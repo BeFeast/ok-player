@@ -36,6 +36,12 @@ public sealed partial class SeekBar : UserControl
     /// <summary>Raised true when scrubbing starts, false when it ends.</summary>
     public event Action<bool>? ScrubStateChanged;
 
+    /// <summary>Raised as the pointer moves over the bar (hovering or dragging): target fraction + pointer X within the bar.</summary>
+    public event Action<double, double>? HoverChanged;
+
+    /// <summary>Raised when the pointer leaves the bar (and isn't dragging).</summary>
+    public event Action? HoverEnded;
+
     private void UpdateVisual()
     {
         double width = ActualWidth;
@@ -65,11 +71,19 @@ public sealed partial class SeekBar : UserControl
 
     private void OnPointerMoved(object sender, PointerRoutedEventArgs e)
     {
+        double x = e.GetCurrentPoint(this).Position.X;
+        double f = ActualWidth > 0 ? Math.Clamp(x / ActualWidth, 0, 1) : 0;
+        HoverChanged?.Invoke(f, x); // preview follows the cursor whether hovering or dragging
         if (!_dragging)
             return;
-        double f = FractionFromPointer(e);
         Fraction = f;
         SeekRequested?.Invoke(f);
+    }
+
+    private void OnPointerExited(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_dragging)
+            HoverEnded?.Invoke();
     }
 
     private void OnPointerReleased(object sender, PointerRoutedEventArgs e)

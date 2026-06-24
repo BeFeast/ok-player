@@ -11,7 +11,8 @@
           PointerMoved="OnPointerMoved"
           PointerReleased="OnPointerReleased"
           PointerCanceled="OnPointerCanceled"
-          PointerCaptureLost="OnPointerCaptureLost">
+          PointerCaptureLost="OnPointerCaptureLost"
+          PointerExited="OnPointerExited">
 
         <!-- track -->
         <Border Height="5" CornerRadius="3" VerticalAlignment="Center"

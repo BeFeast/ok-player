@@ -6,6 +6,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
+using OkPlayer.App.Services;
 using OkPlayer.App.ViewModels;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
@@ -26,6 +27,8 @@ public sealed partial class PlayerView : UserControl
     private bool _panelOpen;
     private bool _syncingChapter;
     private bool _settingVolumeSlider;
+    private readonly ThumbnailService _thumbs = new();
+    private int _previewToken; // ignores stale async thumbnail results
 
     public PlayerViewModel Vm { get; } = new();
 
@@ -56,6 +59,9 @@ public sealed partial class PlayerView : UserControl
         Video.EngineReady += OnEngineReady;
         Seek.SeekRequested += OnSeekRequested;
         Seek.ScrubStateChanged += scrubbing => Vm.IsScrubbing = scrubbing;
+        Seek.HoverChanged += OnSeekHover;
+        Seek.HoverEnded += OnSeekHoverEnded;
+        Unloaded += (_, _) => System.Threading.Tasks.Task.Run(() => _thumbs.Dispose());
         Vm.PropertyChanged += OnVmPropertyChanged;
         Vm.ToastRequested += ShowToast;
         Vm.Chapters.CollectionChanged += (_, _) => UpdateChaptersEmpty();
@@ -106,6 +112,48 @@ public sealed partial class PlayerView : UserControl
     {
         Vm.SeekToFraction(fraction);
         RevealChrome();
+    }
+
+    // ---- seek hover frame-preview ----
+
+    private void OnSeekHover(double fraction, double xInBar)
+    {
+        if (!Vm.HasMedia || Vm.Duration <= 0)
+            return;
+        double time = fraction * Vm.Duration;
+        PreviewTime.Text = FormatPreviewTime(time);
+
+        // Center the preview on the cursor (in RootGrid space), clamped to stay on-screen.
+        double xInRoot = Seek.TransformToVisual(RootGrid).TransformPoint(new Windows.Foundation.Point(xInBar, 0)).X;
+        double pw = PreviewPanel.ActualWidth > 0 ? PreviewPanel.ActualWidth : 180;
+        double maxLeft = Math.Max(8, RootGrid.ActualWidth - pw - 8);
+        PreviewTransform.X = Math.Clamp(xInRoot - pw / 2, 8, maxLeft);
+        PreviewPanel.Opacity = 1;
+
+        int token = ++_previewToken;
+        _ = RequestPreviewAsync(time, token);
+    }
+
+    private async System.Threading.Tasks.Task RequestPreviewAsync(double time, int token)
+    {
+        string? path = await _thumbs.GetThumbnailAsync(time);
+        if (path is null || token != _previewToken)
+            return; // stale (cursor moved on) or no frame
+        try
+        {
+            PreviewImage.Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(path));
+        }
+        catch { /* transient image-load failure — keep the previous frame */ }
+    }
+
+    private void OnSeekHoverEnded() => PreviewPanel.Opacity = 0;
+
+    private static string FormatPreviewTime(double seconds)
+    {
+        var ts = TimeSpan.FromSeconds(Math.Max(0, seconds));
+        return ts.TotalHours >= 1
+            ? $"{(int)ts.TotalHours}:{ts.Minutes:00}:{ts.Seconds:00}"
+            : $"{ts.Minutes}:{ts.Seconds:00}";
     }
 
     // ---- chrome visibility ----
@@ -249,6 +297,7 @@ public sealed partial class PlayerView : UserControl
             ChaptersPanel.Visibility = Visibility.Visible;
             PanelShowSb.Begin();
             RevealChrome(); // an open panel pins the chrome
+            _ = GenerateChapterThumbnailsAsync(); // fill in chapter previews lazily
         }
         else
         {
@@ -267,6 +316,24 @@ public sealed partial class PlayerView : UserControl
 
     private void UpdateChaptersEmpty()
         => ChaptersEmpty.Visibility = Vm.Chapters.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+    private async System.Threading.Tasks.Task GenerateChapterThumbnailsAsync()
+    {
+        if (!Vm.HasMedia)
+            return;
+        foreach (var ch in Vm.Chapters.ToList())
+        {
+            if (!_panelOpen)
+                break; // panel closed — stop generating (cached thumbs remain for next open)
+            if (ch.Thumbnail is not null)
+                continue;
+            string? path = await _thumbs.GetThumbnailAsync(ch.Time + 0.5); // a hair past the boundary
+            if (path is null)
+                continue;
+            try { ch.Thumbnail = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(path)); }
+            catch { /* ignore a transient load failure */ }
+        }
+    }
 
     // ---- volume & overflow ----
 
@@ -308,6 +375,7 @@ public sealed partial class PlayerView : UserControl
             Video.Open(pathOrUrl); // may throw on engine-init failure — do this before mutating UI state
             Vm.OnOpening();        // load accepted: clear the prior file's playhead/duration/chapter/HasMedia
             RevealChrome();        // show the controls when a file opens (drag-drop / picker)
+            _ = _thumbs.OpenAsync(pathOrUrl); // arm the seek-preview engine for this file (fire-and-forget)
         }
         catch (Exception)
         {

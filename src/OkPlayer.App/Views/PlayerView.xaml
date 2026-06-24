@@ -229,6 +229,21 @@
             </Border>
         </Grid>
 
+        <!-- ===== seek hover frame-preview ===== -->
+        <Border x:Name="PreviewPanel" VerticalAlignment="Bottom" HorizontalAlignment="Left"
+                Margin="0,0,0,84" Opacity="0" IsHitTestVisible="False"
+                Background="#F00C0C0C" CornerRadius="9" Padding="5,5,5,4"
+                BorderThickness="1" BorderBrush="#26FFFFFF">
+            <Border.RenderTransform><TranslateTransform x:Name="PreviewTransform" /></Border.RenderTransform>
+            <StackPanel Spacing="4">
+                <Border Width="168" Height="94" CornerRadius="5" Background="#FF000000">
+                    <Image x:Name="PreviewImage" Stretch="UniformToFill" />
+                </Border>
+                <TextBlock x:Name="PreviewTime" Text="0:00" HorizontalAlignment="Center"
+                           Foreground="#F2FFFFFF" FontSize="12" FontWeight="SemiBold" />
+            </StackPanel>
+        </Border>
+
         <!-- ===== right-docked Chapters panel (slide-in Mica) ===== -->
         <Grid x:Name="ChaptersPanel" HorizontalAlignment="Right" Width="316" Opacity="0" Visibility="Collapsed"
               Background="{ThemeResource OkPanelOverVideoBrush}" BorderThickness="1,0,0,0" BorderBrush="{ThemeResource OkStrokeBrush}"
@@ -251,7 +266,9 @@
                 <ListView.ItemTemplate>
                     <DataTemplate x:DataType="vm:ChapterInfo">
                         <Grid Padding="2,6" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
-                            <Border Grid.Column="0" Width="56" Height="32" CornerRadius="4" Background="{ThemeResource OkSubtleFillStrongBrush}" />
+                            <Border Grid.Column="0" Width="56" Height="32" CornerRadius="4" Background="{ThemeResource OkSubtleFillStrongBrush}">
+                                <Image Source="{x:Bind Thumbnail, Mode=OneWay}" Stretch="UniformToFill" />
+                            </Border>
                             <TextBlock Grid.Column="1" Text="{x:Bind Title}" VerticalAlignment="Center"
                                        TextTrimming="CharacterEllipsis" Style="{StaticResource OkBodyTextStyle}" />
                             <TextBlock Grid.Column="2" Text="{x:Bind TimeText}" VerticalAlignment="Center" Style="{StaticResource OkSmallTextStyle}" />
