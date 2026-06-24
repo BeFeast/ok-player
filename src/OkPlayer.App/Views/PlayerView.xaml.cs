@@ -96,6 +96,7 @@ public sealed partial class PlayerView : UserControl
         else if (e.PropertyName == nameof(PlayerViewModel.HasMedia))
         {
             EmptyHint.Visibility = Vm.HasMedia ? Visibility.Collapsed : Visibility.Visible;
+            RevealChrome(); // reveal once media is actually ready, so the idle countdown starts from then
         }
     }
 
@@ -121,7 +122,8 @@ public sealed partial class PlayerView : UserControl
 
     private void HideChrome()
     {
-        if (!_chromeVisible || !Vm.IsPlaying || _panelOpen) // paused / panel-open / already-hidden keeps chrome up
+        // no media / paused / panel-open / already-hidden all keep the chrome up.
+        if (!_chromeVisible || !Vm.HasMedia || !Vm.IsPlaying || _panelOpen)
             return;
         // An open flyout/menu (volume, speed, subtitle, audio, overflow) renders in a popup; pointer
         // moves inside it don't reset the idle timer, so pin chrome while any popup is open.
@@ -140,7 +142,7 @@ public sealed partial class PlayerView : UserControl
     private void ResetIdleTimer()
     {
         _idleTimer.Stop();
-        if (Vm.IsPlaying && !_panelOpen)
+        if (Vm.HasMedia && Vm.IsPlaying && !_panelOpen)
             _idleTimer.Start();
     }
 
