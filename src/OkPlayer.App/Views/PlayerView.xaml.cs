@@ -150,8 +150,9 @@ public sealed partial class PlayerView : UserControl
         {
             string? path = await _thumbs.GetThumbnailAsync(time, () => token != _previewToken);
             if (path is null || token != _previewToken)
-                return; // stale (cursor moved on) or no frame
+                return; // stale (cursor moved on) or no frame (e.g. audio-only) — leave the frame hidden
             PreviewImage.Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(path));
+            PreviewImageFrame.Visibility = Visibility.Visible;
         }
         catch { /* transient failure — keep the previous frame; never fault this fire-and-forget task */ }
     }
@@ -160,6 +161,7 @@ public sealed partial class PlayerView : UserControl
     {
         _previewToken++;           // discard any in-flight thumbnail so it can't flash on the next hover
         PreviewPanel.Opacity = 0;
+        PreviewImageFrame.Visibility = Visibility.Collapsed; // next hover shows the timestamp first, frame when ready
     }
 
     private static string FormatPreviewTime(double seconds)
