@@ -76,6 +76,17 @@ public sealed class MpvContext : IDisposable
         MpvException.Check(MpvNative.mpv_command(_handle, argv), $"command({string.Join(' ', args)})");
     }
 
+    /// <summary>Fire-and-forget command — does not block the caller. Use for actions that may need a
+    /// render to complete (e.g. screenshot), which would deadlock if issued synchronously on the
+    /// render thread.</summary>
+    public void CommandAsync(params string[] args)
+    {
+        var argv = new string?[args.Length + 1];
+        Array.Copy(args, argv, args.Length);
+        argv[args.Length] = null;
+        MpvException.Check(MpvNative.mpv_command_async(_handle, 0, argv), $"command_async({string.Join(' ', args)})");
+    }
+
     public void Loadfile(string pathOrUrl) => Command("loadfile", pathOrUrl, "replace");
 
     public void SetProperty(string name, string value)

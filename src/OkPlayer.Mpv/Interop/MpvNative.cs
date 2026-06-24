@@ -54,6 +54,9 @@ internal static partial class MpvNative
     internal static partial MpvError mpv_command(MpvHandle handle, [In] string?[] args);
 
     [LibraryImport(Lib, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial MpvError mpv_command_async(MpvHandle handle, ulong replyUserData, [In] string?[] args);
+
+    [LibraryImport(Lib, StringMarshalling = StringMarshalling.Utf8)]
     internal static partial MpvError mpv_set_property_string(MpvHandle handle, string name, string data);
 
     [LibraryImport(Lib, EntryPoint = "mpv_get_property_string", StringMarshalling = StringMarshalling.Utf8)]

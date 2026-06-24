@@ -187,7 +187,9 @@ public partial class PlayerViewModel : ObservableObject
 
     public void TakeScreenshot()
     {
-        _engine?.Command("screenshot");
+        // Async: a vo=libmpv screenshot needs a render, so a synchronous command on the render thread
+        // would deadlock.
+        _engine?.CommandAsync("screenshot");
         ToastRequested?.Invoke("Screenshot saved");
     }
 
