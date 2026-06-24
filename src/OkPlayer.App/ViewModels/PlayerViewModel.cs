@@ -144,6 +144,9 @@ public partial class PlayerViewModel : ObservableObject
         Position = 0;
         Duration = 0;
         CurrentChapterIndex = -1;
+        // Re-arm even when replacing an already-playing file, so the next FileLoaded flips HasMedia
+        // false->true and re-fires the ready-time chrome reveal / idle countdown.
+        HasMedia = false;
         _awaitingSeek = false;
     }
 

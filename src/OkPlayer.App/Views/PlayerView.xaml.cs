@@ -22,7 +22,7 @@ public sealed partial class PlayerView : UserControl
 {
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _idleTimer;
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _toastTimer;
-    private bool _chromeVisible = true;
+    private bool _chromeVisible; // starts false to match the chrome's initial Opacity=0, so the first RevealChrome actually animates it in
     private bool _panelOpen;
     private bool _syncingChapter;
     private bool _settingVolumeSlider;
@@ -96,6 +96,9 @@ public sealed partial class PlayerView : UserControl
         else if (e.PropertyName == nameof(PlayerViewModel.HasMedia))
         {
             EmptyHint.Visibility = Vm.HasMedia ? Visibility.Collapsed : Visibility.Visible;
+            // Reveal on any media-state change: ready -> start the idle countdown from now;
+            // cleared (e.g. decode error) -> bring the controls back up over the empty state.
+            RevealChrome();
         }
     }
 
@@ -121,7 +124,8 @@ public sealed partial class PlayerView : UserControl
 
     private void HideChrome()
     {
-        if (!_chromeVisible || !Vm.IsPlaying || _panelOpen) // paused / panel-open / already-hidden keeps chrome up
+        // no media / paused / panel-open / already-hidden all keep the chrome up.
+        if (!_chromeVisible || !Vm.HasMedia || !Vm.IsPlaying || _panelOpen)
             return;
         // An open flyout/menu (volume, speed, subtitle, audio, overflow) renders in a popup; pointer
         // moves inside it don't reset the idle timer, so pin chrome while any popup is open.
@@ -140,7 +144,7 @@ public sealed partial class PlayerView : UserControl
     private void ResetIdleTimer()
     {
         _idleTimer.Stop();
-        if (Vm.IsPlaying && !_panelOpen)
+        if (Vm.HasMedia && Vm.IsPlaying && !_panelOpen)
             _idleTimer.Start();
     }
 
@@ -301,9 +305,9 @@ public sealed partial class PlayerView : UserControl
     {
         try
         {
-            Vm.OnOpening();  // clear the prior file's playhead/duration/chapter before the new load
-            Video.Open(pathOrUrl);
-            RevealChrome();  // show the controls when a file opens (drag-drop / picker)
+            Video.Open(pathOrUrl); // may throw on engine-init failure — do this before mutating UI state
+            Vm.OnOpening();        // load accepted: clear the prior file's playhead/duration/chapter/HasMedia
+            RevealChrome();        // show the controls when a file opens (drag-drop / picker)
         }
         catch (Exception)
         {

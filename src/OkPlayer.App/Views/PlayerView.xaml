@@ -53,6 +53,7 @@
     </UserControl.Resources>
 
     <Grid x:Name="RootGrid" Background="#FF050505" AllowDrop="True"
+          KeyboardAcceleratorPlacementMode="Hidden"
           PointerMoved="OnRootPointerMoved" PointerPressed="OnRootPointerPressed"
           DragOver="OnDragOver" Drop="OnDrop">
 
