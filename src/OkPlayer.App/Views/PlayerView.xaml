@@ -52,7 +52,7 @@
         </Storyboard>
     </UserControl.Resources>
 
-    <Grid x:Name="RootGrid" Background="#FF050505" AllowDrop="True"
+    <Grid x:Name="RootGrid" Background="Transparent" AllowDrop="True"
           KeyboardAcceleratorPlacementMode="Hidden"
           PointerMoved="OnRootPointerMoved" PointerPressed="OnRootPointerPressed"
           DragOver="OnDragOver" Drop="OnDrop">
@@ -61,15 +61,32 @@
             <KeyboardAccelerator Modifiers="Control" Key="O" Invoked="OnOpenAccelerator" />
         </Grid.KeyboardAccelerators>
 
-        <!-- the single video plane -->
-        <render:MpvVideoPanel x:Name="Video" Tapped="OnVideoTapped" />
+        <!-- the single video plane: only over Mica once media is loaded (Mica shows the light shell otherwise) -->
+        <render:MpvVideoPanel x:Name="Video" Tapped="OnVideoTapped" Visibility="Collapsed" />
 
-        <!-- minimal empty state shown until media is loaded -->
-        <StackPanel x:Name="EmptyHint" HorizontalAlignment="Center" VerticalAlignment="Center"
-                    Spacing="6" IsHitTestVisible="False">
-            <FontIcon Glyph="&#xE8E5;" FontSize="30" Foreground="#59FFFFFF" />
-            <TextBlock Text="Open a file" HorizontalAlignment="Center" Foreground="#B3FFFFFF" FontSize="16" FontWeight="SemiBold" />
-            <TextBlock Text="Ctrl+O, or drop a video here" HorizontalAlignment="Center" Foreground="#80FFFFFF" FontSize="12.5" />
+        <!-- light-first empty / welcome state (over Mica) — first-run, no recents -->
+        <StackPanel x:Name="WelcomeCard" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="13">
+            <Border Width="48" Height="48" CornerRadius="13" HorizontalAlignment="Center">
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="0.1,0" EndPoint="0.9,1">
+                        <GradientStop Color="#10938A" Offset="0" />
+                        <GradientStop Color="#0A655F" Offset="1" />
+                    </LinearGradientBrush>
+                </Border.Background>
+                <FontIcon Glyph="&#xE768;" FontSize="22" Foreground="White" />
+            </Border>
+            <TextBlock Text="Welcome to OK Player" FontSize="17" FontWeight="SemiBold"
+                       Foreground="{ThemeResource TextFillColorPrimaryBrush}" HorizontalAlignment="Center" />
+            <Grid Width="280" HorizontalAlignment="Center" Background="Transparent" Tapped="OnWelcomeOpenTapped">
+                <Rectangle RadiusX="10" RadiusY="10" StrokeThickness="1.5" StrokeDashArray="4,3"
+                           Stroke="{ThemeResource TextFillColorTertiaryBrush}" Fill="#40FFFFFF" />
+                <StackPanel Padding="16" Spacing="4" HorizontalAlignment="Center">
+                    <TextBlock Text="Open file&#x2026;" Foreground="{ThemeResource OkAccentTextBrush}"
+                               FontSize="12.5" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                    <TextBlock Text="or drop a video / paste a URL" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               FontSize="11" HorizontalAlignment="Center" />
+                </StackPanel>
+            </Grid>
         </StackPanel>
 
         <!-- ===== top chrome: scrim + title ===== -->

@@ -41,8 +41,10 @@ public sealed partial class PlayerView : UserControl
     public event EventHandler? ToggleFullscreenRequested;
     /// <summary>Esc: leave fullscreen if in it.</summary>
     public event EventHandler? ExitFullscreenRequested;
-    /// <summary>Ctrl+O: ask the host to show a file picker.</summary>
+    /// <summary>Ctrl+O / Welcome card: ask the host to show a file picker.</summary>
     public event EventHandler? OpenFileRequested;
+    /// <summary>True when media is loaded (chrome is over video); false on the light welcome shell. Host adapts caption buttons.</summary>
+    public event EventHandler<bool>? MediaPresenceChanged;
 
     public PlayerView()
     {
@@ -81,8 +83,34 @@ public sealed partial class PlayerView : UserControl
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         Focus(FocusState.Programmatic);
-        RevealChrome();
+        ApplyMediaPresence();
     }
+
+    // Light-first shell: over Mica show the Welcome card with no video plane / no over-video chrome;
+    // once media is loaded, show the video plane + reveal the OSC, and let the host darken→whiten the
+    // caption buttons.
+    private void ApplyMediaPresence()
+    {
+        bool has = Vm.HasMedia;
+        WelcomeCard.Visibility = has ? Visibility.Collapsed : Visibility.Visible;
+        Video.Visibility = has ? Visibility.Visible : Visibility.Collapsed;
+        MediaPresenceChanged?.Invoke(this, has);
+        if (has)
+        {
+            RevealChrome();
+        }
+        else
+        {
+            _idleTimer.Stop();
+            _chromeVisible = false;
+            TitleChrome.IsHitTestVisible = false;
+            BottomChrome.IsHitTestVisible = false;
+            ChromeHideSb.Begin();
+        }
+    }
+
+    private void OnWelcomeOpenTapped(object sender, TappedRoutedEventArgs e)
+        => OpenFileRequested?.Invoke(this, EventArgs.Empty);
 
     private void OnEngineReady(object? sender, EventArgs e)
     {
@@ -108,10 +136,7 @@ public sealed partial class PlayerView : UserControl
         }
         else if (e.PropertyName == nameof(PlayerViewModel.HasMedia))
         {
-            EmptyHint.Visibility = Vm.HasMedia ? Visibility.Collapsed : Visibility.Visible;
-            // Reveal on any media-state change: ready -> start the idle countdown from now;
-            // cleared (e.g. decode error) -> bring the controls back up over the empty state.
-            RevealChrome();
+            ApplyMediaPresence();
         }
     }
 
@@ -176,6 +201,8 @@ public sealed partial class PlayerView : UserControl
 
     private void RevealChrome()
     {
+        if (!Vm.HasMedia)
+            return; // no over-video chrome on the light welcome shell
         if (!_chromeVisible)
         {
             _chromeVisible = true;

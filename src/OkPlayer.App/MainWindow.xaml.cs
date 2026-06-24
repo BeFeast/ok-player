@@ -26,24 +26,38 @@ public sealed partial class MainWindow : Window
         // white glyphs so Mica/video shows through.
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(Player.TitleBarElement);
-        ConfigureCaptionButtons();
+        Player.MediaPresenceChanged += (_, hasMedia) => SetCaptionForVideo(hasMedia);
+        SetCaptionForVideo(false); // start on the light welcome shell (dark caption glyphs)
 
         Player.ToggleFullscreenRequested += (_, _) => SetFullscreen(!_fullscreen);
         Player.ExitFullscreenRequested += (_, _) => SetFullscreen(false);
         Player.OpenFileRequested += async (_, _) => await OpenFileAsync();
     }
 
-    private void ConfigureCaptionButtons()
+    private void SetCaptionForVideo(bool overVideo)
     {
-        var titleBar = AppWindow.TitleBar;
-        titleBar.ButtonBackgroundColor = Microsoft.UI.Colors.Transparent;
-        titleBar.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Transparent;
-        titleBar.ButtonForegroundColor = Microsoft.UI.Colors.White;
-        titleBar.ButtonInactiveForegroundColor = Windows.UI.Color.FromArgb(0xB0, 0xFF, 0xFF, 0xFF);
-        titleBar.ButtonHoverBackgroundColor = Windows.UI.Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF);
-        titleBar.ButtonHoverForegroundColor = Microsoft.UI.Colors.White;
-        titleBar.ButtonPressedBackgroundColor = Windows.UI.Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF);
-        titleBar.ButtonPressedForegroundColor = Microsoft.UI.Colors.White;
+        var tb = AppWindow.TitleBar;
+        tb.ButtonBackgroundColor = Microsoft.UI.Colors.Transparent;
+        tb.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Transparent;
+        if (overVideo)
+        {
+            tb.ButtonForegroundColor = Microsoft.UI.Colors.White;
+            tb.ButtonInactiveForegroundColor = Windows.UI.Color.FromArgb(0xB0, 0xFF, 0xFF, 0xFF);
+            tb.ButtonHoverBackgroundColor = Windows.UI.Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF);
+            tb.ButtonHoverForegroundColor = Microsoft.UI.Colors.White;
+            tb.ButtonPressedBackgroundColor = Windows.UI.Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF);
+            tb.ButtonPressedForegroundColor = Microsoft.UI.Colors.White;
+        }
+        else
+        {
+            // light Mica shell — let the caption glyphs follow the system theme (dark on light)
+            tb.ButtonForegroundColor = null;
+            tb.ButtonInactiveForegroundColor = null;
+            tb.ButtonHoverBackgroundColor = null;
+            tb.ButtonHoverForegroundColor = null;
+            tb.ButtonPressedBackgroundColor = null;
+            tb.ButtonPressedForegroundColor = null;
+        }
     }
 
     private void SetFullscreen(bool on)
