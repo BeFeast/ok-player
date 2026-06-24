@@ -37,13 +37,11 @@ No media library (separate app), no DVD/Blu-ray, no IPTV, no casting/DLNA server
 
 ## License
 
-OK Player's own source code is **[MIT](LICENSE)**.
+**[GPL-3.0-or-later](LICENSE).**
 
-It links **libmpv** (the mpv library), which is **LGPL-2.1-or-later** — and MIT is compatible with that: this app's code can stay MIT as long as libmpv is **dynamically linked**, shipped with its own license/notices, and remains user-replaceable.
+OK Player is built on **mpv / libmpv**, which is copyleft — GPL when built with its full feature set (the standard, hassle-free build). Rather than fight that with an LGPL-only build to chase a permissive license nobody here needs, OK Player is **GPL from the start** — the same choice as [IINA](https://iina.io) (GPLv3) and [mpv.net](https://github.com/mpvnet-player/mpv.net) (GPLv2). You get all of mpv's capabilities with no build gymnastics; the trade-off is standard copyleft — derivatives and distributed binaries stay GPL.
 
-> ⚠️ **Build caveat:** most *prebuilt* libmpv binaries enable GPL components (which is why IINA and mpv.net are GPL). To keep the distributed combination MIT-compatible, OK Player must bundle an **LGPL-only** libmpv build (mpv configured with `--enable-lgpl` / meson `-Dgpl=false`). Otherwise the combined work effectively becomes GPL.
-
-Other dependencies — Windows App SDK / WinUI 3 (MIT) and yt-dlp (invoked as an external tool, public-domain/Unlicense) — carry no linking obligations.
+Other dependencies — Windows App SDK / WinUI 3 (MIT, GPL-compatible) and yt-dlp (invoked as an external tool, Unlicense) — impose no extra obligations.
 
 ---
 
