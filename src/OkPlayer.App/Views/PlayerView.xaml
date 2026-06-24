@@ -27,10 +27,24 @@
                 <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseIn" /></DoubleAnimation.EasingFunction>
             </DoubleAnimation>
         </Storyboard>
+        <Storyboard x:Name="ToastShowSb">
+            <DoubleAnimation Storyboard.TargetName="ToastHost" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.15" />
+            <DoubleAnimation Storyboard.TargetName="ToastTransform" Storyboard.TargetProperty="Y" To="0" Duration="0:0:0.15">
+                <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut" /></DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
+        </Storyboard>
+        <Storyboard x:Name="ToastHideSb">
+            <DoubleAnimation Storyboard.TargetName="ToastHost" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.25" />
+        </Storyboard>
     </UserControl.Resources>
 
-    <Grid x:Name="RootGrid" Background="#FF050505" IsTabStop="True"
-          PointerMoved="OnRootPointerMoved" KeyDown="OnRootKeyDown">
+    <Grid x:Name="RootGrid" Background="#FF050505" IsTabStop="True" AllowDrop="True"
+          PointerMoved="OnRootPointerMoved" KeyDown="OnRootKeyDown"
+          DragOver="OnDragOver" Drop="OnDrop">
+
+        <Grid.KeyboardAccelerators>
+            <KeyboardAccelerator Modifiers="Control" Key="O" Invoked="OnOpenAccelerator" />
+        </Grid.KeyboardAccelerators>
 
         <!-- the single video plane -->
         <render:MpvVideoPanel x:Name="Video" Tapped="OnVideoTapped" />
@@ -109,5 +123,14 @@
                 </Grid>
             </Border>
         </Grid>
+
+        <!-- ===== OSD toast (top-center, shared scrim style) ===== -->
+        <Border x:Name="ToastHost" VerticalAlignment="Top" HorizontalAlignment="Center"
+                Margin="0,64,0,0" Padding="14,8" CornerRadius="12" Opacity="0" IsHitTestVisible="False"
+                Background="{StaticResource OkOverVideoToastBrush}"
+                BorderThickness="0,1,0,0" BorderBrush="{StaticResource OkOverVideoHairlineBrush}">
+            <Border.RenderTransform><TranslateTransform x:Name="ToastTransform" Y="-8" /></Border.RenderTransform>
+            <TextBlock x:Name="ToastText" Foreground="#F2FFFFFF" FontSize="13" FontWeight="Medium" />
+        </Border>
     </Grid>
 </UserControl>

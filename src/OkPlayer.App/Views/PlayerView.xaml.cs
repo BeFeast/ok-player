@@ -4,6 +4,8 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using OkPlayer.App.ViewModels;
+using Windows.ApplicationModel.DataTransfer;
+using Windows.Storage;
 using Windows.System;
 
 namespace OkPlayer.App.Views;
@@ -19,6 +21,7 @@ public sealed partial class PlayerView : UserControl
     private const string DemoSource = "av://lavfi:testsrc2=size=1280x720:rate=30:duration=600";
 
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _idleTimer;
+    private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _toastTimer;
     private bool _chromeVisible = true;
 
     public PlayerViewModel Vm { get; } = new();
@@ -27,6 +30,8 @@ public sealed partial class PlayerView : UserControl
     public event EventHandler? ToggleFullscreenRequested;
     /// <summary>Esc: leave fullscreen if in it.</summary>
     public event EventHandler? ExitFullscreenRequested;
+    /// <summary>Ctrl+O: ask the host to show a file picker.</summary>
+    public event EventHandler? OpenFileRequested;
 
     public PlayerView()
     {
@@ -37,10 +42,16 @@ public sealed partial class PlayerView : UserControl
         _idleTimer.IsRepeating = false;
         _idleTimer.Tick += (_, _) => HideChrome();
 
+        _toastTimer = DispatcherQueue.CreateTimer();
+        _toastTimer.Interval = TimeSpan.FromMilliseconds(1700);
+        _toastTimer.IsRepeating = false;
+        _toastTimer.Tick += (_, _) => ToastHideSb.Begin();
+
         Video.EngineReady += OnEngineReady;
         Seek.SeekRequested += OnSeekRequested;
         Seek.ScrubStateChanged += scrubbing => Vm.IsScrubbing = scrubbing;
         Vm.PropertyChanged += OnVmPropertyChanged;
+        Vm.ToastRequested += ShowToast;
         Loaded += OnLoaded;
     }
 
@@ -156,4 +167,40 @@ public sealed partial class PlayerView : UserControl
     private void OnScreenshotClick(object sender, RoutedEventArgs e) { Vm.TakeScreenshot(); RevealChrome(); }
     private void OnFullscreenClick(object sender, RoutedEventArgs e) => ToggleFullscreenRequested?.Invoke(this, EventArgs.Empty);
     private void OnTrailingTimeTapped(object sender, TappedRoutedEventArgs e) => Vm.ToggleTimeLabel();
+
+    // ---- toasts ----
+
+    private void ShowToast(string message)
+    {
+        ToastText.Text = message;
+        ToastShowSb.Begin();
+        _toastTimer.Stop();
+        _toastTimer.Start();
+    }
+
+    // ---- open media ----
+
+    /// <summary>Load a local path or URL into the engine.</summary>
+    public void OpenMedia(string pathOrUrl) => Video.Open(pathOrUrl);
+
+    private void OnOpenAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        OpenFileRequested?.Invoke(this, EventArgs.Empty);
+        args.Handled = true;
+    }
+
+    private void OnDragOver(object sender, DragEventArgs e)
+    {
+        if (e.DataView.Contains(StandardDataFormats.StorageItems))
+            e.AcceptedOperation = DataPackageOperation.Copy;
+    }
+
+    private async void OnDrop(object sender, DragEventArgs e)
+    {
+        if (!e.DataView.Contains(StandardDataFormats.StorageItems))
+            return;
+        var items = await e.DataView.GetStorageItemsAsync();
+        if (items.Count > 0 && items[0] is StorageFile file)
+            OpenMedia(file.Path);
+    }
 }

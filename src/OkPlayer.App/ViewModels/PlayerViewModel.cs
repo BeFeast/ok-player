@@ -19,6 +19,9 @@ public partial class PlayerViewModel : ObservableObject
     /// <summary>True while the user is scrubbing — suppresses time-pos echo so the thumb doesn't fight the drag.</summary>
     public bool IsScrubbing { get; set; }
 
+    /// <summary>Emitted for transient OSD toasts (volume, mute, speed, screenshot, seek readout).</summary>
+    public event System.Action<string>? ToastRequested;
+
     [ObservableProperty] private double _position;          // seconds
     [ObservableProperty] private double _duration;          // seconds
     [ObservableProperty] private bool _isPaused = true;
@@ -125,7 +128,11 @@ public partial class PlayerViewModel : ObservableObject
     }
 
     public void SeekRelative(double seconds)
-        => _engine?.Command("seek", seconds.ToString(CultureInfo.InvariantCulture), "relative");
+    {
+        _engine?.Command("seek", seconds.ToString(CultureInfo.InvariantCulture), "relative");
+        double target = Duration > 0 ? System.Math.Clamp(Position + seconds, 0, Duration) : Position + seconds;
+        ToastRequested?.Invoke(FormatTime(target));
+    }
 
     public void FrameStep(bool forward) => _engine?.Command(forward ? "frame-step" : "frame-back-step");
 
@@ -135,13 +142,17 @@ public partial class PlayerViewModel : ObservableObject
     public void NudgeVolume(double delta)
     {
         if (_engine is not { } e) return;
-        e.SetProperty("volume", System.Math.Clamp((e.GetPropertyDouble("volume") ?? 100) + delta, 0, 130));
+        double v = System.Math.Clamp((e.GetPropertyDouble("volume") ?? 100) + delta, 0, 130);
+        e.SetProperty("volume", v);
+        ToastRequested?.Invoke($"Volume {v:0}%");
     }
 
     public void ToggleMute()
     {
         if (_engine is not { } e) return;
-        e.SetProperty("mute", !(e.GetPropertyBool("mute") ?? false));
+        bool m = !(e.GetPropertyBool("mute") ?? false);
+        e.SetProperty("mute", m);
+        ToastRequested?.Invoke(m ? "Muted" : "Unmuted");
     }
 
     public void SetSpeed(double speed) => _engine?.SetProperty("speed", speed);
@@ -150,10 +161,16 @@ public partial class PlayerViewModel : ObservableObject
     {
         double[] steps = { 0.5, 0.75, 1.0, 1.25, 1.5, 2.0 };
         int i = System.Array.FindIndex(steps, s => s >= Speed - 0.001);
-        SetSpeed(steps[(i + 1) % steps.Length]);
+        double next = steps[(i + 1) % steps.Length];
+        SetSpeed(next);
+        ToastRequested?.Invoke($"{next:0.00}{Glyph(0x00D7)}");
     }
 
-    public void TakeScreenshot() => _engine?.Command("screenshot");
+    public void TakeScreenshot()
+    {
+        _engine?.Command("screenshot");
+        ToastRequested?.Invoke("Screenshot saved");
+    }
 
     public void ToggleTimeLabel() => ShowRemaining = !ShowRemaining;
 
