@@ -47,30 +47,41 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
     {
         if (_initialized)
             return;
-        _initialized = true;
+        _initialized = true; // set early to block re-entrant calls during init
 
-        _device = new GlInteropDevice();
+        try
+        {
+            _device = new GlInteropDevice();
 
-        _panel = new SwapChainPanel();
-        _panel.CompositionScaleChanged += (_, _) => UpdateSwapChainSize();
-        Content = _panel;
+            _panel = new SwapChainPanel();
+            _panel.CompositionScaleChanged += (_, _) => UpdateSwapChainSize();
+            Content = _panel;
 
-        _mpv = new MpvContext();
-        _mpv.SetOption("vo", "libmpv");        // mandatory: the render API drives output
-        _mpv.SetOption("hwdec", "auto-safe");  // hardware decode where safely mappable to GL
-        _mpv.SetOption("keep-open", "yes");     // hold the last frame instead of closing on EOF
-        _mpv.Initialize();
+            _mpv = new MpvContext();
+            _mpv.SetOption("vo", "libmpv");        // mandatory: the render API drives output
+            _mpv.SetOption("hwdec", "auto-safe");  // hardware decode where safely mappable to GL
+            _mpv.SetOption("keep-open", "yes");     // hold the last frame instead of closing on EOF
+            _mpv.Initialize();
 
-        _render = new MpvRenderContext(_mpv, GlInteropDevice.GetProcAddress);
-        _render.SetUpdateCallback(() => _forceRender = true);
+            _render = new MpvRenderContext(_mpv, GlInteropDevice.GetProcAddress);
+            _render.SetUpdateCallback(() => _forceRender = true);
 
-        // SizeChanged often fires before Loaded (before the device existed), so create the swap chain
-        // now that the control is laid out; CompositionScaleChanged will correct DPI later.
-        if (HasRenderableSize)
-            TryCreateSwapChain();
+            // SizeChanged often fires before Loaded (before the device existed), so create the swap
+            // chain now that the control is laid out; CompositionScaleChanged corrects DPI later.
+            if (HasRenderableSize)
+                TryCreateSwapChain();
 
-        HookRendering();
-        EngineReady?.Invoke(this, EventArgs.Empty);
+            HookRendering();
+            EngineReady?.Invoke(this, EventArgs.Empty);
+        }
+        catch
+        {
+            // A subcomponent ctor failed (no WGL_NV_DX_interop, missing libmpv-2.dll, …). Roll back so
+            // a later retry re-initializes instead of returning early into a null engine.
+            _initialized = false;
+            TeardownEngine();
+            throw;
+        }
     }
 
     private double ScaleX => _panel is { CompositionScaleX: > 0 } ? _panel.CompositionScaleX : 1.0;
@@ -163,20 +174,28 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
 
     public void Dispose()
     {
+        TeardownEngine();
+        _initialized = false; // allow a later reload / reparent to re-initialize cleanly
+    }
+
+    /// <summary>Tear down the engine + GL/D3D resources in dependency order. Every field is
+    /// null-checked, so this is safe to call partially and doubles as failed-init rollback.</summary>
+    private void TeardownEngine()
+    {
         if (_renderingHooked)
         {
-            CompositionTarget.Rendering -= OnRendering;
+            CompositionTarget.Rendering -= OnRendering; // stop the render loop before freeing resources
             _renderingHooked = false;
         }
-        _render?.Dispose();
+        _render?.Dispose();        // free the mpv render context (GL context still current)
         _render = null;
-        _swapChain?.Dispose();
+        _swapChain?.Dispose();     // release the swap chain COM object + GL framebuffer
         _swapChain = null;
-        _mpv?.Dispose();
+        _mpv?.Dispose();           // terminate libmpv
         _mpv = null;
-        // Allow a later reload / reparent to re-initialize cleanly (engine fields are now null).
-        _initialized = false;
+        _device?.Dispose();        // release the D3D device + close the WGL_NV_DX_interop device
+        _device = null;
         _lastRenderTime = TimeSpan.FromSeconds(-1);
-        // The static shared GL context is intentionally retained (single-window app).
+        // The static shared GL context/window is intentionally retained (single-window app).
     }
 }

@@ -14,13 +14,15 @@ namespace OkPlayer.Render;
 /// WGL_NV_DX_interop (wglDXOpenDeviceNV). The GL context is made current on the constructing thread
 /// (the UI thread) and all GL + mpv_render calls must run on that thread.
 /// </summary>
-internal sealed unsafe class GlInteropDevice
+internal sealed unsafe class GlInteropDevice : IDisposable
 {
     private static IGraphicsContext? s_sharedContext;
     private static IBindingsContext? s_sharedBindings;
     // The hidden GLFW window owns the WGL context; keep it alive for the process lifetime so the GC
     // can't finalize it out from under the stored context pointer.
     private static NativeWindow? s_sharedWindow;
+
+    private bool _disposed;
 
     public IntPtr DxFactory { get; }
     public IntPtr DxDevice { get; }
@@ -86,5 +88,23 @@ internal sealed unsafe class GlInteropDevice
 
         s_sharedContext = s_sharedWindow.Context;
         s_sharedContext.MakeCurrent();
+    }
+
+    /// <summary>Release the per-instance D3D device/factory/context and close the WGL_NV_DX_interop
+    /// device. The process-wide shared GL context/window is intentionally retained.</summary>
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+        _disposed = true;
+
+        if (GlDevice != IntPtr.Zero)
+            Wgl.DXCloseDeviceNV(GlDevice);
+        if (DxDeviceContext != IntPtr.Zero)
+            ((ID3D11DeviceContext*)DxDeviceContext)->Release();
+        if (DxDevice != IntPtr.Zero)
+            ((ID3D11Device*)DxDevice)->Release();
+        if (DxFactory != IntPtr.Zero)
+            ((IDXGIFactory2*)DxFactory)->Release();
     }
 }

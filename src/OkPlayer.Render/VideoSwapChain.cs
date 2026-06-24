@@ -160,6 +160,12 @@ internal sealed unsafe class VideoSwapChain : IDisposable
     public void Dispose()
     {
         GL.DeleteFramebuffer(GLFrameBufferHandle);
+        if (SwapChainHandle != IntPtr.Zero)
+        {
+            // Release the COM reference added by CreateSwapChainForComposition.
+            ((IDXGISwapChain1*)SwapChainHandle)->Release();
+            SwapChainHandle = IntPtr.Zero;
+        }
         GC.SuppressFinalize(this);
     }
 }
