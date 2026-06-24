@@ -62,6 +62,14 @@
         <!-- the single video plane -->
         <render:MpvVideoPanel x:Name="Video" Tapped="OnVideoTapped" />
 
+        <!-- minimal empty state shown until media is loaded -->
+        <StackPanel x:Name="EmptyHint" HorizontalAlignment="Center" VerticalAlignment="Center"
+                    Spacing="6" IsHitTestVisible="False">
+            <FontIcon Glyph="&#xE8E5;" FontSize="30" Foreground="#59FFFFFF" />
+            <TextBlock Text="Open a file" HorizontalAlignment="Center" Foreground="#B3FFFFFF" FontSize="16" FontWeight="SemiBold" />
+            <TextBlock Text="Ctrl+O, or drop a video here" HorizontalAlignment="Center" Foreground="#80FFFFFF" FontSize="12.5" />
+        </StackPanel>
+
         <!-- ===== top chrome: scrim + title ===== -->
         <Grid x:Name="TitleChrome" VerticalAlignment="Top" Height="42" Opacity="0">
             <Grid.RenderTransform><TranslateTransform x:Name="TitleTransform" Y="-10" /></Grid.RenderTransform>

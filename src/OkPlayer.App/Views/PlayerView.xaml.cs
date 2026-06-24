@@ -19,9 +19,6 @@ namespace OkPlayer.App.Views;
 /// </summary>
 public sealed partial class PlayerView : UserControl
 {
-    // A synthetic source so the surface is demonstrable without a file; real open arrives next.
-    private const string DemoSource = "av://lavfi:testsrc2=size=1280x720:rate=30:duration=600";
-
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _idleTimer;
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _toastTimer;
     private bool _chromeVisible = true;
@@ -74,10 +71,7 @@ public sealed partial class PlayerView : UserControl
     private void OnEngineReady(object? sender, EventArgs e)
     {
         if (Video.Engine is { } engine)
-        {
             Vm.Attach(engine, DispatcherQueue);
-            Video.Open(DemoSource);
-        }
         RevealChrome();
     }
 
@@ -95,6 +89,10 @@ public sealed partial class PlayerView : UserControl
             _syncingChapter = true;
             ChapterList.SelectedIndex = Vm.CurrentChapterIndex;
             _syncingChapter = false;
+        }
+        else if (e.PropertyName == nameof(PlayerViewModel.HasMedia))
+        {
+            EmptyHint.Visibility = Vm.HasMedia ? Visibility.Collapsed : Visibility.Visible;
         }
     }
 

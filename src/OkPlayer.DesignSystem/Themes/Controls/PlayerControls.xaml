@@ -16,6 +16,8 @@
         <Setter Property="FontSize" Value="18" />
         <Setter Property="HorizontalContentAlignment" Value="Center" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
+        <!-- Don't steal keyboard focus on click, so Space/S keep reaching the player's key map. -->
+        <Setter Property="AllowFocusOnInteraction" Value="False" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
@@ -119,6 +121,7 @@
         <Setter Property="FontSize" Value="11.5" />
         <Setter Property="FontWeight" Value="SemiBold" />
         <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="AllowFocusOnInteraction" Value="False" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
