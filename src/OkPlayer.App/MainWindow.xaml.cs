@@ -1,3 +1,4 @@
+using System;
 using System.Threading.Tasks;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
@@ -61,8 +62,15 @@ public sealed partial class MainWindow : Window
         foreach (var ext in MediaExtensions)
             picker.FileTypeFilter.Add(ext);
 
-        var file = await picker.PickSingleFileAsync();
-        if (file is not null)
-            Player.OpenMedia(file.Path);
+        try
+        {
+            var file = await picker.PickSingleFileAsync();
+            if (file is not null)
+                Player.OpenMedia(file.Path); // OpenMedia is itself non-throwing
+        }
+        catch (Exception)
+        {
+            // Picker failure is non-fatal; swallow so the async-void caller can't crash the app.
+        }
     }
 }

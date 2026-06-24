@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using System.Linq;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -286,11 +287,19 @@ public sealed partial class PlayerView : UserControl
 
     // ---- open media ----
 
-    /// <summary>Load a local path or URL into the engine.</summary>
+    /// <summary>Load a local path or URL into the engine. Never throws to the caller — a failed open
+    /// surfaces a toast (a genuine decode/format failure later arrives as an EndFile(Error) toast).</summary>
     public void OpenMedia(string pathOrUrl)
     {
-        Video.Open(pathOrUrl);
-        RevealChrome(); // show the controls when a file opens (drag-drop / picker)
+        try
+        {
+            Video.Open(pathOrUrl);
+            RevealChrome(); // show the controls when a file opens (drag-drop / picker)
+        }
+        catch (Exception)
+        {
+            ShowToast("Couldn't open this file");
+        }
     }
 
     private void OnOpenAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
@@ -309,8 +318,24 @@ public sealed partial class PlayerView : UserControl
     {
         if (!e.DataView.Contains(StandardDataFormats.StorageItems))
             return;
-        var items = await e.DataView.GetStorageItemsAsync();
-        if (items.Count > 0 && items[0] is StorageFile file)
-            OpenMedia(file.Path);
+        // async void: a transient first-time DataView access can throw — never let it escape to the UI thread.
+        var deferral = e.GetDeferral();
+        try
+        {
+            var items = await e.DataView.GetStorageItemsAsync();
+            var file = items.OfType<StorageFile>().FirstOrDefault();
+            if (file is not null)
+                OpenMedia(file.Path);
+            else if (items.Count > 0)
+                ShowToast("Drop a media file"); // folder / non-file drop: feedback instead of silence
+        }
+        catch (Exception)
+        {
+            ShowToast("Couldn't open dropped item");
+        }
+        finally
+        {
+            deferral.Complete();
+        }
     }
 }
