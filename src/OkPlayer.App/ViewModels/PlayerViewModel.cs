@@ -127,13 +127,24 @@ public partial class PlayerViewModel : ObservableObject
         _dispatcher?.TryEnqueue(() =>
         {
             _awaitingSeek = false;
-            Position = 0;
-            Duration = 0;
             HasMedia = true;
             ApplyTracks(subs, auds, subOff);
             ApplyChapters(chapters);
-            OnPropertyChanged(nameof(CurrentChapterIndex)); // re-sync the chapter highlight after repopulation
+            if (CurrentChapterIndex >= Chapters.Count)
+                CurrentChapterIndex = -1; // a shorter/empty new file must not keep the prior index
+            OnPropertyChanged(nameof(CurrentChapterIndex)); // re-sync the highlight after repopulation
         });
+    }
+
+    /// <summary>Reset transient playback state at load-request time (before mpv reports the new file's
+    /// duration/chapter), so the previous file's playhead can't bleed into the new file's first frames.
+    /// Done here rather than on FileLoaded so it can't clobber a duration the pump already delivered.</summary>
+    public void OnOpening()
+    {
+        Position = 0;
+        Duration = 0;
+        CurrentChapterIndex = -1;
+        _awaitingSeek = false;
     }
 
     private void OnEndFile(object? sender, MpvEndFileReason reason)
@@ -257,61 +268,94 @@ public partial class PlayerViewModel : ObservableObject
         foreach (var c in chapters) Chapters.Add(c);
     }
 
-    // ---- commands (read current state from the cached VM properties, not synchronously from mpv) ----
+    // ---- commands (guarded so an mpv rejection never escapes a keyboard/click handler) ----
 
-    public void TogglePlay() => _engine?.SetProperty("pause", !IsPaused);
+    private void Cmd(params string[] args)
+    {
+        if (_engine is { } e)
+        {
+            try { e.Command(args); } catch (MpvException) { }
+        }
+    }
+
+    private bool CmdOk(params string[] args)
+    {
+        if (_engine is not { } e)
+            return false;
+        try { e.Command(args); return true; } catch (MpvException) { return false; }
+    }
+
+    private void Set(string name, string value)
+    {
+        if (_engine is { } e)
+        {
+            try { e.SetProperty(name, value); } catch (MpvException) { }
+        }
+    }
+
+    private void Set(string name, double value)
+    {
+        if (_engine is { } e)
+        {
+            try { e.SetProperty(name, value); } catch (MpvException) { }
+        }
+    }
+
+    private static string Inv(double v) => v.ToString(CultureInfo.InvariantCulture);
+
+    // mpv-side cycle: authoritative even before the first pause event seeds IsPaused.
+    public void TogglePlay() => Cmd("cycle", "pause");
 
     public void SeekToFraction(double fraction)
     {
-        if (_engine is not { } e || Duration <= 0)
+        if (_engine is null || Duration <= 0)
             return;
         double seconds = System.Math.Clamp(fraction, 0, 1) * Duration;
         Position = seconds;
         _awaitingSeek = true;
-        e.Command("seek", seconds.ToString(CultureInfo.InvariantCulture), "absolute");
+        if (!CmdOk("seek", Inv(seconds), "absolute"))
+            _awaitingSeek = false; // a failed seek must not freeze the time-pos echo
     }
 
     public void SeekRelative(double seconds)
     {
-        if (_engine is not { } e)
-            return;
         _awaitingSeek = true;
-        e.Command("seek", seconds.ToString(CultureInfo.InvariantCulture), "relative");
+        if (!CmdOk("seek", Inv(seconds), "relative"))
+        {
+            _awaitingSeek = false;
+            return;
+        }
         double target = Duration > 0 ? System.Math.Clamp(Position + seconds, 0, Duration) : Position + seconds;
         ToastRequested?.Invoke(FormatTime(target));
     }
 
-    public void FrameStep(bool forward) => _engine?.Command(forward ? "frame-step" : "frame-back-step");
+    public void FrameStep(bool forward) => Cmd(forward ? "frame-step" : "frame-back-step");
 
-    public void JumpChapter(int delta) => _engine?.Command("add", "chapter", delta.ToString(CultureInfo.InvariantCulture));
+    public void JumpChapter(int delta) => Cmd("add", "chapter", Inv(delta));
 
     public void NudgeVolume(double delta)
     {
-        if (_engine is not { } e)
-            return;
-        double v = System.Math.Clamp(Volume + delta, 0, 130);
-        e.SetProperty("volume", v);
-        ToastRequested?.Invoke($"Volume {v:0}%");
+        // "add" lets mpv clamp to volume-max and stays correct under rapid presses (no stale cache).
+        if (CmdOk("add", "volume", Inv(delta)))
+            ToastRequested?.Invoke($"Volume {System.Math.Clamp(Volume + delta, 0, 130):0}%");
     }
 
     public void ToggleMute()
     {
-        if (_engine is not { } e)
-            return;
-        bool m = !IsMuted;
-        e.SetProperty("mute", m);
-        ToastRequested?.Invoke(m ? "Muted" : "Unmuted");
+        bool willMute = !IsMuted;
+        if (CmdOk("cycle", "mute"))
+            ToastRequested?.Invoke(willMute ? "Muted" : "Unmuted");
     }
 
-    public void SetVolume(double value) => _engine?.SetProperty("volume", System.Math.Clamp(value, 0, 130));
+    public void SetVolume(double value) => Set("volume", System.Math.Clamp(value, 0, 130));
 
     public void ToggleAbLoop()
     {
-        _engine?.Command("ab-loop");
-        ToastRequested?.Invoke("A-B loop");
+        if (CmdOk("ab-loop"))
+            ToastRequested?.Invoke("A-B loop");
     }
 
-    public void SetSpeed(double speed) => _engine?.SetProperty("speed", speed);
+    public void SetSpeed(double speed) => Set("speed", speed);
 
     public void CycleSpeed()
     {
@@ -324,23 +368,22 @@ public partial class PlayerViewModel : ObservableObject
 
     public void TakeScreenshot()
     {
+        if (_engine is not { } e)
+            return;
         // "video" mode grabs the decoded frame directly — no render dependency, so it can't stall.
-        _engine?.CommandAsync("screenshot", "video");
+        try { e.CommandAsync("screenshot", "video"); } catch (MpvException) { return; }
         ToastRequested?.Invoke("Screenshot saved");
     }
 
-    public void SetSubtitleOff() => _engine?.SetProperty("sid", "no");
-    public void SelectSubtitle(TrackInfo track) => _engine?.SetProperty("sid", track.Id.ToString(CultureInfo.InvariantCulture));
-    public void SelectAudio(TrackInfo track) => _engine?.SetProperty("aid", track.Id.ToString(CultureInfo.InvariantCulture));
-    public void SeekToChapter(ChapterInfo chapter) => _engine?.SetProperty("chapter", chapter.Index.ToString(CultureInfo.InvariantCulture));
+    public void SetSubtitleOff() => Set("sid", "no");
+    public void SelectSubtitle(TrackInfo track) => Set("sid", track.Id.ToString(CultureInfo.InvariantCulture));
+    public void SelectAudio(TrackInfo track) => Set("aid", track.Id.ToString(CultureInfo.InvariantCulture));
+    public void SeekToChapter(ChapterInfo chapter) => Set("chapter", chapter.Index.ToString(CultureInfo.InvariantCulture));
 
     public void NudgeSubDelay(int ms)
     {
-        if (_engine is not { } e)
-            return;
-        double next = SubDelayMs / 1000.0 + ms / 1000.0;
-        e.SetProperty("sub-delay", next);
-        ToastRequested?.Invoke($"Subtitle delay {next * 1000:+0;-0;0} ms");
+        if (CmdOk("add", "sub-delay", Inv(ms / 1000.0)))
+            ToastRequested?.Invoke($"Subtitle delay {SubDelayMs + ms:+0;-0;0} ms");
     }
 
     public void ToggleTimeLabel() => ShowRemaining = !ShowRemaining;

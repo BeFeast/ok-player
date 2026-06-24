@@ -123,6 +123,14 @@ public sealed partial class PlayerView : UserControl
     {
         if (!_chromeVisible || !Vm.IsPlaying || _panelOpen) // paused / panel-open / already-hidden keeps chrome up
             return;
+        // An open flyout/menu (volume, speed, subtitle, audio, overflow) renders in a popup; pointer
+        // moves inside it don't reset the idle timer, so pin chrome while any popup is open.
+        if (XamlRoot is not null &&
+            Microsoft.UI.Xaml.Media.VisualTreeHelper.GetOpenPopupsForXamlRoot(XamlRoot).Count > 0)
+        {
+            _idleTimer.Start(); // re-check after the popup closes
+            return;
+        }
         _chromeVisible = false;
         TitleChrome.IsHitTestVisible = false;
         BottomChrome.IsHitTestVisible = false;
@@ -293,8 +301,9 @@ public sealed partial class PlayerView : UserControl
     {
         try
         {
+            Vm.OnOpening();  // clear the prior file's playhead/duration/chapter before the new load
             Video.Open(pathOrUrl);
-            RevealChrome(); // show the controls when a file opens (drag-drop / picker)
+            RevealChrome();  // show the controls when a file opens (drag-drop / picker)
         }
         catch (Exception)
         {
