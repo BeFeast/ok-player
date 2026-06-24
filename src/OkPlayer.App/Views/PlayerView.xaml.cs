@@ -29,6 +29,7 @@ public sealed partial class PlayerView : UserControl
     private bool _settingVolumeSlider;
     private readonly ThumbnailService _thumbs = new();
     private int _previewToken; // ignores stale async thumbnail results
+    private bool _viewUnloaded; // guards against duplicate Unloaded disposing the thumbnail engine twice
 
     public PlayerViewModel Vm { get; } = new();
 
@@ -61,7 +62,12 @@ public sealed partial class PlayerView : UserControl
         Seek.ScrubStateChanged += scrubbing => Vm.IsScrubbing = scrubbing;
         Seek.HoverChanged += OnSeekHover;
         Seek.HoverEnded += OnSeekHoverEnded;
-        Unloaded += (_, _) => System.Threading.Tasks.Task.Run(() => _thumbs.Dispose());
+        Unloaded += (_, _) =>
+        {
+            if (_viewUnloaded) return;
+            _viewUnloaded = true;
+            System.Threading.Tasks.Task.Run(() => _thumbs.Dispose());
+        };
         Vm.PropertyChanged += OnVmPropertyChanged;
         Vm.ToastRequested += ShowToast;
         Vm.Chapters.CollectionChanged += (_, _) => UpdateChaptersEmpty();
@@ -136,14 +142,14 @@ public sealed partial class PlayerView : UserControl
 
     private async System.Threading.Tasks.Task RequestPreviewAsync(double time, int token)
     {
-        string? path = await _thumbs.GetThumbnailAsync(time);
-        if (path is null || token != _previewToken)
-            return; // stale (cursor moved on) or no frame
         try
         {
+            string? path = await _thumbs.GetThumbnailAsync(time, () => token != _previewToken);
+            if (path is null || token != _previewToken)
+                return; // stale (cursor moved on) or no frame
             PreviewImage.Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(path));
         }
-        catch { /* transient image-load failure — keep the previous frame */ }
+        catch { /* transient failure — keep the previous frame; never fault this fire-and-forget task */ }
     }
 
     private void OnSeekHoverEnded() => PreviewPanel.Opacity = 0;
@@ -321,18 +327,21 @@ public sealed partial class PlayerView : UserControl
     {
         if (!Vm.HasMedia)
             return;
-        foreach (var ch in Vm.Chapters.ToList())
+        try
         {
-            if (!_panelOpen)
-                break; // panel closed — stop generating (cached thumbs remain for next open)
-            if (ch.Thumbnail is not null)
-                continue;
-            string? path = await _thumbs.GetThumbnailAsync(ch.Time + 0.5); // a hair past the boundary
-            if (path is null)
-                continue;
-            try { ch.Thumbnail = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(path)); }
-            catch { /* ignore a transient load failure */ }
+            foreach (var ch in Vm.Chapters.ToList())
+            {
+                if (!_panelOpen)
+                    break; // panel closed — stop generating (cached thumbs remain for next open)
+                if (ch.Thumbnail is not null)
+                    continue;
+                string? path = await _thumbs.GetThumbnailAsync(ch.Time + 0.5, () => !_panelOpen); // a hair past the boundary
+                if (path is null || !_panelOpen)
+                    continue;
+                ch.Thumbnail = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(path));
+            }
         }
+        catch { /* transient — leave remaining thumbnails null (retried on next panel open) */ }
     }
 
     // ---- volume & overflow ----
