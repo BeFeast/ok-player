@@ -156,10 +156,15 @@ public sealed class MpvContext : IDisposable
         _disposed = true;
         if (_handle.IsValid)
         {
-            MpvNative.mpv_wakeup(_handle); // unblock the pump's mpv_wait_event
-            _eventThread?.Join(TimeSpan.FromSeconds(2));
-            MpvNative.mpv_terminate_destroy(_handle);
-            _handle = default;
+            MpvNative.mpv_wakeup(_handle); // unblock the pump's mpv_wait_event so it observes _disposed
+            bool pumpExited = _eventThread is null || _eventThread.Join(TimeSpan.FromSeconds(5));
+            if (pumpExited)
+            {
+                // Safe to destroy: the pump has returned and will not touch the handle again.
+                MpvNative.mpv_terminate_destroy(_handle);
+                _handle = default;
+            }
+            // If the pump is still stuck, leak the handle rather than risk a use-after-free.
         }
     }
 }

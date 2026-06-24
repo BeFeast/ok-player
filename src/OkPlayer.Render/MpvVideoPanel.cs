@@ -66,7 +66,7 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
 
         // SizeChanged often fires before Loaded (before the device existed), so create the swap chain
         // now that the control is laid out; CompositionScaleChanged will correct DPI later.
-        if (ActualWidth > 0 && ActualHeight > 0)
+        if (HasRenderableSize)
             TryCreateSwapChain();
 
         HookRendering();
@@ -75,6 +75,10 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
 
     private double ScaleX => _panel is { CompositionScaleX: > 0 } ? _panel.CompositionScaleX : 1.0;
     private double ScaleY => _panel is { CompositionScaleY: > 0 } ? _panel.CompositionScaleY : 1.0;
+
+    // True only when both physical-pixel dimensions are at least 1px, so a fractional logical size
+    // (0 &lt; w &lt; 1) during layout/animation can't truncate to a zero-sized swap chain.
+    private bool HasRenderableSize => (int)(ActualWidth * ScaleX) >= 1 && (int)(ActualHeight * ScaleY) >= 1;
 
     private void HookRendering()
     {
@@ -86,7 +90,7 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
 
     private void OnSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        if (_device == null || e.NewSize.Width <= 0 || e.NewSize.Height <= 0)
+        if (_device == null || !HasRenderableSize)
             return;
         if (_swapChain == null)
             TryCreateSwapChain();
@@ -96,7 +100,7 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
 
     private void TryCreateSwapChain()
     {
-        if (_swapChain != null || _device == null || _panel == null)
+        if (_swapChain != null || _device == null || _panel == null || !HasRenderableSize)
             return;
         _swapChain = new VideoSwapChain(_device, (int)ActualWidth, (int)ActualHeight, ScaleX, ScaleY);
         _panel.As<ISwapChainPanelNative>().SetSwapChain(_swapChain.SwapChainHandle);
@@ -130,7 +134,8 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
             return;
         _forceRender = false;
 
-        _swapChain.Begin();
+        if (!_swapChain.Begin())
+            return; // interop acquire failed (device removed / resize race) — skip this frame
         GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
         _render.Render(_swapChain.GLFrameBufferHandle, _swapChain.BufferWidth, _swapChain.BufferHeight);
         _swapChain.End();

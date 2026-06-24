@@ -29,19 +29,23 @@ internal sealed unsafe class GlInteropDevice
 
     public GlInteropDevice()
     {
-        IDXGIFactory2* factory;
-        ID3D11Device* device;
-        ID3D11DeviceContext* deviceContext;
+        IDXGIFactory2* factory = null;
+        ID3D11Device* device = null;
+        ID3D11DeviceContext* deviceContext = null;
 
         {
             Guid guid = typeof(IDXGIFactory2).GUID;
-            DXGI.GetApi(null).CreateDXGIFactory2(0, &guid, (void**)&factory);
+            int hr = DXGI.GetApi(null).CreateDXGIFactory2(0, &guid, (void**)&factory);
+            if (hr < 0 || factory == null)
+                throw new InvalidOperationException($"CreateDXGIFactory2 failed (0x{hr:X8}).");
         }
         {
             var flags = CreateDeviceFlag.BgraSupport | CreateDeviceFlag.VideoSupport;
-            D3D11.GetApi(null).CreateDevice(
+            int hr = D3D11.GetApi(null).CreateDevice(
                 null, D3DDriverType.Hardware, 0, (uint)flags, null, 0, D3D11.SdkVersion,
                 &device, null, &deviceContext);
+            if (hr < 0 || device == null)
+                throw new InvalidOperationException($"D3D11CreateDevice failed (0x{hr:X8}).");
         }
 
         DxFactory = (IntPtr)factory;
