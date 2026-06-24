@@ -197,9 +197,10 @@ public partial class PlayerViewModel : ObservableObject
 
     public void TakeScreenshot()
     {
-        // Async: a vo=libmpv screenshot needs a render, so a synchronous command on the render thread
-        // would deadlock.
-        _engine?.CommandAsync("screenshot");
+        // "video" mode grabs the decoded frame directly — no window render — so it never depends on
+        // (and can't deadlock or stall on) the render thread, in either play or pause. This is the
+        // PRD "clean" screenshot; a with-subtitles capture via the render API is a separate path.
+        _engine?.CommandAsync("screenshot", "video");
         ToastRequested?.Invoke("Screenshot saved");
     }
 
