@@ -11,5 +11,6 @@
         <ResourceDictionary Source="ms-appx:///OkPlayer.DesignSystem/Themes/Brushes.xaml" />
         <ResourceDictionary Source="ms-appx:///OkPlayer.DesignSystem/Themes/ScrimBrushes.xaml" />
         <ResourceDictionary Source="ms-appx:///OkPlayer.DesignSystem/Themes/Typography.xaml" />
+        <ResourceDictionary Source="ms-appx:///OkPlayer.DesignSystem/Themes/Controls/PlayerControls.xaml" />
     </ResourceDictionary.MergedDictionaries>
 </ResourceDictionary>

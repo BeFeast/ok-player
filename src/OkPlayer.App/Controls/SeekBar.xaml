@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="OkPlayer.App.Controls.SeekBar"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Height="18"
+    HorizontalContentAlignment="Stretch">
+
+    <Grid x:Name="Root" Background="Transparent"
+          PointerPressed="OnPointerPressed"
+          PointerMoved="OnPointerMoved"
+          PointerReleased="OnPointerReleased"
+          PointerCanceled="OnPointerCanceled"
+          PointerCaptureLost="OnPointerCaptureLost">
+
+        <!-- track -->
+        <Border Height="5" CornerRadius="3" VerticalAlignment="Center"
+                Background="{StaticResource OkSeekTrackBrush}" />
+        <!-- played fill -->
+        <Border x:Name="FillBar" Height="5" CornerRadius="3" Width="0"
+                VerticalAlignment="Center" HorizontalAlignment="Left"
+                Background="{StaticResource OkSeekFillBrush}" />
+        <!-- thumb -->
+        <Ellipse x:Name="ThumbDot" Width="13" Height="13" Fill="White"
+                 VerticalAlignment="Center" HorizontalAlignment="Left" />
+    </Grid>
+</UserControl>

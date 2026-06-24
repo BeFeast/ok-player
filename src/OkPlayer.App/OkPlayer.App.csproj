@@ -17,6 +17,10 @@
 
     <UseWinUI>true</UseWinUI>
     <EnableDefaultPageItems>true</EnableDefaultPageItems>
+    <!-- MVVMTK0045: [ObservableProperty] fields aren't AOT-friendly for WinRT. We JIT (no Native AOT),
+         and the toolkit's partial-property alternative doesn't generate under the WinUI/CsWinRT
+         pipeline here, so the field-based form is the working choice. -->
+    <NoWarn>$(NoWarn);MVVMTK0045</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
