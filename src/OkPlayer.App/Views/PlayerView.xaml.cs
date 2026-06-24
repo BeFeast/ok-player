@@ -3,6 +3,7 @@ using System.Globalization;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using OkPlayer.App.ViewModels;
 using Windows.ApplicationModel.DataTransfer;
@@ -26,6 +27,7 @@ public sealed partial class PlayerView : UserControl
     private bool _chromeVisible = true;
     private bool _panelOpen;
     private bool _syncingChapter;
+    private bool _settingVolumeSlider;
 
     public PlayerViewModel Vm { get; } = new();
 
@@ -243,6 +245,25 @@ public sealed partial class PlayerView : UserControl
 
     private void UpdateChaptersEmpty()
         => ChaptersEmpty.Visibility = Vm.Chapters.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+    // ---- volume & overflow ----
+
+    private void OnVolumeFlyoutOpened(object? sender, object e)
+    {
+        _settingVolumeSlider = true;     // suppress the echo from seeding the slider
+        VolumeSlider.Value = Vm.Volume;
+        _settingVolumeSlider = false;
+    }
+
+    private void OnVolumeSliderChanged(object sender, RangeBaseValueChangedEventArgs e)
+    {
+        if (!_settingVolumeSlider)
+            Vm.SetVolume(e.NewValue);
+    }
+
+    private void OnVolumeMuteClick(object sender, RoutedEventArgs e) => Vm.ToggleMute();
+    private void OnAbLoopClick(object sender, RoutedEventArgs e) => Vm.ToggleAbLoop();
+    private void OnOpenFromMenu(object sender, RoutedEventArgs e) => OpenFileRequested?.Invoke(this, EventArgs.Empty);
 
     // ---- toasts ----
 

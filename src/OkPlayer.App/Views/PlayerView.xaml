@@ -116,7 +116,21 @@
                                    VerticalAlignment="Center" Foreground="#CCFFFFFF" FontSize="11.5" FontWeight="Medium"
                                    Tapped="OnTrailingTimeTapped" />
                         <Button Style="{StaticResource OkOscIconButtonStyle}" Content="{x:Bind Vm.VolumeGlyph, Mode=OneWay}"
-                                Click="OnVolumeClick" ToolTipService.ToolTip="Mute (M)" />
+                                ToolTipService.ToolTip="Volume">
+                            <Button.Flyout>
+                                <Flyout FlyoutPresenterStyle="{StaticResource OkPopoverFlyoutStyle}" Placement="Top" Opened="OnVolumeFlyoutOpened">
+                                    <Grid Width="186" Padding="4" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="6">
+                                        <Button Grid.Column="0" Style="{StaticResource OkSwitcherRowStyle}" Padding="6"
+                                                FontFamily="Segoe Fluent Icons" FontSize="16" Content="{x:Bind Vm.VolumeGlyph, Mode=OneWay}"
+                                                Click="OnVolumeMuteClick" ToolTipService.ToolTip="Mute (M)" />
+                                        <Slider x:Name="VolumeSlider" Grid.Column="1" Minimum="0" Maximum="130" StepFrequency="1"
+                                                VerticalAlignment="Center" ValueChanged="OnVolumeSliderChanged" />
+                                        <TextBlock Grid.Column="2" Text="{x:Bind Vm.VolumeText, Mode=OneWay}" VerticalAlignment="Center"
+                                                   MinWidth="38" TextAlignment="Right" Style="{StaticResource OkSmallTextStyle}" />
+                                    </Grid>
+                                </Flyout>
+                            </Button.Flyout>
+                        </Button>
                         <!-- speed -->
                         <Button x:Name="SpeedChip" Style="{StaticResource OkSpeedChipStyle}" Margin="4,0"
                                 Content="{x:Bind Vm.SpeedText, Mode=OneWay}" ToolTipService.ToolTip="Playback speed">
@@ -187,8 +201,19 @@
                                 Click="OnScreenshotClick" ToolTipService.ToolTip="Screenshot (S)" />
                         <Button x:Name="FullscreenButton" Style="{StaticResource OkOscIconButtonStyle}" Content="&#xE740;"
                                 Click="OnFullscreenClick" ToolTipService.ToolTip="Fullscreen (F)" />
-                        <Button Style="{StaticResource OkOscIconButtonStyle}" Content="&#xE712;"
-                                ToolTipService.ToolTip="More" />
+                        <Button Style="{StaticResource OkOscIconButtonStyle}" Content="&#xE712;" ToolTipService.ToolTip="More">
+                            <Button.Flyout>
+                                <MenuFlyout>
+                                    <MenuFlyoutItem Text="Open file..." Click="OnOpenFromMenu" />
+                                    <MenuFlyoutItem Text="A-B loop" Click="OnAbLoopClick" />
+                                    <MenuFlyoutSeparator />
+                                    <MenuFlyoutItem Text="Playlist / Queue" IsEnabled="False" />
+                                    <MenuFlyoutItem Text="Video / Geometry" IsEnabled="False" />
+                                    <MenuFlyoutItem Text="Mini-player" IsEnabled="False" />
+                                    <MenuFlyoutItem Text="Settings..." IsEnabled="False" />
+                                </MenuFlyout>
+                            </Button.Flyout>
+                        </Button>
                     </StackPanel>
                 </Grid>
             </Border>

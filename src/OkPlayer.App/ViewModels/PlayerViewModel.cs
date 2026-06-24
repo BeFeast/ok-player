@@ -51,6 +51,7 @@ public partial class PlayerViewModel : ObservableObject
     public string PlayPauseGlyph => IsPaused ? Glyph(0xE768) : Glyph(0xE769); // Play / Pause
     public string VolumeGlyph => IsMuted ? Glyph(0xE74F) : Glyph(0xE767);     // Mute / Volume
     public string SubDelayText => $"{SubDelayMs:+0;-0;0} ms";
+    public string VolumeText => $"{Volume:0}%";
 
     private static string Glyph(int codePoint) => char.ConvertFromUtf32(codePoint);
 
@@ -78,6 +79,7 @@ public partial class PlayerViewModel : ObservableObject
     partial void OnShowRemainingChanged(bool value) => OnPropertyChanged(nameof(TrailingTimeText));
     partial void OnSpeedChanged(double value) => OnPropertyChanged(nameof(SpeedText));
     partial void OnSubDelayMsChanged(int value) => OnPropertyChanged(nameof(SubDelayText));
+    partial void OnVolumeChanged(double value) => OnPropertyChanged(nameof(VolumeText));
 
     /// <summary>Wire the VM to the engine: observe the properties the surface needs.</summary>
     public void Attach(MpvContext engine, DispatcherQueue dispatcher)
@@ -172,6 +174,14 @@ public partial class PlayerViewModel : ObservableObject
         bool m = !(e.GetPropertyBool("mute") ?? false);
         e.SetProperty("mute", m);
         ToastRequested?.Invoke(m ? "Muted" : "Unmuted");
+    }
+
+    public void SetVolume(double value) => _engine?.SetProperty("volume", System.Math.Clamp(value, 0, 130));
+
+    public void ToggleAbLoop()
+    {
+        _engine?.Command("ab-loop");
+        ToastRequested?.Invoke("A-B loop");
     }
 
     public void SetSpeed(double speed) => _engine?.SetProperty("speed", speed);
