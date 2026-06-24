@@ -31,9 +31,12 @@
     <ProjectReference Include="..\OkPlayer.Render\OkPlayer.Render.csproj" />
   </ItemGroup>
 
-  <!-- Bundle the libmpv engine next to the exe (fetched into native/, gitignored). -->
+  <!-- Bundle the libmpv engine next to the exe (fetched into native/, gitignored).
+       Conditional so a clone without the native binaries still builds (it just fails at
+       runtime with a clear DllNotFound until you run the fetch script). -->
   <ItemGroup>
-    <Content Include="$(MSBuildThisFileDirectory)..\..\native\libmpv\libmpv-2.dll">
+    <Content Include="$(MSBuildThisFileDirectory)..\..\native\libmpv\libmpv-2.dll"
+             Condition="Exists('$(MSBuildThisFileDirectory)..\..\native\libmpv\libmpv-2.dll')">
       <Link>libmpv-2.dll</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
