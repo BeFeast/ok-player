@@ -305,9 +305,9 @@ public sealed partial class PlayerView : UserControl
     {
         try
         {
-            Vm.OnOpening();  // clear the prior file's playhead/duration/chapter before the new load
-            Video.Open(pathOrUrl);
-            RevealChrome();  // show the controls when a file opens (drag-drop / picker)
+            Video.Open(pathOrUrl); // may throw on engine-init failure — do this before mutating UI state
+            Vm.OnOpening();        // load accepted: clear the prior file's playhead/duration/chapter/HasMedia
+            RevealChrome();        // show the controls when a file opens (drag-drop / picker)
         }
         catch (Exception)
         {
