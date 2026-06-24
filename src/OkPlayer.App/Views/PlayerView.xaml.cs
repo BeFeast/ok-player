@@ -96,7 +96,9 @@ public sealed partial class PlayerView : UserControl
         else if (e.PropertyName == nameof(PlayerViewModel.HasMedia))
         {
             EmptyHint.Visibility = Vm.HasMedia ? Visibility.Collapsed : Visibility.Visible;
-            RevealChrome(); // reveal once media is actually ready, so the idle countdown starts from then
+            // Reveal on any media-state change: ready -> start the idle countdown from now;
+            // cleared (e.g. decode error) -> bring the controls back up over the empty state.
+            RevealChrome();
         }
     }
 
