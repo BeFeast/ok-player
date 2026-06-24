@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="OkPlayer.App.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:media="using:Microsoft.UI.Xaml.Media"
+    Title="OK Player">
+
+    <Window.SystemBackdrop>
+        <media:MicaBackdrop Kind="Base" />
+    </Window.SystemBackdrop>
+
+    <Grid>
+        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10">
+            <Border Width="56" Height="56" CornerRadius="15" HorizontalAlignment="Center">
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="0.6,1">
+                        <GradientStop Offset="0" Color="{StaticResource OkTeal500}" />
+                        <GradientStop Offset="1" Color="{StaticResource OkTeal700}" />
+                    </LinearGradientBrush>
+                </Border.Background>
+                <FontIcon Glyph="&#xE768;" Foreground="White" FontSize="24" />
+            </Border>
+            <TextBlock Text="OK Player" Style="{StaticResource OkDisplayTextStyle}"
+                       HorizontalAlignment="Center" />
+            <TextBlock Text="design system wired — Mica · OK Teal · Segoe UI Variable"
+                       Style="{StaticResource OkSmallTextStyle}" HorizontalAlignment="Center" />
+        </StackPanel>
+    </Grid>
+</Window>

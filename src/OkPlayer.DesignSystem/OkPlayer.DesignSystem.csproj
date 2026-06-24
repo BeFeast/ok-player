@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The OK Player design language as a WinUI resource library: tokens, brushes (themed via
+       ThemeDictionaries), typography, scrim materials, and control styles. Merged by App.xaml. -->
+  <PropertyGroup>
+    <TargetFramework>net9.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.22621.0</TargetPlatformMinVersion>
+    <RootNamespace>OkPlayer.DesignSystem</RootNamespace>
+    <AssemblyName>OkPlayer.DesignSystem</AssemblyName>
+    <UseWinUI>true</UseWinUI>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" />
+  </ItemGroup>
+
+</Project>

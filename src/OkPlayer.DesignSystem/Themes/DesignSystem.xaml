@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Master design-system dictionary. App.xaml merges this single file.
+     Order matters: Colors first, then Tokens, Brushes (themed), ScrimBrushes (invariant),
+     then Typography (which references brushes). -->
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="ms-appx:///OkPlayer.DesignSystem/Themes/Colors.xaml" />
+        <ResourceDictionary Source="ms-appx:///OkPlayer.DesignSystem/Themes/Tokens.xaml" />
+        <ResourceDictionary Source="ms-appx:///OkPlayer.DesignSystem/Themes/Brushes.xaml" />
+        <ResourceDictionary Source="ms-appx:///OkPlayer.DesignSystem/Themes/ScrimBrushes.xaml" />
+        <ResourceDictionary Source="ms-appx:///OkPlayer.DesignSystem/Themes/Typography.xaml" />
+    </ResourceDictionary.MergedDictionaries>
+</ResourceDictionary>

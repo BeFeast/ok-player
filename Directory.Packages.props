@@ -1,0 +1,24 @@
+<Project>
+
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- WinUI 3 / Windows App SDK -->
+    <PackageVersion Include="Microsoft.WindowsAppSDK" Version="2.2.0" />
+    <PackageVersion Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.8249" />
+
+    <!-- MVVM -->
+    <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+
+    <!-- Render: ANGLE GL context + D3D11 interop for the libmpv render API -->
+    <PackageVersion Include="OpenTK" Version="4.9.4" />
+    <PackageVersion Include="Silk.NET.Core" Version="2.23.0" />
+    <PackageVersion Include="Silk.NET.Direct3D11" Version="2.23.0" />
+    <PackageVersion Include="Silk.NET.OpenGL" Version="2.23.0" />
+    <PackageVersion Include="Silk.NET.DXGI" Version="2.23.0" />
+  </ItemGroup>
+
+</Project>

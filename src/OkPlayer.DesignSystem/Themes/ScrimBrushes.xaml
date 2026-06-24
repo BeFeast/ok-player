@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Over-video chrome materials. THEME-INVARIANT by design: the same dark scrim is used in both
+     Light and Dark, because the video beneath is theme-agnostic (canvas Band 02 recipe).
+     These are SCRIM brushes (solid/gradient with alpha), NOT AcrylicBrush — AcrylicBrush cannot
+     sample a SwapChainPanel, so live-blur over video is impossible. Legibility comes from the
+     scrim gradient + alpha fill + content shadow, exactly as the recipe prescribes. -->
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- OSC / popover-over-video base fill: rgba(22,22,25,.5) -->
+    <SolidColorBrush x:Key="OkOverVideoFillBrush" Color="#80161619" />
+    <!-- Toast / indicator fill: rgba(22,22,25,.6) -->
+    <SolidColorBrush x:Key="OkOverVideoToastBrush" Color="#99161619" />
+    <!-- Inset top hairline highlight: rgba(255,255,255,.14) -->
+    <SolidColorBrush x:Key="OkOverVideoHairlineBrush" Color="#24FFFFFF" />
+
+    <!-- Content over video -->
+    <SolidColorBrush x:Key="OkOverVideoTextBrush" Color="#F2FFFFFF" />
+    <SolidColorBrush x:Key="OkOverVideoTextDimBrush" Color="#CCFFFFFF" />
+    <SolidColorBrush x:Key="OkOverVideoTextFaintBrush" Color="#73FFFFFF" />
+    <!-- Accent over video is always teal-400 -->
+    <SolidColorBrush x:Key="OkOverVideoAccentBrush" Color="#FF28B3AA" />
+
+    <!-- Seekbar (over video) -->
+    <SolidColorBrush x:Key="OkSeekTrackBrush" Color="#40FFFFFF" />
+    <SolidColorBrush x:Key="OkSeekBufferedBrush" Color="#66FFFFFF" />
+    <SolidColorBrush x:Key="OkSeekFillBrush" Color="#FF28B3AA" />
+    <SolidColorBrush x:Key="OkSeekThumbBrush" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="OkChapterTickBrush" Color="#8CFFFFFF" />
+    <SolidColorBrush x:Key="OkAbRegionBrush" Color="#2928B3AA" />
+
+    <!-- Bottom scrim behind the OSC: linear-gradient(to top, rgba(0,0,0,.42) -> 0) -->
+    <LinearGradientBrush x:Key="OkBottomScrimBrush" StartPoint="0,1" EndPoint="0,0">
+        <GradientStop Offset="0.0" Color="#6B000000" />
+        <GradientStop Offset="1.0" Color="#00000000" />
+    </LinearGradientBrush>
+
+    <!-- Top scrim behind the titlebar: linear-gradient(to bottom, rgba(0,0,0,.5) -> 0) -->
+    <LinearGradientBrush x:Key="OkTopScrimBrush" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Offset="0.0" Color="#80000000" />
+        <GradientStop Offset="1.0" Color="#00000000" />
+    </LinearGradientBrush>
+
+    <!-- Left edge scrim where a right panel meets the video -->
+    <LinearGradientBrush x:Key="OkPanelEdgeScrimBrush" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Offset="0.0" Color="#00000000" />
+        <GradientStop Offset="1.0" Color="#40000000" />
+    </LinearGradientBrush>
+
+</ResourceDictionary>
