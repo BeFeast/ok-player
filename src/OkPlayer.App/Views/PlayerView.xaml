@@ -5,7 +5,8 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:render="using:OkPlayer.Render"
     xmlns:ctl="using:OkPlayer.App.Controls"
-    xmlns:vm="using:OkPlayer.App.ViewModels">
+    xmlns:vm="using:OkPlayer.App.ViewModels"
+    IsTabStop="True">
 
     <UserControl.Resources>
         <Storyboard x:Name="ChromeShowSb">
@@ -51,8 +52,8 @@
         </Storyboard>
     </UserControl.Resources>
 
-    <Grid x:Name="RootGrid" Background="#FF050505" IsTabStop="True" AllowDrop="True"
-          PointerMoved="OnRootPointerMoved" PointerPressed="OnRootPointerPressed" KeyDown="OnRootKeyDown"
+    <Grid x:Name="RootGrid" Background="#FF050505" AllowDrop="True"
+          PointerMoved="OnRootPointerMoved" PointerPressed="OnRootPointerPressed"
           DragOver="OnDragOver" Drop="OnDrop">
 
         <Grid.KeyboardAccelerators>

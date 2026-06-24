@@ -59,12 +59,14 @@ public sealed partial class PlayerView : UserControl
         Vm.ToastRequested += ShowToast;
         Vm.Chapters.CollectionChanged += (_, _) => UpdateChaptersEmpty();
         PanelHideSb.Completed += (_, _) => ChaptersPanel.Visibility = Visibility.Collapsed;
+        // Handle keys on the UserControl itself (a Control holds focus reliably, unlike a Grid).
+        KeyDown += OnRootKeyDown;
         Loaded += OnLoaded;
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
-        RootGrid.Focus(FocusState.Programmatic);
+        Focus(FocusState.Programmatic);
         RevealChrome();
     }
 
@@ -141,7 +143,7 @@ public sealed partial class PlayerView : UserControl
     // key map (Space, S, …) keeps working. Buttons don't steal focus (AllowFocusOnInteraction=False)
     // and flyout content lives in a popup, so neither is affected.
     private void OnRootPointerPressed(object sender, PointerRoutedEventArgs e)
-        => RootGrid.Focus(FocusState.Programmatic);
+        => Focus(FocusState.Programmatic);
 
     private void OnVideoTapped(object sender, TappedRoutedEventArgs e)
     {
@@ -285,7 +287,11 @@ public sealed partial class PlayerView : UserControl
     // ---- open media ----
 
     /// <summary>Load a local path or URL into the engine.</summary>
-    public void OpenMedia(string pathOrUrl) => Video.Open(pathOrUrl);
+    public void OpenMedia(string pathOrUrl)
+    {
+        Video.Open(pathOrUrl);
+        RevealChrome(); // show the controls when a file opens (drag-drop / picker)
+    }
 
     private void OnOpenAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
