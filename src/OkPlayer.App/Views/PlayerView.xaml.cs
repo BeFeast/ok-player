@@ -31,6 +31,9 @@ public sealed partial class PlayerView : UserControl
 
     public PlayerViewModel Vm { get; } = new();
 
+    /// <summary>The auto-hiding top bar, used as the window's title-bar drag region.</summary>
+    public FrameworkElement TitleBarElement => TitleChrome;
+
     /// <summary>F / the fullscreen button: toggle fullscreen (the window owns the presenter).</summary>
     public event EventHandler? ToggleFullscreenRequested;
     /// <summary>Esc: leave fullscreen if in it.</summary>

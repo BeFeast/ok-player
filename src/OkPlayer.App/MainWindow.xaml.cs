@@ -19,9 +19,30 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         Title = "OK Player";
+
+        // Immersive: extend content under the title-bar band so the video reaches the top edge;
+        // the auto-hiding top bar is the drag region, and the caption buttons go transparent with
+        // white glyphs so Mica/video shows through.
+        ExtendsContentIntoTitleBar = true;
+        SetTitleBar(Player.TitleBarElement);
+        ConfigureCaptionButtons();
+
         Player.ToggleFullscreenRequested += (_, _) => SetFullscreen(!_fullscreen);
         Player.ExitFullscreenRequested += (_, _) => SetFullscreen(false);
         Player.OpenFileRequested += async (_, _) => await OpenFileAsync();
+    }
+
+    private void ConfigureCaptionButtons()
+    {
+        var titleBar = AppWindow.TitleBar;
+        titleBar.ButtonBackgroundColor = Microsoft.UI.Colors.Transparent;
+        titleBar.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Transparent;
+        titleBar.ButtonForegroundColor = Microsoft.UI.Colors.White;
+        titleBar.ButtonInactiveForegroundColor = Windows.UI.Color.FromArgb(0xB0, 0xFF, 0xFF, 0xFF);
+        titleBar.ButtonHoverBackgroundColor = Windows.UI.Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF);
+        titleBar.ButtonHoverForegroundColor = Microsoft.UI.Colors.White;
+        titleBar.ButtonPressedBackgroundColor = Windows.UI.Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF);
+        titleBar.ButtonPressedForegroundColor = Microsoft.UI.Colors.White;
     }
 
     private void SetFullscreen(bool on)
