@@ -28,6 +28,15 @@
   <ItemGroup>
     <ProjectReference Include="..\OkPlayer.Core\OkPlayer.Core.csproj" />
     <ProjectReference Include="..\OkPlayer.DesignSystem\OkPlayer.DesignSystem.csproj" />
+    <ProjectReference Include="..\OkPlayer.Render\OkPlayer.Render.csproj" />
+  </ItemGroup>
+
+  <!-- Bundle the libmpv engine next to the exe (fetched into native/, gitignored). -->
+  <ItemGroup>
+    <Content Include="$(MSBuildThisFileDirectory)..\..\native\libmpv\libmpv-2.dll">
+      <Link>libmpv-2.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
 </Project>

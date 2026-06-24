@@ -13,12 +13,13 @@
     <!-- MVVM -->
     <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
 
-    <!-- Render: ANGLE GL context + D3D11 interop for the libmpv render API -->
-    <PackageVersion Include="OpenTK" Version="4.9.4" />
-    <PackageVersion Include="Silk.NET.Core" Version="2.23.0" />
-    <PackageVersion Include="Silk.NET.Direct3D11" Version="2.23.0" />
-    <PackageVersion Include="Silk.NET.OpenGL" Version="2.23.0" />
-    <PackageVersion Include="Silk.NET.DXGI" Version="2.23.0" />
+    <!-- Render: native desktop GL (OpenTK/WGL) + D3D11/DXGI (Silk.NET), bridged by
+         WGL_NV_DX_interop. Pinned to the exact versions of the proven mpv-winui reference
+         to de-risk the interop (bump only after the pipeline is verified at runtime). -->
+    <PackageVersion Include="OpenTK" Version="4.8.2" />
+    <PackageVersion Include="Silk.NET.Core" Version="2.21.0" />
+    <PackageVersion Include="Silk.NET.Direct3D11" Version="2.21.0" />
+    <PackageVersion Include="Silk.NET.DXGI" Version="2.21.0" />
   </ItemGroup>
 
 </Project>
