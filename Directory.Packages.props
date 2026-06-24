@@ -1,0 +1,25 @@
+<Project>
+
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- WinUI 3 / Windows App SDK -->
+    <PackageVersion Include="Microsoft.WindowsAppSDK" Version="2.2.0" />
+    <PackageVersion Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.8249" />
+
+    <!-- MVVM -->
+    <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+
+    <!-- Render: native desktop GL (OpenTK/WGL) + D3D11/DXGI (Silk.NET), bridged by
+         WGL_NV_DX_interop. Pinned to the exact versions of the proven mpv-winui reference
+         to de-risk the interop (bump only after the pipeline is verified at runtime). -->
+    <PackageVersion Include="OpenTK" Version="4.8.2" />
+    <PackageVersion Include="Silk.NET.Core" Version="2.21.0" />
+    <PackageVersion Include="Silk.NET.Direct3D11" Version="2.21.0" />
+    <PackageVersion Include="Silk.NET.DXGI" Version="2.21.0" />
+  </ItemGroup>
+
+</Project>

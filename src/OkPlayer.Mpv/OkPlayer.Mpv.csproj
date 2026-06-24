@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- libmpv P/Invoke + managed wrappers. Pure net9.0 (no WinUI) so the engine stays
+       headless-testable and reusable. Uses [LibraryImport] source generators. -->
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <RootNamespace>OkPlayer.Mpv</RootNamespace>
+    <AssemblyName>OkPlayer.Mpv</AssemblyName>
+  </PropertyGroup>
+
+</Project>

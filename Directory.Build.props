@@ -1,0 +1,17 @@
+<Project>
+
+  <!-- Shared settings for every OK Player project. Per-project TargetFramework is set in each csproj
+       (engine/core stay plain net9.0 for headless reuse; UI projects use net9.0-windows10.0.26100.0). -->
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Product>OK Player</Product>
+    <Company>OK Player contributors</Company>
+    <Copyright>Copyright (c) OK Player contributors. GPL-3.0-or-later.</Copyright>
+    <NoWarn>$(NoWarn);NU1507</NoWarn>
+  </PropertyGroup>
+
+</Project>

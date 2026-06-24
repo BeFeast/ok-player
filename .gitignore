@@ -69,3 +69,7 @@ $RECYCLE.BIN/
 .env.local
 appsettings.*.local.json
 secrets.json
+
+# --- OK Player native deps (libmpv etc.; fetched via scripts, not committed) ---
+/native/*
+!/native/README.md

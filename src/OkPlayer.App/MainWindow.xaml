@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="OkPlayer.App.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:media="using:Microsoft.UI.Xaml.Media"
+    xmlns:render="using:OkPlayer.Render"
+    Title="OK Player">
+
+    <Window.SystemBackdrop>
+        <media:MicaBackdrop Kind="Base" />
+    </Window.SystemBackdrop>
+
+    <Grid>
+        <!-- The single video plane (Phase 0 engine spike). -->
+        <render:MpvVideoPanel x:Name="Video" />
+
+        <!-- Throwaway diagnostics overlay. -->
+        <Border VerticalAlignment="Bottom" Background="#A6000000" Padding="12,7">
+            <TextBlock x:Name="Status" Text="starting…" Foreground="White"
+                       FontFamily="Consolas" FontSize="12" TextWrapping="Wrap" />
+        </Border>
+    </Grid>
+</Window>

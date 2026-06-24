@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Semantic brushes, themed via ThemeDictionaries (Light / Dark / HighContrast).
+     Consume with {ThemeResource ...} so Light/Auto swaps automatically.
+     NOTE: brushes used OVER the video plane (OSC, toasts, seekbar) live in ScrimBrushes.xaml
+     and are theme-invariant. Panels/popovers that slide over video ARE themed (they are >90%
+     opaque, so the missing live-blur is imperceptible). -->
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <ResourceDictionary.ThemeDictionaries>
+
+        <!-- ===================== LIGHT ===================== -->
+        <ResourceDictionary x:Key="Light">
+            <!-- Surfaces -->
+            <SolidColorBrush x:Key="OkSurfaceBaseBrush" Color="#FFF3F3F3" />
+            <SolidColorBrush x:Key="OkSurfaceLayer1Brush" Color="#FFFBFBFB" />
+            <SolidColorBrush x:Key="OkSurfaceCardBrush" Color="#FFFFFFFF" />
+            <SolidColorBrush x:Key="OkSettingsWindowBrush" Color="#FFF7F7F5" />
+            <!-- Panels / popovers that float over video (near-opaque) -->
+            <SolidColorBrush x:Key="OkPanelOverVideoBrush" Color="#E6F4F4F2" />
+            <SolidColorBrush x:Key="OkPopoverBrush" Color="#F7F8F8F7" />
+            <!-- Text -->
+            <SolidColorBrush x:Key="OkTextPrimaryBrush" Color="#FF161616" />
+            <SolidColorBrush x:Key="OkTextBodyBrush" Color="#FF1A1A1A" />
+            <SolidColorBrush x:Key="OkTextSecondaryBrush" Color="#8C000000" />
+            <SolidColorBrush x:Key="OkTextTertiaryBrush" Color="#73000000" />
+            <SolidColorBrush x:Key="OkTextFaintBrush" Color="#4D000000" />
+            <!-- Strokes -->
+            <SolidColorBrush x:Key="OkStrokeBrush" Color="#14000000" />
+            <SolidColorBrush x:Key="OkCardStrokeBrush" Color="#12000000" />
+            <!-- Fills -->
+            <SolidColorBrush x:Key="OkSubtleFillBrush" Color="#0D000000" />
+            <SolidColorBrush x:Key="OkSubtleFillStrongBrush" Color="#14000000" />
+            <!-- Accent (light = teal 500) -->
+            <SolidColorBrush x:Key="OkAccentBrush" Color="#FF10938A" />
+            <SolidColorBrush x:Key="OkAccentTextBrush" Color="#FF0A655F" />
+            <SolidColorBrush x:Key="OkAccentSecondaryTextBrush" Color="#FF0C7C75" />
+            <SolidColorBrush x:Key="OkAccentRailBrush" Color="#FF10938A" />
+            <SolidColorBrush x:Key="OkAccentSelectionFillBrush" Color="#1F10938A" />
+            <SolidColorBrush x:Key="OkAccentTintBrush" Color="#1A10938A" />
+            <SolidColorBrush x:Key="OkOnAccentBrush" Color="#FFFFFFFF" />
+            <!-- Status -->
+            <SolidColorBrush x:Key="OkErrorBrush" Color="#FFB42318" />
+        </ResourceDictionary>
+
+        <!-- ===================== DARK ===================== -->
+        <ResourceDictionary x:Key="Dark">
+            <SolidColorBrush x:Key="OkSurfaceBaseBrush" Color="#FF1F1F1F" />
+            <SolidColorBrush x:Key="OkSurfaceLayer1Brush" Color="#FF2B2B2B" />
+            <SolidColorBrush x:Key="OkSurfaceCardBrush" Color="#FF2B2B2B" />
+            <SolidColorBrush x:Key="OkSettingsWindowBrush" Color="#FF1F1F1F" />
+            <SolidColorBrush x:Key="OkPanelOverVideoBrush" Color="#F71F1F1F" />
+            <SolidColorBrush x:Key="OkPopoverBrush" Color="#F71F1F1F" />
+            <SolidColorBrush x:Key="OkTextPrimaryBrush" Color="#EBFFFFFF" />
+            <SolidColorBrush x:Key="OkTextBodyBrush" Color="#EBFFFFFF" />
+            <SolidColorBrush x:Key="OkTextSecondaryBrush" Color="#B3FFFFFF" />
+            <SolidColorBrush x:Key="OkTextTertiaryBrush" Color="#73FFFFFF" />
+            <SolidColorBrush x:Key="OkTextFaintBrush" Color="#59FFFFFF" />
+            <SolidColorBrush x:Key="OkStrokeBrush" Color="#1FFFFFFF" />
+            <SolidColorBrush x:Key="OkCardStrokeBrush" Color="#14FFFFFF" />
+            <SolidColorBrush x:Key="OkSubtleFillBrush" Color="#14FFFFFF" />
+            <SolidColorBrush x:Key="OkSubtleFillStrongBrush" Color="#1FFFFFFF" />
+            <SolidColorBrush x:Key="OkAccentBrush" Color="#FF28B3AA" />
+            <SolidColorBrush x:Key="OkAccentTextBrush" Color="#FF28B3AA" />
+            <SolidColorBrush x:Key="OkAccentSecondaryTextBrush" Color="#FF28B3AA" />
+            <SolidColorBrush x:Key="OkAccentRailBrush" Color="#FF28B3AA" />
+            <SolidColorBrush x:Key="OkAccentSelectionFillBrush" Color="#2628B3AA" />
+            <SolidColorBrush x:Key="OkAccentTintBrush" Color="#1F28B3AA" />
+            <SolidColorBrush x:Key="OkOnAccentBrush" Color="#FF04201E" />
+            <SolidColorBrush x:Key="OkErrorBrush" Color="#FFFF6B5E" />
+        </ResourceDictionary>
+
+        <!-- ===================== HIGH CONTRAST ===================== -->
+        <ResourceDictionary x:Key="HighContrast">
+            <SolidColorBrush x:Key="OkSurfaceBaseBrush" Color="{ThemeResource SystemColorWindowColor}" />
+            <SolidColorBrush x:Key="OkSurfaceLayer1Brush" Color="{ThemeResource SystemColorWindowColor}" />
+            <SolidColorBrush x:Key="OkSurfaceCardBrush" Color="{ThemeResource SystemColorWindowColor}" />
+            <SolidColorBrush x:Key="OkSettingsWindowBrush" Color="{ThemeResource SystemColorWindowColor}" />
+            <SolidColorBrush x:Key="OkPanelOverVideoBrush" Color="{ThemeResource SystemColorWindowColor}" />
+            <SolidColorBrush x:Key="OkPopoverBrush" Color="{ThemeResource SystemColorWindowColor}" />
+            <SolidColorBrush x:Key="OkTextPrimaryBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="OkTextBodyBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="OkTextSecondaryBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="OkTextTertiaryBrush" Color="{ThemeResource SystemColorGrayTextColor}" />
+            <SolidColorBrush x:Key="OkTextFaintBrush" Color="{ThemeResource SystemColorGrayTextColor}" />
+            <SolidColorBrush x:Key="OkStrokeBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="OkCardStrokeBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="OkSubtleFillBrush" Color="{ThemeResource SystemColorWindowColor}" />
+            <SolidColorBrush x:Key="OkSubtleFillStrongBrush" Color="{ThemeResource SystemColorWindowColor}" />
+            <SolidColorBrush x:Key="OkAccentBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+            <SolidColorBrush x:Key="OkAccentTextBrush" Color="{ThemeResource SystemColorHotlightColor}" />
+            <SolidColorBrush x:Key="OkAccentSecondaryTextBrush" Color="{ThemeResource SystemColorHotlightColor}" />
+            <SolidColorBrush x:Key="OkAccentRailBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+            <SolidColorBrush x:Key="OkAccentSelectionFillBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+            <SolidColorBrush x:Key="OkAccentTintBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+            <SolidColorBrush x:Key="OkOnAccentBrush" Color="{ThemeResource SystemColorHighlightTextColor}" />
+            <SolidColorBrush x:Key="OkErrorBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+        </ResourceDictionary>
+
+    </ResourceDictionary.ThemeDictionaries>
+
+</ResourceDictionary>

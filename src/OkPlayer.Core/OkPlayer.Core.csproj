@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Engine-agnostic domain layer: models, playlist, chapters, JSON index + sidecars,
+       screenshot policy. NO WinUI / Windows-UI reference, so it stays headless-testable
+       and reusable on the future Linux/Mac (Rust interop) track. -->
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <RootNamespace>OkPlayer.Core</RootNamespace>
+    <AssemblyName>OkPlayer.Core</AssemblyName>
+  </PropertyGroup>
+
+</Project>
