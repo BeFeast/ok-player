@@ -30,6 +30,7 @@ public sealed partial class PlayerView : UserControl
     private readonly ThumbnailService _thumbs = new();
     private int _previewToken; // ignores stale async thumbnail results
     private bool _viewUnloaded; // guards against duplicate Unloaded disposing the thumbnail engine twice
+    private bool _generatingChapters; // prevents overlapping chapter-thumbnail passes
 
     public PlayerViewModel Vm { get; } = new();
 
@@ -125,7 +126,10 @@ public sealed partial class PlayerView : UserControl
     private void OnSeekHover(double fraction, double xInBar)
     {
         if (!Vm.HasMedia || Vm.Duration <= 0)
+        {
+            OnSeekHoverEnded(); // media gone/replaced under the pointer — hide any lingering preview
             return;
+        }
         double time = fraction * Vm.Duration;
         PreviewTime.Text = FormatPreviewTime(time);
 
@@ -152,7 +156,11 @@ public sealed partial class PlayerView : UserControl
         catch { /* transient failure — keep the previous frame; never fault this fire-and-forget task */ }
     }
 
-    private void OnSeekHoverEnded() => PreviewPanel.Opacity = 0;
+    private void OnSeekHoverEnded()
+    {
+        _previewToken++;           // discard any in-flight thumbnail so it can't flash on the next hover
+        PreviewPanel.Opacity = 0;
+    }
 
     private static string FormatPreviewTime(double seconds)
     {
@@ -325,10 +333,16 @@ public sealed partial class PlayerView : UserControl
 
     private async System.Threading.Tasks.Task GenerateChapterThumbnailsAsync()
     {
-        if (!Vm.HasMedia)
+        if (!Vm.HasMedia || _generatingChapters)
             return;
+        _generatingChapters = true;
         try
         {
+            // The thumbnail engine opens the file asynchronously; if the panel opened first, wait for
+            // it to become ready (up to ~10s) so the thumbnails still fill in rather than silently no-op.
+            for (int i = 0; i < 67 && !_thumbs.IsReady && _panelOpen; i++)
+                await System.Threading.Tasks.Task.Delay(150);
+
             foreach (var ch in Vm.Chapters.ToList())
             {
                 if (!_panelOpen)
@@ -342,6 +356,7 @@ public sealed partial class PlayerView : UserControl
             }
         }
         catch { /* transient — leave remaining thumbnails null (retried on next panel open) */ }
+        finally { _generatingChapters = false; }
     }
 
     // ---- volume & overflow ----

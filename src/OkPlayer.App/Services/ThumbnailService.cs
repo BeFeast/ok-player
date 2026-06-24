@@ -39,9 +39,13 @@ public sealed class ThumbnailService : IDisposable
     {
         if (_disposed)
             return false;
-        await _gate.WaitAsync().ConfigureAwait(false);
+        try { await _gate.WaitAsync(_shutdown.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) { return false; }
+        catch (ObjectDisposedException) { return false; }
         try
         {
+            if (_disposed)
+                return false; // disposed while queued — don't spin up a new engine
             int gen = ++_generation;
             TeardownEngine();
             ClearCache();
@@ -55,7 +59,6 @@ public sealed class ThumbnailService : IDisposable
             mpv.SetOption("hr-seek", "yes");             // exact seeks
             mpv.SetOption("hr-seek-framedrop", "no");
             mpv.SetOption("vf", "scale=320:-2");         // small frames where the encoder honors it
-            mpv.SetOption("ytdl", "no");
             mpv.SetOption("osc", "no");
             mpv.SetOption("input-default-bindings", "no");
 
@@ -92,8 +95,8 @@ public sealed class ThumbnailService : IDisposable
         if (_disposed || !_fileReady)
             return null;
         int gen = _generation;
-        long bucketMs = (long)Math.Max(0, timeSeconds) * 1000;
-        string file = Path.Combine(_tempDir, $"g{gen}_t{bucketMs}.png");
+        long bucketSec = (long)Math.Max(0, timeSeconds); // 1-second thumbnail granularity
+        string file = Path.Combine(_tempDir, $"g{gen}_t{bucketSec}.png");
         if (File.Exists(file))
             return file; // cache hit — no seek
 
