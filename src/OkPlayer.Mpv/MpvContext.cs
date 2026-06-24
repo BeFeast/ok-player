@@ -22,8 +22,10 @@ public sealed class MpvContext : IDisposable
     public event EventHandler<MpvEndFileReason>? EndFile;
     /// <summary>Raised when mpv is shutting down.</summary>
     public event EventHandler? Shutdown;
-    /// <summary>Raised when an observed property changes; argument is the property name.</summary>
-    public event Action<string>? PropertyChanged;
+    /// <summary>Raised when an observed property changes, with the value parsed from the event itself.
+    /// Consumers must use this value rather than calling Get*Property: a synchronous get on the UI
+    /// thread can deadlock against a core that is briefly busy (e.g. servicing a screenshot render).</summary>
+    public event Action<string, object?>? PropertyChanged;
     /// <summary>Raised for each libmpv log message (level, prefix, text).</summary>
     public event Action<MpvLogLevel, string, string>? LogMessageReceived;
 
@@ -74,6 +76,17 @@ public sealed class MpvContext : IDisposable
         Array.Copy(args, argv, args.Length);
         argv[args.Length] = null;
         MpvException.Check(MpvNative.mpv_command(_handle, argv), $"command({string.Join(' ', args)})");
+    }
+
+    /// <summary>Fire-and-forget command — does not block the caller. Use for actions that may need a
+    /// render to complete (e.g. screenshot), which would deadlock if issued synchronously on the
+    /// render thread.</summary>
+    public void CommandAsync(params string[] args)
+    {
+        var argv = new string?[args.Length + 1];
+        Array.Copy(args, argv, args.Length);
+        argv[args.Length] = null;
+        MpvException.Check(MpvNative.mpv_command_async(_handle, 0, argv), $"command_async({string.Join(' ', args)})");
     }
 
     public void Loadfile(string pathOrUrl) => Command("loadfile", pathOrUrl, "replace");
@@ -143,10 +156,26 @@ public sealed class MpvContext : IDisposable
                     var prop = Marshal.PtrToStructure<MpvEventProperty>(ev.Data);
                     var name = prop.Name;
                     if (name is not null)
-                        PropertyChanged?.Invoke(name);
+                        PropertyChanged?.Invoke(name, ParsePropertyValue(prop));
                     break;
             }
         }
+    }
+
+    /// <summary>Read an observed property's value straight from the event payload (valid only during
+    /// this event), so consumers never have to call back into mpv on another thread.</summary>
+    private static object? ParsePropertyValue(MpvEventProperty prop)
+    {
+        if (prop.Data == IntPtr.Zero)
+            return null;
+        return prop.Format switch
+        {
+            MpvFormat.Double => Marshal.PtrToStructure<double>(prop.Data),
+            MpvFormat.Flag => Marshal.ReadInt32(prop.Data) != 0,
+            MpvFormat.Int64 => Marshal.ReadInt64(prop.Data),
+            MpvFormat.String or MpvFormat.OsdString => Marshal.PtrToStringUTF8(Marshal.ReadIntPtr(prop.Data)),
+            _ => null,
+        };
     }
 
     public void Dispose()

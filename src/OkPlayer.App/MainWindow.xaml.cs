@@ -1,90 +1,76 @@
-using System.IO;
-using System.Text;
-using Microsoft.UI.Dispatching;
+using System;
+using System.Threading.Tasks;
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
-using OkPlayer.Mpv;
-using OkPlayer.Mpv.Interop;
+using Windows.Storage.Pickers;
 
 namespace OkPlayer.App;
 
-/// <summary>
-/// Phase 0 engine spike: hosts the MpvVideoPanel, plays a synthetic libmpv source (lavfi testsrc,
-/// no file needed), and dumps libmpv logs + key properties to a temp log so the render pipeline can
-/// be verified headlessly. This becomes the real player surface in the App-shell phase.
-/// </summary>
 public sealed partial class MainWindow : Window
 {
-    private static readonly string LogPath = Path.Combine(Path.GetTempPath(), "okplayer-spike.log");
-    private readonly object _logLock = new();
-    private DispatcherQueueTimer? _timer;
+    private static readonly string[] MediaExtensions =
+    {
+        ".mkv", ".mp4", ".m4v", ".avi", ".mov", ".webm", ".m2ts", ".ts", ".wmv", ".flv",
+        ".mp3", ".flac", ".m4a", ".opus", ".wav", ".ogg", ".mka",
+    };
+
+    private bool _fullscreen;
 
     public MainWindow()
     {
         InitializeComponent();
-        try { File.WriteAllText(LogPath, $"=== OK Player engine spike {System.DateTime.Now:O} ===\n"); } catch { }
-        Log("MainWindow constructed");
-        Video.EngineReady += OnEngineReady;
-        Video.Loaded += (_, _) => Log($"Video.Loaded; size={Video.ActualWidth}x{Video.ActualHeight}");
+        Title = "OK Player";
+
+        // Immersive: extend content under the title-bar band so the video reaches the top edge;
+        // the auto-hiding top bar is the drag region, and the caption buttons go transparent with
+        // white glyphs so Mica/video shows through.
+        ExtendsContentIntoTitleBar = true;
+        SetTitleBar(Player.TitleBarElement);
+        ConfigureCaptionButtons();
+
+        Player.ToggleFullscreenRequested += (_, _) => SetFullscreen(!_fullscreen);
+        Player.ExitFullscreenRequested += (_, _) => SetFullscreen(false);
+        Player.OpenFileRequested += async (_, _) => await OpenFileAsync();
     }
 
-    private void OnEngineReady(object? sender, System.EventArgs e)
+    private void ConfigureCaptionButtons()
     {
-        Log("EngineReady — engine + render context created");
+        var titleBar = AppWindow.TitleBar;
+        titleBar.ButtonBackgroundColor = Microsoft.UI.Colors.Transparent;
+        titleBar.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Transparent;
+        titleBar.ButtonForegroundColor = Microsoft.UI.Colors.White;
+        titleBar.ButtonInactiveForegroundColor = Windows.UI.Color.FromArgb(0xB0, 0xFF, 0xFF, 0xFF);
+        titleBar.ButtonHoverBackgroundColor = Windows.UI.Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF);
+        titleBar.ButtonHoverForegroundColor = Microsoft.UI.Colors.White;
+        titleBar.ButtonPressedBackgroundColor = Windows.UI.Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF);
+        titleBar.ButtonPressedForegroundColor = Microsoft.UI.Colors.White;
+    }
+
+    private void SetFullscreen(bool on)
+    {
+        if (on == _fullscreen)
+            return;
+        _fullscreen = on;
+        AppWindow.SetPresenter(on ? AppWindowPresenterKind.FullScreen : AppWindowPresenterKind.Overlapped);
+    }
+
+    private async Task OpenFileAsync()
+    {
+        var picker = new FileOpenPicker { SuggestedStartLocation = PickerLocationId.VideosLibrary };
+        // Unpackaged: associate the picker with this window's HWND.
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+        foreach (var ext in MediaExtensions)
+            picker.FileTypeFilter.Add(ext);
+
         try
         {
-            MpvContext mpv = Video.Engine!;
-            mpv.LogMessageReceived += (lvl, prefix, text) => Log($"[mpv {lvl}] {prefix}: {text.TrimEnd()}");
-            mpv.RequestLogMessages(MpvLogLevel.V);
-            Log("mpv-version = " + (mpv.GetPropertyString("mpv-version") ?? "<null>"));
-
-            Video.Open("av://lavfi:testsrc2=size=1280x720:rate=30:duration=120");
-            Log("loadfile issued: av://lavfi:testsrc2");
-
-            int ticks = 0;
-            _timer = DispatcherQueue.CreateTimer();
-            _timer.Interval = System.TimeSpan.FromSeconds(3);
-            _timer.Tick += (_, _) =>
-            {
-                ticks++;
-                DumpDiagnostics(mpv, ticks);
-                if (ticks >= 3) _timer!.Stop();
-            };
-            _timer.Start();
+            var file = await picker.PickSingleFileAsync();
+            if (file is not null)
+                Player.OpenMedia(file.Path); // OpenMedia is itself non-throwing
         }
-        catch (System.Exception ex)
+        catch (Exception)
         {
-            Log("OnEngineReady EXCEPTION: " + ex);
-            UpdateStatus("ENGINE ERROR: " + ex.Message);
-        }
-    }
-
-    private void DumpDiagnostics(MpvContext mpv, int tick)
-    {
-        var props = new[]
-        {
-            "time-pos", "duration", "width", "height", "dwidth", "dheight",
-            "container-fps", "estimated-vf-fps", "frame-drop-count", "video-codec",
-            "hwdec-current", "video-format", "pause", "core-idle",
-        };
-        var sb = new StringBuilder();
-        sb.AppendLine($"--- diagnostics tick {tick} ---");
-        foreach (var p in props)
-            sb.AppendLine($"  {p} = {mpv.GetPropertyString(p) ?? "<null>"}");
-        Log(sb.ToString().TrimEnd());
-
-        UpdateStatus($"t={mpv.GetPropertyString("time-pos")}  " +
-                     $"{mpv.GetPropertyString("width")}x{mpv.GetPropertyString("height")}  " +
-                     $"fps={mpv.GetPropertyString("estimated-vf-fps")}  " +
-                     $"drops={mpv.GetPropertyString("frame-drop-count")}");
-    }
-
-    private void UpdateStatus(string text) => DispatcherQueue.TryEnqueue(() => Status.Text = text);
-
-    private void Log(string line)
-    {
-        lock (_logLock)
-        {
-            try { File.AppendAllText(LogPath, line + "\n"); } catch { }
+            // Picker failure is non-fatal; swallow so the async-void caller can't crash the app.
         }
     }
 }

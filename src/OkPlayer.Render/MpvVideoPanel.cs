@@ -61,6 +61,12 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
             _mpv.SetOption("vo", "libmpv");        // mandatory: the render API drives output
             _mpv.SetOption("hwdec", "auto-safe");  // hardware decode where safely mappable to GL
             _mpv.SetOption("keep-open", "yes");     // hold the last frame instead of closing on EOF
+            _mpv.SetOption("volume-max", "130");    // allow the PRD volume boost (>100%)
+            _mpv.SetOption("osc", "no");            // we draw our own on-screen controls
+            _mpv.SetOption("input-default-bindings", "no"); // the app owns the keyboard map
+            string pictures = System.Environment.GetFolderPath(System.Environment.SpecialFolder.MyPictures);
+            if (!string.IsNullOrEmpty(pictures))
+                _mpv.SetOption("screenshot-directory", pictures);
             _mpv.Initialize();
 
             _render = new MpvRenderContext(_mpv, GlInteropDevice.GetProcAddress);
