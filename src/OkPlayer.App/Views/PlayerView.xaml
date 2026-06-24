@@ -4,7 +4,8 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:render="using:OkPlayer.Render"
-    xmlns:ctl="using:OkPlayer.App.Controls">
+    xmlns:ctl="using:OkPlayer.App.Controls"
+    xmlns:vm="using:OkPlayer.App.ViewModels">
 
     <UserControl.Resources>
         <Storyboard x:Name="ChromeShowSb">
@@ -104,13 +105,70 @@
                                    Tapped="OnTrailingTimeTapped" />
                         <Button Style="{StaticResource OkOscIconButtonStyle}" Content="{x:Bind Vm.VolumeGlyph, Mode=OneWay}"
                                 Click="OnVolumeClick" ToolTipService.ToolTip="Mute (M)" />
+                        <!-- speed -->
                         <Button x:Name="SpeedChip" Style="{StaticResource OkSpeedChipStyle}" Margin="4,0"
-                                Content="{x:Bind Vm.SpeedText, Mode=OneWay}" Click="OnSpeedClick"
-                                ToolTipService.ToolTip="Playback speed" />
-                        <Button Style="{StaticResource OkOscIconButtonStyle}" Content="&#xE7F0;"
-                                ToolTipService.ToolTip="Subtitles" />
-                        <Button Style="{StaticResource OkOscIconButtonStyle}" Content="&#xE8D6;"
-                                ToolTipService.ToolTip="Audio" />
+                                Content="{x:Bind Vm.SpeedText, Mode=OneWay}" ToolTipService.ToolTip="Playback speed">
+                            <Button.Flyout>
+                                <Flyout FlyoutPresenterStyle="{StaticResource OkPopoverFlyoutStyle}" Placement="Top">
+                                    <StackPanel Width="120">
+                                        <TextBlock Text="Speed" Style="{StaticResource OkBodyStrongTextStyle}" Margin="6,4" />
+                                        <Button Style="{StaticResource OkSwitcherRowStyle}" Tag="0.5"  Content="0.5&#x00D7;"  Click="OnSpeedStepClick" />
+                                        <Button Style="{StaticResource OkSwitcherRowStyle}" Tag="0.75" Content="0.75&#x00D7;" Click="OnSpeedStepClick" />
+                                        <Button Style="{StaticResource OkSwitcherRowStyle}" Tag="1.0"  Content="1.0&#x00D7;"  Click="OnSpeedStepClick" />
+                                        <Button Style="{StaticResource OkSwitcherRowStyle}" Tag="1.25" Content="1.25&#x00D7;" Click="OnSpeedStepClick" />
+                                        <Button Style="{StaticResource OkSwitcherRowStyle}" Tag="1.5"  Content="1.5&#x00D7;"  Click="OnSpeedStepClick" />
+                                        <Button Style="{StaticResource OkSwitcherRowStyle}" Tag="2.0"  Content="2.0&#x00D7;"  Click="OnSpeedStepClick" />
+                                    </StackPanel>
+                                </Flyout>
+                            </Button.Flyout>
+                        </Button>
+
+                        <!-- subtitles -->
+                        <Button Style="{StaticResource OkOscIconButtonStyle}" Content="&#xE7F0;" ToolTipService.ToolTip="Subtitles">
+                            <Button.Flyout>
+                                <Flyout FlyoutPresenterStyle="{StaticResource OkPopoverFlyoutStyle}" Placement="Top">
+                                    <StackPanel Width="272">
+                                        <TextBlock Text="Subtitles" Style="{StaticResource OkBodyStrongTextStyle}" Margin="6,4" />
+                                        <Button Style="{StaticResource OkSwitcherRowStyle}" Content="Off" Click="OnSubtitleOffClick" />
+                                        <ItemsControl ItemsSource="{x:Bind Vm.SubtitleTracks, Mode=OneWay}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:TrackInfo">
+                                                    <Button Style="{StaticResource OkSwitcherRowStyle}" Content="{x:Bind Label}" Click="OnSubtitleTrackClick" />
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                        <Border Height="1" Margin="8,4" Background="{ThemeResource OkStrokeBrush}" />
+                                        <Button Style="{StaticResource OkSwitcherRowStyle}" IsEnabled="False"
+                                                Foreground="{ThemeResource OkAccentTextBrush}" Content="Generate subtitles&#x2026;  (Scribe)" />
+                                        <StackPanel Orientation="Horizontal" Spacing="8" Margin="10,6,10,4">
+                                            <TextBlock Text="Delay" VerticalAlignment="Center" FontSize="12.5" Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                                            <Button Style="{StaticResource OkSwitcherRowStyle}" Padding="9,3" FontFamily="Segoe UI" FontSize="14" Content="-" Click="OnSubDelayMinus" />
+                                            <TextBlock Text="{x:Bind Vm.SubDelayText, Mode=OneWay}" VerticalAlignment="Center" MinWidth="56" TextAlignment="Center"
+                                                       FontSize="12.5" FontWeight="SemiBold" Foreground="{ThemeResource OkAccentTextBrush}" />
+                                            <Button Style="{StaticResource OkSwitcherRowStyle}" Padding="9,3" FontFamily="Segoe UI" FontSize="14" Content="+" Click="OnSubDelayPlus" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Flyout>
+                            </Button.Flyout>
+                        </Button>
+
+                        <!-- audio -->
+                        <Button Style="{StaticResource OkOscIconButtonStyle}" Content="&#xE8D6;" ToolTipService.ToolTip="Audio">
+                            <Button.Flyout>
+                                <Flyout FlyoutPresenterStyle="{StaticResource OkPopoverFlyoutStyle}" Placement="Top">
+                                    <StackPanel Width="272">
+                                        <TextBlock Text="Audio" Style="{StaticResource OkBodyStrongTextStyle}" Margin="6,4" />
+                                        <ItemsControl ItemsSource="{x:Bind Vm.AudioTracks, Mode=OneWay}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:TrackInfo">
+                                                    <Button Style="{StaticResource OkSwitcherRowStyle}" Content="{x:Bind Label}" Click="OnAudioTrackClick" />
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Flyout>
+                            </Button.Flyout>
+                        </Button>
                         <Button Style="{StaticResource OkOscIconButtonStyle}" Content="&#xE8FD;"
                                 ToolTipService.ToolTip="Chapters (C)" />
                         <Button Style="{StaticResource OkOscIconButtonStyle}" Content="&#xE722;"

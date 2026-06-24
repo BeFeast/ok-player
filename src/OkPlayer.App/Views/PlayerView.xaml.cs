@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -167,6 +168,35 @@ public sealed partial class PlayerView : UserControl
     private void OnScreenshotClick(object sender, RoutedEventArgs e) { Vm.TakeScreenshot(); RevealChrome(); }
     private void OnFullscreenClick(object sender, RoutedEventArgs e) => ToggleFullscreenRequested?.Invoke(this, EventArgs.Empty);
     private void OnTrailingTimeTapped(object sender, TappedRoutedEventArgs e) => Vm.ToggleTimeLabel();
+
+    // ---- switchers ----
+
+    private void OnSpeedStepClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string tag } &&
+            double.TryParse(tag, NumberStyles.Any, CultureInfo.InvariantCulture, out double speed))
+            Vm.SetSpeed(speed);
+        RevealChrome();
+    }
+
+    private void OnSubtitleOffClick(object sender, RoutedEventArgs e) { Vm.SetSubtitleOff(); RevealChrome(); }
+
+    private void OnSubtitleTrackClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: TrackInfo track })
+            Vm.SelectSubtitle(track);
+        RevealChrome();
+    }
+
+    private void OnAudioTrackClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: TrackInfo track })
+            Vm.SelectAudio(track);
+        RevealChrome();
+    }
+
+    private void OnSubDelayMinus(object sender, RoutedEventArgs e) => Vm.NudgeSubDelay(-50);
+    private void OnSubDelayPlus(object sender, RoutedEventArgs e) => Vm.NudgeSubDelay(50);
 
     // ---- toasts ----
 

@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Microsoft.UI.Dispatching;
@@ -31,6 +32,13 @@ public partial class PlayerViewModel : ObservableObject
     [ObservableProperty] private bool _showRemaining;       // total vs remaining
     [ObservableProperty] private string _mediaTitle = string.Empty;
     [ObservableProperty] private bool _hasMedia;
+    [ObservableProperty] private bool _subtitleOff = true;
+    [ObservableProperty] private int _subDelayMs;
+    [ObservableProperty] private int _currentChapterIndex = -1;
+
+    public ObservableCollection<TrackInfo> SubtitleTracks { get; } = new();
+    public ObservableCollection<TrackInfo> AudioTracks { get; } = new();
+    public ObservableCollection<ChapterInfo> Chapters { get; } = new();
 
     public bool IsPlaying => !IsPaused;
     public double PositionFraction => Duration > 0 ? Position / Duration : 0;
@@ -42,6 +50,7 @@ public partial class PlayerViewModel : ObservableObject
     // Segoe Fluent Icons glyphs that flip with state (built from code points to avoid source-encoding issues).
     public string PlayPauseGlyph => IsPaused ? Glyph(0xE768) : Glyph(0xE769); // Play / Pause
     public string VolumeGlyph => IsMuted ? Glyph(0xE74F) : Glyph(0xE767);     // Mute / Volume
+    public string SubDelayText => $"{SubDelayMs:+0;-0;0} ms";
 
     private static string Glyph(int codePoint) => char.ConvertFromUtf32(codePoint);
 
@@ -68,6 +77,7 @@ public partial class PlayerViewModel : ObservableObject
     partial void OnIsMutedChanged(bool value) => OnPropertyChanged(nameof(VolumeGlyph));
     partial void OnShowRemainingChanged(bool value) => OnPropertyChanged(nameof(TrailingTimeText));
     partial void OnSpeedChanged(double value) => OnPropertyChanged(nameof(SpeedText));
+    partial void OnSubDelayMsChanged(int value) => OnPropertyChanged(nameof(SubDelayText));
 
     /// <summary>Wire the VM to the engine: observe the properties the surface needs.</summary>
     public void Attach(MpvContext engine, DispatcherQueue dispatcher)
@@ -78,13 +88,18 @@ public partial class PlayerViewModel : ObservableObject
         {
             ("time-pos", MpvFormat.Double), ("duration", MpvFormat.Double), ("pause", MpvFormat.Flag),
             ("volume", MpvFormat.Double), ("mute", MpvFormat.Flag), ("speed", MpvFormat.Double),
-            ("media-title", MpvFormat.String),
+            ("media-title", MpvFormat.String), ("sid", MpvFormat.String), ("aid", MpvFormat.String),
+            ("sub-delay", MpvFormat.Double), ("chapter", MpvFormat.Int64),
         })
         {
             engine.ObserveProperty(name, fmt);
         }
         engine.PropertyChanged += OnEngineProperty;
+        engine.FileLoaded += OnFileLoaded;
     }
+
+    private void OnFileLoaded(object? sender, System.EventArgs e)
+        => _dispatcher?.TryEnqueue(() => { RefreshTracks(); RefreshChapters(); });
 
     private void OnEngineProperty(string name)
     {
@@ -107,6 +122,10 @@ public partial class PlayerViewModel : ObservableObject
                     MediaTitle = e.GetPropertyString("media-title") ?? string.Empty;
                     HasMedia = true;
                     break;
+                case "sid":
+                case "aid": RefreshTracks(); break;
+                case "sub-delay": SubDelayMs = (int)System.Math.Round((e.GetPropertyDouble("sub-delay") ?? 0) * 1000); break;
+                case "chapter": CurrentChapterIndex = (int)(e.GetPropertyLong("chapter") ?? -1); break;
             }
         });
     }
@@ -173,6 +192,75 @@ public partial class PlayerViewModel : ObservableObject
     }
 
     public void ToggleTimeLabel() => ShowRemaining = !ShowRemaining;
+
+    // ---- tracks & chapters ----
+
+    private void RefreshTracks()
+    {
+        if (_engine is not { } e) return;
+        SubtitleTracks.Clear();
+        AudioTracks.Clear();
+        long count = e.GetPropertyLong("track-list/count") ?? 0;
+        for (long i = 0; i < count; i++)
+        {
+            string? type = e.GetPropertyString($"track-list/{i}/type");
+            long id = e.GetPropertyLong($"track-list/{i}/id") ?? 0;
+            bool selected = e.GetPropertyBool($"track-list/{i}/selected") ?? false;
+            bool external = e.GetPropertyBool($"track-list/{i}/external") ?? false;
+            string? title = e.GetPropertyString($"track-list/{i}/title");
+            string? lang = e.GetPropertyString($"track-list/{i}/lang");
+            string name = !string.IsNullOrEmpty(title) ? title! : !string.IsNullOrEmpty(lang) ? lang! : $"Track {id}";
+
+            string check = selected ? Glyph(0x2713) + "  " : string.Empty; // leading check on the active track
+            if (type == "sub")
+            {
+                string ext = external ? $"   {Glyph(0x00B7)} EXT" : string.Empty;
+                SubtitleTracks.Add(new TrackInfo { Id = id, Selected = selected, External = external, Label = check + name + ext });
+            }
+            else if (type == "audio")
+            {
+                var parts = new System.Collections.Generic.List<string> { name };
+                string? channels = e.GetPropertyString($"track-list/{i}/audio-channels");
+                string? codec = e.GetPropertyString($"track-list/{i}/codec");
+                if (!string.IsNullOrEmpty(channels)) parts.Add(channels!);
+                if (!string.IsNullOrEmpty(codec)) parts.Add(codec!.ToUpperInvariant());
+                AudioTracks.Add(new TrackInfo { Id = id, Selected = selected, Label = check + string.Join($" {Glyph(0x00B7)} ", parts) });
+            }
+        }
+        SubtitleOff = (e.GetPropertyString("sid") ?? "no") == "no";
+    }
+
+    private void RefreshChapters()
+    {
+        if (_engine is not { } e) return;
+        Chapters.Clear();
+        long count = e.GetPropertyLong("chapter-list/count") ?? 0;
+        for (int i = 0; i < count; i++)
+        {
+            double time = e.GetPropertyDouble($"chapter-list/{i}/time") ?? 0;
+            string? title = e.GetPropertyString($"chapter-list/{i}/title");
+            Chapters.Add(new ChapterInfo
+            {
+                Index = i,
+                Time = time,
+                TimeText = FormatTime(time),
+                Title = string.IsNullOrEmpty(title) ? $"Chapter {i + 1}" : title!,
+            });
+        }
+    }
+
+    public void SetSubtitleOff() => _engine?.SetProperty("sid", "no");
+    public void SelectSubtitle(TrackInfo track) => _engine?.SetProperty("sid", track.Id.ToString(CultureInfo.InvariantCulture));
+    public void SelectAudio(TrackInfo track) => _engine?.SetProperty("aid", track.Id.ToString(CultureInfo.InvariantCulture));
+    public void SeekToChapter(ChapterInfo chapter) => _engine?.SetProperty("chapter", chapter.Index.ToString(CultureInfo.InvariantCulture));
+
+    public void NudgeSubDelay(int ms)
+    {
+        if (_engine is not { } e) return;
+        double next = (e.GetPropertyDouble("sub-delay") ?? 0) + ms / 1000.0;
+        e.SetProperty("sub-delay", next);
+        ToastRequested?.Invoke($"Subtitle delay {next * 1000:+0;-0;0} ms");
+    }
 
     private static string FormatTime(double seconds)
     {
