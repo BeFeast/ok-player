@@ -52,7 +52,7 @@
     </UserControl.Resources>
 
     <Grid x:Name="RootGrid" Background="#FF050505" IsTabStop="True" AllowDrop="True"
-          PointerMoved="OnRootPointerMoved" KeyDown="OnRootKeyDown"
+          PointerMoved="OnRootPointerMoved" PointerPressed="OnRootPointerPressed" KeyDown="OnRootKeyDown"
           DragOver="OnDragOver" Drop="OnDrop">
 
         <Grid.KeyboardAccelerators>

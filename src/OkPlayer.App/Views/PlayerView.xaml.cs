@@ -137,6 +137,12 @@ public sealed partial class PlayerView : UserControl
 
     private void OnRootPointerMoved(object sender, PointerRoutedEventArgs e) => RevealChrome();
 
+    // Reclaim keyboard focus when the surface (video/scrim/chrome background) is clicked, so the
+    // key map (Space, S, …) keeps working. Buttons don't steal focus (AllowFocusOnInteraction=False)
+    // and flyout content lives in a popup, so neither is affected.
+    private void OnRootPointerPressed(object sender, PointerRoutedEventArgs e)
+        => RootGrid.Focus(FocusState.Programmatic);
+
     private void OnVideoTapped(object sender, TappedRoutedEventArgs e)
     {
         Vm.TogglePlay();
