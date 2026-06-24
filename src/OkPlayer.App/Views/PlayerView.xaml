@@ -37,6 +37,18 @@
         <Storyboard x:Name="ToastHideSb">
             <DoubleAnimation Storyboard.TargetName="ToastHost" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.25" />
         </Storyboard>
+        <Storyboard x:Name="PanelShowSb">
+            <DoubleAnimation Storyboard.TargetName="ChaptersPanel" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.2" />
+            <DoubleAnimation Storyboard.TargetName="PanelTransform" Storyboard.TargetProperty="X" To="0" Duration="0:0:0.25">
+                <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut" /></DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
+        </Storyboard>
+        <Storyboard x:Name="PanelHideSb">
+            <DoubleAnimation Storyboard.TargetName="ChaptersPanel" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.2" />
+            <DoubleAnimation Storyboard.TargetName="PanelTransform" Storyboard.TargetProperty="X" To="316" Duration="0:0:0.25">
+                <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseIn" /></DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
+        </Storyboard>
     </UserControl.Resources>
 
     <Grid x:Name="RootGrid" Background="#FF050505" IsTabStop="True" AllowDrop="True"
@@ -169,8 +181,8 @@
                                 </Flyout>
                             </Button.Flyout>
                         </Button>
-                        <Button Style="{StaticResource OkOscIconButtonStyle}" Content="&#xE8FD;"
-                                ToolTipService.ToolTip="Chapters (C)" />
+                        <Button x:Name="ChaptersButton" Style="{StaticResource OkOscIconButtonStyle}" Content="&#xE8FD;"
+                                Click="OnChaptersClick" ToolTipService.ToolTip="Chapters (C)" />
                         <Button Style="{StaticResource OkOscIconButtonStyle}" Content="&#xE722;"
                                 Click="OnScreenshotClick" ToolTipService.ToolTip="Screenshot (S)" />
                         <Button x:Name="FullscreenButton" Style="{StaticResource OkOscIconButtonStyle}" Content="&#xE740;"
@@ -179,6 +191,43 @@
                                 ToolTipService.ToolTip="More" />
                     </StackPanel>
                 </Grid>
+            </Border>
+        </Grid>
+
+        <!-- ===== right-docked Chapters panel (slide-in Mica) ===== -->
+        <Grid x:Name="ChaptersPanel" HorizontalAlignment="Right" Width="316" Opacity="0" Visibility="Collapsed"
+              Background="{ThemeResource OkPanelOverVideoBrush}" BorderThickness="1,0,0,0" BorderBrush="{ThemeResource OkStrokeBrush}"
+              RowDefinitions="Auto,*,Auto">
+            <Grid.RenderTransform><TranslateTransform x:Name="PanelTransform" X="316" /></Grid.RenderTransform>
+
+            <Grid Grid.Row="0" Padding="16,14,10,10" ColumnDefinitions="*,Auto">
+                <TextBlock Text="Chapters" Style="{StaticResource OkTitleTextStyle}" VerticalAlignment="Center" />
+                <Button Grid.Column="1" Style="{StaticResource OkOscIconButtonStyle}" Content="&#xE711;"
+                        Foreground="{ThemeResource OkTextSecondaryBrush}" Click="OnChaptersClick" ToolTipService.ToolTip="Close" />
+            </Grid>
+
+            <ListView x:Name="ChapterList" Grid.Row="1" SelectionMode="Single" Padding="6,0"
+                      ItemsSource="{x:Bind Vm.Chapters, Mode=OneWay}" SelectionChanged="OnChapterSelectionChanged">
+                <ListView.Resources>
+                    <SolidColorBrush x:Key="ListViewItemBackgroundSelected" Color="#1F10938A" />
+                    <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPointerOver" Color="#2910938A" />
+                    <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPressed" Color="#2910938A" />
+                </ListView.Resources>
+                <ListView.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ChapterInfo">
+                        <Grid Padding="2,6" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                            <Border Grid.Column="0" Width="56" Height="32" CornerRadius="4" Background="{ThemeResource OkSubtleFillStrongBrush}" />
+                            <TextBlock Grid.Column="1" Text="{x:Bind Title}" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis" Style="{StaticResource OkBodyTextStyle}" />
+                            <TextBlock Grid.Column="2" Text="{x:Bind TimeText}" VerticalAlignment="Center" Style="{StaticResource OkSmallTextStyle}" />
+                        </Grid>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+
+            <Border Grid.Row="2" Padding="14,10" BorderThickness="0,1,0,0" BorderBrush="{ThemeResource OkStrokeBrush}">
+                <TextBlock x:Name="ChaptersEmpty" Text="No chapters in this file." HorizontalAlignment="Center"
+                           Style="{StaticResource OkSmallTextStyle}" />
             </Border>
         </Grid>
 

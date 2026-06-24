@@ -24,6 +24,8 @@ public sealed partial class PlayerView : UserControl
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _idleTimer;
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _toastTimer;
     private bool _chromeVisible = true;
+    private bool _panelOpen;
+    private bool _syncingChapter;
 
     public PlayerViewModel Vm { get; } = new();
 
@@ -53,6 +55,8 @@ public sealed partial class PlayerView : UserControl
         Seek.ScrubStateChanged += scrubbing => Vm.IsScrubbing = scrubbing;
         Vm.PropertyChanged += OnVmPropertyChanged;
         Vm.ToastRequested += ShowToast;
+        Vm.Chapters.CollectionChanged += (_, _) => UpdateChaptersEmpty();
+        PanelHideSb.Completed += (_, _) => ChaptersPanel.Visibility = Visibility.Collapsed;
         Loaded += OnLoaded;
     }
 
@@ -81,6 +85,12 @@ public sealed partial class PlayerView : UserControl
             else
                 ResetIdleTimer();   // playing: allow auto-hide
         }
+        else if (e.PropertyName == nameof(PlayerViewModel.CurrentChapterIndex))
+        {
+            _syncingChapter = true;
+            ChapterList.SelectedIndex = Vm.CurrentChapterIndex;
+            _syncingChapter = false;
+        }
     }
 
     private void OnSeekRequested(double fraction)
@@ -105,7 +115,7 @@ public sealed partial class PlayerView : UserControl
 
     private void HideChrome()
     {
-        if (!_chromeVisible || !Vm.IsPlaying) // paused (or already hidden) keeps chrome up
+        if (!_chromeVisible || !Vm.IsPlaying || _panelOpen) // paused / panel-open / already-hidden keeps chrome up
             return;
         _chromeVisible = false;
         TitleChrome.IsHitTestVisible = false;
@@ -116,7 +126,7 @@ public sealed partial class PlayerView : UserControl
     private void ResetIdleTimer()
     {
         _idleTimer.Stop();
-        if (Vm.IsPlaying)
+        if (Vm.IsPlaying && !_panelOpen)
             _idleTimer.Start();
     }
 
@@ -148,7 +158,11 @@ public sealed partial class PlayerView : UserControl
             case (VirtualKey)0x4D: Vm.ToggleMute(); break;        // M
             case (VirtualKey)0x46: ToggleFullscreenRequested?.Invoke(this, EventArgs.Empty); break; // F
             case (VirtualKey)0x53: Vm.TakeScreenshot(); break;    // S
-            case VirtualKey.Escape: ExitFullscreenRequested?.Invoke(this, EventArgs.Empty); break;
+            case (VirtualKey)0x43: TogglePanel(); break;          // C
+            case VirtualKey.Escape:
+                if (_panelOpen) TogglePanel();
+                else ExitFullscreenRequested?.Invoke(this, EventArgs.Empty);
+                break;
             default: handled = false; break;
         }
         if (handled)
@@ -197,6 +211,38 @@ public sealed partial class PlayerView : UserControl
 
     private void OnSubDelayMinus(object sender, RoutedEventArgs e) => Vm.NudgeSubDelay(-50);
     private void OnSubDelayPlus(object sender, RoutedEventArgs e) => Vm.NudgeSubDelay(50);
+
+    // ---- chapters panel ----
+
+    private void OnChaptersClick(object sender, RoutedEventArgs e) => TogglePanel();
+
+    private void TogglePanel()
+    {
+        _panelOpen = !_panelOpen;
+        if (_panelOpen)
+        {
+            UpdateChaptersEmpty();
+            ChaptersPanel.Visibility = Visibility.Visible;
+            PanelShowSb.Begin();
+            RevealChrome(); // an open panel pins the chrome
+        }
+        else
+        {
+            PanelHideSb.Begin(); // the Completed handler collapses it
+            ResetIdleTimer();
+        }
+    }
+
+    private void OnChapterSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_syncingChapter)
+            return;
+        if (ChapterList.SelectedItem is ChapterInfo chapter)
+            Vm.SeekToChapter(chapter);
+    }
+
+    private void UpdateChaptersEmpty()
+        => ChaptersEmpty.Visibility = Vm.Chapters.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
     // ---- toasts ----
 
