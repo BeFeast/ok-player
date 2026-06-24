@@ -1,0 +1,71 @@
+# --- Build output ---
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+[Bb]uild/
+[Pp]ublish/
+*.binlog
+
+# --- Visual Studio / Rider ---
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.userprefs
+*.DotSettings.user
+
+# --- WinUI 3 / Windows App SDK / MSIX ---
+*.appx
+*.appxbundle
+*.msix
+*.msixbundle
+AppPackages/
+BundleArtifacts/
+_pkginfo.txt
+*.pfx
+*.cer
+GeneratedArtifacts/
+*.appxrecipe
+
+# --- NuGet ---
+*.nupkg
+*.snupkg
+packages/
+!packages/build/
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# --- .NET ---
+*.dll.config
+*.pdb
+*.cache
+*.tmp
+TestResults/
+[Tt]est[Rr]esult*/
+
+# --- mpv / native engine binaries (ship/download separately) ---
+libmpv*.dll
+mpv*.dll
+/engine/runtime/
+
+# --- OS / editor cruft ---
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# --- Secrets / local config ---
+*.env
+.env.local
+appsettings.*.local.json
+secrets.json
