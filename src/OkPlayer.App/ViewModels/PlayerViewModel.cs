@@ -50,6 +50,7 @@ public partial class PlayerViewModel : ObservableObject
     public string SpeedText => Speed.ToString("0.00", CultureInfo.InvariantCulture) + Glyph(0x00D7);
     public string SubDelayText => $"{SubDelayMs:+0;-0;0} ms";
     public string VolumeText => $"{Volume:0}%";
+    public double VolumeFillWidth => System.Math.Clamp(Volume / 130.0, 0, 1) * 54; // inline 54px OSC volume bar
     public string PlayPauseGlyph => IsPaused ? Glyph(0xE768) : Glyph(0xE769);
     public string VolumeGlyph => IsMuted ? Glyph(0xE74F) : Glyph(0xE767);
 
@@ -79,7 +80,11 @@ public partial class PlayerViewModel : ObservableObject
     partial void OnShowRemainingChanged(bool value) => OnPropertyChanged(nameof(TrailingTimeText));
     partial void OnSpeedChanged(double value) => OnPropertyChanged(nameof(SpeedText));
     partial void OnSubDelayMsChanged(int value) => OnPropertyChanged(nameof(SubDelayText));
-    partial void OnVolumeChanged(double value) => OnPropertyChanged(nameof(VolumeText));
+    partial void OnVolumeChanged(double value)
+    {
+        OnPropertyChanged(nameof(VolumeText));
+        OnPropertyChanged(nameof(VolumeFillWidth));
+    }
 
     public void Attach(MpvContext engine, DispatcherQueue dispatcher)
     {

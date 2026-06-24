@@ -26,7 +26,6 @@ public sealed partial class PlayerView : UserControl
     private bool _chromeVisible; // starts false to match the chrome's initial Opacity=0, so the first RevealChrome actually animates it in
     private bool _panelOpen;
     private bool _syncingChapter;
-    private bool _settingVolumeSlider;
     private readonly ThumbnailService _thumbs = new();
     private int _previewToken; // ignores stale async thumbnail results
     private bool _viewUnloaded; // guards against duplicate Unloaded disposing the thumbnail engine twice
@@ -36,6 +35,9 @@ public sealed partial class PlayerView : UserControl
 
     /// <summary>The auto-hiding top bar, used as the window's title-bar drag region.</summary>
     public FrameworkElement TitleBarElement => TitleChrome;
+
+    /// <summary>x:Bind helper: bool -> Visibility (for icon state toggles in XAML).</summary>
+    public static Visibility VisIf(bool value) => value ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>F / the fullscreen button: toggle fullscreen (the window owns the presenter).</summary>
     public event EventHandler? ToggleFullscreenRequested;
@@ -390,17 +392,14 @@ public sealed partial class PlayerView : UserControl
 
     // ---- volume & overflow ----
 
-    private void OnVolumeFlyoutOpened(object? sender, object e)
+    private void OnVolumeBarTapped(object sender, TappedRoutedEventArgs e)
     {
-        _settingVolumeSlider = true;     // suppress the echo from seeding the slider
-        VolumeSlider.Value = Vm.Volume;
-        _settingVolumeSlider = false;
-    }
-
-    private void OnVolumeSliderChanged(object sender, RangeBaseValueChangedEventArgs e)
-    {
-        if (!_settingVolumeSlider)
-            Vm.SetVolume(e.NewValue);
+        if (sender is FrameworkElement fe && fe.ActualWidth > 0)
+        {
+            double f = Math.Clamp(e.GetPosition(fe).X / fe.ActualWidth, 0, 1);
+            Vm.SetVolume(f * 130);
+            RevealChrome();
+        }
     }
 
     private void OnVolumeMuteClick(object sender, RoutedEventArgs e) => Vm.ToggleMute();
