@@ -22,7 +22,7 @@ public sealed partial class PlayerView : UserControl
 {
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _idleTimer;
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _toastTimer;
-    private bool _chromeVisible = true;
+    private bool _chromeVisible; // starts false to match the chrome's initial Opacity=0, so the first RevealChrome actually animates it in
     private bool _panelOpen;
     private bool _syncingChapter;
     private bool _settingVolumeSlider;
