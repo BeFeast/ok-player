@@ -35,32 +35,45 @@ internal sealed unsafe class GlInteropDevice : IDisposable
         ID3D11Device* device = null;
         ID3D11DeviceContext* deviceContext = null;
 
+        try
         {
-            Guid guid = typeof(IDXGIFactory2).GUID;
-            int hr = DXGI.GetApi(null).CreateDXGIFactory2(0, &guid, (void**)&factory);
-            if (hr < 0 || factory == null)
-                throw new InvalidOperationException($"CreateDXGIFactory2 failed (0x{hr:X8}).");
+            {
+                Guid guid = typeof(IDXGIFactory2).GUID;
+                int hr = DXGI.GetApi(null).CreateDXGIFactory2(0, &guid, (void**)&factory);
+                if (hr < 0 || factory == null)
+                    throw new InvalidOperationException($"CreateDXGIFactory2 failed (0x{hr:X8}).");
+            }
+            {
+                var flags = CreateDeviceFlag.BgraSupport | CreateDeviceFlag.VideoSupport;
+                int hr = D3D11.GetApi(null).CreateDevice(
+                    null, D3DDriverType.Hardware, 0, (uint)flags, null, 0, D3D11.SdkVersion,
+                    &device, null, &deviceContext);
+                if (hr < 0 || device == null)
+                    throw new InvalidOperationException($"D3D11CreateDevice failed (0x{hr:X8}).");
+            }
+
+            DxFactory = (IntPtr)factory;
+            DxDevice = (IntPtr)device;
+            DxDeviceContext = (IntPtr)deviceContext;
+
+            EnsureSharedGlContext();
+
+            GlDevice = Wgl.DXOpenDeviceNV((IntPtr)device);
+            if (GlDevice == IntPtr.Zero)
+                throw new NotSupportedException(
+                    "WGL_NV_DX_interop is unavailable on this GPU/driver (wglDXOpenDeviceNV returned null). " +
+                    "An ANGLE/EGL fallback backend is required on such machines.");
         }
+        catch
         {
-            var flags = CreateDeviceFlag.BgraSupport | CreateDeviceFlag.VideoSupport;
-            int hr = D3D11.GetApi(null).CreateDevice(
-                null, D3DDriverType.Hardware, 0, (uint)flags, null, 0, D3D11.SdkVersion,
-                &device, null, &deviceContext);
-            if (hr < 0 || device == null)
-                throw new InvalidOperationException($"D3D11CreateDevice failed (0x{hr:X8}).");
+            // Construction failed partway: the half-built instance is discarded and Dispose() will
+            // never run on it, so release any native objects acquired in locals before rethrowing.
+            if (GlDevice != IntPtr.Zero) Wgl.DXCloseDeviceNV(GlDevice);
+            if (deviceContext != null) deviceContext->Release();
+            if (device != null) device->Release();
+            if (factory != null) factory->Release();
+            throw;
         }
-
-        DxFactory = (IntPtr)factory;
-        DxDevice = (IntPtr)device;
-        DxDeviceContext = (IntPtr)deviceContext;
-
-        EnsureSharedGlContext();
-
-        GlDevice = Wgl.DXOpenDeviceNV((IntPtr)device);
-        if (GlDevice == IntPtr.Zero)
-            throw new NotSupportedException(
-                "WGL_NV_DX_interop is unavailable on this GPU/driver (wglDXOpenDeviceNV returned null). " +
-                "An ANGLE/EGL fallback backend is required on such machines.");
     }
 
     /// <summary>GL function-pointer loader handed to libmpv's render API.</summary>
