@@ -50,6 +50,20 @@ internal sealed unsafe class VideoSwapChain : IDisposable
         SwapChainHandle = (IntPtr)swapChain;
 
         GLFrameBufferHandle = GL.GenFramebuffer();
+
+        // Apply the DPI transform up front so the very first frame is correct on a non-1.0 monitor,
+        // even if no resize/DPI-change event follows creation.
+        ApplyDpiTransform(scaleX, scaleY);
+    }
+
+    private void ApplyDpiTransform(double scaleX, double scaleY)
+    {
+        var transform = new Matrix3X2F
+        {
+            DXGI11 = 1.0f / (float)scaleX,
+            DXGI22 = 1.0f / (float)scaleY,
+        };
+        ((IDXGISwapChain2*)SwapChainHandle)->SetMatrixTransform(in transform);
     }
 
     public void Begin()
@@ -103,12 +117,7 @@ internal sealed unsafe class VideoSwapChain : IDisposable
         BufferWidth = Convert.ToInt32(logicalWidth * scaleX);
         BufferHeight = Convert.ToInt32(logicalHeight * scaleY);
         ((IDXGISwapChain1*)SwapChainHandle)->ResizeBuffers(2, (uint)BufferWidth, (uint)BufferHeight, Format.FormatUnknown, 0);
-        var transform = new Matrix3X2F
-        {
-            DXGI11 = 1.0f / (float)scaleX,
-            DXGI22 = 1.0f / (float)scaleY,
-        };
-        ((IDXGISwapChain2*)SwapChainHandle)->SetMatrixTransform(in transform);
+        ApplyDpiTransform(scaleX, scaleY);
     }
 
     public void Dispose()

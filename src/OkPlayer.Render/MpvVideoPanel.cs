@@ -169,6 +169,9 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
         _swapChain = null;
         _mpv?.Dispose();
         _mpv = null;
+        // Allow a later reload / reparent to re-initialize cleanly (engine fields are now null).
+        _initialized = false;
+        _lastRenderTime = TimeSpan.FromSeconds(-1);
         // The static shared GL context is intentionally retained (single-window app).
     }
 }

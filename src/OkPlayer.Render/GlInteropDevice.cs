@@ -18,6 +18,9 @@ internal sealed unsafe class GlInteropDevice
 {
     private static IGraphicsContext? s_sharedContext;
     private static IBindingsContext? s_sharedBindings;
+    // The hidden GLFW window owns the WGL context; keep it alive for the process lifetime so the GC
+    // can't finalize it out from under the stored context pointer.
+    private static NativeWindow? s_sharedWindow;
 
     public IntPtr DxFactory { get; }
     public IntPtr DxDevice { get; }
@@ -72,12 +75,12 @@ internal sealed unsafe class GlInteropDevice
         settings.WindowBorder = WindowBorder.Hidden;
         settings.WindowState = WindowState.Minimized;
 
-        var nativeWindow = new NativeWindow(settings); // creates a hidden GLFW window + real WGL context
+        s_sharedWindow = new NativeWindow(settings); // hidden GLFW window + real WGL context; kept alive
 
         s_sharedBindings = new GLFWBindingsContext();
         Wgl.LoadBindings(s_sharedBindings); // load WGL extension entry points (incl. NV_DX_interop)
 
-        s_sharedContext = nativeWindow.Context;
+        s_sharedContext = s_sharedWindow.Context;
         s_sharedContext.MakeCurrent();
     }
 }
