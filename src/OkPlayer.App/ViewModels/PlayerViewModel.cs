@@ -103,31 +103,31 @@ public partial class PlayerViewModel : ObservableObject
     private void OnFileLoaded(object? sender, System.EventArgs e)
         => _dispatcher?.TryEnqueue(() => { RefreshTracks(); RefreshChapters(); });
 
-    private void OnEngineProperty(string name)
+    private void OnEngineProperty(string name, object? value)
     {
-        MpvContext? e = _engine;
         DispatcherQueue? d = _dispatcher;
-        if (e is null || d is null)
+        if (d is null)
             return;
 
+        // Value comes straight from the mpv event — never call Get*Property here (UI-thread deadlock).
         d.TryEnqueue(() =>
         {
             switch (name)
             {
-                case "time-pos": if (!IsScrubbing) Position = e.GetPropertyDouble("time-pos") ?? 0; break;
-                case "duration": Duration = e.GetPropertyDouble("duration") ?? 0; break;
-                case "pause": IsPaused = e.GetPropertyBool("pause") ?? true; break;
-                case "volume": Volume = e.GetPropertyDouble("volume") ?? 100; break;
-                case "mute": IsMuted = e.GetPropertyBool("mute") ?? false; break;
-                case "speed": Speed = e.GetPropertyDouble("speed") ?? 1.0; break;
+                case "time-pos": if (!IsScrubbing && value is double tp) Position = tp; break;
+                case "duration": if (value is double du) Duration = du; break;
+                case "pause": if (value is bool pa) IsPaused = pa; break;
+                case "volume": if (value is double vo) Volume = vo; break;
+                case "mute": if (value is bool mu) IsMuted = mu; break;
+                case "speed": if (value is double sp) Speed = sp; break;
                 case "media-title":
-                    MediaTitle = e.GetPropertyString("media-title") ?? string.Empty;
+                    MediaTitle = value as string ?? string.Empty;
                     HasMedia = true;
                     break;
                 case "sid":
                 case "aid": RefreshTracks(); break;
-                case "sub-delay": SubDelayMs = (int)System.Math.Round((e.GetPropertyDouble("sub-delay") ?? 0) * 1000); break;
-                case "chapter": CurrentChapterIndex = (int)(e.GetPropertyLong("chapter") ?? -1); break;
+                case "sub-delay": if (value is double sd) SubDelayMs = (int)System.Math.Round(sd * 1000); break;
+                case "chapter": CurrentChapterIndex = value is long ch ? (int)ch : -1; break;
             }
         });
     }

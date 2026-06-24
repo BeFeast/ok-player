@@ -22,8 +22,10 @@ public sealed class MpvContext : IDisposable
     public event EventHandler<MpvEndFileReason>? EndFile;
     /// <summary>Raised when mpv is shutting down.</summary>
     public event EventHandler? Shutdown;
-    /// <summary>Raised when an observed property changes; argument is the property name.</summary>
-    public event Action<string>? PropertyChanged;
+    /// <summary>Raised when an observed property changes, with the value parsed from the event itself.
+    /// Consumers must use this value rather than calling Get*Property: a synchronous get on the UI
+    /// thread can deadlock against a core that is briefly busy (e.g. servicing a screenshot render).</summary>
+    public event Action<string, object?>? PropertyChanged;
     /// <summary>Raised for each libmpv log message (level, prefix, text).</summary>
     public event Action<MpvLogLevel, string, string>? LogMessageReceived;
 
@@ -154,10 +156,26 @@ public sealed class MpvContext : IDisposable
                     var prop = Marshal.PtrToStructure<MpvEventProperty>(ev.Data);
                     var name = prop.Name;
                     if (name is not null)
-                        PropertyChanged?.Invoke(name);
+                        PropertyChanged?.Invoke(name, ParsePropertyValue(prop));
                     break;
             }
         }
+    }
+
+    /// <summary>Read an observed property's value straight from the event payload (valid only during
+    /// this event), so consumers never have to call back into mpv on another thread.</summary>
+    private static object? ParsePropertyValue(MpvEventProperty prop)
+    {
+        if (prop.Data == IntPtr.Zero)
+            return null;
+        return prop.Format switch
+        {
+            MpvFormat.Double => Marshal.PtrToStructure<double>(prop.Data),
+            MpvFormat.Flag => Marshal.ReadInt32(prop.Data) != 0,
+            MpvFormat.Int64 => Marshal.ReadInt64(prop.Data),
+            MpvFormat.String or MpvFormat.OsdString => Marshal.PtrToStringUTF8(Marshal.ReadIntPtr(prop.Data)),
+            _ => null,
+        };
     }
 
     public void Dispose()
