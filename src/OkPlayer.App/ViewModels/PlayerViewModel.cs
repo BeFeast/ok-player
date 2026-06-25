@@ -85,6 +85,7 @@ public partial class PlayerViewModel : ObservableObject
     partial void OnShowRemainingChanged(bool value) => OnPropertyChanged(nameof(TrailingTimeText));
     partial void OnSpeedChanged(double value) => OnPropertyChanged(nameof(SpeedText));
     partial void OnSubDelayMsChanged(int value) => OnPropertyChanged(nameof(SubDelayText));
+    partial void OnSubScaleChanged(double value) => OnPropertyChanged(nameof(SubScaleText));
 
     partial void OnCurrentChapterIndexChanged(int value) => ApplyCurrentChapterFlags();
 
