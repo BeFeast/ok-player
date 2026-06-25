@@ -332,8 +332,8 @@ public sealed partial class PlayerView : UserControl
         {
             case VirtualKey.Space:
             case (VirtualKey)0x4B: Vm.TogglePlay(); break;        // K
-            case VirtualKey.Left:  Vm.SeekRelative(-5); break;
-            case VirtualKey.Right: Vm.SeekRelative(5); break;
+            case VirtualKey.Left:  Vm.SeekRelative(-App.Settings.Current.SkipStep); break;
+            case VirtualKey.Right: Vm.SeekRelative(App.Settings.Current.SkipStep); break;
             case (VirtualKey)0x4A: Vm.SeekRelative(-10); break;   // J
             case (VirtualKey)0x4C: Vm.SeekRelative(10); break;    // L
             case VirtualKey.Up:    Vm.NudgeVolume(5); break;
@@ -957,7 +957,10 @@ public sealed partial class PlayerView : UserControl
             Video.Open(pathOrUrl); // may throw on engine-init failure — do this before mutating UI state
             Vm.OnOpening();        // load accepted: clear the prior file's playhead/duration/chapter/HasMedia
             _currentPath = pathOrUrl;
-            _resumeTarget = _history.Get(pathOrUrl)?.Position ?? -1; // resume applied on the first Duration
+            // resume only when the user keeps that on (Settings -> Playback); applied on the first Duration
+            _resumeTarget = (App.Settings.Current.ResumePlayback ? _history.Get(pathOrUrl)?.Position : null) ?? -1;
+            if (Math.Abs(App.Settings.Current.DefaultSpeed - 1.0) > 0.001)
+                Vm.SetSpeed(App.Settings.Current.DefaultSpeed); // new files start at the configured default speed
             LoadBookmarks();       // refresh the panel's bookmarks for the new file (panel may be open)
             RevealChrome();        // show the controls when a file opens (drag-drop / picker)
             _ = _thumbs.OpenAsync(pathOrUrl); // arm the seek-preview engine for this file (fire-and-forget)

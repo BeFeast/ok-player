@@ -16,6 +16,11 @@ public sealed class AppSettings
     public int MicaPanels { get; set; } = 70;            // 0..100
     public int MicaOverlays { get; set; } = 40;          // 0..100
 
+    // Playback (design band 9)
+    public bool ResumePlayback { get; set; } = true;     // resume from the last position on open
+    public double DefaultSpeed { get; set; } = 1.0;      // speed a newly opened file starts at
+    public int SkipStep { get; set; } = 5;               // seconds the Left/Right arrows seek
+
     public int SchemaVersion { get; set; } = 1;          // forward-compat migration hook
 }
 
