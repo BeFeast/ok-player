@@ -1064,16 +1064,19 @@ public sealed partial class PlayerView : UserControl
     /// moves the cursor; opening a file elsewhere rebuilds the list from its folder. Streams get no list.</summary>
     private void UpdatePlaylist(string pathOrUrl)
     {
-        if (_playlist?.SetCurrent(pathOrUrl) == true)
-            return; // a sibling we already know — keep the existing order, just move the cursor
         if (pathOrUrl.Contains("://"))
         {
             _playlist = null; // network/stream URL — no folder to enumerate
             return;
         }
+        string full;
+        try { full = System.IO.Path.GetFullPath(pathOrUrl); } // EnumerateFiles yields absolute paths, so the
+        catch { _playlist = null; return; }                    // cursor only matches if `current` is absolute too
+        if (_playlist?.SetCurrent(full) == true)
+            return; // a sibling we already know — keep the existing order, just move the cursor
         try
         {
-            string? dir = System.IO.Path.GetDirectoryName(pathOrUrl);
+            string? dir = System.IO.Path.GetDirectoryName(full);
             if (dir is null)
             {
                 _playlist = null;
@@ -1083,7 +1086,7 @@ public sealed partial class PlayerView : UserControl
             foreach (var f in System.IO.Directory.EnumerateFiles(dir))
                 if (OkPlayer.Core.MediaFormats.IsMedia(f))
                     siblings.Add(f);
-            _playlist = new OkPlayer.Core.Playlist(siblings, pathOrUrl);
+            _playlist = new OkPlayer.Core.Playlist(siblings, full);
         }
         catch
         {
@@ -1113,7 +1116,10 @@ public sealed partial class PlayerView : UserControl
 
     private void OnEndReached()
     {
-        if (_autoAdvance && _playlist?.Next() is string next)
+        // Only advance if the current file is genuinely at its end. A queued eof-reached can arrive after a
+        // manual hop (PageDown / opening another file) loaded a fresh file at position 0 — that stale event
+        // must not skip a file. A real EOF leaves position at (≈) duration.
+        if (_autoAdvance && Vm.Duration > 0 && Vm.Position >= Vm.Duration - 1.0 && _playlist?.Next() is string next)
         {
             ShowToast("Up next… " + System.IO.Path.GetFileNameWithoutExtension(next));
             OpenMedia(next);
