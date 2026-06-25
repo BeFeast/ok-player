@@ -21,6 +21,8 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
+        // apply engine-init settings before the video panel is created
+        OkPlayer.Render.MpvVideoPanel.HardwareDecoding = Settings.Current.HardwareDecoding;
         _window = new MainWindow(GetLaunchFile());
         _window.Activate();
     }

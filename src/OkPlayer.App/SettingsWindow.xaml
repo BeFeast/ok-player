@@ -186,6 +186,38 @@
                                    Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,8,0,0" />
                     </StackPanel>
 
+                    <!-- Video (real) -->
+                    <StackPanel x:Name="VideoPanel" Visibility="Collapsed">
+                        <TextBlock Text="Video" Style="{StaticResource OkSettingsTitleTextStyle}" />
+                        <TextBlock Text="HARDWARE DECODING" FontSize="12" FontWeight="SemiBold" CharacterSpacing="60"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,22,0,10" />
+                        <Border Background="{ThemeResource ControlFillColorTertiaryBrush}" CornerRadius="8" Padding="3" HorizontalAlignment="Left">
+                            <StackPanel Orientation="Horizontal">
+                                <Button x:Name="Hwdec1" Tag="1" Content="Auto" Click="OnHwdec" Width="74" CornerRadius="6" Padding="0,5" FontSize="12.5" Background="Transparent" BorderThickness="0" />
+                                <Button x:Name="Hwdec0" Tag="0" Content="Off"  Click="OnHwdec" Width="74" CornerRadius="6" Padding="0,5" FontSize="12.5" Background="Transparent" BorderThickness="0" />
+                            </StackPanel>
+                        </Border>
+                        <TextBlock Text="Decode video on the GPU where it's safely supported (recommended). Turn off to force software decoding. Restart OK Player to apply."
+                                   TextWrapping="Wrap" MaxWidth="520" HorizontalAlignment="Left" FontSize="11.5"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,8,0,0" />
+                    </StackPanel>
+
+                    <!-- Audio (real) -->
+                    <StackPanel x:Name="AudioPanel" Visibility="Collapsed">
+                        <TextBlock Text="Audio" Style="{StaticResource OkSettingsTitleTextStyle}" />
+                        <TextBlock Text="DEFAULT VOLUME" FontSize="12" FontWeight="SemiBold" CharacterSpacing="60"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,22,0,10" />
+                        <Border Background="{ThemeResource ControlFillColorTertiaryBrush}" CornerRadius="8" Padding="3" HorizontalAlignment="Left">
+                            <StackPanel Orientation="Horizontal">
+                                <Button x:Name="Vol50"  Tag="50"  Content="50%"  Click="OnDefaultVolume" Width="60" CornerRadius="6" Padding="0,5" FontSize="12.5" Background="Transparent" BorderThickness="0" />
+                                <Button x:Name="Vol75"  Tag="75"  Content="75%"  Click="OnDefaultVolume" Width="60" CornerRadius="6" Padding="0,5" FontSize="12.5" Background="Transparent" BorderThickness="0" />
+                                <Button x:Name="Vol100" Tag="100" Content="100%" Click="OnDefaultVolume" Width="60" CornerRadius="6" Padding="0,5" FontSize="12.5" Background="Transparent" BorderThickness="0" />
+                            </StackPanel>
+                        </Border>
+                        <TextBlock Text="The volume OK Player starts at when it launches." FontSize="11.5"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,8,0,0" />
+                    </StackPanel>
+
                     <!-- Advanced (real) — the power-user escape hatch (PRD: raw mpv config) -->
                     <StackPanel x:Name="AdvancedPanel" Visibility="Collapsed">
                         <TextBlock Text="Advanced" Style="{StaticResource OkSettingsTitleTextStyle}" />

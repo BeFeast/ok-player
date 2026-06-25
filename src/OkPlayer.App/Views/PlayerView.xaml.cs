@@ -148,7 +148,10 @@ public sealed partial class PlayerView : UserControl
     private void OnEngineReady(object? sender, EventArgs e)
     {
         if (Video.Engine is { } engine)
+        {
             Vm.Attach(engine, DispatcherQueue);
+            Vm.SetVolume(App.Settings.Current.DefaultVolume); // start at the configured default volume (Settings -> Audio)
+        }
         if (_pendingInitialPath is { } path)
         {
             _pendingInitialPath = null;
