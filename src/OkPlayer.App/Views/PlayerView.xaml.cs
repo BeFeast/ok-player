@@ -166,6 +166,9 @@ public sealed partial class PlayerView : UserControl
         }
         double time = fraction * Vm.Duration;
         PreviewTime.Text = FormatPreviewTime(time);
+        string chapter = ChapterTitleAt(time);
+        PreviewChapter.Text = chapter;
+        PreviewChapter.Visibility = string.IsNullOrEmpty(chapter) ? Visibility.Collapsed : Visibility.Visible;
 
         // Center the preview on the cursor (in RootGrid space), clamped to stay on-screen.
         double xInRoot = Seek.TransformToVisual(RootGrid).TransformPoint(new Windows.Foundation.Point(xInBar, 0)).X;
@@ -196,6 +199,19 @@ public sealed partial class PlayerView : UserControl
         _previewToken++;           // discard any in-flight thumbnail so it can't flash on the next hover
         PreviewPanel.Opacity = 0;
         PreviewImageFrame.Visibility = Visibility.Collapsed; // next hover shows the timestamp first, frame when ready
+    }
+
+    private string ChapterTitleAt(double time)
+    {
+        string title = string.Empty;
+        foreach (var ch in Vm.Chapters) // chapters are ordered by time; keep the last one that started
+        {
+            if (ch.Time <= time + 0.05)
+                title = ch.Title;
+            else
+                break;
+        }
+        return title;
     }
 
     private static string FormatPreviewTime(double seconds)
@@ -375,7 +391,12 @@ public sealed partial class PlayerView : UserControl
     }
 
     private void UpdateChaptersEmpty()
-        => ChaptersEmpty.Visibility = Vm.Chapters.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    {
+        int n = Vm.Chapters.Count;
+        ChaptersEmpty.Visibility = n == 0 ? Visibility.Visible : Visibility.Collapsed;
+        ChaptersSectionHeader.Visibility = n == 0 ? Visibility.Collapsed : Visibility.Visible;
+        ChaptersSectionHeader.Text = $"CHAPTERS · {n}";
+    }
 
     private void UpdateSeekChapters()
     {

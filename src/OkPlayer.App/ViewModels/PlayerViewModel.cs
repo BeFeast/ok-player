@@ -83,6 +83,12 @@ public partial class PlayerViewModel : ObservableObject
     partial void OnShowRemainingChanged(bool value) => OnPropertyChanged(nameof(TrailingTimeText));
     partial void OnSpeedChanged(double value) => OnPropertyChanged(nameof(SpeedText));
     partial void OnSubDelayMsChanged(int value) => OnPropertyChanged(nameof(SubDelayText));
+
+    partial void OnCurrentChapterIndexChanged(int value)
+    {
+        for (int i = 0; i < Chapters.Count; i++)
+            Chapters[i].IsCurrent = i == value;
+    }
     partial void OnVolumeChanged(double value)
     {
         OnPropertyChanged(nameof(VolumeText));

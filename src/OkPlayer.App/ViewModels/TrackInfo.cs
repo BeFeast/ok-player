@@ -1,4 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
 
 namespace OkPlayer.App.ViewModels;
@@ -21,4 +22,8 @@ public sealed partial class ChapterInfo : ObservableObject
     public string TimeText { get; init; } = string.Empty;
 
     [ObservableProperty] private ImageSource? _thumbnail;
+    [ObservableProperty] private bool _isCurrent; // the playing chapter (accent tint + inset bar)
+
+    public Visibility CurrentBarVisibility => IsCurrent ? Visibility.Visible : Visibility.Collapsed;
+    partial void OnIsCurrentChanged(bool value) => OnPropertyChanged(nameof(CurrentBarVisibility));
 }
