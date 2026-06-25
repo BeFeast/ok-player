@@ -74,6 +74,7 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
             string pictures = System.Environment.GetFolderPath(System.Environment.SpecialFolder.MyPictures);
             if (!string.IsNullOrEmpty(pictures))
                 _mpv.SetOption("screenshot-directory", pictures);
+            ApplyUserConfig(_mpv); // power-user escape hatch — applied last so it can override the soft defaults above
             _mpv.Initialize();
 
             _render = new MpvRenderContext(_mpv, GlInteropDevice.GetProcAddress);
@@ -95,6 +96,43 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
             TeardownEngine();
             throw;
         }
+    }
+
+    /// <summary>The power-user escape-hatch config: mpv.conf-style <c>key=value</c> lines applied to the
+    /// engine at startup. Lives next to the other OkPlayer state so it's easy to find and hand-edit.</summary>
+    public static string UserConfigPath => System.IO.Path.Combine(
+        System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData), "OkPlayer", "mpv.conf");
+
+    // Options the user must not override — they'd break video output, the on-screen controls, the app's
+    // keyboard ownership, or open a remote-control / logging surface. Everything else is fair game.
+    private static readonly System.Collections.Generic.HashSet<string> ProtectedOptions =
+        new(System.StringComparer.OrdinalIgnoreCase)
+        {
+            "vo", "osc", "input-default-bindings", "config", "config-dir", "input-conf",
+            "input-ipc-server", "terminal", "msg-level", "wid", "log-file", "load-scripts",
+        };
+
+    private static void ApplyUserConfig(MpvContext mpv)
+    {
+        try
+        {
+            if (!System.IO.File.Exists(UserConfigPath))
+                return;
+            foreach (string rawLine in System.IO.File.ReadAllLines(UserConfigPath))
+            {
+                string line = rawLine.Trim();
+                if (line.Length == 0 || line[0] == '#')
+                    continue;
+                int eq = line.IndexOf('=');
+                string key = (eq >= 0 ? line[..eq] : line).Trim();
+                string val = eq >= 0 ? line[(eq + 1)..].Trim() : "yes";
+                if (key.Length == 0 || ProtectedOptions.Contains(key))
+                    continue;
+                try { mpv.SetOption(key, val); }
+                catch { /* skip an unknown/invalid option rather than fail to start */ }
+            }
+        }
+        catch { /* the escape hatch is best-effort; never block startup on it */ }
     }
 
     private double ScaleX => _panel is { CompositionScaleX: > 0 } ? _panel.CompositionScaleX : 1.0;

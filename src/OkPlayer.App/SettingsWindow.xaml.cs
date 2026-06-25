@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using Microsoft.UI;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
@@ -44,10 +45,53 @@ public sealed partial class SettingsWindow : Window
             return;
         int i = NavList.SelectedIndex;
         bool appearance = i == 0;
+        bool advanced = i == 7;
         AppearancePanel.Visibility = appearance ? Visibility.Visible : Visibility.Collapsed;
-        PlaceholderPanel.Visibility = appearance ? Visibility.Collapsed : Visibility.Visible;
-        if (!appearance && i >= 0 && i < PanelNames.Length)
+        AdvancedPanel.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
+        PlaceholderPanel.Visibility = (!appearance && !advanced) ? Visibility.Visible : Visibility.Collapsed;
+        if (advanced)
+            LoadMpvConf();
+        else if (!appearance && i >= 0 && i < PanelNames.Length)
             PlaceholderTitle.Text = PanelNames[i];
+    }
+
+    // ── Advanced panel (the raw-mpv-config escape hatch) ───────────────
+
+    private void LoadMpvConf()
+    {
+        try
+        {
+            string path = OkPlayer.Render.MpvVideoPanel.UserConfigPath;
+            MpvConfEditor.Text = File.Exists(path) ? File.ReadAllText(path) : string.Empty;
+        }
+        catch { MpvConfEditor.Text = string.Empty; }
+        MpvConfStatus.Text = string.Empty;
+    }
+
+    private void OnMpvConfSave(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            string path = OkPlayer.Render.MpvVideoPanel.UserConfigPath;
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, MpvConfEditor.Text);
+            MpvConfStatus.Text = "Saved · restart to apply";
+        }
+        catch
+        {
+            MpvConfStatus.Text = "Couldn't save";
+        }
+    }
+
+    private void OnOpenConfigFolder(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            string dir = Path.GetDirectoryName(OkPlayer.Render.MpvVideoPanel.UserConfigPath)!;
+            Directory.CreateDirectory(dir);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(dir) { UseShellExecute = true });
+        }
+        catch { /* best effort */ }
     }
 
     // ── Appearance panel ───────────────────────────────────────────────
