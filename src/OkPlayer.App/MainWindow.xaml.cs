@@ -96,16 +96,25 @@ public sealed partial class MainWindow : Window
         AppWindow.SetPresenter(on ? AppWindowPresenterKind.FullScreen : AppWindowPresenterKind.Overlapped);
     }
 
-    /// <summary>Resize the window's client area to the video's native pixels (1:1), clamped to ~95% of the screen.</summary>
+    /// <summary>Size the window to the video's aspect and place it fully inside the monitor: shrink to fit
+    /// ~94% of the work area (never upscaling past native), then centre it so the screen edges never clip it.</summary>
     private void FitToVideo(int w, int h)
     {
         if (w <= 0 || h <= 0 || _fullscreen)
             return;
-        var area = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Nearest);
-        int maxW = (int)(area.WorkArea.Width * 0.95);
-        int maxH = (int)(area.WorkArea.Height * 0.95);
-        double scale = Math.Min(1.0, Math.Min((double)maxW / w, (double)maxH / h));
-        AppWindow.ResizeClient(new Windows.Graphics.SizeInt32((int)(w * scale), (int)(h * scale)));
+        var work = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Nearest).WorkArea;
+        // One scale for both axes keeps the client at the video's exact aspect (video fills it, no black
+        // margins); clamp to <=1 so a small video is never blown up past its native size.
+        double scale = Math.Min(1.0, Math.Min(work.Width * 0.94 / w, work.Height * 0.94 / h));
+        int cw = Math.Max(160, (int)Math.Round(w * scale));
+        int ch = Math.Max(90, (int)Math.Round(h * scale));
+        AppWindow.ResizeClient(new Windows.Graphics.SizeInt32(cw, ch));
+        // Re-read the outer window size (client + frame) and centre it within the work area so a window
+        // sized for a large video can never extend past the monitor edges.
+        var outer = AppWindow.Size;
+        int x = work.X + Math.Max(0, (work.Width - outer.Width) / 2);
+        int y = work.Y + Math.Max(0, (work.Height - outer.Height) / 2);
+        AppWindow.Move(new Windows.Graphics.PointInt32(x, y));
     }
 
     private async Task OpenFileAsync()

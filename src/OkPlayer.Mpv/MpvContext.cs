@@ -28,6 +28,8 @@ public sealed class MpvContext : IDisposable
     public event Action<string, object?>? PropertyChanged;
     /// <summary>Raised for each libmpv log message (level, prefix, text).</summary>
     public event Action<MpvLogLevel, string, string>? LogMessageReceived;
+    /// <summary>Raised when an async command (issued via the reply-userdata overload) finishes.</summary>
+    public event Action<ulong>? CommandReply;
 
     public MpvContext()
     {
@@ -81,12 +83,15 @@ public sealed class MpvContext : IDisposable
     /// <summary>Fire-and-forget command — does not block the caller. Use for actions that may need a
     /// render to complete (e.g. screenshot), which would deadlock if issued synchronously on the
     /// render thread.</summary>
-    public void CommandAsync(params string[] args)
+    public void CommandAsync(params string[] args) => CommandAsync(0, args);
+
+    /// <summary>Async command tagged with <paramref name="replyUserData"/>, echoed back via <see cref="CommandReply"/> when it finishes.</summary>
+    public void CommandAsync(ulong replyUserData, params string[] args)
     {
         var argv = new string?[args.Length + 1];
         Array.Copy(args, argv, args.Length);
         argv[args.Length] = null;
-        MpvException.Check(MpvNative.mpv_command_async(_handle, 0, argv), $"command_async({string.Join(' ', args)})");
+        MpvException.Check(MpvNative.mpv_command_async(_handle, replyUserData, argv), $"command_async({string.Join(' ', args)})");
     }
 
     public void Loadfile(string pathOrUrl) => Command("loadfile", pathOrUrl, "replace");
@@ -151,6 +156,9 @@ public sealed class MpvContext : IDisposable
                     break;
                 case MpvEventId.PlaybackRestart:
                     PlaybackRestart?.Invoke(this, EventArgs.Empty);
+                    break;
+                case MpvEventId.CommandReply:
+                    CommandReply?.Invoke(ev.ReplyUserData);
                     break;
                 case MpvEventId.PropertyChange:
                     var prop = Marshal.PtrToStructure<MpvEventProperty>(ev.Data);

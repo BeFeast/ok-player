@@ -25,6 +25,8 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
     private bool _renderingHooked;
     private volatile bool _forceRender;
     private TimeSpan _lastRenderTime = TimeSpan.FromSeconds(-1);
+    private long _screenshotSkipUntil; // while set, Draw() yields so it can't contend with an in-flight screenshot
+    private const ulong ScreenshotReply = 1;
 
     /// <summary>The underlying libmpv context — the engine the OSC / panels command. Null until initialized.</summary>
     public MpvContext? Engine => _mpv;
@@ -58,6 +60,7 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
             Content = _panel;
 
             _mpv = new MpvContext();
+            _mpv.CommandReply += OnCommandReply;   // clear the screenshot render-yield as soon as it finishes
             _mpv.SetOption("vo", "libmpv");        // mandatory: the render API drives output
             _mpv.SetOption("hwdec", "auto-safe");  // hardware decode where safely mappable to GL
             _mpv.SetOption("keep-open", "yes");     // hold the last frame instead of closing on EOF
@@ -145,6 +148,10 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
     {
         if (_swapChain == null || _render == null)
             return;
+        // A screenshot grab/encode (esp. 4K/HDR) briefly holds mpv busy; rendering on the UI thread would
+        // block on it and freeze the app. Yield the render loop until the screenshot's reply lands.
+        if (System.Environment.TickCount64 < System.Threading.Volatile.Read(ref _screenshotSkipUntil))
+            return;
 
         bool hasFrame = (_render.Update() & MpvRenderUpdateFlag.Frame) != 0;
         if (!hasFrame && !_forceRender)
@@ -169,6 +176,31 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
 
     public void Play() => _mpv?.SetProperty("pause", false);
     public void Pause() => _mpv?.SetProperty("pause", true);
+
+    /// <summary>Take a screenshot of the decoded frame ("video" mode) without ever stalling the UI: the
+    /// render loop yields until the async screenshot replies. Returns false if no engine is loaded.</summary>
+    public bool Screenshot()
+    {
+        if (_mpv is not { } mpv)
+            return false;
+        System.Threading.Volatile.Write(ref _screenshotSkipUntil, System.Environment.TickCount64 + 2500); // safety cap
+        try
+        {
+            mpv.CommandAsync(ScreenshotReply, "screenshot", "video");
+            return true;
+        }
+        catch (MpvException)
+        {
+            System.Threading.Volatile.Write(ref _screenshotSkipUntil, 0);
+            return false;
+        }
+    }
+
+    private void OnCommandReply(ulong id)
+    {
+        if (id == ScreenshotReply)
+            System.Threading.Volatile.Write(ref _screenshotSkipUntil, 0); // screenshot finished — resume rendering
+    }
 
     public void TogglePause()
     {

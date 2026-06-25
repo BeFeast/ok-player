@@ -322,7 +322,7 @@ public sealed partial class PlayerView : UserControl
             case (VirtualKey)0xBC: Vm.FrameStep(false); break;    // ,
             case (VirtualKey)0x4D: Vm.ToggleMute(); break;        // M
             case (VirtualKey)0x46: ToggleFullscreenRequested?.Invoke(this, EventArgs.Empty); break; // F
-            case (VirtualKey)0x53: Vm.TakeScreenshot(); break;    // S
+            case (VirtualKey)0x53: DoScreenshot(); break;         // S
             case (VirtualKey)0x49: _ = OpenMediaInfoAsync(); break; // I
             case (VirtualKey)0x43: TogglePanel(); break;          // C
             case VirtualKey.Escape:
@@ -345,7 +345,15 @@ public sealed partial class PlayerView : UserControl
     private void OnNextClick(object sender, RoutedEventArgs e) { Vm.JumpChapter(1); RevealChrome(); }
     private void OnVolumeClick(object sender, RoutedEventArgs e) { Vm.ToggleMute(); RevealChrome(); }
     private void OnSpeedClick(object sender, RoutedEventArgs e) { Vm.CycleSpeed(); RevealChrome(); }
-    private void OnScreenshotClick(object sender, RoutedEventArgs e) { Vm.TakeScreenshot(); RevealChrome(); }
+    private void OnScreenshotClick(object sender, RoutedEventArgs e) { DoScreenshot(); RevealChrome(); }
+
+    /// <summary>Take a screenshot via the render panel, which yields the UI-thread render loop so a heavy
+    /// 4K/HDR grab can't freeze the app (the old VM path stalled the UI thread).</summary>
+    private void DoScreenshot()
+    {
+        if (Video.Screenshot())
+            ShowToast("Screenshot saved");
+    }
     private void OnFullscreenClick(object sender, RoutedEventArgs e) => ToggleFullscreenRequested?.Invoke(this, EventArgs.Empty);
 
     private void OnFitToVideoClick(object sender, RoutedEventArgs e)
