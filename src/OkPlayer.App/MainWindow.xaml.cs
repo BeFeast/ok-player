@@ -41,10 +41,12 @@ public sealed partial class MainWindow : Window
         {
             Player.SaveProgress();                 // persist resume position on app close
             App.Settings.Changed -= ApplyAppTheme; // don't keep this closed window rooted
+            App.Settings.Changed -= Player.ApplySubtitleDefaults;
             _settingsWindow?.Close();              // don't leave Settings as a headless window
         };
         ApplyAppTheme();
-        App.Settings.Changed += ApplyAppTheme; // theme chosen in Settings applies to the player too
+        App.Settings.Changed += ApplyAppTheme;                 // theme chosen in Settings applies to the player too
+        App.Settings.Changed += Player.ApplySubtitleDefaults;  // subtitle size/position changes apply live
         if (!string.IsNullOrEmpty(initialFile))
             Player.QueueInitialFile(initialFile); // a file passed on the command line ("Open with")
     }

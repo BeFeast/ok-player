@@ -186,6 +186,31 @@
                                    Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,8,0,0" />
                     </StackPanel>
 
+                    <!-- Subtitles (real) -->
+                    <StackPanel x:Name="SubtitlesPanel" Visibility="Collapsed">
+                        <TextBlock Text="Subtitles" Style="{StaticResource OkSettingsTitleTextStyle}" />
+                        <TextBlock Text="SIZE" FontSize="12" FontWeight="SemiBold" CharacterSpacing="60"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,22,0,10" />
+                        <Border Background="{ThemeResource ControlFillColorTertiaryBrush}" CornerRadius="8" Padding="3" HorizontalAlignment="Left">
+                            <StackPanel Orientation="Horizontal">
+                                <Button x:Name="SubSmall"  Tag="0.8" Content="Small"  Click="OnSubSize" Width="74" CornerRadius="6" Padding="0,5" FontSize="12.5" Background="Transparent" BorderThickness="0" />
+                                <Button x:Name="SubNormal" Tag="1.0" Content="Normal" Click="OnSubSize" Width="74" CornerRadius="6" Padding="0,5" FontSize="12.5" Background="Transparent" BorderThickness="0" />
+                                <Button x:Name="SubLarge"  Tag="1.4" Content="Large"  Click="OnSubSize" Width="74" CornerRadius="6" Padding="0,5" FontSize="12.5" Background="Transparent" BorderThickness="0" />
+                            </StackPanel>
+                        </Border>
+                        <TextBlock Text="POSITION" FontSize="12" FontWeight="SemiBold" CharacterSpacing="60"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,24,0,10" />
+                        <Border Background="{ThemeResource ControlFillColorTertiaryBrush}" CornerRadius="8" Padding="3" HorizontalAlignment="Left">
+                            <StackPanel Orientation="Horizontal">
+                                <Button x:Name="SubBottom" Tag="100" Content="Standard" Click="OnSubPos" Width="84" CornerRadius="6" Padding="0,5" FontSize="12.5" Background="Transparent" BorderThickness="0" />
+                                <Button x:Name="SubRaised" Tag="90"  Content="Raised"   Click="OnSubPos" Width="84" CornerRadius="6" Padding="0,5" FontSize="12.5" Background="Transparent" BorderThickness="0" />
+                            </StackPanel>
+                        </Border>
+                        <TextBlock Text="Defaults for newly opened files. Tweak the current file (size, delay) from the subtitles button on the controls."
+                                   TextWrapping="Wrap" MaxWidth="520" HorizontalAlignment="Left" FontSize="11.5"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,8,0,0" />
+                    </StackPanel>
+
                     <!-- Video (real) -->
                     <StackPanel x:Name="VideoPanel" Visibility="Collapsed">
                         <TextBlock Text="Video" Style="{StaticResource OkSettingsTitleTextStyle}" />

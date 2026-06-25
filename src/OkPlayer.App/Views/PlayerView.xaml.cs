@@ -940,6 +940,21 @@ public sealed partial class PlayerView : UserControl
 
     private string? _pendingInitialPath; // a launch-time file held until the engine is ready
 
+    /// <summary>Apply the user's default subtitle size/position (Settings -> Subtitles) to the engine. Live —
+    /// safe to call any time; a no-op when no engine/file is up.</summary>
+    public void ApplySubtitleDefaults()
+    {
+        try
+        {
+            if (Video.Engine is { } e)
+            {
+                e.SetProperty("sub-scale", App.Settings.Current.SubtitleScale);
+                e.SetProperty("sub-pos", (double)App.Settings.Current.SubtitlePosition);
+            }
+        }
+        catch { /* setting a property never blocks startup/open */ }
+    }
+
     /// <summary>Open a file given on the command line ("Open with"). If the engine isn't up yet, hold it
     /// and open on EngineReady.</summary>
     public void QueueInitialFile(string path)
@@ -964,6 +979,7 @@ public sealed partial class PlayerView : UserControl
             _resumeTarget = (App.Settings.Current.ResumePlayback ? _history.Get(pathOrUrl)?.Position : null) ?? -1;
             Vm.SetSpeed(App.Settings.Current.DefaultSpeed); // every file starts at the default speed, incl. 1x
                                                             // (so a manual speed change doesn't carry over)
+            ApplySubtitleDefaults(); // default sub size/position (Settings -> Subtitles)
             LoadBookmarks();       // refresh the panel's bookmarks for the new file (panel may be open)
             RevealChrome();        // show the controls when a file opens (drag-drop / picker)
             _ = _thumbs.OpenAsync(pathOrUrl); // arm the seek-preview engine for this file (fire-and-forget)
