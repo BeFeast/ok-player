@@ -94,19 +94,21 @@ public sealed class MpvContext : IDisposable
         MpvException.Check(MpvNative.mpv_command_async(_handle, replyUserData, argv), $"command_async({string.Join(' ', args)})");
     }
 
-    public void Loadfile(string pathOrUrl) => Command("loadfile", pathOrUrl, "replace");
+    // Async: a synchronous mpv_command("loadfile") blocks the caller until the core accepts it, which
+    // DEADLOCKS the UI thread when the core is briefly busy (e.g. encoding an in-flight screenshot, whose
+    // completion needs a render the blocked UI thread can no longer drive). Fire it async like screenshots.
+    public void Loadfile(string pathOrUrl) => CommandAsync("loadfile", pathOrUrl, "replace");
 
-    public void SetProperty(string name, string value)
-        => MpvException.Check(MpvNative.mpv_set_property_string(_handle, name, value), $"set_property({name})");
+    // Property writes go through the async "set" command, never the synchronous mpv_set_property_*: a
+    // synchronous write BLOCKS the caller until the core accepts it, which deadlocks the UI thread whenever
+    // the core is briefly busy (e.g. encoding an in-flight screenshot). The UI never needs the write's return
+    // value — it observes the property change — so fire-and-forget is both safe and the only deadlock-free way.
+    public void SetProperty(string name, string value) => CommandAsync("set", name, value);
 
     public void SetProperty(string name, double value)
-        => MpvException.Check(MpvNative.mpv_set_property_double(_handle, name, MpvFormat.Double, ref value), $"set_property({name})");
+        => CommandAsync("set", name, value.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
-    public void SetProperty(string name, bool value)
-    {
-        int flag = value ? 1 : 0;
-        MpvException.Check(MpvNative.mpv_set_property_flag(_handle, name, MpvFormat.Flag, ref flag), $"set_property({name})");
-    }
+    public void SetProperty(string name, bool value) => CommandAsync("set", name, value ? "yes" : "no");
 
     public string? GetPropertyString(string name)
     {
