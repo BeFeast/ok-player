@@ -136,4 +136,15 @@ public class PlaylistTests
         p.Shuffle = false;
         Assert.Equal(@"C:\v\ep2.mkv", p.PeekNext); // back to natural ep1 → ep2 → ep10
     }
+
+    [Fact]
+    public void Shuffle_DirectJump_StrandsNoFileUnderRepeatOff()
+    {
+        var folder = new[] { @"C:\v\1.mkv", @"C:\v\2.mkv", @"C:\v\3.mkv", @"C:\v\4.mkv", @"C:\v\5.mkv", @"C:\v\6.mkv" };
+        var p = new Playlist(folder, @"C:\v\1.mkv", new System.Random(3)) { Shuffle = true };
+        p.SetCurrent(@"C:\v\6.mkv"); // a direct jump (clicking an Up-Next row), not a sequential step
+        var seen = new HashSet<string> { p.Current! };
+        while (p.Next() is string n) seen.Add(n); // Repeat.Off — walk to the end of the cycle
+        Assert.Equal(folder.Length, seen.Count); // the jump re-shuffled, so nothing is stranded this cycle
+    }
 }

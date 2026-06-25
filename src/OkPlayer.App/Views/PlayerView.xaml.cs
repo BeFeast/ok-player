@@ -1242,9 +1242,17 @@ public sealed partial class PlayerView : UserControl
         // must not skip a file. A real EOF leaves position at (≈) duration.
         if (_autoAdvance && Vm.Duration > 0 && Vm.Position >= Vm.Duration - 1.0 && _playlist?.AutoAdvanceTarget is string next)
         {
-            ShowToast("Up next… " + System.IO.Path.GetFileNameWithoutExtension(next));
-            OpenMedia(next);
-            Vm.Play(); // the just-ended file left pause=yes (keep-open); play the next one through
+            if (string.Equals(next, _currentPath, StringComparison.OrdinalIgnoreCase))
+            {
+                Vm.SeekToFraction(0); // Repeat One: restart the loaded file, not reload+resume into an EOF loop
+                Vm.Play();
+            }
+            else
+            {
+                ShowToast("Up next… " + System.IO.Path.GetFileNameWithoutExtension(next));
+                OpenMedia(next);
+                Vm.Play(); // the just-ended file left pause=yes (keep-open); play the next one through
+            }
         }
     }
 

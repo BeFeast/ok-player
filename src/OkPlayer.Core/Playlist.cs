@@ -66,13 +66,28 @@ public sealed class Playlist
     public string? Next() { var n = PeekNext; if (n is not null) SetCurrent(n); return n; }
     public string? Prev() { var p = PeekPrev; if (p is not null) SetCurrent(p); return p; }
 
-    /// <summary>Re-point the cursor at <paramref name="path"/> if present (case-insensitive). Order is unchanged.</summary>
+    /// <summary>Re-point the cursor at <paramref name="path"/> if present (case-insensitive). A sequential
+    /// step keeps the order; jumping elsewhere while shuffled re-shuffles the remaining order (new current
+    /// first) so a click never skips the files between, and a wrap reshuffles the next cycle.</summary>
     public bool SetCurrent(string path)
     {
         int i = IndexOf(path);
-        if (i < 0)
-            return false;
-        CurrentIndex = i;
+        if (i < 0 || i == CurrentIndex)
+            return i >= 0; // not found → false; already current → no-op
+        if (_shuffle && CurrentIndex >= 0)
+        {
+            int oldPos = _order.IndexOf(CurrentIndex);
+            bool sequential = oldPos >= 0 &&
+                ((oldPos + 1 < _order.Count && _order[oldPos + 1] == i) ||
+                 (oldPos - 1 >= 0 && _order[oldPos - 1] == i));
+            CurrentIndex = i;
+            if (!sequential)
+                RebuildOrder();
+        }
+        else
+        {
+            CurrentIndex = i;
+        }
         return true;
     }
 
