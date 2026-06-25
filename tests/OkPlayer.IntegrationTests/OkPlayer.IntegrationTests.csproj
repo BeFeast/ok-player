@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <!-- libmpv-2.dll is x64; run the test host as x64 so the native load succeeds -->
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="coverlet.collector" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\OkPlayer.Mpv\OkPlayer.Mpv.csproj" />
+  </ItemGroup>
+
+  <!-- These tests load the real engine, so libmpv-2.dll must sit next to the test assembly. Copy it from
+       native/ when present (locally, or after scripts/fetch-natives.ps1 on a Windows CI runner). When it's
+       absent the project still builds; the [Category=Integration] tests just can't run. -->
+  <ItemGroup>
+    <Content Include="$(MSBuildThisFileDirectory)..\..\native\libmpv\libmpv-2.dll"
+             Condition="Exists('$(MSBuildThisFileDirectory)..\..\native\libmpv\libmpv-2.dll')">
+      <Link>libmpv-2.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>
