@@ -119,6 +119,7 @@ public sealed partial class PlayerView : UserControl
         Vm.PropertyChanged += OnVmPropertyChanged;
         Vm.ToastRequested += ShowToast;
         Vm.EndReached += OnEndReached; // auto-advance the folder playlist when a file plays out
+        SetPanelTab(false);            // the right panel opens on the Chapters tab by default
         Vm.Chapters.CollectionChanged += (_, _) => UpdateChaptersEmpty(); // seek-bar ticks bind Vm.ChapterFractions
         PanelHideSb.Completed += (_, _) => ChaptersPanel.Visibility = Visibility.Collapsed;
         // Handle keys on the UserControl itself (a Control holds focus reliably, unlike a Grid).
@@ -1062,7 +1063,16 @@ public sealed partial class PlayerView : UserControl
 
     /// <summary>Keep the playlist pointed at the opened file. Navigating to a file already in the list just
     /// moves the cursor; opening a file elsewhere rebuilds the list from its folder. Streams get no list.</summary>
+    /// <summary>The folder playlist projected into bound rows for the Up-Next panel (newest cursor state).</summary>
+    public System.Collections.ObjectModel.ObservableCollection<ViewModels.PlaylistRow> UpNext { get; } = new();
+
     private void UpdatePlaylist(string pathOrUrl)
+    {
+        SetPlaylistFor(pathOrUrl);
+        RebuildUpNext();
+    }
+
+    private void SetPlaylistFor(string pathOrUrl)
     {
         if (pathOrUrl.Contains("://"))
         {
@@ -1091,6 +1101,65 @@ public sealed partial class PlayerView : UserControl
         catch
         {
             _playlist = null; // unreadable folder — fall back to single-file playback
+        }
+    }
+
+    /// <summary>Project the folder playlist into the Up-Next rows and refresh the panel's folder header /
+    /// empty state. Called whenever the playlist or its cursor changes.</summary>
+    private void RebuildUpNext()
+    {
+        UpNext.Clear();
+        int cur = _playlist?.CurrentIndex ?? -1;
+        int count = _playlist?.Count ?? 0;
+        for (int i = 0; i < count; i++)
+        {
+            string p = _playlist!.Items[i];
+            UpNext.Add(new ViewModels.PlaylistRow
+            {
+                Path = p,
+                Title = System.IO.Path.GetFileNameWithoutExtension(p),
+                IsCurrent = i == cur,
+                IsNext = i == cur + 1,
+                IsWatched = _history.Get(p) is { Position: > 60 }, // seen at least a minute in
+            });
+        }
+        bool hasFolder = count > 1;
+        UpNextFolderHeader.Text = hasFolder ? $"FROM THIS FOLDER · {count}" : string.Empty;
+        UpNextFolderHeader.Visibility = hasFolder ? Visibility.Visible : Visibility.Collapsed;
+        UpNextList.Visibility = hasFolder ? Visibility.Visible : Visibility.Collapsed;
+        UpNextEmpty.Visibility = hasFolder ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void OnChaptersTab(object sender, TappedRoutedEventArgs e) => SetPanelTab(false);
+    private void OnUpNextTab(object sender, TappedRoutedEventArgs e) => SetPanelTab(true);
+
+    /// <summary>Switch the right panel between its Chapters and Up-Next tabs (one panel, two views).</summary>
+    private void SetPanelTab(bool upNext)
+    {
+        UpNextView.Visibility = upNext ? Visibility.Visible : Visibility.Collapsed;
+        ChaptersSectionHeader.Visibility = upNext ? Visibility.Collapsed : Visibility.Visible;
+        ChapterList.Visibility = upNext ? Visibility.Collapsed : Visibility.Visible;
+        ChaptersFooter.Visibility = upNext ? Visibility.Collapsed : Visibility.Visible;
+
+        var accent = PanelBrush("OkAccentTextBrush", Windows.UI.Color.FromArgb(0xFF, 0x28, 0xB3, 0xAA));
+        var secondary = PanelBrush("OkTextSecondaryBrush", Windows.UI.Color.FromArgb(0xB3, 0xFF, 0xFF, 0xFF));
+        var pill = PanelBrush("OkPopoverBrush", Windows.UI.Color.FromArgb(0xF7, 0x1F, 0x1F, 0x1F));
+        ChaptersTab.Background = upNext ? null : pill;
+        ChaptersTabText.Foreground = upNext ? secondary : accent;
+        UpNextTab.Background = upNext ? pill : null;
+        UpNextTabText.Foreground = upNext ? accent : secondary;
+    }
+
+    private static Microsoft.UI.Xaml.Media.Brush PanelBrush(string key, Windows.UI.Color fallback) =>
+        Microsoft.UI.Xaml.Application.Current.Resources.TryGetValue(key, out var v) && v is Microsoft.UI.Xaml.Media.Brush b
+            ? b : new Microsoft.UI.Xaml.Media.SolidColorBrush(fallback);
+
+    private void OnUpNextRowClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string path } && !string.Equals(path, _currentPath, StringComparison.OrdinalIgnoreCase))
+        {
+            OpenMedia(path);
+            Vm.Play();
         }
     }
 
