@@ -260,10 +260,7 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
     {
         if (id != ScreenshotReply)
             return;
-        // Never underflow: Open() or the watchdog may have already zeroed the counter when a load aborted this
-        // grab, so a late reply must not drive it negative (which would disable the yield for future shots).
-        if (System.Threading.Interlocked.Decrement(ref _screenshotsInFlight) < 0)
-            System.Threading.Interlocked.Exchange(ref _screenshotsInFlight, 0);
+        System.Threading.Interlocked.Decrement(ref _screenshotsInFlight); // resume rendering once all shots finish
         if (success)
             ScreenshotSaved?.Invoke(this, EventArgs.Empty);
     }
