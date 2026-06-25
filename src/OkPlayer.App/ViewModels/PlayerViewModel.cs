@@ -59,6 +59,18 @@ public partial class PlayerViewModel : ObservableObject
     public string PlayPauseGlyph => IsPaused ? Glyph(0xE768) : Glyph(0xE769);
     public string VolumeGlyph => IsMuted ? Glyph(0xE74F) : Glyph(0xE767);
 
+    // Volume UX (design "Volume"): boost above 100% reads amber; muted dims and shows a "Muted" readout.
+    public bool VolumeIsBoost => Volume > 100 && !IsMuted;
+    public string VolumeReadout => IsMuted ? "Muted" : $"{Volume:0}%";
+    public Microsoft.UI.Xaml.Media.Brush VolumeFillBrush => IsMuted ? VolMutedBrush : VolumeIsBoost ? VolBoostBrush : VolWhiteBrush;
+    public Microsoft.UI.Xaml.Media.Brush VolumeGlyphBrush => IsMuted ? VolMutedBrush : VolumeIsBoost ? VolBoostBrush : VolWhiteBrush;
+    public Microsoft.UI.Xaml.Media.Brush VolumeReadoutBrush => IsMuted ? VolMutedBrush : VolumeIsBoost ? VolBoostBrush : VolReadoutBrush;
+
+    private static readonly Microsoft.UI.Xaml.Media.SolidColorBrush VolWhiteBrush = new(Microsoft.UI.Colors.White);
+    private static readonly Microsoft.UI.Xaml.Media.SolidColorBrush VolBoostBrush = new(Windows.UI.Color.FromArgb(0xFF, 0xF0, 0xB8, 0x40));
+    private static readonly Microsoft.UI.Xaml.Media.SolidColorBrush VolMutedBrush = new(Windows.UI.Color.FromArgb(0x73, 0xFF, 0xFF, 0xFF));
+    private static readonly Microsoft.UI.Xaml.Media.SolidColorBrush VolReadoutBrush = new(Windows.UI.Color.FromArgb(0xD9, 0xFF, 0xFF, 0xFF));
+
     private static string Glyph(int codePoint) => char.ConvertFromUtf32(codePoint);
 
     partial void OnPositionChanged(double value)
@@ -81,7 +93,15 @@ public partial class PlayerViewModel : ObservableObject
         OnPropertyChanged(nameof(PlayPauseGlyph));
     }
 
-    partial void OnIsMutedChanged(bool value) => OnPropertyChanged(nameof(VolumeGlyph));
+    partial void OnIsMutedChanged(bool value)
+    {
+        OnPropertyChanged(nameof(VolumeGlyph));
+        OnPropertyChanged(nameof(VolumeIsBoost));
+        OnPropertyChanged(nameof(VolumeReadout));
+        OnPropertyChanged(nameof(VolumeFillBrush));
+        OnPropertyChanged(nameof(VolumeGlyphBrush));
+        OnPropertyChanged(nameof(VolumeReadoutBrush));
+    }
     partial void OnShowRemainingChanged(bool value) => OnPropertyChanged(nameof(TrailingTimeText));
     partial void OnSpeedChanged(double value) => OnPropertyChanged(nameof(SpeedText));
     partial void OnSubDelayMsChanged(int value) => OnPropertyChanged(nameof(SubDelayText));
@@ -98,6 +118,11 @@ public partial class PlayerViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(VolumeText));
         OnPropertyChanged(nameof(VolumeFillWidth));
+        OnPropertyChanged(nameof(VolumeIsBoost));
+        OnPropertyChanged(nameof(VolumeReadout));
+        OnPropertyChanged(nameof(VolumeFillBrush));
+        OnPropertyChanged(nameof(VolumeGlyphBrush));
+        OnPropertyChanged(nameof(VolumeReadoutBrush));
     }
 
     public void Attach(MpvContext engine, DispatcherQueue dispatcher)
