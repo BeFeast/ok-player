@@ -24,10 +24,13 @@ public class M3uTests
     [Fact]
     public void Parse_ResolvesRelative_PassesThroughAbsoluteAndUrls()
     {
-        string text = "ep1.mkv\nC:\\other\\ep2.mkv\nhttps://host/ep3.mp4\n";
-        var entries = M3u.Parse(text, @"C:\v");
-        Assert.Equal(@"C:\v\ep1.mkv", entries[0]);          // relative → resolved against baseDir
-        Assert.Equal(@"C:\other\ep2.mkv", entries[1]);      // absolute → unchanged
+        // Unit tests run on Linux CI too, so build OS-appropriate paths rather than hard-coding Windows ones.
+        string baseDir = System.IO.Path.GetTempPath().TrimEnd(System.IO.Path.DirectorySeparatorChar);
+        string absolute = System.OperatingSystem.IsWindows() ? @"C:\other\ep2.mkv" : "/other/ep2.mkv";
+        string text = $"ep1.mkv\n{absolute}\nhttps://host/ep3.mp4\n";
+        var entries = M3u.Parse(text, baseDir);
+        Assert.Equal(System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, "ep1.mkv")), entries[0]); // relative → resolved
+        Assert.Equal(absolute, entries[1]);                 // absolute → unchanged
         Assert.Equal("https://host/ep3.mp4", entries[2]);   // URL → unchanged
     }
 

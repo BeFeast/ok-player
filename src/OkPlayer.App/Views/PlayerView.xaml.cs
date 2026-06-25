@@ -1039,10 +1039,11 @@ public sealed partial class PlayerView : UserControl
     /// surfaces a toast (a genuine decode/format failure later arrives as an EndFile(Error) toast).</summary>
     public void OpenMedia(string pathOrUrl)
     {
-        if (pathOrUrl.EndsWith(".m3u", StringComparison.OrdinalIgnoreCase) ||
-            pathOrUrl.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase))
+        if (!pathOrUrl.Contains("://") &&
+            (pathOrUrl.EndsWith(".m3u", StringComparison.OrdinalIgnoreCase) ||
+             pathOrUrl.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase)))
         {
-            OpenM3u(pathOrUrl);
+            OpenM3u(pathOrUrl); // a LOCAL .m3u playlist file (an HLS .m3u8 URL is a live stream — mpv plays it)
             return;
         }
         try
@@ -1083,19 +1084,26 @@ public sealed partial class PlayerView : UserControl
 
     private void SetPlaylistFor(string pathOrUrl)
     {
-        if (pathOrUrl.Contains("://"))
+        bool isUrl = pathOrUrl.Contains("://");
+        string key = pathOrUrl; // URLs match by the raw string; local files by their absolute path
+        if (!isUrl)
         {
-            _playlist = null; // network/stream URL — no folder to enumerate
+            try { key = System.IO.Path.GetFullPath(pathOrUrl); } // EnumerateFiles yields absolute paths, so the
+            catch { _playlist = null; return; }                  // cursor only matches if `current` is absolute too
+        }
+        // An entry we already have — a folder sibling, or a file/URL from a loaded .m3u — keeps the list and
+        // just moves the cursor. Crucially this runs BEFORE the URL bail-out, so a URL entry of an .m3u
+        // playlist doesn't wipe the playlist.
+        if (_playlist?.SetCurrent(key) == true)
+            return;
+        if (isUrl)
+        {
+            _playlist = null; // a lone URL with no playlist context — single stream
             return;
         }
-        string full;
-        try { full = System.IO.Path.GetFullPath(pathOrUrl); } // EnumerateFiles yields absolute paths, so the
-        catch { _playlist = null; return; }                    // cursor only matches if `current` is absolute too
-        if (_playlist?.SetCurrent(full) == true)
-            return; // a sibling we already know — keep the existing order, just move the cursor
         try
         {
-            string? dir = System.IO.Path.GetDirectoryName(full);
+            string? dir = System.IO.Path.GetDirectoryName(key);
             if (dir is null)
             {
                 _playlist = null;
@@ -1105,7 +1113,7 @@ public sealed partial class PlayerView : UserControl
             foreach (var f in System.IO.Directory.EnumerateFiles(dir))
                 if (OkPlayer.Core.MediaFormats.IsMedia(f))
                     siblings.Add(f);
-            _playlist = new OkPlayer.Core.Playlist(siblings, full) { Repeat = _repeat, Shuffle = _shuffle };
+            _playlist = new OkPlayer.Core.Playlist(siblings, key) { Repeat = _repeat, Shuffle = _shuffle };
         }
         catch
         {
@@ -1211,7 +1219,8 @@ public sealed partial class PlayerView : UserControl
                 ShowToast("Empty playlist");
                 return;
             }
-            _playlist = new OkPlayer.Core.Playlist(valid, valid[0], sort: false) { Repeat = _repeat, Shuffle = _shuffle };
+            _shuffle = false; // an .m3u defines its own order — honor it rather than shuffle it away
+            _playlist = new OkPlayer.Core.Playlist(valid, valid[0], sort: false) { Repeat = _repeat };
             OpenMedia(valid[0]); // plays; UpdatePlaylist's SetCurrent keeps this list rather than the folder
             Vm.Play();
         }
