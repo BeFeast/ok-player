@@ -55,9 +55,21 @@ public sealed partial class SettingsWindow : Window
     {
         if (!_loaded)
             return;
+        // Re-style only the theme-dependent visuals — never reload panel data (reloading Advanced would
+        // discard unsaved mpv.conf edits). The key chips bake the theme when built, so drop them and let
+        // them rebuild (now if visible, else on next show); the selected segment pill is re-styled in place.
         _shortcutsBuilt = false;
         ShortcutsHost.Children.Clear();
-        OnNavChanged(NavList, null!);
+        if (ShortcutsPanel.Visibility == Visibility.Visible)
+            LoadShortcuts();
+        else if (PlaybackPanel.Visibility == Visibility.Visible)
+            RefreshPlayback();
+        else if (SubtitlesPanel.Visibility == Visibility.Visible)
+            LoadSubtitles();
+        else if (VideoPanel.Visibility == Visibility.Visible)
+            LoadVideo();
+        else if (AudioPanel.Visibility == Visibility.Visible)
+            LoadAudio();
     }
 
     private void OnNavChanged(object sender, SelectionChangedEventArgs e)
