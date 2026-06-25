@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Linq;
 using Microsoft.UI.Dispatching;
@@ -32,6 +33,9 @@ public sealed partial class PlayerView : UserControl
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _saveTimer;
     private string? _currentPath;
     private double _resumeTarget = -1; // pending resume position, applied on the first Duration after open
+
+    /// <summary>Continue-watching cards shown on the welcome screen (bound from XAML).</summary>
+    public ObservableCollection<RecentEntry> Recents { get; } = new();
     private int _previewToken; // ignores stale async thumbnail results
     private bool _viewUnloaded; // guards against duplicate Unloaded disposing the thumbnail engine twice
     private bool _generatingChapters; // prevents overlapping chapter-thumbnail passes
@@ -123,6 +127,7 @@ public sealed partial class PlayerView : UserControl
             TitleChrome.IsHitTestVisible = false;
             BottomChrome.IsHitTestVisible = false;
             ChromeHideSb.Begin();
+            LoadRecents();
         }
     }
 
@@ -373,6 +378,35 @@ public sealed partial class PlayerView : UserControl
             Vm.SeekToFraction(target / Vm.Duration);
             ShowToast($"Resumed at {FormatPreviewTime(target)}");
         }
+    }
+
+    private void LoadRecents()
+    {
+        Recents.Clear();
+        foreach (var (path, rec) in _history.Recents(30))
+        {
+            // Continue-watching = genuinely resumable progress only (the resume thresholds: > 5% watched
+            // and not within 30s of the end). Completed files (stored at position 0) are excluded.
+            if (rec.Duration <= 0 || rec.Position <= rec.Duration * 0.05 || rec.Position >= rec.Duration - 30)
+                continue;
+            double progress = Math.Clamp(rec.Position / rec.Duration, 0, 1);
+            Recents.Add(new RecentEntry
+            {
+                Path = path,
+                Title = string.IsNullOrEmpty(rec.Title) ? System.IO.Path.GetFileNameWithoutExtension(path) : rec.Title!,
+                Meta = $"{(int)(progress * 100)}% · {FormatPreviewTime(Math.Max(0, rec.Duration - rec.Position))} left",
+                Progress = progress,
+            });
+            if (Recents.Count >= 6)
+                break;
+        }
+        RecentsSection.Visibility = Recents.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnRecentClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string path })
+            OpenMedia(path);
     }
 
     // ---- media info (design band 13: Streams) ----

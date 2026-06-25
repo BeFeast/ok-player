@@ -122,6 +122,30 @@
                                FontSize="11" HorizontalAlignment="Center" />
                 </StackPanel>
             </Grid>
+
+            <!-- continue watching (recents from history) -->
+            <StackPanel x:Name="RecentsSection" Width="280" Spacing="2" Visibility="Collapsed">
+                <TextBlock Text="CONTINUE WATCHING" FontSize="11" FontWeight="SemiBold" CharacterSpacing="60"
+                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" Margin="2,10,0,4" />
+                <ItemsControl ItemsSource="{x:Bind Recents}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:RecentEntry">
+                            <Button Click="OnRecentClick" Tag="{x:Bind Path}" Margin="0,0,0,6" Padding="10,8"
+                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" CornerRadius="8"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderThickness="1" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
+                                <StackPanel Spacing="6">
+                                    <TextBlock Text="{x:Bind Title}" FontSize="12.5" FontWeight="SemiBold"
+                                               TextTrimming="CharacterEllipsis" Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                                    <ProgressBar Value="{x:Bind ProgressPercent}" Maximum="100" Height="3"
+                                                 Foreground="{ThemeResource OkAccentBrush}" />
+                                    <TextBlock Text="{x:Bind Meta}" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                </StackPanel>
+                            </Button>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
         </StackPanel>
 
         <!-- ===== top chrome: scrim + title ===== -->
