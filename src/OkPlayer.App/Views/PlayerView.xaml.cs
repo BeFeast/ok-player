@@ -1166,7 +1166,9 @@ public sealed partial class PlayerView : UserControl
     /// <summary>Open the next file in the folder playlist (no-op at the end / without a playlist).</summary>
     public void PlayNext()
     {
-        if (_playlist?.Next() is string next)
+        // Peek, don't advance: OpenMedia moves the cursor (SetCurrent) atomically with the row rebuild, so a
+        // failed open can't leave the cursor ahead of the Up-Next rows.
+        if (_playlist?.PeekNext is string next)
         {
             OpenMedia(next);
             Vm.Play(); // a hop from a played-out (keep-open paused) file must not inherit that pause
@@ -1176,7 +1178,7 @@ public sealed partial class PlayerView : UserControl
     /// <summary>Open the previous file in the folder playlist (no-op at the start / without a playlist).</summary>
     public void PlayPrevious()
     {
-        if (_playlist?.Prev() is string prev)
+        if (_playlist?.PeekPrev is string prev)
         {
             OpenMedia(prev);
             Vm.Play();
@@ -1188,7 +1190,7 @@ public sealed partial class PlayerView : UserControl
         // Only advance if the current file is genuinely at its end. A queued eof-reached can arrive after a
         // manual hop (PageDown / opening another file) loaded a fresh file at position 0 — that stale event
         // must not skip a file. A real EOF leaves position at (≈) duration.
-        if (_autoAdvance && Vm.Duration > 0 && Vm.Position >= Vm.Duration - 1.0 && _playlist?.Next() is string next)
+        if (_autoAdvance && Vm.Duration > 0 && Vm.Position >= Vm.Duration - 1.0 && _playlist?.PeekNext is string next)
         {
             ShowToast("Up next… " + System.IO.Path.GetFileNameWithoutExtension(next));
             OpenMedia(next);

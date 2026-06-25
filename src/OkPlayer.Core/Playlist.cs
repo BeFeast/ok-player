@@ -29,6 +29,12 @@ public sealed class Playlist
     public bool HasNext => CurrentIndex >= 0 && CurrentIndex + 1 < _items.Count;
     public bool HasPrev => CurrentIndex > 0;
 
+    /// <summary>The next/previous path WITHOUT moving the cursor — so a caller can open it and only advance
+    /// the cursor (via SetCurrent) once the open actually takes, keeping the cursor and any projected rows in
+    /// step even if opening fails. Null at the ends.</summary>
+    public string? PeekNext => HasNext ? _items[CurrentIndex + 1] : null;
+    public string? PeekPrev => HasPrev ? _items[CurrentIndex - 1] : null;
+
     /// <summary>Advance the cursor and return the next path, or null if already at the end.</summary>
     public string? Next() => HasNext ? _items[++CurrentIndex] : null;
 
