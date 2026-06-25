@@ -59,8 +59,7 @@ public sealed class ThumbnailService : IDisposable
             mpv.SetOption("hwdec", "no");                // CPU decode: reliable, no GPU contention
             mpv.SetOption("pause", "yes");
             mpv.SetOption("keep-open", "yes");
-            mpv.SetOption("hr-seek", "yes");             // exact seeks
-            mpv.SetOption("hr-seek-framedrop", "no");
+            mpv.SetOption("hr-seek", "no");              // keyframe seeks — fast on 4K (see GetThumbnailAsync)
             mpv.SetOption("vf", "scale=320:-2");         // small frames where the encoder honors it
             mpv.SetOption("osc", "no");
             mpv.SetOption("input-default-bindings", "no");
@@ -127,7 +126,10 @@ public sealed class ThumbnailService : IDisposable
             bool restarted;
             try
             {
-                mpv.Command("seek", target.ToString(CultureInfo.InvariantCulture), "absolute+exact");
+                // Keyframe (not exact) seek: an exact seek decodes every frame from the prior keyframe up to
+                // the target — punishing on 4K (~1s/frame). A keyframe seek decodes one frame and is many
+                // times faster; a thumbnail a keyframe-interval off the cursor is fine for a scrub preview.
+                mpv.Command("seek", target.ToString(CultureInfo.InvariantCulture), "absolute+keyframes");
                 restarted = await WaitWithTimeout(restartTcs.Task, 5000).ConfigureAwait(false);
             }
             finally
