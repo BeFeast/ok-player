@@ -55,7 +55,7 @@
     <Grid x:Name="RootGrid" Background="Transparent" AllowDrop="True"
           KeyboardAcceleratorPlacementMode="Hidden"
           PointerMoved="OnRootPointerMoved" PointerPressed="OnRootPointerPressed"
-          DragOver="OnDragOver" Drop="OnDrop">
+          DragOver="OnDragOver" DragLeave="OnDragLeave" Drop="OnDrop">
 
         <Grid.KeyboardAccelerators>
             <KeyboardAccelerator Modifiers="Control" Key="O" Invoked="OnOpenAccelerator" />
@@ -437,5 +437,20 @@
             <Border.RenderTransform><TranslateTransform x:Name="ToastTransform" Y="-8" /></Border.RenderTransform>
             <TextBlock x:Name="ToastText" Foreground="#F2FFFFFF" FontSize="13" FontWeight="Medium" />
         </Border>
+
+        <!-- ===== drag-over state: accent drop-zone + dim the rest ===== -->
+        <Grid x:Name="DragOverlay" Visibility="Collapsed" IsHitTestVisible="False">
+            <Border Background="#4DFFFFFF" />
+            <Border Margin="14" CornerRadius="10" BorderThickness="2"
+                    BorderBrush="{ThemeResource OkAccentBrush}" Background="#1410938A">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10">
+                    <FontIcon Glyph="&#xE898;" FontSize="30" Foreground="#FF0C7C75" />
+                    <TextBlock Text="Drop to play" FontSize="15" FontWeight="SemiBold"
+                               Foreground="#FF0A655F" HorizontalAlignment="Center" />
+                    <TextBlock x:Name="DragFileName" FontSize="12" Foreground="#FF0C7C75" HorizontalAlignment="Center"
+                               TextTrimming="CharacterEllipsis" MaxWidth="320" />
+                </StackPanel>
+            </Border>
+        </Grid>
     </Grid>
 </UserControl>

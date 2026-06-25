@@ -25,8 +25,12 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
     private bool _renderingHooked;
     private volatile bool _forceRender;
     private TimeSpan _lastRenderTime = TimeSpan.FromSeconds(-1);
-    private long _screenshotSkipUntil; // while set, Draw() yields so it can't contend with an in-flight screenshot
+    private int _screenshotsInFlight;  // >0 while any screenshot is being grabbed/encoded — Draw() yields then
+    private long _screenshotDeadline;  // safety: resume rendering if a reply is ever lost
     private const ulong ScreenshotReply = 1;
+
+    /// <summary>Raised (on the event thread) when a screenshot has finished saving successfully.</summary>
+    public event EventHandler? ScreenshotSaved;
 
     /// <summary>The underlying libmpv context — the engine the OSC / panels command. Null until initialized.</summary>
     public MpvContext? Engine => _mpv;
@@ -149,8 +153,10 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
         if (_swapChain == null || _render == null)
             return;
         // A screenshot grab/encode (esp. 4K/HDR) briefly holds mpv busy; rendering on the UI thread would
-        // block on it and freeze the app. Yield the render loop until the screenshot's reply lands.
-        if (System.Environment.TickCount64 < System.Threading.Volatile.Read(ref _screenshotSkipUntil))
+        // block on it and freeze the app. Yield while any screenshot is in flight (the deadline only guards
+        // against a lost reply — it is extended on each new screenshot, so overlapping shots can't resume early).
+        if (System.Threading.Volatile.Read(ref _screenshotsInFlight) > 0
+            && System.Environment.TickCount64 < System.Threading.Volatile.Read(ref _screenshotDeadline))
             return;
 
         bool hasFrame = (_render.Update() & MpvRenderUpdateFlag.Frame) != 0;
@@ -183,7 +189,8 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
     {
         if (_mpv is not { } mpv)
             return false;
-        System.Threading.Volatile.Write(ref _screenshotSkipUntil, System.Environment.TickCount64 + 2500); // safety cap
+        System.Threading.Interlocked.Increment(ref _screenshotsInFlight);
+        System.Threading.Volatile.Write(ref _screenshotDeadline, System.Environment.TickCount64 + 10000); // generous safety
         try
         {
             mpv.CommandAsync(ScreenshotReply, "screenshot", "video");
@@ -191,15 +198,18 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
         }
         catch (MpvException)
         {
-            System.Threading.Volatile.Write(ref _screenshotSkipUntil, 0);
+            System.Threading.Interlocked.Decrement(ref _screenshotsInFlight);
             return false;
         }
     }
 
-    private void OnCommandReply(ulong id)
+    private void OnCommandReply(ulong id, bool success)
     {
-        if (id == ScreenshotReply)
-            System.Threading.Volatile.Write(ref _screenshotSkipUntil, 0); // screenshot finished — resume rendering
+        if (id != ScreenshotReply)
+            return;
+        System.Threading.Interlocked.Decrement(ref _screenshotsInFlight); // resume rendering once all shots finish
+        if (success)
+            ScreenshotSaved?.Invoke(this, EventArgs.Empty);
     }
 
     public void TogglePause()

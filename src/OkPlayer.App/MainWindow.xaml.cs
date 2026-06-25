@@ -106,16 +106,33 @@ public sealed partial class MainWindow : Window
         // One scale for both axes keeps the client at the video's exact aspect (video fills it, no black
         // margins); clamp to <=1 so a small video is never blown up past its native size.
         double scale = Math.Min(1.0, Math.Min(work.Width * 0.94 / w, work.Height * 0.94 / h));
-        int cw = Math.Max(160, (int)Math.Round(w * scale));
-        int ch = Math.Max(90, (int)Math.Round(h * scale));
+        // A single scale on both axes (Max(1,…) only guards against a zero size) keeps the exact video
+        // aspect — independent per-axis minimums would distort it and reintroduce black margins.
+        int cw = Math.Max(1, (int)Math.Round(w * scale));
+        int ch = Math.Max(1, (int)Math.Round(h * scale));
+        IntPtr hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         AppWindow.ResizeClient(new Windows.Graphics.SizeInt32(cw, ch));
-        // Re-read the outer window size (client + frame) and centre it within the work area so a window
-        // sized for a large video can never extend past the monitor edges.
+        // ResizeClient's height arg excludes the extended title-bar band, but the real content client (what
+        // mpv fills) includes it — so the client comes out taller than asked and mpv letterboxes the video.
+        // Measure that delta and re-request the height minus it, so the client lands on the exact video aspect.
+        if (GetClientRect(hwnd, out var rc))
+        {
+            int delta = (rc.Bottom - rc.Top) - ch;
+            if (delta > 0 && ch - delta > 0)
+                AppWindow.ResizeClient(new Windows.Graphics.SizeInt32(cw, ch - delta));
+        }
+        // Centre the whole window within the work area so a window sized for a large video never extends past
+        // the monitor edges.
         var outer = AppWindow.Size;
         int x = work.X + Math.Max(0, (work.Width - outer.Width) / 2);
         int y = work.Y + Math.Max(0, (work.Height - outer.Height) / 2);
         AppWindow.Move(new Windows.Graphics.PointInt32(x, y));
     }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool GetClientRect(IntPtr hWnd, out NativeRect lpRect);
+
+    private struct NativeRect { public int Left, Top, Right, Bottom; }
 
     private async Task OpenFileAsync()
     {

@@ -28,8 +28,8 @@ public sealed class MpvContext : IDisposable
     public event Action<string, object?>? PropertyChanged;
     /// <summary>Raised for each libmpv log message (level, prefix, text).</summary>
     public event Action<MpvLogLevel, string, string>? LogMessageReceived;
-    /// <summary>Raised when an async command (issued via the reply-userdata overload) finishes.</summary>
-    public event Action<ulong>? CommandReply;
+    /// <summary>Raised when an async command (issued via the reply-userdata overload) finishes; the bool is true on success.</summary>
+    public event Action<ulong, bool>? CommandReply;
 
     public MpvContext()
     {
@@ -158,7 +158,7 @@ public sealed class MpvContext : IDisposable
                     PlaybackRestart?.Invoke(this, EventArgs.Empty);
                     break;
                 case MpvEventId.CommandReply:
-                    CommandReply?.Invoke(ev.ReplyUserData);
+                    CommandReply?.Invoke(ev.ReplyUserData, (int)ev.Error == 0); // mpv error 0 == success
                     break;
                 case MpvEventId.PropertyChange:
                     var prop = Marshal.PtrToStructure<MpvEventProperty>(ev.Data);

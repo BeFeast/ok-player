@@ -85,6 +85,7 @@ public sealed partial class PlayerView : UserControl
         _saveTimer.Start();
 
         Video.EngineReady += OnEngineReady;
+        Video.ScreenshotSaved += (_, _) => DispatcherQueue.TryEnqueue(() => ShowToast("Screenshot saved"));
         Seek.SeekRequested += OnSeekRequested;
         Seek.ScrubStateChanged += scrubbing => Vm.IsScrubbing = scrubbing;
         Seek.HoverChanged += OnSeekHover;
@@ -348,12 +349,8 @@ public sealed partial class PlayerView : UserControl
     private void OnScreenshotClick(object sender, RoutedEventArgs e) { DoScreenshot(); RevealChrome(); }
 
     /// <summary>Take a screenshot via the render panel, which yields the UI-thread render loop so a heavy
-    /// 4K/HDR grab can't freeze the app (the old VM path stalled the UI thread).</summary>
-    private void DoScreenshot()
-    {
-        if (Video.Screenshot())
-            ShowToast("Screenshot saved");
-    }
+    /// 4K/HDR grab can't freeze the app. The toast fires on the ScreenshotSaved event (i.e. on success).</summary>
+    private void DoScreenshot() => Video.Screenshot();
     private void OnFullscreenClick(object sender, RoutedEventArgs e) => ToggleFullscreenRequested?.Invoke(this, EventArgs.Empty);
 
     private void OnFitToVideoClick(object sender, RoutedEventArgs e)
@@ -722,14 +719,46 @@ public sealed partial class PlayerView : UserControl
         args.Handled = true;
     }
 
-    private void OnDragOver(object sender, DragEventArgs e)
+    private bool _dragNameLoaded; // DragOver fires continuously — read the dragged name only once per drag
+
+    private async void OnDragOver(object sender, DragEventArgs e)
     {
-        if (e.DataView.Contains(StandardDataFormats.StorageItems))
-            e.AcceptedOperation = DataPackageOperation.Copy;
+        if (!e.DataView.Contains(StandardDataFormats.StorageItems))
+            return;
+        e.AcceptedOperation = DataPackageOperation.Copy;
+        try
+        {
+            e.DragUIOverride.Caption = "Drop to play";
+            e.DragUIOverride.IsCaptionVisible = true;
+            e.DragUIOverride.IsGlyphVisible = false;
+        }
+        catch { /* override not available on every shell drag — non-fatal */ }
+        DragOverlay.Visibility = Visibility.Visible;
+        if (_dragNameLoaded)
+            return;
+        _dragNameLoaded = true;
+        var deferral = e.GetDeferral();
+        try
+        {
+            var items = await e.DataView.GetStorageItemsAsync();
+            var file = items.OfType<StorageFile>().FirstOrDefault();
+            DragFileName.Text = file is not null ? System.IO.Path.GetFileName(file.Path) : string.Empty;
+        }
+        catch { DragFileName.Text = string.Empty; }
+        finally { deferral.Complete(); }
+    }
+
+    private void OnDragLeave(object sender, DragEventArgs e) => HideDragOverlay();
+
+    private void HideDragOverlay()
+    {
+        DragOverlay.Visibility = Visibility.Collapsed;
+        _dragNameLoaded = false;
     }
 
     private async void OnDrop(object sender, DragEventArgs e)
     {
+        HideDragOverlay();
         if (!e.DataView.Contains(StandardDataFormats.StorageItems))
             return;
         // async void: a transient first-time DataView access can throw — never let it escape to the UI thread.
