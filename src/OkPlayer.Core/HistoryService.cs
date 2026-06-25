@@ -56,6 +56,13 @@ public sealed class HistoryService
         Load();
     }
 
+    /// <summary>Test seam: persist to a caller-supplied path (or null for in-memory only) instead of %APPDATA%.</summary>
+    internal HistoryService(string? path)
+    {
+        _path = path;
+        Load();
+    }
+
     private void Load()
     {
         try

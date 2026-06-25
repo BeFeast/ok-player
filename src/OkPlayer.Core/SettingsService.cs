@@ -67,6 +67,13 @@ public sealed class SettingsService
         Load();
     }
 
+    /// <summary>Test seam: persist to a caller-supplied path instead of %APPDATA%.</summary>
+    internal SettingsService(string? path)
+    {
+        _path = path;
+        Load();
+    }
+
     private void Load()
     {
         try

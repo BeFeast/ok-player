@@ -9,4 +9,8 @@
     <AssemblyName>OkPlayer.Core</AssemblyName>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="OkPlayer.Tests" />
+  </ItemGroup>
+
 </Project>
