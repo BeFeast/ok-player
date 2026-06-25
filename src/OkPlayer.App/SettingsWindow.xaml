@@ -243,6 +243,15 @@
                                    Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,8,0,0" />
                     </StackPanel>
 
+                    <!-- Shortcuts (real) — keyboard reference -->
+                    <StackPanel x:Name="ShortcutsPanel" Visibility="Collapsed">
+                        <TextBlock Text="Shortcuts" Style="{StaticResource OkSettingsTitleTextStyle}" />
+                        <StackPanel x:Name="ShortcutsHost" Margin="0,16,0,0" />
+                        <TextBlock Text="Custom rebinding is on the way. Today these keys are fixed; some also adjust with Settings &#x2192; Playback (skip step)."
+                                   TextWrapping="Wrap" MaxWidth="460" HorizontalAlignment="Left" FontSize="11.5"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,18,0,0" />
+                    </StackPanel>
+
                     <!-- Advanced (real) — the power-user escape hatch (PRD: raw mpv config) -->
                     <StackPanel x:Name="AdvancedPanel" Visibility="Collapsed">
                         <TextBlock Text="Advanced" Style="{StaticResource OkSettingsTitleTextStyle}" />
