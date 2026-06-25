@@ -88,12 +88,25 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private const int DWMWA_BORDER_COLOR = 34;
+    private const uint DWMWA_COLOR_NONE = 0xFFFFFFFE;
+    private const uint DWMWA_COLOR_DEFAULT = 0xFFFFFFFF;
+
+    [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref uint value, int size);
+
     private void SetFullscreen(bool on)
     {
         if (on == _fullscreen)
             return;
         _fullscreen = on;
         AppWindow.SetPresenter(on ? AppWindowPresenterKind.FullScreen : AppWindowPresenterKind.Overlapped);
+        // Win11 draws a 1px window border, which shows as a white hairline over the black letterbox at the
+        // top edge in full screen. Removing the DWM border colour helps; fully eliminating the non-client
+        // hairline needs WM_NCCALCSIZE window subclassing (tracked separately).
+        uint color = on ? DWMWA_COLOR_NONE : DWMWA_COLOR_DEFAULT;
+        IntPtr hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, ref color, sizeof(uint));
     }
 
     /// <summary>Size the window to the video's aspect and place it fully inside the monitor: shrink to fit

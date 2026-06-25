@@ -97,6 +97,9 @@
             </MenuFlyout>
         </Grid.ContextFlyout>
 
+        <!-- black backdrop behind the video so a 1px swap-chain gap (e.g. the window's top edge in fullscreen)
+             never shows the light Mica through it; only present once media is loaded -->
+        <Border x:Name="VideoBackdrop" Background="#FF000000" Visibility="Collapsed" />
         <!-- the single video plane: only over Mica once media is loaded (Mica shows the light shell otherwise) -->
         <render:MpvVideoPanel x:Name="Video" Tapped="OnVideoTapped" Visibility="Collapsed" />
 

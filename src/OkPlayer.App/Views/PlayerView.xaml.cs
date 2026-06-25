@@ -122,6 +122,7 @@ public sealed partial class PlayerView : UserControl
     {
         bool has = Vm.HasMedia;
         WelcomeCard.Visibility = has ? Visibility.Collapsed : Visibility.Visible;
+        VideoBackdrop.Visibility = has ? Visibility.Visible : Visibility.Collapsed;
         Video.Visibility = has ? Visibility.Visible : Visibility.Collapsed;
         MediaPresenceChanged?.Invoke(this, has);
         if (has)
