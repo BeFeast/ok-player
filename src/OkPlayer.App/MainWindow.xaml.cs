@@ -34,7 +34,12 @@ public sealed partial class MainWindow : Window
         Player.OpenFileRequested += async (_, _) => await OpenFileAsync();
         Player.FitToVideoRequested += (_, size) => FitToVideo(size.Width, size.Height);
         Player.SettingsRequested += (_, _) => OpenSettings();
-        Closed += (_, _) => Player.SaveProgress(); // persist resume position on app close
+        Closed += (_, _) =>
+        {
+            Player.SaveProgress();                 // persist resume position on app close
+            App.Settings.Changed -= ApplyAppTheme; // don't keep this closed window rooted
+            _settingsWindow?.Close();              // don't leave Settings as a headless window
+        };
         ApplyAppTheme();
         App.Settings.Changed += ApplyAppTheme; // theme chosen in Settings applies to the player too
     }

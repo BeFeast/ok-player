@@ -1,3 +1,4 @@
+using System;
 using Microsoft.UI;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
@@ -54,6 +55,10 @@ public sealed partial class SettingsWindow : Window
     private void LoadAppearance()
     {
         var s = App.Settings.Current;
+        // settings.json is hand-editable: normalize before binding to the 0..100 sliders.
+        s.MicaTitlebar = Math.Clamp(s.MicaTitlebar, 0, 100);
+        s.MicaPanels = Math.Clamp(s.MicaPanels, 0, 100);
+        s.MicaOverlays = Math.Clamp(s.MicaOverlays, 0, 100);
         MicaTitlebarSlider.Value = s.MicaTitlebar;
         MicaPanelsSlider.Value = s.MicaPanels;
         MicaOverlaysSlider.Value = s.MicaOverlays;
