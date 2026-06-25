@@ -148,6 +148,11 @@ public sealed partial class PlayerView : UserControl
     {
         if (Video.Engine is { } engine)
             Vm.Attach(engine, DispatcherQueue);
+        if (_pendingInitialPath is { } path)
+        {
+            _pendingInitialPath = null;
+            OpenMedia(path); // a command-line file queued before the engine was ready
+        }
         RevealChrome();
     }
 
@@ -974,6 +979,18 @@ public sealed partial class PlayerView : UserControl
     }
 
     // ---- open media ----
+
+    private string? _pendingInitialPath; // a launch-time file held until the engine is ready
+
+    /// <summary>Open a file given on the command line ("Open with"). If the engine isn't up yet, hold it
+    /// and open on EngineReady.</summary>
+    public void QueueInitialFile(string path)
+    {
+        if (Video.Engine is not null)
+            OpenMedia(path);
+        else
+            _pendingInitialPath = path;
+    }
 
     /// <summary>Load a local path or URL into the engine. Never throws to the caller — a failed open
     /// surfaces a toast (a genuine decode/format failure later arrives as an EndFile(Error) toast).</summary>

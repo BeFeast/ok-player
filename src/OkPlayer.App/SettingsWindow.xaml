@@ -12,11 +12,11 @@
         <media:MicaBackdrop Kind="Base" />
     </Window.SystemBackdrop>
 
-    <Grid Background="{ThemeResource OkSettingsWindowBrush}" RowDefinitions="42,*">
+    <Grid Background="{ThemeResource OkSettingsWindowBrush}" RowDefinitions="40,*">
 
-        <!-- titlebar (system caption buttons drawn by the OS via ExtendsContentIntoTitleBar) -->
-        <Grid x:Name="AppTitleBar" Grid.Row="0" Padding="16,0,6,0"
-              BorderThickness="0,0,0,1" BorderBrush="{ThemeResource OkStrokeBrush}">
+        <!-- titlebar (system caption buttons drawn by the OS via ExtendsContentIntoTitleBar). No divider:
+             the OS caption buttons are shorter than the band, so a bottom rule just framed an empty gap. -->
+        <Grid x:Name="AppTitleBar" Grid.Row="0" Padding="16,0,6,0">
             <TextBlock Text="Settings" VerticalAlignment="Center" FontSize="12.5" FontWeight="SemiBold"
                        Foreground="{ThemeResource OkTextSecondaryBrush}" />
         </Grid>
