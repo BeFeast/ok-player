@@ -34,7 +34,10 @@ public sealed partial class PlayerView : UserControl
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _saveTimer;
     private string? _currentPath;
     private OkPlayer.Core.Playlist? _playlist; // the opened file's folder, in natural order (null for streams)
-    private bool _autoAdvance = true;          // PRD: auto-advance defaults on (a mode toggle ships with the panel)
+    // Session play-modes — persist across folder changes and are applied to each new playlist.
+    private bool _autoAdvance = true;          // PRD: auto-advance defaults on
+    private OkPlayer.Core.RepeatMode _repeat = OkPlayer.Core.RepeatMode.Off;
+    private bool _shuffle;
     private double _resumeTarget = -1; // pending resume position, applied on the first Duration after open
 
     /// <summary>Continue-watching cards shown on the welcome screen (bound from XAML).</summary>
@@ -1096,7 +1099,7 @@ public sealed partial class PlayerView : UserControl
             foreach (var f in System.IO.Directory.EnumerateFiles(dir))
                 if (OkPlayer.Core.MediaFormats.IsMedia(f))
                     siblings.Add(f);
-            _playlist = new OkPlayer.Core.Playlist(siblings, full);
+            _playlist = new OkPlayer.Core.Playlist(siblings, full) { Repeat = _repeat, Shuffle = _shuffle };
         }
         catch
         {
@@ -1111,6 +1114,7 @@ public sealed partial class PlayerView : UserControl
         UpNext.Clear();
         int cur = _playlist?.CurrentIndex ?? -1;
         int count = _playlist?.Count ?? 0;
+        string? nextPath = _playlist?.PeekNext; // the up-next item in play order (handles shuffle + wrap)
         for (int i = 0; i < count; i++)
         {
             string p = _playlist!.Items[i];
@@ -1119,7 +1123,7 @@ public sealed partial class PlayerView : UserControl
                 Path = p,
                 Title = System.IO.Path.GetFileNameWithoutExtension(p),
                 IsCurrent = i == cur,
-                IsNext = i == cur + 1,
+                IsNext = string.Equals(p, nextPath, StringComparison.OrdinalIgnoreCase),
                 IsWatched = _history.Get(p) is { Position: > 60 }, // seen at least a minute in
             });
         }
@@ -1128,6 +1132,52 @@ public sealed partial class PlayerView : UserControl
         UpNextFolderHeader.Visibility = hasFolder ? Visibility.Visible : Visibility.Collapsed;
         UpNextList.Visibility = hasFolder ? Visibility.Visible : Visibility.Collapsed;
         UpNextEmpty.Visibility = hasFolder ? Visibility.Collapsed : Visibility.Visible;
+        RefreshModeButtons();
+    }
+
+    /// <summary>Reflect the active play-modes on the footer toggle buttons (glyph + accent vs. dimmed).</summary>
+    private void RefreshModeButtons()
+    {
+        var accent = PanelBrush("OkAccentTextBrush", Windows.UI.Color.FromArgb(0xFF, 0x28, 0xB3, 0xAA));
+        var dim = PanelBrush("OkTextSecondaryBrush", Windows.UI.Color.FromArgb(0xB3, 0xFF, 0xFF, 0xFF));
+        var tint = new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(0x24, 0x10, 0x93, 0x8A));
+
+        var rep = _playlist?.Repeat ?? _repeat;
+        RepeatIcon.Glyph = rep == OkPlayer.Core.RepeatMode.One ? "" : ""; // RepeatOne vs RepeatAll
+        RepeatIcon.Foreground = rep == OkPlayer.Core.RepeatMode.Off ? dim : accent;
+        RepeatButton.Background = rep == OkPlayer.Core.RepeatMode.Off ? null : tint;
+
+        bool sh = _playlist?.Shuffle ?? _shuffle;
+        ShuffleIcon.Foreground = sh ? accent : dim;
+        ShuffleButton.Background = sh ? tint : null;
+
+        AutoAdvanceIcon.Foreground = _autoAdvance ? accent : dim;
+        AutoAdvanceButton.Background = _autoAdvance ? tint : null;
+    }
+
+    private void OnRepeatClick(object sender, RoutedEventArgs e)
+    {
+        _repeat = _repeat switch
+        {
+            OkPlayer.Core.RepeatMode.Off => OkPlayer.Core.RepeatMode.All,
+            OkPlayer.Core.RepeatMode.All => OkPlayer.Core.RepeatMode.One,
+            _ => OkPlayer.Core.RepeatMode.Off,
+        };
+        if (_playlist is not null) _playlist.Repeat = _repeat;
+        RebuildUpNext(); // the up-next item can change (wrap), so refresh the NEXT badge + the buttons
+    }
+
+    private void OnShuffleClick(object sender, RoutedEventArgs e)
+    {
+        _shuffle = !_shuffle;
+        if (_playlist is not null) _playlist.Shuffle = _shuffle;
+        RebuildUpNext();
+    }
+
+    private void OnAutoAdvanceClick(object sender, RoutedEventArgs e)
+    {
+        _autoAdvance = !_autoAdvance;
+        RefreshModeButtons();
     }
 
     private void OnChaptersTab(object sender, TappedRoutedEventArgs e) => SetPanelTab(false);
@@ -1190,11 +1240,19 @@ public sealed partial class PlayerView : UserControl
         // Only advance if the current file is genuinely at its end. A queued eof-reached can arrive after a
         // manual hop (PageDown / opening another file) loaded a fresh file at position 0 — that stale event
         // must not skip a file. A real EOF leaves position at (≈) duration.
-        if (_autoAdvance && Vm.Duration > 0 && Vm.Position >= Vm.Duration - 1.0 && _playlist?.PeekNext is string next)
+        if (_autoAdvance && Vm.Duration > 0 && Vm.Position >= Vm.Duration - 1.0 && _playlist?.AutoAdvanceTarget is string next)
         {
-            ShowToast("Up next… " + System.IO.Path.GetFileNameWithoutExtension(next));
-            OpenMedia(next);
-            Vm.Play(); // the just-ended file left pause=yes (keep-open); play the next one through
+            if (string.Equals(next, _currentPath, StringComparison.OrdinalIgnoreCase))
+            {
+                Vm.SeekToFraction(0); // Repeat One: restart the loaded file, not reload+resume into an EOF loop
+                Vm.Play();
+            }
+            else
+            {
+                ShowToast("Up next… " + System.IO.Path.GetFileNameWithoutExtension(next));
+                OpenMedia(next);
+                Vm.Play(); // the just-ended file left pause=yes (keep-open); play the next one through
+            }
         }
     }
 
