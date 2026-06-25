@@ -105,14 +105,22 @@
 
         <!-- light-first empty / welcome state (over Mica) — first-run, no recents -->
         <StackPanel x:Name="WelcomeCard" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="13">
-            <Border Width="48" Height="48" CornerRadius="13" HorizontalAlignment="Center">
+            <Border Width="52" Height="52" CornerRadius="14" HorizontalAlignment="Center">
                 <Border.Background>
                     <LinearGradientBrush StartPoint="0.1,0" EndPoint="0.9,1">
-                        <GradientStop Color="#10938A" Offset="0" />
+                        <GradientStop Color="#15A89D" Offset="0" />
                         <GradientStop Color="#0A655F" Offset="1" />
                     </LinearGradientBrush>
                 </Border.Background>
-                <FontIcon Glyph="&#xE768;" FontSize="22" Foreground="White" />
+                <!-- the OK&#x25B6; brand mark (matches the app icon) -->
+                <Viewbox Margin="11,15">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="OK" FontFamily="Segoe UI" FontSize="36" FontWeight="Bold"
+                                   Foreground="White" LineHeight="36" />
+                        <Path Fill="White" Stretch="Fill" Width="15" Height="22" Margin="3,1,0,0"
+                              VerticalAlignment="Center" Data="M0,0 L0,22 L15,11 Z" />
+                    </StackPanel>
+                </Viewbox>
             </Border>
             <TextBlock Text="Welcome to OK Player" FontSize="17" FontWeight="SemiBold"
                        Foreground="{ThemeResource TextFillColorPrimaryBrush}" HorizontalAlignment="Center" />

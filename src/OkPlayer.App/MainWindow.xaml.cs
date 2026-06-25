@@ -20,6 +20,7 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         Title = "OK Player";
+        try { AppWindow.SetIcon(System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "OkPlayer.ico")); } catch { }
 
         // Immersive: extend content under the title-bar band so the video reaches the top edge;
         // the auto-hiding top bar is the drag region, and the caption buttons go transparent with
