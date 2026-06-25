@@ -61,19 +61,38 @@
             <KeyboardAccelerator Modifiers="Control" Key="O" Invoked="OnOpenAccelerator" />
         </Grid.KeyboardAccelerators>
 
-        <!-- right-click context menu -->
+        <!-- right-click context menu (design band 11 — light material) -->
         <Grid.ContextFlyout>
-            <MenuFlyout>
-                <MenuFlyoutItem Text="Play / Pause" Click="OnPlayClick" />
+            <MenuFlyout MenuFlyoutPresenterStyle="{StaticResource OkMenuFlyoutPresenterStyle}">
+                <MenuFlyoutItem Text="Play / Pause" Click="OnPlayClick">
+                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE768;" /></MenuFlyoutItem.Icon>
+                </MenuFlyoutItem>
+                <MenuFlyoutItem Text="Screenshot" Click="OnScreenshotClick">
+                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE722;" /></MenuFlyoutItem.Icon>
+                </MenuFlyoutItem>
+                <MenuFlyoutItem Text="A&#x2013;B loop" Click="OnAbLoopClick">
+                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8EE;" /></MenuFlyoutItem.Icon>
+                </MenuFlyoutItem>
+                <MenuFlyoutItem Text="Add bookmark here" Click="OnAddBookmarkClick">
+                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE840;" /></MenuFlyoutItem.Icon>
+                </MenuFlyoutItem>
                 <MenuFlyoutSeparator />
-                <MenuFlyoutItem Text="Open file&#x2026;" Click="OnOpenFromMenu" />
-                <MenuFlyoutItem Text="Screenshot" Click="OnScreenshotClick" />
-                <MenuFlyoutItem Text="A&#x2013;B loop" Click="OnAbLoopClick" />
-                <MenuFlyoutItem Text="Chapters" Click="OnChaptersClick" />
+                <MenuFlyoutItem Text="Chapters" Click="OnChaptersClick">
+                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8FD;" /></MenuFlyoutItem.Icon>
+                </MenuFlyoutItem>
+                <MenuFlyoutSubItem Text="Window">
+                    <MenuFlyoutSubItem.Icon><FontIcon Glyph="&#xE740;" /></MenuFlyoutSubItem.Icon>
+                    <MenuFlyoutItem Text="Fullscreen" Click="OnFullscreenClick" />
+                    <MenuFlyoutItem Text="Fit window to video" Click="OnFitToVideoClick" />
+                </MenuFlyoutSubItem>
+                <MenuFlyoutItem Text="Open file&#x2026;" Click="OnOpenFromMenu">
+                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8E5;" /></MenuFlyoutItem.Icon>
+                </MenuFlyoutItem>
                 <MenuFlyoutSeparator />
-                <MenuFlyoutItem Text="Fullscreen" Click="OnFullscreenClick" />
                 <MenuFlyoutItem Text="Media info&#x2026;" IsEnabled="False" />
-                <MenuFlyoutItem Text="Settings&#x2026;" IsEnabled="False" />
+                <MenuFlyoutItem Text="Settings&#x2026;" IsEnabled="False">
+                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE713;" /></MenuFlyoutItem.Icon>
+                </MenuFlyoutItem>
             </MenuFlyout>
         </Grid.ContextFlyout>
 
@@ -257,14 +276,15 @@
                     <Button Grid.Column="13" Style="{StaticResource OkOscSvgButtonStyle}" ToolTipService.ToolTip="More">
                         <FontIcon Glyph="&#xE712;" FontSize="19" Foreground="White" />
                         <Button.Flyout>
-                            <MenuFlyout>
-                                <MenuFlyoutItem Text="Open file..." Click="OnOpenFromMenu" />
-                                <MenuFlyoutItem Text="A-B loop" Click="OnAbLoopClick" />
+                            <MenuFlyout MenuFlyoutPresenterStyle="{StaticResource OkMenuFlyoutPresenterStyle}">
+                                <MenuFlyoutItem Text="Open file&#x2026;" Click="OnOpenFromMenu" />
+                                <MenuFlyoutItem Text="A&#x2013;B loop" Click="OnAbLoopClick" />
+                                <MenuFlyoutItem Text="Fit window to video" Click="OnFitToVideoClick" />
                                 <MenuFlyoutSeparator />
                                 <MenuFlyoutItem Text="Playlist / Queue" IsEnabled="False" />
-                                <MenuFlyoutItem Text="Video / Geometry" IsEnabled="False" />
                                 <MenuFlyoutItem Text="Mini-player" IsEnabled="False" />
-                                <MenuFlyoutItem Text="Settings..." IsEnabled="False" />
+                                <MenuFlyoutItem Text="Media info&#x2026;" IsEnabled="False" />
+                                <MenuFlyoutItem Text="Settings&#x2026;" IsEnabled="False" />
                             </MenuFlyout>
                         </Button.Flyout>
                     </Button>

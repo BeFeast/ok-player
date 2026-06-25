@@ -37,6 +37,8 @@ public partial class PlayerViewModel : ObservableObject
     [ObservableProperty] private bool _subtitleOff = true;
     [ObservableProperty] private int _subDelayMs;
     [ObservableProperty] private int _currentChapterIndex = -1;
+    [ObservableProperty] private int _videoWidth;   // mpv dwidth (display resolution)
+    [ObservableProperty] private int _videoHeight;  // mpv dheight
 
     public ObservableCollection<TrackInfo> SubtitleTracks { get; } = new();
     public ObservableCollection<TrackInfo> AudioTracks { get; } = new();
@@ -97,6 +99,7 @@ public partial class PlayerViewModel : ObservableObject
             ("volume", MpvFormat.Double), ("mute", MpvFormat.Flag), ("speed", MpvFormat.Double),
             ("media-title", MpvFormat.String), ("sid", MpvFormat.String), ("aid", MpvFormat.String),
             ("sub-delay", MpvFormat.Double), ("chapter", MpvFormat.Int64),
+            ("dwidth", MpvFormat.Int64), ("dheight", MpvFormat.Int64),
         })
         {
             engine.ObserveProperty(name, fmt);
@@ -200,6 +203,8 @@ public partial class PlayerViewModel : ObservableObject
                 case "media-title": MediaTitle = value as string ?? string.Empty; break;
                 case "sub-delay": if (value is double sd) SubDelayMs = (int)System.Math.Round(sd * 1000); break;
                 case "chapter": CurrentChapterIndex = value is long ch ? (int)ch : -1; break;
+                case "dwidth": if (value is long dw) VideoWidth = (int)dw; break;
+                case "dheight": if (value is long dh) VideoHeight = (int)dh; break;
             }
         });
     }

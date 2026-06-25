@@ -32,6 +32,7 @@ public sealed partial class MainWindow : Window
         Player.ToggleFullscreenRequested += (_, _) => SetFullscreen(!_fullscreen);
         Player.ExitFullscreenRequested += (_, _) => SetFullscreen(false);
         Player.OpenFileRequested += async (_, _) => await OpenFileAsync();
+        Player.FitToVideoRequested += (_, size) => FitToVideo(size.Width, size.Height);
     }
 
     private void SetCaptionForVideo(bool overVideo)
@@ -66,6 +67,18 @@ public sealed partial class MainWindow : Window
             return;
         _fullscreen = on;
         AppWindow.SetPresenter(on ? AppWindowPresenterKind.FullScreen : AppWindowPresenterKind.Overlapped);
+    }
+
+    /// <summary>Resize the window's client area to the video's native pixels (1:1), clamped to ~95% of the screen.</summary>
+    private void FitToVideo(int w, int h)
+    {
+        if (w <= 0 || h <= 0 || _fullscreen)
+            return;
+        var area = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Nearest);
+        int maxW = (int)(area.WorkArea.Width * 0.95);
+        int maxH = (int)(area.WorkArea.Height * 0.95);
+        double scale = Math.Min(1.0, Math.Min((double)maxW / w, (double)maxH / h));
+        AppWindow.ResizeClient(new Windows.Graphics.SizeInt32((int)(w * scale), (int)(h * scale)));
     }
 
     private async Task OpenFileAsync()

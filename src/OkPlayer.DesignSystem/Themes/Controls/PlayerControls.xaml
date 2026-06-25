@@ -55,6 +55,17 @@
         </Setter>
     </Style>
 
+    <!-- Context / overflow menu surface — light popover material per the design (radius 9, padded, comfortable width). -->
+    <Style x:Key="OkMenuFlyoutPresenterStyle" TargetType="MenuFlyoutPresenter">
+        <Setter Property="Background" Value="{ThemeResource OkPopoverBrush}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource OkCardStrokeBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="9" />
+        <Setter Property="Padding" Value="5" />
+        <Setter Property="MinWidth" Value="232" />
+        <Setter Property="MaxWidth" Value="340" />
+    </Style>
+
     <!-- Tight OSC button hosting a vector (Viewbox/Path) icon — matches the design's compact icon row. -->
     <Style x:Key="OkOscSvgButtonStyle" TargetType="Button">
         <Setter Property="Background" Value="Transparent" />

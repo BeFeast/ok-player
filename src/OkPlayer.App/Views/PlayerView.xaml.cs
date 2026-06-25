@@ -47,6 +47,8 @@ public sealed partial class PlayerView : UserControl
     public event EventHandler? OpenFileRequested;
     /// <summary>True when media is loaded (chrome is over video); false on the light welcome shell. Host adapts caption buttons.</summary>
     public event EventHandler<bool>? MediaPresenceChanged;
+    /// <summary>Resize the window to the video's native pixel size (clamped to the screen). Host owns the AppWindow.</summary>
+    public event EventHandler<(int Width, int Height)>? FitToVideoRequested;
 
     public PlayerView()
     {
@@ -298,6 +300,14 @@ public sealed partial class PlayerView : UserControl
     private void OnSpeedClick(object sender, RoutedEventArgs e) { Vm.CycleSpeed(); RevealChrome(); }
     private void OnScreenshotClick(object sender, RoutedEventArgs e) { Vm.TakeScreenshot(); RevealChrome(); }
     private void OnFullscreenClick(object sender, RoutedEventArgs e) => ToggleFullscreenRequested?.Invoke(this, EventArgs.Empty);
+
+    private void OnFitToVideoClick(object sender, RoutedEventArgs e)
+    {
+        if (Vm.VideoWidth > 0 && Vm.VideoHeight > 0)
+            FitToVideoRequested?.Invoke(this, (Vm.VideoWidth, Vm.VideoHeight));
+    }
+
+    private void OnAddBookmarkClick(object sender, RoutedEventArgs e) => ShowToast("Bookmark added"); // persisted bookmarks: TODO
     private void OnTrailingTimeTapped(object sender, TappedRoutedEventArgs e) => Vm.ToggleTimeLabel();
 
     // ---- switchers ----
