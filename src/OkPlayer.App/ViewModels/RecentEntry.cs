@@ -12,7 +12,7 @@ public sealed partial class RecentEntry : ObservableObject
     public string TimeLeft { get; set; } = string.Empty;  // "16m left" badge
     public double Progress { get; set; }                   // 0..1, drives the progress bar
     public double ProgressPercent => Progress * 100;       // for ProgressBar.Value
-    public double ProgressFillWidth => Progress * 280;     // px fill against the 280px card width
+    public double ProgressFillWidth => Progress * 200;     // px fill against the 200px shelf-card width
     public Brush? PlaceholderGradient { get; set; }        // shown until/without a poster
     [ObservableProperty] private ImageSource? _poster;     // cached poster frame (fills in async)
 }
