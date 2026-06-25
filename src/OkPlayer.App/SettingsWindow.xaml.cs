@@ -46,18 +46,72 @@ public sealed partial class SettingsWindow : Window
             return;
         int i = NavList.SelectedIndex;
         bool appearance = i == 0;
+        bool playback = i == 1;
         bool integration = i == 6;
         bool advanced = i == 7;
         AppearancePanel.Visibility = appearance ? Visibility.Visible : Visibility.Collapsed;
+        PlaybackPanel.Visibility = playback ? Visibility.Visible : Visibility.Collapsed;
         IntegrationPanel.Visibility = integration ? Visibility.Visible : Visibility.Collapsed;
         AdvancedPanel.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
-        PlaceholderPanel.Visibility = (!appearance && !integration && !advanced) ? Visibility.Visible : Visibility.Collapsed;
+        PlaceholderPanel.Visibility = (!appearance && !playback && !integration && !advanced) ? Visibility.Visible : Visibility.Collapsed;
         if (advanced)
             LoadMpvConf();
         else if (integration)
             LoadIntegration();
+        else if (playback)
+            LoadPlayback();
         else if (!appearance && i >= 0 && i < PanelNames.Length)
             PlaceholderTitle.Text = PanelNames[i];
+    }
+
+    // ── Playback panel ─────────────────────────────────────────────────
+
+    private void LoadPlayback()
+    {
+        ResumeToggle.Toggled -= OnResumeToggled;
+        ResumeToggle.IsOn = App.Settings.Current.ResumePlayback;
+        ResumeToggle.Toggled += OnResumeToggled;
+        RefreshPlayback();
+    }
+
+    private void RefreshPlayback()
+    {
+        var s = App.Settings.Current;
+        StyleSegment(Speed075, Math.Abs(s.DefaultSpeed - 0.75) < 0.001);
+        StyleSegment(Speed100, Math.Abs(s.DefaultSpeed - 1.0) < 0.001);
+        StyleSegment(Speed125, Math.Abs(s.DefaultSpeed - 1.25) < 0.001);
+        StyleSegment(Speed150, Math.Abs(s.DefaultSpeed - 1.5) < 0.001);
+        StyleSegment(Speed200, Math.Abs(s.DefaultSpeed - 2.0) < 0.001);
+        StyleSegment(Skip5, s.SkipStep == 5);
+        StyleSegment(Skip10, s.SkipStep == 10);
+        StyleSegment(Skip30, s.SkipStep == 30);
+    }
+
+    private void OnResumeToggled(object sender, RoutedEventArgs e)
+    {
+        App.Settings.Current.ResumePlayback = ResumeToggle.IsOn;
+        App.Settings.Save();
+    }
+
+    private void OnSpeedDefault(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string t } &&
+            double.TryParse(t, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double v))
+        {
+            App.Settings.Current.DefaultSpeed = v;
+            App.Settings.Save();
+            RefreshPlayback();
+        }
+    }
+
+    private void OnSkipStep(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string t } && int.TryParse(t, out int v))
+        {
+            App.Settings.Current.SkipStep = v;
+            App.Settings.Save();
+            RefreshPlayback();
+        }
     }
 
     // ── Integration panel (file-type associations) ─────────────────────

@@ -150,6 +150,42 @@
                         </StackPanel>
                     </StackPanel>
 
+                    <!-- Playback (real) -->
+                    <StackPanel x:Name="PlaybackPanel" Visibility="Collapsed">
+                        <TextBlock Text="Playback" Style="{StaticResource OkSettingsTitleTextStyle}" />
+
+                        <TextBlock Text="RESUME" FontSize="12" FontWeight="SemiBold" CharacterSpacing="60"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,22,0,8" />
+                        <ToggleSwitch x:Name="ResumeToggle" OnContent="Resume where you left off"
+                                      OffContent="Always start from the beginning" Toggled="OnResumeToggled" />
+                        <TextBlock Text="Reopens a file at the position you stopped (skips the first 5% and the last 30s)."
+                                   FontSize="11.5" Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,4,0,0" />
+
+                        <TextBlock Text="DEFAULT SPEED" FontSize="12" FontWeight="SemiBold" CharacterSpacing="60"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,24,0,10" />
+                        <Border Background="{ThemeResource ControlFillColorTertiaryBrush}" CornerRadius="8" Padding="3" HorizontalAlignment="Left">
+                            <StackPanel Orientation="Horizontal">
+                                <Button x:Name="Speed075" Tag="0.75" Content="0.75&#x00D7;" Click="OnSpeedDefault" Width="58" CornerRadius="6" Padding="0,5" FontSize="12.5" Background="Transparent" BorderThickness="0" />
+                                <Button x:Name="Speed100" Tag="1.0"  Content="1&#x00D7;"    Click="OnSpeedDefault" Width="52" CornerRadius="6" Padding="0,5" FontSize="12.5" Background="Transparent" BorderThickness="0" />
+                                <Button x:Name="Speed125" Tag="1.25" Content="1.25&#x00D7;" Click="OnSpeedDefault" Width="58" CornerRadius="6" Padding="0,5" FontSize="12.5" Background="Transparent" BorderThickness="0" />
+                                <Button x:Name="Speed150" Tag="1.5"  Content="1.5&#x00D7;"  Click="OnSpeedDefault" Width="54" CornerRadius="6" Padding="0,5" FontSize="12.5" Background="Transparent" BorderThickness="0" />
+                                <Button x:Name="Speed200" Tag="2.0"  Content="2&#x00D7;"    Click="OnSpeedDefault" Width="52" CornerRadius="6" Padding="0,5" FontSize="12.5" Background="Transparent" BorderThickness="0" />
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Text="ARROW-KEY SKIP" FontSize="12" FontWeight="SemiBold" CharacterSpacing="60"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,24,0,10" />
+                        <Border Background="{ThemeResource ControlFillColorTertiaryBrush}" CornerRadius="8" Padding="3" HorizontalAlignment="Left">
+                            <StackPanel Orientation="Horizontal">
+                                <Button x:Name="Skip5"  Tag="5"  Content="5s"  Click="OnSkipStep" Width="52" CornerRadius="6" Padding="0,5" FontSize="12.5" Background="Transparent" BorderThickness="0" />
+                                <Button x:Name="Skip10" Tag="10" Content="10s" Click="OnSkipStep" Width="52" CornerRadius="6" Padding="0,5" FontSize="12.5" Background="Transparent" BorderThickness="0" />
+                                <Button x:Name="Skip30" Tag="30" Content="30s" Click="OnSkipStep" Width="52" CornerRadius="6" Padding="0,5" FontSize="12.5" Background="Transparent" BorderThickness="0" />
+                            </StackPanel>
+                        </Border>
+                        <TextBlock Text="The Left / Right arrows seek by this amount (J / L always jump 10s)." FontSize="11.5"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,8,0,0" />
+                    </StackPanel>
+
                     <!-- Advanced (real) — the power-user escape hatch (PRD: raw mpv config) -->
                     <StackPanel x:Name="AdvancedPanel" Visibility="Collapsed">
                         <TextBlock Text="Advanced" Style="{StaticResource OkSettingsTitleTextStyle}" />
