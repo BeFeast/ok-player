@@ -12,20 +12,15 @@
         <media:MicaBackdrop Kind="Base" />
     </Window.SystemBackdrop>
 
-    <Grid Background="{ThemeResource OkSettingsWindowBrush}" RowDefinitions="40,*">
+    <Grid Background="{ThemeResource OkSettingsWindowBrush}">
 
-        <!-- titlebar (system caption buttons drawn by the OS via ExtendsContentIntoTitleBar). No divider:
-             the OS caption buttons are shorter than the band, so a bottom rule just framed an empty gap. -->
-        <Grid x:Name="AppTitleBar" Grid.Row="0" Padding="16,0,6,0">
-            <TextBlock Text="Settings" VerticalAlignment="Center" FontSize="12.5" FontWeight="SemiBold"
-                       Foreground="{ThemeResource OkTextSecondaryBrush}" />
-        </Grid>
-
-        <!-- body: 192px nav rail + content pane -->
-        <Grid Grid.Row="1" ColumnDefinitions="192,*">
+        <!-- body: 192px nav rail + content pane. It fills the whole window so the nav rail runs full
+             height to the top edge; the caption strip below is a transparent overlay, so there's no
+             separate full-width title band cutting the rail off. -->
+        <Grid ColumnDefinitions="192,*">
 
             <Border Grid.Column="0" BorderThickness="0,0,1,0" BorderBrush="{ThemeResource OkStrokeBrush}" Background="#04000000">
-                <StackPanel Padding="10,12">
+                <StackPanel Padding="10,44,10,12">
                     <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderThickness="1"
                             BorderBrush="{ThemeResource OkStrokeBrush}" CornerRadius="7" Padding="9,6" Margin="0,0,0,6">
                         <StackPanel Orientation="Horizontal" Spacing="8">
@@ -84,7 +79,7 @@
                 </StackPanel>
             </Border>
 
-            <ScrollViewer Grid.Column="1" Padding="28,24" VerticalScrollBarVisibility="Auto">
+            <ScrollViewer Grid.Column="1" Padding="28,44,28,24" VerticalScrollBarVisibility="Auto">
                 <Grid>
                     <!-- Appearance (real) -->
                     <StackPanel x:Name="AppearancePanel">
@@ -218,6 +213,13 @@
                     </StackPanel>
                 </Grid>
             </ScrollViewer>
+        </Grid>
+
+        <!-- transparent drag strip over the very top: the OS caption buttons sit at the right, the title at
+             the left. It overlays the full-height body, so the nav rail's background reaches the top edge. -->
+        <Grid x:Name="AppTitleBar" Height="40" VerticalAlignment="Top" Background="Transparent" Padding="16,0,0,0">
+            <TextBlock Text="Settings" VerticalAlignment="Center" FontSize="12.5" FontWeight="SemiBold"
+                       Foreground="{ThemeResource OkTextSecondaryBrush}" />
         </Grid>
     </Grid>
 </Window>
