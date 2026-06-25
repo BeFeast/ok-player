@@ -33,7 +33,28 @@ public sealed partial class MainWindow : Window
         Player.ExitFullscreenRequested += (_, _) => SetFullscreen(false);
         Player.OpenFileRequested += async (_, _) => await OpenFileAsync();
         Player.FitToVideoRequested += (_, size) => FitToVideo(size.Width, size.Height);
+        Player.SettingsRequested += (_, _) => OpenSettings();
         Closed += (_, _) => Player.SaveProgress(); // persist resume position on app close
+        ApplyAppTheme();
+        App.Settings.Changed += ApplyAppTheme; // theme chosen in Settings applies to the player too
+    }
+
+    private void ApplyAppTheme()
+    {
+        if (Content is FrameworkElement root)
+            root.RequestedTheme = App.Settings.Current.Theme == "Light" ? ElementTheme.Light : ElementTheme.Default;
+    }
+
+    private SettingsWindow? _settingsWindow;
+
+    private void OpenSettings()
+    {
+        if (_settingsWindow is null)
+        {
+            _settingsWindow = new SettingsWindow();
+            _settingsWindow.Closed += (_, _) => _settingsWindow = null; // single instance; clear on close
+        }
+        _settingsWindow.Activate();
     }
 
     private void SetCaptionForVideo(bool overVideo)

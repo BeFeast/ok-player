@@ -90,7 +90,7 @@
                 </MenuFlyoutItem>
                 <MenuFlyoutSeparator />
                 <MenuFlyoutItem Text="Media info&#x2026;" Click="OnMediaInfoClick" />
-                <MenuFlyoutItem Text="Settings&#x2026;" IsEnabled="False">
+                <MenuFlyoutItem Text="Settings&#x2026;" Click="OnSettingsClick">
                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE713;" /></MenuFlyoutItem.Icon>
                 </MenuFlyoutItem>
             </MenuFlyout>
@@ -318,7 +318,7 @@
                                 <MenuFlyoutItem Text="Playlist / Queue" IsEnabled="False" />
                                 <MenuFlyoutItem Text="Mini-player" IsEnabled="False" />
                                 <MenuFlyoutItem Text="Media info&#x2026;" Click="OnMediaInfoClick" />
-                                <MenuFlyoutItem Text="Settings&#x2026;" IsEnabled="False" />
+                                <MenuFlyoutItem Text="Settings&#x2026;" Click="OnSettingsClick" />
                             </MenuFlyout>
                         </Button.Flyout>
                     </Button>

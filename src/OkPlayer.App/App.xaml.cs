@@ -1,4 +1,5 @@
 using Microsoft.UI.Xaml;
+using OkPlayer.App.Services;
 
 namespace OkPlayer.App;
 
@@ -7,6 +8,9 @@ namespace OkPlayer.App;
 public partial class App : Application
 {
     private Window? _window;
+
+    /// <summary>The one shared user-settings instance (single source of truth across all windows).</summary>
+    public static SettingsService Settings { get; } = new();
 
     public App()
     {
