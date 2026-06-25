@@ -104,7 +104,7 @@ public sealed partial class PlayerView : UserControl
         };
         Vm.PropertyChanged += OnVmPropertyChanged;
         Vm.ToastRequested += ShowToast;
-        Vm.Chapters.CollectionChanged += (_, _) => { UpdateChaptersEmpty(); UpdateSeekChapters(); };
+        Vm.Chapters.CollectionChanged += (_, _) => UpdateChaptersEmpty(); // seek-bar ticks bind Vm.ChapterFractions
         PanelHideSb.Completed += (_, _) => ChaptersPanel.Visibility = Visibility.Collapsed;
         // Handle keys on the UserControl itself (a Control holds focus reliably, unlike a Grid).
         KeyDown += OnRootKeyDown;
@@ -181,8 +181,7 @@ public sealed partial class PlayerView : UserControl
         }
         else if (e.PropertyName == nameof(PlayerViewModel.Duration))
         {
-            UpdateSeekChapters(); // chapter ticks are positioned by time/duration
-            TryResume();
+            TryResume(); // seek-bar chapter ticks update via the Vm.ChapterFractions binding
         }
     }
 
@@ -414,6 +413,61 @@ public sealed partial class PlayerView : UserControl
             _history.RemoveBookmark(path, b.Time);
             LoadBookmarks();
         }
+    }
+
+    // ---- chapter editor: user-authored chapters live in the sidecar, merged with the file's own ----
+
+    private void OnAddChapterClick(object sender, RoutedEventArgs e)
+    {
+        if (_currentPath is { } path && Vm.HasMedia && Vm.Duration > 0 &&
+            _history.AddUserChapter(path, Vm.Position, $"Chapter at {FormatPreviewTime(Vm.Position)}"))
+        {
+            ShowToast($"Chapter added at {FormatPreviewTime(Vm.Position)}");
+            LoadUserChapters();
+        }
+    }
+
+    private void LoadUserChapters()
+    {
+        var list = new List<(double, string)>();
+        if (_currentPath is { } path)
+            foreach (var c in _history.GetUserChapters(path))
+                list.Add((c.Time, c.Title));
+        Vm.SetUserChapters(list);
+    }
+
+    private void OnChapterDelete(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: ChapterInfo c } && _currentPath is { } path)
+        {
+            _history.RemoveUserChapter(path, c.Time);
+            LoadUserChapters();
+        }
+    }
+
+    private async void OnChapterRename(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: ChapterInfo c } || _currentPath is not { } path)
+            return;
+        var input = new TextBox { Text = c.Title, SelectionStart = c.Title.Length };
+        var dialog = new ContentDialog
+        {
+            Title = "Rename chapter",
+            Content = input,
+            PrimaryButtonText = "Save",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = XamlRoot,
+        };
+        try
+        {
+            if (await dialog.ShowAsync() == ContentDialogResult.Primary && !string.IsNullOrWhiteSpace(input.Text))
+            {
+                _history.RenameUserChapter(path, c.Time, input.Text.Trim());
+                LoadUserChapters();
+            }
+        }
+        catch { /* another content dialog is already open — ignore the concurrent open */ }
     }
 
     /// <summary>Persist the current file's resume position. Safe to call any time (no-op without media).</summary>
@@ -878,21 +932,6 @@ public sealed partial class PlayerView : UserControl
         ChaptersSectionHeader.Text = $"CHAPTERS · {n}";
     }
 
-    private void UpdateSeekChapters()
-    {
-        if (Vm.Duration > 0 && Vm.Chapters.Count > 0)
-        {
-            var fractions = new List<double>(Vm.Chapters.Count);
-            foreach (var ch in Vm.Chapters)
-                fractions.Add(ch.Time / Vm.Duration);
-            Seek.Chapters = fractions;
-        }
-        else
-        {
-            Seek.Chapters = null;
-        }
-    }
-
     private async System.Threading.Tasks.Task GenerateChapterThumbnailsAsync()
     {
         if (!Vm.HasMedia || _generatingChapters)
@@ -981,6 +1020,7 @@ public sealed partial class PlayerView : UserControl
                                                             // (so a manual speed change doesn't carry over)
             ApplySubtitleDefaults(); // default sub size/position (Settings -> Subtitles)
             LoadBookmarks();       // refresh the panel's bookmarks for the new file (panel may be open)
+            LoadUserChapters();    // feed the file's user-added chapters in (merge with the file's own)
             RevealChrome();        // show the controls when a file opens (drag-drop / picker)
             _ = _thumbs.OpenAsync(pathOrUrl); // arm the seek-preview engine for this file (fire-and-forget)
         }

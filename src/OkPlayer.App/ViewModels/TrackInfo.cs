@@ -20,10 +20,12 @@ public sealed partial class ChapterInfo : ObservableObject
     public string Title { get; init; } = string.Empty;
     public double Time { get; init; }
     public string TimeText { get; init; } = string.Empty;
+    public bool IsUserDefined { get; init; } // user-added (editable) vs read-only from the file
 
     [ObservableProperty] private ImageSource? _thumbnail;
     [ObservableProperty] private bool _isCurrent; // the playing chapter (accent tint + inset bar)
 
     public Visibility CurrentBarVisibility => IsCurrent ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility EditVisibility => IsUserDefined ? Visibility.Visible : Visibility.Collapsed; // rename/delete affordances
     partial void OnIsCurrentChanged(bool value) => OnPropertyChanged(nameof(CurrentBarVisibility));
 }
