@@ -76,6 +76,9 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
                 _mpv.SetOption("screenshot-directory", pictures);
             ApplyUserConfig(_mpv); // power-user escape hatch — applied last so it can override the soft defaults above
             _mpv.Initialize();
+            // EnsureInitialized runs on the UI thread (Loaded), which is also where the render loop drives mpv.
+            // Arm the debug guard so any blocking mpv call mistakenly issued on this thread fails fast.
+            _mpv.MarkRenderThread();
 
             _render = new MpvRenderContext(_mpv, GlInteropDevice.GetProcAddress);
             _render.SetUpdateCallback(() => _forceRender = true);
@@ -263,14 +266,6 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
         System.Threading.Interlocked.Decrement(ref _screenshotsInFlight); // resume rendering once all shots finish
         if (success)
             ScreenshotSaved?.Invoke(this, EventArgs.Empty);
-    }
-
-    public void TogglePause()
-    {
-        if (_mpv == null)
-            return;
-        bool paused = _mpv.GetPropertyBool("pause") ?? false;
-        _mpv.SetProperty("pause", !paused);
     }
 
     public void Dispose()

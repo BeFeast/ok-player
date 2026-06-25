@@ -620,9 +620,10 @@ public sealed partial class PlayerView : UserControl
 
     private void OnSettingsClick(object sender, RoutedEventArgs e) => SettingsRequested?.Invoke(this, EventArgs.Empty);
 
-    /// <summary>Show (or toggle) the Media-info card. Reads on the UI thread — a one-shot user action on the
-    /// same thread that owns the engine's disposal, so it can't race a torn-down handle.</summary>
-    private void OpenMediaInfo()
+    /// <summary>Show (or toggle) the Media-info card. The ~40 property reads run OFF the UI thread (each is a
+    /// synchronous mpv_get_property that would deadlock the UI thread against a briefly-busy core); only the
+    /// finished, string-only view-model is marshalled back. Its brushes/fonts bind lazily on the UI thread.</summary>
+    private async void OpenMediaInfo()
     {
         if (_mediaInfoOpen)
         {
@@ -631,7 +632,13 @@ public sealed partial class PlayerView : UserControl
         }
         if (!Vm.HasMedia || Video.Engine is not { } engine)
             return;
-        _mediaInfoModel = BuildMediaInfo(engine, _currentPath);
+        string? path = _currentPath; // pin the file we're reading so a mid-read switch can't show stale info
+        MediaInfoViewModel model;
+        try { model = await System.Threading.Tasks.Task.Run(() => BuildMediaInfo(engine, path)); }
+        catch { return; } // engine torn down mid-read — just don't show the card
+        if (!Vm.HasMedia || _mediaInfoOpen || _currentPath != path)
+            return; // the file changed, or the card was toggled, while we were reading
+        _mediaInfoModel = model;
         MediaInfoCardView.DataContext = _mediaInfoModel;
         MediaInfoHost.Visibility = Visibility.Visible;
         _mediaInfoOpen = true;

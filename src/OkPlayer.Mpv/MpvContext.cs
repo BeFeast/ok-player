@@ -71,8 +71,27 @@ public sealed class MpvContext : IDisposable
         MpvNative.mpv_request_log_messages(_handle, s);
     }
 
+    private int _renderThreadId; // 0 = guard off; set (DEBUG only) to the render/UI thread of the main engine
+
+    /// <summary>Mark the calling thread as the render/UI thread. In DEBUG, any later synchronous (blocking)
+    /// mpv call from this thread throws — turning the "blocking call on the UI thread" deadlock class into a
+    /// deterministic dev-time failure rather than an intermittent freeze. Only the main render engine calls
+    /// this; the thumbnail engine never does, so its off-thread reads stay allowed. No-op in Release.</summary>
+    [System.Diagnostics.Conditional("DEBUG")]
+    public void MarkRenderThread() => _renderThreadId = Environment.CurrentManagedThreadId;
+
+    [System.Diagnostics.Conditional("DEBUG")]
+    private void GuardBlockingCall(string op)
+    {
+        if (_renderThreadId != 0 && Environment.CurrentManagedThreadId == _renderThreadId)
+            throw new InvalidOperationException(
+                $"Blocking mpv call '{op}' on the render/UI thread can deadlock a briefly-busy core. Issue " +
+                "commands via CommandAsync, set properties via SetProperty (async), or read off the UI thread.");
+    }
+
     public void Command(params string[] args)
     {
+        GuardBlockingCall("command");
         // mpv_command wants a NULL-terminated argv.
         var argv = new string?[args.Length + 1];
         Array.Copy(args, argv, args.Length);
@@ -112,6 +131,7 @@ public sealed class MpvContext : IDisposable
 
     public string? GetPropertyString(string name)
     {
+        GuardBlockingCall("get " + name);
         IntPtr ptr = MpvNative.mpv_get_property_string_raw(_handle, name);
         if (ptr == IntPtr.Zero)
             return null;
@@ -120,13 +140,22 @@ public sealed class MpvContext : IDisposable
     }
 
     public double? GetPropertyDouble(string name)
-        => MpvNative.mpv_get_property_double(_handle, name, MpvFormat.Double, out double v) == MpvError.Success ? v : null;
+    {
+        GuardBlockingCall("get " + name);
+        return MpvNative.mpv_get_property_double(_handle, name, MpvFormat.Double, out double v) == MpvError.Success ? v : null;
+    }
 
     public long? GetPropertyLong(string name)
-        => MpvNative.mpv_get_property_long(_handle, name, MpvFormat.Int64, out long v) == MpvError.Success ? v : null;
+    {
+        GuardBlockingCall("get " + name);
+        return MpvNative.mpv_get_property_long(_handle, name, MpvFormat.Int64, out long v) == MpvError.Success ? v : null;
+    }
 
     public bool? GetPropertyBool(string name)
-        => MpvNative.mpv_get_property_flag(_handle, name, MpvFormat.Flag, out int v) == MpvError.Success ? v != 0 : null;
+    {
+        GuardBlockingCall("get " + name);
+        return MpvNative.mpv_get_property_flag(_handle, name, MpvFormat.Flag, out int v) == MpvError.Success ? v != 0 : null;
+    }
 
     public void ObserveProperty(string name, MpvFormat format = MpvFormat.None)
         => MpvException.Check(MpvNative.mpv_observe_property(_handle, 0, name, format), $"observe_property({name})");
