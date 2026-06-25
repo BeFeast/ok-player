@@ -29,7 +29,14 @@ public sealed partial class SettingsWindow : Window
         AppWindow.Resize(new Windows.Graphics.SizeInt32(760, 560));
         ApplyTheme();
         App.Settings.Changed += ApplyTheme;
-        Closed += (_, _) => App.Settings.Changed -= ApplyTheme;
+        if (Content is FrameworkElement rootEl)
+            rootEl.ActualThemeChanged += OnActualThemeChanged;
+        Closed += (_, _) =>
+        {
+            App.Settings.Changed -= ApplyTheme;
+            if (Content is FrameworkElement r)
+                r.ActualThemeChanged -= OnActualThemeChanged;
+        };
         LoadAppearance();
         _loaded = true;
     }
@@ -38,6 +45,33 @@ public sealed partial class SettingsWindow : Window
     {
         if (Content is FrameworkElement root)
             root.RequestedTheme = App.Settings.Current.Theme == "Light" ? ElementTheme.Light : ElementTheme.Default;
+    }
+
+    // The segment pills and the Shortcuts key chips bake theme-dependent colors when they are built (the
+    // chips only once). ActualThemeChanged fires whenever the effective theme flips — by setting change or
+    // a system light/dark switch while on Auto — and the new theme is already in effect, so rebuild the
+    // chips and re-style the visible panel here so their contrast tracks the theme.
+    private void OnActualThemeChanged(FrameworkElement sender, object args)
+    {
+        if (!_loaded)
+            return;
+        // Re-style only the theme-dependent visuals — never reload panel data (reloading Advanced would
+        // discard unsaved mpv.conf edits). The key chips bake the theme when built, so drop them and let
+        // them rebuild (now if visible, else on next show); the selected segment pill is re-styled in place.
+        _shortcutsBuilt = false;
+        ShortcutsHost.Children.Clear();
+        if (AppearancePanel.Visibility == Visibility.Visible)
+            RefreshAppearance(); // the theme/accent pills are themed too — and this panel hosts the switch
+        else if (ShortcutsPanel.Visibility == Visibility.Visible)
+            LoadShortcuts();
+        else if (PlaybackPanel.Visibility == Visibility.Visible)
+            RefreshPlayback();
+        else if (SubtitlesPanel.Visibility == Visibility.Visible)
+            LoadSubtitles();
+        else if (VideoPanel.Visibility == Visibility.Visible)
+            LoadVideo();
+        else if (AudioPanel.Visibility == Visibility.Visible)
+            LoadAudio();
     }
 
     private void OnNavChanged(object sender, SelectionChangedEventArgs e)
@@ -140,7 +174,9 @@ public sealed partial class SettingsWindow : Window
 
     private FrameworkElement KeyChip(string key) => new Border
     {
-        Background = new SolidColorBrush(Color.FromArgb(0x0D, 0, 0, 0)),
+        // a faint dark fill on light, a faint light fill on dark — 5% black vanishes on dark Mica
+        Background = new SolidColorBrush((Content as FrameworkElement)?.ActualTheme == ElementTheme.Dark
+            ? Color.FromArgb(0x18, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x0D, 0, 0, 0)),
         BorderBrush = Res("OkStrokeBrush", new SolidColorBrush(Color.FromArgb(0x14, 0, 0, 0))),
         BorderThickness = new Thickness(1),
         CornerRadius = new CornerRadius(5),
@@ -412,8 +448,17 @@ public sealed partial class SettingsWindow : Window
 
     private void StyleSegment(Button b, bool selected)
     {
-        b.Background = selected ? Res("CardBackgroundFillColorDefaultBrush", new SolidColorBrush(Colors.White)) : Transparent;
-        b.Foreground = selected ? AccentText : Res("OkTextBodyBrush", new SolidColorBrush(Color.FromArgb(0xDE, 0, 0, 0)));
+        // The selected "pill" must lift off the track in both themes: a light card on light Mica, a
+        // translucent-white pill on dark (the system card fill is too faint there). Pair it with the
+        // theme-aware accent text so the label stays readable (the light-mode dark teal is unreadable on dark).
+        bool dark = b.ActualTheme == ElementTheme.Dark;
+        b.Background = selected
+            ? (dark ? new SolidColorBrush(Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF))
+                    : Res("CardBackgroundFillColorDefaultBrush", new SolidColorBrush(Colors.White)))
+            : Transparent;
+        b.Foreground = selected
+            ? Res("OkAccentTextBrush", AccentText)
+            : Res("OkTextBodyBrush", new SolidColorBrush(Color.FromArgb(0xDE, 0, 0, 0)));
         b.FontWeight = selected ? FontWeights.SemiBold : FontWeights.Normal;
     }
 
