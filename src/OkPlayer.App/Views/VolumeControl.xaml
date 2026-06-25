@@ -9,6 +9,7 @@
     <Grid x:Name="Root" Background="Transparent" PointerEntered="OnRootEnter" PointerExited="OnRootExit">
         <StackPanel Spacing="3" VerticalAlignment="Center" HorizontalAlignment="Center">
             <Button x:Name="SpeakerBtn" Width="34" Height="34" Padding="0" Click="OnMuteClick"
+                    GotFocus="OnFocusGot" LostFocus="OnFocusLost" KeyDown="OnKeyDown"
                     Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="Mute (M) &#x00B7; Ctrl-click: 100%">
                 <FontIcon x:Name="SpeakerIcon" Glyph="&#xE767;" FontSize="18" Foreground="White" />
             </Button>

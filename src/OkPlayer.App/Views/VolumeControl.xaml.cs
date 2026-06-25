@@ -103,6 +103,23 @@ public sealed partial class VolumeControl : UserControl
             _graceTimer.Start();
     }
 
+    // keyboard parity: focusing the speaker opens the capsule; arrows adjust (Shift = fine); blur collapses it
+    private void OnFocusGot(object sender, RoutedEventArgs e) => Expand();
+    private void OnFocusLost(object sender, RoutedEventArgs e)
+    {
+        if (!_dragging && !_editing)
+            _graceTimer.Start();
+    }
+
+    private void OnKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        bool fine = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
+            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+        double step = fine ? 0.1 : 1;
+        if (e.Key is VirtualKey.Up or VirtualKey.Right) { _vm?.NudgeVolume(step); e.Handled = true; }
+        else if (e.Key is VirtualKey.Down or VirtualKey.Left) { _vm?.NudgeVolume(-step); e.Handled = true; }
+    }
+
     private void Expand()
     {
         _graceTimer.Stop();
