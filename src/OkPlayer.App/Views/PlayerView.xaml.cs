@@ -570,6 +570,8 @@ public sealed partial class PlayerView : UserControl
 
     private void OnSubDelayMinus(object sender, RoutedEventArgs e) => Vm.NudgeSubDelay(-50);
     private void OnSubDelayPlus(object sender, RoutedEventArgs e) => Vm.NudgeSubDelay(50);
+    private void OnSubScaleMinus(object sender, RoutedEventArgs e) => Vm.NudgeSubScale(-0.1);
+    private void OnSubScalePlus(object sender, RoutedEventArgs e) => Vm.NudgeSubScale(0.1);
 
     // ---- chapters panel ----
 
