@@ -50,6 +50,7 @@ public sealed partial class SettingsWindow : Window
         bool subtitles = i == 2;
         bool video = i == 3;
         bool audio = i == 4;
+        bool shortcuts = i == 5;
         bool integration = i == 6;
         bool advanced = i == 7;
         AppearancePanel.Visibility = appearance ? Visibility.Visible : Visibility.Collapsed;
@@ -57,9 +58,10 @@ public sealed partial class SettingsWindow : Window
         SubtitlesPanel.Visibility = subtitles ? Visibility.Visible : Visibility.Collapsed;
         VideoPanel.Visibility = video ? Visibility.Visible : Visibility.Collapsed;
         AudioPanel.Visibility = audio ? Visibility.Visible : Visibility.Collapsed;
+        ShortcutsPanel.Visibility = shortcuts ? Visibility.Visible : Visibility.Collapsed;
         IntegrationPanel.Visibility = integration ? Visibility.Visible : Visibility.Collapsed;
         AdvancedPanel.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
-        PlaceholderPanel.Visibility = (!appearance && !playback && !subtitles && !video && !audio && !integration && !advanced)
+        PlaceholderPanel.Visibility = (!appearance && !playback && !subtitles && !video && !audio && !shortcuts && !integration && !advanced)
             ? Visibility.Visible : Visibility.Collapsed;
         if (advanced)
             LoadMpvConf();
@@ -73,9 +75,86 @@ public sealed partial class SettingsWindow : Window
             LoadVideo();
         else if (audio)
             LoadAudio();
+        else if (shortcuts)
+            LoadShortcuts();
         else if (!appearance && i >= 0 && i < PanelNames.Length)
             PlaceholderTitle.Text = PanelNames[i];
     }
+
+    // ── Shortcuts panel (keyboard reference) ───────────────────────────
+
+    private bool _shortcutsBuilt;
+
+    private void LoadShortcuts()
+    {
+        if (_shortcutsBuilt)
+            return;
+        (string Cat, string Action, string[] Keys)[] map =
+        {
+            ("PLAYBACK", "Play / pause", new[] { "Space", "K" }),
+            ("PLAYBACK", "Seek backward / forward", new[] { "←", "→" }),
+            ("PLAYBACK", "Jump 10 seconds back / forward", new[] { "J", "L" }),
+            ("PLAYBACK", "Frame step back / forward", new[] { ",", "." }),
+            ("AUDIO", "Volume up / down", new[] { "↑", "↓" }),
+            ("AUDIO", "Mute", new[] { "M" }),
+            ("VIEW", "Fullscreen", new[] { "F" }),
+            ("VIEW", "Chapters panel", new[] { "C" }),
+            ("VIEW", "Media info", new[] { "I" }),
+            ("VIEW", "Close panel / exit fullscreen", new[] { "Esc" }),
+            ("CAPTURE", "Screenshot", new[] { "S" }),
+        };
+        string? lastCat = null;
+        foreach (var (cat, action, keys) in map)
+        {
+            if (cat != lastCat)
+            {
+                ShortcutsHost.Children.Add(new TextBlock
+                {
+                    Text = cat,
+                    FontSize = 12,
+                    FontWeight = FontWeights.SemiBold,
+                    CharacterSpacing = 60,
+                    Foreground = Res("OkTextSecondaryBrush", new SolidColorBrush(Color.FromArgb(0x99, 0, 0, 0))),
+                    Margin = new Thickness(0, lastCat is null ? 0 : 18, 0, 8),
+                });
+                lastCat = cat;
+            }
+            ShortcutsHost.Children.Add(BuildShortcutRow(action, keys));
+        }
+        _shortcutsBuilt = true;
+    }
+
+    private FrameworkElement BuildShortcutRow(string action, string[] keys)
+    {
+        var grid = new Grid { Margin = new Thickness(0, 0, 0, 3), MaxWidth = 440, HorizontalAlignment = HorizontalAlignment.Left };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.Children.Add(new TextBlock { Text = action, FontSize = 12.5, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 6, 24, 6) });
+        var chips = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5, VerticalAlignment = VerticalAlignment.Center };
+        Grid.SetColumn(chips, 1);
+        foreach (string k in keys)
+            chips.Children.Add(KeyChip(k));
+        grid.Children.Add(chips);
+        return grid;
+    }
+
+    private FrameworkElement KeyChip(string key) => new Border
+    {
+        Background = new SolidColorBrush(Color.FromArgb(0x0D, 0, 0, 0)),
+        BorderBrush = Res("OkStrokeBrush", new SolidColorBrush(Color.FromArgb(0x14, 0, 0, 0))),
+        BorderThickness = new Thickness(1),
+        CornerRadius = new CornerRadius(5),
+        Padding = new Thickness(8, 3, 8, 3),
+        MinWidth = 28,
+        Child = new TextBlock
+        {
+            Text = key,
+            FontSize = 11.5,
+            FontFamily = new FontFamily("Consolas"),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Foreground = Res("OkTextBodyBrush", new SolidColorBrush(Color.FromArgb(0xDE, 0, 0, 0))),
+        },
+    };
 
     // ── Subtitles panel ────────────────────────────────────────────────
 
