@@ -959,8 +959,8 @@ public sealed partial class PlayerView : UserControl
             _currentPath = pathOrUrl;
             // resume only when the user keeps that on (Settings -> Playback); applied on the first Duration
             _resumeTarget = (App.Settings.Current.ResumePlayback ? _history.Get(pathOrUrl)?.Position : null) ?? -1;
-            if (Math.Abs(App.Settings.Current.DefaultSpeed - 1.0) > 0.001)
-                Vm.SetSpeed(App.Settings.Current.DefaultSpeed); // new files start at the configured default speed
+            Vm.SetSpeed(App.Settings.Current.DefaultSpeed); // every file starts at the default speed, incl. 1x
+                                                            // (so a manual speed change doesn't carry over)
             LoadBookmarks();       // refresh the panel's bookmarks for the new file (panel may be open)
             RevealChrome();        // show the controls when a file opens (drag-drop / picker)
             _ = _thumbs.OpenAsync(pathOrUrl); // arm the seek-preview engine for this file (fire-and-forget)
