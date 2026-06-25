@@ -47,17 +47,19 @@ public sealed partial class SettingsWindow : Window
         int i = NavList.SelectedIndex;
         bool appearance = i == 0;
         bool playback = i == 1;
+        bool subtitles = i == 2;
         bool video = i == 3;
         bool audio = i == 4;
         bool integration = i == 6;
         bool advanced = i == 7;
         AppearancePanel.Visibility = appearance ? Visibility.Visible : Visibility.Collapsed;
         PlaybackPanel.Visibility = playback ? Visibility.Visible : Visibility.Collapsed;
+        SubtitlesPanel.Visibility = subtitles ? Visibility.Visible : Visibility.Collapsed;
         VideoPanel.Visibility = video ? Visibility.Visible : Visibility.Collapsed;
         AudioPanel.Visibility = audio ? Visibility.Visible : Visibility.Collapsed;
         IntegrationPanel.Visibility = integration ? Visibility.Visible : Visibility.Collapsed;
         AdvancedPanel.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
-        PlaceholderPanel.Visibility = (!appearance && !playback && !video && !audio && !integration && !advanced)
+        PlaceholderPanel.Visibility = (!appearance && !playback && !subtitles && !video && !audio && !integration && !advanced)
             ? Visibility.Visible : Visibility.Collapsed;
         if (advanced)
             LoadMpvConf();
@@ -65,12 +67,47 @@ public sealed partial class SettingsWindow : Window
             LoadIntegration();
         else if (playback)
             LoadPlayback();
+        else if (subtitles)
+            LoadSubtitles();
         else if (video)
             LoadVideo();
         else if (audio)
             LoadAudio();
         else if (!appearance && i >= 0 && i < PanelNames.Length)
             PlaceholderTitle.Text = PanelNames[i];
+    }
+
+    // ── Subtitles panel ────────────────────────────────────────────────
+
+    private void LoadSubtitles()
+    {
+        var s = App.Settings.Current;
+        StyleSegment(SubSmall, Math.Abs(s.SubtitleScale - 0.8) < 0.001);
+        StyleSegment(SubNormal, Math.Abs(s.SubtitleScale - 1.0) < 0.001);
+        StyleSegment(SubLarge, Math.Abs(s.SubtitleScale - 1.4) < 0.001);
+        StyleSegment(SubBottom, s.SubtitlePosition == 100);
+        StyleSegment(SubRaised, s.SubtitlePosition == 90);
+    }
+
+    private void OnSubSize(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string t } &&
+            double.TryParse(t, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double v))
+        {
+            App.Settings.Current.SubtitleScale = v;
+            App.Settings.Save();
+            LoadSubtitles();
+        }
+    }
+
+    private void OnSubPos(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string t } && int.TryParse(t, out int v))
+        {
+            App.Settings.Current.SubtitlePosition = v;
+            App.Settings.Save();
+            LoadSubtitles();
+        }
     }
 
     // ── Video / Audio panels ───────────────────────────────────────────

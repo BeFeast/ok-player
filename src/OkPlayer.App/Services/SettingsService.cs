@@ -27,6 +27,10 @@ public sealed class AppSettings
     // Audio
     public int DefaultVolume { get; set; } = 100;        // 0..130, the volume the engine starts at
 
+    // Subtitles
+    public double SubtitleScale { get; set; } = 1.0;     // default sub-scale (size multiplier)
+    public int SubtitlePosition { get; set; } = 100;     // default sub-pos: 100 = bottom, lower = higher
+
     public int SchemaVersion { get; set; } = 1;          // forward-compat migration hook
 }
 
