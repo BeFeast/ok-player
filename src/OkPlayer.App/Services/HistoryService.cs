@@ -123,6 +123,22 @@ public sealed class HistoryService
         return true;
     }
 
+    public IReadOnlyList<double> GetBookmarks(string path)
+    {
+        lock (_lock)
+            return _records.TryGetValue(path, out var r) ? r.Bookmarks.ToList() : new List<double>();
+    }
+
+    public void RemoveBookmark(string path, double time)
+    {
+        lock (_lock)
+        {
+            if (_records.TryGetValue(path, out var r))
+                r.Bookmarks.RemoveAll(b => Math.Abs(b - time) < 0.01);
+        }
+        Save();
+    }
+
     /// <summary>Most-recently-opened existing files, newest first, for continue-watching.</summary>
     public IReadOnlyList<(string Path, FileRecord Record)> Recents(int count)
     {

@@ -9,3 +9,10 @@ public sealed class RecentEntry
     public double Progress { get; set; }              // 0..1, drives the card's progress bar
     public double ProgressPercent => Progress * 100;  // for ProgressBar.Value
 }
+
+/// <summary>A saved bookmark shown in the Chapters panel's BOOKMARKS section.</summary>
+public sealed class BookmarkEntry
+{
+    public double Time { get; set; }
+    public string TimeText { get; set; } = string.Empty;
+}

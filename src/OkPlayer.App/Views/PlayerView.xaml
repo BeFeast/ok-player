@@ -390,6 +390,30 @@
                 <StackPanel Spacing="8">
                     <TextBlock x:Name="ChaptersEmpty" Text="No chapters in this file." HorizontalAlignment="Center"
                                Style="{StaticResource OkSmallTextStyle}" />
+                    <StackPanel x:Name="BookmarksSection" Spacing="1" Visibility="Collapsed">
+                        <TextBlock x:Name="BookmarksHeader" Text="BOOKMARKS" FontSize="11" FontWeight="SemiBold"
+                                   CharacterSpacing="60" Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="2,0,0,3" />
+                        <ScrollViewer MaxHeight="128" VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{x:Bind Bookmarks}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:BookmarkEntry">
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <Button Grid.Column="0" Click="OnBookmarkJump" Style="{StaticResource OkSwitcherRowStyle}">
+                                                <StackPanel Orientation="Horizontal" Spacing="9">
+                                                    <FontIcon Glyph="&#xE840;" FontSize="13" Foreground="{ThemeResource OkAccentTextBrush}" />
+                                                    <TextBlock Text="{x:Bind TimeText}" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Button>
+                                            <Button Grid.Column="1" Click="OnBookmarkDelete" Content="&#xE711;" FontFamily="Segoe Fluent Icons"
+                                                    FontSize="11" Background="Transparent" BorderThickness="0" CornerRadius="6" Padding="8,6"
+                                                    Foreground="{ThemeResource OkTextSecondaryBrush}" VerticalAlignment="Center"
+                                                    ToolTipService.ToolTip="Remove bookmark" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </StackPanel>
                     <Button Click="OnAddBookmarkClick" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
                             Background="{ThemeResource OkAccentBrush}" Foreground="White" CornerRadius="7" Padding="9"
                             FontSize="12.5" FontWeight="SemiBold" Content="Bookmark here" />
