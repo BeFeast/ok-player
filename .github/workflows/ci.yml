@@ -20,3 +20,22 @@ jobs:
       # this catches logic regressions (chapter math, history sidecar, settings) fast and cheaply.
       - name: Test
         run: dotnet test tests/OkPlayer.Tests/OkPlayer.Tests.csproj -c Release --logger "console;verbosity=normal"
+
+  integration-tests:
+    name: Integration tests (real libmpv + render-thread guard)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      # These exercise the actual engine (the open-time deadlock guard contract), so they need libmpv.
+      - name: Fetch libmpv
+        shell: pwsh
+        run: ./scripts/fetch-natives.ps1
+
+      # Debug so the (DEBUG-only) render-thread guard is compiled in and its assertions run.
+      - name: Test
+        run: dotnet test tests/OkPlayer.IntegrationTests/OkPlayer.IntegrationTests.csproj -c Debug --logger "console;verbosity=normal"

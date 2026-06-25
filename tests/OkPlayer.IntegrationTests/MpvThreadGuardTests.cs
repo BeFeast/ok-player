@@ -1,0 +1,72 @@
+using OkPlayer.Mpv;
+
+namespace OkPlayer.IntegrationTests;
+
+/// <summary>Real-libmpv tests of the render-thread deadlock guard contract (the open-time freeze in #33).
+/// They load the actual engine, so they need libmpv-2.dll at runtime and are tagged Category=Integration —
+/// the fast headless CI excludes them; they run locally and in a Windows job that has fetched the natives.
+/// The guard is DEBUG-only, so the assertions that depend on it are compiled only in Debug.</summary>
+[Trait("Category", "Integration")]
+public class MpvThreadGuardTests
+{
+    [Fact]
+    public void Initialize_LoadsTheRealEngine()
+    {
+        using var ctx = new MpvContext();
+        ctx.Initialize(); // throws if libmpv-2.dll can't load or mpv_initialize fails
+    }
+
+#if DEBUG
+    [Fact]
+    public void BlockingCall_OnTheRenderThread_FailsFast()
+    {
+        using var ctx = new MpvContext();
+        ctx.Initialize();
+        ctx.MarkRenderThread();
+
+        // The whole point of the guard: a synchronous (blocking) mpv call from the marked render/UI thread
+        // — the exact shape that deadlocked against a busy core in #33 — throws immediately instead.
+        Assert.Throws<InvalidOperationException>(() => ctx.Command("set", "volume", "50"));
+        Assert.Throws<InvalidOperationException>(() => ctx.GetPropertyDouble("volume"));
+        Assert.Throws<InvalidOperationException>(() => ctx.GetPropertyString("media-title"));
+    }
+
+    [Fact]
+    public void AsyncPaths_OnTheRenderThread_StayAllowed()
+    {
+        using var ctx = new MpvContext();
+        ctx.Initialize();
+        ctx.MarkRenderThread();
+
+        // The deadlock-free paths the app actually uses must NOT trip the guard.
+        Assert.Null(Record.Exception(() =>
+        {
+            ctx.CommandAsync("seek", "0", "absolute");
+            ctx.SetProperty("volume", 50.0);
+            ctx.SetProperty("pause", true);
+            ctx.Loadfile("does-not-exist.mkv");
+        }));
+    }
+#endif
+
+    [Fact]
+    public void BlockingReads_FromOtherThreads_AreAllowed()
+    {
+        using var ctx = new MpvContext();
+        ctx.Initialize();
+        ctx.MarkRenderThread(); // marks THIS thread only
+
+        // The event-pump and thumbnail engines read off the render thread; those must never be guarded.
+        // Use a dedicated thread, not Task.Run: the threadpool can hand back the very thread that called
+        // MarkRenderThread (xUnit itself runs on the pool), which would make this assertion flaky.
+        Exception? captured = null;
+        var reader = new System.Threading.Thread(() =>
+        {
+            try { ctx.GetPropertyDouble("volume"); }
+            catch (Exception ex) { captured = ex; }
+        });
+        reader.Start();
+        reader.Join();
+        Assert.Null(captured);
+    }
+}
