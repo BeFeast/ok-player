@@ -8,12 +8,15 @@
     <AssemblyName>OkPlayer</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
 
-    <!-- Unpackaged, framework-dependent for the dev loop (the WindowsAppRuntime 2.2 is installed).
-         Phase 7 flips to self-contained for distribution. -->
+    <!-- Unpackaged. Debug is framework-dependent for the dev loop (the WindowsAppRuntime is installed);
+         Release is self-contained for distribution — bundles .NET + the Windows App SDK so the target
+         needs nothing pre-installed. These live on the App only (class libraries reject self-contained). -->
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <SelfContained>false</SelfContained>
     <WindowsPackageType>None</WindowsPackageType>
+    <SelfContained>false</SelfContained>
     <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
+    <SelfContained Condition="'$(Configuration)' == 'Release'">true</SelfContained>
+    <WindowsAppSDKSelfContained Condition="'$(Configuration)' == 'Release'">true</WindowsAppSDKSelfContained>
 
     <UseWinUI>true</UseWinUI>
     <EnableDefaultPageItems>true</EnableDefaultPageItems>
@@ -34,6 +37,17 @@
     <ProjectReference Include="..\OkPlayer.DesignSystem\OkPlayer.DesignSystem.csproj" />
     <ProjectReference Include="..\OkPlayer.Render\OkPlayer.Render.csproj" />
   </ItemGroup>
+
+  <!-- `dotnet publish` for an unpackaged WinUI 3 app drops the merged app resource index
+       ($(AssemblyName).pri) — without it every ms-appx resource (the DesignSystem merged
+       dictionaries) fails to resolve at runtime and the first StaticResource lookup throws a
+       XamlParseException on startup. Copy it into the publish output. -->
+  <Target Name="CopyAppPriToPublish" AfterTargets="Publish">
+    <Copy SourceFiles="$(OutDir)$(AssemblyName).pri"
+          DestinationFolder="$(PublishDir)"
+          Condition="Exists('$(OutDir)$(AssemblyName).pri')"
+          SkipUnchangedFiles="true" />
+  </Target>
 
   <!-- Bundle the libmpv engine next to the exe (fetched into native/, gitignored).
        Conditional so a clone without the native binaries still builds (it just fails at
