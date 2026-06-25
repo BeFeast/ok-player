@@ -1,3 +1,5 @@
+using System;
+using System.IO;
 using Microsoft.UI.Xaml;
 using OkPlayer.App.Services;
 
@@ -19,7 +21,27 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
-        _window = new MainWindow();
+        _window = new MainWindow(GetLaunchFile());
         _window.Activate();
+    }
+
+    /// <summary>A file/URL passed on the command line (Explorer "Open with", a file association, or
+    /// `OkPlayer.exe path`). Unpackaged apps receive it via the process argv, not the activation args.</summary>
+    private static string? GetLaunchFile()
+    {
+        try
+        {
+            string[] argv = Environment.GetCommandLineArgs();
+            for (int i = 1; i < argv.Length; i++)
+            {
+                string a = argv[i];
+                if (a.Length == 0 || a[0] == '-' || a[0] == '/')
+                    continue; // skip switches
+                if (a.Contains("://", StringComparison.Ordinal) || File.Exists(a))
+                    return a;
+            }
+        }
+        catch { /* never let argv parsing block startup */ }
+        return null;
     }
 }

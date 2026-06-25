@@ -16,7 +16,7 @@ public sealed partial class MainWindow : Window
 
     private bool _fullscreen;
 
-    public MainWindow()
+    public MainWindow(string? initialFile = null)
     {
         InitializeComponent();
         Title = "OK Player";
@@ -45,6 +45,8 @@ public sealed partial class MainWindow : Window
         };
         ApplyAppTheme();
         App.Settings.Changed += ApplyAppTheme; // theme chosen in Settings applies to the player too
+        if (!string.IsNullOrEmpty(initialFile))
+            Player.QueueInitialFile(initialFile); // a file passed on the command line ("Open with")
     }
 
     private void ApplyAppTheme()
