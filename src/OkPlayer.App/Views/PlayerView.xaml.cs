@@ -28,6 +28,10 @@ public sealed partial class PlayerView : UserControl
     private bool _panelOpen;
     private bool _syncingChapter;
     private readonly ThumbnailService _thumbs = new();
+    private readonly HistoryService _history = new();
+    private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _saveTimer;
+    private string? _currentPath;
+    private double _resumeTarget = -1; // pending resume position, applied on the first Duration after open
     private int _previewToken; // ignores stale async thumbnail results
     private bool _viewUnloaded; // guards against duplicate Unloaded disposing the thumbnail engine twice
     private bool _generatingChapters; // prevents overlapping chapter-thumbnail passes
@@ -65,6 +69,12 @@ public sealed partial class PlayerView : UserControl
         _toastTimer.IsRepeating = false;
         _toastTimer.Tick += (_, _) => ToastHideSb.Begin();
 
+        _saveTimer = DispatcherQueue.CreateTimer();
+        _saveTimer.Interval = TimeSpan.FromSeconds(10); // periodically persist the resume position
+        _saveTimer.IsRepeating = true;
+        _saveTimer.Tick += (_, _) => SaveProgress();
+        _saveTimer.Start();
+
         Video.EngineReady += OnEngineReady;
         Seek.SeekRequested += OnSeekRequested;
         Seek.ScrubStateChanged += scrubbing => Vm.IsScrubbing = scrubbing;
@@ -74,6 +84,8 @@ public sealed partial class PlayerView : UserControl
         {
             if (_viewUnloaded) return;
             _viewUnloaded = true;
+            _saveTimer.Stop();
+            SaveProgress();
             System.Threading.Tasks.Task.Run(() => _thumbs.Dispose());
         };
         Vm.PropertyChanged += OnVmPropertyChanged;
@@ -146,6 +158,7 @@ public sealed partial class PlayerView : UserControl
         else if (e.PropertyName == nameof(PlayerViewModel.Duration))
         {
             UpdateSeekChapters(); // chapter ticks are positioned by time/duration
+            TryResume();
         }
     }
 
@@ -331,7 +344,36 @@ public sealed partial class PlayerView : UserControl
             FitToVideoRequested?.Invoke(this, (Vm.VideoWidth, Vm.VideoHeight));
     }
 
-    private void OnAddBookmarkClick(object sender, RoutedEventArgs e) => ShowToast("Bookmark added"); // persisted bookmarks: TODO
+    private void OnAddBookmarkClick(object sender, RoutedEventArgs e)
+    {
+        if (_currentPath is { } path && Vm.HasMedia && _history.AddBookmark(path, Vm.Position))
+            ShowToast($"Bookmark added at {FormatPreviewTime(Vm.Position)}");
+    }
+
+    /// <summary>Persist the current file's resume position. Safe to call any time (no-op without media).</summary>
+    public void SaveProgress()
+    {
+        if (_currentPath is { } path && Vm.HasMedia && Vm.Duration > 0)
+        {
+            // Near-EOF counts as completed: store 0 so it neither auto-resumes nor lingers half-watched.
+            double position = Vm.Position < Vm.Duration - 30 ? Vm.Position : 0;
+            _history.Record(path, position, Vm.Duration);
+        }
+    }
+
+    private void TryResume()
+    {
+        if (_resumeTarget <= 0 || Vm.Duration <= 0)
+            return;
+        double target = _resumeTarget;
+        _resumeTarget = -1; // apply once per open
+        // PRD: skip resume when < 5% watched or within 30s of the end.
+        if (target > Vm.Duration * 0.05 && target < Vm.Duration - 30)
+        {
+            Vm.SeekToFraction(target / Vm.Duration);
+            ShowToast($"Resumed at {FormatPreviewTime(target)}");
+        }
+    }
 
     // ---- media info (design band 13: Streams) ----
 
@@ -579,8 +621,11 @@ public sealed partial class PlayerView : UserControl
     {
         try
         {
+            SaveProgress();        // persist the outgoing file's position before we replace it
             Video.Open(pathOrUrl); // may throw on engine-init failure — do this before mutating UI state
             Vm.OnOpening();        // load accepted: clear the prior file's playhead/duration/chapter/HasMedia
+            _currentPath = pathOrUrl;
+            _resumeTarget = _history.Get(pathOrUrl)?.Position ?? -1; // resume applied on the first Duration
             RevealChrome();        // show the controls when a file opens (drag-drop / picker)
             _ = _thumbs.OpenAsync(pathOrUrl); // arm the seek-preview engine for this file (fire-and-forget)
         }

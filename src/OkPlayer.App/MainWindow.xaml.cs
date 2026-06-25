@@ -33,6 +33,7 @@ public sealed partial class MainWindow : Window
         Player.ExitFullscreenRequested += (_, _) => SetFullscreen(false);
         Player.OpenFileRequested += async (_, _) => await OpenFileAsync();
         Player.FitToVideoRequested += (_, size) => FitToVideo(size.Width, size.Height);
+        Closed += (_, _) => Player.SaveProgress(); // persist resume position on app close
     }
 
     private void SetCaptionForVideo(bool overVideo)
