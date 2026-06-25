@@ -140,7 +140,9 @@ public sealed partial class SettingsWindow : Window
 
     private FrameworkElement KeyChip(string key) => new Border
     {
-        Background = new SolidColorBrush(Color.FromArgb(0x0D, 0, 0, 0)),
+        // a faint dark fill on light, a faint light fill on dark — 5% black vanishes on dark Mica
+        Background = new SolidColorBrush((Content as FrameworkElement)?.ActualTheme == ElementTheme.Dark
+            ? Color.FromArgb(0x18, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x0D, 0, 0, 0)),
         BorderBrush = Res("OkStrokeBrush", new SolidColorBrush(Color.FromArgb(0x14, 0, 0, 0))),
         BorderThickness = new Thickness(1),
         CornerRadius = new CornerRadius(5),
@@ -412,8 +414,17 @@ public sealed partial class SettingsWindow : Window
 
     private void StyleSegment(Button b, bool selected)
     {
-        b.Background = selected ? Res("CardBackgroundFillColorDefaultBrush", new SolidColorBrush(Colors.White)) : Transparent;
-        b.Foreground = selected ? AccentText : Res("OkTextBodyBrush", new SolidColorBrush(Color.FromArgb(0xDE, 0, 0, 0)));
+        // The selected "pill" must lift off the track in both themes: a light card on light Mica, a
+        // translucent-white pill on dark (the system card fill is too faint there). Pair it with the
+        // theme-aware accent text so the label stays readable (the light-mode dark teal is unreadable on dark).
+        bool dark = b.ActualTheme == ElementTheme.Dark;
+        b.Background = selected
+            ? (dark ? new SolidColorBrush(Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF))
+                    : Res("CardBackgroundFillColorDefaultBrush", new SolidColorBrush(Colors.White)))
+            : Transparent;
+        b.Foreground = selected
+            ? Res("OkAccentTextBrush", AccentText)
+            : Res("OkTextBodyBrush", new SolidColorBrush(Color.FromArgb(0xDE, 0, 0, 0)));
         b.FontWeight = selected ? FontWeights.SemiBold : FontWeights.Normal;
     }
 
