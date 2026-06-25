@@ -7,6 +7,7 @@
     <RootNamespace>OkPlayer.App</RootNamespace>
     <AssemblyName>OkPlayer</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\OkPlayer.ico</ApplicationIcon>
 
     <!-- Unpackaged. Debug is framework-dependent for the dev loop (the WindowsAppRuntime is installed);
          Release is self-contained for distribution — bundles .NET + the Windows App SDK so the target
@@ -56,6 +57,10 @@
     <Content Include="$(MSBuildThisFileDirectory)..\..\native\libmpv\libmpv-2.dll"
              Condition="Exists('$(MSBuildThisFileDirectory)..\..\native\libmpv\libmpv-2.dll')">
       <Link>libmpv-2.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <!-- ship the icon next to the exe too so AppWindow.SetIcon can set the window/taskbar icon at runtime -->
+    <Content Include="Assets\OkPlayer.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
