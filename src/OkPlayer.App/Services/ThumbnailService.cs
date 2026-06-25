@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using OkPlayer.Mpv;
@@ -9,9 +10,9 @@ namespace OkPlayer.App.Services;
 
 /// <summary>
 /// Generates frame thumbnails on a dedicated decode-only libmpv instance (vo=null), so the main
-/// playback engine is never disturbed. Each thumbnail is written to a temp PNG named by its open
-/// generation + time bucket (so repeats are cache hits and a new file can never serve a prior
-/// file's frame) and returned as a path the UI can load. One frame is produced at a time.
+/// playback engine is never disturbed. Each thumbnail is written to a temp PNG named by a per-file key
+/// (path + last-write + size) and time bucket, so a reopened file serves instant cache hits across loads
+/// and sessions while two files never collide. A soft size cap is pruned on open. One frame at a time.
 /// </summary>
 public sealed class ThumbnailService : IDisposable
 {
@@ -23,7 +24,8 @@ public sealed class ThumbnailService : IDisposable
     private volatile bool _fileReady;
     private volatile bool _seekPending;                    // true only while a seek's PlaybackRestart is expected
     private volatile bool _disposed;
-    private int _generation;                               // bumps per OpenAsync; namespaces the cache + bails stale requests
+    private int _generation;                               // bumps per OpenAsync; bails stale requests
+    private string _fileKey = "0";                         // per-file cache namespace (path+mtime+size hash)
 
     public ThumbnailService()
     {
@@ -47,8 +49,9 @@ public sealed class ThumbnailService : IDisposable
             if (_disposed)
                 return false; // disposed while queued — don't spin up a new engine
             int gen = ++_generation;
+            _fileKey = ComputeFileKey(path);
             TeardownEngine();
-            ClearCache();
+            PruneCache(); // bound the cache; do NOT wipe it — entries are now keyed per file and reused across loads
 
             var mpv = new MpvContext();
             mpv.SetOption("vo", "null");                 // decode only, no window
@@ -95,10 +98,11 @@ public sealed class ThumbnailService : IDisposable
         if (_disposed || !_fileReady)
             return null;
         int gen = _generation;
+        string fileKey = _fileKey; // capture together so a mid-call file switch is caught by the gen check below
         long bucketSec = (long)Math.Max(0, timeSeconds); // 1-second thumbnail granularity
-        string file = Path.Combine(_tempDir, $"g{gen}_t{bucketSec}.png");
+        string file = Path.Combine(_tempDir, $"{fileKey}_t{bucketSec}.png");
         if (File.Exists(file))
-            return file; // cache hit — no seek
+            return file; // cache hit — no seek (persists across loads and sessions: same file -> same key)
 
         try { await _gate.WaitAsync().ConfigureAwait(false); }
         catch (ObjectDisposedException) { return null; } // disposed while queued
@@ -160,13 +164,29 @@ public sealed class ThumbnailService : IDisposable
         }
     }
 
-    private void ClearCache()
+    private static string ComputeFileKey(string path)
+    {
+        // A stable per-file namespace: path + last-write + size. The same file reuses its thumbnails across
+        // loads and sessions, an edited file invalidates them, and two files never collide.
+        string raw;
+        try { var fi = new FileInfo(path); raw = $"{path}|{fi.LastWriteTimeUtc.Ticks}|{fi.Length}"; }
+        catch { raw = path; } // URL / unstattable: key on the path alone
+        byte[] hash = System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(raw));
+        return Convert.ToHexString(hash)[..16].ToLowerInvariant();
+    }
+
+    /// <summary>Keep the on-disk thumbnail cache under a soft size cap, deleting the oldest files first. Runs
+    /// on open instead of wiping the cache, so a reopened file still serves instant cache hits.</summary>
+    private void PruneCache(long maxBytes = 300L * 1024 * 1024)
     {
         try
         {
-            foreach (string f in Directory.EnumerateFiles(_tempDir, "*.png"))
+            long total = 0;
+            foreach (var f in new DirectoryInfo(_tempDir).GetFiles("*.png").OrderByDescending(f => f.LastWriteTimeUtc))
             {
-                try { File.Delete(f); } catch { /* locked — harmless: filenames are generation-namespaced */ }
+                total += f.Length;
+                if (total > maxBytes)
+                    try { f.Delete(); } catch { /* locked — fine, it's a cache */ }
             }
         }
         catch { /* best effort */ }
