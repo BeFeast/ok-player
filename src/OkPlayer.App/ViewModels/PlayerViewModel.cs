@@ -36,6 +36,8 @@ public partial class PlayerViewModel : ObservableObject
     [ObservableProperty] private bool _hasMedia;
     [ObservableProperty] private bool _subtitleOff = true;
     [ObservableProperty] private int _subDelayMs;
+    [ObservableProperty] private double _subScale = 1.0;
+    public string SubScaleText => $"{SubScale * 100:0}%";
     [ObservableProperty] private int _currentChapterIndex = -1;
     [ObservableProperty] private int _videoWidth;   // mpv dwidth (display resolution)
     [ObservableProperty] private int _videoHeight;  // mpv dheight
@@ -83,6 +85,7 @@ public partial class PlayerViewModel : ObservableObject
     partial void OnShowRemainingChanged(bool value) => OnPropertyChanged(nameof(TrailingTimeText));
     partial void OnSpeedChanged(double value) => OnPropertyChanged(nameof(SpeedText));
     partial void OnSubDelayMsChanged(int value) => OnPropertyChanged(nameof(SubDelayText));
+    partial void OnSubScaleChanged(double value) => OnPropertyChanged(nameof(SubScaleText));
 
     partial void OnCurrentChapterIndexChanged(int value) => ApplyCurrentChapterFlags();
 
@@ -107,7 +110,7 @@ public partial class PlayerViewModel : ObservableObject
             ("time-pos", MpvFormat.Double), ("duration", MpvFormat.Double), ("pause", MpvFormat.Flag),
             ("volume", MpvFormat.Double), ("mute", MpvFormat.Flag), ("speed", MpvFormat.Double),
             ("media-title", MpvFormat.String), ("sid", MpvFormat.String), ("aid", MpvFormat.String),
-            ("sub-delay", MpvFormat.Double), ("chapter", MpvFormat.Int64),
+            ("sub-delay", MpvFormat.Double), ("sub-scale", MpvFormat.Double), ("chapter", MpvFormat.Int64),
             ("dwidth", MpvFormat.Int64), ("dheight", MpvFormat.Int64),
             ("demuxer-cache-time", MpvFormat.Double),
         })
@@ -213,6 +216,7 @@ public partial class PlayerViewModel : ObservableObject
                 case "speed": if (value is double sp) Speed = sp; break;
                 case "media-title": MediaTitle = value as string ?? string.Empty; break;
                 case "sub-delay": if (value is double sd) SubDelayMs = (int)System.Math.Round(sd * 1000); break;
+                case "sub-scale": if (value is double ss) SubScale = ss; break;
                 case "chapter": CurrentChapterIndex = value is long ch ? (int)ch : -1; break;
                 case "dwidth": if (value is long dw) VideoWidth = (int)dw; break;
                 case "dheight": if (value is long dh) VideoHeight = (int)dh; break;
@@ -409,6 +413,12 @@ public partial class PlayerViewModel : ObservableObject
     {
         if (CmdOk("add", "sub-delay", Inv(ms / 1000.0)))
             ToastRequested?.Invoke($"Subtitle delay {SubDelayMs + ms:+0;-0;0} ms");
+    }
+
+    public void NudgeSubScale(double delta)
+    {
+        if (CmdOk("add", "sub-scale", Inv(delta)))
+            ToastRequested?.Invoke($"Subtitle size {System.Math.Clamp(SubScale + delta, 0.2, 4.0) * 100:0}%");
     }
 
     public void ToggleTimeLabel() => ShowRemaining = !ShowRemaining;

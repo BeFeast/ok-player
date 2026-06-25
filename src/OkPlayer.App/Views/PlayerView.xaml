@@ -259,12 +259,19 @@
                                     <Border Height="1" Margin="8,4" Background="{ThemeResource OkStrokeBrush}" />
                                     <Button Style="{StaticResource OkSwitcherRowStyle}" IsEnabled="False"
                                             Foreground="{ThemeResource OkAccentTextBrush}" Content="Generate subtitles&#x2026;  (Scribe)" />
-                                    <StackPanel Orientation="Horizontal" Spacing="8" Margin="10,6,10,4">
-                                        <TextBlock Text="Delay" VerticalAlignment="Center" FontSize="12.5" Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                                    <StackPanel Orientation="Horizontal" Spacing="8" Margin="10,6,10,2">
+                                        <TextBlock Text="Delay" VerticalAlignment="Center" MinWidth="40" FontSize="12.5" Foreground="{ThemeResource OkTextSecondaryBrush}" />
                                         <Button Style="{StaticResource OkSwitcherRowStyle}" Padding="9,3" FontFamily="Segoe UI" FontSize="14" Content="-" Click="OnSubDelayMinus" />
                                         <TextBlock Text="{x:Bind Vm.SubDelayText, Mode=OneWay}" VerticalAlignment="Center" MinWidth="56" TextAlignment="Center"
                                                    FontSize="12.5" FontWeight="SemiBold" Foreground="{ThemeResource OkAccentTextBrush}" />
                                         <Button Style="{StaticResource OkSwitcherRowStyle}" Padding="9,3" FontFamily="Segoe UI" FontSize="14" Content="+" Click="OnSubDelayPlus" />
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Spacing="8" Margin="10,2,10,4">
+                                        <TextBlock Text="Size" VerticalAlignment="Center" MinWidth="40" FontSize="12.5" Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                                        <Button Style="{StaticResource OkSwitcherRowStyle}" Padding="9,3" FontFamily="Segoe UI" FontSize="14" Content="-" Click="OnSubScaleMinus" />
+                                        <TextBlock Text="{x:Bind Vm.SubScaleText, Mode=OneWay}" VerticalAlignment="Center" MinWidth="56" TextAlignment="Center"
+                                                   FontSize="12.5" FontWeight="SemiBold" Foreground="{ThemeResource OkAccentTextBrush}" />
+                                        <Button Style="{StaticResource OkSwitcherRowStyle}" Padding="9,3" FontFamily="Segoe UI" FontSize="14" Content="+" Click="OnSubScalePlus" />
                                     </StackPanel>
                                 </StackPanel>
                             </Flyout>
