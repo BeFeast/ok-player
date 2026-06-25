@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Input;
+using OkPlayer.Core;
 using Windows.Storage.Pickers;
 
 namespace OkPlayer.App;
@@ -47,6 +48,7 @@ public sealed partial class MainWindow : Window
             surface.AddHandler(UIElement.PointerReleasedEvent, new PointerEventHandler(OnBackdropPointerReleased), true);
             surface.AddHandler(UIElement.PointerCaptureLostEvent, new PointerEventHandler(OnBackdropPointerCaptureLost), true);
         }
+        HookAspectResize(); // hold Shift while dragging an edge to keep the video's aspect
         Closed += (_, _) =>
         {
             Player.SaveProgress();                 // persist resume position on app close
@@ -238,6 +240,51 @@ public sealed partial class MainWindow : Window
     {
         _bgDragArmed = false;
         _bgDragging = false;
+    }
+
+    // ---- aspect-locked resize: hold Shift while dragging a window edge to keep the video's aspect ----
+
+    private const uint WM_SIZING = 0x0214;
+    private const int VK_SHIFT = 0x10;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int vKey);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hWnd, out NativeRect lpRect);
+    [System.Runtime.InteropServices.DllImport("comctl32.dll", SetLastError = true)]
+    private static extern bool SetWindowSubclass(IntPtr hWnd, SubclassProc proc, IntPtr id, IntPtr data);
+    [System.Runtime.InteropServices.DllImport("comctl32.dll")]
+    private static extern IntPtr DefSubclassProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+    private delegate IntPtr SubclassProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam, IntPtr id, IntPtr data);
+
+    private SubclassProc? _aspectSubclass; // hold a reference so the GC can't collect the native callback
+
+    private void HookAspectResize()
+    {
+        _aspectSubclass = AspectResizeWndProc;
+        SetWindowSubclass(WinRT.Interop.WindowNative.GetWindowHandle(this), _aspectSubclass, (IntPtr)1, IntPtr.Zero);
+    }
+
+    /// <summary>WM_SIZING hook: while Shift is held and a video is loaded, snap the proposed window rect so
+    /// the client keeps the video's aspect (no letterboxing). Everything else chains to the default proc.</summary>
+    private IntPtr AspectResizeWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam, IntPtr id, IntPtr data)
+    {
+        if (msg == WM_SIZING && !_fullscreen && (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0)
+        {
+            double aspect = Player.VideoAspect;
+            if (aspect > 0 && GetClientRect(hWnd, out var cr) && GetWindowRect(hWnd, out var wr))
+            {
+                int frameW = (wr.Right - wr.Left) - (cr.Right - cr.Left);
+                int frameH = (wr.Bottom - wr.Top) - (cr.Bottom - cr.Top);
+                var rect = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeRect>(lParam);
+                var (l, t, r, b) = AspectResize.Constrain(rect.Left, rect.Top, rect.Right, rect.Bottom,
+                    (int)wParam, aspect, frameW, frameH);
+                rect.Left = l; rect.Top = t; rect.Right = r; rect.Bottom = b;
+                System.Runtime.InteropServices.Marshal.StructureToPtr(rect, lParam, false);
+                return (IntPtr)1; // TRUE: we adjusted the proposed rect
+            }
+        }
+        return DefSubclassProc(hWnd, msg, wParam, lParam);
     }
 
     private async Task OpenFileAsync()
