@@ -1039,6 +1039,13 @@ public sealed partial class PlayerView : UserControl
     /// surfaces a toast (a genuine decode/format failure later arrives as an EndFile(Error) toast).</summary>
     public void OpenMedia(string pathOrUrl)
     {
+        if (!pathOrUrl.Contains("://") &&
+            (pathOrUrl.EndsWith(".m3u", StringComparison.OrdinalIgnoreCase) ||
+             pathOrUrl.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase)))
+        {
+            OpenM3u(pathOrUrl); // a LOCAL .m3u playlist file (an HLS .m3u8 URL is a live stream — mpv plays it)
+            return;
+        }
         try
         {
             SaveProgress();        // persist the outgoing file's position before we replace it
@@ -1077,19 +1084,26 @@ public sealed partial class PlayerView : UserControl
 
     private void SetPlaylistFor(string pathOrUrl)
     {
-        if (pathOrUrl.Contains("://"))
+        bool isUrl = pathOrUrl.Contains("://");
+        string key = pathOrUrl; // URLs match by the raw string; local files by their absolute path
+        if (!isUrl)
         {
-            _playlist = null; // network/stream URL — no folder to enumerate
+            try { key = System.IO.Path.GetFullPath(pathOrUrl); } // EnumerateFiles yields absolute paths, so the
+            catch { _playlist = null; return; }                  // cursor only matches if `current` is absolute too
+        }
+        // An entry we already have — a folder sibling, or a file/URL from a loaded .m3u — keeps the list and
+        // just moves the cursor. Crucially this runs BEFORE the URL bail-out, so a URL entry of an .m3u
+        // playlist doesn't wipe the playlist.
+        if (_playlist?.SetCurrent(key) == true)
+            return;
+        if (isUrl)
+        {
+            _playlist = null; // a lone URL with no playlist context — single stream
             return;
         }
-        string full;
-        try { full = System.IO.Path.GetFullPath(pathOrUrl); } // EnumerateFiles yields absolute paths, so the
-        catch { _playlist = null; return; }                    // cursor only matches if `current` is absolute too
-        if (_playlist?.SetCurrent(full) == true)
-            return; // a sibling we already know — keep the existing order, just move the cursor
         try
         {
-            string? dir = System.IO.Path.GetDirectoryName(full);
+            string? dir = System.IO.Path.GetDirectoryName(key);
             if (dir is null)
             {
                 _playlist = null;
@@ -1099,7 +1113,7 @@ public sealed partial class PlayerView : UserControl
             foreach (var f in System.IO.Directory.EnumerateFiles(dir))
                 if (OkPlayer.Core.MediaFormats.IsMedia(f))
                     siblings.Add(f);
-            _playlist = new OkPlayer.Core.Playlist(siblings, full) { Repeat = _repeat, Shuffle = _shuffle };
+            _playlist = new OkPlayer.Core.Playlist(siblings, key) { Repeat = _repeat, Shuffle = _shuffle };
         }
         catch
         {
@@ -1178,6 +1192,42 @@ public sealed partial class PlayerView : UserControl
     {
         _autoAdvance = !_autoAdvance;
         RefreshModeButtons();
+    }
+
+    /// <summary>Raised with the playlist's `.m3u` text when the user taps Save; MainWindow runs the save picker.</summary>
+    public event EventHandler<string>? SavePlaylistRequested;
+
+    private void OnSavePlaylistClick(object sender, RoutedEventArgs e)
+    {
+        if (_playlist is { Count: > 0 })
+            SavePlaylistRequested?.Invoke(this, OkPlayer.Core.M3u.Write(_playlist.Items));
+    }
+
+    /// <summary>Open a `.m3u` as the active playlist: parse it (order preserved), keep the entries that exist
+    /// or are URLs, and play the first.</summary>
+    private void OpenM3u(string m3uPath)
+    {
+        try
+        {
+            var entries = OkPlayer.Core.M3u.Parse(System.IO.File.ReadAllText(m3uPath), System.IO.Path.GetDirectoryName(m3uPath));
+            var valid = new System.Collections.Generic.List<string>();
+            foreach (var entry in entries)
+                if (entry.Contains("://") || System.IO.File.Exists(entry))
+                    valid.Add(entry);
+            if (valid.Count == 0)
+            {
+                ShowToast("Empty playlist");
+                return;
+            }
+            _shuffle = false; // an .m3u defines its own order — honor it rather than shuffle it away
+            _playlist = new OkPlayer.Core.Playlist(valid, valid[0], sort: false) { Repeat = _repeat };
+            OpenMedia(valid[0]); // plays; UpdatePlaylist's SetCurrent keeps this list rather than the folder
+            Vm.Play();
+        }
+        catch
+        {
+            ShowToast("Couldn't open this playlist");
+        }
     }
 
     private void OnChaptersTab(object sender, TappedRoutedEventArgs e) => SetPanelTab(false);

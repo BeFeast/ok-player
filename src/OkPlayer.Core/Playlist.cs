@@ -24,14 +24,16 @@ public sealed class Playlist
     private readonly Random _rng;
     private bool _shuffle;
 
-    /// <summary>Build a playlist from a set of paths (natural order), cursor on <paramref name="current"/>.</summary>
-    public Playlist(IEnumerable<string> items, string current) : this(items, current, new Random()) { }
+    /// <summary>Build a playlist from a set of paths, cursor on <paramref name="current"/>. <paramref name="sort"/>
+    /// natural-sorts the items (the folder case); pass false to keep the given order (an .m3u's order matters).</summary>
+    public Playlist(IEnumerable<string> items, string current, bool sort = true) : this(items, current, new Random(), sort) { }
 
     // Seam for deterministic shuffle tests.
-    internal Playlist(IEnumerable<string> items, string current, Random rng)
+    internal Playlist(IEnumerable<string> items, string current, Random rng, bool sort = true)
     {
         _items = new List<string>(items);
-        _items.Sort(NaturalComparer.Instance);
+        if (sort)
+            _items.Sort(NaturalComparer.Instance);
         _rng = rng;
         CurrentIndex = IndexOf(current);
         _order = new List<int>();

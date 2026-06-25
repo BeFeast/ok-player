@@ -33,6 +33,7 @@ public sealed partial class MainWindow : Window
         Player.OpenFileRequested += async (_, _) => await OpenFileAsync();
         Player.FitToVideoRequested += (_, size) => FitToVideo(size.Width, size.Height);
         Player.SettingsRequested += (_, _) => OpenSettings();
+        Player.SavePlaylistRequested += async (_, content) => await SavePlaylistAsync(content);
         // Drag the window by the video / welcome backdrop, like the title bar. handledEventsToo=true so the
         // ScrollViewer's own move handling can't swallow the drag.
         foreach (var surface in Player.WindowDragSurfaces)
@@ -288,6 +289,8 @@ public sealed partial class MainWindow : Window
         WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
         foreach (var ext in MediaFormats.Extensions)
             picker.FileTypeFilter.Add(ext);
+        picker.FileTypeFilter.Add(".m3u");  // open a saved playlist
+        picker.FileTypeFilter.Add(".m3u8");
 
         try
         {
@@ -298,6 +301,27 @@ public sealed partial class MainWindow : Window
         catch (Exception)
         {
             // Picker failure is non-fatal; swallow so the async-void caller can't crash the app.
+        }
+    }
+
+    private async Task SavePlaylistAsync(string m3uContent)
+    {
+        var picker = new FileSavePicker
+        {
+            SuggestedStartLocation = PickerLocationId.VideosLibrary,
+            SuggestedFileName = "playlist",
+        };
+        picker.FileTypeChoices.Add("Playlist", new System.Collections.Generic.List<string> { ".m3u" });
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+        try
+        {
+            var file = await picker.PickSaveFileAsync();
+            if (file is not null)
+                await Windows.Storage.FileIO.WriteTextAsync(file, m3uContent);
+        }
+        catch (Exception)
+        {
+            // Save failure is non-fatal.
         }
     }
 }
