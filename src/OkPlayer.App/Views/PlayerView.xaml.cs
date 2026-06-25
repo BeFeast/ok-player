@@ -234,6 +234,7 @@ public sealed partial class PlayerView : UserControl
             TitleChrome.IsHitTestVisible = true;
             BottomChrome.IsHitTestVisible = true;
             ChromeShowSb.Begin();
+            Vm.SetSubtitleMargin(true); // lift subtitles above the OSC
         }
         ResetIdleTimer();
     }
@@ -255,6 +256,7 @@ public sealed partial class PlayerView : UserControl
         TitleChrome.IsHitTestVisible = false;
         BottomChrome.IsHitTestVisible = false;
         ChromeHideSb.Begin();
+        Vm.SetSubtitleMargin(false); // drop subtitles back toward the bottom
     }
 
     private void ResetIdleTimer()

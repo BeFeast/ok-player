@@ -410,6 +410,9 @@ public partial class PlayerViewModel : ObservableObject
 
     public void ToggleTimeLabel() => ShowRemaining = !ShowRemaining;
 
+    /// <summary>Lift subtitles above the OSC while the chrome is visible (design: 56px ↔ 128px baseline).</summary>
+    public void SetSubtitleMargin(bool chromeVisible) => Set("sub-margin-y", chromeVisible ? "128" : "56");
+
     private static string FormatTime(double seconds)
     {
         if (double.IsNaN(seconds) || seconds < 0)
