@@ -25,8 +25,6 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
     private bool _renderingHooked;
     private volatile bool _forceRender;
     private TimeSpan _lastRenderTime = TimeSpan.FromSeconds(-1);
-    private int _screenshotsInFlight;  // >0 while any screenshot is being grabbed/encoded — Draw() yields then
-    private long _screenshotDeadline;  // safety: resume rendering if a reply is ever lost
     private const ulong ScreenshotReply = 1;
 
     /// <summary>Raised (on the event thread) when a screenshot has finished saving successfully.</summary>
@@ -200,16 +198,6 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
     {
         if (_swapChain == null || _render == null)
             return;
-        // A screenshot grab/encode (esp. 4K/HDR) briefly holds mpv busy; rendering on the UI thread would
-        // block on it and freeze the app. Resume only when the screenshot's reply clears the counter — never
-        // merely because time passed. The deadline is a last-resort watchdog (far beyond any real grab) that
-        // recovers from a truly lost reply, not part of the normal resume condition.
-        if (System.Threading.Volatile.Read(ref _screenshotsInFlight) > 0)
-        {
-            if (System.Environment.TickCount64 >= System.Threading.Volatile.Read(ref _screenshotDeadline))
-                System.Threading.Volatile.Write(ref _screenshotsInFlight, 0); // watchdog: a reply was lost
-            return;
-        }
 
         bool hasFrame = (_render.Update() & MpvRenderUpdateFlag.Frame) != 0;
         if (!hasFrame && !_forceRender)
@@ -239,14 +227,14 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
     public void Play() => _mpv?.SetProperty("pause", false);
     public void Pause() => _mpv?.SetProperty("pause", true);
 
-    /// <summary>Take a screenshot of the decoded frame ("video" mode) without ever stalling the UI: the
-    /// render loop yields until the async screenshot replies. Returns false if no engine is loaded.</summary>
+    /// <summary>Take a screenshot of the decoded frame ("video" mode). Fire-and-forget: the async command
+    /// runs while the render loop keeps driving the pipeline (a paused/yielded render with vo=libmpv would
+    /// starve the grab and it would never land), and ScreenshotSaved fires when the reply confirms success.
+    /// Returns false only if no engine is loaded.</summary>
     public bool Screenshot()
     {
         if (_mpv is not { } mpv)
             return false;
-        System.Threading.Interlocked.Increment(ref _screenshotsInFlight);
-        System.Threading.Volatile.Write(ref _screenshotDeadline, System.Environment.TickCount64 + 30000); // watchdog only
         try
         {
             mpv.CommandAsync(ScreenshotReply, "screenshot", "video");
@@ -254,17 +242,13 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
         }
         catch (MpvException)
         {
-            System.Threading.Interlocked.Decrement(ref _screenshotsInFlight);
             return false;
         }
     }
 
     private void OnCommandReply(ulong id, bool success)
     {
-        if (id != ScreenshotReply)
-            return;
-        System.Threading.Interlocked.Decrement(ref _screenshotsInFlight); // resume rendering once all shots finish
-        if (success)
+        if (id == ScreenshotReply && success)
             ScreenshotSaved?.Invoke(this, EventArgs.Empty);
     }
 
@@ -283,7 +267,6 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
             CompositionTarget.Rendering -= OnRendering; // stop the render loop before freeing resources
             _renderingHooked = false;
         }
-        System.Threading.Volatile.Write(ref _screenshotsInFlight, 0); // a torn-down engine can't deliver a reply
         _render?.Dispose();        // free the mpv render context (GL context still current)
         _render = null;
         _swapChain?.Dispose();     // release the swap chain COM object + GL framebuffer
