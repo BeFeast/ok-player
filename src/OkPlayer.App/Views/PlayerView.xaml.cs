@@ -49,6 +49,11 @@ public sealed partial class PlayerView : UserControl
     /// <summary>The auto-hiding top bar, used as the window's title-bar drag region.</summary>
     public FrameworkElement TitleBarElement => TitleChrome;
 
+    /// <summary>Backdrops that double as window-drag handles (the video plane and the welcome shell) — a
+    /// press-drag on empty space there moves the window like the title bar does, while a plain click still
+    /// falls through to play/pause (video) or the cards (welcome). MainWindow wires the actual move.</summary>
+    internal UIElement[] WindowDragSurfaces => new UIElement[] { Video, WelcomeCard };
+
     /// <summary>x:Bind helper: bool -> Visibility (for icon state toggles in XAML).</summary>
     public static Visibility VisIf(bool value) => value ? Visibility.Visible : Visibility.Collapsed;
 

@@ -2,6 +2,7 @@ using System;
 using System.Threading.Tasks;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Input;
 using Windows.Storage.Pickers;
 
 namespace OkPlayer.App;
@@ -37,6 +38,15 @@ public sealed partial class MainWindow : Window
         Player.OpenFileRequested += async (_, _) => await OpenFileAsync();
         Player.FitToVideoRequested += (_, size) => FitToVideo(size.Width, size.Height);
         Player.SettingsRequested += (_, _) => OpenSettings();
+        // Drag the window by the video / welcome backdrop, like the title bar. handledEventsToo=true so the
+        // ScrollViewer's own move handling can't swallow the drag.
+        foreach (var surface in Player.WindowDragSurfaces)
+        {
+            surface.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(OnBackdropPointerPressed), true);
+            surface.AddHandler(UIElement.PointerMovedEvent, new PointerEventHandler(OnBackdropPointerMoved), true);
+            surface.AddHandler(UIElement.PointerReleasedEvent, new PointerEventHandler(OnBackdropPointerReleased), true);
+            surface.AddHandler(UIElement.PointerCaptureLostEvent, new PointerEventHandler(OnBackdropPointerCaptureLost), true);
+        }
         Closed += (_, _) =>
         {
             Player.SaveProgress();                 // persist resume position on app close
@@ -168,6 +178,67 @@ public sealed partial class MainWindow : Window
     private static extern bool GetClientRect(IntPtr hWnd, out NativeRect lpRect);
 
     private struct NativeRect { public int Left, Top, Right, Bottom; }
+
+    // ---- drag the window by the video / welcome backdrop (any non-control area), like the title bar ----
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool GetCursorPos(out NativePoint p);
+    private struct NativePoint { public int X, Y; }
+
+    private bool _bgDragArmed, _bgDragging;
+    private NativePoint _bgCursor0;          // absolute cursor at press
+    private Windows.Graphics.PointInt32 _bgWin0; // window origin at press
+
+    private void OnBackdropPointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        // Full screen has no movable window; touch/pen should tap through, not drag.
+        if (_fullscreen || e.Pointer.PointerDeviceType != Microsoft.UI.Input.PointerDeviceType.Mouse)
+            return;
+        if (!e.GetCurrentPoint((UIElement)sender).Properties.IsLeftButtonPressed)
+            return;
+        GetCursorPos(out _bgCursor0);
+        _bgWin0 = AppWindow.Position;
+        _bgDragArmed = true;
+        _bgDragging = false;
+    }
+
+    private void OnBackdropPointerMoved(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_bgDragArmed)
+            return;
+        if (!e.GetCurrentPoint((UIElement)sender).Properties.IsLeftButtonPressed)
+        {
+            _bgDragArmed = false; // released somewhere we didn't see
+            return;
+        }
+        GetCursorPos(out var cur);
+        int dx = cur.X - _bgCursor0.X, dy = cur.Y - _bgCursor0.Y;
+        if (!_bgDragging && Math.Abs(dx) + Math.Abs(dy) > 4)
+        {
+            // Promote to a drag only past a small threshold, so a plain click still reaches play/pause.
+            _bgDragging = true;
+            ((UIElement)sender).CapturePointer(e.Pointer);
+        }
+        if (_bgDragging)
+            AppWindow.Move(new Windows.Graphics.PointInt32(_bgWin0.X + dx, _bgWin0.Y + dy));
+    }
+
+    private void OnBackdropPointerReleased(object sender, PointerRoutedEventArgs e)
+    {
+        if (_bgDragging)
+        {
+            ((UIElement)sender).ReleasePointerCapture(e.Pointer);
+            e.Handled = true; // a drag isn't a click — suppress the play/pause tap that would otherwise follow
+        }
+        _bgDragArmed = false;
+        _bgDragging = false;
+    }
+
+    private void OnBackdropPointerCaptureLost(object sender, PointerRoutedEventArgs e)
+    {
+        _bgDragArmed = false;
+        _bgDragging = false;
+    }
 
     private async Task OpenFileAsync()
     {
