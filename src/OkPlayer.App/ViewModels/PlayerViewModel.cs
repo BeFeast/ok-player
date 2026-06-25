@@ -83,6 +83,14 @@ public partial class PlayerViewModel : ObservableObject
     partial void OnShowRemainingChanged(bool value) => OnPropertyChanged(nameof(TrailingTimeText));
     partial void OnSpeedChanged(double value) => OnPropertyChanged(nameof(SpeedText));
     partial void OnSubDelayMsChanged(int value) => OnPropertyChanged(nameof(SubDelayText));
+
+    partial void OnCurrentChapterIndexChanged(int value) => ApplyCurrentChapterFlags();
+
+    private void ApplyCurrentChapterFlags()
+    {
+        for (int i = 0; i < Chapters.Count; i++)
+            Chapters[i].IsCurrent = i == CurrentChapterIndex;
+    }
     partial void OnVolumeChanged(double value)
     {
         OnPropertyChanged(nameof(VolumeText));
@@ -143,6 +151,7 @@ public partial class PlayerViewModel : ObservableObject
             if (CurrentChapterIndex >= Chapters.Count)
                 CurrentChapterIndex = -1; // a shorter/empty new file must not keep the prior index
             OnPropertyChanged(nameof(CurrentChapterIndex)); // re-sync the highlight after repopulation
+            ApplyCurrentChapterFlags(); // partial setter doesn't fire on the manual notify above
         });
     }
 
@@ -403,6 +412,9 @@ public partial class PlayerViewModel : ObservableObject
     }
 
     public void ToggleTimeLabel() => ShowRemaining = !ShowRemaining;
+
+    /// <summary>Lift subtitles above the OSC while the chrome is visible (design: 56px ↔ 128px baseline).</summary>
+    public void SetSubtitleMargin(bool chromeVisible) => Set("sub-margin-y", chromeVisible ? "128" : "56");
 
     private static string FormatTime(double seconds)
     {

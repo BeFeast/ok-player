@@ -294,35 +294,52 @@
             </Border>
         </Grid>
 
-        <!-- ===== seek hover frame-preview ===== -->
-        <Border x:Name="PreviewPanel" VerticalAlignment="Bottom" HorizontalAlignment="Left"
-                Margin="0,0,0,84" Opacity="0" IsHitTestVisible="False"
-                Background="#F00C0C0C" CornerRadius="9" Padding="5,5,5,4"
-                BorderThickness="1" BorderBrush="#26FFFFFF">
-            <Border.RenderTransform><TranslateTransform x:Name="PreviewTransform" /></Border.RenderTransform>
-            <StackPanel Spacing="4">
-                <Border x:Name="PreviewImageFrame" Width="168" Height="94" CornerRadius="5"
-                        Background="#FF000000" Visibility="Collapsed">
-                    <Image x:Name="PreviewImage" Stretch="UniformToFill" />
-                </Border>
-                <TextBlock x:Name="PreviewTime" Text="0:00" HorizontalAlignment="Center"
-                           Foreground="#F2FFFFFF" FontSize="12" FontWeight="SemiBold" />
-            </StackPanel>
-        </Border>
+        <!-- ===== seek hover frame-preview (design band 5: frame + timecode + chapter, downward pointer) ===== -->
+        <StackPanel x:Name="PreviewPanel" VerticalAlignment="Bottom" HorizontalAlignment="Left"
+                    Margin="0,0,0,80" Opacity="0" IsHitTestVisible="False">
+            <StackPanel.RenderTransform><TranslateTransform x:Name="PreviewTransform" /></StackPanel.RenderTransform>
+            <Border Width="158" CornerRadius="9" Background="#C7121215" BorderThickness="1" BorderBrush="#24FFFFFF">
+                <Border.Shadow><ThemeShadow /></Border.Shadow>
+                <StackPanel>
+                    <Border x:Name="PreviewImageFrame" Height="89" CornerRadius="8,8,0,0"
+                            Background="#FF000000" Visibility="Collapsed">
+                        <Image x:Name="PreviewImage" Stretch="UniformToFill" />
+                    </Border>
+                    <StackPanel Padding="9,6">
+                        <TextBlock x:Name="PreviewTime" Text="0:00" FontSize="12" FontWeight="SemiBold" Foreground="White" />
+                        <TextBlock x:Name="PreviewChapter" FontSize="10" Foreground="#A6FFFFFF" Margin="0,1,0,0"
+                                   TextTrimming="CharacterEllipsis" Visibility="Collapsed" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+            <Polygon Points="0,0 12,0 6,6" Fill="#C7121215" HorizontalAlignment="Center" />
+        </StackPanel>
 
-        <!-- ===== right-docked Chapters panel (slide-in Mica) ===== -->
+        <!-- ===== right-docked Chapters / Up Next panel (slide-in Mica, design band 6) ===== -->
         <Grid x:Name="ChaptersPanel" HorizontalAlignment="Right" Width="316" Opacity="0" Visibility="Collapsed"
               Background="{ThemeResource OkPanelOverVideoBrush}" BorderThickness="1,0,0,0" BorderBrush="{ThemeResource OkStrokeBrush}"
-              RowDefinitions="Auto,*,Auto">
+              RowDefinitions="Auto,Auto,*,Auto">
             <Grid.RenderTransform><TranslateTransform x:Name="PanelTransform" X="316" /></Grid.RenderTransform>
 
-            <Grid Grid.Row="0" Padding="16,14,10,10" ColumnDefinitions="*,Auto">
-                <TextBlock Text="Chapters" Style="{StaticResource OkTitleTextStyle}" VerticalAlignment="Center" />
+            <!-- segmented header (Chapters | Up Next) + close -->
+            <Grid Grid.Row="0" Padding="14,14,8,6" ColumnDefinitions="*,Auto">
+                <Border Background="#14000000" CornerRadius="8" Padding="3" HorizontalAlignment="Left">
+                    <StackPanel Orientation="Horizontal">
+                        <Border Background="{ThemeResource OkPopoverBrush}" CornerRadius="6" Padding="16,6">
+                            <TextBlock Text="Chapters" FontSize="12.5" FontWeight="SemiBold" Foreground="{ThemeResource OkAccentTextBrush}" />
+                        </Border>
+                        <TextBlock Text="Up Next" FontSize="12.5" Padding="16,6" VerticalAlignment="Center"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                    </StackPanel>
+                </Border>
                 <Button Grid.Column="1" Style="{StaticResource OkOscIconButtonStyle}" Content="&#xE711;"
                         Foreground="{ThemeResource OkTextSecondaryBrush}" Click="OnChaptersClick" ToolTipService.ToolTip="Close" />
             </Grid>
 
-            <ListView x:Name="ChapterList" Grid.Row="1" SelectionMode="Single" Padding="6,0"
+            <TextBlock x:Name="ChaptersSectionHeader" Grid.Row="1" Text="CHAPTERS" Margin="20,6,0,4"
+                       FontSize="11" FontWeight="SemiBold" CharacterSpacing="60" Foreground="{ThemeResource OkTextSecondaryBrush}" />
+
+            <ListView x:Name="ChapterList" Grid.Row="2" SelectionMode="Single" Padding="8,0"
                       ItemsSource="{x:Bind Vm.Chapters, Mode=OneWay}" SelectionChanged="OnChapterSelectionChanged">
                 <ListView.Resources>
                     <SolidColorBrush x:Key="ListViewItemBackgroundSelected" Color="#1F10938A" />
@@ -331,21 +348,28 @@
                 </ListView.Resources>
                 <ListView.ItemTemplate>
                     <DataTemplate x:DataType="vm:ChapterInfo">
-                        <Grid Padding="2,6" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
-                            <Border Grid.Column="0" Width="56" Height="32" CornerRadius="4" Background="{ThemeResource OkSubtleFillStrongBrush}">
+                        <Grid Padding="0,5" ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="10">
+                            <Border Grid.Column="0" Width="3" CornerRadius="2" Height="34"
+                                    Background="{ThemeResource OkAccentRailBrush}" Visibility="{x:Bind CurrentBarVisibility, Mode=OneWay}" />
+                            <Border Grid.Column="1" Width="56" Height="32" CornerRadius="4" Background="{ThemeResource OkSubtleFillStrongBrush}">
                                 <Image Source="{x:Bind Thumbnail, Mode=OneWay}" Stretch="UniformToFill" />
                             </Border>
-                            <TextBlock Grid.Column="1" Text="{x:Bind Title}" VerticalAlignment="Center"
+                            <TextBlock Grid.Column="2" Text="{x:Bind Title}" VerticalAlignment="Center"
                                        TextTrimming="CharacterEllipsis" Style="{StaticResource OkBodyTextStyle}" />
-                            <TextBlock Grid.Column="2" Text="{x:Bind TimeText}" VerticalAlignment="Center" Style="{StaticResource OkSmallTextStyle}" />
+                            <TextBlock Grid.Column="3" Text="{x:Bind TimeText}" VerticalAlignment="Center" Style="{StaticResource OkSmallTextStyle}" />
                         </Grid>
                     </DataTemplate>
                 </ListView.ItemTemplate>
             </ListView>
 
-            <Border Grid.Row="2" Padding="14,10" BorderThickness="0,1,0,0" BorderBrush="{ThemeResource OkStrokeBrush}">
-                <TextBlock x:Name="ChaptersEmpty" Text="No chapters in this file." HorizontalAlignment="Center"
-                           Style="{StaticResource OkSmallTextStyle}" />
+            <Border Grid.Row="3" Padding="14,10" BorderThickness="0,1,0,0" BorderBrush="{ThemeResource OkStrokeBrush}">
+                <StackPanel Spacing="8">
+                    <TextBlock x:Name="ChaptersEmpty" Text="No chapters in this file." HorizontalAlignment="Center"
+                               Style="{StaticResource OkSmallTextStyle}" />
+                    <Button Click="OnAddBookmarkClick" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                            Background="{ThemeResource OkAccentBrush}" Foreground="White" CornerRadius="7" Padding="9"
+                            FontSize="12.5" FontWeight="SemiBold" Content="Bookmark here" />
+                </StackPanel>
             </Border>
         </Grid>
 
