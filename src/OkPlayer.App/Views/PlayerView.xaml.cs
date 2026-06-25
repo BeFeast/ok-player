@@ -1039,6 +1039,12 @@ public sealed partial class PlayerView : UserControl
     /// surfaces a toast (a genuine decode/format failure later arrives as an EndFile(Error) toast).</summary>
     public void OpenMedia(string pathOrUrl)
     {
+        if (pathOrUrl.EndsWith(".m3u", StringComparison.OrdinalIgnoreCase) ||
+            pathOrUrl.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase))
+        {
+            OpenM3u(pathOrUrl);
+            return;
+        }
         try
         {
             SaveProgress();        // persist the outgoing file's position before we replace it
@@ -1178,6 +1184,41 @@ public sealed partial class PlayerView : UserControl
     {
         _autoAdvance = !_autoAdvance;
         RefreshModeButtons();
+    }
+
+    /// <summary>Raised with the playlist's `.m3u` text when the user taps Save; MainWindow runs the save picker.</summary>
+    public event EventHandler<string>? SavePlaylistRequested;
+
+    private void OnSavePlaylistClick(object sender, RoutedEventArgs e)
+    {
+        if (_playlist is { Count: > 0 })
+            SavePlaylistRequested?.Invoke(this, OkPlayer.Core.M3u.Write(_playlist.Items));
+    }
+
+    /// <summary>Open a `.m3u` as the active playlist: parse it (order preserved), keep the entries that exist
+    /// or are URLs, and play the first.</summary>
+    private void OpenM3u(string m3uPath)
+    {
+        try
+        {
+            var entries = OkPlayer.Core.M3u.Parse(System.IO.File.ReadAllText(m3uPath), System.IO.Path.GetDirectoryName(m3uPath));
+            var valid = new System.Collections.Generic.List<string>();
+            foreach (var entry in entries)
+                if (entry.Contains("://") || System.IO.File.Exists(entry))
+                    valid.Add(entry);
+            if (valid.Count == 0)
+            {
+                ShowToast("Empty playlist");
+                return;
+            }
+            _playlist = new OkPlayer.Core.Playlist(valid, valid[0], sort: false) { Repeat = _repeat, Shuffle = _shuffle };
+            OpenMedia(valid[0]); // plays; UpdatePlaylist's SetCurrent keeps this list rather than the folder
+            Vm.Play();
+        }
+        catch
+        {
+            ShowToast("Couldn't open this playlist");
+        }
     }
 
     private void OnChaptersTab(object sender, TappedRoutedEventArgs e) => SetPanelTab(false);

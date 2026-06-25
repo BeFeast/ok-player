@@ -547,20 +547,27 @@
                 <!-- footer: play-mode toggles (active = teal accent; SetPanelTab/RefreshModeButtons set colours) -->
                 <Border Grid.Row="3" BorderThickness="0,1,0,0" BorderBrush="{ThemeResource OkStrokeBrush}"
                         Padding="2,8,0,0" Margin="0,8,0,0">
-                    <StackPanel Orientation="Horizontal" Spacing="2">
-                        <Button x:Name="RepeatButton" Click="OnRepeatClick" Width="32" Height="32" Padding="0" CornerRadius="7"
-                                Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="Repeat (off / all / one)">
-                            <FontIcon x:Name="RepeatIcon" Glyph="&#xE8EE;" FontSize="15" Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                    <Grid ColumnDefinitions="*,Auto" VerticalAlignment="Center">
+                        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="2">
+                            <Button x:Name="RepeatButton" Click="OnRepeatClick" Width="32" Height="32" Padding="0" CornerRadius="7"
+                                    Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="Repeat (off / all / one)">
+                                <FontIcon x:Name="RepeatIcon" Glyph="&#xE8EE;" FontSize="15" Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                            </Button>
+                            <Button x:Name="ShuffleButton" Click="OnShuffleClick" Width="32" Height="32" Padding="0" CornerRadius="7"
+                                    Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="Shuffle">
+                                <FontIcon x:Name="ShuffleIcon" Glyph="&#xE8B1;" FontSize="15" Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                            </Button>
+                            <Button x:Name="AutoAdvanceButton" Click="OnAutoAdvanceClick" Width="32" Height="32" Padding="0" CornerRadius="7"
+                                    Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="Auto-advance (continue to the next file)">
+                                <FontIcon x:Name="AutoAdvanceIcon" Glyph="&#xE72C;" FontSize="15" Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                            </Button>
+                        </StackPanel>
+                        <Button Grid.Column="1" Click="OnSavePlaylistClick" CornerRadius="6" Padding="10,5" VerticalAlignment="Center"
+                                Background="{ThemeResource OkSubtleFillStrongBrush}" BorderThickness="0"
+                                ToolTipService.ToolTip="Save this playlist as an .m3u file">
+                            <TextBlock Text="Save .m3u" FontSize="11" FontWeight="SemiBold" Foreground="{ThemeResource OkTextSecondaryBrush}" />
                         </Button>
-                        <Button x:Name="ShuffleButton" Click="OnShuffleClick" Width="32" Height="32" Padding="0" CornerRadius="7"
-                                Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="Shuffle">
-                            <FontIcon x:Name="ShuffleIcon" Glyph="&#xE8B1;" FontSize="15" Foreground="{ThemeResource OkTextSecondaryBrush}" />
-                        </Button>
-                        <Button x:Name="AutoAdvanceButton" Click="OnAutoAdvanceClick" Width="32" Height="32" Padding="0" CornerRadius="7"
-                                Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="Auto-advance (continue to the next file)">
-                            <FontIcon x:Name="AutoAdvanceIcon" Glyph="&#xE72C;" FontSize="15" Foreground="{ThemeResource OkTextSecondaryBrush}" />
-                        </Button>
-                    </StackPanel>
+                    </Grid>
                 </Border>
             </Grid>
         </Grid>
