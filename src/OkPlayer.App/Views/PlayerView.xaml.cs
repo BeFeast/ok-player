@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using Microsoft.UI.Dispatching;
@@ -77,7 +78,7 @@ public sealed partial class PlayerView : UserControl
         };
         Vm.PropertyChanged += OnVmPropertyChanged;
         Vm.ToastRequested += ShowToast;
-        Vm.Chapters.CollectionChanged += (_, _) => UpdateChaptersEmpty();
+        Vm.Chapters.CollectionChanged += (_, _) => { UpdateChaptersEmpty(); UpdateSeekChapters(); };
         PanelHideSb.Completed += (_, _) => ChaptersPanel.Visibility = Visibility.Collapsed;
         // Handle keys on the UserControl itself (a Control holds focus reliably, unlike a Grid).
         KeyDown += OnRootKeyDown;
@@ -141,6 +142,10 @@ public sealed partial class PlayerView : UserControl
         else if (e.PropertyName == nameof(PlayerViewModel.HasMedia))
         {
             ApplyMediaPresence();
+        }
+        else if (e.PropertyName == nameof(PlayerViewModel.Duration))
+        {
+            UpdateSeekChapters(); // chapter ticks are positioned by time/duration
         }
     }
 
@@ -371,6 +376,21 @@ public sealed partial class PlayerView : UserControl
 
     private void UpdateChaptersEmpty()
         => ChaptersEmpty.Visibility = Vm.Chapters.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+    private void UpdateSeekChapters()
+    {
+        if (Vm.Duration > 0 && Vm.Chapters.Count > 0)
+        {
+            var fractions = new List<double>(Vm.Chapters.Count);
+            foreach (var ch in Vm.Chapters)
+                fractions.Add(ch.Time / Vm.Duration);
+            Seek.Chapters = fractions;
+        }
+        else
+        {
+            Seek.Chapters = null;
+        }
+    }
 
     private async System.Threading.Tasks.Task GenerateChapterThumbnailsAsync()
     {

@@ -179,7 +179,9 @@
                                MinWidth="54" Foreground="#D9FFFFFF" FontSize="12.5" FontWeight="Medium" Tapped="OnTrailingTimeTapped" />
 
                     <ctl:SeekBar x:Name="Seek" Grid.Column="4" VerticalAlignment="Center"
-                                 Fraction="{x:Bind Vm.PositionFraction, Mode=OneWay}" />
+                                 Fraction="{x:Bind Vm.PositionFraction, Mode=OneWay}"
+                                 Buffered="{x:Bind Vm.BufferedFraction, Mode=OneWay}"
+                                 CurrentChapter="{x:Bind Vm.CurrentChapterIndex, Mode=OneWay}" />
 
                     <TextBlock Grid.Column="5" Text="{x:Bind Vm.TrailingTimeText, Mode=OneWay}" VerticalAlignment="Center"
                                MinWidth="62" TextAlignment="Right" Foreground="#D9FFFFFF" FontSize="12.5" FontWeight="Medium"

@@ -39,6 +39,7 @@ public partial class PlayerViewModel : ObservableObject
     [ObservableProperty] private int _currentChapterIndex = -1;
     [ObservableProperty] private int _videoWidth;   // mpv dwidth (display resolution)
     [ObservableProperty] private int _videoHeight;  // mpv dheight
+    [ObservableProperty] private double _bufferedFraction; // demuxer cache extent, 0..1
 
     public ObservableCollection<TrackInfo> SubtitleTracks { get; } = new();
     public ObservableCollection<TrackInfo> AudioTracks { get; } = new();
@@ -100,6 +101,7 @@ public partial class PlayerViewModel : ObservableObject
             ("media-title", MpvFormat.String), ("sid", MpvFormat.String), ("aid", MpvFormat.String),
             ("sub-delay", MpvFormat.Double), ("chapter", MpvFormat.Int64),
             ("dwidth", MpvFormat.Int64), ("dheight", MpvFormat.Int64),
+            ("demuxer-cache-time", MpvFormat.Double),
         })
         {
             engine.ObserveProperty(name, fmt);
@@ -205,6 +207,7 @@ public partial class PlayerViewModel : ObservableObject
                 case "chapter": CurrentChapterIndex = value is long ch ? (int)ch : -1; break;
                 case "dwidth": if (value is long dw) VideoWidth = (int)dw; break;
                 case "dheight": if (value is long dh) VideoHeight = (int)dh; break;
+                case "demuxer-cache-time": if (value is double ct) BufferedFraction = Duration > 0 ? System.Math.Clamp(ct / Duration, 0, 1) : 0; break;
             }
         });
     }
