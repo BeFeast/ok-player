@@ -78,6 +78,7 @@ public partial class PlayerViewModel : ObservableObject
         OnPropertyChanged(nameof(PositionFraction));
         OnPropertyChanged(nameof(CurrentTimeText));
         OnPropertyChanged(nameof(TrailingTimeText));
+        UpdateCurrentChapter();
     }
 
     partial void OnDurationChanged(double value)
@@ -85,6 +86,7 @@ public partial class PlayerViewModel : ObservableObject
         OnPropertyChanged(nameof(PositionFraction));
         OnPropertyChanged(nameof(DurationText));
         OnPropertyChanged(nameof(TrailingTimeText));
+        OnPropertyChanged(nameof(ChapterFractions)); // fractions depend on duration
     }
 
     partial void OnIsPausedChanged(bool value)
@@ -191,6 +193,10 @@ public partial class PlayerViewModel : ObservableObject
         Position = 0;
         Duration = 0;
         CurrentChapterIndex = -1;
+        _fileChapters = new();
+        _userChapters = new();
+        Chapters.Clear();
+        OnPropertyChanged(nameof(ChapterFractions));
         // Re-arm even when replacing an already-playing file, so the next FileLoaded flips HasMedia
         // false->true and re-fires the ready-time chrome reveal / idle countdown.
         HasMedia = false;
@@ -242,7 +248,8 @@ public partial class PlayerViewModel : ObservableObject
                 case "media-title": MediaTitle = value as string ?? string.Empty; break;
                 case "sub-delay": if (value is double sd) SubDelayMs = (int)System.Math.Round(sd * 1000); break;
                 case "sub-scale": if (value is double ss) SubScale = ss; break;
-                case "chapter": CurrentChapterIndex = value is long ch ? (int)ch : -1; break;
+                // "chapter" is still observed, but CurrentChapterIndex is derived from playhead time so it
+                // matches our merged (file + user) re-indexed list, where the engine's index no longer lines up.
                 case "dwidth": if (value is long dw) VideoWidth = (int)dw; break;
                 case "dheight": if (value is long dh) VideoHeight = (int)dh; break;
                 case "demuxer-cache-time": if (value is double ct) BufferedFraction = Duration > 0 ? System.Math.Clamp(ct / Duration, 0, 1) : 0; break;
@@ -316,10 +323,77 @@ public partial class PlayerViewModel : ObservableObject
         SubtitleOff = subOff;
     }
 
+    private List<ChapterInfo> _fileChapters = new();
+    private List<(double Time, string Title)> _userChapters = new();
+
     private void ApplyChapters(List<ChapterInfo> chapters)
     {
+        _fileChapters = chapters;
+        RebuildChapters();
+    }
+
+    /// <summary>Replace the user-authored chapters (from the sidecar) and re-merge with the file's own.</summary>
+    public void SetUserChapters(IEnumerable<(double Time, string Title)> chapters)
+    {
+        _userChapters = new List<(double, string)>(chapters);
+        RebuildChapters();
+    }
+
+    /// <summary>Merge the file's chapters (read-only) and the user's into one time-sorted, re-indexed list,
+    /// carrying over already-decoded thumbnails by time so an edit doesn't reload them.</summary>
+    private void RebuildChapters()
+    {
+        var thumbs = new Dictionary<long, Microsoft.UI.Xaml.Media.ImageSource?>();
+        foreach (var c in Chapters)
+            thumbs[(long)System.Math.Round(c.Time * 10)] = c.Thumbnail;
+
+        var merged = new List<(double Time, string Title, bool User)>();
+        foreach (var c in _fileChapters)
+            merged.Add((c.Time, c.Title, false));
+        foreach (var (time, title) in _userChapters)
+            merged.Add((time, title, true));
+        merged.Sort((a, b) => a.Time.CompareTo(b.Time));
+
         Chapters.Clear();
-        foreach (var c in chapters) Chapters.Add(c);
+        for (int i = 0; i < merged.Count; i++)
+        {
+            var (time, title, user) = merged[i];
+            var entry = new ChapterInfo { Index = i, Time = time, Title = title, TimeText = FormatTime(time), IsUserDefined = user };
+            if (thumbs.TryGetValue((long)System.Math.Round(time * 10), out var th))
+                entry.Thumbnail = th;
+            Chapters.Add(entry);
+        }
+        OnPropertyChanged(nameof(ChapterFractions));
+        UpdateCurrentChapter();
+    }
+
+    /// <summary>Chapter start positions as 0..1 fractions, for the seek-bar tick markers.</summary>
+    public IReadOnlyList<double> ChapterFractions
+    {
+        get
+        {
+            var list = new List<double>();
+            if (Duration > 0)
+                foreach (var c in Chapters)
+                    list.Add(System.Math.Clamp(c.Time / Duration, 0, 1));
+            return list;
+        }
+    }
+
+    /// <summary>Pick the current chapter by playhead time (works for merged file + user chapters, where the
+    /// engine's own chapter index no longer matches our re-indexed list).</summary>
+    private void UpdateCurrentChapter()
+    {
+        int idx = -1;
+        for (int i = 0; i < Chapters.Count; i++)
+        {
+            if (Chapters[i].Time <= Position + 0.25)
+                idx = i;
+            else
+                break;
+        }
+        if (idx != CurrentChapterIndex)
+            CurrentChapterIndex = idx;
     }
 
     // ---- commands (guarded so an mpv rejection never escapes a keyboard/click handler) ----
@@ -385,7 +459,13 @@ public partial class PlayerViewModel : ObservableObject
 
     public void FrameStep(bool forward) => Cmd(forward ? "frame-step" : "frame-back-step");
 
-    public void JumpChapter(int delta) => Cmd("add", "chapter", Inv(delta));
+    public void JumpChapter(int delta)
+    {
+        if (Chapters.Count == 0)
+            return;
+        int target = System.Math.Clamp(CurrentChapterIndex + delta, 0, Chapters.Count - 1);
+        SeekToChapter(Chapters[target]);
+    }
 
     public void NudgeVolume(double delta)
     {
@@ -432,7 +512,11 @@ public partial class PlayerViewModel : ObservableObject
     public void SetSubtitleOff() => Set("sid", "no");
     public void SelectSubtitle(TrackInfo track) => Set("sid", track.Id.ToString(CultureInfo.InvariantCulture));
     public void SelectAudio(TrackInfo track) => Set("aid", track.Id.ToString(CultureInfo.InvariantCulture));
-    public void SeekToChapter(ChapterInfo chapter) => Set("chapter", chapter.Index.ToString(CultureInfo.InvariantCulture));
+    public void SeekToChapter(ChapterInfo chapter)
+    {
+        if (Duration > 0)
+            SeekToFraction(chapter.Time / Duration); // seek by time so user-added chapters work too
+    }
 
     public void NudgeSubDelay(int ms)
     {

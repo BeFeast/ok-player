@@ -230,6 +230,7 @@
                     <ctl:SeekBar x:Name="Seek" Grid.Column="4" VerticalAlignment="Center"
                                  Fraction="{x:Bind Vm.PositionFraction, Mode=OneWay}"
                                  Buffered="{x:Bind Vm.BufferedFraction, Mode=OneWay}"
+                                 Chapters="{x:Bind Vm.ChapterFractions, Mode=OneWay}"
                                  CurrentChapter="{x:Bind Vm.CurrentChapterIndex, Mode=OneWay}" />
 
                     <TextBlock Grid.Column="5" Text="{x:Bind Vm.TrailingTimeText, Mode=OneWay}" VerticalAlignment="Center"
@@ -399,7 +400,7 @@
                 </ListView.Resources>
                 <ListView.ItemTemplate>
                     <DataTemplate x:DataType="vm:ChapterInfo">
-                        <Grid Padding="0,5" ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="10">
+                        <Grid Padding="0,5" ColumnDefinitions="Auto,Auto,*,Auto,Auto" ColumnSpacing="10">
                             <Border Grid.Column="0" Width="3" CornerRadius="2" Height="34"
                                     Background="{ThemeResource OkAccentRailBrush}" Visibility="{x:Bind CurrentBarVisibility, Mode=OneWay}" />
                             <Border Grid.Column="1" Width="56" Height="32" CornerRadius="4" Background="{ThemeResource OkSubtleFillStrongBrush}">
@@ -408,6 +409,16 @@
                             <TextBlock Grid.Column="2" Text="{x:Bind Title}" VerticalAlignment="Center"
                                        TextTrimming="CharacterEllipsis" Style="{StaticResource OkBodyTextStyle}" />
                             <TextBlock Grid.Column="3" Text="{x:Bind TimeText}" VerticalAlignment="Center" Style="{StaticResource OkSmallTextStyle}" />
+                            <!-- rename/delete: only on user-added chapters -->
+                            <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="0" VerticalAlignment="Center"
+                                        Visibility="{x:Bind EditVisibility}">
+                                <Button Click="OnChapterRename" Content="&#xE70F;" FontFamily="Segoe Fluent Icons" FontSize="12"
+                                        Background="Transparent" BorderThickness="0" CornerRadius="6" Padding="7,5"
+                                        Foreground="{ThemeResource OkTextSecondaryBrush}" ToolTipService.ToolTip="Rename" />
+                                <Button Click="OnChapterDelete" Content="&#xE711;" FontFamily="Segoe Fluent Icons" FontSize="11"
+                                        Background="Transparent" BorderThickness="0" CornerRadius="6" Padding="7,5"
+                                        Foreground="{ThemeResource OkTextSecondaryBrush}" ToolTipService.ToolTip="Delete chapter" />
+                            </StackPanel>
                         </Grid>
                     </DataTemplate>
                 </ListView.ItemTemplate>
@@ -441,6 +452,9 @@
                             </ItemsControl>
                         </ScrollViewer>
                     </StackPanel>
+                    <Button Click="OnAddChapterClick" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                            Background="{ThemeResource OkSubtleFillStrongBrush}" Foreground="{ThemeResource OkTextBodyBrush}" CornerRadius="7" Padding="9"
+                            FontSize="12.5" FontWeight="SemiBold" Content="Add chapter here" />
                     <Button Click="OnAddBookmarkClick" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
                             Background="{ThemeResource OkAccentBrush}" Foreground="White" CornerRadius="7" Padding="9"
                             FontSize="12.5" FontWeight="SemiBold" Content="Bookmark here" />

@@ -7,6 +7,14 @@ using System.Text.Json.Serialization;
 
 namespace OkPlayer.App.Services;
 
+/// <summary>A user-authored chapter mark (time + title), stored in the sidecar and merged with the
+/// file's own chapters for display, seeking and seek-bar markers.</summary>
+public sealed class ChapterMark
+{
+    public double Time { get; set; }
+    public string Title { get; set; } = string.Empty;
+}
+
 /// <summary>Persisted per-file playback state: resume position, bookmarks, last-opened time.</summary>
 public sealed class FileRecord
 {
@@ -16,6 +24,7 @@ public sealed class FileRecord
     public string? Title { get; set; }
     public string? PosterPath { get; set; } // cached poster frame for continue-watching
     public List<double> Bookmarks { get; set; } = new();
+    public List<ChapterMark> UserChapters { get; set; } = new(); // user-added chapters (the file's own are read-only)
 }
 
 /// <summary>
@@ -147,6 +156,57 @@ public sealed class HistoryService
                 r.Bookmarks.RemoveAll(b => Math.Abs(b - time) < 0.01);
         }
         Save();
+    }
+
+    public bool AddUserChapter(string path, double time, string title)
+    {
+        if (!IsTrackable(path))
+            return false;
+        lock (_lock)
+        {
+            FileRecord r = GetOrCreate(path);
+            if (string.IsNullOrEmpty(r.Title))
+                r.Title = Path.GetFileNameWithoutExtension(path);
+            if (string.IsNullOrEmpty(r.LastOpenedUtc))
+                r.LastOpenedUtc = DateTime.UtcNow.ToString("o");
+            if (!r.UserChapters.Any(c => Math.Abs(c.Time - time) < 0.5))
+            {
+                r.UserChapters.Add(new ChapterMark { Time = time, Title = title });
+                r.UserChapters.Sort((a, b) => a.Time.CompareTo(b.Time));
+            }
+        }
+        Save();
+        return true;
+    }
+
+    public void RenameUserChapter(string path, double time, string title)
+    {
+        lock (_lock)
+        {
+            if (_records.TryGetValue(path, out var r) &&
+                r.UserChapters.FirstOrDefault(c => Math.Abs(c.Time - time) < 0.01) is { } mark)
+                mark.Title = title;
+        }
+        Save();
+    }
+
+    public void RemoveUserChapter(string path, double time)
+    {
+        lock (_lock)
+        {
+            if (_records.TryGetValue(path, out var r))
+                r.UserChapters.RemoveAll(c => Math.Abs(c.Time - time) < 0.01);
+        }
+        Save();
+    }
+
+    /// <summary>The user's own chapters for a file (copies, so callers can't mutate the stored list).</summary>
+    public IReadOnlyList<ChapterMark> GetUserChapters(string path)
+    {
+        lock (_lock)
+            return _records.TryGetValue(path, out var r)
+                ? r.UserChapters.Select(c => new ChapterMark { Time = c.Time, Title = c.Title }).ToList()
+                : new List<ChapterMark>();
     }
 
     /// <summary>Most-recently-opened existing files, newest first, for continue-watching.</summary>
