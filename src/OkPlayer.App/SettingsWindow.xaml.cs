@@ -6,6 +6,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
+using OkPlayer.App.Services;
 using Windows.UI;
 
 namespace OkPlayer.App;
@@ -45,15 +46,85 @@ public sealed partial class SettingsWindow : Window
             return;
         int i = NavList.SelectedIndex;
         bool appearance = i == 0;
+        bool integration = i == 6;
         bool advanced = i == 7;
         AppearancePanel.Visibility = appearance ? Visibility.Visible : Visibility.Collapsed;
+        IntegrationPanel.Visibility = integration ? Visibility.Visible : Visibility.Collapsed;
         AdvancedPanel.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
-        PlaceholderPanel.Visibility = (!appearance && !advanced) ? Visibility.Visible : Visibility.Collapsed;
+        PlaceholderPanel.Visibility = (!appearance && !integration && !advanced) ? Visibility.Visible : Visibility.Collapsed;
         if (advanced)
             LoadMpvConf();
+        else if (integration)
+            LoadIntegration();
         else if (!appearance && i >= 0 && i < PanelNames.Length)
             PlaceholderTitle.Text = PanelNames[i];
     }
+
+    // ── Integration panel (file-type associations) ─────────────────────
+
+    private static readonly string[] VideoExts = { ".mkv", ".mp4", ".m4v", ".avi", ".mov", ".webm", ".m2ts", ".ts", ".wmv", ".flv" };
+    private static readonly string[] AudioExts = { ".mp3", ".flac", ".m4a", ".opus", ".wav", ".ogg", ".mka" };
+    private readonly FileAssociationService _assoc = new();
+    private bool _assocBuilt;
+
+    private void LoadIntegration()
+    {
+        if (_assocBuilt)
+        {
+            RefreshAssocChecks();
+            return;
+        }
+        BuildAssoc(AssocVideoPanel, VideoExts);
+        BuildAssoc(AssocAudioPanel, AudioExts);
+        _assocBuilt = true;
+    }
+
+    private void BuildAssoc(Panel host, string[] exts)
+    {
+        foreach (string ext in exts)
+        {
+            var cb = new CheckBox { Content = ext, Tag = ext, FontSize = 12.5, MinWidth = 0, IsChecked = _assoc.IsAssigned(ext) };
+            cb.Checked += OnAssocToggle;
+            cb.Unchecked += OnAssocToggle;
+            host.Children.Add(cb);
+        }
+    }
+
+    private void RefreshAssocChecks()
+    {
+        foreach (Panel host in new[] { (Panel)AssocVideoPanel, AssocAudioPanel })
+            foreach (var child in host.Children)
+                if (child is CheckBox { Tag: string ext } cb)
+                {
+                    cb.Checked -= OnAssocToggle;
+                    cb.Unchecked -= OnAssocToggle;
+                    cb.IsChecked = _assoc.IsAssigned(ext); // re-sync without firing the toggle handler
+                    cb.Checked += OnAssocToggle;
+                    cb.Unchecked += OnAssocToggle;
+                }
+    }
+
+    private void OnAssocToggle(object sender, RoutedEventArgs e)
+    {
+        if (sender is not CheckBox { Tag: string ext } cb)
+            return;
+        try
+        {
+            if (cb.IsChecked == true)
+                _assoc.Assign(ext);
+            else
+                _assoc.Unassign(ext);
+            _assoc.NotifyShell();
+            AssocStatus.Text = "Updated";
+        }
+        catch
+        {
+            AssocStatus.Text = "Couldn't update";
+            cb.IsChecked = _assoc.IsAssigned(ext);
+        }
+    }
+
+    private void OnOpenDefaultApps(object sender, RoutedEventArgs e) => FileAssociationService.OpenWindowsDefaultApps();
 
     // ── Advanced panel (the raw-mpv-config escape hatch) ───────────────
 

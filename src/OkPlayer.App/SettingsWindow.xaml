@@ -182,6 +182,31 @@
                                    Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,10,0,0" />
                     </StackPanel>
 
+                    <!-- Integration (real) — file-type associations -->
+                    <StackPanel x:Name="IntegrationPanel" Visibility="Collapsed">
+                        <TextBlock Text="Integration" Style="{StaticResource OkSettingsTitleTextStyle}" />
+
+                        <TextBlock Text="FILE ASSOCIATIONS" FontSize="12" FontWeight="SemiBold" CharacterSpacing="60"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,22,0,10" />
+                        <TextBlock TextWrapping="Wrap" MaxWidth="560" HorizontalAlignment="Left" FontSize="12.5"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}"
+                                   Text="Tick the file types OK Player should handle &#x2014; they then appear in Explorer's Open with and in Windows' Default apps. Windows decides which app is the default, so use the button below to set OK Player as the default for the types you ticked." />
+
+                        <TextBlock Text="Video" FontSize="12.5" FontWeight="SemiBold" Margin="0,18,0,8" />
+                        <VariableSizedWrapGrid x:Name="AssocVideoPanel" Orientation="Horizontal" ItemWidth="116" ItemHeight="34" />
+
+                        <TextBlock Text="Audio" FontSize="12.5" FontWeight="SemiBold" Margin="0,16,0,8" />
+                        <VariableSizedWrapGrid x:Name="AssocAudioPanel" Orientation="Horizontal" ItemWidth="116" ItemHeight="34" />
+
+                        <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,20,0,0" VerticalAlignment="Center">
+                            <Button Content="Set as default in Windows&#x2026;" Click="OnOpenDefaultApps" CornerRadius="7" Padding="14,7"
+                                    FontSize="12.5" FontWeight="SemiBold" Background="{ThemeResource OkAccentBrush}"
+                                    Foreground="White" BorderThickness="0" />
+                            <TextBlock x:Name="AssocStatus" VerticalAlignment="Center" FontSize="12"
+                                       Foreground="{ThemeResource OkAccentTextBrush}" />
+                        </StackPanel>
+                    </StackPanel>
+
                     <!-- placeholder for the not-yet-built panels -->
                     <StackPanel x:Name="PlaceholderPanel" Visibility="Collapsed">
                         <TextBlock x:Name="PlaceholderTitle" Style="{StaticResource OkSettingsTitleTextStyle}" />
