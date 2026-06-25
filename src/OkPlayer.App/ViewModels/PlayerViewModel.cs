@@ -463,7 +463,9 @@ public partial class PlayerViewModel : ObservableObject
     {
         if (Chapters.Count == 0)
             return;
-        int target = System.Math.Clamp(CurrentChapterIndex + delta, 0, Chapters.Count - 1);
+        int target = CurrentChapterIndex + delta;
+        if (target < 0 || target >= Chapters.Count)
+            return; // already at the first/last chapter — don't rewind to its own start
         SeekToChapter(Chapters[target]);
     }
 

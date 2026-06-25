@@ -162,6 +162,7 @@ public sealed class HistoryService
     {
         if (!IsTrackable(path))
             return false;
+        bool added = false;
         lock (_lock)
         {
             FileRecord r = GetOrCreate(path);
@@ -173,10 +174,12 @@ public sealed class HistoryService
             {
                 r.UserChapters.Add(new ChapterMark { Time = time, Title = title });
                 r.UserChapters.Sort((a, b) => a.Time.CompareTo(b.Time));
+                added = true;
             }
         }
-        Save();
-        return true;
+        if (added)
+            Save();
+        return added; // false when a chapter already sits within 0.5s, so the caller won't claim it added one
     }
 
     public void RenameUserChapter(string path, double time, string title)
