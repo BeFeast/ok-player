@@ -692,6 +692,7 @@ public sealed partial class PlayerView : UserControl
             Vm.OnOpening();        // load accepted: clear the prior file's playhead/duration/chapter/HasMedia
             _currentPath = pathOrUrl;
             _resumeTarget = _history.Get(pathOrUrl)?.Position ?? -1; // resume applied on the first Duration
+            LoadBookmarks();       // refresh the panel's bookmarks for the new file (panel may be open)
             RevealChrome();        // show the controls when a file opens (drag-drop / picker)
             _ = _thumbs.OpenAsync(pathOrUrl); // arm the seek-preview engine for this file (fire-and-forget)
         }
