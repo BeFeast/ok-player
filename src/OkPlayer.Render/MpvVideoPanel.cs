@@ -170,6 +170,10 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
 
         if (!_swapChain.Begin())
             return; // interop acquire failed (device removed / resize race) — skip this frame
+        // Clear to OPAQUE black: the SwapChainPanel composites over the window backdrop (Mica), so any pixel
+        // mpv doesn't cover (e.g. a 1px row at the window's top edge in fullscreen) must be opaque black, not
+        // transparent — otherwise the light Mica shows through as a white hairline.
+        GL.ClearColor(0f, 0f, 0f, 1f);
         GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
         _render.Render(_swapChain.GLFrameBufferHandle, _swapChain.BufferWidth, _swapChain.BufferHeight);
         _swapChain.End();
