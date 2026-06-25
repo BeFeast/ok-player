@@ -114,7 +114,8 @@
                        Foreground="{ThemeResource TextFillColorPrimaryBrush}" HorizontalAlignment="Center" />
             <Grid Width="280" HorizontalAlignment="Center" Background="Transparent" Tapped="OnWelcomeOpenTapped">
                 <Rectangle RadiusX="10" RadiusY="10" StrokeThickness="1.5" StrokeDashArray="4,3"
-                           Stroke="{ThemeResource TextFillColorTertiaryBrush}" Fill="#40FFFFFF" />
+                           Stroke="{ThemeResource TextFillColorTertiaryBrush}"
+                           Fill="{ThemeResource CardBackgroundFillColorSecondaryBrush}" />
                 <StackPanel Padding="16" Spacing="4" HorizontalAlignment="Center">
                     <TextBlock Text="Open file&#x2026;" Foreground="{ThemeResource OkAccentTextBrush}"
                                FontSize="12.5" FontWeight="SemiBold" HorizontalAlignment="Center" />
