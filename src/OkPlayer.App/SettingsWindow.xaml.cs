@@ -60,7 +60,9 @@ public sealed partial class SettingsWindow : Window
         // them rebuild (now if visible, else on next show); the selected segment pill is re-styled in place.
         _shortcutsBuilt = false;
         ShortcutsHost.Children.Clear();
-        if (ShortcutsPanel.Visibility == Visibility.Visible)
+        if (AppearancePanel.Visibility == Visibility.Visible)
+            RefreshAppearance(); // the theme/accent pills are themed too — and this panel hosts the switch
+        else if (ShortcutsPanel.Visibility == Visibility.Visible)
             LoadShortcuts();
         else if (PlaybackPanel.Visibility == Visibility.Visible)
             RefreshPlayback();
