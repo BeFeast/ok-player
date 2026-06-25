@@ -1,7 +1,11 @@
 using System;
+using System.Collections.Generic;
+using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
+using Windows.UI;
 
 namespace OkPlayer.App.Controls;
 
@@ -30,11 +34,50 @@ public sealed partial class SeekBar : UserControl
         set => SetValue(FractionProperty, value);
     }
 
+    public static readonly DependencyProperty BufferedProperty = DependencyProperty.Register(
+        nameof(Buffered), typeof(double), typeof(SeekBar),
+        new PropertyMetadata(0.0, (d, _) => ((SeekBar)d).UpdateVisual()));
+
+    /// <summary>Buffered/cached extent, 0..1 (lighter band behind the fill).</summary>
+    public double Buffered
+    {
+        get => (double)GetValue(BufferedProperty);
+        set => SetValue(BufferedProperty, value);
+    }
+
+    public static readonly DependencyProperty ChaptersProperty = DependencyProperty.Register(
+        nameof(Chapters), typeof(object), typeof(SeekBar),
+        new PropertyMetadata(null, (d, _) => ((SeekBar)d).RenderTicks()));
+
+    /// <summary>Chapter start positions as 0..1 fractions (an IReadOnlyList&lt;double&gt;); rendered as ticks.</summary>
+    public object? Chapters
+    {
+        get => GetValue(ChaptersProperty);
+        set => SetValue(ChaptersProperty, value);
+    }
+
+    public static readonly DependencyProperty CurrentChapterProperty = DependencyProperty.Register(
+        nameof(CurrentChapter), typeof(int), typeof(SeekBar),
+        new PropertyMetadata(-1, (d, _) => ((SeekBar)d).RenderTicks()));
+
+    /// <summary>Index of the current chapter (its tick is accent-colored).</summary>
+    public int CurrentChapter
+    {
+        get => (int)GetValue(CurrentChapterProperty);
+        set => SetValue(CurrentChapterProperty, value);
+    }
+
     /// <summary>Raised with the target fraction on press, drag, and release.</summary>
     public event Action<double>? SeekRequested;
 
     /// <summary>Raised true when scrubbing starts, false when it ends.</summary>
     public event Action<bool>? ScrubStateChanged;
+
+    /// <summary>Raised as the pointer moves over the bar (hovering or dragging): target fraction + pointer X within the bar.</summary>
+    public event Action<double, double>? HoverChanged;
+
+    /// <summary>Raised when the pointer leaves the bar (and isn't dragging).</summary>
+    public event Action? HoverEnded;
 
     private void UpdateVisual()
     {
@@ -43,7 +86,35 @@ public sealed partial class SeekBar : UserControl
             return;
         double f = Math.Clamp(Fraction, 0, 1);
         FillBar.Width = f * width;
+        BufferedBar.Width = Math.Clamp(Buffered, 0, 1) * width;
         ThumbDot.Margin = new Thickness(f * width - ThumbDot.Width / 2, 0, 0, 0);
+        RenderTicks();
+    }
+
+    private static readonly Color TickColor = Color.FromArgb(0x8C, 0xFF, 0xFF, 0xFF);   // rgba(255,255,255,.55)
+    private static readonly Color CurrentTickColor = Color.FromArgb(0xFF, 0x28, 0xB3, 0xAA); // over-video accent
+
+    private void RenderTicks()
+    {
+        TickCanvas.Children.Clear();
+        double width = ActualWidth;
+        if (width <= 0 || Chapters is not IReadOnlyList<double> chapters)
+            return;
+        for (int i = 0; i < chapters.Count; i++)
+        {
+            double frac = Math.Clamp(chapters[i], 0, 1);
+            if (frac <= 0.004 || frac >= 0.996)
+                continue; // skip the 0:00 chapter and the very end
+            var tick = new Border
+            {
+                Width = 2,
+                Height = 9,
+                CornerRadius = new CornerRadius(1),
+                Background = new SolidColorBrush(i == CurrentChapter ? CurrentTickColor : TickColor),
+            };
+            Canvas.SetLeft(tick, frac * width - 1);
+            TickCanvas.Children.Add(tick);
+        }
     }
 
     private double FractionFromPointer(PointerRoutedEventArgs e)
@@ -65,11 +136,19 @@ public sealed partial class SeekBar : UserControl
 
     private void OnPointerMoved(object sender, PointerRoutedEventArgs e)
     {
+        double x = e.GetCurrentPoint(this).Position.X;
+        double f = ActualWidth > 0 ? Math.Clamp(x / ActualWidth, 0, 1) : 0;
+        HoverChanged?.Invoke(f, x); // preview follows the cursor whether hovering or dragging
         if (!_dragging)
             return;
-        double f = FractionFromPointer(e);
         Fraction = f;
         SeekRequested?.Invoke(f);
+    }
+
+    private void OnPointerExited(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_dragging)
+            HoverEnded?.Invoke();
     }
 
     private void OnPointerReleased(object sender, PointerRoutedEventArgs e)

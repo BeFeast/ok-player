@@ -55,6 +55,54 @@
         </Setter>
     </Style>
 
+    <!-- Context / overflow menu surface — light popover material per the design (radius 9, padded, comfortable width). -->
+    <Style x:Key="OkMenuFlyoutPresenterStyle" TargetType="MenuFlyoutPresenter">
+        <Setter Property="Background" Value="{ThemeResource OkPopoverBrush}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource OkCardStrokeBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="9" />
+        <Setter Property="Padding" Value="5" />
+        <Setter Property="MinWidth" Value="232" />
+        <Setter Property="MaxWidth" Value="340" />
+    </Style>
+
+    <!-- Tight OSC button hosting a vector (Viewbox/Path) icon — matches the design's compact icon row. -->
+    <Style x:Key="OkOscSvgButtonStyle" TargetType="Button">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="White" />
+        <Setter Property="Padding" Value="6" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="AllowFocusOnInteraction" Value="False" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Root" Background="{TemplateBinding Background}"
+                            CornerRadius="{TemplateBinding CornerRadius}" Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Content="{TemplateBinding Content}" />
+                        <VisualStateManager.VisualStateGroups>
+                            <VisualStateGroup x:Name="CommonStates">
+                                <VisualState x:Name="Normal" />
+                                <VisualState x:Name="PointerOver">
+                                    <VisualState.Setters><Setter Target="Root.Background" Value="#1FFFFFFF" /></VisualState.Setters>
+                                </VisualState>
+                                <VisualState x:Name="Pressed">
+                                    <VisualState.Setters>
+                                        <Setter Target="Root.Background" Value="#2EFFFFFF" />
+                                        <Setter Target="Root.(UIElement.Opacity)" Value="0.8" />
+                                    </VisualState.Setters>
+                                </VisualState>
+                                <VisualState x:Name="Disabled">
+                                    <VisualState.Setters><Setter Target="Root.(UIElement.Opacity)" Value="0.4" /></VisualState.Setters>
+                                </VisualState>
+                            </VisualStateGroup>
+                        </VisualStateManager.VisualStateGroups>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- Popover container (subtitle/audio/speed switchers) — off-video Mica-ish surface. -->
     <Style x:Key="OkPopoverFlyoutStyle" TargetType="FlyoutPresenter">
         <Setter Property="Background" Value="{ThemeResource OkPopoverBrush}" />

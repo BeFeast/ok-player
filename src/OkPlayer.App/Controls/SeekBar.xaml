@@ -11,15 +11,21 @@
           PointerMoved="OnPointerMoved"
           PointerReleased="OnPointerReleased"
           PointerCanceled="OnPointerCanceled"
-          PointerCaptureLost="OnPointerCaptureLost">
+          PointerCaptureLost="OnPointerCaptureLost"
+          PointerExited="OnPointerExited">
 
         <!-- track -->
         <Border Height="5" CornerRadius="3" VerticalAlignment="Center"
                 Background="{StaticResource OkSeekTrackBrush}" />
+        <!-- buffered band (behind the fill) -->
+        <Border x:Name="BufferedBar" Height="5" CornerRadius="3" Width="0"
+                VerticalAlignment="Center" HorizontalAlignment="Left" Background="#61FFFFFF" />
         <!-- played fill -->
         <Border x:Name="FillBar" Height="5" CornerRadius="3" Width="0"
                 VerticalAlignment="Center" HorizontalAlignment="Left"
                 Background="{StaticResource OkSeekFillBrush}" />
+        <!-- chapter ticks -->
+        <Canvas x:Name="TickCanvas" Height="9" VerticalAlignment="Center" IsHitTestVisible="False" />
         <!-- thumb -->
         <Ellipse x:Name="ThumbDot" Width="13" Height="13" Fill="White"
                  VerticalAlignment="Center" HorizontalAlignment="Left" />

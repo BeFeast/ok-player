@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using Microsoft.UI.Dispatching;
@@ -6,6 +7,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
+using OkPlayer.App.Services;
 using OkPlayer.App.ViewModels;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
@@ -25,19 +27,29 @@ public sealed partial class PlayerView : UserControl
     private bool _chromeVisible; // starts false to match the chrome's initial Opacity=0, so the first RevealChrome actually animates it in
     private bool _panelOpen;
     private bool _syncingChapter;
-    private bool _settingVolumeSlider;
+    private readonly ThumbnailService _thumbs = new();
+    private int _previewToken; // ignores stale async thumbnail results
+    private bool _viewUnloaded; // guards against duplicate Unloaded disposing the thumbnail engine twice
+    private bool _generatingChapters; // prevents overlapping chapter-thumbnail passes
 
     public PlayerViewModel Vm { get; } = new();
 
     /// <summary>The auto-hiding top bar, used as the window's title-bar drag region.</summary>
     public FrameworkElement TitleBarElement => TitleChrome;
 
+    /// <summary>x:Bind helper: bool -> Visibility (for icon state toggles in XAML).</summary>
+    public static Visibility VisIf(bool value) => value ? Visibility.Visible : Visibility.Collapsed;
+
     /// <summary>F / the fullscreen button: toggle fullscreen (the window owns the presenter).</summary>
     public event EventHandler? ToggleFullscreenRequested;
     /// <summary>Esc: leave fullscreen if in it.</summary>
     public event EventHandler? ExitFullscreenRequested;
-    /// <summary>Ctrl+O: ask the host to show a file picker.</summary>
+    /// <summary>Ctrl+O / Welcome card: ask the host to show a file picker.</summary>
     public event EventHandler? OpenFileRequested;
+    /// <summary>True when media is loaded (chrome is over video); false on the light welcome shell. Host adapts caption buttons.</summary>
+    public event EventHandler<bool>? MediaPresenceChanged;
+    /// <summary>Resize the window to the video's native pixel size (clamped to the screen). Host owns the AppWindow.</summary>
+    public event EventHandler<(int Width, int Height)>? FitToVideoRequested;
 
     public PlayerView()
     {
@@ -56,9 +68,17 @@ public sealed partial class PlayerView : UserControl
         Video.EngineReady += OnEngineReady;
         Seek.SeekRequested += OnSeekRequested;
         Seek.ScrubStateChanged += scrubbing => Vm.IsScrubbing = scrubbing;
+        Seek.HoverChanged += OnSeekHover;
+        Seek.HoverEnded += OnSeekHoverEnded;
+        Unloaded += (_, _) =>
+        {
+            if (_viewUnloaded) return;
+            _viewUnloaded = true;
+            System.Threading.Tasks.Task.Run(() => _thumbs.Dispose());
+        };
         Vm.PropertyChanged += OnVmPropertyChanged;
         Vm.ToastRequested += ShowToast;
-        Vm.Chapters.CollectionChanged += (_, _) => UpdateChaptersEmpty();
+        Vm.Chapters.CollectionChanged += (_, _) => { UpdateChaptersEmpty(); UpdateSeekChapters(); };
         PanelHideSb.Completed += (_, _) => ChaptersPanel.Visibility = Visibility.Collapsed;
         // Handle keys on the UserControl itself (a Control holds focus reliably, unlike a Grid).
         KeyDown += OnRootKeyDown;
@@ -68,8 +88,34 @@ public sealed partial class PlayerView : UserControl
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         Focus(FocusState.Programmatic);
-        RevealChrome();
+        ApplyMediaPresence();
     }
+
+    // Light-first shell: over Mica show the Welcome card with no video plane / no over-video chrome;
+    // once media is loaded, show the video plane + reveal the OSC, and let the host darken→whiten the
+    // caption buttons.
+    private void ApplyMediaPresence()
+    {
+        bool has = Vm.HasMedia;
+        WelcomeCard.Visibility = has ? Visibility.Collapsed : Visibility.Visible;
+        Video.Visibility = has ? Visibility.Visible : Visibility.Collapsed;
+        MediaPresenceChanged?.Invoke(this, has);
+        if (has)
+        {
+            RevealChrome();
+        }
+        else
+        {
+            _idleTimer.Stop();
+            _chromeVisible = false;
+            TitleChrome.IsHitTestVisible = false;
+            BottomChrome.IsHitTestVisible = false;
+            ChromeHideSb.Begin();
+        }
+    }
+
+    private void OnWelcomeOpenTapped(object sender, TappedRoutedEventArgs e)
+        => OpenFileRequested?.Invoke(this, EventArgs.Empty);
 
     private void OnEngineReady(object? sender, EventArgs e)
     {
@@ -95,10 +141,11 @@ public sealed partial class PlayerView : UserControl
         }
         else if (e.PropertyName == nameof(PlayerViewModel.HasMedia))
         {
-            EmptyHint.Visibility = Vm.HasMedia ? Visibility.Collapsed : Visibility.Visible;
-            // Reveal on any media-state change: ready -> start the idle countdown from now;
-            // cleared (e.g. decode error) -> bring the controls back up over the empty state.
-            RevealChrome();
+            ApplyMediaPresence();
+        }
+        else if (e.PropertyName == nameof(PlayerViewModel.Duration))
+        {
+            UpdateSeekChapters(); // chapter ticks are positioned by time/duration
         }
     }
 
@@ -108,10 +155,63 @@ public sealed partial class PlayerView : UserControl
         RevealChrome();
     }
 
+    // ---- seek hover frame-preview ----
+
+    private void OnSeekHover(double fraction, double xInBar)
+    {
+        if (!Vm.HasMedia || Vm.Duration <= 0)
+        {
+            OnSeekHoverEnded(); // media gone/replaced under the pointer — hide any lingering preview
+            return;
+        }
+        double time = fraction * Vm.Duration;
+        PreviewTime.Text = FormatPreviewTime(time);
+
+        // Center the preview on the cursor (in RootGrid space), clamped to stay on-screen.
+        double xInRoot = Seek.TransformToVisual(RootGrid).TransformPoint(new Windows.Foundation.Point(xInBar, 0)).X;
+        double pw = PreviewPanel.ActualWidth > 0 ? PreviewPanel.ActualWidth : 180;
+        double maxLeft = Math.Max(8, RootGrid.ActualWidth - pw - 8);
+        PreviewTransform.X = Math.Clamp(xInRoot - pw / 2, 8, maxLeft);
+        PreviewPanel.Opacity = 1;
+
+        int token = ++_previewToken;
+        _ = RequestPreviewAsync(time, token);
+    }
+
+    private async System.Threading.Tasks.Task RequestPreviewAsync(double time, int token)
+    {
+        try
+        {
+            string? path = await _thumbs.GetThumbnailAsync(time, () => token != _previewToken);
+            if (path is null || token != _previewToken)
+                return; // stale (cursor moved on) or no frame (e.g. audio-only) — leave the frame hidden
+            PreviewImage.Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(path));
+            PreviewImageFrame.Visibility = Visibility.Visible;
+        }
+        catch { /* transient failure — keep the previous frame; never fault this fire-and-forget task */ }
+    }
+
+    private void OnSeekHoverEnded()
+    {
+        _previewToken++;           // discard any in-flight thumbnail so it can't flash on the next hover
+        PreviewPanel.Opacity = 0;
+        PreviewImageFrame.Visibility = Visibility.Collapsed; // next hover shows the timestamp first, frame when ready
+    }
+
+    private static string FormatPreviewTime(double seconds)
+    {
+        var ts = TimeSpan.FromSeconds(Math.Max(0, seconds));
+        return ts.TotalHours >= 1
+            ? $"{(int)ts.TotalHours}:{ts.Minutes:00}:{ts.Seconds:00}"
+            : $"{ts.Minutes}:{ts.Seconds:00}";
+    }
+
     // ---- chrome visibility ----
 
     private void RevealChrome()
     {
+        if (!Vm.HasMedia)
+            return; // no over-video chrome on the light welcome shell
         if (!_chromeVisible)
         {
             _chromeVisible = true;
@@ -205,6 +305,14 @@ public sealed partial class PlayerView : UserControl
     private void OnSpeedClick(object sender, RoutedEventArgs e) { Vm.CycleSpeed(); RevealChrome(); }
     private void OnScreenshotClick(object sender, RoutedEventArgs e) { Vm.TakeScreenshot(); RevealChrome(); }
     private void OnFullscreenClick(object sender, RoutedEventArgs e) => ToggleFullscreenRequested?.Invoke(this, EventArgs.Empty);
+
+    private void OnFitToVideoClick(object sender, RoutedEventArgs e)
+    {
+        if (Vm.VideoWidth > 0 && Vm.VideoHeight > 0)
+            FitToVideoRequested?.Invoke(this, (Vm.VideoWidth, Vm.VideoHeight));
+    }
+
+    private void OnAddBookmarkClick(object sender, RoutedEventArgs e) => ShowToast("Bookmark added"); // persisted bookmarks: TODO
     private void OnTrailingTimeTapped(object sender, TappedRoutedEventArgs e) => Vm.ToggleTimeLabel();
 
     // ---- switchers ----
@@ -249,6 +357,7 @@ public sealed partial class PlayerView : UserControl
             ChaptersPanel.Visibility = Visibility.Visible;
             PanelShowSb.Begin();
             RevealChrome(); // an open panel pins the chrome
+            _ = GenerateChapterThumbnailsAsync(); // fill in chapter previews lazily
         }
         else
         {
@@ -268,19 +377,59 @@ public sealed partial class PlayerView : UserControl
     private void UpdateChaptersEmpty()
         => ChaptersEmpty.Visibility = Vm.Chapters.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
-    // ---- volume & overflow ----
-
-    private void OnVolumeFlyoutOpened(object? sender, object e)
+    private void UpdateSeekChapters()
     {
-        _settingVolumeSlider = true;     // suppress the echo from seeding the slider
-        VolumeSlider.Value = Vm.Volume;
-        _settingVolumeSlider = false;
+        if (Vm.Duration > 0 && Vm.Chapters.Count > 0)
+        {
+            var fractions = new List<double>(Vm.Chapters.Count);
+            foreach (var ch in Vm.Chapters)
+                fractions.Add(ch.Time / Vm.Duration);
+            Seek.Chapters = fractions;
+        }
+        else
+        {
+            Seek.Chapters = null;
+        }
     }
 
-    private void OnVolumeSliderChanged(object sender, RangeBaseValueChangedEventArgs e)
+    private async System.Threading.Tasks.Task GenerateChapterThumbnailsAsync()
     {
-        if (!_settingVolumeSlider)
-            Vm.SetVolume(e.NewValue);
+        if (!Vm.HasMedia || _generatingChapters)
+            return;
+        _generatingChapters = true;
+        try
+        {
+            // The thumbnail engine opens the file asynchronously; if the panel opened first, wait for
+            // it to become ready (up to ~10s) so the thumbnails still fill in rather than silently no-op.
+            for (int i = 0; i < 67 && !_thumbs.IsReady && _panelOpen; i++)
+                await System.Threading.Tasks.Task.Delay(150);
+
+            foreach (var ch in Vm.Chapters.ToList())
+            {
+                if (!_panelOpen)
+                    break; // panel closed — stop generating (cached thumbs remain for next open)
+                if (ch.Thumbnail is not null)
+                    continue;
+                string? path = await _thumbs.GetThumbnailAsync(ch.Time + 0.5, () => !_panelOpen); // a hair past the boundary
+                if (path is null || !_panelOpen)
+                    continue;
+                ch.Thumbnail = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(path));
+            }
+        }
+        catch { /* transient — leave remaining thumbnails null (retried on next panel open) */ }
+        finally { _generatingChapters = false; }
+    }
+
+    // ---- volume & overflow ----
+
+    private void OnVolumeBarTapped(object sender, TappedRoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.ActualWidth > 0)
+        {
+            double f = Math.Clamp(e.GetPosition(fe).X / fe.ActualWidth, 0, 1);
+            Vm.SetVolume(f * 130);
+            RevealChrome();
+        }
     }
 
     private void OnVolumeMuteClick(object sender, RoutedEventArgs e) => Vm.ToggleMute();
@@ -308,6 +457,7 @@ public sealed partial class PlayerView : UserControl
             Video.Open(pathOrUrl); // may throw on engine-init failure — do this before mutating UI state
             Vm.OnOpening();        // load accepted: clear the prior file's playhead/duration/chapter/HasMedia
             RevealChrome();        // show the controls when a file opens (drag-drop / picker)
+            _ = _thumbs.OpenAsync(pathOrUrl); // arm the seek-preview engine for this file (fire-and-forget)
         }
         catch (Exception)
         {
