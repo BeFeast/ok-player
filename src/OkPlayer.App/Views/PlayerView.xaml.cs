@@ -383,19 +383,22 @@ public sealed partial class PlayerView : UserControl
     private void LoadRecents()
     {
         Recents.Clear();
-        foreach (var (path, rec) in _history.Recents(6))
+        foreach (var (path, rec) in _history.Recents(30))
         {
-            double progress = rec.Duration > 0 ? Math.Clamp(rec.Position / rec.Duration, 0, 1) : 0;
-            string meta = rec.Duration > 0 && rec.Position > 1
-                ? $"{(int)(progress * 100)}% · {FormatPreviewTime(Math.Max(0, rec.Duration - rec.Position))} left"
-                : "Not started";
+            // Continue-watching = genuinely resumable progress only (the resume thresholds: > 5% watched
+            // and not within 30s of the end). Completed files (stored at position 0) are excluded.
+            if (rec.Duration <= 0 || rec.Position <= rec.Duration * 0.05 || rec.Position >= rec.Duration - 30)
+                continue;
+            double progress = Math.Clamp(rec.Position / rec.Duration, 0, 1);
             Recents.Add(new RecentEntry
             {
                 Path = path,
                 Title = string.IsNullOrEmpty(rec.Title) ? System.IO.Path.GetFileNameWithoutExtension(path) : rec.Title!,
-                Meta = meta,
+                Meta = $"{(int)(progress * 100)}% · {FormatPreviewTime(Math.Max(0, rec.Duration - rec.Position))} left",
                 Progress = progress,
             });
+            if (Recents.Count >= 6)
+                break;
         }
         RecentsSection.Visibility = Recents.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
