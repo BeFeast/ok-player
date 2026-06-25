@@ -61,6 +61,8 @@ public sealed partial class PlayerView : UserControl
     public event EventHandler<bool>? MediaPresenceChanged;
     /// <summary>Resize the window to the video's native pixel size (clamped to the screen). Host owns the AppWindow.</summary>
     public event EventHandler<(int Width, int Height)>? FitToVideoRequested;
+    /// <summary>Open the Settings window. The host owns the single SettingsWindow instance.</summary>
+    public event EventHandler? SettingsRequested;
 
     public PlayerView()
     {
@@ -445,6 +447,8 @@ public sealed partial class PlayerView : UserControl
     private bool _mediaInfoOpen; // in-flight guard: one dialog / one read at a time
 
     private void OnMediaInfoClick(object sender, RoutedEventArgs e) => _ = OpenMediaInfoAsync();
+
+    private void OnSettingsClick(object sender, RoutedEventArgs e) => SettingsRequested?.Invoke(this, EventArgs.Empty);
 
     private async System.Threading.Tasks.Task OpenMediaInfoAsync()
     {

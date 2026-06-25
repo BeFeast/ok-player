@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="OkPlayer.App.SettingsWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:media="using:Microsoft.UI.Xaml.Media"
+    mc:Ignorable="d">
+
+    <Window.SystemBackdrop>
+        <media:MicaBackdrop Kind="Base" />
+    </Window.SystemBackdrop>
+
+    <Grid Background="{ThemeResource OkSettingsWindowBrush}" RowDefinitions="42,*">
+
+        <!-- titlebar (system caption buttons drawn by the OS via ExtendsContentIntoTitleBar) -->
+        <Grid x:Name="AppTitleBar" Grid.Row="0" Padding="16,0,6,0"
+              BorderThickness="0,0,0,1" BorderBrush="{ThemeResource OkStrokeBrush}">
+            <TextBlock Text="Settings" VerticalAlignment="Center" FontSize="12.5" FontWeight="SemiBold"
+                       Foreground="{ThemeResource OkTextSecondaryBrush}" />
+        </Grid>
+
+        <!-- body: 192px nav rail + content pane -->
+        <Grid Grid.Row="1" ColumnDefinitions="192,*">
+
+            <Border Grid.Column="0" BorderThickness="0,0,1,0" BorderBrush="{ThemeResource OkStrokeBrush}" Background="#04000000">
+                <StackPanel Padding="10,12">
+                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderThickness="1"
+                            BorderBrush="{ThemeResource OkStrokeBrush}" CornerRadius="7" Padding="9,6" Margin="0,0,0,6">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <FontIcon Glyph="&#xE721;" FontSize="13" Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                            <TextBlock Text="Search" FontSize="12" Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                        </StackPanel>
+                    </Border>
+
+                    <ListView x:Name="NavList" SelectionMode="Single" SelectedIndex="0" SelectionChanged="OnNavChanged" Padding="0">
+                        <ListView.Resources>
+                            <SolidColorBrush x:Key="ListViewItemBackgroundSelected" Color="#1F10938A" />
+                            <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPointerOver" Color="#2910938A" />
+                            <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPressed" Color="#2910938A" />
+                        </ListView.Resources>
+                        <ListViewItem>
+                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                <FontIcon Glyph="&#xE706;" FontSize="16" /><TextBlock Text="Appearance" VerticalAlignment="Center" FontSize="12.5" />
+                            </StackPanel>
+                        </ListViewItem>
+                        <ListViewItem>
+                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                <FontIcon Glyph="&#xE768;" FontSize="16" /><TextBlock Text="Playback" VerticalAlignment="Center" FontSize="12.5" />
+                            </StackPanel>
+                        </ListViewItem>
+                        <ListViewItem>
+                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                <FontIcon Glyph="&#xED1E;" FontSize="16" /><TextBlock Text="Subtitles" VerticalAlignment="Center" FontSize="12.5" />
+                            </StackPanel>
+                        </ListViewItem>
+                        <ListViewItem>
+                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                <FontIcon Glyph="&#xE7F4;" FontSize="16" /><TextBlock Text="Video" VerticalAlignment="Center" FontSize="12.5" />
+                            </StackPanel>
+                        </ListViewItem>
+                        <ListViewItem>
+                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                <FontIcon Glyph="&#xE767;" FontSize="16" /><TextBlock Text="Audio" VerticalAlignment="Center" FontSize="12.5" />
+                            </StackPanel>
+                        </ListViewItem>
+                        <ListViewItem>
+                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                <FontIcon Glyph="&#xE765;" FontSize="16" /><TextBlock Text="Shortcuts" VerticalAlignment="Center" FontSize="12.5" />
+                            </StackPanel>
+                        </ListViewItem>
+                        <ListViewItem>
+                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                <FontIcon Glyph="&#xE71B;" FontSize="16" /><TextBlock Text="Integration" VerticalAlignment="Center" FontSize="12.5" />
+                            </StackPanel>
+                        </ListViewItem>
+                        <ListViewItem>
+                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                <FontIcon Glyph="&#xE943;" FontSize="16" /><TextBlock Text="Advanced" VerticalAlignment="Center" FontSize="12.5" />
+                            </StackPanel>
+                        </ListViewItem>
+                    </ListView>
+                </StackPanel>
+            </Border>
+
+            <ScrollViewer Grid.Column="1" Padding="28,24" VerticalScrollBarVisibility="Auto">
+                <Grid>
+                    <!-- Appearance (real) -->
+                    <StackPanel x:Name="AppearancePanel">
+                        <TextBlock Text="Appearance" Style="{StaticResource OkSettingsTitleTextStyle}" />
+
+                        <!-- THEME -->
+                        <TextBlock Text="THEME" FontSize="12" FontWeight="SemiBold" CharacterSpacing="60"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,22,0,10" />
+                        <Border Background="{ThemeResource ControlFillColorTertiaryBrush}" CornerRadius="8" Padding="3"
+                                Width="220" HorizontalAlignment="Left">
+                            <Grid ColumnDefinitions="*,*">
+                                <Button x:Name="ThemeLightBtn" Grid.Column="0" Content="Light" Click="OnThemeLight"
+                                        HorizontalAlignment="Stretch" CornerRadius="6" Padding="0,5" FontSize="12.5"
+                                        Background="Transparent" BorderThickness="0" />
+                                <Button x:Name="ThemeAutoBtn" Grid.Column="1" Content="Auto" Click="OnThemeAuto"
+                                        HorizontalAlignment="Stretch" CornerRadius="6" Padding="0,5" FontSize="12.5"
+                                        Background="Transparent" BorderThickness="0" />
+                            </Grid>
+                        </Border>
+                        <TextBlock Text="Auto follows the system &#x2014; dark renders most evenings." FontSize="11.5"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,8,0,0" />
+
+                        <!-- ACCENT -->
+                        <TextBlock Text="ACCENT" FontSize="12" FontWeight="SemiBold" CharacterSpacing="60"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,24,0,12" />
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <Button x:Name="AccentSystemBtn" Click="OnAccentSystem" CornerRadius="8" Padding="10,12"
+                                    Background="Transparent" BorderThickness="1" BorderBrush="{ThemeResource OkStrokeBrush}">
+                                <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                                    <Border Width="18" Height="18" CornerRadius="5" Background="#FF0067C0" />
+                                    <TextBlock Text="System accent" FontSize="12.5" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
+                            <Button x:Name="AccentTealBtn" Click="OnAccentTeal" CornerRadius="8" Padding="10,12"
+                                    Background="Transparent" BorderThickness="1" BorderBrush="{ThemeResource OkStrokeBrush}">
+                                <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                                    <Border Width="18" Height="18" CornerRadius="5" Background="{ThemeResource OkAccentBrush}" />
+                                    <TextBlock Text="OK Player teal" FontSize="12.5" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
+
+                        <!-- MICA INTENSITY -->
+                        <TextBlock Text="MICA INTENSITY &#x2014; PER SURFACE" FontSize="12" FontWeight="SemiBold" CharacterSpacing="60"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,24,0,12" />
+                        <StackPanel Spacing="10" MaxWidth="380" HorizontalAlignment="Left">
+                            <Grid ColumnDefinitions="90,*,40">
+                                <TextBlock Text="Titlebar" VerticalAlignment="Center" FontSize="12.5" />
+                                <Slider x:Name="MicaTitlebarSlider" Grid.Column="1" Minimum="0" Maximum="100" StepFrequency="5"
+                                        ValueChanged="OnMicaChanged" VerticalAlignment="Center" />
+                                <TextBlock x:Name="MicaTitlebarVal" Grid.Column="2" VerticalAlignment="Center" TextAlignment="Right"
+                                           FontSize="12" Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                            </Grid>
+                            <Grid ColumnDefinitions="90,*,40">
+                                <TextBlock Text="Panels" VerticalAlignment="Center" FontSize="12.5" />
+                                <Slider x:Name="MicaPanelsSlider" Grid.Column="1" Minimum="0" Maximum="100" StepFrequency="5"
+                                        ValueChanged="OnMicaChanged" VerticalAlignment="Center" />
+                                <TextBlock x:Name="MicaPanelsVal" Grid.Column="2" VerticalAlignment="Center" TextAlignment="Right"
+                                           FontSize="12" Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                            </Grid>
+                            <Grid ColumnDefinitions="90,*,40">
+                                <TextBlock Text="Overlays" VerticalAlignment="Center" FontSize="12.5" />
+                                <Slider x:Name="MicaOverlaysSlider" Grid.Column="1" Minimum="0" Maximum="100" StepFrequency="5"
+                                        ValueChanged="OnMicaChanged" VerticalAlignment="Center" />
+                                <TextBlock x:Name="MicaOverlaysVal" Grid.Column="2" VerticalAlignment="Center" TextAlignment="Right"
+                                           FontSize="12" Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                            </Grid>
+                        </StackPanel>
+                    </StackPanel>
+                    <!-- placeholder for the not-yet-built panels -->
+                    <StackPanel x:Name="PlaceholderPanel" Visibility="Collapsed">
+                        <TextBlock x:Name="PlaceholderTitle" Style="{StaticResource OkSettingsTitleTextStyle}" />
+                        <Border Margin="0,16,0,0" Padding="12,9" CornerRadius="7" HorizontalAlignment="Left"
+                                Background="{ThemeResource OkAccentTintBrush}">
+                            <TextBlock Text="Coming soon" FontSize="12" FontWeight="SemiBold"
+                                       Foreground="{ThemeResource OkAccentTextBrush}" />
+                        </Border>
+                    </StackPanel>
+                </Grid>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</Window>
