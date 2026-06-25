@@ -149,6 +149,7 @@ public partial class PlayerViewModel : ObservableObject
         engine.FileLoaded += OnFileLoaded;
         engine.EndFile += OnEndFile;
         engine.PlaybackRestart += OnPlaybackRestart;
+        engine.CommandReply += OnVmCommandReply;
     }
 
     public void Detach()
@@ -159,6 +160,7 @@ public partial class PlayerViewModel : ObservableObject
             e.FileLoaded -= OnFileLoaded;
             e.EndFile -= OnEndFile;
             e.PlaybackRestart -= OnPlaybackRestart;
+            e.CommandReply -= OnVmCommandReply;
         }
         _engine = null;
         _dispatcher = null;
@@ -432,20 +434,40 @@ public partial class PlayerViewModel : ObservableObject
         double seconds = System.Math.Clamp(fraction, 0, 1) * Duration;
         Position = seconds;
         _awaitingSeek = true;
-        if (!CmdOk("seek", Inv(seconds), "absolute"))
-            _awaitingSeek = false; // a failed seek must not freeze the time-pos echo
+        if (!SeekCmd("seek", Inv(seconds), "absolute"))
+            _awaitingSeek = false; // submit rejected up front
     }
 
     public void SeekRelative(double seconds)
     {
         _awaitingSeek = true;
-        if (!CmdOk("seek", Inv(seconds), "relative"))
+        if (!SeekCmd("seek", Inv(seconds), "relative"))
         {
             _awaitingSeek = false;
             return;
         }
         double target = Duration > 0 ? System.Math.Clamp(Position + seconds, 0, Duration) : Position + seconds;
         ToastRequested?.Invoke(FormatTime(target));
+    }
+
+    private const ulong SeekReply = 1; // tags seek commands so a rejected seek (non-seekable stream) can be caught
+
+    /// <summary>Dispatch a seek async, tagged so <see cref="OnVmCommandReply"/> can clear the time-pos
+    /// suppression if mpv later rejects it (success arrives via PlaybackRestart). Returns false only if the
+    /// submit itself is refused (no engine).</summary>
+    private bool SeekCmd(params string[] args)
+    {
+        if (_engine is not { } e)
+            return false;
+        try { e.CommandAsync(SeekReply, args); return true; } catch (MpvException) { return false; }
+    }
+
+    private void OnVmCommandReply(ulong id, bool success)
+    {
+        // A rejected seek never fires PlaybackRestart, so it would otherwise leave _awaitingSeek stuck and
+        // freeze the time-pos echo (e.g. seeking a non-seekable live stream). Clear it on failure.
+        if (id == SeekReply && !success)
+            _dispatcher?.TryEnqueue(() => _awaitingSeek = false);
     }
 
     public void FrameStep(bool forward) => Cmd(forward ? "frame-step" : "frame-back-step");

@@ -632,11 +632,12 @@ public sealed partial class PlayerView : UserControl
         }
         if (!Vm.HasMedia || Video.Engine is not { } engine)
             return;
+        string? path = _currentPath; // pin the file we're reading so a mid-read switch can't show stale info
         MediaInfoViewModel model;
-        try { model = await System.Threading.Tasks.Task.Run(() => BuildMediaInfo(engine, _currentPath)); }
+        try { model = await System.Threading.Tasks.Task.Run(() => BuildMediaInfo(engine, path)); }
         catch { return; } // engine torn down mid-read — just don't show the card
-        if (!Vm.HasMedia || _mediaInfoOpen)
-            return; // the file changed or the card was toggled while we were reading
+        if (!Vm.HasMedia || _mediaInfoOpen || _currentPath != path)
+            return; // the file changed, or the card was toggled, while we were reading
         _mediaInfoModel = model;
         MediaInfoCardView.DataContext = _mediaInfoModel;
         MediaInfoHost.Visibility = Visibility.Visible;
