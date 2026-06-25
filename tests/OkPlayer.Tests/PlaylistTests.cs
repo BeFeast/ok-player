@@ -80,4 +80,17 @@ public class PlaylistTests
         Assert.False(p.SetCurrent(@"C:\v\missing.mkv"));
         Assert.Equal(@"C:\v\ep10.mkv", p.Current); // unchanged on miss
     }
+
+    [Fact]
+    public void Peek_ReturnsNeighboursWithoutMovingCursor()
+    {
+        var p = new Playlist(Folder, @"C:\v\ep1.mkv");
+        Assert.Equal(@"C:\v\ep2.mkv", p.PeekNext);
+        Assert.Null(p.PeekPrev);          // at the start
+        Assert.Equal(0, p.CurrentIndex);  // peeking did not move the cursor
+        p.SetCurrent(@"C:\v\ep10.mkv");    // last item
+        Assert.Null(p.PeekNext);
+        Assert.Equal(@"C:\v\ep2.mkv", p.PeekPrev);
+        Assert.Equal(2, p.CurrentIndex);
+    }
 }

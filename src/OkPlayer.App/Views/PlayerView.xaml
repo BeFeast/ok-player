@@ -394,11 +394,12 @@
             <Grid Grid.Row="0" Padding="14,14,8,6" ColumnDefinitions="*,Auto">
                 <Border Background="#14000000" CornerRadius="8" Padding="3" HorizontalAlignment="Left">
                     <StackPanel Orientation="Horizontal">
-                        <Border Background="{ThemeResource OkPopoverBrush}" CornerRadius="6" Padding="16,6">
-                            <TextBlock Text="Chapters" FontSize="12.5" FontWeight="SemiBold" Foreground="{ThemeResource OkAccentTextBrush}" />
+                        <Border x:Name="ChaptersTab" CornerRadius="6" Tapped="OnChaptersTab">
+                            <TextBlock x:Name="ChaptersTabText" Text="Chapters" FontSize="12.5" FontWeight="SemiBold" Padding="16,6" />
                         </Border>
-                        <TextBlock Text="Up Next" FontSize="12.5" Padding="16,6" VerticalAlignment="Center"
-                                   Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                        <Border x:Name="UpNextTab" CornerRadius="6" Tapped="OnUpNextTab">
+                            <TextBlock x:Name="UpNextTabText" Text="Up Next" FontSize="12.5" FontWeight="SemiBold" Padding="16,6" />
+                        </Border>
                     </StackPanel>
                 </Border>
                 <Button Grid.Column="1" Style="{StaticResource OkOscIconButtonStyle}" Content="&#xE711;"
@@ -441,7 +442,7 @@
                 </ListView.ItemTemplate>
             </ListView>
 
-            <Border Grid.Row="3" Padding="14,10" BorderThickness="0,1,0,0" BorderBrush="{ThemeResource OkStrokeBrush}">
+            <Border x:Name="ChaptersFooter" Grid.Row="3" Padding="14,10" BorderThickness="0,1,0,0" BorderBrush="{ThemeResource OkStrokeBrush}">
                 <StackPanel Spacing="8">
                     <TextBlock x:Name="ChaptersEmpty" Text="No chapters in this file." HorizontalAlignment="Center"
                                Style="{StaticResource OkSmallTextStyle}" />
@@ -477,6 +478,72 @@
                             FontSize="12.5" FontWeight="SemiBold" Content="Bookmark here" />
                 </StackPanel>
             </Border>
+
+            <!-- Up Next tab — overlays the Chapters content (rows 1-3); SetPanelTab toggles which shows -->
+            <Grid x:Name="UpNextView" Grid.Row="1" Grid.RowSpan="3" Visibility="Collapsed"
+                  RowDefinitions="Auto,Auto,*" Padding="14,6,14,12">
+                <!-- now-playing card -->
+                <Border Grid.Row="0" CornerRadius="8" Padding="8" Background="#1F10938A" Margin="0,0,0,10">
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                        <Border Grid.Column="0" Width="54" Height="34" CornerRadius="5">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0.1,0" EndPoint="0.9,1">
+                                    <GradientStop Color="#16352B" Offset="0" />
+                                    <GradientStop Color="#0C7C75" Offset="1" />
+                                </LinearGradientBrush>
+                            </Border.Background>
+                            <FontIcon Glyph="&#xE768;" FontSize="14" Foreground="#80FFFFFF" />
+                        </Border>
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                            <TextBlock Text="{x:Bind Vm.MediaTitle, Mode=OneWay}" FontSize="12.5" FontWeight="SemiBold"
+                                       Foreground="{ThemeResource OkAccentTextBrush}" TextTrimming="CharacterEllipsis" MaxLines="1" />
+                            <TextBlock Text="NOW PLAYING" FontSize="10.5" FontWeight="SemiBold" CharacterSpacing="40"
+                                       Foreground="#FF0C7C75" Margin="0,1,0,0" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+                <!-- FROM THIS FOLDER · N -->
+                <TextBlock x:Name="UpNextFolderHeader" Grid.Row="1" Text="FROM THIS FOLDER" FontSize="11" FontWeight="SemiBold"
+                           CharacterSpacing="60" Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="2,2,0,5" />
+                <!-- the folder, in playlist order -->
+                <ScrollViewer x:Name="UpNextList" Grid.Row="2" VerticalScrollBarVisibility="Auto">
+                    <ItemsControl ItemsSource="{x:Bind UpNext}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:PlaylistRow">
+                                <Button Click="OnUpNextRowClick" Tag="{x:Bind Path}" Margin="0,0,0,1" Padding="0"
+                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                                        Background="Transparent" BorderThickness="0" Opacity="{x:Bind RowOpacity}">
+                                    <Grid>
+                                        <Border Background="#1410938A" CornerRadius="6" Visibility="{x:Bind CurrentVisibility}" />
+                                        <Grid Padding="7,7" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                                            <Grid Grid.Column="0" Width="16" VerticalAlignment="Center">
+                                                <Ellipse Width="9" Height="9" Stroke="{ThemeResource OkTextSecondaryBrush}"
+                                                         StrokeThickness="1.3" Visibility="{x:Bind CircleVisibility}" />
+                                                <FontIcon Glyph="&#xE73E;" FontSize="13" Foreground="#FF0C7C75" Visibility="{x:Bind CheckVisibility}" />
+                                            </Grid>
+                                            <TextBlock Grid.Column="1" Text="{x:Bind Title}" VerticalAlignment="Center"
+                                                       TextTrimming="CharacterEllipsis" Style="{StaticResource OkBodyTextStyle}" />
+                                            <Border Grid.Column="2" Visibility="{x:Bind NextVisibility}" Background="#2610938A"
+                                                    CornerRadius="4" Padding="6,2" VerticalAlignment="Center">
+                                                <TextBlock Text="NEXT" FontSize="9" FontWeight="SemiBold" Foreground="#FF0C7C75" />
+                                            </Border>
+                                        </Grid>
+                                    </Grid>
+                                </Button>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+                <!-- empty: single URL / lone file -->
+                <StackPanel x:Name="UpNextEmpty" Grid.Row="2" VerticalAlignment="Center" HorizontalAlignment="Center"
+                            Spacing="6" Visibility="Collapsed" Padding="20,0">
+                    <FontIcon Glyph="&#xE8A5;" FontSize="24" Foreground="{ThemeResource OkTextSecondaryBrush}" HorizontalAlignment="Center" />
+                    <TextBlock Text="Just this file" FontSize="13" FontWeight="SemiBold" HorizontalAlignment="Center"
+                               Foreground="{ThemeResource OkTextBodyBrush}" />
+                    <TextBlock Text="No other media in this folder." FontSize="11.5" HorizontalAlignment="Center"
+                               TextAlignment="Center" Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                </StackPanel>
+            </Grid>
         </Grid>
 
         <!-- ===== OSD toast (top-center, shared scrim style) ===== -->
