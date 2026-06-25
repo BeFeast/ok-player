@@ -14,6 +14,7 @@ public sealed class FileRecord
     public double Duration { get; set; }
     public string LastOpenedUtc { get; set; } = string.Empty;
     public string? Title { get; set; }
+    public string? PosterPath { get; set; } // cached poster frame for continue-watching
     public List<double> Bookmarks { get; set; } = new();
 }
 
@@ -121,6 +122,15 @@ public sealed class HistoryService
         }
         Save();
         return true;
+    }
+
+    public void SetPoster(string path, string posterPath)
+    {
+        if (!IsTrackable(path))
+            return;
+        lock (_lock)
+            GetOrCreate(path).PosterPath = posterPath;
+        Save();
     }
 
     public IReadOnlyList<double> GetBookmarks(string path)

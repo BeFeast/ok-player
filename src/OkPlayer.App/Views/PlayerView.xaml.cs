@@ -29,6 +29,7 @@ public sealed partial class PlayerView : UserControl
     private bool _panelOpen;
     private bool _syncingChapter;
     private readonly ThumbnailService _thumbs = new();
+    private readonly ThumbnailService _posterThumbs = new(); // decode-only engine for continue-watching posters
     private readonly HistoryService _history = new();
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _saveTimer;
     private string? _currentPath;
@@ -98,7 +99,7 @@ public sealed partial class PlayerView : UserControl
             _viewUnloaded = true;
             _saveTimer.Stop();
             SaveProgress();
-            System.Threading.Tasks.Task.Run(() => _thumbs.Dispose());
+            System.Threading.Tasks.Task.Run(() => { _thumbs.Dispose(); _posterThumbs.Dispose(); });
         };
         Vm.PropertyChanged += OnVmPropertyChanged;
         Vm.ToastRequested += ShowToast;
@@ -432,23 +433,109 @@ public sealed partial class PlayerView : UserControl
             if (rec.Duration <= 0 || rec.Position <= rec.Duration * 0.05 || rec.Position >= rec.Duration - 30)
                 continue;
             double progress = Math.Clamp(rec.Position / rec.Duration, 0, 1);
-            Recents.Add(new RecentEntry
+            var entry = new RecentEntry
             {
                 Path = path,
                 Title = string.IsNullOrEmpty(rec.Title) ? System.IO.Path.GetFileNameWithoutExtension(path) : rec.Title!,
-                Meta = $"{(int)(progress * 100)}% · {FormatPreviewTime(Math.Max(0, rec.Duration - rec.Position))} left",
+                Meta = FormatRuntime(rec.Duration),
+                TimeLeft = FormatTimeLeft(rec.Duration - rec.Position),
                 Progress = progress,
-            });
+                PlaceholderGradient = PosterGradient(Recents.Count),
+            };
+            if (!string.IsNullOrEmpty(rec.PosterPath) && System.IO.File.Exists(rec.PosterPath))
+                entry.Poster = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(rec.PosterPath!));
+            Recents.Add(entry);
             if (Recents.Count >= 6)
                 break;
         }
         RecentsSection.Visibility = Recents.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        _ = GeneratePostersAsync(); // fill any missing posters in the background
     }
 
     private void OnRecentClick(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement { Tag: string path })
             OpenMedia(path);
+    }
+
+    private static string FormatRuntime(double seconds)
+    {
+        int total = (int)seconds;
+        int h = total / 3600, m = total % 3600 / 60;
+        return h > 0 ? $"{h}h {m}m" : $"{m}m";
+    }
+
+    private static string FormatTimeLeft(double seconds)
+    {
+        int total = (int)Math.Max(0, seconds);
+        int h = total / 3600, m = total % 3600 / 60;
+        return h > 0 ? $"{h}h {m}m left" : $"{Math.Max(1, m)}m left";
+    }
+
+    // Rotating band-04 placeholder gradients so a card without a poster still looks designed.
+    private static readonly (string A, string B)[] PosterPalette =
+    {
+        ("#FF16202E", "#FF7B5A47"), ("#FF2A3B52", "#FF0C1320"), ("#FF16352B", "#FF7DA883"),
+    };
+
+    private static Microsoft.UI.Xaml.Media.Brush PosterGradient(int index)
+    {
+        var (a, b) = PosterPalette[index % PosterPalette.Length];
+        return new Microsoft.UI.Xaml.Media.LinearGradientBrush
+        {
+            StartPoint = new Windows.Foundation.Point(0.1, 0),
+            EndPoint = new Windows.Foundation.Point(0.9, 1),
+            GradientStops =
+            {
+                new Microsoft.UI.Xaml.Media.GradientStop { Color = Hex(a), Offset = 0 },
+                new Microsoft.UI.Xaml.Media.GradientStop { Color = Hex(b), Offset = 1 },
+            },
+        };
+    }
+
+    private static Windows.UI.Color Hex(string s)
+        => Windows.UI.Color.FromArgb(0xFF,
+            System.Convert.ToByte(s.Substring(3, 2), 16),
+            System.Convert.ToByte(s.Substring(5, 2), 16),
+            System.Convert.ToByte(s.Substring(7, 2), 16));
+
+    private bool _generatingPosters;
+
+    private async System.Threading.Tasks.Task GeneratePostersAsync()
+    {
+        if (_generatingPosters)
+            return;
+        _generatingPosters = true;
+        try
+        {
+            string dir = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "OkPlayer", "posters");
+            System.IO.Directory.CreateDirectory(dir);
+            foreach (var entry in Recents.ToList())
+            {
+                if (entry.Poster is not null || Vm.HasMedia) // a poster already, or playback started — stop
+                    continue;
+                var rec = _history.Get(entry.Path);
+                double when = rec is { Duration: > 0 } ? Math.Max(3, rec.Duration * 0.2) : 30;
+                if (!await _posterThumbs.OpenAsync(entry.Path))
+                    continue;
+                string? frame = await _posterThumbs.GetThumbnailAsync(when);
+                if (frame is null || !System.IO.File.Exists(frame))
+                    continue;
+                string poster = System.IO.Path.Combine(dir, PosterHash(entry.Path) + ".png");
+                try { System.IO.File.Copy(frame, poster, overwrite: true); } catch { continue; }
+                _history.SetPoster(entry.Path, poster);
+                DispatcherQueue.TryEnqueue(() => entry.Poster = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(poster)));
+            }
+        }
+        catch { /* best effort */ }
+        finally { _generatingPosters = false; }
+    }
+
+    private static string PosterHash(string path)
+    {
+        byte[] hash = System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(path));
+        return System.Convert.ToHexString(hash);
     }
 
     // ---- media info (design band 13: Streams) ----
