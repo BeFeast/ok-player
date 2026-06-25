@@ -101,7 +101,7 @@
              never shows the light Mica through it; only present once media is loaded -->
         <Border x:Name="VideoBackdrop" Background="#FF000000" Visibility="Collapsed" />
         <!-- the single video plane: only over Mica once media is loaded (Mica shows the light shell otherwise) -->
-        <render:MpvVideoPanel x:Name="Video" Tapped="OnVideoTapped" Visibility="Collapsed" />
+        <render:MpvVideoPanel x:Name="Video" Tapped="OnVideoTapped" DoubleTapped="OnVideoDoubleTapped" Visibility="Collapsed" />
 
         <!-- light-first empty / welcome state (over Mica) — first-run, no recents -->
         <StackPanel x:Name="WelcomeCard" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="13">
@@ -271,7 +271,7 @@
                     <Button Grid.Column="7" x:Name="SpeedChip" Style="{StaticResource OkSpeedChipStyle}"
                             Content="{x:Bind Vm.SpeedText, Mode=OneWay}" ToolTipService.ToolTip="Playback speed">
                         <Button.Flyout>
-                            <Flyout FlyoutPresenterStyle="{StaticResource OkPopoverFlyoutStyle}" Placement="Top">
+                            <Flyout x:Name="SpeedFlyout" FlyoutPresenterStyle="{StaticResource OkPopoverFlyoutStyle}" Placement="Top">
                                 <StackPanel Width="120">
                                     <TextBlock Text="Speed" Style="{StaticResource OkBodyStrongTextStyle}" Margin="6,4" />
                                     <Button Style="{StaticResource OkSwitcherRowStyle}" Tag="0.5"  Content="0.5&#x00D7;"  Click="OnSpeedStepClick" />
@@ -288,7 +288,7 @@
                     <Button Grid.Column="8" Style="{StaticResource OkOscSvgButtonStyle}" ToolTipService.ToolTip="Subtitles">
                         <FontIcon Glyph="&#xE7F0;" FontSize="19" Foreground="White" />
                         <Button.Flyout>
-                            <Flyout FlyoutPresenterStyle="{StaticResource OkPopoverFlyoutStyle}" Placement="Top">
+                            <Flyout x:Name="SubtitleFlyout" FlyoutPresenterStyle="{StaticResource OkPopoverFlyoutStyle}" Placement="Top">
                                 <StackPanel Width="272">
                                     <TextBlock Text="Subtitles" Style="{StaticResource OkBodyStrongTextStyle}" Margin="6,4" />
                                     <Button Style="{StaticResource OkSwitcherRowStyle}" Content="Off" Click="OnSubtitleOffClick" />
@@ -324,7 +324,7 @@
                     <Button Grid.Column="9" Style="{StaticResource OkOscSvgButtonStyle}" ToolTipService.ToolTip="Audio">
                         <FontIcon Glyph="&#xE8D6;" FontSize="19" Foreground="White" />
                         <Button.Flyout>
-                            <Flyout FlyoutPresenterStyle="{StaticResource OkPopoverFlyoutStyle}" Placement="Top">
+                            <Flyout x:Name="AudioFlyout" FlyoutPresenterStyle="{StaticResource OkPopoverFlyoutStyle}" Placement="Top">
                                 <StackPanel Width="272">
                                     <TextBlock Text="Audio" Style="{StaticResource OkBodyStrongTextStyle}" Margin="6,4" />
                                     <ItemsControl ItemsSource="{x:Bind Vm.AudioTracks, Mode=OneWay}">

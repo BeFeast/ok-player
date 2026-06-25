@@ -310,6 +310,15 @@ public sealed partial class PlayerView : UserControl
         RevealChrome();
     }
 
+    private void OnVideoDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
+    {
+        // The first of the two taps already fired OnVideoTapped (a play/pause toggle); undo it so a
+        // double-click toggles only full screen, leaving playback as it was.
+        Vm.TogglePlay();
+        ToggleFullscreenRequested?.Invoke(this, EventArgs.Empty);
+        RevealChrome();
+    }
+
     private void OnRootKeyDown(object sender, KeyRoutedEventArgs e)
     {
         bool handled = true;
@@ -794,15 +803,17 @@ public sealed partial class PlayerView : UserControl
         if (sender is Button { Tag: string tag } &&
             double.TryParse(tag, NumberStyles.Any, CultureInfo.InvariantCulture, out double speed))
             Vm.SetSpeed(speed);
+        SpeedFlyout.Hide();   // a speed pick is a one-shot choice — dismiss the popover
         RevealChrome();
     }
 
-    private void OnSubtitleOffClick(object sender, RoutedEventArgs e) { Vm.SetSubtitleOff(); RevealChrome(); }
+    private void OnSubtitleOffClick(object sender, RoutedEventArgs e) { Vm.SetSubtitleOff(); SubtitleFlyout.Hide(); RevealChrome(); }
 
     private void OnSubtitleTrackClick(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement { DataContext: TrackInfo track })
             Vm.SelectSubtitle(track);
+        SubtitleFlyout.Hide();   // picking a track dismisses the switcher (the Delay/Size steppers don't)
         RevealChrome();
     }
 
@@ -810,6 +821,7 @@ public sealed partial class PlayerView : UserControl
     {
         if (sender is FrameworkElement { DataContext: TrackInfo track })
             Vm.SelectAudio(track);
+        AudioFlyout.Hide();
         RevealChrome();
     }
 
