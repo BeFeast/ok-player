@@ -84,10 +84,12 @@ public partial class PlayerViewModel : ObservableObject
     partial void OnSpeedChanged(double value) => OnPropertyChanged(nameof(SpeedText));
     partial void OnSubDelayMsChanged(int value) => OnPropertyChanged(nameof(SubDelayText));
 
-    partial void OnCurrentChapterIndexChanged(int value)
+    partial void OnCurrentChapterIndexChanged(int value) => ApplyCurrentChapterFlags();
+
+    private void ApplyCurrentChapterFlags()
     {
         for (int i = 0; i < Chapters.Count; i++)
-            Chapters[i].IsCurrent = i == value;
+            Chapters[i].IsCurrent = i == CurrentChapterIndex;
     }
     partial void OnVolumeChanged(double value)
     {
@@ -149,6 +151,7 @@ public partial class PlayerViewModel : ObservableObject
             if (CurrentChapterIndex >= Chapters.Count)
                 CurrentChapterIndex = -1; // a shorter/empty new file must not keep the prior index
             OnPropertyChanged(nameof(CurrentChapterIndex)); // re-sync the highlight after repopulation
+            ApplyCurrentChapterFlags(); // partial setter doesn't fire on the manual notify above
         });
     }
 
