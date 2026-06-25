@@ -86,6 +86,8 @@ public sealed partial class PlayerView : UserControl
 
         Video.EngineReady += OnEngineReady;
         Video.ScreenshotSaved += (_, _) => DispatcherQueue.TryEnqueue(() => ShowToast("Screenshot saved"));
+        MediaInfoCardView.CloseRequested += (_, _) => CloseMediaInfo();
+        MediaInfoCardView.CopyRequested += (_, _) => OnMediaInfoCopy();
         Seek.SeekRequested += OnSeekRequested;
         Seek.ScrubStateChanged += scrubbing => Vm.IsScrubbing = scrubbing;
         Seek.HoverChanged += OnSeekHover;
@@ -324,10 +326,11 @@ public sealed partial class PlayerView : UserControl
             case (VirtualKey)0x4D: Vm.ToggleMute(); break;        // M
             case (VirtualKey)0x46: ToggleFullscreenRequested?.Invoke(this, EventArgs.Empty); break; // F
             case (VirtualKey)0x53: DoScreenshot(); break;         // S
-            case (VirtualKey)0x49: _ = OpenMediaInfoAsync(); break; // I
+            case (VirtualKey)0x49: OpenMediaInfo(); break;        // I
             case (VirtualKey)0x43: TogglePanel(); break;          // C
             case VirtualKey.Escape:
-                if (_panelOpen) TogglePanel();
+                if (_mediaInfoOpen) CloseMediaInfo();
+                else if (_panelOpen) TogglePanel();
                 else ExitFullscreenRequested?.Invoke(this, EventArgs.Empty);
                 break;
             default: handled = false; break;
@@ -451,68 +454,39 @@ public sealed partial class PlayerView : UserControl
 
     private bool _mediaInfoOpen; // in-flight guard: one dialog / one read at a time
 
-    private void OnMediaInfoClick(object sender, RoutedEventArgs e) => _ = OpenMediaInfoAsync();
+    private MediaInfoViewModel? _mediaInfoModel;
+
+    private void OnMediaInfoClick(object sender, RoutedEventArgs e) => OpenMediaInfo();
 
     private void OnSettingsClick(object sender, RoutedEventArgs e) => SettingsRequested?.Invoke(this, EventArgs.Empty);
 
-    private async System.Threading.Tasks.Task OpenMediaInfoAsync()
+    /// <summary>Show (or toggle) the Media-info card. Reads on the UI thread — a one-shot user action on the
+    /// same thread that owns the engine's disposal, so it can't race a torn-down handle.</summary>
+    private void OpenMediaInfo()
     {
-        if (_mediaInfoOpen || !Vm.HasMedia || Video.Engine is not { } engine)
+        if (_mediaInfoOpen)
+        {
+            CloseMediaInfo();
             return;
+        }
+        if (!Vm.HasMedia || Video.Engine is not { } engine)
+            return;
+        _mediaInfoModel = BuildMediaInfo(engine, _currentPath);
+        MediaInfoCardView.DataContext = _mediaInfoModel;
+        MediaInfoHost.Visibility = Visibility.Visible;
         _mediaInfoOpen = true;
-        try
-        {
-            // Read on the UI thread: this is a one-shot user action (not an observe callback, so the core
-            // is responsive), and running on the same thread that owns MpvVideoPanel.Dispose() rules out a
-            // read landing on a torn-down native handle.
-            var rows = ReadMediaInfo(engine);
-            var dialog = new ContentDialog
-            {
-                Title = "Media information",
-                Content = BuildMediaInfoContent(rows),
-                CloseButtonText = "Close",
-                DefaultButton = ContentDialogButton.Close,
-                XamlRoot = XamlRoot,
-            };
-            await dialog.ShowAsync();
-        }
-        catch { /* engine unavailable or a dialog already showing */ }
-        finally
-        {
-            _mediaInfoOpen = false;
-        }
     }
 
-    private static List<(string Section, string Label, string Value)> ReadMediaInfo(OkPlayer.Mpv.MpvContext e)
+    private void CloseMediaInfo()
     {
-        var rows = new List<(string, string, string)>();
-        void Add(string sec, string label, string? val)
-        {
-            if (!string.IsNullOrWhiteSpace(val))
-                rows.Add((sec, label, val!));
-        }
-        Add("File", "Container", e.GetPropertyString("file-format"));
-        if (e.GetPropertyLong("file-size") is long size)
-            Add("File", "File size", FormatBytes(size));
-        if (e.GetPropertyDouble("duration") is double dur)
-            Add("File", "Duration", FormatPreviewTime(dur));
+        MediaInfoHost.Visibility = Visibility.Collapsed;
+        _mediaInfoOpen = false;
+    }
 
-        Add("Video", "Codec", e.GetPropertyString("video-codec"));
-        if (e.GetPropertyLong("width") is long w && e.GetPropertyLong("height") is long h)
-            Add("Video", "Resolution", $"{w} × {h}");
-        if ((e.GetPropertyDouble("container-fps") ?? e.GetPropertyDouble("estimated-vf-fps")) is double fps && fps > 0)
-            Add("Video", "Frame rate", $"{fps:0.###} fps");
-        Add("Video", "Pixel format", e.GetPropertyString("video-params/pixelformat"));
-        if (e.GetPropertyLong("video-bitrate") is long vbr && vbr > 0)
-            Add("Video", "Bitrate", $"{vbr / 1_000_000.0:0.0} Mb/s");
-
-        Add("Audio", "Codec", e.GetPropertyString("audio-codec"));
-        Add("Audio", "Channels", e.GetPropertyString("audio-params/channel-count"));
-        if (e.GetPropertyLong("audio-params/samplerate") is long sr && sr > 0)
-            Add("Audio", "Sample rate", $"{sr / 1000.0:0.#} kHz");
-        if (e.GetPropertyLong("audio-bitrate") is long abr && abr > 0)
-            Add("Audio", "Bitrate", $"{abr / 1000.0:0} kb/s");
-        return rows;
+    private void OnMediaInfoCopy()
+    {
+        if (_mediaInfoModel is { } m && CopyMediaInfo(m))
+            ShowToast("Copied");
     }
 
     private static string FormatBytes(long b)
@@ -520,34 +494,208 @@ public sealed partial class PlayerView : UserControl
          : b >= (1L << 20) ? $"{b / (double)(1L << 20):0.0} MB"
          : $"{b / 1024.0:0} KB";
 
-    private static UIElement BuildMediaInfoContent(List<(string Section, string Label, string Value)> rows)
+    private static MediaInfoViewModel BuildMediaInfo(OkPlayer.Mpv.MpvContext e, string? path)
     {
-        var outer = new StackPanel { Spacing = 14, MinWidth = 360 };
-        foreach (var group in rows.GroupBy(r => r.Section))
+        var m = new MediaInfoViewModel
         {
-            var card = new StackPanel { Spacing = 7 };
-            card.Children.Add(new TextBlock
+            FileName = string.IsNullOrEmpty(path) ? (e.GetPropertyString("media-title") ?? string.Empty) : System.IO.Path.GetFileName(path),
+            DirectoryPath = string.IsNullOrEmpty(path) ? string.Empty : System.IO.Path.GetDirectoryName(path) + "\\",
+        };
+
+        var file = new InfoSection { Eyebrow = "FILE · CONTAINER" };
+        file.Add("Container", FriendlyContainer(e.GetPropertyString("file-format")));
+        long? size = e.GetPropertyLong("file-size");
+        if (size is long s) file.Add("File size", FormatBytes(s));
+        double? dur = e.GetPropertyDouble("duration");
+        if (dur is double d) file.Add("Duration", FormatPreviewTime(d));
+        if (size is long sz && dur is double du && du > 1)
+            file.Add("Overall bitrate", $"{sz * 8.0 / du / 1_000_000:0.0} Mb/s");
+        m.StreamSections.Add(file);
+
+        var video = new InfoSection { Eyebrow = "VIDEO", IdChip = SelectedTrackChip(e, "video") };
+        video.Add("Codec", FriendlyVideoCodec(e.GetPropertyString("video-codec")));
+        video.Add("Profile", SelectedTrackProp(e, "video", "codec-profile"));
+        long? vw = e.GetPropertyLong("video-params/w") ?? e.GetPropertyLong("width");
+        long? vh = e.GetPropertyLong("video-params/h") ?? e.GetPropertyLong("height");
+        if (vw is long ww && vh is long hh) video.Add("Resolution", $"{ww} × {hh}");
+        if ((e.GetPropertyDouble("container-fps") ?? e.GetPropertyDouble("estimated-vf-fps")) is double f && f > 0)
+            video.Add("Frame rate", $"{f:0.###} fps");
+        string? pix = e.GetPropertyString("video-params/pixelformat");
+        video.Add("Bit depth", BitDepthFromPixfmt(pix));
+        video.Add("Pixel format", pix, mono: true);
+        m.StreamSections.Add(video);
+
+        string? gamma = e.GetPropertyString("video-params/gamma");
+        string? prim = e.GetPropertyString("video-params/primaries");
+        if (gamma is "pq" or "hlg" || prim == "bt.2020")
+        {
+            var hdr = new InfoSection { Eyebrow = "HDR · COLOR", Badge = gamma == "hlg" ? "HLG" : "HDR10", BadgeAmber = true };
+            hdr.Add("Primaries", prim?.ToUpperInvariant());
+            hdr.Add("Transfer", gamma == "pq" ? "ST 2084 (PQ)" : gamma == "hlg" ? "HLG" : gamma);
+            if ((e.GetPropertyDouble("video-params/max-luma") ?? e.GetPropertyDouble("video-params/sig-peak")) is double mx)
             {
-                Text = group.Key.ToUpperInvariant(),
-                FontSize = 11,
-                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                CharacterSpacing = 60,
-                Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["OkAccentSecondaryTextBrush"],
-            });
-            foreach (var (_, label, value) in group)
-            {
-                var grid = new Grid { ColumnSpacing = 16 };
-                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                grid.Children.Add(new TextBlock { Text = label, FontSize = 12.5, Opacity = 0.6 });
-                var val = new TextBlock { Text = value, FontSize = 12.5, FontWeight = Microsoft.UI.Text.FontWeights.Medium, TextAlignment = TextAlignment.Right };
-                Grid.SetColumn(val, 1);
-                grid.Children.Add(val);
-                card.Children.Add(grid);
+                double mn = e.GetPropertyDouble("video-params/min-luma") ?? 0;
+                hdr.Add("Mastering", $"{mn:0.####}–{mx:0} nits");
             }
-            outer.Children.Add(card);
+            m.StreamSections.Add(hdr);
         }
-        return new ScrollViewer { Content = outer, MaxHeight = 440, HorizontalContentAlignment = HorizontalAlignment.Stretch };
+
+        ReadTrackSections(e, m);
+        BuildStats(e, m);
+        return m;
+    }
+
+    private static void ReadTrackSections(OkPlayer.Mpv.MpvContext e, MediaInfoViewModel m)
+    {
+        long count = e.GetPropertyLong("track-list/count") ?? 0;
+        int audN = 0, subN = 0;
+        for (long i = 0; i < count; i++)
+        {
+            string? type = e.GetPropertyString($"track-list/{i}/type");
+            long id = e.GetPropertyLong($"track-list/{i}/id") ?? 0;
+            bool selected = e.GetPropertyBool($"track-list/{i}/selected") ?? false;
+            bool external = e.GetPropertyBool($"track-list/{i}/external") ?? false;
+            bool deflt = e.GetPropertyBool($"track-list/{i}/default") ?? false;
+            string? title = e.GetPropertyString($"track-list/{i}/title");
+            string? lang = e.GetPropertyString($"track-list/{i}/lang");
+            string? codec = e.GetPropertyString($"track-list/{i}/codec");
+
+            if (type == "audio")
+            {
+                audN++;
+                var detail = new List<string>();
+                if (e.GetPropertyString($"track-list/{i}/demux-channel-count") is { } ch) detail.Add($"{ch} ch");
+                else if (e.GetPropertyString($"track-list/{i}/audio-channels") is { } ac) detail.Add(ac);
+                if (e.GetPropertyLong($"track-list/{i}/demux-samplerate") is long hz && hz > 0) detail.Add($"{hz / 1000.0:0.#} kHz");
+                if (e.GetPropertyLong($"track-list/{i}/demux-bitrate") is long br && br > 0) detail.Add($"{br / 1000.0:0} kb/s");
+                if (!string.IsNullOrEmpty(lang)) detail.Add(lang!);
+                m.AudioSection.Tracks.Add(new TrackRow
+                {
+                    IdChip = external ? "ext" : $"#0:{id}",
+                    Title = !string.IsNullOrEmpty(title) ? title! : FriendlyAudioCodec(codec),
+                    Detail = string.Join(" · ", detail),
+                    Highlight = deflt || selected,
+                    Badge = (deflt || selected) ? "DEFAULT" : null,
+                });
+            }
+            else if (type == "sub")
+            {
+                subN++;
+                var detail = new List<string>();
+                if (!string.IsNullOrEmpty(lang)) detail.Add(lang!);
+                if (external) detail.Add("external");
+                m.SubtitleSection.Tracks.Add(new TrackRow
+                {
+                    IdChip = external ? "ext" : $"#0:{id}",
+                    Title = !string.IsNullOrEmpty(title) ? title! : FriendlySubCodec(codec),
+                    Detail = string.Join(" · ", detail),
+                    Highlight = selected,
+                    Badge = external ? "EXT" : selected ? "ON" : null,
+                });
+            }
+        }
+        m.AudioSection.Eyebrow = $"AUDIO · {audN} TRACK{(audN == 1 ? "" : "S")}";
+        m.SubtitleSection.Eyebrow = $"SUBTITLES · {subN} TRACK{(subN == 1 ? "" : "S")}";
+    }
+
+    private static void BuildStats(OkPlayer.Mpv.MpvContext e, MediaInfoViewModel m)
+    {
+        var dec = new InfoSection { Eyebrow = "DECODE · RENDER" };
+        string hw = e.GetPropertyString("hwdec-current") is { } h && h != "no" ? h : "software";
+        dec.Add("Hardware decoder", hw, mono: true);
+        dec.Add("Renderer", e.GetPropertyString("current-vo"), mono: true);
+        dec.Add("Scaler", e.GetPropertyString("scale"), mono: true);
+        dec.Add("Tone-mapping", e.GetPropertyString("tone-mapping"), mono: true);
+        if (dec.Count > 0) m.StatsSections.Add(dec);
+
+        var live = new InfoSection { Eyebrow = "LIVE · PERFORMANCE" };
+        if ((e.GetPropertyDouble("estimated-vf-fps") ?? e.GetPropertyDouble("container-fps")) is double fps && fps > 0)
+            live.Add("Current FPS", $"{fps:0.00}", accent: true);
+        if (e.GetPropertyDouble("avsync") is double av)
+            live.Add("A–V sync", $"{av:+0.000;−0.000;0.000} s", accent: true);
+        if (e.GetPropertyLong("frame-drop-count") is long fd)
+            live.Add("Frames dropped", fd.ToString("N0", CultureInfo.InvariantCulture));
+        if (e.GetPropertyDouble("demuxer-cache-duration") is double cd)
+            live.Add("Container cache", $"{cd:0.0} s");
+        if (live.Count > 0) m.StatsSections.Add(live);
+
+        var disp = new InfoSection { Eyebrow = "DISPLAY · OUTPUT" };
+        if (e.GetPropertyLong("display-width") is long dw && e.GetPropertyLong("display-height") is long dh)
+        {
+            string hz = e.GetPropertyDouble("display-fps") is double dfps ? $" @ {dfps:0.##} Hz" : "";
+            disp.Add("Display mode", $"{dw} × {dh}{hz}");
+        }
+        disp.Add("Sync mode", e.GetPropertyString("video-sync"), mono: true);
+        if (disp.Count > 0) m.StatsSections.Add(disp);
+    }
+
+    private bool CopyMediaInfo(MediaInfoViewModel m)
+    {
+        try
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"Media information — {m.FileName}");
+            if (!string.IsNullOrEmpty(m.DirectoryPath)) sb.AppendLine(m.DirectoryPath);
+            void Section(InfoSection sec)
+            {
+                sb.AppendLine();
+                sb.AppendLine(sec.Eyebrow + (sec.IdChip is { } c ? $" {c}" : "") + (sec.Badge is { } b ? $" [{b}]" : ""));
+                foreach (var r in sec.Left.Concat(sec.Right)) sb.AppendLine($"  {r.Label,-18}{r.Value}");
+            }
+            foreach (var sec in m.StreamSections) Section(sec);
+            foreach (var ts in new[] { m.AudioSection, m.SubtitleSection })
+            {
+                if (ts.Tracks.Count == 0) continue;
+                sb.AppendLine();
+                sb.AppendLine(ts.Eyebrow);
+                foreach (var t in ts.Tracks) sb.AppendLine($"  {t.IdChip}  {t.Title}{(t.Badge is { } bb ? $" ({bb})" : "")}\n      {t.Detail}");
+            }
+            foreach (var sec in m.StatsSections) Section(sec);
+
+            var dp = new Windows.ApplicationModel.DataTransfer.DataPackage();
+            dp.SetText(sb.ToString());
+            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dp);
+            return true;
+        }
+        catch { return false; }
+    }
+
+    private static string? FriendlyContainer(string? f)
+        => f switch { null or "" => null, var x when x.Contains("matroska") => "Matroska · MKV", var x when x.Contains("mp4") || x.Contains("mov") => "MP4 · MOV", var x when x.Contains("webm") => "WebM", _ => f!.Split(',')[0].ToUpperInvariant() };
+
+    private static string? FriendlyVideoCodec(string? c)
+        => c switch { null or "" => null, "hevc" => "HEVC (H.265)", "h264" => "H.264 (AVC)", "av1" => "AV1", "vp9" => "VP9", _ => c!.ToUpperInvariant() };
+
+    private static string FriendlyAudioCodec(string? c)
+        => c switch { null or "" => "Audio", "truehd" => "Dolby TrueHD", "eac3" => "E-AC-3 (Dolby Digital+)", "ac3" => "AC-3 (Dolby Digital)", "aac" => "AAC", "dts" => "DTS", "flac" => "FLAC", "opus" => "Opus", _ => c!.ToUpperInvariant() };
+
+    private static string FriendlySubCodec(string? c)
+        => c switch { null or "" => "Subtitle", "hdmv_pgs_subtitle" => "PGS (HDMV)", "subrip" => "SubRip (SRT)", "ass" => "ASS", "dvd_subtitle" => "VobSub", _ => c!.ToUpperInvariant() };
+
+    private static string? BitDepthFromPixfmt(string? p)
+    {
+        if (string.IsNullOrEmpty(p)) return null;
+        string chroma = p.Contains("420") ? "4:2:0" : p.Contains("422") ? "4:2:2" : p.Contains("444") ? "4:4:4" : "";
+        string bits = p.Contains("p10") ? "10-bit" : p.Contains("p12") ? "12-bit" : "8-bit";
+        return string.IsNullOrEmpty(chroma) ? bits : $"{bits} · {chroma}";
+    }
+
+    private static string? SelectedTrackChip(OkPlayer.Mpv.MpvContext e, string type)
+    {
+        long count = e.GetPropertyLong("track-list/count") ?? 0;
+        for (long i = 0; i < count; i++)
+            if (e.GetPropertyString($"track-list/{i}/type") == type && (e.GetPropertyBool($"track-list/{i}/selected") ?? false))
+                return $"#0:{e.GetPropertyLong($"track-list/{i}/id") ?? 0}";
+        return null;
+    }
+
+    private static string? SelectedTrackProp(OkPlayer.Mpv.MpvContext e, string type, string prop)
+    {
+        long count = e.GetPropertyLong("track-list/count") ?? 0;
+        for (long i = 0; i < count; i++)
+            if (e.GetPropertyString($"track-list/{i}/type") == type && (e.GetPropertyBool($"track-list/{i}/selected") ?? false))
+                return e.GetPropertyString($"track-list/{i}/{prop}");
+        return null;
     }
     private void OnTrailingTimeTapped(object sender, TappedRoutedEventArgs e) => Vm.ToggleTimeLabel();
 

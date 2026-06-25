@@ -6,6 +6,7 @@
     xmlns:render="using:OkPlayer.Render"
     xmlns:ctl="using:OkPlayer.App.Controls"
     xmlns:vm="using:OkPlayer.App.ViewModels"
+    xmlns:views="using:OkPlayer.App.Views"
     IsTabStop="True">
 
     <UserControl.Resources>
@@ -437,6 +438,11 @@
             <Border.RenderTransform><TranslateTransform x:Name="ToastTransform" Y="-8" /></Border.RenderTransform>
             <TextBlock x:Name="ToastText" Foreground="#F2FFFFFF" FontSize="13" FontWeight="Medium" />
         </Border>
+
+        <!-- ===== Media info overlay (design band 13) ===== -->
+        <Grid x:Name="MediaInfoHost" Visibility="Collapsed" Background="#52000000">
+            <views:MediaInfoCard x:Name="MediaInfoCardView" HorizontalAlignment="Center" VerticalAlignment="Center" />
+        </Grid>
 
         <!-- ===== drag-over state: accent drop-zone + dim the rest ===== -->
         <Grid x:Name="DragOverlay" Visibility="Collapsed" IsHitTestVisible="False">

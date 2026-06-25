@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="OkPlayer.App.Views.MediaInfoCard"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <UserControl.Resources>
+        <!-- label -> value row inside a section's column -->
+        <DataTemplate x:Key="RowTemplate">
+            <Grid ColumnDefinitions="Auto,*" Margin="0,0,0,9" ColumnSpacing="12">
+                <TextBlock Text="{Binding Label}" FontSize="12.5" Foreground="#80000000" />
+                <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12.5"
+                           FontWeight="{Binding ValueWeight}" Foreground="{Binding ValueForeground}"
+                           FontFamily="{Binding ValueFontFamily}" HorizontalAlignment="Right"
+                           TextAlignment="Right" TextWrapping="NoWrap" />
+            </Grid>
+        </DataTemplate>
+
+        <!-- a Streams/Stats section card: eyebrow (+ id-chip / badge) + two columns of rows -->
+        <DataTemplate x:Key="SectionTemplate">
+            <Border Background="White" BorderThickness="1" BorderBrush="#0F000000" CornerRadius="8"
+                    Padding="16,13" Margin="0,0,0,12">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,0,11" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Eyebrow}" FontSize="11" FontWeight="SemiBold"
+                                   CharacterSpacing="70" Foreground="#FF0C7C75" VerticalAlignment="Center" />
+                        <Border Visibility="{Binding IdChipVisibility}" Background="#0D000000" CornerRadius="4"
+                                Padding="6,1" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding IdChip}" FontFamily="Cascadia Code, Consolas" FontSize="10"
+                                       Foreground="#66000000" />
+                        </Border>
+                        <Border Visibility="{Binding BadgeVisibility}" Background="#1FC88C00" CornerRadius="5"
+                                Padding="7,2" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding Badge}" FontSize="9" FontWeight="SemiBold"
+                                       CharacterSpacing="40" Foreground="#FF9A6A00" />
+                        </Border>
+                    </StackPanel>
+                    <Grid ColumnDefinitions="*,28,*">
+                        <ItemsControl Grid.Column="0" ItemsSource="{Binding Left}" ItemTemplate="{StaticResource RowTemplate}" />
+                        <ItemsControl Grid.Column="2" ItemsSource="{Binding Right}" ItemTemplate="{StaticResource RowTemplate}" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+
+        <!-- one audio/subtitle track row -->
+        <DataTemplate x:Key="TrackTemplate">
+            <Border Background="{Binding RowBackground}" BorderBrush="{Binding RowBorder}" BorderThickness="1"
+                    CornerRadius="7" Padding="11,9" Margin="0,0,0,9">
+                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="11">
+                    <TextBlock Text="{Binding IdChip}" FontFamily="Cascadia Code, Consolas" FontSize="10"
+                               Foreground="#66000000" VerticalAlignment="Center" />
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Text="{Binding Title}" FontSize="12.5" FontWeight="{Binding TitleWeight}"
+                                   Foreground="#FF1A1A1A" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding Detail}" FontSize="11" Foreground="#80000000" Margin="0,2,0,0"
+                                   TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                    <Border Grid.Column="2" Visibility="{Binding BadgeVisibility}" Background="#2410938A"
+                            CornerRadius="5" Padding="7,2" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Badge}" FontSize="9" FontWeight="SemiBold" Foreground="#FF0C7C75" />
+                    </Border>
+                </Grid>
+            </Border>
+        </DataTemplate>
+    </UserControl.Resources>
+
+    <Border Width="660" MaxHeight="780" CornerRadius="11" Background="#FFF7F7F5"
+            BorderThickness="1" BorderBrush="#14000000">
+        <Border.Shadow><ThemeShadow /></Border.Shadow>
+        <Grid RowDefinitions="Auto,Auto,*,Auto">
+
+            <!-- header -->
+            <Grid Grid.Row="0" Padding="20,16,20,14" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="13"
+                  BorderThickness="0,0,0,1" BorderBrush="#12000000">
+                <Border Width="36" Height="36" CornerRadius="9" VerticalAlignment="Top">
+                    <Border.Background>
+                        <LinearGradientBrush StartPoint="0.15,0" EndPoint="0.85,1">
+                            <GradientStop Color="#10938A" Offset="0" />
+                            <GradientStop Color="#0A655F" Offset="1" />
+                        </LinearGradientBrush>
+                    </Border.Background>
+                    <FontIcon Glyph="&#xE946;" FontSize="18" Foreground="White" />
+                </Border>
+                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <TextBlock Text="Media information" FontSize="16" FontWeight="SemiBold" Foreground="#FF161616" />
+                    <TextBlock Text="{Binding FileName}" FontFamily="Cascadia Code, Consolas" FontSize="11.5"
+                               Foreground="#80000000" TextTrimming="CharacterEllipsis" Margin="0,2,0,0" />
+                </StackPanel>
+                <Button Grid.Column="2" Click="OnClose" Width="28" Height="28" CornerRadius="7" Padding="0"
+                        Background="#0A000000" BorderThickness="0" VerticalAlignment="Top">
+                    <FontIcon Glyph="&#xE711;" FontSize="11" Foreground="#8C000000" />
+                </Button>
+            </Grid>
+
+            <!-- tabs -->
+            <Border Grid.Row="1" Background="#0D000000" CornerRadius="8" Padding="3" Width="280"
+                    HorizontalAlignment="Left" Margin="20,13,20,0">
+                <Grid ColumnDefinitions="*,*">
+                    <Button x:Name="StreamsTab" Grid.Column="0" Click="OnStreamsTab" Content="Streams"
+                            HorizontalAlignment="Stretch" CornerRadius="6" Padding="0,7" BorderThickness="0"
+                            Background="Transparent" FontSize="12.5" />
+                    <Button x:Name="StatsTab" Grid.Column="1" Click="OnStatsTab" Content="Stats for nerds"
+                            HorizontalAlignment="Stretch" CornerRadius="6" Padding="0,7" BorderThickness="0"
+                            Background="Transparent" FontSize="12.5" />
+                </Grid>
+            </Border>
+
+            <!-- content -->
+            <ScrollViewer Grid.Row="2" Padding="20,16,20,20" VerticalScrollBarVisibility="Auto">
+                <Grid>
+                    <StackPanel Visibility="{Binding StreamsVisibility}">
+                        <ItemsControl ItemsSource="{Binding StreamSections}" ItemTemplate="{StaticResource SectionTemplate}" />
+                        <!-- AUDIO -->
+                        <Border Visibility="{Binding AudioSection.Visibility}" Background="White" BorderThickness="1"
+                                BorderBrush="#0F000000" CornerRadius="8" Padding="16,13" Margin="0,0,0,12">
+                            <StackPanel>
+                                <TextBlock Text="{Binding AudioSection.Eyebrow}" FontSize="11" FontWeight="SemiBold"
+                                           CharacterSpacing="70" Foreground="#FF0C7C75" Margin="0,0,0,11" />
+                                <ItemsControl ItemsSource="{Binding AudioSection.Tracks}" ItemTemplate="{StaticResource TrackTemplate}" />
+                            </StackPanel>
+                        </Border>
+                        <!-- SUBTITLES -->
+                        <Border Visibility="{Binding SubtitleSection.Visibility}" Background="White" BorderThickness="1"
+                                BorderBrush="#0F000000" CornerRadius="8" Padding="16,13">
+                            <StackPanel>
+                                <TextBlock Text="{Binding SubtitleSection.Eyebrow}" FontSize="11" FontWeight="SemiBold"
+                                           CharacterSpacing="70" Foreground="#FF0C7C75" Margin="0,0,0,11" />
+                                <ItemsControl ItemsSource="{Binding SubtitleSection.Tracks}" ItemTemplate="{StaticResource TrackTemplate}" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                    <ItemsControl Visibility="{Binding StatsVisibility}" ItemsSource="{Binding StatsSections}"
+                                  ItemTemplate="{StaticResource SectionTemplate}" />
+                </Grid>
+            </ScrollViewer>
+
+            <!-- footer -->
+            <Grid Grid.Row="3" Padding="20,12" ColumnDefinitions="*,Auto" BorderThickness="0,1,0,0" BorderBrush="#12000000">
+                <TextBlock Text="{Binding DirectoryPath}" FontFamily="Cascadia Code, Consolas" FontSize="11"
+                           Foreground="#66000000" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                    <Button Click="OnCopyAll" Content="Copy all" CornerRadius="7" Padding="14,8" FontSize="12"
+                            FontWeight="SemiBold" Background="#0D000000" Foreground="#FF1A1A1A"
+                            BorderThickness="1" BorderBrush="#14000000" />
+                    <Button Click="OnClose" Content="Done" CornerRadius="7" Padding="18,8" FontSize="12"
+                            FontWeight="SemiBold" Background="#FF10938A" Foreground="White" BorderThickness="0" />
+                </StackPanel>
+            </Grid>
+        </Grid>
+    </Border>
+</UserControl>
