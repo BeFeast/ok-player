@@ -913,6 +913,41 @@ public sealed partial class PlayerView : UserControl
     }
 
     private void OnVolumeMuteClick(object sender, RoutedEventArgs e) => Vm.ToggleMute();
+
+    /// <summary>Scroll over the volume control to adjust it; Shift-scroll is a fine step.</summary>
+    private void OnVolumeWheel(object sender, PointerRoutedEventArgs e)
+    {
+        int wheel = e.GetCurrentPoint((UIElement)sender).Properties.MouseWheelDelta;
+        if (wheel == 0)
+            return;
+        bool fine = Microsoft.UI.Input.InputKeyboardSource
+            .GetKeyStateForCurrentThread(VirtualKey.Shift)
+            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+        Vm.NudgeVolume((wheel > 0 ? 1 : -1) * (fine ? 1 : 5));
+        RevealChrome();
+        e.Handled = true;
+    }
+
+    /// <summary>Click-to-type: seed the input with the current value and focus it.</summary>
+    private void OnVolumeFlyoutOpening(object sender, object e)
+    {
+        VolumeInput.Text = ((int)Math.Round(Vm.Volume)).ToString(CultureInfo.InvariantCulture);
+        VolumeInput.SelectAll();
+        DispatcherQueue.TryEnqueue(() => VolumeInput.Focus(FocusState.Programmatic));
+    }
+
+    private void OnVolumeInputKey(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key != VirtualKey.Enter)
+            return;
+        if (double.TryParse(VolumeInput.Text, NumberStyles.Any, CultureInfo.InvariantCulture, out double v))
+        {
+            Vm.SetVolume(Math.Clamp(v, 0, 130));
+            RevealChrome();
+        }
+        VolumeReadoutBtn.Flyout?.Hide();
+        e.Handled = true;
+    }
     private void OnAbLoopClick(object sender, RoutedEventArgs e) => Vm.ToggleAbLoop();
     private void OnOpenFromMenu(object sender, RoutedEventArgs e) => OpenFileRequested?.Invoke(this, EventArgs.Empty);
 
