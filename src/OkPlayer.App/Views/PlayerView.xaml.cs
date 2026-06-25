@@ -335,22 +335,36 @@ public sealed partial class PlayerView : UserControl
 
     // ---- media info (design band 13: Streams) ----
 
+    private bool _mediaInfoOpen; // in-flight guard: one dialog / one read at a time
+
     private void OnMediaInfoClick(object sender, RoutedEventArgs e) => _ = OpenMediaInfoAsync();
 
     private async System.Threading.Tasks.Task OpenMediaInfoAsync()
     {
-        if (!Vm.HasMedia || Video.Engine is not { } engine)
+        if (_mediaInfoOpen || !Vm.HasMedia || Video.Engine is not { } engine)
             return;
-        var rows = await System.Threading.Tasks.Task.Run(() => ReadMediaInfo(engine)); // off the UI thread
-        var dialog = new ContentDialog
+        _mediaInfoOpen = true;
+        try
         {
-            Title = "Media information",
-            Content = BuildMediaInfoContent(rows),
-            CloseButtonText = "Close",
-            DefaultButton = ContentDialogButton.Close,
-            XamlRoot = XamlRoot,
-        };
-        try { await dialog.ShowAsync(); } catch { /* another dialog open */ }
+            // Read on the UI thread: this is a one-shot user action (not an observe callback, so the core
+            // is responsive), and running on the same thread that owns MpvVideoPanel.Dispose() rules out a
+            // read landing on a torn-down native handle.
+            var rows = ReadMediaInfo(engine);
+            var dialog = new ContentDialog
+            {
+                Title = "Media information",
+                Content = BuildMediaInfoContent(rows),
+                CloseButtonText = "Close",
+                DefaultButton = ContentDialogButton.Close,
+                XamlRoot = XamlRoot,
+            };
+            await dialog.ShowAsync();
+        }
+        catch { /* engine unavailable or a dialog already showing */ }
+        finally
+        {
+            _mediaInfoOpen = false;
+        }
     }
 
     private static List<(string Section, string Label, string Value)> ReadMediaInfo(OkPlayer.Mpv.MpvContext e)
