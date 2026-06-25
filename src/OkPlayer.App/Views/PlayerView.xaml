@@ -237,35 +237,8 @@
                                Tapped="OnTrailingTimeTapped" />
 
                     <!-- volume: mute icon + inline bar + readout (scroll to adjust, click % to type; boost reads amber) -->
-                    <StackPanel Grid.Column="6" Orientation="Horizontal" Spacing="7" VerticalAlignment="Center"
-                                Background="Transparent" PointerWheelChanged="OnVolumeWheel">
-                        <Button Style="{StaticResource OkOscSvgButtonStyle}" Padding="2" Click="OnVolumeMuteClick" ToolTipService.ToolTip="Mute (M)">
-                            <FontIcon Glyph="{x:Bind Vm.VolumeGlyph, Mode=OneWay}" FontSize="18" Foreground="{x:Bind Vm.VolumeGlyphBrush, Mode=OneWay}" />
-                        </Button>
-                        <Grid Width="54" Height="14" VerticalAlignment="Center" Background="Transparent" Tapped="OnVolumeBarTapped">
-                            <Border Height="4" CornerRadius="2" VerticalAlignment="Center" Background="#40FFFFFF" />
-                            <Border Height="4" CornerRadius="2" VerticalAlignment="Center" HorizontalAlignment="Left"
-                                    Background="{x:Bind Vm.VolumeFillBrush, Mode=OneWay}" Width="{x:Bind Vm.VolumeFillWidth, Mode=OneWay}" />
-                        </Grid>
-                        <Button x:Name="VolumeReadoutBtn" Style="{StaticResource OkSpeedChipStyle}" MinWidth="46" Padding="7,3"
-                                ToolTipService.ToolTip="Click to type an exact value; scroll to adjust">
-                            <TextBlock Text="{x:Bind Vm.VolumeReadout, Mode=OneWay}" Foreground="{x:Bind Vm.VolumeReadoutBrush, Mode=OneWay}"
-                                       FontSize="11.5" FontWeight="SemiBold" />
-                            <Button.Flyout>
-                                <Flyout FlyoutPresenterStyle="{StaticResource OkPopoverFlyoutStyle}" Placement="Top" Opening="OnVolumeFlyoutOpening">
-                                    <StackPanel Width="156" Spacing="8">
-                                        <TextBlock Text="Volume" Style="{StaticResource OkBodyStrongTextStyle}" Margin="2,2,0,0" />
-                                        <StackPanel Orientation="Horizontal" Spacing="6">
-                                            <TextBox x:Name="VolumeInput" Width="92" KeyDown="OnVolumeInputKey" />
-                                            <TextBlock Text="%" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                        </StackPanel>
-                                        <TextBlock Text="0&#x2013;130 &#x00B7; boost above 100%" FontSize="10.5"
-                                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}" Margin="2,0,0,2" />
-                                    </StackPanel>
-                                </Flyout>
-                            </Button.Flyout>
-                        </Button>
-                    </StackPanel>
+                    <!-- volume: resting icon + level wick; hover/focus floats the full slider capsule (design v3) -->
+                    <views:VolumeControl x:Name="VolumeCtl" Grid.Column="6" VerticalAlignment="Center" Margin="3,0" />
 
                     <!-- speed chip -->
                     <Button Grid.Column="7" x:Name="SpeedChip" Style="{StaticResource OkSpeedChipStyle}"
