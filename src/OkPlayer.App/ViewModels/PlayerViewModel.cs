@@ -140,7 +140,7 @@ public partial class PlayerViewModel : ObservableObject
             ("media-title", MpvFormat.String), ("sid", MpvFormat.String), ("aid", MpvFormat.String),
             ("sub-delay", MpvFormat.Double), ("sub-scale", MpvFormat.Double), ("chapter", MpvFormat.Int64),
             ("dwidth", MpvFormat.Int64), ("dheight", MpvFormat.Int64),
-            ("demuxer-cache-time", MpvFormat.Double),
+            ("demuxer-cache-time", MpvFormat.Double), ("eof-reached", MpvFormat.Flag),
         })
         {
             engine.ObserveProperty(name, fmt);
@@ -206,6 +206,11 @@ public partial class PlayerViewModel : ObservableObject
         _awaitingSeek = false;
     }
 
+    /// <summary>Raised (on the UI thread) when playback reaches the natural end of the current file —
+    /// signalled by the eof-reached property, since keep-open suppresses the end-file event at EOF. The
+    /// view uses it to auto-advance the folder playlist; the last frame is otherwise held.</summary>
+    public event Action? EndReached;
+
     private void OnEndFile(object? sender, MpvEndFileReason reason)
     {
         if (reason != MpvEndFileReason.Error)
@@ -245,6 +250,7 @@ public partial class PlayerViewModel : ObservableObject
                 case "time-pos": if (!IsScrubbing && !_awaitingSeek && value is double tp) Position = tp; break;
                 case "duration": if (value is double du) Duration = du; break;
                 case "pause": if (value is bool pa) IsPaused = pa; break;
+                case "eof-reached": if (value is bool eof && eof) EndReached?.Invoke(); break; // natural EOF (keep-open)
                 case "volume": if (value is double vo) Volume = vo; break;
                 case "mute": if (value is bool mu) IsMuted = mu; break;
                 case "speed": if (value is double sp) Speed = sp; break;
@@ -426,6 +432,10 @@ public partial class PlayerViewModel : ObservableObject
 
     // mpv-side cycle: authoritative even before the first pause event seeds IsPaused.
     public void TogglePlay() => Cmd("cycle", "pause");
+
+    /// <summary>Resume playback (pause=no). Used after a playlist hop, since keep-open leaves the previous
+    /// file paused at its end and that pause would otherwise carry into the newly loaded file.</summary>
+    public void Play() => Cmd("set", "pause", "no");
 
     public void SeekToFraction(double fraction)
     {

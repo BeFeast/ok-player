@@ -33,6 +33,8 @@ public sealed partial class PlayerView : UserControl
     private readonly HistoryService _history = new();
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _saveTimer;
     private string? _currentPath;
+    private OkPlayer.Core.Playlist? _playlist; // the opened file's folder, in natural order (null for streams)
+    private bool _autoAdvance = true;          // PRD: auto-advance defaults on (a mode toggle ships with the panel)
     private double _resumeTarget = -1; // pending resume position, applied on the first Duration after open
 
     /// <summary>Continue-watching cards shown on the welcome screen (bound from XAML).</summary>
@@ -116,6 +118,7 @@ public sealed partial class PlayerView : UserControl
         };
         Vm.PropertyChanged += OnVmPropertyChanged;
         Vm.ToastRequested += ShowToast;
+        Vm.EndReached += OnEndReached; // auto-advance the folder playlist when a file plays out
         Vm.Chapters.CollectionChanged += (_, _) => UpdateChaptersEmpty(); // seek-bar ticks bind Vm.ChapterFractions
         PanelHideSb.Completed += (_, _) => ChaptersPanel.Visibility = Visibility.Collapsed;
         // Handle keys on the UserControl itself (a Control holds focus reliably, unlike a Grid).
@@ -359,6 +362,8 @@ public sealed partial class PlayerView : UserControl
             case (VirtualKey)0x53: DoScreenshot(); break;         // S
             case (VirtualKey)0x49: OpenMediaInfo(); break;        // I
             case (VirtualKey)0x43: TogglePanel(); break;          // C
+            case VirtualKey.PageDown: PlayNext(); break;          // next file in the folder playlist
+            case VirtualKey.PageUp:   PlayPrevious(); break;      // previous file
             case VirtualKey.Escape:
                 if (_mediaInfoOpen) CloseMediaInfo();
                 else if (_panelOpen) TogglePanel();
@@ -1045,10 +1050,74 @@ public sealed partial class PlayerView : UserControl
             LoadUserChapters();    // feed the file's user-added chapters in (merge with the file's own)
             RevealChrome();        // show the controls when a file opens (drag-drop / picker)
             _ = _thumbs.OpenAsync(pathOrUrl); // arm the seek-preview engine for this file (fire-and-forget)
+            UpdatePlaylist(pathOrUrl);        // (re)build the folder-as-playlist around this file
         }
         catch (Exception)
         {
             ShowToast("Couldn't open this file");
+        }
+    }
+
+    // ---- folder-as-playlist (PRD 10.3): opening a file makes its folder the active playlist ----
+
+    /// <summary>Keep the playlist pointed at the opened file. Navigating to a file already in the list just
+    /// moves the cursor; opening a file elsewhere rebuilds the list from its folder. Streams get no list.</summary>
+    private void UpdatePlaylist(string pathOrUrl)
+    {
+        if (_playlist?.SetCurrent(pathOrUrl) == true)
+            return; // a sibling we already know — keep the existing order, just move the cursor
+        if (pathOrUrl.Contains("://"))
+        {
+            _playlist = null; // network/stream URL — no folder to enumerate
+            return;
+        }
+        try
+        {
+            string? dir = System.IO.Path.GetDirectoryName(pathOrUrl);
+            if (dir is null)
+            {
+                _playlist = null;
+                return;
+            }
+            var siblings = new System.Collections.Generic.List<string>();
+            foreach (var f in System.IO.Directory.EnumerateFiles(dir))
+                if (OkPlayer.Core.MediaFormats.IsMedia(f))
+                    siblings.Add(f);
+            _playlist = new OkPlayer.Core.Playlist(siblings, pathOrUrl);
+        }
+        catch
+        {
+            _playlist = null; // unreadable folder — fall back to single-file playback
+        }
+    }
+
+    /// <summary>Open the next file in the folder playlist (no-op at the end / without a playlist).</summary>
+    public void PlayNext()
+    {
+        if (_playlist?.Next() is string next)
+        {
+            OpenMedia(next);
+            Vm.Play(); // a hop from a played-out (keep-open paused) file must not inherit that pause
+        }
+    }
+
+    /// <summary>Open the previous file in the folder playlist (no-op at the start / without a playlist).</summary>
+    public void PlayPrevious()
+    {
+        if (_playlist?.Prev() is string prev)
+        {
+            OpenMedia(prev);
+            Vm.Play();
+        }
+    }
+
+    private void OnEndReached()
+    {
+        if (_autoAdvance && _playlist?.Next() is string next)
+        {
+            ShowToast("Up next… " + System.IO.Path.GetFileNameWithoutExtension(next));
+            OpenMedia(next);
+            Vm.Play(); // the just-ended file left pause=yes (keep-open); play the next one through
         }
     }
 
