@@ -153,9 +153,19 @@ public sealed partial class VolumeControl : UserControl
 
     private void OnTrackPressed(object sender, PointerRoutedEventArgs e)
     {
+        if (CtrlDown()) { ResetToUnity(); return; } // Ctrl-click resets to 100%
         _dragging = true;
         Track.CapturePointer(e.Pointer);
         SetFromX(e.GetCurrentPoint(Track).Position.X);
+    }
+
+    private static bool CtrlDown() => Microsoft.UI.Input.InputKeyboardSource
+        .GetKeyStateForCurrentThread(VirtualKey.Control).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+
+    private void ResetToUnity()
+    {
+        if (Muted) _vm?.ToggleMute(); // a reset to 100% should also be audible
+        _vm?.SetVolume(Unity);
     }
 
     private void OnTrackMoved(object sender, PointerRoutedEventArgs e)
@@ -187,7 +197,11 @@ public sealed partial class VolumeControl : UserControl
 
     // ── mute ──
 
-    private void OnMuteClick(object sender, RoutedEventArgs e) => _vm?.ToggleMute();
+    private void OnMuteClick(object sender, RoutedEventArgs e)
+    {
+        if (CtrlDown()) ResetToUnity(); // Ctrl-click the speaker resets to 100% instead of muting
+        else _vm?.ToggleMute();
+    }
 
     // ── type-to-set ──
 
