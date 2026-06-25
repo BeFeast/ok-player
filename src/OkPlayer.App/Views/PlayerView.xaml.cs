@@ -300,6 +300,7 @@ public sealed partial class PlayerView : UserControl
             case (VirtualKey)0x4D: Vm.ToggleMute(); break;        // M
             case (VirtualKey)0x46: ToggleFullscreenRequested?.Invoke(this, EventArgs.Empty); break; // F
             case (VirtualKey)0x53: Vm.TakeScreenshot(); break;    // S
+            case (VirtualKey)0x49: _ = OpenMediaInfoAsync(); break; // I
             case (VirtualKey)0x43: TogglePanel(); break;          // C
             case VirtualKey.Escape:
                 if (_panelOpen) TogglePanel();
@@ -331,6 +332,93 @@ public sealed partial class PlayerView : UserControl
     }
 
     private void OnAddBookmarkClick(object sender, RoutedEventArgs e) => ShowToast("Bookmark added"); // persisted bookmarks: TODO
+
+    // ---- media info (design band 13: Streams) ----
+
+    private void OnMediaInfoClick(object sender, RoutedEventArgs e) => _ = OpenMediaInfoAsync();
+
+    private async System.Threading.Tasks.Task OpenMediaInfoAsync()
+    {
+        if (!Vm.HasMedia || Video.Engine is not { } engine)
+            return;
+        var rows = await System.Threading.Tasks.Task.Run(() => ReadMediaInfo(engine)); // off the UI thread
+        var dialog = new ContentDialog
+        {
+            Title = "Media information",
+            Content = BuildMediaInfoContent(rows),
+            CloseButtonText = "Close",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = XamlRoot,
+        };
+        try { await dialog.ShowAsync(); } catch { /* another dialog open */ }
+    }
+
+    private static List<(string Section, string Label, string Value)> ReadMediaInfo(OkPlayer.Mpv.MpvContext e)
+    {
+        var rows = new List<(string, string, string)>();
+        void Add(string sec, string label, string? val)
+        {
+            if (!string.IsNullOrWhiteSpace(val))
+                rows.Add((sec, label, val!));
+        }
+        Add("File", "Container", e.GetPropertyString("file-format"));
+        if (e.GetPropertyLong("file-size") is long size)
+            Add("File", "File size", FormatBytes(size));
+        if (e.GetPropertyDouble("duration") is double dur)
+            Add("File", "Duration", FormatPreviewTime(dur));
+
+        Add("Video", "Codec", e.GetPropertyString("video-codec"));
+        if (e.GetPropertyLong("width") is long w && e.GetPropertyLong("height") is long h)
+            Add("Video", "Resolution", $"{w} × {h}");
+        if ((e.GetPropertyDouble("container-fps") ?? e.GetPropertyDouble("estimated-vf-fps")) is double fps && fps > 0)
+            Add("Video", "Frame rate", $"{fps:0.###} fps");
+        Add("Video", "Pixel format", e.GetPropertyString("video-params/pixelformat"));
+        if (e.GetPropertyLong("video-bitrate") is long vbr && vbr > 0)
+            Add("Video", "Bitrate", $"{vbr / 1_000_000.0:0.0} Mb/s");
+
+        Add("Audio", "Codec", e.GetPropertyString("audio-codec"));
+        Add("Audio", "Channels", e.GetPropertyString("audio-params/channel-count"));
+        if (e.GetPropertyLong("audio-params/samplerate") is long sr && sr > 0)
+            Add("Audio", "Sample rate", $"{sr / 1000.0:0.#} kHz");
+        if (e.GetPropertyLong("audio-bitrate") is long abr && abr > 0)
+            Add("Audio", "Bitrate", $"{abr / 1000.0:0} kb/s");
+        return rows;
+    }
+
+    private static string FormatBytes(long b)
+        => b >= (1L << 30) ? $"{b / (double)(1L << 30):0.0} GB"
+         : b >= (1L << 20) ? $"{b / (double)(1L << 20):0.0} MB"
+         : $"{b / 1024.0:0} KB";
+
+    private static UIElement BuildMediaInfoContent(List<(string Section, string Label, string Value)> rows)
+    {
+        var outer = new StackPanel { Spacing = 14, MinWidth = 360 };
+        foreach (var group in rows.GroupBy(r => r.Section))
+        {
+            var card = new StackPanel { Spacing = 7 };
+            card.Children.Add(new TextBlock
+            {
+                Text = group.Key.ToUpperInvariant(),
+                FontSize = 11,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                CharacterSpacing = 60,
+                Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["OkAccentSecondaryTextBrush"],
+            });
+            foreach (var (_, label, value) in group)
+            {
+                var grid = new Grid { ColumnSpacing = 16 };
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                grid.Children.Add(new TextBlock { Text = label, FontSize = 12.5, Opacity = 0.6 });
+                var val = new TextBlock { Text = value, FontSize = 12.5, FontWeight = Microsoft.UI.Text.FontWeights.Medium, TextAlignment = TextAlignment.Right };
+                Grid.SetColumn(val, 1);
+                grid.Children.Add(val);
+                card.Children.Add(grid);
+            }
+            outer.Children.Add(card);
+        }
+        return new ScrollViewer { Content = outer, MaxHeight = 440, HorizontalContentAlignment = HorizontalAlignment.Stretch };
+    }
     private void OnTrailingTimeTapped(object sender, TappedRoutedEventArgs e) => Vm.ToggleTimeLabel();
 
     // ---- switchers ----
