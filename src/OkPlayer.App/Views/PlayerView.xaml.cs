@@ -36,6 +36,9 @@ public sealed partial class PlayerView : UserControl
 
     /// <summary>Continue-watching cards shown on the welcome screen (bound from XAML).</summary>
     public ObservableCollection<RecentEntry> Recents { get; } = new();
+
+    /// <summary>Bookmarks for the current file, shown in the Chapters panel (bound from XAML).</summary>
+    public ObservableCollection<BookmarkEntry> Bookmarks { get; } = new();
     private int _previewToken; // ignores stale async thumbnail results
     private bool _viewUnloaded; // guards against duplicate Unloaded disposing the thumbnail engine twice
     private bool _generatingChapters; // prevents overlapping chapter-thumbnail passes
@@ -352,7 +355,35 @@ public sealed partial class PlayerView : UserControl
     private void OnAddBookmarkClick(object sender, RoutedEventArgs e)
     {
         if (_currentPath is { } path && Vm.HasMedia && _history.AddBookmark(path, Vm.Position))
+        {
             ShowToast($"Bookmark added at {FormatPreviewTime(Vm.Position)}");
+            LoadBookmarks();
+        }
+    }
+
+    private void LoadBookmarks()
+    {
+        Bookmarks.Clear();
+        if (_currentPath is { } path)
+            foreach (double t in _history.GetBookmarks(path))
+                Bookmarks.Add(new BookmarkEntry { Time = t, TimeText = FormatPreviewTime(t) });
+        BookmarksHeader.Text = $"BOOKMARKS · {Bookmarks.Count}";
+        BookmarksSection.Visibility = Bookmarks.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnBookmarkJump(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: BookmarkEntry b } && Vm.Duration > 0)
+            Vm.SeekToFraction(b.Time / Vm.Duration);
+    }
+
+    private void OnBookmarkDelete(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: BookmarkEntry b } && _currentPath is { } path)
+        {
+            _history.RemoveBookmark(path, b.Time);
+            LoadBookmarks();
+        }
     }
 
     /// <summary>Persist the current file's resume position. Safe to call any time (no-op without media).</summary>
@@ -550,6 +581,7 @@ public sealed partial class PlayerView : UserControl
         if (_panelOpen)
         {
             UpdateChaptersEmpty();
+            LoadBookmarks();
             ChaptersPanel.Visibility = Visibility.Visible;
             PanelShowSb.Begin();
             RevealChrome(); // an open panel pins the chrome
@@ -660,6 +692,7 @@ public sealed partial class PlayerView : UserControl
             Vm.OnOpening();        // load accepted: clear the prior file's playhead/duration/chapter/HasMedia
             _currentPath = pathOrUrl;
             _resumeTarget = _history.Get(pathOrUrl)?.Position ?? -1; // resume applied on the first Duration
+            LoadBookmarks();       // refresh the panel's bookmarks for the new file (panel may be open)
             RevealChrome();        // show the controls when a file opens (drag-drop / picker)
             _ = _thumbs.OpenAsync(pathOrUrl); // arm the seek-preview engine for this file (fire-and-forget)
         }
