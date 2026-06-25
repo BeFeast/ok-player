@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Microsoft.UI.Dispatching;
+using OkPlayer.Core;
 using OkPlayer.Mpv;
 using OkPlayer.Mpv.Interop;
 
@@ -347,51 +348,38 @@ public partial class PlayerViewModel : ObservableObject
         foreach (var c in Chapters)
             thumbs[(long)System.Math.Round(c.Time * 10)] = c.Thumbnail;
 
-        var merged = new List<(double Time, string Title, bool User)>();
+        var fileTuples = new List<(double, string)>(_fileChapters.Count);
         foreach (var c in _fileChapters)
-            merged.Add((c.Time, c.Title, false));
-        foreach (var (time, title) in _userChapters)
-            merged.Add((time, title, true));
-        merged.Sort((a, b) => a.Time.CompareTo(b.Time));
+            fileTuples.Add((c.Time, c.Title));
 
         Chapters.Clear();
-        for (int i = 0; i < merged.Count; i++)
+        foreach (var m in ChapterMath.Merge(fileTuples, _userChapters)) // pure merge/sort/reindex (Core, tested)
         {
-            var (time, title, user) = merged[i];
-            var entry = new ChapterInfo { Index = i, Time = time, Title = title, TimeText = FormatTime(time), IsUserDefined = user };
-            if (thumbs.TryGetValue((long)System.Math.Round(time * 10), out var th))
-                entry.Thumbnail = th;
+            var entry = new ChapterInfo { Index = m.Index, Time = m.Time, Title = m.Title, TimeText = FormatTime(m.Time), IsUserDefined = m.IsUserDefined };
+            if (thumbs.TryGetValue((long)System.Math.Round(m.Time * 10), out var th))
+                entry.Thumbnail = th; // carry over an already-decoded thumbnail so an edit doesn't reload it
             Chapters.Add(entry);
         }
         OnPropertyChanged(nameof(ChapterFractions));
         UpdateCurrentChapter();
     }
 
-    /// <summary>Chapter start positions as 0..1 fractions, for the seek-bar tick markers.</summary>
-    public IReadOnlyList<double> ChapterFractions
+    private List<double> ChapterTimes()
     {
-        get
-        {
-            var list = new List<double>();
-            if (Duration > 0)
-                foreach (var c in Chapters)
-                    list.Add(System.Math.Clamp(c.Time / Duration, 0, 1));
-            return list;
-        }
+        var times = new List<double>(Chapters.Count);
+        foreach (var c in Chapters)
+            times.Add(c.Time);
+        return times;
     }
+
+    /// <summary>Chapter start positions as 0..1 fractions, for the seek-bar tick markers.</summary>
+    public IReadOnlyList<double> ChapterFractions => ChapterMath.Fractions(ChapterTimes(), Duration);
 
     /// <summary>Pick the current chapter by playhead time (works for merged file + user chapters, where the
     /// engine's own chapter index no longer matches our re-indexed list).</summary>
     private void UpdateCurrentChapter()
     {
-        int idx = -1;
-        for (int i = 0; i < Chapters.Count; i++)
-        {
-            if (Chapters[i].Time <= Position + 0.25)
-                idx = i;
-            else
-                break;
-        }
+        int idx = ChapterMath.CurrentIndex(ChapterTimes(), Position);
         if (idx != CurrentChapterIndex)
             CurrentChapterIndex = idx;
     }
@@ -461,12 +449,8 @@ public partial class PlayerViewModel : ObservableObject
 
     public void JumpChapter(int delta)
     {
-        if (Chapters.Count == 0)
-            return;
-        int target = CurrentChapterIndex + delta;
-        if (target < 0 || target >= Chapters.Count)
-            return; // already at the first/last chapter — don't rewind to its own start
-        SeekToChapter(Chapters[target]);
+        if (ChapterMath.JumpTarget(CurrentChapterIndex, delta, Chapters.Count) is int target)
+            SeekToChapter(Chapters[target]); // null at the first/last chapter -> no rewind
     }
 
     public void NudgeVolume(double delta)

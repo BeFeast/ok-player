@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  unit-tests:
+    name: Unit tests (engine-agnostic Core, headless)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      # OkPlayer.Core + OkPlayer.Tests are plain net9.0 (no WinUI), so they build and run anywhere —
+      # this catches logic regressions (chapter math, history sidecar, settings) fast and cheaply.
+      - name: Test
+        run: dotnet test tests/OkPlayer.Tests/OkPlayer.Tests.csproj -c Release --logger "console;verbosity=normal"

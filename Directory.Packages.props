@@ -20,6 +20,12 @@
     <PackageVersion Include="Silk.NET.Core" Version="2.21.0" />
     <PackageVersion Include="Silk.NET.Direct3D11" Version="2.21.0" />
     <PackageVersion Include="Silk.NET.DXGI" Version="2.21.0" />
+
+    <!-- Test stack (headless unit tests for the engine-agnostic Core) -->
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageVersion Include="xunit" Version="2.9.2" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageVersion Include="coverlet.collector" Version="6.0.2" />
   </ItemGroup>
 
 </Project>
