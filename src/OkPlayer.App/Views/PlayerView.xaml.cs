@@ -346,27 +346,29 @@ public sealed partial class PlayerView : UserControl
 
     private void OnAddBookmarkClick(object sender, RoutedEventArgs e)
     {
-        if (_currentPath is { } path && Vm.HasMedia)
-        {
-            _history.AddBookmark(path, Vm.Position);
+        if (_currentPath is { } path && Vm.HasMedia && _history.AddBookmark(path, Vm.Position))
             ShowToast($"Bookmark added at {FormatPreviewTime(Vm.Position)}");
-        }
     }
 
     /// <summary>Persist the current file's resume position. Safe to call any time (no-op without media).</summary>
     public void SaveProgress()
     {
         if (_currentPath is { } path && Vm.HasMedia && Vm.Duration > 0)
-            _history.Record(path, Vm.Position, Vm.Duration);
+        {
+            // Near-EOF counts as completed: store 0 so it neither auto-resumes nor lingers half-watched.
+            double position = Vm.Position < Vm.Duration - 30 ? Vm.Position : 0;
+            _history.Record(path, position, Vm.Duration);
+        }
     }
 
     private void TryResume()
     {
-        if (_resumeTarget <= 5 || Vm.Duration <= 0)
+        if (_resumeTarget <= 0 || Vm.Duration <= 0)
             return;
         double target = _resumeTarget;
         _resumeTarget = -1; // apply once per open
-        if (target < Vm.Duration - 15) // don't resume a file that was essentially finished
+        // PRD: skip resume when < 5% watched or within 30s of the end.
+        if (target > Vm.Duration * 0.05 && target < Vm.Duration - 30)
         {
             Vm.SeekToFraction(target / Vm.Duration);
             ShowToast($"Resumed at {FormatPreviewTime(target)}");

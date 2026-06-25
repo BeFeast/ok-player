@@ -30,15 +30,19 @@ public sealed class HistoryService
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    private readonly string _path;
+    private readonly string? _path; // null when AppData is unavailable — persistence is disabled, not fatal
     private readonly object _lock = new();
     private Dictionary<string, FileRecord> _records = new(StringComparer.OrdinalIgnoreCase);
 
     public HistoryService()
     {
-        string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "OkPlayer");
-        Directory.CreateDirectory(dir);
-        _path = Path.Combine(dir, "history.json");
+        try
+        {
+            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "OkPlayer");
+            Directory.CreateDirectory(dir);
+            _path = Path.Combine(dir, "history.json");
+        }
+        catch { _path = null; } // can't reach AppData: run without persistence rather than failing to start
         Load();
     }
 
@@ -46,7 +50,7 @@ public sealed class HistoryService
     {
         try
         {
-            if (!File.Exists(_path))
+            if (_path is null || !File.Exists(_path))
                 return;
             var data = JsonSerializer.Deserialize<Dictionary<string, FileRecord>>(File.ReadAllText(_path), JsonOpts);
             if (data is not null)
@@ -57,6 +61,8 @@ public sealed class HistoryService
 
     private void Save()
     {
+        if (_path is null)
+            return; // persistence disabled this session
         try
         {
             string json;
@@ -94,13 +100,19 @@ public sealed class HistoryService
         Save();
     }
 
-    public void AddBookmark(string path, double time)
+    /// <summary>Add a bookmark; returns false (no toast) for untrackable paths such as URLs.</summary>
+    public bool AddBookmark(string path, double time)
     {
         if (!IsTrackable(path))
-            return;
+            return false;
         lock (_lock)
         {
             FileRecord r = GetOrCreate(path);
+            // Keep a bookmark-first record complete so recents ordering/metadata stay correct.
+            if (string.IsNullOrEmpty(r.Title))
+                r.Title = Path.GetFileNameWithoutExtension(path);
+            if (string.IsNullOrEmpty(r.LastOpenedUtc))
+                r.LastOpenedUtc = DateTime.UtcNow.ToString("o");
             if (!r.Bookmarks.Any(b => Math.Abs(b - time) < 0.5))
             {
                 r.Bookmarks.Add(time);
@@ -108,6 +120,7 @@ public sealed class HistoryService
             }
         }
         Save();
+        return true;
     }
 
     /// <summary>Most-recently-opened existing files, newest first, for continue-watching.</summary>
