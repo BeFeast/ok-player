@@ -93,4 +93,47 @@ public class PlaylistTests
         Assert.Equal(@"C:\v\ep2.mkv", p.PeekPrev);
         Assert.Equal(2, p.CurrentIndex);
     }
+
+    [Fact]
+    public void RepeatOff_StopsAtEnd()
+    {
+        var p = new Playlist(Folder, @"C:\v\ep10.mkv"); // last item, Repeat.Off (default)
+        Assert.Null(p.PeekNext);
+        Assert.Null(p.AutoAdvanceTarget);
+    }
+
+    [Fact]
+    public void RepeatAll_WrapsAtBothEnds()
+    {
+        var last = new Playlist(Folder, @"C:\v\ep10.mkv") { Repeat = RepeatMode.All };
+        Assert.Equal(@"C:\v\ep1.mkv", last.PeekNext);   // end → first
+        var first = new Playlist(Folder, @"C:\v\ep1.mkv") { Repeat = RepeatMode.All };
+        Assert.Equal(@"C:\v\ep10.mkv", first.PeekPrev); // start → last
+    }
+
+    [Fact]
+    public void RepeatOne_ReplaysOnAutoAdvance_ButManualNextStillMoves()
+    {
+        var p = new Playlist(Folder, @"C:\v\ep2.mkv") { Repeat = RepeatMode.One };
+        Assert.Equal(@"C:\v\ep2.mkv", p.AutoAdvanceTarget); // EOF replays the current file
+        Assert.Equal(@"C:\v\ep10.mkv", p.PeekNext);         // a manual hop still advances
+    }
+
+    [Fact]
+    public void Shuffle_VisitsEveryFileOnce_StartingFromCurrent()
+    {
+        var p = new Playlist(Folder, @"C:\v\ep2.mkv") { Repeat = RepeatMode.All, Shuffle = true };
+        var seen = new List<string> { p.Current! };
+        for (int i = 0; i < Folder.Length - 1; i++) { p.Next(); seen.Add(p.Current!); }
+        Assert.Equal(@"C:\v\ep2.mkv", seen[0]);                       // the playing file stays first
+        Assert.Equal(Folder.Length, new HashSet<string>(seen).Count); // a full permutation, no repeats
+    }
+
+    [Fact]
+    public void ShuffleOff_RestoresNaturalOrder()
+    {
+        var p = new Playlist(Folder, @"C:\v\ep1.mkv") { Shuffle = true };
+        p.Shuffle = false;
+        Assert.Equal(@"C:\v\ep2.mkv", p.PeekNext); // back to natural ep1 → ep2 → ep10
+    }
 }

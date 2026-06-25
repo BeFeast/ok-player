@@ -3,45 +3,70 @@ using System.Collections.Generic;
 
 namespace OkPlayer.Core;
 
+/// <summary>How the playlist behaves at its ends.</summary>
+public enum RepeatMode
+{
+    Off, // stop at the last item
+    One, // replay the current item on auto-advance
+    All, // wrap around (last → first, first → last)
+}
+
 /// <summary>
-/// A linear, per-window playlist: the files to play in natural order, plus a cursor at the current one.
-/// The folder-as-playlist behavior builds one from the opened file's folder. Next/Prev move the cursor and
-/// hand back the path to open (or null at the ends); HasNext/HasPrev drive the Prev/Next button enabled
-/// state. Queue, shuffle, repeat, and .m3u are layered on later — this is the MVP core. Pure/testable.
+/// A per-window playlist: the folder's files in natural order, a cursor, and the play modes (repeat,
+/// shuffle). Navigation reads the neighbour in the active <em>play order</em> (shuffled or natural), wrapping
+/// when Repeat=All; auto-advance additionally honours Repeat=One by replaying the current file. The cursor
+/// moves only through SetCurrent, so a caller can peek-then-open without ever desyncing. Pure/testable.
 /// </summary>
 public sealed class Playlist
 {
-    private readonly List<string> _items;
+    private readonly List<string> _items;  // files, natural-sorted (stable identity order)
+    private List<int> _order;              // playback order: indices into _items (identity unless shuffled)
+    private readonly Random _rng;
+    private bool _shuffle;
 
-    /// <summary>Build a playlist from a set of paths (sorted naturally), with the cursor on <paramref name="current"/>.</summary>
-    public Playlist(IEnumerable<string> items, string current)
+    /// <summary>Build a playlist from a set of paths (natural order), cursor on <paramref name="current"/>.</summary>
+    public Playlist(IEnumerable<string> items, string current) : this(items, current, new Random()) { }
+
+    // Seam for deterministic shuffle tests.
+    internal Playlist(IEnumerable<string> items, string current, Random rng)
     {
         _items = new List<string>(items);
         _items.Sort(NaturalComparer.Instance);
+        _rng = rng;
         CurrentIndex = IndexOf(current);
+        _order = new List<int>();
+        RebuildOrder();
     }
 
     public IReadOnlyList<string> Items => _items;
     public int Count => _items.Count;
-    public int CurrentIndex { get; private set; }
+    public int CurrentIndex { get; private set; } // index into _items, or -1
+    public RepeatMode Repeat { get; set; } = RepeatMode.Off;
+
+    /// <summary>Shuffle the play order (current file stays first); turning it off restores natural order.</summary>
+    public bool Shuffle
+    {
+        get => _shuffle;
+        set { if (_shuffle != value) { _shuffle = value; RebuildOrder(); } }
+    }
 
     public string? Current => CurrentIndex >= 0 && CurrentIndex < _items.Count ? _items[CurrentIndex] : null;
-    public bool HasNext => CurrentIndex >= 0 && CurrentIndex + 1 < _items.Count;
-    public bool HasPrev => CurrentIndex > 0;
 
-    /// <summary>The next/previous path WITHOUT moving the cursor — so a caller can open it and only advance
-    /// the cursor (via SetCurrent) once the open actually takes, keeping the cursor and any projected rows in
-    /// step even if opening fails. Null at the ends.</summary>
-    public string? PeekNext => HasNext ? _items[CurrentIndex + 1] : null;
-    public string? PeekPrev => HasPrev ? _items[CurrentIndex - 1] : null;
+    /// <summary>The next path in play order without moving the cursor (wraps when Repeat=All), or null at the
+    /// end. Repeat=One does not affect manual next — see <see cref="AutoAdvanceTarget"/>.</summary>
+    public string? PeekNext => Neighbour(+1);
+    public string? PeekPrev => Neighbour(-1);
+    public bool HasNext => PeekNext is not null;
+    public bool HasPrev => PeekPrev is not null;
 
-    /// <summary>Advance the cursor and return the next path, or null if already at the end.</summary>
-    public string? Next() => HasNext ? _items[++CurrentIndex] : null;
+    /// <summary>What to play when the current file ends: the same file when Repeat=One, otherwise PeekNext.</summary>
+    public string? AutoAdvanceTarget => Repeat == RepeatMode.One ? Current : PeekNext;
 
-    /// <summary>Step the cursor back and return the previous path, or null if already at the start.</summary>
-    public string? Prev() => HasPrev ? _items[--CurrentIndex] : null;
+    /// <summary>Advance the cursor to the next item and return it (null at the end). Equivalent to opening PeekNext.</summary>
+    public string? Next() { var n = PeekNext; if (n is not null) SetCurrent(n); return n; }
+    public string? Prev() { var p = PeekPrev; if (p is not null) SetCurrent(p); return p; }
 
-    /// <summary>Re-point the cursor at <paramref name="path"/> if it's in the list (e.g. a queued item was opened directly).</summary>
+    /// <summary>Re-point the cursor at <paramref name="path"/> if present (case-insensitive). Order is unchanged.</summary>
     public bool SetCurrent(string path)
     {
         int i = IndexOf(path);
@@ -49,6 +74,39 @@ public sealed class Playlist
             return false;
         CurrentIndex = i;
         return true;
+    }
+
+    private string? Neighbour(int step)
+    {
+        if (CurrentIndex < 0 || _order.Count == 0)
+            return null;
+        int pos = _order.IndexOf(CurrentIndex) + step;
+        if (pos < 0 || pos >= _order.Count)
+        {
+            if (Repeat != RepeatMode.All)
+                return null;
+            pos = (pos + _order.Count) % _order.Count; // wrap
+        }
+        return _items[_order[pos]];
+    }
+
+    private void RebuildOrder()
+    {
+        _order = new List<int>(_items.Count);
+        for (int i = 0; i < _items.Count; i++)
+            _order.Add(i);
+        if (!_shuffle)
+            return;
+        for (int i = _order.Count - 1; i > 0; i--) // Fisher–Yates
+        {
+            int j = _rng.Next(i + 1);
+            (_order[i], _order[j]) = (_order[j], _order[i]);
+        }
+        if (CurrentIndex >= 0) // keep the playing file at the front so it isn't skipped
+        {
+            _order.Remove(CurrentIndex);
+            _order.Insert(0, CurrentIndex);
+        }
     }
 
     private int IndexOf(string path) =>

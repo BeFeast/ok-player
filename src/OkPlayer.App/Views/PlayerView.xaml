@@ -481,7 +481,7 @@
 
             <!-- Up Next tab — overlays the Chapters content (rows 1-3); SetPanelTab toggles which shows -->
             <Grid x:Name="UpNextView" Grid.Row="1" Grid.RowSpan="3" Visibility="Collapsed"
-                  RowDefinitions="Auto,Auto,*" Padding="14,6,14,12">
+                  RowDefinitions="Auto,Auto,*,Auto" Padding="14,6,14,12">
                 <!-- now-playing card -->
                 <Border Grid.Row="0" CornerRadius="8" Padding="8" Background="#1F10938A" Margin="0,0,0,10">
                     <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
@@ -543,6 +543,25 @@
                     <TextBlock Text="No other media in this folder." FontSize="11.5" HorizontalAlignment="Center"
                                TextAlignment="Center" Foreground="{ThemeResource OkTextSecondaryBrush}" />
                 </StackPanel>
+
+                <!-- footer: play-mode toggles (active = teal accent; SetPanelTab/RefreshModeButtons set colours) -->
+                <Border Grid.Row="3" BorderThickness="0,1,0,0" BorderBrush="{ThemeResource OkStrokeBrush}"
+                        Padding="2,8,0,0" Margin="0,8,0,0">
+                    <StackPanel Orientation="Horizontal" Spacing="2">
+                        <Button x:Name="RepeatButton" Click="OnRepeatClick" Width="32" Height="32" Padding="0" CornerRadius="7"
+                                Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="Repeat (off / all / one)">
+                            <FontIcon x:Name="RepeatIcon" Glyph="&#xE8EE;" FontSize="15" Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                        </Button>
+                        <Button x:Name="ShuffleButton" Click="OnShuffleClick" Width="32" Height="32" Padding="0" CornerRadius="7"
+                                Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="Shuffle">
+                            <FontIcon x:Name="ShuffleIcon" Glyph="&#xE8B1;" FontSize="15" Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                        </Button>
+                        <Button x:Name="AutoAdvanceButton" Click="OnAutoAdvanceClick" Width="32" Height="32" Padding="0" CornerRadius="7"
+                                Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="Auto-advance (continue to the next file)">
+                            <FontIcon x:Name="AutoAdvanceIcon" Glyph="&#xE72C;" FontSize="15" Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                        </Button>
+                    </StackPanel>
+                </Border>
             </Grid>
         </Grid>
 
