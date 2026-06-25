@@ -10,12 +10,6 @@ namespace OkPlayer.App;
 
 public sealed partial class MainWindow : Window
 {
-    private static readonly string[] MediaExtensions =
-    {
-        ".mkv", ".mp4", ".m4v", ".avi", ".mov", ".webm", ".m2ts", ".ts", ".wmv", ".flv",
-        ".mp3", ".flac", ".m4a", ".opus", ".wav", ".ogg", ".mka",
-    };
-
     private bool _fullscreen;
 
     public MainWindow(string? initialFile = null)
@@ -292,7 +286,7 @@ public sealed partial class MainWindow : Window
         var picker = new FileOpenPicker { SuggestedStartLocation = PickerLocationId.VideosLibrary };
         // Unpackaged: associate the picker with this window's HWND.
         WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
-        foreach (var ext in MediaExtensions)
+        foreach (var ext in MediaFormats.Extensions)
             picker.FileTypeFilter.Add(ext);
 
         try
