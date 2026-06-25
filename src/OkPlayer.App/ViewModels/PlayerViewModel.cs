@@ -386,11 +386,14 @@ public partial class PlayerViewModel : ObservableObject
 
     // ---- commands (guarded so an mpv rejection never escapes a keyboard/click handler) ----
 
+    // All commands go out async (mpv_command_async): a synchronous mpv_command blocks the UI thread until
+    // the core accepts it, which deadlocks while the core is briefly busy (e.g. an in-flight screenshot).
+    // The UI reacts to observed property events, not a command's return, so fire-and-forget is correct.
     private void Cmd(params string[] args)
     {
         if (_engine is { } e)
         {
-            try { e.Command(args); } catch (MpvException) { }
+            try { e.CommandAsync(args); } catch (MpvException) { }
         }
     }
 
@@ -398,7 +401,7 @@ public partial class PlayerViewModel : ObservableObject
     {
         if (_engine is not { } e)
             return false;
-        try { e.Command(args); return true; } catch (MpvException) { return false; }
+        try { e.CommandAsync(args); return true; } catch (MpvException) { return false; } // true == accepted for dispatch
     }
 
     private void Set(string name, string value)
