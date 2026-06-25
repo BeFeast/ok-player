@@ -450,7 +450,9 @@ public partial class PlayerViewModel : ObservableObject
         ToastRequested?.Invoke(FormatTime(target));
     }
 
-    private const ulong SeekReply = 1; // tags seek commands so a rejected seek (non-seekable stream) can be caught
+    // Distinct from MpvVideoPanel.ScreenshotReply (1) — both subscribe to the engine's CommandReply, so a
+    // shared id would make every seek reply look like a finished screenshot ("Screenshot saved" on any seek).
+    private const ulong SeekReply = 2; // tags seek commands so a rejected seek (non-seekable stream) can be caught
 
     /// <summary>Dispatch a seek async, tagged so <see cref="OnVmCommandReply"/> can clear the time-pos
     /// suppression if mpv later rejects it (success arrives via PlaybackRestart). Returns false only if the

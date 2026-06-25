@@ -545,9 +545,12 @@ public sealed partial class PlayerView : UserControl
     }
 
     // Rotating band-04 placeholder gradients so a card without a poster still looks designed.
+    // Soft light placeholders shown while a poster frame decodes (or if a file can't produce one) — they sit
+    // on the light Mica shell, so they read as clean "loading" cards rather than the old near-black blocks.
     private static readonly (string A, string B)[] PosterPalette =
     {
-        ("#FF16202E", "#FF7B5A47"), ("#FF2A3B52", "#FF0C1320"), ("#FF16352B", "#FF7DA883"),
+        ("#FFE7EEF4", "#FFCFDCE8"), ("#FFE6EEEB", "#FFCEDED7"), ("#FFEFE9E2", "#FFDBD0C4"),
+        ("#FFEAEAF2", "#FFD3D3E4"), ("#FFEDEAE6", "#FFD8D0C6"),
     };
 
     private static Microsoft.UI.Xaml.Media.Brush PosterGradient(int index)

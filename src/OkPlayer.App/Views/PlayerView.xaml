@@ -103,75 +103,92 @@
         <!-- the single video plane: only over Mica once media is loaded (Mica shows the light shell otherwise) -->
         <render:MpvVideoPanel x:Name="Video" Tapped="OnVideoTapped" DoubleTapped="OnVideoDoubleTapped" Visibility="Collapsed" />
 
-        <!-- light-first empty / welcome state (over Mica) — first-run, no recents -->
-        <StackPanel x:Name="WelcomeCard" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="13">
-            <Border Width="52" Height="52" CornerRadius="14" HorizontalAlignment="Center">
-                <Border.Background>
-                    <LinearGradientBrush StartPoint="0.1,0" EndPoint="0.9,1">
-                        <GradientStop Color="#15A89D" Offset="0" />
-                        <GradientStop Color="#0A655F" Offset="1" />
-                    </LinearGradientBrush>
-                </Border.Background>
-                <!-- the OK&#x25B6; brand mark (matches the app icon) -->
-                <Viewbox Margin="11,15">
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Text="OK" FontFamily="Segoe UI" FontSize="36" FontWeight="Bold"
-                                   Foreground="White" LineHeight="36" />
-                        <Path Fill="White" Stretch="Fill" Width="15" Height="22" Margin="3,1,0,0"
-                              VerticalAlignment="Center" Data="M0,0 L0,22 L15,11 Z" />
+        <!-- light-first empty / welcome state (over Mica) — hero + continue-watching shelf (PRD 2.2).
+             Scrollable + min-height-locked to the viewport: the hero centres when short, scrolls (never
+             clips the title) when the recents shelf makes it tall. -->
+        <ScrollViewer x:Name="WelcomeCard" VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled"
+                      ZoomMode="Disabled" Padding="40,0">
+            <Grid MinHeight="{Binding ViewportHeight, ElementName=WelcomeCard}">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="900" Spacing="24" Padding="0,40">
+
+                    <!-- centred hero: brand mark + title + open / drop card -->
+                    <StackPanel HorizontalAlignment="Center" Spacing="13">
+                        <Border Width="52" Height="52" CornerRadius="14" HorizontalAlignment="Center">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0.1,0" EndPoint="0.9,1">
+                                    <GradientStop Color="#15A89D" Offset="0" />
+                                    <GradientStop Color="#0A655F" Offset="1" />
+                                </LinearGradientBrush>
+                            </Border.Background>
+                            <!-- the OK&#x25B6; brand mark (matches the app icon) -->
+                            <Viewbox Margin="11,15">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="OK" FontFamily="Segoe UI" FontSize="36" FontWeight="Bold"
+                                               Foreground="White" LineHeight="36" />
+                                    <Path Fill="White" Stretch="Fill" Width="15" Height="22" Margin="3,1,0,0"
+                                          VerticalAlignment="Center" Data="M0,0 L0,22 L15,11 Z" />
+                                </StackPanel>
+                            </Viewbox>
+                        </Border>
+                        <TextBlock Text="Welcome to OK Player" FontSize="17" FontWeight="SemiBold"
+                                   Foreground="{ThemeResource TextFillColorPrimaryBrush}" HorizontalAlignment="Center" />
+                        <Grid Width="280" HorizontalAlignment="Center" Background="Transparent" Tapped="OnWelcomeOpenTapped">
+                            <Rectangle RadiusX="10" RadiusY="10" StrokeThickness="1.5" StrokeDashArray="4,3"
+                                       Stroke="{ThemeResource TextFillColorTertiaryBrush}"
+                                       Fill="{ThemeResource CardBackgroundFillColorSecondaryBrush}" />
+                            <StackPanel Padding="16" Spacing="4" HorizontalAlignment="Center">
+                                <TextBlock Text="Open file&#x2026;" Foreground="{ThemeResource OkAccentTextBrush}"
+                                           FontSize="12.5" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                                <TextBlock Text="or drop a video / paste a URL" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                           FontSize="11" HorizontalAlignment="Center" />
+                            </StackPanel>
+                        </Grid>
                     </StackPanel>
-                </Viewbox>
-            </Border>
-            <TextBlock Text="Welcome to OK Player" FontSize="17" FontWeight="SemiBold"
-                       Foreground="{ThemeResource TextFillColorPrimaryBrush}" HorizontalAlignment="Center" />
-            <Grid Width="280" HorizontalAlignment="Center" Background="Transparent" Tapped="OnWelcomeOpenTapped">
-                <Rectangle RadiusX="10" RadiusY="10" StrokeThickness="1.5" StrokeDashArray="4,3"
-                           Stroke="{ThemeResource TextFillColorTertiaryBrush}"
-                           Fill="{ThemeResource CardBackgroundFillColorSecondaryBrush}" />
-                <StackPanel Padding="16" Spacing="4" HorizontalAlignment="Center">
-                    <TextBlock Text="Open file&#x2026;" Foreground="{ThemeResource OkAccentTextBrush}"
-                               FontSize="12.5" FontWeight="SemiBold" HorizontalAlignment="Center" />
-                    <TextBlock Text="or drop a video / paste a URL" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                               FontSize="11" HorizontalAlignment="Center" />
+
+                    <!-- continue watching — a horizontally scrollable shelf of recents (newest first) -->
+                    <StackPanel x:Name="RecentsSection" Spacing="9" Visibility="Collapsed">
+                        <TextBlock Text="CONTINUE WATCHING" FontSize="11" FontWeight="SemiBold" CharacterSpacing="60"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}" Margin="2,0,0,0" />
+                        <ScrollViewer HorizontalScrollMode="Auto" HorizontalScrollBarVisibility="Auto"
+                                      VerticalScrollMode="Disabled" VerticalScrollBarVisibility="Hidden" Padding="0,0,0,4">
+                            <ItemsControl ItemsSource="{x:Bind Recents}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="14" /></ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:RecentEntry">
+                                        <Button Click="OnRecentClick" Tag="{x:Bind Path}" Width="200" Padding="0"
+                                                Background="Transparent" BorderThickness="0" HorizontalContentAlignment="Stretch">
+                                            <StackPanel Spacing="7">
+                                                <!-- 16:9 poster (gradient placeholder + frame + progress + time-left) -->
+                                                <Border Height="112" CornerRadius="8">
+                                                    <Grid>
+                                                        <Border Background="{x:Bind PlaceholderGradient}" />
+                                                        <Image Source="{x:Bind Poster, Mode=OneWay}" Stretch="UniformToFill" />
+                                                        <Grid VerticalAlignment="Bottom" Height="4" Background="#4DFFFFFF">
+                                                            <Border HorizontalAlignment="Left" Background="#FF28B3AA"
+                                                                    Width="{x:Bind ProgressFillWidth}" />
+                                                        </Grid>
+                                                        <Border HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,7,9"
+                                                                CornerRadius="5" Padding="6,2" Background="#80000000">
+                                                            <TextBlock Text="{x:Bind TimeLeft}" FontSize="10" FontWeight="SemiBold" Foreground="White" />
+                                                        </Border>
+                                                    </Grid>
+                                                </Border>
+                                                <TextBlock Text="{x:Bind Title}" FontSize="13" FontWeight="Medium" MaxLines="1"
+                                                           TextTrimming="CharacterEllipsis" Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                                                <TextBlock Text="{x:Bind Meta}" FontSize="11.5" Margin="0,-3,0,0"
+                                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                            </StackPanel>
+                                        </Button>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </StackPanel>
                 </StackPanel>
             </Grid>
-
-            <!-- continue watching (recents from history) -->
-            <StackPanel x:Name="RecentsSection" Width="280" Spacing="2" Visibility="Collapsed">
-                <TextBlock Text="CONTINUE WATCHING" FontSize="11" FontWeight="SemiBold" CharacterSpacing="60"
-                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" Margin="2,10,0,4" />
-                <ItemsControl ItemsSource="{x:Bind Recents}">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="vm:RecentEntry">
-                            <Button Click="OnRecentClick" Tag="{x:Bind Path}" Margin="0,0,0,12" Padding="0"
-                                    Background="Transparent" BorderThickness="0"
-                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
-                                <StackPanel Spacing="9">
-                                    <!-- poster thumbnail (gradient placeholder + frame + progress + time-left) -->
-                                    <Border Height="110" CornerRadius="8">
-                                        <Grid>
-                                            <Border Background="{x:Bind PlaceholderGradient}" />
-                                            <Image Source="{x:Bind Poster, Mode=OneWay}" Stretch="UniformToFill" />
-                                            <Grid VerticalAlignment="Bottom" Height="4" Background="#4DFFFFFF">
-                                                <Border HorizontalAlignment="Left" Background="#FF28B3AA"
-                                                        Width="{x:Bind ProgressFillWidth}" />
-                                            </Grid>
-                                            <Border HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,7,9"
-                                                    CornerRadius="5" Padding="6,2" Background="#80000000">
-                                                <TextBlock Text="{x:Bind TimeLeft}" FontSize="10" FontWeight="SemiBold" Foreground="White" />
-                                            </Border>
-                                        </Grid>
-                                    </Border>
-                                    <TextBlock Text="{x:Bind Title}" FontSize="13" FontWeight="Medium" TextTrimming="CharacterEllipsis"
-                                               Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
-                                    <TextBlock Text="{x:Bind Meta}" FontSize="11.5" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                </StackPanel>
-                            </Button>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </StackPanel>
-        </StackPanel>
+        </ScrollViewer>
 
         <!-- ===== top chrome: scrim + title ===== -->
         <Grid x:Name="TitleChrome" VerticalAlignment="Top" Height="42" Opacity="0">
