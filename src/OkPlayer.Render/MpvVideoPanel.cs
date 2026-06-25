@@ -104,12 +104,15 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
         System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData), "OkPlayer", "mpv.conf");
 
     // Options the user must not override — they'd break video output, the on-screen controls, the app's
-    // keyboard ownership, or open a remote-control / logging surface. Everything else is fair game.
+    // keyboard ownership, or open a remote-control / logging surface. The loader group
+    // (include / script / scripts / load-scripts) is blocked too: it can pull in another config or run
+    // arbitrary Lua/JS, so a copy-pasted mpv.conf can't turn the escape hatch into code execution.
     private static readonly System.Collections.Generic.HashSet<string> ProtectedOptions =
         new(System.StringComparer.OrdinalIgnoreCase)
         {
             "vo", "osc", "input-default-bindings", "config", "config-dir", "input-conf",
-            "input-ipc-server", "terminal", "msg-level", "wid", "log-file", "load-scripts",
+            "input-ipc-server", "terminal", "msg-level", "wid", "log-file",
+            "include", "script", "scripts", "load-scripts", "scripts-dir",
         };
 
     private static void ApplyUserConfig(MpvContext mpv)
