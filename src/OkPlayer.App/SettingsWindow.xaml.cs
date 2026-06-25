@@ -29,7 +29,14 @@ public sealed partial class SettingsWindow : Window
         AppWindow.Resize(new Windows.Graphics.SizeInt32(760, 560));
         ApplyTheme();
         App.Settings.Changed += ApplyTheme;
-        Closed += (_, _) => App.Settings.Changed -= ApplyTheme;
+        if (Content is FrameworkElement rootEl)
+            rootEl.ActualThemeChanged += OnActualThemeChanged;
+        Closed += (_, _) =>
+        {
+            App.Settings.Changed -= ApplyTheme;
+            if (Content is FrameworkElement r)
+                r.ActualThemeChanged -= OnActualThemeChanged;
+        };
         LoadAppearance();
         _loaded = true;
     }
@@ -38,6 +45,19 @@ public sealed partial class SettingsWindow : Window
     {
         if (Content is FrameworkElement root)
             root.RequestedTheme = App.Settings.Current.Theme == "Light" ? ElementTheme.Light : ElementTheme.Default;
+    }
+
+    // The segment pills and the Shortcuts key chips bake theme-dependent colors when they are built (the
+    // chips only once). ActualThemeChanged fires whenever the effective theme flips — by setting change or
+    // a system light/dark switch while on Auto — and the new theme is already in effect, so rebuild the
+    // chips and re-style the visible panel here so their contrast tracks the theme.
+    private void OnActualThemeChanged(FrameworkElement sender, object args)
+    {
+        if (!_loaded)
+            return;
+        _shortcutsBuilt = false;
+        ShortcutsHost.Children.Clear();
+        OnNavChanged(NavList, null!);
     }
 
     private void OnNavChanged(object sender, SelectionChangedEventArgs e)
