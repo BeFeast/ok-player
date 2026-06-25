@@ -32,6 +32,8 @@ public sealed partial class MainWindow : Window
 
         Player.ToggleFullscreenRequested += (_, _) => SetFullscreen(!_fullscreen);
         Player.ExitFullscreenRequested += (_, _) => SetFullscreen(false);
+        // re-cover the island top edge if WinUI re-lays it out while full screen (e.g. a DPI/size change)
+        AppWindow.Changed += (_, args) => { if (_fullscreen && args.DidSizeChange) DispatcherQueue.TryEnqueue(CoverIslandTopEdge); };
         Player.OpenFileRequested += async (_, _) => await OpenFileAsync();
         Player.FitToVideoRequested += (_, size) => FitToVideo(size.Width, size.Height);
         Player.SettingsRequested += (_, _) => OpenSettings();
@@ -89,12 +91,26 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private const int DWMWA_BORDER_COLOR = 34;
-    private const uint DWMWA_COLOR_NONE = 0xFFFFFFFE;
-    private const uint DWMWA_COLOR_DEFAULT = 0xFFFFFFFF;
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern IntPtr FindWindowExW(IntPtr parent, IntPtr after, string? cls, string? title);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+    private const uint SWP_NOZORDER = 0x4, SWP_NOACTIVATE = 0x10;
+    private IntPtr _islandBridge;
 
-    [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
-    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref uint value, int size);
+    /// <summary>WinUI lays the XAML island host (DesktopChildSiteBridge) out 1px below the client origin in
+    /// full screen, so the video starts at y=1 and the backdrop shows through at y=0 as a white hairline.
+    /// Force the island to cover the whole client (y=0..bottom) so the video owns the top scanline.</summary>
+    private void CoverIslandTopEdge()
+    {
+        if (!_fullscreen)
+            return;
+        IntPtr top = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        if (_islandBridge == IntPtr.Zero)
+            _islandBridge = FindWindowExW(top, IntPtr.Zero, "Microsoft.UI.Content.DesktopChildSiteBridge", null);
+        if (_islandBridge != IntPtr.Zero && GetClientRect(top, out var rc))
+            SetWindowPos(_islandBridge, IntPtr.Zero, 0, 0, rc.Right - rc.Left, rc.Bottom - rc.Top, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
 
     private void SetFullscreen(bool on)
     {
@@ -102,12 +118,13 @@ public sealed partial class MainWindow : Window
             return;
         _fullscreen = on;
         AppWindow.SetPresenter(on ? AppWindowPresenterKind.FullScreen : AppWindowPresenterKind.Overlapped);
-        // Win11 draws a 1px window border, which shows as a white hairline over the black letterbox at the
-        // top edge in full screen. Removing the DWM border colour helps; fully eliminating the non-client
-        // hairline needs WM_NCCALCSIZE window subclassing (tracked separately).
-        uint color = on ? DWMWA_COLOR_NONE : DWMWA_COLOR_DEFAULT;
-        IntPtr hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-        DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, ref color, sizeof(uint));
+        if (on)
+        {
+            // re-apply across the layout passes that follow the presenter change (each would otherwise
+            // reset the island back to y=1)
+            DispatcherQueue.TryEnqueue(CoverIslandTopEdge);
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, CoverIslandTopEdge);
+        }
     }
 
     /// <summary>Size the window to the video's aspect and place it fully inside the monitor: shrink to fit
