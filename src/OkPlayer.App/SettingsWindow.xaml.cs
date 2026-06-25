@@ -47,21 +47,67 @@ public sealed partial class SettingsWindow : Window
         int i = NavList.SelectedIndex;
         bool appearance = i == 0;
         bool playback = i == 1;
+        bool video = i == 3;
+        bool audio = i == 4;
         bool integration = i == 6;
         bool advanced = i == 7;
         AppearancePanel.Visibility = appearance ? Visibility.Visible : Visibility.Collapsed;
         PlaybackPanel.Visibility = playback ? Visibility.Visible : Visibility.Collapsed;
+        VideoPanel.Visibility = video ? Visibility.Visible : Visibility.Collapsed;
+        AudioPanel.Visibility = audio ? Visibility.Visible : Visibility.Collapsed;
         IntegrationPanel.Visibility = integration ? Visibility.Visible : Visibility.Collapsed;
         AdvancedPanel.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
-        PlaceholderPanel.Visibility = (!appearance && !playback && !integration && !advanced) ? Visibility.Visible : Visibility.Collapsed;
+        PlaceholderPanel.Visibility = (!appearance && !playback && !video && !audio && !integration && !advanced)
+            ? Visibility.Visible : Visibility.Collapsed;
         if (advanced)
             LoadMpvConf();
         else if (integration)
             LoadIntegration();
         else if (playback)
             LoadPlayback();
+        else if (video)
+            LoadVideo();
+        else if (audio)
+            LoadAudio();
         else if (!appearance && i >= 0 && i < PanelNames.Length)
             PlaceholderTitle.Text = PanelNames[i];
+    }
+
+    // ── Video / Audio panels ───────────────────────────────────────────
+
+    private void LoadVideo()
+    {
+        bool hw = App.Settings.Current.HardwareDecoding;
+        StyleSegment(Hwdec1, hw);
+        StyleSegment(Hwdec0, !hw);
+    }
+
+    private void OnHwdec(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string t })
+        {
+            App.Settings.Current.HardwareDecoding = t == "1";
+            App.Settings.Save();
+            LoadVideo();
+        }
+    }
+
+    private void LoadAudio()
+    {
+        int v = App.Settings.Current.DefaultVolume;
+        StyleSegment(Vol50, v == 50);
+        StyleSegment(Vol75, v == 75);
+        StyleSegment(Vol100, v == 100);
+    }
+
+    private void OnDefaultVolume(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string t } && int.TryParse(t, out int v))
+        {
+            App.Settings.Current.DefaultVolume = v;
+            App.Settings.Save();
+            LoadAudio();
+        }
     }
 
     // ── Playback panel ─────────────────────────────────────────────────

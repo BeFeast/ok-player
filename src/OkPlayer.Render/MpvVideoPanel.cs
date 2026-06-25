@@ -66,7 +66,7 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
             _mpv = new MpvContext();
             _mpv.CommandReply += OnCommandReply;   // clear the screenshot render-yield as soon as it finishes
             _mpv.SetOption("vo", "libmpv");        // mandatory: the render API drives output
-            _mpv.SetOption("hwdec", "auto-safe");  // hardware decode where safely mappable to GL
+            _mpv.SetOption("hwdec", HardwareDecoding ? "auto-safe" : "no"); // hw decode (Settings -> Video)
             _mpv.SetOption("keep-open", "yes");     // hold the last frame instead of closing on EOF
             _mpv.SetOption("volume-max", "130");    // allow the PRD volume boost (>100%)
             _mpv.SetOption("osc", "no");            // we draw our own on-screen controls
@@ -97,6 +97,10 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
             throw;
         }
     }
+
+    /// <summary>Use hardware video decoding (auto-safe) vs software. Read at engine init; the host sets it
+    /// from user settings before the panel loads. Applied per engine, so it takes effect on restart.</summary>
+    public static bool HardwareDecoding { get; set; } = true;
 
     /// <summary>The power-user escape-hatch config: mpv.conf-style <c>key=value</c> lines applied to the
     /// engine at startup. Lives next to the other OkPlayer state so it's easy to find and hand-edit.</summary>

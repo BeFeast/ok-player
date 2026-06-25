@@ -21,6 +21,12 @@ public sealed class AppSettings
     public double DefaultSpeed { get; set; } = 1.0;      // speed a newly opened file starts at
     public int SkipStep { get; set; } = 5;               // seconds the Left/Right arrows seek
 
+    // Video
+    public bool HardwareDecoding { get; set; } = true;   // hwdec auto-safe vs software (applied at engine init)
+
+    // Audio
+    public int DefaultVolume { get; set; } = 100;        // 0..130, the volume the engine starts at
+
     public int SchemaVersion { get; set; } = 1;          // forward-compat migration hook
 }
 
