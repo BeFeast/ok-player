@@ -30,12 +30,13 @@ public static class TimeCode
         return total;
     }
 
-    /// <summary>Format seconds as a timecode: H:MM:SS past an hour, else M:SS.</summary>
+    /// <summary>Format seconds as a timecode: H:MM:SS past an hour, else M:SS. Truncates fractional
+    /// seconds (not rounds), matching the player's on-screen clock — you're "at" second N until N+1.</summary>
     public static string Format(double seconds)
     {
         if (seconds < 0 || double.IsNaN(seconds))
             seconds = 0;
-        int total = (int)Math.Round(seconds);
+        int total = (int)Math.Floor(seconds);
         int h = total / 3600, m = total % 3600 / 60, s = total % 60;
         return h > 0
             ? string.Format(CultureInfo.InvariantCulture, "{0}:{1:D2}:{2:D2}", h, m, s)
