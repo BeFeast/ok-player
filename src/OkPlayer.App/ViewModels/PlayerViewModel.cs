@@ -306,16 +306,18 @@ public partial class PlayerViewModel : ObservableObject
     {
         if (_engine is not { } e)
             return (true, true);
-        // Resolve selection by id against sid / secondary-sid rather than track-list/selected: a track chosen
-        // as the SECONDARY subtitle also reports selected=yes, which would otherwise mis-check it in the
-        // primary list. Comparing ids keeps each list's checkmark to its own slot.
-        string sid = e.GetPropertyString("sid") ?? "no";
+        // The SECONDARY subtitle is matched by id against secondary-sid (it's set to a concrete id, never
+        // "auto"). The PRIMARY uses track-list/selected — which also resolves an "auto"/default selection mpv
+        // makes for us — minus the track that's the secondary (a secondary track also reports selected=yes,
+        // and would otherwise show a stray checkmark in the primary list).
         string secondarySid = e.GetPropertyString("secondary-sid") ?? "no";
+        bool anyPrimary = false;
         long count = e.GetPropertyLong("track-list/count") ?? 0;
         for (long i = 0; i < count; i++)
         {
             string? type = e.GetPropertyString($"track-list/{i}/type");
             long id = e.GetPropertyLong($"track-list/{i}/id") ?? 0;
+            bool selected = e.GetPropertyBool($"track-list/{i}/selected") ?? false;
             bool external = e.GetPropertyBool($"track-list/{i}/external") ?? false;
             string? title = e.GetPropertyString($"track-list/{i}/title");
             string? lang = e.GetPropertyString($"track-list/{i}/lang");
@@ -323,16 +325,15 @@ public partial class PlayerViewModel : ObservableObject
 
             if (type == "sub")
             {
-                string idStr = id.ToString(CultureInfo.InvariantCulture);
-                bool isPrimary = sid == idStr;
-                bool isSecondary = secondarySid == idStr;
+                bool isSecondary = secondarySid == id.ToString(CultureInfo.InvariantCulture);
+                bool isPrimary = selected && !isSecondary; // 'selected' covers an auto/default pick; exclude the secondary track
+                if (isPrimary) anyPrimary = true;
                 string ext = external ? $"   {Glyph(0x00B7)} EXT" : string.Empty;
                 subs.Add(new TrackInfo { Id = id, Selected = isPrimary, External = external, Label = Check(isPrimary) + baseName + ext });
                 secondarySubs.Add(new TrackInfo { Id = id, Selected = isSecondary, External = external, Label = Check(isSecondary) + baseName + ext });
             }
             else if (type == "audio")
             {
-                bool selected = e.GetPropertyBool($"track-list/{i}/selected") ?? false;
                 var parts = new List<string> { baseName };
                 string? channels = e.GetPropertyString($"track-list/{i}/audio-channels");
                 string? codec = e.GetPropertyString($"track-list/{i}/codec");
@@ -341,7 +342,7 @@ public partial class PlayerViewModel : ObservableObject
                 auds.Add(new TrackInfo { Id = id, Selected = selected, Label = Check(selected) + string.Join($" {Glyph(0x00B7)} ", parts) });
             }
         }
-        return (sid == "no", secondarySid == "no");
+        return (!anyPrimary, secondarySid == "no");
     }
 
     private static string Check(bool on) => on ? Glyph(0x2713) + "  " : string.Empty;
@@ -455,8 +456,10 @@ public partial class PlayerViewModel : ObservableObject
         SubtitleOff = subOff;
         SecondarySubtitleOff = secondaryOff;
         // A second simultaneous subtitle is only meaningful with at least two tracks (e.g. native + a
-        // learning language); below that, hide the secondary picker entirely to keep the flyout calm.
-        CanUseSecondarySubtitle = subs.Count >= 2;
+        // learning language); below that, hide the secondary picker to keep the flyout calm — UNLESS a
+        // secondary is already active (mpv can carry secondary-sid into a 1-track file), so the user always
+        // keeps an Off control to clear it.
+        CanUseSecondarySubtitle = subs.Count >= 2 || !secondaryOff;
     }
 
     private List<ChapterInfo> _fileChapters = new();
