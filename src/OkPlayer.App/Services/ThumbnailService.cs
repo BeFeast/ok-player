@@ -101,11 +101,12 @@ public sealed class ThumbnailService : IDisposable
         long bucketSec = (long)Math.Max(0, timeSeconds); // 1-second thumbnail granularity
         string file = Path.Combine(_tempDir, $"{fileKey}_t{bucketSec}.png");
         // Probe the disk cache BEFORE the engine-ready gate: a reopened file serves its persisted thumbnails
-        // instantly, without waiting (seconds) for the decode engine to spin up and load the file.
-        if (fileKey != "0" && File.Exists(file))
+        // instantly, without waiting (seconds) for the decode engine to spin up and load the file. Re-check
+        // the generation so a file switched in mid-call never returns the previous file's cached frame.
+        if (fileKey != "0" && gen == _generation && File.Exists(file))
             return file; // cache hit — no seek (persists across loads and sessions: same file -> same key)
-        if (!_fileReady)
-            return null; // miss and the engine isn't loaded yet — nothing to generate
+        if (!_fileReady || gen != _generation)
+            return null; // miss and the engine isn't loaded yet (or the file switched) — nothing to generate
 
         try { await _gate.WaitAsync().ConfigureAwait(false); }
         catch (ObjectDisposedException) { return null; } // disposed while queued
