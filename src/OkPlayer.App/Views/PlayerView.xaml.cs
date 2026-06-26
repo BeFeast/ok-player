@@ -1019,12 +1019,15 @@ public sealed partial class PlayerView : UserControl
         _chapterWarmBusy = true;
         try
         {
-            // Wait for THIS file's decode engine to finish loading (await the open task, not a global flag,
-            // so a warm that starts mid-switch can't grab the previous file's frames). Bail if superseded.
+            // Wait for THIS file's decode engine to finish loading: await the open task only while it's still
+            // in flight (so a warm that starts mid-switch can't grab the previous file's frames), then gate on
+            // the LIVE readiness flag — never on the task's one-shot result, which would pin a transient
+            // failure and lock out every later retry for this file.
             var ready = _thumbReady;
-            bool ok = ready is null ? _thumbs.IsReady : await ready;
-            if (gen != _openGeneration || !ok || !_thumbs.IsReady)
-                return; // a different file is loading, or the engine never readied — a later trigger retries
+            if (ready is { IsCompleted: false })
+                await ready;
+            if (gen != _openGeneration || !_thumbs.IsReady)
+                return; // a different file is loading, or the engine isn't ready yet — a later trigger retries
 
             // Re-walk while the chapter set keeps changing (embedded chapters land after user ones; edits).
             while (_chapterWarmDirty && gen == _openGeneration)
