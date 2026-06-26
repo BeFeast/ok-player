@@ -12,7 +12,7 @@ public sealed partial class MainWindow : Window
 {
     private bool _fullscreen;
 
-    public MainWindow(string? initialFile = null, double? resumeSeconds = null)
+    public MainWindow(string? initialFile = null, double? resumeSeconds = null, int? subTrack = null, int? audioTrack = null)
     {
         InitializeComponent();
         Title = "OK Player";
@@ -60,7 +60,7 @@ public sealed partial class MainWindow : Window
         App.Settings.Changed += Player.ApplySubtitleDefaults;  // subtitle size/position changes apply live
         App.Settings.Changed += Player.ApplyAudioDefaults;     // loudness normalization toggles apply live
         if (!string.IsNullOrEmpty(initialFile))
-            Player.QueueInitialFile(initialFile, resumeSeconds); // a file passed on the command line / a library launch
+            Player.QueueInitialFile(initialFile, resumeSeconds, subTrack, audioTrack); // command-line / library launch
     }
 
     private void ApplyAppTheme()

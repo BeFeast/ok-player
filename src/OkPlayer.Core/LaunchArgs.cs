@@ -1,25 +1,31 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 
 namespace OkPlayer.Core;
 
 /// <summary>Parses the player's command line for the companion-library launch contract (PRD §13.1):
-/// a media file/URL plus an optional <c>--resume &lt;time&gt;</c> the library uses to open the player at an
-/// exact position. Pure and engine-agnostic so it can be unit-tested; the caller validates which positional
-/// is a real file (URL / exists on disk) and applies the resume.</summary>
+/// a media file/URL plus optional <c>--resume &lt;time&gt;</c> and <c>--sub</c>/<c>--audio</c> track
+/// preselection the library uses to open the player at an exact position with a chosen subtitle/audio track.
+/// Pure and engine-agnostic so it can be unit-tested; the caller validates which positional is a real file
+/// (URL / exists on disk) and applies the result.</summary>
 public static class LaunchArgs
 {
     /// <param name="args">The command-line arguments <b>excluding</b> the executable (i.e. what a normal
     /// <c>Main(string[] args)</c> receives — call <c>Environment.GetCommandLineArgs()[1..]</c>).</param>
     /// <returns><c>Files</c>: positional tokens in order (the caller picks the first that is a URL or an
     /// existing file). <c>ResumeSeconds</c>: the parsed <c>--resume</c> value in seconds, or null when absent
-    /// or malformed. A resume of 0 is meaningful — "start from the beginning", overriding remembered position.</returns>
-    public static (IReadOnlyList<string> Files, double? ResumeSeconds) Parse(IReadOnlyList<string>? args)
+    /// or malformed (a resume of 0 is meaningful — "start from the beginning", overriding remembered position).
+    /// <c>Sub</c>/<c>Audio</c>: the <c>--sub</c>/<c>--audio</c> track id to preselect (mpv track id ≥ 1, since
+    /// mpv ids are 1-based — 0 is "auto", not a track), or <c>-1</c> for an explicit <c>no</c>/<c>off</c>, or
+    /// null when absent/malformed.</returns>
+    public static (IReadOnlyList<string> Files, double? ResumeSeconds, int? Sub, int? Audio) Parse(IReadOnlyList<string>? args)
     {
         var files = new List<string>();
         double? resume = null;
+        int? sub = null, audio = null;
         if (args is null)
-            return (files, resume);
+            return (files, resume, sub, audio);
 
         for (int i = 0; i < args.Count; i++)
         {
@@ -27,28 +33,50 @@ public static class LaunchArgs
             if (string.IsNullOrEmpty(a))
                 continue;
 
+            // `?? <prev>`: a malformed/missing value yields null but must not wipe an earlier valid one
+            // (e.g. `--sub 2 --sub bad` keeps 2). A later *valid* repeat still wins.
             if (TryMatchOption(a, "resume", out string? inlineValue))
-            {
-                if (inlineValue is not null)
-                {
-                    resume = TimeCode.Parse(inlineValue);
-                }
-                // Only consume the *next* token as the value if it's actually a timecode — otherwise a path
-                // following a bare "--resume" would be silently swallowed instead of opened.
-                else if (i + 1 < args.Count && TimeCode.Parse(args[i + 1]) is { } next)
-                {
-                    resume = next;
-                    i++;
-                }
-                continue;
-            }
+            { resume = Consume(inlineValue, args, ref i, TimeCode.Parse) ?? resume; continue; }
+            if (TryMatchOption(a, "sub", out inlineValue))
+            { sub = Consume(inlineValue, args, ref i, ParseTrackId) ?? sub; continue; }
+            if (TryMatchOption(a, "audio", out inlineValue))
+            { audio = Consume(inlineValue, args, ref i, ParseTrackId) ?? audio; continue; }
 
             if (a[0] == '-' || a[0] == '/')
                 continue; // an unknown switch — ignore (file associations may append flags)
 
             files.Add(a);
         }
-        return (files, resume);
+        return (files, resume, sub, audio);
+    }
+
+    /// <summary>Resolve an option's value: the inline part (<c>--opt=value</c>) if present, else the following
+    /// token — but only consume that token when it actually parses, so a path after a bare <c>--opt</c> stays
+    /// a positional instead of being silently swallowed.</summary>
+    private static T? Consume<T>(string? inlineValue, IReadOnlyList<string> args, ref int i, Func<string, T?> parse)
+        where T : struct
+    {
+        if (inlineValue is not null)
+            return parse(inlineValue);
+        if (i + 1 < args.Count && parse(args[i + 1]) is { } next)
+        {
+            i++;
+            return next;
+        }
+        return null;
+    }
+
+    /// <summary>A track id is a positive integer — mpv track ids are 1-based, and <c>0</c> means "auto", not
+    /// a real track, so it (and anything non-numeric) is null/ignored. <c>no</c>/<c>off</c> → -1, "select
+    /// none".</summary>
+    private static int? ParseTrackId(string? s)
+    {
+        if (string.IsNullOrWhiteSpace(s))
+            return null;
+        s = s.Trim();
+        if (s.Equals("no", StringComparison.OrdinalIgnoreCase) || s.Equals("off", StringComparison.OrdinalIgnoreCase))
+            return -1;
+        return int.TryParse(s, NumberStyles.None, CultureInfo.InvariantCulture, out int id) && id >= 1 ? id : null;
     }
 
     /// <summary>Matches <c>--name</c>, <c>-name</c> or <c>/name</c> (case-insensitive). When the token carries
