@@ -525,7 +525,7 @@ public sealed partial class PlayerView : UserControl
         if (sender is FrameworkElement { Tag: string ratio })
         {
             Vm.SetAspect(ratio);
-            ShowToast(ratio == "-1" ? "Aspect: Auto" : $"Aspect: {ratio}");
+            ShowToast(ratio == "no" ? "Aspect: Auto" : $"Aspect: {ratio}");
         }
     }
 

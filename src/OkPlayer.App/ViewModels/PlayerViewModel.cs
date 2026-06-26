@@ -467,7 +467,8 @@ public partial class PlayerViewModel : ObservableObject
     // UI thread can deadlock a busy core — we own every change, so a local mirror stays in sync.
     private int _videoRotate;        // 0 / 90 / 180 / 270
     private bool _fillScreen;        // panscan: crop to fill, removing letterbox/pillar bars
-    private string _aspectOverride = "-1"; // "-1" = the file's own aspect
+    private const string AspectAuto = "no"; // mpv's value for "use the file's own aspect" (the default)
+    private string _aspectOverride = AspectAuto;
 
     /// <summary>Rotate the video plane 90° clockwise (cycles 0 → 90 → 180 → 270 → 0).</summary>
     public void RotateVideo()
@@ -476,7 +477,7 @@ public partial class PlayerViewModel : ObservableObject
         Set("video-rotate", _videoRotate.ToString(CultureInfo.InvariantCulture));
     }
 
-    /// <summary>Force a display aspect ratio ("-1" restores the file's own); e.g. "16:9", "4:3", "2.35:1".</summary>
+    /// <summary>Force a display aspect ratio ("no" restores the file's own); e.g. "16:9", "4:3", "2.35:1".</summary>
     public void SetAspect(string ratio)
     {
         _aspectOverride = ratio;
@@ -497,14 +498,14 @@ public partial class PlayerViewModel : ObservableObject
 
     private void ResetVideoAdjustments(bool force)
     {
-        if (!force && _videoRotate == 0 && !_fillScreen && _aspectOverride == "-1")
+        if (!force && _videoRotate == 0 && !_fillScreen && _aspectOverride == AspectAuto)
             return; // nothing to undo — don't spam the engine on every file open
         _videoRotate = 0;
         _fillScreen = false;
-        _aspectOverride = "-1";
+        _aspectOverride = AspectAuto;
         Set("video-rotate", "0");
         Set("panscan", 0.0);
-        Set("video-aspect-override", "-1");
+        Set("video-aspect-override", AspectAuto);
     }
 
     private void Set(string name, string value)

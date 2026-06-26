@@ -87,10 +87,10 @@ public class MpvThreadGuardTests
         ctx.Command("set", "video-aspect-override", "16:9");
         Assert.False(string.IsNullOrEmpty(ctx.GetPropertyString("video-aspect-override")));
 
-        // Reset values the "Reset video" item sends.
+        // Reset values the "Reset video" item sends — "no" restores mpv's automatic aspect handling.
         ctx.Command("set", "video-rotate", "0");
         ctx.Command("set", "panscan", "0.0");
-        ctx.Command("set", "video-aspect-override", "-1");
+        ctx.Command("set", "video-aspect-override", "no");
         Assert.Equal(0, ctx.GetPropertyLong("video-rotate"));
         Assert.Equal(0.0, ctx.GetPropertyDouble("panscan"));
     }
