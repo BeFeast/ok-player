@@ -28,6 +28,7 @@ public sealed partial class MainWindow : Window
 
         Player.ToggleFullscreenRequested += (_, _) => SetFullscreen(!_fullscreen);
         Player.ExitFullscreenRequested += (_, _) => SetFullscreen(false);
+        Player.MiniPlayerRequested += (_, _) => SetMiniPlayer(!_miniPlayer);
         // re-cover the island top edge if WinUI re-lays it out while full screen (e.g. a DPI/size change)
         AppWindow.Changed += (_, args) => { if (_fullscreen && args.DidSizeChange) DispatcherQueue.TryEnqueue(CoverIslandTopEdge); };
         Player.OpenFileRequested += async (_, _) => await OpenFileAsync();
@@ -138,10 +139,30 @@ public sealed partial class MainWindow : Window
             p.IsAlwaysOnTop = on;
     }
 
+    private bool _miniPlayer;
+
+    /// <summary>Toggle the compact-overlay mini-player — native Windows picture-in-picture: a small,
+    /// always-on-top window the OS keeps above others. Mutually exclusive with fullscreen. Leaving it
+    /// restores the overlapped presenter and re-applies the user's always-on-top choice (a fresh presenter
+    /// starts un-pinned).</summary>
+    private void SetMiniPlayer(bool on)
+    {
+        if (on == _miniPlayer)
+            return;
+        if (on && _fullscreen)
+            SetFullscreen(false); // can't be both; drop fullscreen first
+        _miniPlayer = on;
+        AppWindow.SetPresenter(on ? AppWindowPresenterKind.CompactOverlay : AppWindowPresenterKind.Overlapped);
+        if (!on && _alwaysOnTop && AppWindow.Presenter is OverlappedPresenter p)
+            p.IsAlwaysOnTop = true;
+    }
+
     private void SetFullscreen(bool on)
     {
         if (on == _fullscreen)
             return;
+        if (on && _miniPlayer)
+            SetMiniPlayer(false); // mutually exclusive: leave compact overlay before going fullscreen
         _fullscreen = on;
         AppWindow.SetPresenter(on ? AppWindowPresenterKind.FullScreen : AppWindowPresenterKind.Overlapped);
         if (!on && _alwaysOnTop && AppWindow.Presenter is OverlappedPresenter p)

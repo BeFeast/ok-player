@@ -93,6 +93,7 @@
                 <MenuFlyoutSubItem Text="Window">
                     <MenuFlyoutSubItem.Icon><FontIcon Glyph="&#xE740;" /></MenuFlyoutSubItem.Icon>
                     <MenuFlyoutItem Text="Fullscreen" Click="OnFullscreenClick" />
+                    <MenuFlyoutItem Text="Mini player" Click="OnMiniPlayerClick" IsEnabled="{x:Bind Vm.HasMedia, Mode=OneWay}" />
                     <MenuFlyoutItem Text="Fit window to video" Click="OnFitToVideoClick" />
                     <ToggleMenuFlyoutItem x:Name="AlwaysOnTopToggle" Text="Always on top" Click="OnAlwaysOnTopClick" />
                 </MenuFlyoutSubItem>
@@ -454,7 +455,7 @@
                                 <MenuFlyoutItem Text="Copy frame to clipboard" Click="OnCopyFrameClick" />
                                 <MenuFlyoutSeparator />
                                 <MenuFlyoutItem Text="Playlist / Queue" IsEnabled="False" />
-                                <MenuFlyoutItem Text="Mini-player" IsEnabled="False" />
+                                <MenuFlyoutItem Text="Mini player" Click="OnMiniPlayerClick" IsEnabled="{x:Bind Vm.HasMedia, Mode=OneWay}" />
                                 <MenuFlyoutItem Text="Media info&#x2026;" Click="OnMediaInfoClick" />
                                 <MenuFlyoutItem Text="Settings&#x2026;" Click="OnSettingsClick" />
                             </MenuFlyout>

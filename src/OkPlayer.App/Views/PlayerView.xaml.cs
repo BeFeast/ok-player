@@ -519,6 +519,12 @@ public sealed partial class PlayerView : UserControl
     }
     private void OnFullscreenClick(object sender, RoutedEventArgs e) => ToggleFullscreenRequested?.Invoke(this, EventArgs.Empty);
 
+    /// <summary>Toggle the compact-overlay mini-player (native Windows PiP). The owning window applies it
+    /// (it holds the AppWindow and tracks the mode); raised as a plain toggle, like fullscreen.</summary>
+    public event EventHandler? MiniPlayerRequested;
+
+    private void OnMiniPlayerClick(object sender, RoutedEventArgs e) => MiniPlayerRequested?.Invoke(this, EventArgs.Empty);
+
     private void OnFitToVideoClick(object sender, RoutedEventArgs e)
     {
         if (Vm.VideoWidth > 0 && Vm.VideoHeight > 0)
