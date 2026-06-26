@@ -109,6 +109,7 @@ public sealed partial class PlayerView : UserControl
         Video.EngineReady += OnEngineReady;
         Video.ScreenshotSaved += (_, _) => DispatcherQueue.TryEnqueue(() => ShowToast("Screenshot saved"));
         Video.ScreenshotForClipboard += (_, ok) => DispatcherQueue.TryEnqueue(() => OnClipboardFrameReady(ok));
+        Video.SubtitleAdded += (_, ok) => DispatcherQueue.TryEnqueue(() => OnSubtitleAdded(ok));
         MediaInfoCardView.CloseRequested += (_, _) => CloseMediaInfo();
         MediaInfoCardView.CopyRequested += (_, _) => OnMediaInfoCopy();
         VolumeCtl.Vm = Vm;
@@ -1057,20 +1058,29 @@ public sealed partial class PlayerView : UserControl
         AddSubtitleRequested?.Invoke(this, EventArgs.Empty);
     }
 
+    private readonly Queue<string> _subtitlePending = new(); // submitted sub-add filenames, in reply order
+
     /// <summary>Load an external subtitle file into the running engine and select it. mpv's sub-add with
-    /// "select" flips <c>sid</c>, which re-reads the track list, so the new track appears in the switcher.</summary>
+    /// "select" flips <c>sid</c>, which re-reads the track list, so the new track appears in the switcher.
+    /// Toast is deferred to the reply (<see cref="OnSubtitleAdded"/>) so a file mpv can't parse reports a
+    /// failure instead of a false success.</summary>
     public void AddSubtitle(string path)
     {
-        try
-        {
-            if (Video.Engine is { } engine && !string.IsNullOrEmpty(path))
-            {
-                engine.CommandAsync("sub-add", path, "select");
-                ShowToast($"Subtitles added: {System.IO.Path.GetFileName(path)}");
-                RevealChrome();
-            }
-        }
-        catch { ShowToast("Couldn't add subtitles"); }
+        if (string.IsNullOrEmpty(path))
+            return;
+        if (Video.AddSubtitle(path))
+            _subtitlePending.Enqueue(System.IO.Path.GetFileName(path));
+        else
+            ShowToast("Couldn't add subtitles");
+        RevealChrome();
+    }
+
+    /// <summary>mpv finished a sub-add: <paramref name="ok"/> is whether it loaded. Dequeue regardless so the
+    /// one-submit-one-reply pairing stays in sync; toast the real outcome.</summary>
+    private void OnSubtitleAdded(bool ok)
+    {
+        string name = _subtitlePending.Count > 0 ? _subtitlePending.Dequeue() : "subtitles";
+        ShowToast(ok ? $"Subtitles added: {name}" : "Couldn't add subtitles");
     }
 
     private void OnSubtitleTrackClick(object sender, RoutedEventArgs e)

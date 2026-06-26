@@ -29,6 +29,7 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
     // from PlayerViewModel.SeekReply (= 2) or a reply is read as the wrong command's completion.
     private const ulong ScreenshotReply = 1;
     private const ulong ClipboardReply = 3;
+    private const ulong SubtitleAddReply = 4;
 
     /// <summary>Raised (on the event thread) when a screenshot has finished saving successfully.</summary>
     public event EventHandler? ScreenshotSaved;
@@ -273,12 +274,36 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
     /// in sync; a failed reply would otherwise strand the caller's queued path.</summary>
     public event EventHandler<bool>? ScreenshotForClipboard;
 
+    /// <summary>Load an external subtitle file and select it. Returns true if the command was submitted;
+    /// <see cref="SubtitleAdded"/> then fires with whether mpv actually loaded it (a corrupt/unsupported
+    /// file fails), so the caller can report success vs failure accurately rather than assuming success.</summary>
+    public bool AddSubtitle(string path)
+    {
+        if (_mpv is not { } mpv)
+            return false;
+        try
+        {
+            mpv.CommandAsync(SubtitleAddReply, "sub-add", path, "select");
+            return true;
+        }
+        catch (MpvException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Raised (on the event thread) for EVERY submitted sub-add — the bool is whether mpv loaded
+    /// the file. Fires even on failure so the caller's one-submit-one-reply bookkeeping stays in sync.</summary>
+    public event EventHandler<bool>? SubtitleAdded;
+
     private void OnCommandReply(ulong id, bool success)
     {
         if (id == ScreenshotReply && success)
             ScreenshotSaved?.Invoke(this, EventArgs.Empty);
         else if (id == ClipboardReply)
             ScreenshotForClipboard?.Invoke(this, success);
+        else if (id == SubtitleAddReply)
+            SubtitleAdded?.Invoke(this, success);
     }
 
     public void Dispose()
