@@ -44,6 +44,20 @@ public sealed class HistoryService
     private readonly object _lock = new();
     private Dictionary<string, FileRecord> _records = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Private (incognito) session: when true, no new playback data is recorded — <see cref="Record"/>,
+    /// <see cref="SetPoster"/>, <see cref="AddBookmark"/> and the user-chapter writes all become no-ops,
+    /// so watching leaves no trace (no resume position, no recents entry). Existing history stays
+    /// readable (resume from before still works), and deletions (<see cref="Clear"/>, removes) still
+    /// apply. Session-scoped: defaults off every launch, opt-in per session.
+    /// </summary>
+    public bool Private { get; set; }
+
+    /// <summary>Raised after records are removed out-of-band (<see cref="Clear"/> or
+    /// <see cref="PruneOlderThan"/>) so other windows — the player's continue-watching recents — can
+    /// refresh instead of showing stale entries.</summary>
+    public event Action? Changed;
+
     public HistoryService()
     {
         try
@@ -103,7 +117,7 @@ public sealed class HistoryService
     /// <summary>Record the latest position/duration for a local file (creates the entry if needed).</summary>
     public void Record(string path, double position, double duration)
     {
-        if (!IsTrackable(path))
+        if (Private || !IsTrackable(path))
             return;
         lock (_lock)
         {
@@ -117,10 +131,11 @@ public sealed class HistoryService
         Save();
     }
 
-    /// <summary>Add a bookmark; returns false (no toast) for untrackable paths such as URLs.</summary>
+    /// <summary>Add a bookmark; returns false (no toast) for untrackable paths such as URLs, or while
+    /// a <see cref="Private"/> session is active (nothing is persisted in incognito).</summary>
     public bool AddBookmark(string path, double time)
     {
-        if (!IsTrackable(path))
+        if (Private || !IsTrackable(path))
             return false;
         lock (_lock)
         {
@@ -142,7 +157,7 @@ public sealed class HistoryService
 
     public void SetPoster(string path, string posterPath)
     {
-        if (!IsTrackable(path))
+        if (Private || !IsTrackable(path))
             return;
         lock (_lock)
             GetOrCreate(path).PosterPath = posterPath;
@@ -167,7 +182,7 @@ public sealed class HistoryService
 
     public bool AddUserChapter(string path, double time, string title)
     {
-        if (!IsTrackable(path))
+        if (Private || !IsTrackable(path))
             return false;
         bool added = false;
         lock (_lock)
@@ -229,6 +244,52 @@ public sealed class HistoryService
                 .Take(count)
                 .Select(kv => (kv.Key, kv.Value))
                 .ToList();
+    }
+
+    /// <summary>Wipe all watch history (resume positions, recents, bookmarks, user chapters). Returns
+    /// the number of file records removed. Persists the empty store so it survives restart.</summary>
+    public int Clear()
+    {
+        int removed;
+        lock (_lock)
+        {
+            removed = _records.Count;
+            if (removed == 0)
+                return 0;
+            _records = new Dictionary<string, FileRecord>(StringComparer.OrdinalIgnoreCase);
+        }
+        Save();
+        Changed?.Invoke();
+        return removed;
+    }
+
+    /// <summary>Retention: drop records last opened more than <paramref name="days"/> days ago.
+    /// <paramref name="days"/> &lt;= 0 keeps everything (the default). Records with no/unparseable
+    /// timestamp are kept. Returns the number pruned; persists only when something was removed.</summary>
+    public int PruneOlderThan(int days)
+    {
+        if (days <= 0)
+            return 0;
+        DateTime cutoff = DateTime.UtcNow.AddDays(-days);
+        int removed;
+        lock (_lock)
+        {
+            var stale = _records
+                .Where(kv => DateTime.TryParse(
+                    kv.Value.LastOpenedUtc, null,
+                    System.Globalization.DateTimeStyles.RoundtripKind, out var t) && t < cutoff)
+                .Select(kv => kv.Key)
+                .ToList();
+            foreach (string key in stale)
+                _records.Remove(key);
+            removed = stale.Count;
+        }
+        if (removed > 0)
+        {
+            Save();
+            Changed?.Invoke(); // a retention change can prune visible recents — let the player refresh
+        }
+        return removed;
     }
 
     private FileRecord GetOrCreate(string path)

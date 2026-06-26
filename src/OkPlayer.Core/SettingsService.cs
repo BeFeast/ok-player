@@ -31,6 +31,9 @@ public sealed class AppSettings
     public double SubtitleScale { get; set; } = 1.0;     // default sub-scale (size multiplier)
     public int SubtitlePosition { get; set; } = 100;     // default sub-pos: 100 = bottom, lower = higher
 
+    // Privacy (Integration panel)
+    public int HistoryRetentionDays { get; set; } = 0;   // auto-prune history older than N days; 0 = keep forever
+
     public int SchemaVersion { get; set; } = 1;          // forward-compat migration hook
 }
 

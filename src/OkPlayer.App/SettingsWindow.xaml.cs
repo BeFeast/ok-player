@@ -319,8 +319,19 @@ public sealed partial class SettingsWindow : Window
     private readonly FileAssociationService _assoc = new();
     private bool _assocBuilt;
 
+    // Retention dropdown index → days kept (0 = forever). Order matches the ComboBoxItems in XAML.
+    private static readonly int[] RetentionDays = { 0, 7, 30, 90, 365 };
+    private bool _retentionReady; // suppress the SelectionChanged that fires while we set the initial index
+
     private void LoadIntegration()
     {
+        // Reflect the persisted retention window without firing OnRetentionChanged.
+        _retentionReady = false;
+        int days = App.Settings.Current.HistoryRetentionDays;
+        int idx = Array.IndexOf(RetentionDays, days);
+        RetentionCombo.SelectedIndex = idx >= 0 ? idx : 0; // unknown value falls back to "Forever"
+        _retentionReady = true;
+
         if (_assocBuilt)
         {
             RefreshAssocChecks();
@@ -329,6 +340,42 @@ public sealed partial class SettingsWindow : Window
         BuildAssoc(AssocVideoPanel, VideoExts);
         BuildAssoc(AssocAudioPanel, AudioExts);
         _assocBuilt = true;
+    }
+
+    private void OnRetentionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_retentionReady)
+            return;
+        int idx = RetentionCombo.SelectedIndex;
+        int days = idx >= 0 && idx < RetentionDays.Length ? RetentionDays[idx] : 0;
+        App.Settings.Current.HistoryRetentionDays = days;
+        App.Settings.Save();
+        int pruned = App.History.PruneOlderThan(days); // apply the new window immediately
+        HistoryStatus.Text = days == 0 ? "History kept forever"
+            : pruned > 0 ? $"Removed {pruned} older item{(pruned == 1 ? "" : "s")}"
+            : "Retention updated";
+    }
+
+    private async void OnClearHistory(object sender, RoutedEventArgs e)
+    {
+        var dialog = new ContentDialog
+        {
+            Title = "Clear watch history?",
+            Content = "This removes all resume positions, Continue Watching entries, bookmarks and your added chapters. This can't be undone.",
+            PrimaryButtonText = "Clear",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = Content.XamlRoot,
+        };
+        try
+        {
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+                return;
+        }
+        catch { return; } // another dialog is already open — ignore the concurrent open
+        int removed = App.History.Clear();
+        HistoryStatus.Text = removed == 0 ? "History was already empty"
+            : $"Cleared {removed} item{(removed == 1 ? "" : "s")}";
     }
 
     private void BuildAssoc(Panel host, string[] exts)

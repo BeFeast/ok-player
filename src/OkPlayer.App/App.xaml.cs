@@ -14,6 +14,10 @@ public partial class App : Application
     /// <summary>The one shared user-settings instance (single source of truth across all windows).</summary>
     public static SettingsService Settings { get; } = new();
 
+    /// <summary>The one shared watch-history instance (single source of truth across all windows), so a
+    /// "Clear history" from Settings is reflected by the player's recents without a stale second copy.</summary>
+    public static HistoryService History { get; } = new();
+
     public App()
     {
         InitializeComponent();
@@ -23,6 +27,7 @@ public partial class App : Application
     {
         // apply engine-init settings before the video panel is created
         OkPlayer.Render.MpvVideoPanel.HardwareDecoding = Settings.Current.HardwareDecoding;
+        History.PruneOlderThan(Settings.Current.HistoryRetentionDays); // honour the retention window on launch
         _window = new MainWindow(GetLaunchFile());
         _window.Activate();
     }
