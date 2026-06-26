@@ -251,9 +251,9 @@ public sealed partial class PlayerView : UserControl
 
     private void OnSeekHover(double fraction, double xInBar)
     {
-        if (!Vm.HasMedia || Vm.Duration <= 0)
+        if (!Vm.HasMedia || !double.IsFinite(Vm.Duration) || Vm.Duration <= 0)
         {
-            OnSeekHoverEnded(); // media gone/replaced under the pointer — hide any lingering preview
+            OnSeekHoverEnded(); // media gone/replaced or duration unknown — hide any lingering preview
             return;
         }
         double time = fraction * Vm.Duration;
@@ -1098,13 +1098,13 @@ public sealed partial class PlayerView : UserControl
     private void WarmTimeline()
     {
         int gen = _openGeneration;
-        if (_timelineWarmGen == gen || Vm.Duration <= 0)
+        if (_timelineWarmGen == gen)
             return;
         _timelineWarmGen = gen;
-        _ = WarmTimelineAsync(gen, Vm.Duration);
+        _ = WarmTimelineAsync(gen);
     }
 
-    private async System.Threading.Tasks.Task WarmTimelineAsync(int gen, double duration)
+    private async System.Threading.Tasks.Task WarmTimelineAsync(int gen)
     {
         try
         {
@@ -1119,10 +1119,28 @@ public sealed partial class PlayerView : UserControl
             await System.Threading.Tasks.Task.Delay(3000);
             if (gen != _openGeneration || !_thumbs.IsReady)
                 return;
+            // Read the duration here (not at claim time): the file is loaded, so this is the real, stable value
+            // for THIS media — a stale duration notification from the previous file can't drive the grid.
+            double duration = Vm.Duration;
+            if (!double.IsFinite(duration) || duration <= 0)
+            {
+                if (gen == _openGeneration)
+                    _timelineWarmGen = -1; // no usable duration yet — let a later Duration update retry
+                return;
+            }
+            if (Vm.VideoWidth <= 0)
+                return; // audio-only (no video plane): the engine can't produce frames — don't burn 140 seeks
             // ~140 frames evenly across the file, clamped so a long film stays coarse and a short clip isn't dense.
             double step = Math.Clamp(duration / 140.0, 10.0, 60.0);
+            int consecutiveNull = 0;
             for (double t = 0; t < duration && gen == _openGeneration; t += step)
-                await _thumbs.GetThumbnailAsync(t, () => gen != _openGeneration); // caches; bails if superseded
+            {
+                string? f = await _thumbs.GetThumbnailAsync(t, () => gen != _openGeneration); // caches; bails if superseded
+                if (f is null && ++consecutiveNull >= 3)
+                    return; // the engine isn't producing frames (no video / unseekable) — stop wasting seeks
+                if (f is not null)
+                    consecutiveNull = 0;
+            }
         }
         catch { /* best effort — a partial grid still makes scrubbing faster */ }
     }

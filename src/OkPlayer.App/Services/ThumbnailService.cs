@@ -215,7 +215,7 @@ public sealed class ThumbnailService : IDisposable
     /// generates. Backed by an in-memory second index, so it's cheap to call on every pointer move.</summary>
     public string? PeekNearestCached(double timeSeconds, double maxDistanceSeconds)
     {
-        if (_disposed)
+        if (_disposed || !double.IsFinite(timeSeconds) || !double.IsFinite(maxDistanceSeconds))
             return null;
         string fileKey = _fileKey;
         if (fileKey == "0")
