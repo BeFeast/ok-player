@@ -223,6 +223,8 @@ public sealed partial class PlayerView : UserControl
             OpenMedia(path); // a command-line file queued before the engine was ready
             _explicitResume = _pendingInitialResume; // after OpenMedia (it resets per-open state)
             _pendingInitialResume = null;
+            ApplyLaunchTracks(_pendingInitialSub, _pendingInitialAudio);
+            _pendingInitialSub = _pendingInitialAudio = null;
         }
         RevealChrome();
     }
@@ -1471,6 +1473,7 @@ public sealed partial class PlayerView : UserControl
 
     private string? _pendingInitialPath; // a launch-time file held until the engine is ready
     private double? _pendingInitialResume; // explicit resume paired with _pendingInitialPath
+    private int? _pendingInitialSub, _pendingInitialAudio; // launch-time track preselection paired with _pendingInitialPath
 
     /// <summary>Apply the user's default subtitle size/position (Settings -> Subtitles) to the engine. Live —
     /// safe to call any time; a no-op when no engine/file is up.</summary>
@@ -1507,17 +1510,36 @@ public sealed partial class PlayerView : UserControl
 
     /// <summary>Open a file given on the command line ("Open with"). If the engine isn't up yet, hold it
     /// and open on EngineReady.</summary>
-    public void QueueInitialFile(string path, double? resumeSeconds = null)
+    public void QueueInitialFile(string path, double? resumeSeconds = null, int? subTrack = null, int? audioTrack = null)
     {
         if (Video.Engine is not null)
         {
             OpenMedia(path);
             _explicitResume = resumeSeconds; // set after OpenMedia, which resets per-open state; applied on first Duration
+            ApplyLaunchTracks(subTrack, audioTrack);
         }
         else
         {
             _pendingInitialPath = path;
             _pendingInitialResume = resumeSeconds;
+            _pendingInitialSub = subTrack;
+            _pendingInitialAudio = audioTrack;
+        }
+    }
+
+    /// <summary>Apply a launch-time subtitle/audio track preselection (PRD §13.1). mpv honours sid/aid as the
+    /// file loads, so this is set once right after open — no per-open latch needed. -1 means "none"/off.</summary>
+    private void ApplyLaunchTracks(int? subTrack, int? audioTrack)
+    {
+        if (subTrack is int s)
+        {
+            if (s < 0) Vm.SetSubtitleOff();
+            else Vm.SelectSubtitleId(s);
+        }
+        if (audioTrack is int a)
+        {
+            if (a < 0) Vm.SetAudioOff();
+            else Vm.SelectAudioId(a);
         }
     }
 

@@ -717,6 +717,11 @@ public partial class PlayerViewModel : ObservableObject
     public void SetSubtitleOff() => Set("sid", "no");
     public void SelectSubtitle(TrackInfo track) => Set("sid", track.Id.ToString(CultureInfo.InvariantCulture));
     public void SelectAudio(TrackInfo track) => Set("aid", track.Id.ToString(CultureInfo.InvariantCulture));
+
+    // Track selection by raw id — used for launch-time preselection (mpv applies sid/aid as the file loads).
+    public void SelectSubtitleId(int id) => Set("sid", id.ToString(CultureInfo.InvariantCulture));
+    public void SelectAudioId(int id) => Set("aid", id.ToString(CultureInfo.InvariantCulture));
+    public void SetAudioOff() => Set("aid", "no");
     public void SeekToChapter(ChapterInfo chapter)
     {
         if (Duration > 0)
