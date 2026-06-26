@@ -24,8 +24,16 @@
         <Border x:Name="FillBar" Height="5" CornerRadius="3" Width="0"
                 VerticalAlignment="Center" HorizontalAlignment="Left"
                 Background="{StaticResource OkSeekFillBrush}" />
+        <!-- A–B loop region (tinted band between the two points) -->
+        <Border x:Name="AbBand" Height="9" CornerRadius="3" Width="0" Visibility="Collapsed"
+                VerticalAlignment="Center" HorizontalAlignment="Left" Background="#8044E0D3" IsHitTestVisible="False" />
         <!-- chapter ticks -->
         <Canvas x:Name="TickCanvas" Height="9" VerticalAlignment="Center" IsHitTestVisible="False" />
+        <!-- A–B loop point markers -->
+        <Border x:Name="AbMarkerA" Width="2" Height="13" CornerRadius="1" Visibility="Collapsed"
+                VerticalAlignment="Center" HorizontalAlignment="Left" Background="#FF28B3AA" IsHitTestVisible="False" />
+        <Border x:Name="AbMarkerB" Width="2" Height="13" CornerRadius="1" Visibility="Collapsed"
+                VerticalAlignment="Center" HorizontalAlignment="Left" Background="#FF28B3AA" IsHitTestVisible="False" />
         <!-- thumb -->
         <Ellipse x:Name="ThumbDot" Width="13" Height="13" Fill="White"
                  VerticalAlignment="Center" HorizontalAlignment="Left" />

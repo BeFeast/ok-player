@@ -88,6 +88,8 @@ public partial class PlayerViewModel : ObservableObject
         OnPropertyChanged(nameof(DurationText));
         OnPropertyChanged(nameof(TrailingTimeText));
         OnPropertyChanged(nameof(ChapterFractions)); // fractions depend on duration
+        OnPropertyChanged(nameof(AbLoopAFraction));  // A–B band positions depend on duration too
+        OnPropertyChanged(nameof(AbLoopBFraction));
     }
 
     partial void OnIsPausedChanged(bool value)
@@ -141,6 +143,7 @@ public partial class PlayerViewModel : ObservableObject
             ("sub-delay", MpvFormat.Double), ("sub-scale", MpvFormat.Double), ("chapter", MpvFormat.Int64),
             ("dwidth", MpvFormat.Int64), ("dheight", MpvFormat.Int64),
             ("demuxer-cache-time", MpvFormat.Double), ("eof-reached", MpvFormat.Flag),
+            ("ab-loop-a", MpvFormat.String), ("ab-loop-b", MpvFormat.String),
         })
         {
             engine.ObserveProperty(name, fmt);
@@ -262,6 +265,8 @@ public partial class PlayerViewModel : ObservableObject
                 case "dwidth": if (value is long dw) VideoWidth = (int)dw; break;
                 case "dheight": if (value is long dh) VideoHeight = (int)dh; break;
                 case "demuxer-cache-time": if (value is double ct) BufferedFraction = Duration > 0 ? System.Math.Clamp(ct / Duration, 0, 1) : 0; break;
+                case "ab-loop-a": _abA = ParseAbLoop(value as string); OnPropertyChanged(nameof(AbLoopAFraction)); break;
+                case "ab-loop-b": _abB = ParseAbLoop(value as string); OnPropertyChanged(nameof(AbLoopBFraction)); break;
             }
         });
     }
@@ -506,10 +511,32 @@ public partial class PlayerViewModel : ObservableObject
 
     public void SetVolume(double value) => Set("volume", System.Math.Clamp(value, 0, 130));
 
+    private double? _abA, _abB; // A–B loop points in seconds (null = unset), tracked from the ab-loop-a/b observes
+
+    /// <summary>A–B loop start/end as 0..1 fractions for the seek bar, or NaN when unset.</summary>
+    public double AbLoopAFraction => _abA is double a && Duration > 0 ? System.Math.Clamp(a / Duration, 0, 1) : double.NaN;
+    public double AbLoopBFraction => _abB is double b && Duration > 0 ? System.Math.Clamp(b / Duration, 0, 1) : double.NaN;
+
+    private static double? ParseAbLoop(string? s) =>
+        s is null || s == "no" ? null
+        : double.TryParse(s, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double v) ? v
+        : null;
+
     public void ToggleAbLoop()
     {
+        // mpv's `ab-loop` cycles deterministically: set A → set B → clear. Predict the resulting state from the
+        // current one so the toast is specific, instead of reading the property back (a UI-thread read deadlocks).
+        string msg = _abA is null ? $"A–B loop: start at {FormatClock(Position)}"
+                   : _abB is null ? $"A–B loop: {FormatClock(_abA.Value)} – {FormatClock(Position)}"
+                   : "A–B loop cleared";
         if (CmdOk("ab-loop"))
-            ToastRequested?.Invoke("A-B loop");
+            ToastRequested?.Invoke(msg);
+    }
+
+    private static string FormatClock(double seconds)
+    {
+        var ts = System.TimeSpan.FromSeconds(System.Math.Max(0, seconds));
+        return ts.TotalHours >= 1 ? $"{(int)ts.TotalHours}:{ts.Minutes:00}:{ts.Seconds:00}" : $"{ts.Minutes}:{ts.Seconds:00}";
     }
 
     public void SetSpeed(double speed) => Set("speed", speed);

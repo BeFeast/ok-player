@@ -67,6 +67,28 @@ public sealed partial class SeekBar : UserControl
         set => SetValue(CurrentChapterProperty, value);
     }
 
+    public static readonly DependencyProperty AbLoopAProperty = DependencyProperty.Register(
+        nameof(AbLoopA), typeof(double), typeof(SeekBar),
+        new PropertyMetadata(double.NaN, (d, _) => ((SeekBar)d).UpdateAbVisual()));
+
+    public static readonly DependencyProperty AbLoopBProperty = DependencyProperty.Register(
+        nameof(AbLoopB), typeof(double), typeof(SeekBar),
+        new PropertyMetadata(double.NaN, (d, _) => ((SeekBar)d).UpdateAbVisual()));
+
+    /// <summary>A–B loop start as a 0..1 fraction, or NaN when unset.</summary>
+    public double AbLoopA
+    {
+        get => (double)GetValue(AbLoopAProperty);
+        set => SetValue(AbLoopAProperty, value);
+    }
+
+    /// <summary>A–B loop end as a 0..1 fraction, or NaN when unset.</summary>
+    public double AbLoopB
+    {
+        get => (double)GetValue(AbLoopBProperty);
+        set => SetValue(AbLoopBProperty, value);
+    }
+
     /// <summary>Raised with the target fraction on press, drag, and release.</summary>
     public event Action<double>? SeekRequested;
 
@@ -89,6 +111,42 @@ public sealed partial class SeekBar : UserControl
         BufferedBar.Width = Math.Clamp(Buffered, 0, 1) * width;
         ThumbDot.Margin = new Thickness(f * width - ThumbDot.Width / 2, 0, 0, 0);
         RenderTicks();
+        UpdateAbVisual();
+    }
+
+    private void UpdateAbVisual()
+    {
+        double width = ActualWidth;
+        bool aSet = !double.IsNaN(AbLoopA);
+        bool bSet = !double.IsNaN(AbLoopB);
+        if (width <= 0 || (!aSet && !bSet))
+        {
+            AbBand.Visibility = Visibility.Collapsed;
+            AbMarkerA.Visibility = Visibility.Collapsed;
+            AbMarkerB.Visibility = Visibility.Collapsed;
+            return;
+        }
+        // One point set = loop runs from there to the other end; the band spans whatever is known.
+        double a = Math.Clamp(aSet ? AbLoopA : 0, 0, 1);
+        double b = Math.Clamp(bSet ? AbLoopB : 1, 0, 1);
+        double left = Math.Min(a, b) * width;
+        double right = Math.Max(a, b) * width;
+        AbBand.Margin = new Thickness(left, 0, 0, 0);
+        AbBand.Width = Math.Max(0, right - left);
+        AbBand.Visibility = Visibility.Visible;
+        SetMarker(AbMarkerA, aSet, AbLoopA, width);
+        SetMarker(AbMarkerB, bSet, AbLoopB, width);
+    }
+
+    private static void SetMarker(Border marker, bool set, double frac, double width)
+    {
+        if (!set)
+        {
+            marker.Visibility = Visibility.Collapsed;
+            return;
+        }
+        marker.Margin = new Thickness(Math.Clamp(frac, 0, 1) * width - marker.Width / 2, 0, 0, 0);
+        marker.Visibility = Visibility.Visible;
     }
 
     private static readonly Color TickColor = Color.FromArgb(0x8C, 0xFF, 0xFF, 0xFF);   // rgba(255,255,255,.55)
