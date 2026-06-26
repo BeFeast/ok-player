@@ -26,6 +26,8 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
     private volatile bool _forceRender;
     private TimeSpan _lastRenderTime = TimeSpan.FromSeconds(-1);
     private const ulong ScreenshotReply = 1;
+    private const ulong ClipboardReply = 2; // distinct id so a clipboard grab's reply isn't read as a saved-to-disk one
+    private string? _pendingClipboardPath;
 
     /// <summary>Raised (on the event thread) when a screenshot has finished saving successfully.</summary>
     public event EventHandler? ScreenshotSaved;
@@ -227,17 +229,18 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
     public void Play() => _mpv?.SetProperty("pause", false);
     public void Pause() => _mpv?.SetProperty("pause", true);
 
-    /// <summary>Take a screenshot of the decoded frame ("video" mode). Fire-and-forget: the async command
-    /// runs while the render loop keeps driving the pipeline (a paused/yielded render with vo=libmpv would
-    /// starve the grab and it would never land), and ScreenshotSaved fires when the reply confirms success.
+    /// <summary>Take a screenshot to the screenshot directory. <paramref name="includeSubtitles"/> uses mpv's
+    /// "subtitles" mode (decoded frame + rendered subtitles) instead of the bare "video" frame. Fire-and-forget:
+    /// the async command runs while the render loop keeps driving the pipeline (a paused/yielded render with
+    /// vo=libmpv would starve the grab and it would never land), and ScreenshotSaved fires on success.
     /// Returns false only if no engine is loaded.</summary>
-    public bool Screenshot()
+    public bool Screenshot(bool includeSubtitles = false)
     {
         if (_mpv is not { } mpv)
             return false;
         try
         {
-            mpv.CommandAsync(ScreenshotReply, "screenshot", "video");
+            mpv.CommandAsync(ScreenshotReply, "screenshot", includeSubtitles ? "subtitles" : "video");
             return true;
         }
         catch (MpvException)
@@ -246,10 +249,37 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
         }
     }
 
+    /// <summary>Grab the current frame to <paramref name="path"/> (so the caller can copy it to the clipboard).
+    /// Raises <see cref="ScreenshotForClipboard"/> with the path when the reply confirms the file is written.</summary>
+    public bool ScreenshotToClipboard(string path, bool includeSubtitles = false)
+    {
+        if (_mpv is not { } mpv)
+            return false;
+        try
+        {
+            _pendingClipboardPath = path;
+            mpv.CommandAsync(ClipboardReply, "screenshot-to-file", path, includeSubtitles ? "subtitles" : "video");
+            return true;
+        }
+        catch (MpvException)
+        {
+            _pendingClipboardPath = null;
+            return false;
+        }
+    }
+
+    /// <summary>Raised (on the event thread) with the saved path once a clipboard screenshot is written.</summary>
+    public event EventHandler<string>? ScreenshotForClipboard;
+
     private void OnCommandReply(ulong id, bool success)
     {
         if (id == ScreenshotReply && success)
             ScreenshotSaved?.Invoke(this, EventArgs.Empty);
+        else if (id == ClipboardReply && success && _pendingClipboardPath is { } path)
+        {
+            _pendingClipboardPath = null;
+            ScreenshotForClipboard?.Invoke(this, path);
+        }
     }
 
     public void Dispose()

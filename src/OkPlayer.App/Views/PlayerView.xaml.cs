@@ -108,6 +108,7 @@ public sealed partial class PlayerView : UserControl
 
         Video.EngineReady += OnEngineReady;
         Video.ScreenshotSaved += (_, _) => DispatcherQueue.TryEnqueue(() => ShowToast("Screenshot saved"));
+        Video.ScreenshotForClipboard += (_, path) => DispatcherQueue.TryEnqueue(() => CopyFrameToClipboard(path));
         MediaInfoCardView.CloseRequested += (_, _) => CloseMediaInfo();
         MediaInfoCardView.CopyRequested += (_, _) => OnMediaInfoCopy();
         VolumeCtl.Vm = Vm;
@@ -437,10 +438,37 @@ public sealed partial class PlayerView : UserControl
     private void OnVolumeClick(object sender, RoutedEventArgs e) { Vm.ToggleMute(); RevealChrome(); }
     private void OnSpeedClick(object sender, RoutedEventArgs e) { Vm.CycleSpeed(); RevealChrome(); }
     private void OnScreenshotClick(object sender, RoutedEventArgs e) { DoScreenshot(); RevealChrome(); }
+    private void OnScreenshotWithSubsClick(object sender, RoutedEventArgs e) { Video.Screenshot(includeSubtitles: true); RevealChrome(); }
+    private void OnCopyFrameClick(object sender, RoutedEventArgs e) { DoCopyFrame(); RevealChrome(); }
 
-    /// <summary>Take a screenshot via the render panel, which yields the UI-thread render loop so a heavy
-    /// 4K/HDR grab can't freeze the app. The toast fires on the ScreenshotSaved event (i.e. on success).</summary>
+    /// <summary>Take a screenshot via the render panel. The grab runs while the render loop keeps driving the
+    /// pipeline (vo=libmpv is fed by it), so it never freezes the app. The toast fires on the ScreenshotSaved
+    /// event (i.e. on success).</summary>
     private void DoScreenshot() => Video.Screenshot();
+
+    /// <summary>Grab the current frame to a temp file, then copy it onto the Windows clipboard.</summary>
+    private void DoCopyFrame()
+    {
+        string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "OkPlayer");
+        System.IO.Directory.CreateDirectory(dir);
+        Video.ScreenshotToClipboard(System.IO.Path.Combine(dir, "clipboard-frame.png"));
+    }
+
+    private async void CopyFrameToClipboard(string path)
+    {
+        try
+        {
+            var file = await Windows.Storage.StorageFile.GetFileFromPathAsync(path);
+            var data = new Windows.ApplicationModel.DataTransfer.DataPackage
+            {
+                RequestedOperation = Windows.ApplicationModel.DataTransfer.DataPackageOperation.Copy,
+            };
+            data.SetBitmap(Windows.Storage.Streams.RandomAccessStreamReference.CreateFromFile(file));
+            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(data);
+            ShowToast("Frame copied to clipboard");
+        }
+        catch { ShowToast("Couldn't copy the frame"); }
+    }
     private void OnFullscreenClick(object sender, RoutedEventArgs e) => ToggleFullscreenRequested?.Invoke(this, EventArgs.Empty);
 
     private void OnFitToVideoClick(object sender, RoutedEventArgs e)
