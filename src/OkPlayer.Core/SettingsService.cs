@@ -27,6 +27,7 @@ public sealed class AppSettings
     // Audio
     public int DefaultVolume { get; set; } = 100;        // 0..130, the volume the engine starts at
     public bool AudioNormalization { get; set; }         // loudness normalization (night mode) via an mpv audio filter
+    public string AudioDevice { get; set; } = "";        // remembered output device (mpv id); "" = mpv's default (auto)
 
     // Subtitles
     public double SubtitleScale { get; set; } = 1.0;     // default sub-scale (size multiplier)

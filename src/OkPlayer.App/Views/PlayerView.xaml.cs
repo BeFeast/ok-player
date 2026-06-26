@@ -211,6 +211,9 @@ public sealed partial class PlayerView : UserControl
         {
             Vm.Attach(engine, DispatcherQueue);
             Vm.SetVolume(App.Settings.Current.DefaultVolume); // start at the configured default volume (Settings -> Audio)
+            string device = App.Settings.Current.AudioDevice;
+            if (!string.IsNullOrEmpty(device))
+                Vm.SelectAudioDevice(device); // restore the remembered output device (falls back to auto if gone)
         }
         if (_pendingInitialPath is { } path)
         {
@@ -1132,6 +1135,8 @@ public sealed partial class PlayerView : UserControl
         if (sender is FrameworkElement { DataContext: AudioDevice dev })
         {
             Vm.SelectAudioDevice(dev.Name);
+            App.Settings.Current.AudioDevice = dev.Name; // remember the choice across launches
+            App.Settings.Save();
             ShowToast($"Audio output: {dev.Label}");
         }
         AudioFlyout.Hide();

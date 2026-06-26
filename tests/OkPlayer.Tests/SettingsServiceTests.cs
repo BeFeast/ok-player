@@ -22,6 +22,9 @@ public class SettingsServiceTests : IDisposable
         Assert.True(s.ResumePlayback);
         Assert.Equal(1.0, s.DefaultSpeed);
         Assert.True(s.HardwareDecoding);
+        Assert.False(s.AudioNormalization);   // off by default
+        Assert.Equal("", s.AudioDevice);      // empty = mpv's default output
+        Assert.Equal(0, s.HistoryRetentionDays); // keep forever by default
     }
 
     [Fact]
@@ -31,12 +34,18 @@ public class SettingsServiceTests : IDisposable
         a.Current.Theme = "Light";
         a.Current.DefaultVolume = 75;
         a.Current.SubtitleScale = 1.4;
+        a.Current.AudioNormalization = true;
+        a.Current.AudioDevice = "wasapi/{headphones}";
+        a.Current.HistoryRetentionDays = 30;
         a.Save();
 
         var reloaded = New().Current; // a fresh service reads the same file
         Assert.Equal("Light", reloaded.Theme);
         Assert.Equal(75, reloaded.DefaultVolume);
         Assert.Equal(1.4, reloaded.SubtitleScale);
+        Assert.True(reloaded.AudioNormalization);
+        Assert.Equal("wasapi/{headphones}", reloaded.AudioDevice);
+        Assert.Equal(30, reloaded.HistoryRetentionDays);
     }
 
     [Fact]
