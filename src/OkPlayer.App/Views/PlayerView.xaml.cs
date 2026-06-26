@@ -457,8 +457,10 @@ public sealed partial class PlayerView : UserControl
         string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "OkPlayer");
         System.IO.Directory.CreateDirectory(dir);
         string path = System.IO.Path.Combine(dir, $"clipboard-frame-{++_clipboardSeq}.png");
-        _clipboardPending.Enqueue(path);
-        Video.ScreenshotToClipboard(path);
+        // Enqueue only if the grab was actually submitted; otherwise no reply arrives and a stale path would
+        // desync the queue, making every later reply copy the wrong (or a missing) frame.
+        if (Video.ScreenshotToClipboard(path))
+            _clipboardPending.Enqueue(path);
     }
 
     private void OnClipboardFrameReady()
