@@ -1114,6 +1114,11 @@ public sealed partial class PlayerView : UserControl
                 await ready;
             if (gen != _openGeneration || !_thumbs.IsReady)
                 return;
+            // Let playback (and any resume seek + chapter warm) settle before pulling the CPU-decode engine
+            // through the whole timeline, so this background work doesn't contend with a smooth start.
+            await System.Threading.Tasks.Task.Delay(3000);
+            if (gen != _openGeneration || !_thumbs.IsReady)
+                return;
             // ~140 frames evenly across the file, clamped so a long film stays coarse and a short clip isn't dense.
             double step = Math.Clamp(duration / 140.0, 10.0, 60.0);
             for (double t = 0; t < duration && gen == _openGeneration; t += step)
