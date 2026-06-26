@@ -708,9 +708,11 @@ public sealed partial class PlayerView : UserControl
     {
         if (_currentPath is { } path && Vm.HasMedia && Vm.Duration > 0)
         {
-            // Near-EOF counts as completed: store 0 so it neither auto-resumes nor lingers half-watched.
-            double position = Vm.Position < Vm.Duration - 30 ? Vm.Position : 0;
-            _history.Record(path, position, Vm.Duration);
+            // Near-EOF counts as completed: store 0 so it neither auto-resumes nor lingers half-watched,
+            // and flag it Finished so the watched-marker (and a companion library) can tell "done" from "fresh".
+            bool finished = Vm.Position >= Vm.Duration - 30;
+            double position = finished ? 0 : Vm.Position;
+            _history.Record(path, position, Vm.Duration, finished);
         }
     }
 
@@ -1580,7 +1582,7 @@ public sealed partial class PlayerView : UserControl
                 Title = System.IO.Path.GetFileNameWithoutExtension(p),
                 IsCurrent = i == cur,
                 IsNext = string.Equals(p, nextPath, StringComparison.OrdinalIgnoreCase),
-                IsWatched = _history.Get(p) is { Position: > 60 }, // seen at least a minute in
+                IsWatched = _history.Get(p) is { Finished: true } or { Position: > 60 }, // watched to end, or seen a minute in
             });
         }
         bool hasFolder = count > 1;

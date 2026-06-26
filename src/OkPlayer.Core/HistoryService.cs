@@ -20,6 +20,11 @@ public sealed class FileRecord
 {
     public double Position { get; set; }
     public double Duration { get; set; }
+    /// <summary>True once the file was watched to the end. Distinct from <see cref="Position"/> == 0,
+    /// which a finished file also stores (so it re-opens from the start): without this flag a consumer
+    /// — the playlist's watched-marker, or a companion library reading history.json — can't tell a
+    /// completed file from one that was never started. <c>percent watched ≈ Finished ? 1 : Position/Duration</c>.</summary>
+    public bool Finished { get; set; }
     public string LastOpenedUtc { get; set; } = string.Empty;
     public string? Title { get; set; }
     public string? PosterPath { get; set; } // cached poster frame for continue-watching
@@ -114,8 +119,10 @@ public sealed class HistoryService
             return _records.TryGetValue(path, out var r) ? r : null;
     }
 
-    /// <summary>Record the latest position/duration for a local file (creates the entry if needed).</summary>
-    public void Record(string path, double position, double duration)
+    /// <summary>Record the latest position/duration for a local file (creates the entry if needed).
+    /// <paramref name="finished"/> marks the file watched-to-end; it always overwrites the prior value,
+    /// so re-watching a completed file from the start clears the flag.</summary>
+    public void Record(string path, double position, double duration, bool finished = false)
     {
         if (Private || !IsTrackable(path))
             return;
@@ -125,6 +132,7 @@ public sealed class HistoryService
             r.Position = position;
             if (duration > 0)
                 r.Duration = duration;
+            r.Finished = finished;
             r.Title = Path.GetFileNameWithoutExtension(path);
             r.LastOpenedUtc = DateTime.UtcNow.ToString("o");
         }
