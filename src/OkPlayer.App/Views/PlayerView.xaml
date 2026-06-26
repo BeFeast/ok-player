@@ -307,7 +307,9 @@
                                  Fraction="{x:Bind Vm.PositionFraction, Mode=OneWay}"
                                  Buffered="{x:Bind Vm.BufferedFraction, Mode=OneWay}"
                                  Chapters="{x:Bind Vm.ChapterFractions, Mode=OneWay}"
-                                 CurrentChapter="{x:Bind Vm.CurrentChapterIndex, Mode=OneWay}" />
+                                 CurrentChapter="{x:Bind Vm.CurrentChapterIndex, Mode=OneWay}"
+                                 AbLoopA="{x:Bind Vm.AbLoopAFraction, Mode=OneWay}"
+                                 AbLoopB="{x:Bind Vm.AbLoopBFraction, Mode=OneWay}" />
 
                     <TextBlock Grid.Column="5" Text="{x:Bind Vm.TrailingTimeText, Mode=OneWay}" VerticalAlignment="Center"
                                MinWidth="62" TextAlignment="Right" Foreground="#D9FFFFFF" FontSize="12.5" FontWeight="Medium"

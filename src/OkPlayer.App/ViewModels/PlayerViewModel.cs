@@ -88,6 +88,8 @@ public partial class PlayerViewModel : ObservableObject
         OnPropertyChanged(nameof(DurationText));
         OnPropertyChanged(nameof(TrailingTimeText));
         OnPropertyChanged(nameof(ChapterFractions)); // fractions depend on duration
+        OnPropertyChanged(nameof(AbLoopAFraction));  // A–B band positions depend on duration too
+        OnPropertyChanged(nameof(AbLoopBFraction));
     }
 
     partial void OnIsPausedChanged(bool value)
@@ -141,6 +143,7 @@ public partial class PlayerViewModel : ObservableObject
             ("sub-delay", MpvFormat.Double), ("sub-scale", MpvFormat.Double), ("chapter", MpvFormat.Int64),
             ("dwidth", MpvFormat.Int64), ("dheight", MpvFormat.Int64),
             ("demuxer-cache-time", MpvFormat.Double), ("eof-reached", MpvFormat.Flag),
+            ("ab-loop-a", MpvFormat.String), ("ab-loop-b", MpvFormat.String),
         })
         {
             engine.ObserveProperty(name, fmt);
@@ -262,6 +265,8 @@ public partial class PlayerViewModel : ObservableObject
                 case "dwidth": if (value is long dw) VideoWidth = (int)dw; break;
                 case "dheight": if (value is long dh) VideoHeight = (int)dh; break;
                 case "demuxer-cache-time": if (value is double ct) BufferedFraction = Duration > 0 ? System.Math.Clamp(ct / Duration, 0, 1) : 0; break;
+                case "ab-loop-a": _abA = ParseAbLoop(value as string); OnPropertyChanged(nameof(AbLoopAFraction)); ScheduleAbAnnounce(); break;
+                case "ab-loop-b": _abB = ParseAbLoop(value as string); OnPropertyChanged(nameof(AbLoopBFraction)); ScheduleAbAnnounce(); break;
             }
         });
     }
@@ -506,10 +511,51 @@ public partial class PlayerViewModel : ObservableObject
 
     public void SetVolume(double value) => Set("volume", System.Math.Clamp(value, 0, 130));
 
-    public void ToggleAbLoop()
+    private double? _abA, _abB; // A–B loop points in seconds (null = unset), tracked from the ab-loop-a/b observes
+
+    /// <summary>A–B loop start/end as 0..1 fractions for the seek bar, or NaN when unset.</summary>
+    public double AbLoopAFraction => _abA is double a && Duration > 0 ? System.Math.Clamp(a / Duration, 0, 1) : double.NaN;
+    public double AbLoopBFraction => _abB is double b && Duration > 0 ? System.Math.Clamp(b / Duration, 0, 1) : double.NaN;
+
+    private static double? ParseAbLoop(string? s) =>
+        s is null || s == "no" ? null
+        : double.TryParse(s, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double v) ? v
+        : null;
+
+    // ab-loop has no toast here: the ab-loop-a/b observes are authoritative (mpv sets each point at its real
+    // playback position), so the toast + seek-bar region are driven from them. That avoids both a stale predicted
+    // state on rapid re-toggles and a drifted time when a seek is still pending.
+    public void ToggleAbLoop() => CmdOk("ab-loop");
+
+    private int _abAnnounceVersion;  // coalesces the a/b observes of one toggle into a single toast
+    private bool _abWasActive;       // suppresses a spurious "cleared" toast on load (both points start unset)
+
+    private void ScheduleAbAnnounce()
     {
-        if (CmdOk("ab-loop"))
-            ToastRequested?.Invoke("A-B loop");
+        int v = ++_abAnnounceVersion;
+        // Defer so a clear (both a→no and b→no) collapses into one announce of the final state.
+        _dispatcher?.TryEnqueue(() => { if (v == _abAnnounceVersion) AnnounceAbLoop(); });
+    }
+
+    private void AnnounceAbLoop()
+    {
+        bool active = _abA is not null || _abB is not null;
+        string? msg = (_abA, _abB) switch
+        {
+            (not null, not null) => $"A–B loop: {FormatClock(_abA.Value)} – {FormatClock(_abB.Value)}",
+            (not null, null)     => $"A–B loop: start at {FormatClock(_abA.Value)}",
+            (null, not null)     => $"A–B loop: end at {FormatClock(_abB.Value)}",
+            _                    => _abWasActive ? "A–B loop cleared" : null, // no toast on the initial unset state
+        };
+        _abWasActive = active;
+        if (msg is not null)
+            ToastRequested?.Invoke(msg);
+    }
+
+    private static string FormatClock(double seconds)
+    {
+        var ts = System.TimeSpan.FromSeconds(System.Math.Max(0, seconds));
+        return ts.TotalHours >= 1 ? $"{(int)ts.TotalHours}:{ts.Minutes:00}:{ts.Seconds:00}" : $"{ts.Minutes}:{ts.Seconds:00}";
     }
 
     public void SetSpeed(double speed) => Set("speed", speed);
