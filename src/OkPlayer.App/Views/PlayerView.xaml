@@ -108,6 +108,9 @@
                 <MenuFlyoutItem Text="Open file&#x2026;" Click="OnOpenFromMenu">
                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8E5;" /></MenuFlyoutItem.Icon>
                 </MenuFlyoutItem>
+                <MenuFlyoutItem Text="Open file location" Click="OnOpenFileLocationClick">
+                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE838;" /></MenuFlyoutItem.Icon>
+                </MenuFlyoutItem>
                 <MenuFlyoutSeparator />
                 <ToggleMenuFlyoutItem x:Name="PrivateModeToggle" Text="Private session" Click="OnPrivateModeClick">
                     <ToggleMenuFlyoutItem.Icon><FontIcon Glyph="&#xE72E;" /></ToggleMenuFlyoutItem.Icon>
