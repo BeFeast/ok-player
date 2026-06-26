@@ -126,14 +126,20 @@ public sealed partial class SeekBar : UserControl
             AbMarkerB.Visibility = Visibility.Collapsed;
             return;
         }
-        // One point set = loop runs from there to the other end; the band spans whatever is known.
-        double a = Math.Clamp(aSet ? AbLoopA : 0, 0, 1);
-        double b = Math.Clamp(bSet ? AbLoopB : 1, 0, 1);
-        double left = Math.Min(a, b) * width;
-        double right = Math.Max(a, b) * width;
-        AbBand.Margin = new Thickness(left, 0, 0, 0);
-        AbBand.Width = Math.Max(0, right - left);
-        AbBand.Visibility = Visibility.Visible;
+        // The band marks an ACTIVE loop region, which mpv only engages once BOTH points are set; with just one
+        // set, show its marker but not a misleading half-region band.
+        if (aSet && bSet)
+        {
+            double left = Math.Min(AbLoopA, AbLoopB) * width;
+            double right = Math.Max(AbLoopA, AbLoopB) * width;
+            AbBand.Margin = new Thickness(Math.Clamp(left, 0, width), 0, 0, 0);
+            AbBand.Width = Math.Clamp(right - left, 0, width);
+            AbBand.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            AbBand.Visibility = Visibility.Collapsed;
+        }
         SetMarker(AbMarkerA, aSet, AbLoopA, width);
         SetMarker(AbMarkerB, bSet, AbLoopB, width);
     }

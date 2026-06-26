@@ -265,8 +265,8 @@ public partial class PlayerViewModel : ObservableObject
                 case "dwidth": if (value is long dw) VideoWidth = (int)dw; break;
                 case "dheight": if (value is long dh) VideoHeight = (int)dh; break;
                 case "demuxer-cache-time": if (value is double ct) BufferedFraction = Duration > 0 ? System.Math.Clamp(ct / Duration, 0, 1) : 0; break;
-                case "ab-loop-a": _abA = ParseAbLoop(value as string); OnPropertyChanged(nameof(AbLoopAFraction)); break;
-                case "ab-loop-b": _abB = ParseAbLoop(value as string); OnPropertyChanged(nameof(AbLoopBFraction)); break;
+                case "ab-loop-a": _abA = ParseAbLoop(value as string); OnPropertyChanged(nameof(AbLoopAFraction)); ScheduleAbAnnounce(); break;
+                case "ab-loop-b": _abB = ParseAbLoop(value as string); OnPropertyChanged(nameof(AbLoopBFraction)); ScheduleAbAnnounce(); break;
             }
         });
     }
@@ -522,14 +522,33 @@ public partial class PlayerViewModel : ObservableObject
         : double.TryParse(s, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double v) ? v
         : null;
 
-    public void ToggleAbLoop()
+    // ab-loop has no toast here: the ab-loop-a/b observes are authoritative (mpv sets each point at its real
+    // playback position), so the toast + seek-bar region are driven from them. That avoids both a stale predicted
+    // state on rapid re-toggles and a drifted time when a seek is still pending.
+    public void ToggleAbLoop() => CmdOk("ab-loop");
+
+    private int _abAnnounceVersion;  // coalesces the a/b observes of one toggle into a single toast
+    private bool _abWasActive;       // suppresses a spurious "cleared" toast on load (both points start unset)
+
+    private void ScheduleAbAnnounce()
     {
-        // mpv's `ab-loop` cycles deterministically: set A → set B → clear. Predict the resulting state from the
-        // current one so the toast is specific, instead of reading the property back (a UI-thread read deadlocks).
-        string msg = _abA is null ? $"A–B loop: start at {FormatClock(Position)}"
-                   : _abB is null ? $"A–B loop: {FormatClock(_abA.Value)} – {FormatClock(Position)}"
-                   : "A–B loop cleared";
-        if (CmdOk("ab-loop"))
+        int v = ++_abAnnounceVersion;
+        // Defer so a clear (both a→no and b→no) collapses into one announce of the final state.
+        _dispatcher?.TryEnqueue(() => { if (v == _abAnnounceVersion) AnnounceAbLoop(); });
+    }
+
+    private void AnnounceAbLoop()
+    {
+        bool active = _abA is not null || _abB is not null;
+        string? msg = (_abA, _abB) switch
+        {
+            (not null, not null) => $"A–B loop: {FormatClock(_abA.Value)} – {FormatClock(_abB.Value)}",
+            (not null, null)     => $"A–B loop: start at {FormatClock(_abA.Value)}",
+            (null, not null)     => $"A–B loop: end at {FormatClock(_abB.Value)}",
+            _                    => _abWasActive ? "A–B loop cleared" : null, // no toast on the initial unset state
+        };
+        _abWasActive = active;
+        if (msg is not null)
             ToastRequested?.Invoke(msg);
     }
 
