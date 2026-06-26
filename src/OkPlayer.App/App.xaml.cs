@@ -28,27 +28,26 @@ public partial class App : Application
         // apply engine-init settings before the video panel is created
         OkPlayer.Render.MpvVideoPanel.HardwareDecoding = Settings.Current.HardwareDecoding;
         History.PruneOlderThan(Settings.Current.HistoryRetentionDays); // honour the retention window on launch
-        _window = new MainWindow(GetLaunchFile());
+        var (file, resume) = GetLaunchTarget();
+        _window = new MainWindow(file, resume);
         _window.Activate();
     }
 
-    /// <summary>A file/URL passed on the command line (Explorer "Open with", a file association, or
-    /// `OkPlayer.exe path`). Unpackaged apps receive it via the process argv, not the activation args.</summary>
-    private static string? GetLaunchFile()
+    /// <summary>A file/URL passed on the command line (Explorer "Open with", a file association, or a
+    /// companion-library launch `OkPlayer.exe path --resume &lt;seconds&gt;` per PRD §13.1). Unpackaged apps
+    /// receive argv on the process command line, not the activation args. Returns the first positional that is
+    /// a URL or an existing file, plus the explicit resume position (null when absent/malformed).</summary>
+    private static (string? File, double? Resume) GetLaunchTarget()
     {
         try
         {
             string[] argv = Environment.GetCommandLineArgs();
-            for (int i = 1; i < argv.Length; i++)
-            {
-                string a = argv[i];
-                if (a.Length == 0 || a[0] == '-' || a[0] == '/')
-                    continue; // skip switches
-                if (a.Contains("://", StringComparison.Ordinal) || File.Exists(a))
-                    return a;
-            }
+            var (files, resume) = OkPlayer.Core.LaunchArgs.Parse(argv.Length > 1 ? argv[1..] : Array.Empty<string>());
+            foreach (string f in files)
+                if (f.Contains("://", StringComparison.Ordinal) || File.Exists(f))
+                    return (f, resume);
         }
         catch { /* never let argv parsing block startup */ }
-        return null;
+        return (null, null);
     }
 }

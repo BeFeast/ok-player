@@ -72,8 +72,26 @@ closed/replaced. There is no push/callback channel yet — a companion app polls
 watches the file. A future revision may add a push channel (CLI callback / local
 IPC / `ok-player://`) without changing this schema.
 
-## Not yet implemented (inbound half)
+## Inbound: launch-with-resume
 
-The other half of the PRD §13.1 contract — **launch-with-resume** (the library
-launching the player with an explicit "resume from X" that overrides remembered
-position) — is not wired up yet. When added it will be documented here.
+The other half of the PRD §13.1 contract. The library launches the player with a
+file and an explicit position to start at:
+
+```
+OkPlayer.exe "C:\media\show\s01e03.mkv" --resume 1342
+OkPlayer.exe "C:\media\show\s01e03.mkv" --resume=22:22   # m:ss / h:mm:ss also accepted
+```
+
+- `--resume <time>` (also `--resume=<time>` / `--resume:<time>`, `-resume`, `/resume`)
+  takes seconds (`1342`, `1342.5`) or a timecode (`22:22`, `1:23:45`).
+- The given position is honored **verbatim**: it overrides the player's own
+  remembered position and bypasses the auto-resume heuristic (the < 5% / last-30s
+  skip), because in this flow the library — not the player — decides where to start.
+  It is clamped just shy of the end so a stale over-duration value can't land on EOF.
+- `--resume 0` is meaningful: "start from the beginning," overriding a remembered
+  position.
+- A malformed or missing value is ignored — the player falls back to its own
+  remembered position.
+
+Subtitle/audio preselection (the optional `[sub=…, audio=…]` in the PRD diagram) is
+not wired up yet; when added it will be documented here.

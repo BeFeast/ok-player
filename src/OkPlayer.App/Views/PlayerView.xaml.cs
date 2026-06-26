@@ -40,6 +40,7 @@ public sealed partial class PlayerView : UserControl
     private bool _shuffle;
     private double _resumeTarget = -1; // pending resume position, applied on the first Duration after open
     private bool _reachedEnd; // latched when the current file plays through to a natural EOF; resets on open
+    private double? _explicitResume; // exact resume from a library launch (PRD §13.1): overrides history, skips the heuristic
 
     /// <summary>Continue-watching cards shown on the welcome screen (bound from XAML).</summary>
     public ObservableCollection<RecentEntry> Recents { get; } = new();
@@ -220,6 +221,8 @@ public sealed partial class PlayerView : UserControl
         {
             _pendingInitialPath = null;
             OpenMedia(path); // a command-line file queued before the engine was ready
+            _explicitResume = _pendingInitialResume; // after OpenMedia (it resets per-open state)
+            _pendingInitialResume = null;
         }
         RevealChrome();
     }
@@ -722,7 +725,22 @@ public sealed partial class PlayerView : UserControl
 
     private void TryResume()
     {
-        if (_resumeTarget <= 0 || Vm.Duration <= 0)
+        if (Vm.Duration <= 0)
+            return;
+        // A companion-library launch (PRD §13.1) carries an exact position: honour it verbatim — overriding any
+        // remembered position and bypassing the auto-resume heuristic, since the library, not the player, decides
+        // where to start. Clamp just shy of the end so a stale over-duration value can't land on EOF (and latch
+        // the file "finished"). A resume of exactly 0 is meaningful: "start from the beginning".
+        if (_explicitResume is { } exact)
+        {
+            _explicitResume = null;
+            _resumeTarget = -1; // the explicit position wins; drop any history target queued for this open
+            double clamped = Math.Clamp(exact, 0, Math.Max(0, Vm.Duration - 0.5));
+            Vm.SeekToFraction(Vm.Duration > 0 ? clamped / Vm.Duration : 0);
+            ShowToast($"Resumed at {FormatPreviewTime(clamped)}");
+            return;
+        }
+        if (_resumeTarget <= 0)
             return;
         double target = _resumeTarget;
         _resumeTarget = -1; // apply once per open
@@ -1436,6 +1454,7 @@ public sealed partial class PlayerView : UserControl
     // ---- open media ----
 
     private string? _pendingInitialPath; // a launch-time file held until the engine is ready
+    private double? _pendingInitialResume; // explicit resume paired with _pendingInitialPath
 
     /// <summary>Apply the user's default subtitle size/position (Settings -> Subtitles) to the engine. Live —
     /// safe to call any time; a no-op when no engine/file is up.</summary>
@@ -1472,12 +1491,18 @@ public sealed partial class PlayerView : UserControl
 
     /// <summary>Open a file given on the command line ("Open with"). If the engine isn't up yet, hold it
     /// and open on EngineReady.</summary>
-    public void QueueInitialFile(string path)
+    public void QueueInitialFile(string path, double? resumeSeconds = null)
     {
         if (Video.Engine is not null)
+        {
             OpenMedia(path);
+            _explicitResume = resumeSeconds; // set after OpenMedia, which resets per-open state; applied on first Duration
+        }
         else
+        {
             _pendingInitialPath = path;
+            _pendingInitialResume = resumeSeconds;
+        }
     }
 
     /// <summary>Load a local path or URL into the engine. Never throws to the caller — a failed open
