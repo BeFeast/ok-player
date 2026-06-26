@@ -109,6 +109,7 @@ public sealed partial class PlayerView : UserControl
         Video.EngineReady += OnEngineReady;
         Video.ScreenshotSaved += (_, _) => DispatcherQueue.TryEnqueue(() => ShowToast("Screenshot saved"));
         Video.ScreenshotForClipboard += (_, ok) => DispatcherQueue.TryEnqueue(() => OnClipboardFrameReady(ok));
+        Video.SubtitleAdded += (_, ok) => DispatcherQueue.TryEnqueue(() => OnSubtitleAdded(ok));
         MediaInfoCardView.CloseRequested += (_, _) => CloseMediaInfo();
         MediaInfoCardView.CopyRequested += (_, _) => OnMediaInfoCopy();
         VolumeCtl.Vm = Vm;
@@ -1042,6 +1043,46 @@ public sealed partial class PlayerView : UserControl
 
     private void OnSubtitleOffClick(object sender, RoutedEventArgs e) { Vm.SetSubtitleOff(); SubtitleFlyout.Hide(); RevealChrome(); }
 
+    /// <summary>Raised when the user asks to load an external subtitle file; the owning window shows the
+    /// picker (it holds the HWND) and calls <see cref="AddSubtitle"/> back.</summary>
+    public event EventHandler? AddSubtitleRequested;
+
+    private void OnAddSubtitleFile(object sender, RoutedEventArgs e)
+    {
+        SubtitleFlyout.Hide();
+        if (!Vm.HasMedia)
+        {
+            ShowToast("Open a video first");
+            return;
+        }
+        AddSubtitleRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private readonly Queue<string> _subtitlePending = new(); // submitted sub-add filenames, in reply order
+
+    /// <summary>Load an external subtitle file into the running engine and select it. mpv's sub-add with
+    /// "select" flips <c>sid</c>, which re-reads the track list, so the new track appears in the switcher.
+    /// Toast is deferred to the reply (<see cref="OnSubtitleAdded"/>) so a file mpv can't parse reports a
+    /// failure instead of a false success.</summary>
+    public void AddSubtitle(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return;
+        if (Video.AddSubtitle(path))
+            _subtitlePending.Enqueue(System.IO.Path.GetFileName(path));
+        else
+            ShowToast("Couldn't add subtitles");
+        RevealChrome();
+    }
+
+    /// <summary>mpv finished a sub-add: <paramref name="ok"/> is whether it loaded. Dequeue regardless so the
+    /// one-submit-one-reply pairing stays in sync; toast the real outcome.</summary>
+    private void OnSubtitleAdded(bool ok)
+    {
+        string name = _subtitlePending.Count > 0 ? _subtitlePending.Dequeue() : "subtitles";
+        ShowToast(ok ? $"Subtitles added: {name}" : "Couldn't add subtitles");
+    }
+
     private void OnSubtitleTrackClick(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement { DataContext: TrackInfo track })
@@ -1625,7 +1666,13 @@ public sealed partial class PlayerView : UserControl
             var items = await e.DataView.GetStorageItemsAsync();
             var file = items.OfType<StorageFile>().FirstOrDefault();
             if (file is not null)
-                OpenMedia(file.Path);
+            {
+                // A subtitle dropped onto a playing video loads as a track rather than replacing the media.
+                if (Vm.HasMedia && OkPlayer.Core.MediaFormats.IsSubtitle(file.Path))
+                    AddSubtitle(file.Path);
+                else
+                    OpenMedia(file.Path);
+            }
             else if (items.Count > 0)
                 ShowToast("Drop a media file"); // folder / non-file drop: feedback instead of silence
         }

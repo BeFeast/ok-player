@@ -14,8 +14,19 @@ public static class MediaFormats
         ".mp3", ".flac", ".m4a", ".opus", ".wav", ".ogg", ".mka",
     };
 
+    /// <summary>External subtitle file extensions — the single source of truth shared by the "Add subtitle
+    /// file" picker filter and the drag-drop router, so a dropped .srt loads as a track, not as media.</summary>
+    public static readonly IReadOnlyList<string> SubtitleExtensions = new[]
+    {
+        ".srt", ".ass", ".ssa", ".sub", ".vtt", ".idx", ".sup",
+    };
+
     private static readonly HashSet<string> Set = new(Extensions, StringComparer.OrdinalIgnoreCase);
+    private static readonly HashSet<string> SubSet = new(SubtitleExtensions, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>True if the path's extension is a media type we play (case-insensitive).</summary>
     public static bool IsMedia(string path) => Set.Contains(Path.GetExtension(path));
+
+    /// <summary>True if the path's extension is an external subtitle file (case-insensitive).</summary>
+    public static bool IsSubtitle(string path) => SubSet.Contains(Path.GetExtension(path));
 }
