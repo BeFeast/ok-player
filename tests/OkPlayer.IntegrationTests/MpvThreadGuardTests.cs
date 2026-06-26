@@ -71,6 +71,31 @@ public class MpvThreadGuardTests
     }
 
     [Fact]
+    public void VideoAdjustmentProperties_AreValidAndWritable()
+    {
+        using var ctx = new MpvContext();
+        ctx.Initialize();
+
+        // The Video submenu writes exactly these properties — assert the names are real and accept our
+        // values against libmpv (a typo'd property name would otherwise fail silently in the async path).
+        ctx.Command("set", "video-rotate", "90");
+        Assert.Equal(90, ctx.GetPropertyLong("video-rotate"));
+
+        ctx.Command("set", "panscan", "1.0");
+        Assert.Equal(1.0, ctx.GetPropertyDouble("panscan"));
+
+        ctx.Command("set", "video-aspect-override", "16:9");
+        Assert.False(string.IsNullOrEmpty(ctx.GetPropertyString("video-aspect-override")));
+
+        // Reset values the "Reset video" item sends.
+        ctx.Command("set", "video-rotate", "0");
+        ctx.Command("set", "panscan", "0.0");
+        ctx.Command("set", "video-aspect-override", "-1");
+        Assert.Equal(0, ctx.GetPropertyLong("video-rotate"));
+        Assert.Equal(0.0, ctx.GetPropertyDouble("panscan"));
+    }
+
+    [Fact]
     public void CallsAfterDispose_AreNoOps_NotCrashes()
     {
         var ctx = new MpvContext();
