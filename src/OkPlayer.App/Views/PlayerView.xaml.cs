@@ -1373,6 +1373,33 @@ public sealed partial class PlayerView : UserControl
     private void OnAbLoopClick(object sender, RoutedEventArgs e) => Vm.ToggleAbLoop();
     private void OnOpenFromMenu(object sender, RoutedEventArgs e) => OpenFileRequested?.Invoke(this, EventArgs.Empty);
 
+    /// <summary>Reveal the current file in Explorer (selected). Local files only — URLs/streams have no
+    /// folder; a moved/deleted file is reported rather than opening an empty window.</summary>
+    private void OnOpenFileLocationClick(object sender, RoutedEventArgs e)
+    {
+        if (_currentPath is not { } path || path.Contains("://", StringComparison.Ordinal))
+        {
+            ShowToast("Not a local file");
+            return;
+        }
+        if (!System.IO.File.Exists(path))
+        {
+            ShowToast("File not found");
+            return;
+        }
+        try
+        {
+            // /select highlights the file in its folder; quote the path so spaces are preserved.
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                Arguments = $"/select,\"{path}\"",
+                UseShellExecute = true,
+            });
+        }
+        catch { ShowToast("Couldn't open the folder"); }
+    }
+
     // ---- toasts ----
 
     private void ShowToast(string message)
