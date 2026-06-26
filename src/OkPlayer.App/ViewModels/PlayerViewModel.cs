@@ -335,15 +335,26 @@ public partial class PlayerViewModel : ObservableObject
         var result = new List<AudioDevice>();
         long count = e.GetPropertyLong("audio-device-list/count") ?? 0;
         string current = e.GetPropertyString("audio-device") ?? "auto";
+        bool sawAuto = false;
         for (long i = 0; i < count; i++)
         {
             string? name = e.GetPropertyString($"audio-device-list/{i}/name");
             if (string.IsNullOrEmpty(name))
                 continue;
+            if (name == "auto")
+                sawAuto = true;
             string? desc = e.GetPropertyString($"audio-device-list/{i}/description");
             bool selected = name == current;
             string label = (selected ? Glyph(0x2713) + "  " : string.Empty) + (string.IsNullOrEmpty(desc) ? name! : desc!);
             result.Add(new AudioDevice { Name = name!, Selected = selected, Label = label });
+        }
+        // Always offer an explicit Automatic entry so the user can return to the system default — and so a
+        // remembered specific device can be cleared back to auto. (mpv usually lists "auto" itself, but not
+        // on every AO build.)
+        if (!sawAuto)
+        {
+            bool autoSel = current is "auto" or "";
+            result.Insert(0, new AudioDevice { Name = "auto", Selected = autoSel, Label = (autoSel ? Glyph(0x2713) + "  " : string.Empty) + "Automatic" });
         }
         return result;
     }
@@ -352,6 +363,27 @@ public partial class PlayerViewModel : ObservableObject
     /// flyout closes on pick and re-reads on its next open, so the checkmark refreshes then — no immediate
     /// re-read here (it would race the async set and read the stale device).</summary>
     public void SelectAudioDevice(string name) => Set("audio-device", name);
+
+    /// <summary>Restore a remembered output device at startup, but only if it still exists — a saved USB/
+    /// Bluetooth/HDMI device that's since been unplugged would otherwise be force-selected and could leave
+    /// playback silent. "auto"/empty is always valid (mpv's default). Validates the list off the UI thread.</summary>
+    public void RestoreAudioDevice(string name)
+    {
+        if (string.IsNullOrEmpty(name) || name == "auto")
+            return; // already mpv's default — nothing to restore
+        MpvContext? e = _engine;
+        DispatcherQueue? d = _dispatcher;
+        if (e is null || d is null)
+            return;
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            bool present = false;
+            foreach (var dev in ReadAudioDevices(e))
+                if (dev.Name == name) { present = true; break; }
+            if (present)
+                d.TryEnqueue(() => Set("audio-device", name)); // gone → leave mpv on its default, no silent output
+        });
+    }
 
     private List<ChapterInfo> ReadChapters()
     {

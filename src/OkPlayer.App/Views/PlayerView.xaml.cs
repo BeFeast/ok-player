@@ -213,7 +213,7 @@ public sealed partial class PlayerView : UserControl
             Vm.SetVolume(App.Settings.Current.DefaultVolume); // start at the configured default volume (Settings -> Audio)
             string device = App.Settings.Current.AudioDevice;
             if (!string.IsNullOrEmpty(device))
-                Vm.SelectAudioDevice(device); // restore the remembered output device (falls back to auto if gone)
+                Vm.RestoreAudioDevice(device); // restore the remembered device only if it still exists
         }
         if (_pendingInitialPath is { } path)
         {
