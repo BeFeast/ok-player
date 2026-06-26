@@ -88,6 +88,7 @@
                     <MenuFlyoutSubItem.Icon><FontIcon Glyph="&#xE740;" /></MenuFlyoutSubItem.Icon>
                     <MenuFlyoutItem Text="Fullscreen" Click="OnFullscreenClick" />
                     <MenuFlyoutItem Text="Fit window to video" Click="OnFitToVideoClick" />
+                    <ToggleMenuFlyoutItem x:Name="AlwaysOnTopToggle" Text="Always on top" Click="OnAlwaysOnTopClick" />
                 </MenuFlyoutSubItem>
                 <MenuFlyoutSubItem Text="Video" IsEnabled="{x:Bind Vm.HasMedia, Mode=OneWay}">
                     <MenuFlyoutSubItem.Icon><FontIcon Glyph="&#xE7F4;" /></MenuFlyoutSubItem.Icon>
