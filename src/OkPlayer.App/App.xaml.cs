@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Reflection;
 using Microsoft.UI.Xaml;
 using OkPlayer.App.Services;
 
@@ -43,6 +44,25 @@ public partial class App : Application
         {
             var v = typeof(App).Assembly.GetName().Version;
             return v is null ? string.Empty : $"{v.Major}.{v.Minor}.{v.Build}";
+        }
+        catch { return string.Empty; }
+    }
+
+    /// <summary>Short git SHA the build was produced from (e.g. "ab12cd3", or "ab12cd3-dirty" when the working
+    /// tree had uncommitted changes); empty when built outside a git checkout. Parsed from the build-metadata
+    /// suffix of AssemblyInformationalVersion, which the csproj StampGitShaRevision target stamps. Shown in
+    /// Settings → Advanced (About) so a stale build or a build off the wrong branch is obvious — the dirty-build
+    /// failure mode this guards against.</summary>
+    public static string GitSha { get; } = GetGitSha();
+
+    private static string GetGitSha()
+    {
+        try
+        {
+            string? info = typeof(App).Assembly
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+            int plus = info?.IndexOf('+') ?? -1;
+            return plus >= 0 ? info![(plus + 1)..] : string.Empty;
         }
         catch { return string.Empty; }
     }
