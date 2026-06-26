@@ -108,6 +108,7 @@ public sealed partial class PlayerView : UserControl
 
         Video.EngineReady += OnEngineReady;
         Video.ScreenshotSaved += (_, _) => DispatcherQueue.TryEnqueue(() => ShowToast("Screenshot saved"));
+        Video.ScreenshotForClipboard += (_, ok) => DispatcherQueue.TryEnqueue(() => OnClipboardFrameReady(ok));
         MediaInfoCardView.CloseRequested += (_, _) => CloseMediaInfo();
         MediaInfoCardView.CopyRequested += (_, _) => OnMediaInfoCopy();
         VolumeCtl.Vm = Vm;
@@ -437,10 +438,74 @@ public sealed partial class PlayerView : UserControl
     private void OnVolumeClick(object sender, RoutedEventArgs e) { Vm.ToggleMute(); RevealChrome(); }
     private void OnSpeedClick(object sender, RoutedEventArgs e) { Vm.CycleSpeed(); RevealChrome(); }
     private void OnScreenshotClick(object sender, RoutedEventArgs e) { DoScreenshot(); RevealChrome(); }
+    private void OnScreenshotWithSubsClick(object sender, RoutedEventArgs e) { Video.Screenshot(includeSubtitles: true); RevealChrome(); }
+    private void OnCopyFrameClick(object sender, RoutedEventArgs e) { DoCopyFrame(); RevealChrome(); }
 
-    /// <summary>Take a screenshot via the render panel, which yields the UI-thread render loop so a heavy
-    /// 4K/HDR grab can't freeze the app. The toast fires on the ScreenshotSaved event (i.e. on success).</summary>
+    /// <summary>Take a screenshot via the render panel. The grab runs while the render loop keeps driving the
+    /// pipeline (vo=libmpv is fed by it), so it never freezes the app. The toast fires on the ScreenshotSaved
+    /// event (i.e. on success).</summary>
     private void DoScreenshot() => Video.Screenshot();
+
+    private int _clipboardSeq;
+    // Each grab gets its own temp file (so a second grab can't overwrite the frame a pending copy hasn't read
+    // yet) and the paths are dequeued in request order — mpv replies for one id arrive FIFO.
+    private readonly System.Collections.Generic.Queue<string> _clipboardPending = new();
+
+    /// <summary>Grab the current frame to a unique temp file, then copy it onto the Windows clipboard.</summary>
+    private void DoCopyFrame()
+    {
+        string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "OkPlayer");
+        System.IO.Directory.CreateDirectory(dir);
+        string path = System.IO.Path.Combine(dir, $"clipboard-frame-{++_clipboardSeq}.png");
+        // Enqueue only if the grab was actually submitted; otherwise no reply arrives and a stale path would
+        // desync the queue, making every later reply copy the wrong (or a missing) frame.
+        if (Video.ScreenshotToClipboard(path))
+            _clipboardPending.Enqueue(path);
+    }
+
+    private void OnClipboardFrameReady(bool ok)
+    {
+        if (_clipboardPending.Count == 0)
+            return; // one reply per submitted grab keeps this in sync; dequeue regardless of success
+        string path = _clipboardPending.Dequeue();
+        if (ok)
+        {
+            _ = CopyFrameToClipboard(path);
+        }
+        else
+        {
+            try { System.IO.File.Delete(path); } catch { /* never written */ }
+            ShowToast("Couldn't copy the frame");
+        }
+    }
+
+    private async System.Threading.Tasks.Task CopyFrameToClipboard(string path)
+    {
+        try
+        {
+            // Read the PNG into memory and hand the clipboard an in-memory stream, so the backing temp file can
+            // be deleted immediately and a later grab overwriting/removing it can't change what gets pasted.
+            byte[] bytes = await System.IO.File.ReadAllBytesAsync(path);
+            var ras = new Windows.Storage.Streams.InMemoryRandomAccessStream();
+            using (var writer = new Windows.Storage.Streams.DataWriter(ras))
+            {
+                writer.WriteBytes(bytes);
+                await writer.StoreAsync();
+                await writer.FlushAsync();
+                writer.DetachStream();
+            }
+            ras.Seek(0);
+            var data = new Windows.ApplicationModel.DataTransfer.DataPackage
+            {
+                RequestedOperation = Windows.ApplicationModel.DataTransfer.DataPackageOperation.Copy,
+            };
+            data.SetBitmap(Windows.Storage.Streams.RandomAccessStreamReference.CreateFromStream(ras));
+            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(data);
+            ShowToast("Frame copied to clipboard");
+        }
+        catch { ShowToast("Couldn't copy the frame"); }
+        finally { try { System.IO.File.Delete(path); } catch { /* best effort */ } }
+    }
     private void OnFullscreenClick(object sender, RoutedEventArgs e) => ToggleFullscreenRequested?.Invoke(this, EventArgs.Empty);
 
     private void OnFitToVideoClick(object sender, RoutedEventArgs e)

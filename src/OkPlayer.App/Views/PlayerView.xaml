@@ -68,9 +68,12 @@
                 <MenuFlyoutItem Text="Play / Pause" Click="OnPlayClick">
                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE768;" /></MenuFlyoutItem.Icon>
                 </MenuFlyoutItem>
-                <MenuFlyoutItem Text="Screenshot" Click="OnScreenshotClick">
-                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE722;" /></MenuFlyoutItem.Icon>
-                </MenuFlyoutItem>
+                <MenuFlyoutSubItem Text="Screenshot">
+                    <MenuFlyoutSubItem.Icon><FontIcon Glyph="&#xE722;" /></MenuFlyoutSubItem.Icon>
+                    <MenuFlyoutItem Text="Save frame" Click="OnScreenshotClick" />
+                    <MenuFlyoutItem Text="Save frame with subtitles" Click="OnScreenshotWithSubsClick" />
+                    <MenuFlyoutItem Text="Copy frame to clipboard" Click="OnCopyFrameClick" />
+                </MenuFlyoutSubItem>
                 <MenuFlyoutItem Text="A&#x2013;B loop" Click="OnAbLoopClick">
                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8EE;" /></MenuFlyoutItem.Icon>
                 </MenuFlyoutItem>
@@ -409,6 +412,9 @@
                                 <MenuFlyoutItem Text="Open file&#x2026;" Click="OnOpenFromMenu" />
                                 <MenuFlyoutItem Text="A&#x2013;B loop" Click="OnAbLoopClick" />
                                 <MenuFlyoutItem Text="Fit window to video" Click="OnFitToVideoClick" />
+                                <MenuFlyoutSeparator />
+                                <MenuFlyoutItem Text="Screenshot with subtitles" Click="OnScreenshotWithSubsClick" />
+                                <MenuFlyoutItem Text="Copy frame to clipboard" Click="OnCopyFrameClick" />
                                 <MenuFlyoutSeparator />
                                 <MenuFlyoutItem Text="Playlist / Queue" IsEnabled="False" />
                                 <MenuFlyoutItem Text="Mini-player" IsEnabled="False" />
