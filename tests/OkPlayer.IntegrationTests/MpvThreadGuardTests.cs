@@ -50,6 +50,27 @@ public class MpvThreadGuardTests
 #endif
 
     [Fact]
+    public void AudioDeviceList_IsReadableThroughFlatProperties()
+    {
+        using var ctx = new MpvContext();
+        ctx.Initialize();
+
+        // This is the exact read path PlayerViewModel.ReadAudioDevices uses to populate the output-device
+        // switcher: the flat audio-device-list/count + per-index name/description sub-properties.
+        long count = ctx.GetPropertyLong("audio-device-list/count") ?? -1;
+        Assert.True(count >= 0, "audio-device-list/count should marshal as a readable long");
+        for (long i = 0; i < count; i++)
+        {
+            string? name = ctx.GetPropertyString($"audio-device-list/{i}/name");
+            Assert.False(string.IsNullOrEmpty(name), $"device {i} must expose a name (the id we set audio-device to)");
+            _ = ctx.GetPropertyString($"audio-device-list/{i}/description"); // optional, must at least not throw
+        }
+
+        // The property the picker writes is always present (defaults to "auto") and round-trips.
+        Assert.NotNull(ctx.GetPropertyString("audio-device"));
+    }
+
+    [Fact]
     public void BlockingReads_FromOtherThreads_AreAllowed()
     {
         using var ctx = new MpvContext();

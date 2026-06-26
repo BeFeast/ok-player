@@ -13,6 +13,15 @@ public sealed class TrackInfo
     public bool External { get; init; }
 }
 
+/// <summary>An audio output device from libmpv's audio-device-list. <see cref="Name"/> is the mpv
+/// device id passed to the <c>audio-device</c> property; <see cref="Label"/> is the display description.</summary>
+public sealed class AudioDevice
+{
+    public string Name { get; init; } = string.Empty;
+    public string Label { get; init; } = string.Empty;
+    public bool Selected { get; init; }
+}
+
 /// <summary>A chapter from libmpv's chapter-list. <see cref="Thumbnail"/> fills in asynchronously.</summary>
 public sealed partial class ChapterInfo : ObservableObject
 {

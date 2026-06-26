@@ -46,6 +46,7 @@ public partial class PlayerViewModel : ObservableObject
 
     public ObservableCollection<TrackInfo> SubtitleTracks { get; } = new();
     public ObservableCollection<TrackInfo> AudioTracks { get; } = new();
+    public ObservableCollection<AudioDevice> AudioDevices { get; } = new();
     public ObservableCollection<ChapterInfo> Chapters { get; } = new();
 
     public bool IsPlaying => !IsPaused;
@@ -306,6 +307,50 @@ public partial class PlayerViewModel : ObservableObject
         }
         return (e.GetPropertyString("sid") ?? "no") == "no";
     }
+
+    /// <summary>Refresh the audio output device list off the UI thread (a libmpv property read on the
+    /// render/UI thread can deadlock a busy core), then marshal the result onto the dispatcher. Cheap and
+    /// idempotent — call it when the audio flyout opens.</summary>
+    public void RefreshAudioDevices()
+    {
+        MpvContext? e = _engine;
+        DispatcherQueue? d = _dispatcher;
+        if (e is null || d is null)
+            return;
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            var list = ReadAudioDevices(e);
+            d.TryEnqueue(() =>
+            {
+                AudioDevices.Clear();
+                foreach (var dev in list)
+                    AudioDevices.Add(dev);
+            });
+        });
+    }
+
+    private static List<AudioDevice> ReadAudioDevices(MpvContext e)
+    {
+        var result = new List<AudioDevice>();
+        long count = e.GetPropertyLong("audio-device-list/count") ?? 0;
+        string current = e.GetPropertyString("audio-device") ?? "auto";
+        for (long i = 0; i < count; i++)
+        {
+            string? name = e.GetPropertyString($"audio-device-list/{i}/name");
+            if (string.IsNullOrEmpty(name))
+                continue;
+            string? desc = e.GetPropertyString($"audio-device-list/{i}/description");
+            bool selected = name == current;
+            string label = (selected ? Glyph(0x2713) + "  " : string.Empty) + (string.IsNullOrEmpty(desc) ? name! : desc!);
+            result.Add(new AudioDevice { Name = name!, Selected = selected, Label = label });
+        }
+        return result;
+    }
+
+    /// <summary>Switch the audio output device (session-scoped; mpv's <c>audio-device</c> property). The
+    /// flyout closes on pick and re-reads on its next open, so the checkmark refreshes then — no immediate
+    /// re-read here (it would race the async set and read the stale device).</summary>
+    public void SelectAudioDevice(string name) => Set("audio-device", name);
 
     private List<ChapterInfo> ReadChapters()
     {

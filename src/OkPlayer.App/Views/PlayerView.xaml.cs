@@ -1099,6 +1099,19 @@ public sealed partial class PlayerView : UserControl
         RevealChrome();
     }
 
+    private void OnAudioFlyoutOpened(object? sender, object e) => Vm.RefreshAudioDevices();
+
+    private void OnAudioDeviceClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: AudioDevice dev })
+        {
+            Vm.SelectAudioDevice(dev.Name);
+            ShowToast($"Audio output: {dev.Label}");
+        }
+        AudioFlyout.Hide();
+        RevealChrome();
+    }
+
     private void OnSubDelayMinus(object sender, RoutedEventArgs e) => Vm.NudgeSubDelay(-50);
     private void OnSubDelayPlus(object sender, RoutedEventArgs e) => Vm.NudgeSubDelay(50);
     private void OnSubScaleMinus(object sender, RoutedEventArgs e) => Vm.NudgeSubScale(-0.1);
