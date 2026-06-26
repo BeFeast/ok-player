@@ -129,6 +129,31 @@ public class HistoryServiceTests : IDisposable
     }
 
     [Fact]
+    public void Record_Finished_DefaultsFalse_AndPersists()
+    {
+        var a = New();
+        a.Record(Movie, 120, 600); // default overload -> not finished
+        Assert.False(a.Get(Movie)!.Finished);
+
+        a.Record(Movie, 0, 600, finished: true);
+        Assert.True(a.Get(Movie)!.Finished);
+
+        var b = New(); // survives a round-trip through disk
+        Assert.True(b.Get(Movie)!.Finished);
+    }
+
+    [Fact]
+    public void Record_Finished_IsOverwritten_WhenReWatchedFromStart()
+    {
+        var h = New();
+        h.Record(Movie, 0, 600, finished: true);
+        Assert.True(h.Get(Movie)!.Finished);
+
+        h.Record(Movie, 45, 600); // re-watching from the start clears the flag
+        Assert.False(h.Get(Movie)!.Finished);
+    }
+
+    [Fact]
     public void Clear_WipesEverything_AndReturnsCount()
     {
         var h = New();
