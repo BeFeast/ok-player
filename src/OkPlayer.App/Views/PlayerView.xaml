@@ -106,50 +106,60 @@
         <!-- light-first empty / welcome state (over Mica) — hero + continue-watching shelf (PRD 2.2).
              Scrollable + min-height-locked to the viewport: the hero centres when short, scrolls (never
              clips the title) when the recents shelf makes it tall. -->
-        <ScrollViewer x:Name="WelcomeCard" VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled"
-                      ZoomMode="Disabled" Padding="40,0">
-            <Grid MinHeight="{Binding ViewportHeight, ElementName=WelcomeCard}">
-                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="900" Spacing="24" Padding="0,40">
+        <!-- light-first empty / welcome state (over Mica). Two layouts (design 2.2): a recents-forward
+             "Continue watching" view when there are recents, and a centred first-run hero when there aren't. -->
+        <Grid x:Name="WelcomeCard">
 
-                    <!-- centred hero: brand mark + title + open / drop card -->
-                    <StackPanel HorizontalAlignment="Center" Spacing="13">
-                        <Border Width="52" Height="52" CornerRadius="14" HorizontalAlignment="Center">
-                            <Border.Background>
-                                <LinearGradientBrush StartPoint="0.1,0" EndPoint="0.9,1">
-                                    <GradientStop Color="#15A89D" Offset="0" />
-                                    <GradientStop Color="#0A655F" Offset="1" />
-                                </LinearGradientBrush>
-                            </Border.Background>
-                            <!-- the OK&#x25B6; brand mark (matches the app icon) -->
-                            <Viewbox Margin="11,15">
-                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                    <TextBlock Text="OK" FontFamily="Segoe UI" FontSize="36" FontWeight="Bold"
-                                               Foreground="White" LineHeight="36" />
-                                    <Path Fill="White" Stretch="Fill" Width="15" Height="22" Margin="3,1,0,0"
-                                          VerticalAlignment="Center" Data="M0,0 L0,22 L15,11 Z" />
-                                </StackPanel>
-                            </Viewbox>
-                        </Border>
-                        <TextBlock Text="Welcome to OK Player" FontSize="17" FontWeight="SemiBold"
-                                   Foreground="{ThemeResource TextFillColorPrimaryBrush}" HorizontalAlignment="Center" />
-                        <Grid Width="280" HorizontalAlignment="Center" Background="Transparent" Tapped="OnWelcomeOpenTapped">
-                            <Rectangle RadiusX="10" RadiusY="10" StrokeThickness="1.5" StrokeDashArray="4,3"
-                                       Stroke="{ThemeResource TextFillColorTertiaryBrush}"
-                                       Fill="{ThemeResource CardBackgroundFillColorSecondaryBrush}" />
-                            <StackPanel Padding="16" Spacing="4" HorizontalAlignment="Center">
-                                <TextBlock Text="Open file&#x2026;" Foreground="{ThemeResource OkAccentTextBrush}"
-                                           FontSize="12.5" FontWeight="SemiBold" HorizontalAlignment="Center" />
-                                <TextBlock Text="or drop a video / paste a URL" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                           FontSize="11" HorizontalAlignment="Center" />
+            <!-- FIRST RUN / no recents: centred hero. Scrollable + min-height-locked to the viewport so the
+                 hero centres when the window is tall and scrolls (never clips) when it is short. -->
+            <ScrollViewer x:Name="WelcomeFirstRun" Visibility="Collapsed"
+                          VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled" ZoomMode="Disabled">
+                <Grid MinHeight="{Binding ViewportHeight, ElementName=WelcomeFirstRun}">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="13" Padding="24">
+                    <Border Width="52" Height="52" CornerRadius="14" HorizontalAlignment="Center">
+                        <Border.Background>
+                            <LinearGradientBrush StartPoint="0.1,0" EndPoint="0.9,1">
+                                <GradientStop Color="#15A89D" Offset="0" />
+                                <GradientStop Color="#0A655F" Offset="1" />
+                            </LinearGradientBrush>
+                        </Border.Background>
+                        <Viewbox Margin="11,15">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="OK" FontFamily="Segoe UI" FontSize="36" FontWeight="Bold" Foreground="White" LineHeight="36" />
+                                <Path Fill="White" Stretch="Fill" Width="15" Height="22" Margin="3,1,0,0"
+                                      VerticalAlignment="Center" Data="M0,0 L0,22 L15,11 Z" />
                             </StackPanel>
-                        </Grid>
-                    </StackPanel>
+                        </Viewbox>
+                    </Border>
+                    <TextBlock Text="Welcome to OK Player" FontSize="17" FontWeight="SemiBold"
+                               Foreground="{ThemeResource TextFillColorPrimaryBrush}" HorizontalAlignment="Center" />
+                    <Grid Width="280" HorizontalAlignment="Center" Background="Transparent" Tapped="OnWelcomeOpenTapped">
+                        <Rectangle RadiusX="10" RadiusY="10" StrokeThickness="1.5" StrokeDashArray="4,3"
+                                   Stroke="{ThemeResource TextFillColorTertiaryBrush}" Fill="{ThemeResource CardBackgroundFillColorSecondaryBrush}" />
+                        <StackPanel Padding="16" Spacing="4" HorizontalAlignment="Center">
+                            <TextBlock Text="Open file&#x2026;" Foreground="{ThemeResource OkAccentTextBrush}" FontSize="12.5"
+                                       FontWeight="SemiBold" HorizontalAlignment="Center" />
+                            <TextBlock Text="or drop a video / paste a URL" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       FontSize="11" HorizontalAlignment="Center" />
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
+                </Grid>
+            </ScrollViewer>
 
-                    <!-- continue watching — a horizontally scrollable shelf of recents (newest first) -->
-                    <StackPanel x:Name="RecentsSection" Spacing="9" Visibility="Collapsed">
-                        <TextBlock Text="CONTINUE WATCHING" FontSize="11" FontWeight="SemiBold" CharacterSpacing="60"
-                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}" Margin="2,0,0,0" />
-                        <ScrollViewer HorizontalScrollMode="Auto" HorizontalScrollBarVisibility="Auto"
+            <!-- VARIATION A / has recents: recents-forward, left-aligned, footer pinned bottom -->
+            <Grid x:Name="WelcomeVariationA" Visibility="Collapsed" RowDefinitions="*,Auto">
+                <ScrollViewer x:Name="VariationAScroll" Grid.Row="0" VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollMode="Disabled" ZoomMode="Disabled">
+                    <Grid MinHeight="{Binding ViewportHeight, ElementName=VariationAScroll}">
+                    <StackPanel MaxWidth="860" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="44,36">
+                        <TextBlock Text="Continue watching" FontSize="30" FontWeight="SemiBold" CharacterSpacing="-15"
+                                   Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                        <TextBlock Text="Pick up where you left off &#x2014; or open something new." FontSize="13.5" Margin="0,6,0,0"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+                        <!-- recents row -->
+                        <ScrollViewer Margin="0,22,0,0" HorizontalScrollMode="Auto" HorizontalScrollBarVisibility="Auto"
                                       VerticalScrollMode="Disabled" VerticalScrollBarVisibility="Hidden" Padding="0,0,0,4">
                             <ItemsControl ItemsSource="{x:Bind Recents}">
                                 <ItemsControl.ItemsPanel>
@@ -157,17 +167,15 @@
                                 </ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="vm:RecentEntry">
-                                        <Button Click="OnRecentClick" Tag="{x:Bind Path}" Width="200" Padding="0"
+                                        <Button Click="OnRecentClick" Tag="{x:Bind Path}" Width="194" Padding="0"
                                                 Background="Transparent" BorderThickness="0" HorizontalContentAlignment="Stretch">
                                             <StackPanel Spacing="7">
-                                                <!-- 16:9 poster (gradient placeholder + frame + progress + time-left) -->
-                                                <Border Height="112" CornerRadius="8">
+                                                <Border Height="110" CornerRadius="8">
                                                     <Grid>
                                                         <Border Background="{x:Bind PlaceholderGradient}" />
                                                         <Image Source="{x:Bind Poster, Mode=OneWay}" Stretch="UniformToFill" />
                                                         <Grid VerticalAlignment="Bottom" Height="4" Background="#4DFFFFFF">
-                                                            <Border HorizontalAlignment="Left" Background="#FF28B3AA"
-                                                                    Width="{x:Bind ProgressFillWidth}" />
+                                                            <Border HorizontalAlignment="Left" Background="#FF28B3AA" Width="{x:Bind ProgressFillWidth}" />
                                                         </Grid>
                                                         <Border HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,7,9"
                                                                 CornerRadius="5" Padding="6,2" Background="#80000000">
@@ -185,10 +193,61 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
                         </ScrollViewer>
+
+                        <!-- actions + drop zone -->
+                        <Grid Margin="0,26,0,0" ColumnDefinitions="Auto,*" ColumnSpacing="14">
+                            <StackPanel Grid.Column="0" Spacing="9" VerticalAlignment="Center">
+                                <Button Click="OnWelcomeOpenClick" Background="{ThemeResource OkAccentBrush}" Foreground="White"
+                                        CornerRadius="7" Padding="20,11" BorderThickness="0">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <FontIcon Glyph="&#xE8B7;" FontSize="15" Foreground="White" />
+                                        <TextBlock Text="Open file&#x2026;" FontSize="13" FontWeight="SemiBold" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Click="OnOpenUrlClick" Background="{ThemeResource OkSubtleFillStrongBrush}"
+                                        Foreground="{ThemeResource TextFillColorPrimaryBrush}" CornerRadius="7" Padding="18,10"
+                                        BorderThickness="1" BorderBrush="{ThemeResource OkStrokeBrush}" HorizontalContentAlignment="Center">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <FontIcon Glyph="&#xE71B;" FontSize="14" />
+                                        <TextBlock Text="Open URL&#x2026;" FontSize="12.5" FontWeight="SemiBold" />
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+                            <Grid Grid.Column="1" Background="Transparent" Tapped="OnWelcomeOpenTapped" MinHeight="92">
+                                <Rectangle RadiusX="9" RadiusY="9" StrokeThickness="1.5" StrokeDashArray="4,3"
+                                           Stroke="{ThemeResource TextFillColorTertiaryBrush}" Fill="{ThemeResource CardBackgroundFillColorSecondaryBrush}" />
+                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="6">
+                                    <FontIcon Glyph="&#xE898;" FontSize="22" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    <TextBlock Text="Drop a video, or paste a URL" FontSize="12.5"
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                </StackPanel>
+                            </Grid>
+                        </Grid>
                     </StackPanel>
-                </StackPanel>
+                    </Grid>
+                </ScrollViewer>
+
+                <!-- footer -->
+                <Grid Grid.Row="1" Height="42" Padding="24,0" BorderThickness="0,1,0,0" BorderBrush="{ThemeResource OkStrokeBrush}"
+                      ColumnDefinitions="Auto,*,Auto">
+                    <Button Grid.Column="0" Click="OnHistoryClick" Background="Transparent" BorderThickness="0" Padding="2,4"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon Glyph="&#xE81C;" FontSize="13" />
+                            <TextBlock Text="History" FontSize="12" FontWeight="Medium" />
+                        </StackPanel>
+                    </Button>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="5" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Ellipse Width="6" Height="6" Fill="#FF28B3AA" />
+                        <TextBlock Text="Recording history" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                    </StackPanel>
+                    <Button Grid.Column="2" Click="OnSettingsClick" Background="Transparent" BorderThickness="0" Padding="6"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" ToolTipService.ToolTip="Settings">
+                        <FontIcon Glyph="&#xE713;" FontSize="15" />
+                    </Button>
+                </Grid>
             </Grid>
-        </ScrollViewer>
+        </Grid>
 
         <!-- ===== top chrome: scrim + title ===== -->
         <Grid x:Name="TitleChrome" VerticalAlignment="Top" Height="42" Opacity="0">
