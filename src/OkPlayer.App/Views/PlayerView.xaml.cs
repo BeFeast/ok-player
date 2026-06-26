@@ -350,7 +350,7 @@ public sealed partial class PlayerView : UserControl
             TitleChrome.IsHitTestVisible = true;
             BottomChrome.IsHitTestVisible = true;
             ChromeShowSb.Begin();
-            Vm.SetSubtitleMargin(true); // lift subtitles above the OSC
+            Vm.ApplySubtitlePosition(App.Settings.Current.SubtitlePosition, true); // lift subtitles above the OSC
         }
         ResetIdleTimer();
     }
@@ -372,7 +372,7 @@ public sealed partial class PlayerView : UserControl
         TitleChrome.IsHitTestVisible = false;
         BottomChrome.IsHitTestVisible = false;
         ChromeHideSb.Begin();
-        Vm.SetSubtitleMargin(false); // drop subtitles back toward the bottom
+        Vm.ApplySubtitlePosition(App.Settings.Current.SubtitlePosition, false); // drop subtitles back to the user's position
     }
 
     private void ResetIdleTimer()
@@ -1484,7 +1484,9 @@ public sealed partial class PlayerView : UserControl
             if (Video.Engine is { } e)
             {
                 e.SetProperty("sub-scale", App.Settings.Current.SubtitleScale);
-                e.SetProperty("sub-pos", (double)App.Settings.Current.SubtitlePosition);
+                // sub-pos is owned by the OSC-lift (it both positions and lifts subtitles); re-apply it for
+                // the current chrome state so a live position change keeps the lift consistent.
+                Vm.ApplySubtitlePosition(App.Settings.Current.SubtitlePosition, _chromeVisible);
             }
         }
         catch { /* setting a property never blocks startup/open */ }
