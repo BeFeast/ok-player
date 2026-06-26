@@ -110,9 +110,12 @@
              "Continue watching" view when there are recents, and a centred first-run hero when there aren't. -->
         <Grid x:Name="WelcomeCard">
 
-            <!-- FIRST RUN / no recents: centred hero -->
-            <Grid x:Name="WelcomeFirstRun" Visibility="Collapsed">
-                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="13">
+            <!-- FIRST RUN / no recents: centred hero. Scrollable + min-height-locked to the viewport so the
+                 hero centres when the window is tall and scrolls (never clips) when it is short. -->
+            <ScrollViewer x:Name="WelcomeFirstRun" Visibility="Collapsed"
+                          VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled" ZoomMode="Disabled">
+                <Grid MinHeight="{Binding ViewportHeight, ElementName=WelcomeFirstRun}">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="13" Padding="24">
                     <Border Width="52" Height="52" CornerRadius="14" HorizontalAlignment="Center">
                         <Border.Background>
                             <LinearGradientBrush StartPoint="0.1,0" EndPoint="0.9,1">
@@ -141,11 +144,14 @@
                         </StackPanel>
                     </Grid>
                 </StackPanel>
-            </Grid>
+                </Grid>
+            </ScrollViewer>
 
             <!-- VARIATION A / has recents: recents-forward, left-aligned, footer pinned bottom -->
             <Grid x:Name="WelcomeVariationA" Visibility="Collapsed" RowDefinitions="*,Auto">
-                <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled" ZoomMode="Disabled">
+                <ScrollViewer x:Name="VariationAScroll" Grid.Row="0" VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollMode="Disabled" ZoomMode="Disabled">
+                    <Grid MinHeight="{Binding ViewportHeight, ElementName=VariationAScroll}">
                     <StackPanel MaxWidth="860" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="44,36">
                         <TextBlock Text="Continue watching" FontSize="30" FontWeight="SemiBold" CharacterSpacing="-15"
                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
@@ -218,6 +224,7 @@
                             </Grid>
                         </Grid>
                     </StackPanel>
+                    </Grid>
                 </ScrollViewer>
 
                 <!-- footer -->
