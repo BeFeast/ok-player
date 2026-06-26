@@ -29,11 +29,13 @@ public sealed partial class SettingsWindow : Window
         AppWindow.Resize(new Windows.Graphics.SizeInt32(760, 560));
         ApplyTheme();
         App.Settings.Changed += ApplyTheme;
+        App.MpvVersionChanged += OnMpvVersionChanged;
         if (Content is FrameworkElement rootEl)
             rootEl.ActualThemeChanged += OnActualThemeChanged;
         Closed += (_, _) =>
         {
             App.Settings.Changed -= ApplyTheme;
+            App.MpvVersionChanged -= OnMpvVersionChanged;
             if (Content is FrameworkElement r)
                 r.ActualThemeChanged -= OnActualThemeChanged;
         };
@@ -52,10 +54,15 @@ public sealed partial class SettingsWindow : Window
         RefreshEngineVersion();
     }
 
+    // App.MpvVersion is captured off the UI thread at engine attach, which can land after this window is
+    // already open and even already sitting on Advanced. Marshal to this window and refresh the About engine
+    // line so it surfaces immediately, instead of waiting for the user to leave and re-enter the panel.
+    private void OnMpvVersionChanged() => DispatcherQueue?.TryEnqueue(RefreshEngineVersion);
+
     /// <summary>Show the libmpv engine line when its version is known, else hide it. The engine attaches
     /// — and the off-thread <c>mpv-version</c> read completes — only after media starts playing, so this
-    /// is re-run when the Advanced panel (which hosts About) is shown: a version captured after this
-    /// window opened still surfaces, instead of the line staying hidden for the window's lifetime.</summary>
+    /// is re-run when the Advanced panel (which hosts About) is shown, and on <see cref="App.MpvVersionChanged"/>:
+    /// a version captured after this window opened still surfaces, instead of the line staying hidden.</summary>
     private void RefreshEngineVersion()
     {
         string? mpv = App.MpvVersion;

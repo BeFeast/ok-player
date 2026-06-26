@@ -23,8 +23,19 @@ public partial class App : Application
     public static string AppVersion { get; } = GetAppVersion();
 
     /// <summary>libmpv's human version string (e.g. "mpv 0.39.0"), captured off-thread when the engine
-    /// attaches; null until then. Cosmetic — read by the Settings About block.</summary>
-    public static string? MpvVersion { get; set; }
+    /// attaches; null until then. Cosmetic — read by the Settings About block. Setting it raises
+    /// <see cref="MpvVersionChanged"/> so an already-open Settings window can refresh its engine line.</summary>
+    public static string? MpvVersion
+    {
+        get => _mpvVersion;
+        set { _mpvVersion = value; MpvVersionChanged?.Invoke(); }
+    }
+    private static string? _mpvVersion;
+
+    /// <summary>Raised when <see cref="MpvVersion"/> is set — which happens off the UI thread at engine
+    /// attach, possibly after a Settings window is already open. Handlers must marshal to their own
+    /// dispatcher before touching UI.</summary>
+    public static event Action? MpvVersionChanged;
 
     private static string GetAppVersion()
     {
