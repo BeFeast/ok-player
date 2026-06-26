@@ -576,6 +576,19 @@ public partial class PlayerViewModel : ObservableObject
             _awaitingSeek = false; // submit rejected up front
     }
 
+    /// <summary>Seek to an absolute time in seconds (mpv clamps to the media bounds). Unlike
+    /// <see cref="SeekToFraction"/> this needs no known duration, so it's safe before/while duration settles.</summary>
+    public void SeekToSeconds(double seconds)
+    {
+        if (_engine is null)
+            return;
+        double s = System.Math.Max(0, seconds);
+        Position = s;
+        _awaitingSeek = true;
+        if (!SeekCmd("seek", Inv(s), "absolute"))
+            _awaitingSeek = false; // submit rejected up front
+    }
+
     public void SeekRelative(double seconds)
     {
         _awaitingSeek = true;

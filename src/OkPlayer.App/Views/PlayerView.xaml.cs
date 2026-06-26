@@ -40,6 +40,7 @@ public sealed partial class PlayerView : UserControl
     private bool _shuffle;
     private double _resumeTarget = -1; // pending resume position, applied on the first Duration after open
     private bool _reachedEnd; // latched when the current file plays through to a natural EOF; resets on open
+    private double? _explicitResume; // exact resume from a library launch (PRD §13.1): overrides history, skips the heuristic
 
     /// <summary>Continue-watching cards shown on the welcome screen (bound from XAML).</summary>
     public ObservableCollection<RecentEntry> Recents { get; } = new();
@@ -220,6 +221,8 @@ public sealed partial class PlayerView : UserControl
         {
             _pendingInitialPath = null;
             OpenMedia(path); // a command-line file queued before the engine was ready
+            _explicitResume = _pendingInitialResume; // after OpenMedia (it resets per-open state)
+            _pendingInitialResume = null;
         }
         RevealChrome();
     }
@@ -722,7 +725,27 @@ public sealed partial class PlayerView : UserControl
 
     private void TryResume()
     {
-        if (_resumeTarget <= 0 || Vm.Duration <= 0)
+        if (Vm.Duration <= 0)
+            return;
+        // A companion-library launch (PRD §13.1) carries an exact position: honour it verbatim — overriding any
+        // remembered position and bypassing the auto-resume heuristic, since the library, not the player, decides
+        // where to start. mpv can report a provisional (small) duration before the final one for progressive /
+        // network media, so wait until the known duration actually covers the target before seeking — otherwise
+        // we'd land at the wrong early spot and then skip the real seek. (A target of 0, "from the start", and a
+        // file genuinely shorter than the target both fall through gracefully: start from 0.) Seek by absolute
+        // seconds, clamped just shy of the end so a value at/over the end can't land on EOF and latch "finished".
+        if (_explicitResume is { } exact)
+        {
+            if (exact > Vm.Duration)
+                return; // keep _explicitResume queued; a later, larger Duration will apply it (or the next open clears it)
+            _explicitResume = null;
+            _resumeTarget = -1; // the explicit position wins; drop any history target queued for this open
+            double seekTo = Math.Min(exact, Math.Max(0, Vm.Duration - 0.5));
+            Vm.SeekToSeconds(seekTo);
+            ShowToast($"Resumed at {FormatPreviewTime(seekTo)}");
+            return;
+        }
+        if (_resumeTarget <= 0)
             return;
         double target = _resumeTarget;
         _resumeTarget = -1; // apply once per open
@@ -1436,6 +1459,7 @@ public sealed partial class PlayerView : UserControl
     // ---- open media ----
 
     private string? _pendingInitialPath; // a launch-time file held until the engine is ready
+    private double? _pendingInitialResume; // explicit resume paired with _pendingInitialPath
 
     /// <summary>Apply the user's default subtitle size/position (Settings -> Subtitles) to the engine. Live —
     /// safe to call any time; a no-op when no engine/file is up.</summary>
@@ -1472,12 +1496,18 @@ public sealed partial class PlayerView : UserControl
 
     /// <summary>Open a file given on the command line ("Open with"). If the engine isn't up yet, hold it
     /// and open on EngineReady.</summary>
-    public void QueueInitialFile(string path)
+    public void QueueInitialFile(string path, double? resumeSeconds = null)
     {
         if (Video.Engine is not null)
+        {
             OpenMedia(path);
+            _explicitResume = resumeSeconds; // set after OpenMedia, which resets per-open state; applied on first Duration
+        }
         else
+        {
             _pendingInitialPath = path;
+            _pendingInitialResume = resumeSeconds;
+        }
     }
 
     /// <summary>Load a local path or URL into the engine. Never throws to the caller — a failed open
@@ -1498,6 +1528,9 @@ public sealed partial class PlayerView : UserControl
             Vm.OnOpening();        // load accepted: clear the prior file's playhead/duration/chapter/HasMedia
             _currentPath = pathOrUrl;
             _reachedEnd = false;   // fresh file: not finished until it plays through to its own EOF
+            _explicitResume = null; // a launch resume belongs only to its launch file (the two launch paths set it
+                                    // again right after this call); clearing here drops a stale value if that file
+                                    // never reported a Duration, so the next normal open isn't force-seeked.
             _openGeneration++;     // invalidate any in-flight chapter-warm pass for the previous file
             // resume only when the user keeps that on (Settings -> Playback); applied on the first Duration
             _resumeTarget = (App.Settings.Current.ResumePlayback ? _history.Get(pathOrUrl)?.Position : null) ?? -1;
