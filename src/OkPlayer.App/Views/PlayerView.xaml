@@ -80,6 +80,9 @@
                 <MenuFlyoutItem Text="Add bookmark here" Click="OnAddBookmarkClick">
                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE840;" /></MenuFlyoutItem.Icon>
                 </MenuFlyoutItem>
+                <MenuFlyoutItem Text="Go to time&#x2026;" Click="OnGoToTimeClick">
+                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE823;" /></MenuFlyoutItem.Icon>
+                </MenuFlyoutItem>
                 <MenuFlyoutSeparator />
                 <MenuFlyoutItem Text="Chapters" Click="OnChaptersClick">
                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8FD;" /></MenuFlyoutItem.Icon>

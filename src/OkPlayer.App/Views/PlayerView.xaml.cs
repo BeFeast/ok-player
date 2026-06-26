@@ -558,6 +558,38 @@ public sealed partial class PlayerView : UserControl
         ShowToast("Video reset");
     }
 
+    /// <summary>Seek to an exact typed timecode (pillar 4: precise navigation). Accepts "90", "1:30",
+    /// "1:23:45"; clamps to the file's duration and rejects invalid input.</summary>
+    private async void OnGoToTimeClick(object sender, RoutedEventArgs e)
+    {
+        if (!Vm.HasMedia || !double.IsFinite(Vm.Duration) || Vm.Duration <= 0)
+            return;
+        var input = new TextBox { PlaceholderText = "e.g. 1:23:45" };
+        var dialog = new ContentDialog
+        {
+            Title = "Go to time",
+            Content = input,
+            PrimaryButtonText = "Go",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = XamlRoot,
+        };
+        try
+        {
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+                return;
+            if (OkPlayer.Core.TimeCode.Parse(input.Text) is not { } seconds)
+            {
+                ShowToast("Enter a time like 1:23:45");
+                return;
+            }
+            double target = Math.Clamp(seconds, 0, Vm.Duration);
+            Vm.SeekToFraction(target / Vm.Duration);
+            ShowToast($"Jumped to {FormatPreviewTime(target)}");
+        }
+        catch { /* another content dialog is already open — ignore the concurrent open */ }
+    }
+
     private void OnAddBookmarkClick(object sender, RoutedEventArgs e)
     {
         if (_currentPath is { } path && Vm.HasMedia && _history.AddBookmark(path, Vm.Position))
