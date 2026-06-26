@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -26,6 +27,9 @@ public sealed class ThumbnailService : IDisposable
     private volatile bool _disposed;
     private int _generation;                               // bumps per OpenAsync; bails stale requests
     private string _fileKey = "0";                         // per-file cache namespace (path+mtime+size hash)
+    private readonly object _bucketsLock = new();
+    private SortedSet<long> _cachedBuckets = new();        // seconds with a cached frame for the current file
+                                                           // (in-memory index for instant nearest-frame lookup)
 
     public ThumbnailService()
     {
@@ -53,6 +57,7 @@ public sealed class ThumbnailService : IDisposable
             // the previous file's, it could return the old media's frame. Key-first closes that window.
             _fileKey = ComputeFileKey(path);
             int gen = ++_generation;
+            SeedBucketIndex(_fileKey); // rebuild the in-memory cached-second index from disk for this file
             TeardownEngine();
             PruneCache(); // bound the cache; do NOT wipe it — entries are now keyed per file and reused across loads
 
@@ -149,7 +154,10 @@ public sealed class ThumbnailService : IDisposable
                 return null;          // frame not ready in time — don't cache a stale frame; allow retry
 
             mpv.Command("screenshot-to-file", file, "video");
-            return File.Exists(file) ? file : null;
+            if (!File.Exists(file))
+                return null;
+            RecordBucket(bucketSec); // index it so PeekNearestCached can find it instantly
+            return file;
         }
         catch
         {
@@ -200,6 +208,56 @@ public sealed class ThumbnailService : IDisposable
             }
         }
         catch { /* best effort */ }
+    }
+
+    /// <summary>Return the nearest already-cached thumbnail within ±<paramref name="maxDistanceSeconds"/> of
+    /// the time, or null. Synchronous and seek-free — for an instant scrub placeholder while the exact frame
+    /// generates. Backed by an in-memory second index, so it's cheap to call on every pointer move.</summary>
+    public string? PeekNearestCached(double timeSeconds, double maxDistanceSeconds)
+    {
+        if (_disposed)
+            return null;
+        string fileKey = _fileKey;
+        if (fileKey == "0")
+            return null;
+        long center = (long)Math.Max(0, timeSeconds);
+        long max = (long)Math.Max(0, maxDistanceSeconds);
+        long best = -1;
+        lock (_bucketsLock)
+        {
+            foreach (long b in _cachedBuckets.GetViewBetween(center - max, center + max))
+                if (best < 0 || Math.Abs(b - center) < Math.Abs(best - center))
+                    best = b;
+        }
+        if (best < 0)
+            return null;
+        string file = Path.Combine(_tempDir, $"{fileKey}_t{best}.png");
+        return File.Exists(file) ? file : null; // verify on disk in case the cache was pruned under us
+    }
+
+    /// <summary>Rebuild the in-memory cached-second index from the on-disk PNGs for a file key (called on open).</summary>
+    private void SeedBucketIndex(string fileKey)
+    {
+        var seeded = new SortedSet<long>();
+        try
+        {
+            foreach (var f in Directory.EnumerateFiles(_tempDir, $"{fileKey}_t*.png"))
+            {
+                string name = Path.GetFileNameWithoutExtension(f);
+                int t = name.LastIndexOf("_t", StringComparison.Ordinal);
+                if (t >= 0 && long.TryParse(name.AsSpan(t + 2), out long sec))
+                    seeded.Add(sec);
+            }
+        }
+        catch { /* best effort — an empty index just means no instant placeholders until frames warm */ }
+        lock (_bucketsLock)
+            _cachedBuckets = seeded;
+    }
+
+    private void RecordBucket(long bucketSec)
+    {
+        lock (_bucketsLock)
+            _cachedBuckets.Add(bucketSec);
     }
 
     private void TeardownEngine()
