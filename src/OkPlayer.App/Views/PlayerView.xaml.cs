@@ -50,6 +50,7 @@ public sealed partial class PlayerView : UserControl
     private int _openGeneration;      // bumps per file open; a stale chapter-warm pass bails on mismatch
     private bool _chapterWarmBusy;     // a chapter-thumbnail warm pass is running (single-flight)
     private bool _chapterWarmDirty;    // the chapter set changed (or a retry is wanted) — re-walk it
+    private int _timelineWarmGen = -1; // the open generation a coarse seek-preview warm is already running for
     private System.Threading.Tasks.Task<bool>? _thumbReady; // resolves when the decode engine has the current file
 
     public PlayerViewModel Vm { get; } = new();
@@ -236,6 +237,7 @@ public sealed partial class PlayerView : UserControl
         else if (e.PropertyName == nameof(PlayerViewModel.Duration))
         {
             TryResume(); // seek-bar chapter ticks update via the Vm.ChapterFractions binding
+            WarmTimeline(); // preemptively warm a coarse grid of seek-preview frames for instant scrubbing
         }
     }
 
@@ -249,9 +251,9 @@ public sealed partial class PlayerView : UserControl
 
     private void OnSeekHover(double fraction, double xInBar)
     {
-        if (!Vm.HasMedia || Vm.Duration <= 0)
+        if (!Vm.HasMedia || !double.IsFinite(Vm.Duration) || Vm.Duration <= 0)
         {
-            OnSeekHoverEnded(); // media gone/replaced under the pointer — hide any lingering preview
+            OnSeekHoverEnded(); // media gone/replaced or duration unknown — hide any lingering preview
             return;
         }
         double time = fraction * Vm.Duration;
@@ -266,6 +268,16 @@ public sealed partial class PlayerView : UserControl
         double maxLeft = Math.Max(8, RootGrid.ActualWidth - pw - 8);
         PreviewTransform.X = Math.Clamp(xInRoot - pw / 2, 8, maxLeft);
         PreviewPanel.Opacity = 1;
+
+        // Instant placeholder: show the nearest already-cached frame immediately so scrubbing feels instant,
+        // then refine to the exact second below (which keyframe-seeks only if the cursor settles). Capped
+        // distance so the placeholder is never wildly off the cursor.
+        string? near = _thumbs.PeekNearestCached(time, 45);
+        if (near is not null)
+        {
+            PreviewImage.Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(near));
+            PreviewImageFrame.Visibility = Visibility.Visible;
+        }
 
         int token = ++_previewToken;
         _ = RequestPreviewAsync(time, token);
@@ -1077,6 +1089,60 @@ public sealed partial class PlayerView : UserControl
             if (_chapterWarmDirty && _openGeneration != gen)
                 WarmChapterThumbnails();
         }
+    }
+
+    /// <summary>Preemptively warm a coarse, bounded grid of seek-preview frames across the whole timeline so
+    /// scrubbing is instant (the hover preview shows the nearest cached frame immediately — see PeekNearestCached).
+    /// Background + low priority: it shares the one decode engine + gate with chapter warming and on-demand
+    /// hover requests, releasing the gate between frames so a live hover interleaves. Single-flight per open.</summary>
+    private void WarmTimeline()
+    {
+        int gen = _openGeneration;
+        if (_timelineWarmGen == gen)
+            return;
+        _timelineWarmGen = gen;
+        _ = WarmTimelineAsync(gen);
+    }
+
+    private async System.Threading.Tasks.Task WarmTimelineAsync(int gen)
+    {
+        try
+        {
+            // Wait for THIS file's decode engine (await the open task while in flight, then gate on live state).
+            var ready = _thumbReady;
+            if (ready is { IsCompleted: false })
+                await ready;
+            if (gen != _openGeneration || !_thumbs.IsReady)
+                return;
+            // Let playback (and any resume seek + chapter warm) settle before pulling the CPU-decode engine
+            // through the whole timeline, so this background work doesn't contend with a smooth start.
+            await System.Threading.Tasks.Task.Delay(3000);
+            if (gen != _openGeneration || !_thumbs.IsReady)
+                return;
+            // Read the duration here (not at claim time): the file is loaded, so this is the real, stable value
+            // for THIS media — a stale duration notification from the previous file can't drive the grid.
+            double duration = Vm.Duration;
+            if (!double.IsFinite(duration) || duration <= 0)
+            {
+                if (gen == _openGeneration)
+                    _timelineWarmGen = -1; // no usable duration yet — let a later Duration update retry
+                return;
+            }
+            if (Vm.VideoWidth <= 0)
+                return; // audio-only (no video plane): the engine can't produce frames — don't burn 140 seeks
+            // ~140 frames evenly across the file, clamped so a long film stays coarse and a short clip isn't dense.
+            double step = Math.Clamp(duration / 140.0, 10.0, 60.0);
+            int consecutiveNull = 0;
+            for (double t = 0; t < duration && gen == _openGeneration; t += step)
+            {
+                string? f = await _thumbs.GetThumbnailAsync(t, () => gen != _openGeneration); // caches; bails if superseded
+                if (f is null && ++consecutiveNull >= 3)
+                    return; // the engine isn't producing frames (no video / unseekable) — stop wasting seeks
+                if (f is not null)
+                    consecutiveNull = 0;
+            }
+        }
+        catch { /* best effort — a partial grid still makes scrubbing faster */ }
     }
 
     // ---- overflow ----  (the volume control owns its own mute / drag / scroll / type interactions)
