@@ -47,7 +47,8 @@ public sealed partial class PlayerView : UserControl
     public ObservableCollection<BookmarkEntry> Bookmarks { get; } = new();
     private int _previewToken; // ignores stale async thumbnail results
     private bool _viewUnloaded; // guards against duplicate Unloaded disposing the thumbnail engine twice
-    private bool _generatingChapters; // prevents overlapping chapter-thumbnail passes
+    private int _openGeneration;      // bumps per file open; a stale chapter-warm pass bails on mismatch
+    private int _chapterWarmGen = -1;  // the generation a chapter-thumbnail warm pass is already running for
 
     public PlayerViewModel Vm { get; } = new();
 
@@ -968,7 +969,7 @@ public sealed partial class PlayerView : UserControl
             ChaptersPanel.Visibility = Visibility.Visible;
             PanelShowSb.Begin();
             RevealChrome(); // an open panel pins the chrome
-            _ = GenerateChapterThumbnailsAsync(); // fill in chapter previews lazily
+            WarmChapterThumbnails(); // ensure previews are filling (usually already warmed on open)
         }
         else
         {
@@ -993,32 +994,51 @@ public sealed partial class PlayerView : UserControl
         ChaptersSectionHeader.Text = $"CHAPTERS · {n}";
     }
 
-    private async System.Threading.Tasks.Task GenerateChapterThumbnailsAsync()
+    /// <summary>Kick off a background chapter-thumbnail warm for the current file (single-flight per open).
+    /// Runs whether or not the panel is open, so the cache is filled preemptively and a reopened file —
+    /// or a freshly opened panel — shows its chapter previews instantly.</summary>
+    private void WarmChapterThumbnails()
     {
-        if (!Vm.HasMedia || _generatingChapters)
-            return;
-        _generatingChapters = true;
+        int gen = _openGeneration;
+        if (_chapterWarmGen == gen)
+            return; // already warming (or warmed) this file
+        _chapterWarmGen = gen;
+        _ = GenerateChapterThumbnailsAsync(gen);
+    }
+
+    private async System.Threading.Tasks.Task GenerateChapterThumbnailsAsync(int gen)
+    {
         try
         {
-            // The thumbnail engine opens the file asynchronously; if the panel opened first, wait for
-            // it to become ready (up to ~10s) so the thumbnails still fill in rather than silently no-op.
-            for (int i = 0; i < 67 && !_thumbs.IsReady && _panelOpen; i++)
+            // The decode engine opens the file asynchronously; wait for it (up to ~10s) so the thumbnails
+            // still fill rather than silently no-op. Bail the moment another file starts opening.
+            for (int i = 0; i < 67 && !_thumbs.IsReady && gen == _openGeneration; i++)
                 await System.Threading.Tasks.Task.Delay(150);
+            if (gen != _openGeneration || !_thumbs.IsReady)
+            {
+                if (gen == _openGeneration)
+                    _chapterWarmGen = -1; // engine never readied — let a later trigger retry this file
+                return;
+            }
+            // Chapters are applied around FileLoaded, which can land just after HasMedia flips; let the
+            // list populate before walking it.
+            for (int i = 0; i < 20 && Vm.Chapters.Count == 0 && gen == _openGeneration; i++)
+                await System.Threading.Tasks.Task.Delay(100);
 
             foreach (var ch in Vm.Chapters.ToList())
             {
-                if (!_panelOpen)
-                    break; // panel closed — stop generating (cached thumbs remain for next open)
+                if (gen != _openGeneration)
+                    return; // a different file is loading — its own warm pass takes over
                 if (ch.Thumbnail is not null)
                     continue;
-                string? path = await _thumbs.GetThumbnailAsync(ch.Time + 0.5, () => !_panelOpen); // a hair past the boundary
-                if (path is null || !_panelOpen)
+                // a hair past the boundary so the frame is the chapter's content, not the cut
+                string? path = await _thumbs.GetThumbnailAsync(ch.Time + 0.5, () => gen != _openGeneration);
+                if (path is null || gen != _openGeneration)
                     continue;
                 ch.Thumbnail = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(path));
             }
         }
-        catch { /* transient — leave remaining thumbnails null (retried on next panel open) */ }
-        finally { _generatingChapters = false; }
+        catch { /* transient — remaining thumbnails stay null (retried on next open / panel open) */ }
     }
 
     // ---- overflow ----  (the volume control owns its own mute / drag / scroll / type interactions)
@@ -1082,6 +1102,7 @@ public sealed partial class PlayerView : UserControl
             Video.Open(pathOrUrl); // may throw on engine-init failure — do this before mutating UI state
             Vm.OnOpening();        // load accepted: clear the prior file's playhead/duration/chapter/HasMedia
             _currentPath = pathOrUrl;
+            _openGeneration++;     // invalidate any in-flight chapter-warm pass for the previous file
             // resume only when the user keeps that on (Settings -> Playback); applied on the first Duration
             _resumeTarget = (App.Settings.Current.ResumePlayback ? _history.Get(pathOrUrl)?.Position : null) ?? -1;
             Vm.SetSpeed(App.Settings.Current.DefaultSpeed); // every file starts at the default speed, incl. 1x
@@ -1091,6 +1112,7 @@ public sealed partial class PlayerView : UserControl
             LoadUserChapters();    // feed the file's user-added chapters in (merge with the file's own)
             RevealChrome();        // show the controls when a file opens (drag-drop / picker)
             _ = _thumbs.OpenAsync(pathOrUrl); // arm the seek-preview engine for this file (fire-and-forget)
+            WarmChapterThumbnails();           // preemptively fill the chapter-thumbnail cache in the background
             UpdatePlaylist(pathOrUrl);        // (re)build the folder-as-playlist around this file
         }
         catch (Exception)

@@ -94,14 +94,18 @@ public sealed class ThumbnailService : IDisposable
 
     public async Task<string?> GetThumbnailAsync(double timeSeconds, Func<bool>? isStale)
     {
-        if (_disposed || !_fileReady)
+        if (_disposed)
             return null;
         int gen = _generation;
         string fileKey = _fileKey; // capture together so a mid-call file switch is caught by the gen check below
         long bucketSec = (long)Math.Max(0, timeSeconds); // 1-second thumbnail granularity
         string file = Path.Combine(_tempDir, $"{fileKey}_t{bucketSec}.png");
-        if (File.Exists(file))
+        // Probe the disk cache BEFORE the engine-ready gate: a reopened file serves its persisted thumbnails
+        // instantly, without waiting (seconds) for the decode engine to spin up and load the file.
+        if (fileKey != "0" && File.Exists(file))
             return file; // cache hit — no seek (persists across loads and sessions: same file -> same key)
+        if (!_fileReady)
+            return null; // miss and the engine isn't loaded yet — nothing to generate
 
         try { await _gate.WaitAsync().ConfigureAwait(false); }
         catch (ObjectDisposedException) { return null; } // disposed while queued
