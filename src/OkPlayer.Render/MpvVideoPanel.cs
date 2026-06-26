@@ -73,6 +73,14 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
             _mpv.SetOption("volume-max", "130");    // allow the PRD volume boost (>100%)
             _mpv.SetOption("osc", "no");            // we draw our own on-screen controls
             _mpv.SetOption("input-default-bindings", "no"); // the app owns the keyboard map
+            // Honour sub-margin-y (the OSC-lift toggles it on chrome show/hide) for EVERY subtitle kind, so the
+            // controls never overlap captions (PRD P1-D9). mpv applies margins to text/bitmap subs by default
+            // (sub-use-margins) but NOT to ASS-styled subs: those are governed by sub-ass-override, which
+            // defaults to "scale" and ignores margins. sub-ass-force-margins makes the margin options apply to
+            // ASS subs too WITHOUT restyling them (unlike sub-ass-override=force, which strips fonts/colors) —
+            // so the lift works for embedded ASS and styled text subs while keeping their look intact.
+            _mpv.SetOption("sub-use-margins", "yes");
+            _mpv.SetOption("sub-ass-force-margins", "yes");
             string pictures = System.Environment.GetFolderPath(System.Environment.SpecialFolder.MyPictures);
             if (!string.IsNullOrEmpty(pictures))
                 _mpv.SetOption("screenshot-directory", pictures);

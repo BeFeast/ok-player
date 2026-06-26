@@ -96,6 +96,38 @@ public class MpvThreadGuardTests
     }
 
     [Fact]
+    public void SubtitleMargins_LiftEverySubtitleKind()
+    {
+        // mpv applies sub-margin-y (the property the OSC-lift toggles so controls never overlap captions,
+        // PRD P1-D9) to text/bitmap subs by default, but ASS-styled subs are governed by sub-ass-override —
+        // which defaults to "scale" and ignores margins. That default is the exact reason the lift silently
+        // no-opped on ASS subtitles; sub-ass-force-margins defaults off, which is what we flip on.
+        using (var bare = new MpvContext())
+        {
+            bare.Initialize();
+            Assert.Equal("scale", bare.GetPropertyString("sub-ass-override"));
+            Assert.Equal("no", bare.GetPropertyString("sub-ass-force-margins"));
+        }
+
+        // MpvVideoPanel sets these two as init options so the lift works for every subtitle kind. Assert
+        // libmpv accepts them (a typo'd option would otherwise fail silently) and that they flip to "yes".
+        // sub-ass-force-margins applies the margins to ASS subs WITHOUT restyling them (unlike
+        // sub-ass-override=force), so their fonts/colors stay intact while the lift clears the OSC.
+        using var ctx = new MpvContext();
+        ctx.SetOption("sub-use-margins", "yes");
+        ctx.SetOption("sub-ass-force-margins", "yes");
+        ctx.Initialize();
+        Assert.Equal("yes", ctx.GetPropertyString("sub-use-margins"));
+        Assert.Equal("yes", ctx.GetPropertyString("sub-ass-force-margins"));
+        Assert.Equal("scale", ctx.GetPropertyString("sub-ass-override")); // styling preserved, margins not forced via override
+
+        // sub-margin-y is the property SetSubtitleMargin writes (128 chrome-up / 56 chrome-down) — confirm
+        // the name is real and accepts the lift value against the actual engine.
+        ctx.Command("set", "sub-margin-y", "128");
+        Assert.Equal(128, ctx.GetPropertyLong("sub-margin-y"));
+    }
+
+    [Fact]
     public void CallsAfterDispose_AreNoOps_NotCrashes()
     {
         var ctx = new MpvContext();
