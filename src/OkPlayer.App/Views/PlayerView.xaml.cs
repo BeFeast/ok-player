@@ -521,6 +521,17 @@ public sealed partial class PlayerView : UserControl
             FitToVideoRequested?.Invoke(this, (Vm.VideoWidth, Vm.VideoHeight));
     }
 
+    /// <summary>Pin the window above others. The owning window applies it (it holds the AppWindow); the
+    /// toggle's own IsChecked is the menu's source of truth.</summary>
+    public event EventHandler<bool>? AlwaysOnTopRequested;
+
+    private void OnAlwaysOnTopClick(object sender, RoutedEventArgs e)
+    {
+        bool on = AlwaysOnTopToggle.IsChecked;
+        AlwaysOnTopRequested?.Invoke(this, on);
+        ShowToast(on ? "Always on top" : "Always on top off");
+    }
+
     // ---- video-plane adjustments (Video submenu) ----
 
     private void OnAspectClick(object sender, RoutedEventArgs e)

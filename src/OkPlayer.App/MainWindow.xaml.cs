@@ -33,6 +33,7 @@ public sealed partial class MainWindow : Window
         Player.OpenFileRequested += async (_, _) => await OpenFileAsync();
         Player.AddSubtitleRequested += async (_, _) => await AddSubtitleAsync();
         Player.FitToVideoRequested += (_, size) => FitToVideo(size.Width, size.Height);
+        Player.AlwaysOnTopRequested += (_, on) => SetAlwaysOnTop(on);
         Player.SettingsRequested += (_, _) => OpenSettings();
         Player.SavePlaylistRequested += async (_, content) => await SavePlaylistAsync(content);
         // Drag the window by the video / welcome backdrop, like the title bar. handledEventsToo=true so the
@@ -126,12 +127,25 @@ public sealed partial class MainWindow : Window
             SetWindowPos(_islandBridge, IntPtr.Zero, 0, 0, rc.Right - rc.Left, rc.Bottom - rc.Top, SWP_NOZORDER | SWP_NOACTIVATE);
     }
 
+    private bool _alwaysOnTop;
+
+    /// <summary>Pin/unpin the window above others via the overlapped presenter (the idiomatic WinUI 3 path,
+    /// vs. raw HWND_TOPMOST). Re-applied after fullscreen, which swaps the presenter and would drop it.</summary>
+    private void SetAlwaysOnTop(bool on)
+    {
+        _alwaysOnTop = on;
+        if (AppWindow.Presenter is OverlappedPresenter p)
+            p.IsAlwaysOnTop = on;
+    }
+
     private void SetFullscreen(bool on)
     {
         if (on == _fullscreen)
             return;
         _fullscreen = on;
         AppWindow.SetPresenter(on ? AppWindowPresenterKind.FullScreen : AppWindowPresenterKind.Overlapped);
+        if (!on && _alwaysOnTop && AppWindow.Presenter is OverlappedPresenter p)
+            p.IsAlwaysOnTop = true; // the new overlapped presenter starts un-pinned — restore the user's choice
         if (on)
         {
             // re-apply across the layout passes that follow the presenter change (each would otherwise
