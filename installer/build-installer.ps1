@@ -7,22 +7,35 @@
   next to it, then invokes the Inno Setup compiler (ISCC) against installer\OkPlayer.iss. The result
   is artifacts\OkPlayer-Setup-v<Version>-win-x64.exe.
 .PARAMETER Version
-  Version string baked into the installer (default 0.2.0).
+  Version baked into the installer AND the published assembly. Optional — defaults to the <Version>
+  in src\OkPlayer.App\OkPlayer.App.csproj (the single source of truth, also shown in the app's
+  Settings -> About). Pass -Version only to override for a one-off build.
 .EXAMPLE
-  pwsh installer\build-installer.ps1 -Version 0.2.0
+  .\installer\build-installer.ps1                  # uses the csproj <Version>
+  .\installer\build-installer.ps1 -Version 0.8.0   # override
 #>
 param(
-  [string]$Version = '0.2.0'
+  [string]$Version
 )
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $publish = Join-Path $repo 'artifacts\publish'
 $artifacts = Join-Path $repo 'artifacts'
+$appProj = Join-Path $repo 'src\OkPlayer.App\OkPlayer.App.csproj'
+
+# Single source of truth: the app version lives in the csproj <Version>. Read it unless -Version overrides,
+# so the installer, the release tag, and the in-app "About" can never drift apart.
+if (-not $Version) {
+  $m = Select-String -Path $appProj -Pattern '<Version>\s*([^<\s]+)\s*</Version>' | Select-Object -First 1
+  if (-not $m) { throw "No <Version> in $appProj and no -Version passed." }
+  $Version = $m.Matches[0].Groups[1].Value
+}
+Write-Host "Version: $Version"
 
 Write-Host "Publishing self-contained Release -> $publish"
 if (Test-Path $publish) { Remove-Item $publish -Recurse -Force }
-dotnet publish (Join-Path $repo 'src\OkPlayer.App\OkPlayer.App.csproj') -c Release -r win-x64 -o $publish
+dotnet publish $appProj -c Release -r win-x64 -o $publish -p:Version=$Version
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)" }
 
 Copy-Item (Join-Path $repo 'LICENSE') (Join-Path $publish 'LICENSE.txt') -Force
