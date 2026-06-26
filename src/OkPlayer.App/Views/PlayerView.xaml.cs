@@ -39,6 +39,7 @@ public sealed partial class PlayerView : UserControl
     private OkPlayer.Core.RepeatMode _repeat = OkPlayer.Core.RepeatMode.Off;
     private bool _shuffle;
     private double _resumeTarget = -1; // pending resume position, applied on the first Duration after open
+    private bool _reachedEnd; // latched when the current file plays through to a natural EOF; resets on open
 
     /// <summary>Continue-watching cards shown on the welcome screen (bound from XAML).</summary>
     public ObservableCollection<RecentEntry> Recents { get; } = new();
@@ -708,11 +709,14 @@ public sealed partial class PlayerView : UserControl
     {
         if (_currentPath is { } path && Vm.HasMedia && Vm.Duration > 0)
         {
-            // Near-EOF counts as completed: store 0 so it neither auto-resumes nor lingers half-watched,
-            // and flag it Finished so the watched-marker (and a companion library) can tell "done" from "fresh".
-            bool finished = Vm.Position >= Vm.Duration - 30;
-            double position = finished ? 0 : Vm.Position;
-            _history.Record(path, position, Vm.Duration, finished);
+            // "Finished" latches only when the file played through to a natural EOF (_reachedEnd), never from a
+            // sampled position — so seeking into the final stretch, or seeking back after the credits, can't flip
+            // the watched flag, and a sub-30s clip isn't marked finished the instant it opens at position 0.
+            // Independently, parking the stored position at 0 once the playhead is in the final stretch keeps
+            // resume/continue-watching clean. "Final stretch" = the last 30s, but never more than the final 5%.
+            double completeAt = Math.Max(Vm.Duration * 0.95, Vm.Duration - 30);
+            double position = (_reachedEnd || Vm.Position >= completeAt) ? 0 : Vm.Position;
+            _history.Record(path, position, Vm.Duration, _reachedEnd);
         }
     }
 
@@ -1493,6 +1497,7 @@ public sealed partial class PlayerView : UserControl
             Video.Open(pathOrUrl); // may throw on engine-init failure — do this before mutating UI state
             Vm.OnOpening();        // load accepted: clear the prior file's playhead/duration/chapter/HasMedia
             _currentPath = pathOrUrl;
+            _reachedEnd = false;   // fresh file: not finished until it plays through to its own EOF
             _openGeneration++;     // invalidate any in-flight chapter-warm pass for the previous file
             // resume only when the user keeps that on (Settings -> Playback); applied on the first Duration
             _resumeTarget = (App.Settings.Current.ResumePlayback ? _history.Get(pathOrUrl)?.Position : null) ?? -1;
@@ -1731,10 +1736,16 @@ public sealed partial class PlayerView : UserControl
 
     private void OnEndReached()
     {
-        // Only advance if the current file is genuinely at its end. A queued eof-reached can arrive after a
-        // manual hop (PageDown / opening another file) loaded a fresh file at position 0 — that stale event
-        // must not skip a file. A real EOF leaves position at (≈) duration.
-        if (_autoAdvance && Vm.Duration > 0 && Vm.Position >= Vm.Duration - 1.0 && _playlist?.AutoAdvanceTarget is string next)
+        // Only act on a genuine end-of-file. A queued eof-reached can arrive after a manual hop (PageDown /
+        // opening another file) loaded a fresh file at position 0 — that stale event must neither skip a file
+        // nor mark anything watched. A real EOF leaves position at (≈) duration.
+        bool atRealEof = Vm.Duration > 0 && Vm.Position >= Vm.Duration - 1.0;
+        if (atRealEof)
+        {
+            _reachedEnd = true;
+            SaveProgress(); // latch Finished now — before any auto-advance swaps the current file out
+        }
+        if (atRealEof && _autoAdvance && _playlist?.AutoAdvanceTarget is string next)
         {
             if (string.Equals(next, _currentPath, StringComparison.OrdinalIgnoreCase))
             {

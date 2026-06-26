@@ -53,12 +53,17 @@ Fields a reader can rely on for watched-state and progress:
 
 ### Why `Finished` exists
 
-`Position` is reset to `0` when a file is watched to the end, so it neither
-auto-resumes nor lingers half-watched in continue-watching. That makes `Position`
-alone ambiguous: `0` means **either** "finished" **or** "never started." The
-`Finished` flag disambiguates — it is the "watched flag when the near-end threshold
-is crossed" the PRD calls for (§13.1). Re-watching a completed file from the start
-clears the flag on the next progress write.
+`Position` is reset to `0` when the playhead is parked in the file's final stretch,
+so it neither auto-resumes nor lingers half-watched in continue-watching. That makes
+`Position` alone ambiguous: `0` means **either** "finished" **or** "never started."
+The `Finished` flag disambiguates — it is the "watched flag when the near-end
+threshold is crossed" the PRD calls for (§13.1).
+
+`Finished` latches only when the file **plays through to a natural end-of-file**, not
+from a sampled position — so seeking into the final stretch, or seeking back after the
+credits, does not flip it, and a clip never reads as finished merely by being opened.
+Re-watching a completed file from the start (it reopens at position 0) clears the flag
+once playback progresses.
 
 ## Cadence
 
