@@ -244,12 +244,25 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
+    private bool _audioReady; // suppress the Toggled that fires while we set the initial toggle state
+
     private void LoadAudio()
     {
         int v = App.Settings.Current.DefaultVolume;
         StyleSegment(Vol50, v == 50);
         StyleSegment(Vol75, v == 75);
         StyleSegment(Vol100, v == 100);
+        _audioReady = false;
+        NormalizeToggle.IsOn = App.Settings.Current.AudioNormalization;
+        _audioReady = true;
+    }
+
+    private void OnNormalizeToggled(object sender, RoutedEventArgs e)
+    {
+        if (!_audioReady)
+            return; // reflecting the persisted value, not a user change — don't re-save/re-apply
+        App.Settings.Current.AudioNormalization = NormalizeToggle.IsOn;
+        App.Settings.Save(); // raises Changed → the player applies/removes the audio filter live
     }
 
     private void OnDefaultVolume(object sender, RoutedEventArgs e)

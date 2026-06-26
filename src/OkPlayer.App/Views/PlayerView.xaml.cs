@@ -1267,6 +1267,24 @@ public sealed partial class PlayerView : UserControl
         catch { /* setting a property never blocks startup/open */ }
     }
 
+    /// <summary>Apply loudness normalization (Settings -> Audio) to the engine via an mpv audio filter.
+    /// Live — safe to call any time; a no-op when no engine is up. dynaudnorm evens quiet dialogue and
+    /// loud effects (night mode). Manages only our own labelled filter (<c>@okpnorm</c>) with af
+    /// add/remove, so any filters the user set via raw mpv.conf (the escape hatch) are left intact.</summary>
+    public void ApplyAudioDefaults()
+    {
+        try
+        {
+            if (Video.Engine is { } e)
+            {
+                e.CommandAsync("af", "remove", "@okpnorm"); // drop our prior instance (no-op if absent)
+                if (App.Settings.Current.AudioNormalization)
+                    e.CommandAsync("af", "add", "@okpnorm:dynaudnorm");
+            }
+        }
+        catch { /* an af command never blocks startup/open */ }
+    }
+
     /// <summary>Open a file given on the command line ("Open with"). If the engine isn't up yet, hold it
     /// and open on EngineReady.</summary>
     public void QueueInitialFile(string path)
@@ -1300,6 +1318,7 @@ public sealed partial class PlayerView : UserControl
             Vm.SetSpeed(App.Settings.Current.DefaultSpeed); // every file starts at the default speed, incl. 1x
                                                             // (so a manual speed change doesn't carry over)
             ApplySubtitleDefaults(); // default sub size/position (Settings -> Subtitles)
+            ApplyAudioDefaults();    // loudness normalization (Settings -> Audio)
             LoadBookmarks();       // refresh the panel's bookmarks for the new file (panel may be open)
             LoadUserChapters();    // feed the file's user-added chapters in (merge with the file's own)
             RevealChrome();        // show the controls when a file opens (drag-drop / picker)
