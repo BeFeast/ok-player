@@ -108,7 +108,7 @@ public sealed partial class PlayerView : UserControl
 
         Video.EngineReady += OnEngineReady;
         Video.ScreenshotSaved += (_, _) => DispatcherQueue.TryEnqueue(() => ShowToast("Screenshot saved"));
-        Video.ScreenshotForClipboard += (_, _) => DispatcherQueue.TryEnqueue(() => CopyFrameToClipboard(ClipboardFramePath));
+        Video.ScreenshotForClipboard += (_, _) => DispatcherQueue.TryEnqueue(OnClipboardFrameReady);
         MediaInfoCardView.CloseRequested += (_, _) => CloseMediaInfo();
         MediaInfoCardView.CopyRequested += (_, _) => OnMediaInfoCopy();
         VolumeCtl.Vm = Vm;
@@ -446,31 +446,53 @@ public sealed partial class PlayerView : UserControl
     /// event (i.e. on success).</summary>
     private void DoScreenshot() => Video.Screenshot();
 
-    // The single temp path a clipboard grab writes to; PlayerView owns it (the panel no longer tracks a path).
-    private static string ClipboardFramePath =>
-        System.IO.Path.Combine(System.IO.Path.GetTempPath(), "OkPlayer", "clipboard-frame.png");
+    private int _clipboardSeq;
+    // Each grab gets its own temp file (so a second grab can't overwrite the frame a pending copy hasn't read
+    // yet) and the paths are dequeued in request order — mpv replies for one id arrive FIFO.
+    private readonly System.Collections.Generic.Queue<string> _clipboardPending = new();
 
-    /// <summary>Grab the current frame to a temp file, then copy it onto the Windows clipboard.</summary>
+    /// <summary>Grab the current frame to a unique temp file, then copy it onto the Windows clipboard.</summary>
     private void DoCopyFrame()
     {
-        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(ClipboardFramePath)!);
-        Video.ScreenshotToClipboard(ClipboardFramePath);
+        string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "OkPlayer");
+        System.IO.Directory.CreateDirectory(dir);
+        string path = System.IO.Path.Combine(dir, $"clipboard-frame-{++_clipboardSeq}.png");
+        _clipboardPending.Enqueue(path);
+        Video.ScreenshotToClipboard(path);
     }
 
-    private async void CopyFrameToClipboard(string path)
+    private void OnClipboardFrameReady()
+    {
+        if (_clipboardPending.Count > 0)
+            _ = CopyFrameToClipboard(_clipboardPending.Dequeue());
+    }
+
+    private async System.Threading.Tasks.Task CopyFrameToClipboard(string path)
     {
         try
         {
-            var file = await Windows.Storage.StorageFile.GetFileFromPathAsync(path);
+            // Read the PNG into memory and hand the clipboard an in-memory stream, so the backing temp file can
+            // be deleted immediately and a later grab overwriting/removing it can't change what gets pasted.
+            byte[] bytes = await System.IO.File.ReadAllBytesAsync(path);
+            var ras = new Windows.Storage.Streams.InMemoryRandomAccessStream();
+            using (var writer = new Windows.Storage.Streams.DataWriter(ras))
+            {
+                writer.WriteBytes(bytes);
+                await writer.StoreAsync();
+                await writer.FlushAsync();
+                writer.DetachStream();
+            }
+            ras.Seek(0);
             var data = new Windows.ApplicationModel.DataTransfer.DataPackage
             {
                 RequestedOperation = Windows.ApplicationModel.DataTransfer.DataPackageOperation.Copy,
             };
-            data.SetBitmap(Windows.Storage.Streams.RandomAccessStreamReference.CreateFromFile(file));
+            data.SetBitmap(Windows.Storage.Streams.RandomAccessStreamReference.CreateFromStream(ras));
             Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(data);
             ShowToast("Frame copied to clipboard");
         }
         catch { ShowToast("Couldn't copy the frame"); }
+        finally { try { System.IO.File.Delete(path); } catch { /* best effort */ } }
     }
     private void OnFullscreenClick(object sender, RoutedEventArgs e) => ToggleFullscreenRequested?.Invoke(this, EventArgs.Empty);
 
