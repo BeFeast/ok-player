@@ -597,6 +597,23 @@ public sealed partial class PlayerView : UserControl
         catch { /* another content dialog is already open — ignore the concurrent open */ }
     }
 
+    /// <summary>Copy the current playhead position as a timecode to the clipboard (pairs with Go to time —
+    /// share or note a moment).</summary>
+    private void OnCopyTimeClick(object sender, RoutedEventArgs e)
+    {
+        if (!Vm.HasMedia)
+            return;
+        string tc = OkPlayer.Core.TimeCode.Format(Vm.Position);
+        try
+        {
+            var data = new DataPackage { RequestedOperation = DataPackageOperation.Copy };
+            data.SetText(tc);
+            Clipboard.SetContent(data);
+            ShowToast($"Copied {tc}");
+        }
+        catch { ShowToast("Couldn't copy the time"); }
+    }
+
     private void OnAddBookmarkClick(object sender, RoutedEventArgs e)
     {
         if (_currentPath is { } path && Vm.HasMedia && _history.AddBookmark(path, Vm.Position))
