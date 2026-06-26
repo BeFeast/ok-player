@@ -6,6 +6,10 @@
     <TargetPlatformMinVersion>10.0.22621.0</TargetPlatformMinVersion>
     <RootNamespace>OkPlayer.App</RootNamespace>
     <AssemblyName>OkPlayer</AssemblyName>
+
+    <!-- Single source of truth for the app version. The UI reads it from the assembly (Settings -> About,
+         nav-rail footer); installer/build-installer.ps1 reads it from this csproj so they can't drift. -->
+    <Version>0.7.2</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\OkPlayer.ico</ApplicationIcon>
 

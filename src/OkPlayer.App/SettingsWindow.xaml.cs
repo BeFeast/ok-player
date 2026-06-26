@@ -38,7 +38,22 @@ public sealed partial class SettingsWindow : Window
                 r.ActualThemeChanged -= OnActualThemeChanged;
         };
         LoadAppearance();
+        ShowVersion();
         _loaded = true;
+    }
+
+    /// <summary>Populate the version surfaces: the muted nav-rail footer and the Advanced → About block.
+    /// The mpv engine line is captured off-thread at engine attach (cosmetic) and may be absent.</summary>
+    private void ShowVersion()
+    {
+        string version = App.AppVersion;
+        NavVersionText.Text = string.IsNullOrEmpty(version) ? string.Empty : $"v{version}";
+        AboutVersionText.Text = string.IsNullOrEmpty(version) ? "OK Player" : $"OK Player {version}";
+        string? mpv = App.MpvVersion;
+        if (string.IsNullOrWhiteSpace(mpv))
+            AboutEngineText.Visibility = Visibility.Collapsed;
+        else
+            AboutEngineText.Text = mpv;
     }
 
     private void ApplyTheme()

@@ -18,6 +18,24 @@ public partial class App : Application
     /// "Clear history" from Settings is reflected by the player's recents without a stale second copy.</summary>
     public static HistoryService History { get; } = new();
 
+    /// <summary>App version as Major.Minor.Build, read from the assembly (single-sourced from the csproj
+    /// <c>&lt;Version&gt;</c>). Shown in Settings → Advanced (About) and the Settings nav-rail footer.</summary>
+    public static string AppVersion { get; } = GetAppVersion();
+
+    /// <summary>libmpv's human version string (e.g. "mpv 0.39.0"), captured off-thread when the engine
+    /// attaches; null until then. Cosmetic — read by the Settings About block.</summary>
+    public static string? MpvVersion { get; set; }
+
+    private static string GetAppVersion()
+    {
+        try
+        {
+            var v = typeof(App).Assembly.GetName().Version;
+            return v is null ? string.Empty : $"{v.Major}.{v.Minor}.{v.Build}";
+        }
+        catch { return string.Empty; }
+    }
+
     public App()
     {
         InitializeComponent();

@@ -154,6 +154,20 @@ public partial class PlayerViewModel : ObservableObject
         engine.EndFile += OnEndFile;
         engine.PlaybackRestart += OnPlaybackRestart;
         engine.CommandReply += OnVmCommandReply;
+
+        // Capture libmpv's version once, off the UI thread (a constant property — safe to read off-thread,
+        // and it dodges the render-thread blocking-call guard), for the Settings → Advanced "About" block.
+        if (App.MpvVersion is null)
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                try
+                {
+                    string? v = engine.GetPropertyString("mpv-version");
+                    if (!string.IsNullOrWhiteSpace(v))
+                        App.MpvVersion = v;
+                }
+                catch { /* version is cosmetic — never fault attach over it */ }
+            });
     }
 
     public void Detach()
