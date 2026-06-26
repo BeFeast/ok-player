@@ -1269,15 +1269,20 @@ public sealed partial class PlayerView : UserControl
 
     /// <summary>Apply loudness normalization (Settings -> Audio) to the engine via an mpv audio filter.
     /// Live — safe to call any time; a no-op when no engine is up. dynaudnorm evens quiet dialogue and
-    /// loud effects (night mode). Empty filter string clears it.</summary>
+    /// loud effects (night mode). Manages only our own labelled filter (<c>@okpnorm</c>) with af
+    /// add/remove, so any filters the user set via raw mpv.conf (the escape hatch) are left intact.</summary>
     public void ApplyAudioDefaults()
     {
         try
         {
             if (Video.Engine is { } e)
-                e.SetProperty("af", App.Settings.Current.AudioNormalization ? "dynaudnorm" : "");
+            {
+                e.CommandAsync("af", "remove", "@okpnorm"); // drop our prior instance (no-op if absent)
+                if (App.Settings.Current.AudioNormalization)
+                    e.CommandAsync("af", "add", "@okpnorm:dynaudnorm");
+            }
         }
-        catch { /* setting a property never blocks startup/open */ }
+        catch { /* an af command never blocks startup/open */ }
     }
 
     /// <summary>Open a file given on the command line ("Open with"). If the engine isn't up yet, hold it
