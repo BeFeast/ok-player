@@ -518,6 +518,32 @@ public sealed partial class PlayerView : UserControl
             FitToVideoRequested?.Invoke(this, (Vm.VideoWidth, Vm.VideoHeight));
     }
 
+    // ---- video-plane adjustments (Video submenu) ----
+
+    private void OnAspectClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string ratio })
+        {
+            Vm.SetAspect(ratio);
+            ShowToast(ratio == "no" ? "Aspect: Auto" : $"Aspect: {ratio}");
+        }
+    }
+
+    private void OnRotateClick(object sender, RoutedEventArgs e)
+    {
+        Vm.RotateVideo();
+        ShowToast("Rotated 90°");
+    }
+
+    private void OnFillScreenClick(object sender, RoutedEventArgs e)
+        => ShowToast(Vm.ToggleFillScreen() ? "Fill screen on" : "Fill screen off");
+
+    private void OnResetVideoClick(object sender, RoutedEventArgs e)
+    {
+        Vm.ResetVideoAdjustments();
+        ShowToast("Video reset");
+    }
+
     private void OnAddBookmarkClick(object sender, RoutedEventArgs e)
     {
         if (_currentPath is { } path && Vm.HasMedia && _history.AddBookmark(path, Vm.Position))

@@ -208,6 +208,7 @@ public partial class PlayerViewModel : ObservableObject
         // false->true and re-fires the ready-time chrome reveal / idle countdown.
         HasMedia = false;
         _awaitingSeek = false;
+        ResetVideoAdjustments(force: false); // a rotation/aspect/fill tweak shouldn't carry into the next file
     }
 
     /// <summary>Raised (on the UI thread) when playback reaches the natural end of the current file —
@@ -460,6 +461,51 @@ public partial class PlayerViewModel : ObservableObject
         if (_engine is not { } e)
             return false;
         try { e.CommandAsync(args); return true; } catch (MpvException) { return false; } // true == accepted for dispatch
+    }
+
+    // Video-plane adjustments (menu-driven). Tracked locally because reading the live mpv values on the
+    // UI thread can deadlock a busy core — we own every change, so a local mirror stays in sync.
+    private int _videoRotate;        // 0 / 90 / 180 / 270
+    private bool _fillScreen;        // panscan: crop to fill, removing letterbox/pillar bars
+    private const string AspectAuto = "no"; // mpv's value for "use the file's own aspect" (the default)
+    private string _aspectOverride = AspectAuto;
+
+    /// <summary>Rotate the video plane 90° clockwise (cycles 0 → 90 → 180 → 270 → 0).</summary>
+    public void RotateVideo()
+    {
+        _videoRotate = (_videoRotate + 90) % 360;
+        Set("video-rotate", _videoRotate.ToString(CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>Force a display aspect ratio ("no" restores the file's own); e.g. "16:9", "4:3", "2.35:1".</summary>
+    public void SetAspect(string ratio)
+    {
+        _aspectOverride = ratio;
+        Set("video-aspect-override", ratio);
+    }
+
+    /// <summary>Toggle pan-and-scan fill — crop the video to fill the window, removing black bars. Returns
+    /// the new state so the caller can phrase the toast.</summary>
+    public bool ToggleFillScreen()
+    {
+        _fillScreen = !_fillScreen;
+        Set("panscan", _fillScreen ? 1.0 : 0.0);
+        return _fillScreen;
+    }
+
+    /// <summary>Undo every video-plane adjustment (rotation, aspect override, fill).</summary>
+    public void ResetVideoAdjustments() => ResetVideoAdjustments(force: true);
+
+    private void ResetVideoAdjustments(bool force)
+    {
+        if (!force && _videoRotate == 0 && !_fillScreen && _aspectOverride == AspectAuto)
+            return; // nothing to undo — don't spam the engine on every file open
+        _videoRotate = 0;
+        _fillScreen = false;
+        _aspectOverride = AspectAuto;
+        Set("video-rotate", "0");
+        Set("panscan", 0.0);
+        Set("video-aspect-override", AspectAuto);
     }
 
     private void Set(string name, string value)

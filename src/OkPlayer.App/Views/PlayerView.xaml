@@ -89,6 +89,18 @@
                     <MenuFlyoutItem Text="Fullscreen" Click="OnFullscreenClick" />
                     <MenuFlyoutItem Text="Fit window to video" Click="OnFitToVideoClick" />
                 </MenuFlyoutSubItem>
+                <MenuFlyoutSubItem Text="Video" IsEnabled="{x:Bind Vm.HasMedia, Mode=OneWay}">
+                    <MenuFlyoutSubItem.Icon><FontIcon Glyph="&#xE7F4;" /></MenuFlyoutSubItem.Icon>
+                    <MenuFlyoutSubItem Text="Aspect ratio">
+                        <MenuFlyoutItem Text="Auto" Tag="no" Click="OnAspectClick" />
+                        <MenuFlyoutItem Text="16:9" Tag="16:9" Click="OnAspectClick" />
+                        <MenuFlyoutItem Text="4:3" Tag="4:3" Click="OnAspectClick" />
+                        <MenuFlyoutItem Text="2.35:1" Tag="2.35:1" Click="OnAspectClick" />
+                    </MenuFlyoutSubItem>
+                    <MenuFlyoutItem Text="Rotate 90&#x00B0;" Click="OnRotateClick" />
+                    <MenuFlyoutItem Text="Fill screen (crop bars)" Click="OnFillScreenClick" />
+                    <MenuFlyoutItem Text="Reset video" Click="OnResetVideoClick" />
+                </MenuFlyoutSubItem>
                 <MenuFlyoutItem Text="Open file&#x2026;" Click="OnOpenFromMenu">
                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8E5;" /></MenuFlyoutItem.Icon>
                 </MenuFlyoutItem>
