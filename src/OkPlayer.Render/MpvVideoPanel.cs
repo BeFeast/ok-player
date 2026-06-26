@@ -25,9 +25,10 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
     private bool _renderingHooked;
     private volatile bool _forceRender;
     private TimeSpan _lastRenderTime = TimeSpan.FromSeconds(-1);
+    // Reply ids are shared across this ONE MpvContext (the VM attaches to the same engine): keep them distinct
+    // from PlayerViewModel.SeekReply (= 2) or a reply is read as the wrong command's completion.
     private const ulong ScreenshotReply = 1;
-    private const ulong ClipboardReply = 2; // distinct id so a clipboard grab's reply isn't read as a saved-to-disk one
-    private string? _pendingClipboardPath;
+    private const ulong ClipboardReply = 3;
 
     /// <summary>Raised (on the event thread) when a screenshot has finished saving successfully.</summary>
     public event EventHandler? ScreenshotSaved;
@@ -250,36 +251,32 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
     }
 
     /// <summary>Grab the current frame to <paramref name="path"/> (so the caller can copy it to the clipboard).
-    /// Raises <see cref="ScreenshotForClipboard"/> with the path when the reply confirms the file is written.</summary>
+    /// Raises <see cref="ScreenshotForClipboard"/> when the reply confirms the file is written; the caller owns
+    /// the path it passed, so no path is tracked here (a fresh grab can't strand a prior one's state).</summary>
     public bool ScreenshotToClipboard(string path, bool includeSubtitles = false)
     {
         if (_mpv is not { } mpv)
             return false;
         try
         {
-            _pendingClipboardPath = path;
             mpv.CommandAsync(ClipboardReply, "screenshot-to-file", path, includeSubtitles ? "subtitles" : "video");
             return true;
         }
         catch (MpvException)
         {
-            _pendingClipboardPath = null;
             return false;
         }
     }
 
-    /// <summary>Raised (on the event thread) with the saved path once a clipboard screenshot is written.</summary>
-    public event EventHandler<string>? ScreenshotForClipboard;
+    /// <summary>Raised (on the event thread) once a clipboard screenshot has been written to the caller's path.</summary>
+    public event EventHandler? ScreenshotForClipboard;
 
     private void OnCommandReply(ulong id, bool success)
     {
         if (id == ScreenshotReply && success)
             ScreenshotSaved?.Invoke(this, EventArgs.Empty);
-        else if (id == ClipboardReply && success && _pendingClipboardPath is { } path)
-        {
-            _pendingClipboardPath = null;
-            ScreenshotForClipboard?.Invoke(this, path);
-        }
+        else if (id == ClipboardReply && success)
+            ScreenshotForClipboard?.Invoke(this, EventArgs.Empty);
     }
 
     public void Dispose()

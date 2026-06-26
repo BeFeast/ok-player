@@ -108,7 +108,7 @@ public sealed partial class PlayerView : UserControl
 
         Video.EngineReady += OnEngineReady;
         Video.ScreenshotSaved += (_, _) => DispatcherQueue.TryEnqueue(() => ShowToast("Screenshot saved"));
-        Video.ScreenshotForClipboard += (_, path) => DispatcherQueue.TryEnqueue(() => CopyFrameToClipboard(path));
+        Video.ScreenshotForClipboard += (_, _) => DispatcherQueue.TryEnqueue(() => CopyFrameToClipboard(ClipboardFramePath));
         MediaInfoCardView.CloseRequested += (_, _) => CloseMediaInfo();
         MediaInfoCardView.CopyRequested += (_, _) => OnMediaInfoCopy();
         VolumeCtl.Vm = Vm;
@@ -446,12 +446,15 @@ public sealed partial class PlayerView : UserControl
     /// event (i.e. on success).</summary>
     private void DoScreenshot() => Video.Screenshot();
 
+    // The single temp path a clipboard grab writes to; PlayerView owns it (the panel no longer tracks a path).
+    private static string ClipboardFramePath =>
+        System.IO.Path.Combine(System.IO.Path.GetTempPath(), "OkPlayer", "clipboard-frame.png");
+
     /// <summary>Grab the current frame to a temp file, then copy it onto the Windows clipboard.</summary>
     private void DoCopyFrame()
     {
-        string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "OkPlayer");
-        System.IO.Directory.CreateDirectory(dir);
-        Video.ScreenshotToClipboard(System.IO.Path.Combine(dir, "clipboard-frame.png"));
+        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(ClipboardFramePath)!);
+        Video.ScreenshotToClipboard(ClipboardFramePath);
     }
 
     private async void CopyFrameToClipboard(string path)
