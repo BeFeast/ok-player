@@ -383,13 +383,24 @@
                     <Button Grid.Column="9" Style="{StaticResource OkOscSvgButtonStyle}" ToolTipService.ToolTip="Audio">
                         <FontIcon Glyph="&#xE8D6;" FontSize="19" Foreground="White" />
                         <Button.Flyout>
-                            <Flyout x:Name="AudioFlyout" FlyoutPresenterStyle="{StaticResource OkPopoverFlyoutStyle}" Placement="Top">
+                            <Flyout x:Name="AudioFlyout" FlyoutPresenterStyle="{StaticResource OkPopoverFlyoutStyle}" Placement="Top"
+                                    Opened="OnAudioFlyoutOpened">
                                 <StackPanel Width="272">
                                     <TextBlock Text="Audio" Style="{StaticResource OkBodyStrongTextStyle}" Margin="6,4" />
                                     <ItemsControl ItemsSource="{x:Bind Vm.AudioTracks, Mode=OneWay}">
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate x:DataType="vm:TrackInfo">
                                                 <Button Style="{StaticResource OkSwitcherRowStyle}" Content="{x:Bind Label}" Click="OnAudioTrackClick" />
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <Border Height="1" Margin="8,4" Background="{ThemeResource OkStrokeBrush}" />
+                                    <TextBlock Text="OUTPUT DEVICE" FontSize="11" FontWeight="SemiBold" CharacterSpacing="60"
+                                               Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="6,2,6,4" />
+                                    <ItemsControl ItemsSource="{x:Bind Vm.AudioDevices, Mode=OneWay}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:AudioDevice">
+                                                <Button Style="{StaticResource OkSwitcherRowStyle}" Content="{x:Bind Label}" Click="OnAudioDeviceClick" />
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>
