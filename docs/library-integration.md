@@ -87,7 +87,9 @@ OkPlayer.exe "C:\media\show\s01e03.mkv" --resume=22:22   # m:ss / h:mm:ss also a
 - The given position is honored **verbatim**: it overrides the player's own
   remembered position and bypasses the auto-resume heuristic (the < 5% / last-30s
   skip), because in this flow the library — not the player — decides where to start.
-  It is clamped just shy of the end so a stale over-duration value can't land on EOF.
+  Application waits until the media's duration is known to cover the target (mpv may
+  report a provisional duration first for network/progressive media); a value beyond
+  the media's end is ignored and the file starts from the beginning.
 - `--resume 0` is meaningful: "start from the beginning," overriding a remembered
   position.
 - A malformed or missing value is ignored — the player falls back to its own
