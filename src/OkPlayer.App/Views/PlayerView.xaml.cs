@@ -1042,10 +1042,12 @@ public sealed partial class PlayerView : UserControl
             if (!_thumbs.IsReady)
                 return; // still not ready — give up for now (a later trigger retries)
 
-            // Re-walk while the chapter set keeps changing (embedded chapters land after user ones; edits).
-            while (_chapterWarmDirty && gen == _openGeneration)
+            // Re-walk while the chapter set keeps changing (embedded chapters land after user ones; edits) or a
+            // transient miss wants a retry. Bounded by a pass cap so a frame that always fails can't spin.
+            for (int pass = 0; _chapterWarmDirty && gen == _openGeneration && pass < 4; pass++)
             {
                 _chapterWarmDirty = false;
+                bool missed = false;
                 foreach (var ch in Vm.Chapters.ToList())
                 {
                     if (gen != _openGeneration)
@@ -1056,9 +1058,13 @@ public sealed partial class PlayerView : UserControl
                     string? path = await _thumbs.GetThumbnailAsync(ch.Time + 0.5, () => gen != _openGeneration);
                     if (gen != _openGeneration)
                         return;
-                    if (path is null)
-                        continue; // transient miss — retried on the next trigger (panel open / chapter change)
+                    if (path is null) { missed = true; continue; } // transient miss — retried below
                     ch.Thumbnail = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(path));
+                }
+                if (missed && gen == _openGeneration)
+                {
+                    _chapterWarmDirty = true;                  // retry the frames that transiently failed
+                    await System.Threading.Tasks.Task.Delay(400); // brief backoff so a hard failure can't spin
                 }
             }
         }

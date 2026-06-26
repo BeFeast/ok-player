@@ -48,8 +48,11 @@ public sealed class ThumbnailService : IDisposable
         {
             if (_disposed)
                 return false; // disposed while queued — don't spin up a new engine
-            int gen = ++_generation;
+            // Publish the new file key BEFORE bumping the generation: a concurrent GetThumbnailAsync validates
+            // its cache hit against the generation, so if it saw the bumped generation while the key were still
+            // the previous file's, it could return the old media's frame. Key-first closes that window.
             _fileKey = ComputeFileKey(path);
+            int gen = ++_generation;
             TeardownEngine();
             PruneCache(); // bound the cache; do NOT wipe it — entries are now keyed per file and reused across loads
 
