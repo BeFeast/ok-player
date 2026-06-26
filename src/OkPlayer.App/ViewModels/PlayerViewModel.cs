@@ -36,6 +36,8 @@ public partial class PlayerViewModel : ObservableObject
     [ObservableProperty] private string _mediaTitle = string.Empty;
     [ObservableProperty] private bool _hasMedia;
     [ObservableProperty] private bool _subtitleOff = true;
+    [ObservableProperty] private bool _secondarySubtitleOff = true;
+    [ObservableProperty] private bool _canUseSecondarySubtitle; // ≥2 sub tracks: gates the secondary picker
     [ObservableProperty] private int _subDelayMs;
     [ObservableProperty] private double _subScale = 1.0;
     public string SubScaleText => $"{SubScale * 100:0}%";
@@ -45,6 +47,9 @@ public partial class PlayerViewModel : ObservableObject
     [ObservableProperty] private double _bufferedFraction; // demuxer cache extent, 0..1
 
     public ObservableCollection<TrackInfo> SubtitleTracks { get; } = new();
+    /// <summary>The same subtitle tracks as <see cref="SubtitleTracks"/>, but with selection reflecting the
+    /// SECONDARY slot (mpv <c>secondary-sid</c>) — a second caption shown at the same time, at the top.</summary>
+    public ObservableCollection<TrackInfo> SecondarySubtitleTracks { get; } = new();
     public ObservableCollection<TrackInfo> AudioTracks { get; } = new();
     public ObservableCollection<AudioDevice> AudioDevices { get; } = new();
     public ObservableCollection<ChapterInfo> Chapters { get; } = new();
@@ -112,6 +117,11 @@ public partial class PlayerViewModel : ObservableObject
     partial void OnSpeedChanged(double value) => OnPropertyChanged(nameof(SpeedText));
     partial void OnSubDelayMsChanged(int value) => OnPropertyChanged(nameof(SubDelayText));
     partial void OnSubScaleChanged(double value) => OnPropertyChanged(nameof(SubScaleText));
+    partial void OnCanUseSecondarySubtitleChanged(bool value) => OnPropertyChanged(nameof(SecondarySubtitleVisibility));
+
+    /// <summary>Collapses the secondary-subtitle picker unless the file has ≥2 subtitle tracks.</summary>
+    public Microsoft.UI.Xaml.Visibility SecondarySubtitleVisibility =>
+        CanUseSecondarySubtitle ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
 
     partial void OnCurrentChapterIndexChanged(int value) => ApplyCurrentChapterFlags();
 
@@ -141,6 +151,7 @@ public partial class PlayerViewModel : ObservableObject
             ("time-pos", MpvFormat.Double), ("duration", MpvFormat.Double), ("pause", MpvFormat.Flag),
             ("volume", MpvFormat.Double), ("mute", MpvFormat.Flag), ("speed", MpvFormat.Double),
             ("media-title", MpvFormat.String), ("sid", MpvFormat.String), ("aid", MpvFormat.String),
+            ("secondary-sid", MpvFormat.String),
             ("sub-delay", MpvFormat.Double), ("sub-scale", MpvFormat.Double), ("chapter", MpvFormat.Int64),
             ("dwidth", MpvFormat.Int64), ("dheight", MpvFormat.Int64),
             ("demuxer-cache-time", MpvFormat.Double), ("eof-reached", MpvFormat.Flag),
@@ -191,13 +202,14 @@ public partial class PlayerViewModel : ObservableObject
         // Read track/chapter metadata here (pump thread); marshal only the finished lists to the UI.
         var subs = new List<TrackInfo>();
         var auds = new List<TrackInfo>();
-        bool subOff = ReadTracks(subs, auds);
+        var secondarySubs = new List<TrackInfo>();
+        var (subOff, secondaryOff) = ReadTracks(subs, auds, secondarySubs);
         var chapters = ReadChapters();
         _dispatcher?.TryEnqueue(() =>
         {
             _awaitingSeek = false;
             HasMedia = true;
-            ApplyTracks(subs, auds, subOff);
+            ApplyTracks(subs, auds, subOff, secondarySubs, secondaryOff);
             ApplyChapters(chapters);
             if (CurrentChapterIndex >= Chapters.Count)
                 CurrentChapterIndex = -1; // a shorter/empty new file must not keep the prior index
@@ -251,13 +263,14 @@ public partial class PlayerViewModel : ObservableObject
         if (d is null)
             return;
 
-        if (name is "sid" or "aid")
+        if (name is "sid" or "aid" or "secondary-sid")
         {
             // selection changed: re-read the track list off the UI thread, then apply on it.
             var subs = new List<TrackInfo>();
             var auds = new List<TrackInfo>();
-            bool subOff = ReadTracks(subs, auds);
-            d.TryEnqueue(() => ApplyTracks(subs, auds, subOff));
+            var secondarySubs = new List<TrackInfo>();
+            var (subOff, secondaryOff) = ReadTracks(subs, auds, secondarySubs);
+            d.TryEnqueue(() => ApplyTracks(subs, auds, subOff, secondarySubs, secondaryOff));
             return;
         }
 
@@ -289,39 +302,49 @@ public partial class PlayerViewModel : ObservableObject
 
     // ---- off-thread reads (libmpv's client API is thread-safe; we never touch the render context here) ----
 
-    private bool ReadTracks(List<TrackInfo> subs, List<TrackInfo> auds)
+    private (bool SubOff, bool SecondaryOff) ReadTracks(List<TrackInfo> subs, List<TrackInfo> auds, List<TrackInfo> secondarySubs)
     {
         if (_engine is not { } e)
-            return true;
+            return (true, true);
+        // Resolve selection by id against sid / secondary-sid rather than track-list/selected: a track chosen
+        // as the SECONDARY subtitle also reports selected=yes, which would otherwise mis-check it in the
+        // primary list. Comparing ids keeps each list's checkmark to its own slot.
+        string sid = e.GetPropertyString("sid") ?? "no";
+        string secondarySid = e.GetPropertyString("secondary-sid") ?? "no";
         long count = e.GetPropertyLong("track-list/count") ?? 0;
         for (long i = 0; i < count; i++)
         {
             string? type = e.GetPropertyString($"track-list/{i}/type");
             long id = e.GetPropertyLong($"track-list/{i}/id") ?? 0;
-            bool selected = e.GetPropertyBool($"track-list/{i}/selected") ?? false;
             bool external = e.GetPropertyBool($"track-list/{i}/external") ?? false;
             string? title = e.GetPropertyString($"track-list/{i}/title");
             string? lang = e.GetPropertyString($"track-list/{i}/lang");
             string baseName = !string.IsNullOrEmpty(title) ? title! : !string.IsNullOrEmpty(lang) ? lang! : $"Track {id}";
-            string check = selected ? Glyph(0x2713) + "  " : string.Empty;
 
             if (type == "sub")
             {
+                string idStr = id.ToString(CultureInfo.InvariantCulture);
+                bool isPrimary = sid == idStr;
+                bool isSecondary = secondarySid == idStr;
                 string ext = external ? $"   {Glyph(0x00B7)} EXT" : string.Empty;
-                subs.Add(new TrackInfo { Id = id, Selected = selected, External = external, Label = check + baseName + ext });
+                subs.Add(new TrackInfo { Id = id, Selected = isPrimary, External = external, Label = Check(isPrimary) + baseName + ext });
+                secondarySubs.Add(new TrackInfo { Id = id, Selected = isSecondary, External = external, Label = Check(isSecondary) + baseName + ext });
             }
             else if (type == "audio")
             {
+                bool selected = e.GetPropertyBool($"track-list/{i}/selected") ?? false;
                 var parts = new List<string> { baseName };
                 string? channels = e.GetPropertyString($"track-list/{i}/audio-channels");
                 string? codec = e.GetPropertyString($"track-list/{i}/codec");
                 if (!string.IsNullOrEmpty(channels)) parts.Add(channels!);
                 if (!string.IsNullOrEmpty(codec)) parts.Add(codec!.ToUpperInvariant());
-                auds.Add(new TrackInfo { Id = id, Selected = selected, Label = check + string.Join($" {Glyph(0x00B7)} ", parts) });
+                auds.Add(new TrackInfo { Id = id, Selected = selected, Label = Check(selected) + string.Join($" {Glyph(0x00B7)} ", parts) });
             }
         }
-        return (e.GetPropertyString("sid") ?? "no") == "no";
+        return (sid == "no", secondarySid == "no");
     }
+
+    private static string Check(bool on) => on ? Glyph(0x2713) + "  " : string.Empty;
 
     /// <summary>Refresh the audio output device list off the UI thread (a libmpv property read on the
     /// render/UI thread can deadlock a busy core), then marshal the result onto the dispatcher. Cheap and
@@ -420,13 +443,20 @@ public partial class PlayerViewModel : ObservableObject
         return result;
     }
 
-    private void ApplyTracks(List<TrackInfo> subs, List<TrackInfo> auds, bool subOff)
+    private void ApplyTracks(List<TrackInfo> subs, List<TrackInfo> auds, bool subOff,
+                             List<TrackInfo> secondarySubs, bool secondaryOff)
     {
         SubtitleTracks.Clear();
         foreach (var t in subs) SubtitleTracks.Add(t);
+        SecondarySubtitleTracks.Clear();
+        foreach (var t in secondarySubs) SecondarySubtitleTracks.Add(t);
         AudioTracks.Clear();
         foreach (var t in auds) AudioTracks.Add(t);
         SubtitleOff = subOff;
+        SecondarySubtitleOff = secondaryOff;
+        // A second simultaneous subtitle is only meaningful with at least two tracks (e.g. native + a
+        // learning language); below that, hide the secondary picker entirely to keep the flyout calm.
+        CanUseSecondarySubtitle = subs.Count >= 2;
     }
 
     private List<ChapterInfo> _fileChapters = new();
@@ -730,6 +760,10 @@ public partial class PlayerViewModel : ObservableObject
 
     public void SetSubtitleOff() => Set("sid", "no");
     public void SelectSubtitle(TrackInfo track) => Set("sid", track.Id.ToString(CultureInfo.InvariantCulture));
+
+    // Secondary subtitle (mpv secondary-sid): a second caption shown at once, rendered at the top by default.
+    public void SetSecondarySubtitleOff() => Set("secondary-sid", "no");
+    public void SelectSecondarySubtitle(TrackInfo track) => Set("secondary-sid", track.Id.ToString(CultureInfo.InvariantCulture));
     public void SelectAudio(TrackInfo track) => Set("aid", track.Id.ToString(CultureInfo.InvariantCulture));
 
     // Track selection by raw id — used for launch-time preselection (mpv applies sid/aid as the file loads).

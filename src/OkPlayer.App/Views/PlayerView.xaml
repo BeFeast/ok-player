@@ -380,6 +380,20 @@
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>
+                                    <!-- Secondary subtitle (a second caption shown at once, top of frame) — only when the file has 2+ tracks -->
+                                    <StackPanel Visibility="{x:Bind Vm.SecondarySubtitleVisibility, Mode=OneWay}">
+                                        <Border Height="1" Margin="8,4" Background="{ThemeResource OkStrokeBrush}" />
+                                        <TextBlock Text="Secondary subtitle" FontSize="11.5" FontWeight="SemiBold" CharacterSpacing="40"
+                                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="6,2,6,4" />
+                                        <Button Style="{StaticResource OkSwitcherRowStyle}" Content="Off" Click="OnSecondarySubtitleOffClick" />
+                                        <ItemsControl ItemsSource="{x:Bind Vm.SecondarySubtitleTracks, Mode=OneWay}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:TrackInfo">
+                                                    <Button Style="{StaticResource OkSwitcherRowStyle}" Content="{x:Bind Label}" Click="OnSecondarySubtitleTrackClick" />
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
                                     <Border Height="1" Margin="8,4" Background="{ThemeResource OkStrokeBrush}" />
                                     <Button Style="{StaticResource OkSwitcherRowStyle}" Content="Add subtitle file&#x2026;" Click="OnAddSubtitleFile" />
                                     <Button Style="{StaticResource OkSwitcherRowStyle}" IsEnabled="False"
