@@ -1026,8 +1026,21 @@ public sealed partial class PlayerView : UserControl
             var ready = _thumbReady;
             if (ready is { IsCompleted: false })
                 await ready;
-            if (gen != _openGeneration || !_thumbs.IsReady)
-                return; // a different file is loading, or the engine isn't ready yet — a later trigger retries
+            if (gen != _openGeneration)
+                return; // a different file is loading
+            // If the engine didn't come up (transient open failure / timeout), re-arm it once so a stuck
+            // not-ready state can't blank this file's previews for the whole session. Bounded: a warm only
+            // starts on a trigger (open / panel open / chapter change), so this re-arms at most once per pass.
+            if (!_thumbs.IsReady && _currentPath is { } filePath)
+            {
+                var rearm = _thumbs.OpenAsync(filePath);
+                _thumbReady = rearm;
+                await rearm;
+                if (gen != _openGeneration)
+                    return;
+            }
+            if (!_thumbs.IsReady)
+                return; // still not ready — give up for now (a later trigger retries)
 
             // Re-walk while the chapter set keeps changing (embedded chapters land after user ones; edits).
             while (_chapterWarmDirty && gen == _openGeneration)
