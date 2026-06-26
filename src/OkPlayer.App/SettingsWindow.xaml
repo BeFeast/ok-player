@@ -241,6 +241,14 @@
                         </Border>
                         <TextBlock Text="The volume OK Player starts at when it launches." FontSize="11.5"
                                    Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,8,0,0" />
+
+                        <TextBlock Text="LOUDNESS" FontSize="12" FontWeight="SemiBold" CharacterSpacing="60"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,28,0,10" />
+                        <ToggleSwitch x:Name="NormalizeToggle" OnContent="Even out loud and quiet parts"
+                                      OffContent="Off" Toggled="OnNormalizeToggled" />
+                        <TextBlock Text="Night mode: smooths the gap between quiet dialogue and loud effects so you don't keep reaching for the volume."
+                                   TextWrapping="Wrap" MaxWidth="460" HorizontalAlignment="Left" FontSize="11.5"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,8,0,0" />
                     </StackPanel>
 
                     <!-- Shortcuts (real) — keyboard reference -->

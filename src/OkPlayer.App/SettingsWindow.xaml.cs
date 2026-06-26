@@ -250,6 +250,13 @@ public sealed partial class SettingsWindow : Window
         StyleSegment(Vol50, v == 50);
         StyleSegment(Vol75, v == 75);
         StyleSegment(Vol100, v == 100);
+        NormalizeToggle.IsOn = App.Settings.Current.AudioNormalization;
+    }
+
+    private void OnNormalizeToggled(object sender, RoutedEventArgs e)
+    {
+        App.Settings.Current.AudioNormalization = NormalizeToggle.IsOn;
+        App.Settings.Save(); // raises Changed → the player applies/removes the audio filter live
     }
 
     private void OnDefaultVolume(object sender, RoutedEventArgs e)
