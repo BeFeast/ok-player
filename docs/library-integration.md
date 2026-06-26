@@ -105,8 +105,9 @@ OkPlayer.exe "C:\media\show\s01e03.mkv" --resume 1342 --sub 2 --audio 1
 OkPlayer.exe "C:\media\show\s01e03.mkv" --sub no          # start with subtitles off
 ```
 
-- `--sub <id>` / `--audio <id>` take an **mpv track id** (a non-negative integer, as
-  listed in the track switcher / `track-list`). Also `--sub=<id>` / `--sub:<id>`,
+- `--sub <id>` / `--audio <id>` take an **mpv track id** (a positive integer — mpv
+  track ids are 1-based; `0` is ignored, since mpv reads it as "auto"). Ids are as
+  listed in the track switcher / `track-list`. Also `--sub=<id>` / `--sub:<id>`,
   `-sub`, `/sub`.
 - `--sub no` / `--sub off` (and the audio equivalents) explicitly select **none**.
 - Applied as mpv selects the track on load; a malformed/missing value is ignored.

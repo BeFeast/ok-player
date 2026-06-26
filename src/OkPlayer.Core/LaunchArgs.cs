@@ -16,8 +16,9 @@ public static class LaunchArgs
     /// <returns><c>Files</c>: positional tokens in order (the caller picks the first that is a URL or an
     /// existing file). <c>ResumeSeconds</c>: the parsed <c>--resume</c> value in seconds, or null when absent
     /// or malformed (a resume of 0 is meaningful — "start from the beginning", overriding remembered position).
-    /// <c>Sub</c>/<c>Audio</c>: the <c>--sub</c>/<c>--audio</c> track id to preselect (mpv track id ≥ 0), or
-    /// <c>-1</c> for an explicit <c>no</c>/<c>off</c>, or null when absent/malformed.</returns>
+    /// <c>Sub</c>/<c>Audio</c>: the <c>--sub</c>/<c>--audio</c> track id to preselect (mpv track id ≥ 1, since
+    /// mpv ids are 1-based — 0 is "auto", not a track), or <c>-1</c> for an explicit <c>no</c>/<c>off</c>, or
+    /// null when absent/malformed.</returns>
     public static (IReadOnlyList<string> Files, double? ResumeSeconds, int? Sub, int? Audio) Parse(IReadOnlyList<string>? args)
     {
         var files = new List<string>();
@@ -32,12 +33,14 @@ public static class LaunchArgs
             if (string.IsNullOrEmpty(a))
                 continue;
 
+            // `?? <prev>`: a malformed/missing value yields null but must not wipe an earlier valid one
+            // (e.g. `--sub 2 --sub bad` keeps 2). A later *valid* repeat still wins.
             if (TryMatchOption(a, "resume", out string? inlineValue))
-            { resume = Consume(inlineValue, args, ref i, TimeCode.Parse); continue; }
+            { resume = Consume(inlineValue, args, ref i, TimeCode.Parse) ?? resume; continue; }
             if (TryMatchOption(a, "sub", out inlineValue))
-            { sub = Consume(inlineValue, args, ref i, ParseTrackId); continue; }
+            { sub = Consume(inlineValue, args, ref i, ParseTrackId) ?? sub; continue; }
             if (TryMatchOption(a, "audio", out inlineValue))
-            { audio = Consume(inlineValue, args, ref i, ParseTrackId); continue; }
+            { audio = Consume(inlineValue, args, ref i, ParseTrackId) ?? audio; continue; }
 
             if (a[0] == '-' || a[0] == '/')
                 continue; // an unknown switch — ignore (file associations may append flags)
@@ -63,8 +66,9 @@ public static class LaunchArgs
         return null;
     }
 
-    /// <summary>A track id is a non-negative integer, or <c>no</c>/<c>off</c> (→ -1, "select none"). Anything
-    /// else is null (ignored).</summary>
+    /// <summary>A track id is a positive integer — mpv track ids are 1-based, and <c>0</c> means "auto", not
+    /// a real track, so it (and anything non-numeric) is null/ignored. <c>no</c>/<c>off</c> → -1, "select
+    /// none".</summary>
     private static int? ParseTrackId(string? s)
     {
         if (string.IsNullOrWhiteSpace(s))
@@ -72,7 +76,7 @@ public static class LaunchArgs
         s = s.Trim();
         if (s.Equals("no", StringComparison.OrdinalIgnoreCase) || s.Equals("off", StringComparison.OrdinalIgnoreCase))
             return -1;
-        return int.TryParse(s, NumberStyles.None, CultureInfo.InvariantCulture, out int id) ? id : null;
+        return int.TryParse(s, NumberStyles.None, CultureInfo.InvariantCulture, out int id) && id >= 1 ? id : null;
     }
 
     /// <summary>Matches <c>--name</c>, <c>-name</c> or <c>/name</c> (case-insensitive). When the token carries

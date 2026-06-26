@@ -180,10 +180,35 @@ public class LaunchArgsTests
     public void Parse_AllFlagsTogether()
     {
         var (files, resume, sub, audio) = LaunchArgs.Parse(
-            new[] { "--resume", "1:30", Movie, "--sub", "3", "--audio", "0" });
+            new[] { "--resume", "1:30", Movie, "--sub", "3", "--audio", "2" });
         Assert.Equal(new[] { Movie }, files);
         Assert.Equal(90, resume);
         Assert.Equal(3, sub);
-        Assert.Equal(0, audio);
+        Assert.Equal(2, audio);
+    }
+
+    [Fact]
+    public void Parse_TrackIdZero_IsRejected_BecauseMpvIdsAre1Based()
+    {
+        // mpv reads aid/sid 0 as "auto", not track 0 — so 0 is ignored rather than silently selecting auto.
+        var (_, _, sub, audio) = LaunchArgs.Parse(new[] { Movie, "--sub=0", "--audio=0" });
+        Assert.Null(sub);
+        Assert.Null(audio);
+    }
+
+    [Fact]
+    public void Parse_LaterMalformedRepeat_KeepsEarlierValidValue()
+    {
+        var (_, resume, sub, _) = LaunchArgs.Parse(
+            new[] { Movie, "--resume=90", "--resume=bad", "--sub=2", "--sub=bad" });
+        Assert.Equal(90, resume); // the malformed repeat must not wipe the valid 90
+        Assert.Equal(2, sub);     // nor the valid 2
+    }
+
+    [Fact]
+    public void Parse_LaterValidRepeat_Wins()
+    {
+        var (_, resume, _, _) = LaunchArgs.Parse(new[] { Movie, "--resume=90", "--resume=120" });
+        Assert.Equal(120, resume);
     }
 }

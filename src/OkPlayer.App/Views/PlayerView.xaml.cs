@@ -1531,15 +1531,17 @@ public sealed partial class PlayerView : UserControl
     /// file loads, so this is set once right after open — no per-open latch needed. -1 means "none"/off.</summary>
     private void ApplyLaunchTracks(int? subTrack, int? audioTrack)
     {
+        // -1 = explicit off; >= 1 = a real (1-based) mpv track. 0 would mean "auto" to mpv, so ignore it —
+        // LaunchArgs already rejects 0, this just keeps the apply site self-defending.
         if (subTrack is int s)
         {
             if (s < 0) Vm.SetSubtitleOff();
-            else Vm.SelectSubtitleId(s);
+            else if (s >= 1) Vm.SelectSubtitleId(s);
         }
         if (audioTrack is int a)
         {
             if (a < 0) Vm.SetAudioOff();
-            else Vm.SelectAudioId(a);
+            else if (a >= 1) Vm.SelectAudioId(a);
         }
     }
 
