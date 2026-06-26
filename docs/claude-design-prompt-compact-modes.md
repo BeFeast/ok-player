@@ -2,11 +2,11 @@
 
 You are designing **two compact window modes for OK Player**, the most elegant media player on Windows — native Fluent/Mica refinement at macOS-utility grade, over libmpv. Produce the visual design (design-system extensions + screens + every state) for both modes **together, as one cohesive family**: the **Mini-Player (PiP)** and the **Compact Music Mode**.
 
-This prompt **extends** — never contradicts — two sources of truth:
+This prompt **extends** two sources of truth — and, **for these two compact modes specifically, takes precedence over them at the handful of points where it deliberately diverges.** Those points are few, and each is flagged inline as a **Decision** or a **divergence** (PiP double-click behavior, icon source, toast timing, Acrylic-over-video material); everywhere else the sources below govern unchanged. The two sources:
 - **`docs/OK-Player-PRD.md`** (the product contract; §2.10 Mini-Player, §2.11 Compact Music Mode, §2.3 Compact OSC, §2.13 OSD toasts, §14.0 state matrix + visibility rule, §15 mouse/window behaviors, §16 visual language, P1-D9 OSC-never-overlaps-subtitles, P1-D13/§16.4 window-mode transitions).
 - **`docs/claude-design-prompt.md`** (the main design brief — native Fluent/Mica, **Light + Auto/dark**, teal accent, calm and restrained, IINA-grade restraint + Paste motion).
 
-Read both first. Match their voice, their tokens, and their taste. Where the implemented design system already names a brush, radius, duration, style, or glyph, **reuse it by name**; only invent a new `Ok*` token when nothing existing fits, and say why. Where the PRD's aspirational guidance and the *shipped* system diverge (icon family, timecode style), **extend the shipped reality** and note the divergence — this prompt is called out below at each such seam.
+**Precedence when they collide:** this prompt's flagged Decisions/divergences (for the compact modes) → the shipped design system → `claude-design-prompt.md` → the PRD's aspirational guidance. Read both sources first; match their voice, their tokens, and their taste. Where the implemented design system already names a brush, radius, duration, style, or glyph, **reuse it by name**; only invent a new `Ok*` token when nothing existing fits, and say why. Where the PRD's aspirational guidance and the *shipped* system diverge (icon family, timecode style), **extend the shipped reality** and note the divergence — this prompt calls out each such seam below.
 
 **The four pillars rank every decision when they collide (lower wins):**
 1. **Most elegant design** — the reason someone chooses OK Player. Pillar 1 wins all conflicts.
