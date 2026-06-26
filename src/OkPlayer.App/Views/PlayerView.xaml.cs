@@ -108,7 +108,7 @@ public sealed partial class PlayerView : UserControl
 
         Video.EngineReady += OnEngineReady;
         Video.ScreenshotSaved += (_, _) => DispatcherQueue.TryEnqueue(() => ShowToast("Screenshot saved"));
-        Video.ScreenshotForClipboard += (_, _) => DispatcherQueue.TryEnqueue(OnClipboardFrameReady);
+        Video.ScreenshotForClipboard += (_, ok) => DispatcherQueue.TryEnqueue(() => OnClipboardFrameReady(ok));
         MediaInfoCardView.CloseRequested += (_, _) => CloseMediaInfo();
         MediaInfoCardView.CopyRequested += (_, _) => OnMediaInfoCopy();
         VolumeCtl.Vm = Vm;
@@ -463,10 +463,20 @@ public sealed partial class PlayerView : UserControl
             _clipboardPending.Enqueue(path);
     }
 
-    private void OnClipboardFrameReady()
+    private void OnClipboardFrameReady(bool ok)
     {
-        if (_clipboardPending.Count > 0)
-            _ = CopyFrameToClipboard(_clipboardPending.Dequeue());
+        if (_clipboardPending.Count == 0)
+            return; // one reply per submitted grab keeps this in sync; dequeue regardless of success
+        string path = _clipboardPending.Dequeue();
+        if (ok)
+        {
+            _ = CopyFrameToClipboard(path);
+        }
+        else
+        {
+            try { System.IO.File.Delete(path); } catch { /* never written */ }
+            ShowToast("Couldn't copy the frame");
+        }
     }
 
     private async System.Threading.Tasks.Task CopyFrameToClipboard(string path)

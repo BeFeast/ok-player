@@ -268,15 +268,17 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
         }
     }
 
-    /// <summary>Raised (on the event thread) once a clipboard screenshot has been written to the caller's path.</summary>
-    public event EventHandler? ScreenshotForClipboard;
+    /// <summary>Raised (on the event thread) for EVERY submitted clipboard grab — the bool is whether it wrote
+    /// the file. Fires even on failure so the caller can keep its per-grab bookkeeping (one submit ↔ one reply)
+    /// in sync; a failed reply would otherwise strand the caller's queued path.</summary>
+    public event EventHandler<bool>? ScreenshotForClipboard;
 
     private void OnCommandReply(ulong id, bool success)
     {
         if (id == ScreenshotReply && success)
             ScreenshotSaved?.Invoke(this, EventArgs.Empty);
-        else if (id == ClipboardReply && success)
-            ScreenshotForClipboard?.Invoke(this, EventArgs.Empty);
+        else if (id == ClipboardReply)
+            ScreenshotForClipboard?.Invoke(this, success);
     }
 
     public void Dispose()
