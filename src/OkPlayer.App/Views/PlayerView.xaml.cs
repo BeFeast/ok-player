@@ -164,6 +164,32 @@ public sealed partial class PlayerView : UserControl
     private void OnWelcomeOpenTapped(object sender, TappedRoutedEventArgs e)
         => OpenFileRequested?.Invoke(this, EventArgs.Empty);
 
+    private void OnWelcomeOpenClick(object sender, RoutedEventArgs e)
+        => OpenFileRequested?.Invoke(this, EventArgs.Empty);
+
+    private async void OnOpenUrlClick(object sender, RoutedEventArgs e)
+    {
+        var input = new TextBox { PlaceholderText = "https://…  or  smb://host/share/file.mkv" };
+        var dialog = new ContentDialog
+        {
+            Title = "Open URL",
+            Content = input,
+            PrimaryButtonText = "Open",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = XamlRoot,
+        };
+        try
+        {
+            if (await dialog.ShowAsync() == ContentDialogResult.Primary && !string.IsNullOrWhiteSpace(input.Text))
+                OpenMedia(input.Text.Trim());
+        }
+        catch { /* another content dialog is already open — ignore the concurrent open */ }
+    }
+
+    private void OnHistoryClick(object sender, RoutedEventArgs e)
+        => ShowToast("History view is coming soon");
+
     private void OnEngineReady(object? sender, EventArgs e)
     {
         if (Video.Engine is { } engine)
@@ -541,7 +567,11 @@ public sealed partial class PlayerView : UserControl
             if (Recents.Count >= 6)
                 break;
         }
-        RecentsSection.Visibility = Recents.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        // Two welcome layouts: recents-forward "Continue watching" when there is resumable history,
+        // else the centred first-run hero.
+        bool hasRecents = Recents.Count > 0;
+        WelcomeVariationA.Visibility = hasRecents ? Visibility.Visible : Visibility.Collapsed;
+        WelcomeFirstRun.Visibility = hasRecents ? Visibility.Collapsed : Visibility.Visible;
         _ = GeneratePostersAsync(); // fill any missing posters in the background
     }
 
@@ -1321,8 +1351,9 @@ public sealed partial class PlayerView : UserControl
         e.AcceptedOperation = DataPackageOperation.Copy;
         try
         {
-            e.DragUIOverride.Caption = "Drop to play";
-            e.DragUIOverride.IsCaptionVisible = true;
+            // The custom DragOverlay already shows the accent drop-zone + "Drop to play"; suppress the OS
+            // caption/glyph so the two don't double up.
+            e.DragUIOverride.IsCaptionVisible = false;
             e.DragUIOverride.IsGlyphVisible = false;
         }
         catch { /* override not available on every shell drag — non-fatal */ }
