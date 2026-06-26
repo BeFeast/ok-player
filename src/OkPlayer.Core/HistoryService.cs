@@ -53,8 +53,9 @@ public sealed class HistoryService
     /// </summary>
     public bool Private { get; set; }
 
-    /// <summary>Raised after the store is wiped (<see cref="Clear"/>) so other windows — the player's
-    /// continue-watching recents — can refresh instead of showing stale entries.</summary>
+    /// <summary>Raised after records are removed out-of-band (<see cref="Clear"/> or
+    /// <see cref="PruneOlderThan"/>) so other windows — the player's continue-watching recents — can
+    /// refresh instead of showing stale entries.</summary>
     public event Action? Changed;
 
     public HistoryService()
@@ -284,7 +285,10 @@ public sealed class HistoryService
             removed = stale.Count;
         }
         if (removed > 0)
+        {
             Save();
+            Changed?.Invoke(); // a retention change can prune visible recents — let the player refresh
+        }
         return removed;
     }
 

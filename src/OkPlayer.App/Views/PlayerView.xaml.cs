@@ -121,13 +121,14 @@ public sealed partial class PlayerView : UserControl
             if (_viewUnloaded) return;
             _viewUnloaded = true;
             _saveTimer.Stop();
+            _history.Changed -= OnHistoryChanged; // shared instance outlives the view — don't leak the handler
             SaveProgress();
             System.Threading.Tasks.Task.Run(() => { _thumbs.Dispose(); _posterThumbs.Dispose(); });
         };
         Vm.PropertyChanged += OnVmPropertyChanged;
         Vm.ToastRequested += ShowToast;
-        // "Clear history" can fire from the Settings window — refresh the welcome recents when it does.
-        _history.Changed += () => DispatcherQueue.TryEnqueue(LoadRecents);
+        // "Clear history" / retention prune can fire from the Settings window — refresh when it does.
+        _history.Changed += OnHistoryChanged;
         Vm.EndReached += OnEndReached; // auto-advance the folder playlist when a file plays out
         SetPanelTab(false);            // the right panel opens on the Chapters tab by default
         Vm.Chapters.CollectionChanged += (_, _) =>
@@ -761,6 +762,18 @@ public sealed partial class PlayerView : UserControl
     private void OnMediaInfoClick(object sender, RoutedEventArgs e) => OpenMediaInfo();
 
     private void OnSettingsClick(object sender, RoutedEventArgs e) => SettingsRequested?.Invoke(this, EventArgs.Empty);
+
+    /// <summary>History was cleared or pruned out-of-band (from the Settings window). Refresh the
+    /// welcome recents and, if a file is open, its now-stale bookmarks/user-chapters too.</summary>
+    private void OnHistoryChanged() => DispatcherQueue.TryEnqueue(() =>
+    {
+        LoadRecents();
+        if (_currentPath is not null)
+        {
+            LoadBookmarks();
+            LoadUserChapters();
+        }
+    });
 
     /// <summary>Toggle the incognito session: while on, nothing is written to history (no resume
     /// position, no recents). Session-scoped — resets off on restart. Existing recents stay visible.</summary>
