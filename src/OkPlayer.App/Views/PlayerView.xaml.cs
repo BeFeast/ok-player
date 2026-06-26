@@ -30,7 +30,7 @@ public sealed partial class PlayerView : UserControl
     private bool _syncingChapter;
     private readonly ThumbnailService _thumbs = new();
     private readonly ThumbnailService _posterThumbs = new(); // decode-only engine for continue-watching posters
-    private readonly HistoryService _history = new();
+    private readonly HistoryService _history = App.History; // shared instance; Settings' "Clear history" reflects here
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _saveTimer;
     private string? _currentPath;
     private OkPlayer.Core.Playlist? _playlist; // the opened file's folder, in natural order (null for streams)
@@ -126,6 +126,8 @@ public sealed partial class PlayerView : UserControl
         };
         Vm.PropertyChanged += OnVmPropertyChanged;
         Vm.ToastRequested += ShowToast;
+        // "Clear history" can fire from the Settings window — refresh the welcome recents when it does.
+        _history.Changed += () => DispatcherQueue.TryEnqueue(LoadRecents);
         Vm.EndReached += OnEndReached; // auto-advance the folder playlist when a file plays out
         SetPanelTab(false);            // the right panel opens on the Chapters tab by default
         Vm.Chapters.CollectionChanged += (_, _) =>
@@ -759,6 +761,14 @@ public sealed partial class PlayerView : UserControl
     private void OnMediaInfoClick(object sender, RoutedEventArgs e) => OpenMediaInfo();
 
     private void OnSettingsClick(object sender, RoutedEventArgs e) => SettingsRequested?.Invoke(this, EventArgs.Empty);
+
+    /// <summary>Toggle the incognito session: while on, nothing is written to history (no resume
+    /// position, no recents). Session-scoped — resets off on restart. Existing recents stay visible.</summary>
+    private void OnPrivateModeClick(object sender, RoutedEventArgs e)
+    {
+        _history.Private = PrivateModeToggle.IsChecked;
+        ShowToast(_history.Private ? "Private session on — not saving history" : "Private session off");
+    }
 
     /// <summary>Show (or toggle) the Media-info card. The ~40 property reads run OFF the UI thread (each is a
     /// synchronous mpv_get_property that would deadlock the UI thread against a briefly-busy core); only the

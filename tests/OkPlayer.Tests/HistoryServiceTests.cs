@@ -98,4 +98,77 @@ public class HistoryServiceTests : IDisposable
         first.Title = "mutated by caller";
         Assert.Equal("orig", h.GetUserChapters(Movie).Single().Title);
     }
+
+    [Fact]
+    public void Private_SuppressesAllWrites_AndPersistsNothing()
+    {
+        var h = New();
+        h.Private = true;
+        h.Record(Movie, 120, 600);
+        Assert.False(h.AddBookmark(Movie, 30));
+        Assert.False(h.AddUserChapter(Movie, 40, "x"));
+        h.SetPoster(Movie, @"C:\poster.png");
+
+        Assert.Null(h.Get(Movie));
+        Assert.Empty(h.Recents(10));
+        var fresh = New(); // nothing reached disk
+        Assert.Null(fresh.Get(Movie));
+    }
+
+    [Fact]
+    public void Private_StillReadsExistingHistory_AndAllowsDeletion()
+    {
+        var seed = New();
+        seed.Record(Movie, 90, 600); // recorded normally
+
+        var h = New();
+        h.Private = true;
+        Assert.NotNull(h.Get(Movie));    // existing history stays readable in incognito
+        Assert.Equal(1, h.Clear());      // deletions still apply
+        Assert.Null(h.Get(Movie));
+    }
+
+    [Fact]
+    public void Clear_WipesEverything_AndReturnsCount()
+    {
+        var h = New();
+        h.Record(Movie, 10, 100);
+        h.Record(@"C:\media\other.mkv", 20, 200);
+        Assert.Equal(2, h.Clear());
+        Assert.Empty(h.Recents(10));
+        Assert.Equal(0, h.Clear()); // already empty
+    }
+
+    [Fact]
+    public void PruneOlderThan_ZeroKeepsForever_PositiveDropsStale()
+    {
+        var h = New();
+        h.Record(Movie, 10, 100);
+        // Forge an old timestamp directly on the stored record.
+        h.Get(Movie)!.LastOpenedUtc = DateTime.UtcNow.AddDays(-40).ToString("o");
+
+        Assert.Equal(0, h.PruneOlderThan(0));         // 0 = keep forever
+        Assert.Equal(1, h.PruneOlderThan(30));        // 40 days old > 30 -> pruned
+        Assert.Null(h.Get(Movie));
+    }
+
+    [Fact]
+    public void PruneOlderThan_KeepsUndatedRecords()
+    {
+        var h = New();
+        h.AddBookmark(Movie, 5); // bookmark-first record may carry a timestamp; clear it to simulate undated
+        h.Get(Movie)!.LastOpenedUtc = "";
+        Assert.Equal(0, h.PruneOlderThan(30)); // unparseable timestamp -> kept, not silently dropped
+        Assert.NotNull(h.Get(Movie));
+    }
+
+    [Fact]
+    public void PruneOlderThan_KeepsEntriesWithinWindow()
+    {
+        var h = New();
+        h.Record(Movie, 10, 100);
+        h.Get(Movie)!.LastOpenedUtc = DateTime.UtcNow.AddDays(-5).ToString("o");
+        Assert.Equal(0, h.PruneOlderThan(30)); // 5 days < 30 -> kept
+        Assert.NotNull(h.Get(Movie));
+    }
 }

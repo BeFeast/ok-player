@@ -302,6 +302,30 @@
                             <TextBlock x:Name="AssocStatus" VerticalAlignment="Center" FontSize="12"
                                        Foreground="{ThemeResource OkAccentTextBrush}" />
                         </StackPanel>
+
+                        <TextBlock Text="PRIVACY" FontSize="12" FontWeight="SemiBold" CharacterSpacing="60"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,30,0,10" />
+                        <TextBlock TextWrapping="Wrap" MaxWidth="560" HorizontalAlignment="Left" FontSize="12.5"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}"
+                                   Text="OK Player remembers what you watched so it can resume and show Continue Watching. Use a private session (right-click menu) to watch without recording, set how long history is kept, or clear it now." />
+
+                        <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,16,0,0" VerticalAlignment="Center">
+                            <TextBlock Text="Keep history for" VerticalAlignment="Center" FontSize="12.5" />
+                            <ComboBox x:Name="RetentionCombo" SelectionChanged="OnRetentionChanged" MinWidth="150" FontSize="12.5">
+                                <ComboBoxItem Content="Forever" />
+                                <ComboBoxItem Content="7 days" />
+                                <ComboBoxItem Content="30 days" />
+                                <ComboBoxItem Content="90 days" />
+                                <ComboBoxItem Content="1 year" />
+                            </ComboBox>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,16,0,0" VerticalAlignment="Center">
+                            <Button Content="Clear watch history&#x2026;" Click="OnClearHistory" CornerRadius="7" Padding="14,7"
+                                    FontSize="12.5" FontWeight="SemiBold" />
+                            <TextBlock x:Name="HistoryStatus" VerticalAlignment="Center" FontSize="12"
+                                       Foreground="{ThemeResource OkAccentTextBrush}" />
+                        </StackPanel>
                     </StackPanel>
 
                     <!-- placeholder for the not-yet-built panels -->
