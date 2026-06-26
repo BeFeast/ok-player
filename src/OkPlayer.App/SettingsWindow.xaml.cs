@@ -49,11 +49,25 @@ public sealed partial class SettingsWindow : Window
         string version = App.AppVersion;
         NavVersionText.Text = string.IsNullOrEmpty(version) ? string.Empty : $"v{version}";
         AboutVersionText.Text = string.IsNullOrEmpty(version) ? "OK Player" : $"OK Player {version}";
+        RefreshEngineVersion();
+    }
+
+    /// <summary>Show the libmpv engine line when its version is known, else hide it. The engine attaches
+    /// — and the off-thread <c>mpv-version</c> read completes — only after media starts playing, so this
+    /// is re-run when the Advanced panel (which hosts About) is shown: a version captured after this
+    /// window opened still surfaces, instead of the line staying hidden for the window's lifetime.</summary>
+    private void RefreshEngineVersion()
+    {
         string? mpv = App.MpvVersion;
         if (string.IsNullOrWhiteSpace(mpv))
+        {
             AboutEngineText.Visibility = Visibility.Collapsed;
+        }
         else
+        {
             AboutEngineText.Text = mpv;
+            AboutEngineText.Visibility = Visibility.Visible;
+        }
     }
 
     private void ApplyTheme()
@@ -113,7 +127,10 @@ public sealed partial class SettingsWindow : Window
         PlaceholderPanel.Visibility = (!appearance && !playback && !subtitles && !video && !audio && !shortcuts && !integration && !advanced)
             ? Visibility.Visible : Visibility.Collapsed;
         if (advanced)
+        {
             LoadMpvConf();
+            RefreshEngineVersion(); // pick up a version captured after this window opened
+        }
         else if (integration)
             LoadIntegration();
         else if (playback)
