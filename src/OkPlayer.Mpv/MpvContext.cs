@@ -13,6 +13,11 @@ public sealed class MpvContext : IDisposable
     private MpvHandle _handle;
     private Thread? _eventThread;
     private volatile bool _disposed;
+    // Serializes native handle USE (external reads/commands) against handle DESTRUCTION in Dispose, closing
+    // the check-then-call gap after IsDown so an off-thread caller can't use a freed handle. The event pump
+    // never takes it — it blocks in mpv_wait_event(-1), which would otherwise serialize every call — and
+    // Dispose joins the pump before taking it, so the pump can't race the destroy regardless.
+    private readonly object _handleLock = new();
 
     /// <summary>Raised when a file finishes loading (event data has no payload).</summary>
     public event EventHandler? FileLoaded;
@@ -103,7 +108,12 @@ public sealed class MpvContext : IDisposable
         var argv = new string?[args.Length + 1];
         Array.Copy(args, argv, args.Length);
         argv[args.Length] = null;
-        MpvException.Check(MpvNative.mpv_command(_handle, argv), $"command({string.Join(' ', args)})");
+        lock (_handleLock)
+        {
+            if (IsDown)
+                return;
+            MpvException.Check(MpvNative.mpv_command(_handle, argv), $"command({string.Join(' ', args)})");
+        }
     }
 
     /// <summary>Fire-and-forget command — does not block the caller. Use for actions that may need a
@@ -119,7 +129,12 @@ public sealed class MpvContext : IDisposable
         var argv = new string?[args.Length + 1];
         Array.Copy(args, argv, args.Length);
         argv[args.Length] = null;
-        MpvException.Check(MpvNative.mpv_command_async(_handle, replyUserData, argv), $"command_async({string.Join(' ', args)})");
+        lock (_handleLock)
+        {
+            if (IsDown)
+                return;
+            MpvException.Check(MpvNative.mpv_command_async(_handle, replyUserData, argv), $"command_async({string.Join(' ', args)})");
+        }
     }
 
     // Async: a synchronous mpv_command("loadfile") blocks the caller until the core accepts it, which
@@ -143,11 +158,16 @@ public sealed class MpvContext : IDisposable
         if (IsDown)
             return null;
         GuardBlockingCall("get " + name);
-        IntPtr ptr = MpvNative.mpv_get_property_string_raw(_handle, name);
-        if (ptr == IntPtr.Zero)
-            return null;
-        try { return Marshal.PtrToStringUTF8(ptr); }
-        finally { MpvNative.mpv_free(ptr); } // mpv owns the heap string — free it (fixes reference leak)
+        lock (_handleLock)
+        {
+            if (IsDown)
+                return null;
+            IntPtr ptr = MpvNative.mpv_get_property_string_raw(_handle, name);
+            if (ptr == IntPtr.Zero)
+                return null;
+            try { return Marshal.PtrToStringUTF8(ptr); }
+            finally { MpvNative.mpv_free(ptr); } // mpv owns the heap string — free it (fixes reference leak)
+        }
     }
 
     public double? GetPropertyDouble(string name)
@@ -155,7 +175,12 @@ public sealed class MpvContext : IDisposable
         if (IsDown)
             return null;
         GuardBlockingCall("get " + name);
-        return MpvNative.mpv_get_property_double(_handle, name, MpvFormat.Double, out double v) == MpvError.Success ? v : null;
+        lock (_handleLock)
+        {
+            if (IsDown)
+                return null;
+            return MpvNative.mpv_get_property_double(_handle, name, MpvFormat.Double, out double v) == MpvError.Success ? v : null;
+        }
     }
 
     public long? GetPropertyLong(string name)
@@ -163,7 +188,12 @@ public sealed class MpvContext : IDisposable
         if (IsDown)
             return null;
         GuardBlockingCall("get " + name);
-        return MpvNative.mpv_get_property_long(_handle, name, MpvFormat.Int64, out long v) == MpvError.Success ? v : null;
+        lock (_handleLock)
+        {
+            if (IsDown)
+                return null;
+            return MpvNative.mpv_get_property_long(_handle, name, MpvFormat.Int64, out long v) == MpvError.Success ? v : null;
+        }
     }
 
     public bool? GetPropertyBool(string name)
@@ -171,7 +201,12 @@ public sealed class MpvContext : IDisposable
         if (IsDown)
             return null;
         GuardBlockingCall("get " + name);
-        return MpvNative.mpv_get_property_flag(_handle, name, MpvFormat.Flag, out int v) == MpvError.Success ? v != 0 : null;
+        lock (_handleLock)
+        {
+            if (IsDown)
+                return null;
+            return MpvNative.mpv_get_property_flag(_handle, name, MpvFormat.Flag, out int v) == MpvError.Success ? v != 0 : null;
+        }
     }
 
     public void ObserveProperty(string name, MpvFormat format = MpvFormat.None)
@@ -245,9 +280,14 @@ public sealed class MpvContext : IDisposable
             bool pumpExited = _eventThread is null || _eventThread.Join(TimeSpan.FromSeconds(5));
             if (pumpExited)
             {
-                // Safe to destroy: the pump has returned and will not touch the handle again.
-                MpvNative.mpv_terminate_destroy(_handle);
-                _handle = default;
+                // Pump has returned; take the handle lock so we can't destroy while an external read/command
+                // is mid-native-call (the join above is outside the lock, so the render thread never blocks
+                // on a call held across the multi-second join).
+                lock (_handleLock)
+                {
+                    MpvNative.mpv_terminate_destroy(_handle);
+                    _handle = default;
+                }
             }
             // If the pump is still stuck, leak the handle rather than risk a use-after-free.
         }
