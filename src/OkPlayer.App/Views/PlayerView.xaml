@@ -83,7 +83,7 @@
                 <MenuFlyoutItem Text="Go to time&#x2026;" Click="OnGoToTimeClick">
                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE823;" /></MenuFlyoutItem.Icon>
                 </MenuFlyoutItem>
-                <MenuFlyoutItem Text="Copy current time" Click="OnCopyTimeClick">
+                <MenuFlyoutItem Text="Copy current time" Click="OnCopyTimeClick" IsEnabled="{x:Bind Vm.HasMedia, Mode=OneWay}">
                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
                 </MenuFlyoutItem>
                 <MenuFlyoutSeparator />

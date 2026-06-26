@@ -36,6 +36,8 @@ public class TimeCodeTests
     [InlineData(5025, "1:23:45")]
     [InlineData(0, "0:00")]
     [InlineData(-3, "0:00")]   // clamps negatives
+    [InlineData(83.7, "1:23")] // truncates, not rounds — matches the on-screen clock
+    [InlineData(59.9, "0:59")]
     public void Format_RendersTimecode(double seconds, string expected)
         => Assert.Equal(expected, TimeCode.Format(seconds));
 
