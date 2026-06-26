@@ -48,8 +48,11 @@ public sealed class ThumbnailService : IDisposable
         {
             if (_disposed)
                 return false; // disposed while queued — don't spin up a new engine
-            int gen = ++_generation;
+            // Publish the new file key BEFORE bumping the generation: a concurrent GetThumbnailAsync validates
+            // its cache hit against the generation, so if it saw the bumped generation while the key were still
+            // the previous file's, it could return the old media's frame. Key-first closes that window.
             _fileKey = ComputeFileKey(path);
+            int gen = ++_generation;
             TeardownEngine();
             PruneCache(); // bound the cache; do NOT wipe it — entries are now keyed per file and reused across loads
 
@@ -94,14 +97,19 @@ public sealed class ThumbnailService : IDisposable
 
     public async Task<string?> GetThumbnailAsync(double timeSeconds, Func<bool>? isStale)
     {
-        if (_disposed || !_fileReady)
+        if (_disposed)
             return null;
         int gen = _generation;
         string fileKey = _fileKey; // capture together so a mid-call file switch is caught by the gen check below
         long bucketSec = (long)Math.Max(0, timeSeconds); // 1-second thumbnail granularity
         string file = Path.Combine(_tempDir, $"{fileKey}_t{bucketSec}.png");
-        if (File.Exists(file))
+        // Probe the disk cache BEFORE the engine-ready gate: a reopened file serves its persisted thumbnails
+        // instantly, without waiting (seconds) for the decode engine to spin up and load the file. Re-check
+        // the generation so a file switched in mid-call never returns the previous file's cached frame.
+        if (fileKey != "0" && gen == _generation && File.Exists(file))
             return file; // cache hit — no seek (persists across loads and sessions: same file -> same key)
+        if (!_fileReady || gen != _generation)
+            return null; // miss and the engine isn't loaded yet (or the file switched) — nothing to generate
 
         try { await _gate.WaitAsync().ConfigureAwait(false); }
         catch (ObjectDisposedException) { return null; } // disposed while queued

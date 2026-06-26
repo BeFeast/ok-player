@@ -47,7 +47,10 @@ public sealed partial class PlayerView : UserControl
     public ObservableCollection<BookmarkEntry> Bookmarks { get; } = new();
     private int _previewToken; // ignores stale async thumbnail results
     private bool _viewUnloaded; // guards against duplicate Unloaded disposing the thumbnail engine twice
-    private bool _generatingChapters; // prevents overlapping chapter-thumbnail passes
+    private int _openGeneration;      // bumps per file open; a stale chapter-warm pass bails on mismatch
+    private bool _chapterWarmBusy;     // a chapter-thumbnail warm pass is running (single-flight)
+    private bool _chapterWarmDirty;    // the chapter set changed (or a retry is wanted) — re-walk it
+    private System.Threading.Tasks.Task<bool>? _thumbReady; // resolves when the decode engine has the current file
 
     public PlayerViewModel Vm { get; } = new();
 
@@ -123,7 +126,13 @@ public sealed partial class PlayerView : UserControl
         Vm.ToastRequested += ShowToast;
         Vm.EndReached += OnEndReached; // auto-advance the folder playlist when a file plays out
         SetPanelTab(false);            // the right panel opens on the Chapters tab by default
-        Vm.Chapters.CollectionChanged += (_, _) => UpdateChaptersEmpty(); // seek-bar ticks bind Vm.ChapterFractions
+        Vm.Chapters.CollectionChanged += (_, _) =>
+        {
+            UpdateChaptersEmpty(); // seek-bar ticks bind Vm.ChapterFractions
+            // Re-warm when the chapter set changes (embedded chapters arriving after user ones, edits, …).
+            // Defer so a multi-step rebuild (clear + N adds) settles before we snapshot the list.
+            DispatcherQueue.TryEnqueue(WarmChapterThumbnails);
+        };
         PanelHideSb.Completed += (_, _) => ChaptersPanel.Visibility = Visibility.Collapsed;
         // Handle keys on the UserControl itself (a Control holds focus reliably, unlike a Grid).
         KeyDown += OnRootKeyDown;
@@ -968,7 +977,7 @@ public sealed partial class PlayerView : UserControl
             ChaptersPanel.Visibility = Visibility.Visible;
             PanelShowSb.Begin();
             RevealChrome(); // an open panel pins the chrome
-            _ = GenerateChapterThumbnailsAsync(); // fill in chapter previews lazily
+            WarmChapterThumbnails(); // ensure previews are filling (usually already warmed on open)
         }
         else
         {
@@ -993,32 +1002,81 @@ public sealed partial class PlayerView : UserControl
         ChaptersSectionHeader.Text = $"CHAPTERS · {n}";
     }
 
-    private async System.Threading.Tasks.Task GenerateChapterThumbnailsAsync()
+    /// <summary>Request a background chapter-thumbnail warm for the current file. Coalesces: marks the
+    /// chapter set dirty and starts a pass only if one isn't already running. Runs whether or not the panel
+    /// is open, so the cache fills preemptively and a reopened file — or a freshly opened panel — shows its
+    /// chapter previews instantly. Re-fired on open, on chapter changes, and on panel open.</summary>
+    private void WarmChapterThumbnails()
     {
-        if (!Vm.HasMedia || _generatingChapters)
-            return;
-        _generatingChapters = true;
+        _chapterWarmDirty = true;
+        if (_chapterWarmBusy)
+            return; // a pass is running; it will pick up the dirty flag and re-walk the list
+        _ = RunChapterWarmAsync(_openGeneration);
+    }
+
+    private async System.Threading.Tasks.Task RunChapterWarmAsync(int gen)
+    {
+        _chapterWarmBusy = true;
         try
         {
-            // The thumbnail engine opens the file asynchronously; if the panel opened first, wait for
-            // it to become ready (up to ~10s) so the thumbnails still fill in rather than silently no-op.
-            for (int i = 0; i < 67 && !_thumbs.IsReady && _panelOpen; i++)
-                await System.Threading.Tasks.Task.Delay(150);
-
-            foreach (var ch in Vm.Chapters.ToList())
+            // Wait for THIS file's decode engine to finish loading: await the open task only while it's still
+            // in flight (so a warm that starts mid-switch can't grab the previous file's frames), then gate on
+            // the LIVE readiness flag — never on the task's one-shot result, which would pin a transient
+            // failure and lock out every later retry for this file.
+            var ready = _thumbReady;
+            if (ready is { IsCompleted: false })
+                await ready;
+            if (gen != _openGeneration)
+                return; // a different file is loading
+            // If the engine didn't come up (transient open failure / timeout), re-arm it once so a stuck
+            // not-ready state can't blank this file's previews for the whole session. Bounded: a warm only
+            // starts on a trigger (open / panel open / chapter change), so this re-arms at most once per pass.
+            if (!_thumbs.IsReady && _currentPath is { } filePath)
             {
-                if (!_panelOpen)
-                    break; // panel closed — stop generating (cached thumbs remain for next open)
-                if (ch.Thumbnail is not null)
-                    continue;
-                string? path = await _thumbs.GetThumbnailAsync(ch.Time + 0.5, () => !_panelOpen); // a hair past the boundary
-                if (path is null || !_panelOpen)
-                    continue;
-                ch.Thumbnail = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(path));
+                var rearm = _thumbs.OpenAsync(filePath);
+                _thumbReady = rearm;
+                await rearm;
+                if (gen != _openGeneration)
+                    return;
+            }
+            if (!_thumbs.IsReady)
+                return; // still not ready — give up for now (a later trigger retries)
+
+            // Re-walk while the chapter set keeps changing (embedded chapters land after user ones; edits) or a
+            // transient miss wants a retry. Bounded by a pass cap so a frame that always fails can't spin.
+            for (int pass = 0; _chapterWarmDirty && gen == _openGeneration && pass < 4; pass++)
+            {
+                _chapterWarmDirty = false;
+                bool missed = false;
+                foreach (var ch in Vm.Chapters.ToList())
+                {
+                    if (gen != _openGeneration)
+                        return; // a different file is loading — its own pass takes over
+                    if (ch.Thumbnail is not null)
+                        continue;
+                    // a hair past the boundary so the frame is the chapter's content, not the cut
+                    string? path = await _thumbs.GetThumbnailAsync(ch.Time + 0.5, () => gen != _openGeneration);
+                    if (gen != _openGeneration)
+                        return;
+                    if (path is null) { missed = true; continue; } // transient miss — retried below
+                    ch.Thumbnail = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(path));
+                }
+                if (missed && gen == _openGeneration)
+                {
+                    _chapterWarmDirty = true;                  // retry the frames that transiently failed
+                    await System.Threading.Tasks.Task.Delay(400); // brief backoff so a hard failure can't spin
+                }
             }
         }
-        catch { /* transient — leave remaining thumbnails null (retried on next panel open) */ }
-        finally { _generatingChapters = false; }
+        catch { /* transient — remaining thumbnails stay null (retried on next open / panel open) */ }
+        finally
+        {
+            _chapterWarmBusy = false;
+            // A newer file arrived while we were busy and our pass bailed on the generation check — hand off
+            // to it. Guarded by the generation change so this can't loop on the same file's transient misses.
+            if (_chapterWarmDirty && _openGeneration != gen)
+                WarmChapterThumbnails();
+        }
     }
 
     // ---- overflow ----  (the volume control owns its own mute / drag / scroll / type interactions)
@@ -1082,6 +1140,7 @@ public sealed partial class PlayerView : UserControl
             Video.Open(pathOrUrl); // may throw on engine-init failure — do this before mutating UI state
             Vm.OnOpening();        // load accepted: clear the prior file's playhead/duration/chapter/HasMedia
             _currentPath = pathOrUrl;
+            _openGeneration++;     // invalidate any in-flight chapter-warm pass for the previous file
             // resume only when the user keeps that on (Settings -> Playback); applied on the first Duration
             _resumeTarget = (App.Settings.Current.ResumePlayback ? _history.Get(pathOrUrl)?.Position : null) ?? -1;
             Vm.SetSpeed(App.Settings.Current.DefaultSpeed); // every file starts at the default speed, incl. 1x
@@ -1090,7 +1149,8 @@ public sealed partial class PlayerView : UserControl
             LoadBookmarks();       // refresh the panel's bookmarks for the new file (panel may be open)
             LoadUserChapters();    // feed the file's user-added chapters in (merge with the file's own)
             RevealChrome();        // show the controls when a file opens (drag-drop / picker)
-            _ = _thumbs.OpenAsync(pathOrUrl); // arm the seek-preview engine for this file (fire-and-forget)
+            _thumbReady = _thumbs.OpenAsync(pathOrUrl); // arm the seek-preview engine; the warm awaits this task
+            WarmChapterThumbnails();           // preemptively fill the chapter-thumbnail cache in the background
             UpdatePlaylist(pathOrUrl);        // (re)build the folder-as-playlist around this file
         }
         catch (Exception)
