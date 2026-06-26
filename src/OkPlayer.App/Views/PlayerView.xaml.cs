@@ -583,6 +583,13 @@ public sealed partial class PlayerView : UserControl
                 ShowToast("Enter a time like 1:23:45");
                 return;
             }
+            // The file can end / fail / be replaced while the dialog is open — re-check before seeking so
+            // we don't divide by a now-zero duration or claim a jump that didn't happen.
+            if (!Vm.HasMedia || !double.IsFinite(Vm.Duration) || Vm.Duration <= 0)
+            {
+                ShowToast("No video to seek");
+                return;
+            }
             double target = Math.Clamp(seconds, 0, Vm.Duration);
             Vm.SeekToFraction(target / Vm.Duration);
             ShowToast($"Jumped to {FormatPreviewTime(target)}");
