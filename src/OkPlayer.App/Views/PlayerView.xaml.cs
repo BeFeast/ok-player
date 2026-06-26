@@ -1042,6 +1042,37 @@ public sealed partial class PlayerView : UserControl
 
     private void OnSubtitleOffClick(object sender, RoutedEventArgs e) { Vm.SetSubtitleOff(); SubtitleFlyout.Hide(); RevealChrome(); }
 
+    /// <summary>Raised when the user asks to load an external subtitle file; the owning window shows the
+    /// picker (it holds the HWND) and calls <see cref="AddSubtitle"/> back.</summary>
+    public event EventHandler? AddSubtitleRequested;
+
+    private void OnAddSubtitleFile(object sender, RoutedEventArgs e)
+    {
+        SubtitleFlyout.Hide();
+        if (!Vm.HasMedia)
+        {
+            ShowToast("Open a video first");
+            return;
+        }
+        AddSubtitleRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Load an external subtitle file into the running engine and select it. mpv's sub-add with
+    /// "select" flips <c>sid</c>, which re-reads the track list, so the new track appears in the switcher.</summary>
+    public void AddSubtitle(string path)
+    {
+        try
+        {
+            if (Video.Engine is { } engine && !string.IsNullOrEmpty(path))
+            {
+                engine.CommandAsync("sub-add", path, "select");
+                ShowToast($"Subtitles added: {System.IO.Path.GetFileName(path)}");
+                RevealChrome();
+            }
+        }
+        catch { ShowToast("Couldn't add subtitles"); }
+    }
+
     private void OnSubtitleTrackClick(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement { DataContext: TrackInfo track })
@@ -1625,7 +1656,13 @@ public sealed partial class PlayerView : UserControl
             var items = await e.DataView.GetStorageItemsAsync();
             var file = items.OfType<StorageFile>().FirstOrDefault();
             if (file is not null)
-                OpenMedia(file.Path);
+            {
+                // A subtitle dropped onto a playing video loads as a track rather than replacing the media.
+                if (Vm.HasMedia && OkPlayer.Core.MediaFormats.IsSubtitle(file.Path))
+                    AddSubtitle(file.Path);
+                else
+                    OpenMedia(file.Path);
+            }
             else if (items.Count > 0)
                 ShowToast("Drop a media file"); // folder / non-file drop: feedback instead of silence
         }

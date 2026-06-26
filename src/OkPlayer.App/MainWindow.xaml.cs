@@ -31,6 +31,7 @@ public sealed partial class MainWindow : Window
         // re-cover the island top edge if WinUI re-lays it out while full screen (e.g. a DPI/size change)
         AppWindow.Changed += (_, args) => { if (_fullscreen && args.DidSizeChange) DispatcherQueue.TryEnqueue(CoverIslandTopEdge); };
         Player.OpenFileRequested += async (_, _) => await OpenFileAsync();
+        Player.AddSubtitleRequested += async (_, _) => await AddSubtitleAsync();
         Player.FitToVideoRequested += (_, size) => FitToVideo(size.Width, size.Height);
         Player.SettingsRequested += (_, _) => OpenSettings();
         Player.SavePlaylistRequested += async (_, content) => await SavePlaylistAsync(content);
@@ -299,6 +300,24 @@ public sealed partial class MainWindow : Window
             var file = await picker.PickSingleFileAsync();
             if (file is not null)
                 Player.OpenMedia(file.Path); // OpenMedia is itself non-throwing
+        }
+        catch (Exception)
+        {
+            // Picker failure is non-fatal; swallow so the async-void caller can't crash the app.
+        }
+    }
+
+    private async Task AddSubtitleAsync()
+    {
+        var picker = new FileOpenPicker { SuggestedStartLocation = PickerLocationId.VideosLibrary };
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+        foreach (var ext in MediaFormats.SubtitleExtensions)
+            picker.FileTypeFilter.Add(ext);
+        try
+        {
+            var file = await picker.PickSingleFileAsync();
+            if (file is not null)
+                Player.AddSubtitle(file.Path);
         }
         catch (Exception)
         {
