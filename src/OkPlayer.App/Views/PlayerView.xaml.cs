@@ -523,7 +523,12 @@ public sealed partial class PlayerView : UserControl
     /// (it holds the AppWindow and tracks the mode); raised as a plain toggle, like fullscreen.</summary>
     public event EventHandler? MiniPlayerRequested;
 
-    private void OnMiniPlayerClick(object sender, RoutedEventArgs e) => MiniPlayerRequested?.Invoke(this, EventArgs.Empty);
+    private void OnMiniPlayerClick(object sender, RoutedEventArgs e)
+    {
+        if (!Vm.HasMedia)
+            return; // the menu items are IsEnabled-bound to HasMedia, but guard here too: never enter PiP on the welcome screen
+        MiniPlayerRequested?.Invoke(this, EventArgs.Empty);
+    }
 
     private void OnFitToVideoClick(object sender, RoutedEventArgs e)
     {
