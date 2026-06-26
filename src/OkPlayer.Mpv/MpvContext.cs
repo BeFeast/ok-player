@@ -89,8 +89,15 @@ public sealed class MpvContext : IDisposable
                 "commands via CommandAsync, set properties via SetProperty (async), or read off the UI thread.");
     }
 
+    /// <summary>True once the engine is torn down (or its handle invalid). Public calls short-circuit on it
+    /// so a command/read racing disposal — e.g. an off-thread property read still in flight when the view
+    /// unloads — can't pass a freed mpv handle to libmpv and crash.</summary>
+    private bool IsDown => _disposed || !_handle.IsValid;
+
     public void Command(params string[] args)
     {
+        if (IsDown)
+            return;
         GuardBlockingCall("command");
         // mpv_command wants a NULL-terminated argv.
         var argv = new string?[args.Length + 1];
@@ -107,6 +114,8 @@ public sealed class MpvContext : IDisposable
     /// <summary>Async command tagged with <paramref name="replyUserData"/>, echoed back via <see cref="CommandReply"/> when it finishes.</summary>
     public void CommandAsync(ulong replyUserData, params string[] args)
     {
+        if (IsDown)
+            return;
         var argv = new string?[args.Length + 1];
         Array.Copy(args, argv, args.Length);
         argv[args.Length] = null;
@@ -131,6 +140,8 @@ public sealed class MpvContext : IDisposable
 
     public string? GetPropertyString(string name)
     {
+        if (IsDown)
+            return null;
         GuardBlockingCall("get " + name);
         IntPtr ptr = MpvNative.mpv_get_property_string_raw(_handle, name);
         if (ptr == IntPtr.Zero)
@@ -141,18 +152,24 @@ public sealed class MpvContext : IDisposable
 
     public double? GetPropertyDouble(string name)
     {
+        if (IsDown)
+            return null;
         GuardBlockingCall("get " + name);
         return MpvNative.mpv_get_property_double(_handle, name, MpvFormat.Double, out double v) == MpvError.Success ? v : null;
     }
 
     public long? GetPropertyLong(string name)
     {
+        if (IsDown)
+            return null;
         GuardBlockingCall("get " + name);
         return MpvNative.mpv_get_property_long(_handle, name, MpvFormat.Int64, out long v) == MpvError.Success ? v : null;
     }
 
     public bool? GetPropertyBool(string name)
     {
+        if (IsDown)
+            return null;
         GuardBlockingCall("get " + name);
         return MpvNative.mpv_get_property_flag(_handle, name, MpvFormat.Flag, out int v) == MpvError.Success ? v != 0 : null;
     }

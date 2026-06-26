@@ -71,6 +71,23 @@ public class MpvThreadGuardTests
     }
 
     [Fact]
+    public void CallsAfterDispose_AreNoOps_NotCrashes()
+    {
+        var ctx = new MpvContext();
+        ctx.Initialize();
+        ctx.Dispose();
+
+        // After teardown, reads/commands must short-circuit instead of passing a freed handle to libmpv
+        // (the disposal race an off-thread device read or a late device-switch click could otherwise hit).
+        Assert.Null(ctx.GetPropertyLong("audio-device-list/count"));
+        Assert.Null(ctx.GetPropertyString("audio-device"));
+        Assert.Null(ctx.GetPropertyDouble("volume"));
+        Assert.Null(ctx.GetPropertyBool("pause"));
+        Assert.Null(Record.Exception(() => ctx.SetProperty("audio-device", "auto")));
+        Assert.Null(Record.Exception(() => ctx.CommandAsync("af", "remove", "@okpnorm")));
+    }
+
+    [Fact]
     public void BlockingReads_FromOtherThreads_AreAllowed()
     {
         using var ctx = new MpvContext();
