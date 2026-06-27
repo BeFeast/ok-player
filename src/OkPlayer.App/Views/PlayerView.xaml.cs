@@ -350,10 +350,23 @@ public sealed partial class PlayerView : UserControl
             TitleChrome.IsHitTestVisible = true;
             BottomChrome.IsHitTestVisible = true;
             ChromeShowSb.Begin();
-            Vm.SetSubtitleMargin(true); // lift subtitles above the OSC
+            Vm.ApplySubtitlePosition(App.Settings.Current.SubtitlePosition, ComputeOscLift()); // lift subtitles above the OSC
         }
         ResetIdleTimer();
     }
+
+    /// <summary>The sub-pos lift (percentage points) that clears the OSC for the current surface size. sub-pos
+    /// is a percentage of render height but the OSC pill is a fixed device-independent height, so a constant
+    /// percentage is too few pixels on a small surface (mini-player, a tiny window). Convert the OSC's fixed
+    /// DIP clearance into the needed percentage, floored at the tuned large-window value. See
+    /// <see cref="OkPlayer.Core.SubtitleLift"/>.</summary>
+    private double ComputeOscLift()
+        => OkPlayer.Core.SubtitleLift.ForSurface(ActualHeight, OscClearanceDip, PlayerViewModel.OscSubtitleLift);
+
+    // The OSC pill is anchored to the bottom of the player surface at a fixed device-independent height
+    // (Margin 16,0,16,18 + Padding 18,11 + the ~32px control row → its top is ~72 DIP up); lift captions a
+    // little past that so they never touch the controls.
+    private const double OscClearanceDip = 88;
 
     private void HideChrome()
     {
@@ -372,7 +385,7 @@ public sealed partial class PlayerView : UserControl
         TitleChrome.IsHitTestVisible = false;
         BottomChrome.IsHitTestVisible = false;
         ChromeHideSb.Begin();
-        Vm.SetSubtitleMargin(false); // drop subtitles back toward the bottom
+        Vm.ApplySubtitlePosition(App.Settings.Current.SubtitlePosition, 0); // drop subtitles back to the user's position
     }
 
     private void ResetIdleTimer()
@@ -1494,7 +1507,9 @@ public sealed partial class PlayerView : UserControl
             if (Video.Engine is { } e)
             {
                 e.SetProperty("sub-scale", App.Settings.Current.SubtitleScale);
-                e.SetProperty("sub-pos", (double)App.Settings.Current.SubtitlePosition);
+                // sub-pos is owned by the OSC-lift (it both positions and lifts subtitles); re-apply it for
+                // the current chrome state so a live position change keeps the lift consistent.
+                Vm.ApplySubtitlePosition(App.Settings.Current.SubtitlePosition, _chromeVisible ? ComputeOscLift() : 0);
             }
         }
         catch { /* setting a property never blocks startup/open */ }

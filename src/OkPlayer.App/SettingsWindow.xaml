@@ -295,6 +295,8 @@
                         <TextBlock x:Name="AboutVersionText" FontSize="13.5" FontWeight="SemiBold" />
                         <TextBlock x:Name="AboutEngineText" FontSize="12.5" Margin="0,3,0,0"
                                    Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                        <TextBlock x:Name="AboutBuildText" FontSize="12.5" Margin="0,3,0,0" IsTextSelectionEnabled="True"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" />
                         <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,8,0,0" VerticalAlignment="Center">
                             <HyperlinkButton Content="GitHub" NavigateUri="https://github.com/BeFeast/ok-player"
                                              Padding="0,2" FontSize="12.5" />

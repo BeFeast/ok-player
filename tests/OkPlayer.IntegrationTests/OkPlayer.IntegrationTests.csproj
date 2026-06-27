@@ -27,6 +27,14 @@
     <ProjectReference Include="..\..\src\OkPlayer.Mpv\OkPlayer.Mpv.csproj" />
   </ItemGroup>
 
+  <!-- Render fixtures (e.g. an mkv with an embedded ASS subtitle) for the subtitle-position tests. -->
+  <ItemGroup>
+    <Content Include="fixtures\**\*">
+      <Link>fixtures\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
   <!-- These tests load the real engine, so libmpv-2.dll must sit next to the test assembly. Copy it from
        native/ when present (locally, or after scripts/fetch-natives.ps1 on a Windows CI runner). When it's
        absent the project still builds; the [Category=Integration] tests just can't run. -->

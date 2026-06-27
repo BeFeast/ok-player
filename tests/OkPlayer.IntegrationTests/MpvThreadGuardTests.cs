@@ -96,35 +96,23 @@ public class MpvThreadGuardTests
     }
 
     [Fact]
-    public void SubtitleMargins_LiftEverySubtitleKind()
+    public void SubPosition_IsWritable_AndIsHowTheOscLiftWorks()
     {
-        // mpv applies sub-margin-y (the property the OSC-lift toggles so controls never overlap captions,
-        // PRD P1-D9) to text/bitmap subs by default, but ASS-styled subs are governed by sub-ass-override —
-        // which defaults to "scale" and ignores margins. That default is the exact reason the lift silently
-        // no-opped on ASS subtitles; sub-ass-force-margins defaults off, which is what we flip on.
-        using (var bare = new MpvContext())
-        {
-            bare.Initialize();
-            Assert.Equal("scale", bare.GetPropertyString("sub-ass-override"));
-            Assert.Equal("no", bare.GetPropertyString("sub-ass-force-margins"));
-        }
-
-        // MpvVideoPanel sets these two as init options so the lift works for every subtitle kind. Assert
-        // libmpv accepts them (a typo'd option would otherwise fail silently) and that they flip to "yes".
-        // sub-ass-force-margins applies the margins to ASS subs WITHOUT restyling them (unlike
-        // sub-ass-override=force), so their fonts/colors stay intact while the lift clears the OSC.
+        // PlayerViewModel.ApplySubtitlePosition drives the OSC-clearance lift (PRD P1-D9) through sub-pos, NOT
+        // sub-margin-y: libass ignores sub-margin-y for ASS subtitles (sub-ass-override defaults to "scale"),
+        // which is exactly why the earlier margin-based lift silently no-opped on ASS captions. sub-pos lifts
+        // every subtitle kind. This asserts the property is real and round-trips against the actual engine;
+        // SubtitleOscClearanceTests proves on rendered pixels that the lift actually clears the OSC.
         using var ctx = new MpvContext();
-        ctx.SetOption("sub-use-margins", "yes");
-        ctx.SetOption("sub-ass-force-margins", "yes");
         ctx.Initialize();
-        Assert.Equal("yes", ctx.GetPropertyString("sub-use-margins"));
-        Assert.Equal("yes", ctx.GetPropertyString("sub-ass-force-margins"));
-        Assert.Equal("scale", ctx.GetPropertyString("sub-ass-override")); // styling preserved, margins not forced via override
 
-        // sub-margin-y is the property SetSubtitleMargin writes (128 chrome-up / 56 chrome-down) — confirm
-        // the name is real and accepts the lift value against the actual engine.
-        ctx.Command("set", "sub-margin-y", "128");
-        Assert.Equal(128, ctx.GetPropertyLong("sub-margin-y"));
+        Assert.Equal(100.0, ctx.GetPropertyDouble("sub-pos")); // mpv default: bottom of the frame
+
+        ctx.Command("set", "sub-pos", "84"); // 100 - OscSubtitleLift(16), the chrome-visible value
+        Assert.Equal(84.0, ctx.GetPropertyDouble("sub-pos"));
+
+        ctx.Command("set", "sub-pos", "100"); // chrome hidden: back to the configured base position
+        Assert.Equal(100.0, ctx.GetPropertyDouble("sub-pos"));
     }
 
     [Fact]

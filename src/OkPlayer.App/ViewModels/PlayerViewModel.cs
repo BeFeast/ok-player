@@ -793,8 +793,20 @@ public partial class PlayerViewModel : ObservableObject
 
     public void ToggleTimeLabel() => ShowRemaining = !ShowRemaining;
 
-    /// <summary>Lift subtitles above the OSC while the chrome is visible (design: 56px ↔ 128px baseline).</summary>
-    public void SetSubtitleMargin(bool chromeVisible) => Set("sub-margin-y", chromeVisible ? "128" : "56");
+    /// <summary>Minimum percentage points to raise subtitles by while the OSC chrome is up, so the controls
+    /// never overlap captions (PRD P1-D9). Driven through <c>sub-pos</c>, not <c>sub-margin-y</c>: libass
+    /// ignores the margin for ASS subtitles, so the old margin toggle silently failed on every ASS track (e.g.
+    /// embedded SDH) — sub-pos moves every subtitle kind. This is the floor for large surfaces; the View
+    /// raises it on small ones (where a fixed % is too few pixels) via <see cref="OkPlayer.Core.SubtitleLift"/>.
+    /// Verified by SubtitleOscClearanceTests.</summary>
+    public const double OscSubtitleLift = 16;
+
+    /// <summary>Position subtitles via <c>sub-pos</c> (a percentage; 100 = bottom). <paramref name="basePos"/>
+    /// is the user's configured position; <paramref name="lift"/> is how far to raise it (0 when the chrome is
+    /// hidden, else the OSC-clearance lift the View computes for the current surface size). Works for ASS, text
+    /// and bitmap subtitles alike (unlike <c>sub-margin-y</c>, which libass ignores for ASS).</summary>
+    public void ApplySubtitlePosition(double basePos, double lift)
+        => Set("sub-pos", System.Math.Max(0, basePos - lift));
 
     private static string FormatTime(double seconds)
     {
