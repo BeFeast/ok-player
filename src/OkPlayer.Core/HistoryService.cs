@@ -28,6 +28,12 @@ public sealed class FileRecord
     public string LastOpenedUtc { get; set; } = string.Empty;
     public string? Title { get; set; }
     public string? PosterPath { get; set; } // cached poster frame for continue-watching
+    /// <summary>Remembered per-file track choice (mirrors the §13.1 launch preselect convention): <c>null</c>
+    /// = not recorded, so restore leaves mpv's default; <c>-1</c> = explicitly OFF/none; <c>&gt;= 1</c> = the
+    /// mpv track id to reselect. Nullable + <see cref="JsonIgnoreCondition.WhenWritingNull"/> keeps old records
+    /// clean and back-compatible (they load with null and don't force a track).</summary>
+    public int? SubtitleId { get; set; }
+    public int? AudioId { get; set; }
     public List<double> Bookmarks { get; set; } = new();
     public List<ChapterMark> UserChapters { get; set; } = new(); // user-added chapters (the file's own are read-only)
 }
@@ -99,16 +105,31 @@ public sealed class HistoryService
     {
         if (_path is null)
             return; // persistence disabled this session
-        try
+        string json;
+        lock (_lock)
+            json = JsonSerializer.Serialize(_records, JsonOpts);
+        string tmp = _path + ".tmp";
+        // Files under %APPDATA% take brief exclusive locks from Defender and the Search indexer, which scan
+        // each newly written file. That made the atomic replace throw a sharing violation and — because the
+        // failure was swallowed — silently drop the save, losing the resume position and the remembered track
+        // choice. Retry across the transient lock so the save actually lands (same fix as SettingsService.Save).
+        for (int attempt = 0; ; attempt++)
         {
-            string json;
-            lock (_lock)
-                json = JsonSerializer.Serialize(_records, JsonOpts);
-            string tmp = _path + ".tmp";
-            File.WriteAllText(tmp, json);
-            File.Move(tmp, _path, overwrite: true); // replace in one step so a crash can't truncate history
+            try
+            {
+                File.WriteAllText(tmp, json);
+                File.Move(tmp, _path, overwrite: true); // replace in one step so a crash can't truncate history
+                break;
+            }
+            catch (Exception ex) when (attempt < 8 && ex is IOException or UnauthorizedAccessException)
+            {
+                System.Threading.Thread.Sleep(30); // up to ~240ms; the scanner's lock clears well within this
+            }
+            catch
+            {
+                break; // give up after the retries (or an unexpected error) — Save stays best-effort, never throws
+            }
         }
-        catch { /* best effort */ }
     }
 
     public FileRecord? Get(string path)
@@ -121,8 +142,13 @@ public sealed class HistoryService
 
     /// <summary>Record the latest position/duration for a local file (creates the entry if needed).
     /// <paramref name="finished"/> marks the file watched-to-end; it always overwrites the prior value,
-    /// so re-watching a completed file from the start clears the flag.</summary>
-    public void Record(string path, double position, double duration, bool finished = false)
+    /// so re-watching a completed file from the start clears the flag. <paramref name="subtitleId"/> and
+    /// <paramref name="audioId"/> remember the user's per-file track choice and are written ONLY when supplied
+    /// (a <c>null</c> arg leaves the stored value untouched, so a caller that doesn't know the selection — or
+    /// a record made before a track was picked — never clears a previously remembered one). See
+    /// <see cref="FileRecord.SubtitleId"/> for the value convention.</summary>
+    public void Record(string path, double position, double duration, bool finished = false,
+                       int? subtitleId = null, int? audioId = null)
     {
         if (Private || !IsTrackable(path))
             return;
@@ -135,6 +161,10 @@ public sealed class HistoryService
             r.Finished = finished;
             r.Title = Path.GetFileNameWithoutExtension(path);
             r.LastOpenedUtc = DateTime.UtcNow.ToString("o");
+            if (subtitleId.HasValue)
+                r.SubtitleId = subtitleId;
+            if (audioId.HasValue)
+                r.AudioId = audioId;
         }
         Save();
     }

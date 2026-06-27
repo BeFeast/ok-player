@@ -1,3 +1,4 @@
+using System.Threading;
 using OkPlayer.App.Services;
 
 namespace OkPlayer.Tests;
@@ -151,6 +152,85 @@ public class HistoryServiceTests : IDisposable
 
         h.Record(Movie, 45, 600); // re-watching from the start clears the flag
         Assert.False(h.Get(Movie)!.Finished);
+    }
+
+    [Fact]
+    public void Record_RemembersSubtitleAndAudioTrack_RoundTrips()
+    {
+        var a = New();
+        a.Record(Movie, 120, 600, finished: false, subtitleId: 3, audioId: 2);
+
+        var b = New(); // a fresh service reads the same file
+        var r = b.Get(Movie)!;
+        Assert.Equal(3, r.SubtitleId);
+        Assert.Equal(2, r.AudioId);
+    }
+
+    [Fact]
+    public void Record_NullTrackArgs_LeaveStoredIdsUnchanged()
+    {
+        var h = New();
+        h.Record(Movie, 100, 600, subtitleId: 5, audioId: 1);
+        h.Record(Movie, 150, 600); // a later position-only save (null track args) must not wipe the choice
+
+        var r = h.Get(Movie)!;
+        Assert.Equal(150, r.Position);
+        Assert.Equal(5, r.SubtitleId);
+        Assert.Equal(1, r.AudioId);
+    }
+
+    [Fact]
+    public void Record_SubtitleAndAudioOff_RoundTripAsMinusOne()
+    {
+        var a = New();
+        a.Record(Movie, 10, 600, subtitleId: -1, audioId: -1); // -1 = explicitly off/none
+
+        var b = New();
+        var r = b.Get(Movie)!;
+        Assert.Equal(-1, r.SubtitleId);
+        Assert.Equal(-1, r.AudioId);
+    }
+
+    [Fact]
+    public void Get_OldRecordWithoutTrackFields_LoadsWithNullIds()
+    {
+        // A history.json written before the track fields existed must load cleanly (back-compat), with the new
+        // ids null so restore leaves mpv's default rather than forcing a track.
+        File.WriteAllText(_path, """
+            {
+              "C:\\media\\movie.mkv": {
+                "Position": 42,
+                "Duration": 600,
+                "Finished": false,
+                "LastOpenedUtc": "2026-01-01T00:00:00.0000000Z"
+              }
+            }
+            """);
+
+        var r = New().Get(Movie)!;
+        Assert.Equal(42, r.Position);
+        Assert.Null(r.SubtitleId);
+        Assert.Null(r.AudioId);
+    }
+
+    // Regression mirror of SettingsServiceTests: %APPDATA% files take brief exclusive locks from Defender /
+    // the Search indexer. Record's Save must retry across a transient lock instead of silently dropping the
+    // write (which lost the resume position AND, now, the remembered track choice).
+    [Fact]
+    public void Save_RetriesAcrossATransientLock_AndStillPersists()
+    {
+        var a = New();
+        a.Record(Movie, 10, 600, subtitleId: 2); // create the file first so the next save is a replace
+        Assert.True(File.Exists(_path));
+
+        var locker = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.None);
+        var release = Task.Run(() => { Thread.Sleep(60); locker.Dispose(); }); // free it within the retry budget
+        a.Record(Movie, 305, 600, subtitleId: 4); // retries until the lock clears instead of giving up
+        release.Wait();
+
+        var r = New().Get(Movie)!;
+        Assert.Equal(305, r.Position);
+        Assert.Equal(4, r.SubtitleId);
     }
 
     [Fact]
