@@ -29,7 +29,10 @@ public sealed partial class SettingsWindow : Window
     // Reads the live Windows personalization accent so the "System accent" card can preview the real colour.
     private readonly Windows.UI.ViewManagement.UISettings _ui = new();
 
-    public SettingsWindow()
+    /// <summary>Opens Settings on <paramref name="initialPanel"/> (by display name, e.g. "Subtitles"), or on
+    /// About when null/unknown — About is the default landing page. The name argument is the deep-link seam:
+    /// a caller that wants to jump straight to a specific panel passes its name.</summary>
+    public SettingsWindow(string? initialPanel = null)
     {
         InitializeComponent();
         Title = "Settings";
@@ -53,6 +56,29 @@ public sealed partial class SettingsWindow : Window
         LoadAppearance();
         ShowVersion();
         _loaded = true;
+        SelectInitialPanel(initialPanel); // land on About by default (or the deep-linked panel)
+    }
+
+    /// <summary>Drive the initial rail selection (rather than just toggling visibility) so the chosen panel's
+    /// load hook runs via <see cref="OnNavChanged"/>. Defaults to About; an unknown name also falls back to it.</summary>
+    private void SelectInitialPanel(string? panelName)
+    {
+        int index = ResolvePanelIndex(panelName);
+        if (index == 8)
+            NavFooterList.SelectedIndex = 0; // About lives in the bottom-pinned footer list
+        else
+            NavList.SelectedIndex = index;
+    }
+
+    private static int ResolvePanelIndex(string? name)
+    {
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+            int i = Array.FindIndex(PanelNames, p => string.Equals(p, name, StringComparison.OrdinalIgnoreCase));
+            if (i >= 0)
+                return i;
+        }
+        return 8; // About — the default landing panel
     }
 
     /// <summary>The Advanced editor rows — one per mpv.conf option. <see cref="LoadMpvConf"/> repopulates it

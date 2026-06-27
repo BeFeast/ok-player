@@ -30,7 +30,7 @@
                         </StackPanel>
                     </Border>
 
-                    <ListView x:Name="NavList" SelectionMode="Single" SelectedIndex="0" SelectionChanged="OnNavChanged" Padding="0">
+                    <ListView x:Name="NavList" SelectionMode="Single" SelectedIndex="-1" SelectionChanged="OnNavChanged" Padding="0">
                         <ListView.Resources>
                             <SolidColorBrush x:Key="ListViewItemBackgroundSelected" Color="#1F10938A" />
                             <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPointerOver" Color="#2910938A" />
