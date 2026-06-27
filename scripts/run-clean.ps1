@@ -48,22 +48,33 @@ if ($branch -ne 'main' -and -not $AllowBranch) {
   throw "Refusing to build off '$branch'. Run 'git checkout main' first, or re-run with -AllowBranch to build this branch on purpose."
 }
 
-# 2. Kill any instance launched from THIS output dir so it can't lock its own DLLs. Match by full path so we
-#    never force-close the installed app or another OkPlayer.exe that merely shares the name.
-$running = Get-Process OkPlayer -ErrorAction SilentlyContinue |
-  Where-Object { try { $_.Path -eq $exePath } catch { $false } }
-if ($running) {
-  Write-Host "Stopping the dev instance from $outDir : PID $($running.Id -join ', ')"
+# 2. Stop any instance launched from THIS output dir so it can't lock its own DLLs. Split running OkPlayers:
+#    ones we can CONFIRM by full path (force-close those -- never the installed app or a namesake), vs ones
+#    whose path we can't read. A non-elevated script can neither inspect nor terminate an elevated process, so
+#    an OkPlayer we can't read is almost certainly running as admin; record its PID so a later locked-file
+#    failure can name exactly what to close instead of failing generically.
+# PowerShell's added .Path member returns $null (it does NOT throw) when the path can't be read -- which is
+# exactly what happens for a higher-integrity (elevated) process seen from this normal one. So classify by the
+# value: matches our exe -> ours; readable-but-different -> ignore; empty/unreadable -> opaque. (The try/catch
+# is belt-and-suspenders for any host where .Path throws instead of returning $null.)
+$ours   = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
+$opaque = [System.Collections.Generic.List[int]]::new()
+foreach ($p in (Get-Process OkPlayer -ErrorAction SilentlyContinue)) {
+  $path = try { $p.Path } catch { $null }
+  if ($path -eq $exePath) { $ours.Add($p) }
+  elseif ([string]::IsNullOrEmpty($path)) { $opaque.Add($p.Id) }
+}
+if ($ours.Count) {
+  Write-Host "Stopping the dev instance from $outDir : PID $(($ours | ForEach-Object Id) -join ', ')"
   $stuck = [System.Collections.Generic.List[int]]::new()
-  $running | ForEach-Object {
-    $proc = $_   # in the catch below $_ is the error record, not the process, so capture it here
+  foreach ($proc in $ours) {
     try { $proc.Kill(); if (-not $proc.WaitForExit(5000)) { $stuck.Add($proc.Id) } }
     catch { $stuck.Add($proc.Id) }   # Kill can throw "Access is denied" (e.g. an elevated instance) -- still stuck
   }
-  # A force-killed process that won't exit holds the output DLLs; fail clearly instead of a cryptic publish error.
+  # A process we couldn't stop still holds the output DLLs; fail clearly instead of a cryptic publish error.
   if ($stuck.Count) { throw "Couldn't stop the running instance (PID $($stuck -join ', ')) -- close OK Player and try again." }
 } else {
-  Write-Host "No running OkPlayer instance from this output dir."
+  Write-Host "No confirmed OkPlayer instance from this output dir."
 }
 
 # 3. Clean publish: wipe the output folder, then publish from scratch. Retry the delete with backoff so a

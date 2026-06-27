@@ -52,18 +52,29 @@ if ($stale) {
   $reason = if (-not (Test-Path $exe)) { 'no build yet' } elseif ($ForceRebuild) { 'forced' } elseif ($dirty) { 'uncommitted changes' } else { "built '$built', want '$head'" }
   Write-Host "Dev preview out of date on '$branch' ($reason) -- rebuilding..." -ForegroundColor Yellow
 
-  # Kill ONLY the instance launched from this output dir -- it locks the DLLs we're about to overwrite. Match
-  # by full path so we never force-close the installed app or another OkPlayer.exe that just shares the name.
-  # If a force-killed process somehow refuses to exit, stop with a clear message rather than letting publish
-  # fail cryptically on the still-locked exe.
+  # Find every running OkPlayer, then split it: instances we can CONFIRM were launched from this output dir
+  # (force-close those -- they lock the DLLs we're about to overwrite), vs instances whose path we can't read.
+  # Matching by full path means we never force-close the installed app or another OkPlayer that just shares the
+  # name. A non-elevated launcher can neither read the path of nor terminate an elevated process, so an
+  # OkPlayer we can't inspect is almost certainly running as admin: we can't stop it, but we record its PID so
+  # that if it turns out to be holding these files, the cleanup failure below can name exactly what to close.
+  # PowerShell's added .Path member returns $null (it does NOT throw) when the path can't be read -- which is
+  # exactly what happens for a higher-integrity (elevated) process seen from this normal one. So classify by the
+  # value: matches our exe -> ours; readable-but-different -> ignore; empty/unreadable -> opaque. (The try/catch
+  # is belt-and-suspenders for any host where .Path throws instead of returning $null.)
+  $ours   = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
+  $opaque = [System.Collections.Generic.List[int]]::new()
+  foreach ($p in (Get-Process OkPlayer -ErrorAction SilentlyContinue)) {
+    $path = try { $p.Path } catch { $null }
+    if ($path -eq $exe) { $ours.Add($p) }
+    elseif ([string]::IsNullOrEmpty($path)) { $opaque.Add($p.Id) }
+  }
+
   $stuck = [System.Collections.Generic.List[int]]::new()
-  Get-Process OkPlayer -ErrorAction SilentlyContinue |
-    Where-Object { try { $_.Path -eq $exe } catch { $false } } |
-    ForEach-Object {
-      $proc = $_   # in the catch below $_ is the error record, not the process, so capture it here
-      try { $proc.Kill(); if (-not $proc.WaitForExit(5000)) { $stuck.Add($proc.Id) } }
-      catch { $stuck.Add($proc.Id) }   # Kill can throw "Access is denied" (e.g. an elevated instance) -- still stuck
-    }
+  foreach ($proc in $ours) {
+    try { $proc.Kill(); if (-not $proc.WaitForExit(5000)) { $stuck.Add($proc.Id) } }
+    catch { $stuck.Add($proc.Id) }   # Kill can throw "Access is denied" (e.g. an elevated instance) -- still stuck
+  }
   if ($stuck.Count) { throw "Couldn't stop the running dev preview (PID $($stuck -join ', ')) -- close OK Player and try again." }
 
   # Clear the previous publish, retrying ~10s to wait out a transient AV/OS handle on a just-killed exe/DLL
@@ -75,7 +86,10 @@ if ($stale) {
       try { Remove-Item $outDir -Recurse -Force -ErrorAction Stop; $cleared = $true }
       catch { Start-Sleep -Milliseconds 250 }
     }
-    if (-not $cleared) { throw "A file in $outDir is locked (antivirus, or an OK Player still running from it). Close OK Player, pause real-time scanning if needed, and run the Dev Preview again." }
+    if (-not $cleared) {
+      $elev = if ($opaque.Count) { " An OK Player may be running as administrator (PID $($opaque -join ', ')); a normally-launched script can't stop it -- close it manually." } else { '' }
+      throw "A file in $outDir is locked (antivirus, or an OK Player still running from it).$elev Close OK Player, pause real-time scanning if needed, and run the Dev Preview again."
+    }
   }
 
   dotnet publish $appProj -c Release -r win-x64 --self-contained true -o $outDir
