@@ -620,17 +620,39 @@ public sealed partial class SettingsWindow : Window
         RefreshAppearance();
     }
 
-    // Themed brushes live in ThemeDictionaries (not the flat Resources map), so fall back to theme-stable
-    // teal constants when a key can't be resolved from code.
     private static readonly SolidColorBrush Transparent = new(Colors.Transparent);
     private static readonly SolidColorBrush Accent = new(Color.FromArgb(0xFF, 0x10, 0x93, 0x8A));
     private static readonly SolidColorBrush AccentText = new(Color.FromArgb(0xFF, 0x0A, 0x65, 0x5F));
     private static readonly SolidColorBrush AccentTint = new(Color.FromArgb(0x1A, 0x10, 0x93, 0x8A));
 
-    private static Brush Res(string key, Brush fallback)
+    /// <summary>Resolve a brush from the merged resources for the window's CURRENT theme. System brushes (e.g.
+    /// CardBackgroundFillColorDefaultBrush) live flat and resolve directly; the design-system Ok* brushes live
+    /// ONLY inside <c>ResourceDictionary.ThemeDictionaries</c> (Light/Dark/HighContrast), which a flat
+    /// <c>TryGetValue</c> can't see — so for those we walk the merged dictionaries' theme dictionaries for the
+    /// active ActualTheme. Without this, code-set Ok* foregrounds fell back to the light-only color and were
+    /// near-black on dark (the "black text on black buttons" bug). The fallback is a last resort only.</summary>
+    private Brush Res(string key, Brush fallback)
     {
-        if (Application.Current.Resources.TryGetValue(key, out var v) && v is Brush b)
-            return b;
-        return fallback;
+        if (Application.Current.Resources.TryGetValue(key, out var v) && v is Brush flat)
+            return flat;
+        bool dark = (Content as FrameworkElement)?.ActualTheme == ElementTheme.Dark;
+        return TryThemedBrush(Application.Current.Resources, key, dark ? "Dark" : "Light", out var themed)
+            ? themed
+            : fallback;
+    }
+
+    private static bool TryThemedBrush(ResourceDictionary dict, string key, string themeKey, out Brush brush)
+    {
+        brush = Transparent;
+        if (dict.ThemeDictionaries.TryGetValue(themeKey, out var themeObj) && themeObj is ResourceDictionary themed
+            && themed.TryGetValue(key, out var v) && v is Brush b)
+        {
+            brush = b;
+            return true;
+        }
+        foreach (var md in dict.MergedDictionaries)
+            if (TryThemedBrush(md, key, themeKey, out brush))
+                return true;
+        return false;
     }
 }
