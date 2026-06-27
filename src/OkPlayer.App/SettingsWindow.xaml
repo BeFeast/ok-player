@@ -76,6 +76,11 @@
                                 <FontIcon Glyph="&#xE943;" FontSize="16" /><TextBlock Text="Advanced" VerticalAlignment="Center" FontSize="12.5" />
                             </StackPanel>
                         </ListViewItem>
+                        <ListViewItem>
+                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                <FontIcon Glyph="&#xE946;" FontSize="16" /><TextBlock Text="About" VerticalAlignment="Center" FontSize="12.5" />
+                            </StackPanel>
+                        </ListViewItem>
                     </ListView>
                 </StackPanel>
                 <TextBlock Grid.Row="1" x:Name="NavVersionText" FontSize="11" Margin="4,10,0,2"
@@ -289,10 +294,12 @@
                         </StackPanel>
                         <TextBlock Text="Restart OK Player to apply changes." FontSize="11.5"
                                    Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,10,0,0" />
+                    </StackPanel>
 
-                        <TextBlock Text="ABOUT" FontSize="12" FontWeight="SemiBold" CharacterSpacing="60"
-                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,30,0,10" />
-                        <TextBlock x:Name="AboutVersionText" FontSize="13.5" FontWeight="SemiBold" />
+                    <!-- About — app + engine version, build SHA, links (its own nav tab, below Advanced) -->
+                    <StackPanel x:Name="AboutPanel" Visibility="Collapsed">
+                        <TextBlock Text="About" Style="{StaticResource OkSettingsTitleTextStyle}" />
+                        <TextBlock x:Name="AboutVersionText" FontSize="13.5" FontWeight="SemiBold" Margin="0,22,0,0" />
                         <TextBlock x:Name="AboutEngineText" FontSize="12.5" Margin="0,3,0,0"
                                    Foreground="{ThemeResource OkTextSecondaryBrush}" />
                         <TextBlock x:Name="AboutBuildText" FontSize="12.5" Margin="0,3,0,0" IsTextSelectionEnabled="True"
