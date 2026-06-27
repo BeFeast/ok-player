@@ -580,7 +580,12 @@ public sealed partial class SettingsWindow : Window
         try
         {
             string path = OkPlayer.Render.MpvVideoPanel.UserConfigPath;
-            string text = MpvConfText.Serialize(MpvOptions.Select(r => new MpvOption(r.Key, r.Value)));
+            // Don't persist protected options. The engine loader skips them anyway (they're flagged "ignored"
+            // in the UI), so writing them back would leave the saved mpv.conf contradicting that hint and
+            // mislead anyone hand-editing the file. Drop them here so the file only holds options that apply.
+            string text = MpvConfText.Serialize(
+                MpvOptions.Where(r => !OkPlayer.Render.MpvVideoPanel.IsProtectedOption(r.Key))
+                          .Select(r => new MpvOption(r.Key, r.Value)));
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             WriteConfigAtomic(path, text);
             MpvConfStatus.Text = "Saved · restart to apply";
