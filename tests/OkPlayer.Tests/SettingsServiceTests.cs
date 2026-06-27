@@ -1,3 +1,4 @@
+using System.Threading;
 using OkPlayer.App.Services;
 
 namespace OkPlayer.Tests;
@@ -46,6 +47,37 @@ public class SettingsServiceTests : IDisposable
         Assert.True(reloaded.AudioNormalization);
         Assert.Equal("wasapi/{headphones}", reloaded.AudioDevice);
         Assert.Equal(30, reloaded.HistoryRetentionDays);
+    }
+
+    [Fact]
+    public void Save_ThenReload_PersistsAccentSource()
+    {
+        var a = New();
+        a.Current.AccentSource = "System";
+        a.Save();
+        Assert.Equal("System", New().Current.AccentSource); // must survive a restart, not revert to teal
+    }
+
+    // Regression: %APPDATA% files take brief exclusive locks from Defender / the Search indexer. The save
+    // used to swallow the resulting sharing violation and silently drop the write (the System accent
+    // "reverting to teal after restart"). Save must retry across a transient lock and still land.
+    [Fact]
+    public void Save_RetriesAcrossATransientLock_AndStillPersists()
+    {
+        var a = New();
+        a.Current.AccentSource = "System";
+        a.Save();                              // create the file first so the next save is a replace
+        Assert.True(File.Exists(_path));
+
+        a.Current.DefaultVolume = 42;          // a change we expect to survive despite the lock
+        var locker = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.None);
+        var release = Task.Run(() => { Thread.Sleep(60); locker.Dispose(); }); // free it within the retry budget
+        a.Save();                              // retries until the lock clears instead of giving up
+        release.Wait();
+
+        var reloaded = New().Current;
+        Assert.Equal(42, reloaded.DefaultVolume);
+        Assert.Equal("System", reloaded.AccentSource);
     }
 
     [Fact]
