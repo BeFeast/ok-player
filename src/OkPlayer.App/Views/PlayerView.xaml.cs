@@ -953,10 +953,9 @@ public sealed partial class PlayerView : UserControl
                 if (entry.Poster is not null || Vm.HasMedia) // a poster already, or playback started — stop
                     continue;
                 var rec = _history.Get(entry.Path);
-                double when = rec is { Duration: > 0 } ? Math.Max(3, rec.Duration * 0.2) : 30;
                 if (!await _posterThumbs.OpenAsync(entry.Path))
                     continue;
-                string? frame = await _posterThumbs.GetThumbnailAsync(when);
+                string? frame = await PickRepresentativeFrameAsync(rec is { Duration: > 0 } ? rec.Duration : 0);
                 if (frame is null || !System.IO.File.Exists(frame))
                     continue;
                 string poster = System.IO.Path.Combine(dir, PosterHash(entry.Path) + ".png");
@@ -967,6 +966,51 @@ public sealed partial class PlayerView : UserControl
         }
         catch { /* best effort */ }
         finally { _generatingPosters = false; }
+    }
+
+    /// <summary>Pick a non-black poster frame. A single fixed 20% grab often lands on a fade/dark scene (studio
+    /// logos, dark openings) → a black poster; instead sample a few positions across the file and keep the
+    /// brightest. Stops early once a clearly-lit frame is found. Falls back to the brightest sampled frame when
+    /// the whole film is dark, and to a single fixed grab when the duration is unknown.</summary>
+    private async System.Threading.Tasks.Task<string?> PickRepresentativeFrameAsync(double duration)
+    {
+        const double litEnough = 48; // mean luma (0–255); a clearly-lit scene, well clear of black/fade frames
+        double[] fractions = { 0.20, 0.35, 0.50, 0.65 };
+        string? best = null;
+        double bestLuma = -1;
+        foreach (double f in fractions)
+        {
+            double when = duration > 0 ? Math.Max(3, duration * f) : 30;
+            string? frame = await _posterThumbs.GetThumbnailAsync(when);
+            if (frame is { } && System.IO.File.Exists(frame))
+            {
+                double luma = await MeanLumaAsync(frame);
+                if (luma > bestLuma) { bestLuma = luma; best = frame; }
+            }
+            if (duration <= 0 || bestLuma >= litEnough)
+                break; // unknown duration → one grab; otherwise stop as soon as a lit frame is in hand
+        }
+        return best;
+    }
+
+    /// <summary>Mean luma (0–255) of a PNG via the platform codec, scored by <see cref="OkPlayer.Core.ImageLuma"/>.
+    /// Unreadable → 0 (treated as darkest, so another candidate wins).</summary>
+    private static async System.Threading.Tasks.Task<double> MeanLumaAsync(string pngPath)
+    {
+        try
+        {
+            var file = await Windows.Storage.StorageFile.GetFileFromPathAsync(pngPath);
+            using var stream = await file.OpenAsync(Windows.Storage.FileAccessMode.Read);
+            var decoder = await Windows.Graphics.Imaging.BitmapDecoder.CreateAsync(stream);
+            var pixels = await decoder.GetPixelDataAsync(
+                Windows.Graphics.Imaging.BitmapPixelFormat.Bgra8,
+                Windows.Graphics.Imaging.BitmapAlphaMode.Ignore,
+                new Windows.Graphics.Imaging.BitmapTransform(),
+                Windows.Graphics.Imaging.ExifOrientationMode.IgnoreExifOrientation,
+                Windows.Graphics.Imaging.ColorManagementMode.DoNotColorManage);
+            return OkPlayer.Core.ImageLuma.MeanBgra(pixels.DetachPixelData());
+        }
+        catch { return 0; }
     }
 
     private static string PosterHash(string path)
