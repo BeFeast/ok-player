@@ -84,7 +84,7 @@ public sealed partial class HistoryView : UserControl
             {
                 // Decode to ~thumbnail size, not the poster's native frame size — a long history would
                 // otherwise hold hundreds of full-res bitmaps for 64px rows.
-                try { row.Poster = new BitmapImage(new Uri(rec.PosterPath!)) { DecodePixelWidth = 128 }; }
+                try { row.Poster = PosterImage.Load(rec.PosterPath!, decodePixelWidth: 128); }
                 catch { /* unreadable poster -> gradient */ }
             }
             _allRows.Add((row, HistoryFormat.BucketFor(opened, now)));
