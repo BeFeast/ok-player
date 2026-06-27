@@ -46,6 +46,7 @@ public sealed partial class SettingsWindow : Window
         {
             App.Settings.Changed -= ApplyTheme;
             App.MpvVersionChanged -= OnMpvVersionChanged;
+            _copyStatusTimer?.Stop(); // don't let a pending copy-status tick write to a torn-down element
             if (Content is FrameworkElement r)
                 r.ActualThemeChanged -= OnActualThemeChanged;
         };
@@ -84,11 +85,11 @@ public sealed partial class SettingsWindow : Window
         string sha = App.GitSha;
         AboutBuildSha.Text = string.IsNullOrEmpty(sha) ? Dash : sha;
 
-        // Hardware decode: the persisted preference (applied at engine init). On → method + accent "ON" tag;
-        // off → software, no tag. We surface the configured method rather than probing the live decoder.
-        bool hw = App.Settings.Current.HardwareDecoding;
-        AboutEngineHwdec.Text = hw ? "d3d11va" : "software";
-        AboutHwdecTag.Visibility = hw ? Visibility.Visible : Visibility.Collapsed;
+        // Hardware decode + the render path. hwdec reflects the persisted preference and is re-read on
+        // About-shown (RefreshHwdec) because the Video panel can toggle it while this window is open — a
+        // one-time snapshot would go stale. The graphics backend is the app's fixed render path.
+        RefreshHwdec();
+        AboutEngineGraphics.Text = GraphicsBackend;
 
         // Host facts.
         AboutHostWindows.Text = WindowsBuildString();
@@ -97,6 +98,26 @@ public sealed partial class SettingsWindow : Window
 
         RefreshEngineVersion();
     }
+
+    // The real render path: native desktop OpenGL shared into D3D11 via WGL_NV_DX_interop — no ANGLE (see
+    // OkPlayer.Render). Single-sourced here so the Engine card and the copied diagnostics can't disagree.
+    private const string GraphicsBackend = "OpenGL · WGL_NV_DX_interop → D3D11";
+
+    /// <summary>Reflect the persisted hardware-decoding preference in the Engine card: on → method + accent
+    /// "ON" tag, off → software with no tag. Re-read on About-shown (not just once at populate) because the
+    /// Video panel can toggle the setting in the same window, which would otherwise leave a stale snapshot.</summary>
+    private void RefreshHwdec()
+    {
+        if (AboutEngineHwdec is null)
+            return; // the spec sheet isn't realised yet
+        bool hw = App.Settings.Current.HardwareDecoding;
+        AboutEngineHwdec.Text = HwdecMethod(hw);
+        AboutHwdecTag.Visibility = hw ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    // The decode-method label paired with the on/off state, derived from the same bool — so the card and the
+    // copied diagnostics can never disagree (the old "off · d3d11va" mismatch).
+    private static string HwdecMethod(bool hardwareDecoding) => hardwareDecoding ? "d3d11va" : "software";
 
     // App.MpvVersion is captured off the UI thread at engine attach, which can land after this window is
     // already open and even already sitting on About. Marshal to this window and refresh the About engine
@@ -241,7 +262,7 @@ public sealed partial class SettingsWindow : Window
             buildLine += $" {Dash} up to date";
 
         bool hw = App.Settings.Current.HardwareDecoding;
-        string hwLine = $"{(hw ? "on" : "off")} · {AboutEngineHwdec.Text}";
+        string hwLine = $"{(hw ? "on" : "off")} · {HwdecMethod(hw)}"; // both from the live bool — never "off · d3d11va"
 
         var sb = new System.Text.StringBuilder();
         sb.Append("OK Player ").Append(ver).Append(" (Stable)\n");
@@ -251,7 +272,7 @@ public sealed partial class SettingsWindow : Window
         AppendDiagLine(sb, "libmpv", AboutEngineMpv.Text);
         AppendDiagLine(sb, "FFmpeg", Dash);
         AppendDiagLine(sb, "Render API", "libmpv render");
-        AppendDiagLine(sb, "Graphics", "OpenGL · ANGLE → D3D11");
+        AppendDiagLine(sb, "Graphics", GraphicsBackend);
         AppendDiagLine(sb, "Hardware decode", hwLine);
         sb.Append("\nHost\n");
         AppendDiagLine(sb, "Windows 11", AboutHostWindows.Text);
@@ -355,6 +376,7 @@ public sealed partial class SettingsWindow : Window
         }
         else if (about)
         {
+            RefreshHwdec();         // the Video panel can toggle hwdec while this window is open — re-read it
             RefreshEngineVersion(); // engine version may have been captured after this window opened
             StartStaleCheck();      // best-effort, fire-once compare of the build SHA against main
         }
