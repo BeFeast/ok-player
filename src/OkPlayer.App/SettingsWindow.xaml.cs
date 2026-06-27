@@ -1,5 +1,7 @@
 using System;
+using System.Collections.ObjectModel;
 using System.IO;
+using System.Linq;
 using Microsoft.UI;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
@@ -7,6 +9,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
 using OkPlayer.App.Services;
+using OkPlayer.App.ViewModels;
 using Windows.UI;
 
 namespace OkPlayer.App;
@@ -42,10 +45,15 @@ public sealed partial class SettingsWindow : Window
             if (Content is FrameworkElement r)
                 r.ActualThemeChanged -= OnActualThemeChanged;
         };
+        MpvOptionsList.ItemsSource = MpvOptions; // the rows mutate in place; the collection notifies the list
         LoadAppearance();
         ShowVersion();
         _loaded = true;
     }
+
+    /// <summary>The Advanced editor rows — one per mpv.conf option. <see cref="LoadMpvConf"/> repopulates it
+    /// from disk; the add/remove handlers mutate it; <see cref="OnMpvConfSave"/> serialises it back.</summary>
+    public ObservableCollection<MpvOptionRow> MpvOptions { get; } = new();
 
     /// <summary>Populate the version surfaces: the muted nav-rail footer and the About panel.
     /// The mpv engine line is captured off-thread at engine attach (cosmetic) and may be absent.</summary>
@@ -526,15 +534,45 @@ public sealed partial class SettingsWindow : Window
 
     // ── Advanced panel (the raw-mpv-config escape hatch) ───────────────
 
+    // Reloads each time the Advanced tab is shown (matching the old raw-TextBox behaviour); a theme restyle
+    // deliberately does NOT call this, so it can't discard unsaved edits (see OnActualThemeChanged).
     private void LoadMpvConf()
     {
+        MpvOptions.Clear();
         try
         {
             string path = OkPlayer.Render.MpvVideoPanel.UserConfigPath;
-            MpvConfEditor.Text = File.Exists(path) ? File.ReadAllText(path) : string.Empty;
+            string text = File.Exists(path) ? File.ReadAllText(path) : string.Empty;
+            // Comments and blank lines are dropped — the editor is key/value only (acceptable for v1). An
+            // empty/absent file yields no rows.
+            foreach (MpvOption opt in MpvConfText.Parse(text))
+                MpvOptions.Add(new MpvOptionRow(opt.Key, opt.Value));
         }
-        catch { MpvConfEditor.Text = string.Empty; }
+        catch { /* unreadable file — start from an empty editor rather than throw */ }
         MpvConfStatus.Text = string.Empty;
+    }
+
+    private void OnAddOption(object sender, RoutedEventArgs e)
+    {
+        // AutoFocus has the new row's key field grab focus once its container is realised (OnRowKeyLoaded);
+        // the ItemsControl container isn't available synchronously right after the add.
+        MpvOptions.Add(new MpvOptionRow { AutoFocus = true });
+    }
+
+    private void OnRemoveOption(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: MpvOptionRow row })
+            MpvOptions.Remove(row);
+    }
+
+    // One-shot: only the just-added row (AutoFocus set) grabs focus; rows loaded from disk load with it clear.
+    private void OnRowKeyLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox { DataContext: MpvOptionRow { AutoFocus: true } row } box)
+        {
+            row.AutoFocus = false;
+            box.Focus(FocusState.Programmatic);
+        }
     }
 
     private void OnMpvConfSave(object sender, RoutedEventArgs e)
@@ -542,13 +580,41 @@ public sealed partial class SettingsWindow : Window
         try
         {
             string path = OkPlayer.Render.MpvVideoPanel.UserConfigPath;
+            // Don't persist protected options. The engine loader skips them anyway (they're flagged "ignored"
+            // in the UI), so writing them back would leave the saved mpv.conf contradicting that hint and
+            // mislead anyone hand-editing the file. Drop them here so the file only holds options that apply.
+            string text = MpvConfText.Serialize(
+                MpvOptions.Where(r => !OkPlayer.Render.MpvVideoPanel.IsProtectedOption(r.Key))
+                          .Select(r => new MpvOption(r.Key, r.Value)));
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, MpvConfEditor.Text);
+            WriteConfigAtomic(path, text);
             MpvConfStatus.Text = "Saved · restart to apply";
         }
         catch
         {
             MpvConfStatus.Text = "Couldn't save";
+        }
+    }
+
+    // Write to a temp file then atomically replace, retrying across the brief shared locks Defender / the
+    // Search indexer take on a freshly written file under %APPDATA% — the same transient-lock fix as
+    // SettingsService.Save()/HistoryService.Save(), so a sharing violation can't truncate or drop the save.
+    // After the retries the exception propagates to OnMpvConfSave, which reports "Couldn't save".
+    private static void WriteConfigAtomic(string path, string text)
+    {
+        string tmp = path + ".tmp";
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                File.WriteAllText(tmp, text);
+                File.Move(tmp, path, overwrite: true); // replace in one step so a crash can't truncate the config
+                return;
+            }
+            catch (Exception ex) when (attempt < 8 && ex is IOException or UnauthorizedAccessException)
+            {
+                System.Threading.Thread.Sleep(30); // up to ~240ms; the scanner's lock clears well within this
+            }
         }
     }
 

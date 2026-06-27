@@ -124,6 +124,13 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
             "include", "script", "scripts", "load-scripts", "scripts-dir",
         };
 
+    /// <summary>True when <paramref name="key"/> is an engine-critical option the escape hatch must not
+    /// override (video output, the OSC, the keyboard map, the config-loader / scripting surface). Trimmed and
+    /// case-insensitive, matching how <see cref="ApplyUserConfig"/> tests each line. Exposed so the
+    /// Settings → Advanced editor can flag a row the loader will silently skip (App references Render).</summary>
+    public static bool IsProtectedOption(string key) =>
+        !string.IsNullOrWhiteSpace(key) && ProtectedOptions.Contains(key.Trim());
+
     private static void ApplyUserConfig(MpvContext mpv)
     {
         try
