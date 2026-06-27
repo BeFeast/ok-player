@@ -2,14 +2,17 @@ using System;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using Microsoft.UI;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.Win32;
 using OkPlayer.App.Services;
 using OkPlayer.App.ViewModels;
+using Windows.ApplicationModel.DataTransfer;
 using Windows.UI;
 
 namespace OkPlayer.App;
@@ -26,13 +29,16 @@ public sealed partial class SettingsWindow : Window
     // Reads the live Windows personalization accent so the "System accent" card can preview the real colour.
     private readonly Windows.UI.ViewManagement.UISettings _ui = new();
 
-    public SettingsWindow()
+    /// <summary>Opens Settings on <paramref name="initialPanel"/> (by display name, e.g. "Subtitles"), or on
+    /// About when null/unknown — About is the default landing page. The name argument is the deep-link seam:
+    /// a caller that wants to jump straight to a specific panel passes its name.</summary>
+    public SettingsWindow(string? initialPanel = null)
     {
         InitializeComponent();
         Title = "Settings";
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
-        AppWindow.Resize(new Windows.Graphics.SizeInt32(760, 560));
+        ResizeForDpi();
         ApplyTheme();
         App.Settings.Changed += ApplyTheme;
         App.MpvVersionChanged += OnMpvVersionChanged;
@@ -42,6 +48,7 @@ public sealed partial class SettingsWindow : Window
         {
             App.Settings.Changed -= ApplyTheme;
             App.MpvVersionChanged -= OnMpvVersionChanged;
+            _copyStatusTimer?.Stop(); // don't let a pending copy-status tick write to a torn-down element
             if (Content is FrameworkElement r)
                 r.ActualThemeChanged -= OnActualThemeChanged;
         };
@@ -49,58 +56,252 @@ public sealed partial class SettingsWindow : Window
         LoadAppearance();
         ShowVersion();
         _loaded = true;
+        SelectInitialPanel(initialPanel); // land on About by default (or the deep-linked panel)
+    }
+
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(IntPtr hwnd);
+
+    /// <summary>Size the window in LOGICAL pixels. The design's 760×560 is logical, but
+    /// <see cref="Microsoft.UI.Windowing.AppWindow.Resize"/> takes physical pixels, so an unscaled call comes
+    /// out cramped at >100% display scaling. Scale by the live window DPI; fall back to the raw 760×560 if the
+    /// DPI can't be read.</summary>
+    private void ResizeForDpi()
+    {
+        int width = 760, height = 560;
+        try
+        {
+            IntPtr hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            uint dpi = GetDpiForWindow(hwnd);
+            if (dpi > 0)
+            {
+                double scale = dpi / 96.0;
+                width = (int)Math.Round(760 * scale);
+                height = (int)Math.Round(560 * scale);
+            }
+        }
+        catch { /* DPI query failed — keep the safe unscaled logical size */ }
+        AppWindow.Resize(new Windows.Graphics.SizeInt32(width, height));
+    }
+
+    /// <summary>Drive the initial rail selection (rather than just toggling visibility) so the chosen panel's
+    /// load hook runs via <see cref="OnNavChanged"/>. Defaults to About; an unknown name also falls back to it.</summary>
+    private void SelectInitialPanel(string? panelName)
+    {
+        int index = ResolvePanelIndex(panelName);
+        if (index == 8)
+            NavFooterList.SelectedIndex = 0; // About lives in the bottom-pinned footer list
+        else
+            NavList.SelectedIndex = index;
+    }
+
+    private static int ResolvePanelIndex(string? name)
+    {
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+            int i = Array.FindIndex(PanelNames, p => string.Equals(p, name, StringComparison.OrdinalIgnoreCase));
+            if (i >= 0)
+                return i;
+        }
+        return 8; // About — the default landing panel
     }
 
     /// <summary>The Advanced editor rows — one per mpv.conf option. <see cref="LoadMpvConf"/> repopulates it
     /// from disk; the add/remove handlers mutate it; <see cref="OnMpvConfSave"/> serialises it back.</summary>
     public ObservableCollection<MpvOptionRow> MpvOptions { get; } = new();
 
-    /// <summary>Populate the version surfaces: the muted nav-rail footer and the About panel.
-    /// The mpv engine line is captured off-thread at engine attach (cosmetic) and may be absent.</summary>
+    /// <summary>Fill the About spec sheet (a static snapshot). The rail has no version footer — the version
+    /// lives in the About hero chip and the App card.</summary>
     private void ShowVersion()
     {
-        string version = App.AppVersion;
-        NavVersionText.Text = string.IsNullOrEmpty(version) ? string.Empty : $"v{version}";
-        AboutVersionText.Text = string.IsNullOrEmpty(version) ? string.Empty : $"Version {version}"; // the hero shows the product name
+        PopulateAbout();
+    }
 
-        // The built commit's short SHA (App.GitSha), so a stale build or a build off the wrong branch is
-        // obvious here. Hidden when unknown (built outside a git checkout); a "-dirty" suffix flags a build
-        // made with uncommitted changes.
+    private const string Dash = "—"; // em dash: the honest "no value" placeholder for an unavailable fact
+
+    /// <summary>Fill the About spec sheet from cheap, locally-available facts, read once as a static snapshot.
+    /// The libmpv line can still be unknown here (it lands at engine attach), so it is also refreshed by
+    /// <see cref="RefreshEngineVersion"/> on About-shown and on <see cref="App.MpvVersionChanged"/>. The
+    /// stale-build tag fills in asynchronously (see <see cref="StartStaleCheck"/>).</summary>
+    private void PopulateAbout()
+    {
+        string version = App.AppVersion;
+        AboutHeroVersionChip.Text = string.IsNullOrEmpty(version) ? Dash : version;
+        AboutAppVersion.Text = string.IsNullOrEmpty(version) ? Dash : version;
+
+        // Built commit's short SHA. Empty outside a git build → an em dash with no state tag. A "-dirty" suffix
+        // is kept verbatim (uncommitted build) and skips the stale check (see StartStaleCheck).
         string sha = App.GitSha;
-        if (string.IsNullOrEmpty(sha))
-        {
-            AboutBuildText.Visibility = Visibility.Collapsed;
-        }
-        else
-        {
-            AboutBuildText.Text = $"build {sha}";
-            AboutBuildText.Visibility = Visibility.Visible;
-        }
+        AboutBuildSha.Text = string.IsNullOrEmpty(sha) ? Dash : sha;
+
+        // Hardware decode + the render path. hwdec reflects the persisted preference and is re-read on
+        // About-shown (RefreshHwdec) because the Video panel can toggle it while this window is open — a
+        // one-time snapshot would go stale. The graphics backend is the app's fixed render path.
+        RefreshHwdec();
+        AboutEngineGraphics.Text = GraphicsBackend;
+
+        // Host facts.
+        AboutHostWindows.Text = WindowsBuildString();
+        AboutHostDotnet.Text = DotNetVersionString();
+        AboutHostAppSdk.Text = WindowsAppSdkVersionString();
+        AboutHostCpu.Text = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant();
 
         RefreshEngineVersion();
     }
+
+    // The real render path: native desktop OpenGL shared into D3D11 via WGL_NV_DX_interop — no ANGLE (see
+    // OkPlayer.Render). Single-sourced here so the Engine card and the copied diagnostics can't disagree.
+    private const string GraphicsBackend = "OpenGL · WGL_NV_DX_interop → D3D11";
+
+    /// <summary>Reflect the persisted hardware-decoding preference in the Engine card: on → method + accent
+    /// "ON" tag, off → software with no tag. Re-read on About-shown (not just once at populate) because the
+    /// Video panel can toggle the setting in the same window, which would otherwise leave a stale snapshot.</summary>
+    private void RefreshHwdec()
+    {
+        if (AboutEngineHwdec is null)
+            return; // the spec sheet isn't realised yet
+        bool hw = App.Settings.Current.HardwareDecoding;
+        AboutEngineHwdec.Text = HwdecMethod(hw);
+        AboutHwdecTag.Visibility = hw ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    // The decode-method label paired with the on/off state, derived from the same bool — so the card and the
+    // copied diagnostics can never disagree (the old "off · d3d11va" mismatch).
+    private static string HwdecMethod(bool hardwareDecoding) => hardwareDecoding ? "d3d11va" : "software";
 
     // App.MpvVersion is captured off the UI thread at engine attach, which can land after this window is
     // already open and even already sitting on About. Marshal to this window and refresh the About engine
     // line so it surfaces immediately, instead of waiting for the user to leave and re-enter the panel.
     private void OnMpvVersionChanged() => DispatcherQueue?.TryEnqueue(RefreshEngineVersion);
 
-    /// <summary>Show the libmpv engine line when its version is known, else hide it. The engine attaches
-    /// — and the off-thread <c>mpv-version</c> read completes — only after media starts playing, so this
-    /// is re-run when the About panel is shown, and on <see cref="App.MpvVersionChanged"/>:
-    /// a version captured after this window opened still surfaces, instead of the line staying hidden.</summary>
+    /// <summary>Show the libmpv engine version when known, else an em dash. The engine attaches — and the
+    /// off-thread <c>mpv-version</c> read completes — only after media starts playing, so this is re-run when
+    /// the About panel is shown and on <see cref="App.MpvVersionChanged"/>. The "mpv " prefix is stripped so
+    /// the value cell shows just the number.</summary>
     private void RefreshEngineVersion()
     {
+        if (AboutEngineMpv is null)
+            return; // the spec sheet isn't realised yet (called before InitializeComponent completes)
         string? mpv = App.MpvVersion;
-        if (string.IsNullOrWhiteSpace(mpv))
+        AboutEngineMpv.Text = string.IsNullOrWhiteSpace(mpv) ? Dash : StripMpvPrefix(mpv);
+    }
+
+    private static string StripMpvPrefix(string s)
+    {
+        s = s.Trim();
+        const string prefix = "mpv ";
+        return s.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? s[prefix.Length..].Trim() : s;
+    }
+
+    /// <summary>The Windows build, with the UBR revision appended when the registry exposes it
+    /// (e.g. "26100.1742"); degrades to the bare build number if the value can't be read.</summary>
+    private static string WindowsBuildString()
+    {
+        int build = Environment.OSVersion.Version.Build;
+        try
         {
-            AboutEngineText.Visibility = Visibility.Collapsed;
+            using var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
+            if (key?.GetValue("UBR") is int ubr)
+                return $"{build}.{ubr}";
         }
-        else
+        catch { /* registry read blocked — fall back to the bare build number */ }
+        return build.ToString();
+    }
+
+    /// <summary>The running .NET runtime version, e.g. ".NET 9.0.6" → "9.0.6"; the raw description otherwise.</summary>
+    private static string DotNetVersionString()
+    {
+        string d = RuntimeInformation.FrameworkDescription.Trim();
+        const string prefix = ".NET ";
+        return d.StartsWith(prefix, StringComparison.Ordinal) ? d[prefix.Length..].Trim() : d;
+    }
+
+    /// <summary>The Windows App SDK / WinUI 3 version, read from the loaded Microsoft.WinUI assembly (file
+    /// version preferred, assembly version as a fallback). An em dash if neither is readable.</summary>
+    private static string WindowsAppSdkVersionString()
+    {
+        try
         {
-            AboutEngineText.Text = mpv;
-            AboutEngineText.Visibility = Visibility.Visible;
+            System.Reflection.Assembly asm = typeof(Microsoft.UI.Xaml.Application).Assembly;
+            string location = asm.Location;
+            if (!string.IsNullOrEmpty(location))
+            {
+                string? fileVersion = System.Diagnostics.FileVersionInfo.GetVersionInfo(location).FileVersion;
+                if (!string.IsNullOrWhiteSpace(fileVersion))
+                    return fileVersion.Trim();
+            }
+            Version? v = asm.GetName().Version;
+            if (v is not null && v != new Version(0, 0, 0, 0))
+                return v.ToString();
         }
+        catch { /* unreadable assembly metadata — fall back to the em dash */ }
+        return Dash;
+    }
+
+    // ── About: diagnostics copy ────────────────────────────────────────
+
+    private void OnCopyDiagnostics(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var data = new DataPackage { RequestedOperation = DataPackageOperation.Copy };
+            data.SetText(BuildDiagnosticsText());
+            Clipboard.SetContent(data);
+            ShowCopyStatus("Diagnostics copied");
+        }
+        catch
+        {
+            ShowCopyStatus("Couldn't copy");
+        }
+    }
+
+    /// <summary>The whole sheet as plain text (the README diagnostics format), built from the same live
+    /// values shown in the cards.</summary>
+    private string BuildDiagnosticsText()
+    {
+        string ver = string.IsNullOrEmpty(App.AppVersion) ? Dash : App.AppVersion;
+        string buildLine = $"Build {AboutBuildSha.Text}";
+
+        bool hw = App.Settings.Current.HardwareDecoding;
+        string hwLine = $"{(hw ? "on" : "off")} · {HwdecMethod(hw)}"; // both from the live bool — never "off · d3d11va"
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append("OK Player ").Append(ver).Append(" (Stable)\n");
+        sb.Append(buildLine).Append('\n');
+        sb.Append("License GPL-3.0-or-later\n\n");
+        sb.Append("Engine\n");
+        AppendDiagLine(sb, "libmpv", AboutEngineMpv.Text);
+        AppendDiagLine(sb, "FFmpeg", Dash);
+        AppendDiagLine(sb, "Render API", "libmpv render");
+        AppendDiagLine(sb, "Graphics", GraphicsBackend);
+        AppendDiagLine(sb, "Hardware decode", hwLine);
+        sb.Append("\nHost\n");
+        AppendDiagLine(sb, "Windows 11", AboutHostWindows.Text);
+        AppendDiagLine(sb, ".NET", AboutHostDotnet.Text);
+        AppendDiagLine(sb, "Windows App SDK", AboutHostAppSdk.Text);
+        AppendDiagLine(sb, "CPU", AboutHostCpu.Text);
+        AppendDiagLine(sb, "GPU", Dash);
+        return sb.ToString();
+    }
+
+    private static void AppendDiagLine(System.Text.StringBuilder sb, string label, string value)
+        => sb.Append("  ").Append(label.PadRight(17)).Append(value).Append('\n');
+
+    private Microsoft.UI.Xaml.DispatcherTimer? _copyStatusTimer;
+
+    private void ShowCopyStatus(string text)
+    {
+        AboutCopyStatus.Text = text;
+        _copyStatusTimer ??= CreateCopyStatusTimer();
+        _copyStatusTimer.Stop();
+        _copyStatusTimer.Start();
+    }
+
+    private Microsoft.UI.Xaml.DispatcherTimer CreateCopyStatusTimer()
+    {
+        var t = new Microsoft.UI.Xaml.DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        t.Tick += (_, _) => { t.Stop(); AboutCopyStatus.Text = string.Empty; };
+        return t;
     }
 
     private void ApplyTheme()
@@ -145,11 +346,36 @@ public sealed partial class SettingsWindow : Window
             LoadAudio();
     }
 
+    private bool _navSyncing; // guards the cross-list deselect from re-entering this handler
+
+    // The rail is split: the main list holds Appearance..Advanced, and About is a bottom-pinned one-item
+    // footer list. Selecting in one clears the other so only one row is ever highlighted. Index 8 == About.
     private void OnNavChanged(object sender, SelectionChangedEventArgs e)
     {
         if (AppearancePanel is null) // SelectedIndex=0 fires during InitializeComponent, before the pane exists
             return;
-        int i = NavList.SelectedIndex;
+        if (_navSyncing)
+            return; // a deselection we just triggered on the other list — ignore it
+        int i;
+        if (ReferenceEquals(sender, NavFooterList))
+        {
+            if (NavFooterList.SelectedIndex < 0)
+                return;
+            i = 8; // About
+            _navSyncing = true; NavList.SelectedIndex = -1; _navSyncing = false;
+        }
+        else
+        {
+            if (NavList.SelectedIndex < 0)
+                return;
+            i = NavList.SelectedIndex;
+            _navSyncing = true; NavFooterList.SelectedIndex = -1; _navSyncing = false;
+        }
+        ShowPanel(i);
+    }
+
+    private void ShowPanel(int i)
+    {
         bool appearance = i == 0;
         bool playback = i == 1;
         bool subtitles = i == 2;
@@ -175,7 +401,10 @@ public sealed partial class SettingsWindow : Window
             LoadMpvConf();
         }
         else if (about)
+        {
+            RefreshHwdec();         // the Video panel can toggle hwdec while this window is open — re-read it
             RefreshEngineVersion(); // engine version may have been captured after this window opened
+        }
         else if (integration)
             LoadIntegration();
         else if (playback)
