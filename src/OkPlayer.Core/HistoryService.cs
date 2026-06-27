@@ -254,6 +254,19 @@ public sealed class HistoryService
                 .ToList();
     }
 
+    /// <summary>Every tracked file that still exists on disk, newest-opened first — the full History
+    /// list. Unlike <see cref="Recents"/> this keeps finished files and applies no resume-progress
+    /// threshold; missing files are still hidden, so History never shows a dead path.</summary>
+    public IReadOnlyList<(string Path, FileRecord Record)> All()
+    {
+        lock (_lock)
+            return _records
+                .Where(kv => File.Exists(kv.Key))
+                .OrderByDescending(kv => kv.Value.LastOpenedUtc, StringComparer.Ordinal)
+                .Select(kv => (kv.Key, kv.Value))
+                .ToList();
+    }
+
     /// <summary>Wipe all watch history (resume positions, recents, bookmarks, user chapters). Returns
     /// the number of file records removed. Persists the empty store so it survives restart.</summary>
     public int Clear()
@@ -268,6 +281,24 @@ public sealed class HistoryService
         }
         Save();
         Changed?.Invoke();
+        return removed;
+    }
+
+    /// <summary>Remove a single file's entry (resume position, bookmarks, user chapters, poster).
+    /// Returns true if a record existed and was dropped. Persists and fires <see cref="Changed"/> so
+    /// open surfaces — the recents shelf and the History list — refresh instead of showing it again.</summary>
+    public bool Remove(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return false;
+        bool removed;
+        lock (_lock)
+            removed = _records.Remove(path);
+        if (removed)
+        {
+            Save();
+            Changed?.Invoke();
+        }
         return removed;
     }
 

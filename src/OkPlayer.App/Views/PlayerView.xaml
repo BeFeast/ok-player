@@ -312,6 +312,9 @@
             </Grid>
         </Grid>
 
+        <!-- ===== History surface: third idle-canvas state (over Mica), opened from the welcome footer / H ===== -->
+        <views:HistoryView x:Name="HistorySurface" Visibility="Collapsed" />
+
         <!-- ===== top chrome: scrim + title ===== -->
         <Grid x:Name="TitleChrome" VerticalAlignment="Top" Height="42" Opacity="0">
             <Grid.RenderTransform><TranslateTransform x:Name="TitleTransform" Y="-10" /></Grid.RenderTransform>

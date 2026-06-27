@@ -196,4 +196,65 @@ public class HistoryServiceTests : IDisposable
         Assert.Equal(0, h.PruneOlderThan(30)); // 5 days < 30 -> kept
         Assert.NotNull(h.Get(Movie));
     }
+
+    [Fact]
+    public void Remove_DropsRecord_ReturnsTrue_FiresChanged_AndPersists()
+    {
+        var h = New();
+        h.Record(Movie, 10, 100);
+        int changed = 0;
+        h.Changed += () => changed++;
+
+        Assert.True(h.Remove(Movie));
+        Assert.Null(h.Get(Movie));
+        Assert.Equal(1, changed);
+
+        Assert.Null(New().Get(Movie)); // removal reached disk
+    }
+
+    [Fact]
+    public void Remove_AbsentOrEmptyPath_ReturnsFalse_AndDoesNotFireChanged()
+    {
+        var h = New();
+        int changed = 0;
+        h.Changed += () => changed++;
+
+        Assert.False(h.Remove(Movie)); // never recorded
+        Assert.False(h.Remove(""));
+        Assert.Equal(0, changed);
+    }
+
+    [Fact]
+    public void All_ReturnsExistingFilesNewestFirst_IncludingFinished()
+    {
+        var h = New();
+        string a = TempMedia(), b = TempMedia();
+        try
+        {
+            h.Record(a, 30, 600);
+            h.Record(b, 0, 600, finished: true);
+            h.Get(a)!.LastOpenedUtc = DateTime.UtcNow.AddMinutes(-10).ToString("o"); // older
+            h.Get(b)!.LastOpenedUtc = DateTime.UtcNow.ToString("o");                 // newer
+
+            var all = h.All();
+            Assert.Equal(new[] { b, a }, all.Select(x => x.Path)); // newest-opened first
+            Assert.True(all.Single(x => x.Path == b).Record.Finished); // finished files are kept
+        }
+        finally { File.Delete(a); File.Delete(b); }
+    }
+
+    [Fact]
+    public void All_HidesMissingFiles()
+    {
+        var h = New();
+        h.Record(Movie, 10, 100); // Movie path does not exist on disk
+        Assert.Empty(h.All());
+    }
+
+    private static string TempMedia()
+    {
+        string p = Path.Combine(Path.GetTempPath(), $"okplayer-media-{Guid.NewGuid():N}.mkv");
+        File.WriteAllText(p, "x");
+        return p;
+    }
 }

@@ -1,0 +1,210 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="OkPlayer.App.Views.HistoryView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:OkPlayer.App.ViewModels"
+    IsTabStop="True">
+
+    <UserControl.Resources>
+        <vm:BoolToOpacityConverter x:Key="BoolToOpacity" />
+    </UserControl.Resources>
+
+    <!-- canvas-takeover History surface (third idle state, over Mica). ContextRequested is swallowed at
+         the root so the player's right-click menu never shows through; rows raise their own menu. -->
+    <Grid Background="Transparent" ContextRequested="OnSurfaceContextRequested" RowDefinitions="*,Auto">
+
+        <ScrollViewer Grid.Row="0" x:Name="Scroll" VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollMode="Disabled" ZoomMode="Disabled" Padding="0">
+            <StackPanel MaxWidth="792" HorizontalAlignment="Center" Padding="26,30,26,40">
+
+                <!-- header: back + title + search -->
+                <Grid ColumnDefinitions="Auto,*,Auto" MinHeight="44" ColumnSpacing="11">
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="11" VerticalAlignment="Center">
+                        <Button Click="OnBackClick" Width="32" Height="32" Padding="0" CornerRadius="8"
+                                Background="{ThemeResource OkSubtleFillStrongBrush}" BorderThickness="0"
+                                Foreground="{ThemeResource TextFillColorPrimaryBrush}" ToolTipService.ToolTip="Back to Continue watching">
+                            <FontIcon Glyph="&#xE76B;" FontSize="15" />
+                        </Button>
+                        <TextBlock Text="History" FontSize="30" FontWeight="SemiBold" CharacterSpacing="-15"
+                                   Foreground="{ThemeResource TextFillColorPrimaryBrush}" VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <Border x:Name="SearchWrap" Grid.Column="2" Width="236" CornerRadius="8" Padding="10,8"
+                            Background="{ThemeResource OkSubtleFillStrongBrush}" BorderThickness="1"
+                            BorderBrush="{ThemeResource OkStrokeBrush}" VerticalAlignment="Center">
+                        <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                            <FontIcon Grid.Column="0" Glyph="&#xE721;" FontSize="13"
+                                      Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <TextBox x:Name="SearchBox" Grid.Column="1" PlaceholderText="Search&#x2026;"
+                                     BorderThickness="0" Background="Transparent" Padding="0" MinHeight="0"
+                                     FontSize="13" TextChanged="OnSearchChanged" KeyDown="OnSearchKeyDown" />
+                            <Button x:Name="SearchClear" Grid.Column="2" Click="OnClearSearchClick" Width="18" Height="18"
+                                    Padding="0" CornerRadius="5" Visibility="Collapsed" BorderThickness="0"
+                                    Background="{ThemeResource OkSubtleFillStrongBrush}"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}">
+                                <FontIcon Glyph="&#xE711;" FontSize="10" />
+                            </Button>
+                        </Grid>
+                    </Border>
+                </Grid>
+
+                <!-- subtitle + retention link -->
+                <TextBlock Margin="0,8,0,0" FontSize="13.5" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           TextWrapping="Wrap">
+                    <Run Text="Everything you&#x2019;ve opened &#x00B7; " /><Hyperlink Click="OnRetentionClick"
+                        Foreground="{ThemeResource OkAccentTextBrush}" UnderlineStyle="Single">keeping last 90 days</Hyperlink>
+                </TextBlock>
+
+                <Border Height="1" Margin="0,16,0,0" Background="{ThemeResource OkStrokeBrush}" />
+
+                <!-- private banner -->
+                <Border x:Name="PrivateBanner" Visibility="Collapsed" Margin="0,16,0,0" Padding="13,9" CornerRadius="8"
+                        Background="{ThemeResource OkSubtleFillStrongBrush}" BorderThickness="1" BorderBrush="{ThemeResource OkStrokeBrush}">
+                    <StackPanel Orientation="Horizontal" Spacing="9">
+                        <FontIcon Glyph="&#xED1A;" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
+                        <TextBlock Text="Private mode &#x2014; new opens aren&#x2019;t being recorded. Your existing history is still here."
+                                   FontSize="12" FontWeight="Medium" TextWrapping="Wrap"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Border>
+
+                <!-- ===== mode host ===== -->
+                <Grid x:Name="StateHost" Margin="0,0,0,0">
+
+                    <!-- LIST -->
+                    <StackPanel x:Name="ListPanel">
+                        <TextBlock x:Name="ResultsCaption" Visibility="Collapsed" Margin="12,18,0,0"
+                                   FontSize="11" FontWeight="SemiBold" CharacterSpacing="40"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <ItemsControl x:Name="GroupsList">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:HistoryGroup">
+                                    <StackPanel Margin="0,18,0,0">
+                                        <TextBlock Text="{x:Bind Header}" Visibility="{x:Bind HeaderVisibility}"
+                                                   FontSize="11" FontWeight="SemiBold" CharacterSpacing="90" Padding="12,0,0,8"
+                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                        <ItemsControl ItemsSource="{x:Bind Rows}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:HistoryRow">
+                                                    <Grid Tapped="OnRowTapped" ContextRequested="OnRowContextRequested"
+                                                          PointerEntered="OnRowPointerEntered" PointerExited="OnRowPointerExited"
+                                                          Background="Transparent" Padding="0" Margin="0,1">
+                                                        <!-- hover background (fades in on pointer-over) -->
+                                                        <Border CornerRadius="7" Background="{ThemeResource OkSubtleFillStrongBrush}"
+                                                                Opacity="{x:Bind Hovered, Mode=OneWay, Converter={StaticResource BoolToOpacity}}" />
+                                                        <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="13" Padding="10,9,12,9">
+                                                            <!-- thumbnail 64x36 + progress fill -->
+                                                            <Border Grid.Column="0" Width="64" Height="36" CornerRadius="6"
+                                                                    Opacity="{x:Bind ThumbOpacity}">
+                                                                <Grid>
+                                                                    <Border Background="{x:Bind PlaceholderGradient}" CornerRadius="6" />
+                                                                    <Image Source="{x:Bind Poster, Mode=OneWay}" Stretch="UniformToFill" />
+                                                                    <Border HorizontalAlignment="Left" VerticalAlignment="Bottom" Height="3"
+                                                                            Width="{x:Bind FillWidth}" Background="#FF28B3AA"
+                                                                            Visibility="{x:Bind FillVisibility}" />
+                                                                </Grid>
+                                                            </Border>
+                                                            <!-- title + folder -->
+                                                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="3">
+                                                                <TextBlock Text="{x:Bind Title}" FontSize="13" FontWeight="Medium"
+                                                                           MaxLines="1" TextTrimming="CharacterEllipsis"
+                                                                           Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                                                                <TextBlock Text="{x:Bind Folder}" FontSize="11.5" MaxLines="1"
+                                                                           TextTrimming="CharacterEllipsis"
+                                                                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                                            </StackPanel>
+                                                            <!-- when + state -->
+                                                            <StackPanel Grid.Column="2" MinWidth="92" Spacing="5"
+                                                                        HorizontalAlignment="Right" VerticalAlignment="Center">
+                                                                <TextBlock Text="{x:Bind When}" FontSize="11.5" HorizontalAlignment="Right"
+                                                                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                                                <!-- finished chip -->
+                                                                <Border Visibility="{x:Bind FinishedVisibility}" HorizontalAlignment="Right"
+                                                                        CornerRadius="6" Padding="6,3,8,3" Background="{ThemeResource OkSubtleFillStrongBrush}">
+                                                                    <StackPanel Orientation="Horizontal" Spacing="4">
+                                                                        <FontIcon Glyph="&#xE73E;" FontSize="10"
+                                                                                  Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                                                        <TextBlock Text="Finished" FontSize="10.5" FontWeight="SemiBold"
+                                                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                                                    </StackPanel>
+                                                                </Border>
+                                                                <!-- in-progress: time left (accent) -->
+                                                                <TextBlock Text="{x:Bind StateLabel}" Visibility="{x:Bind ProgressVisibility}"
+                                                                           HorizontalAlignment="Right" FontSize="11" FontWeight="SemiBold"
+                                                                           Foreground="{ThemeResource OkAccentTextBrush}" />
+                                                                <!-- barely started: minutes in (secondary) -->
+                                                                <TextBlock Text="{x:Bind StateLabel}" Visibility="{x:Bind BarelyVisibility}"
+                                                                           HorizontalAlignment="Right" FontSize="11"
+                                                                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                                            </StackPanel>
+                                                            <!-- overflow -->
+                                                            <Button Grid.Column="3" Click="OnRowMenuClick" Width="30" Height="30" Padding="0"
+                                                                    VerticalAlignment="Center" CornerRadius="7" BorderThickness="0"
+                                                                    Background="Transparent" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                                    Opacity="{x:Bind Hovered, Mode=OneWay, Converter={StaticResource BoolToOpacity}}"
+                                                                    ToolTipService.ToolTip="More">
+                                                                <FontIcon Glyph="&#xE712;" FontSize="15" />
+                                                            </Button>
+                                                        </Grid>
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <Border x:Name="EndCap" Margin="0,26,0,0" Padding="0,18,0,0"
+                                BorderThickness="0,1,0,0" BorderBrush="{ThemeResource OkStrokeBrush}">
+                            <TextBlock Text="End of history &#x00B7; keeping last 90 days" TextAlignment="Center"
+                                       FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                        </Border>
+                    </StackPanel>
+
+                    <!-- EMPTY / NO-MATCHES card (icon + title + body + optional button) -->
+                    <Border x:Name="StateCard" Visibility="Collapsed" Margin="0,30,0,0" MaxWidth="430"
+                            HorizontalAlignment="Center" CornerRadius="12" Padding="28,34"
+                            Background="{ThemeResource OkSubtleFillStrongBrush}" BorderThickness="1" BorderBrush="{ThemeResource OkStrokeBrush}">
+                        <StackPanel HorizontalAlignment="Center" Spacing="11">
+                            <Border Width="54" Height="54" CornerRadius="14" HorizontalAlignment="Center"
+                                    Background="{ThemeResource OkAccentTintBrush}">
+                                <FontIcon x:Name="StateIcon" Glyph="&#xE81C;" FontSize="22" Foreground="{ThemeResource OkAccentTextBrush}" />
+                            </Border>
+                            <TextBlock x:Name="StateTitle" FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Center"
+                                       TextAlignment="Center" Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                            <TextBlock x:Name="StateBody" FontSize="12.5" MaxWidth="300" TextWrapping="Wrap" LineHeight="19"
+                                       HorizontalAlignment="Center" TextAlignment="Center"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <Button x:Name="StateButton" Visibility="Collapsed" Click="OnClearSearchClick" Margin="0,4,0,0"
+                                    HorizontalAlignment="Center" CornerRadius="7" Padding="18,8" BorderThickness="0"
+                                    Background="{ThemeResource OkAccentBrush}" Foreground="White">
+                                <TextBlock Text="Clear search" FontSize="12" FontWeight="SemiBold" />
+                            </Button>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- footer: left flips to "Continue watching", center records pill, right gear -->
+        <Grid Grid.Row="1" Height="42" Padding="24,0" BorderThickness="0,1,0,0" BorderBrush="{ThemeResource OkStrokeBrush}"
+              ColumnDefinitions="Auto,*,Auto">
+            <Button Grid.Column="0" Click="OnFooterLeftClick" Background="Transparent" BorderThickness="0" Padding="2,4"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon Glyph="&#xE76B;" FontSize="12" />
+                    <TextBlock Text="Continue watching" FontSize="12" FontWeight="Medium" />
+                </StackPanel>
+            </Button>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="5" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <Ellipse x:Name="FooterDot" Width="6" Height="6" Fill="#FF28B3AA" />
+                <TextBlock x:Name="FooterPill" Text="Recording history" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+            </StackPanel>
+            <Button Grid.Column="2" Click="OnSettingsClick" Background="Transparent" BorderThickness="0" Padding="6"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" ToolTipService.ToolTip="Settings">
+                <FontIcon Glyph="&#xE713;" FontSize="15" />
+            </Button>
+        </Grid>
+    </Grid>
+</UserControl>
