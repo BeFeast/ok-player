@@ -10,11 +10,8 @@ namespace OkPlayer.App.Services;
 public sealed class AppSettings
 {
     // Appearance (design band 9 — fully rendered)
-    public string Theme { get; set; } = "Auto";        // "Light" | "Auto"
+    public string Theme { get; set; } = "Auto";        // "Light" | "Dark" | "Auto"
     public string AccentSource { get; set; } = "OkTeal"; // "System" | "OkTeal"
-    public int MicaTitlebar { get; set; } = 55;          // 0..100
-    public int MicaPanels { get; set; } = 70;            // 0..100
-    public int MicaOverlays { get; set; } = 40;          // 0..100
 
     // Playback (design band 9)
     public bool ResumePlayback { get; set; } = true;     // resume from the last position on open

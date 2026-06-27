@@ -95,8 +95,17 @@ public sealed partial class SettingsWindow : Window
     private void ApplyTheme()
     {
         if (Content is FrameworkElement root)
-            root.RequestedTheme = App.Settings.Current.Theme == "Light" ? ElementTheme.Light : ElementTheme.Default;
+            root.RequestedTheme = ThemeFor(App.Settings.Current.Theme);
     }
+
+    /// <summary>Map the persisted theme preference to an <see cref="ElementTheme"/>: explicit Light/Dark, or
+    /// Default ("Auto" — follow the system) for anything else. Shared by the player window.</summary>
+    internal static ElementTheme ThemeFor(string theme) => theme switch
+    {
+        "Light" => ElementTheme.Light,
+        "Dark" => ElementTheme.Dark,
+        _ => ElementTheme.Default,
+    };
 
     // The segment pills and the Shortcuts key chips bake theme-dependent colors when they are built (the
     // chips only once). ActualThemeChanged fires whenever the effective theme flips — by setting change or
@@ -553,31 +562,18 @@ public sealed partial class SettingsWindow : Window
 
     // ── Appearance panel ───────────────────────────────────────────────
 
-    private void LoadAppearance()
-    {
-        var s = App.Settings.Current;
-        // settings.json is hand-editable: normalize before binding to the 0..100 sliders.
-        s.MicaTitlebar = Math.Clamp(s.MicaTitlebar, 0, 100);
-        s.MicaPanels = Math.Clamp(s.MicaPanels, 0, 100);
-        s.MicaOverlays = Math.Clamp(s.MicaOverlays, 0, 100);
-        MicaTitlebarSlider.Value = s.MicaTitlebar;
-        MicaPanelsSlider.Value = s.MicaPanels;
-        MicaOverlaysSlider.Value = s.MicaOverlays;
-        RefreshAppearance();
-    }
+    private void LoadAppearance() => RefreshAppearance();
 
     private void RefreshAppearance()
     {
         var s = App.Settings.Current;
-        bool light = s.Theme == "Light";
-        StyleSegment(ThemeLightBtn, light);
-        StyleSegment(ThemeAutoBtn, !light);
+        // "Auto" is anything that isn't an explicit Light/Dark — mirrors ThemeFor's default arm.
+        StyleSegment(ThemeLightBtn, s.Theme == "Light");
+        StyleSegment(ThemeDarkBtn, s.Theme == "Dark");
+        StyleSegment(ThemeAutoBtn, s.Theme is not ("Light" or "Dark"));
         bool teal = s.AccentSource == "OkTeal";
         StyleCard(AccentTealBtn, teal);
         StyleCard(AccentSystemBtn, !teal);
-        MicaTitlebarVal.Text = $"{s.MicaTitlebar}%";
-        MicaPanelsVal.Text = $"{s.MicaPanels}%";
-        MicaOverlaysVal.Text = $"{s.MicaOverlays}%";
     }
 
     private void StyleSegment(Button b, bool selected)
@@ -604,6 +600,7 @@ public sealed partial class SettingsWindow : Window
     }
 
     private void OnThemeLight(object sender, RoutedEventArgs e) => SetTheme("Light");
+    private void OnThemeDark(object sender, RoutedEventArgs e) => SetTheme("Dark");
     private void OnThemeAuto(object sender, RoutedEventArgs e) => SetTheme("Auto");
 
     private void SetTheme(string theme)
@@ -620,18 +617,6 @@ public sealed partial class SettingsWindow : Window
     {
         App.Settings.Current.AccentSource = source; // live accent swap is a later refinement; persist + reflect now
         App.Settings.Save();
-        RefreshAppearance();
-    }
-
-    private void OnMicaChanged(object sender, RangeBaseValueChangedEventArgs e)
-    {
-        if (!_loaded)
-            return;
-        var s = App.Settings.Current;
-        s.MicaTitlebar = (int)MicaTitlebarSlider.Value;
-        s.MicaPanels = (int)MicaPanelsSlider.Value;
-        s.MicaOverlays = (int)MicaOverlaysSlider.Value;
-        App.Settings.Save();   // effect deferred (WinUI Mica has no per-surface intensity API); value persists
         RefreshAppearance();
     }
 
