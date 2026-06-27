@@ -31,9 +31,9 @@
         <Canvas x:Name="TickCanvas" Height="9" VerticalAlignment="Center" IsHitTestVisible="False" />
         <!-- A–B loop point markers -->
         <Border x:Name="AbMarkerA" Width="2" Height="13" CornerRadius="1" Visibility="Collapsed"
-                VerticalAlignment="Center" HorizontalAlignment="Left" Background="#FF28B3AA" IsHitTestVisible="False" />
+                VerticalAlignment="Center" HorizontalAlignment="Left" Background="{ThemeResource OkSeekFillBrush}" IsHitTestVisible="False" />
         <Border x:Name="AbMarkerB" Width="2" Height="13" CornerRadius="1" Visibility="Collapsed"
-                VerticalAlignment="Center" HorizontalAlignment="Left" Background="#FF28B3AA" IsHitTestVisible="False" />
+                VerticalAlignment="Center" HorizontalAlignment="Left" Background="{ThemeResource OkSeekFillBrush}" IsHitTestVisible="False" />
         <!-- thumb -->
         <Ellipse x:Name="ThumbDot" Width="13" Height="13" Fill="White"
                  VerticalAlignment="Center" HorizontalAlignment="Left" />
