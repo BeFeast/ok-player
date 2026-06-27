@@ -15,7 +15,7 @@
             </Button>
             <Grid Width="18" Height="3" Margin="0,-3,0,0">
                 <Border Background="#30FFFFFF" CornerRadius="2" />
-                <Border x:Name="Wick" Background="#FF28B3AA" CornerRadius="2" HorizontalAlignment="Left" Width="14" />
+                <Border x:Name="Wick" Background="{ThemeResource OkOverVideoAccentBrush}" CornerRadius="2" HorizontalAlignment="Left" Width="14" />
             </Grid>
         </StackPanel>
 
@@ -29,7 +29,7 @@
                     <Canvas x:Name="Track" Width="96" Height="14" Background="Transparent"
                             PointerPressed="OnTrackPressed" PointerMoved="OnTrackMoved" PointerReleased="OnTrackReleased">
                         <Border Canvas.Top="4" Width="96" Height="6" CornerRadius="3" Background="#33FFFFFF" />
-                        <Border x:Name="TealFill" Canvas.Top="4" Canvas.Left="0" Height="6" CornerRadius="3" Background="#FF28B3AA" />
+                        <Border x:Name="TealFill" Canvas.Top="4" Canvas.Left="0" Height="6" CornerRadius="3" Background="{ThemeResource OkOverVideoAccentBrush}" />
                         <Border x:Name="AmberFill" Canvas.Top="4" Height="6" Background="#FFF0B840" Visibility="Collapsed" />
                         <Border x:Name="Marker" Canvas.Top="1" Width="2" Height="12" CornerRadius="1" Background="#80FFFFFF" />
                         <Border x:Name="Thumb" Canvas.Top="0" Width="14" Height="14" CornerRadius="7" Background="White">

@@ -101,7 +101,7 @@
                                                                     <Border Background="{x:Bind PlaceholderGradient}" CornerRadius="6" />
                                                                     <Image Source="{x:Bind Poster, Mode=OneWay}" Stretch="UniformToFill" />
                                                                     <Border HorizontalAlignment="Left" VerticalAlignment="Bottom" Height="3"
-                                                                            Width="{x:Bind FillWidth}" Background="#FF28B3AA"
+                                                                            Width="{x:Bind FillWidth}" Background="{ThemeResource OkOverVideoAccentBrush}"
                                                                             Visibility="{x:Bind FillVisibility}" />
                                                                 </Grid>
                                                             </Border>
@@ -198,7 +198,7 @@
                 </StackPanel>
             </Button>
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="5" HorizontalAlignment="Center" VerticalAlignment="Center">
-                <Ellipse x:Name="FooterDot" Width="6" Height="6" Fill="#FF28B3AA" />
+                <Ellipse x:Name="FooterDot" Width="6" Height="6" Fill="{ThemeResource OkOverVideoAccentBrush}" />
                 <TextBlock x:Name="FooterPill" Text="Recording history" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
             </StackPanel>
             <Button Grid.Column="2" Click="OnSettingsClick" Background="Transparent" BorderThickness="0" Padding="6"

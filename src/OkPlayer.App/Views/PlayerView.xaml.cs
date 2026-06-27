@@ -41,6 +41,7 @@ public sealed partial class PlayerView : UserControl
     private double _resumeTarget = -1; // pending resume position, applied on the first Duration after open
     private bool _reachedEnd; // latched when the current file plays through to a natural EOF; resets on open
     private double? _explicitResume; // exact resume from a library launch (PRD §13.1): overrides history, skips the heuristic
+    private int? _resumeSubId, _resumeAudioId; // remembered per-file track choice from history, applied right after open (a launch --sub/--audio still wins)
 
     /// <summary>The full resumable continue-watching pool (most-recent first).</summary>
     public ObservableCollection<RecentEntry> Recents { get; } = new();
@@ -803,7 +804,8 @@ public sealed partial class PlayerView : UserControl
             // resume/continue-watching clean. "Final stretch" = the last 30s, but never more than the final 5%.
             double completeAt = Math.Max(Vm.Duration * 0.95, Vm.Duration - 30);
             double position = (_reachedEnd || Vm.Position >= completeAt) ? 0 : Vm.Position;
-            _history.Record(path, position, Vm.Duration, _reachedEnd);
+            // Also remember the user's current subtitle/audio track choice so reopening the file restores it.
+            _history.Record(path, position, Vm.Duration, _reachedEnd, Vm.CurrentSubtitleId, Vm.CurrentAudioId);
         }
     }
 
@@ -822,6 +824,7 @@ public sealed partial class PlayerView : UserControl
         _reachedEnd = false;
         _explicitResume = null;
         _resumeTarget = -1;
+        _resumeSubId = _resumeAudioId = null;
         _openGeneration++;       // invalidate any in-flight chapter/thumbnail warm for the closed file
         _playlist = null;        // drop the folder-as-playlist…
         UpNext.Clear();          // …and its projected rows
@@ -1762,6 +1765,26 @@ public sealed partial class PlayerView : UserControl
         }
     }
 
+    /// <summary>Restore the subtitle/audio track the user last chose for this file (captured into
+    /// <see cref="_resumeSubId"/>/<see cref="_resumeAudioId"/> from history in <see cref="OpenMedia"/>). Same
+    /// shape and lifecycle as <see cref="ApplyLaunchTracks"/> — set once right after open, since mpv applies
+    /// sid/aid as the file loads. Same value convention: -1 = off/none, &gt;= 1 = a real mpv track, null =
+    /// nothing remembered -> leave mpv's default. A launch preselect runs after this and overrides it.</summary>
+    private void ApplyRememberedTracks()
+    {
+        if (_resumeSubId is int s)
+        {
+            if (s < 0) Vm.SetSubtitleOff();
+            else if (s >= 1) Vm.SelectSubtitleId(s);
+        }
+        if (_resumeAudioId is int a)
+        {
+            if (a < 0) Vm.SetAudioOff();
+            else if (a >= 1) Vm.SelectAudioId(a);
+        }
+        _resumeSubId = _resumeAudioId = null; // apply once per open
+    }
+
     /// <summary>Load a local path or URL into the engine. Never throws to the caller — a failed open
     /// surfaces a toast (a genuine decode/format failure later arrives as an EndFile(Error) toast).</summary>
     public void OpenMedia(string pathOrUrl, bool fromStart = false)
@@ -1786,11 +1809,19 @@ public sealed partial class PlayerView : UserControl
             _openGeneration++;     // invalidate any in-flight chapter-warm pass for the previous file
             // resume only when the user keeps that on (Settings -> Playback) and didn't ask to start over
             // (History's "Play from start"); applied on the first Duration
-            _resumeTarget = (!fromStart && App.Settings.Current.ResumePlayback ? _history.Get(pathOrUrl)?.Position : null) ?? -1;
+            var record = _history.Get(pathOrUrl);
+            _resumeTarget = (!fromStart && App.Settings.Current.ResumePlayback ? record?.Position : null) ?? -1;
+            // Remember the per-file subtitle/audio track choice from a previous viewing. Independent of the
+            // resume position (and of ResumePlayback / "Play from start"): null = none recorded -> leave mpv's
+            // default. Applied right after open, mirroring the launch preselect; a launch --sub/--audio override
+            // (ApplyLaunchTracks, called after OpenMedia returns) still wins by running last.
+            _resumeSubId = record?.SubtitleId;
+            _resumeAudioId = record?.AudioId;
             Vm.SetSpeed(App.Settings.Current.DefaultSpeed); // every file starts at the default speed, incl. 1x
                                                             // (so a manual speed change doesn't carry over)
             ApplySubtitleDefaults(); // default sub size/position (Settings -> Subtitles)
             ApplyAudioDefaults();    // loudness normalization (Settings -> Audio)
+            ApplyRememberedTracks(); // reselect the remembered sub/audio track (mpv honours sid/aid as the file loads)
             LoadBookmarks();       // refresh the panel's bookmarks for the new file (panel may be open)
             LoadUserChapters();    // feed the file's user-added chapters in (merge with the file's own)
             RevealChrome();        // show the controls when a file opens (drag-drop / picker)

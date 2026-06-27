@@ -95,16 +95,31 @@ public sealed class SettingsService
     {
         if (_path is not null)
         {
-            try
+            string json;
+            lock (_lock)
+                json = JsonSerializer.Serialize(Current, JsonOpts);
+            string tmp = _path + ".tmp";
+            // Files under %APPDATA% take brief shared locks from Defender and the Search indexer, which scan
+            // each newly written file. That made the atomic replace throw a sharing violation and — because
+            // the failure was swallowed — silently drop the save, which looked like "the System accent
+            // reverts to teal after a restart". Retry across the transient lock so the save actually lands.
+            for (int attempt = 0; ; attempt++)
             {
-                string json;
-                lock (_lock)
-                    json = JsonSerializer.Serialize(Current, JsonOpts);
-                string tmp = _path + ".tmp";
-                File.WriteAllText(tmp, json);
-                File.Move(tmp, _path, overwrite: true); // replace in one step so a crash can't truncate
+                try
+                {
+                    File.WriteAllText(tmp, json);
+                    File.Move(tmp, _path, overwrite: true); // replace in one step so a crash can't truncate
+                    break;
+                }
+                catch (Exception ex) when (attempt < 8 && ex is IOException or UnauthorizedAccessException)
+                {
+                    System.Threading.Thread.Sleep(30); // up to ~240ms; the scanner's lock clears well within this
+                }
+                catch
+                {
+                    break; // give up after the retries (or an unexpected error) — Save stays best-effort, never throws
+                }
             }
-            catch { /* best effort */ }
         }
         Changed?.Invoke();
     }

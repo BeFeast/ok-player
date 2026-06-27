@@ -121,14 +121,14 @@
                             <Button x:Name="AccentSystemBtn" Click="OnAccentSystem" CornerRadius="8" Padding="10,12"
                                     Background="Transparent" BorderThickness="1" BorderBrush="{ThemeResource OkStrokeBrush}">
                                 <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-                                    <Border Width="18" Height="18" CornerRadius="5" Background="#FF0067C0" />
+                                    <Border x:Name="SystemAccentSwatch" Width="18" Height="18" CornerRadius="5" />
                                     <TextBlock Text="System accent" FontSize="12.5" VerticalAlignment="Center" />
                                 </StackPanel>
                             </Button>
                             <Button x:Name="AccentTealBtn" Click="OnAccentTeal" CornerRadius="8" Padding="10,12"
                                     Background="Transparent" BorderThickness="1" BorderBrush="{ThemeResource OkStrokeBrush}">
                                 <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-                                    <Border Width="18" Height="18" CornerRadius="5" Background="{ThemeResource OkAccentBrush}" />
+                                    <Border Width="18" Height="18" CornerRadius="5" Background="#FF10938A" />
                                     <TextBlock Text="OK Player teal" FontSize="12.5" VerticalAlignment="Center" />
                                 </StackPanel>
                             </Button>

@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Globalization;
+using System.Linq;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Microsoft.UI.Dispatching;
 using OkPlayer.Core;
@@ -53,6 +54,13 @@ public partial class PlayerViewModel : ObservableObject
     public ObservableCollection<TrackInfo> AudioTracks { get; } = new();
     public ObservableCollection<AudioDevice> AudioDevices { get; } = new();
     public ObservableCollection<ChapterInfo> Chapters { get; } = new();
+
+    /// <summary>The currently selected PRIMARY subtitle / audio track id, cached on the UI thread from the
+    /// last <see cref="ApplyTracks"/> so the save path can read the user's choice without an mpv read on the
+    /// UI thread (which can deadlock a busy core). Convention matches <c>FileRecord</c>: <c>-1</c> = off/none,
+    /// <c>&gt;= 1</c> = the mpv track id. Set once a file has loaded; defaults to off until then.</summary>
+    public int? CurrentSubtitleId { get; private set; }
+    public int? CurrentAudioId { get; private set; }
 
     public bool IsPlaying => !IsPaused;
     public double PositionFraction => Duration > 0 ? Position / Duration : 0;
@@ -455,6 +463,10 @@ public partial class PlayerViewModel : ObservableObject
         foreach (var t in auds) AudioTracks.Add(t);
         SubtitleOff = subOff;
         SecondarySubtitleOff = secondaryOff;
+        // Cache the current primary-sub / audio selection for the save path (history remembers it per file).
+        // -1 == off/none; otherwise the selected track's id. Read from the freshly-built lists, no mpv call.
+        CurrentSubtitleId = subOff ? -1 : (int?)(subs.FirstOrDefault(t => t.Selected)?.Id) ?? -1;
+        CurrentAudioId = (int?)(auds.FirstOrDefault(t => t.Selected)?.Id) ?? -1;
         // A second simultaneous subtitle is only meaningful with at least two tracks (e.g. native + a
         // learning language); below that, hide the secondary picker to keep the flyout calm — UNLESS a
         // secondary is already active (mpv can carry secondary-sid into a 1-track file), so the user always

@@ -20,6 +20,9 @@ public sealed partial class SettingsWindow : Window
 
     private bool _loaded;
 
+    // Reads the live Windows personalization accent so the "System accent" card can preview the real colour.
+    private readonly Windows.UI.ViewManagement.UISettings _ui = new();
+
     public SettingsWindow()
     {
         InitializeComponent();
@@ -574,6 +577,9 @@ public sealed partial class SettingsWindow : Window
         bool teal = s.AccentSource == "OkTeal";
         StyleCard(AccentTealBtn, teal);
         StyleCard(AccentSystemBtn, !teal);
+        // Preview the real Windows accent on the System card (the teal card's swatch is a fixed teal in XAML),
+        // so the two options read as distinct choices instead of two identical swatches.
+        SystemAccentSwatch.Background = new SolidColorBrush(_ui.GetColorValue(Windows.UI.ViewManagement.UIColorType.Accent));
     }
 
     private void StyleSegment(Button b, bool selected)

@@ -26,7 +26,7 @@
                 <StackPanel>
                     <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,0,11" VerticalAlignment="Center">
                         <TextBlock Text="{Binding Eyebrow}" FontSize="11" FontWeight="SemiBold"
-                                   CharacterSpacing="70" Foreground="#FF0C7C75" VerticalAlignment="Center" />
+                                   CharacterSpacing="70" Foreground="{ThemeResource OkAccentSecondaryTextBrush}" VerticalAlignment="Center" />
                         <Border Visibility="{Binding IdChipVisibility}" Background="#0D000000" CornerRadius="4"
                                 Padding="6,1" VerticalAlignment="Center">
                             <TextBlock Text="{Binding IdChip}" FontFamily="Cascadia Code, Consolas" FontSize="10"
@@ -59,31 +59,28 @@
                         <TextBlock Text="{Binding Detail}" FontSize="11" Foreground="#80000000" Margin="0,2,0,0"
                                    TextTrimming="CharacterEllipsis" />
                     </StackPanel>
-                    <Border Grid.Column="2" Visibility="{Binding BadgeVisibility}" Background="#2410938A"
+                    <Border Grid.Column="2" Visibility="{Binding BadgeVisibility}" Background="{ThemeResource OkAccentSelectionFillBrush}"
                             CornerRadius="5" Padding="7,2" VerticalAlignment="Center">
-                        <TextBlock Text="{Binding Badge}" FontSize="9" FontWeight="SemiBold" Foreground="#FF0C7C75" />
+                        <TextBlock Text="{Binding Badge}" FontSize="9" FontWeight="SemiBold" Foreground="{ThemeResource OkAccentSecondaryTextBrush}" />
                     </Border>
                 </Grid>
             </Border>
         </DataTemplate>
     </UserControl.Resources>
 
+    <!-- Always a light "over video" popover; force Light so the themed Ok* accent brushes resolve to their
+         light shades (matching the hardcoded light surface) while still following the live accent. -->
     <Border Width="660" MaxHeight="780" CornerRadius="11" Background="#FFF7F7F5"
-            BorderThickness="1" BorderBrush="#14000000">
+            BorderThickness="1" BorderBrush="#14000000" RequestedTheme="Light">
         <Border.Shadow><ThemeShadow /></Border.Shadow>
         <Grid RowDefinitions="Auto,Auto,*,Auto">
 
             <!-- header -->
             <Grid Grid.Row="0" Padding="20,16,20,14" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="13"
                   BorderThickness="0,0,0,1" BorderBrush="#12000000">
-                <Border Width="36" Height="36" CornerRadius="9" VerticalAlignment="Top">
-                    <Border.Background>
-                        <LinearGradientBrush StartPoint="0.15,0" EndPoint="0.85,1">
-                            <GradientStop Color="#10938A" Offset="0" />
-                            <GradientStop Color="#0A655F" Offset="1" />
-                        </LinearGradientBrush>
-                    </Border.Background>
-                    <FontIcon Glyph="&#xE946;" FontSize="18" Foreground="White" />
+                <Border Width="36" Height="36" CornerRadius="9" VerticalAlignment="Top"
+                        Background="{ThemeResource OkAccentBrush}">
+                    <FontIcon Glyph="&#xE946;" FontSize="18" Foreground="{ThemeResource OkOnAccentBrush}" />
                 </Border>
                 <StackPanel Grid.Column="1" VerticalAlignment="Center">
                     <TextBlock Text="Media information" FontSize="16" FontWeight="SemiBold" Foreground="#FF161616" />
@@ -119,7 +116,7 @@
                                 BorderBrush="#0F000000" CornerRadius="8" Padding="16,13" Margin="0,0,0,12">
                             <StackPanel>
                                 <TextBlock Text="{Binding AudioSection.Eyebrow}" FontSize="11" FontWeight="SemiBold"
-                                           CharacterSpacing="70" Foreground="#FF0C7C75" Margin="0,0,0,11" />
+                                           CharacterSpacing="70" Foreground="{ThemeResource OkAccentSecondaryTextBrush}" Margin="0,0,0,11" />
                                 <ItemsControl ItemsSource="{Binding AudioSection.Tracks}" ItemTemplate="{StaticResource TrackTemplate}" />
                             </StackPanel>
                         </Border>
@@ -128,7 +125,7 @@
                                 BorderBrush="#0F000000" CornerRadius="8" Padding="16,13">
                             <StackPanel>
                                 <TextBlock Text="{Binding SubtitleSection.Eyebrow}" FontSize="11" FontWeight="SemiBold"
-                                           CharacterSpacing="70" Foreground="#FF0C7C75" Margin="0,0,0,11" />
+                                           CharacterSpacing="70" Foreground="{ThemeResource OkAccentSecondaryTextBrush}" Margin="0,0,0,11" />
                                 <ItemsControl ItemsSource="{Binding SubtitleSection.Tracks}" ItemTemplate="{StaticResource TrackTemplate}" />
                             </StackPanel>
                         </Border>
@@ -147,7 +144,7 @@
                             FontWeight="SemiBold" Background="#0D000000" Foreground="#FF1A1A1A"
                             BorderThickness="1" BorderBrush="#14000000" />
                     <Button Click="OnClose" Content="Done" CornerRadius="7" Padding="18,8" FontSize="12"
-                            FontWeight="SemiBold" Background="#FF10938A" Foreground="White" BorderThickness="0" />
+                            FontWeight="SemiBold" Background="{ThemeResource OkAccentBrush}" Foreground="{ThemeResource OkOnAccentBrush}" BorderThickness="0" />
                 </StackPanel>
             </Grid>
         </Grid>
