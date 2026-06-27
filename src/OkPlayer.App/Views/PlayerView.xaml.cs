@@ -980,6 +980,10 @@ public sealed partial class PlayerView : UserControl
 
     private bool _generatingPosters;
 
+    // Sentinel stored as PosterPath when a file has no usable (non-black) frame, so we don't re-derive it
+    // every welcome visit. Treated as "no poster" by consumers (File.Exists is false), so the gradient shows.
+    private const string NoUsablePoster = "(none)";
+
     private async System.Threading.Tasks.Task GeneratePostersAsync()
     {
         if (_generatingPosters)
@@ -990,17 +994,39 @@ public sealed partial class PlayerView : UserControl
             string dir = System.IO.Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "OkPlayer", "posters");
             System.IO.Directory.CreateDirectory(dir);
+            const double minUsableLuma = 22; // below this a thumbnail reads as a black block — show the gradient
             foreach (var entry in Recents.ToList())
             {
-                if (entry.Poster is not null || Vm.HasMedia) // a poster already, or playback started — stop
-                    continue;
+                if (Vm.HasMedia) // playback started — stop the background pass
+                    break;
                 var rec = _history.Get(entry.Path);
+                if (rec?.PosterPath == NoUsablePoster)
+                    continue; // already decided this file has no usable (non-black) frame — keep the gradient
+
+                string poster = System.IO.Path.Combine(dir, PosterHash(entry.Path) + ".png");
+                // Keep an existing poster only if it isn't (near-)black: earlier builds cached black frames and
+                // a fixed grab can land on a dark scene, so re-validate rather than trusting the cache forever.
+                if (System.IO.File.Exists(poster) && await MeanLumaAsync(poster) is double cached && cached >= minUsableLuma)
+                {
+                    if (entry.Poster is null)
+                        DispatcherQueue.TryEnqueue(() => entry.Poster = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(poster)));
+                    continue;
+                }
+
                 if (!await _posterThumbs.OpenAsync(entry.Path))
                     continue;
-                string? frame = await PickRepresentativeFrameAsync(rec is { Duration: > 0 } ? rec.Duration : 0);
-                if (frame is null || !System.IO.File.Exists(frame))
+                var (frame, frameLuma) = await PickRepresentativeFrameAsync(rec is { Duration: > 0 } ? rec.Duration : 0);
+                if (frame is null)
+                    continue; // nothing decoded (transient) — retry on a later pass, don't give up
+                if (frameLuma < minUsableLuma)
+                {
+                    // Even the brightest sampled frame is basically black — a clean light gradient beats a black
+                    // block. Drop any stale poster and mark the file so we don't re-derive it every visit.
+                    try { if (System.IO.File.Exists(poster)) System.IO.File.Delete(poster); } catch { /* best effort */ }
+                    _history.SetPoster(entry.Path, NoUsablePoster);
+                    DispatcherQueue.TryEnqueue(() => entry.Poster = null); // show the gradient, not a stale black image
                     continue;
-                string poster = System.IO.Path.Combine(dir, PosterHash(entry.Path) + ".png");
+                }
                 try { System.IO.File.Copy(frame, poster, overwrite: true); } catch { continue; }
                 _history.SetPoster(entry.Path, poster);
                 DispatcherQueue.TryEnqueue(() => entry.Poster = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(poster)));
@@ -1014,10 +1040,11 @@ public sealed partial class PlayerView : UserControl
     /// logos, dark openings) → a black poster; instead sample a few positions across the file and keep the
     /// brightest. Stops early once a clearly-lit frame is found. Falls back to the brightest sampled frame when
     /// the whole film is dark, and to a single fixed grab when the duration is unknown.</summary>
-    private async System.Threading.Tasks.Task<string?> PickRepresentativeFrameAsync(double duration)
+    private async System.Threading.Tasks.Task<(string? Frame, double Luma)> PickRepresentativeFrameAsync(double duration)
     {
         const double litEnough = 48; // mean luma (0–255); a clearly-lit scene, well clear of black/fade frames
-        double[] fractions = { 0.20, 0.35, 0.50, 0.65 };
+        // Sample widely — many films open dark and only brighten mid-reel, so cover 15%–82% of the runtime.
+        double[] fractions = { 0.15, 0.25, 0.38, 0.50, 0.62, 0.75, 0.82 };
         string? best = null;
         double bestLuma = -1;
         foreach (double f in fractions)
@@ -1035,7 +1062,7 @@ public sealed partial class PlayerView : UserControl
             if (duration <= 0 || bestLuma >= litEnough)
                 break; // unknown duration → one grab; otherwise stop as soon as a lit frame is in hand
         }
-        return best;
+        return (best, bestLuma);
     }
 
     /// <summary>Mean luma (0–255) of a PNG via the platform codec, scored by <see cref="OkPlayer.Core.ImageLuma"/>.
