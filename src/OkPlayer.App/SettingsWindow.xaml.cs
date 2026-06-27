@@ -50,7 +50,7 @@ public sealed partial class SettingsWindow : Window
     {
         string version = App.AppVersion;
         NavVersionText.Text = string.IsNullOrEmpty(version) ? string.Empty : $"v{version}";
-        AboutVersionText.Text = string.IsNullOrEmpty(version) ? "OK Player" : $"OK Player {version}";
+        AboutVersionText.Text = string.IsNullOrEmpty(version) ? string.Empty : $"Version {version}"; // the hero shows the product name
 
         // The built commit's short SHA (App.GitSha), so a stale build or a build off the wrong branch is
         // obvious here. Hidden when unknown (built outside a git checkout); a "-dirty" suffix flags a build
