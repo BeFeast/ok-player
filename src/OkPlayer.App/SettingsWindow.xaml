@@ -19,7 +19,7 @@
              separate full-width title band cutting the rail off. -->
         <Grid ColumnDefinitions="192,*">
 
-            <Border Grid.Column="0" BorderThickness="0,0,1,0" BorderBrush="{ThemeResource OkStrokeBrush}" Background="#04000000">
+            <Border Grid.Column="0" BorderThickness="0,0,1,0" BorderBrush="{ThemeResource OkStrokeBrush}" Background="{ThemeResource OkSubtleFillBrush}">
                 <Grid Padding="10,44,10,12" RowDefinitions="*,Auto">
                 <StackPanel Grid.Row="0">
                     <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderThickness="1"
@@ -275,7 +275,7 @@
                         <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,12,0,0" VerticalAlignment="Center">
                             <Button x:Name="MpvConfSaveBtn" Content="Save" Click="OnMpvConfSave" CornerRadius="7" Padding="16,7"
                                     FontSize="12.5" FontWeight="SemiBold" Background="{ThemeResource OkAccentBrush}"
-                                    Foreground="White" BorderThickness="0" />
+                                    Foreground="{ThemeResource OkOnAccentBrush}" BorderThickness="0" />
                             <Button Content="Open config folder" Click="OnOpenConfigFolder" CornerRadius="7" Padding="14,7"
                                     FontSize="12.5" Background="Transparent" BorderThickness="1" BorderBrush="{ThemeResource OkStrokeBrush}" />
                             <TextBlock x:Name="MpvConfStatus" VerticalAlignment="Center" FontSize="12"
@@ -322,7 +322,7 @@
                         <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,20,0,0" VerticalAlignment="Center">
                             <Button Content="Set as default in Windows&#x2026;" Click="OnOpenDefaultApps" CornerRadius="7" Padding="14,7"
                                     FontSize="12.5" FontWeight="SemiBold" Background="{ThemeResource OkAccentBrush}"
-                                    Foreground="White" BorderThickness="0" />
+                                    Foreground="{ThemeResource OkOnAccentBrush}" BorderThickness="0" />
                             <TextBlock x:Name="AssocStatus" VerticalAlignment="Center" FontSize="12"
                                        Foreground="{ThemeResource OkAccentTextBrush}" />
                         </StackPanel>
