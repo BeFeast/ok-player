@@ -328,55 +328,303 @@
                                    Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,10,0,0" />
                     </StackPanel>
 
-                    <!-- About — brand hero + app/engine version, build SHA, links (its own nav tab, below Advanced) -->
+                    <!-- About — bespoke brand illustration + App/Engine/Host spec sheet + footer (its own nav tab,
+                         below Advanced). Replaces the former brand-badge box. The triangle illustration is FIXED
+                         brand teal (it is the logo); only incidental chrome (the channel/ON tags, footer links,
+                         the stale-build tag) follows the live accent via the Ok* brushes. Spec values are a static
+                         snapshot populated in code-behind (PopulateAbout); the libmpv line and the stale-build tag
+                         fill in live. -->
                     <StackPanel x:Name="AboutPanel" Visibility="Collapsed">
-                        <TextBlock Text="About" Style="{StaticResource OkSettingsTitleTextStyle}" />
+                        <StackPanel.Resources>
+                            <ResourceDictionary>
+                                <!-- Theme-specific fixed colours with no shared-brush equivalent: the illustration's
+                                     trailing ticks and the amber "behind main" build-state. Scoped to About so no
+                                     new global brush is added; ThemeResource resolves them per Light/Dark/HC. -->
+                                <ResourceDictionary.ThemeDictionaries>
+                                    <ResourceDictionary x:Key="Light">
+                                        <SolidColorBrush x:Key="AboutTickBrush" Color="#FF10938A" />
+                                        <SolidColorBrush x:Key="AboutAmberDotBrush" Color="#FFB07D12" />
+                                        <SolidColorBrush x:Key="AboutAmberFillBrush" Color="#1FC88C00" />
+                                        <SolidColorBrush x:Key="AboutAmberTextBrush" Color="#FF9A6A00" />
+                                    </ResourceDictionary>
+                                    <ResourceDictionary x:Key="Dark">
+                                        <SolidColorBrush x:Key="AboutTickBrush" Color="#FF28B3AA" />
+                                        <SolidColorBrush x:Key="AboutAmberDotBrush" Color="#FFE0A85A" />
+                                        <SolidColorBrush x:Key="AboutAmberFillBrush" Color="#29E0A85A" />
+                                        <SolidColorBrush x:Key="AboutAmberTextBrush" Color="#FFE6B46A" />
+                                    </ResourceDictionary>
+                                    <ResourceDictionary x:Key="HighContrast">
+                                        <SolidColorBrush x:Key="AboutTickBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                                        <SolidColorBrush x:Key="AboutAmberDotBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                                        <SolidColorBrush x:Key="AboutAmberFillBrush" Color="{ThemeResource SystemColorWindowColor}" />
+                                        <SolidColorBrush x:Key="AboutAmberTextBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                                    </ResourceDictionary>
+                                </ResourceDictionary.ThemeDictionaries>
 
-                        <!-- Brand hero: the OK▶ mark (kept teal — it is the logo, not an accent surface, so it
-                             stays constant under any system accent) beside the app name + tagline, on a neutral card. -->
-                        <Border Margin="0,22,0,0" MaxWidth="560" HorizontalAlignment="Stretch" CornerRadius="14"
-                                Padding="26,24" Background="{ThemeResource OkSurfaceCardBrush}"
-                                BorderBrush="{ThemeResource OkCardStrokeBrush}" BorderThickness="1">
-                            <StackPanel Orientation="Horizontal" Spacing="20" VerticalAlignment="Center">
-                                <Border Width="76" Height="76" CornerRadius="20" VerticalAlignment="Center">
-                                    <Border.Background>
-                                        <LinearGradientBrush StartPoint="0.1,0" EndPoint="0.9,1">
-                                            <GradientStop Color="#15A89D" Offset="0" />
-                                            <GradientStop Color="#0A655F" Offset="1" />
-                                        </LinearGradientBrush>
-                                    </Border.Background>
-                                    <Viewbox Margin="16,22">
-                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                            <TextBlock Text="OK" FontFamily="Segoe UI" FontSize="36" FontWeight="Bold"
-                                                       Foreground="White" LineHeight="36" />
-                                            <Path Fill="White" Stretch="Fill" Width="15" Height="22" Margin="3,1,0,0"
-                                                  VerticalAlignment="Center" Data="M0,0 L0,22 L15,11 Z" />
-                                        </StackPanel>
-                                    </Viewbox>
-                                </Border>
-                                <StackPanel VerticalAlignment="Center" Spacing="4">
-                                    <TextBlock Text="OK Player" FontSize="24" FontWeight="SemiBold"
-                                               Foreground="{ThemeResource OkTextPrimaryBrush}" />
-                                    <TextBlock Text="The elegant media player for Windows." FontSize="13"
-                                               TextWrapping="Wrap" MaxWidth="300"
-                                               Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                                <Style x:Key="AboutCardStyle" TargetType="Border">
+                                    <Setter Property="Background" Value="{ThemeResource OkSurfaceCardBrush}" />
+                                    <Setter Property="BorderBrush" Value="{ThemeResource OkCardStrokeBrush}" />
+                                    <Setter Property="BorderThickness" Value="1" />
+                                    <Setter Property="CornerRadius" Value="8" />
+                                    <Setter Property="Padding" Value="16,14" />
+                                </Style>
+                                <Style x:Key="AboutGroupLabelStyle" TargetType="TextBlock">
+                                    <Setter Property="FontFamily" Value="Segoe UI" />
+                                    <Setter Property="FontSize" Value="11" />
+                                    <Setter Property="FontWeight" Value="SemiBold" />
+                                    <Setter Property="CharacterSpacing" Value="100" />
+                                    <Setter Property="Foreground" Value="{ThemeResource OkTextTertiaryBrush}" />
+                                    <Setter Property="Margin" Value="0,0,0,13" />
+                                </Style>
+                                <Style x:Key="AboutRowLabelStyle" TargetType="TextBlock">
+                                    <Setter Property="FontFamily" Value="Segoe UI" />
+                                    <Setter Property="FontSize" Value="12.5" />
+                                    <Setter Property="Foreground" Value="{ThemeResource OkTextSecondaryBrush}" />
+                                    <Setter Property="VerticalAlignment" Value="Center" />
+                                </Style>
+                                <Style x:Key="AboutValueStyle" TargetType="TextBlock">
+                                    <Setter Property="FontFamily" Value="Cascadia Code, Consolas" />
+                                    <Setter Property="FontSize" Value="12" />
+                                    <Setter Property="FontWeight" Value="Medium" />
+                                    <Setter Property="Foreground" Value="{ThemeResource OkTextPrimaryBrush}" />
+                                    <Setter Property="VerticalAlignment" Value="Center" />
+                                    <Setter Property="TextAlignment" Value="Right" />
+                                </Style>
+                                <Style x:Key="AboutValueWordStyle" TargetType="TextBlock">
+                                    <Setter Property="FontFamily" Value="Segoe UI" />
+                                    <Setter Property="FontSize" Value="12.5" />
+                                    <Setter Property="FontWeight" Value="Medium" />
+                                    <Setter Property="Foreground" Value="{ThemeResource OkTextPrimaryBrush}" />
+                                    <Setter Property="VerticalAlignment" Value="Center" />
+                                    <Setter Property="TextAlignment" Value="Right" />
+                                </Style>
+                                <Style x:Key="AboutTagBorderStyle" TargetType="Border">
+                                    <Setter Property="CornerRadius" Value="5" />
+                                    <Setter Property="Padding" Value="6,2" />
+                                    <Setter Property="VerticalAlignment" Value="Center" />
+                                </Style>
+                                <Style x:Key="AboutTagTextStyle" TargetType="TextBlock">
+                                    <Setter Property="FontFamily" Value="Segoe UI" />
+                                    <Setter Property="FontSize" Value="8.5" />
+                                    <Setter Property="FontWeight" Value="SemiBold" />
+                                    <Setter Property="CharacterSpacing" Value="70" />
+                                </Style>
+                            </ResourceDictionary>
+                        </StackPanel.Resources>
+
+                        <!-- 1 · Identity hero -->
+                        <Grid ColumnDefinitions="Auto,*">
+                            <!-- Bespoke illustration: a gradient play-triangle resolving from a sweep of frame-ticks.
+                                 Recreated from the design SVG (viewBox 124x96, shown 116x90) as native shapes; FIXED
+                                 brand teal in both themes (only the faint trailing ticks shade per theme). -->
+                            <Grid Grid.Column="0" Width="118" Height="94" Margin="0,0,22,0" VerticalAlignment="Center">
+                                <Viewbox Width="116" Height="90" Stretch="Uniform">
+                                    <Canvas Width="124" Height="96">
+                                        <Rectangle Canvas.Left="14"   Canvas.Top="43.5" Width="5.5" Height="9"  RadiusX="2.75" RadiusY="2.75" Fill="{ThemeResource AboutTickBrush}" Opacity="0.10" />
+                                        <Rectangle Canvas.Left="22"   Canvas.Top="41"   Width="5.5" Height="14" RadiusX="2.75" RadiusY="2.75" Fill="{ThemeResource AboutTickBrush}" Opacity="0.18" />
+                                        <Rectangle Canvas.Left="31"   Canvas.Top="38"   Width="5.5" Height="20" RadiusX="2.75" RadiusY="2.75" Fill="{ThemeResource AboutTickBrush}" Opacity="0.30" />
+                                        <Rectangle Canvas.Left="40.5" Canvas.Top="34"   Width="5.5" Height="28" RadiusX="2.75" RadiusY="2.75" Fill="{ThemeResource AboutTickBrush}" Opacity="0.44" />
+                                        <Rectangle Canvas.Left="51"   Canvas.Top="30"   Width="5.5" Height="36" RadiusX="2.75" RadiusY="2.75" Fill="{ThemeResource AboutTickBrush}" Opacity="0.62" />
+                                        <!-- soft drop shadow: an offset translucent copy of the triangle silhouette -->
+                                        <Path Data="M64 22 L108 48 L64 74 Z" Fill="#0A655F" Stroke="#0A655F" StrokeThickness="6"
+                                              StrokeLineJoin="Round" Opacity="0.30">
+                                            <Path.RenderTransform>
+                                                <TranslateTransform Y="5" />
+                                            </Path.RenderTransform>
+                                        </Path>
+                                        <Path Data="M64 22 L108 48 L64 74 Z" StrokeThickness="6" StrokeLineJoin="Round">
+                                            <Path.Fill>
+                                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                                    <GradientStop Color="#1CAFA2" Offset="0" />
+                                                    <GradientStop Color="#118A80" Offset="0.55" />
+                                                    <GradientStop Color="#0A655F" Offset="1" />
+                                                </LinearGradientBrush>
+                                            </Path.Fill>
+                                            <Path.Stroke>
+                                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                                    <GradientStop Color="#1CAFA2" Offset="0" />
+                                                    <GradientStop Color="#118A80" Offset="0.55" />
+                                                    <GradientStop Color="#0A655F" Offset="1" />
+                                                </LinearGradientBrush>
+                                            </Path.Stroke>
+                                        </Path>
+                                    </Canvas>
+                                </Viewbox>
+                            </Grid>
+
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock FontFamily="Segoe UI Variable Display, Segoe UI" FontSize="30" LineHeight="30"
+                                           CharacterSpacing="-20" Foreground="{ThemeResource OkTextPrimaryBrush}">
+                                    <Run Text="OK" FontWeight="Bold" /><Run Text=" Player" FontWeight="Light" />
+                                </TextBlock>
+                                <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,10,0,0">
+                                    <Border Background="{ThemeResource OkSubtleFillBrush}" CornerRadius="6" Padding="9,3" VerticalAlignment="Center">
+                                        <TextBlock x:Name="AboutHeroVersionChip" FontFamily="Cascadia Code, Consolas" FontSize="11.5"
+                                                   FontWeight="SemiBold" Foreground="{ThemeResource OkTextPrimaryBrush}" />
+                                    </Border>
+                                    <Border Background="{ThemeResource OkAccentTintBrush}" CornerRadius="6" Padding="9,4" VerticalAlignment="Center">
+                                        <TextBlock Text="STABLE" FontFamily="Segoe UI" FontSize="10" FontWeight="SemiBold"
+                                                   CharacterSpacing="50" Foreground="{ThemeResource OkAccentTextBrush}" />
+                                    </Border>
                                 </StackPanel>
+                                <TextBlock Text="The most elegant media player on Windows." FontFamily="Segoe UI" FontSize="13"
+                                           LineHeight="18" TextWrapping="Wrap" Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,11,0,0" />
+                                <TextBlock Text="Open source &#x00B7; by Oleg Kossoy" FontFamily="Segoe UI" FontSize="11.5"
+                                           Foreground="{ThemeResource OkTextTertiaryBrush}" Margin="0,3,0,0" />
                             </StackPanel>
-                        </Border>
+                        </Grid>
 
-                        <TextBlock x:Name="AboutVersionText" FontSize="13.5" FontWeight="SemiBold" Margin="0,20,0,0" />
-                        <TextBlock x:Name="AboutEngineText" FontSize="12.5" Margin="0,3,0,0"
-                                   Foreground="{ThemeResource OkTextSecondaryBrush}" />
-                        <TextBlock x:Name="AboutBuildText" FontSize="12.5" Margin="0,3,0,0" IsTextSelectionEnabled="True"
-                                   Foreground="{ThemeResource OkTextSecondaryBrush}" />
-                        <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,8,0,0" VerticalAlignment="Center">
-                            <HyperlinkButton Content="GitHub" NavigateUri="https://github.com/BeFeast/ok-player"
-                                             Padding="0,2" FontSize="12.5" />
-                            <TextBlock Text="&#x00B7;" VerticalAlignment="Center"
-                                       Foreground="{ThemeResource OkTextSecondaryBrush}" />
-                            <HyperlinkButton Content="License (GPL-3.0)" FontSize="12.5" Padding="0,2"
-                                             NavigateUri="https://github.com/BeFeast/ok-player/blob/main/LICENSE" />
+                        <!-- divider below the hero -->
+                        <Border Height="1" Background="{ThemeResource OkCardStrokeBrush}" Margin="0,22,0,22" />
+
+                        <!-- 2 · Spec sheet -->
+                        <StackPanel Spacing="12">
+
+                            <!-- APP -->
+                            <Border Style="{StaticResource AboutCardStyle}">
+                                <StackPanel>
+                                    <TextBlock Text="APP" Style="{StaticResource AboutGroupLabelStyle}" />
+                                    <StackPanel Spacing="10">
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock Text="Version" Style="{StaticResource AboutRowLabelStyle}" />
+                                            <TextBlock Grid.Column="1" x:Name="AboutAppVersion" Style="{StaticResource AboutValueStyle}" />
+                                        </Grid>
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock Text="Channel" Style="{StaticResource AboutRowLabelStyle}" />
+                                            <TextBlock Grid.Column="1" Text="Stable" Style="{StaticResource AboutValueWordStyle}" />
+                                        </Grid>
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock Text="Build" Style="{StaticResource AboutRowLabelStyle}" />
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="7" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                                <Ellipse x:Name="AboutBuildDot" Width="6" Height="6" VerticalAlignment="Center"
+                                                         Fill="{ThemeResource AboutAmberDotBrush}" Visibility="Collapsed" />
+                                                <TextBlock x:Name="AboutBuildSha" Style="{StaticResource AboutValueStyle}" />
+                                                <Border x:Name="AboutBuildTagUpToDate" Style="{StaticResource AboutTagBorderStyle}"
+                                                        Background="{ThemeResource OkSubtleFillBrush}" Visibility="Collapsed">
+                                                    <TextBlock Text="UP TO DATE" Style="{StaticResource AboutTagTextStyle}"
+                                                               Foreground="{ThemeResource OkTextTertiaryBrush}" />
+                                                </Border>
+                                                <Border x:Name="AboutBuildTagBehind" Style="{StaticResource AboutTagBorderStyle}"
+                                                        Background="{ThemeResource AboutAmberFillBrush}" Visibility="Collapsed">
+                                                    <TextBlock x:Name="AboutBuildBehindText" Style="{StaticResource AboutTagTextStyle}"
+                                                               Foreground="{ThemeResource AboutAmberTextBrush}" />
+                                                </Border>
+                                            </StackPanel>
+                                        </Grid>
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock Text="License" Style="{StaticResource AboutRowLabelStyle}" />
+                                            <TextBlock Grid.Column="1" Text="GPL-3.0-or-later" Style="{StaticResource AboutValueStyle}" />
+                                        </Grid>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- ENGINE -->
+                            <Border Style="{StaticResource AboutCardStyle}">
+                                <StackPanel>
+                                    <TextBlock Text="ENGINE" Style="{StaticResource AboutGroupLabelStyle}" />
+                                    <StackPanel Spacing="10">
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock Text="libmpv" Style="{StaticResource AboutRowLabelStyle}" />
+                                            <TextBlock Grid.Column="1" x:Name="AboutEngineMpv" Style="{StaticResource AboutValueStyle}" />
+                                        </Grid>
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock Text="FFmpeg" Style="{StaticResource AboutRowLabelStyle}" />
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="7" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                                <TextBlock Text="&#x2014;" Style="{StaticResource AboutValueStyle}" />
+                                                <Border Style="{StaticResource AboutTagBorderStyle}" Background="{ThemeResource OkSubtleFillBrush}">
+                                                    <TextBlock Text="PLANNED" Style="{StaticResource AboutTagTextStyle}" Foreground="{ThemeResource OkTextTertiaryBrush}" />
+                                                </Border>
+                                            </StackPanel>
+                                        </Grid>
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock Text="Render API" Style="{StaticResource AboutRowLabelStyle}" />
+                                            <TextBlock Grid.Column="1" Text="libmpv render" Style="{StaticResource AboutValueStyle}" />
+                                        </Grid>
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock Text="Graphics" Style="{StaticResource AboutRowLabelStyle}" />
+                                            <TextBlock Grid.Column="1" Text="OpenGL &#x00B7; ANGLE &#x2192; D3D11" Style="{StaticResource AboutValueStyle}" />
+                                        </Grid>
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock Text="Hardware decode" Style="{StaticResource AboutRowLabelStyle}" />
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="7" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                                <TextBlock x:Name="AboutEngineHwdec" Style="{StaticResource AboutValueStyle}" />
+                                                <Border x:Name="AboutHwdecTag" Style="{StaticResource AboutTagBorderStyle}"
+                                                        Background="{ThemeResource OkAccentTintBrush}" Visibility="Collapsed">
+                                                    <TextBlock Text="ON" Style="{StaticResource AboutTagTextStyle}" Foreground="{ThemeResource OkAccentTextBrush}" />
+                                                </Border>
+                                            </StackPanel>
+                                        </Grid>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- HOST (two-column grid) -->
+                            <Border Style="{StaticResource AboutCardStyle}">
+                                <StackPanel>
+                                    <TextBlock Text="HOST" Style="{StaticResource AboutGroupLabelStyle}" />
+                                    <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="26" RowSpacing="10">
+                                        <Grid Grid.Row="0" Grid.Column="0" ColumnDefinitions="*,Auto">
+                                            <TextBlock Text="Windows 11" Style="{StaticResource AboutRowLabelStyle}" />
+                                            <TextBlock Grid.Column="1" x:Name="AboutHostWindows" Style="{StaticResource AboutValueStyle}" />
+                                        </Grid>
+                                        <Grid Grid.Row="0" Grid.Column="1" ColumnDefinitions="*,Auto">
+                                            <TextBlock Text=".NET" Style="{StaticResource AboutRowLabelStyle}" />
+                                            <TextBlock Grid.Column="1" x:Name="AboutHostDotnet" Style="{StaticResource AboutValueStyle}" />
+                                        </Grid>
+                                        <Grid Grid.Row="1" Grid.Column="0" ColumnDefinitions="*,Auto">
+                                            <TextBlock Text="App SDK" Style="{StaticResource AboutRowLabelStyle}" />
+                                            <TextBlock Grid.Column="1" Text="&#x2014;" Style="{StaticResource AboutValueStyle}" />
+                                        </Grid>
+                                        <Grid Grid.Row="1" Grid.Column="1" ColumnDefinitions="*,Auto">
+                                            <TextBlock Text="CPU" Style="{StaticResource AboutRowLabelStyle}" />
+                                            <TextBlock Grid.Column="1" x:Name="AboutHostCpu" Style="{StaticResource AboutValueStyle}" />
+                                        </Grid>
+                                        <Grid Grid.Row="2" Grid.Column="0" ColumnDefinitions="*,Auto">
+                                            <TextBlock Text="GPU" Style="{StaticResource AboutRowLabelStyle}" />
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="7" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                                <TextBlock Text="&#x2014;" Style="{StaticResource AboutValueStyle}" />
+                                                <Border Style="{StaticResource AboutTagBorderStyle}" Background="{ThemeResource OkSubtleFillBrush}">
+                                                    <TextBlock Text="PLANNED" Style="{StaticResource AboutTagTextStyle}" Foreground="{ThemeResource OkTextTertiaryBrush}" />
+                                                </Border>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
+
+                        <!-- 3 · Footer -->
+                        <Border Margin="0,8,0,0" Padding="0,17,0,0" BorderThickness="0,1,0,0" BorderBrush="{ThemeResource OkCardStrokeBrush}">
+                            <Grid ColumnDefinitions="Auto,*,Auto">
+                                <Button Grid.Column="0" Click="OnCopyDiagnostics" CornerRadius="7" Padding="14,8"
+                                        Background="{ThemeResource OkSubtleFillBrush}" BorderThickness="1" BorderBrush="{ThemeResource OkCardStrokeBrush}">
+                                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                        <FontIcon Glyph="&#xE8C8;" FontSize="14" Foreground="{ThemeResource OkTextPrimaryBrush}" />
+                                        <TextBlock Text="Copy diagnostics" FontSize="12" FontWeight="SemiBold" Foreground="{ThemeResource OkTextPrimaryBrush}" />
+                                    </StackPanel>
+                                </Button>
+                                <TextBlock Grid.Column="1" x:Name="AboutCopyStatus" VerticalAlignment="Center" Margin="14,0,0,0"
+                                           FontSize="12" Foreground="{ThemeResource OkAccentTextBrush}" />
+                                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="13" VerticalAlignment="Center">
+                                    <HyperlinkButton NavigateUri="https://github.com/BeFeast/ok-player" Padding="0"
+                                                     Foreground="{ThemeResource OkAccentTextBrush}">
+                                        <StackPanel Orientation="Horizontal" Spacing="5">
+                                            <TextBlock Text="GitHub" FontSize="12" FontWeight="SemiBold" />
+                                            <TextBlock Text="&#x2197;" FontSize="12" />
+                                        </StackPanel>
+                                    </HyperlinkButton>
+                                    <Ellipse Width="3" Height="3" Fill="{ThemeResource OkTextTertiaryBrush}" VerticalAlignment="Center" />
+                                    <HyperlinkButton NavigateUri="https://github.com/BeFeast/ok-player/blob/main/LICENSE" Padding="0"
+                                                     Foreground="{ThemeResource OkAccentTextBrush}">
+                                        <StackPanel Orientation="Horizontal" Spacing="5">
+                                            <TextBlock Text="License" FontSize="12" FontWeight="SemiBold" />
+                                            <TextBlock Text="&#x2197;" FontSize="12" />
+                                        </StackPanel>
+                                    </HyperlinkButton>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
                     </StackPanel>
 
                     <!-- Integration (real) — file-type associations -->
