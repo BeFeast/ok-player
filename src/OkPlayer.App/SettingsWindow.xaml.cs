@@ -2,7 +2,6 @@ using System;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
-using System.Net.Http;
 using System.Runtime.InteropServices;
 using Microsoft.UI;
 using Microsoft.UI.Text;
@@ -166,74 +165,7 @@ public sealed partial class SettingsWindow : Window
         return d.StartsWith(prefix, StringComparison.Ordinal) ? d[prefix.Length..].Trim() : d;
     }
 
-    // ── About: stale-build check + diagnostics copy ────────────────────
-
-    private bool _staleChecked;
-
-    private static readonly HttpClient AboutHttp = CreateAboutHttp();
-
-    private static HttpClient CreateAboutHttp()
-    {
-        var h = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
-        h.DefaultRequestHeaders.UserAgent.ParseAdd("OkPlayer-About"); // GitHub rejects requests with no UA
-        h.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
-        return h;
-    }
-
-    /// <summary>Best-effort, fire-once stale-build check: ask GitHub how far <c>main</c> is ahead of the
-    /// running build's commit. "identical" → a muted UP TO DATE tag; main ahead by N → an amber "N BEHIND MAIN"
-    /// tag. Any failure (offline, dirty/unknown SHA, 404, timeout, throttle) stays silent — a build is never
-    /// falsely shown as current. The network call runs off the UI thread; the result marshals back via the
-    /// dispatcher.</summary>
-    private void StartStaleCheck()
-    {
-        if (_staleChecked)
-            return;
-        _staleChecked = true;
-        string sha = App.GitSha;
-        if (string.IsNullOrEmpty(sha) || sha.Contains("-dirty", StringComparison.OrdinalIgnoreCase))
-            return; // nothing to compare, or a dirty tree that no longer matches its commit
-        _ = CheckStaleAsync(sha);
-    }
-
-    private async System.Threading.Tasks.Task CheckStaleAsync(string sha)
-    {
-        try
-        {
-            string url = $"https://api.github.com/repos/BeFeast/ok-player/compare/{sha}...main";
-            using var resp = await AboutHttp.GetAsync(url).ConfigureAwait(false);
-            if (!resp.IsSuccessStatusCode)
-                return;
-            using var stream = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
-            using var doc = await System.Text.Json.JsonDocument.ParseAsync(stream).ConfigureAwait(false);
-            var root = doc.RootElement;
-            string status = root.TryGetProperty("status", out var st) ? st.GetString() ?? string.Empty : string.Empty;
-            int ahead = root.TryGetProperty("ahead_by", out var ab) ? ab.GetInt32() : 0;
-            DispatcherQueue?.TryEnqueue(() => ApplyStaleResult(status, ahead));
-        }
-        catch { /* best effort — stay silent on any failure */ }
-    }
-
-    private void ApplyStaleResult(string status, int ahead)
-    {
-        if (AboutBuildTagUpToDate is null)
-            return;
-        if (status == "identical")
-        {
-            AboutBuildDot.Visibility = Visibility.Collapsed;
-            AboutBuildTagBehind.Visibility = Visibility.Collapsed;
-            AboutBuildTagUpToDate.Visibility = Visibility.Visible;
-        }
-        else if (status == "ahead" && ahead > 0)
-        {
-            // base (our build) is an ancestor of main; main is `ahead` commits in front of it.
-            AboutBuildBehindText.Text = $"{ahead} behind main";
-            AboutBuildTagUpToDate.Visibility = Visibility.Collapsed;
-            AboutBuildDot.Visibility = Visibility.Visible;
-            AboutBuildTagBehind.Visibility = Visibility.Visible;
-        }
-        // "behind" (local ahead) / "diverged" / anything else → stay silent (no tag), never a false "current".
-    }
+    // ── About: diagnostics copy ────────────────────────────────────────
 
     private void OnCopyDiagnostics(object sender, RoutedEventArgs e)
     {
@@ -256,10 +188,6 @@ public sealed partial class SettingsWindow : Window
     {
         string ver = string.IsNullOrEmpty(App.AppVersion) ? Dash : App.AppVersion;
         string buildLine = $"Build {AboutBuildSha.Text}";
-        if (AboutBuildTagBehind.Visibility == Visibility.Visible)
-            buildLine += $" {Dash} newer build available ({AboutBuildBehindText.Text})";
-        else if (AboutBuildTagUpToDate.Visibility == Visibility.Visible)
-            buildLine += $" {Dash} up to date";
 
         bool hw = App.Settings.Current.HardwareDecoding;
         string hwLine = $"{(hw ? "on" : "off")} · {HwdecMethod(hw)}"; // both from the live bool — never "off · d3d11va"
@@ -378,7 +306,6 @@ public sealed partial class SettingsWindow : Window
         {
             RefreshHwdec();         // the Video panel can toggle hwdec while this window is open — re-read it
             RefreshEngineVersion(); // engine version may have been captured after this window opened
-            StartStaleCheck();      // best-effort, fire-once compare of the build SHA against main
         }
         else if (integration)
             LoadIntegration();

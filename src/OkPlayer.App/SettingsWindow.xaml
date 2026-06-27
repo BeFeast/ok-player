@@ -343,21 +343,12 @@
                                 <ResourceDictionary.ThemeDictionaries>
                                     <ResourceDictionary x:Key="Light">
                                         <SolidColorBrush x:Key="AboutTickBrush" Color="#FF10938A" />
-                                        <SolidColorBrush x:Key="AboutAmberDotBrush" Color="#FFB07D12" />
-                                        <SolidColorBrush x:Key="AboutAmberFillBrush" Color="#1FC88C00" />
-                                        <SolidColorBrush x:Key="AboutAmberTextBrush" Color="#FF9A6A00" />
                                     </ResourceDictionary>
                                     <ResourceDictionary x:Key="Dark">
                                         <SolidColorBrush x:Key="AboutTickBrush" Color="#FF28B3AA" />
-                                        <SolidColorBrush x:Key="AboutAmberDotBrush" Color="#FFE0A85A" />
-                                        <SolidColorBrush x:Key="AboutAmberFillBrush" Color="#29E0A85A" />
-                                        <SolidColorBrush x:Key="AboutAmberTextBrush" Color="#FFE6B46A" />
                                     </ResourceDictionary>
                                     <ResourceDictionary x:Key="HighContrast">
                                         <SolidColorBrush x:Key="AboutTickBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
-                                        <SolidColorBrush x:Key="AboutAmberDotBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
-                                        <SolidColorBrush x:Key="AboutAmberFillBrush" Color="{ThemeResource SystemColorWindowColor}" />
-                                        <SolidColorBrush x:Key="AboutAmberTextBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
                                     </ResourceDictionary>
                                 </ResourceDictionary.ThemeDictionaries>
 
@@ -495,21 +486,7 @@
                                         </Grid>
                                         <Grid ColumnDefinitions="*,Auto">
                                             <TextBlock Text="Build" Style="{StaticResource AboutRowLabelStyle}" />
-                                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="7" HorizontalAlignment="Right" VerticalAlignment="Center">
-                                                <Ellipse x:Name="AboutBuildDot" Width="6" Height="6" VerticalAlignment="Center"
-                                                         Fill="{ThemeResource AboutAmberDotBrush}" Visibility="Collapsed" />
-                                                <TextBlock x:Name="AboutBuildSha" Style="{StaticResource AboutValueStyle}" />
-                                                <Border x:Name="AboutBuildTagUpToDate" Style="{StaticResource AboutTagBorderStyle}"
-                                                        Background="{ThemeResource OkSubtleFillBrush}" Visibility="Collapsed">
-                                                    <TextBlock Text="UP TO DATE" Style="{StaticResource AboutTagTextStyle}"
-                                                               Foreground="{ThemeResource OkTextTertiaryBrush}" />
-                                                </Border>
-                                                <Border x:Name="AboutBuildTagBehind" Style="{StaticResource AboutTagBorderStyle}"
-                                                        Background="{ThemeResource AboutAmberFillBrush}" Visibility="Collapsed">
-                                                    <TextBlock x:Name="AboutBuildBehindText" Style="{StaticResource AboutTagTextStyle}"
-                                                               Foreground="{ThemeResource AboutAmberTextBrush}" />
-                                                </Border>
-                                            </StackPanel>
+                                            <TextBlock Grid.Column="1" x:Name="AboutBuildSha" Style="{StaticResource AboutValueStyle}" />
                                         </Grid>
                                         <Grid ColumnDefinitions="*,Auto">
                                             <TextBlock Text="License" Style="{StaticResource AboutRowLabelStyle}" />
