@@ -35,7 +35,6 @@ $head   = (git -C $repo rev-parse --short=7 HEAD).Trim()
 if ($LASTEXITCODE -ne 0) { throw "git rev-parse failed -- is $repo a git checkout?" }
 $branch = (git -C $repo rev-parse --abbrev-ref HEAD).Trim()
 $dirty  = [bool]((git -C $repo status --porcelain) | Select-Object -First 1)
-$want   = if ($dirty) { "$head-dirty" } else { $head }
 
 # The build stamps "<version>+<sha>" into the assembly (StampGitShaRevision in the csproj); read it back.
 $built = $null
@@ -44,17 +43,34 @@ if (Test-Path $exe) {
   if ($pv -match '\+(.+)$') { $built = $Matches[1] }
 }
 
-$stale = $ForceRebuild -or (-not (Test-Path $exe)) -or ($built -ne $want)
+# A dirty tree ALWAYS rebuilds: the "-dirty" stamp can't tell one set of uncommitted edits from the next, so
+# a stamp match would otherwise launch a stale build for the exact case this launcher exists to cover. When
+# the tree is clean, the embedded sha must equal HEAD.
+$stale = $ForceRebuild -or (-not (Test-Path $exe)) -or $dirty -or ($built -ne $head)
 
 if ($stale) {
-  $reason = if (-not (Test-Path $exe)) { 'no build yet' } elseif ($ForceRebuild) { 'forced' } else { "built '$built', want '$want'" }
+  $reason = if (-not (Test-Path $exe)) { 'no build yet' } elseif ($ForceRebuild) { 'forced' } elseif ($dirty) { 'uncommitted changes' } else { "built '$built', want '$head'" }
   Write-Host "Dev preview out of date on '$branch' ($reason) -- rebuilding..." -ForegroundColor Yellow
-  Get-Process OkPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
-  Start-Sleep -Milliseconds 500   # let the OS release the file handles before we overwrite the binaries
-  if (Test-Path $outDir) { Remove-Item $outDir -Recurse -Force }
+
+  # Kill ONLY the instance launched from this output dir -- it locks the DLLs we're about to overwrite. Match
+  # by full path so we never force-close the installed app or another OkPlayer.exe that just shares the name.
+  Get-Process OkPlayer -ErrorAction SilentlyContinue |
+    Where-Object { try { $_.Path -eq $exe } catch { $false } } |
+    ForEach-Object { try { $_.Kill(); [void]$_.WaitForExit(5000) } catch {} }
+
+  # Clear the previous publish, tolerating an AV/OS handle that lingers on a just-killed exe/DLL for a moment
+  # (a fixed sleep would either stall every run or still race a slow scanner).
+  if (Test-Path $outDir) {
+    for ($attempt = 1; ; $attempt++) {
+      try { Remove-Item $outDir -Recurse -Force -ErrorAction Stop; break }
+      catch { if ($attempt -ge 20) { throw }; Start-Sleep -Milliseconds 250 }
+    }
+  }
+
   dotnet publish $appProj -c Release -r win-x64 --self-contained true -o $outDir
   if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)" }
-  $built = $want
+  $pv = ([System.Diagnostics.FileVersionInfo]::GetVersionInfo($exe)).ProductVersion
+  $built = if ($pv -match '\+(.+)$') { $Matches[1] } else { $head }
   Write-Host "Built $branch @ $built" -ForegroundColor Green
 } else {
   Write-Host "Dev preview is current ($branch @ $built) -- launching." -ForegroundColor Green

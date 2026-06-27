@@ -48,21 +48,25 @@ if ($branch -ne 'main' -and -not $AllowBranch) {
   throw "Refusing to build off '$branch'. Run 'git checkout main' first, or re-run with -AllowBranch to build this branch on purpose."
 }
 
-# 2. Kill any running instance so it can't lock its own output DLLs.
-$running = Get-Process OkPlayer -ErrorAction SilentlyContinue
+# 2. Kill any instance launched from THIS output dir so it can't lock its own DLLs. Match by full path so we
+#    never force-close the installed app or another OkPlayer.exe that merely shares the name.
+$running = Get-Process OkPlayer -ErrorAction SilentlyContinue |
+  Where-Object { try { $_.Path -eq $exePath } catch { $false } }
 if ($running) {
-  Write-Host "Stopping running OkPlayer instance(s): PID $($running.Id -join ', ')"
-  $running | Stop-Process -Force
-  # Give the OS a moment to release the file handles before we overwrite the binaries.
-  Start-Sleep -Seconds 2
+  Write-Host "Stopping the dev instance from $outDir : PID $($running.Id -join ', ')"
+  $running | ForEach-Object { try { $_.Kill(); [void]$_.WaitForExit(5000) } catch {} }
 } else {
-  Write-Host "No running OkPlayer instance found."
+  Write-Host "No running OkPlayer instance from this output dir."
 }
 
-# 3. Clean publish: wipe the output folder, then publish from scratch.
+# 3. Clean publish: wipe the output folder, then publish from scratch. Retry the delete with backoff so a
+#    lingering AV/OS handle on a just-killed exe/DLL doesn't abort the build.
 if (Test-Path $outDir) {
   Write-Host "Removing previous output: $outDir"
-  Remove-Item $outDir -Recurse -Force
+  for ($attempt = 1; ; $attempt++) {
+    try { Remove-Item $outDir -Recurse -Force -ErrorAction Stop; break }
+    catch { if ($attempt -ge 20) { throw }; Start-Sleep -Milliseconds 250 }
+  }
 }
 
 Write-Host "Publishing clean self-contained Release (win-x64) -> $outDir"
