@@ -59,7 +59,11 @@ if ($stale) {
   $stuck = [System.Collections.Generic.List[int]]::new()
   Get-Process OkPlayer -ErrorAction SilentlyContinue |
     Where-Object { try { $_.Path -eq $exe } catch { $false } } |
-    ForEach-Object { try { $_.Kill(); if (-not $_.WaitForExit(5000)) { $stuck.Add($_.Id) } } catch {} }
+    ForEach-Object {
+      $proc = $_   # in the catch below $_ is the error record, not the process, so capture it here
+      try { $proc.Kill(); if (-not $proc.WaitForExit(5000)) { $stuck.Add($proc.Id) } }
+      catch { $stuck.Add($proc.Id) }   # Kill can throw "Access is denied" (e.g. an elevated instance) -- still stuck
+    }
   if ($stuck.Count) { throw "Couldn't stop the running dev preview (PID $($stuck -join ', ')) -- close OK Player and try again." }
 
   # Clear the previous publish, retrying ~10s to wait out a transient AV/OS handle on a just-killed exe/DLL
