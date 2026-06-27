@@ -62,16 +62,16 @@ if ($stale) {
     ForEach-Object { try { $_.Kill(); if (-not $_.WaitForExit(5000)) { $stuck.Add($_.Id) } } catch {} }
   if ($stuck.Count) { throw "Couldn't stop the running dev preview (PID $($stuck -join ', ')) -- close OK Player and try again." }
 
-  # Best-effort wipe of the previous publish: retry an AV/OS handle that lingers on a just-killed exe/DLL,
-  # but NEVER abort the launch on it -- dotnet publish overwrites the app's own files anyway, so a rare
-  # un-removable orphan is harmless and we still rebuild and launch.
+  # Clear the previous publish, retrying ~10s to wait out a transient AV/OS handle on a just-killed exe/DLL
+  # (the common case). If a file is still locked after that, stop with an actionable message: dotnet publish
+  # cannot overwrite an OS-locked file either, so proceeding would only surface a cryptic build error.
   if (Test-Path $outDir) {
     $cleared = $false
     for ($attempt = 1; $attempt -le 40 -and -not $cleared; $attempt++) {
       try { Remove-Item $outDir -Recurse -Force -ErrorAction Stop; $cleared = $true }
       catch { Start-Sleep -Milliseconds 250 }
     }
-    if (-not $cleared) { Write-Warning "Could not fully clear $outDir (a scanner may still hold a handle); publishing over it." }
+    if (-not $cleared) { throw "A file in $outDir is locked (antivirus, or an OK Player still running from it). Close OK Player, pause real-time scanning if needed, and run the Dev Preview again." }
   }
 
   dotnet publish $appProj -c Release -r win-x64 --self-contained true -o $outDir

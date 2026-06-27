@@ -71,8 +71,9 @@ if (Test-Path $outDir) {
     try { Remove-Item $outDir -Recurse -Force -ErrorAction Stop; $cleared = $true }
     catch { Start-Sleep -Milliseconds 250 }
   }
-  # Best-effort: if a scanner still holds a handle, warn and publish over it rather than aborting the build.
-  if (-not $cleared) { Write-Warning "Could not fully clear $outDir (a scanner may still hold a handle); publishing over it." }
+  # If a file is still locked after ~10s, stop with an actionable message: dotnet publish can't overwrite an
+  # OS-locked file either, so proceeding would only surface a cryptic build error.
+  if (-not $cleared) { throw "A file in $outDir is locked (antivirus, or an OK Player still running from it). Close OK Player, pause real-time scanning if needed, and try again." }
 }
 
 Write-Host "Publishing clean self-contained Release (win-x64) -> $outDir"
