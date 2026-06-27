@@ -10,6 +10,13 @@
     <!-- Single source of truth for the app version. The UI reads it from the assembly (Settings -> About,
          nav-rail footer); installer/build-installer.ps1 reads it from this csproj so they can't drift. -->
     <Version>0.7.2</Version>
+
+    <!-- Let StampGitShaRevision (below) own the AssemblyInformationalVersion +metadata suffix so it can emit a
+         SHORT sha plus a "-dirty" marker. Without this the SDK's source-control integration pre-fills
+         SourceRevisionId with the full 40-char HEAD sha (and no dirty flag), which is too long for the About
+         line and hides uncommitted-build state. We don't ship SourceLink for this unpackaged app, so nothing
+         else needs the full sha. -->
+    <EnableSourceControlManagerQueries>false</EnableSourceControlManagerQueries>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\OkPlayer.ico</ApplicationIcon>
 
@@ -42,6 +49,34 @@
     <ProjectReference Include="..\OkPlayer.DesignSystem\OkPlayer.DesignSystem.csproj" />
     <ProjectReference Include="..\OkPlayer.Render\OkPlayer.Render.csproj" />
   </ItemGroup>
+
+  <!-- Stamp the built commit's short SHA into AssemblyInformationalVersion (e.g. "0.7.2+ab12cd3", or
+       "…+ab12cd3-dirty" when the working tree has uncommitted changes). The Settings About block surfaces it
+       so a stale/Frankenbuild or a build off the wrong branch is obvious at a glance — the exact failure mode
+       behind the half-day "dirty build" loss. No SourceLink dependency; degrades to no SHA outside a git
+       checkout (Exec ContinueOnError). Hooks the SDK target that folds SourceRevisionId into the version. -->
+  <Target Name="StampGitShaRevision" BeforeTargets="AddSourceRevisionToInformationalVersion"
+          Condition="'$(SourceRevisionId)' == ''">
+    <Exec Command="git -C &quot;$(MSBuildProjectDirectory)&quot; rev-parse --short=7 HEAD"
+          ConsoleToMSBuild="true" ContinueOnError="true"
+          StandardOutputImportance="low" StandardErrorImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_OkpGitSha" />
+      <Output TaskParameter="ExitCode" PropertyName="_OkpGitExit" />
+    </Exec>
+    <!-- Default (normal) untracked mode on purpose: SDK-style projects compile untracked .cs/.xaml in the
+         tree, so an untracked experiment file is a real build input and must count as dirty. .gitignore still
+         excludes build outputs (bin/obj) and fetched natives, so this flags only genuine source drift. -->
+    <Exec Command="git -C &quot;$(MSBuildProjectDirectory)&quot; status --porcelain"
+          ConsoleToMSBuild="true" ContinueOnError="true"
+          StandardOutputImportance="low" StandardErrorImportance="low"
+          Condition="'$(_OkpGitExit)' == '0'">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_OkpGitDirty" />
+    </Exec>
+    <PropertyGroup Condition="'$(_OkpGitExit)' == '0' and '$(_OkpGitSha)' != ''">
+      <SourceRevisionId>$(_OkpGitSha)</SourceRevisionId>
+      <SourceRevisionId Condition="'$(_OkpGitDirty)' != ''">$(_OkpGitSha)-dirty</SourceRevisionId>
+    </PropertyGroup>
+  </Target>
 
   <!-- `dotnet publish` for an unpackaged WinUI 3 app drops the merged app resource index
        ($(AssemblyName).pri) — without it every ms-appx resource (the DesignSystem merged
