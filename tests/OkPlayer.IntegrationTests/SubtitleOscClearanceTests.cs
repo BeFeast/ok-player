@@ -131,21 +131,15 @@ public class SubtitleOscClearanceTests
             ctx.Initialize();
             ctx.Command("loadfile", Fix(fixture), "replace");
 
-            // Wait for the one rendered frame to be FULLY written before we decode it. The image VO writes the
-            // PNG then closes it; poll until the file exists and its size is stable across two checks. Stopping
-            // at "a file appeared" would race the VO and could decode a half-written PNG on a slow runner
-            // (Greptile #70: PNG write race) — truncated reads / false pixel results. ~10s budget for a busy CI.
-            long lastSize = -1;
-            for (int i = 0; i < 200; i++)
-            {
+            // Wait only until the VO has produced the frame file (proof it stepped the single frame), then let
+            // the using-block's Dispose be the synchronisation barrier: MpvContext.Dispose calls
+            // mpv_terminate_destroy, which blocks until mpv has fully shut the render path down — flushing and
+            // closing the PNG. Decoding AFTER the block therefore reads a complete file with no race against
+            // the writer (a size-stability poll could still complete mid-write if the VO paused; Greptile #70).
+            // ~10s budget so a busy CI runner that's slow to render still produces the file before we give up.
+            for (int i = 0; i < 200 && !Directory.EnumerateFiles(outdir, "*.png").Any(); i++)
                 System.Threading.Thread.Sleep(50);
-                string? candidate = Directory.EnumerateFiles(outdir, "*.png").OrderBy(f => f).LastOrDefault();
-                if (candidate is null) continue;
-                long size = new FileInfo(candidate).Length;
-                if (size > 0 && size == lastSize) break; // unchanged since the last poll → write finished
-                lastSize = size;
-            }
-        }
+        } // <- Dispose() => mpv_terminate_destroy: flushes & closes the PNG before returning
 
         string? frame = Directory.EnumerateFiles(outdir, "*.png").OrderBy(f => f).LastOrDefault();
         Assert.True(frame is not null, $"libmpv image VO produced no PNG for {fixture}; " +
