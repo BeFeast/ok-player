@@ -98,12 +98,15 @@
                         <TextBlock Text="THEME" FontSize="12" FontWeight="SemiBold" CharacterSpacing="60"
                                    Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,22,0,10" />
                         <Border Background="{ThemeResource ControlFillColorTertiaryBrush}" CornerRadius="8" Padding="3"
-                                Width="220" HorizontalAlignment="Left">
-                            <Grid ColumnDefinitions="*,*">
+                                Width="240" HorizontalAlignment="Left">
+                            <Grid ColumnDefinitions="*,*,*">
                                 <Button x:Name="ThemeLightBtn" Grid.Column="0" Content="Light" Click="OnThemeLight"
                                         HorizontalAlignment="Stretch" CornerRadius="6" Padding="0,5" FontSize="12.5"
                                         Background="Transparent" BorderThickness="0" />
-                                <Button x:Name="ThemeAutoBtn" Grid.Column="1" Content="Auto" Click="OnThemeAuto"
+                                <Button x:Name="ThemeDarkBtn" Grid.Column="1" Content="Dark" Click="OnThemeDark"
+                                        HorizontalAlignment="Stretch" CornerRadius="6" Padding="0,5" FontSize="12.5"
+                                        Background="Transparent" BorderThickness="0" />
+                                <Button x:Name="ThemeAutoBtn" Grid.Column="2" Content="Auto" Click="OnThemeAuto"
                                         HorizontalAlignment="Stretch" CornerRadius="6" Padding="0,5" FontSize="12.5"
                                         Background="Transparent" BorderThickness="0" />
                             </Grid>
@@ -129,33 +132,6 @@
                                     <TextBlock Text="OK Player teal" FontSize="12.5" VerticalAlignment="Center" />
                                 </StackPanel>
                             </Button>
-                        </StackPanel>
-
-                        <!-- MICA INTENSITY -->
-                        <TextBlock Text="MICA INTENSITY &#x2014; PER SURFACE" FontSize="12" FontWeight="SemiBold" CharacterSpacing="60"
-                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,24,0,12" />
-                        <StackPanel Spacing="10" MaxWidth="380" HorizontalAlignment="Left">
-                            <Grid ColumnDefinitions="90,*,40">
-                                <TextBlock Text="Titlebar" VerticalAlignment="Center" FontSize="12.5" />
-                                <Slider x:Name="MicaTitlebarSlider" Grid.Column="1" Minimum="0" Maximum="100" StepFrequency="5"
-                                        ValueChanged="OnMicaChanged" VerticalAlignment="Center" />
-                                <TextBlock x:Name="MicaTitlebarVal" Grid.Column="2" VerticalAlignment="Center" TextAlignment="Right"
-                                           FontSize="12" Foreground="{ThemeResource OkTextSecondaryBrush}" />
-                            </Grid>
-                            <Grid ColumnDefinitions="90,*,40">
-                                <TextBlock Text="Panels" VerticalAlignment="Center" FontSize="12.5" />
-                                <Slider x:Name="MicaPanelsSlider" Grid.Column="1" Minimum="0" Maximum="100" StepFrequency="5"
-                                        ValueChanged="OnMicaChanged" VerticalAlignment="Center" />
-                                <TextBlock x:Name="MicaPanelsVal" Grid.Column="2" VerticalAlignment="Center" TextAlignment="Right"
-                                           FontSize="12" Foreground="{ThemeResource OkTextSecondaryBrush}" />
-                            </Grid>
-                            <Grid ColumnDefinitions="90,*,40">
-                                <TextBlock Text="Overlays" VerticalAlignment="Center" FontSize="12.5" />
-                                <Slider x:Name="MicaOverlaysSlider" Grid.Column="1" Minimum="0" Maximum="100" StepFrequency="5"
-                                        ValueChanged="OnMicaChanged" VerticalAlignment="Center" />
-                                <TextBlock x:Name="MicaOverlaysVal" Grid.Column="2" VerticalAlignment="Center" TextAlignment="Right"
-                                           FontSize="12" Foreground="{ThemeResource OkTextSecondaryBrush}" />
-                            </Grid>
                         </StackPanel>
                     </StackPanel>
 

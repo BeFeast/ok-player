@@ -66,7 +66,7 @@ public sealed partial class MainWindow : Window
     private void ApplyAppTheme()
     {
         if (Content is FrameworkElement root)
-            root.RequestedTheme = App.Settings.Current.Theme == "Light" ? ElementTheme.Light : ElementTheme.Default;
+            root.RequestedTheme = SettingsWindow.ThemeFor(App.Settings.Current.Theme);
     }
 
     private SettingsWindow? _settingsWindow;
