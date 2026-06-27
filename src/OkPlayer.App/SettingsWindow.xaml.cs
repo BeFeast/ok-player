@@ -273,11 +273,36 @@ public sealed partial class SettingsWindow : Window
             LoadAudio();
     }
 
+    private bool _navSyncing; // guards the cross-list deselect from re-entering this handler
+
+    // The rail is split: the main list holds Appearance..Advanced, and About is a bottom-pinned one-item
+    // footer list. Selecting in one clears the other so only one row is ever highlighted. Index 8 == About.
     private void OnNavChanged(object sender, SelectionChangedEventArgs e)
     {
         if (AppearancePanel is null) // SelectedIndex=0 fires during InitializeComponent, before the pane exists
             return;
-        int i = NavList.SelectedIndex;
+        if (_navSyncing)
+            return; // a deselection we just triggered on the other list — ignore it
+        int i;
+        if (ReferenceEquals(sender, NavFooterList))
+        {
+            if (NavFooterList.SelectedIndex < 0)
+                return;
+            i = 8; // About
+            _navSyncing = true; NavList.SelectedIndex = -1; _navSyncing = false;
+        }
+        else
+        {
+            if (NavList.SelectedIndex < 0)
+                return;
+            i = NavList.SelectedIndex;
+            _navSyncing = true; NavFooterList.SelectedIndex = -1; _navSyncing = false;
+        }
+        ShowPanel(i);
+    }
+
+    private void ShowPanel(int i)
+    {
         bool appearance = i == 0;
         bool playback = i == 1;
         bool subtitles = i == 2;

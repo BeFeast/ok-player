@@ -20,7 +20,7 @@
         <Grid ColumnDefinitions="192,*">
 
             <Border Grid.Column="0" BorderThickness="0,0,1,0" BorderBrush="{ThemeResource OkStrokeBrush}" Background="{ThemeResource OkSubtleFillBrush}">
-                <Grid Padding="10,44,10,12" RowDefinitions="*,Auto">
+                <Grid Padding="10,44,10,12" RowDefinitions="*,Auto,Auto,Auto">
                 <StackPanel Grid.Row="0">
                     <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderThickness="1"
                             BorderBrush="{ThemeResource OkStrokeBrush}" CornerRadius="7" Padding="9,6" Margin="0,0,0,6">
@@ -76,14 +76,27 @@
                                 <FontIcon Glyph="&#xE943;" FontSize="16" /><TextBlock Text="Advanced" VerticalAlignment="Center" FontSize="12.5" />
                             </StackPanel>
                         </ListViewItem>
-                        <ListViewItem>
-                            <StackPanel Orientation="Horizontal" Spacing="10">
-                                <FontIcon Glyph="&#xE946;" FontSize="16" /><TextBlock Text="About" VerticalAlignment="Center" FontSize="12.5" />
-                            </StackPanel>
-                        </ListViewItem>
                     </ListView>
                 </StackPanel>
-                <TextBlock Grid.Row="1" x:Name="NavVersionText" FontSize="11" Margin="4,10,0,2"
+
+                <!-- About is pinned to the bottom of the rail under a flexible spacer (the * row above) and a
+                     hairline divider, per the design. It lives in its own one-item list so the selection
+                     coordinates with the main list (OnNavChanged clears the other when one is picked). -->
+                <Border Grid.Row="1" Height="1" Background="{ThemeResource OkStrokeBrush}" Margin="4,8,4,8" />
+                <ListView x:Name="NavFooterList" Grid.Row="2" SelectionMode="Single" SelectedIndex="-1"
+                          SelectionChanged="OnNavChanged" Padding="0">
+                    <ListView.Resources>
+                        <SolidColorBrush x:Key="ListViewItemBackgroundSelected" Color="#1F10938A" />
+                        <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPointerOver" Color="#2910938A" />
+                        <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPressed" Color="#2910938A" />
+                    </ListView.Resources>
+                    <ListViewItem>
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <FontIcon Glyph="&#xE946;" FontSize="16" /><TextBlock Text="About" VerticalAlignment="Center" FontSize="12.5" />
+                        </StackPanel>
+                    </ListViewItem>
+                </ListView>
+                <TextBlock Grid.Row="3" x:Name="NavVersionText" FontSize="11" Margin="4,10,0,2"
                            Foreground="{ThemeResource OkTextSecondaryBrush}" Opacity="0.8" />
                 </Grid>
             </Border>
