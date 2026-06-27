@@ -612,6 +612,24 @@ public partial class PlayerViewModel : ObservableObject
     /// file paused at its end and that pause would otherwise carry into the newly loaded file.</summary>
     public void Play() => Cmd("set", "pause", "no");
 
+    /// <summary>Stop playback and unload the current file: clears mpv's playlist, returns the engine to idle,
+    /// and resets to the empty state (no title/tracks/chapters) so the view falls back to the Welcome card.
+    /// The caller persists the resume position (SaveProgress) before calling this.</summary>
+    public void CloseFile()
+    {
+        Cmd("stop"); // halt playback + clear the internal playlist; the engine goes idle (keep-open holds no frame)
+        HasMedia = false;
+        MediaTitle = string.Empty;
+        Position = 0;
+        Duration = 0;
+        CurrentChapterIndex = -1;
+        SubtitleTracks.Clear();
+        SecondarySubtitleTracks.Clear();
+        AudioTracks.Clear();
+        Chapters.Clear();
+        OnPropertyChanged(nameof(ChapterFractions));
+    }
+
     public void SeekToFraction(double fraction)
     {
         if (_engine is null || Duration <= 0)
