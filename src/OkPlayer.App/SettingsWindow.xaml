@@ -764,15 +764,6 @@
                         </StackPanel>
                     </StackPanel>
 
-                    <!-- placeholder for the not-yet-built panels -->
-                    <StackPanel x:Name="PlaceholderPanel" Visibility="Collapsed">
-                        <TextBlock x:Name="PlaceholderTitle" Style="{StaticResource OkSettingsTitleTextStyle}" />
-                        <Border Margin="0,16,0,0" Padding="12,9" CornerRadius="7" HorizontalAlignment="Left"
-                                Background="{ThemeResource OkAccentTintBrush}">
-                            <TextBlock Text="Coming soon" FontSize="12" FontWeight="SemiBold"
-                                       Foreground="{ThemeResource OkAccentTextBrush}" />
-                        </Border>
-                    </StackPanel>
                 </Grid>
             </ScrollViewer>
         </Grid>

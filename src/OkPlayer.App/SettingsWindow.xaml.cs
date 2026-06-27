@@ -394,8 +394,6 @@ public sealed partial class SettingsWindow : Window
         IntegrationPanel.Visibility = integration ? Visibility.Visible : Visibility.Collapsed;
         AdvancedPanel.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
         AboutPanel.Visibility = about ? Visibility.Visible : Visibility.Collapsed;
-        PlaceholderPanel.Visibility = (!appearance && !playback && !subtitles && !video && !audio && !shortcuts && !integration && !advanced && !about)
-            ? Visibility.Visible : Visibility.Collapsed;
         if (advanced)
         {
             LoadMpvConf();
@@ -417,8 +415,6 @@ public sealed partial class SettingsWindow : Window
             LoadAudio();
         else if (shortcuts)
             LoadShortcuts();
-        else if (!appearance && i >= 0 && i < PanelNames.Length)
-            PlaceholderTitle.Text = PanelNames[i];
     }
 
     // ── Shortcuts panel (keyboard reference) ───────────────────────────
