@@ -543,7 +543,7 @@
                                         </Grid>
                                         <Grid ColumnDefinitions="*,Auto">
                                             <TextBlock Text="Graphics" Style="{StaticResource AboutRowLabelStyle}" />
-                                            <TextBlock Grid.Column="1" Text="OpenGL &#x00B7; ANGLE &#x2192; D3D11" Style="{StaticResource AboutValueStyle}" />
+                                            <TextBlock Grid.Column="1" x:Name="AboutEngineGraphics" Style="{StaticResource AboutValueStyle}" />
                                         </Grid>
                                         <Grid ColumnDefinitions="*,Auto">
                                             <TextBlock Text="Hardware decode" Style="{StaticResource AboutRowLabelStyle}" />
