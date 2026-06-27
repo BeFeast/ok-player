@@ -266,12 +266,55 @@
                                    Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,22,0,10" />
                         <TextBlock TextWrapping="Wrap" MaxWidth="560" HorizontalAlignment="Left" FontSize="12.5"
                                    Foreground="{ThemeResource OkTextSecondaryBrush}"
-                                   Text="OK Player ships smart defaults. Power users can pass raw options straight to the mpv engine &#x2014; one key=value per line, exactly like an mpv.conf. Engine-critical options (video output, the on-screen controls, the keyboard map) are protected." />
-                        <TextBox x:Name="MpvConfEditor" Margin="0,14,0,0" MinHeight="220" MaxWidth="560" HorizontalAlignment="Left"
-                                 AcceptsReturn="True" TextWrapping="NoWrap" FontFamily="Cascadia Code, Consolas" FontSize="12.5"
-                                 ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                                 IsSpellCheckEnabled="False"
-                                 PlaceholderText="# one option per line, e.g.&#x0A;hwdec=no&#x0A;sub-font=Arial&#x0A;cache=yes" />
+                                   Text="OK Player ships smart defaults. Power users can pass raw options straight to the mpv engine &#x2014; one key=value per row, like an mpv.conf. Engine-critical options (video output, the on-screen controls, the keyboard map) are protected and ignored here." />
+
+                        <!-- editable key=value rows, each one mpv.conf line. A protected key shows an "ignored"
+                             hint; the value uses the mpv.conf monospace feel. Backed by an ObservableCollection
+                             (ItemsSource set in code-behind); rows persist across a theme restyle. -->
+                        <ItemsControl x:Name="MpvOptionsList" Margin="0,14,0,0" MaxWidth="560" HorizontalAlignment="Left">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="0,0,0,6" ColumnSpacing="6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="1.5*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox Grid.Column="0" Loaded="OnRowKeyLoaded" PlaceholderText="option"
+                                                 Text="{Binding Key, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                 FontFamily="Cascadia Code, Consolas" FontSize="12.5" MinHeight="34"
+                                                 IsSpellCheckEnabled="False" />
+                                        <TextBlock Grid.Column="1" Text="=" VerticalAlignment="Center" FontSize="13"
+                                                   Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                                        <TextBox Grid.Column="2" PlaceholderText="value"
+                                                 Text="{Binding Value, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                 FontFamily="Cascadia Code, Consolas" FontSize="12.5" MinHeight="34"
+                                                 IsSpellCheckEnabled="False" />
+                                        <FontIcon Grid.Column="3" Glyph="&#xE946;" FontSize="15" Margin="2,0,0,0"
+                                                  VerticalAlignment="Center" Foreground="{ThemeResource OkTextSecondaryBrush}"
+                                                  Visibility="{Binding ProtectedVisibility, Mode=OneWay}"
+                                                  ToolTipService.ToolTip="Ignored &#x2014; managed by OK Player" />
+                                        <Button Grid.Column="4" Click="OnRemoveOption" Width="32" Height="32" Padding="0"
+                                                CornerRadius="7" Background="Transparent" BorderThickness="0"
+                                                Foreground="{ThemeResource OkTextSecondaryBrush}"
+                                                ToolTipService.ToolTip="Remove option">
+                                            <FontIcon Glyph="&#xE711;" FontSize="12" />
+                                        </Button>
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <Button Click="OnAddOption" Margin="0,4,0,0" CornerRadius="7" Padding="11,6"
+                                Background="Transparent" BorderThickness="1" BorderBrush="{ThemeResource OkStrokeBrush}">
+                            <StackPanel Orientation="Horizontal" Spacing="7">
+                                <FontIcon Glyph="&#xE710;" FontSize="12" />
+                                <TextBlock Text="Add option" FontSize="12.5" />
+                            </StackPanel>
+                        </Button>
+
                         <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,12,0,0" VerticalAlignment="Center">
                             <Button x:Name="MpvConfSaveBtn" Content="Save" Click="OnMpvConfSave" CornerRadius="7" Padding="16,7"
                                     FontSize="12.5" FontWeight="SemiBold" Background="{ThemeResource OkAccentBrush}"
