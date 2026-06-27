@@ -34,6 +34,8 @@ jobs:
       # These exercise the actual engine (the open-time deadlock guard contract), so they need libmpv.
       - name: Fetch libmpv
         shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # authenticates the api.github.com release lookup (5000/hr vs the 60/hr unauthenticated limit that 403s on shared runner IPs)
         run: ./scripts/fetch-natives.ps1
 
       # Debug so the (DEBUG-only) render-thread guard is compiled in and its assertions run.
