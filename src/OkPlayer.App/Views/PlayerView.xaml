@@ -181,16 +181,17 @@
                 <ScrollViewer x:Name="VariationAScroll" Grid.Row="0" VerticalScrollBarVisibility="Auto"
                               HorizontalScrollMode="Disabled" ZoomMode="Disabled">
                     <Grid MinHeight="{Binding ViewportHeight, ElementName=VariationAScroll}">
-                    <StackPanel MaxWidth="860" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="44,36">
+                    <StackPanel MaxWidth="920" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="44,36">
                         <TextBlock Text="Continue watching" FontSize="30" FontWeight="SemiBold" CharacterSpacing="-15"
                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
                         <TextBlock Text="Pick up where you left off &#x2014; or open something new." FontSize="13.5" Margin="0,6,0,0"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
 
-                        <!-- recents row -->
-                        <ScrollViewer Margin="0,22,0,0" HorizontalScrollMode="Auto" HorizontalScrollBarVisibility="Auto"
-                                      VerticalScrollMode="Disabled" VerticalScrollBarVisibility="Hidden" Padding="0,0,0,4">
-                            <ItemsControl ItemsSource="{x:Bind Recents}">
+                        <!-- recents row: show as many cards as fit the available width (no horizontal scroll —
+                             the design's elegance bar). Older resumable files stay reachable via History. The
+                             visible count is recomputed from the row width in OnRecentsRowSizeChanged. -->
+                        <Grid x:Name="RecentsRow" Margin="0,22,0,0" SizeChanged="OnRecentsRowSizeChanged">
+                            <ItemsControl ItemsSource="{x:Bind VisibleRecents}">
                                 <ItemsControl.ItemsPanel>
                                     <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="14" /></ItemsPanelTemplate>
                                 </ItemsControl.ItemsPanel>
@@ -221,7 +222,37 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
-                        </ScrollViewer>
+                        </Grid>
+                        <!-- recents that don't fit the row, opened in a flyout so every resumable file stays
+                             reachable without a horizontal scrollbar (a full History view is separate work) -->
+                        <Button x:Name="MoreRecentsLink" Visibility="Collapsed" Margin="2,7,0,0" Padding="4,2"
+                                Background="Transparent" BorderThickness="0">
+                            <TextBlock x:Name="MoreRecentsText" FontSize="12" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                            <Button.Flyout>
+                                <Flyout Placement="Top">
+                                    <StackPanel Width="300">
+                                        <TextBlock Text="MORE TO CONTINUE" FontSize="11" FontWeight="SemiBold" CharacterSpacing="60"
+                                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="6,2,6,6" />
+                                        <ScrollViewer MaxHeight="320" VerticalScrollBarVisibility="Auto">
+                                            <ItemsControl ItemsSource="{x:Bind OverflowRecents}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate x:DataType="vm:RecentEntry">
+                                                        <Button Click="OnRecentClick" Tag="{x:Bind Path}" Style="{StaticResource OkSwitcherRowStyle}"
+                                                                HorizontalContentAlignment="Stretch">
+                                                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                                                                <TextBlock Grid.Column="0" Text="{x:Bind Title}" MaxLines="1" TextTrimming="CharacterEllipsis" />
+                                                                <TextBlock Grid.Column="1" Text="{x:Bind TimeLeft}" FontSize="11"
+                                                                           Foreground="{ThemeResource OkTextSecondaryBrush}" VerticalAlignment="Center" />
+                                                            </Grid>
+                                                        </Button>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </ScrollViewer>
+                                    </StackPanel>
+                                </Flyout>
+                            </Button.Flyout>
+                        </Button>
 
                         <!-- actions + drop zone -->
                         <Grid Margin="0,26,0,0" ColumnDefinitions="Auto,*" ColumnSpacing="14">
