@@ -126,20 +126,25 @@ public class SubtitleOscClearanceTests
             ctx.SetOption("sid", "1");
             ctx.SetOption("keep-open", "no");
             ctx.SetOption("start", "1");          // sample at t=1s, inside the fixture's 0..30s subtitle
-            ctx.SetOption("frames", "3");
+            ctx.SetOption("frames", "1");         // exactly one frame: a single, unambiguous output file
             configureSub(ctx);
             ctx.Initialize();
             ctx.Command("loadfile", Fix(fixture), "replace");
 
-            // Wait for the image VO to flush frames (it writes 00000001.png ...). Poll rather than sleep a
-            // fixed slug so the test is as quick as the machine allows but tolerant on a busy CI box.
-            string? png = null;
-            for (int i = 0; i < 100 && png is null; i++)
+            // Wait for the one rendered frame to be FULLY written before we decode it. The image VO writes the
+            // PNG then closes it; poll until the file exists and its size is stable across two checks. Stopping
+            // at "a file appeared" would race the VO and could decode a half-written PNG on a slow runner
+            // (Greptile #70: PNG write race) — truncated reads / false pixel results. ~10s budget for a busy CI.
+            long lastSize = -1;
+            for (int i = 0; i < 200; i++)
             {
                 System.Threading.Thread.Sleep(50);
-                png = Directory.EnumerateFiles(outdir, "*.png").OrderBy(f => f).LastOrDefault();
+                string? candidate = Directory.EnumerateFiles(outdir, "*.png").OrderBy(f => f).LastOrDefault();
+                if (candidate is null) continue;
+                long size = new FileInfo(candidate).Length;
+                if (size > 0 && size == lastSize) break; // unchanged since the last poll → write finished
+                lastSize = size;
             }
-            System.Threading.Thread.Sleep(150); // let the last file finish writing
         }
 
         string? frame = Directory.EnumerateFiles(outdir, "*.png").OrderBy(f => f).LastOrDefault();
