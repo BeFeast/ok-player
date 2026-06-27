@@ -259,6 +259,11 @@ public sealed partial class SettingsWindow : Window
         StyleSegment(SubLarge, Math.Abs(s.SubtitleScale - 1.4) < 0.001);
         StyleSegment(SubBottom, s.SubtitlePosition == 100);
         StyleSegment(SubRaised, s.SubtitlePosition == 90);
+        string style = OkPlayer.Core.SubtitleStyle.FromKey(s.SubtitleStyle).Key;
+        StyleSegment(SubStyleDefault, style == "Default");
+        StyleSegment(SubStyleBold, style == "Bold");
+        StyleSegment(SubStyleClassic, style == "Classic");
+        StyleSegment(SubStyleContrast, style == "Contrast");
     }
 
     private void OnSubSize(object sender, RoutedEventArgs e)
@@ -277,6 +282,18 @@ public sealed partial class SettingsWindow : Window
         if (sender is Button { Tag: string t } && int.TryParse(t, out int v))
         {
             App.Settings.Current.SubtitlePosition = v;
+            App.Settings.Save();
+            LoadSubtitles();
+        }
+    }
+
+    private void OnSubStyle(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string key })
+        {
+            // Normalize through FromKey so only a known preset key is ever persisted (an unknown Tag, or a
+            // hand-edited settings value, collapses to Default rather than sticking an invalid key).
+            App.Settings.Current.SubtitleStyle = OkPlayer.Core.SubtitleStyle.FromKey(key).Key;
             App.Settings.Save();
             LoadSubtitles();
         }

@@ -32,6 +32,7 @@ public sealed class AppSettings
     // Subtitles
     public double SubtitleScale { get; set; } = 1.0;     // default sub-scale (size multiplier)
     public int SubtitlePosition { get; set; } = 100;     // default sub-pos: 100 = bottom, lower = higher
+    public string SubtitleStyle { get; set; } = "Default"; // appearance preset key (OkPlayer.Core.SubtitleStyle)
 
     // Privacy (Integration panel)
     public int HistoryRetentionDays { get; set; } = 0;   // auto-prune history older than N days; 0 = keep forever

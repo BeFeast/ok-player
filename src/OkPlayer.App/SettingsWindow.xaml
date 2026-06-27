@@ -215,6 +215,19 @@
                                 <Button x:Name="SubRaised" Tag="90"  Content="Raised"   Click="OnSubPos" Width="84" CornerRadius="6" Padding="0,5" FontSize="12.5" Background="Transparent" BorderThickness="0" />
                             </StackPanel>
                         </Border>
+                        <TextBlock Text="STYLE" FontSize="12" FontWeight="SemiBold" CharacterSpacing="60"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,24,0,10" />
+                        <Border Background="{ThemeResource ControlFillColorTertiaryBrush}" CornerRadius="8" Padding="3" HorizontalAlignment="Left">
+                            <StackPanel Orientation="Horizontal">
+                                <Button x:Name="SubStyleDefault"  Tag="Default"  Content="Default"       Click="OnSubStyle" Width="96" CornerRadius="6" Padding="0,5" FontSize="12.5" Background="Transparent" BorderThickness="0" />
+                                <Button x:Name="SubStyleBold"     Tag="Bold"     Content="Bold"          Click="OnSubStyle" Width="96" CornerRadius="6" Padding="0,5" FontSize="12.5" Background="Transparent" BorderThickness="0" />
+                                <Button x:Name="SubStyleClassic"  Tag="Classic"  Content="Classic"       Click="OnSubStyle" Width="96" CornerRadius="6" Padding="0,5" FontSize="12.5" Background="Transparent" BorderThickness="0" />
+                                <Button x:Name="SubStyleContrast" Tag="Contrast" Content="High contrast" Click="OnSubStyle" Width="110" CornerRadius="6" Padding="0,5" FontSize="12.5" Background="Transparent" BorderThickness="0" />
+                            </StackPanel>
+                        </Border>
+                        <TextBlock Text="Style affects text subtitles (SRT); ASS/SSA tracks keep their own built-in styling."
+                                   TextWrapping="Wrap" MaxWidth="520" HorizontalAlignment="Left" FontSize="11.5"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,8,0,0" />
                         <TextBlock Text="Defaults for newly opened files. Tweak the current file (size, delay) from the subtitles button on the controls."
                                    TextWrapping="Wrap" MaxWidth="520" HorizontalAlignment="Left" FontSize="11.5"
                                    Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,8,0,0" />

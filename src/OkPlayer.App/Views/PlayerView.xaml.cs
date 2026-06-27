@@ -1507,6 +1507,11 @@ public sealed partial class PlayerView : UserControl
             if (Video.Engine is { } e)
             {
                 e.SetProperty("sub-scale", App.Settings.Current.SubtitleScale);
+                // Appearance preset (Settings -> Subtitles -> STYLE): a fixed set of sub-* style options.
+                // Every preset writes the same options, so switching fully overrides the previous look.
+                // These style mpv's own text-sub renderer; ASS subs keep their embedded styling by design.
+                foreach (var (name, value) in OkPlayer.Core.SubtitleStyle.FromKey(App.Settings.Current.SubtitleStyle).Options)
+                    e.SetProperty(name, value);
                 // sub-pos is owned by the OSC-lift (it both positions and lifts subtitles); re-apply it for
                 // the current chrome state so a live position change keeps the lift consistent.
                 Vm.ApplySubtitlePosition(App.Settings.Current.SubtitlePosition, _chromeVisible ? ComputeOscLift() : 0);
