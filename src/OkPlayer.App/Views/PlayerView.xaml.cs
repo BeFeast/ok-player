@@ -128,6 +128,10 @@ public sealed partial class PlayerView : UserControl
         Video.SubtitleAdded += (_, ok) => DispatcherQueue.TryEnqueue(() => OnSubtitleAdded(ok));
         MediaInfoCardView.CloseRequested += (_, _) => CloseMediaInfo();
         MediaInfoCardView.CopyRequested += (_, _) => OnMediaInfoCopy();
+        HistorySurface.OpenRequested += OnHistoryOpenRequested;
+        HistorySurface.CloseRequested += (_, _) => CloseHistory();
+        HistorySurface.SettingsRequested += (_, _) => SettingsRequested?.Invoke(this, EventArgs.Empty);
+        HistorySurface.ToastRequested += (_, msg) => ShowToast(msg);
         VolumeCtl.Vm = Vm;
         Seek.SeekRequested += OnSeekRequested;
         Seek.ScrubStateChanged += scrubbing => Vm.IsScrubbing = scrubbing;
@@ -170,10 +174,15 @@ public sealed partial class PlayerView : UserControl
     // Light-first shell: over Mica show the Welcome card with no video plane / no over-video chrome;
     // once media is loaded, show the video plane + reveal the OSC, and let the host darken→whiten the
     // caption buttons.
+    private bool _historyOpen; // the History surface is showing (idle-only; mutually exclusive with playback)
+
     private void ApplyMediaPresence()
     {
         bool has = Vm.HasMedia;
-        WelcomeCard.Visibility = has ? Visibility.Collapsed : Visibility.Visible;
+        if (has && _historyOpen)
+            _historyOpen = false; // opening a file from History (or anywhere) takes over the canvas
+        WelcomeCard.Visibility = (has || _historyOpen) ? Visibility.Collapsed : Visibility.Visible;
+        HistorySurface.Visibility = _historyOpen ? Visibility.Visible : Visibility.Collapsed;
         VideoBackdrop.Visibility = has ? Visibility.Visible : Visibility.Collapsed;
         Video.Visibility = has ? Visibility.Visible : Visibility.Collapsed;
         MediaPresenceChanged?.Invoke(this, has);
@@ -188,7 +197,8 @@ public sealed partial class PlayerView : UserControl
             TitleChrome.IsHitTestVisible = false;
             BottomChrome.IsHitTestVisible = false;
             ChromeHideSb.Begin();
-            LoadRecents();
+            if (!_historyOpen)
+                LoadRecents(); // refresh the welcome shelf (skip while History owns the canvas)
         }
     }
 
@@ -218,8 +228,37 @@ public sealed partial class PlayerView : UserControl
         catch { /* another content dialog is already open — ignore the concurrent open */ }
     }
 
-    private void OnHistoryClick(object sender, RoutedEventArgs e)
-        => ShowToast("History view is coming soon");
+    private void OnHistoryClick(object sender, RoutedEventArgs e) => OpenHistory();
+
+    private void OnHistoryOpenRequested(object? sender, HistoryView.OpenRequest req)
+    {
+        // Fall back to the welcome shelf, then open — matching open-from-welcome, where the shelf stays
+        // up until the video is ready and remains if the file fails to load (async decode errors leave
+        // HasMedia false and never re-run ApplyMediaPresence, so collapsing to a bare canvas would strand it).
+        CloseHistory();
+        OpenMedia(req.Path, req.FromStart);
+    }
+
+    /// <summary>Open the full History surface — a third idle-canvas state alongside Welcome and playback.
+    /// Idle-only: a file must be closed first (the OSC's Close file / X), so History never sits over video.</summary>
+    private void OpenHistory()
+    {
+        if (Vm.HasMedia || _historyOpen)
+            return;
+        _historyOpen = true;
+        HistorySurface.Load();
+        ApplyMediaPresence();
+        HistorySurface.Focus(FocusState.Programmatic); // History owns the keyboard (search / Esc) while open
+    }
+
+    private void CloseHistory()
+    {
+        if (!_historyOpen)
+            return;
+        _historyOpen = false;
+        ApplyMediaPresence();   // back to the welcome shelf (and refresh it for any removals)
+        Focus(FocusState.Programmatic);
+    }
 
     private void OnEngineReady(object? sender, EventArgs e)
     {
@@ -436,6 +475,8 @@ public sealed partial class PlayerView : UserControl
 
     private void OnRootKeyDown(object sender, KeyRoutedEventArgs e)
     {
+        if (_historyOpen)
+            return; // History owns the keyboard while open (its own search box / Esc handling)
         bool handled = true;
         switch (e.Key)
         {
@@ -455,6 +496,7 @@ public sealed partial class PlayerView : UserControl
             case (VirtualKey)0x49: OpenMediaInfo(); break;        // I
             case (VirtualKey)0x43: TogglePanel(); break;          // C
             case (VirtualKey)0x58: CloseFile(); break;            // X — close the current file, back to Welcome
+            case (VirtualKey)0x48: if (!Vm.HasMedia) OpenHistory(); else handled = false; break; // H — open History (idle)
             case VirtualKey.PageDown: PlayNext(); break;          // next file in the folder playlist
             case VirtualKey.PageUp:   PlayPrevious(); break;      // previous file
             case VirtualKey.Escape:
@@ -1695,7 +1737,7 @@ public sealed partial class PlayerView : UserControl
 
     /// <summary>Load a local path or URL into the engine. Never throws to the caller — a failed open
     /// surfaces a toast (a genuine decode/format failure later arrives as an EndFile(Error) toast).</summary>
-    public void OpenMedia(string pathOrUrl)
+    public void OpenMedia(string pathOrUrl, bool fromStart = false)
     {
         if (!pathOrUrl.Contains("://") &&
             (pathOrUrl.EndsWith(".m3u", StringComparison.OrdinalIgnoreCase) ||
@@ -1715,8 +1757,9 @@ public sealed partial class PlayerView : UserControl
                                     // again right after this call); clearing here drops a stale value if that file
                                     // never reported a Duration, so the next normal open isn't force-seeked.
             _openGeneration++;     // invalidate any in-flight chapter-warm pass for the previous file
-            // resume only when the user keeps that on (Settings -> Playback); applied on the first Duration
-            _resumeTarget = (App.Settings.Current.ResumePlayback ? _history.Get(pathOrUrl)?.Position : null) ?? -1;
+            // resume only when the user keeps that on (Settings -> Playback) and didn't ask to start over
+            // (History's "Play from start"); applied on the first Duration
+            _resumeTarget = (!fromStart && App.Settings.Current.ResumePlayback ? _history.Get(pathOrUrl)?.Position : null) ?? -1;
             Vm.SetSpeed(App.Settings.Current.DefaultSpeed); // every file starts at the default speed, incl. 1x
                                                             // (so a manual speed change doesn't carry over)
             ApplySubtitleDefaults(); // default sub size/position (Settings -> Subtitles)
@@ -1731,6 +1774,7 @@ public sealed partial class PlayerView : UserControl
         catch (Exception)
         {
             ShowToast("Couldn't open this file");
+            ApplyMediaPresence(); // restore the idle surface (e.g. the welcome shelf after a failed History resume)
         }
     }
 
