@@ -40,6 +40,25 @@ public class MpvConfTextTests
     }
 
     [Fact]
+    public void Parse_SkipsProfileSectionHeaders()
+    {
+        // A "[fast]" header must not become a bare option (which would serialize to the bogus "[fast]=yes");
+        // it's dropped like a comment, and the options keep parsing.
+        var options = MpvConfText.Parse("[fast]\nhwdec=auto\n[slow]\ncache=yes");
+        Assert.Equal(new[] { "hwdec", "cache" }, options.Select(o => o.Key));
+        Assert.DoesNotContain(options, o => o.Key.StartsWith('['));
+    }
+
+    [Fact]
+    public void RoundTrip_DoesNotCorruptProfileHeaderIntoOption()
+    {
+        // Regression: the round-trip used to rewrite "[fast]" as "[fast]=yes", corrupting the profile boundary.
+        string serialized = MpvConfText.Serialize(MpvConfText.Parse("[fast]\nhwdec=auto"));
+        Assert.DoesNotContain("[fast]", serialized);
+        Assert.Equal("hwdec=auto\n", serialized);
+    }
+
+    [Fact]
     public void Parse_ValueWithEquals_SplitsOnFirstOnly()
     {
         // glsl-shaders paths and option=sub-option=value forms keep everything after the first '='.

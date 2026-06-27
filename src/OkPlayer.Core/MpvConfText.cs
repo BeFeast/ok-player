@@ -12,11 +12,16 @@ public readonly record struct MpvOption(string Key, string Value);
 /// exactly so a round-trip is faithful: one option per line; blank lines and lines beginning with <c>#</c>
 /// are ignored; the value is everything after the first <c>=</c> (so values may themselves contain <c>=</c>);
 /// a bare key with no <c>=</c> means <c>key=yes</c>; keys and values are trimmed. A <c>#</c> that is not the
-/// first character is part of the value (e.g. <c>sub-color=#FFFFFF</c>), not a comment.</summary>
+/// first character is part of the value (e.g. <c>sub-color=#FFFFFF</c>), not a comment. mpv profile-section
+/// headers (a line beginning with <c>[</c>, e.g. <c>[fast]</c>) are ignored too: the key/value editor can't
+/// represent a section, and the engine loader applies the file as flat <c>SetOption</c> calls (it blocks
+/// <c>config</c>, so mpv never loads profiles itself) — so a section was never honoured here anyway. Ignoring
+/// the header keeps a round-trip from rewriting <c>[fast]</c> as the bogus option <c>[fast]=yes</c>.</summary>
 public static class MpvConfText
 {
-    /// <summary>Parse mpv.conf text into options, in file order. Comments and blank lines are dropped (the
-    /// editor is key/value only); a bare key becomes <c>yes</c>. Tolerant of CRLF and LF.</summary>
+    /// <summary>Parse mpv.conf text into options, in file order. Comments, blank lines, and profile-section
+    /// headers are dropped (the editor is key/value only); a bare key becomes <c>yes</c>. Tolerant of CRLF
+    /// and LF.</summary>
     public static IReadOnlyList<MpvOption> Parse(string? text)
     {
         var options = new List<MpvOption>();
@@ -26,7 +31,10 @@ public static class MpvConfText
         foreach (string rawLine in text.Split('\n'))
         {
             string line = rawLine.Trim(); // also strips a trailing '\r' from CRLF endings
-            if (line.Length == 0 || line[0] == '#')
+            // Skip blanks, comments, and mpv profile-section headers ("[name]"). Treating "[fast]" as a bare
+            // option would round-trip it to the bogus "[fast]=yes" and destroy the profile boundary; the
+            // key/value editor can't represent a section, so it's dropped like a comment instead of mangled.
+            if (line.Length == 0 || line[0] == '#' || line[0] == '[')
                 continue;
 
             int eq = line.IndexOf('=');
