@@ -1,0 +1,54 @@
+using System.Collections.Generic;
+using System.IO;
+
+namespace OkPlayer.Core;
+
+/// <summary>Recursively collect the media files under a dropped folder so dropping a folder can become a
+/// playlist. The recursion is depth-bounded so a pathological or symlink-looped tree can't walk forever, and
+/// reparse points (symlinks / junctions) are skipped for the same reason. Unreadable subdirectories are
+/// skipped rather than fatal.</summary>
+public static class FolderScan
+{
+    /// <summary>Default recursion depth (the root folder is depth 0). Deep enough for any real media library,
+    /// bounded so a runaway or looped tree can't hang the drop.</summary>
+    public const int DefaultMaxDepth = 12;
+
+    /// <summary>Media files under <paramref name="root"/>, recursing up to <paramref name="maxDepth"/> levels
+    /// below it (root = depth 0), natural-sorted by full path so the playlist plays in the obvious order.</summary>
+    public static List<string> MediaFiles(string root, int maxDepth = DefaultMaxDepth)
+    {
+        var found = new List<string>();
+        Walk(root, 0, maxDepth, found);
+        found.Sort(NaturalComparer.Instance);
+        return found;
+    }
+
+    private static void Walk(string dir, int depth, int maxDepth, List<string> acc)
+    {
+        // Files at this level. A dir whose files can't be listed still gets its subdirectories tried.
+        List<string> files = new();
+        try { files = new List<string>(Directory.EnumerateFiles(dir)); }
+        catch { /* unreadable — skip this level's files */ }
+        foreach (string f in files)
+            if (MediaFormats.IsMedia(f))
+                acc.Add(f);
+
+        if (depth >= maxDepth)
+            return;
+
+        List<string> subdirs;
+        try { subdirs = new List<string>(Directory.EnumerateDirectories(dir)); }
+        catch { return; }
+        foreach (string sub in subdirs)
+        {
+            try
+            {
+                // Symlinks/junctions can loop back into the tree (infinite walk) or escape it — skip them.
+                if ((File.GetAttributes(sub) & FileAttributes.ReparsePoint) != 0)
+                    continue;
+            }
+            catch { continue; }
+            Walk(sub, depth + 1, maxDepth, acc);
+        }
+    }
+}
