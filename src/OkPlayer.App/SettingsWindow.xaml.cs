@@ -16,7 +16,7 @@ namespace OkPlayer.App;
 public sealed partial class SettingsWindow : Window
 {
     private static readonly string[] PanelNames =
-        { "Appearance", "Playback", "Subtitles", "Video", "Audio", "Shortcuts", "Integration", "Advanced" };
+        { "Appearance", "Playback", "Subtitles", "Video", "Audio", "Shortcuts", "Integration", "Advanced", "About" };
 
     private bool _loaded;
 
@@ -44,7 +44,7 @@ public sealed partial class SettingsWindow : Window
         _loaded = true;
     }
 
-    /// <summary>Populate the version surfaces: the muted nav-rail footer and the Advanced → About block.
+    /// <summary>Populate the version surfaces: the muted nav-rail footer and the About panel.
     /// The mpv engine line is captured off-thread at engine attach (cosmetic) and may be absent.</summary>
     private void ShowVersion()
     {
@@ -70,13 +70,13 @@ public sealed partial class SettingsWindow : Window
     }
 
     // App.MpvVersion is captured off the UI thread at engine attach, which can land after this window is
-    // already open and even already sitting on Advanced. Marshal to this window and refresh the About engine
+    // already open and even already sitting on About. Marshal to this window and refresh the About engine
     // line so it surfaces immediately, instead of waiting for the user to leave and re-enter the panel.
     private void OnMpvVersionChanged() => DispatcherQueue?.TryEnqueue(RefreshEngineVersion);
 
     /// <summary>Show the libmpv engine line when its version is known, else hide it. The engine attaches
     /// — and the off-thread <c>mpv-version</c> read completes — only after media starts playing, so this
-    /// is re-run when the Advanced panel (which hosts About) is shown, and on <see cref="App.MpvVersionChanged"/>:
+    /// is re-run when the About panel is shown, and on <see cref="App.MpvVersionChanged"/>:
     /// a version captured after this window opened still surfaces, instead of the line staying hidden.</summary>
     private void RefreshEngineVersion()
     {
@@ -138,6 +138,7 @@ public sealed partial class SettingsWindow : Window
         bool shortcuts = i == 5;
         bool integration = i == 6;
         bool advanced = i == 7;
+        bool about = i == 8;
         AppearancePanel.Visibility = appearance ? Visibility.Visible : Visibility.Collapsed;
         PlaybackPanel.Visibility = playback ? Visibility.Visible : Visibility.Collapsed;
         SubtitlesPanel.Visibility = subtitles ? Visibility.Visible : Visibility.Collapsed;
@@ -146,13 +147,15 @@ public sealed partial class SettingsWindow : Window
         ShortcutsPanel.Visibility = shortcuts ? Visibility.Visible : Visibility.Collapsed;
         IntegrationPanel.Visibility = integration ? Visibility.Visible : Visibility.Collapsed;
         AdvancedPanel.Visibility = advanced ? Visibility.Visible : Visibility.Collapsed;
-        PlaceholderPanel.Visibility = (!appearance && !playback && !subtitles && !video && !audio && !shortcuts && !integration && !advanced)
+        AboutPanel.Visibility = about ? Visibility.Visible : Visibility.Collapsed;
+        PlaceholderPanel.Visibility = (!appearance && !playback && !subtitles && !video && !audio && !shortcuts && !integration && !advanced && !about)
             ? Visibility.Visible : Visibility.Collapsed;
         if (advanced)
         {
             LoadMpvConf();
-            RefreshEngineVersion(); // pick up a version captured after this window opened
         }
+        else if (about)
+            RefreshEngineVersion(); // engine version may have been captured after this window opened
         else if (integration)
             LoadIntegration();
         else if (playback)
