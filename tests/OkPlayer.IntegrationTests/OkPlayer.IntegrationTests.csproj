@@ -25,6 +25,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\OkPlayer.Mpv\OkPlayer.Mpv.csproj" />
+    <ProjectReference Include="..\..\src\OkPlayer.Core\OkPlayer.Core.csproj" />
   </ItemGroup>
 
   <!-- Render fixtures (e.g. an mkv with an embedded ASS subtitle) for the subtitle-position tests. -->

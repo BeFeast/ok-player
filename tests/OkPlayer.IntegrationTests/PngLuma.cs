@@ -5,7 +5,8 @@ using System.IO.Compression;
 namespace OkPlayer.IntegrationTests;
 
 /// <summary>Minimal PNG decoder used only by the subtitle render tests: it inflates the image and exposes
-/// per-pixel luma so a test can locate the brightest rows (the burned-in subtitle text) without pulling in
+/// per-pixel luma (to locate the brightest rows = the burned-in subtitle text) and per-pixel RGB (to check
+/// the caption's colour, e.g. that a yellow preset actually renders yellow), without pulling in
 /// System.Drawing or any other image package. Handles the 8-bit, non-interlaced grayscale/RGB(A) outputs
 /// that mpv's image VO produces; anything else throws so an unexpected format surfaces loudly.</summary>
 internal sealed class PngLuma
@@ -13,10 +14,19 @@ internal sealed class PngLuma
     public int Width { get; }
     public int Height { get; }
     private readonly byte[] _luma; // one byte (0..255) per pixel, row-major
+    private readonly byte[] _rgb;  // three bytes (R,G,B) per pixel, row-major
 
-    private PngLuma(int w, int h, byte[] luma) { Width = w; Height = h; _luma = luma; }
+    private PngLuma(int w, int h, byte[] luma, byte[] rgb) { Width = w; Height = h; _luma = luma; _rgb = rgb; }
 
     public byte At(int x, int y) => _luma[y * Width + x];
+
+    /// <summary>The pixel's colour. Grayscale inputs report R=G=B; alpha is dropped (mpv's image VO writes
+    /// opaque frames).</summary>
+    public (byte R, byte G, byte B) ColorAt(int x, int y)
+    {
+        int o = (y * Width + x) * 3;
+        return (_rgb[o], _rgb[o + 1], _rgb[o + 2]);
+    }
 
     public static PngLuma Load(string path)
     {
@@ -65,6 +75,7 @@ internal sealed class PngLuma
         byte[] prev = new byte[stride];
         byte[] cur = new byte[stride];
         byte[] luma = new byte[width * height];
+        byte[] rgb = new byte[width * height * 3];
 
         int p = 0;
         for (int y = 0; y < height; y++)
@@ -76,16 +87,19 @@ internal sealed class PngLuma
             for (int x = 0; x < width; x++)
             {
                 int o = x * bpp;
-                byte l = channels switch
-                {
-                    1 or 2 => cur[o],                                                // gray (alpha ignored)
-                    _ => (byte)((cur[o] * 299 + cur[o + 1] * 587 + cur[o + 2] * 114) / 1000) // Rec.601 luma
-                };
-                luma[y * width + x] = l;
+                byte r, g, b;
+                if (channels is 1 or 2) // gray (alpha ignored)
+                    r = g = b = cur[o];
+                else                    // RGB / RGBA
+                    (r, g, b) = (cur[o], cur[o + 1], cur[o + 2]);
+
+                luma[y * width + x] = (byte)((r * 299 + g * 587 + b * 114) / 1000); // Rec.601 luma
+                int ro = (y * width + x) * 3;
+                rgb[ro] = r; rgb[ro + 1] = g; rgb[ro + 2] = b;
             }
             (prev, cur) = (cur, prev);
         }
-        return new PngLuma(width, height, luma);
+        return new PngLuma(width, height, luma, rgb);
     }
 
     private static void Unfilter(byte filter, byte[] cur, byte[] prev, int bpp)
