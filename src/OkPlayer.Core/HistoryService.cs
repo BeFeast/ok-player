@@ -277,24 +277,55 @@ public sealed class HistoryService
     {
         lock (_lock)
             return _records
-                .Where(kv => File.Exists(kv.Key))
+                .Where(kv => IsListable(kv.Key))
                 .OrderByDescending(kv => kv.Value.LastOpenedUtc, StringComparer.Ordinal)
                 .Take(count)
                 .Select(kv => (kv.Key, kv.Value))
                 .ToList();
     }
 
-    /// <summary>Every tracked file that still exists on disk, newest-opened first — the full History
-    /// list. Unlike <see cref="Recents"/> this keeps finished files and applies no resume-progress
-    /// threshold; missing files are still hidden, so History never shows a dead path.</summary>
+    /// <summary>Every tracked file that is still present, newest-opened first — the full History list. Unlike
+    /// <see cref="Recents"/> this keeps finished files and applies no resume-progress threshold. A genuinely
+    /// local-and-missing file is hidden so History never shows a dead path, but a network/URL entry is kept
+    /// (see <see cref="IsListable"/>) so a transiently-offline NFS/SMB file doesn't vanish.</summary>
     public IReadOnlyList<(string Path, FileRecord Record)> All()
     {
         lock (_lock)
             return _records
-                .Where(kv => File.Exists(kv.Key))
+                .Where(kv => IsListable(kv.Key))
                 .OrderByDescending(kv => kv.Value.LastOpenedUtc, StringComparer.Ordinal)
                 .Select(kv => (kv.Key, kv.Value))
                 .ToList();
+    }
+
+    /// <summary>Whether a tracked path should still be listed in History / recents. Local files are listed only
+    /// while they exist (a deleted file shouldn't linger). But <see cref="File.Exists"/> is unreliable for
+    /// network paths — an NFS/SMB share that is briefly slow, offline, or auth-gated returns <c>false</c> even
+    /// when the file is there (Exists swallows the IO/timeout exception) — so a URL or a network path (UNC or a
+    /// mapped network drive) is never hidden on a false Exists; only a genuinely local-and-missing file is
+    /// dropped. Without this, an NFS file vanished from History/recents on any transient blip.</summary>
+    private static bool IsListable(string path)
+        => path.Contains("://", StringComparison.Ordinal) || IsNetworkPath(path) || File.Exists(path);
+
+    /// <summary>True for a UNC path (<c>\\server\share\…</c>) or a path on a mapped network drive (e.g. an
+    /// NFS/SMB mount surfaced as <c>Z:\</c>). Errs toward <c>true</c> on any classification failure, so a file
+    /// that may be present is never hidden by a misclassification.</summary>
+    public static bool IsNetworkPath(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return false;
+        if (path.StartsWith(@"\\", StringComparison.Ordinal))
+            return true; // UNC, including \\server\share and \\?\UNC\
+        try
+        {
+            if (!Path.IsPathRooted(path))
+                return false;
+            string? root = Path.GetPathRoot(path);
+            if (string.IsNullOrEmpty(root))
+                return false;
+            return new DriveInfo(root).DriveType is DriveType.Network or DriveType.NoRootDirectory;
+        }
+        catch { return true; } // can't classify the root -> don't risk hiding a file that may be present
     }
 
     /// <summary>Wipe all watch history (resume positions, recents, bookmarks, user chapters). Returns
