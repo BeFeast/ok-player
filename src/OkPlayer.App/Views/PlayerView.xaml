@@ -115,6 +115,9 @@
                 <MenuFlyoutItem Text="Open file location" Click="OnOpenFileLocationClick">
                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE838;" /></MenuFlyoutItem.Icon>
                 </MenuFlyoutItem>
+                <MenuFlyoutItem Text="Close file" Click="OnCloseFileClick" IsEnabled="{x:Bind Vm.HasMedia, Mode=OneWay}">
+                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE711;" /></MenuFlyoutItem.Icon>
+                </MenuFlyoutItem>
                 <MenuFlyoutSeparator />
                 <ToggleMenuFlyoutItem x:Name="PrivateModeToggle" Text="Private session" Click="OnPrivateModeClick">
                     <ToggleMenuFlyoutItem.Icon><FontIcon Glyph="&#xE72E;" /></ToggleMenuFlyoutItem.Icon>
@@ -493,6 +496,7 @@
                         <Button.Flyout>
                             <MenuFlyout MenuFlyoutPresenterStyle="{StaticResource OkMenuFlyoutPresenterStyle}">
                                 <MenuFlyoutItem Text="Open file&#x2026;" Click="OnOpenFromMenu" />
+                                <MenuFlyoutItem Text="Close file" Click="OnCloseFileClick" IsEnabled="{x:Bind Vm.HasMedia, Mode=OneWay}" />
                                 <MenuFlyoutItem Text="A&#x2013;B loop" Click="OnAbLoopClick" />
                                 <MenuFlyoutItem Text="Fit window to video" Click="OnFitToVideoClick" />
                                 <MenuFlyoutSeparator />

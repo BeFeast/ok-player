@@ -454,6 +454,7 @@ public sealed partial class PlayerView : UserControl
             case (VirtualKey)0x53: DoScreenshot(); break;         // S
             case (VirtualKey)0x49: OpenMediaInfo(); break;        // I
             case (VirtualKey)0x43: TogglePanel(); break;          // C
+            case (VirtualKey)0x58: CloseFile(); break;            // X — close the current file, back to Welcome
             case VirtualKey.PageDown: PlayNext(); break;          // next file in the folder playlist
             case VirtualKey.PageUp:   PlayPrevious(); break;      // previous file
             case VirtualKey.Escape:
@@ -473,6 +474,7 @@ public sealed partial class PlayerView : UserControl
     // ---- OSC clicks ----
 
     private void OnPlayClick(object sender, RoutedEventArgs e) { Vm.TogglePlay(); RevealChrome(); }
+    private void OnCloseFileClick(object sender, RoutedEventArgs e) => CloseFile();
     private void OnPrevClick(object sender, RoutedEventArgs e) { Vm.JumpChapter(-1); RevealChrome(); }
     private void OnNextClick(object sender, RoutedEventArgs e) { Vm.JumpChapter(1); RevealChrome(); }
     private void OnVolumeClick(object sender, RoutedEventArgs e) { Vm.ToggleMute(); RevealChrome(); }
@@ -761,6 +763,26 @@ public sealed partial class PlayerView : UserControl
             double position = (_reachedEnd || Vm.Position >= completeAt) ? 0 : Vm.Position;
             _history.Record(path, position, Vm.Duration, _reachedEnd);
         }
+    }
+
+    /// <summary>Stop playback, unload the current file, and fall back to the Welcome card. Persists the resume
+    /// position first (same as EOF), then drops all per-file state so the next open starts clean. No-op without
+    /// media. Surfaced on the OSC overflow menu, the right-click menu, and the X key.</summary>
+    private void CloseFile()
+    {
+        if (!Vm.HasMedia)
+            return;
+        SaveProgress();          // persist the outgoing file's position before we unload it
+        if (_panelOpen)
+            TogglePanel();       // collapse the side panel — its chapters/bookmarks/up-next are now empty
+        Vm.CloseFile();          // stop mpv + clear title/tracks/chapters; flips HasMedia → ApplyMediaPresence → Welcome
+        _currentPath = null;
+        _reachedEnd = false;
+        _explicitResume = null;
+        _resumeTarget = -1;
+        _openGeneration++;       // invalidate any in-flight chapter/thumbnail warm for the closed file
+        _playlist = null;        // drop the folder-as-playlist…
+        UpNext.Clear();          // …and its projected rows
     }
 
     private void TryResume()
