@@ -59,6 +59,11 @@ public sealed partial class PlayerView : UserControl
     // to work out how many fit the current row width.
     private const double RecentCardWidth = 194;
     private const double RecentCardSpacing = 14;
+    // Welcome-shelf geometry, matched to the XAML (StackPanel MaxWidth 920, Padding 44 each side). The visible
+    // count is computed from the available *viewport* width, not the content-sized RecentsRow — see
+    // RebuildVisibleRecents.
+    private const double RecentsShelfMaxWidth = 920;
+    private const double RecentsShelfPadding = 44;
 
     /// <summary>Bookmarks for the current file, shown in the Chapters panel (bound from XAML).</summary>
     public ObservableCollection<BookmarkEntry> Bookmarks { get; } = new();
@@ -904,8 +909,15 @@ public sealed partial class PlayerView : UserControl
     /// collection is only mutated when its slice actually differs.</summary>
     private void RebuildVisibleRecents()
     {
+        // Measure the available width from the *viewport*, not RecentsRow.ActualWidth. The row is a Grid inside
+        // a centred, content-sized StackPanel, so its width tracks the cards it currently holds — once the
+        // window shrinks it down to a single card it can never grow back (it would only ever measure one card
+        // wide). The viewport width is the true space the shelf may use, capped at the StackPanel's MaxWidth
+        // and inset by its horizontal padding. 0 before first layout → VisibleCount falls back to its default.
+        double viewport = VariationAScroll?.ViewportWidth ?? 0;
+        double avail = viewport <= 0 ? 0 : Math.Min(RecentsShelfMaxWidth, viewport) - 2 * RecentsShelfPadding;
         int want = OkPlayer.Core.RecentsShelf.VisibleCount(
-            RecentsRow?.ActualWidth ?? 0, Recents.Count, RecentCardWidth, RecentCardSpacing);
+            avail, Recents.Count, RecentCardWidth, RecentCardSpacing);
 
         SyncSlice(VisibleRecents, 0, want);
         SyncSlice(OverflowRecents, want, Recents.Count);
@@ -929,7 +941,7 @@ public sealed partial class PlayerView : UserControl
             target.Add(Recents[i]);
     }
 
-    private void OnRecentsRowSizeChanged(object sender, SizeChangedEventArgs e) => RebuildVisibleRecents();
+    private void OnRecentsViewportSizeChanged(object sender, SizeChangedEventArgs e) => RebuildVisibleRecents();
 
     private void OnRecentClick(object sender, RoutedEventArgs e)
     {

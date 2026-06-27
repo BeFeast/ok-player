@@ -258,6 +258,12 @@ public sealed partial class HistoryView : UserControl
             ShowRowMenu(row, fe, null);
     }
 
+    /// <summary>The overflow button opens its menu via <see cref="OnRowMenuClick"/> (Click). Swallow the
+    /// Tapped that bubbles up from the same press so the row's <see cref="OnRowTapped"/> doesn't also fire and
+    /// open the file — which would dismiss the just-opened menu and make the button look like it only works on
+    /// right-click.</summary>
+    private void OnRowMenuButtonTapped(object sender, TappedRoutedEventArgs e) => e.Handled = true;
+
     /// <summary>Swallow the surface-level right-click so the player's context menu never shows over
     /// History; rows that want a menu handle ContextRequested themselves (and mark it handled first).</summary>
     private void OnSurfaceContextRequested(UIElement sender, ContextRequestedEventArgs e) => e.Handled = true;

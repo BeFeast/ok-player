@@ -214,6 +214,18 @@ public sealed partial class MainWindow : Window
 
     private struct NativeRect { public int Left, Top, Right, Bottom; }
 
+    // Win32 MINMAXINFO (lParam of WM_GETMINMAXINFO). Only ptMinTrackSize is written; the layout must match
+    // exactly so the marshalled offsets line up. (NativePoint is defined alongside the bg-drag P/Invokes.)
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct MinMaxInfo
+    {
+        public NativePoint ptReserved;
+        public NativePoint ptMaxSize;
+        public NativePoint ptMaxPosition;
+        public NativePoint ptMinTrackSize;
+        public NativePoint ptMaxTrackSize;
+    }
+
     // ---- drag the window by the video / welcome backdrop (any non-control area), like the title bar ----
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
@@ -278,10 +290,18 @@ public sealed partial class MainWindow : Window
     // ---- aspect-locked resize: hold Shift while dragging a window edge to keep the video's aspect ----
 
     private const uint WM_SIZING = 0x0214;
+    private const uint WM_GETMINMAXINFO = 0x0024;
     private const int VK_SHIFT = 0x10;
+
+    // Smallest window we let the user drag to. Logical (DPI-independent) pixels — scaled to physical in the
+    // WM_GETMINMAXINFO handler. Below this the welcome shelf and chrome start clipping their content.
+    private const int MinWindowLogicalWidth = 720;
+    private const int MinWindowLogicalHeight = 480;
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern short GetAsyncKeyState(int vKey);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(IntPtr hWnd);
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern bool GetWindowRect(IntPtr hWnd, out NativeRect lpRect);
     [System.Runtime.InteropServices.DllImport("comctl32.dll", SetLastError = true)]
@@ -302,6 +322,21 @@ public sealed partial class MainWindow : Window
     /// the client keeps the video's aspect (no letterboxing). Everything else chains to the default proc.</summary>
     private IntPtr AspectResizeWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam, IntPtr id, IntPtr data)
     {
+        // Clamp the resize floor only in the normal windowed state. The compact-overlay mini-player and
+        // fullscreen drive their own sizing (the mini-player is deliberately tiny), so forcing the welcome
+        // floor on them would inflate the mini-player window — chain those to the default proc untouched.
+        if (msg == WM_GETMINMAXINFO && !_miniPlayer && !_fullscreen)
+        {
+            // Clamp the resize floor so the window can't be dragged small enough to crop the welcome content.
+            // ptMinTrackSize is the whole-window track size in physical pixels, so scale the logical floor by DPI.
+            uint dpi = GetDpiForWindow(hWnd);
+            double scale = dpi > 0 ? dpi / 96.0 : 1.0;
+            var mmi = System.Runtime.InteropServices.Marshal.PtrToStructure<MinMaxInfo>(lParam);
+            mmi.ptMinTrackSize.X = (int)Math.Round(MinWindowLogicalWidth * scale);
+            mmi.ptMinTrackSize.Y = (int)Math.Round(MinWindowLogicalHeight * scale);
+            System.Runtime.InteropServices.Marshal.StructureToPtr(mmi, lParam, false);
+            return IntPtr.Zero; // handled
+        }
         if (msg == WM_SIZING && !_fullscreen && (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0)
         {
             double aspect = Player.VideoAspect;
