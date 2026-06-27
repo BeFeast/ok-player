@@ -58,13 +58,16 @@ if ($stale) {
     Where-Object { try { $_.Path -eq $exe } catch { $false } } |
     ForEach-Object { try { $_.Kill(); [void]$_.WaitForExit(5000) } catch {} }
 
-  # Clear the previous publish, tolerating an AV/OS handle that lingers on a just-killed exe/DLL for a moment
-  # (a fixed sleep would either stall every run or still race a slow scanner).
+  # Best-effort wipe of the previous publish: retry an AV/OS handle that lingers on a just-killed exe/DLL,
+  # but NEVER abort the launch on it -- dotnet publish overwrites the app's own files anyway, so a rare
+  # un-removable orphan is harmless and we still rebuild and launch.
   if (Test-Path $outDir) {
-    for ($attempt = 1; ; $attempt++) {
-      try { Remove-Item $outDir -Recurse -Force -ErrorAction Stop; break }
-      catch { if ($attempt -ge 20) { throw }; Start-Sleep -Milliseconds 250 }
+    $cleared = $false
+    for ($attempt = 1; $attempt -le 40 -and -not $cleared; $attempt++) {
+      try { Remove-Item $outDir -Recurse -Force -ErrorAction Stop; $cleared = $true }
+      catch { Start-Sleep -Milliseconds 250 }
     }
+    if (-not $cleared) { Write-Warning "Could not fully clear $outDir (a scanner may still hold a handle); publishing over it." }
   }
 
   dotnet publish $appProj -c Release -r win-x64 --self-contained true -o $outDir

@@ -63,10 +63,13 @@ if ($running) {
 #    lingering AV/OS handle on a just-killed exe/DLL doesn't abort the build.
 if (Test-Path $outDir) {
   Write-Host "Removing previous output: $outDir"
-  for ($attempt = 1; ; $attempt++) {
-    try { Remove-Item $outDir -Recurse -Force -ErrorAction Stop; break }
-    catch { if ($attempt -ge 20) { throw }; Start-Sleep -Milliseconds 250 }
+  $cleared = $false
+  for ($attempt = 1; $attempt -le 40 -and -not $cleared; $attempt++) {
+    try { Remove-Item $outDir -Recurse -Force -ErrorAction Stop; $cleared = $true }
+    catch { Start-Sleep -Milliseconds 250 }
   }
+  # Best-effort: if a scanner still holds a handle, warn and publish over it rather than aborting the build.
+  if (-not $cleared) { Write-Warning "Could not fully clear $outDir (a scanner may still hold a handle); publishing over it." }
 }
 
 Write-Host "Publishing clean self-contained Release (win-x64) -> $outDir"
