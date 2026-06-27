@@ -54,9 +54,13 @@ if ($stale) {
 
   # Kill ONLY the instance launched from this output dir -- it locks the DLLs we're about to overwrite. Match
   # by full path so we never force-close the installed app or another OkPlayer.exe that just shares the name.
+  # If a force-killed process somehow refuses to exit, stop with a clear message rather than letting publish
+  # fail cryptically on the still-locked exe.
+  $stuck = [System.Collections.Generic.List[int]]::new()
   Get-Process OkPlayer -ErrorAction SilentlyContinue |
     Where-Object { try { $_.Path -eq $exe } catch { $false } } |
-    ForEach-Object { try { $_.Kill(); [void]$_.WaitForExit(5000) } catch {} }
+    ForEach-Object { try { $_.Kill(); if (-not $_.WaitForExit(5000)) { $stuck.Add($_.Id) } } catch {} }
+  if ($stuck.Count) { throw "Couldn't stop the running dev preview (PID $($stuck -join ', ')) -- close OK Player and try again." }
 
   # Best-effort wipe of the previous publish: retry an AV/OS handle that lingers on a just-killed exe/DLL,
   # but NEVER abort the launch on it -- dotnet publish overwrites the app's own files anyway, so a rare

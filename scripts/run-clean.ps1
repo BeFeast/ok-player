@@ -54,7 +54,10 @@ $running = Get-Process OkPlayer -ErrorAction SilentlyContinue |
   Where-Object { try { $_.Path -eq $exePath } catch { $false } }
 if ($running) {
   Write-Host "Stopping the dev instance from $outDir : PID $($running.Id -join ', ')"
-  $running | ForEach-Object { try { $_.Kill(); [void]$_.WaitForExit(5000) } catch {} }
+  $stuck = [System.Collections.Generic.List[int]]::new()
+  $running | ForEach-Object { try { $_.Kill(); if (-not $_.WaitForExit(5000)) { $stuck.Add($_.Id) } } catch {} }
+  # A force-killed process that won't exit holds the output DLLs; fail clearly instead of a cryptic publish error.
+  if ($stuck.Count) { throw "Couldn't stop the running instance (PID $($stuck -join ', ')) -- close OK Player and try again." }
 } else {
   Write-Host "No running OkPlayer instance from this output dir."
 }
