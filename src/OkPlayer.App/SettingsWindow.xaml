@@ -285,10 +285,43 @@
                                    Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,10,0,0" />
                     </StackPanel>
 
-                    <!-- About — app + engine version, build SHA, links (its own nav tab, below Advanced) -->
+                    <!-- About — brand hero + app/engine version, build SHA, links (its own nav tab, below Advanced) -->
                     <StackPanel x:Name="AboutPanel" Visibility="Collapsed">
                         <TextBlock Text="About" Style="{StaticResource OkSettingsTitleTextStyle}" />
-                        <TextBlock x:Name="AboutVersionText" FontSize="13.5" FontWeight="SemiBold" Margin="0,22,0,0" />
+
+                        <!-- Brand hero: the OK▶ mark (kept teal — it is the logo, not an accent surface, so it
+                             stays constant under any system accent) beside the app name + tagline, on a neutral card. -->
+                        <Border Margin="0,22,0,0" MaxWidth="560" HorizontalAlignment="Stretch" CornerRadius="14"
+                                Padding="26,24" Background="{ThemeResource OkSurfaceCardBrush}"
+                                BorderBrush="{ThemeResource OkCardStrokeBrush}" BorderThickness="1">
+                            <StackPanel Orientation="Horizontal" Spacing="20" VerticalAlignment="Center">
+                                <Border Width="76" Height="76" CornerRadius="20" VerticalAlignment="Center">
+                                    <Border.Background>
+                                        <LinearGradientBrush StartPoint="0.1,0" EndPoint="0.9,1">
+                                            <GradientStop Color="#15A89D" Offset="0" />
+                                            <GradientStop Color="#0A655F" Offset="1" />
+                                        </LinearGradientBrush>
+                                    </Border.Background>
+                                    <Viewbox Margin="16,22">
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <TextBlock Text="OK" FontFamily="Segoe UI" FontSize="36" FontWeight="Bold"
+                                                       Foreground="White" LineHeight="36" />
+                                            <Path Fill="White" Stretch="Fill" Width="15" Height="22" Margin="3,1,0,0"
+                                                  VerticalAlignment="Center" Data="M0,0 L0,22 L15,11 Z" />
+                                        </StackPanel>
+                                    </Viewbox>
+                                </Border>
+                                <StackPanel VerticalAlignment="Center" Spacing="4">
+                                    <TextBlock Text="OK Player" FontSize="24" FontWeight="SemiBold"
+                                               Foreground="{ThemeResource OkTextPrimaryBrush}" />
+                                    <TextBlock Text="The elegant media player for Windows." FontSize="13"
+                                               TextWrapping="Wrap" MaxWidth="300"
+                                               Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock x:Name="AboutVersionText" FontSize="13.5" FontWeight="SemiBold" Margin="0,20,0,0" />
                         <TextBlock x:Name="AboutEngineText" FontSize="12.5" Margin="0,3,0,0"
                                    Foreground="{ThemeResource OkTextSecondaryBrush}" />
                         <TextBlock x:Name="AboutBuildText" FontSize="12.5" Margin="0,3,0,0" IsTextSelectionEnabled="True"
