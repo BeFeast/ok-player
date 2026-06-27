@@ -27,9 +27,14 @@ $apiHeaders = $headers.Clone()
 if ($env:GITHUB_TOKEN) { $apiHeaders['Authorization'] = "Bearer $env:GITHUB_TOKEN" }
 Write-Host 'Resolving latest mpv-dev (GPL, x86_64) from zhongfly/mpv-winbuild...'
 $rel = Invoke-RestMethod 'https://api.github.com/repos/zhongfly/mpv-winbuild/releases/latest' -Headers $apiHeaders
-$asset = $rel.assets |
-    Where-Object { $_.name -like 'mpv-dev-x86_64-*' -and $_.name -notlike '*-v3-*' -and $_.name -notlike '*lgpl*' -and $_.name -like '*.7z' } |
-    Select-Object -First 1
+# GPL (non-lgpl) x86_64 dev build. Prefer the baseline (non-v3) for max CPU compatibility, but fall back to
+# the x86-64-v3 build when upstream only ships that — as of 2026-06 zhongfly dropped the non-v3 GPL dev asset
+# and offers only mpv-dev-x86_64-v3. Win11's hardware floor (8th-gen Intel / Zen+) supports x86-64-v3 (AVX2),
+# so the v3 build is safe for this Win11-only app.
+$candidates = $rel.assets |
+    Where-Object { $_.name -like 'mpv-dev-x86_64-*' -and $_.name -notlike '*lgpl*' -and $_.name -like '*.7z' }
+$asset = ($candidates | Where-Object { $_.name -notlike '*-v3-*' } | Select-Object -First 1)
+if (-not $asset) { $asset = $candidates | Select-Object -First 1 } # fall back to the x86-64-v3 build
 if (-not $asset) { throw 'No mpv-dev-x86_64 (GPL) .7z asset in the latest release' }
 
 $archive = Join-Path $env:TEMP $asset.name
