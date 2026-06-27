@@ -594,9 +594,11 @@ public sealed partial class SettingsWindow : Window
 
     private void StyleCard(Button b, bool selected)
     {
-        b.BorderBrush = selected ? Accent : Res("OkStrokeBrush", new SolidColorBrush(Color.FromArgb(0x14, 0, 0, 0)));
+        // Use the live accent brushes so the selected card previews the chosen accent (system or teal),
+        // not a hardcoded teal swatch.
+        b.BorderBrush = selected ? Res("OkAccentBrush", Accent) : Res("OkStrokeBrush", new SolidColorBrush(Color.FromArgb(0x14, 0, 0, 0)));
         b.BorderThickness = new Thickness(selected ? 1.5 : 1);
-        b.Background = selected ? AccentTint : Transparent;
+        b.Background = selected ? Res("OkAccentTintBrush", AccentTint) : Transparent;
     }
 
     private void OnThemeLight(object sender, RoutedEventArgs e) => SetTheme("Light");
