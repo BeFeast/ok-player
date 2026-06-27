@@ -77,6 +77,9 @@ public partial class App : Application
         // apply engine-init settings before the video panel is created
         OkPlayer.Render.MpvVideoPanel.HardwareDecoding = Settings.Current.HardwareDecoding;
         History.PruneOlderThan(Settings.Current.HistoryRetentionDays); // honour the retention window on launch
+        // Resolve the accent (teal or the live Windows system accent) into the brushes before first render.
+        AccentManager.Initialize();
+        Settings.Changed += AccentManager.Apply; // re-apply when the accent source is toggled in Settings
         var (file, resume, sub, audio) = GetLaunchTarget();
         _window = new MainWindow(file, resume, sub, audio);
         _window.Activate();
