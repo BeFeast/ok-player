@@ -881,7 +881,7 @@ public sealed partial class PlayerView : UserControl
                 PlaceholderGradient = PosterGradient(Recents.Count),
             };
             if (!string.IsNullOrEmpty(rec.PosterPath) && System.IO.File.Exists(rec.PosterPath))
-                entry.Poster = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(rec.PosterPath!));
+                entry.Poster = PosterImage.Load(rec.PosterPath!);
             Recents.Add(entry);
             if (Recents.Count >= 10) // a bounded pool; the shelf shows what fits, the rest live in History
                 break;
@@ -1009,7 +1009,7 @@ public sealed partial class PlayerView : UserControl
                 if (System.IO.File.Exists(poster) && await MeanLumaAsync(poster) is double cached && cached >= minUsableLuma)
                 {
                     if (entry.Poster is null)
-                        DispatcherQueue.TryEnqueue(() => entry.Poster = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(poster)));
+                        DispatcherQueue.TryEnqueue(() => entry.Poster = PosterImage.Load(poster));
                     continue;
                 }
 
@@ -1029,7 +1029,7 @@ public sealed partial class PlayerView : UserControl
                 }
                 try { System.IO.File.Copy(frame, poster, overwrite: true); } catch { continue; }
                 _history.SetPoster(entry.Path, poster);
-                DispatcherQueue.TryEnqueue(() => entry.Poster = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(poster)));
+                DispatcherQueue.TryEnqueue(() => entry.Poster = PosterImage.Load(poster));
             }
         }
         catch { /* best effort */ }
