@@ -38,7 +38,7 @@ public sealed partial class SettingsWindow : Window
         Title = "Settings";
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
-        AppWindow.Resize(new Windows.Graphics.SizeInt32(760, 560));
+        ResizeForDpi();
         ApplyTheme();
         App.Settings.Changed += ApplyTheme;
         App.MpvVersionChanged += OnMpvVersionChanged;
@@ -57,6 +57,31 @@ public sealed partial class SettingsWindow : Window
         ShowVersion();
         _loaded = true;
         SelectInitialPanel(initialPanel); // land on About by default (or the deep-linked panel)
+    }
+
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(IntPtr hwnd);
+
+    /// <summary>Size the window in LOGICAL pixels. The design's 760×560 is logical, but
+    /// <see cref="Microsoft.UI.Windowing.AppWindow.Resize"/> takes physical pixels, so an unscaled call comes
+    /// out cramped at >100% display scaling. Scale by the live window DPI; fall back to the raw 760×560 if the
+    /// DPI can't be read.</summary>
+    private void ResizeForDpi()
+    {
+        int width = 760, height = 560;
+        try
+        {
+            IntPtr hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            uint dpi = GetDpiForWindow(hwnd);
+            if (dpi > 0)
+            {
+                double scale = dpi / 96.0;
+                width = (int)Math.Round(760 * scale);
+                height = (int)Math.Round(560 * scale);
+            }
+        }
+        catch { /* DPI query failed — keep the safe unscaled logical size */ }
+        AppWindow.Resize(new Windows.Graphics.SizeInt32(width, height));
     }
 
     /// <summary>Drive the initial rail selection (rather than just toggling visibility) so the chosen panel's
@@ -85,11 +110,10 @@ public sealed partial class SettingsWindow : Window
     /// from disk; the add/remove handlers mutate it; <see cref="OnMpvConfSave"/> serialises it back.</summary>
     public ObservableCollection<MpvOptionRow> MpvOptions { get; } = new();
 
-    /// <summary>Populate the muted nav-rail version footer, then fill the About spec sheet (a static snapshot).</summary>
+    /// <summary>Fill the About spec sheet (a static snapshot). The rail has no version footer — the version
+    /// lives in the About hero chip and the App card.</summary>
     private void ShowVersion()
     {
-        string version = App.AppVersion;
-        NavVersionText.Text = string.IsNullOrEmpty(version) ? string.Empty : $"v{version}";
         PopulateAbout();
     }
 
@@ -119,6 +143,7 @@ public sealed partial class SettingsWindow : Window
         // Host facts.
         AboutHostWindows.Text = WindowsBuildString();
         AboutHostDotnet.Text = DotNetVersionString();
+        AboutHostAppSdk.Text = WindowsAppSdkVersionString();
         AboutHostCpu.Text = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant();
 
         RefreshEngineVersion();
@@ -191,6 +216,28 @@ public sealed partial class SettingsWindow : Window
         return d.StartsWith(prefix, StringComparison.Ordinal) ? d[prefix.Length..].Trim() : d;
     }
 
+    /// <summary>The Windows App SDK / WinUI 3 version, read from the loaded Microsoft.WinUI assembly (file
+    /// version preferred, assembly version as a fallback). An em dash if neither is readable.</summary>
+    private static string WindowsAppSdkVersionString()
+    {
+        try
+        {
+            System.Reflection.Assembly asm = typeof(Microsoft.UI.Xaml.Application).Assembly;
+            string location = asm.Location;
+            if (!string.IsNullOrEmpty(location))
+            {
+                string? fileVersion = System.Diagnostics.FileVersionInfo.GetVersionInfo(location).FileVersion;
+                if (!string.IsNullOrWhiteSpace(fileVersion))
+                    return fileVersion.Trim();
+            }
+            Version? v = asm.GetName().Version;
+            if (v is not null && v != new Version(0, 0, 0, 0))
+                return v.ToString();
+        }
+        catch { /* unreadable assembly metadata — fall back to the em dash */ }
+        return Dash;
+    }
+
     // ── About: diagnostics copy ────────────────────────────────────────
 
     private void OnCopyDiagnostics(object sender, RoutedEventArgs e)
@@ -231,7 +278,7 @@ public sealed partial class SettingsWindow : Window
         sb.Append("\nHost\n");
         AppendDiagLine(sb, "Windows 11", AboutHostWindows.Text);
         AppendDiagLine(sb, ".NET", AboutHostDotnet.Text);
-        AppendDiagLine(sb, "Windows App SDK", Dash);
+        AppendDiagLine(sb, "Windows App SDK", AboutHostAppSdk.Text);
         AppendDiagLine(sb, "CPU", AboutHostCpu.Text);
         AppendDiagLine(sb, "GPU", Dash);
         return sb.ToString();

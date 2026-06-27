@@ -12,30 +12,128 @@
         <media:MicaBackdrop Kind="Base" />
     </Window.SystemBackdrop>
 
-    <Grid Background="{ThemeResource OkSettingsWindowBrush}">
+    <!-- Root: no opaque Background, so the MicaBackdrop shows through the inter-card base (the rail and every
+         card paint their own surfaces). MicaBackdrop supplies its own solid fallback when transparency is off. -->
+    <Grid>
+
+        <Grid.Resources>
+            <ResourceDictionary>
+                <ResourceDictionary.ThemeDictionaries>
+                    <!-- Window-scoped rail tints, matched to the design's barely-there rail surface
+                         (rgba(0,0,0,.015) / rgba(255,255,255,.02)) and .72/.74 label colour. Kept local so no
+                         global brush is added. -->
+                    <ResourceDictionary x:Key="Light">
+                        <SolidColorBrush x:Key="OkRailFillBrush" Color="#04000000" />
+                        <SolidColorBrush x:Key="OkRailTextBrush" Color="#B8000000" />
+                    </ResourceDictionary>
+                    <ResourceDictionary x:Key="Dark">
+                        <SolidColorBrush x:Key="OkRailFillBrush" Color="#05FFFFFF" />
+                        <SolidColorBrush x:Key="OkRailTextBrush" Color="#BDFFFFFF" />
+                    </ResourceDictionary>
+                    <ResourceDictionary x:Key="HighContrast">
+                        <SolidColorBrush x:Key="OkRailFillBrush" Color="{ThemeResource SystemColorWindowColor}" />
+                        <SolidColorBrush x:Key="OkRailTextBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    </ResourceDictionary>
+                </ResourceDictionary.ThemeDictionaries>
+
+                <!-- Shared rail-item container style for BOTH the main nav list and the About footer list.
+                     Replaces the stock WinUI selection visual with the design's treatment: an accent-soft
+                     fill, a full-height 3px accent left bar, and accent SemiBold label/icon — all driven off
+                     the Ok* accent brushes (theme + System/teal accent aware), never the OS accent. -->
+                <Style x:Key="OkRailItemStyle" TargetType="ListViewItem">
+                    <Setter Property="Background" Value="Transparent" />
+                    <Setter Property="Foreground" Value="{ThemeResource OkRailTextBrush}" />
+                    <Setter Property="Padding" Value="10,8" />
+                    <Setter Property="Margin" Value="0,0,0,2" />
+                    <Setter Property="MinHeight" Value="34" />
+                    <Setter Property="CornerRadius" Value="7" />
+                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                    <Setter Property="VerticalContentAlignment" Value="Center" />
+                    <Setter Property="UseSystemFocusVisuals" Value="True" />
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="ListViewItem">
+                                <Grid Background="Transparent" CornerRadius="{TemplateBinding CornerRadius}">
+                                    <Border x:Name="SelectionFill" CornerRadius="{TemplateBinding CornerRadius}"
+                                            Background="{ThemeResource OkAccentSelectionFillBrush}" Opacity="0" />
+                                    <Rectangle x:Name="AccentBar" Width="3" RadiusX="1.5" RadiusY="1.5"
+                                               HorizontalAlignment="Left" Fill="{ThemeResource OkAccentRailBrush}" Opacity="0" />
+                                    <ContentPresenter x:Name="ContentPresenter"
+                                                      Content="{TemplateBinding Content}"
+                                                      ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                      Padding="{TemplateBinding Padding}"
+                                                      Foreground="{TemplateBinding Foreground}"
+                                                      HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                      VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
+                                    <VisualStateManager.VisualStateGroups>
+                                        <VisualStateGroup x:Name="CommonStates">
+                                            <VisualState x:Name="Normal" />
+                                            <VisualState x:Name="PointerOver">
+                                                <VisualState.Setters>
+                                                    <Setter Target="SelectionFill.Background" Value="{ThemeResource OkSubtleFillBrush}" />
+                                                    <Setter Target="SelectionFill.Opacity" Value="1" />
+                                                </VisualState.Setters>
+                                            </VisualState>
+                                            <VisualState x:Name="Pressed">
+                                                <VisualState.Setters>
+                                                    <Setter Target="SelectionFill.Background" Value="{ThemeResource OkSubtleFillStrongBrush}" />
+                                                    <Setter Target="SelectionFill.Opacity" Value="1" />
+                                                </VisualState.Setters>
+                                            </VisualState>
+                                            <VisualState x:Name="Selected">
+                                                <VisualState.Setters>
+                                                    <Setter Target="SelectionFill.Opacity" Value="1" />
+                                                    <Setter Target="AccentBar.Opacity" Value="1" />
+                                                    <Setter Target="ContentPresenter.Foreground" Value="{ThemeResource OkAccentTextBrush}" />
+                                                    <Setter Target="ContentPresenter.FontWeight" Value="SemiBold" />
+                                                </VisualState.Setters>
+                                            </VisualState>
+                                            <VisualState x:Name="PointerOverSelected">
+                                                <VisualState.Setters>
+                                                    <Setter Target="SelectionFill.Background" Value="{ThemeResource OkAccentTintBrush}" />
+                                                    <Setter Target="SelectionFill.Opacity" Value="1" />
+                                                    <Setter Target="AccentBar.Opacity" Value="1" />
+                                                    <Setter Target="ContentPresenter.Foreground" Value="{ThemeResource OkAccentTextBrush}" />
+                                                    <Setter Target="ContentPresenter.FontWeight" Value="SemiBold" />
+                                                </VisualState.Setters>
+                                            </VisualState>
+                                            <VisualState x:Name="PressedSelected">
+                                                <VisualState.Setters>
+                                                    <Setter Target="SelectionFill.Background" Value="{ThemeResource OkAccentTintBrush}" />
+                                                    <Setter Target="SelectionFill.Opacity" Value="1" />
+                                                    <Setter Target="AccentBar.Opacity" Value="1" />
+                                                    <Setter Target="ContentPresenter.Foreground" Value="{ThemeResource OkAccentTextBrush}" />
+                                                    <Setter Target="ContentPresenter.FontWeight" Value="SemiBold" />
+                                                </VisualState.Setters>
+                                            </VisualState>
+                                        </VisualStateGroup>
+                                    </VisualStateManager.VisualStateGroups>
+                                </Grid>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Style>
+            </ResourceDictionary>
+        </Grid.Resources>
 
         <!-- body: 192px nav rail + content pane. It fills the whole window so the nav rail runs full
              height to the top edge; the caption strip below is a transparent overlay, so there's no
              separate full-width title band cutting the rail off. -->
         <Grid ColumnDefinitions="192,*">
 
-            <Border Grid.Column="0" BorderThickness="0,0,1,0" BorderBrush="{ThemeResource OkStrokeBrush}" Background="{ThemeResource OkSubtleFillBrush}">
-                <Grid Padding="10,44,10,12" RowDefinitions="*,Auto,Auto,Auto">
+            <Border Grid.Column="0" BorderThickness="0,0,1,0" BorderBrush="{ThemeResource OkCardStrokeBrush}" Background="{ThemeResource OkRailFillBrush}">
+                <Grid Padding="10,54,10,12" RowDefinitions="*,Auto,Auto">
                 <StackPanel Grid.Row="0">
                     <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderThickness="1"
-                            BorderBrush="{ThemeResource OkStrokeBrush}" CornerRadius="7" Padding="9,6" Margin="0,0,0,6">
+                            BorderBrush="{ThemeResource OkStrokeBrush}" CornerRadius="7" Padding="10,7" Margin="0,0,0,6">
                         <StackPanel Orientation="Horizontal" Spacing="8">
-                            <FontIcon Glyph="&#xE721;" FontSize="13" Foreground="{ThemeResource OkTextSecondaryBrush}" />
-                            <TextBlock Text="Search" FontSize="12" Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                            <FontIcon Glyph="&#xE721;" FontSize="13" Foreground="{ThemeResource OkTextTertiaryBrush}" />
+                            <TextBlock Text="Search" FontSize="12" Foreground="{ThemeResource OkTextTertiaryBrush}" />
                         </StackPanel>
                     </Border>
 
-                    <ListView x:Name="NavList" SelectionMode="Single" SelectedIndex="-1" SelectionChanged="OnNavChanged" Padding="0">
-                        <ListView.Resources>
-                            <SolidColorBrush x:Key="ListViewItemBackgroundSelected" Color="#1F10938A" />
-                            <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPointerOver" Color="#2910938A" />
-                            <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPressed" Color="#2910938A" />
-                        </ListView.Resources>
+                    <ListView x:Name="NavList" SelectionMode="Single" SelectedIndex="-1" SelectionChanged="OnNavChanged"
+                              Padding="0" ItemContainerStyle="{StaticResource OkRailItemStyle}">
                         <ListViewItem>
                             <StackPanel Orientation="Horizontal" Spacing="10">
                                 <FontIcon Glyph="&#xE706;" FontSize="16" /><TextBlock Text="Appearance" VerticalAlignment="Center" FontSize="12.5" />
@@ -82,26 +180,19 @@
                 <!-- About is pinned to the bottom of the rail under a flexible spacer (the * row above) and a
                      hairline divider, per the design. It lives in its own one-item list so the selection
                      coordinates with the main list (OnNavChanged clears the other when one is picked). -->
-                <Border Grid.Row="1" Height="1" Background="{ThemeResource OkStrokeBrush}" Margin="4,8,4,8" />
+                <Border Grid.Row="1" Height="1" Background="{ThemeResource OkCardStrokeBrush}" Margin="9,6,9,8" />
                 <ListView x:Name="NavFooterList" Grid.Row="2" SelectionMode="Single" SelectedIndex="-1"
-                          SelectionChanged="OnNavChanged" Padding="0">
-                    <ListView.Resources>
-                        <SolidColorBrush x:Key="ListViewItemBackgroundSelected" Color="#1F10938A" />
-                        <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPointerOver" Color="#2910938A" />
-                        <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPressed" Color="#2910938A" />
-                    </ListView.Resources>
+                          SelectionChanged="OnNavChanged" Padding="0" ItemContainerStyle="{StaticResource OkRailItemStyle}">
                     <ListViewItem>
                         <StackPanel Orientation="Horizontal" Spacing="10">
                             <FontIcon Glyph="&#xE946;" FontSize="16" /><TextBlock Text="About" VerticalAlignment="Center" FontSize="12.5" />
                         </StackPanel>
                     </ListViewItem>
                 </ListView>
-                <TextBlock Grid.Row="3" x:Name="NavVersionText" FontSize="11" Margin="4,10,0,2"
-                           Foreground="{ThemeResource OkTextSecondaryBrush}" Opacity="0.8" />
                 </Grid>
             </Border>
 
-            <ScrollViewer Grid.Column="1" Padding="28,44,28,24" VerticalScrollBarVisibility="Auto">
+            <ScrollViewer Grid.Column="1" Padding="24,70,44,28" VerticalScrollBarVisibility="Auto">
                 <Grid>
                     <!-- Appearance (real) -->
                     <StackPanel x:Name="AppearancePanel">
@@ -431,9 +522,9 @@
                                         <Rectangle Canvas.Left="51"   Canvas.Top="30"   Width="5.5" Height="36" RadiusX="2.75" RadiusY="2.75" Fill="{ThemeResource AboutTickBrush}" Opacity="0.62" />
                                         <!-- soft drop shadow: an offset translucent copy of the triangle silhouette -->
                                         <Path Data="M64 22 L108 48 L64 74 Z" Fill="#0A655F" Stroke="#0A655F" StrokeThickness="6"
-                                              StrokeLineJoin="Round" Opacity="0.30">
+                                              StrokeLineJoin="Round" Opacity="0.34">
                                             <Path.RenderTransform>
-                                                <TranslateTransform Y="5" />
+                                                <TranslateTransform Y="6" />
                                             </Path.RenderTransform>
                                         </Path>
                                         <Path Data="M64 22 L108 48 L64 74 Z" StrokeThickness="6" StrokeLineJoin="Round">
@@ -459,7 +550,7 @@
                             <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                 <TextBlock FontFamily="Segoe UI Variable Display, Segoe UI" FontSize="30" LineHeight="30"
                                            CharacterSpacing="-20" Foreground="{ThemeResource OkTextPrimaryBrush}">
-                                    <Run Text="OK" FontWeight="Bold" /><Run Text=" Player" FontWeight="Light" />
+                                    <Run Text="OK" FontWeight="Bold" /><Run Text=" " /><Run Text="Player" FontWeight="Light" />
                                 </TextBlock>
                                 <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,10,0,0">
                                     <Border Background="{ThemeResource OkSubtleFillBrush}" CornerRadius="6" Padding="9,3" VerticalAlignment="Center">
@@ -472,7 +563,7 @@
                                     </Border>
                                 </StackPanel>
                                 <TextBlock Text="The most elegant media player on Windows." FontFamily="Segoe UI" FontSize="13"
-                                           LineHeight="18" TextWrapping="Wrap" Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,11,0,0" />
+                                           LineHeight="18.2" TextWrapping="Wrap" Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,11,0,0" />
                                 <TextBlock Text="Open source &#x00B7; by Oleg Kossoy" FontFamily="Segoe UI" FontSize="11.5"
                                            Foreground="{ThemeResource OkTextTertiaryBrush}" Margin="0,3,0,0" />
                             </StackPanel>
@@ -564,7 +655,7 @@
                                         </Grid>
                                         <Grid Grid.Row="1" Grid.Column="0" ColumnDefinitions="*,Auto">
                                             <TextBlock Text="App SDK" Style="{StaticResource AboutRowLabelStyle}" />
-                                            <TextBlock Grid.Column="1" Text="&#x2014;" Style="{StaticResource AboutValueStyle}" />
+                                            <TextBlock Grid.Column="1" x:Name="AboutHostAppSdk" Style="{StaticResource AboutValueStyle}" />
                                         </Grid>
                                         <Grid Grid.Row="1" Grid.Column="1" ColumnDefinitions="*,Auto">
                                             <TextBlock Text="CPU" Style="{StaticResource AboutRowLabelStyle}" />
@@ -681,7 +772,7 @@
 
         <!-- transparent drag strip over the very top: the OS caption buttons sit at the right, the title at
              the left. It overlays the full-height body, so the nav rail's background reaches the top edge. -->
-        <Grid x:Name="AppTitleBar" Height="40" VerticalAlignment="Top" Background="Transparent" Padding="16,0,0,0">
+        <Grid x:Name="AppTitleBar" Height="42" VerticalAlignment="Top" Background="Transparent" Padding="16,0,0,0">
             <TextBlock Text="Settings" VerticalAlignment="Center" FontSize="12.5" FontWeight="SemiBold"
                        Foreground="{ThemeResource OkTextSecondaryBrush}" />
         </Grid>
