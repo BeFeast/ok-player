@@ -9,7 +9,7 @@
 
     <!-- Single source of truth for the app version. The UI reads it from the assembly (Settings -> About,
          nav-rail footer); installer/build-installer.ps1 reads it from this csproj so they can't drift. -->
-    <Version>0.7.2</Version>
+    <Version>0.7.3</Version>
 
     <!-- Let StampGitShaRevision (below) own the AssemblyInformationalVersion +metadata suffix so it can emit a
          SHORT sha plus a "-dirty" marker. Without this the SDK's source-control integration pre-fills
