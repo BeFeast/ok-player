@@ -2,14 +2,18 @@ using System;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
+using System.Runtime.InteropServices;
 using Microsoft.UI;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.Win32;
 using OkPlayer.App.Services;
 using OkPlayer.App.ViewModels;
+using Windows.ApplicationModel.DataTransfer;
 using Windows.UI;
 
 namespace OkPlayer.App;
@@ -55,27 +59,41 @@ public sealed partial class SettingsWindow : Window
     /// from disk; the add/remove handlers mutate it; <see cref="OnMpvConfSave"/> serialises it back.</summary>
     public ObservableCollection<MpvOptionRow> MpvOptions { get; } = new();
 
-    /// <summary>Populate the version surfaces: the muted nav-rail footer and the About panel.
-    /// The mpv engine line is captured off-thread at engine attach (cosmetic) and may be absent.</summary>
+    /// <summary>Populate the muted nav-rail version footer, then fill the About spec sheet (a static snapshot).</summary>
     private void ShowVersion()
     {
         string version = App.AppVersion;
         NavVersionText.Text = string.IsNullOrEmpty(version) ? string.Empty : $"v{version}";
-        AboutVersionText.Text = string.IsNullOrEmpty(version) ? string.Empty : $"Version {version}"; // the hero shows the product name
+        PopulateAbout();
+    }
 
-        // The built commit's short SHA (App.GitSha), so a stale build or a build off the wrong branch is
-        // obvious here. Hidden when unknown (built outside a git checkout); a "-dirty" suffix flags a build
-        // made with uncommitted changes.
+    private const string Dash = "—"; // em dash: the honest "no value" placeholder for an unavailable fact
+
+    /// <summary>Fill the About spec sheet from cheap, locally-available facts, read once as a static snapshot.
+    /// The libmpv line can still be unknown here (it lands at engine attach), so it is also refreshed by
+    /// <see cref="RefreshEngineVersion"/> on About-shown and on <see cref="App.MpvVersionChanged"/>. The
+    /// stale-build tag fills in asynchronously (see <see cref="StartStaleCheck"/>).</summary>
+    private void PopulateAbout()
+    {
+        string version = App.AppVersion;
+        AboutHeroVersionChip.Text = string.IsNullOrEmpty(version) ? Dash : version;
+        AboutAppVersion.Text = string.IsNullOrEmpty(version) ? Dash : version;
+
+        // Built commit's short SHA. Empty outside a git build → an em dash with no state tag. A "-dirty" suffix
+        // is kept verbatim (uncommitted build) and skips the stale check (see StartStaleCheck).
         string sha = App.GitSha;
-        if (string.IsNullOrEmpty(sha))
-        {
-            AboutBuildText.Visibility = Visibility.Collapsed;
-        }
-        else
-        {
-            AboutBuildText.Text = $"build {sha}";
-            AboutBuildText.Visibility = Visibility.Visible;
-        }
+        AboutBuildSha.Text = string.IsNullOrEmpty(sha) ? Dash : sha;
+
+        // Hardware decode: the persisted preference (applied at engine init). On → method + accent "ON" tag;
+        // off → software, no tag. We surface the configured method rather than probing the live decoder.
+        bool hw = App.Settings.Current.HardwareDecoding;
+        AboutEngineHwdec.Text = hw ? "d3d11va" : "software";
+        AboutHwdecTag.Visibility = hw ? Visibility.Visible : Visibility.Collapsed;
+
+        // Host facts.
+        AboutHostWindows.Text = WindowsBuildString();
+        AboutHostDotnet.Text = DotNetVersionString();
+        AboutHostCpu.Text = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant();
 
         RefreshEngineVersion();
     }
@@ -85,22 +103,183 @@ public sealed partial class SettingsWindow : Window
     // line so it surfaces immediately, instead of waiting for the user to leave and re-enter the panel.
     private void OnMpvVersionChanged() => DispatcherQueue?.TryEnqueue(RefreshEngineVersion);
 
-    /// <summary>Show the libmpv engine line when its version is known, else hide it. The engine attaches
-    /// — and the off-thread <c>mpv-version</c> read completes — only after media starts playing, so this
-    /// is re-run when the About panel is shown, and on <see cref="App.MpvVersionChanged"/>:
-    /// a version captured after this window opened still surfaces, instead of the line staying hidden.</summary>
+    /// <summary>Show the libmpv engine version when known, else an em dash. The engine attaches — and the
+    /// off-thread <c>mpv-version</c> read completes — only after media starts playing, so this is re-run when
+    /// the About panel is shown and on <see cref="App.MpvVersionChanged"/>. The "mpv " prefix is stripped so
+    /// the value cell shows just the number.</summary>
     private void RefreshEngineVersion()
     {
+        if (AboutEngineMpv is null)
+            return; // the spec sheet isn't realised yet (called before InitializeComponent completes)
         string? mpv = App.MpvVersion;
-        if (string.IsNullOrWhiteSpace(mpv))
+        AboutEngineMpv.Text = string.IsNullOrWhiteSpace(mpv) ? Dash : StripMpvPrefix(mpv);
+    }
+
+    private static string StripMpvPrefix(string s)
+    {
+        s = s.Trim();
+        const string prefix = "mpv ";
+        return s.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? s[prefix.Length..].Trim() : s;
+    }
+
+    /// <summary>The Windows build, with the UBR revision appended when the registry exposes it
+    /// (e.g. "26100.1742"); degrades to the bare build number if the value can't be read.</summary>
+    private static string WindowsBuildString()
+    {
+        int build = Environment.OSVersion.Version.Build;
+        try
         {
-            AboutEngineText.Visibility = Visibility.Collapsed;
+            using var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
+            if (key?.GetValue("UBR") is int ubr)
+                return $"{build}.{ubr}";
         }
-        else
+        catch { /* registry read blocked — fall back to the bare build number */ }
+        return build.ToString();
+    }
+
+    /// <summary>The running .NET runtime version, e.g. ".NET 9.0.6" → "9.0.6"; the raw description otherwise.</summary>
+    private static string DotNetVersionString()
+    {
+        string d = RuntimeInformation.FrameworkDescription.Trim();
+        const string prefix = ".NET ";
+        return d.StartsWith(prefix, StringComparison.Ordinal) ? d[prefix.Length..].Trim() : d;
+    }
+
+    // ── About: stale-build check + diagnostics copy ────────────────────
+
+    private bool _staleChecked;
+
+    private static readonly HttpClient AboutHttp = CreateAboutHttp();
+
+    private static HttpClient CreateAboutHttp()
+    {
+        var h = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+        h.DefaultRequestHeaders.UserAgent.ParseAdd("OkPlayer-About"); // GitHub rejects requests with no UA
+        h.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+        return h;
+    }
+
+    /// <summary>Best-effort, fire-once stale-build check: ask GitHub how far <c>main</c> is ahead of the
+    /// running build's commit. "identical" → a muted UP TO DATE tag; main ahead by N → an amber "N BEHIND MAIN"
+    /// tag. Any failure (offline, dirty/unknown SHA, 404, timeout, throttle) stays silent — a build is never
+    /// falsely shown as current. The network call runs off the UI thread; the result marshals back via the
+    /// dispatcher.</summary>
+    private void StartStaleCheck()
+    {
+        if (_staleChecked)
+            return;
+        _staleChecked = true;
+        string sha = App.GitSha;
+        if (string.IsNullOrEmpty(sha) || sha.Contains("-dirty", StringComparison.OrdinalIgnoreCase))
+            return; // nothing to compare, or a dirty tree that no longer matches its commit
+        _ = CheckStaleAsync(sha);
+    }
+
+    private async System.Threading.Tasks.Task CheckStaleAsync(string sha)
+    {
+        try
         {
-            AboutEngineText.Text = mpv;
-            AboutEngineText.Visibility = Visibility.Visible;
+            string url = $"https://api.github.com/repos/BeFeast/ok-player/compare/{sha}...main";
+            using var resp = await AboutHttp.GetAsync(url).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode)
+                return;
+            using var stream = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
+            using var doc = await System.Text.Json.JsonDocument.ParseAsync(stream).ConfigureAwait(false);
+            var root = doc.RootElement;
+            string status = root.TryGetProperty("status", out var st) ? st.GetString() ?? string.Empty : string.Empty;
+            int ahead = root.TryGetProperty("ahead_by", out var ab) ? ab.GetInt32() : 0;
+            DispatcherQueue?.TryEnqueue(() => ApplyStaleResult(status, ahead));
         }
+        catch { /* best effort — stay silent on any failure */ }
+    }
+
+    private void ApplyStaleResult(string status, int ahead)
+    {
+        if (AboutBuildTagUpToDate is null)
+            return;
+        if (status == "identical")
+        {
+            AboutBuildDot.Visibility = Visibility.Collapsed;
+            AboutBuildTagBehind.Visibility = Visibility.Collapsed;
+            AboutBuildTagUpToDate.Visibility = Visibility.Visible;
+        }
+        else if (status == "ahead" && ahead > 0)
+        {
+            // base (our build) is an ancestor of main; main is `ahead` commits in front of it.
+            AboutBuildBehindText.Text = $"{ahead} behind main";
+            AboutBuildTagUpToDate.Visibility = Visibility.Collapsed;
+            AboutBuildDot.Visibility = Visibility.Visible;
+            AboutBuildTagBehind.Visibility = Visibility.Visible;
+        }
+        // "behind" (local ahead) / "diverged" / anything else → stay silent (no tag), never a false "current".
+    }
+
+    private void OnCopyDiagnostics(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var data = new DataPackage { RequestedOperation = DataPackageOperation.Copy };
+            data.SetText(BuildDiagnosticsText());
+            Clipboard.SetContent(data);
+            ShowCopyStatus("Diagnostics copied");
+        }
+        catch
+        {
+            ShowCopyStatus("Couldn't copy");
+        }
+    }
+
+    /// <summary>The whole sheet as plain text (the README diagnostics format), built from the same live
+    /// values shown in the cards.</summary>
+    private string BuildDiagnosticsText()
+    {
+        string ver = string.IsNullOrEmpty(App.AppVersion) ? Dash : App.AppVersion;
+        string buildLine = $"Build {AboutBuildSha.Text}";
+        if (AboutBuildTagBehind.Visibility == Visibility.Visible)
+            buildLine += $" {Dash} newer build available ({AboutBuildBehindText.Text})";
+        else if (AboutBuildTagUpToDate.Visibility == Visibility.Visible)
+            buildLine += $" {Dash} up to date";
+
+        bool hw = App.Settings.Current.HardwareDecoding;
+        string hwLine = $"{(hw ? "on" : "off")} · {AboutEngineHwdec.Text}";
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append("OK Player ").Append(ver).Append(" (Stable)\n");
+        sb.Append(buildLine).Append('\n');
+        sb.Append("License GPL-3.0-or-later\n\n");
+        sb.Append("Engine\n");
+        AppendDiagLine(sb, "libmpv", AboutEngineMpv.Text);
+        AppendDiagLine(sb, "FFmpeg", Dash);
+        AppendDiagLine(sb, "Render API", "libmpv render");
+        AppendDiagLine(sb, "Graphics", "OpenGL · ANGLE → D3D11");
+        AppendDiagLine(sb, "Hardware decode", hwLine);
+        sb.Append("\nHost\n");
+        AppendDiagLine(sb, "Windows 11", AboutHostWindows.Text);
+        AppendDiagLine(sb, ".NET", AboutHostDotnet.Text);
+        AppendDiagLine(sb, "Windows App SDK", Dash);
+        AppendDiagLine(sb, "CPU", AboutHostCpu.Text);
+        AppendDiagLine(sb, "GPU", Dash);
+        return sb.ToString();
+    }
+
+    private static void AppendDiagLine(System.Text.StringBuilder sb, string label, string value)
+        => sb.Append("  ").Append(label.PadRight(17)).Append(value).Append('\n');
+
+    private Microsoft.UI.Xaml.DispatcherTimer? _copyStatusTimer;
+
+    private void ShowCopyStatus(string text)
+    {
+        AboutCopyStatus.Text = text;
+        _copyStatusTimer ??= CreateCopyStatusTimer();
+        _copyStatusTimer.Stop();
+        _copyStatusTimer.Start();
+    }
+
+    private Microsoft.UI.Xaml.DispatcherTimer CreateCopyStatusTimer()
+    {
+        var t = new Microsoft.UI.Xaml.DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        t.Tick += (_, _) => { t.Stop(); AboutCopyStatus.Text = string.Empty; };
+        return t;
     }
 
     private void ApplyTheme()
@@ -175,7 +354,10 @@ public sealed partial class SettingsWindow : Window
             LoadMpvConf();
         }
         else if (about)
+        {
             RefreshEngineVersion(); // engine version may have been captured after this window opened
+            StartStaleCheck();      // best-effort, fire-once compare of the build SHA against main
+        }
         else if (integration)
             LoadIntegration();
         else if (playback)
