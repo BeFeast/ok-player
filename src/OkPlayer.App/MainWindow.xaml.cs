@@ -322,7 +322,10 @@ public sealed partial class MainWindow : Window
     /// the client keeps the video's aspect (no letterboxing). Everything else chains to the default proc.</summary>
     private IntPtr AspectResizeWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam, IntPtr id, IntPtr data)
     {
-        if (msg == WM_GETMINMAXINFO)
+        // Clamp the resize floor only in the normal windowed state. The compact-overlay mini-player and
+        // fullscreen drive their own sizing (the mini-player is deliberately tiny), so forcing the welcome
+        // floor on them would inflate the mini-player window — chain those to the default proc untouched.
+        if (msg == WM_GETMINMAXINFO && !_miniPlayer && !_fullscreen)
         {
             // Clamp the resize floor so the window can't be dragged small enough to crop the welcome content.
             // ptMinTrackSize is the whole-window track size in physical pixels, so scale the logical floor by DPI.
