@@ -1242,6 +1242,16 @@ public sealed partial class PlayerView : UserControl
         RevealChrome();
     }
 
+    private void OnSecondarySubtitleOffClick(object sender, RoutedEventArgs e) { Vm.SetSecondarySubtitleOff(); SubtitleFlyout.Hide(); RevealChrome(); }
+
+    private void OnSecondarySubtitleTrackClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: TrackInfo track })
+            Vm.SelectSecondarySubtitle(track);
+        SubtitleFlyout.Hide();
+        RevealChrome();
+    }
+
     private void OnAudioTrackClick(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement { DataContext: TrackInfo track })

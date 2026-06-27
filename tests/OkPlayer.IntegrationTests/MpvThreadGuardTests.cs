@@ -116,6 +116,22 @@ public class MpvThreadGuardTests
     }
 
     [Fact]
+    public void SecondarySubtitleProperties_AreValidAndWritable()
+    {
+        using var ctx = new MpvContext();
+        ctx.Initialize();
+
+        // The dual-subtitle picker writes secondary-sid; assert the name is real on the bundled engine and
+        // round-trips (a typo'd async set is otherwise silent). "no" is always valid without a loaded file.
+        Assert.Equal("no", ctx.GetPropertyString("secondary-sid")); // default: no second caption
+        ctx.Command("set", "secondary-sid", "no");
+        Assert.Equal("no", ctx.GetPropertyString("secondary-sid"));
+
+        // The second caption renders at the top by default, so it never collides with the bottom OSC.
+        Assert.Equal(0.0, ctx.GetPropertyDouble("secondary-sub-pos"));
+    }
+
+    [Fact]
     public void CallsAfterDispose_AreNoOps_NotCrashes()
     {
         var ctx = new MpvContext();
