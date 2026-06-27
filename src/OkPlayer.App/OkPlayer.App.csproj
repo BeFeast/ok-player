@@ -63,7 +63,10 @@
       <Output TaskParameter="ConsoleOutput" PropertyName="_OkpGitSha" />
       <Output TaskParameter="ExitCode" PropertyName="_OkpGitExit" />
     </Exec>
-    <Exec Command="git -C &quot;$(MSBuildProjectDirectory)&quot; status --porcelain --untracked-files=no"
+    <!-- Default (normal) untracked mode on purpose: SDK-style projects compile untracked .cs/.xaml in the
+         tree, so an untracked experiment file is a real build input and must count as dirty. .gitignore still
+         excludes build outputs (bin/obj) and fetched natives, so this flags only genuine source drift. -->
+    <Exec Command="git -C &quot;$(MSBuildProjectDirectory)&quot; status --porcelain"
           ConsoleToMSBuild="true" ContinueOnError="true"
           StandardOutputImportance="low" StandardErrorImportance="low"
           Condition="'$(_OkpGitExit)' == '0'">
