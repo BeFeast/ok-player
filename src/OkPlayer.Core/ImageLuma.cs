@@ -9,10 +9,13 @@ namespace OkPlayer.Core;
 public static class ImageLuma
 {
     /// <summary>Mean perceptual luma (0–255) of a BGRA8 pixel buffer, subsampled every <paramref name="stride"/>
-    /// bytes (default every 16th pixel) — far cheaper than every pixel and more than enough to tell a black/fade
-    /// frame from a lit one. <paramref name="stride"/> is floored to a 4-byte (whole-pixel) multiple. Returns 0
-    /// for an empty/too-short buffer.</summary>
-    public static double MeanBgra(ReadOnlySpan<byte> bgra, int stride = 64)
+    /// bytes (default ≈ every 13th pixel — a <i>prime</i> step). A prime pixel stride is coprime to typical frame
+    /// widths, so the sampled column index advances each row and the scan sweeps the whole frame rather than a
+    /// fixed set of columns — a divisor stride (e.g. 16px on a 320-wide frame) would only ever sample columns
+    /// 0, 16, 32, …, so a frame bright between them could score dark. Far cheaper than every pixel and enough to
+    /// tell a black/fade frame from a lit one. <paramref name="stride"/> is floored to a 4-byte (whole-pixel)
+    /// multiple. Returns 0 for an empty/too-short buffer.</summary>
+    public static double MeanBgra(ReadOnlySpan<byte> bgra, int stride = 52)
     {
         stride -= stride % 4;     // keep sampling aligned to pixel starts (BGRA = 4 bytes/pixel)
         if (stride < 4)

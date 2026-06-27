@@ -48,4 +48,22 @@ public class ImageLumaTests
         double mid = ImageLuma.MeanBgra(Fill(64, 100, 100, 100), stride: 7);
         Assert.Equal(100, mid, 3);
     }
+
+    [Fact]
+    public void DefaultStride_SweepsColumns_NotJustADivisorSet()
+    {
+        // A 320-wide frame bright only on ODD columns. A 16px (divisor of 320) stride samples columns
+        // 0,16,32,… — all even — and would score the frame black; the default prime stride must drift across
+        // columns row to row and pick the brightness up.
+        const int w = 320, h = 16;
+        var buf = new byte[w * h * 4];
+        for (int y = 0; y < h; y++)
+            for (int x = 1; x < w; x += 2)
+            {
+                int i = (y * w + x) * 4;
+                buf[i] = buf[i + 1] = buf[i + 2] = 200; buf[i + 3] = 255;
+            }
+        Assert.True(ImageLuma.MeanBgra(buf, stride: 64) < 2, "a 16px divisor stride only sees the dark even columns");
+        Assert.True(ImageLuma.MeanBgra(buf) > 60, "the default prime stride sweeps the odd columns too");
+    }
 }

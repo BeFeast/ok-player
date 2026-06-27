@@ -982,10 +982,13 @@ public sealed partial class PlayerView : UserControl
         {
             double when = duration > 0 ? Math.Max(3, duration * f) : 30;
             string? frame = await _posterThumbs.GetThumbnailAsync(when);
-            if (frame is { } && System.IO.File.Exists(frame))
+            if (frame is { } && System.IO.File.Exists(frame)
+                && await MeanLumaAsync(frame) is double luma && luma > bestLuma)
             {
-                double luma = await MeanLumaAsync(frame);
-                if (luma > bestLuma) { bestLuma = luma; best = frame; }
+                // Only a frame that actually decoded can win — an unreadable/partial PNG (null) must never
+                // become the poster, even though the file "exists".
+                bestLuma = luma;
+                best = frame;
             }
             if (duration <= 0 || bestLuma >= litEnough)
                 break; // unknown duration → one grab; otherwise stop as soon as a lit frame is in hand
@@ -994,8 +997,9 @@ public sealed partial class PlayerView : UserControl
     }
 
     /// <summary>Mean luma (0–255) of a PNG via the platform codec, scored by <see cref="OkPlayer.Core.ImageLuma"/>.
-    /// Unreadable → 0 (treated as darkest, so another candidate wins).</summary>
-    private static async System.Threading.Tasks.Task<double> MeanLumaAsync(string pngPath)
+    /// Returns null when the file can't be read/decoded, so the caller skips it rather than letting a broken PNG
+    /// (which would otherwise score 0) win as the poster.</summary>
+    private static async System.Threading.Tasks.Task<double?> MeanLumaAsync(string pngPath)
     {
         try
         {
@@ -1010,7 +1014,7 @@ public sealed partial class PlayerView : UserControl
                 Windows.Graphics.Imaging.ColorManagementMode.DoNotColorManage);
             return OkPlayer.Core.ImageLuma.MeanBgra(pixels.DetachPixelData());
         }
-        catch { return 0; }
+        catch { return null; }
     }
 
     private static string PosterHash(string path)
