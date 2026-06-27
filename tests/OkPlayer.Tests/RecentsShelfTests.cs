@@ -18,7 +18,9 @@ public class RecentsShelfTests
     [InlineData(609, 2)]  // one px short of three -> two
     [InlineData(832, 4)]  // a wider column fits four
     [InlineData(208, 1)]  // one card + one gap
-    [InlineData(120, 1)]  // narrower than a card still shows one (better than an empty shelf)
+    [InlineData(194, 1)]  // exactly one card wide -> one
+    [InlineData(193, 0)]  // one px short of a card -> none (the row no longer scrolls, so don't clip a card)
+    [InlineData(120, 0)]  // far narrower than a card -> none; the overflow control holds them instead
     public void VisibleCount_FitsAsManyWholeCardsAsThereIsRoomFor(double width, int expected)
         => Assert.Equal(expected, RecentsShelf.VisibleCount(width, available: 20, Card, Gap));
 

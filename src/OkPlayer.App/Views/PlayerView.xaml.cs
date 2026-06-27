@@ -46,9 +46,13 @@ public sealed partial class PlayerView : UserControl
     public ObservableCollection<RecentEntry> Recents { get; } = new();
 
     /// <summary>The leading slice of <see cref="Recents"/> actually shown on the welcome shelf — as many cards
-    /// as fit the row width, so the shelf never needs a horizontal scrollbar. The remainder stay reachable via
-    /// History. Recomputed in <see cref="RebuildVisibleRecents"/> on load and on resize.</summary>
+    /// as fit the row width, so the shelf never needs a horizontal scrollbar. Recomputed in
+    /// <see cref="RebuildVisibleRecents"/> on load and on resize.</summary>
     public ObservableCollection<RecentEntry> VisibleRecents { get; } = new();
+
+    /// <summary>The remainder of <see cref="Recents"/> that didn't fit the row, listed in the "+N more" flyout
+    /// so every resumable file stays reachable without a horizontal scrollbar.</summary>
+    public ObservableCollection<RecentEntry> OverflowRecents { get; } = new();
 
     // Continue-watching card geometry, matched to the DataTemplate (194px card, 14px inter-card spacing), used
     // to work out how many fit the current row width.
@@ -827,28 +831,35 @@ public sealed partial class PlayerView : UserControl
         _ = GeneratePostersAsync(); // fill any missing posters in the background
     }
 
-    /// <summary>Re-slice <see cref="Recents"/> into <see cref="VisibleRecents"/> so the shelf shows as many
-    /// cards as fit its current width (never overflowing into a horizontal scrollbar), and surface a
-    /// "+N more in History" link when some resumable files are hidden. Idempotent and flicker-free: it only
-    /// mutates the collection when the resulting slice actually differs.</summary>
+    /// <summary>Split <see cref="Recents"/> into <see cref="VisibleRecents"/> (as many cards as fit the row
+    /// width — never overflowing into a horizontal scrollbar) and <see cref="OverflowRecents"/> (the rest,
+    /// reached through the "+N more" flyout so nothing becomes unreachable). Idempotent and flicker-free: each
+    /// collection is only mutated when its slice actually differs.</summary>
     private void RebuildVisibleRecents()
     {
         int want = OkPlayer.Core.RecentsShelf.VisibleCount(
             RecentsRow?.ActualWidth ?? 0, Recents.Count, RecentCardWidth, RecentCardSpacing);
 
-        bool same = VisibleRecents.Count == want;
-        for (int i = 0; same && i < want; i++)
-            if (!ReferenceEquals(VisibleRecents[i], Recents[i])) same = false;
-        if (!same)
-        {
-            VisibleRecents.Clear();
-            for (int i = 0; i < want; i++)
-                VisibleRecents.Add(Recents[i]);
-        }
+        SyncSlice(VisibleRecents, 0, want);
+        SyncSlice(OverflowRecents, want, Recents.Count);
 
         int more = Recents.Count - want;
-        MoreRecentsText.Text = more > 0 ? $"+{more} more in History" : string.Empty;
+        MoreRecentsText.Text = more > 0 ? $"+{more} more" : string.Empty;
         MoreRecentsLink.Visibility = more > 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>Make <paramref name="target"/> equal Recents[start..end), touching it only if it differs.</summary>
+    private void SyncSlice(ObservableCollection<RecentEntry> target, int start, int end)
+    {
+        int count = end - start;
+        bool same = target.Count == count;
+        for (int i = 0; same && i < count; i++)
+            if (!ReferenceEquals(target[i], Recents[start + i])) same = false;
+        if (same)
+            return;
+        target.Clear();
+        for (int i = start; i < end; i++)
+            target.Add(Recents[i]);
     }
 
     private void OnRecentsRowSizeChanged(object sender, SizeChangedEventArgs e) => RebuildVisibleRecents();
