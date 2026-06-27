@@ -1,6 +1,5 @@
 using System;
 using System.Globalization;
-using System.IO;
 using System.Linq;
 
 namespace OkPlayer.App.Services;
@@ -77,25 +76,21 @@ public static class HistoryFormat
 
     /// <summary>A short location breadcrumb for the row's secondary line: the last two folder segments
     /// of the file's directory joined with " › " (e.g. "Severance › Season 02"). Bare drive roots
-    /// ("D:") are dropped from the breadcrumb but kept as a fallback when nothing else remains.</summary>
+    /// ("D:") are dropped from the breadcrumb but kept as a fallback when nothing else remains.
+    /// Splits on both separators explicitly — OK Player is Windows-only (paths use '\'), but the
+    /// engine-agnostic Core tests run headless on Linux, where Path.GetDirectoryName wouldn't see '\'.</summary>
     public static string FolderLabel(string path)
     {
         if (string.IsNullOrEmpty(path))
             return string.Empty;
-        string? dir;
-        try { dir = Path.GetDirectoryName(path); }
-        catch { return string.Empty; }
-        if (string.IsNullOrEmpty(dir))
-            return string.Empty;
-
-        string[] segs = dir.Split(
-            new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
-            StringSplitOptions.RemoveEmptyEntries);
-        // Drop a bare drive letter ("C:") so it doesn't eat one of the two breadcrumb slots.
-        string[] named = segs.Where(s => !(s.Length == 2 && s[1] == ':')).ToArray();
-        if (named.Length == 0)
-            return segs.Length > 0 ? segs[^1] : string.Empty;
-        int take = Math.Min(2, named.Length);
-        return string.Join(" › ", named[^take..]);
+        string[] parts = path.Split(new[] { '\\', '/' }, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length <= 1)
+            return string.Empty; // just a bare filename — no folder to show
+        // Drop the file name (last part), then the bare drive letter ("C:") so it doesn't eat a slot.
+        string[] dirs = parts.Take(parts.Length - 1).Where(s => !(s.Length == 2 && s[1] == ':')).ToArray();
+        if (dirs.Length == 0)
+            return parts[^2]; // e.g. a drive-root file "C:\clip.mkv" -> "C:"
+        int take = Math.Min(2, dirs.Length);
+        return string.Join(" › ", dirs[^take..]);
     }
 }
