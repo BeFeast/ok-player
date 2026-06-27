@@ -87,8 +87,12 @@ if (Test-Path $outDir) {
     catch { Start-Sleep -Milliseconds 250 }
   }
   # If a file is still locked after ~10s, stop with an actionable message: dotnet publish can't overwrite an
-  # OS-locked file either, so proceeding would only surface a cryptic build error.
-  if (-not $cleared) { throw "A file in $outDir is locked (antivirus, or an OK Player still running from it). Close OK Player, pause real-time scanning if needed, and try again." }
+  # OS-locked file either, so proceeding would only surface a cryptic build error. If an opaque (likely
+  # elevated) OkPlayer is running, name its PID -- this script can't stop it, so the user must close it.
+  if (-not $cleared) {
+    $elev = if ($opaque.Count) { " An OK Player may be running as administrator (PID $($opaque -join ', ')); a normally-launched script can't stop it -- close it manually." } else { '' }
+    throw "A file in $outDir is locked (antivirus, or an OK Player still running from it).$elev Close OK Player, pause real-time scanning if needed, and try again."
+  }
 }
 
 Write-Host "Publishing clean self-contained Release (win-x64) -> $outDir"
