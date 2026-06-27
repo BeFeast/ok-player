@@ -38,7 +38,20 @@
                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             <TextBox x:Name="SearchBox" Grid.Column="1" PlaceholderText="Search&#x2026;"
                                      BorderThickness="0" Background="Transparent" Padding="0" MinHeight="0"
-                                     FontSize="13" TextChanged="OnSearchChanged" KeyDown="OnSearchKeyDown" />
+                                     FontSize="13" TextChanged="OnSearchChanged" KeyDown="OnSearchKeyDown">
+                                <TextBox.Resources>
+                                    <!-- The rounded SearchWrap Border is the only search chrome. Neutralise the stock
+                                         TextBox visuals in every state: no accent focus underline, no per-state fill —
+                                         otherwise the default blue underline + brighter focused fill break the design. -->
+                                    <Thickness x:Key="TextControlBorderThemeThicknessFocused">0</Thickness>
+                                    <SolidColorBrush x:Key="TextControlBackground" Color="Transparent" />
+                                    <SolidColorBrush x:Key="TextControlBackgroundPointerOver" Color="Transparent" />
+                                    <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="Transparent" />
+                                    <SolidColorBrush x:Key="TextControlBorderBrush" Color="Transparent" />
+                                    <SolidColorBrush x:Key="TextControlBorderBrushPointerOver" Color="Transparent" />
+                                    <SolidColorBrush x:Key="TextControlBorderBrushFocused" Color="Transparent" />
+                                </TextBox.Resources>
+                            </TextBox>
                             <Button x:Name="SearchClear" Grid.Column="2" Click="OnClearSearchClick" Width="18" Height="18"
                                     Padding="0" CornerRadius="5" Visibility="Collapsed" BorderThickness="0"
                                     Background="{ThemeResource OkSubtleFillStrongBrush}"
@@ -139,7 +152,8 @@
                                                                            Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                                                             </StackPanel>
                                                             <!-- overflow -->
-                                                            <Button Grid.Column="3" Click="OnRowMenuClick" Width="30" Height="30" Padding="0"
+                                                            <Button Grid.Column="3" Click="OnRowMenuClick" Tapped="OnRowMenuButtonTapped"
+                                                                    Width="30" Height="30" Padding="0"
                                                                     VerticalAlignment="Center" CornerRadius="7" BorderThickness="0"
                                                                     Background="Transparent" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                                                     Opacity="{x:Bind Hovered, Mode=OneWay, Converter={StaticResource BoolToOpacity}}"
