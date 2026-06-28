@@ -277,24 +277,66 @@ public sealed class HistoryService
     {
         lock (_lock)
             return _records
-                .Where(kv => File.Exists(kv.Key))
+                .Where(kv => IsListable(kv.Key))
                 .OrderByDescending(kv => kv.Value.LastOpenedUtc, StringComparer.Ordinal)
                 .Take(count)
                 .Select(kv => (kv.Key, kv.Value))
                 .ToList();
     }
 
-    /// <summary>Every tracked file that still exists on disk, newest-opened first — the full History
-    /// list. Unlike <see cref="Recents"/> this keeps finished files and applies no resume-progress
-    /// threshold; missing files are still hidden, so History never shows a dead path.</summary>
+    /// <summary>Every tracked file that is still present, newest-opened first — the full History list. Unlike
+    /// <see cref="Recents"/> this keeps finished files and applies no resume-progress threshold. A genuinely
+    /// local-and-missing file is hidden so History never shows a dead path, but a network/URL entry is kept
+    /// (see <see cref="IsListable"/>) so a transiently-offline NFS/SMB file doesn't vanish.</summary>
     public IReadOnlyList<(string Path, FileRecord Record)> All()
     {
         lock (_lock)
             return _records
-                .Where(kv => File.Exists(kv.Key))
+                .Where(kv => IsListable(kv.Key))
                 .OrderByDescending(kv => kv.Value.LastOpenedUtc, StringComparer.Ordinal)
                 .Select(kv => (kv.Key, kv.Value))
                 .ToList();
+    }
+
+    /// <summary>Whether a tracked path should still be listed in History / recents. Local files are listed only
+    /// while they exist (a deleted file shouldn't linger). But <see cref="File.Exists"/> is unreliable for
+    /// network paths — an NFS/SMB share that is briefly slow, offline, or auth-gated returns <c>false</c> even
+    /// when the file is there (Exists swallows the IO/timeout exception) — so a URL or a network path (UNC or a
+    /// mapped network drive) is never hidden on a false Exists; only a genuinely local-and-missing file is
+    /// dropped. Without this, an NFS file vanished from History/recents on any transient blip.</summary>
+    private static bool IsListable(string path)
+        => path.Contains("://", StringComparison.Ordinal) || IsNetworkPath(path) || File.Exists(path);
+
+    /// <summary>True for a UNC path (<c>\\server\share\…</c>) or a path on a <b>mapped network drive</b> (e.g. an
+    /// NFS/SMB mount surfaced as <c>Z:\</c>, whose <see cref="DriveType.Network"/> stays reported even while the
+    /// share is disconnected). A removable/fixed <b>local</b> drive that is currently unplugged or unmounted
+    /// reports <see cref="DriveType.NoRootDirectory"/> (or fails to probe) — that is a local-and-missing file, so
+    /// it is deliberately <i>not</i> treated as network: it falls through to <see cref="File.Exists"/> and drops
+    /// off, rather than lingering in History as if it were a flaky network share.</summary>
+    public static bool IsNetworkPath(string path)
+        => IsNetworkPath(path, ProbeRootDriveType);
+
+    /// <summary>Testable core of <see cref="IsNetworkPath(string)"/>: the root drive-type probe is injected so the
+    /// classification can be unit-tested without depending on the volumes actually mounted on the test machine
+    /// (the probe returns <c>null</c> when the root can't be classified).</summary>
+    internal static bool IsNetworkPath(string path, Func<string, DriveType?> rootDriveType)
+    {
+        if (string.IsNullOrEmpty(path))
+            return false;
+        if (path.StartsWith(@"\\", StringComparison.Ordinal))
+            return true; // UNC, including \\server\share and \\?\UNC\
+        if (!Path.IsPathRooted(path))
+            return false;
+        string? root = Path.GetPathRoot(path);
+        if (string.IsNullOrEmpty(root))
+            return false;
+        return rootDriveType(root) == DriveType.Network; // only a mapped network drive bypasses File.Exists
+    }
+
+    private static DriveType? ProbeRootDriveType(string root)
+    {
+        try { return new DriveInfo(root).DriveType; }
+        catch { return null; } // unclassifiable root -> treat as local; File.Exists is the decider
     }
 
     /// <summary>Wipe all watch history (resume positions, recents, bookmarks, user chapters). Returns
