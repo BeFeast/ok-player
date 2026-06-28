@@ -1140,15 +1140,16 @@ public sealed partial class PlayerView : UserControl
                 if (Vm.HasMedia) // playback started — stop the background pass
                     break;
                 var rec = _history.Get(entry.Path);
-                if (rec?.PosterPath == NoUsablePoster)
-                    continue; // already decided this file has no usable (non-black) frame — keep the gradient
-
                 string poster = System.IO.Path.Combine(dir, PosterHash(entry.Path) + ".png");
                 if (OkPlayer.Core.MediaFormats.IsAudio(entry.Path))
                 {
-                    await EnsureAudioPosterAsync(entry, poster); // an audio file's "poster" is its album art, not a frame
+                    // Before the no-art gate: a sidecar cover can be dropped in after the track was first seen,
+                    // so EnsureAudioPosterAsync re-checks it cheaply and only the embedded extraction is skipped.
+                    await EnsureAudioPosterAsync(entry, poster);
                     continue;
                 }
+                if (rec?.PosterPath == NoUsablePoster)
+                    continue; // video: already decided this file has no usable (non-black) frame — keep the gradient
                 // Keep an existing poster only if it isn't (near-)black: earlier builds cached black frames and
                 // a fixed grab can land on a dark scene, so re-validate rather than trusting the cache forever.
                 if (System.IO.File.Exists(poster) && await MeanLumaAsync(poster) is double cached && cached >= minUsableLuma)
@@ -1181,27 +1182,42 @@ public sealed partial class PlayerView : UserControl
         finally { _generatingPosters = false; }
     }
 
-    /// <summary>Fill an audio recent's poster from its embedded album art — there's no video frame to grab.
-    /// Caches the art into the persistent posters dir and records it on the history entry so later visits load
-    /// instantly; marks the file posterless (gradient) when it carries no embedded picture, so we don't re-probe
-    /// it every visit. Best-effort: any failure just leaves the gradient.</summary>
+    /// <summary>Fill an audio recent's poster from a sidecar cover image or, failing that, its embedded album art
+    /// (there's no video frame to grab). Caches the art into the persistent posters dir and records it on the
+    /// history entry so later visits load instantly; marks the file posterless (gradient) only when it has
+    /// neither, so we don't re-extract embedded art every visit. A cheap sidecar re-check still runs even for a
+    /// posterless entry — a cover dropped in next to the track later overrides the verdict. Best-effort.</summary>
     private async System.Threading.Tasks.Task EnsureAudioPosterAsync(RecentEntry entry, string posterPath)
     {
         if (entry.Poster is not null)
             return; // already shown (loaded from the cached poster path in LoadRecents)
+        // 1) Cheap sidecar-only check first — runs even when the entry is marked NoUsablePoster, so art added
+        //    after the track was first seen is picked up (the media file's mtime/size don't change).
+        if (await Services.CoverArtService.GetSidecarAsync(entry.Path) is { } sidecar && System.IO.File.Exists(sidecar))
+        {
+            SetAudioPoster(entry, sidecar, posterPath);
+            return;
+        }
+        // 2) No sidecar. If we already determined there's no embedded picture, don't re-run the costly extractor.
+        if (_history.Get(entry.Path)?.PosterPath == NoUsablePoster)
+            return;
         var (art, definitelyNoArt) = await Services.CoverArtService.GetWithStatusAsync(entry.Path);
         if (art is not null && System.IO.File.Exists(art))
-        {
-            try { System.IO.File.Copy(art, posterPath, overwrite: true); }
-            catch { return; }
-            _history.SetPoster(entry.Path, posterPath);
-            DispatcherQueue.TryEnqueue(() => entry.Poster = PosterImage.Load(posterPath));
-        }
+            SetAudioPoster(entry, art, posterPath);
         else if (definitelyNoArt)
-        {
-            _history.SetPoster(entry.Path, NoUsablePoster); // really has no picture — keep the gradient, skip future probes
-        }
+            _history.SetPoster(entry.Path, NoUsablePoster); // neither sidecar nor embedded — keep the gradient
         // else: a transient failure (timeout/locked/unreadable) — leave the gradient and retry on a later pass
+    }
+
+    /// <summary>Copy a resolved cover image into the persistent posters dir, record it on the history entry, and
+    /// show it on the card. The copy makes the poster self-contained (a sidecar the user later moves won't break
+    /// it); the copied file is content-sniffed on load, so a .png-named JPEG/WebP still renders.</summary>
+    private void SetAudioPoster(RecentEntry entry, string sourceImage, string posterPath)
+    {
+        try { System.IO.File.Copy(sourceImage, posterPath, overwrite: true); }
+        catch { return; }
+        _history.SetPoster(entry.Path, posterPath);
+        DispatcherQueue.TryEnqueue(() => entry.Poster = PosterImage.Load(posterPath));
     }
 
     /// <summary>Pick a non-black poster frame. A single fixed 20% grab often lands on a fade/dark scene (studio

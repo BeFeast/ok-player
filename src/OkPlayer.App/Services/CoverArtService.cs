@@ -47,10 +47,23 @@ public static class CoverArtService
         }, ct);
     }
 
+    /// <summary>Just the sidecar resolution — no embedded extraction. Lets a caller cheaply re-check for a cover
+    /// dropped in next to a track <em>after</em> it was first marked art-less (a sidecar can appear without the
+    /// media file changing, so a cached "no art" verdict must not block it). Null when there's no usable sidecar.</summary>
+    public static Task<string?> GetSidecarAsync(string mediaPath, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(mediaPath) || mediaPath.Contains("://", StringComparison.Ordinal))
+            return Task.FromResult<string?>(null);
+        return Task.Run(() => ResolveSidecar(mediaPath), ct);
+    }
+
     /// <summary>A cover image sitting next to the media file: a same-named image first (<c>track.flac</c> →
     /// <c>track.jpg</c>), else a well-known folder cover (<c>cover</c>/<c>folder</c>/<c>front</c>/<c>poster</c>/…).
     /// One directory listing, matched case-insensitively (NFS/SMB can be case-sensitive, so don't trust
-    /// <c>File.Exists</c> casing). Returns null when none exists or the directory can't be read.</summary>
+    /// <c>File.Exists</c> casing). Within a stem, the <see cref="ArtExtensions"/> preference order decides
+    /// deterministically (so <c>cover.jpg</c> beats <c>cover.png</c> regardless of enumeration order). Candidates
+    /// that aren't actually decodable images are skipped, so a zero-byte or corrupt sidecar can't mask valid
+    /// embedded art. Returns null when there's no usable sidecar or the directory can't be read.</summary>
     private static string? ResolveSidecar(string mediaPath)
     {
         try
@@ -60,22 +73,31 @@ public static class CoverArtService
                 return null;
             string baseName = Path.GetFileNameWithoutExtension(mediaPath);
             string? sameName = null;
-            var folderHits = new string?[FolderArtNames.Length]; // best file per folder-cover stem, by preference
+            int sameNameRank = int.MaxValue;                            // lower ArtExtensions index = preferred
+            var folderHits = new string?[FolderArtNames.Length];        // best usable file per folder-cover stem
+            var folderRanks = new int[FolderArtNames.Length];
+            Array.Fill(folderRanks, int.MaxValue);
             foreach (string file in Directory.EnumerateFiles(dir))
             {
-                if (!IsArtExtension(Path.GetExtension(file)))
-                    continue;
+                int rank = ArtExtensionRank(Path.GetExtension(file));
+                if (rank < 0)
+                    continue;                                           // not a cover-image extension
                 string stem = Path.GetFileNameWithoutExtension(file);
-                if (sameName is null && string.Equals(stem, baseName, StringComparison.OrdinalIgnoreCase))
-                    sameName = file; // exact same-name cover — highest priority, stop preferring folder covers
-                else
-                    for (int i = 0; i < FolderArtNames.Length; i++)
-                        if (folderHits[i] is null && string.Equals(stem, FolderArtNames[i], StringComparison.OrdinalIgnoreCase))
-                            folderHits[i] = file;
+                bool isSameName = string.Equals(stem, baseName, StringComparison.OrdinalIgnoreCase);
+                int folderIndex = isSameName ? -1 : FolderStemIndex(stem);
+                if (!isSameName && folderIndex < 0)
+                    continue;                                           // neither same-name nor a known folder cover
+                // Only validate (a header read) a file that could improve on what we already have for its slot.
+                if (isSameName ? rank >= sameNameRank : rank >= folderRanks[folderIndex])
+                    continue;
+                if (!IsUsableImage(file))
+                    continue;                                           // zero-byte / not a real image — never let it mask embedded art
+                if (isSameName) { sameName = file; sameNameRank = rank; }
+                else { folderHits[folderIndex] = file; folderRanks[folderIndex] = rank; }
             }
             if (sameName is not null)
                 return sameName;
-            foreach (string? hit in folderHits) // in FolderArtNames preference order
+            foreach (string? hit in folderHits)                          // in FolderArtNames preference order
                 if (hit is not null)
                     return hit;
             return null;
@@ -83,12 +105,47 @@ public static class CoverArtService
         catch { return null; } // unreadable directory — fall back to embedded extraction
     }
 
-    private static bool IsArtExtension(string ext)
+    /// <summary>Index of <paramref name="ext"/> in <see cref="ArtExtensions"/> (0 = most preferred), or -1.</summary>
+    private static int ArtExtensionRank(string ext)
     {
-        foreach (string a in ArtExtensions)
-            if (string.Equals(ext, a, StringComparison.OrdinalIgnoreCase))
-                return true;
-        return false;
+        for (int i = 0; i < ArtExtensions.Length; i++)
+            if (string.Equals(ext, ArtExtensions[i], StringComparison.OrdinalIgnoreCase))
+                return i;
+        return -1;
+    }
+
+    /// <summary>Index of <paramref name="stem"/> in <see cref="FolderArtNames"/> (0 = most preferred), or -1.</summary>
+    private static int FolderStemIndex(string stem)
+    {
+        for (int i = 0; i < FolderArtNames.Length; i++)
+            if (string.Equals(stem, FolderArtNames[i], StringComparison.OrdinalIgnoreCase))
+                return i;
+        return -1;
+    }
+
+    /// <summary>Cheaply reject an unusable sidecar (zero-byte, truncated, or not actually a JPEG/PNG/WebP) by
+    /// sniffing only its magic bytes — so a broken file next to the media can't be returned in place of valid
+    /// embedded art. Not a full decode; a header-valid but body-corrupt file still falls to the loader's own
+    /// guard, but that's rare and degrades to the fallback tile rather than hiding art outright.</summary>
+    private static bool IsUsableImage(string path)
+    {
+        try
+        {
+            using var fs = File.OpenRead(path);
+            if (fs.Length < 12)
+                return false;
+            Span<byte> h = stackalloc byte[12];
+            fs.ReadExactly(h);
+            if (h[0] == 0xFF && h[1] == 0xD8 && h[2] == 0xFF)
+                return true; // JPEG
+            if (h[0] == 0x89 && h[1] == 0x50 && h[2] == 0x4E && h[3] == 0x47)
+                return true; // PNG
+            if (h[0] == (byte)'R' && h[1] == (byte)'I' && h[2] == (byte)'F' && h[3] == (byte)'F'
+                && h[8] == (byte)'W' && h[9] == (byte)'E' && h[10] == (byte)'B' && h[11] == (byte)'P')
+                return true; // WebP
+            return false;
+        }
+        catch { return false; }
     }
 
     private static string? Extract(string mediaPath, out bool definitelyNoArt)
