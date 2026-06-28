@@ -1394,7 +1394,7 @@ public sealed partial class PlayerView : UserControl
         if (await Services.CoverArtService.GetSidecarAsync(entry.Path) is { } sidecar
             && (OkPlayer.Core.NetworkPath.IsNetwork(sidecar) || System.IO.File.Exists(sidecar)))
         {
-            SetAudioPoster(entry, sidecar, posterPath);
+            await SetAudioPosterAsync(entry, sidecar, posterPath);
             return;
         }
         // 2) No sidecar. If we already determined there's no embedded picture, don't re-run the costly extractor.
@@ -1402,7 +1402,7 @@ public sealed partial class PlayerView : UserControl
             return;
         var (art, definitelyNoArt) = await Services.CoverArtService.GetWithStatusAsync(entry.Path);
         if (art is not null && System.IO.File.Exists(art))
-            SetAudioPoster(entry, art, posterPath);
+            await SetAudioPosterAsync(entry, art, posterPath);
         else if (definitelyNoArt)
             _history.SetPoster(entry.Path, NoUsablePoster); // neither sidecar nor embedded — keep the gradient
         // else: a transient failure (timeout/locked/unreadable) — leave the gradient and retry on a later pass
@@ -1410,10 +1410,12 @@ public sealed partial class PlayerView : UserControl
 
     /// <summary>Copy a resolved cover image into the persistent posters dir, record it on the history entry, and
     /// show it on the card. The copy makes the poster self-contained (a sidecar the user later moves won't break
-    /// it); the copied file is content-sniffed on load, so a .png-named JPEG/WebP still renders.</summary>
-    private void SetAudioPoster(RecentEntry entry, string sourceImage, string posterPath)
+    /// it); the copied file is content-sniffed on load, so a .png-named JPEG/WebP still renders. The copy runs
+    /// OFF the UI thread — the source can be a sidecar next to the media on a (possibly network) share, and a
+    /// synchronous File.Copy of a stalled SMB file would freeze the dispatcher.</summary>
+    private async System.Threading.Tasks.Task SetAudioPosterAsync(RecentEntry entry, string sourceImage, string posterPath)
     {
-        try { System.IO.File.Copy(sourceImage, posterPath, overwrite: true); }
+        try { await System.Threading.Tasks.Task.Run(() => System.IO.File.Copy(sourceImage, posterPath, overwrite: true)); }
         catch { return; }
         _history.SetPoster(entry.Path, posterPath);
         DispatcherQueue.TryEnqueue(() => entry.Poster = PosterImage.Load(posterPath));
@@ -2734,10 +2736,15 @@ public sealed partial class PlayerView : UserControl
             if (data.Contains(StandardDataFormats.Text))
             {
                 string text = (await data.GetTextAsync() ?? string.Empty).Trim().Trim('"');
-                // Accept a network path (UNC / mapped drive) without File.Exists — statting a dead mount on the
-                // UI thread would freeze the app; OpenMedia hands it to libmpv, which opens it off-thread.
-                if (text.Length > 0 && (OkPlayer.Core.MediaFormats.IsPlayableUrl(text)
-                    || OkPlayer.Core.NetworkPath.IsNetwork(text) || System.IO.File.Exists(text)))
+                // A URL opens immediately. A filesystem path is stat'd OFF the UI thread — a dead SMB mount would
+                // freeze the dispatcher on File.Exists — and opened only if it resolves, so a typo'd/dead path
+                // toasts instead of becoming the current media.
+                if (text.Length > 0 && OkPlayer.Core.MediaFormats.IsPlayableUrl(text))
+                {
+                    OpenMedia(text);
+                    return;
+                }
+                if (text.Length > 0 && await System.Threading.Tasks.Task.Run(() => System.IO.File.Exists(text)))
                 {
                     OpenMedia(text);
                     return;
