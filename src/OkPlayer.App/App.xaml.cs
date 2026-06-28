@@ -108,21 +108,17 @@ public partial class App : Application
     /// <summary>A file/URL passed on the command line (Explorer "Open with", a file association, or a
     /// companion-library launch `OkPlayer.exe path --resume &lt;seconds&gt; [--sub N] [--audio N]` per PRD
     /// §13.1). Unpackaged apps receive argv on the process command line, not the activation args. Returns the
-    /// first positional token, plus the explicit resume position and the subtitle/audio track preselection
-    /// (each null when absent/malformed).</summary>
+    /// first positional that is a URL or an existing file, plus the explicit resume position and the
+    /// subtitle/audio track preselection (each null when absent/malformed).</summary>
     private static (string? File, double? Resume, int? Sub, int? Audio) GetLaunchTarget()
     {
         try
         {
             string[] argv = Environment.GetCommandLineArgs();
             var (files, resume, sub, audio) = OkPlayer.Core.LaunchArgs.Parse(argv.Length > 1 ? argv[1..] : Array.Empty<string>());
-            // Take the first positional as the target WITHOUT statting it. A network (NFS/SMB) path would block
-            // the UI thread on File.Exists here — inside OnLaunched, before the window is shown — and freeze
-            // startup. The open path validates instead: a missing/unreadable file surfaces a toast, and an .m3u
-            // is read + entry-checked off the UI thread (see OpenM3u). URLs and local paths both pass straight
-            // through.
-            if (files.Count > 0)
-                return (files[0], resume, sub, audio);
+            foreach (string f in files)
+                if (f.Contains("://", StringComparison.Ordinal) || File.Exists(f))
+                    return (f, resume, sub, audio);
         }
         catch { /* never let argv parsing block startup */ }
         return (null, null, null, null);
@@ -173,11 +169,9 @@ public partial class App : Application
                 .Where(t => !string.Equals(t, self, StringComparison.OrdinalIgnoreCase))
                 .ToArray();
             var (files, _, _, _) = OkPlayer.Core.LaunchArgs.Parse(rest);
-            // First positional, unstatted — same reasoning as GetLaunchTarget: a File.Exists on a network path
-            // would stall the redirect (the second instance blocks on RedirectActivationToAsync until we return).
-            // The open path validates instead.
-            if (files.Count > 0)
-                return files[0];
+            foreach (string f in files)
+                if (f.Contains("://", StringComparison.Ordinal) || File.Exists(f))
+                    return f;
         }
         catch { /* malformed args -> just surface the window */ }
         return null;

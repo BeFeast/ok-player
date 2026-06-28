@@ -948,6 +948,8 @@ public sealed partial class PlayerView : UserControl
         _resumeTarget = -1;
         _resumeSubId = _resumeAudioId = null;
         _openGeneration++;       // invalidate any in-flight chapter/thumbnail warm for the closed file
+        _loading = false;        // a close during a slow playlist/file open owns the loading state: drop the spinner…
+        _loadWatchdog.Stop();    // …and disarm the watchdog so a superseded open can't later fire a false toast
         _playlist = null;        // drop the folder-as-playlist…
         UpNext.Clear();          // …and its projected rows
     }
@@ -2178,7 +2180,8 @@ public sealed partial class PlayerView : UserControl
         }
 
         if (gen != _openGeneration)
-            return; // superseded by a newer open while we were validating
+            return; // superseded by a newer open/close while we were validating — that generation now owns the
+                    // loading state (OpenMedia re-armed it, CloseFile cleared it), so we must NOT touch it here
 
         if (valid.Count == 0)
         {
@@ -2188,7 +2191,13 @@ public sealed partial class PlayerView : UserControl
 
         _shuffle = false; // an .m3u defines its own order — honor it rather than shuffle it away
         _playlist = new OkPlayer.Core.Playlist(valid, valid[0], sort: false) { Repeat = _repeat };
+        // A playlist launch (OkPlayer.exe playlist.m3u --resume <s>) parks its exact resume in _explicitResume
+        // after the outer OpenMedia(m3u) returned — but that resume targets the playlist's FIRST entry, and the
+        // inner OpenMedia below resets per-open state (clearing _explicitResume). Capture it across the open so
+        // the first entry still honours the launch resume. Null in every non-launch open, so this is a no-op there.
+        double? launchResume = _explicitResume;
         OpenMedia(valid[0]); // plays; UpdatePlaylist's SetCurrent keeps this list rather than the folder
+        _explicitResume = launchResume;
         Vm.Play();
     }
 
