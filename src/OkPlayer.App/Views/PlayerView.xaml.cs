@@ -84,7 +84,7 @@ public sealed partial class PlayerView : UserControl
     private int _lyricsActiveIndex = -1;  // the currently highlighted line, or -1
     private bool _lyricsTimed;            // the loaded sheet is synced (drives the highlight + click-to-seek)
     private string? _lyricsForPath;       // the file the loaded/loading lyrics belong to (set at load start)
-    private string? _lyricsForTitle;      // Vm.MediaTitle the attempt ran under — a cheap "tags changed" retry proxy
+    private bool _lyricsResolved;         // we have actual lyrics for _lyricsForPath (vs. a miss we may retry on tags)
     private System.Threading.CancellationTokenSource? _lyricsCts; // aborts a superseded in-flight fetch
 
     public PlayerViewModel Vm { get; } = new();
@@ -179,6 +179,7 @@ public sealed partial class PlayerView : UserControl
         _history.Changed += OnHistoryChanged;
         Vm.EndReached += OnEndReached; // auto-advance the folder playlist when a file plays out
         Vm.LoadFailed += OnLoadFailed; // tear down the loading spinner if an open fails (e.g. a dead URL)
+        Vm.MetadataChanged += () => ReloadOpenLyricsIf(metadataChanged: true); // late tags may now resolve lyrics
         SetPanelTab(false);            // initial visual; RefreshPanelTabs picks the real default per file on open
         Vm.Chapters.CollectionChanged += (_, _) =>
         {
@@ -331,7 +332,7 @@ public sealed partial class PlayerView : UserControl
         _lyricsActiveIndex = -1;
         _lyricsTimed = false;
         _lyricsForPath = path;
-        _lyricsForTitle = Vm.MediaTitle; // pin the title we resolve under; a later change retries (tags arrived)
+        _lyricsResolved = false; // a miss stays retryable until the tags it needs actually arrive (MetadataChanged)
         ShowLyricsStatus("Searching for lyrics…");
         if (string.IsNullOrEmpty(path))
         {
@@ -359,15 +360,15 @@ public sealed partial class PlayerView : UserControl
 
             if (doc.IsEmpty)
             {
-                // Pin the miss (path + the title we ran under) and DON'T clear it: a retry happens only when the
-                // track or its title metadata actually changes (see MaybeReloadOpenLyrics). So a genuinely tag-less
-                // local file settles on "No lyrics found" instead of thrashing on every Duration tick, while a late
-                // tag arrival (the title changes) still re-resolves — even if this lookup was in flight when it landed.
+                // A miss leaves _lyricsResolved false (set above), so a later MetadataChanged — late-arriving tags
+                // that may now resolve — re-attempts via ReloadOpenLyricsIf, even mid-fetch. A genuinely tag-less
+                // track fires no further metadata change, so it settles on "No lyrics found" without thrashing.
                 ShowLyricsStatus("No lyrics found for this track");
                 return;
             }
             _lyricLines = doc.Lines;
             _lyricsTimed = doc.HasTimings;
+            _lyricsResolved = true; // we have lyrics for this track — later tag changes shouldn't re-fetch
             foreach (OkPlayer.Core.LrcLine line in doc.Lines)
                 _lyrics.Add(new LyricRow(line.Text, line.Time.TotalSeconds));
             HideLyricsStatus();
@@ -389,17 +390,18 @@ public sealed partial class PlayerView : UserControl
         }
     }
 
-    /// <summary>If the lyrics overlay is open, (re)resolve for the current file when either the track changed or its
-    /// title metadata changed since the attempt we ran. Driven off BOTH the media-title and the duration signals: a
-    /// playlist advance always raises Duration even when two tracks share a title (path differs), and tags arriving
-    /// after file-loaded raise MediaTitle (title differs). The title check is independent of the in-flight
-    /// <see cref="_lyricsForPath"/> pin, so a retry from late tags is never masked by a lookup that's still running;
-    /// a stable path+title means no redundant refetch, so a tag-less track settles instead of thrashing.</summary>
-    private void MaybeReloadOpenLyrics()
+    /// <summary>If the lyrics overlay is open, (re)resolve for the current file. A <b>track change</b> always reloads
+    /// (driven off media-title/duration — a playlist advance raises Duration even when two tracks share a title). A
+    /// <b>metadata change</b> reloads only while we're still showing a miss (<see cref="_lyricsResolved"/> is false):
+    /// that's the signal that the artist/title/album a lookup needs has arrived late — and it fires on mpv's tag
+    /// dictionary, not the display title, so a missing-artist-but-same-title fill-in still re-resolves even mid-fetch
+    /// (the generation guard + cancellation supersede the in-flight load). A genuinely tag-less track has no metadata
+    /// change after load, so it settles on "No lyrics found" instead of thrashing on every Duration tick.</summary>
+    private void ReloadOpenLyricsIf(bool metadataChanged)
     {
         if (LyricsOverlay.Visibility != Visibility.Visible)
             return;
-        if (_lyricsForPath != _currentPath || _lyricsForTitle != Vm.MediaTitle)
+        if (_lyricsForPath != _currentPath || (metadataChanged && !_lyricsResolved))
             _ = LoadLyricsAsync(_currentPath);
     }
 
@@ -453,7 +455,7 @@ public sealed partial class PlayerView : UserControl
         _lyricsCts?.Dispose();
         _lyricsCts = null;
         _lyricsForPath = null;
-        _lyricsForTitle = null;
+        _lyricsResolved = false;
         _lyrics.Clear();
         _lyricLines = System.Array.Empty<OkPlayer.Core.LrcLine>();
         _lyricsActiveIndex = -1;
@@ -611,13 +613,13 @@ public sealed partial class PlayerView : UserControl
         {
             if (AudioNowPlaying.Visibility == Visibility.Visible)
                 ApplyAudioSurface(Vm.HasMedia); // the metadata title arrives after file-loaded — refresh the card
-            MaybeReloadOpenLyrics(); // a new track's tags arrived — refresh the open lyrics overlay
+            ReloadOpenLyricsIf(metadataChanged: false); // title change marks a track change for the open overlay
         }
         else if (e.PropertyName == nameof(PlayerViewModel.Duration))
         {
             TryResume(); // seek-bar chapter ticks update via the Vm.ChapterFractions binding
             WarmTimeline(); // preemptively warm a coarse grid of seek-preview frames for instant scrubbing
-            MaybeReloadOpenLyrics(); // a fresh Duration marks a real track change — covers same-title advances
+            ReloadOpenLyricsIf(metadataChanged: false); // a fresh Duration marks a track change (same-title advances)
         }
         else if (e.PropertyName == nameof(PlayerViewModel.Position))
         {

@@ -159,7 +159,7 @@ public partial class PlayerViewModel : ObservableObject
             ("time-pos", MpvFormat.Double), ("duration", MpvFormat.Double), ("pause", MpvFormat.Flag),
             ("volume", MpvFormat.Double), ("mute", MpvFormat.Flag), ("speed", MpvFormat.Double),
             ("media-title", MpvFormat.String), ("sid", MpvFormat.String), ("aid", MpvFormat.String),
-            ("secondary-sid", MpvFormat.String),
+            ("secondary-sid", MpvFormat.String), ("metadata", MpvFormat.None),
             ("sub-delay", MpvFormat.Double), ("sub-scale", MpvFormat.Double), ("chapter", MpvFormat.Int64),
             ("dwidth", MpvFormat.Int64), ("dheight", MpvFormat.Int64),
             ("demuxer-cache-time", MpvFormat.Double), ("eof-reached", MpvFormat.Flag),
@@ -254,6 +254,11 @@ public partial class PlayerViewModel : ObservableObject
     /// "Loading…" overlay it put up at open time (otherwise a failed slow URL would spin forever).</summary>
     public event Action? LoadFailed;
 
+    /// <summary>Raised (on the UI thread) when mpv's tag dictionary changes — at file-load, when tags fill in late
+    /// after <c>file-loaded</c>, or per-song on an ICY stream. The lyrics overlay listens so it can re-resolve once
+    /// the artist/title/album it needs has actually arrived, even when the display title never changed.</summary>
+    public event Action? MetadataChanged;
+
     private void OnEndFile(object? sender, MpvEndFileReason reason)
     {
         if (reason != MpvEndFileReason.Error)
@@ -300,6 +305,7 @@ public partial class PlayerViewModel : ObservableObject
                 case "mute": if (value is bool mu) IsMuted = mu; break;
                 case "speed": if (value is double sp) Speed = sp; break;
                 case "media-title": MediaTitle = value as string ?? string.Empty; break;
+                case "metadata": MetadataChanged?.Invoke(); break; // tags changed (or arrived late) — see the event
                 case "sub-delay": if (value is double sd) SubDelayMs = (int)System.Math.Round(sd * 1000); break;
                 case "sub-scale": if (value is double ss) SubScale = ss; break;
                 // "chapter" is still observed, but CurrentChapterIndex is derived from playhead time so it
