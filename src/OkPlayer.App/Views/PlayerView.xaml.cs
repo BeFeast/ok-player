@@ -1389,9 +1389,12 @@ public sealed partial class PlayerView : UserControl
             return; // already shown (loaded from the cached poster path in LoadRecents)
         // 1) Cheap sidecar-only check first — runs even when the entry is marked NoUsablePoster, so art added
         //    after the track was first seen is picked up (the media file's mtime/size don't change).
-        if (await Services.CoverArtService.GetSidecarAsync(entry.Path) is { } sidecar && System.IO.File.Exists(sidecar))
+        // GetSidecarAsync already found this file by enumerating off-thread; the re-stat just guards a TOCTOU
+        // delete. Skip it for network paths so a flaky share can't block the resumed continuation (UI thread).
+        if (await Services.CoverArtService.GetSidecarAsync(entry.Path) is { } sidecar
+            && (OkPlayer.Core.NetworkPath.IsNetwork(sidecar) || System.IO.File.Exists(sidecar)))
         {
-            SetAudioPoster(entry, sidecar, posterPath);
+            await SetAudioPosterAsync(entry, sidecar, posterPath);
             return;
         }
         // 2) No sidecar. If we already determined there's no embedded picture, don't re-run the costly extractor.
@@ -1399,7 +1402,7 @@ public sealed partial class PlayerView : UserControl
             return;
         var (art, definitelyNoArt) = await Services.CoverArtService.GetWithStatusAsync(entry.Path);
         if (art is not null && System.IO.File.Exists(art))
-            SetAudioPoster(entry, art, posterPath);
+            await SetAudioPosterAsync(entry, art, posterPath);
         else if (definitelyNoArt)
             _history.SetPoster(entry.Path, NoUsablePoster); // neither sidecar nor embedded — keep the gradient
         // else: a transient failure (timeout/locked/unreadable) — leave the gradient and retry on a later pass
@@ -1407,10 +1410,12 @@ public sealed partial class PlayerView : UserControl
 
     /// <summary>Copy a resolved cover image into the persistent posters dir, record it on the history entry, and
     /// show it on the card. The copy makes the poster self-contained (a sidecar the user later moves won't break
-    /// it); the copied file is content-sniffed on load, so a .png-named JPEG/WebP still renders.</summary>
-    private void SetAudioPoster(RecentEntry entry, string sourceImage, string posterPath)
+    /// it); the copied file is content-sniffed on load, so a .png-named JPEG/WebP still renders. The copy runs
+    /// OFF the UI thread — the source can be a sidecar next to the media on a (possibly network) share, and a
+    /// synchronous File.Copy of a stalled SMB file would freeze the dispatcher.</summary>
+    private async System.Threading.Tasks.Task SetAudioPosterAsync(RecentEntry entry, string sourceImage, string posterPath)
     {
-        try { System.IO.File.Copy(sourceImage, posterPath, overwrite: true); }
+        try { await System.Threading.Tasks.Task.Run(() => System.IO.File.Copy(sourceImage, posterPath, overwrite: true)); }
         catch { return; }
         _history.SetPoster(entry.Path, posterPath);
         DispatcherQueue.TryEnqueue(() => entry.Poster = PosterImage.Load(posterPath));
@@ -2041,7 +2046,9 @@ public sealed partial class PlayerView : UserControl
             ShowToast("Not a local file");
             return;
         }
-        if (!System.IO.File.Exists(path))
+        // Skip the existence check for network paths — statting a dead SMB mount on the UI thread would freeze
+        // the window; Explorer handles a missing target on its own. Only stat genuinely local files here.
+        if (!OkPlayer.Core.NetworkPath.IsNetwork(path) && !System.IO.File.Exists(path))
         {
             ShowToast("File not found");
             return;
@@ -2729,7 +2736,15 @@ public sealed partial class PlayerView : UserControl
             if (data.Contains(StandardDataFormats.Text))
             {
                 string text = (await data.GetTextAsync() ?? string.Empty).Trim().Trim('"');
-                if (text.Length > 0 && (OkPlayer.Core.MediaFormats.IsPlayableUrl(text) || System.IO.File.Exists(text)))
+                // A URL opens immediately. A filesystem path is stat'd OFF the UI thread — a dead SMB mount would
+                // freeze the dispatcher on File.Exists — and opened only if it resolves, so a typo'd/dead path
+                // toasts instead of becoming the current media.
+                if (text.Length > 0 && OkPlayer.Core.MediaFormats.IsPlayableUrl(text))
+                {
+                    OpenMedia(text);
+                    return;
+                }
+                if (text.Length > 0 && await System.Threading.Tasks.Task.Run(() => System.IO.File.Exists(text)))
                 {
                     OpenMedia(text);
                     return;

@@ -132,7 +132,10 @@ public partial class App : Application
             string[] argv = Environment.GetCommandLineArgs();
             var (files, resume, sub, audio) = OkPlayer.Core.LaunchArgs.Parse(argv.Length > 1 ? argv[1..] : Array.Empty<string>());
             foreach (string f in files)
-                if (f.Contains("://", StringComparison.Ordinal) || File.Exists(f))
+                // A URL or a network path (UNC / mapped drive) is accepted WITHOUT File.Exists: statting a dead
+                // SMB mount on the UI thread here, before the window exists, freezes startup for the full SMB
+                // timeout (~60s). Hand the path to libmpv, which opens it off-thread and reports any failure.
+                if (f.Contains("://", StringComparison.Ordinal) || OkPlayer.Core.NetworkPath.IsNetwork(f) || File.Exists(f))
                     return (f, resume, sub, audio);
         }
         catch { /* never let argv parsing block startup */ }

@@ -307,51 +307,14 @@ public sealed class HistoryService
     private static bool IsListable(string path)
         => path.Contains("://", StringComparison.Ordinal) || IsNetworkPath(path) || File.Exists(path);
 
-    /// <summary>True for a UNC path (<c>\\server\share\…</c>) or a path on a <b>mapped network drive</b> (e.g. an
-    /// NFS/SMB mount surfaced as <c>Z:\</c>, whose <see cref="DriveType.Network"/> stays reported even while the
-    /// share is disconnected). A removable/fixed <b>local</b> drive that is currently unplugged or unmounted
-    /// reports <see cref="DriveType.NoRootDirectory"/> (or fails to probe) — that is a local-and-missing file, so
-    /// it is deliberately <i>not</i> treated as network: it falls through to <see cref="File.Exists"/> and drops
-    /// off, rather than lingering in History as if it were a flaky network share.</summary>
-    public static bool IsNetworkPath(string path)
-        => IsNetworkPath(path, ProbeRootDriveType);
+    /// <summary>True for a UNC path or a path on a mapped network drive — see <see cref="NetworkPath"/>.
+    /// Network paths are never hidden on a false <see cref="File.Exists"/> (a flaky share returns <c>false</c>
+    /// even when the file is there), so an NFS/SMB file doesn't vanish from History on a transient blip.</summary>
+    public static bool IsNetworkPath(string path) => OkPlayer.Core.NetworkPath.IsNetwork(path);
 
-    /// <summary>Testable core of <see cref="IsNetworkPath(string)"/>: the root drive-type probe is injected so the
-    /// classification can be unit-tested without depending on the volumes actually mounted on the test machine
-    /// (the probe returns <c>null</c> when the root can't be classified).</summary>
+    /// <summary>Testable core (injected drive-type probe) — forwards to <see cref="OkPlayer.Core.NetworkPath"/>.</summary>
     internal static bool IsNetworkPath(string path, Func<string, DriveType?> rootDriveType)
-    {
-        if (string.IsNullOrEmpty(path))
-            return false;
-        // Peel the extended-length / device prefix (\\?\ or \\.\) first, so an extended-length UNC path
-        // (\\?\UNC\server\share — network) is told apart from an extended-length LOCAL path (\\?\C:\dir\file —
-        // a drive, NOT network). A bare "\\" check alone misclassifies \\?\C:\… as a share and would keep a
-        // deleted local file lingering in History.
-        string p = path;
-        if (p.StartsWith(@"\\?\", StringComparison.Ordinal) || p.StartsWith(@"\\.\", StringComparison.Ordinal))
-        {
-            p = p[4..];
-            if (p.StartsWith(@"UNC\", StringComparison.OrdinalIgnoreCase))
-                return true; // \\?\UNC\server\share — a network share
-            // otherwise \\?\C:\… or \\?\Volume{…}\… — a local volume; classify the remainder as a normal path
-        }
-        else if (p.StartsWith(@"\\", StringComparison.Ordinal))
-        {
-            return true; // plain UNC: \\server\share
-        }
-        if (!Path.IsPathRooted(p))
-            return false;
-        string? root = Path.GetPathRoot(p);
-        if (string.IsNullOrEmpty(root))
-            return false;
-        return rootDriveType(root) == DriveType.Network; // only a mapped network drive bypasses File.Exists
-    }
-
-    private static DriveType? ProbeRootDriveType(string root)
-    {
-        try { return new DriveInfo(root).DriveType; }
-        catch { return null; } // unclassifiable root -> treat as local; File.Exists is the decider
-    }
+        => OkPlayer.Core.NetworkPath.IsNetwork(path, rootDriveType);
 
     /// <summary>Wipe all watch history (resume positions, recents, bookmarks, user chapters). Returns
     /// the number of file records removed. Persists the empty store so it survives restart.</summary>
