@@ -217,22 +217,6 @@ public sealed partial class PlayerView : UserControl
     private async void OnOpenUrlClick(object sender, RoutedEventArgs e)
     {
         var input = new TextBox { PlaceholderText = "https://…  or  smb://host/share/file.mkv" };
-        // Pre-fill from the clipboard when it holds a link, so "Open URL" doubles as paste-a-URL: copy a link in
-        // the browser, click here, press Enter. Reliable regardless of keyboard focus (unlike the Ctrl+V accel).
-        try
-        {
-            var clip = Windows.ApplicationModel.DataTransfer.Clipboard.GetContent();
-            if (clip.Contains(StandardDataFormats.Text))
-            {
-                string clipped = (await clip.GetTextAsync() ?? string.Empty).Trim();
-                if (OkPlayer.Core.MediaFormats.IsPlayableUrl(clipped))
-                {
-                    input.Text = clipped;
-                    input.SelectAll();
-                }
-            }
-        }
-        catch { /* clipboard unavailable — just open an empty dialog */ }
         var dialog = new ContentDialog
         {
             Title = "Open URL",
@@ -242,12 +226,34 @@ public sealed partial class PlayerView : UserControl
             DefaultButton = ContentDialogButton.Primary,
             XamlRoot = XamlRoot,
         };
+        // Pre-fill from the clipboard when it holds a link, so "Open URL" doubles as paste-a-URL: copy a link in
+        // the browser, click here, press Enter. Fire-and-forget so a slow/large clipboard provider can't delay
+        // the dialog appearing — the field populates a moment later if the text is a URL.
+        _ = PrefillUrlFromClipboardAsync(input);
         try
         {
             if (await dialog.ShowAsync() == ContentDialogResult.Primary && !string.IsNullOrWhiteSpace(input.Text))
                 OpenMedia(input.Text.Trim());
         }
         catch { /* another content dialog is already open — ignore the concurrent open */ }
+    }
+
+    private static async Task PrefillUrlFromClipboardAsync(TextBox input)
+    {
+        try
+        {
+            var clip = Windows.ApplicationModel.DataTransfer.Clipboard.GetContent();
+            if (clip.Contains(StandardDataFormats.Text))
+            {
+                string clipped = (await clip.GetTextAsync() ?? string.Empty).Trim();
+                if (input.Text.Length == 0 && OkPlayer.Core.MediaFormats.IsPlayableUrl(clipped)) // don't clobber typing
+                {
+                    input.Text = clipped;
+                    input.SelectAll();
+                }
+            }
+        }
+        catch { /* clipboard unavailable / slow — leave the field empty */ }
     }
 
     private void OnHistoryClick(object sender, RoutedEventArgs e) => OpenHistory();
