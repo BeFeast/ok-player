@@ -40,6 +40,17 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
     /// <summary>Raised once the engine + render context are ready.</summary>
     public event EventHandler? EngineReady;
 
+    /// <summary>Optional diagnostic sink for the render-init breadcrumbs — the host (App) points it at the file
+    /// logger so a hang inside GL/D3D/libmpv init (which throws nothing) is still pinned to its last step.
+    /// Static so it can be set before any panel is constructed; null = no-op.</summary>
+    public static Action<string>? Diagnostics;
+
+    /// <summary>Optional sink for mpv's own log messages (level, prefix, text) — routed to the file logger so an
+    /// engine warning/error around a freeze is captured. Set by the host before the panel loads.</summary>
+    public static Action<string, string, string>? MpvLogMessage;
+
+    private static void Diag(string s) { try { Diagnostics?.Invoke(s); } catch { } }
+
     public MpvVideoPanel()
     {
         HorizontalContentAlignment = HorizontalAlignment.Stretch;
@@ -59,14 +70,22 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
 
         try
         {
+            Diag("render init: creating GL interop device (WGL_NV_DX_interop)");
             _device = new GlInteropDevice();
 
+            Diag("render init: creating SwapChainPanel");
             _panel = new SwapChainPanel();
             _panel.CompositionScaleChanged += (_, _) => UpdateSwapChainSize();
             Content = _panel;
 
+            Diag("render init: creating mpv context");
             _mpv = new MpvContext();
             _mpv.CommandReply += OnCommandReply;   // clear the screenshot render-yield as soon as it finishes
+            // Route mpv's own log messages to the host's logger (engine warnings around a freeze are gold).
+            _mpv.LogMessageReceived += (lvl, prefix, text) =>
+            {
+                try { MpvLogMessage?.Invoke(lvl.ToString(), prefix, text); } catch { }
+            };
             _mpv.SetOption("vo", "libmpv");        // mandatory: the render API drives output
             _mpv.SetOption("hwdec", HardwareDecoding ? "auto-safe" : "no"); // hw decode (Settings -> Video)
             _mpv.SetOption("keep-open", "yes");     // hold the last frame instead of closing on EOF
@@ -80,27 +99,36 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
             string pictures = System.Environment.GetFolderPath(System.Environment.SpecialFolder.MyPictures);
             if (!string.IsNullOrEmpty(pictures))
                 _mpv.SetOption("screenshot-directory", pictures);
+            Diag("render init: applying user mpv.conf (reads %APPDATA%\\OkPlayer\\mpv.conf)");
             ApplyUserConfig(_mpv); // power-user escape hatch — applied last so it can override the soft defaults above
+            Diag("render init: mpv_initialize");
             _mpv.Initialize();
+            _mpv.RequestLogMessages(OkPlayer.Mpv.Interop.MpvLogLevel.Warn); // surface engine warnings/errors into the log
             // EnsureInitialized runs on the UI thread (Loaded), which is also where the render loop drives mpv.
             // Arm the debug guard so any blocking mpv call mistakenly issued on this thread fails fast.
             _mpv.MarkRenderThread();
 
+            Diag("render init: creating render context (GL)");
             _render = new MpvRenderContext(_mpv, GlInteropDevice.GetProcAddress);
             _render.SetUpdateCallback(() => _forceRender = true);
 
             // SizeChanged often fires before Loaded (before the device existed), so create the swap
             // chain now that the control is laid out; CompositionScaleChanged corrects DPI later.
             if (HasRenderableSize)
+            {
+                Diag("render init: creating swap chain");
                 TryCreateSwapChain();
+            }
 
             HookRendering();
+            Diag("render init: done (engine ready)");
             EngineReady?.Invoke(this, EventArgs.Empty);
         }
-        catch
+        catch (Exception ex)
         {
             // A subcomponent ctor failed (no WGL_NV_DX_interop, missing libmpv-2.dll, …). Roll back so
             // a later retry re-initializes instead of returning early into a null engine.
+            Diag("render init FAILED: " + ex);
             _initialized = false;
             TeardownEngine();
             throw;
