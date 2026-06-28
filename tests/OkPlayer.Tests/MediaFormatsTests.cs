@@ -36,4 +36,22 @@ public class MediaFormatsTests
         foreach (string ext in MediaFormats.SubtitleExtensions)
             Assert.False(MediaFormats.IsMedia("x" + ext)); // a subtitle is never treated as playable media
     }
+
+    [Theory]
+    [InlineData("https://example.com/video.mkv")]
+    [InlineData("http://host:8080/stream")]
+    [InlineData("smb://nas/share/movie.mkv")]
+    [InlineData("rtsp://host/live")]
+    [InlineData("  https://example.com/v.mp4  ")] // surrounding whitespace is trimmed
+    public void IsPlayableUrl_TrueForAbsoluteStreamUrls(string text) => Assert.True(MediaFormats.IsPlayableUrl(text));
+
+    [Theory]
+    [InlineData("check out https://example.com/v.mkv it's great")] // a paragraph that merely contains a URL
+    [InlineData("file:///C:/media/movie.mkv")]                     // an explicit file: URI is a local file, not a stream
+    [InlineData("movie.mkv")]                                       // relative, not absolute
+    [InlineData("not a url at all")]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public void IsPlayableUrl_FalseForPathsParagraphsAndJunk(string? text) => Assert.False(MediaFormats.IsPlayableUrl(text));
 }

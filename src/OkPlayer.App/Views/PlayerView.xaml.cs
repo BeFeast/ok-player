@@ -2097,11 +2097,13 @@ public sealed partial class PlayerView : UserControl
         args.Handled = true;
     }
 
-    private bool _dragNameLoaded; // DragOver fires continuously — read the dragged name only once per drag
-
-    private async void OnDragOver(object sender, DragEventArgs e)
+    private void OnDragOver(object sender, DragEventArgs e)
     {
-        if (!e.DataView.Contains(StandardDataFormats.StorageItems))
+        var data = e.DataView;
+        // Accept files/folders and links (a URL/text dragged from a browser).
+        if (!data.Contains(StandardDataFormats.StorageItems)
+            && !data.Contains(StandardDataFormats.WebLink)
+            && !data.Contains(StandardDataFormats.Text))
             return;
         e.AcceptedOperation = DataPackageOperation.Copy;
         try
@@ -2113,20 +2115,10 @@ public sealed partial class PlayerView : UserControl
         }
         catch { /* override not available on every shell drag — non-fatal */ }
         DragOverlay.Visibility = Visibility.Visible;
-        if (_dragNameLoaded)
-            return;
-        _dragNameLoaded = true;
-        var deferral = e.GetDeferral();
-        try
-        {
-            var items = await e.DataView.GetStorageItemsAsync();
-            var first = items.FirstOrDefault(); // a file or a folder — show whichever was dragged
-            DragFileName.Text = first is not null
-                ? System.IO.Path.GetFileName(first.Path.TrimEnd('\\', '/'))
-                : string.Empty;
-        }
-        catch { DragFileName.Text = string.Empty; }
-        finally { deferral.Complete(); }
+        // Deliberately NO GetStorageItemsAsync() here. A link dragged from a browser is also offered as a
+        // VIRTUAL ".url" file (FileGroupDescriptor), and materializing that inside the modal drag loop
+        // deadlocks — the app hangs for the whole drag. The filename preview isn't worth that; "Drop to play"
+        // is enough. The dropped item is resolved in OnDrop, after the drag loop ends.
     }
 
     private void OnDragLeave(object sender, DragEventArgs e) => HideDragOverlay();
@@ -2134,7 +2126,6 @@ public sealed partial class PlayerView : UserControl
     private void HideDragOverlay()
     {
         DragOverlay.Visibility = Visibility.Collapsed;
-        _dragNameLoaded = false;
     }
 
     /// <summary>Drop-a-folder → playlist: scan the folder for media (recursively, depth-bounded — see
@@ -2170,26 +2161,41 @@ public sealed partial class PlayerView : UserControl
     private async void OnDrop(object sender, DragEventArgs e)
     {
         HideDragOverlay();
-        if (!e.DataView.Contains(StandardDataFormats.StorageItems))
-            return;
-        // async void: a transient first-time DataView access can throw — never let it escape to the UI thread.
+        var data = e.DataView;
+        // async void: a transient DataView access can throw — never let it escape to the UI thread.
         var deferral = e.GetDeferral();
         try
         {
-            var items = await e.DataView.GetStorageItemsAsync();
-            var file = items.OfType<StorageFile>().FirstOrDefault();
-            if (file is not null)
+            // Resolve a dragged LINK first. A browser link drag also exposes a virtual ".url" file via
+            // StorageItems, so reaching for StorageItems would open the shortcut file (or stall materializing
+            // it) instead of the actual address — resolve the URL up front and open it as a stream.
+            string? url = await TryGetDroppedUrlAsync(data);
+            if (url is not null)
             {
-                // A subtitle dropped onto a playing video loads as a track rather than replacing the media.
-                if (Vm.HasMedia && OkPlayer.Core.MediaFormats.IsSubtitle(file.Path))
-                    AddSubtitle(file.Path);
-                else
-                    OpenMedia(file.Path);
+                OpenMedia(url);
+                return;
             }
-            else if (items.OfType<StorageFolder>().FirstOrDefault() is { } folder)
-                await OpenFolderAsPlaylist(folder.Path); // dropped folder → recursive playlist, play the first file
-            else if (items.Count > 0)
-                ShowToast("Drop a media file or folder"); // non-file/non-folder drop: feedback instead of silence
+            if (data.Contains(StandardDataFormats.StorageItems))
+            {
+                var items = await data.GetStorageItemsAsync();
+                var file = items.OfType<StorageFile>().FirstOrDefault();
+                if (file is not null)
+                {
+                    // A subtitle dropped onto a playing video loads as a track rather than replacing the media.
+                    if (Vm.HasMedia && OkPlayer.Core.MediaFormats.IsSubtitle(file.Path))
+                        AddSubtitle(file.Path);
+                    else
+                        OpenMedia(file.Path);
+                }
+                else if (items.OfType<StorageFolder>().FirstOrDefault() is { } folder)
+                    await OpenFolderAsPlaylist(folder.Path); // dropped folder → recursive playlist, play first
+                else if (items.Count > 0)
+                    ShowToast("Drop a media file or folder");
+            }
+            else
+            {
+                ShowToast("Drop a media file, folder, or link");
+            }
         }
         catch (Exception)
         {
@@ -2199,5 +2205,60 @@ public sealed partial class PlayerView : UserControl
         {
             deferral.Complete();
         }
+    }
+
+    /// <summary>Resolve a dragged link to a URL string: prefer an explicit WebLink, else URL-like text (a browser
+    /// link drag carries the address as text too). Returns null when there is no link — a plain file/folder drop
+    /// or arbitrary non-URL text — so the caller falls through to file handling. Never throws.</summary>
+    private static async Task<string?> TryGetDroppedUrlAsync(DataPackageView data)
+    {
+        try
+        {
+            if (data.Contains(StandardDataFormats.WebLink))
+            {
+                var uri = await data.GetWebLinkAsync();
+                if (uri is not null)
+                    return uri.ToString();
+            }
+        }
+        catch { /* fall through to text */ }
+        try
+        {
+            if (data.Contains(StandardDataFormats.Text))
+            {
+                string text = (await data.GetTextAsync() ?? string.Empty).Trim();
+                if (OkPlayer.Core.MediaFormats.IsPlayableUrl(text)) // a single absolute URL, not a paragraph
+                    return text;
+            }
+        }
+        catch { /* not a link */ }
+        return null;
+    }
+
+    /// <summary>Ctrl+V: open a URL or local file path from the clipboard ("paste a URL"/path). A no-op with a
+    /// gentle toast when the clipboard holds neither, so a stray paste doesn't disrupt playback.</summary>
+    private async void OnPasteAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        // Don't hijack Ctrl+V from a focused text field — the History search box, or any TextBox — let it paste
+        // there. Only the bare player surface turns a pasted URL/path into an open. Return BEFORE marking the
+        // accelerator handled, or the focused field never receives the paste.
+        if (_historyOpen || (XamlRoot is not null && FocusManager.GetFocusedElement(XamlRoot) is TextBox))
+            return;
+        args.Handled = true;
+        try
+        {
+            var data = Windows.ApplicationModel.DataTransfer.Clipboard.GetContent();
+            if (data.Contains(StandardDataFormats.Text))
+            {
+                string text = (await data.GetTextAsync() ?? string.Empty).Trim().Trim('"');
+                if (text.Length > 0 && (OkPlayer.Core.MediaFormats.IsPlayableUrl(text) || System.IO.File.Exists(text)))
+                {
+                    OpenMedia(text);
+                    return;
+                }
+            }
+            ShowToast("Clipboard has no link or file path");
+        }
+        catch { ShowToast("Couldn't read the clipboard"); }
     }
 }
