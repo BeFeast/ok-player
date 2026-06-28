@@ -83,7 +83,8 @@ public sealed partial class PlayerView : UserControl
     private int _lyricsGen;               // bumps per fetch / file change; a stale lyrics fetch bails on mismatch
     private int _lyricsActiveIndex = -1;  // the currently highlighted line, or -1
     private bool _lyricsTimed;            // the loaded sheet is synced (drives the highlight + click-to-seek)
-    private string? _lyricsForPath;       // the file the loaded lyrics belong to (dedupes reloads)
+    private string? _lyricsForPath;       // the file the loaded/loading lyrics belong to (set at load start)
+    private string? _lyricsForTitle;      // Vm.MediaTitle the attempt ran under — a cheap "tags changed" retry proxy
     private System.Threading.CancellationTokenSource? _lyricsCts; // aborts a superseded in-flight fetch
 
     public PlayerViewModel Vm { get; } = new();
@@ -330,6 +331,7 @@ public sealed partial class PlayerView : UserControl
         _lyricsActiveIndex = -1;
         _lyricsTimed = false;
         _lyricsForPath = path;
+        _lyricsForTitle = Vm.MediaTitle; // pin the title we resolve under; a later change retries (tags arrived)
         ShowLyricsStatus("Searching for lyrics…");
         if (string.IsNullOrEmpty(path))
         {
@@ -357,12 +359,10 @@ public sealed partial class PlayerView : UserControl
 
             if (doc.IsEmpty)
             {
-                // A miss with no usable metadata (and no sidecar) isn't final — tags can still be arriving after
-                // file-loaded. Leave the path UNRESOLVED so a later metadata/duration signal re-attempts; a genuine
-                // miss (we had artist+track, the source simply had nothing) stays pinned so we don't keep refetching.
-                bool hadMetadata = !string.IsNullOrWhiteSpace(artist) && !string.IsNullOrWhiteSpace(track);
-                if (!hadMetadata && _lyricsForPath == path)
-                    _lyricsForPath = null;
+                // Pin the miss (path + the title we ran under) and DON'T clear it: a retry happens only when the
+                // track or its title metadata actually changes (see MaybeReloadOpenLyrics). So a genuinely tag-less
+                // local file settles on "No lyrics found" instead of thrashing on every Duration tick, while a late
+                // tag arrival (the title changes) still re-resolves — even if this lookup was in flight when it landed.
                 ShowLyricsStatus("No lyrics found for this track");
                 return;
             }
@@ -389,13 +389,17 @@ public sealed partial class PlayerView : UserControl
         }
     }
 
-    /// <summary>If the lyrics overlay is open and showing a different (or not-yet-resolved) track than what's now
-    /// playing, (re)resolve for the current file. Driven off BOTH the media-title and the duration signals — a
-    /// playlist advance always raises Duration even when two consecutive tracks share a title, so an open overlay
-    /// can't get stuck on a stale sheet (or the "Searching…" spinner) when the title alone doesn't change.</summary>
+    /// <summary>If the lyrics overlay is open, (re)resolve for the current file when either the track changed or its
+    /// title metadata changed since the attempt we ran. Driven off BOTH the media-title and the duration signals: a
+    /// playlist advance always raises Duration even when two tracks share a title (path differs), and tags arriving
+    /// after file-loaded raise MediaTitle (title differs). The title check is independent of the in-flight
+    /// <see cref="_lyricsForPath"/> pin, so a retry from late tags is never masked by a lookup that's still running;
+    /// a stable path+title means no redundant refetch, so a tag-less track settles instead of thrashing.</summary>
     private void MaybeReloadOpenLyrics()
     {
-        if (LyricsOverlay.Visibility == Visibility.Visible && _lyricsForPath != _currentPath)
+        if (LyricsOverlay.Visibility != Visibility.Visible)
+            return;
+        if (_lyricsForPath != _currentPath || _lyricsForTitle != Vm.MediaTitle)
             _ = LoadLyricsAsync(_currentPath);
     }
 
@@ -449,6 +453,7 @@ public sealed partial class PlayerView : UserControl
         _lyricsCts?.Dispose();
         _lyricsCts = null;
         _lyricsForPath = null;
+        _lyricsForTitle = null;
         _lyrics.Clear();
         _lyricLines = System.Array.Empty<OkPlayer.Core.LrcLine>();
         _lyricsActiveIndex = -1;
