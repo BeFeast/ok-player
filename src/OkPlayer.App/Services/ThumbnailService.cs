@@ -67,6 +67,7 @@ public sealed class ThumbnailService : IDisposable
             var mpv = new MpvContext();
             mpv.SetOption("vo", "null");                 // decode only, no window
             mpv.SetOption("audio", "no");
+            mpv.SetOption("audio-display", "no");        // an audio file's cover art is not a seekable video — no thumbnails
             mpv.SetOption("hwdec", "no");                // CPU decode: reliable, no GPU contention
             mpv.SetOption("pause", "yes");
             mpv.SetOption("keep-open", "yes");

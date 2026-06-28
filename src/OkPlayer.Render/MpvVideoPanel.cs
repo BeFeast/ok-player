@@ -70,6 +70,10 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
             _mpv.SetOption("vo", "libmpv");        // mandatory: the render API drives output
             _mpv.SetOption("hwdec", HardwareDecoding ? "auto-safe" : "no"); // hw decode (Settings -> Video)
             _mpv.SetOption("keep-open", "yes");     // hold the last frame instead of closing on EOF
+            // Don't promote an audio file's embedded cover art to a video track. Routing that single still
+            // frame through the libmpv render API freezes the UI (the app shows its own now-playing card for
+            // audio instead). Without this, a flac/mp3 with album art opens, starts playing, then hangs.
+            _mpv.SetOption("audio-display", "no");
             _mpv.SetOption("volume-max", "130");    // allow the PRD volume boost (>100%)
             _mpv.SetOption("osc", "no");            // we draw our own on-screen controls
             _mpv.SetOption("input-default-bindings", "no"); // the app owns the keyboard map
