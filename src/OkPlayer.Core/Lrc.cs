@@ -54,7 +54,8 @@ public sealed class LrcDocument
 public static class Lrc
 {
     // A bracket time tag body: minutes:seconds(.fraction). Minutes may exceed 59; fraction 1–3 digits, '.' or ':'.
-    private static readonly Regex TimeTag = new(@"^(\d+):([0-5]?\d)(?:[.:](\d{1,3}))?$", RegexOptions.Compiled);
+    // The separator is captured so the ':' variant ([mm:ss:cc]) can be read as centiseconds, not by digit length.
+    private static readonly Regex TimeTag = new(@"^(\d+):([0-5]?\d)(?:([.:])(\d{1,3}))?$", RegexOptions.Compiled);
     // Enhanced per-word stamps inside a line, e.g. "<00:12.50>word" — removed for the v1 line-level renderer.
     private static readonly Regex WordTag = new(@"<\d+:\d{1,2}(?:[.:]\d{1,3})?>", RegexOptions.Compiled);
 
@@ -84,8 +85,8 @@ public static class Lrc
                 string tag = raw.Substring(i + 1, close - i - 1);
                 if (TryParseTime(tag, out TimeSpan ts))
                     stamps.Add(ts);
-                else
-                    ApplyIdTag(tag, ref title, ref artist, ref album, ref length, ref offsetMs);
+                else if (!ApplyIdTag(tag, ref title, ref artist, ref album, ref length, ref offsetMs))
+                    break; // an unrecognized bracket (e.g. a "[Chorus]" section header) — keep it as lyric text
                 i = close + 1;
             }
 
@@ -130,31 +131,40 @@ public static class Lrc
         int minutes = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
         int seconds = int.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture);
         double frac = 0;
-        if (m.Groups[3].Success)
+        if (m.Groups[4].Success)
         {
-            string f = m.Groups[3].Value;
-            frac = int.Parse(f, CultureInfo.InvariantCulture) / Math.Pow(10, f.Length); // 1–3 digits → fractional s
+            string f = m.Groups[4].Value;
+            // The ':' LRC variant ([mm:ss:cc]) is always centiseconds; the '.' variant is .x/.xx/.xxx by length.
+            frac = m.Groups[3].Value == ":"
+                ? int.Parse(f, CultureInfo.InvariantCulture) / 100.0
+                : int.Parse(f, CultureInfo.InvariantCulture) / Math.Pow(10, f.Length);
         }
         time = TimeSpan.FromSeconds(minutes * 60 + seconds + frac);
         return true;
     }
 
-    private static void ApplyIdTag(string tag, ref string? title, ref string? artist, ref string? album,
+    /// <summary>Apply a recognized ID tag (<c>ti/ar/al/length/offset</c>) and report whether it was one. Returns
+    /// false for anything else — including a plain bracketed section header like <c>[Chorus]</c> — so the caller
+    /// keeps that text as a lyric line instead of silently swallowing it.</summary>
+    private static bool ApplyIdTag(string tag, ref string? title, ref string? artist, ref string? album,
                                    ref TimeSpan? length, ref double offsetMs)
     {
         int colon = tag.IndexOf(':');
         if (colon <= 0)
-            return;
+            return false;
         string key = tag.Substring(0, colon).Trim().ToLowerInvariant();
         string value = tag.Substring(colon + 1).Trim();
         switch (key)
         {
-            case "ti": title = NullIfEmpty(value); break;
-            case "ar": artist = NullIfEmpty(value); break;
-            case "al": album = NullIfEmpty(value); break;
-            case "length": if (TryParseTime(value, out TimeSpan len)) length = len; break;
-            case "offset": if (double.TryParse(value, NumberStyles.Integer | NumberStyles.AllowLeadingSign,
-                               CultureInfo.InvariantCulture, out double ms)) offsetMs = ms; break;
+            case "ti": title = NullIfEmpty(value); return true;
+            case "ar": artist = NullIfEmpty(value); return true;
+            case "al": album = NullIfEmpty(value); return true;
+            case "length": if (TryParseTime(value, out TimeSpan len)) length = len; return true;
+            case "offset":
+                if (double.TryParse(value, NumberStyles.Integer | NumberStyles.AllowLeadingSign,
+                        CultureInfo.InvariantCulture, out double ms)) offsetMs = ms;
+                return true;
+            default: return false;
         }
     }
 

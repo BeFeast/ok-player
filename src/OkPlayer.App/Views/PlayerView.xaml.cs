@@ -333,10 +333,12 @@ public sealed partial class PlayerView : UserControl
             return;
         var (artist, track) = OkPlayer.Core.TrackTags.Resolve(
             meta.Artist, meta.Title, Vm.MediaTitle, System.IO.Path.GetFileNameWithoutExtension(path));
+        bool privateSession = _history.Private;
         var query = new OkPlayer.App.Services.LyricsQuery(
             MediaPath: path, Artist: artist, Track: track, Album: meta.Album,
             DurationSeconds: meta.DurationSeconds,
-            AllowNetwork: true, AllowCacheWrite: !_history.Private);
+            // A private session stays fully local — sidecar/cache only; no request (not even metadata) leaves.
+            AllowNetwork: !privateSession, AllowCacheWrite: !privateSession);
 
         OkPlayer.Core.LrcDocument doc = await OkPlayer.App.Services.LyricsService.GetAsync(query);
         if (gen != _lyricsGen)

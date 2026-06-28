@@ -63,6 +63,28 @@ public class LrcTests
         Assert.Equal(0.0, Lrc.Parse("[offset:5000]\n[00:01.00]a").Lines[0].Time.TotalSeconds, 6);
     }
 
+    [Theory]
+    [InlineData("[01:02:03]x", 62.03)]  // colon variant = centiseconds, not 62.003
+    [InlineData("[01:02:50]x", 62.5)]
+    [InlineData("[01:02:5]x", 62.05)]   // a 1-digit colon field is still centiseconds
+    public void ColonVariant_FractionIsCentiseconds(string line, double expectedSeconds)
+    {
+        var doc = Lrc.Parse(line);
+        Assert.Single(doc.Lines);
+        Assert.Equal(expectedSeconds, doc.Lines[0].Time.TotalSeconds, 6);
+    }
+
+    [Fact]
+    public void BracketedSectionHeaders_ArePreservedInPlainLyrics()
+    {
+        // A plain (untimed) sheet with [Chorus]/[Verse] markers: those header-only lines must survive, not be
+        // swallowed as unknown tags and dropped.
+        var doc = Lrc.Parse("[Chorus]\nWe're no strangers to love\n[Verse 1]\nYou know the rules");
+        Assert.False(doc.HasTimings);
+        Assert.Equal(new[] { "[Chorus]", "We're no strangers to love", "[Verse 1]", "You know the rules" },
+                     doc.Lines.Select(l => l.Text));
+    }
+
     [Fact]
     public void EnhancedWordTags_AreStrippedToCleanLineText()
     {
