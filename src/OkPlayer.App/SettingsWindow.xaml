@@ -725,7 +725,12 @@
                                    Foreground="{ThemeResource OkTextSecondaryBrush}"
                                    Text="Tick the file types OK Player should handle &#x2014; they then appear in Explorer's Open with and in Windows' Default apps. Windows decides which app is the default, so use the button below to set OK Player as the default for the types you ticked." />
 
-                        <TextBlock Text="Video" FontSize="12.5" FontWeight="SemiBold" Margin="0,18,0,8" />
+                        <StackPanel Orientation="Horizontal" Spacing="2" Margin="0,12,0,0">
+                            <HyperlinkButton Content="Select all" Click="OnAssocSelectAll" Padding="6,2" FontSize="12.5" />
+                            <HyperlinkButton Content="Clear all" Click="OnAssocClearAll" Padding="6,2" FontSize="12.5" />
+                        </StackPanel>
+
+                        <TextBlock Text="Video" FontSize="12.5" FontWeight="SemiBold" Margin="0,12,0,8" />
                         <VariableSizedWrapGrid x:Name="AssocVideoPanel" Orientation="Horizontal" ItemWidth="116" ItemHeight="34" />
 
                         <TextBlock Text="Audio" FontSize="12.5" FontWeight="SemiBold" Margin="0,16,0,8" />

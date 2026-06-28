@@ -755,6 +755,37 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
+    private void OnAssocSelectAll(object sender, RoutedEventArgs e) => SetAllAssoc(true);
+    private void OnAssocClearAll(object sender, RoutedEventArgs e) => SetAllAssoc(false);
+
+    /// <summary>Assign or unassign OK Player for every listed type in one go, so the user doesn't tick (or untick)
+    /// each extension by hand. Updates the registry once per type, ticks the boxes without re-firing the per-box
+    /// handler, then notifies the shell a single time.</summary>
+    private void SetAllAssoc(bool on)
+    {
+        try
+        {
+            foreach (Panel host in new[] { (Panel)AssocVideoPanel, AssocAudioPanel })
+                foreach (var child in host.Children)
+                    if (child is CheckBox { Tag: string ext } cb)
+                    {
+                        if (on) _assoc.Assign(ext); else _assoc.Unassign(ext);
+                        cb.Checked -= OnAssocToggle;
+                        cb.Unchecked -= OnAssocToggle;
+                        cb.IsChecked = on;
+                        cb.Checked += OnAssocToggle;
+                        cb.Unchecked += OnAssocToggle;
+                    }
+            _assoc.NotifyShell();
+            AssocStatus.Text = on ? "All types added" : "All types cleared";
+        }
+        catch
+        {
+            AssocStatus.Text = "Couldn't update";
+            RefreshAssocChecks();
+        }
+    }
+
     private void OnOpenDefaultApps(object sender, RoutedEventArgs e) => FileAssociationService.OpenWindowsDefaultApps();
 
     // ── Advanced panel (the raw-mpv-config escape hatch) ───────────────
