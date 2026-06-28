@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -27,7 +28,7 @@ public static class CoverArtService
     {
         if (string.IsNullOrEmpty(mediaPath) || mediaPath.Contains("://", StringComparison.Ordinal))
             return Task.FromResult<string?>(null); // local files only — a remote fetch could stall the extractor
-        return Task.Run(() => ResolveSidecar(mediaPath) ?? Extract(mediaPath, out _), ct);
+        return Task.Run(async () => await ResolveSidecarAsync(mediaPath) ?? Extract(mediaPath, out _), ct);
     }
 
     /// <summary>Like <see cref="GetAsync"/>, but also reports whether the file <em>definitively</em> has no cover
@@ -38,9 +39,9 @@ public static class CoverArtService
     {
         if (string.IsNullOrEmpty(mediaPath) || mediaPath.Contains("://", StringComparison.Ordinal))
             return Task.FromResult<(string?, bool)>((null, false));
-        return Task.Run<(string?, bool)>(() =>
+        return Task.Run<(string?, bool)>(async () =>
         {
-            if (ResolveSidecar(mediaPath) is { } sidecar)
+            if (await ResolveSidecarAsync(mediaPath) is { } sidecar)
                 return (sidecar, false); // a sidecar image IS art — never a "no art" verdict
             string? p = Extract(mediaPath, out bool noArt);
             return (p, noArt);
@@ -54,17 +55,21 @@ public static class CoverArtService
     {
         if (string.IsNullOrEmpty(mediaPath) || mediaPath.Contains("://", StringComparison.Ordinal))
             return Task.FromResult<string?>(null);
-        return Task.Run(() => ResolveSidecar(mediaPath), ct);
+        return Task.Run(() => ResolveSidecarAsync(mediaPath), ct);
     }
 
     /// <summary>A cover image sitting next to the media file: a same-named image first (<c>track.flac</c> →
     /// <c>track.jpg</c>), else a well-known folder cover (<c>cover</c>/<c>folder</c>/<c>front</c>/<c>poster</c>/…).
     /// One directory listing, matched case-insensitively (NFS/SMB can be case-sensitive, so don't trust
-    /// <c>File.Exists</c> casing). Within a stem, the <see cref="ArtExtensions"/> preference order decides
-    /// deterministically (so <c>cover.jpg</c> beats <c>cover.png</c> regardless of enumeration order). Candidates
-    /// that aren't actually decodable images are skipped, so a zero-byte or corrupt sidecar can't mask valid
-    /// embedded art. Returns null when there's no usable sidecar or the directory can't be read.</summary>
-    private static string? ResolveSidecar(string mediaPath)
+    /// <c>File.Exists</c> casing). Selection is fully deterministic regardless of enumeration order: same-named
+    /// beats folder covers, a better <see cref="ArtExtensions"/> rank wins within that, and an ordinal path
+    /// compare breaks any remaining tie (e.g. a case-sensitive volume holding both <c>cover.jpg</c> and
+    /// <c>COVER.JPG</c>). Each candidate is then <em>fully decoded</em> in preference order and the first that
+    /// decodes wins — a header-valid but truncated/corrupt image must not win and suppress embedded extraction,
+    /// which a magic-byte sniff alone can't guarantee. Returns null when no candidate decodes or the directory
+    /// can't be read. All filesystem and decode work runs off the UI thread (callers wrap this in
+    /// <see cref="Task.Run"/>), so a network mount can't stall the dispatcher.</summary>
+    private static async Task<string?> ResolveSidecarAsync(string mediaPath)
     {
         try
         {
@@ -72,11 +77,7 @@ public static class CoverArtService
             if (string.IsNullOrEmpty(dir))
                 return null;
             string baseName = Path.GetFileNameWithoutExtension(mediaPath);
-            string? sameName = null;
-            int sameNameRank = int.MaxValue;                            // lower ArtExtensions index = preferred
-            var folderHits = new string?[FolderArtNames.Length];        // best usable file per folder-cover stem
-            var folderRanks = new int[FolderArtNames.Length];
-            Array.Fill(folderRanks, int.MaxValue);
+            var candidates = new List<(int Slot, int Rank, string Path)>(); // Slot: -1 = same-named, else FolderArtNames index
             foreach (string file in Directory.EnumerateFiles(dir))
             {
                 int rank = ArtExtensionRank(Path.GetExtension(file));
@@ -84,22 +85,29 @@ public static class CoverArtService
                     continue;                                           // not a cover-image extension
                 string stem = Path.GetFileNameWithoutExtension(file);
                 bool isSameName = string.Equals(stem, baseName, StringComparison.OrdinalIgnoreCase);
-                int folderIndex = isSameName ? -1 : FolderStemIndex(stem);
-                if (!isSameName && folderIndex < 0)
+                int slot = isSameName ? -1 : FolderStemIndex(stem);
+                if (!isSameName && slot < 0)
                     continue;                                           // neither same-name nor a known folder cover
-                // Only validate (a header read) a file that could improve on what we already have for its slot.
-                if (isSameName ? rank >= sameNameRank : rank >= folderRanks[folderIndex])
-                    continue;
-                if (!IsUsableImage(file))
-                    continue;                                           // zero-byte / not a real image — never let it mask embedded art
-                if (isSameName) { sameName = file; sameNameRank = rank; }
-                else { folderHits[folderIndex] = file; folderRanks[folderIndex] = rank; }
+                if (!HasImageHeader(file))
+                    continue;                                           // cheap reject: zero-byte / not a JPEG/PNG/WebP
+                candidates.Add((slot, rank, file));
             }
-            if (sameName is not null)
-                return sameName;
-            foreach (string? hit in folderHits)                          // in FolderArtNames preference order
-                if (hit is not null)
-                    return hit;
+            // Deterministic preference: same-named (slot -1) before folder covers, better extension rank within
+            // that, then ordinal path so the choice never depends on filesystem enumeration order.
+            candidates.Sort((a, b) =>
+            {
+                int c = a.Slot.CompareTo(b.Slot);
+                if (c != 0) return c;
+                c = a.Rank.CompareTo(b.Rank);
+                if (c != 0) return c;
+                return string.CompareOrdinal(a.Path, b.Path);
+            });
+            // Full-decode in order; the first that actually decodes wins. A truncated/corrupt file that passed the
+            // header sniff is rejected here so it can't mask valid embedded art (we fall through to the next
+            // candidate, and ultimately to embedded extraction when none decode).
+            foreach (var candidate in candidates)
+                if (await CanDecodeAsync(candidate.Path))
+                    return candidate.Path;
             return null;
         }
         catch { return null; } // unreadable directory — fall back to embedded extraction
@@ -123,11 +131,11 @@ public static class CoverArtService
         return -1;
     }
 
-    /// <summary>Cheaply reject an unusable sidecar (zero-byte, truncated, or not actually a JPEG/PNG/WebP) by
-    /// sniffing only its magic bytes — so a broken file next to the media can't be returned in place of valid
-    /// embedded art. Not a full decode; a header-valid but body-corrupt file still falls to the loader's own
-    /// guard, but that's rare and degrades to the fallback tile rather than hiding art outright.</summary>
-    private static bool IsUsableImage(string path)
+    /// <summary>Cheap prefilter: reject a candidate that obviously isn't a JPEG/PNG/WebP (zero-byte, truncated
+    /// below the magic length, or wrong type) by sniffing only its leading bytes — so we don't spin up a full
+    /// image decoder for junk. Passing this is necessary but not sufficient; <see cref="CanDecodeAsync"/> is the
+    /// authoritative usability gate, since a valid header can still front a truncated or corrupt body.</summary>
+    private static bool HasImageHeader(string path)
     {
         try
         {
@@ -144,6 +152,23 @@ public static class CoverArtService
                 && h[8] == (byte)'W' && h[9] == (byte)'E' && h[10] == (byte)'B' && h[11] == (byte)'P')
                 return true; // WebP
             return false;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>The authoritative usability check: actually decode the whole image (via the platform WIC decoder —
+    /// the same path the posters use) and report whether it succeeds. A full decode is the only thing that catches
+    /// a header-valid but truncated or corrupt file — exactly the case that must not win and suppress embedded
+    /// extraction. Its callers run it off the UI thread (wrapped in <see cref="Task.Run"/>); never throws.</summary>
+    private static async Task<bool> CanDecodeAsync(string path)
+    {
+        try
+        {
+            var file = await Windows.Storage.StorageFile.GetFileFromPathAsync(path);
+            using var stream = await file.OpenAsync(Windows.Storage.FileAccessMode.Read);
+            var decoder = await Windows.Graphics.Imaging.BitmapDecoder.CreateAsync(stream);
+            await decoder.GetPixelDataAsync(); // forces a full decode → throws on a truncated/corrupt body
+            return true;
         }
         catch { return false; }
     }
