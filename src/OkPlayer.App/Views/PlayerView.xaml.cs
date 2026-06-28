@@ -1542,8 +1542,8 @@ public sealed partial class PlayerView : UserControl
         try { model = await System.Threading.Tasks.Task.Run(() => BuildMediaInfo(engine, path)); }
         catch { return; } // engine torn down mid-read — just don't show the card
         finally { _mediaInfoBuilding = false; }
-        if (!Vm.HasMedia || _mediaInfoWindow is not null || _currentPath != path)
-            return; // the file changed, or a window opened, while we were reading
+        if (!Vm.HasMedia || _mediaInfoWindow is not null || _currentPath != path || _viewUnloaded)
+            return; // the file changed, a window opened, or the view tore down while we were reading
         _mediaInfoModel = model;
         var win = new MediaInfoWindow(model);
         win.CopyRequested += (_, _) => OnMediaInfoCopy();

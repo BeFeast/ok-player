@@ -26,7 +26,7 @@ public sealed partial class MediaInfoWindow : Window
         {
             p.IsMaximizable = false;
             p.IsMinimizable = false;
-            p.IsResizable = true; // a tool window: resizable so long track lists fit, but no min/max
+            p.IsResizable = false; // fixed-size inspector; the card scrolls internally for long track lists
         }
         // Dark caption glyphs on the light card surface.
         var tb = AppWindow.TitleBar;
