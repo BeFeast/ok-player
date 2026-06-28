@@ -53,9 +53,9 @@ public sealed class LrcDocument
 /// highlight isn't a v1 target). Engine- and UI-free for headless tests.</summary>
 public static class Lrc
 {
-    // A bracket time tag body: minutes:seconds(.fraction). Minutes may exceed 59; fraction 1–3 digits, '.' or ':'.
-    // The separator is captured so the ':' variant ([mm:ss:cc]) can be read as centiseconds, not by digit length.
-    private static readonly Regex TimeTag = new(@"^(\d+):([0-5]?\d)(?:([.:])(\d{1,3}))?$", RegexOptions.Compiled);
+    // A bracket time tag body: minutes:seconds(.fraction). Minutes may exceed 59; the fraction is 1–3 digits
+    // after a '.' or ':', read as a decimal fraction of a second by digit count (tenths/centi/milli).
+    private static readonly Regex TimeTag = new(@"^(\d+):([0-5]?\d)(?:[.:](\d{1,3}))?$", RegexOptions.Compiled);
     // Enhanced per-word stamps inside a line, e.g. "<00:12.50>word" — removed for the v1 line-level renderer.
     private static readonly Regex WordTag = new(@"<\d+:\d{1,2}(?:[.:]\d{1,3})?>", RegexOptions.Compiled);
 
@@ -137,13 +137,12 @@ public static class Lrc
             || !int.TryParse(m.Groups[2].Value, NumberStyles.None, CultureInfo.InvariantCulture, out int seconds))
             return false;
         double frac = 0;
-        if (m.Groups[4].Success)
+        if (m.Groups[3].Success)
         {
-            string f = m.Groups[4].Value; // 1–3 digits, so int.Parse can't overflow here
-            // The ':' LRC variant ([mm:ss:cc]) is always centiseconds; the '.' variant is .x/.xx/.xxx by length.
-            frac = m.Groups[3].Value == ":"
-                ? int.Parse(f, CultureInfo.InvariantCulture) / 100.0
-                : int.Parse(f, CultureInfo.InvariantCulture) / Math.Pow(10, f.Length);
+            string f = m.Groups[3].Value; // 1–3 digits, so int.Parse can't overflow here
+            // Fraction by digit count, independent of the '.'/':' separator: .x/.xx/.xxx == tenths/centi/milli.
+            // So [mm:ss:03] and [mm:ss.03] both mean +0.03s, and [mm:ss:500] is +0.5s (not +5s).
+            frac = int.Parse(f, CultureInfo.InvariantCulture) / Math.Pow(10, f.Length);
         }
         double totalSeconds = (double)minutes * 60 + seconds + frac;
         if (totalSeconds < 0 || totalSeconds > TimeSpan.MaxValue.TotalSeconds)

@@ -64,10 +64,12 @@ public class LrcTests
     }
 
     [Theory]
-    [InlineData("[01:02:03]x", 62.03)]  // colon variant = centiseconds, not 62.003
+    [InlineData("[01:02:03]x", 62.03)]   // 2-digit = centiseconds (colon separator)
     [InlineData("[01:02:50]x", 62.5)]
-    [InlineData("[01:02:5]x", 62.05)]   // a 1-digit colon field is still centiseconds
-    public void ColonVariant_FractionIsCentiseconds(string line, double expectedSeconds)
+    [InlineData("[01:02:500]x", 62.5)]   // 3-digit colon = milliseconds — must be +0.5s, NOT +5s (=67s)
+    [InlineData("[01:02:5]x", 62.5)]     // 1-digit = tenths
+    [InlineData("[01:02.500]x", 62.5)]   // the '.' separator parses identically (length-based)
+    public void Fractions_AreLengthBased_RegardlessOfSeparator(string line, double expectedSeconds)
     {
         var doc = Lrc.Parse(line);
         Assert.Single(doc.Lines);
