@@ -162,7 +162,52 @@
                            TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" />
                 <TextBlock Text="Audio" HorizontalAlignment="Center" FontSize="12" CharacterSpacing="40"
                            Foreground="{ThemeResource OkOverVideoTextFaintBrush}" />
+                <!-- on-demand synced lyrics (karaoke) for the playing track -->
+                <Button x:Name="LyricsButton" HorizontalAlignment="Center" Click="OnLyricsToggle"
+                        Background="#26FFFFFF" BorderThickness="0" CornerRadius="14" Padding="14,6" Margin="0,2,0,0"
+                        Foreground="{ThemeResource OkOverVideoTextBrush}">
+                    <StackPanel Orientation="Horizontal" Spacing="7">
+                        <FontIcon Glyph="&#xE720;" FontSize="13" />
+                        <TextBlock Text="Lyrics" FontSize="12.5" FontWeight="SemiBold" />
+                    </StackPanel>
+                </Button>
             </StackPanel>
+        </Grid>
+
+        <!-- ===== synced-lyrics overlay (audio karaoke, on-demand) ===== -->
+        <!-- Apple-Music-style: a dark scrim over the now-playing cover with the lyric sheet; the active line
+             brightens + auto-scrolls, click a line to seek. Inset clear of the caption buttons (top) and the
+             OSC (bottom). Toggled by the Lyrics button; only meaningful for audio. -->
+        <Grid x:Name="LyricsOverlay" Visibility="Collapsed" Background="#E6101014"
+              Margin="0,40,0,84" RowDefinitions="Auto,*">
+            <Grid Grid.Row="0" Padding="22,14,10,6" ColumnDefinitions="*,Auto">
+                <TextBlock x:Name="LyricsHeader" Text="LYRICS" FontSize="11" FontWeight="SemiBold" CharacterSpacing="60"
+                           VerticalAlignment="Center" Foreground="{ThemeResource OkOverVideoTextFaintBrush}" />
+                <Button Grid.Column="1" Style="{StaticResource OkOscIconButtonStyle}" Content="&#xE711;"
+                        Foreground="{ThemeResource OkOverVideoTextBrush}" Click="OnLyricsClose"
+                        ToolTipService.ToolTip="Close lyrics" />
+            </Grid>
+            <ListView x:Name="LyricsList" Grid.Row="1" SelectionMode="None" IsItemClickEnabled="True"
+                      ItemClick="OnLyricLineClick" Padding="24,4,24,48" HorizontalAlignment="Center" MaxWidth="660"
+                      ScrollViewer.HorizontalScrollMode="Disabled">
+                <ListView.ItemContainerStyle>
+                    <Style TargetType="ListViewItem">
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <Setter Property="Padding" Value="6,2" />
+                    </Style>
+                </ListView.ItemContainerStyle>
+                <ListView.ItemTemplate>
+                    <DataTemplate x:DataType="vm:LyricRow">
+                        <TextBlock Text="{x:Bind Text}" TextWrapping="Wrap" TextAlignment="Center" FontSize="16.5"
+                                   LineHeight="24" Margin="0,5"
+                                   Foreground="{ThemeResource OkOverVideoTextBrush}"
+                                   Opacity="{x:Bind LineOpacity, Mode=OneWay}"
+                                   FontWeight="{x:Bind LineWeight, Mode=OneWay}" />
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+            <TextBlock x:Name="LyricsStatus" Grid.Row="1" HorizontalAlignment="Center" VerticalAlignment="Center"
+                       Foreground="{ThemeResource OkOverVideoTextFaintBrush}" FontSize="13" Visibility="Collapsed" />
         </Grid>
 
         <!-- light-first empty / welcome state (over Mica) — hero + continue-watching shelf (PRD 2.2).

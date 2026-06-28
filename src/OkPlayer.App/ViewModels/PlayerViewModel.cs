@@ -381,6 +381,26 @@ public partial class PlayerViewModel : ObservableObject
         });
     }
 
+    /// <summary>Read the playing track's tag metadata (artist/title/album) off the UI thread — a libmpv read on
+    /// the render/UI thread can deadlock a busy core. mpv's <c>metadata/by-key</c> lookup is case-insensitive.
+    /// Returns whatever is present (nulls when absent) plus the known duration; falls back to <c>album_artist</c>
+    /// when there's no track artist. Safe after dispose (the read no-ops to null behind the engine handle lock).</summary>
+    public System.Threading.Tasks.Task<TrackMetadata> ReadMetadataAsync()
+    {
+        MpvContext? e = _engine;
+        double dur = Duration;
+        if (e is null)
+            return System.Threading.Tasks.Task.FromResult(new TrackMetadata(null, null, null, dur));
+        return System.Threading.Tasks.Task.Run(() => new TrackMetadata(
+            NullIfEmpty(e.GetPropertyString("metadata/by-key/artist"))
+                ?? NullIfEmpty(e.GetPropertyString("metadata/by-key/album_artist")),
+            NullIfEmpty(e.GetPropertyString("metadata/by-key/title")),
+            NullIfEmpty(e.GetPropertyString("metadata/by-key/album")),
+            dur));
+    }
+
+    private static string? NullIfEmpty(string? s) => string.IsNullOrWhiteSpace(s) ? null : s;
+
     private static List<AudioDevice> ReadAudioDevices(MpvContext e)
     {
         var result = new List<AudioDevice>();
@@ -853,3 +873,6 @@ public partial class PlayerViewModel : ObservableObject
             : $"{ts.Minutes}:{ts.Seconds:00}";
     }
 }
+
+/// <summary>The playing track's tag metadata for a lyrics lookup. Any field may be null when the tag is absent.</summary>
+public readonly record struct TrackMetadata(string? Artist, string? Title, string? Album, double DurationSeconds);
