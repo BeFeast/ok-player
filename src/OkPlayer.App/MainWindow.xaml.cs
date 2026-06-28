@@ -175,7 +175,14 @@ public sealed partial class MainWindow : Window
         if (on == _miniPlayer)
             return;
         if (on && _fullscreen)
+        {
             SetFullscreen(false); // can't be both; drop fullscreen first
+            if (_fullscreen) // the off-switch hit a presenter failure — don't enter a both-modes-on state
+            {
+                Services.Log.Warn("SetMiniPlayer aborted: could not leave fullscreen first");
+                return;
+            }
+        }
         Services.Log.Step($"SetPresenter({(on ? "CompactOverlay" : "Overlapped")}) [mini-player]");
         try
         {
@@ -198,7 +205,14 @@ public sealed partial class MainWindow : Window
         if (on == _fullscreen)
             return;
         if (on && _miniPlayer)
+        {
             SetMiniPlayer(false); // mutually exclusive: leave compact overlay before going fullscreen
+            if (_miniPlayer) // the off-switch hit a presenter failure — don't enter a both-modes-on state
+            {
+                Services.Log.Warn("SetFullscreen aborted: could not leave mini-player first");
+                return;
+            }
+        }
         // SetPresenter(FullScreen) is the prime suspect for "the whole desktop disappeared": a borderless
         // full-screen window that then freezes covers everything. Breadcrumb it (so a hang here is named) and
         // guard it (so a driver/compositor throw can't tear down the app).
