@@ -2143,30 +2143,62 @@ public sealed partial class PlayerView : UserControl
     }
 
     /// <summary>Open a `.m3u` as the active playlist: parse it (order preserved), keep the entries that exist
-    /// or are URLs, and play the first.</summary>
-    private void OpenM3u(string m3uPath)
+    /// or are URLs, and play the first. The file read and the per-entry <c>File.Exists</c> checks run off the
+    /// UI thread: a playlist of network (NFS/SMB) paths would otherwise block the dispatcher on each stat and
+    /// freeze the app — the exact hang reported when opening a saved .m3u of network files. While the entries
+    /// are validated we show the loading spinner so the click gives feedback.</summary>
+    private async void OpenM3u(string m3uPath)
     {
+        // Feedback during the off-thread read/validate gap (can be seconds on a slow mount). OpenMedia re-arms
+        // its own spinner + watchdog once we hand it the first entry.
+        _loading = true;
+        LoadingName.Text = DisplayNameFor(m3uPath);
+        _loadWatchdog.Stop();
+        _loadWatchdog.Start();
+        ApplyMediaPresence();
+        int gen = ++_openGeneration; // a newer open (file/folder/another playlist) supersedes this load
+
+        System.Collections.Generic.List<string> valid;
         try
         {
-            var entries = OkPlayer.Core.M3u.Parse(System.IO.File.ReadAllText(m3uPath), System.IO.Path.GetDirectoryName(m3uPath));
-            var valid = new System.Collections.Generic.List<string>();
-            foreach (var entry in entries)
-                if (entry.Contains("://") || System.IO.File.Exists(entry))
-                    valid.Add(entry);
-            if (valid.Count == 0)
+            valid = await Task.Run(() =>
             {
-                ShowToast("Empty playlist");
-                return;
-            }
-            _shuffle = false; // an .m3u defines its own order — honor it rather than shuffle it away
-            _playlist = new OkPlayer.Core.Playlist(valid, valid[0], sort: false) { Repeat = _repeat };
-            OpenMedia(valid[0]); // plays; UpdatePlaylist's SetCurrent keeps this list rather than the folder
-            Vm.Play();
+                var entries = OkPlayer.Core.M3u.Parse(System.IO.File.ReadAllText(m3uPath), System.IO.Path.GetDirectoryName(m3uPath));
+                var v = new System.Collections.Generic.List<string>();
+                foreach (var entry in entries)
+                    if (entry.Contains("://") || System.IO.File.Exists(entry))
+                        v.Add(entry);
+                return v;
+            }); // resumes on the UI thread (DispatcherQueue sync-context) to touch the playlist + XAML
         }
         catch
         {
-            ShowToast("Couldn't open this playlist");
+            if (gen == _openGeneration) FailPlaylistOpen("Couldn't open this playlist");
+            return;
         }
+
+        if (gen != _openGeneration)
+            return; // superseded by a newer open while we were validating
+
+        if (valid.Count == 0)
+        {
+            FailPlaylistOpen("Empty playlist");
+            return;
+        }
+
+        _shuffle = false; // an .m3u defines its own order — honor it rather than shuffle it away
+        _playlist = new OkPlayer.Core.Playlist(valid, valid[0], sort: false) { Repeat = _repeat };
+        OpenMedia(valid[0]); // plays; UpdatePlaylist's SetCurrent keeps this list rather than the folder
+        Vm.Play();
+    }
+
+    /// <summary>Tear down the loading spinner and surface a toast when a playlist open can't proceed.</summary>
+    private void FailPlaylistOpen(string message)
+    {
+        _loading = false;
+        _loadWatchdog.Stop();
+        ShowToast(message);
+        ApplyMediaPresence();
     }
 
     private void OnChaptersTab(object sender, TappedRoutedEventArgs e) => SetPanelTab(false);
