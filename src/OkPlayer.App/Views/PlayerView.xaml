@@ -216,7 +216,7 @@
                               SizeChanged="OnRecentsViewportSizeChanged">
                     <Grid MinHeight="{Binding ViewportHeight, ElementName=VariationAScroll}">
                     <StackPanel MaxWidth="920" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="44,36">
-                        <TextBlock Text="Continue watching" FontSize="30" FontWeight="SemiBold" CharacterSpacing="-15"
+                        <TextBlock x:Name="ContinueHeader" Text="Continue watching" FontSize="30" FontWeight="SemiBold" CharacterSpacing="-15"
                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
                         <TextBlock Text="Pick up where you left off &#x2014; or open something new." FontSize="13.5" Margin="0,6,0,0"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
@@ -714,6 +714,7 @@
                                                 <Ellipse Width="9" Height="9" Stroke="{ThemeResource OkTextSecondaryBrush}"
                                                          StrokeThickness="1.3" Visibility="{x:Bind CircleVisibility}" />
                                                 <FontIcon Glyph="&#xE73E;" FontSize="13" Foreground="{ThemeResource OkAccentSecondaryTextBrush}" Visibility="{x:Bind CheckVisibility}" />
+                                                <FontIcon Glyph="&#xE768;" FontSize="13" Foreground="{ThemeResource OkAccentTextBrush}" Visibility="{x:Bind PlayingVisibility}" />
                                             </Grid>
                                             <TextBlock Grid.Column="1" Text="{x:Bind Title}" VerticalAlignment="Center"
                                                        TextTrimming="CharacterEllipsis" Style="{StaticResource OkBodyTextStyle}" />

@@ -28,6 +28,7 @@ public sealed partial class PlayerView : UserControl
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _loadWatchdog; // backstop: never let the spinner hang forever
     private bool _chromeVisible; // starts false to match the chrome's initial Opacity=0, so the first RevealChrome actually animates it in
     private bool _panelOpen;
+    private bool _panelTabUserChosen; // the user tapped a panel tab for this file -> stop auto-defaulting it
     private bool _syncingChapter;
     private readonly ThumbnailService _thumbs = new();
     private readonly ThumbnailService _posterThumbs = new(); // decode-only engine for continue-watching posters
@@ -164,10 +165,11 @@ public sealed partial class PlayerView : UserControl
         _history.Changed += OnHistoryChanged;
         Vm.EndReached += OnEndReached; // auto-advance the folder playlist when a file plays out
         Vm.LoadFailed += OnLoadFailed; // tear down the loading spinner if an open fails (e.g. a dead URL)
-        SetPanelTab(false);            // the right panel opens on the Chapters tab by default
+        SetPanelTab(false);            // initial visual; RefreshPanelTabs picks the real default per file on open
         Vm.Chapters.CollectionChanged += (_, _) =>
         {
             UpdateChaptersEmpty(); // seek-bar ticks bind Vm.ChapterFractions
+            RefreshPanelTabs();    // chapters arriving/clearing changes whether the Chapters tab is offered at all
             // Re-warm when the chapter set changes (embedded chapters arriving after user ones, edits, …).
             // Defer so a multi-step rebuild (clear + N adds) settles before we snapshot the list.
             DispatcherQueue.TryEnqueue(WarmChapterThumbnails);
@@ -1016,6 +1018,10 @@ public sealed partial class PlayerView : UserControl
         // Two welcome layouts: recents-forward "Continue watching" when there is resumable history,
         // else the centred first-run hero.
         bool hasRecents = Recents.Count > 0;
+        // You don't "watch" audio: when every resumable item is a track, call the shelf "Continue listening".
+        // Mixed or any video keeps "Continue watching" (there's something to watch).
+        bool allAudio = hasRecents && Recents.All(r => OkPlayer.Core.MediaFormats.IsAudio(r.Path));
+        ContinueHeader.Text = allAudio ? "Continue listening" : "Continue watching";
         WelcomeVariationA.Visibility = hasRecents ? Visibility.Visible : Visibility.Collapsed;
         WelcomeFirstRun.Visibility = hasRecents ? Visibility.Collapsed : Visibility.Visible;
         RebuildVisibleRecents(); // pick the leading cards that fit + the "+N more" hint
@@ -1138,6 +1144,11 @@ public sealed partial class PlayerView : UserControl
                     continue; // already decided this file has no usable (non-black) frame — keep the gradient
 
                 string poster = System.IO.Path.Combine(dir, PosterHash(entry.Path) + ".png");
+                if (OkPlayer.Core.MediaFormats.IsAudio(entry.Path))
+                {
+                    await EnsureAudioPosterAsync(entry, poster); // an audio file's "poster" is its album art, not a frame
+                    continue;
+                }
                 // Keep an existing poster only if it isn't (near-)black: earlier builds cached black frames and
                 // a fixed grab can land on a dark scene, so re-validate rather than trusting the cache forever.
                 if (System.IO.File.Exists(poster) && await MeanLumaAsync(poster) is double cached && cached >= minUsableLuma)
@@ -1168,6 +1179,29 @@ public sealed partial class PlayerView : UserControl
         }
         catch { /* best effort */ }
         finally { _generatingPosters = false; }
+    }
+
+    /// <summary>Fill an audio recent's poster from its embedded album art — there's no video frame to grab.
+    /// Caches the art into the persistent posters dir and records it on the history entry so later visits load
+    /// instantly; marks the file posterless (gradient) when it carries no embedded picture, so we don't re-probe
+    /// it every visit. Best-effort: any failure just leaves the gradient.</summary>
+    private async System.Threading.Tasks.Task EnsureAudioPosterAsync(RecentEntry entry, string posterPath)
+    {
+        if (entry.Poster is not null)
+            return; // already shown (loaded from the cached poster path in LoadRecents)
+        var (art, definitelyNoArt) = await Services.CoverArtService.GetWithStatusAsync(entry.Path);
+        if (art is not null && System.IO.File.Exists(art))
+        {
+            try { System.IO.File.Copy(art, posterPath, overwrite: true); }
+            catch { return; }
+            _history.SetPoster(entry.Path, posterPath);
+            DispatcherQueue.TryEnqueue(() => entry.Poster = PosterImage.Load(posterPath));
+        }
+        else if (definitelyNoArt)
+        {
+            _history.SetPoster(entry.Path, NoUsablePoster); // really has no picture — keep the gradient, skip future probes
+        }
+        // else: a transient failure (timeout/locked/unreadable) — leave the gradient and retry on a later pass
     }
 
     /// <summary>Pick a non-black poster frame. A single fixed 20% grab often lands on a fade/dark scene (studio
@@ -1611,6 +1645,7 @@ public sealed partial class PlayerView : UserControl
         if (_panelOpen)
         {
             UpdateChaptersEmpty();
+            RefreshPanelTabs();      // land on the right default tab (audio/no-chapters -> Up Next) and hide an empty Chapters tab
             LoadBookmarks();
             ChaptersPanel.Visibility = Visibility.Visible;
             PanelBackdrop.Visibility = Visibility.Visible; // arm light-dismiss: a click outside the panel closes it
@@ -1955,6 +1990,7 @@ public sealed partial class PlayerView : UserControl
                                     // again right after this call); clearing here drops a stale value if that file
                                     // never reported a Duration, so the next normal open isn't force-seeked.
             _openGeneration++;     // invalidate any in-flight chapter-warm pass for the previous file
+            _panelTabUserChosen = false; // a new file re-defaults the panel tab (audio -> Up Next, video -> Chapters)
             // resume only when the user keeps that on (Settings -> Playback) and didn't ask to start over
             // (History's "Play from start"); applied on the first Duration
             var record = _history.Get(pathOrUrl);
@@ -2210,8 +2246,24 @@ public sealed partial class PlayerView : UserControl
         ApplyMediaPresence();
     }
 
-    private void OnChaptersTab(object sender, TappedRoutedEventArgs e) => SetPanelTab(false);
-    private void OnUpNextTab(object sender, TappedRoutedEventArgs e) => SetPanelTab(true);
+    private void OnChaptersTab(object sender, TappedRoutedEventArgs e) { _panelTabUserChosen = true; SetPanelTab(false); }
+    private void OnUpNextTab(object sender, TappedRoutedEventArgs e) { _panelTabUserChosen = true; SetPanelTab(true); }
+
+    /// <summary>True when the open file is audio (by extension) — used to default the side panel to Up Next,
+    /// since chapters are meaningless for music.</summary>
+    private bool IsCurrentAudio() => _currentPath is { } p && OkPlayer.Core.MediaFormats.IsAudio(p);
+
+    /// <summary>Pick the default panel tab for the current file: Up Next for audio or any file without chapters
+    /// (chapters are meaningless there), the Chapters tab for video that has them. Both tabs stay available — the
+    /// Chapters tab also hosts the file's bookmarks and the "Bookmark here" action, which are independent of
+    /// chapters, so it must never be hidden. Honors a manual tab tap for the current file
+    /// (<see cref="_panelTabUserChosen"/>, reset on each open).</summary>
+    private void RefreshPanelTabs()
+    {
+        if (_panelTabUserChosen)
+            return; // respect the user's explicit pick for this file
+        SetPanelTab(IsCurrentAudio() || Vm.Chapters.Count == 0); // audio / no chapters -> Up Next; else Chapters
+    }
 
     /// <summary>Switch the right panel between its Chapters and Up-Next tabs (one panel, two views).</summary>
     private void SetPanelTab(bool upNext)
