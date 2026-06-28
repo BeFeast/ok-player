@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OK Player — the most elegant media player on Windows</title>
+<meta name="description" content="OK Player is a Windows-native media player: an IINA-class GUI over the mpv engine, in native Fluent/Mica. Elegant design, beautiful chapters with thumbnails, great subtitles, precise navigation, and time-synced lyrics.">
+<meta property="og:title" content="OK Player — the most elegant media player on Windows">
+<meta property="og:description" content="An IINA-class player for Windows: native Fluent/Mica polish over the mpv engine. Chapters with thumbnails, great subtitle UX, precise navigation, synced lyrics.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="../screenshots/chapters-godfather.png">
+<style>
+  :root{
+    --bg:#0e0f13; --bg2:#15171d; --card:#191c24; --line:#272b36;
+    --fg:#eef0f4; --muted:#a6acbb; --accent:#2ec5b6; --accent2:#37e0cf;
+    --radius:14px; --max:1080px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:linear-gradient(180deg,#0c0d11,#0e0f13 40%);
+    color:var(--fg); font:16px/1.6 "Segoe UI Variable","Segoe UI",system-ui,-apple-system,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--accent2); text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:var(--max); margin:0 auto; padding:0 24px}
+  .btn{
+    display:inline-block; background:var(--accent); color:#06201d; font-weight:650;
+    padding:13px 26px; border-radius:999px; transition:transform .12s ease, background .12s ease;
+  }
+  .btn:hover{background:var(--accent2); text-decoration:none; transform:translateY(-1px)}
+  .btn.ghost{background:transparent; color:var(--fg); border:1px solid var(--line); font-weight:550}
+  .btn.ghost:hover{border-color:var(--accent); background:#ffffff08}
+
+  header.hero{padding:88px 0 40px; text-align:center}
+  .eyebrow{color:var(--muted); letter-spacing:.14em; text-transform:uppercase; font-size:12px; font-weight:600}
+  h1{font-size:clamp(34px,6vw,60px); line-height:1.05; margin:.35em 0 .15em; letter-spacing:-.02em}
+  .lede{color:var(--muted); font-size:clamp(17px,2.4vw,21px); max-width:680px; margin:0 auto 26px}
+  .cta{display:flex; gap:14px; justify-content:center; flex-wrap:wrap; margin-bottom:10px}
+  .fineprint{color:var(--muted); font-size:13.5px; margin-top:14px}
+  .shot{width:100%; height:auto; border-radius:var(--radius); border:1px solid var(--line);
+    box-shadow:0 30px 80px -30px #000; display:block}
+  .hero-shot{max-width:920px; margin:44px auto 0}
+
+  section{padding:64px 0}
+  h2{font-size:clamp(24px,3.4vw,34px); letter-spacing:-.01em; margin:0 0 8px}
+  .sub{color:var(--muted); margin:0 0 36px; max-width:680px}
+
+  .pillars{display:grid; grid-template-columns:repeat(2,1fr); gap:18px}
+  @media(max-width:720px){.pillars{grid-template-columns:1fr}}
+  .pillar{background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:24px}
+  .pillar .n{color:var(--accent); font-weight:700; font-size:14px; letter-spacing:.04em}
+  .pillar h3{margin:.35em 0 .35em; font-size:20px}
+  .pillar p{color:var(--muted); margin:0}
+
+  .gallery{display:grid; grid-template-columns:repeat(2,1fr); gap:18px}
+  @media(max-width:720px){.gallery{grid-template-columns:1fr}}
+  figure{margin:0}
+  figcaption{color:var(--muted); font-size:14px; margin-top:10px; text-align:center}
+
+  .more{display:grid; grid-template-columns:repeat(2,1fr); gap:10px 28px; color:var(--muted); margin-top:6px}
+  @media(max-width:720px){.more{grid-template-columns:1fr}}
+  .more b{color:var(--fg); font-weight:600}
+
+  .specs{display:flex; flex-wrap:wrap; gap:10px}
+  .chip{background:#ffffff0a; border:1px solid var(--line); border-radius:999px; padding:7px 14px; color:var(--muted); font-size:14px}
+
+  .download{background:var(--bg2); border:1px solid var(--line); border-radius:var(--radius); padding:40px; text-align:center}
+  footer{border-top:1px solid var(--line); padding:34px 0 60px; color:var(--muted); font-size:14px; text-align:center}
+  .divider{height:1px; background:var(--line); border:0; margin:0}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">Windows 11 · free &amp; open-source</div>
+    <h1>The most elegant media&nbsp;player on Windows</h1>
+    <p class="lede">An IINA-class player for Windows: native Fluent/Mica polish over the proven <strong>mpv</strong> engine. A pure player — open a file, folder, or URL and it just plays, beautifully.</p>
+    <div class="cta">
+      <a class="btn" href="https://github.com/BeFeast/ok-player/releases/latest">Download for Windows</a>
+      <a class="btn ghost" href="https://github.com/BeFeast/ok-player">View on GitHub</a>
+    </div>
+    <div class="fineprint">Self-contained installer or portable zip · 64-bit · no runtime to install</div>
+    <div class="hero-shot">
+      <img class="shot" src="../screenshots/chapters-godfather.png" alt="OK Player showing a film with a chapter panel of thumbnail previews">
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <h2>Four pillars</h2>
+    <p class="sub">OK Player is built around four things, ranked — when they conflict, the lower one wins.</p>
+    <div class="pillars">
+      <div class="pillar"><div class="n">01</div><h3>Most elegant design</h3><p>Native Fluent/Mica, macOS-utility-grade refinement. A single video plane with controls that auto-hide, and a proper now-playing card for audio.</p></div>
+      <div class="pillar"><div class="n">02</div><h3>Best subtitle UX</h3><p>Effortless loading, comfortable style presets, dual subtitles, precise sync — and captions that lift clear of the on-screen controls.</p></div>
+      <div class="pillar"><div class="n">03</div><h3>Chapters with thumbnails</h3><p>Chapters as thumbnail + title + time, not bare timestamps. Seek-bar hover previews, user bookmarks, and auto-chapters for files without them.</p></div>
+      <div class="pillar"><div class="n">04</div><h3>Screenshots &amp; precise nav</h3><p>Clean and with-subtitles capture, copy-to-clipboard, frame stepping, exact timecode jumps, and frame-accurate readouts.</p></div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<section>
+  <div class="wrap">
+    <h2>See it</h2>
+    <p class="sub">Real frames from the app — chapters with thumbnails, the audio now-playing card, and time-synced lyrics.</p>
+    <div class="gallery">
+      <figure><img class="shot" src="../screenshots/chapters-eyes-wide-shut.png" alt="Chapter panel with per-chapter thumbnails"><figcaption>Chapters as thumbnail + title + time</figcaption></figure>
+      <figure><img class="shot" src="../screenshots/now-playing-audio.png" alt="Audio now-playing card with embedded cover art"><figcaption>Now-playing card with embedded cover art</figcaption></figure>
+      <figure><img class="shot" src="../screenshots/lyrics-overlay.png" alt="Time-synced lyrics overlay"><figcaption>Time-synced lyrics for audio</figcaption></figure>
+      <figure><img class="shot" src="../screenshots/chapters-godfather.png" alt="Chapter panel on a film with 23 chapters"><figcaption>Hover previews &amp; bookmarks on the seek bar</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<section>
+  <div class="wrap">
+    <h2>Also in the box</h2>
+    <div class="more">
+      <div><b>🎤 Synced lyrics</b> — Apple-Music-style overlay for audio; local-first, private sessions stay offline.</div>
+      <div><b>🎵 Music mode</b> — Up-Next-first panel, “Continue listening”, sidecar cover art.</div>
+      <div><b>🗂 Folder-as-playlist</b> — drop a folder; repeat / shuffle / auto-advance.</div>
+      <div><b>↪️ Resume</b> — picks up where you left off, per file.</div>
+      <div><b>🪟 Window modes</b> — mini-player / PiP, always-on-top, fullscreen.</div>
+      <div><b>🔁 A–B loop</b>, speed control, per-output audio device &amp; loudness normalization.</div>
+      <div><b>🔒 Private session</b> — clear-history &amp; retention controls.</div>
+      <div><b>⚙️ Escape hatch</b> — smart defaults, with raw <code>mpv.conf</code> for power users.</div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<section>
+  <div class="wrap download">
+    <h2>Download OK Player</h2>
+    <p class="sub" style="margin:0 auto 22px">Windows 11, 64-bit. Self-contained — nothing else to install.</p>
+    <div class="cta"><a class="btn" href="https://github.com/BeFeast/ok-player/releases/latest">Get the latest release</a></div>
+    <p class="fineprint">Not code-signed yet — Windows SmartScreen may show a one-time warning; click <b>More info → Run anyway</b>.</p>
+    <div class="specs" style="justify-content:center; margin-top:22px">
+      <span class="chip">C# / .NET 9 · WinUI 3 · Mica</span>
+      <span class="chip">Engine: libmpv</span>
+      <span class="chip">Windows 11 only</span>
+      <span class="chip">GPL-3.0-or-later</span>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    OK Player is free and <a href="https://github.com/BeFeast/ok-player">open-source</a> (GPL-3.0-or-later) · built on <a href="https://mpv.io">mpv</a> / libmpv · in the spirit of <a href="https://iina.io">IINA</a> for macOS.
+  </div>
+</footer>
+
+</body>
+</html>
