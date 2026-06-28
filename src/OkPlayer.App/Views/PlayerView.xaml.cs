@@ -1571,15 +1571,24 @@ public sealed partial class PlayerView : UserControl
             UpdateChaptersEmpty();
             LoadBookmarks();
             ChaptersPanel.Visibility = Visibility.Visible;
+            PanelBackdrop.Visibility = Visibility.Visible; // arm light-dismiss: a click outside the panel closes it
             PanelShowSb.Begin();
             RevealChrome(); // an open panel pins the chrome
             WarmChapterThumbnails(); // ensure previews are filling (usually already warmed on open)
         }
         else
         {
+            PanelBackdrop.Visibility = Visibility.Collapsed;
             PanelHideSb.Begin(); // the Completed handler collapses it
             ResetIdleTimer();
         }
+    }
+
+    private void OnPanelBackdropPressed(object sender, PointerRoutedEventArgs e)
+    {
+        if (_panelOpen)
+            TogglePanel(); // click outside the panel dismisses it (light-dismiss)
+        e.Handled = true;  // consume the click so it doesn't also reach the OSC underneath
     }
 
     private void OnChapterSelectionChanged(object sender, SelectionChangedEventArgs e)

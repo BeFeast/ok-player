@@ -558,6 +558,11 @@
             <Polygon Points="0,0 12,0 6,6" Fill="#C7121215" HorizontalAlignment="Center" />
         </StackPanel>
 
+        <!-- Light-dismiss backdrop for the Chapters/Up-Next panel: a full-canvas transparent hit target shown
+             only while the panel is open, so a click anywhere outside the panel closes it. It sits above the OSC
+             but below the panel (next element), so clicks on the panel itself still land on the panel. -->
+        <Grid x:Name="PanelBackdrop" Background="Transparent" Visibility="Collapsed" PointerPressed="OnPanelBackdropPressed" />
+
         <!-- ===== right-docked Chapters / Up Next panel (slide-in Mica, design band 6) ===== -->
         <!-- inset as a floating card: clear of the window caption buttons (top) and the OSC (bottom), so the
              translucent panel never overlaps those controls (no double-close, no controls bleeding through) -->
