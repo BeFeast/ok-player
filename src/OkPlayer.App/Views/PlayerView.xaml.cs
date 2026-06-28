@@ -217,6 +217,22 @@ public sealed partial class PlayerView : UserControl
     private async void OnOpenUrlClick(object sender, RoutedEventArgs e)
     {
         var input = new TextBox { PlaceholderText = "https://…  or  smb://host/share/file.mkv" };
+        // Pre-fill from the clipboard when it holds a link, so "Open URL" doubles as paste-a-URL: copy a link in
+        // the browser, click here, press Enter. Reliable regardless of keyboard focus (unlike the Ctrl+V accel).
+        try
+        {
+            var clip = Windows.ApplicationModel.DataTransfer.Clipboard.GetContent();
+            if (clip.Contains(StandardDataFormats.Text))
+            {
+                string clipped = (await clip.GetTextAsync() ?? string.Empty).Trim();
+                if (OkPlayer.Core.MediaFormats.IsPlayableUrl(clipped))
+                {
+                    input.Text = clipped;
+                    input.SelectAll();
+                }
+            }
+        }
+        catch { /* clipboard unavailable — just open an empty dialog */ }
         var dialog = new ContentDialog
         {
             Title = "Open URL",

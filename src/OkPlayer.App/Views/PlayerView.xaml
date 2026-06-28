@@ -747,16 +747,17 @@
         </Grid>
 
         <!-- ===== drag-over state: accent drop-zone + dim the rest ===== -->
+        <!-- Drag-over feedback: a gentle dim + a single contained "Drop to play" card (no full-window frame,
+             so it reads cleanly over the welcome screen as well as over video). -->
         <Grid x:Name="DragOverlay" Visibility="Collapsed" IsHitTestVisible="False">
-            <Border Background="#4DFFFFFF" />
-            <Border Margin="14" CornerRadius="10" BorderThickness="2"
-                    BorderBrush="{ThemeResource OkAccentBrush}" Background="{ThemeResource OkAccentTintBrush}">
-                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10">
-                    <FontIcon Glyph="&#xE898;" FontSize="30" Foreground="{ThemeResource OkAccentSecondaryTextBrush}" />
+            <Border Background="#14000000" />
+            <Border HorizontalAlignment="Center" VerticalAlignment="Center" CornerRadius="14" Padding="34,26"
+                    BorderThickness="1.5" BorderBrush="{ThemeResource OkAccentBrush}"
+                    Background="{ThemeResource OkSurfaceCardBrush}">
+                <StackPanel HorizontalAlignment="Center" Spacing="10">
+                    <FontIcon Glyph="&#xE898;" FontSize="28" Foreground="{ThemeResource OkAccentTextBrush}" />
                     <TextBlock Text="Drop to play" FontSize="15" FontWeight="SemiBold"
                                Foreground="{ThemeResource OkAccentTextBrush}" HorizontalAlignment="Center" />
-                    <TextBlock x:Name="DragFileName" FontSize="12" Foreground="{ThemeResource OkAccentSecondaryTextBrush}" HorizontalAlignment="Center"
-                               TextTrimming="CharacterEllipsis" MaxWidth="320" />
                 </StackPanel>
             </Border>
         </Grid>
