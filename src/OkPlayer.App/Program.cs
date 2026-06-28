@@ -4,6 +4,7 @@ using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.Windows.AppLifecycle;
 using OkPlayer.App.Services;
+using Velopack;
 
 namespace OkPlayer.App;
 
@@ -17,6 +18,19 @@ public static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        // VERY FIRST — before any of our own startup. During install/update/uninstall Velopack relaunches this
+        // exe with --veloapp-* hook arguments; Run() detects them, executes the matching fast-exit hook, and
+        // exits the process from inside this call. Anything placed above it would run on every hook invocation
+        // (and could trip the hooks' hard timeouts), so all our real startup lives strictly after it. On a normal
+        // user launch Run() does nothing and returns. No-ops on dev/portable builds (not Velopack-installed).
+        VelopackApp.Build()
+            .SetAutoApplyOnStartup(false)        // we apply on the user's terms (a restart prompt), never silently on launch
+            .Run();
+        // NB: the file-type ProgID is repointed at the current exe on normal startup (App.OnLaunched), not via a
+        // Velopack first-run hook — so the refresh runs after Log.Init (failures are logged) and on EVERY launch,
+        // covering an updated install path regardless of when Velopack's hooks fire.
+
+        // Reached only on a genuine user launch (hook launches already exited inside Run() above).
         // Diagnostics first — before anything can fault — so a launch-time crash/hang is on disk. Best-effort.
         Log.Init();
         Log.InstallGlobalHandlers();

@@ -64,6 +64,28 @@ public sealed class FileAssociationService
         _registered = true;
     }
 
+    /// <summary>If the ProgID's open-command no longer points at the exe now running — e.g. the app was updated
+    /// to a new install path (the Inno→Velopack move, or a future versioned layout) — rewrite the registration so
+    /// a double-click / "Open with" launches THIS build instead of a removed one. Returns true if it rewrote
+    /// anything. Deliberately a no-op when nothing is registered yet (don't create associations the user never
+    /// asked for) and when the path already matches. Call on startup; wrap in try/catch (registry can throw).</summary>
+    public bool RefreshCommandIfStale()
+    {
+        if (!CanRegister)
+            return false;
+        string want = $"\"{_exePath}\" \"%1\"";
+        using (var oc = Registry.CurrentUser.OpenSubKey($@"Software\Classes\{ProgId}\shell\open\command"))
+        {
+            if (oc?.GetValue("") is not string have)
+                return false; // never registered → nothing to refresh; leave the user's associations untouched
+            if (string.Equals(have, want, StringComparison.OrdinalIgnoreCase))
+                return false; // already points at the current exe
+        }
+        EnsureRegistered(); // a fresh instance: _registered is false, so this rewrites the command to _exePath
+        NotifyShell();
+        return true;
+    }
+
     public bool IsAssigned(string ext)
     {
         ext = Norm(ext);
