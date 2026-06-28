@@ -28,6 +28,7 @@ public sealed partial class PlayerView : UserControl
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _loadWatchdog; // backstop: never let the spinner hang forever
     private bool _chromeVisible; // starts false to match the chrome's initial Opacity=0, so the first RevealChrome actually animates it in
     private bool _panelOpen;
+    private bool _panelTabUserChosen; // the user tapped a panel tab for this file -> stop auto-defaulting it
     private bool _syncingChapter;
     private readonly ThumbnailService _thumbs = new();
     private readonly ThumbnailService _posterThumbs = new(); // decode-only engine for continue-watching posters
@@ -164,10 +165,11 @@ public sealed partial class PlayerView : UserControl
         _history.Changed += OnHistoryChanged;
         Vm.EndReached += OnEndReached; // auto-advance the folder playlist when a file plays out
         Vm.LoadFailed += OnLoadFailed; // tear down the loading spinner if an open fails (e.g. a dead URL)
-        SetPanelTab(false);            // the right panel opens on the Chapters tab by default
+        SetPanelTab(false);            // initial visual; RefreshPanelTabs picks the real default per file on open
         Vm.Chapters.CollectionChanged += (_, _) =>
         {
             UpdateChaptersEmpty(); // seek-bar ticks bind Vm.ChapterFractions
+            RefreshPanelTabs();    // chapters arriving/clearing changes whether the Chapters tab is offered at all
             // Re-warm when the chapter set changes (embedded chapters arriving after user ones, edits, …).
             // Defer so a multi-step rebuild (clear + N adds) settles before we snapshot the list.
             DispatcherQueue.TryEnqueue(WarmChapterThumbnails);
@@ -1611,6 +1613,7 @@ public sealed partial class PlayerView : UserControl
         if (_panelOpen)
         {
             UpdateChaptersEmpty();
+            RefreshPanelTabs();      // land on the right default tab (audio/no-chapters -> Up Next) and hide an empty Chapters tab
             LoadBookmarks();
             ChaptersPanel.Visibility = Visibility.Visible;
             PanelBackdrop.Visibility = Visibility.Visible; // arm light-dismiss: a click outside the panel closes it
@@ -1955,6 +1958,7 @@ public sealed partial class PlayerView : UserControl
                                     // again right after this call); clearing here drops a stale value if that file
                                     // never reported a Duration, so the next normal open isn't force-seeked.
             _openGeneration++;     // invalidate any in-flight chapter-warm pass for the previous file
+            _panelTabUserChosen = false; // a new file re-defaults the panel tab (audio -> Up Next, video -> Chapters)
             // resume only when the user keeps that on (Settings -> Playback) and didn't ask to start over
             // (History's "Play from start"); applied on the first Duration
             var record = _history.Get(pathOrUrl);
@@ -2210,8 +2214,33 @@ public sealed partial class PlayerView : UserControl
         ApplyMediaPresence();
     }
 
-    private void OnChaptersTab(object sender, TappedRoutedEventArgs e) => SetPanelTab(false);
-    private void OnUpNextTab(object sender, TappedRoutedEventArgs e) => SetPanelTab(true);
+    private void OnChaptersTab(object sender, TappedRoutedEventArgs e) { _panelTabUserChosen = true; SetPanelTab(false); }
+    private void OnUpNextTab(object sender, TappedRoutedEventArgs e) { _panelTabUserChosen = true; SetPanelTab(true); }
+
+    /// <summary>True when the open file is audio (by extension) — used to default the side panel to Up Next,
+    /// since chapters are meaningless for music.</summary>
+    private bool IsCurrentAudio() => _currentPath is { } p && OkPlayer.Core.MediaFormats.IsAudio(p);
+
+    /// <summary>Decide which panel tabs are offered and which one is the default for the current file. Chapters
+    /// are hidden when the file has none (most audio, many videos) so the segmented control only appears when
+    /// there's a real choice; audio defaults to Up Next. Honors a manual tab tap for the current file
+    /// (<see cref="_panelTabUserChosen"/>, reset on each open).</summary>
+    private void RefreshPanelTabs()
+    {
+        bool hasChapters = Vm.Chapters.Count > 0;
+        // Only show the Chapters|Up Next toggle when Chapters is a real option; otherwise the panel is Up Next only.
+        PanelTabs.Visibility = hasChapters ? Visibility.Visible : Visibility.Collapsed;
+        ChaptersTab.Visibility = hasChapters ? Visibility.Visible : Visibility.Collapsed;
+
+        if (!hasChapters)
+        {
+            SetPanelTab(true); // nothing to switch to — Up Next is the only meaningful view
+            return;
+        }
+        if (_panelTabUserChosen)
+            return;            // respect the user's explicit pick for this file
+        SetPanelTab(IsCurrentAudio()); // audio -> Up Next, video -> Chapters
+    }
 
     /// <summary>Switch the right panel between its Chapters and Up-Next tabs (one panel, two views).</summary>
     private void SetPanelTab(bool upNext)

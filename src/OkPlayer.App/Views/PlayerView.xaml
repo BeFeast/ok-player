@@ -586,7 +586,7 @@
 
             <!-- segmented header (Chapters | Up Next) + close -->
             <Grid Grid.Row="0" Padding="14,14,8,6" ColumnDefinitions="*,Auto">
-                <Border Background="#14000000" CornerRadius="8" Padding="3" HorizontalAlignment="Left">
+                <Border x:Name="PanelTabs" Background="#14000000" CornerRadius="8" Padding="3" HorizontalAlignment="Left">
                     <StackPanel Orientation="Horizontal">
                         <Border x:Name="ChaptersTab" CornerRadius="6" Tapped="OnChaptersTab">
                             <TextBlock x:Name="ChaptersTabText" Text="Chapters" FontSize="12.5" FontWeight="SemiBold" Padding="16,6" />
@@ -714,6 +714,7 @@
                                                 <Ellipse Width="9" Height="9" Stroke="{ThemeResource OkTextSecondaryBrush}"
                                                          StrokeThickness="1.3" Visibility="{x:Bind CircleVisibility}" />
                                                 <FontIcon Glyph="&#xE73E;" FontSize="13" Foreground="{ThemeResource OkAccentSecondaryTextBrush}" Visibility="{x:Bind CheckVisibility}" />
+                                                <FontIcon Glyph="&#xE768;" FontSize="13" Foreground="{ThemeResource OkAccentTextBrush}" Visibility="{x:Bind PlayingVisibility}" />
                                             </Grid>
                                             <TextBlock Grid.Column="1" Text="{x:Bind Title}" VerticalAlignment="Center"
                                                        TextTrimming="CharacterEllipsis" Style="{StaticResource OkBodyTextStyle}" />

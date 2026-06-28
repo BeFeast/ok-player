@@ -34,9 +34,12 @@ public sealed class PlaylistRow
     public bool IsWatched { get; set; }   // seen before (per-file memory) — dimmed + check glyph
 
     public Microsoft.UI.Xaml.Visibility CurrentVisibility => Vis(IsCurrent);
-    public Microsoft.UI.Xaml.Visibility NextVisibility => Vis(IsNext);
-    public Microsoft.UI.Xaml.Visibility CheckVisibility => Vis(IsWatched);
-    public Microsoft.UI.Xaml.Visibility CircleVisibility => Vis(!IsWatched);
+    public Microsoft.UI.Xaml.Visibility NextVisibility => Vis(IsNext && !IsCurrent);
+    // Leading marker, mutually exclusive: the now-playing row gets the accent "playing" glyph; a previously
+    // seen row gets a check; everything else gets the hollow circle.
+    public Microsoft.UI.Xaml.Visibility PlayingVisibility => Vis(IsCurrent);
+    public Microsoft.UI.Xaml.Visibility CheckVisibility => Vis(IsWatched && !IsCurrent);
+    public Microsoft.UI.Xaml.Visibility CircleVisibility => Vis(!IsWatched && !IsCurrent);
     public double RowOpacity => IsWatched && !IsCurrent ? 0.55 : 1.0;
 
     private static Microsoft.UI.Xaml.Visibility Vis(bool v) =>
