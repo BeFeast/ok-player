@@ -60,6 +60,7 @@
 
         <Grid.KeyboardAccelerators>
             <KeyboardAccelerator Modifiers="Control" Key="O" Invoked="OnOpenAccelerator" />
+            <KeyboardAccelerator Modifiers="Control" Key="V" Invoked="OnPasteAccelerator" />
         </Grid.KeyboardAccelerators>
 
         <!-- right-click context menu (design band 11 — light material) -->
@@ -171,7 +172,7 @@
                         <StackPanel Padding="16" Spacing="4" HorizontalAlignment="Center">
                             <TextBlock Text="Open file&#x2026;" Foreground="{ThemeResource OkAccentTextBrush}" FontSize="12.5"
                                        FontWeight="SemiBold" HorizontalAlignment="Center" />
-                            <TextBlock Text="or drop a video / paste a URL" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            <TextBlock Text="or drop a file, folder, or link" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                        FontSize="11" HorizontalAlignment="Center" />
                         </StackPanel>
                     </Grid>
@@ -283,7 +284,7 @@
                                            Stroke="{ThemeResource TextFillColorTertiaryBrush}" Fill="{ThemeResource CardBackgroundFillColorSecondaryBrush}" />
                                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="6">
                                     <FontIcon Glyph="&#xE898;" FontSize="22" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                    <TextBlock Text="Drop a video, or paste a URL" FontSize="12.5"
+                                    <TextBlock Text="Drop a video, folder, or link" FontSize="12.5"
                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                 </StackPanel>
                             </Grid>
