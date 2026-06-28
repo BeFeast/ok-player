@@ -15,6 +15,7 @@ public sealed class AppSettings
 
     // Playback (design band 9)
     public bool ResumePlayback { get; set; } = true;     // resume from the last position on open
+    public bool HideControlsWhenPaused { get; set; } = true; // also auto-hide the OSC when paused, after the same idle timeout
     public double DefaultSpeed { get; set; } = 1.0;      // speed a newly opened file starts at
     public int SkipStep { get; set; } = 5;               // seconds the Left/Right arrows seek
 

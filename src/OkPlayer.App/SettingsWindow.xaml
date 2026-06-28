@@ -250,6 +250,13 @@
                         <TextBlock Text="Reopens a file at the position you stopped (skips the first 5% and the last 30s)."
                                    FontSize="11.5" Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,4,0,0" />
 
+                        <TextBlock Text="ON-SCREEN CONTROLS" FontSize="12" FontWeight="SemiBold" CharacterSpacing="60"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,22,0,8" />
+                        <ToggleSwitch x:Name="HidePausedToggle" OnContent="Hide controls when paused"
+                                      OffContent="Keep controls visible when paused" Toggled="OnHidePausedToggled" />
+                        <TextBlock Text="Auto-hides the controls 2.5s after you pause, the same as during playback. Move the mouse to show them again."
+                                   FontSize="11.5" Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,4,0,0" />
+
                         <TextBlock Text="DEFAULT SPEED" FontSize="12" FontWeight="SemiBold" CharacterSpacing="60"
                                    Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,24,0,10" />
                         <Border Background="{ThemeResource ControlFillColorTertiaryBrush}" CornerRadius="8" Padding="3" HorizontalAlignment="Left">
