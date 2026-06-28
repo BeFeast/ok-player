@@ -36,7 +36,7 @@ public sealed partial class MainWindow : Window
         Player.FitToVideoRequested += (_, size) => FitToVideo(size.Width, size.Height);
         Player.AlwaysOnTopRequested += (_, on) => SetAlwaysOnTop(on);
         Player.SettingsRequested += (_, _) => OpenSettings();
-        Player.SavePlaylistRequested += async (_, content) => await SavePlaylistAsync(content);
+        Player.SavePlaylistRequested += (_, content) => SavePlaylist(content);
         // Drag the window by the video / welcome backdrop, like the title bar. handledEventsToo=true so the
         // ScrollViewer's own move handling can't swallow the drag.
         foreach (var surface in Player.WindowDragSurfaces)
@@ -420,24 +420,21 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task SavePlaylistAsync(string m3uContent)
+    private void SavePlaylist(string m3uContent)
     {
-        var picker = new FileSavePicker
-        {
-            SuggestedStartLocation = PickerLocationId.VideosLibrary,
-            SuggestedFileName = "playlist",
-        };
-        picker.FileTypeChoices.Add("Playlist", new System.Collections.Generic.List<string> { ".m3u" });
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+        // The shell Save dialog (Win32SaveDialog) is synchronous and runs its own modal message loop, so the
+        // app stays responsive while it's up; we replaced the WinRT FileSavePicker, which threw E_FAIL / hung
+        // in this unpackaged app.
         try
         {
-            var file = await picker.PickSaveFileAsync();
-            if (file is not null)
-                await Windows.Storage.FileIO.WriteTextAsync(file, m3uContent);
+            IntPtr hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            string? path = Win32SaveDialog.PickSavePath(hwnd, "playlist", "Playlist", "m3u");
+            if (path is not null)
+                System.IO.File.WriteAllText(path, m3uContent);
         }
         catch (Exception)
         {
-            // Save failure is non-fatal.
+            // a save failure is non-fatal
         }
     }
 }

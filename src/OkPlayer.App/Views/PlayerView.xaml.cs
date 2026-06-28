@@ -25,6 +25,7 @@ public sealed partial class PlayerView : UserControl
 {
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _idleTimer;
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _toastTimer;
+    private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _loadWatchdog; // backstop: never let the spinner hang forever
     private bool _chromeVisible; // starts false to match the chrome's initial Opacity=0, so the first RevealChrome actually animates it in
     private bool _panelOpen;
     private bool _syncingChapter;
@@ -122,6 +123,11 @@ public sealed partial class PlayerView : UserControl
         _toastTimer.IsRepeating = false;
         _toastTimer.Tick += (_, _) => ToastHideSb.Begin();
 
+        _loadWatchdog = DispatcherQueue.CreateTimer();
+        _loadWatchdog.Interval = TimeSpan.FromSeconds(30); // generous: a real load (even a slow stream) starts well within this
+        _loadWatchdog.IsRepeating = false;
+        _loadWatchdog.Tick += OnLoadWatchdogTick;
+
         _saveTimer = DispatcherQueue.CreateTimer();
         _saveTimer.Interval = TimeSpan.FromSeconds(10); // periodically persist the resume position
         _saveTimer.IsRepeating = true;
@@ -157,6 +163,7 @@ public sealed partial class PlayerView : UserControl
         // "Clear history" / retention prune can fire from the Settings window — refresh when it does.
         _history.Changed += OnHistoryChanged;
         Vm.EndReached += OnEndReached; // auto-advance the folder playlist when a file plays out
+        Vm.LoadFailed += OnLoadFailed; // tear down the loading spinner if an open fails (e.g. a dead URL)
         SetPanelTab(false);            // the right panel opens on the Chapters tab by default
         Vm.Chapters.CollectionChanged += (_, _) =>
         {
@@ -181,16 +188,27 @@ public sealed partial class PlayerView : UserControl
     // once media is loaded, show the video plane + reveal the OSC, and let the host darken→whiten the
     // caption buttons.
     private bool _historyOpen; // the History surface is showing (idle-only; mutually exclusive with playback)
+    private bool _loading;     // an open is in flight (load accepted, awaiting the first frame or a load error)
+    private string? _audioArtForPath; // the audio file we've resolved the now-playing cover art for
 
     private void ApplyMediaPresence()
     {
         bool has = Vm.HasMedia;
+        if (has)
+        {
+            _loading = false;       // the file is ready — drop the loading spinner
+            _loadWatchdog.Stop();   // and disarm the never-hang backstop
+        }
         if (has && _historyOpen)
             _historyOpen = false; // opening a file from History (or anywhere) takes over the canvas
-        WelcomeCard.Visibility = (has || _historyOpen) ? Visibility.Collapsed : Visibility.Visible;
-        HistorySurface.Visibility = _historyOpen ? Visibility.Visible : Visibility.Collapsed;
+        // While a load is in flight the spinner owns the canvas, so suppress the welcome/History idle surfaces.
+        bool idle = !has && !_loading;
+        WelcomeCard.Visibility = (idle && !_historyOpen) ? Visibility.Visible : Visibility.Collapsed;
+        HistorySurface.Visibility = (idle && _historyOpen) ? Visibility.Visible : Visibility.Collapsed;
         VideoBackdrop.Visibility = has ? Visibility.Visible : Visibility.Collapsed;
         Video.Visibility = has ? Visibility.Visible : Visibility.Collapsed;
+        LoadingOverlay.Visibility = _loading ? Visibility.Visible : Visibility.Collapsed;
+        ApplyAudioSurface(has);
         MediaPresenceChanged?.Invoke(this, has);
         if (has)
         {
@@ -203,9 +221,76 @@ public sealed partial class PlayerView : UserControl
             TitleChrome.IsHitTestVisible = false;
             BottomChrome.IsHitTestVisible = false;
             ChromeHideSb.Begin();
-            if (!_historyOpen)
-                LoadRecents(); // refresh the welcome shelf (skip while History owns the canvas)
+            if (idle && !_historyOpen)
+                LoadRecents(); // refresh the welcome shelf (skip while History owns the canvas or a load is in flight)
         }
+    }
+
+    /// <summary>Audio-only media (flac/mp3/…) renders no video frames (the playback engine runs with
+    /// audio-display=no, so embedded cover art is never a video track). Show a now-playing card over the black
+    /// plane instead of looking broken — with the file's cover art when it has any. Gated on the audio extension
+    /// so a real video file never flashes the card.</summary>
+    private void ApplyAudioSurface(bool has)
+    {
+        bool audioOnly = has && Vm.VideoWidth <= 0
+            && _currentPath is { } p && OkPlayer.Core.MediaFormats.IsAudio(p);
+        AudioNowPlaying.Visibility = audioOnly ? Visibility.Visible : Visibility.Collapsed;
+        if (audioOnly)
+        {
+            AudioTitle.Text = !string.IsNullOrWhiteSpace(Vm.MediaTitle)
+                ? Vm.MediaTitle // the file's metadata title (mpv media-title); fall back to the bare file name
+                : (_currentPath is { } cp ? System.IO.Path.GetFileNameWithoutExtension(cp) : string.Empty);
+            if (_audioArtForPath != _currentPath) // kick the extraction once per file, not on every refresh
+            {
+                _audioArtForPath = _currentPath;
+                ShowAudioArtFallback();             // music-note tile until the art (if any) lands
+                _ = LoadCoverArtAsync(_currentPath!);
+            }
+        }
+        else
+        {
+            _audioArtForPath = null; // next audio file re-resolves its art
+        }
+    }
+
+    private void ShowAudioArtFallback()
+    {
+        AudioArtHost.Visibility = Visibility.Collapsed;
+        AudioArtFallback.Visibility = Visibility.Visible;
+        AudioArtBrush.ImageSource = null;
+    }
+
+    private async Task LoadCoverArtAsync(string path)
+    {
+        string? png = await OkPlayer.App.Services.CoverArtService.GetAsync(path);
+        if (png is null || _currentPath != path || _audioArtForPath != path)
+            return; // no embedded art, or the file changed while we were extracting
+        try
+        {
+            AudioArtBrush.ImageSource = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(png));
+            AudioArtHost.Visibility = Visibility.Visible;
+            AudioArtFallback.Visibility = Visibility.Collapsed;
+        }
+        catch { /* leave the fallback tile up if the bitmap can't be loaded */ }
+    }
+
+    private void OnLoadFailed()
+    {
+        _loading = false;      // async open/decode failure — tear down the spinner (the VM also toasts the error)
+        _loadWatchdog.Stop();
+        ApplyMediaPresence();  // back to the idle welcome surface
+    }
+
+    /// <summary>The open never produced a first frame or a load error within the timeout (e.g. mpv stalled on a
+    /// dead network mount and emitted nothing) — give up rather than spin forever.</summary>
+    private void OnLoadWatchdogTick(Microsoft.UI.Dispatching.DispatcherQueueTimer sender, object args)
+    {
+        sender.Stop();
+        if (!_loading || Vm.HasMedia)
+            return; // already resolved between the tick firing and now
+        _loading = false;
+        ApplyMediaPresence();
+        ShowToast("Couldn't play this file");
     }
 
     private void OnWelcomeOpenTapped(object sender, TappedRoutedEventArgs e)
@@ -226,12 +311,34 @@ public sealed partial class PlayerView : UserControl
             DefaultButton = ContentDialogButton.Primary,
             XamlRoot = XamlRoot,
         };
+        // Pre-fill from the clipboard when it holds a link, so "Open URL" doubles as paste-a-URL: copy a link in
+        // the browser, click here, press Enter. Fire-and-forget so a slow/large clipboard provider can't delay
+        // the dialog appearing — the field populates a moment later if the text is a URL.
+        _ = PrefillUrlFromClipboardAsync(input);
         try
         {
             if (await dialog.ShowAsync() == ContentDialogResult.Primary && !string.IsNullOrWhiteSpace(input.Text))
                 OpenMedia(input.Text.Trim());
         }
         catch { /* another content dialog is already open — ignore the concurrent open */ }
+    }
+
+    private static async Task PrefillUrlFromClipboardAsync(TextBox input)
+    {
+        try
+        {
+            var clip = Windows.ApplicationModel.DataTransfer.Clipboard.GetContent();
+            if (clip.Contains(StandardDataFormats.Text))
+            {
+                string clipped = (await clip.GetTextAsync() ?? string.Empty).Trim();
+                if (input.Text.Length == 0 && OkPlayer.Core.MediaFormats.IsPlayableUrl(clipped)) // don't clobber typing
+                {
+                    input.Text = clipped;
+                    input.SelectAll();
+                }
+            }
+        }
+        catch { /* clipboard unavailable / slow — leave the field empty */ }
     }
 
     private void OnHistoryClick(object sender, RoutedEventArgs e) => OpenHistory();
@@ -306,6 +413,16 @@ public sealed partial class PlayerView : UserControl
         else if (e.PropertyName == nameof(PlayerViewModel.HasMedia))
         {
             ApplyMediaPresence();
+        }
+        else if (e.PropertyName == nameof(PlayerViewModel.VideoWidth))
+        {
+            // dwidth can arrive after file-loaded (or flip when cover art decodes), so re-decide the audio card.
+            ApplyAudioSurface(Vm.HasMedia);
+        }
+        else if (e.PropertyName == nameof(PlayerViewModel.MediaTitle))
+        {
+            if (AudioNowPlaying.Visibility == Visibility.Visible)
+                ApplyAudioSurface(Vm.HasMedia); // the metadata title arrives after file-loaded — refresh the card
         }
         else if (e.PropertyName == nameof(PlayerViewModel.Duration))
         {
@@ -1494,15 +1611,24 @@ public sealed partial class PlayerView : UserControl
             UpdateChaptersEmpty();
             LoadBookmarks();
             ChaptersPanel.Visibility = Visibility.Visible;
+            PanelBackdrop.Visibility = Visibility.Visible; // arm light-dismiss: a click outside the panel closes it
             PanelShowSb.Begin();
             RevealChrome(); // an open panel pins the chrome
             WarmChapterThumbnails(); // ensure previews are filling (usually already warmed on open)
         }
         else
         {
+            PanelBackdrop.Visibility = Visibility.Collapsed;
             PanelHideSb.Begin(); // the Completed handler collapses it
             ResetIdleTimer();
         }
+    }
+
+    private void OnPanelBackdropPressed(object sender, PointerRoutedEventArgs e)
+    {
+        if (_panelOpen)
+            TogglePanel(); // click outside the panel dismisses it (light-dismiss)
+        e.Handled = true;  // consume the click so it doesn't also reach the OSC underneath
     }
 
     private void OnChapterSelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -1814,6 +1940,14 @@ public sealed partial class PlayerView : UserControl
             Video.Open(pathOrUrl); // may throw on engine-init failure — do this before mutating UI state
             Vm.OnOpening();        // load accepted: clear the prior file's playhead/duration/chapter/HasMedia
             _currentPath = pathOrUrl;
+            // Show the loading spinner until the first frame (or a load error) arrives — vital for slow network
+            // sources, which would otherwise sit on the welcome screen with no feedback. HasMedia was already
+            // false, so OnOpening's reset doesn't re-fire ApplyMediaPresence; call it here to reveal the overlay.
+            _loading = true;
+            LoadingName.Text = DisplayNameFor(pathOrUrl);
+            _loadWatchdog.Stop();
+            _loadWatchdog.Start(); // (re)arm the never-hang backstop for this open
+            ApplyMediaPresence();
             _reachedEnd = false;   // fresh file: not finished until it plays through to its own EOF
             _explicitResume = null; // a launch resume belongs only to its launch file (the two launch paths set it
                                     // again right after this call); clearing here drops a stale value if that file
@@ -1843,9 +1977,21 @@ public sealed partial class PlayerView : UserControl
         }
         catch (Exception)
         {
+            _loading = false;     // synchronous open failure — drop the spinner with the idle surface
+            _loadWatchdog.Stop();
             ShowToast("Couldn't open this file");
             ApplyMediaPresence(); // restore the idle surface (e.g. the welcome shelf after a failed History resume)
         }
+    }
+
+    /// <summary>The label shown under the loading spinner: a stream URL in full (trimming handles overflow),
+    /// or just the file name for a local path.</summary>
+    private static string DisplayNameFor(string pathOrUrl)
+    {
+        if (pathOrUrl.Contains("://", StringComparison.Ordinal))
+            return pathOrUrl;
+        try { return System.IO.Path.GetFileName(pathOrUrl); }
+        catch { return pathOrUrl; }
     }
 
     // ---- folder-as-playlist (PRD 10.3): opening a file makes its folder the active playlist ----
@@ -1880,24 +2026,38 @@ public sealed partial class PlayerView : UserControl
             _playlist = null; // a lone URL with no playlist context — single stream
             return;
         }
-        try
+        // A fresh folder is needed. Enumerating it can block on a slow/dead network mount (NFS/SMB), and doing
+        // that on the UI thread would freeze the dispatcher — the marshaled file-loaded event could never run,
+        // so the file would never actually start (the loading spinner would hang forever). Scan off the UI
+        // thread instead; the playlist fills in a moment later. Until then, treat playback as single-file.
+        _playlist = null;
+        _ = BuildFolderPlaylistAsync(key, _openGeneration);
+    }
+
+    /// <summary>Enumerate the file's folder off the UI thread and build the folder-as-playlist around it, then
+    /// marshal the result back. A generation guard drops a stale scan if a newer open superseded it; the
+    /// null-playlist guard yields to a playlist another path (e.g. a recursive folder drop) set meanwhile.</summary>
+    private async Task BuildFolderPlaylistAsync(string key, int gen)
+    {
+        string? dir = System.IO.Path.GetDirectoryName(key);
+        if (dir is null)
+            return;
+        System.Collections.Generic.List<string>? siblings = await Task.Run(() =>
         {
-            string? dir = System.IO.Path.GetDirectoryName(key);
-            if (dir is null)
+            try
             {
-                _playlist = null;
-                return;
+                var list = new System.Collections.Generic.List<string>();
+                foreach (var f in System.IO.Directory.EnumerateFiles(dir))
+                    if (OkPlayer.Core.MediaFormats.IsMedia(f))
+                        list.Add(f);
+                return list;
             }
-            var siblings = new System.Collections.Generic.List<string>();
-            foreach (var f in System.IO.Directory.EnumerateFiles(dir))
-                if (OkPlayer.Core.MediaFormats.IsMedia(f))
-                    siblings.Add(f);
-            _playlist = new OkPlayer.Core.Playlist(siblings, key) { Repeat = _repeat, Shuffle = _shuffle };
-        }
-        catch
-        {
-            _playlist = null; // unreadable folder — fall back to single-file playback
-        }
+            catch { return (System.Collections.Generic.List<string>?)null; } // unreadable folder — stay single-file
+        });
+        if (gen != _openGeneration || siblings is null || _playlist is not null)
+            return; // superseded by a newer open, unreadable, or another path already set the playlist
+        _playlist = new OkPlayer.Core.Playlist(siblings, key) { Repeat = _repeat, Shuffle = _shuffle };
+        RebuildUpNext();
     }
 
     /// <summary>Project the folder playlist into the Up-Next rows and refresh the panel's folder header /
@@ -2164,18 +2324,17 @@ public sealed partial class PlayerView : UserControl
         var data = e.DataView;
         // async void: a transient DataView access can throw — never let it escape to the UI thread.
         var deferral = e.GetDeferral();
+        // Resolve WHAT was dropped first, release the OLE drop, and only THEN open it. Opening can do slow work
+        // (a network folder/file), and anything still running inside the deferral keeps the source's drag loop
+        // alive — which freezes the drag ghost on screen system-wide. Decide here; act after Complete().
+        string? openUrl = null, openFile = null, openFolder = null, addSub = null;
         try
         {
             // Resolve a dragged LINK first. A browser link drag also exposes a virtual ".url" file via
             // StorageItems, so reaching for StorageItems would open the shortcut file (or stall materializing
             // it) instead of the actual address — resolve the URL up front and open it as a stream.
-            string? url = await TryGetDroppedUrlAsync(data);
-            if (url is not null)
-            {
-                OpenMedia(url);
-                return;
-            }
-            if (data.Contains(StandardDataFormats.StorageItems))
+            openUrl = await TryGetDroppedUrlAsync(data);
+            if (openUrl is null && data.Contains(StandardDataFormats.StorageItems))
             {
                 var items = await data.GetStorageItemsAsync();
                 var file = items.OfType<StorageFile>().FirstOrDefault();
@@ -2183,16 +2342,16 @@ public sealed partial class PlayerView : UserControl
                 {
                     // A subtitle dropped onto a playing video loads as a track rather than replacing the media.
                     if (Vm.HasMedia && OkPlayer.Core.MediaFormats.IsSubtitle(file.Path))
-                        AddSubtitle(file.Path);
+                        addSub = file.Path;
                     else
-                        OpenMedia(file.Path);
+                        openFile = file.Path;
                 }
                 else if (items.OfType<StorageFolder>().FirstOrDefault() is { } folder)
-                    await OpenFolderAsPlaylist(folder.Path); // dropped folder → recursive playlist, play first
+                    openFolder = folder.Path;
                 else if (items.Count > 0)
                     ShowToast("Drop a media file or folder");
             }
-            else
+            else if (openUrl is null)
             {
                 ShowToast("Drop a media file, folder, or link");
             }
@@ -2203,7 +2362,20 @@ public sealed partial class PlayerView : UserControl
         }
         finally
         {
-            deferral.Complete();
+            deferral.Complete(); // release the OLE drop now — the drag ghost can't linger while the open runs
+        }
+
+        // Open AFTER the deferral completes, so a slow (network) open never holds the source's drag loop open.
+        try
+        {
+            if (openUrl is not null) OpenMedia(openUrl);
+            else if (addSub is not null) AddSubtitle(addSub);
+            else if (openFile is not null) OpenMedia(openFile);
+            else if (openFolder is not null) await OpenFolderAsPlaylist(openFolder); // recursive playlist, play first
+        }
+        catch (Exception)
+        {
+            ShowToast("Couldn't open dropped item");
         }
     }
 

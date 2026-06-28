@@ -136,6 +136,35 @@
         <!-- the single video plane: only over Mica once media is loaded (Mica shows the light shell otherwise) -->
         <render:MpvVideoPanel x:Name="Video" Tapped="OnVideoTapped" DoubleTapped="OnVideoDoubleTapped" Visibility="Collapsed" />
 
+        <!-- Audio-only "now playing": an audio file has no video plane, so without this the surface is a black
+             void that reads as "didn't open". Shows the file's embedded cover art (extracted off-thread) when it
+             has any, else a music-note tile. The OSC composites on top. Sits over the black VideoBackdrop, so it
+             uses the over-content brushes. -->
+        <Grid x:Name="AudioNowPlaying" Visibility="Collapsed">
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="20" Padding="32" MaxWidth="560">
+                <Grid Width="220" Height="220" HorizontalAlignment="Center">
+                    <!-- fallback tile shown until/unless cover art is available -->
+                    <Border x:Name="AudioArtFallback" CornerRadius="16" Background="#1F28B3AA"
+                            BorderThickness="1" BorderBrush="{ThemeResource OkOverVideoHairlineBrush}">
+                        <FontIcon Glyph="&#xE8D6;" FontSize="72" Foreground="{ThemeResource OkOverVideoAccentBrush}"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <!-- extracted cover art (CornerRadius clips the image brush) -->
+                    <Border x:Name="AudioArtHost" CornerRadius="16" Visibility="Collapsed">
+                        <Border.Shadow><ThemeShadow /></Border.Shadow>
+                        <Border.Background>
+                            <ImageBrush x:Name="AudioArtBrush" Stretch="UniformToFill" />
+                        </Border.Background>
+                    </Border>
+                </Grid>
+                <TextBlock x:Name="AudioTitle" HorizontalAlignment="Center" TextAlignment="Center" FontSize="19"
+                           FontWeight="SemiBold" Foreground="{ThemeResource OkOverVideoTextBrush}"
+                           TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" />
+                <TextBlock Text="Audio" HorizontalAlignment="Center" FontSize="12" CharacterSpacing="40"
+                           Foreground="{ThemeResource OkOverVideoTextFaintBrush}" />
+            </StackPanel>
+        </Grid>
+
         <!-- light-first empty / welcome state (over Mica) — hero + continue-watching shelf (PRD 2.2).
              Scrollable + min-height-locked to the viewport: the hero centres when short, scrolls (never
              clips the title) when the recents shelf makes it tall. -->
@@ -541,6 +570,11 @@
             <Polygon Points="0,0 12,0 6,6" Fill="#C7121215" HorizontalAlignment="Center" />
         </StackPanel>
 
+        <!-- Light-dismiss backdrop for the Chapters/Up-Next panel: a full-canvas transparent hit target shown
+             only while the panel is open, so a click anywhere outside the panel closes it. It sits above the OSC
+             but below the panel (next element), so clicks on the panel itself still land on the panel. -->
+        <Grid x:Name="PanelBackdrop" Background="Transparent" Visibility="Collapsed" PointerPressed="OnPanelBackdropPressed" />
+
         <!-- ===== right-docked Chapters / Up Next panel (slide-in Mica, design band 6) ===== -->
         <!-- inset as a floating card: clear of the window caption buttons (top) and the OSC (bottom), so the
              translucent panel never overlaps those controls (no double-close, no controls bleeding through) -->
@@ -732,6 +766,18 @@
             </Grid>
         </Grid>
 
+        <!-- Shown while a file/URL is opening (until file-loaded or an error). Critical for slow network
+             sources, which would otherwise sit on the welcome screen with no feedback. -->
+        <Grid x:Name="LoadingOverlay" Visibility="Collapsed" Background="#CC000000">
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="16">
+                <ProgressRing IsActive="True" Width="46" Height="46" Foreground="{ThemeResource OkOverVideoAccentBrush}" />
+                <TextBlock Text="Loading…" HorizontalAlignment="Center" FontSize="14" FontWeight="SemiBold"
+                           Foreground="{ThemeResource OkOverVideoTextBrush}" />
+                <TextBlock x:Name="LoadingName" HorizontalAlignment="Center" TextAlignment="Center" FontSize="12"
+                           Foreground="{ThemeResource OkOverVideoTextFaintBrush}" TextTrimming="CharacterEllipsis" MaxWidth="440" />
+            </StackPanel>
+        </Grid>
+
         <!-- ===== OSD toast (top-center, shared scrim style) ===== -->
         <Border x:Name="ToastHost" VerticalAlignment="Top" HorizontalAlignment="Center"
                 Margin="0,64,0,0" Padding="14,8" CornerRadius="12" Opacity="0" IsHitTestVisible="False"
@@ -747,16 +793,17 @@
         </Grid>
 
         <!-- ===== drag-over state: accent drop-zone + dim the rest ===== -->
+        <!-- Drag-over feedback: a gentle dim + a single contained "Drop to play" card (no full-window frame,
+             so it reads cleanly over the welcome screen as well as over video). -->
         <Grid x:Name="DragOverlay" Visibility="Collapsed" IsHitTestVisible="False">
-            <Border Background="#4DFFFFFF" />
-            <Border Margin="14" CornerRadius="10" BorderThickness="2"
-                    BorderBrush="{ThemeResource OkAccentBrush}" Background="{ThemeResource OkAccentTintBrush}">
-                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10">
-                    <FontIcon Glyph="&#xE898;" FontSize="30" Foreground="{ThemeResource OkAccentSecondaryTextBrush}" />
+            <Border Background="#14000000" />
+            <Border HorizontalAlignment="Center" VerticalAlignment="Center" CornerRadius="14" Padding="34,26"
+                    BorderThickness="1.5" BorderBrush="{ThemeResource OkAccentBrush}"
+                    Background="{ThemeResource OkSurfaceCardBrush}">
+                <StackPanel HorizontalAlignment="Center" Spacing="10">
+                    <FontIcon Glyph="&#xE898;" FontSize="28" Foreground="{ThemeResource OkAccentTextBrush}" />
                     <TextBlock Text="Drop to play" FontSize="15" FontWeight="SemiBold"
                                Foreground="{ThemeResource OkAccentTextBrush}" HorizontalAlignment="Center" />
-                    <TextBlock x:Name="DragFileName" FontSize="12" Foreground="{ThemeResource OkAccentSecondaryTextBrush}" HorizontalAlignment="Center"
-                               TextTrimming="CharacterEllipsis" MaxWidth="320" />
                 </StackPanel>
             </Border>
         </Grid>

@@ -250,6 +250,10 @@ public partial class PlayerViewModel : ObservableObject
     /// view uses it to auto-advance the folder playlist; the last frame is otherwise held.</summary>
     public event Action? EndReached;
 
+    /// <summary>Raised (on the UI thread) when a load attempt fails outright, so the view can tear down any
+    /// "Loading…" overlay it put up at open time (otherwise a failed slow URL would spin forever).</summary>
+    public event Action? LoadFailed;
+
     private void OnEndFile(object? sender, MpvEndFileReason reason)
     {
         if (reason != MpvEndFileReason.Error)
@@ -258,6 +262,7 @@ public partial class PlayerViewModel : ObservableObject
         {
             HasMedia = false;
             MediaTitle = string.Empty;
+            LoadFailed?.Invoke();
             ToastRequested?.Invoke("Couldn't play this file");
         });
     }

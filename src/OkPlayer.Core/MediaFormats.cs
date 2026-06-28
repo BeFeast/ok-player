@@ -8,6 +8,14 @@ namespace OkPlayer.Core;
 /// picker's filter and the folder-as-playlist scan, so the two never drift apart.</summary>
 public static class MediaFormats
 {
+    /// <summary>The audio-only containers among <see cref="Extensions"/> — files that carry no video plane,
+    /// so the player shows a now-playing card instead of a black void. (mpv may still decode embedded cover
+    /// art as a video frame; that case is detected at runtime by a non-zero video width.)</summary>
+    public static readonly IReadOnlyList<string> AudioExtensions = new[]
+    {
+        ".mp3", ".flac", ".m4a", ".opus", ".wav", ".ogg", ".mka",
+    };
+
     public static readonly IReadOnlyList<string> Extensions = new[]
     {
         ".mkv", ".mp4", ".m4v", ".avi", ".mov", ".webm", ".m2ts", ".ts", ".wmv", ".flv",
@@ -23,9 +31,14 @@ public static class MediaFormats
 
     private static readonly HashSet<string> Set = new(Extensions, StringComparer.OrdinalIgnoreCase);
     private static readonly HashSet<string> SubSet = new(SubtitleExtensions, StringComparer.OrdinalIgnoreCase);
+    private static readonly HashSet<string> AudioSet = new(AudioExtensions, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>True if the path's extension is a media type we play (case-insensitive).</summary>
     public static bool IsMedia(string path) => Set.Contains(Path.GetExtension(path));
+
+    /// <summary>True if the path's extension is an audio-only container (case-insensitive) — the player has no
+    /// video plane to show for it. Subset of <see cref="IsMedia"/>.</summary>
+    public static bool IsAudio(string path) => AudioSet.Contains(Path.GetExtension(path));
 
     /// <summary>True if the path's extension is an external subtitle file (case-insensitive).</summary>
     public static bool IsSubtitle(string path) => SubSet.Contains(Path.GetExtension(path));
