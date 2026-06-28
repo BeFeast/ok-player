@@ -28,10 +28,14 @@ public sealed class FileAssociationService
     /// <summary>False if we can't resolve our own exe path (then registration is unavailable).</summary>
     public bool CanRegister => !string.IsNullOrEmpty(_exePath);
 
-    /// <summary>Register the ProgID, the Applications entry, and the Default-Apps capabilities. Idempotent.</summary>
+    private bool _registered; // EnsureRegistered did its (idempotent) work this session — skip the redundant rewrite
+
+    /// <summary>Register the ProgID, the Applications entry, and the Default-Apps capabilities. Idempotent, and
+    /// cheap to call repeatedly (e.g. once per extension in a bulk assign) — the actual registry writes run only
+    /// the first time per session.</summary>
     public void EnsureRegistered()
     {
-        if (!CanRegister)
+        if (!CanRegister || _registered)
             return;
         string cmd = $"\"{_exePath}\" \"%1\"";
         string icon = $"\"{_exePath}\",0";
@@ -53,9 +57,11 @@ public sealed class FileAssociationService
         {
             cap.SetValue("ApplicationName", "OK Player");
             cap.SetValue("ApplicationDescription", "An elegant media player for Windows.");
+            cap.SetValue("ApplicationIcon", icon); // so OK Player shows with its icon in Windows' Default Apps
         }
         using (var reg = Registry.CurrentUser.CreateSubKey(@"Software\RegisteredApplications"))
             reg.SetValue(AppRegName, CapabilitiesKey);
+        _registered = true;
     }
 
     public bool IsAssigned(string ext)
