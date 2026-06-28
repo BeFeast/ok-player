@@ -7,32 +7,88 @@ using OkPlayer.Mpv.Interop;
 
 namespace OkPlayer.App.Services;
 
-/// <summary>Extracts an audio file's embedded cover art (album art) to a cached PNG so the now-playing surface
-/// can show it. Runs on a throwaway <c>vo=null</c> mpv — no render API, so the cover-art-as-video freeze that
-/// forces <c>audio-display=no</c> on the playback engine can't happen here. Returns null when the file carries
-/// no embedded picture.</summary>
+/// <summary>Resolves an audio file's cover art for the now-playing surface. Prefers a <em>sidecar</em> image
+/// sitting next to the file (the Kodi/Jellyfin/Plex convention — <c>track.jpg</c> or a folder <c>cover.jpg</c>/
+/// <c>folder.jpg</c>), which is typically higher-resolution and intentional; otherwise extracts the file's
+/// embedded album art to a cached PNG via a throwaway <c>vo=null</c> mpv (no render API, so the
+/// cover-art-as-video freeze that forces <c>audio-display=no</c> on the playback engine can't happen here).
+/// Returns null when the file has neither.</summary>
 public static class CoverArtService
 {
     private static readonly string CacheDir = Path.Combine(Path.GetTempPath(), "OkPlayer", "coverart");
 
-    /// <summary>Path to a PNG of the file's embedded cover art, or null if it has none / can't be read. The
-    /// result is cached on disk keyed by path+mtime+size, so reopening a track is instant. Never throws.</summary>
+    // Sidecar art conventions. Extensions BitmapImage can decode; folder-cover stems in descending preference.
+    private static readonly string[] ArtExtensions = { ".jpg", ".jpeg", ".png", ".webp" };
+    private static readonly string[] FolderArtNames = { "cover", "folder", "front", "poster", "album", "albumart" };
+
+    /// <summary>Path to a usable cover image (a sidecar image, or a cached PNG of the embedded art), or null if
+    /// the file has neither / can't be read. Local files only. Never throws.</summary>
     public static Task<string?> GetAsync(string mediaPath, CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(mediaPath) || mediaPath.Contains("://", StringComparison.Ordinal))
             return Task.FromResult<string?>(null); // local files only — a remote fetch could stall the extractor
-        return Task.Run(() => Extract(mediaPath, out _), ct);
+        return Task.Run(() => ResolveSidecar(mediaPath) ?? Extract(mediaPath, out _), ct);
     }
 
-    /// <summary>Like <see cref="GetAsync"/>, but also reports whether the file <em>definitively</em> carries no
-    /// embedded picture (<c>DefinitelyNoArt</c>), distinct from a transient failure (timeout, locked file, …).
-    /// A caller that caches a "no art" verdict should only trust <c>DefinitelyNoArt</c> — a transient null must
-    /// not become a permanent gradient.</summary>
+    /// <summary>Like <see cref="GetAsync"/>, but also reports whether the file <em>definitively</em> has no cover
+    /// (no sidecar and no embedded picture, <c>DefinitelyNoArt</c>), distinct from a transient failure (timeout,
+    /// locked file, …). A caller that caches a "no art" verdict should only trust <c>DefinitelyNoArt</c> — a
+    /// transient null must not become a permanent gradient.</summary>
     public static Task<(string? Path, bool DefinitelyNoArt)> GetWithStatusAsync(string mediaPath, CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(mediaPath) || mediaPath.Contains("://", StringComparison.Ordinal))
             return Task.FromResult<(string?, bool)>((null, false));
-        return Task.Run(() => { string? p = Extract(mediaPath, out bool noArt); return (p, noArt); }, ct);
+        return Task.Run<(string?, bool)>(() =>
+        {
+            if (ResolveSidecar(mediaPath) is { } sidecar)
+                return (sidecar, false); // a sidecar image IS art — never a "no art" verdict
+            string? p = Extract(mediaPath, out bool noArt);
+            return (p, noArt);
+        }, ct);
+    }
+
+    /// <summary>A cover image sitting next to the media file: a same-named image first (<c>track.flac</c> →
+    /// <c>track.jpg</c>), else a well-known folder cover (<c>cover</c>/<c>folder</c>/<c>front</c>/<c>poster</c>/…).
+    /// One directory listing, matched case-insensitively (NFS/SMB can be case-sensitive, so don't trust
+    /// <c>File.Exists</c> casing). Returns null when none exists or the directory can't be read.</summary>
+    private static string? ResolveSidecar(string mediaPath)
+    {
+        try
+        {
+            string? dir = Path.GetDirectoryName(mediaPath);
+            if (string.IsNullOrEmpty(dir))
+                return null;
+            string baseName = Path.GetFileNameWithoutExtension(mediaPath);
+            string? sameName = null;
+            var folderHits = new string?[FolderArtNames.Length]; // best file per folder-cover stem, by preference
+            foreach (string file in Directory.EnumerateFiles(dir))
+            {
+                if (!IsArtExtension(Path.GetExtension(file)))
+                    continue;
+                string stem = Path.GetFileNameWithoutExtension(file);
+                if (sameName is null && string.Equals(stem, baseName, StringComparison.OrdinalIgnoreCase))
+                    sameName = file; // exact same-name cover — highest priority, stop preferring folder covers
+                else
+                    for (int i = 0; i < FolderArtNames.Length; i++)
+                        if (folderHits[i] is null && string.Equals(stem, FolderArtNames[i], StringComparison.OrdinalIgnoreCase))
+                            folderHits[i] = file;
+            }
+            if (sameName is not null)
+                return sameName;
+            foreach (string? hit in folderHits) // in FolderArtNames preference order
+                if (hit is not null)
+                    return hit;
+            return null;
+        }
+        catch { return null; } // unreadable directory — fall back to embedded extraction
+    }
+
+    private static bool IsArtExtension(string ext)
+    {
+        foreach (string a in ArtExtensions)
+            if (string.Equals(ext, a, StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
     }
 
     private static string? Extract(string mediaPath, out bool definitelyNoArt)
