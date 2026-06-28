@@ -61,18 +61,26 @@ Copy-Item (Join-Path $repo 'LICENSE') (Join-Path $publishDir 'LICENSE.txt') -For
 Copy-Item (Join-Path $repo 'THIRD-PARTY-NOTICES.md') $publishDir -Force
 if (Test-Path (Join-Path $repo 'README.md')) { Copy-Item (Join-Path $repo 'README.md') $publishDir -Force }
 
+# Start each run from a clean releases dir: vpk computes deltas against whatever prior .nupkg files sit in the
+# output dir, so a stale local pack left here from a previous run could otherwise produce a delta against the
+# wrong predecessor. On -Publish we repopulate it from the real GitHub feed just below.
+if (Test-Path $releases) { Remove-Item $releases -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $releases | Out-Null
 
 # When publishing, pull the prior releases first so vpk can compute a binary delta against them. The first
-# release has no predecessor, so this is best-effort (a "no releases" failure there is expected and fine).
+# release has no predecessor, so this is best-effort: on failure we fall back to a full-only release (always
+# applies for clients; just no delta optimization), rather than deltaing against stale local files.
 if ($Publish) {
   Write-Host "Fetching prior releases for delta computation"
-  & $vpk download github --repoUrl $repoUrl --pre --outputDir $releases 2>&1 | Write-Host
-  if ($LASTEXITCODE -ne 0) { Write-Host "  (no prior releases to delta against — first build)" }
+  & $vpk download github --repoUrl $repoUrl --channel win --pre --outputDir $releases 2>&1 | Write-Host
+  if ($LASTEXITCODE -ne 0) { Write-Host "  (no prior releases to delta against — first build / full-only)" }
 }
 
 # Pack the entire publish folder (self-contained runtime + libmpv + .pri + icon) into Velopack artifacts.
 # --packId must stay 'OkPlayer' forever (changing it breaks the update chain); the human name is --packTitle.
+# --channel is pinned to the Windows default 'win' (the client's GithubSource reads releases.win.json). "beta"
+# is deliberately NOT a Velopack channel here — it's the GitHub pre-release flag (--pre, on upload) plus the
+# in-app display label, so there's a single feed and no channel split to keep in sync between pack and client.
 Write-Host "Packing Velopack release -> $releases"
 & $vpk pack `
   --packId OkPlayer `
@@ -82,6 +90,7 @@ Write-Host "Packing Velopack release -> $releases"
   --packDir $publishDir `
   --mainExe OkPlayer.exe `
   --icon $icon `
+  --channel win `
   --outputDir $releases
 if ($LASTEXITCODE -ne 0) { throw "vpk pack failed ($LASTEXITCODE)" }
 
@@ -95,6 +104,8 @@ if ($Publish) {
   Write-Host "Uploading GitHub pre-release v$Version (the update feed)"
   & $vpk upload github `
     --repoUrl $repoUrl `
+    --outputDir $releases `
+    --channel win `
     --publish `
     --pre `
     --tag "v$Version" `
