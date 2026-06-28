@@ -79,18 +79,31 @@ public partial class App : Application
     public App()
     {
         InitializeComponent();
+        // Last-resort XAML exception sink — log it, but don't change crash behaviour (leave Handled=false).
+        UnhandledException += (_, e) => Log.Exception("App.UnhandledException", e.Exception);
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
+        Log.Step("App.OnLaunched: start");
+        // Point the render layer's diagnostic sinks at the file logger BEFORE the video panel is created, so a
+        // hang inside GL/D3D/libmpv init (which throws nothing) is still pinned to its last breadcrumb, and
+        // mpv's own warnings land in the same file.
+        OkPlayer.Render.MpvVideoPanel.Diagnostics = Log.Step;
+        OkPlayer.Render.MpvVideoPanel.MpvLogMessage = Log.Mpv;
         // apply engine-init settings before the video panel is created
         OkPlayer.Render.MpvVideoPanel.HardwareDecoding = Settings.Current.HardwareDecoding;
+        Log.Step($"settings: hwdec={Settings.Current.HardwareDecoding}, theme={Settings.Current.Theme}");
         History.PruneOlderThan(Settings.Current.HistoryRetentionDays); // honour the retention window on launch
         // Resolve the accent (teal or the live Windows system accent) into the brushes before first render.
         AccentManager.Initialize();
         Settings.Changed += AccentManager.Apply; // re-apply when the accent source is toggled in Settings
+        Log.Step("GetLaunchTarget (File.Exists on argv)");
         var (file, resume, sub, audio) = GetLaunchTarget();
+        Log.Step($"launch target: file={(file is not null)}, resume={(resume is not null)}");
+        Log.Step("MainWindow ctor: start");
         var mw = new MainWindow(file, resume, sub, audio);
+        Log.Step("MainWindow ctor: done");
         // Publish the window and drain any redirect that raced ahead of it, atomically under the lock so a
         // redirect can't slip a file in after we read the stash but before the window is visible.
         string? pending;
@@ -101,6 +114,8 @@ public partial class App : Application
             _pendingRedirectFile = null;
         }
         mw.Activate();
+        Log.Step("MainWindow activated");
+        Log.StartUiWatchdog(mw.DispatcherQueue); // watch for the "window froze" symptom from here on
         if (pending is not null)
             mw.DispatcherQueue.TryEnqueue(() => mw.OpenFileFromRedirect(pending));
     }

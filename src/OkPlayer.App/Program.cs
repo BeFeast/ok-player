@@ -3,6 +3,7 @@ using System.Threading;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.Windows.AppLifecycle;
+using OkPlayer.App.Services;
 
 namespace OkPlayer.App;
 
@@ -16,6 +17,11 @@ public static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        // Diagnostics first — before anything can fault — so a launch-time crash/hang is on disk. Best-effort.
+        Log.Init();
+        Log.InstallGlobalHandlers();
+        Log.Step("Program.Main: start");
+
         WinRT.ComWrappersSupport.InitializeComWrappers();
 
         // Failsafe: any failure inside the single-instance path falls through to a normal launch, so a quirk in
@@ -24,16 +30,21 @@ public static class Program
         try
         {
             if (RedirectToPrimaryInstance())
+            {
+                Log.Step("single-instance: redirected to primary; this process exits");
                 return 0; // we handed this launch to the running instance; this process exits
+            }
         }
-        catch { /* fall through to a normal launch */ }
+        catch (Exception ex) { Log.Exception("RedirectToPrimaryInstance", ex); /* fall through to a normal launch */ }
 
+        Log.Step("Application.Start");
         Application.Start(p =>
         {
             var context = new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread());
             SynchronizationContext.SetSynchronizationContext(context);
             _ = new App();
         });
+        Log.Step("Application.Start returned (process shutting down)");
         return 0;
     }
 
@@ -52,7 +63,9 @@ public static class Program
         }
 
         AppActivationArguments activation = AppInstance.GetCurrent().GetActivatedEventArgs();
+        Log.Step("single-instance: not primary — redirecting activation (blocking)");
         primary.RedirectActivationToAsync(activation).AsTask().GetAwaiter().GetResult();
+        Log.Step("single-instance: redirect completed");
         return true;
     }
 }

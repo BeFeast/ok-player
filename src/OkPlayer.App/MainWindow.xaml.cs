@@ -175,9 +175,27 @@ public sealed partial class MainWindow : Window
         if (on == _miniPlayer)
             return;
         if (on && _fullscreen)
+        {
             SetFullscreen(false); // can't be both; drop fullscreen first
-        _miniPlayer = on;
-        AppWindow.SetPresenter(on ? AppWindowPresenterKind.CompactOverlay : AppWindowPresenterKind.Overlapped);
+            if (_fullscreen) // the off-switch hit a presenter failure — don't enter a both-modes-on state
+            {
+                Services.Log.Warn("SetMiniPlayer aborted: could not leave fullscreen first");
+                return;
+            }
+        }
+        Services.Log.Step($"SetPresenter({(on ? "CompactOverlay" : "Overlapped")}) [mini-player]");
+        try
+        {
+            AppWindow.SetPresenter(on ? AppWindowPresenterKind.CompactOverlay : AppWindowPresenterKind.Overlapped);
+        }
+        catch (Exception ex)
+        {
+            // The presenter didn't change — leave _miniPlayer untouched so the flag still matches reality.
+            Services.Log.Exception("SetMiniPlayer.SetPresenter", ex);
+            return;
+        }
+        _miniPlayer = on; // commit the flag only once the presenter actually switched
+        Services.Log.Step("SetPresenter done [mini-player]");
         if (!on && _alwaysOnTop && AppWindow.Presenter is OverlappedPresenter p)
             p.IsAlwaysOnTop = true;
     }
@@ -187,9 +205,30 @@ public sealed partial class MainWindow : Window
         if (on == _fullscreen)
             return;
         if (on && _miniPlayer)
+        {
             SetMiniPlayer(false); // mutually exclusive: leave compact overlay before going fullscreen
-        _fullscreen = on;
-        AppWindow.SetPresenter(on ? AppWindowPresenterKind.FullScreen : AppWindowPresenterKind.Overlapped);
+            if (_miniPlayer) // the off-switch hit a presenter failure — don't enter a both-modes-on state
+            {
+                Services.Log.Warn("SetFullscreen aborted: could not leave mini-player first");
+                return;
+            }
+        }
+        // SetPresenter(FullScreen) is the prime suspect for "the whole desktop disappeared": a borderless
+        // full-screen window that then freezes covers everything. Breadcrumb it (so a hang here is named) and
+        // guard it (so a driver/compositor throw can't tear down the app).
+        Services.Log.Step($"SetPresenter({(on ? "FullScreen" : "Overlapped")}) [fullscreen]");
+        try
+        {
+            AppWindow.SetPresenter(on ? AppWindowPresenterKind.FullScreen : AppWindowPresenterKind.Overlapped);
+        }
+        catch (Exception ex)
+        {
+            // The presenter didn't change — leave _fullscreen untouched so the flag still matches reality.
+            Services.Log.Exception("SetFullscreen.SetPresenter", ex);
+            return;
+        }
+        _fullscreen = on; // commit the flag only once the presenter actually switched
+        Services.Log.Step("SetPresenter done [fullscreen]");
         if (!on && _alwaysOnTop && AppWindow.Presenter is OverlappedPresenter p)
             p.IsAlwaysOnTop = true; // the new overlapped presenter starts un-pinned — restore the user's choice
         if (on)
