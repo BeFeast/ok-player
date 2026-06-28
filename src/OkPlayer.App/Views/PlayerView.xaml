@@ -833,10 +833,7 @@
             <TextBlock x:Name="ToastText" Foreground="#F2FFFFFF" FontSize="13" FontWeight="Medium" />
         </Border>
 
-        <!-- ===== Media info overlay (design band 13) ===== -->
-        <Grid x:Name="MediaInfoHost" Visibility="Collapsed" Background="#52000000">
-            <views:MediaInfoCard x:Name="MediaInfoCardView" HorizontalAlignment="Center" VerticalAlignment="Center" />
-        </Grid>
+        <!-- Media info now lives in its own movable inspector window (MediaInfoWindow), not an over-video overlay. -->
 
         <!-- ===== drag-over state: accent drop-zone + dim the rest ===== -->
         <!-- Drag-over feedback: a gentle dim + a single contained "Drop to play" card (no full-window frame,

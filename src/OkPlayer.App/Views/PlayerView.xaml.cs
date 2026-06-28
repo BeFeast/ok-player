@@ -149,8 +149,6 @@ public sealed partial class PlayerView : UserControl
         Video.ScreenshotSaved += (_, _) => DispatcherQueue.TryEnqueue(() => ShowToast("Screenshot saved"));
         Video.ScreenshotForClipboard += (_, ok) => DispatcherQueue.TryEnqueue(() => OnClipboardFrameReady(ok));
         Video.SubtitleAdded += (_, ok) => DispatcherQueue.TryEnqueue(() => OnSubtitleAdded(ok));
-        MediaInfoCardView.CloseRequested += (_, _) => CloseMediaInfo();
-        MediaInfoCardView.CopyRequested += (_, _) => OnMediaInfoCopy();
         HistorySurface.OpenRequested += OnHistoryOpenRequested;
         HistorySurface.CloseRequested += (_, _) => CloseHistory();
         HistorySurface.SettingsRequested += (_, _) => SettingsRequested?.Invoke(this, EventArgs.Empty);
@@ -168,6 +166,7 @@ public sealed partial class PlayerView : UserControl
             _saveTimer.Stop();
             _history.Changed -= OnHistoryChanged; // shared instance outlives the view — don't leak the handler
             App.Settings.Changed -= OnSettingsChanged; // shared instance outlives the view — don't leak the handler
+            _mediaInfoWindow?.Close(); // don't leave the inspector window orphaned when the player tears down
             _lyricsCts?.Cancel();   // abort + release a lyrics fetch still in flight when the view tears down
             _lyricsCts?.Dispose();
             _lyricsCts = null;
@@ -604,6 +603,8 @@ public sealed partial class PlayerView : UserControl
         }
         else if (e.PropertyName == nameof(PlayerViewModel.HasMedia))
         {
+            if (!Vm.HasMedia)
+                CloseMediaInfo(); // the file closed — its media info is now stale
             ApplyMediaPresence();
         }
         else if (e.PropertyName == nameof(PlayerViewModel.VideoWidth))
@@ -834,7 +835,7 @@ public sealed partial class PlayerView : UserControl
             case VirtualKey.PageDown: PlayNext(); break;          // next file in the folder playlist
             case VirtualKey.PageUp:   PlayPrevious(); break;      // previous file
             case VirtualKey.Escape:
-                if (_mediaInfoOpen) CloseMediaInfo();
+                if (_mediaInfoWindow is not null) CloseMediaInfo();
                 else if (_panelOpen) TogglePanel();
                 else ExitFullscreenRequested?.Invoke(this, EventArgs.Empty);
                 break;
@@ -1494,7 +1495,8 @@ public sealed partial class PlayerView : UserControl
 
     // ---- media info (design band 13: Streams) ----
 
-    private bool _mediaInfoOpen; // in-flight guard: one dialog / one read at a time
+    private MediaInfoWindow? _mediaInfoWindow; // the open inspector window (single instance), or null
+    private bool _mediaInfoBuilding;           // in-flight guard: one off-thread property read at a time
 
     private MediaInfoViewModel? _mediaInfoModel;
 
@@ -1527,30 +1529,30 @@ public sealed partial class PlayerView : UserControl
     /// finished, string-only view-model is marshalled back. Its brushes/fonts bind lazily on the UI thread.</summary>
     private async void OpenMediaInfo()
     {
-        if (_mediaInfoOpen)
+        if (_mediaInfoWindow is not null) // toggle: a second press closes the open inspector window
         {
             CloseMediaInfo();
             return;
         }
-        if (!Vm.HasMedia || Video.Engine is not { } engine)
+        if (!Vm.HasMedia || Video.Engine is not { } engine || _mediaInfoBuilding)
             return;
+        _mediaInfoBuilding = true;
         string? path = _currentPath; // pin the file we're reading so a mid-read switch can't show stale info
         MediaInfoViewModel model;
         try { model = await System.Threading.Tasks.Task.Run(() => BuildMediaInfo(engine, path)); }
         catch { return; } // engine torn down mid-read — just don't show the card
-        if (!Vm.HasMedia || _mediaInfoOpen || _currentPath != path)
-            return; // the file changed, or the card was toggled, while we were reading
+        finally { _mediaInfoBuilding = false; }
+        if (!Vm.HasMedia || _mediaInfoWindow is not null || _currentPath != path || _viewUnloaded)
+            return; // the file changed, a window opened, or the view tore down while we were reading
         _mediaInfoModel = model;
-        MediaInfoCardView.DataContext = _mediaInfoModel;
-        MediaInfoHost.Visibility = Visibility.Visible;
-        _mediaInfoOpen = true;
+        var win = new MediaInfoWindow(model);
+        win.CopyRequested += (_, _) => OnMediaInfoCopy();
+        win.Closed += (_, _) => { _mediaInfoWindow = null; _mediaInfoModel = null; };
+        _mediaInfoWindow = win;
+        win.Activate();
     }
 
-    private void CloseMediaInfo()
-    {
-        MediaInfoHost.Visibility = Visibility.Collapsed;
-        _mediaInfoOpen = false;
-    }
+    private void CloseMediaInfo() => _mediaInfoWindow?.Close(); // the Closed handler clears the field
 
     private void OnMediaInfoCopy()
     {
