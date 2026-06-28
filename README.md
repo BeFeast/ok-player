@@ -40,7 +40,7 @@ Effortless loading (embedded + external), comfortable style presets, dual subtit
 
 ### 3. Beautiful chapters with thumbnails
 
-Chapters as **thumbnail + title + time**, not bare timestamps — plus seek-bar hover previews and user bookmarks. Auto-chapters for files that ship without them.
+Chapters as **thumbnail + title + time**, not bare timestamps — plus seek-bar hover previews and your own bookmarks.
 
 <img src="docs/screenshots/chapters-eyes-wide-shut.png" alt="Chapter panel with per-chapter thumbnails" width="880">
 
@@ -81,7 +81,7 @@ cd ok-player
 dotnet build OkPlayer.sln -c Release
 ```
 
-To produce the installer + portable zip: `./installer/build-installer.ps1`.
+To produce the release artifacts (installer `.exe` + portable `.zip`): `./installer/build-installer.ps1`.
 
 ## Non-goals
 

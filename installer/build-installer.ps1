@@ -57,3 +57,10 @@ if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
 
 $setup = Join-Path $artifacts "OkPlayer-Setup-v$Version-win-x64.exe"
 Write-Host "Installer built: $setup ($([int]((Get-Item $setup).Length/1MB)) MB)"
+
+# Portable build: the same self-contained publish, zipped. Shipped alongside the installer on each release,
+# so produce it here too (no separate manual step) — unzip-and-run, no install.
+$zip = Join-Path $artifacts "OkPlayer-v$Version-win-x64.zip"
+if (Test-Path $zip) { Remove-Item $zip -Force }
+Compress-Archive -Path (Join-Path $publish '*') -DestinationPath $zip -CompressionLevel Optimal
+Write-Host "Portable zip built: $zip ($([int]((Get-Item $zip).Length/1MB)) MB)"
