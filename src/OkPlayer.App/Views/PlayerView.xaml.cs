@@ -189,6 +189,7 @@ public sealed partial class PlayerView : UserControl
     // caption buttons.
     private bool _historyOpen; // the History surface is showing (idle-only; mutually exclusive with playback)
     private bool _loading;     // an open is in flight (load accepted, awaiting the first frame or a load error)
+    private string? _audioArtForPath; // the audio file we've resolved the now-playing cover art for
 
     private void ApplyMediaPresence()
     {
@@ -225,18 +226,52 @@ public sealed partial class PlayerView : UserControl
         }
     }
 
-    /// <summary>Audio-only media (flac/mp3/…) renders no video frames, so the plane is a black void. Show a
-    /// now-playing card over it instead of looking broken. Gated on the audio extension so a real video file
-    /// never flashes the card; the per-frame video-width check lets embedded cover art show as video instead.</summary>
+    /// <summary>Audio-only media (flac/mp3/…) renders no video frames (the playback engine runs with
+    /// audio-display=no, so embedded cover art is never a video track). Show a now-playing card over the black
+    /// plane instead of looking broken — with the file's cover art when it has any. Gated on the audio extension
+    /// so a real video file never flashes the card.</summary>
     private void ApplyAudioSurface(bool has)
     {
         bool audioOnly = has && Vm.VideoWidth <= 0
             && _currentPath is { } p && OkPlayer.Core.MediaFormats.IsAudio(p);
         AudioNowPlaying.Visibility = audioOnly ? Visibility.Visible : Visibility.Collapsed;
         if (audioOnly)
+        {
             AudioTitle.Text = !string.IsNullOrWhiteSpace(Vm.MediaTitle)
                 ? Vm.MediaTitle
                 : (_currentPath is { } cp ? System.IO.Path.GetFileName(cp) : string.Empty);
+            if (_audioArtForPath != _currentPath) // kick the extraction once per file, not on every refresh
+            {
+                _audioArtForPath = _currentPath;
+                ShowAudioArtFallback();             // music-note tile until the art (if any) lands
+                _ = LoadCoverArtAsync(_currentPath!);
+            }
+        }
+        else
+        {
+            _audioArtForPath = null; // next audio file re-resolves its art
+        }
+    }
+
+    private void ShowAudioArtFallback()
+    {
+        AudioArtHost.Visibility = Visibility.Collapsed;
+        AudioArtFallback.Visibility = Visibility.Visible;
+        AudioArtBrush.ImageSource = null;
+    }
+
+    private async Task LoadCoverArtAsync(string path)
+    {
+        string? png = await OkPlayer.App.Services.CoverArtService.GetAsync(path);
+        if (png is null || _currentPath != path || _audioArtForPath != path)
+            return; // no embedded art, or the file changed while we were extracting
+        try
+        {
+            AudioArtBrush.ImageSource = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(png));
+            AudioArtHost.Visibility = Visibility.Visible;
+            AudioArtFallback.Visibility = Visibility.Collapsed;
+        }
+        catch { /* leave the fallback tile up if the bitmap can't be loaded */ }
     }
 
     private void OnLoadFailed()

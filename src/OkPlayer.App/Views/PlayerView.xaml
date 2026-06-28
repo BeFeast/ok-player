@@ -137,14 +137,26 @@
         <render:MpvVideoPanel x:Name="Video" Tapped="OnVideoTapped" DoubleTapped="OnVideoDoubleTapped" Visibility="Collapsed" />
 
         <!-- Audio-only "now playing": an audio file has no video plane, so without this the surface is a black
-             void that reads as "didn't open". A simple placeholder (icon + title) until the full Music Mode lands;
-             the OSC composites on top. Sits over the black VideoBackdrop, so it uses the over-content brushes. -->
+             void that reads as "didn't open". Shows the file's embedded cover art (extracted off-thread) when it
+             has any, else a music-note tile. The OSC composites on top. Sits over the black VideoBackdrop, so it
+             uses the over-content brushes. -->
         <Grid x:Name="AudioNowPlaying" Visibility="Collapsed">
-            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="18" Padding="32" MaxWidth="560">
-                <Border Width="104" Height="104" CornerRadius="52" HorizontalAlignment="Center" Background="#1F28B3AA"
-                        BorderThickness="1" BorderBrush="{ThemeResource OkOverVideoHairlineBrush}">
-                    <FontIcon Glyph="&#xE8D6;" FontSize="46" Foreground="{ThemeResource OkOverVideoAccentBrush}" />
-                </Border>
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="20" Padding="32" MaxWidth="560">
+                <Grid Width="220" Height="220" HorizontalAlignment="Center">
+                    <!-- fallback tile shown until/unless cover art is available -->
+                    <Border x:Name="AudioArtFallback" CornerRadius="16" Background="#1F28B3AA"
+                            BorderThickness="1" BorderBrush="{ThemeResource OkOverVideoHairlineBrush}">
+                        <FontIcon Glyph="&#xE8D6;" FontSize="72" Foreground="{ThemeResource OkOverVideoAccentBrush}"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <!-- extracted cover art (CornerRadius clips the image brush) -->
+                    <Border x:Name="AudioArtHost" CornerRadius="16" Visibility="Collapsed">
+                        <Border.Shadow><ThemeShadow /></Border.Shadow>
+                        <Border.Background>
+                            <ImageBrush x:Name="AudioArtBrush" Stretch="UniformToFill" />
+                        </Border.Background>
+                    </Border>
+                </Grid>
                 <TextBlock x:Name="AudioTitle" HorizontalAlignment="Center" TextAlignment="Center" FontSize="19"
                            FontWeight="SemiBold" Foreground="{ThemeResource OkOverVideoTextBrush}"
                            TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" />
