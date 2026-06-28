@@ -2120,8 +2120,10 @@ public sealed partial class PlayerView : UserControl
         try
         {
             var items = await e.DataView.GetStorageItemsAsync();
-            var file = items.OfType<StorageFile>().FirstOrDefault();
-            DragFileName.Text = file is not null ? System.IO.Path.GetFileName(file.Path) : string.Empty;
+            var first = items.FirstOrDefault(); // a file or a folder — show whichever was dragged
+            DragFileName.Text = first is not null
+                ? System.IO.Path.GetFileName(first.Path.TrimEnd('\\', '/'))
+                : string.Empty;
         }
         catch { DragFileName.Text = string.Empty; }
         finally { deferral.Complete(); }
@@ -2133,6 +2135,36 @@ public sealed partial class PlayerView : UserControl
     {
         DragOverlay.Visibility = Visibility.Collapsed;
         _dragNameLoaded = false;
+    }
+
+    /// <summary>Drop-a-folder → playlist: scan the folder for media (recursively, depth-bounded — see
+    /// <see cref="OkPlayer.Core.FolderScan"/>), build the playlist, and start the first file. The scan runs off
+    /// the UI thread because a deep or network folder can take a moment.</summary>
+    private async Task OpenFolderAsPlaylist(string folderPath)
+    {
+        // A large or network folder can take a while to scan off-thread. If the user opens or drops something
+        // else meanwhile, that newer action must win — claim a generation up front and bail if it's superseded,
+        // so a slow scan can't silently replace whatever is playing by the time it finishes. (_openGeneration is
+        // UI-thread-only and bumped by OpenMedia/CloseFile; the continuation resumes on the UI thread.)
+        int gen = ++_openGeneration;
+        var media = await Task.Run(() => OkPlayer.Core.FolderScan.MediaFiles(folderPath));
+        if (gen != _openGeneration)
+            return; // a newer open/drop took over while we were scanning — don't clobber it
+        if (media.Count == 0)
+        {
+            ShowToast("No media in that folder");
+            return;
+        }
+        OpenMedia(media[0]); // builds the immediate-folder playlist and handles a failed open via its own catch
+        if (_currentPath != media[0])
+            return; // the first file wouldn't open (OpenMedia toasted + restored the idle surface) — don't leave
+                    // the player on a playlist rooted on a file that never played
+        // Override the immediate-folder playlist OpenMedia just built with the full recursive scan (subfolders
+        // included) and surface it in the Up-Next panel.
+        _shuffle = false; // a folder defines a natural order — honor it rather than shuffle it away
+        _playlist = new OkPlayer.Core.Playlist(media, media[0], sort: false) { Repeat = _repeat };
+        RebuildUpNext();
+        Vm.Play();
     }
 
     private async void OnDrop(object sender, DragEventArgs e)
@@ -2154,8 +2186,10 @@ public sealed partial class PlayerView : UserControl
                 else
                     OpenMedia(file.Path);
             }
+            else if (items.OfType<StorageFolder>().FirstOrDefault() is { } folder)
+                await OpenFolderAsPlaylist(folder.Path); // dropped folder → recursive playlist, play the first file
             else if (items.Count > 0)
-                ShowToast("Drop a media file"); // folder / non-file drop: feedback instead of silence
+                ShowToast("Drop a media file or folder"); // non-file/non-folder drop: feedback instead of silence
         }
         catch (Exception)
         {
