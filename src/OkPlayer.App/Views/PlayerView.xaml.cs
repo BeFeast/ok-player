@@ -25,6 +25,7 @@ public sealed partial class PlayerView : UserControl
 {
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _idleTimer;
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _toastTimer;
+    private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _loadWatchdog; // backstop: never let the spinner hang forever
     private bool _chromeVisible; // starts false to match the chrome's initial Opacity=0, so the first RevealChrome actually animates it in
     private bool _panelOpen;
     private bool _syncingChapter;
@@ -122,6 +123,11 @@ public sealed partial class PlayerView : UserControl
         _toastTimer.IsRepeating = false;
         _toastTimer.Tick += (_, _) => ToastHideSb.Begin();
 
+        _loadWatchdog = DispatcherQueue.CreateTimer();
+        _loadWatchdog.Interval = TimeSpan.FromSeconds(30); // generous: a real load (even a slow stream) starts well within this
+        _loadWatchdog.IsRepeating = false;
+        _loadWatchdog.Tick += OnLoadWatchdogTick;
+
         _saveTimer = DispatcherQueue.CreateTimer();
         _saveTimer.Interval = TimeSpan.FromSeconds(10); // periodically persist the resume position
         _saveTimer.IsRepeating = true;
@@ -188,7 +194,10 @@ public sealed partial class PlayerView : UserControl
     {
         bool has = Vm.HasMedia;
         if (has)
-            _loading = false; // the file is ready — drop the loading spinner
+        {
+            _loading = false;       // the file is ready — drop the loading spinner
+            _loadWatchdog.Stop();   // and disarm the never-hang backstop
+        }
         if (has && _historyOpen)
             _historyOpen = false; // opening a file from History (or anywhere) takes over the canvas
         // While a load is in flight the spinner owns the canvas, so suppress the welcome/History idle surfaces.
@@ -233,7 +242,20 @@ public sealed partial class PlayerView : UserControl
     private void OnLoadFailed()
     {
         _loading = false;      // async open/decode failure — tear down the spinner (the VM also toasts the error)
+        _loadWatchdog.Stop();
         ApplyMediaPresence();  // back to the idle welcome surface
+    }
+
+    /// <summary>The open never produced a first frame or a load error within the timeout (e.g. mpv stalled on a
+    /// dead network mount and emitted nothing) — give up rather than spin forever.</summary>
+    private void OnLoadWatchdogTick(Microsoft.UI.Dispatching.DispatcherQueueTimer sender, object args)
+    {
+        sender.Stop();
+        if (!_loading || Vm.HasMedia)
+            return; // already resolved between the tick firing and now
+        _loading = false;
+        ApplyMediaPresence();
+        ShowToast("Couldn't play this file");
     }
 
     private void OnWelcomeOpenTapped(object sender, TappedRoutedEventArgs e)
@@ -1874,6 +1896,8 @@ public sealed partial class PlayerView : UserControl
             // false, so OnOpening's reset doesn't re-fire ApplyMediaPresence; call it here to reveal the overlay.
             _loading = true;
             LoadingName.Text = DisplayNameFor(pathOrUrl);
+            _loadWatchdog.Stop();
+            _loadWatchdog.Start(); // (re)arm the never-hang backstop for this open
             ApplyMediaPresence();
             _reachedEnd = false;   // fresh file: not finished until it plays through to its own EOF
             _explicitResume = null; // a launch resume belongs only to its launch file (the two launch paths set it
@@ -1905,6 +1929,7 @@ public sealed partial class PlayerView : UserControl
         catch (Exception)
         {
             _loading = false;     // synchronous open failure — drop the spinner with the idle surface
+            _loadWatchdog.Stop();
             ShowToast("Couldn't open this file");
             ApplyMediaPresence(); // restore the idle surface (e.g. the welcome shelf after a failed History resume)
         }
@@ -1952,24 +1977,38 @@ public sealed partial class PlayerView : UserControl
             _playlist = null; // a lone URL with no playlist context — single stream
             return;
         }
-        try
+        // A fresh folder is needed. Enumerating it can block on a slow/dead network mount (NFS/SMB), and doing
+        // that on the UI thread would freeze the dispatcher — the marshaled file-loaded event could never run,
+        // so the file would never actually start (the loading spinner would hang forever). Scan off the UI
+        // thread instead; the playlist fills in a moment later. Until then, treat playback as single-file.
+        _playlist = null;
+        _ = BuildFolderPlaylistAsync(key, _openGeneration);
+    }
+
+    /// <summary>Enumerate the file's folder off the UI thread and build the folder-as-playlist around it, then
+    /// marshal the result back. A generation guard drops a stale scan if a newer open superseded it; the
+    /// null-playlist guard yields to a playlist another path (e.g. a recursive folder drop) set meanwhile.</summary>
+    private async Task BuildFolderPlaylistAsync(string key, int gen)
+    {
+        string? dir = System.IO.Path.GetDirectoryName(key);
+        if (dir is null)
+            return;
+        System.Collections.Generic.List<string>? siblings = await Task.Run(() =>
         {
-            string? dir = System.IO.Path.GetDirectoryName(key);
-            if (dir is null)
+            try
             {
-                _playlist = null;
-                return;
+                var list = new System.Collections.Generic.List<string>();
+                foreach (var f in System.IO.Directory.EnumerateFiles(dir))
+                    if (OkPlayer.Core.MediaFormats.IsMedia(f))
+                        list.Add(f);
+                return list;
             }
-            var siblings = new System.Collections.Generic.List<string>();
-            foreach (var f in System.IO.Directory.EnumerateFiles(dir))
-                if (OkPlayer.Core.MediaFormats.IsMedia(f))
-                    siblings.Add(f);
-            _playlist = new OkPlayer.Core.Playlist(siblings, key) { Repeat = _repeat, Shuffle = _shuffle };
-        }
-        catch
-        {
-            _playlist = null; // unreadable folder — fall back to single-file playback
-        }
+            catch { return (System.Collections.Generic.List<string>?)null; } // unreadable folder — stay single-file
+        });
+        if (gen != _openGeneration || siblings is null || _playlist is not null)
+            return; // superseded by a newer open, unreadable, or another path already set the playlist
+        _playlist = new OkPlayer.Core.Playlist(siblings, key) { Repeat = _repeat, Shuffle = _shuffle };
+        RebuildUpNext();
     }
 
     /// <summary>Project the folder playlist into the Up-Next rows and refresh the panel's folder header /
