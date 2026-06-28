@@ -42,12 +42,14 @@ public sealed partial class SettingsWindow : Window
         ApplyTheme();
         App.Settings.Changed += ApplyTheme;
         App.MpvVersionChanged += OnMpvVersionChanged;
+        App.Updates.Changed += OnUpdatesChanged; // a background check finishing while About is open refreshes the card
         if (Content is FrameworkElement rootEl)
             rootEl.ActualThemeChanged += OnActualThemeChanged;
         Closed += (_, _) =>
         {
             App.Settings.Changed -= ApplyTheme;
             App.MpvVersionChanged -= OnMpvVersionChanged;
+            App.Updates.Changed -= OnUpdatesChanged;
             _copyStatusTimer?.Stop(); // don't let a pending copy-status tick write to a torn-down element
             if (Content is FrameworkElement r)
                 r.ActualThemeChanged -= OnActualThemeChanged;
@@ -129,6 +131,11 @@ public sealed partial class SettingsWindow : Window
         AboutHeroVersionChip.Text = string.IsNullOrEmpty(version) ? Dash : version;
         AboutAppVersion.Text = string.IsNullOrEmpty(version) ? Dash : version;
 
+        // Release channel (currently "beta" for the whole pre-1.0 program): the hero chip (UPPER) + the App row.
+        string channel = App.ReleaseChannel ?? "";
+        AboutHeroChannelChip.Text = channel.ToUpperInvariant();
+        AboutAppChannel.Text = channel.Length == 0 ? Dash : char.ToUpperInvariant(channel[0]) + channel[1..];
+
         // Built commit's short SHA. Empty outside a git build → an em dash with no state tag. A "-dirty" suffix
         // is kept verbatim (uncommitted build) and skips the stale check (see StartStaleCheck).
         string sha = App.GitSha;
@@ -191,6 +198,71 @@ public sealed partial class SettingsWindow : Window
         s = s.Trim();
         const string prefix = "mpv ";
         return s.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? s[prefix.Length..].Trim() : s;
+    }
+
+    // ---- updates (About → Updates card) ----
+
+    private bool _updatesReady; // suppress the Toggled that fires while we set the toggle's initial state in LoadUpdates
+
+    /// <summary>Reflect the persisted auto-check preference and the live update state in the About → Updates card.
+    /// Called when the About panel is shown.</summary>
+    private void LoadUpdates()
+    {
+        if (AutoUpdateToggle is null)
+            return;
+        _updatesReady = false;
+        AutoUpdateToggle.IsOn = App.Settings.Current.AutoCheckUpdates;
+        _updatesReady = true;
+        RefreshUpdatesUi();
+    }
+
+    /// <summary>Drive the status line + button visibility/enabled state from <see cref="App.Updates"/>. Safe to
+    /// call repeatedly and from the <see cref="OnUpdatesChanged"/> handler.</summary>
+    private void RefreshUpdatesUi()
+    {
+        if (AboutUpdateStatus is null)
+            return; // the card isn't realised yet
+        var u = App.Updates;
+        if (!u.IsSupported)
+        {
+            // Dev / portable build: there's no installed feed to update from. Be honest rather than implying it works.
+            AboutUpdateStatus.Text = "Unavailable (development build)";
+            CheckUpdatesButton.IsEnabled = false;
+            RestartNowButton.Visibility = Visibility.Collapsed;
+            return;
+        }
+        CheckUpdatesButton.IsEnabled = !u.IsChecking;
+        if (u.UpdateReady)
+        {
+            AboutUpdateStatus.Text = u.PendingVersion is { } v ? $"Update ready · {v}" : "Update ready";
+            RestartNowButton.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            AboutUpdateStatus.Text = u.IsChecking ? "Checking…" : "Up to date";
+            RestartNowButton.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    // UpdateService.Changed can fire off the UI thread (the background check completes on a worker) — marshal first.
+    private void OnUpdatesChanged() => DispatcherQueue?.TryEnqueue(RefreshUpdatesUi);
+
+    private void OnCheckForUpdates(object sender, RoutedEventArgs e)
+    {
+        if (!App.Updates.IsSupported)
+            return;
+        _ = App.Updates.CheckAndDownloadAsync(); // the Changed event drives the UI; reflect "Checking…" immediately
+        RefreshUpdatesUi();
+    }
+
+    private void OnRestartNow(object sender, RoutedEventArgs e) => App.Updates.ApplyAndRestart();
+
+    private void OnAutoUpdateToggled(object sender, RoutedEventArgs e)
+    {
+        if (!_updatesReady)
+            return; // ignore the programmatic IsOn set in LoadUpdates
+        App.Settings.Current.AutoCheckUpdates = AutoUpdateToggle.IsOn;
+        App.Settings.Save();
     }
 
     /// <summary>The Windows build, with the UBR revision appended when the registry exposes it
@@ -402,6 +474,7 @@ public sealed partial class SettingsWindow : Window
         {
             RefreshHwdec();         // the Video panel can toggle hwdec while this window is open — re-read it
             RefreshEngineVersion(); // engine version may have been captured after this window opened
+            LoadUpdates();          // reflect the persisted auto-check pref + the live update state
         }
         else if (integration)
             LoadIntegration();

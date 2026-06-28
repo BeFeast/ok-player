@@ -128,8 +128,10 @@ public partial class App : Application
         if (pending is not null)
             mw.DispatcherQueue.TryEnqueue(() => mw.OpenFileFromRedirect(pending));
         // Fire-and-forget background update check: ask GitHub whether a newer release exists and pre-download it
-        // (off the UI thread, failure-silent). No-op on dev/portable builds and until the Velopack feed is live.
-        _ = Updates.CheckAndDownloadAsync();
+        // (off the UI thread, failure-silent). Gated on the user preference; also a no-op on dev/portable builds
+        // and until the Velopack feed is live.
+        if (Settings.Current.AutoCheckUpdates)
+            _ = Updates.CheckAndDownloadAsync();
         // If a Velopack update moved the install path, repoint the file-type association command at this exe so a
         // double-click still launches the current build. Off the UI thread (registry I/O); logged; no-op when the
         // user has no associations registered or the path already matches.
