@@ -307,25 +307,36 @@ public sealed class HistoryService
     private static bool IsListable(string path)
         => path.Contains("://", StringComparison.Ordinal) || IsNetworkPath(path) || File.Exists(path);
 
-    /// <summary>True for a UNC path (<c>\\server\share\…</c>) or a path on a mapped network drive (e.g. an
-    /// NFS/SMB mount surfaced as <c>Z:\</c>). Errs toward <c>true</c> on any classification failure, so a file
-    /// that may be present is never hidden by a misclassification.</summary>
+    /// <summary>True for a UNC path (<c>\\server\share\…</c>) or a path on a <b>mapped network drive</b> (e.g. an
+    /// NFS/SMB mount surfaced as <c>Z:\</c>, whose <see cref="DriveType.Network"/> stays reported even while the
+    /// share is disconnected). A removable/fixed <b>local</b> drive that is currently unplugged or unmounted
+    /// reports <see cref="DriveType.NoRootDirectory"/> (or fails to probe) — that is a local-and-missing file, so
+    /// it is deliberately <i>not</i> treated as network: it falls through to <see cref="File.Exists"/> and drops
+    /// off, rather than lingering in History as if it were a flaky network share.</summary>
     public static bool IsNetworkPath(string path)
+        => IsNetworkPath(path, ProbeRootDriveType);
+
+    /// <summary>Testable core of <see cref="IsNetworkPath(string)"/>: the root drive-type probe is injected so the
+    /// classification can be unit-tested without depending on the volumes actually mounted on the test machine
+    /// (the probe returns <c>null</c> when the root can't be classified).</summary>
+    internal static bool IsNetworkPath(string path, Func<string, DriveType?> rootDriveType)
     {
         if (string.IsNullOrEmpty(path))
             return false;
         if (path.StartsWith(@"\\", StringComparison.Ordinal))
             return true; // UNC, including \\server\share and \\?\UNC\
-        try
-        {
-            if (!Path.IsPathRooted(path))
-                return false;
-            string? root = Path.GetPathRoot(path);
-            if (string.IsNullOrEmpty(root))
-                return false;
-            return new DriveInfo(root).DriveType is DriveType.Network or DriveType.NoRootDirectory;
-        }
-        catch { return true; } // can't classify the root -> don't risk hiding a file that may be present
+        if (!Path.IsPathRooted(path))
+            return false;
+        string? root = Path.GetPathRoot(path);
+        if (string.IsNullOrEmpty(root))
+            return false;
+        return rootDriveType(root) == DriveType.Network; // only a mapped network drive bypasses File.Exists
+    }
+
+    private static DriveType? ProbeRootDriveType(string root)
+    {
+        try { return new DriveInfo(root).DriveType; }
+        catch { return null; } // unclassifiable root -> treat as local; File.Exists is the decider
     }
 
     /// <summary>Wipe all watch history (resume positions, recents, bookmarks, user chapters). Returns
