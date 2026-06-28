@@ -77,6 +77,14 @@ public sealed partial class PlayerView : UserControl
     private int _timelineWarmGen = -1; // the open generation a coarse seek-preview warm is already running for
     private System.Threading.Tasks.Task<bool>? _thumbReady; // resolves when the decode engine has the current file
 
+    // ---- synced lyrics (audio karaoke overlay) ----
+    private readonly ObservableCollection<LyricRow> _lyrics = new();
+    private System.Collections.Generic.IReadOnlyList<OkPlayer.Core.LrcLine> _lyricLines = System.Array.Empty<OkPlayer.Core.LrcLine>();
+    private int _lyricsGen;               // bumps per fetch / file change; a stale lyrics fetch bails on mismatch
+    private int _lyricsActiveIndex = -1;  // the currently highlighted line, or -1
+    private bool _lyricsTimed;            // the loaded sheet is synced (drives the highlight + click-to-seek)
+    private string? _lyricsForPath;       // the file the loaded lyrics belong to (dedupes reloads)
+
     public PlayerViewModel Vm { get; } = new();
 
     /// <summary>The auto-hiding top bar, used as the window's title-bar drag region.</summary>
@@ -161,6 +169,7 @@ public sealed partial class PlayerView : UserControl
         };
         Vm.PropertyChanged += OnVmPropertyChanged;
         Vm.ToastRequested += ShowToast;
+        LyricsList.ItemsSource = _lyrics;
         // "Clear history" / retention prune can fire from the Settings window — refresh when it does.
         _history.Changed += OnHistoryChanged;
         Vm.EndReached += OnEndReached; // auto-advance the folder playlist when a file plays out
@@ -252,6 +261,7 @@ public sealed partial class PlayerView : UserControl
         else
         {
             _audioArtForPath = null; // next audio file re-resolves its art
+            CloseLyrics();           // lyrics are audio-only — hide the overlay when we switch to video/welcome
         }
     }
 
@@ -274,6 +284,130 @@ public sealed partial class PlayerView : UserControl
             AudioArtFallback.Visibility = Visibility.Collapsed;
         }
         catch { /* leave the fallback tile up if the bitmap can't be loaded */ }
+    }
+
+    // ===== synced lyrics (audio karaoke overlay) =====
+
+    private void OnLyricsToggle(object sender, RoutedEventArgs e)
+    {
+        if (LyricsOverlay.Visibility == Visibility.Visible)
+            CloseLyrics();
+        else
+            OpenLyrics();
+    }
+
+    private void OnLyricsClose(object sender, RoutedEventArgs e) => CloseLyrics();
+
+    private void CloseLyrics() => LyricsOverlay.Visibility = Visibility.Collapsed;
+
+    /// <summary>Show the overlay; fetch lyrics for the current track if we don't already have them, else just
+    /// re-sync the highlight to the playhead.</summary>
+    private void OpenLyrics()
+    {
+        LyricsOverlay.Visibility = Visibility.Visible;
+        if (_lyricsForPath != _currentPath)
+            _ = LoadLyricsAsync(_currentPath);
+        else
+            UpdateLyricHighlight(force: true);
+    }
+
+    /// <summary>Resolve lyrics for <paramref name="path"/> (sidecar → cache → LRCLIB) off the UI thread, behind a
+    /// generation guard so a track change supersedes a slow fetch. In a private session, don't cache to disk.</summary>
+    private async System.Threading.Tasks.Task LoadLyricsAsync(string? path)
+    {
+        int gen = ++_lyricsGen;
+        _lyrics.Clear();
+        _lyricLines = System.Array.Empty<OkPlayer.Core.LrcLine>();
+        _lyricsActiveIndex = -1;
+        _lyricsTimed = false;
+        _lyricsForPath = path;
+        ShowLyricsStatus("Searching for lyrics…");
+        if (string.IsNullOrEmpty(path))
+        {
+            ShowLyricsStatus("No lyrics");
+            return;
+        }
+
+        TrackMetadata meta = await Vm.ReadMetadataAsync();
+        if (gen != _lyricsGen)
+            return;
+        var (artist, track) = OkPlayer.Core.TrackTags.Resolve(
+            meta.Artist, meta.Title, Vm.MediaTitle, System.IO.Path.GetFileNameWithoutExtension(path));
+        var query = new OkPlayer.App.Services.LyricsQuery(
+            MediaPath: path, Artist: artist, Track: track, Album: meta.Album,
+            DurationSeconds: meta.DurationSeconds,
+            AllowNetwork: true, AllowCacheWrite: !_history.Private);
+
+        OkPlayer.Core.LrcDocument doc = await OkPlayer.App.Services.LyricsService.GetAsync(query);
+        if (gen != _lyricsGen)
+            return; // a newer file / fetch superseded this one
+
+        if (doc.IsEmpty)
+        {
+            ShowLyricsStatus("No lyrics found for this track");
+            return;
+        }
+        _lyricLines = doc.Lines;
+        _lyricsTimed = doc.HasTimings;
+        foreach (OkPlayer.Core.LrcLine line in doc.Lines)
+            _lyrics.Add(new LyricRow(line.Text, line.Time.TotalSeconds));
+        HideLyricsStatus();
+        UpdateLyricHighlight(force: true);
+    }
+
+    private void ShowLyricsStatus(string text)
+    {
+        LyricsStatus.Text = text;
+        LyricsStatus.Visibility = Visibility.Visible;
+        LyricsList.Visibility = Visibility.Collapsed;
+    }
+
+    private void HideLyricsStatus()
+    {
+        LyricsStatus.Visibility = Visibility.Collapsed;
+        LyricsList.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>Highlight the lyric line the playhead is on and scroll it into view. Cheap (a binary search and
+    /// at most two flag flips); only touches the UI when the active line actually changes.</summary>
+    private void UpdateLyricHighlight(bool force = false)
+    {
+        if (LyricsOverlay.Visibility != Visibility.Visible || !_lyricsTimed || _lyrics.Count == 0)
+            return;
+        int idx = OkPlayer.Core.LyricSync.ActiveIndex(_lyricLines, Vm.Position);
+        if (idx == _lyricsActiveIndex && !force)
+            return;
+        if (_lyricsActiveIndex >= 0 && _lyricsActiveIndex < _lyrics.Count)
+            _lyrics[_lyricsActiveIndex].IsActive = false;
+        _lyricsActiveIndex = idx;
+        if (idx >= 0 && idx < _lyrics.Count)
+        {
+            _lyrics[idx].IsActive = true;
+            LyricsList.ScrollIntoView(_lyrics[idx]);
+        }
+    }
+
+    private void OnLyricLineClick(object sender, Microsoft.UI.Xaml.Controls.ItemClickEventArgs e)
+    {
+        if (!_lyricsTimed || e.ClickedItem is not LyricRow row)
+            return; // plain (untimed) lyrics carry no per-line position to seek to
+        Vm.SeekToSeconds(row.Time);
+        RevealChrome();
+    }
+
+    /// <summary>Drop any loaded lyrics (the file is changing/closing) so the next open re-resolves. Leaves the
+    /// overlay's visibility alone — a playlist advance keeps it open and reloads when the new track's tags
+    /// arrive (via the MediaTitle handler).</summary>
+    private void ResetLyricsData()
+    {
+        _lyricsGen++; // supersede any in-flight fetch
+        _lyricsForPath = null;
+        _lyrics.Clear();
+        _lyricLines = System.Array.Empty<OkPlayer.Core.LrcLine>();
+        _lyricsActiveIndex = -1;
+        _lyricsTimed = false;
+        if (LyricsOverlay.Visibility == Visibility.Visible)
+            ShowLyricsStatus("Searching for lyrics…");
     }
 
     private void OnLoadFailed()
@@ -425,11 +559,17 @@ public sealed partial class PlayerView : UserControl
         {
             if (AudioNowPlaying.Visibility == Visibility.Visible)
                 ApplyAudioSurface(Vm.HasMedia); // the metadata title arrives after file-loaded — refresh the card
+            if (LyricsOverlay.Visibility == Visibility.Visible && _lyricsForPath != _currentPath)
+                _ = LoadLyricsAsync(_currentPath); // a new track's tags arrived — refresh the open lyrics overlay
         }
         else if (e.PropertyName == nameof(PlayerViewModel.Duration))
         {
             TryResume(); // seek-bar chapter ticks update via the Vm.ChapterFractions binding
             WarmTimeline(); // preemptively warm a coarse grid of seek-preview frames for instant scrubbing
+        }
+        else if (e.PropertyName == nameof(PlayerViewModel.Position))
+        {
+            UpdateLyricHighlight(); // advance the synced-lyrics highlight (no-op unless the overlay is open + timed)
         }
     }
 
@@ -950,6 +1090,8 @@ public sealed partial class PlayerView : UserControl
         _resumeTarget = -1;
         _resumeSubId = _resumeAudioId = null;
         _openGeneration++;       // invalidate any in-flight chapter/thumbnail warm for the closed file
+        CloseLyrics();           // back to the welcome surface — drop the lyrics overlay…
+        ResetLyricsData();       // …and the loaded sheet
         _loading = false;        // a close during a slow playlist/file open owns the loading state: drop the spinner…
         _loadWatchdog.Stop();    // …and disarm the watchdog so a superseded open can't later fire a false toast
         _playlist = null;        // drop the folder-as-playlist…
@@ -2007,6 +2149,7 @@ public sealed partial class PlayerView : UserControl
                                     // never reported a Duration, so the next normal open isn't force-seeked.
             _openGeneration++;     // invalidate any in-flight chapter-warm pass for the previous file
             _panelTabUserChosen = false; // a new file re-defaults the panel tab (audio -> Up Next, video -> Chapters)
+            ResetLyricsData();     // drop the prior file's lyrics; an open overlay reloads when the new tags arrive
             // resume only when the user keeps that on (Settings -> Playback) and didn't ask to start over
             // (History's "Play from start"); applied on the first Duration
             var record = _history.Get(pathOrUrl);
