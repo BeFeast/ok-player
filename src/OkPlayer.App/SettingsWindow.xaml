@@ -572,7 +572,7 @@
                                                    FontWeight="SemiBold" Foreground="{ThemeResource OkTextPrimaryBrush}" />
                                     </Border>
                                     <Border Background="{ThemeResource OkAccentTintBrush}" CornerRadius="6" Padding="9,4" VerticalAlignment="Center">
-                                        <TextBlock Text="STABLE" FontFamily="Segoe UI" FontSize="10" FontWeight="SemiBold"
+                                        <TextBlock x:Name="AboutHeroChannelChip" FontFamily="Segoe UI" FontSize="10" FontWeight="SemiBold"
                                                    CharacterSpacing="50" Foreground="{ThemeResource OkAccentTextBrush}" />
                                     </Border>
                                 </StackPanel>
@@ -600,7 +600,7 @@
                                         </Grid>
                                         <Grid ColumnDefinitions="*,Auto">
                                             <TextBlock Text="Channel" Style="{StaticResource AboutRowLabelStyle}" />
-                                            <TextBlock Grid.Column="1" Text="Stable" Style="{StaticResource AboutValueWordStyle}" />
+                                            <TextBlock Grid.Column="1" x:Name="AboutAppChannel" Style="{StaticResource AboutValueWordStyle}" />
                                         </Grid>
                                         <Grid ColumnDefinitions="*,Auto">
                                             <TextBlock Text="Build" Style="{StaticResource AboutRowLabelStyle}" />
@@ -610,6 +610,38 @@
                                             <TextBlock Text="License" Style="{StaticResource AboutRowLabelStyle}" />
                                             <TextBlock Grid.Column="1" Text="GPL-3.0-or-later" Style="{StaticResource AboutValueStyle}" />
                                         </Grid>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- UPDATES -->
+                            <Border Style="{StaticResource AboutCardStyle}">
+                                <StackPanel>
+                                    <TextBlock Text="UPDATES" Style="{StaticResource AboutGroupLabelStyle}" />
+                                    <StackPanel Spacing="10">
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock Text="Status" Style="{StaticResource AboutRowLabelStyle}" />
+                                            <TextBlock Grid.Column="1" x:Name="AboutUpdateStatus" Text="&#x2014;"
+                                                       Style="{StaticResource AboutValueWordStyle}" />
+                                        </Grid>
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <StackPanel>
+                                                <TextBlock Text="Check automatically" Style="{StaticResource AboutRowLabelStyle}" />
+                                                <TextBlock Text="On launch" FontFamily="Segoe UI" FontSize="11"
+                                                           Foreground="{ThemeResource OkTextTertiaryBrush}" Margin="0,1,0,0" />
+                                            </StackPanel>
+                                            <ToggleSwitch Grid.Column="1" x:Name="AutoUpdateToggle" MinWidth="0"
+                                                          OnContent="" OffContent="" VerticalAlignment="Center"
+                                                          Toggled="OnAutoUpdateToggled" />
+                                        </Grid>
+                                        <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,2,0,0">
+                                            <Button x:Name="CheckUpdatesButton" Content="Check for updates" Click="OnCheckForUpdates"
+                                                    CornerRadius="7" Padding="14,7" FontSize="12.5" />
+                                            <Button x:Name="RestartNowButton" Content="Restart to update" Click="OnRestartNow"
+                                                    CornerRadius="7" Padding="14,7" FontSize="12.5" Visibility="Collapsed"
+                                                    Background="{ThemeResource OkAccentBrush}" Foreground="{ThemeResource OkOnAccentBrush}"
+                                                    BorderThickness="0" />
+                                        </StackPanel>
                                     </StackPanel>
                                 </StackPanel>
                             </Border>

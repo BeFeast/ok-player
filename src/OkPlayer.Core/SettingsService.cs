@@ -35,6 +35,9 @@ public sealed class AppSettings
     // Privacy (Integration panel)
     public int HistoryRetentionDays { get; set; } = 0;   // auto-prune history older than N days; 0 = keep forever
 
+    // Updates (About panel) — Velopack auto-update. On by default for the beta program.
+    public bool AutoCheckUpdates { get; set; } = true;   // check GitHub for a newer release on launch
+
     public int SchemaVersion { get; set; } = 1;          // forward-compat migration hook
 }
 

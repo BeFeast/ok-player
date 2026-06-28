@@ -159,6 +159,8 @@ public sealed partial class PlayerView : UserControl
         Seek.HoverChanged += OnSeekHover;
         Seek.HoverEnded += OnSeekHoverEnded;
         App.Settings.Changed += OnSettingsChanged; // re-evaluate pause auto-hide when its toggle changes mid-pause
+        App.Updates.Changed += OnUpdateStateChanged; // surface a ready update once, as an unobtrusive toast
+        OnUpdateStateChanged(); // also catch an update already staged before we subscribed (a prior-session download)
         Unloaded += (_, _) =>
         {
             if (_viewUnloaded) return;
@@ -166,6 +168,7 @@ public sealed partial class PlayerView : UserControl
             _saveTimer.Stop();
             _history.Changed -= OnHistoryChanged; // shared instance outlives the view — don't leak the handler
             App.Settings.Changed -= OnSettingsChanged; // shared instance outlives the view — don't leak the handler
+            App.Updates.Changed -= OnUpdateStateChanged;
             _mediaInfoWindow?.Close(); // don't leave the inspector window orphaned when the player tears down
             _lyricsCts?.Cancel();   // abort + release a lyrics fetch still in flight when the view tears down
             _lyricsCts?.Dispose();
@@ -782,6 +785,19 @@ public sealed partial class PlayerView : UserControl
         if (Vm.IsPaused)
             RevealChrome();
     }
+
+    private bool _updateToastShown; // session guard: announce a ready update once, not on every Changed tick
+
+    /// <summary>When a background-downloaded update becomes ready, surface it once per session as an unobtrusive
+    /// toast pointing at Settings → About to restart. <see cref="UpdateService.Changed"/> can fire off the UI
+    /// thread (the check completes on a worker), so marshal before touching the toast.</summary>
+    private void OnUpdateStateChanged() => DispatcherQueue.TryEnqueue(() =>
+    {
+        if (_viewUnloaded || _updateToastShown || !App.Updates.UpdateReady)
+            return; // skip a callback that landed after the view tore down (Changed can fire from a worker thread)
+        _updateToastShown = true;
+        ShowToast("Update ready · open Settings to restart");
+    });
 
     // ---- input ----
 
