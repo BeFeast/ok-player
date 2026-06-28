@@ -1389,7 +1389,10 @@ public sealed partial class PlayerView : UserControl
             return; // already shown (loaded from the cached poster path in LoadRecents)
         // 1) Cheap sidecar-only check first — runs even when the entry is marked NoUsablePoster, so art added
         //    after the track was first seen is picked up (the media file's mtime/size don't change).
-        if (await Services.CoverArtService.GetSidecarAsync(entry.Path) is { } sidecar && System.IO.File.Exists(sidecar))
+        // GetSidecarAsync already found this file by enumerating off-thread; the re-stat just guards a TOCTOU
+        // delete. Skip it for network paths so a flaky share can't block the resumed continuation (UI thread).
+        if (await Services.CoverArtService.GetSidecarAsync(entry.Path) is { } sidecar
+            && (OkPlayer.Core.NetworkPath.IsNetwork(sidecar) || System.IO.File.Exists(sidecar)))
         {
             SetAudioPoster(entry, sidecar, posterPath);
             return;
@@ -2041,7 +2044,9 @@ public sealed partial class PlayerView : UserControl
             ShowToast("Not a local file");
             return;
         }
-        if (!System.IO.File.Exists(path))
+        // Skip the existence check for network paths — statting a dead SMB mount on the UI thread would freeze
+        // the window; Explorer handles a missing target on its own. Only stat genuinely local files here.
+        if (!OkPlayer.Core.NetworkPath.IsNetwork(path) && !System.IO.File.Exists(path))
         {
             ShowToast("File not found");
             return;
@@ -2729,7 +2734,10 @@ public sealed partial class PlayerView : UserControl
             if (data.Contains(StandardDataFormats.Text))
             {
                 string text = (await data.GetTextAsync() ?? string.Empty).Trim().Trim('"');
-                if (text.Length > 0 && (OkPlayer.Core.MediaFormats.IsPlayableUrl(text) || System.IO.File.Exists(text)))
+                // Accept a network path (UNC / mapped drive) without File.Exists — statting a dead mount on the
+                // UI thread would freeze the app; OpenMedia hands it to libmpv, which opens it off-thread.
+                if (text.Length > 0 && (OkPlayer.Core.MediaFormats.IsPlayableUrl(text)
+                    || OkPlayer.Core.NetworkPath.IsNetwork(text) || System.IO.File.Exists(text)))
                 {
                     OpenMedia(text);
                     return;
