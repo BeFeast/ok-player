@@ -69,6 +69,31 @@ public sealed partial class MainWindow : Window
             root.RequestedTheme = SettingsWindow.ThemeFor(App.Settings.Current.Theme);
     }
 
+    /// <summary>Open a file a second launch forwarded into this single instance (see <see cref="App"/>), then
+    /// bring the window forward. Engine is already up in a running instance, so open immediately. UI thread.</summary>
+    public void OpenFileFromRedirect(string path)
+    {
+        Player.OpenMedia(path);
+        BringToForeground();
+    }
+
+    /// <summary>Surface this window: restore it if minimized, activate it, and force it to the foreground — a
+    /// plain <see cref="Window.Activate"/> can't steal focus from the app the user is currently in.</summary>
+    public void BringToForeground()
+    {
+        try
+        {
+            if (AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized } p)
+                p.Restore();
+        }
+        catch { }
+        Activate();
+        try { SetForegroundWindow(WinRT.Interop.WindowNative.GetWindowHandle(this)); } catch { }
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
     private SettingsWindow? _settingsWindow;
 
     private void OpenSettings()
