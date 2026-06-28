@@ -101,8 +101,11 @@ public static class Lrc
 
         if (timed.Count > 0)
         {
-            // A positive [offset] makes lyrics appear earlier, i.e. subtract it from each stamp; clamp at zero.
-            TimeSpan offset = TimeSpan.FromMilliseconds(offsetMs);
+            // A positive [offset] makes lyrics appear earlier, i.e. subtract it from each stamp; clamp at zero. A
+            // pathological offset (huge / NaN) is ignored rather than allowed to overflow TimeSpan.
+            TimeSpan offset = !double.IsNaN(offsetMs) && Math.Abs(offsetMs) < TimeSpan.MaxValue.TotalMilliseconds
+                ? TimeSpan.FromMilliseconds(offsetMs)
+                : TimeSpan.Zero;
             for (int k = 0; k < timed.Count; k++)
             {
                 TimeSpan t = timed[k].Time - offset;
@@ -128,18 +131,24 @@ public static class Lrc
         Match m = TimeTag.Match(tag.Trim());
         if (!m.Success)
             return false;
-        int minutes = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
-        int seconds = int.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture);
+        // The minutes capture is unbounded (\d+), so parse defensively — a pathological field must skip the
+        // stamp, never throw (the "never throws" contract). long widens the minutes*60 arithmetic safely.
+        if (!long.TryParse(m.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out long minutes)
+            || !int.TryParse(m.Groups[2].Value, NumberStyles.None, CultureInfo.InvariantCulture, out int seconds))
+            return false;
         double frac = 0;
         if (m.Groups[4].Success)
         {
-            string f = m.Groups[4].Value;
+            string f = m.Groups[4].Value; // 1–3 digits, so int.Parse can't overflow here
             // The ':' LRC variant ([mm:ss:cc]) is always centiseconds; the '.' variant is .x/.xx/.xxx by length.
             frac = m.Groups[3].Value == ":"
                 ? int.Parse(f, CultureInfo.InvariantCulture) / 100.0
                 : int.Parse(f, CultureInfo.InvariantCulture) / Math.Pow(10, f.Length);
         }
-        time = TimeSpan.FromSeconds(minutes * 60 + seconds + frac);
+        double totalSeconds = (double)minutes * 60 + seconds + frac;
+        if (totalSeconds < 0 || totalSeconds > TimeSpan.MaxValue.TotalSeconds)
+            return false; // out of TimeSpan range — skip rather than overflow
+        time = TimeSpan.FromSeconds(totalSeconds);
         return true;
     }
 

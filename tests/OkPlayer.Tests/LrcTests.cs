@@ -119,6 +119,27 @@ public class LrcTests
         Assert.All(doc.Lines, l => Assert.Equal(TimeSpan.Zero, l.Time));
     }
 
+    [Theory]
+    [InlineData("[99999999999:00.00]bad")]            // minutes fit long but overflow TimeSpan → range guard skips
+    [InlineData("[123456789012345678901:00.00]bad")]  // minutes overflow long parse → TryParse skips
+    public void OverflowMinutes_AreSkipped_NotThrown(string badLine)
+    {
+        // The parser must honour its "never throws" contract on pathological input and keep the good line.
+        var doc = Lrc.Parse(badLine + "\n[00:01.00]good");
+        Assert.True(doc.HasTimings);
+        Assert.Single(doc.Lines);
+        Assert.Equal("good", doc.Lines[0].Text);
+    }
+
+    [Fact]
+    public void HugeOffset_IsIgnored_NotOverflowed()
+    {
+        // A pathological [offset:…] must not overflow TimeSpan — it is ignored, leaving the stamp untouched.
+        var doc = Lrc.Parse("[offset:999999999999999999]\n[00:10.00]a");
+        Assert.Single(doc.Lines);
+        Assert.Equal(10.0, doc.Lines[0].Time.TotalSeconds, 6);
+    }
+
     [Fact]
     public void LengthTag_IsCaptured()
     {

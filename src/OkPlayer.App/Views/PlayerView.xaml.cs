@@ -328,33 +328,46 @@ public sealed partial class PlayerView : UserControl
             return;
         }
 
-        TrackMetadata meta = await Vm.ReadMetadataAsync();
-        if (gen != _lyricsGen)
-            return;
-        var (artist, track) = OkPlayer.Core.TrackTags.Resolve(
-            meta.Artist, meta.Title, Vm.MediaTitle, System.IO.Path.GetFileNameWithoutExtension(path));
-        bool privateSession = _history.Private;
-        var query = new OkPlayer.App.Services.LyricsQuery(
-            MediaPath: path, Artist: artist, Track: track, Album: meta.Album,
-            DurationSeconds: meta.DurationSeconds,
-            // A private session stays fully local — sidecar/cache only; no request (not even metadata) leaves.
-            AllowNetwork: !privateSession, AllowCacheWrite: !privateSession);
-
-        OkPlayer.Core.LrcDocument doc = await OkPlayer.App.Services.LyricsService.GetAsync(query);
-        if (gen != _lyricsGen)
-            return; // a newer file / fetch superseded this one
-
-        if (doc.IsEmpty)
+        try
         {
-            ShowLyricsStatus("No lyrics found for this track");
-            return;
+            TrackMetadata meta = await Vm.ReadMetadataAsync();
+            if (gen != _lyricsGen)
+                return;
+            var (artist, track) = OkPlayer.Core.TrackTags.Resolve(
+                meta.Artist, meta.Title, Vm.MediaTitle, System.IO.Path.GetFileNameWithoutExtension(path));
+            bool privateSession = _history.Private;
+            var query = new OkPlayer.App.Services.LyricsQuery(
+                MediaPath: path, Artist: artist, Track: track, Album: meta.Album,
+                DurationSeconds: meta.DurationSeconds,
+                // A private session stays fully local — sidecar/cache only; no request (not even metadata) leaves.
+                AllowNetwork: !privateSession, AllowCacheWrite: !privateSession);
+
+            OkPlayer.Core.LrcDocument doc = await OkPlayer.App.Services.LyricsService.GetAsync(query);
+            if (gen != _lyricsGen)
+                return; // a newer file / fetch superseded this one
+
+            if (doc.IsEmpty)
+            {
+                ShowLyricsStatus("No lyrics found for this track");
+                return;
+            }
+            _lyricLines = doc.Lines;
+            _lyricsTimed = doc.HasTimings;
+            foreach (OkPlayer.Core.LrcLine line in doc.Lines)
+                _lyrics.Add(new LyricRow(line.Text, line.Time.TotalSeconds));
+            HideLyricsStatus();
+            UpdateLyricHighlight(force: true);
         }
-        _lyricLines = doc.Lines;
-        _lyricsTimed = doc.HasTimings;
-        foreach (OkPlayer.Core.LrcLine line in doc.Lines)
-            _lyrics.Add(new LyricRow(line.Text, line.Time.TotalSeconds));
-        HideLyricsStatus();
-        UpdateLyricHighlight(force: true);
+        catch when (gen != _lyricsGen)
+        {
+            // a newer load owns the overlay now — leave its state alone
+        }
+        catch
+        {
+            // fire-and-forget: a fault (e.g. a malformed sidecar, a network hiccup) must never strand the
+            // overlay on the "Searching…" spinner — fall back to the no-lyrics state for this track.
+            ShowLyricsStatus("No lyrics found for this track");
+        }
     }
 
     private void ShowLyricsStatus(string text)
