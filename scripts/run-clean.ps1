@@ -16,7 +16,7 @@
 
   It then prints the exact git short SHA and the OkPlayer.exe path that was built, and
   (unless -NoLaunch) starts it. This mirrors the publish conventions in
-  installer\build-installer.ps1.
+  installer\build-velopack.ps1.
 .PARAMETER NoLaunch
   Build but do not launch the resulting OkPlayer.exe.
 .PARAMETER AllowBranch

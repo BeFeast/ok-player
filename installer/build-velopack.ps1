@@ -1,0 +1,107 @@
+#requires -Version 7
+<#
+.SYNOPSIS
+  Build the OK Player Velopack release (auto-updating Setup.exe + portable zip) from a self-contained
+  Release publish.
+.DESCRIPTION
+  Publishes the app self-contained for win-x64, stages LICENSE.txt + THIRD-PARTY-NOTICES.md + README next
+  to it, then runs `vpk pack` to produce the Velopack artifacts in artifacts\releases:
+    - OkPlayer-win-Setup.exe      the auto-updating installer users download once
+    - OkPlayer-win-Portable.zip   the no-install portable build (our fallback "as before")
+    - OkPlayer-<ver>-full.nupkg   the full release package (the update payload)
+    - OkPlayer-<ver>-delta.nupkg  binary delta vs the previous release (from v2 onward)
+    - releases.win.json           the channel manifest the app reads to find updates
+  The GitHub Release IS the update feed: with -Publish, `vpk upload github` attaches all of the above to a
+  (pre-)release on tag v<Version>, which GithubSource then reads at runtime. Without -Publish this is a
+  local pack only (no network, no upload) — for verifying the pipeline.
+.PARAMETER Version
+  Version baked into the published assembly AND the Velopack package. Optional — defaults to the <Version>
+  in src\OkPlayer.App\OkPlayer.App.csproj (the single source of truth, also shown in Settings -> About).
+.PARAMETER Publish
+  Also upload the artifacts to a GitHub pre-release on tag v<Version> (the live update feed). Requires a
+  token in $env:GH_TOKEN or a logged-in `gh`. Omit for a local-only pack.
+.EXAMPLE
+  .\installer\build-velopack.ps1                 # local pack only (artifacts\releases)
+  .\installer\build-velopack.ps1 -Publish        # pack + publish the GitHub pre-release (the feed)
+#>
+param(
+  [string]$Version,
+  [switch]$Publish
+)
+
+$ErrorActionPreference = 'Stop'
+$repo = Split-Path -Parent $PSScriptRoot
+$publishDir = Join-Path $repo 'artifacts\publish'
+$releases = Join-Path $repo 'artifacts\releases'
+$appProj = Join-Path $repo 'src\OkPlayer.App\OkPlayer.App.csproj'
+$icon = Join-Path $repo 'src\OkPlayer.App\Assets\OkPlayer.ico'
+$repoUrl = 'https://github.com/BeFeast/ok-player'
+
+# Single source of truth: the app version lives in the csproj <Version>. Read it unless -Version overrides,
+# so the package, the release tag, and the in-app "About" can never drift apart.
+if (-not $Version) {
+  $m = Select-String -Path $appProj -Pattern '<Version>\s*([^<\s]+)\s*</Version>' | Select-Object -First 1
+  if (-not $m) { throw "No <Version> in $appProj and no -Version passed." }
+  $Version = $m.Matches[0].Groups[1].Value
+}
+Write-Host "Version: $Version"
+
+# Resolve vpk: prefer PATH, else the global-tool install location (a freshly-installed tool isn't on PATH
+# until the shell is reopened). Keep it version-matched to the Velopack NuGet package.
+$vpk = (Get-Command vpk -ErrorAction SilentlyContinue)?.Source
+if (-not $vpk) { $vpk = Join-Path $env:USERPROFILE '.dotnet\tools\vpk.exe' }
+if (-not (Test-Path $vpk)) { throw "vpk not found. Install it: dotnet tool install -g vpk --version 1.2.0" }
+
+Write-Host "Publishing self-contained Release -> $publishDir"
+if (Test-Path $publishDir) { Remove-Item $publishDir -Recurse -Force }
+dotnet publish $appProj -c Release -r win-x64 -o $publishDir -p:Version=$Version
+if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)" }
+
+Copy-Item (Join-Path $repo 'LICENSE') (Join-Path $publishDir 'LICENSE.txt') -Force
+Copy-Item (Join-Path $repo 'THIRD-PARTY-NOTICES.md') $publishDir -Force
+if (Test-Path (Join-Path $repo 'README.md')) { Copy-Item (Join-Path $repo 'README.md') $publishDir -Force }
+
+New-Item -ItemType Directory -Force -Path $releases | Out-Null
+
+# When publishing, pull the prior releases first so vpk can compute a binary delta against them. The first
+# release has no predecessor, so this is best-effort (a "no releases" failure there is expected and fine).
+if ($Publish) {
+  Write-Host "Fetching prior releases for delta computation"
+  & $vpk download github --repoUrl $repoUrl --pre --outputDir $releases 2>&1 | Write-Host
+  if ($LASTEXITCODE -ne 0) { Write-Host "  (no prior releases to delta against — first build)" }
+}
+
+# Pack the entire publish folder (self-contained runtime + libmpv + .pri + icon) into Velopack artifacts.
+# --packId must stay 'OkPlayer' forever (changing it breaks the update chain); the human name is --packTitle.
+Write-Host "Packing Velopack release -> $releases"
+& $vpk pack `
+  --packId OkPlayer `
+  --packTitle 'OK Player' `
+  --packAuthors 'BeFeast' `
+  --packVersion $Version `
+  --packDir $publishDir `
+  --mainExe OkPlayer.exe `
+  --icon $icon `
+  --outputDir $releases
+if ($LASTEXITCODE -ne 0) { throw "vpk pack failed ($LASTEXITCODE)" }
+
+$setup = Join-Path $releases 'OkPlayer-win-Setup.exe'
+if (Test-Path $setup) { Write-Host "Setup built: $setup ($([int]((Get-Item $setup).Length/1MB)) MB)" }
+
+if ($Publish) {
+  $token = $env:GH_TOKEN
+  if (-not $token) { $token = (gh auth token 2>$null) }
+  if (-not $token) { throw "No GitHub token: set `$env:GH_TOKEN or run `gh auth login`." }
+  Write-Host "Uploading GitHub pre-release v$Version (the update feed)"
+  & $vpk upload github `
+    --repoUrl $repoUrl `
+    --publish `
+    --pre `
+    --tag "v$Version" `
+    --releaseName "OK Player $Version" `
+    --token $token
+  if ($LASTEXITCODE -ne 0) { throw "vpk upload github failed ($LASTEXITCODE)" }
+  Write-Host "Published v$Version. Testers install OkPlayer-win-Setup.exe once; updates then apply in-app."
+} else {
+  Write-Host "Local pack complete (no upload). Re-run with -Publish to push the GitHub pre-release feed."
+}
