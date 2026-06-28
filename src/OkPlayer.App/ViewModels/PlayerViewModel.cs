@@ -233,6 +233,12 @@ public partial class PlayerViewModel : ObservableObject
     {
         Position = 0;
         Duration = 0;
+        // Clear the outgoing file's video dimensions. mpv reports dwidth/dheight only when a video track is
+        // present, so switching from a video to an audio-only file (no dwidth event) would otherwise leave the
+        // previous video's size here — making the audio now-playing card (gated on VideoWidth<=0) never show,
+        // so the stale last video frame stays on screen behind the new audio track.
+        VideoWidth = 0;
+        VideoHeight = 0;
         CurrentChapterIndex = -1;
         _fileChapters = new();
         _userChapters = new();
@@ -310,8 +316,10 @@ public partial class PlayerViewModel : ObservableObject
                 case "sub-scale": if (value is double ss) SubScale = ss; break;
                 // "chapter" is still observed, but CurrentChapterIndex is derived from playhead time so it
                 // matches our merged (file + user) re-indexed list, where the engine's index no longer lines up.
-                case "dwidth": if (value is long dw) VideoWidth = (int)dw; break;
-                case "dheight": if (value is long dh) VideoHeight = (int)dh; break;
+                // A non-long value means mpv dropped the property (no video track) — zero it so a prior video's
+                // size can't linger and mask an audio-only file (see OnOpening).
+                case "dwidth": VideoWidth = value is long dw ? (int)dw : 0; break;
+                case "dheight": VideoHeight = value is long dh ? (int)dh : 0; break;
                 case "demuxer-cache-time": if (value is double ct) BufferedFraction = Duration > 0 ? System.Math.Clamp(ct / Duration, 0, 1) : 0; break;
                 case "ab-loop-a": _abA = ParseAbLoop(value as string); OnPropertyChanged(nameof(AbLoopAFraction)); ScheduleAbAnnounce(); break;
                 case "ab-loop-b": _abB = ParseAbLoop(value as string); OnPropertyChanged(nameof(AbLoopBFraction)); ScheduleAbAnnounce(); break;
