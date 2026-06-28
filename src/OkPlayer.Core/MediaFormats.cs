@@ -29,4 +29,13 @@ public static class MediaFormats
 
     /// <summary>True if the path's extension is an external subtitle file (case-insensitive).</summary>
     public static bool IsSubtitle(string path) => SubSet.Contains(Path.GetExtension(path));
+
+    /// <summary>True when <paramref name="text"/> is a single absolute URL that can be handed to mpv as a stream
+    /// (http/https/rtmp/rtsp/smb/…) — used to turn a dropped or pasted link into an open. Rejects a paragraph
+    /// that merely contains a URL (it won't parse as an absolute Uri) and a bare local file path (it parses as a
+    /// <c>file:</c> Uri, which we exclude; local files are opened by path, not through here). Trims the input.</summary>
+    public static bool IsPlayableUrl(string? text)
+        => !string.IsNullOrWhiteSpace(text)
+           && Uri.TryCreate(text.Trim(), UriKind.Absolute, out var uri)
+           && !uri.IsFile;
 }

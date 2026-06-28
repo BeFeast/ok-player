@@ -2227,7 +2227,7 @@ public sealed partial class PlayerView : UserControl
             if (data.Contains(StandardDataFormats.Text))
             {
                 string text = (await data.GetTextAsync() ?? string.Empty).Trim();
-                if (text.Contains("://", StringComparison.Ordinal)) // only treat URL-like text as a link
+                if (OkPlayer.Core.MediaFormats.IsPlayableUrl(text)) // a single absolute URL, not a paragraph
                     return text;
             }
         }
@@ -2239,16 +2239,19 @@ public sealed partial class PlayerView : UserControl
     /// gentle toast when the clipboard holds neither, so a stray paste doesn't disrupt playback.</summary>
     private async void OnPasteAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
+        // Don't hijack Ctrl+V from a focused text field — the History search box, or any TextBox — let it paste
+        // there. Only the bare player surface turns a pasted URL/path into an open. Return BEFORE marking the
+        // accelerator handled, or the focused field never receives the paste.
+        if (_historyOpen || (XamlRoot is not null && FocusManager.GetFocusedElement(XamlRoot) is TextBox))
+            return;
         args.Handled = true;
-        if (_historyOpen)
-            return; // History owns the keyboard while open
         try
         {
             var data = Windows.ApplicationModel.DataTransfer.Clipboard.GetContent();
             if (data.Contains(StandardDataFormats.Text))
             {
                 string text = (await data.GetTextAsync() ?? string.Empty).Trim().Trim('"');
-                if (text.Length > 0 && (text.Contains("://", StringComparison.Ordinal) || System.IO.File.Exists(text)))
+                if (text.Length > 0 && (OkPlayer.Core.MediaFormats.IsPlayableUrl(text) || System.IO.File.Exists(text)))
                 {
                     OpenMedia(text);
                     return;
