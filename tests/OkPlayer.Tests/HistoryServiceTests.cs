@@ -18,6 +18,7 @@ public class HistoryServiceTests : IDisposable
     [Theory]
     [InlineData(@"\\nas\media\movie.mkv", true)]       // UNC share — kept even if File.Exists blips false
     [InlineData(@"\\?\UNC\nas\media\movie.mkv", true)] // extended-length UNC
+    [InlineData(@"\\?\C:\media\movie.mkv", false)]     // extended-length LOCAL path — a drive, not a share
     [InlineData(@"C:\media\movie.mkv", false)]         // local fixed drive — gated on real existence
     [InlineData(@"movie.mkv", false)]                  // relative path — not rooted
     [InlineData("", false)]                            // empty

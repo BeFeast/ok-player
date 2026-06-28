@@ -323,11 +323,25 @@ public sealed class HistoryService
     {
         if (string.IsNullOrEmpty(path))
             return false;
-        if (path.StartsWith(@"\\", StringComparison.Ordinal))
-            return true; // UNC, including \\server\share and \\?\UNC\
-        if (!Path.IsPathRooted(path))
+        // Peel the extended-length / device prefix (\\?\ or \\.\) first, so an extended-length UNC path
+        // (\\?\UNC\server\share — network) is told apart from an extended-length LOCAL path (\\?\C:\dir\file —
+        // a drive, NOT network). A bare "\\" check alone misclassifies \\?\C:\… as a share and would keep a
+        // deleted local file lingering in History.
+        string p = path;
+        if (p.StartsWith(@"\\?\", StringComparison.Ordinal) || p.StartsWith(@"\\.\", StringComparison.Ordinal))
+        {
+            p = p[4..];
+            if (p.StartsWith(@"UNC\", StringComparison.OrdinalIgnoreCase))
+                return true; // \\?\UNC\server\share — a network share
+            // otherwise \\?\C:\… or \\?\Volume{…}\… — a local volume; classify the remainder as a normal path
+        }
+        else if (p.StartsWith(@"\\", StringComparison.Ordinal))
+        {
+            return true; // plain UNC: \\server\share
+        }
+        if (!Path.IsPathRooted(p))
             return false;
-        string? root = Path.GetPathRoot(path);
+        string? root = Path.GetPathRoot(p);
         if (string.IsNullOrEmpty(root))
             return false;
         return rootDriveType(root) == DriveType.Network; // only a mapped network drive bypasses File.Exists
