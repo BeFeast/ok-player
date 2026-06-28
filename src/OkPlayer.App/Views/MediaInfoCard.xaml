@@ -68,11 +68,9 @@
         </DataTemplate>
     </UserControl.Resources>
 
-    <!-- Always a light "over video" popover; force Light so the themed Ok* accent brushes resolve to their
-         light shades (matching the hardcoded light surface) while still following the live accent. -->
-    <Border Width="660" MaxHeight="780" CornerRadius="11" Background="#FFF7F7F5"
-            BorderThickness="1" BorderBrush="#14000000" RequestedTheme="Light">
-        <Border.Shadow><ThemeShadow /></Border.Shadow>
+    <!-- Fills its host window (a movable inspector). Force Light so the themed Ok* accent brushes resolve to
+         their light shades (matching the hardcoded light surface) while still following the live accent. -->
+    <Border CornerRadius="0" Background="#FFF7F7F5" BorderThickness="0" RequestedTheme="Light">
         <Grid RowDefinitions="Auto,Auto,*,Auto">
 
             <!-- header -->
@@ -87,10 +85,9 @@
                     <TextBlock Text="{Binding FileName}" FontFamily="Cascadia Code, Consolas" FontSize="11.5"
                                Foreground="#80000000" TextTrimming="CharacterEllipsis" Margin="0,2,0,0" />
                 </StackPanel>
-                <Button Grid.Column="2" Click="OnClose" Width="28" Height="28" CornerRadius="7" Padding="0"
-                        Background="#0A000000" BorderThickness="0" VerticalAlignment="Top">
-                    <FontIcon Glyph="&#xE711;" FontSize="11" Foreground="#8C000000" />
-                </Button>
+                <!-- Reserve the top-right corner for the window's native close button (the card no longer draws
+                     its own X; the footer "Done" and the OS close both dismiss the window). -->
+                <Border Grid.Column="2" Width="32" Height="28" VerticalAlignment="Top" Background="Transparent" />
             </Grid>
 
             <!-- tabs -->
