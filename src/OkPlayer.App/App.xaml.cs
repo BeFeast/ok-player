@@ -130,6 +130,18 @@ public partial class App : Application
         // Fire-and-forget background update check: ask GitHub whether a newer release exists and pre-download it
         // (off the UI thread, failure-silent). No-op on dev/portable builds and until the Velopack feed is live.
         _ = Updates.CheckAndDownloadAsync();
+        // If a Velopack update moved the install path, repoint the file-type association command at this exe so a
+        // double-click still launches the current build. Off the UI thread (registry I/O); logged; no-op when the
+        // user has no associations registered or the path already matches.
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            try
+            {
+                if (new FileAssociationService().RefreshCommandIfStale())
+                    Log.Info("file associations: open-command refreshed to the current exe path");
+            }
+            catch (Exception ex) { Log.Warn("file associations: refresh failed: " + ex.Message); }
+        });
     }
 
     /// <summary>A file/URL passed on the command line (Explorer "Open with", a file association, or a

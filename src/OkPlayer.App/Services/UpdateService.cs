@@ -34,11 +34,16 @@ public sealed class UpdateService
     /// <summary>A check is in flight right now (so the UI can show a spinner / disable the button).</summary>
     public bool IsChecking => Volatile.Read(ref _checking) == 1;
 
-    /// <summary>A newer release is downloaded and a restart will apply it.</summary>
-    public bool UpdateReady => _pending is not null;
+    /// <summary>A newer release is staged and a restart will apply it — either downloaded this session
+    /// (<c>_pending</c>) or left staged on disk by a previous run (Velopack's
+    /// <see cref="UpdateManager.UpdatePendingRestart"/>). The latter is what lets a download survive the user
+    /// relaunching before they press Restart — <c>SetAutoApplyOnStartup(false)</c> means it isn't auto-applied,
+    /// so without this it would look like "no update" until a fresh online check re-found it.</summary>
+    public bool UpdateReady => _pending is not null || _mgr.UpdatePendingRestart is not null;
 
-    /// <summary>Version string of the downloaded, ready-to-apply update, or null when none is staged.</summary>
-    public string? PendingVersion => _pending?.TargetFullRelease?.Version?.ToString();
+    /// <summary>Version string of the staged, ready-to-apply update (this session's, or a prior run's), or null
+    /// when none is staged.</summary>
+    public string? PendingVersion => (_pending?.TargetFullRelease ?? _mgr.UpdatePendingRestart)?.Version?.ToString();
 
     /// <summary>Raised when the update state changes (check started/finished, update downloaded). May fire OFF
     /// the UI thread — marshal before touching XAML.</summary>
@@ -50,8 +55,8 @@ public sealed class UpdateService
     /// and swallowed so it can never break the app.</summary>
     public async Task CheckAndDownloadAsync()
     {
-        if (!IsSupported || _pending is not null)
-            return;
+        if (!IsSupported || UpdateReady)
+            return; // not a Velopack build, or an update is already staged (this session or left on disk by a prior run)
         if (Interlocked.Exchange(ref _checking, 1) == 1)
             return; // another check already running
         Changed?.Invoke();
@@ -75,8 +80,10 @@ public sealed class UpdateService
     /// thread once the user agrees. No-op if nothing is staged.</summary>
     public void ApplyAndRestart()
     {
-        if (_pending is null)
-            return;
-        _mgr.ApplyUpdatesAndRestart(_pending);
+        // Prefer this session's downloaded update; otherwise apply a package left staged on disk by a prior run
+        // (so a download isn't lost when the user relaunched before pressing Restart).
+        VelopackAsset? staged = _pending?.TargetFullRelease ?? _mgr.UpdatePendingRestart;
+        if (staged is not null)
+            _mgr.ApplyUpdatesAndRestart(staged);
     }
 }
