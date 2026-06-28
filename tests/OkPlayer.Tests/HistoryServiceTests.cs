@@ -15,6 +15,34 @@ public class HistoryServiceTests : IDisposable
         try { File.Delete(_path); } catch { }
     }
 
+    [Theory]
+    [InlineData(@"\\nas\media\movie.mkv", true)]       // UNC share — kept even if File.Exists blips false
+    [InlineData(@"\\?\UNC\nas\media\movie.mkv", true)] // extended-length UNC
+    [InlineData(@"\\?\C:\media\movie.mkv", false)]     // extended-length LOCAL path — a drive, not a share
+    [InlineData(@"C:\media\movie.mkv", false)]         // local fixed drive — gated on real existence
+    [InlineData(@"movie.mkv", false)]                  // relative path — not rooted
+    [InlineData("", false)]                            // empty
+    public void IsNetworkPath_TreatsUncAndNetworkDrivesAsNetwork(string path, bool expected)
+        => Assert.Equal(expected, HistoryService.IsNetworkPath(path));
+
+    // A path rooted on whatever OS the test runs on, so the drive-type branch is actually reached: the
+    // engine-agnostic unit job runs on Linux, where a Windows "Z:\" path isn't rooted and the method bails
+    // before the probe. The probe is injected, so no real volume is touched on either OS.
+    private static string RootedMediaPath()
+        => Path.Combine(Path.GetPathRoot(Path.GetFullPath("."))!, "media", "movie.mkv");
+
+    [Theory]
+    [InlineData(DriveType.Network, true)]           // mapped network drive (NFS/SMB) — bypasses File.Exists
+    [InlineData(DriveType.Fixed, false)]            // local fixed disk — gated on real existence
+    [InlineData(DriveType.Removable, false)]        // USB while plugged in — gated on real existence
+    [InlineData(DriveType.NoRootDirectory, false)]  // removable/local drive UNPLUGGED — must drop off, not linger
+    public void IsNetworkPath_OnlyMappedNetworkDriveBypassesExistence(DriveType type, bool expected)
+        => Assert.Equal(expected, HistoryService.IsNetworkPath(RootedMediaPath(), _ => type));
+
+    [Fact] // probe couldn't classify the root -> treat as local, let File.Exists decide (don't keep it visible)
+    public void IsNetworkPath_UnclassifiableRoot_IsTreatedAsLocal()
+        => Assert.False(HistoryService.IsNetworkPath(RootedMediaPath(), _ => null));
+
     [Fact]
     public void AddUserChapter_RoundTripsThroughGet()
     {
