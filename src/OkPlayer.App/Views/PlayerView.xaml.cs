@@ -2142,7 +2142,14 @@ public sealed partial class PlayerView : UserControl
     /// the UI thread because a deep or network folder can take a moment.</summary>
     private async Task OpenFolderAsPlaylist(string folderPath)
     {
+        // A large or network folder can take a while to scan off-thread. If the user opens or drops something
+        // else meanwhile, that newer action must win — claim a generation up front and bail if it's superseded,
+        // so a slow scan can't silently replace whatever is playing by the time it finishes. (_openGeneration is
+        // UI-thread-only and bumped by OpenMedia/CloseFile; the continuation resumes on the UI thread.)
+        int gen = ++_openGeneration;
         var media = await Task.Run(() => OkPlayer.Core.FolderScan.MediaFiles(folderPath));
+        if (gen != _openGeneration)
+            return; // a newer open/drop took over while we were scanning — don't clobber it
         if (media.Count == 0)
         {
             ShowToast("No media in that folder");
