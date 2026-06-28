@@ -13,7 +13,13 @@ namespace OkPlayer.App;
 /// (unpackaged) before this type is constructed.</summary>
 public partial class App : Application
 {
-    private Window? _window;
+    // The single main window, plus the cross-thread handoff for redirected launches. OnLaunched (UI thread)
+    // builds the window; OnRedirectedActivation (a background thread) may fire before that. The lock makes the
+    // two rendezvous: a redirect that loses the race stashes its file, and OnLaunched opens it once the window
+    // exists — so a file double-clicked during startup is never silently dropped.
+    private readonly object _redirectLock = new();
+    private MainWindow? _mainWindow;        // guarded by _redirectLock; null until the window is built
+    private string? _pendingRedirectFile;   // a redirect's file that arrived before the window existed
 
     /// <summary>The one shared user-settings instance (single source of truth across all windows).</summary>
     public static SettingsService Settings { get; } = new();
@@ -84,8 +90,19 @@ public partial class App : Application
         AccentManager.Initialize();
         Settings.Changed += AccentManager.Apply; // re-apply when the accent source is toggled in Settings
         var (file, resume, sub, audio) = GetLaunchTarget();
-        _window = new MainWindow(file, resume, sub, audio);
-        _window.Activate();
+        var mw = new MainWindow(file, resume, sub, audio);
+        // Publish the window and drain any redirect that raced ahead of it, atomically under the lock so a
+        // redirect can't slip a file in after we read the stash but before the window is visible.
+        string? pending;
+        lock (_redirectLock)
+        {
+            _mainWindow = mw;
+            pending = _pendingRedirectFile;
+            _pendingRedirectFile = null;
+        }
+        mw.Activate();
+        if (pending is not null)
+            mw.DispatcherQueue.TryEnqueue(() => mw.OpenFileFromRedirect(pending));
     }
 
     /// <summary>A file/URL passed on the command line (Explorer "Open with", a file association, or a
@@ -114,14 +131,27 @@ public partial class App : Application
     public void OnRedirectedActivation(AppActivationArguments args)
     {
         string? file = ExtractLaunchFile(args);
-        if (_window is MainWindow mw)
-            mw.DispatcherQueue.TryEnqueue(() =>
+        MainWindow? mw;
+        lock (_redirectLock)
+        {
+            mw = _mainWindow;
+            if (mw is null)
             {
+                // The window isn't built yet — a second launch raced startup. Stash the file so OnLaunched
+                // opens it once the window exists; otherwise this redirect returns success and the file is lost.
+                // A bare bring-to-front (no file) needs no stash: the window is about to Activate() regardless.
                 if (file is not null)
-                    mw.OpenFileFromRedirect(file);
-                else
-                    mw.BringToForeground();
-            });
+                    _pendingRedirectFile = file;
+                return;
+            }
+        }
+        mw.DispatcherQueue.TryEnqueue(() =>
+        {
+            if (file is not null)
+                mw.OpenFileFromRedirect(file);
+            else
+                mw.BringToForeground();
+        });
     }
 
     /// <summary>Pull the first openable file/URL out of a redirected launch's command line. Unpackaged apps get
