@@ -84,6 +84,7 @@ public sealed partial class PlayerView : UserControl
     private int _lyricsActiveIndex = -1;  // the currently highlighted line, or -1
     private bool _lyricsTimed;            // the loaded sheet is synced (drives the highlight + click-to-seek)
     private string? _lyricsForPath;       // the file the loaded lyrics belong to (dedupes reloads)
+    private System.Threading.CancellationTokenSource? _lyricsCts; // aborts a superseded in-flight fetch
 
     public PlayerViewModel Vm { get; } = new();
 
@@ -164,6 +165,9 @@ public sealed partial class PlayerView : UserControl
             _viewUnloaded = true;
             _saveTimer.Stop();
             _history.Changed -= OnHistoryChanged; // shared instance outlives the view — don't leak the handler
+            _lyricsCts?.Cancel();   // abort + release a lyrics fetch still in flight when the view tears down
+            _lyricsCts?.Dispose();
+            _lyricsCts = null;
             SaveProgress();
             System.Threading.Tasks.Task.Run(() => { _thumbs.Dispose(); _posterThumbs.Dispose(); });
         };
@@ -312,10 +316,15 @@ public sealed partial class PlayerView : UserControl
     }
 
     /// <summary>Resolve lyrics for <paramref name="path"/> (sidecar → cache → LRCLIB) off the UI thread, behind a
-    /// generation guard so a track change supersedes a slow fetch. In a private session, don't cache to disk.</summary>
+    /// generation guard AND a per-load cancellation token so a track change supersedes — and actually aborts the
+    /// in-flight network request of — a slow fetch. In a private session, don't cache to disk.</summary>
     private async System.Threading.Tasks.Task LoadLyricsAsync(string? path)
     {
         int gen = ++_lyricsGen;
+        _lyricsCts?.Cancel();   // abort any prior in-flight fetch before it can land on the overlay
+        _lyricsCts?.Dispose();
+        _lyricsCts = new System.Threading.CancellationTokenSource();
+        System.Threading.CancellationToken ct = _lyricsCts.Token;
         _lyrics.Clear();
         _lyricLines = System.Array.Empty<OkPlayer.Core.LrcLine>();
         _lyricsActiveIndex = -1;
@@ -330,7 +339,7 @@ public sealed partial class PlayerView : UserControl
 
         try
         {
-            TrackMetadata meta = await Vm.ReadMetadataAsync();
+            TrackMetadata meta = await Vm.ReadMetadataAsync(ct);
             if (gen != _lyricsGen)
                 return;
             var (artist, track) = OkPlayer.Core.TrackTags.Resolve(
@@ -342,12 +351,18 @@ public sealed partial class PlayerView : UserControl
                 // A private session stays fully local — sidecar/cache only; no request (not even metadata) leaves.
                 AllowNetwork: !privateSession, AllowCacheWrite: !privateSession);
 
-            OkPlayer.Core.LrcDocument doc = await OkPlayer.App.Services.LyricsService.GetAsync(query);
+            OkPlayer.Core.LrcDocument doc = await OkPlayer.App.Services.LyricsService.GetAsync(query, ct);
             if (gen != _lyricsGen)
                 return; // a newer file / fetch superseded this one
 
             if (doc.IsEmpty)
             {
+                // A miss with no usable metadata (and no sidecar) isn't final — tags can still be arriving after
+                // file-loaded. Leave the path UNRESOLVED so a later metadata/duration signal re-attempts; a genuine
+                // miss (we had artist+track, the source simply had nothing) stays pinned so we don't keep refetching.
+                bool hadMetadata = !string.IsNullOrWhiteSpace(artist) && !string.IsNullOrWhiteSpace(track);
+                if (!hadMetadata && _lyricsForPath == path)
+                    _lyricsForPath = null;
                 ShowLyricsStatus("No lyrics found for this track");
                 return;
             }
@@ -357,6 +372,10 @@ public sealed partial class PlayerView : UserControl
                 _lyrics.Add(new LyricRow(line.Text, line.Time.TotalSeconds));
             HideLyricsStatus();
             UpdateLyricHighlight(force: true);
+        }
+        catch (System.OperationCanceledException)
+        {
+            // superseded by a newer load (or a file change) which cancelled this token — that load owns the overlay
         }
         catch when (gen != _lyricsGen)
         {
@@ -368,6 +387,16 @@ public sealed partial class PlayerView : UserControl
             // overlay on the "Searching…" spinner — fall back to the no-lyrics state for this track.
             ShowLyricsStatus("No lyrics found for this track");
         }
+    }
+
+    /// <summary>If the lyrics overlay is open and showing a different (or not-yet-resolved) track than what's now
+    /// playing, (re)resolve for the current file. Driven off BOTH the media-title and the duration signals — a
+    /// playlist advance always raises Duration even when two consecutive tracks share a title, so an open overlay
+    /// can't get stuck on a stale sheet (or the "Searching…" spinner) when the title alone doesn't change.</summary>
+    private void MaybeReloadOpenLyrics()
+    {
+        if (LyricsOverlay.Visibility == Visibility.Visible && _lyricsForPath != _currentPath)
+            _ = LoadLyricsAsync(_currentPath);
     }
 
     private void ShowLyricsStatus(string text)
@@ -416,6 +445,9 @@ public sealed partial class PlayerView : UserControl
     private void ResetLyricsData()
     {
         _lyricsGen++; // supersede any in-flight fetch
+        _lyricsCts?.Cancel(); // and abort its in-flight network request rather than let it run to completion
+        _lyricsCts?.Dispose();
+        _lyricsCts = null;
         _lyricsForPath = null;
         _lyrics.Clear();
         _lyricLines = System.Array.Empty<OkPlayer.Core.LrcLine>();
@@ -574,13 +606,13 @@ public sealed partial class PlayerView : UserControl
         {
             if (AudioNowPlaying.Visibility == Visibility.Visible)
                 ApplyAudioSurface(Vm.HasMedia); // the metadata title arrives after file-loaded — refresh the card
-            if (LyricsOverlay.Visibility == Visibility.Visible && _lyricsForPath != _currentPath)
-                _ = LoadLyricsAsync(_currentPath); // a new track's tags arrived — refresh the open lyrics overlay
+            MaybeReloadOpenLyrics(); // a new track's tags arrived — refresh the open lyrics overlay
         }
         else if (e.PropertyName == nameof(PlayerViewModel.Duration))
         {
             TryResume(); // seek-bar chapter ticks update via the Vm.ChapterFractions binding
             WarmTimeline(); // preemptively warm a coarse grid of seek-preview frames for instant scrubbing
+            MaybeReloadOpenLyrics(); // a fresh Duration marks a real track change — covers same-title advances
         }
         else if (e.PropertyName == nameof(PlayerViewModel.Position))
         {

@@ -385,7 +385,7 @@ public partial class PlayerViewModel : ObservableObject
     /// the render/UI thread can deadlock a busy core. mpv's <c>metadata/by-key</c> lookup is case-insensitive.
     /// Returns whatever is present (nulls when absent) plus the known duration; falls back to <c>album_artist</c>
     /// when there's no track artist. Safe after dispose (the read no-ops to null behind the engine handle lock).</summary>
-    public System.Threading.Tasks.Task<TrackMetadata> ReadMetadataAsync()
+    public System.Threading.Tasks.Task<TrackMetadata> ReadMetadataAsync(System.Threading.CancellationToken ct = default)
     {
         MpvContext? e = _engine;
         double dur = Duration;
@@ -396,7 +396,7 @@ public partial class PlayerViewModel : ObservableObject
                 ?? NullIfEmpty(e.GetPropertyString("metadata/by-key/album_artist")),
             NullIfEmpty(e.GetPropertyString("metadata/by-key/title")),
             NullIfEmpty(e.GetPropertyString("metadata/by-key/album")),
-            dur));
+            dur), ct);
     }
 
     private static string? NullIfEmpty(string? s) => string.IsNullOrWhiteSpace(s) ? null : s;
