@@ -238,8 +238,8 @@ public sealed partial class PlayerView : UserControl
         if (audioOnly)
         {
             AudioTitle.Text = !string.IsNullOrWhiteSpace(Vm.MediaTitle)
-                ? Vm.MediaTitle
-                : (_currentPath is { } cp ? System.IO.Path.GetFileName(cp) : string.Empty);
+                ? Vm.MediaTitle // the file's metadata title (mpv media-title); fall back to the bare file name
+                : (_currentPath is { } cp ? System.IO.Path.GetFileNameWithoutExtension(cp) : string.Empty);
             if (_audioArtForPath != _currentPath) // kick the extraction once per file, not on every refresh
             {
                 _audioArtForPath = _currentPath;
@@ -418,6 +418,11 @@ public sealed partial class PlayerView : UserControl
         {
             // dwidth can arrive after file-loaded (or flip when cover art decodes), so re-decide the audio card.
             ApplyAudioSurface(Vm.HasMedia);
+        }
+        else if (e.PropertyName == nameof(PlayerViewModel.MediaTitle))
+        {
+            if (AudioNowPlaying.Visibility == Visibility.Visible)
+                ApplyAudioSurface(Vm.HasMedia); // the metadata title arrives after file-loaded — refresh the card
         }
         else if (e.PropertyName == nameof(PlayerViewModel.Duration))
         {
