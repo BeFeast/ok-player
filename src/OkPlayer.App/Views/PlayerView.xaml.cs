@@ -2155,9 +2155,15 @@ public sealed partial class PlayerView : UserControl
             ShowToast("No media in that folder");
             return;
         }
+        OpenMedia(media[0]); // builds the immediate-folder playlist and handles a failed open via its own catch
+        if (_currentPath != media[0])
+            return; // the first file wouldn't open (OpenMedia toasted + restored the idle surface) — don't leave
+                    // the player on a playlist rooted on a file that never played
+        // Override the immediate-folder playlist OpenMedia just built with the full recursive scan (subfolders
+        // included) and surface it in the Up-Next panel.
         _shuffle = false; // a folder defines a natural order — honor it rather than shuffle it away
         _playlist = new OkPlayer.Core.Playlist(media, media[0], sort: false) { Repeat = _repeat };
-        OpenMedia(media[0]); // SetPlaylistFor finds media[0] in _playlist and keeps this list, not the file's folder
+        RebuildUpNext();
         Vm.Play();
     }
 

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 
@@ -26,20 +27,14 @@ public static class FolderScan
     private static void Walk(string dir, int depth, int maxDepth, List<string> acc)
     {
         // Files at this level. A dir whose files can't be listed still gets its subdirectories tried.
-        List<string> files = new();
-        try { files = new List<string>(Directory.EnumerateFiles(dir)); }
-        catch { /* unreadable — skip this level's files */ }
-        foreach (string f in files)
+        foreach (string f in SafeList(() => Directory.EnumerateFiles(dir)))
             if (MediaFormats.IsMedia(f))
                 acc.Add(f);
 
         if (depth >= maxDepth)
             return;
 
-        List<string> subdirs;
-        try { subdirs = new List<string>(Directory.EnumerateDirectories(dir)); }
-        catch { return; }
-        foreach (string sub in subdirs)
+        foreach (string sub in SafeList(() => Directory.EnumerateDirectories(dir)))
         {
             try
             {
@@ -50,5 +45,22 @@ public static class FolderScan
             catch { continue; }
             Walk(sub, depth + 1, maxDepth, acc);
         }
+    }
+
+    /// <summary>Materialize a directory enumeration, keeping whatever entries were produced before any fault.
+    /// <see cref="Directory.EnumerateFiles(string)"/> / <see cref="Directory.EnumerateDirectories(string)"/>
+    /// stream lazily, so a single transiently-removed or inaccessible entry can throw mid-iteration — which, if
+    /// it aborted the whole level, would drop the siblings already seen AND skip every readable subfolder after
+    /// it. Salvaging the partial result keeps the playlist as complete as the filesystem allowed.</summary>
+    internal static List<string> SafeList(Func<IEnumerable<string>> enumerate)
+    {
+        var result = new List<string>();
+        try
+        {
+            foreach (string item in enumerate())
+                result.Add(item);
+        }
+        catch { /* keep the partial result gathered before the fault */ }
+        return result;
     }
 }

@@ -53,4 +53,17 @@ public class FolderScanTests : IDisposable
     [Fact]
     public void MediaFiles_MissingRoot_ReturnsEmpty()
         => Assert.Empty(FolderScan.MediaFiles(Path.Combine(_root, "does-not-exist")));
+
+    [Fact] // a child entry removed/locked mid-enumeration must not discard the siblings already seen
+    public void SafeList_KeepsEntriesEnumeratedBeforeAFault()
+    {
+        static IEnumerable<string> FaultsAfterTwo()
+        {
+            yield return "a";
+            yield return "b";
+            throw new IOException("entry vanished mid-enumeration");
+        }
+
+        Assert.Equal(new[] { "a", "b" }, FolderScan.SafeList(FaultsAfterTwo));
+    }
 }
