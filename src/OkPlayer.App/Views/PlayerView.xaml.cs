@@ -2284,18 +2284,17 @@ public sealed partial class PlayerView : UserControl
         var data = e.DataView;
         // async void: a transient DataView access can throw — never let it escape to the UI thread.
         var deferral = e.GetDeferral();
+        // Resolve WHAT was dropped first, release the OLE drop, and only THEN open it. Opening can do slow work
+        // (a network folder/file), and anything still running inside the deferral keeps the source's drag loop
+        // alive — which freezes the drag ghost on screen system-wide. Decide here; act after Complete().
+        string? openUrl = null, openFile = null, openFolder = null, addSub = null;
         try
         {
             // Resolve a dragged LINK first. A browser link drag also exposes a virtual ".url" file via
             // StorageItems, so reaching for StorageItems would open the shortcut file (or stall materializing
             // it) instead of the actual address — resolve the URL up front and open it as a stream.
-            string? url = await TryGetDroppedUrlAsync(data);
-            if (url is not null)
-            {
-                OpenMedia(url);
-                return;
-            }
-            if (data.Contains(StandardDataFormats.StorageItems))
+            openUrl = await TryGetDroppedUrlAsync(data);
+            if (openUrl is null && data.Contains(StandardDataFormats.StorageItems))
             {
                 var items = await data.GetStorageItemsAsync();
                 var file = items.OfType<StorageFile>().FirstOrDefault();
@@ -2303,16 +2302,16 @@ public sealed partial class PlayerView : UserControl
                 {
                     // A subtitle dropped onto a playing video loads as a track rather than replacing the media.
                     if (Vm.HasMedia && OkPlayer.Core.MediaFormats.IsSubtitle(file.Path))
-                        AddSubtitle(file.Path);
+                        addSub = file.Path;
                     else
-                        OpenMedia(file.Path);
+                        openFile = file.Path;
                 }
                 else if (items.OfType<StorageFolder>().FirstOrDefault() is { } folder)
-                    await OpenFolderAsPlaylist(folder.Path); // dropped folder → recursive playlist, play first
+                    openFolder = folder.Path;
                 else if (items.Count > 0)
                     ShowToast("Drop a media file or folder");
             }
-            else
+            else if (openUrl is null)
             {
                 ShowToast("Drop a media file, folder, or link");
             }
@@ -2323,7 +2322,20 @@ public sealed partial class PlayerView : UserControl
         }
         finally
         {
-            deferral.Complete();
+            deferral.Complete(); // release the OLE drop now — the drag ghost can't linger while the open runs
+        }
+
+        // Open AFTER the deferral completes, so a slow (network) open never holds the source's drag loop open.
+        try
+        {
+            if (openUrl is not null) OpenMedia(openUrl);
+            else if (addSub is not null) AddSubtitle(addSub);
+            else if (openFile is not null) OpenMedia(openFile);
+            else if (openFolder is not null) await OpenFolderAsPlaylist(openFolder); // recursive playlist, play first
+        }
+        catch (Exception)
+        {
+            ShowToast("Couldn't open dropped item");
         }
     }
 

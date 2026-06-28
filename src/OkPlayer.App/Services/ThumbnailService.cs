@@ -55,7 +55,10 @@ public sealed class ThumbnailService : IDisposable
             // Publish the new file key BEFORE bumping the generation: a concurrent GetThumbnailAsync validates
             // its cache hit against the generation, so if it saw the bumped generation while the key were still
             // the previous file's, it could return the old media's frame. Key-first closes that window.
-            _fileKey = ComputeFileKey(path);
+            // ComputeFileKey stats the media file (new FileInfo); on a slow/dead network mount (NFS/SMB) that
+            // blocks. The gate above may have been free, so the await completed synchronously and we could still
+            // be on the caller's UI thread — hop to the thread pool for the stat so an open never freezes the UI.
+            _fileKey = await Task.Run(() => ComputeFileKey(path)).ConfigureAwait(false);
             int gen = ++_generation;
             SeedBucketIndex(_fileKey); // rebuild the in-memory cached-second index from disk for this file
             TeardownEngine();
