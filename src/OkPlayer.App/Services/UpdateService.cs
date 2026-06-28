@@ -16,8 +16,10 @@ namespace OkPlayer.App.Services;
 public sealed class UpdateService
 {
     private readonly UpdateManager _mgr;
-    private UpdateInfo? _pending;   // a downloaded, ready-to-apply update (null until found + downloaded)
-    private int _checking;          // 0/1 guard so overlapping background checks don't stack
+    private UpdateInfo? _pending;        // a downloaded, ready-to-apply update (null until found + downloaded)
+    private int _checking;               // 0/1 guard so overlapping background checks don't stack
+    private volatile bool _checkedOk;    // a check has completed successfully at least once this session
+    private volatile bool _lastCheckFailed; // the most recent check/download threw (offline, rate-limited, …)
 
     public UpdateService()
     {
@@ -33,6 +35,14 @@ public sealed class UpdateService
 
     /// <summary>A check is in flight right now (so the UI can show a spinner / disable the button).</summary>
     public bool IsChecking => Volatile.Read(ref _checking) == 1;
+
+    /// <summary>A check has completed successfully at least once this session — so the UI can tell a confirmed
+    /// "up to date" apart from "haven't checked yet" (auto-check off, or before the launch check returns).</summary>
+    public bool CheckedOk => _checkedOk;
+
+    /// <summary>The most recent check/download failed (offline, rate-limited, feed unreachable) — so the UI can
+    /// say "couldn't check" instead of implying a confirmed up-to-date result.</summary>
+    public bool LastCheckFailed => _lastCheckFailed;
 
     /// <summary>A newer release is staged and a restart will apply it — either downloaded this session
     /// (<c>_pending</c>) or left staged on disk by a previous run (Velopack's
@@ -63,12 +73,18 @@ public sealed class UpdateService
         try
         {
             UpdateInfo? info = await _mgr.CheckForUpdatesAsync().ConfigureAwait(false);
+            _checkedOk = true;          // the check itself succeeded (whether or not it found an update)
+            _lastCheckFailed = false;
             if (info is null)
                 return; // already current
             await _mgr.DownloadUpdatesAsync(info).ConfigureAwait(false);
             _pending = info;
         }
-        catch (Exception ex) { Log.Error("UpdateService.CheckAndDownload: " + ex.Message); }
+        catch (Exception ex)
+        {
+            _lastCheckFailed = true;
+            Log.Error("UpdateService.CheckAndDownload: " + ex.Message);
+        }
         finally
         {
             Interlocked.Exchange(ref _checking, 0);

@@ -160,6 +160,7 @@ public sealed partial class PlayerView : UserControl
         Seek.HoverEnded += OnSeekHoverEnded;
         App.Settings.Changed += OnSettingsChanged; // re-evaluate pause auto-hide when its toggle changes mid-pause
         App.Updates.Changed += OnUpdateStateChanged; // surface a ready update once, as an unobtrusive toast
+        OnUpdateStateChanged(); // also catch an update already staged before we subscribed (a prior-session download)
         Unloaded += (_, _) =>
         {
             if (_viewUnloaded) return;
@@ -792,8 +793,8 @@ public sealed partial class PlayerView : UserControl
     /// thread (the check completes on a worker), so marshal before touching the toast.</summary>
     private void OnUpdateStateChanged() => DispatcherQueue.TryEnqueue(() =>
     {
-        if (_updateToastShown || !App.Updates.UpdateReady)
-            return;
+        if (_viewUnloaded || _updateToastShown || !App.Updates.UpdateReady)
+            return; // skip a callback that landed after the view tore down (Changed can fire from a worker thread)
         _updateToastShown = true;
         ShowToast("Update ready · open Settings to restart");
     });

@@ -25,6 +25,7 @@ public sealed partial class SettingsWindow : Window
         { "Appearance", "Playback", "Subtitles", "Video", "Audio", "Shortcuts", "Integration", "Advanced", "About" };
 
     private bool _loaded;
+    private bool _closed; // set in Closed; gate dispatcher-queued callbacks so they don't touch a dead window
 
     // Reads the live Windows personalization accent so the "System accent" card can preview the real colour.
     private readonly Windows.UI.ViewManagement.UISettings _ui = new();
@@ -47,6 +48,7 @@ public sealed partial class SettingsWindow : Window
             rootEl.ActualThemeChanged += OnActualThemeChanged;
         Closed += (_, _) =>
         {
+            _closed = true; // a Changed callback already queued must not touch the torn-down window's elements
             App.Settings.Changed -= ApplyTheme;
             App.MpvVersionChanged -= OnMpvVersionChanged;
             App.Updates.Changed -= OnUpdatesChanged;
@@ -236,16 +238,22 @@ public sealed partial class SettingsWindow : Window
         {
             AboutUpdateStatus.Text = u.PendingVersion is { } v ? $"Update ready · {v}" : "Update ready";
             RestartNowButton.Visibility = Visibility.Visible;
+            return;
         }
-        else
-        {
-            AboutUpdateStatus.Text = u.IsChecking ? "Checking…" : "Up to date";
-            RestartNowButton.Visibility = Visibility.Collapsed;
-        }
+        RestartNowButton.Visibility = Visibility.Collapsed;
+        // Only claim "Up to date" after a check actually succeeded — distinguish in-flight, failed, and
+        // not-yet-checked (auto-check off, or before the launch check returns) so we never imply a confirmed
+        // result we don't have.
+        AboutUpdateStatus.Text =
+            u.IsChecking ? "Checking…" :
+            u.LastCheckFailed ? "Couldn't check — try again" :
+            u.CheckedOk ? "Up to date" :
+            "Not checked yet";
     }
 
-    // UpdateService.Changed can fire off the UI thread (the background check completes on a worker) — marshal first.
-    private void OnUpdatesChanged() => DispatcherQueue?.TryEnqueue(RefreshUpdatesUi);
+    // UpdateService.Changed can fire off the UI thread (the background check completes on a worker) — marshal first,
+    // and gate on _closed so a callback queued just as the window closes can't write to torn-down elements.
+    private void OnUpdatesChanged() => DispatcherQueue?.TryEnqueue(() => { if (!_closed) RefreshUpdatesUi(); });
 
     private void OnCheckForUpdates(object sender, RoutedEventArgs e)
     {
