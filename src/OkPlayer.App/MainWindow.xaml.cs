@@ -176,7 +176,6 @@ public sealed partial class MainWindow : Window
             return;
         if (on && _fullscreen)
             SetFullscreen(false); // can't be both; drop fullscreen first
-        _miniPlayer = on;
         Services.Log.Step($"SetPresenter({(on ? "CompactOverlay" : "Overlapped")}) [mini-player]");
         try
         {
@@ -184,10 +183,11 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            // The presenter didn't change — leave _miniPlayer untouched so the flag still matches reality.
             Services.Log.Exception("SetMiniPlayer.SetPresenter", ex);
-            _miniPlayer = !on; // keep our flag consistent with the presenter that's actually active
             return;
         }
+        _miniPlayer = on; // commit the flag only once the presenter actually switched
         Services.Log.Step("SetPresenter done [mini-player]");
         if (!on && _alwaysOnTop && AppWindow.Presenter is OverlappedPresenter p)
             p.IsAlwaysOnTop = true;
@@ -199,7 +199,6 @@ public sealed partial class MainWindow : Window
             return;
         if (on && _miniPlayer)
             SetMiniPlayer(false); // mutually exclusive: leave compact overlay before going fullscreen
-        _fullscreen = on;
         // SetPresenter(FullScreen) is the prime suspect for "the whole desktop disappeared": a borderless
         // full-screen window that then freezes covers everything. Breadcrumb it (so a hang here is named) and
         // guard it (so a driver/compositor throw can't tear down the app).
@@ -210,10 +209,11 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            // The presenter didn't change — leave _fullscreen untouched so the flag still matches reality.
             Services.Log.Exception("SetFullscreen.SetPresenter", ex);
-            _fullscreen = !on; // keep our flag consistent with the presenter that's actually active
             return;
         }
+        _fullscreen = on; // commit the flag only once the presenter actually switched
         Services.Log.Step("SetPresenter done [fullscreen]");
         if (!on && _alwaysOnTop && AppWindow.Presenter is OverlappedPresenter p)
             p.IsAlwaysOnTop = true; // the new overlapped presenter starts un-pinned — restore the user's choice

@@ -39,12 +39,14 @@ public static class Log
         try
         {
             System.IO.Directory.CreateDirectory(Directory);
-            Prune(keep: 10);
+            // Include the PID so two processes that start in the same second (e.g. a second launch that
+            // single-instance-redirects and exits) get distinct files instead of truncating each other's.
             string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
-            _path = Path.Combine(Directory, $"okplayer-{stamp}.log");
+            _path = Path.Combine(Directory, $"okplayer-{stamp}-{Environment.ProcessId}.log");
             // FileShare.ReadWrite so the tester can open/copy the file while the app is still running (or hung).
             var fs = new FileStream(_path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
             _writer = new StreamWriter(fs) { AutoFlush = true };
+            Prune(keep: 10); // after creating ours, so the count stays bounded including this session
         }
         catch { /* logging must never break startup */ }
 
