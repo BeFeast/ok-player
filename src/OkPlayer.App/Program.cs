@@ -4,6 +4,7 @@ using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.Windows.AppLifecycle;
 using OkPlayer.App.Services;
+using Velopack;
 
 namespace OkPlayer.App;
 
@@ -17,6 +18,17 @@ public static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        // VERY FIRST — before any of our own startup. During install/update/uninstall Velopack relaunches this
+        // exe with --veloapp-* hook arguments; Run() detects them, executes the matching fast-exit hook, and
+        // exits the process from inside this call. Anything placed above it would run on every hook invocation
+        // (and could trip the hooks' hard timeouts), so all our real startup lives strictly after it. On a normal
+        // user launch Run() does nothing and returns. No-ops on dev/portable builds (not Velopack-installed).
+        VelopackApp.Build()
+            .SetAutoApplyOnStartup(false)        // we apply on the user's terms (a restart prompt), never silently on launch
+            .OnFirstRun(_ => TryReregisterFileAssociations()) // the exe path changes on install/update — refresh the ProgID
+            .Run();
+
+        // Reached only on a genuine user launch (hook launches already exited inside Run() above).
         // Diagnostics first — before anything can fault — so a launch-time crash/hang is on disk. Best-effort.
         Log.Init();
         Log.InstallGlobalHandlers();
@@ -67,5 +79,15 @@ public static class Program
         primary.RedirectActivationToAsync(activation).AsTask().GetAwaiter().GetResult();
         Log.Step("single-instance: redirect completed");
         return true;
+    }
+
+    /// <summary>After a Velopack install/update the exe moves to a new versioned location, so the file-type
+    /// ProgID command (registered against the old path) must be refreshed or a double-click / "Open with" would
+    /// launch the now-removed build. Runs once on the first launch after each install (Velopack's OnFirstRun),
+    /// before our logging is up — so it stays self-contained and best-effort, never blocking that first launch.</summary>
+    private static void TryReregisterFileAssociations()
+    {
+        try { new FileAssociationService().EnsureRegistered(); }
+        catch { /* never let association upkeep block the first run after an update */ }
     }
 }

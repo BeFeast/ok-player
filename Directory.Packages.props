@@ -13,6 +13,10 @@
     <!-- MVVM -->
     <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
 
+    <!-- Auto-update: Velopack manages an unpackaged self-contained app and uses the GitHub Release as its
+         update feed. No-ops on dev/portable builds (IsInstalled == false). -->
+    <PackageVersion Include="Velopack" Version="1.2.0" />
+
     <!-- Render: native desktop GL (OpenTK/WGL) + D3D11/DXGI (Silk.NET), bridged by
          WGL_NV_DX_interop. Pinned to the exact versions of the proven mpv-winui reference
          to de-risk the interop (bump only after the pipeline is verified at runtime). -->

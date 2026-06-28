@@ -28,6 +28,15 @@ public partial class App : Application
     /// "Clear history" from Settings is reflected by the player's recents without a stale second copy.</summary>
     public static HistoryService History { get; } = new();
 
+    /// <summary>The auto-update service (Velopack). A background check runs once on launch; it no-ops on dev and
+    /// portable builds (only a Velopack-installed build can update itself). Shared so Settings → About can drive
+    /// a manual check / restart.</summary>
+    public static UpdateService Updates { get; } = new();
+
+    /// <summary>The release channel this build updates from — every build is a pre-1.0 beta for now, so the feed
+    /// is the repo's GitHub pre-releases. Surfaced in Settings → About.</summary>
+    public const string ReleaseChannel = "beta";
+
     /// <summary>App version as Major.Minor.Build, read from the assembly (single-sourced from the csproj
     /// <c>&lt;Version&gt;</c>). Shown in Settings → Advanced (About) and the Settings nav-rail footer.</summary>
     public static string AppVersion { get; } = GetAppVersion();
@@ -118,6 +127,9 @@ public partial class App : Application
         Log.StartUiWatchdog(mw.DispatcherQueue); // watch for the "window froze" symptom from here on
         if (pending is not null)
             mw.DispatcherQueue.TryEnqueue(() => mw.OpenFileFromRedirect(pending));
+        // Fire-and-forget background update check: ask GitHub whether a newer release exists and pre-download it
+        // (off the UI thread, failure-silent). No-op on dev/portable builds and until the Velopack feed is live.
+        _ = Updates.CheckAndDownloadAsync();
     }
 
     /// <summary>A file/URL passed on the command line (Explorer "Open with", a file association, or a
