@@ -1189,7 +1189,7 @@ public sealed partial class PlayerView : UserControl
     {
         if (entry.Poster is not null)
             return; // already shown (loaded from the cached poster path in LoadRecents)
-        string? art = await Services.CoverArtService.GetAsync(entry.Path);
+        var (art, definitelyNoArt) = await Services.CoverArtService.GetWithStatusAsync(entry.Path);
         if (art is not null && System.IO.File.Exists(art))
         {
             try { System.IO.File.Copy(art, posterPath, overwrite: true); }
@@ -1197,10 +1197,11 @@ public sealed partial class PlayerView : UserControl
             _history.SetPoster(entry.Path, posterPath);
             DispatcherQueue.TryEnqueue(() => entry.Poster = PosterImage.Load(posterPath));
         }
-        else
+        else if (definitelyNoArt)
         {
-            _history.SetPoster(entry.Path, NoUsablePoster); // no embedded art — keep the gradient, skip future probes
+            _history.SetPoster(entry.Path, NoUsablePoster); // really has no picture — keep the gradient, skip future probes
         }
+        // else: a transient failure (timeout/locked/unreadable) — leave the gradient and retry on a later pass
     }
 
     /// <summary>Pick a non-black poster frame. A single fixed 20% grab often lands on a fade/dark scene (studio
@@ -2252,25 +2253,16 @@ public sealed partial class PlayerView : UserControl
     /// since chapters are meaningless for music.</summary>
     private bool IsCurrentAudio() => _currentPath is { } p && OkPlayer.Core.MediaFormats.IsAudio(p);
 
-    /// <summary>Decide which panel tabs are offered and which one is the default for the current file. Chapters
-    /// are hidden when the file has none (most audio, many videos) so the segmented control only appears when
-    /// there's a real choice; audio defaults to Up Next. Honors a manual tab tap for the current file
+    /// <summary>Pick the default panel tab for the current file: Up Next for audio or any file without chapters
+    /// (chapters are meaningless there), the Chapters tab for video that has them. Both tabs stay available — the
+    /// Chapters tab also hosts the file's bookmarks and the "Bookmark here" action, which are independent of
+    /// chapters, so it must never be hidden. Honors a manual tab tap for the current file
     /// (<see cref="_panelTabUserChosen"/>, reset on each open).</summary>
     private void RefreshPanelTabs()
     {
-        bool hasChapters = Vm.Chapters.Count > 0;
-        // Only show the Chapters|Up Next toggle when Chapters is a real option; otherwise the panel is Up Next only.
-        PanelTabs.Visibility = hasChapters ? Visibility.Visible : Visibility.Collapsed;
-        ChaptersTab.Visibility = hasChapters ? Visibility.Visible : Visibility.Collapsed;
-
-        if (!hasChapters)
-        {
-            SetPanelTab(true); // nothing to switch to — Up Next is the only meaningful view
-            return;
-        }
         if (_panelTabUserChosen)
-            return;            // respect the user's explicit pick for this file
-        SetPanelTab(IsCurrentAudio()); // audio -> Up Next, video -> Chapters
+            return; // respect the user's explicit pick for this file
+        SetPanelTab(IsCurrentAudio() || Vm.Chapters.Count == 0); // audio / no chapters -> Up Next; else Chapters
     }
 
     /// <summary>Switch the right panel between its Chapters and Up-Next tabs (one panel, two views).</summary>

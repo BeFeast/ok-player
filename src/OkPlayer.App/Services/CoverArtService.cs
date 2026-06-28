@@ -21,11 +21,24 @@ public static class CoverArtService
     {
         if (string.IsNullOrEmpty(mediaPath) || mediaPath.Contains("://", StringComparison.Ordinal))
             return Task.FromResult<string?>(null); // local files only — a remote fetch could stall the extractor
-        return Task.Run(() => Extract(mediaPath), ct);
+        return Task.Run(() => Extract(mediaPath, out _), ct);
     }
 
-    private static string? Extract(string mediaPath)
+    /// <summary>Like <see cref="GetAsync"/>, but also reports whether the file <em>definitively</em> carries no
+    /// embedded picture (<c>DefinitelyNoArt</c>), distinct from a transient failure (timeout, locked file, …).
+    /// A caller that caches a "no art" verdict should only trust <c>DefinitelyNoArt</c> — a transient null must
+    /// not become a permanent gradient.</summary>
+    public static Task<(string? Path, bool DefinitelyNoArt)> GetWithStatusAsync(string mediaPath, CancellationToken ct = default)
     {
+        if (string.IsNullOrEmpty(mediaPath) || mediaPath.Contains("://", StringComparison.Ordinal))
+            return Task.FromResult<(string?, bool)>((null, false));
+        return Task.Run(() => { string? p = Extract(mediaPath, out bool noArt); return (p, noArt); }, ct);
+    }
+
+    private static string? Extract(string mediaPath, out bool definitelyNoArt)
+    {
+        definitelyNoArt = false; // only the "no attached picture" branch flips this; every failure leaves it false
+
         string outPng;
         try
         {
@@ -63,7 +76,10 @@ public static class CoverArtService
             if (!loaded.Wait(TimeSpan.FromSeconds(10)) || failed)
                 return null;
             if ((mpv.GetPropertyLong("dwidth") ?? 0) <= 0)
-                return null; // no attached picture — nothing to extract
+            {
+                definitelyNoArt = true; // the file loaded fine but has no picture stream — a real, cacheable verdict
+                return null;
+            }
             mpv.Command("screenshot-to-file", outPng, "video"); // blocks until written
             return File.Exists(outPng) && new FileInfo(outPng).Length > 0 ? outPng : null;
         }
