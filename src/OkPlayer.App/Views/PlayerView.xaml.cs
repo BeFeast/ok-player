@@ -590,7 +590,7 @@ public sealed partial class PlayerView : UserControl
         if (e.PropertyName == nameof(PlayerViewModel.IsPaused))
         {
             if (Vm.IsPaused)
-                RevealChrome();     // paused: chrome stays visible indefinitely
+                RevealChrome();     // paused: reveal now; "hide when paused" (Settings) lets the idle timer hide it
             else
                 ResetIdleTimer();   // playing: allow auto-hide
         }
@@ -740,10 +740,14 @@ public sealed partial class PlayerView : UserControl
     // little past that so they never touch the controls.
     private const double OscClearanceDip = 88;
 
+    // True when the OSC should auto-hide on pause as well as during playback (Settings -> Playback). The same
+    // 2.5s idle timeout applies; any pointer move re-reveals it.
+    private bool PauseHideEnabled => Vm.IsPaused && App.Settings.Current.HideControlsWhenPaused;
+
     private void HideChrome()
     {
-        // no media / paused / panel-open / already-hidden all keep the chrome up.
-        if (!_chromeVisible || !Vm.HasMedia || !Vm.IsPlaying || _panelOpen)
+        // no media / panel-open / already-hidden keep the chrome up; so does pause UNLESS "hide when paused" is on.
+        if (!_chromeVisible || !Vm.HasMedia || _panelOpen || (!Vm.IsPlaying && !PauseHideEnabled))
             return;
         // An open flyout/menu (volume, speed, subtitle, audio, overflow) renders in a popup; pointer
         // moves inside it don't reset the idle timer, so pin chrome while any popup is open.
@@ -763,7 +767,7 @@ public sealed partial class PlayerView : UserControl
     private void ResetIdleTimer()
     {
         _idleTimer.Stop();
-        if (Vm.HasMedia && Vm.IsPlaying && !_panelOpen)
+        if (Vm.HasMedia && !_panelOpen && (Vm.IsPlaying || PauseHideEnabled))
             _idleTimer.Start();
     }
 

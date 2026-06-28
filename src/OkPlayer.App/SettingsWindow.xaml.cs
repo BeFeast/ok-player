@@ -601,6 +601,9 @@ public sealed partial class SettingsWindow : Window
         ResumeToggle.Toggled -= OnResumeToggled;
         ResumeToggle.IsOn = App.Settings.Current.ResumePlayback;
         ResumeToggle.Toggled += OnResumeToggled;
+        HidePausedToggle.Toggled -= OnHidePausedToggled;
+        HidePausedToggle.IsOn = App.Settings.Current.HideControlsWhenPaused;
+        HidePausedToggle.Toggled += OnHidePausedToggled;
         RefreshPlayback();
     }
 
@@ -620,6 +623,12 @@ public sealed partial class SettingsWindow : Window
     private void OnResumeToggled(object sender, RoutedEventArgs e)
     {
         App.Settings.Current.ResumePlayback = ResumeToggle.IsOn;
+        App.Settings.Save();
+    }
+
+    private void OnHidePausedToggled(object sender, RoutedEventArgs e)
+    {
+        App.Settings.Current.HideControlsWhenPaused = HidePausedToggle.IsOn;
         App.Settings.Save();
     }
 
