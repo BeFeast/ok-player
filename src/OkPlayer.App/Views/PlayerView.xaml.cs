@@ -1018,6 +1018,10 @@ public sealed partial class PlayerView : UserControl
         // Two welcome layouts: recents-forward "Continue watching" when there is resumable history,
         // else the centred first-run hero.
         bool hasRecents = Recents.Count > 0;
+        // You don't "watch" audio: when every resumable item is a track, call the shelf "Continue listening".
+        // Mixed or any video keeps "Continue watching" (there's something to watch).
+        bool allAudio = hasRecents && Recents.All(r => OkPlayer.Core.MediaFormats.IsAudio(r.Path));
+        ContinueHeader.Text = allAudio ? "Continue listening" : "Continue watching";
         WelcomeVariationA.Visibility = hasRecents ? Visibility.Visible : Visibility.Collapsed;
         WelcomeFirstRun.Visibility = hasRecents ? Visibility.Collapsed : Visibility.Visible;
         RebuildVisibleRecents(); // pick the leading cards that fit + the "+N more" hint
@@ -1140,6 +1144,11 @@ public sealed partial class PlayerView : UserControl
                     continue; // already decided this file has no usable (non-black) frame — keep the gradient
 
                 string poster = System.IO.Path.Combine(dir, PosterHash(entry.Path) + ".png");
+                if (OkPlayer.Core.MediaFormats.IsAudio(entry.Path))
+                {
+                    await EnsureAudioPosterAsync(entry, poster); // an audio file's "poster" is its album art, not a frame
+                    continue;
+                }
                 // Keep an existing poster only if it isn't (near-)black: earlier builds cached black frames and
                 // a fixed grab can land on a dark scene, so re-validate rather than trusting the cache forever.
                 if (System.IO.File.Exists(poster) && await MeanLumaAsync(poster) is double cached && cached >= minUsableLuma)
@@ -1170,6 +1179,28 @@ public sealed partial class PlayerView : UserControl
         }
         catch { /* best effort */ }
         finally { _generatingPosters = false; }
+    }
+
+    /// <summary>Fill an audio recent's poster from its embedded album art — there's no video frame to grab.
+    /// Caches the art into the persistent posters dir and records it on the history entry so later visits load
+    /// instantly; marks the file posterless (gradient) when it carries no embedded picture, so we don't re-probe
+    /// it every visit. Best-effort: any failure just leaves the gradient.</summary>
+    private async System.Threading.Tasks.Task EnsureAudioPosterAsync(RecentEntry entry, string posterPath)
+    {
+        if (entry.Poster is not null)
+            return; // already shown (loaded from the cached poster path in LoadRecents)
+        string? art = await Services.CoverArtService.GetAsync(entry.Path);
+        if (art is not null && System.IO.File.Exists(art))
+        {
+            try { System.IO.File.Copy(art, posterPath, overwrite: true); }
+            catch { return; }
+            _history.SetPoster(entry.Path, posterPath);
+            DispatcherQueue.TryEnqueue(() => entry.Poster = PosterImage.Load(posterPath));
+        }
+        else
+        {
+            _history.SetPoster(entry.Path, NoUsablePoster); // no embedded art — keep the gradient, skip future probes
+        }
     }
 
     /// <summary>Pick a non-black poster frame. A single fixed 20% grab often lands on a fade/dark scene (studio
