@@ -760,7 +760,8 @@ public sealed partial class SettingsWindow : Window
 
     /// <summary>Assign or unassign OK Player for every listed type in one go, so the user doesn't tick (or untick)
     /// each extension by hand. Updates the registry once per type, ticks the boxes without re-firing the per-box
-    /// handler, then notifies the shell a single time.</summary>
+    /// handler, then notifies the shell a single time — including after a partial failure, since some writes may
+    /// already have landed.</summary>
     private void SetAllAssoc(bool on)
     {
         try
@@ -776,13 +777,18 @@ public sealed partial class SettingsWindow : Window
                         cb.Checked += OnAssocToggle;
                         cb.Unchecked += OnAssocToggle;
                     }
-            _assoc.NotifyShell();
             AssocStatus.Text = on ? "All types added" : "All types cleared";
         }
         catch
         {
             AssocStatus.Text = "Couldn't update";
             RefreshAssocChecks();
+        }
+        finally
+        {
+            // A partial bulk update still mutated the registry — refresh the shell regardless so Explorer /
+            // Default Apps don't keep showing the pre-change state for the writes that did land.
+            _assoc.NotifyShell();
         }
     }
 
