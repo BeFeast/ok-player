@@ -38,6 +38,27 @@ public class MediaFormatsTests
     }
 
     [Theory]
+    [InlineData(@"C:\music\song.flac")]
+    [InlineData(@"C:\music\track.MP3")]  // case-insensitive
+    [InlineData("podcast.opus")]
+    [InlineData(@"C:\music\album.mka")]
+    public void IsAudio_TrueForAudioOnlyContainers(string path) => Assert.True(MediaFormats.IsAudio(path));
+
+    [Theory]
+    [InlineData(@"C:\v\movie.mkv")]
+    [InlineData(@"C:\v\clip.mp4")]
+    [InlineData(@"C:\v\subs.srt")]
+    [InlineData(@"C:\v\notes.txt")]
+    public void IsAudio_FalseForVideoSubtitleAndOther(string path) => Assert.False(MediaFormats.IsAudio(path));
+
+    [Fact]
+    public void AudioExtensions_AreAllRecognizedMedia() // the audio subset must never drift out of Extensions
+    {
+        foreach (string ext in MediaFormats.AudioExtensions)
+            Assert.True(MediaFormats.IsMedia("x" + ext));
+    }
+
+    [Theory]
     [InlineData("https://example.com/video.mkv")]
     [InlineData("http://host:8080/stream")]
     [InlineData("smb://nas/share/movie.mkv")]

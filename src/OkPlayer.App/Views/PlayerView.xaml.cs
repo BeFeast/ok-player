@@ -157,6 +157,7 @@ public sealed partial class PlayerView : UserControl
         // "Clear history" / retention prune can fire from the Settings window — refresh when it does.
         _history.Changed += OnHistoryChanged;
         Vm.EndReached += OnEndReached; // auto-advance the folder playlist when a file plays out
+        Vm.LoadFailed += OnLoadFailed; // tear down the loading spinner if an open fails (e.g. a dead URL)
         SetPanelTab(false);            // the right panel opens on the Chapters tab by default
         Vm.Chapters.CollectionChanged += (_, _) =>
         {
@@ -181,16 +182,23 @@ public sealed partial class PlayerView : UserControl
     // once media is loaded, show the video plane + reveal the OSC, and let the host darken→whiten the
     // caption buttons.
     private bool _historyOpen; // the History surface is showing (idle-only; mutually exclusive with playback)
+    private bool _loading;     // an open is in flight (load accepted, awaiting the first frame or a load error)
 
     private void ApplyMediaPresence()
     {
         bool has = Vm.HasMedia;
+        if (has)
+            _loading = false; // the file is ready — drop the loading spinner
         if (has && _historyOpen)
             _historyOpen = false; // opening a file from History (or anywhere) takes over the canvas
-        WelcomeCard.Visibility = (has || _historyOpen) ? Visibility.Collapsed : Visibility.Visible;
-        HistorySurface.Visibility = _historyOpen ? Visibility.Visible : Visibility.Collapsed;
+        // While a load is in flight the spinner owns the canvas, so suppress the welcome/History idle surfaces.
+        bool idle = !has && !_loading;
+        WelcomeCard.Visibility = (idle && !_historyOpen) ? Visibility.Visible : Visibility.Collapsed;
+        HistorySurface.Visibility = (idle && _historyOpen) ? Visibility.Visible : Visibility.Collapsed;
         VideoBackdrop.Visibility = has ? Visibility.Visible : Visibility.Collapsed;
         Video.Visibility = has ? Visibility.Visible : Visibility.Collapsed;
+        LoadingOverlay.Visibility = _loading ? Visibility.Visible : Visibility.Collapsed;
+        ApplyAudioSurface(has);
         MediaPresenceChanged?.Invoke(this, has);
         if (has)
         {
@@ -203,9 +211,29 @@ public sealed partial class PlayerView : UserControl
             TitleChrome.IsHitTestVisible = false;
             BottomChrome.IsHitTestVisible = false;
             ChromeHideSb.Begin();
-            if (!_historyOpen)
-                LoadRecents(); // refresh the welcome shelf (skip while History owns the canvas)
+            if (idle && !_historyOpen)
+                LoadRecents(); // refresh the welcome shelf (skip while History owns the canvas or a load is in flight)
         }
+    }
+
+    /// <summary>Audio-only media (flac/mp3/…) renders no video frames, so the plane is a black void. Show a
+    /// now-playing card over it instead of looking broken. Gated on the audio extension so a real video file
+    /// never flashes the card; the per-frame video-width check lets embedded cover art show as video instead.</summary>
+    private void ApplyAudioSurface(bool has)
+    {
+        bool audioOnly = has && Vm.VideoWidth <= 0
+            && _currentPath is { } p && OkPlayer.Core.MediaFormats.IsAudio(p);
+        AudioNowPlaying.Visibility = audioOnly ? Visibility.Visible : Visibility.Collapsed;
+        if (audioOnly)
+            AudioTitle.Text = !string.IsNullOrWhiteSpace(Vm.MediaTitle)
+                ? Vm.MediaTitle
+                : (_currentPath is { } cp ? System.IO.Path.GetFileName(cp) : string.Empty);
+    }
+
+    private void OnLoadFailed()
+    {
+        _loading = false;      // async open/decode failure — tear down the spinner (the VM also toasts the error)
+        ApplyMediaPresence();  // back to the idle welcome surface
     }
 
     private void OnWelcomeOpenTapped(object sender, TappedRoutedEventArgs e)
@@ -328,6 +356,11 @@ public sealed partial class PlayerView : UserControl
         else if (e.PropertyName == nameof(PlayerViewModel.HasMedia))
         {
             ApplyMediaPresence();
+        }
+        else if (e.PropertyName == nameof(PlayerViewModel.VideoWidth))
+        {
+            // dwidth can arrive after file-loaded (or flip when cover art decodes), so re-decide the audio card.
+            ApplyAudioSurface(Vm.HasMedia);
         }
         else if (e.PropertyName == nameof(PlayerViewModel.Duration))
         {
@@ -1836,6 +1869,12 @@ public sealed partial class PlayerView : UserControl
             Video.Open(pathOrUrl); // may throw on engine-init failure — do this before mutating UI state
             Vm.OnOpening();        // load accepted: clear the prior file's playhead/duration/chapter/HasMedia
             _currentPath = pathOrUrl;
+            // Show the loading spinner until the first frame (or a load error) arrives — vital for slow network
+            // sources, which would otherwise sit on the welcome screen with no feedback. HasMedia was already
+            // false, so OnOpening's reset doesn't re-fire ApplyMediaPresence; call it here to reveal the overlay.
+            _loading = true;
+            LoadingName.Text = DisplayNameFor(pathOrUrl);
+            ApplyMediaPresence();
             _reachedEnd = false;   // fresh file: not finished until it plays through to its own EOF
             _explicitResume = null; // a launch resume belongs only to its launch file (the two launch paths set it
                                     // again right after this call); clearing here drops a stale value if that file
@@ -1865,9 +1904,20 @@ public sealed partial class PlayerView : UserControl
         }
         catch (Exception)
         {
+            _loading = false;     // synchronous open failure — drop the spinner with the idle surface
             ShowToast("Couldn't open this file");
             ApplyMediaPresence(); // restore the idle surface (e.g. the welcome shelf after a failed History resume)
         }
+    }
+
+    /// <summary>The label shown under the loading spinner: a stream URL in full (trimming handles overflow),
+    /// or just the file name for a local path.</summary>
+    private static string DisplayNameFor(string pathOrUrl)
+    {
+        if (pathOrUrl.Contains("://", StringComparison.Ordinal))
+            return pathOrUrl;
+        try { return System.IO.Path.GetFileName(pathOrUrl); }
+        catch { return pathOrUrl; }
     }
 
     // ---- folder-as-playlist (PRD 10.3): opening a file makes its folder the active playlist ----
