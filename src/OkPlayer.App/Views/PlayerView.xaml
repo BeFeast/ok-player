@@ -396,7 +396,8 @@
                                                     </Grid>
                                                 </Border>
                                                 <TextBlock Text="{x:Bind Title}" FontSize="13" FontWeight="Medium" MaxLines="1"
-                                                           TextTrimming="CharacterEllipsis" Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                                                           TextTrimming="CharacterEllipsis" Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                                           ToolTipService.ToolTip="{x:Bind Title}" />
                                                 <TextBlock Text="{x:Bind Meta}" FontSize="11.5" Margin="0,-3,0,0"
                                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                             </StackPanel>
@@ -422,7 +423,8 @@
                                                         <Button Click="OnRecentClick" Tag="{x:Bind Path}" Style="{StaticResource OkSwitcherRowStyle}"
                                                                 HorizontalContentAlignment="Stretch">
                                                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
-                                                                <TextBlock Grid.Column="0" Text="{x:Bind Title}" MaxLines="1" TextTrimming="CharacterEllipsis" />
+                                                                <TextBlock Grid.Column="0" Text="{x:Bind Title}" MaxLines="1" TextTrimming="CharacterEllipsis"
+                                                                           ToolTipService.ToolTip="{x:Bind Title}" />
                                                                 <TextBlock Grid.Column="1" Text="{x:Bind TimeLeft}" FontSize="11"
                                                                            Foreground="{ThemeResource OkTextSecondaryBrush}" VerticalAlignment="Center" />
                                                             </Grid>
@@ -786,7 +788,8 @@
                                 <Image Source="{x:Bind Thumbnail, Mode=OneWay}" Stretch="UniformToFill" />
                             </Border>
                             <TextBlock Grid.Column="2" Text="{x:Bind Title}" VerticalAlignment="Center"
-                                       TextTrimming="CharacterEllipsis" Style="{StaticResource OkBodyTextStyle}" />
+                                       TextTrimming="CharacterEllipsis" Style="{StaticResource OkBodyTextStyle}"
+                                       ToolTipService.ToolTip="{x:Bind Title}" />
                             <TextBlock Grid.Column="3" Text="{x:Bind TimeText}" VerticalAlignment="Center" Style="{StaticResource OkSmallTextStyle}" />
                             <!-- rename/delete: only on user-added chapters -->
                             <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="0" VerticalAlignment="Center"
@@ -884,7 +887,8 @@
                                                 <FontIcon Glyph="&#xE768;" FontSize="13" Foreground="{ThemeResource OkAccentTextBrush}" Visibility="{x:Bind PlayingVisibility}" />
                                             </Grid>
                                             <TextBlock Grid.Column="1" Text="{x:Bind Title}" VerticalAlignment="Center"
-                                                       TextTrimming="CharacterEllipsis" Style="{StaticResource OkBodyTextStyle}" />
+                                                       TextTrimming="CharacterEllipsis" Style="{StaticResource OkBodyTextStyle}"
+                                                       ToolTipService.ToolTip="{x:Bind Title}" />
                                             <Border Grid.Column="2" Visibility="{x:Bind NextVisibility}" Background="{ThemeResource OkAccentSelectionFillBrush}"
                                                     CornerRadius="4" Padding="6,2" VerticalAlignment="Center">
                                                 <TextBlock Text="NEXT" FontSize="9" FontWeight="SemiBold" Foreground="{ThemeResource OkAccentSecondaryTextBrush}" />
