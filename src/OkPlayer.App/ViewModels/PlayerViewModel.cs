@@ -35,6 +35,7 @@ public partial class PlayerViewModel : ObservableObject
     [ObservableProperty] private double _speed = 1.0;
     [ObservableProperty] private bool _showRemaining;       // total vs remaining
     [ObservableProperty] private string _mediaTitle = string.Empty;
+    private string? _nfoTitle; // a curated title from a local .nfo sidecar; when set it wins over mpv's media-title
     [ObservableProperty] private bool _hasMedia;
     [ObservableProperty] private bool _subtitleOff = true;
     [ObservableProperty] private bool _secondarySubtitleOff = true;
@@ -229,6 +230,16 @@ public partial class PlayerViewModel : ObservableObject
     /// <summary>Reset transient playback state at load-request time (before mpv reports the new file's
     /// duration/chapter), so the previous file's playhead can't bleed into the new file's first frames.
     /// Done here rather than on FileLoaded so it can't clobber a duration the pump already delivered.</summary>
+    /// <summary>Apply a title resolved from a local <c>.nfo</c> sidecar. A non-null title wins over mpv's
+    /// media-title (the curated library name beats the filename / embedded tag) and sticks for the file: later
+    /// media-title events keep deferring to it. Cleared per file in <see cref="OnOpening"/>. Call on the UI thread.</summary>
+    public void ApplyNfoTitle(string? title)
+    {
+        _nfoTitle = string.IsNullOrWhiteSpace(title) ? null : title.Trim();
+        if (_nfoTitle is { } t)
+            MediaTitle = t;
+    }
+
     public void OnOpening()
     {
         Position = 0;
@@ -239,6 +250,7 @@ public partial class PlayerViewModel : ObservableObject
         // so the stale last video frame stays on screen behind the new audio track.
         VideoWidth = 0;
         VideoHeight = 0;
+        _nfoTitle = null; // a .nfo title belongs only to its file; the view re-resolves it per open (async)
         CurrentChapterIndex = -1;
         _fileChapters = new();
         _userChapters = new();
@@ -310,7 +322,7 @@ public partial class PlayerViewModel : ObservableObject
                 case "volume": if (value is double vo) Volume = vo; break;
                 case "mute": if (value is bool mu) IsMuted = mu; break;
                 case "speed": if (value is double sp) Speed = sp; break;
-                case "media-title": MediaTitle = value as string ?? string.Empty; break;
+                case "media-title": MediaTitle = _nfoTitle ?? value as string ?? string.Empty; break;
                 case "metadata": MetadataChanged?.Invoke(); break; // tags changed (or arrived late) — see the event
                 case "sub-delay": if (value is double sd) SubDelayMs = (int)System.Math.Round(sd * 1000); break;
                 case "sub-scale": if (value is double ss) SubScale = ss; break;
