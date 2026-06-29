@@ -39,6 +39,18 @@
         <Storyboard x:Name="ToastHideSb">
             <DoubleAnimation Storyboard.TargetName="ToastHost" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.25" />
         </Storyboard>
+        <Storyboard x:Name="UpdateBannerShowSb">
+            <DoubleAnimation Storyboard.TargetName="UpdateBanner" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.22" />
+            <DoubleAnimation Storyboard.TargetName="UpdateBannerTransform" Storyboard.TargetProperty="Y" To="0" Duration="0:0:0.28">
+                <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut" /></DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
+        </Storyboard>
+        <Storyboard x:Name="UpdateBannerHideSb">
+            <DoubleAnimation Storyboard.TargetName="UpdateBanner" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.2" />
+            <DoubleAnimation Storyboard.TargetName="UpdateBannerTransform" Storyboard.TargetProperty="Y" To="12" Duration="0:0:0.2">
+                <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseIn" /></DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
+        </Storyboard>
         <Storyboard x:Name="PanelShowSb">
             <DoubleAnimation Storyboard.TargetName="ChaptersPanel" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.2" />
             <DoubleAnimation Storyboard.TargetName="PanelTransform" Storyboard.TargetProperty="X" To="0" Duration="0:0:0.25">
@@ -831,6 +843,25 @@
                 BorderThickness="0,1,0,0" BorderBrush="{StaticResource OkOverVideoHairlineBrush}">
             <Border.RenderTransform><TranslateTransform x:Name="ToastTransform" Y="-8" /></Border.RenderTransform>
             <TextBlock x:Name="ToastText" Foreground="#F2FFFFFF" FontSize="13" FontWeight="Medium" />
+        </Border>
+
+        <!-- ===== update-ready banner (actionable: restart in place, no trip to Settings) =====
+             Bottom-center, above the OSC. Persistent (not a transient toast) until the user restarts or dismisses. -->
+        <Border x:Name="UpdateBanner" VerticalAlignment="Bottom" HorizontalAlignment="Center"
+                Margin="0,0,0,100" Padding="6" CornerRadius="16" Opacity="0" Visibility="Collapsed"
+                Background="{StaticResource OkOverVideoToastBrush}"
+                BorderThickness="0,1,0,0" BorderBrush="{StaticResource OkOverVideoHairlineBrush}">
+            <Border.RenderTransform><TranslateTransform x:Name="UpdateBannerTransform" Y="12" /></Border.RenderTransform>
+            <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                <FontIcon Glyph="&#xE777;" FontSize="15" Margin="12,0,0,0" VerticalAlignment="Center"
+                          Foreground="{ThemeResource OkAccentBrush}" />
+                <TextBlock x:Name="UpdateBannerText" VerticalAlignment="Center"
+                           Foreground="#F2FFFFFF" FontSize="13" FontWeight="Medium" />
+                <Button x:Name="UpdateRestartButton" Content="Restart now" Click="OnUpdateRestartClick"
+                        Background="{ThemeResource OkAccentBrush}" Style="{StaticResource OkUpdateAccentButtonStyle}" />
+                <Button Click="OnUpdateLaterClick" Style="{StaticResource OkOscIconButtonStyle}"
+                        Content="&#xE711;" ToolTipService.ToolTip="Later" />
+            </StackPanel>
         </Border>
 
         <!-- Media info now lives in its own movable inspector window (MediaInfoWindow), not an over-video overlay. -->
