@@ -65,7 +65,7 @@
 
         <!-- right-click context menu (design band 11 — light material) -->
         <Grid.ContextFlyout>
-            <MenuFlyout MenuFlyoutPresenterStyle="{StaticResource OkMenuFlyoutPresenterStyle}">
+            <MenuFlyout MenuFlyoutPresenterStyle="{StaticResource OkMenuFlyoutPresenterStyle}" Opening="OnContextMenuOpening">
                 <MenuFlyoutItem Text="Play / Pause" Click="OnPlayClick">
                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE768;" /></MenuFlyoutItem.Icon>
                 </MenuFlyoutItem>
@@ -113,7 +113,7 @@
                 <MenuFlyoutItem Text="Open file&#x2026;" Click="OnOpenFromMenu">
                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8E5;" /></MenuFlyoutItem.Icon>
                 </MenuFlyoutItem>
-                <MenuFlyoutItem Text="Open file location" Click="OnOpenFileLocationClick" IsEnabled="{x:Bind Vm.HasMedia, Mode=OneWay}">
+                <MenuFlyoutItem x:Name="OpenFileLocationItem" Text="Open file location" Click="OnOpenFileLocationClick">
                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE838;" /></MenuFlyoutItem.Icon>
                 </MenuFlyoutItem>
                 <MenuFlyoutItem Text="Close file" Click="OnCloseFileClick" IsEnabled="{x:Bind Vm.HasMedia, Mode=OneWay}">

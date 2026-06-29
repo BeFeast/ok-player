@@ -316,10 +316,11 @@ public partial class PlayerViewModel : ObservableObject
                 case "sub-scale": if (value is double ss) SubScale = ss; break;
                 // "chapter" is still observed, but CurrentChapterIndex is derived from playhead time so it
                 // matches our merged (file + user) re-indexed list, where the engine's index no longer lines up.
-                // A non-long value means mpv dropped the property (no video track) — zero it so a prior video's
-                // size can't linger and mask an audio-only file (see OnOpening).
-                case "dwidth": VideoWidth = value is long dw ? (int)dw : 0; break;
-                case "dheight": VideoHeight = value is long dh ? (int)dh : 0; break;
+                // Only adopt a real (long) size; ignore a transient null. The stale-frame fix for video->audio
+                // switches lives in OnOpening (which zeroes per file load) — zeroing here too would tear down a
+                // cover-art file's valid video surface during any momentary property drop (Greptile P2).
+                case "dwidth": if (value is long dw) VideoWidth = (int)dw; break;
+                case "dheight": if (value is long dh) VideoHeight = (int)dh; break;
                 case "demuxer-cache-time": if (value is double ct) BufferedFraction = Duration > 0 ? System.Math.Clamp(ct / Duration, 0, 1) : 0; break;
                 case "ab-loop-a": _abA = ParseAbLoop(value as string); OnPropertyChanged(nameof(AbLoopAFraction)); ScheduleAbAnnounce(); break;
                 case "ab-loop-b": _abB = ParseAbLoop(value as string); OnPropertyChanged(nameof(AbLoopBFraction)); ScheduleAbAnnounce(); break;
