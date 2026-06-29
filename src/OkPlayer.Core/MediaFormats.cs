@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 
 namespace OkPlayer.Core;
 
@@ -10,17 +11,28 @@ public static class MediaFormats
 {
     /// <summary>The audio-only containers among <see cref="Extensions"/> — files that carry no video plane,
     /// so the player shows a now-playing card instead of a black void. (mpv may still decode embedded cover
-    /// art as a video frame; that case is detected at runtime by a non-zero video width.)</summary>
+    /// art as a video frame; that case is detected at runtime by a non-zero video width.) Covers the common
+    /// lossy and lossless/audiophile formats libmpv decodes — a format missing here plays, but would otherwise
+    /// fall through to a black screen since there's no video plane and no now-playing card.</summary>
     public static readonly IReadOnlyList<string> AudioExtensions = new[]
     {
-        ".mp3", ".flac", ".m4a", ".opus", ".wav", ".ogg", ".mka",
+        ".mp3", ".flac", ".m4a", ".m4b", ".opus", ".wav", ".ogg", ".oga", ".mka", ".aac",
+        ".wv", ".ape", ".wma", ".aiff", ".aif", ".dsf", ".dff", ".tak", ".tta", ".mpc",
+        ".ac3", ".dts", ".caf", ".spx", ".amr",
     };
 
-    public static readonly IReadOnlyList<string> Extensions = new[]
+    /// <summary>The video containers OK Player recognizes.</summary>
+    public static readonly IReadOnlyList<string> VideoExtensions = new[]
     {
         ".mkv", ".mp4", ".m4v", ".avi", ".mov", ".webm", ".m2ts", ".ts", ".wmv", ".flv",
-        ".mp3", ".flac", ".m4a", ".opus", ".wav", ".ogg", ".mka",
+        ".mpg", ".mpeg", ".3gp", ".3g2", ".ogv", ".vob", ".divx", ".f4v", ".mts", ".m2t",
+        ".asf", ".rm", ".rmvb", ".mxf",
     };
+
+    // Composed from the video + audio lists so the two can't drift (and an audio format added above is
+    // automatically a recognized media type for the open picker, folder scan, and file associations).
+    public static readonly IReadOnlyList<string> Extensions =
+        new List<string>(VideoExtensions).Concat(AudioExtensions).ToArray();
 
     /// <summary>External subtitle file extensions — the single source of truth shared by the "Add subtitle
     /// file" picker filter and the drag-drop router, so a dropped .srt loads as a track, not as media.</summary>
