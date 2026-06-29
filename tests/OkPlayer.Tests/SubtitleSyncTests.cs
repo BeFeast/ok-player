@@ -170,6 +170,21 @@ public class SubtitleSyncAlignerTests
     }
 
     [Fact]
+    public void DroppedLeadingWord_DoesNotSkewOffset()
+    {
+        // ASR misses each cue's first word; the offset must still resolve to +3.0, not +3.0+wordgap, because the
+        // matched word's cue position is backed out with the ASR word cadence.
+        var asr = new List<AsrToken>
+        {
+            new("quick", 13.4), new("brown", 13.8), new("fox", 14.2),          // cue1 minus "The"
+            new("over", 16.4), new("the", 16.8), new("lazy", 17.2), new("dog", 17.6), // cue2 minus "jumps"
+        };
+        var r = SubtitleSyncAligner.Align(asr, Cues);
+        Assert.NotNull(r);
+        Assert.Equal(3.0, r!.OffsetSeconds, 1);
+    }
+
+    [Fact]
     public void NoMatch_ReturnsNull()
     {
         var asr = new List<AsrToken>

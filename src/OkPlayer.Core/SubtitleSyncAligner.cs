@@ -54,6 +54,11 @@ public static class SubtitleSyncAligner
         if (words.Count < 3)
             return null;
 
+        // Typical gap between spoken words, from the ASR's own cadence — used to back out the cue's start time
+        // when ASR drops a cue's leading word(s) (the first *matched* word is then a later one, so subtracting
+        // cue.Start raw would skew the vote later). Degrades to 0 for segment-level ASR (no intra-segment timing).
+        double wordGap = MedianConsecutiveGap(times);
+
         var candidates = new List<double>();
         foreach (SrtCue cue in cues)
         {
@@ -65,7 +70,10 @@ public static class SubtitleSyncAligner
             if (firstMatchedAt < 0 || score < minMatch)
                 continue;
 
-            double offset = times[firstMatchedAt] - cue.Start;
+            // Where the matched word sits in the cue: estimate that word's spoken time as cue.Start + pos·wordGap,
+            // so a dropped leading word doesn't bias the offset by its position.
+            int cuePos = Math.Max(0, cueWords.IndexOf(words[firstMatchedAt]));
+            double offset = times[firstMatchedAt] - (cue.Start + cuePos * wordGap);
             if (Math.Abs(offset) <= maxOffsetSeconds)
                 candidates.Add(offset);
         }
@@ -133,6 +141,22 @@ public static class SubtitleSyncAligner
             }
         }
         return (bestFirst, bestRecall);
+    }
+
+    // Median of the positive gaps between consecutive ASR word times — a robust per-clip word cadence. Returns 0
+    // when there's no intra-word timing (e.g. segment-level ASR where consecutive words share a timestamp).
+    private static double MedianConsecutiveGap(List<double> times)
+    {
+        var gaps = new List<double>();
+        for (int i = 1; i < times.Count; i++)
+        {
+            double d = times[i] - times[i - 1];
+            if (d > 0) gaps.Add(d);
+        }
+        if (gaps.Count == 0)
+            return 0;
+        gaps.Sort();
+        return gaps[gaps.Count / 2];
     }
 
     // Lowercase, split on any non-alphanumeric. Unicode letters/digits kept (works for non-Latin scripts too).
