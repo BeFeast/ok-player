@@ -373,6 +373,11 @@ public sealed partial class PlayerView : UserControl
             _lyricLines = doc.Lines;
             _lyricsTimed = doc.HasTimings;
             _lyricsResolved = true; // we have lyrics for this track — later tag changes shouldn't re-fetch
+            // Untimed (plain) lyrics carry no per-line timestamps — tapping a line can't seek, so drop the click
+            // affordance and mark the sheet "not synced" so it reads as the track's lyrics, just unsynced, rather
+            // than looking broken when a tap does nothing.
+            LyricsList.IsItemClickEnabled = _lyricsTimed;
+            LyricsHeader.Text = _lyricsTimed ? "LYRICS" : "LYRICS · NOT SYNCED";
             foreach (OkPlayer.Core.LrcLine line in doc.Lines)
                 _lyrics.Add(new LyricRow(line.Text, line.Time.TotalSeconds));
             HideLyricsStatus();
@@ -852,6 +857,7 @@ public sealed partial class PlayerView : UserControl
             case VirtualKey.PageUp:   PlayPrevious(); break;      // previous file
             case VirtualKey.Escape:
                 if (_mediaInfoWindow is not null) CloseMediaInfo();
+                else if (LyricsOverlay.Visibility == Visibility.Visible) CloseLyrics(); // dismiss the lyrics sheet first
                 else if (_panelOpen) TogglePanel();
                 else ExitFullscreenRequested?.Invoke(this, EventArgs.Empty);
                 break;

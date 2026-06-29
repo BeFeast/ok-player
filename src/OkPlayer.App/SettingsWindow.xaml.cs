@@ -736,8 +736,10 @@ public sealed partial class SettingsWindow : Window
 
     // ── Integration panel (file-type associations) ─────────────────────
 
-    private static readonly string[] VideoExts = { ".mkv", ".mp4", ".m4v", ".avi", ".mov", ".webm", ".m2ts", ".ts", ".wmv", ".flv" };
-    private static readonly string[] AudioExts = { ".mp3", ".flac", ".m4a", ".opus", ".wav", ".ogg", ".mka" };
+    // Sourced from the single MediaFormats source of truth so the association checkboxes can't drift from the
+    // formats the player actually recognizes — a format added there is immediately registrable here too.
+    private static readonly string[] VideoExts = OkPlayer.Core.MediaFormats.VideoExtensions.ToArray();
+    private static readonly string[] AudioExts = OkPlayer.Core.MediaFormats.AudioExtensions.ToArray();
     private readonly FileAssociationService _assoc = new();
     private bool _assocBuilt;
 
