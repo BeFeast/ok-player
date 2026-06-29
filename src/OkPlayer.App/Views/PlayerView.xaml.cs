@@ -236,9 +236,8 @@ public sealed partial class PlayerView : UserControl
         WelcomeCard.Visibility = (idle && !_historyOpen) ? Visibility.Visible : Visibility.Collapsed;
         HistorySurface.Visibility = (idle && _historyOpen) ? Visibility.Visible : Visibility.Collapsed;
         VideoBackdrop.Visibility = has ? Visibility.Visible : Visibility.Collapsed;
-        Video.Visibility = has ? Visibility.Visible : Visibility.Collapsed;
         LoadingOverlay.Visibility = _loading ? Visibility.Visible : Visibility.Collapsed;
-        ApplyAudioSurface(has);
+        ApplyAudioSurface(has); // owns Video plane visibility (hidden for audio so a stale video frame can't show)
         ApplyCaptionPalette(has); // white caption glyphs over video; theme-aware on the welcome shell
         MediaPresenceChanged?.Invoke(this, has);
         if (has)
@@ -270,6 +269,11 @@ public sealed partial class PlayerView : UserControl
         bool audioOnly = has && Vm.VideoWidth <= 0
             && _currentPath is { } p && OkPlayer.Core.MediaFormats.IsAudio(p);
         AudioNowPlaying.Visibility = audioOnly ? Visibility.Visible : Visibility.Collapsed;
+        // Show the video plane only for actual video. Hiding it for audio keeps the previous file's last decoded
+        // frame from showing behind/around the now-playing card — mpv renders no new frames with audio-display=no,
+        // so the GL surface would otherwise hold the stale video (e.g. opening an audio track from History while a
+        // video was on screen). The opaque VideoBackdrop stays as the card's black backing.
+        Video.Visibility = (has && !audioOnly) ? Visibility.Visible : Visibility.Collapsed;
         if (audioOnly)
         {
             AudioTitle.Text = !string.IsNullOrWhiteSpace(Vm.MediaTitle)
