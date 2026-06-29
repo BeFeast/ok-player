@@ -122,10 +122,12 @@
                                                             <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="3">
                                                                 <TextBlock Text="{x:Bind Title}" FontSize="13" FontWeight="Medium"
                                                                            MaxLines="1" TextTrimming="CharacterEllipsis"
-                                                                           Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                                                                           Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                                                           ToolTipService.ToolTip="{x:Bind Title}" />
                                                                 <TextBlock Text="{x:Bind Folder}" FontSize="11.5" MaxLines="1"
                                                                            TextTrimming="CharacterEllipsis"
-                                                                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                                                           Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                                                           ToolTipService.ToolTip="{x:Bind Folder}" />
                                                             </StackPanel>
                                                             <!-- when + state -->
                                                             <StackPanel Grid.Column="2" MinWidth="92" Spacing="5"
