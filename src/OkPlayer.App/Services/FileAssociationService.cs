@@ -6,11 +6,13 @@ namespace OkPlayer.App.Services;
 
 /// <summary>
 /// Per-user (HKCU) file-association management for the unpackaged app. Registers a ProgID + an
-/// "Applications\OkPlayer.exe" entry + Default-Apps capabilities, and assigns/unassigns OK Player as a
-/// candidate handler for individual extensions. Windows 10/11 hash-protect the *default* handler
-/// (UserChoice), so an app can make itself a candidate (it then shows in "Open with" and in Windows'
-/// Default Apps) but the user must confirm "default" in Windows — see <see cref="OpenWindowsDefaultApps"/>.
-/// No admin rights are needed.
+/// "Applications\OkPlayer.exe" entry + Default-Apps capabilities, and assigns/unassigns OK Player for
+/// individual extensions. <see cref="Assign"/> writes the legacy per-user default ProgID pointer
+/// (HKCU\Software\Classes\&lt;ext&gt;), which makes a double-click open OK Player whenever Windows has no
+/// hash-protected UserChoice for the type — the common case for media extensions (the same approach mpv.net
+/// and MPC-HC take; no admin, no hash forgery). When Windows HAS hash-pinned the type to another app
+/// (<see cref="HasForeignUserChoice"/>), only the user can switch it, via Settings → Default apps
+/// (<see cref="OpenWindowsDefaultApps"/>). No admin rights are needed.
 /// </summary>
 public sealed class FileAssociationService
 {
@@ -18,6 +20,9 @@ public sealed class FileAssociationService
     private const string AppRegName = "OK Player";
     private const string CapabilitiesKey = @"Software\OkPlayer\Capabilities";
     private const string AppExeName = "OkPlayer.exe";
+    // Where Assign() stashes the extension's prior per-user default ProgID, so Unassign() can put it back
+    // instead of orphaning the type. Lives under the HKCU\Software\Classes\<ext> key it backs up.
+    private const string PrevProgIdValue = "OkPlayerPrevProgId";
 
     private readonly string _exePath = Environment.ProcessPath ?? string.Empty;
 
@@ -86,6 +91,10 @@ public sealed class FileAssociationService
         return true;
     }
 
+    /// <summary>True when OK Player is registered as a handler for this extension (the candidate registration the
+    /// checkbox represents). Being registered is NOT the same as being the OS default: on Win11 a double-click
+    /// only goes straight to us once the user confirms in Windows (which writes the hash-protected UserChoice) —
+    /// see <see cref="HasForeignUserChoice"/> and <see cref="OpenWindowsDefaultApps"/>.</summary>
     public bool IsAssigned(string ext)
     {
         ext = Norm(ext);
@@ -93,16 +102,40 @@ public sealed class FileAssociationService
         return k?.GetValue(ProgId) is not null;
     }
 
+    /// <summary>True when Windows has a hash-protected UserChoice for this extension pinned to a DIFFERENT app.
+    /// In that state our default pointer is overridden, so assigning can't make a double-click open OK Player —
+    /// only the user can switch it (Settings → Default apps). Lets the UI say so instead of silently no-op'ing.</summary>
+    public bool HasForeignUserChoice(string ext)
+    {
+        ext = Norm(ext);
+        using var uc = Registry.CurrentUser.OpenSubKey(
+            $@"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{ext}\UserChoice");
+        return uc?.GetValue("ProgId") is string p && p.Length > 0 && p != ProgId;
+    }
+
     public void Assign(string ext)
     {
         EnsureRegistered();
         ext = Norm(ext);
+        // Candidate registration: surfaces OK Player in "Open with" and in Windows' Default Apps list.
         using (var owp = Registry.CurrentUser.CreateSubKey($@"Software\Classes\{ext}\OpenWithProgids"))
             owp.SetValue(ProgId, Array.Empty<byte>(), RegistryValueKind.None);
         using (var fa = Registry.CurrentUser.CreateSubKey($@"{CapabilitiesKey}\FileAssociations"))
             fa.SetValue(ext, ProgId);
         using (var st = Registry.CurrentUser.CreateSubKey($@"Software\Classes\Applications\{AppExeName}\SupportedTypes"))
             st.SetValue(ext, string.Empty);
+        // Best-effort effective default: the legacy per-user ProgID pointer in HKCU\Software\Classes\<ext> wins
+        // the HKCR merge over the HKLM default and gives the file OK Player's icon. On a pristine extension (no
+        // prior handler) it can also make a double-click open us; but where Windows has any UserChoice or an
+        // "Open with" history, it shows its picker until the user confirms once (verified empirically — the
+        // pointer alone is not enough on Win11). It forges no UserChoice hash, so it needs no admin and trips no
+        // AV/SmartScreen/UCPD guard. Back up any prior ProgID so Unassign can restore the user's handler.
+        using (var cls = Registry.CurrentUser.CreateSubKey($@"Software\Classes\{ext}"))
+        {
+            if (cls.GetValue("") is string prev && prev.Length > 0 && prev != ProgId)
+                cls.SetValue(PrevProgIdValue, prev);
+            cls.SetValue("", ProgId);
+        }
     }
 
     public void Unassign(string ext)
@@ -114,6 +147,19 @@ public sealed class FileAssociationService
             fa?.DeleteValue(ext, throwOnMissingValue: false);
         using (var st = Registry.CurrentUser.OpenSubKey($@"Software\Classes\Applications\{AppExeName}\SupportedTypes", writable: true))
             st?.DeleteValue(ext, throwOnMissingValue: false);
+        // Roll back the default pointer only while it's still ours: restore the backed-up prior ProgID, or clear
+        // it if there was none — never clobber a default the user re-pointed elsewhere since we set it.
+        using (var cls = Registry.CurrentUser.OpenSubKey($@"Software\Classes\{ext}", writable: true))
+        {
+            if (cls?.GetValue("") as string == ProgId)
+            {
+                if (cls.GetValue(PrevProgIdValue) is string prev && prev.Length > 0)
+                    cls.SetValue("", prev);
+                else
+                    cls.DeleteValue("", throwOnMissingValue: false);
+                cls.DeleteValue(PrevProgIdValue, throwOnMissingValue: false);
+            }
+        }
     }
 
     /// <summary>Tell the shell that associations changed so Explorer / "Open with" refresh.</summary>
