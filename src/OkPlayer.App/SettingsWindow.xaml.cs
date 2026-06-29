@@ -834,11 +834,20 @@ public sealed partial class SettingsWindow : Window
         try
         {
             if (cb.IsChecked == true)
+            {
                 _assoc.Assign(ext);
+                // Honest status: our default pointer is set, but a hash-protected UserChoice (if Windows pinned
+                // this type to another app) still wins. Tell the user instead of implying it just took effect.
+                AssocStatus.Text = _assoc.HasForeignUserChoice(ext)
+                    ? $"Set — but Windows still has {ext} pinned; use “Open Windows Default Apps” to switch it"
+                    : "Updated";
+            }
             else
+            {
                 _assoc.Unassign(ext);
+                AssocStatus.Text = "Updated";
+            }
             _assoc.NotifyShell();
-            AssocStatus.Text = "Updated";
         }
         catch
         {
@@ -858,18 +867,22 @@ public sealed partial class SettingsWindow : Window
     {
         try
         {
+            int pinned = 0; // types Windows hash-pinned to another app — our pointer can't override those
             foreach (Panel host in new[] { (Panel)AssocVideoPanel, AssocAudioPanel })
                 foreach (var child in host.Children)
                     if (child is CheckBox { Tag: string ext } cb)
                     {
-                        if (on) _assoc.Assign(ext); else _assoc.Unassign(ext);
+                        if (on) { _assoc.Assign(ext); if (_assoc.HasForeignUserChoice(ext)) pinned++; }
+                        else _assoc.Unassign(ext);
                         cb.Checked -= OnAssocToggle;
                         cb.Unchecked -= OnAssocToggle;
                         cb.IsChecked = on;
                         cb.Checked += OnAssocToggle;
                         cb.Unchecked += OnAssocToggle;
                     }
-            AssocStatus.Text = on ? "All types added" : "All types cleared";
+            AssocStatus.Text = !on ? "All types cleared"
+                : pinned == 0 ? "All types registered — open Windows Default Apps and pick OK Player to set it as default"
+                : $"Registered — {pinned} type(s) are pinned by Windows; use “Open Windows Default Apps” to switch them";
         }
         catch
         {
