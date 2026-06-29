@@ -314,6 +314,15 @@ public sealed partial class PlayerView : UserControl
         catch { /* leave the fallback tile up if the bitmap can't be loaded */ }
     }
 
+    // Resolve a Kodi/Jellyfin .nfo next to the file and, if present, use its curated title over the filename.
+    // Off the UI thread; applied only if this file is still the current one (a faster switch supersedes it).
+    private async Task LoadNfoTitleAsync(string path)
+    {
+        var nfo = await OkPlayer.App.Services.NfoService.GetAsync(path);
+        if (nfo is not null && _currentPath == path)
+            Vm.ApplyNfoTitle(nfo.Title);
+    }
+
     // ===== synced lyrics (audio karaoke overlay) =====
 
     private void OnLyricsToggle(object sender, RoutedEventArgs e)
@@ -2358,6 +2367,7 @@ public sealed partial class PlayerView : UserControl
             _thumbReady = _thumbs.OpenAsync(pathOrUrl); // arm the seek-preview engine; the warm awaits this task
             WarmChapterThumbnails();           // preemptively fill the chapter-thumbnail cache in the background
             UpdatePlaylist(pathOrUrl);        // (re)build the folder-as-playlist around this file
+            _ = LoadNfoTitleAsync(pathOrUrl); // prefer a curated title from a local .nfo sidecar (Kodi/Jellyfin)
         }
         catch (Exception)
         {
