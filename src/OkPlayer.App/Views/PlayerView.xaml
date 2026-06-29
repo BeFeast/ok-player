@@ -234,7 +234,11 @@
 
         <!-- black backdrop behind the video so a 1px swap-chain gap (e.g. the window's top edge in fullscreen)
              never shows the light Mica through it; only present once media is loaded -->
-        <Border x:Name="VideoBackdrop" Background="#FF000000" Visibility="Collapsed" />
+        <!-- Black backing behind the video plane / audio card. Carries the same tap gestures as the video plane
+             so play/pause (tap) and fullscreen (double-tap) still work over an audio file, where the video plane
+             is hidden. For video the MpvVideoPanel sits on top and handles the tap first. -->
+        <Border x:Name="VideoBackdrop" Background="#FF000000" Visibility="Collapsed"
+                Tapped="OnVideoTapped" DoubleTapped="OnVideoDoubleTapped" />
         <!-- the single video plane: only over Mica once media is loaded (Mica shows the light shell otherwise) -->
         <render:MpvVideoPanel x:Name="Video" Tapped="OnVideoTapped" DoubleTapped="OnVideoDoubleTapped" Visibility="Collapsed" />
 
