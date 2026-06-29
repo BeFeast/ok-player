@@ -290,7 +290,10 @@ public sealed partial class MainWindow : Window
         if (GetClientRect(hwnd, out var rcClamped))
         {
             int cwActual = rcClamped.Right - rcClamped.Left, chActual = rcClamped.Bottom - rcClamped.Top;
-            if (OkPlayer.Core.WindowFit.FillClient(w, h, cwActual, chActual) is { } fill)
+            // Cap the grown axis at the same on-screen budget the initial fit used, so a narrow/portrait clip
+            // whose width is pinned at the minimum can't grow a window taller than the monitor.
+            int maxCw = (int)(work.Width * 0.94), maxCh = (int)(work.Height * 0.94);
+            if (OkPlayer.Core.WindowFit.FillClient(w, h, cwActual, chActual, maxCw, maxCh) is { } fill)
                 AppWindow.ResizeClient(new Windows.Graphics.SizeInt32(fill.Width, Math.Max(1, fill.Height - bandDelta)));
         }
         // Centre the whole window within the work area so a window sized for a large video never extends past

@@ -16,8 +16,13 @@ public static class WindowFit
     /// with no letterbox, or null if the current <paramref name="clientW"/>×<paramref name="clientH"/> already
     /// matches the video aspect to within ~1px. When the window was clamped wider than the video, the height is
     /// grown to match; when clamped taller, the width is grown. The clamped (larger) axis is preserved because
-    /// the OS won't let the window go below it.</summary>
-    public static (int Width, int Height)? FillClient(int videoW, int videoH, int clientW, int clientH)
+    /// the OS won't let the window go below it. The grown axis is capped at <paramref name="maxClientW"/>/
+    /// <paramref name="maxClientH"/> (the on-screen work area) so the corrected window never extends past the
+    /// monitor — on a display too small to grow into (e.g. a portrait clip whose width is already at the
+    /// minimum), some bar is unavoidable and we keep the window on-screen rather than oversizing it. Pass 0 for
+    /// a cap to leave that axis uncapped.</summary>
+    public static (int Width, int Height)? FillClient(
+        int videoW, int videoH, int clientW, int clientH, int maxClientW, int maxClientH)
     {
         if (videoW <= 0 || videoH <= 0 || clientW <= 0 || clientH <= 0)
             return null;
@@ -30,11 +35,15 @@ public static class WindowFit
         if (sideBars >= 1.0) // too wide (width was clamped up) → grow height to the video aspect
         {
             int targetH = (int)System.Math.Round(clientW / videoAspect);
+            if (maxClientH > 0)
+                targetH = System.Math.Min(targetH, maxClientH); // never grow past the screen
             return targetH > 0 && targetH != clientH ? (clientW, targetH) : null;
         }
         if (vertBars >= 1.0) // too tall (height was clamped up) → grow width to the video aspect
         {
             int targetW = (int)System.Math.Round(clientH * videoAspect);
+            if (maxClientW > 0)
+                targetW = System.Math.Min(targetW, maxClientW);
             return targetW > 0 && targetW != clientW ? (targetW, clientH) : null;
         }
         return null; // already filled within a pixel
