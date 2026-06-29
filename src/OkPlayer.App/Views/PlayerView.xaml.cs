@@ -2072,6 +2072,16 @@ public sealed partial class PlayerView : UserControl
 
     /// <summary>Reveal the current file in Explorer (selected). Local files only — URLs/streams have no
     /// folder; a moved/deleted file is reported rather than opening an empty window.</summary>
+    // Gate "Open file location" on having a revealable local path rather than on HasMedia: a load that failed
+    // still leaves _currentPath set (and that local file is worth revealing), while the welcome screen has no
+    // path at all — so HasMedia would both wrongly disable the former and offer a no-op on the latter. URLs and
+    // streams aren't on disk, so exclude them here too (Greptile P2).
+    private void OnContextMenuOpening(object sender, object e)
+    {
+        OpenFileLocationItem.IsEnabled =
+            _currentPath is { } path && !path.Contains("://", StringComparison.Ordinal);
+    }
+
     private void OnOpenFileLocationClick(object sender, RoutedEventArgs e)
     {
         if (_currentPath is not { } path || path.Contains("://", StringComparison.Ordinal))

@@ -233,6 +233,12 @@ public partial class PlayerViewModel : ObservableObject
     {
         Position = 0;
         Duration = 0;
+        // Clear the outgoing file's video dimensions. mpv reports dwidth/dheight only when a video track is
+        // present, so switching from a video to an audio-only file (no dwidth event) would otherwise leave the
+        // previous video's size here — making the audio now-playing card (gated on VideoWidth<=0) never show,
+        // so the stale last video frame stays on screen behind the new audio track.
+        VideoWidth = 0;
+        VideoHeight = 0;
         CurrentChapterIndex = -1;
         _fileChapters = new();
         _userChapters = new();
@@ -310,6 +316,9 @@ public partial class PlayerViewModel : ObservableObject
                 case "sub-scale": if (value is double ss) SubScale = ss; break;
                 // "chapter" is still observed, but CurrentChapterIndex is derived from playhead time so it
                 // matches our merged (file + user) re-indexed list, where the engine's index no longer lines up.
+                // Only adopt a real (long) size; ignore a transient null. The stale-frame fix for video->audio
+                // switches lives in OnOpening (which zeroes per file load) — zeroing here too would tear down a
+                // cover-art file's valid video surface during any momentary property drop (Greptile P2).
                 case "dwidth": if (value is long dw) VideoWidth = (int)dw; break;
                 case "dheight": if (value is long dh) VideoHeight = (int)dh; break;
                 case "demuxer-cache-time": if (value is double ct) BufferedFraction = Duration > 0 ? System.Math.Clamp(ct / Duration, 0, 1) : 0; break;
