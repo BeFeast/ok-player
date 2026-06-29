@@ -285,6 +285,7 @@ public partial class PlayerViewModel : ObservableObject
         {
             HasMedia = false;
             MediaTitle = string.Empty;
+            _nfoTitle = null; // so a late media-title after the failure can't restore the dead file's .nfo title
             LoadFailed?.Invoke();
             ToastRequested?.Invoke("Couldn't play this file");
         });
@@ -684,6 +685,7 @@ public partial class PlayerViewModel : ObservableObject
         Cmd("stop"); // halt playback + clear the internal playlist; the engine goes idle (keep-open holds no frame)
         HasMedia = false;
         MediaTitle = string.Empty;
+        _nfoTitle = null; // drop the closed file's curated title so a late media-title can't write it back
         Position = 0;
         Duration = 0;
         CurrentChapterIndex = -1;
