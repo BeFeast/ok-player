@@ -72,14 +72,23 @@ public static class SubtitleSyncAligner
         if (candidates.Count == 0)
             return null;
 
-        // Cluster offsets into bins; the densest bin wins. Average within the bin for a sub-bin-precise result.
-        IGrouping<double, double> best = candidates
-            .GroupBy(o => Math.Round(o / binSeconds))
-            .OrderByDescending(g => g.Count())
-            .ThenBy(g => Math.Abs(g.Average())) // tie-break toward the smaller correction
-            .First();
-
-        return new SubtitleSyncResult(best.Average(), (double)best.Count() / candidates.Count, best.Count());
+        // Cluster by a sliding window of width binSeconds over the sorted offsets — a tolerance, not fixed bin
+        // boundaries (so 3.12 and 3.13 always cluster together, where Round(o/bin) could split them). The densest
+        // window wins; its members are averaged for a precise result.
+        candidates.Sort();
+        int bestLo = 0, bestCount = 0;
+        for (int lo = 0, hi = 0; lo < candidates.Count; lo++)
+        {
+            if (hi < lo) hi = lo;
+            while (hi + 1 < candidates.Count && candidates[hi + 1] - candidates[lo] <= binSeconds)
+                hi++;
+            int count = hi - lo + 1;
+            if (count > bestCount) { bestCount = count; bestLo = lo; }
+        }
+        double sum = 0;
+        for (int i = bestLo; i < bestLo + bestCount; i++)
+            sum += candidates[i];
+        return new SubtitleSyncResult(sum / bestCount, (double)bestCount / candidates.Count, bestCount);
     }
 
     // Slide a window the width of the cue across the ASR words; for each, count how many of the cue's words are
@@ -89,7 +98,12 @@ public static class SubtitleSyncAligner
     // timing) and the recall score. O(asr·cue) — cheap for a short cue against a 10 s sample.
     private static (int FirstMatchedAt, double Score) BestWindow(List<string> asr, List<string> cue)
     {
-        var cueSet = new HashSet<string>(cue);
+        // Multiset of the cue's words (with multiplicity), so a repeated-word cue like "no no no" can match all
+        // three — a plain set would cap its recall at 1/3 and silence it.
+        var cueCounts = new Dictionary<string, int>();
+        foreach (string w in cue)
+            cueCounts[w] = cueCounts.GetValueOrDefault(w) + 1;
+
         int bestFirst = -1;
         double bestRecall = 0, bestPrecision = 0;
         int width = cue.Count;
@@ -98,11 +112,12 @@ public static class SubtitleSyncAligner
         {
             int end = Math.Min(asr.Count, s + width);
             int matched = 0, firstMatched = -1;
-            var remaining = new HashSet<string>(cueSet);
+            var remaining = new Dictionary<string, int>(cueCounts);
             for (int i = s; i < end; i++)
             {
-                if (remaining.Remove(asr[i]))
+                if (remaining.TryGetValue(asr[i], out int n) && n > 0)
                 {
+                    remaining[asr[i]] = n - 1;
                     matched++;
                     if (firstMatched < 0) firstMatched = i;
                 }

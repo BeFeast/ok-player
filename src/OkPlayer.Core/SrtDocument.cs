@@ -34,8 +34,12 @@ public static class SrtDocument
             text = text[1..];
 
         int autoIndex = 0;
-        foreach (string block in text.Split("\n\n", StringSplitOptions.RemoveEmptyEntries))
+        // Split on one or more blank lines — tolerating whitespace-only separators that subtitle editors emit
+        // (a plain "\n\n" split would merge two cues when the blank line holds spaces/tabs).
+        foreach (string block in Regex.Split(text, @"\n(?:[ \t]*\n)+"))
         {
+            if (string.IsNullOrWhiteSpace(block))
+                continue;
             string[] lines = block.Split('\n');
 
             // The time line is line 0 (no index) or line 1 (index present); scan the first few to be safe.

@@ -57,6 +57,18 @@ public class SrtDocumentTests
     [InlineData("not a subtitle file")]
     [InlineData("1\nno timecode here\njust text")]
     public void GarbageYieldsNoCues(string input) => Assert.Empty(SrtDocument.Parse(input));
+
+    [Fact]
+    public void SplitsOnWhitespaceOnlySeparatorLines()
+    {
+        // A separator line with spaces/tabs (common from subtitle editors) must still split the cues.
+        const string srt = "1\n00:00:01,000 --> 00:00:02,000\nFirst\n \t \n2\n00:00:03,000 --> 00:00:04,000\nSecond";
+        var cues = SrtDocument.Parse(srt);
+        Assert.Equal(2, cues.Count);
+        Assert.Equal("First", cues[0].Text);
+        Assert.Equal("Second", cues[1].Text);
+        Assert.Equal(3.0, cues[1].Start, 3);
+    }
 }
 
 public class SubtitleSyncAlignerTests
@@ -124,6 +136,37 @@ public class SubtitleSyncAlignerTests
         var r = SubtitleSyncAligner.Align(asr, Cues);
         Assert.NotNull(r);
         Assert.Equal(3.0, r!.OffsetSeconds, 1);
+    }
+
+    [Fact]
+    public void RepeatedWordCue_StillMatches()
+    {
+        // "no no no" must match all three occurrences (multiset), not cap recall at 1/3.
+        var cues = new[] { new SrtCue(1, 20.0, 21.0, "No no no") };
+        var asr = new List<AsrToken> { new("no", 24.0), new("no", 24.5), new("no", 25.0) };
+        var r = SubtitleSyncAligner.Align(asr, cues);
+        Assert.NotNull(r);
+        Assert.Equal(4.0, r!.OffsetSeconds, 1); // 24.0 − 20.0
+    }
+
+    [Fact]
+    public void NearBoundaryOffsets_ClusterTogether()
+    {
+        // Candidate offsets straddling a fixed-bin boundary (≈3.12 / ≈3.13) must still cluster (tolerance window).
+        var cues = new[]
+        {
+            new SrtCue(1, 10.00, 12.0, "alpha bravo charlie"),
+            new SrtCue(2, 20.00, 22.0, "delta echo foxtrot"),
+        };
+        var asr = new List<AsrToken>
+        {
+            new("alpha", 13.12), new("bravo", 13.5), new("charlie", 13.9),
+            new("delta", 23.13), new("echo", 23.5), new("foxtrot", 23.9),
+        };
+        var r = SubtitleSyncAligner.Align(asr, cues);
+        Assert.NotNull(r);
+        Assert.Equal(2, r!.Votes);                 // both cues in one cluster despite the boundary
+        Assert.Equal(3.125, r.OffsetSeconds, 2);
     }
 
     [Fact]
