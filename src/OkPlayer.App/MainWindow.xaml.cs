@@ -18,19 +18,28 @@ public sealed partial class MainWindow : Window
         Title = "OK Player";
         try { AppWindow.SetIcon(System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "OkPlayer.ico")); } catch { }
 
-        // Immersive: extend content under the title-bar band so the video reaches the top edge;
-        // the auto-hiding top bar is the drag region, and the caption buttons go transparent with
-        // white glyphs so Mica/video shows through.
+        // Immersive: extend content under the title-bar band so the video reaches the top edge; the auto-hiding
+        // top bar is the drag region. We hide the NATIVE min/max/close and draw our own in that auto-hiding chrome
+        // (PlayerView.CaptionBar) so they vanish over video like the rest of the controls — the native buttons
+        // can't. The host owns the AppWindow/presenter actions they invoke.
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(Player.TitleBarElement);
-        Player.MediaPresenceChanged += (_, hasMedia) => SetCaptionForVideo(hasMedia);
-        SetCaptionForVideo(false); // start on the light welcome shell (dark caption glyphs)
+        HideNativeCaption();
+        UpdateMaxRestoreGlyph(); // seed the maximize/restore glyph for the window's starting state
+        Player.CaptionMinimizeRequested += (_, _) => { if (AppWindow.Presenter is OverlappedPresenter p) p.Minimize(); };
+        Player.CaptionMaximizeRestoreRequested += (_, _) => ToggleMaximize();
+        Player.CaptionCloseRequested += (_, _) => Close();
 
         Player.ToggleFullscreenRequested += (_, _) => SetFullscreen(!_fullscreen);
         Player.ExitFullscreenRequested += (_, _) => SetFullscreen(false);
         Player.MiniPlayerRequested += (_, _) => SetMiniPlayer(!_miniPlayer);
-        // re-cover the island top edge if WinUI re-lays it out while full screen (e.g. a DPI/size change)
-        AppWindow.Changed += (_, args) => { if (_fullscreen && args.DidSizeChange) DispatcherQueue.TryEnqueue(CoverIslandTopEdge); };
+        // re-cover the island top edge if WinUI re-lays it out while full screen (e.g. a DPI/size change), and
+        // keep the custom maximize/restore glyph in sync with the window state (maximize, restore, snap, drag-to-top).
+        AppWindow.Changed += (_, args) =>
+        {
+            if (_fullscreen && args.DidSizeChange) DispatcherQueue.TryEnqueue(CoverIslandTopEdge);
+            if (args.DidPresenterChange || args.DidSizeChange) UpdateMaxRestoreGlyph();
+        };
         Player.OpenFileRequested += async (_, _) => await OpenFileAsync();
         Player.AddSubtitleRequested += async (_, _) => await AddSubtitleAsync();
         Player.FitToVideoRequested += (_, size) => FitToVideo(size.Width, size.Height);
@@ -106,31 +115,28 @@ public sealed partial class MainWindow : Window
         _settingsWindow.Activate();
     }
 
-    private void SetCaptionForVideo(bool overVideo)
+    /// <summary>Hide the native min/max/close so the custom caption buttons (in the auto-hiding chrome) are the
+    /// only ones — keeping the resize border. Must be re-applied after a presenter swap back to Overlapped
+    /// (leaving fullscreen / mini-player), which restores the native title bar.</summary>
+    private void HideNativeCaption()
     {
-        var tb = AppWindow.TitleBar;
-        tb.ButtonBackgroundColor = Microsoft.UI.Colors.Transparent;
-        tb.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Transparent;
-        if (overVideo)
+        if (AppWindow.Presenter is OverlappedPresenter p)
+            p.SetBorderAndTitleBar(hasBorder: true, hasTitleBar: false);
+    }
+
+    /// <summary>Maximize ⇄ restore — the custom maximize button's action.</summary>
+    private void ToggleMaximize()
+    {
+        if (AppWindow.Presenter is OverlappedPresenter p)
         {
-            tb.ButtonForegroundColor = Microsoft.UI.Colors.White;
-            tb.ButtonInactiveForegroundColor = Windows.UI.Color.FromArgb(0xB0, 0xFF, 0xFF, 0xFF);
-            tb.ButtonHoverBackgroundColor = Windows.UI.Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF);
-            tb.ButtonHoverForegroundColor = Microsoft.UI.Colors.White;
-            tb.ButtonPressedBackgroundColor = Windows.UI.Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF);
-            tb.ButtonPressedForegroundColor = Microsoft.UI.Colors.White;
-        }
-        else
-        {
-            // light Mica shell — let the caption glyphs follow the system theme (dark on light)
-            tb.ButtonForegroundColor = null;
-            tb.ButtonInactiveForegroundColor = null;
-            tb.ButtonHoverBackgroundColor = null;
-            tb.ButtonHoverForegroundColor = null;
-            tb.ButtonPressedBackgroundColor = null;
-            tb.ButtonPressedForegroundColor = null;
+            if (p.State == OverlappedPresenterState.Maximized) p.Restore();
+            else p.Maximize();
         }
     }
+
+    /// <summary>Point the custom maximize button at the current window state (maximized → show restore glyph).</summary>
+    private void UpdateMaxRestoreGlyph()
+        => Player.SetMaximizedGlyph(AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Maximized });
 
     [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
     private static extern IntPtr FindWindowExW(IntPtr parent, IntPtr after, string? cls, string? title);
@@ -196,8 +202,13 @@ public sealed partial class MainWindow : Window
         }
         _miniPlayer = on; // commit the flag only once the presenter actually switched
         Services.Log.Step("SetPresenter done [mini-player]");
-        if (!on && _alwaysOnTop && AppWindow.Presenter is OverlappedPresenter p)
-            p.IsAlwaysOnTop = true;
+        if (!on) // back to the overlapped presenter — it restores the native title bar, so re-hide it
+        {
+            HideNativeCaption();
+            UpdateMaxRestoreGlyph();
+            if (_alwaysOnTop && AppWindow.Presenter is OverlappedPresenter p)
+                p.IsAlwaysOnTop = true;
+        }
     }
 
     private void SetFullscreen(bool on)
@@ -229,8 +240,13 @@ public sealed partial class MainWindow : Window
         }
         _fullscreen = on; // commit the flag only once the presenter actually switched
         Services.Log.Step("SetPresenter done [fullscreen]");
-        if (!on && _alwaysOnTop && AppWindow.Presenter is OverlappedPresenter p)
-            p.IsAlwaysOnTop = true; // the new overlapped presenter starts un-pinned — restore the user's choice
+        if (!on) // back to the overlapped presenter — it restores the native title bar, so re-hide it
+        {
+            HideNativeCaption();
+            UpdateMaxRestoreGlyph();
+            if (_alwaysOnTop && AppWindow.Presenter is OverlappedPresenter p)
+                p.IsAlwaysOnTop = true; // the new overlapped presenter starts un-pinned — restore the user's choice
+        }
         if (on)
         {
             // re-apply across the layout passes that follow the presenter change (each would otherwise
