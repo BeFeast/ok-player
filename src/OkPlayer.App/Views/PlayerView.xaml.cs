@@ -791,18 +791,38 @@ public sealed partial class PlayerView : UserControl
             RevealChrome();
     }
 
-    private bool _updateToastShown; // session guard: announce a ready update once, not on every Changed tick
+    private bool _updateBannerShown; // session guard: surface a ready update once, not on every Changed tick
 
-    /// <summary>When a background-downloaded update becomes ready, surface it once per session as an unobtrusive
-    /// toast pointing at Settings → About to restart. <see cref="UpdateService.Changed"/> can fire off the UI
-    /// thread (the check completes on a worker), so marshal before touching the toast.</summary>
+    /// <summary>When a background-downloaded update becomes ready, surface it once per session as an actionable
+    /// banner with an in-place "Restart now" — no trip to Settings. <see cref="UpdateService.Changed"/> can fire
+    /// off the UI thread (the check completes on a worker), so marshal before touching the UI.</summary>
     private void OnUpdateStateChanged() => DispatcherQueue.TryEnqueue(() =>
     {
-        if (_viewUnloaded || _updateToastShown || !App.Updates.UpdateReady)
+        if (_viewUnloaded || _updateBannerShown || !App.Updates.UpdateReady)
             return; // skip a callback that landed after the view tore down (Changed can fire from a worker thread)
-        _updateToastShown = true;
-        ShowToast("Update ready · open Settings to restart");
+        _updateBannerShown = true;
+        string ver = App.Updates.PendingVersion is { } v ? $"Update ready · {v}" : "Update ready";
+        UpdateBannerText.Text = ver;
+        UpdateBanner.Visibility = Visibility.Visible;
+        UpdateBannerShowSb.Begin();
     });
+
+    /// <summary>Apply the staged update and relaunch — the banner's primary action. Tears the process down.</summary>
+    private void OnUpdateRestartClick(object sender, RoutedEventArgs e) => App.Updates.ApplyAndRestart();
+
+    /// <summary>Dismiss the banner for this session; the update stays staged and is re-offered on the next launch
+    /// (UpdateReady persists), and Settings → About still has the restart action.</summary>
+    private void OnUpdateLaterClick(object sender, RoutedEventArgs e)
+    {
+        UpdateBannerHideSb.Completed += HideUpdateBannerOnCompleted;
+        UpdateBannerHideSb.Begin();
+    }
+
+    private void HideUpdateBannerOnCompleted(object? sender, object e)
+    {
+        UpdateBannerHideSb.Completed -= HideUpdateBannerOnCompleted;
+        UpdateBanner.Visibility = Visibility.Collapsed;
+    }
 
     // ---- input ----
 
