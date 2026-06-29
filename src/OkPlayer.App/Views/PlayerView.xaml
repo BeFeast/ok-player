@@ -30,7 +30,10 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="Root" Background="{TemplateBinding Background}">
-                            <FontIcon x:Name="Glyph" Glyph="{TemplateBinding Content}"
+                            <!-- ContentPresenter (not FontIcon.Glyph) renders the glyph string in the icon font;
+                                 avoids any object->string transfer ambiguity on the Content TemplateBinding. -->
+                            <ContentPresenter x:Name="Glyph" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                      Content="{TemplateBinding Content}"
                                       FontFamily="{TemplateBinding FontFamily}" FontSize="{TemplateBinding FontSize}"
                                       Foreground="{StaticResource OkCaptionGlyphBrush}" />
                             <VisualStateManager.VisualStateGroups>
@@ -62,7 +65,10 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="Root" Background="{TemplateBinding Background}">
-                            <FontIcon x:Name="Glyph" Glyph="{TemplateBinding Content}"
+                            <!-- ContentPresenter (not FontIcon.Glyph) renders the glyph string in the icon font;
+                                 avoids any object->string transfer ambiguity on the Content TemplateBinding. -->
+                            <ContentPresenter x:Name="Glyph" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                      Content="{TemplateBinding Content}"
                                       FontFamily="{TemplateBinding FontFamily}" FontSize="{TemplateBinding FontSize}"
                                       Foreground="{StaticResource OkCaptionGlyphBrush}" />
                             <VisualStateManager.VisualStateGroups>
@@ -501,8 +507,13 @@
                                Foreground="#F2FFFFFF" FontSize="12.5" FontWeight="Medium" VerticalAlignment="Center" />
                 </StackPanel>
             </Grid>
-            <!-- Custom min/max/close. Children of the SetTitleBar element, so WinUI excludes them from the drag
-                 region and they receive clicks. Opacity is driven by CaptionShow/HideSb (see code-behind). -->
+            <!-- The window drag region: the top bar minus the right caption strip (3×46px). Passed to SetTitleBar.
+                 Reserving the strip keeps the caption buttons OUTSIDE the drag element so they reliably receive
+                 clicks (a control inside the SetTitleBar element does not get pointer input). -->
+            <Border x:Name="TitleDragRegion" Background="Transparent" Margin="0,0,138,0" />
+            <!-- Custom min/max/close — a sibling of (not inside) the drag element. Opacity is driven by
+                 CaptionShow/HideSb; IsHitTestVisible is toggled with visibility (code-behind) so the hidden,
+                 opacity-0 buttons can't catch a click in the top-right corner over video. -->
             <StackPanel x:Name="CaptionBar" Orientation="Horizontal" HorizontalAlignment="Right"
                         VerticalAlignment="Top" Opacity="0">
                 <Button x:Name="MinimizeButton" Style="{StaticResource OkCaptionButtonStyle}" Content="&#xE921;"

@@ -89,8 +89,9 @@ public sealed partial class PlayerView : UserControl
 
     public PlayerViewModel Vm { get; } = new();
 
-    /// <summary>The auto-hiding top bar, used as the window's title-bar drag region.</summary>
-    public FrameworkElement TitleBarElement => TitleChrome;
+    /// <summary>The window's title-bar drag region — the top bar minus the right caption strip, so the custom
+    /// caption buttons sit outside the drag element and reliably receive clicks.</summary>
+    public FrameworkElement TitleBarElement => TitleDragRegion;
 
     /// <summary>Surfaces that double as window-drag handles — just the video plane. A press-drag on empty
     /// video space moves the window like the title bar; a plain click still falls through to play/pause.
@@ -252,6 +253,7 @@ public sealed partial class PlayerView : UserControl
             // (the scrim/title behind them is non-interactive and faded to 0); only the OSC drops out.
             TitleChrome.IsHitTestVisible = true;
             BottomChrome.IsHitTestVisible = false;
+            CaptionBar.IsHitTestVisible = true;
             ChromeHideSb.Begin();
             CaptionShowSb.Begin(); // caption buttons are always available on the idle welcome/History surface
             if (idle && !_historyOpen)
@@ -744,6 +746,7 @@ public sealed partial class PlayerView : UserControl
             _chromeVisible = true;
             TitleChrome.IsHitTestVisible = true;
             BottomChrome.IsHitTestVisible = true;
+            CaptionBar.IsHitTestVisible = true;
             ChromeShowSb.Begin();
             CaptionShowSb.Begin(); // caption buttons fade in with the chrome over video
             Vm.ApplySubtitlePosition(App.Settings.Current.SubtitlePosition, ComputeOscLift()); // lift subtitles above the OSC
@@ -784,6 +787,7 @@ public sealed partial class PlayerView : UserControl
         _chromeVisible = false;
         TitleChrome.IsHitTestVisible = false;
         BottomChrome.IsHitTestVisible = false;
+        CaptionBar.IsHitTestVisible = false; // hidden + non-hittable so a top-right click over video can't trigger it
         ChromeHideSb.Begin();
         CaptionHideSb.Begin(); // caption buttons fade out with the chrome over video
         Vm.ApplySubtitlePosition(App.Settings.Current.SubtitlePosition, 0); // drop subtitles back to the user's position
