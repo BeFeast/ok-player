@@ -275,11 +275,23 @@ public sealed partial class MainWindow : Window
         // ResizeClient's height arg excludes the extended title-bar band, but the real content client (what
         // mpv fills) includes it — so the client comes out taller than asked and mpv letterboxes the video.
         // Measure that delta and re-request the height minus it, so the client lands on the exact video aspect.
+        int bandDelta = 0;
         if (GetClientRect(hwnd, out var rc))
         {
             int delta = (rc.Bottom - rc.Top) - ch;
+            bandDelta = delta;
             if (delta > 0 && ch - delta > 0)
                 AppWindow.ResizeClient(new Windows.Graphics.SizeInt32(cw, ch - delta));
+        }
+        // The OS may have clamped the window UP to the minimum size (WM_GETMINMAXINFO) — common on a small
+        // display, where a video that fits narrower than the minimum width gets a window wider than the video
+        // aspect, which mpv pillarboxes with black side bars (#110). Measure the real client and, if it no
+        // longer matches the video aspect, grow the other axis so the video fills the minimum-size window.
+        if (GetClientRect(hwnd, out var rcClamped))
+        {
+            int cwActual = rcClamped.Right - rcClamped.Left, chActual = rcClamped.Bottom - rcClamped.Top;
+            if (OkPlayer.Core.WindowFit.FillClient(w, h, cwActual, chActual) is { } fill)
+                AppWindow.ResizeClient(new Windows.Graphics.SizeInt32(fill.Width, Math.Max(1, fill.Height - bandDelta)));
         }
         // Centre the whole window within the work area so a window sized for a large video never extends past
         // the monitor edges.
@@ -287,6 +299,9 @@ public sealed partial class MainWindow : Window
         int x = work.X + Math.Max(0, (work.Width - outer.Width) / 2);
         int y = work.Y + Math.Max(0, (work.Height - outer.Height) / 2);
         AppWindow.Move(new Windows.Graphics.PointInt32(x, y));
+        GetClientRect(hwnd, out var rcDone);
+        Services.Log.Step($"FitToVideo: video={w}x{h} work={work.Width}x{work.Height} " +
+            $"client={rcDone.Right - rcDone.Left}x{rcDone.Bottom - rcDone.Top}");
     }
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
