@@ -139,9 +139,13 @@ public sealed class FileAssociationService
         // AV/SmartScreen/UCPD guard. Back up any prior ProgID so Unassign can restore the user's handler.
         using (var cls = Registry.CurrentUser.CreateSubKey($@"Software\Classes\{ext}"))
         {
-            // Back up the real prior handler — but not our own ProgID/alias, or a re-assign would later "restore"
-            // OK Player instead of the user's actual pre-OK-Player default.
-            if (cls.GetValue("") is string prev && prev.Length > 0 && !IsOurProgId(prev))
+            // Back up the prior handler so Unassign can restore it — skipping only the exact ProgID we write
+            // here, so a re-assign can't overwrite a real saved prior with our own value. The
+            // Applications\OkPlayer.exe alias (a default Windows wrote when the user picked us in the chooser) IS
+            // backed up, so toggling the association off returns the type to that OK Player default rather than
+            // dropping it entirely.
+            if (cls.GetValue("") is string prev && prev.Length > 0
+                && !string.Equals(prev, ProgId, StringComparison.OrdinalIgnoreCase))
                 cls.SetValue(PrevProgIdValue, prev);
             cls.SetValue("", ProgId);
         }
