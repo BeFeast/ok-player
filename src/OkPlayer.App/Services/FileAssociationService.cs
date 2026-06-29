@@ -110,8 +110,15 @@ public sealed class FileAssociationService
         ext = Norm(ext);
         using var uc = Registry.CurrentUser.OpenSubKey(
             $@"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{ext}\UserChoice");
-        return uc?.GetValue("ProgId") is string p && p.Length > 0 && p != ProgId;
+        return uc?.GetValue("ProgId") is string p && p.Length > 0 && !IsOurProgId(p);
     }
+
+    // Windows records OUR default under either ProgID form: the ProgID we register, or the
+    // "Applications\OkPlayer.exe" alias it writes when the user picks us from the Open-with chooser. Treat both
+    // as ours so a confirmed OK Player default isn't mistaken for a foreign app.
+    private static bool IsOurProgId(string? progId) =>
+        string.Equals(progId, ProgId, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(progId, $@"Applications\{AppExeName}", StringComparison.OrdinalIgnoreCase);
 
     public void Assign(string ext)
     {
@@ -132,7 +139,9 @@ public sealed class FileAssociationService
         // AV/SmartScreen/UCPD guard. Back up any prior ProgID so Unassign can restore the user's handler.
         using (var cls = Registry.CurrentUser.CreateSubKey($@"Software\Classes\{ext}"))
         {
-            if (cls.GetValue("") is string prev && prev.Length > 0 && prev != ProgId)
+            // Back up the real prior handler — but not our own ProgID/alias, or a re-assign would later "restore"
+            // OK Player instead of the user's actual pre-OK-Player default.
+            if (cls.GetValue("") is string prev && prev.Length > 0 && !IsOurProgId(prev))
                 cls.SetValue(PrevProgIdValue, prev);
             cls.SetValue("", ProgId);
         }
@@ -151,12 +160,19 @@ public sealed class FileAssociationService
         // it if there was none — never clobber a default the user re-pointed elsewhere since we set it.
         using (var cls = Registry.CurrentUser.OpenSubKey($@"Software\Classes\{ext}", writable: true))
         {
-            if (cls?.GetValue("") as string == ProgId)
+            if (cls is not null)
             {
-                if (cls.GetValue(PrevProgIdValue) is string prev && prev.Length > 0)
-                    cls.SetValue("", prev);
-                else
-                    cls.DeleteValue("", throwOnMissingValue: false);
+                // Roll the default back to the backup only while it's still ours — never clobber a default the
+                // user re-pointed elsewhere since we set it.
+                if (IsOurProgId(cls.GetValue("") as string))
+                {
+                    if (cls.GetValue(PrevProgIdValue) is string prev && prev.Length > 0)
+                        cls.SetValue("", prev);
+                    else
+                        cls.DeleteValue("", throwOnMissingValue: false);
+                }
+                // Drop our backup either way: it's only meaningful while we own the default, and a stale copy
+                // could otherwise restore an outdated ProgID on a later assign/unassign cycle.
                 cls.DeleteValue(PrevProgIdValue, throwOnMissingValue: false);
             }
         }
