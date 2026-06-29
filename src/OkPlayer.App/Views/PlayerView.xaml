@@ -10,12 +10,96 @@
     IsTabStop="True">
 
     <UserControl.Resources>
+        <!-- Custom window caption buttons: they replace the native min/max/close so they live in the
+             auto-hiding chrome (the native ones can't hide over video). The three brushes are mutated live
+             by ApplyCaptionPalette for the over-video (white) vs light/dark welcome-shell palette. -->
+        <SolidColorBrush x:Key="OkCaptionGlyphBrush" Color="#F2FFFFFF" />
+        <SolidColorBrush x:Key="OkCaptionHoverBrush" Color="#1FFFFFFF" />
+        <SolidColorBrush x:Key="OkCaptionPressedBrush" Color="#2EFFFFFF" />
+        <Style x:Key="OkCaptionButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="46" />
+            <Setter Property="Height" Value="42" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="FontFamily" Value="Segoe Fluent Icons" />
+            <Setter Property="FontSize" Value="10" />
+            <Setter Property="CornerRadius" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="AllowFocusOnInteraction" Value="False" />
+            <Setter Property="UseSystemFocusVisuals" Value="False" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Root" Background="{TemplateBinding Background}">
+                            <FontIcon x:Name="Glyph" Glyph="{TemplateBinding Content}"
+                                      FontFamily="{TemplateBinding FontFamily}" FontSize="{TemplateBinding FontSize}"
+                                      Foreground="{StaticResource OkCaptionGlyphBrush}" />
+                            <VisualStateManager.VisualStateGroups>
+                                <VisualStateGroup x:Name="CommonStates">
+                                    <VisualState x:Name="Normal" />
+                                    <VisualState x:Name="PointerOver">
+                                        <VisualState.Setters>
+                                            <Setter Target="Root.Background" Value="{StaticResource OkCaptionHoverBrush}" />
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="Pressed">
+                                        <VisualState.Setters>
+                                            <Setter Target="Root.Background" Value="{StaticResource OkCaptionPressedBrush}" />
+                                            <Setter Target="Glyph.(UIElement.Opacity)" Value="0.7" />
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="Disabled" />
+                                </VisualStateGroup>
+                            </VisualStateManager.VisualStateGroups>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- Close button: same metrics, but the Windows-convention red hover with a forced-white glyph
+             (legible on red in either palette). -->
+        <Style x:Key="OkCaptionCloseButtonStyle" TargetType="Button" BasedOn="{StaticResource OkCaptionButtonStyle}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Root" Background="{TemplateBinding Background}">
+                            <FontIcon x:Name="Glyph" Glyph="{TemplateBinding Content}"
+                                      FontFamily="{TemplateBinding FontFamily}" FontSize="{TemplateBinding FontSize}"
+                                      Foreground="{StaticResource OkCaptionGlyphBrush}" />
+                            <VisualStateManager.VisualStateGroups>
+                                <VisualStateGroup x:Name="CommonStates">
+                                    <VisualState x:Name="Normal" />
+                                    <VisualState x:Name="PointerOver">
+                                        <VisualState.Setters>
+                                            <Setter Target="Root.Background" Value="#E81123" />
+                                            <Setter Target="Glyph.Foreground" Value="#FFFFFFFF" />
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="Pressed">
+                                        <VisualState.Setters>
+                                            <Setter Target="Root.Background" Value="#F1707A" />
+                                            <Setter Target="Glyph.Foreground" Value="#FFFFFFFF" />
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="Disabled" />
+                                </VisualStateGroup>
+                            </VisualStateManager.VisualStateGroups>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Storyboard x:Name="CaptionShowSb">
+            <DoubleAnimation Storyboard.TargetName="CaptionBar" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.18" />
+        </Storyboard>
+        <Storyboard x:Name="CaptionHideSb">
+            <DoubleAnimation Storyboard.TargetName="CaptionBar" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.18" />
+        </Storyboard>
         <Storyboard x:Name="ChromeShowSb">
             <DoubleAnimation Storyboard.TargetName="BottomChrome" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.18" />
             <DoubleAnimation Storyboard.TargetName="BottomTransform" Storyboard.TargetProperty="Y" To="0" Duration="0:0:0.2">
                 <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut" /></DoubleAnimation.EasingFunction>
             </DoubleAnimation>
-            <DoubleAnimation Storyboard.TargetName="TitleChrome" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.18" />
+            <DoubleAnimation Storyboard.TargetName="TitleChromeFade" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.18" />
             <DoubleAnimation Storyboard.TargetName="TitleTransform" Storyboard.TargetProperty="Y" To="0" Duration="0:0:0.18">
                 <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut" /></DoubleAnimation.EasingFunction>
             </DoubleAnimation>
@@ -25,7 +109,7 @@
             <DoubleAnimation Storyboard.TargetName="BottomTransform" Storyboard.TargetProperty="Y" To="16" Duration="0:0:0.2">
                 <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseIn" /></DoubleAnimation.EasingFunction>
             </DoubleAnimation>
-            <DoubleAnimation Storyboard.TargetName="TitleChrome" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.18" />
+            <DoubleAnimation Storyboard.TargetName="TitleChromeFade" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.18" />
             <DoubleAnimation Storyboard.TargetName="TitleTransform" Storyboard.TargetProperty="Y" To="-10" Duration="0:0:0.18">
                 <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseIn" /></DoubleAnimation.EasingFunction>
             </DoubleAnimation>
@@ -404,14 +488,29 @@
         <!-- ===== History surface: third idle-canvas state (over Mica), opened from the welcome footer / H ===== -->
         <views:HistoryView x:Name="HistorySurface" Visibility="Collapsed" />
 
-        <!-- ===== top chrome: scrim + title ===== -->
-        <Grid x:Name="TitleChrome" VerticalAlignment="Top" Height="42" Opacity="0">
-            <Grid.RenderTransform><TranslateTransform x:Name="TitleTransform" Y="-10" /></Grid.RenderTransform>
-            <Border Background="{StaticResource OkTopScrimBrush}" IsHitTestVisible="False" />
-            <StackPanel Orientation="Horizontal" Spacing="9" VerticalAlignment="Center" Margin="14,0">
-                <FontIcon Glyph="&#xE768;" FontSize="13" Foreground="#E6FFFFFF" />
-                <TextBlock x:Name="TitleText" Text="{x:Bind Vm.MediaTitle, Mode=OneWay}"
-                           Foreground="#F2FFFFFF" FontSize="12.5" FontWeight="Medium" VerticalAlignment="Center" />
+        <!-- ===== top chrome: drag region + scrim/title (fade) + custom caption buttons ===== -->
+        <!-- TitleChrome is the SetTitleBar drag region and the caption host (kept opacity 1); the scrim+title
+             fade independently via TitleChromeFade so the caption buttons stay legible on the welcome shell. -->
+        <Grid x:Name="TitleChrome" VerticalAlignment="Top" Height="42">
+            <Grid x:Name="TitleChromeFade" Opacity="0" IsHitTestVisible="False">
+                <Grid.RenderTransform><TranslateTransform x:Name="TitleTransform" Y="-10" /></Grid.RenderTransform>
+                <Border Background="{StaticResource OkTopScrimBrush}" />
+                <StackPanel Orientation="Horizontal" Spacing="9" VerticalAlignment="Center" Margin="14,0">
+                    <FontIcon Glyph="&#xE768;" FontSize="13" Foreground="#E6FFFFFF" />
+                    <TextBlock x:Name="TitleText" Text="{x:Bind Vm.MediaTitle, Mode=OneWay}"
+                               Foreground="#F2FFFFFF" FontSize="12.5" FontWeight="Medium" VerticalAlignment="Center" />
+                </StackPanel>
+            </Grid>
+            <!-- Custom min/max/close. Children of the SetTitleBar element, so WinUI excludes them from the drag
+                 region and they receive clicks. Opacity is driven by CaptionShow/HideSb (see code-behind). -->
+            <StackPanel x:Name="CaptionBar" Orientation="Horizontal" HorizontalAlignment="Right"
+                        VerticalAlignment="Top" Opacity="0">
+                <Button x:Name="MinimizeButton" Style="{StaticResource OkCaptionButtonStyle}" Content="&#xE921;"
+                        Click="OnCaptionMinimizeClick" AutomationProperties.Name="Minimize" />
+                <Button x:Name="MaximizeButton" Style="{StaticResource OkCaptionButtonStyle}" Content="&#xE922;"
+                        Click="OnCaptionMaximizeClick" AutomationProperties.Name="Maximize" />
+                <Button x:Name="CloseButton" Style="{StaticResource OkCaptionCloseButtonStyle}" Content="&#xE8BB;"
+                        Click="OnCaptionCloseClick" AutomationProperties.Name="Close" />
             </StackPanel>
         </Grid>
 

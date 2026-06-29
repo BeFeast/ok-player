@@ -119,6 +119,11 @@ public sealed partial class PlayerView : UserControl
     public event EventHandler<(int Width, int Height)>? FitToVideoRequested;
     /// <summary>Open the Settings window. The host owns the single SettingsWindow instance.</summary>
     public event EventHandler? SettingsRequested;
+    /// <summary>Custom caption buttons (the native min/max/close are hidden so they can auto-hide over video).
+    /// The host owns the AppWindow/presenter that actually minimizes, maximizes/restores, and closes.</summary>
+    public event EventHandler? CaptionMinimizeRequested;
+    public event EventHandler? CaptionMaximizeRestoreRequested;
+    public event EventHandler? CaptionCloseRequested;
 
     public PlayerView()
     {
@@ -178,6 +183,9 @@ public sealed partial class PlayerView : UserControl
         };
         Vm.PropertyChanged += OnVmPropertyChanged;
         Vm.ToastRequested += ShowToast;
+        // Recolour the caption glyphs when the welcome shell flips light<->dark (no effect over video — white wins).
+        ActualThemeChanged += (_, _) => { if (!Vm.HasMedia) ApplyCaptionPalette(false); };
+        ApplyCaptionPalette(false); // start on the light welcome shell
         LyricsList.ItemsSource = _lyrics;
         // "Clear history" / retention prune can fire from the Settings window — refresh when it does.
         _history.Changed += OnHistoryChanged;
@@ -230,6 +238,7 @@ public sealed partial class PlayerView : UserControl
         Video.Visibility = has ? Visibility.Visible : Visibility.Collapsed;
         LoadingOverlay.Visibility = _loading ? Visibility.Visible : Visibility.Collapsed;
         ApplyAudioSurface(has);
+        ApplyCaptionPalette(has); // white caption glyphs over video; theme-aware on the welcome shell
         MediaPresenceChanged?.Invoke(this, has);
         if (has)
         {
@@ -239,9 +248,12 @@ public sealed partial class PlayerView : UserControl
         {
             _idleTimer.Stop();
             _chromeVisible = false;
-            TitleChrome.IsHitTestVisible = false;
+            // Keep the title bar hit-testable on the welcome shell so the custom caption buttons stay clickable
+            // (the scrim/title behind them is non-interactive and faded to 0); only the OSC drops out.
+            TitleChrome.IsHitTestVisible = true;
             BottomChrome.IsHitTestVisible = false;
             ChromeHideSb.Begin();
+            CaptionShowSb.Begin(); // caption buttons are always available on the idle welcome/History surface
             if (idle && !_historyOpen)
                 LoadRecents(); // refresh the welcome shelf (skip while History owns the canvas or a load is in flight)
         }
@@ -733,6 +745,7 @@ public sealed partial class PlayerView : UserControl
             TitleChrome.IsHitTestVisible = true;
             BottomChrome.IsHitTestVisible = true;
             ChromeShowSb.Begin();
+            CaptionShowSb.Begin(); // caption buttons fade in with the chrome over video
             Vm.ApplySubtitlePosition(App.Settings.Current.SubtitlePosition, ComputeOscLift()); // lift subtitles above the OSC
         }
         ResetIdleTimer();
@@ -772,6 +785,7 @@ public sealed partial class PlayerView : UserControl
         TitleChrome.IsHitTestVisible = false;
         BottomChrome.IsHitTestVisible = false;
         ChromeHideSb.Begin();
+        CaptionHideSb.Begin(); // caption buttons fade out with the chrome over video
         Vm.ApplySubtitlePosition(App.Settings.Current.SubtitlePosition, 0); // drop subtitles back to the user's position
     }
 
@@ -780,6 +794,41 @@ public sealed partial class PlayerView : UserControl
         _idleTimer.Stop();
         if (Vm.HasMedia && !_panelOpen && (Vm.IsPlaying || PauseHideEnabled))
             _idleTimer.Start();
+    }
+
+    // ---- custom caption buttons ----
+
+    private void OnCaptionMinimizeClick(object sender, RoutedEventArgs e) => CaptionMinimizeRequested?.Invoke(this, EventArgs.Empty);
+    private void OnCaptionMaximizeClick(object sender, RoutedEventArgs e) => CaptionMaximizeRestoreRequested?.Invoke(this, EventArgs.Empty);
+    private void OnCaptionCloseClick(object sender, RoutedEventArgs e) => CaptionCloseRequested?.Invoke(this, EventArgs.Empty);
+
+    /// <summary>Swap the maximize/restore glyph + tooltip to match the window state. The host window calls this
+    /// when the presenter/size changes (maximize, restore, snap, drag-to-top).</summary>
+    public void SetMaximizedGlyph(bool maximized)
+    {
+        MaximizeButton.Content = maximized ? "" : ""; // ChromeRestore : ChromeMaximize
+        Microsoft.UI.Xaml.Controls.ToolTipService.SetToolTip(MaximizeButton, maximized ? "Restore" : "Maximize");
+    }
+
+    /// <summary>Recolour the custom caption glyphs for the surface behind them: white over video, theme-aware on
+    /// the light/dark welcome shell. Mutates the shared brushes referenced by the caption button templates.</summary>
+    private void ApplyCaptionPalette(bool overVideo)
+    {
+        var glyph = (Microsoft.UI.Xaml.Media.SolidColorBrush)Resources["OkCaptionGlyphBrush"];
+        var hover = (Microsoft.UI.Xaml.Media.SolidColorBrush)Resources["OkCaptionHoverBrush"];
+        var pressed = (Microsoft.UI.Xaml.Media.SolidColorBrush)Resources["OkCaptionPressedBrush"];
+        if (overVideo || ActualTheme == ElementTheme.Dark)
+        {
+            glyph.Color = Windows.UI.Color.FromArgb(0xF2, 0xFF, 0xFF, 0xFF);
+            hover.Color = Windows.UI.Color.FromArgb(0x1F, 0xFF, 0xFF, 0xFF);
+            pressed.Color = Windows.UI.Color.FromArgb(0x2E, 0xFF, 0xFF, 0xFF);
+        }
+        else
+        {
+            glyph.Color = Windows.UI.Color.FromArgb(0xE6, 0x1A, 0x1A, 0x1A);
+            hover.Color = Windows.UI.Color.FromArgb(0x14, 0x00, 0x00, 0x00);
+            pressed.Color = Windows.UI.Color.FromArgb(0x24, 0x00, 0x00, 0x00);
+        }
     }
 
     // Toggling "Hide controls when paused" (Settings) while a file is already paused must take effect now, not
