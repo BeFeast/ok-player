@@ -939,6 +939,12 @@ public sealed partial class PlayerView : UserControl
             case (VirtualKey)0x43: TogglePanel(); break;          // C
             case (VirtualKey)0x58: CloseFile(); break;            // X — close the current file, back to Welcome
             case (VirtualKey)0x48: if (!Vm.HasMedia) OpenHistory(); else handled = false; break; // H — open History (idle)
+            case (VirtualKey)0x5A: // Z — subtitle delay sync (mpv-style): Z earlier, Shift+Z later; +Ctrl = coarse (±1s)
+            {
+                int step = IsKeyDown(VirtualKey.Control) ? 1000 : 100;
+                Vm.NudgeSubDelay(IsKeyDown(VirtualKey.Shift) ? step : -step);
+                break;
+            }
             case VirtualKey.PageDown: PlayNext(); break;          // next file in the folder playlist
             case VirtualKey.PageUp:   PlayPrevious(); break;      // previous file
             case VirtualKey.Escape:
@@ -955,6 +961,12 @@ public sealed partial class PlayerView : UserControl
             RevealChrome();
         }
     }
+
+    // True while a modifier key is physically held — used to qualify a key chord (Shift flips a direction,
+    // Ctrl selects the coarse step) without separate keybindings.
+    private static bool IsKeyDown(VirtualKey key) =>
+        Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(key)
+            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
 
     // ---- OSC clicks ----
 
@@ -1972,8 +1984,7 @@ public sealed partial class PlayerView : UserControl
         RevealChrome();
     }
 
-    private void OnSubDelayMinus(object sender, RoutedEventArgs e) => Vm.NudgeSubDelay(-50);
-    private void OnSubDelayPlus(object sender, RoutedEventArgs e) => Vm.NudgeSubDelay(50);
+    private void OnSubDelayReset(object sender, RoutedEventArgs e) => Vm.SetSubDelay(0);
     private void OnSubScaleMinus(object sender, RoutedEventArgs e) => Vm.NudgeSubScale(-0.1);
     private void OnSubScalePlus(object sender, RoutedEventArgs e) => Vm.NudgeSubScale(0.1);
 

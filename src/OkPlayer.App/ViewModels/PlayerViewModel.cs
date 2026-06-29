@@ -124,7 +124,11 @@ public partial class PlayerViewModel : ObservableObject
     }
     partial void OnShowRemainingChanged(bool value) => OnPropertyChanged(nameof(TrailingTimeText));
     partial void OnSpeedChanged(double value) => OnPropertyChanged(nameof(SpeedText));
-    partial void OnSubDelayMsChanged(int value) => OnPropertyChanged(nameof(SubDelayText));
+    partial void OnSubDelayMsChanged(int value)
+    {
+        OnPropertyChanged(nameof(SubDelayText));
+        OnPropertyChanged(nameof(SubDelayInput)); // keep the flyout's direct-entry box in sync with the engine
+    }
     partial void OnSubScaleChanged(double value) => OnPropertyChanged(nameof(SubScaleText));
     partial void OnCanUseSecondarySubtitleChanged(bool value) => OnPropertyChanged(nameof(SecondarySubtitleVisibility));
 
@@ -867,6 +871,29 @@ public partial class PlayerViewModel : ObservableObject
     {
         if (CmdOk("add", "sub-delay", Inv(ms / 1000.0)))
             ToastRequested?.Invoke($"Subtitle delay {SubDelayMs + ms:+0;-0;0} ms");
+    }
+
+    /// <summary>Set subtitle delay to an absolute value in ms (the flyout's direct-entry box and Reset use this,
+    /// so a large offset is one gesture instead of dozens of nudges). The engine's <c>sub-delay</c> observer
+    /// writes the result back through <see cref="SubDelayMs"/>, keeping the box in sync.</summary>
+    public void SetSubDelay(int ms)
+    {
+        if (CmdOk("set", "sub-delay", Inv(ms / 1000.0)))
+            ToastRequested?.Invoke($"Subtitle delay {ms:+0;-0;0} ms");
+    }
+
+    /// <summary>Editable subtitle delay (ms) bound to the flyout NumberBox. Reading reflects the engine; setting
+    /// (user typed or spun) pushes an absolute value via <see cref="SetSubDelay"/>, then the observer confirms it
+    /// back into <see cref="SubDelayMs"/> (and this). Guards against the echo so a programmatic sync is a no-op.</summary>
+    public double SubDelayInput
+    {
+        get => SubDelayMs;
+        set
+        {
+            int ms = double.IsNaN(value) ? 0 : (int)System.Math.Round(value);
+            if (ms != SubDelayMs)
+                SetSubDelay(ms);
+        }
     }
 
     public void NudgeSubScale(double delta)
