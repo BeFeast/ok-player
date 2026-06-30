@@ -35,17 +35,18 @@ public static class AudioClipExtractor
             return null;
 
         double start = Math.Max(0, positionSeconds - leadInSeconds);
-        Directory.CreateDirectory(CacheDir);
-        string outPath = Path.Combine(CacheDir, $"clip-{Environment.ProcessId}-{Guid.NewGuid():N}.wav");
-
-        // -ss BEFORE -i = fast input seek (keyframe-accurate, sub-second drift is fine — the aligner is robust);
-        // -vn drops video; mono / 16 kHz / s16 PCM is the small, Whisper-ready shape.
-        string args =
-            $"-nostdin -loglevel error -y -ss {Inv(start)} -t {Inv(lengthSeconds)} -i \"{mediaPath}\" " +
-            $"-vn -ac 1 -ar 16000 -c:a pcm_s16le \"{outPath}\"";
-
+        string outPath = "";
         try
         {
+            Directory.CreateDirectory(CacheDir); // inside the guard: an unwritable temp dir degrades to null, not a throw
+            outPath = Path.Combine(CacheDir, $"clip-{Environment.ProcessId}-{Guid.NewGuid():N}.wav");
+
+            // -ss BEFORE -i = fast input seek (keyframe-accurate, sub-second drift is fine — the aligner is robust);
+            // -vn drops video; mono / 16 kHz / s16 PCM is the small, Whisper-ready shape.
+            string args =
+                $"-nostdin -loglevel error -y -ss {Inv(start)} -t {Inv(lengthSeconds)} -i \"{mediaPath}\" " +
+                $"-vn -ac 1 -ar 16000 -c:a pcm_s16le \"{outPath}\"";
+
             await FfmpegRunner.RunAsync(args, TimeSpan.FromSeconds(30), ct).ConfigureAwait(false);
             var fi = new FileInfo(outPath);
             if (fi is { Exists: true, Length: > 1024 }) // a real 10 s 16 kHz mono clip is ~320 KB
@@ -58,6 +59,10 @@ public static class AudioClipExtractor
         catch (OperationCanceledException)
         {
             // caller cancelled (e.g. user moved on)
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            // temp dir unwritable / disk full / locked — degrade to "no clip" per the never-throws contract
         }
         TryDelete(outPath);
         return null;

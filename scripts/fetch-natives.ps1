@@ -9,20 +9,20 @@
 # Sources: GPL `mpv-dev-x86_64` from https://github.com/zhongfly/mpv-winbuild and the GPL `win64-gpl` build from
 # https://github.com/BtbN/FFmpeg-Builds. See native/README.md and THIRD-PARTY-NOTICES.md.
 param(
-    [string]$NativeRoot = (Join-Path $PSScriptRoot '..' 'native')
+    # -Dest is the libmpv output folder (kept for backward compatibility with existing callers). ffmpeg is
+    # fetched into a sibling `ffmpeg/` folder under the same `native/` root.
+    [string]$Dest = (Join-Path $PSScriptRoot '..' 'native' 'libmpv')
 )
 $ErrorActionPreference = 'Stop'
 
 $headers = @{ 'User-Agent' = 'okplayer-fetch-natives' }
 # Authenticate ONLY the api.github.com lookups when a token is available (CI sets GITHUB_TOKEN). The
 # unauthenticated API limit (60/hr per IP) is easily exhausted on shared Actions-runner IPs and fails with HTTP
-# 403 "rate limit exceeded". The asset downloads below are redirects to a CDN that rejects a second auth
-# mechanism, so they must keep the token-free $headers.
+# 403 "rate limit exceeded". Asset downloads are CDN redirects that reject a second auth mechanism, so they keep
+# the token-free $headers.
 $apiHeaders = $headers.Clone()
 if ($env:GITHUB_TOKEN) { $apiHeaders['Authorization'] = "Bearer $env:GITHUB_TOKEN" }
 
-# Resolve a 7-Zip once for both extractions: prefer 7z/7za on PATH (GitHub's windows runner has it), then the
-# default install dir.
 function Get-SevenZip {
     $sz = (Get-Command 7z -ErrorAction SilentlyContinue)?.Source
     if (-not $sz) { $sz = (Get-Command 7za -ErrorAction SilentlyContinue)?.Source }
@@ -30,14 +30,13 @@ function Get-SevenZip {
     return $sz
 }
 
-# --- libmpv (GPL, x86_64) -> native/libmpv/libmpv-2.dll ---
-$mpvDest = Join-Path $NativeRoot 'libmpv'
-$dll = Join-Path $mpvDest 'libmpv-2.dll'
+# --- libmpv (GPL, x86_64) -> native/libmpv/libmpv-2.dll  (REQUIRED — failure is fatal) ---
+$dll = Join-Path $Dest 'libmpv-2.dll'
 if (Test-Path $dll) {
     Write-Host "libmpv already present: $dll"
 }
 else {
-    New-Item -ItemType Directory -Force $mpvDest | Out-Null
+    New-Item -ItemType Directory -Force $Dest | Out-Null
     Write-Host 'Resolving latest mpv-dev (GPL, x86_64) from zhongfly/mpv-winbuild...'
     $rel = Invoke-RestMethod 'https://api.github.com/repos/zhongfly/mpv-winbuild/releases/latest' -Headers $apiHeaders
     # GPL (non-lgpl) x86_64 dev build. Prefer the baseline (non-v3) for max CPU compatibility, but fall back to
@@ -52,33 +51,35 @@ else {
     $archive = Join-Path $env:TEMP $asset.name
     Write-Host "Downloading $($asset.name) ($([int]($asset.size / 1MB)) MB)..."
     Invoke-WebRequest $asset.browser_download_url -OutFile $archive -Headers $headers
-    & (Get-SevenZip) e $archive "-o$mpvDest" 'libmpv-2.dll' -y | Out-Null
+    & (Get-SevenZip) e $archive "-o$Dest" 'libmpv-2.dll' -y | Out-Null
     if (-not (Test-Path $dll)) { throw "Extraction did not produce $dll" }
     Write-Host "Done: $dll"
 }
 
-# --- ffmpeg (GPL, win64) -> native/ffmpeg/ffmpeg.exe ---
-$ffDest = Join-Path $NativeRoot 'ffmpeg'
+# --- ffmpeg (GPL, win64) -> native/ffmpeg/ffmpeg.exe  (OPTIONAL — failure warns, never blocks the build/tests
+#     that only need libmpv; the ffmpeg-backed features just degrade until it's present) ---
+$ffDest = Join-Path (Split-Path -Parent $Dest) 'ffmpeg'
 $ffexe = Join-Path $ffDest 'ffmpeg.exe'
 if (Test-Path $ffexe) {
     Write-Host "ffmpeg already present: $ffexe"
 }
 else {
-    New-Item -ItemType Directory -Force $ffDest | Out-Null
-    Write-Host 'Resolving ffmpeg (GPL, win64) from BtbN/FFmpeg-Builds...'
-    $ffrel = Invoke-RestMethod 'https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest' -Headers $apiHeaders
-    # The static (non-shared) GPL win64 build — a single self-contained ffmpeg.exe, no extra DLLs to ship.
-    $ffasset = $ffrel.assets |
-        Where-Object { $_.name -like '*win64-gpl*.zip' -and $_.name -notlike '*shared*' -and $_.name -notlike '*lgpl*' } |
-        Select-Object -First 1
-    if (-not $ffasset) { throw 'No static win64-gpl ffmpeg .zip in the latest BtbN release' }
-
-    $ffarchive = Join-Path $env:TEMP $ffasset.name
-    Write-Host "Downloading $($ffasset.name) ($([int]($ffasset.size / 1MB)) MB)..."
-    Invoke-WebRequest $ffasset.browser_download_url -OutFile $ffarchive -Headers $headers
-    # The zip nests bin/ffmpeg.exe under a versioned top folder; -r finds it, and we extract only ffmpeg.exe
-    # (not ffprobe/ffplay) — media inspection already goes through libmpv.
-    & (Get-SevenZip) e $ffarchive "-o$ffDest" 'ffmpeg.exe' -r -y | Out-Null
-    if (-not (Test-Path $ffexe)) { throw "Extraction did not produce $ffexe" }
-    Write-Host "Done: $ffexe"
+    try {
+        New-Item -ItemType Directory -Force $ffDest | Out-Null
+        # BtbN publishes a rolling `latest` tag with stable asset names — use the direct download URL rather than
+        # the releases API (the auto-build release is a prerelease, so `releases/latest` can miss it). Static
+        # (non-shared) GPL win64 build = a single self-contained ffmpeg.exe, no extra DLLs to ship.
+        $ffUrl = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip'
+        $ffarchive = Join-Path $env:TEMP 'ffmpeg-master-latest-win64-gpl.zip'
+        Write-Host "Downloading ffmpeg (GPL, win64 static) from BtbN/FFmpeg-Builds..."
+        Invoke-WebRequest $ffUrl -OutFile $ffarchive -Headers $headers
+        # The zip nests bin/ffmpeg.exe under a versioned top folder; -r finds it, and we extract only ffmpeg.exe
+        # (not ffprobe/ffplay) — media inspection already goes through libmpv.
+        & (Get-SevenZip) e $ffarchive "-o$ffDest" 'ffmpeg.exe' -r -y | Out-Null
+        if (-not (Test-Path $ffexe)) { throw "Extraction did not produce $ffexe" }
+        Write-Host "Done: $ffexe"
+    }
+    catch {
+        Write-Warning "ffmpeg fetch failed ($($_.Exception.Message)). The media-processing features (subtitle auto-sync) will be unavailable until you re-run this script. The libmpv-only build/tests are unaffected."
+    }
 }
