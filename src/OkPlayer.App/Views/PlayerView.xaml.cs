@@ -905,7 +905,7 @@ public sealed partial class PlayerView : UserControl
     // the subtitle-delay NumberBox, or its inner TextBox can never receive text input.
     private void OnRootPointerPressed(object sender, PointerRoutedEventArgs e)
     {
-        if (!IsEditableInputElement(e.OriginalSource))
+        if (!_subDelayEditing && !IsEditableInputElement(e.OriginalSource))
             Focus(FocusState.Programmatic);
     }
 
@@ -980,7 +980,7 @@ public sealed partial class PlayerView : UserControl
             .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
 
     private bool IsEditableInputFocused()
-        => XamlRoot is not null && IsEditableInputElement(FocusManager.GetFocusedElement(XamlRoot));
+        => _subDelayEditing || (XamlRoot is not null && IsEditableInputElement(FocusManager.GetFocusedElement(XamlRoot)));
 
     private static bool IsEditableInputElement(object? element)
     {
