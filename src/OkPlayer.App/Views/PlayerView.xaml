@@ -608,11 +608,12 @@
                         </Button.Flyout>
                     </Button>
 
-                    <Button Grid.Column="8" Style="{StaticResource OkOscSvgButtonStyle}" ToolTipService.ToolTip="Subtitles">
+                    <Button Grid.Column="8" Style="{StaticResource OkOscSvgButtonStyle}" AllowFocusOnInteraction="True"
+                            ToolTipService.ToolTip="Subtitles">
                         <FontIcon Glyph="&#xE7F0;" FontSize="19" Foreground="White" />
                         <Button.Flyout>
                             <Flyout x:Name="SubtitleFlyout" FlyoutPresenterStyle="{StaticResource OkPopoverFlyoutStyle}"
-                                    Placement="Top" Opened="OnSubtitleFlyoutOpened" Closed="OnSubtitleFlyoutClosed">
+                                    Placement="Top" ShowMode="Standard" Opened="OnSubtitleFlyoutOpened" Closed="OnSubtitleFlyoutClosed">
                                 <Grid x:Name="SubtitleFlyoutRoot" Width="286" RowSpacing="0">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto" />
