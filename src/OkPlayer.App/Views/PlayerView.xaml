@@ -638,6 +638,10 @@
                                     </StackPanel>
                                     <Border Height="1" Margin="8,4" Background="{ThemeResource OkStrokeBrush}" />
                                     <Button Style="{StaticResource OkSwitcherRowStyle}" Content="Add subtitle file&#x2026;" Click="OnAddSubtitleFile" />
+                                    <!-- Auto-sync: transcribe ~10s at the current position and align the loaded track. Reserved
+                                         slot — wired once the Scribe clip-transcribe endpoint lands (Core aligner + clip extractor done). -->
+                                    <Button Style="{StaticResource OkSwitcherRowStyle}" IsEnabled="False"
+                                            Foreground="{ThemeResource OkAccentTextBrush}" Content="Auto-sync subtitles&#x2026;  (soon)" />
                                     <Button Style="{StaticResource OkSwitcherRowStyle}" IsEnabled="False"
                                             Foreground="{ThemeResource OkAccentTextBrush}" Content="Generate subtitles&#x2026;  (Scribe)" />
                                     <!-- Direct entry beats nudging: type a value (e.g. 3000), or use the spinners (±50) /
