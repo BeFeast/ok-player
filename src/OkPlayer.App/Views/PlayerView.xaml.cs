@@ -36,6 +36,7 @@ public sealed partial class PlayerView : UserControl
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _saveTimer;
     private string? _currentPath;
     private OkPlayer.Core.Playlist? _playlist; // the opened file's folder, in natural order (null for streams)
+    private bool _subtitleFlyoutOpen;
     private bool _subDelayEditing;
     // Session play-modes — persist across folder changes and are applied to each new playlist.
     private bool _autoAdvance = true;          // PRD: auto-advance defaults on
@@ -928,6 +929,8 @@ public sealed partial class PlayerView : UserControl
     {
         if (_historyOpen)
             return; // History owns the keyboard while open (its own search box / Esc handling)
+        if (_subtitleFlyoutOpen)
+            return; // Subtitle flyout owns track-list scrolling and delay-field editing while open
         if (IsEditableInputFocused())
             return; // NumberBox/TextBox flyouts own typing, arrows, Enter, Esc, etc.
         bool handled = true;
@@ -1990,9 +1993,16 @@ public sealed partial class PlayerView : UserControl
 
     private void OnSubtitleFlyoutOpened(object? sender, object e)
     {
+        _subtitleFlyoutOpen = true;
         double available = RootGrid.ActualHeight > 0 ? RootGrid.ActualHeight - 132 : 520;
         SubtitleFlyoutRoot.MaxHeight = Math.Clamp(available, 280, 560);
         SyncSubDelayBox(force: true);
+    }
+
+    private void OnSubtitleFlyoutClosed(object? sender, object e)
+    {
+        _subtitleFlyoutOpen = false;
+        _subDelayEditing = false;
     }
 
     private void OnAudioTrackClick(object sender, RoutedEventArgs e)
@@ -2862,6 +2872,8 @@ public sealed partial class PlayerView : UserControl
 
     private void OnOpenAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
+        if (_historyOpen || _subtitleFlyoutOpen || IsEditableInputFocused())
+            return;
         OpenFileRequested?.Invoke(this, EventArgs.Empty);
         args.Handled = true;
     }
@@ -3023,7 +3035,7 @@ public sealed partial class PlayerView : UserControl
         // Don't hijack Ctrl+V from a focused text field — the History search box, or any TextBox — let it paste
         // there. Only the bare player surface turns a pasted URL/path into an open. Return BEFORE marking the
         // accelerator handled, or the focused field never receives the paste.
-        if (_historyOpen || IsEditableInputFocused())
+        if (_historyOpen || _subtitleFlyoutOpen || IsEditableInputFocused())
             return;
         args.Handled = true;
         try

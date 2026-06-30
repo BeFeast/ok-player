@@ -612,7 +612,7 @@
                         <FontIcon Glyph="&#xE7F0;" FontSize="19" Foreground="White" />
                         <Button.Flyout>
                             <Flyout x:Name="SubtitleFlyout" FlyoutPresenterStyle="{StaticResource OkPopoverFlyoutStyle}"
-                                    Placement="Top" Opened="OnSubtitleFlyoutOpened">
+                                    Placement="Top" Opened="OnSubtitleFlyoutOpened" Closed="OnSubtitleFlyoutClosed">
                                 <Grid x:Name="SubtitleFlyoutRoot" Width="286" RowSpacing="0">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto" />
