@@ -895,10 +895,13 @@ public sealed partial class PlayerView : UserControl
     private void OnRootPointerMoved(object sender, PointerRoutedEventArgs e) => RevealChrome();
 
     // Reclaim keyboard focus when the surface (video/scrim/chrome background) is clicked, so the
-    // key map (Space, S, …) keeps working. Buttons don't steal focus (AllowFocusOnInteraction=False)
-    // and flyout content lives in a popup, so neither is affected.
+    // key map (Space, S, …) keeps working. Do not steal focus from editable popup content such as
+    // the subtitle-delay NumberBox, or its inner TextBox can never receive text input.
     private void OnRootPointerPressed(object sender, PointerRoutedEventArgs e)
-        => Focus(FocusState.Programmatic);
+    {
+        if (!IsEditableInputElement(e.OriginalSource))
+            Focus(FocusState.Programmatic);
+    }
 
     private void OnVideoTapped(object sender, TappedRoutedEventArgs e)
     {
@@ -919,6 +922,8 @@ public sealed partial class PlayerView : UserControl
     {
         if (_historyOpen)
             return; // History owns the keyboard while open (its own search box / Esc handling)
+        if (IsEditableInputFocused())
+            return; // NumberBox/TextBox flyouts own typing, arrows, Enter, Esc, etc.
         bool handled = true;
         switch (e.Key)
         {
@@ -967,6 +972,22 @@ public sealed partial class PlayerView : UserControl
     private static bool IsKeyDown(VirtualKey key) =>
         Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(key)
             .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+
+    private bool IsEditableInputFocused()
+        => XamlRoot is not null && IsEditableInputElement(FocusManager.GetFocusedElement(XamlRoot));
+
+    private static bool IsEditableInputElement(object? element)
+    {
+        for (DependencyObject? current = element as DependencyObject;
+             current is not null;
+             current = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(current))
+        {
+            if (current is TextBox or PasswordBox or RichEditBox or AutoSuggestBox or NumberBox or ComboBox)
+                return true;
+        }
+
+        return false;
+    }
 
     // ---- OSC clicks ----
 
@@ -2874,7 +2895,7 @@ public sealed partial class PlayerView : UserControl
         // Don't hijack Ctrl+V from a focused text field — the History search box, or any TextBox — let it paste
         // there. Only the bare player surface turns a pasted URL/path into an open. Return BEFORE marking the
         // accelerator handled, or the focused field never receives the paste.
-        if (_historyOpen || (XamlRoot is not null && FocusManager.GetFocusedElement(XamlRoot) is TextBox))
+        if (_historyOpen || IsEditableInputFocused())
             return;
         args.Handled = true;
         try
