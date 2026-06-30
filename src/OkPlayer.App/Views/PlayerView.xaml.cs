@@ -36,6 +36,7 @@ public sealed partial class PlayerView : UserControl
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _saveTimer;
     private string? _currentPath;
     private OkPlayer.Core.Playlist? _playlist; // the opened file's folder, in natural order (null for streams)
+    private bool _subDelayEditing;
     // Session play-modes — persist across folder changes and are applied to each new playlist.
     private bool _autoAdvance = true;          // PRD: auto-advance defaults on
     private OkPlayer.Core.RepeatMode _repeat = OkPlayer.Core.RepeatMode.Off;
@@ -211,6 +212,7 @@ public sealed partial class PlayerView : UserControl
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         Focus(FocusState.Programmatic);
+        SyncSubDelayBox(force: true);
         ApplyMediaPresence();
     }
 
@@ -662,6 +664,10 @@ public sealed partial class PlayerView : UserControl
         else if (e.PropertyName == nameof(PlayerViewModel.Position))
         {
             UpdateLyricHighlight(); // advance the synced-lyrics highlight (no-op unless the overlay is open + timed)
+        }
+        else if (e.PropertyName == nameof(PlayerViewModel.SubDelayMs))
+        {
+            SyncSubDelayBox(force: false);
         }
     }
 
@@ -1982,6 +1988,13 @@ public sealed partial class PlayerView : UserControl
         RevealChrome();
     }
 
+    private void OnSubtitleFlyoutOpened(object? sender, object e)
+    {
+        double available = RootGrid.ActualHeight > 0 ? RootGrid.ActualHeight - 132 : 520;
+        SubtitleFlyoutRoot.MaxHeight = Math.Clamp(available, 280, 560);
+        SyncSubDelayBox(force: true);
+    }
+
     private void OnAudioTrackClick(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement { DataContext: TrackInfo track })
@@ -2005,7 +2018,122 @@ public sealed partial class PlayerView : UserControl
         RevealChrome();
     }
 
-    private void OnSubDelayReset(object sender, RoutedEventArgs e) => Vm.SetSubDelay(0);
+    private void OnSubDelayTextGotFocus(object sender, RoutedEventArgs e)
+    {
+        _subDelayEditing = true;
+        DispatcherQueue.TryEnqueue(() => SubDelayBox.SelectAll());
+    }
+
+    private void OnSubDelayTextLostFocus(object sender, RoutedEventArgs e)
+    {
+        CommitSubDelayText(showInvalidToast: false);
+        _subDelayEditing = false;
+        SyncSubDelayBox(force: true);
+    }
+
+    private void OnSubDelayTextKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case VirtualKey.Enter:
+                CommitSubDelayText(showInvalidToast: true);
+                DispatcherQueue.TryEnqueue(() => SubDelayBox.SelectAll());
+                e.Handled = true;
+                RevealChrome();
+                break;
+            case VirtualKey.Escape:
+                _subDelayEditing = false;
+                SyncSubDelayBox(force: true);
+                e.Handled = true;
+                RevealChrome();
+                break;
+            case VirtualKey.Up:
+                NudgeSubDelayFromBox(50);
+                e.Handled = true;
+                RevealChrome();
+                break;
+            case VirtualKey.Down:
+                NudgeSubDelayFromBox(-50);
+                e.Handled = true;
+                RevealChrome();
+                break;
+            case VirtualKey.PageUp:
+                NudgeSubDelayFromBox(500);
+                e.Handled = true;
+                RevealChrome();
+                break;
+            case VirtualKey.PageDown:
+                NudgeSubDelayFromBox(-500);
+                e.Handled = true;
+                RevealChrome();
+                break;
+        }
+    }
+
+    private void OnSubDelayMinus(object sender, RoutedEventArgs e)
+    {
+        NudgeSubDelayFromBox(-50);
+        RevealChrome();
+    }
+
+    private void OnSubDelayPlus(object sender, RoutedEventArgs e)
+    {
+        NudgeSubDelayFromBox(50);
+        RevealChrome();
+    }
+
+    private void OnSubDelayReset(object sender, RoutedEventArgs e)
+    {
+        _subDelayEditing = false;
+        Vm.SetSubDelay(0);
+        SyncSubDelayBox(force: true);
+        RevealChrome();
+    }
+
+    private void SyncSubDelayBox(bool force)
+    {
+        if (!force && _subDelayEditing)
+            return;
+        SubDelayBox.Text = Vm.SubDelayMs.ToString(CultureInfo.InvariantCulture);
+    }
+
+    private bool TryReadSubDelayText(out int ms)
+    {
+        string text = SubDelayBox.Text.Trim();
+        if (int.TryParse(text, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int parsed))
+        {
+            ms = Math.Clamp(parsed, -600000, 600000);
+            return true;
+        }
+
+        ms = Vm.SubDelayMs;
+        return false;
+    }
+
+    private bool CommitSubDelayText(bool showInvalidToast)
+    {
+        if (!TryReadSubDelayText(out int ms))
+        {
+            if (showInvalidToast)
+                ShowToast("Enter delay in milliseconds");
+            SyncSubDelayBox(force: true);
+            return false;
+        }
+
+        if (ms != Vm.SubDelayMs)
+            Vm.SetSubDelay(ms);
+        SubDelayBox.Text = ms.ToString(CultureInfo.InvariantCulture);
+        return true;
+    }
+
+    private void NudgeSubDelayFromBox(int deltaMs)
+    {
+        int current = TryReadSubDelayText(out int ms) ? ms : Vm.SubDelayMs;
+        int next = Math.Clamp(current + deltaMs, -600000, 600000);
+        Vm.SetSubDelay(next);
+        SubDelayBox.Text = next.ToString(CultureInfo.InvariantCulture);
+    }
+
     private void OnSubScaleMinus(object sender, RoutedEventArgs e) => Vm.NudgeSubScale(-0.1);
     private void OnSubScalePlus(object sender, RoutedEventArgs e) => Vm.NudgeSubScale(0.1);
 

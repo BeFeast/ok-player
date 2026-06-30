@@ -611,60 +611,86 @@
                     <Button Grid.Column="8" Style="{StaticResource OkOscSvgButtonStyle}" ToolTipService.ToolTip="Subtitles">
                         <FontIcon Glyph="&#xE7F0;" FontSize="19" Foreground="White" />
                         <Button.Flyout>
-                            <Flyout x:Name="SubtitleFlyout" FlyoutPresenterStyle="{StaticResource OkPopoverFlyoutStyle}" Placement="Top">
-                                <StackPanel Width="272">
-                                    <TextBlock Text="Subtitles" Style="{StaticResource OkBodyStrongTextStyle}" Margin="6,4" />
-                                    <Button Style="{StaticResource OkSwitcherRowStyle}" Content="Off" Click="OnSubtitleOffClick" />
-                                    <ItemsControl ItemsSource="{x:Bind Vm.SubtitleTracks, Mode=OneWay}">
-                                        <ItemsControl.ItemTemplate>
-                                            <DataTemplate x:DataType="vm:TrackInfo">
-                                                <Button Style="{StaticResource OkSwitcherRowStyle}" Content="{x:Bind Label}" Click="OnSubtitleTrackClick" />
-                                            </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
-                                    <!-- Secondary subtitle (a second caption shown at once, top of frame) — only when the file has 2+ tracks -->
-                                    <StackPanel Visibility="{x:Bind Vm.SecondarySubtitleVisibility, Mode=OneWay}">
-                                        <Border Height="1" Margin="8,4" Background="{ThemeResource OkStrokeBrush}" />
-                                        <TextBlock Text="Secondary subtitle" FontSize="11.5" FontWeight="SemiBold" CharacterSpacing="40"
-                                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="6,2,6,4" />
-                                        <Button Style="{StaticResource OkSwitcherRowStyle}" Content="Off" Click="OnSecondarySubtitleOffClick" />
-                                        <ItemsControl ItemsSource="{x:Bind Vm.SecondarySubtitleTracks, Mode=OneWay}">
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate x:DataType="vm:TrackInfo">
-                                                    <Button Style="{StaticResource OkSwitcherRowStyle}" Content="{x:Bind Label}" Click="OnSecondarySubtitleTrackClick" />
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
+                            <Flyout x:Name="SubtitleFlyout" FlyoutPresenterStyle="{StaticResource OkPopoverFlyoutStyle}"
+                                    Placement="Top" Opened="OnSubtitleFlyoutOpened">
+                                <Grid x:Name="SubtitleFlyoutRoot" Width="286" RowSpacing="0">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="*" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Text="Subtitles" Style="{StaticResource OkBodyStrongTextStyle}" Margin="6,4" />
+
+                                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                                                  HorizontalScrollMode="Disabled" Padding="0,0,3,0">
+                                        <StackPanel>
+                                            <Button Style="{StaticResource OkSwitcherRowStyle}" Content="Off" Click="OnSubtitleOffClick" />
+                                            <ItemsControl ItemsSource="{x:Bind Vm.SubtitleTracks, Mode=OneWay}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate x:DataType="vm:TrackInfo">
+                                                        <Button Style="{StaticResource OkSwitcherRowStyle}" Content="{x:Bind Label}" Click="OnSubtitleTrackClick" />
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                            <!-- Secondary subtitle (a second caption shown at once, top of frame) — only when the file has 2+ tracks -->
+                                            <StackPanel Visibility="{x:Bind Vm.SecondarySubtitleVisibility, Mode=OneWay}">
+                                                <Border Height="1" Margin="8,4" Background="{ThemeResource OkStrokeBrush}" />
+                                                <TextBlock Text="Secondary subtitle" FontSize="11.5" FontWeight="SemiBold" CharacterSpacing="40"
+                                                           Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="6,2,6,4" />
+                                                <Button Style="{StaticResource OkSwitcherRowStyle}" Content="Off" Click="OnSecondarySubtitleOffClick" />
+                                                <ItemsControl ItemsSource="{x:Bind Vm.SecondarySubtitleTracks, Mode=OneWay}">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate x:DataType="vm:TrackInfo">
+                                                            <Button Style="{StaticResource OkSwitcherRowStyle}" Content="{x:Bind Label}" Click="OnSecondarySubtitleTrackClick" />
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </ScrollViewer>
+
+                                    <StackPanel Grid.Row="2">
+                                        <Border Height="1" Margin="8,6,8,4" Background="{ThemeResource OkStrokeBrush}" />
+                                        <Button Style="{StaticResource OkSwitcherRowStyle}" Content="Add subtitle file&#x2026;" Click="OnAddSubtitleFile" />
+                                        <!-- Auto-sync: transcribe ~10s at the current position and align the loaded track. Reserved
+                                             slot — wired once the Scribe clip-transcribe endpoint lands (Core aligner + clip extractor done). -->
+                                        <Button Style="{StaticResource OkSwitcherRowStyle}" IsEnabled="False"
+                                                Foreground="{ThemeResource OkAccentTextBrush}" Content="Auto-sync subtitles&#x2026;  (soon)" />
+                                        <Button Style="{StaticResource OkSwitcherRowStyle}" IsEnabled="False"
+                                                Foreground="{ThemeResource OkAccentTextBrush}" Content="Generate subtitles&#x2026;  (Scribe)" />
+                                        <!-- Direct entry beats nudging: type a value (e.g. 3000), Enter/blur applies it.
+                                             Up/Down buttons nudge by 50 ms; PageUp/Down in the field nudges by 500 ms. -->
+                                        <StackPanel Orientation="Horizontal" Spacing="6" Margin="10,6,10,2">
+                                            <TextBlock Text="Delay" VerticalAlignment="Center" MinWidth="40" FontSize="12.5" Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                                            <TextBox x:Name="SubDelayBox" Width="82" MinWidth="82" Padding="8,3" FontSize="12.5"
+                                                     HorizontalContentAlignment="Right" InputScope="Number"
+                                                     GotFocus="OnSubDelayTextGotFocus" LostFocus="OnSubDelayTextLostFocus"
+                                                     KeyDown="OnSubDelayTextKeyDown"
+                                                     ToolTipService.ToolTip="Subtitle delay in ms. Type a value, then press Enter or leave the field." />
+                                            <TextBlock Text="ms" VerticalAlignment="Center" FontSize="12.5" Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                                            <Button Style="{StaticResource OkSwitcherRowStyle}" Padding="7,3" Click="OnSubDelayMinus"
+                                                    ToolTipService.ToolTip="Move subtitles earlier by 50 ms">
+                                                <FontIcon Glyph="&#xE70D;" FontSize="12" Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                                            </Button>
+                                            <Button Style="{StaticResource OkSwitcherRowStyle}" Padding="7,3" Click="OnSubDelayPlus"
+                                                    ToolTipService.ToolTip="Move subtitles later by 50 ms">
+                                                <FontIcon Glyph="&#xE70E;" FontSize="12" Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                                            </Button>
+                                            <Button Style="{StaticResource OkSwitcherRowStyle}" Padding="7,3" Click="OnSubDelayReset"
+                                                    ToolTipService.ToolTip="Reset delay to 0">
+                                                <FontIcon Glyph="&#xE7A7;" FontSize="13" Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                                            </Button>
+                                        </StackPanel>
+                                        <StackPanel Orientation="Horizontal" Spacing="8" Margin="10,2,10,4">
+                                            <TextBlock Text="Size" VerticalAlignment="Center" MinWidth="40" FontSize="12.5" Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                                            <Button Style="{StaticResource OkSwitcherRowStyle}" Padding="9,3" FontFamily="Segoe UI" FontSize="14" Content="-" Click="OnSubScaleMinus" />
+                                            <TextBlock Text="{x:Bind Vm.SubScaleText, Mode=OneWay}" VerticalAlignment="Center" MinWidth="56" TextAlignment="Center"
+                                                       FontSize="12.5" FontWeight="SemiBold" Foreground="{ThemeResource OkAccentTextBrush}" />
+                                            <Button Style="{StaticResource OkSwitcherRowStyle}" Padding="9,3" FontFamily="Segoe UI" FontSize="14" Content="+" Click="OnSubScalePlus" />
+                                        </StackPanel>
                                     </StackPanel>
-                                    <Border Height="1" Margin="8,4" Background="{ThemeResource OkStrokeBrush}" />
-                                    <Button Style="{StaticResource OkSwitcherRowStyle}" Content="Add subtitle file&#x2026;" Click="OnAddSubtitleFile" />
-                                    <!-- Auto-sync: transcribe ~10s at the current position and align the loaded track. Reserved
-                                         slot — wired once the Scribe clip-transcribe endpoint lands (Core aligner + clip extractor done). -->
-                                    <Button Style="{StaticResource OkSwitcherRowStyle}" IsEnabled="False"
-                                            Foreground="{ThemeResource OkAccentTextBrush}" Content="Auto-sync subtitles&#x2026;  (soon)" />
-                                    <Button Style="{StaticResource OkSwitcherRowStyle}" IsEnabled="False"
-                                            Foreground="{ThemeResource OkAccentTextBrush}" Content="Generate subtitles&#x2026;  (Scribe)" />
-                                    <!-- Direct entry beats nudging: type a value (e.g. 3000), or use the spinners (±50) /
-                                         keyboard (↑↓ ±50, PageUp/Down ±500). Reset zeroes it. Global hotkey: Z / Shift+Z (±100), +Ctrl (±1s). -->
-                                    <StackPanel Orientation="Horizontal" Spacing="8" Margin="10,6,10,2">
-                                        <TextBlock Text="Delay" VerticalAlignment="Center" MinWidth="40" FontSize="12.5" Foreground="{ThemeResource OkTextSecondaryBrush}" />
-                                        <NumberBox Value="{x:Bind Vm.SubDelayInput, Mode=TwoWay}" SpinButtonPlacementMode="Inline"
-                                                   SmallChange="50" LargeChange="500" Minimum="-600000" Maximum="600000" Width="138"
-                                                   VerticalAlignment="Center" ToolTipService.ToolTip="Subtitle delay in ms — type a value, or use the spinners / arrow keys" />
-                                        <TextBlock Text="ms" VerticalAlignment="Center" FontSize="12.5" Foreground="{ThemeResource OkTextSecondaryBrush}" />
-                                        <Button Style="{StaticResource OkSwitcherRowStyle}" Padding="7,3" Click="OnSubDelayReset"
-                                                ToolTipService.ToolTip="Reset delay to 0">
-                                            <FontIcon Glyph="&#xE7A7;" FontSize="13" Foreground="{ThemeResource OkTextSecondaryBrush}" />
-                                        </Button>
-                                    </StackPanel>
-                                    <StackPanel Orientation="Horizontal" Spacing="8" Margin="10,2,10,4">
-                                        <TextBlock Text="Size" VerticalAlignment="Center" MinWidth="40" FontSize="12.5" Foreground="{ThemeResource OkTextSecondaryBrush}" />
-                                        <Button Style="{StaticResource OkSwitcherRowStyle}" Padding="9,3" FontFamily="Segoe UI" FontSize="14" Content="-" Click="OnSubScaleMinus" />
-                                        <TextBlock Text="{x:Bind Vm.SubScaleText, Mode=OneWay}" VerticalAlignment="Center" MinWidth="56" TextAlignment="Center"
-                                                   FontSize="12.5" FontWeight="SemiBold" Foreground="{ThemeResource OkAccentTextBrush}" />
-                                        <Button Style="{StaticResource OkSwitcherRowStyle}" Padding="9,3" FontFamily="Segoe UI" FontSize="14" Content="+" Click="OnSubScalePlus" />
-                                    </StackPanel>
-                                </StackPanel>
+                                </Grid>
                             </Flyout>
                         </Button.Flyout>
                     </Button>
