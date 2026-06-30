@@ -102,6 +102,14 @@
       <Link>libmpv-2.dll</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <!-- Bundle ffmpeg.exe next to the app (fetched into native/ffmpeg/, gitignored). Used for media processing:
+         subtitle-sync audio clips today, cut/convert/remux later. Conditional so a clone without the native
+         binary still builds (the feature degrades to unavailable until you run scripts/fetch-natives.ps1). -->
+    <Content Include="$(MSBuildThisFileDirectory)..\..\native\ffmpeg\ffmpeg.exe"
+             Condition="Exists('$(MSBuildThisFileDirectory)..\..\native\ffmpeg\ffmpeg.exe')">
+      <Link>ffmpeg.exe</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <!-- ship the icon next to the exe too so AppWindow.SetIcon can set the window/taskbar icon at runtime -->
     <Content Include="Assets\OkPlayer.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

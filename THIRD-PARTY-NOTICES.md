@@ -20,8 +20,11 @@ bundled build are listed below; the authoritative, per-file licensing is in each
 ## FFmpeg
 
 - **Project:** FFmpeg — <https://ffmpeg.org> · <https://github.com/FFmpeg/FFmpeg>
-- **License:** GPL-2.0-or-later for this build (FFmpeg is LGPL-2.1-or-later by default, but
-  GPL-only components are enabled in the mpv build bundled here).
+- **Components bundled:** (1) the FFmpeg libraries inside `libmpv-2.dll`, and (2) a standalone
+  `ffmpeg.exe` — a GPL `win64-gpl` build from <https://github.com/BtbN/FFmpeg-Builds> — used by OK
+  Player for media processing (subtitle-sync audio clips; cut/convert/remux).
+- **License:** GPL-2.0-or-later for these builds (FFmpeg is LGPL-2.1-or-later by default, but
+  GPL-only components are enabled in the builds bundled here).
   Full text: <https://www.ffmpeg.org/legal.html>
 - **Copyright:** © the FFmpeg developers.
 
@@ -49,4 +52,5 @@ bundled build are listed below; the authoritative, per-file licensing is in each
 OK Player's source is at <https://github.com/BeFeast/ok-player>. The corresponding source for the
 bundled GPL components (mpv, FFmpeg) is available from the upstream projects linked above; mpv's
 Windows builds and their build scripts are published at <https://github.com/zhongfly/mpv-winbuild>
-and <https://sourceforge.net/projects/mpv-player-windows/>.
+and <https://sourceforge.net/projects/mpv-player-windows/>, and the standalone `ffmpeg.exe` build
+and its build scripts at <https://github.com/BtbN/FFmpeg-Builds>.
