@@ -9,7 +9,7 @@ use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
 use okp_core::{AppIdentity, media_formats, natural_compare};
-use okp_mpv::{Mpv, MpvEvent, Track, TrackKind};
+use okp_mpv::{Chapter, Mpv, MpvEvent, Track, TrackKind};
 use velopack::VelopackApp;
 
 mod history;
@@ -127,13 +127,22 @@ struct Controls {
     up_next_panel: gtk::Box,
     up_next_title: gtk::Label,
     up_next_list: gtk::ListBox,
-    up_next_snapshot: RefCell<PlaylistSnapshot>,
+    side_panel_snapshot: RefCell<SidePanelSnapshot>,
+    side_panel_actions: Rc<RefCell<Vec<SidePanelAction>>>,
 }
 
-#[derive(Clone, Default, PartialEq, Eq)]
-struct PlaylistSnapshot {
+#[derive(Clone, Default, PartialEq)]
+struct SidePanelSnapshot {
     current_file: Option<PathBuf>,
     playlist: Vec<PathBuf>,
+    chapters: Vec<Chapter>,
+}
+
+#[derive(Clone, Copy)]
+enum SidePanelAction {
+    None,
+    Chapter(f64),
+    Playlist(usize),
 }
 
 fn main() -> glib::ExitCode {
@@ -279,7 +288,7 @@ fn build_controls(
     volume.set_value(100.0);
     volume.add_css_class("okp-volume");
 
-    let up_next_title = gtk::Label::new(Some("Up Next"));
+    let up_next_title = gtk::Label::new(Some("Chapters / Up Next"));
     up_next_title.add_css_class("okp-up-next-title");
     up_next_title.set_xalign(0.0);
 
@@ -305,10 +314,25 @@ fn build_controls(
     up_next_panel.append(&up_next_scroller);
 
     let up_next_state = Rc::clone(&state);
+    let up_next_actions = Rc::new(RefCell::new(Vec::<SidePanelAction>::new()));
+    let row_actions = Rc::clone(&up_next_actions);
     up_next_list.connect_row_activated(move |_, row| {
         let index = row.index();
-        if index >= 0 {
-            jump_playlist_index(&up_next_state, index as usize);
+        if index < 0 {
+            return;
+        }
+
+        match row_actions
+            .borrow()
+            .get(index as usize)
+            .copied()
+            .unwrap_or(SidePanelAction::None)
+        {
+            SidePanelAction::None => {}
+            SidePanelAction::Chapter(time) => seek_to_chapter(&up_next_state, time),
+            SidePanelAction::Playlist(index) => {
+                jump_playlist_index(&up_next_state, index);
+            }
         }
     });
 
@@ -409,7 +433,8 @@ fn build_controls(
         up_next_panel,
         up_next_title,
         up_next_list,
-        up_next_snapshot: RefCell::new(PlaylistSnapshot::default()),
+        side_panel_snapshot: RefCell::new(SidePanelSnapshot::default()),
+        side_panel_actions: up_next_actions,
     }
 }
 
@@ -613,39 +638,116 @@ fn set_button_active(button: &gtk::Button, active: bool) {
 fn update_up_next_panel(controls: &Controls, state: &Rc<RefCell<PlayerState>>) {
     let snapshot = {
         let state = state.borrow();
-        PlaylistSnapshot {
+        let chapters = state
+            .mpv
+            .as_ref()
+            .map(Mpv::chapters)
+            .and_then(Result::ok)
+            .unwrap_or_default();
+
+        SidePanelSnapshot {
             current_file: state.current_file.clone(),
             playlist: state.playlist.clone(),
+            chapters,
         }
     };
-    let is_visible = snapshot.playlist.len() > 1;
+    let is_visible = !snapshot.chapters.is_empty() || snapshot.playlist.len() > 1;
 
     controls.up_next_panel.set_visible(is_visible);
     if !is_visible {
-        controls.up_next_snapshot.replace(snapshot);
+        controls.side_panel_snapshot.replace(snapshot);
+        controls.side_panel_actions.borrow_mut().clear();
         clear_list_box(&controls.up_next_list);
         return;
     }
 
-    if *controls.up_next_snapshot.borrow() == snapshot {
+    if *controls.side_panel_snapshot.borrow() == snapshot {
         return;
     }
-    controls.up_next_snapshot.replace(snapshot.clone());
+    controls.side_panel_snapshot.replace(snapshot.clone());
 
     let current_index = snapshot
         .current_file
         .as_ref()
         .and_then(|current| snapshot.playlist.iter().position(|path| path == current));
 
-    controls
-        .up_next_title
-        .set_text(&format!("Up Next · {}", snapshot.playlist.len()));
+    controls.up_next_title.set_text("Chapters / Up Next");
     clear_list_box(&controls.up_next_list);
-    for (index, path) in snapshot.playlist.iter().enumerate() {
-        controls
-            .up_next_list
-            .append(&playlist_row(path, index, current_index));
+    let mut actions = Vec::new();
+
+    if !snapshot.chapters.is_empty() {
+        controls.up_next_list.append(&panel_heading_row(&format!(
+            "Chapters · {}",
+            snapshot.chapters.len()
+        )));
+        actions.push(SidePanelAction::None);
+
+        for chapter in &snapshot.chapters {
+            controls.up_next_list.append(&chapter_row(chapter));
+            actions.push(SidePanelAction::Chapter(chapter.time));
+        }
     }
+
+    if snapshot.playlist.len() > 1 {
+        controls.up_next_list.append(&panel_heading_row(&format!(
+            "Up Next · {}",
+            snapshot.playlist.len()
+        )));
+        actions.push(SidePanelAction::None);
+
+        for (index, path) in snapshot.playlist.iter().enumerate() {
+            controls
+                .up_next_list
+                .append(&playlist_row(path, index, current_index));
+            actions.push(SidePanelAction::Playlist(index));
+        }
+    }
+
+    controls.side_panel_actions.replace(actions);
+}
+
+fn panel_heading_row(text: &str) -> gtk::ListBoxRow {
+    let row = gtk::ListBoxRow::new();
+    row.add_css_class("okp-panel-heading-row");
+    row.set_activatable(false);
+    row.set_selectable(false);
+
+    let label = gtk::Label::new(Some(text));
+    label.add_css_class("okp-panel-heading");
+    label.set_xalign(0.0);
+    row.set_child(Some(&label));
+    row
+}
+
+fn chapter_row(chapter: &Chapter) -> gtk::ListBoxRow {
+    let row = gtk::ListBoxRow::new();
+    row.add_css_class("okp-up-next-row");
+    row.set_selectable(false);
+
+    let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row_box.set_hexpand(true);
+
+    let time = gtk::Label::new(Some(&format_time(chapter.time)));
+    time.add_css_class("okp-up-next-marker");
+    time.set_width_chars(6);
+    time.set_xalign(0.0);
+
+    let title_text = chapter
+        .title
+        .as_deref()
+        .filter(|title| !title.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("Chapter {}", chapter.index + 1));
+    let title = gtk::Label::new(Some(&title_text));
+    title.add_css_class("okp-up-next-file");
+    title.set_xalign(0.0);
+    title.set_hexpand(true);
+    title.set_ellipsize(pango::EllipsizeMode::End);
+
+    row_box.append(&time);
+    row_box.append(&title);
+    row.set_child(Some(&row_box));
+    row
 }
 
 fn clear_list_box(list: &gtk::ListBox) {
@@ -1282,6 +1384,12 @@ fn adjust_subtitle_scale(state: &Rc<RefCell<PlayerState>>, delta: f64) {
     }
 }
 
+fn seek_to_chapter(state: &Rc<RefCell<PlayerState>>, time: f64) {
+    if time.is_finite() && time >= 0.0 {
+        with_mpv(state, |mpv| mpv.seek_absolute(time));
+    }
+}
+
 fn toggle_fullscreen(window: &gtk::ApplicationWindow) {
     if window.is_fullscreen() {
         window.unfullscreen();
@@ -1907,6 +2015,16 @@ fn install_css() {
 
         .okp-up-next-list {
             background: transparent;
+        }
+
+        .okp-panel-heading-row {
+            padding: 4px 10px 2px 10px;
+        }
+
+        .okp-panel-heading {
+            color: rgba(255, 255, 255, 0.52);
+            font-size: 11px;
+            font-weight: 700;
         }
 
         .okp-up-next-row {

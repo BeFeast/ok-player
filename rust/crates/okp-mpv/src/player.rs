@@ -31,6 +31,13 @@ pub struct Track {
     pub audio_channels: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct Chapter {
+    pub index: i64,
+    pub time: f64,
+    pub title: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrackKind {
     Audio,
@@ -191,6 +198,26 @@ impl Mpv {
         }
 
         Ok(tracks)
+    }
+
+    pub fn chapters(&self) -> Result<Vec<Chapter>, MpvError> {
+        let count = self.get_i64("chapter-list/count")?.unwrap_or(0).max(0);
+        let mut chapters = Vec::new();
+
+        for index in 0..count {
+            let prefix = format!("chapter-list/{index}");
+            let Some(time) = self.get_double(&format!("{prefix}/time"))? else {
+                continue;
+            };
+
+            chapters.push(Chapter {
+                index,
+                time,
+                title: self.get_string(&format!("{prefix}/title"))?,
+            });
+        }
+
+        Ok(chapters)
     }
 
     pub fn playback_state(&self) -> Result<PlaybackState, MpvError> {
