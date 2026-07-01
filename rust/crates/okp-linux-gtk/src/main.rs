@@ -558,6 +558,7 @@ fn populate_subtitle_popover(
         .filter(|track| track.kind == TrackKind::Subtitle)
         .collect::<Vec<_>>();
     let any_selected = tracks.iter().any(|track| track.selected);
+    let secondary_subtitle_id = read_secondary_subtitle_id(&state);
 
     let off_button = track_button("Off", !any_selected);
     let off_state = Rc::clone(&state);
@@ -573,13 +574,50 @@ fn populate_subtitle_popover(
     if tracks.is_empty() {
         content.append(&empty_track_label("No subtitle tracks"));
     } else {
-        for track in tracks {
-            let button = track_button(&track_label(&track), track.selected);
+        for track in &tracks {
+            let button = track_button(&track_label(track), track.selected);
             let track_state = Rc::clone(&state);
             let track_popover = popover.clone();
             let track_id = track.id;
             button.connect_clicked(move |_| {
                 if with_mpv(&track_state, |mpv| mpv.select_subtitle(Some(track_id))) {
+                    save_current_preferences(&track_state);
+                }
+                track_popover.popdown();
+            });
+            content.append(&button);
+        }
+    }
+
+    content.append(&divider());
+    content.append(&track_section_title("Secondary"));
+
+    let secondary_off_button = track_button("Off", secondary_subtitle_id.is_none());
+    let secondary_off_state = Rc::clone(&state);
+    let secondary_off_popover = popover.clone();
+    secondary_off_button.connect_clicked(move |_| {
+        if with_mpv(&secondary_off_state, |mpv| {
+            mpv.select_secondary_subtitle(None)
+        }) {
+            save_current_preferences(&secondary_off_state);
+        }
+        secondary_off_popover.popdown();
+    });
+    content.append(&secondary_off_button);
+
+    if tracks.is_empty() {
+        content.append(&empty_track_label("No subtitle tracks"));
+    } else {
+        for track in &tracks {
+            let selected = secondary_subtitle_id == Some(track.id);
+            let button = track_button(&track_label_for(track, selected), selected);
+            let track_state = Rc::clone(&state);
+            let track_popover = popover.clone();
+            let track_id = track.id;
+            button.connect_clicked(move |_| {
+                if with_mpv(&track_state, |mpv| {
+                    mpv.select_secondary_subtitle(Some(track_id))
+                }) {
                     save_current_preferences(&track_state);
                 }
                 track_popover.popdown();
@@ -650,11 +688,15 @@ fn track_popover_content(title: &str) -> gtk::Box {
     content.add_css_class("okp-track-popover-content");
     content.set_width_request(270);
 
+    content.append(&track_section_title(title));
+    content
+}
+
+fn track_section_title(title: &str) -> gtk::Label {
     let title = gtk::Label::new(Some(title));
     title.add_css_class("okp-track-popover-title");
     title.set_xalign(0.0);
-    content.append(&title);
-    content
+    title
 }
 
 fn subtitle_adjustment_rows(
@@ -794,6 +836,22 @@ fn read_tracks(state: &Rc<RefCell<PlayerState>>) -> Vec<Track> {
     }
 }
 
+fn read_secondary_subtitle_id(state: &Rc<RefCell<PlayerState>>) -> Option<i64> {
+    let value = {
+        let state = state.borrow();
+        state.mpv.as_ref().map(Mpv::secondary_subtitle_id)
+    };
+
+    match value {
+        Some(Ok(value)) => value,
+        Some(Err(error)) => {
+            eprintln!("Failed to read secondary subtitle track: {error}");
+            None
+        }
+        None => None,
+    }
+}
+
 fn track_button(text: &str, selected: bool) -> gtk::Button {
     let button = gtk::Button::new();
     button.add_css_class("okp-track-row");
@@ -822,6 +880,10 @@ fn divider() -> gtk::Separator {
 }
 
 fn track_label(track: &Track) -> String {
+    track_label_for(track, track.selected)
+}
+
+fn track_label_for(track: &Track, selected: bool) -> String {
     let mut parts = Vec::new();
     parts.push(track_base_label(track));
 
@@ -839,7 +901,7 @@ fn track_label(track: &Track) -> String {
     }
 
     let label = parts.join(" · ");
-    if track.selected {
+    if selected {
         format!("On  {label}")
     } else {
         label
@@ -1285,6 +1347,18 @@ fn apply_playback_preferences(
         }
     }
 
+    if let Some(enabled) = preferences.secondary_subtitle_enabled {
+        if !enabled {
+            mpv.select_secondary_subtitle(None)?;
+        } else if let Some(track_id) = preferences.secondary_subtitle_track_id
+            && tracks
+                .iter()
+                .any(|track| track.kind == TrackKind::Subtitle && track.id == track_id)
+        {
+            mpv.select_secondary_subtitle(Some(track_id))?;
+        }
+    }
+
     if let Some(delay) = preferences.subtitle_delay.and_then(finite_option) {
         mpv.set_subtitle_delay(delay)?;
     }
@@ -1327,6 +1401,11 @@ fn read_current_playback_preferences(mpv: &Mpv) -> history::PlaybackPreferences 
     let selected_subtitle = tracks
         .iter()
         .find(|track| track.kind == TrackKind::Subtitle && track.selected);
+    let secondary_subtitle_id = mpv.secondary_subtitle_id().ok().flatten().filter(|id| {
+        tracks
+            .iter()
+            .any(|track| track.kind == TrackKind::Subtitle && track.id == *id)
+    });
     let has_audio_tracks = tracks.iter().any(|track| track.kind == TrackKind::Audio);
     let has_subtitle_tracks = tracks.iter().any(|track| track.kind == TrackKind::Subtitle);
 
@@ -1335,6 +1414,8 @@ fn read_current_playback_preferences(mpv: &Mpv) -> history::PlaybackPreferences 
         audio_track_id: selected_audio.map(|track| track.id),
         subtitle_enabled: has_subtitle_tracks.then_some(selected_subtitle.is_some()),
         subtitle_track_id: selected_subtitle.map(|track| track.id),
+        secondary_subtitle_enabled: has_subtitle_tracks.then_some(secondary_subtitle_id.is_some()),
+        secondary_subtitle_track_id: secondary_subtitle_id,
         subtitle_delay: mpv.subtitle_delay().ok().and_then(finite_option),
         subtitle_scale: mpv.subtitle_scale().ok().and_then(finite_option),
     }

@@ -27,6 +27,10 @@ pub struct PlaybackPreferences {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtitle_track_id: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_subtitle_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_subtitle_track_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtitle_delay: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtitle_scale: Option<f64>,
@@ -38,6 +42,8 @@ impl PlaybackPreferences {
             && self.audio_track_id.is_none()
             && self.subtitle_enabled.is_none()
             && self.subtitle_track_id.is_none()
+            && self.secondary_subtitle_enabled.is_none()
+            && self.secondary_subtitle_track_id.is_none()
             && self.subtitle_delay.is_none()
             && self.subtitle_scale.is_none()
     }
@@ -50,6 +56,10 @@ impl PlaybackPreferences {
         if updated.subtitle_enabled.is_some() {
             self.subtitle_enabled = updated.subtitle_enabled;
             self.subtitle_track_id = updated.subtitle_track_id;
+        }
+        if updated.secondary_subtitle_enabled.is_some() {
+            self.secondary_subtitle_enabled = updated.secondary_subtitle_enabled;
+            self.secondary_subtitle_track_id = updated.secondary_subtitle_track_id;
         }
         if updated.subtitle_delay.is_some() {
             self.subtitle_delay = updated.subtitle_delay;
@@ -328,6 +338,8 @@ mod tests {
             PlaybackPreferences {
                 audio_enabled: Some(true),
                 audio_track_id: Some(1),
+                secondary_subtitle_enabled: Some(true),
+                secondary_subtitle_track_id: Some(4),
                 subtitle_delay: Some(0.25),
                 ..PlaybackPreferences::default()
             },
@@ -347,6 +359,8 @@ mod tests {
                 audio_enabled: Some(true),
                 audio_track_id: Some(1),
                 subtitle_enabled: Some(false),
+                secondary_subtitle_enabled: Some(true),
+                secondary_subtitle_track_id: Some(4),
                 subtitle_delay: Some(0.25),
                 subtitle_scale: Some(1.2),
                 ..PlaybackPreferences::default()

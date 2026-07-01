@@ -224,6 +224,15 @@ impl Mpv {
         self.command(&["set", "sid", &value])
     }
 
+    pub fn select_secondary_subtitle(&self, id: Option<i64>) -> Result<(), MpvError> {
+        let value = track_id_or_off(id);
+        self.command(&["set", "secondary-sid", &value])
+    }
+
+    pub fn secondary_subtitle_id(&self) -> Result<Option<i64>, MpvError> {
+        Ok(self.get_i64("secondary-sid")?.filter(|id| *id > 0))
+    }
+
     pub fn select_audio(&self, id: Option<i64>) -> Result<(), MpvError> {
         let value = track_id_or_off(id);
         self.command(&["set", "aid", &value])
