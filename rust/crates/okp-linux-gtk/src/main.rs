@@ -5107,25 +5107,33 @@ fn show_media_info_window(
     let window = gtk::Window::builder()
         .title("Media Information")
         .transient_for(parent)
-        .default_width(620)
-        .default_height(720)
+        .default_width(680)
+        .default_height(820)
         .decorated(false)
         .build();
     window.add_css_class("okp-info-window");
 
-    let root = gtk::Box::new(gtk::Orientation::Vertical, 14);
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.add_css_class("okp-info-root");
-    root.set_margin_top(18);
-    root.set_margin_end(18);
-    root.set_margin_bottom(18);
-    root.set_margin_start(18);
 
-    let header = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 16);
+    page.add_css_class("okp-info-page");
+    page.set_margin_top(54);
+    page.set_margin_end(36);
+    page.set_margin_bottom(24);
+    page.set_margin_start(36);
+
+    let header = gtk::Box::new(gtk::Orientation::Vertical, 5);
+    header.add_css_class("okp-info-hero");
+    let eyebrow = gtk::Label::new(Some("MEDIA INFO"));
+    eyebrow.add_css_class("okp-info-eyebrow");
+    eyebrow.set_xalign(0.0);
+    header.append(&eyebrow);
+
     let title = gtk::Label::new(Some(&media_info.title));
     title.add_css_class("okp-info-title");
     title.set_xalign(0.0);
     title.set_ellipsize(pango::EllipsizeMode::End);
-    title.set_selectable(true);
     header.append(&title);
 
     if let Some(path) = media_info.path.as_deref() {
@@ -5133,13 +5141,12 @@ fn show_media_info_window(
         path_label.add_css_class("okp-info-path");
         path_label.set_xalign(0.0);
         path_label.set_ellipsize(pango::EllipsizeMode::Middle);
-        path_label.set_selectable(true);
         header.append(&path_label);
     }
-    root.append(&header);
+    page.append(&header);
 
     if let Some(summary) = media_info_summary_widget(media_info) {
-        root.append(&summary);
+        page.append(&summary);
     }
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
@@ -5155,12 +5162,12 @@ fn show_media_info_window(
     scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     scroller.set_vexpand(true);
     scroller.set_child(Some(&content));
-    root.append(&scroller);
+    page.append(&scroller);
 
-    let footer = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    footer.set_halign(gtk::Align::End);
+    let footer = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    footer.add_css_class("okp-info-footer");
 
-    let copy_button = gtk::Button::with_label("Copy");
+    let copy_button = media_info_action_button("Copy info", "edit-copy-symbolic");
     copy_button.add_css_class("okp-info-footer-button");
     let copy_text = Rc::new(media_info_copy_text(media_info));
     let copy_toast = Rc::clone(&status_toast);
@@ -5170,20 +5177,42 @@ fn show_media_info_window(
             copy_toast.show("Media information copied");
         }
     });
+    footer.append(&copy_button);
 
     let done_button = gtk::Button::with_label("Done");
     done_button.add_css_class("okp-info-footer-button");
+    done_button.set_has_frame(false);
+    done_button.set_halign(gtk::Align::End);
+    done_button.set_hexpand(true);
     let close_window = window.clone();
     done_button.connect_clicked(move |_| close_window.close());
-
-    footer.append(&copy_button);
     footer.append(&done_button);
-    root.append(&footer);
+    page.append(&footer);
+    root.append(&page);
+
+    let content_overlay = gtk::Overlay::new();
+    content_overlay.set_child(Some(&root));
+    content_overlay.add_overlay(&settings_window_controls(&window));
 
     let handle = gtk::WindowHandle::new();
-    handle.set_child(Some(&root));
+    handle.set_child(Some(&content_overlay));
     window.set_child(Some(&handle));
     window.present();
+}
+
+fn media_info_action_button(label: &str, icon_name: &str) -> gtk::Button {
+    let button = gtk::Button::new();
+    button.set_has_frame(false);
+
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 7);
+    content.set_halign(gtk::Align::Center);
+    let icon = gtk::Image::from_icon_name(icon_name);
+    icon.set_pixel_size(14);
+    content.append(&icon);
+    content.append(&gtk::Label::new(Some(label)));
+    button.set_child(Some(&content));
+
+    button
 }
 
 fn media_info_summary_widget(media_info: &MediaInfo) -> Option<gtk::Box> {
@@ -5276,7 +5305,8 @@ fn media_info_section_widget(section: &InfoSection) -> gtk::Box {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
     content.add_css_class("okp-info-section");
 
-    let title = gtk::Label::new(Some(&section.title));
+    let section_title = section.title.to_uppercase();
+    let title = gtk::Label::new(Some(&section_title));
     title.add_css_class("okp-info-section-title");
     title.set_xalign(0.0);
     content.append(&title);
@@ -5305,7 +5335,6 @@ fn media_info_row(label: &str, value: &str) -> gtk::Box {
     value_widget.set_hexpand(true);
     value_widget.set_wrap(true);
     value_widget.set_wrap_mode(pango::WrapMode::WordChar);
-    value_widget.set_selectable(true);
     row.append(&value_widget);
 
     row
@@ -5334,20 +5363,32 @@ fn media_info_track_row(track: &InfoTrack) -> gtk::Box {
         row.add_css_class("is-selected");
     }
 
-    let kind = gtk::Label::new(Some(media_info_track_kind_label(track.kind)));
+    let kind_text = media_info_track_kind_label(track.kind).to_uppercase();
+    let kind = gtk::Label::new(Some(&kind_text));
     kind.add_css_class("okp-info-track-kind");
-    kind.set_width_chars(7);
+    kind.set_width_chars(8);
     kind.set_xalign(0.0);
     row.append(&kind);
 
     let body = gtk::Box::new(gtk::Orientation::Vertical, 2);
     body.set_hexpand(true);
 
+    let title_row = gtk::Box::new(gtk::Orientation::Horizontal, 7);
+    title_row.set_hexpand(true);
+
     let title = gtk::Label::new(Some(&format!("#{} {}", track.id, track.title)));
     title.add_css_class("okp-info-track-title");
     title.set_xalign(0.0);
     title.set_ellipsize(pango::EllipsizeMode::End);
-    body.append(&title);
+    title.set_hexpand(true);
+    title_row.append(&title);
+
+    if track.selected {
+        let current = gtk::Label::new(Some("CURRENT"));
+        current.add_css_class("okp-info-track-current");
+        title_row.append(&current);
+    }
+    body.append(&title_row);
 
     if !track.detail.is_empty() {
         let detail = gtk::Label::new(Some(&track.detail));
@@ -6649,7 +6690,7 @@ fn install_css() {
         }
 
         .okp-info-window {
-            background: #101115;
+            background: #eef4f9;
         }
 
         window.okp-command-dialog {
@@ -6698,12 +6739,20 @@ fn install_css() {
             border-color: rgba(40, 179, 170, 0.48);
         }
 
+        window.okp-command-dialog .okp-info-label {
+            color: rgba(255, 255, 255, 0.62);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
         .okp-settings-window {
             background: transparent;
         }
 
         .okp-info-root {
-            background: #101115;
+            background: #eef4f9;
+            color: #161616;
         }
 
         .okp-settings-root {
@@ -6815,8 +6864,32 @@ fn install_css() {
             padding: 70px 44px 28px 24px;
         }
 
+        .okp-info-page {
+            background: #eef4f9;
+        }
+
+        .okp-info-hero {
+            min-height: 82px;
+        }
+
+        .okp-info-eyebrow {
+            color: rgba(0, 0, 0, 0.40);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0;
+        }
+
+        .okp-info-title {
+            color: #161616;
+            font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
+            font-size: 28px;
+            font-weight: 650;
+        }
+
         .okp-info-path {
-            color: rgba(255, 255, 255, 0.56);
+            color: rgba(0, 0, 0, 0.46);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12px;
         }
 
@@ -7059,7 +7132,8 @@ fn install_css() {
         }
 
         .okp-update-status {
-            color: rgba(255, 255, 255, 0.72);
+            color: rgba(0, 0, 0, 0.50);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12px;
         }
 
@@ -7067,69 +7141,81 @@ fn install_css() {
             min-height: 42px;
             padding: 10px;
             border-radius: 8px;
-            background: rgba(255, 255, 255, 0.045);
+            background: #ffffff;
+            border: 1px solid rgba(0, 0, 0, 0.06);
         }
 
         .okp-settings-state-pill {
             min-width: 34px;
             padding: 3px 8px;
             border-radius: 999px;
-            background: rgba(255, 255, 255, 0.08);
-            color: rgba(255, 255, 255, 0.8);
+            background: rgba(16, 147, 138, 0.12);
+            color: #0a655f;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 11px;
-            font-weight: 800;
-        }
-
-        .okp-info-section {
-            padding: 12px;
-            border-radius: 8px;
-            background: rgba(255, 255, 255, 0.055);
-        }
-
-        .okp-info-section-title {
-            margin-bottom: 2px;
-            color: rgba(255, 255, 255, 0.9);
-            font-size: 13px;
-            font-weight: 700;
-        }
-
-        .okp-info-row {
-            min-height: 24px;
-        }
-
-        .okp-info-label {
-            color: rgba(255, 255, 255, 0.52);
-            font-size: 12px;
             font-weight: 600;
         }
 
+        .okp-info-section {
+            padding: 14px 16px;
+            border-radius: 8px;
+            background: #ffffff;
+            border: 1px solid rgba(0, 0, 0, 0.06);
+        }
+
+        .okp-info-section-title {
+            margin-bottom: 10px;
+            color: rgba(0, 0, 0, 0.40);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0;
+        }
+
+        .okp-info-row {
+            min-height: 22px;
+        }
+
+        .okp-info-label {
+            color: rgba(0, 0, 0, 0.50);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12.5px;
+            font-weight: 400;
+        }
+
         .okp-info-value {
-            color: rgba(255, 255, 255, 0.84);
+            color: #161616;
+            font-family: 'Cascadia Code', 'Cascadia Mono', monospace;
             font-size: 12px;
+            font-weight: 500;
+            font-feature-settings: 'tnum';
         }
 
         .okp-info-summary {
-            padding: 2px 0;
+            padding: 0;
         }
 
         .okp-info-chip {
             min-width: 78px;
             padding: 8px 10px;
             border-radius: 8px;
-            background: rgba(40, 179, 170, 0.12);
-            border: 1px solid rgba(40, 179, 170, 0.22);
+            background: #ffffff;
+            border: 1px solid rgba(0, 0, 0, 0.06);
         }
 
         .okp-info-chip-label {
-            color: rgba(219, 255, 252, 0.68);
+            color: rgba(0, 0, 0, 0.40);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 10px;
-            font-weight: 800;
+            font-weight: 600;
+            letter-spacing: 0;
         }
 
         .okp-info-chip-value {
-            color: rgba(255, 255, 255, 0.94);
+            color: #161616;
+            font-family: 'Cascadia Code', 'Cascadia Mono', monospace;
             font-size: 12px;
-            font-weight: 700;
+            font-weight: 600;
             font-feature-settings: 'tnum';
         }
 
@@ -7140,72 +7226,100 @@ fn install_css() {
         .okp-settings-scale trough {
             min-height: 6px;
             border-radius: 999px;
-            background: rgba(255, 255, 255, 0.24);
+            background: rgba(0, 0, 0, 0.13);
         }
 
         .okp-settings-scale highlight {
             min-height: 6px;
             border-radius: 999px;
-            background: #ff6a3d;
+            background: #0067c0;
         }
 
         .okp-settings-scale slider {
             min-width: 18px;
             min-height: 18px;
             border-radius: 999px;
-            background: rgba(255, 255, 255, 0.96);
+            background: #ffffff;
+            border: 1px solid rgba(0, 0, 0, 0.13);
         }
 
         .okp-settings-button {
             min-width: 82px;
             min-height: 32px;
             border-radius: 7px;
-            background: rgba(255, 255, 255, 0.08);
-            color: rgba(255, 255, 255, 0.88);
+            background: #ffffff;
+            border: 1px solid rgba(0, 0, 0, 0.06);
+            box-shadow: none;
+            color: #161616;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12px;
         }
 
         .okp-settings-button:hover {
-            background: rgba(255, 255, 255, 0.13);
+            background: #f8fafb;
         }
 
         .okp-info-track-row {
             min-height: 44px;
             padding: 8px 9px;
             border-radius: 7px;
-            background: rgba(0, 0, 0, 0.16);
+            background: #f8fafb;
+            border: 1px solid rgba(0, 0, 0, 0.04);
         }
 
         .okp-info-track-row.is-selected {
-            background: rgba(98, 181, 255, 0.17);
+            background: rgba(16, 147, 138, 0.10);
+            border-color: rgba(16, 147, 138, 0.18);
         }
 
         .okp-info-track-kind {
-            color: rgba(98, 181, 255, 0.95);
+            color: #0a655f;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 11px;
-            font-weight: 800;
+            font-weight: 600;
+            letter-spacing: 0;
         }
 
         .okp-info-track-title {
-            color: rgba(255, 255, 255, 0.9);
-            font-size: 13px;
-            font-weight: 650;
+            color: #161616;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12.5px;
+            font-weight: 600;
+        }
+
+        .okp-info-track-current {
+            padding: 2px 6px;
+            border-radius: 5px;
+            background: rgba(16, 147, 138, 0.12);
+            color: #0a655f;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 8.5px;
+            font-weight: 600;
+            letter-spacing: 0;
         }
 
         .okp-info-track-detail {
-            color: rgba(255, 255, 255, 0.58);
-            font-size: 12px;
+            color: rgba(0, 0, 0, 0.48);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 11.5px;
         }
 
         .okp-info-footer-button {
             min-width: 82px;
             min-height: 34px;
+            padding: 0 14px;
             border-radius: 7px;
-            background: rgba(255, 255, 255, 0.08);
-            color: rgba(255, 255, 255, 0.88);
+            background: #e2e8ec;
+            border: 1px solid rgba(0, 0, 0, 0.06);
+            box-shadow: none;
+            color: #161616;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12px;
+            font-weight: 600;
         }
 
         .okp-info-footer-button:hover {
-            background: rgba(255, 255, 255, 0.13);
+            background: #d9e1e7;
         }
         ",
     );
