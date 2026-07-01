@@ -12,12 +12,16 @@ use okp_core::{AppIdentity, media_formats, natural_compare};
 use okp_mpv::{Mpv, MpvEvent, Track, TrackKind};
 use velopack::VelopackApp;
 
+mod history;
+
 #[derive(Default)]
 struct PlayerState {
     mpv: Option<Mpv>,
     current_file: Option<PathBuf>,
     playlist: Vec<PathBuf>,
     pending_subtitles: Vec<PathBuf>,
+    pending_resume: Option<(PathBuf, f64)>,
+    history: history::HistoryStore,
 }
 
 #[derive(Clone, Default)]
@@ -125,6 +129,7 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
     connect_mpv(&video_area, Rc::clone(&state), launch_args);
     connect_drop(&window, Rc::clone(&state));
     connect_keyboard(&window, Rc::clone(&state));
+    connect_progress_persistence(&window, Rc::clone(&state));
     connect_state_poll(
         Rc::clone(&state),
         controls,
@@ -420,6 +425,7 @@ fn connect_state_poll(
             } else {
                 raw_time
             };
+            try_pending_resume(&state, duration);
 
             controls.play_button.set_sensitive(has_media);
             controls.subtitle_button.set_sensitive(has_media);
@@ -853,6 +859,7 @@ fn drain_mpv_events(state: &Rc<RefCell<PlayerState>>) {
         if let MpvEvent::EndFile { reason } = event
             && reason.is_eof()
         {
+            save_current_progress(state, true);
             advance_playlist_on_eof(state);
         }
     }
@@ -1006,6 +1013,20 @@ fn connect_keyboard(window: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerSta
     window.add_controller(controller);
 }
 
+fn connect_progress_persistence(window: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerState>>) {
+    let timer_state = Rc::clone(&state);
+    glib::timeout_add_local(Duration::from_secs(10), move || {
+        save_current_progress(&timer_state, false);
+        glib::ControlFlow::Continue
+    });
+
+    let close_state = Rc::clone(&state);
+    window.connect_close_request(move |_| {
+        save_current_progress(&close_state, false);
+        glib::Propagation::Proceed
+    });
+}
+
 fn with_mpv(
     state: &Rc<RefCell<PlayerState>>,
     command: impl FnOnce(&Mpv) -> Result<(), okp_mpv::MpvError>,
@@ -1041,8 +1062,15 @@ fn toggle_fullscreen(window: &gtk::ApplicationWindow) {
 }
 
 fn load_media_path(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
+    load_media_path_internal(state, path, true);
+}
+
+fn load_media_path_internal(state: &Rc<RefCell<PlayerState>>, path: PathBuf, save_previous: bool) {
     if !is_media_path(&path) {
         return;
+    }
+    if save_previous {
+        save_current_progress(state, false);
     }
 
     let result = {
@@ -1059,10 +1087,13 @@ fn load_media_path(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
 
 fn remember_loaded_media(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
     let playlist = build_folder_playlist(&path);
+    let resume_path = path.clone();
     let mut state = state.borrow_mut();
+    let resume = state.history.resume_position(&path);
     state.current_file = Some(path);
     state.playlist = playlist;
     state.pending_subtitles.clear();
+    state.pending_resume = resume.map(|position| (resume_path, position));
 }
 
 fn navigate_playlist(state: &Rc<RefCell<PlayerState>>, direction: isize) -> bool {
@@ -1083,7 +1114,7 @@ fn navigate_playlist(state: &Rc<RefCell<PlayerState>>, direction: isize) -> bool
         .position(|path| path == &current_file)
         .unwrap_or(0);
     let next_index = (current_index as isize + direction).rem_euclid(playlist.len() as isize);
-    load_media_path(state, playlist[next_index as usize].clone());
+    load_media_path_internal(state, playlist[next_index as usize].clone(), true);
     true
 }
 
@@ -1097,7 +1128,7 @@ fn jump_playlist_index(state: &Rc<RefCell<PlayerState>>, index: usize) -> bool {
         return false;
     };
 
-    load_media_path(state, path);
+    load_media_path_internal(state, path, true);
     true
 }
 
@@ -1120,8 +1151,82 @@ fn advance_playlist_on_eof(state: &Rc<RefCell<PlayerState>>) -> bool {
         return false;
     };
 
-    load_media_path(state, next_file);
+    load_media_path_internal(state, next_file, false);
     true
+}
+
+fn try_pending_resume(state: &Rc<RefCell<PlayerState>>, duration: f64) {
+    if !duration.is_finite() || duration <= 0.0 {
+        return;
+    }
+
+    let pending = {
+        let state = state.borrow();
+        state.pending_resume.clone()
+    };
+    let Some((path, target)) = pending else {
+        return;
+    };
+
+    let is_current = state
+        .borrow()
+        .current_file
+        .as_ref()
+        .is_some_and(|current| current == &path);
+    if !is_current {
+        state.borrow_mut().pending_resume = None;
+        return;
+    }
+
+    if target > duration {
+        return;
+    }
+
+    if target <= duration * 0.05 || target >= history::completion_start(duration) {
+        state.borrow_mut().pending_resume = None;
+        return;
+    }
+
+    let result = {
+        let state = state.borrow();
+        state.mpv.as_ref().map(|mpv| mpv.seek_absolute(target))
+    };
+    if matches!(result, Some(Ok(()))) {
+        state.borrow_mut().pending_resume = None;
+    } else if let Some(Err(error)) = result {
+        eprintln!("Failed to resume '{}': {error}", path.display());
+    }
+}
+
+fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: bool) {
+    let snapshot = {
+        let state = state.borrow();
+        let Some(path) = state.current_file.clone() else {
+            return;
+        };
+        let Some(playback) = state.mpv.as_ref().and_then(|mpv| mpv.playback_state().ok()) else {
+            return;
+        };
+
+        (path, playback)
+    };
+
+    let (path, playback) = snapshot;
+    let Some(duration) = playback.duration else {
+        return;
+    };
+    let position = playback.time_pos.unwrap_or(0.0);
+    if !duration.is_finite() || duration <= 0.0 || !position.is_finite() {
+        return;
+    }
+
+    let mut state = state.borrow_mut();
+    state
+        .history
+        .record(&path, position.clamp(0.0, duration), duration, finished);
+    if let Err(error) = state.history.save() {
+        eprintln!("Failed to save history: {error}");
+    }
 }
 
 fn build_folder_playlist(path: &Path) -> Vec<PathBuf> {

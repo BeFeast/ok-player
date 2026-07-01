@@ -908,6 +908,8 @@ dependencies = [
  "okp-core",
  "okp-mpv",
  "relm4",
+ "serde",
+ "serde_json",
  "velopack",
 ]
 
