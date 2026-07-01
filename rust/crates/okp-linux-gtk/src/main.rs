@@ -77,6 +77,7 @@ fn build_window(app: &gtk::Application, file: Option<PathBuf>) {
 
     connect_mpv(&video_area, Rc::clone(&state), file);
     connect_drop(&window, Rc::clone(&state));
+    connect_keyboard(&window, Rc::clone(&state));
     connect_state_poll(
         Rc::clone(&state),
         controls,
@@ -344,6 +345,79 @@ fn connect_drop(window: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerState>>
         true
     });
     window.add_controller(drop_target);
+}
+
+fn connect_keyboard(window: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerState>>) {
+    let controller = gtk::EventControllerKey::new();
+    let shortcut_window = window.clone();
+    controller.connect_key_pressed(move |_, key, _, modifiers| {
+        if modifiers.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK) {
+            return glib::Propagation::Proceed;
+        }
+
+        match key {
+            gdk::Key::space => {
+                with_mpv(&state, |mpv| mpv.cycle_pause());
+                glib::Propagation::Stop
+            }
+            gdk::Key::Left => {
+                with_mpv(&state, |mpv| mpv.seek_relative(-5.0));
+                glib::Propagation::Stop
+            }
+            gdk::Key::Right => {
+                with_mpv(&state, |mpv| mpv.seek_relative(5.0));
+                glib::Propagation::Stop
+            }
+            gdk::Key::Down => {
+                adjust_volume(&state, -5.0);
+                glib::Propagation::Stop
+            }
+            gdk::Key::Up => {
+                adjust_volume(&state, 5.0);
+                glib::Propagation::Stop
+            }
+            gdk::Key::o | gdk::Key::O => {
+                open_media_dialog(&shortcut_window, Rc::clone(&state));
+                glib::Propagation::Stop
+            }
+            gdk::Key::f | gdk::Key::F => {
+                toggle_fullscreen(&shortcut_window);
+                glib::Propagation::Stop
+            }
+            gdk::Key::Escape if shortcut_window.is_fullscreen() => {
+                shortcut_window.unfullscreen();
+                glib::Propagation::Stop
+            }
+            _ => glib::Propagation::Proceed,
+        }
+    });
+    window.add_controller(controller);
+}
+
+fn with_mpv(
+    state: &Rc<RefCell<PlayerState>>,
+    command: impl FnOnce(&Mpv) -> Result<(), okp_mpv::MpvError>,
+) {
+    if let Some(mpv) = state.borrow().mpv.as_ref()
+        && let Err(error) = command(mpv)
+    {
+        eprintln!("mpv command failed: {error}");
+    }
+}
+
+fn adjust_volume(state: &Rc<RefCell<PlayerState>>, delta: f64) {
+    with_mpv(state, |mpv| {
+        let volume = mpv.playback_state()?.volume.unwrap_or(100.0);
+        mpv.set_volume(volume + delta)
+    });
+}
+
+fn toggle_fullscreen(window: &gtk::ApplicationWindow) {
+    if window.is_fullscreen() {
+        window.unfullscreen();
+    } else {
+        window.fullscreen();
+    }
 }
 
 fn load_media_path(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {

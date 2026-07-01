@@ -118,6 +118,10 @@ impl Mpv {
         self.command(&["seek", &seconds, "absolute+exact"])
     }
 
+    pub fn seek_relative(&self, seconds: f64) -> Result<(), MpvError> {
+        self.command(&["seek", &seconds.to_string(), "relative+exact"])
+    }
+
     pub fn set_volume(&self, volume: f64) -> Result<(), MpvError> {
         self.set_double("volume", volume.clamp(0.0, 130.0))
     }
