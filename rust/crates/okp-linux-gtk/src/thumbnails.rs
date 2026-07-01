@@ -12,6 +12,7 @@ use okp_mpv::Chapter;
 
 const THUMB_WIDTH: u32 = 144;
 const THUMB_HEIGHT: u32 = 81;
+const HOVER_BUCKET_SECONDS: f64 = 10.0;
 
 pub fn request_key(media_path: &Path, chapters: &[Chapter]) -> String {
     let mut hasher = DefaultHasher::new();
@@ -37,6 +38,40 @@ pub fn thumbnail_path(media_path: &Path, chapter: &Chapter) -> PathBuf {
 
 pub fn existing_thumbnail_path(media_path: &Path, chapter: &Chapter) -> Option<PathBuf> {
     let path = thumbnail_path(media_path, chapter);
+    path.exists().then_some(path)
+}
+
+pub fn hover_thumbnail_time(seconds: f64, duration: f64) -> f64 {
+    if !seconds.is_finite() || seconds < 0.0 {
+        return 0.0;
+    }
+
+    let duration = if duration.is_finite() && duration > 0.0 {
+        duration
+    } else {
+        seconds
+    };
+    let clamped = seconds.min(duration);
+    ((clamped / HOVER_BUCKET_SECONDS).round() * HOVER_BUCKET_SECONDS).min(duration)
+}
+
+pub fn hover_request_key(media_path: &Path, seconds: f64) -> String {
+    format!(
+        "{}:hover:{}",
+        media_fingerprint(media_path),
+        chapter_time_key(seconds)
+    )
+}
+
+pub fn hover_thumbnail_path(media_path: &Path, seconds: f64) -> PathBuf {
+    cache_root()
+        .join(media_fingerprint(media_path))
+        .join("hover")
+        .join(format!("hover-{}.jpg", chapter_time_key(seconds)))
+}
+
+pub fn existing_hover_thumbnail_path(media_path: &Path, seconds: f64) -> Option<PathBuf> {
+    let path = hover_thumbnail_path(media_path, seconds);
     path.exists().then_some(path)
 }
 
@@ -68,6 +103,32 @@ pub fn warm_chapter_thumbnails(
         }
 
         if wrote_any {
+            let _ = sender.send(request_key);
+        }
+    });
+}
+
+pub fn warm_hover_thumbnail(
+    media_path: PathBuf,
+    seconds: f64,
+    request_key: String,
+    sender: Sender<String>,
+) {
+    thread::spawn(move || {
+        let output = hover_thumbnail_path(&media_path, seconds);
+        if output.exists() {
+            let _ = sender.send(request_key);
+            return;
+        }
+
+        if let Some(parent) = output.parent()
+            && let Err(error) = fs::create_dir_all(parent)
+        {
+            eprintln!("Failed to create hover thumbnail cache: {error}");
+            return;
+        }
+
+        if generate_thumbnail(&media_path, seconds, &output) {
             let _ = sender.send(request_key);
         }
     });
@@ -147,4 +208,24 @@ fn media_fingerprint(path: &Path) -> String {
 
 fn chapter_time_key(seconds: f64) -> i64 {
     (seconds.max(0.0) * 1000.0).round() as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hover_thumbnail_time_quantizes_to_ten_second_buckets() {
+        assert_eq!(hover_thumbnail_time(0.0, 120.0), 0.0);
+        assert_eq!(hover_thumbnail_time(4.9, 120.0), 0.0);
+        assert_eq!(hover_thumbnail_time(5.0, 120.0), 10.0);
+        assert_eq!(hover_thumbnail_time(53.42, 120.0), 50.0);
+    }
+
+    #[test]
+    fn hover_thumbnail_time_clamps_to_duration_and_rejects_invalid_values() {
+        assert_eq!(hover_thumbnail_time(f64::NAN, 120.0), 0.0);
+        assert_eq!(hover_thumbnail_time(-1.0, 120.0), 0.0);
+        assert_eq!(hover_thumbnail_time(118.0, 116.0), 116.0);
+    }
 }

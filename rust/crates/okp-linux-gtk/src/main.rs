@@ -26,6 +26,7 @@ struct PlayerState {
     pending_resume: Option<(PathBuf, f64)>,
     pending_preferences: Option<(PathBuf, history::PlaybackPreferences)>,
     thumbnail_request_key: Option<String>,
+    hover_thumbnail_request_key: Option<String>,
     chapters_snapshot: Vec<Chapter>,
     modes: PlayModes,
     history: history::HistoryStore,
@@ -195,12 +196,20 @@ impl StatusToast {
 
 struct SeekHoverPreview {
     popover: gtk::Popover,
+    thumbnail: gtk::Picture,
+    thumbnail_snapshot: RefCell<Option<PathBuf>>,
     time_label: gtk::Label,
     chapter_label: gtk::Label,
 }
 
 impl SeekHoverPreview {
     fn new(seek: &gtk::Scale) -> Self {
+        let thumbnail = gtk::Picture::new();
+        thumbnail.add_css_class("okp-seek-preview-thumb");
+        thumbnail.set_size_request(144, 81);
+        thumbnail.set_can_shrink(true);
+        thumbnail.set_visible(false);
+
         let time_label = gtk::Label::new(Some("00:00"));
         time_label.add_css_class("okp-seek-preview-time");
 
@@ -211,6 +220,7 @@ impl SeekHoverPreview {
 
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
         content.add_css_class("okp-seek-preview");
+        content.append(&thumbnail);
         content.append(&time_label);
         content.append(&chapter_label);
 
@@ -223,15 +233,36 @@ impl SeekHoverPreview {
 
         Self {
             popover,
+            thumbnail,
+            thumbnail_snapshot: RefCell::new(None),
             time_label,
             chapter_label,
         }
     }
 
-    fn show(&self, seek: &gtk::Scale, x: f64, time: f64, chapter: Option<&Chapter>) {
+    fn show(
+        &self,
+        seek: &gtk::Scale,
+        x: f64,
+        time: f64,
+        chapter: Option<&Chapter>,
+        thumbnail: Option<PathBuf>,
+    ) {
         let width = seek.width().max(1);
         let height = seek.height().max(1);
         let x = x.clamp(0.0, f64::from(width)).round() as i32;
+        if let Some(thumbnail_path) = thumbnail {
+            let mut snapshot = self.thumbnail_snapshot.borrow_mut();
+            if snapshot.as_ref() != Some(&thumbnail_path) {
+                self.thumbnail.set_filename(Some(&thumbnail_path));
+                *snapshot = Some(thumbnail_path);
+            }
+            self.thumbnail.set_visible(true);
+        } else {
+            self.thumbnail.set_visible(false);
+            self.thumbnail_snapshot.borrow_mut().take();
+        }
+
         self.time_label.set_text(&format_time(time));
         if let Some(chapter) = chapter {
             let title = chapter
@@ -542,7 +573,7 @@ fn build_controls(
 
         glib::Propagation::Proceed
     });
-    connect_seek_hover(&seek, Rc::clone(&state));
+    connect_seek_hover(&seek, Rc::clone(&state), thumbnail_sender.clone());
 
     let volume_state = Rc::clone(&state);
     volume.connect_change_value(move |_, _, value| {
@@ -609,7 +640,11 @@ fn controls_bar(controls: &Controls) -> gtk::Box {
     bar
 }
 
-fn connect_seek_hover(seek: &gtk::Scale, state: Rc<RefCell<PlayerState>>) {
+fn connect_seek_hover(
+    seek: &gtk::Scale,
+    state: Rc<RefCell<PlayerState>>,
+    thumbnail_sender: mpsc::Sender<String>,
+) {
     let preview = Rc::new(SeekHoverPreview::new(seek));
     let motion = gtk::EventControllerMotion::new();
 
@@ -617,14 +652,27 @@ fn connect_seek_hover(seek: &gtk::Scale, state: Rc<RefCell<PlayerState>>) {
     let motion_state = Rc::clone(&state);
     let motion_preview = Rc::clone(&preview);
     motion.connect_motion(move |_, x, _| {
-        let Some((duration, chapters)) = seek_hover_snapshot(&motion_state) else {
+        let Some((media_path, duration, chapters)) = seek_hover_snapshot(&motion_state) else {
             motion_preview.hide();
             return;
         };
 
         let width = f64::from(motion_seek.width().max(1));
         let time = (x.clamp(0.0, width) / width * duration).clamp(0.0, duration);
-        motion_preview.show(&motion_seek, x, time, chapter_at_time(&chapters, time));
+        let thumbnail = hover_thumbnail_for_time(
+            &motion_state,
+            &media_path,
+            time,
+            duration,
+            &thumbnail_sender,
+        );
+        motion_preview.show(
+            &motion_seek,
+            x,
+            time,
+            chapter_at_time(&chapters, time),
+            thumbnail,
+        );
     });
 
     motion.connect_leave(move |_| {
@@ -634,9 +682,9 @@ fn connect_seek_hover(seek: &gtk::Scale, state: Rc<RefCell<PlayerState>>) {
     seek.add_controller(motion);
 }
 
-fn seek_hover_snapshot(state: &Rc<RefCell<PlayerState>>) -> Option<(f64, Vec<Chapter>)> {
+fn seek_hover_snapshot(state: &Rc<RefCell<PlayerState>>) -> Option<(PathBuf, f64, Vec<Chapter>)> {
     let state = state.borrow();
-    state.current_file.as_ref()?;
+    let current_file = state.current_file.clone()?;
 
     state
         .mpv
@@ -644,7 +692,7 @@ fn seek_hover_snapshot(state: &Rc<RefCell<PlayerState>>) -> Option<(f64, Vec<Cha
         .and_then(|mpv| mpv.playback_state().ok())
         .and_then(|playback| playback.duration)
         .filter(|duration| duration.is_finite() && *duration > 0.0)
-        .map(|duration| (duration, state.chapters_snapshot.clone()))
+        .map(|duration| (current_file, duration, state.chapters_snapshot.clone()))
 }
 
 fn chapter_at_time(chapters: &[Chapter], time: f64) -> Option<&Chapter> {
@@ -658,6 +706,41 @@ fn chapter_at_time(chapters: &[Chapter], time: f64) -> Option<&Chapter> {
     }
 
     current
+}
+
+fn hover_thumbnail_for_time(
+    state: &Rc<RefCell<PlayerState>>,
+    media_path: &Path,
+    time: f64,
+    duration: f64,
+    sender: &mpsc::Sender<String>,
+) -> Option<PathBuf> {
+    let thumbnail_time = thumbnails::hover_thumbnail_time(time, duration);
+    if let Some(path) = thumbnails::existing_hover_thumbnail_path(media_path, thumbnail_time) {
+        return Some(path);
+    }
+
+    let request_key = thumbnails::hover_request_key(media_path, thumbnail_time);
+    let should_start = {
+        let mut state = state.borrow_mut();
+        if state.hover_thumbnail_request_key.as_deref() == Some(request_key.as_str()) {
+            false
+        } else {
+            state.hover_thumbnail_request_key = Some(request_key.clone());
+            true
+        }
+    };
+
+    if should_start {
+        thumbnails::warm_hover_thumbnail(
+            media_path.to_path_buf(),
+            thumbnail_time,
+            request_key,
+            sender.clone(),
+        );
+    }
+
+    None
 }
 
 fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, launch_args: LaunchArgs) {
@@ -1816,6 +1899,7 @@ fn remember_loaded_media(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
         state.modes.reset_shuffle_order();
     }
     state.thumbnail_request_key = None;
+    state.hover_thumbnail_request_key = None;
     if let Some(current_index) = current_playlist_index(&state) {
         let playlist_len = state.playlist.len();
         state
@@ -2367,6 +2451,12 @@ fn install_css() {
             border-radius: 7px;
             background: rgba(14, 15, 18, 0.92);
             box-shadow: 0 10px 28px rgba(0, 0, 0, 0.34);
+        }
+
+        .okp-seek-preview-thumb {
+            margin-bottom: 6px;
+            border-radius: 5px;
+            background: rgba(255, 255, 255, 0.08);
         }
 
         .okp-seek-preview-time {
