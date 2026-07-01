@@ -12,7 +12,7 @@ use gtk::prelude::*;
 use okp_core::{AppIdentity, media_formats, natural_compare};
 use okp_mpv::{
     Chapter, InfoSection, InfoTrack, MediaInfo, Mpv, MpvEvent, Track, TrackKind,
-    current_render_target_size,
+    current_render_target_size, resolve_render_target_size,
 };
 use velopack::VelopackApp;
 
@@ -962,14 +962,18 @@ fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, launch
     video_area.connect_render(move |area, _context| {
         area.make_current();
         area.attach_buffers();
+        let viewport_size = current_render_target_size();
+        let widget_width = area.width();
+        let widget_height = area.height();
+        let scale_factor = area.scale_factor();
         let mut state = render_state.borrow_mut();
-        let target_size = state
-            .render_target_size
-            .or_else(current_render_target_size)
-            .unwrap_or(okp_mpv::RenderTargetSize {
-                width: area.width().max(1),
-                height: area.height().max(1),
-            });
+        let target_size = resolve_render_target_size(
+            viewport_size,
+            state.render_target_size,
+            widget_width,
+            widget_height,
+            scale_factor,
+        );
         if let Some(mpv) = state.mpv.as_mut()
             && let Err(error) = mpv.render(target_size.width, target_size.height)
         {

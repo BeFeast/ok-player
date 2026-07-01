@@ -16,6 +16,23 @@ pub struct RenderTargetSize {
     pub height: i32,
 }
 
+impl RenderTargetSize {
+    fn is_valid(self) -> bool {
+        self.width > 0 && self.height > 0
+    }
+
+    fn area(self) -> i64 {
+        i64::from(self.width) * i64::from(self.height)
+    }
+
+    fn max_components(self, other: RenderTargetSize) -> RenderTargetSize {
+        RenderTargetSize {
+            width: self.width.max(other.width),
+            height: self.height.max(other.height),
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PlaybackState {
     pub time_pos: Option<f64>,
@@ -931,6 +948,39 @@ pub fn current_render_target_size() -> Option<RenderTargetSize> {
     }
 }
 
+pub fn resolve_render_target_size(
+    viewport: Option<RenderTargetSize>,
+    resize: Option<RenderTargetSize>,
+    widget_width: i32,
+    widget_height: i32,
+    scale_factor: i32,
+) -> RenderTargetSize {
+    let widget_size = RenderTargetSize {
+        width: widget_width.max(1),
+        height: widget_height.max(1),
+    };
+    let scale_factor = scale_factor.max(1);
+    let scaled_widget_size = RenderTargetSize {
+        width: widget_size.width.saturating_mul(scale_factor),
+        height: widget_size.height.saturating_mul(scale_factor),
+    };
+
+    let mut target = resize
+        .filter(|size| size.is_valid())
+        .unwrap_or(widget_size)
+        .max_components(scaled_widget_size);
+
+    if let Some(viewport) = viewport.filter(|size| size.is_valid())
+        && viewport.width >= target.width
+        && viewport.height >= target.height
+        && viewport.area() >= target.area()
+    {
+        target = viewport;
+    }
+
+    target
+}
+
 impl Drop for Mpv {
     fn drop(&mut self) {
         self.destroy_render_context();
@@ -999,6 +1049,100 @@ mod tests {
         assert_eq!(format_duration(0.0), "00:00");
         assert_eq!(format_duration(125.2), "02:05");
         assert_eq!(format_duration(6906.0), "01:55:06");
+    }
+
+    #[test]
+    fn resolves_hidpi_logical_resize_to_scaled_widget_size() {
+        let target = resolve_render_target_size(
+            None,
+            Some(RenderTargetSize {
+                width: 1024,
+                height: 576,
+            }),
+            1024,
+            576,
+            2,
+        );
+
+        assert_eq!(
+            target,
+            RenderTargetSize {
+                width: 2048,
+                height: 1152,
+            }
+        );
+    }
+
+    #[test]
+    fn keeps_physical_resize_size_when_it_matches_scaled_widget() {
+        let target = resolve_render_target_size(
+            None,
+            Some(RenderTargetSize {
+                width: 2048,
+                height: 1152,
+            }),
+            1024,
+            576,
+            2,
+        );
+
+        assert_eq!(
+            target,
+            RenderTargetSize {
+                width: 2048,
+                height: 1152,
+            }
+        );
+    }
+
+    #[test]
+    fn prefers_larger_gl_viewport_for_fractional_or_backend_scaling() {
+        let target = resolve_render_target_size(
+            Some(RenderTargetSize {
+                width: 1536,
+                height: 864,
+            }),
+            Some(RenderTargetSize {
+                width: 1024,
+                height: 576,
+            }),
+            1024,
+            576,
+            1,
+        );
+
+        assert_eq!(
+            target,
+            RenderTargetSize {
+                width: 1536,
+                height: 864,
+            }
+        );
+    }
+
+    #[test]
+    fn ignores_too_small_gl_viewport_snapshot() {
+        let target = resolve_render_target_size(
+            Some(RenderTargetSize {
+                width: 640,
+                height: 360,
+            }),
+            Some(RenderTargetSize {
+                width: 1024,
+                height: 576,
+            }),
+            1024,
+            576,
+            2,
+        );
+
+        assert_eq!(
+            target,
+            RenderTargetSize {
+                width: 2048,
+                height: 1152,
+            }
+        );
     }
 
     #[test]
