@@ -26,6 +26,7 @@ struct PlayerState {
     pending_resume: Option<(PathBuf, f64)>,
     pending_preferences: Option<(PathBuf, history::PlaybackPreferences)>,
     thumbnail_request_key: Option<String>,
+    chapters_snapshot: Vec<Chapter>,
     modes: PlayModes,
     history: history::HistoryStore,
 }
@@ -189,6 +190,68 @@ impl StatusToast {
             glib::ControlFlow::Break
         });
         self.hide_source.borrow_mut().replace(source_id);
+    }
+}
+
+struct SeekHoverPreview {
+    popover: gtk::Popover,
+    time_label: gtk::Label,
+    chapter_label: gtk::Label,
+}
+
+impl SeekHoverPreview {
+    fn new(seek: &gtk::Scale) -> Self {
+        let time_label = gtk::Label::new(Some("00:00"));
+        time_label.add_css_class("okp-seek-preview-time");
+
+        let chapter_label = gtk::Label::new(None);
+        chapter_label.add_css_class("okp-seek-preview-chapter");
+        chapter_label.set_ellipsize(pango::EllipsizeMode::End);
+        chapter_label.set_max_width_chars(32);
+
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        content.add_css_class("okp-seek-preview");
+        content.append(&time_label);
+        content.append(&chapter_label);
+
+        let popover = gtk::Popover::new();
+        popover.set_autohide(false);
+        popover.set_has_arrow(false);
+        popover.set_position(gtk::PositionType::Top);
+        popover.set_child(Some(&content));
+        popover.set_parent(seek);
+
+        Self {
+            popover,
+            time_label,
+            chapter_label,
+        }
+    }
+
+    fn show(&self, seek: &gtk::Scale, x: f64, time: f64, chapter: Option<&Chapter>) {
+        let width = seek.width().max(1);
+        let height = seek.height().max(1);
+        let x = x.clamp(0.0, f64::from(width)).round() as i32;
+        self.time_label.set_text(&format_time(time));
+        if let Some(chapter) = chapter {
+            let title = chapter
+                .title
+                .as_deref()
+                .filter(|title| !title.is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("Chapter {}", chapter.index + 1));
+            self.chapter_label.set_text(&title);
+            self.chapter_label.set_visible(true);
+        } else {
+            self.chapter_label.set_visible(false);
+        }
+        self.popover
+            .set_pointing_to(Some(&gdk::Rectangle::new(x, 0, 1, height)));
+        self.popover.popup();
+    }
+
+    fn hide(&self) {
+        self.popover.popdown();
     }
 }
 
@@ -479,6 +542,7 @@ fn build_controls(
 
         glib::Propagation::Proceed
     });
+    connect_seek_hover(&seek, Rc::clone(&state));
 
     let volume_state = Rc::clone(&state);
     volume.connect_change_value(move |_, _, value| {
@@ -543,6 +607,57 @@ fn controls_bar(controls: &Controls) -> gtk::Box {
     bar.append(&controls.volume);
 
     bar
+}
+
+fn connect_seek_hover(seek: &gtk::Scale, state: Rc<RefCell<PlayerState>>) {
+    let preview = Rc::new(SeekHoverPreview::new(seek));
+    let motion = gtk::EventControllerMotion::new();
+
+    let motion_seek = seek.clone();
+    let motion_state = Rc::clone(&state);
+    let motion_preview = Rc::clone(&preview);
+    motion.connect_motion(move |_, x, _| {
+        let Some((duration, chapters)) = seek_hover_snapshot(&motion_state) else {
+            motion_preview.hide();
+            return;
+        };
+
+        let width = f64::from(motion_seek.width().max(1));
+        let time = (x.clamp(0.0, width) / width * duration).clamp(0.0, duration);
+        motion_preview.show(&motion_seek, x, time, chapter_at_time(&chapters, time));
+    });
+
+    motion.connect_leave(move |_| {
+        preview.hide();
+    });
+
+    seek.add_controller(motion);
+}
+
+fn seek_hover_snapshot(state: &Rc<RefCell<PlayerState>>) -> Option<(f64, Vec<Chapter>)> {
+    let state = state.borrow();
+    state.current_file.as_ref()?;
+
+    state
+        .mpv
+        .as_ref()
+        .and_then(|mpv| mpv.playback_state().ok())
+        .and_then(|playback| playback.duration)
+        .filter(|duration| duration.is_finite() && *duration > 0.0)
+        .map(|duration| (duration, state.chapters_snapshot.clone()))
+}
+
+fn chapter_at_time(chapters: &[Chapter], time: f64) -> Option<&Chapter> {
+    let mut current = None;
+    for chapter in chapters {
+        if chapter.time.is_finite() && chapter.time <= time {
+            current = Some(chapter);
+        } else {
+            break;
+        }
+    }
+
+    current
 }
 
 fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, launch_args: LaunchArgs) {
@@ -736,6 +851,13 @@ fn update_up_next_panel(controls: &Controls, state: &Rc<RefCell<PlayerState>>) {
         }
     };
     let is_visible = !snapshot.chapters.is_empty() || snapshot.playlist.len() > 1;
+
+    {
+        let mut state = state.borrow_mut();
+        if state.chapters_snapshot != snapshot.chapters {
+            state.chapters_snapshot = snapshot.chapters.clone();
+        }
+    }
 
     controls.up_next_panel.set_visible(is_visible);
     if !is_visible {
@@ -2238,6 +2360,26 @@ fn install_css() {
 
         .okp-seek {
             min-width: 260px;
+        }
+
+        .okp-seek-preview {
+            padding: 7px 10px;
+            border-radius: 7px;
+            background: rgba(14, 15, 18, 0.92);
+            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.34);
+        }
+
+        .okp-seek-preview-time {
+            color: rgba(255, 255, 255, 0.92);
+            font-size: 12px;
+            font-weight: 700;
+            font-feature-settings: 'tnum';
+        }
+
+        .okp-seek-preview-chapter {
+            margin-top: 2px;
+            color: rgba(255, 255, 255, 0.62);
+            font-size: 11px;
         }
 
         .okp-volume {
