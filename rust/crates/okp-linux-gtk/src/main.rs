@@ -588,6 +588,9 @@ fn populate_subtitle_popover(
     });
     content.append(&add_button);
 
+    content.append(&divider());
+    content.append(&subtitle_adjustment_rows(popover, parent, &state));
+
     popover.set_child(Some(&content));
 }
 
@@ -637,6 +640,125 @@ fn track_popover_content(title: &str) -> gtk::Box {
     title.set_xalign(0.0);
     content.append(&title);
     content
+}
+
+fn subtitle_adjustment_rows(
+    popover: &gtk::Popover,
+    parent: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
+) -> gtk::Box {
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
+
+    let (delay_seconds, scale) = read_subtitle_adjustments(state);
+    content.append(&subtitle_adjustment_row(
+        "Delay",
+        &format_delay(delay_seconds),
+        [
+            ("-50", SubtitleAdjustment::Delay(-0.05)),
+            ("Reset", SubtitleAdjustment::SetDelay(0.0)),
+            ("+50", SubtitleAdjustment::Delay(0.05)),
+        ],
+        popover,
+        parent,
+        state,
+    ));
+    content.append(&subtitle_adjustment_row(
+        "Size",
+        &format_scale(scale),
+        [
+            ("-", SubtitleAdjustment::Scale(-0.1)),
+            ("100%", SubtitleAdjustment::SetScale(1.0)),
+            ("+", SubtitleAdjustment::Scale(0.1)),
+        ],
+        popover,
+        parent,
+        state,
+    ));
+
+    content
+}
+
+#[derive(Clone, Copy)]
+enum SubtitleAdjustment {
+    Delay(f64),
+    SetDelay(f64),
+    Scale(f64),
+    SetScale(f64),
+}
+
+fn subtitle_adjustment_row(
+    title: &str,
+    value: &str,
+    actions: [(&str, SubtitleAdjustment); 3],
+    popover: &gtk::Popover,
+    parent: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
+) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    row.add_css_class("okp-sub-adjust-row");
+
+    let label = gtk::Label::new(Some(title));
+    label.add_css_class("okp-sub-adjust-label");
+    label.set_xalign(0.0);
+    label.set_width_chars(6);
+    row.append(&label);
+
+    let value_label = gtk::Label::new(Some(value));
+    value_label.add_css_class("okp-sub-adjust-value");
+    value_label.set_xalign(1.0);
+    value_label.set_width_chars(7);
+    row.append(&value_label);
+
+    for (text, adjustment) in actions {
+        let button = gtk::Button::with_label(text);
+        button.add_css_class("okp-sub-adjust-button");
+        let button_state = Rc::clone(state);
+        let button_popover = popover.clone();
+        let button_parent = parent.clone();
+        button.connect_clicked(move |_| {
+            apply_subtitle_adjustment(&button_state, adjustment);
+            populate_subtitle_popover(&button_popover, &button_parent, Rc::clone(&button_state));
+        });
+        row.append(&button);
+    }
+
+    row
+}
+
+fn read_subtitle_adjustments(state: &Rc<RefCell<PlayerState>>) -> (f64, f64) {
+    let values = {
+        let state = state.borrow();
+        state.mpv.as_ref().map(|mpv| {
+            (
+                mpv.subtitle_delay().unwrap_or(0.0),
+                mpv.subtitle_scale().unwrap_or(1.0),
+            )
+        })
+    };
+
+    values.unwrap_or((0.0, 1.0))
+}
+
+fn apply_subtitle_adjustment(state: &Rc<RefCell<PlayerState>>, adjustment: SubtitleAdjustment) {
+    with_mpv(state, |mpv| match adjustment {
+        SubtitleAdjustment::Delay(delta) => mpv.adjust_subtitle_delay(delta),
+        SubtitleAdjustment::SetDelay(value) => mpv.set_subtitle_delay(value),
+        SubtitleAdjustment::Scale(delta) => mpv.adjust_subtitle_scale(delta),
+        SubtitleAdjustment::SetScale(value) => mpv.set_subtitle_scale(value),
+    });
+}
+
+fn format_delay(seconds: f64) -> String {
+    let millis = (seconds * 1000.0).round() as i64;
+    if millis > 0 {
+        format!("+{millis} ms")
+    } else {
+        format!("{millis} ms")
+    }
+}
+
+fn format_scale(scale: f64) -> String {
+    format!("{:.0}%", scale * 100.0)
 }
 
 fn read_tracks(state: &Rc<RefCell<PlayerState>>) -> Vec<Track> {
@@ -854,6 +976,22 @@ fn connect_keyboard(window: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerSta
                 open_subtitle_dialog(&shortcut_window, Rc::clone(&state));
                 glib::Propagation::Stop
             }
+            gdk::Key::z => {
+                adjust_subtitle_delay(&state, 0.05);
+                glib::Propagation::Stop
+            }
+            gdk::Key::Z => {
+                adjust_subtitle_delay(&state, -0.05);
+                glib::Propagation::Stop
+            }
+            gdk::Key::bracketleft => {
+                adjust_subtitle_scale(&state, -0.1);
+                glib::Propagation::Stop
+            }
+            gdk::Key::bracketright => {
+                adjust_subtitle_scale(&state, 0.1);
+                glib::Propagation::Stop
+            }
             gdk::Key::f | gdk::Key::F => {
                 toggle_fullscreen(&shortcut_window);
                 glib::Propagation::Stop
@@ -884,6 +1022,14 @@ fn adjust_volume(state: &Rc<RefCell<PlayerState>>, delta: f64) {
         let volume = mpv.playback_state()?.volume.unwrap_or(100.0);
         mpv.set_volume(volume + delta)
     });
+}
+
+fn adjust_subtitle_delay(state: &Rc<RefCell<PlayerState>>, delta_seconds: f64) {
+    with_mpv(state, |mpv| mpv.adjust_subtitle_delay(delta_seconds));
+}
+
+fn adjust_subtitle_scale(state: &Rc<RefCell<PlayerState>>, delta: f64) {
+    with_mpv(state, |mpv| mpv.adjust_subtitle_scale(delta));
 }
 
 fn toggle_fullscreen(window: &gtk::ApplicationWindow) {
@@ -1212,6 +1358,34 @@ fn install_css() {
 
         .okp-track-divider {
             margin: 5px 3px;
+        }
+
+        .okp-sub-adjust-row {
+            margin: 0 2px;
+        }
+
+        .okp-sub-adjust-label {
+            color: rgba(255, 255, 255, 0.62);
+            font-size: 12px;
+        }
+
+        .okp-sub-adjust-value {
+            color: rgba(255, 255, 255, 0.9);
+            font-size: 12px;
+            font-feature-settings: 'tnum';
+        }
+
+        .okp-sub-adjust-button {
+            min-width: 44px;
+            min-height: 28px;
+            padding: 4px 7px;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.08);
+            color: rgba(255, 255, 255, 0.86);
+        }
+
+        .okp-sub-adjust-button:hover {
+            background: rgba(255, 255, 255, 0.13);
         }
         ",
     );

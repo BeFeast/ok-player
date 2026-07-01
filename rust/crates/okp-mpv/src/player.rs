@@ -229,6 +229,32 @@ impl Mpv {
         self.command(&["set", "aid", &value])
     }
 
+    pub fn subtitle_delay(&self) -> Result<f64, MpvError> {
+        Ok(self.get_double("sub-delay")?.unwrap_or(0.0))
+    }
+
+    pub fn set_subtitle_delay(&self, seconds: f64) -> Result<(), MpvError> {
+        self.set_double("sub-delay", seconds.clamp(-600.0, 600.0))
+    }
+
+    pub fn adjust_subtitle_delay(&self, delta_seconds: f64) -> Result<(), MpvError> {
+        let delay = self.subtitle_delay()?;
+        self.set_subtitle_delay(delay + delta_seconds)
+    }
+
+    pub fn subtitle_scale(&self) -> Result<f64, MpvError> {
+        Ok(self.get_double("sub-scale")?.unwrap_or(1.0))
+    }
+
+    pub fn set_subtitle_scale(&self, scale: f64) -> Result<(), MpvError> {
+        self.set_double("sub-scale", scale.clamp(0.25, 4.0))
+    }
+
+    pub fn adjust_subtitle_scale(&self, delta: f64) -> Result<(), MpvError> {
+        let scale = self.subtitle_scale()?;
+        self.set_subtitle_scale(scale + delta)
+    }
+
     pub fn drain_events(&self) -> Vec<MpvEvent> {
         let mut events = Vec::new();
 
