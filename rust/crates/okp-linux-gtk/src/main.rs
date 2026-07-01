@@ -2,6 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::env;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::mpsc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gtk::gdk;
@@ -13,6 +14,7 @@ use okp_mpv::{Chapter, Mpv, MpvEvent, Track, TrackKind};
 use velopack::VelopackApp;
 
 mod history;
+mod thumbnails;
 
 #[derive(Default)]
 struct PlayerState {
@@ -22,6 +24,7 @@ struct PlayerState {
     pending_subtitles: Vec<PathBuf>,
     pending_resume: Option<(PathBuf, f64)>,
     pending_preferences: Option<(PathBuf, history::PlaybackPreferences)>,
+    thumbnail_request_key: Option<String>,
     modes: PlayModes,
     history: history::HistoryStore,
 }
@@ -130,6 +133,8 @@ struct Controls {
     up_next_list: gtk::ListBox,
     side_panel_snapshot: RefCell<SidePanelSnapshot>,
     side_panel_actions: Rc<RefCell<Vec<SidePanelAction>>>,
+    thumbnail_sender: mpsc::Sender<String>,
+    thumbnail_events: RefCell<mpsc::Receiver<String>>,
 }
 
 #[derive(Clone, Default, PartialEq)]
@@ -317,6 +322,7 @@ fn build_controls(
     let up_next_state = Rc::clone(&state);
     let up_next_actions = Rc::new(RefCell::new(Vec::<SidePanelAction>::new()));
     let row_actions = Rc::clone(&up_next_actions);
+    let (thumbnail_sender, thumbnail_receiver) = mpsc::channel();
     up_next_list.connect_row_activated(move |_, row| {
         let index = row.index();
         if index < 0 {
@@ -437,6 +443,8 @@ fn build_controls(
         up_next_list,
         side_panel_snapshot: RefCell::new(SidePanelSnapshot::default()),
         side_panel_actions: up_next_actions,
+        thumbnail_sender,
+        thumbnail_events: RefCell::new(thumbnail_receiver),
     }
 }
 
@@ -547,6 +555,7 @@ fn connect_state_poll(
             .and_then(|mpv| mpv.playback_state().ok());
         let has_media = state.borrow().current_file.is_some();
         let has_playlist = state.borrow().playlist.len() > 1;
+        drain_thumbnail_events(&controls);
         update_up_next_panel(&controls, &state);
         update_mode_buttons(&controls, &state);
 
@@ -664,6 +673,8 @@ fn update_up_next_panel(controls: &Controls, state: &Rc<RefCell<PlayerState>>) {
         return;
     }
 
+    request_chapter_thumbnail_warm(controls, state, &snapshot);
+
     if *controls.side_panel_snapshot.borrow() == snapshot {
         return;
     }
@@ -691,7 +702,13 @@ fn update_up_next_panel(controls: &Controls, state: &Rc<RefCell<PlayerState>>) {
         actions.push(SidePanelAction::None);
 
         for chapter in &snapshot.chapters {
-            controls.up_next_list.append(&chapter_row(chapter));
+            let thumbnail = snapshot
+                .current_file
+                .as_ref()
+                .and_then(|path| thumbnails::existing_thumbnail_path(path, chapter));
+            controls
+                .up_next_list
+                .append(&chapter_row(chapter, thumbnail));
             actions.push(SidePanelAction::Chapter(chapter.time));
         }
     }
@@ -712,6 +729,52 @@ fn update_up_next_panel(controls: &Controls, state: &Rc<RefCell<PlayerState>>) {
     }
 
     controls.side_panel_actions.replace(actions);
+}
+
+fn drain_thumbnail_events(controls: &Controls) {
+    let mut changed = false;
+    while controls.thumbnail_events.borrow().try_recv().is_ok() {
+        changed = true;
+    }
+
+    if changed {
+        controls
+            .side_panel_snapshot
+            .replace(SidePanelSnapshot::default());
+    }
+}
+
+fn request_chapter_thumbnail_warm(
+    controls: &Controls,
+    state: &Rc<RefCell<PlayerState>>,
+    snapshot: &SidePanelSnapshot,
+) {
+    let Some(media_path) = snapshot.current_file.as_ref() else {
+        return;
+    };
+    if snapshot.chapters.is_empty() {
+        return;
+    }
+
+    let key = thumbnails::request_key(media_path, &snapshot.chapters);
+    let should_start = {
+        let mut state = state.borrow_mut();
+        if state.thumbnail_request_key.as_deref() == Some(key.as_str()) {
+            false
+        } else {
+            state.thumbnail_request_key = Some(key.clone());
+            true
+        }
+    };
+
+    if should_start {
+        thumbnails::warm_chapter_thumbnails(
+            media_path.clone(),
+            snapshot.chapters.clone(),
+            key,
+            controls.thumbnail_sender.clone(),
+        );
+    }
 }
 
 fn update_chapter_marks(seek: &gtk::Scale, snapshot: &RefCell<Vec<f64>>, chapters: &[Chapter]) {
@@ -744,7 +807,7 @@ fn panel_heading_row(text: &str) -> gtk::ListBoxRow {
     row
 }
 
-fn chapter_row(chapter: &Chapter) -> gtk::ListBoxRow {
+fn chapter_row(chapter: &Chapter, thumbnail: Option<PathBuf>) -> gtk::ListBoxRow {
     let row = gtk::ListBoxRow::new();
     row.add_css_class("okp-up-next-row");
     row.set_selectable(false);
@@ -752,10 +815,15 @@ fn chapter_row(chapter: &Chapter) -> gtk::ListBoxRow {
     let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     row_box.set_hexpand(true);
 
-    let time = gtk::Label::new(Some(&format_time(chapter.time)));
-    time.add_css_class("okp-up-next-marker");
-    time.set_width_chars(6);
-    time.set_xalign(0.0);
+    let thumbnail_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    thumbnail_box.add_css_class("okp-chapter-thumb");
+    thumbnail_box.set_size_request(88, 50);
+    if let Some(thumbnail) = thumbnail {
+        let picture = gtk::Picture::for_filename(thumbnail);
+        picture.set_size_request(88, 50);
+        picture.set_can_shrink(true);
+        thumbnail_box.append(&picture);
+    }
 
     let title_text = chapter
         .title
@@ -763,14 +831,24 @@ fn chapter_row(chapter: &Chapter) -> gtk::ListBoxRow {
         .filter(|title| !title.is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| format!("Chapter {}", chapter.index + 1));
+
+    let label_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    label_box.set_hexpand(true);
+
+    let time = gtk::Label::new(Some(&format_time(chapter.time)));
+    time.add_css_class("okp-up-next-marker");
+    time.set_xalign(0.0);
+
     let title = gtk::Label::new(Some(&title_text));
     title.add_css_class("okp-up-next-file");
     title.set_xalign(0.0);
     title.set_hexpand(true);
     title.set_ellipsize(pango::EllipsizeMode::End);
 
-    row_box.append(&time);
-    row_box.append(&title);
+    label_box.append(&time);
+    label_box.append(&title);
+    row_box.append(&thumbnail_box);
+    row_box.append(&label_box);
     row.set_child(Some(&row_box));
     row
 }
@@ -1485,6 +1563,7 @@ fn remember_loaded_media(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
     if playlist_changed {
         state.modes.reset_shuffle_order();
     }
+    state.thumbnail_request_key = None;
     if let Some(current_index) = current_playlist_index(&state) {
         let playlist_len = state.playlist.len();
         state
@@ -2057,6 +2136,13 @@ fn install_css() {
             padding: 8px 10px;
             border-radius: 7px;
             color: rgba(255, 255, 255, 0.78);
+        }
+
+        .okp-chapter-thumb {
+            min-width: 88px;
+            min-height: 50px;
+            border-radius: 5px;
+            background: rgba(255, 255, 255, 0.08);
         }
 
         .okp-up-next-row:hover {
