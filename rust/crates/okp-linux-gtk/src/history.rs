@@ -16,6 +16,50 @@ pub struct HistoryStore {
     dirty: bool,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PlaybackPreferences {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_track_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle_track_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle_delay: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle_scale: Option<f64>,
+}
+
+impl PlaybackPreferences {
+    fn is_empty(&self) -> bool {
+        self.audio_enabled.is_none()
+            && self.audio_track_id.is_none()
+            && self.subtitle_enabled.is_none()
+            && self.subtitle_track_id.is_none()
+            && self.subtitle_delay.is_none()
+            && self.subtitle_scale.is_none()
+    }
+
+    fn merge(&mut self, updated: PlaybackPreferences) {
+        if updated.audio_enabled.is_some() {
+            self.audio_enabled = updated.audio_enabled;
+            self.audio_track_id = updated.audio_track_id;
+        }
+        if updated.subtitle_enabled.is_some() {
+            self.subtitle_enabled = updated.subtitle_enabled;
+            self.subtitle_track_id = updated.subtitle_track_id;
+        }
+        if updated.subtitle_delay.is_some() {
+            self.subtitle_delay = updated.subtitle_delay;
+        }
+        if updated.subtitle_scale.is_some() {
+            self.subtitle_scale = updated.subtitle_scale;
+        }
+    }
+}
+
 impl Default for HistoryStore {
     fn default() -> Self {
         Self::open()
@@ -60,6 +104,12 @@ impl HistoryStore {
             position.clamp(0.0, duration)
         };
 
+        let preferences = self
+            .data
+            .files
+            .get(&key)
+            .map(|record| record.preferences.clone())
+            .unwrap_or_default();
         self.data.files.insert(
             key,
             HistoryRecord {
@@ -67,6 +117,7 @@ impl HistoryStore {
                 duration,
                 finished: finished || (existing_finished && final_stretch),
                 updated_at_unix: unix_now(),
+                preferences,
             },
         );
         self.dirty = true;
@@ -85,6 +136,31 @@ impl HistoryStore {
         }
 
         Some(record.position)
+    }
+
+    pub fn record_preferences(&mut self, path: &Path, preferences: PlaybackPreferences) {
+        if preferences.is_empty() {
+            return;
+        }
+
+        let key = history_key(path);
+        let mut record = self
+            .data
+            .files
+            .remove(&key)
+            .unwrap_or_else(HistoryRecord::empty);
+        record.preferences.merge(preferences);
+        record.updated_at_unix = unix_now();
+        self.data.files.insert(key, record);
+        self.dirty = true;
+    }
+
+    pub fn playback_preferences(&self, path: &Path) -> Option<PlaybackPreferences> {
+        self.data
+            .files
+            .get(&history_key(path))
+            .map(|record| record.preferences.clone())
+            .filter(|preferences| !preferences.is_empty())
     }
 
     pub fn save(&mut self) -> io::Result<()> {
@@ -117,6 +193,20 @@ struct HistoryRecord {
     duration: f64,
     finished: bool,
     updated_at_unix: i64,
+    #[serde(default, skip_serializing_if = "PlaybackPreferences::is_empty")]
+    preferences: PlaybackPreferences,
+}
+
+impl HistoryRecord {
+    fn empty() -> Self {
+        Self {
+            position: 0.0,
+            duration: 0.0,
+            finished: false,
+            updated_at_unix: unix_now(),
+            preferences: PlaybackPreferences::default(),
+        }
+    }
 }
 
 pub fn completion_start(duration: f64) -> f64 {
@@ -199,5 +289,68 @@ mod tests {
         history.record(path, 599.0, 600.0, true);
 
         assert_eq!(history.resume_position(path), None);
+    }
+
+    #[test]
+    fn preserves_preferences_when_progress_is_updated() {
+        let mut history = store();
+        let path = Path::new("/media/movie.mkv");
+
+        history.record_preferences(
+            path,
+            PlaybackPreferences {
+                subtitle_enabled: Some(true),
+                subtitle_track_id: Some(3),
+                subtitle_delay: Some(0.25),
+                ..PlaybackPreferences::default()
+            },
+        );
+        history.record(path, 120.0, 600.0, false);
+
+        assert_eq!(
+            history.playback_preferences(path),
+            Some(PlaybackPreferences {
+                subtitle_enabled: Some(true),
+                subtitle_track_id: Some(3),
+                subtitle_delay: Some(0.25),
+                ..PlaybackPreferences::default()
+            })
+        );
+    }
+
+    #[test]
+    fn merges_preference_updates_without_clearing_unrelated_fields() {
+        let mut history = store();
+        let path = Path::new("/media/movie.mkv");
+
+        history.record_preferences(
+            path,
+            PlaybackPreferences {
+                audio_enabled: Some(true),
+                audio_track_id: Some(1),
+                subtitle_delay: Some(0.25),
+                ..PlaybackPreferences::default()
+            },
+        );
+        history.record_preferences(
+            path,
+            PlaybackPreferences {
+                subtitle_enabled: Some(false),
+                subtitle_scale: Some(1.2),
+                ..PlaybackPreferences::default()
+            },
+        );
+
+        assert_eq!(
+            history.playback_preferences(path),
+            Some(PlaybackPreferences {
+                audio_enabled: Some(true),
+                audio_track_id: Some(1),
+                subtitle_enabled: Some(false),
+                subtitle_delay: Some(0.25),
+                subtitle_scale: Some(1.2),
+                ..PlaybackPreferences::default()
+            })
+        );
     }
 }

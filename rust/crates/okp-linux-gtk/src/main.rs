@@ -21,6 +21,7 @@ struct PlayerState {
     playlist: Vec<PathBuf>,
     pending_subtitles: Vec<PathBuf>,
     pending_resume: Option<(PathBuf, f64)>,
+    pending_preferences: Option<(PathBuf, history::PlaybackPreferences)>,
     history: history::HistoryStore,
 }
 
@@ -562,7 +563,9 @@ fn populate_subtitle_popover(
     let off_state = Rc::clone(&state);
     let off_popover = popover.clone();
     off_button.connect_clicked(move |_| {
-        with_mpv(&off_state, |mpv| mpv.select_subtitle(None));
+        if with_mpv(&off_state, |mpv| mpv.select_subtitle(None)) {
+            save_current_preferences(&off_state);
+        }
         off_popover.popdown();
     });
     content.append(&off_button);
@@ -576,7 +579,9 @@ fn populate_subtitle_popover(
             let track_popover = popover.clone();
             let track_id = track.id;
             button.connect_clicked(move |_| {
-                with_mpv(&track_state, |mpv| mpv.select_subtitle(Some(track_id)));
+                if with_mpv(&track_state, |mpv| mpv.select_subtitle(Some(track_id))) {
+                    save_current_preferences(&track_state);
+                }
                 track_popover.popdown();
             });
             content.append(&button);
@@ -612,7 +617,9 @@ fn populate_audio_popover(popover: &gtk::Popover, state: Rc<RefCell<PlayerState>
     let off_state = Rc::clone(&state);
     let off_popover = popover.clone();
     off_button.connect_clicked(move |_| {
-        with_mpv(&off_state, |mpv| mpv.select_audio(None));
+        if with_mpv(&off_state, |mpv| mpv.select_audio(None)) {
+            save_current_preferences(&off_state);
+        }
         off_popover.popdown();
     });
     content.append(&off_button);
@@ -626,7 +633,9 @@ fn populate_audio_popover(popover: &gtk::Popover, state: Rc<RefCell<PlayerState>
             let track_popover = popover.clone();
             let track_id = track.id;
             button.connect_clicked(move |_| {
-                with_mpv(&track_state, |mpv| mpv.select_audio(Some(track_id)));
+                if with_mpv(&track_state, |mpv| mpv.select_audio(Some(track_id))) {
+                    save_current_preferences(&track_state);
+                }
                 track_popover.popdown();
             });
             content.append(&button);
@@ -746,12 +755,14 @@ fn read_subtitle_adjustments(state: &Rc<RefCell<PlayerState>>) -> (f64, f64) {
 }
 
 fn apply_subtitle_adjustment(state: &Rc<RefCell<PlayerState>>, adjustment: SubtitleAdjustment) {
-    with_mpv(state, |mpv| match adjustment {
+    if with_mpv(state, |mpv| match adjustment {
         SubtitleAdjustment::Delay(delta) => mpv.adjust_subtitle_delay(delta),
         SubtitleAdjustment::SetDelay(value) => mpv.set_subtitle_delay(value),
         SubtitleAdjustment::Scale(delta) => mpv.adjust_subtitle_scale(delta),
         SubtitleAdjustment::SetScale(value) => mpv.set_subtitle_scale(value),
-    });
+    }) {
+        save_current_preferences(state);
+    }
 }
 
 fn format_delay(seconds: f64) -> String {
@@ -856,11 +867,13 @@ fn drain_mpv_events(state: &Rc<RefCell<PlayerState>>) {
     };
 
     for event in events {
-        if let MpvEvent::EndFile { reason } = event
-            && reason.is_eof()
-        {
-            save_current_progress(state, true);
-            advance_playlist_on_eof(state);
+        match event {
+            MpvEvent::FileLoaded => try_pending_playback_preferences(state),
+            MpvEvent::EndFile { reason } if reason.is_eof() => {
+                save_current_progress(state, true);
+                advance_playlist_on_eof(state);
+            }
+            _ => {}
         }
     }
 }
@@ -1030,12 +1043,15 @@ fn connect_progress_persistence(window: &gtk::ApplicationWindow, state: Rc<RefCe
 fn with_mpv(
     state: &Rc<RefCell<PlayerState>>,
     command: impl FnOnce(&Mpv) -> Result<(), okp_mpv::MpvError>,
-) {
+) -> bool {
     if let Some(mpv) = state.borrow().mpv.as_ref()
         && let Err(error) = command(mpv)
     {
         eprintln!("mpv command failed: {error}");
+        return false;
     }
+
+    state.borrow().mpv.is_some()
 }
 
 fn adjust_volume(state: &Rc<RefCell<PlayerState>>, delta: f64) {
@@ -1046,11 +1062,15 @@ fn adjust_volume(state: &Rc<RefCell<PlayerState>>, delta: f64) {
 }
 
 fn adjust_subtitle_delay(state: &Rc<RefCell<PlayerState>>, delta_seconds: f64) {
-    with_mpv(state, |mpv| mpv.adjust_subtitle_delay(delta_seconds));
+    if with_mpv(state, |mpv| mpv.adjust_subtitle_delay(delta_seconds)) {
+        save_current_preferences(state);
+    }
 }
 
 fn adjust_subtitle_scale(state: &Rc<RefCell<PlayerState>>, delta: f64) {
-    with_mpv(state, |mpv| mpv.adjust_subtitle_scale(delta));
+    if with_mpv(state, |mpv| mpv.adjust_subtitle_scale(delta)) {
+        save_current_preferences(state);
+    }
 }
 
 fn toggle_fullscreen(window: &gtk::ApplicationWindow) {
@@ -1088,12 +1108,15 @@ fn load_media_path_internal(state: &Rc<RefCell<PlayerState>>, path: PathBuf, sav
 fn remember_loaded_media(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
     let playlist = build_folder_playlist(&path);
     let resume_path = path.clone();
+    let preferences_path = path.clone();
     let mut state = state.borrow_mut();
     let resume = state.history.resume_position(&path);
+    let preferences = state.history.playback_preferences(&path);
     state.current_file = Some(path);
     state.playlist = playlist;
     state.pending_subtitles.clear();
     state.pending_resume = resume.map(|position| (resume_path, position));
+    state.pending_preferences = preferences.map(|preferences| (preferences_path, preferences));
 }
 
 fn navigate_playlist(state: &Rc<RefCell<PlayerState>>, direction: isize) -> bool {
@@ -1198,6 +1221,129 @@ fn try_pending_resume(state: &Rc<RefCell<PlayerState>>, duration: f64) {
     }
 }
 
+fn try_pending_playback_preferences(state: &Rc<RefCell<PlayerState>>) {
+    let pending = {
+        let state = state.borrow();
+        state.pending_preferences.clone()
+    };
+    let Some((path, preferences)) = pending else {
+        return;
+    };
+
+    let is_current = state
+        .borrow()
+        .current_file
+        .as_ref()
+        .is_some_and(|current| current == &path);
+    if !is_current {
+        state.borrow_mut().pending_preferences = None;
+        return;
+    }
+
+    let result = {
+        let state = state.borrow();
+        state
+            .mpv
+            .as_ref()
+            .map(|mpv| apply_playback_preferences(mpv, &preferences))
+    };
+
+    match result {
+        Some(Ok(())) => state.borrow_mut().pending_preferences = None,
+        Some(Err(error)) => eprintln!("Failed to restore playback preferences: {error}"),
+        None => {}
+    }
+}
+
+fn apply_playback_preferences(
+    mpv: &Mpv,
+    preferences: &history::PlaybackPreferences,
+) -> Result<(), okp_mpv::MpvError> {
+    let tracks = mpv.tracks()?;
+
+    if let Some(enabled) = preferences.audio_enabled {
+        if !enabled {
+            mpv.select_audio(None)?;
+        } else if let Some(track_id) = preferences.audio_track_id
+            && tracks
+                .iter()
+                .any(|track| track.kind == TrackKind::Audio && track.id == track_id)
+        {
+            mpv.select_audio(Some(track_id))?;
+        }
+    }
+
+    if let Some(enabled) = preferences.subtitle_enabled {
+        if !enabled {
+            mpv.select_subtitle(None)?;
+        } else if let Some(track_id) = preferences.subtitle_track_id
+            && tracks
+                .iter()
+                .any(|track| track.kind == TrackKind::Subtitle && track.id == track_id)
+        {
+            mpv.select_subtitle(Some(track_id))?;
+        }
+    }
+
+    if let Some(delay) = preferences.subtitle_delay.and_then(finite_option) {
+        mpv.set_subtitle_delay(delay)?;
+    }
+    if let Some(scale) = preferences.subtitle_scale.and_then(finite_option) {
+        mpv.set_subtitle_scale(scale)?;
+    }
+
+    Ok(())
+}
+
+fn save_current_preferences(state: &Rc<RefCell<PlayerState>>) {
+    let snapshot = {
+        let state = state.borrow();
+        let Some(path) = state.current_file.clone() else {
+            return;
+        };
+        let Some(preferences) = state.mpv.as_ref().map(read_current_playback_preferences) else {
+            return;
+        };
+
+        (path, preferences)
+    };
+
+    let (path, preferences) = snapshot;
+    let mut state = state.borrow_mut();
+    state.history.record_preferences(&path, preferences);
+    if let Err(error) = state.history.save() {
+        eprintln!("Failed to save playback preferences: {error}");
+    }
+}
+
+fn read_current_playback_preferences(mpv: &Mpv) -> history::PlaybackPreferences {
+    let tracks = mpv.tracks().unwrap_or_else(|error| {
+        eprintln!("Failed to read tracks for preferences: {error}");
+        Vec::new()
+    });
+    let selected_audio = tracks
+        .iter()
+        .find(|track| track.kind == TrackKind::Audio && track.selected);
+    let selected_subtitle = tracks
+        .iter()
+        .find(|track| track.kind == TrackKind::Subtitle && track.selected);
+    let has_audio_tracks = tracks.iter().any(|track| track.kind == TrackKind::Audio);
+    let has_subtitle_tracks = tracks.iter().any(|track| track.kind == TrackKind::Subtitle);
+
+    history::PlaybackPreferences {
+        audio_enabled: has_audio_tracks.then_some(selected_audio.is_some()),
+        audio_track_id: selected_audio.map(|track| track.id),
+        subtitle_enabled: has_subtitle_tracks.then_some(selected_subtitle.is_some()),
+        subtitle_track_id: selected_subtitle.map(|track| track.id),
+        subtitle_delay: mpv.subtitle_delay().ok().and_then(finite_option),
+        subtitle_scale: mpv.subtitle_scale().ok().and_then(finite_option),
+    }
+}
+
+fn finite_option(value: f64) -> Option<f64> {
+    value.is_finite().then_some(value)
+}
+
 fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: bool) {
     let snapshot = {
         let state = state.borrow();
@@ -1207,11 +1353,16 @@ fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: bool) {
         let Some(playback) = state.mpv.as_ref().and_then(|mpv| mpv.playback_state().ok()) else {
             return;
         };
+        let preferences = state
+            .mpv
+            .as_ref()
+            .map(read_current_playback_preferences)
+            .unwrap_or_default();
 
-        (path, playback)
+        (path, playback, preferences)
     };
 
-    let (path, playback) = snapshot;
+    let (path, playback, preferences) = snapshot;
     let Some(duration) = playback.duration else {
         return;
     };
@@ -1224,6 +1375,7 @@ fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: bool) {
     state
         .history
         .record(&path, position.clamp(0.0, duration), duration, finished);
+    state.history.record_preferences(&path, preferences);
     if let Err(error) = state.history.save() {
         eprintln!("Failed to save history: {error}");
     }
