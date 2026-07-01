@@ -142,7 +142,9 @@ struct Controls {
     previous_button: gtk::Button,
     play_button: gtk::Button,
     next_button: gtk::Button,
+    chapters_button: gtk::Button,
     screenshot_button: gtk::Button,
+    fullscreen_button: gtk::Button,
     more_button: gtk::MenuButton,
     seek: gtk::Scale,
     elapsed_label: gtk::Label,
@@ -152,6 +154,8 @@ struct Controls {
     up_next_revealer: gtk::Revealer,
     up_next_title: gtk::Label,
     up_next_list: gtk::ListBox,
+    side_panel_user_visible: Rc<Cell<bool>>,
+    side_panel_pinned: Rc<Cell<bool>>,
     side_panel_snapshot: RefCell<SidePanelSnapshot>,
     side_panel_actions: Rc<RefCell<Vec<SidePanelAction>>>,
     thumbnail_sender: mpsc::Sender<String>,
@@ -477,6 +481,7 @@ impl SeekHoverPreview {
 
 #[derive(Clone, Default, PartialEq)]
 struct SidePanelSnapshot {
+    has_media: bool,
     current_file: Option<PathBuf>,
     playlist: Vec<PathBuf>,
     chapters: Vec<Chapter>,
@@ -596,6 +601,7 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
     );
     connect_progress_persistence(&window, Rc::clone(&state));
     connect_state_poll(
+        &window,
         Rc::clone(&state),
         controls,
         Rc::clone(&updating_seek),
@@ -727,6 +733,15 @@ fn build_controls(
     next_button.set_tooltip_text(Some("Next item (Page Down)"));
     next_button.set_sensitive(false);
 
+    let chapters_button = gtk::Button::builder()
+        .icon_name("view-list-symbolic")
+        .build();
+    chapters_button.set_has_frame(false);
+    chapters_button.add_css_class("okp-control-button");
+    chapters_button.add_css_class("okp-icon-button");
+    chapters_button.set_tooltip_text(Some("Chapters / Up Next"));
+    chapters_button.set_sensitive(false);
+
     let screenshot_button = gtk::Button::builder()
         .icon_name("camera-photo-symbolic")
         .build();
@@ -735,6 +750,15 @@ fn build_controls(
     screenshot_button.add_css_class("okp-icon-button");
     screenshot_button.set_tooltip_text(Some("Save screenshot to Pictures/OK Player (C)"));
     screenshot_button.set_sensitive(false);
+
+    let fullscreen_button = gtk::Button::builder()
+        .icon_name("view-fullscreen-symbolic")
+        .build();
+    fullscreen_button.set_has_frame(false);
+    fullscreen_button.add_css_class("okp-control-button");
+    fullscreen_button.add_css_class("okp-icon-button");
+    fullscreen_button.set_tooltip_text(Some("Enter Fullscreen (F)"));
+    fullscreen_button.set_sensitive(false);
 
     let more_button = gtk::MenuButton::builder()
         .icon_name("view-more-symbolic")
@@ -790,6 +814,9 @@ fn build_controls(
     up_next_revealer.set_can_target(true);
     up_next_revealer.set_visible(false);
     up_next_revealer.set_child(Some(&up_next_panel));
+
+    let side_panel_user_visible = Rc::new(Cell::new(false));
+    let side_panel_pinned = Rc::new(Cell::new(false));
 
     let up_next_state = Rc::clone(&state);
     let up_next_actions = Rc::new(RefCell::new(Vec::<SidePanelAction>::new()));
@@ -889,10 +916,29 @@ fn build_controls(
         navigate_playlist(&next_state, 1);
     });
 
+    let chapters_panel = up_next_revealer.clone();
+    let chapters_toggle = chapters_button.clone();
+    let chapters_visible = Rc::clone(&side_panel_user_visible);
+    let chapters_pinned = Rc::clone(&side_panel_pinned);
+    let chapters_chrome = Rc::clone(&chrome);
+    chapters_button.connect_clicked(move |_| {
+        set_side_panel_user_visible(
+            &chapters_panel,
+            &chapters_toggle,
+            &chapters_visible,
+            &chapters_pinned,
+            &chapters_chrome,
+            !chapters_visible.get(),
+        );
+    });
+
     let screenshot_state = Rc::clone(&state);
     let screenshot_toast = Rc::clone(&status_toast);
     screenshot_button
         .connect_clicked(move |_| take_screenshot(&screenshot_state, &screenshot_toast));
+
+    let fullscreen_parent = window.clone();
+    fullscreen_button.connect_clicked(move |_| toggle_fullscreen(&fullscreen_parent));
 
     let seek_state = Rc::clone(&state);
     seek.connect_change_value(move |_, _, value| {
@@ -924,7 +970,9 @@ fn build_controls(
         previous_button,
         play_button,
         next_button,
+        chapters_button,
         screenshot_button,
+        fullscreen_button,
         more_button,
         seek,
         elapsed_label,
@@ -934,6 +982,8 @@ fn build_controls(
         up_next_revealer,
         up_next_title,
         up_next_list,
+        side_panel_user_visible,
+        side_panel_pinned,
         side_panel_snapshot: RefCell::new(SidePanelSnapshot::default()),
         side_panel_actions: up_next_actions,
         thumbnail_sender,
@@ -974,7 +1024,9 @@ fn controls_bar(controls: &Controls) -> gtk::Box {
     secondary.append(&controls.speed_button);
     secondary.append(&controls.subtitle_button);
     secondary.append(&controls.audio_button);
+    secondary.append(&controls.chapters_button);
     secondary.append(&controls.screenshot_button);
+    secondary.append(&controls.fullscreen_button);
     secondary.append(&controls.more_button);
 
     bar.append(&primary);
@@ -1001,6 +1053,45 @@ fn connect_popover_chrome_pin(popover: &gtk::Popover, chrome: Rc<ChromeVisibilit
     popover.connect_closed(move |_| {
         chrome.unpin();
     });
+}
+
+fn set_side_panel_user_visible(
+    revealer: &gtk::Revealer,
+    toggle: &gtk::Button,
+    user_visible: &Rc<Cell<bool>>,
+    pinned: &Rc<Cell<bool>>,
+    chrome: &ChromeVisibility,
+    visible: bool,
+) {
+    user_visible.set(visible);
+    revealer.set_visible(visible);
+
+    if visible {
+        toggle.add_css_class("is-selected");
+        if pinned.get() {
+            chrome.show_persistently();
+        } else {
+            chrome.pin();
+            pinned.set(true);
+        }
+    } else {
+        toggle.remove_css_class("is-selected");
+        if pinned.replace(false) {
+            chrome.unpin();
+        }
+    }
+}
+
+fn update_fullscreen_button(button: &gtk::Button, is_fullscreen: bool) {
+    if is_fullscreen {
+        button.set_icon_name("view-restore-symbolic");
+        button.set_tooltip_text(Some("Exit Fullscreen (F / Esc)"));
+        button.add_css_class("is-selected");
+    } else {
+        button.set_icon_name("view-fullscreen-symbolic");
+        button.set_tooltip_text(Some("Enter Fullscreen (F)"));
+        button.remove_css_class("is-selected");
+    }
 }
 
 fn connect_seek_hover(
@@ -1192,6 +1283,7 @@ fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, launch
 }
 
 fn connect_state_poll(
+    window: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
     controls: Controls,
     updating_seek: Rc<Cell<bool>>,
@@ -1199,6 +1291,7 @@ fn connect_state_poll(
     chrome: Rc<ChromeVisibility>,
     empty_surface: EmptySurface,
 ) {
+    let window = window.clone();
     glib::timeout_add_local(Duration::from_millis(200), move || {
         drain_mpv_events(&state);
 
@@ -1211,7 +1304,7 @@ fn connect_state_poll(
         let has_playlist = state.borrow().playlist.len() > 1;
         empty_surface.set_has_media(has_media);
         drain_thumbnail_events(&controls);
-        update_up_next_panel(&controls, &state);
+        update_up_next_panel(&controls, &state, &chrome);
 
         if let Some(playback) = playback {
             try_pending_subtitles(&state);
@@ -1232,7 +1325,9 @@ fn connect_state_poll(
             controls.speed_button.set_sensitive(has_media);
             controls.previous_button.set_sensitive(has_playlist);
             controls.next_button.set_sensitive(has_playlist);
+            controls.chapters_button.set_sensitive(has_media);
             controls.screenshot_button.set_sensitive(has_media);
+            controls.fullscreen_button.set_sensitive(has_media);
             controls.play_button.set_icon_name(if playback.paused {
                 "media-playback-start-symbolic"
             } else {
@@ -1248,6 +1343,7 @@ fn connect_state_poll(
             controls
                 .speed_button
                 .set_label(&format_speed(playback.speed.unwrap_or(1.0)));
+            update_fullscreen_button(&controls.fullscreen_button, window.is_fullscreen());
             controls.seek.set_sensitive(has_media && duration > 0.0);
 
             updating_seek.set(true);
@@ -1271,12 +1367,15 @@ fn connect_state_poll(
             controls.speed_button.set_sensitive(has_media);
             controls.previous_button.set_sensitive(has_playlist);
             controls.next_button.set_sensitive(has_playlist);
+            controls.chapters_button.set_sensitive(has_media);
             controls.screenshot_button.set_sensitive(has_media);
+            controls.fullscreen_button.set_sensitive(has_media);
             controls
                 .play_button
                 .set_icon_name("media-playback-start-symbolic");
             controls.play_button.set_tooltip_text(Some("Play (Space)"));
             controls.speed_button.set_label("1.00x");
+            update_fullscreen_button(&controls.fullscreen_button, window.is_fullscreen());
             controls.seek.set_sensitive(false);
             updating_seek.set(true);
             controls.seek.set_range(0.0, 1.0);
@@ -1352,9 +1451,14 @@ fn show_video_context_menu(
     popover.popup();
 }
 
-fn update_up_next_panel(controls: &Controls, state: &Rc<RefCell<PlayerState>>) {
+fn update_up_next_panel(
+    controls: &Controls,
+    state: &Rc<RefCell<PlayerState>>,
+    chrome: &ChromeVisibility,
+) {
     let snapshot = {
         let state = state.borrow();
+        let has_media = has_loaded_media_state(&state);
         let chapters = state
             .mpv
             .as_ref()
@@ -1363,12 +1467,12 @@ fn update_up_next_panel(controls: &Controls, state: &Rc<RefCell<PlayerState>>) {
             .unwrap_or_default();
 
         SidePanelSnapshot {
+            has_media,
             current_file: state.current_file.clone(),
             playlist: state.playlist.clone(),
             chapters,
         }
     };
-    let is_visible = !snapshot.chapters.is_empty() || snapshot.playlist.len() > 1;
 
     {
         let mut state = state.borrow_mut();
@@ -1377,13 +1481,29 @@ fn update_up_next_panel(controls: &Controls, state: &Rc<RefCell<PlayerState>>) {
         }
     }
 
-    controls.up_next_revealer.set_visible(is_visible);
-    if !is_visible {
+    controls.chapters_button.set_sensitive(snapshot.has_media);
+    if !snapshot.has_media {
+        set_side_panel_user_visible(
+            &controls.up_next_revealer,
+            &controls.chapters_button,
+            &controls.side_panel_user_visible,
+            &controls.side_panel_pinned,
+            chrome,
+            false,
+        );
         controls.side_panel_snapshot.replace(snapshot);
         controls.side_panel_actions.borrow_mut().clear();
         update_chapter_marks(&controls.seek, &controls.chapter_marks_snapshot, &[]);
         clear_list_box(&controls.up_next_list);
         return;
+    }
+
+    let panel_visible = controls.side_panel_user_visible.get();
+    controls.up_next_revealer.set_visible(panel_visible);
+    if panel_visible {
+        controls.chapters_button.add_css_class("is-selected");
+    } else {
+        controls.chapters_button.remove_css_class("is-selected");
     }
 
     request_chapter_thumbnail_warm(controls, state, &snapshot);
@@ -1439,6 +1559,15 @@ fn update_up_next_panel(controls: &Controls, state: &Rc<RefCell<PlayerState>>) {
                 .append(&playlist_row(path, index, current_index));
             actions.push(SidePanelAction::Playlist(index));
         }
+    }
+
+    if snapshot.chapters.is_empty() && snapshot.playlist.len() <= 1 {
+        controls.up_next_list.append(&panel_heading_row("Chapters"));
+        actions.push(SidePanelAction::None);
+        controls
+            .up_next_list
+            .append(&panel_empty_row("No chapters in this media yet."));
+        actions.push(SidePanelAction::None);
     }
 
     controls.side_panel_actions.replace(actions);
@@ -1515,6 +1644,20 @@ fn panel_heading_row(text: &str) -> gtk::ListBoxRow {
 
     let label = gtk::Label::new(Some(text));
     label.add_css_class("okp-panel-heading");
+    label.set_xalign(0.0);
+    row.set_child(Some(&label));
+    row
+}
+
+fn panel_empty_row(text: &str) -> gtk::ListBoxRow {
+    let row = gtk::ListBoxRow::new();
+    row.add_css_class("okp-panel-empty-row");
+    row.set_activatable(false);
+    row.set_selectable(false);
+
+    let label = gtk::Label::new(Some(text));
+    label.add_css_class("okp-panel-empty");
+    label.set_wrap(true);
     label.set_xalign(0.0);
     row.set_child(Some(&label));
     row
@@ -4538,6 +4681,17 @@ fn install_css() {
             color: rgba(255, 255, 255, 0.52);
             font-size: 11px;
             font-weight: 700;
+        }
+
+        .okp-panel-empty-row {
+            padding: 10px;
+            border-radius: 7px;
+            background: rgba(255, 255, 255, 0.045);
+        }
+
+        .okp-panel-empty {
+            color: rgba(255, 255, 255, 0.58);
+            font-size: 12px;
         }
 
         .okp-up-next-row {
