@@ -562,42 +562,66 @@ fn build_controls(
     chrome: Rc<ChromeVisibility>,
 ) -> Controls {
     let play_button = gtk::Button::with_label("Play");
+    play_button.set_has_frame(false);
     play_button.add_css_class("okp-control-button");
+    play_button.add_css_class("okp-play-button");
+    play_button.set_tooltip_text(Some("Play / Pause (Space)"));
     play_button.set_sensitive(false);
 
     let open_button = gtk::Button::with_label("Open");
+    open_button.set_has_frame(false);
     open_button.add_css_class("okp-control-button");
+    open_button.add_css_class("okp-chip-button");
+    open_button.set_tooltip_text(Some("Open file (O)"));
 
     let subtitle_button = gtk::MenuButton::builder().label("Sub").build();
+    subtitle_button.set_has_frame(false);
     subtitle_button.add_css_class("okp-control-button");
+    subtitle_button.add_css_class("okp-chip-button");
+    subtitle_button.set_tooltip_text(Some("Subtitles"));
     subtitle_button.set_sensitive(false);
 
     let audio_button = gtk::MenuButton::builder().label("Audio").build();
+    audio_button.set_has_frame(false);
     audio_button.add_css_class("okp-control-button");
+    audio_button.add_css_class("okp-chip-button");
+    audio_button.set_tooltip_text(Some("Audio"));
     audio_button.set_sensitive(false);
 
     let speed_button = gtk::MenuButton::builder().label("1.00x").build();
+    speed_button.set_has_frame(false);
     speed_button.add_css_class("okp-control-button");
+    speed_button.add_css_class("okp-speed-chip");
+    speed_button.set_tooltip_text(Some("Playback speed"));
     speed_button.set_sensitive(false);
 
     let previous_button = gtk::Button::with_label("Prev");
+    previous_button.set_has_frame(false);
     previous_button.add_css_class("okp-control-button");
+    previous_button.add_css_class("okp-transport-button");
+    previous_button.set_tooltip_text(Some("Previous item (Page Up)"));
     previous_button.set_sensitive(false);
 
     let elapsed_label = gtk::Label::new(Some("00:00"));
     elapsed_label.add_css_class("okp-time-label");
 
     let next_button = gtk::Button::with_label("Next");
+    next_button.set_has_frame(false);
     next_button.add_css_class("okp-control-button");
+    next_button.add_css_class("okp-transport-button");
+    next_button.set_tooltip_text(Some("Next item (Page Down)"));
     next_button.set_sensitive(false);
 
     let screenshot_button = gtk::Button::with_label("Shot");
+    screenshot_button.set_has_frame(false);
     screenshot_button.add_css_class("okp-control-button");
     screenshot_button.set_tooltip_text(Some("Save screenshot to Pictures/OK Player (C)"));
     screenshot_button.set_sensitive(false);
 
     let more_button = gtk::MenuButton::builder().label("More").build();
+    more_button.set_has_frame(false);
     more_button.add_css_class("okp-control-button");
+    more_button.add_css_class("okp-chip-button");
     more_button.set_tooltip_text(Some("More commands"));
 
     let duration_label = gtk::Label::new(Some("00:00"));
@@ -611,7 +635,7 @@ fn build_controls(
 
     let volume = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 130.0, 1.0);
     volume.set_draw_value(false);
-    volume.set_width_request(116);
+    volume.set_width_request(96);
     volume.set_value(100.0);
     volume.add_css_class("okp-volume");
 
@@ -798,7 +822,7 @@ fn build_controls(
 }
 
 fn controls_bar(controls: &Controls) -> gtk::Box {
-    let bar = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    let bar = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     bar.add_css_class("okp-controls");
     bar.set_halign(gtk::Align::Fill);
     bar.set_valign(gtk::Align::End);
@@ -806,19 +830,22 @@ fn controls_bar(controls: &Controls) -> gtk::Box {
     bar.set_margin_end(18);
     bar.set_margin_bottom(18);
 
+    let transport = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    transport.add_css_class("okp-control-group");
+    transport.append(&controls.previous_button);
+    transport.append(&controls.play_button);
+    transport.append(&controls.next_button);
+
     bar.append(&controls.open_button);
-    bar.append(&controls.subtitle_button);
-    bar.append(&controls.audio_button);
-    bar.append(&controls.speed_button);
-    bar.append(&controls.previous_button);
-    bar.append(&controls.play_button);
-    bar.append(&controls.next_button);
-    bar.append(&controls.screenshot_button);
-    bar.append(&controls.more_button);
+    bar.append(&transport);
     bar.append(&controls.elapsed_label);
     bar.append(&controls.seek);
     bar.append(&controls.duration_label);
     bar.append(&controls.volume);
+    bar.append(&controls.speed_button);
+    bar.append(&controls.subtitle_button);
+    bar.append(&controls.audio_button);
+    bar.append(&controls.more_button);
 
     bar
 }
@@ -3548,19 +3575,88 @@ fn install_css() {
         }
 
         .okp-controls {
-            padding: 10px 12px;
-            border-radius: 8px;
-            background: rgba(12, 13, 16, 0.86);
-            box-shadow: 0 10px 34px rgba(0, 0, 0, 0.38);
+            padding: 9px 12px;
+            border-radius: 18px;
+            background: rgba(18, 18, 21, 0.88);
+            border-top: 1px solid rgba(255, 255, 255, 0.14);
+            box-shadow: 0 14px 42px rgba(0, 0, 0, 0.42);
         }
 
-        .okp-control-button {
-            min-width: 72px;
+        .okp-control-group {
+            padding: 2px;
+            border-radius: 14px;
+            background: rgba(255, 255, 255, 0.055);
+        }
+
+        button.okp-control-button,
+        menubutton.okp-control-button > button {
+            min-width: 38px;
             min-height: 34px;
+            padding: 0 10px;
+            border-radius: 10px;
+            border: 1px solid transparent;
+            background: transparent;
+            box-shadow: none;
+            color: rgba(255, 255, 255, 0.86);
+            font-size: 12px;
+            font-weight: 650;
+        }
+
+        button.okp-control-button:hover,
+        menubutton.okp-control-button > button:hover {
+            background: rgba(255, 255, 255, 0.11);
+            color: rgba(255, 255, 255, 0.96);
+        }
+
+        button.okp-control-button:active,
+        menubutton.okp-control-button > button:active,
+        button.okp-control-button:checked,
+        menubutton.okp-control-button > button:checked {
+            background: rgba(40, 179, 170, 0.24);
+            border-color: rgba(40, 179, 170, 0.42);
+            color: rgba(255, 255, 255, 0.98);
+        }
+
+        button.okp-control-button:disabled,
+        menubutton.okp-control-button > button:disabled {
+            background: transparent;
+            border-color: transparent;
+            color: rgba(255, 255, 255, 0.32);
+        }
+
+        button.okp-play-button {
+            min-width: 54px;
+            background: rgba(40, 179, 170, 0.92);
+            color: #ffffff;
+        }
+
+        button.okp-play-button:hover {
+            background: rgba(55, 207, 197, 0.96);
+        }
+
+        button.okp-play-button:disabled {
+            background: rgba(255, 255, 255, 0.11);
+            color: rgba(255, 255, 255, 0.34);
+        }
+
+        button.okp-transport-button {
+            min-width: 44px;
+        }
+
+        button.okp-chip-button,
+        menubutton.okp-chip-button > button {
+            min-width: 48px;
+        }
+
+        menubutton.okp-speed-chip > button {
+            min-width: 56px;
+            background: rgba(255, 255, 255, 0.08);
+            color: rgba(40, 179, 170, 0.98);
+            font-feature-settings: 'tnum';
         }
 
         .okp-control-button.is-selected {
-            background: rgba(98, 181, 255, 0.22);
+            background: rgba(40, 179, 170, 0.22);
         }
 
         .okp-time-label {
@@ -3581,6 +3677,31 @@ fn install_css() {
 
         .okp-seek {
             min-width: 260px;
+        }
+
+        scale.okp-seek trough,
+        scale.okp-volume trough {
+            min-height: 4px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.23);
+            border: none;
+        }
+
+        scale.okp-seek highlight,
+        scale.okp-volume highlight {
+            min-height: 4px;
+            border-radius: 999px;
+            background: #28b3aa;
+        }
+
+        scale.okp-seek slider,
+        scale.okp-volume slider {
+            min-width: 12px;
+            min-height: 12px;
+            margin: -5px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.96);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.42);
         }
 
         .okp-seek-preview {
@@ -3686,20 +3807,22 @@ fn install_css() {
             font-weight: 700;
         }
 
-        .okp-track-row {
+        button.okp-track-row {
             min-height: 34px;
             padding: 7px 9px;
             border-radius: 7px;
             background: transparent;
+            border: none;
+            box-shadow: none;
             color: rgba(255, 255, 255, 0.82);
         }
 
-        .okp-track-row:hover {
+        button.okp-track-row:hover {
             background: rgba(255, 255, 255, 0.08);
         }
 
-        .okp-track-row.is-selected {
-            background: rgba(98, 181, 255, 0.18);
+        button.okp-track-row.is-selected {
+            background: rgba(40, 179, 170, 0.18);
             color: rgba(255, 255, 255, 0.96);
         }
 
