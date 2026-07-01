@@ -22,6 +22,8 @@ mod settings;
 mod thumbnails;
 
 const SPEED_PRESETS: [f64; 6] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+const APP_BUILD_VERSION: &str = env!("OKP_BUILD_VERSION");
+const APP_BUILD_SHA: &str = env!("OKP_BUILD_SHA");
 
 #[derive(Default)]
 struct PlayerState {
@@ -2182,6 +2184,12 @@ fn open_settings_window(
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
     content.add_css_class("okp-settings-content");
 
+    content.append(&settings_about_section(
+        parent,
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    ));
+
     let playback = settings_section("Playback");
     playback.append(&settings_volume_row(Rc::clone(&state)));
     content.append(&playback);
@@ -2236,6 +2244,69 @@ fn settings_section(title: &str) -> gtk::Box {
     title.set_xalign(0.0);
     section.append(&title);
     section
+}
+
+fn settings_about_section(
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let section = settings_section("About");
+
+    let hero = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    hero.add_css_class("okp-about-hero");
+
+    let logo = gtk::Image::from_icon_name("com.befeast.okplayer");
+    logo.add_css_class("okp-about-logo");
+    logo.set_pixel_size(58);
+    hero.append(&logo);
+
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 3);
+    text.set_valign(gtk::Align::Center);
+    text.set_hexpand(true);
+
+    let name = gtk::Label::new(Some("OK Player"));
+    name.add_css_class("okp-about-name");
+    name.set_xalign(0.0);
+    text.append(&name);
+
+    let version = gtk::Label::new(Some(&format!("Version {}", app_version_label())));
+    version.add_css_class("okp-about-version");
+    version.set_xalign(0.0);
+    version.set_selectable(true);
+    text.append(&version);
+
+    hero.append(&text);
+    section.append(&hero);
+
+    section.append(&settings_value_row("Version", APP_BUILD_VERSION));
+    section.append(&settings_value_row("Build", APP_BUILD_SHA));
+    section.append(&settings_value_row("Platform", "Linux GTK4 / libmpv"));
+    section.append(&settings_value_row("License", "GPL-3.0-or-later"));
+
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    actions.set_halign(gtk::Align::End);
+
+    let media_info = gtk::Button::with_label("Media Information...");
+    media_info.add_css_class("okp-settings-button");
+    media_info.set_sensitive(has_loaded_media(&state));
+    let media_parent = parent.clone();
+    let media_state = Rc::clone(&state);
+    media_info.connect_clicked(move |_| {
+        open_media_info_window(&media_parent, &media_state, Rc::clone(&status_toast));
+    });
+    actions.append(&media_info);
+    section.append(&actions);
+
+    section
+}
+
+fn app_version_label() -> String {
+    if APP_BUILD_SHA == "unknown" {
+        APP_BUILD_VERSION.to_owned()
+    } else {
+        format!("{APP_BUILD_VERSION} ({APP_BUILD_SHA})")
+    }
 }
 
 fn settings_volume_row(state: Rc<RefCell<PlayerState>>) -> gtk::Box {
@@ -3897,6 +3968,30 @@ fn install_css() {
 
         .okp-settings-content {
             padding-right: 4px;
+        }
+
+        .okp-about-hero {
+            min-height: 70px;
+            padding: 10px;
+            border-radius: 8px;
+            background: rgba(40, 179, 170, 0.12);
+            border: 1px solid rgba(40, 179, 170, 0.22);
+        }
+
+        .okp-about-logo {
+            color: #28b3aa;
+        }
+
+        .okp-about-name {
+            color: rgba(255, 255, 255, 0.95);
+            font-size: 20px;
+            font-weight: 750;
+        }
+
+        .okp-about-version {
+            color: rgba(255, 255, 255, 0.64);
+            font-size: 12px;
+            font-feature-settings: 'tnum';
         }
 
         .okp-info-section {

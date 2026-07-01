@@ -11,7 +11,7 @@ BUILD_ROOT="$DEB_DIR/${PACKAGE}_${VERSION}_${ARCH}"
 ICON="$ROOT/rust/packaging/linux/com.befeast.okplayer.svg"
 DESKTOP="$ROOT/rust/packaging/linux/com.befeast.okplayer.desktop"
 
-cargo build --manifest-path "$ROOT/rust/Cargo.toml" -p okp-linux-gtk --release
+OKP_BUILD_VERSION="$VERSION" cargo build --manifest-path "$ROOT/rust/Cargo.toml" -p okp-linux-gtk --release
 
 rm -rf "$BUILD_ROOT"
 mkdir -p "$BUILD_ROOT/DEBIAN"

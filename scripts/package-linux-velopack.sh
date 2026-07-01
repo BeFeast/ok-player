@@ -23,7 +23,7 @@ fi
 
 export DOTNET_ROOT="${DOTNET_ROOT:-$HOME/.dotnet}"
 
-cargo build --manifest-path "$ROOT/rust/Cargo.toml" -p okp-linux-gtk --release
+OKP_BUILD_VERSION="$VERSION" cargo build --manifest-path "$ROOT/rust/Cargo.toml" -p okp-linux-gtk --release
 
 rm -rf "$PACK_DIR" "$OUTPUT_DIR"
 mkdir -p "$PACK_DIR" "$OUTPUT_DIR"
