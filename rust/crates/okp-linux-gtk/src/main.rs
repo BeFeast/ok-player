@@ -2,7 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::env;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gtk::gdk;
 use gtk::glib;
@@ -22,7 +22,86 @@ struct PlayerState {
     pending_subtitles: Vec<PathBuf>,
     pending_resume: Option<(PathBuf, f64)>,
     pending_preferences: Option<(PathBuf, history::PlaybackPreferences)>,
+    modes: PlayModes,
     history: history::HistoryStore,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum RepeatMode {
+    #[default]
+    Off,
+    One,
+    All,
+}
+
+impl RepeatMode {
+    fn cycle(self) -> Self {
+        match self {
+            Self::Off => Self::One,
+            Self::One => Self::All,
+            Self::All => Self::Off,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Repeat Off",
+            Self::One => "Repeat One",
+            Self::All => "Repeat All",
+        }
+    }
+}
+
+struct PlayModes {
+    repeat_mode: RepeatMode,
+    shuffle_enabled: bool,
+    auto_advance_enabled: bool,
+    shuffle_order: Vec<usize>,
+    shuffle_cursor: Option<usize>,
+    shuffle_seed: u64,
+}
+
+impl Default for PlayModes {
+    fn default() -> Self {
+        Self {
+            repeat_mode: RepeatMode::Off,
+            shuffle_enabled: false,
+            auto_advance_enabled: true,
+            shuffle_order: Vec::new(),
+            shuffle_cursor: None,
+            shuffle_seed: shuffle_seed(),
+        }
+    }
+}
+
+impl PlayModes {
+    fn reset_shuffle_order(&mut self) {
+        self.shuffle_order.clear();
+        self.shuffle_cursor = None;
+    }
+
+    fn ensure_shuffle_order(&mut self, playlist_len: usize, current_index: usize) {
+        if !self.shuffle_enabled || playlist_len == 0 {
+            self.reset_shuffle_order();
+            return;
+        }
+
+        if self.shuffle_order.len() != playlist_len {
+            self.shuffle_order = (0..playlist_len).collect();
+            for index in (1..playlist_len).rev() {
+                let swap_with = (next_shuffle_value(&mut self.shuffle_seed) as usize) % (index + 1);
+                self.shuffle_order.swap(index, swap_with);
+            }
+        }
+
+        if let Some(position) = self
+            .shuffle_order
+            .iter()
+            .position(|index| *index == current_index)
+        {
+            self.shuffle_cursor = Some(position);
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -38,6 +117,9 @@ struct Controls {
     previous_button: gtk::Button,
     play_button: gtk::Button,
     next_button: gtk::Button,
+    repeat_button: gtk::Button,
+    shuffle_button: gtk::Button,
+    auto_advance_button: gtk::Button,
     seek: gtk::Scale,
     elapsed_label: gtk::Label,
     duration_label: gtk::Label,
@@ -173,6 +255,15 @@ fn build_controls(
     next_button.add_css_class("okp-control-button");
     next_button.set_sensitive(false);
 
+    let repeat_button = gtk::Button::with_label(RepeatMode::Off.label());
+    repeat_button.add_css_class("okp-control-button");
+
+    let shuffle_button = gtk::Button::with_label("Shuffle Off");
+    shuffle_button.add_css_class("okp-control-button");
+
+    let auto_advance_button = gtk::Button::with_label("Auto On");
+    auto_advance_button.add_css_class("okp-control-button");
+
     let duration_label = gtk::Label::new(Some("00:00"));
     duration_label.add_css_class("okp-time-label");
 
@@ -268,6 +359,15 @@ fn build_controls(
         navigate_playlist(&next_state, 1);
     });
 
+    let repeat_state = Rc::clone(&state);
+    repeat_button.connect_clicked(move |_| cycle_repeat_mode(&repeat_state));
+
+    let shuffle_state = Rc::clone(&state);
+    shuffle_button.connect_clicked(move |_| toggle_shuffle(&shuffle_state));
+
+    let auto_advance_state = Rc::clone(&state);
+    auto_advance_button.connect_clicked(move |_| toggle_auto_advance(&auto_advance_state));
+
     let seek_state = Rc::clone(&state);
     seek.connect_change_value(move |_, _, value| {
         if !updating_seek.get()
@@ -299,6 +399,9 @@ fn build_controls(
         previous_button,
         play_button,
         next_button,
+        repeat_button,
+        shuffle_button,
+        auto_advance_button,
         seek,
         elapsed_label,
         duration_label,
@@ -325,6 +428,9 @@ fn controls_bar(controls: &Controls) -> gtk::Box {
     bar.append(&controls.previous_button);
     bar.append(&controls.play_button);
     bar.append(&controls.next_button);
+    bar.append(&controls.repeat_button);
+    bar.append(&controls.shuffle_button);
+    bar.append(&controls.auto_advance_button);
     bar.append(&controls.elapsed_label);
     bar.append(&controls.seek);
     bar.append(&controls.duration_label);
@@ -415,6 +521,7 @@ fn connect_state_poll(
         let has_media = state.borrow().current_file.is_some();
         let has_playlist = state.borrow().playlist.len() > 1;
         update_up_next_panel(&controls, &state);
+        update_mode_buttons(&controls, &state);
 
         if let Some(playback) = playback {
             try_pending_subtitles(&state);
@@ -463,6 +570,44 @@ fn connect_state_poll(
 
         glib::ControlFlow::Continue
     });
+}
+
+fn update_mode_buttons(controls: &Controls, state: &Rc<RefCell<PlayerState>>) {
+    let (repeat_mode, shuffle_enabled, auto_advance_enabled) = {
+        let state = state.borrow();
+        (
+            state.modes.repeat_mode,
+            state.modes.shuffle_enabled,
+            state.modes.auto_advance_enabled,
+        )
+    };
+
+    controls.repeat_button.set_label(repeat_mode.label());
+    set_button_active(&controls.repeat_button, repeat_mode != RepeatMode::Off);
+
+    controls.shuffle_button.set_label(if shuffle_enabled {
+        "Shuffle On"
+    } else {
+        "Shuffle Off"
+    });
+    set_button_active(&controls.shuffle_button, shuffle_enabled);
+
+    controls
+        .auto_advance_button
+        .set_label(if auto_advance_enabled {
+            "Auto On"
+        } else {
+            "Auto Off"
+        });
+    set_button_active(&controls.auto_advance_button, auto_advance_enabled);
+}
+
+fn set_button_active(button: &gtk::Button, active: bool) {
+    if active {
+        button.add_css_class("is-selected");
+    } else {
+        button.remove_css_class("is-selected");
+    }
 }
 
 fn update_up_next_panel(controls: &Controls, state: &Rc<RefCell<PlayerState>>) {
@@ -932,7 +1077,9 @@ fn drain_mpv_events(state: &Rc<RefCell<PlayerState>>) {
         match event {
             MpvEvent::FileLoaded => try_pending_playback_preferences(state),
             MpvEvent::EndFile { reason } if reason.is_eof() => {
-                save_current_progress(state, true);
+                if state.borrow().modes.repeat_mode != RepeatMode::One {
+                    save_current_progress(state, true);
+                }
                 advance_playlist_on_eof(state);
             }
             _ => {}
@@ -1143,6 +1290,31 @@ fn toggle_fullscreen(window: &gtk::ApplicationWindow) {
     }
 }
 
+fn cycle_repeat_mode(state: &Rc<RefCell<PlayerState>>) {
+    let mut state = state.borrow_mut();
+    state.modes.repeat_mode = state.modes.repeat_mode.cycle();
+}
+
+fn toggle_shuffle(state: &Rc<RefCell<PlayerState>>) {
+    let mut state = state.borrow_mut();
+    state.modes.shuffle_enabled = !state.modes.shuffle_enabled;
+    state.modes.reset_shuffle_order();
+
+    if state.modes.shuffle_enabled
+        && let Some(current_index) = current_playlist_index(&state)
+    {
+        let playlist_len = state.playlist.len();
+        state
+            .modes
+            .ensure_shuffle_order(playlist_len, current_index);
+    }
+}
+
+fn toggle_auto_advance(state: &Rc<RefCell<PlayerState>>) {
+    let mut state = state.borrow_mut();
+    state.modes.auto_advance_enabled = !state.modes.auto_advance_enabled;
+}
+
 fn load_media_path(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
     load_media_path_internal(state, path, true);
 }
@@ -1174,32 +1346,29 @@ fn remember_loaded_media(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
     let mut state = state.borrow_mut();
     let resume = state.history.resume_position(&path);
     let preferences = state.history.playback_preferences(&path);
+    let playlist_changed = state.playlist != playlist;
     state.current_file = Some(path);
     state.playlist = playlist;
+    if playlist_changed {
+        state.modes.reset_shuffle_order();
+    }
+    if let Some(current_index) = current_playlist_index(&state) {
+        let playlist_len = state.playlist.len();
+        state
+            .modes
+            .ensure_shuffle_order(playlist_len, current_index);
+    }
     state.pending_subtitles.clear();
     state.pending_resume = resume.map(|position| (resume_path, position));
     state.pending_preferences = preferences.map(|preferences| (preferences_path, preferences));
 }
 
 fn navigate_playlist(state: &Rc<RefCell<PlayerState>>, direction: isize) -> bool {
-    let (current_file, playlist) = {
-        let state = state.borrow();
-        (state.current_file.clone(), state.playlist.clone())
-    };
-
-    let Some(current_file) = current_file else {
+    let Some(path) = playlist_target_path(state, direction, true) else {
         return false;
     };
-    if playlist.len() < 2 {
-        return false;
-    }
 
-    let current_index = playlist
-        .iter()
-        .position(|path| path == &current_file)
-        .unwrap_or(0);
-    let next_index = (current_index as isize + direction).rem_euclid(playlist.len() as isize);
-    load_media_path_internal(state, playlist[next_index as usize].clone(), true);
+    load_media_path_internal(state, path, true);
     true
 }
 
@@ -1213,31 +1382,119 @@ fn jump_playlist_index(state: &Rc<RefCell<PlayerState>>, index: usize) -> bool {
         return false;
     };
 
+    {
+        let mut state = state.borrow_mut();
+        if state.modes.shuffle_enabled {
+            state.modes.shuffle_cursor = state
+                .modes
+                .shuffle_order
+                .iter()
+                .position(|item| *item == index);
+        }
+    }
+
     load_media_path_internal(state, path, true);
     true
 }
 
 fn advance_playlist_on_eof(state: &Rc<RefCell<PlayerState>>) -> bool {
-    let next_file = {
-        let state = state.borrow();
-        let Some(current_file) = state.current_file.as_ref() else {
-            return false;
-        };
+    let repeat_mode = state.borrow().modes.repeat_mode;
+    if repeat_mode == RepeatMode::One {
+        return restart_current_file(state);
+    }
 
-        let Some(current_index) = state.playlist.iter().position(|path| path == current_file)
-        else {
-            return false;
-        };
+    if !state.borrow().modes.auto_advance_enabled {
+        return false;
+    }
 
-        state.playlist.get(current_index + 1).cloned()
-    };
-
-    let Some(next_file) = next_file else {
+    let wrap = repeat_mode == RepeatMode::All;
+    let Some(next_file) = playlist_target_path(state, 1, wrap) else {
         return false;
     };
 
     load_media_path_internal(state, next_file, false);
     true
+}
+
+fn restart_current_file(state: &Rc<RefCell<PlayerState>>) -> bool {
+    let path = {
+        let state = state.borrow();
+        let Some(path) = state.current_file.clone() else {
+            return false;
+        };
+        let Some(mpv) = state.mpv.as_ref() else {
+            return false;
+        };
+        if let Err(error) = mpv.load_file(&path) {
+            eprintln!("Failed to repeat '{}': {error}", path.display());
+            return false;
+        }
+        path
+    };
+
+    let preferences = state.borrow().history.playback_preferences(&path);
+    let mut state = state.borrow_mut();
+    state.pending_resume = None;
+    state.pending_preferences = preferences.map(|preferences| (path, preferences));
+    true
+}
+
+fn playlist_target_path(
+    state: &Rc<RefCell<PlayerState>>,
+    direction: isize,
+    wrap: bool,
+) -> Option<PathBuf> {
+    let mut state = state.borrow_mut();
+    if state.playlist.len() < 2 {
+        return None;
+    }
+
+    let current_index = current_playlist_index(&state).unwrap_or(0);
+    let next_index = if state.modes.shuffle_enabled {
+        shuffled_target_index(&mut state, current_index, direction, wrap)?
+    } else {
+        ordered_target_index(state.playlist.len(), current_index, direction, wrap)?
+    };
+
+    state.playlist.get(next_index).cloned()
+}
+
+fn ordered_target_index(
+    playlist_len: usize,
+    current_index: usize,
+    direction: isize,
+    wrap: bool,
+) -> Option<usize> {
+    let target = current_index as isize + direction;
+    if wrap {
+        Some(target.rem_euclid(playlist_len as isize) as usize)
+    } else if (0..playlist_len as isize).contains(&target) {
+        Some(target as usize)
+    } else {
+        None
+    }
+}
+
+fn shuffled_target_index(
+    state: &mut PlayerState,
+    current_index: usize,
+    direction: isize,
+    wrap: bool,
+) -> Option<usize> {
+    let playlist_len = state.playlist.len();
+    state
+        .modes
+        .ensure_shuffle_order(playlist_len, current_index);
+    let cursor = state.modes.shuffle_cursor.unwrap_or(0);
+    let target_cursor =
+        ordered_target_index(state.modes.shuffle_order.len(), cursor, direction, wrap)?;
+    state.modes.shuffle_cursor = Some(target_cursor);
+    state.modes.shuffle_order.get(target_cursor).copied()
+}
+
+fn current_playlist_index(state: &PlayerState) -> Option<usize> {
+    let current_file = state.current_file.as_ref()?;
+    state.playlist.iter().position(|path| path == current_file)
 }
 
 fn try_pending_resume(state: &Rc<RefCell<PlayerState>>, duration: f64) {
@@ -1573,6 +1830,22 @@ fn format_time(seconds: f64) -> String {
     }
 }
 
+fn shuffle_seed() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0x9E37_79B9_7F4A_7C15)
+}
+
+fn next_shuffle_value(seed: &mut u64) -> u64 {
+    let mut value = (*seed).max(1);
+    value ^= value << 13;
+    value ^= value >> 7;
+    value ^= value << 17;
+    *seed = value;
+    value
+}
+
 fn install_css() {
     let Some(display) = gdk::Display::default() else {
         return;
@@ -1599,6 +1872,10 @@ fn install_css() {
         .okp-control-button {
             min-width: 72px;
             min-height: 34px;
+        }
+
+        .okp-control-button.is-selected {
+            background: rgba(98, 181, 255, 0.22);
         }
 
         .okp-time-label {
