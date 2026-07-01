@@ -7,7 +7,7 @@ use std::time::Duration;
 use gtk::gdk;
 use gtk::glib;
 use gtk::prelude::*;
-use okp_core::{AppIdentity, media_formats};
+use okp_core::{AppIdentity, media_formats, natural_compare};
 use okp_mpv::Mpv;
 use velopack::VelopackApp;
 
@@ -15,6 +15,7 @@ use velopack::VelopackApp;
 struct PlayerState {
     mpv: Option<Mpv>,
     current_file: Option<PathBuf>,
+    playlist: Vec<PathBuf>,
     pending_subtitles: Vec<PathBuf>,
 }
 
@@ -27,7 +28,9 @@ struct LaunchArgs {
 struct Controls {
     open_button: gtk::Button,
     subtitle_button: gtk::Button,
+    previous_button: gtk::Button,
     play_button: gtk::Button,
+    next_button: gtk::Button,
     seek: gtk::Scale,
     elapsed_label: gtk::Label,
     duration_label: gtk::Label,
@@ -136,8 +139,16 @@ fn build_controls(
     subtitle_button.add_css_class("okp-control-button");
     subtitle_button.set_sensitive(false);
 
+    let previous_button = gtk::Button::with_label("Prev");
+    previous_button.add_css_class("okp-control-button");
+    previous_button.set_sensitive(false);
+
     let elapsed_label = gtk::Label::new(Some("00:00"));
     elapsed_label.add_css_class("okp-time-label");
+
+    let next_button = gtk::Button::with_label("Next");
+    next_button.add_css_class("okp-control-button");
+    next_button.set_sensitive(false);
 
     let duration_label = gtk::Label::new(Some("00:00"));
     duration_label.add_css_class("okp-time-label");
@@ -164,6 +175,11 @@ fn build_controls(
         open_subtitle_dialog(&subtitle_parent, Rc::clone(&subtitle_state));
     });
 
+    let previous_state = Rc::clone(&state);
+    previous_button.connect_clicked(move |_| {
+        navigate_playlist(&previous_state, -1);
+    });
+
     let play_state = Rc::clone(&state);
     let play_open_parent = window.clone();
     play_button.connect_clicked(move |_| {
@@ -178,6 +194,11 @@ fn build_controls(
         {
             eprintln!("Failed to toggle playback: {error}");
         }
+    });
+
+    let next_state = Rc::clone(&state);
+    next_button.connect_clicked(move |_| {
+        navigate_playlist(&next_state, 1);
     });
 
     let seek_state = Rc::clone(&state);
@@ -207,7 +228,9 @@ fn build_controls(
     Controls {
         open_button,
         subtitle_button,
+        previous_button,
         play_button,
+        next_button,
         seek,
         elapsed_label,
         duration_label,
@@ -226,7 +249,9 @@ fn controls_bar(controls: &Controls) -> gtk::Box {
 
     bar.append(&controls.open_button);
     bar.append(&controls.subtitle_button);
+    bar.append(&controls.previous_button);
     bar.append(&controls.play_button);
+    bar.append(&controls.next_button);
     bar.append(&controls.elapsed_label);
     bar.append(&controls.seek);
     bar.append(&controls.duration_label);
@@ -310,6 +335,7 @@ fn connect_state_poll(
             .as_ref()
             .and_then(|mpv| mpv.playback_state().ok());
         let has_media = state.borrow().current_file.is_some();
+        let has_playlist = state.borrow().playlist.len() > 1;
 
         if let Some(playback) = playback {
             try_pending_subtitles(&state);
@@ -324,6 +350,8 @@ fn connect_state_poll(
 
             controls.play_button.set_sensitive(has_media);
             controls.subtitle_button.set_sensitive(has_media);
+            controls.previous_button.set_sensitive(has_playlist);
+            controls.next_button.set_sensitive(has_playlist);
             controls
                 .play_button
                 .set_label(if playback.paused { "Play" } else { "Pause" });
@@ -345,6 +373,8 @@ fn connect_state_poll(
         } else {
             controls.play_button.set_sensitive(has_media);
             controls.subtitle_button.set_sensitive(has_media);
+            controls.previous_button.set_sensitive(has_playlist);
+            controls.next_button.set_sensitive(has_playlist);
             controls.play_button.set_label("Play");
             controls.seek.set_sensitive(false);
         }
@@ -447,6 +477,14 @@ fn connect_keyboard(window: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerSta
                 with_mpv(&state, |mpv| mpv.seek_relative(5.0));
                 glib::Propagation::Stop
             }
+            gdk::Key::Page_Up | gdk::Key::KP_Page_Up => {
+                navigate_playlist(&state, -1);
+                glib::Propagation::Stop
+            }
+            gdk::Key::Page_Down | gdk::Key::KP_Page_Down => {
+                navigate_playlist(&state, 1);
+                glib::Propagation::Stop
+            }
             gdk::Key::Down => {
                 adjust_volume(&state, -5.0);
                 glib::Propagation::Stop
@@ -514,9 +552,66 @@ fn load_media_path(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
     };
 
     match result {
-        Some(Ok(())) => state.borrow_mut().current_file = Some(path),
+        Some(Ok(())) => remember_loaded_media(state, path),
         Some(Err(error)) => eprintln!("Failed to load media '{}': {error}", path.display()),
-        None => state.borrow_mut().current_file = Some(path),
+        None => remember_loaded_media(state, path),
+    }
+}
+
+fn remember_loaded_media(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
+    let playlist = build_folder_playlist(&path);
+    let mut state = state.borrow_mut();
+    state.current_file = Some(path);
+    state.playlist = playlist;
+    state.pending_subtitles.clear();
+}
+
+fn navigate_playlist(state: &Rc<RefCell<PlayerState>>, direction: isize) -> bool {
+    let (current_file, playlist) = {
+        let state = state.borrow();
+        (state.current_file.clone(), state.playlist.clone())
+    };
+
+    let Some(current_file) = current_file else {
+        return false;
+    };
+    if playlist.len() < 2 {
+        return false;
+    }
+
+    let current_index = playlist
+        .iter()
+        .position(|path| path == &current_file)
+        .unwrap_or(0);
+    let next_index = (current_index as isize + direction).rem_euclid(playlist.len() as isize);
+    load_media_path(state, playlist[next_index as usize].clone());
+    true
+}
+
+fn build_folder_playlist(path: &Path) -> Vec<PathBuf> {
+    let Some(parent) = path.parent() else {
+        return vec![path.to_path_buf()];
+    };
+
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return vec![path.to_path_buf()];
+    };
+
+    let mut files = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| is_media_path(path))
+        .collect::<Vec<_>>();
+    files.sort_by(|left, right| {
+        let left = left.file_name().and_then(|name| name.to_str());
+        let right = right.file_name().and_then(|name| name.to_str());
+        natural_compare::compare(left, right)
+    });
+
+    if files.is_empty() {
+        vec![path.to_path_buf()]
+    } else {
+        files
     }
 }
 
