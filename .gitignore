@@ -11,6 +11,7 @@ x86/
 [Bb]uild/
 [Pp]ublish/
 *.binlog
+rust/target/
 
 # --- Visual Studio / Rider ---
 .vs/

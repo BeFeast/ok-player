@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=OK Player
+Comment=Elegant mpv-based media player
+Exec=ok-player %U
+Icon=com.befeast.okplayer
+Terminal=false
+Categories=AudioVideo;Player;
+MimeType=video/mp4;video/x-matroska;video/x-msvideo;video/quicktime;video/webm;audio/mpeg;audio/flac;audio/mp4;audio/ogg;audio/x-wav;
+StartupNotify=true

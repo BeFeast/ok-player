@@ -1,0 +1,83 @@
+name: Linux Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Linux package version, for example 0.1.0-linux-alpha.1
+        required: true
+        type: string
+      publish:
+        description: Publish to GitHub Releases
+        required: true
+        default: false
+        type: boolean
+      prerelease:
+        description: Mark GitHub Release as pre-release
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  linux-release:
+    name: Package Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev libmpv-dev mpv ffmpeg cmake ninja-build dpkg-dev
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache-workspaces: rust
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Install Velopack CLI
+        run: dotnet tool install -g vpk
+
+      - name: Test Rust workspace
+        working-directory: rust
+        run: cargo test --workspace
+
+      - name: Build Velopack AppImage lane
+        run: ./scripts/package-linux-velopack.sh "${{ inputs.version }}"
+
+      - name: Build Debian package lane
+        run: ./scripts/package-linux-deb.sh "${{ inputs.version }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ok-player-linux-${{ inputs.version }}
+          path: |
+            artifacts/linux/velopack/**
+            artifacts/linux/deb/*.deb
+
+      - name: Publish Velopack AppImage feed
+        if: inputs.publish
+        run: |
+          "$HOME/.dotnet/tools/vpk" upload github \
+            --outputDir artifacts/linux/velopack \
+            --channel linux \
+            --repoUrl "https://github.com/${{ github.repository }}" \
+            --token "${{ secrets.GITHUB_TOKEN }}" \
+            --publish true \
+            --pre "${{ inputs.prerelease }}" \
+            --releaseName "OK Player Linux ${{ inputs.version }}" \
+            --tag "linux-v${{ inputs.version }}" \
+            --targetCommitish "${{ github.sha }}"
+
+      - name: Attach Debian package to release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "linux-v${{ inputs.version }}" artifacts/linux/deb/*.deb --clobber

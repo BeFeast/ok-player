@@ -1,0 +1,22 @@
+[workspace]
+members = [
+    "crates/okp-core",
+    "crates/okp-ffi",
+    "crates/okp-linux-gtk",
+    "crates/okp-mpv",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/BeFeast/ok-player"
+rust-version = "1.96"
+
+[workspace.dependencies]
+gtk = { package = "gtk4", version = "0.11.4" }
+pkg-config = "0.3.33"
+relm4 = "0.11.0"
+serde = { version = "1.0.228", features = ["derive"] }
+thiserror = "2.0.17"
+velopack = "1.2.0"
