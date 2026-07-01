@@ -6897,6 +6897,26 @@ fn install_css() {
             padding-right: 4px;
         }
 
+        window.okp-info-window scrolledwindow {
+            background: #eef4f9;
+        }
+
+        window.okp-info-window scrollbar {
+            background: transparent;
+            border: none;
+        }
+
+        window.okp-info-window scrollbar trough {
+            background: transparent;
+            border: none;
+        }
+
+        window.okp-info-window scrollbar slider {
+            min-width: 4px;
+            border-radius: 999px;
+            background: rgba(0, 0, 0, 0.22);
+        }
+
         .okp-settings-content {
             padding-right: 4px;
         }
