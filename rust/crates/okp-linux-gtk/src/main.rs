@@ -670,7 +670,9 @@ fn build_controls(
     status_toast: Rc<StatusToast>,
     chrome: Rc<ChromeVisibility>,
 ) -> Controls {
-    let play_button = gtk::Button::with_label("Play");
+    let play_button = gtk::Button::builder()
+        .icon_name("media-playback-start-symbolic")
+        .build();
     play_button.set_has_frame(false);
     play_button.add_css_class("okp-control-button");
     play_button.add_css_class("okp-play-button");
@@ -704,7 +706,9 @@ fn build_controls(
     speed_button.set_tooltip_text(Some("Playback speed"));
     speed_button.set_sensitive(false);
 
-    let previous_button = gtk::Button::with_label("Prev");
+    let previous_button = gtk::Button::builder()
+        .icon_name("media-skip-backward-symbolic")
+        .build();
     previous_button.set_has_frame(false);
     previous_button.add_css_class("okp-control-button");
     previous_button.add_css_class("okp-transport-button");
@@ -714,7 +718,9 @@ fn build_controls(
     let elapsed_label = gtk::Label::new(Some("00:00"));
     elapsed_label.add_css_class("okp-time-label");
 
-    let next_button = gtk::Button::with_label("Next");
+    let next_button = gtk::Button::builder()
+        .icon_name("media-skip-forward-symbolic")
+        .build();
     next_button.set_has_frame(false);
     next_button.add_css_class("okp-control-button");
     next_button.add_css_class("okp-transport-button");
@@ -727,7 +733,9 @@ fn build_controls(
     screenshot_button.set_tooltip_text(Some("Save screenshot to Pictures/OK Player (C)"));
     screenshot_button.set_sensitive(false);
 
-    let more_button = gtk::MenuButton::builder().label("More").build();
+    let more_button = gtk::MenuButton::builder()
+        .icon_name("view-more-symbolic")
+        .build();
     more_button.set_has_frame(false);
     more_button.add_css_class("okp-control-button");
     more_button.add_css_class("okp-chip-button");
@@ -1208,9 +1216,18 @@ fn connect_state_poll(
             controls.previous_button.set_sensitive(has_playlist);
             controls.next_button.set_sensitive(has_playlist);
             controls.screenshot_button.set_sensitive(has_media);
+            controls.play_button.set_icon_name(if playback.paused {
+                "media-playback-start-symbolic"
+            } else {
+                "media-playback-pause-symbolic"
+            });
             controls
                 .play_button
-                .set_label(if playback.paused { "Play" } else { "Pause" });
+                .set_tooltip_text(Some(if playback.paused {
+                    "Play (Space)"
+                } else {
+                    "Pause (Space)"
+                }));
             controls
                 .speed_button
                 .set_label(&format_speed(playback.speed.unwrap_or(1.0)));
@@ -1238,7 +1255,10 @@ fn connect_state_poll(
             controls.previous_button.set_sensitive(has_playlist);
             controls.next_button.set_sensitive(has_playlist);
             controls.screenshot_button.set_sensitive(has_media);
-            controls.play_button.set_label("Play");
+            controls
+                .play_button
+                .set_icon_name("media-playback-start-symbolic");
+            controls.play_button.set_tooltip_text(Some("Play (Space)"));
             controls.speed_button.set_label("1.00x");
             controls.seek.set_sensitive(false);
         }
