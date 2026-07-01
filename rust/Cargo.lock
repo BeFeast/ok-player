@@ -906,6 +906,7 @@ version = "0.1.0"
 dependencies = [
  "gtk4",
  "okp-core",
+ "okp-mpv",
  "relm4",
  "velopack",
 ]
@@ -914,6 +915,7 @@ dependencies = [
 name = "okp-mpv"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "pkg-config",
  "thiserror",
 ]

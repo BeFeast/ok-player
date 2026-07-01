@@ -8,8 +8,8 @@ rust-version.workspace = true
 links = "mpv"
 
 [dependencies]
+libc.workspace = true
 thiserror.workspace = true
 
 [build-dependencies]
 pkg-config.workspace = true
-

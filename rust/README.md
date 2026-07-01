@@ -17,13 +17,15 @@ The Windows WinUI app remains in `src/` while Linux and the shared Rust core gro
 Ubuntu/Debian-family development packages:
 
 ```bash
-sudo apt-get install build-essential pkg-config libgtk-4-dev libadwaita-1-dev libmpv-dev mpv ffmpeg cmake ninja-build
+sudo apt-get install build-essential pkg-config libgtk-4-dev libadwaita-1-dev libmpv-dev libgl1-mesa-dev libegl1-mesa-dev libglx-dev mpv ffmpeg cmake ninja-build
 ```
 
 Notes:
 
 - GTK4 provides the `GtkGLArea` video host planned for libmpv rendering.
 - `libmpv-dev` provides headers and `mpv.pc` for build-time detection.
+- `libgl1-mesa-dev`, `libegl1-mesa-dev`, and `libglx-dev` provide the OpenGL
+  symbols used by the first `GtkGLArea` render spike.
 - `mpv` and `ffmpeg` are runtime tools used by the player and media helpers.
 - Hardware decode is intentionally left to mpv configuration first; document VAAPI/VDPAU
   observations when the render spike lands.
