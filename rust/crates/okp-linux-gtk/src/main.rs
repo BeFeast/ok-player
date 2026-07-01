@@ -381,6 +381,7 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
     window.set_child(Some(&overlay));
 
     connect_mpv(&video_area, Rc::clone(&state), launch_args);
+    connect_video_clicks(&video_area, &window);
     connect_drop(&window, Rc::clone(&state));
     connect_keyboard(&window, Rc::clone(&state), Rc::clone(&status_toast));
     connect_progress_persistence(&window, Rc::clone(&state));
@@ -911,6 +912,20 @@ fn connect_state_poll(
 
         glib::ControlFlow::Continue
     });
+}
+
+fn connect_video_clicks(video_area: &gtk::GLArea, window: &gtk::ApplicationWindow) {
+    let click = gtk::GestureClick::new();
+    click.set_button(0);
+
+    let click_window = window.clone();
+    click.connect_released(move |_, press_count, _, _| {
+        if press_count == 2 {
+            toggle_fullscreen(&click_window);
+        }
+    });
+
+    video_area.add_controller(click);
 }
 
 fn update_mode_buttons(controls: &Controls, state: &Rc<RefCell<PlayerState>>) {
