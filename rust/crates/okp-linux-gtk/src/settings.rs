@@ -1,7 +1,7 @@
 use std::env;
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -43,6 +43,10 @@ impl SettingsStore {
 
     pub fn volume(&self) -> f64 {
         normalized_volume(self.data.playback.volume).unwrap_or(DEFAULT_VOLUME)
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     pub fn set_volume(&mut self, volume: f64) {

@@ -766,16 +766,7 @@ fn build_controls(
     let volume_state = Rc::clone(&state);
     volume.connect_change_value(move |_, _, value| {
         if !updating_volume.get() {
-            let result = volume_state
-                .borrow()
-                .mpv
-                .as_ref()
-                .map(|mpv| mpv.set_volume(value));
-            match result {
-                Some(Ok(())) => save_volume_setting(&volume_state, value),
-                Some(Err(error)) => eprintln!("Failed to set volume: {error}"),
-                None => {}
-            }
+            set_volume_from_ui(&volume_state, value);
         }
 
         glib::Propagation::Proceed
@@ -1641,6 +1632,21 @@ fn command_popover_content(
     });
     content.append(&open_url_button);
 
+    let settings_button = track_button("Settings...", false);
+    let settings_parent = parent.clone();
+    let settings_state = Rc::clone(&state);
+    let settings_toast = Rc::clone(&status_toast);
+    let settings_popover = popover.clone();
+    settings_button.connect_clicked(move |_| {
+        settings_popover.popdown();
+        open_settings_window(
+            &settings_parent,
+            Rc::clone(&settings_state),
+            Rc::clone(&settings_toast),
+        );
+    });
+    content.append(&settings_button);
+
     let info_button = track_button("Media Information", false);
     info_button.set_sensitive(has_media);
     let info_parent = parent.clone();
@@ -2121,6 +2127,196 @@ fn open_clear_history_dialog(
     dialog.present();
 }
 
+fn open_settings_window(
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) {
+    let window = gtk::Window::builder()
+        .title("Settings")
+        .transient_for(parent)
+        .default_width(560)
+        .default_height(520)
+        .build();
+    window.add_css_class("okp-settings-window");
+
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 14);
+    root.add_css_class("okp-settings-root");
+    root.set_margin_top(18);
+    root.set_margin_end(18);
+    root.set_margin_bottom(18);
+    root.set_margin_start(18);
+
+    let title = gtk::Label::new(Some("Settings"));
+    title.add_css_class("okp-info-title");
+    title.set_xalign(0.0);
+    root.append(&title);
+
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    content.add_css_class("okp-settings-content");
+
+    let playback = settings_section("Playback");
+    playback.append(&settings_volume_row(Rc::clone(&state)));
+    content.append(&playback);
+
+    let privacy = settings_section("Privacy");
+    privacy.append(&settings_private_session_row(
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    ));
+    privacy.append(&settings_clear_history_row(
+        parent,
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    ));
+    content.append(&privacy);
+
+    let storage = settings_section("Storage");
+    let settings_path = state
+        .borrow()
+        .settings
+        .path()
+        .to_string_lossy()
+        .into_owned();
+    storage.append(&settings_value_row("Settings file", &settings_path));
+    content.append(&storage);
+
+    let scroller = gtk::ScrolledWindow::new();
+    scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    scroller.set_vexpand(true);
+    scroller.set_child(Some(&content));
+    root.append(&scroller);
+
+    let footer = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    footer.set_halign(gtk::Align::End);
+    let done_button = gtk::Button::with_label("Done");
+    done_button.add_css_class("okp-info-footer-button");
+    let close_window = window.clone();
+    done_button.connect_clicked(move |_| close_window.close());
+    footer.append(&done_button);
+    root.append(&footer);
+
+    window.set_child(Some(&root));
+    window.present();
+}
+
+fn settings_section(title: &str) -> gtk::Box {
+    let section = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    section.add_css_class("okp-info-section");
+
+    let title = gtk::Label::new(Some(title));
+    title.add_css_class("okp-info-section-title");
+    title.set_xalign(0.0);
+    section.append(&title);
+    section
+}
+
+fn settings_volume_row(state: Rc<RefCell<PlayerState>>) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    row.add_css_class("okp-settings-row");
+
+    let header = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    let label = gtk::Label::new(Some("Volume"));
+    label.add_css_class("okp-info-label");
+    label.set_xalign(0.0);
+    label.set_hexpand(true);
+
+    let current_volume = state.borrow().settings.volume();
+    let value = gtk::Label::new(Some(&format!("{current_volume:.0}%")));
+    value.add_css_class("okp-info-value");
+    value.set_xalign(1.0);
+    header.append(&label);
+    header.append(&value);
+    row.append(&header);
+
+    let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 130.0, 1.0);
+    scale.set_draw_value(false);
+    scale.set_value(current_volume);
+    scale.add_css_class("okp-settings-scale");
+
+    let value_label = value.clone();
+    scale.connect_change_value(move |_, _, volume| {
+        value_label.set_text(&format!("{volume:.0}%"));
+        set_volume_from_ui(&state, volume);
+        glib::Propagation::Proceed
+    });
+    row.append(&scale);
+
+    row
+}
+
+fn settings_private_session_row(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row.add_css_class("okp-settings-row");
+
+    let label = gtk::Label::new(Some("Private Session"));
+    label.add_css_class("okp-info-label");
+    label.set_xalign(0.0);
+    label.set_hexpand(true);
+    row.append(&label);
+
+    let private_session = state.borrow().private_session;
+    let button = gtk::Button::with_label(if private_session { "On" } else { "Off" });
+    button.add_css_class("okp-settings-button");
+    button.connect_clicked(move |button| {
+        toggle_private_session(&state, &status_toast);
+        let private_session = state.borrow().private_session;
+        button.set_label(if private_session { "On" } else { "Off" });
+    });
+    row.append(&button);
+
+    row
+}
+
+fn settings_clear_history_row(
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row.add_css_class("okp-settings-row");
+
+    let label = gtk::Label::new(Some("History"));
+    label.add_css_class("okp-info-label");
+    label.set_xalign(0.0);
+    label.set_hexpand(true);
+    row.append(&label);
+
+    let button = gtk::Button::with_label("Clear...");
+    button.add_css_class("okp-settings-button");
+    let parent = parent.clone();
+    button.connect_clicked(move |_| {
+        open_clear_history_dialog(&parent, Rc::clone(&state), Rc::clone(&status_toast));
+    });
+    row.append(&button);
+
+    row
+}
+
+fn settings_value_row(label: &str, value: &str) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row.add_css_class("okp-settings-row");
+
+    let label = gtk::Label::new(Some(label));
+    label.add_css_class("okp-info-label");
+    label.set_xalign(0.0);
+    label.set_width_chars(14);
+    row.append(&label);
+
+    let value = gtk::Label::new(Some(value));
+    value.add_css_class("okp-info-value");
+    value.set_xalign(0.0);
+    value.set_hexpand(true);
+    value.set_ellipsize(pango::EllipsizeMode::Middle);
+    value.set_selectable(true);
+    row.append(&value);
+
+    row
+}
+
 fn open_subtitle_dialog(parent: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerState>>) {
     let dialog = gtk::FileChooserDialog::new(
         Some("Add subtitle"),
@@ -2180,6 +2376,18 @@ fn connect_keyboard(
     let shortcut_window = window.clone();
     controller.connect_key_pressed(move |_, key, _, modifiers| {
         chrome.show_for_activity();
+
+        if modifiers.contains(gdk::ModifierType::CONTROL_MASK)
+            && !modifiers.intersects(gdk::ModifierType::ALT_MASK)
+            && key == gdk::Key::comma
+        {
+            open_settings_window(
+                &shortcut_window,
+                Rc::clone(&state),
+                Rc::clone(&status_toast),
+            );
+            return glib::Propagation::Stop;
+        }
 
         if modifiers.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK) {
             return glib::Propagation::Proceed;
@@ -2310,6 +2518,18 @@ fn has_loaded_media(state: &Rc<RefCell<PlayerState>>) -> bool {
 
 fn has_loaded_media_state(state: &PlayerState) -> bool {
     state.current_file.is_some() || state.current_url.is_some()
+}
+
+fn set_volume_from_ui(state: &Rc<RefCell<PlayerState>>, volume: f64) {
+    let result = state
+        .borrow()
+        .mpv
+        .as_ref()
+        .map(|mpv| mpv.set_volume(volume));
+    match result {
+        Some(Ok(())) | None => save_volume_setting(state, volume),
+        Some(Err(error)) => eprintln!("Failed to set volume: {error}"),
+    }
 }
 
 fn adjust_volume(state: &Rc<RefCell<PlayerState>>, delta: f64) {
@@ -3525,7 +3745,15 @@ fn install_css() {
             background: #101115;
         }
 
+        .okp-settings-window {
+            background: #101115;
+        }
+
         .okp-info-root {
+            background: #101115;
+        }
+
+        .okp-settings-root {
             background: #101115;
         }
 
@@ -3541,6 +3769,10 @@ fn install_css() {
         }
 
         .okp-info-content {
+            padding-right: 4px;
+        }
+
+        .okp-settings-content {
             padding-right: 4px;
         }
 
@@ -3570,6 +3802,35 @@ fn install_css() {
         .okp-info-value {
             color: rgba(255, 255, 255, 0.84);
             font-size: 12px;
+        }
+
+        .okp-settings-row {
+            min-height: 34px;
+        }
+
+        .okp-settings-scale trough {
+            min-height: 6px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.24);
+        }
+
+        .okp-settings-scale highlight {
+            min-height: 6px;
+            border-radius: 999px;
+            background: #ff6a3d;
+        }
+
+        .okp-settings-scale slider {
+            min-width: 18px;
+            min-height: 18px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.96);
+        }
+
+        .okp-settings-button {
+            min-width: 82px;
+            min-height: 32px;
+            border-radius: 7px;
         }
 
         .okp-info-track-row {
