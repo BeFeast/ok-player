@@ -26,6 +26,7 @@ const SPEED_PRESETS: [f64; 6] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 struct PlayerState {
     mpv: Option<Mpv>,
     current_file: Option<PathBuf>,
+    current_url: Option<String>,
     playlist: Vec<PathBuf>,
     pending_subtitles: Vec<PathBuf>,
     pending_resume: Option<(PathBuf, f64)>,
@@ -119,6 +120,7 @@ impl PlayModes {
 #[derive(Clone, Default)]
 struct LaunchArgs {
     file: Option<PathBuf>,
+    url: Option<String>,
     subtitles: Vec<PathBuf>,
 }
 
@@ -333,7 +335,14 @@ fn parse_launch_args() -> (String, LaunchArgs) {
             continue;
         }
 
-        if launch.file.is_none() {
+        if launch.file.is_none() && launch.url.is_none() {
+            if let Some(text) = arg.to_str()
+                && media_formats::is_playable_url(Some(text))
+            {
+                launch.url = Some(text.to_owned());
+                continue;
+            }
+
             launch.file = Some(PathBuf::from(arg));
         }
     }
@@ -563,7 +572,7 @@ fn build_controls(
     let play_state = Rc::clone(&state);
     let play_open_parent = window.clone();
     play_button.connect_clicked(move |_| {
-        let has_media = play_state.borrow().current_file.is_some();
+        let has_media = has_loaded_media(&play_state);
         if !has_media {
             open_media_dialog(&play_open_parent, Rc::clone(&play_state));
             return;
@@ -791,6 +800,8 @@ fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, launch
 
         if let Some(path) = launch_args.file.as_deref() {
             load_media_path(&realize_state, path.to_path_buf());
+        } else if let Some(url) = launch_args.url.as_deref() {
+            load_media_url(&realize_state, url.to_owned());
         }
         realize_state
             .borrow_mut()
@@ -854,7 +865,7 @@ fn connect_state_poll(
             .mpv
             .as_ref()
             .and_then(|mpv| mpv.playback_state().ok());
-        let has_media = state.borrow().current_file.is_some();
+        let has_media = has_loaded_media(&state);
         let has_playlist = state.borrow().playlist.len() > 1;
         drain_thumbnail_events(&controls);
         update_up_next_panel(&controls, &state);
@@ -1416,12 +1427,27 @@ fn command_popover_content(
     let (has_media, repeat_mode, shuffle_enabled, auto_advance_enabled) = {
         let state = state.borrow();
         (
-            state.current_file.is_some(),
+            has_loaded_media_state(&state),
             state.modes.repeat_mode,
             state.modes.shuffle_enabled,
             state.modes.auto_advance_enabled,
         )
     };
+
+    let open_url_button = track_button("Open URL...", false);
+    let open_url_parent = parent.clone();
+    let open_url_state = Rc::clone(&state);
+    let open_url_toast = Rc::clone(&status_toast);
+    let open_url_popover = popover.clone();
+    open_url_button.connect_clicked(move |_| {
+        open_url_popover.popdown();
+        open_url_dialog(
+            &open_url_parent,
+            Rc::clone(&open_url_state),
+            Rc::clone(&open_url_toast),
+        );
+    });
+    content.append(&open_url_button);
 
     let info_button = track_button("Media Information", false);
     info_button.set_sensitive(has_media);
@@ -1789,6 +1815,48 @@ fn open_media_dialog(parent: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerSt
     dialog.present();
 }
 
+fn open_url_dialog(
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) {
+    let dialog = gtk::Dialog::builder()
+        .title("Open URL")
+        .transient_for(parent)
+        .modal(true)
+        .build();
+    dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+    dialog.add_button("Open", gtk::ResponseType::Accept);
+    dialog.set_default_response(gtk::ResponseType::Accept);
+
+    let content = dialog.content_area();
+    content.set_spacing(8);
+    content.set_margin_top(12);
+    content.set_margin_end(12);
+    content.set_margin_bottom(12);
+    content.set_margin_start(12);
+
+    let entry = gtk::Entry::new();
+    entry.set_placeholder_text(Some("https://example.com/video.mkv"));
+    entry.set_activates_default(true);
+    entry.set_width_chars(52);
+    content.append(&entry);
+
+    dialog.connect_response(move |dialog, response| {
+        if response == gtk::ResponseType::Accept {
+            let url = entry.text().trim().to_owned();
+            if media_formats::is_playable_url(Some(&url)) {
+                load_media_url(&state, url);
+            } else {
+                status_toast.show("Enter a valid stream URL");
+            }
+        }
+        dialog.close();
+    });
+
+    dialog.present();
+}
+
 fn open_subtitle_dialog(parent: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerState>>) {
     let dialog = gtk::FileChooserDialog::new(
         Some("Add subtitle"),
@@ -1895,6 +1963,14 @@ fn connect_keyboard(
                 open_subtitle_dialog(&shortcut_window, Rc::clone(&state));
                 glib::Propagation::Stop
             }
+            gdk::Key::u | gdk::Key::U => {
+                open_url_dialog(
+                    &shortcut_window,
+                    Rc::clone(&state),
+                    Rc::clone(&status_toast),
+                );
+                glib::Propagation::Stop
+            }
             gdk::Key::c | gdk::Key::C => {
                 take_screenshot(&state, &status_toast);
                 glib::Propagation::Stop
@@ -1959,6 +2035,14 @@ fn with_mpv(
     }
 
     state.borrow().mpv.is_some()
+}
+
+fn has_loaded_media(state: &Rc<RefCell<PlayerState>>) -> bool {
+    has_loaded_media_state(&state.borrow())
+}
+
+fn has_loaded_media_state(state: &PlayerState) -> bool {
+    state.current_file.is_some() || state.current_url.is_some()
 }
 
 fn adjust_volume(state: &Rc<RefCell<PlayerState>>, delta: f64) {
@@ -2300,6 +2384,25 @@ fn load_media_path(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
     load_media_path_internal(state, path, true);
 }
 
+fn load_media_url(state: &Rc<RefCell<PlayerState>>, url: String) {
+    if !is_media_url(&url) {
+        return;
+    }
+
+    save_current_progress(state, false);
+
+    let result = {
+        let state = state.borrow();
+        state.mpv.as_ref().map(|mpv| mpv.load_url(&url))
+    };
+
+    match result {
+        Some(Ok(())) => remember_loaded_url(state, url),
+        Some(Err(error)) => eprintln!("Failed to load URL '{url}': {error}"),
+        None => remember_loaded_url(state, url),
+    }
+}
+
 fn load_media_path_internal(state: &Rc<RefCell<PlayerState>>, path: PathBuf, save_previous: bool) {
     if !is_media_path(&path) {
         return;
@@ -2329,6 +2432,7 @@ fn remember_loaded_media(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
     let preferences = state.history.playback_preferences(&path);
     let playlist_changed = state.playlist != playlist;
     state.current_file = Some(path);
+    state.current_url = None;
     state.playlist = playlist;
     if playlist_changed {
         state.modes.reset_shuffle_order();
@@ -2344,6 +2448,20 @@ fn remember_loaded_media(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
     state.pending_subtitles.clear();
     state.pending_resume = resume.map(|position| (resume_path, position));
     state.pending_preferences = preferences.map(|preferences| (preferences_path, preferences));
+}
+
+fn remember_loaded_url(state: &Rc<RefCell<PlayerState>>, url: String) {
+    let mut state = state.borrow_mut();
+    state.current_file = None;
+    state.current_url = Some(url);
+    state.playlist.clear();
+    state.modes.reset_shuffle_order();
+    state.thumbnail_request_key = None;
+    state.hover_thumbnail_request_key = None;
+    state.chapters_snapshot.clear();
+    state.pending_subtitles.clear();
+    state.pending_resume = None;
+    state.pending_preferences = None;
 }
 
 fn navigate_playlist(state: &Rc<RefCell<PlayerState>>, direction: isize) -> bool {
@@ -2752,7 +2870,7 @@ fn build_folder_playlist(path: &Path) -> Vec<PathBuf> {
 }
 
 fn load_subtitle_path(state: &Rc<RefCell<PlayerState>>, path: PathBuf) -> bool {
-    if !is_subtitle_path(&path) || state.borrow().current_file.is_none() {
+    if !is_subtitle_path(&path) || !has_loaded_media(state) {
         return false;
     }
 
@@ -2778,7 +2896,7 @@ fn load_subtitle_path(state: &Rc<RefCell<PlayerState>>, path: PathBuf) -> bool {
 fn try_pending_subtitles(state: &Rc<RefCell<PlayerState>>) {
     let pending = {
         let mut state = state.borrow_mut();
-        if state.current_file.is_none() || state.pending_subtitles.is_empty() {
+        if !has_loaded_media_state(&state) || state.pending_subtitles.is_empty() {
             return;
         }
 
@@ -2804,6 +2922,10 @@ fn try_pending_subtitles(state: &Rc<RefCell<PlayerState>>) {
 
 fn is_media_path(path: &Path) -> bool {
     media_formats::is_media(path)
+}
+
+fn is_media_url(url: &str) -> bool {
+    media_formats::is_playable_url(Some(url))
 }
 
 fn is_subtitle_path(path: &Path) -> bool {

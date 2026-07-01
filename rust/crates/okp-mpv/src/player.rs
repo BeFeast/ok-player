@@ -212,6 +212,14 @@ impl Mpv {
         check(unsafe { ffi::mpv_command(self.handle.as_ptr(), args.as_ptr()) })
     }
 
+    pub fn load_url(&self, url: &str) -> Result<(), MpvError> {
+        let command = CString::new("loadfile")?;
+        let url = CString::new(url)?;
+        let args = [command.as_ptr(), url.as_ptr(), ptr::null()];
+
+        check(unsafe { ffi::mpv_command(self.handle.as_ptr(), args.as_ptr()) })
+    }
+
     pub fn add_subtitle_file(&self, path: &Path) -> Result<(), MpvError> {
         let command = CString::new("sub-add")?;
         let path = path_to_cstring(path)?;
