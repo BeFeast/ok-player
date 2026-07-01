@@ -140,7 +140,7 @@ struct Controls {
     duration_label: gtk::Label,
     volume: gtk::Scale,
     chapter_marks_snapshot: RefCell<Vec<f64>>,
-    up_next_panel: gtk::Box,
+    up_next_revealer: gtk::Revealer,
     up_next_title: gtk::Label,
     up_next_list: gtk::ListBox,
     side_panel_snapshot: RefCell<SidePanelSnapshot>,
@@ -151,6 +151,7 @@ struct Controls {
 
 struct ChromeVisibility {
     revealer: gtk::Revealer,
+    linked_revealers: Rc<RefCell<Vec<gtk::Revealer>>>,
     hide_source: Rc<RefCell<Option<glib::SourceId>>>,
     pin_count: Rc<Cell<u32>>,
     auto_hide_enabled: Rc<Cell<bool>>,
@@ -170,6 +171,7 @@ impl ChromeVisibility {
 
         Self {
             revealer,
+            linked_revealers: Rc::new(RefCell::new(Vec::new())),
             hide_source: Rc::new(RefCell::new(None)),
             pin_count: Rc::new(Cell::new(0)),
             auto_hide_enabled: Rc::new(Cell::new(false)),
@@ -183,6 +185,11 @@ impl ChromeVisibility {
 
     fn set_child(&self, child: &impl IsA<gtk::Widget>) {
         self.revealer.set_child(Some(child));
+    }
+
+    fn add_linked_revealer(&self, revealer: &gtk::Revealer) {
+        Self::set_revealer_state(revealer, self.is_revealed.get());
+        self.linked_revealers.borrow_mut().push(revealer.clone());
     }
 
     fn set_auto_hide_enabled(&self, enabled: bool) {
@@ -222,8 +229,19 @@ impl ChromeVisibility {
 
     fn show_now(&self) {
         self.is_revealed.set(true);
-        self.revealer.set_can_target(true);
-        self.revealer.set_reveal_child(true);
+        self.set_all_revealed(true);
+    }
+
+    fn set_all_revealed(&self, revealed: bool) {
+        Self::set_revealer_state(&self.revealer, revealed);
+        for revealer in self.linked_revealers.borrow().iter() {
+            Self::set_revealer_state(revealer, revealed);
+        }
+    }
+
+    fn set_revealer_state(revealer: &gtk::Revealer, revealed: bool) {
+        revealer.set_can_target(revealed);
+        revealer.set_reveal_child(revealed);
     }
 
     fn schedule_hide(&self) {
@@ -233,6 +251,7 @@ impl ChromeVisibility {
         self.cancel_hide();
 
         let revealer = self.revealer.clone();
+        let linked_revealers = Rc::clone(&self.linked_revealers);
         let hide_source = Rc::clone(&self.hide_source);
         let pin_count = Rc::clone(&self.pin_count);
         let auto_hide_enabled = Rc::clone(&self.auto_hide_enabled);
@@ -241,8 +260,10 @@ impl ChromeVisibility {
             hide_source.borrow_mut().take();
             if auto_hide_enabled.get() && pin_count.get() == 0 {
                 is_revealed.set(false);
-                revealer.set_reveal_child(false);
-                revealer.set_can_target(false);
+                Self::set_revealer_state(&revealer, false);
+                for revealer in linked_revealers.borrow().iter() {
+                    Self::set_revealer_state(revealer, false);
+                }
             }
             glib::ControlFlow::Break
         });
@@ -495,10 +516,11 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
     );
     let control_bar = controls_bar(&controls);
     chrome.set_child(&control_bar);
+    chrome.add_linked_revealer(&controls.up_next_revealer);
 
     overlay.set_child(Some(&video_area));
     overlay.add_overlay(chrome.widget());
-    overlay.add_overlay(&controls.up_next_panel);
+    overlay.add_overlay(&controls.up_next_revealer);
     overlay.add_overlay(status_toast.widget());
     window.set_child(Some(&overlay));
     connect_chrome_activity(&overlay, Rc::clone(&chrome));
@@ -606,15 +628,22 @@ fn build_controls(
 
     let up_next_panel = gtk::Box::new(gtk::Orientation::Vertical, 8);
     up_next_panel.add_css_class("okp-up-next-panel");
-    up_next_panel.set_halign(gtk::Align::End);
-    up_next_panel.set_valign(gtk::Align::Fill);
-    up_next_panel.set_margin_top(24);
-    up_next_panel.set_margin_end(24);
-    up_next_panel.set_margin_bottom(92);
     up_next_panel.set_width_request(320);
-    up_next_panel.set_visible(false);
     up_next_panel.append(&up_next_title);
     up_next_panel.append(&up_next_scroller);
+
+    let up_next_revealer = gtk::Revealer::new();
+    up_next_revealer.set_halign(gtk::Align::End);
+    up_next_revealer.set_valign(gtk::Align::Fill);
+    up_next_revealer.set_margin_top(24);
+    up_next_revealer.set_margin_end(24);
+    up_next_revealer.set_margin_bottom(92);
+    up_next_revealer.set_transition_duration(170);
+    up_next_revealer.set_transition_type(gtk::RevealerTransitionType::SlideRight);
+    up_next_revealer.set_reveal_child(true);
+    up_next_revealer.set_can_target(true);
+    up_next_revealer.set_visible(false);
+    up_next_revealer.set_child(Some(&up_next_panel));
 
     let up_next_state = Rc::clone(&state);
     let up_next_actions = Rc::new(RefCell::new(Vec::<SidePanelAction>::new()));
@@ -759,7 +788,7 @@ fn build_controls(
         duration_label,
         volume,
         chapter_marks_snapshot: RefCell::new(Vec::new()),
-        up_next_panel,
+        up_next_revealer,
         up_next_title,
         up_next_list,
         side_panel_snapshot: RefCell::new(SidePanelSnapshot::default()),
@@ -1168,7 +1197,7 @@ fn update_up_next_panel(controls: &Controls, state: &Rc<RefCell<PlayerState>>) {
         }
     }
 
-    controls.up_next_panel.set_visible(is_visible);
+    controls.up_next_revealer.set_visible(is_visible);
     if !is_visible {
         controls.side_panel_snapshot.replace(snapshot);
         controls.side_panel_actions.borrow_mut().clear();
