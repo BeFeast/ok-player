@@ -157,10 +157,15 @@ struct Controls {
     chapter_marks_snapshot: RefCell<Vec<f64>>,
     up_next_revealer: gtk::Revealer,
     up_next_title: gtk::Label,
+    up_next_summary: gtk::Label,
+    chapters_tab: gtk::Button,
+    up_next_tab: gtk::Button,
     up_next_list: gtk::ListBox,
     side_panel_user_visible: Rc<Cell<bool>>,
     side_panel_pinned: Rc<Cell<bool>>,
-    side_panel_snapshot: RefCell<SidePanelSnapshot>,
+    side_panel_mode: Rc<Cell<SidePanelMode>>,
+    side_panel_manual_mode: Rc<Cell<bool>>,
+    side_panel_snapshot: Rc<RefCell<SidePanelSnapshot>>,
     side_panel_actions: Rc<RefCell<Vec<SidePanelAction>>>,
     thumbnail_sender: mpsc::Sender<String>,
     thumbnail_events: RefCell<mpsc::Receiver<String>>,
@@ -524,6 +529,12 @@ enum SidePanelAction {
     None,
     Chapter(f64),
     Playlist(usize),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SidePanelMode {
+    Chapters,
+    UpNext,
 }
 
 fn main() -> glib::ExitCode {
@@ -1131,9 +1142,22 @@ fn build_controls(
     volume.set_value(100.0);
     volume.add_css_class("okp-volume");
 
-    let up_next_title = gtk::Label::new(Some("Chapters / Up Next"));
+    let up_next_title = gtk::Label::new(Some("Playback"));
     up_next_title.add_css_class("okp-up-next-title");
     up_next_title.set_xalign(0.0);
+
+    let up_next_summary = gtk::Label::new(Some("No media loaded"));
+    up_next_summary.add_css_class("okp-up-next-summary");
+    up_next_summary.set_xalign(0.0);
+    up_next_summary.set_ellipsize(pango::EllipsizeMode::End);
+
+    let chapters_tab = side_panel_segment_button("Chapters", true);
+    let up_next_tab = side_panel_segment_button("Up Next", false);
+    let side_panel_mode = Rc::new(Cell::new(SidePanelMode::Chapters));
+    let side_panel_tabs = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    side_panel_tabs.add_css_class("okp-side-panel-tabs");
+    side_panel_tabs.append(&chapters_tab);
+    side_panel_tabs.append(&up_next_tab);
 
     let up_next_list = gtk::ListBox::new();
     up_next_list.add_css_class("okp-up-next-list");
@@ -1144,10 +1168,16 @@ fn build_controls(
     up_next_scroller.set_child(Some(&up_next_list));
     up_next_scroller.set_vexpand(true);
 
-    let up_next_panel = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    let up_next_header = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    up_next_header.add_css_class("okp-side-panel-header");
+    up_next_header.append(&up_next_title);
+    up_next_header.append(&up_next_summary);
+    up_next_header.append(&side_panel_tabs);
+
+    let up_next_panel = gtk::Box::new(gtk::Orientation::Vertical, 10);
     up_next_panel.add_css_class("okp-up-next-panel");
-    up_next_panel.set_width_request(320);
-    up_next_panel.append(&up_next_title);
+    up_next_panel.set_width_request(344);
+    up_next_panel.append(&up_next_header);
     up_next_panel.append(&up_next_scroller);
 
     let up_next_revealer = gtk::Revealer::new();
@@ -1165,6 +1195,8 @@ fn build_controls(
 
     let side_panel_user_visible = Rc::new(Cell::new(false));
     let side_panel_pinned = Rc::new(Cell::new(false));
+    let side_panel_manual_mode = Rc::new(Cell::new(false));
+    let side_panel_snapshot = Rc::new(RefCell::new(SidePanelSnapshot::default()));
 
     let up_next_state = Rc::clone(&state);
     let up_next_actions = Rc::new(RefCell::new(Vec::<SidePanelAction>::new()));
@@ -1188,6 +1220,38 @@ fn build_controls(
                 jump_playlist_index(&up_next_state, index);
             }
         }
+    });
+
+    let chapters_tab_mode = Rc::clone(&side_panel_mode);
+    let chapters_tab_manual_mode = Rc::clone(&side_panel_manual_mode);
+    let chapters_tab_snapshot = Rc::clone(&side_panel_snapshot);
+    let chapters_tab_button = chapters_tab.clone();
+    let chapters_peer_tab = up_next_tab.clone();
+    chapters_tab.connect_clicked(move |_| {
+        chapters_tab_manual_mode.set(true);
+        chapters_tab_mode.set(SidePanelMode::Chapters);
+        chapters_tab_snapshot.borrow_mut().has_media = false;
+        update_side_panel_tab_state(
+            &chapters_tab_button,
+            &chapters_peer_tab,
+            SidePanelMode::Chapters,
+        );
+    });
+
+    let up_next_tab_mode = Rc::clone(&side_panel_mode);
+    let up_next_tab_manual_mode = Rc::clone(&side_panel_manual_mode);
+    let up_next_tab_snapshot = Rc::clone(&side_panel_snapshot);
+    let up_next_tab_button = up_next_tab.clone();
+    let up_next_peer_tab = chapters_tab.clone();
+    up_next_tab.connect_clicked(move |_| {
+        up_next_tab_manual_mode.set(true);
+        up_next_tab_mode.set(SidePanelMode::UpNext);
+        up_next_tab_snapshot.borrow_mut().has_media = false;
+        update_side_panel_tab_state(
+            &up_next_peer_tab,
+            &up_next_tab_button,
+            SidePanelMode::UpNext,
+        );
     });
 
     let subtitle_popover = gtk::Popover::new();
@@ -1269,14 +1333,32 @@ fn build_controls(
     let chapters_visible = Rc::clone(&side_panel_user_visible);
     let chapters_pinned = Rc::clone(&side_panel_pinned);
     let chapters_chrome = Rc::clone(&chrome);
+    let chapters_state = Rc::clone(&state);
+    let chapters_mode = Rc::clone(&side_panel_mode);
+    let chapters_manual_mode = Rc::clone(&side_panel_manual_mode);
+    let chapters_tab_for_toggle = chapters_tab.clone();
+    let up_next_tab_for_toggle = up_next_tab.clone();
+    let chapters_snapshot_for_toggle = Rc::clone(&side_panel_snapshot);
     chapters_button.connect_clicked(move |_| {
+        let next_visible = !chapters_visible.get();
+        if next_visible {
+            let preferred_mode = preferred_side_panel_mode(&chapters_state);
+            chapters_manual_mode.set(false);
+            chapters_mode.set(preferred_mode);
+            chapters_snapshot_for_toggle.borrow_mut().has_media = false;
+            update_side_panel_tab_state(
+                &chapters_tab_for_toggle,
+                &up_next_tab_for_toggle,
+                preferred_mode,
+            );
+        }
         set_side_panel_user_visible(
             &chapters_panel,
             &chapters_toggle,
             &chapters_visible,
             &chapters_pinned,
             &chapters_chrome,
-            !chapters_visible.get(),
+            next_visible,
         );
     });
 
@@ -1329,10 +1411,15 @@ fn build_controls(
         chapter_marks_snapshot: RefCell::new(Vec::new()),
         up_next_revealer,
         up_next_title,
+        up_next_summary,
+        chapters_tab,
+        up_next_tab,
         up_next_list,
         side_panel_user_visible,
         side_panel_pinned,
-        side_panel_snapshot: RefCell::new(SidePanelSnapshot::default()),
+        side_panel_mode,
+        side_panel_manual_mode,
+        side_panel_snapshot,
         side_panel_actions: up_next_actions,
         thumbnail_sender,
         thumbnail_events: RefCell::new(thumbnail_receiver),
@@ -1406,6 +1493,77 @@ fn connect_popover_chrome_pin(popover: &gtk::Popover, chrome: Rc<ChromeVisibilit
 fn prepare_track_popover(popover: &gtk::Popover) {
     popover.add_css_class("okp-track-popover");
     popover.set_has_arrow(false);
+}
+
+fn side_panel_segment_button(label: &str, selected: bool) -> gtk::Button {
+    let button = gtk::Button::with_label(label);
+    button.add_css_class("okp-side-panel-tab");
+    button.set_has_frame(false);
+    if selected {
+        button.add_css_class("is-selected");
+    }
+    button
+}
+
+fn preferred_side_panel_mode(state: &Rc<RefCell<PlayerState>>) -> SidePanelMode {
+    let state = state.borrow();
+    let has_chapters = state
+        .mpv
+        .as_ref()
+        .map(Mpv::chapters)
+        .and_then(Result::ok)
+        .is_some_and(|chapters| !chapters.is_empty());
+    if has_chapters {
+        SidePanelMode::Chapters
+    } else {
+        SidePanelMode::UpNext
+    }
+}
+
+fn update_side_panel_tab_labels(
+    chapters_tab: &gtk::Button,
+    up_next_tab: &gtk::Button,
+    chapters_count: usize,
+    playlist_count: usize,
+) {
+    chapters_tab.set_label(&format!("Chapters {chapters_count}"));
+    up_next_tab.set_label(&format!("Up Next {playlist_count}"));
+}
+
+fn update_side_panel_tab_state(
+    chapters_tab: &gtk::Button,
+    up_next_tab: &gtk::Button,
+    mode: SidePanelMode,
+) {
+    match mode {
+        SidePanelMode::Chapters => {
+            chapters_tab.add_css_class("is-selected");
+            up_next_tab.remove_css_class("is-selected");
+        }
+        SidePanelMode::UpNext => {
+            up_next_tab.add_css_class("is-selected");
+            chapters_tab.remove_css_class("is-selected");
+        }
+    }
+}
+
+fn side_panel_summary(snapshot: &SidePanelSnapshot) -> String {
+    let current = snapshot
+        .current_file
+        .as_deref()
+        .map(display_file_name)
+        .unwrap_or_else(|| "No media loaded".to_owned());
+    let chapter_label = match snapshot.chapters.len() {
+        0 => "0 chapters".to_owned(),
+        1 => "1 chapter".to_owned(),
+        count => format!("{count} chapters"),
+    };
+    let item_label = match snapshot.playlist.len() {
+        0 => "0 items".to_owned(),
+        1 => "1 item".to_owned(),
+        count => format!("{count} items"),
+    };
+    format!("{current} · {chapter_label} · {item_label}")
 }
 
 fn set_side_panel_user_visible(
@@ -1859,11 +2017,21 @@ fn update_up_next_panel(
         controls.chapters_button.remove_css_class("is-selected");
     }
 
+    let previous_snapshot = controls.side_panel_snapshot.borrow().clone();
     request_chapter_thumbnail_warm(controls, state, &snapshot);
 
-    if *controls.side_panel_snapshot.borrow() == snapshot {
+    if previous_snapshot == snapshot {
         return;
     }
+
+    if panel_visible
+        && !controls.side_panel_manual_mode.get()
+        && previous_snapshot.chapters.is_empty()
+        && !snapshot.chapters.is_empty()
+    {
+        controls.side_panel_mode.set(SidePanelMode::Chapters);
+    }
+
     controls.side_panel_snapshot.replace(snapshot.clone());
     update_chapter_marks(
         &controls.seek,
@@ -1876,54 +2044,91 @@ fn update_up_next_panel(
         .as_ref()
         .and_then(|current| snapshot.playlist.iter().position(|path| path == current));
 
-    controls.up_next_title.set_text("Chapters / Up Next");
+    let mode = controls.side_panel_mode.get();
+    update_side_panel_tab_labels(
+        &controls.chapters_tab,
+        &controls.up_next_tab,
+        snapshot.chapters.len(),
+        snapshot.playlist.len(),
+    );
+    update_side_panel_tab_state(&controls.chapters_tab, &controls.up_next_tab, mode);
+    controls.up_next_title.set_text(match mode {
+        SidePanelMode::Chapters => "Chapters",
+        SidePanelMode::UpNext => "Up Next",
+    });
+    controls
+        .up_next_summary
+        .set_text(&side_panel_summary(&snapshot));
     clear_list_box(&controls.up_next_list);
     let mut actions = Vec::new();
 
-    if !snapshot.chapters.is_empty() {
-        controls.up_next_list.append(&panel_heading_row(&format!(
-            "Chapters · {}",
-            snapshot.chapters.len()
-        )));
-        actions.push(SidePanelAction::None);
-
-        for chapter in &snapshot.chapters {
-            let thumbnail = snapshot
-                .current_file
-                .as_ref()
-                .and_then(|path| thumbnails::existing_thumbnail_path(path, chapter));
-            controls
-                .up_next_list
-                .append(&chapter_row(chapter, thumbnail));
-            actions.push(SidePanelAction::Chapter(chapter.time));
+    match mode {
+        SidePanelMode::Chapters => render_chapters_panel(controls, &snapshot, &mut actions),
+        SidePanelMode::UpNext => {
+            render_playlist_panel(controls, &snapshot, current_index, &mut actions)
         }
     }
 
-    if snapshot.playlist.len() > 1 {
-        controls.up_next_list.append(&panel_heading_row(&format!(
-            "Up Next · {}",
-            snapshot.playlist.len()
-        )));
-        actions.push(SidePanelAction::None);
+    controls.side_panel_actions.replace(actions);
+}
 
-        for (index, path) in snapshot.playlist.iter().enumerate() {
-            controls
-                .up_next_list
-                .append(&playlist_row(path, index, current_index));
-            actions.push(SidePanelAction::Playlist(index));
-        }
-    }
-
-    if snapshot.chapters.is_empty() && snapshot.playlist.len() <= 1 {
-        controls.up_next_list.append(&panel_heading_row("Chapters"));
-        actions.push(SidePanelAction::None);
+fn render_chapters_panel(
+    controls: &Controls,
+    snapshot: &SidePanelSnapshot,
+    actions: &mut Vec<SidePanelAction>,
+) {
+    if snapshot.chapters.is_empty() {
         controls
             .up_next_list
             .append(&panel_empty_row("No chapters in this media yet."));
         actions.push(SidePanelAction::None);
+        return;
     }
 
-    controls.side_panel_actions.replace(actions);
+    controls.up_next_list.append(&panel_heading_row(&format!(
+        "Chapters · {}",
+        snapshot.chapters.len()
+    )));
+    actions.push(SidePanelAction::None);
+
+    for chapter in &snapshot.chapters {
+        let thumbnail = snapshot
+            .current_file
+            .as_ref()
+            .and_then(|path| thumbnails::existing_thumbnail_path(path, chapter));
+        controls
+            .up_next_list
+            .append(&chapter_row(chapter, thumbnail));
+        actions.push(SidePanelAction::Chapter(chapter.time));
+    }
+}
+
+fn render_playlist_panel(
+    controls: &Controls,
+    snapshot: &SidePanelSnapshot,
+    current_index: Option<usize>,
+    actions: &mut Vec<SidePanelAction>,
+) {
+    if snapshot.playlist.len() <= 1 {
+        controls
+            .up_next_list
+            .append(&panel_empty_row("No folder queue for this media yet."));
+        actions.push(SidePanelAction::None);
+        return;
+    }
+
+    controls.up_next_list.append(&panel_heading_row(&format!(
+        "Up Next · {}",
+        snapshot.playlist.len()
+    )));
+    actions.push(SidePanelAction::None);
+
+    for (index, path) in snapshot.playlist.iter().enumerate() {
+        controls
+            .up_next_list
+            .append(&playlist_row(path, index, current_index));
+        actions.push(SidePanelAction::Playlist(index));
+    }
 }
 
 fn drain_thumbnail_events(controls: &Controls) {
@@ -3270,23 +3475,31 @@ fn settings_window_controls(window: &gtk::Window) -> gtk::Box {
     controls.set_halign(gtk::Align::End);
     controls.set_valign(gtk::Align::Start);
 
-    let minimize = settings_window_control("window-minimize-symbolic");
+    let minimize = settings_window_control("−", "Minimize");
     let minimize_window = window.clone();
     minimize.connect_clicked(move |_| minimize_window.minimize());
     controls.append(&minimize);
 
-    let maximize = settings_window_control("window-maximize-symbolic");
+    let maximize = settings_window_control("□", "Maximize");
+    sync_settings_maximize_icon(&maximize, window);
     let maximize_window = window.clone();
+    let maximize_button = maximize.clone();
     maximize.connect_clicked(move |_| {
         if maximize_window.is_maximized() {
             maximize_window.unmaximize();
         } else {
             maximize_window.maximize();
         }
+        sync_settings_maximize_icon(&maximize_button, &maximize_window);
+    });
+    let notify_button = maximize.clone();
+    window.connect_maximized_notify(move |window| {
+        sync_settings_maximize_icon(&notify_button, window);
     });
     controls.append(&maximize);
 
-    let close = settings_window_control("window-close-symbolic");
+    let close = settings_window_control("×", "Close");
+    close.add_css_class("okp-settings-window-close");
     let close_window = window.clone();
     close.connect_clicked(move |_| close_window.close());
     controls.append(&close);
@@ -3294,14 +3507,36 @@ fn settings_window_controls(window: &gtk::Window) -> gtk::Box {
     controls
 }
 
-fn settings_window_control(icon_name: &str) -> gtk::Button {
+fn settings_window_control(label: &str, tooltip: &str) -> gtk::Button {
     let button = gtk::Button::new();
     button.add_css_class("okp-settings-window-control");
     button.set_has_frame(false);
-    let icon = gtk::Image::from_icon_name(icon_name);
-    icon.set_pixel_size(12);
-    button.set_child(Some(&icon));
+    button.set_tooltip_text(Some(tooltip));
+
+    let glyph = gtk::Label::new(None);
+    glyph.add_css_class("okp-settings-window-control-glyph");
+    button.set_child(Some(&glyph));
+    set_settings_window_control_label(&button, label);
     button
+}
+
+fn sync_settings_maximize_icon(button: &gtk::Button, window: &gtk::Window) {
+    if window.is_maximized() {
+        set_settings_window_control_label(button, "❐");
+        button.set_tooltip_text(Some("Restore"));
+    } else {
+        set_settings_window_control_label(button, "□");
+        button.set_tooltip_text(Some("Maximize"));
+    }
+}
+
+fn set_settings_window_control_label(button: &gtk::Button, label: &str) {
+    if let Some(glyph) = button.child().and_downcast::<gtk::Label>() {
+        let label = glib::markup_escape_text(label);
+        glyph.set_markup(&format!(
+            "<span font_desc=\"Sans 13\" foreground=\"#161616\">{label}</span>"
+        ));
+    }
 }
 
 fn settings_nav_row(label: &str, icon: SettingsNavIcon, selected: bool) -> gtk::Button {
@@ -6496,35 +6731,81 @@ fn install_css() {
 
         .okp-up-next-panel {
             padding: 12px;
-            border-radius: 8px;
-            background: rgba(14, 15, 18, 0.88);
-            box-shadow: 0 14px 42px rgba(0, 0, 0, 0.42);
+            border-radius: 12px;
+            background: rgba(12, 13, 17, 0.94);
+            border: 1px solid rgba(255, 255, 255, 0.10);
+            box-shadow: 0 22px 58px rgba(0, 0, 0, 0.48);
+        }
+
+        .okp-side-panel-header {
+            padding: 2px 2px 4px 2px;
         }
 
         .okp-up-next-title {
-            color: rgba(255, 255, 255, 0.92);
-            font-size: 13px;
-            font-weight: 700;
+            color: rgba(255, 255, 255, 0.94);
+            font-size: 17px;
+            font-weight: 760;
+        }
+
+        .okp-up-next-summary {
+            color: rgba(255, 255, 255, 0.54);
+            font-size: 11.5px;
+        }
+
+        .okp-side-panel-tabs {
+            margin-top: 6px;
+            padding: 3px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.055);
+            border: 1px solid rgba(255, 255, 255, 0.055);
+        }
+
+        button.okp-side-panel-tab {
+            min-height: 30px;
+            padding: 0 10px;
+            border-radius: 8px;
+            border: none;
+            background: transparent;
+            box-shadow: none;
+            color: rgba(255, 255, 255, 0.64);
+            font-size: 12px;
+            font-weight: 650;
+        }
+
+        button.okp-side-panel-tab:hover {
+            background: rgba(255, 255, 255, 0.07);
+            color: rgba(255, 255, 255, 0.86);
+        }
+
+        button.okp-side-panel-tab.is-selected {
+            background: rgba(40, 179, 170, 0.22);
+            color: rgba(255, 255, 255, 0.96);
         }
 
         .okp-up-next-list {
             background: transparent;
         }
 
+        .okp-up-next-list row {
+            background: transparent;
+        }
+
         .okp-panel-heading-row {
-            padding: 4px 10px 2px 10px;
+            padding: 8px 10px 3px 10px;
         }
 
         .okp-panel-heading {
-            color: rgba(255, 255, 255, 0.52);
-            font-size: 11px;
-            font-weight: 700;
+            color: rgba(255, 255, 255, 0.42);
+            font-size: 10.5px;
+            font-weight: 720;
         }
 
         .okp-panel-empty-row {
-            padding: 10px;
-            border-radius: 7px;
-            background: rgba(255, 255, 255, 0.045);
+            min-height: 58px;
+            padding: 14px 12px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.055);
+            border: 1px solid rgba(255, 255, 255, 0.055);
         }
 
         .okp-panel-empty {
@@ -6533,17 +6814,20 @@ fn install_css() {
         }
 
         .okp-up-next-row {
-            min-height: 38px;
-            padding: 8px 10px;
-            border-radius: 7px;
+            min-height: 42px;
+            margin: 2px 0;
+            padding: 9px 10px;
+            border-radius: 9px;
+            background: rgba(255, 255, 255, 0.035);
             color: rgba(255, 255, 255, 0.78);
         }
 
         .okp-chapter-thumb {
             min-width: 88px;
             min-height: 50px;
-            border-radius: 5px;
+            border-radius: 7px;
             background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.06);
         }
 
         .okp-up-next-row:hover {
@@ -6551,19 +6835,35 @@ fn install_css() {
         }
 
         .okp-up-next-row.is-current {
-            background: rgba(98, 181, 255, 0.18);
+            background: rgba(40, 179, 170, 0.18);
             color: rgba(255, 255, 255, 0.96);
         }
 
         .okp-up-next-marker {
-            color: rgba(98, 181, 255, 0.95);
+            color: rgba(40, 179, 170, 0.98);
             font-size: 11px;
-            font-weight: 700;
+            font-weight: 760;
         }
 
         .okp-up-next-file {
             color: inherit;
             font-size: 13px;
+        }
+
+        .okp-up-next-panel scrolledwindow {
+            background: transparent;
+        }
+
+        .okp-up-next-panel scrollbar,
+        .okp-up-next-panel scrollbar trough {
+            background: transparent;
+            border: none;
+        }
+
+        .okp-up-next-panel scrollbar slider {
+            min-width: 4px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.22);
         }
 
         .okp-track-popover-content {
@@ -6850,6 +7150,24 @@ fn install_css() {
 
         .okp-settings-window-control:hover {
             background: rgba(0, 0, 0, 0.06);
+        }
+
+        label.okp-settings-window-control-glyph {
+            color: #161616;
+            font-size: 13px;
+            font-weight: 400;
+        }
+
+        button.okp-settings-window-control:hover label.okp-settings-window-control-glyph {
+            color: #161616;
+        }
+
+        button.okp-settings-window-close:hover {
+            background: #c42b1c;
+        }
+
+        button.okp-settings-window-close:hover label.okp-settings-window-control-glyph {
+            color: #ffffff;
         }
 
         .okp-settings-stack {
