@@ -18,6 +18,7 @@ use velopack::VelopackApp;
 
 mod history;
 mod screenshots;
+mod settings;
 mod thumbnails;
 
 const SPEED_PRESETS: [f64; 6] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
@@ -37,6 +38,7 @@ struct PlayerState {
     modes: PlayModes,
     private_session: bool,
     history: history::HistoryStore,
+    settings: settings::SettingsStore,
     render_target_size: Option<okp_mpv::RenderTargetSize>,
 }
 
@@ -763,11 +765,17 @@ fn build_controls(
 
     let volume_state = Rc::clone(&state);
     volume.connect_change_value(move |_, _, value| {
-        if !updating_volume.get()
-            && let Some(mpv) = volume_state.borrow().mpv.as_ref()
-            && let Err(error) = mpv.set_volume(value)
-        {
-            eprintln!("Failed to set volume: {error}");
+        if !updating_volume.get() {
+            let result = volume_state
+                .borrow()
+                .mpv
+                .as_ref()
+                .map(|mpv| mpv.set_volume(value));
+            match result {
+                Some(Ok(())) => save_volume_setting(&volume_state, value),
+                Some(Err(error)) => eprintln!("Failed to set volume: {error}"),
+                None => {}
+            }
         }
 
         glib::Propagation::Proceed
@@ -962,6 +970,10 @@ fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, launch
                 return;
             }
         };
+        let saved_volume = realize_state.borrow().settings.volume();
+        if let Err(error) = mpv.set_volume(saved_volume) {
+            eprintln!("Failed to restore saved volume: {error}");
+        }
 
         if let Err(error) = mpv.create_render_context() {
             eprintln!("Failed to create mpv render context: {error}");
@@ -2301,10 +2313,35 @@ fn has_loaded_media_state(state: &PlayerState) -> bool {
 }
 
 fn adjust_volume(state: &Rc<RefCell<PlayerState>>, delta: f64) {
-    with_mpv(state, |mpv| {
-        let volume = mpv.playback_state()?.volume.unwrap_or(100.0);
-        mpv.set_volume(volume + delta)
-    });
+    let updated_volume = {
+        let state = state.borrow();
+        let Some(mpv) = state.mpv.as_ref() else {
+            return;
+        };
+        let volume = match mpv.playback_state() {
+            Ok(playback) => playback.volume.unwrap_or(100.0),
+            Err(error) => {
+                eprintln!("Failed to read volume: {error}");
+                return;
+            }
+        };
+        let updated_volume = (volume + delta).clamp(0.0, 130.0);
+        if let Err(error) = mpv.set_volume(updated_volume) {
+            eprintln!("Failed to set volume: {error}");
+            return;
+        }
+        updated_volume
+    };
+
+    save_volume_setting(state, updated_volume);
+}
+
+fn save_volume_setting(state: &Rc<RefCell<PlayerState>>, volume: f64) {
+    let mut state = state.borrow_mut();
+    state.settings.set_volume(volume);
+    if let Err(error) = state.settings.save() {
+        eprintln!("Failed to save settings: {error}");
+    }
 }
 
 fn adjust_subtitle_delay(state: &Rc<RefCell<PlayerState>>, delta_seconds: f64) {
