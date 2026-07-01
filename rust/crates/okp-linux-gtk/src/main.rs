@@ -619,6 +619,9 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
     overlay.add_overlay(chrome.widget());
     overlay.add_overlay(&controls.up_next_revealer);
     overlay.add_overlay(status_toast.widget());
+    for resize_handle in build_player_resize_handles(&window) {
+        overlay.add_overlay(&resize_handle);
+    }
     window.set_child(Some(&overlay));
     connect_chrome_activity(&overlay, Rc::clone(&chrome));
 
@@ -784,6 +787,174 @@ fn connect_player_window_drag(widget: &impl IsA<gtk::Widget>, window: &gtk::Appl
             gesture.current_button() as i32,
             x,
             y,
+            gesture.current_event_time(),
+        );
+    });
+    widget.add_controller(gesture);
+}
+
+fn build_player_resize_handles(window: &gtk::ApplicationWindow) -> Vec<gtk::Box> {
+    let specs = [
+        (
+            gdk::SurfaceEdge::NorthWest,
+            gtk::Align::Start,
+            gtk::Align::Start,
+            16,
+            16,
+            "nwse-resize",
+            "okp-resize-corner",
+        ),
+        (
+            gdk::SurfaceEdge::North,
+            gtk::Align::Fill,
+            gtk::Align::Start,
+            -1,
+            6,
+            "ns-resize",
+            "okp-resize-edge-horizontal",
+        ),
+        (
+            gdk::SurfaceEdge::NorthEast,
+            gtk::Align::End,
+            gtk::Align::Start,
+            16,
+            16,
+            "nesw-resize",
+            "okp-resize-corner",
+        ),
+        (
+            gdk::SurfaceEdge::West,
+            gtk::Align::Start,
+            gtk::Align::Fill,
+            6,
+            -1,
+            "ew-resize",
+            "okp-resize-edge-vertical",
+        ),
+        (
+            gdk::SurfaceEdge::East,
+            gtk::Align::End,
+            gtk::Align::Fill,
+            6,
+            -1,
+            "ew-resize",
+            "okp-resize-edge-vertical",
+        ),
+        (
+            gdk::SurfaceEdge::SouthWest,
+            gtk::Align::Start,
+            gtk::Align::End,
+            16,
+            16,
+            "nesw-resize",
+            "okp-resize-corner",
+        ),
+        (
+            gdk::SurfaceEdge::South,
+            gtk::Align::Fill,
+            gtk::Align::End,
+            -1,
+            6,
+            "ns-resize",
+            "okp-resize-edge-horizontal",
+        ),
+        (
+            gdk::SurfaceEdge::SouthEast,
+            gtk::Align::End,
+            gtk::Align::End,
+            16,
+            16,
+            "nwse-resize",
+            "okp-resize-corner",
+        ),
+    ];
+
+    specs
+        .into_iter()
+        .map(
+            |(edge, halign, valign, width, height, cursor, class_name)| {
+                let handle = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                handle.add_css_class("okp-resize-handle");
+                handle.add_css_class(class_name);
+                handle.set_halign(halign);
+                handle.set_valign(valign);
+                handle.set_can_target(true);
+                handle.set_cursor_from_name(Some(cursor));
+                if width > 0 {
+                    handle.set_width_request(width);
+                }
+                if height > 0 {
+                    handle.set_height_request(height);
+                }
+                connect_player_window_resize(&handle, window, edge);
+                handle
+            },
+        )
+        .collect()
+}
+
+fn connect_player_window_resize(
+    widget: &gtk::Box,
+    window: &gtk::ApplicationWindow,
+    edge: gdk::SurfaceEdge,
+) {
+    let gesture = gtk::GestureClick::new();
+    gesture.set_button(gdk::BUTTON_PRIMARY);
+    let resize_window = window.clone();
+    let resize_widget = widget.clone();
+    gesture.connect_pressed(move |gesture, _, x, y| {
+        let debug_resize = env::var_os("OKP_DEBUG_WINDOW_RESIZE").is_some();
+        if debug_resize {
+            eprintln!("resize press edge={edge:?} local=({x:.1},{y:.1})");
+        }
+
+        if resize_window.is_fullscreen() || resize_window.is_maximized() {
+            if debug_resize {
+                eprintln!("resize ignored: fullscreen/maximized");
+            }
+            return;
+        }
+
+        let Some(device) = gesture.current_event_device() else {
+            if debug_resize {
+                eprintln!("resize ignored: no device");
+            }
+            return;
+        };
+        let Some(surface) = resize_window.surface() else {
+            if debug_resize {
+                eprintln!("resize ignored: no surface");
+            }
+            return;
+        };
+        let Ok(toplevel) = surface.downcast::<gdk::Toplevel>() else {
+            if debug_resize {
+                eprintln!("resize ignored: surface is not a toplevel");
+            }
+            return;
+        };
+        let window_point = resize_widget
+            .compute_point(
+                &resize_window,
+                &gtk::graphene::Point::new(x as f32, y as f32),
+            )
+            .map(|point| (f64::from(point.x()), f64::from(point.y())))
+            .unwrap_or((x, y));
+        if debug_resize {
+            eprintln!(
+                "resize begin edge={edge:?} window=({:.1},{:.1}) button={}",
+                window_point.0,
+                window_point.1,
+                gesture.current_button()
+            );
+        }
+
+        toplevel.begin_resize(
+            edge,
+            Some(&device),
+            gesture.current_button() as i32,
+            window_point.0,
+            window_point.1,
             gesture.current_event_time(),
         );
     });
@@ -5846,6 +6017,23 @@ fn install_css() {
         button.okp-player-window-close:hover {
             background: rgba(219, 59, 59, 0.86);
             color: #ffffff;
+        }
+
+        .okp-resize-handle {
+            background: transparent;
+        }
+
+        .okp-resize-edge-horizontal {
+            min-height: 6px;
+        }
+
+        .okp-resize-edge-vertical {
+            min-width: 6px;
+        }
+
+        .okp-resize-corner {
+            min-width: 16px;
+            min-height: 16px;
         }
 
         .okp-video-plane {
