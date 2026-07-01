@@ -14,6 +14,7 @@ use okp_mpv::{Chapter, Mpv, MpvEvent, Track, TrackKind};
 use velopack::VelopackApp;
 
 mod history;
+mod screenshots;
 mod thumbnails;
 
 #[derive(Default)]
@@ -120,6 +121,7 @@ struct Controls {
     previous_button: gtk::Button,
     play_button: gtk::Button,
     next_button: gtk::Button,
+    screenshot_button: gtk::Button,
     repeat_button: gtk::Button,
     shuffle_button: gtk::Button,
     auto_advance_button: gtk::Button,
@@ -270,6 +272,11 @@ fn build_controls(
     next_button.add_css_class("okp-control-button");
     next_button.set_sensitive(false);
 
+    let screenshot_button = gtk::Button::with_label("Shot");
+    screenshot_button.add_css_class("okp-control-button");
+    screenshot_button.set_tooltip_text(Some("Save screenshot to Pictures/OK Player (C)"));
+    screenshot_button.set_sensitive(false);
+
     let repeat_button = gtk::Button::with_label(RepeatMode::Off.label());
     repeat_button.add_css_class("okp-control-button");
 
@@ -390,6 +397,9 @@ fn build_controls(
         navigate_playlist(&next_state, 1);
     });
 
+    let screenshot_state = Rc::clone(&state);
+    screenshot_button.connect_clicked(move |_| take_screenshot(&screenshot_state));
+
     let repeat_state = Rc::clone(&state);
     repeat_button.connect_clicked(move |_| cycle_repeat_mode(&repeat_state));
 
@@ -430,6 +440,7 @@ fn build_controls(
         previous_button,
         play_button,
         next_button,
+        screenshot_button,
         repeat_button,
         shuffle_button,
         auto_advance_button,
@@ -463,6 +474,7 @@ fn controls_bar(controls: &Controls) -> gtk::Box {
     bar.append(&controls.previous_button);
     bar.append(&controls.play_button);
     bar.append(&controls.next_button);
+    bar.append(&controls.screenshot_button);
     bar.append(&controls.repeat_button);
     bar.append(&controls.shuffle_button);
     bar.append(&controls.auto_advance_button);
@@ -576,6 +588,7 @@ fn connect_state_poll(
             controls.audio_button.set_sensitive(has_media);
             controls.previous_button.set_sensitive(has_playlist);
             controls.next_button.set_sensitive(has_playlist);
+            controls.screenshot_button.set_sensitive(has_media);
             controls
                 .play_button
                 .set_label(if playback.paused { "Play" } else { "Pause" });
@@ -600,6 +613,7 @@ fn connect_state_poll(
             controls.audio_button.set_sensitive(has_media);
             controls.previous_button.set_sensitive(has_playlist);
             controls.next_button.set_sensitive(has_playlist);
+            controls.screenshot_button.set_sensitive(has_media);
             controls.play_button.set_label("Play");
             controls.seek.set_sensitive(false);
         }
@@ -1386,6 +1400,14 @@ fn connect_keyboard(window: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerSta
                 with_mpv(&state, |mpv| mpv.seek_relative(5.0));
                 glib::Propagation::Stop
             }
+            gdk::Key::period => {
+                with_mpv(&state, |mpv| mpv.frame_step());
+                glib::Propagation::Stop
+            }
+            gdk::Key::comma => {
+                with_mpv(&state, |mpv| mpv.frame_back_step());
+                glib::Propagation::Stop
+            }
             gdk::Key::Page_Up | gdk::Key::KP_Page_Up => {
                 navigate_playlist(&state, -1);
                 glib::Propagation::Stop
@@ -1408,6 +1430,10 @@ fn connect_keyboard(window: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerSta
             }
             gdk::Key::s | gdk::Key::S => {
                 open_subtitle_dialog(&shortcut_window, Rc::clone(&state));
+                glib::Propagation::Stop
+            }
+            gdk::Key::c | gdk::Key::C => {
+                take_screenshot(&state);
                 glib::Propagation::Stop
             }
             gdk::Key::z => {
@@ -1484,6 +1510,28 @@ fn adjust_subtitle_delay(state: &Rc<RefCell<PlayerState>>, delta_seconds: f64) {
 fn adjust_subtitle_scale(state: &Rc<RefCell<PlayerState>>, delta: f64) {
     if with_mpv(state, |mpv| mpv.adjust_subtitle_scale(delta)) {
         save_current_preferences(state);
+    }
+}
+
+fn take_screenshot(state: &Rc<RefCell<PlayerState>>) {
+    let (has_mpv, current_file, position) = {
+        let state = state.borrow();
+        let position = state
+            .mpv
+            .as_ref()
+            .and_then(|mpv| mpv.playback_state().ok())
+            .and_then(|playback| playback.time_pos);
+        (state.mpv.is_some(), state.current_file.clone(), position)
+    };
+
+    if !has_mpv {
+        return;
+    }
+
+    let path = screenshots::next_screenshot_path(current_file.as_deref(), position);
+
+    if with_mpv(state, |mpv| mpv.screenshot_to_file(&path, true)) {
+        eprintln!("Screenshot saved to {}", path.display());
     }
 }
 

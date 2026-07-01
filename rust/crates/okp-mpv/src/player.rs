@@ -242,6 +242,24 @@ impl Mpv {
         self.command(&["seek", &seconds.to_string(), "relative+exact"])
     }
 
+    pub fn frame_step(&self) -> Result<(), MpvError> {
+        self.command(&["frame-step"])
+    }
+
+    pub fn frame_back_step(&self) -> Result<(), MpvError> {
+        self.command(&["frame-back-step"])
+    }
+
+    pub fn screenshot_to_file(&self, path: &Path, include_subtitles: bool) -> Result<(), MpvError> {
+        let path = path.to_string_lossy();
+        let mode = if include_subtitles {
+            "subtitles"
+        } else {
+            "video"
+        };
+        self.command(&["screenshot-to-file", &path, mode])
+    }
+
     pub fn set_volume(&self, volume: f64) -> Result<(), MpvError> {
         self.set_double("volume", volume.clamp(0.0, 130.0))
     }
