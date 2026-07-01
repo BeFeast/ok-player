@@ -31,6 +31,7 @@ const SPEED_PRESETS: [f64; 6] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 const APP_BUILD_VERSION: &str = env!("OKP_BUILD_VERSION");
 const APP_BUILD_SHA: &str = env!("OKP_BUILD_SHA");
 const LINUX_UPDATE_REPO_URL: &str = "https://github.com/BeFeast/ok-player";
+const LINUX_DEB_RELEASES_API_URL: &str = "https://api.github.com/repos/BeFeast/ok-player/releases";
 
 #[derive(Default)]
 struct PlayerState {
@@ -3991,7 +3992,8 @@ impl PendingLinuxUpdate {
 }
 
 fn check_for_linux_deb_update() -> Result<Option<ManualDebUpdate>, String> {
-    let mut response = ureq::get("https://api.github.com/repos/BeFeast/ok-player/releases")
+    let url = linux_deb_releases_url();
+    let mut response = ureq::get(&url)
         .header("Accept", "application/vnd.github+json")
         .header("User-Agent", "OK Player Linux")
         .call()
@@ -4003,6 +4005,17 @@ fn check_for_linux_deb_update() -> Result<Option<ManualDebUpdate>, String> {
     let releases: Vec<GitHubRelease> = serde_json::from_str(&body)
         .map_err(|error| format!("GitHub .deb update feed was invalid: {error}"))?;
 
+    Ok(select_latest_linux_deb_update(releases, APP_BUILD_VERSION))
+}
+
+fn linux_deb_releases_url() -> String {
+    env::var("OKP_LINUX_DEB_RELEASES_URL").unwrap_or_else(|_| LINUX_DEB_RELEASES_API_URL.to_owned())
+}
+
+fn select_latest_linux_deb_update(
+    releases: Vec<GitHubRelease>,
+    current_version: &str,
+) -> Option<ManualDebUpdate> {
     let mut best = None::<ManualDebUpdate>;
     for release in releases {
         if release.draft || !release.prerelease {
@@ -4013,7 +4026,7 @@ fn check_for_linux_deb_update() -> Result<Option<ManualDebUpdate>, String> {
             .strip_prefix("linux-v")
             .unwrap_or(&release.tag_name)
             .to_owned();
-        if compare_linux_versions(&version, APP_BUILD_VERSION) != std::cmp::Ordering::Greater {
+        if compare_linux_versions(&version, current_version) != std::cmp::Ordering::Greater {
             continue;
         }
         let Some(asset) = release.assets.into_iter().find(|asset| {
@@ -4035,7 +4048,7 @@ fn check_for_linux_deb_update() -> Result<Option<ManualDebUpdate>, String> {
         }
     }
 
-    Ok(best)
+    best
 }
 
 fn download_deb_update(update: ManualDebUpdate) -> Result<PathBuf, String> {
@@ -4067,19 +4080,16 @@ fn download_deb_update(update: ManualDebUpdate) -> Result<PathBuf, String> {
 
     fs::write(&temp, bytes).map_err(|error| format!("Could not save update: {error}"))?;
     fs::rename(&temp, &target).map_err(|error| format!("Could not finalize update: {error}"))?;
-    Command::new("xdg-open")
-        .arg(&target)
-        .spawn()
-        .map_err(|error| {
-            format!(
-                "Downloaded to {}, but could not open installer: {error}",
-                target.display()
-            )
-        })?;
+    open_deb_installer(&target)?;
     Ok(target)
 }
 
 fn linux_update_cache_dir() -> PathBuf {
+    if let Some(cache_dir) =
+        env::var_os("OKP_LINUX_UPDATE_CACHE_DIR").filter(|value| !value.is_empty())
+    {
+        return PathBuf::from(cache_dir);
+    }
     if let Some(cache_home) = env::var_os("XDG_CACHE_HOME") {
         return PathBuf::from(cache_home).join("ok-player/updates");
     }
@@ -4087,6 +4097,23 @@ fn linux_update_cache_dir() -> PathBuf {
         return PathBuf::from(home).join(".cache/ok-player/updates");
     }
     env::temp_dir().join("ok-player/updates")
+}
+
+fn open_deb_installer(path: &Path) -> Result<(), String> {
+    if env::var_os("OKP_SKIP_OPEN_INSTALLER").is_some() {
+        return Ok(());
+    }
+
+    Command::new("xdg-open")
+        .arg(path)
+        .spawn()
+        .map_err(|error| {
+            format!(
+                "Downloaded to {}, but could not open installer: {error}",
+                path.display()
+            )
+        })?;
+    Ok(())
 }
 
 fn compare_linux_versions(left: &str, right: &str) -> std::cmp::Ordering {
@@ -6576,5 +6603,110 @@ mod tests {
     fn clamps_subtitle_delay_entry_to_ten_minutes() {
         assert_delay("999999999", 600.0);
         assert_delay("-999999999", -600.0);
+    }
+
+    fn github_asset(name: &str) -> GitHubAsset {
+        GitHubAsset {
+            name: name.to_owned(),
+            browser_download_url: format!("https://example.invalid/{name}"),
+            size: Some(42),
+        }
+    }
+
+    fn github_release(
+        tag_name: &str,
+        draft: bool,
+        prerelease: bool,
+        assets: Vec<GitHubAsset>,
+    ) -> GitHubRelease {
+        GitHubRelease {
+            tag_name: tag_name.to_owned(),
+            draft,
+            prerelease,
+            assets,
+        }
+    }
+
+    #[test]
+    fn linux_version_compare_orders_alpha_numbers_naturally() {
+        assert_eq!(
+            compare_linux_versions("0.1.0-linux-alpha.10", "0.1.0-linux-alpha.9"),
+            std::cmp::Ordering::Greater
+        );
+        assert_eq!(
+            compare_linux_versions("0.1.0-linux-alpha.45", "0.1.0-linux-alpha.45"),
+            std::cmp::Ordering::Equal
+        );
+        assert_eq!(
+            compare_linux_versions("0.1.0-linux-alpha.44", "0.1.0-linux-alpha.45"),
+            std::cmp::Ordering::Less
+        );
+    }
+
+    #[test]
+    fn selects_latest_linux_deb_prerelease_newer_than_current() {
+        let update = select_latest_linux_deb_update(
+            vec![
+                github_release(
+                    "linux-v0.1.0-linux-alpha.46",
+                    false,
+                    true,
+                    vec![github_asset("ok-player_0.1.0-linux-alpha.46_amd64.deb")],
+                ),
+                github_release(
+                    "linux-v0.1.0-linux-alpha.47",
+                    true,
+                    true,
+                    vec![github_asset("ok-player_0.1.0-linux-alpha.47_amd64.deb")],
+                ),
+                github_release(
+                    "linux-v0.1.0-linux-alpha.48",
+                    false,
+                    false,
+                    vec![github_asset("ok-player_0.1.0-linux-alpha.48_amd64.deb")],
+                ),
+                github_release(
+                    "linux-v0.1.0-linux-alpha.49",
+                    false,
+                    true,
+                    vec![github_asset("com.befeast.okplayer.AppImage")],
+                ),
+                github_release(
+                    "linux-v0.1.0-linux-alpha.45",
+                    false,
+                    true,
+                    vec![github_asset("ok-player_0.1.0-linux-alpha.45_amd64.deb")],
+                ),
+            ],
+            "0.1.0-linux-alpha.45",
+        )
+        .expect("alpha46 .deb should be selected");
+
+        assert_eq!(update.version, "0.1.0-linux-alpha.46");
+        assert_eq!(update.name, "ok-player_0.1.0-linux-alpha.46_amd64.deb");
+        assert_eq!(update.size, Some(42));
+    }
+
+    #[test]
+    fn deb_update_selection_returns_none_when_only_current_or_older_exist() {
+        let update = select_latest_linux_deb_update(
+            vec![
+                github_release(
+                    "linux-v0.1.0-linux-alpha.44",
+                    false,
+                    true,
+                    vec![github_asset("ok-player_0.1.0-linux-alpha.44_amd64.deb")],
+                ),
+                github_release(
+                    "linux-v0.1.0-linux-alpha.45",
+                    false,
+                    true,
+                    vec![github_asset("ok-player_0.1.0-linux-alpha.45_amd64.deb")],
+                ),
+            ],
+            "0.1.0-linux-alpha.45",
+        );
+
+        assert!(update.is_none());
     }
 }
