@@ -15,10 +15,18 @@ use velopack::VelopackApp;
 struct PlayerState {
     mpv: Option<Mpv>,
     current_file: Option<PathBuf>,
+    pending_subtitles: Vec<PathBuf>,
+}
+
+#[derive(Clone, Default)]
+struct LaunchArgs {
+    file: Option<PathBuf>,
+    subtitles: Vec<PathBuf>,
 }
 
 struct Controls {
     open_button: gtk::Button,
+    subtitle_button: gtk::Button,
     play_button: gtk::Button,
     seek: gtk::Scale,
     elapsed_label: gtk::Label,
@@ -29,17 +37,40 @@ struct Controls {
 fn main() -> glib::ExitCode {
     VelopackApp::build().set_auto_apply_on_startup(false).run();
 
-    let argv0 = env::args().next().unwrap_or_else(|| "ok-player".to_owned());
-    let file = env::args_os().nth(1).map(PathBuf::from);
+    let (argv0, launch_args) = parse_launch_args();
     let app = gtk::Application::builder()
         .application_id("com.befeast.okplayer")
         .build();
 
-    app.connect_activate(move |app| build_window(app, file.clone()));
+    app.connect_activate(move |app| build_window(app, launch_args.clone()));
     app.run_with_args(&[argv0])
 }
 
-fn build_window(app: &gtk::Application, file: Option<PathBuf>) {
+fn parse_launch_args() -> (String, LaunchArgs) {
+    let mut args = env::args_os();
+    let argv0 = args
+        .next()
+        .and_then(|arg| arg.into_string().ok())
+        .unwrap_or_else(|| "ok-player".to_owned());
+    let mut launch = LaunchArgs::default();
+
+    while let Some(arg) = args.next() {
+        if arg == "--sub" {
+            if let Some(path) = args.next() {
+                launch.subtitles.push(PathBuf::from(path));
+            }
+            continue;
+        }
+
+        if launch.file.is_none() {
+            launch.file = Some(PathBuf::from(arg));
+        }
+    }
+
+    (argv0, launch)
+}
+
+fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
     install_css();
 
     let identity = AppIdentity::linux();
@@ -75,7 +106,7 @@ fn build_window(app: &gtk::Application, file: Option<PathBuf>) {
     overlay.add_overlay(&controls_bar(&controls));
     window.set_child(Some(&overlay));
 
-    connect_mpv(&video_area, Rc::clone(&state), file);
+    connect_mpv(&video_area, Rc::clone(&state), launch_args);
     connect_drop(&window, Rc::clone(&state));
     connect_keyboard(&window, Rc::clone(&state));
     connect_state_poll(
@@ -101,6 +132,10 @@ fn build_controls(
     let open_button = gtk::Button::with_label("Open");
     open_button.add_css_class("okp-control-button");
 
+    let subtitle_button = gtk::Button::with_label("Sub");
+    subtitle_button.add_css_class("okp-control-button");
+    subtitle_button.set_sensitive(false);
+
     let elapsed_label = gtk::Label::new(Some("00:00"));
     elapsed_label.add_css_class("okp-time-label");
 
@@ -122,6 +157,12 @@ fn build_controls(
     let open_parent = window.clone();
     let open_state = Rc::clone(&state);
     open_button.connect_clicked(move |_| open_media_dialog(&open_parent, Rc::clone(&open_state)));
+
+    let subtitle_parent = window.clone();
+    let subtitle_state = Rc::clone(&state);
+    subtitle_button.connect_clicked(move |_| {
+        open_subtitle_dialog(&subtitle_parent, Rc::clone(&subtitle_state));
+    });
 
     let play_state = Rc::clone(&state);
     let play_open_parent = window.clone();
@@ -165,6 +206,7 @@ fn build_controls(
 
     Controls {
         open_button,
+        subtitle_button,
         play_button,
         seek,
         elapsed_label,
@@ -183,6 +225,7 @@ fn controls_bar(controls: &Controls) -> gtk::Box {
     bar.set_margin_bottom(18);
 
     bar.append(&controls.open_button);
+    bar.append(&controls.subtitle_button);
     bar.append(&controls.play_button);
     bar.append(&controls.elapsed_label);
     bar.append(&controls.seek);
@@ -192,7 +235,7 @@ fn controls_bar(controls: &Controls) -> gtk::Box {
     bar
 }
 
-fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, file: Option<PathBuf>) {
+fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, launch_args: LaunchArgs) {
     let realize_state = Rc::clone(&state);
     video_area.connect_realize(move |area| {
         area.make_current();
@@ -216,9 +259,13 @@ fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, file: 
 
         realize_state.borrow_mut().mpv = Some(mpv);
 
-        if let Some(path) = file.as_deref() {
+        if let Some(path) = launch_args.file.as_deref() {
             load_media_path(&realize_state, path.to_path_buf());
         }
+        realize_state
+            .borrow_mut()
+            .pending_subtitles
+            .extend(launch_args.subtitles.clone());
     });
 
     let render_state = Rc::clone(&state);
@@ -265,6 +312,8 @@ fn connect_state_poll(
         let has_media = state.borrow().current_file.is_some();
 
         if let Some(playback) = playback {
+            try_pending_subtitles(&state);
+
             let duration = playback.duration.unwrap_or(0.0).max(0.0);
             let raw_time = playback.time_pos.unwrap_or(0.0).max(0.0);
             let time_pos = if duration > 0.0 {
@@ -274,6 +323,7 @@ fn connect_state_poll(
             };
 
             controls.play_button.set_sensitive(has_media);
+            controls.subtitle_button.set_sensitive(has_media);
             controls
                 .play_button
                 .set_label(if playback.paused { "Play" } else { "Pause" });
@@ -294,6 +344,7 @@ fn connect_state_poll(
             controls.duration_label.set_text(&format_time(duration));
         } else {
             controls.play_button.set_sensitive(has_media);
+            controls.subtitle_button.set_sensitive(has_media);
             controls.play_button.set_label("Play");
             controls.seek.set_sensitive(false);
         }
@@ -326,6 +377,30 @@ fn open_media_dialog(parent: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerSt
     dialog.present();
 }
 
+fn open_subtitle_dialog(parent: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerState>>) {
+    let dialog = gtk::FileChooserDialog::new(
+        Some("Add subtitle"),
+        Some(parent),
+        gtk::FileChooserAction::Open,
+        &[
+            ("Cancel", gtk::ResponseType::Cancel),
+            ("Add", gtk::ResponseType::Accept),
+        ],
+    );
+    dialog.set_modal(true);
+
+    dialog.connect_response(move |dialog, response| {
+        if response == gtk::ResponseType::Accept
+            && let Some(path) = dialog.file().and_then(|file| file.path())
+        {
+            load_subtitle_path(&state, path);
+        }
+        dialog.close();
+    });
+
+    dialog.present();
+}
+
 fn connect_drop(window: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerState>>) {
     let drop_target = gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
     drop_target.connect_drop(move |_, value, _, _| {
@@ -337,12 +412,16 @@ fn connect_drop(window: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerState>>
             return false;
         };
 
-        if !is_media_path(&path) {
-            return false;
+        if is_subtitle_path(&path) {
+            return load_subtitle_path(&state, path);
         }
 
-        load_media_path(&state, path);
-        true
+        if is_media_path(&path) {
+            load_media_path(&state, path);
+            true
+        } else {
+            false
+        }
     });
     window.add_controller(drop_target);
 }
@@ -378,6 +457,10 @@ fn connect_keyboard(window: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerSta
             }
             gdk::Key::o | gdk::Key::O => {
                 open_media_dialog(&shortcut_window, Rc::clone(&state));
+                glib::Propagation::Stop
+            }
+            gdk::Key::s | gdk::Key::S => {
+                open_subtitle_dialog(&shortcut_window, Rc::clone(&state));
                 glib::Propagation::Stop
             }
             gdk::Key::f | gdk::Key::F => {
@@ -437,8 +520,63 @@ fn load_media_path(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
     }
 }
 
+fn load_subtitle_path(state: &Rc<RefCell<PlayerState>>, path: PathBuf) -> bool {
+    if !is_subtitle_path(&path) || state.borrow().current_file.is_none() {
+        return false;
+    }
+
+    let result = {
+        let state = state.borrow();
+        state.mpv.as_ref().map(|mpv| mpv.add_subtitle_file(&path))
+    };
+
+    match result {
+        Some(Ok(())) => true,
+        Some(Err(error)) => {
+            eprintln!(
+                "Subtitle queued until media is ready '{}': {error}",
+                path.display()
+            );
+            state.borrow_mut().pending_subtitles.push(path);
+            false
+        }
+        None => false,
+    }
+}
+
+fn try_pending_subtitles(state: &Rc<RefCell<PlayerState>>) {
+    let pending = {
+        let mut state = state.borrow_mut();
+        if state.current_file.is_none() || state.pending_subtitles.is_empty() {
+            return;
+        }
+
+        std::mem::take(&mut state.pending_subtitles)
+    };
+
+    let mut retry = Vec::new();
+    for path in pending {
+        let result = {
+            let state = state.borrow();
+            state.mpv.as_ref().map(|mpv| mpv.add_subtitle_file(&path))
+        };
+
+        if !matches!(result, Some(Ok(()))) {
+            retry.push(path);
+        }
+    }
+
+    if !retry.is_empty() {
+        state.borrow_mut().pending_subtitles.extend(retry);
+    }
+}
+
 fn is_media_path(path: &Path) -> bool {
     media_formats::is_media(path)
+}
+
+fn is_subtitle_path(path: &Path) -> bool {
+    media_formats::is_subtitle(path)
 }
 
 fn format_time(seconds: f64) -> String {

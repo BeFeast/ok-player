@@ -100,6 +100,20 @@ impl Mpv {
         check(unsafe { ffi::mpv_command(self.handle.as_ptr(), args.as_ptr()) })
     }
 
+    pub fn add_subtitle_file(&self, path: &Path) -> Result<(), MpvError> {
+        let command = CString::new("sub-add")?;
+        let path = path_to_cstring(path)?;
+        let select = CString::new("select")?;
+        let args = [
+            command.as_ptr(),
+            path.as_ptr(),
+            select.as_ptr(),
+            ptr::null(),
+        ];
+
+        check(unsafe { ffi::mpv_command(self.handle.as_ptr(), args.as_ptr()) })
+    }
+
     pub fn playback_state(&self) -> Result<PlaybackState, MpvError> {
         Ok(PlaybackState {
             time_pos: self.get_double("time-pos")?,
