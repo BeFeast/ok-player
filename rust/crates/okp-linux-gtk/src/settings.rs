@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 const SETTINGS_VERSION: u32 = 1;
 const DEFAULT_VOLUME: f64 = 100.0;
 const MAX_VOLUME: f64 = 130.0;
+const DEFAULT_AUTO_CHECK_UPDATES: bool = true;
 
 #[derive(Debug)]
 pub struct SettingsStore {
@@ -32,6 +33,7 @@ impl SettingsStore {
             .unwrap_or_else(|| SettingsFile {
                 version: SETTINGS_VERSION,
                 playback: PlaybackSettings::default(),
+                updates: UpdateSettings::default(),
             });
 
         Self {
@@ -49,6 +51,10 @@ impl SettingsStore {
         &self.path
     }
 
+    pub fn auto_check_updates(&self) -> bool {
+        self.data.updates.auto_check
+    }
+
     pub fn set_volume(&mut self, volume: f64) {
         let Some(volume) = normalized_volume(Some(volume)) else {
             return;
@@ -56,6 +62,13 @@ impl SettingsStore {
 
         if !same_volume(self.data.playback.volume, volume) {
             self.data.playback.volume = Some(volume);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_auto_check_updates(&mut self, enabled: bool) {
+        if self.data.updates.auto_check != enabled {
+            self.data.updates.auto_check = enabled;
             self.dirty = true;
         }
     }
@@ -83,12 +96,28 @@ struct SettingsFile {
     version: u32,
     #[serde(default)]
     playback: PlaybackSettings,
+    #[serde(default)]
+    updates: UpdateSettings,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 struct PlaybackSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     volume: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct UpdateSettings {
+    #[serde(default = "default_auto_check_updates")]
+    auto_check: bool,
+}
+
+impl Default for UpdateSettings {
+    fn default() -> Self {
+        Self {
+            auto_check: DEFAULT_AUTO_CHECK_UPDATES,
+        }
+    }
 }
 
 fn settings_path() -> PathBuf {
@@ -115,6 +144,10 @@ fn same_volume(current: Option<f64>, updated: f64) -> bool {
         .is_some_and(|volume| (volume - updated).abs() < 0.005)
 }
 
+fn default_auto_check_updates() -> bool {
+    DEFAULT_AUTO_CHECK_UPDATES
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,6 +158,7 @@ mod tests {
             data: SettingsFile {
                 version: SETTINGS_VERSION,
                 playback: PlaybackSettings::default(),
+                updates: UpdateSettings::default(),
             },
             dirty: false,
         }
@@ -162,6 +196,26 @@ mod tests {
         settings.set_volume(100.0);
         settings.dirty = false;
         settings.set_volume(100.002);
+
+        assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn auto_update_checks_default_on() {
+        assert!(store().auto_check_updates());
+    }
+
+    #[test]
+    fn auto_update_toggle_marks_dirty_once() {
+        let mut settings = store();
+
+        settings.set_auto_check_updates(false);
+
+        assert!(!settings.auto_check_updates());
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_auto_check_updates(false);
 
         assert!(!settings.dirty);
     }

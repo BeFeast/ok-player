@@ -542,6 +542,7 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
 
     let identity = AppIdentity::linux();
     let state = Rc::new(RefCell::new(PlayerState::default()));
+    let auto_check_updates = state.borrow().settings.auto_check_updates();
     let updating_seek = Rc::new(Cell::new(false));
     let updating_volume = Rc::new(Cell::new(false));
     let status_toast = Rc::new(StatusToast::new());
@@ -611,7 +612,9 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
     );
 
     window.present();
-    check_updates_on_startup(Rc::clone(&status_toast));
+    if auto_check_updates {
+        check_updates_on_startup(Rc::clone(&status_toast));
+    }
 }
 
 fn build_empty_surface(
@@ -2817,10 +2820,10 @@ fn settings_about_section(
 
     let logo = gtk::Image::from_icon_name("com.befeast.okplayer");
     logo.add_css_class("okp-about-logo");
-    logo.set_pixel_size(58);
+    logo.set_pixel_size(68);
     hero.append(&logo);
 
-    let text = gtk::Box::new(gtk::Orientation::Vertical, 3);
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 5);
     text.set_valign(gtk::Align::Center);
     text.set_hexpand(true);
 
@@ -2829,17 +2832,42 @@ fn settings_about_section(
     name.set_xalign(0.0);
     text.append(&name);
 
+    let tagline = gtk::Label::new(Some("Native Linux player powered by GTK4 and libmpv"));
+    tagline.add_css_class("okp-about-tagline");
+    tagline.set_xalign(0.0);
+    tagline.set_wrap(true);
+    text.append(&tagline);
+
     let version = gtk::Label::new(Some(&format!("Version {}", app_version_label())));
     version.add_css_class("okp-about-version");
     version.set_xalign(0.0);
     version.set_selectable(true);
     text.append(&version);
 
+    let pills = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    pills.append(&about_pill("linux"));
+    pills.append(&about_pill("pre-release"));
+    pills.append(&about_pill(&format!("build {APP_BUILD_SHA}")));
+    text.append(&pills);
+
     hero.append(&text);
     section.append(&hero);
 
     section.append(&settings_value_row("Version", APP_BUILD_VERSION));
     section.append(&settings_value_row("Build", APP_BUILD_SHA));
+    section.append(&settings_value_row("Channel", "linux pre-release"));
+    section.append(&settings_value_row(
+        "Install",
+        linux_update_install_status(),
+    ));
+    section.append(&settings_value_row(
+        "Updates",
+        if state.borrow().settings.auto_check_updates() {
+            "Automatic checks on"
+        } else {
+            "Manual checks only"
+        },
+    ));
     section.append(&settings_value_row("Platform", "Linux GTK4 / libmpv"));
     section.append(&settings_value_row("License", "GPL-3.0-or-later"));
 
@@ -2861,11 +2889,25 @@ fn settings_about_section(
     section
 }
 
+fn about_pill(text: &str) -> gtk::Label {
+    let pill = gtk::Label::new(Some(text));
+    pill.add_css_class("okp-about-pill");
+    pill
+}
+
 fn app_version_label() -> String {
     if APP_BUILD_SHA == "unknown" {
         APP_BUILD_VERSION.to_owned()
     } else {
         format!("{APP_BUILD_VERSION} ({APP_BUILD_SHA})")
+    }
+}
+
+fn linux_update_install_status() -> &'static str {
+    if linux_update_manager().is_ok() {
+        "Self-update enabled"
+    } else {
+        "Manual update fallback"
     }
 }
 
@@ -2877,23 +2919,68 @@ fn settings_updates_section(
     section.append(&settings_value_row("Current version", APP_BUILD_VERSION));
     section.append(&settings_value_row("Channel", "linux"));
     section.append(&settings_value_row("Feed", "GitHub Releases"));
-    let install_mode = if linux_update_manager().is_ok() {
-        "Self-update enabled"
-    } else {
-        "Manual update fallback"
-    };
-    section.append(&settings_value_row("Install", install_mode));
+    section.append(&settings_value_row(
+        "Install",
+        linux_update_install_status(),
+    ));
 
     let row = gtk::Box::new(gtk::Orientation::Vertical, 8);
     row.add_css_class("okp-settings-row");
 
-    let status = gtk::Label::new(Some(
-        "Auto-update checks the Linux pre-release feed. AppImage/Velopack installs can download and restart; .deb and dev installs use Releases.",
-    ));
+    let auto_check_enabled = state.borrow().settings.auto_check_updates();
+    let status = gtk::Label::new(Some(update_status_intro(auto_check_enabled)));
     status.add_css_class("okp-update-status");
     status.set_xalign(0.0);
     status.set_wrap(true);
     row.append(&status);
+
+    let auto_row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    auto_row.add_css_class("okp-settings-switch-row");
+    let auto_text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    auto_text.set_hexpand(true);
+    let auto_label = gtk::Label::new(Some("Automatic checks"));
+    auto_label.add_css_class("okp-info-label");
+    auto_label.set_xalign(0.0);
+    auto_text.append(&auto_label);
+    let auto_detail = gtk::Label::new(Some(
+        "Check the linux pre-release feed on startup and show a toast when an update is ready.",
+    ));
+    auto_detail.add_css_class("okp-update-status");
+    auto_detail.set_xalign(0.0);
+    auto_detail.set_wrap(true);
+    auto_text.append(&auto_detail);
+    auto_row.append(&auto_text);
+
+    let auto_state_label = gtk::Label::new(Some(if auto_check_enabled { "On" } else { "Off" }));
+    auto_state_label.add_css_class("okp-settings-state-pill");
+    auto_row.append(&auto_state_label);
+
+    let auto_switch = gtk::Switch::new();
+    auto_switch.set_active(auto_check_enabled);
+    let auto_state = Rc::clone(&state);
+    let auto_toast = Rc::clone(&status_toast);
+    let auto_status = status.clone();
+    let auto_state_text = auto_state_label.clone();
+    auto_switch.connect_state_set(move |_, enabled| {
+        {
+            let mut state = auto_state.borrow_mut();
+            state.settings.set_auto_check_updates(enabled);
+            if let Err(error) = state.settings.save() {
+                eprintln!("Failed to save update settings: {error}");
+                auto_toast.show("Could not save update setting");
+            }
+        }
+        auto_status.set_text(update_status_intro(enabled));
+        auto_state_text.set_text(if enabled { "On" } else { "Off" });
+        auto_toast.show(if enabled {
+            "Automatic update checks on"
+        } else {
+            "Automatic update checks off"
+        });
+        glib::Propagation::Proceed
+    });
+    auto_row.append(&auto_switch);
+    row.append(&auto_row);
 
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     actions.set_halign(gtk::Align::End);
@@ -2960,6 +3047,14 @@ fn settings_updates_section(
     section.append(&row);
 
     section
+}
+
+fn update_status_intro(auto_check_enabled: bool) -> &'static str {
+    if auto_check_enabled {
+        "Automatic update checks are on. AppImage/Velopack installs can download and restart; .deb and dev installs use Releases."
+    } else {
+        "Automatic update checks are off. Use Check for Updates any time; .deb and dev installs use Releases."
+    }
 }
 
 fn start_update_download(
@@ -3649,6 +3744,10 @@ fn show_media_info_window(
     }
     root.append(&header);
 
+    if let Some(summary) = media_info_summary_widget(media_info) {
+        root.append(&summary);
+    }
+
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
     content.add_css_class("okp-info-content");
     for section in &media_info.sections {
@@ -3689,6 +3788,92 @@ fn show_media_info_window(
 
     window.set_child(Some(&root));
     window.present();
+}
+
+fn media_info_summary_widget(media_info: &MediaInfo) -> Option<gtk::Box> {
+    let chips = media_info_summary_chips(media_info);
+    if chips.is_empty() {
+        return None;
+    }
+
+    let summary = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    summary.add_css_class("okp-info-summary");
+    summary.set_halign(gtk::Align::Start);
+    for (label, value) in chips {
+        summary.append(&media_info_summary_chip(label, &value));
+    }
+    Some(summary)
+}
+
+fn media_info_summary_chips(media_info: &MediaInfo) -> Vec<(&'static str, String)> {
+    let mut chips = Vec::new();
+
+    if let Some(container) = media_info_value(media_info, "File", "Container") {
+        chips.push(("Container", container.to_owned()));
+    }
+    if let Some(duration) = media_info_value(media_info, "File", "Duration") {
+        chips.push(("Duration", duration.to_owned()));
+    }
+    if let Some(resolution) = media_info_value(media_info, "Video", "Resolution") {
+        chips.push(("Video", resolution.to_owned()));
+    }
+    if let Some(codec) = media_info_value(media_info, "Video", "Codec") {
+        chips.push(("Codec", codec.to_owned()));
+    }
+
+    let audio_count = media_info
+        .tracks
+        .iter()
+        .filter(|track| track.kind == TrackKind::Audio)
+        .count();
+    if audio_count > 0 {
+        chips.push(("Audio", audio_count.to_string()));
+    }
+
+    let subtitle_count = media_info
+        .tracks
+        .iter()
+        .filter(|track| track.kind == TrackKind::Subtitle)
+        .count();
+    if subtitle_count > 0 {
+        chips.push(("Subtitles", subtitle_count.to_string()));
+    }
+
+    chips
+}
+
+fn media_info_value<'a>(
+    media_info: &'a MediaInfo,
+    section_title: &str,
+    row_label: &str,
+) -> Option<&'a str> {
+    media_info
+        .sections
+        .iter()
+        .find(|section| section.title == section_title)?
+        .rows
+        .iter()
+        .find(|row| row.label == row_label)
+        .map(|row| row.value.as_str())
+}
+
+fn media_info_summary_chip(label: &str, value: &str) -> gtk::Box {
+    let chip = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    chip.add_css_class("okp-info-chip");
+
+    let label = gtk::Label::new(Some(label));
+    label.add_css_class("okp-info-chip-label");
+    label.set_xalign(0.0);
+    chip.append(&label);
+
+    let value = gtk::Label::new(Some(value));
+    value.add_css_class("okp-info-chip-value");
+    value.set_xalign(0.0);
+    value.set_ellipsize(pango::EllipsizeMode::End);
+    value.set_max_width_chars(18);
+    chip.append(&value);
+
+    chip
 }
 
 fn media_info_section_widget(section: &InfoSection) -> gtk::Box {
@@ -3789,7 +3974,13 @@ fn media_info_track_kind_label(kind: TrackKind) -> &'static str {
 }
 
 fn media_info_copy_text(media_info: &MediaInfo) -> String {
-    let mut lines = vec![media_info.title.clone()];
+    let mut lines = vec![
+        "OK Player Media Information".to_owned(),
+        format!("App: OK Player {APP_BUILD_VERSION} ({APP_BUILD_SHA})"),
+        "Platform: Linux GTK4 / libmpv".to_owned(),
+        String::new(),
+        media_info.title.clone(),
+    ];
     if let Some(path) = media_info.path.as_deref() {
         lines.push(format!("Path: {path}"));
     }
@@ -5012,15 +5203,47 @@ fn install_css() {
             font-weight: 750;
         }
 
+        .okp-about-tagline {
+            color: rgba(255, 255, 255, 0.72);
+            font-size: 12px;
+        }
+
         .okp-about-version {
             color: rgba(255, 255, 255, 0.64);
             font-size: 12px;
             font-feature-settings: 'tnum';
         }
 
+        .okp-about-pill {
+            padding: 3px 7px;
+            border-radius: 999px;
+            background: rgba(40, 179, 170, 0.18);
+            color: rgba(219, 255, 252, 0.94);
+            font-size: 10px;
+            font-weight: 800;
+            font-feature-settings: 'tnum';
+        }
+
         .okp-update-status {
             color: rgba(255, 255, 255, 0.72);
             font-size: 12px;
+        }
+
+        .okp-settings-switch-row {
+            min-height: 42px;
+            padding: 10px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.045);
+        }
+
+        .okp-settings-state-pill {
+            min-width: 34px;
+            padding: 3px 8px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.08);
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 11px;
+            font-weight: 800;
         }
 
         .okp-info-section {
@@ -5049,6 +5272,31 @@ fn install_css() {
         .okp-info-value {
             color: rgba(255, 255, 255, 0.84);
             font-size: 12px;
+        }
+
+        .okp-info-summary {
+            padding: 2px 0;
+        }
+
+        .okp-info-chip {
+            min-width: 78px;
+            padding: 8px 10px;
+            border-radius: 8px;
+            background: rgba(40, 179, 170, 0.12);
+            border: 1px solid rgba(40, 179, 170, 0.22);
+        }
+
+        .okp-info-chip-label {
+            color: rgba(219, 255, 252, 0.68);
+            font-size: 10px;
+            font-weight: 800;
+        }
+
+        .okp-info-chip-value {
+            color: rgba(255, 255, 255, 0.94);
+            font-size: 12px;
+            font-weight: 700;
+            font-feature-settings: 'tnum';
         }
 
         .okp-settings-row {
