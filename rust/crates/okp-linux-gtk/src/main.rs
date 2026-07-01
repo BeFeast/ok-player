@@ -10,7 +10,7 @@ use gtk::gdk;
 use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
-use okp_core::{AppIdentity, media_formats, natural_compare};
+use okp_core::{AppIdentity, media_formats, natural_compare, time_code};
 use okp_mpv::{
     Chapter, InfoSection, InfoTrack, MediaInfo, Mpv, MpvEvent, Track, TrackKind,
     current_render_target_size, resolve_render_target_size,
@@ -1980,6 +1980,23 @@ fn command_popover_content(
     });
     content.append(&info_button);
 
+    let go_to_time_button = track_button("Go to Time...", false);
+    go_to_time_button.set_sensitive(has_media);
+    go_to_time_button.set_tooltip_text(Some("Go to timecode (J)"));
+    let go_to_time_parent = parent.clone();
+    let go_to_time_state = Rc::clone(&state);
+    let go_to_time_toast = Rc::clone(&status_toast);
+    let go_to_time_popover = popover.clone();
+    go_to_time_button.connect_clicked(move |_| {
+        go_to_time_popover.popdown();
+        open_go_to_time_dialog(
+            &go_to_time_parent,
+            Rc::clone(&go_to_time_state),
+            Rc::clone(&go_to_time_toast),
+        );
+    });
+    content.append(&go_to_time_button);
+
     let screenshot_button = track_button("Save Screenshot", false);
     screenshot_button.set_sensitive(has_media);
     let screenshot_state = Rc::clone(&state);
@@ -2551,6 +2568,109 @@ fn open_url_dialog(
     });
 
     dialog.present();
+}
+
+fn open_go_to_time_dialog(
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) {
+    let Some((position, duration)) = go_to_time_snapshot(&state) else {
+        status_toast.show("Open media first");
+        return;
+    };
+
+    let dialog = gtk::Dialog::builder()
+        .title("Go to Time")
+        .transient_for(parent)
+        .modal(true)
+        .build();
+    dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+    dialog.add_button("Go", gtk::ResponseType::Accept);
+    dialog.set_default_response(gtk::ResponseType::Accept);
+
+    let content = dialog.content_area();
+    content.set_spacing(8);
+    content.set_margin_top(12);
+    content.set_margin_end(12);
+    content.set_margin_bottom(12);
+    content.set_margin_start(12);
+
+    let label = gtk::Label::new(Some("Enter a timecode or seconds."));
+    label.add_css_class("okp-info-label");
+    label.set_xalign(0.0);
+    content.append(&label);
+
+    let entry = gtk::Entry::new();
+    entry.add_css_class("okp-sub-adjust-entry");
+    gtk::prelude::EntryExt::set_alignment(&entry, 1.0);
+    entry.set_input_purpose(gtk::InputPurpose::Number);
+    entry.set_text(&time_code::format(position));
+    entry.set_placeholder_text(Some("1:23 or 90"));
+    entry.set_activates_default(true);
+    entry.set_width_chars(18);
+    content.append(&entry);
+
+    let range = if duration.is_finite() && duration > 0.0 {
+        format!("Duration {}", time_code::format(duration))
+    } else {
+        "Duration unknown".to_owned()
+    };
+    let hint = gtk::Label::new(Some(&range));
+    hint.add_css_class("okp-info-label");
+    hint.set_xalign(0.0);
+    content.append(&hint);
+
+    let focus_entry = entry.clone();
+    dialog.connect_response(move |dialog, response| {
+        if response != gtk::ResponseType::Accept {
+            dialog.close();
+            return;
+        }
+
+        let text = entry.text();
+        let Some(mut target) = time_code::parse(Some(text.as_str())) else {
+            entry.add_css_class("is-error");
+            status_toast.show("Enter a valid timecode");
+            return;
+        };
+
+        if let Some((_, duration)) = go_to_time_snapshot(&state) {
+            if duration.is_finite() && duration > 0.0 {
+                target = target.min(duration);
+            }
+        } else {
+            status_toast.show("Open media first");
+            dialog.close();
+            return;
+        }
+
+        if seek_to_time(&state, target) {
+            status_toast.show(&format!("Jumped to {}", time_code::format(target)));
+            dialog.close();
+        } else {
+            status_toast.show("Could not seek");
+        }
+    });
+
+    dialog.present();
+    focus_entry.grab_focus();
+    focus_entry.select_region(0, -1);
+}
+
+fn go_to_time_snapshot(state: &Rc<RefCell<PlayerState>>) -> Option<(f64, f64)> {
+    let state = state.borrow();
+    if !has_loaded_media_state(&state) {
+        return None;
+    }
+
+    let playback = state
+        .mpv
+        .as_ref()
+        .and_then(|mpv| mpv.playback_state().ok())?;
+    let position = playback.time_pos.unwrap_or(0.0).max(0.0);
+    let duration = playback.duration.unwrap_or(0.0).max(0.0);
+    Some((position, duration))
 }
 
 fn open_clear_history_dialog(
@@ -3297,6 +3417,14 @@ fn connect_keyboard(
                 open_media_info_window(&shortcut_window, &state, Rc::clone(&status_toast));
                 glib::Propagation::Stop
             }
+            gdk::Key::j | gdk::Key::J => {
+                open_go_to_time_dialog(
+                    &shortcut_window,
+                    Rc::clone(&state),
+                    Rc::clone(&status_toast),
+                );
+                glib::Propagation::Stop
+            }
             gdk::Key::z => {
                 adjust_subtitle_delay(&state, 0.05);
                 glib::Propagation::Stop
@@ -3700,6 +3828,10 @@ fn seek_to_chapter(state: &Rc<RefCell<PlayerState>>, time: f64) {
     if time.is_finite() && time >= 0.0 {
         with_mpv(state, |mpv| mpv.seek_absolute(time));
     }
+}
+
+fn seek_to_time(state: &Rc<RefCell<PlayerState>>, time: f64) -> bool {
+    time.is_finite() && time >= 0.0 && with_mpv(state, |mpv| mpv.seek_absolute(time))
 }
 
 fn toggle_fullscreen(window: &gtk::ApplicationWindow) {
