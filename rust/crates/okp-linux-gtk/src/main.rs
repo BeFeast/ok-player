@@ -1580,7 +1580,7 @@ fn populate_subtitle_popover(
     content.append(&divider());
     content.append(&subtitle_adjustment_rows(popover, parent, &state));
 
-    popover.set_child(Some(&content));
+    set_track_popover_child(popover, content);
 }
 
 fn populate_audio_popover(popover: &gtk::Popover, state: Rc<RefCell<PlayerState>>) {
@@ -1620,7 +1620,7 @@ fn populate_audio_popover(popover: &gtk::Popover, state: Rc<RefCell<PlayerState>
         }
     }
 
-    popover.set_child(Some(&content));
+    set_track_popover_child(popover, content);
 }
 
 fn populate_speed_popover(popover: &gtk::Popover, state: Rc<RefCell<PlayerState>>) {
@@ -1640,7 +1640,7 @@ fn populate_speed_popover(popover: &gtk::Popover, state: Rc<RefCell<PlayerState>
         content.append(&button);
     }
 
-    popover.set_child(Some(&content));
+    set_track_popover_child(popover, content);
 }
 
 fn populate_command_popover(
@@ -1650,7 +1650,7 @@ fn populate_command_popover(
     status_toast: Rc<StatusToast>,
 ) {
     let content = command_popover_content(popover, parent, state, status_toast);
-    popover.set_child(Some(&content));
+    set_track_popover_child(popover, content);
 }
 
 fn command_popover_content(
@@ -1821,10 +1821,21 @@ fn command_popover_content(
 fn track_popover_content(title: &str) -> gtk::Box {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 4);
     content.add_css_class("okp-track-popover-content");
-    content.set_width_request(270);
+    content.set_width_request(320);
 
     content.append(&track_section_title(title));
     content
+}
+
+fn set_track_popover_child(popover: &gtk::Popover, content: gtk::Box) {
+    let scroll = gtk::ScrolledWindow::new();
+    scroll.add_css_class("okp-track-popover-scroll");
+    scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    scroll.set_min_content_width(320);
+    scroll.set_max_content_height(520);
+    scroll.set_propagate_natural_height(true);
+    scroll.set_child(Some(&content));
+    popover.set_child(Some(&scroll));
 }
 
 fn track_section_title(title: &str) -> gtk::Label {
@@ -1842,14 +1853,8 @@ fn subtitle_adjustment_rows(
     let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
 
     let (delay_seconds, scale) = read_subtitle_adjustments(state);
-    content.append(&subtitle_adjustment_row(
-        "Delay",
-        &format_delay(delay_seconds),
-        [
-            ("-50", SubtitleAdjustment::Delay(-0.05)),
-            ("Reset", SubtitleAdjustment::SetDelay(0.0)),
-            ("+50", SubtitleAdjustment::Delay(0.05)),
-        ],
+    content.append(&subtitle_delay_adjustment_row(
+        delay_seconds,
         popover,
         parent,
         state,
@@ -1868,6 +1873,104 @@ fn subtitle_adjustment_rows(
     ));
 
     content
+}
+
+fn subtitle_delay_adjustment_row(
+    delay_seconds: f64,
+    popover: &gtk::Popover,
+    parent: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
+) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    row.add_css_class("okp-sub-adjust-row");
+
+    let top = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let label = gtk::Label::new(Some("Delay"));
+    label.add_css_class("okp-sub-adjust-label");
+    label.set_xalign(0.0);
+    label.set_width_chars(6);
+    top.append(&label);
+
+    let entry = gtk::Entry::new();
+    entry.add_css_class("okp-sub-adjust-entry");
+    gtk::prelude::EntryExt::set_alignment(&entry, 1.0);
+    entry.set_input_purpose(gtk::InputPurpose::Number);
+    entry.set_text(&format_delay_entry(delay_seconds));
+    entry.set_width_chars(8);
+    entry.set_placeholder_text(Some("0"));
+    top.append(&entry);
+
+    let unit = gtk::Label::new(Some("ms"));
+    unit.add_css_class("okp-sub-adjust-unit");
+    top.append(&unit);
+
+    let apply_button = gtk::Button::with_label("Apply");
+    apply_button.add_css_class("okp-sub-adjust-button");
+    top.append(&apply_button);
+
+    let reset_button = gtk::Button::with_label("Reset");
+    reset_button.add_css_class("okp-sub-adjust-button");
+    top.append(&reset_button);
+
+    row.append(&top);
+
+    let quick = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    quick.set_halign(gtk::Align::End);
+    for (text, adjustment) in [
+        ("-50", SubtitleAdjustment::Delay(-0.05)),
+        ("+50", SubtitleAdjustment::Delay(0.05)),
+    ] {
+        let button = gtk::Button::with_label(text);
+        button.add_css_class("okp-sub-adjust-button");
+        let button_state = Rc::clone(state);
+        let button_popover = popover.clone();
+        let button_parent = parent.clone();
+        button.connect_clicked(move |_| {
+            apply_subtitle_adjustment(&button_state, adjustment);
+            populate_subtitle_popover(&button_popover, &button_parent, Rc::clone(&button_state));
+        });
+        quick.append(&button);
+    }
+    row.append(&quick);
+
+    let apply_state = Rc::clone(state);
+    let apply_popover = popover.clone();
+    let apply_parent = parent.clone();
+    let apply_entry = entry.clone();
+    apply_button.connect_clicked(move |_| {
+        apply_subtitle_delay_entry(
+            &apply_entry,
+            &apply_popover,
+            &apply_parent,
+            Rc::clone(&apply_state),
+        );
+    });
+
+    let activate_state = Rc::clone(state);
+    let activate_popover = popover.clone();
+    let activate_parent = parent.clone();
+    entry.connect_activate(move |entry| {
+        apply_subtitle_delay_entry(
+            entry,
+            &activate_popover,
+            &activate_parent,
+            Rc::clone(&activate_state),
+        );
+    });
+
+    let reset_state = Rc::clone(state);
+    let reset_popover = popover.clone();
+    let reset_parent = parent.clone();
+    reset_button.connect_clicked(move |_| {
+        apply_subtitle_adjustment(&reset_state, SubtitleAdjustment::SetDelay(0.0));
+        populate_subtitle_popover(&reset_popover, &reset_parent, Rc::clone(&reset_state));
+    });
+
+    entry.connect_changed(|entry| {
+        entry.remove_css_class("is-error");
+    });
+
+    row
 }
 
 #[derive(Clone, Copy)]
@@ -1942,13 +2045,42 @@ fn apply_subtitle_adjustment(state: &Rc<RefCell<PlayerState>>, adjustment: Subti
     }
 }
 
-fn format_delay(seconds: f64) -> String {
-    let millis = (seconds * 1000.0).round() as i64;
-    if millis > 0 {
-        format!("+{millis} ms")
-    } else {
-        format!("{millis} ms")
+fn apply_subtitle_delay_entry(
+    entry: &gtk::Entry,
+    popover: &gtk::Popover,
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+) {
+    let Some(delay_seconds) = parse_delay_entry_seconds(entry.text().as_str()) else {
+        entry.add_css_class("is-error");
+        entry.grab_focus();
+        return;
+    };
+
+    apply_subtitle_adjustment(&state, SubtitleAdjustment::SetDelay(delay_seconds));
+    populate_subtitle_popover(popover, parent, state);
+}
+
+fn parse_delay_entry_seconds(text: &str) -> Option<f64> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
     }
+
+    let lower = trimmed.to_ascii_lowercase();
+    let seconds = if let Some(value) = lower.strip_suffix("ms") {
+        value.trim().parse::<f64>().ok()? / 1000.0
+    } else if let Some(value) = lower.strip_suffix('s') {
+        value.trim().parse::<f64>().ok()?
+    } else {
+        lower.parse::<f64>().ok()? / 1000.0
+    };
+
+    seconds.is_finite().then(|| seconds.clamp(-600.0, 600.0))
+}
+
+fn format_delay_entry(seconds: f64) -> String {
+    ((seconds * 1000.0).round() as i64).to_string()
 }
 
 fn format_scale(scale: f64) -> String {
@@ -4176,6 +4308,10 @@ fn install_css() {
             background: rgba(18, 19, 23, 0.94);
         }
 
+        .okp-track-popover-scroll {
+            background: rgba(18, 19, 23, 0.94);
+        }
+
         .okp-track-popover-title {
             margin: 0 4px 6px 4px;
             color: rgba(255, 255, 255, 0.92);
@@ -4225,6 +4361,32 @@ fn install_css() {
             color: rgba(255, 255, 255, 0.9);
             font-size: 12px;
             font-feature-settings: 'tnum';
+        }
+
+        entry.okp-sub-adjust-entry {
+            min-width: 74px;
+            min-height: 28px;
+            padding: 4px 7px;
+            border-radius: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            background: rgba(255, 255, 255, 0.08);
+            color: rgba(255, 255, 255, 0.9);
+            font-feature-settings: 'tnum';
+        }
+
+        entry.okp-sub-adjust-entry:focus {
+            border-color: rgba(40, 179, 170, 0.72);
+            box-shadow: 0 0 0 2px rgba(40, 179, 170, 0.16);
+        }
+
+        entry.okp-sub-adjust-entry.is-error {
+            border-color: rgba(255, 104, 104, 0.88);
+            box-shadow: 0 0 0 2px rgba(255, 104, 104, 0.18);
+        }
+
+        .okp-sub-adjust-unit {
+            color: rgba(255, 255, 255, 0.58);
+            font-size: 12px;
         }
 
         .okp-sub-adjust-button {
@@ -4400,4 +4562,40 @@ fn install_css() {
         &provider,
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_delay(input: &str, expected: f64) {
+        let actual = parse_delay_entry_seconds(input).expect("delay should parse");
+        assert!((actual - expected).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parses_subtitle_delay_entry_as_milliseconds_by_default() {
+        assert_delay("250", 0.25);
+        assert_delay("-125", -0.125);
+        assert_delay("+500ms", 0.5);
+    }
+
+    #[test]
+    fn parses_subtitle_delay_entry_seconds_suffix() {
+        assert_delay("1.5s", 1.5);
+        assert_delay("-0.25s", -0.25);
+    }
+
+    #[test]
+    fn rejects_invalid_subtitle_delay_entry() {
+        assert!(parse_delay_entry_seconds("").is_none());
+        assert!(parse_delay_entry_seconds("soon").is_none());
+        assert!(parse_delay_entry_seconds("nan").is_none());
+    }
+
+    #[test]
+    fn clamps_subtitle_delay_entry_to_ten_minutes() {
+        assert_delay("999999999", 600.0);
+        assert_delay("-999999999", -600.0);
+    }
 }
