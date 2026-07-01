@@ -22,6 +22,7 @@ pub struct PlaybackState {
     pub duration: Option<f64>,
     pub paused: bool,
     pub volume: Option<f64>,
+    pub speed: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -232,6 +233,7 @@ impl Mpv {
             duration: self.get_double("duration")?,
             paused: self.get_flag("pause")?.unwrap_or(false),
             volume: self.get_double("volume")?,
+            speed: self.get_double("speed")?,
         })
     }
 
@@ -268,6 +270,14 @@ impl Mpv {
 
     pub fn set_volume(&self, volume: f64) -> Result<(), MpvError> {
         self.set_double("volume", volume.clamp(0.0, 130.0))
+    }
+
+    pub fn speed(&self) -> Result<f64, MpvError> {
+        Ok(self.get_double("speed")?.unwrap_or(1.0))
+    }
+
+    pub fn set_speed(&self, speed: f64) -> Result<(), MpvError> {
+        self.set_double("speed", speed.clamp(0.25, 4.0))
     }
 
     pub fn select_subtitle(&self, id: Option<i64>) -> Result<(), MpvError> {

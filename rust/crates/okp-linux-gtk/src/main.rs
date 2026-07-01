@@ -17,6 +17,8 @@ mod history;
 mod screenshots;
 mod thumbnails;
 
+const SPEED_PRESETS: [f64; 6] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+
 #[derive(Default)]
 struct PlayerState {
     mpv: Option<Mpv>,
@@ -121,6 +123,7 @@ struct Controls {
     open_button: gtk::Button,
     subtitle_button: gtk::MenuButton,
     audio_button: gtk::MenuButton,
+    speed_button: gtk::MenuButton,
     previous_button: gtk::Button,
     play_button: gtk::Button,
     next_button: gtk::Button,
@@ -413,6 +416,10 @@ fn build_controls(
     audio_button.add_css_class("okp-control-button");
     audio_button.set_sensitive(false);
 
+    let speed_button = gtk::MenuButton::builder().label("1.00x").build();
+    speed_button.add_css_class("okp-control-button");
+    speed_button.set_sensitive(false);
+
     let previous_button = gtk::Button::with_label("Prev");
     previous_button.add_css_class("okp-control-button");
     previous_button.set_sensitive(false);
@@ -519,6 +526,14 @@ fn build_controls(
         populate_audio_popover(popover, Rc::clone(&audio_state));
     });
 
+    let speed_popover = gtk::Popover::new();
+    speed_popover.add_css_class("okp-track-popover");
+    speed_button.set_popover(Some(&speed_popover));
+    let speed_state = Rc::clone(&state);
+    speed_popover.connect_show(move |popover| {
+        populate_speed_popover(popover, Rc::clone(&speed_state));
+    });
+
     let open_parent = window.clone();
     let open_state = Rc::clone(&state);
     open_button.connect_clicked(move |_| open_media_dialog(&open_parent, Rc::clone(&open_state)));
@@ -592,6 +607,7 @@ fn build_controls(
         open_button,
         subtitle_button,
         audio_button,
+        speed_button,
         previous_button,
         play_button,
         next_button,
@@ -626,6 +642,7 @@ fn controls_bar(controls: &Controls) -> gtk::Box {
     bar.append(&controls.open_button);
     bar.append(&controls.subtitle_button);
     bar.append(&controls.audio_button);
+    bar.append(&controls.speed_button);
     bar.append(&controls.previous_button);
     bar.append(&controls.play_button);
     bar.append(&controls.next_button);
@@ -854,12 +871,16 @@ fn connect_state_poll(
             controls.play_button.set_sensitive(has_media);
             controls.subtitle_button.set_sensitive(has_media);
             controls.audio_button.set_sensitive(has_media);
+            controls.speed_button.set_sensitive(has_media);
             controls.previous_button.set_sensitive(has_playlist);
             controls.next_button.set_sensitive(has_playlist);
             controls.screenshot_button.set_sensitive(has_media);
             controls
                 .play_button
                 .set_label(if playback.paused { "Play" } else { "Pause" });
+            controls
+                .speed_button
+                .set_label(&format_speed(playback.speed.unwrap_or(1.0)));
             controls.seek.set_sensitive(has_media && duration > 0.0);
 
             updating_seek.set(true);
@@ -879,10 +900,12 @@ fn connect_state_poll(
             controls.play_button.set_sensitive(has_media);
             controls.subtitle_button.set_sensitive(has_media);
             controls.audio_button.set_sensitive(has_media);
+            controls.speed_button.set_sensitive(has_media);
             controls.previous_button.set_sensitive(has_playlist);
             controls.next_button.set_sensitive(has_playlist);
             controls.screenshot_button.set_sensitive(has_media);
             controls.play_button.set_label("Play");
+            controls.speed_button.set_label("1.00x");
             controls.seek.set_sensitive(false);
         }
 
@@ -1317,6 +1340,26 @@ fn populate_audio_popover(popover: &gtk::Popover, state: Rc<RefCell<PlayerState>
             });
             content.append(&button);
         }
+    }
+
+    popover.set_child(Some(&content));
+}
+
+fn populate_speed_popover(popover: &gtk::Popover, state: Rc<RefCell<PlayerState>>) {
+    let content = track_popover_content("Speed");
+    let current_speed = read_playback_speed(&state);
+
+    for speed in SPEED_PRESETS {
+        let button = track_button(&format_speed(speed), speed_matches(current_speed, speed));
+        let speed_state = Rc::clone(&state);
+        let speed_popover = popover.clone();
+        button.connect_clicked(move |_| {
+            if with_mpv(&speed_state, |mpv| mpv.set_speed(speed)) {
+                save_current_preferences(&speed_state);
+            }
+            speed_popover.popdown();
+        });
+        content.append(&button);
     }
 
     popover.set_child(Some(&content));
@@ -2181,6 +2224,9 @@ fn apply_playback_preferences(
     if let Some(scale) = preferences.subtitle_scale.and_then(finite_option) {
         mpv.set_subtitle_scale(scale)?;
     }
+    if let Some(speed) = preferences.speed.and_then(finite_option) {
+        mpv.set_speed(speed)?;
+    }
 
     Ok(())
 }
@@ -2234,11 +2280,30 @@ fn read_current_playback_preferences(mpv: &Mpv) -> history::PlaybackPreferences 
         secondary_subtitle_track_id: secondary_subtitle_id,
         subtitle_delay: mpv.subtitle_delay().ok().and_then(finite_option),
         subtitle_scale: mpv.subtitle_scale().ok().and_then(finite_option),
+        speed: mpv.speed().ok().and_then(finite_option),
     }
 }
 
 fn finite_option(value: f64) -> Option<f64> {
     value.is_finite().then_some(value)
+}
+
+fn read_playback_speed(state: &Rc<RefCell<PlayerState>>) -> f64 {
+    state
+        .borrow()
+        .mpv
+        .as_ref()
+        .and_then(|mpv| mpv.speed().ok())
+        .and_then(finite_option)
+        .unwrap_or(1.0)
+}
+
+fn format_speed(speed: f64) -> String {
+    format!("{:.2}x", speed.clamp(0.25, 4.0))
+}
+
+fn speed_matches(left: f64, right: f64) -> bool {
+    (left - right).abs() < 0.005
 }
 
 fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: bool) {

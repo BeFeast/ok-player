@@ -34,6 +34,8 @@ pub struct PlaybackPreferences {
     pub subtitle_delay: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtitle_scale: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed: Option<f64>,
 }
 
 impl PlaybackPreferences {
@@ -46,6 +48,7 @@ impl PlaybackPreferences {
             && self.secondary_subtitle_track_id.is_none()
             && self.subtitle_delay.is_none()
             && self.subtitle_scale.is_none()
+            && self.speed.is_none()
     }
 
     fn merge(&mut self, updated: PlaybackPreferences) {
@@ -66,6 +69,9 @@ impl PlaybackPreferences {
         }
         if updated.subtitle_scale.is_some() {
             self.subtitle_scale = updated.subtitle_scale;
+        }
+        if updated.speed.is_some() {
+            self.speed = updated.speed;
         }
     }
 }
@@ -341,6 +347,7 @@ mod tests {
                 secondary_subtitle_enabled: Some(true),
                 secondary_subtitle_track_id: Some(4),
                 subtitle_delay: Some(0.25),
+                speed: Some(0.75),
                 ..PlaybackPreferences::default()
             },
         );
@@ -363,6 +370,7 @@ mod tests {
                 secondary_subtitle_track_id: Some(4),
                 subtitle_delay: Some(0.25),
                 subtitle_scale: Some(1.2),
+                speed: Some(0.75),
                 ..PlaybackPreferences::default()
             })
         );
