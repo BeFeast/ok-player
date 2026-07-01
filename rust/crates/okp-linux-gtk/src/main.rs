@@ -584,7 +584,9 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
         .title(&identity.name)
         .default_width(1120)
         .default_height(680)
+        .decorated(false)
         .build();
+    window.add_css_class("okp-player-window");
 
     let overlay = gtk::Overlay::new();
     overlay.add_css_class("okp-root");
@@ -605,12 +607,15 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
         Rc::clone(&chrome),
     );
     let control_bar = controls_bar(&controls);
+    let window_chrome = build_player_window_chrome(&window);
     let empty_surface = build_empty_surface(&window, Rc::clone(&state), Rc::clone(&status_toast));
     chrome.set_child(&control_bar);
+    chrome.add_linked_revealer(&window_chrome);
     chrome.add_linked_revealer(&controls.up_next_revealer);
 
     overlay.set_child(Some(&video_area));
     overlay.add_overlay(empty_surface.widget());
+    overlay.add_overlay(&window_chrome);
     overlay.add_overlay(chrome.widget());
     overlay.add_overlay(&controls.up_next_revealer);
     overlay.add_overlay(status_toast.widget());
@@ -654,6 +659,135 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
     if auto_check_updates {
         check_updates_on_startup(Rc::clone(&status_toast));
     }
+}
+
+fn build_player_window_chrome(window: &gtk::ApplicationWindow) -> gtk::Revealer {
+    let revealer = gtk::Revealer::new();
+    revealer.set_halign(gtk::Align::Fill);
+    revealer.set_valign(gtk::Align::Start);
+    revealer.set_transition_duration(140);
+    revealer.set_transition_type(gtk::RevealerTransitionType::SlideDown);
+    revealer.set_reveal_child(true);
+    revealer.set_can_target(true);
+
+    let bar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    bar.add_css_class("okp-window-chrome");
+    bar.set_halign(gtk::Align::Fill);
+    bar.set_valign(gtk::Align::Start);
+    bar.set_margin_top(0);
+
+    let drag_zone = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    drag_zone.add_css_class("okp-window-drag-zone");
+    drag_zone.set_hexpand(true);
+    drag_zone.set_can_target(true);
+    connect_player_window_drag(&drag_zone, window);
+    bar.append(&drag_zone);
+
+    let controls = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    controls.add_css_class("okp-player-window-controls");
+    controls.set_halign(gtk::Align::End);
+    controls.set_margin_top(4);
+    controls.set_margin_end(6);
+
+    let minimize = player_window_control("−", "Minimize");
+    let minimize_window = window.clone();
+    minimize.connect_clicked(move |_| minimize_window.minimize());
+    controls.append(&minimize);
+
+    let maximize = player_window_control("□", "Maximize");
+    sync_player_maximize_icon(&maximize, window);
+    let maximize_window = window.clone();
+    let maximize_button = maximize.clone();
+    maximize.connect_clicked(move |_| {
+        if maximize_window.is_maximized() {
+            maximize_window.unmaximize();
+        } else {
+            maximize_window.maximize();
+        }
+        sync_player_maximize_icon(&maximize_button, &maximize_window);
+    });
+    let notify_button = maximize.clone();
+    window.connect_maximized_notify(move |window| {
+        sync_player_maximize_icon(&notify_button, window);
+    });
+    controls.append(&maximize);
+
+    let close = player_window_control("×", "Close");
+    close.add_css_class("okp-player-window-close");
+    let close_window = window.clone();
+    close.connect_clicked(move |_| close_window.close());
+    controls.append(&close);
+
+    bar.append(&controls);
+    revealer.set_child(Some(&bar));
+    revealer
+}
+
+fn player_window_control(label: &str, tooltip: &str) -> gtk::Button {
+    let glyph = gtk::Label::new(None);
+    glyph.add_css_class("okp-player-window-control-glyph");
+
+    let button = gtk::Button::new();
+    button.set_child(Some(&glyph));
+    button.add_css_class("okp-player-window-control");
+    button.set_has_frame(false);
+    button.set_tooltip_text(Some(tooltip));
+    set_player_window_control_label(&button, label);
+    button
+}
+
+fn sync_player_maximize_icon(button: &gtk::Button, window: &gtk::ApplicationWindow) {
+    if window.is_maximized() {
+        set_player_window_control_label(button, "❐");
+        button.set_tooltip_text(Some("Restore"));
+    } else {
+        set_player_window_control_label(button, "□");
+        button.set_tooltip_text(Some("Maximize"));
+    }
+}
+
+fn set_player_window_control_label(button: &gtk::Button, label: &str) {
+    if let Some(glyph) = button.child().and_downcast::<gtk::Label>() {
+        let label = glib::markup_escape_text(label);
+        glyph.set_markup(&format!(
+            "<span font_desc=\"Sans 15\" foreground=\"#d8dde3\">{label}</span>"
+        ));
+    }
+}
+
+fn connect_player_window_drag(widget: &impl IsA<gtk::Widget>, window: &gtk::ApplicationWindow) {
+    let gesture = gtk::GestureClick::new();
+    gesture.set_button(gdk::BUTTON_PRIMARY);
+    let drag_window = window.clone();
+    gesture.connect_pressed(move |gesture, n_press, x, y| {
+        if n_press == 2 {
+            if drag_window.is_maximized() {
+                drag_window.unmaximize();
+            } else {
+                drag_window.maximize();
+            }
+            return;
+        }
+
+        let Some(device) = gesture.current_event_device() else {
+            return;
+        };
+        let Some(surface) = drag_window.surface() else {
+            return;
+        };
+        let Ok(toplevel) = surface.downcast::<gdk::Toplevel>() else {
+            return;
+        };
+
+        toplevel.begin_move(
+            &device,
+            gesture.current_button() as i32,
+            x,
+            y,
+            gesture.current_event_time(),
+        );
+    });
+    widget.add_controller(gesture);
 }
 
 fn build_empty_surface(
@@ -5651,6 +5785,67 @@ fn install_css() {
         "
         .okp-root {
             background: #050507;
+        }
+
+        window.okp-player-window {
+            background: #050507;
+        }
+
+        .okp-window-chrome {
+            min-height: 40px;
+            background: transparent;
+        }
+
+        .okp-window-drag-zone {
+            min-height: 40px;
+            background: transparent;
+        }
+
+        .okp-player-window-controls {
+            min-height: 32px;
+            border-radius: 12px;
+            background: rgba(14, 15, 18, 0.42);
+            border: 1px solid rgba(255, 255, 255, 0.07);
+        }
+
+        .okp-player-window-controls button,
+        button.okp-player-window-control {
+            min-width: 42px;
+            min-height: 32px;
+            padding: 0;
+            border: none;
+            border-radius: 8px;
+            background: transparent;
+            box-shadow: none;
+            color: rgba(255, 255, 255, 0.84);
+            font-size: 15px;
+            font-weight: 400;
+        }
+
+        .okp-player-window-controls button:hover,
+        button.okp-player-window-control:hover {
+            background: rgba(255, 255, 255, 0.12);
+            color: rgba(255, 255, 255, 0.96);
+        }
+
+        label.okp-player-window-control-glyph {
+            color: rgba(255, 255, 255, 0.86);
+            font-size: 15px;
+            font-weight: 400;
+        }
+
+        button.okp-player-window-control:hover label.okp-player-window-control-glyph {
+            color: rgba(255, 255, 255, 0.98);
+        }
+
+        .okp-player-window-controls button:active,
+        button.okp-player-window-control:active {
+            background: rgba(255, 255, 255, 0.18);
+        }
+
+        button.okp-player-window-close:hover {
+            background: rgba(219, 59, 59, 0.86);
+            color: #ffffff;
         }
 
         .okp-video-plane {
