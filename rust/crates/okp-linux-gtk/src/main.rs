@@ -10,7 +10,7 @@ use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
 use okp_core::{AppIdentity, media_formats, natural_compare};
-use okp_mpv::{Chapter, Mpv, MpvEvent, Track, TrackKind};
+use okp_mpv::{Chapter, Mpv, MpvEvent, Track, TrackKind, current_render_target_size};
 use velopack::VelopackApp;
 
 mod history;
@@ -30,6 +30,7 @@ struct PlayerState {
     chapters_snapshot: Vec<Chapter>,
     modes: PlayModes,
     history: history::HistoryStore,
+    render_target_size: Option<okp_mpv::RenderTargetSize>,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -776,16 +777,26 @@ fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, launch
             .extend(launch_args.subtitles.clone());
     });
 
+    let resize_state = Rc::clone(&state);
+    video_area.connect_resize(move |_, width, height| {
+        resize_state.borrow_mut().render_target_size =
+            (width > 0 && height > 0).then_some(okp_mpv::RenderTargetSize { width, height });
+    });
+
     let render_state = Rc::clone(&state);
     video_area.connect_render(move |area, _context| {
         area.make_current();
         area.attach_buffers();
-        let scale = area.scale_factor().max(1);
-        let width = area.width() * scale;
-        let height = area.height() * scale;
         let mut state = render_state.borrow_mut();
+        let target_size = state
+            .render_target_size
+            .or_else(current_render_target_size)
+            .unwrap_or(okp_mpv::RenderTargetSize {
+                width: area.width().max(1),
+                height: area.height().max(1),
+            });
         if let Some(mpv) = state.mpv.as_mut()
-            && let Err(error) = mpv.render(width, height)
+            && let Err(error) = mpv.render(target_size.width, target_size.height)
         {
             eprintln!("mpv render failed: {error}");
         }

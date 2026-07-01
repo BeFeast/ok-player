@@ -10,6 +10,12 @@ use thiserror::Error;
 
 use crate::ffi;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RenderTargetSize {
+    pub width: i32,
+    pub height: i32,
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PlaybackState {
     pub time_pos: Option<f64>,
@@ -355,6 +361,7 @@ impl Mpv {
         let mut framebuffer: c_int = 0;
         unsafe {
             ffi::glGetIntegerv(ffi::GL_FRAMEBUFFER_BINDING, &mut framebuffer);
+            ffi::glViewport(0, 0, width, height);
         }
 
         let mut fbo = ffi::mpv_opengl_fbo {
@@ -496,6 +503,21 @@ impl Mpv {
                 &mut value as *mut _ as *mut c_void,
             )
         })
+    }
+}
+
+pub fn current_render_target_size() -> Option<RenderTargetSize> {
+    let mut viewport: [c_int; 4] = [0; 4];
+    unsafe {
+        ffi::glGetIntegerv(ffi::GL_VIEWPORT, viewport.as_mut_ptr());
+    }
+
+    let width = viewport[2];
+    let height = viewport[3];
+    if width > 0 && height > 0 {
+        Some(RenderTargetSize { width, height })
+    } else {
+        None
     }
 }
 
