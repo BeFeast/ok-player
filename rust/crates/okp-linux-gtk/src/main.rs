@@ -124,6 +124,7 @@ struct Controls {
     elapsed_label: gtk::Label,
     duration_label: gtk::Label,
     volume: gtk::Scale,
+    chapter_marks_snapshot: RefCell<Vec<f64>>,
     up_next_panel: gtk::Box,
     up_next_title: gtk::Label,
     up_next_list: gtk::ListBox,
@@ -430,6 +431,7 @@ fn build_controls(
         elapsed_label,
         duration_label,
         volume,
+        chapter_marks_snapshot: RefCell::new(Vec::new()),
         up_next_panel,
         up_next_title,
         up_next_list,
@@ -657,6 +659,7 @@ fn update_up_next_panel(controls: &Controls, state: &Rc<RefCell<PlayerState>>) {
     if !is_visible {
         controls.side_panel_snapshot.replace(snapshot);
         controls.side_panel_actions.borrow_mut().clear();
+        update_chapter_marks(&controls.seek, &controls.chapter_marks_snapshot, &[]);
         clear_list_box(&controls.up_next_list);
         return;
     }
@@ -665,6 +668,11 @@ fn update_up_next_panel(controls: &Controls, state: &Rc<RefCell<PlayerState>>) {
         return;
     }
     controls.side_panel_snapshot.replace(snapshot.clone());
+    update_chapter_marks(
+        &controls.seek,
+        &controls.chapter_marks_snapshot,
+        &snapshot.chapters,
+    );
 
     let current_index = snapshot
         .current_file
@@ -704,6 +712,23 @@ fn update_up_next_panel(controls: &Controls, state: &Rc<RefCell<PlayerState>>) {
     }
 
     controls.side_panel_actions.replace(actions);
+}
+
+fn update_chapter_marks(seek: &gtk::Scale, snapshot: &RefCell<Vec<f64>>, chapters: &[Chapter]) {
+    let marks = chapters
+        .iter()
+        .map(|chapter| chapter.time)
+        .filter(|time| time.is_finite() && *time > 0.0)
+        .collect::<Vec<_>>();
+    if *snapshot.borrow() == marks {
+        return;
+    }
+
+    seek.clear_marks();
+    for time in &marks {
+        seek.add_mark(*time, gtk::PositionType::Top, None);
+    }
+    snapshot.replace(marks);
 }
 
 fn panel_heading_row(text: &str) -> gtk::ListBoxRow {
