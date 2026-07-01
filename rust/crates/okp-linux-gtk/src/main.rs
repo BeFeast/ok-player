@@ -177,6 +177,31 @@ enum LinuxUpdateCheckResult {
     Failed(String),
 }
 
+#[derive(Clone)]
+struct EmptySurface {
+    revealer: gtk::Revealer,
+    panel: gtk::Box,
+}
+
+impl EmptySurface {
+    fn widget(&self) -> &gtk::Revealer {
+        &self.revealer
+    }
+
+    fn set_has_media(&self, has_media: bool) {
+        self.revealer.set_reveal_child(!has_media);
+        self.revealer.set_can_target(!has_media);
+    }
+
+    fn set_drop_active(&self, active: bool) {
+        if active {
+            self.panel.add_css_class("is-drop-target");
+        } else {
+            self.panel.remove_css_class("is-drop-target");
+        }
+    }
+}
+
 struct ChromeVisibility {
     revealer: gtk::Revealer,
     linked_revealers: Rc<RefCell<Vec<gtk::Revealer>>>,
@@ -543,10 +568,12 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
         Rc::clone(&chrome),
     );
     let control_bar = controls_bar(&controls);
+    let empty_surface = build_empty_surface(&window, Rc::clone(&state), Rc::clone(&status_toast));
     chrome.set_child(&control_bar);
     chrome.add_linked_revealer(&controls.up_next_revealer);
 
     overlay.set_child(Some(&video_area));
+    overlay.add_overlay(empty_surface.widget());
     overlay.add_overlay(chrome.widget());
     overlay.add_overlay(&controls.up_next_revealer);
     overlay.add_overlay(status_toast.widget());
@@ -560,7 +587,7 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
         Rc::clone(&state),
         Rc::clone(&status_toast),
     );
-    connect_drop(&window, Rc::clone(&state));
+    connect_drop(&window, Rc::clone(&state), empty_surface.clone());
     connect_keyboard(
         &window,
         Rc::clone(&state),
@@ -574,10 +601,65 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
         Rc::clone(&updating_seek),
         Rc::clone(&updating_volume),
         Rc::clone(&chrome),
+        empty_surface,
     );
 
     window.present();
     check_updates_on_startup(Rc::clone(&status_toast));
+}
+
+fn build_empty_surface(
+    window: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> EmptySurface {
+    let panel = gtk::Box::new(gtk::Orientation::Vertical, 16);
+    panel.add_css_class("okp-empty-panel");
+    panel.set_halign(gtk::Align::Center);
+    panel.set_valign(gtk::Align::Center);
+
+    let logo = gtk::Image::from_icon_name("com.befeast.okplayer");
+    logo.add_css_class("okp-empty-logo");
+    logo.set_pixel_size(64);
+    panel.append(&logo);
+
+    let title = gtk::Label::new(Some("OK Player"));
+    title.add_css_class("okp-empty-title");
+    title.set_xalign(0.5);
+    panel.append(&title);
+
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    actions.set_halign(gtk::Align::Center);
+
+    let open_button = gtk::Button::with_label("Open media");
+    open_button.add_css_class("okp-empty-primary-button");
+    let open_parent = window.clone();
+    let open_state = Rc::clone(&state);
+    open_button.connect_clicked(move |_| open_media_dialog(&open_parent, Rc::clone(&open_state)));
+    actions.append(&open_button);
+
+    let url_button = gtk::Button::with_label("Open URL");
+    url_button.add_css_class("okp-empty-secondary-button");
+    let url_parent = window.clone();
+    let url_state = Rc::clone(&state);
+    let url_toast = Rc::clone(&status_toast);
+    url_button.connect_clicked(move |_| {
+        open_url_dialog(&url_parent, Rc::clone(&url_state), Rc::clone(&url_toast));
+    });
+    actions.append(&url_button);
+
+    panel.append(&actions);
+
+    let revealer = gtk::Revealer::new();
+    revealer.add_css_class("okp-empty-surface");
+    revealer.set_halign(gtk::Align::Fill);
+    revealer.set_valign(gtk::Align::Fill);
+    revealer.set_transition_duration(180);
+    revealer.set_transition_type(gtk::RevealerTransitionType::Crossfade);
+    revealer.set_reveal_child(true);
+    revealer.set_child(Some(&panel));
+
+    EmptySurface { revealer, panel }
 }
 
 fn build_controls(
@@ -1090,6 +1172,7 @@ fn connect_state_poll(
     updating_seek: Rc<Cell<bool>>,
     updating_volume: Rc<Cell<bool>>,
     chrome: Rc<ChromeVisibility>,
+    empty_surface: EmptySurface,
 ) {
     glib::timeout_add_local(Duration::from_millis(200), move || {
         drain_mpv_events(&state);
@@ -1101,6 +1184,7 @@ fn connect_state_poll(
             .and_then(|mpv| mpv.playback_state().ok());
         let has_media = has_loaded_media(&state);
         let has_playlist = state.borrow().playlist.len() > 1;
+        empty_surface.set_has_media(has_media);
         drain_thumbnail_events(&controls);
         update_up_next_panel(&controls, &state);
 
@@ -2876,9 +2960,24 @@ fn open_subtitle_dialog(parent: &gtk::ApplicationWindow, state: Rc<RefCell<Playe
     dialog.present();
 }
 
-fn connect_drop(window: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerState>>) {
+fn connect_drop(
+    window: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    empty_surface: EmptySurface,
+) {
     let drop_target = gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
+    let enter_surface = empty_surface.clone();
+    drop_target.connect_enter(move |_, _, _| {
+        enter_surface.set_drop_active(true);
+        gdk::DragAction::COPY
+    });
+    let leave_surface = empty_surface.clone();
+    drop_target.connect_leave(move |_| {
+        leave_surface.set_drop_active(false);
+    });
+    let drop_surface = empty_surface;
     drop_target.connect_drop(move |_, value, _, _| {
+        drop_surface.set_drop_active(false);
         let Ok(files) = value.get::<gdk::FileList>() else {
             return false;
         };
@@ -4080,6 +4179,51 @@ fn install_css() {
 
         .okp-video-plane {
             background: #050507;
+        }
+
+        .okp-empty-surface {
+            background: rgba(5, 5, 7, 0.94);
+        }
+
+        .okp-empty-panel {
+            min-width: 300px;
+            padding: 28px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: rgba(18, 19, 23, 0.84);
+        }
+
+        .okp-empty-panel.is-drop-target {
+            border-color: rgba(40, 179, 170, 0.82);
+            background: rgba(22, 48, 49, 0.92);
+            box-shadow: 0 0 0 2px rgba(40, 179, 170, 0.18);
+        }
+
+        .okp-empty-logo {
+            color: #28b3aa;
+        }
+
+        .okp-empty-title {
+            color: rgba(255, 255, 255, 0.96);
+            font-size: 24px;
+            font-weight: 750;
+        }
+
+        .okp-empty-primary-button,
+        .okp-empty-secondary-button {
+            min-height: 36px;
+            padding: 6px 14px;
+            border-radius: 7px;
+        }
+
+        .okp-empty-primary-button {
+            background: #28b3aa;
+            color: #051011;
+        }
+
+        .okp-empty-secondary-button {
+            background: rgba(255, 255, 255, 0.08);
+            color: rgba(255, 255, 255, 0.86);
         }
 
         .okp-controls {
