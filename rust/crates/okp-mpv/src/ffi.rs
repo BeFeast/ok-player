@@ -38,6 +38,8 @@ pub const MPV_RENDER_PARAM_API_TYPE: c_int = 1;
 pub const MPV_RENDER_PARAM_OPENGL_INIT_PARAMS: c_int = 2;
 pub const MPV_RENDER_PARAM_OPENGL_FBO: c_int = 3;
 pub const MPV_RENDER_PARAM_FLIP_Y: c_int = 4;
+pub const MPV_FORMAT_FLAG: c_int = 3;
+pub const MPV_FORMAT_DOUBLE: c_int = 5;
 pub const GL_FRAMEBUFFER_BINDING: c_uint = 0x8CA6;
 
 unsafe extern "C" {
@@ -48,6 +50,18 @@ unsafe extern "C" {
         ctx: *mut mpv_handle,
         name: *const c_char,
         data: *const c_char,
+    ) -> c_int;
+    pub fn mpv_set_property(
+        ctx: *mut mpv_handle,
+        name: *const c_char,
+        format: c_int,
+        data: *mut c_void,
+    ) -> c_int;
+    pub fn mpv_get_property(
+        ctx: *mut mpv_handle,
+        name: *const c_char,
+        format: c_int,
+        data: *mut c_void,
     ) -> c_int;
     pub fn mpv_command(ctx: *mut mpv_handle, args: *const *const c_char) -> c_int;
 

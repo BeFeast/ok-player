@@ -1,18 +1,29 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
+use gtk::gdk;
 use gtk::glib;
 use gtk::prelude::*;
-use okp_core::AppIdentity;
+use okp_core::{AppIdentity, media_formats};
 use okp_mpv::Mpv;
 use velopack::VelopackApp;
 
 #[derive(Default)]
 struct PlayerState {
     mpv: Option<Mpv>,
+    current_file: Option<PathBuf>,
+}
+
+struct Controls {
+    open_button: gtk::Button,
+    play_button: gtk::Button,
+    seek: gtk::Scale,
+    elapsed_label: gtk::Label,
+    duration_label: gtk::Label,
+    volume: gtk::Scale,
 }
 
 fn main() -> glib::ExitCode {
@@ -29,8 +40,12 @@ fn main() -> glib::ExitCode {
 }
 
 fn build_window(app: &gtk::Application, file: Option<PathBuf>) {
+    install_css();
+
     let identity = AppIdentity::linux();
     let state = Rc::new(RefCell::new(PlayerState::default()));
+    let updating_seek = Rc::new(Cell::new(false));
+    let updating_volume = Rc::new(Cell::new(false));
 
     let window = gtk::ApplicationWindow::builder()
         .application(app)
@@ -49,12 +64,131 @@ fn build_window(app: &gtk::Application, file: Option<PathBuf>) {
     video_area.set_required_version(3, 2);
     video_area.add_css_class("okp-video-plane");
 
+    let controls = build_controls(
+        &window,
+        Rc::clone(&state),
+        Rc::clone(&updating_seek),
+        Rc::clone(&updating_volume),
+    );
+
     overlay.set_child(Some(&video_area));
+    overlay.add_overlay(&controls_bar(&controls));
     window.set_child(Some(&overlay));
 
     connect_mpv(&video_area, Rc::clone(&state), file);
+    connect_drop(&window, Rc::clone(&state));
+    connect_state_poll(
+        Rc::clone(&state),
+        controls,
+        Rc::clone(&updating_seek),
+        Rc::clone(&updating_volume),
+    );
 
     window.present();
+}
+
+fn build_controls(
+    window: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    updating_seek: Rc<Cell<bool>>,
+    updating_volume: Rc<Cell<bool>>,
+) -> Controls {
+    let play_button = gtk::Button::with_label("Play");
+    play_button.add_css_class("okp-control-button");
+    play_button.set_sensitive(false);
+
+    let open_button = gtk::Button::with_label("Open");
+    open_button.add_css_class("okp-control-button");
+
+    let elapsed_label = gtk::Label::new(Some("00:00"));
+    elapsed_label.add_css_class("okp-time-label");
+
+    let duration_label = gtk::Label::new(Some("00:00"));
+    duration_label.add_css_class("okp-time-label");
+
+    let seek = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 1.0);
+    seek.set_draw_value(false);
+    seek.set_hexpand(true);
+    seek.set_sensitive(false);
+    seek.add_css_class("okp-seek");
+
+    let volume = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 130.0, 1.0);
+    volume.set_draw_value(false);
+    volume.set_width_request(116);
+    volume.set_value(100.0);
+    volume.add_css_class("okp-volume");
+
+    let open_parent = window.clone();
+    let open_state = Rc::clone(&state);
+    open_button.connect_clicked(move |_| open_media_dialog(&open_parent, Rc::clone(&open_state)));
+
+    let play_state = Rc::clone(&state);
+    let play_open_parent = window.clone();
+    play_button.connect_clicked(move |_| {
+        let has_media = play_state.borrow().current_file.is_some();
+        if !has_media {
+            open_media_dialog(&play_open_parent, Rc::clone(&play_state));
+            return;
+        }
+
+        if let Some(mpv) = play_state.borrow().mpv.as_ref()
+            && let Err(error) = mpv.cycle_pause()
+        {
+            eprintln!("Failed to toggle playback: {error}");
+        }
+    });
+
+    let seek_state = Rc::clone(&state);
+    seek.connect_change_value(move |_, _, value| {
+        if !updating_seek.get()
+            && let Some(mpv) = seek_state.borrow().mpv.as_ref()
+            && let Err(error) = mpv.seek_absolute(value)
+        {
+            eprintln!("Failed to seek: {error}");
+        }
+
+        glib::Propagation::Proceed
+    });
+
+    let volume_state = Rc::clone(&state);
+    volume.connect_change_value(move |_, _, value| {
+        if !updating_volume.get()
+            && let Some(mpv) = volume_state.borrow().mpv.as_ref()
+            && let Err(error) = mpv.set_volume(value)
+        {
+            eprintln!("Failed to set volume: {error}");
+        }
+
+        glib::Propagation::Proceed
+    });
+
+    Controls {
+        open_button,
+        play_button,
+        seek,
+        elapsed_label,
+        duration_label,
+        volume,
+    }
+}
+
+fn controls_bar(controls: &Controls) -> gtk::Box {
+    let bar = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    bar.add_css_class("okp-controls");
+    bar.set_halign(gtk::Align::Fill);
+    bar.set_valign(gtk::Align::End);
+    bar.set_margin_start(18);
+    bar.set_margin_end(18);
+    bar.set_margin_bottom(18);
+
+    bar.append(&controls.open_button);
+    bar.append(&controls.play_button);
+    bar.append(&controls.elapsed_label);
+    bar.append(&controls.seek);
+    bar.append(&controls.duration_label);
+    bar.append(&controls.volume);
+
+    bar
 }
 
 fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, file: Option<PathBuf>) {
@@ -79,13 +213,11 @@ fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, file: 
             return;
         }
 
-        if let Some(path) = file.as_deref()
-            && let Err(error) = mpv.load_file(path)
-        {
-            eprintln!("Failed to load media '{}': {error}", path.display());
-        }
-
         realize_state.borrow_mut().mpv = Some(mpv);
+
+        if let Some(path) = file.as_deref() {
+            load_media_path(&realize_state, path.to_path_buf());
+        }
     });
 
     let render_state = Rc::clone(&state);
@@ -115,4 +247,189 @@ fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, file: 
         tick_area.queue_render();
         glib::ControlFlow::Continue
     });
+}
+
+fn connect_state_poll(
+    state: Rc<RefCell<PlayerState>>,
+    controls: Controls,
+    updating_seek: Rc<Cell<bool>>,
+    updating_volume: Rc<Cell<bool>>,
+) {
+    glib::timeout_add_local(Duration::from_millis(200), move || {
+        let playback = state
+            .borrow()
+            .mpv
+            .as_ref()
+            .and_then(|mpv| mpv.playback_state().ok());
+        let has_media = state.borrow().current_file.is_some();
+
+        if let Some(playback) = playback {
+            let duration = playback.duration.unwrap_or(0.0).max(0.0);
+            let raw_time = playback.time_pos.unwrap_or(0.0).max(0.0);
+            let time_pos = if duration > 0.0 {
+                raw_time.min(duration)
+            } else {
+                raw_time
+            };
+
+            controls.play_button.set_sensitive(has_media);
+            controls
+                .play_button
+                .set_label(if playback.paused { "Play" } else { "Pause" });
+            controls.seek.set_sensitive(has_media && duration > 0.0);
+
+            updating_seek.set(true);
+            controls.seek.set_range(0.0, duration.max(1.0));
+            controls.seek.set_value(time_pos);
+            updating_seek.set(false);
+
+            if let Some(volume) = playback.volume {
+                updating_volume.set(true);
+                controls.volume.set_value(volume.clamp(0.0, 130.0));
+                updating_volume.set(false);
+            }
+
+            controls.elapsed_label.set_text(&format_time(time_pos));
+            controls.duration_label.set_text(&format_time(duration));
+        } else {
+            controls.play_button.set_sensitive(has_media);
+            controls.play_button.set_label("Play");
+            controls.seek.set_sensitive(false);
+        }
+
+        glib::ControlFlow::Continue
+    });
+}
+
+fn open_media_dialog(parent: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerState>>) {
+    let dialog = gtk::FileChooserDialog::new(
+        Some("Open media"),
+        Some(parent),
+        gtk::FileChooserAction::Open,
+        &[
+            ("Cancel", gtk::ResponseType::Cancel),
+            ("Open", gtk::ResponseType::Accept),
+        ],
+    );
+    dialog.set_modal(true);
+
+    dialog.connect_response(move |dialog, response| {
+        if response == gtk::ResponseType::Accept
+            && let Some(path) = dialog.file().and_then(|file| file.path())
+        {
+            load_media_path(&state, path);
+        }
+        dialog.close();
+    });
+
+    dialog.present();
+}
+
+fn connect_drop(window: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerState>>) {
+    let drop_target = gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
+    drop_target.connect_drop(move |_, value, _, _| {
+        let Ok(files) = value.get::<gdk::FileList>() else {
+            return false;
+        };
+
+        let Some(path) = files.files().into_iter().find_map(|file| file.path()) else {
+            return false;
+        };
+
+        if !is_media_path(&path) {
+            return false;
+        }
+
+        load_media_path(&state, path);
+        true
+    });
+    window.add_controller(drop_target);
+}
+
+fn load_media_path(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
+    if !is_media_path(&path) {
+        return;
+    }
+
+    let result = {
+        let state = state.borrow();
+        state.mpv.as_ref().map(|mpv| mpv.load_file(&path))
+    };
+
+    match result {
+        Some(Ok(())) => state.borrow_mut().current_file = Some(path),
+        Some(Err(error)) => eprintln!("Failed to load media '{}': {error}", path.display()),
+        None => state.borrow_mut().current_file = Some(path),
+    }
+}
+
+fn is_media_path(path: &Path) -> bool {
+    media_formats::is_media(path)
+}
+
+fn format_time(seconds: f64) -> String {
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return "00:00".to_owned();
+    }
+
+    let total = seconds.round() as u64;
+    let hours = total / 3600;
+    let minutes = (total % 3600) / 60;
+    let seconds = total % 60;
+
+    if hours > 0 {
+        format!("{hours:02}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes:02}:{seconds:02}")
+    }
+}
+
+fn install_css() {
+    let Some(display) = gdk::Display::default() else {
+        return;
+    };
+
+    let provider = gtk::CssProvider::new();
+    provider.load_from_data(
+        "
+        .okp-root {
+            background: #050507;
+        }
+
+        .okp-video-plane {
+            background: #050507;
+        }
+
+        .okp-controls {
+            padding: 10px 12px;
+            border-radius: 8px;
+            background: rgba(12, 13, 16, 0.86);
+            box-shadow: 0 10px 34px rgba(0, 0, 0, 0.38);
+        }
+
+        .okp-control-button {
+            min-width: 72px;
+            min-height: 34px;
+        }
+
+        .okp-time-label {
+            min-width: 52px;
+            color: rgba(255, 255, 255, 0.84);
+            font-feature-settings: 'tnum';
+        }
+
+        .okp-seek {
+            min-width: 260px;
+        }
+
+        .okp-volume {
+            min-width: 116px;
+        }
+        ",
+    );
+    gtk::style_context_add_provider_for_display(
+        &display,
+        &provider,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
 }

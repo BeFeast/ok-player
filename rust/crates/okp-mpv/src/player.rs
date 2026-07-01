@@ -10,6 +10,14 @@ use thiserror::Error;
 
 use crate::ffi;
 
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PlaybackState {
+    pub time_pos: Option<f64>,
+    pub duration: Option<f64>,
+    pub paused: bool,
+    pub volume: Option<f64>,
+}
+
 #[derive(Debug, Error)]
 pub enum MpvError {
     #[error("libmpv returned null handle")]
@@ -92,6 +100,28 @@ impl Mpv {
         check(unsafe { ffi::mpv_command(self.handle.as_ptr(), args.as_ptr()) })
     }
 
+    pub fn playback_state(&self) -> Result<PlaybackState, MpvError> {
+        Ok(PlaybackState {
+            time_pos: self.get_double("time-pos")?,
+            duration: self.get_double("duration")?,
+            paused: self.get_flag("pause")?.unwrap_or(false),
+            volume: self.get_double("volume")?,
+        })
+    }
+
+    pub fn cycle_pause(&self) -> Result<(), MpvError> {
+        self.command(&["cycle", "pause"])
+    }
+
+    pub fn seek_absolute(&self, seconds: f64) -> Result<(), MpvError> {
+        let seconds = seconds.max(0.0).to_string();
+        self.command(&["seek", &seconds, "absolute+exact"])
+    }
+
+    pub fn set_volume(&self, volume: f64) -> Result<(), MpvError> {
+        self.set_double("volume", volume.clamp(0.0, 130.0))
+    }
+
     pub fn render(&mut self, width: i32, height: i32) -> Result<(), MpvError> {
         if width <= 0 || height <= 0 {
             return Ok(());
@@ -154,6 +184,64 @@ impl Mpv {
 
         check(unsafe {
             ffi::mpv_set_option_string(self.handle.as_ptr(), name.as_ptr(), value.as_ptr())
+        })
+    }
+
+    fn command(&self, args: &[&str]) -> Result<(), MpvError> {
+        let c_args = args
+            .iter()
+            .map(|arg| CString::new(*arg))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut ptrs = c_args.iter().map(|arg| arg.as_ptr()).collect::<Vec<_>>();
+        ptrs.push(ptr::null());
+
+        check(unsafe { ffi::mpv_command(self.handle.as_ptr(), ptrs.as_ptr()) })
+    }
+
+    fn get_double(&self, name: &str) -> Result<Option<f64>, MpvError> {
+        let name = CString::new(name)?;
+        let mut value = 0.0;
+        let code = unsafe {
+            ffi::mpv_get_property(
+                self.handle.as_ptr(),
+                name.as_ptr(),
+                ffi::MPV_FORMAT_DOUBLE,
+                &mut value as *mut _ as *mut c_void,
+            )
+        };
+
+        if code < 0 { Ok(None) } else { Ok(Some(value)) }
+    }
+
+    fn get_flag(&self, name: &str) -> Result<Option<bool>, MpvError> {
+        let name = CString::new(name)?;
+        let mut value: c_int = 0;
+        let code = unsafe {
+            ffi::mpv_get_property(
+                self.handle.as_ptr(),
+                name.as_ptr(),
+                ffi::MPV_FORMAT_FLAG,
+                &mut value as *mut _ as *mut c_void,
+            )
+        };
+
+        if code < 0 {
+            Ok(None)
+        } else {
+            Ok(Some(value != 0))
+        }
+    }
+
+    fn set_double(&self, name: &str, mut value: f64) -> Result<(), MpvError> {
+        let name = CString::new(name)?;
+
+        check(unsafe {
+            ffi::mpv_set_property(
+                self.handle.as_ptr(),
+                name.as_ptr(),
+                ffi::MPV_FORMAT_DOUBLE,
+                &mut value as *mut _ as *mut c_void,
+            )
         })
     }
 }
