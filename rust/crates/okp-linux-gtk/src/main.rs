@@ -35,6 +35,7 @@ struct PlayerState {
     hover_thumbnail_request_key: Option<String>,
     chapters_snapshot: Vec<Chapter>,
     modes: PlayModes,
+    private_session: bool,
     history: history::HistoryStore,
     render_target_size: Option<okp_mpv::RenderTargetSize>,
 }
@@ -1569,13 +1570,14 @@ fn command_popover_content(
     status_toast: Rc<StatusToast>,
 ) -> gtk::Box {
     let content = track_popover_content("More");
-    let (has_media, repeat_mode, shuffle_enabled, auto_advance_enabled) = {
+    let (has_media, repeat_mode, shuffle_enabled, auto_advance_enabled, private_session) = {
         let state = state.borrow();
         (
             has_loaded_media_state(&state),
             state.modes.repeat_mode,
             state.modes.shuffle_enabled,
             state.modes.auto_advance_enabled,
+            state.private_session,
         )
     };
 
@@ -1630,6 +1632,40 @@ fn command_popover_content(
         toggle_fullscreen(&fullscreen_parent);
     });
     content.append(&fullscreen_button);
+
+    content.append(&divider());
+
+    let private_button = track_button(
+        if private_session {
+            "Private Session On"
+        } else {
+            "Private Session Off"
+        },
+        private_session,
+    );
+    let private_state = Rc::clone(&state);
+    let private_toast = Rc::clone(&status_toast);
+    let private_popover = popover.clone();
+    private_button.connect_clicked(move |_| {
+        toggle_private_session(&private_state, &private_toast);
+        private_popover.popdown();
+    });
+    content.append(&private_button);
+
+    let clear_history_button = track_button("Clear History...", false);
+    let clear_history_parent = parent.clone();
+    let clear_history_state = Rc::clone(&state);
+    let clear_history_toast = Rc::clone(&status_toast);
+    let clear_history_popover = popover.clone();
+    clear_history_button.connect_clicked(move |_| {
+        clear_history_popover.popdown();
+        open_clear_history_dialog(
+            &clear_history_parent,
+            Rc::clone(&clear_history_state),
+            Rc::clone(&clear_history_toast),
+        );
+    });
+    content.append(&clear_history_button);
 
     content.append(&divider());
 
@@ -1995,6 +2031,44 @@ fn open_url_dialog(
             } else {
                 status_toast.show("Enter a valid stream URL");
             }
+        }
+        dialog.close();
+    });
+
+    dialog.present();
+}
+
+fn open_clear_history_dialog(
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) {
+    let dialog = gtk::Dialog::builder()
+        .title("Clear History")
+        .transient_for(parent)
+        .modal(true)
+        .build();
+    dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+    dialog.add_button("Clear", gtk::ResponseType::Accept);
+    dialog.set_default_response(gtk::ResponseType::Cancel);
+
+    let content = dialog.content_area();
+    content.set_spacing(8);
+    content.set_margin_top(14);
+    content.set_margin_end(14);
+    content.set_margin_bottom(14);
+    content.set_margin_start(14);
+
+    let message = gtk::Label::new(Some(
+        "Clear saved resume positions and per-file playback preferences?",
+    ));
+    message.set_xalign(0.0);
+    message.set_wrap(true);
+    content.append(&message);
+
+    dialog.connect_response(move |dialog, response| {
+        if response == gtk::ResponseType::Accept {
+            clear_history(&state, &status_toast);
         }
         dialog.close();
     });
@@ -2528,6 +2602,38 @@ fn toggle_auto_advance(state: &Rc<RefCell<PlayerState>>) {
     state.modes.auto_advance_enabled = !state.modes.auto_advance_enabled;
 }
 
+fn toggle_private_session(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
+    let enabled = {
+        let mut state = state.borrow_mut();
+        state.private_session = !state.private_session;
+        if state.private_session {
+            state.pending_resume = None;
+            state.pending_preferences = None;
+        }
+        state.private_session
+    };
+
+    status_toast.show(if enabled {
+        "Private session on"
+    } else {
+        "Private session off"
+    });
+}
+
+fn clear_history(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
+    let mut state = state.borrow_mut();
+    state.history.clear();
+    state.pending_resume = None;
+    state.pending_preferences = None;
+    match state.history.save() {
+        Ok(()) => status_toast.show("History cleared"),
+        Err(error) => {
+            eprintln!("Failed to clear history: {error}");
+            status_toast.show("Could not clear history");
+        }
+    }
+}
+
 fn load_media_path(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
     load_media_path_internal(state, path, true);
 }
@@ -2576,8 +2682,16 @@ fn remember_loaded_media(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
     let resume_path = path.clone();
     let preferences_path = path.clone();
     let mut state = state.borrow_mut();
-    let resume = state.history.resume_position(&path);
-    let preferences = state.history.playback_preferences(&path);
+    let resume = if state.private_session {
+        None
+    } else {
+        state.history.resume_position(&path)
+    };
+    let preferences = if state.private_session {
+        None
+    } else {
+        state.history.playback_preferences(&path)
+    };
     let playlist_changed = state.playlist != playlist;
     state.current_file = Some(path);
     state.current_url = None;
@@ -2881,6 +2995,9 @@ fn apply_playback_preferences(
 fn save_current_preferences(state: &Rc<RefCell<PlayerState>>) {
     let snapshot = {
         let state = state.borrow();
+        if state.private_session {
+            return;
+        }
         let Some(path) = state.current_file.clone() else {
             return;
         };
@@ -2956,6 +3073,9 @@ fn speed_matches(left: f64, right: f64) -> bool {
 fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: bool) {
     let snapshot = {
         let state = state.borrow();
+        if state.private_session {
+            return;
+        }
         let Some(path) = state.current_file.clone() else {
             return;
         };

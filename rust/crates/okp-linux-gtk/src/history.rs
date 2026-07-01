@@ -179,6 +179,13 @@ impl HistoryStore {
             .filter(|preferences| !preferences.is_empty())
     }
 
+    pub fn clear(&mut self) {
+        if !self.data.files.is_empty() {
+            self.data.files.clear();
+            self.dirty = true;
+        }
+    }
+
     pub fn save(&mut self) -> io::Result<()> {
         if !self.dirty {
             return Ok(());
@@ -374,5 +381,25 @@ mod tests {
                 ..PlaybackPreferences::default()
             })
         );
+    }
+
+    #[test]
+    fn clear_removes_progress_and_preferences() {
+        let mut history = store();
+        let path = Path::new("/media/movie.mkv");
+
+        history.record(path, 120.0, 600.0, false);
+        history.record_preferences(
+            path,
+            PlaybackPreferences {
+                speed: Some(1.25),
+                ..PlaybackPreferences::default()
+            },
+        );
+        history.clear();
+
+        assert_eq!(history.resume_position(path), None);
+        assert_eq!(history.playback_preferences(path), None);
+        assert!(history.dirty);
     }
 }
