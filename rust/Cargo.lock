@@ -910,6 +910,7 @@ dependencies = [
  "relm4",
  "serde",
  "serde_json",
+ "ureq",
  "velopack",
 ]
 

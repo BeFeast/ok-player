@@ -13,4 +13,5 @@ okp-mpv = { path = "../okp-mpv" }
 relm4.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+ureq.workspace = true
 velopack.workspace = true

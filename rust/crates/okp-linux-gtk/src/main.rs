@@ -1,5 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
@@ -15,6 +16,7 @@ use okp_mpv::{
     Chapter, InfoSection, InfoTrack, MediaInfo, Mpv, MpvEvent, Track, TrackKind,
     current_render_target_size, resolve_render_target_size,
 };
+use serde::Deserialize;
 use velopack::{
     UpdateCheck, UpdateInfo, UpdateManager, UpdateOptions, VelopackApp, VelopackAsset,
     sources::GithubSource,
@@ -164,7 +166,7 @@ struct Controls {
 
 #[derive(Clone)]
 struct PendingLinuxUpdate {
-    manager: UpdateManager,
+    manager: Option<UpdateManager>,
     target: LinuxUpdateTarget,
 }
 
@@ -172,13 +174,41 @@ struct PendingLinuxUpdate {
 enum LinuxUpdateTarget {
     Info(Box<UpdateInfo>),
     Asset(Box<VelopackAsset>),
+    Deb(ManualDebUpdate),
 }
 
 enum LinuxUpdateCheckResult {
     UpToDate,
     Available(PendingLinuxUpdate),
-    Unsupported(String),
     Failed(String),
+}
+
+enum LinuxUpdateApplyResult {
+    Restarting,
+    InstallerOpened(PathBuf),
+}
+
+#[derive(Clone, Debug)]
+struct ManualDebUpdate {
+    version: String,
+    name: String,
+    url: String,
+    size: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubRelease {
+    tag_name: String,
+    draft: bool,
+    prerelease: bool,
+    assets: Vec<GitHubAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubAsset {
+    name: String,
+    browser_download_url: String,
+    size: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -612,6 +642,14 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
     );
 
     window.present();
+    if env::var_os("OKP_OPEN_SETTINGS_ON_STARTUP").is_some() {
+        let settings_parent = window.clone();
+        let settings_state = Rc::clone(&state);
+        let settings_toast = Rc::clone(&status_toast);
+        glib::timeout_add_local_once(Duration::from_millis(250), move || {
+            open_settings_window(&settings_parent, settings_state, settings_toast);
+        });
+    }
     if auto_check_updates {
         check_updates_on_startup(Rc::clone(&status_toast));
     }
@@ -2722,40 +2760,44 @@ fn open_settings_window(
     let window = gtk::Window::builder()
         .title("Settings")
         .transient_for(parent)
-        .default_width(560)
-        .default_height(520)
+        .default_width(744)
+        .default_height(1030)
+        .resizable(false)
+        .decorated(false)
         .build();
     window.add_css_class("okp-settings-window");
 
-    let root = gtk::Box::new(gtk::Orientation::Vertical, 14);
+    let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     root.add_css_class("okp-settings-root");
-    root.set_margin_top(18);
-    root.set_margin_end(18);
-    root.set_margin_bottom(18);
-    root.set_margin_start(18);
 
-    let title = gtk::Label::new(Some("Settings"));
-    title.add_css_class("okp-info-title");
-    title.set_xalign(0.0);
-    root.append(&title);
+    let stack = gtk::Stack::new();
+    stack.add_css_class("okp-settings-stack");
+    stack.set_hexpand(true);
+    stack.set_vexpand(true);
 
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    content.add_css_class("okp-settings-content");
-
-    content.append(&settings_about_section(
-        parent,
+    let about_page = settings_scroller(&settings_about_section(
         Rc::clone(&state),
         Rc::clone(&status_toast),
     ));
-    content.append(&settings_updates_section(
+    stack.add_named(&about_page, Some("about"));
+
+    let updates_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    updates_page.add_css_class("okp-settings-page");
+    updates_page.append(&settings_updates_section(
         Rc::clone(&state),
         Rc::clone(&status_toast),
     ));
+    stack.add_named(&settings_scroller(&updates_page), Some("advanced"));
 
+    let playback_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    playback_page.add_css_class("okp-settings-page");
     let playback = settings_section("Playback");
     playback.append(&settings_volume_row(Rc::clone(&state)));
-    content.append(&playback);
+    playback_page.append(&playback);
+    stack.add_named(&settings_scroller(&playback_page), Some("playback"));
 
+    let privacy_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    privacy_page.add_css_class("okp-settings-page");
     let privacy = settings_section("Privacy");
     privacy.append(&settings_private_session_row(
         Rc::clone(&state),
@@ -2766,7 +2808,7 @@ fn open_settings_window(
         Rc::clone(&state),
         Rc::clone(&status_toast),
     ));
-    content.append(&privacy);
+    privacy_page.append(&privacy);
 
     let storage = settings_section("Storage");
     let settings_path = state
@@ -2776,25 +2818,193 @@ fn open_settings_window(
         .to_string_lossy()
         .into_owned();
     storage.append(&settings_value_row("Settings file", &settings_path));
-    content.append(&storage);
+    privacy_page.append(&storage);
+    stack.add_named(&settings_scroller(&privacy_page), Some("integration"));
 
-    let scroller = gtk::ScrolledWindow::new();
-    scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-    scroller.set_vexpand(true);
-    scroller.set_child(Some(&content));
-    root.append(&scroller);
+    stack.set_visible_child_name("about");
+    root.append(&settings_nav_rail_frame(settings_nav_rail(&stack)));
 
-    let footer = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    footer.set_halign(gtk::Align::End);
-    let done_button = gtk::Button::with_label("Done");
-    done_button.add_css_class("okp-info-footer-button");
-    let close_window = window.clone();
-    done_button.connect_clicked(move |_| close_window.close());
-    footer.append(&done_button);
-    root.append(&footer);
+    let content_overlay = gtk::Overlay::new();
+    content_overlay.set_hexpand(true);
+    content_overlay.set_vexpand(true);
+    content_overlay.set_size_request(552, 1030);
+    content_overlay.set_child(Some(&stack));
+    content_overlay.add_overlay(&settings_window_controls(&window));
+    root.append(&content_overlay);
 
-    window.set_child(Some(&root));
+    let handle = gtk::WindowHandle::new();
+    handle.set_child(Some(&root));
+    window.set_child(Some(&handle));
     window.present();
+}
+
+fn settings_scroller<T: IsA<gtk::Widget>>(child: &T) -> gtk::ScrolledWindow {
+    let scroller = gtk::ScrolledWindow::new();
+    scroller.add_css_class("okp-settings-scroller");
+    scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    scroller.set_hexpand(true);
+    scroller.set_vexpand(true);
+    scroller.set_child(Some(child));
+    scroller
+}
+
+fn settings_nav_rail_frame(rail: gtk::Box) -> gtk::ScrolledWindow {
+    let frame = gtk::ScrolledWindow::new();
+    frame.add_css_class("okp-settings-rail-frame");
+    frame.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Never);
+    frame.set_min_content_width(191);
+    frame.set_max_content_width(191);
+    frame.set_propagate_natural_width(false);
+    frame.set_size_request(191, 1030);
+    frame.set_child(Some(&rail));
+    frame
+}
+
+fn settings_nav_rail(stack: &gtk::Stack) -> gtk::Box {
+    let rail = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    rail.add_css_class("okp-settings-rail");
+    rail.set_size_request(191, 1030);
+
+    let title = gtk::Label::new(Some("Settings"));
+    title.add_css_class("okp-settings-rail-title");
+    title.set_xalign(0.0);
+    rail.append(&title);
+
+    let search = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    search.add_css_class("okp-settings-search");
+    search.set_size_request(171, 30);
+    let search_icon = gtk::Image::from_icon_name("system-search-symbolic");
+    search_icon.set_pixel_size(13);
+    search.append(&search_icon);
+    let search_label = gtk::Label::new(Some("Search"));
+    search_label.add_css_class("okp-settings-search-label");
+    search_label.set_xalign(0.0);
+    search.append(&search_label);
+    rail.append(&search);
+
+    let buttons = Rc::new(RefCell::new(Vec::<gtk::Button>::new()));
+    let nav_items = [
+        ("Appearance", "preferences-desktop-theme-symbolic", None),
+        (
+            "Playback",
+            "media-playback-start-symbolic",
+            Some("playback"),
+        ),
+        ("Subtitles", "media-view-subtitles-symbolic", None),
+        ("Video", "video-display-symbolic", None),
+        ("Audio", "audio-speakers-symbolic", None),
+        ("Shortcuts", "input-keyboard-symbolic", None),
+        ("Integration", "emblem-system-symbolic", Some("integration")),
+        (
+            "Advanced",
+            "applications-engineering-symbolic",
+            Some("advanced"),
+        ),
+    ];
+
+    for (label, icon, page) in nav_items {
+        let row = settings_nav_row(label, icon, false);
+        if let Some(page) = page {
+            connect_settings_nav_row(&row, page, stack, &buttons);
+            buttons.borrow_mut().push(row.clone());
+        }
+        rail.append(&row);
+    }
+
+    let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    spacer.set_vexpand(true);
+    rail.append(&spacer);
+
+    let divider = gtk::Separator::new(gtk::Orientation::Horizontal);
+    divider.add_css_class("okp-settings-rail-divider");
+    rail.append(&divider);
+
+    let about = settings_nav_row("About", "dialog-information-symbolic", true);
+    connect_settings_nav_row(&about, "about", stack, &buttons);
+    buttons.borrow_mut().push(about.clone());
+    rail.append(&about);
+
+    rail
+}
+
+fn settings_window_controls(window: &gtk::Window) -> gtk::Box {
+    let controls = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    controls.add_css_class("okp-settings-window-controls");
+    controls.set_halign(gtk::Align::End);
+    controls.set_valign(gtk::Align::Start);
+
+    let minimize = settings_window_control("window-minimize-symbolic");
+    let minimize_window = window.clone();
+    minimize.connect_clicked(move |_| minimize_window.minimize());
+    controls.append(&minimize);
+
+    let maximize = settings_window_control("window-maximize-symbolic");
+    let maximize_window = window.clone();
+    maximize.connect_clicked(move |_| {
+        if maximize_window.is_maximized() {
+            maximize_window.unmaximize();
+        } else {
+            maximize_window.maximize();
+        }
+    });
+    controls.append(&maximize);
+
+    let close = settings_window_control("window-close-symbolic");
+    let close_window = window.clone();
+    close.connect_clicked(move |_| close_window.close());
+    controls.append(&close);
+
+    controls
+}
+
+fn settings_window_control(icon_name: &str) -> gtk::Button {
+    let button = gtk::Button::new();
+    button.add_css_class("okp-settings-window-control");
+    button.set_has_frame(false);
+    let icon = gtk::Image::from_icon_name(icon_name);
+    icon.set_pixel_size(12);
+    button.set_child(Some(&icon));
+    button
+}
+
+fn settings_nav_row(label: &str, icon_name: &str, selected: bool) -> gtk::Button {
+    let button = gtk::Button::new();
+    button.add_css_class("okp-settings-nav-row");
+    button.set_has_frame(false);
+    button.set_size_request(171, 36);
+    if selected {
+        button.add_css_class("is-selected");
+    }
+
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    content.set_halign(gtk::Align::Fill);
+    let icon = gtk::Image::from_icon_name(icon_name);
+    icon.set_pixel_size(16);
+    content.append(&icon);
+    let text = gtk::Label::new(Some(label));
+    text.set_xalign(0.0);
+    text.set_hexpand(true);
+    content.append(&text);
+    button.set_child(Some(&content));
+    button
+}
+
+fn connect_settings_nav_row(
+    button: &gtk::Button,
+    page: &str,
+    stack: &gtk::Stack,
+    buttons: &Rc<RefCell<Vec<gtk::Button>>>,
+) {
+    let page = page.to_owned();
+    let stack = stack.clone();
+    let buttons = Rc::clone(buttons);
+    button.connect_clicked(move |button| {
+        stack.set_visible_child_name(&page);
+        for row in buttons.borrow().iter() {
+            row.remove_css_class("is-selected");
+        }
+        button.add_css_class("is-selected");
+    });
 }
 
 fn settings_section(title: &str) -> gtk::Box {
@@ -2809,105 +3019,593 @@ fn settings_section(title: &str) -> gtk::Box {
 }
 
 fn settings_about_section(
-    parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) -> gtk::Box {
-    let section = settings_section("About");
+    let snapshot = AboutSnapshot::capture(&state);
+    let pane = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    pane.add_css_class("okp-about-pane");
 
-    let hero = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    hero.add_css_class("okp-about-hero");
+    pane.append(&about_identity_hero(&snapshot));
 
-    let logo = gtk::Image::from_icon_name("com.befeast.okplayer");
-    logo.add_css_class("okp-about-logo");
-    logo.set_pixel_size(68);
-    hero.append(&logo);
+    let divider = gtk::Separator::new(gtk::Orientation::Horizontal);
+    divider.add_css_class("okp-about-identity-divider");
+    pane.append(&divider);
 
-    let text = gtk::Box::new(gtk::Orientation::Vertical, 5);
+    let sheet = gtk::Box::new(gtk::Orientation::Vertical, 11);
+    sheet.add_css_class("okp-about-sheet");
+    sheet.append(&about_app_card(&snapshot));
+    sheet.append(&about_updates_card(
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    ));
+    sheet.append(&about_engine_card(&snapshot));
+    sheet.append(&about_host_card(&snapshot));
+    pane.append(&sheet);
+
+    pane.append(&about_footer(snapshot, status_toast));
+    pane
+}
+
+#[derive(Clone)]
+struct AboutSnapshot {
+    version: String,
+    channel: String,
+    build: String,
+    license: String,
+    libmpv: String,
+    ffmpeg: String,
+    render_api: String,
+    graphics: String,
+    hwdec: String,
+    os: String,
+    gtk: String,
+    cpu: String,
+    install: String,
+    updates: String,
+}
+
+impl AboutSnapshot {
+    fn capture(state: &Rc<RefCell<PlayerState>>) -> Self {
+        let auto_updates = state.borrow().settings.auto_check_updates();
+        Self {
+            version: APP_BUILD_VERSION.to_owned(),
+            channel: "Linux".to_owned(),
+            build: APP_BUILD_SHA.to_owned(),
+            license: "GPL-3.0-or-later".to_owned(),
+            libmpv: pkg_config_version("mpv").unwrap_or_else(|| "system".to_owned()),
+            ffmpeg: ffmpeg_version().unwrap_or_else(|| "system".to_owned()),
+            render_api: "libmpv render".to_owned(),
+            graphics: "OpenGL · GTK GLArea".to_owned(),
+            hwdec: "off".to_owned(),
+            os: linux_os_label(),
+            gtk: format!(
+                "{}.{}.{}",
+                gtk::major_version(),
+                gtk::minor_version(),
+                gtk::micro_version()
+            ),
+            cpu: env::consts::ARCH.to_owned(),
+            install: linux_update_install_status().to_owned(),
+            updates: if auto_updates {
+                "Automatic".to_owned()
+            } else {
+                "Manual".to_owned()
+            },
+        }
+    }
+}
+
+fn about_identity_hero(snapshot: &AboutSnapshot) -> gtk::Box {
+    let hero = gtk::Box::new(gtk::Orientation::Horizontal, 22);
+    hero.add_css_class("okp-about-identity");
+
+    let illustration = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    illustration.add_css_class("okp-about-illustration");
+    illustration.set_halign(gtk::Align::Center);
+    illustration.set_valign(gtk::Align::Center);
+    illustration.append(&about_illustration());
+    hero.append(&illustration);
+
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 0);
     text.set_valign(gtk::Align::Center);
     text.set_hexpand(true);
 
-    let name = gtk::Label::new(Some("OK Player"));
-    name.add_css_class("okp-about-name");
-    name.set_xalign(0.0);
-    text.append(&name);
+    let wordmark = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    wordmark.add_css_class("okp-about-wordmark");
+    let ok = gtk::Label::new(Some("OK"));
+    ok.add_css_class("okp-about-wordmark-ok");
+    let player = gtk::Label::new(Some(" Player"));
+    player.add_css_class("okp-about-wordmark-player");
+    wordmark.append(&ok);
+    wordmark.append(&player);
+    text.append(&wordmark);
 
-    let tagline = gtk::Label::new(Some("Native Linux player powered by GTK4 and libmpv"));
+    let chips = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    chips.add_css_class("okp-about-chip-row");
+    let version = gtk::Label::new(Some(&snapshot.version));
+    version.add_css_class("okp-about-version-chip");
+    chips.append(&version);
+    let channel = gtk::Label::new(Some(&snapshot.channel));
+    channel.add_css_class("okp-about-channel-chip");
+    chips.append(&channel);
+    text.append(&chips);
+
+    let tagline = gtk::Label::new(Some("The most elegant media player on Linux."));
     tagline.add_css_class("okp-about-tagline");
     tagline.set_xalign(0.0);
-    tagline.set_wrap(true);
     text.append(&tagline);
 
-    let version = gtk::Label::new(Some(&format!("Version {}", app_version_label())));
-    version.add_css_class("okp-about-version");
-    version.set_xalign(0.0);
-    version.set_selectable(true);
-    text.append(&version);
-
-    let pills = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    pills.append(&about_pill("linux"));
-    pills.append(&about_pill("pre-release"));
-    pills.append(&about_pill(&format!("build {APP_BUILD_SHA}")));
-    text.append(&pills);
+    let byline = gtk::Label::new(Some("Open source · by Oleg Kossoy"));
+    byline.add_css_class("okp-about-byline");
+    byline.set_xalign(0.0);
+    text.append(&byline);
 
     hero.append(&text);
-    section.append(&hero);
-
-    section.append(&settings_value_row("Version", APP_BUILD_VERSION));
-    section.append(&settings_value_row("Build", APP_BUILD_SHA));
-    section.append(&settings_value_row("Channel", "linux pre-release"));
-    section.append(&settings_value_row(
-        "Install",
-        linux_update_install_status(),
-    ));
-    section.append(&settings_value_row(
-        "Updates",
-        if state.borrow().settings.auto_check_updates() {
-            "Automatic checks on"
-        } else {
-            "Manual checks only"
-        },
-    ));
-    section.append(&settings_value_row("Platform", "Linux GTK4 / libmpv"));
-    section.append(&settings_value_row("License", "GPL-3.0-or-later"));
-
-    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    actions.set_halign(gtk::Align::End);
-
-    let media_info = gtk::Button::with_label("Media Info...");
-    media_info.add_css_class("okp-settings-button");
-    media_info.set_sensitive(has_loaded_media(&state));
-    media_info.set_tooltip_text(Some("Open Media Information (I) after loading media"));
-    let media_parent = parent.clone();
-    let media_state = Rc::clone(&state);
-    media_info.connect_clicked(move |_| {
-        open_media_info_window(&media_parent, &media_state, Rc::clone(&status_toast));
-    });
-    actions.append(&media_info);
-    section.append(&actions);
-
-    section
+    hero
 }
 
-fn about_pill(text: &str) -> gtk::Label {
-    let pill = gtk::Label::new(Some(text));
-    pill.add_css_class("okp-about-pill");
-    pill
-}
-
-fn app_version_label() -> String {
-    if APP_BUILD_SHA == "unknown" {
-        APP_BUILD_VERSION.to_owned()
-    } else {
-        format!("{APP_BUILD_VERSION} ({APP_BUILD_SHA})")
+fn about_illustration() -> gtk::Widget {
+    if let Some(path) = about_illustration_path() {
+        let image = gtk::Image::from_file(path);
+        image.set_size_request(116, 90);
+        image.set_pixel_size(116);
+        return image.upcast();
     }
+
+    let image = gtk::Image::from_icon_name("com.befeast.okplayer");
+    image.set_size_request(116, 90);
+    image.set_pixel_size(90);
+    image.upcast()
+}
+
+fn about_illustration_path() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    candidates.push(PathBuf::from(
+        "/usr/share/ok-player/com.befeast.okplayer.about.svg",
+    ));
+    if let Ok(exe) = env::current_exe()
+        && let Some(parent) = exe.parent()
+    {
+        candidates.push(parent.join("com.befeast.okplayer.about.svg"));
+    }
+    candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packaging/linux/com.befeast.okplayer.about.svg"),
+    );
+
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+fn about_app_card(snapshot: &AboutSnapshot) -> gtk::Box {
+    let rows = gtk::Box::new(gtk::Orientation::Vertical, 9);
+    rows.append(&about_spec_row("Version", &snapshot.version, true, None));
+    rows.append(&about_spec_row("Channel", &snapshot.channel, false, None));
+    rows.append(&about_spec_row(
+        "Build",
+        &snapshot.build,
+        true,
+        Some(("CURRENT", false)),
+    ));
+    rows.append(&about_spec_row("License", &snapshot.license, true, None));
+    about_card("APP", &rows)
+}
+
+fn about_engine_card(snapshot: &AboutSnapshot) -> gtk::Box {
+    let rows = gtk::Box::new(gtk::Orientation::Vertical, 9);
+    rows.append(&about_spec_row("libmpv", &snapshot.libmpv, true, None));
+    rows.append(&about_spec_row(
+        "FFmpeg",
+        &snapshot.ffmpeg,
+        true,
+        Some(("SYSTEM", false)),
+    ));
+    rows.append(&about_spec_row(
+        "Render API",
+        &snapshot.render_api,
+        true,
+        None,
+    ));
+    rows.append(&about_spec_row("Graphics", &snapshot.graphics, true, None));
+    rows.append(&about_spec_row(
+        "Hardware decode",
+        &snapshot.hwdec,
+        false,
+        Some(("OFF", false)),
+    ));
+    about_card("ENGINE", &rows)
+}
+
+fn about_updates_card(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusToast>) -> gtk::Box {
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+
+    let status_row = about_spec_row("Status", "Up to date", false, None);
+    let status_label = status_row
+        .last_child()
+        .and_then(|wrap| wrap.first_child())
+        .and_then(|widget| widget.downcast::<gtk::Label>().ok())
+        .unwrap_or_else(|| gtk::Label::new(Some("Not checked")));
+    content.append(&status_row);
+
+    let auto_row = gtk::Box::new(gtk::Orientation::Horizontal, 14);
+    auto_row.add_css_class("okp-about-row");
+    let auto_text = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    auto_text.set_hexpand(true);
+    let auto_label = gtk::Label::new(Some("Check automatically"));
+    auto_label.add_css_class("okp-about-row-label");
+    auto_label.set_xalign(0.0);
+    auto_text.append(&auto_label);
+    let auto_detail = gtk::Label::new(Some("On launch"));
+    auto_detail.add_css_class("okp-about-row-detail");
+    auto_detail.set_xalign(0.0);
+    auto_text.append(&auto_detail);
+    auto_row.append(&auto_text);
+
+    let auto_check_enabled = state.borrow().settings.auto_check_updates();
+    let auto_switch = about_toggle_button(auto_check_enabled);
+    let auto_state = Rc::clone(&state);
+    let auto_toast = Rc::clone(&status_toast);
+    auto_switch.connect_clicked(move |button| {
+        let enabled = !button.has_css_class("is-active");
+        if enabled {
+            button.add_css_class("is-active");
+        } else {
+            button.remove_css_class("is-active");
+        }
+        if let Some(knob) = button.first_child() {
+            knob.set_halign(if enabled {
+                gtk::Align::End
+            } else {
+                gtk::Align::Start
+            });
+        }
+        {
+            let mut state = auto_state.borrow_mut();
+            state.settings.set_auto_check_updates(enabled);
+            if let Err(error) = state.settings.save() {
+                eprintln!("Failed to save update settings: {error}");
+                auto_toast.show("Could not save update setting");
+            }
+        }
+        auto_toast.show(if enabled {
+            "Automatic update checks on"
+        } else {
+            "Automatic update checks off"
+        });
+    });
+    auto_row.append(&auto_switch);
+    content.append(&auto_row);
+
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    actions.set_halign(gtk::Align::Start);
+    let pending_update = Rc::new(RefCell::new(None::<PendingLinuxUpdate>));
+    let check_button = gtk::Button::with_label("Check for updates");
+    check_button.add_css_class("okp-about-check-button");
+    check_button.set_has_frame(false);
+    check_button.set_size_request(132, 34);
+    let check_status = status_label.clone();
+    let check_pending = Rc::clone(&pending_update);
+    let check_state = Rc::clone(&state);
+    let check_toast = Rc::clone(&status_toast);
+    check_button.connect_clicked(move |button| {
+        if let Some(update) = check_pending.borrow().clone() {
+            start_update_download(
+                button,
+                &check_status,
+                update,
+                Rc::clone(&check_state),
+                Rc::clone(&check_toast),
+            );
+            return;
+        }
+
+        button.set_sensitive(false);
+        button.set_label("Checking...");
+        check_status.set_text("Checking");
+
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(check_for_linux_update());
+        });
+
+        let button = button.clone();
+        let status = check_status.clone();
+        let pending = Rc::clone(&check_pending);
+        let toast = Rc::clone(&check_toast);
+        glib::timeout_add_local(Duration::from_millis(120), move || {
+            match receiver.try_recv() {
+                Ok(result) => {
+                    apply_update_check_result(&button, &status, &pending, &toast, result);
+                    glib::ControlFlow::Break
+                }
+                Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    button.set_sensitive(true);
+                    button.set_label("Check for updates");
+                    status.set_text("Failed");
+                    glib::ControlFlow::Break
+                }
+            }
+        });
+    });
+    actions.append(&check_button);
+    content.append(&actions);
+
+    about_card("UPDATES", &content)
+}
+
+fn about_host_card(snapshot: &AboutSnapshot) -> gtk::Box {
+    let grid = gtk::Grid::new();
+    grid.add_css_class("okp-about-host-grid");
+    grid.set_column_homogeneous(true);
+    grid.set_column_spacing(26);
+    grid.set_row_spacing(8);
+    grid.attach(
+        &about_spec_row("Linux", &snapshot.os, true, None),
+        0,
+        0,
+        1,
+        1,
+    );
+    grid.attach(
+        &about_spec_row("GTK", &snapshot.gtk, true, None),
+        1,
+        0,
+        1,
+        1,
+    );
+    grid.attach(
+        &about_spec_row("CPU", &snapshot.cpu, true, None),
+        0,
+        1,
+        1,
+        1,
+    );
+    grid.attach(
+        &about_spec_row("Install", &snapshot.install, false, None),
+        1,
+        1,
+        1,
+        1,
+    );
+    grid.attach(
+        &about_spec_row("Updates", &snapshot.updates, false, Some(("ON", true))),
+        0,
+        2,
+        1,
+        1,
+    );
+    about_card("HOST", &grid)
+}
+
+fn about_toggle_button(active: bool) -> gtk::Button {
+    let button = gtk::Button::new();
+    button.add_css_class("okp-about-toggle");
+    button.set_has_frame(false);
+    if active {
+        button.add_css_class("is-active");
+    }
+
+    let knob = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    knob.add_css_class("okp-about-toggle-knob");
+    knob.set_halign(if active {
+        gtk::Align::End
+    } else {
+        gtk::Align::Start
+    });
+    knob.set_valign(gtk::Align::Center);
+    button.set_child(Some(&knob));
+    button
+}
+
+fn about_card<T: IsA<gtk::Widget>>(title: &str, content: &T) -> gtk::Box {
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    card.add_css_class("okp-about-card");
+    match title {
+        "APP" => {
+            card.add_css_class("okp-about-card-app");
+            card.set_size_request(-1, 151);
+        }
+        "UPDATES" => {
+            card.add_css_class("okp-about-card-updates");
+            card.set_size_request(-1, 164);
+        }
+        "ENGINE" => {
+            card.add_css_class("okp-about-card-engine");
+            card.set_size_request(-1, 176);
+        }
+        "HOST" => {
+            card.add_css_class("okp-about-card-host");
+            card.set_size_request(-1, 125);
+        }
+        _ => {}
+    }
+
+    let label = gtk::Label::new(Some(title));
+    label.add_css_class("okp-about-card-title");
+    label.set_xalign(0.0);
+    card.append(&label);
+    card.append(content);
+    card
+}
+
+fn about_spec_row(label: &str, value: &str, mono: bool, tag: Option<(&str, bool)>) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 14);
+    row.add_css_class("okp-about-row");
+    row.set_hexpand(true);
+
+    let key = gtk::Label::new(Some(label));
+    key.add_css_class("okp-about-row-label");
+    key.set_xalign(0.0);
+    key.set_hexpand(true);
+    row.append(&key);
+
+    let value_wrap = gtk::Box::new(gtk::Orientation::Horizontal, 7);
+    value_wrap.set_halign(gtk::Align::End);
+
+    let val = gtk::Label::new(Some(value));
+    val.add_css_class(if mono {
+        "okp-about-row-value-mono"
+    } else {
+        "okp-about-row-value"
+    });
+    val.set_xalign(1.0);
+    val.set_ellipsize(pango::EllipsizeMode::End);
+    val.set_selectable(true);
+    value_wrap.append(&val);
+
+    if let Some((text, accent)) = tag {
+        let tag = gtk::Label::new(Some(text));
+        tag.add_css_class("okp-about-tag");
+        if accent {
+            tag.add_css_class("is-accent");
+        }
+        value_wrap.append(&tag);
+    }
+
+    row.append(&value_wrap);
+    row
+}
+
+fn about_footer(snapshot: AboutSnapshot, status_toast: Rc<StatusToast>) -> gtk::Box {
+    let footer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    footer.add_css_class("okp-about-footer");
+
+    let copy = about_action_button("Copy diagnostics", "edit-copy-symbolic");
+    let copy_snapshot = snapshot.clone();
+    copy.connect_clicked(move |_| {
+        if let Some(display) = gdk::Display::default() {
+            display
+                .clipboard()
+                .set_text(&about_diagnostics_text(&copy_snapshot));
+        }
+        status_toast.show("Diagnostics copied");
+    });
+    footer.append(&copy);
+
+    let links = gtk::Box::new(gtk::Orientation::Horizontal, 13);
+    links.set_halign(gtk::Align::End);
+    links.set_hexpand(true);
+
+    let github = about_link_button("GitHub");
+    github.connect_clicked(|_| open_external_url("https://github.com/BeFeast/ok-player"));
+    links.append(&github);
+
+    let dot = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    dot.add_css_class("okp-about-link-dot");
+    links.append(&dot);
+
+    let license = about_link_button("License");
+    license.connect_clicked(|_| {
+        open_external_url("https://github.com/BeFeast/ok-player/blob/main/LICENSE")
+    });
+    links.append(&license);
+    footer.append(&links);
+
+    footer
+}
+
+fn about_action_button(label: &str, icon_name: &str) -> gtk::Button {
+    let button = gtk::Button::new();
+    button.add_css_class("okp-about-copy-button");
+    button.set_has_frame(false);
+    button.set_size_request(147, 34);
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let icon = gtk::Image::from_icon_name(icon_name);
+    icon.set_pixel_size(14);
+    content.append(&icon);
+    content.append(&gtk::Label::new(Some(label)));
+    button.set_child(Some(&content));
+    button
+}
+
+fn about_link_button(label: &str) -> gtk::Button {
+    let button = gtk::Button::new();
+    button.add_css_class("okp-about-link-button");
+    button.set_has_frame(false);
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 5);
+    content.append(&gtk::Label::new(Some(label)));
+    let icon = gtk::Image::from_icon_name("open-in-new-symbolic");
+    icon.set_pixel_size(12);
+    content.append(&icon);
+    button.set_child(Some(&content));
+    button
+}
+
+fn about_diagnostics_text(snapshot: &AboutSnapshot) -> String {
+    format!(
+        "OK Player {} ({})\nBuild {} - current\nLicense {}\n\nEngine\n  libmpv           {}\n  FFmpeg           {}\n  Render API       {}\n  Graphics         {}\n  Hardware decode  {}\n\nHost\n  Linux            {}\n  GTK              {}\n  CPU              {}\n  Install          {}\n  Updates          {}",
+        snapshot.version,
+        snapshot.channel,
+        snapshot.build,
+        snapshot.license,
+        snapshot.libmpv,
+        snapshot.ffmpeg,
+        snapshot.render_api,
+        snapshot.graphics,
+        snapshot.hwdec,
+        snapshot.os,
+        snapshot.gtk,
+        snapshot.cpu,
+        snapshot.install,
+        snapshot.updates
+    )
+}
+
+fn pkg_config_version(package: &str) -> Option<String> {
+    Command::new("pkg-config")
+        .args(["--modversion", package])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn ffmpeg_version() -> Option<String> {
+    Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .and_then(|output| {
+            output
+                .lines()
+                .next()
+                .and_then(|line| line.split_whitespace().nth(2))
+                .map(str::to_owned)
+        })
+}
+
+fn linux_os_label() -> String {
+    if let Ok(os_release) = fs::read_to_string("/etc/os-release")
+        && let Some(pretty_name) = os_release.lines().find_map(|line| {
+            line.strip_prefix("PRETTY_NAME=")
+                .map(|value| value.trim_matches('"').to_owned())
+        })
+        && !pretty_name.is_empty()
+    {
+        return pretty_name;
+    }
+
+    Command::new("uname")
+        .arg("-sr")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "Linux".to_owned())
 }
 
 fn linux_update_install_status() -> &'static str {
     if linux_update_manager().is_ok() {
         "Self-update enabled"
     } else {
-        "Manual update fallback"
+        "Deb installer"
     }
 }
 
@@ -3051,9 +3749,9 @@ fn settings_updates_section(
 
 fn update_status_intro(auto_check_enabled: bool) -> &'static str {
     if auto_check_enabled {
-        "Automatic update checks are on. AppImage/Velopack installs can download and restart; .deb and dev installs use Releases."
+        "Automatic update checks are on. AppImage installs restart in place; .deb installs download the newest installer inside OK Player."
     } else {
-        "Automatic update checks are off. Use Check for Updates any time; .deb and dev installs use Releases."
+        "Automatic update checks are off. Use Check for Updates any time."
     }
 }
 
@@ -3085,14 +3783,24 @@ fn start_update_download(
     let toast = Rc::clone(&status_toast);
     glib::timeout_add_local(Duration::from_millis(150), move || {
         match receiver.try_recv() {
-            Ok(Ok(())) => {
+            Ok(Ok(LinuxUpdateApplyResult::Restarting)) => {
                 button.set_label("Restarting...");
                 status.set_text("Restarting to apply update...");
                 glib::ControlFlow::Break
             }
+            Ok(Ok(LinuxUpdateApplyResult::InstallerOpened(path))) => {
+                button.set_sensitive(true);
+                button.set_label("Check for Updates");
+                status.set_text(&format!(
+                    "Downloaded {}. Complete the installer to update.",
+                    display_file_name(&path)
+                ));
+                toast.show("Installer opened");
+                glib::ControlFlow::Break
+            }
             Ok(Err(error)) => {
                 button.set_sensitive(true);
-                button.set_label("Download and Restart");
+                button.set_label("Check for updates");
                 status.set_text(&format!("Update failed: {error}"));
                 toast.show("Update failed");
                 glib::ControlFlow::Break
@@ -3100,7 +3808,7 @@ fn start_update_download(
             Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
             Err(mpsc::TryRecvError::Disconnected) => {
                 button.set_sensitive(true);
-                button.set_label("Download and Restart");
+                button.set_label("Check for updates");
                 status.set_text("Update failed.");
                 glib::ControlFlow::Break
             }
@@ -3119,27 +3827,21 @@ fn apply_update_check_result(
     match result {
         LinuxUpdateCheckResult::UpToDate => {
             pending.borrow_mut().take();
-            button.set_label("Check for Updates");
-            status.set_text("OK Player is up to date.");
+            button.set_label("Check for updates");
+            status.set_text("Up to date");
             status_toast.show("OK Player is up to date");
         }
         LinuxUpdateCheckResult::Available(update) => {
-            let version = update
-                .target_version()
-                .unwrap_or_else(|| "new version".to_owned());
+            let status_text = update.available_status();
+            let action_label = update.action_label();
             pending.borrow_mut().replace(update);
-            button.set_label("Download and Restart");
-            status.set_text(&format!("{version} is available."));
+            button.set_label(action_label);
+            status.set_text(&status_text);
             status_toast.show("Update available");
-        }
-        LinuxUpdateCheckResult::Unsupported(reason) => {
-            pending.borrow_mut().take();
-            button.set_label("Check for Updates");
-            status.set_text(&format!("{reason} Use GitHub Releases for this install."));
         }
         LinuxUpdateCheckResult::Failed(error) => {
             pending.borrow_mut().take();
-            button.set_label("Check for Updates");
+            button.set_label("Check for updates");
             status.set_text(&format!("Update check failed: {error}"));
             status_toast.show("Update check failed");
         }
@@ -3175,12 +3877,23 @@ fn check_updates_on_startup(status_toast: Rc<StatusToast>) {
 fn check_for_linux_update() -> LinuxUpdateCheckResult {
     let manager = match linux_update_manager() {
         Ok(manager) => manager,
-        Err(error) => return LinuxUpdateCheckResult::Unsupported(error),
+        Err(manager_error) => {
+            return match check_for_linux_deb_update() {
+                Ok(Some(update)) => LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
+                    manager: None,
+                    target: LinuxUpdateTarget::Deb(update),
+                }),
+                Ok(None) => LinuxUpdateCheckResult::UpToDate,
+                Err(deb_error) => {
+                    LinuxUpdateCheckResult::Failed(format!("{manager_error}; {deb_error}"))
+                }
+            };
+        }
     };
 
     if let Some(asset) = manager.get_update_pending_restart() {
         return LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
-            manager,
+            manager: Some(manager),
             target: LinuxUpdateTarget::Asset(Box::new(asset)),
         });
     }
@@ -3188,7 +3901,7 @@ fn check_for_linux_update() -> LinuxUpdateCheckResult {
     match manager.check_for_updates() {
         Ok(UpdateCheck::UpdateAvailable(update)) => {
             LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
-                manager,
+                manager: Some(manager),
                 target: LinuxUpdateTarget::Info(update),
             })
         }
@@ -3211,28 +3924,40 @@ fn linux_update_manager() -> Result<UpdateManager, String> {
     })
 }
 
-fn download_and_apply_linux_update(update: PendingLinuxUpdate) -> Result<(), String> {
+fn download_and_apply_linux_update(
+    update: PendingLinuxUpdate,
+) -> Result<LinuxUpdateApplyResult, String> {
     match update.target {
         LinuxUpdateTarget::Info(info) => {
             let info = info.as_ref();
-            update
+            let manager = update
                 .manager
+                .as_ref()
+                .ok_or_else(|| "Self-update manager unavailable.".to_owned())?;
+            manager
                 .download_updates(info, None)
                 .map_err(|error| error.to_string())?;
-            update
-                .manager
+            manager
                 .apply_updates_and_restart(info)
                 .map_err(|error| error.to_string())?;
+            Ok(LinuxUpdateApplyResult::Restarting)
         }
         LinuxUpdateTarget::Asset(asset) => {
             let asset = asset.as_ref();
-            update
+            let manager = update
                 .manager
+                .as_ref()
+                .ok_or_else(|| "Self-update manager unavailable.".to_owned())?;
+            manager
                 .apply_updates_and_restart(asset)
                 .map_err(|error| error.to_string())?;
+            Ok(LinuxUpdateApplyResult::Restarting)
+        }
+        LinuxUpdateTarget::Deb(update) => {
+            let path = download_deb_update(update)?;
+            Ok(LinuxUpdateApplyResult::InstallerOpened(path))
         }
     }
-    Ok(())
 }
 
 impl PendingLinuxUpdate {
@@ -3240,8 +3965,160 @@ impl PendingLinuxUpdate {
         match &self.target {
             LinuxUpdateTarget::Info(info) => Some(info.TargetFullRelease.Version.clone()),
             LinuxUpdateTarget::Asset(asset) => Some(asset.Version.clone()),
+            LinuxUpdateTarget::Deb(update) => Some(update.version.clone()),
         }
     }
+
+    fn action_label(&self) -> &'static str {
+        match &self.target {
+            LinuxUpdateTarget::Info(_) | LinuxUpdateTarget::Asset(_) => "Download and Restart",
+            LinuxUpdateTarget::Deb(_) => "Download .deb",
+        }
+    }
+
+    fn available_status(&self) -> String {
+        match &self.target {
+            LinuxUpdateTarget::Info(_) | LinuxUpdateTarget::Asset(_) => format!(
+                "{} is available.",
+                self.target_version()
+                    .unwrap_or_else(|| "A new version".to_owned())
+            ),
+            LinuxUpdateTarget::Deb(update) => {
+                format!("{} is available as a .deb installer.", update.version)
+            }
+        }
+    }
+}
+
+fn check_for_linux_deb_update() -> Result<Option<ManualDebUpdate>, String> {
+    let mut response = ureq::get("https://api.github.com/repos/BeFeast/ok-player/releases")
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "OK Player Linux")
+        .call()
+        .map_err(|error| format!("GitHub .deb update check failed: {error}"))?;
+    let body = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|error| format!("GitHub .deb update check failed: {error}"))?;
+    let releases: Vec<GitHubRelease> = serde_json::from_str(&body)
+        .map_err(|error| format!("GitHub .deb update feed was invalid: {error}"))?;
+
+    let mut best = None::<ManualDebUpdate>;
+    for release in releases {
+        if release.draft || !release.prerelease {
+            continue;
+        }
+        let version = release
+            .tag_name
+            .strip_prefix("linux-v")
+            .unwrap_or(&release.tag_name)
+            .to_owned();
+        if compare_linux_versions(&version, APP_BUILD_VERSION) != std::cmp::Ordering::Greater {
+            continue;
+        }
+        let Some(asset) = release.assets.into_iter().find(|asset| {
+            asset.name.starts_with("ok-player_") && asset.name.ends_with("_amd64.deb")
+        }) else {
+            continue;
+        };
+        let candidate = ManualDebUpdate {
+            version,
+            name: asset.name,
+            url: asset.browser_download_url,
+            size: asset.size,
+        };
+        if best.as_ref().is_none_or(|current| {
+            compare_linux_versions(&candidate.version, &current.version)
+                == std::cmp::Ordering::Greater
+        }) {
+            best = Some(candidate);
+        }
+    }
+
+    Ok(best)
+}
+
+fn download_deb_update(update: ManualDebUpdate) -> Result<PathBuf, String> {
+    let cache_dir = linux_update_cache_dir();
+    fs::create_dir_all(&cache_dir)
+        .map_err(|error| format!("Could not create update cache: {error}"))?;
+    let target = cache_dir.join(&update.name);
+    let temp = cache_dir.join(format!("{}.part", update.name));
+
+    let mut response = ureq::get(&update.url)
+        .header("User-Agent", "OK Player Linux")
+        .call()
+        .map_err(|error| format!("Download failed: {error}"))?;
+    let bytes = response
+        .body_mut()
+        .with_config()
+        .limit(256 * 1024 * 1024)
+        .read_to_vec()
+        .map_err(|error| format!("Download failed: {error}"))?;
+    if let Some(expected) = update.size
+        && expected > 0
+        && bytes.len() as u64 != expected
+    {
+        return Err(format!(
+            "Download size mismatch: expected {expected} bytes, got {}.",
+            bytes.len()
+        ));
+    }
+
+    fs::write(&temp, bytes).map_err(|error| format!("Could not save update: {error}"))?;
+    fs::rename(&temp, &target).map_err(|error| format!("Could not finalize update: {error}"))?;
+    Command::new("xdg-open")
+        .arg(&target)
+        .spawn()
+        .map_err(|error| {
+            format!(
+                "Downloaded to {}, but could not open installer: {error}",
+                target.display()
+            )
+        })?;
+    Ok(target)
+}
+
+fn linux_update_cache_dir() -> PathBuf {
+    if let Some(cache_home) = env::var_os("XDG_CACHE_HOME") {
+        return PathBuf::from(cache_home).join("ok-player/updates");
+    }
+    if let Some(home) = env::var_os("HOME") {
+        return PathBuf::from(home).join(".cache/ok-player/updates");
+    }
+    env::temp_dir().join("ok-player/updates")
+}
+
+fn compare_linux_versions(left: &str, right: &str) -> std::cmp::Ordering {
+    let left_key = linux_version_sort_key(left);
+    let right_key = linux_version_sort_key(right);
+    let max_len = left_key.len().max(right_key.len());
+    for index in 0..max_len {
+        let left_part = left_key.get(index).copied().unwrap_or_default();
+        let right_part = right_key.get(index).copied().unwrap_or_default();
+        match left_part.cmp(&right_part) {
+            std::cmp::Ordering::Equal => {}
+            order => return order,
+        }
+    }
+    left.cmp(right)
+}
+
+fn linux_version_sort_key(version: &str) -> Vec<u64> {
+    let mut key = Vec::new();
+    let mut current = String::new();
+    for character in version.chars() {
+        if character.is_ascii_digit() {
+            current.push(character);
+        } else if !current.is_empty() {
+            key.push(current.parse().unwrap_or_default());
+            current.clear();
+        }
+    }
+    if !current.is_empty() {
+        key.push(current.parse().unwrap_or_default());
+    }
+    key
 }
 
 fn open_external_url(url: &str) {
@@ -5155,7 +6032,7 @@ fn install_css() {
         }
 
         .okp-settings-window {
-            background: #101115;
+            background: transparent;
         }
 
         .okp-info-root {
@@ -5163,13 +6040,106 @@ fn install_css() {
         }
 
         .okp-settings-root {
-            background: #101115;
+            background: #eef4f9;
+            color: #161616;
+            border: none;
+            border-radius: 0;
         }
 
-        .okp-info-title {
-            color: rgba(255, 255, 255, 0.94);
-            font-size: 20px;
-            font-weight: 700;
+        .okp-settings-rail-frame {
+            background: #eaf0f5;
+        }
+
+        .okp-settings-rail {
+            padding: 16px 10px 14px 10px;
+            background: #eaf0f5;
+            border-right: 1px solid #dde3e7;
+        }
+
+        .okp-settings-rail-title {
+            margin-left: 5px;
+            margin-bottom: 20px;
+            color: #3b3f42;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12.5px;
+            font-weight: 400;
+        }
+
+        .okp-settings-search {
+            min-height: 30px;
+            margin-bottom: 11px;
+            padding: 7px 10px;
+            border-radius: 7px;
+            background: #f9fbfc;
+            border: 1px solid #d5dce2;
+            color: #6c747a;
+        }
+
+        .okp-settings-search-label {
+            color: #6c747a;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12px;
+            font-weight: 400;
+        }
+
+        .okp-settings-nav-row {
+            min-height: 36px;
+            padding: 8px 10px;
+            border: none;
+            border-radius: 7px;
+            background: transparent;
+            box-shadow: none;
+            color: #3f464b;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12.5px;
+            font-weight: 400;
+        }
+
+        .okp-settings-nav-row:hover {
+            background: rgba(0, 0, 0, 0.035);
+        }
+
+        .okp-settings-nav-row.is-selected {
+            background: #cfe5e8;
+            box-shadow: inset 3px 0 0 #10938a;
+            color: #0a655f;
+            font-weight: 600;
+        }
+
+        .okp-settings-rail-divider {
+            margin: 6px 9px 8px;
+            background: #dbe2e7;
+        }
+
+        .okp-settings-window-controls {
+            min-height: 32px;
+        }
+
+        .okp-settings-window-control {
+            min-width: 48px;
+            min-height: 32px;
+            padding: 0;
+            border: none;
+            border-radius: 0;
+            background: transparent;
+            box-shadow: none;
+            color: #161616;
+        }
+
+        .okp-settings-window-control:hover {
+            background: rgba(0, 0, 0, 0.06);
+        }
+
+        .okp-settings-stack {
+            background: #eef4f9;
+        }
+
+        .okp-settings-scroller {
+            background: #eef4f9;
+        }
+
+        .okp-settings-page {
+            padding: 70px 44px 28px 24px;
         }
 
         .okp-info-path {
@@ -5185,43 +6155,234 @@ fn install_css() {
             padding-right: 4px;
         }
 
-        .okp-about-hero {
-            min-height: 76px;
-            padding: 12px;
-            border-radius: 8px;
-            background: rgba(40, 179, 170, 0.14);
-            border: 1px solid rgba(40, 179, 170, 0.28);
+        .okp-about-pane {
+            padding: 70px 44px 28px 24px;
+            background: #eef4f9;
         }
 
-        .okp-about-logo {
-            color: #28b3aa;
+        .okp-about-identity {
+            min-height: 112px;
         }
 
-        .okp-about-name {
-            color: rgba(255, 255, 255, 0.95);
-            font-size: 20px;
-            font-weight: 750;
+        .okp-about-illustration {
+            min-width: 118px;
+            min-height: 94px;
+        }
+
+        .okp-about-wordmark {
+            color: #161616;
+            font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
+            font-size: 30px;
+            letter-spacing: -0.6px;
+        }
+
+        .okp-about-wordmark-ok {
+            font-weight: 700;
+        }
+
+        .okp-about-wordmark-player {
+            font-weight: 300;
+        }
+
+        .okp-about-chip-row {
+            margin-top: 10px;
+        }
+
+        .okp-about-version-chip {
+            padding: 3px 9px;
+            border-radius: 6px;
+            background: #e2e8ec;
+            color: #161616;
+            font-family: 'Cascadia Code', 'Cascadia Mono', monospace;
+            font-size: 11.5px;
+            font-weight: 600;
+            font-feature-settings: 'tnum';
+        }
+
+        .okp-about-channel-chip {
+            padding: 4px 9px;
+            border-radius: 6px;
+            background: rgba(16, 147, 138, 0.12);
+            color: #0a655f;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
         }
 
         .okp-about-tagline {
-            color: rgba(255, 255, 255, 0.72);
-            font-size: 12px;
+            margin-top: 11px;
+            color: rgba(0, 0, 0, 0.50);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 13px;
+            font-weight: 400;
         }
 
-        .okp-about-version {
-            color: rgba(255, 255, 255, 0.64);
+        .okp-about-byline {
+            margin-top: 3px;
+            color: rgba(0, 0, 0, 0.40);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 11.5px;
+            font-weight: 400;
+        }
+
+        .okp-about-identity-divider {
+            margin: 22px 0;
+            background: rgba(0, 0, 0, 0.07);
+        }
+
+        .okp-about-card {
+            padding: 14px 16px;
+            border-radius: 8px;
+            background: #ffffff;
+            border: 1px solid rgba(0, 0, 0, 0.06);
+        }
+
+        .okp-about-card-title {
+            margin-bottom: 13px;
+            color: rgba(0, 0, 0, 0.40);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.10em;
+        }
+
+        .okp-about-row {
+            min-height: 14px;
+        }
+
+        .okp-about-row-label {
+            color: rgba(0, 0, 0, 0.50);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12.5px;
+            font-weight: 400;
+        }
+
+        .okp-about-row-detail {
+            color: rgba(0, 0, 0, 0.40);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 11.5px;
+            font-weight: 400;
+        }
+
+        .okp-about-row-value,
+        .okp-about-row-value-mono {
+            color: #161616;
+            font-size: 12.5px;
+            font-weight: 500;
+        }
+
+        .okp-about-row-value {
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+        }
+
+        .okp-about-row-value-mono {
+            font-family: 'Cascadia Code', 'Cascadia Mono', monospace;
             font-size: 12px;
             font-feature-settings: 'tnum';
         }
 
-        .okp-about-pill {
-            padding: 3px 7px;
+        .okp-about-host-grid {
+            min-width: 0;
+        }
+
+        .okp-about-tag {
+            padding: 2px 6px;
+            border-radius: 5px;
+            background: rgba(0, 0, 0, 0.05);
+            color: rgba(0, 0, 0, 0.40);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 8.5px;
+            font-weight: 600;
+            letter-spacing: 0.07em;
+        }
+
+        .okp-about-tag.is-accent {
+            background: rgba(16, 147, 138, 0.12);
+            color: #0a655f;
+        }
+
+        .okp-about-footer {
+            margin-top: 8px;
+            padding-top: 17px;
+            border-top: 1px solid rgba(0, 0, 0, 0.07);
+        }
+
+        .okp-about-copy-button {
+            min-height: 34px;
+            padding: 0 14px;
+            border-radius: 7px;
+            background: #e2e8ec;
+            border: 1px solid rgba(0, 0, 0, 0.06);
+            box-shadow: none;
+            color: #161616;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .okp-about-copy-button:hover {
+            background: #d9e1e7;
+        }
+
+        .okp-about-check-button {
+            min-width: 132px;
+            min-height: 34px;
+            padding: 0 14px;
+            border-radius: 7px;
+            background: #ffffff;
+            border: 1px solid rgba(0, 0, 0, 0.06);
+            box-shadow: none;
+            color: #161616;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12px;
+            font-weight: 400;
+        }
+
+        .okp-about-check-button:hover {
+            background: #f8fafb;
+        }
+
+        .okp-about-toggle {
+            min-width: 39px;
+            min-height: 22px;
+            padding: 3px;
+            border: none;
             border-radius: 999px;
-            background: rgba(40, 179, 170, 0.18);
-            color: rgba(219, 255, 252, 0.94);
-            font-size: 10px;
-            font-weight: 800;
-            font-feature-settings: 'tnum';
+            background: #ccd5dc;
+            box-shadow: none;
+        }
+
+        .okp-about-toggle.is-active {
+            background: #0067c0;
+        }
+
+        .okp-about-toggle-knob {
+            min-width: 16px;
+            min-height: 16px;
+            border-radius: 999px;
+            background: #ffffff;
+        }
+
+        .okp-about-link-button {
+            min-height: 24px;
+            padding: 0;
+            border: none;
+            background: transparent;
+            box-shadow: none;
+            color: #0a655f;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .okp-about-link-dot {
+            min-width: 3px;
+            min-height: 3px;
+            margin-top: 10px;
+            border-radius: 999px;
+            background: rgba(0, 0, 0, 0.40);
         }
 
         .okp-update-status {
