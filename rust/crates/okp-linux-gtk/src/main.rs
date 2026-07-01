@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::env;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -14,7 +15,10 @@ use okp_mpv::{
     Chapter, InfoSection, InfoTrack, MediaInfo, Mpv, MpvEvent, Track, TrackKind,
     current_render_target_size, resolve_render_target_size,
 };
-use velopack::VelopackApp;
+use velopack::{
+    UpdateCheck, UpdateInfo, UpdateManager, UpdateOptions, VelopackApp, VelopackAsset,
+    sources::GithubSource,
+};
 
 mod history;
 mod screenshots;
@@ -24,6 +28,7 @@ mod thumbnails;
 const SPEED_PRESETS: [f64; 6] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 const APP_BUILD_VERSION: &str = env!("OKP_BUILD_VERSION");
 const APP_BUILD_SHA: &str = env!("OKP_BUILD_SHA");
+const LINUX_UPDATE_REPO_URL: &str = "https://github.com/BeFeast/ok-player";
 
 #[derive(Default)]
 struct PlayerState {
@@ -151,6 +156,25 @@ struct Controls {
     side_panel_actions: Rc<RefCell<Vec<SidePanelAction>>>,
     thumbnail_sender: mpsc::Sender<String>,
     thumbnail_events: RefCell<mpsc::Receiver<String>>,
+}
+
+#[derive(Clone)]
+struct PendingLinuxUpdate {
+    manager: UpdateManager,
+    target: LinuxUpdateTarget,
+}
+
+#[derive(Clone)]
+enum LinuxUpdateTarget {
+    Info(Box<UpdateInfo>),
+    Asset(Box<VelopackAsset>),
+}
+
+enum LinuxUpdateCheckResult {
+    UpToDate,
+    Available(PendingLinuxUpdate),
+    Unsupported(String),
+    Failed(String),
 }
 
 struct ChromeVisibility {
@@ -553,6 +577,7 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
     );
 
     window.present();
+    check_updates_on_startup(Rc::clone(&status_toast));
 }
 
 fn build_controls(
@@ -2189,6 +2214,10 @@ fn open_settings_window(
         Rc::clone(&state),
         Rc::clone(&status_toast),
     ));
+    content.append(&settings_updates_section(
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    ));
 
     let playback = settings_section("Playback");
     playback.append(&settings_volume_row(Rc::clone(&state)));
@@ -2306,6 +2335,282 @@ fn app_version_label() -> String {
         APP_BUILD_VERSION.to_owned()
     } else {
         format!("{APP_BUILD_VERSION} ({APP_BUILD_SHA})")
+    }
+}
+
+fn settings_updates_section(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let section = settings_section("Updates");
+    section.append(&settings_value_row("Channel", "linux"));
+
+    let row = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    row.add_css_class("okp-settings-row");
+
+    let status = gtk::Label::new(Some("Checks GitHub Releases for AppImage updates."));
+    status.add_css_class("okp-update-status");
+    status.set_xalign(0.0);
+    status.set_wrap(true);
+    row.append(&status);
+
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    actions.set_halign(gtk::Align::End);
+
+    let pending_update = Rc::new(RefCell::new(None::<PendingLinuxUpdate>));
+
+    let check_button = gtk::Button::with_label("Check for Updates");
+    check_button.add_css_class("okp-settings-button");
+    let check_status = status.clone();
+    let check_pending = Rc::clone(&pending_update);
+    let check_state = Rc::clone(&state);
+    let check_toast = Rc::clone(&status_toast);
+    check_button.connect_clicked(move |button| {
+        if let Some(update) = check_pending.borrow().clone() {
+            start_update_download(
+                button,
+                &check_status,
+                update,
+                Rc::clone(&check_state),
+                Rc::clone(&check_toast),
+            );
+            return;
+        }
+
+        button.set_sensitive(false);
+        button.set_label("Checking...");
+        check_status.set_text("Checking GitHub Releases...");
+
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(check_for_linux_update());
+        });
+
+        let button = button.clone();
+        let status = check_status.clone();
+        let pending = Rc::clone(&check_pending);
+        let toast = Rc::clone(&check_toast);
+        glib::timeout_add_local(Duration::from_millis(120), move || {
+            match receiver.try_recv() {
+                Ok(result) => {
+                    apply_update_check_result(&button, &status, &pending, &toast, result);
+                    glib::ControlFlow::Break
+                }
+                Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    button.set_sensitive(true);
+                    button.set_label("Check for Updates");
+                    status.set_text("Update check failed.");
+                    glib::ControlFlow::Break
+                }
+            }
+        });
+    });
+    actions.append(&check_button);
+
+    let releases_button = gtk::Button::with_label("Open Releases");
+    releases_button.add_css_class("okp-settings-button");
+    releases_button.connect_clicked(move |_| {
+        open_external_url("https://github.com/BeFeast/ok-player/releases")
+    });
+    actions.append(&releases_button);
+
+    row.append(&actions);
+    section.append(&row);
+
+    section
+}
+
+fn start_update_download(
+    button: &gtk::Button,
+    status: &gtk::Label,
+    update: PendingLinuxUpdate,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) {
+    save_current_progress(&state, false);
+    button.set_sensitive(false);
+    button.set_label("Downloading...");
+    status.set_text(&format!(
+        "Downloading {}...",
+        update
+            .target_version()
+            .unwrap_or_else(|| "update".to_owned())
+    ));
+    status_toast.show("Downloading update");
+
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(download_and_apply_linux_update(update));
+    });
+
+    let button = button.clone();
+    let status = status.clone();
+    let toast = Rc::clone(&status_toast);
+    glib::timeout_add_local(Duration::from_millis(150), move || {
+        match receiver.try_recv() {
+            Ok(Ok(())) => {
+                button.set_label("Restarting...");
+                status.set_text("Restarting to apply update...");
+                glib::ControlFlow::Break
+            }
+            Ok(Err(error)) => {
+                button.set_sensitive(true);
+                button.set_label("Download and Restart");
+                status.set_text(&format!("Update failed: {error}"));
+                toast.show("Update failed");
+                glib::ControlFlow::Break
+            }
+            Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                button.set_sensitive(true);
+                button.set_label("Download and Restart");
+                status.set_text("Update failed.");
+                glib::ControlFlow::Break
+            }
+        }
+    });
+}
+
+fn apply_update_check_result(
+    button: &gtk::Button,
+    status: &gtk::Label,
+    pending: &Rc<RefCell<Option<PendingLinuxUpdate>>>,
+    status_toast: &StatusToast,
+    result: LinuxUpdateCheckResult,
+) {
+    button.set_sensitive(true);
+    match result {
+        LinuxUpdateCheckResult::UpToDate => {
+            pending.borrow_mut().take();
+            button.set_label("Check for Updates");
+            status.set_text("OK Player is up to date.");
+            status_toast.show("OK Player is up to date");
+        }
+        LinuxUpdateCheckResult::Available(update) => {
+            let version = update
+                .target_version()
+                .unwrap_or_else(|| "new version".to_owned());
+            pending.borrow_mut().replace(update);
+            button.set_label("Download and Restart");
+            status.set_text(&format!("{version} is available."));
+            status_toast.show("Update available");
+        }
+        LinuxUpdateCheckResult::Unsupported(reason) => {
+            pending.borrow_mut().take();
+            button.set_label("Check for Updates");
+            status.set_text(&format!("{reason} Use GitHub Releases for this install."));
+        }
+        LinuxUpdateCheckResult::Failed(error) => {
+            pending.borrow_mut().take();
+            button.set_label("Check for Updates");
+            status.set_text(&format!("Update check failed: {error}"));
+            status_toast.show("Update check failed");
+        }
+    }
+}
+
+fn check_updates_on_startup(status_toast: Rc<StatusToast>) {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(check_for_linux_update());
+    });
+
+    glib::timeout_add_local(Duration::from_millis(500), move || {
+        match receiver.try_recv() {
+            Ok(LinuxUpdateCheckResult::Available(update)) => {
+                let version = update
+                    .target_version()
+                    .unwrap_or_else(|| "new version".to_owned());
+                status_toast.show(&format!("Update available: {version}"));
+                glib::ControlFlow::Break
+            }
+            Ok(LinuxUpdateCheckResult::Failed(error)) => {
+                eprintln!("Startup update check failed: {error}");
+                glib::ControlFlow::Break
+            }
+            Ok(_) => glib::ControlFlow::Break,
+            Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+        }
+    });
+}
+
+fn check_for_linux_update() -> LinuxUpdateCheckResult {
+    let manager = match linux_update_manager() {
+        Ok(manager) => manager,
+        Err(error) => return LinuxUpdateCheckResult::Unsupported(error),
+    };
+
+    if let Some(asset) = manager.get_update_pending_restart() {
+        return LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
+            manager,
+            target: LinuxUpdateTarget::Asset(Box::new(asset)),
+        });
+    }
+
+    match manager.check_for_updates() {
+        Ok(UpdateCheck::UpdateAvailable(update)) => {
+            LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
+                manager,
+                target: LinuxUpdateTarget::Info(update),
+            })
+        }
+        Ok(UpdateCheck::NoUpdateAvailable | UpdateCheck::RemoteIsEmpty) => {
+            LinuxUpdateCheckResult::UpToDate
+        }
+        Err(error) => LinuxUpdateCheckResult::Failed(error.to_string()),
+    }
+}
+
+fn linux_update_manager() -> Result<UpdateManager, String> {
+    let source = GithubSource::new(LINUX_UPDATE_REPO_URL, None, true);
+    let options = UpdateOptions {
+        ExplicitChannel: Some("linux".to_owned()),
+        ..Default::default()
+    };
+    UpdateManager::new(source, Some(options), None).map_err(|error| match error {
+        velopack::Error::NotInstalled(_) => "This install cannot self-update.".to_owned(),
+        other => other.to_string(),
+    })
+}
+
+fn download_and_apply_linux_update(update: PendingLinuxUpdate) -> Result<(), String> {
+    match update.target {
+        LinuxUpdateTarget::Info(info) => {
+            let info = info.as_ref();
+            update
+                .manager
+                .download_updates(info, None)
+                .map_err(|error| error.to_string())?;
+            update
+                .manager
+                .apply_updates_and_restart(info)
+                .map_err(|error| error.to_string())?;
+        }
+        LinuxUpdateTarget::Asset(asset) => {
+            let asset = asset.as_ref();
+            update
+                .manager
+                .apply_updates_and_restart(asset)
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+impl PendingLinuxUpdate {
+    fn target_version(&self) -> Option<String> {
+        match &self.target {
+            LinuxUpdateTarget::Info(info) => Some(info.TargetFullRelease.Version.clone()),
+            LinuxUpdateTarget::Asset(asset) => Some(asset.Version.clone()),
+        }
+    }
+}
+
+fn open_external_url(url: &str) {
+    if let Err(error) = Command::new("xdg-open").arg(url).spawn() {
+        eprintln!("Failed to open {url}: {error}");
     }
 }
 
@@ -3992,6 +4297,11 @@ fn install_css() {
             color: rgba(255, 255, 255, 0.64);
             font-size: 12px;
             font-feature-settings: 'tnum';
+        }
+
+        .okp-update-status {
+            color: rgba(255, 255, 255, 0.72);
+            font-size: 12px;
         }
 
         .okp-info-section {
