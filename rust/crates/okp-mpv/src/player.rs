@@ -18,6 +18,29 @@ pub struct PlaybackState {
     pub volume: Option<f64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MpvEvent {
+    EndFile { reason: EndFileReason },
+    FileLoaded,
+    Shutdown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EndFileReason {
+    Eof,
+    Stop,
+    Quit,
+    Error(c_int),
+    Redirect,
+    Unknown(c_int),
+}
+
+impl EndFileReason {
+    pub fn is_eof(self) -> bool {
+        matches!(self, Self::Eof)
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum MpvError {
     #[error("libmpv returned null handle")]
@@ -138,6 +161,36 @@ impl Mpv {
 
     pub fn set_volume(&self, volume: f64) -> Result<(), MpvError> {
         self.set_double("volume", volume.clamp(0.0, 130.0))
+    }
+
+    pub fn drain_events(&self) -> Vec<MpvEvent> {
+        let mut events = Vec::new();
+
+        loop {
+            let event = unsafe { ffi::mpv_wait_event(self.handle.as_ptr(), 0.0) };
+            let Some(event) = (unsafe { event.as_ref() }) else {
+                break;
+            };
+
+            match event.event_id {
+                ffi::MPV_EVENT_NONE => break,
+                ffi::MPV_EVENT_SHUTDOWN => events.push(MpvEvent::Shutdown),
+                ffi::MPV_EVENT_FILE_LOADED => events.push(MpvEvent::FileLoaded),
+                ffi::MPV_EVENT_END_FILE => {
+                    let reason = if let Some(end_file) =
+                        unsafe { event.data.cast::<ffi::mpv_event_end_file>().as_ref() }
+                    {
+                        end_file_reason(end_file.reason, end_file.error)
+                    } else {
+                        EndFileReason::Unknown(event.error)
+                    };
+                    events.push(MpvEvent::EndFile { reason });
+                }
+                _ => {}
+            }
+        }
+
+        events
     }
 
     pub fn render(&mut self, width: i32, height: i32) -> Result<(), MpvError> {
@@ -287,6 +340,17 @@ fn check(code: c_int) -> Result<(), MpvError> {
         Err(MpvError::LibMpv(code))
     } else {
         Ok(())
+    }
+}
+
+fn end_file_reason(reason: c_int, error: c_int) -> EndFileReason {
+    match reason {
+        ffi::MPV_END_FILE_REASON_EOF => EndFileReason::Eof,
+        ffi::MPV_END_FILE_REASON_STOP => EndFileReason::Stop,
+        ffi::MPV_END_FILE_REASON_QUIT => EndFileReason::Quit,
+        ffi::MPV_END_FILE_REASON_ERROR => EndFileReason::Error(error),
+        ffi::MPV_END_FILE_REASON_REDIRECT => EndFileReason::Redirect,
+        _ => EndFileReason::Unknown(reason),
     }
 }
 

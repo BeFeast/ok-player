@@ -33,6 +33,32 @@ pub struct mpv_opengl_fbo {
     pub internal_format: c_int,
 }
 
+#[repr(C)]
+pub struct mpv_event {
+    pub event_id: c_int,
+    pub error: c_int,
+    pub reply_userdata: u64,
+    pub data: *mut c_void,
+}
+
+#[repr(C)]
+pub struct mpv_event_end_file {
+    pub reason: c_int,
+    pub error: c_int,
+    pub playlist_entry_id: i64,
+    pub playlist_insert_id: i64,
+    pub playlist_insert_num_entries: c_int,
+}
+
+pub const MPV_EVENT_NONE: c_int = 0;
+pub const MPV_EVENT_SHUTDOWN: c_int = 1;
+pub const MPV_EVENT_END_FILE: c_int = 7;
+pub const MPV_EVENT_FILE_LOADED: c_int = 8;
+pub const MPV_END_FILE_REASON_EOF: c_int = 0;
+pub const MPV_END_FILE_REASON_STOP: c_int = 2;
+pub const MPV_END_FILE_REASON_QUIT: c_int = 3;
+pub const MPV_END_FILE_REASON_ERROR: c_int = 4;
+pub const MPV_END_FILE_REASON_REDIRECT: c_int = 5;
 pub const MPV_RENDER_PARAM_INVALID: c_int = 0;
 pub const MPV_RENDER_PARAM_API_TYPE: c_int = 1;
 pub const MPV_RENDER_PARAM_OPENGL_INIT_PARAMS: c_int = 2;
@@ -64,6 +90,7 @@ unsafe extern "C" {
         data: *mut c_void,
     ) -> c_int;
     pub fn mpv_command(ctx: *mut mpv_handle, args: *const *const c_char) -> c_int;
+    pub fn mpv_wait_event(ctx: *mut mpv_handle, timeout: f64) -> *mut mpv_event;
 
     pub fn mpv_render_context_create(
         res: *mut *mut mpv_render_context,

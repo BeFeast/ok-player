@@ -8,7 +8,7 @@ use gtk::gdk;
 use gtk::glib;
 use gtk::prelude::*;
 use okp_core::{AppIdentity, media_formats, natural_compare};
-use okp_mpv::Mpv;
+use okp_mpv::{Mpv, MpvEvent};
 use velopack::VelopackApp;
 
 #[derive(Default)]
@@ -329,6 +329,8 @@ fn connect_state_poll(
     updating_volume: Rc<Cell<bool>>,
 ) {
     glib::timeout_add_local(Duration::from_millis(200), move || {
+        drain_mpv_events(&state);
+
         let playback = state
             .borrow()
             .mpv
@@ -381,6 +383,25 @@ fn connect_state_poll(
 
         glib::ControlFlow::Continue
     });
+}
+
+fn drain_mpv_events(state: &Rc<RefCell<PlayerState>>) {
+    let events = {
+        let state = state.borrow();
+        state
+            .mpv
+            .as_ref()
+            .map(Mpv::drain_events)
+            .unwrap_or_default()
+    };
+
+    for event in events {
+        if let MpvEvent::EndFile { reason } = event
+            && reason.is_eof()
+        {
+            advance_playlist_on_eof(state);
+        }
+    }
 }
 
 fn open_media_dialog(parent: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerState>>) {
@@ -585,6 +606,29 @@ fn navigate_playlist(state: &Rc<RefCell<PlayerState>>, direction: isize) -> bool
         .unwrap_or(0);
     let next_index = (current_index as isize + direction).rem_euclid(playlist.len() as isize);
     load_media_path(state, playlist[next_index as usize].clone());
+    true
+}
+
+fn advance_playlist_on_eof(state: &Rc<RefCell<PlayerState>>) -> bool {
+    let next_file = {
+        let state = state.borrow();
+        let Some(current_file) = state.current_file.as_ref() else {
+            return false;
+        };
+
+        let Some(current_index) = state.playlist.iter().position(|path| path == current_file)
+        else {
+            return false;
+        };
+
+        state.playlist.get(current_index + 1).cloned()
+    };
+
+    let Some(next_file) = next_file else {
+        return false;
+    };
+
+    load_media_path(state, next_file);
     true
 }
 

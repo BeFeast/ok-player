@@ -2,5 +2,5 @@ mod ffi;
 mod player;
 pub mod version;
 
-pub use player::{Mpv, MpvError, PlaybackState};
+pub use player::{EndFileReason, Mpv, MpvError, MpvEvent, PlaybackState};
 pub use version::BuildTimeMpv;
