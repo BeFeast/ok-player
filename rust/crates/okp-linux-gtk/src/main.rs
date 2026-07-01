@@ -131,10 +131,7 @@ struct Controls {
     play_button: gtk::Button,
     next_button: gtk::Button,
     screenshot_button: gtk::Button,
-    info_button: gtk::Button,
-    repeat_button: gtk::Button,
-    shuffle_button: gtk::Button,
-    auto_advance_button: gtk::Button,
+    more_button: gtk::MenuButton,
     seek: gtk::Scale,
     elapsed_label: gtk::Label,
     duration_label: gtk::Label,
@@ -385,7 +382,12 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
     window.set_child(Some(&overlay));
 
     connect_mpv(&video_area, Rc::clone(&state), launch_args);
-    connect_video_clicks(&video_area, &window);
+    connect_video_clicks(
+        &video_area,
+        &window,
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    );
     connect_drop(&window, Rc::clone(&state));
     connect_keyboard(&window, Rc::clone(&state), Rc::clone(&status_toast));
     connect_progress_persistence(&window, Rc::clone(&state));
@@ -441,19 +443,9 @@ fn build_controls(
     screenshot_button.set_tooltip_text(Some("Save screenshot to Pictures/OK Player (C)"));
     screenshot_button.set_sensitive(false);
 
-    let info_button = gtk::Button::with_label("Info");
-    info_button.add_css_class("okp-control-button");
-    info_button.set_tooltip_text(Some("Media information (I)"));
-    info_button.set_sensitive(false);
-
-    let repeat_button = gtk::Button::with_label(RepeatMode::Off.label());
-    repeat_button.add_css_class("okp-control-button");
-
-    let shuffle_button = gtk::Button::with_label("Shuffle Off");
-    shuffle_button.add_css_class("okp-control-button");
-
-    let auto_advance_button = gtk::Button::with_label("Auto On");
-    auto_advance_button.add_css_class("okp-control-button");
+    let more_button = gtk::MenuButton::builder().label("More").build();
+    more_button.add_css_class("okp-control-button");
+    more_button.set_tooltip_text(Some("More commands"));
 
     let duration_label = gtk::Label::new(Some("00:00"));
     duration_label.add_css_class("okp-time-label");
@@ -544,6 +536,21 @@ fn build_controls(
         populate_speed_popover(popover, Rc::clone(&speed_state));
     });
 
+    let more_popover = gtk::Popover::new();
+    more_popover.add_css_class("okp-track-popover");
+    more_button.set_popover(Some(&more_popover));
+    let more_parent = window.clone();
+    let more_state = Rc::clone(&state);
+    let more_toast = Rc::clone(&status_toast);
+    more_popover.connect_show(move |popover| {
+        populate_command_popover(
+            popover,
+            &more_parent,
+            Rc::clone(&more_state),
+            Rc::clone(&more_toast),
+        );
+    });
+
     let open_parent = window.clone();
     let open_state = Rc::clone(&state);
     open_button.connect_clicked(move |_| open_media_dialog(&open_parent, Rc::clone(&open_state)));
@@ -579,22 +586,6 @@ fn build_controls(
     screenshot_button
         .connect_clicked(move |_| take_screenshot(&screenshot_state, &screenshot_toast));
 
-    let info_parent = window.clone();
-    let info_state = Rc::clone(&state);
-    let info_toast = Rc::clone(&status_toast);
-    info_button.connect_clicked(move |_| {
-        open_media_info_window(&info_parent, &info_state, Rc::clone(&info_toast));
-    });
-
-    let repeat_state = Rc::clone(&state);
-    repeat_button.connect_clicked(move |_| cycle_repeat_mode(&repeat_state));
-
-    let shuffle_state = Rc::clone(&state);
-    shuffle_button.connect_clicked(move |_| toggle_shuffle(&shuffle_state));
-
-    let auto_advance_state = Rc::clone(&state);
-    auto_advance_button.connect_clicked(move |_| toggle_auto_advance(&auto_advance_state));
-
     let seek_state = Rc::clone(&state);
     seek.connect_change_value(move |_, _, value| {
         if !updating_seek.get()
@@ -629,10 +620,7 @@ fn build_controls(
         play_button,
         next_button,
         screenshot_button,
-        info_button,
-        repeat_button,
-        shuffle_button,
-        auto_advance_button,
+        more_button,
         seek,
         elapsed_label,
         duration_label,
@@ -665,10 +653,7 @@ fn controls_bar(controls: &Controls) -> gtk::Box {
     bar.append(&controls.play_button);
     bar.append(&controls.next_button);
     bar.append(&controls.screenshot_button);
-    bar.append(&controls.info_button);
-    bar.append(&controls.repeat_button);
-    bar.append(&controls.shuffle_button);
-    bar.append(&controls.auto_advance_button);
+    bar.append(&controls.more_button);
     bar.append(&controls.elapsed_label);
     bar.append(&controls.seek);
     bar.append(&controls.duration_label);
@@ -873,7 +858,6 @@ fn connect_state_poll(
         let has_playlist = state.borrow().playlist.len() > 1;
         drain_thumbnail_events(&controls);
         update_up_next_panel(&controls, &state);
-        update_mode_buttons(&controls, &state);
 
         if let Some(playback) = playback {
             try_pending_subtitles(&state);
@@ -894,7 +878,6 @@ fn connect_state_poll(
             controls.previous_button.set_sensitive(has_playlist);
             controls.next_button.set_sensitive(has_playlist);
             controls.screenshot_button.set_sensitive(has_media);
-            controls.info_button.set_sensitive(has_media);
             controls
                 .play_button
                 .set_label(if playback.paused { "Play" } else { "Pause" });
@@ -924,7 +907,6 @@ fn connect_state_poll(
             controls.previous_button.set_sensitive(has_playlist);
             controls.next_button.set_sensitive(has_playlist);
             controls.screenshot_button.set_sensitive(has_media);
-            controls.info_button.set_sensitive(has_media);
             controls.play_button.set_label("Play");
             controls.speed_button.set_label("1.00x");
             controls.seek.set_sensitive(false);
@@ -934,9 +916,14 @@ fn connect_state_poll(
     });
 }
 
-fn connect_video_clicks(video_area: &gtk::GLArea, window: &gtk::ApplicationWindow) {
+fn connect_video_clicks(
+    video_area: &gtk::GLArea,
+    window: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) {
     let click = gtk::GestureClick::new();
-    click.set_button(0);
+    click.set_button(1);
 
     let click_window = window.clone();
     click.connect_released(move |_, press_count, _, _| {
@@ -946,44 +933,53 @@ fn connect_video_clicks(video_area: &gtk::GLArea, window: &gtk::ApplicationWindo
     });
 
     video_area.add_controller(click);
-}
 
-fn update_mode_buttons(controls: &Controls, state: &Rc<RefCell<PlayerState>>) {
-    let (repeat_mode, shuffle_enabled, auto_advance_enabled) = {
-        let state = state.borrow();
-        (
-            state.modes.repeat_mode,
-            state.modes.shuffle_enabled,
-            state.modes.auto_advance_enabled,
-        )
-    };
+    let context_click = gtk::GestureClick::new();
+    context_click.set_button(3);
 
-    controls.repeat_button.set_label(repeat_mode.label());
-    set_button_active(&controls.repeat_button, repeat_mode != RepeatMode::Off);
-
-    controls.shuffle_button.set_label(if shuffle_enabled {
-        "Shuffle On"
-    } else {
-        "Shuffle Off"
+    let context_area = video_area.clone();
+    let context_window = window.clone();
+    let context_state = Rc::clone(&state);
+    let context_toast = Rc::clone(&status_toast);
+    context_click.connect_pressed(move |_, _, x, y| {
+        show_video_context_menu(
+            &context_area,
+            &context_window,
+            Rc::clone(&context_state),
+            Rc::clone(&context_toast),
+            x,
+            y,
+        );
     });
-    set_button_active(&controls.shuffle_button, shuffle_enabled);
 
-    controls
-        .auto_advance_button
-        .set_label(if auto_advance_enabled {
-            "Auto On"
-        } else {
-            "Auto Off"
-        });
-    set_button_active(&controls.auto_advance_button, auto_advance_enabled);
+    video_area.add_controller(context_click);
 }
 
-fn set_button_active(button: &gtk::Button, active: bool) {
-    if active {
-        button.add_css_class("is-selected");
-    } else {
-        button.remove_css_class("is-selected");
-    }
+fn show_video_context_menu(
+    video_area: &gtk::GLArea,
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+    x: f64,
+    y: f64,
+) {
+    let popover = gtk::Popover::new();
+    popover.add_css_class("okp-track-popover");
+    popover.set_parent(video_area);
+    popover.set_pointing_to(Some(&gdk::Rectangle::new(
+        x.round() as i32,
+        y.round() as i32,
+        1,
+        1,
+    )));
+    popover.set_child(Some(&command_popover_content(
+        &popover,
+        parent,
+        state,
+        status_toast,
+    )));
+    popover.connect_closed(|popover| popover.unparent());
+    popover.popup();
 }
 
 fn update_up_next_panel(controls: &Controls, state: &Rc<RefCell<PlayerState>>) {
@@ -1398,6 +1394,116 @@ fn populate_speed_popover(popover: &gtk::Popover, state: Rc<RefCell<PlayerState>
     }
 
     popover.set_child(Some(&content));
+}
+
+fn populate_command_popover(
+    popover: &gtk::Popover,
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) {
+    let content = command_popover_content(popover, parent, state, status_toast);
+    popover.set_child(Some(&content));
+}
+
+fn command_popover_content(
+    popover: &gtk::Popover,
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let content = track_popover_content("More");
+    let (has_media, repeat_mode, shuffle_enabled, auto_advance_enabled) = {
+        let state = state.borrow();
+        (
+            state.current_file.is_some(),
+            state.modes.repeat_mode,
+            state.modes.shuffle_enabled,
+            state.modes.auto_advance_enabled,
+        )
+    };
+
+    let info_button = track_button("Media Information", false);
+    info_button.set_sensitive(has_media);
+    let info_parent = parent.clone();
+    let info_state = Rc::clone(&state);
+    let info_toast = Rc::clone(&status_toast);
+    let info_popover = popover.clone();
+    info_button.connect_clicked(move |_| {
+        info_popover.popdown();
+        open_media_info_window(&info_parent, &info_state, Rc::clone(&info_toast));
+    });
+    content.append(&info_button);
+
+    let screenshot_button = track_button("Save Screenshot", false);
+    screenshot_button.set_sensitive(has_media);
+    let screenshot_state = Rc::clone(&state);
+    let screenshot_toast = Rc::clone(&status_toast);
+    let screenshot_popover = popover.clone();
+    screenshot_button.connect_clicked(move |_| {
+        screenshot_popover.popdown();
+        take_screenshot(&screenshot_state, &screenshot_toast);
+    });
+    content.append(&screenshot_button);
+
+    let fullscreen_label = if parent.is_fullscreen() {
+        "Exit Fullscreen"
+    } else {
+        "Enter Fullscreen"
+    };
+    let fullscreen_button = track_button(fullscreen_label, parent.is_fullscreen());
+    let fullscreen_parent = parent.clone();
+    let fullscreen_popover = popover.clone();
+    fullscreen_button.connect_clicked(move |_| {
+        fullscreen_popover.popdown();
+        toggle_fullscreen(&fullscreen_parent);
+    });
+    content.append(&fullscreen_button);
+
+    content.append(&divider());
+
+    let repeat_button = track_button(repeat_mode.label(), repeat_mode != RepeatMode::Off);
+    let repeat_state = Rc::clone(&state);
+    let repeat_popover = popover.clone();
+    repeat_button.connect_clicked(move |_| {
+        cycle_repeat_mode(&repeat_state);
+        repeat_popover.popdown();
+    });
+    content.append(&repeat_button);
+
+    let shuffle_button = track_button(
+        if shuffle_enabled {
+            "Shuffle On"
+        } else {
+            "Shuffle Off"
+        },
+        shuffle_enabled,
+    );
+    let shuffle_state = Rc::clone(&state);
+    let shuffle_popover = popover.clone();
+    shuffle_button.connect_clicked(move |_| {
+        toggle_shuffle(&shuffle_state);
+        shuffle_popover.popdown();
+    });
+    content.append(&shuffle_button);
+
+    let auto_advance_button = track_button(
+        if auto_advance_enabled {
+            "Auto-advance On"
+        } else {
+            "Auto-advance Off"
+        },
+        auto_advance_enabled,
+    );
+    let auto_advance_state = Rc::clone(&state);
+    let auto_advance_popover = popover.clone();
+    auto_advance_button.connect_clicked(move |_| {
+        toggle_auto_advance(&auto_advance_state);
+        auto_advance_popover.popdown();
+    });
+    content.append(&auto_advance_button);
+
+    content
 }
 
 fn track_popover_content(title: &str) -> gtk::Box {
