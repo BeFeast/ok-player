@@ -1261,6 +1261,12 @@ fn connect_state_poll(
             controls.play_button.set_tooltip_text(Some("Play (Space)"));
             controls.speed_button.set_label("1.00x");
             controls.seek.set_sensitive(false);
+            updating_seek.set(true);
+            controls.seek.set_range(0.0, 1.0);
+            controls.seek.set_value(0.0);
+            updating_seek.set(false);
+            controls.elapsed_label.set_text("00:00");
+            controls.duration_label.set_text("00:00");
         }
 
         glib::ControlFlow::Continue
@@ -1323,12 +1329,8 @@ fn show_video_context_menu(
         1,
         1,
     )));
-    popover.set_child(Some(&command_popover_content(
-        &popover,
-        parent,
-        state,
-        status_toast,
-    )));
+    let content = command_popover_content(&popover, parent, state, status_toast);
+    set_track_popover_child(&popover, content);
     popover.connect_closed(|popover| popover.unparent());
     popover.popup();
 }
@@ -1827,6 +1829,17 @@ fn command_popover_content(
         take_screenshot(&screenshot_state, &screenshot_toast);
     });
     content.append(&screenshot_button);
+
+    let close_button = track_button("Close Media", false);
+    close_button.set_sensitive(has_media);
+    let close_state = Rc::clone(&state);
+    let close_toast = Rc::clone(&status_toast);
+    let close_popover = popover.clone();
+    close_button.connect_clicked(move |_| {
+        close_popover.popdown();
+        close_current_media(&close_state, &close_toast);
+    });
+    content.append(&close_button);
 
     let fullscreen_label = if parent.is_fullscreen() {
         "Exit Fullscreen"
@@ -3100,6 +3113,10 @@ fn connect_keyboard(
                 );
                 glib::Propagation::Stop
             }
+            gdk::Key::x | gdk::Key::X => {
+                close_current_media(&state, &status_toast);
+                glib::Propagation::Stop
+            }
             gdk::Key::c | gdk::Key::C => {
                 take_screenshot(&state, &status_toast);
                 glib::Propagation::Stop
@@ -3576,6 +3593,46 @@ fn clear_history(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
             status_toast.show("Could not clear history");
         }
     }
+}
+
+fn close_current_media(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) -> bool {
+    if !has_loaded_media(state) {
+        return false;
+    }
+
+    save_current_progress(state, false);
+
+    let result = {
+        let state = state.borrow();
+        state.mpv.as_ref().map(Mpv::stop)
+    };
+
+    match result {
+        Some(Ok(())) | None => {
+            clear_loaded_media_state(state);
+            status_toast.show("Media closed");
+            true
+        }
+        Some(Err(error)) => {
+            eprintln!("Failed to close media: {error}");
+            status_toast.show("Could not close media");
+            false
+        }
+    }
+}
+
+fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
+    let mut state = state.borrow_mut();
+    state.current_file = None;
+    state.current_url = None;
+    state.playlist.clear();
+    state.modes.reset_shuffle_order();
+    state.thumbnail_request_key = None;
+    state.hover_thumbnail_request_key = None;
+    state.chapters_snapshot.clear();
+    state.pending_subtitles.clear();
+    state.pending_resume = None;
+    state.pending_preferences = None;
 }
 
 fn load_media_path(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {

@@ -461,6 +461,10 @@ impl Mpv {
         self.command(&["cycle", "pause"])
     }
 
+    pub fn stop(&self) -> Result<(), MpvError> {
+        self.command(&["stop"])
+    }
+
     pub fn seek_absolute(&self, seconds: f64) -> Result<(), MpvError> {
         let seconds = seconds.max(0.0).to_string();
         self.command(&["seek", &seconds, "absolute+exact"])
