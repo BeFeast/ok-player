@@ -1191,7 +1191,7 @@ fn build_controls(
     });
 
     let subtitle_popover = gtk::Popover::new();
-    subtitle_popover.add_css_class("okp-track-popover");
+    prepare_track_popover(&subtitle_popover);
     connect_popover_chrome_pin(&subtitle_popover, Rc::clone(&chrome));
     subtitle_button.set_popover(Some(&subtitle_popover));
     let subtitle_parent = window.clone();
@@ -1201,7 +1201,7 @@ fn build_controls(
     });
 
     let audio_popover = gtk::Popover::new();
-    audio_popover.add_css_class("okp-track-popover");
+    prepare_track_popover(&audio_popover);
     connect_popover_chrome_pin(&audio_popover, Rc::clone(&chrome));
     audio_button.set_popover(Some(&audio_popover));
     let audio_state = Rc::clone(&state);
@@ -1210,7 +1210,7 @@ fn build_controls(
     });
 
     let speed_popover = gtk::Popover::new();
-    speed_popover.add_css_class("okp-track-popover");
+    prepare_track_popover(&speed_popover);
     connect_popover_chrome_pin(&speed_popover, Rc::clone(&chrome));
     speed_button.set_popover(Some(&speed_popover));
     let speed_state = Rc::clone(&state);
@@ -1219,7 +1219,7 @@ fn build_controls(
     });
 
     let more_popover = gtk::Popover::new();
-    more_popover.add_css_class("okp-track-popover");
+    prepare_track_popover(&more_popover);
     connect_popover_chrome_pin(&more_popover, Rc::clone(&chrome));
     more_button.set_popover(Some(&more_popover));
     let more_parent = window.clone();
@@ -1401,6 +1401,11 @@ fn connect_popover_chrome_pin(popover: &gtk::Popover, chrome: Rc<ChromeVisibilit
     popover.connect_closed(move |_| {
         chrome.unpin();
     });
+}
+
+fn prepare_track_popover(popover: &gtk::Popover) {
+    popover.add_css_class("okp-track-popover");
+    popover.set_has_arrow(false);
 }
 
 fn set_side_panel_user_visible(
@@ -1785,7 +1790,7 @@ fn show_video_context_menu(
     y: f64,
 ) {
     let popover = gtk::Popover::new();
-    popover.add_css_class("okp-track-popover");
+    prepare_track_popover(&popover);
     popover.set_parent(video_area);
     popover.set_pointing_to(Some(&gdk::Rectangle::new(
         x.round() as i32,
@@ -6522,11 +6527,35 @@ fn install_css() {
 
         .okp-track-popover-content {
             padding: 10px;
-            background: rgba(18, 19, 23, 0.94);
+            background: #121317;
+        }
+
+        popover.okp-track-popover {
+            padding: 0;
+            background: transparent;
+            border: none;
+            box-shadow: none;
+        }
+
+        popover.okp-track-popover > contents,
+        popover.okp-track-popover contents {
+            padding: 0;
+            border-radius: 10px;
+            background: #121317;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            box-shadow: 0 18px 46px rgba(0, 0, 0, 0.46);
+        }
+
+        popover.okp-track-popover arrow {
+            min-width: 0;
+            min-height: 0;
+            background: transparent;
+            border: none;
+            box-shadow: none;
         }
 
         .okp-track-popover-scroll {
-            background: rgba(18, 19, 23, 0.94);
+            background: #121317;
         }
 
         .okp-track-popover-title {
