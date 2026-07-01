@@ -148,6 +148,113 @@ struct Controls {
     thumbnail_events: RefCell<mpsc::Receiver<String>>,
 }
 
+struct ChromeVisibility {
+    revealer: gtk::Revealer,
+    hide_source: Rc<RefCell<Option<glib::SourceId>>>,
+    pin_count: Rc<Cell<u32>>,
+    auto_hide_enabled: Rc<Cell<bool>>,
+    is_revealed: Rc<Cell<bool>>,
+}
+
+impl ChromeVisibility {
+    fn new() -> Self {
+        let revealer = gtk::Revealer::new();
+        revealer.add_css_class("okp-chrome-revealer");
+        revealer.set_halign(gtk::Align::Fill);
+        revealer.set_valign(gtk::Align::End);
+        revealer.set_transition_duration(170);
+        revealer.set_transition_type(gtk::RevealerTransitionType::SlideUp);
+        revealer.set_reveal_child(true);
+        revealer.set_can_target(true);
+
+        Self {
+            revealer,
+            hide_source: Rc::new(RefCell::new(None)),
+            pin_count: Rc::new(Cell::new(0)),
+            auto_hide_enabled: Rc::new(Cell::new(false)),
+            is_revealed: Rc::new(Cell::new(true)),
+        }
+    }
+
+    fn widget(&self) -> &gtk::Revealer {
+        &self.revealer
+    }
+
+    fn set_child(&self, child: &impl IsA<gtk::Widget>) {
+        self.revealer.set_child(Some(child));
+    }
+
+    fn set_auto_hide_enabled(&self, enabled: bool) {
+        let was_enabled = self.auto_hide_enabled.replace(enabled);
+        if enabled && self.pin_count.get() == 0 {
+            if !was_enabled || (self.is_revealed.get() && self.hide_source.borrow().is_none()) {
+                self.schedule_hide();
+            }
+        } else {
+            self.show_persistently();
+        }
+    }
+
+    fn show_for_activity(&self) {
+        self.show_now();
+        if self.auto_hide_enabled.get() && self.pin_count.get() == 0 {
+            self.schedule_hide();
+        }
+    }
+
+    fn pin(&self) {
+        self.pin_count.set(self.pin_count.get().saturating_add(1));
+        self.show_persistently();
+    }
+
+    fn unpin(&self) {
+        self.pin_count.set(self.pin_count.get().saturating_sub(1));
+        if self.auto_hide_enabled.get() && self.pin_count.get() == 0 {
+            self.schedule_hide();
+        }
+    }
+
+    fn show_persistently(&self) {
+        self.cancel_hide();
+        self.show_now();
+    }
+
+    fn show_now(&self) {
+        self.is_revealed.set(true);
+        self.revealer.set_can_target(true);
+        self.revealer.set_reveal_child(true);
+    }
+
+    fn schedule_hide(&self) {
+        if !self.is_revealed.get() {
+            return;
+        }
+        self.cancel_hide();
+
+        let revealer = self.revealer.clone();
+        let hide_source = Rc::clone(&self.hide_source);
+        let pin_count = Rc::clone(&self.pin_count);
+        let auto_hide_enabled = Rc::clone(&self.auto_hide_enabled);
+        let is_revealed = Rc::clone(&self.is_revealed);
+        let source_id = glib::timeout_add_local(Duration::from_millis(2600), move || {
+            hide_source.borrow_mut().take();
+            if auto_hide_enabled.get() && pin_count.get() == 0 {
+                is_revealed.set(false);
+                revealer.set_reveal_child(false);
+                revealer.set_can_target(false);
+            }
+            glib::ControlFlow::Break
+        });
+        self.hide_source.borrow_mut().replace(source_id);
+    }
+
+    fn cancel_hide(&self) {
+        if let Some(source_id) = self.hide_source.borrow_mut().take() {
+            source_id.remove();
+        }
+    }
+}
+
 struct StatusToast {
     revealer: gtk::Revealer,
     label: gtk::Label,
@@ -358,6 +465,7 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
     let updating_seek = Rc::new(Cell::new(false));
     let updating_volume = Rc::new(Cell::new(false));
     let status_toast = Rc::new(StatusToast::new());
+    let chrome = Rc::new(ChromeVisibility::new());
 
     let window = gtk::ApplicationWindow::builder()
         .application(app)
@@ -382,13 +490,17 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
         Rc::clone(&updating_seek),
         Rc::clone(&updating_volume),
         Rc::clone(&status_toast),
+        Rc::clone(&chrome),
     );
+    let control_bar = controls_bar(&controls);
+    chrome.set_child(&control_bar);
 
     overlay.set_child(Some(&video_area));
-    overlay.add_overlay(&controls_bar(&controls));
+    overlay.add_overlay(chrome.widget());
     overlay.add_overlay(&controls.up_next_panel);
     overlay.add_overlay(status_toast.widget());
     window.set_child(Some(&overlay));
+    connect_chrome_activity(&overlay, Rc::clone(&chrome));
 
     connect_mpv(&video_area, Rc::clone(&state), launch_args);
     connect_video_clicks(
@@ -398,13 +510,19 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
         Rc::clone(&status_toast),
     );
     connect_drop(&window, Rc::clone(&state));
-    connect_keyboard(&window, Rc::clone(&state), Rc::clone(&status_toast));
+    connect_keyboard(
+        &window,
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+        Rc::clone(&chrome),
+    );
     connect_progress_persistence(&window, Rc::clone(&state));
     connect_state_poll(
         Rc::clone(&state),
         controls,
         Rc::clone(&updating_seek),
         Rc::clone(&updating_volume),
+        Rc::clone(&chrome),
     );
 
     window.present();
@@ -416,6 +534,7 @@ fn build_controls(
     updating_seek: Rc<Cell<bool>>,
     updating_volume: Rc<Cell<bool>>,
     status_toast: Rc<StatusToast>,
+    chrome: Rc<ChromeVisibility>,
 ) -> Controls {
     let play_button = gtk::Button::with_label("Play");
     play_button.add_css_class("okp-control-button");
@@ -522,6 +641,7 @@ fn build_controls(
 
     let subtitle_popover = gtk::Popover::new();
     subtitle_popover.add_css_class("okp-track-popover");
+    connect_popover_chrome_pin(&subtitle_popover, Rc::clone(&chrome));
     subtitle_button.set_popover(Some(&subtitle_popover));
     let subtitle_parent = window.clone();
     let subtitle_state = Rc::clone(&state);
@@ -531,6 +651,7 @@ fn build_controls(
 
     let audio_popover = gtk::Popover::new();
     audio_popover.add_css_class("okp-track-popover");
+    connect_popover_chrome_pin(&audio_popover, Rc::clone(&chrome));
     audio_button.set_popover(Some(&audio_popover));
     let audio_state = Rc::clone(&state);
     audio_popover.connect_show(move |popover| {
@@ -539,6 +660,7 @@ fn build_controls(
 
     let speed_popover = gtk::Popover::new();
     speed_popover.add_css_class("okp-track-popover");
+    connect_popover_chrome_pin(&speed_popover, Rc::clone(&chrome));
     speed_button.set_popover(Some(&speed_popover));
     let speed_state = Rc::clone(&state);
     speed_popover.connect_show(move |popover| {
@@ -547,6 +669,7 @@ fn build_controls(
 
     let more_popover = gtk::Popover::new();
     more_popover.add_css_class("okp-track-popover");
+    connect_popover_chrome_pin(&more_popover, Rc::clone(&chrome));
     more_button.set_popover(Some(&more_popover));
     let more_parent = window.clone();
     let more_state = Rc::clone(&state);
@@ -669,6 +792,25 @@ fn controls_bar(controls: &Controls) -> gtk::Box {
     bar.append(&controls.volume);
 
     bar
+}
+
+fn connect_chrome_activity(overlay: &gtk::Overlay, chrome: Rc<ChromeVisibility>) {
+    let motion = gtk::EventControllerMotion::new();
+    motion.connect_motion(move |_, _, _| {
+        chrome.show_for_activity();
+    });
+    overlay.add_controller(motion);
+}
+
+fn connect_popover_chrome_pin(popover: &gtk::Popover, chrome: Rc<ChromeVisibility>) {
+    let show_chrome = Rc::clone(&chrome);
+    popover.connect_show(move |_| {
+        show_chrome.pin();
+    });
+
+    popover.connect_closed(move |_| {
+        chrome.unpin();
+    });
 }
 
 fn connect_seek_hover(
@@ -856,6 +998,7 @@ fn connect_state_poll(
     controls: Controls,
     updating_seek: Rc<Cell<bool>>,
     updating_volume: Rc<Cell<bool>>,
+    chrome: Rc<ChromeVisibility>,
 ) {
     glib::timeout_add_local(Duration::from_millis(200), move || {
         drain_mpv_events(&state);
@@ -872,6 +1015,7 @@ fn connect_state_poll(
 
         if let Some(playback) = playback {
             try_pending_subtitles(&state);
+            chrome.set_auto_hide_enabled(has_media && !playback.paused);
 
             let duration = playback.duration.unwrap_or(0.0).max(0.0);
             let raw_time = playback.time_pos.unwrap_or(0.0).max(0.0);
@@ -911,6 +1055,7 @@ fn connect_state_poll(
             controls.elapsed_label.set_text(&format_time(time_pos));
             controls.duration_label.set_text(&format_time(duration));
         } else {
+            chrome.set_auto_hide_enabled(false);
             controls.play_button.set_sensitive(has_media);
             controls.subtitle_button.set_sensitive(has_media);
             controls.audio_button.set_sensitive(has_media);
@@ -1910,10 +2055,13 @@ fn connect_keyboard(
     window: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
+    chrome: Rc<ChromeVisibility>,
 ) {
     let controller = gtk::EventControllerKey::new();
     let shortcut_window = window.clone();
     controller.connect_key_pressed(move |_, key, _, modifiers| {
+        chrome.show_for_activity();
+
         if modifiers.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK) {
             return glib::Propagation::Proceed;
         }
