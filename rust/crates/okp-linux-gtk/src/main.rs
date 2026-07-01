@@ -7,6 +7,7 @@ use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use gtk::cairo;
 use gtk::gdk;
 use gtk::glib;
 use gtk::pango;
@@ -1126,7 +1127,7 @@ fn build_controls(
 
     let volume = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 130.0, 1.0);
     volume.set_draw_value(false);
-    volume.set_width_request(96);
+    volume.set_width_request(68);
     volume.set_value(100.0);
     volume.add_css_class("okp-volume");
 
@@ -1339,7 +1340,7 @@ fn build_controls(
 }
 
 fn controls_bar(controls: &Controls) -> gtk::Box {
-    let bar = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    let bar = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     bar.add_css_class("okp-controls");
     bar.set_halign(gtk::Align::Fill);
     bar.set_valign(gtk::Align::End);
@@ -1365,7 +1366,7 @@ fn controls_bar(controls: &Controls) -> gtk::Box {
     timeline.append(&controls.seek);
     timeline.append(&controls.duration_label);
 
-    let secondary = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let secondary = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     secondary.add_css_class("okp-control-group");
     secondary.append(&controls.volume);
     secondary.append(&controls.speed_button);
@@ -2885,6 +2886,8 @@ fn open_url_dialog(
         .transient_for(parent)
         .modal(true)
         .build();
+    dialog.set_decorated(false);
+    dialog.add_css_class("okp-command-dialog");
     dialog.add_button("Cancel", gtk::ResponseType::Cancel);
     dialog.add_button("Open", gtk::ResponseType::Accept);
     dialog.set_default_response(gtk::ResponseType::Accept);
@@ -2895,6 +2898,7 @@ fn open_url_dialog(
     content.set_margin_end(12);
     content.set_margin_bottom(12);
     content.set_margin_start(12);
+    content.append(&command_dialog_title("Open URL"));
 
     let entry = gtk::Entry::new();
     entry.set_placeholder_text(Some("https://example.com/video.mkv"));
@@ -2932,6 +2936,8 @@ fn open_go_to_time_dialog(
         .transient_for(parent)
         .modal(true)
         .build();
+    dialog.set_decorated(false);
+    dialog.add_css_class("okp-command-dialog");
     dialog.add_button("Cancel", gtk::ResponseType::Cancel);
     dialog.add_button("Go", gtk::ResponseType::Accept);
     dialog.set_default_response(gtk::ResponseType::Accept);
@@ -2942,6 +2948,7 @@ fn open_go_to_time_dialog(
     content.set_margin_end(12);
     content.set_margin_bottom(12);
     content.set_margin_start(12);
+    content.append(&command_dialog_title("Go to Time"));
 
     let label = gtk::Label::new(Some("Enter a timecode or seconds."));
     label.add_css_class("okp-info-label");
@@ -3030,6 +3037,8 @@ fn open_clear_history_dialog(
         .transient_for(parent)
         .modal(true)
         .build();
+    dialog.set_decorated(false);
+    dialog.add_css_class("okp-command-dialog");
     dialog.add_button("Cancel", gtk::ResponseType::Cancel);
     dialog.add_button("Clear", gtk::ResponseType::Accept);
     dialog.set_default_response(gtk::ResponseType::Cancel);
@@ -3040,6 +3049,7 @@ fn open_clear_history_dialog(
     content.set_margin_end(14);
     content.set_margin_bottom(14);
     content.set_margin_start(14);
+    content.append(&command_dialog_title("Clear History"));
 
     let message = gtk::Label::new(Some(
         "Clear saved resume positions and per-file playback preferences?",
@@ -3056,6 +3066,13 @@ fn open_clear_history_dialog(
     });
 
     dialog.present();
+}
+
+fn command_dialog_title(title: &str) -> gtk::Label {
+    let label = gtk::Label::new(Some(title));
+    label.add_css_class("okp-command-dialog-title");
+    label.set_xalign(0.0);
+    label
 }
 
 fn open_settings_window(
@@ -3166,6 +3183,19 @@ fn settings_nav_rail_frame(rail: gtk::Box) -> gtk::ScrolledWindow {
     frame
 }
 
+#[derive(Clone, Copy)]
+enum SettingsNavIcon {
+    Appearance,
+    Playback,
+    Subtitles,
+    Video,
+    Audio,
+    Shortcuts,
+    Integration,
+    Advanced,
+    About,
+}
+
 fn settings_nav_rail(stack: &gtk::Stack) -> gtk::Box {
     let rail = gtk::Box::new(gtk::Orientation::Vertical, 2);
     rail.add_css_class("okp-settings-rail");
@@ -3190,22 +3220,18 @@ fn settings_nav_rail(stack: &gtk::Stack) -> gtk::Box {
 
     let buttons = Rc::new(RefCell::new(Vec::<gtk::Button>::new()));
     let nav_items = [
-        ("Appearance", "preferences-desktop-theme-symbolic", None),
+        ("Appearance", SettingsNavIcon::Appearance, None),
+        ("Playback", SettingsNavIcon::Playback, Some("playback")),
+        ("Subtitles", SettingsNavIcon::Subtitles, None),
+        ("Video", SettingsNavIcon::Video, None),
+        ("Audio", SettingsNavIcon::Audio, None),
+        ("Shortcuts", SettingsNavIcon::Shortcuts, None),
         (
-            "Playback",
-            "media-playback-start-symbolic",
-            Some("playback"),
+            "Integration",
+            SettingsNavIcon::Integration,
+            Some("integration"),
         ),
-        ("Subtitles", "media-view-subtitles-symbolic", None),
-        ("Video", "video-display-symbolic", None),
-        ("Audio", "audio-speakers-symbolic", None),
-        ("Shortcuts", "input-keyboard-symbolic", None),
-        ("Integration", "emblem-system-symbolic", Some("integration")),
-        (
-            "Advanced",
-            "applications-engineering-symbolic",
-            Some("advanced"),
-        ),
+        ("Advanced", SettingsNavIcon::Advanced, Some("advanced")),
     ];
 
     for (label, icon, page) in nav_items {
@@ -3225,7 +3251,7 @@ fn settings_nav_rail(stack: &gtk::Stack) -> gtk::Box {
     divider.add_css_class("okp-settings-rail-divider");
     rail.append(&divider);
 
-    let about = settings_nav_row("About", "dialog-information-symbolic", true);
+    let about = settings_nav_row("About", SettingsNavIcon::About, true);
     connect_settings_nav_row(&about, "about", stack, &buttons);
     buttons.borrow_mut().push(about.clone());
     rail.append(&about);
@@ -3273,7 +3299,7 @@ fn settings_window_control(icon_name: &str) -> gtk::Button {
     button
 }
 
-fn settings_nav_row(label: &str, icon_name: &str, selected: bool) -> gtk::Button {
+fn settings_nav_row(label: &str, icon: SettingsNavIcon, selected: bool) -> gtk::Button {
     let button = gtk::Button::new();
     button.add_css_class("okp-settings-nav-row");
     button.set_has_frame(false);
@@ -3284,15 +3310,168 @@ fn settings_nav_row(label: &str, icon_name: &str, selected: bool) -> gtk::Button
 
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     content.set_halign(gtk::Align::Fill);
-    let icon = gtk::Image::from_icon_name(icon_name);
-    icon.set_pixel_size(16);
-    content.append(&icon);
+    content.append(&settings_nav_icon(icon));
     let text = gtk::Label::new(Some(label));
     text.set_xalign(0.0);
     text.set_hexpand(true);
     content.append(&text);
     button.set_child(Some(&content));
     button
+}
+
+fn settings_nav_icon(icon: SettingsNavIcon) -> gtk::DrawingArea {
+    let area = gtk::DrawingArea::new();
+    area.add_css_class("okp-settings-nav-icon");
+    area.set_size_request(16, 16);
+    area.set_draw_func(move |area, cr, width, height| {
+        draw_settings_nav_icon(area, cr, width, height, icon);
+    });
+    area
+}
+
+fn draw_settings_nav_icon(
+    area: &gtk::DrawingArea,
+    cr: &cairo::Context,
+    width: i32,
+    height: i32,
+    icon: SettingsNavIcon,
+) {
+    let color = area.style_context().color();
+    let scale = f64::min(width as f64, height as f64) / 16.0;
+    let _ = cr.save();
+    cr.translate(
+        ((width as f64) - (16.0 * scale)) / 2.0,
+        ((height as f64) - (16.0 * scale)) / 2.0,
+    );
+    cr.scale(scale, scale);
+    cr.set_source_rgba(
+        color.red().into(),
+        color.green().into(),
+        color.blue().into(),
+        color.alpha().into(),
+    );
+    cr.set_line_width(1.25);
+    cr.set_line_cap(cairo::LineCap::Round);
+    cr.set_line_join(cairo::LineJoin::Round);
+
+    match icon {
+        SettingsNavIcon::Appearance => {
+            cr.arc(8.0, 8.0, 3.0, 0.0, std::f64::consts::TAU);
+            let _ = cr.stroke();
+            for index in 0..8 {
+                let angle = (index as f64) * std::f64::consts::FRAC_PI_4;
+                cr.move_to(8.0 + angle.cos() * 5.2, 8.0 + angle.sin() * 5.2);
+                cr.line_to(8.0 + angle.cos() * 6.7, 8.0 + angle.sin() * 6.7);
+            }
+            let _ = cr.stroke();
+        }
+        SettingsNavIcon::Playback => {
+            cr.move_to(5.25, 3.35);
+            cr.line_to(12.3, 8.0);
+            cr.line_to(5.25, 12.65);
+            cr.close_path();
+            let _ = cr.stroke();
+        }
+        SettingsNavIcon::Subtitles => {
+            cairo_rounded_rect(cr, 2.5, 4.0, 11.0, 8.0, 1.2);
+            let _ = cr.stroke();
+            cr.move_to(5.0, 8.8);
+            cr.line_to(7.3, 8.8);
+            cr.move_to(8.7, 8.8);
+            cr.line_to(11.0, 8.8);
+            cr.move_to(5.0, 10.7);
+            cr.line_to(10.2, 10.7);
+            let _ = cr.stroke();
+        }
+        SettingsNavIcon::Video => {
+            cairo_rounded_rect(cr, 2.5, 3.5, 11.0, 8.2, 1.1);
+            let _ = cr.stroke();
+            cr.move_to(8.0, 11.7);
+            cr.line_to(8.0, 13.2);
+            cr.move_to(5.7, 13.2);
+            cr.line_to(10.3, 13.2);
+            let _ = cr.stroke();
+        }
+        SettingsNavIcon::Audio => {
+            cr.move_to(2.6, 6.2);
+            cr.line_to(5.0, 6.2);
+            cr.line_to(8.6, 3.7);
+            cr.line_to(8.6, 12.3);
+            cr.line_to(5.0, 9.8);
+            cr.line_to(2.6, 9.8);
+            cr.close_path();
+            let _ = cr.stroke();
+            cr.arc(8.7, 8.0, 3.3, -0.72, 0.72);
+            let _ = cr.stroke();
+            cr.arc(8.7, 8.0, 5.1, -0.62, 0.62);
+            let _ = cr.stroke();
+        }
+        SettingsNavIcon::Shortcuts => {
+            cairo_rounded_rect(cr, 2.2, 4.1, 11.6, 7.8, 1.1);
+            let _ = cr.stroke();
+            for y in [6.7, 9.2] {
+                for x in [4.5, 6.8, 9.1, 11.4] {
+                    cairo_rounded_rect(cr, x - 0.45, y - 0.35, 0.9, 0.7, 0.2);
+                    let _ = cr.fill();
+                }
+            }
+        }
+        SettingsNavIcon::Integration => {
+            let _ = cr.save();
+            cr.translate(8.0, 8.0);
+            cr.rotate(-std::f64::consts::FRAC_PI_4);
+            cairo_rounded_rect(cr, -6.0, -2.2, 7.3, 4.4, 2.2);
+            let _ = cr.stroke();
+            cairo_rounded_rect(cr, -1.3, -2.2, 7.3, 4.4, 2.2);
+            let _ = cr.stroke();
+            let _ = cr.restore();
+        }
+        SettingsNavIcon::Advanced => {
+            cr.move_to(6.6, 2.6);
+            cr.curve_to(4.6, 2.6, 5.2, 5.2, 4.0, 6.2);
+            cr.curve_to(3.4, 6.8, 3.4, 7.2, 4.0, 7.8);
+            cr.curve_to(5.2, 8.8, 4.6, 13.4, 6.6, 13.4);
+            cr.move_to(9.4, 2.6);
+            cr.curve_to(11.4, 2.6, 10.8, 5.2, 12.0, 6.2);
+            cr.curve_to(12.6, 6.8, 12.6, 7.2, 12.0, 7.8);
+            cr.curve_to(10.8, 8.8, 11.4, 13.4, 9.4, 13.4);
+            let _ = cr.stroke();
+        }
+        SettingsNavIcon::About => {
+            cr.arc(8.0, 8.0, 5.8, 0.0, std::f64::consts::TAU);
+            let _ = cr.stroke();
+            cr.arc(8.0, 5.2, 0.55, 0.0, std::f64::consts::TAU);
+            let _ = cr.fill();
+            cr.move_to(8.0, 7.4);
+            cr.line_to(8.0, 11.0);
+            let _ = cr.stroke();
+        }
+    }
+
+    let _ = cr.restore();
+}
+
+fn cairo_rounded_rect(cr: &cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
+    let right = x + w;
+    let bottom = y + h;
+    cr.new_sub_path();
+    cr.arc(right - r, y + r, r, -std::f64::consts::FRAC_PI_2, 0.0);
+    cr.arc(right - r, bottom - r, r, 0.0, std::f64::consts::FRAC_PI_2);
+    cr.arc(
+        x + r,
+        bottom - r,
+        r,
+        std::f64::consts::FRAC_PI_2,
+        std::f64::consts::PI,
+    );
+    cr.arc(
+        x + r,
+        y + r,
+        r,
+        std::f64::consts::PI,
+        std::f64::consts::PI * 1.5,
+    );
+    cr.close_path();
 }
 
 fn connect_settings_nav_row(
@@ -4925,6 +5104,7 @@ fn show_media_info_window(
         .transient_for(parent)
         .default_width(620)
         .default_height(720)
+        .decorated(false)
         .build();
     window.add_css_class("okp-info-window");
 
@@ -4995,7 +5175,9 @@ fn show_media_info_window(
     footer.append(&done_button);
     root.append(&footer);
 
-    window.set_child(Some(&root));
+    let handle = gtk::WindowHandle::new();
+    handle.set_child(Some(&root));
+    window.set_child(Some(&handle));
     window.present();
 }
 
@@ -6208,7 +6390,7 @@ fn install_css() {
         }
 
         .okp-seek {
-            min-width: 240px;
+            min-width: 120px;
         }
 
         scale.okp-seek trough,
@@ -6441,6 +6623,52 @@ fn install_css() {
             background: #101115;
         }
 
+        window.okp-command-dialog {
+            background: #101115;
+            color: rgba(255, 255, 255, 0.9);
+            border-radius: 8px;
+        }
+
+        window.okp-command-dialog > contents {
+            background: #101115;
+        }
+
+        .okp-command-dialog-title {
+            color: rgba(255, 255, 255, 0.96);
+            font-size: 16px;
+            font-weight: 700;
+        }
+
+        window.okp-command-dialog entry {
+            min-height: 34px;
+            border-radius: 7px;
+            border: 1px solid rgba(40, 179, 170, 0.42);
+            background: rgba(255, 255, 255, 0.055);
+            color: rgba(255, 255, 255, 0.92);
+            box-shadow: none;
+        }
+
+        window.okp-command-dialog button {
+            min-width: 72px;
+            min-height: 34px;
+            padding: 0 14px;
+            border-radius: 7px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: rgba(255, 255, 255, 0.08);
+            color: rgba(255, 255, 255, 0.9);
+            box-shadow: none;
+        }
+
+        window.okp-command-dialog button:hover {
+            background: rgba(255, 255, 255, 0.13);
+            color: rgba(255, 255, 255, 0.98);
+        }
+
+        window.okp-command-dialog button:active {
+            background: rgba(40, 179, 170, 0.28);
+            border-color: rgba(40, 179, 170, 0.48);
+        }
+
         .okp-settings-window {
             background: transparent;
         }
@@ -6516,6 +6744,12 @@ fn install_css() {
             font-weight: 600;
         }
 
+        .okp-settings-nav-icon {
+            min-width: 16px;
+            min-height: 16px;
+            color: inherit;
+        }
+
         .okp-settings-rail-divider {
             margin: 6px 9px 8px;
             background: #dbe2e7;
@@ -6583,7 +6817,7 @@ fn install_css() {
             color: #161616;
             font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
             font-size: 30px;
-            letter-spacing: -0.6px;
+            letter-spacing: 0;
         }
 
         .okp-about-wordmark-ok {
@@ -6617,7 +6851,7 @@ fn install_css() {
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 10px;
             font-weight: 600;
-            letter-spacing: 0.05em;
+            letter-spacing: 0;
             text-transform: uppercase;
         }
 
@@ -6655,7 +6889,7 @@ fn install_css() {
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 11px;
             font-weight: 600;
-            letter-spacing: 0.10em;
+            letter-spacing: 0;
         }
 
         .okp-about-row {
@@ -6705,7 +6939,7 @@ fn install_css() {
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 8.5px;
             font-weight: 600;
-            letter-spacing: 0.07em;
+            letter-spacing: 0;
         }
 
         .okp-about-tag.is-accent {
