@@ -139,6 +139,59 @@ struct Controls {
     thumbnail_events: RefCell<mpsc::Receiver<String>>,
 }
 
+struct StatusToast {
+    revealer: gtk::Revealer,
+    label: gtk::Label,
+    hide_source: Rc<RefCell<Option<glib::SourceId>>>,
+}
+
+impl StatusToast {
+    fn new() -> Self {
+        let label = gtk::Label::new(None);
+        label.add_css_class("okp-status-toast");
+        label.set_ellipsize(pango::EllipsizeMode::Middle);
+        label.set_max_width_chars(72);
+
+        let revealer = gtk::Revealer::new();
+        revealer.set_halign(gtk::Align::Center);
+        revealer.set_valign(gtk::Align::Start);
+        revealer.set_margin_top(28);
+        revealer.set_transition_duration(140);
+        revealer.set_transition_type(gtk::RevealerTransitionType::Crossfade);
+        revealer.set_reveal_child(false);
+        revealer.set_can_target(false);
+        revealer.set_child(Some(&label));
+
+        Self {
+            revealer,
+            label,
+            hide_source: Rc::new(RefCell::new(None)),
+        }
+    }
+
+    fn widget(&self) -> &gtk::Revealer {
+        &self.revealer
+    }
+
+    fn show(&self, message: &str) {
+        self.label.set_text(message);
+        self.revealer.set_reveal_child(true);
+
+        if let Some(source_id) = self.hide_source.borrow_mut().take() {
+            source_id.remove();
+        }
+
+        let revealer = self.revealer.clone();
+        let hide_source = Rc::clone(&self.hide_source);
+        let source_id = glib::timeout_add_local(Duration::from_secs(3), move || {
+            revealer.set_reveal_child(false);
+            hide_source.borrow_mut().take();
+            glib::ControlFlow::Break
+        });
+        self.hide_source.borrow_mut().replace(source_id);
+    }
+}
+
 #[derive(Clone, Default, PartialEq)]
 struct SidePanelSnapshot {
     current_file: Option<PathBuf>,
@@ -196,6 +249,7 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
     let state = Rc::new(RefCell::new(PlayerState::default()));
     let updating_seek = Rc::new(Cell::new(false));
     let updating_volume = Rc::new(Cell::new(false));
+    let status_toast = Rc::new(StatusToast::new());
 
     let window = gtk::ApplicationWindow::builder()
         .application(app)
@@ -219,16 +273,18 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
         Rc::clone(&state),
         Rc::clone(&updating_seek),
         Rc::clone(&updating_volume),
+        Rc::clone(&status_toast),
     );
 
     overlay.set_child(Some(&video_area));
     overlay.add_overlay(&controls_bar(&controls));
     overlay.add_overlay(&controls.up_next_panel);
+    overlay.add_overlay(status_toast.widget());
     window.set_child(Some(&overlay));
 
     connect_mpv(&video_area, Rc::clone(&state), launch_args);
     connect_drop(&window, Rc::clone(&state));
-    connect_keyboard(&window, Rc::clone(&state));
+    connect_keyboard(&window, Rc::clone(&state), Rc::clone(&status_toast));
     connect_progress_persistence(&window, Rc::clone(&state));
     connect_state_poll(
         Rc::clone(&state),
@@ -245,6 +301,7 @@ fn build_controls(
     state: Rc<RefCell<PlayerState>>,
     updating_seek: Rc<Cell<bool>>,
     updating_volume: Rc<Cell<bool>>,
+    status_toast: Rc<StatusToast>,
 ) -> Controls {
     let play_button = gtk::Button::with_label("Play");
     play_button.add_css_class("okp-control-button");
@@ -398,7 +455,9 @@ fn build_controls(
     });
 
     let screenshot_state = Rc::clone(&state);
-    screenshot_button.connect_clicked(move |_| take_screenshot(&screenshot_state));
+    let screenshot_toast = Rc::clone(&status_toast);
+    screenshot_button
+        .connect_clicked(move |_| take_screenshot(&screenshot_state, &screenshot_toast));
 
     let repeat_state = Rc::clone(&state);
     repeat_button.connect_clicked(move |_| cycle_repeat_mode(&repeat_state));
@@ -1379,7 +1438,11 @@ fn connect_drop(window: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerState>>
     window.add_controller(drop_target);
 }
 
-fn connect_keyboard(window: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerState>>) {
+fn connect_keyboard(
+    window: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) {
     let controller = gtk::EventControllerKey::new();
     let shortcut_window = window.clone();
     controller.connect_key_pressed(move |_, key, _, modifiers| {
@@ -1433,7 +1496,7 @@ fn connect_keyboard(window: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerSta
                 glib::Propagation::Stop
             }
             gdk::Key::c | gdk::Key::C => {
-                take_screenshot(&state);
+                take_screenshot(&state, &status_toast);
                 glib::Propagation::Stop
             }
             gdk::Key::z => {
@@ -1513,7 +1576,7 @@ fn adjust_subtitle_scale(state: &Rc<RefCell<PlayerState>>, delta: f64) {
     }
 }
 
-fn take_screenshot(state: &Rc<RefCell<PlayerState>>) {
+fn take_screenshot(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
     let (has_mpv, current_file, position) = {
         let state = state.borrow();
         let position = state
@@ -1530,8 +1593,27 @@ fn take_screenshot(state: &Rc<RefCell<PlayerState>>) {
 
     let path = screenshots::next_screenshot_path(current_file.as_deref(), position);
 
-    if with_mpv(state, |mpv| mpv.screenshot_to_file(&path, true)) {
-        eprintln!("Screenshot saved to {}", path.display());
+    let result = {
+        let state = state.borrow();
+        let Some(mpv) = state.mpv.as_ref() else {
+            return;
+        };
+        mpv.screenshot_to_file(&path, true)
+    };
+
+    match result {
+        Ok(()) => {
+            let filename = path
+                .file_name()
+                .map(|name| name.to_string_lossy())
+                .unwrap_or_else(|| "screenshot.png".into());
+            eprintln!("Screenshot saved to {}", path.display());
+            status_toast.show(&format!("Screenshot saved: {filename}"));
+        }
+        Err(error) => {
+            eprintln!("Failed to save screenshot to {}: {error}", path.display());
+            status_toast.show("Screenshot failed");
+        }
     }
 }
 
@@ -2142,6 +2224,16 @@ fn install_css() {
             min-width: 52px;
             color: rgba(255, 255, 255, 0.84);
             font-feature-settings: 'tnum';
+        }
+
+        .okp-status-toast {
+            padding: 8px 12px;
+            border-radius: 8px;
+            background: rgba(14, 15, 18, 0.9);
+            box-shadow: 0 12px 34px rgba(0, 0, 0, 0.38);
+            color: rgba(255, 255, 255, 0.9);
+            font-size: 13px;
+            font-weight: 600;
         }
 
         .okp-seek {
