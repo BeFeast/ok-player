@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use gtk::gdk;
 use gtk::glib;
+use gtk::pango;
 use gtk::prelude::*;
 use okp_core::{AppIdentity, media_formats, natural_compare};
 use okp_mpv::{Mpv, MpvEvent};
@@ -35,6 +36,16 @@ struct Controls {
     elapsed_label: gtk::Label,
     duration_label: gtk::Label,
     volume: gtk::Scale,
+    up_next_panel: gtk::Box,
+    up_next_title: gtk::Label,
+    up_next_list: gtk::ListBox,
+    up_next_snapshot: RefCell<PlaylistSnapshot>,
+}
+
+#[derive(Clone, Default, PartialEq, Eq)]
+struct PlaylistSnapshot {
+    current_file: Option<PathBuf>,
+    playlist: Vec<PathBuf>,
 }
 
 fn main() -> glib::ExitCode {
@@ -107,6 +118,7 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
 
     overlay.set_child(Some(&video_area));
     overlay.add_overlay(&controls_bar(&controls));
+    overlay.add_overlay(&controls.up_next_panel);
     window.set_child(Some(&overlay));
 
     connect_mpv(&video_area, Rc::clone(&state), launch_args);
@@ -164,6 +176,39 @@ fn build_controls(
     volume.set_width_request(116);
     volume.set_value(100.0);
     volume.add_css_class("okp-volume");
+
+    let up_next_title = gtk::Label::new(Some("Up Next"));
+    up_next_title.add_css_class("okp-up-next-title");
+    up_next_title.set_xalign(0.0);
+
+    let up_next_list = gtk::ListBox::new();
+    up_next_list.add_css_class("okp-up-next-list");
+    up_next_list.set_selection_mode(gtk::SelectionMode::None);
+
+    let up_next_scroller = gtk::ScrolledWindow::new();
+    up_next_scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    up_next_scroller.set_child(Some(&up_next_list));
+    up_next_scroller.set_vexpand(true);
+
+    let up_next_panel = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    up_next_panel.add_css_class("okp-up-next-panel");
+    up_next_panel.set_halign(gtk::Align::End);
+    up_next_panel.set_valign(gtk::Align::Fill);
+    up_next_panel.set_margin_top(24);
+    up_next_panel.set_margin_end(24);
+    up_next_panel.set_margin_bottom(92);
+    up_next_panel.set_width_request(320);
+    up_next_panel.set_visible(false);
+    up_next_panel.append(&up_next_title);
+    up_next_panel.append(&up_next_scroller);
+
+    let up_next_state = Rc::clone(&state);
+    up_next_list.connect_row_activated(move |_, row| {
+        let index = row.index();
+        if index >= 0 {
+            jump_playlist_index(&up_next_state, index as usize);
+        }
+    });
 
     let open_parent = window.clone();
     let open_state = Rc::clone(&state);
@@ -235,6 +280,10 @@ fn build_controls(
         elapsed_label,
         duration_label,
         volume,
+        up_next_panel,
+        up_next_title,
+        up_next_list,
+        up_next_snapshot: RefCell::new(PlaylistSnapshot::default()),
     }
 }
 
@@ -338,6 +387,7 @@ fn connect_state_poll(
             .and_then(|mpv| mpv.playback_state().ok());
         let has_media = state.borrow().current_file.is_some();
         let has_playlist = state.borrow().playlist.len() > 1;
+        update_up_next_panel(&controls, &state);
 
         if let Some(playback) = playback {
             try_pending_subtitles(&state);
@@ -383,6 +433,88 @@ fn connect_state_poll(
 
         glib::ControlFlow::Continue
     });
+}
+
+fn update_up_next_panel(controls: &Controls, state: &Rc<RefCell<PlayerState>>) {
+    let snapshot = {
+        let state = state.borrow();
+        PlaylistSnapshot {
+            current_file: state.current_file.clone(),
+            playlist: state.playlist.clone(),
+        }
+    };
+    let is_visible = snapshot.playlist.len() > 1;
+
+    controls.up_next_panel.set_visible(is_visible);
+    if !is_visible {
+        controls.up_next_snapshot.replace(snapshot);
+        clear_list_box(&controls.up_next_list);
+        return;
+    }
+
+    if *controls.up_next_snapshot.borrow() == snapshot {
+        return;
+    }
+    controls.up_next_snapshot.replace(snapshot.clone());
+
+    let current_index = snapshot
+        .current_file
+        .as_ref()
+        .and_then(|current| snapshot.playlist.iter().position(|path| path == current));
+
+    controls
+        .up_next_title
+        .set_text(&format!("Up Next · {}", snapshot.playlist.len()));
+    clear_list_box(&controls.up_next_list);
+    for (index, path) in snapshot.playlist.iter().enumerate() {
+        controls
+            .up_next_list
+            .append(&playlist_row(path, index, current_index));
+    }
+}
+
+fn clear_list_box(list: &gtk::ListBox) {
+    while let Some(child) = list.first_child() {
+        list.remove(&child);
+    }
+}
+
+fn playlist_row(path: &Path, index: usize, current_index: Option<usize>) -> gtk::ListBoxRow {
+    let is_current = current_index == Some(index);
+    let is_next = current_index.is_some_and(|current| index == current + 1);
+    let row = gtk::ListBoxRow::new();
+    row.add_css_class("okp-up-next-row");
+    row.set_activatable(!is_current);
+    row.set_selectable(false);
+    row.set_tooltip_text(Some(&path.display().to_string()));
+    if is_current {
+        row.add_css_class("is-current");
+    }
+
+    let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row_box.set_hexpand(true);
+
+    let marker = gtk::Label::new(Some(if is_current {
+        "Now"
+    } else if is_next {
+        "Next"
+    } else {
+        ""
+    }));
+    marker.add_css_class("okp-up-next-marker");
+    marker.set_width_chars(4);
+    marker.set_xalign(0.0);
+
+    let title = gtk::Label::new(Some(&display_file_name(path)));
+    title.add_css_class("okp-up-next-file");
+    title.set_xalign(0.0);
+    title.set_hexpand(true);
+    title.set_ellipsize(pango::EllipsizeMode::End);
+
+    row_box.append(&marker);
+    row_box.append(&title);
+    row.set_child(Some(&row_box));
+    row
 }
 
 fn drain_mpv_events(state: &Rc<RefCell<PlayerState>>) {
@@ -609,6 +741,20 @@ fn navigate_playlist(state: &Rc<RefCell<PlayerState>>, direction: isize) -> bool
     true
 }
 
+fn jump_playlist_index(state: &Rc<RefCell<PlayerState>>, index: usize) -> bool {
+    let path = {
+        let state = state.borrow();
+        state.playlist.get(index).cloned()
+    };
+
+    let Some(path) = path else {
+        return false;
+    };
+
+    load_media_path(state, path);
+    true
+}
+
 fn advance_playlist_on_eof(state: &Rc<RefCell<PlayerState>>) -> bool {
     let next_file = {
         let state = state.borrow();
@@ -718,6 +864,14 @@ fn is_subtitle_path(path: &Path) -> bool {
     media_formats::is_subtitle(path)
 }
 
+fn display_file_name(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| path.display().to_string())
+}
+
 fn format_time(seconds: f64) -> String {
     if !seconds.is_finite() || seconds <= 0.0 {
         return "00:00".to_owned();
@@ -775,6 +929,50 @@ fn install_css() {
 
         .okp-volume {
             min-width: 116px;
+        }
+
+        .okp-up-next-panel {
+            padding: 12px;
+            border-radius: 8px;
+            background: rgba(14, 15, 18, 0.88);
+            box-shadow: 0 14px 42px rgba(0, 0, 0, 0.42);
+        }
+
+        .okp-up-next-title {
+            color: rgba(255, 255, 255, 0.92);
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        .okp-up-next-list {
+            background: transparent;
+        }
+
+        .okp-up-next-row {
+            min-height: 38px;
+            padding: 8px 10px;
+            border-radius: 7px;
+            color: rgba(255, 255, 255, 0.78);
+        }
+
+        .okp-up-next-row:hover {
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .okp-up-next-row.is-current {
+            background: rgba(98, 181, 255, 0.18);
+            color: rgba(255, 255, 255, 0.96);
+        }
+
+        .okp-up-next-marker {
+            color: rgba(98, 181, 255, 0.95);
+            font-size: 11px;
+            font-weight: 700;
+        }
+
+        .okp-up-next-file {
+            color: inherit;
+            font-size: 13px;
         }
         ",
     );
