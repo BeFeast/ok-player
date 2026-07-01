@@ -10,7 +10,10 @@ use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
 use okp_core::{AppIdentity, media_formats, natural_compare};
-use okp_mpv::{Chapter, Mpv, MpvEvent, Track, TrackKind, current_render_target_size};
+use okp_mpv::{
+    Chapter, InfoSection, InfoTrack, MediaInfo, Mpv, MpvEvent, Track, TrackKind,
+    current_render_target_size,
+};
 use velopack::VelopackApp;
 
 mod history;
@@ -128,6 +131,7 @@ struct Controls {
     play_button: gtk::Button,
     next_button: gtk::Button,
     screenshot_button: gtk::Button,
+    info_button: gtk::Button,
     repeat_button: gtk::Button,
     shuffle_button: gtk::Button,
     auto_advance_button: gtk::Button,
@@ -437,6 +441,11 @@ fn build_controls(
     screenshot_button.set_tooltip_text(Some("Save screenshot to Pictures/OK Player (C)"));
     screenshot_button.set_sensitive(false);
 
+    let info_button = gtk::Button::with_label("Info");
+    info_button.add_css_class("okp-control-button");
+    info_button.set_tooltip_text(Some("Media information (I)"));
+    info_button.set_sensitive(false);
+
     let repeat_button = gtk::Button::with_label(RepeatMode::Off.label());
     repeat_button.add_css_class("okp-control-button");
 
@@ -570,6 +579,13 @@ fn build_controls(
     screenshot_button
         .connect_clicked(move |_| take_screenshot(&screenshot_state, &screenshot_toast));
 
+    let info_parent = window.clone();
+    let info_state = Rc::clone(&state);
+    let info_toast = Rc::clone(&status_toast);
+    info_button.connect_clicked(move |_| {
+        open_media_info_window(&info_parent, &info_state, Rc::clone(&info_toast));
+    });
+
     let repeat_state = Rc::clone(&state);
     repeat_button.connect_clicked(move |_| cycle_repeat_mode(&repeat_state));
 
@@ -613,6 +629,7 @@ fn build_controls(
         play_button,
         next_button,
         screenshot_button,
+        info_button,
         repeat_button,
         shuffle_button,
         auto_advance_button,
@@ -648,6 +665,7 @@ fn controls_bar(controls: &Controls) -> gtk::Box {
     bar.append(&controls.play_button);
     bar.append(&controls.next_button);
     bar.append(&controls.screenshot_button);
+    bar.append(&controls.info_button);
     bar.append(&controls.repeat_button);
     bar.append(&controls.shuffle_button);
     bar.append(&controls.auto_advance_button);
@@ -876,6 +894,7 @@ fn connect_state_poll(
             controls.previous_button.set_sensitive(has_playlist);
             controls.next_button.set_sensitive(has_playlist);
             controls.screenshot_button.set_sensitive(has_media);
+            controls.info_button.set_sensitive(has_media);
             controls
                 .play_button
                 .set_label(if playback.paused { "Play" } else { "Pause" });
@@ -905,6 +924,7 @@ fn connect_state_poll(
             controls.previous_button.set_sensitive(has_playlist);
             controls.next_button.set_sensitive(has_playlist);
             controls.screenshot_button.set_sensitive(has_media);
+            controls.info_button.set_sensitive(has_media);
             controls.play_button.set_label("Play");
             controls.speed_button.set_label("1.00x");
             controls.seek.set_sensitive(false);
@@ -1773,6 +1793,10 @@ fn connect_keyboard(
                 take_screenshot(&state, &status_toast);
                 glib::Propagation::Stop
             }
+            gdk::Key::i | gdk::Key::I => {
+                open_media_info_window(&shortcut_window, &state, Rc::clone(&status_toast));
+                glib::Propagation::Stop
+            }
             gdk::Key::z => {
                 adjust_subtitle_delay(&state, 0.05);
                 glib::Propagation::Stop
@@ -1889,6 +1913,242 @@ fn take_screenshot(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast)
             status_toast.show("Screenshot failed");
         }
     }
+}
+
+fn open_media_info_window(
+    parent: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) {
+    let result = {
+        let state = state.borrow();
+        let Some(mpv) = state.mpv.as_ref() else {
+            return;
+        };
+
+        mpv.media_info(state.current_file.as_deref())
+    };
+
+    match result {
+        Ok(media_info) => show_media_info_window(parent, &media_info, status_toast),
+        Err(error) => {
+            eprintln!("Failed to read media information: {error}");
+            status_toast.show("Media information unavailable");
+        }
+    }
+}
+
+fn show_media_info_window(
+    parent: &gtk::ApplicationWindow,
+    media_info: &MediaInfo,
+    status_toast: Rc<StatusToast>,
+) {
+    let window = gtk::Window::builder()
+        .title("Media Information")
+        .transient_for(parent)
+        .default_width(620)
+        .default_height(720)
+        .build();
+    window.add_css_class("okp-info-window");
+
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 14);
+    root.add_css_class("okp-info-root");
+    root.set_margin_top(18);
+    root.set_margin_end(18);
+    root.set_margin_bottom(18);
+    root.set_margin_start(18);
+
+    let header = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    let title = gtk::Label::new(Some(&media_info.title));
+    title.add_css_class("okp-info-title");
+    title.set_xalign(0.0);
+    title.set_ellipsize(pango::EllipsizeMode::End);
+    title.set_selectable(true);
+    header.append(&title);
+
+    if let Some(path) = media_info.path.as_deref() {
+        let path_label = gtk::Label::new(Some(path));
+        path_label.add_css_class("okp-info-path");
+        path_label.set_xalign(0.0);
+        path_label.set_ellipsize(pango::EllipsizeMode::Middle);
+        path_label.set_selectable(true);
+        header.append(&path_label);
+    }
+    root.append(&header);
+
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    content.add_css_class("okp-info-content");
+    for section in &media_info.sections {
+        content.append(&media_info_section_widget(section));
+    }
+    if !media_info.tracks.is_empty() {
+        content.append(&media_info_tracks_section(&media_info.tracks));
+    }
+
+    let scroller = gtk::ScrolledWindow::new();
+    scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    scroller.set_vexpand(true);
+    scroller.set_child(Some(&content));
+    root.append(&scroller);
+
+    let footer = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    footer.set_halign(gtk::Align::End);
+
+    let copy_button = gtk::Button::with_label("Copy");
+    copy_button.add_css_class("okp-info-footer-button");
+    let copy_text = Rc::new(media_info_copy_text(media_info));
+    let copy_toast = Rc::clone(&status_toast);
+    copy_button.connect_clicked(move |_| {
+        if let Some(display) = gdk::Display::default() {
+            display.clipboard().set_text(copy_text.as_str());
+            copy_toast.show("Media information copied");
+        }
+    });
+
+    let done_button = gtk::Button::with_label("Done");
+    done_button.add_css_class("okp-info-footer-button");
+    let close_window = window.clone();
+    done_button.connect_clicked(move |_| close_window.close());
+
+    footer.append(&copy_button);
+    footer.append(&done_button);
+    root.append(&footer);
+
+    window.set_child(Some(&root));
+    window.present();
+}
+
+fn media_info_section_widget(section: &InfoSection) -> gtk::Box {
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    content.add_css_class("okp-info-section");
+
+    let title = gtk::Label::new(Some(&section.title));
+    title.add_css_class("okp-info-section-title");
+    title.set_xalign(0.0);
+    content.append(&title);
+
+    for row in &section.rows {
+        content.append(&media_info_row(&row.label, &row.value));
+    }
+
+    content
+}
+
+fn media_info_row(label: &str, value: &str) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    row.add_css_class("okp-info-row");
+    row.set_hexpand(true);
+
+    let label_widget = gtk::Label::new(Some(label));
+    label_widget.add_css_class("okp-info-label");
+    label_widget.set_xalign(0.0);
+    label_widget.set_width_chars(15);
+    row.append(&label_widget);
+
+    let value_widget = gtk::Label::new(Some(value));
+    value_widget.add_css_class("okp-info-value");
+    value_widget.set_xalign(0.0);
+    value_widget.set_hexpand(true);
+    value_widget.set_wrap(true);
+    value_widget.set_wrap_mode(pango::WrapMode::WordChar);
+    value_widget.set_selectable(true);
+    row.append(&value_widget);
+
+    row
+}
+
+fn media_info_tracks_section(tracks: &[InfoTrack]) -> gtk::Box {
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    content.add_css_class("okp-info-section");
+
+    let title = gtk::Label::new(Some("Tracks"));
+    title.add_css_class("okp-info-section-title");
+    title.set_xalign(0.0);
+    content.append(&title);
+
+    for track in tracks {
+        content.append(&media_info_track_row(track));
+    }
+
+    content
+}
+
+fn media_info_track_row(track: &InfoTrack) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row.add_css_class("okp-info-track-row");
+    if track.selected {
+        row.add_css_class("is-selected");
+    }
+
+    let kind = gtk::Label::new(Some(media_info_track_kind_label(track.kind)));
+    kind.add_css_class("okp-info-track-kind");
+    kind.set_width_chars(7);
+    kind.set_xalign(0.0);
+    row.append(&kind);
+
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    body.set_hexpand(true);
+
+    let title = gtk::Label::new(Some(&format!("#{} {}", track.id, track.title)));
+    title.add_css_class("okp-info-track-title");
+    title.set_xalign(0.0);
+    title.set_ellipsize(pango::EllipsizeMode::End);
+    body.append(&title);
+
+    if !track.detail.is_empty() {
+        let detail = gtk::Label::new(Some(&track.detail));
+        detail.add_css_class("okp-info-track-detail");
+        detail.set_xalign(0.0);
+        detail.set_wrap(true);
+        detail.set_wrap_mode(pango::WrapMode::WordChar);
+        body.append(&detail);
+    }
+
+    row.append(&body);
+    row
+}
+
+fn media_info_track_kind_label(kind: TrackKind) -> &'static str {
+    match kind {
+        TrackKind::Audio => "Audio",
+        TrackKind::Subtitle => "Subtitle",
+    }
+}
+
+fn media_info_copy_text(media_info: &MediaInfo) -> String {
+    let mut lines = vec![media_info.title.clone()];
+    if let Some(path) = media_info.path.as_deref() {
+        lines.push(format!("Path: {path}"));
+    }
+
+    for section in &media_info.sections {
+        lines.push(String::new());
+        lines.push(section.title.clone());
+        for row in &section.rows {
+            lines.push(format!("{}: {}", row.label, row.value));
+        }
+    }
+
+    if !media_info.tracks.is_empty() {
+        lines.push(String::new());
+        lines.push("Tracks".to_owned());
+        for track in &media_info.tracks {
+            let detail = if track.detail.is_empty() {
+                String::new()
+            } else {
+                format!(" - {}", track.detail)
+            };
+            lines.push(format!(
+                "{} #{}: {}{}",
+                media_info_track_kind_label(track.kind),
+                track.id,
+                track.title,
+                detail
+            ));
+        }
+    }
+
+    lines.join("\n")
 }
 
 fn seek_to_chapter(state: &Rc<RefCell<PlayerState>>, time: f64) {
@@ -2693,6 +2953,90 @@ fn install_css() {
 
         .okp-sub-adjust-button:hover {
             background: rgba(255, 255, 255, 0.13);
+        }
+
+        .okp-info-window {
+            background: #101115;
+        }
+
+        .okp-info-root {
+            background: #101115;
+        }
+
+        .okp-info-title {
+            color: rgba(255, 255, 255, 0.94);
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        .okp-info-path {
+            color: rgba(255, 255, 255, 0.56);
+            font-size: 12px;
+        }
+
+        .okp-info-content {
+            padding-right: 4px;
+        }
+
+        .okp-info-section {
+            padding: 12px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.055);
+        }
+
+        .okp-info-section-title {
+            margin-bottom: 2px;
+            color: rgba(255, 255, 255, 0.9);
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        .okp-info-row {
+            min-height: 24px;
+        }
+
+        .okp-info-label {
+            color: rgba(255, 255, 255, 0.52);
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .okp-info-value {
+            color: rgba(255, 255, 255, 0.84);
+            font-size: 12px;
+        }
+
+        .okp-info-track-row {
+            min-height: 44px;
+            padding: 8px 9px;
+            border-radius: 7px;
+            background: rgba(0, 0, 0, 0.16);
+        }
+
+        .okp-info-track-row.is-selected {
+            background: rgba(98, 181, 255, 0.17);
+        }
+
+        .okp-info-track-kind {
+            color: rgba(98, 181, 255, 0.95);
+            font-size: 11px;
+            font-weight: 800;
+        }
+
+        .okp-info-track-title {
+            color: rgba(255, 255, 255, 0.9);
+            font-size: 13px;
+            font-weight: 650;
+        }
+
+        .okp-info-track-detail {
+            color: rgba(255, 255, 255, 0.58);
+            font-size: 12px;
+        }
+
+        .okp-info-footer-button {
+            min-width: 82px;
+            min-height: 34px;
         }
         ",
     );

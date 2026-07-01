@@ -45,6 +45,62 @@ pub struct Chapter {
     pub title: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaInfo {
+    pub title: String,
+    pub path: Option<String>,
+    pub sections: Vec<InfoSection>,
+    pub tracks: Vec<InfoTrack>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InfoSection {
+    pub title: String,
+    pub rows: Vec<InfoRow>,
+}
+
+impl InfoSection {
+    fn new(title: &str) -> Self {
+        Self {
+            title: title.to_owned(),
+            rows: Vec::new(),
+        }
+    }
+
+    fn add(&mut self, label: &str, value: impl Into<String>) {
+        let value = value.into();
+        if !value.trim().is_empty() {
+            self.rows.push(InfoRow {
+                label: label.to_owned(),
+                value,
+            });
+        }
+    }
+
+    fn add_option(&mut self, label: &str, value: Option<String>) {
+        if let Some(value) = value {
+            self.add(label, value);
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InfoRow {
+    pub label: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InfoTrack {
+    pub id: i64,
+    pub kind: TrackKind,
+    pub selected: bool,
+    pub external: bool,
+    pub default: bool,
+    pub title: String,
+    pub detail: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrackKind {
     Audio,
@@ -234,6 +290,145 @@ impl Mpv {
             paused: self.get_flag("pause")?.unwrap_or(false),
             volume: self.get_double("volume")?,
             speed: self.get_double("speed")?,
+        })
+    }
+
+    pub fn media_info(&self, path: Option<&Path>) -> Result<MediaInfo, MpvError> {
+        let title = path
+            .map(display_path_name)
+            .or_else(|| self.get_string("media-title").ok().flatten())
+            .unwrap_or_else(|| "Untitled media".to_owned());
+        let path_text = path.map(|path| path.display().to_string());
+        let mut sections = Vec::new();
+
+        let mut file = InfoSection::new("File");
+        file.add_option(
+            "Container",
+            self.get_string("file-format")?
+                .map(|container| friendly_container(&container)),
+        );
+        file.add_option(
+            "Size",
+            self.get_i64("file-size")?
+                .filter(|size| *size >= 0)
+                .map(format_bytes),
+        );
+        file.add_option(
+            "Duration",
+            self.get_double("duration")?
+                .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+                .map(format_duration),
+        );
+        file.add_option("Path", path_text.clone());
+        push_section(&mut sections, file);
+
+        let mut video = InfoSection::new("Video");
+        video.add_option(
+            "Codec",
+            self.get_string("video-codec")?
+                .map(|codec| friendly_codec(&codec)),
+        );
+        let width = self
+            .get_i64("video-params/w")?
+            .or(self.get_i64("width")?)
+            .filter(|value| *value > 0);
+        let height = self
+            .get_i64("video-params/h")?
+            .or(self.get_i64("height")?)
+            .filter(|value| *value > 0);
+        if let (Some(width), Some(height)) = (width, height) {
+            video.add("Resolution", format!("{width} x {height}"));
+        }
+        if let Some(prefix) = self.selected_track_prefix("video")? {
+            video.add_option(
+                "Profile",
+                self.get_string(&format!("{prefix}/codec-profile"))?,
+            );
+            video.add_option(
+                "Bitrate",
+                self.get_i64(&format!("{prefix}/demux-bitrate"))?
+                    .filter(|bitrate| *bitrate > 0)
+                    .map(format_bitrate),
+            );
+        }
+        video.add_option(
+            "Container FPS",
+            self.get_double("container-fps")?
+                .filter(|fps| fps.is_finite() && *fps > 0.0)
+                .map(format_fps),
+        );
+        video.add_option(
+            "Estimated FPS",
+            self.get_double("estimated-vf-fps")?
+                .filter(|fps| fps.is_finite() && *fps > 0.0)
+                .map(format_fps),
+        );
+        video.add_option("Pixel Format", self.get_string("video-params/pixelformat")?);
+        video.add_option("Transfer", self.get_string("video-params/gamma")?);
+        video.add_option("Primaries", self.get_string("video-params/primaries")?);
+        video.add_option(
+            "Peak Luminance",
+            self.get_double("video-params/max-luma")?
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .map(|value| format!("{value:.0} nits")),
+        );
+        push_section(&mut sections, video);
+
+        let chapters = self.chapters()?;
+        let mut chapter_section = InfoSection::new("Chapters");
+        if !chapters.is_empty() {
+            chapter_section.add("Count", chapters.len().to_string());
+            if let Some(first) = chapters.first() {
+                chapter_section.add(
+                    "First",
+                    first
+                        .title
+                        .as_deref()
+                        .filter(|title| !title.is_empty())
+                        .map(|title| format!("{} ({})", title, format_duration(first.time)))
+                        .unwrap_or_else(|| format_duration(first.time)),
+                );
+            }
+        }
+        push_section(&mut sections, chapter_section);
+
+        let mut stats = InfoSection::new("Playback");
+        stats.add_option("Hardware Decode", self.get_string("hwdec-current")?);
+        stats.add_option("Video Output", self.get_string("current-vo")?);
+        stats.add_option("Scaler", self.get_string("scale")?);
+        stats.add_option("Tone Mapping", self.get_string("tone-mapping")?);
+        stats.add_option("Sync Mode", self.get_string("video-sync")?);
+        stats.add_option(
+            "A/V Sync",
+            self.get_double("avsync")?
+                .filter(|value| value.is_finite())
+                .map(|value| format!("{value:+.3} s")),
+        );
+        stats.add_option(
+            "Dropped Frames",
+            self.get_i64("frame-drop-count")?
+                .filter(|value| *value >= 0)
+                .map(|value| value.to_string()),
+        );
+        stats.add_option(
+            "Cache",
+            self.get_double("demuxer-cache-duration")?
+                .filter(|value| value.is_finite() && *value >= 0.0)
+                .map(|value| format!("{value:.1} s")),
+        );
+        stats.add_option(
+            "Display FPS",
+            self.get_double("display-fps")?
+                .filter(|fps| fps.is_finite() && *fps > 0.0)
+                .map(format_fps),
+        );
+        push_section(&mut sections, stats);
+
+        Ok(MediaInfo {
+            title,
+            path: path_text,
+            sections,
+            tracks: self.info_tracks()?,
         })
     }
 
@@ -502,6 +697,103 @@ impl Mpv {
         }
     }
 
+    fn selected_track_prefix(&self, kind: &str) -> Result<Option<String>, MpvError> {
+        let count = self.get_i64("track-list/count")?.unwrap_or(0).max(0);
+        for index in 0..count {
+            let prefix = format!("track-list/{index}");
+            if self.get_string(&format!("{prefix}/type"))?.as_deref() == Some(kind)
+                && self
+                    .get_flag(&format!("{prefix}/selected"))?
+                    .unwrap_or(false)
+            {
+                return Ok(Some(prefix));
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn info_tracks(&self) -> Result<Vec<InfoTrack>, MpvError> {
+        let count = self.get_i64("track-list/count")?.unwrap_or(0).max(0);
+        let mut tracks = Vec::new();
+
+        for index in 0..count {
+            let prefix = format!("track-list/{index}");
+            let Some(kind) = self.get_string(&format!("{prefix}/type"))? else {
+                continue;
+            };
+            let kind = match kind.as_str() {
+                "audio" => TrackKind::Audio,
+                "sub" => TrackKind::Subtitle,
+                _ => continue,
+            };
+
+            let id = self.get_i64(&format!("{prefix}/id"))?.unwrap_or(0);
+            let title = self
+                .get_string(&format!("{prefix}/title"))?
+                .or(self.get_string(&format!("{prefix}/lang"))?)
+                .filter(|title| !title.is_empty())
+                .unwrap_or_else(|| format!("Track {id}"));
+            let codec = self.get_string(&format!("{prefix}/codec"))?;
+            let language = self.get_string(&format!("{prefix}/lang"))?;
+            let external = self
+                .get_flag(&format!("{prefix}/external"))?
+                .unwrap_or(false);
+            let default = self
+                .get_flag(&format!("{prefix}/default"))?
+                .unwrap_or(false);
+            let selected = self
+                .get_flag(&format!("{prefix}/selected"))?
+                .unwrap_or(false);
+
+            let mut details = Vec::new();
+            if selected {
+                details.push("Selected".to_owned());
+            }
+            if let Some(language) = language {
+                details.push(language);
+            }
+            if let Some(codec) = codec {
+                details.push(friendly_codec(&codec));
+            }
+            if kind == TrackKind::Audio {
+                if let Some(channels) = self.get_string(&format!("{prefix}/audio-channels"))? {
+                    details.push(channels);
+                }
+                if let Some(sample_rate) = self
+                    .get_i64(&format!("{prefix}/demux-samplerate"))?
+                    .filter(|sample_rate| *sample_rate > 0)
+                {
+                    details.push(format_sample_rate(sample_rate));
+                }
+                if let Some(bitrate) = self
+                    .get_i64(&format!("{prefix}/demux-bitrate"))?
+                    .filter(|bitrate| *bitrate > 0)
+                {
+                    details.push(format_bitrate(bitrate));
+                }
+            }
+            if external {
+                details.push("External".to_owned());
+            }
+            if default {
+                details.push("Default".to_owned());
+            }
+
+            tracks.push(InfoTrack {
+                id,
+                kind,
+                selected,
+                external,
+                default,
+                title,
+                detail: details.join(" · "),
+            });
+        }
+
+        Ok(tracks)
+    }
+
     fn set_double(&self, name: &str, mut value: f64) -> Result<(), MpvError> {
         let name = CString::new(name)?;
 
@@ -513,6 +805,106 @@ impl Mpv {
                 &mut value as *mut _ as *mut c_void,
             )
         })
+    }
+}
+
+fn push_section(sections: &mut Vec<InfoSection>, section: InfoSection) {
+    if !section.rows.is_empty() {
+        sections.push(section);
+    }
+}
+
+fn display_path_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy())
+        .filter(|name| !name.is_empty())
+        .map(|name| name.into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+fn friendly_container(container: &str) -> String {
+    match container.to_ascii_lowercase().as_str() {
+        "matroska,webm" | "matroska" => "Matroska / WebM".to_owned(),
+        "mov,mp4,m4a,3gp,3g2,mj2" => "MP4 / QuickTime".to_owned(),
+        "avi" => "AVI".to_owned(),
+        "mpegts" => "MPEG-TS".to_owned(),
+        value => value.to_owned(),
+    }
+}
+
+fn friendly_codec(codec: &str) -> String {
+    match codec.to_ascii_lowercase().as_str() {
+        "h264" | "avc1" => "H.264 / AVC".to_owned(),
+        "hevc" | "h265" => "H.265 / HEVC".to_owned(),
+        "av1" => "AV1".to_owned(),
+        "vp8" => "VP8".to_owned(),
+        "vp9" => "VP9".to_owned(),
+        "aac" => "AAC".to_owned(),
+        "ac3" => "AC-3".to_owned(),
+        "eac3" => "E-AC-3".to_owned(),
+        "truehd" => "Dolby TrueHD".to_owned(),
+        "dts" => "DTS".to_owned(),
+        "flac" => "FLAC".to_owned(),
+        "mp3" => "MP3".to_owned(),
+        "opus" => "Opus".to_owned(),
+        "vorbis" => "Vorbis".to_owned(),
+        "ass" => "ASS".to_owned(),
+        "subrip" | "srt" => "SRT".to_owned(),
+        "webvtt" => "WebVTT".to_owned(),
+        value => value.to_ascii_uppercase(),
+    }
+}
+
+fn format_bytes(bytes: i64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes.max(0) as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+
+    if unit == 0 {
+        format!("{} {}", value as i64, UNITS[unit])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+fn format_bitrate(bits_per_second: i64) -> String {
+    if bits_per_second >= 1_000_000 {
+        format!("{:.1} Mbps", bits_per_second as f64 / 1_000_000.0)
+    } else {
+        format!("{:.0} kbps", bits_per_second as f64 / 1_000.0)
+    }
+}
+
+fn format_sample_rate(hertz: i64) -> String {
+    if hertz >= 1000 {
+        format!("{:.1} kHz", hertz as f64 / 1000.0)
+    } else {
+        format!("{hertz} Hz")
+    }
+}
+
+fn format_fps(fps: f64) -> String {
+    format!("{fps:.3} fps")
+}
+
+fn format_duration(seconds: f64) -> String {
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return "00:00".to_owned();
+    }
+
+    let total = seconds.round() as u64;
+    let hours = total / 3600;
+    let minutes = (total % 3600) / 60;
+    let seconds = total % 60;
+
+    if hours > 0 {
+        format!("{hours:02}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes:02}:{seconds:02}")
     }
 }
 
@@ -581,4 +973,30 @@ fn path_to_cstring(path: &Path) -> Result<CString, NulError> {
 #[cfg(not(unix))]
 fn path_to_cstring(path: &Path) -> Result<CString, NulError> {
     CString::new(path.to_string_lossy().as_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formats_media_sizes() {
+        assert_eq!(format_bytes(42), "42 B");
+        assert_eq!(format_bytes(1_572_864), "1.5 MB");
+        assert_eq!(format_bytes(3_221_225_472), "3.0 GB");
+    }
+
+    #[test]
+    fn formats_media_duration() {
+        assert_eq!(format_duration(0.0), "00:00");
+        assert_eq!(format_duration(125.2), "02:05");
+        assert_eq!(format_duration(6906.0), "01:55:06");
+    }
+
+    #[test]
+    fn expands_common_codec_names() {
+        assert_eq!(friendly_codec("h264"), "H.264 / AVC");
+        assert_eq!(friendly_codec("eac3"), "E-AC-3");
+        assert_eq!(friendly_codec("subrip"), "SRT");
+    }
 }
