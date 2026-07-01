@@ -65,6 +65,7 @@ pub const MPV_RENDER_PARAM_OPENGL_INIT_PARAMS: c_int = 2;
 pub const MPV_RENDER_PARAM_OPENGL_FBO: c_int = 3;
 pub const MPV_RENDER_PARAM_FLIP_Y: c_int = 4;
 pub const MPV_FORMAT_FLAG: c_int = 3;
+pub const MPV_FORMAT_INT64: c_int = 4;
 pub const MPV_FORMAT_DOUBLE: c_int = 5;
 pub const GL_FRAMEBUFFER_BINDING: c_uint = 0x8CA6;
 
@@ -89,6 +90,8 @@ unsafe extern "C" {
         format: c_int,
         data: *mut c_void,
     ) -> c_int;
+    pub fn mpv_get_property_string(ctx: *mut mpv_handle, name: *const c_char) -> *mut c_char;
+    pub fn mpv_free(data: *mut c_void);
     pub fn mpv_command(ctx: *mut mpv_handle, args: *const *const c_char) -> c_int;
     pub fn mpv_wait_event(ctx: *mut mpv_handle, timeout: f64) -> *mut mpv_event;
 

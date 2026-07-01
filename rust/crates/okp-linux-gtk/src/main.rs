@@ -9,7 +9,7 @@ use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
 use okp_core::{AppIdentity, media_formats, natural_compare};
-use okp_mpv::{Mpv, MpvEvent};
+use okp_mpv::{Mpv, MpvEvent, Track, TrackKind};
 use velopack::VelopackApp;
 
 #[derive(Default)]
@@ -28,7 +28,8 @@ struct LaunchArgs {
 
 struct Controls {
     open_button: gtk::Button,
-    subtitle_button: gtk::Button,
+    subtitle_button: gtk::MenuButton,
+    audio_button: gtk::MenuButton,
     previous_button: gtk::Button,
     play_button: gtk::Button,
     next_button: gtk::Button,
@@ -147,9 +148,13 @@ fn build_controls(
     let open_button = gtk::Button::with_label("Open");
     open_button.add_css_class("okp-control-button");
 
-    let subtitle_button = gtk::Button::with_label("Sub");
+    let subtitle_button = gtk::MenuButton::builder().label("Sub").build();
     subtitle_button.add_css_class("okp-control-button");
     subtitle_button.set_sensitive(false);
+
+    let audio_button = gtk::MenuButton::builder().label("Audio").build();
+    audio_button.add_css_class("okp-control-button");
+    audio_button.set_sensitive(false);
 
     let previous_button = gtk::Button::with_label("Prev");
     previous_button.add_css_class("okp-control-button");
@@ -210,15 +215,26 @@ fn build_controls(
         }
     });
 
+    let subtitle_popover = gtk::Popover::new();
+    subtitle_popover.add_css_class("okp-track-popover");
+    subtitle_button.set_popover(Some(&subtitle_popover));
+    let subtitle_parent = window.clone();
+    let subtitle_state = Rc::clone(&state);
+    subtitle_popover.connect_show(move |popover| {
+        populate_subtitle_popover(popover, &subtitle_parent, Rc::clone(&subtitle_state));
+    });
+
+    let audio_popover = gtk::Popover::new();
+    audio_popover.add_css_class("okp-track-popover");
+    audio_button.set_popover(Some(&audio_popover));
+    let audio_state = Rc::clone(&state);
+    audio_popover.connect_show(move |popover| {
+        populate_audio_popover(popover, Rc::clone(&audio_state));
+    });
+
     let open_parent = window.clone();
     let open_state = Rc::clone(&state);
     open_button.connect_clicked(move |_| open_media_dialog(&open_parent, Rc::clone(&open_state)));
-
-    let subtitle_parent = window.clone();
-    let subtitle_state = Rc::clone(&state);
-    subtitle_button.connect_clicked(move |_| {
-        open_subtitle_dialog(&subtitle_parent, Rc::clone(&subtitle_state));
-    });
 
     let previous_state = Rc::clone(&state);
     previous_button.connect_clicked(move |_| {
@@ -273,6 +289,7 @@ fn build_controls(
     Controls {
         open_button,
         subtitle_button,
+        audio_button,
         previous_button,
         play_button,
         next_button,
@@ -298,6 +315,7 @@ fn controls_bar(controls: &Controls) -> gtk::Box {
 
     bar.append(&controls.open_button);
     bar.append(&controls.subtitle_button);
+    bar.append(&controls.audio_button);
     bar.append(&controls.previous_button);
     bar.append(&controls.play_button);
     bar.append(&controls.next_button);
@@ -346,9 +364,12 @@ fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, launch
     video_area.connect_render(move |area, _context| {
         area.make_current();
         area.attach_buffers();
+        let scale = area.scale_factor().max(1);
+        let width = area.width() * scale;
+        let height = area.height() * scale;
         let mut state = render_state.borrow_mut();
         if let Some(mpv) = state.mpv.as_mut()
-            && let Err(error) = mpv.render(area.width(), area.height())
+            && let Err(error) = mpv.render(width, height)
         {
             eprintln!("mpv render failed: {error}");
         }
@@ -402,6 +423,7 @@ fn connect_state_poll(
 
             controls.play_button.set_sensitive(has_media);
             controls.subtitle_button.set_sensitive(has_media);
+            controls.audio_button.set_sensitive(has_media);
             controls.previous_button.set_sensitive(has_playlist);
             controls.next_button.set_sensitive(has_playlist);
             controls
@@ -425,6 +447,7 @@ fn connect_state_poll(
         } else {
             controls.play_button.set_sensitive(has_media);
             controls.subtitle_button.set_sensitive(has_media);
+            controls.audio_button.set_sensitive(has_media);
             controls.previous_button.set_sensitive(has_playlist);
             controls.next_button.set_sensitive(has_playlist);
             controls.play_button.set_label("Play");
@@ -515,6 +538,183 @@ fn playlist_row(path: &Path, index: usize, current_index: Option<usize>) -> gtk:
     row_box.append(&title);
     row.set_child(Some(&row_box));
     row
+}
+
+fn populate_subtitle_popover(
+    popover: &gtk::Popover,
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+) {
+    let content = track_popover_content("Subtitles");
+    let tracks = read_tracks(&state)
+        .into_iter()
+        .filter(|track| track.kind == TrackKind::Subtitle)
+        .collect::<Vec<_>>();
+    let any_selected = tracks.iter().any(|track| track.selected);
+
+    let off_button = track_button("Off", !any_selected);
+    let off_state = Rc::clone(&state);
+    let off_popover = popover.clone();
+    off_button.connect_clicked(move |_| {
+        with_mpv(&off_state, |mpv| mpv.select_subtitle(None));
+        off_popover.popdown();
+    });
+    content.append(&off_button);
+
+    if tracks.is_empty() {
+        content.append(&empty_track_label("No subtitle tracks"));
+    } else {
+        for track in tracks {
+            let button = track_button(&track_label(&track), track.selected);
+            let track_state = Rc::clone(&state);
+            let track_popover = popover.clone();
+            let track_id = track.id;
+            button.connect_clicked(move |_| {
+                with_mpv(&track_state, |mpv| mpv.select_subtitle(Some(track_id)));
+                track_popover.popdown();
+            });
+            content.append(&button);
+        }
+    }
+
+    content.append(&divider());
+    let add_button = track_button("Add subtitle file...", false);
+    let add_state = Rc::clone(&state);
+    let add_parent = parent.clone();
+    let add_popover = popover.clone();
+    add_button.connect_clicked(move |_| {
+        add_popover.popdown();
+        open_subtitle_dialog(&add_parent, Rc::clone(&add_state));
+    });
+    content.append(&add_button);
+
+    popover.set_child(Some(&content));
+}
+
+fn populate_audio_popover(popover: &gtk::Popover, state: Rc<RefCell<PlayerState>>) {
+    let content = track_popover_content("Audio");
+    let tracks = read_tracks(&state)
+        .into_iter()
+        .filter(|track| track.kind == TrackKind::Audio)
+        .collect::<Vec<_>>();
+    let any_selected = tracks.iter().any(|track| track.selected);
+
+    let off_button = track_button("Off", !any_selected);
+    let off_state = Rc::clone(&state);
+    let off_popover = popover.clone();
+    off_button.connect_clicked(move |_| {
+        with_mpv(&off_state, |mpv| mpv.select_audio(None));
+        off_popover.popdown();
+    });
+    content.append(&off_button);
+
+    if tracks.is_empty() {
+        content.append(&empty_track_label("No audio tracks"));
+    } else {
+        for track in tracks {
+            let button = track_button(&track_label(&track), track.selected);
+            let track_state = Rc::clone(&state);
+            let track_popover = popover.clone();
+            let track_id = track.id;
+            button.connect_clicked(move |_| {
+                with_mpv(&track_state, |mpv| mpv.select_audio(Some(track_id)));
+                track_popover.popdown();
+            });
+            content.append(&button);
+        }
+    }
+
+    popover.set_child(Some(&content));
+}
+
+fn track_popover_content(title: &str) -> gtk::Box {
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    content.add_css_class("okp-track-popover-content");
+    content.set_width_request(270);
+
+    let title = gtk::Label::new(Some(title));
+    title.add_css_class("okp-track-popover-title");
+    title.set_xalign(0.0);
+    content.append(&title);
+    content
+}
+
+fn read_tracks(state: &Rc<RefCell<PlayerState>>) -> Vec<Track> {
+    let tracks = {
+        let state = state.borrow();
+        state.mpv.as_ref().map(Mpv::tracks)
+    };
+
+    match tracks {
+        Some(Ok(tracks)) => tracks,
+        Some(Err(error)) => {
+            eprintln!("Failed to read tracks: {error}");
+            Vec::new()
+        }
+        None => Vec::new(),
+    }
+}
+
+fn track_button(text: &str, selected: bool) -> gtk::Button {
+    let button = gtk::Button::new();
+    button.add_css_class("okp-track-row");
+    if selected {
+        button.add_css_class("is-selected");
+    }
+
+    let label = gtk::Label::new(Some(text));
+    label.set_xalign(0.0);
+    label.set_ellipsize(pango::EllipsizeMode::End);
+    button.set_child(Some(&label));
+    button
+}
+
+fn empty_track_label(text: &str) -> gtk::Label {
+    let label = gtk::Label::new(Some(text));
+    label.add_css_class("okp-track-empty");
+    label.set_xalign(0.0);
+    label
+}
+
+fn divider() -> gtk::Separator {
+    let divider = gtk::Separator::new(gtk::Orientation::Horizontal);
+    divider.add_css_class("okp-track-divider");
+    divider
+}
+
+fn track_label(track: &Track) -> String {
+    let mut parts = Vec::new();
+    parts.push(track_base_label(track));
+
+    if track.kind == TrackKind::Audio {
+        if let Some(channels) = track.audio_channels.as_deref() {
+            parts.push(channels.to_owned());
+        }
+        if let Some(codec) = track.codec.as_deref() {
+            parts.push(codec.to_ascii_uppercase());
+        }
+    } else if track.external {
+        parts.push("EXT".to_owned());
+    } else if track.default {
+        parts.push("Default".to_owned());
+    }
+
+    let label = parts.join(" · ");
+    if track.selected {
+        format!("On  {label}")
+    } else {
+        label
+    }
+}
+
+fn track_base_label(track: &Track) -> String {
+    track
+        .title
+        .as_deref()
+        .or(track.lang.as_deref())
+        .filter(|label| !label.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("Track {}", track.id))
 }
 
 fn drain_mpv_events(state: &Rc<RefCell<PlayerState>>) {
@@ -973,6 +1173,45 @@ fn install_css() {
         .okp-up-next-file {
             color: inherit;
             font-size: 13px;
+        }
+
+        .okp-track-popover-content {
+            padding: 10px;
+            background: rgba(18, 19, 23, 0.94);
+        }
+
+        .okp-track-popover-title {
+            margin: 0 4px 6px 4px;
+            color: rgba(255, 255, 255, 0.92);
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        .okp-track-row {
+            min-height: 34px;
+            padding: 7px 9px;
+            border-radius: 7px;
+            background: transparent;
+            color: rgba(255, 255, 255, 0.82);
+        }
+
+        .okp-track-row:hover {
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .okp-track-row.is-selected {
+            background: rgba(98, 181, 255, 0.18);
+            color: rgba(255, 255, 255, 0.96);
+        }
+
+        .okp-track-empty {
+            margin: 6px 9px;
+            color: rgba(255, 255, 255, 0.55);
+            font-size: 13px;
+        }
+
+        .okp-track-divider {
+            margin: 5px 3px;
         }
         ",
     );

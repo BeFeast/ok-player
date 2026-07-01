@@ -1,4 +1,4 @@
-use std::ffi::{CString, NulError};
+use std::ffi::{CStr, CString, NulError};
 use std::path::Path;
 use std::ptr::{self, NonNull};
 
@@ -16,6 +16,25 @@ pub struct PlaybackState {
     pub duration: Option<f64>,
     pub paused: bool,
     pub volume: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Track {
+    pub id: i64,
+    pub kind: TrackKind,
+    pub selected: bool,
+    pub external: bool,
+    pub default: bool,
+    pub title: Option<String>,
+    pub lang: Option<String>,
+    pub codec: Option<String>,
+    pub audio_channels: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackKind {
+    Audio,
+    Subtitle,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,6 +156,43 @@ impl Mpv {
         check(unsafe { ffi::mpv_command(self.handle.as_ptr(), args.as_ptr()) })
     }
 
+    pub fn tracks(&self) -> Result<Vec<Track>, MpvError> {
+        let count = self.get_i64("track-list/count")?.unwrap_or(0).max(0);
+        let mut tracks = Vec::new();
+
+        for index in 0..count {
+            let prefix = format!("track-list/{index}");
+            let Some(kind) = self.get_string(&format!("{prefix}/type"))? else {
+                continue;
+            };
+            let kind = match kind.as_str() {
+                "audio" => TrackKind::Audio,
+                "sub" => TrackKind::Subtitle,
+                _ => continue,
+            };
+
+            tracks.push(Track {
+                id: self.get_i64(&format!("{prefix}/id"))?.unwrap_or(0),
+                kind,
+                selected: self
+                    .get_flag(&format!("{prefix}/selected"))?
+                    .unwrap_or(false),
+                external: self
+                    .get_flag(&format!("{prefix}/external"))?
+                    .unwrap_or(false),
+                default: self
+                    .get_flag(&format!("{prefix}/default"))?
+                    .unwrap_or(false),
+                title: self.get_string(&format!("{prefix}/title"))?,
+                lang: self.get_string(&format!("{prefix}/lang"))?,
+                codec: self.get_string(&format!("{prefix}/codec"))?,
+                audio_channels: self.get_string(&format!("{prefix}/audio-channels"))?,
+            });
+        }
+
+        Ok(tracks)
+    }
+
     pub fn playback_state(&self) -> Result<PlaybackState, MpvError> {
         Ok(PlaybackState {
             time_pos: self.get_double("time-pos")?,
@@ -161,6 +217,16 @@ impl Mpv {
 
     pub fn set_volume(&self, volume: f64) -> Result<(), MpvError> {
         self.set_double("volume", volume.clamp(0.0, 130.0))
+    }
+
+    pub fn select_subtitle(&self, id: Option<i64>) -> Result<(), MpvError> {
+        let value = track_id_or_off(id);
+        self.command(&["set", "sid", &value])
+    }
+
+    pub fn select_audio(&self, id: Option<i64>) -> Result<(), MpvError> {
+        let value = track_id_or_off(id);
+        self.command(&["set", "aid", &value])
     }
 
     pub fn drain_events(&self) -> Vec<MpvEvent> {
@@ -303,6 +369,42 @@ impl Mpv {
         }
     }
 
+    fn get_i64(&self, name: &str) -> Result<Option<i64>, MpvError> {
+        let name = CString::new(name)?;
+        let mut value: i64 = 0;
+        let code = unsafe {
+            ffi::mpv_get_property(
+                self.handle.as_ptr(),
+                name.as_ptr(),
+                ffi::MPV_FORMAT_INT64,
+                &mut value as *mut _ as *mut c_void,
+            )
+        };
+
+        if code < 0 { Ok(None) } else { Ok(Some(value)) }
+    }
+
+    fn get_string(&self, name: &str) -> Result<Option<String>, MpvError> {
+        let name = CString::new(name)?;
+        let value = unsafe { ffi::mpv_get_property_string(self.handle.as_ptr(), name.as_ptr()) };
+        if value.is_null() {
+            return Ok(None);
+        }
+
+        let text = unsafe { CStr::from_ptr(value) }
+            .to_string_lossy()
+            .into_owned();
+        unsafe {
+            ffi::mpv_free(value.cast::<c_void>());
+        }
+
+        if text.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(text))
+        }
+    }
+
     fn set_double(&self, name: &str, mut value: f64) -> Result<(), MpvError> {
         let name = CString::new(name)?;
 
@@ -352,6 +454,11 @@ fn end_file_reason(reason: c_int, error: c_int) -> EndFileReason {
         ffi::MPV_END_FILE_REASON_REDIRECT => EndFileReason::Redirect,
         _ => EndFileReason::Unknown(reason),
     }
+}
+
+fn track_id_or_off(id: Option<i64>) -> String {
+    id.map(|id| id.to_string())
+        .unwrap_or_else(|| "no".to_owned())
 }
 
 #[cfg(unix)]
