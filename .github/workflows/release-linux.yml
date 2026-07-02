@@ -1,6 +1,9 @@
 name: Linux Release
 
 on:
+  push:
+    tags:
+      - 'linux-v*'
   workflow_dispatch:
     inputs:
       version:
@@ -28,6 +31,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Resolve release inputs
+        id: release
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tag="${GITHUB_REF_NAME}"
+            version="${tag#linux-v}"
+            publish="true"
+            prerelease="true"
+          else
+            version="${{ inputs.version }}"
+            tag="linux-v${version}"
+            publish="${{ inputs.publish }}"
+            prerelease="${{ inputs.prerelease }}"
+          fi
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "publish=${publish}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
@@ -50,20 +74,20 @@ jobs:
         run: cargo test --workspace
 
       - name: Build Velopack AppImage lane
-        run: ./scripts/package-linux-velopack.sh "${{ inputs.version }}"
+        run: ./scripts/package-linux-velopack.sh "${{ steps.release.outputs.version }}"
 
       - name: Build Debian package lane
-        run: ./scripts/package-linux-deb.sh "${{ inputs.version }}"
+        run: ./scripts/package-linux-deb.sh "${{ steps.release.outputs.version }}"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ok-player-linux-${{ inputs.version }}
+          name: ok-player-linux-${{ steps.release.outputs.version }}
           path: |
             artifacts/linux/velopack/**
             artifacts/linux/deb/*.deb
 
       - name: Publish Velopack AppImage feed
-        if: inputs.publish
+        if: steps.release.outputs.publish == 'true'
         run: |
           "$HOME/.dotnet/tools/vpk" upload github \
             --outputDir artifacts/linux/velopack \
@@ -71,13 +95,13 @@ jobs:
             --repoUrl "https://github.com/${{ github.repository }}" \
             --token "${{ secrets.GITHUB_TOKEN }}" \
             --publish true \
-            --pre "${{ inputs.prerelease }}" \
-            --releaseName "OK Player Linux ${{ inputs.version }}" \
-            --tag "linux-v${{ inputs.version }}" \
+            --pre "${{ steps.release.outputs.prerelease }}" \
+            --releaseName "OK Player Linux ${{ steps.release.outputs.version }}" \
+            --tag "${{ steps.release.outputs.tag }}" \
             --targetCommitish "${{ github.sha }}"
 
       - name: Attach Debian package to release
-        if: inputs.publish
+        if: steps.release.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "linux-v${{ inputs.version }}" artifacts/linux/deb/*.deb --clobber
+        run: gh release upload "${{ steps.release.outputs.tag }}" artifacts/linux/deb/*.deb --clobber
