@@ -1,10 +1,12 @@
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
 use std::rc::Rc;
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use gtk::cairo;
@@ -14,14 +16,15 @@ use gtk::pango;
 use gtk::prelude::*;
 use okp_core::{AppIdentity, m3u, media_formats, natural_compare, time_code};
 use okp_mpv::{
-    AbLoopState, AudioDevice, Chapter, InfoSection, InfoTrack, MediaInfo, Mpv, MpvEvent, Track,
-    TrackKind, current_render_target_size, resolve_render_target_size,
+    AbLoopState, AudioDevice, Chapter, InfoSection, InfoTrack, MediaInfo, Mpv, MpvEvent,
+    PlaybackState, Track, TrackKind, current_render_target_size, resolve_render_target_size,
 };
 use serde::Deserialize;
 use velopack::{
     UpdateCheck, UpdateInfo, UpdateManager, UpdateOptions, VelopackApp, VelopackAsset,
     sources::GithubSource,
 };
+use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
 mod history;
 mod screenshots;
@@ -32,6 +35,9 @@ const SPEED_PRESETS: [f64; 6] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 const APP_BUILD_VERSION: &str = env!("OKP_BUILD_VERSION");
 const APP_BUILD_SHA: &str = env!("OKP_BUILD_SHA");
 const LINUX_DESKTOP_ID: &str = "com.befeast.okplayer.desktop";
+const MPRIS_BUS_NAME: &str = "org.mpris.MediaPlayer2.okplayer";
+const MPRIS_OBJECT_PATH: &str = "/org/mpris/MediaPlayer2";
+const MPRIS_TRACK_PATH: &str = "/org/mpris/MediaPlayer2/Track/0";
 const LINUX_UPDATE_REPO_URL: &str = "https://github.com/BeFeast/ok-player";
 const LINUX_DEB_RELEASES_API_URL: &str = "https://api.github.com/repos/BeFeast/ok-player/releases";
 const UPDATE_STATUS_NOT_CHECKED: &str = "Not checked yet";
@@ -256,6 +262,278 @@ struct AppRuntime {
     state: Rc<RefCell<PlayerState>>,
 }
 
+#[derive(Clone)]
+struct MprisController {
+    snapshot: Arc<Mutex<MprisSnapshot>>,
+    commands: mpsc::Sender<MprisCommand>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct MprisSnapshot {
+    has_media: bool,
+    paused: bool,
+    position_us: i64,
+    duration_us: Option<i64>,
+    volume: f64,
+    can_go_next: bool,
+    can_go_previous: bool,
+    title: String,
+    uri: Option<String>,
+}
+
+impl Default for MprisSnapshot {
+    fn default() -> Self {
+        Self {
+            has_media: false,
+            paused: true,
+            position_us: 0,
+            duration_us: None,
+            volume: 1.0,
+            can_go_next: false,
+            can_go_previous: false,
+            title: "OK Player".to_owned(),
+            uri: None,
+        }
+    }
+}
+
+impl MprisSnapshot {
+    fn playback_status(&self) -> &'static str {
+        if !self.has_media {
+            "Stopped"
+        } else if self.paused {
+            "Paused"
+        } else {
+            "Playing"
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum MprisCommand {
+    Raise,
+    Quit,
+    Play,
+    Pause,
+    PlayPause,
+    Stop,
+    Previous,
+    Next,
+    SeekBy(i64),
+    SetPosition(i64),
+    OpenUri(String),
+}
+
+#[derive(Clone)]
+struct MprisRoot {
+    commands: mpsc::Sender<MprisCommand>,
+}
+
+impl MprisRoot {
+    fn send(&self, command: MprisCommand) -> zbus::fdo::Result<()> {
+        self.commands
+            .send(command)
+            .map_err(|_| zbus::fdo::Error::Failed("OK Player command channel is closed".to_owned()))
+    }
+}
+
+#[zbus::interface(name = "org.mpris.MediaPlayer2")]
+impl MprisRoot {
+    fn raise(&self) -> zbus::fdo::Result<()> {
+        self.send(MprisCommand::Raise)
+    }
+
+    fn quit(&self) -> zbus::fdo::Result<()> {
+        self.send(MprisCommand::Quit)
+    }
+
+    #[zbus(property)]
+    fn can_quit(&self) -> bool {
+        true
+    }
+
+    #[zbus(property)]
+    fn fullscreen(&self) -> bool {
+        false
+    }
+
+    #[zbus(property)]
+    fn can_set_fullscreen(&self) -> bool {
+        false
+    }
+
+    #[zbus(property)]
+    fn can_raise(&self) -> bool {
+        true
+    }
+
+    #[zbus(property)]
+    fn has_track_list(&self) -> bool {
+        false
+    }
+
+    #[zbus(property)]
+    fn identity(&self) -> &str {
+        "OK Player"
+    }
+
+    #[zbus(property)]
+    fn desktop_entry(&self) -> &str {
+        "com.befeast.okplayer"
+    }
+
+    #[zbus(property)]
+    fn supported_uri_schemes(&self) -> Vec<String> {
+        ["file", "http", "https"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    #[zbus(property)]
+    fn supported_mime_types(&self) -> Vec<String> {
+        LINUX_KEY_MEDIA_MIME_TYPES
+            .iter()
+            .map(|mime| (*mime).to_owned())
+            .collect()
+    }
+}
+
+#[derive(Clone)]
+struct MprisPlayer {
+    snapshot: Arc<Mutex<MprisSnapshot>>,
+    commands: mpsc::Sender<MprisCommand>,
+}
+
+impl MprisPlayer {
+    fn send(&self, command: MprisCommand) -> zbus::fdo::Result<()> {
+        self.commands
+            .send(command)
+            .map_err(|_| zbus::fdo::Error::Failed("OK Player command channel is closed".to_owned()))
+    }
+
+    fn snapshot(&self) -> MprisSnapshot {
+        self.snapshot
+            .lock()
+            .map(|snapshot| snapshot.clone())
+            .unwrap_or_default()
+    }
+}
+
+#[zbus::interface(name = "org.mpris.MediaPlayer2.Player")]
+impl MprisPlayer {
+    fn next(&self) -> zbus::fdo::Result<()> {
+        self.send(MprisCommand::Next)
+    }
+
+    fn previous(&self) -> zbus::fdo::Result<()> {
+        self.send(MprisCommand::Previous)
+    }
+
+    fn pause(&self) -> zbus::fdo::Result<()> {
+        self.send(MprisCommand::Pause)
+    }
+
+    fn play_pause(&self) -> zbus::fdo::Result<()> {
+        self.send(MprisCommand::PlayPause)
+    }
+
+    fn stop(&self) -> zbus::fdo::Result<()> {
+        self.send(MprisCommand::Stop)
+    }
+
+    fn play(&self) -> zbus::fdo::Result<()> {
+        self.send(MprisCommand::Play)
+    }
+
+    fn seek(&self, offset: i64) -> zbus::fdo::Result<()> {
+        self.send(MprisCommand::SeekBy(offset))
+    }
+
+    fn set_position(&self, _track_id: OwnedObjectPath, position: i64) -> zbus::fdo::Result<()> {
+        self.send(MprisCommand::SetPosition(position))
+    }
+
+    fn open_uri(&self, uri: &str) -> zbus::fdo::Result<()> {
+        self.send(MprisCommand::OpenUri(uri.to_owned()))
+    }
+
+    #[zbus(property)]
+    fn playback_status(&self) -> String {
+        self.snapshot().playback_status().to_owned()
+    }
+
+    #[zbus(property)]
+    fn loop_status(&self) -> &str {
+        "None"
+    }
+
+    #[zbus(property)]
+    fn rate(&self) -> f64 {
+        1.0
+    }
+
+    #[zbus(property)]
+    fn shuffle(&self) -> bool {
+        false
+    }
+
+    #[zbus(property)]
+    fn metadata(&self) -> HashMap<String, OwnedValue> {
+        mpris_metadata(&self.snapshot())
+    }
+
+    #[zbus(property)]
+    fn volume(&self) -> f64 {
+        self.snapshot().volume
+    }
+
+    #[zbus(property)]
+    fn position(&self) -> i64 {
+        self.snapshot().position_us
+    }
+
+    #[zbus(property)]
+    fn minimum_rate(&self) -> f64 {
+        1.0
+    }
+
+    #[zbus(property)]
+    fn maximum_rate(&self) -> f64 {
+        1.0
+    }
+
+    #[zbus(property)]
+    fn can_go_next(&self) -> bool {
+        self.snapshot().can_go_next
+    }
+
+    #[zbus(property)]
+    fn can_go_previous(&self) -> bool {
+        self.snapshot().can_go_previous
+    }
+
+    #[zbus(property)]
+    fn can_play(&self) -> bool {
+        self.snapshot().has_media
+    }
+
+    #[zbus(property)]
+    fn can_pause(&self) -> bool {
+        self.snapshot().has_media
+    }
+
+    #[zbus(property)]
+    fn can_seek(&self) -> bool {
+        self.snapshot().duration_us.is_some()
+    }
+
+    #[zbus(property)]
+    fn can_control(&self) -> bool {
+        true
+    }
+}
+
 struct Controls {
     open_button: gtk::Button,
     subtitle_button: gtk::MenuButton,
@@ -287,6 +565,14 @@ struct Controls {
     side_panel_actions: Rc<RefCell<Vec<SidePanelAction>>>,
     thumbnail_sender: mpsc::Sender<String>,
     thumbnail_events: RefCell<mpsc::Receiver<String>>,
+}
+
+struct StatePollContext {
+    updating_seek: Rc<Cell<bool>>,
+    updating_volume: Rc<Cell<bool>>,
+    chrome: Rc<ChromeVisibility>,
+    empty_surface: EmptySurface,
+    mpris_snapshot: Arc<Mutex<MprisSnapshot>>,
 }
 
 #[derive(Clone)]
@@ -731,6 +1017,226 @@ enum SidePanelMode {
     UpNext,
 }
 
+fn create_mpris_controller() -> (MprisController, mpsc::Receiver<MprisCommand>) {
+    let (commands, receiver) = mpsc::channel();
+    (
+        MprisController {
+            snapshot: Arc::new(Mutex::new(MprisSnapshot::default())),
+            commands,
+        },
+        receiver,
+    )
+}
+
+fn start_mpris_service(controller: MprisController) {
+    if env::var_os("OKP_DISABLE_MPRIS").is_some() {
+        return;
+    }
+
+    let spawn_result = thread::Builder::new()
+        .name("okp-mpris".to_owned())
+        .spawn(move || {
+            if let Err(error) = run_mpris_service(controller) {
+                eprintln!("MPRIS service unavailable: {error}");
+            }
+        });
+
+    if let Err(error) = spawn_result {
+        eprintln!("Failed to start MPRIS thread: {error}");
+    }
+}
+
+fn run_mpris_service(controller: MprisController) -> zbus::Result<()> {
+    let root = MprisRoot {
+        commands: controller.commands.clone(),
+    };
+    let player = MprisPlayer {
+        snapshot: controller.snapshot,
+        commands: controller.commands,
+    };
+    let _connection = zbus::blocking::connection::Builder::session()?
+        .serve_at(MPRIS_OBJECT_PATH, root)?
+        .serve_at(MPRIS_OBJECT_PATH, player)?
+        .name(MPRIS_BUS_NAME)?
+        .build()?;
+
+    loop {
+        thread::park();
+    }
+}
+
+fn connect_mpris_commands(
+    window: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+    commands: mpsc::Receiver<MprisCommand>,
+) {
+    let window = window.clone();
+    glib::timeout_add_local(Duration::from_millis(80), move || {
+        while let Ok(command) = commands.try_recv() {
+            handle_mpris_command(&window, &state, &status_toast, command);
+        }
+        glib::ControlFlow::Continue
+    });
+}
+
+fn handle_mpris_command(
+    window: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &StatusToast,
+    command: MprisCommand,
+) {
+    match command {
+        MprisCommand::Raise => window.present(),
+        MprisCommand::Quit => window.close(),
+        MprisCommand::Play => set_playback_paused(state, false),
+        MprisCommand::Pause => set_playback_paused(state, true),
+        MprisCommand::PlayPause => {
+            with_mpv(state, |mpv| mpv.cycle_pause());
+        }
+        MprisCommand::Stop => {
+            close_current_media(state, status_toast);
+        }
+        MprisCommand::Previous => {
+            navigate_playlist(state, -1);
+        }
+        MprisCommand::Next => {
+            navigate_playlist(state, 1);
+        }
+        MprisCommand::SeekBy(offset_us) => {
+            let seconds = offset_us as f64 / 1_000_000.0;
+            with_mpv(state, |mpv| mpv.seek_relative(seconds));
+        }
+        MprisCommand::SetPosition(position_us) => {
+            let seconds = position_us.max(0) as f64 / 1_000_000.0;
+            with_mpv(state, |mpv| mpv.seek_absolute(seconds));
+        }
+        MprisCommand::OpenUri(uri) => {
+            if let Some(path) = file_uri_path(&uri) {
+                load_media_path(state, path);
+            } else if is_media_url(&uri) {
+                load_media_url(state, uri);
+            }
+        }
+    }
+}
+
+fn set_playback_paused(state: &Rc<RefCell<PlayerState>>, paused: bool) {
+    let should_toggle = {
+        let state = state.borrow();
+        let Some(mpv) = state.mpv.as_ref() else {
+            return;
+        };
+        match mpv.playback_state() {
+            Ok(playback) => playback.paused != paused,
+            Err(error) => {
+                eprintln!("Failed to read playback state for MPRIS command: {error}");
+                false
+            }
+        }
+    };
+
+    if should_toggle {
+        with_mpv(state, |mpv| mpv.cycle_pause());
+    }
+}
+
+fn update_mpris_snapshot(
+    snapshot: &Arc<Mutex<MprisSnapshot>>,
+    state: &PlayerState,
+    playback: Option<PlaybackState>,
+) {
+    let next = mpris_snapshot_from_state(state, playback);
+    if let Ok(mut snapshot) = snapshot.lock() {
+        *snapshot = next;
+    }
+}
+
+fn mpris_snapshot_from_state(
+    state: &PlayerState,
+    playback: Option<PlaybackState>,
+) -> MprisSnapshot {
+    let has_media = has_loaded_media_state(state);
+    let (title, uri) = mpris_title_and_uri(state);
+    let playback = playback.unwrap_or_default();
+    let duration_us = playback
+        .duration
+        .filter(|duration| duration.is_finite() && *duration > 0.0)
+        .map(secs_to_mpris_us);
+
+    MprisSnapshot {
+        has_media,
+        paused: playback.paused || !has_media,
+        position_us: playback
+            .time_pos
+            .filter(|position| position.is_finite() && *position > 0.0)
+            .map(secs_to_mpris_us)
+            .unwrap_or(0),
+        duration_us,
+        volume: playback.volume.unwrap_or(100.0).max(0.0) / 100.0,
+        can_go_next: state.playlist.len() > 1,
+        can_go_previous: state.playlist.len() > 1,
+        title,
+        uri,
+    }
+}
+
+fn mpris_title_and_uri(state: &PlayerState) -> (String, Option<String>) {
+    if let Some(path) = state.current_file.as_ref() {
+        let title = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned)
+            .unwrap_or_else(|| path.display().to_string());
+        let uri = gtk::gio::File::for_path(path).uri().to_string();
+        return (title, Some(uri));
+    }
+
+    if let Some(url) = state.current_url.as_ref() {
+        return (url.to_owned(), Some(url.to_owned()));
+    }
+
+    ("OK Player".to_owned(), None)
+}
+
+fn secs_to_mpris_us(seconds: f64) -> i64 {
+    (seconds.max(0.0) * 1_000_000.0).round() as i64
+}
+
+fn mpris_metadata(snapshot: &MprisSnapshot) -> HashMap<String, OwnedValue> {
+    let mut metadata = HashMap::new();
+    let track_id = mpris_track_id();
+    metadata.insert(
+        "mpris:trackid".to_owned(),
+        Value::from(track_id).try_into().expect("track id value"),
+    );
+    metadata.insert(
+        "xesam:title".to_owned(),
+        Value::from(snapshot.title.as_str())
+            .try_into()
+            .expect("title value"),
+    );
+    if let Some(duration_us) = snapshot.duration_us {
+        metadata.insert(
+            "mpris:length".to_owned(),
+            Value::from(duration_us).try_into().expect("length value"),
+        );
+    }
+    if let Some(uri) = snapshot.uri.as_deref() {
+        metadata.insert(
+            "xesam:url".to_owned(),
+            Value::from(uri).try_into().expect("url value"),
+        );
+    }
+    metadata
+}
+
+fn mpris_track_id() -> OwnedObjectPath {
+    MPRIS_TRACK_PATH
+        .try_into()
+        .expect("static MPRIS track path")
+}
+
 fn main() -> glib::ExitCode {
     VelopackApp::build().set_auto_apply_on_startup(false).run();
 
@@ -855,6 +1361,8 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> AppRuntime {
     let updating_volume = Rc::new(Cell::new(false));
     let status_toast = Rc::new(StatusToast::new());
     let chrome = Rc::new(ChromeVisibility::new());
+    let (mpris_controller, mpris_commands) = create_mpris_controller();
+    start_mpris_service(mpris_controller.clone());
 
     let window = gtk::ApplicationWindow::builder()
         .application(app)
@@ -917,15 +1425,24 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> AppRuntime {
         Rc::clone(&status_toast),
         Rc::clone(&chrome),
     );
+    connect_mpris_commands(
+        &window,
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+        mpris_commands,
+    );
     connect_progress_persistence(&window, Rc::clone(&state));
     connect_state_poll(
         &window,
         Rc::clone(&state),
         controls,
-        Rc::clone(&updating_seek),
-        Rc::clone(&updating_volume),
-        Rc::clone(&chrome),
-        empty_surface,
+        StatePollContext {
+            updating_seek: Rc::clone(&updating_seek),
+            updating_volume: Rc::clone(&updating_volume),
+            chrome: Rc::clone(&chrome),
+            empty_surface,
+            mpris_snapshot: Arc::clone(&mpris_controller.snapshot),
+        },
     );
 
     window.present();
@@ -2269,12 +2786,16 @@ fn connect_state_poll(
     window: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
     controls: Controls,
-    updating_seek: Rc<Cell<bool>>,
-    updating_volume: Rc<Cell<bool>>,
-    chrome: Rc<ChromeVisibility>,
-    empty_surface: EmptySurface,
+    context: StatePollContext,
 ) {
     let window = window.clone();
+    let StatePollContext {
+        updating_seek,
+        updating_volume,
+        chrome,
+        empty_surface,
+        mpris_snapshot,
+    } = context;
     glib::timeout_add_local(Duration::from_millis(200), move || {
         drain_mpv_events(&state);
         try_pending_audio_device_restore(&state);
@@ -2286,6 +2807,10 @@ fn connect_state_poll(
             .and_then(|mpv| mpv.playback_state().ok());
         let has_media = has_loaded_media(&state);
         let has_playlist = state.borrow().playlist.len() > 1;
+        {
+            let state = state.borrow();
+            update_mpris_snapshot(&mpris_snapshot, &state, playback);
+        }
         sync_ab_loop_state(&state, has_media);
         empty_surface.set_has_media(has_media);
         drain_thumbnail_events(&controls);
@@ -12911,6 +13436,38 @@ mod tests {
         assert_eq!(normalized_settings_page(" Shortcuts "), Some("shortcuts"));
         assert_eq!(normalized_settings_page("about"), Some("about"));
         assert_eq!(normalized_settings_page("native-caption"), None);
+    }
+
+    #[test]
+    fn mpris_snapshot_reports_stopped_without_media() {
+        let snapshot = MprisSnapshot::default();
+
+        assert_eq!(snapshot.playback_status(), "Stopped");
+        assert!(!snapshot.has_media);
+        assert_eq!(snapshot.position_us, 0);
+    }
+
+    #[test]
+    fn mpris_metadata_contains_core_track_fields() {
+        let snapshot = MprisSnapshot {
+            has_media: true,
+            paused: false,
+            position_us: 1_000_000,
+            duration_us: Some(30_000_000),
+            volume: 1.0,
+            can_go_next: true,
+            can_go_previous: true,
+            title: "subtest.mkv".to_owned(),
+            uri: Some("file:///tmp/subtest.mkv".to_owned()),
+        };
+
+        let metadata = mpris_metadata(&snapshot);
+
+        assert_eq!(snapshot.playback_status(), "Playing");
+        assert!(metadata.contains_key("mpris:trackid"));
+        assert!(metadata.contains_key("mpris:length"));
+        assert!(metadata.contains_key("xesam:title"));
+        assert!(metadata.contains_key("xesam:url"));
     }
 
     #[test]
