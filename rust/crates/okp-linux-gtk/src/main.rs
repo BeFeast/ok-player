@@ -57,6 +57,7 @@ const VIDEO_ASPECT_PRESETS: [(&str, &str); 4] = [
 ];
 const AUDIO_DEVICE_AUTO: &str = "auto";
 const AUDIO_DEVICE_RESTORE_MAX_ATTEMPTS: u8 = 50;
+const AB_LOOP_COMBINED_MARK_EPSILON_SECS: f64 = 0.5;
 
 #[derive(Default)]
 struct PlayerState {
@@ -696,6 +697,7 @@ enum TimelineMarkKind {
     Chapter,
     AbStart,
     AbEnd,
+    AbLoop,
 }
 
 #[derive(Clone, Copy)]
@@ -2424,6 +2426,7 @@ fn update_timeline_marks(
             TimelineMarkKind::Chapter => (gtk::PositionType::Top, None),
             TimelineMarkKind::AbStart => (gtk::PositionType::Bottom, Some("A")),
             TimelineMarkKind::AbEnd => (gtk::PositionType::Bottom, Some("B")),
+            TimelineMarkKind::AbLoop => (gtk::PositionType::Bottom, Some("A-B")),
         };
         seek.add_mark(mark.time, position, label);
     }
@@ -2440,20 +2443,39 @@ fn timeline_marks(chapters: &[Chapter], ab_loop: AbLoopState) -> Vec<TimelineMar
         .filter(|mark| mark.time.is_finite() && mark.time > 0.0)
         .collect::<Vec<_>>();
 
-    if let Some(time) = ab_loop.a.filter(|time| time.is_finite() && *time >= 0.0) {
-        marks.push(TimelineMark {
+    let ab_start = ab_loop.a.filter(|time| time.is_finite() && *time >= 0.0);
+    let ab_end = ab_loop.b.filter(|time| time.is_finite() && *time >= 0.0);
+    match (ab_start, ab_end) {
+        (Some(a), Some(b)) if should_combine_ab_loop_marks(a, b) => marks.push(TimelineMark {
+            time: a + ((b - a) / 2.0),
+            kind: TimelineMarkKind::AbLoop,
+        }),
+        (Some(a), Some(b)) => {
+            marks.push(TimelineMark {
+                time: a,
+                kind: TimelineMarkKind::AbStart,
+            });
+            marks.push(TimelineMark {
+                time: b,
+                kind: TimelineMarkKind::AbEnd,
+            });
+        }
+        (Some(time), None) => marks.push(TimelineMark {
             time,
             kind: TimelineMarkKind::AbStart,
-        });
-    }
-    if let Some(time) = ab_loop.b.filter(|time| time.is_finite() && *time >= 0.0) {
-        marks.push(TimelineMark {
+        }),
+        (None, Some(time)) => marks.push(TimelineMark {
             time,
             kind: TimelineMarkKind::AbEnd,
-        });
+        }),
+        (None, None) => {}
     }
 
     marks
+}
+
+fn should_combine_ab_loop_marks(a: f64, b: f64) -> bool {
+    (a - b).abs() <= AB_LOOP_COMBINED_MARK_EPSILON_SECS
 }
 
 fn panel_heading_row(text: &str) -> gtk::ListBoxRow {
@@ -11147,6 +11169,25 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
                 },
             ]
         );
+    }
+
+    #[test]
+    fn timeline_marks_combine_degenerate_ab_loop_points() {
+        assert_eq!(
+            timeline_marks(
+                &[],
+                AbLoopState {
+                    a: Some(12.0),
+                    b: Some(12.25),
+                },
+            ),
+            vec![TimelineMark {
+                time: 12.125,
+                kind: TimelineMarkKind::AbLoop,
+            }]
+        );
+        assert!(should_combine_ab_loop_marks(12.0, 12.5));
+        assert!(!should_combine_ab_loop_marks(12.0, 12.501));
     }
 
     #[test]
