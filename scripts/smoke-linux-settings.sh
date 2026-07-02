@@ -78,6 +78,13 @@ if (( top_center_dark_pixels > 120 )); then
   echo "Unexpected centered caption pixels in Settings chrome: ${top_center_dark_pixels}" >&2
   exit 1
 fi
+
+rail_top_pixel="$(magick "$OUT_DIR/settings.png" -format '%[pixel:p{20,16}]' info:)"
+content_top_pixel="$(magick "$OUT_DIR/settings.png" -format '%[pixel:p{220,16}]' info:)"
+if [[ "$rail_top_pixel" != "srgb(234,240,245)" || "$content_top_pixel" != "srgb(238,244,249)" ]]; then
+  echo "Unexpected Settings top strip colors: rail=${rail_top_pixel}, content=${content_top_pixel}" >&2
+  exit 1
+fi
 SMOKE
 then
   echo "Settings smoke failed. Session log: $OUT_DIR/session.log" >&2

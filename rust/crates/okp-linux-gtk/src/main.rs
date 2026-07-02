@@ -38,6 +38,7 @@ const LINUX_DESKTOP_ID: &str = "com.befeast.okplayer.desktop";
 const MPRIS_BUS_NAME: &str = "org.mpris.MediaPlayer2.okplayer";
 const MPRIS_OBJECT_PATH: &str = "/org/mpris/MediaPlayer2";
 const MPRIS_TRACK_PATH: &str = "/org/mpris/MediaPlayer2/Track/0";
+const MPRIS_SEEKED_DELTA_US: i64 = 750_000;
 const LINUX_UPDATE_REPO_URL: &str = "https://github.com/BeFeast/ok-player";
 const LINUX_DEB_RELEASES_API_URL: &str = "https://api.github.com/repos/BeFeast/ok-player/releases";
 const UPDATE_STATUS_NOT_CHECKED: &str = "Not checked yet";
@@ -328,6 +329,7 @@ enum MprisCommand {
 #[derive(Clone, Debug)]
 enum MprisSignal {
     PropertiesInvalidated(Vec<&'static str>),
+    Seeked(i64),
 }
 
 #[derive(Clone)]
@@ -1103,6 +1105,13 @@ fn emit_mpris_signal(
                 ),
             )
         }
+        MprisSignal::Seeked(position_us) => connection.emit_signal(
+            None::<&str>,
+            MPRIS_OBJECT_PATH,
+            "org.mpris.MediaPlayer2.Player",
+            "Seeked",
+            &(position_us,),
+        ),
         _ => Ok(()),
     }
 }
@@ -1190,16 +1199,21 @@ fn update_mpris_snapshot(
     playback: Option<PlaybackState>,
 ) {
     let next = mpris_snapshot_from_state(state, playback);
-    let invalidated = if let Ok(mut snapshot) = snapshot.lock() {
+    let (invalidated, seeked_position) = if let Ok(mut snapshot) = snapshot.lock() {
         let invalidated = mpris_invalidated_properties(&snapshot, &next);
+        let seeked_position = mpris_seeked_position(&snapshot, &next);
         *snapshot = next;
-        invalidated
+        (invalidated, seeked_position)
     } else {
-        Vec::new()
+        (Vec::new(), None)
     };
 
     if !invalidated.is_empty() {
         let _ = signals.send(MprisSignal::PropertiesInvalidated(invalidated));
+    }
+
+    if let Some(position_us) = seeked_position {
+        let _ = signals.send(MprisSignal::Seeked(position_us));
     }
 }
 
@@ -1243,6 +1257,20 @@ fn mpris_invalidated_properties(
     }
 
     properties
+}
+
+fn mpris_seeked_position(previous: &MprisSnapshot, next: &MprisSnapshot) -> Option<i64> {
+    let same_media = previous.has_media
+        && next.has_media
+        && previous.title == next.title
+        && previous.uri == next.uri
+        && previous.duration_us == next.duration_us;
+    if !same_media {
+        return None;
+    }
+
+    let delta = (previous.position_us - next.position_us).abs();
+    (delta >= MPRIS_SEEKED_DELTA_US).then_some(next.position_us)
 }
 
 fn mpris_snapshot_from_state(
@@ -13598,6 +13626,44 @@ mod tests {
         };
 
         assert!(mpris_invalidated_properties(&next, &moved).is_empty());
+    }
+
+    #[test]
+    fn mpris_seeked_signal_tracks_large_position_jumps_only() {
+        let previous = MprisSnapshot {
+            has_media: true,
+            paused: false,
+            position_us: 1_000_000,
+            duration_us: Some(30_000_000),
+            volume: 1.0,
+            can_go_next: false,
+            can_go_previous: false,
+            title: "subtest.mkv".to_owned(),
+            uri: Some("file:///tmp/subtest.mkv".to_owned()),
+        };
+
+        let normal_tick = MprisSnapshot {
+            position_us: previous.position_us + 200_000,
+            ..previous.clone()
+        };
+        assert_eq!(mpris_seeked_position(&previous, &normal_tick), None);
+
+        let seek_jump = MprisSnapshot {
+            position_us: previous.position_us + 5_000_000,
+            ..previous.clone()
+        };
+        assert_eq!(
+            mpris_seeked_position(&previous, &seek_jump),
+            Some(6_000_000)
+        );
+
+        let different_media = MprisSnapshot {
+            position_us: 0,
+            title: "other.mkv".to_owned(),
+            uri: Some("file:///tmp/other.mkv".to_owned()),
+            ..previous.clone()
+        };
+        assert_eq!(mpris_seeked_position(&previous, &different_media), None);
     }
 
     #[test]
