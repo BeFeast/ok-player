@@ -475,30 +475,61 @@ impl Mpv {
                 .filter(|fps| fps.is_finite() && *fps > 0.0)
                 .map(format_fps),
         );
-        video.add_option("Pixel Format", self.get_string("video-params/pixelformat")?);
+        let pixel_format = self.get_string("video-params/pixelformat")?;
+        video.add_option("Pixel Format", pixel_format.clone());
+        if let Some(bit_depth) = pixel_format
+            .as_deref()
+            .and_then(bit_depth_from_pixel_format)
+        {
+            video.add("Bit Depth", format!("{bit_depth}-bit"));
+        }
         video.add_option(
             "Hardware Format",
             self.get_string("video-params/hw-pixelformat")?,
         );
-        video.add_option("Color Space", self.get_string("video-params/colormatrix")?);
-        video.add_option("Levels", self.get_string("video-params/colorlevels")?);
-        video.add_option("Transfer", self.get_string("video-params/gamma")?);
-        video.add_option("Primaries", self.get_string("video-params/primaries")?);
+        video.add_option(
+            "Color Space",
+            self.get_string("video-params/colormatrix")?
+                .map(|value| friendly_color_matrix(&value)),
+        );
+        video.add_option(
+            "Levels",
+            self.get_string("video-params/colorlevels")?
+                .map(|value| friendly_color_levels(&value)),
+        );
+        let transfer = self.get_string("video-params/gamma")?;
+        let primaries = self.get_string("video-params/primaries")?;
+        let signal_peak = self
+            .get_double("video-params/sig-peak")?
+            .filter(|value| value.is_finite() && *value > 0.0);
+        let peak_luminance = self
+            .get_double("video-params/max-luma")?
+            .filter(|value| value.is_finite() && *value > 0.0);
+        video.add_option(
+            "Dynamic Range",
+            dynamic_range_summary(
+                transfer.as_deref(),
+                primaries.as_deref(),
+                signal_peak,
+                peak_luminance,
+            ),
+        );
+        video.add_option("Transfer", transfer.map(|value| friendly_transfer(&value)));
+        video.add_option(
+            "Primaries",
+            primaries.map(|value| friendly_primaries(&value)),
+        );
         video.add_option(
             "Chroma Location",
             self.get_string("video-params/chroma-location")?,
         );
         video.add_option(
             "Signal Peak",
-            self.get_double("video-params/sig-peak")?
-                .filter(|value| value.is_finite() && *value > 0.0)
-                .map(|value| format!("{value:.3}")),
+            signal_peak.map(|value| format!("{value:.3}")),
         );
         video.add_option(
             "Peak Luminance",
-            self.get_double("video-params/max-luma")?
-                .filter(|value| value.is_finite() && *value > 0.0)
-                .map(|value| format!("{value:.0} nits")),
+            peak_luminance.map(|value| format!("{value:.0} nits")),
         );
         video.add_option(
             "Rotation",
@@ -1137,6 +1168,138 @@ fn friendly_codec(codec: &str) -> String {
     }
 }
 
+fn bit_depth_from_pixel_format(pixel_format: &str) -> Option<u8> {
+    let value = pixel_format.to_ascii_lowercase();
+    if value.contains("nv12")
+        || value.contains("rgb24")
+        || value.contains("rgba")
+        || value.contains("bgra")
+    {
+        return Some(8);
+    }
+    if value.contains("p016") {
+        return Some(16);
+    }
+    if value.contains("p012") {
+        return Some(12);
+    }
+    if value.contains("p010") {
+        return Some(10);
+    }
+    for depth in [16, 14, 12, 10, 9] {
+        let depth = depth.to_string();
+        if value.contains(&format!("p{depth}"))
+            || value.contains(&format!("{depth}le"))
+            || value.contains(&format!("{depth}be"))
+        {
+            return depth.parse().ok();
+        }
+    }
+    if value.contains("yuv420p") || value.contains("yuv422p") || value.contains("yuv444p") {
+        return Some(8);
+    }
+    None
+}
+
+fn dynamic_range_summary(
+    transfer: Option<&str>,
+    primaries: Option<&str>,
+    signal_peak: Option<f64>,
+    peak_luminance: Option<f64>,
+) -> Option<String> {
+    let transfer_label = transfer.map(friendly_transfer);
+    let primaries_label = primaries.map(friendly_primaries);
+    let hdr = transfer.is_some_and(is_hdr_transfer)
+        || primaries.is_some_and(is_hdr_primaries)
+        || signal_peak.is_some_and(|value| value > 1.1)
+        || peak_luminance.is_some_and(|value| value >= 400.0);
+
+    if hdr {
+        let mut evidence = Vec::new();
+        if let Some(transfer) = transfer_label.as_deref()
+            && transfer != "Unknown"
+        {
+            evidence.push(transfer);
+        }
+        if let Some(primaries) = primaries_label.as_deref()
+            && primaries != "Unknown"
+        {
+            evidence.push(primaries);
+        }
+        if evidence.is_empty() {
+            Some("HDR".to_owned())
+        } else {
+            Some(format!("HDR ({})", evidence.join(", ")))
+        }
+    } else if transfer.is_some() || primaries.is_some() {
+        Some("SDR".to_owned())
+    } else {
+        None
+    }
+}
+
+fn is_hdr_transfer(value: &str) -> bool {
+    matches!(
+        value.to_ascii_lowercase().as_str(),
+        "pq" | "smpte2084" | "st2084" | "hlg" | "arib-std-b67"
+    )
+}
+
+fn is_hdr_primaries(value: &str) -> bool {
+    matches!(
+        value.to_ascii_lowercase().as_str(),
+        "bt.2020" | "bt2020" | "bt.2100" | "bt2100"
+    )
+}
+
+fn friendly_transfer(value: &str) -> String {
+    match value.to_ascii_lowercase().as_str() {
+        "pq" | "smpte2084" | "st2084" => "PQ / ST 2084".to_owned(),
+        "hlg" | "arib-std-b67" => "HLG".to_owned(),
+        "bt.1886" => "BT.1886".to_owned(),
+        "srgb" => "sRGB".to_owned(),
+        "gamma2.2" => "Gamma 2.2".to_owned(),
+        "gamma2.8" => "Gamma 2.8".to_owned(),
+        "unknown" => "Unknown".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
+fn friendly_primaries(value: &str) -> String {
+    match value.to_ascii_lowercase().as_str() {
+        "bt.2020" | "bt2020" => "BT.2020".to_owned(),
+        "bt.709" | "bt709" => "BT.709".to_owned(),
+        "bt.601-625" => "BT.601 PAL".to_owned(),
+        "bt.601-525" => "BT.601 NTSC".to_owned(),
+        "dci-p3" => "DCI-P3".to_owned(),
+        "display-p3" => "Display P3".to_owned(),
+        "unknown" => "Unknown".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
+fn friendly_color_matrix(value: &str) -> String {
+    match value.to_ascii_lowercase().as_str() {
+        "bt.2020-ncl" => "BT.2020 non-constant luminance".to_owned(),
+        "bt.2020-cl" => "BT.2020 constant luminance".to_owned(),
+        "bt.709" | "bt709" => "BT.709".to_owned(),
+        "bt.601" | "bt601" => "BT.601".to_owned(),
+        "smpte-240m" => "SMPTE 240M".to_owned(),
+        "rgb" => "RGB".to_owned(),
+        "unknown" => "Unknown".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
+fn friendly_color_levels(value: &str) -> String {
+    match value.to_ascii_lowercase().as_str() {
+        "limited" | "tv" => "Limited / TV".to_owned(),
+        "full" | "pc" => "Full / PC".to_owned(),
+        "unknown" => "Unknown".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
 fn format_bytes(bytes: i64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut value = bytes.max(0) as f64;
@@ -1541,5 +1704,45 @@ mod tests {
         assert_eq!(friendly_codec("h264"), "H.264 / AVC");
         assert_eq!(friendly_codec("eac3"), "E-AC-3");
         assert_eq!(friendly_codec("subrip"), "SRT");
+    }
+
+    #[test]
+    fn extracts_bit_depth_from_common_pixel_formats() {
+        assert_eq!(bit_depth_from_pixel_format("yuv420p"), Some(8));
+        assert_eq!(bit_depth_from_pixel_format("nv12"), Some(8));
+        assert_eq!(bit_depth_from_pixel_format("p010"), Some(10));
+        assert_eq!(bit_depth_from_pixel_format("yuv420p10"), Some(10));
+        assert_eq!(bit_depth_from_pixel_format("yuv420p10le"), Some(10));
+        assert_eq!(bit_depth_from_pixel_format("yuv444p12le"), Some(12));
+        assert_eq!(bit_depth_from_pixel_format("p016"), Some(16));
+        assert_eq!(bit_depth_from_pixel_format("vaapi"), None);
+    }
+
+    #[test]
+    fn summarizes_dynamic_range_from_hdr_metadata() {
+        assert_eq!(
+            dynamic_range_summary(Some("pq"), Some("bt.2020"), Some(10.0), Some(1000.0)),
+            Some("HDR (PQ / ST 2084, BT.2020)".to_owned())
+        );
+        assert_eq!(
+            dynamic_range_summary(Some("hlg"), Some("bt.2020"), None, None),
+            Some("HDR (HLG, BT.2020)".to_owned())
+        );
+        assert_eq!(
+            dynamic_range_summary(Some("bt.1886"), Some("bt.709"), Some(1.0), Some(100.0)),
+            Some("SDR".to_owned())
+        );
+        assert_eq!(dynamic_range_summary(None, None, None, None), None);
+    }
+
+    #[test]
+    fn formats_color_metadata_for_media_info() {
+        assert_eq!(friendly_transfer("pq"), "PQ / ST 2084");
+        assert_eq!(friendly_primaries("bt.2020"), "BT.2020");
+        assert_eq!(
+            friendly_color_matrix("bt.2020-ncl"),
+            "BT.2020 non-constant luminance"
+        );
+        assert_eq!(friendly_color_levels("limited"), "Limited / TV");
     }
 }
