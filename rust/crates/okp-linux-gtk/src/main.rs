@@ -36,6 +36,11 @@ const LINUX_UPDATE_REPO_URL: &str = "https://github.com/BeFeast/ok-player";
 const LINUX_DEB_RELEASES_API_URL: &str = "https://api.github.com/repos/BeFeast/ok-player/releases";
 const UPDATE_STATUS_NOT_CHECKED: &str = "Not checked yet";
 const DEB_SELF_INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
+const SETTINGS_REFERENCE_WIDTH: i32 = 744;
+const SETTINGS_REFERENCE_HEIGHT: i32 = 1030;
+const SETTINGS_RAIL_WIDTH: i32 = 192;
+const SETTINGS_CONTENT_WIDTH: i32 = SETTINGS_REFERENCE_WIDTH - SETTINGS_RAIL_WIDTH;
+const CAPTIONLESS_DRAG_HEIGHT: i32 = 32;
 const LINUX_KEY_MEDIA_MIME_TYPES: &[&str] = &[
     "video/mp4",
     "video/x-matroska",
@@ -4165,19 +4170,37 @@ fn command_dialog_title(title: &str) -> gtk::Label {
     label
 }
 
+fn captionless_transient_window(
+    parent: &gtk::ApplicationWindow,
+    title: &str,
+    default_width: i32,
+    default_height: i32,
+    resizable: bool,
+) -> gtk::Window {
+    let window = gtk::Window::builder()
+        .title(title)
+        .transient_for(parent)
+        .default_width(default_width)
+        .default_height(default_height)
+        .resizable(resizable)
+        .decorated(false)
+        .build();
+    window.set_decorated(false);
+    window
+}
+
 fn open_settings_window(
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) {
-    let window = gtk::Window::builder()
-        .title("Settings")
-        .transient_for(parent)
-        .default_width(744)
-        .default_height(1030)
-        .resizable(false)
-        .decorated(false)
-        .build();
+    let window = captionless_transient_window(
+        parent,
+        "Settings",
+        SETTINGS_REFERENCE_WIDTH,
+        SETTINGS_REFERENCE_HEIGHT,
+        false,
+    );
     window.add_css_class("okp-settings-window");
 
     let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -4304,7 +4327,7 @@ fn open_settings_window(
     stack.set_visible_child_name("about");
     root.append(&settings_nav_rail_frame(settings_nav_rail(&stack)));
 
-    stack.set_size_request(552, 1030);
+    stack.set_size_request(SETTINGS_CONTENT_WIDTH, SETTINGS_REFERENCE_HEIGHT);
     root.append(&stack);
 
     let window_overlay = gtk::Overlay::new();
@@ -4319,8 +4342,8 @@ fn settings_scroller<T: IsA<gtk::Widget>>(child: &T) -> gtk::ScrolledWindow {
     let scroller = gtk::ScrolledWindow::new();
     scroller.add_css_class("okp-settings-scroller");
     scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-    scroller.set_min_content_width(552);
-    scroller.set_max_content_width(552);
+    scroller.set_min_content_width(SETTINGS_CONTENT_WIDTH);
+    scroller.set_max_content_width(SETTINGS_CONTENT_WIDTH);
     scroller.set_propagate_natural_width(false);
     scroller.set_hexpand(true);
     scroller.set_vexpand(true);
@@ -4332,10 +4355,10 @@ fn settings_nav_rail_frame(rail: gtk::Box) -> gtk::ScrolledWindow {
     let frame = gtk::ScrolledWindow::new();
     frame.add_css_class("okp-settings-rail-frame");
     frame.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Never);
-    frame.set_min_content_width(192);
-    frame.set_max_content_width(192);
+    frame.set_min_content_width(SETTINGS_RAIL_WIDTH);
+    frame.set_max_content_width(SETTINGS_RAIL_WIDTH);
     frame.set_propagate_natural_width(false);
-    frame.set_size_request(192, 1030);
+    frame.set_size_request(SETTINGS_RAIL_WIDTH, SETTINGS_REFERENCE_HEIGHT);
     frame.set_child(Some(&rail));
     frame
 }
@@ -4356,7 +4379,7 @@ enum SettingsNavIcon {
 fn settings_nav_rail(stack: &gtk::Stack) -> gtk::Box {
     let rail = gtk::Box::new(gtk::Orientation::Vertical, 2);
     rail.add_css_class("okp-settings-rail");
-    rail.set_size_request(192, 1030);
+    rail.set_size_request(SETTINGS_RAIL_WIDTH, SETTINGS_REFERENCE_HEIGHT);
 
     let title = gtk::Label::new(Some("Settings"));
     title.add_css_class("okp-settings-rail-title");
@@ -4464,7 +4487,7 @@ fn captionless_window_drag_layer(window: &gtk::Window) -> gtk::Box {
     drag_layer.set_halign(gtk::Align::Fill);
     drag_layer.set_valign(gtk::Align::Start);
     drag_layer.set_can_target(true);
-    drag_layer.set_height_request(32);
+    drag_layer.set_height_request(CAPTIONLESS_DRAG_HEIGHT);
     connect_captionless_window_drag(&drag_layer, window);
     drag_layer
 }
@@ -8376,13 +8399,7 @@ fn show_media_info_window(
     media_info: &MediaInfo,
     status_toast: Rc<StatusToast>,
 ) {
-    let window = gtk::Window::builder()
-        .title("Media Information")
-        .transient_for(parent)
-        .default_width(680)
-        .default_height(820)
-        .decorated(false)
-        .build();
+    let window = captionless_transient_window(parent, "Media Information", 680, 820, true);
     window.add_css_class("okp-info-window");
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -10722,6 +10739,18 @@ fn install_css() {
             border: none;
         }
 
+        window.okp-settings-window headerbar,
+        window.okp-info-window headerbar,
+        window.okp-settings-window decoration,
+        window.okp-info-window decoration {
+            min-height: 0;
+            margin: 0;
+            padding: 0;
+            border: none;
+            background: transparent;
+            box-shadow: none;
+        }
+
         .okp-info-root {
             background: #eef4f9;
             color: #161616;
@@ -11444,6 +11473,19 @@ mod tests {
         assert_eq!(about_hero_channel("Linux alpha"), "ALPHA");
         assert_eq!(about_display_channel("1.0.0-linux"), "Linux");
         assert_eq!(about_hero_channel("Linux"), "LINUX");
+    }
+
+    #[test]
+    fn settings_shell_matches_windows_reference_geometry() {
+        assert_eq!(SETTINGS_REFERENCE_WIDTH, 744);
+        assert_eq!(SETTINGS_REFERENCE_HEIGHT, 1030);
+        assert_eq!(SETTINGS_RAIL_WIDTH, 192);
+        assert_eq!(SETTINGS_CONTENT_WIDTH, 552);
+        assert_eq!(
+            SETTINGS_RAIL_WIDTH + SETTINGS_CONTENT_WIDTH,
+            SETTINGS_REFERENCE_WIDTH
+        );
+        assert_eq!(CAPTIONLESS_DRAG_HEIGHT, 32);
     }
 
     #[test]
