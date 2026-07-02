@@ -4445,7 +4445,10 @@ fn open_settings_window(
 
     let shortcuts_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
     shortcuts_page.add_css_class("okp-settings-page");
-    shortcuts_page.append(&settings_shortcuts_section());
+    shortcuts_page.append(&settings_shortcuts_section(
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    ));
     stack.add_named(&settings_scroller(&shortcuts_page), Some("shortcuts"));
 
     let integration_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
@@ -7871,27 +7874,136 @@ fn settings_hwdec_row(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusTo
     row
 }
 
-fn settings_shortcuts_section() -> gtk::Box {
-    let section = settings_section("Shortcuts");
-    section.append(&settings_value_row("Play / Pause", "Space"));
-    section.append(&settings_value_row("Seek", "Left / Right"));
-    section.append(&settings_value_row("Frame step", ", / ."));
-    section.append(&settings_value_row("Playlist", "Page Up / Page Down"));
-    section.append(&settings_value_row("Volume", "Up / Down"));
-    section.append(&settings_value_row("Open file", "O"));
-    section.append(&settings_value_row("Open URL", "U"));
-    section.append(&settings_value_row("Add subtitle", "S"));
-    section.append(&settings_value_row("Close media", "X"));
-    section.append(&settings_value_row("Screenshot", "C"));
-    section.append(&settings_value_row("Copy frame", "Shift+C"));
-    section.append(&settings_value_row("Media info", "I"));
-    section.append(&settings_value_row("Go to time", "J"));
-    section.append(&settings_value_row("A-B loop", "L"));
-    section.append(&settings_value_row("Subtitle delay", "Z / Shift+Z"));
-    section.append(&settings_value_row("Subtitle size", "[ / ]"));
-    section.append(&settings_value_row("Fullscreen", "F / Esc"));
-    section.append(&settings_value_row("Settings", "Ctrl+,"));
+fn settings_shortcuts_section(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    content.append(&settings_keybindings_section(state, status_toast));
+    content.append(&settings_shortcut_defaults_section());
+    content
+}
+
+fn settings_shortcut_defaults_section() -> gtk::Box {
+    let section = settings_section("Action IDs");
+    for action in SHORTCUT_ACTIONS {
+        section.append(&settings_value_row(
+            &format!("{} ({})", action.label(), action.id()),
+            action.default_shortcut(),
+        ));
+    }
     section
+}
+
+fn settings_keybindings_section(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let section = settings_section("Keybinding Remap");
+
+    let detail = gtk::Label::new(Some(
+        "Override defaults with action=shortcut lines. Example: play-pause=P.",
+    ));
+    detail.add_css_class("okp-update-status");
+    detail.set_xalign(0.0);
+    detail.set_width_chars(1);
+    detail.set_max_width_chars(58);
+    detail.set_wrap(true);
+    section.append(&detail);
+
+    let editor = gtk::TextView::new();
+    editor.add_css_class("okp-mpv-conf-editor");
+    editor.set_monospace(true);
+    editor.set_wrap_mode(gtk::WrapMode::None);
+    editor.set_accepts_tab(true);
+    editor
+        .buffer()
+        .set_text(state.borrow().settings.raw_keybindings_config());
+
+    let scroller = gtk::ScrolledWindow::new();
+    scroller.add_css_class("okp-mpv-conf-scroller");
+    scroller.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
+    scroller.set_min_content_height(132);
+    scroller.set_child(Some(&editor));
+    section.append(&scroller);
+
+    let status = gtk::Label::new(Some(
+        "Supported modifiers: Ctrl, Alt, Shift. Leave blank to use defaults.",
+    ));
+    status.add_css_class("okp-update-status");
+    status.set_xalign(0.0);
+    status.set_width_chars(1);
+    status.set_max_width_chars(58);
+    status.set_wrap(true);
+    section.append(&status);
+
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    actions.add_css_class("okp-settings-action-row");
+    actions.set_halign(gtk::Align::End);
+
+    let reset = gtk::Button::with_label("Reset");
+    reset.add_css_class("okp-settings-button");
+    let reset_buffer = editor.buffer();
+    let reset_state = Rc::clone(&state);
+    let reset_toast = Rc::clone(&status_toast);
+    let reset_status = status.clone();
+    reset.connect_clicked(move |_| {
+        reset_buffer.set_text("");
+        apply_raw_keybindings_setting("", &reset_status, &reset_state, &reset_toast);
+    });
+    actions.append(&reset);
+
+    let apply = gtk::Button::with_label("Apply");
+    apply.add_css_class("okp-settings-button");
+    let apply_buffer = editor.buffer();
+    let apply_state = Rc::clone(&state);
+    let apply_toast = Rc::clone(&status_toast);
+    let apply_status = status.clone();
+    apply.connect_clicked(move |_| {
+        let text = text_buffer_string(&apply_buffer);
+        apply_raw_keybindings_setting(&text, &apply_status, &apply_state, &apply_toast);
+    });
+    actions.append(&apply);
+
+    section.append(&actions);
+    section
+}
+
+fn apply_raw_keybindings_setting(
+    text: &str,
+    status: &gtk::Label,
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &Rc<StatusToast>,
+) {
+    if let Err(error) = resolved_shortcut_bindings_from_text(text) {
+        if error.line == 0 {
+            status.set_text(&error.message);
+        } else {
+            status.set_text(&format!("Line {}: {}", error.line, error.message));
+        }
+        status_toast.show("Keybindings have an error");
+        return;
+    }
+
+    let save_result = {
+        let mut state = state.borrow_mut();
+        state.settings.set_raw_keybindings_config(text);
+        state.settings.save()
+    };
+    if let Err(error) = save_result {
+        eprintln!("Failed to save keybinding remap setting: {error}");
+        status.set_text("Could not save keybindings.");
+        status_toast.show("Could not save keybindings");
+        return;
+    }
+
+    if text.trim().is_empty() {
+        status.set_text("Reset saved. Default shortcuts apply immediately.");
+        status_toast.show("Keybindings reset");
+    } else {
+        status.set_text("Saved. New shortcuts apply immediately.");
+        status_toast.show("Keybindings saved");
+    }
 }
 
 fn settings_private_session_row(
@@ -8257,6 +8369,419 @@ fn load_selected_subtitles(state: &Rc<RefCell<PlayerState>>, paths: Vec<PathBuf>
     loaded
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShortcutAction {
+    PlayPause,
+    SeekBack,
+    SeekForward,
+    FrameForward,
+    FrameBack,
+    PreviousItem,
+    NextItem,
+    VolumeDown,
+    VolumeUp,
+    OpenFile,
+    AddSubtitle,
+    OpenUrl,
+    CloseMedia,
+    SaveScreenshot,
+    CopyFrame,
+    MediaInfo,
+    GoToTime,
+    AbLoop,
+    SubtitleDelayForward,
+    SubtitleDelayBack,
+    SubtitleSizeDown,
+    SubtitleSizeUp,
+    Fullscreen,
+    EscapeFullscreen,
+    OpenSettings,
+}
+
+impl ShortcutAction {
+    fn id(self) -> &'static str {
+        match self {
+            Self::PlayPause => "play-pause",
+            Self::SeekBack => "seek-back",
+            Self::SeekForward => "seek-forward",
+            Self::FrameForward => "frame-forward",
+            Self::FrameBack => "frame-back",
+            Self::PreviousItem => "previous-item",
+            Self::NextItem => "next-item",
+            Self::VolumeDown => "volume-down",
+            Self::VolumeUp => "volume-up",
+            Self::OpenFile => "open-file",
+            Self::AddSubtitle => "add-subtitle",
+            Self::OpenUrl => "open-url",
+            Self::CloseMedia => "close-media",
+            Self::SaveScreenshot => "save-screenshot",
+            Self::CopyFrame => "copy-frame",
+            Self::MediaInfo => "media-info",
+            Self::GoToTime => "go-to-time",
+            Self::AbLoop => "ab-loop",
+            Self::SubtitleDelayForward => "subtitle-delay-forward",
+            Self::SubtitleDelayBack => "subtitle-delay-back",
+            Self::SubtitleSizeDown => "subtitle-size-down",
+            Self::SubtitleSizeUp => "subtitle-size-up",
+            Self::Fullscreen => "fullscreen",
+            Self::EscapeFullscreen => "escape-fullscreen",
+            Self::OpenSettings => "open-settings",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::PlayPause => "Play / Pause",
+            Self::SeekBack => "Seek Back",
+            Self::SeekForward => "Seek Forward",
+            Self::FrameForward => "Frame Forward",
+            Self::FrameBack => "Frame Back",
+            Self::PreviousItem => "Previous Item",
+            Self::NextItem => "Next Item",
+            Self::VolumeDown => "Volume Down",
+            Self::VolumeUp => "Volume Up",
+            Self::OpenFile => "Open File",
+            Self::AddSubtitle => "Add Subtitle",
+            Self::OpenUrl => "Open URL",
+            Self::CloseMedia => "Close Media",
+            Self::SaveScreenshot => "Save Screenshot",
+            Self::CopyFrame => "Copy Frame",
+            Self::MediaInfo => "Media Info",
+            Self::GoToTime => "Go to Time",
+            Self::AbLoop => "A-B Loop",
+            Self::SubtitleDelayForward => "Subtitle Delay Forward",
+            Self::SubtitleDelayBack => "Subtitle Delay Back",
+            Self::SubtitleSizeDown => "Subtitle Size Down",
+            Self::SubtitleSizeUp => "Subtitle Size Up",
+            Self::Fullscreen => "Fullscreen",
+            Self::EscapeFullscreen => "Exit Fullscreen",
+            Self::OpenSettings => "Settings",
+        }
+    }
+
+    fn default_shortcut(self) -> &'static str {
+        match self {
+            Self::PlayPause => "Space",
+            Self::SeekBack => "Left",
+            Self::SeekForward => "Right",
+            Self::FrameForward => ".",
+            Self::FrameBack => ",",
+            Self::PreviousItem => "PageUp",
+            Self::NextItem => "PageDown",
+            Self::VolumeDown => "Down",
+            Self::VolumeUp => "Up",
+            Self::OpenFile => "O",
+            Self::AddSubtitle => "S",
+            Self::OpenUrl => "U",
+            Self::CloseMedia => "X",
+            Self::SaveScreenshot => "C",
+            Self::CopyFrame => "Shift+C",
+            Self::MediaInfo => "I",
+            Self::GoToTime => "J",
+            Self::AbLoop => "L",
+            Self::SubtitleDelayForward => "Z",
+            Self::SubtitleDelayBack => "Shift+Z",
+            Self::SubtitleSizeDown => "[",
+            Self::SubtitleSizeUp => "]",
+            Self::Fullscreen => "F",
+            Self::EscapeFullscreen => "Escape",
+            Self::OpenSettings => "Ctrl+,",
+        }
+    }
+}
+
+const SHORTCUT_ACTIONS: &[ShortcutAction] = &[
+    ShortcutAction::PlayPause,
+    ShortcutAction::SeekBack,
+    ShortcutAction::SeekForward,
+    ShortcutAction::FrameForward,
+    ShortcutAction::FrameBack,
+    ShortcutAction::PreviousItem,
+    ShortcutAction::NextItem,
+    ShortcutAction::VolumeDown,
+    ShortcutAction::VolumeUp,
+    ShortcutAction::OpenFile,
+    ShortcutAction::AddSubtitle,
+    ShortcutAction::OpenUrl,
+    ShortcutAction::CloseMedia,
+    ShortcutAction::SaveScreenshot,
+    ShortcutAction::CopyFrame,
+    ShortcutAction::MediaInfo,
+    ShortcutAction::GoToTime,
+    ShortcutAction::AbLoop,
+    ShortcutAction::SubtitleDelayForward,
+    ShortcutAction::SubtitleDelayBack,
+    ShortcutAction::SubtitleSizeDown,
+    ShortcutAction::SubtitleSizeUp,
+    ShortcutAction::Fullscreen,
+    ShortcutAction::EscapeFullscreen,
+    ShortcutAction::OpenSettings,
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ShortcutChord {
+    key: gdk::Key,
+    modifiers: gdk::ModifierType,
+}
+
+impl ShortcutChord {
+    fn new(key: gdk::Key, modifiers: gdk::ModifierType) -> Self {
+        Self {
+            key: key.to_lower(),
+            modifiers: shortcut_modifiers(modifiers),
+        }
+    }
+
+    fn matches(self, key: gdk::Key, modifiers: gdk::ModifierType) -> bool {
+        self.key == key.to_lower() && self.modifiers == shortcut_modifiers(modifiers)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ShortcutBinding {
+    action: ShortcutAction,
+    chord: ShortcutChord,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShortcutConfigError {
+    line: usize,
+    message: String,
+}
+
+fn shortcut_modifiers(modifiers: gdk::ModifierType) -> gdk::ModifierType {
+    modifiers
+        & (gdk::ModifierType::CONTROL_MASK
+            | gdk::ModifierType::SHIFT_MASK
+            | gdk::ModifierType::ALT_MASK)
+}
+
+fn shortcut_action_by_id(id: &str) -> Option<ShortcutAction> {
+    SHORTCUT_ACTIONS
+        .iter()
+        .copied()
+        .find(|action| action.id() == id)
+}
+
+fn default_shortcut_bindings() -> Vec<ShortcutBinding> {
+    SHORTCUT_ACTIONS
+        .iter()
+        .copied()
+        .map(|action| ShortcutBinding {
+            action,
+            chord: parse_shortcut_chord(action.default_shortcut(), 0)
+                .expect("default shortcuts should parse"),
+        })
+        .collect()
+}
+
+fn resolved_shortcut_bindings(
+    settings: &settings::SettingsStore,
+) -> Result<Vec<ShortcutBinding>, ShortcutConfigError> {
+    resolved_shortcut_bindings_from_text(settings.raw_keybindings_config())
+}
+
+fn resolved_shortcut_bindings_from_text(
+    text: &str,
+) -> Result<Vec<ShortcutBinding>, ShortcutConfigError> {
+    let mut bindings = default_shortcut_bindings();
+    for (action, chord) in parse_raw_keybindings_config(text)? {
+        if let Some(binding) = bindings.iter_mut().find(|binding| binding.action == action) {
+            binding.chord = chord;
+        }
+    }
+    validate_shortcut_conflicts(&bindings)?;
+    Ok(bindings)
+}
+
+fn keyboard_action_for_event(
+    settings: &settings::SettingsStore,
+    key: gdk::Key,
+    modifiers: gdk::ModifierType,
+) -> Option<ShortcutAction> {
+    let bindings = resolved_shortcut_bindings(settings).unwrap_or_else(|error| {
+        eprintln!(
+            "Ignoring custom keybindings at line {}: {}",
+            error.line, error.message
+        );
+        default_shortcut_bindings()
+    });
+
+    shortcut_action_for_bindings(&bindings, key, modifiers)
+}
+
+fn shortcut_action_for_bindings(
+    bindings: &[ShortcutBinding],
+    key: gdk::Key,
+    modifiers: gdk::ModifierType,
+) -> Option<ShortcutAction> {
+    bindings
+        .iter()
+        .find(|binding| binding.chord.matches(key, modifiers))
+        .map(|binding| binding.action)
+}
+
+fn parse_raw_keybindings_config(
+    text: &str,
+) -> Result<Vec<(ShortcutAction, ShortcutChord)>, ShortcutConfigError> {
+    let mut overrides = Vec::new();
+
+    for (index, line) in text.lines().enumerate() {
+        let line_number = index + 1;
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';') {
+            continue;
+        }
+
+        let Some((action_id, shortcut)) = trimmed.split_once('=') else {
+            return Err(shortcut_config_error(
+                line_number,
+                "Use action=shortcut syntax, one binding per line.",
+            ));
+        };
+        let action_id = action_id.trim();
+        let shortcut = shortcut.trim();
+        let Some(action) = shortcut_action_by_id(action_id) else {
+            return Err(shortcut_config_error(
+                line_number,
+                &format!("Unknown action `{action_id}`."),
+            ));
+        };
+        if overrides
+            .iter()
+            .any(|(existing_action, _)| *existing_action == action)
+        {
+            return Err(shortcut_config_error(
+                line_number,
+                &format!("Action `{action_id}` is already remapped."),
+            ));
+        }
+
+        overrides.push((action, parse_shortcut_chord(shortcut, line_number)?));
+    }
+
+    Ok(overrides)
+}
+
+fn parse_shortcut_chord(text: &str, line: usize) -> Result<ShortcutChord, ShortcutConfigError> {
+    let mut modifiers = gdk::ModifierType::empty();
+    let mut key = None::<gdk::Key>;
+
+    for token in text
+        .split('+')
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+    {
+        match token.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => modifiers |= gdk::ModifierType::CONTROL_MASK,
+            "alt" | "option" => modifiers |= gdk::ModifierType::ALT_MASK,
+            "shift" => modifiers |= gdk::ModifierType::SHIFT_MASK,
+            _ if key.is_none() => {
+                key = Some(shortcut_key_from_token(token).ok_or_else(|| {
+                    shortcut_config_error(line, &format!("Unknown key `{token}`."))
+                })?);
+            }
+            _ => {
+                return Err(shortcut_config_error(
+                    line,
+                    "Shortcut can only contain one non-modifier key.",
+                ));
+            }
+        }
+    }
+
+    let Some(key) = key else {
+        return Err(shortcut_config_error(line, "Shortcut key is empty."));
+    };
+
+    Ok(ShortcutChord::new(key, modifiers))
+}
+
+fn shortcut_key_from_token(token: &str) -> Option<gdk::Key> {
+    let normalized = match token.to_ascii_lowercase().as_str() {
+        "," | "comma" => "comma".to_owned(),
+        "." | "period" => "period".to_owned(),
+        "[" | "bracketleft" => "bracketleft".to_owned(),
+        "]" | "bracketright" => "bracketright".to_owned(),
+        "esc" | "escape" => "Escape".to_owned(),
+        "pageup" | "page_up" => "Page_Up".to_owned(),
+        "pagedown" | "page_down" => "Page_Down".to_owned(),
+        "space" => "space".to_owned(),
+        "left" => "Left".to_owned(),
+        "right" => "Right".to_owned(),
+        "up" => "Up".to_owned(),
+        "down" => "Down".to_owned(),
+        single if single.chars().count() == 1 => single.to_owned(),
+        _ => token.to_owned(),
+    };
+
+    gdk::Key::from_name(normalized)
+}
+
+fn validate_shortcut_conflicts(bindings: &[ShortcutBinding]) -> Result<(), ShortcutConfigError> {
+    for (index, left) in bindings.iter().enumerate() {
+        if let Some(right) = bindings
+            .iter()
+            .skip(index + 1)
+            .find(|right| right.chord == left.chord)
+        {
+            return Err(shortcut_config_error(
+                0,
+                &format!(
+                    "{} conflicts with {} on {}.",
+                    right.action.id(),
+                    left.action.id(),
+                    shortcut_chord_label(left.chord)
+                ),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn shortcut_config_error(line: usize, message: &str) -> ShortcutConfigError {
+    ShortcutConfigError {
+        line,
+        message: message.to_owned(),
+    }
+}
+
+fn shortcut_chord_label(chord: ShortcutChord) -> String {
+    let mut parts = Vec::new();
+    if chord.modifiers.contains(gdk::ModifierType::CONTROL_MASK) {
+        parts.push("Ctrl".to_owned());
+    }
+    if chord.modifiers.contains(gdk::ModifierType::ALT_MASK) {
+        parts.push("Alt".to_owned());
+    }
+    if chord.modifiers.contains(gdk::ModifierType::SHIFT_MASK) {
+        parts.push("Shift".to_owned());
+    }
+    parts.push(
+        chord
+            .key
+            .name()
+            .map(|name| shortcut_display_key(name.as_str()))
+            .unwrap_or_else(|| "Unknown".to_owned()),
+    );
+    parts.join("+")
+}
+
+fn shortcut_display_key(name: &str) -> String {
+    match name {
+        "space" => "Space".to_owned(),
+        "comma" => ",".to_owned(),
+        "period" => ".".to_owned(),
+        "bracketleft" => "[".to_owned(),
+        "bracketright" => "]".to_owned(),
+        "Page_Up" => "PageUp".to_owned(),
+        "Page_Down" => "PageDown".to_owned(),
+        key if key.len() == 1 => key.to_ascii_uppercase(),
+        key => key.to_owned(),
+    }
+}
+
 fn connect_keyboard(
     window: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
@@ -8268,68 +8793,57 @@ fn connect_keyboard(
     controller.connect_key_pressed(move |_, key, _, modifiers| {
         chrome.show_for_activity();
 
-        if modifiers.contains(gdk::ModifierType::CONTROL_MASK)
-            && !modifiers.intersects(gdk::ModifierType::ALT_MASK)
-            && key == gdk::Key::comma
-        {
-            open_settings_window(
-                &shortcut_window,
-                Rc::clone(&state),
-                Rc::clone(&status_toast),
-            );
-            return glib::Propagation::Stop;
-        }
+        let action = {
+            let state = state.borrow();
+            keyboard_action_for_event(&state.settings, key, modifiers)
+        };
 
-        if modifiers.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK) {
-            return glib::Propagation::Proceed;
-        }
-
-        match key {
-            gdk::Key::space => {
+        match action {
+            Some(ShortcutAction::PlayPause) => {
                 with_mpv(&state, |mpv| mpv.cycle_pause());
                 glib::Propagation::Stop
             }
-            gdk::Key::Left => {
+            Some(ShortcutAction::SeekBack) => {
                 with_mpv(&state, |mpv| mpv.seek_relative(-5.0));
                 glib::Propagation::Stop
             }
-            gdk::Key::Right => {
+            Some(ShortcutAction::SeekForward) => {
                 with_mpv(&state, |mpv| mpv.seek_relative(5.0));
                 glib::Propagation::Stop
             }
-            gdk::Key::period => {
+            Some(ShortcutAction::FrameForward) => {
                 with_mpv(&state, |mpv| mpv.frame_step());
                 glib::Propagation::Stop
             }
-            gdk::Key::comma => {
+            Some(ShortcutAction::FrameBack) => {
                 with_mpv(&state, |mpv| mpv.frame_back_step());
                 glib::Propagation::Stop
             }
-            gdk::Key::Page_Up | gdk::Key::KP_Page_Up => {
+            Some(ShortcutAction::PreviousItem) => {
                 navigate_playlist(&state, -1);
                 glib::Propagation::Stop
             }
-            gdk::Key::Page_Down | gdk::Key::KP_Page_Down => {
+            Some(ShortcutAction::NextItem) => {
                 navigate_playlist(&state, 1);
                 glib::Propagation::Stop
             }
-            gdk::Key::Down => {
+            Some(ShortcutAction::VolumeDown) => {
                 adjust_volume(&state, -5.0);
                 glib::Propagation::Stop
             }
-            gdk::Key::Up => {
+            Some(ShortcutAction::VolumeUp) => {
                 adjust_volume(&state, 5.0);
                 glib::Propagation::Stop
             }
-            gdk::Key::o | gdk::Key::O => {
+            Some(ShortcutAction::OpenFile) => {
                 open_media_dialog(&shortcut_window, Rc::clone(&state));
                 glib::Propagation::Stop
             }
-            gdk::Key::s | gdk::Key::S => {
+            Some(ShortcutAction::AddSubtitle) => {
                 open_subtitle_dialog(&shortcut_window, Rc::clone(&state));
                 glib::Propagation::Stop
             }
-            gdk::Key::u | gdk::Key::U => {
+            Some(ShortcutAction::OpenUrl) => {
                 open_url_dialog(
                     &shortcut_window,
                     Rc::clone(&state),
@@ -8337,27 +8851,23 @@ fn connect_keyboard(
                 );
                 glib::Propagation::Stop
             }
-            gdk::Key::x | gdk::Key::X => {
+            Some(ShortcutAction::CloseMedia) => {
                 close_current_media(&state, &status_toast);
                 glib::Propagation::Stop
             }
-            gdk::Key::c if modifiers.contains(gdk::ModifierType::SHIFT_MASK) => {
+            Some(ShortcutAction::CopyFrame) => {
                 copy_frame_to_clipboard(&state, &status_toast);
                 glib::Propagation::Stop
             }
-            gdk::Key::C => {
-                copy_frame_to_clipboard(&state, &status_toast);
-                glib::Propagation::Stop
-            }
-            gdk::Key::c => {
+            Some(ShortcutAction::SaveScreenshot) => {
                 save_screenshot(&state, &status_toast, false);
                 glib::Propagation::Stop
             }
-            gdk::Key::i | gdk::Key::I => {
+            Some(ShortcutAction::MediaInfo) => {
                 open_media_info_window(&shortcut_window, &state, Rc::clone(&status_toast));
                 glib::Propagation::Stop
             }
-            gdk::Key::j | gdk::Key::J => {
+            Some(ShortcutAction::GoToTime) => {
                 open_go_to_time_dialog(
                     &shortcut_window,
                     Rc::clone(&state),
@@ -8365,32 +8875,40 @@ fn connect_keyboard(
                 );
                 glib::Propagation::Stop
             }
-            gdk::Key::l | gdk::Key::L => {
+            Some(ShortcutAction::AbLoop) => {
                 toggle_ab_loop(&state, &status_toast);
                 glib::Propagation::Stop
             }
-            gdk::Key::z => {
+            Some(ShortcutAction::SubtitleDelayForward) => {
                 adjust_subtitle_delay(&state, 0.05);
                 glib::Propagation::Stop
             }
-            gdk::Key::Z => {
+            Some(ShortcutAction::SubtitleDelayBack) => {
                 adjust_subtitle_delay(&state, -0.05);
                 glib::Propagation::Stop
             }
-            gdk::Key::bracketleft => {
+            Some(ShortcutAction::SubtitleSizeDown) => {
                 adjust_subtitle_scale(&state, -0.1);
                 glib::Propagation::Stop
             }
-            gdk::Key::bracketright => {
+            Some(ShortcutAction::SubtitleSizeUp) => {
                 adjust_subtitle_scale(&state, 0.1);
                 glib::Propagation::Stop
             }
-            gdk::Key::f | gdk::Key::F => {
+            Some(ShortcutAction::Fullscreen) => {
                 toggle_fullscreen(&shortcut_window);
                 glib::Propagation::Stop
             }
-            gdk::Key::Escape if shortcut_window.is_fullscreen() => {
+            Some(ShortcutAction::EscapeFullscreen) if shortcut_window.is_fullscreen() => {
                 shortcut_window.unfullscreen();
+                glib::Propagation::Stop
+            }
+            Some(ShortcutAction::OpenSettings) => {
+                open_settings_window(
+                    &shortcut_window,
+                    Rc::clone(&state),
+                    Rc::clone(&status_toast),
+                );
                 glib::Propagation::Stop
             }
             _ => glib::Propagation::Proceed,
@@ -11864,6 +12382,91 @@ script-opts=osc-layout=bottombar
 
         assert_eq!(error.line, 1);
         assert!(error.message.contains("NUL"));
+    }
+
+    #[test]
+    fn shortcut_parser_accepts_action_overrides() {
+        let bindings = resolved_shortcut_bindings_from_text(
+            "\
+play-pause=P
+copy-frame=Ctrl+Shift+C
+",
+        )
+        .expect("shortcuts should parse");
+
+        assert_eq!(
+            shortcut_action_for_bindings(
+                &bindings,
+                gdk::Key::from_name("p").expect("key exists"),
+                gdk::ModifierType::empty(),
+            ),
+            Some(ShortcutAction::PlayPause)
+        );
+        assert_eq!(
+            shortcut_action_for_bindings(
+                &bindings,
+                gdk::Key::from_name("space").expect("key exists"),
+                gdk::ModifierType::empty(),
+            ),
+            None
+        );
+        assert_eq!(
+            shortcut_action_for_bindings(
+                &bindings,
+                gdk::Key::from_name("C").expect("key exists"),
+                gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::SHIFT_MASK,
+            ),
+            Some(ShortcutAction::CopyFrame)
+        );
+    }
+
+    #[test]
+    fn shortcut_parser_rejects_unknown_action() {
+        let error = resolved_shortcut_bindings_from_text("dance=Space")
+            .expect_err("unknown action should fail");
+
+        assert_eq!(error.line, 1);
+        assert!(error.message.contains("Unknown action"));
+    }
+
+    #[test]
+    fn shortcut_parser_rejects_unknown_key() {
+        let error = resolved_shortcut_bindings_from_text("play-pause=HyperDrive")
+            .expect_err("unknown key should fail");
+
+        assert_eq!(error.line, 1);
+        assert!(error.message.contains("Unknown key"));
+    }
+
+    #[test]
+    fn shortcut_parser_rejects_conflicting_bindings() {
+        let error =
+            resolved_shortcut_bindings_from_text("play-pause=C").expect_err("conflict should fail");
+
+        assert_eq!(error.line, 0);
+        assert!(error.message.contains("conflicts"));
+    }
+
+    #[test]
+    fn shortcut_defaults_keep_shift_copy_frame_distinct() {
+        let bindings = default_shortcut_bindings();
+
+        assert_eq!(
+            shortcut_action_for_bindings(
+                &bindings,
+                gdk::Key::from_name("c").expect("key exists"),
+                gdk::ModifierType::empty(),
+            ),
+            Some(ShortcutAction::SaveScreenshot)
+        );
+        assert_eq!(
+            shortcut_action_for_bindings(
+                &bindings,
+                gdk::Key::from_name("C").expect("key exists"),
+                gdk::ModifierType::SHIFT_MASK,
+            ),
+            Some(ShortcutAction::CopyFrame)
+        );
     }
 
     #[test]

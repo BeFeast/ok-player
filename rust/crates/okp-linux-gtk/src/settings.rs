@@ -154,6 +154,10 @@ impl SettingsStore {
         self.data.advanced.mpv_conf.as_deref().unwrap_or("")
     }
 
+    pub fn raw_keybindings_config(&self) -> &str {
+        self.data.advanced.keybindings.as_deref().unwrap_or("")
+    }
+
     pub fn set_volume(&mut self, volume: f64) {
         let Some(volume) = normalized_volume(Some(volume)) else {
             return;
@@ -268,6 +272,14 @@ impl SettingsStore {
         }
     }
 
+    pub fn set_raw_keybindings_config(&mut self, text: &str) {
+        let updated = raw_mpv_config_setting(text);
+        if self.data.advanced.keybindings != updated {
+            self.data.advanced.keybindings = updated;
+            self.dirty = true;
+        }
+    }
+
     pub fn save(&mut self) -> io::Result<()> {
         if !self.dirty {
             return Ok(());
@@ -355,6 +367,8 @@ impl Default for UpdateSettings {
 struct AdvancedSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mpv_conf: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    keybindings: Option<String>,
 }
 
 fn settings_path() -> PathBuf {
@@ -739,6 +753,37 @@ mod tests {
 
         assert_eq!(settings.raw_mpv_config(), "");
         assert_eq!(settings.data.advanced.mpv_conf, None);
+        assert!(settings.dirty);
+    }
+
+    #[test]
+    fn raw_keybindings_config_stores_text_and_marks_dirty_once() {
+        let mut settings = store();
+
+        settings.set_raw_keybindings_config("play-pause=P\ncopy-frame=Shift+C\n");
+
+        assert_eq!(
+            settings.raw_keybindings_config(),
+            "play-pause=P\ncopy-frame=Shift+C\n"
+        );
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_raw_keybindings_config("play-pause=P\ncopy-frame=Shift+C\n");
+
+        assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn raw_keybindings_config_stores_blank_as_none() {
+        let mut settings = store();
+
+        settings.set_raw_keybindings_config("play-pause=P");
+        settings.dirty = false;
+        settings.set_raw_keybindings_config("\n ");
+
+        assert_eq!(settings.raw_keybindings_config(), "");
+        assert_eq!(settings.data.advanced.keybindings, None);
         assert!(settings.dirty);
     }
 }
