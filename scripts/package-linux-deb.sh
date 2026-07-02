@@ -42,6 +42,37 @@ Description: Elegant mpv-based media player
  This Linux package is an early GTK4/Rust alpha.
 CONTROL
 
+cat > "$BUILD_ROOT/DEBIAN/postinst" <<'POSTINST'
+#!/bin/sh
+set -e
+
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database -q /usr/share/applications || true
+fi
+
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+  gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || true
+fi
+
+exit 0
+POSTINST
+
+cat > "$BUILD_ROOT/DEBIAN/postrm" <<'POSTRM'
+#!/bin/sh
+set -e
+
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database -q /usr/share/applications || true
+fi
+
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+  gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || true
+fi
+
+exit 0
+POSTRM
+
+chmod 755 "$BUILD_ROOT/DEBIAN/postinst" "$BUILD_ROOT/DEBIAN/postrm"
 chmod -R u+rwX,go+rX,go-w "$BUILD_ROOT"
 dpkg-deb --root-owner-group --build "$BUILD_ROOT" "$DEB_DIR/${PACKAGE}_${VERSION}_${ARCH}.deb"
 
