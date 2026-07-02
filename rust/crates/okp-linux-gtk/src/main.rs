@@ -63,6 +63,7 @@ const VIDEO_ASPECT_PRESETS: [(&str, &str); 4] = [
 const AUDIO_DEVICE_AUTO: &str = "auto";
 const AUDIO_DEVICE_RESTORE_MAX_ATTEMPTS: u8 = 50;
 const AB_LOOP_COMBINED_MARK_EPSILON_SECS: f64 = 0.5;
+const PROTECTED_MPV_OPTIONS: &[&str] = &["config", "terminal", "idle", "force-window", "vo"];
 
 #[derive(Default)]
 struct PlayerState {
@@ -2023,9 +2024,38 @@ fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, launch
             return;
         }
 
-        let hwdec = realize_state.borrow().settings.hardware_decode_mpv_option();
-        let mut mpv = match Mpv::new_with_hwdec(hwdec) {
+        let (hwdec, raw_mpv_config) = {
+            let state = realize_state.borrow();
+            (
+                state.settings.hardware_decode_mpv_option().to_owned(),
+                state.settings.raw_mpv_config().to_owned(),
+            )
+        };
+        let raw_mpv_options = match parse_raw_mpv_config(&raw_mpv_config) {
+            Ok(options) => options,
+            Err(error) => {
+                eprintln!(
+                    "Ignoring custom mpv.conf option at line {}: {}",
+                    error.line, error.message
+                );
+                Vec::new()
+            }
+        };
+
+        let mut mpv = match Mpv::new_with_options(&hwdec, &raw_mpv_options) {
             Ok(mpv) => mpv,
+            Err(error) if !raw_mpv_options.is_empty() => {
+                eprintln!(
+                    "Failed to create mpv with custom mpv.conf options: {error}; retrying without them"
+                );
+                match Mpv::new_with_hwdec(&hwdec) {
+                    Ok(mpv) => mpv,
+                    Err(error) => {
+                        eprintln!("Failed to create mpv: {error}");
+                        return;
+                    }
+                }
+            }
             Err(error) => {
                 eprintln!("Failed to create mpv: {error}");
                 return;
@@ -2108,6 +2138,73 @@ fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, launch
         tick_area.queue_render();
         glib::ControlFlow::Continue
     });
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RawMpvConfigError {
+    line: usize,
+    message: String,
+}
+
+fn parse_raw_mpv_config(text: &str) -> Result<Vec<(String, String)>, RawMpvConfigError> {
+    let mut options = Vec::new();
+
+    for (index, line) in text.lines().enumerate() {
+        let line_number = index + 1;
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';') {
+            continue;
+        }
+
+        let option = trimmed.strip_prefix("--").unwrap_or(trimmed);
+        let Some((name, value)) = option.split_once('=') else {
+            return Err(raw_mpv_config_error(
+                line_number,
+                "Use key=value syntax, one option per line.",
+            ));
+        };
+        let name = name.trim();
+        let value = value.trim();
+
+        if name.is_empty() {
+            return Err(raw_mpv_config_error(line_number, "Option name is empty."));
+        }
+        if !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        {
+            return Err(raw_mpv_config_error(
+                line_number,
+                "Option names can use letters, numbers, hyphen, or underscore.",
+            ));
+        }
+        if name.contains('\0') || value.contains('\0') {
+            return Err(raw_mpv_config_error(
+                line_number,
+                "NUL bytes are not valid in mpv options.",
+            ));
+        }
+        if PROTECTED_MPV_OPTIONS
+            .iter()
+            .any(|protected| name.eq_ignore_ascii_case(protected))
+        {
+            return Err(raw_mpv_config_error(
+                line_number,
+                &format!("{name} is managed by OK Player."),
+            ));
+        }
+
+        options.push((name.to_owned(), value.to_owned()));
+    }
+
+    Ok(options)
+}
+
+fn raw_mpv_config_error(line: usize, message: &str) -> RawMpvConfigError {
+    RawMpvConfigError {
+        line,
+        message: message.to_owned(),
+    }
 }
 
 fn apply_launch_args(state: &Rc<RefCell<PlayerState>>, launch_args: &LaunchArgs) -> bool {
@@ -4283,13 +4380,8 @@ fn open_settings_window(
     appearance_page.append(&settings_appearance_section());
     stack.add_named(&settings_scroller(&appearance_page), Some("appearance"));
 
-    let updates_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    updates_page.add_css_class("okp-settings-page");
-    updates_page.append(&settings_updates_section(
-        Rc::clone(&state),
-        Rc::clone(&status_toast),
-    ));
-    stack.add_named(&settings_scroller(&updates_page), Some("advanced"));
+    let advanced_page = settings_advanced_page(Rc::clone(&state), Rc::clone(&status_toast));
+    stack.add_named(&settings_scroller(&advanced_page), Some("advanced"));
 
     let playback_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
     playback_page.add_css_class("okp-settings-page");
@@ -5527,6 +5619,155 @@ fn linux_update_install_status() -> &'static str {
     } else {
         "Deb installer"
     }
+}
+
+fn settings_advanced_page(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    page.add_css_class("okp-settings-page");
+    page.append(&settings_raw_mpv_section(
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    ));
+    page.append(&settings_updates_section(state, status_toast));
+    page
+}
+
+fn settings_raw_mpv_section(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let section = settings_section("mpv.conf");
+
+    let detail = gtk::Label::new(Some(
+        "Raw mpv key=value options. Startup-only options apply when playback starts.",
+    ));
+    detail.add_css_class("okp-update-status");
+    detail.set_xalign(0.0);
+    detail.set_width_chars(1);
+    detail.set_max_width_chars(58);
+    detail.set_wrap(true);
+    section.append(&detail);
+
+    let editor = gtk::TextView::new();
+    editor.add_css_class("okp-mpv-conf-editor");
+    editor.set_monospace(true);
+    editor.set_wrap_mode(gtk::WrapMode::None);
+    editor.set_accepts_tab(true);
+    editor
+        .buffer()
+        .set_text(state.borrow().settings.raw_mpv_config());
+
+    let scroller = gtk::ScrolledWindow::new();
+    scroller.add_css_class("okp-mpv-conf-scroller");
+    scroller.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
+    scroller.set_min_content_height(132);
+    scroller.set_child(Some(&editor));
+    section.append(&scroller);
+
+    let status = gtk::Label::new(Some(
+        "Managed by OK Player: config, terminal, idle, force-window, vo.",
+    ));
+    status.add_css_class("okp-update-status");
+    status.set_xalign(0.0);
+    status.set_width_chars(1);
+    status.set_max_width_chars(58);
+    status.set_wrap(true);
+    section.append(&status);
+
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    actions.add_css_class("okp-settings-action-row");
+    actions.set_halign(gtk::Align::End);
+
+    let reset = gtk::Button::with_label("Reset");
+    reset.add_css_class("okp-settings-button");
+    let reset_buffer = editor.buffer();
+    let reset_state = Rc::clone(&state);
+    let reset_toast = Rc::clone(&status_toast);
+    let reset_status = status.clone();
+    reset.connect_clicked(move |_| {
+        reset_buffer.set_text("");
+        apply_raw_mpv_config_setting("", &reset_status, &reset_state, &reset_toast);
+    });
+    actions.append(&reset);
+
+    let apply = gtk::Button::with_label("Apply");
+    apply.add_css_class("okp-settings-button");
+    let apply_buffer = editor.buffer();
+    let apply_state = Rc::clone(&state);
+    let apply_toast = Rc::clone(&status_toast);
+    let apply_status = status.clone();
+    apply.connect_clicked(move |_| {
+        let text = text_buffer_string(&apply_buffer);
+        apply_raw_mpv_config_setting(&text, &apply_status, &apply_state, &apply_toast);
+    });
+    actions.append(&apply);
+
+    section.append(&actions);
+    section
+}
+
+fn apply_raw_mpv_config_setting(
+    text: &str,
+    status: &gtk::Label,
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &Rc<StatusToast>,
+) {
+    let options = match parse_raw_mpv_config(text) {
+        Ok(options) => options,
+        Err(error) => {
+            status.set_text(&format!("Line {}: {}", error.line, error.message));
+            status_toast.show("mpv.conf has an error");
+            return;
+        }
+    };
+
+    let live_result = {
+        let state = state.borrow();
+        (!options.is_empty())
+            .then(|| state.mpv.as_ref().map(|mpv| mpv.apply_options(&options)))
+            .flatten()
+    };
+
+    let save_result = {
+        let mut state = state.borrow_mut();
+        state.settings.set_raw_mpv_config(text);
+        state.settings.save()
+    };
+    if let Err(error) = save_result {
+        eprintln!("Failed to save custom mpv.conf setting: {error}");
+        status.set_text("Could not save mpv.conf.");
+        status_toast.show("Could not save mpv.conf");
+        return;
+    }
+
+    match live_result {
+        Some(Ok(())) => {
+            status.set_text("Saved and applied to the current mpv session.");
+            status_toast.show("mpv.conf applied");
+        }
+        Some(Err(error)) => {
+            eprintln!("Failed to hot-apply custom mpv.conf options: {error}");
+            status.set_text("Saved. Live apply failed; restart playback to retry.");
+            status_toast.show("Saved. Restart playback to retry");
+        }
+        None if options.is_empty() => {
+            status.set_text("Reset saved. Restart playback to clear hot-applied options.");
+            status_toast.show("mpv.conf reset");
+        }
+        None => {
+            status.set_text("Saved. It applies when playback starts.");
+            status_toast.show("mpv.conf saved");
+        }
+    }
+}
+
+fn text_buffer_string(buffer: &gtk::TextBuffer) -> String {
+    buffer
+        .text(&buffer.start_iter(), &buffer.end_iter(), true)
+        .to_string()
 }
 
 fn settings_updates_section(
@@ -11248,6 +11489,30 @@ fn install_css() {
             font-size: 12px;
         }
 
+        .okp-mpv-conf-scroller {
+            min-height: 132px;
+            border-radius: 8px;
+            background: #ffffff;
+            border: 1px solid rgba(0, 0, 0, 0.06);
+        }
+
+        textview.okp-mpv-conf-editor,
+        textview.okp-mpv-conf-editor text {
+            padding: 10px;
+            background: #ffffff;
+            color: #161616;
+            font-family: 'Cascadia Code', 'Cascadia Mono', monospace;
+            font-size: 12px;
+            font-weight: 500;
+            caret-color: #0067c0;
+        }
+
+        textview.okp-mpv-conf-editor selection,
+        textview.okp-mpv-conf-editor text selection {
+            background: rgba(0, 103, 192, 0.24);
+            color: #161616;
+        }
+
         .okp-settings-switch-row {
             min-height: 42px;
             padding: 10px;
@@ -11545,6 +11810,60 @@ mod tests {
             SETTINGS_REFERENCE_WIDTH
         );
         assert_eq!(CAPTIONLESS_DRAG_HEIGHT, 32);
+    }
+
+    #[test]
+    fn raw_mpv_config_parser_accepts_key_value_lines() {
+        assert_eq!(
+            parse_raw_mpv_config(
+                "\
+# comment
+scale=ewa_lanczossharp
+--profile=gpu-hq
+script-opts=osc-layout=bottombar
+"
+            ),
+            Ok(vec![
+                ("scale".to_owned(), "ewa_lanczossharp".to_owned()),
+                ("profile".to_owned(), "gpu-hq".to_owned()),
+                ("script-opts".to_owned(), "osc-layout=bottombar".to_owned()),
+            ])
+        );
+    }
+
+    #[test]
+    fn raw_mpv_config_parser_reports_missing_value_separator_line() {
+        let error = parse_raw_mpv_config("scale=ewa\nbad line\nprofile=gpu-hq")
+            .expect_err("line should fail");
+
+        assert_eq!(error.line, 2);
+        assert!(error.message.contains("key=value"));
+    }
+
+    #[test]
+    fn raw_mpv_config_parser_rejects_invalid_names() {
+        let error = parse_raw_mpv_config("script/opts=value").expect_err("name should fail");
+
+        assert_eq!(error.line, 1);
+        assert!(error.message.contains("Option names"));
+    }
+
+    #[test]
+    fn raw_mpv_config_parser_rejects_protected_options() {
+        let error = parse_raw_mpv_config("--vo=gpu").expect_err("vo should be managed");
+
+        assert_eq!(error.line, 1);
+        assert!(error.message.contains("managed by OK Player"));
+
+        assert!(parse_raw_mpv_config("VO=gpu").is_err());
+    }
+
+    #[test]
+    fn raw_mpv_config_parser_rejects_nul_values() {
+        let error = parse_raw_mpv_config("profile=gpu-hq\0").expect_err("nul should fail");
+
+        assert_eq!(error.line, 1);
+        assert!(error.message.contains("NUL"));
     }
 
     #[test]

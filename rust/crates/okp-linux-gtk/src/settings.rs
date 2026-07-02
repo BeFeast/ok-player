@@ -57,6 +57,7 @@ impl SettingsStore {
                 audio: AudioSettings::default(),
                 video: VideoSettings::default(),
                 updates: UpdateSettings::default(),
+                advanced: AdvancedSettings::default(),
             });
 
         Self {
@@ -147,6 +148,10 @@ impl SettingsStore {
 
     pub fn gamma(&self) -> f64 {
         normalized_video_adjustment(self.data.video.gamma).unwrap_or(DEFAULT_VIDEO_ADJUSTMENT)
+    }
+
+    pub fn raw_mpv_config(&self) -> &str {
+        self.data.advanced.mpv_conf.as_deref().unwrap_or("")
     }
 
     pub fn set_volume(&mut self, volume: f64) {
@@ -255,6 +260,14 @@ impl SettingsStore {
         }
     }
 
+    pub fn set_raw_mpv_config(&mut self, text: &str) {
+        let updated = raw_mpv_config_setting(text);
+        if self.data.advanced.mpv_conf != updated {
+            self.data.advanced.mpv_conf = updated;
+            self.dirty = true;
+        }
+    }
+
     pub fn save(&mut self) -> io::Result<()> {
         if !self.dirty {
             return Ok(());
@@ -284,6 +297,8 @@ struct SettingsFile {
     video: VideoSettings,
     #[serde(default)]
     updates: UpdateSettings,
+    #[serde(default)]
+    advanced: AdvancedSettings,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -336,6 +351,12 @@ impl Default for UpdateSettings {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+struct AdvancedSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mpv_conf: Option<String>,
+}
+
 fn settings_path() -> PathBuf {
     if let Some(config_home) = env::var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
         return PathBuf::from(config_home).join("ok-player/settings.json");
@@ -383,6 +404,14 @@ fn video_adjustment_setting(value: f64) -> Option<f64> {
     }
 }
 
+fn raw_mpv_config_setting(text: &str) -> Option<String> {
+    if text.trim().is_empty() {
+        None
+    } else {
+        Some(text.to_owned())
+    }
+}
+
 fn normalized_hwdec(hwdec: Option<&str>) -> &'static str {
     match hwdec {
         Some(HWDEC_AUTO_SAFE) => HWDEC_AUTO_SAFE,
@@ -426,6 +455,7 @@ mod tests {
                 audio: AudioSettings::default(),
                 video: VideoSettings::default(),
                 updates: UpdateSettings::default(),
+                advanced: AdvancedSettings::default(),
             },
             dirty: false,
         }
@@ -673,6 +703,42 @@ mod tests {
 
         assert_eq!(settings.brightness(), 0.0);
         assert_eq!(settings.data.video.brightness, None);
+        assert!(settings.dirty);
+    }
+
+    #[test]
+    fn raw_mpv_config_defaults_empty() {
+        assert_eq!(store().raw_mpv_config(), "");
+    }
+
+    #[test]
+    fn raw_mpv_config_stores_text_and_marks_dirty_once() {
+        let mut settings = store();
+
+        settings.set_raw_mpv_config("scale=ewa_lanczossharp\nprofile=gpu-hq\n");
+
+        assert_eq!(
+            settings.raw_mpv_config(),
+            "scale=ewa_lanczossharp\nprofile=gpu-hq\n"
+        );
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_raw_mpv_config("scale=ewa_lanczossharp\nprofile=gpu-hq\n");
+
+        assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn raw_mpv_config_stores_blank_as_none() {
+        let mut settings = store();
+
+        settings.set_raw_mpv_config("profile=gpu-hq");
+        settings.dirty = false;
+        settings.set_raw_mpv_config("   \n\t");
+
+        assert_eq!(settings.raw_mpv_config(), "");
+        assert_eq!(settings.data.advanced.mpv_conf, None);
         assert!(settings.dirty);
     }
 }
