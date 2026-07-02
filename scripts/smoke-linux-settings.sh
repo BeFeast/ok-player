@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BINARY="${1:-ok-player}"
 OUT_DIR="${2:-$ROOT/artifacts/manual-ui/linux-settings-smoke}"
 
-for tool in xvfb-run dbus-run-session xfwm4 xdotool xwininfo import; do
+for tool in xvfb-run dbus-run-session xfwm4 xdotool xwininfo import magick; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "Missing required tool: $tool" >&2
     exit 127
@@ -60,6 +60,22 @@ state="$(awk -F': ' '/Map State:/ { print $2; exit }' "$OUT_DIR/settings.xwininf
 
 if [[ "$width" != "744" || "$height" != "1030" || "$border" != "0" || "$state" != "IsViewable" ]]; then
   echo "Unexpected Settings geometry: ${width}x${height}, border=${border}, state=${state}" >&2
+  exit 1
+fi
+
+# Regression guard for the old GTK caption/headerbar: it rendered a centered
+# "Settings" title in the top chrome. The Windows-reference shell keeps that
+# region blank; the only Settings title lives at the top-left rail.
+top_center_dark_pixels="$(
+  magick "$OUT_DIR/settings.png" \
+    -crop 180x45+282+5 \
+    -colorspace gray \
+    -threshold 32% \
+    -format '%[fx:(1-mean)*w*h]' info:
+)"
+top_center_dark_pixels="${top_center_dark_pixels%.*}"
+if (( top_center_dark_pixels > 120 )); then
+  echo "Unexpected centered caption pixels in Settings chrome: ${top_center_dark_pixels}" >&2
   exit 1
 fi
 SMOKE
