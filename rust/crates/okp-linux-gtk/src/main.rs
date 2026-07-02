@@ -2,10 +2,10 @@ use std::cell::{Cell, RefCell};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, ExitStatus};
 use std::rc::Rc;
 use std::sync::mpsc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use gtk::cairo;
 use gtk::gdk;
@@ -35,6 +35,7 @@ const LINUX_DESKTOP_ID: &str = "com.befeast.okplayer.desktop";
 const LINUX_UPDATE_REPO_URL: &str = "https://github.com/BeFeast/ok-player";
 const LINUX_DEB_RELEASES_API_URL: &str = "https://api.github.com/repos/BeFeast/ok-player/releases";
 const UPDATE_STATUS_NOT_CHECKED: &str = "Not checked yet";
+const DEB_SELF_INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
 const LINUX_KEY_MEDIA_MIME_TYPES: &[&str] = &[
     "video/mp4",
     "video/x-matroska",
@@ -5331,23 +5332,17 @@ fn start_update_download(
                 status.set_text("Restarting to apply update...");
                 glib::ControlFlow::Break
             }
-            Ok(Ok(LinuxUpdateApplyResult::DebInstalled(path))) => {
+            Ok(Ok(LinuxUpdateApplyResult::DebInstalled(_path))) => {
                 button.set_sensitive(true);
                 button.set_label("Check for updates");
-                status.set_text(&format!(
-                    "Installed {}. Restart OK Player to finish.",
-                    display_file_name(&path)
-                ));
+                status.set_text("Installed. Restart OK Player to finish.");
                 toast.show("Update installed");
                 glib::ControlFlow::Break
             }
-            Ok(Ok(LinuxUpdateApplyResult::InstallerOpened(path))) => {
+            Ok(Ok(LinuxUpdateApplyResult::InstallerOpened(_path))) => {
                 button.set_sensitive(true);
                 button.set_label("Check for updates");
-                status.set_text(&format!(
-                    "Opened {}. Complete the installer to update.",
-                    display_file_name(&path)
-                ));
+                status.set_text("Installer opened. Complete it to update.");
                 toast.show("Installer opened");
                 glib::ControlFlow::Break
             }
@@ -5670,12 +5665,12 @@ fn try_install_deb_update(path: &Path) -> Result<bool, String> {
         return Ok(false);
     };
 
-    let status = Command::new(pkexec)
+    let mut child = Command::new(pkexec)
         .arg(apt)
         .arg("install")
         .arg("-y")
         .arg(path)
-        .status()
+        .spawn()
         .map_err(|error| {
             format!(
                 "Downloaded to {}, but could not request administrator approval: {error}",
@@ -5683,11 +5678,63 @@ fn try_install_deb_update(path: &Path) -> Result<bool, String> {
             )
         })?;
 
-    if status.success() {
-        Ok(true)
-    } else {
-        eprintln!("Privileged .deb install exited with {status}; falling back to installer open.");
-        Ok(false)
+    let timeout = deb_self_install_timeout();
+    match wait_for_child_with_timeout(&mut child, timeout).map_err(|error| {
+        format!(
+            "Downloaded to {}, but could not wait for administrator approval: {error}",
+            path.display()
+        )
+    })? {
+        Some(status) if status.success() => Ok(true),
+        Some(status) => {
+            eprintln!(
+                "Privileged .deb install exited with {status}; falling back to installer open."
+            );
+            Ok(false)
+        }
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            eprintln!(
+                "Privileged .deb install timed out after {}s; falling back to installer open.",
+                timeout.as_secs()
+            );
+            Ok(false)
+        }
+    }
+}
+
+fn deb_self_install_timeout() -> Duration {
+    parse_deb_self_install_timeout(
+        env::var("OKP_DEB_SELF_INSTALL_TIMEOUT_SECS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn parse_deb_self_install_timeout(value: Option<&str>) -> Duration {
+    value
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(DEB_SELF_INSTALL_TIMEOUT)
+}
+
+fn wait_for_child_with_timeout(
+    child: &mut Child,
+    timeout: Duration,
+) -> Result<Option<ExitStatus>, std::io::Error> {
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(Some(status));
+        }
+        let elapsed = started.elapsed();
+        if elapsed >= timeout {
+            return Ok(None);
+        }
+        let remaining = timeout.saturating_sub(elapsed);
+        std::thread::sleep(remaining.min(Duration::from_millis(100)));
     }
 }
 
@@ -11375,6 +11422,26 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
 
         assert_eq!(update.action_label(), "Install .deb");
         assert_eq!(update.available_status(), "Available: 0.1.0-linux-alpha.46");
+    }
+
+    #[test]
+    fn deb_self_install_timeout_uses_positive_override_only() {
+        assert_eq!(
+            parse_deb_self_install_timeout(Some("5")),
+            Duration::from_secs(5)
+        );
+        assert_eq!(
+            parse_deb_self_install_timeout(Some("0")),
+            DEB_SELF_INSTALL_TIMEOUT
+        );
+        assert_eq!(
+            parse_deb_self_install_timeout(Some("soon")),
+            DEB_SELF_INSTALL_TIMEOUT
+        );
+        assert_eq!(
+            parse_deb_self_install_timeout(None),
+            DEB_SELF_INSTALL_TIMEOUT
+        );
     }
 
     #[test]
