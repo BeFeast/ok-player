@@ -3353,6 +3353,11 @@ fn open_settings_window(
     video_page.append(&video);
     stack.add_named(&settings_scroller(&video_page), Some("video"));
 
+    let shortcuts_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    shortcuts_page.add_css_class("okp-settings-page");
+    shortcuts_page.append(&settings_shortcuts_section());
+    stack.add_named(&settings_scroller(&shortcuts_page), Some("shortcuts"));
+
     let privacy_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
     privacy_page.add_css_class("okp-settings-page");
     let privacy = settings_section("Privacy");
@@ -3459,7 +3464,7 @@ fn settings_nav_rail(stack: &gtk::Stack) -> gtk::Box {
         ("Subtitles", SettingsNavIcon::Subtitles, None),
         ("Video", SettingsNavIcon::Video, Some("video")),
         ("Audio", SettingsNavIcon::Audio, None),
-        ("Shortcuts", SettingsNavIcon::Shortcuts, None),
+        ("Shortcuts", SettingsNavIcon::Shortcuts, Some("shortcuts")),
         (
             "Integration",
             SettingsNavIcon::Integration,
@@ -5013,6 +5018,27 @@ fn settings_hwdec_row(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusTo
     row.append(&toggle);
 
     row
+}
+
+fn settings_shortcuts_section() -> gtk::Box {
+    let section = settings_section("Shortcuts");
+    section.append(&settings_value_row("Play / Pause", "Space"));
+    section.append(&settings_value_row("Seek", "Left / Right"));
+    section.append(&settings_value_row("Frame step", ", / ."));
+    section.append(&settings_value_row("Playlist", "Page Up / Page Down"));
+    section.append(&settings_value_row("Volume", "Up / Down"));
+    section.append(&settings_value_row("Open file", "O"));
+    section.append(&settings_value_row("Open URL", "U"));
+    section.append(&settings_value_row("Add subtitle", "S"));
+    section.append(&settings_value_row("Close media", "X"));
+    section.append(&settings_value_row("Screenshot", "C"));
+    section.append(&settings_value_row("Media info", "I"));
+    section.append(&settings_value_row("Go to time", "J"));
+    section.append(&settings_value_row("Subtitle delay", "Z / Shift+Z"));
+    section.append(&settings_value_row("Subtitle size", "[ / ]"));
+    section.append(&settings_value_row("Fullscreen", "F / Esc"));
+    section.append(&settings_value_row("Settings", "Ctrl+,"));
+    section
 }
 
 fn settings_private_session_row(
