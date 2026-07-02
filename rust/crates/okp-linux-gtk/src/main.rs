@@ -742,12 +742,12 @@ fn build_player_window_chrome(window: &gtk::ApplicationWindow) -> gtk::Revealer 
     controls.set_margin_top(4);
     controls.set_margin_end(6);
 
-    let minimize = player_window_control("−", "Minimize");
+    let minimize = player_window_control(WindowControlKind::Minimize, "Minimize");
     let minimize_window = window.clone();
     minimize.connect_clicked(move |_| minimize_window.minimize());
     controls.append(&minimize);
 
-    let maximize = player_window_control("□", "Maximize");
+    let maximize = player_window_control(WindowControlKind::Maximize, "Maximize");
     sync_player_maximize_icon(&maximize, window);
     let maximize_window = window.clone();
     let maximize_button = maximize.clone();
@@ -765,7 +765,7 @@ fn build_player_window_chrome(window: &gtk::ApplicationWindow) -> gtk::Revealer 
     });
     controls.append(&maximize);
 
-    let close = player_window_control("×", "Close");
+    let close = player_window_control(WindowControlKind::Close, "Close");
     close.add_css_class("okp-player-window-close");
     let close_window = window.clone();
     close.connect_clicked(move |_| close_window.close());
@@ -776,35 +776,34 @@ fn build_player_window_chrome(window: &gtk::ApplicationWindow) -> gtk::Revealer 
     revealer
 }
 
-fn player_window_control(label: &str, tooltip: &str) -> gtk::Button {
-    let glyph = gtk::Label::new(None);
-    glyph.add_css_class("okp-player-window-control-glyph");
-
+fn player_window_control(kind: WindowControlKind, tooltip: &str) -> gtk::Button {
     let button = gtk::Button::new();
-    button.set_child(Some(&glyph));
     button.add_css_class("okp-player-window-control");
     button.set_has_frame(false);
     button.set_tooltip_text(Some(tooltip));
-    set_player_window_control_label(&button, label);
+    button.set_child(Some(&window_control_icon(
+        kind,
+        "okp-player-window-control-glyph",
+    )));
     button
 }
 
 fn sync_player_maximize_icon(button: &gtk::Button, window: &gtk::ApplicationWindow) {
     if window.is_maximized() {
-        set_player_window_control_label(button, "❐");
+        set_player_window_control_kind(button, WindowControlKind::Restore);
         button.set_tooltip_text(Some("Restore"));
     } else {
-        set_player_window_control_label(button, "□");
+        set_player_window_control_kind(button, WindowControlKind::Maximize);
         button.set_tooltip_text(Some("Maximize"));
     }
 }
 
-fn set_player_window_control_label(button: &gtk::Button, label: &str) {
-    if let Some(glyph) = button.child().and_downcast::<gtk::Label>() {
-        let label = glib::markup_escape_text(label);
-        glyph.set_markup(&format!(
-            "<span font_desc=\"Sans 15\" foreground=\"#d8dde3\">{label}</span>"
-        ));
+fn set_player_window_control_kind(button: &gtk::Button, kind: WindowControlKind) {
+    if let Some(icon) = button.child().and_downcast::<gtk::DrawingArea>() {
+        icon.set_draw_func(move |area, cr, width, height| {
+            draw_window_control_icon(area, cr, width, height, kind);
+        });
+        icon.queue_draw();
     }
 }
 
@@ -3569,12 +3568,12 @@ fn settings_window_controls(window: &gtk::Window) -> gtk::Box {
     controls.set_halign(gtk::Align::End);
     controls.set_valign(gtk::Align::Start);
 
-    let minimize = settings_window_control(SettingsWindowControlKind::Minimize, "Minimize");
+    let minimize = settings_window_control(WindowControlKind::Minimize, "Minimize");
     let minimize_window = window.clone();
     minimize.connect_clicked(move |_| minimize_window.minimize());
     controls.append(&minimize);
 
-    let maximize = settings_window_control(SettingsWindowControlKind::Maximize, "Maximize");
+    let maximize = settings_window_control(WindowControlKind::Maximize, "Maximize");
     sync_settings_maximize_icon(&maximize, window);
     let maximize_window = window.clone();
     let maximize_button = maximize.clone();
@@ -3592,7 +3591,7 @@ fn settings_window_controls(window: &gtk::Window) -> gtk::Box {
     });
     controls.append(&maximize);
 
-    let close = settings_window_control(SettingsWindowControlKind::Close, "Close");
+    let close = settings_window_control(WindowControlKind::Close, "Close");
     close.add_css_class("okp-settings-window-close");
     let close_window = window.clone();
     close.connect_clicked(move |_| close_window.close());
@@ -3602,59 +3601,59 @@ fn settings_window_controls(window: &gtk::Window) -> gtk::Box {
 }
 
 #[derive(Clone, Copy)]
-enum SettingsWindowControlKind {
+enum WindowControlKind {
     Minimize,
     Maximize,
     Restore,
     Close,
 }
 
-fn settings_window_control(kind: SettingsWindowControlKind, tooltip: &str) -> gtk::Button {
+fn settings_window_control(kind: WindowControlKind, tooltip: &str) -> gtk::Button {
     let button = gtk::Button::new();
     button.add_css_class("okp-settings-window-control");
     button.set_has_frame(false);
     button.set_tooltip_text(Some(tooltip));
 
-    let glyph = settings_window_control_icon(kind);
+    let glyph = window_control_icon(kind, "okp-settings-window-control-glyph");
     button.set_child(Some(&glyph));
     button
 }
 
 fn sync_settings_maximize_icon(button: &gtk::Button, window: &gtk::Window) {
     if window.is_maximized() {
-        set_settings_window_control_kind(button, SettingsWindowControlKind::Restore);
+        set_settings_window_control_kind(button, WindowControlKind::Restore);
         button.set_tooltip_text(Some("Restore"));
     } else {
-        set_settings_window_control_kind(button, SettingsWindowControlKind::Maximize);
+        set_settings_window_control_kind(button, WindowControlKind::Maximize);
         button.set_tooltip_text(Some("Maximize"));
     }
 }
 
-fn settings_window_control_icon(kind: SettingsWindowControlKind) -> gtk::DrawingArea {
+fn window_control_icon(kind: WindowControlKind, css_class: &str) -> gtk::DrawingArea {
     let icon = gtk::DrawingArea::new();
-    icon.add_css_class("okp-settings-window-control-glyph");
+    icon.add_css_class(css_class);
     icon.set_size_request(10, 10);
     icon.set_draw_func(move |area, cr, width, height| {
-        draw_settings_window_control_icon(area, cr, width, height, kind);
+        draw_window_control_icon(area, cr, width, height, kind);
     });
     icon
 }
 
-fn set_settings_window_control_kind(button: &gtk::Button, kind: SettingsWindowControlKind) {
+fn set_settings_window_control_kind(button: &gtk::Button, kind: WindowControlKind) {
     if let Some(icon) = button.child().and_downcast::<gtk::DrawingArea>() {
         icon.set_draw_func(move |area, cr, width, height| {
-            draw_settings_window_control_icon(area, cr, width, height, kind);
+            draw_window_control_icon(area, cr, width, height, kind);
         });
         icon.queue_draw();
     }
 }
 
-fn draw_settings_window_control_icon(
+fn draw_window_control_icon(
     area: &gtk::DrawingArea,
     cr: &cairo::Context,
     width: i32,
     height: i32,
-    kind: SettingsWindowControlKind,
+    kind: WindowControlKind,
 ) {
     let color = area.style_context().color();
     let _ = cr.save();
@@ -3672,16 +3671,16 @@ fn draw_settings_window_control_icon(
     cr.set_line_cap(cairo::LineCap::Square);
 
     match kind {
-        SettingsWindowControlKind::Minimize => {
+        WindowControlKind::Minimize => {
             cr.move_to(1.0, 5.0);
             cr.line_to(9.0, 5.0);
             let _ = cr.stroke();
         }
-        SettingsWindowControlKind::Maximize => {
+        WindowControlKind::Maximize => {
             cr.rectangle(1.5, 1.5, 7.0, 7.0);
             let _ = cr.stroke();
         }
-        SettingsWindowControlKind::Restore => {
+        WindowControlKind::Restore => {
             cr.rectangle(2.7, 1.5, 5.8, 5.8);
             let _ = cr.stroke();
             cr.move_to(1.5, 2.8);
@@ -3689,7 +3688,7 @@ fn draw_settings_window_control_icon(
             cr.line_to(7.2, 8.5);
             let _ = cr.stroke();
         }
-        SettingsWindowControlKind::Close => {
+        WindowControlKind::Close => {
             cr.set_line_cap(cairo::LineCap::Round);
             cr.move_to(2.0, 2.0);
             cr.line_to(8.0, 8.0);
