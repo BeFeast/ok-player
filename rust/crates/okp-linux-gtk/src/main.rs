@@ -3444,17 +3444,14 @@ fn open_settings_window(
     stack.set_visible_child_name("about");
     root.append(&settings_nav_rail_frame(settings_nav_rail(&stack)));
 
-    let content_overlay = gtk::Overlay::new();
-    content_overlay.set_hexpand(true);
-    content_overlay.set_vexpand(true);
-    content_overlay.set_size_request(552, 1030);
-    content_overlay.set_child(Some(&stack));
-    content_overlay.add_overlay(&settings_window_controls(&window));
-    root.append(&content_overlay);
+    stack.set_size_request(552, 1030);
+    root.append(&stack);
 
-    let handle = gtk::WindowHandle::new();
-    handle.set_child(Some(&root));
-    window.set_child(Some(&handle));
+    let window_overlay = gtk::Overlay::new();
+    window_overlay.set_child(Some(&root));
+    window_overlay.add_overlay(&captionless_window_drag_layer(&window));
+    window_overlay.add_overlay(&settings_window_controls(&window));
+    window.set_child(Some(&window_overlay));
     window.present();
 }
 
@@ -3599,6 +3596,52 @@ fn settings_window_controls(window: &gtk::Window) -> gtk::Box {
     controls.append(&close);
 
     controls
+}
+
+fn captionless_window_drag_layer(window: &gtk::Window) -> gtk::Box {
+    let drag_layer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    drag_layer.add_css_class("okp-captionless-window-drag-layer");
+    drag_layer.set_halign(gtk::Align::Fill);
+    drag_layer.set_valign(gtk::Align::Start);
+    drag_layer.set_can_target(true);
+    drag_layer.set_height_request(32);
+    connect_captionless_window_drag(&drag_layer, window);
+    drag_layer
+}
+
+fn connect_captionless_window_drag(widget: &impl IsA<gtk::Widget>, window: &gtk::Window) {
+    let gesture = gtk::GestureClick::new();
+    gesture.set_button(gdk::BUTTON_PRIMARY);
+    let drag_window = window.clone();
+    gesture.connect_pressed(move |gesture, n_press, x, y| {
+        if n_press == 2 {
+            if drag_window.is_maximized() {
+                drag_window.unmaximize();
+            } else {
+                drag_window.maximize();
+            }
+            return;
+        }
+
+        let Some(device) = gesture.current_event_device() else {
+            return;
+        };
+        let Some(surface) = drag_window.surface() else {
+            return;
+        };
+        let Ok(toplevel) = surface.downcast::<gdk::Toplevel>() else {
+            return;
+        };
+
+        toplevel.begin_move(
+            &device,
+            gesture.current_button() as i32,
+            x,
+            y,
+            gesture.current_event_time(),
+        );
+    });
+    widget.add_controller(gesture);
 }
 
 #[derive(Clone, Copy)]
@@ -6324,11 +6367,9 @@ fn show_media_info_window(
 
     let content_overlay = gtk::Overlay::new();
     content_overlay.set_child(Some(&root));
+    content_overlay.add_overlay(&captionless_window_drag_layer(&window));
     content_overlay.add_overlay(&settings_window_controls(&window));
-
-    let handle = gtk::WindowHandle::new();
-    handle.set_child(Some(&content_overlay));
-    window.set_child(Some(&handle));
+    window.set_child(Some(&content_overlay));
     window.present();
 }
 
@@ -7956,6 +7997,13 @@ fn install_css() {
             background: transparent;
         }
 
+        window.okp-settings-window > contents,
+        window.okp-info-window > contents {
+            background: transparent;
+            box-shadow: none;
+            border: none;
+        }
+
         .okp-info-root {
             background: #eef4f9;
             color: #161616;
@@ -8037,6 +8085,11 @@ fn install_css() {
         .okp-settings-rail-divider {
             margin: 6px 9px 8px;
             background: #dbe2e7;
+        }
+
+        .okp-captionless-window-drag-layer {
+            min-height: 32px;
+            background: transparent;
         }
 
         .okp-settings-window-controls {
