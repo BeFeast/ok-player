@@ -55,6 +55,8 @@ const VIDEO_ASPECT_PRESETS: [(&str, &str); 4] = [
     ("4:3", "4:3"),
     ("2.35:1", "2.35:1"),
 ];
+const AUDIO_DEVICE_AUTO: &str = "auto";
+const AUDIO_DEVICE_RESTORE_MAX_ATTEMPTS: u8 = 50;
 
 #[derive(Default)]
 struct PlayerState {
@@ -72,9 +74,22 @@ struct PlayerState {
     private_session: bool,
     history: history::HistoryStore,
     settings: settings::SettingsStore,
+    pending_audio_device_restore: Option<PendingAudioDeviceRestore>,
     render_target_size: Option<okp_mpv::RenderTargetSize>,
     video_transform: VideoTransformState,
     ab_loop: AbLoopState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PendingAudioDeviceRestore {
+    name: String,
+    attempts: u8,
+}
+
+impl PendingAudioDeviceRestore {
+    fn new(name: String) -> Self {
+        Self { name, attempts: 0 }
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -1924,10 +1939,6 @@ fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, launch
         if let Err(error) = mpv.set_audio_normalization(audio_normalization) {
             eprintln!("Failed to restore audio normalization: {error}");
         }
-        let audio_device = realize_state.borrow().settings.audio_device().to_owned();
-        if let Err(error) = mpv.restore_audio_device(&audio_device) {
-            eprintln!("Failed to restore audio device: {error}");
-        }
 
         if let Err(error) = mpv.create_render_context() {
             eprintln!("Failed to create mpv render context: {error}");
@@ -1935,6 +1946,8 @@ fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, launch
         }
 
         realize_state.borrow_mut().mpv = Some(mpv);
+        schedule_audio_device_restore(&realize_state);
+        try_pending_audio_device_restore(&realize_state);
 
         if let Some(path) = launch_args.file.as_deref() {
             load_media_path(&realize_state, path.to_path_buf());
@@ -2005,6 +2018,7 @@ fn connect_state_poll(
     let window = window.clone();
     glib::timeout_add_local(Duration::from_millis(200), move || {
         drain_mpv_events(&state);
+        try_pending_audio_device_restore(&state);
 
         let playback = state
             .borrow()
@@ -3537,6 +3551,67 @@ fn read_audio_devices(state: &Rc<RefCell<PlayerState>>) -> Vec<AudioDevice> {
     }
 }
 
+fn schedule_audio_device_restore(state: &Rc<RefCell<PlayerState>>) {
+    let device = state.borrow().settings.audio_device().trim().to_owned();
+    state.borrow_mut().pending_audio_device_restore =
+        should_restore_audio_device(&device).then(|| PendingAudioDeviceRestore::new(device));
+}
+
+fn try_pending_audio_device_restore(state: &Rc<RefCell<PlayerState>>) {
+    let Some(pending) = state.borrow().pending_audio_device_restore.clone() else {
+        return;
+    };
+
+    let restore_result = {
+        let state = state.borrow();
+        let Some(mpv) = state.mpv.as_ref() else {
+            return;
+        };
+        mpv.restore_audio_device(&pending.name)
+    };
+
+    match restore_result {
+        Ok(true) => state.borrow_mut().pending_audio_device_restore = None,
+        Ok(false) => record_audio_device_restore_miss(state, pending, None),
+        Err(error) => record_audio_device_restore_miss(state, pending, Some(error.to_string())),
+    }
+}
+
+fn record_audio_device_restore_miss(
+    state: &Rc<RefCell<PlayerState>>,
+    pending: PendingAudioDeviceRestore,
+    error: Option<String>,
+) {
+    let next = next_audio_device_restore_retry(pending.clone(), AUDIO_DEVICE_RESTORE_MAX_ATTEMPTS);
+    if next.is_none() {
+        if let Some(error) = error {
+            eprintln!(
+                "Failed to restore saved audio output '{}': {error}",
+                pending.name
+            );
+        } else {
+            eprintln!(
+                "Saved audio output '{}' is not available after {AUDIO_DEVICE_RESTORE_MAX_ATTEMPTS} attempts",
+                pending.name
+            );
+        }
+    }
+    state.borrow_mut().pending_audio_device_restore = next;
+}
+
+fn should_restore_audio_device(device: &str) -> bool {
+    let device = device.trim();
+    !device.is_empty() && device != AUDIO_DEVICE_AUTO
+}
+
+fn next_audio_device_restore_retry(
+    mut pending: PendingAudioDeviceRestore,
+    max_attempts: u8,
+) -> Option<PendingAudioDeviceRestore> {
+    pending.attempts = pending.attempts.saturating_add(1);
+    (pending.attempts < max_attempts).then_some(pending)
+}
+
 fn read_secondary_subtitle_id(state: &Rc<RefCell<PlayerState>>) -> Option<i64> {
     let value = {
         let state = state.borrow();
@@ -3631,7 +3706,10 @@ fn drain_mpv_events(state: &Rc<RefCell<PlayerState>>) {
 
     for event in events {
         match event {
-            MpvEvent::FileLoaded => try_pending_playback_preferences(state),
+            MpvEvent::FileLoaded => {
+                try_pending_audio_device_restore(state);
+                try_pending_playback_preferences(state);
+            }
             MpvEvent::EndFile { reason } if reason.is_eof() => {
                 if state.borrow().modes.repeat_mode != RepeatMode::One {
                     save_current_progress(state, true);
@@ -7784,6 +7862,7 @@ fn save_audio_device_setting(
 ) {
     let mut state = state.borrow_mut();
     state.settings.set_audio_device(device);
+    state.pending_audio_device_restore = None;
     if let Err(error) = state.settings.save() {
         eprintln!("Failed to save audio device setting: {error}");
         if let Some(status_toast) = status_toast {
@@ -11123,6 +11202,28 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
             Some("A-B loop cleared".to_owned())
         );
         assert_eq!(ab_loop_message(AbLoopState::default(), false), None);
+    }
+
+    #[test]
+    fn audio_device_restore_skips_auto_or_blank_devices() {
+        assert!(!should_restore_audio_device(""));
+        assert!(!should_restore_audio_device("  "));
+        assert!(!should_restore_audio_device("auto"));
+        assert!(should_restore_audio_device("pulse/alsa_output"));
+    }
+
+    #[test]
+    fn audio_device_restore_retry_is_bounded() {
+        let pending = PendingAudioDeviceRestore::new("pulse/device".to_owned());
+
+        let pending = next_audio_device_restore_retry(pending, 3).expect("first miss should retry");
+        assert_eq!(pending.attempts, 1);
+
+        let pending =
+            next_audio_device_restore_retry(pending, 3).expect("second miss should retry");
+        assert_eq!(pending.attempts, 2);
+
+        assert_eq!(next_audio_device_restore_retry(pending, 3), None);
     }
 
     #[test]
