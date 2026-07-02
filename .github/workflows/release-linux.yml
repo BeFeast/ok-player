@@ -3,9 +3,10 @@ name: Linux Release
 # Release cadence (https://github.com/BeFeast/ok-player/issues/130): Linux releases
 # are cut in batches — at most daily, or on demand — by pushing a `linux-v*` tag or
 # dispatching this workflow manually. Merges to `main` do NOT release; never tag one
-# release per commit. The Windows app's Velopack updater only inspects the 10 newest
-# GitHub releases, so per-commit Linux pre-releases flooded the Windows update feed
-# out of its discovery window and every installed Windows build silently stopped
+# release per commit. The Windows app's Velopack updater only inspects the first 10
+# entries of the GitHub release listing (which is NOT recency-ordered for this repo —
+# see the bridge step), so per-commit Linux pre-releases flooded the Windows update
+# feed out of its discovery window and every installed Windows build silently stopped
 # seeing updates. The "Bridge Windows update feed" step below is the recovery for
 # the already-installed fleet; the batch cadence keeps the release list from being
 # dominated by any single track again.
@@ -99,10 +100,12 @@ jobs:
       # Stage the Windows update feed for bridging BEFORE anything is published
       # (https://github.com/BeFeast/ok-player/issues/130). The installed Windows
       # fleet updates via Velopack 1.2.0 GithubSource (channel "win"), which only
-      # fetches the 10 newest GitHub releases (GithubSource.cs hardcodes perPage=10,
-      # page=1) and silently skips any release without a releases.win.json asset
-      # (GitBase.GetReleaseFeed catches the missing-asset exception and continues) —
-      # if none match, the fleet gets an empty feed and reports "up to date" forever.
+      # fetches the first page of the GitHub release listing (GithubSource.cs
+      # hardcodes perPage=10, page=1; see the bridge step for why those 10 entries
+      # are not the newest releases) and silently skips any release without a
+      # releases.win.json asset (GitBase.GetReleaseFeed catches the missing-asset
+      # exception and continues) — if none match, the fleet gets an empty feed and
+      # reports "up to date" forever.
       # DownloadReleaseEntry resolves a package strictly from the assets of the
       # release that carried the feed json (GitBaseAsset pins the carrying release),
       # so attaching the feed alone is not enough: every nupkg it references must be
@@ -168,18 +171,92 @@ jobs:
             --targetCommitish "${{ github.sha }}"
 
       # Attach the pre-staged win-channel assets (see the staging step above and
-      # https://github.com/BeFeast/ok-player/issues/130). This runs immediately
-      # after publish — before the AppImage/deb attachments — so no other step's
-      # failure can leave the release sitting in Velopack's 10-release window
-      # without the win feed. If this upload itself fails, the cleanup step below
-      # deletes the release.
-      - name: Bridge Windows update feed onto this release
+      # https://github.com/BeFeast/ok-player/issues/130), then make sure the fleet
+      # can actually discover them. Velopack's GithubSource reads exactly the first
+      # 10 entries of repos/{repo}/releases?per_page=10&page=1, and that listing is
+      # NOT recency-ordered for this repo (issue #157): the first page is a stable
+      # block of old releases (observed 2026-07: linux-v0.1.0-linux-alpha.99..90,
+      # while linux-v0.1.0-linux-alpha.108 sat near position 48 and v0.10.13 near
+      # position 108). A newly published linux-v* release therefore normally never
+      # enters the fleet's discovery window, so bridging onto the new release alone
+      # leaves the fleet blind — the fleet was first revived by manually backfilling
+      # the feed onto the window-top release. This step automates that backfill:
+      # after uploading to the new release it re-reads the CURRENT window and
+      # ensures at least one window release carries the current releases.win.json
+      # with every referenced package co-located. Stale bridged copies on linux-v*
+      # window releases are refreshed in place (original feeds on v* Windows
+      # releases are left alone — the current feed IS the newest one of those); if
+      # the window carries no bridged copy at all, the assets go to the window-top
+      # release. The window is stable, so after the first run this is usually a
+      # no-op, and --clobber keeps every re-upload idempotent. This runs
+      # immediately after publish — before the AppImage/deb attachments — so no
+      # other step's failure can leave the new release published while the fleet's
+      # window check has not run. If this step fails, the cleanup step below
+      # deletes the fresh release, restoring the pre-run state.
+      - name: Bridge Windows update feed onto this release and the discovery window
         id: bridge
         if: steps.release.outputs.publish == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ steps.release.outputs.tag }}" artifacts/win-bridge/* --clobber
+        run: |
+          bridge_dir="artifacts/win-bridge"
+          gh release upload "${{ steps.release.outputs.tag }}" "${bridge_dir}"/* --clobber
+
+          mapfile -t win_packages < <(jq -r '.Assets[].FileName' "${bridge_dir}/releases.win.json" | sort -u)
+
+          # Drafts are invisible to the fleet's unauthenticated API calls but
+          # visible to this job's token, so drop them: the reconstructed window is
+          # then a prefix of the window Velopack sees, and a shorter prefix can
+          # only cause a redundant refresh, never a missed one.
+          window="$(gh api "repos/${{ github.repository }}/releases?per_page=10&page=1" \
+            --jq '[.[] | select(.draft | not) | {tag: .tag_name, assets: [.assets[].name]}]')"
+          if [[ "$(jq 'length' <<<"${window}")" -eq 0 ]]; then
+            echo "::error::The release listing returned no published releases; cannot verify the discovery window (issue #157)."
+            exit 1
+          fi
+
+          # A window release counts as current only when it carries a
+          # byte-identical releases.win.json AND every package that feed
+          # references, because Velopack resolves downloads strictly from the
+          # assets of the release that carried the feed.
+          feed_probe="artifacts/win-bridge-window-feed.json"
+          is_current() {
+            local wtag="$1" assets package
+            assets="$(jq -r --arg tag "${wtag}" 'first(.[] | select(.tag == $tag)) | .assets[]' <<<"${window}")"
+            grep -Fxq "releases.win.json" <<<"${assets}" || return 1
+            for package in "${win_packages[@]}"; do
+              grep -Fxq "${package}" <<<"${assets}" || return 1
+            done
+            rm -f "${feed_probe}"
+            gh release download "${wtag}" --repo "${{ github.repository }}" \
+              --pattern "releases.win.json" --output "${feed_probe}" &&
+              cmp -s "${feed_probe}" "${bridge_dir}/releases.win.json"
+          }
+
+          covered=""
+          refresh_targets=()
+          while IFS= read -r wtag; do
+            if is_current "${wtag}"; then
+              covered="${wtag}"
+            elif [[ "${wtag}" == linux-v* ]] && jq -e --arg tag "${wtag}" \
+                'first(.[] | select(.tag == $tag)) | .assets | index("releases.win.json") != null' \
+                <<<"${window}" >/dev/null; then
+              refresh_targets+=("${wtag}")
+            fi
+          done < <(jq -r '.[].tag' <<<"${window}")
+
+          if [[ -z "${covered}" && "${#refresh_targets[@]}" -eq 0 ]]; then
+            refresh_targets=("$(jq -r '.[0].tag' <<<"${window}")")
+          fi
+
+          if [[ "${#refresh_targets[@]}" -eq 0 ]]; then
+            echo "Discovery window already carries the current win feed on ${covered}; nothing to refresh."
+          fi
+          for wtag in "${refresh_targets[@]}"; do
+            echo "Refreshing the win feed bridge on window release ${wtag}."
+            gh release upload "${wtag}" "${bridge_dir}"/* --clobber
+          done
 
       - name: Attach versioned AppImage to release
         if: steps.release.outputs.publish == 'true'
@@ -193,11 +270,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${{ steps.release.outputs.tag }}" artifacts/linux/deb/*.deb --clobber
 
-      # An unbridged linux-v* release must never survive in Velopack's 10-release
-      # window (issue #130): if the release got published but the bridge upload did
-      # not complete, take the release back down. The git tag is kept — for
-      # tag-triggered runs it was pushed by the operator, and re-running the job
-      # republishes the release for the existing tag.
+      # A linux-v* release must never survive a run whose bridge did not complete
+      # (issues #130/#157): if the release got published but the bridge step failed
+      # — the upload onto this release or the discovery-window check/refresh —
+      # take the release back down, restoring the pre-run state so a re-run starts
+      # clean. The git tag is kept — for tag-triggered runs it was pushed by the
+      # operator, and re-running the job republishes the release for the existing
+      # tag.
       - name: Delete the release if it was published without the bridge
         if: failure() && steps.publish.outcome == 'success' && steps.bridge.outcome != 'success'
         env:
