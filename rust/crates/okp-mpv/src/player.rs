@@ -166,6 +166,10 @@ pub struct Mpv {
 
 impl Mpv {
     pub fn new() -> Result<Self, MpvError> {
+        Self::new_with_hwdec("no")
+    }
+
+    pub fn new_with_hwdec(hwdec: &str) -> Result<Self, MpvError> {
         unsafe {
             libc::setlocale(libc::LC_NUMERIC, c"C".as_ptr());
         }
@@ -181,7 +185,7 @@ impl Mpv {
         this.set_option("idle", "yes")?;
         this.set_option("force-window", "no")?;
         this.set_option("vo", "libmpv")?;
-        this.set_option("hwdec", "no")?;
+        this.set_option("hwdec", hwdec)?;
         check(unsafe { ffi::mpv_initialize(this.handle.as_ptr()) })?;
 
         Ok(this)
@@ -249,6 +253,10 @@ impl Mpv {
         ];
 
         check(unsafe { ffi::mpv_command(self.handle.as_ptr(), args.as_ptr()) })
+    }
+
+    pub fn set_hwdec(&self, value: &str) -> Result<(), MpvError> {
+        self.set_option("hwdec", value)
     }
 
     pub fn tracks(&self) -> Result<Vec<Track>, MpvError> {

@@ -1717,7 +1717,8 @@ fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, launch
             return;
         }
 
-        let mut mpv = match Mpv::new() {
+        let hwdec = realize_state.borrow().settings.hardware_decode_mpv_option();
+        let mut mpv = match Mpv::new_with_hwdec(hwdec) {
             Ok(mpv) => mpv,
             Err(error) => {
                 eprintln!("Failed to create mpv: {error}");
@@ -3329,6 +3330,16 @@ fn open_settings_window(
     playback_page.append(&playback);
     stack.add_named(&settings_scroller(&playback_page), Some("playback"));
 
+    let video_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    video_page.add_css_class("okp-settings-page");
+    let video = settings_section("Video");
+    video.append(&settings_hwdec_row(
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    ));
+    video_page.append(&video);
+    stack.add_named(&settings_scroller(&video_page), Some("video"));
+
     let privacy_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
     privacy_page.add_css_class("okp-settings-page");
     let privacy = settings_section("Privacy");
@@ -3433,7 +3444,7 @@ fn settings_nav_rail(stack: &gtk::Stack) -> gtk::Box {
         ("Appearance", SettingsNavIcon::Appearance, None),
         ("Playback", SettingsNavIcon::Playback, Some("playback")),
         ("Subtitles", SettingsNavIcon::Subtitles, None),
-        ("Video", SettingsNavIcon::Video, None),
+        ("Video", SettingsNavIcon::Video, Some("video")),
         ("Audio", SettingsNavIcon::Audio, None),
         ("Shortcuts", SettingsNavIcon::Shortcuts, None),
         (
@@ -3792,7 +3803,9 @@ struct AboutSnapshot {
 
 impl AboutSnapshot {
     fn capture(state: &Rc<RefCell<PlayerState>>) -> Self {
-        let auto_updates = state.borrow().settings.auto_check_updates();
+        let state = state.borrow();
+        let auto_updates = state.settings.auto_check_updates();
+        let hwdec = state.settings.hardware_decode_label().to_owned();
         Self {
             version: APP_BUILD_VERSION.to_owned(),
             channel: "Linux".to_owned(),
@@ -3802,7 +3815,7 @@ impl AboutSnapshot {
             ffmpeg: ffmpeg_version().unwrap_or_else(|| "system".to_owned()),
             render_api: "libmpv render".to_owned(),
             graphics: "OpenGL · GTK GLArea".to_owned(),
-            hwdec: "off".to_owned(),
+            hwdec,
             os: linux_os_label(),
             gtk: format!(
                 "{}.{}.{}",
@@ -3918,6 +3931,11 @@ fn about_app_card(snapshot: &AboutSnapshot) -> gtk::Box {
 
 fn about_engine_card(snapshot: &AboutSnapshot) -> gtk::Box {
     let rows = gtk::Box::new(gtk::Orientation::Vertical, 9);
+    let hwdec_tag = if snapshot.hwdec == "off" {
+        ("OFF", false)
+    } else {
+        ("ON", true)
+    };
     rows.append(&about_spec_row("libmpv", &snapshot.libmpv, true, None));
     rows.append(&about_spec_row(
         "FFmpeg",
@@ -3936,7 +3954,7 @@ fn about_engine_card(snapshot: &AboutSnapshot) -> gtk::Box {
         "Hardware decode",
         &snapshot.hwdec,
         false,
-        Some(("OFF", false)),
+        Some(hwdec_tag),
     ));
     about_card("ENGINE", &rows)
 }
@@ -4216,8 +4234,9 @@ fn about_footer(snapshot: AboutSnapshot, status_toast: Rc<StatusToast>) -> gtk::
     github.connect_clicked(|_| open_external_url("https://github.com/BeFeast/ok-player"));
     links.append(&github);
 
-    let dot = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let dot = gtk::Label::new(Some("•"));
     dot.add_css_class("okp-about-link-dot");
+    dot.set_valign(gtk::Align::Center);
     links.append(&dot);
 
     let license = about_link_button("License");
@@ -4908,6 +4927,77 @@ fn settings_volume_row(state: Rc<RefCell<PlayerState>>) -> gtk::Box {
         glib::Propagation::Proceed
     });
     row.append(&scale);
+
+    row
+}
+
+fn settings_hwdec_row(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusToast>) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row.add_css_class("okp-settings-switch-row");
+
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    text.set_hexpand(true);
+
+    let label = gtk::Label::new(Some("Hardware decode"));
+    label.add_css_class("okp-info-label");
+    label.set_xalign(0.0);
+    text.append(&label);
+
+    let detail = gtk::Label::new(Some(
+        "Use mpv auto-safe decoding when the driver stack supports it.",
+    ));
+    detail.add_css_class("okp-update-status");
+    detail.set_xalign(0.0);
+    detail.set_wrap(true);
+    text.append(&detail);
+    row.append(&text);
+
+    let enabled = state.borrow().settings.hardware_decode_enabled();
+    let state_label = gtk::Label::new(Some(if enabled { "Auto-safe" } else { "Off" }));
+    state_label.add_css_class("okp-settings-state-pill");
+    row.append(&state_label);
+
+    let toggle = gtk::Switch::new();
+    toggle.set_active(enabled);
+    let switch_state = Rc::clone(&state);
+    let switch_toast = Rc::clone(&status_toast);
+    let switch_label = state_label.clone();
+    toggle.connect_state_set(move |_, enabled| {
+        let (hwdec_option, save_ok) = {
+            let mut state = switch_state.borrow_mut();
+            state.settings.set_hardware_decode_enabled(enabled);
+            let save_ok = if let Err(error) = state.settings.save() {
+                eprintln!("Failed to save hardware decode setting: {error}");
+                false
+            } else {
+                true
+            };
+            (state.settings.hardware_decode_mpv_option(), save_ok)
+        };
+
+        switch_label.set_text(if enabled { "Auto-safe" } else { "Off" });
+
+        let live_result = {
+            let state = switch_state.borrow();
+            state.mpv.as_ref().map(|mpv| mpv.set_hwdec(hwdec_option))
+        };
+
+        match live_result {
+            Some(Err(error)) => {
+                eprintln!("Failed to update hardware decode: {error}");
+                switch_toast.show("Could not update hardware decode");
+            }
+            _ if !save_ok => switch_toast.show("Could not save hardware decode setting"),
+            _ => switch_toast.show(if enabled {
+                "Hardware decode auto-safe"
+            } else {
+                "Hardware decode off"
+            }),
+        }
+
+        glib::Propagation::Proceed
+    });
+    row.append(&toggle);
 
     row
 }
@@ -7463,10 +7553,11 @@ fn install_css() {
 
         .okp-about-link-dot {
             min-width: 3px;
-            min-height: 3px;
-            margin-top: 10px;
-            border-radius: 999px;
-            background: rgba(0, 0, 0, 0.40);
+            min-height: 24px;
+            color: rgba(0, 0, 0, 0.40);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 8px;
+            font-weight: 600;
         }
 
         .okp-update-status {

@@ -9,6 +9,8 @@ const SETTINGS_VERSION: u32 = 1;
 const DEFAULT_VOLUME: f64 = 100.0;
 const MAX_VOLUME: f64 = 130.0;
 const DEFAULT_AUTO_CHECK_UPDATES: bool = true;
+const HWDEC_OFF: &str = "no";
+const HWDEC_AUTO_SAFE: &str = "auto-safe";
 
 #[derive(Debug)]
 pub struct SettingsStore {
@@ -33,6 +35,7 @@ impl SettingsStore {
             .unwrap_or_else(|| SettingsFile {
                 version: SETTINGS_VERSION,
                 playback: PlaybackSettings::default(),
+                video: VideoSettings::default(),
                 updates: UpdateSettings::default(),
             });
 
@@ -55,6 +58,22 @@ impl SettingsStore {
         self.data.updates.auto_check
     }
 
+    pub fn hardware_decode_enabled(&self) -> bool {
+        normalized_hwdec(self.data.video.hwdec.as_deref()) == HWDEC_AUTO_SAFE
+    }
+
+    pub fn hardware_decode_mpv_option(&self) -> &'static str {
+        normalized_hwdec(self.data.video.hwdec.as_deref())
+    }
+
+    pub fn hardware_decode_label(&self) -> &'static str {
+        if self.hardware_decode_enabled() {
+            "auto-safe"
+        } else {
+            "off"
+        }
+    }
+
     pub fn set_volume(&mut self, volume: f64) {
         let Some(volume) = normalized_volume(Some(volume)) else {
             return;
@@ -69,6 +88,14 @@ impl SettingsStore {
     pub fn set_auto_check_updates(&mut self, enabled: bool) {
         if self.data.updates.auto_check != enabled {
             self.data.updates.auto_check = enabled;
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_hardware_decode_enabled(&mut self, enabled: bool) {
+        let updated = if enabled { HWDEC_AUTO_SAFE } else { HWDEC_OFF };
+        if normalized_hwdec(self.data.video.hwdec.as_deref()) != updated {
+            self.data.video.hwdec = Some(updated.to_owned());
             self.dirty = true;
         }
     }
@@ -97,6 +124,8 @@ struct SettingsFile {
     #[serde(default)]
     playback: PlaybackSettings,
     #[serde(default)]
+    video: VideoSettings,
+    #[serde(default)]
     updates: UpdateSettings,
 }
 
@@ -104,6 +133,12 @@ struct SettingsFile {
 struct PlaybackSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     volume: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+struct VideoSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hwdec: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -138,6 +173,13 @@ fn normalized_volume(volume: Option<f64>) -> Option<f64> {
         .map(|volume| volume.clamp(0.0, MAX_VOLUME))
 }
 
+fn normalized_hwdec(hwdec: Option<&str>) -> &'static str {
+    match hwdec {
+        Some(HWDEC_AUTO_SAFE) => HWDEC_AUTO_SAFE,
+        _ => HWDEC_OFF,
+    }
+}
+
 fn same_volume(current: Option<f64>, updated: f64) -> bool {
     current
         .and_then(|volume| normalized_volume(Some(volume)))
@@ -158,6 +200,7 @@ mod tests {
             data: SettingsFile {
                 version: SETTINGS_VERSION,
                 playback: PlaybackSettings::default(),
+                video: VideoSettings::default(),
                 updates: UpdateSettings::default(),
             },
             dirty: false,
@@ -218,5 +261,40 @@ mod tests {
         settings.set_auto_check_updates(false);
 
         assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn hardware_decode_defaults_off() {
+        let settings = store();
+
+        assert!(!settings.hardware_decode_enabled());
+        assert_eq!(settings.hardware_decode_mpv_option(), "no");
+        assert_eq!(settings.hardware_decode_label(), "off");
+    }
+
+    #[test]
+    fn hardware_decode_toggle_marks_dirty_once() {
+        let mut settings = store();
+
+        settings.set_hardware_decode_enabled(true);
+
+        assert!(settings.hardware_decode_enabled());
+        assert_eq!(settings.hardware_decode_mpv_option(), "auto-safe");
+        assert_eq!(settings.hardware_decode_label(), "auto-safe");
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_hardware_decode_enabled(true);
+
+        assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn unknown_hardware_decode_value_falls_back_to_off() {
+        let mut settings = store();
+        settings.data.video.hwdec = Some("yes-please".to_owned());
+
+        assert!(!settings.hardware_decode_enabled());
+        assert_eq!(settings.hardware_decode_mpv_option(), "no");
     }
 }
