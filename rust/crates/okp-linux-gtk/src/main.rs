@@ -6,7 +6,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
 use std::rc::Rc;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -39,6 +39,8 @@ const LINUX_DESKTOP_ID: &str = "com.befeast.okplayer.desktop";
 const MPRIS_BUS_NAME: &str = "org.mpris.MediaPlayer2.okplayer";
 const MPRIS_OBJECT_PATH: &str = "/org/mpris/MediaPlayer2";
 const MPRIS_TRACK_PATH: &str = "/org/mpris/MediaPlayer2/Track/0";
+const MPRIS_TRACKLIST_NO_TRACK_PATH: &str = "/org/mpris/MediaPlayer2/TrackList/NoTrack";
+const MPRIS_TRACKLIST_CONTEXT_LIMIT: usize = 21;
 const MPRIS_SEEKED_DELTA_US: i64 = 750_000;
 const MPRIS_ART_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp"];
 const MPRIS_FOLDER_ART_STEMS: &[&str] =
@@ -75,6 +77,9 @@ const AUDIO_DEVICE_AUTO: &str = "auto";
 const AUDIO_DEVICE_RESTORE_MAX_ATTEMPTS: u8 = 50;
 const AB_LOOP_COMBINED_MARK_EPSILON_SECS: f64 = 0.5;
 const PROTECTED_MPV_OPTIONS: &[&str] = &["config", "terminal", "idle", "force-window", "vo"];
+
+static MPRIS_SIDECAR_ART_CACHE: OnceLock<Mutex<HashMap<PathBuf, Option<String>>>> = OnceLock::new();
+static MPRIS_APP_ICON_ART_URL: OnceLock<Option<String>> = OnceLock::new();
 
 #[derive(Default)]
 struct PlayerState {
@@ -287,8 +292,20 @@ struct MprisSnapshot {
     shuffle: bool,
     can_go_next: bool,
     can_go_previous: bool,
+    track_id: OwnedObjectPath,
     title: String,
     uri: Option<String>,
+    art_url: Option<String>,
+    tracklist: Vec<MprisTrack>,
+    current_track_id: Option<OwnedObjectPath>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct MprisTrack {
+    id: OwnedObjectPath,
+    title: String,
+    uri: Option<String>,
+    duration_us: Option<i64>,
     art_url: Option<String>,
 }
 
@@ -305,9 +322,12 @@ impl Default for MprisSnapshot {
             shuffle: false,
             can_go_next: false,
             can_go_previous: false,
+            track_id: mpris_track_id(),
             title: "OK Player".to_owned(),
             uri: None,
             art_url: None,
+            tracklist: Vec::new(),
+            current_track_id: None,
         }
     }
 }
@@ -321,6 +341,13 @@ impl MprisSnapshot {
         } else {
             "Playing"
         }
+    }
+
+    fn tracklist_track_ids(&self) -> Vec<OwnedObjectPath> {
+        self.tracklist
+            .iter()
+            .map(|track| track.id.clone())
+            .collect()
     }
 }
 
@@ -340,12 +367,18 @@ enum MprisCommand {
     SetRate(f64),
     SetLoopStatus(String),
     SetShuffle(bool),
+    GoToTrack(String),
     OpenUri(String),
 }
 
 #[derive(Clone, Debug)]
 enum MprisSignal {
-    PropertiesInvalidated(Vec<&'static str>),
+    PlayerPropertiesInvalidated(Vec<&'static str>),
+    TrackListPropertiesInvalidated(Vec<&'static str>),
+    TrackListReplaced {
+        tracks: Vec<OwnedObjectPath>,
+        current_track: OwnedObjectPath,
+    },
     Seeked(i64),
 }
 
@@ -394,7 +427,7 @@ impl MprisRoot {
 
     #[zbus(property)]
     fn has_track_list(&self) -> bool {
-        false
+        true
     }
 
     #[zbus(property)]
@@ -442,6 +475,82 @@ impl MprisPlayer {
             .lock()
             .map(|snapshot| snapshot.clone())
             .unwrap_or_default()
+    }
+}
+
+#[derive(Clone)]
+struct MprisTrackList {
+    snapshot: Arc<Mutex<MprisSnapshot>>,
+    commands: mpsc::Sender<MprisCommand>,
+}
+
+impl MprisTrackList {
+    fn send(&self, command: MprisCommand) -> zbus::fdo::Result<()> {
+        self.commands
+            .send(command)
+            .map_err(|_| zbus::fdo::Error::Failed("OK Player command channel is closed".to_owned()))
+    }
+
+    fn snapshot(&self) -> MprisSnapshot {
+        self.snapshot
+            .lock()
+            .map(|snapshot| snapshot.clone())
+            .unwrap_or_default()
+    }
+}
+
+#[zbus::interface(name = "org.mpris.MediaPlayer2.TrackList")]
+impl MprisTrackList {
+    fn get_tracks_metadata(
+        &self,
+        track_ids: Vec<OwnedObjectPath>,
+    ) -> Vec<HashMap<String, OwnedValue>> {
+        let snapshot = self.snapshot();
+        track_ids
+            .into_iter()
+            .filter_map(|track_id| {
+                snapshot
+                    .tracklist
+                    .iter()
+                    .find(|track| track.id == track_id)
+                    .map(mpris_track_metadata)
+            })
+            .collect()
+    }
+
+    fn add_track(
+        &self,
+        _uri: &str,
+        _after_track: OwnedObjectPath,
+        _set_as_current: bool,
+    ) -> zbus::fdo::Result<()> {
+        Err(zbus::fdo::Error::NotSupported(
+            "OK Player exposes a read-only MPRIS track list".to_owned(),
+        ))
+    }
+
+    fn remove_track(&self, _track_id: OwnedObjectPath) -> zbus::fdo::Result<()> {
+        Err(zbus::fdo::Error::NotSupported(
+            "OK Player exposes a read-only MPRIS track list".to_owned(),
+        ))
+    }
+
+    fn go_to(&self, track_id: OwnedObjectPath) -> zbus::fdo::Result<()> {
+        self.send(MprisCommand::GoToTrack(track_id.to_string()))
+    }
+
+    #[zbus(property(emits_changed_signal = "false"))]
+    fn tracks(&self) -> Vec<OwnedObjectPath> {
+        self.snapshot()
+            .tracklist
+            .iter()
+            .map(|track| track.id.clone())
+            .collect()
+    }
+
+    #[zbus(property)]
+    fn can_edit_tracks(&self) -> bool {
+        false
     }
 }
 
@@ -1177,12 +1286,17 @@ fn run_mpris_service(
         commands: controller.commands.clone(),
     };
     let player = MprisPlayer {
+        snapshot: Arc::clone(&controller.snapshot),
+        commands: controller.commands.clone(),
+    };
+    let track_list = MprisTrackList {
         snapshot: controller.snapshot,
         commands: controller.commands,
     };
     let connection = zbus::blocking::connection::Builder::session()?
         .serve_at(MPRIS_OBJECT_PATH, root)?
         .serve_at(MPRIS_OBJECT_PATH, player)?
+        .serve_at(MPRIS_OBJECT_PATH, track_list)?
         .name(MPRIS_BUS_NAME)?
         .build()?;
 
@@ -1198,7 +1312,7 @@ fn emit_mpris_signal(
     signal: MprisSignal,
 ) -> zbus::Result<()> {
     match signal {
-        MprisSignal::PropertiesInvalidated(properties) if !properties.is_empty() => {
+        MprisSignal::PlayerPropertiesInvalidated(properties) if !properties.is_empty() => {
             let changed: HashMap<&str, Value<'_>> = HashMap::new();
             connection.emit_signal(
                 None::<&str>,
@@ -1212,6 +1326,30 @@ fn emit_mpris_signal(
                 ),
             )
         }
+        MprisSignal::TrackListPropertiesInvalidated(properties) if !properties.is_empty() => {
+            let changed: HashMap<&str, Value<'_>> = HashMap::new();
+            connection.emit_signal(
+                None::<&str>,
+                MPRIS_OBJECT_PATH,
+                "org.freedesktop.DBus.Properties",
+                "PropertiesChanged",
+                &(
+                    "org.mpris.MediaPlayer2.TrackList",
+                    changed,
+                    properties.as_slice(),
+                ),
+            )
+        }
+        MprisSignal::TrackListReplaced {
+            tracks,
+            current_track,
+        } => connection.emit_signal(
+            None::<&str>,
+            MPRIS_OBJECT_PATH,
+            "org.mpris.MediaPlayer2.TrackList",
+            "TrackListReplaced",
+            &(tracks, current_track),
+        ),
         MprisSignal::Seeked(position_us) => connection.emit_signal(
             None::<&str>,
             MPRIS_OBJECT_PATH,
@@ -1287,6 +1425,22 @@ fn handle_mpris_command(
         MprisCommand::SetShuffle(shuffle) => {
             set_shuffle_from_ui(state, status_toast, shuffle);
         }
+        MprisCommand::GoToTrack(track_id) => {
+            let target = {
+                let state = state.borrow();
+                mpris_tracklist_target_for_id(&state, &track_id)
+            };
+            if let Some((index, item)) = target {
+                if state.borrow().playlist.is_empty() {
+                    match item {
+                        PlaylistItem::Local(path) => load_media_path(state, path),
+                        PlaylistItem::Url(url) => load_media_url(state, url),
+                    }
+                } else {
+                    jump_playlist_index(state, index);
+                }
+            }
+        }
         MprisCommand::OpenUri(uri) => {
             if let Some(path) = file_uri_path(&uri) {
                 load_media_path(state, path);
@@ -1324,22 +1478,68 @@ fn update_mpris_snapshot(
     playback: Option<PlaybackState>,
 ) {
     let next = mpris_snapshot_from_state(state, playback);
-    let (invalidated, seeked_position) = if let Ok(mut snapshot) = snapshot.lock() {
-        let invalidated = mpris_invalidated_properties(&snapshot, &next);
-        let seeked_position = mpris_seeked_position(&snapshot, &next);
-        *snapshot = next;
-        (invalidated, seeked_position)
-    } else {
-        (Vec::new(), None)
-    };
+    let (invalidated, tracklist_invalidated, tracklist_replaced, seeked_position) =
+        if let Ok(mut snapshot) = snapshot.lock() {
+            let invalidated = mpris_invalidated_properties(&snapshot, &next);
+            let tracklist_invalidated = mpris_tracklist_invalidated_properties(&snapshot, &next);
+            let tracklist_replaced = mpris_tracklist_replaced_signal(&snapshot, &next);
+            let seeked_position = mpris_seeked_position(&snapshot, &next);
+            *snapshot = next;
+            (
+                invalidated,
+                tracklist_invalidated,
+                tracklist_replaced,
+                seeked_position,
+            )
+        } else {
+            (Vec::new(), Vec::new(), None, None)
+        };
 
     if !invalidated.is_empty() {
-        let _ = signals.send(MprisSignal::PropertiesInvalidated(invalidated));
+        let _ = signals.send(MprisSignal::PlayerPropertiesInvalidated(invalidated));
+    }
+
+    if !tracklist_invalidated.is_empty() {
+        let _ = signals.send(MprisSignal::TrackListPropertiesInvalidated(
+            tracklist_invalidated,
+        ));
+    }
+
+    if let Some((tracks, current_track)) = tracklist_replaced {
+        let _ = signals.send(MprisSignal::TrackListReplaced {
+            tracks,
+            current_track,
+        });
     }
 
     if let Some(position_us) = seeked_position {
         let _ = signals.send(MprisSignal::Seeked(position_us));
     }
+}
+
+fn mpris_tracklist_invalidated_properties(
+    previous: &MprisSnapshot,
+    next: &MprisSnapshot,
+) -> Vec<&'static str> {
+    (previous.tracklist_track_ids() != next.tracklist_track_ids())
+        .then_some(vec!["Tracks"])
+        .unwrap_or_default()
+}
+
+fn mpris_tracklist_replaced_signal(
+    previous: &MprisSnapshot,
+    next: &MprisSnapshot,
+) -> Option<(Vec<OwnedObjectPath>, OwnedObjectPath)> {
+    if previous.tracklist == next.tracklist && previous.current_track_id == next.current_track_id {
+        return None;
+    }
+
+    Some((
+        next.tracklist_track_ids(),
+        next.current_track_id
+            .clone()
+            .unwrap_or_else(mpris_no_track_id),
+    ))
 }
 
 fn mpris_invalidated_properties(
@@ -1353,6 +1553,7 @@ fn mpris_invalidated_properties(
     }
 
     if previous.has_media != next.has_media
+        || previous.track_id != next.track_id
         || previous.title != next.title
         || previous.uri != next.uri
         || previous.art_url != next.art_url
@@ -1449,6 +1650,17 @@ fn mpris_snapshot_from_state(
         .duration
         .filter(|duration| duration.is_finite() && *duration > 0.0)
         .map(secs_to_mpris_us);
+    let tracklist = mpris_tracklist_from_state(state, duration_us);
+    let current_track_id = tracklist
+        .iter()
+        .find(|track| {
+            track
+                .uri
+                .as_ref()
+                .is_some_and(|track_uri| uri.as_ref() == Some(track_uri))
+        })
+        .map(|track| track.id.clone());
+    let track_id = current_track_id.clone().unwrap_or_else(mpris_track_id);
 
     MprisSnapshot {
         has_media,
@@ -1465,9 +1677,133 @@ fn mpris_snapshot_from_state(
         shuffle: state.modes.shuffle_enabled,
         can_go_next: state.playlist.len() > 1,
         can_go_previous: state.playlist.len() > 1,
+        track_id,
         title,
         uri,
         art_url: has_media.then_some(art_url).flatten(),
+        tracklist,
+        current_track_id,
+    }
+}
+
+fn mpris_tracklist_from_state(
+    state: &PlayerState,
+    current_duration_us: Option<i64>,
+) -> Vec<MprisTrack> {
+    let items = mpris_tracklist_items_from_state(state);
+    if items.is_empty() {
+        return Vec::new();
+    }
+
+    let current_index = mpris_current_tracklist_index(state, &items).unwrap_or(0);
+    let (start, end) = mpris_tracklist_window(items.len(), current_index);
+    items
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(end.saturating_sub(start))
+        .map(|(index, item)| {
+            let id = mpris_tracklist_id_for_item(index, item);
+            let uri = mpris_playlist_item_uri(item);
+            let is_current = index == current_index;
+            MprisTrack {
+                id,
+                title: item.display_name(),
+                uri,
+                duration_us: is_current.then_some(current_duration_us).flatten(),
+                art_url: mpris_playlist_item_art_url(item),
+            }
+        })
+        .collect()
+}
+
+fn mpris_tracklist_items_from_state(state: &PlayerState) -> Vec<PlaylistItem> {
+    if !state.playlist.is_empty() {
+        return state.playlist.clone();
+    }
+
+    if let Some(path) = state.current_file.as_ref() {
+        return vec![PlaylistItem::Local(path.clone())];
+    }
+
+    if let Some(url) = state.current_url.as_ref() {
+        return vec![PlaylistItem::Url(url.clone())];
+    }
+
+    Vec::new()
+}
+
+fn mpris_current_tracklist_index(state: &PlayerState, items: &[PlaylistItem]) -> Option<usize> {
+    items.iter().position(|item| {
+        item.is_current(state.current_file.as_deref(), state.current_url.as_deref())
+    })
+}
+
+fn mpris_tracklist_window(len: usize, current_index: usize) -> (usize, usize) {
+    if len <= MPRIS_TRACKLIST_CONTEXT_LIMIT {
+        return (0, len);
+    }
+
+    let half = MPRIS_TRACKLIST_CONTEXT_LIMIT / 2;
+    let start = current_index
+        .saturating_sub(half)
+        .min(len.saturating_sub(MPRIS_TRACKLIST_CONTEXT_LIMIT));
+    (start, start + MPRIS_TRACKLIST_CONTEXT_LIMIT)
+}
+
+fn mpris_tracklist_id_for_item(index: usize, item: &PlaylistItem) -> OwnedObjectPath {
+    let hash = mpris_playlist_item_hash(item);
+    format!("/org/mpris/MediaPlayer2/TrackList/Track/t{index}_{hash:016x}")
+        .try_into()
+        .expect("generated MPRIS track id should be an object path")
+}
+
+fn mpris_tracklist_target_for_id(
+    state: &PlayerState,
+    track_id: &str,
+) -> Option<(usize, PlaylistItem)> {
+    mpris_tracklist_items_from_state(state)
+        .into_iter()
+        .enumerate()
+        .find(|(index, item)| mpris_tracklist_id_for_item(*index, item).as_str() == track_id)
+}
+
+fn mpris_playlist_item_hash(item: &PlaylistItem) -> u64 {
+    let mut hash = 0xcbf29ce484222325_u64;
+    let mut mix = |byte: u8| {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    };
+
+    match item {
+        PlaylistItem::Local(path) => {
+            mix(b'L');
+            for byte in path.to_string_lossy().as_bytes() {
+                mix(*byte);
+            }
+        }
+        PlaylistItem::Url(url) => {
+            mix(b'U');
+            for byte in url.as_bytes() {
+                mix(*byte);
+            }
+        }
+    }
+
+    hash
+}
+
+fn mpris_playlist_item_uri(item: &PlaylistItem) -> Option<String> {
+    match item {
+        PlaylistItem::Local(path) => Some(local_file_uri(path)),
+        PlaylistItem::Url(url) => Some(url.clone()),
+    }
+}
+
+fn mpris_playlist_item_art_url(item: &PlaylistItem) -> Option<String> {
+    match item {
+        PlaylistItem::Local(path) => mpris_sidecar_art_url(path).or_else(mpris_app_icon_art_url),
+        PlaylistItem::Url(_) => mpris_app_icon_art_url(),
     }
 }
 
@@ -1499,6 +1835,16 @@ fn local_file_uri(path: &Path) -> String {
 }
 
 fn mpris_sidecar_art_url(media_path: &Path) -> Option<String> {
+    let cache = MPRIS_SIDECAR_ART_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut cache) = cache.lock() {
+        if let Some(cached) = cache.get(media_path) {
+            return cached.clone();
+        }
+        let resolved = mpris_sidecar_art_path(media_path).map(|path| local_file_uri(&path));
+        cache.insert(media_path.to_path_buf(), resolved.clone());
+        return resolved;
+    }
+
     mpris_sidecar_art_path(media_path).map(|path| local_file_uri(&path))
 }
 
@@ -1572,7 +1918,9 @@ fn mpris_has_image_header(path: &Path) -> bool {
 }
 
 fn mpris_app_icon_art_url() -> Option<String> {
-    mpris_app_icon_art_path().map(|path| local_file_uri(&path))
+    MPRIS_APP_ICON_ART_URL
+        .get_or_init(|| mpris_app_icon_art_path().map(|path| local_file_uri(&path)))
+        .clone()
 }
 
 fn mpris_app_icon_art_path() -> Option<PathBuf> {
@@ -1598,31 +1946,54 @@ fn secs_to_mpris_us(seconds: f64) -> i64 {
 }
 
 fn mpris_metadata(snapshot: &MprisSnapshot) -> HashMap<String, OwnedValue> {
+    mpris_metadata_map(
+        snapshot.track_id.clone(),
+        &snapshot.title,
+        snapshot.uri.as_deref(),
+        snapshot.duration_us,
+        snapshot.art_url.as_deref(),
+    )
+}
+
+fn mpris_track_metadata(track: &MprisTrack) -> HashMap<String, OwnedValue> {
+    mpris_metadata_map(
+        track.id.clone(),
+        &track.title,
+        track.uri.as_deref(),
+        track.duration_us,
+        track.art_url.as_deref(),
+    )
+}
+
+fn mpris_metadata_map(
+    track_id: OwnedObjectPath,
+    title: &str,
+    uri: Option<&str>,
+    duration_us: Option<i64>,
+    art_url: Option<&str>,
+) -> HashMap<String, OwnedValue> {
     let mut metadata = HashMap::new();
-    let track_id = mpris_track_id();
     metadata.insert(
         "mpris:trackid".to_owned(),
         Value::from(track_id).try_into().expect("track id value"),
     );
     metadata.insert(
         "xesam:title".to_owned(),
-        Value::from(snapshot.title.as_str())
-            .try_into()
-            .expect("title value"),
+        Value::from(title).try_into().expect("title value"),
     );
-    if let Some(duration_us) = snapshot.duration_us {
+    if let Some(duration_us) = duration_us {
         metadata.insert(
             "mpris:length".to_owned(),
             Value::from(duration_us).try_into().expect("length value"),
         );
     }
-    if let Some(uri) = snapshot.uri.as_deref() {
+    if let Some(uri) = uri {
         metadata.insert(
             "xesam:url".to_owned(),
             Value::from(uri).try_into().expect("url value"),
         );
     }
-    if let Some(art_url) = snapshot.art_url.as_deref() {
+    if let Some(art_url) = art_url {
         metadata.insert(
             "mpris:artUrl".to_owned(),
             Value::from(art_url).try_into().expect("art url value"),
@@ -1635,6 +2006,12 @@ fn mpris_track_id() -> OwnedObjectPath {
     MPRIS_TRACK_PATH
         .try_into()
         .expect("static MPRIS track path")
+}
+
+fn mpris_no_track_id() -> OwnedObjectPath {
+    MPRIS_TRACKLIST_NO_TRACK_PATH
+        .try_into()
+        .expect("static MPRIS no-track path")
 }
 
 fn main() -> glib::ExitCode {
@@ -14087,6 +14464,104 @@ mod tests {
 
         assert!(path.is_file());
         assert!(mpris_app_icon_art_url().is_some());
+    }
+
+    #[test]
+    fn mpris_tracklist_window_limits_context_around_current_track() {
+        assert_eq!(mpris_tracklist_window(3, 1), (0, 3));
+        assert_eq!(
+            mpris_tracklist_window(30, 0),
+            (0, MPRIS_TRACKLIST_CONTEXT_LIMIT)
+        );
+        assert_eq!(
+            mpris_tracklist_window(30, 25),
+            (9, 9 + MPRIS_TRACKLIST_CONTEXT_LIMIT)
+        );
+    }
+
+    #[test]
+    fn mpris_tracklist_metadata_uses_current_track_id() {
+        let root = unique_temp_dir("okp-mpris-tracklist");
+        fs::create_dir_all(&root).expect("test folder should be created");
+        let first = root.join("Episode 1.mkv");
+        let second = root.join("Episode 2.mkv");
+        let third = root.join("Episode 3.mkv");
+        fs::write(&first, []).expect("test media should be written");
+        fs::write(&second, []).expect("test media should be written");
+        fs::write(&third, []).expect("test media should be written");
+
+        let mut state = PlayerState {
+            current_file: Some(second.clone()),
+            playlist: vec![
+                PlaylistItem::Local(first.clone()),
+                PlaylistItem::Local(second.clone()),
+                PlaylistItem::Local(third.clone()),
+            ],
+            ..PlayerState::default()
+        };
+
+        let tracks = mpris_tracklist_from_state(&state, Some(42_000_000));
+
+        assert_eq!(tracks.len(), 3);
+        assert_eq!(tracks[1].title, "Episode 2.mkv");
+        assert_eq!(tracks[1].duration_us, Some(42_000_000));
+        assert_eq!(
+            mpris_tracklist_target_for_id(&state, tracks[1].id.as_str()),
+            Some((1, PlaylistItem::Local(second.clone())))
+        );
+
+        let snapshot = mpris_snapshot_from_state(&state, None);
+        assert_eq!(snapshot.current_track_id, Some(snapshot.track_id.clone()));
+        assert!(snapshot.tracklist_track_ids().contains(&snapshot.track_id));
+        assert!(mpris_metadata(&snapshot).contains_key("mpris:trackid"));
+        assert!(mpris_track_metadata(&tracks[1]).contains_key("mpris:trackid"));
+
+        state.current_file = Some(third);
+        let moved = mpris_snapshot_from_state(&state, None);
+        assert_ne!(snapshot.current_track_id, moved.current_track_id);
+        assert!(mpris_tracklist_replaced_signal(&snapshot, &moved).is_some());
+        assert!(mpris_tracklist_invalidated_properties(&snapshot, &moved).is_empty());
+
+        fs::remove_dir_all(root).expect("test folder should be removed");
+    }
+
+    #[test]
+    fn mpris_tracklist_replaced_invalidates_tracks_when_playlist_changes() {
+        let first = PlaylistItem::Url("https://example.test/one.mp3".to_owned());
+        let second = PlaylistItem::Url("https://example.test/two.mp3".to_owned());
+        let previous = MprisSnapshot {
+            tracklist: vec![MprisTrack {
+                id: mpris_tracklist_id_for_item(0, &first),
+                title: first.display_name(),
+                uri: mpris_playlist_item_uri(&first),
+                duration_us: None,
+                art_url: None,
+            }],
+            current_track_id: Some(mpris_tracklist_id_for_item(0, &first)),
+            ..MprisSnapshot::default()
+        };
+        let next = MprisSnapshot {
+            tracklist: vec![
+                previous.tracklist[0].clone(),
+                MprisTrack {
+                    id: mpris_tracklist_id_for_item(1, &second),
+                    title: second.display_name(),
+                    uri: mpris_playlist_item_uri(&second),
+                    duration_us: None,
+                    art_url: None,
+                },
+            ],
+            ..previous.clone()
+        };
+
+        assert_eq!(
+            mpris_tracklist_invalidated_properties(&previous, &next),
+            vec!["Tracks"]
+        );
+        let (tracks, current_track) =
+            mpris_tracklist_replaced_signal(&previous, &next).expect("playlist should change");
+        assert_eq!(tracks.len(), 2);
+        assert_eq!(Some(current_track), previous.current_track_id);
     }
 
     #[test]
