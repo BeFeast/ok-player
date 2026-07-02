@@ -34,6 +34,13 @@ const APP_BUILD_SHA: &str = env!("OKP_BUILD_SHA");
 const LINUX_UPDATE_REPO_URL: &str = "https://github.com/BeFeast/ok-player";
 const LINUX_DEB_RELEASES_API_URL: &str = "https://api.github.com/repos/BeFeast/ok-player/releases";
 const UPDATE_STATUS_NOT_CHECKED: &str = "Not checked yet";
+const VIDEO_ASPECT_AUTO: &str = "no";
+const VIDEO_ASPECT_PRESETS: [(&str, &str); 4] = [
+    ("Auto", VIDEO_ASPECT_AUTO),
+    ("16:9", "16:9"),
+    ("4:3", "4:3"),
+    ("2.35:1", "2.35:1"),
+];
 
 #[derive(Default)]
 struct PlayerState {
@@ -52,6 +59,44 @@ struct PlayerState {
     history: history::HistoryStore,
     settings: settings::SettingsStore,
     render_target_size: Option<okp_mpv::RenderTargetSize>,
+    video_transform: VideoTransformState,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct VideoTransformState {
+    rotation: i64,
+    fill_screen: bool,
+    aspect_override: String,
+}
+
+impl Default for VideoTransformState {
+    fn default() -> Self {
+        Self {
+            rotation: 0,
+            fill_screen: false,
+            aspect_override: VIDEO_ASPECT_AUTO.to_owned(),
+        }
+    }
+}
+
+impl VideoTransformState {
+    fn rotate_clockwise(&mut self) -> i64 {
+        self.rotation = (self.rotation + 90).rem_euclid(360);
+        self.rotation
+    }
+
+    fn set_aspect(&mut self, aspect: &str) {
+        self.aspect_override = video_aspect_value(aspect).to_owned();
+    }
+
+    fn toggle_fill_screen(&mut self) -> bool {
+        self.fill_screen = !self.fill_screen;
+        self.fill_screen
+    }
+
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -2748,6 +2793,7 @@ fn command_popover_content(
         private_session,
         playlist_count,
         has_local_media,
+        video_transform,
     ) = {
         let state = state.borrow();
         (
@@ -2758,6 +2804,7 @@ fn command_popover_content(
             state.private_session,
             state.playlist.len(),
             state.current_file.is_some(),
+            state.video_transform.clone(),
         )
     };
 
@@ -2888,6 +2935,55 @@ fn command_popover_content(
         );
     });
     content.append(&go_to_time_button);
+
+    content.append(&divider());
+    content.append(&track_section_title("Video"));
+    content.append(&track_section_title("Aspect ratio"));
+    for (label, aspect) in VIDEO_ASPECT_PRESETS {
+        let button = track_button(label, video_transform.aspect_override == aspect);
+        button.set_sensitive(has_media);
+        let aspect_state = Rc::clone(&state);
+        let aspect_toast = Rc::clone(&status_toast);
+        let aspect_popover = popover.clone();
+        button.connect_clicked(move |_| {
+            aspect_popover.popdown();
+            set_video_aspect(&aspect_state, aspect, &aspect_toast);
+        });
+        content.append(&button);
+    }
+
+    let rotate_button = track_button("Rotate 90°", false);
+    rotate_button.set_sensitive(has_media);
+    let rotate_state = Rc::clone(&state);
+    let rotate_toast = Rc::clone(&status_toast);
+    let rotate_popover = popover.clone();
+    rotate_button.connect_clicked(move |_| {
+        rotate_popover.popdown();
+        rotate_video_clockwise(&rotate_state, &rotate_toast);
+    });
+    content.append(&rotate_button);
+
+    let fill_button = track_button("Fill screen (crop bars)", video_transform.fill_screen);
+    fill_button.set_sensitive(has_media);
+    let fill_state = Rc::clone(&state);
+    let fill_toast = Rc::clone(&status_toast);
+    let fill_popover = popover.clone();
+    fill_button.connect_clicked(move |_| {
+        fill_popover.popdown();
+        toggle_video_fill_screen(&fill_state, &fill_toast);
+    });
+    content.append(&fill_button);
+
+    let reset_video_button = track_button("Reset video", false);
+    reset_video_button.set_sensitive(has_media);
+    let reset_video_state = Rc::clone(&state);
+    let reset_video_toast = Rc::clone(&status_toast);
+    let reset_video_popover = popover.clone();
+    reset_video_button.connect_clicked(move |_| {
+        reset_video_popover.popdown();
+        reset_video_transform(&reset_video_state, &reset_video_toast);
+    });
+    content.append(&reset_video_button);
 
     content.append(&divider());
     content.append(&track_section_title("Screenshot"));
@@ -7477,6 +7573,68 @@ fn toggle_fullscreen(window: &gtk::ApplicationWindow) {
     }
 }
 
+fn set_video_aspect(state: &Rc<RefCell<PlayerState>>, aspect: &str, status_toast: &StatusToast) {
+    let aspect = video_aspect_value(aspect);
+    if with_mpv(state, |mpv| mpv.set_video_aspect_override(aspect)) {
+        state.borrow_mut().video_transform.set_aspect(aspect);
+        if aspect == VIDEO_ASPECT_AUTO {
+            status_toast.show("Aspect: Auto");
+        } else {
+            status_toast.show(&format!("Aspect: {aspect}"));
+        }
+    } else {
+        status_toast.show("Could not update video");
+    }
+}
+
+fn rotate_video_clockwise(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
+    let rotation = {
+        let state = state.borrow();
+        (state.video_transform.rotation + 90).rem_euclid(360)
+    };
+    if with_mpv(state, |mpv| mpv.set_video_rotation(rotation)) {
+        state.borrow_mut().video_transform.rotate_clockwise();
+        status_toast.show("Rotated 90°");
+    } else {
+        status_toast.show("Could not rotate video");
+    }
+}
+
+fn toggle_video_fill_screen(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
+    let enabled = {
+        let state = state.borrow();
+        !state.video_transform.fill_screen
+    };
+    if with_mpv(state, |mpv| mpv.set_video_fill_screen(enabled)) {
+        state.borrow_mut().video_transform.toggle_fill_screen();
+        status_toast.show(if enabled {
+            "Fill screen on"
+        } else {
+            "Fill screen off"
+        });
+    } else {
+        status_toast.show("Could not update video");
+    }
+}
+
+fn reset_video_transform(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
+    if with_mpv(state, |mpv| mpv.reset_video_transform()) {
+        state.borrow_mut().video_transform.reset();
+        status_toast.show("Video reset");
+    } else {
+        status_toast.show("Could not reset video");
+    }
+}
+
+fn reset_video_transform_for_new_media(state: &mut PlayerState) {
+    state.video_transform.reset();
+    if let Some(mpv) = state.mpv.as_ref()
+        && let Err(error) = mpv.reset_video_transform()
+    {
+        eprintln!("Failed to reset video transform: {error}");
+    }
+}
+
 fn cycle_repeat_mode(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
     let mut state = state.borrow_mut();
     state.modes.repeat_mode = state.modes.repeat_mode.cycle();
@@ -7581,6 +7739,7 @@ fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
     state.pending_subtitles.clear();
     state.pending_resume = None;
     state.pending_preferences = None;
+    state.video_transform.reset();
 }
 
 fn load_media_path(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
@@ -7697,6 +7856,7 @@ fn remember_loaded_media_with_playlist(
         state.history.playback_preferences(&path)
     };
     let playlist_changed = state.playlist != playlist;
+    reset_video_transform_for_new_media(&mut state);
     state.current_file = Some(path);
     state.current_url = None;
     state.playlist = playlist;
@@ -7775,6 +7935,7 @@ fn remember_loaded_url_with_playlist(
 
     let mut state = state.borrow_mut();
     let playlist_changed = state.playlist != playlist;
+    reset_video_transform_for_new_media(&mut state);
     state.current_file = None;
     state.current_url = Some(url);
     state.playlist = playlist;
@@ -8407,6 +8568,13 @@ fn format_speed(speed: f64) -> String {
 
 fn speed_matches(left: f64, right: f64) -> bool {
     (left - right).abs() < 0.005
+}
+
+fn video_aspect_value(value: &str) -> &'static str {
+    VIDEO_ASPECT_PRESETS
+        .iter()
+        .find_map(|(_, preset)| (*preset == value).then_some(*preset))
+        .unwrap_or(VIDEO_ASPECT_AUTO)
 }
 
 fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: bool) {

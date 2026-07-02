@@ -669,6 +669,25 @@ impl Mpv {
         self.set_gamma(gamma)
     }
 
+    pub fn set_video_aspect_override(&self, value: &str) -> Result<(), MpvError> {
+        self.command(&["set", "video-aspect-override", video_aspect_override(value)])
+    }
+
+    pub fn set_video_rotation(&self, degrees: i64) -> Result<(), MpvError> {
+        let degrees = normalized_video_rotation(degrees).to_string();
+        self.command(&["set", "video-rotate", &degrees])
+    }
+
+    pub fn set_video_fill_screen(&self, enabled: bool) -> Result<(), MpvError> {
+        self.set_double("panscan", if enabled { 1.0 } else { 0.0 })
+    }
+
+    pub fn reset_video_transform(&self) -> Result<(), MpvError> {
+        self.set_video_rotation(0)?;
+        self.set_video_fill_screen(false)?;
+        self.set_video_aspect_override("no")
+    }
+
     pub fn set_audio_normalization(&self, enabled: bool) -> Result<(), MpvError> {
         let _ = self.command(&["af", "remove", AUDIO_NORMALIZATION_FILTER_LABEL]);
         if enabled {
@@ -1133,6 +1152,19 @@ fn video_adjustment(value: f64) -> f64 {
     }
 }
 
+fn normalized_video_rotation(degrees: i64) -> i64 {
+    degrees.rem_euclid(360) / 90 * 90
+}
+
+fn video_aspect_override(value: &str) -> &str {
+    match value {
+        "16:9" => "16:9",
+        "4:3" => "4:3",
+        "2.35:1" => "2.35:1",
+        _ => "no",
+    }
+}
+
 fn format_aspect_ratio(aspect: f64) -> String {
     const COMMON: [(u32, u32); 5] = [(4, 3), (16, 9), (16, 10), (21, 9), (64, 27)];
     for (width, height) in COMMON {
@@ -1317,6 +1349,17 @@ mod tests {
         assert_eq!(video_adjustment(125.0), 100.0);
         assert_eq!(video_adjustment(-125.0), -100.0);
         assert_eq!(video_adjustment(f64::NAN), 0.0);
+    }
+
+    #[test]
+    fn normalizes_video_transform_values() {
+        assert_eq!(normalized_video_rotation(0), 0);
+        assert_eq!(normalized_video_rotation(90), 90);
+        assert_eq!(normalized_video_rotation(450), 90);
+        assert_eq!(normalized_video_rotation(-90), 270);
+        assert_eq!(video_aspect_override("16:9"), "16:9");
+        assert_eq!(video_aspect_override("2.35:1"), "2.35:1");
+        assert_eq!(video_aspect_override("-1"), "no");
     }
 
     #[test]
