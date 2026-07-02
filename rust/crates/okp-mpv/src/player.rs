@@ -384,6 +384,22 @@ impl Mpv {
                     .map(format_bitrate),
             );
         }
+        let display_width = self.get_i64("video-params/dw")?.filter(|value| *value > 0);
+        let display_height = self.get_i64("video-params/dh")?.filter(|value| *value > 0);
+        if let (Some(display_width), Some(display_height)) = (display_width, display_height)
+            && (Some(display_width) != width || Some(display_height) != height)
+        {
+            video.add(
+                "Display Size",
+                format!("{display_width} x {display_height}"),
+            );
+        }
+        video.add_option(
+            "Aspect",
+            self.get_double("video-params/aspect")?
+                .filter(|aspect| aspect.is_finite() && *aspect > 0.0)
+                .map(format_aspect_ratio),
+        );
         video.add_option(
             "Container FPS",
             self.get_double("container-fps")?
@@ -397,15 +413,76 @@ impl Mpv {
                 .map(format_fps),
         );
         video.add_option("Pixel Format", self.get_string("video-params/pixelformat")?);
+        video.add_option(
+            "Hardware Format",
+            self.get_string("video-params/hw-pixelformat")?,
+        );
+        video.add_option("Color Space", self.get_string("video-params/colormatrix")?);
+        video.add_option("Levels", self.get_string("video-params/colorlevels")?);
         video.add_option("Transfer", self.get_string("video-params/gamma")?);
         video.add_option("Primaries", self.get_string("video-params/primaries")?);
+        video.add_option(
+            "Chroma Location",
+            self.get_string("video-params/chroma-location")?,
+        );
+        video.add_option(
+            "Signal Peak",
+            self.get_double("video-params/sig-peak")?
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .map(|value| format!("{value:.3}")),
+        );
         video.add_option(
             "Peak Luminance",
             self.get_double("video-params/max-luma")?
                 .filter(|value| value.is_finite() && *value > 0.0)
                 .map(|value| format!("{value:.0} nits")),
         );
+        video.add_option(
+            "Rotation",
+            self.get_i64("video-params/rotate")?
+                .filter(|value| *value != 0)
+                .map(|value| format!("{value} deg")),
+        );
         push_section(&mut sections, video);
+
+        let mut audio = InfoSection::new("Audio");
+        audio.add_option(
+            "Codec",
+            self.get_string("audio-codec")?
+                .map(|codec| friendly_codec(&codec)),
+        );
+        if let Some(prefix) = self.selected_track_prefix("audio")? {
+            audio.add_option("Track", selected_track_title(self, &prefix)?);
+            audio.add_option("Language", self.get_string(&format!("{prefix}/lang"))?);
+            audio.add_option(
+                "Channels",
+                self.get_string(&format!("{prefix}/audio-channels"))?,
+            );
+            audio.add_option(
+                "Sample Rate",
+                self.get_i64(&format!("{prefix}/demux-samplerate"))?
+                    .filter(|sample_rate| *sample_rate > 0)
+                    .map(format_sample_rate),
+            );
+            audio.add_option(
+                "Bitrate",
+                self.get_i64(&format!("{prefix}/demux-bitrate"))?
+                    .filter(|bitrate| *bitrate > 0)
+                    .map(format_bitrate),
+            );
+        }
+        audio.add_option("Output Format", self.get_string("audio-params/format")?);
+        audio.add_option(
+            "Output Channels",
+            self.get_string("audio-params/hr-channels")?,
+        );
+        audio.add_option(
+            "Output Rate",
+            self.get_i64("audio-params/samplerate")?
+                .filter(|sample_rate| *sample_rate > 0)
+                .map(format_sample_rate),
+        );
+        push_section(&mut sections, audio);
 
         let chapters = self.chapters()?;
         let mut chapter_section = InfoSection::new("Chapters");
@@ -859,6 +936,15 @@ fn display_path_name(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
+fn selected_track_title(mpv: &Mpv, prefix: &str) -> Result<Option<String>, MpvError> {
+    let id = mpv.get_i64(&format!("{prefix}/id"))?.unwrap_or(0);
+    Ok(mpv
+        .get_string(&format!("{prefix}/title"))?
+        .or(mpv.get_string(&format!("{prefix}/lang"))?)
+        .filter(|title| !title.is_empty())
+        .or_else(|| (id > 0).then(|| format!("Track {id}"))))
+}
+
 fn friendly_container(container: &str) -> String {
     match container.to_ascii_lowercase().as_str() {
         "matroska,webm" | "matroska" => "Matroska / WebM".to_owned(),
@@ -926,6 +1012,18 @@ fn format_sample_rate(hertz: i64) -> String {
 
 fn format_fps(fps: f64) -> String {
     format!("{fps:.3} fps")
+}
+
+fn format_aspect_ratio(aspect: f64) -> String {
+    const COMMON: [(u32, u32); 5] = [(4, 3), (16, 9), (16, 10), (21, 9), (64, 27)];
+    for (width, height) in COMMON {
+        let common = f64::from(width) / f64::from(height);
+        if (aspect - common).abs() < 0.01 {
+            return format!("{width}:{height}");
+        }
+    }
+
+    format!("{aspect:.3}:1")
 }
 
 fn format_duration(seconds: f64) -> String {
@@ -1061,6 +1159,13 @@ mod tests {
         assert_eq!(format_duration(0.0), "00:00");
         assert_eq!(format_duration(125.2), "02:05");
         assert_eq!(format_duration(6906.0), "01:55:06");
+    }
+
+    #[test]
+    fn formats_common_aspect_ratios() {
+        assert_eq!(format_aspect_ratio(16.0 / 9.0), "16:9");
+        assert_eq!(format_aspect_ratio(4.0 / 3.0), "4:3");
+        assert_eq!(format_aspect_ratio(2.0), "2.000:1");
     }
 
     #[test]
