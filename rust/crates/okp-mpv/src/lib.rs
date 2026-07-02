@@ -1,4 +1,6 @@
 mod ffi;
+#[cfg(debug_assertions)]
+mod guard;
 mod player;
 pub mod version;
 
