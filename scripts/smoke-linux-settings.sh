@@ -85,6 +85,25 @@ if [[ "$rail_top_pixel" != "srgb(234,240,245)" || "$content_top_pixel" != "srgb(
   echo "Unexpected Settings top strip colors: rail=${rail_top_pixel}, content=${content_top_pixel}" >&2
   exit 1
 fi
+
+if [[ "${OKP_EXPECT_UPDATE_STATUS_UP_TO_DATE:-0}" == "1" ]]; then
+  # Optional network-backed guard: the About Updates status should settle on
+  # "Up to date" instead of the old dead-looking "Not checked yet". This uses
+  # a stable dark-pixel envelope for the right-aligned status text so the
+  # default smoke remains OCR-free and offline-friendly.
+  update_status_dark_pixels="$(
+    magick "$OUT_DIR/settings.png" \
+      -crop 125x24+560+444 \
+      -colorspace gray \
+      -threshold 50% \
+      -format '%[fx:(1-mean)*w*h]' info:
+  )"
+  update_status_dark_pixels="${update_status_dark_pixels%.*}"
+  if (( update_status_dark_pixels < 90 || update_status_dark_pixels > 190 )); then
+    echo "Unexpected update status text pixels: ${update_status_dark_pixels}" >&2
+    exit 1
+  fi
+fi
 SMOKE
 then
   echo "Settings smoke failed. Session log: $OUT_DIR/session.log" >&2

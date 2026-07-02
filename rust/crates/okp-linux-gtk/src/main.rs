@@ -88,6 +88,7 @@ struct PlayerState {
     private_session: bool,
     history: history::HistoryStore,
     settings: settings::SettingsStore,
+    linux_update_status: LinuxUpdateStatus,
     pending_audio_device_restore: Option<PendingAudioDeviceRestore>,
     render_target_size: Option<okp_mpv::RenderTargetSize>,
     video_transform: VideoTransformState,
@@ -612,6 +613,61 @@ enum LinuxUpdateCheckResult {
     UpToDate,
     Available(PendingLinuxUpdate),
     Failed(String),
+}
+
+#[derive(Clone, Default)]
+enum LinuxUpdateStatus {
+    #[default]
+    NotChecked,
+    Checking,
+    UpToDate,
+    Available(PendingLinuxUpdate),
+    Failed(String),
+}
+
+impl LinuxUpdateStatus {
+    fn from_check_result(result: &LinuxUpdateCheckResult) -> Self {
+        match result {
+            LinuxUpdateCheckResult::UpToDate => Self::UpToDate,
+            LinuxUpdateCheckResult::Available(update) => Self::Available(update.clone()),
+            LinuxUpdateCheckResult::Failed(error) => Self::Failed(error.clone()),
+        }
+    }
+
+    fn pending_update(&self) -> Option<PendingLinuxUpdate> {
+        match self {
+            Self::Available(update) => Some(update.clone()),
+            _ => None,
+        }
+    }
+
+    fn action_label(&self) -> String {
+        match self {
+            Self::Available(update) => update.action_label().to_owned(),
+            Self::Checking => "Checking...".to_owned(),
+            _ => "Check for updates".to_owned(),
+        }
+    }
+
+    fn about_status_text(&self) -> String {
+        match self {
+            Self::NotChecked => UPDATE_STATUS_NOT_CHECKED.to_owned(),
+            Self::Checking => "Checking...".to_owned(),
+            Self::UpToDate => "Up to date".to_owned(),
+            Self::Available(update) => update.available_status(),
+            Self::Failed(_) => "Update check failed".to_owned(),
+        }
+    }
+
+    fn settings_status_text(&self, auto_check_enabled: bool) -> String {
+        match self {
+            Self::NotChecked => update_status_intro(auto_check_enabled).to_owned(),
+            Self::Checking => "Checking GitHub Releases...".to_owned(),
+            Self::UpToDate => "OK Player is up to date".to_owned(),
+            Self::Available(update) => update.available_status(),
+            Self::Failed(error) => format!("Update check failed: {error}"),
+        }
+    }
 }
 
 enum LinuxUpdateApplyResult {
@@ -1599,7 +1655,7 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> AppRuntime {
         });
     }
     if auto_check_updates {
-        check_updates_on_startup(Rc::clone(&status_toast));
+        check_updates_on_startup(Rc::clone(&state), Rc::clone(&status_toast));
     }
 
     AppRuntime { window, state }
@@ -5909,8 +5965,14 @@ fn about_engine_card(snapshot: &AboutSnapshot) -> gtk::Box {
 
 fn about_updates_card(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusToast>) -> gtk::Box {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    let initial_update_status = state.borrow().linux_update_status.clone();
 
-    let status_row = about_spec_row("Status", UPDATE_STATUS_NOT_CHECKED, false, None);
+    let status_row = about_spec_row(
+        "Status",
+        &initial_update_status.about_status_text(),
+        false,
+        None,
+    );
     let status_label = status_row
         .last_child()
         .and_then(|wrap| wrap.first_child())
@@ -5969,11 +6031,15 @@ fn about_updates_card(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusTo
 
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     actions.set_halign(gtk::Align::Start);
-    let pending_update = Rc::new(RefCell::new(None::<PendingLinuxUpdate>));
-    let check_button = gtk::Button::with_label("Check for updates");
+    let pending_update = Rc::new(RefCell::new(initial_update_status.pending_update()));
+    let check_button = gtk::Button::with_label(&initial_update_status.action_label());
     check_button.add_css_class("okp-about-check-button");
     check_button.set_has_frame(false);
     check_button.set_size_request(132, 34);
+    check_button.set_sensitive(!matches!(
+        initial_update_status,
+        LinuxUpdateStatus::Checking
+    ));
     let check_status = status_label.clone();
     let check_pending = Rc::clone(&pending_update);
     let check_state = Rc::clone(&state);
@@ -5990,36 +6056,35 @@ fn about_updates_card(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusTo
             return;
         }
 
-        button.set_sensitive(false);
-        button.set_label("Checking...");
-        check_status.set_text("Checking...");
-
-        let (sender, receiver) = mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = sender.send(check_for_linux_update());
-        });
-
-        let button = button.clone();
-        let status = check_status.clone();
-        let pending = Rc::clone(&check_pending);
-        let toast = Rc::clone(&check_toast);
-        glib::timeout_add_local(Duration::from_millis(120), move || {
-            match receiver.try_recv() {
-                Ok(result) => {
-                    apply_update_check_result(&button, &status, &pending, &toast, result);
-                    glib::ControlFlow::Break
-                }
-                Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    button.set_sensitive(true);
-                    button.set_label("Check for updates");
-                    status.set_text("Update check failed");
-                    glib::ControlFlow::Break
-                }
-            }
-        });
+        start_update_check_for_ui(
+            button,
+            &check_status,
+            &check_pending,
+            Rc::clone(&check_state),
+            Rc::clone(&check_toast),
+            "Checking...",
+            true,
+        );
     });
     actions.append(&check_button);
+    if auto_check_enabled && matches!(initial_update_status, LinuxUpdateStatus::NotChecked) {
+        let auto_button = check_button.clone();
+        let auto_status = status_label.clone();
+        let auto_pending = Rc::clone(&pending_update);
+        let auto_state = Rc::clone(&state);
+        let auto_toast = Rc::clone(&status_toast);
+        glib::idle_add_local_once(move || {
+            start_update_check_for_ui(
+                &auto_button,
+                &auto_status,
+                &auto_pending,
+                auto_state,
+                auto_toast,
+                "Checking...",
+                false,
+            );
+        });
+    }
     content.append(&actions);
 
     about_card("UPDATES", &content)
@@ -6482,7 +6547,10 @@ fn settings_updates_section(
     row.add_css_class("okp-settings-row");
 
     let auto_check_enabled = state.borrow().settings.auto_check_updates();
-    let status = gtk::Label::new(Some(update_status_intro(auto_check_enabled)));
+    let initial_update_status = state.borrow().linux_update_status.clone();
+    let status = gtk::Label::new(Some(
+        &initial_update_status.settings_status_text(auto_check_enabled),
+    ));
     status.add_css_class("okp-update-status");
     status.set_xalign(0.0);
     status.set_width_chars(1);
@@ -6544,10 +6612,14 @@ fn settings_updates_section(
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     actions.set_halign(gtk::Align::End);
 
-    let pending_update = Rc::new(RefCell::new(None::<PendingLinuxUpdate>));
+    let pending_update = Rc::new(RefCell::new(initial_update_status.pending_update()));
 
-    let check_button = gtk::Button::with_label("Check for updates");
+    let check_button = gtk::Button::with_label(&initial_update_status.action_label());
     check_button.add_css_class("okp-settings-button");
+    check_button.set_sensitive(!matches!(
+        initial_update_status,
+        LinuxUpdateStatus::Checking
+    ));
     let check_status = status.clone();
     let check_pending = Rc::clone(&pending_update);
     let check_state = Rc::clone(&state);
@@ -6564,36 +6636,35 @@ fn settings_updates_section(
             return;
         }
 
-        button.set_sensitive(false);
-        button.set_label("Checking...");
-        check_status.set_text("Checking GitHub Releases...");
-
-        let (sender, receiver) = mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = sender.send(check_for_linux_update());
-        });
-
-        let button = button.clone();
-        let status = check_status.clone();
-        let pending = Rc::clone(&check_pending);
-        let toast = Rc::clone(&check_toast);
-        glib::timeout_add_local(Duration::from_millis(120), move || {
-            match receiver.try_recv() {
-                Ok(result) => {
-                    apply_update_check_result(&button, &status, &pending, &toast, result);
-                    glib::ControlFlow::Break
-                }
-                Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    button.set_sensitive(true);
-                    button.set_label("Check for updates");
-                    status.set_text("Update check failed.");
-                    glib::ControlFlow::Break
-                }
-            }
-        });
+        start_update_check_for_ui(
+            button,
+            &check_status,
+            &check_pending,
+            Rc::clone(&check_state),
+            Rc::clone(&check_toast),
+            "Checking GitHub Releases...",
+            true,
+        );
     });
     actions.append(&check_button);
+    if auto_check_enabled && matches!(initial_update_status, LinuxUpdateStatus::NotChecked) {
+        let auto_button = check_button.clone();
+        let auto_status = status.clone();
+        let auto_pending = Rc::clone(&pending_update);
+        let auto_state = Rc::clone(&state);
+        let auto_toast = Rc::clone(&status_toast);
+        glib::idle_add_local_once(move || {
+            start_update_check_for_ui(
+                &auto_button,
+                &auto_status,
+                &auto_pending,
+                auto_state,
+                auto_toast,
+                "Checking GitHub Releases...",
+                false,
+            );
+        });
+    }
 
     let releases_button = gtk::Button::with_label("Open Releases");
     releases_button.add_css_class("okp-settings-button");
@@ -6614,6 +6685,56 @@ fn update_status_intro(auto_check_enabled: bool) -> &'static str {
     } else {
         "Automatic update checks are off. Use Check for updates any time."
     }
+}
+
+fn start_update_check_for_ui(
+    button: &gtk::Button,
+    status: &gtk::Label,
+    pending: &Rc<RefCell<Option<PendingLinuxUpdate>>>,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+    checking_status: &str,
+    show_toast: bool,
+) {
+    button.set_sensitive(false);
+    button.set_label("Checking...");
+    status.set_text(checking_status);
+    pending.borrow_mut().take();
+    state.borrow_mut().linux_update_status = LinuxUpdateStatus::Checking;
+
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(check_for_linux_update());
+    });
+
+    let button = button.clone();
+    let status = status.clone();
+    let pending = Rc::clone(pending);
+    glib::timeout_add_local(Duration::from_millis(120), move || {
+        match receiver.try_recv() {
+            Ok(result) => {
+                apply_update_check_result(
+                    &button,
+                    &status,
+                    &pending,
+                    Rc::clone(&state),
+                    &status_toast,
+                    show_toast,
+                    result,
+                );
+                glib::ControlFlow::Break
+            }
+            Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                button.set_sensitive(true);
+                button.set_label("Check for updates");
+                status.set_text("Update check failed");
+                state.borrow_mut().linux_update_status =
+                    LinuxUpdateStatus::Failed("update check channel closed".to_owned());
+                glib::ControlFlow::Break
+            }
+        }
+    });
 }
 
 fn start_update_download(
@@ -6685,16 +6806,21 @@ fn apply_update_check_result(
     button: &gtk::Button,
     status: &gtk::Label,
     pending: &Rc<RefCell<Option<PendingLinuxUpdate>>>,
+    state: Rc<RefCell<PlayerState>>,
     status_toast: &StatusToast,
+    show_toast: bool,
     result: LinuxUpdateCheckResult,
 ) {
+    state.borrow_mut().linux_update_status = LinuxUpdateStatus::from_check_result(&result);
     button.set_sensitive(true);
     match result {
         LinuxUpdateCheckResult::UpToDate => {
             pending.borrow_mut().take();
             button.set_label("Check for updates");
             status.set_text("Up to date");
-            status_toast.show("OK Player is up to date");
+            if show_toast {
+                status_toast.show("OK Player is up to date");
+            }
         }
         LinuxUpdateCheckResult::Available(update) => {
             let status_text = update.available_status();
@@ -6702,18 +6828,22 @@ fn apply_update_check_result(
             pending.borrow_mut().replace(update);
             button.set_label(action_label);
             status.set_text(&status_text);
-            status_toast.show("Update available");
+            if show_toast {
+                status_toast.show("Update available");
+            }
         }
         LinuxUpdateCheckResult::Failed(error) => {
             pending.borrow_mut().take();
             button.set_label("Check for updates");
             status.set_text(&format!("Update check failed: {error}"));
-            status_toast.show("Update check failed");
+            if show_toast {
+                status_toast.show("Update check failed");
+            }
         }
     }
 }
 
-fn check_updates_on_startup(status_toast: Rc<StatusToast>) {
+fn check_updates_on_startup(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusToast>) {
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         let _ = sender.send(check_for_linux_update());
@@ -6721,18 +6851,23 @@ fn check_updates_on_startup(status_toast: Rc<StatusToast>) {
 
     glib::timeout_add_local(Duration::from_millis(500), move || {
         match receiver.try_recv() {
-            Ok(LinuxUpdateCheckResult::Available(update)) => {
-                let version = update
-                    .target_version()
-                    .unwrap_or_else(|| "new version".to_owned());
-                status_toast.show(&format!("Update available: {version}"));
+            Ok(result) => {
+                state.borrow_mut().linux_update_status =
+                    LinuxUpdateStatus::from_check_result(&result);
+                match result {
+                    LinuxUpdateCheckResult::Available(update) => {
+                        let version = update
+                            .target_version()
+                            .unwrap_or_else(|| "new version".to_owned());
+                        status_toast.show(&format!("Update available: {version}"));
+                    }
+                    LinuxUpdateCheckResult::Failed(error) => {
+                        eprintln!("Startup update check failed: {error}");
+                    }
+                    LinuxUpdateCheckResult::UpToDate => {}
+                }
                 glib::ControlFlow::Break
             }
-            Ok(LinuxUpdateCheckResult::Failed(error)) => {
-                eprintln!("Startup update check failed: {error}");
-                glib::ControlFlow::Break
-            }
-            Ok(_) => glib::ControlFlow::Break,
             Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
             Err(mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
         }
@@ -14709,6 +14844,48 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
 
         assert_eq!(update.action_label(), "Install .deb");
         assert_eq!(update.available_status(), "Available: 0.1.0-linux-alpha.46");
+    }
+
+    #[test]
+    fn linux_update_status_reflects_last_check_result() {
+        let up_to_date = LinuxUpdateStatus::from_check_result(&LinuxUpdateCheckResult::UpToDate);
+        assert_eq!(up_to_date.about_status_text(), "Up to date");
+        assert_eq!(
+            up_to_date.settings_status_text(true),
+            "OK Player is up to date"
+        );
+        assert_eq!(up_to_date.action_label(), "Check for updates");
+        assert!(up_to_date.pending_update().is_none());
+
+        let update = PendingLinuxUpdate {
+            manager: None,
+            target: LinuxUpdateTarget::Deb(ManualDebUpdate {
+                version: "0.1.0-linux-alpha.46".to_owned(),
+                name: "ok-player_0.1.0-linux-alpha.46_amd64.deb".to_owned(),
+                url: "https://example.invalid/update.deb".to_owned(),
+                size: Some(42),
+            }),
+        };
+        let available =
+            LinuxUpdateStatus::from_check_result(&LinuxUpdateCheckResult::Available(update));
+        assert_eq!(
+            available.about_status_text(),
+            "Available: 0.1.0-linux-alpha.46"
+        );
+        assert_eq!(
+            available.settings_status_text(true),
+            "Available: 0.1.0-linux-alpha.46"
+        );
+        assert_eq!(available.action_label(), "Install .deb");
+        assert!(available.pending_update().is_some());
+
+        let failed =
+            LinuxUpdateStatus::from_check_result(&LinuxUpdateCheckResult::Failed("no feed".into()));
+        assert_eq!(failed.about_status_text(), "Update check failed");
+        assert_eq!(
+            failed.settings_status_text(true),
+            "Update check failed: no feed"
+        );
     }
 
     #[test]
