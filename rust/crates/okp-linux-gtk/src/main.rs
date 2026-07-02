@@ -224,7 +224,7 @@ struct Controls {
     elapsed_label: gtk::Label,
     duration_label: gtk::Label,
     volume: gtk::Scale,
-    chapter_marks_snapshot: RefCell<Vec<f64>>,
+    timeline_marks_snapshot: RefCell<Vec<TimelineMark>>,
     up_next_revealer: gtk::Revealer,
     up_next_title: gtk::Label,
     up_next_summary: gtk::Label,
@@ -653,6 +653,20 @@ struct SidePanelSnapshot {
     current_url: Option<String>,
     playlist: Vec<PlaylistItem>,
     chapters: Vec<Chapter>,
+    ab_loop: AbLoopState,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TimelineMark {
+    time: f64,
+    kind: TimelineMarkKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum TimelineMarkKind {
+    Chapter,
+    AbStart,
+    AbEnd,
 }
 
 #[derive(Clone, Copy)]
@@ -1553,7 +1567,7 @@ fn build_controls(
         elapsed_label,
         duration_label,
         volume,
-        chapter_marks_snapshot: RefCell::new(Vec::new()),
+        timeline_marks_snapshot: RefCell::new(Vec::new()),
         up_next_revealer,
         up_next_title,
         up_next_summary,
@@ -2156,6 +2170,7 @@ fn update_up_next_panel(
             current_url: state.current_url.clone(),
             playlist: state.playlist.clone(),
             chapters,
+            ab_loop: state.ab_loop,
         }
     };
 
@@ -2178,7 +2193,12 @@ fn update_up_next_panel(
         );
         controls.side_panel_snapshot.replace(snapshot);
         controls.side_panel_actions.borrow_mut().clear();
-        update_chapter_marks(&controls.seek, &controls.chapter_marks_snapshot, &[]);
+        update_timeline_marks(
+            &controls.seek,
+            &controls.timeline_marks_snapshot,
+            &[],
+            AbLoopState::default(),
+        );
         clear_list_box(&controls.up_next_list);
         return;
     }
@@ -2207,10 +2227,11 @@ fn update_up_next_panel(
     }
 
     controls.side_panel_snapshot.replace(snapshot.clone());
-    update_chapter_marks(
+    update_timeline_marks(
         &controls.seek,
-        &controls.chapter_marks_snapshot,
+        &controls.timeline_marks_snapshot,
         &snapshot.chapters,
+        snapshot.ab_loop,
     );
 
     let current_index = snapshot.playlist.iter().position(|item| {
@@ -2358,21 +2379,53 @@ fn request_chapter_thumbnail_warm(
     }
 }
 
-fn update_chapter_marks(seek: &gtk::Scale, snapshot: &RefCell<Vec<f64>>, chapters: &[Chapter]) {
-    let marks = chapters
-        .iter()
-        .map(|chapter| chapter.time)
-        .filter(|time| time.is_finite() && *time > 0.0)
-        .collect::<Vec<_>>();
+fn update_timeline_marks(
+    seek: &gtk::Scale,
+    snapshot: &RefCell<Vec<TimelineMark>>,
+    chapters: &[Chapter],
+    ab_loop: AbLoopState,
+) {
+    let marks = timeline_marks(chapters, ab_loop);
     if *snapshot.borrow() == marks {
         return;
     }
 
     seek.clear_marks();
-    for time in &marks {
-        seek.add_mark(*time, gtk::PositionType::Top, None);
+    for mark in &marks {
+        let (position, label) = match mark.kind {
+            TimelineMarkKind::Chapter => (gtk::PositionType::Top, None),
+            TimelineMarkKind::AbStart => (gtk::PositionType::Bottom, Some("A")),
+            TimelineMarkKind::AbEnd => (gtk::PositionType::Bottom, Some("B")),
+        };
+        seek.add_mark(mark.time, position, label);
     }
     snapshot.replace(marks);
+}
+
+fn timeline_marks(chapters: &[Chapter], ab_loop: AbLoopState) -> Vec<TimelineMark> {
+    let mut marks = chapters
+        .iter()
+        .map(|chapter| TimelineMark {
+            time: chapter.time,
+            kind: TimelineMarkKind::Chapter,
+        })
+        .filter(|mark| mark.time.is_finite() && mark.time > 0.0)
+        .collect::<Vec<_>>();
+
+    if let Some(time) = ab_loop.a.filter(|time| time.is_finite() && *time >= 0.0) {
+        marks.push(TimelineMark {
+            time,
+            kind: TimelineMarkKind::AbStart,
+        });
+    }
+    if let Some(time) = ab_loop.b.filter(|time| time.is_finite() && *time >= 0.0) {
+        marks.push(TimelineMark {
+            time,
+            kind: TimelineMarkKind::AbEnd,
+        });
+    }
+
+    marks
 }
 
 fn panel_heading_row(text: &str) -> gtk::ListBoxRow {
@@ -9239,6 +9292,20 @@ fn install_css() {
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.42);
         }
 
+        scale.okp-seek mark indicator {
+            min-width: 2px;
+            min-height: 8px;
+            border-radius: 999px;
+            background: rgba(40, 179, 170, 0.84);
+        }
+
+        scale.okp-seek mark label {
+            color: rgba(40, 179, 170, 0.90);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 10px;
+            font-weight: 700;
+        }
+
         .okp-seek-preview {
             padding: 7px 10px;
             border-radius: 7px;
@@ -10309,6 +10376,51 @@ mod tests {
         assert_eq!(about_hero_channel("Linux alpha"), "ALPHA");
         assert_eq!(about_display_channel("1.0.0-linux"), "Linux");
         assert_eq!(about_hero_channel("Linux"), "LINUX");
+    }
+
+    #[test]
+    fn timeline_marks_include_ab_loop_points() {
+        let chapters = vec![
+            Chapter {
+                index: 0,
+                time: 0.0,
+                title: Some("Start".to_owned()),
+            },
+            Chapter {
+                index: 1,
+                time: 42.0,
+                title: Some("Scene".to_owned()),
+            },
+            Chapter {
+                index: 2,
+                time: f64::NAN,
+                title: None,
+            },
+        ];
+
+        assert_eq!(
+            timeline_marks(
+                &chapters,
+                AbLoopState {
+                    a: Some(0.0),
+                    b: Some(120.0),
+                },
+            ),
+            vec![
+                TimelineMark {
+                    time: 42.0,
+                    kind: TimelineMarkKind::Chapter,
+                },
+                TimelineMark {
+                    time: 0.0,
+                    kind: TimelineMarkKind::AbStart,
+                },
+                TimelineMark {
+                    time: 120.0,
+                    kind: TimelineMarkKind::AbEnd,
+                },
+            ]
+        );
     }
 
     #[test]
