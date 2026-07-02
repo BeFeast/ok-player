@@ -10,6 +10,9 @@ use thiserror::Error;
 
 use crate::ffi;
 
+const AUDIO_NORMALIZATION_FILTER_LABEL: &str = "@okpnorm";
+const AUDIO_NORMALIZATION_FILTER: &str = "@okpnorm:dynaudnorm";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RenderTargetSize {
     pub width: i32,
@@ -618,6 +621,15 @@ impl Mpv {
         self.set_gamma(gamma)
     }
 
+    pub fn set_audio_normalization(&self, enabled: bool) -> Result<(), MpvError> {
+        let _ = self.command(&["af", "remove", AUDIO_NORMALIZATION_FILTER_LABEL]);
+        if enabled {
+            self.command(&["af", "add", AUDIO_NORMALIZATION_FILTER])
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn select_subtitle(&self, id: Option<i64>) -> Result<(), MpvError> {
         let value = track_id_or_off(id);
         self.command(&["set", "sid", &value])
@@ -1210,6 +1222,12 @@ mod tests {
         assert_eq!(video_adjustment(125.0), 100.0);
         assert_eq!(video_adjustment(-125.0), -100.0);
         assert_eq!(video_adjustment(f64::NAN), 0.0);
+    }
+
+    #[test]
+    fn audio_normalization_filter_is_labelled() {
+        assert_eq!(AUDIO_NORMALIZATION_FILTER_LABEL, "@okpnorm");
+        assert_eq!(AUDIO_NORMALIZATION_FILTER, "@okpnorm:dynaudnorm");
     }
 
     #[test]

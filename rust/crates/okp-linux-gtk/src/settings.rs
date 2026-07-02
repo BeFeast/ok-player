@@ -14,6 +14,7 @@ const DEFAULT_SHUFFLE: bool = false;
 const REPEAT_OFF: &str = "off";
 const REPEAT_ONE: &str = "one";
 const REPEAT_ALL: &str = "all";
+const DEFAULT_AUDIO_NORMALIZATION: bool = false;
 const DEFAULT_AUTO_CHECK_UPDATES: bool = true;
 const HWDEC_OFF: &str = "no";
 const HWDEC_AUTO_SAFE: &str = "auto-safe";
@@ -52,6 +53,7 @@ impl SettingsStore {
             .unwrap_or_else(|| SettingsFile {
                 version: SETTINGS_VERSION,
                 playback: PlaybackSettings::default(),
+                audio: AudioSettings::default(),
                 video: VideoSettings::default(),
                 updates: UpdateSettings::default(),
             });
@@ -84,6 +86,13 @@ impl SettingsStore {
 
     pub fn repeat_mode(&self) -> &'static str {
         normalized_repeat(self.data.playback.repeat.as_deref())
+    }
+
+    pub fn audio_normalization_enabled(&self) -> bool {
+        self.data
+            .audio
+            .normalization
+            .unwrap_or(DEFAULT_AUDIO_NORMALIZATION)
     }
 
     pub fn path(&self) -> &Path {
@@ -175,6 +184,13 @@ impl SettingsStore {
         }
     }
 
+    pub fn set_audio_normalization_enabled(&mut self, enabled: bool) {
+        if self.audio_normalization_enabled() != enabled {
+            self.data.audio.normalization = Some(enabled);
+            self.dirty = true;
+        }
+    }
+
     pub fn set_auto_check_updates(&mut self, enabled: bool) {
         if self.data.updates.auto_check != enabled {
             self.data.updates.auto_check = enabled;
@@ -250,6 +266,8 @@ struct SettingsFile {
     #[serde(default)]
     playback: PlaybackSettings,
     #[serde(default)]
+    audio: AudioSettings,
+    #[serde(default)]
     video: VideoSettings,
     #[serde(default)]
     updates: UpdateSettings,
@@ -267,6 +285,12 @@ struct PlaybackSettings {
     repeat: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     shuffle: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+struct AudioSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    normalization: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -369,6 +393,7 @@ mod tests {
             data: SettingsFile {
                 version: SETTINGS_VERSION,
                 playback: PlaybackSettings::default(),
+                audio: AudioSettings::default(),
                 video: VideoSettings::default(),
                 updates: UpdateSettings::default(),
             },
@@ -425,6 +450,26 @@ mod tests {
     #[test]
     fn auto_update_checks_default_on() {
         assert!(store().auto_check_updates());
+    }
+
+    #[test]
+    fn audio_normalization_defaults_off() {
+        assert!(!store().audio_normalization_enabled());
+    }
+
+    #[test]
+    fn audio_normalization_toggle_marks_dirty_once() {
+        let mut settings = store();
+
+        settings.set_audio_normalization_enabled(true);
+
+        assert!(settings.audio_normalization_enabled());
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_audio_normalization_enabled(true);
+
+        assert!(!settings.dirty);
     }
 
     #[test]

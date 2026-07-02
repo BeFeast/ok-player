@@ -1842,6 +1842,13 @@ fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, launch
         ) {
             eprintln!("Failed to restore video adjustments: {error}");
         }
+        let audio_normalization = realize_state
+            .borrow()
+            .settings
+            .audio_normalization_enabled();
+        if let Err(error) = mpv.set_audio_normalization(audio_normalization) {
+            eprintln!("Failed to restore audio normalization: {error}");
+        }
 
         if let Err(error) = mpv.create_render_context() {
             eprintln!("Failed to create mpv render context: {error}");
@@ -5542,6 +5549,10 @@ fn settings_audio_page(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusT
         &selected_track_summary(&state, TrackKind::Audio),
     ));
     summary.append(&settings_volume_row(Rc::clone(&state)));
+    summary.append(&settings_audio_normalization_row(
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    ));
     page.append(&summary);
     page.append(&settings_audio_track_section(state, status_toast));
 
@@ -6021,6 +6032,76 @@ fn settings_volume_row(state: Rc<RefCell<PlayerState>>) -> gtk::Box {
         glib::Propagation::Proceed
     });
     row.append(&scale);
+
+    row
+}
+
+fn settings_audio_normalization_row(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let active = state.borrow().settings.audio_normalization_enabled();
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row.add_css_class("okp-settings-switch-row");
+
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    text.set_hexpand(true);
+    let label = gtk::Label::new(Some("Loudness normalization"));
+    label.add_css_class("okp-info-label");
+    label.set_xalign(0.0);
+    text.append(&label);
+    let detail = gtk::Label::new(Some(
+        "Night mode: smooths quiet dialogue and loud effects using mpv dynaudnorm.",
+    ));
+    detail.add_css_class("okp-update-status");
+    detail.set_xalign(0.0);
+    detail.set_width_chars(1);
+    detail.set_max_width_chars(50);
+    detail.set_wrap(true);
+    text.append(&detail);
+    row.append(&text);
+
+    let state_label = gtk::Label::new(Some(if active { "On" } else { "Off" }));
+    state_label.add_css_class("okp-settings-state-pill");
+    state_label.set_valign(gtk::Align::Center);
+    row.append(&state_label);
+
+    let toggle = about_toggle_button(active);
+    let toggle_state = Rc::clone(&state);
+    let toggle_toast = Rc::clone(&status_toast);
+    let toggle_state_label = state_label.clone();
+    toggle.connect_clicked(move |button| {
+        let enabled = !button.has_css_class("is-active");
+        set_about_toggle_active(button, enabled);
+
+        let (save_result, live_result) = {
+            let mut state = toggle_state.borrow_mut();
+            state.settings.set_audio_normalization_enabled(enabled);
+            let save_result = state.settings.save();
+            let live_result = state
+                .mpv
+                .as_ref()
+                .map(|mpv| mpv.set_audio_normalization(enabled));
+            (save_result, live_result)
+        };
+
+        toggle_state_label.set_text(if enabled { "On" } else { "Off" });
+
+        if let Err(error) = save_result {
+            eprintln!("Failed to save audio normalization setting: {error}");
+            toggle_toast.show("Could not save audio normalization");
+        } else if let Some(Err(error)) = live_result {
+            eprintln!("Failed to update audio normalization: {error}");
+            toggle_toast.show("Could not update audio normalization");
+        } else {
+            toggle_toast.show(if enabled {
+                "Loudness normalization on"
+            } else {
+                "Loudness normalization off"
+            });
+        }
+    });
+    row.append(&toggle);
 
     row
 }
