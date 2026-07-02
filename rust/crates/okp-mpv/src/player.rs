@@ -185,6 +185,8 @@ pub enum MpvError {
 pub struct Mpv {
     handle: NonNull<ffi::mpv_handle>,
     render_context: Option<NonNull<ffi::mpv_render_context>>,
+    #[cfg(debug_assertions)]
+    blocking_read_guard: crate::guard::BlockingReadGuard,
 }
 
 impl Mpv {
@@ -205,6 +207,8 @@ impl Mpv {
         let this = Self {
             handle,
             render_context: None,
+            #[cfg(debug_assertions)]
+            blocking_read_guard: Default::default(),
         };
 
         this.set_option("terminal", "no")?;
@@ -217,6 +221,23 @@ impl Mpv {
         check(unsafe { ffi::mpv_initialize(this.handle.as_ptr()) })?;
 
         Ok(this)
+    }
+
+    /// Mark the calling thread as the UI (GLib main-context) thread. In debug
+    /// builds, every later blocking property read issued from this thread is
+    /// counted and hard-logged with a backtrace — the Rust twin of the Windows
+    /// DEBUG render-thread guard (see `guard` for why it logs instead of
+    /// aborting). No-op in release builds.
+    pub fn mark_ui_thread(&self) {
+        #[cfg(debug_assertions)]
+        self.blocking_read_guard.mark_ui_thread();
+    }
+
+    /// Number of blocking property reads issued from the marked UI thread.
+    /// Debug builds only; exists so tests can assert the tripwire fires.
+    #[cfg(debug_assertions)]
+    pub fn blocking_read_violations(&self) -> usize {
+        self.blocking_read_guard.violations()
     }
 
     pub fn create_render_context(&mut self) -> Result<(), MpvError> {
@@ -945,6 +966,8 @@ impl Mpv {
     }
 
     fn get_double(&self, name: &str) -> Result<Option<f64>, MpvError> {
+        #[cfg(debug_assertions)]
+        self.blocking_read_guard.check_blocking_read(name);
         let name = CString::new(name)?;
         let mut value = 0.0;
         let code = unsafe {
@@ -960,6 +983,8 @@ impl Mpv {
     }
 
     fn get_flag(&self, name: &str) -> Result<Option<bool>, MpvError> {
+        #[cfg(debug_assertions)]
+        self.blocking_read_guard.check_blocking_read(name);
         let name = CString::new(name)?;
         let mut value: c_int = 0;
         let code = unsafe {
@@ -979,6 +1004,8 @@ impl Mpv {
     }
 
     fn get_i64(&self, name: &str) -> Result<Option<i64>, MpvError> {
+        #[cfg(debug_assertions)]
+        self.blocking_read_guard.check_blocking_read(name);
         let name = CString::new(name)?;
         let mut value: i64 = 0;
         let code = unsafe {
@@ -994,6 +1021,8 @@ impl Mpv {
     }
 
     fn get_string(&self, name: &str) -> Result<Option<String>, MpvError> {
+        #[cfg(debug_assertions)]
+        self.blocking_read_guard.check_blocking_read(name);
         let name = CString::new(name)?;
         let value = unsafe { ffi::mpv_get_property_string(self.handle.as_ptr(), name.as_ptr()) };
         if value.is_null() {
@@ -1539,6 +1568,34 @@ fn path_to_cstring(path: &Path) -> Result<CString, NulError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Real-libmpv twin of the Windows `MpvThreadGuardTests`: blocking reads
+    /// on the marked UI thread must trip the debug guard, everything else must
+    /// stay clean. Loads the actual engine, so it needs libmpv at test time —
+    /// same contract as CI, which installs libmpv-dev before `cargo test`.
+    #[test]
+    #[cfg(debug_assertions)]
+    fn blocking_reads_on_the_marked_ui_thread_trip_the_guard() {
+        let mpv = Mpv::new().expect("libmpv must be loadable for okp-mpv tests");
+
+        let _ = mpv
+            .playback_state()
+            .expect("playback state must be readable");
+        assert_eq!(
+            mpv.blocking_read_violations(),
+            0,
+            "reads before mark_ui_thread must not be flagged"
+        );
+
+        mpv.mark_ui_thread();
+        let _ = mpv
+            .playback_state()
+            .expect("playback state must be readable");
+        assert!(
+            mpv.blocking_read_violations() > 0,
+            "blocking reads on the marked UI thread must be recorded"
+        );
+    }
 
     #[test]
     fn formats_media_sizes() {

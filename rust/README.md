@@ -32,10 +32,30 @@ Notes:
 
 ## Current Checks
 
+All three gates run in CI (`.github/workflows/rust.yml`) on every pull request:
+
 ```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo run -p okp-linux-gtk
 ```
+
+## UI-Thread Blocking-Read Guard
+
+A synchronous mpv property read on the thread that drives the UI can deadlock
+against a briefly-busy core — the freeze class from the Windows #33 postmortem,
+guarded there by the DEBUG render-thread guard in `MpvContext`. The Rust twin
+lives in `okp-mpv`: the GTK shell calls `Mpv::mark_ui_thread()` on the GLib
+main context at attach time, and debug builds then hard-log every blocking
+property read from that thread with a backtrace (deduplicated per read shape).
+
+Decision: the guard logs loudly instead of aborting, because the GTK shell
+still has known synchronous read sites (the 200 ms state poll and the popover
+builders) whose migration to the observe/event path is tracked in the
+core-extraction epic. Aborting today would kill every debug run at the first
+poll tick; each logged backtrace is a call site on that epic's worklist.
+Release builds compile the guard out entirely.
 
 ## Linux Packaging
 

@@ -3536,6 +3536,11 @@ fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, launch
                 return;
             }
         };
+        // The realize handler runs on the GLib main context: arm the debug
+        // tripwire so blocking property reads issued from this thread are
+        // hard-logged with a backtrace (the deadlock class from the Windows
+        // #33 postmortem). No-op in release builds.
+        mpv.mark_ui_thread();
         let saved_volume = realize_state.borrow().settings.volume();
         if let Err(error) = mpv.set_volume(saved_volume) {
             eprintln!("Failed to restore saved volume: {error}");
