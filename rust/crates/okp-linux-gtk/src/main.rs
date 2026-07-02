@@ -220,6 +220,12 @@ enum LinuxUpdateApplyResult {
     InstallerOpened(PathBuf),
 }
 
+#[derive(Clone, Copy)]
+enum QueueInsertMode {
+    Append,
+    PlayNext,
+}
+
 #[derive(Clone, Debug)]
 struct ManualDebUpdate {
     version: String,
@@ -2625,6 +2631,7 @@ fn command_popover_content(
         auto_advance_enabled,
         private_session,
         playlist_count,
+        has_local_media,
     ) = {
         let state = state.borrow();
         (
@@ -2634,6 +2641,7 @@ fn command_popover_content(
             state.modes.auto_advance_enabled,
             state.private_session,
             state.playlist.len(),
+            state.current_file.is_some(),
         )
     };
 
@@ -2666,6 +2674,42 @@ fn command_popover_content(
         );
     });
     content.append(&open_playlist_button);
+
+    let add_queue_button = track_button("Add to Queue...", false);
+    add_queue_button.set_sensitive(has_local_media);
+    add_queue_button.set_tooltip_text(Some("Append local media files to Up Next"));
+    let add_queue_parent = parent.clone();
+    let add_queue_state = Rc::clone(&state);
+    let add_queue_toast = Rc::clone(&status_toast);
+    let add_queue_popover = popover.clone();
+    add_queue_button.connect_clicked(move |_| {
+        add_queue_popover.popdown();
+        open_queue_media_dialog(
+            &add_queue_parent,
+            Rc::clone(&add_queue_state),
+            Rc::clone(&add_queue_toast),
+            QueueInsertMode::Append,
+        );
+    });
+    content.append(&add_queue_button);
+
+    let play_next_button = track_button("Play Next...", false);
+    play_next_button.set_sensitive(has_local_media);
+    play_next_button.set_tooltip_text(Some("Insert local media files after the current item"));
+    let play_next_parent = parent.clone();
+    let play_next_state = Rc::clone(&state);
+    let play_next_toast = Rc::clone(&status_toast);
+    let play_next_popover = popover.clone();
+    play_next_button.connect_clicked(move |_| {
+        play_next_popover.popdown();
+        open_queue_media_dialog(
+            &play_next_parent,
+            Rc::clone(&play_next_state),
+            Rc::clone(&play_next_toast),
+            QueueInsertMode::PlayNext,
+        );
+    });
+    content.append(&play_next_button);
 
     let save_playlist_button = track_button("Save Playlist...", false);
     save_playlist_button.set_sensitive(playlist_count > 0);
@@ -6142,11 +6186,85 @@ fn save_playlist_dialog(
     dialog.present();
 }
 
+fn open_queue_media_dialog(
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+    mode: QueueInsertMode,
+) {
+    let (title, accept_label) = match mode {
+        QueueInsertMode::Append => ("Add to Queue", "Add"),
+        QueueInsertMode::PlayNext => ("Play Next", "Add"),
+    };
+    let dialog = gtk::FileChooserDialog::new(
+        Some(title),
+        Some(parent),
+        gtk::FileChooserAction::Open,
+        &[
+            ("Cancel", gtk::ResponseType::Cancel),
+            (accept_label, gtk::ResponseType::Accept),
+        ],
+    );
+    dialog.set_modal(true);
+    dialog.set_select_multiple(true);
+    dialog.add_filter(&media_file_filter());
+    dialog.add_filter(&all_files_filter());
+
+    dialog.connect_response(move |dialog, response| {
+        if response == gtk::ResponseType::Accept {
+            queue_media_paths(&state, file_chooser_paths(dialog), mode, &status_toast);
+        }
+        dialog.close();
+    });
+
+    dialog.present();
+}
+
+fn file_chooser_paths(dialog: &gtk::FileChooserDialog) -> Vec<PathBuf> {
+    let files = dialog.files();
+    let mut paths = Vec::new();
+    for index in 0..files.n_items() {
+        if let Some(path) = files
+            .item(index)
+            .and_then(|object| object.downcast::<gtk::gio::File>().ok())
+            .and_then(|file| file.path())
+        {
+            paths.push(path);
+        }
+    }
+
+    if paths.is_empty()
+        && let Some(path) = dialog.file().and_then(|file| file.path())
+    {
+        paths.push(path);
+    }
+
+    paths
+}
+
 fn playlist_file_filter() -> gtk::FileFilter {
     let filter = gtk::FileFilter::new();
     filter.set_name(Some("M3U playlists"));
     filter.add_pattern("*.m3u");
     filter.add_pattern("*.m3u8");
+    filter
+}
+
+fn media_file_filter() -> gtk::FileFilter {
+    let filter = gtk::FileFilter::new();
+    filter.set_name(Some("Media files"));
+    for extension in media_formats::extensions() {
+        let pattern = format!("*{extension}");
+        filter.add_pattern(&pattern);
+        filter.add_pattern(&pattern.to_ascii_uppercase());
+    }
+    filter
+}
+
+fn all_files_filter() -> gtk::FileFilter {
+    let filter = gtk::FileFilter::new();
+    filter.set_name(Some("All files"));
+    filter.add_pattern("*");
     filter
 }
 
@@ -7167,6 +7285,50 @@ fn save_m3u_playlist(
     }
 }
 
+fn queue_media_paths(
+    state: &Rc<RefCell<PlayerState>>,
+    paths: Vec<PathBuf>,
+    mode: QueueInsertMode,
+    status_toast: &StatusToast,
+) -> bool {
+    let additions = unique_media_paths(paths);
+    if additions.is_empty() {
+        status_toast.show("Choose media files");
+        return false;
+    }
+
+    let count = {
+        let mut state = state.borrow_mut();
+        let Some(current_file) = state.current_file.clone() else {
+            status_toast.show("Open local media first");
+            return false;
+        };
+        let Some((playlist, count)) =
+            queue_playlist_insert(state.playlist.clone(), &current_file, additions, mode)
+        else {
+            status_toast.show("Already in queue");
+            return false;
+        };
+
+        state.playlist = playlist;
+        state.modes.reset_shuffle_order();
+        if let Some(current_index) = current_playlist_index(&state) {
+            let playlist_len = state.playlist.len();
+            state
+                .modes
+                .ensure_shuffle_order(playlist_len, current_index);
+        }
+        count
+    };
+
+    let action = match mode {
+        QueueInsertMode::Append => "Queued",
+        QueueInsertMode::PlayNext => "Will play next",
+    };
+    status_toast.show(&format!("{action}: {count} item{}", plural_s(count)));
+    true
+}
+
 fn local_media_paths_from_m3u_entries(entries: &[String]) -> Vec<PathBuf> {
     entries
         .iter()
@@ -7188,6 +7350,64 @@ fn playlist_save_path(mut path: PathBuf) -> PathBuf {
 
 fn plural_s(count: usize) -> &'static str {
     if count == 1 { "" } else { "s" }
+}
+
+fn unique_media_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut unique = Vec::new();
+    for path in paths {
+        if is_media_path(&path) && !unique.iter().any(|existing| existing == &path) {
+            unique.push(path);
+        }
+    }
+    unique
+}
+
+fn queue_playlist_insert(
+    mut playlist: Vec<PathBuf>,
+    current_file: &Path,
+    additions: Vec<PathBuf>,
+    mode: QueueInsertMode,
+) -> Option<(Vec<PathBuf>, usize)> {
+    if playlist.is_empty() {
+        playlist.push(current_file.to_path_buf());
+    }
+    if !playlist.iter().any(|item| item.as_path() == current_file) {
+        playlist.insert(0, current_file.to_path_buf());
+    }
+
+    let additions = additions
+        .into_iter()
+        .filter(|path| path.as_path() != current_file)
+        .collect::<Vec<_>>();
+    if additions.is_empty() {
+        return None;
+    }
+
+    match mode {
+        QueueInsertMode::Append => {
+            let additions = additions
+                .into_iter()
+                .filter(|path| !playlist.iter().any(|item| item == path))
+                .collect::<Vec<_>>();
+            if additions.is_empty() {
+                return None;
+            }
+
+            let count = additions.len();
+            playlist.extend(additions);
+            Some((playlist, count))
+        }
+        QueueInsertMode::PlayNext => {
+            playlist.retain(|item| !additions.iter().any(|addition| addition == item));
+            let current_index = playlist
+                .iter()
+                .position(|item| item.as_path() == current_file)
+                .unwrap_or(0);
+            let count = additions.len();
+            playlist.splice(current_index + 1..current_index + 1, additions);
+            Some((playlist, count))
+        }
+    }
 }
 
 fn navigate_playlist(state: &Rc<RefCell<PlayerState>>, direction: isize) -> bool {
@@ -9155,6 +9375,105 @@ mod tests {
                 PathBuf::from("/media/ep2.mkv"),
                 PathBuf::from("/media/ep1.mp4")
             ]
+        );
+    }
+
+    #[test]
+    fn unique_media_paths_keeps_order_and_skips_non_media_duplicates() {
+        let paths = vec![
+            PathBuf::from("/media/a.mkv"),
+            PathBuf::from("/media/a.mkv"),
+            PathBuf::from("/media/subs.srt"),
+            PathBuf::from("/media/b.flac"),
+            PathBuf::from("/media/readme.txt"),
+        ];
+
+        assert_eq!(
+            unique_media_paths(paths),
+            vec![
+                PathBuf::from("/media/a.mkv"),
+                PathBuf::from("/media/b.flac")
+            ]
+        );
+    }
+
+    #[test]
+    fn queue_playlist_append_adds_new_media_to_the_end() {
+        let playlist = vec![
+            PathBuf::from("/media/current.mkv"),
+            PathBuf::from("/media/queued.mkv"),
+        ];
+        let additions = vec![
+            PathBuf::from("/media/current.mkv"),
+            PathBuf::from("/media/queued.mkv"),
+            PathBuf::from("/media/new.mp4"),
+            PathBuf::from("/media/album.flac"),
+        ];
+
+        let (playlist, count) = queue_playlist_insert(
+            playlist,
+            Path::new("/media/current.mkv"),
+            additions,
+            QueueInsertMode::Append,
+        )
+        .expect("new media should append");
+
+        assert_eq!(count, 2);
+        assert_eq!(
+            playlist,
+            vec![
+                PathBuf::from("/media/current.mkv"),
+                PathBuf::from("/media/queued.mkv"),
+                PathBuf::from("/media/new.mp4"),
+                PathBuf::from("/media/album.flac"),
+            ]
+        );
+    }
+
+    #[test]
+    fn queue_playlist_play_next_inserts_after_current_and_moves_existing_items() {
+        let playlist = vec![
+            PathBuf::from("/media/previous.mkv"),
+            PathBuf::from("/media/current.mkv"),
+            PathBuf::from("/media/later.mkv"),
+            PathBuf::from("/media/final.mkv"),
+        ];
+        let additions = vec![
+            PathBuf::from("/media/later.mkv"),
+            PathBuf::from("/media/new.mp4"),
+        ];
+
+        let (playlist, count) = queue_playlist_insert(
+            playlist,
+            Path::new("/media/current.mkv"),
+            additions,
+            QueueInsertMode::PlayNext,
+        )
+        .expect("play next should insert");
+
+        assert_eq!(count, 2);
+        assert_eq!(
+            playlist,
+            vec![
+                PathBuf::from("/media/previous.mkv"),
+                PathBuf::from("/media/current.mkv"),
+                PathBuf::from("/media/later.mkv"),
+                PathBuf::from("/media/new.mp4"),
+                PathBuf::from("/media/final.mkv"),
+            ]
+        );
+    }
+
+    #[test]
+    fn queue_playlist_rejects_current_only_selection() {
+        assert!(
+            queue_playlist_insert(
+                vec![PathBuf::from("/media/current.mkv")],
+                Path::new("/media/current.mkv"),
+                vec![PathBuf::from("/media/current.mkv")],
+                QueueInsertMode::Append,
+            )
+            .is_none()
         );
     }
 
