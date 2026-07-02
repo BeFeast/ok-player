@@ -17,6 +17,17 @@ const REPEAT_ALL: &str = "all";
 const DEFAULT_AUTO_CHECK_UPDATES: bool = true;
 const HWDEC_OFF: &str = "no";
 const HWDEC_AUTO_SAFE: &str = "auto-safe";
+const DEFAULT_VIDEO_ADJUSTMENT: f64 = 0.0;
+const MIN_VIDEO_ADJUSTMENT: f64 = -100.0;
+const MAX_VIDEO_ADJUSTMENT: f64 = 100.0;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VideoAdjustments {
+    pub brightness: f64,
+    pub contrast: f64,
+    pub saturation: f64,
+    pub gamma: f64,
+}
 
 #[derive(Debug)]
 pub struct SettingsStore {
@@ -99,6 +110,31 @@ impl SettingsStore {
         }
     }
 
+    pub fn video_adjustments(&self) -> VideoAdjustments {
+        VideoAdjustments {
+            brightness: self.brightness(),
+            contrast: self.contrast(),
+            saturation: self.saturation(),
+            gamma: self.gamma(),
+        }
+    }
+
+    pub fn brightness(&self) -> f64 {
+        normalized_video_adjustment(self.data.video.brightness).unwrap_or(DEFAULT_VIDEO_ADJUSTMENT)
+    }
+
+    pub fn contrast(&self) -> f64 {
+        normalized_video_adjustment(self.data.video.contrast).unwrap_or(DEFAULT_VIDEO_ADJUSTMENT)
+    }
+
+    pub fn saturation(&self) -> f64 {
+        normalized_video_adjustment(self.data.video.saturation).unwrap_or(DEFAULT_VIDEO_ADJUSTMENT)
+    }
+
+    pub fn gamma(&self) -> f64 {
+        normalized_video_adjustment(self.data.video.gamma).unwrap_or(DEFAULT_VIDEO_ADJUSTMENT)
+    }
+
     pub fn set_volume(&mut self, volume: f64) {
         let Some(volume) = normalized_volume(Some(volume)) else {
             return;
@@ -154,6 +190,42 @@ impl SettingsStore {
         }
     }
 
+    pub fn set_brightness(&mut self, value: f64) {
+        if let Some(value) = normalized_video_adjustment(Some(value))
+            && !same_video_adjustment(self.data.video.brightness, value)
+        {
+            self.data.video.brightness = video_adjustment_setting(value);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_contrast(&mut self, value: f64) {
+        if let Some(value) = normalized_video_adjustment(Some(value))
+            && !same_video_adjustment(self.data.video.contrast, value)
+        {
+            self.data.video.contrast = video_adjustment_setting(value);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_saturation(&mut self, value: f64) {
+        if let Some(value) = normalized_video_adjustment(Some(value))
+            && !same_video_adjustment(self.data.video.saturation, value)
+        {
+            self.data.video.saturation = video_adjustment_setting(value);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_gamma(&mut self, value: f64) {
+        if let Some(value) = normalized_video_adjustment(Some(value))
+            && !same_video_adjustment(self.data.video.gamma, value)
+        {
+            self.data.video.gamma = video_adjustment_setting(value);
+            self.dirty = true;
+        }
+    }
+
     pub fn save(&mut self) -> io::Result<()> {
         if !self.dirty {
             return Ok(());
@@ -201,6 +273,14 @@ struct PlaybackSettings {
 struct VideoSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     hwdec: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    brightness: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    contrast: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    saturation: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    gamma: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -235,6 +315,20 @@ fn normalized_volume(volume: Option<f64>) -> Option<f64> {
         .map(|volume| volume.clamp(0.0, MAX_VOLUME))
 }
 
+fn normalized_video_adjustment(value: Option<f64>) -> Option<f64> {
+    value
+        .filter(|value| value.is_finite())
+        .map(|value| value.clamp(MIN_VIDEO_ADJUSTMENT, MAX_VIDEO_ADJUSTMENT))
+}
+
+fn video_adjustment_setting(value: f64) -> Option<f64> {
+    if (value - DEFAULT_VIDEO_ADJUSTMENT).abs() < 0.005 {
+        None
+    } else {
+        Some(value)
+    }
+}
+
 fn normalized_hwdec(hwdec: Option<&str>) -> &'static str {
     match hwdec {
         Some(HWDEC_AUTO_SAFE) => HWDEC_AUTO_SAFE,
@@ -254,6 +348,11 @@ fn same_volume(current: Option<f64>, updated: f64) -> bool {
     current
         .and_then(|volume| normalized_volume(Some(volume)))
         .is_some_and(|volume| (volume - updated).abs() < 0.005)
+}
+
+fn same_video_adjustment(current: Option<f64>, updated: f64) -> bool {
+    normalized_video_adjustment(current).is_some_and(|current| (current - updated).abs() < 0.005)
+        || (current.is_none() && (updated - DEFAULT_VIDEO_ADJUSTMENT).abs() < 0.005)
 }
 
 fn default_auto_check_updates() -> bool {
@@ -408,5 +507,63 @@ mod tests {
 
         assert!(!settings.hardware_decode_enabled());
         assert_eq!(settings.hardware_decode_mpv_option(), "no");
+    }
+
+    #[test]
+    fn video_adjustments_default_to_zero() {
+        let settings = store();
+
+        assert_eq!(
+            settings.video_adjustments(),
+            VideoAdjustments {
+                brightness: 0.0,
+                contrast: 0.0,
+                saturation: 0.0,
+                gamma: 0.0,
+            }
+        );
+    }
+
+    #[test]
+    fn video_adjustments_clamp_and_mark_dirty() {
+        let mut settings = store();
+
+        settings.set_brightness(150.0);
+        settings.set_contrast(-125.0);
+        settings.set_saturation(25.0);
+        settings.set_gamma(-10.0);
+
+        assert_eq!(settings.brightness(), 100.0);
+        assert_eq!(settings.contrast(), -100.0);
+        assert_eq!(settings.saturation(), 25.0);
+        assert_eq!(settings.gamma(), -10.0);
+        assert!(settings.dirty);
+    }
+
+    #[test]
+    fn video_adjustments_ignore_non_finite_values() {
+        let mut settings = store();
+
+        settings.set_brightness(f64::NAN);
+        settings.set_contrast(f64::INFINITY);
+
+        assert_eq!(settings.brightness(), 0.0);
+        assert_eq!(settings.contrast(), 0.0);
+        assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn video_adjustments_store_default_as_none() {
+        let mut settings = store();
+
+        settings.set_brightness(12.0);
+        assert_eq!(settings.data.video.brightness, Some(12.0));
+        settings.dirty = false;
+
+        settings.set_brightness(0.0);
+
+        assert_eq!(settings.brightness(), 0.0);
+        assert_eq!(settings.data.video.brightness, None);
+        assert!(settings.dirty);
     }
 }

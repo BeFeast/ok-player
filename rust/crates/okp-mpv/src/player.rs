@@ -589,6 +589,35 @@ impl Mpv {
         self.set_double("speed", speed.clamp(0.25, 4.0))
     }
 
+    pub fn set_brightness(&self, value: f64) -> Result<(), MpvError> {
+        self.set_double("brightness", video_adjustment(value))
+    }
+
+    pub fn set_contrast(&self, value: f64) -> Result<(), MpvError> {
+        self.set_double("contrast", video_adjustment(value))
+    }
+
+    pub fn set_saturation(&self, value: f64) -> Result<(), MpvError> {
+        self.set_double("saturation", video_adjustment(value))
+    }
+
+    pub fn set_gamma(&self, value: f64) -> Result<(), MpvError> {
+        self.set_double("gamma", video_adjustment(value))
+    }
+
+    pub fn set_video_adjustments(
+        &self,
+        brightness: f64,
+        contrast: f64,
+        saturation: f64,
+        gamma: f64,
+    ) -> Result<(), MpvError> {
+        self.set_brightness(brightness)?;
+        self.set_contrast(contrast)?;
+        self.set_saturation(saturation)?;
+        self.set_gamma(gamma)
+    }
+
     pub fn select_subtitle(&self, id: Option<i64>) -> Result<(), MpvError> {
         let value = track_id_or_off(id);
         self.command(&["set", "sid", &value])
@@ -1014,6 +1043,14 @@ fn format_fps(fps: f64) -> String {
     format!("{fps:.3} fps")
 }
 
+fn video_adjustment(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(-100.0, 100.0)
+    } else {
+        0.0
+    }
+}
+
 fn format_aspect_ratio(aspect: f64) -> String {
     const COMMON: [(u32, u32); 5] = [(4, 3), (16, 9), (16, 10), (21, 9), (64, 27)];
     for (width, height) in COMMON {
@@ -1166,6 +1203,13 @@ mod tests {
         assert_eq!(format_aspect_ratio(16.0 / 9.0), "16:9");
         assert_eq!(format_aspect_ratio(4.0 / 3.0), "4:3");
         assert_eq!(format_aspect_ratio(2.0), "2.000:1");
+    }
+
+    #[test]
+    fn clamps_video_adjustments() {
+        assert_eq!(video_adjustment(125.0), 100.0);
+        assert_eq!(video_adjustment(-125.0), -100.0);
+        assert_eq!(video_adjustment(f64::NAN), 0.0);
     }
 
     #[test]

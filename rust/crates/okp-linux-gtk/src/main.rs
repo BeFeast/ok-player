@@ -1833,6 +1833,15 @@ fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, launch
         if let Err(error) = mpv.set_volume(saved_volume) {
             eprintln!("Failed to restore saved volume: {error}");
         }
+        let video_adjustments = realize_state.borrow().settings.video_adjustments();
+        if let Err(error) = mpv.set_video_adjustments(
+            video_adjustments.brightness,
+            video_adjustments.contrast,
+            video_adjustments.saturation,
+            video_adjustments.gamma,
+        ) {
+            eprintln!("Failed to restore video adjustments: {error}");
+        }
 
         if let Err(error) = mpv.create_render_context() {
             eprintln!("Failed to create mpv render context: {error}");
@@ -3644,6 +3653,26 @@ fn open_settings_window(
     video_page.add_css_class("okp-settings-page");
     let video = settings_section("Video");
     video.append(&settings_hwdec_row(
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    ));
+    video.append(&settings_video_adjustment_row(
+        VideoAdjustment::Brightness,
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    ));
+    video.append(&settings_video_adjustment_row(
+        VideoAdjustment::Contrast,
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    ));
+    video.append(&settings_video_adjustment_row(
+        VideoAdjustment::Saturation,
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    ));
+    video.append(&settings_video_adjustment_row(
+        VideoAdjustment::Gamma,
         Rc::clone(&state),
         Rc::clone(&status_toast),
     ));
@@ -5994,6 +6023,152 @@ fn settings_volume_row(state: Rc<RefCell<PlayerState>>) -> gtk::Box {
     row.append(&scale);
 
     row
+}
+
+#[derive(Clone, Copy)]
+enum VideoAdjustment {
+    Brightness,
+    Contrast,
+    Saturation,
+    Gamma,
+}
+
+impl VideoAdjustment {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Brightness => "Brightness",
+            Self::Contrast => "Contrast",
+            Self::Saturation => "Saturation",
+            Self::Gamma => "Gamma",
+        }
+    }
+
+    fn read(self, settings: &settings::SettingsStore) -> f64 {
+        match self {
+            Self::Brightness => settings.brightness(),
+            Self::Contrast => settings.contrast(),
+            Self::Saturation => settings.saturation(),
+            Self::Gamma => settings.gamma(),
+        }
+    }
+
+    fn write(self, settings: &mut settings::SettingsStore, value: f64) {
+        match self {
+            Self::Brightness => settings.set_brightness(value),
+            Self::Contrast => settings.set_contrast(value),
+            Self::Saturation => settings.set_saturation(value),
+            Self::Gamma => settings.set_gamma(value),
+        }
+    }
+
+    fn apply(self, mpv: &Mpv, value: f64) -> Result<(), okp_mpv::MpvError> {
+        match self {
+            Self::Brightness => mpv.set_brightness(value),
+            Self::Contrast => mpv.set_contrast(value),
+            Self::Saturation => mpv.set_saturation(value),
+            Self::Gamma => mpv.set_gamma(value),
+        }
+    }
+}
+
+fn settings_video_adjustment_row(
+    adjustment: VideoAdjustment,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    row.add_css_class("okp-settings-row");
+
+    let header = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    let label = gtk::Label::new(Some(adjustment.label()));
+    label.add_css_class("okp-info-label");
+    label.set_xalign(0.0);
+    label.set_hexpand(true);
+
+    let current = adjustment.read(&state.borrow().settings);
+    let value = gtk::Label::new(Some(&format_video_adjustment(current)));
+    value.add_css_class("okp-info-value");
+    value.set_xalign(1.0);
+
+    let reset = gtk::Button::with_label("Reset");
+    reset.add_css_class("okp-settings-button");
+
+    header.append(&label);
+    header.append(&value);
+    header.append(&reset);
+    row.append(&header);
+
+    let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, -100.0, 100.0, 1.0);
+    scale.set_draw_value(false);
+    scale.set_value(current);
+    scale.add_css_class("okp-settings-scale");
+
+    let value_label = value.clone();
+    let slider_state = Rc::clone(&state);
+    let slider_toast = Rc::clone(&status_toast);
+    scale.connect_change_value(move |_, _, raw_value| {
+        let value = raw_value.round().clamp(-100.0, 100.0);
+        value_label.set_text(&format_video_adjustment(value));
+        set_video_adjustment_from_ui(&slider_state, adjustment, value, &slider_toast);
+        glib::Propagation::Proceed
+    });
+
+    let reset_scale = scale.clone();
+    let reset_state = Rc::clone(&state);
+    let reset_toast = Rc::clone(&status_toast);
+    let reset_value = value.clone();
+    reset.connect_clicked(move |_| {
+        reset_scale.set_value(0.0);
+        reset_value.set_text(&format_video_adjustment(0.0));
+        set_video_adjustment_from_ui(&reset_state, adjustment, 0.0, &reset_toast);
+    });
+
+    row.append(&scale);
+    row
+}
+
+fn set_video_adjustment_from_ui(
+    state: &Rc<RefCell<PlayerState>>,
+    adjustment: VideoAdjustment,
+    value: f64,
+    status_toast: &StatusToast,
+) {
+    let (stored_value, save_ok) = {
+        let mut state = state.borrow_mut();
+        adjustment.write(&mut state.settings, value);
+        let save_ok = if let Err(error) = state.settings.save() {
+            eprintln!("Failed to save video adjustment: {error}");
+            false
+        } else {
+            true
+        };
+        (adjustment.read(&state.settings), save_ok)
+    };
+
+    let live_result = {
+        let state = state.borrow();
+        state
+            .mpv
+            .as_ref()
+            .map(|mpv| adjustment.apply(mpv, stored_value))
+    };
+
+    match live_result {
+        Some(Err(error)) => {
+            eprintln!("Failed to update video adjustment: {error}");
+            status_toast.show("Could not update video adjustment");
+        }
+        _ if !save_ok => status_toast.show("Could not save video adjustment"),
+        _ => {}
+    }
+}
+
+fn format_video_adjustment(value: f64) -> String {
+    if value > 0.0 {
+        format!("+{value:.0}")
+    } else {
+        format!("{value:.0}")
+    }
 }
 
 fn settings_hwdec_row(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusToast>) -> gtk::Box {
