@@ -3319,6 +3319,8 @@ fn open_settings_window(
 
     let stack = gtk::Stack::new();
     stack.add_css_class("okp-settings-stack");
+    stack.set_hhomogeneous(false);
+    stack.set_vhomogeneous(false);
     stack.set_hexpand(true);
     stack.set_vexpand(true);
 
@@ -3416,6 +3418,9 @@ fn settings_scroller<T: IsA<gtk::Widget>>(child: &T) -> gtk::ScrolledWindow {
     let scroller = gtk::ScrolledWindow::new();
     scroller.add_css_class("okp-settings-scroller");
     scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    scroller.set_min_content_width(552);
+    scroller.set_max_content_width(552);
+    scroller.set_propagate_natural_width(false);
     scroller.set_hexpand(true);
     scroller.set_vexpand(true);
     scroller.set_child(Some(child));
@@ -3426,10 +3431,10 @@ fn settings_nav_rail_frame(rail: gtk::Box) -> gtk::ScrolledWindow {
     let frame = gtk::ScrolledWindow::new();
     frame.add_css_class("okp-settings-rail-frame");
     frame.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Never);
-    frame.set_min_content_width(191);
-    frame.set_max_content_width(191);
+    frame.set_min_content_width(192);
+    frame.set_max_content_width(192);
     frame.set_propagate_natural_width(false);
-    frame.set_size_request(191, 1030);
+    frame.set_size_request(192, 1030);
     frame.set_child(Some(&rail));
     frame
 }
@@ -3450,7 +3455,7 @@ enum SettingsNavIcon {
 fn settings_nav_rail(stack: &gtk::Stack) -> gtk::Box {
     let rail = gtk::Box::new(gtk::Orientation::Vertical, 2);
     rail.add_css_class("okp-settings-rail");
-    rail.set_size_request(191, 1030);
+    rail.set_size_request(192, 1030);
 
     let title = gtk::Label::new(Some("Settings"));
     title.add_css_class("okp-settings-rail-title");
@@ -3520,12 +3525,12 @@ fn settings_window_controls(window: &gtk::Window) -> gtk::Box {
     controls.set_halign(gtk::Align::End);
     controls.set_valign(gtk::Align::Start);
 
-    let minimize = settings_window_control("−", "Minimize");
+    let minimize = settings_window_control(SettingsWindowControlKind::Minimize, "Minimize");
     let minimize_window = window.clone();
     minimize.connect_clicked(move |_| minimize_window.minimize());
     controls.append(&minimize);
 
-    let maximize = settings_window_control("□", "Maximize");
+    let maximize = settings_window_control(SettingsWindowControlKind::Maximize, "Maximize");
     sync_settings_maximize_icon(&maximize, window);
     let maximize_window = window.clone();
     let maximize_button = maximize.clone();
@@ -3543,7 +3548,7 @@ fn settings_window_controls(window: &gtk::Window) -> gtk::Box {
     });
     controls.append(&maximize);
 
-    let close = settings_window_control("×", "Close");
+    let close = settings_window_control(SettingsWindowControlKind::Close, "Close");
     close.add_css_class("okp-settings-window-close");
     let close_window = window.clone();
     close.connect_clicked(move |_| close_window.close());
@@ -3552,36 +3557,105 @@ fn settings_window_controls(window: &gtk::Window) -> gtk::Box {
     controls
 }
 
-fn settings_window_control(label: &str, tooltip: &str) -> gtk::Button {
+#[derive(Clone, Copy)]
+enum SettingsWindowControlKind {
+    Minimize,
+    Maximize,
+    Restore,
+    Close,
+}
+
+fn settings_window_control(kind: SettingsWindowControlKind, tooltip: &str) -> gtk::Button {
     let button = gtk::Button::new();
     button.add_css_class("okp-settings-window-control");
     button.set_has_frame(false);
     button.set_tooltip_text(Some(tooltip));
 
-    let glyph = gtk::Label::new(None);
-    glyph.add_css_class("okp-settings-window-control-glyph");
+    let glyph = settings_window_control_icon(kind);
     button.set_child(Some(&glyph));
-    set_settings_window_control_label(&button, label);
     button
 }
 
 fn sync_settings_maximize_icon(button: &gtk::Button, window: &gtk::Window) {
     if window.is_maximized() {
-        set_settings_window_control_label(button, "❐");
+        set_settings_window_control_kind(button, SettingsWindowControlKind::Restore);
         button.set_tooltip_text(Some("Restore"));
     } else {
-        set_settings_window_control_label(button, "□");
+        set_settings_window_control_kind(button, SettingsWindowControlKind::Maximize);
         button.set_tooltip_text(Some("Maximize"));
     }
 }
 
-fn set_settings_window_control_label(button: &gtk::Button, label: &str) {
-    if let Some(glyph) = button.child().and_downcast::<gtk::Label>() {
-        let label = glib::markup_escape_text(label);
-        glyph.set_markup(&format!(
-            "<span font_desc=\"Sans 13\" foreground=\"#161616\">{label}</span>"
-        ));
+fn settings_window_control_icon(kind: SettingsWindowControlKind) -> gtk::DrawingArea {
+    let icon = gtk::DrawingArea::new();
+    icon.add_css_class("okp-settings-window-control-glyph");
+    icon.set_size_request(10, 10);
+    icon.set_draw_func(move |area, cr, width, height| {
+        draw_settings_window_control_icon(area, cr, width, height, kind);
+    });
+    icon
+}
+
+fn set_settings_window_control_kind(button: &gtk::Button, kind: SettingsWindowControlKind) {
+    if let Some(icon) = button.child().and_downcast::<gtk::DrawingArea>() {
+        icon.set_draw_func(move |area, cr, width, height| {
+            draw_settings_window_control_icon(area, cr, width, height, kind);
+        });
+        icon.queue_draw();
     }
+}
+
+fn draw_settings_window_control_icon(
+    area: &gtk::DrawingArea,
+    cr: &cairo::Context,
+    width: i32,
+    height: i32,
+    kind: SettingsWindowControlKind,
+) {
+    let color = area.style_context().color();
+    let _ = cr.save();
+    cr.translate(
+        ((width as f64) - 10.0) / 2.0,
+        ((height as f64) - 10.0) / 2.0,
+    );
+    cr.set_source_rgba(
+        color.red().into(),
+        color.green().into(),
+        color.blue().into(),
+        color.alpha().into(),
+    );
+    cr.set_line_width(1.0);
+    cr.set_line_cap(cairo::LineCap::Square);
+
+    match kind {
+        SettingsWindowControlKind::Minimize => {
+            cr.move_to(1.0, 5.0);
+            cr.line_to(9.0, 5.0);
+            let _ = cr.stroke();
+        }
+        SettingsWindowControlKind::Maximize => {
+            cr.rectangle(1.5, 1.5, 7.0, 7.0);
+            let _ = cr.stroke();
+        }
+        SettingsWindowControlKind::Restore => {
+            cr.rectangle(2.7, 1.5, 5.8, 5.8);
+            let _ = cr.stroke();
+            cr.move_to(1.5, 2.8);
+            cr.line_to(1.5, 8.5);
+            cr.line_to(7.2, 8.5);
+            let _ = cr.stroke();
+        }
+        SettingsWindowControlKind::Close => {
+            cr.set_line_cap(cairo::LineCap::Round);
+            cr.move_to(2.0, 2.0);
+            cr.line_to(8.0, 8.0);
+            cr.move_to(8.0, 2.0);
+            cr.line_to(2.0, 8.0);
+            let _ = cr.stroke();
+        }
+    }
+
+    let _ = cr.restore();
 }
 
 fn settings_nav_row(label: &str, icon: SettingsNavIcon, selected: bool) -> gtk::Button {
@@ -4227,6 +4301,8 @@ fn about_spec_row(label: &str, value: &str, mono: bool, tag: Option<(&str, bool)
         "okp-about-row-value"
     });
     val.set_xalign(1.0);
+    val.set_width_chars(1);
+    val.set_max_width_chars(34);
     val.set_ellipsize(pango::EllipsizeMode::End);
     val.set_selectable(true);
     value_wrap.append(&val);
@@ -4407,6 +4483,8 @@ fn settings_updates_section(
     let status = gtk::Label::new(Some(update_status_intro(auto_check_enabled)));
     status.add_css_class("okp-update-status");
     status.set_xalign(0.0);
+    status.set_width_chars(1);
+    status.set_max_width_chars(58);
     status.set_wrap(true);
     row.append(&status);
 
@@ -4423,6 +4501,8 @@ fn settings_updates_section(
     ));
     auto_detail.add_css_class("okp-update-status");
     auto_detail.set_xalign(0.0);
+    auto_detail.set_width_chars(1);
+    auto_detail.set_max_width_chars(50);
     auto_detail.set_wrap(true);
     auto_text.append(&auto_detail);
     auto_row.append(&auto_text);
@@ -5489,6 +5569,8 @@ fn settings_value_row_with_label(label: &str, value: &str) -> (gtk::Box, gtk::La
     value.add_css_class("okp-info-value");
     value.set_xalign(0.0);
     value.set_hexpand(true);
+    value.set_width_chars(1);
+    value.set_max_width_chars(44);
     value.set_ellipsize(pango::EllipsizeMode::Middle);
     value.set_selectable(true);
     row.append(&value);
@@ -7664,13 +7746,13 @@ fn install_css() {
             background: rgba(0, 0, 0, 0.06);
         }
 
-        label.okp-settings-window-control-glyph {
+        .okp-settings-window-control-glyph {
+            min-width: 10px;
+            min-height: 10px;
             color: #161616;
-            font-size: 13px;
-            font-weight: 400;
         }
 
-        button.okp-settings-window-control:hover label.okp-settings-window-control-glyph {
+        button.okp-settings-window-control:hover .okp-settings-window-control-glyph {
             color: #161616;
         }
 
@@ -7678,7 +7760,7 @@ fn install_css() {
             background: #c42b1c;
         }
 
-        button.okp-settings-window-close:hover label.okp-settings-window-control-glyph {
+        button.okp-settings-window-close:hover .okp-settings-window-control-glyph {
             color: #ffffff;
         }
 
