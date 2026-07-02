@@ -7216,6 +7216,7 @@ fn settings_shortcuts_section() -> gtk::Box {
     section.append(&settings_value_row("Add subtitle", "S"));
     section.append(&settings_value_row("Close media", "X"));
     section.append(&settings_value_row("Screenshot", "C"));
+    section.append(&settings_value_row("Copy frame", "Shift+C"));
     section.append(&settings_value_row("Media info", "I"));
     section.append(&settings_value_row("Go to time", "J"));
     section.append(&settings_value_row("A-B loop", "L"));
@@ -7593,7 +7594,15 @@ fn connect_keyboard(
                 close_current_media(&state, &status_toast);
                 glib::Propagation::Stop
             }
-            gdk::Key::c | gdk::Key::C => {
+            gdk::Key::c if modifiers.contains(gdk::ModifierType::SHIFT_MASK) => {
+                copy_frame_to_clipboard(&state, &status_toast);
+                glib::Propagation::Stop
+            }
+            gdk::Key::C => {
+                copy_frame_to_clipboard(&state, &status_toast);
+                glib::Propagation::Stop
+            }
+            gdk::Key::c => {
                 save_screenshot(&state, &status_toast, false);
                 glib::Propagation::Stop
             }
@@ -7830,6 +7839,7 @@ fn copy_frame_to_clipboard(state: &Rc<RefCell<PlayerState>>, status_toast: &Stat
         Ok(texture) => {
             if let Some(display) = gdk::Display::default() {
                 display.clipboard().set_texture(&texture);
+                eprintln!("Frame copied to clipboard from {}", path.display());
                 status_toast.show("Frame copied");
             } else {
                 status_toast.show("Clipboard unavailable");
