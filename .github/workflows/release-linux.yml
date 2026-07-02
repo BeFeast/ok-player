@@ -1,5 +1,15 @@
 name: Linux Release
 
+# Release cadence (https://github.com/BeFeast/ok-player/issues/130): Linux releases
+# are cut in batches — at most daily, or on demand — by pushing a `linux-v*` tag or
+# dispatching this workflow manually. Merges to `main` do NOT release; never tag one
+# release per commit. The Windows app's Velopack updater only inspects the 10 newest
+# GitHub releases, so per-commit Linux pre-releases flooded the Windows update feed
+# out of its discovery window and every installed Windows build silently stopped
+# seeing updates. The "Bridge Windows update feed" step below is the recovery for
+# the already-installed fleet; the batch cadence keeps the release list from being
+# dominated by any single track again.
+
 on:
   push:
     tags:
@@ -111,3 +121,60 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${{ steps.release.outputs.tag }}" artifacts/linux/deb/*.deb --clobber
+
+      # Bridge the Windows update feed onto this release
+      # (https://github.com/BeFeast/ok-player/issues/130). The installed Windows
+      # fleet updates via Velopack 1.2.0 GithubSource (channel "win"), which only
+      # fetches the 10 newest GitHub releases (GithubSource.cs hardcodes perPage=10,
+      # page=1) and silently skips any release without a releases.win.json asset
+      # (GitBase.GetReleaseFeed catches the missing-asset exception and continues) —
+      # if none match, the fleet gets an empty feed and reports "up to date" forever.
+      # DownloadReleaseEntry resolves a package strictly from the assets of the
+      # release that carried the feed json (GitBaseAsset pins the carrying release),
+      # so attaching the feed alone is not enough: every nupkg it references must be
+      # co-located on the same release. Re-attaching the current win-channel assets
+      # to every published Linux release keeps the Windows feed inside the 10-release
+      # discovery window with no action from users. Remove this step only once the
+      # Windows app has migrated off GithubSource (HttpSource migration) and the
+      # installed fleet has picked that migration up — not before.
+      - name: Bridge Windows update feed onto this release
+        if: steps.release.outputs.publish == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Current Windows release = newest published release tagged v* (never
+          # linux-v*) that carries the win feed. Bridged copies on linux-v* releases
+          # are deliberately excluded so a stale copy can never shadow a newer
+          # Windows release, and we paginate because Windows tags may sit far past
+          # the first page of the release list.
+          win_tag="$(gh api --paginate "repos/${{ github.repository }}/releases?per_page=100" \
+            --jq '.[] | select((.draft | not) and .published_at != null)
+                      | select(.tag_name | test("^v[0-9]"))
+                      | select(any(.assets[]; .name == "releases.win.json"))
+                      | [.published_at, .tag_name] | @tsv' \
+            | sort | tail -n 1 | cut -f 2)"
+          if [[ -z "${win_tag}" ]]; then
+            echo "::error::No Windows release carries releases.win.json; cannot bridge the win update feed (issue #130)."
+            exit 1
+          fi
+          echo "Bridging win-channel assets from ${win_tag}"
+
+          bridge_dir="artifacts/win-bridge"
+          mkdir -p "${bridge_dir}"
+          gh release download "${win_tag}" --repo "${{ github.repository }}" \
+            --pattern "releases.win.json" --dir "${bridge_dir}"
+
+          # The feed pins downloads to the release that carries it, so every package
+          # it references (full, and delta where present) must ride along.
+          mapfile -t win_packages < <(jq -r '.Assets[].FileName' "${bridge_dir}/releases.win.json" | sort -u)
+          if [[ "${#win_packages[@]}" -eq 0 ]]; then
+            echo "::error::releases.win.json from ${win_tag} references no packages; refusing to bridge an empty feed."
+            exit 1
+          fi
+          for package in "${win_packages[@]}"; do
+            gh release download "${win_tag}" --repo "${{ github.repository }}" \
+              --pattern "${package}" --dir "${bridge_dir}"
+          done
+
+          gh release upload "${{ steps.release.outputs.tag }}" "${bridge_dir}"/* --clobber
