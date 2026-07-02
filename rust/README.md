@@ -47,5 +47,6 @@ Two package lanes are intentionally separate:
 ```
 
 - Velopack lane: AppImage + `releases.linux.json` feed for self-updating GitHub Releases.
-- Debian lane: `.deb` for Debian/Ubuntu-family install flow. This does not use in-app self-update;
-  a future APT/Flatpak lane should own package-manager updates.
+- Debian lane: `.deb` for Debian/Ubuntu-family install flow. In-app checks can download the
+  newest GitHub Release `.deb`, request admin approval via `pkexec apt-get install -y`, and
+  fall back to opening the installer when privileged install is unavailable.

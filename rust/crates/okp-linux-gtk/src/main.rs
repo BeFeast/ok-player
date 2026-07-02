@@ -216,6 +216,7 @@ enum LinuxUpdateCheckResult {
 
 enum LinuxUpdateApplyResult {
     Restarting,
+    DebInstalled(PathBuf),
     InstallerOpened(PathBuf),
 }
 
@@ -4512,6 +4513,8 @@ fn linux_os_label() -> String {
 fn linux_update_install_status() -> &'static str {
     if linux_update_manager().is_ok() {
         "Self-update enabled"
+    } else if deb_self_install_available() {
+        "Deb self-install"
     } else {
         "Deb installer"
     }
@@ -4662,7 +4665,7 @@ fn settings_updates_section(
 
 fn update_status_intro(auto_check_enabled: bool) -> &'static str {
     if auto_check_enabled {
-        "Automatic update checks are on. AppImage installs restart in place; .deb installs download the newest installer inside OK Player."
+        "Automatic update checks are on. AppImage installs restart in place; .deb installs request admin approval and fall back to opening the installer."
     } else {
         "Automatic update checks are off. Use Check for updates any time."
     }
@@ -4701,11 +4704,21 @@ fn start_update_download(
                 status.set_text("Restarting to apply update...");
                 glib::ControlFlow::Break
             }
+            Ok(Ok(LinuxUpdateApplyResult::DebInstalled(path))) => {
+                button.set_sensitive(true);
+                button.set_label("Check for updates");
+                status.set_text(&format!(
+                    "Installed {}. Restart OK Player to finish.",
+                    display_file_name(&path)
+                ));
+                toast.show("Update installed");
+                glib::ControlFlow::Break
+            }
             Ok(Ok(LinuxUpdateApplyResult::InstallerOpened(path))) => {
                 button.set_sensitive(true);
                 button.set_label("Check for updates");
                 status.set_text(&format!(
-                    "Downloaded {}. Complete the installer to update.",
+                    "Opened {}. Complete the installer to update.",
                     display_file_name(&path)
                 ));
                 toast.show("Installer opened");
@@ -4868,7 +4881,12 @@ fn download_and_apply_linux_update(
         }
         LinuxUpdateTarget::Deb(update) => {
             let path = download_deb_update(update)?;
-            Ok(LinuxUpdateApplyResult::InstallerOpened(path))
+            if try_install_deb_update(&path)? {
+                Ok(LinuxUpdateApplyResult::DebInstalled(path))
+            } else {
+                open_deb_installer(&path)?;
+                Ok(LinuxUpdateApplyResult::InstallerOpened(path))
+            }
         }
     }
 }
@@ -4885,7 +4903,7 @@ impl PendingLinuxUpdate {
     fn action_label(&self) -> &'static str {
         match &self.target {
             LinuxUpdateTarget::Info(_) | LinuxUpdateTarget::Asset(_) => "Download and Restart",
-            LinuxUpdateTarget::Deb(_) => "Download .deb",
+            LinuxUpdateTarget::Deb(_) => "Install .deb",
         }
     }
 
@@ -4897,7 +4915,7 @@ impl PendingLinuxUpdate {
                     .unwrap_or_else(|| "A new version".to_owned())
             ),
             LinuxUpdateTarget::Deb(update) => {
-                format!("{} is available as a .deb installer.", update.version)
+                format!("{} is available as a Debian package.", update.version)
             }
         }
     }
@@ -4992,7 +5010,6 @@ fn download_deb_update(update: ManualDebUpdate) -> Result<PathBuf, String> {
 
     fs::write(&temp, bytes).map_err(|error| format!("Could not save update: {error}"))?;
     fs::rename(&temp, &target).map_err(|error| format!("Could not finalize update: {error}"))?;
-    open_deb_installer(&target)?;
     Ok(target)
 }
 
@@ -5009,6 +5026,56 @@ fn linux_update_cache_dir() -> PathBuf {
         return PathBuf::from(home).join(".cache/ok-player/updates");
     }
     env::temp_dir().join("ok-player/updates")
+}
+
+fn deb_self_install_available() -> bool {
+    find_executable("pkexec").is_some()
+        && (find_executable("apt-get").is_some() || find_executable("apt").is_some())
+}
+
+fn try_install_deb_update(path: &Path) -> Result<bool, String> {
+    if env::var_os("OKP_SKIP_DEB_SELF_INSTALL").is_some() {
+        return Ok(false);
+    }
+
+    let Some(pkexec) = find_executable("pkexec") else {
+        return Ok(false);
+    };
+    let Some(apt) = find_executable("apt-get").or_else(|| find_executable("apt")) else {
+        return Ok(false);
+    };
+
+    let status = Command::new(pkexec)
+        .arg(apt)
+        .arg("install")
+        .arg("-y")
+        .arg(path)
+        .status()
+        .map_err(|error| {
+            format!(
+                "Downloaded to {}, but could not request administrator approval: {error}",
+                path.display()
+            )
+        })?;
+
+    if status.success() {
+        Ok(true)
+    } else {
+        eprintln!("Privileged .deb install exited with {status}; falling back to installer open.");
+        Ok(false)
+    }
+}
+
+fn find_executable(name: &str) -> Option<PathBuf> {
+    if name.contains(std::path::MAIN_SEPARATOR) {
+        let path = PathBuf::from(name);
+        return path.is_file().then_some(path);
+    }
+
+    let path_var = env::var_os("PATH")?;
+    env::split_paths(&path_var)
+        .map(|dir| dir.join(name))
+        .find(|path| path.is_file())
 }
 
 fn open_deb_installer(path: &Path) -> Result<(), String> {
@@ -8651,6 +8718,25 @@ mod tests {
         assert_eq!(update.version, "0.1.0-linux-alpha.46");
         assert_eq!(update.name, "ok-player_0.1.0-linux-alpha.46_amd64.deb");
         assert_eq!(update.size, Some(42));
+    }
+
+    #[test]
+    fn deb_update_action_requests_install() {
+        let update = PendingLinuxUpdate {
+            manager: None,
+            target: LinuxUpdateTarget::Deb(ManualDebUpdate {
+                version: "0.1.0-linux-alpha.46".to_owned(),
+                name: "ok-player_0.1.0-linux-alpha.46_amd64.deb".to_owned(),
+                url: "https://example.invalid/update.deb".to_owned(),
+                size: Some(42),
+            }),
+        };
+
+        assert_eq!(update.action_label(), "Install .deb");
+        assert_eq!(
+            update.available_status(),
+            "0.1.0-linux-alpha.46 is available as a Debian package."
+        );
     }
 
     #[test]
