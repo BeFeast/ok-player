@@ -153,6 +153,7 @@ jobs:
           done
 
       - name: Publish Velopack AppImage feed
+        id: publish
         if: steps.release.outputs.publish == 'true'
         run: |
           "$HOME/.dotnet/tools/vpk" upload github \
@@ -166,6 +167,20 @@ jobs:
             --tag "${{ steps.release.outputs.tag }}" \
             --targetCommitish "${{ github.sha }}"
 
+      # Attach the pre-staged win-channel assets (see the staging step above and
+      # https://github.com/BeFeast/ok-player/issues/130). This runs immediately
+      # after publish — before the AppImage/deb attachments — so no other step's
+      # failure can leave the release sitting in Velopack's 10-release window
+      # without the win feed. If this upload itself fails, the cleanup step below
+      # deletes the release.
+      - name: Bridge Windows update feed onto this release
+        id: bridge
+        if: steps.release.outputs.publish == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ steps.release.outputs.tag }}" artifacts/win-bridge/* --clobber
+
       - name: Attach versioned AppImage to release
         if: steps.release.outputs.publish == 'true'
         env:
@@ -178,13 +193,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${{ steps.release.outputs.tag }}" artifacts/linux/deb/*.deb --clobber
 
-      # Attach the pre-staged win-channel assets (see the staging step above and
-      # https://github.com/BeFeast/ok-player/issues/130). Upload is idempotent
-      # (--clobber); if this step alone fails, re-running the job re-attaches the
-      # staged assets to the already-published release.
-      - name: Bridge Windows update feed onto this release
-        if: steps.release.outputs.publish == 'true'
-        shell: bash
+      # An unbridged linux-v* release must never survive in Velopack's 10-release
+      # window (issue #130): if the release got published but the bridge upload did
+      # not complete, take the release back down. The git tag is kept — for
+      # tag-triggered runs it was pushed by the operator, and re-running the job
+      # republishes the release for the existing tag.
+      - name: Delete the release if it was published without the bridge
+        if: failure() && steps.publish.outcome == 'success' && steps.bridge.outcome != 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ steps.release.outputs.tag }}" artifacts/win-bridge/* --clobber
+        run: |
+          echo "::warning::Deleting release ${{ steps.release.outputs.tag }} because the win-feed bridge did not complete (issue #130)."
+          gh release delete "${{ steps.release.outputs.tag }}" --yes
