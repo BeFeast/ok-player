@@ -1,5 +1,15 @@
 name: Linux Release
 
+# Release cadence (https://github.com/BeFeast/ok-player/issues/130): Linux releases
+# are cut in batches — at most daily, or on demand — by pushing a `linux-v*` tag or
+# dispatching this workflow manually. Merges to `main` do NOT release; never tag one
+# release per commit. The Windows app's Velopack updater only inspects the 10 newest
+# GitHub releases, so per-commit Linux pre-releases flooded the Windows update feed
+# out of its discovery window and every installed Windows build silently stopped
+# seeing updates. The "Bridge Windows update feed" step below is the recovery for
+# the already-installed fleet; the batch cadence keeps the release list from being
+# dominated by any single track again.
+
 on:
   push:
     tags:
@@ -86,7 +96,64 @@ jobs:
             artifacts/linux/velopack/**
             artifacts/linux/deb/*.deb
 
+      # Stage the Windows update feed for bridging BEFORE anything is published
+      # (https://github.com/BeFeast/ok-player/issues/130). The installed Windows
+      # fleet updates via Velopack 1.2.0 GithubSource (channel "win"), which only
+      # fetches the 10 newest GitHub releases (GithubSource.cs hardcodes perPage=10,
+      # page=1) and silently skips any release without a releases.win.json asset
+      # (GitBase.GetReleaseFeed catches the missing-asset exception and continues) —
+      # if none match, the fleet gets an empty feed and reports "up to date" forever.
+      # DownloadReleaseEntry resolves a package strictly from the assets of the
+      # release that carried the feed json (GitBaseAsset pins the carrying release),
+      # so attaching the feed alone is not enough: every nupkg it references must be
+      # co-located on the same release. Staging (discovery + download + validation)
+      # runs before the vpk publish step so a bridge failure aborts the job while
+      # nothing has been published yet — a new linux-v* release must never enter
+      # Velopack's 10-release window without the win feed riding along. Remove the
+      # bridge only once the Windows app has migrated off GithubSource (HttpSource
+      # migration) and the installed fleet has picked that migration up — not before.
+      - name: Stage Windows update feed for the bridge
+        if: steps.release.outputs.publish == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Current Windows release = newest published release tagged v* (never
+          # linux-v*) that carries the win feed. Bridged copies on linux-v* releases
+          # are deliberately excluded so a stale copy can never shadow a newer
+          # Windows release, and we paginate because Windows tags may sit far past
+          # the first page of the release list.
+          win_tag="$(gh api --paginate "repos/${{ github.repository }}/releases?per_page=100" \
+            --jq '.[] | select((.draft | not) and .published_at != null)
+                      | select(.tag_name | test("^v[0-9]"))
+                      | select(any(.assets[]; .name == "releases.win.json"))
+                      | [.published_at, .tag_name] | @tsv' \
+            | sort | tail -n 1 | cut -f 2)"
+          if [[ -z "${win_tag}" ]]; then
+            echo "::error::No Windows release carries releases.win.json; refusing to publish an unbridged Linux release (issue #130)."
+            exit 1
+          fi
+          echo "Staging win-channel assets from ${win_tag}"
+
+          bridge_dir="artifacts/win-bridge"
+          mkdir -p "${bridge_dir}"
+          gh release download "${win_tag}" --repo "${{ github.repository }}" \
+            --pattern "releases.win.json" --dir "${bridge_dir}"
+
+          # The feed pins downloads to the release that carries it, so every package
+          # it references (full, and delta where present) must ride along.
+          mapfile -t win_packages < <(jq -r '.Assets[].FileName' "${bridge_dir}/releases.win.json" | sort -u)
+          if [[ "${#win_packages[@]}" -eq 0 ]]; then
+            echo "::error::releases.win.json from ${win_tag} references no packages; refusing to bridge an empty feed."
+            exit 1
+          fi
+          for package in "${win_packages[@]}"; do
+            gh release download "${win_tag}" --repo "${{ github.repository }}" \
+              --pattern "${package}" --dir "${bridge_dir}"
+          done
+
       - name: Publish Velopack AppImage feed
+        id: publish
         if: steps.release.outputs.publish == 'true'
         run: |
           "$HOME/.dotnet/tools/vpk" upload github \
@@ -100,6 +167,20 @@ jobs:
             --tag "${{ steps.release.outputs.tag }}" \
             --targetCommitish "${{ github.sha }}"
 
+      # Attach the pre-staged win-channel assets (see the staging step above and
+      # https://github.com/BeFeast/ok-player/issues/130). This runs immediately
+      # after publish — before the AppImage/deb attachments — so no other step's
+      # failure can leave the release sitting in Velopack's 10-release window
+      # without the win feed. If this upload itself fails, the cleanup step below
+      # deletes the release.
+      - name: Bridge Windows update feed onto this release
+        id: bridge
+        if: steps.release.outputs.publish == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ steps.release.outputs.tag }}" artifacts/win-bridge/* --clobber
+
       - name: Attach versioned AppImage to release
         if: steps.release.outputs.publish == 'true'
         env:
@@ -111,3 +192,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${{ steps.release.outputs.tag }}" artifacts/linux/deb/*.deb --clobber
+
+      # An unbridged linux-v* release must never survive in Velopack's 10-release
+      # window (issue #130): if the release got published but the bridge upload did
+      # not complete, take the release back down. The git tag is kept — for
+      # tag-triggered runs it was pushed by the operator, and re-running the job
+      # republishes the release for the existing tag.
+      - name: Delete the release if it was published without the bridge
+        if: failure() && steps.publish.outcome == 'success' && steps.bridge.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "::warning::Deleting release ${{ steps.release.outputs.tag }} because the win-feed bridge did not complete (issue #130)."
+          gh release delete "${{ steps.release.outputs.tag }}" --yes
