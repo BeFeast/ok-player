@@ -233,8 +233,8 @@ fn apply_playback_settings_defaults(state: &Rc<RefCell<PlayerState>>) {
 
 #[derive(Clone, Default)]
 struct LaunchArgs {
-    file: Option<PathBuf>,
-    url: Option<String>,
+    items: Vec<PlaylistItem>,
+    playlists: Vec<PathBuf>,
     subtitles: Vec<PathBuf>,
 }
 
@@ -731,8 +731,11 @@ fn parse_launch_args() -> (String, LaunchArgs) {
         .next()
         .and_then(|arg| arg.into_string().ok())
         .unwrap_or_else(|| "ok-player".to_owned());
-    let mut launch = LaunchArgs::default();
+    (argv0, parse_launch_args_from(args))
+}
 
+fn parse_launch_args_from(mut args: impl Iterator<Item = std::ffi::OsString>) -> LaunchArgs {
+    let mut launch = LaunchArgs::default();
     while let Some(arg) = args.next() {
         if arg == "--sub" {
             if let Some(path) = args.next() {
@@ -741,19 +744,47 @@ fn parse_launch_args() -> (String, LaunchArgs) {
             continue;
         }
 
-        if launch.file.is_none() && launch.url.is_none() {
-            if let Some(text) = arg.to_str()
-                && media_formats::is_playable_url(Some(text))
-            {
-                launch.url = Some(text.to_owned());
+        if let Some(text) = arg.to_str() {
+            if media_formats::is_playable_url(Some(text)) {
+                push_unique_playlist_item(&mut launch.items, PlaylistItem::Url(text.to_owned()));
                 continue;
             }
 
-            launch.file = Some(PathBuf::from(arg));
+            if let Some(path) = file_uri_path(text) {
+                add_launch_path_arg(&mut launch, path);
+                continue;
+            }
         }
+
+        add_launch_path_arg(&mut launch, PathBuf::from(arg));
     }
 
-    (argv0, launch)
+    launch
+}
+
+fn file_uri_path(text: &str) -> Option<PathBuf> {
+    text.strip_prefix("file://")?;
+    gtk::gio::File::for_uri(text).path()
+}
+
+fn add_launch_path_arg(launch: &mut LaunchArgs, path: PathBuf) {
+    if is_subtitle_path(&path) {
+        if !launch.subtitles.iter().any(|existing| existing == &path) {
+            launch.subtitles.push(path);
+        }
+    } else if is_playlist_path(&path) {
+        if !launch.playlists.iter().any(|existing| existing == &path) {
+            launch.playlists.push(path);
+        }
+    } else if is_media_path(&path) {
+        push_unique_playlist_item(&mut launch.items, PlaylistItem::Local(path));
+    }
+}
+
+fn push_unique_playlist_item(items: &mut Vec<PlaylistItem>, item: PlaylistItem) {
+    if !items.iter().any(|existing| existing == &item) {
+        items.push(item);
+    }
 }
 
 fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
@@ -1951,11 +1982,7 @@ fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, launch
         schedule_audio_device_restore(&realize_state);
         try_pending_audio_device_restore(&realize_state);
 
-        if let Some(path) = launch_args.file.as_deref() {
-            load_media_path(&realize_state, path.to_path_buf());
-        } else if let Some(url) = launch_args.url.as_deref() {
-            load_media_url(&realize_state, url.to_owned());
-        }
+        load_launch_args(&realize_state, &launch_args);
         realize_state
             .borrow_mut()
             .pending_subtitles
@@ -2006,6 +2033,30 @@ fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, launch
         tick_area.queue_render();
         glib::ControlFlow::Continue
     });
+}
+
+fn load_launch_args(state: &Rc<RefCell<PlayerState>>, launch_args: &LaunchArgs) -> bool {
+    match launch_args.items.as_slice() {
+        [PlaylistItem::Local(path)] => {
+            load_media_path(state, path.clone());
+            true
+        }
+        [PlaylistItem::Url(url)] => {
+            load_media_url(state, url.clone());
+            true
+        }
+        [] => launch_args
+            .playlists
+            .first()
+            .is_some_and(|path| load_m3u_playlist_silent(state, path)),
+        items => {
+            let playlist = items.to_vec();
+            let Some(first_item) = playlist.first().cloned() else {
+                return false;
+            };
+            load_playlist_item_with_playlist(state, first_item, playlist, true)
+        }
+    }
 }
 
 fn connect_state_poll(
@@ -11467,6 +11518,62 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
                 url_item("https://example.test/ep3.mp4"),
                 local_item("/media/ep1.mp4")
             ]
+        );
+    }
+
+    #[test]
+    fn launch_args_keep_ordered_media_urls_and_subtitles() {
+        let launch = parse_launch_args_from(
+            [
+                "/media/b.mkv",
+                "https://example.test/a.mp4",
+                "/media/b.mkv",
+                "/media/captions.srt",
+                "--sub",
+                "/media/forced.ass",
+                "/media/readme.txt",
+            ]
+            .into_iter()
+            .map(Into::into),
+        );
+
+        assert_eq!(
+            launch.items,
+            vec![
+                local_item("/media/b.mkv"),
+                url_item("https://example.test/a.mp4")
+            ]
+        );
+        assert_eq!(
+            launch.subtitles,
+            vec![
+                PathBuf::from("/media/captions.srt"),
+                PathBuf::from("/media/forced.ass")
+            ]
+        );
+        assert!(launch.playlists.is_empty());
+    }
+
+    #[test]
+    fn launch_args_decode_file_uris_and_detect_playlists() {
+        let launch = parse_launch_args_from(
+            [
+                "file:///tmp/OK%20Player/movie.mkv",
+                "file:///tmp/OK%20Player/list.m3u8",
+                "file:///tmp/OK%20Player/subs.vtt",
+            ]
+            .into_iter()
+            .map(Into::into),
+        );
+
+        assert_eq!(launch.items, vec![local_item("/tmp/OK Player/movie.mkv")]);
+        assert_eq!(
+            launch.playlists,
+            vec![PathBuf::from("/tmp/OK Player/list.m3u8")]
+        );
+        assert_eq!(
+            launch.subtitles,
+            vec![PathBuf::from("/tmp/OK Player/subs.vtt")]
         );
     }
 
