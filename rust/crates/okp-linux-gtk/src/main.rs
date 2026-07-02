@@ -2,6 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
 use std::rc::Rc;
@@ -39,6 +40,9 @@ const MPRIS_BUS_NAME: &str = "org.mpris.MediaPlayer2.okplayer";
 const MPRIS_OBJECT_PATH: &str = "/org/mpris/MediaPlayer2";
 const MPRIS_TRACK_PATH: &str = "/org/mpris/MediaPlayer2/Track/0";
 const MPRIS_SEEKED_DELTA_US: i64 = 750_000;
+const MPRIS_ART_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp"];
+const MPRIS_FOLDER_ART_STEMS: &[&str] =
+    &["cover", "folder", "front", "poster", "album", "albumart"];
 const LINUX_UPDATE_REPO_URL: &str = "https://github.com/BeFeast/ok-player";
 const LINUX_DEB_RELEASES_API_URL: &str = "https://api.github.com/repos/BeFeast/ok-player/releases";
 const UPDATE_STATUS_NOT_CHECKED: &str = "Not checked yet";
@@ -285,6 +289,7 @@ struct MprisSnapshot {
     can_go_previous: bool,
     title: String,
     uri: Option<String>,
+    art_url: Option<String>,
 }
 
 impl Default for MprisSnapshot {
@@ -302,6 +307,7 @@ impl Default for MprisSnapshot {
             can_go_previous: false,
             title: "OK Player".to_owned(),
             uri: None,
+            art_url: None,
         }
     }
 }
@@ -1349,6 +1355,7 @@ fn mpris_invalidated_properties(
     if previous.has_media != next.has_media
         || previous.title != next.title
         || previous.uri != next.uri
+        || previous.art_url != next.art_url
         || previous.duration_us != next.duration_us
     {
         properties.push("Metadata");
@@ -1436,7 +1443,7 @@ fn mpris_snapshot_from_state(
     playback: Option<PlaybackState>,
 ) -> MprisSnapshot {
     let has_media = has_loaded_media_state(state);
-    let (title, uri) = mpris_title_and_uri(state);
+    let (title, uri, art_url) = mpris_title_uri_and_art(state);
     let playback = playback.unwrap_or_default();
     let duration_us = playback
         .duration
@@ -1460,25 +1467,130 @@ fn mpris_snapshot_from_state(
         can_go_previous: state.playlist.len() > 1,
         title,
         uri,
+        art_url: has_media.then_some(art_url).flatten(),
     }
 }
 
-fn mpris_title_and_uri(state: &PlayerState) -> (String, Option<String>) {
+fn mpris_title_uri_and_art(state: &PlayerState) -> (String, Option<String>, Option<String>) {
     if let Some(path) = state.current_file.as_ref() {
         let title = path
             .file_name()
             .and_then(|name| name.to_str())
             .map(str::to_owned)
             .unwrap_or_else(|| path.display().to_string());
-        let uri = gtk::gio::File::for_path(path).uri().to_string();
-        return (title, Some(uri));
+        let uri = local_file_uri(path);
+        let art_url = mpris_sidecar_art_url(path).or_else(mpris_app_icon_art_url);
+        return (title, Some(uri), art_url);
     }
 
     if let Some(url) = state.current_url.as_ref() {
-        return (url.to_owned(), Some(url.to_owned()));
+        return (
+            url.to_owned(),
+            Some(url.to_owned()),
+            mpris_app_icon_art_url(),
+        );
     }
 
-    ("OK Player".to_owned(), None)
+    ("OK Player".to_owned(), None, None)
+}
+
+fn local_file_uri(path: &Path) -> String {
+    gtk::gio::File::for_path(path).uri().to_string()
+}
+
+fn mpris_sidecar_art_url(media_path: &Path) -> Option<String> {
+    mpris_sidecar_art_path(media_path).map(|path| local_file_uri(&path))
+}
+
+fn mpris_sidecar_art_path(media_path: &Path) -> Option<PathBuf> {
+    let dir = media_path.parent()?;
+    let media_stem = media_path.file_stem()?.to_str()?;
+    let mut candidates: Vec<(i32, usize, PathBuf)> = Vec::new();
+
+    for entry in fs::read_dir(dir).ok()? {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        let Some(extension_rank) = mpris_art_extension_rank(&path) else {
+            continue;
+        };
+        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        let slot = if stem.eq_ignore_ascii_case(media_stem) {
+            -1
+        } else if let Some(index) = mpris_folder_art_stem_index(stem) {
+            index as i32
+        } else {
+            continue;
+        };
+        if !mpris_has_image_header(&path) {
+            continue;
+        }
+        candidates.push((slot, extension_rank, path));
+    }
+
+    candidates.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.2.cmp(&b.2))
+    });
+
+    candidates.into_iter().map(|(_, _, path)| path).next()
+}
+
+fn mpris_art_extension_rank(path: &Path) -> Option<usize> {
+    let extension = path.extension()?.to_str()?;
+    MPRIS_ART_EXTENSIONS
+        .iter()
+        .position(|candidate| extension.eq_ignore_ascii_case(candidate))
+}
+
+fn mpris_folder_art_stem_index(stem: &str) -> Option<usize> {
+    MPRIS_FOLDER_ART_STEMS
+        .iter()
+        .position(|candidate| stem.eq_ignore_ascii_case(candidate))
+}
+
+fn mpris_has_image_header(path: &Path) -> bool {
+    let Ok(mut file) = fs::File::open(path) else {
+        return false;
+    };
+    let mut bytes = [0_u8; 12];
+    if file.read_exact(&mut bytes).is_err() {
+        return false;
+    }
+
+    (bytes[0] == 0xff && bytes[1] == 0xd8 && bytes[2] == 0xff)
+        || bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+        || (bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"))
+}
+
+fn mpris_app_icon_art_url() -> Option<String> {
+    mpris_app_icon_art_path().map(|path| local_file_uri(&path))
+}
+
+fn mpris_app_icon_art_path() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    candidates.push(PathBuf::from(
+        "/usr/share/icons/hicolor/scalable/apps/com.befeast.okplayer.svg",
+    ));
+    if let Ok(exe) = env::current_exe()
+        && let Some(parent) = exe.parent()
+    {
+        candidates.push(parent.join("com.befeast.okplayer.svg"));
+    }
+    candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packaging/linux/com.befeast.okplayer.svg"),
+    );
+
+    candidates.into_iter().find(|path| path.is_file())
 }
 
 fn secs_to_mpris_us(seconds: f64) -> i64 {
@@ -1508,6 +1620,12 @@ fn mpris_metadata(snapshot: &MprisSnapshot) -> HashMap<String, OwnedValue> {
         metadata.insert(
             "xesam:url".to_owned(),
             Value::from(uri).try_into().expect("url value"),
+        );
+    }
+    if let Some(art_url) = snapshot.art_url.as_deref() {
+        metadata.insert(
+            "mpris:artUrl".to_owned(),
+            Value::from(art_url).try_into().expect("art url value"),
         );
     }
     metadata
@@ -13783,6 +13901,14 @@ mod tests {
         ))
     }
 
+    fn write_jpeg_header(path: &Path) {
+        fs::write(path, b"\xff\xd8\xffok-player").expect("test jpeg header should be written");
+    }
+
+    fn write_png_header(path: &Path) {
+        fs::write(path, b"\x89PNG\r\n\x1a\nokp!").expect("test png header should be written");
+    }
+
     fn assert_delay(input: &str, expected: f64) {
         let actual = parse_delay_entry_seconds(input).expect("delay should parse");
         assert!((actual - expected).abs() < f64::EPSILON);
@@ -13843,6 +13969,7 @@ mod tests {
             can_go_previous: true,
             title: "subtest.mkv".to_owned(),
             uri: Some("file:///tmp/subtest.mkv".to_owned()),
+            art_url: Some("file:///tmp/subtest.jpg".to_owned()),
             ..MprisSnapshot::default()
         };
 
@@ -13853,6 +13980,7 @@ mod tests {
         assert!(metadata.contains_key("mpris:length"));
         assert!(metadata.contains_key("xesam:title"));
         assert!(metadata.contains_key("xesam:url"));
+        assert!(metadata.contains_key("mpris:artUrl"));
     }
 
     #[test]
@@ -13889,6 +14017,76 @@ mod tests {
         };
 
         assert!(mpris_invalidated_properties(&next, &moved).is_empty());
+    }
+
+    #[test]
+    fn mpris_metadata_invalidates_when_art_url_changes() {
+        let previous = MprisSnapshot {
+            has_media: true,
+            paused: false,
+            position_us: 1_000_000,
+            duration_us: Some(30_000_000),
+            title: "song.flac".to_owned(),
+            uri: Some("file:///tmp/song.flac".to_owned()),
+            art_url: Some("file:///tmp/old-cover.jpg".to_owned()),
+            ..MprisSnapshot::default()
+        };
+        let next = MprisSnapshot {
+            art_url: Some("file:///tmp/new-cover.jpg".to_owned()),
+            ..previous.clone()
+        };
+
+        assert_eq!(
+            mpris_invalidated_properties(&previous, &next),
+            vec!["Metadata"]
+        );
+    }
+
+    #[test]
+    fn mpris_sidecar_art_prefers_same_named_image() {
+        let root = unique_temp_dir("okp-mpris-art-same-name");
+        fs::create_dir_all(&root).expect("test folder should be created");
+        let media = root.join("Track 01.flac");
+        let folder_cover = root.join("cover.jpg");
+        let same_named = root.join("Track 01.png");
+        fs::write(&media, []).expect("test media should be written");
+        write_jpeg_header(&folder_cover);
+        write_png_header(&same_named);
+
+        assert_eq!(mpris_sidecar_art_path(&media), Some(same_named.clone()));
+        assert_eq!(
+            mpris_sidecar_art_url(&media),
+            Some(local_file_uri(&same_named))
+        );
+
+        fs::remove_dir_all(root).expect("test folder should be removed");
+    }
+
+    #[test]
+    fn mpris_sidecar_art_uses_folder_priority_and_skips_junk() {
+        let root = unique_temp_dir("okp-mpris-art-folder");
+        fs::create_dir_all(&root).expect("test folder should be created");
+        let media = root.join("Episode 1.mkv");
+        let bad_cover = root.join("cover.jpg");
+        let folder_cover = root.join("folder.jpg");
+        let poster = root.join("poster.png");
+        fs::write(&media, []).expect("test media should be written");
+        fs::write(&bad_cover, []).expect("junk cover should be written");
+        write_jpeg_header(&folder_cover);
+        write_png_header(&poster);
+
+        assert_eq!(mpris_sidecar_art_path(&media), Some(folder_cover));
+
+        fs::remove_dir_all(root).expect("test folder should be removed");
+    }
+
+    #[test]
+    fn mpris_app_icon_art_fallback_is_available_in_dev_tree() {
+        let path =
+            mpris_app_icon_art_path().expect("app icon should resolve in dev or installed tree");
+
+        assert!(path.is_file());
+        assert!(mpris_app_icon_art_url().is_some());
     }
 
     #[test]
