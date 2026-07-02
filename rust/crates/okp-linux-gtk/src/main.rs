@@ -5537,13 +5537,11 @@ impl PendingLinuxUpdate {
     fn available_status(&self) -> String {
         match &self.target {
             LinuxUpdateTarget::Info(_) | LinuxUpdateTarget::Asset(_) => format!(
-                "{} is available.",
+                "Available: {}",
                 self.target_version()
-                    .unwrap_or_else(|| "A new version".to_owned())
+                    .unwrap_or_else(|| "new version".to_owned())
             ),
-            LinuxUpdateTarget::Deb(update) => {
-                format!("{} is available as a Debian package.", update.version)
-            }
+            LinuxUpdateTarget::Deb(update) => format!("Available: {}", update.version),
         }
     }
 }
@@ -11376,10 +11374,7 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
         };
 
         assert_eq!(update.action_label(), "Install .deb");
-        assert_eq!(
-            update.available_status(),
-            "0.1.0-linux-alpha.46 is available as a Debian package."
-        );
+        assert_eq!(update.available_status(), "Available: 0.1.0-linux-alpha.46");
     }
 
     #[test]
