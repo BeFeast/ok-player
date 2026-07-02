@@ -620,6 +620,7 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
     );
     let control_bar = controls_bar(&controls);
     let window_chrome = build_player_window_chrome(&window);
+    sync_player_window_chrome_fullscreen(&window_chrome, &window);
     let empty_surface = build_empty_surface(&window, Rc::clone(&state), Rc::clone(&status_toast));
     chrome.set_child(&control_bar);
     chrome.add_linked_revealer(&window_chrome);
@@ -674,6 +675,18 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
     if auto_check_updates {
         check_updates_on_startup(Rc::clone(&status_toast));
     }
+}
+
+fn sync_player_window_chrome_fullscreen(
+    window_chrome: &gtk::Revealer,
+    window: &gtk::ApplicationWindow,
+) {
+    window_chrome.set_visible(!window.is_fullscreen());
+
+    let fullscreen_chrome = window_chrome.clone();
+    window.connect_notify_local(Some("fullscreened"), move |window, _| {
+        fullscreen_chrome.set_visible(!window.is_fullscreen());
+    });
 }
 
 fn build_player_window_chrome(window: &gtk::ApplicationWindow) -> gtk::Revealer {
