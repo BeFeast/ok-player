@@ -1288,6 +1288,20 @@ fn build_empty_surface(
     open_button.connect_clicked(move |_| open_media_dialog(&open_parent, Rc::clone(&open_state)));
     actions.append(&open_button);
 
+    let folder_button = gtk::Button::with_label("Open folder");
+    folder_button.add_css_class("okp-empty-secondary-button");
+    let folder_parent = window.clone();
+    let folder_state = Rc::clone(&state);
+    let folder_toast = Rc::clone(&status_toast);
+    folder_button.connect_clicked(move |_| {
+        open_folder_dialog(
+            &folder_parent,
+            Rc::clone(&folder_state),
+            Rc::clone(&folder_toast),
+        );
+    });
+    actions.append(&folder_button);
+
     let url_button = gtk::Button::with_label("Open URL");
     url_button.add_css_class("okp-empty-secondary-button");
     let url_parent = window.clone();
@@ -3130,6 +3144,21 @@ fn command_popover_content(
     });
     content.append(&open_url_button);
 
+    let open_folder_button = track_button("Open Folder...", false);
+    let open_folder_parent = parent.clone();
+    let open_folder_state = Rc::clone(&state);
+    let open_folder_toast = Rc::clone(&status_toast);
+    let open_folder_popover = popover.clone();
+    open_folder_button.connect_clicked(move |_| {
+        open_folder_popover.popdown();
+        open_folder_dialog(
+            &open_folder_parent,
+            Rc::clone(&open_folder_state),
+            Rc::clone(&open_folder_toast),
+        );
+    });
+    content.append(&open_folder_button);
+
     let open_playlist_button = track_button("Open Playlist...", false);
     let open_playlist_parent = parent.clone();
     let open_playlist_state = Rc::clone(&state);
@@ -3964,6 +3993,36 @@ fn open_media_dialog(parent: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerSt
     dialog.connect_response(move |dialog, response| {
         if response == gtk::ResponseType::Accept {
             load_selected_local_paths(&state, file_chooser_paths(dialog));
+        }
+        dialog.close();
+    });
+
+    dialog.present();
+}
+
+fn open_folder_dialog(
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) {
+    let dialog = gtk::FileChooserDialog::new(
+        Some("Open folder"),
+        Some(parent),
+        gtk::FileChooserAction::SelectFolder,
+        &[
+            ("Cancel", gtk::ResponseType::Cancel),
+            ("Open", gtk::ResponseType::Accept),
+        ],
+    );
+    dialog.set_modal(true);
+    dialog.set_decorated(false);
+    dialog.set_select_multiple(true);
+
+    dialog.connect_response(move |dialog, response| {
+        if response == gtk::ResponseType::Accept
+            && !load_selected_local_paths(&state, file_chooser_paths(dialog))
+        {
+            status_toast.show("Folder has no playable media");
         }
         dialog.close();
     });
@@ -11876,6 +11935,30 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
         );
 
         fs::remove_dir_all(root).expect("test folder should be removed");
+    }
+
+    #[test]
+    fn selected_media_paths_expands_multiple_folders_in_selection_order() {
+        let root = unique_temp_dir("okp-folder-multi-selection");
+        let season_one = root.join("Season 1");
+        let season_two = root.join("Season 2");
+        fs::create_dir_all(&season_one).expect("first test folder should be created");
+        fs::create_dir_all(&season_two).expect("second test folder should be created");
+        let s1e1 = season_one.join("Episode 1.mkv");
+        let s1e2 = season_one.join("Episode 2.mkv");
+        let s2e1 = season_two.join("Episode 1.mkv");
+        let s2e10 = season_two.join("Episode 10.mkv");
+        fs::write(&s1e2, []).expect("test media should be created");
+        fs::write(&s1e1, []).expect("test media should be created");
+        fs::write(&s2e10, []).expect("test media should be created");
+        fs::write(&s2e1, []).expect("test media should be created");
+
+        assert_eq!(
+            selected_media_paths(&[season_two, season_one]),
+            vec![s2e1, s2e10, s1e1, s1e2]
+        );
+
+        fs::remove_dir_all(root).expect("test folders should be removed");
     }
 
     #[test]
