@@ -3328,6 +3328,11 @@ fn open_settings_window(
     ));
     stack.add_named(&about_page, Some("about"));
 
+    let appearance_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    appearance_page.add_css_class("okp-settings-page");
+    appearance_page.append(&settings_appearance_section());
+    stack.add_named(&settings_scroller(&appearance_page), Some("appearance"));
+
     let updates_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
     updates_page.add_css_class("okp-settings-page");
     updates_page.append(&settings_updates_section(
@@ -3343,6 +3348,10 @@ fn open_settings_window(
     playback_page.append(&playback);
     stack.add_named(&settings_scroller(&playback_page), Some("playback"));
 
+    let subtitles_page =
+        settings_subtitles_page(parent, Rc::clone(&state), Rc::clone(&status_toast));
+    stack.add_named(&settings_scroller(&subtitles_page), Some("subtitles"));
+
     let video_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
     video_page.add_css_class("okp-settings-page");
     let video = settings_section("Video");
@@ -3352,6 +3361,9 @@ fn open_settings_window(
     ));
     video_page.append(&video);
     stack.add_named(&settings_scroller(&video_page), Some("video"));
+
+    let audio_page = settings_audio_page(Rc::clone(&state), Rc::clone(&status_toast));
+    stack.add_named(&settings_scroller(&audio_page), Some("audio"));
 
     let shortcuts_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
     shortcuts_page.add_css_class("okp-settings-page");
@@ -3459,11 +3471,15 @@ fn settings_nav_rail(stack: &gtk::Stack) -> gtk::Box {
 
     let buttons = Rc::new(RefCell::new(Vec::<gtk::Button>::new()));
     let nav_items = [
-        ("Appearance", SettingsNavIcon::Appearance, None),
+        (
+            "Appearance",
+            SettingsNavIcon::Appearance,
+            Some("appearance"),
+        ),
         ("Playback", SettingsNavIcon::Playback, Some("playback")),
-        ("Subtitles", SettingsNavIcon::Subtitles, None),
+        ("Subtitles", SettingsNavIcon::Subtitles, Some("subtitles")),
         ("Video", SettingsNavIcon::Video, Some("video")),
-        ("Audio", SettingsNavIcon::Audio, None),
+        ("Audio", SettingsNavIcon::Audio, Some("audio")),
         ("Shortcuts", SettingsNavIcon::Shortcuts, Some("shortcuts")),
         (
             "Integration",
@@ -4915,6 +4931,369 @@ fn open_external_url(url: &str) {
     }
 }
 
+fn settings_appearance_section() -> gtk::Box {
+    let section = settings_section("Appearance");
+    section.append(&settings_value_row("App theme", "Canonical light"));
+    section.append(&settings_value_row("Player surface", "Dark video plane"));
+    section.append(&settings_value_row(
+        "Window chrome",
+        "Custom captionless controls",
+    ));
+    section.append(&settings_value_row("Fullscreen caption", "Hidden"));
+    section.append(&settings_value_row("Accent", "OK teal"));
+    section
+}
+
+fn settings_subtitles_page(
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    page.add_css_class("okp-settings-page");
+
+    let snapshot = settings_subtitle_snapshot(&state);
+    let summary = settings_section("Subtitles");
+    summary.append(&settings_value_row("Primary", &snapshot.primary));
+    summary.append(&settings_value_row("Secondary", &snapshot.secondary));
+    let (delay_row, delay_label) =
+        settings_value_row_with_label("Delay", &format_delay_label(snapshot.delay_seconds));
+    summary.append(&delay_row);
+    let (scale_row, scale_label) =
+        settings_value_row_with_label("Size", &format_scale(snapshot.scale));
+    summary.append(&scale_row);
+
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    actions.add_css_class("okp-settings-action-row");
+    actions.set_halign(gtk::Align::End);
+
+    let add_button = gtk::Button::with_label("Add subtitle...");
+    add_button.add_css_class("okp-settings-button");
+    add_button.set_sensitive(snapshot.has_media);
+    let add_parent = parent.clone();
+    let add_state = Rc::clone(&state);
+    add_button.connect_clicked(move |_| open_subtitle_dialog(&add_parent, Rc::clone(&add_state)));
+    actions.append(&add_button);
+
+    for (label, adjustment) in [
+        ("-50 ms", SubtitleAdjustment::Delay(-0.05)),
+        ("+50 ms", SubtitleAdjustment::Delay(0.05)),
+        ("Reset", SubtitleAdjustment::SetDelay(0.0)),
+        ("Smaller", SubtitleAdjustment::Scale(-0.1)),
+        ("100%", SubtitleAdjustment::SetScale(1.0)),
+        ("Larger", SubtitleAdjustment::Scale(0.1)),
+    ] {
+        let button = gtk::Button::with_label(label);
+        button.add_css_class("okp-settings-button");
+        button.set_sensitive(snapshot.has_media);
+        let button_state = Rc::clone(&state);
+        let button_toast = Rc::clone(&status_toast);
+        let button_delay = delay_label.clone();
+        let button_scale = scale_label.clone();
+        button.connect_clicked(move |_| {
+            apply_subtitle_adjustment(&button_state, adjustment);
+            refresh_settings_subtitle_values(&button_state, &button_delay, &button_scale);
+            button_toast.show("Subtitle settings updated");
+        });
+        actions.append(&button);
+    }
+    summary.append(&actions);
+    page.append(&summary);
+
+    page.append(&settings_subtitle_track_section(
+        "Primary Track",
+        false,
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    ));
+    page.append(&settings_subtitle_track_section(
+        "Secondary Track",
+        true,
+        state,
+        status_toast,
+    ));
+
+    page
+}
+
+fn settings_audio_page(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusToast>) -> gtk::Box {
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    page.add_css_class("okp-settings-page");
+
+    let summary = settings_section("Audio");
+    summary.append(&settings_value_row(
+        "Current track",
+        &selected_track_summary(&state, TrackKind::Audio),
+    ));
+    summary.append(&settings_volume_row(Rc::clone(&state)));
+    page.append(&summary);
+    page.append(&settings_audio_track_section(state, status_toast));
+
+    page
+}
+
+struct SettingsSubtitleSnapshot {
+    has_media: bool,
+    primary: String,
+    secondary: String,
+    delay_seconds: f64,
+    scale: f64,
+}
+
+fn settings_subtitle_snapshot(state: &Rc<RefCell<PlayerState>>) -> SettingsSubtitleSnapshot {
+    let has_media = has_loaded_media(state);
+    let tracks = read_tracks(state)
+        .into_iter()
+        .filter(|track| track.kind == TrackKind::Subtitle)
+        .collect::<Vec<_>>();
+    let primary = tracks
+        .iter()
+        .find(|track| track.selected)
+        .map(track_base_label)
+        .unwrap_or_else(|| {
+            if has_media {
+                "Off".to_owned()
+            } else {
+                "No media loaded".to_owned()
+            }
+        });
+    let secondary_id = read_secondary_subtitle_id(state);
+    let secondary = secondary_id
+        .and_then(|id| tracks.iter().find(|track| track.id == id))
+        .map(track_base_label)
+        .unwrap_or_else(|| {
+            if has_media {
+                "Off".to_owned()
+            } else {
+                "No media loaded".to_owned()
+            }
+        });
+    let (delay_seconds, scale) = read_subtitle_adjustments(state);
+
+    SettingsSubtitleSnapshot {
+        has_media,
+        primary,
+        secondary,
+        delay_seconds,
+        scale,
+    }
+}
+
+fn refresh_settings_subtitle_values(
+    state: &Rc<RefCell<PlayerState>>,
+    delay_label: &gtk::Label,
+    scale_label: &gtk::Label,
+) {
+    let (delay_seconds, scale) = read_subtitle_adjustments(state);
+    delay_label.set_text(&format_delay_label(delay_seconds));
+    scale_label.set_text(&format_scale(scale));
+}
+
+fn settings_subtitle_track_section(
+    title: &str,
+    secondary: bool,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let section = settings_section(title);
+    if !has_loaded_media(&state) {
+        section.append(&settings_empty_state("No media loaded"));
+        return section;
+    }
+
+    let tracks = read_tracks(&state)
+        .into_iter()
+        .filter(|track| track.kind == TrackKind::Subtitle)
+        .collect::<Vec<_>>();
+    let selected_id = if secondary {
+        read_secondary_subtitle_id(&state)
+    } else {
+        tracks
+            .iter()
+            .find(|track| track.selected)
+            .map(|track| track.id)
+    };
+    let buttons = Rc::new(RefCell::new(Vec::<gtk::Button>::new()));
+
+    let off_button = settings_track_button("Off", selected_id.is_none());
+    connect_settings_subtitle_track_button(
+        &off_button,
+        None,
+        secondary,
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+        &buttons,
+    );
+    buttons.borrow_mut().push(off_button.clone());
+    section.append(&off_button);
+
+    if tracks.is_empty() {
+        section.append(&settings_empty_state("No subtitle tracks"));
+    } else {
+        for track in tracks {
+            let button = settings_track_button(
+                &track_label_for(&track, false),
+                selected_id == Some(track.id),
+            );
+            connect_settings_subtitle_track_button(
+                &button,
+                Some(track.id),
+                secondary,
+                Rc::clone(&state),
+                Rc::clone(&status_toast),
+                &buttons,
+            );
+            buttons.borrow_mut().push(button.clone());
+            section.append(&button);
+        }
+    }
+
+    section
+}
+
+fn settings_audio_track_section(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let section = settings_section("Audio Tracks");
+    if !has_loaded_media(&state) {
+        section.append(&settings_empty_state("No media loaded"));
+        return section;
+    }
+
+    let tracks = read_tracks(&state)
+        .into_iter()
+        .filter(|track| track.kind == TrackKind::Audio)
+        .collect::<Vec<_>>();
+    let selected_id = tracks
+        .iter()
+        .find(|track| track.selected)
+        .map(|track| track.id);
+    let buttons = Rc::new(RefCell::new(Vec::<gtk::Button>::new()));
+
+    let off_button = settings_track_button("Off", selected_id.is_none());
+    connect_settings_audio_track_button(
+        &off_button,
+        None,
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+        &buttons,
+    );
+    buttons.borrow_mut().push(off_button.clone());
+    section.append(&off_button);
+
+    if tracks.is_empty() {
+        section.append(&settings_empty_state("No audio tracks"));
+    } else {
+        for track in tracks {
+            let button = settings_track_button(
+                &track_label_for(&track, false),
+                selected_id == Some(track.id),
+            );
+            connect_settings_audio_track_button(
+                &button,
+                Some(track.id),
+                Rc::clone(&state),
+                Rc::clone(&status_toast),
+                &buttons,
+            );
+            buttons.borrow_mut().push(button.clone());
+            section.append(&button);
+        }
+    }
+
+    section
+}
+
+fn connect_settings_subtitle_track_button(
+    button: &gtk::Button,
+    track_id: Option<i64>,
+    secondary: bool,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+    buttons: &Rc<RefCell<Vec<gtk::Button>>>,
+) {
+    let selected_button = button.clone();
+    let buttons = Rc::clone(buttons);
+    button.connect_clicked(move |_| {
+        let ok = with_mpv(&state, |mpv| {
+            if secondary {
+                mpv.select_secondary_subtitle(track_id)
+            } else {
+                mpv.select_subtitle(track_id)
+            }
+        });
+        if ok {
+            save_current_preferences(&state);
+            mark_settings_track_selected(&buttons, &selected_button);
+            status_toast.show("Subtitle track updated");
+        }
+    });
+}
+
+fn connect_settings_audio_track_button(
+    button: &gtk::Button,
+    track_id: Option<i64>,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+    buttons: &Rc<RefCell<Vec<gtk::Button>>>,
+) {
+    let selected_button = button.clone();
+    let buttons = Rc::clone(buttons);
+    button.connect_clicked(move |_| {
+        if with_mpv(&state, |mpv| mpv.select_audio(track_id)) {
+            save_current_preferences(&state);
+            mark_settings_track_selected(&buttons, &selected_button);
+            status_toast.show("Audio track updated");
+        }
+    });
+}
+
+fn mark_settings_track_selected(buttons: &Rc<RefCell<Vec<gtk::Button>>>, selected: &gtk::Button) {
+    for button in buttons.borrow().iter() {
+        button.remove_css_class("is-selected");
+    }
+    selected.add_css_class("is-selected");
+}
+
+fn settings_track_button(text: &str, selected: bool) -> gtk::Button {
+    let button = gtk::Button::with_label(text);
+    button.add_css_class("okp-settings-track-row");
+    button.set_has_frame(false);
+    if selected {
+        button.add_css_class("is-selected");
+    }
+    button
+}
+
+fn settings_empty_state(text: &str) -> gtk::Label {
+    let label = gtk::Label::new(Some(text));
+    label.add_css_class("okp-update-status");
+    label.set_xalign(0.0);
+    label
+}
+
+fn selected_track_summary(state: &Rc<RefCell<PlayerState>>, kind: TrackKind) -> String {
+    if !has_loaded_media(state) {
+        return "No media loaded".to_owned();
+    }
+
+    read_tracks(state)
+        .into_iter()
+        .find(|track| track.kind == kind && track.selected)
+        .map(|track| track_label_for(&track, false))
+        .unwrap_or_else(|| "Off".to_owned())
+}
+
+fn format_delay_label(seconds: f64) -> String {
+    let milliseconds = (seconds * 1000.0).round() as i64;
+    if milliseconds > 0 {
+        format!("+{milliseconds} ms")
+    } else {
+        format!("{milliseconds} ms")
+    }
+}
+
 fn settings_volume_row(state: Rc<RefCell<PlayerState>>) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Vertical, 8);
     row.add_css_class("okp-settings-row");
@@ -5093,6 +5472,10 @@ fn settings_clear_history_row(
 }
 
 fn settings_value_row(label: &str, value: &str) -> gtk::Box {
+    settings_value_row_with_label(label, value).0
+}
+
+fn settings_value_row_with_label(label: &str, value: &str) -> (gtk::Box, gtk::Label) {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     row.add_css_class("okp-settings-row");
 
@@ -5110,7 +5493,7 @@ fn settings_value_row(label: &str, value: &str) -> gtk::Box {
     value.set_selectable(true);
     row.append(&value);
 
-    row
+    (row, value)
 }
 
 fn open_subtitle_dialog(parent: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerState>>) {
@@ -7691,6 +8074,10 @@ fn install_css() {
             min-height: 34px;
         }
 
+        .okp-settings-action-row {
+            margin-top: 8px;
+        }
+
         .okp-settings-scale trough {
             min-height: 6px;
             border-radius: 999px;
@@ -7725,6 +8112,30 @@ fn install_css() {
 
         .okp-settings-button:hover {
             background: #f8fafb;
+        }
+
+        button.okp-settings-track-row {
+            min-height: 34px;
+            padding: 7px 10px;
+            border-radius: 7px;
+            background: #f8fafb;
+            border: 1px solid rgba(0, 0, 0, 0.04);
+            box-shadow: none;
+            color: #161616;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12px;
+            font-weight: 400;
+        }
+
+        button.okp-settings-track-row:hover {
+            background: #f1f5f8;
+        }
+
+        button.okp-settings-track-row.is-selected {
+            background: rgba(16, 147, 138, 0.12);
+            border-color: rgba(16, 147, 138, 0.24);
+            color: #0a655f;
+            font-weight: 600;
         }
 
         .okp-info-track-row {
