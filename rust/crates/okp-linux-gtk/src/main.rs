@@ -7691,22 +7691,75 @@ fn connect_drop(
             return false;
         };
 
-        let Some(path) = files.files().into_iter().find_map(|file| file.path()) else {
-            return false;
-        };
-
-        if is_subtitle_path(&path) {
-            return load_subtitle_path(&state, path);
-        }
-
-        if is_media_path(&path) {
-            load_media_path(&state, path);
-            true
-        } else {
-            false
-        }
+        load_dropped_paths(&state, dropped_file_list_paths(&files))
     });
     window.add_controller(drop_target);
+}
+
+fn dropped_file_list_paths(files: &gdk::FileList) -> Vec<PathBuf> {
+    files
+        .files()
+        .into_iter()
+        .filter_map(|file| file.path())
+        .collect()
+}
+
+fn load_dropped_paths(state: &Rc<RefCell<PlayerState>>, paths: Vec<PathBuf>) -> bool {
+    let media_paths = dropped_media_paths(&paths);
+    match media_paths.as_slice() {
+        [path] => {
+            load_media_path(state, path.clone());
+            load_dropped_subtitles(state, dropped_subtitle_paths(&paths));
+            return true;
+        }
+        [] => {}
+        _ => {
+            let playlist = media_paths
+                .into_iter()
+                .map(PlaylistItem::Local)
+                .collect::<Vec<_>>();
+            let Some(first_item) = playlist.first().cloned() else {
+                return false;
+            };
+            let loaded = load_playlist_item_with_playlist(state, first_item, playlist, true);
+            if loaded {
+                load_dropped_subtitles(state, dropped_subtitle_paths(&paths));
+            }
+            return loaded;
+        }
+    }
+
+    if let Some(path) = dropped_playlist_path(&paths) {
+        return load_m3u_playlist_silent(state, &path);
+    }
+
+    load_dropped_subtitles(state, dropped_subtitle_paths(&paths))
+}
+
+fn dropped_media_paths(paths: &[PathBuf]) -> Vec<PathBuf> {
+    unique_media_paths(paths.to_vec())
+}
+
+fn dropped_subtitle_paths(paths: &[PathBuf]) -> Vec<PathBuf> {
+    let mut subtitles = Vec::new();
+    for path in paths {
+        if is_subtitle_path(path) && !subtitles.iter().any(|existing| existing == path) {
+            subtitles.push(path.clone());
+        }
+    }
+    subtitles
+}
+
+fn dropped_playlist_path(paths: &[PathBuf]) -> Option<PathBuf> {
+    paths.iter().find(|path| is_playlist_path(path)).cloned()
+}
+
+fn load_dropped_subtitles(state: &Rc<RefCell<PlayerState>>, paths: Vec<PathBuf>) -> bool {
+    let mut loaded = false;
+    for path in paths {
+        loaded |= load_subtitle_path(state, path);
+    }
+    loaded
 }
 
 fn connect_keyboard(
@@ -8969,30 +9022,65 @@ fn load_m3u_playlist(
     path: &Path,
     status_toast: &StatusToast,
 ) -> bool {
-    if !is_playlist_path(path) {
-        status_toast.show("Choose an M3U playlist");
-        return false;
+    let playlist = match read_m3u_playlist_items(path) {
+        Ok(playlist) => playlist,
+        Err(M3uPlaylistReadError::NotPlaylist) => {
+            status_toast.show("Choose an M3U playlist");
+            return false;
+        }
+        Err(M3uPlaylistReadError::ReadFailed) => {
+            status_toast.show("Could not read playlist");
+            return false;
+        }
+        Err(M3uPlaylistReadError::Empty) => {
+            status_toast.show("Playlist has no playable media");
+            return false;
+        }
+    };
+
+    let count = playlist.len();
+    if let Some(first_item) = playlist.first().cloned()
+        && load_playlist_item_with_playlist(state, first_item, playlist, true)
+    {
+        status_toast.show(&format!("Playlist opened: {count} item{}", plural_s(count)));
+        return true;
     }
 
-    let Ok(text) = fs::read_to_string(path) else {
-        status_toast.show("Could not read playlist");
+    status_toast.show("Could not open playlist media");
+    false
+}
+
+fn load_m3u_playlist_silent(state: &Rc<RefCell<PlayerState>>, path: &Path) -> bool {
+    let Ok(playlist) = read_m3u_playlist_items(path) else {
         return false;
     };
 
-    let entries = m3u::parse(&text, path.parent());
-    let playlist = playlist_items_from_m3u_entries(&entries);
-    if let Some(first_item) = playlist.first().cloned() {
-        let count = playlist.len();
-        if load_playlist_item_with_playlist(state, first_item, playlist, true) {
-            status_toast.show(&format!("Playlist opened: {count} item{}", plural_s(count)));
-            return true;
-        }
-        status_toast.show("Could not open playlist media");
+    let Some(first_item) = playlist.first().cloned() else {
         return false;
+    };
+    load_playlist_item_with_playlist(state, first_item, playlist, true)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum M3uPlaylistReadError {
+    NotPlaylist,
+    ReadFailed,
+    Empty,
+}
+
+fn read_m3u_playlist_items(path: &Path) -> Result<Vec<PlaylistItem>, M3uPlaylistReadError> {
+    if !is_playlist_path(path) {
+        return Err(M3uPlaylistReadError::NotPlaylist);
     }
 
-    status_toast.show("Playlist has no playable media");
-    false
+    let text = fs::read_to_string(path).map_err(|_| M3uPlaylistReadError::ReadFailed)?;
+    let entries = m3u::parse(&text, path.parent());
+    let playlist = playlist_items_from_m3u_entries(&entries);
+    if playlist.is_empty() {
+        Err(M3uPlaylistReadError::Empty)
+    } else {
+        Ok(playlist)
+    }
 }
 
 fn save_m3u_playlist(
@@ -11398,6 +11486,54 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
                 PathBuf::from("/media/a.mkv"),
                 PathBuf::from("/media/b.flac")
             ]
+        );
+    }
+
+    #[test]
+    fn dropped_media_paths_keep_drop_order_and_skip_non_media() {
+        let paths = vec![
+            PathBuf::from("/media/b.mkv"),
+            PathBuf::from("/media/subs.srt"),
+            PathBuf::from("/media/a.mp4"),
+            PathBuf::from("/media/b.mkv"),
+            PathBuf::from("/media/list.m3u"),
+        ];
+
+        assert_eq!(
+            dropped_media_paths(&paths),
+            vec![PathBuf::from("/media/b.mkv"), PathBuf::from("/media/a.mp4")]
+        );
+    }
+
+    #[test]
+    fn dropped_subtitle_paths_keep_order_and_deduplicate() {
+        let paths = vec![
+            PathBuf::from("/media/a.en.srt"),
+            PathBuf::from("/media/movie.mkv"),
+            PathBuf::from("/media/a.en.srt"),
+            PathBuf::from("/media/a.signs.ass"),
+        ];
+
+        assert_eq!(
+            dropped_subtitle_paths(&paths),
+            vec![
+                PathBuf::from("/media/a.en.srt"),
+                PathBuf::from("/media/a.signs.ass")
+            ]
+        );
+    }
+
+    #[test]
+    fn dropped_playlist_path_picks_first_m3u_variant() {
+        let paths = vec![
+            PathBuf::from("/media/movie.mkv"),
+            PathBuf::from("/media/queue.m3u8"),
+            PathBuf::from("/media/other.m3u"),
+        ];
+
+        assert_eq!(
+            dropped_playlist_path(&paths),
+            Some(PathBuf::from("/media/queue.m3u8"))
         );
     }
 
