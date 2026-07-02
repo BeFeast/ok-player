@@ -4473,6 +4473,7 @@ fn settings_about_section(
 #[derive(Clone)]
 struct AboutSnapshot {
     version: String,
+    package_version: String,
     channel: String,
     build: String,
     license: String,
@@ -4494,8 +4495,9 @@ impl AboutSnapshot {
         let auto_updates = state.settings.auto_check_updates();
         let hwdec = state.settings.hardware_decode_label().to_owned();
         Self {
-            version: APP_BUILD_VERSION.to_owned(),
-            channel: "Linux".to_owned(),
+            version: about_display_version(APP_BUILD_VERSION),
+            package_version: APP_BUILD_VERSION.to_owned(),
+            channel: about_display_channel(APP_BUILD_VERSION),
             build: APP_BUILD_SHA.to_owned(),
             license: "GPL-3.0-or-later".to_owned(),
             libmpv: pkg_config_version("mpv").unwrap_or_else(|| "system".to_owned()),
@@ -4551,7 +4553,7 @@ fn about_identity_hero(snapshot: &AboutSnapshot) -> gtk::Box {
     let version = gtk::Label::new(Some(&snapshot.version));
     version.add_css_class("okp-about-version-chip");
     chips.append(&version);
-    let channel = gtk::Label::new(Some(&snapshot.channel));
+    let channel = gtk::Label::new(Some(&about_hero_channel(&snapshot.channel)));
     channel.add_css_class("okp-about-channel-chip");
     chips.append(&channel);
     text.append(&chips);
@@ -4602,16 +4604,38 @@ fn about_illustration_path() -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.is_file())
 }
 
+fn about_display_version(version: &str) -> String {
+    version
+        .split_once("-linux-")
+        .map(|(base, _)| base)
+        .unwrap_or(version)
+        .to_owned()
+}
+
+fn about_display_channel(version: &str) -> String {
+    if version.contains("-linux-alpha") {
+        "Linux alpha"
+    } else if version.contains("-linux-beta") {
+        "Linux beta"
+    } else {
+        "Linux"
+    }
+    .to_owned()
+}
+
+fn about_hero_channel(channel: &str) -> String {
+    channel
+        .split_whitespace()
+        .last()
+        .unwrap_or(channel)
+        .to_uppercase()
+}
+
 fn about_app_card(snapshot: &AboutSnapshot) -> gtk::Box {
     let rows = gtk::Box::new(gtk::Orientation::Vertical, 9);
     rows.append(&about_spec_row("Version", &snapshot.version, true, None));
     rows.append(&about_spec_row("Channel", &snapshot.channel, false, None));
-    rows.append(&about_spec_row(
-        "Build",
-        &snapshot.build,
-        true,
-        Some(("CURRENT", false)),
-    ));
+    rows.append(&about_spec_row("Build", &snapshot.build, true, None));
     rows.append(&about_spec_row("License", &snapshot.license, true, None));
     about_card("APP", &rows)
 }
@@ -4969,8 +4993,8 @@ fn about_link_button(label: &str) -> gtk::Button {
     button.set_has_frame(false);
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 5);
     content.append(&gtk::Label::new(Some(label)));
-    let icon = gtk::Image::from_icon_name("open-in-new-symbolic");
-    icon.set_pixel_size(12);
+    let icon = gtk::Label::new(Some("↗"));
+    icon.add_css_class("okp-about-link-arrow");
     content.append(&icon);
     button.set_child(Some(&content));
     button
@@ -4979,7 +5003,7 @@ fn about_link_button(label: &str) -> gtk::Button {
 fn about_diagnostics_text(snapshot: &AboutSnapshot) -> String {
     format!(
         "OK Player {} ({})\nBuild {} - current\nLicense {}\n\nEngine\n  libmpv           {}\n  FFmpeg           {}\n  Render API       {}\n  Graphics         {}\n  Hardware decode  {}\n\nHost\n  Linux            {}\n  GTK              {}\n  CPU              {}\n  Install          {}\n  Updates          {}",
-        snapshot.version,
+        snapshot.package_version,
         snapshot.channel,
         snapshot.build,
         snapshot.license,
@@ -9629,7 +9653,7 @@ fn install_css() {
         }
 
         .okp-settings-search {
-            min-height: 30px;
+            min-height: 16px;
             margin-bottom: 11px;
             padding: 7px 10px;
             border-radius: 7px;
@@ -9646,7 +9670,7 @@ fn install_css() {
         }
 
         .okp-settings-nav-row {
-            min-height: 36px;
+            min-height: 18px;
             padding: 8px 10px;
             border: none;
             border-radius: 7px;
@@ -10013,6 +10037,13 @@ fn install_css() {
             font-weight: 600;
         }
 
+        .okp-about-link-arrow {
+            color: #0a655f;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
         .okp-about-link-dot {
             min-width: 3px;
             min-height: 24px;
@@ -10264,6 +10295,20 @@ mod tests {
     fn assert_delay(input: &str, expected: f64) {
         let actual = parse_delay_entry_seconds(input).expect("delay should parse");
         assert!((actual - expected).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn about_display_version_keeps_about_layout_compact() {
+        assert_eq!(about_display_version("0.1.0-linux-alpha.77"), "0.1.0");
+        assert_eq!(about_display_version("1.0.0"), "1.0.0");
+    }
+
+    #[test]
+    fn about_channel_separates_linux_release_track_from_version() {
+        assert_eq!(about_display_channel("0.1.0-linux-alpha.77"), "Linux alpha");
+        assert_eq!(about_hero_channel("Linux alpha"), "ALPHA");
+        assert_eq!(about_display_channel("1.0.0-linux"), "Linux");
+        assert_eq!(about_hero_channel("Linux"), "LINUX");
     }
 
     #[test]
