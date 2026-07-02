@@ -40,7 +40,7 @@ struct PlayerState {
     mpv: Option<Mpv>,
     current_file: Option<PathBuf>,
     current_url: Option<String>,
-    playlist: Vec<PathBuf>,
+    playlist: Vec<PlaylistItem>,
     pending_subtitles: Vec<PathBuf>,
     pending_resume: Option<(PathBuf, f64)>,
     pending_preferences: Option<(PathBuf, history::PlaybackPreferences)>,
@@ -224,6 +224,59 @@ enum LinuxUpdateApplyResult {
 enum QueueInsertMode {
     Append,
     PlayNext,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PlaylistItem {
+    Local(PathBuf),
+    Url(String),
+}
+
+impl PlaylistItem {
+    fn local(path: PathBuf) -> Option<Self> {
+        is_media_path(&path).then_some(Self::Local(path))
+    }
+
+    fn from_m3u_entry(entry: &str) -> Option<Self> {
+        if is_media_url(entry) {
+            return Some(Self::Url(entry.to_owned()));
+        }
+
+        Self::local(PathBuf::from(entry))
+    }
+
+    fn is_current(&self, current_file: Option<&Path>, current_url: Option<&str>) -> bool {
+        match self {
+            Self::Local(path) => current_file.is_some_and(|current| current == path),
+            Self::Url(url) => current_url.is_some_and(|current| current == url),
+        }
+    }
+
+    fn display_name(&self) -> String {
+        match self {
+            Self::Local(path) => display_file_name(path),
+            Self::Url(url) => url
+                .rsplit('/')
+                .next()
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| url.to_owned()),
+        }
+    }
+
+    fn display_location(&self) -> String {
+        match self {
+            Self::Local(path) => path.display().to_string(),
+            Self::Url(url) => url.to_owned(),
+        }
+    }
+
+    fn m3u_entry(&self) -> String {
+        match self {
+            Self::Local(path) => path.to_string_lossy().into_owned(),
+            Self::Url(url) => url.to_owned(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -551,7 +604,8 @@ impl SeekHoverPreview {
 struct SidePanelSnapshot {
     has_media: bool,
     current_file: Option<PathBuf>,
-    playlist: Vec<PathBuf>,
+    current_url: Option<String>,
+    playlist: Vec<PlaylistItem>,
     chapters: Vec<Chapter>,
 }
 
@@ -1596,6 +1650,12 @@ fn side_panel_summary(snapshot: &SidePanelSnapshot) -> String {
         .current_file
         .as_deref()
         .map(display_file_name)
+        .or_else(|| {
+            snapshot
+                .current_url
+                .as_ref()
+                .map(|url| PlaylistItem::Url(url.clone()).display_name())
+        })
         .unwrap_or_else(|| "No media loaded".to_owned());
     let chapter_label = match snapshot.chapters.len() {
         0 => "0 chapters".to_owned(),
@@ -2025,6 +2085,7 @@ fn update_up_next_panel(
         SidePanelSnapshot {
             has_media,
             current_file: state.current_file.clone(),
+            current_url: state.current_url.clone(),
             playlist: state.playlist.clone(),
             chapters,
         }
@@ -2084,10 +2145,12 @@ fn update_up_next_panel(
         &snapshot.chapters,
     );
 
-    let current_index = snapshot
-        .current_file
-        .as_ref()
-        .and_then(|current| snapshot.playlist.iter().position(|path| path == current));
+    let current_index = snapshot.playlist.iter().position(|item| {
+        item.is_current(
+            snapshot.current_file.as_deref(),
+            snapshot.current_url.as_deref(),
+        )
+    });
 
     let mode = controls.side_panel_mode.get();
     update_side_panel_tab_labels(
@@ -2169,9 +2232,9 @@ fn render_playlist_panel(
     )));
     actions.push(SidePanelAction::None);
 
-    for (index, path) in snapshot.playlist.iter().enumerate() {
+    for (index, item) in snapshot.playlist.iter().enumerate() {
         controls.up_next_list.append(&playlist_row(
-            path,
+            item,
             index,
             current_index,
             snapshot.playlist.len(),
@@ -2324,7 +2387,7 @@ fn clear_list_box(list: &gtk::ListBox) {
 }
 
 fn playlist_row(
-    path: &Path,
+    item: &PlaylistItem,
     index: usize,
     current_index: Option<usize>,
     playlist_len: usize,
@@ -2336,7 +2399,7 @@ fn playlist_row(
     row.add_css_class("okp-up-next-row");
     row.set_activatable(!is_current);
     row.set_selectable(false);
-    row.set_tooltip_text(Some(&path.display().to_string()));
+    row.set_tooltip_text(Some(&item.display_location()));
     if is_current {
         row.add_css_class("is-current");
     }
@@ -2355,7 +2418,7 @@ fn playlist_row(
     marker.set_width_chars(4);
     marker.set_xalign(0.0);
 
-    let title = gtk::Label::new(Some(&display_file_name(path)));
+    let title = gtk::Label::new(Some(&item.display_name()));
     title.add_css_class("okp-up-next-file");
     title.set_xalign(0.0);
     title.set_hexpand(true);
@@ -7120,7 +7183,7 @@ fn remember_loaded_media(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
 fn load_media_path_with_playlist(
     state: &Rc<RefCell<PlayerState>>,
     path: PathBuf,
-    playlist: Vec<PathBuf>,
+    playlist: Vec<PlaylistItem>,
     save_previous: bool,
 ) -> bool {
     if !is_media_path(&path) {
@@ -7154,14 +7217,20 @@ fn load_media_path_with_playlist(
 fn remember_loaded_media_with_playlist(
     state: &Rc<RefCell<PlayerState>>,
     path: PathBuf,
-    playlist: Vec<PathBuf>,
+    playlist: Vec<PlaylistItem>,
 ) {
     let mut playlist = playlist
         .into_iter()
-        .filter(|path| is_media_path(path))
+        .filter(|item| match item {
+            PlaylistItem::Local(path) => is_media_path(path),
+            PlaylistItem::Url(url) => is_media_url(url),
+        })
         .collect::<Vec<_>>();
-    if !playlist.iter().any(|item| item == &path) {
-        playlist.insert(0, path.clone());
+    if !playlist
+        .iter()
+        .any(|item| matches!(item, PlaylistItem::Local(item_path) if item_path == &path))
+    {
+        playlist.insert(0, PlaylistItem::Local(path.clone()));
     }
     let resume_path = path.clone();
     let preferences_path = path.clone();
@@ -7197,17 +7266,96 @@ fn remember_loaded_media_with_playlist(
 }
 
 fn remember_loaded_url(state: &Rc<RefCell<PlayerState>>, url: String) {
+    remember_loaded_url_with_playlist(state, url.clone(), vec![PlaylistItem::Url(url)]);
+}
+
+fn load_media_url_with_playlist(
+    state: &Rc<RefCell<PlayerState>>,
+    url: String,
+    playlist: Vec<PlaylistItem>,
+    save_previous: bool,
+) -> bool {
+    if !is_media_url(&url) {
+        return false;
+    }
+    if save_previous {
+        save_current_progress(state, false);
+    }
+
+    let result = {
+        let state = state.borrow();
+        state.mpv.as_ref().map(|mpv| mpv.load_url(&url))
+    };
+
+    match result {
+        Some(Ok(())) => {
+            remember_loaded_url_with_playlist(state, url, playlist);
+            true
+        }
+        Some(Err(error)) => {
+            eprintln!("Failed to load URL '{url}': {error}");
+            false
+        }
+        None => {
+            remember_loaded_url_with_playlist(state, url, playlist);
+            true
+        }
+    }
+}
+
+fn remember_loaded_url_with_playlist(
+    state: &Rc<RefCell<PlayerState>>,
+    url: String,
+    playlist: Vec<PlaylistItem>,
+) {
+    let mut playlist = playlist
+        .into_iter()
+        .filter(|item| match item {
+            PlaylistItem::Local(path) => is_media_path(path),
+            PlaylistItem::Url(url) => is_media_url(url),
+        })
+        .collect::<Vec<_>>();
+    if !playlist
+        .iter()
+        .any(|item| matches!(item, PlaylistItem::Url(item_url) if item_url == &url))
+    {
+        playlist.insert(0, PlaylistItem::Url(url.clone()));
+    }
+
     let mut state = state.borrow_mut();
+    let playlist_changed = state.playlist != playlist;
     state.current_file = None;
     state.current_url = Some(url);
-    state.playlist.clear();
-    state.modes.reset_shuffle_order();
+    state.playlist = playlist;
+    if playlist_changed {
+        state.modes.reset_shuffle_order();
+    }
     state.thumbnail_request_key = None;
     state.hover_thumbnail_request_key = None;
     state.chapters_snapshot.clear();
     state.pending_subtitles.clear();
     state.pending_resume = None;
     state.pending_preferences = None;
+    if let Some(current_index) = current_playlist_index(&state) {
+        let playlist_len = state.playlist.len();
+        state
+            .modes
+            .ensure_shuffle_order(playlist_len, current_index);
+    }
+}
+
+fn load_playlist_item_with_playlist(
+    state: &Rc<RefCell<PlayerState>>,
+    item: PlaylistItem,
+    playlist: Vec<PlaylistItem>,
+    save_previous: bool,
+) -> bool {
+    match item {
+        PlaylistItem::Local(path) => {
+            load_media_path_with_playlist(state, path, playlist, save_previous)
+        }
+        PlaylistItem::Url(url) => load_media_url_with_playlist(state, url, playlist, save_previous),
+    }
 }
 
 fn load_m3u_playlist(
@@ -7226,21 +7374,15 @@ fn load_m3u_playlist(
     };
 
     let entries = m3u::parse(&text, path.parent());
-    let playlist = local_media_paths_from_m3u_entries(&entries);
-    if let Some(first_path) = playlist.first().cloned() {
+    let playlist = playlist_items_from_m3u_entries(&entries);
+    if let Some(first_item) = playlist.first().cloned() {
         let count = playlist.len();
-        if load_media_path_with_playlist(state, first_path, playlist, true) {
+        if load_playlist_item_with_playlist(state, first_item, playlist, true) {
             status_toast.show(&format!("Playlist opened: {count} item{}", plural_s(count)));
             return true;
         }
         status_toast.show("Could not open playlist media");
         return false;
-    }
-
-    if let Some(url) = entries.iter().find(|entry| is_media_url(entry)).cloned() {
-        load_media_url(state, url);
-        status_toast.show("Playlist opened: 1 URL");
-        return true;
     }
 
     status_toast.show("Playlist has no playable media");
@@ -7257,8 +7399,7 @@ fn save_m3u_playlist(
         state
             .playlist
             .iter()
-            .filter(|path| is_media_path(path))
-            .map(|path| path.to_string_lossy().into_owned())
+            .map(PlaylistItem::m3u_entry)
             .collect::<Vec<_>>()
     };
 
@@ -7329,12 +7470,10 @@ fn queue_media_paths(
     true
 }
 
-fn local_media_paths_from_m3u_entries(entries: &[String]) -> Vec<PathBuf> {
+fn playlist_items_from_m3u_entries(entries: &[String]) -> Vec<PlaylistItem> {
     entries
         .iter()
-        .filter(|entry| !entry.contains("://"))
-        .map(PathBuf::from)
-        .filter(|path| is_media_path(path))
+        .filter_map(|entry| PlaylistItem::from_m3u_entry(entry))
         .collect()
 }
 
@@ -7363,16 +7502,19 @@ fn unique_media_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
 }
 
 fn queue_playlist_insert(
-    mut playlist: Vec<PathBuf>,
+    mut playlist: Vec<PlaylistItem>,
     current_file: &Path,
     additions: Vec<PathBuf>,
     mode: QueueInsertMode,
-) -> Option<(Vec<PathBuf>, usize)> {
+) -> Option<(Vec<PlaylistItem>, usize)> {
     if playlist.is_empty() {
-        playlist.push(current_file.to_path_buf());
+        playlist.push(PlaylistItem::Local(current_file.to_path_buf()));
     }
-    if !playlist.iter().any(|item| item.as_path() == current_file) {
-        playlist.insert(0, current_file.to_path_buf());
+    if !playlist
+        .iter()
+        .any(|item| matches!(item, PlaylistItem::Local(path) if path.as_path() == current_file))
+    {
+        playlist.insert(0, PlaylistItem::Local(current_file.to_path_buf()));
     }
 
     let additions = additions
@@ -7387,7 +7529,12 @@ fn queue_playlist_insert(
         QueueInsertMode::Append => {
             let additions = additions
                 .into_iter()
-                .filter(|path| !playlist.iter().any(|item| item == path))
+                .filter(|path| {
+                    !playlist.iter().any(
+                        |item| matches!(item, PlaylistItem::Local(item_path) if item_path == path),
+                    )
+                })
+                .map(PlaylistItem::Local)
                 .collect::<Vec<_>>();
             if additions.is_empty() {
                 return None;
@@ -7398,34 +7545,41 @@ fn queue_playlist_insert(
             Some((playlist, count))
         }
         QueueInsertMode::PlayNext => {
-            playlist.retain(|item| !additions.iter().any(|addition| addition == item));
+            playlist.retain(|item| {
+                !additions
+                    .iter()
+                    .any(|addition| matches!(item, PlaylistItem::Local(path) if path == addition))
+            });
             let current_index = playlist
                 .iter()
-                .position(|item| item.as_path() == current_file)
+                .position(|item| matches!(item, PlaylistItem::Local(path) if path.as_path() == current_file))
                 .unwrap_or(0);
             let count = additions.len();
-            playlist.splice(current_index + 1..current_index + 1, additions);
+            playlist.splice(
+                current_index + 1..current_index + 1,
+                additions.into_iter().map(PlaylistItem::Local),
+            );
             Some((playlist, count))
         }
     }
 }
 
 fn navigate_playlist(state: &Rc<RefCell<PlayerState>>, direction: isize) -> bool {
-    let Some(path) = playlist_target_path(state, direction, true) else {
+    let Some(item) = playlist_target_item(state, direction, true) else {
         return false;
     };
     let playlist = state.borrow().playlist.clone();
 
-    load_media_path_with_playlist(state, path, playlist, true)
+    load_playlist_item_with_playlist(state, item, playlist, true)
 }
 
 fn jump_playlist_index(state: &Rc<RefCell<PlayerState>>, index: usize) -> bool {
-    let (path, playlist) = {
+    let (item, playlist) = {
         let state = state.borrow();
         (state.playlist.get(index).cloned(), state.playlist.clone())
     };
 
-    let Some(path) = path else {
+    let Some(item) = item else {
         return false;
     };
 
@@ -7440,7 +7594,7 @@ fn jump_playlist_index(state: &Rc<RefCell<PlayerState>>, index: usize) -> bool {
         }
     }
 
-    load_media_path_with_playlist(state, path, playlist, true)
+    load_playlist_item_with_playlist(state, item, playlist, true)
 }
 
 fn advance_playlist_on_eof(state: &Rc<RefCell<PlayerState>>) -> bool {
@@ -7454,12 +7608,12 @@ fn advance_playlist_on_eof(state: &Rc<RefCell<PlayerState>>) -> bool {
     }
 
     let wrap = repeat_mode == RepeatMode::All;
-    let Some(next_file) = playlist_target_path(state, 1, wrap) else {
+    let Some(next_item) = playlist_target_item(state, 1, wrap) else {
         return false;
     };
     let playlist = state.borrow().playlist.clone();
 
-    load_media_path_with_playlist(state, next_file, playlist, false)
+    load_playlist_item_with_playlist(state, next_item, playlist, false)
 }
 
 fn move_playlist_item(state: &Rc<RefCell<PlayerState>>, from: usize, to: usize) -> bool {
@@ -7474,11 +7628,9 @@ fn move_playlist_item(state: &Rc<RefCell<PlayerState>>, from: usize, to: usize) 
 
 fn remove_playlist_item(state: &Rc<RefCell<PlayerState>>, index: usize) -> bool {
     let mut state = state.borrow_mut();
-    if state
-        .playlist
-        .get(index)
-        .is_some_and(|path| state.current_file.as_ref() == Some(path))
-    {
+    if state.playlist.get(index).is_some_and(|item| {
+        item.is_current(state.current_file.as_deref(), state.current_url.as_deref())
+    }) {
         return false;
     }
     let Some(playlist) = remove_playlist_index(state.playlist.clone(), index) else {
@@ -7489,7 +7641,11 @@ fn remove_playlist_item(state: &Rc<RefCell<PlayerState>>, index: usize) -> bool 
     true
 }
 
-fn reorder_playlist(mut playlist: Vec<PathBuf>, from: usize, to: usize) -> Option<Vec<PathBuf>> {
+fn reorder_playlist(
+    mut playlist: Vec<PlaylistItem>,
+    from: usize,
+    to: usize,
+) -> Option<Vec<PlaylistItem>> {
     if from >= playlist.len() || from == to {
         return None;
     }
@@ -7499,7 +7655,10 @@ fn reorder_playlist(mut playlist: Vec<PathBuf>, from: usize, to: usize) -> Optio
     Some(playlist)
 }
 
-fn remove_playlist_index(mut playlist: Vec<PathBuf>, index: usize) -> Option<Vec<PathBuf>> {
+fn remove_playlist_index(
+    mut playlist: Vec<PlaylistItem>,
+    index: usize,
+) -> Option<Vec<PlaylistItem>> {
     if playlist.len() <= 1 || index >= playlist.len() {
         return None;
     }
@@ -7530,11 +7689,11 @@ fn restart_current_file(state: &Rc<RefCell<PlayerState>>) -> bool {
     true
 }
 
-fn playlist_target_path(
+fn playlist_target_item(
     state: &Rc<RefCell<PlayerState>>,
     direction: isize,
     wrap: bool,
-) -> Option<PathBuf> {
+) -> Option<PlaylistItem> {
     let mut state = state.borrow_mut();
     if state.playlist.len() < 2 {
         return None;
@@ -7584,8 +7743,9 @@ fn shuffled_target_index(
 }
 
 fn current_playlist_index(state: &PlayerState) -> Option<usize> {
-    let current_file = state.current_file.as_ref()?;
-    state.playlist.iter().position(|path| path == current_file)
+    state.playlist.iter().position(|item| {
+        item.is_current(state.current_file.as_deref(), state.current_url.as_deref())
+    })
 }
 
 fn try_pending_resume(state: &Rc<RefCell<PlayerState>>, duration: f64) {
@@ -7838,13 +7998,13 @@ fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: bool) {
     }
 }
 
-fn build_folder_playlist(path: &Path) -> Vec<PathBuf> {
+fn build_folder_playlist(path: &Path) -> Vec<PlaylistItem> {
     let Some(parent) = path.parent() else {
-        return vec![path.to_path_buf()];
+        return vec![PlaylistItem::Local(path.to_path_buf())];
     };
 
     let Ok(entries) = std::fs::read_dir(parent) else {
-        return vec![path.to_path_buf()];
+        return vec![PlaylistItem::Local(path.to_path_buf())];
     };
 
     let mut files = entries
@@ -7859,9 +8019,9 @@ fn build_folder_playlist(path: &Path) -> Vec<PathBuf> {
     });
 
     if files.is_empty() {
-        vec![path.to_path_buf()]
+        vec![PlaylistItem::Local(path.to_path_buf())]
     } else {
-        files
+        files.into_iter().map(PlaylistItem::Local).collect()
     }
 }
 
@@ -9307,6 +9467,14 @@ fn install_css() {
 mod tests {
     use super::*;
 
+    fn local_item(path: &str) -> PlaylistItem {
+        PlaylistItem::Local(PathBuf::from(path))
+    }
+
+    fn url_item(url: &str) -> PlaylistItem {
+        PlaylistItem::Url(url.to_owned())
+    }
+
     fn assert_delay(input: &str, expected: f64) {
         let actual = parse_delay_entry_seconds(input).expect("delay should parse");
         assert!((actual - expected).abs() < f64::EPSILON);
@@ -9358,7 +9526,7 @@ mod tests {
     }
 
     #[test]
-    fn m3u_local_media_paths_skip_urls_subtitles_and_unknown_entries() {
+    fn m3u_playlist_items_keep_urls_and_skip_subtitles_unknown_entries() {
         let entries = vec![
             "/media/ep2.mkv".to_owned(),
             "https://example.test/ep3.mp4".to_owned(),
@@ -9367,13 +9535,14 @@ mod tests {
             "/media/ep1.mp4".to_owned(),
         ];
 
-        let paths = local_media_paths_from_m3u_entries(&entries);
+        let items = playlist_items_from_m3u_entries(&entries);
 
         assert_eq!(
-            paths,
+            items,
             vec![
-                PathBuf::from("/media/ep2.mkv"),
-                PathBuf::from("/media/ep1.mp4")
+                local_item("/media/ep2.mkv"),
+                url_item("https://example.test/ep3.mp4"),
+                local_item("/media/ep1.mp4")
             ]
         );
     }
@@ -9400,8 +9569,9 @@ mod tests {
     #[test]
     fn queue_playlist_append_adds_new_media_to_the_end() {
         let playlist = vec![
-            PathBuf::from("/media/current.mkv"),
-            PathBuf::from("/media/queued.mkv"),
+            local_item("/media/current.mkv"),
+            url_item("https://example.test/stream"),
+            local_item("/media/queued.mkv"),
         ];
         let additions = vec![
             PathBuf::from("/media/current.mkv"),
@@ -9422,10 +9592,11 @@ mod tests {
         assert_eq!(
             playlist,
             vec![
-                PathBuf::from("/media/current.mkv"),
-                PathBuf::from("/media/queued.mkv"),
-                PathBuf::from("/media/new.mp4"),
-                PathBuf::from("/media/album.flac"),
+                local_item("/media/current.mkv"),
+                url_item("https://example.test/stream"),
+                local_item("/media/queued.mkv"),
+                local_item("/media/new.mp4"),
+                local_item("/media/album.flac"),
             ]
         );
     }
@@ -9433,10 +9604,11 @@ mod tests {
     #[test]
     fn queue_playlist_play_next_inserts_after_current_and_moves_existing_items() {
         let playlist = vec![
-            PathBuf::from("/media/previous.mkv"),
-            PathBuf::from("/media/current.mkv"),
-            PathBuf::from("/media/later.mkv"),
-            PathBuf::from("/media/final.mkv"),
+            local_item("/media/previous.mkv"),
+            local_item("/media/current.mkv"),
+            url_item("https://example.test/stream"),
+            local_item("/media/later.mkv"),
+            local_item("/media/final.mkv"),
         ];
         let additions = vec![
             PathBuf::from("/media/later.mkv"),
@@ -9455,11 +9627,12 @@ mod tests {
         assert_eq!(
             playlist,
             vec![
-                PathBuf::from("/media/previous.mkv"),
-                PathBuf::from("/media/current.mkv"),
-                PathBuf::from("/media/later.mkv"),
-                PathBuf::from("/media/new.mp4"),
-                PathBuf::from("/media/final.mkv"),
+                local_item("/media/previous.mkv"),
+                local_item("/media/current.mkv"),
+                local_item("/media/later.mkv"),
+                local_item("/media/new.mp4"),
+                url_item("https://example.test/stream"),
+                local_item("/media/final.mkv"),
             ]
         );
     }
@@ -9468,7 +9641,7 @@ mod tests {
     fn queue_playlist_rejects_current_only_selection() {
         assert!(
             queue_playlist_insert(
-                vec![PathBuf::from("/media/current.mkv")],
+                vec![local_item("/media/current.mkv")],
                 Path::new("/media/current.mkv"),
                 vec![PathBuf::from("/media/current.mkv")],
                 QueueInsertMode::Append,
@@ -9480,20 +9653,20 @@ mod tests {
     #[test]
     fn reorder_playlist_moves_item_to_target_slot_after_removal() {
         let playlist = vec![
-            PathBuf::from("/media/a.mkv"),
-            PathBuf::from("/media/b.mkv"),
-            PathBuf::from("/media/c.mkv"),
-            PathBuf::from("/media/d.mkv"),
+            local_item("/media/a.mkv"),
+            local_item("/media/b.mkv"),
+            url_item("https://example.test/c.mp4"),
+            local_item("/media/d.mkv"),
         ];
 
         let reordered = reorder_playlist(playlist.clone(), 0, 2).expect("move should work");
         assert_eq!(
             reordered,
             vec![
-                PathBuf::from("/media/b.mkv"),
-                PathBuf::from("/media/c.mkv"),
-                PathBuf::from("/media/a.mkv"),
-                PathBuf::from("/media/d.mkv"),
+                local_item("/media/b.mkv"),
+                url_item("https://example.test/c.mp4"),
+                local_item("/media/a.mkv"),
+                local_item("/media/d.mkv"),
             ]
         );
 
@@ -9501,17 +9674,17 @@ mod tests {
         assert_eq!(
             reordered,
             vec![
-                PathBuf::from("/media/a.mkv"),
-                PathBuf::from("/media/d.mkv"),
-                PathBuf::from("/media/b.mkv"),
-                PathBuf::from("/media/c.mkv"),
+                local_item("/media/a.mkv"),
+                local_item("/media/d.mkv"),
+                local_item("/media/b.mkv"),
+                url_item("https://example.test/c.mp4"),
             ]
         );
     }
 
     #[test]
     fn reorder_playlist_rejects_noop_or_out_of_range_moves() {
-        let playlist = vec![PathBuf::from("/media/a.mkv"), PathBuf::from("/media/b.mkv")];
+        let playlist = vec![local_item("/media/a.mkv"), local_item("/media/b.mkv")];
 
         assert!(reorder_playlist(playlist.clone(), 0, 0).is_none());
         assert!(reorder_playlist(playlist, 3, 0).is_none());
@@ -9520,18 +9693,18 @@ mod tests {
     #[test]
     fn remove_playlist_index_keeps_at_least_one_item() {
         let playlist = vec![
-            PathBuf::from("/media/a.mkv"),
-            PathBuf::from("/media/b.mkv"),
-            PathBuf::from("/media/c.mkv"),
+            local_item("/media/a.mkv"),
+            url_item("https://example.test/b.mp4"),
+            local_item("/media/c.mkv"),
         ];
 
         let without_middle = remove_playlist_index(playlist, 1).expect("remove should work");
         assert_eq!(
             without_middle,
-            vec![PathBuf::from("/media/a.mkv"), PathBuf::from("/media/c.mkv")]
+            vec![local_item("/media/a.mkv"), local_item("/media/c.mkv")]
         );
 
-        assert!(remove_playlist_index(vec![PathBuf::from("/media/a.mkv")], 0).is_none());
+        assert!(remove_playlist_index(vec![local_item("/media/a.mkv")], 0).is_none());
     }
 
     fn github_asset(name: &str) -> GitHubAsset {
