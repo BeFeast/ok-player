@@ -4350,6 +4350,10 @@ fn open_settings_window(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) {
+    let initial_page = env::var("OKP_OPEN_SETTINGS_PAGE_ON_STARTUP")
+        .ok()
+        .and_then(|page| normalized_settings_page(&page))
+        .unwrap_or("about");
     let window = captionless_transient_window(
         parent,
         "Settings",
@@ -4478,8 +4482,11 @@ fn open_settings_window(
     integration_page.append(&storage);
     stack.add_named(&settings_scroller(&integration_page), Some("integration"));
 
-    stack.set_visible_child_name("about");
-    root.append(&settings_nav_rail_frame(settings_nav_rail(&stack)));
+    stack.set_visible_child_name(initial_page);
+    root.append(&settings_nav_rail_frame(settings_nav_rail(
+        &stack,
+        initial_page,
+    )));
 
     stack.set_size_request(SETTINGS_CONTENT_WIDTH, SETTINGS_REFERENCE_HEIGHT);
     root.append(&stack);
@@ -4490,6 +4497,21 @@ fn open_settings_window(
     window_overlay.add_overlay(&settings_window_controls(&window));
     window.set_child(Some(&window_overlay));
     window.present();
+}
+
+fn normalized_settings_page(page: &str) -> Option<&'static str> {
+    match page.trim().to_ascii_lowercase().as_str() {
+        "appearance" => Some("appearance"),
+        "playback" => Some("playback"),
+        "subtitles" => Some("subtitles"),
+        "video" => Some("video"),
+        "audio" => Some("audio"),
+        "shortcuts" => Some("shortcuts"),
+        "integration" => Some("integration"),
+        "advanced" => Some("advanced"),
+        "about" => Some("about"),
+        _ => None,
+    }
 }
 
 fn settings_scroller<T: IsA<gtk::Widget>>(child: &T) -> gtk::ScrolledWindow {
@@ -4530,7 +4552,7 @@ enum SettingsNavIcon {
     About,
 }
 
-fn settings_nav_rail(stack: &gtk::Stack) -> gtk::Box {
+fn settings_nav_rail(stack: &gtk::Stack, selected_page: &str) -> gtk::Box {
     let rail = gtk::Box::new(gtk::Orientation::Vertical, 2);
     rail.add_css_class("okp-settings-rail");
     rail.set_size_request(SETTINGS_RAIL_WIDTH, SETTINGS_REFERENCE_HEIGHT);
@@ -4573,7 +4595,7 @@ fn settings_nav_rail(stack: &gtk::Stack) -> gtk::Box {
     ];
 
     for (label, icon, page) in nav_items {
-        let row = settings_nav_row(label, icon, false);
+        let row = settings_nav_row(label, icon, page == Some(selected_page));
         if let Some(page) = page {
             connect_settings_nav_row(&row, page, stack, &buttons);
             buttons.borrow_mut().push(row.clone());
@@ -4589,7 +4611,7 @@ fn settings_nav_rail(stack: &gtk::Stack) -> gtk::Box {
     divider.add_css_class("okp-settings-rail-divider");
     rail.append(&divider);
 
-    let about = settings_nav_row("About", SettingsNavIcon::About, true);
+    let about = settings_nav_row("About", SettingsNavIcon::About, selected_page == "about");
     connect_settings_nav_row(&about, "about", stack, &buttons);
     buttons.borrow_mut().push(about.clone());
     rail.append(&about);
@@ -7879,115 +7901,336 @@ fn settings_shortcuts_section(
     status_toast: Rc<StatusToast>,
 ) -> gtk::Box {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    content.append(&settings_keybindings_section(state, status_toast));
-    content.append(&settings_shortcut_defaults_section());
+    content.append(&settings_shortcut_editor_section(state, status_toast));
     content
 }
 
-fn settings_shortcut_defaults_section() -> gtk::Box {
-    let section = settings_section("Action IDs");
-    for action in SHORTCUT_ACTIONS {
-        section.append(&settings_value_row(
-            &format!("{} ({})", action.label(), action.id()),
-            action.default_shortcut(),
-        ));
-    }
-    section
+struct ShortcutEditorRow {
+    action: ShortcutAction,
+    default_chord: ShortcutChord,
+    current_chord: Cell<ShortcutChord>,
+    container: gtk::Box,
+    chip: gtk::Button,
+    chip_label: gtk::Label,
+    badge: gtk::Label,
+    reset: gtk::Button,
 }
 
-fn settings_keybindings_section(
+fn settings_shortcut_editor_section(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) -> gtk::Box {
-    let section = settings_section("Keybinding Remap");
+    let section = settings_section("Keyboard Shortcuts");
+    let rows = Rc::new(RefCell::new(Vec::<Rc<ShortcutEditorRow>>::new()));
+    let bindings = shortcut_editor_initial_bindings(&state.borrow().settings);
 
-    let detail = gtk::Label::new(Some(
-        "Override defaults with action=shortcut lines. Example: play-pause=P.",
-    ));
-    detail.add_css_class("okp-update-status");
-    detail.set_xalign(0.0);
-    detail.set_width_chars(1);
-    detail.set_max_width_chars(58);
-    detail.set_wrap(true);
-    section.append(&detail);
+    let search = gtk::Entry::new();
+    search.add_css_class("okp-shortcuts-search");
+    search.set_placeholder_text(Some("Search"));
+    section.append(&search);
 
-    let editor = gtk::TextView::new();
-    editor.add_css_class("okp-mpv-conf-editor");
-    editor.set_monospace(true);
-    editor.set_wrap_mode(gtk::WrapMode::None);
-    editor.set_accepts_tab(true);
-    editor
-        .buffer()
-        .set_text(state.borrow().settings.raw_keybindings_config());
-
-    let scroller = gtk::ScrolledWindow::new();
-    scroller.add_css_class("okp-mpv-conf-scroller");
-    scroller.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
-    scroller.set_min_content_height(132);
-    scroller.set_child(Some(&editor));
-    section.append(&scroller);
-
-    let status = gtk::Label::new(Some(
-        "Supported modifiers: Ctrl, Alt, Shift. Leave blank to use defaults.",
-    ));
+    let status = gtk::Label::new(Some("Ready"));
     status.add_css_class("okp-update-status");
     status.set_xalign(0.0);
     status.set_width_chars(1);
     status.set_max_width_chars(58);
     status.set_wrap(true);
+
+    let list = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    list.add_css_class("okp-shortcuts-list");
+
+    for action in SHORTCUT_ACTIONS {
+        let current_chord = bindings
+            .iter()
+            .find(|binding| binding.action == *action)
+            .map(|binding| binding.chord)
+            .unwrap_or_else(|| {
+                parse_shortcut_chord(action.default_shortcut(), 0)
+                    .expect("default shortcuts should parse")
+            });
+        let row = shortcut_editor_row(
+            *action,
+            current_chord,
+            Rc::clone(&rows),
+            Rc::clone(&state),
+            Rc::clone(&status_toast),
+            status.clone(),
+        );
+        list.append(&row.container);
+        rows.borrow_mut().push(row);
+    }
+    section.append(&list);
+
     section.append(&status);
+
+    let search_rows = Rc::clone(&rows);
+    search.connect_changed(move |entry| {
+        let query = entry.text().trim().to_ascii_lowercase();
+        for row in search_rows.borrow().iter() {
+            let visible = query.is_empty()
+                || row.action.label().to_ascii_lowercase().contains(&query)
+                || row.action.id().contains(&query)
+                || shortcut_chord_label(row.current_chord.get())
+                    .to_ascii_lowercase()
+                    .contains(&query);
+            row.container.set_visible(visible);
+        }
+    });
 
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     actions.add_css_class("okp-settings-action-row");
     actions.set_halign(gtk::Align::End);
 
-    let reset = gtk::Button::with_label("Reset");
+    let reset = gtk::Button::with_label("Reset All");
     reset.add_css_class("okp-settings-button");
-    let reset_buffer = editor.buffer();
-    let reset_state = Rc::clone(&state);
-    let reset_toast = Rc::clone(&status_toast);
-    let reset_status = status.clone();
+    let reset_rows = Rc::clone(&rows);
+    let reset_state = state;
+    let reset_toast = status_toast;
+    let reset_status = status;
     reset.connect_clicked(move |_| {
-        reset_buffer.set_text("");
-        apply_raw_keybindings_setting("", &reset_status, &reset_state, &reset_toast);
+        shortcut_editor_clear_capture(&reset_rows.borrow());
+        shortcut_editor_clear_conflicts(&reset_rows.borrow());
+        for row in reset_rows.borrow().iter() {
+            row.current_chord.set(row.default_chord);
+            shortcut_editor_refresh_row(row);
+        }
+        save_shortcut_editor_rows(
+            &reset_rows,
+            &reset_state,
+            &reset_status,
+            &reset_toast,
+            "All shortcuts reset",
+        );
     });
     actions.append(&reset);
-
-    let apply = gtk::Button::with_label("Apply");
-    apply.add_css_class("okp-settings-button");
-    let apply_buffer = editor.buffer();
-    let apply_state = Rc::clone(&state);
-    let apply_toast = Rc::clone(&status_toast);
-    let apply_status = status.clone();
-    apply.connect_clicked(move |_| {
-        let text = text_buffer_string(&apply_buffer);
-        apply_raw_keybindings_setting(&text, &apply_status, &apply_state, &apply_toast);
-    });
-    actions.append(&apply);
 
     section.append(&actions);
     section
 }
 
-fn apply_raw_keybindings_setting(
-    text: &str,
-    status: &gtk::Label,
-    state: &Rc<RefCell<PlayerState>>,
-    status_toast: &Rc<StatusToast>,
-) {
-    if let Err(error) = resolved_shortcut_bindings_from_text(text) {
-        if error.line == 0 {
-            status.set_text(&error.message);
-        } else {
-            status.set_text(&format!("Line {}: {}", error.line, error.message));
+fn shortcut_editor_row(
+    action: ShortcutAction,
+    current_chord: ShortcutChord,
+    rows: Rc<RefCell<Vec<Rc<ShortcutEditorRow>>>>,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+    status: gtk::Label,
+) -> Rc<ShortcutEditorRow> {
+    let default_chord =
+        parse_shortcut_chord(action.default_shortcut(), 0).expect("default shortcuts should parse");
+    let container = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    container.add_css_class("okp-shortcut-row");
+
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 1);
+    text.set_hexpand(true);
+
+    let title = gtk::Label::new(Some(action.label()));
+    title.add_css_class("okp-shortcut-action-title");
+    title.set_xalign(0.0);
+    text.append(&title);
+
+    let subtitle = gtk::Label::new(Some(action.id()));
+    subtitle.add_css_class("okp-shortcut-action-id");
+    subtitle.set_xalign(0.0);
+    text.append(&subtitle);
+    container.append(&text);
+
+    let badge = gtk::Label::new(Some("CUSTOM"));
+    badge.add_css_class("okp-shortcut-badge");
+    badge.set_valign(gtk::Align::Center);
+    container.append(&badge);
+
+    let chip = gtk::Button::new();
+    chip.add_css_class("okp-shortcut-chip");
+    chip.set_has_frame(false);
+    chip.set_focus_on_click(true);
+    chip.set_tooltip_text(Some("Change shortcut"));
+    let chip_label = gtk::Label::new(None);
+    chip_label.add_css_class("okp-shortcut-chip-label");
+    chip.set_child(Some(&chip_label));
+    container.append(&chip);
+
+    let reset = gtk::Button::with_label("Reset");
+    reset.add_css_class("okp-shortcut-reset");
+    reset.set_has_frame(false);
+    reset.set_valign(gtk::Align::Center);
+    container.append(&reset);
+
+    let row = Rc::new(ShortcutEditorRow {
+        action,
+        default_chord,
+        current_chord: Cell::new(current_chord),
+        container,
+        chip,
+        chip_label,
+        badge,
+        reset,
+    });
+    shortcut_editor_refresh_row(&row);
+
+    let chip_row = Rc::clone(&row);
+    let chip_rows = Rc::clone(&rows);
+    let chip_status = status.clone();
+    row.chip.connect_clicked(move |button| {
+        shortcut_editor_clear_capture(&chip_rows.borrow());
+        shortcut_editor_clear_conflicts(&chip_rows.borrow());
+        button.add_css_class("is-capturing");
+        chip_row.chip_label.set_text("Press keys");
+        chip_status.set_text(&format!("Recording {}", chip_row.action.label()));
+        button.grab_focus();
+    });
+
+    let key_row = Rc::clone(&row);
+    let key_rows = Rc::clone(&rows);
+    let key_state = Rc::clone(&state);
+    let key_toast = Rc::clone(&status_toast);
+    let key_status = status.clone();
+    let key_controller = gtk::EventControllerKey::new();
+    key_controller.connect_key_pressed(move |_, key, _, modifiers| {
+        if !key_row.chip.has_css_class("is-capturing") {
+            return glib::Propagation::Proceed;
         }
-        status_toast.show("Keybindings have an error");
+
+        let chord = match shortcut_chord_from_event(key, modifiers) {
+            Ok(chord) => chord,
+            Err(message) => {
+                key_status.set_text(message);
+                return glib::Propagation::Stop;
+            }
+        };
+
+        if let Some(conflict) = shortcut_editor_conflict(&key_rows.borrow(), key_row.action, chord)
+        {
+            shortcut_editor_mark_conflict(&key_rows.borrow(), key_row.action, conflict);
+            key_status.set_text(&format!(
+                "{} already uses {}",
+                conflict.label(),
+                shortcut_chord_label(chord)
+            ));
+            key_toast.show("Shortcut conflict");
+            return glib::Propagation::Stop;
+        }
+
+        shortcut_editor_clear_conflicts(&key_rows.borrow());
+        key_row.chip.remove_css_class("is-capturing");
+        key_row.current_chord.set(chord);
+        shortcut_editor_refresh_row(&key_row);
+        save_shortcut_editor_rows(
+            &key_rows,
+            &key_state,
+            &key_status,
+            &key_toast,
+            "Shortcut saved",
+        );
+        glib::Propagation::Stop
+    });
+    row.chip.add_controller(key_controller);
+
+    let reset_row = Rc::clone(&row);
+    let reset_rows = rows;
+    let reset_state = state;
+    let reset_toast = status_toast;
+    let reset_status = status;
+    row.reset.connect_clicked(move |_| {
+        shortcut_editor_clear_capture(&reset_rows.borrow());
+        shortcut_editor_clear_conflicts(&reset_rows.borrow());
+        reset_row.current_chord.set(reset_row.default_chord);
+        shortcut_editor_refresh_row(&reset_row);
+        save_shortcut_editor_rows(
+            &reset_rows,
+            &reset_state,
+            &reset_status,
+            &reset_toast,
+            "Shortcut reset",
+        );
+    });
+
+    row
+}
+
+fn shortcut_editor_initial_bindings(settings: &settings::SettingsStore) -> Vec<ShortcutBinding> {
+    resolved_shortcut_bindings(settings).unwrap_or_else(|error| {
+        eprintln!(
+            "Ignoring custom keybindings at line {} while building Settings UI: {}",
+            error.line, error.message
+        );
+        default_shortcut_bindings()
+    })
+}
+
+fn shortcut_editor_refresh_row(row: &ShortcutEditorRow) {
+    let is_custom = row.current_chord.get() != row.default_chord;
+    row.chip_label
+        .set_text(&shortcut_chord_label(row.current_chord.get()));
+    row.badge.set_visible(is_custom);
+    row.reset.set_sensitive(is_custom);
+}
+
+fn shortcut_editor_clear_capture(rows: &[Rc<ShortcutEditorRow>]) {
+    for row in rows {
+        if row.chip.has_css_class("is-capturing") {
+            row.chip.remove_css_class("is-capturing");
+            shortcut_editor_refresh_row(row);
+        }
+    }
+}
+
+fn shortcut_editor_clear_conflicts(rows: &[Rc<ShortcutEditorRow>]) {
+    for row in rows {
+        row.container.remove_css_class("is-conflict");
+        row.chip.remove_css_class("is-conflict");
+    }
+}
+
+fn shortcut_editor_mark_conflict(
+    rows: &[Rc<ShortcutEditorRow>],
+    left: ShortcutAction,
+    right: ShortcutAction,
+) {
+    shortcut_editor_clear_conflicts(rows);
+    for row in rows {
+        if row.action == left || row.action == right {
+            row.container.add_css_class("is-conflict");
+            row.chip.add_css_class("is-conflict");
+        }
+    }
+}
+
+fn shortcut_editor_conflict(
+    rows: &[Rc<ShortcutEditorRow>],
+    action: ShortcutAction,
+    chord: ShortcutChord,
+) -> Option<ShortcutAction> {
+    rows.iter()
+        .find(|row| row.action != action && row.current_chord.get() == chord)
+        .map(|row| row.action)
+}
+
+fn save_shortcut_editor_rows(
+    rows: &Rc<RefCell<Vec<Rc<ShortcutEditorRow>>>>,
+    state: &Rc<RefCell<PlayerState>>,
+    status: &gtk::Label,
+    status_toast: &StatusToast,
+    success_message: &str,
+) {
+    let bindings = rows
+        .borrow()
+        .iter()
+        .map(|row| ShortcutBinding {
+            action: row.action,
+            chord: row.current_chord.get(),
+        })
+        .collect::<Vec<_>>();
+    if let Err(error) = validate_shortcut_conflicts(&bindings) {
+        status.set_text(&error.message);
+        status_toast.show("Shortcut conflict");
         return;
     }
 
+    let text = shortcut_config_text_from_bindings(&bindings);
     let save_result = {
         let mut state = state.borrow_mut();
-        state.settings.set_raw_keybindings_config(text);
+        state.settings.set_raw_keybindings_config(&text);
         state.settings.save()
     };
     if let Err(error) = save_result {
@@ -7997,13 +8240,8 @@ fn apply_raw_keybindings_setting(
         return;
     }
 
-    if text.trim().is_empty() {
-        status.set_text("Reset saved. Default shortcuts apply immediately.");
-        status_toast.show("Keybindings reset");
-    } else {
-        status.set_text("Saved. New shortcuts apply immediately.");
-        status_toast.show("Keybindings saved");
-    }
+    status.set_text(success_message);
+    status_toast.show(success_message);
 }
 
 fn settings_private_session_row(
@@ -8594,6 +8832,23 @@ fn resolved_shortcut_bindings_from_text(
     Ok(bindings)
 }
 
+fn shortcut_config_text_from_bindings(bindings: &[ShortcutBinding]) -> String {
+    let mut lines = Vec::new();
+    for action in SHORTCUT_ACTIONS {
+        let default_chord = parse_shortcut_chord(action.default_shortcut(), 0)
+            .expect("default shortcuts should parse");
+        let chord = bindings
+            .iter()
+            .find(|binding| binding.action == *action)
+            .map(|binding| binding.chord)
+            .unwrap_or(default_chord);
+        if chord != default_chord {
+            lines.push(format!("{}={}", action.id(), shortcut_chord_label(chord)));
+        }
+    }
+    lines.join("\n")
+}
+
 fn keyboard_action_for_event(
     settings: &settings::SettingsStore,
     key: gdk::Key,
@@ -8716,6 +8971,41 @@ fn shortcut_key_from_token(token: &str) -> Option<gdk::Key> {
     };
 
     gdk::Key::from_name(normalized)
+}
+
+fn shortcut_chord_from_event(
+    key: gdk::Key,
+    modifiers: gdk::ModifierType,
+) -> Result<ShortcutChord, &'static str> {
+    if shortcut_is_modifier_key(key) {
+        return Err("Press a non-modifier key.");
+    }
+
+    Ok(ShortcutChord::new(key, modifiers))
+}
+
+fn shortcut_is_modifier_key(key: gdk::Key) -> bool {
+    key.name()
+        .map(|name| {
+            matches!(
+                name.as_str(),
+                "Shift_L"
+                    | "Shift_R"
+                    | "Control_L"
+                    | "Control_R"
+                    | "Alt_L"
+                    | "Alt_R"
+                    | "Meta_L"
+                    | "Meta_R"
+                    | "Super_L"
+                    | "Super_R"
+                    | "Hyper_L"
+                    | "Hyper_R"
+                    | "ISO_Level3_Shift"
+                    | "Caps_Lock"
+            )
+        })
+        .unwrap_or(false)
 }
 
 fn validate_shortcut_conflicts(bindings: &[ShortcutBinding]) -> Result<(), ShortcutConfigError> {
@@ -11617,6 +11907,24 @@ fn install_css() {
             font-weight: 400;
         }
 
+        entry.okp-shortcuts-search {
+            min-height: 30px;
+            margin-bottom: 2px;
+            padding: 6px 10px;
+            border-radius: 7px;
+            background: #f9fbfc;
+            border: 1px solid #d5dce2;
+            box-shadow: none;
+            color: #161616;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12px;
+        }
+
+        entry.okp-shortcuts-search:focus {
+            border-color: rgba(0, 103, 192, 0.68);
+            box-shadow: 0 0 0 1px rgba(0, 103, 192, 0.18);
+        }
+
         .okp-settings-nav-row {
             min-height: 18px;
             padding: 8px 10px;
@@ -12145,6 +12453,102 @@ fn install_css() {
             margin-top: 8px;
         }
 
+        .okp-shortcuts-list {
+            margin-top: 4px;
+        }
+
+        .okp-shortcut-row {
+            min-height: 44px;
+            padding: 7px 0;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+        }
+
+        .okp-shortcut-row:last-child {
+            border-bottom: none;
+        }
+
+        .okp-shortcut-row.is-conflict {
+            color: #9a1f15;
+        }
+
+        .okp-shortcut-action-title {
+            color: #161616;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12.5px;
+            font-weight: 500;
+        }
+
+        .okp-shortcut-action-id {
+            color: rgba(0, 0, 0, 0.40);
+            font-family: 'Cascadia Code', 'Cascadia Mono', monospace;
+            font-size: 10.5px;
+            font-feature-settings: 'tnum';
+        }
+
+        .okp-shortcut-badge {
+            padding: 2px 6px;
+            border-radius: 5px;
+            background: rgba(16, 147, 138, 0.12);
+            color: #0a655f;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 8.5px;
+            font-weight: 600;
+        }
+
+        button.okp-shortcut-chip {
+            min-width: 92px;
+            min-height: 30px;
+            padding: 0 10px;
+            border-radius: 7px;
+            background: #f8fafb;
+            border: 1px solid rgba(0, 0, 0, 0.07);
+            box-shadow: none;
+            color: #161616;
+        }
+
+        button.okp-shortcut-chip:hover {
+            background: #f1f5f8;
+        }
+
+        button.okp-shortcut-chip.is-capturing {
+            background: rgba(0, 103, 192, 0.12);
+            border-color: rgba(0, 103, 192, 0.52);
+        }
+
+        button.okp-shortcut-chip.is-conflict {
+            background: rgba(196, 43, 28, 0.10);
+            border-color: rgba(196, 43, 28, 0.42);
+        }
+
+        .okp-shortcut-chip-label {
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 11.5px;
+            font-weight: 600;
+            font-feature-settings: 'tnum';
+        }
+
+        button.okp-shortcut-reset {
+            min-width: 52px;
+            min-height: 30px;
+            padding: 0 10px;
+            border-radius: 7px;
+            background: transparent;
+            border: 1px solid transparent;
+            box-shadow: none;
+            color: #0a655f;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        button.okp-shortcut-reset:hover {
+            background: rgba(16, 147, 138, 0.08);
+        }
+
+        button.okp-shortcut-reset:disabled {
+            color: rgba(0, 0, 0, 0.24);
+        }
+
         .okp-settings-scale trough {
             min-height: 6px;
             border-radius: 999px;
@@ -12331,6 +12735,13 @@ mod tests {
     }
 
     #[test]
+    fn settings_initial_page_env_accepts_known_pages_only() {
+        assert_eq!(normalized_settings_page(" Shortcuts "), Some("shortcuts"));
+        assert_eq!(normalized_settings_page("about"), Some("about"));
+        assert_eq!(normalized_settings_page("native-caption"), None);
+    }
+
+    #[test]
     fn raw_mpv_config_parser_accepts_key_value_lines() {
         assert_eq!(
             parse_raw_mpv_config(
@@ -12466,6 +12877,58 @@ copy-frame=Ctrl+Shift+C
                 gdk::ModifierType::SHIFT_MASK,
             ),
             Some(ShortcutAction::CopyFrame)
+        );
+    }
+
+    #[test]
+    fn shortcut_config_text_serializes_only_custom_bindings() {
+        let mut bindings = default_shortcut_bindings();
+        let custom = parse_shortcut_chord("P", 0).expect("custom shortcut should parse");
+        bindings
+            .iter_mut()
+            .find(|binding| binding.action == ShortcutAction::PlayPause)
+            .expect("play-pause binding should exist")
+            .chord = custom;
+
+        assert_eq!(
+            shortcut_config_text_from_bindings(&bindings),
+            "play-pause=P"
+        );
+        assert!(
+            resolved_shortcut_bindings_from_text(&shortcut_config_text_from_bindings(&bindings))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn shortcut_config_text_returns_blank_for_defaults() {
+        assert_eq!(
+            shortcut_config_text_from_bindings(&default_shortcut_bindings()),
+            ""
+        );
+    }
+
+    #[test]
+    fn shortcut_capture_rejects_modifier_only_keys() {
+        let shift = gdk::Key::from_name("Shift_L").expect("key exists");
+        assert_eq!(
+            shortcut_chord_from_event(shift, gdk::ModifierType::SHIFT_MASK),
+            Err("Press a non-modifier key.")
+        );
+
+        let comma = gdk::Key::from_name("comma").expect("key exists");
+        assert_eq!(
+            shortcut_chord_from_event(comma, gdk::ModifierType::CONTROL_MASK)
+                .map(shortcut_chord_label),
+            Ok("Ctrl+,".to_owned())
+        );
+    }
+
+    #[test]
+    fn shortcut_labels_keep_letter_o_distinct_from_zero() {
+        assert_eq!(
+            shortcut_chord_label(parse_shortcut_chord("O", 0).expect("O should parse")),
+            "O"
         );
     }
 
