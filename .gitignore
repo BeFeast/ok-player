@@ -74,3 +74,6 @@ secrets.json
 # --- OK Player native deps (libmpv etc.; fetched via scripts, not committed) ---
 /native/*
 !/native/README.md
+
+# --- Local dev orchestration scratch (never committed) ---
+.maestro/
