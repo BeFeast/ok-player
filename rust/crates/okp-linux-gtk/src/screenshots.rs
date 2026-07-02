@@ -33,6 +33,26 @@ pub fn next_screenshot_path(media_path: Option<&Path>, position: Option<f64>) ->
     dir.join(format!("{base_name}{position}-{timestamp}-fallback.png"))
 }
 
+pub fn next_clipboard_frame_path() -> PathBuf {
+    let dir = env::temp_dir().join("ok-player");
+    let _ = fs::create_dir_all(&dir);
+    let timestamp = unix_millis();
+
+    for suffix in 0..100 {
+        let unique = if suffix == 0 {
+            String::new()
+        } else {
+            format!("-{suffix}")
+        };
+        let path = dir.join(format!("clipboard-frame-{timestamp}{unique}.png"));
+        if !path.exists() {
+            return path;
+        }
+    }
+
+    dir.join(format!("clipboard-frame-{timestamp}-fallback.png"))
+}
+
 fn screenshot_dir() -> PathBuf {
     xdg_pictures_dir()
         .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join("Pictures")))

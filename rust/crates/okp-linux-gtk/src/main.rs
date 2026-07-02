@@ -1205,7 +1205,7 @@ fn build_controls(
     screenshot_button.set_has_frame(false);
     screenshot_button.add_css_class("okp-control-button");
     screenshot_button.add_css_class("okp-icon-button");
-    screenshot_button.set_tooltip_text(Some("Save screenshot to Pictures/OK Player (C)"));
+    screenshot_button.set_tooltip_text(Some("Save frame to Pictures/OK Player (C)"));
     screenshot_button.set_sensitive(false);
 
     let fullscreen_button = gtk::Button::builder()
@@ -1464,7 +1464,7 @@ fn build_controls(
     let screenshot_state = Rc::clone(&state);
     let screenshot_toast = Rc::clone(&status_toast);
     screenshot_button
-        .connect_clicked(move |_| take_screenshot(&screenshot_state, &screenshot_toast));
+        .connect_clicked(move |_| save_screenshot(&screenshot_state, &screenshot_toast, false));
 
     let fullscreen_parent = window.clone();
     fullscreen_button.connect_clicked(move |_| toggle_fullscreen(&fullscreen_parent));
@@ -2889,16 +2889,41 @@ fn command_popover_content(
     });
     content.append(&go_to_time_button);
 
-    let screenshot_button = track_button("Save Screenshot", false);
-    screenshot_button.set_sensitive(has_media);
-    let screenshot_state = Rc::clone(&state);
-    let screenshot_toast = Rc::clone(&status_toast);
-    let screenshot_popover = popover.clone();
-    screenshot_button.connect_clicked(move |_| {
-        screenshot_popover.popdown();
-        take_screenshot(&screenshot_state, &screenshot_toast);
+    content.append(&divider());
+    content.append(&track_section_title("Screenshot"));
+
+    let save_frame_button = track_button("Save frame", false);
+    save_frame_button.set_sensitive(has_media);
+    let save_frame_state = Rc::clone(&state);
+    let save_frame_toast = Rc::clone(&status_toast);
+    let save_frame_popover = popover.clone();
+    save_frame_button.connect_clicked(move |_| {
+        save_frame_popover.popdown();
+        save_screenshot(&save_frame_state, &save_frame_toast, false);
     });
-    content.append(&screenshot_button);
+    content.append(&save_frame_button);
+
+    let save_subs_button = track_button("Save frame with subtitles", false);
+    save_subs_button.set_sensitive(has_media);
+    let save_subs_state = Rc::clone(&state);
+    let save_subs_toast = Rc::clone(&status_toast);
+    let save_subs_popover = popover.clone();
+    save_subs_button.connect_clicked(move |_| {
+        save_subs_popover.popdown();
+        save_screenshot(&save_subs_state, &save_subs_toast, true);
+    });
+    content.append(&save_subs_button);
+
+    let copy_frame_button = track_button("Copy frame to clipboard", false);
+    copy_frame_button.set_sensitive(has_media);
+    let copy_frame_state = Rc::clone(&state);
+    let copy_frame_toast = Rc::clone(&status_toast);
+    let copy_frame_popover = popover.clone();
+    copy_frame_button.connect_clicked(move |_| {
+        copy_frame_popover.popdown();
+        copy_frame_to_clipboard(&copy_frame_state, &copy_frame_toast);
+    });
+    content.append(&copy_frame_button);
 
     let close_button = track_button("Close Media", false);
     close_button.set_sensitive(has_media);
@@ -6815,7 +6840,7 @@ fn connect_keyboard(
                 glib::Propagation::Stop
             }
             gdk::Key::c | gdk::Key::C => {
-                take_screenshot(&state, &status_toast);
+                save_screenshot(&state, &status_toast, false);
                 glib::Propagation::Stop
             }
             gdk::Key::i | gdk::Key::I => {
@@ -6967,7 +6992,7 @@ fn adjust_subtitle_scale(state: &Rc<RefCell<PlayerState>>, delta: f64) {
     }
 }
 
-fn take_screenshot(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
+fn screenshot_context(state: &Rc<RefCell<PlayerState>>) -> Option<(Option<PathBuf>, Option<f64>)> {
     let (has_mpv, current_file, position) = {
         let state = state.borrow();
         let position = state
@@ -6979,9 +7004,20 @@ fn take_screenshot(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast)
     };
 
     if !has_mpv {
-        return;
+        return None;
     }
 
+    Some((current_file, position))
+}
+
+fn save_screenshot(
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &StatusToast,
+    include_subtitles: bool,
+) {
+    let Some((current_file, position)) = screenshot_context(state) else {
+        return;
+    };
     let path = screenshots::next_screenshot_path(current_file.as_deref(), position);
 
     let result = {
@@ -6989,7 +7025,7 @@ fn take_screenshot(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast)
         let Some(mpv) = state.mpv.as_ref() else {
             return;
         };
-        mpv.screenshot_to_file(&path, true)
+        mpv.screenshot_to_file(&path, include_subtitles)
     };
 
     match result {
@@ -7006,6 +7042,47 @@ fn take_screenshot(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast)
             status_toast.show("Screenshot failed");
         }
     }
+}
+
+fn copy_frame_to_clipboard(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
+    if screenshot_context(state).is_none() {
+        return;
+    }
+
+    let path = screenshots::next_clipboard_frame_path();
+    let result = {
+        let state = state.borrow();
+        let Some(mpv) = state.mpv.as_ref() else {
+            return;
+        };
+        mpv.screenshot_to_file(&path, false)
+    };
+
+    if let Err(error) = result {
+        eprintln!(
+            "Failed to capture frame for clipboard at {}: {error}",
+            path.display()
+        );
+        status_toast.show("Couldn't copy the frame");
+        let _ = fs::remove_file(&path);
+        return;
+    }
+
+    match gdk::Texture::from_filename(&path) {
+        Ok(texture) => {
+            if let Some(display) = gdk::Display::default() {
+                display.clipboard().set_texture(&texture);
+                status_toast.show("Frame copied");
+            } else {
+                status_toast.show("Clipboard unavailable");
+            }
+        }
+        Err(error) => {
+            eprintln!("Failed to load clipboard frame {}: {error}", path.display());
+            status_toast.show("Couldn't copy the frame");
+        }
+    }
+    let _ = fs::remove_file(&path);
 }
 
 fn open_media_info_window(
