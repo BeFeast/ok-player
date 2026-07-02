@@ -7908,12 +7908,21 @@ fn settings_shortcuts_section(
 struct ShortcutEditorRow {
     action: ShortcutAction,
     default_chord: ShortcutChord,
-    current_chord: Cell<ShortcutChord>,
+    primary_chord: Cell<ShortcutChord>,
+    secondary_chord: Cell<Option<ShortcutChord>>,
     container: gtk::Box,
-    chip: gtk::Button,
-    chip_label: gtk::Label,
+    primary_chip: gtk::Button,
+    primary_chip_label: gtk::Label,
+    secondary_chip: gtk::Button,
+    secondary_chip_label: gtk::Label,
     badge: gtk::Label,
     reset: gtk::Button,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ShortcutEditorSlot {
+    Primary,
+    Secondary,
 }
 
 fn settings_shortcut_editor_section(
@@ -7940,17 +7949,16 @@ fn settings_shortcut_editor_section(
     list.add_css_class("okp-shortcuts-list");
 
     for action in SHORTCUT_ACTIONS {
-        let current_chord = bindings
-            .iter()
-            .find(|binding| binding.action == *action)
-            .map(|binding| binding.chord)
-            .unwrap_or_else(|| {
-                parse_shortcut_chord(action.default_shortcut(), 0)
-                    .expect("default shortcuts should parse")
-            });
+        let current_chords = shortcut_chords_for_action(&bindings, *action);
+        let primary_chord = current_chords
+            .first()
+            .copied()
+            .unwrap_or_else(|| default_chord_for_action(*action));
+        let secondary_chord = current_chords.get(1).copied();
         let row = shortcut_editor_row(
             *action,
-            current_chord,
+            primary_chord,
+            secondary_chord,
             Rc::clone(&rows),
             Rc::clone(&state),
             Rc::clone(&status_toast),
@@ -7970,9 +7978,14 @@ fn settings_shortcut_editor_section(
             let visible = query.is_empty()
                 || row.action.label().to_ascii_lowercase().contains(&query)
                 || row.action.id().contains(&query)
-                || shortcut_chord_label(row.current_chord.get())
+                || shortcut_chord_label(row.primary_chord.get())
                     .to_ascii_lowercase()
-                    .contains(&query);
+                    .contains(&query)
+                || row
+                    .secondary_chord
+                    .get()
+                    .map(shortcut_chord_label)
+                    .is_some_and(|label| label.to_ascii_lowercase().contains(&query));
             row.container.set_visible(visible);
         }
     });
@@ -7991,7 +8004,8 @@ fn settings_shortcut_editor_section(
         shortcut_editor_clear_capture(&reset_rows.borrow());
         shortcut_editor_clear_conflicts(&reset_rows.borrow());
         for row in reset_rows.borrow().iter() {
-            row.current_chord.set(row.default_chord);
+            row.primary_chord.set(row.default_chord);
+            row.secondary_chord.set(None);
             shortcut_editor_refresh_row(row);
         }
         save_shortcut_editor_rows(
@@ -8010,7 +8024,8 @@ fn settings_shortcut_editor_section(
 
 fn shortcut_editor_row(
     action: ShortcutAction,
-    current_chord: ShortcutChord,
+    primary_chord: ShortcutChord,
+    secondary_chord: Option<ShortcutChord>,
     rows: Rc<RefCell<Vec<Rc<ShortcutEditorRow>>>>,
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
@@ -8040,15 +8055,26 @@ fn shortcut_editor_row(
     badge.set_valign(gtk::Align::Center);
     container.append(&badge);
 
-    let chip = gtk::Button::new();
-    chip.add_css_class("okp-shortcut-chip");
-    chip.set_has_frame(false);
-    chip.set_focus_on_click(true);
-    chip.set_tooltip_text(Some("Change shortcut"));
-    let chip_label = gtk::Label::new(None);
-    chip_label.add_css_class("okp-shortcut-chip-label");
-    chip.set_child(Some(&chip_label));
-    container.append(&chip);
+    let primary_chip = gtk::Button::new();
+    primary_chip.add_css_class("okp-shortcut-chip");
+    primary_chip.set_has_frame(false);
+    primary_chip.set_focus_on_click(true);
+    primary_chip.set_tooltip_text(Some("Change primary shortcut"));
+    let primary_chip_label = gtk::Label::new(None);
+    primary_chip_label.add_css_class("okp-shortcut-chip-label");
+    primary_chip.set_child(Some(&primary_chip_label));
+    container.append(&primary_chip);
+
+    let secondary_chip = gtk::Button::new();
+    secondary_chip.add_css_class("okp-shortcut-chip");
+    secondary_chip.add_css_class("is-secondary");
+    secondary_chip.set_has_frame(false);
+    secondary_chip.set_focus_on_click(true);
+    secondary_chip.set_tooltip_text(Some("Add secondary shortcut"));
+    let secondary_chip_label = gtk::Label::new(None);
+    secondary_chip_label.add_css_class("okp-shortcut-chip-label");
+    secondary_chip.set_child(Some(&secondary_chip_label));
+    container.append(&secondary_chip);
 
     let reset = gtk::Button::with_label("Reset");
     reset.add_css_class("okp-shortcut-reset");
@@ -8059,72 +8085,34 @@ fn shortcut_editor_row(
     let row = Rc::new(ShortcutEditorRow {
         action,
         default_chord,
-        current_chord: Cell::new(current_chord),
+        primary_chord: Cell::new(primary_chord),
+        secondary_chord: Cell::new(secondary_chord),
         container,
-        chip,
-        chip_label,
+        primary_chip,
+        primary_chip_label,
+        secondary_chip,
+        secondary_chip_label,
         badge,
         reset,
     });
     shortcut_editor_refresh_row(&row);
 
-    let chip_row = Rc::clone(&row);
-    let chip_rows = Rc::clone(&rows);
-    let chip_status = status.clone();
-    row.chip.connect_clicked(move |button| {
-        shortcut_editor_clear_capture(&chip_rows.borrow());
-        shortcut_editor_clear_conflicts(&chip_rows.borrow());
-        button.add_css_class("is-capturing");
-        chip_row.chip_label.set_text("Press keys");
-        chip_status.set_text(&format!("Recording {}", chip_row.action.label()));
-        button.grab_focus();
-    });
-
-    let key_row = Rc::clone(&row);
-    let key_rows = Rc::clone(&rows);
-    let key_state = Rc::clone(&state);
-    let key_toast = Rc::clone(&status_toast);
-    let key_status = status.clone();
-    let key_controller = gtk::EventControllerKey::new();
-    key_controller.connect_key_pressed(move |_, key, _, modifiers| {
-        if !key_row.chip.has_css_class("is-capturing") {
-            return glib::Propagation::Proceed;
-        }
-
-        let chord = match shortcut_chord_from_event(key, modifiers) {
-            Ok(chord) => chord,
-            Err(message) => {
-                key_status.set_text(message);
-                return glib::Propagation::Stop;
-            }
-        };
-
-        if let Some(conflict) = shortcut_editor_conflict(&key_rows.borrow(), key_row.action, chord)
-        {
-            shortcut_editor_mark_conflict(&key_rows.borrow(), key_row.action, conflict);
-            key_status.set_text(&format!(
-                "{} already uses {}",
-                conflict.label(),
-                shortcut_chord_label(chord)
-            ));
-            key_toast.show("Shortcut conflict");
-            return glib::Propagation::Stop;
-        }
-
-        shortcut_editor_clear_conflicts(&key_rows.borrow());
-        key_row.chip.remove_css_class("is-capturing");
-        key_row.current_chord.set(chord);
-        shortcut_editor_refresh_row(&key_row);
-        save_shortcut_editor_rows(
-            &key_rows,
-            &key_state,
-            &key_status,
-            &key_toast,
-            "Shortcut saved",
-        );
-        glib::Propagation::Stop
-    });
-    row.chip.add_controller(key_controller);
+    connect_shortcut_editor_chip(
+        &row,
+        ShortcutEditorSlot::Primary,
+        Rc::clone(&rows),
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+        status.clone(),
+    );
+    connect_shortcut_editor_chip(
+        &row,
+        ShortcutEditorSlot::Secondary,
+        Rc::clone(&rows),
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+        status.clone(),
+    );
 
     let reset_row = Rc::clone(&row);
     let reset_rows = rows;
@@ -8134,7 +8122,8 @@ fn shortcut_editor_row(
     row.reset.connect_clicked(move |_| {
         shortcut_editor_clear_capture(&reset_rows.borrow());
         shortcut_editor_clear_conflicts(&reset_rows.borrow());
-        reset_row.current_chord.set(reset_row.default_chord);
+        reset_row.primary_chord.set(reset_row.default_chord);
+        reset_row.secondary_chord.set(None);
         shortcut_editor_refresh_row(&reset_row);
         save_shortcut_editor_rows(
             &reset_rows,
@@ -8148,6 +8137,76 @@ fn shortcut_editor_row(
     row
 }
 
+fn connect_shortcut_editor_chip(
+    row: &Rc<ShortcutEditorRow>,
+    slot: ShortcutEditorSlot,
+    rows: Rc<RefCell<Vec<Rc<ShortcutEditorRow>>>>,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+    status: gtk::Label,
+) {
+    let chip = shortcut_editor_chip_for(row, slot);
+    let chip_row = Rc::clone(row);
+    let chip_rows = Rc::clone(&rows);
+    let chip_status = status.clone();
+    chip.connect_clicked(move |button| {
+        shortcut_editor_clear_capture(&chip_rows.borrow());
+        shortcut_editor_clear_conflicts(&chip_rows.borrow());
+        button.add_css_class("is-capturing");
+        shortcut_editor_chip_label_for(&chip_row, slot).set_text("Press keys");
+        chip_status.set_text(&format!("Recording {}", chip_row.action.label()));
+        button.grab_focus();
+    });
+
+    let key_row = Rc::clone(row);
+    let key_rows = rows;
+    let key_state = state;
+    let key_toast = status_toast;
+    let key_status = status;
+    let key_chip = shortcut_editor_chip_for(row, slot);
+    let key_controller = gtk::EventControllerKey::new();
+    key_controller.connect_key_pressed(move |_, key, _, modifiers| {
+        if !key_chip.has_css_class("is-capturing") {
+            return glib::Propagation::Proceed;
+        }
+
+        let chord = match shortcut_chord_from_event(key, modifiers) {
+            Ok(chord) => chord,
+            Err(message) => {
+                key_status.set_text(message);
+                return glib::Propagation::Stop;
+            }
+        };
+
+        if let Some(conflict) =
+            shortcut_editor_conflict(&key_rows.borrow(), key_row.action, slot, chord)
+        {
+            shortcut_editor_mark_conflict(&key_rows.borrow(), key_row.action, conflict);
+            key_status.set_text(&format!(
+                "{} already uses {}",
+                conflict.label(),
+                shortcut_chord_label(chord)
+            ));
+            key_toast.show("Shortcut conflict");
+            return glib::Propagation::Stop;
+        }
+
+        shortcut_editor_clear_conflicts(&key_rows.borrow());
+        key_chip.remove_css_class("is-capturing");
+        shortcut_editor_set_chord(&key_row, slot, chord);
+        shortcut_editor_refresh_row(&key_row);
+        save_shortcut_editor_rows(
+            &key_rows,
+            &key_state,
+            &key_status,
+            &key_toast,
+            "Shortcut saved",
+        );
+        glib::Propagation::Stop
+    });
+    shortcut_editor_chip_for(row, slot).add_controller(key_controller);
+}
+
 fn shortcut_editor_initial_bindings(settings: &settings::SettingsStore) -> Vec<ShortcutBinding> {
     resolved_shortcut_bindings(settings).unwrap_or_else(|error| {
         eprintln!(
@@ -8159,17 +8218,33 @@ fn shortcut_editor_initial_bindings(settings: &settings::SettingsStore) -> Vec<S
 }
 
 fn shortcut_editor_refresh_row(row: &ShortcutEditorRow) {
-    let is_custom = row.current_chord.get() != row.default_chord;
-    row.chip_label
-        .set_text(&shortcut_chord_label(row.current_chord.get()));
+    let secondary = row.secondary_chord.get();
+    let is_custom = row.primary_chord.get() != row.default_chord || secondary.is_some();
+    row.primary_chip_label
+        .set_text(&shortcut_chord_label(row.primary_chord.get()));
+    if let Some(chord) = secondary {
+        row.secondary_chip_label
+            .set_text(&shortcut_chord_label(chord));
+        row.secondary_chip.remove_css_class("is-empty");
+        row.secondary_chip
+            .set_tooltip_text(Some("Change secondary shortcut"));
+    } else {
+        row.secondary_chip_label.set_text("Add");
+        row.secondary_chip.add_css_class("is-empty");
+        row.secondary_chip
+            .set_tooltip_text(Some("Add secondary shortcut"));
+    }
     row.badge.set_visible(is_custom);
     row.reset.set_sensitive(is_custom);
 }
 
 fn shortcut_editor_clear_capture(rows: &[Rc<ShortcutEditorRow>]) {
     for row in rows {
-        if row.chip.has_css_class("is-capturing") {
-            row.chip.remove_css_class("is-capturing");
+        let was_capturing = row.primary_chip.has_css_class("is-capturing")
+            || row.secondary_chip.has_css_class("is-capturing");
+        row.primary_chip.remove_css_class("is-capturing");
+        row.secondary_chip.remove_css_class("is-capturing");
+        if was_capturing {
             shortcut_editor_refresh_row(row);
         }
     }
@@ -8178,7 +8253,8 @@ fn shortcut_editor_clear_capture(rows: &[Rc<ShortcutEditorRow>]) {
 fn shortcut_editor_clear_conflicts(rows: &[Rc<ShortcutEditorRow>]) {
     for row in rows {
         row.container.remove_css_class("is-conflict");
-        row.chip.remove_css_class("is-conflict");
+        row.primary_chip.remove_css_class("is-conflict");
+        row.secondary_chip.remove_css_class("is-conflict");
     }
 }
 
@@ -8191,7 +8267,8 @@ fn shortcut_editor_mark_conflict(
     for row in rows {
         if row.action == left || row.action == right {
             row.container.add_css_class("is-conflict");
-            row.chip.add_css_class("is-conflict");
+            row.primary_chip.add_css_class("is-conflict");
+            row.secondary_chip.add_css_class("is-conflict");
         }
     }
 }
@@ -8199,11 +8276,22 @@ fn shortcut_editor_mark_conflict(
 fn shortcut_editor_conflict(
     rows: &[Rc<ShortcutEditorRow>],
     action: ShortcutAction,
+    slot: ShortcutEditorSlot,
     chord: ShortcutChord,
 ) -> Option<ShortcutAction> {
-    rows.iter()
-        .find(|row| row.action != action && row.current_chord.get() == chord)
-        .map(|row| row.action)
+    for row in rows {
+        if !(row.action == action && slot == ShortcutEditorSlot::Primary)
+            && row.primary_chord.get() == chord
+        {
+            return Some(row.action);
+        }
+        if !(row.action == action && slot == ShortcutEditorSlot::Secondary)
+            && row.secondary_chord.get() == Some(chord)
+        {
+            return Some(row.action);
+        }
+    }
+    None
 }
 
 fn save_shortcut_editor_rows(
@@ -8216,9 +8304,18 @@ fn save_shortcut_editor_rows(
     let bindings = rows
         .borrow()
         .iter()
-        .map(|row| ShortcutBinding {
-            action: row.action,
-            chord: row.current_chord.get(),
+        .flat_map(|row| {
+            let mut bindings = vec![ShortcutBinding {
+                action: row.action,
+                chord: row.primary_chord.get(),
+            }];
+            if let Some(chord) = row.secondary_chord.get() {
+                bindings.push(ShortcutBinding {
+                    action: row.action,
+                    chord,
+                });
+            }
+            bindings
         })
         .collect::<Vec<_>>();
     if let Err(error) = validate_shortcut_conflicts(&bindings) {
@@ -8242,6 +8339,31 @@ fn save_shortcut_editor_rows(
 
     status.set_text(success_message);
     status_toast.show(success_message);
+}
+
+fn shortcut_editor_chip_for(row: &ShortcutEditorRow, slot: ShortcutEditorSlot) -> gtk::Button {
+    match slot {
+        ShortcutEditorSlot::Primary => row.primary_chip.clone(),
+        ShortcutEditorSlot::Secondary => row.secondary_chip.clone(),
+    }
+}
+
+fn shortcut_editor_chip_label_for(row: &ShortcutEditorRow, slot: ShortcutEditorSlot) -> gtk::Label {
+    match slot {
+        ShortcutEditorSlot::Primary => row.primary_chip_label.clone(),
+        ShortcutEditorSlot::Secondary => row.secondary_chip_label.clone(),
+    }
+}
+
+fn shortcut_editor_set_chord(
+    row: &ShortcutEditorRow,
+    slot: ShortcutEditorSlot,
+    chord: ShortcutChord,
+) {
+    match slot {
+        ShortcutEditorSlot::Primary => row.primary_chord.set(chord),
+        ShortcutEditorSlot::Secondary => row.secondary_chord.set(Some(chord)),
+    }
 }
 
 fn settings_private_session_row(
@@ -8756,6 +8878,8 @@ const SHORTCUT_ACTIONS: &[ShortcutAction] = &[
     ShortcutAction::OpenSettings,
 ];
 
+const MAX_SHORTCUTS_PER_ACTION: usize = 2;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ShortcutChord {
     key: gdk::Key,
@@ -8823,10 +8947,22 @@ fn resolved_shortcut_bindings_from_text(
     text: &str,
 ) -> Result<Vec<ShortcutBinding>, ShortcutConfigError> {
     let mut bindings = default_shortcut_bindings();
-    for (action, chord) in parse_raw_keybindings_config(text)? {
-        if let Some(binding) = bindings.iter_mut().find(|binding| binding.action == action) {
-            binding.chord = chord;
+    let overrides = parse_raw_keybindings_config(text)?;
+    for action in SHORTCUT_ACTIONS {
+        let action_overrides = overrides
+            .iter()
+            .filter(|(override_action, _)| override_action == action)
+            .map(|(_, chord)| *chord)
+            .collect::<Vec<_>>();
+        if action_overrides.is_empty() {
+            continue;
         }
+
+        bindings.retain(|binding| binding.action != *action);
+        bindings.extend(action_overrides.into_iter().map(|chord| ShortcutBinding {
+            action: *action,
+            chord,
+        }));
     }
     validate_shortcut_conflicts(&bindings)?;
     Ok(bindings)
@@ -8835,18 +8971,39 @@ fn resolved_shortcut_bindings_from_text(
 fn shortcut_config_text_from_bindings(bindings: &[ShortcutBinding]) -> String {
     let mut lines = Vec::new();
     for action in SHORTCUT_ACTIONS {
-        let default_chord = parse_shortcut_chord(action.default_shortcut(), 0)
-            .expect("default shortcuts should parse");
-        let chord = bindings
-            .iter()
-            .find(|binding| binding.action == *action)
-            .map(|binding| binding.chord)
-            .unwrap_or(default_chord);
-        if chord != default_chord {
+        let default_chord = default_chord_for_action(*action);
+        let chords = shortcut_chords_for_action(bindings, *action);
+        if chords.len() == 1 && chords[0] == default_chord {
+            continue;
+        }
+
+        for chord in chords.into_iter().take(MAX_SHORTCUTS_PER_ACTION) {
             lines.push(format!("{}={}", action.id(), shortcut_chord_label(chord)));
         }
     }
     lines.join("\n")
+}
+
+fn shortcut_chords_for_action(
+    bindings: &[ShortcutBinding],
+    action: ShortcutAction,
+) -> Vec<ShortcutChord> {
+    let chords = bindings
+        .iter()
+        .filter(|binding| binding.action == action)
+        .map(|binding| binding.chord)
+        .take(MAX_SHORTCUTS_PER_ACTION)
+        .collect::<Vec<_>>();
+
+    if chords.is_empty() {
+        vec![default_chord_for_action(action)]
+    } else {
+        chords
+    }
+}
+
+fn default_chord_for_action(action: ShortcutAction) -> ShortcutChord {
+    parse_shortcut_chord(action.default_shortcut(), 0).expect("default shortcuts should parse")
 }
 
 fn keyboard_action_for_event(
@@ -8902,13 +9059,14 @@ fn parse_raw_keybindings_config(
                 &format!("Unknown action `{action_id}`."),
             ));
         };
-        if overrides
+        let existing_count = overrides
             .iter()
-            .any(|(existing_action, _)| *existing_action == action)
-        {
+            .filter(|(existing_action, _)| *existing_action == action)
+            .count();
+        if existing_count >= MAX_SHORTCUTS_PER_ACTION {
             return Err(shortcut_config_error(
                 line_number,
-                &format!("Action `{action_id}` is already remapped."),
+                &format!("Action `{action_id}` supports at most two shortcuts."),
             ));
         }
 
@@ -12496,7 +12654,7 @@ fn install_css() {
         }
 
         button.okp-shortcut-chip {
-            min-width: 92px;
+            min-width: 82px;
             min-height: 30px;
             padding: 0 10px;
             border-radius: 7px;
@@ -12508,6 +12666,20 @@ fn install_css() {
 
         button.okp-shortcut-chip:hover {
             background: #f1f5f8;
+        }
+
+        button.okp-shortcut-chip.is-secondary {
+            min-width: 66px;
+        }
+
+        button.okp-shortcut-chip.is-empty {
+            background: transparent;
+            border-color: rgba(16, 147, 138, 0.18);
+            color: #0a655f;
+        }
+
+        button.okp-shortcut-chip.is-empty:hover {
+            background: rgba(16, 147, 138, 0.08);
         }
 
         button.okp-shortcut-chip.is-capturing {
@@ -12832,6 +13004,34 @@ copy-frame=Ctrl+Shift+C
     }
 
     #[test]
+    fn shortcut_parser_accepts_secondary_action_binding() {
+        let bindings = resolved_shortcut_bindings_from_text(
+            "\
+play-pause=Space
+play-pause=P
+",
+        )
+        .expect("secondary shortcut should parse");
+
+        assert_eq!(
+            shortcut_action_for_bindings(
+                &bindings,
+                gdk::Key::from_name("space").expect("key exists"),
+                gdk::ModifierType::empty(),
+            ),
+            Some(ShortcutAction::PlayPause)
+        );
+        assert_eq!(
+            shortcut_action_for_bindings(
+                &bindings,
+                gdk::Key::from_name("p").expect("key exists"),
+                gdk::ModifierType::empty(),
+            ),
+            Some(ShortcutAction::PlayPause)
+        );
+    }
+
+    #[test]
     fn shortcut_parser_rejects_unknown_action() {
         let error = resolved_shortcut_bindings_from_text("dance=Space")
             .expect_err("unknown action should fail");
@@ -12856,6 +13056,21 @@ copy-frame=Ctrl+Shift+C
 
         assert_eq!(error.line, 0);
         assert!(error.message.contains("conflicts"));
+    }
+
+    #[test]
+    fn shortcut_parser_rejects_third_action_binding() {
+        let error = resolved_shortcut_bindings_from_text(
+            "\
+play-pause=Space
+play-pause=P
+play-pause=Ctrl+P
+",
+        )
+        .expect_err("third shortcut should fail");
+
+        assert_eq!(error.line, 3);
+        assert!(error.message.contains("at most two"));
     }
 
     #[test]
@@ -12897,6 +13112,39 @@ copy-frame=Ctrl+Shift+C
         assert!(
             resolved_shortcut_bindings_from_text(&shortcut_config_text_from_bindings(&bindings))
                 .is_ok()
+        );
+    }
+
+    #[test]
+    fn shortcut_config_text_serializes_secondary_bindings() {
+        let mut bindings = default_shortcut_bindings();
+        bindings.push(ShortcutBinding {
+            action: ShortcutAction::PlayPause,
+            chord: parse_shortcut_chord("P", 0).expect("custom shortcut should parse"),
+        });
+
+        assert_eq!(
+            shortcut_config_text_from_bindings(&bindings),
+            "play-pause=Space\nplay-pause=P"
+        );
+        let resolved =
+            resolved_shortcut_bindings_from_text(&shortcut_config_text_from_bindings(&bindings))
+                .expect("serialized secondary shortcut should parse");
+        assert_eq!(
+            shortcut_action_for_bindings(
+                &resolved,
+                gdk::Key::from_name("space").expect("key exists"),
+                gdk::ModifierType::empty(),
+            ),
+            Some(ShortcutAction::PlayPause)
+        );
+        assert_eq!(
+            shortcut_action_for_bindings(
+                &resolved,
+                gdk::Key::from_name("p").expect("key exists"),
+                gdk::ModifierType::empty(),
+            ),
+            Some(ShortcutAction::PlayPause)
         );
     }
 
