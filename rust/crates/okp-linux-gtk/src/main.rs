@@ -4,7 +4,7 @@ use std::env;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread;
@@ -45,6 +45,7 @@ const MPRIS_SEEKED_DELTA_US: i64 = 750_000;
 const MPRIS_ART_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp"];
 const MPRIS_FOLDER_ART_STEMS: &[&str] =
     &["cover", "folder", "front", "poster", "album", "albumart"];
+const MPRIS_EMBEDDED_ART_TIMEOUT: Duration = Duration::from_secs(8);
 const LINUX_UPDATE_REPO_URL: &str = "https://github.com/BeFeast/ok-player";
 const LINUX_DEB_RELEASES_API_URL: &str = "https://api.github.com/repos/BeFeast/ok-player/releases";
 const UPDATE_STATUS_NOT_CHECKED: &str = "Not checked yet";
@@ -79,6 +80,9 @@ const AB_LOOP_COMBINED_MARK_EPSILON_SECS: f64 = 0.5;
 const PROTECTED_MPV_OPTIONS: &[&str] = &["config", "terminal", "idle", "force-window", "vo"];
 
 static MPRIS_SIDECAR_ART_CACHE: OnceLock<Mutex<HashMap<PathBuf, Option<String>>>> = OnceLock::new();
+static MPRIS_EMBEDDED_ART_CACHE: OnceLock<
+    Mutex<HashMap<MprisEmbeddedArtCacheKey, MprisEmbeddedArtCacheEntry>>,
+> = OnceLock::new();
 static MPRIS_APP_ICON_ART_URL: OnceLock<Option<String>> = OnceLock::new();
 
 #[derive(Default)]
@@ -108,6 +112,19 @@ struct PlayerState {
 struct PendingAudioDeviceRestore {
     name: String,
     attempts: u8,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct MprisEmbeddedArtCacheKey {
+    path: PathBuf,
+    len: u64,
+    modified_ns: u128,
+}
+
+#[derive(Clone, Debug)]
+enum MprisEmbeddedArtCacheEntry {
+    Pending,
+    Ready(Option<PathBuf>),
 }
 
 impl PendingAudioDeviceRestore {
@@ -1802,7 +1819,7 @@ fn mpris_playlist_item_uri(item: &PlaylistItem) -> Option<String> {
 
 fn mpris_playlist_item_art_url(item: &PlaylistItem) -> Option<String> {
     match item {
-        PlaylistItem::Local(path) => mpris_sidecar_art_url(path).or_else(mpris_app_icon_art_url),
+        PlaylistItem::Local(path) => mpris_local_art_url(path),
         PlaylistItem::Url(_) => mpris_app_icon_art_url(),
     }
 }
@@ -1815,7 +1832,7 @@ fn mpris_title_uri_and_art(state: &PlayerState) -> (String, Option<String>, Opti
             .map(str::to_owned)
             .unwrap_or_else(|| path.display().to_string());
         let uri = local_file_uri(path);
-        let art_url = mpris_sidecar_art_url(path).or_else(mpris_app_icon_art_url);
+        let art_url = mpris_local_art_url(path);
         return (title, Some(uri), art_url);
     }
 
@@ -1834,6 +1851,12 @@ fn local_file_uri(path: &Path) -> String {
     gtk::gio::File::for_path(path).uri().to_string()
 }
 
+fn mpris_local_art_url(media_path: &Path) -> Option<String> {
+    mpris_sidecar_art_url(media_path)
+        .or_else(|| mpris_embedded_art_url(media_path))
+        .or_else(mpris_app_icon_art_url)
+}
+
 fn mpris_sidecar_art_url(media_path: &Path) -> Option<String> {
     let cache = MPRIS_SIDECAR_ART_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(mut cache) = cache.lock() {
@@ -1846,6 +1869,163 @@ fn mpris_sidecar_art_url(media_path: &Path) -> Option<String> {
     }
 
     mpris_sidecar_art_path(media_path).map(|path| local_file_uri(&path))
+}
+
+fn mpris_embedded_art_url(media_path: &Path) -> Option<String> {
+    if !media_formats::is_audio(media_path) {
+        return None;
+    }
+
+    let key = mpris_embedded_art_cache_key(media_path)?;
+    let cache = MPRIS_EMBEDDED_ART_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let Ok(mut cache) = cache.lock() else {
+        return None;
+    };
+
+    match cache.get(&key) {
+        Some(MprisEmbeddedArtCacheEntry::Pending) => return None,
+        Some(MprisEmbeddedArtCacheEntry::Ready(path)) => {
+            return path.as_ref().map(|path| local_file_uri(path));
+        }
+        None => {}
+    }
+
+    cache.insert(key.clone(), MprisEmbeddedArtCacheEntry::Pending);
+    drop(cache);
+    spawn_mpris_embedded_art_extraction(key);
+    None
+}
+
+fn spawn_mpris_embedded_art_extraction(key: MprisEmbeddedArtCacheKey) {
+    let thread_key = key.clone();
+    let spawn_result = thread::Builder::new()
+        .name("okp-mpris-art".to_owned())
+        .spawn(move || {
+            let resolved = mpris_extract_embedded_art_path(&thread_key);
+            let cache = MPRIS_EMBEDDED_ART_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+            if let Ok(mut cache) = cache.lock() {
+                cache.insert(thread_key, MprisEmbeddedArtCacheEntry::Ready(resolved));
+            }
+        });
+
+    if let Err(error) = spawn_result {
+        eprintln!("Failed to spawn MPRIS embedded artwork extraction: {error}");
+        let cache = MPRIS_EMBEDDED_ART_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        if let Ok(mut cache) = cache.lock() {
+            cache.insert(key, MprisEmbeddedArtCacheEntry::Ready(None));
+        }
+    }
+}
+
+fn mpris_extract_embedded_art_path(key: &MprisEmbeddedArtCacheKey) -> Option<PathBuf> {
+    let output = mpris_embedded_art_cache_path(key);
+    if output.is_file() {
+        if mpris_has_image_header(&output) {
+            return Some(output);
+        }
+        let _ = fs::remove_file(&output);
+    }
+
+    let parent = output.parent()?;
+    fs::create_dir_all(parent).ok()?;
+    let temp = mpris_embedded_art_temp_path(&output)?;
+    let _ = fs::remove_file(&temp);
+
+    let ffmpeg = find_executable("ffmpeg")?;
+    let mut child = Command::new(ffmpeg)
+        .arg("-nostdin")
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-y")
+        .arg("-i")
+        .arg(&key.path)
+        .args(["-map", "0:v:0", "-frames:v", "1", "-an", "-sn", "-dn"])
+        .arg(&temp)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+
+    let status = wait_for_child_with_timeout(&mut child, MPRIS_EMBEDDED_ART_TIMEOUT).ok()?;
+    let Some(status) = status else {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = fs::remove_file(&temp);
+        return None;
+    };
+    if !status.success() || !mpris_has_image_header(&temp) {
+        let _ = fs::remove_file(&temp);
+        return None;
+    }
+
+    fs::rename(&temp, &output).ok()?;
+    Some(output)
+}
+
+fn mpris_embedded_art_cache_key(media_path: &Path) -> Option<MprisEmbeddedArtCacheKey> {
+    let metadata = fs::metadata(media_path).ok()?;
+    let modified_ns = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+
+    Some(MprisEmbeddedArtCacheKey {
+        path: media_path.to_path_buf(),
+        len: metadata.len(),
+        modified_ns,
+    })
+}
+
+fn mpris_embedded_art_cache_path(key: &MprisEmbeddedArtCacheKey) -> PathBuf {
+    mpris_embedded_art_cache_path_in_dir(key, &mpris_embedded_art_cache_dir())
+}
+
+fn mpris_embedded_art_cache_path_in_dir(key: &MprisEmbeddedArtCacheKey, dir: &Path) -> PathBuf {
+    dir.join(format!("{:016x}.png", mpris_embedded_art_cache_hash(key)))
+}
+
+fn mpris_embedded_art_cache_hash(key: &MprisEmbeddedArtCacheKey) -> u64 {
+    let mut hash = 0xcbf29ce484222325_u64;
+    let mut mix = |byte: u8| {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    };
+
+    for byte in key.path.to_string_lossy().as_bytes() {
+        mix(*byte);
+    }
+    for byte in key.len.to_le_bytes() {
+        mix(byte);
+    }
+    for byte in key.modified_ns.to_le_bytes() {
+        mix(byte);
+    }
+
+    hash
+}
+
+fn mpris_embedded_art_cache_dir() -> PathBuf {
+    if let Some(cache_dir) =
+        env::var_os("OKP_MPRIS_ART_CACHE_DIR").filter(|value| !value.is_empty())
+    {
+        return PathBuf::from(cache_dir);
+    }
+    if let Some(cache_home) = env::var_os("XDG_CACHE_HOME").filter(|value| !value.is_empty()) {
+        return PathBuf::from(cache_home).join("ok-player/mpris-art");
+    }
+    if let Some(home) = env::var_os("HOME").filter(|value| !value.is_empty()) {
+        return PathBuf::from(home).join(".cache/ok-player/mpris-art");
+    }
+    env::temp_dir().join("ok-player/mpris-art")
+}
+
+fn mpris_embedded_art_temp_path(output: &Path) -> Option<PathBuf> {
+    let stem = output.file_stem()?.to_string_lossy();
+    Some(output.with_file_name(format!("{stem}.part.{}.png", std::process::id())))
 }
 
 fn mpris_sidecar_art_path(media_path: &Path) -> Option<PathBuf> {
@@ -14453,6 +14633,62 @@ mod tests {
         write_png_header(&poster);
 
         assert_eq!(mpris_sidecar_art_path(&media), Some(folder_cover));
+
+        fs::remove_dir_all(root).expect("test folder should be removed");
+    }
+
+    #[test]
+    fn mpris_local_art_prefers_sidecar_before_embedded_art() {
+        let root = unique_temp_dir("okp-mpris-art-sidecar-first");
+        fs::create_dir_all(&root).expect("test folder should be created");
+        let media = root.join("Song.flac");
+        let sidecar = root.join("Song.jpg");
+        fs::write(&media, b"not a real flac").expect("test media should be written");
+        write_jpeg_header(&sidecar);
+
+        assert_eq!(mpris_local_art_url(&media), Some(local_file_uri(&sidecar)));
+
+        let key = mpris_embedded_art_cache_key(&media).expect("media key should be available");
+        let cache = MPRIS_EMBEDDED_ART_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        assert!(
+            !cache
+                .lock()
+                .expect("embedded art cache should lock")
+                .contains_key(&key)
+        );
+
+        fs::remove_dir_all(root).expect("test folder should be removed");
+    }
+
+    #[test]
+    fn mpris_embedded_art_is_audio_only() {
+        let root = unique_temp_dir("okp-mpris-art-video-skip");
+        fs::create_dir_all(&root).expect("test folder should be created");
+        let media = root.join("Movie.mkv");
+        fs::write(&media, b"not a real video").expect("test media should be written");
+
+        assert_eq!(mpris_embedded_art_url(&media), None);
+
+        fs::remove_dir_all(root).expect("test folder should be removed");
+    }
+
+    #[test]
+    fn mpris_embedded_art_cache_path_changes_when_media_changes() {
+        let root = unique_temp_dir("okp-mpris-art-cache-key");
+        fs::create_dir_all(&root).expect("test folder should be created");
+        let media = root.join("Song.flac");
+        let cache_dir = root.join("cache");
+        fs::write(&media, [1_u8]).expect("test media should be written");
+        let before = mpris_embedded_art_cache_key(&media).expect("cache key should resolve");
+
+        fs::write(&media, [1_u8, 2_u8]).expect("test media should be updated");
+        let after = mpris_embedded_art_cache_key(&media).expect("updated cache key should resolve");
+
+        assert_ne!(before.len, after.len);
+        assert_ne!(
+            mpris_embedded_art_cache_path_in_dir(&before, &cache_dir),
+            mpris_embedded_art_cache_path_in_dir(&after, &cache_dir)
+        );
 
         fs::remove_dir_all(root).expect("test folder should be removed");
     }
