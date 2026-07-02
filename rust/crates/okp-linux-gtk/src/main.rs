@@ -3949,12 +3949,16 @@ fn open_media_dialog(parent: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerSt
         ],
     );
     dialog.set_modal(true);
+    dialog.set_decorated(false);
+    dialog.set_select_multiple(true);
+    dialog.add_filter(&media_file_filter());
+    dialog.add_filter(&playlist_file_filter());
+    dialog.add_filter(&subtitle_file_filter());
+    dialog.add_filter(&all_files_filter());
 
     dialog.connect_response(move |dialog, response| {
-        if response == gtk::ResponseType::Accept
-            && let Some(path) = dialog.file().and_then(|file| file.path())
-        {
-            load_media_path(&state, path);
+        if response == gtk::ResponseType::Accept {
+            load_selected_local_paths(&state, file_chooser_paths(dialog));
         }
         dialog.close();
     });
@@ -7656,6 +7660,9 @@ fn open_subtitle_dialog(parent: &gtk::ApplicationWindow, state: Rc<RefCell<Playe
         ],
     );
     dialog.set_modal(true);
+    dialog.set_decorated(false);
+    dialog.add_filter(&subtitle_file_filter());
+    dialog.add_filter(&all_files_filter());
 
     dialog.connect_response(move |dialog, response| {
         if response == gtk::ResponseType::Accept
@@ -7684,7 +7691,9 @@ fn open_playlist_dialog(
         ],
     );
     dialog.set_modal(true);
+    dialog.set_decorated(false);
     dialog.add_filter(&playlist_file_filter());
+    dialog.add_filter(&all_files_filter());
 
     dialog.connect_response(move |dialog, response| {
         if response == gtk::ResponseType::Accept
@@ -7713,8 +7722,10 @@ fn save_playlist_dialog(
         ],
     );
     dialog.set_modal(true);
+    dialog.set_decorated(false);
     dialog.set_current_name("OK Player Playlist.m3u");
     dialog.add_filter(&playlist_file_filter());
+    dialog.add_filter(&all_files_filter());
 
     dialog.connect_response(move |dialog, response| {
         if response == gtk::ResponseType::Accept
@@ -7748,6 +7759,7 @@ fn open_queue_media_dialog(
         ],
     );
     dialog.set_modal(true);
+    dialog.set_decorated(false);
     dialog.set_select_multiple(true);
     dialog.add_filter(&media_file_filter());
     dialog.add_filter(&all_files_filter());
@@ -7803,6 +7815,17 @@ fn media_file_filter() -> gtk::FileFilter {
     filter
 }
 
+fn subtitle_file_filter() -> gtk::FileFilter {
+    let filter = gtk::FileFilter::new();
+    filter.set_name(Some("Subtitle files"));
+    for extension in media_formats::SUBTITLE_EXTENSIONS {
+        let pattern = format!("*{extension}");
+        filter.add_pattern(&pattern);
+        filter.add_pattern(&pattern.to_ascii_uppercase());
+    }
+    filter
+}
+
 fn all_files_filter() -> gtk::FileFilter {
     let filter = gtk::FileFilter::new();
     filter.set_name(Some("All files"));
@@ -7832,7 +7855,7 @@ fn connect_drop(
             return false;
         };
 
-        load_dropped_paths(&state, dropped_file_list_paths(&files))
+        load_selected_local_paths(&state, dropped_file_list_paths(&files))
     });
     window.add_controller(drop_target);
 }
@@ -7845,12 +7868,12 @@ fn dropped_file_list_paths(files: &gdk::FileList) -> Vec<PathBuf> {
         .collect()
 }
 
-fn load_dropped_paths(state: &Rc<RefCell<PlayerState>>, paths: Vec<PathBuf>) -> bool {
-    let media_paths = dropped_media_paths(&paths);
+fn load_selected_local_paths(state: &Rc<RefCell<PlayerState>>, paths: Vec<PathBuf>) -> bool {
+    let media_paths = selected_media_paths(&paths);
     match media_paths.as_slice() {
         [path] => {
             load_media_path(state, path.clone());
-            load_dropped_subtitles(state, dropped_subtitle_paths(&paths));
+            load_selected_subtitles(state, selected_subtitle_paths(&paths));
             return true;
         }
         [] => {}
@@ -7864,24 +7887,24 @@ fn load_dropped_paths(state: &Rc<RefCell<PlayerState>>, paths: Vec<PathBuf>) -> 
             };
             let loaded = load_playlist_item_with_playlist(state, first_item, playlist, true);
             if loaded {
-                load_dropped_subtitles(state, dropped_subtitle_paths(&paths));
+                load_selected_subtitles(state, selected_subtitle_paths(&paths));
             }
             return loaded;
         }
     }
 
-    if let Some(path) = dropped_playlist_path(&paths) {
+    if let Some(path) = selected_playlist_path(&paths) {
         return load_m3u_playlist_silent(state, &path);
     }
 
-    load_dropped_subtitles(state, dropped_subtitle_paths(&paths))
+    load_selected_subtitles(state, selected_subtitle_paths(&paths))
 }
 
-fn dropped_media_paths(paths: &[PathBuf]) -> Vec<PathBuf> {
+fn selected_media_paths(paths: &[PathBuf]) -> Vec<PathBuf> {
     unique_media_paths(paths.to_vec())
 }
 
-fn dropped_subtitle_paths(paths: &[PathBuf]) -> Vec<PathBuf> {
+fn selected_subtitle_paths(paths: &[PathBuf]) -> Vec<PathBuf> {
     let mut subtitles = Vec::new();
     for path in paths {
         if is_subtitle_path(path) && !subtitles.iter().any(|existing| existing == path) {
@@ -7891,11 +7914,11 @@ fn dropped_subtitle_paths(paths: &[PathBuf]) -> Vec<PathBuf> {
     subtitles
 }
 
-fn dropped_playlist_path(paths: &[PathBuf]) -> Option<PathBuf> {
+fn selected_playlist_path(paths: &[PathBuf]) -> Option<PathBuf> {
     paths.iter().find(|path| is_playlist_path(path)).cloned()
 }
 
-fn load_dropped_subtitles(state: &Rc<RefCell<PlayerState>>, paths: Vec<PathBuf>) -> bool {
+fn load_selected_subtitles(state: &Rc<RefCell<PlayerState>>, paths: Vec<PathBuf>) -> bool {
     let mut loaded = false;
     for path in paths {
         loaded |= load_subtitle_path(state, path);
@@ -11723,7 +11746,7 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
     }
 
     #[test]
-    fn dropped_media_paths_keep_drop_order_and_skip_non_media() {
+    fn selected_media_paths_keep_selection_order_and_skip_non_media() {
         let paths = vec![
             PathBuf::from("/media/b.mkv"),
             PathBuf::from("/media/subs.srt"),
@@ -11733,13 +11756,13 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
         ];
 
         assert_eq!(
-            dropped_media_paths(&paths),
+            selected_media_paths(&paths),
             vec![PathBuf::from("/media/b.mkv"), PathBuf::from("/media/a.mp4")]
         );
     }
 
     #[test]
-    fn dropped_subtitle_paths_keep_order_and_deduplicate() {
+    fn selected_subtitle_paths_keep_order_and_deduplicate() {
         let paths = vec![
             PathBuf::from("/media/a.en.srt"),
             PathBuf::from("/media/movie.mkv"),
@@ -11748,7 +11771,7 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
         ];
 
         assert_eq!(
-            dropped_subtitle_paths(&paths),
+            selected_subtitle_paths(&paths),
             vec![
                 PathBuf::from("/media/a.en.srt"),
                 PathBuf::from("/media/a.signs.ass")
@@ -11757,7 +11780,7 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
     }
 
     #[test]
-    fn dropped_playlist_path_picks_first_m3u_variant() {
+    fn selected_playlist_path_picks_first_m3u_variant() {
         let paths = vec![
             PathBuf::from("/media/movie.mkv"),
             PathBuf::from("/media/queue.m3u8"),
@@ -11765,9 +11788,64 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
         ];
 
         assert_eq!(
-            dropped_playlist_path(&paths),
+            selected_playlist_path(&paths),
             Some(PathBuf::from("/media/queue.m3u8"))
         );
+    }
+
+    #[test]
+    fn load_selected_local_paths_uses_explicit_playlist_for_multiple_media() {
+        let state = Rc::new(RefCell::new(PlayerState::default()));
+        let paths = vec![
+            PathBuf::from("/media/b.mkv"),
+            PathBuf::from("/media/subs.srt"),
+            PathBuf::from("/media/a.mp4"),
+            PathBuf::from("/media/b.mkv"),
+        ];
+
+        assert!(load_selected_local_paths(&state, paths));
+
+        let state = state.borrow();
+        assert_eq!(state.current_file, Some(PathBuf::from("/media/b.mkv")));
+        assert_eq!(
+            state.playlist,
+            vec![local_item("/media/b.mkv"), local_item("/media/a.mp4")]
+        );
+    }
+
+    #[test]
+    fn load_selected_local_paths_preserves_folder_playlist_for_single_media() {
+        let root = env::temp_dir().join(format!(
+            "okp-selection-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be after epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("test folder should be created");
+        let first = root.join("Episode 1.mkv");
+        let second = root.join("Episode 2.mkv");
+        let subtitle = root.join("Episode 2.srt");
+        fs::write(&first, []).expect("test media should be created");
+        fs::write(&second, []).expect("test media should be created");
+        fs::write(&subtitle, []).expect("test subtitle should be created");
+
+        let state = Rc::new(RefCell::new(PlayerState::default()));
+
+        assert!(load_selected_local_paths(&state, vec![second.clone()]));
+
+        let state_ref = state.borrow();
+        assert_eq!(state_ref.current_file, Some(second.clone()));
+        assert_eq!(
+            state_ref.playlist,
+            vec![
+                PlaylistItem::Local(first.clone()),
+                PlaylistItem::Local(second.clone())
+            ]
+        );
+        drop(state_ref);
+
+        fs::remove_dir_all(root).expect("test folder should be removed");
     }
 
     #[test]
