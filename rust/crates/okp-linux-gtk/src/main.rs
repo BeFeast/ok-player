@@ -33,6 +33,7 @@ const APP_BUILD_VERSION: &str = env!("OKP_BUILD_VERSION");
 const APP_BUILD_SHA: &str = env!("OKP_BUILD_SHA");
 const LINUX_UPDATE_REPO_URL: &str = "https://github.com/BeFeast/ok-player";
 const LINUX_DEB_RELEASES_API_URL: &str = "https://api.github.com/repos/BeFeast/ok-player/releases";
+const UPDATE_STATUS_NOT_CHECKED: &str = "Not checked yet";
 
 #[derive(Default)]
 struct PlayerState {
@@ -4070,7 +4071,7 @@ fn about_engine_card(snapshot: &AboutSnapshot) -> gtk::Box {
 fn about_updates_card(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusToast>) -> gtk::Box {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
 
-    let status_row = about_spec_row("Status", "Up to date", false, None);
+    let status_row = about_spec_row("Status", UPDATE_STATUS_NOT_CHECKED, false, None);
     let status_label = status_row
         .last_child()
         .and_then(|wrap| wrap.first_child())
@@ -4152,7 +4153,7 @@ fn about_updates_card(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusTo
 
         button.set_sensitive(false);
         button.set_label("Checking...");
-        check_status.set_text("Checking");
+        check_status.set_text("Checking...");
 
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
@@ -4173,7 +4174,7 @@ fn about_updates_card(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusTo
                 Err(mpsc::TryRecvError::Disconnected) => {
                     button.set_sensitive(true);
                     button.set_label("Check for updates");
-                    status.set_text("Failed");
+                    status.set_text("Update check failed");
                     glib::ControlFlow::Break
                 }
             }
@@ -4543,7 +4544,7 @@ fn settings_updates_section(
 
     let pending_update = Rc::new(RefCell::new(None::<PendingLinuxUpdate>));
 
-    let check_button = gtk::Button::with_label("Check for Updates");
+    let check_button = gtk::Button::with_label("Check for updates");
     check_button.add_css_class("okp-settings-button");
     let check_status = status.clone();
     let check_pending = Rc::clone(&pending_update);
@@ -4583,7 +4584,7 @@ fn settings_updates_section(
                 Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
                 Err(mpsc::TryRecvError::Disconnected) => {
                     button.set_sensitive(true);
-                    button.set_label("Check for Updates");
+                    button.set_label("Check for updates");
                     status.set_text("Update check failed.");
                     glib::ControlFlow::Break
                 }
@@ -4609,7 +4610,7 @@ fn update_status_intro(auto_check_enabled: bool) -> &'static str {
     if auto_check_enabled {
         "Automatic update checks are on. AppImage installs restart in place; .deb installs download the newest installer inside OK Player."
     } else {
-        "Automatic update checks are off. Use Check for Updates any time."
+        "Automatic update checks are off. Use Check for updates any time."
     }
 }
 
@@ -4648,7 +4649,7 @@ fn start_update_download(
             }
             Ok(Ok(LinuxUpdateApplyResult::InstallerOpened(path))) => {
                 button.set_sensitive(true);
-                button.set_label("Check for Updates");
+                button.set_label("Check for updates");
                 status.set_text(&format!(
                     "Downloaded {}. Complete the installer to update.",
                     display_file_name(&path)
