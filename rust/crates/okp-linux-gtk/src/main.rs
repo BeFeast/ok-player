@@ -12,7 +12,7 @@ use gtk::gdk;
 use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
-use okp_core::{AppIdentity, media_formats, natural_compare, time_code};
+use okp_core::{AppIdentity, m3u, media_formats, natural_compare, time_code};
 use okp_mpv::{
     Chapter, InfoSection, InfoTrack, MediaInfo, Mpv, MpvEvent, Track, TrackKind,
     current_render_target_size, resolve_render_target_size,
@@ -2523,7 +2523,14 @@ fn command_popover_content(
     status_toast: Rc<StatusToast>,
 ) -> gtk::Box {
     let content = track_popover_content("More");
-    let (has_media, repeat_mode, shuffle_enabled, auto_advance_enabled, private_session) = {
+    let (
+        has_media,
+        repeat_mode,
+        shuffle_enabled,
+        auto_advance_enabled,
+        private_session,
+        playlist_count,
+    ) = {
         let state = state.borrow();
         (
             has_loaded_media_state(&state),
@@ -2531,6 +2538,7 @@ fn command_popover_content(
             state.modes.shuffle_enabled,
             state.modes.auto_advance_enabled,
             state.private_session,
+            state.playlist.len(),
         )
     };
 
@@ -2548,6 +2556,38 @@ fn command_popover_content(
         );
     });
     content.append(&open_url_button);
+
+    let open_playlist_button = track_button("Open Playlist...", false);
+    let open_playlist_parent = parent.clone();
+    let open_playlist_state = Rc::clone(&state);
+    let open_playlist_toast = Rc::clone(&status_toast);
+    let open_playlist_popover = popover.clone();
+    open_playlist_button.connect_clicked(move |_| {
+        open_playlist_popover.popdown();
+        open_playlist_dialog(
+            &open_playlist_parent,
+            Rc::clone(&open_playlist_state),
+            Rc::clone(&open_playlist_toast),
+        );
+    });
+    content.append(&open_playlist_button);
+
+    let save_playlist_button = track_button("Save Playlist...", false);
+    save_playlist_button.set_sensitive(playlist_count > 0);
+    save_playlist_button.set_tooltip_text(Some("Save current Up Next list as M3U"));
+    let save_playlist_parent = parent.clone();
+    let save_playlist_state = Rc::clone(&state);
+    let save_playlist_toast = Rc::clone(&status_toast);
+    let save_playlist_popover = popover.clone();
+    save_playlist_button.connect_clicked(move |_| {
+        save_playlist_popover.popdown();
+        save_playlist_dialog(
+            &save_playlist_parent,
+            Rc::clone(&save_playlist_state),
+            Rc::clone(&save_playlist_toast),
+        );
+    });
+    content.append(&save_playlist_button);
 
     let settings_button = track_button("Settings...", false);
     let settings_parent = parent.clone();
@@ -5948,6 +5988,73 @@ fn open_subtitle_dialog(parent: &gtk::ApplicationWindow, state: Rc<RefCell<Playe
     dialog.present();
 }
 
+fn open_playlist_dialog(
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) {
+    let dialog = gtk::FileChooserDialog::new(
+        Some("Open playlist"),
+        Some(parent),
+        gtk::FileChooserAction::Open,
+        &[
+            ("Cancel", gtk::ResponseType::Cancel),
+            ("Open", gtk::ResponseType::Accept),
+        ],
+    );
+    dialog.set_modal(true);
+    dialog.add_filter(&playlist_file_filter());
+
+    dialog.connect_response(move |dialog, response| {
+        if response == gtk::ResponseType::Accept
+            && let Some(path) = dialog.file().and_then(|file| file.path())
+        {
+            load_m3u_playlist(&state, &path, &status_toast);
+        }
+        dialog.close();
+    });
+
+    dialog.present();
+}
+
+fn save_playlist_dialog(
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) {
+    let dialog = gtk::FileChooserDialog::new(
+        Some("Save playlist"),
+        Some(parent),
+        gtk::FileChooserAction::Save,
+        &[
+            ("Cancel", gtk::ResponseType::Cancel),
+            ("Save", gtk::ResponseType::Accept),
+        ],
+    );
+    dialog.set_modal(true);
+    dialog.set_current_name("OK Player Playlist.m3u");
+    dialog.add_filter(&playlist_file_filter());
+
+    dialog.connect_response(move |dialog, response| {
+        if response == gtk::ResponseType::Accept
+            && let Some(path) = dialog.file().and_then(|file| file.path())
+        {
+            save_m3u_playlist(&state, playlist_save_path(path), &status_toast);
+        }
+        dialog.close();
+    });
+
+    dialog.present();
+}
+
+fn playlist_file_filter() -> gtk::FileFilter {
+    let filter = gtk::FileFilter::new();
+    filter.set_name(Some("M3U playlists"));
+    filter.add_pattern("*.m3u");
+    filter.add_pattern("*.m3u8");
+    filter
+}
+
 fn connect_drop(
     window: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
@@ -6794,6 +6901,55 @@ fn load_media_path_internal(state: &Rc<RefCell<PlayerState>>, path: PathBuf, sav
 
 fn remember_loaded_media(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
     let playlist = build_folder_playlist(&path);
+    remember_loaded_media_with_playlist(state, path, playlist);
+}
+
+fn load_media_path_with_playlist(
+    state: &Rc<RefCell<PlayerState>>,
+    path: PathBuf,
+    playlist: Vec<PathBuf>,
+    save_previous: bool,
+) -> bool {
+    if !is_media_path(&path) {
+        return false;
+    }
+    if save_previous {
+        save_current_progress(state, false);
+    }
+
+    let result = {
+        let state = state.borrow();
+        state.mpv.as_ref().map(|mpv| mpv.load_file(&path))
+    };
+
+    match result {
+        Some(Ok(())) => {
+            remember_loaded_media_with_playlist(state, path, playlist);
+            true
+        }
+        Some(Err(error)) => {
+            eprintln!("Failed to load media '{}': {error}", path.display());
+            false
+        }
+        None => {
+            remember_loaded_media_with_playlist(state, path, playlist);
+            true
+        }
+    }
+}
+
+fn remember_loaded_media_with_playlist(
+    state: &Rc<RefCell<PlayerState>>,
+    path: PathBuf,
+    playlist: Vec<PathBuf>,
+) {
+    let mut playlist = playlist
+        .into_iter()
+        .filter(|path| is_media_path(path))
+        .collect::<Vec<_>>();
+    if !playlist.iter().any(|item| item == &path) {
+        playlist.insert(0, path.clone());
+    }
     let resume_path = path.clone();
     let preferences_path = path.clone();
     let mut state = state.borrow_mut();
@@ -6839,6 +6995,104 @@ fn remember_loaded_url(state: &Rc<RefCell<PlayerState>>, url: String) {
     state.pending_subtitles.clear();
     state.pending_resume = None;
     state.pending_preferences = None;
+}
+
+fn load_m3u_playlist(
+    state: &Rc<RefCell<PlayerState>>,
+    path: &Path,
+    status_toast: &StatusToast,
+) -> bool {
+    if !is_playlist_path(path) {
+        status_toast.show("Choose an M3U playlist");
+        return false;
+    }
+
+    let Ok(text) = fs::read_to_string(path) else {
+        status_toast.show("Could not read playlist");
+        return false;
+    };
+
+    let entries = m3u::parse(&text, path.parent());
+    let playlist = local_media_paths_from_m3u_entries(&entries);
+    if let Some(first_path) = playlist.first().cloned() {
+        let count = playlist.len();
+        if load_media_path_with_playlist(state, first_path, playlist, true) {
+            status_toast.show(&format!("Playlist opened: {count} item{}", plural_s(count)));
+            return true;
+        }
+        status_toast.show("Could not open playlist media");
+        return false;
+    }
+
+    if let Some(url) = entries.iter().find(|entry| is_media_url(entry)).cloned() {
+        load_media_url(state, url);
+        status_toast.show("Playlist opened: 1 URL");
+        return true;
+    }
+
+    status_toast.show("Playlist has no playable media");
+    false
+}
+
+fn save_m3u_playlist(
+    state: &Rc<RefCell<PlayerState>>,
+    path: PathBuf,
+    status_toast: &StatusToast,
+) -> bool {
+    let paths = {
+        let state = state.borrow();
+        state
+            .playlist
+            .iter()
+            .filter(|path| is_media_path(path))
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+    };
+
+    if paths.is_empty() {
+        status_toast.show("No playlist to save");
+        return false;
+    }
+
+    let text = m3u::write(paths.iter().map(String::as_str));
+    match fs::write(&path, text) {
+        Ok(()) => {
+            status_toast.show(&format!(
+                "Playlist saved: {} item{}",
+                paths.len(),
+                plural_s(paths.len())
+            ));
+            true
+        }
+        Err(error) => {
+            eprintln!("Failed to save playlist '{}': {error}", path.display());
+            status_toast.show("Could not save playlist");
+            false
+        }
+    }
+}
+
+fn local_media_paths_from_m3u_entries(entries: &[String]) -> Vec<PathBuf> {
+    entries
+        .iter()
+        .filter(|entry| !entry.contains("://"))
+        .map(PathBuf::from)
+        .filter(|path| is_media_path(path))
+        .collect()
+}
+
+fn playlist_save_path(mut path: PathBuf) -> PathBuf {
+    if path
+        .extension()
+        .is_none_or(|extension| extension.is_empty())
+    {
+        path.set_extension("m3u");
+    }
+    path
+}
+
+fn plural_s(count: usize) -> &'static str {
+    if count == 1 { "" } else { "s" }
 }
 
 fn navigate_playlist(state: &Rc<RefCell<PlayerState>>, direction: isize) -> bool {
@@ -7313,6 +7567,16 @@ fn is_media_url(url: &str) -> bool {
 
 fn is_subtitle_path(path: &Path) -> bool {
     media_formats::is_subtitle(path)
+}
+
+fn is_playlist_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| {
+            let extension = extension.to_ascii_lowercase();
+            extension == "m3u" || extension == "m3u8"
+        })
+        .unwrap_or(false)
 }
 
 fn display_file_name(path: &Path) -> String {
@@ -8689,6 +8953,46 @@ mod tests {
     fn clamps_subtitle_delay_entry_to_ten_minutes() {
         assert_delay("999999999", 600.0);
         assert_delay("-999999999", -600.0);
+    }
+
+    #[test]
+    fn playlist_save_path_adds_default_extension_only_when_missing() {
+        assert_eq!(
+            playlist_save_path(PathBuf::from("/tmp/OK Player Playlist")).as_path(),
+            Path::new("/tmp/OK Player Playlist.m3u")
+        );
+        assert_eq!(
+            playlist_save_path(PathBuf::from("/tmp/list.m3u8")).as_path(),
+            Path::new("/tmp/list.m3u8")
+        );
+    }
+
+    #[test]
+    fn playlist_path_detects_m3u_variants() {
+        assert!(is_playlist_path(Path::new("/tmp/list.m3u")));
+        assert!(is_playlist_path(Path::new("/tmp/list.M3U8")));
+        assert!(!is_playlist_path(Path::new("/tmp/movie.mkv")));
+    }
+
+    #[test]
+    fn m3u_local_media_paths_skip_urls_subtitles_and_unknown_entries() {
+        let entries = vec![
+            "/media/ep2.mkv".to_owned(),
+            "https://example.test/ep3.mp4".to_owned(),
+            "/media/captions.srt".to_owned(),
+            "/media/readme.txt".to_owned(),
+            "/media/ep1.mp4".to_owned(),
+        ];
+
+        let paths = local_media_paths_from_m3u_entries(&entries);
+
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("/media/ep2.mkv"),
+                PathBuf::from("/media/ep1.mp4")
+            ]
+        );
     }
 
     fn github_asset(name: &str) -> GitHubAsset {
