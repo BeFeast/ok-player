@@ -2923,6 +2923,18 @@ fn command_popover_content(
     });
     content.append(&info_button);
 
+    let location_button = track_button("Open File Location", false);
+    location_button.set_sensitive(has_local_media);
+    location_button.set_tooltip_text(Some("Open the current file in the file manager"));
+    let location_state = Rc::clone(&state);
+    let location_toast = Rc::clone(&status_toast);
+    let location_popover = popover.clone();
+    location_button.connect_clicked(move |_| {
+        location_popover.popdown();
+        open_current_file_location(&location_state, &location_toast);
+    });
+    content.append(&location_button);
+
     let go_to_time_button = track_button("Go to Time...", false);
     go_to_time_button.set_sensitive(has_media);
     go_to_time_button.set_tooltip_text(Some("Go to timecode (J)"));
@@ -2939,6 +2951,18 @@ fn command_popover_content(
         );
     });
     content.append(&go_to_time_button);
+
+    let copy_time_button = track_button("Copy Current Time", false);
+    copy_time_button.set_sensitive(has_media);
+    copy_time_button.set_tooltip_text(Some("Copy the current timecode"));
+    let copy_time_state = Rc::clone(&state);
+    let copy_time_toast = Rc::clone(&status_toast);
+    let copy_time_popover = popover.clone();
+    copy_time_button.connect_clicked(move |_| {
+        copy_time_popover.popdown();
+        copy_current_time(&copy_time_state, &copy_time_toast);
+    });
+    content.append(&copy_time_button);
 
     let ab_loop_button = track_button("A-B loop", ab_loop_active);
     ab_loop_button.set_sensitive(has_media);
@@ -7200,6 +7224,76 @@ fn copy_frame_to_clipboard(state: &Rc<RefCell<PlayerState>>, status_toast: &Stat
         }
     }
     let _ = fs::remove_file(&path);
+}
+
+fn copy_current_time(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
+    let time = {
+        let state = state.borrow();
+        state
+            .mpv
+            .as_ref()
+            .and_then(|mpv| mpv.playback_state().ok())
+            .and_then(|playback| playback.time_pos)
+            .filter(|time| time.is_finite() && *time >= 0.0)
+    };
+
+    let Some(time) = time else {
+        status_toast.show("Open media first");
+        return;
+    };
+
+    let text = time_code::format(time);
+    if let Some(display) = gdk::Display::default() {
+        display.clipboard().set_text(&text);
+        status_toast.show(&format!("Copied {text}"));
+    } else {
+        status_toast.show("Clipboard unavailable");
+    }
+}
+
+fn open_current_file_location(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
+    let path = state.borrow().current_file.clone();
+    let Some(path) = path else {
+        status_toast.show("Not a local file");
+        return;
+    };
+
+    if show_file_in_file_manager(&path) {
+        status_toast.show("Opened file location");
+    } else {
+        status_toast.show("Could not open the folder");
+    }
+}
+
+fn show_file_in_file_manager(path: &Path) -> bool {
+    if try_file_manager_show_items(path) {
+        return true;
+    }
+
+    let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    else {
+        return false;
+    };
+
+    Command::new("xdg-open").arg(parent).spawn().is_ok()
+}
+
+fn try_file_manager_show_items(path: &Path) -> bool {
+    let uri = gtk::gio::File::for_path(path).uri().to_string();
+    Command::new("dbus-send")
+        .args([
+            "--session",
+            "--dest=org.freedesktop.FileManager1",
+            "--type=method_call",
+            "/org/freedesktop/FileManager1",
+            "org.freedesktop.FileManager1.ShowItems",
+        ])
+        .arg(format!("array:string:{uri}"))
+        .arg("string:")
+        .spawn()
+        .is_ok()
 }
 
 fn open_media_info_window(
