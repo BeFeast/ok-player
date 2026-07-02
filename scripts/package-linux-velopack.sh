@@ -44,4 +44,13 @@ install -Dm644 "$ABOUT_ICON" "$PACK_DIR/com.befeast.okplayer.about.svg"
   --icon "$ICON" \
   --categories "AudioVideo;Player"
 
+GENERIC_APPIMAGE="$OUTPUT_DIR/$PACK_ID.AppImage"
+VERSIONED_APPIMAGE="$OUTPUT_DIR/OK-Player-$VERSION-x86_64.AppImage"
+if [ -f "$GENERIC_APPIMAGE" ]; then
+  cp "$GENERIC_APPIMAGE" "$VERSIONED_APPIMAGE"
+else
+  unzip -p "$OUTPUT_DIR/$PACK_ID-$VERSION-linux-full.nupkg" "lib/app/$PACK_ID.AppImage" > "$VERSIONED_APPIMAGE"
+fi
+chmod 755 "$VERSIONED_APPIMAGE"
+
 echo "Velopack Linux artifacts written to $OUTPUT_DIR"

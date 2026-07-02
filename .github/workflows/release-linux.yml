@@ -55,7 +55,7 @@ jobs:
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev libmpv-dev libgl1-mesa-dev libegl1-mesa-dev libglx-dev mpv ffmpeg cmake ninja-build dpkg-dev
+          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev libmpv-dev libgl1-mesa-dev libegl1-mesa-dev libglx-dev mpv ffmpeg cmake ninja-build dpkg-dev unzip
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -99,6 +99,12 @@ jobs:
             --releaseName "OK Player Linux ${{ steps.release.outputs.version }}" \
             --tag "${{ steps.release.outputs.tag }}" \
             --targetCommitish "${{ github.sha }}"
+
+      - name: Attach versioned AppImage to release
+        if: steps.release.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ steps.release.outputs.tag }}" "artifacts/linux/velopack/OK-Player-${{ steps.release.outputs.version }}-x86_64.AppImage" --clobber
 
       - name: Attach Debian package to release
         if: steps.release.outputs.publish == 'true'
