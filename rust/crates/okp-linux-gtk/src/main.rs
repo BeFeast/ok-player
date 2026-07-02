@@ -7901,7 +7901,15 @@ fn load_selected_local_paths(state: &Rc<RefCell<PlayerState>>, paths: Vec<PathBu
 }
 
 fn selected_media_paths(paths: &[PathBuf]) -> Vec<PathBuf> {
-    unique_media_paths(paths.to_vec())
+    let mut media_paths = Vec::new();
+    for path in paths {
+        if path.is_dir() {
+            media_paths.extend(media_paths_in_directory(path));
+        } else if is_media_path(path) {
+            media_paths.push(path.clone());
+        }
+    }
+    unique_media_paths(media_paths)
 }
 
 fn selected_subtitle_paths(paths: &[PathBuf]) -> Vec<PathBuf> {
@@ -9868,8 +9876,17 @@ fn build_folder_playlist(path: &Path) -> Vec<PlaylistItem> {
         return vec![PlaylistItem::Local(path.to_path_buf())];
     };
 
-    let Ok(entries) = std::fs::read_dir(parent) else {
+    let files = media_paths_in_directory(parent);
+    if files.is_empty() {
         return vec![PlaylistItem::Local(path.to_path_buf())];
+    };
+
+    files.into_iter().map(PlaylistItem::Local).collect()
+}
+
+fn media_paths_in_directory(directory: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return Vec::new();
     };
 
     let mut files = entries
@@ -9882,12 +9899,7 @@ fn build_folder_playlist(path: &Path) -> Vec<PlaylistItem> {
         let right = right.file_name().and_then(|name| name.to_str());
         natural_compare::compare(left, right)
     });
-
-    if files.is_empty() {
-        vec![PlaylistItem::Local(path.to_path_buf())]
-    } else {
-        files.into_iter().map(PlaylistItem::Local).collect()
-    }
+    files
 }
 
 fn load_subtitle_path(state: &Rc<RefCell<PlayerState>>, path: PathBuf) -> bool {
@@ -11405,6 +11417,16 @@ mod tests {
         PlaylistItem::Url(url.to_owned())
     }
 
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        env::temp_dir().join(format!(
+            "{prefix}-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be after epoch")
+                .as_nanos()
+        ))
+    }
+
     fn assert_delay(input: &str, expected: f64) {
         let actual = parse_delay_entry_seconds(input).expect("delay should parse");
         assert!((actual - expected).abs() < f64::EPSILON);
@@ -11794,6 +11816,27 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
     }
 
     #[test]
+    fn selected_media_paths_expands_folders_in_natural_order() {
+        let root = unique_temp_dir("okp-folder-selection");
+        fs::create_dir_all(&root).expect("test folder should be created");
+        let first = root.join("Episode 1.mp4");
+        let second = root.join("Episode 2.mkv");
+        let tenth = root.join("Episode 10.mkv");
+        fs::write(&tenth, []).expect("test media should be created");
+        fs::write(&first, []).expect("test media should be created");
+        fs::write(root.join("Episode 2.srt"), []).expect("test subtitle should be created");
+        fs::write(&second, []).expect("test media should be created");
+        fs::write(root.join("cover.jpg"), []).expect("test ignored file should be created");
+
+        assert_eq!(
+            selected_media_paths(std::slice::from_ref(&root)),
+            vec![first, second, tenth]
+        );
+
+        fs::remove_dir_all(root).expect("test folder should be removed");
+    }
+
+    #[test]
     fn load_selected_local_paths_uses_explicit_playlist_for_multiple_media() {
         let state = Rc::new(RefCell::new(PlayerState::default()));
         let paths = vec![
@@ -11815,13 +11858,7 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
 
     #[test]
     fn load_selected_local_paths_preserves_folder_playlist_for_single_media() {
-        let root = env::temp_dir().join(format!(
-            "okp-selection-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("clock should be after epoch")
-                .as_nanos()
-        ));
+        let root = unique_temp_dir("okp-selection");
         fs::create_dir_all(&root).expect("test folder should be created");
         let first = root.join("Episode 1.mkv");
         let second = root.join("Episode 2.mkv");
@@ -11836,6 +11873,33 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
 
         let state_ref = state.borrow();
         assert_eq!(state_ref.current_file, Some(second.clone()));
+        assert_eq!(
+            state_ref.playlist,
+            vec![
+                PlaylistItem::Local(first.clone()),
+                PlaylistItem::Local(second.clone())
+            ]
+        );
+        drop(state_ref);
+
+        fs::remove_dir_all(root).expect("test folder should be removed");
+    }
+
+    #[test]
+    fn load_selected_local_paths_opens_folder_as_playlist() {
+        let root = unique_temp_dir("okp-folder-load");
+        fs::create_dir_all(&root).expect("test folder should be created");
+        let first = root.join("Episode 1.mkv");
+        let second = root.join("Episode 2.mkv");
+        fs::write(&second, []).expect("test media should be created");
+        fs::write(&first, []).expect("test media should be created");
+
+        let state = Rc::new(RefCell::new(PlayerState::default()));
+
+        assert!(load_selected_local_paths(&state, vec![root.clone()]));
+
+        let state_ref = state.borrow();
+        assert_eq!(state_ref.current_file, Some(first.clone()));
         assert_eq!(
             state_ref.playlist,
             vec![
