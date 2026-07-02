@@ -2595,6 +2595,8 @@ fn playlist_row(
     title.set_hexpand(true);
     title.set_ellipsize(pango::EllipsizeMode::End);
 
+    let drag_handle = playlist_drag_handle();
+
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 2);
     actions.add_css_class("okp-up-next-actions");
 
@@ -2644,13 +2646,28 @@ fn playlist_row(
     });
     actions.append(&remove);
 
-    connect_playlist_row_drag_reorder(&row, index, state);
+    connect_playlist_row_drag_reorder(&row, &drag_handle, index, state);
 
+    row_box.append(&drag_handle);
     row_box.append(&marker);
     row_box.append(&title);
     row_box.append(&actions);
     row.set_child(Some(&row_box));
     row
+}
+
+fn playlist_drag_handle() -> gtk::Box {
+    let handle = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    handle.add_css_class("okp-up-next-drag-handle");
+    handle.set_tooltip_text(Some("Drag to reorder"));
+    handle.set_valign(gtk::Align::Center);
+    handle.set_can_target(true);
+
+    let icon = gtk::Image::from_icon_name("view-more-symbolic");
+    icon.add_css_class("okp-up-next-drag-handle-icon");
+    handle.append(&icon);
+
+    handle
 }
 
 fn playlist_action_button(icon_name: &str, tooltip: &str, sensitive: bool) -> gtk::Button {
@@ -2664,6 +2681,7 @@ fn playlist_action_button(icon_name: &str, tooltip: &str, sensitive: bool) -> gt
 
 fn connect_playlist_row_drag_reorder(
     row: &gtk::ListBoxRow,
+    handle: &impl IsA<gtk::Widget>,
     index: usize,
     state: Rc<RefCell<PlayerState>>,
 ) {
@@ -2673,16 +2691,52 @@ fn connect_playlist_row_drag_reorder(
     drag.connect_prepare(move |_, _, _| {
         Some(gdk::ContentProvider::for_value(&(index as u32).to_value()))
     });
-    row.add_controller(drag);
+    handle.add_controller(drag);
 
     let drop = gtk::DropTarget::new(u32::static_type(), gdk::DragAction::MOVE);
-    drop.connect_drop(move |_, value, _, _| {
+    let enter_row = row.clone();
+    drop.connect_enter(move |_, _, _| {
+        enter_row.add_css_class("is-drop-target");
+        gdk::DragAction::MOVE
+    });
+    let leave_row = row.clone();
+    drop.connect_leave(move |_| {
+        leave_row.remove_css_class("is-drop-target");
+    });
+    let drop_row = row.clone();
+    drop.connect_drop(move |_, value, _, y| {
+        drop_row.remove_css_class("is-drop-target");
         let Ok(source_index) = value.get::<u32>() else {
             return false;
         };
-        move_playlist_item(&state, source_index as usize, index)
+        let drop_after = y >= f64::from(drop_row.allocated_height()) / 2.0;
+        let Some(target_index) =
+            playlist_drop_target_index(source_index as usize, index, drop_after)
+        else {
+            return false;
+        };
+        move_playlist_item(&state, source_index as usize, target_index)
     });
     row.add_controller(drop);
+}
+
+fn playlist_drop_target_index(
+    source_index: usize,
+    row_index: usize,
+    drop_after: bool,
+) -> Option<usize> {
+    if source_index == row_index {
+        return None;
+    }
+
+    let target = match (drop_after, source_index < row_index) {
+        (false, true) => row_index.saturating_sub(1),
+        (false, false) => row_index,
+        (true, true) => row_index,
+        (true, false) => row_index + 1,
+    };
+
+    (target != source_index).then_some(target)
 }
 
 fn populate_subtitle_popover(
@@ -10121,6 +10175,7 @@ fn install_css() {
             margin: 2px 0;
             padding: 9px 10px;
             border-radius: 9px;
+            border: 1px solid transparent;
             background: rgba(255, 255, 255, 0.035);
             color: rgba(255, 255, 255, 0.78);
         }
@@ -10140,6 +10195,25 @@ fn install_css() {
         .okp-up-next-row.is-current {
             background: rgba(40, 179, 170, 0.18);
             color: rgba(255, 255, 255, 0.96);
+        }
+
+        .okp-up-next-row.is-drop-target {
+            background: rgba(40, 179, 170, 0.22);
+            border-color: rgba(40, 179, 170, 0.62);
+        }
+
+        .okp-up-next-drag-handle {
+            min-width: 18px;
+            color: rgba(255, 255, 255, 0.34);
+        }
+
+        .okp-up-next-drag-handle-icon {
+            -gtk-icon-size: 16px;
+        }
+
+        .okp-up-next-row:hover .okp-up-next-drag-handle,
+        .okp-up-next-row.is-drop-target .okp-up-next-drag-handle {
+            color: rgba(255, 255, 255, 0.78);
         }
 
         .okp-up-next-marker {
@@ -11449,6 +11523,22 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
 
         assert!(reorder_playlist(playlist.clone(), 0, 0).is_none());
         assert!(reorder_playlist(playlist, 3, 0).is_none());
+    }
+
+    #[test]
+    fn playlist_drop_target_index_maps_before_after_slots() {
+        assert_eq!(playlist_drop_target_index(0, 2, false), Some(1));
+        assert_eq!(playlist_drop_target_index(0, 2, true), Some(2));
+        assert_eq!(playlist_drop_target_index(3, 1, false), Some(1));
+        assert_eq!(playlist_drop_target_index(3, 1, true), Some(2));
+    }
+
+    #[test]
+    fn playlist_drop_target_index_rejects_self_or_existing_slot() {
+        assert_eq!(playlist_drop_target_index(2, 2, false), None);
+        assert_eq!(playlist_drop_target_index(2, 2, true), None);
+        assert_eq!(playlist_drop_target_index(1, 2, false), None);
+        assert_eq!(playlist_drop_target_index(2, 1, true), None);
     }
 
     #[test]
