@@ -14,8 +14,8 @@ use gtk::pango;
 use gtk::prelude::*;
 use okp_core::{AppIdentity, m3u, media_formats, natural_compare, time_code};
 use okp_mpv::{
-    AudioDevice, Chapter, InfoSection, InfoTrack, MediaInfo, Mpv, MpvEvent, Track, TrackKind,
-    current_render_target_size, resolve_render_target_size,
+    AbLoopState, AudioDevice, Chapter, InfoSection, InfoTrack, MediaInfo, Mpv, MpvEvent, Track,
+    TrackKind, current_render_target_size, resolve_render_target_size,
 };
 use serde::Deserialize;
 use velopack::{
@@ -60,6 +60,7 @@ struct PlayerState {
     settings: settings::SettingsStore,
     render_target_size: Option<okp_mpv::RenderTargetSize>,
     video_transform: VideoTransformState,
+    ab_loop: AbLoopState,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -1984,6 +1985,7 @@ fn connect_state_poll(
             .and_then(|mpv| mpv.playback_state().ok());
         let has_media = has_loaded_media(&state);
         let has_playlist = state.borrow().playlist.len() > 1;
+        sync_ab_loop_state(&state, has_media);
         empty_surface.set_has_media(has_media);
         drain_thumbnail_events(&controls);
         update_up_next_panel(&controls, &state, &chrome);
@@ -2794,6 +2796,7 @@ fn command_popover_content(
         playlist_count,
         has_local_media,
         video_transform,
+        ab_loop_active,
     ) = {
         let state = state.borrow();
         (
@@ -2805,6 +2808,7 @@ fn command_popover_content(
             state.playlist.len(),
             state.current_file.is_some(),
             state.video_transform.clone(),
+            state.ab_loop.is_active(),
         )
     };
 
@@ -2935,6 +2939,18 @@ fn command_popover_content(
         );
     });
     content.append(&go_to_time_button);
+
+    let ab_loop_button = track_button("A-B loop", ab_loop_active);
+    ab_loop_button.set_sensitive(has_media);
+    ab_loop_button.set_tooltip_text(Some("Set A, set B, clear (L)"));
+    let ab_loop_state = Rc::clone(&state);
+    let ab_loop_toast = Rc::clone(&status_toast);
+    let ab_loop_popover = popover.clone();
+    ab_loop_button.connect_clicked(move |_| {
+        ab_loop_popover.popdown();
+        toggle_ab_loop(&ab_loop_state, &ab_loop_toast);
+    });
+    content.append(&ab_loop_button);
 
     content.append(&divider());
     content.append(&track_section_title("Video"));
@@ -6561,6 +6577,7 @@ fn settings_shortcuts_section() -> gtk::Box {
     section.append(&settings_value_row("Screenshot", "C"));
     section.append(&settings_value_row("Media info", "I"));
     section.append(&settings_value_row("Go to time", "J"));
+    section.append(&settings_value_row("A-B loop", "L"));
     section.append(&settings_value_row("Subtitle delay", "Z / Shift+Z"));
     section.append(&settings_value_row("Subtitle size", "[ / ]"));
     section.append(&settings_value_row("Fullscreen", "F / Esc"));
@@ -6949,6 +6966,10 @@ fn connect_keyboard(
                     Rc::clone(&state),
                     Rc::clone(&status_toast),
                 );
+                glib::Propagation::Stop
+            }
+            gdk::Key::l | gdk::Key::L => {
+                toggle_ab_loop(&state, &status_toast);
                 glib::Propagation::Stop
             }
             gdk::Key::z => {
@@ -7573,6 +7594,55 @@ fn toggle_fullscreen(window: &gtk::ApplicationWindow) {
     }
 }
 
+fn toggle_ab_loop(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
+    let was_active = state.borrow().ab_loop.is_active();
+    let result = {
+        let state = state.borrow();
+        state.mpv.as_ref().map(|mpv| {
+            mpv.toggle_ab_loop()?;
+            mpv.ab_loop_state()
+        })
+    };
+
+    match result {
+        Some(Ok(ab_loop)) => {
+            state.borrow_mut().ab_loop = ab_loop;
+            if let Some(message) = ab_loop_message(ab_loop, was_active) {
+                status_toast.show(&message);
+            }
+        }
+        Some(Err(error)) => {
+            eprintln!("Failed to toggle A-B loop: {error}");
+            status_toast.show("Could not update A-B loop");
+        }
+        None => status_toast.show("Open media first"),
+    }
+}
+
+fn sync_ab_loop_state(state: &Rc<RefCell<PlayerState>>, has_media: bool) {
+    let ab_loop = if has_media {
+        state
+            .borrow()
+            .mpv
+            .as_ref()
+            .and_then(|mpv| mpv.ab_loop_state().ok())
+            .unwrap_or_default()
+    } else {
+        AbLoopState::default()
+    };
+    state.borrow_mut().ab_loop = ab_loop;
+}
+
+fn ab_loop_message(ab_loop: AbLoopState, was_active: bool) -> Option<String> {
+    match (ab_loop.a, ab_loop.b) {
+        (Some(a), Some(b)) => Some(format!("A-B loop: {} - {}", format_time(a), format_time(b))),
+        (Some(a), None) => Some(format!("A-B loop: start at {}", format_time(a))),
+        (None, Some(b)) => Some(format!("A-B loop: end at {}", format_time(b))),
+        (None, None) if was_active => Some("A-B loop cleared".to_owned()),
+        _ => None,
+    }
+}
+
 fn set_video_aspect(state: &Rc<RefCell<PlayerState>>, aspect: &str, status_toast: &StatusToast) {
     let aspect = video_aspect_value(aspect);
     if with_mpv(state, |mpv| mpv.set_video_aspect_override(aspect)) {
@@ -7740,6 +7810,7 @@ fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
     state.pending_resume = None;
     state.pending_preferences = None;
     state.video_transform.reset();
+    state.ab_loop = AbLoopState::default();
 }
 
 fn load_media_path(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
@@ -7857,6 +7928,7 @@ fn remember_loaded_media_with_playlist(
     };
     let playlist_changed = state.playlist != playlist;
     reset_video_transform_for_new_media(&mut state);
+    state.ab_loop = AbLoopState::default();
     state.current_file = Some(path);
     state.current_url = None;
     state.playlist = playlist;
@@ -7936,6 +8008,7 @@ fn remember_loaded_url_with_playlist(
     let mut state = state.borrow_mut();
     let playlist_changed = state.playlist != playlist;
     reset_video_transform_for_new_media(&mut state);
+    state.ab_loop = AbLoopState::default();
     state.current_file = None;
     state.current_url = Some(url);
     state.playlist = playlist;
@@ -10123,6 +10196,35 @@ mod tests {
     fn clamps_subtitle_delay_entry_to_ten_minutes() {
         assert_delay("999999999", 600.0);
         assert_delay("-999999999", -600.0);
+    }
+
+    #[test]
+    fn ab_loop_message_describes_cycle_state() {
+        assert_eq!(
+            ab_loop_message(
+                AbLoopState {
+                    a: Some(12.0),
+                    b: None,
+                },
+                false,
+            ),
+            Some("A-B loop: start at 00:12".to_owned())
+        );
+        assert_eq!(
+            ab_loop_message(
+                AbLoopState {
+                    a: Some(12.0),
+                    b: Some(42.0),
+                },
+                true,
+            ),
+            Some("A-B loop: 00:12 - 00:42".to_owned())
+        );
+        assert_eq!(
+            ab_loop_message(AbLoopState::default(), true),
+            Some("A-B loop cleared".to_owned())
+        );
+        assert_eq!(ab_loop_message(AbLoopState::default(), false), None);
     }
 
     #[test]

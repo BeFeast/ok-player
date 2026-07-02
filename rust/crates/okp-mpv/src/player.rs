@@ -46,6 +46,18 @@ pub struct PlaybackState {
     pub speed: Option<f64>,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct AbLoopState {
+    pub a: Option<f64>,
+    pub b: Option<f64>,
+}
+
+impl AbLoopState {
+    pub fn is_active(self) -> bool {
+        self.a.is_some() || self.b.is_some()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Track {
     pub id: i64,
@@ -618,6 +630,23 @@ impl Mpv {
         self.command(&["frame-back-step"])
     }
 
+    pub fn toggle_ab_loop(&self) -> Result<(), MpvError> {
+        self.command(&["ab-loop"])
+    }
+
+    pub fn ab_loop_state(&self) -> Result<AbLoopState, MpvError> {
+        Ok(AbLoopState {
+            a: self
+                .get_string("ab-loop-a")?
+                .as_deref()
+                .and_then(parse_ab_loop_point),
+            b: self
+                .get_string("ab-loop-b")?
+                .as_deref()
+                .and_then(parse_ab_loop_point),
+        })
+    }
+
     pub fn screenshot_to_file(&self, path: &Path, include_subtitles: bool) -> Result<(), MpvError> {
         let path = path.to_string_lossy();
         let mode = if include_subtitles {
@@ -1165,6 +1194,18 @@ fn video_aspect_override(value: &str) -> &str {
     }
 }
 
+fn parse_ab_loop_point(value: &str) -> Option<f64> {
+    let value = value.trim();
+    if value.is_empty() || value == "no" {
+        return None;
+    }
+
+    value
+        .parse::<f64>()
+        .ok()
+        .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+}
+
 fn format_aspect_ratio(aspect: f64) -> String {
     const COMMON: [(u32, u32); 5] = [(4, 3), (16, 9), (16, 10), (21, 9), (64, 27)];
     for (width, height) in COMMON {
@@ -1360,6 +1401,15 @@ mod tests {
         assert_eq!(video_aspect_override("16:9"), "16:9");
         assert_eq!(video_aspect_override("2.35:1"), "2.35:1");
         assert_eq!(video_aspect_override("-1"), "no");
+    }
+
+    #[test]
+    fn parses_ab_loop_points() {
+        assert_eq!(parse_ab_loop_point("no"), None);
+        assert_eq!(parse_ab_loop_point(""), None);
+        assert_eq!(parse_ab_loop_point("-1"), None);
+        assert_eq!(parse_ab_loop_point("12.5"), Some(12.5));
+        assert_eq!(parse_ab_loop_point("nan"), None);
     }
 
     #[test]
