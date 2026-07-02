@@ -14,7 +14,7 @@ use gtk::pango;
 use gtk::prelude::*;
 use okp_core::{AppIdentity, m3u, media_formats, natural_compare, time_code};
 use okp_mpv::{
-    Chapter, InfoSection, InfoTrack, MediaInfo, Mpv, MpvEvent, Track, TrackKind,
+    AudioDevice, Chapter, InfoSection, InfoTrack, MediaInfo, Mpv, MpvEvent, Track, TrackKind,
     current_render_target_size, resolve_render_target_size,
 };
 use serde::Deserialize;
@@ -1367,8 +1367,9 @@ fn build_controls(
     connect_popover_chrome_pin(&audio_popover, Rc::clone(&chrome));
     audio_button.set_popover(Some(&audio_popover));
     let audio_state = Rc::clone(&state);
+    let audio_toast = Rc::clone(&status_toast);
     audio_popover.connect_show(move |popover| {
-        populate_audio_popover(popover, Rc::clone(&audio_state));
+        populate_audio_popover(popover, Rc::clone(&audio_state), Rc::clone(&audio_toast));
     });
 
     let speed_popover = gtk::Popover::new();
@@ -1848,6 +1849,10 @@ fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, launch
             .audio_normalization_enabled();
         if let Err(error) = mpv.set_audio_normalization(audio_normalization) {
             eprintln!("Failed to restore audio normalization: {error}");
+        }
+        let audio_device = realize_state.borrow().settings.audio_device().to_owned();
+        if let Err(error) = mpv.restore_audio_device(&audio_device) {
+            eprintln!("Failed to restore audio device: {error}");
         }
 
         if let Err(error) = mpv.create_render_context() {
@@ -2626,7 +2631,11 @@ fn populate_subtitle_popover(
     set_track_popover_child(popover, content);
 }
 
-fn populate_audio_popover(popover: &gtk::Popover, state: Rc<RefCell<PlayerState>>) {
+fn populate_audio_popover(
+    popover: &gtk::Popover,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) {
     let content = track_popover_content("Audio");
     let tracks = read_tracks(&state)
         .into_iter()
@@ -2658,6 +2667,34 @@ fn populate_audio_popover(popover: &gtk::Popover, state: Rc<RefCell<PlayerState>
                     save_current_preferences(&track_state);
                 }
                 track_popover.popdown();
+            });
+            content.append(&button);
+        }
+    }
+
+    content.append(&divider());
+    content.append(&track_section_title("Output Device"));
+    let devices = read_audio_devices(&state);
+    if devices.is_empty() {
+        content.append(&empty_track_label("No output devices"));
+    } else {
+        for device in devices {
+            let button = track_button(&device.label, device.selected);
+            let device_state = Rc::clone(&state);
+            let device_popover = popover.clone();
+            let device_toast = Rc::clone(&status_toast);
+            let device_name = device.name.clone();
+            let device_label = device.label.clone();
+            button.connect_clicked(move |_| {
+                if with_mpv(&device_state, |mpv| mpv.set_audio_device(&device_name)) {
+                    save_audio_device_setting(
+                        &device_state,
+                        &device_name,
+                        Some(device_toast.as_ref()),
+                    );
+                    device_toast.show(&format!("Audio output: {device_label}"));
+                }
+                device_popover.popdown();
             });
             content.append(&button);
         }
@@ -3250,6 +3287,22 @@ fn read_tracks(state: &Rc<RefCell<PlayerState>>) -> Vec<Track> {
         Some(Ok(tracks)) => tracks,
         Some(Err(error)) => {
             eprintln!("Failed to read tracks: {error}");
+            Vec::new()
+        }
+        None => Vec::new(),
+    }
+}
+
+fn read_audio_devices(state: &Rc<RefCell<PlayerState>>) -> Vec<AudioDevice> {
+    let devices = {
+        let state = state.borrow();
+        state.mpv.as_ref().map(Mpv::audio_devices)
+    };
+
+    match devices {
+        Some(Ok(devices)) => devices,
+        Some(Err(error)) => {
+            eprintln!("Failed to read audio devices: {error}");
             Vec::new()
         }
         None => Vec::new(),
@@ -5554,6 +5607,10 @@ fn settings_audio_page(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusT
         Rc::clone(&status_toast),
     ));
     page.append(&summary);
+    page.append(&settings_audio_device_section(
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    ));
     page.append(&settings_audio_track_section(state, status_toast));
 
     page
@@ -5957,6 +6014,24 @@ fn connect_settings_audio_track_button(
     });
 }
 
+fn connect_settings_audio_device_button(
+    button: &gtk::Button,
+    device_name: String,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+    buttons: &Rc<RefCell<Vec<gtk::Button>>>,
+) {
+    let selected_button = button.clone();
+    let buttons = Rc::clone(buttons);
+    button.connect_clicked(move |_| {
+        if with_mpv(&state, |mpv| mpv.set_audio_device(&device_name)) {
+            save_audio_device_setting(&state, &device_name, Some(status_toast.as_ref()));
+            mark_settings_track_selected(&buttons, &selected_button);
+            status_toast.show("Audio output updated");
+        }
+    });
+}
+
 fn mark_settings_track_selected(buttons: &Rc<RefCell<Vec<gtk::Button>>>, selected: &gtk::Button) {
     for button in buttons.borrow().iter() {
         button.remove_css_class("is-selected");
@@ -6104,6 +6179,34 @@ fn settings_audio_normalization_row(
     row.append(&toggle);
 
     row
+}
+
+fn settings_audio_device_section(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let section = settings_section("Output Device");
+    let devices = read_audio_devices(&state);
+    if devices.is_empty() {
+        section.append(&settings_empty_state("Audio engine not ready"));
+        return section;
+    }
+
+    let buttons = Rc::new(RefCell::new(Vec::<gtk::Button>::new()));
+    for device in devices {
+        let button = settings_track_button(&device.label, device.selected);
+        connect_settings_audio_device_button(
+            &button,
+            device.name,
+            Rc::clone(&state),
+            Rc::clone(&status_toast),
+            &buttons,
+        );
+        buttons.borrow_mut().push(button.clone());
+        section.append(&button);
+    }
+
+    section
 }
 
 #[derive(Clone, Copy)]
@@ -6834,6 +6937,21 @@ fn save_volume_setting(state: &Rc<RefCell<PlayerState>>, volume: f64) {
     state.settings.set_volume(volume);
     if let Err(error) = state.settings.save() {
         eprintln!("Failed to save settings: {error}");
+    }
+}
+
+fn save_audio_device_setting(
+    state: &Rc<RefCell<PlayerState>>,
+    device: &str,
+    status_toast: Option<&StatusToast>,
+) {
+    let mut state = state.borrow_mut();
+    state.settings.set_audio_device(device);
+    if let Err(error) = state.settings.save() {
+        eprintln!("Failed to save audio device setting: {error}");
+        if let Some(status_toast) = status_toast {
+            status_toast.show("Could not save audio output");
+        }
     }
 }
 

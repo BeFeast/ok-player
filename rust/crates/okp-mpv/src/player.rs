@@ -12,6 +12,7 @@ use crate::ffi;
 
 const AUDIO_NORMALIZATION_FILTER_LABEL: &str = "@okpnorm";
 const AUDIO_NORMALIZATION_FILTER: &str = "@okpnorm:dynaudnorm";
+const AUDIO_DEVICE_AUTO: &str = "auto";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RenderTargetSize {
@@ -56,6 +57,13 @@ pub struct Track {
     pub lang: Option<String>,
     pub codec: Option<String>,
     pub audio_channels: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioDevice {
+    pub name: String,
+    pub label: String,
+    pub selected: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -297,6 +305,46 @@ impl Mpv {
         }
 
         Ok(tracks)
+    }
+
+    pub fn audio_devices(&self) -> Result<Vec<AudioDevice>, MpvError> {
+        let count = self.get_i64("audio-device-list/count")?.unwrap_or(0).max(0);
+        let current = self
+            .get_string("audio-device")?
+            .unwrap_or_else(|| AUDIO_DEVICE_AUTO.to_owned());
+        let mut devices = Vec::new();
+        let mut saw_auto = false;
+
+        for index in 0..count {
+            let prefix = format!("audio-device-list/{index}");
+            let Some(name) = self.get_string(&format!("{prefix}/name"))? else {
+                continue;
+            };
+            if name == AUDIO_DEVICE_AUTO {
+                saw_auto = true;
+            }
+            devices.push(AudioDevice {
+                selected: audio_device_selected(&name, &current),
+                label: audio_device_label(
+                    &name,
+                    self.get_string(&format!("{prefix}/description"))?,
+                ),
+                name,
+            });
+        }
+
+        if !saw_auto {
+            devices.insert(
+                0,
+                AudioDevice {
+                    name: AUDIO_DEVICE_AUTO.to_owned(),
+                    label: "Automatic".to_owned(),
+                    selected: audio_device_selected(AUDIO_DEVICE_AUTO, &current),
+                },
+            );
+        }
+
+        Ok(devices)
     }
 
     pub fn chapters(&self) -> Result<Vec<Chapter>, MpvError> {
@@ -647,6 +695,28 @@ impl Mpv {
     pub fn select_audio(&self, id: Option<i64>) -> Result<(), MpvError> {
         let value = track_id_or_off(id);
         self.command(&["set", "aid", &value])
+    }
+
+    pub fn set_audio_device(&self, name: &str) -> Result<(), MpvError> {
+        self.command(&["set", "audio-device", normalized_audio_device_name(name)])
+    }
+
+    pub fn restore_audio_device(&self, name: &str) -> Result<bool, MpvError> {
+        let name = normalized_audio_device_name(name);
+        if name == AUDIO_DEVICE_AUTO {
+            return Ok(false);
+        }
+
+        if self
+            .audio_devices()?
+            .iter()
+            .any(|device| device.name == name)
+        {
+            self.set_audio_device(name)?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     pub fn subtitle_delay(&self) -> Result<f64, MpvError> {
@@ -1182,6 +1252,31 @@ fn track_id_or_off(id: Option<i64>) -> String {
         .unwrap_or_else(|| "no".to_owned())
 }
 
+fn normalized_audio_device_name(name: &str) -> &str {
+    let name = name.trim();
+    if name.is_empty() {
+        AUDIO_DEVICE_AUTO
+    } else {
+        name
+    }
+}
+
+fn audio_device_selected(name: &str, current: &str) -> bool {
+    name == normalized_audio_device_name(current)
+}
+
+fn audio_device_label(name: &str, description: Option<String>) -> String {
+    let description = description
+        .as_deref()
+        .map(str::trim)
+        .filter(|description| !description.is_empty());
+    if name == AUDIO_DEVICE_AUTO {
+        description.unwrap_or("Automatic").to_owned()
+    } else {
+        description.unwrap_or(name).to_owned()
+    }
+}
+
 #[cfg(unix)]
 fn path_to_cstring(path: &Path) -> Result<CString, NulError> {
     CString::new(path.as_os_str().as_bytes())
@@ -1228,6 +1323,30 @@ mod tests {
     fn audio_normalization_filter_is_labelled() {
         assert_eq!(AUDIO_NORMALIZATION_FILTER_LABEL, "@okpnorm");
         assert_eq!(AUDIO_NORMALIZATION_FILTER, "@okpnorm:dynaudnorm");
+    }
+
+    #[test]
+    fn normalizes_audio_device_names() {
+        assert_eq!(normalized_audio_device_name(""), "auto");
+        assert_eq!(normalized_audio_device_name("  "), "auto");
+        assert_eq!(
+            normalized_audio_device_name("pulse/alsa_output"),
+            "pulse/alsa_output"
+        );
+    }
+
+    #[test]
+    fn formats_audio_device_labels() {
+        assert_eq!(audio_device_label("auto", None), "Automatic");
+        assert_eq!(
+            audio_device_label("auto", Some("System default".to_owned())),
+            "System default"
+        );
+        assert_eq!(
+            audio_device_label("pulse/device", Some(" Speakers ".to_owned())),
+            "Speakers"
+        );
+        assert_eq!(audio_device_label("pulse/device", None), "pulse/device");
     }
 
     #[test]

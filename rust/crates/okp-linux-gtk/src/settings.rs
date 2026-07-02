@@ -15,6 +15,7 @@ const REPEAT_OFF: &str = "off";
 const REPEAT_ONE: &str = "one";
 const REPEAT_ALL: &str = "all";
 const DEFAULT_AUDIO_NORMALIZATION: bool = false;
+const DEFAULT_AUDIO_DEVICE: &str = "auto";
 const DEFAULT_AUTO_CHECK_UPDATES: bool = true;
 const HWDEC_OFF: &str = "no";
 const HWDEC_AUTO_SAFE: &str = "auto-safe";
@@ -93,6 +94,10 @@ impl SettingsStore {
             .audio
             .normalization
             .unwrap_or(DEFAULT_AUDIO_NORMALIZATION)
+    }
+
+    pub fn audio_device(&self) -> &str {
+        normalized_audio_device(self.data.audio.device.as_deref())
     }
 
     pub fn path(&self) -> &Path {
@@ -187,6 +192,14 @@ impl SettingsStore {
     pub fn set_audio_normalization_enabled(&mut self, enabled: bool) {
         if self.audio_normalization_enabled() != enabled {
             self.data.audio.normalization = Some(enabled);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_audio_device(&mut self, device: &str) {
+        let device = normalized_audio_device(Some(device));
+        if self.audio_device() != device {
+            self.data.audio.device = audio_device_setting(device);
             self.dirty = true;
         }
     }
@@ -291,6 +304,8 @@ struct PlaybackSettings {
 struct AudioSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     normalization: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -343,6 +358,21 @@ fn normalized_video_adjustment(value: Option<f64>) -> Option<f64> {
     value
         .filter(|value| value.is_finite())
         .map(|value| value.clamp(MIN_VIDEO_ADJUSTMENT, MAX_VIDEO_ADJUSTMENT))
+}
+
+fn normalized_audio_device(device: Option<&str>) -> &str {
+    device
+        .map(str::trim)
+        .filter(|device| !device.is_empty())
+        .unwrap_or(DEFAULT_AUDIO_DEVICE)
+}
+
+fn audio_device_setting(device: &str) -> Option<String> {
+    if device == DEFAULT_AUDIO_DEVICE {
+        None
+    } else {
+        Some(device.to_owned())
+    }
 }
 
 fn video_adjustment_setting(value: f64) -> Option<f64> {
@@ -470,6 +500,40 @@ mod tests {
         settings.set_audio_normalization_enabled(true);
 
         assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn audio_device_defaults_to_auto() {
+        assert_eq!(store().audio_device(), "auto");
+    }
+
+    #[test]
+    fn audio_device_setting_trims_and_marks_dirty_once() {
+        let mut settings = store();
+
+        settings.set_audio_device(" pulse/device ");
+
+        assert_eq!(settings.audio_device(), "pulse/device");
+        assert_eq!(settings.data.audio.device.as_deref(), Some("pulse/device"));
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_audio_device("pulse/device");
+
+        assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn audio_device_stores_auto_as_none() {
+        let mut settings = store();
+
+        settings.set_audio_device("pulse/device");
+        settings.dirty = false;
+        settings.set_audio_device("auto");
+
+        assert_eq!(settings.audio_device(), "auto");
+        assert_eq!(settings.data.audio.device, None);
+        assert!(settings.dirty);
     }
 
     #[test]
