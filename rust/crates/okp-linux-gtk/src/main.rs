@@ -2104,7 +2104,7 @@ fn update_up_next_panel(
     match mode {
         SidePanelMode::Chapters => render_chapters_panel(controls, &snapshot, &mut actions),
         SidePanelMode::UpNext => {
-            render_playlist_panel(controls, &snapshot, current_index, &mut actions)
+            render_playlist_panel(controls, state, &snapshot, current_index, &mut actions)
         }
     }
 
@@ -2144,6 +2144,7 @@ fn render_chapters_panel(
 
 fn render_playlist_panel(
     controls: &Controls,
+    state: &Rc<RefCell<PlayerState>>,
     snapshot: &SidePanelSnapshot,
     current_index: Option<usize>,
     actions: &mut Vec<SidePanelAction>,
@@ -2163,9 +2164,13 @@ fn render_playlist_panel(
     actions.push(SidePanelAction::None);
 
     for (index, path) in snapshot.playlist.iter().enumerate() {
-        controls
-            .up_next_list
-            .append(&playlist_row(path, index, current_index));
+        controls.up_next_list.append(&playlist_row(
+            path,
+            index,
+            current_index,
+            snapshot.playlist.len(),
+            Rc::clone(state),
+        ));
         actions.push(SidePanelAction::Playlist(index));
     }
 }
@@ -2312,7 +2317,13 @@ fn clear_list_box(list: &gtk::ListBox) {
     }
 }
 
-fn playlist_row(path: &Path, index: usize, current_index: Option<usize>) -> gtk::ListBoxRow {
+fn playlist_row(
+    path: &Path,
+    index: usize,
+    current_index: Option<usize>,
+    playlist_len: usize,
+    state: Rc<RefCell<PlayerState>>,
+) -> gtk::ListBoxRow {
     let is_current = current_index == Some(index);
     let is_next = current_index.is_some_and(|current| index == current + 1);
     let row = gtk::ListBoxRow::new();
@@ -2344,10 +2355,94 @@ fn playlist_row(path: &Path, index: usize, current_index: Option<usize>) -> gtk:
     title.set_hexpand(true);
     title.set_ellipsize(pango::EllipsizeMode::End);
 
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+    actions.add_css_class("okp-up-next-actions");
+
+    let move_up = playlist_action_button("go-up-symbolic", "Move up", index > 0);
+    let move_up_state = Rc::clone(&state);
+    move_up.connect_clicked(move |_| {
+        move_playlist_item(&move_up_state, index, index.saturating_sub(1));
+    });
+    actions.append(&move_up);
+
+    let play_next_sensitive =
+        current_index.is_some_and(|current| index != current && index != current + 1);
+    let play_next = playlist_action_button(
+        "media-skip-forward-symbolic",
+        "Play next",
+        play_next_sensitive,
+    );
+    let play_next_state = Rc::clone(&state);
+    play_next.connect_clicked(move |_| {
+        if let Some(current) = current_index {
+            let target = if index < current {
+                current
+            } else {
+                current + 1
+            };
+            move_playlist_item(&play_next_state, index, target);
+        }
+    });
+    actions.append(&play_next);
+
+    let move_down =
+        playlist_action_button("go-down-symbolic", "Move down", index + 1 < playlist_len);
+    let move_down_state = Rc::clone(&state);
+    move_down.connect_clicked(move |_| {
+        move_playlist_item(&move_down_state, index, index + 1);
+    });
+    actions.append(&move_down);
+
+    let remove = playlist_action_button(
+        "list-remove-symbolic",
+        "Remove from queue",
+        !is_current && playlist_len > 1,
+    );
+    let remove_state = Rc::clone(&state);
+    remove.connect_clicked(move |_| {
+        remove_playlist_item(&remove_state, index);
+    });
+    actions.append(&remove);
+
+    connect_playlist_row_drag_reorder(&row, index, state);
+
     row_box.append(&marker);
     row_box.append(&title);
+    row_box.append(&actions);
     row.set_child(Some(&row_box));
     row
+}
+
+fn playlist_action_button(icon_name: &str, tooltip: &str, sensitive: bool) -> gtk::Button {
+    let button = gtk::Button::from_icon_name(icon_name);
+    button.add_css_class("okp-up-next-action-button");
+    button.set_has_frame(false);
+    button.set_tooltip_text(Some(tooltip));
+    button.set_sensitive(sensitive);
+    button
+}
+
+fn connect_playlist_row_drag_reorder(
+    row: &gtk::ListBoxRow,
+    index: usize,
+    state: Rc<RefCell<PlayerState>>,
+) {
+    let drag = gtk::DragSource::builder()
+        .actions(gdk::DragAction::MOVE)
+        .build();
+    drag.connect_prepare(move |_, _, _| {
+        Some(gdk::ContentProvider::for_value(&(index as u32).to_value()))
+    });
+    row.add_controller(drag);
+
+    let drop = gtk::DropTarget::new(u32::static_type(), gdk::DragAction::MOVE);
+    drop.connect_drop(move |_, value, _, _| {
+        let Ok(source_index) = value.get::<u32>() else {
+            return false;
+        };
+        move_playlist_item(&state, source_index as usize, index)
+    });
+    row.add_controller(drop);
 }
 
 fn populate_subtitle_popover(
@@ -7099,15 +7194,15 @@ fn navigate_playlist(state: &Rc<RefCell<PlayerState>>, direction: isize) -> bool
     let Some(path) = playlist_target_path(state, direction, true) else {
         return false;
     };
+    let playlist = state.borrow().playlist.clone();
 
-    load_media_path_internal(state, path, true);
-    true
+    load_media_path_with_playlist(state, path, playlist, true)
 }
 
 fn jump_playlist_index(state: &Rc<RefCell<PlayerState>>, index: usize) -> bool {
-    let path = {
+    let (path, playlist) = {
         let state = state.borrow();
-        state.playlist.get(index).cloned()
+        (state.playlist.get(index).cloned(), state.playlist.clone())
     };
 
     let Some(path) = path else {
@@ -7125,8 +7220,7 @@ fn jump_playlist_index(state: &Rc<RefCell<PlayerState>>, index: usize) -> bool {
         }
     }
 
-    load_media_path_internal(state, path, true);
-    true
+    load_media_path_with_playlist(state, path, playlist, true)
 }
 
 fn advance_playlist_on_eof(state: &Rc<RefCell<PlayerState>>) -> bool {
@@ -7143,9 +7237,54 @@ fn advance_playlist_on_eof(state: &Rc<RefCell<PlayerState>>) -> bool {
     let Some(next_file) = playlist_target_path(state, 1, wrap) else {
         return false;
     };
+    let playlist = state.borrow().playlist.clone();
 
-    load_media_path_internal(state, next_file, false);
+    load_media_path_with_playlist(state, next_file, playlist, false)
+}
+
+fn move_playlist_item(state: &Rc<RefCell<PlayerState>>, from: usize, to: usize) -> bool {
+    let mut state = state.borrow_mut();
+    let Some(playlist) = reorder_playlist(state.playlist.clone(), from, to) else {
+        return false;
+    };
+    state.playlist = playlist;
+    state.modes.reset_shuffle_order();
     true
+}
+
+fn remove_playlist_item(state: &Rc<RefCell<PlayerState>>, index: usize) -> bool {
+    let mut state = state.borrow_mut();
+    if state
+        .playlist
+        .get(index)
+        .is_some_and(|path| state.current_file.as_ref() == Some(path))
+    {
+        return false;
+    }
+    let Some(playlist) = remove_playlist_index(state.playlist.clone(), index) else {
+        return false;
+    };
+    state.playlist = playlist;
+    state.modes.reset_shuffle_order();
+    true
+}
+
+fn reorder_playlist(mut playlist: Vec<PathBuf>, from: usize, to: usize) -> Option<Vec<PathBuf>> {
+    if from >= playlist.len() || from == to {
+        return None;
+    }
+    let item = playlist.remove(from);
+    let target = to.min(playlist.len());
+    playlist.insert(target, item);
+    Some(playlist)
+}
+
+fn remove_playlist_index(mut playlist: Vec<PathBuf>, index: usize) -> Option<Vec<PathBuf>> {
+    if playlist.len() <= 1 || index >= playlist.len() {
+        return None;
+    }
+    playlist.remove(index);
+    Some(playlist)
 }
 
 fn restart_current_file(state: &Rc<RefCell<PlayerState>>) -> bool {
@@ -8059,6 +8198,30 @@ fn install_css() {
         .okp-up-next-file {
             color: inherit;
             font-size: 13px;
+        }
+
+        .okp-up-next-actions {
+            min-width: 104px;
+        }
+
+        button.okp-up-next-action-button {
+            min-width: 24px;
+            min-height: 24px;
+            padding: 0;
+            border: none;
+            border-radius: 5px;
+            background: transparent;
+            box-shadow: none;
+            color: rgba(255, 255, 255, 0.58);
+        }
+
+        button.okp-up-next-action-button:hover {
+            background: rgba(255, 255, 255, 0.10);
+            color: rgba(255, 255, 255, 0.90);
+        }
+
+        button.okp-up-next-action-button:disabled {
+            color: rgba(255, 255, 255, 0.18);
         }
 
         .okp-up-next-panel scrolledwindow {
@@ -8993,6 +9156,63 @@ mod tests {
                 PathBuf::from("/media/ep1.mp4")
             ]
         );
+    }
+
+    #[test]
+    fn reorder_playlist_moves_item_to_target_slot_after_removal() {
+        let playlist = vec![
+            PathBuf::from("/media/a.mkv"),
+            PathBuf::from("/media/b.mkv"),
+            PathBuf::from("/media/c.mkv"),
+            PathBuf::from("/media/d.mkv"),
+        ];
+
+        let reordered = reorder_playlist(playlist.clone(), 0, 2).expect("move should work");
+        assert_eq!(
+            reordered,
+            vec![
+                PathBuf::from("/media/b.mkv"),
+                PathBuf::from("/media/c.mkv"),
+                PathBuf::from("/media/a.mkv"),
+                PathBuf::from("/media/d.mkv"),
+            ]
+        );
+
+        let reordered = reorder_playlist(playlist, 3, 1).expect("move should work");
+        assert_eq!(
+            reordered,
+            vec![
+                PathBuf::from("/media/a.mkv"),
+                PathBuf::from("/media/d.mkv"),
+                PathBuf::from("/media/b.mkv"),
+                PathBuf::from("/media/c.mkv"),
+            ]
+        );
+    }
+
+    #[test]
+    fn reorder_playlist_rejects_noop_or_out_of_range_moves() {
+        let playlist = vec![PathBuf::from("/media/a.mkv"), PathBuf::from("/media/b.mkv")];
+
+        assert!(reorder_playlist(playlist.clone(), 0, 0).is_none());
+        assert!(reorder_playlist(playlist, 3, 0).is_none());
+    }
+
+    #[test]
+    fn remove_playlist_index_keeps_at_least_one_item() {
+        let playlist = vec![
+            PathBuf::from("/media/a.mkv"),
+            PathBuf::from("/media/b.mkv"),
+            PathBuf::from("/media/c.mkv"),
+        ];
+
+        let without_middle = remove_playlist_index(playlist, 1).expect("remove should work");
+        assert_eq!(
+            without_middle,
+            vec![PathBuf::from("/media/a.mkv"), PathBuf::from("/media/c.mkv")]
+        );
+
+        assert!(remove_playlist_index(vec![PathBuf::from("/media/a.mkv")], 0).is_none());
     }
 
     fn github_asset(name: &str) -> GitHubAsset {
