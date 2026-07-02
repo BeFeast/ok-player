@@ -238,6 +238,18 @@ struct LaunchArgs {
     subtitles: Vec<PathBuf>,
 }
 
+impl LaunchArgs {
+    fn has_payload(&self) -> bool {
+        !self.items.is_empty() || !self.playlists.is_empty() || !self.subtitles.is_empty()
+    }
+}
+
+#[derive(Clone)]
+struct AppRuntime {
+    window: gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+}
+
 struct Controls {
     open_button: gtk::Button,
     subtitle_button: gtk::MenuButton,
@@ -716,30 +728,44 @@ enum SidePanelMode {
 fn main() -> glib::ExitCode {
     VelopackApp::build().set_auto_apply_on_startup(false).run();
 
-    let (argv0, launch_args) = parse_launch_args();
     let app = gtk::Application::builder()
         .application_id("com.befeast.okplayer")
+        .flags(gtk::gio::ApplicationFlags::HANDLES_COMMAND_LINE)
         .build();
 
-    app.connect_activate(move |app| build_window(app, launch_args.clone()));
-    app.run_with_args(&[argv0])
+    let runtime = Rc::new(RefCell::new(None::<AppRuntime>));
+    app.connect_command_line(move |app, command_line| {
+        let mut args = command_line.arguments().into_iter();
+        let _argv0 = args.next();
+        let cwd = command_line.cwd();
+        let launch_args = parse_launch_args_from_cwd(args, cwd.as_deref());
+
+        if let Some(runtime) = runtime.borrow().as_ref() {
+            open_runtime_launch_args(runtime, &launch_args);
+        } else {
+            runtime.replace(Some(build_window(app, launch_args)));
+        }
+
+        glib::ExitCode::SUCCESS
+    });
+    app.run()
 }
 
-fn parse_launch_args() -> (String, LaunchArgs) {
-    let mut args = env::args_os();
-    let argv0 = args
-        .next()
-        .and_then(|arg| arg.into_string().ok())
-        .unwrap_or_else(|| "ok-player".to_owned());
-    (argv0, parse_launch_args_from(args))
+#[cfg(test)]
+fn parse_launch_args_from(args: impl Iterator<Item = std::ffi::OsString>) -> LaunchArgs {
+    let cwd = env::current_dir().ok();
+    parse_launch_args_from_cwd(args, cwd.as_deref())
 }
 
-fn parse_launch_args_from(mut args: impl Iterator<Item = std::ffi::OsString>) -> LaunchArgs {
+fn parse_launch_args_from_cwd(
+    mut args: impl Iterator<Item = std::ffi::OsString>,
+    cwd: Option<&Path>,
+) -> LaunchArgs {
     let mut launch = LaunchArgs::default();
     while let Some(arg) = args.next() {
         if arg == "--sub" {
-            if let Some(path) = args.next() {
-                launch.subtitles.push(PathBuf::from(path));
+            if let Some(arg) = args.next() {
+                add_launch_subtitle_arg(&mut launch, arg, cwd);
             }
             continue;
         }
@@ -756,7 +782,7 @@ fn parse_launch_args_from(mut args: impl Iterator<Item = std::ffi::OsString>) ->
             }
         }
 
-        add_launch_path_arg(&mut launch, PathBuf::from(arg));
+        add_launch_path_arg(&mut launch, launch_path_arg(arg, cwd));
     }
 
     launch
@@ -767,11 +793,30 @@ fn file_uri_path(text: &str) -> Option<PathBuf> {
     gtk::gio::File::for_uri(text).path()
 }
 
+fn add_launch_subtitle_arg(launch: &mut LaunchArgs, arg: std::ffi::OsString, cwd: Option<&Path>) {
+    if let Some(text) = arg.to_str()
+        && let Some(path) = file_uri_path(text)
+    {
+        add_unique_launch_subtitle(launch, path);
+        return;
+    }
+
+    add_unique_launch_subtitle(launch, launch_path_arg(arg, cwd));
+}
+
+fn launch_path_arg(arg: std::ffi::OsString, cwd: Option<&Path>) -> PathBuf {
+    let path = PathBuf::from(arg);
+    if path.is_relative()
+        && let Some(cwd) = cwd
+    {
+        return cwd.join(path);
+    }
+    path
+}
+
 fn add_launch_path_arg(launch: &mut LaunchArgs, path: PathBuf) {
     if is_subtitle_path(&path) {
-        if !launch.subtitles.iter().any(|existing| existing == &path) {
-            launch.subtitles.push(path);
-        }
+        add_unique_launch_subtitle(launch, path);
     } else if is_playlist_path(&path) {
         if !launch.playlists.iter().any(|existing| existing == &path) {
             launch.playlists.push(path);
@@ -781,13 +826,19 @@ fn add_launch_path_arg(launch: &mut LaunchArgs, path: PathBuf) {
     }
 }
 
+fn add_unique_launch_subtitle(launch: &mut LaunchArgs, path: PathBuf) {
+    if !launch.subtitles.iter().any(|existing| existing == &path) {
+        launch.subtitles.push(path);
+    }
+}
+
 fn push_unique_playlist_item(items: &mut Vec<PlaylistItem>, item: PlaylistItem) {
     if !items.iter().any(|existing| existing == &item) {
         items.push(item);
     }
 }
 
-fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
+fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> AppRuntime {
     install_css();
 
     let identity = AppIdentity::linux();
@@ -882,6 +933,15 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
     }
     if auto_check_updates {
         check_updates_on_startup(Rc::clone(&status_toast));
+    }
+
+    AppRuntime { window, state }
+}
+
+fn open_runtime_launch_args(runtime: &AppRuntime, launch_args: &LaunchArgs) {
+    runtime.window.present();
+    if launch_args.has_payload() {
+        apply_launch_args(&runtime.state, launch_args);
     }
 }
 
@@ -1982,11 +2042,7 @@ fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, launch
         schedule_audio_device_restore(&realize_state);
         try_pending_audio_device_restore(&realize_state);
 
-        load_launch_args(&realize_state, &launch_args);
-        realize_state
-            .borrow_mut()
-            .pending_subtitles
-            .extend(launch_args.subtitles.clone());
+        apply_launch_args(&realize_state, &launch_args);
     });
 
     let resize_state = Rc::clone(&state);
@@ -2035,6 +2091,21 @@ fn connect_mpv(video_area: &gtk::GLArea, state: Rc<RefCell<PlayerState>>, launch
     });
 }
 
+fn apply_launch_args(state: &Rc<RefCell<PlayerState>>, launch_args: &LaunchArgs) -> bool {
+    if launch_args.has_payload() {
+        eprintln!(
+            "Launch request: {} item(s), {} playlist(s), {} subtitle(s)",
+            launch_args.items.len(),
+            launch_args.playlists.len(),
+            launch_args.subtitles.len()
+        );
+    }
+
+    let loaded = load_launch_args(state, launch_args);
+    let subtitles_loaded = apply_launch_subtitles(state, &launch_args.subtitles);
+    loaded || subtitles_loaded
+}
+
 fn load_launch_args(state: &Rc<RefCell<PlayerState>>, launch_args: &LaunchArgs) -> bool {
     match launch_args.items.as_slice() {
         [PlaylistItem::Local(path)] => {
@@ -2057,6 +2128,25 @@ fn load_launch_args(state: &Rc<RefCell<PlayerState>>, launch_args: &LaunchArgs) 
             load_playlist_item_with_playlist(state, first_item, playlist, true)
         }
     }
+}
+
+fn apply_launch_subtitles(state: &Rc<RefCell<PlayerState>>, subtitles: &[PathBuf]) -> bool {
+    let mut applied = false;
+    for path in subtitles {
+        if load_subtitle_path(state, path.clone()) {
+            applied = true;
+        } else if !has_loaded_media(state) {
+            let mut state = state.borrow_mut();
+            if !state
+                .pending_subtitles
+                .iter()
+                .any(|existing| existing == path)
+            {
+                state.pending_subtitles.push(path.clone());
+            }
+        }
+    }
+    applied
 }
 
 fn connect_state_poll(
@@ -11575,6 +11665,42 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
             launch.subtitles,
             vec![PathBuf::from("/tmp/OK Player/subs.vtt")]
         );
+    }
+
+    #[test]
+    fn launch_args_resolve_relative_paths_against_command_line_cwd() {
+        let launch = parse_launch_args_from_cwd(
+            ["movie.mkv", "--sub", "subs.srt"]
+                .into_iter()
+                .map(Into::into),
+            Some(Path::new("/tmp/OK Player")),
+        );
+
+        assert_eq!(launch.items, vec![local_item("/tmp/OK Player/movie.mkv")]);
+        assert_eq!(
+            launch.subtitles,
+            vec![PathBuf::from("/tmp/OK Player/subs.srt")]
+        );
+    }
+
+    #[test]
+    fn load_launch_args_uses_explicit_playlist_for_multiple_items() {
+        let state = Rc::new(RefCell::new(PlayerState::default()));
+        let launch = LaunchArgs {
+            items: vec![
+                local_item("/media/a.mkv"),
+                url_item("https://example.test/b.mp4"),
+            ],
+            playlists: Vec::new(),
+            subtitles: Vec::new(),
+        };
+
+        assert!(load_launch_args(&state, &launch));
+
+        let state = state.borrow();
+        assert_eq!(state.current_file, Some(PathBuf::from("/media/a.mkv")));
+        assert_eq!(state.current_url, None);
+        assert_eq!(state.playlist, launch.items);
     }
 
     #[test]
