@@ -8,6 +8,12 @@ use serde::{Deserialize, Serialize};
 const SETTINGS_VERSION: u32 = 1;
 const DEFAULT_VOLUME: f64 = 100.0;
 const MAX_VOLUME: f64 = 130.0;
+const DEFAULT_RESUME: bool = true;
+const DEFAULT_AUTO_ADVANCE: bool = true;
+const DEFAULT_SHUFFLE: bool = false;
+const REPEAT_OFF: &str = "off";
+const REPEAT_ONE: &str = "one";
+const REPEAT_ALL: &str = "all";
 const DEFAULT_AUTO_CHECK_UPDATES: bool = true;
 const HWDEC_OFF: &str = "no";
 const HWDEC_AUTO_SAFE: &str = "auto-safe";
@@ -50,6 +56,25 @@ impl SettingsStore {
         normalized_volume(self.data.playback.volume).unwrap_or(DEFAULT_VOLUME)
     }
 
+    pub fn resume_enabled(&self) -> bool {
+        self.data.playback.resume.unwrap_or(DEFAULT_RESUME)
+    }
+
+    pub fn auto_advance_enabled(&self) -> bool {
+        self.data
+            .playback
+            .auto_advance
+            .unwrap_or(DEFAULT_AUTO_ADVANCE)
+    }
+
+    pub fn shuffle_enabled(&self) -> bool {
+        self.data.playback.shuffle.unwrap_or(DEFAULT_SHUFFLE)
+    }
+
+    pub fn repeat_mode(&self) -> &'static str {
+        normalized_repeat(self.data.playback.repeat.as_deref())
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -81,6 +106,35 @@ impl SettingsStore {
 
         if !same_volume(self.data.playback.volume, volume) {
             self.data.playback.volume = Some(volume);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_resume_enabled(&mut self, enabled: bool) {
+        if self.resume_enabled() != enabled {
+            self.data.playback.resume = Some(enabled);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_auto_advance_enabled(&mut self, enabled: bool) {
+        if self.auto_advance_enabled() != enabled {
+            self.data.playback.auto_advance = Some(enabled);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_shuffle_enabled(&mut self, enabled: bool) {
+        if self.shuffle_enabled() != enabled {
+            self.data.playback.shuffle = Some(enabled);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_repeat_mode(&mut self, repeat: &str) {
+        let repeat = normalized_repeat(Some(repeat));
+        if self.repeat_mode() != repeat {
+            self.data.playback.repeat = Some(repeat.to_owned());
             self.dirty = true;
         }
     }
@@ -133,6 +187,14 @@ struct SettingsFile {
 struct PlaybackSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     volume: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resume: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auto_advance: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    repeat: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    shuffle: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -180,6 +242,14 @@ fn normalized_hwdec(hwdec: Option<&str>) -> &'static str {
     }
 }
 
+fn normalized_repeat(repeat: Option<&str>) -> &'static str {
+    match repeat {
+        Some(REPEAT_ONE) => REPEAT_ONE,
+        Some(REPEAT_ALL) => REPEAT_ALL,
+        _ => REPEAT_OFF,
+    }
+}
+
 fn same_volume(current: Option<f64>, updated: f64) -> bool {
     current
         .and_then(|volume| normalized_volume(Some(volume)))
@@ -210,6 +280,16 @@ mod tests {
     #[test]
     fn volume_defaults_to_one_hundred() {
         assert_eq!(store().volume(), 100.0);
+    }
+
+    #[test]
+    fn playback_defaults_match_player_modes() {
+        let settings = store();
+
+        assert!(settings.resume_enabled());
+        assert!(settings.auto_advance_enabled());
+        assert!(!settings.shuffle_enabled());
+        assert_eq!(settings.repeat_mode(), "off");
     }
 
     #[test]
@@ -261,6 +341,38 @@ mod tests {
         settings.set_auto_check_updates(false);
 
         assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn playback_toggles_mark_dirty_once() {
+        let mut settings = store();
+
+        settings.set_resume_enabled(false);
+        settings.set_auto_advance_enabled(false);
+        settings.set_shuffle_enabled(true);
+        settings.set_repeat_mode("all");
+
+        assert!(!settings.resume_enabled());
+        assert!(!settings.auto_advance_enabled());
+        assert!(settings.shuffle_enabled());
+        assert_eq!(settings.repeat_mode(), "all");
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_resume_enabled(false);
+        settings.set_auto_advance_enabled(false);
+        settings.set_shuffle_enabled(true);
+        settings.set_repeat_mode("all");
+
+        assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn unknown_repeat_mode_falls_back_to_off() {
+        let mut settings = store();
+        settings.data.playback.repeat = Some("forever".to_owned());
+
+        assert_eq!(settings.repeat_mode(), "off");
     }
 
     #[test]

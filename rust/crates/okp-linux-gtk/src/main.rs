@@ -78,6 +78,22 @@ impl RepeatMode {
             Self::All => "Repeat All",
         }
     }
+
+    fn settings_value(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::One => "one",
+            Self::All => "all",
+        }
+    }
+
+    fn from_settings_value(value: &str) -> Self {
+        match value {
+            "one" => Self::One,
+            "all" => Self::All,
+            _ => Self::Off,
+        }
+    }
 }
 
 struct PlayModes {
@@ -130,6 +146,13 @@ impl PlayModes {
             self.shuffle_cursor = Some(position);
         }
     }
+}
+
+fn apply_playback_settings_defaults(state: &Rc<RefCell<PlayerState>>) {
+    let mut state = state.borrow_mut();
+    state.modes.repeat_mode = RepeatMode::from_settings_value(state.settings.repeat_mode());
+    state.modes.auto_advance_enabled = state.settings.auto_advance_enabled();
+    state.modes.shuffle_enabled = state.settings.shuffle_enabled();
 }
 
 #[derive(Clone, Default)]
@@ -586,6 +609,7 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) {
 
     let identity = AppIdentity::linux();
     let state = Rc::new(RefCell::new(PlayerState::default()));
+    apply_playback_settings_defaults(&state);
     let auto_check_updates = state.borrow().settings.auto_check_updates();
     let updating_seek = Rc::new(Cell::new(false));
     let updating_volume = Rc::new(Cell::new(false));
@@ -2644,9 +2668,10 @@ fn command_popover_content(
 
     let repeat_button = track_button(repeat_mode.label(), repeat_mode != RepeatMode::Off);
     let repeat_state = Rc::clone(&state);
+    let repeat_toast = Rc::clone(&status_toast);
     let repeat_popover = popover.clone();
     repeat_button.connect_clicked(move |_| {
-        cycle_repeat_mode(&repeat_state);
+        cycle_repeat_mode(&repeat_state, &repeat_toast);
         repeat_popover.popdown();
     });
     content.append(&repeat_button);
@@ -2660,9 +2685,10 @@ fn command_popover_content(
         shuffle_enabled,
     );
     let shuffle_state = Rc::clone(&state);
+    let shuffle_toast = Rc::clone(&status_toast);
     let shuffle_popover = popover.clone();
     shuffle_button.connect_clicked(move |_| {
-        toggle_shuffle(&shuffle_state);
+        toggle_shuffle(&shuffle_state, &shuffle_toast);
         shuffle_popover.popdown();
     });
     content.append(&shuffle_button);
@@ -2676,9 +2702,10 @@ fn command_popover_content(
         auto_advance_enabled,
     );
     let auto_advance_state = Rc::clone(&state);
+    let auto_advance_toast = Rc::clone(&status_toast);
     let auto_advance_popover = popover.clone();
     auto_advance_button.connect_clicked(move |_| {
-        toggle_auto_advance(&auto_advance_state);
+        toggle_auto_advance(&auto_advance_state, &auto_advance_toast);
         auto_advance_popover.popdown();
     });
     content.append(&auto_advance_button);
@@ -3347,6 +3374,22 @@ fn open_settings_window(
     let playback_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
     playback_page.add_css_class("okp-settings-page");
     let playback = settings_section("Playback");
+    playback.append(&settings_resume_row(
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    ));
+    playback.append(&settings_auto_advance_row(
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    ));
+    playback.append(&settings_repeat_row(
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    ));
+    playback.append(&settings_shuffle_row(
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    ));
     playback.append(&settings_volume_row(Rc::clone(&state)));
     playback_page.append(&playback);
     stack.add_named(&settings_scroller(&playback_page), Some("playback"));
@@ -4234,20 +4277,31 @@ fn about_toggle_button(active: bool) -> gtk::Button {
     let button = gtk::Button::new();
     button.add_css_class("okp-about-toggle");
     button.set_has_frame(false);
-    if active {
-        button.add_css_class("is-active");
-    }
+    button.set_size_request(39, 22);
+    button.set_halign(gtk::Align::End);
+    button.set_valign(gtk::Align::Center);
 
     let knob = gtk::Box::new(gtk::Orientation::Vertical, 0);
     knob.add_css_class("okp-about-toggle-knob");
-    knob.set_halign(if active {
-        gtk::Align::End
-    } else {
-        gtk::Align::Start
-    });
     knob.set_valign(gtk::Align::Center);
     button.set_child(Some(&knob));
+    set_about_toggle_active(&button, active);
     button
+}
+
+fn set_about_toggle_active(button: &gtk::Button, active: bool) {
+    if active {
+        button.add_css_class("is-active");
+    } else {
+        button.remove_css_class("is-active");
+    }
+    if let Some(knob) = button.first_child() {
+        knob.set_halign(if active {
+            gtk::Align::End
+        } else {
+            gtk::Align::Start
+        });
+    }
 }
 
 fn about_card<T: IsA<gtk::Widget>>(title: &str, content: &T) -> gtk::Box {
@@ -4510,15 +4564,17 @@ fn settings_updates_section(
 
     let auto_state_label = gtk::Label::new(Some(if auto_check_enabled { "On" } else { "Off" }));
     auto_state_label.add_css_class("okp-settings-state-pill");
+    auto_state_label.set_valign(gtk::Align::Center);
     auto_row.append(&auto_state_label);
 
-    let auto_switch = gtk::Switch::new();
-    auto_switch.set_active(auto_check_enabled);
+    let auto_switch = about_toggle_button(auto_check_enabled);
     let auto_state = Rc::clone(&state);
     let auto_toast = Rc::clone(&status_toast);
     let auto_status = status.clone();
     let auto_state_text = auto_state_label.clone();
-    auto_switch.connect_state_set(move |_, enabled| {
+    auto_switch.connect_clicked(move |button| {
+        let enabled = !button.has_css_class("is-active");
+        set_about_toggle_active(button, enabled);
         {
             let mut state = auto_state.borrow_mut();
             state.settings.set_auto_check_updates(enabled);
@@ -4534,7 +4590,6 @@ fn settings_updates_section(
         } else {
             "Automatic update checks off"
         });
-        glib::Propagation::Proceed
     });
     auto_row.append(&auto_switch);
     row.append(&auto_row);
@@ -5111,6 +5166,187 @@ fn settings_audio_page(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusT
     page.append(&settings_audio_track_section(state, status_toast));
 
     page
+}
+
+fn settings_resume_row(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusToast>) -> gtk::Box {
+    let active = state.borrow().settings.resume_enabled();
+    settings_playback_switch_row(
+        "Resume playback",
+        "Reopen files at the saved position, skipping the first 5% and final stretch.",
+        active,
+        state,
+        status_toast,
+        |state, enabled| state.settings.set_resume_enabled(enabled),
+        "Resume playback",
+    )
+}
+
+fn settings_auto_advance_row(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let active = state.borrow().modes.auto_advance_enabled;
+    settings_playback_switch_row(
+        "Auto-advance",
+        "Continue to the next item in the folder or playlist when a file ends.",
+        active,
+        state,
+        status_toast,
+        |state, enabled| {
+            state.modes.auto_advance_enabled = enabled;
+            state.settings.set_auto_advance_enabled(enabled);
+        },
+        "Auto-advance",
+    )
+}
+
+fn settings_shuffle_row(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let active = state.borrow().modes.shuffle_enabled;
+    settings_playback_switch_row(
+        "Shuffle default",
+        "Start folders and playlists in shuffled order, without immediate repeats.",
+        active,
+        state,
+        status_toast,
+        |state, enabled| {
+            state.modes.shuffle_enabled = enabled;
+            state.modes.reset_shuffle_order();
+            if enabled && let Some(current_index) = current_playlist_index(state) {
+                state
+                    .modes
+                    .ensure_shuffle_order(state.playlist.len(), current_index);
+            }
+            state.settings.set_shuffle_enabled(enabled);
+        },
+        "Shuffle",
+    )
+}
+
+fn settings_playback_switch_row<F>(
+    title: &str,
+    detail: &str,
+    active: bool,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+    apply: F,
+    toast_subject: &'static str,
+) -> gtk::Box
+where
+    F: Fn(&mut PlayerState, bool) + 'static,
+{
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row.add_css_class("okp-settings-switch-row");
+
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    text.set_hexpand(true);
+    let label = gtk::Label::new(Some(title));
+    label.add_css_class("okp-info-label");
+    label.set_xalign(0.0);
+    text.append(&label);
+    let detail = gtk::Label::new(Some(detail));
+    detail.add_css_class("okp-update-status");
+    detail.set_xalign(0.0);
+    detail.set_width_chars(1);
+    detail.set_max_width_chars(50);
+    detail.set_wrap(true);
+    text.append(&detail);
+    row.append(&text);
+
+    let state_label = gtk::Label::new(Some(if active { "On" } else { "Off" }));
+    state_label.add_css_class("okp-settings-state-pill");
+    state_label.set_valign(gtk::Align::Center);
+    row.append(&state_label);
+
+    let toggle = about_toggle_button(active);
+    let toggle_state = Rc::clone(&state);
+    let toggle_toast = Rc::clone(&status_toast);
+    let toggle_state_label = state_label.clone();
+    toggle.connect_clicked(move |button| {
+        let enabled = !button.has_css_class("is-active");
+        set_about_toggle_active(button, enabled);
+        {
+            let mut state = toggle_state.borrow_mut();
+            apply(&mut state, enabled);
+            save_settings_or_toast(&mut state, &toggle_toast);
+        }
+        toggle_state_label.set_text(if enabled { "On" } else { "Off" });
+        toggle_toast.show(&format!(
+            "{toast_subject} {}",
+            if enabled { "on" } else { "off" }
+        ));
+    });
+    row.append(&toggle);
+
+    row
+}
+
+fn settings_repeat_row(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusToast>) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row.add_css_class("okp-settings-switch-row");
+
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    text.set_hexpand(true);
+    let label = gtk::Label::new(Some("Repeat default"));
+    label.add_css_class("okp-info-label");
+    label.set_xalign(0.0);
+    text.append(&label);
+    let detail = gtk::Label::new(Some(
+        "Choose how folders and playlists repeat when they reach the end.",
+    ));
+    detail.add_css_class("okp-update-status");
+    detail.set_xalign(0.0);
+    detail.set_width_chars(1);
+    detail.set_max_width_chars(50);
+    detail.set_wrap(true);
+    text.append(&detail);
+    row.append(&text);
+
+    let current = state.borrow().modes.repeat_mode;
+    let state_label = gtk::Label::new(Some(match current {
+        RepeatMode::Off => "Off",
+        RepeatMode::One => "One",
+        RepeatMode::All => "All",
+    }));
+    state_label.add_css_class("okp-settings-state-pill");
+    state_label.set_valign(gtk::Align::Center);
+    row.append(&state_label);
+
+    let button = gtk::Button::with_label(current.label());
+    button.add_css_class("okp-settings-button");
+    button.set_valign(gtk::Align::Center);
+    let repeat_state = Rc::clone(&state);
+    let repeat_toast = Rc::clone(&status_toast);
+    let repeat_state_label = state_label.clone();
+    button.connect_clicked(move |button| {
+        let mode = {
+            let mut state = repeat_state.borrow_mut();
+            state.modes.repeat_mode = state.modes.repeat_mode.cycle();
+            let mode = state.modes.repeat_mode;
+            state.settings.set_repeat_mode(mode.settings_value());
+            save_settings_or_toast(&mut state, &repeat_toast);
+            mode
+        };
+        button.set_label(mode.label());
+        repeat_state_label.set_text(match mode {
+            RepeatMode::Off => "Off",
+            RepeatMode::One => "One",
+            RepeatMode::All => "All",
+        });
+        repeat_toast.show(mode.label());
+    });
+    row.append(&button);
+
+    row
+}
+
+fn save_settings_or_toast(state: &mut PlayerState, status_toast: &StatusToast) {
+    if let Err(error) = state.settings.save() {
+        eprintln!("Failed to save settings: {error}");
+        status_toast.show("Could not save settings");
+    }
 }
 
 struct SettingsSubtitleSnapshot {
@@ -6300,12 +6536,15 @@ fn toggle_fullscreen(window: &gtk::ApplicationWindow) {
     }
 }
 
-fn cycle_repeat_mode(state: &Rc<RefCell<PlayerState>>) {
+fn cycle_repeat_mode(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
     let mut state = state.borrow_mut();
     state.modes.repeat_mode = state.modes.repeat_mode.cycle();
+    let repeat = state.modes.repeat_mode.settings_value();
+    state.settings.set_repeat_mode(repeat);
+    save_settings_or_toast(&mut state, status_toast);
 }
 
-fn toggle_shuffle(state: &Rc<RefCell<PlayerState>>) {
+fn toggle_shuffle(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
     let mut state = state.borrow_mut();
     state.modes.shuffle_enabled = !state.modes.shuffle_enabled;
     state.modes.reset_shuffle_order();
@@ -6318,11 +6557,17 @@ fn toggle_shuffle(state: &Rc<RefCell<PlayerState>>) {
             .modes
             .ensure_shuffle_order(playlist_len, current_index);
     }
+    let enabled = state.modes.shuffle_enabled;
+    state.settings.set_shuffle_enabled(enabled);
+    save_settings_or_toast(&mut state, status_toast);
 }
 
-fn toggle_auto_advance(state: &Rc<RefCell<PlayerState>>) {
+fn toggle_auto_advance(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
     let mut state = state.borrow_mut();
     state.modes.auto_advance_enabled = !state.modes.auto_advance_enabled;
+    let enabled = state.modes.auto_advance_enabled;
+    state.settings.set_auto_advance_enabled(enabled);
+    save_settings_or_toast(&mut state, status_toast);
 }
 
 fn toggle_private_session(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
@@ -6445,7 +6690,7 @@ fn remember_loaded_media(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
     let resume_path = path.clone();
     let preferences_path = path.clone();
     let mut state = state.borrow_mut();
-    let resume = if state.private_session {
+    let resume = if state.private_session || !state.settings.resume_enabled() {
         None
     } else {
         state.history.resume_position(&path)
@@ -8023,7 +8268,7 @@ fn install_css() {
             background: #f8fafb;
         }
 
-        .okp-about-toggle {
+        button.okp-about-toggle {
             min-width: 39px;
             min-height: 22px;
             padding: 3px;
@@ -8033,7 +8278,7 @@ fn install_css() {
             box-shadow: none;
         }
 
-        .okp-about-toggle.is-active {
+        button.okp-about-toggle.is-active {
             background: #0067c0;
         }
 
