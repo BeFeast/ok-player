@@ -5,7 +5,3 @@ pub mod natural_compare;
 pub mod time_code;
 
 pub use app::AppIdentity;
-
-fn ci_clippy_probe(values: &Vec<String>) -> usize {
-    values.len()
-}
