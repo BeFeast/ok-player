@@ -266,6 +266,7 @@ struct AppRuntime {
 struct MprisController {
     snapshot: Arc<Mutex<MprisSnapshot>>,
     commands: mpsc::Sender<MprisCommand>,
+    signals: mpsc::Sender<MprisSignal>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -322,6 +323,11 @@ enum MprisCommand {
     SeekBy(i64),
     SetPosition(i64),
     OpenUri(String),
+}
+
+#[derive(Clone, Debug)]
+enum MprisSignal {
+    PropertiesInvalidated(Vec<&'static str>),
 }
 
 #[derive(Clone)]
@@ -573,6 +579,7 @@ struct StatePollContext {
     chrome: Rc<ChromeVisibility>,
     empty_surface: EmptySurface,
     mpris_snapshot: Arc<Mutex<MprisSnapshot>>,
+    mpris_signals: mpsc::Sender<MprisSignal>,
 }
 
 #[derive(Clone)]
@@ -1017,18 +1024,25 @@ enum SidePanelMode {
     UpNext,
 }
 
-fn create_mpris_controller() -> (MprisController, mpsc::Receiver<MprisCommand>) {
+fn create_mpris_controller() -> (
+    MprisController,
+    mpsc::Receiver<MprisCommand>,
+    mpsc::Receiver<MprisSignal>,
+) {
     let (commands, receiver) = mpsc::channel();
+    let (signals, signal_receiver) = mpsc::channel();
     (
         MprisController {
             snapshot: Arc::new(Mutex::new(MprisSnapshot::default())),
             commands,
+            signals,
         },
         receiver,
+        signal_receiver,
     )
 }
 
-fn start_mpris_service(controller: MprisController) {
+fn start_mpris_service(controller: MprisController, signal_receiver: mpsc::Receiver<MprisSignal>) {
     if env::var_os("OKP_DISABLE_MPRIS").is_some() {
         return;
     }
@@ -1036,7 +1050,7 @@ fn start_mpris_service(controller: MprisController) {
     let spawn_result = thread::Builder::new()
         .name("okp-mpris".to_owned())
         .spawn(move || {
-            if let Err(error) = run_mpris_service(controller) {
+            if let Err(error) = run_mpris_service(controller, signal_receiver) {
                 eprintln!("MPRIS service unavailable: {error}");
             }
         });
@@ -1046,7 +1060,10 @@ fn start_mpris_service(controller: MprisController) {
     }
 }
 
-fn run_mpris_service(controller: MprisController) -> zbus::Result<()> {
+fn run_mpris_service(
+    controller: MprisController,
+    signal_receiver: mpsc::Receiver<MprisSignal>,
+) -> zbus::Result<()> {
     let root = MprisRoot {
         commands: controller.commands.clone(),
     };
@@ -1054,14 +1071,39 @@ fn run_mpris_service(controller: MprisController) -> zbus::Result<()> {
         snapshot: controller.snapshot,
         commands: controller.commands,
     };
-    let _connection = zbus::blocking::connection::Builder::session()?
+    let connection = zbus::blocking::connection::Builder::session()?
         .serve_at(MPRIS_OBJECT_PATH, root)?
         .serve_at(MPRIS_OBJECT_PATH, player)?
         .name(MPRIS_BUS_NAME)?
         .build()?;
 
-    loop {
-        thread::park();
+    while let Ok(signal) = signal_receiver.recv() {
+        emit_mpris_signal(&connection, signal)?;
+    }
+
+    Ok(())
+}
+
+fn emit_mpris_signal(
+    connection: &zbus::blocking::Connection,
+    signal: MprisSignal,
+) -> zbus::Result<()> {
+    match signal {
+        MprisSignal::PropertiesInvalidated(properties) if !properties.is_empty() => {
+            let changed: HashMap<&str, Value<'_>> = HashMap::new();
+            connection.emit_signal(
+                None::<&str>,
+                MPRIS_OBJECT_PATH,
+                "org.freedesktop.DBus.Properties",
+                "PropertiesChanged",
+                &(
+                    "org.mpris.MediaPlayer2.Player",
+                    changed,
+                    properties.as_slice(),
+                ),
+            )
+        }
+        _ => Ok(()),
     }
 }
 
@@ -1143,13 +1185,64 @@ fn set_playback_paused(state: &Rc<RefCell<PlayerState>>, paused: bool) {
 
 fn update_mpris_snapshot(
     snapshot: &Arc<Mutex<MprisSnapshot>>,
+    signals: &mpsc::Sender<MprisSignal>,
     state: &PlayerState,
     playback: Option<PlaybackState>,
 ) {
     let next = mpris_snapshot_from_state(state, playback);
-    if let Ok(mut snapshot) = snapshot.lock() {
+    let invalidated = if let Ok(mut snapshot) = snapshot.lock() {
+        let invalidated = mpris_invalidated_properties(&snapshot, &next);
         *snapshot = next;
+        invalidated
+    } else {
+        Vec::new()
+    };
+
+    if !invalidated.is_empty() {
+        let _ = signals.send(MprisSignal::PropertiesInvalidated(invalidated));
     }
+}
+
+fn mpris_invalidated_properties(
+    previous: &MprisSnapshot,
+    next: &MprisSnapshot,
+) -> Vec<&'static str> {
+    let mut properties = Vec::new();
+
+    if previous.playback_status() != next.playback_status() {
+        properties.push("PlaybackStatus");
+    }
+
+    if previous.has_media != next.has_media
+        || previous.title != next.title
+        || previous.uri != next.uri
+        || previous.duration_us != next.duration_us
+    {
+        properties.push("Metadata");
+    }
+
+    if previous.has_media != next.has_media {
+        properties.push("CanPlay");
+        properties.push("CanPause");
+    }
+
+    if previous.duration_us != next.duration_us {
+        properties.push("CanSeek");
+    }
+
+    if previous.can_go_next != next.can_go_next {
+        properties.push("CanGoNext");
+    }
+
+    if previous.can_go_previous != next.can_go_previous {
+        properties.push("CanGoPrevious");
+    }
+
+    if (previous.volume - next.volume).abs() > f64::EPSILON {
+        properties.push("Volume");
+    }
+
+    properties
 }
 
 fn mpris_snapshot_from_state(
@@ -1361,8 +1454,8 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> AppRuntime {
     let updating_volume = Rc::new(Cell::new(false));
     let status_toast = Rc::new(StatusToast::new());
     let chrome = Rc::new(ChromeVisibility::new());
-    let (mpris_controller, mpris_commands) = create_mpris_controller();
-    start_mpris_service(mpris_controller.clone());
+    let (mpris_controller, mpris_commands, mpris_signals) = create_mpris_controller();
+    start_mpris_service(mpris_controller.clone(), mpris_signals);
 
     let window = gtk::ApplicationWindow::builder()
         .application(app)
@@ -1442,6 +1535,7 @@ fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> AppRuntime {
             chrome: Rc::clone(&chrome),
             empty_surface,
             mpris_snapshot: Arc::clone(&mpris_controller.snapshot),
+            mpris_signals: mpris_controller.signals.clone(),
         },
     );
 
@@ -2795,6 +2889,7 @@ fn connect_state_poll(
         chrome,
         empty_surface,
         mpris_snapshot,
+        mpris_signals,
     } = context;
     glib::timeout_add_local(Duration::from_millis(200), move || {
         drain_mpv_events(&state);
@@ -2809,7 +2904,7 @@ fn connect_state_poll(
         let has_playlist = state.borrow().playlist.len() > 1;
         {
             let state = state.borrow();
-            update_mpris_snapshot(&mpris_snapshot, &state, playback);
+            update_mpris_snapshot(&mpris_snapshot, &mpris_signals, &state, playback);
         }
         sync_ab_loop_state(&state, has_media);
         empty_surface.set_has_media(has_media);
@@ -13468,6 +13563,41 @@ mod tests {
         assert!(metadata.contains_key("mpris:length"));
         assert!(metadata.contains_key("xesam:title"));
         assert!(metadata.contains_key("xesam:url"));
+    }
+
+    #[test]
+    fn mpris_invalidations_cover_shell_state_without_position_spam() {
+        let previous = MprisSnapshot::default();
+        let next = MprisSnapshot {
+            has_media: true,
+            paused: false,
+            position_us: 1_000_000,
+            duration_us: Some(30_000_000),
+            volume: 0.75,
+            can_go_next: true,
+            can_go_previous: true,
+            title: "subtest.mkv".to_owned(),
+            uri: Some("file:///tmp/subtest.mkv".to_owned()),
+        };
+
+        let invalidated = mpris_invalidated_properties(&previous, &next);
+
+        assert!(invalidated.contains(&"PlaybackStatus"));
+        assert!(invalidated.contains(&"Metadata"));
+        assert!(invalidated.contains(&"CanPlay"));
+        assert!(invalidated.contains(&"CanPause"));
+        assert!(invalidated.contains(&"CanSeek"));
+        assert!(invalidated.contains(&"CanGoNext"));
+        assert!(invalidated.contains(&"CanGoPrevious"));
+        assert!(invalidated.contains(&"Volume"));
+        assert!(!invalidated.contains(&"Position"));
+
+        let moved = MprisSnapshot {
+            position_us: 2_000_000,
+            ..next.clone()
+        };
+
+        assert!(mpris_invalidated_properties(&next, &moved).is_empty());
     }
 
     #[test]
