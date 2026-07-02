@@ -144,7 +144,7 @@ impl VideoTransformState {
     }
 }
 
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum RepeatMode {
     #[default]
     Off,
@@ -278,6 +278,9 @@ struct MprisSnapshot {
     position_us: i64,
     duration_us: Option<i64>,
     volume: f64,
+    rate: f64,
+    repeat_mode: RepeatMode,
+    shuffle: bool,
     can_go_next: bool,
     can_go_previous: bool,
     title: String,
@@ -292,6 +295,9 @@ impl Default for MprisSnapshot {
             position_us: 0,
             duration_us: None,
             volume: 1.0,
+            rate: 1.0,
+            repeat_mode: RepeatMode::Off,
+            shuffle: false,
             can_go_next: false,
             can_go_previous: false,
             title: "OK Player".to_owned(),
@@ -325,6 +331,9 @@ enum MprisCommand {
     SeekBy(i64),
     SetPosition(i64),
     SetVolume(f64),
+    SetRate(f64),
+    SetLoopStatus(String),
+    SetShuffle(bool),
     OpenUri(String),
 }
 
@@ -473,19 +482,44 @@ impl MprisPlayer {
         self.snapshot().playback_status().to_owned()
     }
 
-    #[zbus(property)]
+    #[zbus(property(emits_changed_signal = "false"))]
     fn loop_status(&self) -> &str {
-        "None"
+        mpris_loop_status(self.snapshot().repeat_mode)
     }
 
     #[zbus(property)]
+    fn set_loop_status(&self, status: &str) -> zbus::fdo::Result<()> {
+        if mpris_repeat_mode(status).is_none() {
+            return Err(zbus::fdo::Error::InvalidArgs(format!(
+                "Unsupported LoopStatus: {status}"
+            )));
+        }
+        self.send(MprisCommand::SetLoopStatus(status.to_owned()))
+    }
+
+    #[zbus(property(emits_changed_signal = "false"))]
     fn rate(&self) -> f64 {
-        1.0
+        self.snapshot().rate
     }
 
     #[zbus(property)]
+    fn set_rate(&self, rate: f64) -> zbus::fdo::Result<()> {
+        if !rate.is_finite() {
+            return Err(zbus::fdo::Error::InvalidArgs(
+                "Rate must be finite".to_owned(),
+            ));
+        }
+        self.send(MprisCommand::SetRate(rate))
+    }
+
+    #[zbus(property(emits_changed_signal = "false"))]
     fn shuffle(&self) -> bool {
-        false
+        self.snapshot().shuffle
+    }
+
+    #[zbus(property)]
+    fn set_shuffle(&self, shuffle: bool) -> zbus::fdo::Result<()> {
+        self.send(MprisCommand::SetShuffle(shuffle))
     }
 
     #[zbus(property)]
@@ -515,12 +549,12 @@ impl MprisPlayer {
 
     #[zbus(property)]
     fn minimum_rate(&self) -> f64 {
-        1.0
+        0.25
     }
 
     #[zbus(property)]
     fn maximum_rate(&self) -> f64 {
-        1.0
+        4.0
     }
 
     #[zbus(property)]
@@ -1234,6 +1268,19 @@ fn handle_mpris_command(
                 set_volume_from_ui(state, volume);
             }
         }
+        MprisCommand::SetRate(rate) => {
+            if let Some(speed) = mpris_rate_to_mpv_speed(rate) {
+                set_playback_speed_from_ui(state, speed);
+            }
+        }
+        MprisCommand::SetLoopStatus(status) => {
+            if let Some(repeat_mode) = mpris_repeat_mode(&status) {
+                set_repeat_mode_from_ui(state, status_toast, repeat_mode);
+            }
+        }
+        MprisCommand::SetShuffle(shuffle) => {
+            set_shuffle_from_ui(state, status_toast, shuffle);
+        }
         MprisCommand::OpenUri(uri) => {
             if let Some(path) = file_uri_path(&uri) {
                 load_media_path(state, path);
@@ -1328,6 +1375,18 @@ fn mpris_invalidated_properties(
         properties.push("Volume");
     }
 
+    if (previous.rate - next.rate).abs() > f64::EPSILON {
+        properties.push("Rate");
+    }
+
+    if previous.repeat_mode != next.repeat_mode {
+        properties.push("LoopStatus");
+    }
+
+    if previous.shuffle != next.shuffle {
+        properties.push("Shuffle");
+    }
+
     properties
 }
 
@@ -1349,6 +1408,27 @@ fn mpris_volume_to_mpv_percent(volume: f64) -> Option<f64> {
     volume
         .is_finite()
         .then(|| (volume * 100.0).clamp(0.0, 130.0))
+}
+
+fn mpris_rate_to_mpv_speed(rate: f64) -> Option<f64> {
+    rate.is_finite().then(|| rate.clamp(0.25, 4.0))
+}
+
+fn mpris_loop_status(mode: RepeatMode) -> &'static str {
+    match mode {
+        RepeatMode::Off => "None",
+        RepeatMode::One => "Track",
+        RepeatMode::All => "Playlist",
+    }
+}
+
+fn mpris_repeat_mode(status: &str) -> Option<RepeatMode> {
+    match status {
+        "None" => Some(RepeatMode::Off),
+        "Track" => Some(RepeatMode::One),
+        "Playlist" => Some(RepeatMode::All),
+        _ => None,
+    }
 }
 
 fn mpris_snapshot_from_state(
@@ -1373,6 +1453,9 @@ fn mpris_snapshot_from_state(
             .unwrap_or(0),
         duration_us,
         volume: playback.volume.unwrap_or(100.0).max(0.0) / 100.0,
+        rate: playback.speed.unwrap_or(1.0).clamp(0.25, 4.0),
+        repeat_mode: state.modes.repeat_mode,
+        shuffle: state.modes.shuffle_enabled,
         can_go_next: state.playlist.len() > 1,
         can_go_previous: state.playlist.len() > 1,
         title,
@@ -3899,9 +3982,7 @@ fn populate_speed_popover(popover: &gtk::Popover, state: Rc<RefCell<PlayerState>
         let speed_state = Rc::clone(&state);
         let speed_popover = popover.clone();
         button.connect_clicked(move |_| {
-            if with_mpv(&speed_state, |mpv| mpv.set_speed(speed)) {
-                save_current_preferences(&speed_state);
-            }
+            set_playback_speed_from_ui(&speed_state, speed);
             speed_popover.popdown();
         });
         content.append(&button);
@@ -10940,16 +11021,34 @@ fn reset_video_transform_for_new_media(state: &mut PlayerState) {
 }
 
 fn cycle_repeat_mode(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
+    let repeat_mode = state.borrow().modes.repeat_mode.cycle();
+    set_repeat_mode_from_ui(state, status_toast, repeat_mode);
+}
+
+fn set_repeat_mode_from_ui(
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &StatusToast,
+    repeat_mode: RepeatMode,
+) {
     let mut state = state.borrow_mut();
-    state.modes.repeat_mode = state.modes.repeat_mode.cycle();
+    state.modes.repeat_mode = repeat_mode;
     let repeat = state.modes.repeat_mode.settings_value();
     state.settings.set_repeat_mode(repeat);
     save_settings_or_toast(&mut state, status_toast);
 }
 
 fn toggle_shuffle(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
+    let enabled = !state.borrow().modes.shuffle_enabled;
+    set_shuffle_from_ui(state, status_toast, enabled);
+}
+
+fn set_shuffle_from_ui(
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &StatusToast,
+    enabled: bool,
+) {
     let mut state = state.borrow_mut();
-    state.modes.shuffle_enabled = !state.modes.shuffle_enabled;
+    state.modes.shuffle_enabled = enabled;
     state.modes.reset_shuffle_order();
 
     if state.modes.shuffle_enabled
@@ -10960,9 +11059,14 @@ fn toggle_shuffle(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) 
             .modes
             .ensure_shuffle_order(playlist_len, current_index);
     }
-    let enabled = state.modes.shuffle_enabled;
     state.settings.set_shuffle_enabled(enabled);
     save_settings_or_toast(&mut state, status_toast);
+}
+
+fn set_playback_speed_from_ui(state: &Rc<RefCell<PlayerState>>, speed: f64) {
+    if with_mpv(state, |mpv| mpv.set_speed(speed)) {
+        save_current_preferences(state);
+    }
 }
 
 fn toggle_auto_advance(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
@@ -13739,6 +13843,7 @@ mod tests {
             can_go_previous: true,
             title: "subtest.mkv".to_owned(),
             uri: Some("file:///tmp/subtest.mkv".to_owned()),
+            ..MprisSnapshot::default()
         };
 
         let metadata = mpris_metadata(&snapshot);
@@ -13763,6 +13868,7 @@ mod tests {
             can_go_previous: true,
             title: "subtest.mkv".to_owned(),
             uri: Some("file:///tmp/subtest.mkv".to_owned()),
+            ..MprisSnapshot::default()
         };
 
         let invalidated = mpris_invalidated_properties(&previous, &next);
@@ -13797,6 +13903,7 @@ mod tests {
             can_go_previous: false,
             title: "subtest.mkv".to_owned(),
             uri: Some("file:///tmp/subtest.mkv".to_owned()),
+            ..MprisSnapshot::default()
         };
 
         let normal_tick = MprisSnapshot {
@@ -13832,6 +13939,39 @@ mod tests {
         assert_eq!(mpris_volume_to_mpv_percent(-1.0), Some(0.0));
         assert_eq!(mpris_volume_to_mpv_percent(f64::NAN), None);
         assert_eq!(mpris_volume_to_mpv_percent(f64::INFINITY), None);
+    }
+
+    #[test]
+    fn mpris_play_mode_properties_follow_player_state() {
+        assert_eq!(mpris_loop_status(RepeatMode::Off), "None");
+        assert_eq!(mpris_loop_status(RepeatMode::One), "Track");
+        assert_eq!(mpris_loop_status(RepeatMode::All), "Playlist");
+        assert_eq!(mpris_repeat_mode("None"), Some(RepeatMode::Off));
+        assert_eq!(mpris_repeat_mode("Track"), Some(RepeatMode::One));
+        assert_eq!(mpris_repeat_mode("Playlist"), Some(RepeatMode::All));
+        assert_eq!(mpris_repeat_mode("bad"), None);
+
+        let previous = MprisSnapshot::default();
+        let next = MprisSnapshot {
+            rate: 1.25,
+            repeat_mode: RepeatMode::All,
+            shuffle: true,
+            ..MprisSnapshot::default()
+        };
+        let invalidated = mpris_invalidated_properties(&previous, &next);
+
+        assert!(invalidated.contains(&"Rate"));
+        assert!(invalidated.contains(&"LoopStatus"));
+        assert!(invalidated.contains(&"Shuffle"));
+    }
+
+    #[test]
+    fn mpris_rate_setter_maps_to_supported_speed_range() {
+        assert_eq!(mpris_rate_to_mpv_speed(0.1), Some(0.25));
+        assert_eq!(mpris_rate_to_mpv_speed(1.25), Some(1.25));
+        assert_eq!(mpris_rate_to_mpv_speed(9.0), Some(4.0));
+        assert_eq!(mpris_rate_to_mpv_speed(f64::NAN), None);
+        assert_eq!(mpris_rate_to_mpv_speed(f64::INFINITY), None);
     }
 
     #[test]
