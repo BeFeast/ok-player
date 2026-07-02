@@ -323,6 +323,7 @@ enum MprisCommand {
     Next,
     SeekBy(i64),
     SetPosition(i64),
+    SetVolume(f64),
     OpenUri(String),
 }
 
@@ -491,9 +492,19 @@ impl MprisPlayer {
         mpris_metadata(&self.snapshot())
     }
 
-    #[zbus(property)]
+    #[zbus(property(emits_changed_signal = "false"))]
     fn volume(&self) -> f64 {
         self.snapshot().volume
+    }
+
+    #[zbus(property)]
+    fn set_volume(&self, volume: f64) -> zbus::fdo::Result<()> {
+        if !volume.is_finite() {
+            return Err(zbus::fdo::Error::InvalidArgs(
+                "Volume must be finite".to_owned(),
+            ));
+        }
+        self.send(MprisCommand::SetVolume(volume))
     }
 
     #[zbus(property)]
@@ -1162,6 +1173,11 @@ fn handle_mpris_command(
             let seconds = position_us.max(0) as f64 / 1_000_000.0;
             with_mpv(state, |mpv| mpv.seek_absolute(seconds));
         }
+        MprisCommand::SetVolume(volume) => {
+            if let Some(volume) = mpris_volume_to_mpv_percent(volume) {
+                set_volume_from_ui(state, volume);
+            }
+        }
         MprisCommand::OpenUri(uri) => {
             if let Some(path) = file_uri_path(&uri) {
                 load_media_path(state, path);
@@ -1271,6 +1287,12 @@ fn mpris_seeked_position(previous: &MprisSnapshot, next: &MprisSnapshot) -> Opti
 
     let delta = (previous.position_us - next.position_us).abs();
     (delta >= MPRIS_SEEKED_DELTA_US).then_some(next.position_us)
+}
+
+fn mpris_volume_to_mpv_percent(volume: f64) -> Option<f64> {
+    volume
+        .is_finite()
+        .then(|| (volume * 100.0).clamp(0.0, 130.0))
 }
 
 fn mpris_snapshot_from_state(
@@ -13664,6 +13686,17 @@ mod tests {
             ..previous.clone()
         };
         assert_eq!(mpris_seeked_position(&previous, &different_media), None);
+    }
+
+    #[test]
+    fn mpris_volume_setter_maps_to_mpv_percent_range() {
+        assert_eq!(mpris_volume_to_mpv_percent(0.0), Some(0.0));
+        assert_eq!(mpris_volume_to_mpv_percent(0.42), Some(42.0));
+        assert_eq!(mpris_volume_to_mpv_percent(1.0), Some(100.0));
+        assert_eq!(mpris_volume_to_mpv_percent(2.0), Some(130.0));
+        assert_eq!(mpris_volume_to_mpv_percent(-1.0), Some(0.0));
+        assert_eq!(mpris_volume_to_mpv_percent(f64::NAN), None);
+        assert_eq!(mpris_volume_to_mpv_percent(f64::INFINITY), None);
     }
 
     #[test]
