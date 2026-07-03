@@ -15,6 +15,7 @@ use gtk::gdk;
 use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
+use okp_core::playlist::{Playlist, PlaylistItem, QueueInsertMode, RepeatMode};
 use okp_core::{AppIdentity, m3u, media_formats, natural_compare, sha256sums, time_code};
 use okp_mpv::{
     AbLoopState, AudioDevice, Chapter, InfoSection, InfoTrack, MediaInfo, Mpv, MpvEvent,
@@ -92,14 +93,13 @@ struct PlayerState {
     mpv: Option<Mpv>,
     current_file: Option<PathBuf>,
     current_url: Option<String>,
-    playlist: Vec<PlaylistItem>,
+    playlist: Playlist,
     pending_subtitles: Vec<PathBuf>,
     pending_resume: Option<(PathBuf, f64)>,
     pending_preferences: Option<(PathBuf, history::PlaybackPreferences)>,
     thumbnail_request_key: Option<String>,
     hover_thumbnail_request_key: Option<String>,
     chapters_snapshot: Vec<Chapter>,
-    modes: PlayModes,
     private_session: bool,
     history: history::HistoryStore,
     settings: settings::SettingsStore,
@@ -172,105 +172,23 @@ impl VideoTransformState {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum RepeatMode {
-    #[default]
-    Off,
-    One,
-    All,
-}
-
-impl RepeatMode {
-    fn cycle(self) -> Self {
-        match self {
-            Self::Off => Self::One,
-            Self::One => Self::All,
-            Self::All => Self::Off,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Off => "Repeat Off",
-            Self::One => "Repeat One",
-            Self::All => "Repeat All",
-        }
-    }
-
-    fn settings_value(self) -> &'static str {
-        match self {
-            Self::Off => "off",
-            Self::One => "one",
-            Self::All => "all",
-        }
-    }
-
-    fn from_settings_value(value: &str) -> Self {
-        match value {
-            "one" => Self::One,
-            "all" => Self::All,
-            _ => Self::Off,
-        }
-    }
-}
-
-struct PlayModes {
-    repeat_mode: RepeatMode,
-    shuffle_enabled: bool,
-    auto_advance_enabled: bool,
-    shuffle_order: Vec<usize>,
-    shuffle_cursor: Option<usize>,
-    shuffle_seed: u64,
-}
-
-impl Default for PlayModes {
-    fn default() -> Self {
-        Self {
-            repeat_mode: RepeatMode::Off,
-            shuffle_enabled: false,
-            auto_advance_enabled: true,
-            shuffle_order: Vec::new(),
-            shuffle_cursor: None,
-            shuffle_seed: shuffle_seed(),
-        }
-    }
-}
-
-impl PlayModes {
-    fn reset_shuffle_order(&mut self) {
-        self.shuffle_order.clear();
-        self.shuffle_cursor = None;
-    }
-
-    fn ensure_shuffle_order(&mut self, playlist_len: usize, current_index: usize) {
-        if !self.shuffle_enabled || playlist_len == 0 {
-            self.reset_shuffle_order();
-            return;
-        }
-
-        if self.shuffle_order.len() != playlist_len {
-            self.shuffle_order = (0..playlist_len).collect();
-            for index in (1..playlist_len).rev() {
-                let swap_with = (next_shuffle_value(&mut self.shuffle_seed) as usize) % (index + 1);
-                self.shuffle_order.swap(index, swap_with);
-            }
-        }
-
-        if let Some(position) = self
-            .shuffle_order
-            .iter()
-            .position(|index| *index == current_index)
-        {
-            self.shuffle_cursor = Some(position);
-        }
+fn repeat_mode_label(mode: RepeatMode) -> &'static str {
+    match mode {
+        RepeatMode::Off => "Repeat Off",
+        RepeatMode::One => "Repeat One",
+        RepeatMode::All => "Repeat All",
     }
 }
 
 fn apply_playback_settings_defaults(state: &Rc<RefCell<PlayerState>>) {
     let mut state = state.borrow_mut();
-    state.modes.repeat_mode = RepeatMode::from_settings_value(state.settings.repeat_mode());
-    state.modes.auto_advance_enabled = state.settings.auto_advance_enabled();
-    state.modes.shuffle_enabled = state.settings.shuffle_enabled();
+    let repeat_mode = RepeatMode::from_settings_value(state.settings.repeat_mode());
+    let auto_advance = state.settings.auto_advance_enabled();
+    let shuffle = state.settings.shuffle_enabled();
+    state.playlist.reseed(shuffle_seed());
+    state.playlist.set_repeat(repeat_mode);
+    state.playlist.set_auto_advance(auto_advance);
+    state.playlist.set_shuffle(shuffle);
 }
 
 #[derive(Clone, Default)]
@@ -842,65 +760,6 @@ enum LinuxUpdateApplyResult {
     Restarting,
     DebInstalled(PathBuf),
     InstallerOpened(PathBuf),
-}
-
-#[derive(Clone, Copy)]
-enum QueueInsertMode {
-    Append,
-    PlayNext,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum PlaylistItem {
-    Local(PathBuf),
-    Url(String),
-}
-
-impl PlaylistItem {
-    fn local(path: PathBuf) -> Option<Self> {
-        is_media_path(&path).then_some(Self::Local(path))
-    }
-
-    fn from_m3u_entry(entry: &str) -> Option<Self> {
-        if is_media_url(entry) {
-            return Some(Self::Url(entry.to_owned()));
-        }
-
-        Self::local(PathBuf::from(entry))
-    }
-
-    fn is_current(&self, current_file: Option<&Path>, current_url: Option<&str>) -> bool {
-        match self {
-            Self::Local(path) => current_file.is_some_and(|current| current == path),
-            Self::Url(url) => current_url.is_some_and(|current| current == url),
-        }
-    }
-
-    fn display_name(&self) -> String {
-        match self {
-            Self::Local(path) => display_file_name(path),
-            Self::Url(url) => url
-                .rsplit('/')
-                .next()
-                .filter(|name| !name.is_empty())
-                .map(str::to_owned)
-                .unwrap_or_else(|| url.to_owned()),
-        }
-    }
-
-    fn display_location(&self) -> String {
-        match self {
-            Self::Local(path) => path.display().to_string(),
-            Self::Url(url) => url.to_owned(),
-        }
-    }
-
-    fn m3u_entry(&self) -> String {
-        match self {
-            Self::Local(path) => path.to_string_lossy().into_owned(),
-            Self::Url(url) => url.to_owned(),
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -1693,8 +1552,8 @@ fn mpris_snapshot_from_state(
         duration_us,
         volume: playback.volume.unwrap_or(100.0).max(0.0) / 100.0,
         rate: playback.speed.unwrap_or(1.0).clamp(0.25, 4.0),
-        repeat_mode: state.modes.repeat_mode,
-        shuffle: state.modes.shuffle_enabled,
+        repeat_mode: state.playlist.repeat(),
+        shuffle: state.playlist.shuffle(),
         can_go_next: state.playlist.len() > 1,
         can_go_previous: state.playlist.len() > 1,
         track_id,
@@ -1739,7 +1598,7 @@ fn mpris_tracklist_from_state(
 
 fn mpris_tracklist_items_from_state(state: &PlayerState) -> Vec<PlaylistItem> {
     if !state.playlist.is_empty() {
-        return state.playlist.clone();
+        return state.playlist.items().to_vec();
     }
 
     if let Some(path) = state.current_file.as_ref() {
@@ -3947,7 +3806,7 @@ fn update_up_next_panel(
             has_media,
             current_file: state.current_file.clone(),
             current_url: state.current_url.clone(),
-            playlist: state.playlist.clone(),
+            playlist: state.playlist.items().to_vec(),
             chapters,
             ab_loop: state.ab_loop,
         }
@@ -4705,9 +4564,9 @@ fn command_popover_content(
         let state = state.borrow();
         (
             has_loaded_media_state(&state),
-            state.modes.repeat_mode,
-            state.modes.shuffle_enabled,
-            state.modes.auto_advance_enabled,
+            state.playlist.repeat(),
+            state.playlist.shuffle(),
+            state.playlist.auto_advance(),
             state.private_session,
             state.playlist.len(),
             state.current_file.is_some(),
@@ -5041,7 +4900,10 @@ fn command_popover_content(
 
     content.append(&divider());
 
-    let repeat_button = track_button(repeat_mode.label(), repeat_mode != RepeatMode::Off);
+    let repeat_button = track_button(
+        repeat_mode_label(repeat_mode),
+        repeat_mode != RepeatMode::Off,
+    );
     let repeat_state = Rc::clone(&state);
     let repeat_toast = Rc::clone(&status_toast);
     let repeat_popover = popover.clone();
@@ -5549,7 +5411,7 @@ fn drain_mpv_events(state: &Rc<RefCell<PlayerState>>) {
                 try_pending_playback_preferences(state);
             }
             MpvEvent::EndFile { reason } if reason.is_eof() => {
-                if state.borrow().modes.repeat_mode != RepeatMode::One {
+                if state.borrow().playlist.repeat() != RepeatMode::One {
                     save_current_progress(state, true);
                 }
                 advance_playlist_on_eof(state);
@@ -8726,7 +8588,7 @@ fn settings_auto_advance_row(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) -> gtk::Box {
-    let active = state.borrow().modes.auto_advance_enabled;
+    let active = state.borrow().playlist.auto_advance();
     settings_playback_switch_row(
         "Auto-advance",
         "Continue to the next item in the folder or playlist when a file ends.",
@@ -8734,7 +8596,7 @@ fn settings_auto_advance_row(
         state,
         status_toast,
         |state, enabled| {
-            state.modes.auto_advance_enabled = enabled;
+            state.playlist.set_auto_advance(enabled);
             state.settings.set_auto_advance_enabled(enabled);
         },
         "Auto-advance",
@@ -8745,7 +8607,7 @@ fn settings_shuffle_row(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) -> gtk::Box {
-    let active = state.borrow().modes.shuffle_enabled;
+    let active = state.borrow().playlist.shuffle();
     settings_playback_switch_row(
         "Shuffle default",
         "Start folders and playlists in shuffled order, without immediate repeats.",
@@ -8753,13 +8615,7 @@ fn settings_shuffle_row(
         state,
         status_toast,
         |state, enabled| {
-            state.modes.shuffle_enabled = enabled;
-            state.modes.reset_shuffle_order();
-            if enabled && let Some(current_index) = current_playlist_index(state) {
-                state
-                    .modes
-                    .ensure_shuffle_order(state.playlist.len(), current_index);
-            }
+            state.playlist.set_shuffle(enabled);
             state.settings.set_shuffle_enabled(enabled);
         },
         "Shuffle",
@@ -8845,7 +8701,7 @@ fn settings_repeat_row(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusT
     text.append(&detail);
     row.append(&text);
 
-    let current = state.borrow().modes.repeat_mode;
+    let current = state.borrow().playlist.repeat();
     let state_label = gtk::Label::new(Some(match current {
         RepeatMode::Off => "Off",
         RepeatMode::One => "One",
@@ -8855,7 +8711,7 @@ fn settings_repeat_row(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusT
     state_label.set_valign(gtk::Align::Center);
     row.append(&state_label);
 
-    let button = gtk::Button::with_label(current.label());
+    let button = gtk::Button::with_label(repeat_mode_label(current));
     button.add_css_class("okp-settings-button");
     button.set_valign(gtk::Align::Center);
     let repeat_state = Rc::clone(&state);
@@ -8864,19 +8720,19 @@ fn settings_repeat_row(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusT
     button.connect_clicked(move |button| {
         let mode = {
             let mut state = repeat_state.borrow_mut();
-            state.modes.repeat_mode = state.modes.repeat_mode.cycle();
-            let mode = state.modes.repeat_mode;
+            let mode = state.playlist.repeat().cycle();
+            state.playlist.set_repeat(mode);
             state.settings.set_repeat_mode(mode.settings_value());
             save_settings_or_toast(&mut state, &repeat_toast);
             mode
         };
-        button.set_label(mode.label());
+        button.set_label(repeat_mode_label(mode));
         repeat_state_label.set_text(match mode {
             RepeatMode::Off => "Off",
             RepeatMode::One => "One",
             RepeatMode::All => "All",
         });
-        repeat_toast.show(mode.label());
+        repeat_toast.show(repeat_mode_label(mode));
     });
     row.append(&button);
 
@@ -11758,7 +11614,7 @@ fn reset_video_transform_for_new_media(state: &mut PlayerState) {
 }
 
 fn cycle_repeat_mode(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
-    let repeat_mode = state.borrow().modes.repeat_mode.cycle();
+    let repeat_mode = state.borrow().playlist.repeat().cycle();
     set_repeat_mode_from_ui(state, status_toast, repeat_mode);
 }
 
@@ -11768,14 +11624,13 @@ fn set_repeat_mode_from_ui(
     repeat_mode: RepeatMode,
 ) {
     let mut state = state.borrow_mut();
-    state.modes.repeat_mode = repeat_mode;
-    let repeat = state.modes.repeat_mode.settings_value();
-    state.settings.set_repeat_mode(repeat);
+    state.playlist.set_repeat(repeat_mode);
+    state.settings.set_repeat_mode(repeat_mode.settings_value());
     save_settings_or_toast(&mut state, status_toast);
 }
 
 fn toggle_shuffle(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
-    let enabled = !state.borrow().modes.shuffle_enabled;
+    let enabled = !state.borrow().playlist.shuffle();
     set_shuffle_from_ui(state, status_toast, enabled);
 }
 
@@ -11785,17 +11640,7 @@ fn set_shuffle_from_ui(
     enabled: bool,
 ) {
     let mut state = state.borrow_mut();
-    state.modes.shuffle_enabled = enabled;
-    state.modes.reset_shuffle_order();
-
-    if state.modes.shuffle_enabled
-        && let Some(current_index) = current_playlist_index(&state)
-    {
-        let playlist_len = state.playlist.len();
-        state
-            .modes
-            .ensure_shuffle_order(playlist_len, current_index);
-    }
+    state.playlist.set_shuffle(enabled);
     state.settings.set_shuffle_enabled(enabled);
     save_settings_or_toast(&mut state, status_toast);
 }
@@ -11808,8 +11653,8 @@ fn set_playback_speed_from_ui(state: &Rc<RefCell<PlayerState>>, speed: f64) {
 
 fn toggle_auto_advance(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
     let mut state = state.borrow_mut();
-    state.modes.auto_advance_enabled = !state.modes.auto_advance_enabled;
-    let enabled = state.modes.auto_advance_enabled;
+    let enabled = !state.playlist.auto_advance();
+    state.playlist.set_auto_advance(enabled);
     state.settings.set_auto_advance_enabled(enabled);
     save_settings_or_toast(&mut state, status_toast);
 }
@@ -11877,7 +11722,6 @@ fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
     state.current_file = None;
     state.current_url = None;
     state.playlist.clear();
-    state.modes.reset_shuffle_order();
     state.thumbnail_request_key = None;
     state.hover_thumbnail_request_key = None;
     state.chapters_snapshot.clear();
@@ -12001,23 +11845,14 @@ fn remember_loaded_media_with_playlist(
     } else {
         state.history.playback_preferences(&path)
     };
-    let playlist_changed = state.playlist != playlist;
     reset_video_transform_for_new_media(&mut state);
     state.ab_loop = AbLoopState::default();
+    let current = PlaylistItem::Local(path.clone());
     state.current_file = Some(path);
     state.current_url = None;
-    state.playlist = playlist;
-    if playlist_changed {
-        state.modes.reset_shuffle_order();
-    }
+    state.playlist.reset(playlist, &current);
     state.thumbnail_request_key = None;
     state.hover_thumbnail_request_key = None;
-    if let Some(current_index) = current_playlist_index(&state) {
-        let playlist_len = state.playlist.len();
-        state
-            .modes
-            .ensure_shuffle_order(playlist_len, current_index);
-    }
     state.pending_subtitles.clear();
     state.pending_resume = resume.map(|position| (resume_path, position));
     state.pending_preferences = preferences.map(|preferences| (preferences_path, preferences));
@@ -12081,27 +11916,18 @@ fn remember_loaded_url_with_playlist(
     }
 
     let mut state = state.borrow_mut();
-    let playlist_changed = state.playlist != playlist;
     reset_video_transform_for_new_media(&mut state);
     state.ab_loop = AbLoopState::default();
+    let current = PlaylistItem::Url(url.clone());
     state.current_file = None;
     state.current_url = Some(url);
-    state.playlist = playlist;
-    if playlist_changed {
-        state.modes.reset_shuffle_order();
-    }
+    state.playlist.reset(playlist, &current);
     state.thumbnail_request_key = None;
     state.hover_thumbnail_request_key = None;
     state.chapters_snapshot.clear();
     state.pending_subtitles.clear();
     state.pending_resume = None;
     state.pending_preferences = None;
-    if let Some(current_index) = current_playlist_index(&state) {
-        let playlist_len = state.playlist.len();
-        state
-            .modes
-            .ensure_shuffle_order(playlist_len, current_index);
-    }
 }
 
 fn load_playlist_item_with_playlist(
@@ -12193,6 +12019,7 @@ fn save_m3u_playlist(
         let state = state.borrow();
         state
             .playlist
+            .items()
             .iter()
             .map(PlaylistItem::m3u_entry)
             .collect::<Vec<_>>()
@@ -12239,21 +12066,10 @@ fn queue_media_paths(
             status_toast.show("Open local media first");
             return false;
         };
-        let Some((playlist, count)) =
-            queue_playlist_insert(state.playlist.clone(), &current_file, additions, mode)
-        else {
+        let Some(count) = state.playlist.queue_insert(&current_file, additions, mode) else {
             status_toast.show("Already in queue");
             return false;
         };
-
-        state.playlist = playlist;
-        state.modes.reset_shuffle_order();
-        if let Some(current_index) = current_playlist_index(&state) {
-            let playlist_len = state.playlist.len();
-            state
-                .modes
-                .ensure_shuffle_order(playlist_len, current_index);
-        }
         count
     };
 
@@ -12296,169 +12112,77 @@ fn unique_media_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
     unique
 }
 
-fn queue_playlist_insert(
-    mut playlist: Vec<PlaylistItem>,
-    current_file: &Path,
-    additions: Vec<PathBuf>,
-    mode: QueueInsertMode,
-) -> Option<(Vec<PlaylistItem>, usize)> {
-    if playlist.is_empty() {
-        playlist.push(PlaylistItem::Local(current_file.to_path_buf()));
-    }
-    if !playlist
-        .iter()
-        .any(|item| matches!(item, PlaylistItem::Local(path) if path.as_path() == current_file))
-    {
-        playlist.insert(0, PlaylistItem::Local(current_file.to_path_buf()));
-    }
-
-    let additions = additions
-        .into_iter()
-        .filter(|path| path.as_path() != current_file)
-        .collect::<Vec<_>>();
-    if additions.is_empty() {
-        return None;
-    }
-
-    match mode {
-        QueueInsertMode::Append => {
-            let additions = additions
-                .into_iter()
-                .filter(|path| {
-                    !playlist.iter().any(
-                        |item| matches!(item, PlaylistItem::Local(item_path) if item_path == path),
-                    )
-                })
-                .map(PlaylistItem::Local)
-                .collect::<Vec<_>>();
-            if additions.is_empty() {
-                return None;
-            }
-
-            let count = additions.len();
-            playlist.extend(additions);
-            Some((playlist, count))
-        }
-        QueueInsertMode::PlayNext => {
-            playlist.retain(|item| {
-                !additions
-                    .iter()
-                    .any(|addition| matches!(item, PlaylistItem::Local(path) if path == addition))
-            });
-            let current_index = playlist
-                .iter()
-                .position(|item| matches!(item, PlaylistItem::Local(path) if path.as_path() == current_file))
-                .unwrap_or(0);
-            let count = additions.len();
-            playlist.splice(
-                current_index + 1..current_index + 1,
-                additions.into_iter().map(PlaylistItem::Local),
-            );
-            Some((playlist, count))
-        }
-    }
-}
-
 fn navigate_playlist(state: &Rc<RefCell<PlayerState>>, direction: isize) -> bool {
-    let Some(item) = playlist_target_item(state, direction, true) else {
-        return false;
+    let (index, item, playlist) = {
+        let state = state.borrow();
+        let Some(index) = state.playlist.peek_wrapping_index(direction) else {
+            return false;
+        };
+        let Some(item) = state.playlist.get(index).cloned() else {
+            return false;
+        };
+        (index, item, state.playlist.items().to_vec())
     };
-    let playlist = state.borrow().playlist.clone();
 
-    load_playlist_item_with_playlist(state, item, playlist, true)
+    if !load_playlist_item_with_playlist(state, item, playlist, true) {
+        return false; // load rejected → the cursor stays on the playing item
+    }
+    state.borrow_mut().playlist.set_current_index(index);
+    true
 }
 
 fn jump_playlist_index(state: &Rc<RefCell<PlayerState>>, index: usize) -> bool {
     let (item, playlist) = {
         let state = state.borrow();
-        (state.playlist.get(index).cloned(), state.playlist.clone())
+        let Some(item) = state.playlist.get(index).cloned() else {
+            return false;
+        };
+        (item, state.playlist.items().to_vec())
     };
 
-    let Some(item) = item else {
-        return false;
-    };
-
-    {
-        let mut state = state.borrow_mut();
-        if state.modes.shuffle_enabled {
-            state.modes.shuffle_cursor = state
-                .modes
-                .shuffle_order
-                .iter()
-                .position(|item| *item == index);
-        }
+    if !load_playlist_item_with_playlist(state, item, playlist, true) {
+        return false; // load rejected → the cursor stays on the playing item
     }
-
-    load_playlist_item_with_playlist(state, item, playlist, true)
+    // Committed by index after the reset inside the load, which re-finds by equality and would
+    // otherwise leave the cursor on the first occurrence of a repeated entry.
+    state.borrow_mut().playlist.set_current_index(index);
+    true
 }
 
 fn advance_playlist_on_eof(state: &Rc<RefCell<PlayerState>>) -> bool {
-    let repeat_mode = state.borrow().modes.repeat_mode;
+    let (repeat_mode, target, playlist) = {
+        let state = state.borrow();
+        (
+            state.playlist.repeat(),
+            state.playlist.auto_advance_target_index(),
+            state.playlist.items().to_vec(),
+        )
+    };
+
     if repeat_mode == RepeatMode::One {
         return restart_current_file(state);
     }
 
-    if !state.borrow().modes.auto_advance_enabled {
-        return false;
-    }
-
-    let wrap = repeat_mode == RepeatMode::All;
-    let Some(next_item) = playlist_target_item(state, 1, wrap) else {
+    let Some(index) = target else {
         return false;
     };
-    let playlist = state.borrow().playlist.clone();
+    let Some(next_item) = playlist.get(index).cloned() else {
+        return false;
+    };
 
-    load_playlist_item_with_playlist(state, next_item, playlist, false)
+    if !load_playlist_item_with_playlist(state, next_item, playlist, false) {
+        return false; // load rejected → the cursor stays on the playing item
+    }
+    state.borrow_mut().playlist.set_current_index(index);
+    true
 }
 
 fn move_playlist_item(state: &Rc<RefCell<PlayerState>>, from: usize, to: usize) -> bool {
-    let mut state = state.borrow_mut();
-    let Some(playlist) = reorder_playlist(state.playlist.clone(), from, to) else {
-        return false;
-    };
-    state.playlist = playlist;
-    state.modes.reset_shuffle_order();
-    true
+    state.borrow_mut().playlist.reorder(from, to)
 }
 
 fn remove_playlist_item(state: &Rc<RefCell<PlayerState>>, index: usize) -> bool {
-    let mut state = state.borrow_mut();
-    if state.playlist.get(index).is_some_and(|item| {
-        item.is_current(state.current_file.as_deref(), state.current_url.as_deref())
-    }) {
-        return false;
-    }
-    let Some(playlist) = remove_playlist_index(state.playlist.clone(), index) else {
-        return false;
-    };
-    state.playlist = playlist;
-    state.modes.reset_shuffle_order();
-    true
-}
-
-fn reorder_playlist(
-    mut playlist: Vec<PlaylistItem>,
-    from: usize,
-    to: usize,
-) -> Option<Vec<PlaylistItem>> {
-    if from >= playlist.len() || from == to {
-        return None;
-    }
-    let item = playlist.remove(from);
-    let target = to.min(playlist.len());
-    playlist.insert(target, item);
-    Some(playlist)
-}
-
-fn remove_playlist_index(
-    mut playlist: Vec<PlaylistItem>,
-    index: usize,
-) -> Option<Vec<PlaylistItem>> {
-    if playlist.len() <= 1 || index >= playlist.len() {
-        return None;
-    }
-    playlist.remove(index);
-    Some(playlist)
+    state.borrow_mut().playlist.remove(index)
 }
 
 fn restart_current_file(state: &Rc<RefCell<PlayerState>>) -> bool {
@@ -12482,65 +12206,6 @@ fn restart_current_file(state: &Rc<RefCell<PlayerState>>) -> bool {
     state.pending_resume = None;
     state.pending_preferences = preferences.map(|preferences| (path, preferences));
     true
-}
-
-fn playlist_target_item(
-    state: &Rc<RefCell<PlayerState>>,
-    direction: isize,
-    wrap: bool,
-) -> Option<PlaylistItem> {
-    let mut state = state.borrow_mut();
-    if state.playlist.len() < 2 {
-        return None;
-    }
-
-    let current_index = current_playlist_index(&state).unwrap_or(0);
-    let next_index = if state.modes.shuffle_enabled {
-        shuffled_target_index(&mut state, current_index, direction, wrap)?
-    } else {
-        ordered_target_index(state.playlist.len(), current_index, direction, wrap)?
-    };
-
-    state.playlist.get(next_index).cloned()
-}
-
-fn ordered_target_index(
-    playlist_len: usize,
-    current_index: usize,
-    direction: isize,
-    wrap: bool,
-) -> Option<usize> {
-    let target = current_index as isize + direction;
-    if wrap {
-        Some(target.rem_euclid(playlist_len as isize) as usize)
-    } else if (0..playlist_len as isize).contains(&target) {
-        Some(target as usize)
-    } else {
-        None
-    }
-}
-
-fn shuffled_target_index(
-    state: &mut PlayerState,
-    current_index: usize,
-    direction: isize,
-    wrap: bool,
-) -> Option<usize> {
-    let playlist_len = state.playlist.len();
-    state
-        .modes
-        .ensure_shuffle_order(playlist_len, current_index);
-    let cursor = state.modes.shuffle_cursor.unwrap_or(0);
-    let target_cursor =
-        ordered_target_index(state.modes.shuffle_order.len(), cursor, direction, wrap)?;
-    state.modes.shuffle_cursor = Some(target_cursor);
-    state.modes.shuffle_order.get(target_cursor).copied()
-}
-
-fn current_playlist_index(state: &PlayerState) -> Option<usize> {
-    state.playlist.iter().position(|item| {
-        item.is_current(state.current_file.as_deref(), state.current_url.as_deref())
-    })
 }
 
 fn try_pending_resume(state: &Rc<RefCell<PlayerState>>, duration: f64) {
@@ -12934,15 +12599,6 @@ fn shuffle_seed() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos() as u64)
         .unwrap_or(0x9E37_79B9_7F4A_7C15)
-}
-
-fn next_shuffle_value(seed: &mut u64) -> u64 {
-    let mut value = (*seed).max(1);
-    value ^= value << 13;
-    value ^= value >> 7;
-    value ^= value << 17;
-    *seed = value;
-    value
 }
 
 fn install_css() {
@@ -14790,11 +14446,15 @@ mod tests {
 
         let mut state = PlayerState {
             current_file: Some(second.clone()),
-            playlist: vec![
-                PlaylistItem::Local(first.clone()),
-                PlaylistItem::Local(second.clone()),
-                PlaylistItem::Local(third.clone()),
-            ],
+            playlist: Playlist::from_items(
+                vec![
+                    PlaylistItem::Local(first.clone()),
+                    PlaylistItem::Local(second.clone()),
+                    PlaylistItem::Local(third.clone()),
+                ],
+                Some(&PlaylistItem::Local(second.clone())),
+                false,
+            ),
             ..PlayerState::default()
         };
 
@@ -15511,7 +15171,7 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
         let state = state.borrow();
         assert_eq!(state.current_file, Some(PathBuf::from("/media/a.mkv")));
         assert_eq!(state.current_url, None);
-        assert_eq!(state.playlist, launch.items);
+        assert_eq!(state.playlist.items(), launch.items.as_slice());
     }
 
     #[test]
@@ -15641,8 +15301,8 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
         let state = state.borrow();
         assert_eq!(state.current_file, Some(PathBuf::from("/media/b.mkv")));
         assert_eq!(
-            state.playlist,
-            vec![local_item("/media/b.mkv"), local_item("/media/a.mp4")]
+            state.playlist.items(),
+            [local_item("/media/b.mkv"), local_item("/media/a.mp4")]
         );
     }
 
@@ -15664,8 +15324,8 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
         let state_ref = state.borrow();
         assert_eq!(state_ref.current_file, Some(second.clone()));
         assert_eq!(
-            state_ref.playlist,
-            vec![
+            state_ref.playlist.items(),
+            [
                 PlaylistItem::Local(first.clone()),
                 PlaylistItem::Local(second.clone())
             ]
@@ -15691,8 +15351,8 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
         let state_ref = state.borrow();
         assert_eq!(state_ref.current_file, Some(first.clone()));
         assert_eq!(
-            state_ref.playlist,
-            vec![
+            state_ref.playlist.items(),
+            [
                 PlaylistItem::Local(first.clone()),
                 PlaylistItem::Local(second.clone())
             ]
@@ -15700,130 +15360,6 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
         drop(state_ref);
 
         fs::remove_dir_all(root).expect("test folder should be removed");
-    }
-
-    #[test]
-    fn queue_playlist_append_adds_new_media_to_the_end() {
-        let playlist = vec![
-            local_item("/media/current.mkv"),
-            url_item("https://example.test/stream"),
-            local_item("/media/queued.mkv"),
-        ];
-        let additions = vec![
-            PathBuf::from("/media/current.mkv"),
-            PathBuf::from("/media/queued.mkv"),
-            PathBuf::from("/media/new.mp4"),
-            PathBuf::from("/media/album.flac"),
-        ];
-
-        let (playlist, count) = queue_playlist_insert(
-            playlist,
-            Path::new("/media/current.mkv"),
-            additions,
-            QueueInsertMode::Append,
-        )
-        .expect("new media should append");
-
-        assert_eq!(count, 2);
-        assert_eq!(
-            playlist,
-            vec![
-                local_item("/media/current.mkv"),
-                url_item("https://example.test/stream"),
-                local_item("/media/queued.mkv"),
-                local_item("/media/new.mp4"),
-                local_item("/media/album.flac"),
-            ]
-        );
-    }
-
-    #[test]
-    fn queue_playlist_play_next_inserts_after_current_and_moves_existing_items() {
-        let playlist = vec![
-            local_item("/media/previous.mkv"),
-            local_item("/media/current.mkv"),
-            url_item("https://example.test/stream"),
-            local_item("/media/later.mkv"),
-            local_item("/media/final.mkv"),
-        ];
-        let additions = vec![
-            PathBuf::from("/media/later.mkv"),
-            PathBuf::from("/media/new.mp4"),
-        ];
-
-        let (playlist, count) = queue_playlist_insert(
-            playlist,
-            Path::new("/media/current.mkv"),
-            additions,
-            QueueInsertMode::PlayNext,
-        )
-        .expect("play next should insert");
-
-        assert_eq!(count, 2);
-        assert_eq!(
-            playlist,
-            vec![
-                local_item("/media/previous.mkv"),
-                local_item("/media/current.mkv"),
-                local_item("/media/later.mkv"),
-                local_item("/media/new.mp4"),
-                url_item("https://example.test/stream"),
-                local_item("/media/final.mkv"),
-            ]
-        );
-    }
-
-    #[test]
-    fn queue_playlist_rejects_current_only_selection() {
-        assert!(
-            queue_playlist_insert(
-                vec![local_item("/media/current.mkv")],
-                Path::new("/media/current.mkv"),
-                vec![PathBuf::from("/media/current.mkv")],
-                QueueInsertMode::Append,
-            )
-            .is_none()
-        );
-    }
-
-    #[test]
-    fn reorder_playlist_moves_item_to_target_slot_after_removal() {
-        let playlist = vec![
-            local_item("/media/a.mkv"),
-            local_item("/media/b.mkv"),
-            url_item("https://example.test/c.mp4"),
-            local_item("/media/d.mkv"),
-        ];
-
-        let reordered = reorder_playlist(playlist.clone(), 0, 2).expect("move should work");
-        assert_eq!(
-            reordered,
-            vec![
-                local_item("/media/b.mkv"),
-                url_item("https://example.test/c.mp4"),
-                local_item("/media/a.mkv"),
-                local_item("/media/d.mkv"),
-            ]
-        );
-
-        let reordered = reorder_playlist(playlist, 3, 1).expect("move should work");
-        assert_eq!(
-            reordered,
-            vec![
-                local_item("/media/a.mkv"),
-                local_item("/media/d.mkv"),
-                local_item("/media/b.mkv"),
-                url_item("https://example.test/c.mp4"),
-            ]
-        );
-    }
-
-    #[test]
-    fn reorder_playlist_rejects_noop_or_out_of_range_moves() {
-        let playlist = vec![local_item("/media/a.mkv"), local_item("/media/b.mkv")];
-
-        assert!(reorder_playlist(playlist.clone(), 0, 0).is_none());
-        assert!(reorder_playlist(playlist, 3, 0).is_none());
     }
 
     #[test]
@@ -15840,23 +15376,6 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
         assert_eq!(playlist_drop_target_index(2, 2, true), None);
         assert_eq!(playlist_drop_target_index(1, 2, false), None);
         assert_eq!(playlist_drop_target_index(2, 1, true), None);
-    }
-
-    #[test]
-    fn remove_playlist_index_keeps_at_least_one_item() {
-        let playlist = vec![
-            local_item("/media/a.mkv"),
-            url_item("https://example.test/b.mp4"),
-            local_item("/media/c.mkv"),
-        ];
-
-        let without_middle = remove_playlist_index(playlist, 1).expect("remove should work");
-        assert_eq!(
-            without_middle,
-            vec![local_item("/media/a.mkv"), local_item("/media/c.mkv")]
-        );
-
-        assert!(remove_playlist_index(vec![local_item("/media/a.mkv")], 0).is_none());
     }
 
     fn github_asset(name: &str) -> GitHubAsset {

@@ -38,6 +38,36 @@ behaves identically on both sides.
   invariant that every preset writes the same six options are identical (pinned by the ported
   suite).
 
+## Playlist → `okp_core::playlist`
+
+- **Item model.** C# `Playlist` holds path strings; the Rust port holds `PlaylistItem` (a local
+  path or a stream URL) — the item model of the Linux shell's queue engine, which the port
+  absorbs (queue insert modes, reorder, removal, wrap-always transport stepping, and the
+  auto-advance toggle; none of these exist in the C# module, whose lists are immutable).
+  The auto-advance flag defaults to on — the fixed C# behavior — and Repeat=One bypasses it.
+  Construction sorts by the full path/URL string with the ported natural comparer, exactly the
+  C# sort; Rust's sort is stable where `List<T>.Sort` is not (same refinement noted for Lrc).
+- **`CurrentIndex` sentinel.** C# returns `-1` for "no current item"; `current_index()` returns
+  `Option<usize>` with `None` for the same case (the `Option` convention used across `okp-core`).
+- **Path matching case.** C# `SetCurrent`/`IndexOf` match paths with
+  `StringComparison.OrdinalIgnoreCase` (Windows filesystems are case-insensitive); the Rust port
+  matches by exact item equality — on Linux, paths differing only in case are distinct files, so
+  ignoring case could conflate them. A Windows consumer (via `okp-ffi`) must normalize case
+  before lookup. The ported ignore-case test asserts exact-case behavior instead.
+- **Shuffle RNG.** C# uses `System.Random` (time-seeded, injectable seam for tests); the port
+  uses a seedable xorshift64 — the Linux shell's shuffle RNG, with the shell providing clock
+  entropy via `reseed`. The spec's shuffle tests assert permutation properties (full coverage,
+  current-first), not concrete sequences, so both satisfy them; the Fisher–Yates `% (i + 1)`
+  modulo bias is negligible at playlist sizes.
+- **`Next()`/`Prev()` with duplicate entries.** C# advances by re-finding the peeked *path*, so
+  when an M3U repeats an entry the cursor lands on its first occurrence; the Rust port advances
+  to the actual neighbouring position. A deterministic refinement — identical whenever entries
+  are unique (always, for folder playlists). `reset` with identical items follows the same rule:
+  a cursor already sitting on an occurrence equal to the new current item stays put instead of
+  being re-found by equality, and the index-returning peeks (`peek_wrapping_index`,
+  `auto_advance_target_index`) let a shell load an item first and commit the cursor by position
+  only after the player accepts it.
+
 ## SubtitleSyncAligner → `okp_core::subtitle_sync`
 
 - **Null/absent sentinels.** C# `Align` returns `null` (and accepts `null` inputs) for the

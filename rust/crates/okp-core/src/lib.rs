@@ -3,6 +3,7 @@ pub mod lrc;
 pub mod m3u;
 pub mod media_formats;
 pub mod natural_compare;
+pub mod playlist;
 pub mod sha256sums;
 pub mod srt;
 pub mod subtitle_lift;
