@@ -445,6 +445,24 @@ mod tests {
     }
 
     #[test]
+    fn non_finite_resume_open_is_rejected() {
+        unsafe {
+            let machine = okp_player_machine_new();
+            let source = CString::new("/media/a.mkv").unwrap();
+            let mut open = command(OkpCommandKind::Open);
+            open.source = source.as_ptr();
+            // An infinite resume clears `non_negative`'s sentinel gate, so it reaches the
+            // core as a real value and must be refused rather than seeded into the state.
+            open.resume_from = f64::INFINITY;
+            let outcome = okp_player_machine_apply_command(machine, &open);
+            assert_eq!(outcome.kind, OkpOutcomeKind::Rejected);
+            assert_eq!(outcome.reject_reason, OkpRejectReason::NotFinite);
+            assert_eq!(okp_player_machine_status(machine), OkpPlaybackStatus::Idle);
+            okp_player_machine_free(machine);
+        }
+    }
+
+    #[test]
     fn non_finite_seek_is_rejected() {
         unsafe {
             let machine = okp_player_machine_new();

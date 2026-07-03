@@ -326,6 +326,14 @@ impl PlayerMachine {
     pub fn apply_command(&mut self, command: &PlayerCommand) -> CommandOutcome {
         match command {
             PlayerCommand::Open(request) => {
+                // A resume point, if given, must be finite before it becomes the seek
+                // target: reject NaN/infinity here rather than record it in the snapshot.
+                if request
+                    .resume_from
+                    .is_some_and(|resume| !resume.is_finite())
+                {
+                    return CommandOutcome::Rejected(RejectReason::NotFinite);
+                }
                 // Volume and speed are engine-global and persist across loads; keep them.
                 let volume = self.snapshot.volume;
                 let speed = self.snapshot.speed;
@@ -517,6 +525,35 @@ mod tests {
         assert_eq!(machine.status(), PlaybackStatus::Opening);
         assert_eq!(machine.snapshot().source, Some(local("/media/a.mkv")));
         assert_eq!(machine.snapshot().time_pos, Some(42.5));
+    }
+
+    #[test]
+    fn open_rejects_a_non_finite_resume_point() {
+        for resume in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut machine = PlayerMachine::new();
+            assert_eq!(
+                machine.apply_command(&PlayerCommand::Open(OpenRequest {
+                    source: local("/media/a.mkv"),
+                    resume_from: Some(resume),
+                    initial_audio: None,
+                    initial_subtitle: None,
+                })),
+                CommandOutcome::Rejected(RejectReason::NotFinite)
+            );
+            // A rejected open records nothing and burns no request id: the machine is
+            // untouched, exactly as it was fresh.
+            assert_eq!(machine.snapshot(), &PlaybackSnapshot::default());
+
+            // The very next accepted command still takes request id 1.
+            assert_eq!(
+                request_id(
+                    machine.apply_command(&PlayerCommand::Open(OpenRequest::new(local(
+                        "/media/a.mkv",
+                    ))))
+                ),
+                1
+            );
+        }
     }
 
     #[test]
