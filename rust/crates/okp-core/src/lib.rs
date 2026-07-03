@@ -12,6 +12,7 @@ pub mod mpv_conf_text;
 pub mod natural_compare;
 pub mod network_path;
 pub mod nfo_metadata;
+pub mod player;
 pub mod playlist;
 pub mod recents_shelf;
 pub mod settings;
