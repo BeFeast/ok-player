@@ -12,3 +12,6 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 okp-core = { path = "../okp-core" }
 
+[build-dependencies]
+cbindgen = "0.29"
+
