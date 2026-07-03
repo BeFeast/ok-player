@@ -23,3 +23,17 @@ behaves identically on both sides.
   despite the parser's "never throws" contract (both values pass their individual range guards).
   The Rust port's `f64` arithmetic just yields a large finite time and never panics. Neither
   suite covers this corner; the Rust behavior is the intended one.
+
+## SubtitleLift → `okp_core::subtitle_lift` / SubtitleStyle → `okp_core::subtitle_style`
+
+- **`FromKey(null)` sentinel.** C# takes a nullable `string?`; the Rust `from_key` takes
+  `Option<&str>` with `None` for the same case (matching the `Option`-based convention already
+  used across `okp-core`). Both fall back to the Default preset.
+- **`FromKey` case-insensitivity.** C# compares keys with `StringComparison.OrdinalIgnoreCase`;
+  the Rust port uses `eq_ignore_ascii_case`. The two differ only for non-ASCII input, and every
+  preset key is ASCII, so matching is identical for any key that can resolve to a preset; all
+  other input falls back to Default on both sides.
+- **Preset data shape.** C# exposes `IReadOnlyList<KeyValuePair<string, string>>` built at class
+  init; Rust exposes the same ordered pairs as `'static` slices. Keys, values, ordering, and the
+  invariant that every preset writes the same six options are identical (pinned by the ported
+  suite).
