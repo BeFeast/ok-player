@@ -229,3 +229,21 @@ behaves identically on both sides.
   milliseconds with `round_ties_even`, matching the C# `Math.Round` banker's rounding behind
   `SubDelayMs` on Windows. The shell previously rounded half away from zero; the two differed
   only at exact half-millisecond delays, unreachable through either shell's own controls.
+
+## Update selection → `okp_core::update_selection` (Linux shell extraction)
+
+- **No C# counterpart.** Windows updates flow through Velopack's static feed (`UpdateFeed`,
+  pinned by `UpdateFeedTests.cs`), where Velopack itself compares SemVer versions and picks the
+  package; nothing to port. This module is the pure half of the Linux `.deb` self-update flow
+  extracted from the GTK shell under the freeze-boundary rule (EPIC #134, B8): the GitHub
+  release-feed schema (`GitHubRelease`/`GitHubAsset`), the natural version comparison, and
+  `select_latest_deb_update`, which picks the newest published prerelease strictly newer than
+  the running version that ships an `ok-player_*_amd64.deb`. The spec is the four shell tests
+  that moved into the module. Network fetch, checksum download/verification (fail-closed via
+  the `SHA256SUMS_ASSET` URL the selection carries), staging, and installation stay in the
+  shell; behavior is unchanged.
+- **Version compare is release-feed-specific.** `compare_versions` orders by numeric runs with
+  a lexicographic tiebreak — it is not `natural_compare` (the ported C# filename comparer),
+  which interleaves text segments into the comparison. For the single-scheme version strings
+  the feed carries (`0.1.0-linux-alpha.N`) the two agree; the update path keeps its shipped
+  comparer verbatim.
