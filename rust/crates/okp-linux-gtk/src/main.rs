@@ -19,6 +19,7 @@ use okp_core::playlist::{Playlist, PlaylistItem, QueueInsertMode, RepeatMode};
 use okp_core::shortcuts::{
     self, ShortcutAction, ShortcutBinding, ShortcutChord, ShortcutModifiers, ShortcutSlot,
 };
+use okp_core::update_selection::{self, DebUpdate, GitHubRelease, SHA256SUMS_ASSET};
 use okp_core::{
     AppIdentity, m3u, media_formats, natural_compare, sha256sums, subtitle_delay, time_code,
 };
@@ -26,7 +27,6 @@ use okp_mpv::{
     AbLoopState, AudioDevice, Chapter, InfoSection, InfoTrack, MediaInfo, Mpv, MpvEvent,
     PlaybackState, Track, TrackKind, current_render_target_size, resolve_render_target_size,
 };
-use serde::Deserialize;
 use velopack::{
     UpdateCheck, UpdateInfo, UpdateManager, UpdateOptions, VelopackApp, VelopackAsset,
     sources::GithubSource,
@@ -54,7 +54,6 @@ const MPRIS_FOLDER_ART_STEMS: &[&str] =
 const MPRIS_EMBEDDED_ART_TIMEOUT: Duration = Duration::from_secs(8);
 const LINUX_UPDATE_REPO_URL: &str = "https://github.com/BeFeast/ok-player";
 const LINUX_DEB_RELEASES_API_URL: &str = "https://api.github.com/repos/BeFeast/ok-player/releases";
-const LINUX_SHA256SUMS_ASSET: &str = "SHA256SUMS";
 const LINUX_SHA256SUMS_MAX_BYTES: u64 = 1024 * 1024;
 const UPDATE_STATUS_NOT_CHECKED: &str = "Not checked yet";
 const DEB_SELF_INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
@@ -697,7 +696,7 @@ struct PendingLinuxUpdate {
 enum LinuxUpdateTarget {
     Info(Box<UpdateInfo>),
     Asset(Box<VelopackAsset>),
-    Deb(ManualDebUpdate),
+    Deb(DebUpdate),
 }
 
 enum LinuxUpdateCheckResult {
@@ -765,30 +764,6 @@ enum LinuxUpdateApplyResult {
     Restarting,
     DebInstalled(PathBuf),
     InstallerOpened(PathBuf),
-}
-
-#[derive(Clone, Debug)]
-struct ManualDebUpdate {
-    version: String,
-    name: String,
-    url: String,
-    size: Option<u64>,
-    sums_url: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GitHubRelease {
-    tag_name: String,
-    draft: bool,
-    prerelease: bool,
-    assets: Vec<GitHubAsset>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GitHubAsset {
-    name: String,
-    browser_download_url: String,
-    size: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -7606,7 +7581,7 @@ impl PendingLinuxUpdate {
     }
 }
 
-fn check_for_linux_deb_update() -> Result<Option<ManualDebUpdate>, String> {
+fn check_for_linux_deb_update() -> Result<Option<DebUpdate>, String> {
     let url = linux_deb_releases_url();
     let mut response = ureq::get(&url)
         .header("Accept", "application/vnd.github+json")
@@ -7620,59 +7595,17 @@ fn check_for_linux_deb_update() -> Result<Option<ManualDebUpdate>, String> {
     let releases: Vec<GitHubRelease> = serde_json::from_str(&body)
         .map_err(|error| format!("GitHub .deb update feed was invalid: {error}"))?;
 
-    Ok(select_latest_linux_deb_update(releases, APP_BUILD_VERSION))
+    Ok(update_selection::select_latest_deb_update(
+        releases,
+        APP_BUILD_VERSION,
+    ))
 }
 
 fn linux_deb_releases_url() -> String {
     env::var("OKP_LINUX_DEB_RELEASES_URL").unwrap_or_else(|_| LINUX_DEB_RELEASES_API_URL.to_owned())
 }
 
-fn select_latest_linux_deb_update(
-    releases: Vec<GitHubRelease>,
-    current_version: &str,
-) -> Option<ManualDebUpdate> {
-    let mut best = None::<ManualDebUpdate>;
-    for release in releases {
-        if release.draft || !release.prerelease {
-            continue;
-        }
-        let version = release
-            .tag_name
-            .strip_prefix("linux-v")
-            .unwrap_or(&release.tag_name)
-            .to_owned();
-        if compare_linux_versions(&version, current_version) != std::cmp::Ordering::Greater {
-            continue;
-        }
-        let sums_url = release
-            .assets
-            .iter()
-            .find(|asset| asset.name == LINUX_SHA256SUMS_ASSET)
-            .map(|asset| asset.browser_download_url.clone());
-        let Some(asset) = release.assets.into_iter().find(|asset| {
-            asset.name.starts_with("ok-player_") && asset.name.ends_with("_amd64.deb")
-        }) else {
-            continue;
-        };
-        let candidate = ManualDebUpdate {
-            version,
-            name: asset.name,
-            url: asset.browser_download_url,
-            size: asset.size,
-            sums_url,
-        };
-        if best.as_ref().is_none_or(|current| {
-            compare_linux_versions(&candidate.version, &current.version)
-                == std::cmp::Ordering::Greater
-        }) {
-            best = Some(candidate);
-        }
-    }
-
-    best
-}
-
-fn download_deb_update(update: ManualDebUpdate) -> Result<PathBuf, String> {
+fn download_deb_update(update: DebUpdate) -> Result<PathBuf, String> {
     let cache_dir = linux_update_cache_dir();
     fs::create_dir_all(&cache_dir)
         .map_err(|error| format!("Could not create update cache: {error}"))?;
@@ -7706,9 +7639,9 @@ fn download_deb_update(update: ManualDebUpdate) -> Result<PathBuf, String> {
 /// release publishes none: a stripped manifest must block the install, not
 /// downgrade it to unverified. Errors here are checksum-download errors,
 /// deliberately distinct from package download and verification errors.
-fn download_deb_checksums(update: &ManualDebUpdate) -> Result<String, String> {
+fn download_deb_checksums(update: &DebUpdate) -> Result<String, String> {
     let sums_url = update.sums_url.as_deref().ok_or_else(|| {
-        format!("Release {} does not publish {LINUX_SHA256SUMS_ASSET}; refusing to install an unverifiable update.", update.version)
+        format!("Release {} does not publish {SHA256SUMS_ASSET}; refusing to install an unverifiable update.", update.version)
     })?;
     let mut response = ureq::get(sums_url)
         .header("User-Agent", "OK Player Linux")
@@ -7884,38 +7817,6 @@ fn open_deb_installer(path: &Path) -> Result<(), String> {
             )
         })?;
     Ok(())
-}
-
-fn compare_linux_versions(left: &str, right: &str) -> std::cmp::Ordering {
-    let left_key = linux_version_sort_key(left);
-    let right_key = linux_version_sort_key(right);
-    let max_len = left_key.len().max(right_key.len());
-    for index in 0..max_len {
-        let left_part = left_key.get(index).copied().unwrap_or_default();
-        let right_part = right_key.get(index).copied().unwrap_or_default();
-        match left_part.cmp(&right_part) {
-            std::cmp::Ordering::Equal => {}
-            order => return order,
-        }
-    }
-    left.cmp(right)
-}
-
-fn linux_version_sort_key(version: &str) -> Vec<u64> {
-    let mut key = Vec::new();
-    let mut current = String::new();
-    for character in version.chars() {
-        if character.is_ascii_digit() {
-            current.push(character);
-        } else if !current.is_empty() {
-            key.push(current.parse().unwrap_or_default());
-            current.clear();
-        }
-    }
-    if !current.is_empty() {
-        key.push(current.parse().unwrap_or_default());
-    }
-    key
 }
 
 fn open_external_url(url: &str) {
@@ -14634,114 +14535,9 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
         assert_eq!(playlist_drop_target_index(2, 1, true), None);
     }
 
-    fn github_asset(name: &str) -> GitHubAsset {
-        GitHubAsset {
-            name: name.to_owned(),
-            browser_download_url: format!("https://example.invalid/{name}"),
-            size: Some(42),
-        }
-    }
-
-    fn github_release(
-        tag_name: &str,
-        draft: bool,
-        prerelease: bool,
-        assets: Vec<GitHubAsset>,
-    ) -> GitHubRelease {
-        GitHubRelease {
-            tag_name: tag_name.to_owned(),
-            draft,
-            prerelease,
-            assets,
-        }
-    }
-
-    #[test]
-    fn linux_version_compare_orders_alpha_numbers_naturally() {
-        assert_eq!(
-            compare_linux_versions("0.1.0-linux-alpha.10", "0.1.0-linux-alpha.9"),
-            std::cmp::Ordering::Greater
-        );
-        assert_eq!(
-            compare_linux_versions("0.1.0-linux-alpha.45", "0.1.0-linux-alpha.45"),
-            std::cmp::Ordering::Equal
-        );
-        assert_eq!(
-            compare_linux_versions("0.1.0-linux-alpha.44", "0.1.0-linux-alpha.45"),
-            std::cmp::Ordering::Less
-        );
-    }
-
-    #[test]
-    fn selects_latest_linux_deb_prerelease_newer_than_current() {
-        let update = select_latest_linux_deb_update(
-            vec![
-                github_release(
-                    "linux-v0.1.0-linux-alpha.46",
-                    false,
-                    true,
-                    vec![
-                        github_asset("SHA256SUMS"),
-                        github_asset("ok-player_0.1.0-linux-alpha.46_amd64.deb"),
-                    ],
-                ),
-                github_release(
-                    "linux-v0.1.0-linux-alpha.47",
-                    true,
-                    true,
-                    vec![github_asset("ok-player_0.1.0-linux-alpha.47_amd64.deb")],
-                ),
-                github_release(
-                    "linux-v0.1.0-linux-alpha.48",
-                    false,
-                    false,
-                    vec![github_asset("ok-player_0.1.0-linux-alpha.48_amd64.deb")],
-                ),
-                github_release(
-                    "linux-v0.1.0-linux-alpha.49",
-                    false,
-                    true,
-                    vec![github_asset("com.befeast.okplayer.AppImage")],
-                ),
-                github_release(
-                    "linux-v0.1.0-linux-alpha.45",
-                    false,
-                    true,
-                    vec![github_asset("ok-player_0.1.0-linux-alpha.45_amd64.deb")],
-                ),
-            ],
-            "0.1.0-linux-alpha.45",
-        )
-        .expect("alpha46 .deb should be selected");
-
-        assert_eq!(update.version, "0.1.0-linux-alpha.46");
-        assert_eq!(update.name, "ok-player_0.1.0-linux-alpha.46_amd64.deb");
-        assert_eq!(update.size, Some(42));
-        assert_eq!(
-            update.sums_url.as_deref(),
-            Some("https://example.invalid/SHA256SUMS")
-        );
-    }
-
-    #[test]
-    fn deb_update_selection_leaves_sums_url_empty_when_release_lacks_manifest() {
-        let update = select_latest_linux_deb_update(
-            vec![github_release(
-                "linux-v0.1.0-linux-alpha.46",
-                false,
-                true,
-                vec![github_asset("ok-player_0.1.0-linux-alpha.46_amd64.deb")],
-            )],
-            "0.1.0-linux-alpha.45",
-        )
-        .expect("alpha46 .deb should be selected");
-
-        assert!(update.sums_url.is_none());
-    }
-
     #[test]
     fn deb_checksum_download_refuses_release_without_manifest() {
-        let update = ManualDebUpdate {
+        let update = DebUpdate {
             version: "0.1.0-linux-alpha.46".to_owned(),
             name: "ok-player_0.1.0-linux-alpha.46_amd64.deb".to_owned(),
             url: "https://example.invalid/update.deb".to_owned(),
@@ -14838,7 +14634,7 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
     fn deb_update_action_requests_install() {
         let update = PendingLinuxUpdate {
             manager: None,
-            target: LinuxUpdateTarget::Deb(ManualDebUpdate {
+            target: LinuxUpdateTarget::Deb(DebUpdate {
                 version: "0.1.0-linux-alpha.46".to_owned(),
                 name: "ok-player_0.1.0-linux-alpha.46_amd64.deb".to_owned(),
                 url: "https://example.invalid/update.deb".to_owned(),
@@ -14864,7 +14660,7 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
 
         let update = PendingLinuxUpdate {
             manager: None,
-            target: LinuxUpdateTarget::Deb(ManualDebUpdate {
+            target: LinuxUpdateTarget::Deb(DebUpdate {
                 version: "0.1.0-linux-alpha.46".to_owned(),
                 name: "ok-player_0.1.0-linux-alpha.46_amd64.deb".to_owned(),
                 url: "https://example.invalid/update.deb".to_owned(),
@@ -14912,28 +14708,5 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
             parse_deb_self_install_timeout(None),
             DEB_SELF_INSTALL_TIMEOUT
         );
-    }
-
-    #[test]
-    fn deb_update_selection_returns_none_when_only_current_or_older_exist() {
-        let update = select_latest_linux_deb_update(
-            vec![
-                github_release(
-                    "linux-v0.1.0-linux-alpha.44",
-                    false,
-                    true,
-                    vec![github_asset("ok-player_0.1.0-linux-alpha.44_amd64.deb")],
-                ),
-                github_release(
-                    "linux-v0.1.0-linux-alpha.45",
-                    false,
-                    true,
-                    vec![github_asset("ok-player_0.1.0-linux-alpha.45_amd64.deb")],
-                ),
-            ],
-            "0.1.0-linux-alpha.45",
-        );
-
-        assert!(update.is_none());
     }
 }
