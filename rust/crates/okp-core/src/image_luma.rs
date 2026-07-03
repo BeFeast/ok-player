@@ -37,6 +37,7 @@ pub fn mean_bgra(bgra: &[u8], stride: usize) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use okp_test_fixtures::assert_close;
 
     fn fill(pixels: usize, b: u8, g: u8, r: u8) -> Vec<u8> {
         let mut buf = vec![0u8; pixels * 4];
@@ -47,13 +48,6 @@ mod tests {
             px[3] = 255;
         }
         buf
-    }
-
-    fn assert_close(actual: f64, expected: f64, tolerance: f64) {
-        assert!(
-            (actual - expected).abs() < tolerance,
-            "expected {expected} ± {tolerance}, got {actual}"
-        );
     }
 
     #[test]

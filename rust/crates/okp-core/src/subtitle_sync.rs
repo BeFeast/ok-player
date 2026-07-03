@@ -236,6 +236,7 @@ fn tokenize(text: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use okp_test_fixtures::assert_close;
 
     fn cue(index: i32, start: f64, end: f64, text: &str) -> SrtCue {
         SrtCue {
@@ -277,20 +278,12 @@ mod tests {
         list
     }
 
-    #[track_caller]
-    fn assert_offset(actual: f64, expected: f64, tolerance: f64) {
-        assert!(
-            (actual - expected).abs() < tolerance,
-            "expected offset {expected}±{tolerance}, got {actual}"
-        );
-    }
-
     #[test]
     fn subtitles_early_returns_positive_delay() {
         // Audio actually happens 3 s LATER than the cues are authored → subs need +3 s delay.
         let asr = spoken(13.0, 16.0, 19.0);
         let r = align(&asr, &cues(), AlignOptions::default()).expect("aligned");
-        assert_offset(r.offset_seconds, 3.0, 0.05);
+        assert_close(r.offset_seconds, 3.0, 0.05);
         assert!(r.votes >= 2, "votes {}", r.votes);
         assert!(r.confidence > 0.6, "confidence {}", r.confidence);
     }
@@ -300,14 +293,14 @@ mod tests {
         // Audio happens 2 s EARLIER than authored → subs need −2 s delay.
         let asr = spoken(8.0, 11.0, 14.0);
         let r = align(&asr, &cues(), AlignOptions::default()).expect("aligned");
-        assert_offset(r.offset_seconds, -2.0, 0.05);
+        assert_close(r.offset_seconds, -2.0, 0.05);
     }
 
     #[test]
     fn already_in_sync_returns_near_zero() {
         let asr = spoken(10.0, 13.0, 16.0);
         let r = align(&asr, &cues(), AlignOptions::default()).expect("aligned");
-        assert_offset(r.offset_seconds, 0.0, 0.05);
+        assert_close(r.offset_seconds, 0.0, 0.05);
     }
 
     #[test]
@@ -322,7 +315,7 @@ mod tests {
             token("lazy", 17.2), // "the"/"dog" dropped
         ];
         let r = align(&asr, &cues(), AlignOptions::default()).expect("aligned");
-        assert_offset(r.offset_seconds, 3.0, 0.05);
+        assert_close(r.offset_seconds, 3.0, 0.05);
     }
 
     #[test]
@@ -331,7 +324,7 @@ mod tests {
         let cues = [cue(1, 20.0, 21.0, "No no no")];
         let asr = vec![token("no", 24.0), token("no", 24.5), token("no", 25.0)];
         let r = align(&asr, &cues, AlignOptions::default()).expect("aligned");
-        assert_offset(r.offset_seconds, 4.0, 0.05); // 24.0 − 20.0
+        assert_close(r.offset_seconds, 4.0, 0.05); // 24.0 − 20.0
     }
 
     #[test]
@@ -352,7 +345,7 @@ mod tests {
         ];
         let r = align(&asr, &cues, AlignOptions::default()).expect("aligned");
         assert_eq!(r.votes, 2); // both cues in one cluster despite the boundary
-        assert_offset(r.offset_seconds, 3.125, 0.005);
+        assert_close(r.offset_seconds, 3.125, 0.005);
     }
 
     #[test]
@@ -370,7 +363,7 @@ mod tests {
             token("dog", 17.6),
         ];
         let r = align(&asr, &cues(), AlignOptions::default()).expect("aligned");
-        assert_offset(r.offset_seconds, 3.0, 0.05);
+        assert_close(r.offset_seconds, 3.0, 0.05);
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use super::*;
+use okp_test_fixtures::unique_temp_dir;
 
 fn local_item(path: &str) -> PlaylistItem {
     PlaylistItem::Local(PathBuf::from(path))
@@ -6,16 +7,6 @@ fn local_item(path: &str) -> PlaylistItem {
 
 fn url_item(url: &str) -> PlaylistItem {
     PlaylistItem::Url(url.to_owned())
-}
-
-fn unique_temp_dir(prefix: &str) -> PathBuf {
-    env::temp_dir().join(format!(
-        "{prefix}-{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock should be after epoch")
-            .as_nanos()
-    ))
 }
 
 fn write_jpeg_header(path: &Path) {

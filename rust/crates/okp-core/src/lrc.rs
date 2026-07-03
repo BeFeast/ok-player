@@ -335,10 +335,7 @@ mod tests {
     use super::*;
 
     fn assert_seconds(actual: f64, expected: f64) {
-        assert!(
-            (actual - expected).abs() < 1e-9,
-            "expected {expected}, got {actual}"
-        );
+        okp_test_fixtures::assert_close(actual, expected, 1e-9);
     }
 
     fn texts(doc: &LrcDocument) -> Vec<&str> {

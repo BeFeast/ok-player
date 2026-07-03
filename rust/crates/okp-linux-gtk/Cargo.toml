@@ -16,3 +16,6 @@ serde_json.workspace = true
 ureq.workspace = true
 velopack.workspace = true
 zbus.workspace = true
+
+[dev-dependencies]
+okp-test-fixtures = { path = "../okp-test-fixtures" }

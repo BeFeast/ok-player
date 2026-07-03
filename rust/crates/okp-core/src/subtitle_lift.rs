@@ -60,10 +60,7 @@ mod tests {
             // It must equal exactly the percentage that maps the fixed OSC clearance onto this
             // surface height.
             let expected = OSC / height * 100.0;
-            assert!(
-                (lift - expected).abs() < 1e-6,
-                "expected {expected}, got {lift}"
-            );
+            okp_test_fixtures::assert_close(lift, expected, 1e-6);
         }
     }
 
