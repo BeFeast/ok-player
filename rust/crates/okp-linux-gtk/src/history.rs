@@ -1,79 +1,17 @@
-use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::{Deserialize, Serialize};
-
-const HISTORY_VERSION: u32 = 1;
+pub use okp_core::history::Preferences as PlaybackPreferences;
+use okp_core::history::{FileEntry as HistoryRecord, History as HistoryFile};
 
 #[derive(Debug)]
 pub struct HistoryStore {
     path: PathBuf,
     data: HistoryFile,
     dirty: bool,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct PlaybackPreferences {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub audio_enabled: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub audio_track_id: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub subtitle_enabled: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub subtitle_track_id: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub secondary_subtitle_enabled: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub secondary_subtitle_track_id: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub subtitle_delay: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub subtitle_scale: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub speed: Option<f64>,
-}
-
-impl PlaybackPreferences {
-    fn is_empty(&self) -> bool {
-        self.audio_enabled.is_none()
-            && self.audio_track_id.is_none()
-            && self.subtitle_enabled.is_none()
-            && self.subtitle_track_id.is_none()
-            && self.secondary_subtitle_enabled.is_none()
-            && self.secondary_subtitle_track_id.is_none()
-            && self.subtitle_delay.is_none()
-            && self.subtitle_scale.is_none()
-            && self.speed.is_none()
-    }
-
-    fn merge(&mut self, updated: PlaybackPreferences) {
-        if updated.audio_enabled.is_some() {
-            self.audio_enabled = updated.audio_enabled;
-            self.audio_track_id = updated.audio_track_id;
-        }
-        if updated.subtitle_enabled.is_some() {
-            self.subtitle_enabled = updated.subtitle_enabled;
-            self.subtitle_track_id = updated.subtitle_track_id;
-        }
-        if updated.secondary_subtitle_enabled.is_some() {
-            self.secondary_subtitle_enabled = updated.secondary_subtitle_enabled;
-            self.secondary_subtitle_track_id = updated.secondary_subtitle_track_id;
-        }
-        if updated.subtitle_delay.is_some() {
-            self.subtitle_delay = updated.subtitle_delay;
-        }
-        if updated.subtitle_scale.is_some() {
-            self.subtitle_scale = updated.subtitle_scale;
-        }
-        if updated.speed.is_some() {
-            self.speed = updated.speed;
-        }
-    }
 }
 
 impl Default for HistoryStore {
@@ -87,12 +25,8 @@ impl HistoryStore {
         let path = history_path();
         let data = fs::read_to_string(&path)
             .ok()
-            .and_then(|json| serde_json::from_str::<HistoryFile>(&json).ok())
-            .filter(|data| data.version == HISTORY_VERSION)
-            .unwrap_or_else(|| HistoryFile {
-                version: HISTORY_VERSION,
-                files: BTreeMap::new(),
-            });
+            .and_then(|json| HistoryFile::load(&json))
+            .unwrap_or_default();
 
         Self {
             path,
@@ -134,6 +68,7 @@ impl HistoryStore {
                 finished: finished || (existing_finished && final_stretch),
                 updated_at_unix: unix_now(),
                 preferences,
+                ..HistoryRecord::default()
             },
         );
         self.dirty = true;
@@ -164,7 +99,7 @@ impl HistoryStore {
             .data
             .files
             .remove(&key)
-            .unwrap_or_else(HistoryRecord::empty);
+            .unwrap_or_else(new_history_record);
         record.preferences.merge(preferences);
         record.updated_at_unix = unix_now();
         self.data.files.insert(key, record);
@@ -204,31 +139,12 @@ impl HistoryStore {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct HistoryFile {
-    version: u32,
-    files: BTreeMap<String, HistoryRecord>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct HistoryRecord {
-    position: f64,
-    duration: f64,
-    finished: bool,
-    updated_at_unix: i64,
-    #[serde(default, skip_serializing_if = "PlaybackPreferences::is_empty")]
-    preferences: PlaybackPreferences,
-}
-
-impl HistoryRecord {
-    fn empty() -> Self {
-        Self {
-            position: 0.0,
-            duration: 0.0,
-            finished: false,
-            updated_at_unix: unix_now(),
-            preferences: PlaybackPreferences::default(),
-        }
+/// A fresh record stamped with the current time — the starting point when preferences
+/// are recorded for a file that has no progress entry yet.
+fn new_history_record() -> HistoryRecord {
+    HistoryRecord {
+        updated_at_unix: unix_now(),
+        ..HistoryRecord::default()
     }
 }
 
@@ -266,10 +182,7 @@ mod tests {
     fn store() -> HistoryStore {
         HistoryStore {
             path: PathBuf::from("unused.json"),
-            data: HistoryFile {
-                version: HISTORY_VERSION,
-                files: BTreeMap::new(),
-            },
+            data: HistoryFile::default(),
             dirty: false,
         }
     }

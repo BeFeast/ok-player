@@ -247,3 +247,105 @@ behaves identically on both sides.
   which interleaves text segments into the comparison. For the single-scheme version strings
   the feed carries (`0.1.0-linux-alpha.N`) the two agree; the update path keeps its shipped
   comparer verbatim.
+
+## Persistence schemas → `okp_core::settings` / `okp_core::history` (shared schema + migration)
+
+The shared, versioned on-disk schemas both shells converge on (EPIC #134, B9). Unlike the
+extractions above, these were never a C# port: two divergent on-disk **dialects** shipped —
+the Linux GTK shell's snake_case files and the Windows `OkPlayer.Core` PascalCase files — and
+this work designs one **canonical** document that is a superset of both, plus the migration
+that reads either dialect. The schema and the migration live in core; **path resolution and
+file IO stay in each shell** (the "shell seam": `$XDG_CONFIG_HOME`/`$XDG_STATE_HOME` on Linux,
+`%APPDATA%` on Windows). The canonical form is snake_case, sectioned/wrapped, and stamped
+`version: 2` (bumped from the Linux alpha `1`). `Settings::load` / `History::load` accept the
+canonical form, the Linux alpha dialect, and the Windows dialect, and return `None` for
+anything else so the shell falls back to defaults — exactly how both shells already treat a
+corrupt file. The Windows shell still writes its own PascalCase files today; it adopts the
+canonical schema when the C ABI consumer lands (the "%APPDATA% later" note in the issue), and
+migrating now, while user state is ~2 testers, keeps that switch cheap. The Windows C# tree is
+untouched by this work; the Windows migration is exercised only by the Rust golden tests.
+
+### Why a version bump, and what "migration" means per dialect
+
+- **Linux alpha (`version: 1`, snake_case, `{ version, playback, audio, video, updates,
+  advanced }` for settings; `{ version, files }` for history).** The canonical form is a
+  structural superset, so an alpha document deserializes directly; `load` only re-stamps the
+  version to `2` and leaves every value untouched (the added sections/fields default to absent).
+  A tester's alpha file therefore upgrades in place with no data loss, and the shell's on-disk
+  output is byte-identical apart from the version stamp and any newly written field. A document
+  whose `version` is `0` or greater than `2` is rejected (fall back to defaults) rather than
+  silently down-migrated.
+- **Windows (PascalCase; settings flat with `SchemaVersion`, history a bare
+  `Dictionary<string, FileRecord>` with no wrapper).** Detected by shape — settings by the
+  `SchemaVersion` key (the lowercase `version` marks the native dialect), history by the
+  absence of the `{ version, files }` wrapper — then remapped field by field into the canonical
+  document.
+
+### Settings field map (Windows → canonical)
+
+| Windows `AppSettings` (PascalCase) | Canonical (`okp_core::settings`) |
+|---|---|
+| `DefaultVolume` (int) | `playback.volume` (f64) |
+| `ResumePlayback` | `playback.resume` |
+| `DefaultSpeed` | `playback.default_speed` |
+| `SkipStep` | `playback.skip_step_seconds` |
+| `HideControlsWhenPaused` | `playback.hide_controls_when_paused` |
+| `AudioNormalization` | `audio.normalization` |
+| `AudioDevice` (`""` = default) | `audio.device` (absent = default) |
+| `HardwareDecoding` (bool) | `video.hwdec` (`auto-safe` / `no`) |
+| `SubtitleScale` / `SubtitlePosition` / `SubtitleStyle` | `subtitles.scale` / `.position` / `.style` |
+| `Theme` / `AccentSource` | `appearance.theme` / `.accent_source` |
+| `AutoCheckUpdates` | `updates.auto_check` |
+| `HistoryRetentionDays` | `privacy.history_retention_days` |
+
+- **Hardware decoding is stored as the mpv string, not a bool.** The Linux dialect already
+  persists `video.hwdec` as the mpv option (`auto-safe` / `no`); the canonical form keeps that
+  encoding, so a Windows `HardwareDecoding` bool maps to `auto-safe` (true) or `no` (false).
+- **The default audio device is absent, not `""`.** Windows writes `""` for "device not
+  remembered"; the canonical form uses an absent field, matching the Linux `auto` convention
+  (`AudioSettings::device == None`).
+- **`mpv.conf` is not migrated from Windows settings.** On Windows the raw mpv config is a
+  separate `%APPDATA%\OkPlayer\mpv.conf` text file, never a field of `settings.json`, so
+  `advanced.mpv_conf` is left absent when migrating a Windows settings document (the shell reads
+  that file on its own). `advanced.keybindings` is likewise Linux-only.
+- **Linux-only vs Windows-only fields coexist.** The picture adjustments
+  (`video.brightness`/`contrast`/`saturation`/`gamma`), `playback.auto_advance`, `repeat`, and
+  `shuffle` are Linux-only; the `subtitles`, `appearance`, and `privacy` sections are Windows-only
+  today. Each shell reads the subset it understands and carries the rest through untouched on
+  save, so the shared schema grows without either side dropping the other's state. The three
+  Windows-only sections are `skip_serializing_if`-empty, so a Linux document never writes them.
+
+### History field map (Windows → canonical)
+
+| Windows `FileRecord` (PascalCase) | Canonical (`okp_core::history`) |
+|---|---|
+| `Position` / `Duration` / `Finished` | `position` / `duration` / `finished` |
+| `LastOpenedUtc` (ISO-8601 string) | `updated_at_unix` (i64 Unix seconds) |
+| `Title` / `PosterPath` | `title` / `poster_path` |
+| `Bookmarks` | `bookmarks` |
+| `UserChapters` (`{ Time, Title }`) | `chapters` (`{ time, title }`) |
+| `AudioId` / `SubtitleId` (int? sentinel) | `preferences.audio_enabled` + `audio_track_id` / subtitle pair |
+
+- **Timestamps become Unix seconds.** The Linux dialect already stores `updated_at_unix`
+  (epoch seconds); the canonical form keeps it. Windows `LastOpenedUtc`
+  (`DateTime.UtcNow.ToString("o")`, e.g. `2026-01-01T00:00:00.0000000Z`) is parsed to whole
+  UTC seconds — fractional seconds and any zone suffix are dropped, and only the `Z` UTC form
+  Windows emits is interpreted. An unparseable stamp folds to the epoch (`0`); real Windows
+  files always parse. Core carries a self-contained `days_from_civil` for this (no `chrono`
+  dependency), the same civil-day algorithm `history_format` uses.
+- **Track-id sentinels fold into the enable/track-id pair.** The Linux dialect records audio
+  and subtitle selection as an `Option<bool>` "enabled" flag beside an `Option<i64>` track id;
+  Windows records a single `int?` with the convention `null` = unrecorded, `-1` = explicitly
+  off, `>= 0` = a track id. Migration maps `null → (None, None)`, a negative id
+  `→ (Some(false), None)` ("keep it off"), and any other id `→ (Some(true), Some(id))`. This is
+  a best-effort reconciliation of the two per-file models; the secondary-subtitle, subtitle
+  delay/scale, and speed preferences have no Windows counterpart and stay absent.
+- **Windows-only extras are preserved but Linux never writes them.** `title`, `poster_path`,
+  `bookmarks`, and `chapters` are carried through the canonical record (so a future Windows
+  consumer keeps them) and are `skip_serializing_if`-empty, so a Linux-shaped record serializes
+  exactly as the alpha dialect did. The Linux shell's `record()` replaces a file's progress
+  fields while preserving its stored `preferences`, exactly as before; on Linux the extras are
+  always empty, so behavior is unchanged.
+- **Path keys are carried verbatim.** History is keyed by the raw media path string on both
+  platforms (Windows preserves backslashes and original case). Migration does not rewrite keys;
+  a cross-platform consumer normalizes case at lookup time (the same note as `Playlist`).

@@ -1,6 +1,7 @@
 pub mod app;
 pub mod aspect_resize;
 pub mod chapter_math;
+pub mod history;
 pub mod history_format;
 pub mod image_luma;
 pub mod launch_args;
@@ -13,6 +14,7 @@ pub mod network_path;
 pub mod nfo_metadata;
 pub mod playlist;
 pub mod recents_shelf;
+pub mod settings;
 pub mod sha256sums;
 pub mod shortcuts;
 pub mod srt;
