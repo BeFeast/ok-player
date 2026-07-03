@@ -1,0 +1,85 @@
+name: Update Feeds
+
+# The static home of the OK Player update channels (issues #131 Windows, #162 Linux).
+# Installed builds read their channel manifest from https://befeast.github.io/ok-player/:
+#   - Windows (Velopack SimpleWebSource):   updates/win/releases.win.json
+#   - Linux AppImage (Velopack HttpSource): updates/linux/releases.linux.json
+#   - Linux .deb self-updater:              updates/linux/deb.linux.json
+# This workflow is the ONLY writer of that site. It rebuilds the whole site from docs/site plus
+# manifests derived from the newest published release on each track (scripts/build-win-feed.sh and
+# scripts/build-linux-feed.sh) and deploys to GitHub Pages atomically — deploy-pages swaps the
+# entire site in one step, so every feed is always present and there is no window where any is
+# missing or half-written. Because the deploy replaces the whole site, BOTH feeds are rebuilt on
+# every run; one workflow owning the whole site is what keeps a Linux-triggered redeploy from
+# clobbering the Windows feed and vice versa.
+#
+# Triggers:
+#   - release published: `vpk upload github` (installer/build-velopack.ps1 -Publish) publishes the
+#     Windows v* release with the operator's token, so this event fires and the feed update rides
+#     the Windows release pipeline. Linux releases are created by release-linux.yml with
+#     GITHUB_TOKEN, which never fires this event — release-linux.yml instead calls this workflow
+#     directly via workflow_call once it has published a linux-v* release.
+#   - push to main touching the site or a generator: content redeploy.
+#   - workflow_dispatch: manual redeploy, first-time bootstrap, belt-and-braces re-runs.
+#   - workflow_call: invoked by release-linux.yml after publishing a linux-v* release.
+# Every run rebuilds both feeds from the current source of truth, so overlapping or repeated
+# triggers are harmless; the concurrency group serializes deploys so the last one wins.
+
+on:
+  release:
+    types: [published]
+  push:
+    branches: [main]
+    paths:
+      - 'docs/site/**'
+      - 'scripts/build-win-feed.sh'
+      - 'scripts/build-linux-feed.sh'
+      - '.github/workflows/publish-update-feeds.yml'
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  publish-feeds:
+    name: Publish update feeds to GitHub Pages
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Both scripts stage the shared docs/site skeleton idempotently, then write their own
+      # updates/<track>/ subtree. Running both into one _site yields the complete site so the
+      # single deploy below never drops the other track's feed.
+      - name: Build site + Windows manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/build-win-feed.sh "${{ github.repository }}" _site
+
+      - name: Build Linux manifests
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/build-linux-feed.sh "${{ github.repository }}" _site
+
+      # enablement: true creates the Pages site (build type "workflow") on the first run, so no
+      # separate admin step is needed. If org policy blocks API enablement, enable it once by
+      # hand: Settings -> Pages -> Source: GitHub Actions.
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
