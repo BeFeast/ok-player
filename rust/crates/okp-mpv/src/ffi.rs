@@ -50,15 +50,25 @@ pub struct mpv_event_end_file {
     pub playlist_insert_num_entries: c_int,
 }
 
+#[repr(C)]
+pub struct mpv_event_property {
+    pub name: *const c_char,
+    pub format: c_int,
+    pub data: *mut c_void,
+}
+
 pub const MPV_EVENT_NONE: c_int = 0;
 pub const MPV_EVENT_SHUTDOWN: c_int = 1;
+pub const MPV_EVENT_COMMAND_REPLY: c_int = 5;
 pub const MPV_EVENT_END_FILE: c_int = 7;
 pub const MPV_EVENT_FILE_LOADED: c_int = 8;
+pub const MPV_EVENT_PROPERTY_CHANGE: c_int = 22;
 pub const MPV_END_FILE_REASON_EOF: c_int = 0;
 pub const MPV_END_FILE_REASON_STOP: c_int = 2;
 pub const MPV_END_FILE_REASON_QUIT: c_int = 3;
 pub const MPV_END_FILE_REASON_ERROR: c_int = 4;
 pub const MPV_END_FILE_REASON_REDIRECT: c_int = 5;
+pub const MPV_FORMAT_NONE: c_int = 0;
 pub const MPV_RENDER_PARAM_INVALID: c_int = 0;
 pub const MPV_RENDER_PARAM_API_TYPE: c_int = 1;
 pub const MPV_RENDER_PARAM_OPENGL_INIT_PARAMS: c_int = 2;
@@ -94,6 +104,22 @@ unsafe extern "C" {
     pub fn mpv_get_property_string(ctx: *mut mpv_handle, name: *const c_char) -> *mut c_char;
     pub fn mpv_free(data: *mut c_void);
     pub fn mpv_command(ctx: *mut mpv_handle, args: *const *const c_char) -> c_int;
+    pub fn mpv_command_async(
+        ctx: *mut mpv_handle,
+        reply_userdata: u64,
+        args: *const *const c_char,
+    ) -> c_int;
+    pub fn mpv_observe_property(
+        ctx: *mut mpv_handle,
+        reply_userdata: u64,
+        name: *const c_char,
+        format: c_int,
+    ) -> c_int;
+    pub fn mpv_set_wakeup_callback(
+        ctx: *mut mpv_handle,
+        cb: Option<unsafe extern "C" fn(d: *mut c_void)>,
+        d: *mut c_void,
+    );
     pub fn mpv_wait_event(ctx: *mut mpv_handle, timeout: f64) -> *mut mpv_event;
 
     pub fn mpv_render_context_create(

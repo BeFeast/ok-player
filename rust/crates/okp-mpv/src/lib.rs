@@ -2,6 +2,7 @@ mod ffi;
 #[cfg(debug_assertions)]
 mod guard;
 mod player;
+mod pump;
 pub mod version;
 
 pub use player::{

@@ -218,13 +218,7 @@ pub(crate) fn set_playback_paused(state: &Rc<RefCell<PlayerState>>, paused: bool
         let Some(mpv) = state.mpv.as_ref() else {
             return;
         };
-        match mpv.playback_state() {
-            Ok(playback) => playback.paused != paused,
-            Err(error) => {
-                eprintln!("Failed to read playback state for MPRIS command: {error}");
-                false
-            }
-        }
+        mpv.observed_playback_state().paused != paused
     };
 
     if should_toggle {

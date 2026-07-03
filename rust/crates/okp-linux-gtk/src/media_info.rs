@@ -5,19 +5,18 @@ pub(crate) fn open_media_info_window(
     state: &Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) {
-    let result = {
+    let media_info = {
         let state = state.borrow();
         let Some(mpv) = state.mpv.as_ref() else {
             return;
         };
 
-        mpv.media_info(state.current_file.as_deref())
+        mpv.observed_media_info()
     };
 
-    match result {
-        Ok(media_info) => show_media_info_window(parent, &media_info, status_toast),
-        Err(error) => {
-            eprintln!("Failed to read media information: {error}");
+    match media_info {
+        Some(media_info) => show_media_info_window(parent, &media_info, status_toast),
+        None => {
             status_toast.show("Media information unavailable");
         }
     }

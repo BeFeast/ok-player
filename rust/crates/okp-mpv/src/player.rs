@@ -1,5 +1,5 @@
 use std::ffi::{CStr, CString, NulError};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ptr::{self, NonNull};
 
 #[cfg(unix)]
@@ -9,6 +9,7 @@ use libc::{c_char, c_int, c_void};
 use thiserror::Error;
 
 use crate::ffi;
+use crate::pump::EventPump;
 
 const AUDIO_NORMALIZATION_FILTER_LABEL: &str = "@okpnorm";
 const AUDIO_NORMALIZATION_FILTER: &str = "@okpnorm:dynaudnorm";
@@ -182,141 +183,74 @@ pub enum MpvError {
     MissingRenderContext,
 }
 
-pub struct Mpv {
+/// A bare, non-owning handle over which every mpv property read is issued.
+///
+/// It carries no debug guard, so it is safe to use from the background event
+/// pump: the guard exists to catch reads on the *UI* thread, and the pump reads
+/// off it deliberately. `Mpv` owns the handle and its destruction; `RawReader`
+/// only borrows the pointer, which the libmpv client API allows to be used from
+/// any thread concurrently with commands and rendering.
+#[derive(Clone, Copy)]
+pub(crate) struct RawReader {
     handle: NonNull<ffi::mpv_handle>,
-    render_context: Option<NonNull<ffi::mpv_render_context>>,
-    #[cfg(debug_assertions)]
-    blocking_read_guard: crate::guard::BlockingReadGuard,
 }
 
-impl Mpv {
-    pub fn new() -> Result<Self, MpvError> {
-        Self::new_with_options("no", &[])
+// SAFETY: the libmpv client API (mpv_get_property/mpv_command/mpv_wait_event/…)
+// is documented as thread-safe; the render API used on the UI thread is a
+// separate, independently thread-safe surface. `RawReader` never touches the
+// render context.
+unsafe impl Send for RawReader {}
+unsafe impl Sync for RawReader {}
+
+impl RawReader {
+    pub(crate) fn new(handle: NonNull<ffi::mpv_handle>) -> Self {
+        Self { handle }
     }
 
-    pub fn new_with_hwdec(hwdec: &str) -> Result<Self, MpvError> {
-        Self::new_with_options(hwdec, &[])
+    pub(crate) fn handle(&self) -> NonNull<ffi::mpv_handle> {
+        self.handle
     }
 
-    pub fn new_with_options(hwdec: &str, options: &[(String, String)]) -> Result<Self, MpvError> {
-        unsafe {
-            libc::setlocale(libc::LC_NUMERIC, c"C".as_ptr());
-        }
-
-        let handle = NonNull::new(unsafe { ffi::mpv_create() }).ok_or(MpvError::NullHandle)?;
-        let this = Self {
-            handle,
-            render_context: None,
-            #[cfg(debug_assertions)]
-            blocking_read_guard: Default::default(),
-        };
-
-        this.set_option("terminal", "no")?;
-        this.set_option("config", "no")?;
-        this.set_option("idle", "yes")?;
-        this.set_option("force-window", "no")?;
-        this.set_option("vo", "libmpv")?;
-        this.set_option("hwdec", hwdec)?;
-        this.apply_options(options)?;
-        check(unsafe { ffi::mpv_initialize(this.handle.as_ptr()) })?;
-
-        Ok(this)
+    pub(crate) fn playback_state(&self) -> Result<PlaybackState, MpvError> {
+        Ok(PlaybackState {
+            time_pos: self.get_double("time-pos")?,
+            duration: self.get_double("duration")?,
+            paused: self.get_flag("pause")?.unwrap_or(false),
+            volume: self.get_double("volume")?,
+            speed: self.get_double("speed")?,
+        })
     }
 
-    /// Mark the calling thread as the UI (GLib main-context) thread. In debug
-    /// builds, every later blocking property read issued from this thread is
-    /// counted and hard-logged with a backtrace — the Rust twin of the Windows
-    /// DEBUG render-thread guard (see `guard` for why it logs instead of
-    /// aborting). No-op in release builds.
-    pub fn mark_ui_thread(&self) {
-        #[cfg(debug_assertions)]
-        self.blocking_read_guard.mark_ui_thread();
+    pub(crate) fn ab_loop_state(&self) -> Result<AbLoopState, MpvError> {
+        Ok(AbLoopState {
+            a: self
+                .get_string("ab-loop-a")?
+                .as_deref()
+                .and_then(parse_ab_loop_point),
+            b: self
+                .get_string("ab-loop-b")?
+                .as_deref()
+                .and_then(parse_ab_loop_point),
+        })
     }
 
-    /// Number of blocking property reads issued from the marked UI thread.
-    /// Debug builds only; exists so tests can assert the tripwire fires.
-    #[cfg(debug_assertions)]
-    pub fn blocking_read_violations(&self) -> usize {
-        self.blocking_read_guard.violations()
+    pub(crate) fn secondary_subtitle_id(&self) -> Result<Option<i64>, MpvError> {
+        Ok(self.get_i64("secondary-sid")?.filter(|id| *id > 0))
     }
 
-    pub fn create_render_context(&mut self) -> Result<(), MpvError> {
-        if self.render_context.is_some() {
-            return Ok(());
-        }
-
-        let api = CString::new("opengl")?;
-        let mut init_params = ffi::mpv_opengl_init_params {
-            get_proc_address: Some(get_proc_address),
-            get_proc_address_ctx: ptr::null_mut(),
-        };
-        let mut params = [
-            ffi::mpv_render_param {
-                param_type: ffi::MPV_RENDER_PARAM_API_TYPE,
-                data: api.as_ptr() as *mut c_void,
-            },
-            ffi::mpv_render_param {
-                param_type: ffi::MPV_RENDER_PARAM_OPENGL_INIT_PARAMS,
-                data: &mut init_params as *mut _ as *mut c_void,
-            },
-            ffi::mpv_render_param {
-                param_type: ffi::MPV_RENDER_PARAM_INVALID,
-                data: ptr::null_mut(),
-            },
-        ];
-
-        let mut context = ptr::null_mut();
-        check(unsafe {
-            ffi::mpv_render_context_create(&mut context, self.handle.as_ptr(), params.as_mut_ptr())
-        })?;
-        self.render_context = NonNull::new(context);
-
-        Ok(())
+    pub(crate) fn subtitle_delay(&self) -> Result<f64, MpvError> {
+        Ok(self.get_double("sub-delay")?.unwrap_or(0.0))
     }
 
-    pub fn load_file(&self, path: &Path) -> Result<(), MpvError> {
-        let command = CString::new("loadfile")?;
-        let path = path_to_cstring(path)?;
-        let args = [command.as_ptr(), path.as_ptr(), ptr::null()];
-
-        check(unsafe { ffi::mpv_command(self.handle.as_ptr(), args.as_ptr()) })
+    pub(crate) fn subtitle_scale(&self) -> Result<f64, MpvError> {
+        Ok(self.get_double("sub-scale")?.unwrap_or(1.0))
     }
 
-    pub fn load_url(&self, url: &str) -> Result<(), MpvError> {
-        let command = CString::new("loadfile")?;
-        let url = CString::new(url)?;
-        let args = [command.as_ptr(), url.as_ptr(), ptr::null()];
-
-        check(unsafe { ffi::mpv_command(self.handle.as_ptr(), args.as_ptr()) })
+    pub(crate) fn speed(&self) -> Result<f64, MpvError> {
+        Ok(self.get_double("speed")?.unwrap_or(1.0))
     }
 
-    pub fn add_subtitle_file(&self, path: &Path) -> Result<(), MpvError> {
-        let command = CString::new("sub-add")?;
-        let path = path_to_cstring(path)?;
-        let select = CString::new("select")?;
-        let args = [
-            command.as_ptr(),
-            path.as_ptr(),
-            select.as_ptr(),
-            ptr::null(),
-        ];
-
-        check(unsafe { ffi::mpv_command(self.handle.as_ptr(), args.as_ptr()) })
-    }
-
-    pub fn set_hwdec(&self, value: &str) -> Result<(), MpvError> {
-        self.set_option("hwdec", value)
-    }
-
-    pub fn apply_options(&self, options: &[(String, String)]) -> Result<(), MpvError> {
-        for (name, value) in options {
-            self.set_option(name, value)?;
-        }
-
-        Ok(())
-    }
-
-    pub fn tracks(&self) -> Result<Vec<Track>, MpvError> {
+    pub(crate) fn tracks(&self) -> Result<Vec<Track>, MpvError> {
         let count = self.get_i64("track-list/count")?.unwrap_or(0).max(0);
         let mut tracks = Vec::new();
 
@@ -353,7 +287,7 @@ impl Mpv {
         Ok(tracks)
     }
 
-    pub fn audio_devices(&self) -> Result<Vec<AudioDevice>, MpvError> {
+    pub(crate) fn audio_devices(&self) -> Result<Vec<AudioDevice>, MpvError> {
         let count = self.get_i64("audio-device-list/count")?.unwrap_or(0).max(0);
         let current = self
             .get_string("audio-device")?
@@ -393,7 +327,7 @@ impl Mpv {
         Ok(devices)
     }
 
-    pub fn chapters(&self) -> Result<Vec<Chapter>, MpvError> {
+    pub(crate) fn chapters(&self) -> Result<Vec<Chapter>, MpvError> {
         let count = self.get_i64("chapter-list/count")?.unwrap_or(0).max(0);
         let mut chapters = Vec::new();
 
@@ -413,17 +347,7 @@ impl Mpv {
         Ok(chapters)
     }
 
-    pub fn playback_state(&self) -> Result<PlaybackState, MpvError> {
-        Ok(PlaybackState {
-            time_pos: self.get_double("time-pos")?,
-            duration: self.get_double("duration")?,
-            paused: self.get_flag("pause")?.unwrap_or(false),
-            volume: self.get_double("volume")?,
-            speed: self.get_double("speed")?,
-        })
-    }
-
-    pub fn media_info(&self, path: Option<&Path>) -> Result<MediaInfo, MpvError> {
+    pub(crate) fn media_info(&self, path: Option<&Path>) -> Result<MediaInfo, MpvError> {
         let title = path
             .map(display_path_name)
             .or_else(|| self.get_string("media-title").ok().flatten())
@@ -670,304 +594,7 @@ impl Mpv {
         })
     }
 
-    pub fn cycle_pause(&self) -> Result<(), MpvError> {
-        self.command(&["cycle", "pause"])
-    }
-
-    pub fn stop(&self) -> Result<(), MpvError> {
-        self.command(&["stop"])
-    }
-
-    pub fn seek_absolute(&self, seconds: f64) -> Result<(), MpvError> {
-        let seconds = seconds.max(0.0).to_string();
-        self.command(&["seek", &seconds, "absolute+exact"])
-    }
-
-    pub fn seek_relative(&self, seconds: f64) -> Result<(), MpvError> {
-        self.command(&["seek", &seconds.to_string(), "relative+exact"])
-    }
-
-    pub fn frame_step(&self) -> Result<(), MpvError> {
-        self.command(&["frame-step"])
-    }
-
-    pub fn frame_back_step(&self) -> Result<(), MpvError> {
-        self.command(&["frame-back-step"])
-    }
-
-    pub fn toggle_ab_loop(&self) -> Result<(), MpvError> {
-        self.command(&["ab-loop"])
-    }
-
-    pub fn ab_loop_state(&self) -> Result<AbLoopState, MpvError> {
-        Ok(AbLoopState {
-            a: self
-                .get_string("ab-loop-a")?
-                .as_deref()
-                .and_then(parse_ab_loop_point),
-            b: self
-                .get_string("ab-loop-b")?
-                .as_deref()
-                .and_then(parse_ab_loop_point),
-        })
-    }
-
-    pub fn screenshot_to_file(&self, path: &Path, include_subtitles: bool) -> Result<(), MpvError> {
-        let path = path.to_string_lossy();
-        let mode = if include_subtitles {
-            "subtitles"
-        } else {
-            "video"
-        };
-        self.command(&["screenshot-to-file", &path, mode])
-    }
-
-    pub fn set_volume(&self, volume: f64) -> Result<(), MpvError> {
-        self.set_double("volume", volume.clamp(0.0, 130.0))
-    }
-
-    pub fn speed(&self) -> Result<f64, MpvError> {
-        Ok(self.get_double("speed")?.unwrap_or(1.0))
-    }
-
-    pub fn set_speed(&self, speed: f64) -> Result<(), MpvError> {
-        self.set_double("speed", speed.clamp(0.25, 4.0))
-    }
-
-    pub fn set_brightness(&self, value: f64) -> Result<(), MpvError> {
-        self.set_double("brightness", video_adjustment(value))
-    }
-
-    pub fn set_contrast(&self, value: f64) -> Result<(), MpvError> {
-        self.set_double("contrast", video_adjustment(value))
-    }
-
-    pub fn set_saturation(&self, value: f64) -> Result<(), MpvError> {
-        self.set_double("saturation", video_adjustment(value))
-    }
-
-    pub fn set_gamma(&self, value: f64) -> Result<(), MpvError> {
-        self.set_double("gamma", video_adjustment(value))
-    }
-
-    pub fn set_video_adjustments(
-        &self,
-        brightness: f64,
-        contrast: f64,
-        saturation: f64,
-        gamma: f64,
-    ) -> Result<(), MpvError> {
-        self.set_brightness(brightness)?;
-        self.set_contrast(contrast)?;
-        self.set_saturation(saturation)?;
-        self.set_gamma(gamma)
-    }
-
-    pub fn set_video_aspect_override(&self, value: &str) -> Result<(), MpvError> {
-        self.command(&["set", "video-aspect-override", video_aspect_override(value)])
-    }
-
-    pub fn set_video_rotation(&self, degrees: i64) -> Result<(), MpvError> {
-        let degrees = normalized_video_rotation(degrees).to_string();
-        self.command(&["set", "video-rotate", &degrees])
-    }
-
-    pub fn set_video_fill_screen(&self, enabled: bool) -> Result<(), MpvError> {
-        self.set_double("panscan", if enabled { 1.0 } else { 0.0 })
-    }
-
-    pub fn reset_video_transform(&self) -> Result<(), MpvError> {
-        self.set_video_rotation(0)?;
-        self.set_video_fill_screen(false)?;
-        self.set_video_aspect_override("no")
-    }
-
-    pub fn set_audio_normalization(&self, enabled: bool) -> Result<(), MpvError> {
-        let _ = self.command(&["af", "remove", AUDIO_NORMALIZATION_FILTER_LABEL]);
-        if enabled {
-            self.command(&["af", "add", AUDIO_NORMALIZATION_FILTER])
-        } else {
-            Ok(())
-        }
-    }
-
-    pub fn select_subtitle(&self, id: Option<i64>) -> Result<(), MpvError> {
-        let value = track_id_or_off(id);
-        self.command(&["set", "sid", &value])
-    }
-
-    pub fn select_secondary_subtitle(&self, id: Option<i64>) -> Result<(), MpvError> {
-        let value = track_id_or_off(id);
-        self.command(&["set", "secondary-sid", &value])
-    }
-
-    pub fn secondary_subtitle_id(&self) -> Result<Option<i64>, MpvError> {
-        Ok(self.get_i64("secondary-sid")?.filter(|id| *id > 0))
-    }
-
-    pub fn select_audio(&self, id: Option<i64>) -> Result<(), MpvError> {
-        let value = track_id_or_off(id);
-        self.command(&["set", "aid", &value])
-    }
-
-    pub fn set_audio_device(&self, name: &str) -> Result<(), MpvError> {
-        self.command(&["set", "audio-device", normalized_audio_device_name(name)])
-    }
-
-    pub fn restore_audio_device(&self, name: &str) -> Result<bool, MpvError> {
-        let name = normalized_audio_device_name(name);
-        if name == AUDIO_DEVICE_AUTO {
-            return Ok(false);
-        }
-
-        if self
-            .audio_devices()?
-            .iter()
-            .any(|device| device.name == name)
-        {
-            self.set_audio_device(name)?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    }
-
-    pub fn subtitle_delay(&self) -> Result<f64, MpvError> {
-        Ok(self.get_double("sub-delay")?.unwrap_or(0.0))
-    }
-
-    pub fn set_subtitle_delay(&self, seconds: f64) -> Result<(), MpvError> {
-        self.set_double("sub-delay", seconds.clamp(-600.0, 600.0))
-    }
-
-    pub fn adjust_subtitle_delay(&self, delta_seconds: f64) -> Result<(), MpvError> {
-        let delay = self.subtitle_delay()?;
-        self.set_subtitle_delay(delay + delta_seconds)
-    }
-
-    pub fn subtitle_scale(&self) -> Result<f64, MpvError> {
-        Ok(self.get_double("sub-scale")?.unwrap_or(1.0))
-    }
-
-    pub fn set_subtitle_scale(&self, scale: f64) -> Result<(), MpvError> {
-        self.set_double("sub-scale", scale.clamp(0.25, 4.0))
-    }
-
-    pub fn adjust_subtitle_scale(&self, delta: f64) -> Result<(), MpvError> {
-        let scale = self.subtitle_scale()?;
-        self.set_subtitle_scale(scale + delta)
-    }
-
-    pub fn drain_events(&self) -> Vec<MpvEvent> {
-        let mut events = Vec::new();
-
-        loop {
-            let event = unsafe { ffi::mpv_wait_event(self.handle.as_ptr(), 0.0) };
-            let Some(event) = (unsafe { event.as_ref() }) else {
-                break;
-            };
-
-            match event.event_id {
-                ffi::MPV_EVENT_NONE => break,
-                ffi::MPV_EVENT_SHUTDOWN => events.push(MpvEvent::Shutdown),
-                ffi::MPV_EVENT_FILE_LOADED => events.push(MpvEvent::FileLoaded),
-                ffi::MPV_EVENT_END_FILE => {
-                    let reason = if let Some(end_file) =
-                        unsafe { event.data.cast::<ffi::mpv_event_end_file>().as_ref() }
-                    {
-                        end_file_reason(end_file.reason, end_file.error)
-                    } else {
-                        EndFileReason::Unknown(event.error)
-                    };
-                    events.push(MpvEvent::EndFile { reason });
-                }
-                _ => {}
-            }
-        }
-
-        events
-    }
-
-    pub fn render(&mut self, width: i32, height: i32) -> Result<(), MpvError> {
-        if width <= 0 || height <= 0 {
-            return Ok(());
-        }
-
-        let context = self
-            .render_context
-            .ok_or(MpvError::MissingRenderContext)?
-            .as_ptr();
-        unsafe {
-            let _ = ffi::mpv_render_context_update(context);
-        }
-
-        let mut framebuffer: c_int = 0;
-        unsafe {
-            ffi::glGetIntegerv(ffi::GL_FRAMEBUFFER_BINDING, &mut framebuffer);
-            ffi::glViewport(0, 0, width, height);
-        }
-
-        let mut fbo = ffi::mpv_opengl_fbo {
-            fbo: framebuffer,
-            w: width,
-            h: height,
-            internal_format: 0,
-        };
-        let mut flip_y: c_int = 1;
-        let mut params = [
-            ffi::mpv_render_param {
-                param_type: ffi::MPV_RENDER_PARAM_OPENGL_FBO,
-                data: &mut fbo as *mut _ as *mut c_void,
-            },
-            ffi::mpv_render_param {
-                param_type: ffi::MPV_RENDER_PARAM_FLIP_Y,
-                data: &mut flip_y as *mut _ as *mut c_void,
-            },
-            ffi::mpv_render_param {
-                param_type: ffi::MPV_RENDER_PARAM_INVALID,
-                data: ptr::null_mut(),
-            },
-        ];
-
-        check(unsafe { ffi::mpv_render_context_render(context, params.as_mut_ptr()) })?;
-        unsafe {
-            ffi::mpv_render_context_report_swap(context);
-        }
-
-        Ok(())
-    }
-
-    pub fn destroy_render_context(&mut self) {
-        if let Some(context) = self.render_context.take() {
-            unsafe {
-                ffi::mpv_render_context_free(context.as_ptr());
-            }
-        }
-    }
-
-    fn set_option(&self, name: &str, value: &str) -> Result<(), MpvError> {
-        let name = CString::new(name)?;
-        let value = CString::new(value)?;
-
-        check(unsafe {
-            ffi::mpv_set_option_string(self.handle.as_ptr(), name.as_ptr(), value.as_ptr())
-        })
-    }
-
-    fn command(&self, args: &[&str]) -> Result<(), MpvError> {
-        let c_args = args
-            .iter()
-            .map(|arg| CString::new(*arg))
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut ptrs = c_args.iter().map(|arg| arg.as_ptr()).collect::<Vec<_>>();
-        ptrs.push(ptr::null());
-
-        check(unsafe { ffi::mpv_command(self.handle.as_ptr(), ptrs.as_ptr()) })
-    }
-
     fn get_double(&self, name: &str) -> Result<Option<f64>, MpvError> {
-        #[cfg(debug_assertions)]
-        self.blocking_read_guard.check_blocking_read(name);
         let name = CString::new(name)?;
         let mut value = 0.0;
         let code = unsafe {
@@ -983,8 +610,6 @@ impl Mpv {
     }
 
     fn get_flag(&self, name: &str) -> Result<Option<bool>, MpvError> {
-        #[cfg(debug_assertions)]
-        self.blocking_read_guard.check_blocking_read(name);
         let name = CString::new(name)?;
         let mut value: c_int = 0;
         let code = unsafe {
@@ -1004,8 +629,6 @@ impl Mpv {
     }
 
     fn get_i64(&self, name: &str) -> Result<Option<i64>, MpvError> {
-        #[cfg(debug_assertions)]
-        self.blocking_read_guard.check_blocking_read(name);
         let name = CString::new(name)?;
         let mut value: i64 = 0;
         let code = unsafe {
@@ -1021,8 +644,6 @@ impl Mpv {
     }
 
     fn get_string(&self, name: &str) -> Result<Option<String>, MpvError> {
-        #[cfg(debug_assertions)]
-        self.blocking_read_guard.check_blocking_read(name);
         let name = CString::new(name)?;
         let value = unsafe { ffi::mpv_get_property_string(self.handle.as_ptr(), name.as_ptr()) };
         if value.is_null() {
@@ -1139,6 +760,490 @@ impl Mpv {
 
         Ok(tracks)
     }
+}
+
+pub struct Mpv {
+    handle: NonNull<ffi::mpv_handle>,
+    render_context: Option<NonNull<ffi::mpv_render_context>>,
+    pump: Option<EventPump>,
+    #[cfg(debug_assertions)]
+    blocking_read_guard: crate::guard::BlockingReadGuard,
+}
+
+impl Mpv {
+    pub fn new() -> Result<Self, MpvError> {
+        Self::new_with_options("no", &[])
+    }
+
+    pub fn new_with_hwdec(hwdec: &str) -> Result<Self, MpvError> {
+        Self::new_with_options(hwdec, &[])
+    }
+
+    pub fn new_with_options(hwdec: &str, options: &[(String, String)]) -> Result<Self, MpvError> {
+        unsafe {
+            libc::setlocale(libc::LC_NUMERIC, c"C".as_ptr());
+        }
+
+        let handle = NonNull::new(unsafe { ffi::mpv_create() }).ok_or(MpvError::NullHandle)?;
+        let this = Self {
+            handle,
+            render_context: None,
+            pump: None,
+            #[cfg(debug_assertions)]
+            blocking_read_guard: Default::default(),
+        };
+
+        this.set_option("terminal", "no")?;
+        this.set_option("config", "no")?;
+        this.set_option("idle", "yes")?;
+        this.set_option("force-window", "no")?;
+        this.set_option("vo", "libmpv")?;
+        this.set_option("hwdec", hwdec)?;
+        this.apply_options(options)?;
+        check(unsafe { ffi::mpv_initialize(this.handle.as_ptr()) })?;
+
+        Ok(this)
+    }
+
+    /// Mark the calling thread as the UI (GLib main-context) thread. In debug
+    /// builds, every later blocking property read issued from this thread is
+    /// counted and hard-logged with a backtrace — the Rust twin of the Windows
+    /// DEBUG render-thread guard (see `guard` for why it logs instead of
+    /// aborting). No-op in release builds.
+    pub fn mark_ui_thread(&self) {
+        #[cfg(debug_assertions)]
+        self.blocking_read_guard.mark_ui_thread();
+    }
+
+    /// Number of blocking property reads issued from the marked UI thread.
+    /// Debug builds only; exists so tests can assert the tripwire fires.
+    #[cfg(debug_assertions)]
+    pub fn blocking_read_violations(&self) -> usize {
+        self.blocking_read_guard.violations()
+    }
+
+    /// Start the background event pump: observe the properties the shell cares
+    /// about, register the wakeup callback, and spawn the thread that reads
+    /// state off the UI thread. Idempotent; call once after the handle is
+    /// created (and, in the shell, after `mark_ui_thread`).
+    pub fn start_event_pump(&mut self) {
+        if self.pump.is_none() {
+            self.pump = Some(EventPump::start(self.handle));
+        }
+    }
+
+    fn reader(&self) -> RawReader {
+        RawReader::new(self.handle)
+    }
+
+    /// Read the live playback scalars synchronously. This is a blocking mpv
+    /// call and trips the debug guard on the marked UI thread — the shell reads
+    /// from [`Mpv::observed_playback_state`] instead. Kept as the guarded read
+    /// the tripwire test exercises and the regression backstop for new callers.
+    pub fn playback_state(&self) -> Result<PlaybackState, MpvError> {
+        #[cfg(debug_assertions)]
+        self.blocking_read_guard.check_blocking_read("time-pos");
+        self.reader().playback_state()
+    }
+
+    /// Latest playback scalars observed by the pump. A plain in-memory read; no
+    /// mpv call, safe from the UI thread.
+    pub fn observed_playback_state(&self) -> PlaybackState {
+        self.pump
+            .as_ref()
+            .map(EventPump::playback_state)
+            .unwrap_or_default()
+    }
+
+    pub fn observed_ab_loop_state(&self) -> AbLoopState {
+        self.pump
+            .as_ref()
+            .map(EventPump::ab_loop_state)
+            .unwrap_or_default()
+    }
+
+    pub fn observed_subtitle_delay(&self) -> f64 {
+        self.pump
+            .as_ref()
+            .map(EventPump::subtitle_delay)
+            .unwrap_or(0.0)
+    }
+
+    pub fn observed_subtitle_scale(&self) -> f64 {
+        self.pump
+            .as_ref()
+            .map(EventPump::subtitle_scale)
+            .unwrap_or(1.0)
+    }
+
+    pub fn observed_speed(&self) -> f64 {
+        self.pump.as_ref().map(EventPump::speed).unwrap_or(1.0)
+    }
+
+    pub fn observed_secondary_subtitle_id(&self) -> Option<i64> {
+        self.pump
+            .as_ref()
+            .and_then(EventPump::secondary_subtitle_id)
+    }
+
+    pub fn observed_chapters(&self) -> Vec<Chapter> {
+        self.pump
+            .as_ref()
+            .map(EventPump::chapters)
+            .unwrap_or_default()
+    }
+
+    pub fn observed_tracks(&self) -> Vec<Track> {
+        self.pump
+            .as_ref()
+            .map(EventPump::tracks)
+            .unwrap_or_default()
+    }
+
+    pub fn observed_audio_devices(&self) -> Vec<AudioDevice> {
+        self.pump
+            .as_ref()
+            .map(EventPump::audio_devices)
+            .unwrap_or_default()
+    }
+
+    pub fn observed_media_info(&self) -> Option<MediaInfo> {
+        self.pump.as_ref().and_then(EventPump::media_info)
+    }
+
+    /// Drain the lifecycle events (`FileLoaded`/`EndFile`/`Shutdown`) the pump
+    /// has queued since the last call, oldest first.
+    pub fn take_lifecycle_events(&self) -> Vec<MpvEvent> {
+        self.pump
+            .as_ref()
+            .map(EventPump::take_lifecycle_events)
+            .unwrap_or_default()
+    }
+
+    /// Tell the pump which local path backs the current media so `media-info`
+    /// reports the same title/path the shell used to pass synchronously.
+    pub fn set_media_source(&self, source: Option<PathBuf>) {
+        if let Some(pump) = self.pump.as_ref() {
+            pump.set_media_source(source);
+        }
+    }
+
+    pub fn create_render_context(&mut self) -> Result<(), MpvError> {
+        if self.render_context.is_some() {
+            return Ok(());
+        }
+
+        let api = CString::new("opengl")?;
+        let mut init_params = ffi::mpv_opengl_init_params {
+            get_proc_address: Some(get_proc_address),
+            get_proc_address_ctx: ptr::null_mut(),
+        };
+        let mut params = [
+            ffi::mpv_render_param {
+                param_type: ffi::MPV_RENDER_PARAM_API_TYPE,
+                data: api.as_ptr() as *mut c_void,
+            },
+            ffi::mpv_render_param {
+                param_type: ffi::MPV_RENDER_PARAM_OPENGL_INIT_PARAMS,
+                data: &mut init_params as *mut _ as *mut c_void,
+            },
+            ffi::mpv_render_param {
+                param_type: ffi::MPV_RENDER_PARAM_INVALID,
+                data: ptr::null_mut(),
+            },
+        ];
+
+        let mut context = ptr::null_mut();
+        check(unsafe {
+            ffi::mpv_render_context_create(&mut context, self.handle.as_ptr(), params.as_mut_ptr())
+        })?;
+        self.render_context = NonNull::new(context);
+
+        Ok(())
+    }
+
+    pub fn load_file(&self, path: &Path) -> Result<(), MpvError> {
+        let command = CString::new("loadfile")?;
+        let path = path_to_cstring(path)?;
+        let args = [command.as_ptr(), path.as_ptr(), ptr::null()];
+
+        check(unsafe { ffi::mpv_command(self.handle.as_ptr(), args.as_ptr()) })
+    }
+
+    pub fn load_url(&self, url: &str) -> Result<(), MpvError> {
+        let command = CString::new("loadfile")?;
+        let url = CString::new(url)?;
+        let args = [command.as_ptr(), url.as_ptr(), ptr::null()];
+
+        check(unsafe { ffi::mpv_command(self.handle.as_ptr(), args.as_ptr()) })
+    }
+
+    pub fn add_subtitle_file(&self, path: &Path) -> Result<(), MpvError> {
+        let command = CString::new("sub-add")?;
+        let path = path_to_cstring(path)?;
+        let select = CString::new("select")?;
+        let args = [
+            command.as_ptr(),
+            path.as_ptr(),
+            select.as_ptr(),
+            ptr::null(),
+        ];
+
+        check(unsafe { ffi::mpv_command(self.handle.as_ptr(), args.as_ptr()) })
+    }
+
+    pub fn set_hwdec(&self, value: &str) -> Result<(), MpvError> {
+        self.set_option("hwdec", value)
+    }
+
+    pub fn apply_options(&self, options: &[(String, String)]) -> Result<(), MpvError> {
+        for (name, value) in options {
+            self.set_option(name, value)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn cycle_pause(&self) -> Result<(), MpvError> {
+        self.command_async(&["cycle", "pause"])
+    }
+
+    pub fn stop(&self) -> Result<(), MpvError> {
+        self.command_async(&["stop"])
+    }
+
+    pub fn seek_absolute(&self, seconds: f64) -> Result<(), MpvError> {
+        let seconds = seconds.max(0.0).to_string();
+        self.command_async(&["seek", &seconds, "absolute+exact"])
+    }
+
+    pub fn seek_relative(&self, seconds: f64) -> Result<(), MpvError> {
+        self.command_async(&["seek", &seconds.to_string(), "relative+exact"])
+    }
+
+    pub fn frame_step(&self) -> Result<(), MpvError> {
+        self.command_async(&["frame-step"])
+    }
+
+    pub fn frame_back_step(&self) -> Result<(), MpvError> {
+        self.command_async(&["frame-back-step"])
+    }
+
+    pub fn toggle_ab_loop(&self) -> Result<(), MpvError> {
+        self.command(&["ab-loop"])
+    }
+
+    pub fn screenshot_to_file(&self, path: &Path, include_subtitles: bool) -> Result<(), MpvError> {
+        let path = path.to_string_lossy();
+        let mode = if include_subtitles {
+            "subtitles"
+        } else {
+            "video"
+        };
+        self.command(&["screenshot-to-file", &path, mode])
+    }
+
+    pub fn set_volume(&self, volume: f64) -> Result<(), MpvError> {
+        self.set_double("volume", volume.clamp(0.0, 130.0))
+    }
+
+    pub fn set_speed(&self, speed: f64) -> Result<(), MpvError> {
+        self.set_double("speed", speed.clamp(0.25, 4.0))
+    }
+
+    pub fn set_brightness(&self, value: f64) -> Result<(), MpvError> {
+        self.set_double("brightness", video_adjustment(value))
+    }
+
+    pub fn set_contrast(&self, value: f64) -> Result<(), MpvError> {
+        self.set_double("contrast", video_adjustment(value))
+    }
+
+    pub fn set_saturation(&self, value: f64) -> Result<(), MpvError> {
+        self.set_double("saturation", video_adjustment(value))
+    }
+
+    pub fn set_gamma(&self, value: f64) -> Result<(), MpvError> {
+        self.set_double("gamma", video_adjustment(value))
+    }
+
+    pub fn set_video_adjustments(
+        &self,
+        brightness: f64,
+        contrast: f64,
+        saturation: f64,
+        gamma: f64,
+    ) -> Result<(), MpvError> {
+        self.set_brightness(brightness)?;
+        self.set_contrast(contrast)?;
+        self.set_saturation(saturation)?;
+        self.set_gamma(gamma)
+    }
+
+    pub fn set_video_aspect_override(&self, value: &str) -> Result<(), MpvError> {
+        self.command(&["set", "video-aspect-override", video_aspect_override(value)])
+    }
+
+    pub fn set_video_rotation(&self, degrees: i64) -> Result<(), MpvError> {
+        let degrees = normalized_video_rotation(degrees).to_string();
+        self.command(&["set", "video-rotate", &degrees])
+    }
+
+    pub fn set_video_fill_screen(&self, enabled: bool) -> Result<(), MpvError> {
+        self.set_double("panscan", if enabled { 1.0 } else { 0.0 })
+    }
+
+    pub fn reset_video_transform(&self) -> Result<(), MpvError> {
+        self.set_video_rotation(0)?;
+        self.set_video_fill_screen(false)?;
+        self.set_video_aspect_override("no")
+    }
+
+    pub fn set_audio_normalization(&self, enabled: bool) -> Result<(), MpvError> {
+        let _ = self.command(&["af", "remove", AUDIO_NORMALIZATION_FILTER_LABEL]);
+        if enabled {
+            self.command(&["af", "add", AUDIO_NORMALIZATION_FILTER])
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn select_subtitle(&self, id: Option<i64>) -> Result<(), MpvError> {
+        let value = track_id_or_off(id);
+        self.command(&["set", "sid", &value])
+    }
+
+    pub fn select_secondary_subtitle(&self, id: Option<i64>) -> Result<(), MpvError> {
+        let value = track_id_or_off(id);
+        self.command(&["set", "secondary-sid", &value])
+    }
+
+    pub fn select_audio(&self, id: Option<i64>) -> Result<(), MpvError> {
+        let value = track_id_or_off(id);
+        self.command(&["set", "aid", &value])
+    }
+
+    pub fn set_audio_device(&self, name: &str) -> Result<(), MpvError> {
+        self.command(&["set", "audio-device", normalized_audio_device_name(name)])
+    }
+
+    /// Restore a saved audio output if it is present in the observed device
+    /// list. Reads the pump snapshot (no blocking mpv call) and only issues the
+    /// `set` command when the device is available.
+    pub fn restore_audio_device(&self, name: &str) -> Result<bool, MpvError> {
+        let name = normalized_audio_device_name(name);
+        if name == AUDIO_DEVICE_AUTO {
+            return Ok(false);
+        }
+
+        if self
+            .observed_audio_devices()
+            .iter()
+            .any(|device| device.name == name)
+        {
+            self.set_audio_device(name)?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub fn set_subtitle_delay(&self, seconds: f64) -> Result<(), MpvError> {
+        self.set_double("sub-delay", seconds.clamp(-600.0, 600.0))
+    }
+
+    pub fn adjust_subtitle_delay(&self, delta_seconds: f64) -> Result<(), MpvError> {
+        self.set_subtitle_delay(self.observed_subtitle_delay() + delta_seconds)
+    }
+
+    pub fn set_subtitle_scale(&self, scale: f64) -> Result<(), MpvError> {
+        self.set_double("sub-scale", scale.clamp(0.25, 4.0))
+    }
+
+    pub fn adjust_subtitle_scale(&self, delta: f64) -> Result<(), MpvError> {
+        self.set_subtitle_scale(self.observed_subtitle_scale() + delta)
+    }
+
+    pub fn render(&mut self, width: i32, height: i32) -> Result<(), MpvError> {
+        if width <= 0 || height <= 0 {
+            return Ok(());
+        }
+
+        let context = self
+            .render_context
+            .ok_or(MpvError::MissingRenderContext)?
+            .as_ptr();
+        unsafe {
+            let _ = ffi::mpv_render_context_update(context);
+        }
+
+        let mut framebuffer: c_int = 0;
+        unsafe {
+            ffi::glGetIntegerv(ffi::GL_FRAMEBUFFER_BINDING, &mut framebuffer);
+            ffi::glViewport(0, 0, width, height);
+        }
+
+        let mut fbo = ffi::mpv_opengl_fbo {
+            fbo: framebuffer,
+            w: width,
+            h: height,
+            internal_format: 0,
+        };
+        let mut flip_y: c_int = 1;
+        let mut params = [
+            ffi::mpv_render_param {
+                param_type: ffi::MPV_RENDER_PARAM_OPENGL_FBO,
+                data: &mut fbo as *mut _ as *mut c_void,
+            },
+            ffi::mpv_render_param {
+                param_type: ffi::MPV_RENDER_PARAM_FLIP_Y,
+                data: &mut flip_y as *mut _ as *mut c_void,
+            },
+            ffi::mpv_render_param {
+                param_type: ffi::MPV_RENDER_PARAM_INVALID,
+                data: ptr::null_mut(),
+            },
+        ];
+
+        check(unsafe { ffi::mpv_render_context_render(context, params.as_mut_ptr()) })?;
+        unsafe {
+            ffi::mpv_render_context_report_swap(context);
+        }
+
+        Ok(())
+    }
+
+    pub fn destroy_render_context(&mut self) {
+        if let Some(context) = self.render_context.take() {
+            unsafe {
+                ffi::mpv_render_context_free(context.as_ptr());
+            }
+        }
+    }
+
+    fn set_option(&self, name: &str, value: &str) -> Result<(), MpvError> {
+        let name = CString::new(name)?;
+        let value = CString::new(value)?;
+
+        check(unsafe {
+            ffi::mpv_set_option_string(self.handle.as_ptr(), name.as_ptr(), value.as_ptr())
+        })
+    }
+
+    fn command(&self, args: &[&str]) -> Result<(), MpvError> {
+        // `_c_args` owns the CString buffers `ptrs` points into; it must outlive
+        // the mpv call, so it is bound (not dropped) for the whole scope.
+        let (_c_args, ptrs) = command_args(args)?;
+        check(unsafe { ffi::mpv_command(self.handle.as_ptr(), ptrs.as_ptr()) })
+    }
+
+    /// Fire-and-forget command dispatch for latency-sensitive transport
+    /// controls (pause/seek/frame-step). It never blocks the caller on a busy
+    /// core; the reply arrives as an event the pump drains and logs on failure.
+    fn command_async(&self, args: &[&str]) -> Result<(), MpvError> {
+        let (_c_args, ptrs) = command_args(args)?;
+        check(unsafe { ffi::mpv_command_async(self.handle.as_ptr(), 0, ptrs.as_ptr()) })
+    }
 
     fn set_double(&self, name: &str, mut value: f64) -> Result<(), MpvError> {
         let name = CString::new(name)?;
@@ -1152,6 +1257,18 @@ impl Mpv {
             )
         })
     }
+}
+
+/// Build the NUL-terminated argv libmpv expects. The `CString` vector must be
+/// kept alive by the caller for as long as the pointer vector is used.
+fn command_args(args: &[&str]) -> Result<(Vec<CString>, Vec<*const c_char>), MpvError> {
+    let c_args = args
+        .iter()
+        .map(|arg| CString::new(*arg))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut ptrs = c_args.iter().map(|arg| arg.as_ptr()).collect::<Vec<_>>();
+    ptrs.push(ptr::null());
+    Ok((c_args, ptrs))
 }
 
 fn push_section(sections: &mut Vec<InfoSection>, section: InfoSection) {
@@ -1168,11 +1285,11 @@ fn display_path_name(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-fn selected_track_title(mpv: &Mpv, prefix: &str) -> Result<Option<String>, MpvError> {
-    let id = mpv.get_i64(&format!("{prefix}/id"))?.unwrap_or(0);
-    Ok(mpv
+fn selected_track_title(reader: &RawReader, prefix: &str) -> Result<Option<String>, MpvError> {
+    let id = reader.get_i64(&format!("{prefix}/id"))?.unwrap_or(0);
+    Ok(reader
         .get_string(&format!("{prefix}/title"))?
-        .or(mpv.get_string(&format!("{prefix}/lang"))?)
+        .or(reader.get_string(&format!("{prefix}/lang"))?)
         .filter(|title| !title.is_empty())
         .or_else(|| (id > 0).then(|| format!("Track {id}"))))
 }
@@ -1490,6 +1607,12 @@ pub fn resolve_render_target_size(
 
 impl Drop for Mpv {
     fn drop(&mut self) {
+        // Stop the pump before the handle is destroyed: it unsets the wakeup
+        // callback and joins the background thread so no event reception or
+        // property read can race `mpv_terminate_destroy`.
+        if let Some(pump) = self.pump.take() {
+            pump.shutdown();
+        }
         self.destroy_render_context();
         unsafe {
             ffi::mpv_terminate_destroy(self.handle.as_ptr());
@@ -1514,7 +1637,7 @@ fn check(code: c_int) -> Result<(), MpvError> {
     }
 }
 
-fn end_file_reason(reason: c_int, error: c_int) -> EndFileReason {
+pub(crate) fn end_file_reason(reason: c_int, error: c_int) -> EndFileReason {
     match reason {
         ffi::MPV_END_FILE_REASON_EOF => EndFileReason::Eof,
         ffi::MPV_END_FILE_REASON_STOP => EndFileReason::Stop,
@@ -1595,6 +1718,38 @@ mod tests {
             mpv.blocking_read_violations() > 0,
             "blocking reads on the marked UI thread must be recorded"
         );
+    }
+
+    /// The event pump must start, publish observed state off the UI thread, and
+    /// tear down cleanly on drop without racing `mpv_terminate_destroy`. Needs
+    /// real libmpv (same contract as the guard test). Observed reads never trip
+    /// the guard even after the UI thread is marked, because they never call mpv.
+    #[test]
+    fn event_pump_publishes_observed_state_and_shuts_down_cleanly() {
+        let mut mpv = Mpv::new().expect("libmpv must be loadable for okp-mpv tests");
+        mpv.mark_ui_thread();
+        mpv.start_event_pump();
+
+        // Give the pump a moment to observe the initial property values.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        // Idle defaults: nothing playing, so scale/speed report their 1.0
+        // fallbacks and the transport scalars are absent — all read from the
+        // snapshot without touching mpv.
+        assert_eq!(mpv.observed_subtitle_scale(), 1.0);
+        assert_eq!(mpv.observed_speed(), 1.0);
+        assert!(mpv.observed_playback_state().time_pos.is_none());
+        let _ = mpv.observed_tracks();
+        let _ = mpv.take_lifecycle_events();
+
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            mpv.blocking_read_violations(),
+            0,
+            "observed reads must never issue a blocking mpv read on the UI thread"
+        );
+
+        // Dropping here exercises pump shutdown + terminate ordering.
     }
 
     #[test]
