@@ -1752,6 +1752,45 @@ mod tests {
         // Dropping here exercises pump shutdown + terminate ordering.
     }
 
+    /// Recording a media source after the `FileLoaded` recompute has already
+    /// run must still refresh `media_info`: `set_media_source` has to wake the
+    /// pump and rebuild the snapshot against the new path instead of waiting for
+    /// an unrelated `track-list`/`chapter-list` change. Needs real libmpv.
+    #[test]
+    fn setting_the_media_source_refreshes_media_info() {
+        let mut mpv = Mpv::new().expect("libmpv must be loadable for okp-mpv tests");
+        mpv.mark_ui_thread();
+        mpv.start_event_pump();
+
+        // Let the initial recompute settle; with no source recorded yet it
+        // builds `media_info` with no local path.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert_eq!(
+            mpv.observed_media_info().and_then(|info| info.path),
+            None,
+            "media_info must have no path before a source is recorded"
+        );
+
+        let source = PathBuf::from("/tmp/okp-media-source-refresh.mkv");
+        mpv.set_media_source(Some(source.clone()));
+
+        // The setter wakes the pump, so the snapshot rebuilds without any
+        // further mpv event.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert_eq!(
+            mpv.observed_media_info().and_then(|info| info.path),
+            Some(source.display().to_string()),
+            "set_media_source must wake the pump and rebuild media_info"
+        );
+
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            mpv.blocking_read_violations(),
+            0,
+            "observed reads must never issue a blocking mpv read on the UI thread"
+        );
+    }
+
     #[test]
     fn formats_media_sizes() {
         assert_eq!(format_bytes(42), "42 B");

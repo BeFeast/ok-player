@@ -116,6 +116,9 @@ struct PumpShared {
     snapshot: Mutex<Snapshot>,
     events: Mutex<Vec<MpvEvent>>,
     media_source: Mutex<Option<PathBuf>>,
+    /// Set when the shell records a new media source so the next pump pass
+    /// rebuilds `media_info` against it, even without a fresh mpv event.
+    media_info_dirty: AtomicBool,
     wake: Mutex<bool>,
     condvar: Condvar,
     running: AtomicBool,
@@ -137,6 +140,7 @@ impl EventPump {
             snapshot: Mutex::new(Snapshot::default()),
             events: Mutex::new(Vec::new()),
             media_source: Mutex::new(None),
+            media_info_dirty: AtomicBool::new(false),
             // Start "pending" so the pump populates the snapshot immediately.
             wake: Mutex::new(true),
             condvar: Condvar::new(),
@@ -221,8 +225,16 @@ impl EventPump {
     /// Record the local path backing the current media so `media-info` reports
     /// the same title/path the shell would have passed synchronously. `None`
     /// for streams (matching the shell's URL handling).
+    ///
+    /// The `FileLoaded` recompute usually runs before the shell gets a chance to
+    /// call this, so it builds `media_info` with no source. Flag `media_info`
+    /// dirty and wake the pump so it rebuilds the snapshot against the path we
+    /// just recorded instead of waiting for an unrelated list change.
     pub(crate) fn set_media_source(&self, source: Option<PathBuf>) {
         *lock(&self.shared.media_source) = source;
+        self.shared.media_info_dirty.store(true, Ordering::Release);
+        *lock(&self.shared.wake) = true;
+        self.shared.condvar.notify_one();
     }
 
     /// Stop the wakeup callback, wake the pump so it observes the shutdown flag,
@@ -269,7 +281,13 @@ fn pump_loop(shared: &Arc<PumpShared>) {
             break;
         }
 
-        let (lifecycle, flags) = drain_events(shared);
+        let (lifecycle, mut flags) = drain_events(shared);
+        // A `set_media_source` between the `FileLoaded` recompute and now only
+        // updates the stored path, so fold its pending flag in here to rebuild
+        // `media_info` against it.
+        if shared.media_info_dirty.swap(false, Ordering::AcqRel) {
+            flags.media_info = true;
+        }
         // Refresh the snapshot *before* the lifecycle events become visible, so
         // a shell handler that reacts to `FileLoaded` already sees fresh tracks.
         recompute(shared, flags);
