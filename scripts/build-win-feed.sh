@@ -8,9 +8,8 @@
 #                                  Assets[].FileName is the absolute GitHub release-asset URL
 #
 # The manifest is derived, never authored: the newest published v* GitHub release that
-# carries releases.win.json is the source of truth (the same discovery rule the #130 bridge
-# in release-linux.yml uses), so every run is idempotent — triggers can race or repeat and
-# the last deploy still serves the newest feed.
+# carries releases.win.json is the source of truth, so every run is idempotent — triggers
+# can race or repeat and the last deploy still serves the newest feed.
 #
 # Requires: gh (authenticated; GH_TOKEN in CI), jq. Fails loudly rather than publish a wrong
 # feed: a missing feed release, an empty manifest, or a referenced package that is not
