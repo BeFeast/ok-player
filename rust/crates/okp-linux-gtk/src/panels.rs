@@ -11,8 +11,7 @@ pub(crate) fn update_up_next_panel(
         let chapters = state
             .mpv
             .as_ref()
-            .map(Mpv::chapters)
-            .and_then(Result::ok)
+            .map(Mpv::observed_chapters)
             .unwrap_or_default();
 
         SidePanelSnapshot {

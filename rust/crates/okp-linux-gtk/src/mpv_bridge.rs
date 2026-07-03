@@ -81,6 +81,11 @@ pub(crate) fn connect_mpv(
             return;
         }
 
+        // Start the background event pump: from here on the shell reads playback
+        // state from its observed snapshot rather than polling mpv from this
+        // (GLib main-context) thread, so the tripwire armed above stays green.
+        mpv.start_event_pump();
+
         realize_state.borrow_mut().mpv = Some(mpv);
         schedule_audio_device_restore(&realize_state);
         try_pending_audio_device_restore(&realize_state);
@@ -282,7 +287,7 @@ pub(crate) fn connect_state_poll(
             .borrow()
             .mpv
             .as_ref()
-            .and_then(|mpv| mpv.playback_state().ok());
+            .map(|mpv| mpv.observed_playback_state());
         let has_media = has_loaded_media(&state);
         let has_playlist = state.borrow().playlist.len() > 1;
         {

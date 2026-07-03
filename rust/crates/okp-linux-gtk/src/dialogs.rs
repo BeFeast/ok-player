@@ -203,7 +203,7 @@ pub(crate) fn go_to_time_snapshot(state: &Rc<RefCell<PlayerState>>) -> Option<(f
     let playback = state
         .mpv
         .as_ref()
-        .and_then(|mpv| mpv.playback_state().ok())?;
+        .map(|mpv| mpv.observed_playback_state())?;
     let position = playback.time_pos.unwrap_or(0.0).max(0.0);
     let duration = playback.duration.unwrap_or(0.0).max(0.0);
     Some((position, duration))

@@ -800,12 +800,10 @@ pub(crate) fn subtitle_adjustment_row(
 pub(crate) fn read_subtitle_adjustments(state: &Rc<RefCell<PlayerState>>) -> (f64, f64) {
     let values = {
         let state = state.borrow();
-        state.mpv.as_ref().map(|mpv| {
-            (
-                mpv.subtitle_delay().unwrap_or(0.0),
-                mpv.subtitle_scale().unwrap_or(1.0),
-            )
-        })
+        state
+            .mpv
+            .as_ref()
+            .map(|mpv| (mpv.observed_subtitle_delay(), mpv.observed_subtitle_scale()))
     };
 
     values.unwrap_or((0.0, 1.0))
@@ -846,35 +844,21 @@ pub(crate) fn format_scale(scale: f64) -> String {
 }
 
 pub(crate) fn read_tracks(state: &Rc<RefCell<PlayerState>>) -> Vec<Track> {
-    let tracks = {
-        let state = state.borrow();
-        state.mpv.as_ref().map(Mpv::tracks)
-    };
-
-    match tracks {
-        Some(Ok(tracks)) => tracks,
-        Some(Err(error)) => {
-            eprintln!("Failed to read tracks: {error}");
-            Vec::new()
-        }
-        None => Vec::new(),
-    }
+    let state = state.borrow();
+    state
+        .mpv
+        .as_ref()
+        .map(Mpv::observed_tracks)
+        .unwrap_or_default()
 }
 
 pub(crate) fn read_audio_devices(state: &Rc<RefCell<PlayerState>>) -> Vec<AudioDevice> {
-    let devices = {
-        let state = state.borrow();
-        state.mpv.as_ref().map(Mpv::audio_devices)
-    };
-
-    match devices {
-        Some(Ok(devices)) => devices,
-        Some(Err(error)) => {
-            eprintln!("Failed to read audio devices: {error}");
-            Vec::new()
-        }
-        None => Vec::new(),
-    }
+    let state = state.borrow();
+    state
+        .mpv
+        .as_ref()
+        .map(Mpv::observed_audio_devices)
+        .unwrap_or_default()
 }
 
 pub(crate) fn schedule_audio_device_restore(state: &Rc<RefCell<PlayerState>>) {
@@ -939,19 +923,11 @@ pub(crate) fn next_audio_device_restore_retry(
 }
 
 pub(crate) fn read_secondary_subtitle_id(state: &Rc<RefCell<PlayerState>>) -> Option<i64> {
-    let value = {
-        let state = state.borrow();
-        state.mpv.as_ref().map(Mpv::secondary_subtitle_id)
-    };
-
-    match value {
-        Some(Ok(value)) => value,
-        Some(Err(error)) => {
-            eprintln!("Failed to read secondary subtitle track: {error}");
-            None
-        }
-        None => None,
-    }
+    let state = state.borrow();
+    state
+        .mpv
+        .as_ref()
+        .and_then(Mpv::observed_secondary_subtitle_id)
 }
 
 pub(crate) fn track_button(text: &str, selected: bool) -> gtk::Button {
@@ -1026,7 +1002,7 @@ pub(crate) fn drain_mpv_events(state: &Rc<RefCell<PlayerState>>) {
         state
             .mpv
             .as_ref()
-            .map(Mpv::drain_events)
+            .map(Mpv::take_lifecycle_events)
             .unwrap_or_default()
     };
 

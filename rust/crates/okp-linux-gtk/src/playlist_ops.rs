@@ -2,6 +2,9 @@ use super::*;
 
 pub(crate) fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
     let mut state = state.borrow_mut();
+    if let Some(mpv) = state.mpv.as_ref() {
+        mpv.set_media_source(None);
+    }
     state.current_file = None;
     state.current_url = None;
     state.playlist.clear();
@@ -134,6 +137,9 @@ pub(crate) fn remember_loaded_media_with_playlist(
     };
     reset_video_transform_for_new_media(&mut state);
     state.ab_loop = AbLoopState::default();
+    if let Some(mpv) = state.mpv.as_ref() {
+        mpv.set_media_source(Some(path.clone()));
+    }
     let current = PlaylistItem::Local(path.clone());
     state.current_file = Some(path);
     state.current_url = None;
@@ -205,6 +211,9 @@ pub(crate) fn remember_loaded_url_with_playlist(
     let mut state = state.borrow_mut();
     reset_video_transform_for_new_media(&mut state);
     state.ab_loop = AbLoopState::default();
+    if let Some(mpv) = state.mpv.as_ref() {
+        mpv.set_media_source(None);
+    }
     let current = PlaylistItem::Url(url.clone());
     state.current_file = None;
     state.current_url = Some(url);
@@ -571,7 +580,7 @@ pub(crate) fn apply_playback_preferences(
     mpv: &Mpv,
     preferences: &history::PlaybackPreferences,
 ) -> Result<(), okp_mpv::MpvError> {
-    let tracks = mpv.tracks()?;
+    let tracks = mpv.observed_tracks();
 
     if let Some(enabled) = preferences.audio_enabled {
         if !enabled {
@@ -647,17 +656,14 @@ pub(crate) fn save_current_preferences(state: &Rc<RefCell<PlayerState>>) {
 }
 
 pub(crate) fn read_current_playback_preferences(mpv: &Mpv) -> history::PlaybackPreferences {
-    let tracks = mpv.tracks().unwrap_or_else(|error| {
-        eprintln!("Failed to read tracks for preferences: {error}");
-        Vec::new()
-    });
+    let tracks = mpv.observed_tracks();
     let selected_audio = tracks
         .iter()
         .find(|track| track.kind == TrackKind::Audio && track.selected);
     let selected_subtitle = tracks
         .iter()
         .find(|track| track.kind == TrackKind::Subtitle && track.selected);
-    let secondary_subtitle_id = mpv.secondary_subtitle_id().ok().flatten().filter(|id| {
+    let secondary_subtitle_id = mpv.observed_secondary_subtitle_id().filter(|id| {
         tracks
             .iter()
             .any(|track| track.kind == TrackKind::Subtitle && track.id == *id)
@@ -672,9 +678,9 @@ pub(crate) fn read_current_playback_preferences(mpv: &Mpv) -> history::PlaybackP
         subtitle_track_id: selected_subtitle.map(|track| track.id),
         secondary_subtitle_enabled: has_subtitle_tracks.then_some(secondary_subtitle_id.is_some()),
         secondary_subtitle_track_id: secondary_subtitle_id,
-        subtitle_delay: mpv.subtitle_delay().ok().and_then(finite_option),
-        subtitle_scale: mpv.subtitle_scale().ok().and_then(finite_option),
-        speed: mpv.speed().ok().and_then(finite_option),
+        subtitle_delay: finite_option(mpv.observed_subtitle_delay()),
+        subtitle_scale: finite_option(mpv.observed_subtitle_scale()),
+        speed: finite_option(mpv.observed_speed()),
     }
 }
 
@@ -687,7 +693,7 @@ pub(crate) fn read_playback_speed(state: &Rc<RefCell<PlayerState>>) -> f64 {
         .borrow()
         .mpv
         .as_ref()
-        .and_then(|mpv| mpv.speed().ok())
+        .map(|mpv| mpv.observed_speed())
         .and_then(finite_option)
         .unwrap_or(1.0)
 }
@@ -716,7 +722,7 @@ pub(crate) fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: 
         let Some(path) = state.current_file.clone() else {
             return;
         };
-        let Some(playback) = state.mpv.as_ref().and_then(|mpv| mpv.playback_state().ok()) else {
+        let Some(playback) = state.mpv.as_ref().map(|mpv| mpv.observed_playback_state()) else {
             return;
         };
         let preferences = state

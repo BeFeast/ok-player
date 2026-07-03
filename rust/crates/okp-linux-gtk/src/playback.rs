@@ -59,13 +59,7 @@ pub(crate) fn adjust_volume(state: &Rc<RefCell<PlayerState>>, delta: f64) {
         let Some(mpv) = state.mpv.as_ref() else {
             return;
         };
-        let volume = match mpv.playback_state() {
-            Ok(playback) => playback.volume.unwrap_or(100.0),
-            Err(error) => {
-                eprintln!("Failed to read volume: {error}");
-                return;
-            }
-        };
+        let volume = mpv.observed_playback_state().volume.unwrap_or(100.0);
         let updated_volume = (volume + delta).clamp(0.0, 130.0);
         if let Err(error) = mpv.set_volume(updated_volume) {
             eprintln!("Failed to set volume: {error}");
@@ -121,7 +115,7 @@ pub(crate) fn screenshot_context(
         let position = state
             .mpv
             .as_ref()
-            .and_then(|mpv| mpv.playback_state().ok())
+            .map(|mpv| mpv.observed_playback_state())
             .and_then(|playback| playback.time_pos);
         (state.mpv.is_some(), state.current_file.clone(), position)
     };
@@ -218,7 +212,7 @@ pub(crate) fn copy_current_time(state: &Rc<RefCell<PlayerState>>, status_toast: 
         state
             .mpv
             .as_ref()
-            .and_then(|mpv| mpv.playback_state().ok())
+            .map(|mpv| mpv.observed_playback_state())
             .and_then(|playback| playback.time_pos)
             .filter(|time| time.is_finite() && *time >= 0.0)
     };
@@ -303,29 +297,35 @@ pub(crate) fn toggle_fullscreen(window: &gtk::ApplicationWindow) {
     }
 }
 
-pub(crate) fn toggle_ab_loop(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
+pub(crate) fn toggle_ab_loop(state: &Rc<RefCell<PlayerState>>, status_toast: &Rc<StatusToast>) {
     let was_active = state.borrow().ab_loop.is_active();
-    let result = {
-        let state = state.borrow();
-        state.mpv.as_ref().map(|mpv| {
-            mpv.toggle_ab_loop()?;
-            mpv.ab_loop_state()
-        })
-    };
-
-    match result {
-        Some(Ok(ab_loop)) => {
-            state.borrow_mut().ab_loop = ab_loop;
-            if let Some(message) = ab_loop_message(ab_loop, was_active) {
-                status_toast.show(&message);
-            }
-        }
-        Some(Err(error)) => {
-            eprintln!("Failed to toggle A-B loop: {error}");
-            status_toast.show("Could not update A-B loop");
-        }
-        None => status_toast.show("Open media first"),
+    if state.borrow().mpv.is_none() {
+        status_toast.show("Open media first");
+        return;
     }
+    if !with_mpv(state, |mpv| mpv.toggle_ab_loop()) {
+        status_toast.show("Could not update A-B loop");
+        return;
+    }
+
+    // The `ab-loop-a`/`ab-loop-b` changes are delivered to the event pump
+    // asynchronously, so the settled endpoints — and the toast describing them —
+    // are read from the observed snapshot a beat later instead of a blocking
+    // read on the UI thread.
+    let state = Rc::clone(state);
+    let status_toast = Rc::clone(status_toast);
+    glib::timeout_add_local_once(AB_LOOP_SETTLE_DELAY, move || {
+        let ab_loop = state
+            .borrow()
+            .mpv
+            .as_ref()
+            .map(|mpv| mpv.observed_ab_loop_state())
+            .unwrap_or_default();
+        state.borrow_mut().ab_loop = ab_loop;
+        if let Some(message) = ab_loop_message(ab_loop, was_active) {
+            status_toast.show(&message);
+        }
+    });
 }
 
 pub(crate) fn sync_ab_loop_state(state: &Rc<RefCell<PlayerState>>, has_media: bool) {
@@ -334,7 +334,7 @@ pub(crate) fn sync_ab_loop_state(state: &Rc<RefCell<PlayerState>>, has_media: bo
             .borrow()
             .mpv
             .as_ref()
-            .and_then(|mpv| mpv.ab_loop_state().ok())
+            .map(|mpv| mpv.observed_ab_loop_state())
             .unwrap_or_default()
     } else {
         AbLoopState::default()

@@ -10,13 +10,13 @@
 //! with a backtrace.
 //!
 //! Decision: violations hard-log (once per property shape) instead of
-//! aborting. The GTK shell still has known synchronous read sites — the
-//! 200 ms state poll and the popover builders — whose migration to the
-//! observe/event path is tracked in the core-extraction epic; aborting today
-//! would kill every debug run at the first poll tick. The loud backtrace
-//! keeps the tripwire deterministic for new call sites while the legacy ones
-//! are drained, and the violation counter lets tests assert on it. Release
-//! builds compile the guard out entirely.
+//! aborting. The 200 ms state poll and the popover builders that used to read
+//! mpv synchronously now project the background event pump's snapshot instead
+//! (see `pump`), so a green debug run issues no blocking reads at all. The
+//! guard stays armed as the regression backstop: any new synchronous read that
+//! creeps back onto the main context still logs a loud backtrace, and the
+//! violation counter lets tests assert the tripwire fires. Release builds
+//! compile the guard out entirely.
 
 use std::backtrace::Backtrace;
 use std::cell::{Cell, RefCell};

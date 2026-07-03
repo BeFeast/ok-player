@@ -484,8 +484,7 @@ pub(crate) fn preferred_side_panel_mode(state: &Rc<RefCell<PlayerState>>) -> Sid
     let has_chapters = state
         .mpv
         .as_ref()
-        .map(Mpv::chapters)
-        .and_then(Result::ok)
+        .map(Mpv::observed_chapters)
         .is_some_and(|chapters| !chapters.is_empty());
     if has_chapters {
         SidePanelMode::Chapters
@@ -636,7 +635,7 @@ pub(crate) fn seek_hover_snapshot(
     state
         .mpv
         .as_ref()
-        .and_then(|mpv| mpv.playback_state().ok())
+        .map(|mpv| mpv.observed_playback_state())
         .and_then(|playback| playback.duration)
         .filter(|duration| duration.is_finite() && *duration > 0.0)
         .map(|duration| (current_file, duration, state.chapters_snapshot.clone()))

@@ -86,6 +86,9 @@ const MPRIS_ART_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp"];
 const MPRIS_FOLDER_ART_STEMS: &[&str] =
     &["cover", "folder", "front", "poster", "album", "albumart"];
 const MPRIS_EMBEDDED_ART_TIMEOUT: Duration = Duration::from_secs(8);
+// Grace period after toggling the A-B loop before the settled endpoints are read
+// back from the event pump's snapshot (the change is observed asynchronously).
+const AB_LOOP_SETTLE_DELAY: Duration = Duration::from_millis(60);
 // Both Linux update lanes discover through a static feed on GitHub Pages
 // (issue #162, symmetric to the Windows feed in #131) so a churn of releases on
 // the other track can never bury the newest Linux release out of a discovery
