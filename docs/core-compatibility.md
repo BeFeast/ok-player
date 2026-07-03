@@ -365,15 +365,24 @@ the player through. Both shells today handle playback imperatively against their
 wrappers (WinUI over libmpv on Windows, `okp-mpv` on Linux) and neither is wired to this machine
 yet, so it diverges from nothing shipped; this entry records the intentional model choices so a
 later shell rewire is judged against them. The spec is the module's own Rust unit tests (the
-`shortcuts`/`update_selection` precedent), and `okp-ffi` mirrors the same types as `#[repr(C)]`
-without adding logic (issue #152).
+`shortcuts`/`update_selection` precedent). `okp-ffi` (the C-ABI seam, shipped in #175) projects
+these types across the boundary rather than re-exporting them unchanged. It flattens each tagged
+union into a flat `#[repr(C)]` struct — `OkpCommand` is a `kind` discriminant plus every possible
+field — and, because C has no `Option`, re-encodes the core's `Option` sentinels as negative magic
+values at the edge: `resume_from < 0` and negative track ids fold back to `None`/off. The reject
+enum also gains two C-only variants the core never emits — a `None` "not rejected" sentinel (the
+outcome is returned by value) and `InvalidArgument` for null or non-UTF-8 input. That boundary
+marshalling is the only thing the seam adds; no domain logic lives there (issue #152).
 
 - **Sentinels are `Option`/enums, never magic values.** The convention noted for `Playlist`,
   `ChapterMath`, and the rest carries through: "no active media"/"unknown" are `Option`
   (`snapshot.source`, `time_pos`, `duration`, a track `id: Option<i64>` where `None` = off), and
   lifecycle/category codes are `#[repr(i32)]` enums (`PlaybackStatus`, `EndReason`, `TrackKind`,
   `SeekMode`, `PlayerErrorKind`, `RejectReason`) with stable discriminants a C consumer casts
-  straight through — the `aspect_resize::ResizeEdge` pattern.
+  straight through — the `aspect_resize::ResizeEdge` pattern. This "never magic values" rule is the
+  *core Rust* contract: the `#[repr(i32)]` enums cross the C ABI unchanged, but the `Option` fields
+  are the one exception noted above — `okp-ffi` re-encodes them as negative sentinels at the
+  boundary precisely because C cannot express `Option`.
 - **Optimistic transitions with request-id correlation.** `apply_command` gates a command against
   the current lifecycle state, applies the optimistic transition locally (flipping paused,
   entering `Opening`), and hands back a monotonic `request_id`; only an `Accepted` command consumes
