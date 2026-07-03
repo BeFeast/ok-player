@@ -90,12 +90,35 @@ jobs:
       - name: Build Debian package lane
         run: ./scripts/package-linux-deb.sh "${{ steps.release.outputs.version }}"
 
+      # Checksum manifest for the user-facing installable assets: the Linux
+      # app verifies a downloaded .deb against this manifest before handing
+      # it to pkexec (issue #132), and AppImage downloaders can check by
+      # hand. The Velopack nupkg is deliberately not listed here — its
+      # SHA256 already travels inside releases.linux.json and Velopack
+      # verifies it during download_updates. Every command below fails the
+      # job on a missing input (set -e, exact filenames, unexpandable glob),
+      # so a release can never ship with a silently partial manifest.
+      - name: Generate SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            (cd artifacts/linux/deb && sha256sum -- *.deb)
+            (cd artifacts/linux/velopack && sha256sum -- "OK-Player-${{ steps.release.outputs.version }}-x86_64.AppImage")
+          } > artifacts/linux/SHA256SUMS
+          if ! grep -qE '^[0-9a-f]{64}  \S.*_amd64\.deb$' artifacts/linux/SHA256SUMS; then
+            echo "::error::SHA256SUMS carries no .deb entry; refusing to release without it (issue #132)."
+            exit 1
+          fi
+          cat artifacts/linux/SHA256SUMS
+
       - uses: actions/upload-artifact@v4
         with:
           name: ok-player-linux-${{ steps.release.outputs.version }}
           path: |
             artifacts/linux/velopack/**
             artifacts/linux/deb/*.deb
+            artifacts/linux/SHA256SUMS
 
       # Stage the Windows update feed for bridging BEFORE anything is published
       # (https://github.com/BeFeast/ok-player/issues/130). The installed Windows
@@ -257,6 +280,16 @@ jobs:
             echo "Refreshing the win feed bridge on window release ${wtag}."
             gh release upload "${wtag}" "${bridge_dir}"/* --clobber
           done
+
+      # SHA256SUMS goes up before the assets it covers: the updater selects
+      # a release by its .deb asset and refuses to install when SHA256SUMS
+      # is missing, so this order means a partially attached release is
+      # never selectable rather than selectable-but-unverifiable.
+      - name: Attach SHA256SUMS to release
+        if: steps.release.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ steps.release.outputs.tag }}" artifacts/linux/SHA256SUMS --clobber
 
       - name: Attach versioned AppImage to release
         if: steps.release.outputs.publish == 'true'

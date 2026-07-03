@@ -15,7 +15,7 @@ use gtk::gdk;
 use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
-use okp_core::{AppIdentity, m3u, media_formats, natural_compare, time_code};
+use okp_core::{AppIdentity, m3u, media_formats, natural_compare, sha256sums, time_code};
 use okp_mpv::{
     AbLoopState, AudioDevice, Chapter, InfoSection, InfoTrack, MediaInfo, Mpv, MpvEvent,
     PlaybackState, Track, TrackKind, current_render_target_size, resolve_render_target_size,
@@ -48,6 +48,8 @@ const MPRIS_FOLDER_ART_STEMS: &[&str] =
 const MPRIS_EMBEDDED_ART_TIMEOUT: Duration = Duration::from_secs(8);
 const LINUX_UPDATE_REPO_URL: &str = "https://github.com/BeFeast/ok-player";
 const LINUX_DEB_RELEASES_API_URL: &str = "https://api.github.com/repos/BeFeast/ok-player/releases";
+const LINUX_SHA256SUMS_ASSET: &str = "SHA256SUMS";
+const LINUX_SHA256SUMS_MAX_BYTES: u64 = 1024 * 1024;
 const UPDATE_STATUS_NOT_CHECKED: &str = "Not checked yet";
 const DEB_SELF_INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
 const SETTINGS_REFERENCE_WIDTH: i32 = 744;
@@ -907,6 +909,7 @@ struct ManualDebUpdate {
     name: String,
     url: String,
     size: Option<u64>,
+    sums_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -7792,6 +7795,11 @@ fn select_latest_linux_deb_update(
         if compare_linux_versions(&version, current_version) != std::cmp::Ordering::Greater {
             continue;
         }
+        let sums_url = release
+            .assets
+            .iter()
+            .find(|asset| asset.name == LINUX_SHA256SUMS_ASSET)
+            .map(|asset| asset.browser_download_url.clone());
         let Some(asset) = release.assets.into_iter().find(|asset| {
             asset.name.starts_with("ok-player_") && asset.name.ends_with("_amd64.deb")
         }) else {
@@ -7802,6 +7810,7 @@ fn select_latest_linux_deb_update(
             name: asset.name,
             url: asset.browser_download_url,
             size: asset.size,
+            sums_url,
         };
         if best.as_ref().is_none_or(|current| {
             compare_linux_versions(&candidate.version, &current.version)
@@ -7818,8 +7827,8 @@ fn download_deb_update(update: ManualDebUpdate) -> Result<PathBuf, String> {
     let cache_dir = linux_update_cache_dir();
     fs::create_dir_all(&cache_dir)
         .map_err(|error| format!("Could not create update cache: {error}"))?;
-    let target = cache_dir.join(&update.name);
-    let temp = cache_dir.join(format!("{}.part", update.name));
+
+    let manifest = download_deb_checksums(&update)?;
 
     let mut response = ureq::get(&update.url)
         .header("User-Agent", "OK Player Linux")
@@ -7841,9 +7850,57 @@ fn download_deb_update(update: ManualDebUpdate) -> Result<PathBuf, String> {
         ));
     }
 
+    stage_verified_deb(&bytes, &manifest, &update.name, &cache_dir)
+}
+
+/// Fetches the release's `SHA256SUMS` manifest. Fails closed when the
+/// release publishes none: a stripped manifest must block the install, not
+/// downgrade it to unverified. Errors here are checksum-download errors,
+/// deliberately distinct from package download and verification errors.
+fn download_deb_checksums(update: &ManualDebUpdate) -> Result<String, String> {
+    let sums_url = update.sums_url.as_deref().ok_or_else(|| {
+        format!("Release {} does not publish {LINUX_SHA256SUMS_ASSET}; refusing to install an unverifiable update.", update.version)
+    })?;
+    let mut response = ureq::get(sums_url)
+        .header("User-Agent", "OK Player Linux")
+        .call()
+        .map_err(|error| format!("Checksum download failed: {error}"))?;
+    response
+        .body_mut()
+        .with_config()
+        .limit(LINUX_SHA256SUMS_MAX_BYTES)
+        .read_to_string()
+        .map_err(|error| format!("Checksum download failed: {error}"))
+}
+
+/// Stages the downloaded package and verifies it against the manifest
+/// before it is renamed into place. A payload that fails verification is
+/// deleted and never becomes the path handed to the privileged installer.
+fn stage_verified_deb(
+    bytes: &[u8],
+    manifest: &str,
+    file_name: &str,
+    cache_dir: &Path,
+) -> Result<PathBuf, String> {
+    let target = cache_dir.join(file_name);
+    let temp = cache_dir.join(format!("{file_name}.part"));
+
     fs::write(&temp, bytes).map_err(|error| format!("Could not save update: {error}"))?;
+    if let Err(error) = verify_staged_deb(&temp, file_name, manifest) {
+        let _ = fs::remove_file(&temp);
+        return Err(error);
+    }
     fs::rename(&temp, &target).map_err(|error| format!("Could not finalize update: {error}"))?;
     Ok(target)
+}
+
+/// Re-reads the staged file from disk so the digest covers the exact bytes
+/// the installer will consume, not the in-memory copy they came from.
+fn verify_staged_deb(path: &Path, file_name: &str, manifest: &str) -> Result<(), String> {
+    let staged = fs::read(path)
+        .map_err(|error| format!("Could not read staged update for verification: {error}"))?;
+    sha256sums::verify_payload(manifest, file_name, &staged)
+        .map_err(|error| format!("Update integrity check failed: {error}"))
 }
 
 fn linux_update_cache_dir() -> PathBuf {
@@ -15848,7 +15905,10 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
                     "linux-v0.1.0-linux-alpha.46",
                     false,
                     true,
-                    vec![github_asset("ok-player_0.1.0-linux-alpha.46_amd64.deb")],
+                    vec![
+                        github_asset("SHA256SUMS"),
+                        github_asset("ok-player_0.1.0-linux-alpha.46_amd64.deb"),
+                    ],
                 ),
                 github_release(
                     "linux-v0.1.0-linux-alpha.47",
@@ -15882,6 +15942,121 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
         assert_eq!(update.version, "0.1.0-linux-alpha.46");
         assert_eq!(update.name, "ok-player_0.1.0-linux-alpha.46_amd64.deb");
         assert_eq!(update.size, Some(42));
+        assert_eq!(
+            update.sums_url.as_deref(),
+            Some("https://example.invalid/SHA256SUMS")
+        );
+    }
+
+    #[test]
+    fn deb_update_selection_leaves_sums_url_empty_when_release_lacks_manifest() {
+        let update = select_latest_linux_deb_update(
+            vec![github_release(
+                "linux-v0.1.0-linux-alpha.46",
+                false,
+                true,
+                vec![github_asset("ok-player_0.1.0-linux-alpha.46_amd64.deb")],
+            )],
+            "0.1.0-linux-alpha.45",
+        )
+        .expect("alpha46 .deb should be selected");
+
+        assert!(update.sums_url.is_none());
+    }
+
+    #[test]
+    fn deb_checksum_download_refuses_release_without_manifest() {
+        let update = ManualDebUpdate {
+            version: "0.1.0-linux-alpha.46".to_owned(),
+            name: "ok-player_0.1.0-linux-alpha.46_amd64.deb".to_owned(),
+            url: "https://example.invalid/update.deb".to_owned(),
+            size: Some(42),
+            sums_url: None,
+        };
+
+        let error = download_deb_checksums(&update).expect_err("missing manifest should refuse");
+        assert!(
+            error.contains("does not publish SHA256SUMS"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn staged_deb_with_one_flipped_byte_is_refused_and_discarded() {
+        let cache_dir = unique_temp_dir("okp-deb-verify-tamper");
+        fs::create_dir_all(&cache_dir).expect("cache dir should be created");
+        let name = "ok-player_0.1.0-linux-alpha.46_amd64.deb";
+        let payload = b"pretend this is a .deb archive".to_vec();
+        let manifest = format!("{}  {name}\n", sha256sums::sha256_hex(&payload));
+        let mut tampered = payload.clone();
+        tampered[payload.len() / 2] ^= 0x01;
+
+        let error = stage_verified_deb(&tampered, &manifest, name, &cache_dir)
+            .expect_err("tampered payload should be refused");
+
+        assert!(
+            error.contains("Update integrity check failed"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("sha256 mismatch"),
+            "unexpected error: {error}"
+        );
+        // Neither the staged temp file nor the install target may survive:
+        // the install path only ever hands a successfully returned target
+        // path to pkexec, and nothing verifiable-as-bad is left behind.
+        assert!(!cache_dir.join(name).exists());
+        assert!(!cache_dir.join(format!("{name}.part")).exists());
+        fs::remove_dir_all(&cache_dir).expect("cache dir should be removed");
+    }
+
+    #[test]
+    fn staged_deb_tampered_on_disk_after_write_is_refused() {
+        let cache_dir = unique_temp_dir("okp-deb-verify-disk");
+        fs::create_dir_all(&cache_dir).expect("cache dir should be created");
+        let name = "ok-player_0.1.0-linux-alpha.46_amd64.deb";
+        let payload = b"pretend this is a .deb archive".to_vec();
+        let manifest = format!("{}  {name}\n", sha256sums::sha256_hex(&payload));
+        let staged = cache_dir.join(name);
+        fs::write(&staged, &payload).expect("staged payload should be written");
+
+        assert!(verify_staged_deb(&staged, name, &manifest).is_ok());
+
+        let mut tampered = payload.clone();
+        tampered[0] ^= 0x01;
+        fs::write(&staged, &tampered).expect("tampered payload should be written");
+
+        let error = verify_staged_deb(&staged, name, &manifest)
+            .expect_err("on-disk tampering should be refused");
+        assert!(
+            error.contains("sha256 mismatch"),
+            "unexpected error: {error}"
+        );
+        fs::remove_dir_all(&cache_dir).expect("cache dir should be removed");
+    }
+
+    #[test]
+    fn staged_deb_matching_manifest_is_finalized() {
+        let cache_dir = unique_temp_dir("okp-deb-verify-ok");
+        fs::create_dir_all(&cache_dir).expect("cache dir should be created");
+        let name = "ok-player_0.1.0-linux-alpha.46_amd64.deb";
+        let payload = b"pretend this is a .deb archive".to_vec();
+        let manifest = format!(
+            "{}  {name}\n{}  OK-Player-0.1.0-x86_64.AppImage\n",
+            sha256sums::sha256_hex(&payload),
+            sha256sums::sha256_hex(b"another asset")
+        );
+
+        let target = stage_verified_deb(&payload, &manifest, name, &cache_dir)
+            .expect("verified payload should be staged");
+
+        assert_eq!(target, cache_dir.join(name));
+        assert_eq!(
+            fs::read(&target).expect("target should be readable"),
+            payload
+        );
+        assert!(!cache_dir.join(format!("{name}.part")).exists());
+        fs::remove_dir_all(&cache_dir).expect("cache dir should be removed");
     }
 
     #[test]
@@ -15893,6 +16068,7 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
                 name: "ok-player_0.1.0-linux-alpha.46_amd64.deb".to_owned(),
                 url: "https://example.invalid/update.deb".to_owned(),
                 size: Some(42),
+                sums_url: None,
             }),
         };
 
@@ -15918,6 +16094,7 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
                 name: "ok-player_0.1.0-linux-alpha.46_amd64.deb".to_owned(),
                 url: "https://example.invalid/update.deb".to_owned(),
                 size: Some(42),
+                sums_url: None,
             }),
         };
         let available =
