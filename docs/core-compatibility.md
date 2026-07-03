@@ -355,3 +355,41 @@ untouched by this work; the Windows migration is exercised only by the Rust gold
 - **Path keys are carried verbatim.** History is keyed by the raw media path string on both
   platforms (Windows preserves backslashes and original case). Migration does not rewrite keys;
   a cross-platform consumer normalizes case at lookup time (the same note as `Playlist`).
+
+## Player state machine + command/event contract → `okp_core::player` (new C-ABI seam)
+
+Unlike every entry above, `player` is neither a port of a `src/OkPlayer.Core` module nor a lift
+of existing shell logic: it is the new typed command/event/snapshot contract the epic calls C10
+(#152, shipped in #175) — the seam a shell, or a future C-ABI consumer through `okp-ffi`, drives
+the player through. Both shells today handle playback imperatively against their own engine
+wrappers (WinUI over libmpv on Windows, `okp-mpv` on Linux) and neither is wired to this machine
+yet, so it diverges from nothing shipped; this entry records the intentional model choices so a
+later shell rewire is judged against them. The spec is the module's own Rust unit tests (the
+`shortcuts`/`update_selection` precedent), and `okp-ffi` mirrors the same types as `#[repr(C)]`
+without adding logic (issue #152).
+
+- **Sentinels are `Option`/enums, never magic values.** The convention noted for `Playlist`,
+  `ChapterMath`, and the rest carries through: "no active media"/"unknown" are `Option`
+  (`snapshot.source`, `time_pos`, `duration`, a track `id: Option<i64>` where `None` = off), and
+  lifecycle/category codes are `#[repr(i32)]` enums (`PlaybackStatus`, `EndReason`, `TrackKind`,
+  `SeekMode`, `PlayerErrorKind`, `RejectReason`) with stable discriminants a C consumer casts
+  straight through — the `aspect_resize::ResizeEdge` pattern.
+- **Optimistic transitions with request-id correlation.** `apply_command` gates a command against
+  the current lifecycle state, applies the optimistic transition locally (flipping paused,
+  entering `Opening`), and hands back a monotonic `request_id`; only an `Accepted` command consumes
+  an id, so a `Rejected` or `NoOp` never burns one and ids never repeat or go backwards. This
+  models the `mpv_command_async` reply userdata the event-driven `okp-mpv` will carry — there is no
+  C# equivalent to reconcile.
+- **Engine-global vs per-file state.** Volume and speed are engine-global: settable before any
+  media loads and preserved across `Open`/`Close`, while per-file state (position, duration,
+  tracks, chapters, subtitle delay, end reason, last error) resets on every open. A deliberate
+  model decision, not a ported one.
+- **Finiteness gating at the boundary.** Commands carrying an `f64` — `Seek`, `SetSubtitleDelay`,
+  `SetSpeed`, `SetVolume`, and an `Open` `resume_from` — reject non-finite values (`NaN`/±∞) with
+  `RejectReason::NotFinite` before any state changes, and the finiteness guard fires ahead of the
+  active-media guard. Pure hardening at the contract edge; neither shell's own controls can emit
+  such a value.
+- **Events fold in only when media is in flight.** A `Loaded` or `Ended` event while `Idle` is
+  ignored, and a stray `Paused` property echo reconciles the lifecycle only while playback is
+  active (`Playing`/`Paused`) — so out-of-order engine wake-ups cannot manufacture a phantom
+  transition. The `Ended` state keeps the media context current until the next `Open`/`Close`.
