@@ -10,9 +10,12 @@
     - OkPlayer-win-Portable.zip   the no-install portable build (our fallback "as before")
     - OkPlayer-<ver>-full.nupkg   the full release package (the update payload)
     - OkPlayer-<ver>-delta.nupkg  binary delta vs the previous release (from v2 onward)
-    - releases.win.json           the channel manifest the app reads to find updates
-  The GitHub Release IS the update feed: with -Publish, `vpk upload github` attaches all of the above to a
-  (pre-)release on tag v<Version>, which GithubSource then reads at runtime. Without -Publish this is a
+    - releases.win.json           the channel manifest describing the packages above
+  With -Publish, `vpk upload github` attaches all of the above to a (pre-)release on tag v<Version>.
+  Since issue #131 the GitHub Release is the asset store, not the runtime feed: publishing fires the
+  `release published` event, which runs .github/workflows/publish-win-feed.yml — that workflow re-derives
+  the static feed on GitHub Pages (the URL installed builds actually poll) from this release's
+  releases.win.json, so the feed update rides the release automatically. Without -Publish this is a
   local pack only (no network, no upload) — for verifying the pipeline.
 .PARAMETER Version
   Version baked into the published assembly AND the Velopack package. Optional — defaults to the <Version>
@@ -78,9 +81,10 @@ if ($Publish) {
 
 # Pack the entire publish folder (self-contained runtime + libmpv + .pri + icon) into Velopack artifacts.
 # --packId must stay 'OkPlayer' forever (changing it breaks the update chain); the human name is --packTitle.
-# --channel is pinned to the Windows default 'win' (the client's GithubSource reads releases.win.json). "beta"
-# is deliberately NOT a Velopack channel here — it's the GitHub pre-release flag (--pre, on upload) plus the
-# in-app display label, so there's a single feed and no channel split to keep in sync between pack and client.
+# --channel is pinned to 'win', matching the client's ExplicitChannel (UpdateFeed.WinChannel) so the manifest
+# name (releases.win.json) can never fork between pack and client. "beta" is deliberately NOT a Velopack
+# channel here — it's the GitHub pre-release flag (--pre, on upload) plus the in-app display label, so there's
+# a single feed and no channel split to keep in sync.
 Write-Host "Packing Velopack release -> $releases"
 & $vpk pack `
   --packId OkPlayer `
@@ -113,6 +117,12 @@ if ($Publish) {
     --token $token
   if ($LASTEXITCODE -ne 0) { throw "vpk upload github failed ($LASTEXITCODE)" }
   Write-Host "Published v$Version. Testers install OkPlayer-win-Setup.exe once; updates then apply in-app."
+  # Publishing with a user token fires `release published`, which runs the publish-win-feed workflow —
+  # the static feed on GitHub Pages updates without further action here (issue #131).
+  Write-Host "The publish-win-feed workflow now refreshes the static update feed:"
+  Write-Host "  https://befeast.github.io/ok-player/updates/win/releases.win.json"
+  Write-Host "Check it with: gh run list --workflow publish-win-feed.yml --limit 1"
+  Write-Host "  (fallback if that run went missing: gh workflow run publish-win-feed.yml)"
 } else {
   Write-Host "Local pack complete (no upload). Re-run with -Publish to push the GitHub pre-release feed."
 }

@@ -10,6 +10,9 @@
   <ItemGroup>
     <PackageReference Include="coverlet.collector" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <!-- Contract pins for the static update feed (UpdateFeedTests): the client-side Velopack behaviors
+         the #131 migration depends on, tested against the real library, not a copy of its logic. -->
+    <PackageReference Include="Velopack" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
   </ItemGroup>
