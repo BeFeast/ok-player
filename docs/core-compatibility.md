@@ -187,3 +187,22 @@ behaves identically on both sides.
   deterministic across OSes — a `Z:\…` path reaches the injected probe even on Linux, where
   C#-on-Linux would return false before probing (a combination the C# suite never covers).
   On Windows the results are identical.
+
+## Shortcut/keybinding model → `okp_core::shortcuts` (Linux shell extraction)
+
+- **No C# counterpart.** This module was not ported from `src/OkPlayer.Core`; it is the
+  keybinding model extracted from the Linux GTK shell (`okp-linux-gtk`) under the
+  freeze-boundary rule (EPIC #134, B6). The spec is the twelve shortcut tests that moved from
+  the shell's test module into the core module, not a C# suite. The Windows app has its own
+  shortcut handling; if the two ever converge, this module is the shared home.
+- **Key identity.** The shell stored chords as `gdk::Key` keysyms; core stores the canonical,
+  case-folded keysym *name* (`space`, `comma`, `Page_Up`, `c`). The platform key namespace is
+  injected via the `KeyNames` trait: the portable set (display aliases plus ASCII letters and
+  digits) resolves in core, and any other config token is resolved by the shell through
+  `gdk::Key::from_name` exactly as before — including its case-sensitivity (`Return` resolves,
+  `return` does not).
+- **Nameless captured keys.** Previously a captured key with no keysym name was accepted,
+  serialized as the bogus token `Unknown`, and then invalidated the whole keybinding config on
+  the next parse. A name-based chord cannot represent such a key, so capture now rejects it
+  with the same "Press a non-modifier key." message. This is the one intentional behavior
+  change of the extraction.
