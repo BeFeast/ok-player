@@ -37,3 +37,24 @@ behaves identically on both sides.
   init; Rust exposes the same ordered pairs as `'static` slices. Keys, values, ordering, and the
   invariant that every preset writes the same six options are identical (pinned by the ported
   suite).
+
+## SubtitleSyncAligner → `okp_core::subtitle_sync`
+
+- **Null/absent sentinels.** C# `Align` returns `null` (and accepts `null` inputs) for the
+  no-result cases; `okp_core::subtitle_sync::align` returns `Option<SubtitleSyncResult>` and takes
+  slices, which cannot be null — the empty-slice guard covers the same cases. `Votes` is C# `int`;
+  the Rust `votes` is `usize`. Purely representational.
+- **Optional parameters.** The C# tuning knobs are optional parameters with defaults
+  (`minCueWords = 2`, `minMatch = 0.6`, `binSeconds = 0.25`, `maxOffsetSeconds = 120`); Rust has
+  no default arguments, so they live in an `AlignOptions` struct whose `Default` carries the same
+  values.
+- **Tokenizer Unicode classification.** C# classifies UTF-16 code units with
+  `char.IsLetterOrDigit` (letter categories + `Nd`); Rust classifies scalar values with
+  `char::is_alphanumeric` (Alphabetic + `Nd`/`Nl`/`No`). They differ only on exotica: astral-plane
+  letters (e.g. mathematical alphanumerics) are surrogate pairs in C# and split tokens there but
+  are kept in Rust, and number-letter/other-number characters (Roman numerals, `½`) are separators
+  in C# but token characters in Rust. Likewise C# lowercases with the simple per-`char`
+  `ToLowerInvariant` while Rust applies full Unicode lowercasing (multi-char expansions like
+  `İ` → `i̇`). Both sides run the one tokenizer over both the ASR words and the cue text, so
+  matching stays self-consistent; only cross-implementation offsets on such scripts could differ,
+  and no supported ASR source emits them.
