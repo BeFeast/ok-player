@@ -16,6 +16,9 @@ use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
 use okp_core::playlist::{Playlist, PlaylistItem, QueueInsertMode, RepeatMode};
+use okp_core::shortcuts::{
+    self, ShortcutAction, ShortcutBinding, ShortcutChord, ShortcutModifiers, ShortcutSlot,
+};
 use okp_core::{AppIdentity, m3u, media_formats, natural_compare, sha256sums, time_code};
 use okp_mpv::{
     AbLoopState, AudioDevice, Chapter, InfoSection, InfoTrack, MediaInfo, Mpv, MpvEvent,
@@ -9387,8 +9390,8 @@ fn settings_shortcuts_section(
 struct ShortcutEditorRow {
     action: ShortcutAction,
     default_chord: ShortcutChord,
-    primary_chord: Cell<ShortcutChord>,
-    secondary_chord: Cell<Option<ShortcutChord>>,
+    primary_chord: RefCell<ShortcutChord>,
+    secondary_chord: RefCell<Option<ShortcutChord>>,
     container: gtk::Box,
     primary_chip: gtk::Button,
     primary_chip_label: gtk::Label,
@@ -9396,12 +9399,6 @@ struct ShortcutEditorRow {
     secondary_chip_label: gtk::Label,
     badge: gtk::Label,
     reset: gtk::Button,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ShortcutEditorSlot {
-    Primary,
-    Secondary,
 }
 
 fn settings_shortcut_editor_section(
@@ -9427,13 +9424,12 @@ fn settings_shortcut_editor_section(
     let list = gtk::Box::new(gtk::Orientation::Vertical, 0);
     list.add_css_class("okp-shortcuts-list");
 
-    for action in SHORTCUT_ACTIONS {
-        let current_chords = shortcut_chords_for_action(&bindings, *action);
+    for action in shortcuts::SHORTCUT_ACTIONS {
+        let mut current_chords = shortcuts::chords_for_action(&bindings, *action).into_iter();
         let primary_chord = current_chords
-            .first()
-            .copied()
-            .unwrap_or_else(|| default_chord_for_action(*action));
-        let secondary_chord = current_chords.get(1).copied();
+            .next()
+            .unwrap_or_else(|| shortcuts::default_chord_for_action(*action));
+        let secondary_chord = current_chords.next();
         let row = shortcut_editor_row(
             *action,
             primary_chord,
@@ -9457,13 +9453,17 @@ fn settings_shortcut_editor_section(
             let visible = query.is_empty()
                 || row.action.label().to_ascii_lowercase().contains(&query)
                 || row.action.id().contains(&query)
-                || shortcut_chord_label(row.primary_chord.get())
+                || row
+                    .primary_chord
+                    .borrow()
+                    .label()
                     .to_ascii_lowercase()
                     .contains(&query)
                 || row
                     .secondary_chord
-                    .get()
-                    .map(shortcut_chord_label)
+                    .borrow()
+                    .as_ref()
+                    .map(ShortcutChord::label)
                     .is_some_and(|label| label.to_ascii_lowercase().contains(&query));
             row.container.set_visible(visible);
         }
@@ -9483,8 +9483,8 @@ fn settings_shortcut_editor_section(
         shortcut_editor_clear_capture(&reset_rows.borrow());
         shortcut_editor_clear_conflicts(&reset_rows.borrow());
         for row in reset_rows.borrow().iter() {
-            row.primary_chord.set(row.default_chord);
-            row.secondary_chord.set(None);
+            *row.primary_chord.borrow_mut() = row.default_chord.clone();
+            *row.secondary_chord.borrow_mut() = None;
             shortcut_editor_refresh_row(row);
         }
         save_shortcut_editor_rows(
@@ -9510,8 +9510,7 @@ fn shortcut_editor_row(
     status_toast: Rc<StatusToast>,
     status: gtk::Label,
 ) -> Rc<ShortcutEditorRow> {
-    let default_chord =
-        parse_shortcut_chord(action.default_shortcut(), 0).expect("default shortcuts should parse");
+    let default_chord = shortcuts::default_chord_for_action(action);
     let container = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     container.add_css_class("okp-shortcut-row");
 
@@ -9564,8 +9563,8 @@ fn shortcut_editor_row(
     let row = Rc::new(ShortcutEditorRow {
         action,
         default_chord,
-        primary_chord: Cell::new(primary_chord),
-        secondary_chord: Cell::new(secondary_chord),
+        primary_chord: RefCell::new(primary_chord),
+        secondary_chord: RefCell::new(secondary_chord),
         container,
         primary_chip,
         primary_chip_label,
@@ -9578,7 +9577,7 @@ fn shortcut_editor_row(
 
     connect_shortcut_editor_chip(
         &row,
-        ShortcutEditorSlot::Primary,
+        ShortcutSlot::Primary,
         Rc::clone(&rows),
         Rc::clone(&state),
         Rc::clone(&status_toast),
@@ -9586,7 +9585,7 @@ fn shortcut_editor_row(
     );
     connect_shortcut_editor_chip(
         &row,
-        ShortcutEditorSlot::Secondary,
+        ShortcutSlot::Secondary,
         Rc::clone(&rows),
         Rc::clone(&state),
         Rc::clone(&status_toast),
@@ -9601,8 +9600,8 @@ fn shortcut_editor_row(
     row.reset.connect_clicked(move |_| {
         shortcut_editor_clear_capture(&reset_rows.borrow());
         shortcut_editor_clear_conflicts(&reset_rows.borrow());
-        reset_row.primary_chord.set(reset_row.default_chord);
-        reset_row.secondary_chord.set(None);
+        *reset_row.primary_chord.borrow_mut() = reset_row.default_chord.clone();
+        *reset_row.secondary_chord.borrow_mut() = None;
         shortcut_editor_refresh_row(&reset_row);
         save_shortcut_editor_rows(
             &reset_rows,
@@ -9618,7 +9617,7 @@ fn shortcut_editor_row(
 
 fn connect_shortcut_editor_chip(
     row: &Rc<ShortcutEditorRow>,
-    slot: ShortcutEditorSlot,
+    slot: ShortcutSlot,
     rows: Rc<RefCell<Vec<Rc<ShortcutEditorRow>>>>,
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
@@ -9658,13 +9657,13 @@ fn connect_shortcut_editor_chip(
         };
 
         if let Some(conflict) =
-            shortcut_editor_conflict(&key_rows.borrow(), key_row.action, slot, chord)
+            shortcut_editor_conflict(&key_rows.borrow(), key_row.action, slot, &chord)
         {
             shortcut_editor_mark_conflict(&key_rows.borrow(), key_row.action, conflict);
             key_status.set_text(&format!(
                 "{} already uses {}",
                 conflict.label(),
-                shortcut_chord_label(chord)
+                chord.label()
             ));
             key_toast.show("Shortcut conflict");
             return glib::Propagation::Stop;
@@ -9692,18 +9691,17 @@ fn shortcut_editor_initial_bindings(settings: &settings::SettingsStore) -> Vec<S
             "Ignoring custom keybindings at line {} while building Settings UI: {}",
             error.line, error.message
         );
-        default_shortcut_bindings()
+        shortcuts::default_bindings()
     })
 }
 
 fn shortcut_editor_refresh_row(row: &ShortcutEditorRow) {
-    let secondary = row.secondary_chord.get();
-    let is_custom = row.primary_chord.get() != row.default_chord || secondary.is_some();
+    let secondary = row.secondary_chord.borrow().clone();
+    let is_custom = *row.primary_chord.borrow() != row.default_chord || secondary.is_some();
     row.primary_chip_label
-        .set_text(&shortcut_chord_label(row.primary_chord.get()));
+        .set_text(&row.primary_chord.borrow().label());
     if let Some(chord) = secondary {
-        row.secondary_chip_label
-            .set_text(&shortcut_chord_label(chord));
+        row.secondary_chip_label.set_text(&chord.label());
         row.secondary_chip.remove_css_class("is-empty");
         row.secondary_chip
             .set_tooltip_text(Some("Change secondary shortcut"));
@@ -9752,25 +9750,23 @@ fn shortcut_editor_mark_conflict(
     }
 }
 
+fn shortcut_editor_action_chords(rows: &[Rc<ShortcutEditorRow>]) -> Vec<shortcuts::ActionChords> {
+    rows.iter()
+        .map(|row| shortcuts::ActionChords {
+            action: row.action,
+            primary: row.primary_chord.borrow().clone(),
+            secondary: row.secondary_chord.borrow().clone(),
+        })
+        .collect()
+}
+
 fn shortcut_editor_conflict(
     rows: &[Rc<ShortcutEditorRow>],
     action: ShortcutAction,
-    slot: ShortcutEditorSlot,
-    chord: ShortcutChord,
+    slot: ShortcutSlot,
+    chord: &ShortcutChord,
 ) -> Option<ShortcutAction> {
-    for row in rows {
-        if !(row.action == action && slot == ShortcutEditorSlot::Primary)
-            && row.primary_chord.get() == chord
-        {
-            return Some(row.action);
-        }
-        if !(row.action == action && slot == ShortcutEditorSlot::Secondary)
-            && row.secondary_chord.get() == Some(chord)
-        {
-            return Some(row.action);
-        }
-    }
-    None
+    shortcuts::slot_conflict(&shortcut_editor_action_chords(rows), action, slot, chord)
 }
 
 fn save_shortcut_editor_rows(
@@ -9780,30 +9776,15 @@ fn save_shortcut_editor_rows(
     status_toast: &StatusToast,
     success_message: &str,
 ) {
-    let bindings = rows
-        .borrow()
-        .iter()
-        .flat_map(|row| {
-            let mut bindings = vec![ShortcutBinding {
-                action: row.action,
-                chord: row.primary_chord.get(),
-            }];
-            if let Some(chord) = row.secondary_chord.get() {
-                bindings.push(ShortcutBinding {
-                    action: row.action,
-                    chord,
-                });
-            }
-            bindings
-        })
-        .collect::<Vec<_>>();
-    if let Err(error) = validate_shortcut_conflicts(&bindings) {
+    let bindings =
+        shortcuts::bindings_from_action_chords(&shortcut_editor_action_chords(&rows.borrow()));
+    if let Err(error) = shortcuts::validate_conflicts(&bindings) {
         status.set_text(&error.message);
         status_toast.show("Shortcut conflict");
         return;
     }
 
-    let text = shortcut_config_text_from_bindings(&bindings);
+    let text = shortcuts::config_text_from_bindings(&bindings);
     let save_result = {
         let mut state = state.borrow_mut();
         state.settings.set_raw_keybindings_config(&text);
@@ -9820,28 +9801,24 @@ fn save_shortcut_editor_rows(
     status_toast.show(success_message);
 }
 
-fn shortcut_editor_chip_for(row: &ShortcutEditorRow, slot: ShortcutEditorSlot) -> gtk::Button {
+fn shortcut_editor_chip_for(row: &ShortcutEditorRow, slot: ShortcutSlot) -> gtk::Button {
     match slot {
-        ShortcutEditorSlot::Primary => row.primary_chip.clone(),
-        ShortcutEditorSlot::Secondary => row.secondary_chip.clone(),
+        ShortcutSlot::Primary => row.primary_chip.clone(),
+        ShortcutSlot::Secondary => row.secondary_chip.clone(),
     }
 }
 
-fn shortcut_editor_chip_label_for(row: &ShortcutEditorRow, slot: ShortcutEditorSlot) -> gtk::Label {
+fn shortcut_editor_chip_label_for(row: &ShortcutEditorRow, slot: ShortcutSlot) -> gtk::Label {
     match slot {
-        ShortcutEditorSlot::Primary => row.primary_chip_label.clone(),
-        ShortcutEditorSlot::Secondary => row.secondary_chip_label.clone(),
+        ShortcutSlot::Primary => row.primary_chip_label.clone(),
+        ShortcutSlot::Secondary => row.secondary_chip_label.clone(),
     }
 }
 
-fn shortcut_editor_set_chord(
-    row: &ShortcutEditorRow,
-    slot: ShortcutEditorSlot,
-    chord: ShortcutChord,
-) {
+fn shortcut_editor_set_chord(row: &ShortcutEditorRow, slot: ShortcutSlot, chord: ShortcutChord) {
     match slot {
-        ShortcutEditorSlot::Primary => row.primary_chord.set(chord),
-        ShortcutEditorSlot::Secondary => row.secondary_chord.set(Some(chord)),
+        ShortcutSlot::Primary => *row.primary_chord.borrow_mut() = chord,
+        ShortcutSlot::Secondary => *row.secondary_chord.borrow_mut() = Some(chord),
     }
 }
 
@@ -10208,281 +10185,32 @@ fn load_selected_subtitles(state: &Rc<RefCell<PlayerState>>, paths: Vec<PathBuf>
     loaded
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ShortcutAction {
-    PlayPause,
-    SeekBack,
-    SeekForward,
-    FrameForward,
-    FrameBack,
-    PreviousItem,
-    NextItem,
-    VolumeDown,
-    VolumeUp,
-    OpenFile,
-    AddSubtitle,
-    OpenUrl,
-    CloseMedia,
-    SaveScreenshot,
-    CopyFrame,
-    MediaInfo,
-    GoToTime,
-    AbLoop,
-    SubtitleDelayForward,
-    SubtitleDelayBack,
-    SubtitleSizeDown,
-    SubtitleSizeUp,
-    Fullscreen,
-    EscapeFullscreen,
-    OpenSettings,
-}
+/// Adapts the GDK keyval tables to the core shortcut model's key namespace: config tokens
+/// beyond the portable set resolve exactly as the pre-extraction parser did
+/// (`gdk::Key::from_name`, case-sensitive), and the canonical name comes back case-folded via
+/// `to_lower()` so cased letter keysyms compare consistently with key events.
+struct GdkKeyNames;
 
-impl ShortcutAction {
-    fn id(self) -> &'static str {
-        match self {
-            Self::PlayPause => "play-pause",
-            Self::SeekBack => "seek-back",
-            Self::SeekForward => "seek-forward",
-            Self::FrameForward => "frame-forward",
-            Self::FrameBack => "frame-back",
-            Self::PreviousItem => "previous-item",
-            Self::NextItem => "next-item",
-            Self::VolumeDown => "volume-down",
-            Self::VolumeUp => "volume-up",
-            Self::OpenFile => "open-file",
-            Self::AddSubtitle => "add-subtitle",
-            Self::OpenUrl => "open-url",
-            Self::CloseMedia => "close-media",
-            Self::SaveScreenshot => "save-screenshot",
-            Self::CopyFrame => "copy-frame",
-            Self::MediaInfo => "media-info",
-            Self::GoToTime => "go-to-time",
-            Self::AbLoop => "ab-loop",
-            Self::SubtitleDelayForward => "subtitle-delay-forward",
-            Self::SubtitleDelayBack => "subtitle-delay-back",
-            Self::SubtitleSizeDown => "subtitle-size-down",
-            Self::SubtitleSizeUp => "subtitle-size-up",
-            Self::Fullscreen => "fullscreen",
-            Self::EscapeFullscreen => "escape-fullscreen",
-            Self::OpenSettings => "open-settings",
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::PlayPause => "Play / Pause",
-            Self::SeekBack => "Seek Back",
-            Self::SeekForward => "Seek Forward",
-            Self::FrameForward => "Frame Forward",
-            Self::FrameBack => "Frame Back",
-            Self::PreviousItem => "Previous Item",
-            Self::NextItem => "Next Item",
-            Self::VolumeDown => "Volume Down",
-            Self::VolumeUp => "Volume Up",
-            Self::OpenFile => "Open File",
-            Self::AddSubtitle => "Add Subtitle",
-            Self::OpenUrl => "Open URL",
-            Self::CloseMedia => "Close Media",
-            Self::SaveScreenshot => "Save Screenshot",
-            Self::CopyFrame => "Copy Frame",
-            Self::MediaInfo => "Media Info",
-            Self::GoToTime => "Go to Time",
-            Self::AbLoop => "A-B Loop",
-            Self::SubtitleDelayForward => "Subtitle Delay Forward",
-            Self::SubtitleDelayBack => "Subtitle Delay Back",
-            Self::SubtitleSizeDown => "Subtitle Size Down",
-            Self::SubtitleSizeUp => "Subtitle Size Up",
-            Self::Fullscreen => "Fullscreen",
-            Self::EscapeFullscreen => "Exit Fullscreen",
-            Self::OpenSettings => "Settings",
-        }
-    }
-
-    fn default_shortcut(self) -> &'static str {
-        match self {
-            Self::PlayPause => "Space",
-            Self::SeekBack => "Left",
-            Self::SeekForward => "Right",
-            Self::FrameForward => ".",
-            Self::FrameBack => ",",
-            Self::PreviousItem => "PageUp",
-            Self::NextItem => "PageDown",
-            Self::VolumeDown => "Down",
-            Self::VolumeUp => "Up",
-            Self::OpenFile => "O",
-            Self::AddSubtitle => "S",
-            Self::OpenUrl => "U",
-            Self::CloseMedia => "X",
-            Self::SaveScreenshot => "C",
-            Self::CopyFrame => "Shift+C",
-            Self::MediaInfo => "I",
-            Self::GoToTime => "J",
-            Self::AbLoop => "L",
-            Self::SubtitleDelayForward => "Z",
-            Self::SubtitleDelayBack => "Shift+Z",
-            Self::SubtitleSizeDown => "[",
-            Self::SubtitleSizeUp => "]",
-            Self::Fullscreen => "F",
-            Self::EscapeFullscreen => "Escape",
-            Self::OpenSettings => "Ctrl+,",
-        }
+impl shortcuts::KeyNames for GdkKeyNames {
+    fn canonicalize_extra(&self, token: &str) -> Option<String> {
+        gdk::Key::from_name(token)
+            .and_then(|key| key.to_lower().name())
+            .map(Into::into)
     }
 }
 
-const SHORTCUT_ACTIONS: &[ShortcutAction] = &[
-    ShortcutAction::PlayPause,
-    ShortcutAction::SeekBack,
-    ShortcutAction::SeekForward,
-    ShortcutAction::FrameForward,
-    ShortcutAction::FrameBack,
-    ShortcutAction::PreviousItem,
-    ShortcutAction::NextItem,
-    ShortcutAction::VolumeDown,
-    ShortcutAction::VolumeUp,
-    ShortcutAction::OpenFile,
-    ShortcutAction::AddSubtitle,
-    ShortcutAction::OpenUrl,
-    ShortcutAction::CloseMedia,
-    ShortcutAction::SaveScreenshot,
-    ShortcutAction::CopyFrame,
-    ShortcutAction::MediaInfo,
-    ShortcutAction::GoToTime,
-    ShortcutAction::AbLoop,
-    ShortcutAction::SubtitleDelayForward,
-    ShortcutAction::SubtitleDelayBack,
-    ShortcutAction::SubtitleSizeDown,
-    ShortcutAction::SubtitleSizeUp,
-    ShortcutAction::Fullscreen,
-    ShortcutAction::EscapeFullscreen,
-    ShortcutAction::OpenSettings,
-];
-
-const MAX_SHORTCUTS_PER_ACTION: usize = 2;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ShortcutChord {
-    key: gdk::Key,
-    modifiers: gdk::ModifierType,
-}
-
-impl ShortcutChord {
-    fn new(key: gdk::Key, modifiers: gdk::ModifierType) -> Self {
-        Self {
-            key: key.to_lower(),
-            modifiers: shortcut_modifiers(modifiers),
-        }
+fn shortcut_modifiers_from_event(modifiers: gdk::ModifierType) -> ShortcutModifiers {
+    ShortcutModifiers {
+        ctrl: modifiers.contains(gdk::ModifierType::CONTROL_MASK),
+        alt: modifiers.contains(gdk::ModifierType::ALT_MASK),
+        shift: modifiers.contains(gdk::ModifierType::SHIFT_MASK),
     }
-
-    fn matches(self, key: gdk::Key, modifiers: gdk::ModifierType) -> bool {
-        self.key == key.to_lower() && self.modifiers == shortcut_modifiers(modifiers)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ShortcutBinding {
-    action: ShortcutAction,
-    chord: ShortcutChord,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ShortcutConfigError {
-    line: usize,
-    message: String,
-}
-
-fn shortcut_modifiers(modifiers: gdk::ModifierType) -> gdk::ModifierType {
-    modifiers
-        & (gdk::ModifierType::CONTROL_MASK
-            | gdk::ModifierType::SHIFT_MASK
-            | gdk::ModifierType::ALT_MASK)
-}
-
-fn shortcut_action_by_id(id: &str) -> Option<ShortcutAction> {
-    SHORTCUT_ACTIONS
-        .iter()
-        .copied()
-        .find(|action| action.id() == id)
-}
-
-fn default_shortcut_bindings() -> Vec<ShortcutBinding> {
-    SHORTCUT_ACTIONS
-        .iter()
-        .copied()
-        .map(|action| ShortcutBinding {
-            action,
-            chord: parse_shortcut_chord(action.default_shortcut(), 0)
-                .expect("default shortcuts should parse"),
-        })
-        .collect()
 }
 
 fn resolved_shortcut_bindings(
     settings: &settings::SettingsStore,
-) -> Result<Vec<ShortcutBinding>, ShortcutConfigError> {
-    resolved_shortcut_bindings_from_text(settings.raw_keybindings_config())
-}
-
-fn resolved_shortcut_bindings_from_text(
-    text: &str,
-) -> Result<Vec<ShortcutBinding>, ShortcutConfigError> {
-    let mut bindings = default_shortcut_bindings();
-    let overrides = parse_raw_keybindings_config(text)?;
-    for action in SHORTCUT_ACTIONS {
-        let action_overrides = overrides
-            .iter()
-            .filter(|(override_action, _)| override_action == action)
-            .map(|(_, chord)| *chord)
-            .collect::<Vec<_>>();
-        if action_overrides.is_empty() {
-            continue;
-        }
-
-        bindings.retain(|binding| binding.action != *action);
-        bindings.extend(action_overrides.into_iter().map(|chord| ShortcutBinding {
-            action: *action,
-            chord,
-        }));
-    }
-    validate_shortcut_conflicts(&bindings)?;
-    Ok(bindings)
-}
-
-fn shortcut_config_text_from_bindings(bindings: &[ShortcutBinding]) -> String {
-    let mut lines = Vec::new();
-    for action in SHORTCUT_ACTIONS {
-        let default_chord = default_chord_for_action(*action);
-        let chords = shortcut_chords_for_action(bindings, *action);
-        if chords.len() == 1 && chords[0] == default_chord {
-            continue;
-        }
-
-        for chord in chords.into_iter().take(MAX_SHORTCUTS_PER_ACTION) {
-            lines.push(format!("{}={}", action.id(), shortcut_chord_label(chord)));
-        }
-    }
-    lines.join("\n")
-}
-
-fn shortcut_chords_for_action(
-    bindings: &[ShortcutBinding],
-    action: ShortcutAction,
-) -> Vec<ShortcutChord> {
-    let chords = bindings
-        .iter()
-        .filter(|binding| binding.action == action)
-        .map(|binding| binding.chord)
-        .take(MAX_SHORTCUTS_PER_ACTION)
-        .collect::<Vec<_>>();
-
-    if chords.is_empty() {
-        vec![default_chord_for_action(action)]
-    } else {
-        chords
-    }
-}
-
-fn default_chord_for_action(action: ShortcutAction) -> ShortcutChord {
-    parse_shortcut_chord(action.default_shortcut(), 0).expect("default shortcuts should parse")
+) -> Result<Vec<ShortcutBinding>, shortcuts::ShortcutConfigError> {
+    shortcuts::resolved_bindings_from_text(settings.raw_keybindings_config(), &GdkKeyNames)
 }
 
 fn keyboard_action_for_event(
@@ -10495,218 +10223,26 @@ fn keyboard_action_for_event(
             "Ignoring custom keybindings at line {}: {}",
             error.line, error.message
         );
-        default_shortcut_bindings()
+        shortcuts::default_bindings()
     });
 
-    shortcut_action_for_bindings(&bindings, key, modifiers)
-}
-
-fn shortcut_action_for_bindings(
-    bindings: &[ShortcutBinding],
-    key: gdk::Key,
-    modifiers: gdk::ModifierType,
-) -> Option<ShortcutAction> {
-    bindings
-        .iter()
-        .find(|binding| binding.chord.matches(key, modifiers))
-        .map(|binding| binding.action)
-}
-
-fn parse_raw_keybindings_config(
-    text: &str,
-) -> Result<Vec<(ShortcutAction, ShortcutChord)>, ShortcutConfigError> {
-    let mut overrides = Vec::new();
-
-    for (index, line) in text.lines().enumerate() {
-        let line_number = index + 1;
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';') {
-            continue;
-        }
-
-        let Some((action_id, shortcut)) = trimmed.split_once('=') else {
-            return Err(shortcut_config_error(
-                line_number,
-                "Use action=shortcut syntax, one binding per line.",
-            ));
-        };
-        let action_id = action_id.trim();
-        let shortcut = shortcut.trim();
-        let Some(action) = shortcut_action_by_id(action_id) else {
-            return Err(shortcut_config_error(
-                line_number,
-                &format!("Unknown action `{action_id}`."),
-            ));
-        };
-        let existing_count = overrides
-            .iter()
-            .filter(|(existing_action, _)| *existing_action == action)
-            .count();
-        if existing_count >= MAX_SHORTCUTS_PER_ACTION {
-            return Err(shortcut_config_error(
-                line_number,
-                &format!("Action `{action_id}` supports at most two shortcuts."),
-            ));
-        }
-
-        overrides.push((action, parse_shortcut_chord(shortcut, line_number)?));
-    }
-
-    Ok(overrides)
-}
-
-fn parse_shortcut_chord(text: &str, line: usize) -> Result<ShortcutChord, ShortcutConfigError> {
-    let mut modifiers = gdk::ModifierType::empty();
-    let mut key = None::<gdk::Key>;
-
-    for token in text
-        .split('+')
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
-    {
-        match token.to_ascii_lowercase().as_str() {
-            "ctrl" | "control" => modifiers |= gdk::ModifierType::CONTROL_MASK,
-            "alt" | "option" => modifiers |= gdk::ModifierType::ALT_MASK,
-            "shift" => modifiers |= gdk::ModifierType::SHIFT_MASK,
-            _ if key.is_none() => {
-                key = Some(shortcut_key_from_token(token).ok_or_else(|| {
-                    shortcut_config_error(line, &format!("Unknown key `{token}`."))
-                })?);
-            }
-            _ => {
-                return Err(shortcut_config_error(
-                    line,
-                    "Shortcut can only contain one non-modifier key.",
-                ));
-            }
-        }
-    }
-
-    let Some(key) = key else {
-        return Err(shortcut_config_error(line, "Shortcut key is empty."));
-    };
-
-    Ok(ShortcutChord::new(key, modifiers))
-}
-
-fn shortcut_key_from_token(token: &str) -> Option<gdk::Key> {
-    let normalized = match token.to_ascii_lowercase().as_str() {
-        "," | "comma" => "comma".to_owned(),
-        "." | "period" => "period".to_owned(),
-        "[" | "bracketleft" => "bracketleft".to_owned(),
-        "]" | "bracketright" => "bracketright".to_owned(),
-        "esc" | "escape" => "Escape".to_owned(),
-        "pageup" | "page_up" => "Page_Up".to_owned(),
-        "pagedown" | "page_down" => "Page_Down".to_owned(),
-        "space" => "space".to_owned(),
-        "left" => "Left".to_owned(),
-        "right" => "Right".to_owned(),
-        "up" => "Up".to_owned(),
-        "down" => "Down".to_owned(),
-        single if single.chars().count() == 1 => single.to_owned(),
-        _ => token.to_owned(),
-    };
-
-    gdk::Key::from_name(normalized)
+    let key_name = key.to_lower().name()?;
+    shortcuts::action_for_key(
+        &bindings,
+        key_name.as_str(),
+        shortcut_modifiers_from_event(modifiers),
+    )
 }
 
 fn shortcut_chord_from_event(
     key: gdk::Key,
     modifiers: gdk::ModifierType,
 ) -> Result<ShortcutChord, &'static str> {
-    if shortcut_is_modifier_key(key) {
-        return Err("Press a non-modifier key.");
-    }
-
-    Ok(ShortcutChord::new(key, modifiers))
-}
-
-fn shortcut_is_modifier_key(key: gdk::Key) -> bool {
-    key.name()
-        .map(|name| {
-            matches!(
-                name.as_str(),
-                "Shift_L"
-                    | "Shift_R"
-                    | "Control_L"
-                    | "Control_R"
-                    | "Alt_L"
-                    | "Alt_R"
-                    | "Meta_L"
-                    | "Meta_R"
-                    | "Super_L"
-                    | "Super_R"
-                    | "Hyper_L"
-                    | "Hyper_R"
-                    | "ISO_Level3_Shift"
-                    | "Caps_Lock"
-            )
-        })
-        .unwrap_or(false)
-}
-
-fn validate_shortcut_conflicts(bindings: &[ShortcutBinding]) -> Result<(), ShortcutConfigError> {
-    for (index, left) in bindings.iter().enumerate() {
-        if let Some(right) = bindings
-            .iter()
-            .skip(index + 1)
-            .find(|right| right.chord == left.chord)
-        {
-            return Err(shortcut_config_error(
-                0,
-                &format!(
-                    "{} conflicts with {} on {}.",
-                    right.action.id(),
-                    left.action.id(),
-                    shortcut_chord_label(left.chord)
-                ),
-            ));
-        }
-    }
-
-    Ok(())
-}
-
-fn shortcut_config_error(line: usize, message: &str) -> ShortcutConfigError {
-    ShortcutConfigError {
-        line,
-        message: message.to_owned(),
-    }
-}
-
-fn shortcut_chord_label(chord: ShortcutChord) -> String {
-    let mut parts = Vec::new();
-    if chord.modifiers.contains(gdk::ModifierType::CONTROL_MASK) {
-        parts.push("Ctrl".to_owned());
-    }
-    if chord.modifiers.contains(gdk::ModifierType::ALT_MASK) {
-        parts.push("Alt".to_owned());
-    }
-    if chord.modifiers.contains(gdk::ModifierType::SHIFT_MASK) {
-        parts.push("Shift".to_owned());
-    }
-    parts.push(
-        chord
-            .key
-            .name()
-            .map(|name| shortcut_display_key(name.as_str()))
-            .unwrap_or_else(|| "Unknown".to_owned()),
-    );
-    parts.join("+")
-}
-
-fn shortcut_display_key(name: &str) -> String {
-    match name {
-        "space" => "Space".to_owned(),
-        "comma" => ",".to_owned(),
-        "period" => ".".to_owned(),
-        "bracketleft" => "[".to_owned(),
-        "bracketright" => "]".to_owned(),
-        "Page_Up" => "PageUp".to_owned(),
-        "Page_Down" => "PageDown".to_owned(),
-        key if key.len() == 1 => key.to_ascii_uppercase(),
-        key => key.to_owned(),
-    }
+    let key_name = key.to_lower().name();
+    shortcuts::chord_from_captured_key(
+        key_name.as_deref(),
+        shortcut_modifiers_from_event(modifiers),
+    )
 }
 
 fn connect_keyboard(
@@ -14657,219 +14193,6 @@ script-opts=osc-layout=bottombar
 
         assert_eq!(error.line, 1);
         assert!(error.message.contains("NUL"));
-    }
-
-    #[test]
-    fn shortcut_parser_accepts_action_overrides() {
-        let bindings = resolved_shortcut_bindings_from_text(
-            "\
-play-pause=P
-copy-frame=Ctrl+Shift+C
-",
-        )
-        .expect("shortcuts should parse");
-
-        assert_eq!(
-            shortcut_action_for_bindings(
-                &bindings,
-                gdk::Key::from_name("p").expect("key exists"),
-                gdk::ModifierType::empty(),
-            ),
-            Some(ShortcutAction::PlayPause)
-        );
-        assert_eq!(
-            shortcut_action_for_bindings(
-                &bindings,
-                gdk::Key::from_name("space").expect("key exists"),
-                gdk::ModifierType::empty(),
-            ),
-            None
-        );
-        assert_eq!(
-            shortcut_action_for_bindings(
-                &bindings,
-                gdk::Key::from_name("C").expect("key exists"),
-                gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::SHIFT_MASK,
-            ),
-            Some(ShortcutAction::CopyFrame)
-        );
-    }
-
-    #[test]
-    fn shortcut_parser_accepts_secondary_action_binding() {
-        let bindings = resolved_shortcut_bindings_from_text(
-            "\
-play-pause=Space
-play-pause=P
-",
-        )
-        .expect("secondary shortcut should parse");
-
-        assert_eq!(
-            shortcut_action_for_bindings(
-                &bindings,
-                gdk::Key::from_name("space").expect("key exists"),
-                gdk::ModifierType::empty(),
-            ),
-            Some(ShortcutAction::PlayPause)
-        );
-        assert_eq!(
-            shortcut_action_for_bindings(
-                &bindings,
-                gdk::Key::from_name("p").expect("key exists"),
-                gdk::ModifierType::empty(),
-            ),
-            Some(ShortcutAction::PlayPause)
-        );
-    }
-
-    #[test]
-    fn shortcut_parser_rejects_unknown_action() {
-        let error = resolved_shortcut_bindings_from_text("dance=Space")
-            .expect_err("unknown action should fail");
-
-        assert_eq!(error.line, 1);
-        assert!(error.message.contains("Unknown action"));
-    }
-
-    #[test]
-    fn shortcut_parser_rejects_unknown_key() {
-        let error = resolved_shortcut_bindings_from_text("play-pause=HyperDrive")
-            .expect_err("unknown key should fail");
-
-        assert_eq!(error.line, 1);
-        assert!(error.message.contains("Unknown key"));
-    }
-
-    #[test]
-    fn shortcut_parser_rejects_conflicting_bindings() {
-        let error =
-            resolved_shortcut_bindings_from_text("play-pause=C").expect_err("conflict should fail");
-
-        assert_eq!(error.line, 0);
-        assert!(error.message.contains("conflicts"));
-    }
-
-    #[test]
-    fn shortcut_parser_rejects_third_action_binding() {
-        let error = resolved_shortcut_bindings_from_text(
-            "\
-play-pause=Space
-play-pause=P
-play-pause=Ctrl+P
-",
-        )
-        .expect_err("third shortcut should fail");
-
-        assert_eq!(error.line, 3);
-        assert!(error.message.contains("at most two"));
-    }
-
-    #[test]
-    fn shortcut_defaults_keep_shift_copy_frame_distinct() {
-        let bindings = default_shortcut_bindings();
-
-        assert_eq!(
-            shortcut_action_for_bindings(
-                &bindings,
-                gdk::Key::from_name("c").expect("key exists"),
-                gdk::ModifierType::empty(),
-            ),
-            Some(ShortcutAction::SaveScreenshot)
-        );
-        assert_eq!(
-            shortcut_action_for_bindings(
-                &bindings,
-                gdk::Key::from_name("C").expect("key exists"),
-                gdk::ModifierType::SHIFT_MASK,
-            ),
-            Some(ShortcutAction::CopyFrame)
-        );
-    }
-
-    #[test]
-    fn shortcut_config_text_serializes_only_custom_bindings() {
-        let mut bindings = default_shortcut_bindings();
-        let custom = parse_shortcut_chord("P", 0).expect("custom shortcut should parse");
-        bindings
-            .iter_mut()
-            .find(|binding| binding.action == ShortcutAction::PlayPause)
-            .expect("play-pause binding should exist")
-            .chord = custom;
-
-        assert_eq!(
-            shortcut_config_text_from_bindings(&bindings),
-            "play-pause=P"
-        );
-        assert!(
-            resolved_shortcut_bindings_from_text(&shortcut_config_text_from_bindings(&bindings))
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn shortcut_config_text_serializes_secondary_bindings() {
-        let mut bindings = default_shortcut_bindings();
-        bindings.push(ShortcutBinding {
-            action: ShortcutAction::PlayPause,
-            chord: parse_shortcut_chord("P", 0).expect("custom shortcut should parse"),
-        });
-
-        assert_eq!(
-            shortcut_config_text_from_bindings(&bindings),
-            "play-pause=Space\nplay-pause=P"
-        );
-        let resolved =
-            resolved_shortcut_bindings_from_text(&shortcut_config_text_from_bindings(&bindings))
-                .expect("serialized secondary shortcut should parse");
-        assert_eq!(
-            shortcut_action_for_bindings(
-                &resolved,
-                gdk::Key::from_name("space").expect("key exists"),
-                gdk::ModifierType::empty(),
-            ),
-            Some(ShortcutAction::PlayPause)
-        );
-        assert_eq!(
-            shortcut_action_for_bindings(
-                &resolved,
-                gdk::Key::from_name("p").expect("key exists"),
-                gdk::ModifierType::empty(),
-            ),
-            Some(ShortcutAction::PlayPause)
-        );
-    }
-
-    #[test]
-    fn shortcut_config_text_returns_blank_for_defaults() {
-        assert_eq!(
-            shortcut_config_text_from_bindings(&default_shortcut_bindings()),
-            ""
-        );
-    }
-
-    #[test]
-    fn shortcut_capture_rejects_modifier_only_keys() {
-        let shift = gdk::Key::from_name("Shift_L").expect("key exists");
-        assert_eq!(
-            shortcut_chord_from_event(shift, gdk::ModifierType::SHIFT_MASK),
-            Err("Press a non-modifier key.")
-        );
-
-        let comma = gdk::Key::from_name("comma").expect("key exists");
-        assert_eq!(
-            shortcut_chord_from_event(comma, gdk::ModifierType::CONTROL_MASK)
-                .map(shortcut_chord_label),
-            Ok("Ctrl+,".to_owned())
-        );
-    }
-
-    #[test]
-    fn shortcut_labels_keep_letter_o_distinct_from_zero() {
-        assert_eq!(
-            shortcut_chord_label(parse_shortcut_chord("O", 0).expect("O should parse")),
-            "O"
-        );
     }
 
     #[test]
