@@ -12113,28 +12113,40 @@ fn unique_media_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
 }
 
 fn navigate_playlist(state: &Rc<RefCell<PlayerState>>, direction: isize) -> bool {
-    let (item, playlist) = {
-        let mut state = state.borrow_mut();
-        let Some(item) = state.playlist.step_wrapping(direction) else {
+    let (index, item, playlist) = {
+        let state = state.borrow();
+        let Some(index) = state.playlist.peek_wrapping_index(direction) else {
             return false;
         };
-        (item, state.playlist.items().to_vec())
+        let Some(item) = state.playlist.get(index).cloned() else {
+            return false;
+        };
+        (index, item, state.playlist.items().to_vec())
     };
 
-    load_playlist_item_with_playlist(state, item, playlist, true)
+    if !load_playlist_item_with_playlist(state, item, playlist, true) {
+        return false; // load rejected → the cursor stays on the playing item
+    }
+    state.borrow_mut().playlist.set_current_index(index);
+    true
 }
 
 fn jump_playlist_index(state: &Rc<RefCell<PlayerState>>, index: usize) -> bool {
     let (item, playlist) = {
-        let mut state = state.borrow_mut();
+        let state = state.borrow();
         let Some(item) = state.playlist.get(index).cloned() else {
             return false;
         };
-        state.playlist.set_current_index(index);
         (item, state.playlist.items().to_vec())
     };
 
-    load_playlist_item_with_playlist(state, item, playlist, true)
+    if !load_playlist_item_with_playlist(state, item, playlist, true) {
+        return false; // load rejected → the cursor stays on the playing item
+    }
+    // Committed by index after the reset inside the load, which re-finds by equality and would
+    // otherwise leave the cursor on the first occurrence of a repeated entry.
+    state.borrow_mut().playlist.set_current_index(index);
+    true
 }
 
 fn advance_playlist_on_eof(state: &Rc<RefCell<PlayerState>>) -> bool {
@@ -12142,7 +12154,7 @@ fn advance_playlist_on_eof(state: &Rc<RefCell<PlayerState>>) -> bool {
         let state = state.borrow();
         (
             state.playlist.repeat(),
-            state.playlist.auto_advance_target().cloned(),
+            state.playlist.auto_advance_target_index(),
             state.playlist.items().to_vec(),
         )
     };
@@ -12151,11 +12163,18 @@ fn advance_playlist_on_eof(state: &Rc<RefCell<PlayerState>>) -> bool {
         return restart_current_file(state);
     }
 
-    let Some(next_item) = target else {
+    let Some(index) = target else {
+        return false;
+    };
+    let Some(next_item) = playlist.get(index).cloned() else {
         return false;
     };
 
-    load_playlist_item_with_playlist(state, next_item, playlist, false)
+    if !load_playlist_item_with_playlist(state, next_item, playlist, false) {
+        return false; // load rejected → the cursor stays on the playing item
+    }
+    state.borrow_mut().playlist.set_current_index(index);
+    true
 }
 
 fn move_playlist_item(state: &Rc<RefCell<PlayerState>>, from: usize, to: usize) -> bool {

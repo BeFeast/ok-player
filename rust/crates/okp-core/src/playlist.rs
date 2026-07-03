@@ -275,13 +275,21 @@ impl Playlist {
     /// What to play when the current item ends: the same item when Repeat=One, nothing when
     /// auto-advance is off, otherwise [`Self::peek_next`].
     pub fn auto_advance_target(&self) -> Option<&PlaylistItem> {
+        self.auto_advance_target_index()
+            .map(|index| &self.items[index])
+    }
+
+    /// [`Self::auto_advance_target`] as an index into [`Self::items`] — unambiguous when the
+    /// playlist repeats an entry, so a shell can load the item and then commit the cursor with
+    /// [`Self::set_current_index`].
+    pub fn auto_advance_target_index(&self) -> Option<usize> {
         if self.repeat == RepeatMode::One {
-            return self.current();
+            return self.current_index;
         }
         if !self.auto_advance {
             return None;
         }
-        self.peek_next()
+        self.neighbour(1)
     }
 
     /// Advance the cursor to the next item in play order and return it (`None` at the end).
@@ -305,6 +313,14 @@ impl Playlist {
     /// mode — the transport-button behavior (Repeat only governs what happens at end of file).
     /// `None` when there is nothing to move to (fewer than two items).
     pub fn step_wrapping(&mut self, direction: isize) -> Option<PlaylistItem> {
+        let target = self.peek_wrapping_index(direction)?;
+        self.set_current_index(target);
+        Some(self.items[target].clone())
+    }
+
+    /// The [`Self::step_wrapping`] target as an index into [`Self::items`], without moving the
+    /// cursor — a shell can attempt the load and commit the cursor only on success.
+    pub fn peek_wrapping_index(&self, direction: isize) -> Option<usize> {
         if self.items.len() < 2 {
             return None;
         }
@@ -312,9 +328,7 @@ impl Playlist {
         let current = self.current_index.unwrap_or(0);
         let position = self.order.iter().position(|&index| index == current)? as isize;
         let len = self.order.len() as isize;
-        let target = self.order[(position + direction).rem_euclid(len) as usize];
-        self.set_current_index(target);
-        Some(self.items[target].clone())
+        Some(self.order[(position + direction).rem_euclid(len) as usize])
     }
 
     /// Re-point the cursor at `item` if present. A sequential step keeps the order; jumping
@@ -361,7 +375,12 @@ impl Playlist {
     /// rebuild it.
     pub fn reset(&mut self, items: Vec<PlaylistItem>, current: &PlaylistItem) {
         if self.items == items {
-            self.set_current(current);
+            // The cursor may already sit on a later occurrence of `current` (set by index when
+            // the playlist repeats an entry); re-finding by equality would snap it back to the
+            // first duplicate and desync navigation from the visible position.
+            if self.current() != Some(current) {
+                self.set_current(current);
+            }
             return;
         }
 
@@ -952,6 +971,71 @@ mod tests {
         playlist.reset(vec![local("/media/x.mkv")], &local("/media/x.mkv"));
         assert_eq!(playlist.items(), [local("/media/x.mkv")]);
         assert_eq!(playlist.current_index(), Some(0));
+    }
+
+    #[test]
+    fn reset_with_identical_items_keeps_the_cursor_on_a_duplicate_occurrence() {
+        let items = vec![
+            local("/media/a.mkv"),
+            local("/media/b.mkv"),
+            local("/media/a.mkv"), // an M3U may repeat an entry
+            local("/media/c.mkv"),
+        ];
+        let mut playlist = Playlist::from_items(items.clone(), Some(&items[0]), false);
+        playlist.set_current_index(2);
+
+        playlist.reset(items.clone(), &local("/media/a.mkv"));
+
+        assert_eq!(playlist.current_index(), Some(2)); // stays on the later occurrence
+        assert_eq!(playlist.peek_next(), Some(&local("/media/c.mkv"))); // neighbours follow it
+
+        playlist.reset(items, &local("/media/b.mkv")); // cursor elsewhere → re-find by equality
+        assert_eq!(playlist.current_index(), Some(1));
+    }
+
+    #[test]
+    fn peek_wrapping_index_reports_the_target_without_moving_the_cursor() {
+        let playlist = folder_playlist(r"C:\v\ep10.mkv"); // last item, Repeat=Off
+
+        assert_eq!(playlist.peek_wrapping_index(1), Some(0)); // wraps to the first item
+        assert_eq!(playlist.peek_wrapping_index(-1), Some(1));
+        assert_eq!(playlist.current_index(), Some(2)); // peeking did not move the cursor
+
+        let solo = Playlist::from_items(vec![local("/media/a.mkv")], None, false);
+        assert_eq!(solo.peek_wrapping_index(1), None); // nothing to move to
+    }
+
+    #[test]
+    fn step_wrapping_navigates_duplicate_entries_by_position() {
+        let items = vec![
+            local("/media/a.mkv"),
+            local("/media/b.mkv"),
+            local("/media/a.mkv"),
+        ];
+        let mut playlist = Playlist::from_items(items.clone(), Some(&items[0]), false);
+
+        assert_eq!(playlist.step_wrapping(-1), Some(local("/media/a.mkv")));
+        assert_eq!(playlist.current_index(), Some(2)); // wrapped to the last duplicate
+        assert_eq!(playlist.step_wrapping(1), Some(local("/media/a.mkv")));
+        assert_eq!(playlist.current_index(), Some(0)); // and back to the first
+    }
+
+    #[test]
+    fn auto_advance_target_index_distinguishes_consecutive_duplicates() {
+        let items = vec![
+            local("/media/a.mkv"),
+            local("/media/b.mkv"),
+            local("/media/b.mkv"),
+            local("/media/c.mkv"),
+        ];
+        let mut playlist = Playlist::from_items(items.clone(), Some(&items[1]), false);
+
+        assert_eq!(playlist.auto_advance_target_index(), Some(2)); // the second b, not a replay
+        playlist.set_current_index(2);
+        assert_eq!(playlist.auto_advance_target_index(), Some(3)); // the chain reaches c
+
+        playlist.set_repeat(RepeatMode::One);
+        assert_eq!(playlist.auto_advance_target_index(), Some(2)); // Repeat=One replays in place
     }
 
     #[test]

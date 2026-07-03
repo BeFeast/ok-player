@@ -62,7 +62,11 @@ behaves identically on both sides.
 - **`Next()`/`Prev()` with duplicate entries.** C# advances by re-finding the peeked *path*, so
   when an M3U repeats an entry the cursor lands on its first occurrence; the Rust port advances
   to the actual neighbouring position. A deterministic refinement — identical whenever entries
-  are unique (always, for folder playlists).
+  are unique (always, for folder playlists). `reset` with identical items follows the same rule:
+  a cursor already sitting on an occurrence equal to the new current item stays put instead of
+  being re-found by equality, and the index-returning peeks (`peek_wrapping_index`,
+  `auto_advance_target_index`) let a shell load an item first and commit the cursor by position
+  only after the player accepts it.
 
 ## SubtitleSyncAligner → `okp_core::subtitle_sync`
 
