@@ -15,8 +15,9 @@ The Linux updater had the mirror-image fragility (#162): the AppImage lane used 
 
 Both cures are the same: discovery moved to static HTTPS URLs on GitHub Pages that no
 release-list churn can bury. #131 built it for Windows; #162 did it for Linux. The #130/#158
-bridge in `release-linux.yml` keeps the legacy Windows channel alive during the transition (see
-the transition plan below).
+bridge in `release-linux.yml` kept the legacy Windows `GithubSource` fleet discovering updates
+during the transition; it was retired in #171 once every installed Windows client had reached the
+first static-feed build (see the transition record below).
 
 ## How discovery works now
 
@@ -87,23 +88,23 @@ Triggers:
   `curl -s https://befeast.github.io/ok-player/updates/linux/deb.linux.json | jq .` should each
   list the just-shipped version with resolvable asset URLs.
 
-## Transition plan (legacy fleets still on GithubSource)
+## Transition (complete): the legacy GithubSource bridge
 
-The static feeds are the discovery mechanism for **new** builds. Already-installed builds that
-predate the migration still discover through the GitHub release listing, so the #130/#158 bridge
-in `release-linux.yml` **must stay** until both fleets have picked up their first static-feed build
-through the repaired legacy channel:
+While pre-migration builds were still installed they discovered updates through the GitHub release
+listing rather than the static feeds, so the #130/#158 bridge in `release-linux.yml` attached the
+current Windows channel assets (`releases.win.json` + the nupkgs it references) to every published
+Linux release, keeping that legacy `GithubSource` fleet from being buried by release-list churn:
 
-- **Windows:** builds ≤ v0.10.13 discover via `GithubSource`; v0.10.14 (#161) is the first
-  static-feed build.
-- **Linux:** builds before this change discover the AppImage lane via `GithubSource` and the `.deb`
-  lane via the releases API. The first static-feed Linux build reaches them through the existing
-  batched `linux-v*` release channel (the burial risk there is bounded by the #130 batch cadence);
-  every update after that flows through the static feed.
+- **Windows:** builds ≤ v0.10.13 discovered via `GithubSource`; v0.10.14 (#161) is the first
+  static-feed build (`SimpleWebSource`).
+- **Linux:** builds before the #162 migration discovered the AppImage lane via `GithubSource` and
+  the `.deb` lane via the releases API. The first static-feed Linux build reached them through the
+  batched `linux-v*` release channel; every update after that flows through the static feed.
 
-After **both** fleets are confirmed to have adopted their static-feed builds, retire the bridge:
-
-1. remove the `#130`/`#158` bridge steps from `release-linux.yml` (separate small PR, per #131/#162);
-2. remove the corresponding Windows-side `GithubSource` fallback.
-
-Until then, leave the bridge in place.
+The bridge was retired in **#171** once every installed Windows client had reached v0.10.14: the
+Windows client now reads only `SimpleWebSource` (no `GithubSource` fallback remains), so no
+installed build reads the bridged assets. `release-linux.yml` no longer attaches Windows channel
+assets, and the static Pages feeds are the sole discovery mechanism on both tracks. The bridged
+copies left on old `linux-v*` releases are dead weight and can be deleted; the original
+`releases.win.json` + nupkg assets on the `v0.10.*` Windows releases **must stay**, because the
+static win feed rewrites its `FileName` entries to those releases' asset URLs.
