@@ -135,6 +135,13 @@ behaves identically on both sides.
 - **Option-name matching.** `OrdinalIgnoreCase` → `eq_ignore_ascii_case`: the option names
   ("resume"/"sub"/"audio") are ASCII, so only non-ASCII case-folding lookalikes (e.g. long s)
   differ — such tokens simply fall through to the unknown-switch rule.
+- **Unmatched slash tokens.** C# ignores every `/`-prefixed token that is not a documented
+  option as an unknown Windows-style switch; on POSIX `/…` is an absolute path, so the port
+  keeps unmatched slash tokens positional (`/home/alice/movie.mkv --resume 90` opens the
+  file) while the documented names — `/resume`, `/sub`, `/audio`, inline values included —
+  still parse as switches. Unknown `-`-prefixed tokens are ignored on both sides. The ported
+  unknown-switch test asserts the dash forms; a stray `/foo` becomes positional in Rust,
+  where the caller's URL/exists-on-disk validation filters it.
 
 ## ImageLuma → `okp_core::image_luma`
 

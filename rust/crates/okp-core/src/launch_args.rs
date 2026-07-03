@@ -51,10 +51,14 @@ pub fn parse<S: AsRef<str>>(args: &[S]) -> LaunchArgs {
             parsed.sub = consume(inline, args, &mut i, parse_track_id).or(parsed.sub);
         } else if let Some(inline) = try_match_option(arg, "audio") {
             parsed.audio = consume(inline, args, &mut i, parse_track_id).or(parsed.audio);
-        } else if !arg.starts_with(['-', '/']) {
+        } else if !arg.starts_with('-') {
+            // Positional — including unmatched `/…` tokens. C# drops those as unknown
+            // Windows-style switches, but on POSIX `/home/alice/movie.mkv` is an absolute
+            // path; only the documented names (matched above) keep the slash-switch
+            // spelling. Divergence recorded in docs/core-compatibility.md.
             parsed.files.push(arg.to_string());
         }
-        // else: an unknown switch — ignore (file associations may append flags)
+        // else: an unknown `-` switch — ignore (file associations may append flags)
 
         i += 1;
     }
@@ -206,10 +210,34 @@ mod tests {
     }
 
     #[test]
-    fn parse_unknown_switches_are_ignored() {
-        let parsed = parse(&["--fullscreen", MOVIE, "/foo", "-x"]);
+    fn parse_unknown_dash_switches_are_ignored() {
+        let parsed = parse(&["--fullscreen", MOVIE, "-x"]);
         assert_eq!(parsed.files, [MOVIE]);
         assert_eq!(parsed.resume_seconds, None);
+    }
+
+    #[test]
+    fn parse_posix_absolute_path_is_positional() {
+        let parsed = parse(&["/home/alice/movie.mkv", "--resume", "90"]);
+        assert_eq!(parsed.files, ["/home/alice/movie.mkv"]);
+        assert_eq!(parsed.resume_seconds, Some(90.0));
+    }
+
+    #[test]
+    fn parse_unmatched_slash_token_is_positional() {
+        // Divergence from C# (which ignores `/foo` as an unknown Windows switch): on POSIX
+        // it is an absolute path, so it stays positional and the caller's URL/exists-on-disk
+        // validation filters it. See docs/core-compatibility.md.
+        let parsed = parse(&["/foo", MOVIE]);
+        assert_eq!(parsed.files, ["/foo", MOVIE]);
+    }
+
+    #[test]
+    fn parse_slash_spelled_documented_options_are_still_switches() {
+        let parsed = parse(&["/home/alice/movie.mkv", "/resume", "90", "/sub", "2"]);
+        assert_eq!(parsed.files, ["/home/alice/movie.mkv"]);
+        assert_eq!(parsed.resume_seconds, Some(90.0));
+        assert_eq!(parsed.sub, Some(TrackSelection::Id(2)));
     }
 
     #[test]
