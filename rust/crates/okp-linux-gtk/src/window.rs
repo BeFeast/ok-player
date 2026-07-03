@@ -1,0 +1,590 @@
+use super::*;
+
+#[cfg(test)]
+pub(crate) fn parse_launch_args_from(args: impl Iterator<Item = std::ffi::OsString>) -> LaunchArgs {
+    let cwd = env::current_dir().ok();
+    parse_launch_args_from_cwd(args, cwd.as_deref())
+}
+
+pub(crate) fn parse_launch_args_from_cwd(
+    mut args: impl Iterator<Item = std::ffi::OsString>,
+    cwd: Option<&Path>,
+) -> LaunchArgs {
+    let mut launch = LaunchArgs::default();
+    while let Some(arg) = args.next() {
+        if arg == "--sub" {
+            if let Some(arg) = args.next() {
+                add_launch_subtitle_arg(&mut launch, arg, cwd);
+            }
+            continue;
+        }
+
+        if let Some(text) = arg.to_str() {
+            if media_formats::is_playable_url(Some(text)) {
+                push_unique_playlist_item(&mut launch.items, PlaylistItem::Url(text.to_owned()));
+                continue;
+            }
+
+            if let Some(path) = file_uri_path(text) {
+                add_launch_path_arg(&mut launch, path);
+                continue;
+            }
+        }
+
+        add_launch_path_arg(&mut launch, launch_path_arg(arg, cwd));
+    }
+
+    launch
+}
+
+pub(crate) fn file_uri_path(text: &str) -> Option<PathBuf> {
+    text.strip_prefix("file://")?;
+    gtk::gio::File::for_uri(text).path()
+}
+
+pub(crate) fn add_launch_subtitle_arg(
+    launch: &mut LaunchArgs,
+    arg: std::ffi::OsString,
+    cwd: Option<&Path>,
+) {
+    if let Some(text) = arg.to_str()
+        && let Some(path) = file_uri_path(text)
+    {
+        add_unique_launch_subtitle(launch, path);
+        return;
+    }
+
+    add_unique_launch_subtitle(launch, launch_path_arg(arg, cwd));
+}
+
+pub(crate) fn launch_path_arg(arg: std::ffi::OsString, cwd: Option<&Path>) -> PathBuf {
+    let path = PathBuf::from(arg);
+    if path.is_relative()
+        && let Some(cwd) = cwd
+    {
+        return cwd.join(path);
+    }
+    path
+}
+
+pub(crate) fn add_launch_path_arg(launch: &mut LaunchArgs, path: PathBuf) {
+    if is_subtitle_path(&path) {
+        add_unique_launch_subtitle(launch, path);
+    } else if is_playlist_path(&path) {
+        if !launch.playlists.iter().any(|existing| existing == &path) {
+            launch.playlists.push(path);
+        }
+    } else if is_media_path(&path) {
+        push_unique_playlist_item(&mut launch.items, PlaylistItem::Local(path));
+    }
+}
+
+pub(crate) fn add_unique_launch_subtitle(launch: &mut LaunchArgs, path: PathBuf) {
+    if !launch.subtitles.iter().any(|existing| existing == &path) {
+        launch.subtitles.push(path);
+    }
+}
+
+pub(crate) fn push_unique_playlist_item(items: &mut Vec<PlaylistItem>, item: PlaylistItem) {
+    if !items.iter().any(|existing| existing == &item) {
+        items.push(item);
+    }
+}
+
+pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> AppRuntime {
+    install_css();
+
+    let identity = AppIdentity::linux();
+    let state = Rc::new(RefCell::new(PlayerState::default()));
+    apply_playback_settings_defaults(&state);
+    let auto_check_updates = state.borrow().settings.auto_check_updates();
+    let updating_seek = Rc::new(Cell::new(false));
+    let updating_volume = Rc::new(Cell::new(false));
+    let status_toast = Rc::new(StatusToast::new());
+    let chrome = Rc::new(ChromeVisibility::new());
+    let (mpris_controller, mpris_commands, mpris_signals) = create_mpris_controller();
+    start_mpris_service(mpris_controller.clone(), mpris_signals);
+
+    let window = gtk::ApplicationWindow::builder()
+        .application(app)
+        .title(&identity.name)
+        .default_width(1120)
+        .default_height(680)
+        .decorated(false)
+        .build();
+    window.add_css_class("okp-player-window");
+
+    let overlay = gtk::Overlay::new();
+    overlay.add_css_class("okp-root");
+
+    let video_area = gtk::GLArea::new();
+    video_area.set_hexpand(true);
+    video_area.set_vexpand(true);
+    video_area.set_auto_render(false);
+    video_area.set_required_version(3, 2);
+    video_area.add_css_class("okp-video-plane");
+
+    let controls = build_controls(
+        &window,
+        Rc::clone(&state),
+        Rc::clone(&updating_seek),
+        Rc::clone(&updating_volume),
+        Rc::clone(&status_toast),
+        Rc::clone(&chrome),
+    );
+    let control_bar = controls_bar(&controls);
+    let window_chrome = build_player_window_chrome(&window);
+    sync_player_window_chrome_fullscreen(&window_chrome, &window);
+    let empty_surface = build_empty_surface(&window, Rc::clone(&state), Rc::clone(&status_toast));
+    chrome.set_child(&control_bar);
+    chrome.add_linked_revealer(&window_chrome);
+    chrome.add_linked_revealer(&controls.up_next_revealer);
+
+    overlay.set_child(Some(&video_area));
+    overlay.add_overlay(empty_surface.widget());
+    overlay.add_overlay(&window_chrome);
+    overlay.add_overlay(chrome.widget());
+    overlay.add_overlay(&controls.up_next_revealer);
+    overlay.add_overlay(status_toast.widget());
+    for resize_handle in build_player_resize_handles(&window) {
+        overlay.add_overlay(&resize_handle);
+    }
+    window.set_child(Some(&overlay));
+    connect_chrome_activity(&overlay, Rc::clone(&chrome));
+
+    connect_mpv(&video_area, Rc::clone(&state), launch_args);
+    connect_video_clicks(
+        &video_area,
+        &window,
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    );
+    connect_drop(&window, Rc::clone(&state), empty_surface.clone());
+    connect_keyboard(
+        &window,
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+        Rc::clone(&chrome),
+    );
+    connect_mpris_commands(
+        &window,
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+        mpris_commands,
+    );
+    connect_progress_persistence(&window, Rc::clone(&state));
+    connect_state_poll(
+        &window,
+        Rc::clone(&state),
+        controls,
+        StatePollContext {
+            updating_seek: Rc::clone(&updating_seek),
+            updating_volume: Rc::clone(&updating_volume),
+            chrome: Rc::clone(&chrome),
+            empty_surface,
+            mpris_snapshot: Arc::clone(&mpris_controller.snapshot),
+            mpris_signals: mpris_controller.signals.clone(),
+        },
+    );
+
+    window.present();
+    if env::var_os("OKP_OPEN_SETTINGS_ON_STARTUP").is_some() {
+        let settings_parent = window.clone();
+        let settings_state = Rc::clone(&state);
+        let settings_toast = Rc::clone(&status_toast);
+        glib::timeout_add_local_once(Duration::from_millis(250), move || {
+            open_settings_window(&settings_parent, settings_state, settings_toast);
+        });
+    }
+    if auto_check_updates {
+        check_updates_on_startup(Rc::clone(&state), Rc::clone(&status_toast));
+    }
+
+    AppRuntime { window, state }
+}
+
+pub(crate) fn open_runtime_launch_args(runtime: &AppRuntime, launch_args: &LaunchArgs) {
+    runtime.window.present();
+    if launch_args.has_payload() {
+        apply_launch_args(&runtime.state, launch_args);
+    }
+}
+
+pub(crate) fn sync_player_window_chrome_fullscreen(
+    window_chrome: &gtk::Revealer,
+    window: &gtk::ApplicationWindow,
+) {
+    window_chrome.set_visible(!window.is_fullscreen());
+
+    let fullscreen_chrome = window_chrome.clone();
+    window.connect_notify_local(Some("fullscreened"), move |window, _| {
+        fullscreen_chrome.set_visible(!window.is_fullscreen());
+    });
+}
+
+pub(crate) fn build_player_window_chrome(window: &gtk::ApplicationWindow) -> gtk::Revealer {
+    let revealer = gtk::Revealer::new();
+    revealer.set_halign(gtk::Align::Fill);
+    revealer.set_valign(gtk::Align::Start);
+    revealer.set_transition_duration(140);
+    revealer.set_transition_type(gtk::RevealerTransitionType::SlideDown);
+    revealer.set_reveal_child(true);
+    revealer.set_can_target(true);
+
+    let bar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    bar.add_css_class("okp-window-chrome");
+    bar.set_halign(gtk::Align::Fill);
+    bar.set_valign(gtk::Align::Start);
+    bar.set_margin_top(0);
+
+    let drag_zone = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    drag_zone.add_css_class("okp-window-drag-zone");
+    drag_zone.set_hexpand(true);
+    drag_zone.set_can_target(true);
+    connect_player_window_drag(&drag_zone, window);
+    bar.append(&drag_zone);
+
+    let controls = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    controls.add_css_class("okp-player-window-controls");
+    controls.set_halign(gtk::Align::End);
+    controls.set_margin_top(4);
+    controls.set_margin_end(6);
+
+    let minimize = player_window_control(WindowControlKind::Minimize, "Minimize");
+    let minimize_window = window.clone();
+    minimize.connect_clicked(move |_| minimize_window.minimize());
+    controls.append(&minimize);
+
+    let maximize = player_window_control(WindowControlKind::Maximize, "Maximize");
+    sync_player_maximize_icon(&maximize, window);
+    let maximize_window = window.clone();
+    let maximize_button = maximize.clone();
+    maximize.connect_clicked(move |_| {
+        if maximize_window.is_maximized() {
+            maximize_window.unmaximize();
+        } else {
+            maximize_window.maximize();
+        }
+        sync_player_maximize_icon(&maximize_button, &maximize_window);
+    });
+    let notify_button = maximize.clone();
+    window.connect_maximized_notify(move |window| {
+        sync_player_maximize_icon(&notify_button, window);
+    });
+    controls.append(&maximize);
+
+    let close = player_window_control(WindowControlKind::Close, "Close");
+    close.add_css_class("okp-player-window-close");
+    let close_window = window.clone();
+    close.connect_clicked(move |_| close_window.close());
+    controls.append(&close);
+
+    bar.append(&controls);
+    revealer.set_child(Some(&bar));
+    revealer
+}
+
+pub(crate) fn player_window_control(kind: WindowControlKind, tooltip: &str) -> gtk::Button {
+    let button = gtk::Button::new();
+    button.add_css_class("okp-player-window-control");
+    button.set_has_frame(false);
+    button.set_tooltip_text(Some(tooltip));
+    button.set_child(Some(&window_control_icon(
+        kind,
+        "okp-player-window-control-glyph",
+    )));
+    button
+}
+
+pub(crate) fn sync_player_maximize_icon(button: &gtk::Button, window: &gtk::ApplicationWindow) {
+    if window.is_maximized() {
+        set_player_window_control_kind(button, WindowControlKind::Restore);
+        button.set_tooltip_text(Some("Restore"));
+    } else {
+        set_player_window_control_kind(button, WindowControlKind::Maximize);
+        button.set_tooltip_text(Some("Maximize"));
+    }
+}
+
+pub(crate) fn set_player_window_control_kind(button: &gtk::Button, kind: WindowControlKind) {
+    if let Some(icon) = button.child().and_downcast::<gtk::DrawingArea>() {
+        icon.set_draw_func(move |area, cr, width, height| {
+            draw_window_control_icon(area, cr, width, height, kind);
+        });
+        icon.queue_draw();
+    }
+}
+
+pub(crate) fn connect_player_window_drag(
+    widget: &impl IsA<gtk::Widget>,
+    window: &gtk::ApplicationWindow,
+) {
+    let gesture = gtk::GestureClick::new();
+    gesture.set_button(gdk::BUTTON_PRIMARY);
+    let drag_window = window.clone();
+    gesture.connect_pressed(move |gesture, n_press, x, y| {
+        if n_press == 2 {
+            if drag_window.is_maximized() {
+                drag_window.unmaximize();
+            } else {
+                drag_window.maximize();
+            }
+            return;
+        }
+
+        let Some(device) = gesture.current_event_device() else {
+            return;
+        };
+        let Some(surface) = drag_window.surface() else {
+            return;
+        };
+        let Ok(toplevel) = surface.downcast::<gdk::Toplevel>() else {
+            return;
+        };
+
+        toplevel.begin_move(
+            &device,
+            gesture.current_button() as i32,
+            x,
+            y,
+            gesture.current_event_time(),
+        );
+    });
+    widget.add_controller(gesture);
+}
+
+pub(crate) fn build_player_resize_handles(window: &gtk::ApplicationWindow) -> Vec<gtk::Box> {
+    let specs = [
+        (
+            gdk::SurfaceEdge::NorthWest,
+            gtk::Align::Start,
+            gtk::Align::Start,
+            16,
+            16,
+            "nwse-resize",
+            "okp-resize-corner",
+        ),
+        (
+            gdk::SurfaceEdge::North,
+            gtk::Align::Fill,
+            gtk::Align::Start,
+            -1,
+            6,
+            "ns-resize",
+            "okp-resize-edge-horizontal",
+        ),
+        (
+            gdk::SurfaceEdge::NorthEast,
+            gtk::Align::End,
+            gtk::Align::Start,
+            16,
+            16,
+            "nesw-resize",
+            "okp-resize-corner",
+        ),
+        (
+            gdk::SurfaceEdge::West,
+            gtk::Align::Start,
+            gtk::Align::Fill,
+            6,
+            -1,
+            "ew-resize",
+            "okp-resize-edge-vertical",
+        ),
+        (
+            gdk::SurfaceEdge::East,
+            gtk::Align::End,
+            gtk::Align::Fill,
+            6,
+            -1,
+            "ew-resize",
+            "okp-resize-edge-vertical",
+        ),
+        (
+            gdk::SurfaceEdge::SouthWest,
+            gtk::Align::Start,
+            gtk::Align::End,
+            16,
+            16,
+            "nesw-resize",
+            "okp-resize-corner",
+        ),
+        (
+            gdk::SurfaceEdge::South,
+            gtk::Align::Fill,
+            gtk::Align::End,
+            -1,
+            6,
+            "ns-resize",
+            "okp-resize-edge-horizontal",
+        ),
+        (
+            gdk::SurfaceEdge::SouthEast,
+            gtk::Align::End,
+            gtk::Align::End,
+            16,
+            16,
+            "nwse-resize",
+            "okp-resize-corner",
+        ),
+    ];
+
+    specs
+        .into_iter()
+        .map(
+            |(edge, halign, valign, width, height, cursor, class_name)| {
+                let handle = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                handle.add_css_class("okp-resize-handle");
+                handle.add_css_class(class_name);
+                handle.set_halign(halign);
+                handle.set_valign(valign);
+                handle.set_can_target(true);
+                handle.set_cursor_from_name(Some(cursor));
+                if width > 0 {
+                    handle.set_width_request(width);
+                }
+                if height > 0 {
+                    handle.set_height_request(height);
+                }
+                connect_player_window_resize(&handle, window, edge);
+                handle
+            },
+        )
+        .collect()
+}
+
+pub(crate) fn connect_player_window_resize(
+    widget: &gtk::Box,
+    window: &gtk::ApplicationWindow,
+    edge: gdk::SurfaceEdge,
+) {
+    let gesture = gtk::GestureClick::new();
+    gesture.set_button(gdk::BUTTON_PRIMARY);
+    let resize_window = window.clone();
+    let resize_widget = widget.clone();
+    gesture.connect_pressed(move |gesture, _, x, y| {
+        let debug_resize = env::var_os("OKP_DEBUG_WINDOW_RESIZE").is_some();
+        if debug_resize {
+            eprintln!("resize press edge={edge:?} local=({x:.1},{y:.1})");
+        }
+
+        if resize_window.is_fullscreen() || resize_window.is_maximized() {
+            if debug_resize {
+                eprintln!("resize ignored: fullscreen/maximized");
+            }
+            return;
+        }
+
+        let Some(device) = gesture.current_event_device() else {
+            if debug_resize {
+                eprintln!("resize ignored: no device");
+            }
+            return;
+        };
+        let Some(surface) = resize_window.surface() else {
+            if debug_resize {
+                eprintln!("resize ignored: no surface");
+            }
+            return;
+        };
+        let Ok(toplevel) = surface.downcast::<gdk::Toplevel>() else {
+            if debug_resize {
+                eprintln!("resize ignored: surface is not a toplevel");
+            }
+            return;
+        };
+        let window_point = resize_widget
+            .compute_point(
+                &resize_window,
+                &gtk::graphene::Point::new(x as f32, y as f32),
+            )
+            .map(|point| (f64::from(point.x()), f64::from(point.y())))
+            .unwrap_or((x, y));
+        if debug_resize {
+            eprintln!(
+                "resize begin edge={edge:?} window=({:.1},{:.1}) button={}",
+                window_point.0,
+                window_point.1,
+                gesture.current_button()
+            );
+        }
+
+        toplevel.begin_resize(
+            edge,
+            Some(&device),
+            gesture.current_button() as i32,
+            window_point.0,
+            window_point.1,
+            gesture.current_event_time(),
+        );
+    });
+    widget.add_controller(gesture);
+}
+
+pub(crate) fn build_empty_surface(
+    window: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> EmptySurface {
+    let panel = gtk::Box::new(gtk::Orientation::Vertical, 16);
+    panel.add_css_class("okp-empty-panel");
+    panel.set_halign(gtk::Align::Center);
+    panel.set_valign(gtk::Align::Center);
+
+    let logo = gtk::Image::from_icon_name("com.befeast.okplayer");
+    logo.add_css_class("okp-empty-logo");
+    logo.set_pixel_size(64);
+    panel.append(&logo);
+
+    let title = gtk::Label::new(Some("OK Player"));
+    title.add_css_class("okp-empty-title");
+    title.set_xalign(0.5);
+    panel.append(&title);
+
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    actions.set_halign(gtk::Align::Center);
+
+    let open_button = gtk::Button::with_label("Open media");
+    open_button.add_css_class("okp-empty-primary-button");
+    let open_parent = window.clone();
+    let open_state = Rc::clone(&state);
+    open_button.connect_clicked(move |_| open_media_dialog(&open_parent, Rc::clone(&open_state)));
+    actions.append(&open_button);
+
+    let folder_button = gtk::Button::with_label("Open folder");
+    folder_button.add_css_class("okp-empty-secondary-button");
+    let folder_parent = window.clone();
+    let folder_state = Rc::clone(&state);
+    let folder_toast = Rc::clone(&status_toast);
+    folder_button.connect_clicked(move |_| {
+        open_folder_dialog(
+            &folder_parent,
+            Rc::clone(&folder_state),
+            Rc::clone(&folder_toast),
+        );
+    });
+    actions.append(&folder_button);
+
+    let url_button = gtk::Button::with_label("Open URL");
+    url_button.add_css_class("okp-empty-secondary-button");
+    let url_parent = window.clone();
+    let url_state = Rc::clone(&state);
+    let url_toast = Rc::clone(&status_toast);
+    url_button.connect_clicked(move |_| {
+        open_url_dialog(&url_parent, Rc::clone(&url_state), Rc::clone(&url_toast));
+    });
+    actions.append(&url_button);
+
+    panel.append(&actions);
+
+    let revealer = gtk::Revealer::new();
+    revealer.add_css_class("okp-empty-surface");
+    revealer.set_halign(gtk::Align::Fill);
+    revealer.set_valign(gtk::Align::Fill);
+    revealer.set_transition_duration(180);
+    revealer.set_transition_type(gtk::RevealerTransitionType::Crossfade);
+    revealer.set_reveal_child(true);
+    revealer.set_child(Some(&panel));
+
+    EmptySurface { revealer, panel }
+}
