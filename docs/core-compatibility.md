@@ -206,3 +206,26 @@ behaves identically on both sides.
   the next parse. A name-based chord cannot represent such a key, so capture now rejects it
   with the same "Press a non-modifier key." message. This is the one intentional behavior
   change of the extraction.
+
+## OSC clock → `okp_core::time_code::format_clock` / subtitle delay → `okp_core::subtitle_delay` (Linux shell extraction)
+
+- **Round-vs-floor resolved in favor of floor.** The shipped Linux OSC clock rounded to the
+  nearest second, so for the last half of every second it read one ahead of the Windows clock.
+  C# `TimeCode.Format` truncates by explicit decision ("you're 'at' second N until N+1", a
+  Greptile-era ruling): a clock must not show a second that has not fully elapsed.
+  `format_clock` therefore floors, and the Linux shell now uses it everywhere it formatted
+  clock text (OSC elapsed/duration labels, seek-hover bubble, chapter rows, A–B loop toasts).
+  This is the one intentional behavior change of the extraction, pinned by
+  `format_clock_floors_fractional_seconds`.
+- **Clock presentation is per-shell styling.** `format_clock` keeps the Linux zero-padded
+  shape (`MM:SS` / `HH:MM:SS`, `00:00` for unloaded or invalid positions); the Windows clock
+  renders an unpadded leading field (`M:SS` / `H:MM:SS`, exactly `time_code::format`). Same
+  truncation, different padding — the shells intentionally differ in presentation only.
+- **Delay entry parsing has no C# counterpart.** The Windows delay flyout edits through a
+  numeric NumberBox (whole milliseconds), so free-text parsing exists only on Linux: a bare
+  number is milliseconds, `ms`/`s` suffixes pick the unit, values clamp to ±600 s. The spec is
+  the shell's own tests, which moved into the module (the B6 shortcuts precedent).
+- **Millisecond rounding is ties-to-even.** The delay readouts convert seconds to whole
+  milliseconds with `round_ties_even`, matching the C# `Math.Round` banker's rounding behind
+  `SubDelayMs` on Windows. The shell previously rounded half away from zero; the two differed
+  only at exact half-millisecond delays, unreachable through either shell's own controls.

@@ -19,7 +19,9 @@ use okp_core::playlist::{Playlist, PlaylistItem, QueueInsertMode, RepeatMode};
 use okp_core::shortcuts::{
     self, ShortcutAction, ShortcutBinding, ShortcutChord, ShortcutModifiers, ShortcutSlot,
 };
-use okp_core::{AppIdentity, m3u, media_formats, natural_compare, sha256sums, time_code};
+use okp_core::{
+    AppIdentity, m3u, media_formats, natural_compare, sha256sums, subtitle_delay, time_code,
+};
 use okp_mpv::{
     AbLoopState, AudioDevice, Chapter, InfoSection, InfoTrack, MediaInfo, Mpv, MpvEvent,
     PlaybackState, Track, TrackKind, current_render_target_size, resolve_render_target_size,
@@ -1064,7 +1066,7 @@ impl SeekHoverPreview {
             self.thumbnail_snapshot.borrow_mut().take();
         }
 
-        self.time_label.set_text(&format_time(time));
+        self.time_label.set_text(&time_code::format_clock(time));
         if let Some(chapter) = chapter {
             let title = chapter
                 .title
@@ -3696,8 +3698,12 @@ fn connect_state_poll(
                 updating_volume.set(false);
             }
 
-            controls.elapsed_label.set_text(&format_time(time_pos));
-            controls.duration_label.set_text(&format_time(duration));
+            controls
+                .elapsed_label
+                .set_text(&time_code::format_clock(time_pos));
+            controls
+                .duration_label
+                .set_text(&time_code::format_clock(duration));
         } else {
             chrome.set_auto_hide_enabled(false);
             controls.play_button.set_sensitive(has_media);
@@ -4144,7 +4150,7 @@ fn chapter_row(chapter: &Chapter, thumbnail: Option<PathBuf>) -> gtk::ListBoxRow
     let label_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
     label_box.set_hexpand(true);
 
-    let time = gtk::Label::new(Some(&format_time(chapter.time)));
+    let time = gtk::Label::new(Some(&time_code::format_clock(chapter.time)));
     time.add_css_class("okp-up-next-marker");
     time.set_xalign(0.0);
 
@@ -5030,7 +5036,7 @@ fn subtitle_delay_adjustment_row(
     entry.add_css_class("okp-sub-adjust-entry");
     gtk::prelude::EntryExt::set_alignment(&entry, 1.0);
     entry.set_input_purpose(gtk::InputPurpose::Number);
-    entry.set_text(&format_delay_entry(delay_seconds));
+    entry.set_text(&subtitle_delay::format_entry(delay_seconds));
     entry.set_width_chars(8);
     entry.set_placeholder_text(Some("0"));
     top.append(&entry);
@@ -5186,7 +5192,7 @@ fn apply_subtitle_delay_entry(
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
 ) {
-    let Some(delay_seconds) = parse_delay_entry_seconds(entry.text().as_str()) else {
+    let Some(delay_seconds) = subtitle_delay::parse_entry_seconds(entry.text().as_str()) else {
         entry.add_css_class("is-error");
         entry.grab_focus();
         return;
@@ -5194,28 +5200,6 @@ fn apply_subtitle_delay_entry(
 
     apply_subtitle_adjustment(&state, SubtitleAdjustment::SetDelay(delay_seconds));
     populate_subtitle_popover(popover, parent, state);
-}
-
-fn parse_delay_entry_seconds(text: &str) -> Option<f64> {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let lower = trimmed.to_ascii_lowercase();
-    let seconds = if let Some(value) = lower.strip_suffix("ms") {
-        value.trim().parse::<f64>().ok()? / 1000.0
-    } else if let Some(value) = lower.strip_suffix('s') {
-        value.trim().parse::<f64>().ok()?
-    } else {
-        lower.parse::<f64>().ok()? / 1000.0
-    };
-
-    seconds.is_finite().then(|| seconds.clamp(-600.0, 600.0))
-}
-
-fn format_delay_entry(seconds: f64) -> String {
-    ((seconds * 1000.0).round() as i64).to_string()
 }
 
 fn format_scale(scale: f64) -> String {
@@ -8490,8 +8474,10 @@ fn settings_subtitles_page(
     let summary = settings_section("Subtitles");
     summary.append(&settings_value_row("Primary", &snapshot.primary));
     summary.append(&settings_value_row("Secondary", &snapshot.secondary));
-    let (delay_row, delay_label) =
-        settings_value_row_with_label("Delay", &format_delay_label(snapshot.delay_seconds));
+    let (delay_row, delay_label) = settings_value_row_with_label(
+        "Delay",
+        &subtitle_delay::format_label(snapshot.delay_seconds),
+    );
     summary.append(&delay_row);
     let (scale_row, scale_label) =
         settings_value_row_with_label("Size", &format_scale(snapshot.scale));
@@ -8802,7 +8788,7 @@ fn refresh_settings_subtitle_values(
     scale_label: &gtk::Label,
 ) {
     let (delay_seconds, scale) = read_subtitle_adjustments(state);
-    delay_label.set_text(&format_delay_label(delay_seconds));
+    delay_label.set_text(&subtitle_delay::format_label(delay_seconds));
     scale_label.set_text(&format_scale(scale));
 }
 
@@ -9018,15 +9004,6 @@ fn selected_track_summary(state: &Rc<RefCell<PlayerState>>, kind: TrackKind) -> 
         .find(|track| track.kind == kind && track.selected)
         .map(|track| track_label_for(&track, false))
         .unwrap_or_else(|| "Off".to_owned())
-}
-
-fn format_delay_label(seconds: f64) -> String {
-    let milliseconds = (seconds * 1000.0).round() as i64;
-    if milliseconds > 0 {
-        format!("+{milliseconds} ms")
-    } else {
-        format!("{milliseconds} ms")
-    }
 }
 
 fn settings_volume_row(state: Rc<RefCell<PlayerState>>) -> gtk::Box {
@@ -11079,9 +11056,13 @@ fn sync_ab_loop_state(state: &Rc<RefCell<PlayerState>>, has_media: bool) {
 
 fn ab_loop_message(ab_loop: AbLoopState, was_active: bool) -> Option<String> {
     match (ab_loop.a, ab_loop.b) {
-        (Some(a), Some(b)) => Some(format!("A-B loop: {} - {}", format_time(a), format_time(b))),
-        (Some(a), None) => Some(format!("A-B loop: start at {}", format_time(a))),
-        (None, Some(b)) => Some(format!("A-B loop: end at {}", format_time(b))),
+        (Some(a), Some(b)) => Some(format!(
+            "A-B loop: {} - {}",
+            time_code::format_clock(a),
+            time_code::format_clock(b)
+        )),
+        (Some(a), None) => Some(format!("A-B loop: start at {}", time_code::format_clock(a))),
+        (None, Some(b)) => Some(format!("A-B loop: end at {}", time_code::format_clock(b))),
         (None, None) if was_active => Some("A-B loop cleared".to_owned()),
         _ => None,
     }
@@ -12111,23 +12092,6 @@ fn display_file_name(path: &Path) -> String {
         .filter(|name| !name.is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| path.display().to_string())
-}
-
-fn format_time(seconds: f64) -> String {
-    if !seconds.is_finite() || seconds <= 0.0 {
-        return "00:00".to_owned();
-    }
-
-    let total = seconds.round() as u64;
-    let hours = total / 3600;
-    let minutes = (total % 3600) / 60;
-    let seconds = total % 60;
-
-    if hours > 0 {
-        format!("{hours:02}:{minutes:02}:{seconds:02}")
-    } else {
-        format!("{minutes:02}:{seconds:02}")
-    }
 }
 
 fn shuffle_seed() -> u64 {
@@ -13720,11 +13684,6 @@ mod tests {
         fs::write(path, b"\x89PNG\r\n\x1a\nokp!").expect("test png header should be written");
     }
 
-    fn assert_delay(input: &str, expected: f64) {
-        let actual = parse_delay_entry_seconds(input).expect("delay should parse");
-        assert!((actual - expected).abs() < f64::EPSILON);
-    }
-
     #[test]
     fn about_display_version_keeps_about_layout_compact() {
         assert_eq!(about_display_version("0.1.0-linux-alpha.77"), "0.1.0");
@@ -14285,32 +14244,6 @@ MimeType=video/mp4;video/x-matroska;audio/flac;
         );
         assert!(should_combine_ab_loop_marks(12.0, 12.5));
         assert!(!should_combine_ab_loop_marks(12.0, 12.501));
-    }
-
-    #[test]
-    fn parses_subtitle_delay_entry_as_milliseconds_by_default() {
-        assert_delay("250", 0.25);
-        assert_delay("-125", -0.125);
-        assert_delay("+500ms", 0.5);
-    }
-
-    #[test]
-    fn parses_subtitle_delay_entry_seconds_suffix() {
-        assert_delay("1.5s", 1.5);
-        assert_delay("-0.25s", -0.25);
-    }
-
-    #[test]
-    fn rejects_invalid_subtitle_delay_entry() {
-        assert!(parse_delay_entry_seconds("").is_none());
-        assert!(parse_delay_entry_seconds("soon").is_none());
-        assert!(parse_delay_entry_seconds("nan").is_none());
-    }
-
-    #[test]
-    fn clamps_subtitle_delay_entry_to_ten_minutes() {
-        assert_delay("999999999", 600.0);
-        assert_delay("-999999999", -600.0);
     }
 
     #[test]

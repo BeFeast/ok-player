@@ -39,6 +39,28 @@ pub fn format(seconds: f64) -> String {
     }
 }
 
+/// Formats seconds as the on-screen clock: zero-padded `MM:SS`, or `HH:MM:SS`
+/// once the hour is reached. Non-finite and non-positive inputs render `00:00`.
+/// Fractional seconds truncate (never round): the clock shows second N until
+/// N+1 has fully elapsed, the same deliberate choice as the Windows shell's
+/// clock (see the compatibility note in docs/core-compatibility.md).
+pub fn format_clock(seconds: f64) -> String {
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return "00:00".to_owned();
+    }
+
+    let total = seconds.floor() as u64;
+    let hours = total / 3600;
+    let minutes = total % 3600 / 60;
+    let seconds = total % 60;
+
+    if hours > 0 {
+        format!("{hours:02}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes:02}:{seconds:02}")
+    }
+}
+
 fn parse_field(part: &str, allow_fraction: bool) -> Option<f64> {
     if part.is_empty() {
         return None;
@@ -123,6 +145,41 @@ mod tests {
 
         for (seconds, expected) in cases {
             assert_eq!(format(seconds), expected);
+        }
+    }
+
+    #[test]
+    fn format_clock_renders_padded_clock() {
+        let cases = [
+            (0.0, "00:00"),
+            (5.0, "00:05"),
+            (90.0, "01:30"),
+            (3599.0, "59:59"),
+            (3600.0, "01:00:00"),
+            (5025.0, "01:23:45"),
+            (-3.0, "00:00"),
+            (f64::NAN, "00:00"),
+            (f64::INFINITY, "00:00"),
+        ];
+
+        for (seconds, expected) in cases {
+            assert_eq!(format_clock(seconds), expected);
+        }
+    }
+
+    #[test]
+    fn format_clock_floors_fractional_seconds() {
+        // Pins the round-vs-floor resolution: the clock stays at second N until
+        // N+1 has elapsed, so 59.9 must render :59, not roll over to 1:00.
+        let cases = [
+            (0.999, "00:00"),
+            (59.9, "00:59"),
+            (83.7, "01:23"),
+            (3599.9, "59:59"),
+        ];
+
+        for (seconds, expected) in cases {
+            assert_eq!(format_clock(seconds), expected);
         }
     }
 
