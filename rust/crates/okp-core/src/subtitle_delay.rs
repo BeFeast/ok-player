@@ -59,7 +59,7 @@ mod tests {
 
     fn assert_delay(input: &str, expected: f64) {
         let actual = parse_entry_seconds(input).expect("delay should parse");
-        assert!((actual - expected).abs() < f64::EPSILON);
+        okp_test_fixtures::assert_close(actual, expected, f64::EPSILON);
     }
 
     #[test]

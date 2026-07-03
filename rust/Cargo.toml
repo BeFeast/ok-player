@@ -4,6 +4,7 @@ members = [
     "crates/okp-ffi",
     "crates/okp-linux-gtk",
     "crates/okp-mpv",
+    "crates/okp-test-fixtures",
 ]
 resolver = "3"
 

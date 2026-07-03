@@ -1236,6 +1236,7 @@ dependencies = [
 name = "okp-core"
 version = "0.1.0"
 dependencies = [
+ "okp-test-fixtures",
  "roxmltree",
  "serde",
  "serde_json",
@@ -1257,6 +1258,7 @@ dependencies = [
  "gtk4",
  "okp-core",
  "okp-mpv",
+ "okp-test-fixtures",
  "relm4",
  "serde",
  "serde_json",
@@ -1273,6 +1275,10 @@ dependencies = [
  "pkg-config",
  "thiserror",
 ]
+
+[[package]]
+name = "okp-test-fixtures"
+version = "0.1.0"
 
 [[package]]
 name = "once_cell"
