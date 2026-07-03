@@ -1,14 +1,24 @@
 pub mod app;
+pub mod aspect_resize;
+pub mod chapter_math;
+pub mod history_format;
+pub mod image_luma;
+pub mod launch_args;
 pub mod lrc;
 pub mod m3u;
 pub mod media_formats;
+pub mod mpv_conf_text;
 pub mod natural_compare;
+pub mod network_path;
+pub mod nfo_metadata;
 pub mod playlist;
+pub mod recents_shelf;
 pub mod sha256sums;
 pub mod srt;
 pub mod subtitle_lift;
 pub mod subtitle_style;
 pub mod subtitle_sync;
 pub mod time_code;
+pub mod track_tags;
 
 pub use app::AppIdentity;

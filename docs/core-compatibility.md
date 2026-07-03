@@ -88,3 +88,102 @@ behaves identically on both sides.
   `İ` → `i̇`). Both sides run the one tokenizer over both the ASR words and the cue text, so
   matching stays self-consistent; only cross-implementation offsets on such scripts could differ,
   and no supported ASR source emits them.
+
+## HistoryFormat → `okp_core::history_format`
+
+- **Timestamp input.** C# takes `DateTime` values; the port takes a minimal civil
+  `LocalDateTime` (year/month/day/hour/minute) — everything the buckets and labels read
+  (nothing below the minute is ever formatted). Where `DateTime` construction validates, the
+  port makes a valid civil date the caller's contract (the shell maps it from a real clock).
+- **Invariant names.** C# formats with `CultureInfo.InvariantCulture`; the port hardcodes the
+  invariant abbreviated weekday/month tables. Output is identical ("Tue 21:48", "12 Jun").
+
+## RecentsShelf → `okp_core::recents_shelf`
+
+- **Counts are `usize`.** C# `int` inputs admit a negative `available`/`unmeasuredDefault`
+  (clamped to 0) and, with absurd negative geometry, a negative fit that `Math.Min` would
+  return as-is; the unsigned port pins the documented [0, available] clamp. The
+  `unmeasuredDefault = 3` default parameter becomes the `DEFAULT_UNMEASURED` const (Rust has
+  no default arguments; the `AlignOptions` pattern).
+
+## NfoMetadata → `okp_core::nfo_metadata`
+
+- **XML engine.** C# parses with `XDocument.Parse` (DTD processing prohibited); the port uses
+  `roxmltree` (DTD disabled by default). Both reject non-XML text and DOCTYPE-carrying input;
+  XML-conformance exotica beyond the .nfo convention may be judged differently by the two
+  parsers, but every suite case behaves identically. Element values concatenate all descendant
+  text/CDATA, matching `XElement.Value`.
+- **Shapes.** `Parse(string?)` → `parse(Option<&str>)`; the record's `int?`/`string?` fields →
+  `Option<i32>`/`Option<String>`.
+- **Name matching.** C# matches element local names with `OrdinalIgnoreCase`; the port uses
+  `eq_ignore_ascii_case` — the looked-up names are ASCII, so only non-ASCII lookalike tags
+  differ, and those match on neither side's conventions (same note as SubtitleStyle). The
+  `<premiered>`/`<aired>` year prefix is the first four characters (C# slices UTF-16 units,
+  Rust chars) — identical for any digit prefix.
+
+## MpvConfText → `okp_core::mpv_conf_text`
+
+- **Shapes only.** `Parse(string?)` → `parse(Option<&str>)`; the `MpvOption` readonly record
+  struct → a plain struct. Parsing and serialisation behave identically.
+
+## LaunchArgs → `okp_core::launch_args`
+
+- **Return shape.** C# returns a tuple whose `int?` Sub/Audio use `-1` as "explicit off"; the
+  port returns a `LaunchArgs` struct with `Option<TrackSelection>` (`Off` | `Id(n)`), making
+  the off-sentinel a variant instead of a magic value. Null `args` → an empty slice (slices
+  cannot be null).
+- **Option-name matching.** `OrdinalIgnoreCase` → `eq_ignore_ascii_case`: the option names
+  ("resume"/"sub"/"audio") are ASCII, so only non-ASCII case-folding lookalikes (e.g. long s)
+  differ — such tokens simply fall through to the unknown-switch rule.
+- **Unmatched slash tokens.** C# ignores every `/`-prefixed token that is not a documented
+  option as an unknown Windows-style switch; on POSIX `/…` is an absolute path, so the port
+  keeps unmatched slash tokens positional (`/home/alice/movie.mkv --resume 90` opens the
+  file) while the documented names — `/resume`, `/sub`, `/audio`, inline values included —
+  still parse as switches. Unknown `-`-prefixed tokens are ignored on both sides. The ported
+  unknown-switch test asserts the dash forms; a stray `/foo` becomes positional in Rust,
+  where the caller's URL/exists-on-disk validation filters it.
+
+## ImageLuma → `okp_core::image_luma`
+
+- **Shapes only.** `stride` int → `usize` (a negative stride — floored to the 4-byte minimum
+  in C# — is unrepresentable); the `stride = 52` default parameter becomes the
+  `DEFAULT_STRIDE` const; `ReadOnlySpan<byte>` → `&[u8]`. Scores are identical.
+
+## AspectResize → `okp_core::aspect_resize`
+
+- **Edge codes.** C# takes the raw Win32 `WMSZ_*` int (any unknown code falls into the corner
+  branch); the port takes a `ResizeEdge` enum with the same discriminants, so a bogus code is
+  unrepresentable rather than silently treated as a corner. The proposed rect is one
+  `(left, top, right, bottom)` tuple in and out rather than four scalars. `Math.Round`'s
+  banker's rounding is preserved via `round_ties_even`.
+
+## ChapterMath → `okp_core::chapter_math`
+
+- **Index sentinels.** `CurrentIndex` returns `-1` before the first chapter →
+  `Option<usize>` with `None`; `JumpTarget`'s `current` parameter follows (`None` = C# `-1`).
+  The `epsilon = 0.25` default parameter becomes the `DEFAULT_EPSILON` const.
+- **Sort.** C# sorts with unstable `List<T>.Sort` plus an explicit insertion-order tiebreak;
+  the port's stable `sort_by(f64::total_cmp)` yields the same order for every real chapter
+  list. Only NaN times (absurd input) would be placed differently (`CompareTo` sorts NaN
+  first; `total_cmp` sorts positive NaN last).
+
+## TrackTags → `okp_core::track_tags`
+
+- **Shapes only.** Nullable strings → `Option<&str>` in, `Option<String>` out. The `" - "`
+  split point is a byte offset where C# uses a UTF-16 index, but both guards ("at least one
+  character before and after the separator") are positional, so behavior is identical for all
+  inputs.
+
+## NetworkPath → `okp_core::network_path`
+
+- **Probe injection.** C#'s parameterless `IsNetwork(path)` wraps a real `DriveInfo` probe;
+  core exposes only the injected-probe form — the platform shell supplies it (Windows:
+  `DriveInfo`; a Linux shell would classify from its mount table). `DriveType` is ported
+  verbatim from `System.IO.DriveType`.
+- **Rooting.** C# defers `IsPathRooted`/`GetPathRoot` to `System.IO.Path`, whose rules change
+  per OS — the C# suite's engine-agnostic (Linux) runs never see a drive-letter root. The
+  port recognizes the union of both platforms' rooted shapes everywhere: ASCII drive-letter
+  roots (`C:`, `C:\`, `C:/`) and separator roots (`\`, `/`). Classification is therefore
+  deterministic across OSes — a `Z:\…` path reaches the injected probe even on Linux, where
+  C#-on-Linux would return false before probing (a combination the C# suite never covers).
+  On Windows the results are identical.
