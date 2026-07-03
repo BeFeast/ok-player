@@ -3,9 +3,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use okp_core::settings::Settings;
 
-const SETTINGS_VERSION: u32 = 1;
 const DEFAULT_VOLUME: f64 = 100.0;
 const MAX_VOLUME: f64 = 130.0;
 const DEFAULT_RESUME: bool = true;
@@ -16,7 +15,6 @@ const REPEAT_ONE: &str = "one";
 const REPEAT_ALL: &str = "all";
 const DEFAULT_AUDIO_NORMALIZATION: bool = false;
 const DEFAULT_AUDIO_DEVICE: &str = "auto";
-const DEFAULT_AUTO_CHECK_UPDATES: bool = true;
 const HWDEC_OFF: &str = "no";
 const HWDEC_AUTO_SAFE: &str = "auto-safe";
 const DEFAULT_VIDEO_ADJUSTMENT: f64 = 0.0;
@@ -34,7 +32,7 @@ pub struct VideoAdjustments {
 #[derive(Debug)]
 pub struct SettingsStore {
     path: PathBuf,
-    data: SettingsFile,
+    data: Settings,
     dirty: bool,
 }
 
@@ -49,16 +47,8 @@ impl SettingsStore {
         let path = settings_path();
         let data = fs::read_to_string(&path)
             .ok()
-            .and_then(|json| serde_json::from_str::<SettingsFile>(&json).ok())
-            .filter(|data| data.version == SETTINGS_VERSION)
-            .unwrap_or_else(|| SettingsFile {
-                version: SETTINGS_VERSION,
-                playback: PlaybackSettings::default(),
-                audio: AudioSettings::default(),
-                video: VideoSettings::default(),
-                updates: UpdateSettings::default(),
-                advanced: AdvancedSettings::default(),
-            });
+            .and_then(|json| Settings::load(&json))
+            .unwrap_or_default();
 
         Self {
             path,
@@ -298,79 +288,6 @@ impl SettingsStore {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SettingsFile {
-    version: u32,
-    #[serde(default)]
-    playback: PlaybackSettings,
-    #[serde(default)]
-    audio: AudioSettings,
-    #[serde(default)]
-    video: VideoSettings,
-    #[serde(default)]
-    updates: UpdateSettings,
-    #[serde(default)]
-    advanced: AdvancedSettings,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-struct PlaybackSettings {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    volume: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    resume: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    auto_advance: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    repeat: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    shuffle: Option<bool>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-struct AudioSettings {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    normalization: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    device: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-struct VideoSettings {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    hwdec: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    brightness: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    contrast: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    saturation: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    gamma: Option<f64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct UpdateSettings {
-    #[serde(default = "default_auto_check_updates")]
-    auto_check: bool,
-}
-
-impl Default for UpdateSettings {
-    fn default() -> Self {
-        Self {
-            auto_check: DEFAULT_AUTO_CHECK_UPDATES,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-struct AdvancedSettings {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    mpv_conf: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    keybindings: Option<String>,
-}
-
 fn settings_path() -> PathBuf {
     if let Some(config_home) = env::var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
         return PathBuf::from(config_home).join("ok-player/settings.json");
@@ -452,10 +369,6 @@ fn same_video_adjustment(current: Option<f64>, updated: f64) -> bool {
         || (current.is_none() && (updated - DEFAULT_VIDEO_ADJUSTMENT).abs() < 0.005)
 }
 
-fn default_auto_check_updates() -> bool {
-    DEFAULT_AUTO_CHECK_UPDATES
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -463,14 +376,7 @@ mod tests {
     fn store() -> SettingsStore {
         SettingsStore {
             path: PathBuf::from("unused.json"),
-            data: SettingsFile {
-                version: SETTINGS_VERSION,
-                playback: PlaybackSettings::default(),
-                audio: AudioSettings::default(),
-                video: VideoSettings::default(),
-                updates: UpdateSettings::default(),
-                advanced: AdvancedSettings::default(),
-            },
+            data: Settings::default(),
             dirty: false,
         }
     }
