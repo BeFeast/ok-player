@@ -19,7 +19,7 @@ use okp_core::playlist::{Playlist, PlaylistItem, QueueInsertMode, RepeatMode};
 use okp_core::shortcuts::{
     self, ShortcutAction, ShortcutBinding, ShortcutChord, ShortcutModifiers, ShortcutSlot,
 };
-use okp_core::update_selection::{self, DebUpdate, GitHubRelease, SHA256SUMS_ASSET};
+use okp_core::update_selection::{self, DebFeed, DebUpdate, SHA256SUMS_ASSET};
 use okp_core::{
     AppIdentity, m3u, media_formats, natural_compare, sha256sums, subtitle_delay, time_code,
 };
@@ -29,7 +29,7 @@ use okp_mpv::{
 };
 use velopack::{
     UpdateCheck, UpdateInfo, UpdateManager, UpdateOptions, VelopackApp, VelopackAsset,
-    sources::GithubSource,
+    sources::HttpSource,
 };
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
@@ -52,8 +52,15 @@ const MPRIS_ART_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp"];
 const MPRIS_FOLDER_ART_STEMS: &[&str] =
     &["cover", "folder", "front", "poster", "album", "albumart"];
 const MPRIS_EMBEDDED_ART_TIMEOUT: Duration = Duration::from_secs(8);
-const LINUX_UPDATE_REPO_URL: &str = "https://github.com/BeFeast/ok-player";
-const LINUX_DEB_RELEASES_API_URL: &str = "https://api.github.com/repos/BeFeast/ok-player/releases";
+// Both Linux update lanes discover through a static feed on GitHub Pages
+// (issue #162, symmetric to the Windows feed in #131) so a churn of releases on
+// the other track can never bury the newest Linux release out of a discovery
+// window. The Velopack AppImage lane reads releases.linux.json under this base
+// (HttpSource appends the channel file name); the .deb lane reads deb.linux.json
+// directly. Overridable for local testing via OKP_LINUX_UPDATE_FEED_URL and
+// OKP_LINUX_DEB_FEED_URL.
+const LINUX_UPDATE_FEED_BASE_URL: &str = "https://befeast.github.io/ok-player/updates/linux";
+const LINUX_DEB_FEED_URL: &str = "https://befeast.github.io/ok-player/updates/linux/deb.linux.json";
 const LINUX_SHA256SUMS_MAX_BYTES: u64 = 1024 * 1024;
 const UPDATE_STATUS_NOT_CHECKED: &str = "Not checked yet";
 const DEB_SELF_INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
@@ -752,7 +759,7 @@ impl LinuxUpdateStatus {
     fn settings_status_text(&self, auto_check_enabled: bool) -> String {
         match self {
             Self::NotChecked => update_status_intro(auto_check_enabled).to_owned(),
-            Self::Checking => "Checking GitHub Releases...".to_owned(),
+            Self::Checking => "Checking the update feed...".to_owned(),
             Self::UpToDate => "OK Player is up to date".to_owned(),
             Self::Available(update) => update.available_status(),
             Self::Failed(error) => format!("Update check failed: {error}"),
@@ -7125,7 +7132,7 @@ fn settings_updates_section(
     let section = settings_section("Updates");
     section.append(&settings_value_row("Current version", APP_BUILD_VERSION));
     section.append(&settings_value_row("Channel", "linux"));
-    section.append(&settings_value_row("Feed", "GitHub Releases"));
+    section.append(&settings_value_row("Feed", "Static (GitHub Pages)"));
     section.append(&settings_value_row(
         "Install",
         linux_update_install_status(),
@@ -7230,7 +7237,7 @@ fn settings_updates_section(
             &check_pending,
             Rc::clone(&check_state),
             Rc::clone(&check_toast),
-            "Checking GitHub Releases...",
+            "Checking the update feed...",
             true,
         );
     });
@@ -7248,7 +7255,7 @@ fn settings_updates_section(
                 &auto_pending,
                 auto_state,
                 auto_toast,
-                "Checking GitHub Releases...",
+                "Checking the update feed...",
                 false,
             );
         });
@@ -7501,7 +7508,7 @@ fn check_for_linux_update() -> LinuxUpdateCheckResult {
 }
 
 fn linux_update_manager() -> Result<UpdateManager, String> {
-    let source = GithubSource::new(LINUX_UPDATE_REPO_URL, None, true);
+    let source = HttpSource::new(linux_update_feed_base_url());
     let options = UpdateOptions {
         ExplicitChannel: Some("linux".to_owned()),
         ..Default::default()
@@ -7510,6 +7517,10 @@ fn linux_update_manager() -> Result<UpdateManager, String> {
         velopack::Error::NotInstalled(_) => "This install cannot self-update.".to_owned(),
         other => other.to_string(),
     })
+}
+
+fn linux_update_feed_base_url() -> String {
+    env::var("OKP_LINUX_UPDATE_FEED_URL").unwrap_or_else(|_| LINUX_UPDATE_FEED_BASE_URL.to_owned())
 }
 
 fn download_and_apply_linux_update(
@@ -7582,27 +7593,30 @@ impl PendingLinuxUpdate {
 }
 
 fn check_for_linux_deb_update() -> Result<Option<DebUpdate>, String> {
-    let url = linux_deb_releases_url();
+    let url = linux_deb_feed_url();
     let mut response = ureq::get(&url)
-        .header("Accept", "application/vnd.github+json")
+        .header("Accept", "application/json")
         .header("User-Agent", "OK Player Linux")
         .call()
-        .map_err(|error| format!("GitHub .deb update check failed: {error}"))?;
+        .map_err(|error| format!(".deb update check failed: {error}"))?;
     let body = response
         .body_mut()
         .read_to_string()
-        .map_err(|error| format!("GitHub .deb update check failed: {error}"))?;
-    let releases: Vec<GitHubRelease> = serde_json::from_str(&body)
-        .map_err(|error| format!("GitHub .deb update feed was invalid: {error}"))?;
+        .map_err(|error| format!(".deb update check failed: {error}"))?;
+    // A fetch or parse failure surfaces as Err ("couldn't check"); a feed that
+    // is not newer than the running build returns Ok(None) ("up to date"). The
+    // two must stay distinct, as on Windows (issue #162 acceptance).
+    let feed: DebFeed = serde_json::from_str(&body)
+        .map_err(|error| format!(".deb update feed was invalid: {error}"))?;
 
-    Ok(update_selection::select_latest_deb_update(
-        releases,
+    Ok(update_selection::select_deb_update_from_feed(
+        feed,
         APP_BUILD_VERSION,
     ))
 }
 
-fn linux_deb_releases_url() -> String {
-    env::var("OKP_LINUX_DEB_RELEASES_URL").unwrap_or_else(|_| LINUX_DEB_RELEASES_API_URL.to_owned())
+fn linux_deb_feed_url() -> String {
+    env::var("OKP_LINUX_DEB_FEED_URL").unwrap_or_else(|_| LINUX_DEB_FEED_URL.to_owned())
 }
 
 fn download_deb_update(update: DebUpdate) -> Result<PathBuf, String> {

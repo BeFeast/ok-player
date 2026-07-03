@@ -13,7 +13,7 @@
     - releases.win.json           the channel manifest describing the packages above
   With -Publish, `vpk upload github` attaches all of the above to a (pre-)release on tag v<Version>.
   Since issue #131 the GitHub Release is the asset store, not the runtime feed: publishing fires the
-  `release published` event, which runs .github/workflows/publish-win-feed.yml — that workflow re-derives
+  `release published` event, which runs .github/workflows/publish-update-feeds.yml — that workflow re-derives
   the static feed on GitHub Pages (the URL installed builds actually poll) from this release's
   releases.win.json, so the feed update rides the release automatically. Without -Publish this is a
   local pack only (no network, no upload) — for verifying the pipeline.
@@ -117,12 +117,12 @@ if ($Publish) {
     --token $token
   if ($LASTEXITCODE -ne 0) { throw "vpk upload github failed ($LASTEXITCODE)" }
   Write-Host "Published v$Version. Testers install OkPlayer-win-Setup.exe once; updates then apply in-app."
-  # Publishing with a user token fires `release published`, which runs the publish-win-feed workflow —
+  # Publishing with a user token fires `release published`, which runs the Update Feeds workflow —
   # the static feed on GitHub Pages updates without further action here (issue #131).
-  Write-Host "The publish-win-feed workflow now refreshes the static update feed:"
+  Write-Host "The Update Feeds workflow now refreshes the static update feed:"
   Write-Host "  https://befeast.github.io/ok-player/updates/win/releases.win.json"
-  Write-Host "Check it with: gh run list --workflow publish-win-feed.yml --limit 1"
-  Write-Host "  (fallback if that run went missing: gh workflow run publish-win-feed.yml)"
+  Write-Host "Check it with: gh run list --workflow publish-update-feeds.yml --limit 1"
+  Write-Host "  (fallback if that run went missing: gh workflow run publish-update-feeds.yml)"
 } else {
   Write-Host "Local pack complete (no upload). Re-run with -Publish to push the GitHub pre-release feed."
 }

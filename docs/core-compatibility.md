@@ -235,13 +235,19 @@ behaves identically on both sides.
 - **No C# counterpart.** Windows updates flow through Velopack's static feed (`UpdateFeed`,
   pinned by `UpdateFeedTests.cs`), where Velopack itself compares SemVer versions and picks the
   package; nothing to port. This module is the pure half of the Linux `.deb` self-update flow
-  extracted from the GTK shell under the freeze-boundary rule (EPIC #134, B8): the GitHub
-  release-feed schema (`GitHubRelease`/`GitHubAsset`), the natural version comparison, and
-  `select_latest_deb_update`, which picks the newest published prerelease strictly newer than
-  the running version that ships an `ok-player_*_amd64.deb`. The spec is the four shell tests
-  that moved into the module. Network fetch, checksum download/verification (fail-closed via
-  the `SHA256SUMS_ASSET` URL the selection carries), staging, and installation stay in the
-  shell; behavior is unchanged.
+  extracted from the GTK shell under the freeze-boundary rule (EPIC #134, B8) and migrated to a
+  static feed (#162, symmetric to the Windows #131 feed): the `.deb` static-manifest schema
+  (`DebFeed`/`DebFeedPackage`), the natural version comparison, and `select_deb_update_from_feed`,
+  which returns the feed's `.deb` when it is strictly newer than the running build. Release
+  discovery — which release, which assets — now lives in the feed generator
+  (`scripts/build-linux-feed.sh` re-derives the manifest from the newest `linux-v*` release), so
+  the module just compares the feed's single version to the running one. Network fetch, checksum
+  download/verification (fail-closed via the `SHA256SUMS_ASSET` URL the selection carries),
+  staging, and installation stay in the shell.
+- **Empty vs failed stays honest.** A failed feed fetch surfaces in the shell as an error
+  (`LinuxUpdateStatus::Failed`, "couldn't check"); a feed that is not newer than the running build
+  returns `None` (`UpToDate`). `select_deb_update_from_feed` never sees a fetch failure, so the two
+  outcomes can never be conflated — the same distinction Velopack keeps on Windows (#162 acceptance).
 - **Version compare is release-feed-specific.** `compare_versions` orders by numeric runs with
   a lexicographic tiebreak — it is not `natural_compare` (the ported C# filename comparer),
   which interleaves text segments into the comparison. For the single-scheme version strings

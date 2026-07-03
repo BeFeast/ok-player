@@ -39,6 +39,8 @@ jobs:
   linux-release:
     name: Package Linux
     runs-on: ubuntu-latest
+    outputs:
+      published: ${{ steps.release.outputs.publish }}
     steps:
       - uses: actions/checkout@v4
 
@@ -317,3 +319,22 @@ jobs:
         run: |
           echo "::warning::Deleting release ${{ steps.release.outputs.tag }} because the win-feed bridge did not complete (issue #130)."
           gh release delete "${{ steps.release.outputs.tag }}" --yes
+
+  # Refresh the static update feeds on GitHub Pages once a linux-v* release is published
+  # (issue #162). This workflow creates the release with GITHUB_TOKEN, which never fires the
+  # `release published` event publish-update-feeds.yml also listens for, so this call is the
+  # trigger: it re-derives updates/linux/releases.linux.json (AppImage lane) and
+  # updates/linux/deb.linux.json (.deb lane) from this very release and redeploys the whole
+  # Pages site atomically. Feed regeneration is therefore part of the release pipeline, not a
+  # manual action. A feed-refresh failure does NOT unpublish the release — the release and its
+  # #130/#158 win-feed bridge already succeeded in linux-release, and the refresh is idempotent
+  # and re-runnable (workflow_dispatch on Update Feeds).
+  publish-feed:
+    name: Refresh update feeds
+    needs: linux-release
+    if: needs.linux-release.outputs.published == 'true'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/publish-update-feeds.yml
