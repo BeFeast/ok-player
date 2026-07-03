@@ -1,0 +1,72 @@
+name: Windows Update Feed
+
+# The static home of the Windows Velopack update channel (issue #131). Installed builds
+# read https://befeast.github.io/ok-player/updates/win/releases.win.json (SimpleWebSource
+# in UpdateService); this workflow is the only writer of that URL. It rebuilds the site
+# from docs/site plus a manifest derived from the newest published v* release carrying
+# releases.win.json (scripts/build-win-feed.sh), and deploys to GitHub Pages atomically —
+# deploy-pages swaps the whole site in one step, so there is no window where the feed
+# is missing or half-written.
+#
+# Triggers:
+#   - release published: `vpk upload github` (installer/build-velopack.ps1 -Publish)
+#     publishes the v* release with the operator's token, so this event fires and the
+#     feed update rides the release pipeline instead of being a manual action. Releases
+#     the Linux workflow creates with GITHUB_TOKEN never fire this event by design —
+#     and would be no-ops anyway, since the manifest derives only from v* releases.
+#   - push to main touching the site or the generator: content redeploy.
+#   - workflow_dispatch: manual redeploy, first-time bootstrap, and the belt-and-braces
+#     dispatch build-velopack.ps1 attempts after publishing.
+# Every run rebuilds from the current source of truth, so overlapping or repeated
+# triggers are harmless; the concurrency group serializes deploys so the last one wins.
+
+on:
+  release:
+    types: [published]
+  push:
+    branches: [main]
+    paths:
+      - 'docs/site/**'
+      - 'scripts/build-win-feed.sh'
+      - '.github/workflows/publish-win-feed.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  publish-feed:
+    name: Publish win feed to GitHub Pages
+    # Only Windows v* releases can change the manifest; skip linux-v* release events.
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v')
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build site + rewritten win manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/build-win-feed.sh "${{ github.repository }}" _site
+
+      # enablement: true creates the Pages site (build type "workflow") on the first
+      # run, so no separate admin step is needed. If org policy blocks API enablement,
+      # enable it once by hand: Settings -> Pages -> Source: GitHub Actions.
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
