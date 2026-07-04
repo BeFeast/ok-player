@@ -380,10 +380,7 @@ pub(crate) fn settings_subtitle_track_section(
         section.append(&settings_empty_state("No subtitle tracks"));
     } else {
         for track in tracks {
-            let button = settings_track_button(
-                &track_label_for(&track, false),
-                selected_id == Some(track.id),
-            );
+            let button = settings_track_button(&track_label(&track), selected_id == Some(track.id));
             connect_settings_subtitle_track_button(
                 &button,
                 Some(track.id),
@@ -435,10 +432,7 @@ pub(crate) fn settings_audio_track_section(
         section.append(&settings_empty_state("No audio tracks"));
     } else {
         for track in tracks {
-            let button = settings_track_button(
-                &track_label_for(&track, false),
-                selected_id == Some(track.id),
-            );
+            let button = settings_track_button(&track_label(&track), selected_id == Some(track.id));
             connect_settings_audio_track_button(
                 &button,
                 Some(track.id),
@@ -567,7 +561,7 @@ pub(crate) fn selected_track_summary(state: &Rc<RefCell<PlayerState>>, kind: Tra
     read_tracks(state)
         .into_iter()
         .find(|track| track.kind == kind && track.selected)
-        .map(|track| track_label_for(&track, false))
+        .map(|track| track_label(&track))
         .unwrap_or_else(|| "Off".to_owned())
 }
 

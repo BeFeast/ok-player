@@ -21,7 +21,8 @@ use okp_core::shortcuts::{
 };
 use okp_core::update_selection::{self, DebFeed, DebUpdate, SHA256SUMS_ASSET};
 use okp_core::{
-    AppIdentity, m3u, media_formats, natural_compare, sha256sums, subtitle_delay, time_code,
+    AppIdentity, chapter_math, m3u, media_formats, natural_compare, sha256sums, subtitle_delay,
+    time_code,
 };
 use okp_mpv::{
     AbLoopState, AudioDevice, Chapter, InfoRow, InfoSection, InfoTrack, MediaInfo, Mpv, MpvEvent,
@@ -698,6 +699,12 @@ struct Controls {
     side_panel_manual_mode: Rc<Cell<bool>>,
     side_panel_snapshot: Rc<RefCell<SidePanelSnapshot>>,
     side_panel_actions: Rc<RefCell<Vec<SidePanelAction>>>,
+    // When set, the live poll leaves the side panel alone so the visual smoke
+    // hook (`OKP_OPEN_SIDE_PANEL_ON_STARTUP`) can render fixture rows that would
+    // otherwise be cleared the moment the poll sees there is no loaded media.
+    // The poll clears it as soon as real media loads, so a session that merely
+    // inherited the env var falls back to live data instead of fixtures.
+    side_panel_preview_frozen: Rc<Cell<bool>>,
     thumbnail_sender: mpsc::Sender<String>,
     thumbnail_events: RefCell<mpsc::Receiver<String>>,
 }
@@ -1096,6 +1103,11 @@ struct SidePanelSnapshot {
     current_url: Option<String>,
     playlist: Vec<PlaylistItem>,
     chapters: Vec<Chapter>,
+    // Index of the chapter the playhead currently sits in (via
+    // `chapter_math::current_index`). Kept as the resolved index rather than the
+    // raw position so the panel only re-renders when the playhead crosses a
+    // chapter boundary, not on every poll tick.
+    current_chapter: Option<usize>,
     ab_loop: AbLoopState,
 }
 
