@@ -1775,11 +1775,20 @@ mod tests {
         mpv.set_media_source(Some(source.clone()));
 
         // The setter wakes the pump, so the snapshot rebuilds without any
-        // further mpv event.
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        // further mpv event. Poll for the rebuild instead of asserting after a
+        // single fixed delay: the cross-thread wake can take longer than 100 ms
+        // on a loaded CI runner, which made the fixed-sleep assertion flaky.
+        let want = Some(source.display().to_string());
+        let mut observed = None;
+        for _ in 0..200 {
+            observed = mpv.observed_media_info().and_then(|info| info.path);
+            if observed == want {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         assert_eq!(
-            mpv.observed_media_info().and_then(|info| info.path),
-            Some(source.display().to_string()),
+            observed, want,
             "set_media_source must wake the pump and rebuild media_info"
         );
 
