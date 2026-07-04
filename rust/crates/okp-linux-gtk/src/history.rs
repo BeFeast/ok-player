@@ -220,8 +220,10 @@ fn new_history_record() -> HistoryRecord {
     }
 }
 
+/// The near-end / "finished" boundary, shared with the resume heuristic and the report-back
+/// "watched" flag so all three agree (see [`okp_core::resume`]).
 pub fn completion_start(duration: f64) -> f64 {
-    (duration * 0.95).max(duration - 30.0)
+    okp_core::resume::completion_start(duration)
 }
 
 fn history_path() -> PathBuf {

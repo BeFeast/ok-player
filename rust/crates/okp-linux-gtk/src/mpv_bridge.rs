@@ -215,7 +215,93 @@ pub(crate) fn apply_launch_args(
 
     let loaded = load_launch_args(state, launch_args);
     let subtitles_loaded = apply_launch_subtitles(state, &launch_args.subtitles);
+    apply_launch_playback_overrides(state, launch_args);
     loaded || subtitles_loaded
+}
+
+/// Apply the companion-library launch overrides (PRD §13.1) to the file just loaded: an
+/// explicit resume position (queued to override the remembered one, honoured even in a private
+/// session) and audio/subtitle track hints (layered over any remembered per-file preferences).
+/// Only a local file carries these; a stream launch has no resume/track memory to override.
+pub(crate) fn apply_launch_playback_overrides(
+    state: &Rc<RefCell<PlayerState>>,
+    launch_args: &LaunchArgs,
+) {
+    let Some(path) = state.borrow().current_file.clone() else {
+        return;
+    };
+
+    let launch_prefs = launch_track_preferences(launch_args);
+    let mut state = state.borrow_mut();
+
+    if let Some(resume) = launch_args.resume {
+        state.pending_explicit_resume = Some((path.clone(), resume));
+    }
+
+    if !launch_prefs.is_empty() {
+        // Start from whatever preferences the load already queued for this file (the remembered
+        // ones, or none in a private session) and overlay the explicit launch hints on top, so
+        // an unspecified dimension still falls back to memory.
+        let mut prefs = state
+            .pending_preferences
+            .take()
+            .filter(|(existing, _)| existing == &path)
+            .map(|(_, prefs)| prefs)
+            .unwrap_or_default();
+        prefs.merge(launch_prefs);
+        state.pending_preferences = Some((path, prefs));
+    }
+}
+
+/// Translate the launch track hints into the per-file preference shape the resume machinery
+/// already applies. `Off` records "keep it disabled"; an id records that track selected.
+fn launch_track_preferences(launch_args: &LaunchArgs) -> history::PlaybackPreferences {
+    let mut prefs = history::PlaybackPreferences::default();
+    match launch_args.audio_track {
+        Some(TrackSelection::Off) => prefs.audio_enabled = Some(false),
+        Some(TrackSelection::Id(id)) => {
+            prefs.audio_enabled = Some(true);
+            prefs.audio_track_id = Some(i64::from(id));
+        }
+        None => {}
+    }
+    match launch_args.sub_track {
+        Some(TrackSelection::Off) => prefs.subtitle_enabled = Some(false),
+        Some(TrackSelection::Id(id)) => {
+            prefs.subtitle_enabled = Some(true);
+            prefs.subtitle_track_id = Some(i64::from(id));
+        }
+        None => {}
+    }
+    prefs
+}
+
+/// The MVP report-back channel (PRD §13.1): forward the reporter's progress/watched signal for
+/// the current file. There is no companion process yet, so the local channel is stderr behind
+/// `OKP_DEBUG_PROGRESS_REPORT` — a pluggable seam the Later shared-DB / `ok-player://` model can
+/// replace without touching playback UX. Silent (and cheap) unless there is something to report.
+fn route_progress_report(state: &Rc<RefCell<PlayerState>>, outcome: ReportOutcome) {
+    if outcome.is_empty() || env::var_os("OKP_DEBUG_PROGRESS_REPORT").is_none() {
+        return;
+    }
+
+    let file = state
+        .borrow()
+        .current_file
+        .as_deref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "<stream>".to_owned());
+    if let Some(progress) = outcome.progress {
+        eprintln!(
+            "progress-report: file={file} pos={:.3} dur={:.3} pct={:.1}%",
+            progress.position,
+            progress.duration,
+            progress.percent * 100.0
+        );
+    }
+    if outcome.watched {
+        eprintln!("progress-report: file={file} watched");
+    }
 }
 
 pub(crate) fn load_launch_args(state: &Rc<RefCell<PlayerState>>, launch_args: &LaunchArgs) -> bool {
@@ -315,6 +401,15 @@ pub(crate) fn connect_state_poll(
                 raw_time
             };
             try_pending_resume(&state, duration);
+
+            // Feed the companion report-back seam (PRD §13.1) from the same observed snapshot,
+            // gated by the private session. Pure bookkeeping — no blocking mpv read here.
+            let outcome = {
+                let mut state = state.borrow_mut();
+                let private = state.private_session;
+                state.progress_reporter.tick(time_pos, duration, private)
+            };
+            route_progress_report(&state, outcome);
 
             controls.play_button.set_sensitive(has_media);
             controls.subtitle_button.set_sensitive(has_media);

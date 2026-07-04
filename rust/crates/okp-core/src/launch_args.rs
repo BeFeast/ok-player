@@ -86,6 +86,14 @@ fn consume<T, S: AsRef<str>>(
     None
 }
 
+/// Classify a `--sub`/`--audio` value as a track selection (a 1-based mpv id, or `no`/`off`).
+/// Public so a shell that *also* accepts `--sub <file>` (as the Linux GTK shell does) can tell
+/// a track hint (`--sub 2`) from a subtitle path (`--sub movie.srt`): a path returns `None`.
+#[must_use]
+pub fn parse_track_selection(value: &str) -> Option<TrackSelection> {
+    parse_track_id(value)
+}
+
 /// A track id is a positive integer — mpv track ids are 1-based, and `0` means "auto", not a
 /// real track, so it (and anything non-numeric) is `None`/ignored. `no`/`off` → off, "select
 /// none".

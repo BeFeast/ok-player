@@ -1051,6 +1051,7 @@ fn load_launch_args_uses_explicit_playlist_for_multiple_items() {
         ],
         playlists: Vec::new(),
         subtitles: Vec::new(),
+        ..LaunchArgs::default()
     };
 
     assert!(load_launch_args(&state, &launch));
@@ -1059,6 +1060,136 @@ fn load_launch_args_uses_explicit_playlist_for_multiple_items() {
     assert_eq!(state.current_file, Some(PathBuf::from("/media/a.mkv")));
     assert_eq!(state.current_url, None);
     assert_eq!(state.playlist.items(), launch.items.as_slice());
+}
+
+#[test]
+fn launch_args_parse_the_companion_resume_and_track_hints() {
+    // PRD §13.1: `--resume` (timecode or seconds) plus `--sub`/`--audio` track ids.
+    let launch = parse_launch_args_from(
+        [
+            "--resume",
+            "1:30",
+            "/media/movie.mkv",
+            "--audio",
+            "2",
+            "--sub",
+            "3",
+        ]
+        .into_iter()
+        .map(Into::into),
+    );
+
+    assert_eq!(launch.items, vec![local_item("/media/movie.mkv")]);
+    assert_eq!(launch.resume, Some(90.0));
+    assert_eq!(launch.audio_track, Some(TrackSelection::Id(2)));
+    assert_eq!(launch.sub_track, Some(TrackSelection::Id(3)));
+    // `--sub 3` is a track hint, not a subtitle file.
+    assert!(launch.subtitles.is_empty());
+}
+
+#[test]
+fn launch_args_sub_with_a_path_stays_a_subtitle_file_not_a_track_hint() {
+    let launch = parse_launch_args_from(
+        ["/media/movie.mkv", "--sub", "/media/forced.ass"]
+            .into_iter()
+            .map(Into::into),
+    );
+
+    assert_eq!(launch.subtitles, vec![PathBuf::from("/media/forced.ass")]);
+    assert_eq!(launch.sub_track, None);
+}
+
+#[test]
+fn launch_track_hints_apply_over_the_pending_preferences() {
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(PathBuf::from("/media/a.mkv")),
+        ..PlayerState::default()
+    }));
+    let launch = LaunchArgs {
+        audio_track: Some(TrackSelection::Id(2)),
+        sub_track: Some(TrackSelection::Off),
+        ..LaunchArgs::default()
+    };
+
+    apply_launch_playback_overrides(&state, &launch);
+
+    let state = state.borrow();
+    let (path, prefs) = state
+        .pending_preferences
+        .as_ref()
+        .expect("launch track hints should queue preferences");
+    assert_eq!(path, &PathBuf::from("/media/a.mkv"));
+    assert_eq!(prefs.audio_enabled, Some(true));
+    assert_eq!(prefs.audio_track_id, Some(2));
+    assert_eq!(prefs.subtitle_enabled, Some(false));
+    assert_eq!(prefs.subtitle_track_id, None);
+}
+
+#[test]
+fn explicit_launch_resume_is_queued_even_in_a_private_session() {
+    // The companion, not history, asked for this position, so private mode does not gate it.
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(PathBuf::from("/media/a.mkv")),
+        private_session: true,
+        ..PlayerState::default()
+    }));
+    let launch = LaunchArgs {
+        items: vec![local_item("/media/a.mkv")],
+        resume: Some(42.0),
+        ..LaunchArgs::default()
+    };
+
+    apply_launch_playback_overrides(&state, &launch);
+
+    assert_eq!(
+        state.borrow().pending_explicit_resume,
+        Some((PathBuf::from("/media/a.mkv"), 42.0))
+    );
+}
+
+#[test]
+fn try_pending_resume_waits_when_duration_is_below_the_explicit_target() {
+    // A provisional (small) duration must not consume the explicit target — it stays queued
+    // for a later, larger duration (progressive / network media).
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(PathBuf::from("/media/a.mkv")),
+        pending_explicit_resume: Some((PathBuf::from("/media/a.mkv"), 700.0)),
+        ..PlayerState::default()
+    }));
+
+    try_pending_resume(&state, 600.0);
+
+    assert_eq!(
+        state.borrow().pending_explicit_resume,
+        Some((PathBuf::from("/media/a.mkv"), 700.0))
+    );
+}
+
+#[test]
+fn try_pending_resume_drops_a_target_left_over_from_another_file() {
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(PathBuf::from("/media/a.mkv")),
+        pending_explicit_resume: Some((PathBuf::from("/media/old.mkv"), 45.0)),
+        ..PlayerState::default()
+    }));
+
+    try_pending_resume(&state, 600.0);
+
+    assert!(state.borrow().pending_explicit_resume.is_none());
+}
+
+#[test]
+fn try_pending_resume_discards_a_barely_started_remembered_position() {
+    // 10s of 600s is under the 5% floor, so the remembered target is dropped, not applied.
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(PathBuf::from("/media/a.mkv")),
+        pending_resume: Some((PathBuf::from("/media/a.mkv"), 10.0)),
+        ..PlayerState::default()
+    }));
+
+    try_pending_resume(&state, 600.0);
+
+    assert!(state.borrow().pending_resume.is_none());
 }
 
 #[test]

@@ -15,7 +15,9 @@ pub(crate) fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
     state.chapters_snapshot.clear();
     state.pending_subtitles.clear();
     state.pending_resume = None;
+    state.pending_explicit_resume = None;
     state.pending_preferences = None;
+    state.progress_reporter.begin();
     state.video_transform.reset();
     state.ab_loop = AbLoopState::default();
 }
@@ -149,6 +151,10 @@ pub(crate) fn remember_loaded_media_with_playlist(
     state.thumbnail_request_key = None;
     state.hover_thumbnail_request_key = None;
     state.pending_subtitles.clear();
+    // A fresh open resets the report-back latch and drops any explicit resume left from a prior
+    // file; a launch-with-resume re-arms it after the load via `apply_launch_playback_overrides`.
+    state.progress_reporter.begin();
+    state.pending_explicit_resume = None;
     state.pending_resume = resume.map(|position| (resume_path, position));
     state.pending_preferences = preferences.map(|preferences| (preferences_path, preferences));
 }
@@ -224,7 +230,9 @@ pub(crate) fn remember_loaded_url_with_playlist(
     state.hover_thumbnail_request_key = None;
     state.chapters_snapshot.clear();
     state.pending_subtitles.clear();
+    state.progress_reporter.begin();
     state.pending_resume = None;
+    state.pending_explicit_resume = None;
     state.pending_preferences = None;
 }
 
@@ -496,52 +504,79 @@ pub(crate) fn restart_current_file(state: &Rc<RefCell<PlayerState>>) -> bool {
 
     let preferences = state.borrow().history.playback_preferences(&path);
     let mut state = state.borrow_mut();
+    // Replaying from the top re-arms the report-back latch and drops any stale resume target.
+    state.progress_reporter.begin();
     state.pending_resume = None;
+    state.pending_explicit_resume = None;
     state.pending_preferences = preferences.map(|preferences| (path, preferences));
     true
 }
 
+/// Apply the queued resume target for the loaded file, if any. An explicit launch resume
+/// (PRD §13.1) overrides the remembered position and is honoured verbatim; a remembered one is
+/// subject to the §12.1 barely-started / near-end heuristic. The precedence and thresholds live
+/// in [`okp_core::resume::resolve_resume`]; this only gathers the targets and applies the seek.
 pub(crate) fn try_pending_resume(state: &Rc<RefCell<PlayerState>>, duration: f64) {
-    if !duration.is_finite() || duration <= 0.0 {
-        return;
-    }
-
-    let pending = {
-        let state = state.borrow();
-        state.pending_resume.clone()
+    let (explicit, remembered) = {
+        let mut state = state.borrow_mut();
+        let current = state.current_file.clone();
+        // Drop any target left over from a previously loaded file (or a stream, which carries
+        // none). What remains belongs to the file the seek would land on.
+        if !resume_target_matches(&state.pending_explicit_resume, &current) {
+            state.pending_explicit_resume = None;
+        }
+        if !resume_target_matches(&state.pending_resume, &current) {
+            state.pending_resume = None;
+        }
+        (
+            state
+                .pending_explicit_resume
+                .as_ref()
+                .map(|(_, target)| *target),
+            state.pending_resume.as_ref().map(|(_, target)| *target),
+        )
     };
-    let Some((path, target)) = pending else {
-        return;
-    };
 
-    let is_current = state
-        .borrow()
-        .current_file
-        .as_ref()
-        .is_some_and(|current| current == &path);
-    if !is_current {
-        state.borrow_mut().pending_resume = None;
+    if explicit.is_none() && remembered.is_none() {
         return;
     }
 
-    if target > duration {
-        return;
+    match okp_core::resume::resolve_resume(explicit, remembered, duration) {
+        // The known duration does not cover the target yet — keep it queued for a later,
+        // larger duration (progressive / network media report a provisional one first).
+        ResumeDecision::Wait => {}
+        ResumeDecision::Start => clear_resume_targets(state),
+        ResumeDecision::Seek(target) => {
+            let result = {
+                let state = state.borrow();
+                state.mpv.as_ref().map(|mpv| mpv.seek_absolute(target))
+            };
+            match result {
+                // Consume both targets once the seek lands; a transient engine gap (None) or a
+                // failure leaves them queued to retry on a later poll.
+                Some(Ok(())) => clear_resume_targets(state),
+                Some(Err(error)) => eprintln!("Failed to resume at {target:.3}s: {error}"),
+                None => {}
+            }
+        }
     }
+}
 
-    if target <= duration * 0.05 || target >= history::completion_start(duration) {
-        state.borrow_mut().pending_resume = None;
-        return;
+/// Whether a queued resume target still refers to the loaded file. Nothing queued trivially
+/// matches (no drop needed); a target with no current file is stale.
+fn resume_target_matches(pending: &Option<(PathBuf, f64)>, current: &Option<PathBuf>) -> bool {
+    match (pending, current) {
+        (None, _) => true,
+        (Some((path, _)), Some(current)) => path == current,
+        (Some(_), None) => false,
     }
+}
 
-    let result = {
-        let state = state.borrow();
-        state.mpv.as_ref().map(|mpv| mpv.seek_absolute(target))
-    };
-    if matches!(result, Some(Ok(()))) {
-        state.borrow_mut().pending_resume = None;
-    } else if let Some(Err(error)) = result {
-        eprintln!("Failed to resume '{}': {error}", path.display());
-    }
+/// Drop both resume targets once one has been applied (or ruled out) for this open.
+fn clear_resume_targets(state: &Rc<RefCell<PlayerState>>) {
+    let mut state = state.borrow_mut();
+    state.pending_resume = None;
+    state.pending_explicit_resume = None;
 }
 
 pub(crate) fn try_pending_playback_preferences(state: &Rc<RefCell<PlayerState>>) {

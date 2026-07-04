@@ -469,3 +469,47 @@ marshalling is the only thing the seam adds; no domain logic lives there (issue 
   ignored, and a stray `Paused` property echo reconciles the lifecycle only while playback is
   active (`Playing`/`Paused`) — so out-of-order engine wake-ups cannot manufacture a phantom
   transition. The `Ended` state keeps the media context current until the next `Open`/`Close`.
+
+## Resume resolution + report-back seam → `okp_core::resume` / `okp_core::progress_report` (Linux companion increment)
+
+The companion-library MVP contract (PRD §13.1, issue #202) has two halves — launch-with-resume
+and progress report-back — and both had been implemented only inside the shells: the Windows
+`PlayerView.TryResume`/`SaveProgress` heuristics in `src/OkPlayer.App`, and the Linux GTK
+`try_pending_resume` inline logic. Neither half is a `src/OkPlayer.Core` module, so these are new
+core homes for shell logic (the `shortcuts`/`update_selection` precedent), not a straight C# port;
+their spec is each module's own Rust unit tests. The GTK shell now drives both; the WinUI shell
+keeps its inline copies until a later increment rewires it.
+
+- **One resume-precedence resolver.** `resume::resolve_resume(explicit, remembered, duration)`
+  folds the two competing targets into a single `ResumeDecision` (`Seek`/`Start`/`Wait`). An
+  explicit launch resume (PRD §13.1) always wins: honoured verbatim, clamped only to
+  `duration - 0.5s` so it cannot land on EOF and latch "finished", and bypassing the
+  barely-started/near-end heuristic that gates a *remembered* position (PRD §12.1). A resume of `0`
+  is a meaningful explicit target ("from the top") and still overrides memory. `Wait` models the
+  progressive/network case where a provisional small duration does not yet cover the target — the
+  same "keep it queued for a larger duration" behaviour both shells already had inline. This
+  matches the C# `PlayerView.TryResume` ordering (explicit first, then the `> 5%` / `< end - 30s`
+  remembered rule); it is verified by unit tests rather than by porting the WinUI view.
+- **The near-end boundary is shared.** `resume::completion_start(duration) = max(duration * 0.95,
+  duration - 30s)` is the single definition of the "final stretch"; the GTK `history::completion_start`
+  now delegates to it, and it is *also* the threshold the report-back "watched" flag fires on — so
+  resume-skip and watched-state provably agree (PRD §13.1: "the same signal it uses internally for
+  resume"). The constants (`RESUME_MIN_FRACTION`, `NEAR_END_FRACTION`, `NEAR_END_TAIL_SECONDS`,
+  `RESUME_END_GUARD_SECONDS`) are named rather than inline magic numbers.
+- **Report-back is a pure, private-aware state machine.** `progress_report::ProgressReporter` folds
+  playback ticks into a `ReportOutcome` (a throttled periodic `Progress` with a `0..=1` watched
+  fraction, plus a one-shot `watched` flag latched at `completion_start`) and is engine/UI-free.
+  Private mode (PRD §12.3 / §13.3) is honoured *in the model*: a private tick produces nothing and
+  advances no internal state, so no watched/history signal can leave the process while private —
+  the reporter cannot be misused to leak it. The transport is the `ProgressSink` seam; the MVP wires
+  a local stderr channel (behind `OKP_DEBUG_PROGRESS_REPORT`), leaving the Later shared-DB /
+  `ok-player://` model to swap the sink without touching playback UX.
+- **Explicit resume vs privacy.** Unlike a *remembered* resume (suppressed while private, since it
+  is "what was watched"), an explicit launch resume is a companion instruction, not a recorded fact,
+  so the GTK shell queues and applies it even in a private session — mirroring the PRD's split
+  between honouring an explicit launch and recording history.
+- **`--sub` is overloaded on Linux only.** The shared `launch_args` grammar reads `--sub <id>` /
+  `--audio <id>` as track hints (issue's companion contract); the GTK shell additionally accepts
+  `--sub <file>` to side-load a subtitle. `launch_args::parse_track_selection` is exposed so the
+  shell can disambiguate: a track-id token becomes a hint, anything else stays a subtitle path. The
+  WinUI shell has no `--sub <file>` form, so this overload is a Linux-only divergence.

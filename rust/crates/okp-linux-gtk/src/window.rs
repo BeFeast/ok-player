@@ -7,14 +7,38 @@ pub(crate) fn parse_launch_args_from(args: impl Iterator<Item = std::ffi::OsStri
 }
 
 pub(crate) fn parse_launch_args_from_cwd(
-    mut args: impl Iterator<Item = std::ffi::OsString>,
+    args: impl Iterator<Item = std::ffi::OsString>,
     cwd: Option<&Path>,
 ) -> LaunchArgs {
+    let raw: Vec<std::ffi::OsString> = args.collect();
     let mut launch = LaunchArgs::default();
+
+    // The companion-library launch contract (PRD §13.1: `--resume` plus `--sub`/`--audio`
+    // track hints) is parsed by the shared core so both shells agree on the grammar (inline
+    // `--opt=value`, `/opt`, malformed-value fallback). The media/subtitle-file/playlist tokens
+    // are collected in the loop below; `contract.files` is intentionally ignored here.
+    let contract = okp_core::launch_args::parse(
+        &raw.iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>(),
+    );
+    launch.resume = contract.resume_seconds;
+    launch.audio_track = contract.audio;
+    launch.sub_track = contract.sub;
+
+    let mut args = raw.into_iter();
     while let Some(arg) = args.next() {
         if arg == "--sub" {
-            if let Some(arg) = args.next() {
-                add_launch_subtitle_arg(&mut launch, arg, cwd);
+            if let Some(value) = args.next() {
+                // `--sub <id|no|off>` is a track hint (already captured in `contract` above);
+                // only a real path is loaded as an external subtitle file.
+                if value
+                    .to_str()
+                    .and_then(okp_core::launch_args::parse_track_selection)
+                    .is_none()
+                {
+                    add_launch_subtitle_arg(&mut launch, value, cwd);
+                }
             }
             continue;
         }

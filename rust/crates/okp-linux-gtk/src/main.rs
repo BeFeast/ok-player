@@ -15,7 +15,10 @@ use gtk::gdk;
 use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
+use okp_core::launch_args::TrackSelection;
 use okp_core::playlist::{Playlist, PlaylistItem, QueueInsertMode, RepeatMode};
+use okp_core::progress_report::{ProgressReporter, ReportOutcome};
+use okp_core::resume::ResumeDecision;
 use okp_core::shortcuts::{
     self, ShortcutAction, ShortcutBinding, ShortcutChord, ShortcutModifiers, ShortcutSlot,
 };
@@ -147,6 +150,10 @@ struct PlayerState {
     playlist: Playlist,
     pending_subtitles: Vec<PathBuf>,
     pending_resume: Option<(PathBuf, f64)>,
+    /// An explicit launch resume (PRD §13.1) queued for the currently loading file. It
+    /// overrides the remembered [`Self::pending_resume`] and applies even in a private session,
+    /// since the companion — not history — asked for this position.
+    pending_explicit_resume: Option<(PathBuf, f64)>,
     pending_preferences: Option<(PathBuf, history::PlaybackPreferences)>,
     thumbnail_request_key: Option<String>,
     hover_thumbnail_request_key: Option<String>,
@@ -159,6 +166,9 @@ struct PlayerState {
     render_target_size: Option<okp_mpv::RenderTargetSize>,
     video_transform: VideoTransformState,
     ab_loop: AbLoopState,
+    /// Report-back seam for the companion library (PRD §13.1) — periodic progress and a
+    /// near-end "watched" flag, driven from the state poll and gated by the private session.
+    progress_reporter: ProgressReporter,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -228,6 +238,11 @@ struct LaunchArgs {
     items: Vec<PlaylistItem>,
     playlists: Vec<PathBuf>,
     subtitles: Vec<PathBuf>,
+    /// Companion-library launch contract (PRD §13.1): an explicit resume position (seconds)
+    /// overriding the remembered one for this launch, plus optional audio/subtitle track hints.
+    resume: Option<f64>,
+    audio_track: Option<TrackSelection>,
+    sub_track: Option<TrackSelection>,
 }
 
 impl LaunchArgs {
