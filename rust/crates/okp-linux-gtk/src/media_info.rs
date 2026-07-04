@@ -78,7 +78,10 @@ pub(crate) fn show_media_info_window(
         content.append(&media_info_section_widget(section));
     }
     if !media_info.tracks.is_empty() {
-        content.append(&media_info_tracks_section(&media_info.tracks));
+        content.append(&media_info_tracks_section(
+            &media_info.tracks,
+            media_info.secondary_subtitle_id,
+        ));
     }
 
     let scroller = gtk::ScrolledWindow::new();
@@ -193,15 +196,18 @@ pub(crate) fn media_info_preview_sample() -> MediaInfo {
                 detail: "PGS · embedded".to_owned(),
             },
             InfoTrack {
+                // The secondary caption: mpv reports it `selected` alongside the
+                // primary, and it is matched as secondary by `secondary_subtitle_id`.
                 id: 4,
                 kind: TrackKind::Subtitle,
-                selected: false,
+                selected: true,
                 external: true,
                 default: false,
                 title: "English".to_owned(),
                 detail: "SubRip (SRT) · external".to_owned(),
             },
         ],
+        secondary_subtitle_id: Some(4),
     }
 }
 
@@ -387,7 +393,10 @@ pub(crate) fn media_info_row(label: &str, value: &str) -> gtk::Box {
     row
 }
 
-pub(crate) fn media_info_tracks_section(tracks: &[InfoTrack]) -> gtk::Box {
+pub(crate) fn media_info_tracks_section(
+    tracks: &[InfoTrack],
+    secondary_subtitle_id: Option<i64>,
+) -> gtk::Box {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
     content.add_css_class("okp-info-section");
 
@@ -397,13 +406,16 @@ pub(crate) fn media_info_tracks_section(tracks: &[InfoTrack]) -> gtk::Box {
     content.append(&title);
 
     for track in tracks {
-        content.append(&media_info_track_row(track));
+        content.append(&media_info_track_row(track, secondary_subtitle_id));
     }
 
     content
 }
 
-pub(crate) fn media_info_track_row(track: &InfoTrack) -> gtk::Box {
+pub(crate) fn media_info_track_row(
+    track: &InfoTrack,
+    secondary_subtitle_id: Option<i64>,
+) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     row.add_css_class("okp-info-track-row");
     if track.selected {
@@ -430,10 +442,10 @@ pub(crate) fn media_info_track_row(track: &InfoTrack) -> gtk::Box {
     title.set_hexpand(true);
     title_row.append(&title);
 
-    if track.selected {
-        let current = gtk::Label::new(Some("CURRENT"));
-        current.add_css_class("okp-info-track-current");
-        title_row.append(&current);
+    if let Some(badge_text) = media_info_track_badge(track, secondary_subtitle_id) {
+        let badge = gtk::Label::new(Some(badge_text));
+        badge.add_css_class("okp-info-track-current");
+        title_row.append(&badge);
     }
     body.append(&title_row);
 
@@ -455,6 +467,23 @@ pub(crate) fn media_info_track_kind_label(kind: TrackKind) -> &'static str {
         TrackKind::Audio => "Audio",
         TrackKind::Subtitle => "Subtitle",
     }
+}
+
+/// The status badge for a track row. Subtitles distinguish the primary and
+/// secondary caption slots (mpv marks both `selected`, so they are told apart by
+/// `secondary-sid`); every other selected track is simply the CURRENT one.
+pub(crate) fn media_info_track_badge(
+    track: &InfoTrack,
+    secondary_subtitle_id: Option<i64>,
+) -> Option<&'static str> {
+    if track.kind == TrackKind::Subtitle {
+        return match subtitle_selection::slot_for(track.id, track.selected, secondary_subtitle_id) {
+            Some(subtitle_selection::SubtitleSlot::Primary) => Some("PRIMARY"),
+            Some(subtitle_selection::SubtitleSlot::Secondary) => Some("SECONDARY"),
+            None => None,
+        };
+    }
+    track.selected.then_some("CURRENT")
 }
 
 pub(crate) fn media_info_copy_text(media_info: &MediaInfo) -> String {
@@ -486,11 +515,17 @@ pub(crate) fn media_info_copy_text(media_info: &MediaInfo) -> String {
             } else {
                 format!(" - {}", track.detail)
             };
+            let role = match media_info_track_badge(track, media_info.secondary_subtitle_id) {
+                Some("PRIMARY") => " [Primary]",
+                Some("SECONDARY") => " [Secondary]",
+                _ => "",
+            };
             lines.push(format!(
-                "{} #{}: {}{}",
+                "{} #{}: {}{}{}",
                 media_info_track_kind_label(track.kind),
                 track.id,
                 track.title,
+                role,
                 detail
             ));
         }

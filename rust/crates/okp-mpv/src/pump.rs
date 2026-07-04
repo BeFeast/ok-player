@@ -403,6 +403,13 @@ fn recompute(shared: &Arc<PumpShared>, flags: RecomputeFlags) {
     if let Some(media_info) = media_info {
         snapshot.media_info = media_info;
     }
+    // A `secondary-sid` change on its own does not flag `media_info` for a
+    // rebuild, so refresh the marker in place here — otherwise the Media Info
+    // window would keep showing the secondary caption that was active the last
+    // time the track list changed.
+    if let Some(media_info) = snapshot.media_info.as_mut() {
+        media_info.secondary_subtitle_id = secondary_subtitle_id;
+    }
 }
 
 /// Lock a mutex, recovering the guard if the pump thread poisoned it — a busy
