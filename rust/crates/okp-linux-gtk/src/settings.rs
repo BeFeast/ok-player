@@ -3,6 +3,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use okp_core::screenshot::ScreenshotFormat;
 use okp_core::settings::Settings;
 
 const DEFAULT_VOLUME: f64 = 100.0;
@@ -140,6 +141,25 @@ impl SettingsStore {
         normalized_video_adjustment(self.data.video.gamma).unwrap_or(DEFAULT_VIDEO_ADJUSTMENT)
     }
 
+    pub fn screenshot_format(&self) -> ScreenshotFormat {
+        ScreenshotFormat::from_settings_value(self.data.screenshots.format.as_deref())
+    }
+
+    /// The user's configured capture directory, if set to a usable absolute path. `None`
+    /// means "use the platform default" — the shell resolves that fallback (XDG Pictures).
+    pub fn screenshot_directory(&self) -> Option<PathBuf> {
+        self.data
+            .screenshots
+            .directory
+            .as_deref()
+            .map(str::trim)
+            .filter(|dir| !dir.is_empty())
+            .map(PathBuf::from)
+            // Validate on read too: a relative path (e.g. from a hand-edited file) is unusable
+            // across launches, so fall back to the platform default rather than trusting it.
+            .filter(|dir| dir.is_absolute())
+    }
+
     pub fn raw_mpv_config(&self) -> &str {
         self.data.advanced.mpv_conf.as_deref().unwrap_or("")
     }
@@ -254,6 +274,23 @@ impl SettingsStore {
         }
     }
 
+    pub fn set_screenshot_format(&mut self, format: ScreenshotFormat) {
+        if self.screenshot_format() != format {
+            self.data.screenshots.format = screenshot_format_setting(format);
+            self.dirty = true;
+        }
+    }
+
+    /// Persist the capture directory. `None` (or a non-absolute path) resets to the platform
+    /// default; a usable absolute path is stored verbatim.
+    pub fn set_screenshot_directory(&mut self, dir: Option<&Path>) {
+        let updated = screenshot_directory_setting(dir);
+        if self.data.screenshots.directory != updated {
+            self.data.screenshots.directory = updated;
+            self.dirty = true;
+        }
+    }
+
     pub fn set_raw_mpv_config(&mut self, text: &str) {
         let updated = raw_mpv_config_setting(text);
         if self.data.advanced.mpv_conf != updated {
@@ -333,6 +370,23 @@ fn video_adjustment_setting(value: f64) -> Option<f64> {
     } else {
         Some(value)
     }
+}
+
+fn screenshot_format_setting(format: ScreenshotFormat) -> Option<String> {
+    // Store the default PNG as absent so a Linux document stays clean until the user changes it.
+    if format == ScreenshotFormat::default() {
+        None
+    } else {
+        Some(format.settings_value().to_owned())
+    }
+}
+
+fn screenshot_directory_setting(dir: Option<&Path>) -> Option<String> {
+    // Only an absolute path is meaningful across launches; anything else falls back to the
+    // platform default rather than persisting an unusable relative or empty path.
+    dir.filter(|dir| dir.is_absolute())
+        .map(|dir| dir.to_string_lossy().into_owned())
+        .filter(|dir| !dir.trim().is_empty())
 }
 
 fn raw_mpv_config_setting(text: &str) -> Option<String> {
@@ -623,6 +677,86 @@ mod tests {
 
         assert_eq!(settings.brightness(), 0.0);
         assert_eq!(settings.data.video.brightness, None);
+        assert!(settings.dirty);
+    }
+
+    #[test]
+    fn screenshot_format_defaults_to_png() {
+        let settings = store();
+        assert_eq!(settings.screenshot_format(), ScreenshotFormat::Png);
+        // The default is stored as absent, keeping the document clean.
+        assert_eq!(settings.data.screenshots.format, None);
+    }
+
+    #[test]
+    fn screenshot_format_persists_and_marks_dirty_once() {
+        let mut settings = store();
+
+        settings.set_screenshot_format(ScreenshotFormat::Jpeg);
+
+        assert_eq!(settings.screenshot_format(), ScreenshotFormat::Jpeg);
+        assert_eq!(settings.data.screenshots.format.as_deref(), Some("jpg"));
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_screenshot_format(ScreenshotFormat::Jpeg);
+        assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn screenshot_format_reset_to_png_clears_the_field() {
+        let mut settings = store();
+
+        settings.set_screenshot_format(ScreenshotFormat::WebP);
+        settings.dirty = false;
+        settings.set_screenshot_format(ScreenshotFormat::Png);
+
+        assert_eq!(settings.screenshot_format(), ScreenshotFormat::Png);
+        assert_eq!(settings.data.screenshots.format, None);
+        assert!(settings.dirty);
+    }
+
+    #[test]
+    fn screenshot_directory_defaults_to_none() {
+        assert_eq!(store().screenshot_directory(), None);
+    }
+
+    #[test]
+    fn screenshot_directory_persists_absolute_paths_only() {
+        let mut settings = store();
+
+        settings.set_screenshot_directory(Some(Path::new("/home/tester/Captures")));
+        assert_eq!(
+            settings.screenshot_directory(),
+            Some(PathBuf::from("/home/tester/Captures"))
+        );
+        assert!(settings.dirty);
+
+        // A relative path is not persisted — it resets to the default instead.
+        settings.dirty = false;
+        settings.set_screenshot_directory(Some(Path::new("relative/dir")));
+        assert_eq!(settings.screenshot_directory(), None);
+        assert!(settings.dirty);
+    }
+
+    #[test]
+    fn screenshot_directory_read_rejects_a_relative_stored_path() {
+        // A hand-edited settings.json with a relative directory falls back to the default.
+        let mut settings = store();
+        settings.data.screenshots.directory = Some("relative/captures".to_owned());
+        assert_eq!(settings.screenshot_directory(), None);
+    }
+
+    #[test]
+    fn screenshot_directory_reset_clears_the_field() {
+        let mut settings = store();
+
+        settings.set_screenshot_directory(Some(Path::new("/captures")));
+        settings.dirty = false;
+        settings.set_screenshot_directory(None);
+
+        assert_eq!(settings.screenshot_directory(), None);
+        assert_eq!(settings.data.screenshots.directory, None);
         assert!(settings.dirty);
     }
 

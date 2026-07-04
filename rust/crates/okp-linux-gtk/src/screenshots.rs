@@ -3,57 +3,47 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub fn next_screenshot_path(media_path: Option<&Path>, position: Option<f64>) -> PathBuf {
-    let base_name = media_path
+use okp_core::screenshot::{self, ScreenshotFormat};
+
+/// Resolve the collision-free target path for a screenshot in `dir`, named after the media
+/// and position and carrying `format`'s extension. Returns `None` if the directory can't be
+/// created or every candidate name is already taken — the caller surfaces that as an error
+/// rather than overwriting an existing capture. The name itself is composed by
+/// `okp_core::screenshot`; only the directory IO and the timestamp live here.
+pub fn next_screenshot_path(
+    dir: &Path,
+    media_path: Option<&Path>,
+    position: Option<f64>,
+    format: ScreenshotFormat,
+) -> Option<PathBuf> {
+    fs::create_dir_all(dir).ok()?;
+    let media_stem = media_path
         .and_then(Path::file_stem)
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .map(sanitize_filename)
-        .unwrap_or_else(|| "ok-player".to_owned());
-    let position = position
-        .filter(|value| value.is_finite() && *value >= 0.0)
-        .map(|value| format!("-{}", time_slug(value)))
-        .unwrap_or_default();
-    let timestamp = unix_millis();
-    let dir = screenshot_dir();
-    let _ = fs::create_dir_all(&dir);
-
-    for suffix in 0..100 {
-        let unique = if suffix == 0 {
-            String::new()
-        } else {
-            format!("-{suffix}")
-        };
-        let path = dir.join(format!("{base_name}{position}-{timestamp}{unique}.png"));
-        if !path.exists() {
-            return path;
-        }
-    }
-
-    dir.join(format!("{base_name}{position}-{timestamp}-fallback.png"))
+        .and_then(|name| name.to_str());
+    let stem = screenshot::screenshot_stem(media_stem, position, unix_millis());
+    let name =
+        screenshot::resolve_unique_name(&stem, format.extension(), |name| dir.join(name).exists())?;
+    Some(dir.join(name))
 }
 
-pub fn next_clipboard_frame_path() -> PathBuf {
+/// A transient temp path for a clipboard frame, resolved collision-free. The file is deleted
+/// once the frame is on the clipboard; PNG keeps it lossless for the paste target. Returns
+/// `None` if the temp directory can't be prepared or no free name is available.
+pub fn next_clipboard_frame_path() -> Option<PathBuf> {
     let dir = env::temp_dir().join("ok-player");
-    let _ = fs::create_dir_all(&dir);
-    let timestamp = unix_millis();
-
-    for suffix in 0..100 {
-        let unique = if suffix == 0 {
-            String::new()
-        } else {
-            format!("-{suffix}")
-        };
-        let path = dir.join(format!("clipboard-frame-{timestamp}{unique}.png"));
-        if !path.exists() {
-            return path;
-        }
-    }
-
-    dir.join(format!("clipboard-frame-{timestamp}-fallback.png"))
+    fs::create_dir_all(&dir).ok()?;
+    let stem = format!("clipboard-frame-{}", unix_millis());
+    let name = screenshot::resolve_unique_name(&stem, "png", |name| dir.join(name).exists())?;
+    Some(dir.join(name))
 }
 
-fn screenshot_dir() -> PathBuf {
+/// The directory captures are written to: the user's configured folder when set, otherwise
+/// the platform default (`$XDG_PICTURES_DIR/OK Player`, falling back to `~/Pictures` or temp).
+pub fn screenshot_dir(configured: Option<PathBuf>) -> PathBuf {
+    configured.unwrap_or_else(default_screenshot_dir)
+}
+
+fn default_screenshot_dir() -> PathBuf {
     xdg_pictures_dir()
         .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join("Pictures")))
         .unwrap_or_else(env::temp_dir)
@@ -81,37 +71,6 @@ fn parse_xdg_pictures_dir(home: &Path, user_dirs: &str) -> Option<PathBuf> {
     None
 }
 
-fn sanitize_filename(value: &str) -> String {
-    let sanitized = value
-        .chars()
-        .map(|ch| match ch {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-',
-            ch if ch.is_control() => '-',
-            ch => ch,
-        })
-        .collect::<String>();
-
-    sanitized
-        .trim_matches(|ch| matches!(ch, ' ' | '.' | '-'))
-        .chars()
-        .take(80)
-        .collect::<String>()
-        .if_empty("ok-player")
-}
-
-fn time_slug(seconds: f64) -> String {
-    let total = seconds.round() as u64;
-    let hours = total / 3600;
-    let minutes = (total % 3600) / 60;
-    let seconds = total % 60;
-
-    if hours > 0 {
-        format!("{hours:02}h{minutes:02}m{seconds:02}s")
-    } else {
-        format!("{minutes:02}m{seconds:02}s")
-    }
-}
-
 fn unix_millis() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -119,38 +78,18 @@ fn unix_millis() -> u128 {
         .unwrap_or_default()
 }
 
-trait IfEmpty {
-    fn if_empty(self, fallback: &str) -> String;
-}
-
-impl IfEmpty for String {
-    fn if_empty(self, fallback: &str) -> String {
-        if self.is_empty() {
-            fallback.to_owned()
-        } else {
-            self
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn sanitize_filename_replaces_path_punctuation_and_trims() {
+    fn screenshot_dir_prefers_the_configured_directory() {
+        let configured = PathBuf::from("/home/tester/Captures");
         assert_eq!(
-            sanitize_filename("  Movie: Cut/Scene?.mkv  "),
-            "Movie- Cut-Scene-.mkv"
+            screenshot_dir(Some(configured.clone())),
+            configured,
+            "a configured directory should be used verbatim"
         );
-        assert_eq!(sanitize_filename("...---"), "ok-player");
-    }
-
-    #[test]
-    fn time_slug_formats_media_positions() {
-        assert_eq!(time_slug(53.2), "00m53s");
-        assert_eq!(time_slug(3222.0), "53m42s");
-        assert_eq!(time_slug(3906.0), "01h05m06s");
     }
 
     #[test]

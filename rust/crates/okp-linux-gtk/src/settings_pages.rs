@@ -697,6 +697,184 @@ pub(crate) fn settings_audio_device_section(
     section
 }
 
+/// The "Screenshots" section (format + save folder), shown on the Video page since captures
+/// are frames of the video plane.
+pub(crate) fn settings_screenshot_section(
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let section = settings_section("Screenshots");
+    section.append(&settings_screenshot_format_row(
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    ));
+    section.append(&settings_screenshot_folder_row(parent, state, status_toast));
+    section
+}
+
+pub(crate) fn settings_screenshot_format_row(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row.add_css_class("okp-settings-switch-row");
+
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    text.set_hexpand(true);
+    let label = gtk::Label::new(Some("Image format"));
+    label.add_css_class("okp-info-label");
+    label.set_xalign(0.0);
+    text.append(&label);
+    let detail = gtk::Label::new(Some("Choose the file type new screenshots are saved as."));
+    detail.add_css_class("okp-update-status");
+    detail.set_xalign(0.0);
+    detail.set_width_chars(1);
+    detail.set_max_width_chars(50);
+    detail.set_wrap(true);
+    text.append(&detail);
+    row.append(&text);
+
+    let current = state.borrow().settings.screenshot_format();
+    let state_label = gtk::Label::new(Some(current.label()));
+    state_label.add_css_class("okp-settings-state-pill");
+    state_label.set_valign(gtk::Align::Center);
+    row.append(&state_label);
+
+    let button = gtk::Button::with_label(current.label());
+    button.add_css_class("okp-settings-button");
+    button.set_valign(gtk::Align::Center);
+    let format_state = Rc::clone(&state);
+    let format_toast = Rc::clone(&status_toast);
+    let format_state_label = state_label.clone();
+    button.connect_clicked(move |button| {
+        let format = {
+            let mut state = format_state.borrow_mut();
+            let format = state.settings.screenshot_format().next();
+            state.settings.set_screenshot_format(format);
+            save_settings_or_toast(&mut state, &format_toast);
+            format
+        };
+        button.set_label(format.label());
+        format_state_label.set_text(format.label());
+        format_toast.show(&format!("Screenshots: {}", format.label()));
+    });
+    row.append(&button);
+
+    row
+}
+
+pub(crate) fn settings_screenshot_folder_row(
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row.add_css_class("okp-settings-switch-row");
+
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    text.set_hexpand(true);
+    let label = gtk::Label::new(Some("Save folder"));
+    label.add_css_class("okp-info-label");
+    label.set_xalign(0.0);
+    text.append(&label);
+    let path_label = gtk::Label::new(Some(&screenshot_folder_display(&state)));
+    path_label.add_css_class("okp-update-status");
+    path_label.set_xalign(0.0);
+    path_label.set_width_chars(1);
+    path_label.set_max_width_chars(48);
+    path_label.set_ellipsize(pango::EllipsizeMode::Middle);
+    text.append(&path_label);
+    row.append(&text);
+
+    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    buttons.set_valign(gtk::Align::Center);
+
+    let change = gtk::Button::with_label("Change…");
+    change.add_css_class("okp-settings-button");
+    let change_parent = parent.clone();
+    let change_state = Rc::clone(&state);
+    let change_toast = Rc::clone(&status_toast);
+    let change_path_label = path_label.clone();
+    change.connect_clicked(move |_| {
+        open_screenshot_folder_dialog(
+            &change_parent,
+            Rc::clone(&change_state),
+            Rc::clone(&change_toast),
+            change_path_label.clone(),
+        );
+    });
+    buttons.append(&change);
+
+    let reset = gtk::Button::with_label("Reset");
+    reset.add_css_class("okp-settings-button");
+    let reset_state = Rc::clone(&state);
+    let reset_toast = Rc::clone(&status_toast);
+    let reset_path_label = path_label.clone();
+    reset.connect_clicked(move |_| {
+        {
+            let mut state = reset_state.borrow_mut();
+            state.settings.set_screenshot_directory(None);
+            save_settings_or_toast(&mut state, &reset_toast);
+        }
+        reset_path_label.set_text(&screenshot_folder_display(&reset_state));
+        reset_toast.show("Screenshots folder reset to default");
+    });
+    buttons.append(&reset);
+
+    row.append(&buttons);
+    row
+}
+
+/// The effective capture directory as a display string: the configured folder when set,
+/// otherwise the resolved platform default.
+fn screenshot_folder_display(state: &Rc<RefCell<PlayerState>>) -> String {
+    let configured = state.borrow().settings.screenshot_directory();
+    screenshots::screenshot_dir(configured)
+        .to_string_lossy()
+        .into_owned()
+}
+
+pub(crate) fn open_screenshot_folder_dialog(
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+    path_label: gtk::Label,
+) {
+    let dialog = gtk::FileChooserDialog::new(
+        Some("Choose screenshot folder"),
+        Some(parent),
+        gtk::FileChooserAction::SelectFolder,
+        &[
+            ("Cancel", gtk::ResponseType::Cancel),
+            ("Select", gtk::ResponseType::Accept),
+        ],
+    );
+    dialog.set_modal(true);
+    dialog.set_decorated(false);
+
+    // Open the picker in the folder captures currently go to.
+    let current = screenshots::screenshot_dir(state.borrow().settings.screenshot_directory());
+    let _ = dialog.set_current_folder(Some(&gtk::gio::File::for_path(&current)));
+
+    dialog.connect_response(move |dialog, response| {
+        if response == gtk::ResponseType::Accept
+            && let Some(folder) = dialog.file().and_then(|file| file.path())
+        {
+            {
+                let mut state = state.borrow_mut();
+                state.settings.set_screenshot_directory(Some(&folder));
+                save_settings_or_toast(&mut state, &status_toast);
+            }
+            path_label.set_text(&screenshot_folder_display(&state));
+            status_toast.show("Screenshots folder updated");
+        }
+        dialog.close();
+    });
+
+    dialog.present();
+}
+
 pub(crate) fn settings_video_adjustment_row(
     adjustment: VideoAdjustment,
     state: Rc<RefCell<PlayerState>>,

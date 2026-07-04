@@ -135,8 +135,25 @@ pub(crate) fn save_screenshot(
     let Some((current_file, position)) = screenshot_context(state) else {
         return;
     };
-    let path = screenshots::next_screenshot_path(current_file.as_deref(), position);
+    let (dir, format) = {
+        let state = state.borrow();
+        (
+            screenshots::screenshot_dir(state.settings.screenshot_directory()),
+            state.settings.screenshot_format(),
+        )
+    };
+    let Some(path) =
+        screenshots::next_screenshot_path(&dir, current_file.as_deref(), position, format)
+    else {
+        // The directory was unwritable or every candidate name was taken; refuse to overwrite
+        // and surface the failure instead of blocking playback.
+        eprintln!("Could not prepare a screenshot path in {}", dir.display());
+        status_toast.show("Couldn't save the screenshot");
+        return;
+    };
 
+    // `screenshot-to-file` captures the decoded frame (mode video/subtitles), never the
+    // on-screen window, so the confirmation toast below can never appear in the saved image.
     let result = {
         let state = state.borrow();
         let Some(mpv) = state.mpv.as_ref() else {
@@ -169,7 +186,11 @@ pub(crate) fn copy_frame_to_clipboard(
         return;
     }
 
-    let path = screenshots::next_clipboard_frame_path();
+    let Some(path) = screenshots::next_clipboard_frame_path() else {
+        eprintln!("Could not prepare a temp path for the clipboard frame");
+        status_toast.show("Couldn't copy the frame");
+        return;
+    };
     let result = {
         let state = state.borrow();
         let Some(mpv) = state.mpv.as_ref() else {

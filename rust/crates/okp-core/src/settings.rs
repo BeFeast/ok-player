@@ -51,6 +51,8 @@ pub struct Settings {
     pub advanced: AdvancedSettings,
     #[serde(default, skip_serializing_if = "PrivacySettings::is_empty")]
     pub privacy: PrivacySettings,
+    #[serde(default, skip_serializing_if = "ScreenshotSettings::is_empty")]
+    pub screenshots: ScreenshotSettings,
 }
 
 impl Default for Settings {
@@ -65,6 +67,7 @@ impl Default for Settings {
             updates: UpdateSettings::default(),
             advanced: AdvancedSettings::default(),
             privacy: PrivacySettings::default(),
+            screenshots: ScreenshotSettings::default(),
         }
     }
 }
@@ -228,6 +231,27 @@ impl PrivacySettings {
     }
 }
 
+/// Screenshot capture preferences. Linux-first today (the GTK shell drives capture); carried
+/// in the shared schema so a future Windows port reads the same document. Both fields are
+/// optional — an absent field means "use the platform default" (PNG into the Pictures
+/// folder), so a Linux document left at defaults never writes this section.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ScreenshotSettings {
+    /// Output image format token (`png` / `jpg` / `webp`); absent means the default PNG.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    /// Absolute directory captures are written to; absent means the platform default (the XDG
+    /// Pictures directory, or `~/Pictures`, under an `OK Player` subfolder).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directory: Option<String>,
+}
+
+impl ScreenshotSettings {
+    fn is_empty(&self) -> bool {
+        self.format.is_none() && self.directory.is_none()
+    }
+}
+
 fn default_auto_check() -> bool {
     true
 }
@@ -298,6 +322,8 @@ impl WindowsSettings {
             privacy: PrivacySettings {
                 history_retention_days: self.history_retention_days,
             },
+            // Windows does not persist screenshot preferences yet; default to absent.
+            screenshots: ScreenshotSettings::default(),
         }
     }
 }
@@ -387,6 +413,29 @@ mod tests {
         assert!(!json.contains("subtitles"));
         assert!(!json.contains("appearance"));
         assert!(!json.contains("privacy"));
+        assert!(!json.contains("screenshots"));
+    }
+
+    #[test]
+    fn screenshot_section_round_trips_and_omits_when_empty() {
+        // A populated screenshot section survives a save/load round trip.
+        let mut settings = Settings::default();
+        settings.screenshots.format = Some("jpg".to_owned());
+        settings.screenshots.directory = Some("/home/tester/Captures".to_owned());
+
+        let json = serde_json::to_string(&settings).expect("serialize");
+        assert!(json.contains("screenshots"));
+        let restored = Settings::load(&json).expect("document with screenshots should load");
+        assert_eq!(restored.screenshots.format.as_deref(), Some("jpg"));
+        assert_eq!(
+            restored.screenshots.directory.as_deref(),
+            Some("/home/tester/Captures")
+        );
+
+        // A document that never touched screenshots defaults the section back to empty.
+        let bare = r#"{ "version": 2, "playback": {} }"#;
+        let loaded = Settings::load(bare).expect("bare document should load");
+        assert!(loaded.screenshots.is_empty());
     }
 
     #[test]

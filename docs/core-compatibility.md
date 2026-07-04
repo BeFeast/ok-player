@@ -378,11 +378,19 @@ untouched by this work; the Windows migration is exercised only by the Rust gold
   `advanced.mpv_conf` is left absent when migrating a Windows settings document (the shell reads
   that file on its own). `advanced.keybindings` is likewise Linux-only.
 - **Linux-only vs Windows-only fields coexist.** The picture adjustments
-  (`video.brightness`/`contrast`/`saturation`/`gamma`), `playback.auto_advance`, `repeat`, and
-  `shuffle` are Linux-only; the `subtitles`, `appearance`, and `privacy` sections are Windows-only
-  today. Each shell reads the subset it understands and carries the rest through untouched on
-  save, so the shared schema grows without either side dropping the other's state. The three
-  Windows-only sections are `skip_serializing_if`-empty, so a Linux document never writes them.
+  (`video.brightness`/`contrast`/`saturation`/`gamma`), `playback.auto_advance`, `repeat`,
+  `shuffle`, and the `screenshots` section are Linux-first; the `subtitles`, `appearance`, and
+  `privacy` sections are Windows-only today. Each shell reads the subset it understands and
+  carries the rest through untouched on save, so the shared schema grows without either side
+  dropping the other's state. These sections are `skip_serializing_if`-empty, so a document
+  never writes the ones it left at defaults.
+- **Screenshots are a Linux-first section (`screenshots.format` / `screenshots.directory`).**
+  The GTK shell drives screenshot capture, so it owns the format (`png` / `jpg` / `webp`,
+  absent = PNG) and the save directory (an absolute path, absent = the platform default
+  Pictures folder). The naming/format rules themselves live in `okp_core::screenshot`
+  (freeze-boundary: no shell owns filename or format logic); only path resolution stays in the
+  shell. Windows does not persist screenshot preferences yet, so migrating a Windows document
+  leaves the section absent, and it round-trips untouched once a future Windows port adopts it.
 
 ### History field map (Windows → canonical)
 
