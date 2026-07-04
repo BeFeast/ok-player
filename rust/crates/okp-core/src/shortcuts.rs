@@ -329,6 +329,10 @@ pub fn resolved_bindings_from_text(
 ) -> Result<Vec<ShortcutBinding>, ShortcutConfigError> {
     let mut bindings = default_bindings();
     let overrides = parse_config_overrides(text, key_names)?;
+    let override_chords = overrides
+        .iter()
+        .map(|(_, chord)| chord.clone())
+        .collect::<Vec<_>>();
     for action in SHORTCUT_ACTIONS {
         let action_overrides = overrides
             .iter()
@@ -345,8 +349,22 @@ pub fn resolved_bindings_from_text(
             chord,
         }));
     }
+    bindings.retain(|binding| {
+        overrides
+            .iter()
+            .any(|(action, _)| *action == binding.action)
+            || !is_upgrade_shadowable_default(binding.action)
+            || !override_chords.contains(&binding.chord)
+    });
     validate_conflicts(&bindings)?;
     Ok(bindings)
+}
+
+fn is_upgrade_shadowable_default(action: ShortcutAction) -> bool {
+    matches!(
+        action,
+        ShortcutAction::SubtitlePreviousCue | ShortcutAction::SubtitleNextCue
+    )
 }
 
 /// Serialise bindings back to config text: only actions whose chords differ from the default
@@ -763,6 +781,27 @@ play-pause=P
 
         assert_eq!(error.line, 0);
         assert!(error.message.contains("conflicts"));
+    }
+
+    #[test]
+    fn shortcut_parser_keeps_saved_binding_that_conflicts_with_new_default() {
+        let bindings = resolved_bindings_from_text("seek-back=Ctrl+Left", &PortableKeyNames)
+            .expect("saved shortcut should override a default conflict");
+
+        assert_eq!(
+            action_for_key(&bindings, "Left", ctrl()),
+            Some(ShortcutAction::SeekBack)
+        );
+        assert_eq!(
+            chords_for_action(&bindings, ShortcutAction::SubtitlePreviousCue),
+            vec![default_chord_for_action(
+                ShortcutAction::SubtitlePreviousCue
+            )]
+        );
+        assert!(!bindings.iter().any(|binding| {
+            binding.action == ShortcutAction::SubtitlePreviousCue
+                && binding.chord == portable_chord("Ctrl+Left")
+        }));
     }
 
     #[test]

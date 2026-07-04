@@ -81,7 +81,8 @@ pub(crate) fn populate_subtitle_popover(
     }
 
     content.append(&divider());
-    let search_source = selected_subtitle_search_source(&tracks);
+    let current_file = state.borrow().current_file.clone();
+    let search_source = selected_subtitle_search_source(&tracks, current_file.as_deref());
     let search_button = track_button("Search subtitles...", false);
     search_button.set_sensitive(matches!(search_source, SubtitleSearchSource::Available(_)));
     search_button.set_tooltip_text(Some(search_source.message()));
@@ -960,7 +961,10 @@ impl SubtitleSearchSource {
     }
 }
 
-pub(crate) fn selected_subtitle_search_source(tracks: &[Track]) -> SubtitleSearchSource {
+pub(crate) fn selected_subtitle_search_source(
+    tracks: &[Track],
+    current_file: Option<&Path>,
+) -> SubtitleSearchSource {
     let Some(track) = tracks
         .iter()
         .find(|track| track.kind == TrackKind::Subtitle && track.selected)
@@ -976,7 +980,7 @@ pub(crate) fn selected_subtitle_search_source(tracks: &[Track]) -> SubtitleSearc
         .external_filename
         .as_deref()
         .filter(|path| !path.trim().is_empty())
-        .map(PathBuf::from)
+        .and_then(|path| resolve_external_subtitle_path(path, current_file))
     else {
         return SubtitleSearchSource::MissingPath;
     };
@@ -988,36 +992,109 @@ pub(crate) fn selected_subtitle_search_source(tracks: &[Track]) -> SubtitleSearc
     }
 }
 
+fn resolve_external_subtitle_path(path: &str, current_file: Option<&Path>) -> Option<PathBuf> {
+    let path = PathBuf::from(path);
+    if path.is_absolute() {
+        return Some(path);
+    }
+
+    let media_dir = current_file?.parent()?;
+    if !media_dir.is_absolute() {
+        return None;
+    }
+    Some(media_dir.join(path))
+}
+
 pub(crate) fn open_subtitle_search_dialog(
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) {
-    let source = selected_subtitle_search_source(&read_tracks(&state));
+    let current_file = state.borrow().current_file.clone();
+    let source = selected_subtitle_search_source(&read_tracks(&state), current_file.as_deref());
     let SubtitleSearchSource::Available(path) = source else {
         status_toast.show(source.message());
         return;
     };
 
+    status_toast.show("Loading subtitle search");
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = load_subtitle_search_index(path);
+        let _ = sender.send(result);
+    });
+
+    let parent = parent.clone();
+    glib::timeout_add_local(Duration::from_millis(40), move || {
+        match receiver.try_recv() {
+            Ok(Ok(index)) => {
+                show_subtitle_search_dialog(
+                    &parent,
+                    Rc::clone(&state),
+                    Rc::clone(&status_toast),
+                    index,
+                );
+                glib::ControlFlow::Break
+            }
+            Ok(Err(SubtitleSearchLoadError::ReadFailed { path, error })) => {
+                eprintln!("Failed to read subtitle file '{}': {error}", path.display());
+                status_toast.show("Could not read subtitle file");
+                glib::ControlFlow::Break
+            }
+            Ok(Err(SubtitleSearchLoadError::UnsupportedFormat)) => {
+                status_toast.show("Search supports SRT and LRC subtitle files");
+                glib::ControlFlow::Break
+            }
+            Ok(Err(SubtitleSearchLoadError::Empty)) => {
+                status_toast.show("No searchable subtitle cues");
+                glib::ControlFlow::Break
+            }
+            Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                status_toast.show("Could not read subtitle file");
+                glib::ControlFlow::Break
+            }
+        }
+    });
+}
+
+#[derive(Debug)]
+enum SubtitleSearchLoadError {
+    ReadFailed {
+        path: PathBuf,
+        error: std::io::Error,
+    },
+    UnsupportedFormat,
+    Empty,
+}
+
+fn load_subtitle_search_index(
+    path: PathBuf,
+) -> Result<subtitle_search::SubtitleCueIndex, SubtitleSearchLoadError> {
     let text = match fs::read_to_string(&path) {
         Ok(text) => text,
         Err(error) => {
-            eprintln!("Failed to read subtitle file '{}': {error}", path.display());
-            status_toast.show("Could not read subtitle file");
-            return;
+            return Err(SubtitleSearchLoadError::ReadFailed { path, error });
         }
     };
 
     let Some(index) = subtitle_search::SubtitleCueIndex::from_path_text(&path, Some(&text)) else {
-        status_toast.show("Search supports SRT and LRC subtitle files");
-        return;
+        return Err(SubtitleSearchLoadError::UnsupportedFormat);
     };
 
     if index.is_empty() {
-        status_toast.show("No searchable subtitle cues");
-        return;
+        return Err(SubtitleSearchLoadError::Empty);
     }
 
+    Ok(index)
+}
+
+fn show_subtitle_search_dialog(
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+    index: subtitle_search::SubtitleCueIndex,
+) {
     let dialog = gtk::Dialog::builder()
         .title("Search Subtitles")
         .transient_for(parent)

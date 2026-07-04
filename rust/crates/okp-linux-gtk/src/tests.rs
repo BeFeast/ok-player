@@ -738,7 +738,7 @@ fn track_label_shows_tags_without_a_selection_prefix() {
 #[test]
 fn subtitle_search_source_reports_no_track_and_searchable_external_tracks() {
     assert_eq!(
-        selected_subtitle_search_source(&[]),
+        selected_subtitle_search_source(&[], Some(Path::new("/media/Episode 1.mkv"))),
         SubtitleSearchSource::NoActiveTrack
     );
 
@@ -755,7 +755,7 @@ fn subtitle_search_source_reports_no_track_and_searchable_external_tracks() {
         audio_channels: None,
     };
     assert_eq!(
-        selected_subtitle_search_source(&[embedded]),
+        selected_subtitle_search_source(&[embedded], Some(Path::new("/media/Episode 1.mkv"))),
         SubtitleSearchSource::NotExternal
     );
 
@@ -772,8 +772,36 @@ fn subtitle_search_source_reports_no_track_and_searchable_external_tracks() {
         audio_channels: None,
     };
     assert_eq!(
-        selected_subtitle_search_source(&[external]),
+        selected_subtitle_search_source(&[external], Some(Path::new("/media/Episode 1.mkv"))),
         SubtitleSearchSource::Available(PathBuf::from("/tmp/Episode 1.srt"))
+    );
+}
+
+#[test]
+fn subtitle_search_source_resolves_relative_external_track_from_media_directory() {
+    let external = Track {
+        id: 4,
+        kind: TrackKind::Subtitle,
+        selected: true,
+        external: true,
+        external_filename: Some("subs/Episode 1.srt".to_owned()),
+        default: false,
+        title: Some("English".to_owned()),
+        lang: None,
+        codec: Some("subrip".to_owned()),
+        audio_channels: None,
+    };
+
+    assert_eq!(
+        selected_subtitle_search_source(
+            std::slice::from_ref(&external),
+            Some(Path::new("/media/Episode 1.mkv"))
+        ),
+        SubtitleSearchSource::Available(PathBuf::from("/media/subs/Episode 1.srt"))
+    );
+    assert_eq!(
+        selected_subtitle_search_source(&[external], None),
+        SubtitleSearchSource::MissingPath
     );
 }
 
