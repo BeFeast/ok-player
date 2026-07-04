@@ -5,9 +5,17 @@ pub(crate) fn update_up_next_panel(
     state: &Rc<RefCell<PlayerState>>,
     chrome: &ChromeVisibility,
 ) {
-    // The visual smoke hook owns the panel while it renders fixture rows.
+    // The visual smoke hook owns the panel while it renders fixture rows, but it
+    // must release the moment real media loads: a session that inherited the
+    // `OKP_OPEN_SIDE_PANEL_ON_STARTUP` env var has to fall back to live data
+    // instead of showing fixtures for the rest of the process.
     if controls.side_panel_preview_frozen.get() {
-        return;
+        let has_real_media = has_loaded_media_state(&state.borrow());
+        if has_real_media {
+            controls.side_panel_preview_frozen.set(false);
+        } else {
+            return;
+        }
     }
 
     let snapshot = {
@@ -708,7 +716,10 @@ pub(crate) fn side_panel_preview_sample() -> SidePanelSnapshot {
 
 /// Freeze the live poll and render the side panel from fixture data so the
 /// Chapters and Up Next surfaces can be screenshot-tested without loaded media.
-/// Presentational smoke hook only; production code never calls this.
+/// The freeze lasts only until real media loads: [`update_up_next_panel`]
+/// releases it and rebuilds live rows, so an inherited env var can never pin
+/// fixtures over a real session. Presentational smoke hook only; production
+/// code never calls this.
 pub(crate) fn open_side_panel_preview(
     controls: &Controls,
     state: &Rc<RefCell<PlayerState>>,

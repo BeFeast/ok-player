@@ -702,6 +702,8 @@ struct Controls {
     // When set, the live poll leaves the side panel alone so the visual smoke
     // hook (`OKP_OPEN_SIDE_PANEL_ON_STARTUP`) can render fixture rows that would
     // otherwise be cleared the moment the poll sees there is no loaded media.
+    // The poll clears it as soon as real media loads, so a session that merely
+    // inherited the env var falls back to live data instead of fixtures.
     side_panel_preview_frozen: Rc<Cell<bool>>,
     thumbnail_sender: mpsc::Sender<String>,
     thumbnail_events: RefCell<mpsc::Receiver<String>>,
