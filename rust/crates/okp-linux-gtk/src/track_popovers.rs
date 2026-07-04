@@ -4,6 +4,7 @@ pub(crate) fn populate_subtitle_popover(
     popover: &gtk::Popover,
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
 ) {
     let content = track_popover_content("Subtitles");
     let tracks = read_tracks(&state)
@@ -80,6 +81,28 @@ pub(crate) fn populate_subtitle_popover(
     }
 
     content.append(&divider());
+    let search_source = selected_subtitle_search_source(&tracks);
+    let search_button = track_button("Search subtitles...", false);
+    search_button.set_sensitive(matches!(search_source, SubtitleSearchSource::Available(_)));
+    search_button.set_tooltip_text(Some(search_source.message()));
+    let search_parent = parent.clone();
+    let search_state = Rc::clone(&state);
+    let search_toast = Rc::clone(&status_toast);
+    let search_popover = popover.clone();
+    search_button.connect_clicked(move |_| {
+        search_popover.popdown();
+        open_subtitle_search_dialog(
+            &search_parent,
+            Rc::clone(&search_state),
+            Rc::clone(&search_toast),
+        );
+    });
+    content.append(&search_button);
+    if !matches!(search_source, SubtitleSearchSource::Available(_)) {
+        content.append(&empty_track_label(search_source.message()));
+    }
+
+    content.append(&divider());
     let add_button = track_button("Add subtitle file...", false);
     let add_state = Rc::clone(&state);
     let add_parent = parent.clone();
@@ -91,7 +114,12 @@ pub(crate) fn populate_subtitle_popover(
     content.append(&add_button);
 
     content.append(&divider());
-    content.append(&subtitle_adjustment_rows(popover, parent, &state));
+    content.append(&subtitle_adjustment_rows(
+        popover,
+        parent,
+        &state,
+        &status_toast,
+    ));
 
     set_track_popover_child(popover, content);
 }
@@ -665,6 +693,7 @@ pub(crate) fn subtitle_adjustment_rows(
     popover: &gtk::Popover,
     parent: &gtk::ApplicationWindow,
     state: &Rc<RefCell<PlayerState>>,
+    status_toast: &Rc<StatusToast>,
 ) -> gtk::Box {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
 
@@ -674,6 +703,7 @@ pub(crate) fn subtitle_adjustment_rows(
         popover,
         parent,
         state,
+        status_toast,
     ));
     content.append(&subtitle_adjustment_row(
         "Size",
@@ -686,6 +716,7 @@ pub(crate) fn subtitle_adjustment_rows(
         popover,
         parent,
         state,
+        status_toast,
     ));
 
     content
@@ -696,6 +727,7 @@ pub(crate) fn subtitle_delay_adjustment_row(
     popover: &gtk::Popover,
     parent: &gtk::ApplicationWindow,
     state: &Rc<RefCell<PlayerState>>,
+    status_toast: &Rc<StatusToast>,
 ) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Vertical, 6);
     row.add_css_class("okp-sub-adjust-row");
@@ -741,9 +773,15 @@ pub(crate) fn subtitle_delay_adjustment_row(
         let button_state = Rc::clone(state);
         let button_popover = popover.clone();
         let button_parent = parent.clone();
+        let button_toast = Rc::clone(status_toast);
         button.connect_clicked(move |_| {
             apply_subtitle_adjustment(&button_state, adjustment);
-            populate_subtitle_popover(&button_popover, &button_parent, Rc::clone(&button_state));
+            populate_subtitle_popover(
+                &button_popover,
+                &button_parent,
+                Rc::clone(&button_state),
+                Rc::clone(&button_toast),
+            );
         });
         quick.append(&button);
     }
@@ -753,33 +791,43 @@ pub(crate) fn subtitle_delay_adjustment_row(
     let apply_popover = popover.clone();
     let apply_parent = parent.clone();
     let apply_entry = entry.clone();
+    let apply_toast = Rc::clone(status_toast);
     apply_button.connect_clicked(move |_| {
         apply_subtitle_delay_entry(
             &apply_entry,
             &apply_popover,
             &apply_parent,
             Rc::clone(&apply_state),
+            Rc::clone(&apply_toast),
         );
     });
 
     let activate_state = Rc::clone(state);
     let activate_popover = popover.clone();
     let activate_parent = parent.clone();
+    let activate_toast = Rc::clone(status_toast);
     entry.connect_activate(move |entry| {
         apply_subtitle_delay_entry(
             entry,
             &activate_popover,
             &activate_parent,
             Rc::clone(&activate_state),
+            Rc::clone(&activate_toast),
         );
     });
 
     let reset_state = Rc::clone(state);
     let reset_popover = popover.clone();
     let reset_parent = parent.clone();
+    let reset_toast = Rc::clone(status_toast);
     reset_button.connect_clicked(move |_| {
         apply_subtitle_adjustment(&reset_state, SubtitleAdjustment::SetDelay(0.0));
-        populate_subtitle_popover(&reset_popover, &reset_parent, Rc::clone(&reset_state));
+        populate_subtitle_popover(
+            &reset_popover,
+            &reset_parent,
+            Rc::clone(&reset_state),
+            Rc::clone(&reset_toast),
+        );
     });
 
     entry.connect_changed(|entry| {
@@ -796,6 +844,7 @@ pub(crate) fn subtitle_adjustment_row(
     popover: &gtk::Popover,
     parent: &gtk::ApplicationWindow,
     state: &Rc<RefCell<PlayerState>>,
+    status_toast: &Rc<StatusToast>,
 ) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     row.add_css_class("okp-sub-adjust-row");
@@ -818,9 +867,15 @@ pub(crate) fn subtitle_adjustment_row(
         let button_state = Rc::clone(state);
         let button_popover = popover.clone();
         let button_parent = parent.clone();
+        let button_toast = Rc::clone(status_toast);
         button.connect_clicked(move |_| {
             apply_subtitle_adjustment(&button_state, adjustment);
-            populate_subtitle_popover(&button_popover, &button_parent, Rc::clone(&button_state));
+            populate_subtitle_popover(
+                &button_popover,
+                &button_parent,
+                Rc::clone(&button_state),
+                Rc::clone(&button_toast),
+            );
         });
         row.append(&button);
     }
@@ -859,6 +914,7 @@ pub(crate) fn apply_subtitle_delay_entry(
     popover: &gtk::Popover,
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
 ) {
     let Some(delay_seconds) = subtitle_delay::parse_entry_seconds(entry.text().as_str()) else {
         entry.add_css_class("is-error");
@@ -867,7 +923,7 @@ pub(crate) fn apply_subtitle_delay_entry(
     };
 
     apply_subtitle_adjustment(&state, SubtitleAdjustment::SetDelay(delay_seconds));
-    populate_subtitle_popover(popover, parent, state);
+    populate_subtitle_popover(popover, parent, state, status_toast);
 }
 
 pub(crate) fn format_scale(scale: f64) -> String {
@@ -881,6 +937,187 @@ pub(crate) fn read_tracks(state: &Rc<RefCell<PlayerState>>) -> Vec<Track> {
         .as_ref()
         .map(Mpv::observed_tracks)
         .unwrap_or_default()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SubtitleSearchSource {
+    Available(PathBuf),
+    NoActiveTrack,
+    NotExternal,
+    UnsupportedFormat,
+    MissingPath,
+}
+
+impl SubtitleSearchSource {
+    fn message(&self) -> &'static str {
+        match self {
+            Self::Available(_) => "Search the selected external SRT/LRC subtitle track",
+            Self::NoActiveTrack => "Select a subtitle track to search",
+            Self::NotExternal => "Search supports external SRT/LRC subtitle files",
+            Self::UnsupportedFormat => "Search supports SRT and LRC subtitle files",
+            Self::MissingPath => "Subtitle file path is unavailable",
+        }
+    }
+}
+
+pub(crate) fn selected_subtitle_search_source(tracks: &[Track]) -> SubtitleSearchSource {
+    let Some(track) = tracks
+        .iter()
+        .find(|track| track.kind == TrackKind::Subtitle && track.selected)
+    else {
+        return SubtitleSearchSource::NoActiveTrack;
+    };
+
+    if !track.external {
+        return SubtitleSearchSource::NotExternal;
+    }
+
+    let Some(path) = track
+        .external_filename
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .map(PathBuf::from)
+    else {
+        return SubtitleSearchSource::MissingPath;
+    };
+
+    if subtitle_search::is_supported_subtitle_path(&path) {
+        SubtitleSearchSource::Available(path)
+    } else {
+        SubtitleSearchSource::UnsupportedFormat
+    }
+}
+
+pub(crate) fn open_subtitle_search_dialog(
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) {
+    let source = selected_subtitle_search_source(&read_tracks(&state));
+    let SubtitleSearchSource::Available(path) = source else {
+        status_toast.show(source.message());
+        return;
+    };
+
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) => {
+            eprintln!("Failed to read subtitle file '{}': {error}", path.display());
+            status_toast.show("Could not read subtitle file");
+            return;
+        }
+    };
+
+    let Some(index) = subtitle_search::SubtitleCueIndex::from_path_text(&path, Some(&text)) else {
+        status_toast.show("Search supports SRT and LRC subtitle files");
+        return;
+    };
+
+    if index.is_empty() {
+        status_toast.show("No searchable subtitle cues");
+        return;
+    }
+
+    let dialog = gtk::Dialog::builder()
+        .title("Search Subtitles")
+        .transient_for(parent)
+        .modal(true)
+        .default_width(460)
+        .build();
+    dialog.add_button("Close", gtk::ResponseType::Close);
+
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    content.set_margin_top(18);
+    content.set_margin_bottom(18);
+    content.set_margin_start(18);
+    content.set_margin_end(18);
+    dialog.content_area().append(&content);
+
+    content.append(&command_dialog_title("Search Subtitles"));
+
+    let entry_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let entry = gtk::Entry::new();
+    entry.set_hexpand(true);
+    entry.set_placeholder_text(Some("Cue text"));
+    entry_row.append(&entry);
+
+    let search_button = gtk::Button::with_label("Search");
+    search_button.add_css_class("okp-sub-adjust-button");
+    entry_row.append(&search_button);
+    content.append(&entry_row);
+
+    let status = gtk::Label::new(Some("Enter subtitle text"));
+    status.add_css_class("okp-info-label");
+    status.set_xalign(0.0);
+    status.set_wrap(true);
+    content.append(&status);
+
+    let results = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    content.append(&results);
+
+    let index = Rc::new(index);
+    let render_results = Rc::new({
+        let results = results.clone();
+        let status = status.clone();
+        let state = Rc::clone(&state);
+        let status_toast = Rc::clone(&status_toast);
+        move |query: &str| {
+            clear_box(&results);
+            let matches = index.search(query, 8);
+            if query.trim().is_empty() {
+                status.set_text("Enter subtitle text");
+                return;
+            }
+            if matches.is_empty() {
+                status.set_text("No matching cues");
+                return;
+            }
+
+            status.set_text(&format!(
+                "{} matching cue{}",
+                matches.len(),
+                plural_s(matches.len())
+            ));
+            for cue in matches {
+                let label = format!("{}  {}", time_code::format(cue.start_seconds), cue.text);
+                let button = track_button(&label, false);
+                let seek_state = Rc::clone(&state);
+                let seek_toast = Rc::clone(&status_toast);
+                button.connect_clicked(move |_| {
+                    if seek_to_time(&seek_state, cue.start_seconds) {
+                        seek_toast.show(&format!(
+                            "Jumped to {}",
+                            time_code::format(cue.start_seconds)
+                        ));
+                    } else {
+                        seek_toast.show("Could not seek");
+                    }
+                });
+                results.append(&button);
+            }
+        }
+    });
+
+    let button_entry = entry.clone();
+    let button_render = Rc::clone(&render_results);
+    search_button.connect_clicked(move |_| {
+        button_render(button_entry.text().as_str());
+    });
+
+    let activate_render = Rc::clone(&render_results);
+    entry.connect_activate(move |entry| {
+        activate_render(entry.text().as_str());
+    });
+
+    dialog.connect_response(|dialog, _| dialog.close());
+    dialog.present();
+    entry.grab_focus();
+}
+
+fn clear_box(container: &gtk::Box) {
+    while let Some(child) = container.first_child() {
+        container.remove(&child);
+    }
 }
 
 pub(crate) fn read_audio_devices(state: &Rc<RefCell<PlayerState>>) -> Vec<AudioDevice> {

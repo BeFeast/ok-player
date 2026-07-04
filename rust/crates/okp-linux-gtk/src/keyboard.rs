@@ -159,6 +159,14 @@ pub(crate) fn connect_keyboard(
                 adjust_subtitle_scale(&state, 0.1);
                 glib::Propagation::Stop
             }
+            Some(ShortcutAction::SubtitlePreviousCue) => {
+                with_mpv(&state, |mpv| mpv.seek_previous_subtitle_cue());
+                glib::Propagation::Stop
+            }
+            Some(ShortcutAction::SubtitleNextCue) => {
+                with_mpv(&state, |mpv| mpv.seek_next_subtitle_cue());
+                glib::Propagation::Stop
+            }
             Some(ShortcutAction::Fullscreen) => {
                 toggle_fullscreen(&shortcut_window);
                 glib::Propagation::Stop

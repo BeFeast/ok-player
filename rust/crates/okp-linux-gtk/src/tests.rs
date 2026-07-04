@@ -711,6 +711,7 @@ fn track_label_shows_tags_without_a_selection_prefix() {
         kind: TrackKind::Subtitle,
         selected: true,
         external: true,
+        external_filename: Some("/tmp/example.srt".to_owned()),
         default: false,
         title: Some("English (SDH)".to_owned()),
         lang: None,
@@ -724,6 +725,7 @@ fn track_label_shows_tags_without_a_selection_prefix() {
         kind: TrackKind::Audio,
         selected: true,
         external: false,
+        external_filename: None,
         default: true,
         title: Some("English".to_owned()),
         lang: None,
@@ -731,6 +733,48 @@ fn track_label_shows_tags_without_a_selection_prefix() {
         audio_channels: Some("5.1".to_owned()),
     };
     assert_eq!(track_label(&audio), "English · 5.1 · EAC3");
+}
+
+#[test]
+fn subtitle_search_source_reports_no_track_and_searchable_external_tracks() {
+    assert_eq!(
+        selected_subtitle_search_source(&[]),
+        SubtitleSearchSource::NoActiveTrack
+    );
+
+    let embedded = Track {
+        id: 3,
+        kind: TrackKind::Subtitle,
+        selected: true,
+        external: false,
+        external_filename: None,
+        default: false,
+        title: Some("English".to_owned()),
+        lang: None,
+        codec: Some("subrip".to_owned()),
+        audio_channels: None,
+    };
+    assert_eq!(
+        selected_subtitle_search_source(&[embedded]),
+        SubtitleSearchSource::NotExternal
+    );
+
+    let external = Track {
+        id: 4,
+        kind: TrackKind::Subtitle,
+        selected: true,
+        external: true,
+        external_filename: Some("/tmp/Episode 1.srt".to_owned()),
+        default: false,
+        title: Some("English".to_owned()),
+        lang: None,
+        codec: Some("subrip".to_owned()),
+        audio_channels: None,
+    };
+    assert_eq!(
+        selected_subtitle_search_source(&[external]),
+        SubtitleSearchSource::Available(PathBuf::from("/tmp/Episode 1.srt"))
+    );
 }
 
 #[test]

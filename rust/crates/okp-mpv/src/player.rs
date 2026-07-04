@@ -65,6 +65,7 @@ pub struct Track {
     pub kind: TrackKind,
     pub selected: bool,
     pub external: bool,
+    pub external_filename: Option<String>,
     pub default: bool,
     pub title: Option<String>,
     pub lang: Option<String>,
@@ -274,6 +275,7 @@ impl RawReader {
                 external: self
                     .get_flag(&format!("{prefix}/external"))?
                     .unwrap_or(false),
+                external_filename: self.get_string(&format!("{prefix}/external-filename"))?,
                 default: self
                     .get_flag(&format!("{prefix}/default"))?
                     .unwrap_or(false),
@@ -1027,6 +1029,14 @@ impl Mpv {
 
     pub fn frame_back_step(&self) -> Result<(), MpvError> {
         self.command_async(&["frame-back-step"])
+    }
+
+    pub fn seek_previous_subtitle_cue(&self) -> Result<(), MpvError> {
+        self.command_async(&["sub-seek", "-1"])
+    }
+
+    pub fn seek_next_subtitle_cue(&self) -> Result<(), MpvError> {
+        self.command_async(&["sub-seek", "1"])
     }
 
     pub fn toggle_ab_loop(&self) -> Result<(), MpvError> {

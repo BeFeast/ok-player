@@ -235,8 +235,14 @@ pub(crate) fn build_controls(
     subtitle_button.set_popover(Some(&subtitle_popover));
     let subtitle_parent = window.clone();
     let subtitle_state = Rc::clone(&state);
+    let subtitle_toast = Rc::clone(&status_toast);
     subtitle_popover.connect_show(move |popover| {
-        populate_subtitle_popover(popover, &subtitle_parent, Rc::clone(&subtitle_state));
+        populate_subtitle_popover(
+            popover,
+            &subtitle_parent,
+            Rc::clone(&subtitle_state),
+            Rc::clone(&subtitle_toast),
+        );
     });
 
     let audio_popover = gtk::Popover::new();
