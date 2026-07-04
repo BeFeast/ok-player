@@ -73,6 +73,7 @@ pub enum ScribeSubtitleBeginError {
     Unconfigured,
     UnsupportedBackend,
     NoLocalMedia,
+    AlreadyActive,
 }
 
 impl ScribeSubtitleBeginError {
@@ -81,6 +82,7 @@ impl ScribeSubtitleBeginError {
             Self::Unconfigured => "Scribe subtitles are coming soon",
             Self::UnsupportedBackend => "Configured Scribe backend is not supported yet",
             Self::NoLocalMedia => "Generate subtitles needs a local media file",
+            Self::AlreadyActive => "Subtitle generation is already running",
         }
     }
 }
@@ -116,6 +118,10 @@ impl ScribeSubtitleState {
                 return Err(ScribeSubtitleBeginError::UnsupportedBackend);
             }
             ScribeSubtitleBackend::Supported { .. } => {}
+        }
+
+        if self.current_request().is_some() {
+            return Err(ScribeSubtitleBeginError::AlreadyActive);
         }
 
         let Some(request) = request else {
@@ -256,6 +262,41 @@ mod tests {
                 progress_percent: Some(100),
             }) if progress_request == &request
         ));
+    }
+
+    #[test]
+    fn begin_keeps_active_request_until_terminal_state() {
+        let mut state = supported_state();
+        let first_request = request();
+        let second_request =
+            ScribeSubtitleRequest::for_media_path("/media/Other.mkv").expect("local media request");
+
+        state
+            .begin(Some(first_request.clone()))
+            .expect("queue first job");
+        assert_eq!(
+            state.begin(Some(second_request.clone())),
+            Err(ScribeSubtitleBeginError::AlreadyActive)
+        );
+        assert_eq!(
+            state.job(),
+            Some(&ScribeSubtitleJob::Queued {
+                request: first_request.clone()
+            })
+        );
+
+        state.mark_in_progress(None);
+        assert_eq!(
+            state.begin(Some(second_request)),
+            Err(ScribeSubtitleBeginError::AlreadyActive)
+        );
+        assert_eq!(
+            state.job(),
+            Some(&ScribeSubtitleJob::InProgress {
+                request: first_request,
+                progress_percent: None
+            })
+        );
     }
 
     #[test]

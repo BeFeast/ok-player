@@ -92,6 +92,8 @@ fn scribe_generate_subtitles_can_queue_for_future_supported_backend() {
         scribe_subtitle_action_label(&state.borrow().scribe_subtitles),
         "Generating subtitles... queued"
     );
+    assert!(!scribe_subtitle_action_enabled(&state.borrow()));
+    assert!(!begin_scribe_subtitle_generation(&state));
     assert!(scribe_subtitle_generation_active(
         &state.borrow().scribe_subtitles
     ));

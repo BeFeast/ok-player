@@ -75,8 +75,9 @@ pub(crate) fn settings_subtitles_page(
     generate_button.set_tooltip_text(generate_tooltip.as_deref());
     let generate_state = Rc::clone(&state);
     let generate_toast = Rc::clone(&status_toast);
-    generate_button.connect_clicked(move |_| {
+    generate_button.connect_clicked(move |button| {
         if begin_scribe_subtitle_generation(&generate_state) {
+            refresh_settings_scribe_subtitle_button(&generate_state, button);
             generate_toast.show("Subtitle generation queued");
         } else if let Some(message) = scribe_subtitle_unavailable_message(&generate_state.borrow())
         {
@@ -101,6 +102,13 @@ pub(crate) fn settings_subtitles_page(
     ));
 
     page
+}
+
+fn refresh_settings_scribe_subtitle_button(state: &Rc<RefCell<PlayerState>>, button: &gtk::Button) {
+    let state_ref = state.borrow();
+    button.set_label(scribe_subtitle_action_label(&state_ref.scribe_subtitles));
+    button.set_sensitive(scribe_subtitle_action_enabled(&state_ref));
+    button.set_tooltip_text(scribe_subtitle_unavailable_message(&state_ref));
 }
 
 pub(crate) fn settings_audio_page(
