@@ -932,6 +932,11 @@ const OKP_STYLESHEET: &str = "
             box-shadow: none;
         }
 
+        window.okp-command-dialog entry.is-error {
+            border-color: alpha(@okp_danger_bright, 0.88);
+            box-shadow: 0 0 0 2px alpha(@okp_danger_bright, 0.18);
+        }
+
         window.okp-command-dialog button {
             min-width: 72px;
             min-height: 34px;
@@ -2004,6 +2009,17 @@ mod tests {
                 "smoke-locked surface token changed: expected `{token}`"
             );
         }
+    }
+
+    #[test]
+    fn command_dialog_entries_have_a_visible_error_cue() {
+        // The Open URL field is a plain command-dialog entry, so its `is-error`
+        // state needs a selector that matches without `okp-sub-adjust-entry`;
+        // otherwise a rejected URL leaves no field-level cue once the toast hides.
+        assert!(
+            OKP_STYLESHEET.contains("window.okp-command-dialog entry.is-error {"),
+            "command-dialog entries lost their `is-error` styling"
+        );
     }
 
     #[test]
