@@ -212,6 +212,138 @@ const OKP_STYLESHEET: &str = "
             font-size: 11.5px;
         }
 
+        .okp-recents-section {
+            margin-top: 22px;
+        }
+
+        .okp-recents-header {
+            color: rgba(255, 255, 255, 0.86);
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 0.4px;
+        }
+
+        .okp-recents-row {
+            padding: 0;
+        }
+
+        .okp-recents-card {
+            padding: 0;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(255, 255, 255, 0.03);
+            box-shadow: none;
+            outline: none;
+        }
+
+        .okp-recents-card:hover {
+            border-color: alpha(@okp_accent, 0.55);
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        .okp-recents-card:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.55);
+        }
+
+        .okp-recents-card > box {
+            padding: 8px 8px 10px 8px;
+        }
+
+        .okp-recents-thumb {
+            border-radius: 8px;
+            margin-bottom: 8px;
+        }
+
+        .okp-recents-thumb-0 {
+            background: linear-gradient(135deg, alpha(@okp_accent, 0.34), rgba(13, 30, 32, 0.9));
+        }
+
+        .okp-recents-thumb-1 {
+            background: linear-gradient(135deg, alpha(@okp_accent_bright, 0.3), rgba(16, 32, 36, 0.9));
+        }
+
+        .okp-recents-thumb-2 {
+            background: linear-gradient(135deg, alpha(@okp_accent_deep, 0.34), rgba(18, 30, 34, 0.9));
+        }
+
+        .okp-recents-thumb-3 {
+            background: linear-gradient(135deg, alpha(@okp_teal, 0.34), rgba(12, 28, 32, 0.9));
+        }
+
+        .okp-recents-thumb-4 {
+            background: linear-gradient(135deg, alpha(@okp_teal_deep, 0.4), rgba(12, 26, 30, 0.9));
+        }
+
+        .okp-recents-thumb-glyph {
+            color: rgba(255, 255, 255, 0.62);
+        }
+
+        .okp-recents-badge {
+            margin: 6px;
+            padding: 2px 7px;
+            border-radius: 7px;
+            background: rgba(5, 5, 7, 0.72);
+            color: rgba(255, 255, 255, 0.9);
+            font-size: 10.5px;
+            font-weight: 600;
+        }
+
+        .okp-recents-progress {
+            margin: 0;
+            padding: 0;
+            min-height: 4px;
+        }
+
+        .okp-recents-progress trough {
+            min-height: 4px;
+            border-radius: 0 0 8px 8px;
+            border: none;
+            background: rgba(5, 5, 7, 0.66);
+        }
+
+        .okp-recents-progress progress {
+            min-height: 4px;
+            border-radius: 0;
+            background: @okp_accent_bright;
+        }
+
+        .okp-recents-title {
+            margin-top: 2px;
+            color: rgba(255, 255, 255, 0.94);
+            font-size: 12.5px;
+            font-weight: 650;
+        }
+
+        .okp-recents-meta {
+            margin-top: 2px;
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 11px;
+        }
+
+        .okp-recents-when {
+            margin-top: 1px;
+            color: rgba(255, 255, 255, 0.34);
+            font-size: 10.5px;
+        }
+
+        .okp-recents-private {
+            margin-top: 20px;
+            padding: 10px 16px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(255, 255, 255, 0.04);
+        }
+
+        .okp-recents-private-icon {
+            color: alpha(@okp_accent_bright, 0.85);
+        }
+
+        .okp-recents-private-text {
+            color: rgba(255, 255, 255, 0.62);
+            font-size: 12px;
+        }
+
         .okp-controls {
             padding: 8px 10px;
             border-radius: 18px;

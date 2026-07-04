@@ -21,8 +21,8 @@ use okp_core::shortcuts::{
 };
 use okp_core::update_selection::{self, DebFeed, DebUpdate, SHA256SUMS_ASSET};
 use okp_core::{
-    AppIdentity, chapter_math, m3u, media_formats, natural_compare, sha256sums, subtitle_delay,
-    time_code,
+    AppIdentity, chapter_math, history_format, m3u, media_formats, natural_compare, recents_shelf,
+    sha256sums, subtitle_delay, time_code,
 };
 use okp_mpv::{
     AbLoopState, AudioDevice, Chapter, InfoRow, InfoSection, InfoTrack, MediaInfo, Mpv, MpvEvent,
@@ -798,10 +798,43 @@ enum LinuxUpdateApplyResult {
     InstallerOpened(PathBuf),
 }
 
+/// Widgets of the welcome surface's recents-forward "Continue watching" shelf. The `section`
+/// (heading + cards) and the `private_note` are mutually-exclusive slots inserted into the welcome
+/// panel: exactly one shows when there is something to say, both hide on a clean first run so the
+/// centred identity hero stands alone.
+#[derive(Clone)]
+struct WelcomeRecents {
+    section: gtk::Box,
+    header: gtk::Label,
+    cards: gtk::FlowBox,
+    private_note: gtk::Box,
+}
+
+/// How many "Continue watching" cards the welcome shelf draws — the newest resumable files. A
+/// small, fixed row (the design's single-shelf elegance); a fuller searchable History view is a
+/// later slice that reuses the same `HistoryStore::continue_watching` seam.
+const WELCOME_RECENTS_MAX_CARDS: usize = 3;
+
+/// Top inset (px) for the recents-forward welcome layout. The taller shelf layout anchors to the
+/// top and grows downward (deterministic clearance from the overlaid control bar) instead of
+/// centring; a clean first run stays centred and pixel-identical to before the shelf existed.
+const WELCOME_RECENTS_TOP_INSET: i32 = 46;
+
 #[derive(Clone)]
 struct EmptySurface {
     revealer: gtk::Revealer,
     panel: gtk::Box,
+    /// The first-run tagline, secondary Open folder/URL row, and drop hint — hidden when the
+    /// recents shelf (or private note) takes over, leaving the primary "Open media" CTA so the
+    /// taller recents-forward layout stays clear of the overlaid control bar.
+    tagline: gtk::Label,
+    secondary_row: gtk::Box,
+    hint: gtk::Label,
+    recents: WelcomeRecents,
+    state: Rc<RefCell<PlayerState>>,
+    /// The signature of the last-rendered shelf, so the 200ms idle poll only rebuilds the cards
+    /// when the resumable set (or the private flag) actually changed — not on every tick.
+    signature: Rc<RefCell<Option<String>>>,
 }
 
 impl EmptySurface {
@@ -812,6 +845,84 @@ impl EmptySurface {
     fn set_has_media(&self, has_media: bool) {
         self.revealer.set_reveal_child(!has_media);
         self.revealer.set_can_target(!has_media);
+        // Refresh the shelf whenever the welcome surface is showing (idle, no media). Cheap: the
+        // signature guard below rebuilds widgets only when the resumable set changed.
+        if !has_media {
+            self.refresh_recents();
+        }
+    }
+
+    /// Recompute the recents shelf from current history + the private flag, rebuilding its widgets
+    /// only when the result differs from what is on screen.
+    fn refresh_recents(&self) {
+        let (private, cards) = {
+            let state = self.state.borrow();
+            welcome_recents_preview().unwrap_or_else(|| {
+                let private = state.private_session;
+                let cards = state
+                    .history
+                    .continue_watching(private, WELCOME_RECENTS_MAX_CARDS);
+                (private, cards)
+            })
+        };
+
+        let signature = welcome_recents_signature(private, &cards);
+        if self.signature.borrow().as_deref() == Some(signature.as_str()) {
+            return;
+        }
+        *self.signature.borrow_mut() = Some(signature);
+        self.render_recents(private, &cards);
+    }
+
+    /// Lay out the current shelf state: the private note during a private session, the card row
+    /// when there are resumable files, or nothing (leaving the identity hero) on a clean start.
+    fn render_recents(&self, private: bool, cards: &[recents_shelf::ContinueWatchingCard]) {
+        clear_flow_box(&self.recents.cards);
+
+        if private {
+            self.recents.section.set_visible(false);
+            self.recents.private_note.set_visible(true);
+            // Compact (no tagline/hint) but short enough to stay centred.
+            self.set_welcome_layout(true, false);
+            return;
+        }
+        self.recents.private_note.set_visible(false);
+
+        if cards.is_empty() {
+            self.recents.section.set_visible(false);
+            self.set_welcome_layout(false, false);
+            return;
+        }
+
+        self.recents
+            .header
+            .set_text(recents_shelf::shelf_header(cards));
+        for card in cards {
+            self.recents
+                .cards
+                .append(&build_recent_card(&self.state, card));
+        }
+        self.recents.section.set_visible(true);
+        self.set_welcome_layout(true, true);
+    }
+
+    /// Shape the welcome panel for its current content. `compact` drops the first-run tagline,
+    /// secondary Open row, and drop hint (the recents-forward and private layouts), leaving the
+    /// primary "Open media" CTA. `top_anchored` anchors the panel to the top and lets it grow
+    /// downward — only the tall recents shelf needs it, so it clears the overlaid control bar
+    /// instead of centring under it; the short first-run and private layouts stay centred. First
+    /// run (`compact=false, top_anchored=false`) is pixel-identical to the pre-shelf welcome.
+    fn set_welcome_layout(&self, compact: bool, top_anchored: bool) {
+        self.tagline.set_visible(!compact);
+        self.secondary_row.set_visible(!compact);
+        self.hint.set_visible(!compact);
+        if top_anchored {
+            self.panel.set_valign(gtk::Align::Start);
+            self.panel.set_margin_top(WELCOME_RECENTS_TOP_INSET);
+        } else {
+            self.panel.set_valign(gtk::Align::Center);
+            self.panel.set_margin_top(0);
+        }
     }
 
     fn set_drop_active(&self, active: bool) {

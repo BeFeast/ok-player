@@ -573,6 +573,10 @@ pub(crate) fn build_empty_surface(
     tagline.set_max_width_chars(34);
     panel.append(&tagline);
 
+    let recents = build_welcome_recents();
+    panel.append(&recents.section);
+    panel.append(&recents.private_note);
+
     let actions = gtk::Box::new(gtk::Orientation::Vertical, 8);
     actions.add_css_class("okp-empty-actions");
 
@@ -631,7 +635,270 @@ pub(crate) fn build_empty_surface(
     revealer.set_reveal_child(true);
     revealer.set_child(Some(&panel));
 
-    EmptySurface { revealer, panel }
+    let surface = EmptySurface {
+        revealer,
+        panel,
+        tagline,
+        secondary_row,
+        hint,
+        recents,
+        state,
+        signature: Rc::new(RefCell::new(None)),
+    };
+    // Populate the shelf from existing history so a returning user sees "Continue watching"
+    // immediately, before the first idle poll tick.
+    surface.refresh_recents();
+    surface
+}
+
+/// Build the (initially hidden) welcome recents widgets: the "Continue watching" section — a
+/// heading over a reflowing card row — and the private-session note that stands in for it while a
+/// private session is active. Both start collapsed; [`EmptySurface::refresh_recents`] reveals the
+/// right one.
+pub(crate) fn build_welcome_recents() -> WelcomeRecents {
+    let section = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    section.add_css_class("okp-recents-section");
+    section.set_halign(gtk::Align::Center);
+    section.set_visible(false);
+
+    let header = gtk::Label::new(Some("Continue watching"));
+    header.add_css_class("okp-recents-header");
+    header.set_halign(gtk::Align::Start);
+    section.append(&header);
+
+    let cards = gtk::FlowBox::new();
+    cards.add_css_class("okp-recents-row");
+    cards.set_selection_mode(gtk::SelectionMode::None);
+    cards.set_homogeneous(true);
+    cards.set_max_children_per_line(WELCOME_RECENTS_MAX_CARDS as u32);
+    cards.set_min_children_per_line(1);
+    cards.set_row_spacing(14);
+    cards.set_column_spacing(14);
+    // The card row must never own the horizontal scroll; when the window is too narrow for the
+    // full row the FlowBox reflows the cards onto a second line rather than overlapping them.
+    cards.set_halign(gtk::Align::Center);
+    section.append(&cards);
+
+    let private_note = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    private_note.add_css_class("okp-recents-private");
+    private_note.set_halign(gtk::Align::Center);
+    private_note.set_visible(false);
+    let private_icon = gtk::Image::from_icon_name("view-conceal-symbolic");
+    private_icon.add_css_class("okp-recents-private-icon");
+    private_note.append(&private_icon);
+    let private_text = gtk::Label::new(Some("Private session — recent activity is hidden."));
+    private_text.add_css_class("okp-recents-private-text");
+    private_text.set_wrap(true);
+    private_text.set_max_width_chars(36);
+    private_note.append(&private_text);
+
+    WelcomeRecents {
+        section,
+        header,
+        cards,
+        private_note,
+    }
+}
+
+/// Build one "Continue watching" card: a clickable poster tile (placeholder gradient + progress
+/// fill + a "time left" badge) over the title, folder breadcrumb, and last-opened context. Clicking
+/// resumes the file. Purely presentational — every string and fraction comes from the core
+/// [`recents_shelf::ContinueWatchingCard`].
+pub(crate) fn build_recent_card(
+    state: &Rc<RefCell<PlayerState>>,
+    card: &recents_shelf::ContinueWatchingCard,
+) -> gtk::Widget {
+    let button = gtk::Button::new();
+    button.add_css_class("okp-recents-card");
+    button.set_tooltip_text(Some(&card.path));
+
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+
+    let thumb = gtk::Overlay::new();
+    thumb.add_css_class("okp-recents-thumb");
+    thumb.add_css_class(&format!("okp-recents-thumb-{}", card.palette_index % 5));
+    thumb.set_size_request(194, 96);
+
+    let glyph = gtk::Image::from_icon_name(if card.is_audio {
+        "audio-x-generic-symbolic"
+    } else {
+        "media-playback-start-symbolic"
+    });
+    glyph.add_css_class("okp-recents-thumb-glyph");
+    glyph.set_halign(gtk::Align::Center);
+    glyph.set_valign(gtk::Align::Center);
+    glyph.set_pixel_size(26);
+    thumb.set_child(Some(&glyph));
+
+    let badge = gtk::Label::new(Some(&card.time_left_label));
+    badge.add_css_class("okp-recents-badge");
+    badge.set_halign(gtk::Align::End);
+    badge.set_valign(gtk::Align::Start);
+    thumb.add_overlay(&badge);
+
+    let progress = gtk::ProgressBar::new();
+    progress.add_css_class("okp-recents-progress");
+    progress.set_fraction(card.progress.clamp(0.0, 1.0));
+    progress.set_halign(gtk::Align::Fill);
+    progress.set_valign(gtk::Align::End);
+    thumb.add_overlay(&progress);
+    content.append(&thumb);
+
+    let title = gtk::Label::new(Some(&card.title));
+    title.add_css_class("okp-recents-title");
+    title.set_halign(gtk::Align::Start);
+    title.set_xalign(0.0);
+    title.set_ellipsize(pango::EllipsizeMode::End);
+    title.set_max_width_chars(20);
+    content.append(&title);
+
+    let breadcrumb = history_format::folder_label(&card.path);
+    let meta_text = if breadcrumb.is_empty() {
+        card.runtime_label.clone()
+    } else {
+        format!("{breadcrumb} · {}", card.runtime_label)
+    };
+    let meta = gtk::Label::new(Some(&meta_text));
+    meta.add_css_class("okp-recents-meta");
+    meta.set_halign(gtk::Align::Start);
+    meta.set_xalign(0.0);
+    meta.set_ellipsize(pango::EllipsizeMode::End);
+    meta.set_max_width_chars(20);
+    content.append(&meta);
+
+    let when_text = when_label_for(card.updated_at_unix);
+    if !when_text.is_empty() {
+        let when = gtk::Label::new(Some(&when_text));
+        when.add_css_class("okp-recents-when");
+        when.set_halign(gtk::Align::Start);
+        when.set_xalign(0.0);
+        content.append(&when);
+    }
+
+    button.set_child(Some(&content));
+
+    let click_state = Rc::clone(state);
+    let path = card.path.clone();
+    button.connect_clicked(move |_| open_recent_media(&click_state, &path));
+
+    button.upcast()
+}
+
+/// Open a recents card's target: a stream URL through the URL loader, a local path through the file
+/// loader. Both route through the same resume/progress path the open dialogs use.
+pub(crate) fn open_recent_media(state: &Rc<RefCell<PlayerState>>, path: &str) {
+    if media_formats::is_playable_url(Some(path)) {
+        load_media_url(state, path.to_owned());
+    } else {
+        load_media_path(state, PathBuf::from(path));
+    }
+}
+
+/// The local "when" label for a last-opened Unix timestamp (e.g. "Today 21:14", "Tue 20:03",
+/// "12 Jun"), formatted by the shared [`history_format`] rule. Empty when the clock is unavailable.
+pub(crate) fn when_label_for(updated_at_unix: i64) -> String {
+    let Ok(when) = glib::DateTime::from_unix_local(updated_at_unix) else {
+        return String::new();
+    };
+    let Ok(now) = glib::DateTime::now_local() else {
+        return String::new();
+    };
+    history_format::when_label(local_date_time(&when), local_date_time(&now))
+}
+
+fn local_date_time(value: &glib::DateTime) -> history_format::LocalDateTime {
+    history_format::LocalDateTime::new(
+        value.year(),
+        value.month() as u32,
+        value.day_of_month() as u32,
+        value.hour() as u32,
+        value.minute() as u32,
+    )
+}
+
+/// A stable fingerprint of the shelf's inputs, so the idle poll only rebuilds the cards when the
+/// resumable set (or the private flag) changed — not on every 200ms tick.
+pub(crate) fn welcome_recents_signature(
+    private: bool,
+    cards: &[recents_shelf::ContinueWatchingCard],
+) -> String {
+    if private {
+        return "private".to_owned();
+    }
+    if cards.is_empty() {
+        return "empty".to_owned();
+    }
+    let mut signature = String::new();
+    for card in cards {
+        signature.push_str(&card.path);
+        signature.push('|');
+        signature.push_str(&format!("{:.4}", card.progress));
+        signature.push('|');
+        signature.push_str(&card.updated_at_unix.to_string());
+        signature.push(';');
+    }
+    signature
+}
+
+/// Remove every child from a FlowBox (its children are the auto-inserted `FlowBoxChild` wrappers).
+pub(crate) fn clear_flow_box(flow_box: &gtk::FlowBox) {
+    while let Some(child) = flow_box.first_child() {
+        flow_box.remove(&child);
+    }
+}
+
+/// The screenshot/smoke override for the welcome shelf, mirroring the other preview-on-startup
+/// hooks: `OKP_WELCOME_RECENTS_PREVIEW=private` renders the private-session note; any other value
+/// renders a fixed fixture card set. `None` (unset) means read real history. Returns the
+/// `(private, cards)` pair the shell would otherwise compute, so the surface renders
+/// deterministically without seeded history.
+pub(crate) fn welcome_recents_preview() -> Option<(bool, Vec<recents_shelf::ContinueWatchingCard>)>
+{
+    let value = env::var_os("OKP_WELCOME_RECENTS_PREVIEW")?;
+    if value
+        .to_str()
+        .is_some_and(|value| value.eq_ignore_ascii_case("private"))
+    {
+        Some((true, Vec::new()))
+    } else {
+        Some((false, welcome_recents_preview_sample()))
+    }
+}
+
+/// A representative "Continue watching" card set for the screenshot/smoke preview, run through the
+/// real core selection so the preview exercises the shipping projection.
+pub(crate) fn welcome_recents_preview_sample() -> Vec<recents_shelf::ContinueWatchingCard> {
+    use okp_core::history::FileEntry;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(0);
+    let entry = |position: f64, duration: f64, opened_ago: i64| FileEntry {
+        position,
+        duration,
+        updated_at_unix: now - opened_ago,
+        ..FileEntry::default()
+    };
+    let entries = [
+        (
+            "/home/media/Movies/Dune Part Two/Dune.Part.Two.2160p.mkv".to_owned(),
+            entry(4200.0, 9660.0, 90 * 60),
+        ),
+        (
+            "/home/media/Series/Severance/Season 02/S02E05.mkv".to_owned(),
+            entry(1180.0, 3300.0, 26 * 60 * 60),
+        ),
+        (
+            "/home/media/Talks/Design/interview-raw-take3.mov".to_owned(),
+            entry(300.0, 2400.0, 3 * 24 * 60 * 60),
+        ),
+    ];
+    recents_shelf::select_continue_watching(
+        entries.iter().map(|(path, record)| (path.as_str(), record)),
+        false,
+        WELCOME_RECENTS_MAX_CARDS,
+    )
 }
 
 /// The welcome surface anchors the OK Player identity with the app icon tile.

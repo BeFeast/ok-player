@@ -45,6 +45,42 @@ fn empty_surface_logo_resolves_to_the_bundled_app_icon() {
 }
 
 #[test]
+fn welcome_recents_preview_sample_projects_the_continue_watching_shelf() {
+    // The screenshot/smoke fixture must run through the real core selection so the preview
+    // exercises the shipping projection, not a hand-built stand-in.
+    let cards = welcome_recents_preview_sample();
+    assert_eq!(cards.len(), WELCOME_RECENTS_MAX_CARDS);
+    assert_eq!(cards[0].title, "Dune.Part.Two.2160p");
+    assert_eq!(cards[0].time_left_label, "1h 31m left");
+    assert_eq!(cards[0].palette_index, 0);
+    // A mix of video and audio still reads as "Continue watching".
+    assert_eq!(recents_shelf::shelf_header(&cards), "Continue watching");
+}
+
+#[test]
+fn welcome_recents_signature_separates_private_empty_and_populated_states() {
+    let cards = welcome_recents_preview_sample();
+    assert_eq!(welcome_recents_signature(true, &cards), "private");
+    assert_eq!(welcome_recents_signature(false, &[]), "empty");
+    let populated = welcome_recents_signature(false, &cards);
+    assert!(populated.contains(&cards[0].path));
+    assert_ne!(populated, "empty");
+    assert_ne!(populated, "private");
+}
+
+#[test]
+fn when_label_for_a_current_timestamp_reads_today() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .expect("system clock after the epoch");
+    assert!(
+        when_label_for(now).starts_with("Today"),
+        "a just-now timestamp should bucket into Today"
+    );
+}
+
+#[test]
 fn settings_shell_matches_windows_reference_geometry() {
     assert_eq!(SETTINGS_REFERENCE_WIDTH, 744);
     assert_eq!(SETTINGS_REFERENCE_HEIGHT, 1030);

@@ -6,6 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use okp_core::history::Preferences as PlaybackPreferences;
 use okp_core::history::{FileEntry as HistoryRecord, History as HistoryFile};
+pub use okp_core::recents_shelf::completion_start;
+use okp_core::recents_shelf::{self, ContinueWatchingCard};
 
 #[derive(Debug)]
 pub struct HistoryStore {
@@ -76,17 +78,38 @@ impl HistoryStore {
 
     pub fn resume_position(&self, path: &Path) -> Option<f64> {
         let record = self.data.files.get(&history_key(path))?;
-        if record.finished
-            || !record.duration.is_finite()
-            || record.duration <= 0.0
-            || !record.position.is_finite()
-            || record.position <= record.duration * 0.05
-            || record.position >= completion_start(record.duration)
-        {
+        if record.finished || !recents_shelf::is_resumable(record.position, record.duration) {
             return None;
         }
 
         Some(record.position)
+    }
+
+    /// The recents-forward "Continue watching" cards for the welcome shelf: every still-present
+    /// resumable file, newest-opened first, projected by [`recents_shelf`]. `private` is threaded
+    /// through so a private session yields an empty shelf (recents never leak); `max_cards` bounds
+    /// the pool the shell draws from. Genuinely local-and-missing files are dropped so the shelf
+    /// never shows a dead path, but URLs and network paths are kept (a flaky share shouldn't hide
+    /// them) — the listability rule the Windows `HistoryService` applies, done here as shell IO.
+    pub fn continue_watching(&self, private: bool, max_cards: usize) -> Vec<ContinueWatchingCard> {
+        if private || max_cards == 0 {
+            return Vec::new();
+        }
+        // Filter the cheap in-memory resumable predicate first so the filesystem `is_listable`
+        // probe only touches the handful of genuinely resumable files, not the whole history —
+        // this runs on the idle welcome-surface poll. `select_continue_watching` re-applies the
+        // same resumable rule (its contract), so the pre-filter is an optimisation, not a divergence.
+        let listable: Vec<(&str, &HistoryRecord)> = self
+            .data
+            .files
+            .iter()
+            .filter(|(_, record)| {
+                !record.finished && recents_shelf::is_resumable(record.position, record.duration)
+            })
+            .filter(|(path, _)| is_listable(path))
+            .map(|(path, record)| (path.as_str(), record))
+            .collect();
+        recents_shelf::select_continue_watching(listable, private, max_cards)
     }
 
     pub fn record_preferences(&mut self, path: &Path, preferences: PlaybackPreferences) {
@@ -148,8 +171,11 @@ fn new_history_record() -> HistoryRecord {
     }
 }
 
-pub fn completion_start(duration: f64) -> f64 {
-    (duration * 0.95).max(duration - 30.0)
+/// Whether a tracked path should still surface in the recents shelf. A URL or stream is always
+/// kept; a local path is kept only while the file exists, so a deleted file stops appearing —
+/// mirrors `HistoryService.IsListable` on the Windows side.
+fn is_listable(path: &str) -> bool {
+    path.contains("://") || Path::new(path).exists()
 }
 
 fn history_path() -> PathBuf {
@@ -294,6 +320,31 @@ mod tests {
                 ..PlaybackPreferences::default()
             })
         );
+    }
+
+    #[test]
+    fn continue_watching_lists_resumable_present_files_and_hides_missing_and_private() {
+        use okp_test_fixtures::unique_temp_dir;
+
+        let dir = unique_temp_dir("okp-gtk-continue-watching");
+        fs::create_dir_all(&dir).expect("temp dir");
+        let present = dir.join("present.mkv");
+        fs::write(&present, b"video").expect("write present file");
+        let missing = dir.join("missing.mkv");
+
+        let mut history = store();
+        history.record(&present, 120.0, 600.0, false); // resumable, still on disk
+        history.record(&missing, 240.0, 600.0, false); // resumable, but deleted below
+        fs::remove_file(&missing).ok();
+
+        let cards = history.continue_watching(false, 10);
+        let paths: Vec<&str> = cards.iter().map(|card| card.path.as_str()).collect();
+        assert_eq!(paths, [present.to_string_lossy()]);
+
+        // A private session yields an empty shelf even with resumable history present.
+        assert!(history.continue_watching(true, 10).is_empty());
+
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
