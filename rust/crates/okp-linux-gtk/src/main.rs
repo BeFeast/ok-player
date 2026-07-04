@@ -1028,6 +1028,7 @@ impl SeekHoverPreview {
         content.append(&chapter_label);
 
         let popover = gtk::Popover::new();
+        popover.add_css_class("okp-seek-popover");
         popover.set_autohide(false);
         popover.set_has_arrow(false);
         popover.set_position(gtk::PositionType::Top);

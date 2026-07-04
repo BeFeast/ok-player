@@ -208,7 +208,7 @@ pub(crate) fn settings_nav_rail(stack: &gtk::Stack, selected_page: &str) -> gtk:
     search.add_css_class("okp-settings-search");
     search.set_size_request(171, 30);
     let search_icon = gtk::Image::from_icon_name("system-search-symbolic");
-    search_icon.set_pixel_size(13);
+    search_icon.set_pixel_size(14);
     search.append(&search_icon);
     let search_label = gtk::Label::new(Some("Search"));
     search_label.add_css_class("okp-settings-search-label");

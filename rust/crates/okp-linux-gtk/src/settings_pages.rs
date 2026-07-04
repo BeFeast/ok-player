@@ -546,7 +546,7 @@ pub(crate) fn settings_empty_state(text: &str) -> gtk::Box {
     inner.set_hexpand(true);
 
     let icon = gtk::Image::from_icon_name("dialog-information-symbolic");
-    icon.set_pixel_size(15);
+    icon.set_pixel_size(14);
     icon.add_css_class("okp-empty-state-icon");
     inner.append(&icon);
 
@@ -833,6 +833,7 @@ pub(crate) fn settings_hwdec_row(
     row.append(&state_label);
 
     let toggle = gtk::Switch::new();
+    toggle.add_css_class("okp-settings-switch");
     toggle.set_active(enabled);
     let switch_state = Rc::clone(&state);
     let switch_toast = Rc::clone(&status_toast);
