@@ -1,19 +1,32 @@
 use super::*;
 
-pub(crate) fn install_css() {
-    let Some(display) = gdk::Display::default() else {
-        return;
-    };
+const OKP_STYLESHEET: &str = "
+        /* Design tokens: one coherent OK Player palette. Every accent and state
+           colour below derives from these bases via alpha()/mix(), so the whole
+           shell retints from a single edit. Dark chrome and the light settings
+           surface share one teal brand accent; there is no stray adwaita blue. */
+        @define-color okp_bg #050507;
+        @define-color okp_accent #28b3aa;
+        @define-color okp_accent_bright #37cfc5;
+        @define-color okp_accent_deep #229a92;
+        @define-color okp_light_bg #eef4f9;
+        @define-color okp_light_rail #eaf0f5;
+        @define-color okp_ink #161616;
+        @define-color okp_teal #10938a;
+        @define-color okp_teal_deep #0a655f;
+        @define-color okp_danger #c42b1c;
+        @define-color okp_danger_deep #9a1f15;
+        @define-color okp_danger_dark #db3b3b;
+        @define-color okp_danger_bright #ff6868;
+        @define-color okp_warning #b07600;
+        @define-color okp_warning_deep #6f4b00;
 
-    let provider = gtk::CssProvider::new();
-    provider.load_from_data(
-        "
         .okp-root {
-            background: #050507;
+            background: @okp_bg;
         }
 
         window.okp-player-window {
-            background: #050507;
+            background: @okp_bg;
         }
 
         .okp-window-chrome {
@@ -71,11 +84,11 @@ pub(crate) fn install_css() {
         .okp-player-window-controls button:focus-visible,
         button.okp-player-window-control:focus-visible {
             outline: none;
-            box-shadow: inset 0 0 0 1px rgba(40, 179, 170, 0.65);
+            box-shadow: inset 0 0 0 1px alpha(@okp_accent, 0.65);
         }
 
         button.okp-player-window-close:hover {
-            background: rgba(219, 59, 59, 0.86);
+            background: alpha(@okp_danger_dark, 0.86);
             color: #ffffff;
         }
 
@@ -97,11 +110,11 @@ pub(crate) fn install_css() {
         }
 
         .okp-video-plane {
-            background: #050507;
+            background: @okp_bg;
         }
 
         .okp-empty-surface {
-            background: rgba(5, 5, 7, 0.94);
+            background: alpha(@okp_bg, 0.94);
         }
 
         .okp-empty-panel {
@@ -113,9 +126,9 @@ pub(crate) fn install_css() {
         }
 
         .okp-empty-panel.is-drop-target {
-            border-color: rgba(40, 179, 170, 0.82);
+            border-color: alpha(@okp_accent, 0.82);
             background: linear-gradient(180deg, rgba(19, 46, 47, 0.95), rgba(13, 32, 33, 0.95));
-            box-shadow: 0 0 0 2px rgba(40, 179, 170, 0.22), 0 30px 80px rgba(0, 0, 0, 0.55);
+            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.22), 0 30px 80px rgba(0, 0, 0, 0.55);
         }
 
         .okp-empty-logo {
@@ -160,22 +173,22 @@ pub(crate) fn install_css() {
         }
 
         .okp-empty-primary-button {
-            background: #28b3aa;
+            background: @okp_accent;
             color: #041110;
         }
 
         .okp-empty-primary-button:hover {
-            background: #37cfc5;
+            background: @okp_accent_bright;
         }
 
         .okp-empty-primary-button:active {
-            background: #229a92;
+            background: @okp_accent_deep;
         }
 
         .okp-empty-primary-button:focus-visible,
         .okp-empty-secondary-button:focus-visible {
             outline: none;
-            box-shadow: 0 0 0 2px rgba(40, 179, 170, 0.55);
+            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.55);
         }
 
         .okp-empty-secondary-button {
@@ -249,8 +262,8 @@ pub(crate) fn install_css() {
         menubutton.okp-control-button > button:active,
         button.okp-control-button:checked,
         menubutton.okp-control-button > button:checked {
-            background: rgba(40, 179, 170, 0.24);
-            border-color: rgba(40, 179, 170, 0.42);
+            background: alpha(@okp_accent, 0.24);
+            border-color: alpha(@okp_accent, 0.42);
             color: rgba(255, 255, 255, 0.98);
         }
 
@@ -264,18 +277,18 @@ pub(crate) fn install_css() {
         button.okp-control-button:focus-visible,
         menubutton.okp-control-button > button:focus-visible {
             outline: none;
-            box-shadow: 0 0 0 2px rgba(40, 179, 170, 0.55);
+            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.55);
         }
 
         button.okp-play-button {
             min-width: 42px;
             border-radius: 11px;
-            background: rgba(40, 179, 170, 0.92);
+            background: alpha(@okp_accent, 0.92);
             color: #ffffff;
         }
 
         button.okp-play-button:hover {
-            background: rgba(55, 207, 197, 0.96);
+            background: alpha(@okp_accent_bright, 0.96);
         }
 
         button.okp-play-button:disabled {
@@ -302,12 +315,12 @@ pub(crate) fn install_css() {
         menubutton.okp-speed-chip > button {
             min-width: 56px;
             background: rgba(255, 255, 255, 0.08);
-            color: rgba(40, 179, 170, 0.98);
+            color: alpha(@okp_accent, 0.98);
             font-feature-settings: 'tnum';
         }
 
         .okp-control-button.is-selected {
-            background: rgba(40, 179, 170, 0.22);
+            background: alpha(@okp_accent, 0.22);
         }
 
         .okp-time-label {
@@ -344,7 +357,7 @@ pub(crate) fn install_css() {
         scale.okp-volume highlight {
             min-height: 3px;
             border-radius: 999px;
-            background: #28b3aa;
+            background: @okp_accent;
         }
 
         scale.okp-seek slider,
@@ -379,6 +392,25 @@ pub(crate) fn install_css() {
             font-size: 9.5px;
             font-weight: 800;
             font-feature-settings: 'tnum';
+        }
+
+        /* Strip the default popover chrome so the seek-hover preview shows only
+           its own dark card, matching the normalized track popovers instead of a
+           stock light popover frame. */
+        popover.okp-seek-popover,
+        popover.okp-seek-popover > contents {
+            padding: 0;
+            background: transparent;
+            border: none;
+            box-shadow: none;
+        }
+
+        popover.okp-seek-popover > arrow {
+            min-width: 0;
+            min-height: 0;
+            background: transparent;
+            border: none;
+            box-shadow: none;
         }
 
         .okp-seek-preview {
@@ -461,13 +493,13 @@ pub(crate) fn install_css() {
         }
 
         button.okp-side-panel-tab.is-selected {
-            background: rgba(40, 179, 170, 0.22);
+            background: alpha(@okp_accent, 0.22);
             color: rgba(255, 255, 255, 0.96);
         }
 
         button.okp-side-panel-tab:focus-visible {
             outline: none;
-            box-shadow: inset 0 0 0 1px rgba(40, 179, 170, 0.6);
+            box-shadow: inset 0 0 0 1px alpha(@okp_accent, 0.6);
         }
 
         .okp-up-next-list {
@@ -535,7 +567,7 @@ pub(crate) fn install_css() {
         }
 
         .okp-up-next-row.is-current .okp-chapter-thumb {
-            border-color: rgba(40, 179, 170, 0.55);
+            border-color: alpha(@okp_accent, 0.55);
         }
 
         .okp-up-next-row:hover {
@@ -543,8 +575,8 @@ pub(crate) fn install_css() {
         }
 
         .okp-up-next-row.is-current {
-            background: rgba(40, 179, 170, 0.18);
-            border-color: rgba(40, 179, 170, 0.32);
+            background: alpha(@okp_accent, 0.18);
+            border-color: alpha(@okp_accent, 0.32);
             color: rgba(255, 255, 255, 0.96);
         }
 
@@ -563,8 +595,8 @@ pub(crate) fn install_css() {
         }
 
         .okp-up-next-row.is-drop-target {
-            background: rgba(40, 179, 170, 0.22);
-            border-color: rgba(40, 179, 170, 0.62);
+            background: alpha(@okp_accent, 0.22);
+            border-color: alpha(@okp_accent, 0.62);
         }
 
         .okp-up-next-drag-handle {
@@ -604,7 +636,7 @@ pub(crate) fn install_css() {
         .okp-now-badge {
             padding: 1px 7px;
             border-radius: 999px;
-            background: #28b3aa;
+            background: @okp_accent;
             color: #041110;
             font-size: 9.5px;
             font-weight: 800;
@@ -614,15 +646,15 @@ pub(crate) fn install_css() {
         .okp-next-badge {
             padding: 1px 7px;
             border-radius: 999px;
-            background: rgba(40, 179, 170, 0.18);
-            color: rgba(40, 179, 170, 0.98);
+            background: alpha(@okp_accent, 0.18);
+            color: alpha(@okp_accent, 0.98);
             font-size: 9.5px;
             font-weight: 760;
             letter-spacing: 0;
         }
 
         .okp-up-next-marker {
-            color: rgba(40, 179, 170, 0.98);
+            color: alpha(@okp_accent, 0.98);
             font-size: 11px;
             font-weight: 760;
             font-feature-settings: 'tnum';
@@ -751,8 +783,8 @@ pub(crate) fn install_css() {
         }
 
         button.okp-track-row.is-selected {
-            background: rgba(40, 179, 170, 0.16);
-            border-color: rgba(40, 179, 170, 0.30);
+            background: alpha(@okp_accent, 0.16);
+            border-color: alpha(@okp_accent, 0.30);
             color: rgba(255, 255, 255, 0.98);
         }
 
@@ -768,12 +800,12 @@ pub(crate) fn install_css() {
 
         button.okp-track-row:focus-visible {
             outline: none;
-            box-shadow: inset 0 0 0 1px rgba(40, 179, 170, 0.6);
+            box-shadow: inset 0 0 0 1px alpha(@okp_accent, 0.6);
         }
 
         .okp-track-check {
             min-width: 14px;
-            color: rgba(40, 179, 170, 0.98);
+            color: alpha(@okp_accent, 0.98);
         }
 
         button.okp-track-row:disabled .okp-track-check {
@@ -822,13 +854,13 @@ pub(crate) fn install_css() {
         }
 
         entry.okp-sub-adjust-entry:focus {
-            border-color: rgba(40, 179, 170, 0.72);
-            box-shadow: 0 0 0 2px rgba(40, 179, 170, 0.16);
+            border-color: alpha(@okp_accent, 0.72);
+            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.16);
         }
 
         entry.okp-sub-adjust-entry.is-error {
-            border-color: rgba(255, 104, 104, 0.88);
-            box-shadow: 0 0 0 2px rgba(255, 104, 104, 0.18);
+            border-color: alpha(@okp_danger_bright, 0.88);
+            box-shadow: 0 0 0 2px alpha(@okp_danger_bright, 0.18);
         }
 
         .okp-sub-adjust-unit {
@@ -850,7 +882,7 @@ pub(crate) fn install_css() {
         }
 
         .okp-info-window {
-            background: #eef4f9;
+            background: @okp_light_bg;
         }
 
         window.okp-command-dialog {
@@ -872,7 +904,7 @@ pub(crate) fn install_css() {
         window.okp-command-dialog entry {
             min-height: 34px;
             border-radius: 7px;
-            border: 1px solid rgba(40, 179, 170, 0.42);
+            border: 1px solid alpha(@okp_accent, 0.42);
             background: rgba(255, 255, 255, 0.055);
             color: rgba(255, 255, 255, 0.92);
             box-shadow: none;
@@ -895,8 +927,8 @@ pub(crate) fn install_css() {
         }
 
         window.okp-command-dialog button:active {
-            background: rgba(40, 179, 170, 0.28);
-            border-color: rgba(40, 179, 170, 0.48);
+            background: alpha(@okp_accent, 0.28);
+            border-color: alpha(@okp_accent, 0.48);
         }
 
         window.okp-command-dialog .okp-info-label {
@@ -930,24 +962,24 @@ pub(crate) fn install_css() {
         }
 
         .okp-info-root {
-            background: #eef4f9;
-            color: #161616;
+            background: @okp_light_bg;
+            color: @okp_ink;
         }
 
         .okp-settings-root {
-            background: #eef4f9;
-            color: #161616;
+            background: @okp_light_bg;
+            color: @okp_ink;
             border: none;
             border-radius: 0;
         }
 
         .okp-settings-rail-frame {
-            background: #eaf0f5;
+            background: @okp_light_rail;
         }
 
         .okp-settings-rail {
             padding: 16px 10px 14px 10px;
-            background: #eaf0f5;
+            background: @okp_light_rail;
             border-right: 1px solid #dde3e7;
         }
 
@@ -985,14 +1017,14 @@ pub(crate) fn install_css() {
             background: #f9fbfc;
             border: 1px solid #d5dce2;
             box-shadow: none;
-            color: #161616;
+            color: @okp_ink;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12px;
         }
 
         entry.okp-shortcuts-search:focus {
-            border-color: rgba(0, 103, 192, 0.68);
-            box-shadow: 0 0 0 1px rgba(0, 103, 192, 0.18);
+            border-color: alpha(@okp_teal, 0.68);
+            box-shadow: 0 0 0 1px alpha(@okp_teal, 0.18);
         }
 
         .okp-settings-nav-row {
@@ -1014,8 +1046,8 @@ pub(crate) fn install_css() {
 
         .okp-settings-nav-row.is-selected {
             background: #cfe5e8;
-            box-shadow: inset 3px 0 0 #10938a;
-            color: #0a655f;
+            box-shadow: inset 3px 0 0 @okp_teal;
+            color: @okp_teal_deep;
             font-weight: 600;
         }
 
@@ -1047,7 +1079,7 @@ pub(crate) fn install_css() {
             border-radius: 0;
             background: transparent;
             box-shadow: none;
-            color: #161616;
+            color: @okp_ink;
         }
 
         .okp-settings-window-control:hover {
@@ -1057,15 +1089,15 @@ pub(crate) fn install_css() {
         .okp-settings-window-control-glyph {
             min-width: 10px;
             min-height: 10px;
-            color: #161616;
+            color: @okp_ink;
         }
 
         button.okp-settings-window-control:hover .okp-settings-window-control-glyph {
-            color: #161616;
+            color: @okp_ink;
         }
 
         button.okp-settings-window-close:hover {
-            background: #c42b1c;
+            background: @okp_danger;
         }
 
         button.okp-settings-window-close:hover .okp-settings-window-control-glyph {
@@ -1073,11 +1105,11 @@ pub(crate) fn install_css() {
         }
 
         .okp-settings-stack {
-            background: #eef4f9;
+            background: @okp_light_bg;
         }
 
         .okp-settings-scroller {
-            background: #eef4f9;
+            background: @okp_light_bg;
         }
 
         .okp-settings-page {
@@ -1085,7 +1117,7 @@ pub(crate) fn install_css() {
         }
 
         .okp-info-page {
-            background: #eef4f9;
+            background: @okp_light_bg;
         }
 
         .okp-info-hero {
@@ -1101,7 +1133,7 @@ pub(crate) fn install_css() {
         }
 
         .okp-info-title {
-            color: #161616;
+            color: @okp_ink;
             font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
             font-size: 28px;
             font-weight: 650;
@@ -1118,7 +1150,7 @@ pub(crate) fn install_css() {
         }
 
         window.okp-info-window scrolledwindow {
-            background: #eef4f9;
+            background: @okp_light_bg;
         }
 
         window.okp-info-window scrollbar {
@@ -1143,7 +1175,7 @@ pub(crate) fn install_css() {
 
         .okp-about-pane {
             padding: 70px 44px 28px 24px;
-            background: #eef4f9;
+            background: @okp_light_bg;
         }
 
         .okp-about-identity {
@@ -1156,7 +1188,7 @@ pub(crate) fn install_css() {
         }
 
         .okp-about-wordmark {
-            color: #161616;
+            color: @okp_ink;
             font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
             font-size: 30px;
             letter-spacing: 0;
@@ -1178,7 +1210,7 @@ pub(crate) fn install_css() {
             padding: 3px 9px;
             border-radius: 6px;
             background: #e2e8ec;
-            color: #161616;
+            color: @okp_ink;
             font-family: 'Cascadia Code', 'Cascadia Mono', monospace;
             font-size: 11.5px;
             font-weight: 600;
@@ -1188,8 +1220,8 @@ pub(crate) fn install_css() {
         .okp-about-channel-chip {
             padding: 4px 9px;
             border-radius: 6px;
-            background: rgba(16, 147, 138, 0.12);
-            color: #0a655f;
+            background: alpha(@okp_teal, 0.12);
+            color: @okp_teal_deep;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 10px;
             font-weight: 600;
@@ -1254,7 +1286,7 @@ pub(crate) fn install_css() {
 
         .okp-about-row-value,
         .okp-about-row-value-mono {
-            color: #161616;
+            color: @okp_ink;
             font-size: 12.5px;
             font-weight: 500;
         }
@@ -1285,8 +1317,8 @@ pub(crate) fn install_css() {
         }
 
         .okp-about-tag.is-accent {
-            background: rgba(16, 147, 138, 0.12);
-            color: #0a655f;
+            background: alpha(@okp_teal, 0.12);
+            color: @okp_teal_deep;
         }
 
         .okp-about-footer {
@@ -1302,7 +1334,7 @@ pub(crate) fn install_css() {
             background: #e2e8ec;
             border: 1px solid rgba(0, 0, 0, 0.06);
             box-shadow: none;
-            color: #161616;
+            color: @okp_ink;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12px;
             font-weight: 600;
@@ -1320,7 +1352,7 @@ pub(crate) fn install_css() {
             background: #ffffff;
             border: 1px solid rgba(0, 0, 0, 0.06);
             box-shadow: none;
-            color: #161616;
+            color: @okp_ink;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12px;
             font-weight: 400;
@@ -1341,7 +1373,7 @@ pub(crate) fn install_css() {
         }
 
         button.okp-about-toggle.is-active {
-            background: #0067c0;
+            background: @okp_teal;
         }
 
         .okp-about-toggle-knob {
@@ -1351,20 +1383,54 @@ pub(crate) fn install_css() {
             background: #ffffff;
         }
 
+        /* The single stock GtkSwitch (hardware decode) is retinted so it lights
+           up in OK teal instead of the host theme's accent, matching the brand
+           toggle above. Only the track/knob colours are overridden; GTK keeps
+           its own switch geometry and the state-set handler is untouched. */
+        switch.okp-settings-switch {
+            border: none;
+            background: #ccd5dc;
+            box-shadow: none;
+        }
+
+        switch.okp-settings-switch:checked {
+            background: @okp_teal;
+        }
+
+        switch.okp-settings-switch > slider {
+            background: #ffffff;
+            border: none;
+            box-shadow: none;
+            outline: none;
+        }
+
+        /* Strip the native focus ring only for pointer/programmatic focus;
+           keyboard focus keeps a visible marker via the :focus-visible rule
+           below, so tabbing to the switch never leaves it unmarked. */
+        switch.okp-settings-switch:focus:not(:focus-visible),
+        switch.okp-settings-switch:focus:not(:focus-visible) > slider {
+            outline: none;
+        }
+
+        switch.okp-settings-switch:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 2px alpha(@okp_teal, 0.35);
+        }
+
         .okp-about-link-button {
             min-height: 24px;
             padding: 0;
             border: none;
             background: transparent;
             box-shadow: none;
-            color: #0a655f;
+            color: @okp_teal_deep;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12px;
             font-weight: 600;
         }
 
         .okp-about-link-arrow {
-            color: #0a655f;
+            color: @okp_teal_deep;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12px;
             font-weight: 600;
@@ -1396,33 +1462,37 @@ pub(crate) fn install_css() {
         textview.okp-mpv-conf-editor text {
             padding: 10px;
             background: #ffffff;
-            color: #161616;
+            color: @okp_ink;
             font-family: 'Cascadia Code', 'Cascadia Mono', monospace;
             font-size: 12px;
             font-weight: 500;
-            caret-color: #0067c0;
+            caret-color: @okp_teal;
         }
 
         textview.okp-mpv-conf-editor selection,
         textview.okp-mpv-conf-editor text selection {
-            background: rgba(0, 103, 192, 0.24);
-            color: #161616;
+            background: alpha(@okp_teal, 0.24);
+            color: @okp_ink;
         }
 
+        /* Switch rows sit inside an .okp-info-section card, so they use the same
+           recessed inset as the track rows instead of a second white card with a
+           matching border. That keeps grouped settings from reading as
+           card-inside-card clutter. */
         .okp-settings-switch-row {
             min-height: 42px;
             padding: 10px;
             border-radius: 8px;
-            background: #ffffff;
-            border: 1px solid rgba(0, 0, 0, 0.06);
+            background: #f8fafb;
+            border: 1px solid rgba(0, 0, 0, 0.05);
         }
 
         .okp-settings-state-pill {
             min-width: 34px;
             padding: 3px 8px;
             border-radius: 999px;
-            background: rgba(16, 147, 138, 0.12);
-            color: #0a655f;
+            background: alpha(@okp_teal, 0.12);
+            color: @okp_teal_deep;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 11px;
             font-weight: 600;
@@ -1438,18 +1508,18 @@ pub(crate) fn install_css() {
         }
 
         .okp-integration-state-pill.is-good {
-            background: rgba(16, 147, 138, 0.12);
-            color: #0a655f;
+            background: alpha(@okp_teal, 0.12);
+            color: @okp_teal_deep;
         }
 
         .okp-integration-state-pill.is-warning {
-            background: rgba(176, 118, 0, 0.14);
-            color: #6f4b00;
+            background: alpha(@okp_warning, 0.14);
+            color: @okp_warning_deep;
         }
 
         .okp-integration-state-pill.is-bad {
-            background: rgba(196, 43, 28, 0.12);
-            color: #9a1f15;
+            background: alpha(@okp_danger, 0.12);
+            color: @okp_danger_deep;
         }
 
         .okp-info-section {
@@ -1480,7 +1550,7 @@ pub(crate) fn install_css() {
         }
 
         .okp-info-value {
-            color: #161616;
+            color: @okp_ink;
             font-family: 'Cascadia Code', 'Cascadia Mono', monospace;
             font-size: 12px;
             font-weight: 500;
@@ -1508,7 +1578,7 @@ pub(crate) fn install_css() {
         }
 
         .okp-info-chip-value {
-            color: #161616;
+            color: @okp_ink;
             font-family: 'Cascadia Code', 'Cascadia Mono', monospace;
             font-size: 12px;
             font-weight: 600;
@@ -1534,7 +1604,7 @@ pub(crate) fn install_css() {
         }
 
         .okp-info-row.is-highlight .okp-info-value {
-            color: #0a655f;
+            color: @okp_teal_deep;
             font-weight: 700;
         }
 
@@ -1561,11 +1631,11 @@ pub(crate) fn install_css() {
         }
 
         .okp-shortcut-row.is-conflict {
-            color: #9a1f15;
+            color: @okp_danger_deep;
         }
 
         .okp-shortcut-action-title {
-            color: #161616;
+            color: @okp_ink;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12.5px;
             font-weight: 500;
@@ -1581,8 +1651,8 @@ pub(crate) fn install_css() {
         .okp-shortcut-badge {
             padding: 2px 6px;
             border-radius: 5px;
-            background: rgba(16, 147, 138, 0.12);
-            color: #0a655f;
+            background: alpha(@okp_teal, 0.12);
+            color: @okp_teal_deep;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 8.5px;
             font-weight: 600;
@@ -1596,7 +1666,7 @@ pub(crate) fn install_css() {
             background: #f8fafb;
             border: 1px solid rgba(0, 0, 0, 0.07);
             box-shadow: none;
-            color: #161616;
+            color: @okp_ink;
         }
 
         button.okp-shortcut-chip:hover {
@@ -1609,22 +1679,22 @@ pub(crate) fn install_css() {
 
         button.okp-shortcut-chip.is-empty {
             background: transparent;
-            border-color: rgba(16, 147, 138, 0.18);
-            color: #0a655f;
+            border-color: alpha(@okp_teal, 0.18);
+            color: @okp_teal_deep;
         }
 
         button.okp-shortcut-chip.is-empty:hover {
-            background: rgba(16, 147, 138, 0.08);
+            background: alpha(@okp_teal, 0.08);
         }
 
         button.okp-shortcut-chip.is-capturing {
-            background: rgba(0, 103, 192, 0.12);
-            border-color: rgba(0, 103, 192, 0.52);
+            background: alpha(@okp_teal, 0.12);
+            border-color: alpha(@okp_teal, 0.52);
         }
 
         button.okp-shortcut-chip.is-conflict {
-            background: rgba(196, 43, 28, 0.10);
-            border-color: rgba(196, 43, 28, 0.42);
+            background: alpha(@okp_danger, 0.10);
+            border-color: alpha(@okp_danger, 0.42);
         }
 
         .okp-shortcut-chip-label {
@@ -1642,14 +1712,14 @@ pub(crate) fn install_css() {
             background: transparent;
             border: 1px solid transparent;
             box-shadow: none;
-            color: #0a655f;
+            color: @okp_teal_deep;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12px;
             font-weight: 600;
         }
 
         button.okp-shortcut-reset:hover {
-            background: rgba(16, 147, 138, 0.08);
+            background: alpha(@okp_teal, 0.08);
         }
 
         button.okp-shortcut-reset:disabled {
@@ -1665,7 +1735,7 @@ pub(crate) fn install_css() {
         .okp-settings-scale highlight {
             min-height: 6px;
             border-radius: 999px;
-            background: #0067c0;
+            background: @okp_teal;
         }
 
         .okp-settings-scale slider {
@@ -1683,7 +1753,7 @@ pub(crate) fn install_css() {
             background: #ffffff;
             border: 1px solid rgba(0, 0, 0, 0.06);
             box-shadow: none;
-            color: #161616;
+            color: @okp_ink;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12px;
         }
@@ -1716,7 +1786,7 @@ pub(crate) fn install_css() {
 
         .okp-empty-state-icon {
             color: rgba(0, 0, 0, 0.34);
-            -gtk-icon-size: 15px;
+            -gtk-icon-size: 14px;
         }
 
         .okp-empty-state-text {
@@ -1733,7 +1803,7 @@ pub(crate) fn install_css() {
             background: #f8fafb;
             border: 1px solid rgba(0, 0, 0, 0.04);
             box-shadow: none;
-            color: #161616;
+            color: @okp_ink;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12px;
             font-weight: 400;
@@ -1744,9 +1814,9 @@ pub(crate) fn install_css() {
         }
 
         button.okp-settings-track-row.is-selected {
-            background: rgba(16, 147, 138, 0.12);
-            border-color: rgba(16, 147, 138, 0.24);
-            color: #0a655f;
+            background: alpha(@okp_teal, 0.12);
+            border-color: alpha(@okp_teal, 0.24);
+            color: @okp_teal_deep;
             font-weight: 600;
         }
 
@@ -1759,12 +1829,12 @@ pub(crate) fn install_css() {
         }
 
         .okp-info-track-row.is-selected {
-            background: rgba(16, 147, 138, 0.10);
-            border-color: rgba(16, 147, 138, 0.18);
+            background: alpha(@okp_teal, 0.10);
+            border-color: alpha(@okp_teal, 0.18);
         }
 
         .okp-info-track-kind {
-            color: #0a655f;
+            color: @okp_teal_deep;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 11px;
             font-weight: 600;
@@ -1772,7 +1842,7 @@ pub(crate) fn install_css() {
         }
 
         .okp-info-track-title {
-            color: #161616;
+            color: @okp_ink;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12.5px;
             font-weight: 600;
@@ -1781,8 +1851,8 @@ pub(crate) fn install_css() {
         .okp-info-track-current {
             padding: 2px 6px;
             border-radius: 5px;
-            background: rgba(16, 147, 138, 0.12);
-            color: #0a655f;
+            background: alpha(@okp_teal, 0.12);
+            color: @okp_teal_deep;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 8.5px;
             font-weight: 600;
@@ -1803,7 +1873,7 @@ pub(crate) fn install_css() {
             background: #e2e8ec;
             border: 1px solid rgba(0, 0, 0, 0.06);
             box-shadow: none;
-            color: #161616;
+            color: @okp_ink;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12px;
             font-weight: 600;
@@ -1812,11 +1882,109 @@ pub(crate) fn install_css() {
         .okp-info-footer-button:hover {
             background: #d9e1e7;
         }
-        ",
-    );
+        ";
+
+pub(crate) fn install_css() {
+    let Some(display) = gdk::Display::default() else {
+        return;
+    };
+
+    let provider = gtk::CssProvider::new();
+    provider.load_from_data(OKP_STYLESHEET);
     gtk::style_context_add_provider_for_display(
         &display,
         &provider,
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OKP_STYLESHEET;
+    use std::collections::HashSet;
+
+    /// Token names declared via `@define-color okp_<name> <value>;`.
+    fn defined_tokens() -> HashSet<String> {
+        OKP_STYLESHEET
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("@define-color "))
+            .filter_map(|rest| rest.split_whitespace().next())
+            .map(str::to_owned)
+            .collect()
+    }
+
+    #[test]
+    fn every_token_reference_resolves_to_a_definition() {
+        let defined = defined_tokens();
+        assert!(!defined.is_empty(), "stylesheet declares no @okp tokens");
+
+        // A stray `@okp_...` typo makes GTK drop that declaration silently, so a
+        // whole surface would lose its colour with no build error. Guard it.
+        let mut idx = 0;
+        while let Some(pos) = OKP_STYLESHEET[idx..].find("@okp_") {
+            let start = idx + pos + 1; // skip the leading '@'
+            let name: String = OKP_STYLESHEET[start..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            assert!(
+                defined.contains(&name),
+                "stylesheet references undefined token @{name}"
+            );
+            idx = start + name.len();
+        }
+    }
+
+    #[test]
+    fn palette_is_unified_on_the_brand_accent() {
+        // The generic adwaita blue must not reappear on any surface: the light
+        // settings chrome shares the dark player's single teal brand accent.
+        for stray in ["#0067c0", "0, 103, 192"] {
+            assert!(
+                !OKP_STYLESHEET.contains(stray),
+                "stray adwaita-blue literal `{stray}` found; use @okp_teal"
+            );
+        }
+
+        // Brand accent colours live only in their `@define-color`; every other
+        // use goes through a token so the palette retints from one edit.
+        for once in ["#28b3aa", "#37cfc5", "#10938a"] {
+            let count = OKP_STYLESHEET.matches(once).count();
+            assert!(
+                count <= 1,
+                "accent colour `{once}` should only appear in its @define-color, found {count}"
+            );
+        }
+        for gone in ["40, 179, 170", "16, 147, 138"] {
+            assert!(
+                !OKP_STYLESHEET.contains(gone),
+                "raw accent literal `{gone}` should be replaced by a token"
+            );
+        }
+    }
+
+    #[test]
+    fn smoke_locked_surface_tokens_stay_pinned() {
+        // The Linux smoke scripts assert these exact background pixels, so the
+        // captionless shells stay recognisable. Keep the token values pinned.
+        for token in [
+            "@define-color okp_bg #050507;",
+            "@define-color okp_light_bg #eef4f9;",
+            "@define-color okp_light_rail #eaf0f5;",
+        ] {
+            assert!(
+                OKP_STYLESHEET.contains(token),
+                "smoke-locked surface token changed: expected `{token}`"
+            );
+        }
+    }
+
+    #[test]
+    fn stylesheet_braces_are_balanced() {
+        assert_eq!(
+            OKP_STYLESHEET.matches('{').count(),
+            OKP_STYLESHEET.matches('}').count(),
+            "unbalanced CSS braces in the stylesheet"
+        );
+    }
 }
