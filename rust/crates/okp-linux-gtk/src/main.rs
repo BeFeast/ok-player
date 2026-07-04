@@ -21,8 +21,8 @@ use okp_core::shortcuts::{
 };
 use okp_core::update_selection::{self, DebFeed, DebUpdate, SHA256SUMS_ASSET};
 use okp_core::{
-    AppIdentity, chapter_math, m3u, media_formats, natural_compare, sha256sums, subtitle_delay,
-    time_code,
+    AppIdentity, chapter_math, lrc, m3u, media_formats, natural_compare, sha256sums,
+    subtitle_delay, time_code,
 };
 use okp_mpv::{
     AbLoopState, AudioDevice, Chapter, InfoRow, InfoSection, InfoTrack, MediaInfo, Mpv, MpvEvent,
@@ -41,6 +41,7 @@ mod dialogs;
 mod history;
 mod integration;
 mod keyboard;
+mod lyrics;
 mod media_info;
 mod mpris;
 mod mpv_bridge;
@@ -61,6 +62,7 @@ pub(crate) use css::*;
 pub(crate) use dialogs::*;
 pub(crate) use integration::*;
 pub(crate) use keyboard::*;
+pub(crate) use lyrics::*;
 pub(crate) use media_info::*;
 pub(crate) use mpris::*;
 pub(crate) use mpv_bridge::*;
@@ -717,6 +719,7 @@ struct StatePollContext {
     updating_volume: Rc<Cell<bool>>,
     chrome: Rc<ChromeVisibility>,
     empty_surface: EmptySurface,
+    lyrics_surface: LyricsSurface,
     mpris_snapshot: Arc<Mutex<MprisSnapshot>>,
     mpris_signals: mpsc::Sender<MprisSignal>,
 }

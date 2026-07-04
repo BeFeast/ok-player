@@ -788,6 +788,97 @@ fn side_panel_preview_sample_covers_chapters_and_queue() {
 }
 
 #[test]
+fn lyrics_preview_sample_is_a_synced_sheet_with_a_mid_active_line() {
+    let (document, position) = lyrics_preview_sample();
+
+    assert!(
+        document.has_timings,
+        "preview fixture must be a synced sheet"
+    );
+    assert_eq!(document.lines.len(), 8);
+    assert_eq!(document.title.as_deref(), Some("Neon Skyline"));
+    assert_eq!(document.artist.as_deref(), Some("The Wander Club"));
+
+    // The smoke screenshot relies on a mid-sheet line being the active (brightened) one, so the
+    // fixture proves the surface has lines both above and below the highlight.
+    let active =
+        lrc::active_index(&document.lines, position).expect("preview position lands on a line");
+    assert!(
+        active > 0 && active + 1 < document.lines.len(),
+        "active line should sit mid-sheet, got {active}",
+    );
+    assert_eq!(document.lines[active].text, "A neon skyline out of sight");
+}
+
+#[test]
+fn lyrics_surface_gates_on_local_audio_only() {
+    // The overlay reveals for a local audio file, and never for video, a stream, or no media — so
+    // the video-first player stays untouched.
+    let audio = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(PathBuf::from("/music/song.flac")),
+        ..PlayerState::default()
+    }));
+    assert_eq!(
+        current_audio_path(&audio),
+        Some(PathBuf::from("/music/song.flac"))
+    );
+
+    let video = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(PathBuf::from("/films/movie.mkv")),
+        ..PlayerState::default()
+    }));
+    assert!(current_audio_path(&video).is_none());
+
+    let stream = Rc::new(RefCell::new(PlayerState {
+        current_url: Some("https://example.com/live.mp3".to_owned()),
+        ..PlayerState::default()
+    }));
+    assert!(current_audio_path(&stream).is_none());
+
+    assert!(current_audio_path(&Rc::new(RefCell::new(PlayerState::default()))).is_none());
+}
+
+#[test]
+fn sidecar_lyrics_next_to_audio_parse_as_a_synced_sheet() {
+    // A local audio file with a matching `.lrc` resolves to synchronized lyrics (the shell's
+    // discover → parse expression, end to end on disk).
+    let dir = unique_temp_dir("okp-gtk-lyrics-synced");
+    fs::create_dir_all(&dir).expect("temp dir");
+    let media = dir.join("Song.mp3");
+    fs::write(&media, b"x").expect("media file");
+    fs::write(dir.join("Song.lrc"), "[00:01.00]one\n[00:02.50]two\n").expect("sidecar");
+
+    let document = okp_core::lyrics::read_sidecar(&media)
+        .map(|text| lrc::parse(Some(&text)))
+        .unwrap_or_default();
+
+    assert!(document.has_timings);
+    assert_eq!(document.lines.len(), 2);
+    assert_eq!(document.lines[1].text, "two");
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn missing_sidecar_resolves_to_an_empty_document_for_the_empty_state() {
+    // A local audio file with no sidecar yields the calm empty state, never debug text: the
+    // discover → parse expression produces the empty document `rebuild` renders as "No lyrics".
+    let dir = unique_temp_dir("okp-gtk-lyrics-empty");
+    fs::create_dir_all(&dir).expect("temp dir");
+    let media = dir.join("Instrumental.flac");
+    fs::write(&media, b"x").expect("media file");
+
+    let document = okp_core::lyrics::read_sidecar(&media)
+        .map(|text| lrc::parse(Some(&text)))
+        .unwrap_or_default();
+
+    assert!(document.is_empty());
+    assert!(!document.has_timings);
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn ab_loop_message_describes_cycle_state() {
     assert_eq!(
         ab_loop_message(

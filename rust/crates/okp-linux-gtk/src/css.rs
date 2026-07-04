@@ -212,6 +212,88 @@ const OKP_STYLESHEET: &str = "
             font-size: 11.5px;
         }
 
+        /* Audio lyrics overlay — an Apple-Music-style sheet over the (black) audio plane. The scrim
+           is translucent so any embedded cover art shows dimly behind, the lines dim away from the
+           active one, and the brand teal lands on the header so it reads at a glance. */
+        .okp-lyrics-surface {
+            background: alpha(@okp_bg, 0.90);
+        }
+
+        .okp-lyrics-content {
+            margin-top: 48px;
+            margin-bottom: 96px;
+        }
+
+        .okp-lyrics-header {
+            margin-bottom: 6px;
+            color: alpha(@okp_accent_bright, 0.90);
+            font-size: 11px;
+            font-weight: 760;
+            letter-spacing: 2px;
+        }
+
+        .okp-lyrics-scroller {
+            min-width: 420px;
+        }
+
+        .okp-lyrics-list {
+            padding: 40px 20px;
+        }
+
+        button.okp-lyrics-line {
+            padding: 8px 14px;
+            border: none;
+            border-radius: 10px;
+            background: transparent;
+            box-shadow: none;
+            color: rgba(255, 255, 255, 0.42);
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        button.okp-lyrics-line:hover {
+            background: rgba(255, 255, 255, 0.06);
+            color: rgba(255, 255, 255, 0.72);
+        }
+
+        button.okp-lyrics-line.is-gap {
+            color: rgba(255, 255, 255, 0.24);
+        }
+
+        button.okp-lyrics-line.is-active {
+            background: transparent;
+            color: #ffffff;
+            font-size: 21px;
+            font-weight: 780;
+        }
+
+        button.okp-lyrics-line.is-active:hover {
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        button.okp-lyrics-line:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.55);
+        }
+
+        .okp-lyrics-line-plain {
+            padding: 7px 14px;
+            color: rgba(255, 255, 255, 0.82);
+            font-size: 16px;
+            font-weight: 500;
+        }
+
+        .okp-lyrics-empty-icon {
+            color: alpha(@okp_accent_bright, 0.80);
+        }
+
+        .okp-lyrics-empty-text {
+            margin-top: 4px;
+            color: rgba(255, 255, 255, 0.56);
+            font-size: 14px;
+            font-weight: 500;
+        }
+
         .okp-controls {
             padding: 8px 10px;
             border-radius: 18px;
