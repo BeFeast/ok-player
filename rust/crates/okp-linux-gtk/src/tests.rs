@@ -52,6 +52,67 @@ fn settings_initial_page_env_accepts_known_pages_only() {
 }
 
 #[test]
+fn media_info_preview_sample_covers_the_polished_surfaces() {
+    let sample = media_info_preview_sample();
+
+    // The visual smoke fixture must exercise the summary strip, the section
+    // list, and the track list so screenshots catch regressions in each.
+    assert!(sample.path.is_some());
+    let section_titles: Vec<&str> = sample
+        .sections
+        .iter()
+        .map(|section| section.title.as_str())
+        .collect();
+    assert!(section_titles.contains(&"File"));
+    assert!(section_titles.contains(&"Video"));
+
+    assert!(
+        sample
+            .tracks
+            .iter()
+            .any(|track| track.kind == TrackKind::Audio)
+    );
+    assert!(
+        sample
+            .tracks
+            .iter()
+            .any(|track| track.kind == TrackKind::Subtitle)
+    );
+    assert!(sample.tracks.iter().any(|track| track.external));
+
+    // The summary derives an HDR chip and the Video section carries the row it
+    // condenses, so both the accent row and the chip stay covered.
+    assert_eq!(
+        media_info_value(&sample, "Video", "HDR").map(media_info_hdr_summary),
+        Some("HDR10".to_owned())
+    );
+    let chip_labels: Vec<&str> = media_info_summary_chips(&sample)
+        .iter()
+        .map(|(label, _)| *label)
+        .collect();
+    assert!(chip_labels.contains(&"HDR"));
+}
+
+#[test]
+fn media_info_hdr_summary_keeps_leading_format_token() {
+    assert_eq!(
+        media_info_hdr_summary("HDR10 · BT.2020 · SMPTE ST 2084 (PQ)"),
+        "HDR10"
+    );
+    assert_eq!(media_info_hdr_summary("Dolby Vision"), "Dolby Vision");
+    assert_eq!(media_info_hdr_summary(""), "");
+}
+
+#[test]
+fn media_info_row_highlights_active_hdr_only() {
+    assert!(media_info_row_is_highlight("HDR", "HDR10 · BT.2020"));
+    assert!(media_info_row_is_highlight("hdr", "Dolby Vision"));
+    assert!(!media_info_row_is_highlight("HDR", "No"));
+    assert!(!media_info_row_is_highlight("HDR", "SDR"));
+    assert!(!media_info_row_is_highlight("Codec", "HEVC (H.265)"));
+}
+
+#[test]
 fn mpris_snapshot_reports_stopped_without_media() {
     let snapshot = MprisSnapshot::default();
 

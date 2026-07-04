@@ -1304,6 +1304,29 @@ pub(crate) fn install_css() {
             font-feature-settings: 'tnum';
         }
 
+        flowbox.okp-info-summary {
+            padding: 0;
+        }
+
+        .okp-info-summary flowboxchild {
+            min-height: 0;
+            padding: 0;
+            border-radius: 8px;
+            background: transparent;
+        }
+
+        .okp-info-summary flowboxchild:selected,
+        .okp-info-summary flowboxchild:focus {
+            background: transparent;
+            box-shadow: none;
+            outline: none;
+        }
+
+        .okp-info-row.is-highlight .okp-info-value {
+            color: #0a655f;
+            font-weight: 700;
+        }
+
         .okp-settings-row {
             min-height: 34px;
         }
@@ -1456,6 +1479,40 @@ pub(crate) fn install_css() {
 
         .okp-settings-button:hover {
             background: #f8fafb;
+        }
+
+        .okp-settings-button:disabled,
+        .okp-settings-stepper-button:disabled {
+            background: #f2f5f8;
+            border-color: rgba(0, 0, 0, 0.04);
+            color: rgba(0, 0, 0, 0.32);
+        }
+
+        button.okp-settings-stepper-button {
+            min-width: 58px;
+            padding: 0 10px;
+            font-feature-settings: 'tnum';
+        }
+
+        .okp-empty-state {
+            min-height: 40px;
+            margin: 2px 0;
+            padding: 14px;
+            border-radius: 8px;
+            background: #f4f8fb;
+            border: 1px dashed rgba(0, 0, 0, 0.13);
+        }
+
+        .okp-empty-state-icon {
+            color: rgba(0, 0, 0, 0.34);
+            -gtk-icon-size: 15px;
+        }
+
+        .okp-empty-state-text {
+            color: rgba(0, 0, 0, 0.46);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12.5px;
+            font-weight: 400;
         }
 
         button.okp-settings-track-row {
