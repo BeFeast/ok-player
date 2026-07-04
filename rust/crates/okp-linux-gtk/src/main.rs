@@ -686,6 +686,9 @@ struct Controls {
     elapsed_label: gtk::Label,
     duration_label: gtk::Label,
     volume: gtk::Scale,
+    // Shared toast surface, kept so the side panel's own row handlers (add/remove a
+    // bookmark) can report their outcome without threading a toast through every call.
+    status_toast: Rc<StatusToast>,
     timeline_marks_snapshot: RefCell<Vec<TimelineMark>>,
     up_next_revealer: gtk::Revealer,
     up_next_title: gtk::Label,
@@ -1109,6 +1112,10 @@ struct SidePanelSnapshot {
     // raw position so the panel only re-renders when the playhead crosses a
     // chapter boundary, not on every poll tick.
     current_chapter: Option<usize>,
+    // The user's saved position bookmarks for the current local file (empty for streams
+    // and unbookmarked media). Carried in the snapshot so the panel re-renders the
+    // Bookmarks section the moment a mark is added or removed.
+    bookmarks: Vec<f64>,
     ab_loop: AbLoopState,
 }
 
@@ -1121,6 +1128,7 @@ struct TimelineMark {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum TimelineMarkKind {
     Chapter,
+    Bookmark,
     AbStart,
     AbEnd,
     AbLoop,
@@ -1131,6 +1139,7 @@ enum SidePanelAction {
     None,
     Chapter(f64),
     Playlist(usize),
+    AddBookmark,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

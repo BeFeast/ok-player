@@ -31,6 +31,13 @@ pub(crate) fn update_up_next_panel(
             .as_ref()
             .and_then(|mpv| mpv.observed_playback_state().time_pos);
         let current_chapter = current_chapter_index(&chapters, position);
+        // Only a local file carries persistent per-file bookmarks (streams are not
+        // tracked, exactly as history keys off `current_file`).
+        let bookmarks = state
+            .current_file
+            .as_ref()
+            .map(|path| state.history.bookmarks(path))
+            .unwrap_or_default();
 
         SidePanelSnapshot {
             has_media,
@@ -39,6 +46,7 @@ pub(crate) fn update_up_next_panel(
             playlist: state.playlist.items().to_vec(),
             chapters,
             current_chapter,
+            bookmarks,
             ab_loop: state.ab_loop,
         }
     };
@@ -65,6 +73,7 @@ pub(crate) fn update_up_next_panel(
         update_timeline_marks(
             &controls.seek,
             &controls.timeline_marks_snapshot,
+            &[],
             &[],
             AbLoopState::default(),
         );
@@ -100,6 +109,7 @@ pub(crate) fn update_up_next_panel(
         &controls.seek,
         &controls.timeline_marks_snapshot,
         &snapshot.chapters,
+        &snapshot.bookmarks,
         snapshot.ab_loop,
     );
 
@@ -129,7 +139,7 @@ pub(crate) fn update_up_next_panel(
     let mut actions = Vec::new();
 
     match mode {
-        SidePanelMode::Chapters => render_chapters_panel(controls, &snapshot, &mut actions),
+        SidePanelMode::Chapters => render_chapters_panel(controls, state, &snapshot, &mut actions),
         SidePanelMode::UpNext => {
             render_playlist_panel(controls, state, &snapshot, current_index, &mut actions)
         }
@@ -140,34 +150,146 @@ pub(crate) fn update_up_next_panel(
 
 pub(crate) fn render_chapters_panel(
     controls: &Controls,
+    state: &Rc<RefCell<PlayerState>>,
     snapshot: &SidePanelSnapshot,
     actions: &mut Vec<SidePanelAction>,
 ) {
-    if snapshot.chapters.is_empty() {
+    let has_chapters = !snapshot.chapters.is_empty();
+    if has_chapters {
+        controls.up_next_list.append(&panel_heading_row(&format!(
+            "Chapters · {}",
+            snapshot.chapters.len()
+        )));
+        actions.push(SidePanelAction::None);
+
+        for (index, chapter) in snapshot.chapters.iter().enumerate() {
+            let thumbnail = snapshot
+                .current_file
+                .as_ref()
+                .and_then(|path| thumbnails::existing_thumbnail_path(path, chapter));
+            let is_current = snapshot.current_chapter == Some(index);
+            controls
+                .up_next_list
+                .append(&chapter_row(chapter, thumbnail, is_current));
+            actions.push(SidePanelAction::Chapter(chapter.time));
+        }
+    }
+
+    // Bookmarks live alongside the file's own chapters but stay in their own section so
+    // the read-only chapter spine (navigation, thumbnails, current-state) is untouched.
+    // Only a local file can carry persistent bookmarks, so a stream shows no section.
+    if snapshot.current_file.is_some() {
+        render_bookmarks_section(controls, state, snapshot, actions);
+    } else if !has_chapters {
         controls
             .up_next_list
             .append(&panel_empty_row("No chapters in this media yet."));
         actions.push(SidePanelAction::None);
-        return;
     }
+}
 
+/// The user's own position bookmarks: a heading, the always-present "add at the current
+/// position" affordance, then one row per saved mark (tap to jump, trash to remove).
+pub(crate) fn render_bookmarks_section(
+    controls: &Controls,
+    state: &Rc<RefCell<PlayerState>>,
+    snapshot: &SidePanelSnapshot,
+    actions: &mut Vec<SidePanelAction>,
+) {
     controls.up_next_list.append(&panel_heading_row(&format!(
-        "Chapters · {}",
-        snapshot.chapters.len()
+        "Bookmarks · {}",
+        snapshot.bookmarks.len()
     )));
     actions.push(SidePanelAction::None);
 
-    for (index, chapter) in snapshot.chapters.iter().enumerate() {
-        let thumbnail = snapshot
-            .current_file
-            .as_ref()
-            .and_then(|path| thumbnails::existing_thumbnail_path(path, chapter));
-        let is_current = snapshot.current_chapter == Some(index);
-        controls
-            .up_next_list
-            .append(&chapter_row(chapter, thumbnail, is_current));
-        actions.push(SidePanelAction::Chapter(chapter.time));
+    controls.up_next_list.append(&add_bookmark_row());
+    actions.push(SidePanelAction::AddBookmark);
+
+    for &time in &snapshot.bookmarks {
+        controls.up_next_list.append(&bookmark_row(
+            time,
+            Rc::clone(state),
+            Rc::clone(&controls.status_toast),
+        ));
+        // A bookmark row seeks on activation, exactly like a chapter row.
+        actions.push(SidePanelAction::Chapter(time));
     }
+}
+
+/// The "Add bookmark at current position" affordance row. Activation is dispatched
+/// through [`SidePanelAction::AddBookmark`] by the list's row-activated handler, so this
+/// only needs to render — keeping it a plain (state-free) widget the poll can rebuild.
+pub(crate) fn add_bookmark_row() -> gtk::ListBoxRow {
+    let row = gtk::ListBoxRow::new();
+    row.add_css_class("okp-up-next-row");
+    row.add_css_class("okp-add-bookmark-row");
+    row.set_selectable(false);
+    row.set_tooltip_text(Some("Save a bookmark at the current position"));
+
+    let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row_box.set_hexpand(true);
+
+    let icon = gtk::Image::from_icon_name("list-add-symbolic");
+    icon.add_css_class("okp-add-bookmark-icon");
+    icon.set_pixel_size(16);
+    icon.set_valign(gtk::Align::Center);
+
+    let label = gtk::Label::new(Some("Add bookmark at current position"));
+    label.add_css_class("okp-up-next-file");
+    label.set_xalign(0.0);
+    label.set_hexpand(true);
+    label.set_ellipsize(pango::EllipsizeMode::End);
+
+    row_box.append(&icon);
+    row_box.append(&label);
+    row.set_child(Some(&row_box));
+    row
+}
+
+pub(crate) fn bookmark_row(
+    time: f64,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::ListBoxRow {
+    let row = gtk::ListBoxRow::new();
+    row.add_css_class("okp-up-next-row");
+    row.add_css_class("okp-bookmark-row");
+    row.set_selectable(false);
+    row.set_tooltip_text(Some("Jump to bookmark"));
+
+    let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row_box.set_hexpand(true);
+
+    let icon = gtk::Image::from_icon_name("user-bookmarks-symbolic");
+    icon.add_css_class("okp-bookmark-icon");
+    icon.set_pixel_size(15);
+    icon.set_valign(gtk::Align::Center);
+
+    let label_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    label_box.set_hexpand(true);
+    label_box.set_valign(gtk::Align::Center);
+
+    let title = gtk::Label::new(Some("Bookmark"));
+    title.add_css_class("okp-up-next-file");
+    title.set_xalign(0.0);
+
+    let marker = gtk::Label::new(Some(&time_code::format_clock(time)));
+    marker.add_css_class("okp-up-next-marker");
+    marker.set_xalign(0.0);
+
+    label_box.append(&title);
+    label_box.append(&marker);
+
+    let remove = playlist_action_button("list-remove-symbolic", "Remove bookmark", true);
+    remove.connect_clicked(move |_| {
+        remove_bookmark_at(&state, &status_toast, time);
+    });
+
+    row_box.append(&icon);
+    row_box.append(&label_box);
+    row_box.append(&remove);
+    row.set_child(Some(&row_box));
+    row
 }
 
 /// Index of the chapter the playhead sits in, resolved through the shared core
@@ -265,17 +387,21 @@ pub(crate) fn update_timeline_marks(
     seek: &gtk::Scale,
     snapshot: &RefCell<Vec<TimelineMark>>,
     chapters: &[Chapter],
+    bookmarks: &[f64],
     ab_loop: AbLoopState,
 ) {
-    let marks = timeline_marks(chapters, ab_loop);
+    let marks = timeline_marks(chapters, bookmarks, ab_loop);
     if *snapshot.borrow() == marks {
         return;
     }
 
     seek.clear_marks();
     for mark in &marks {
+        // Chapters tick along the top edge; bookmarks and the A-B endpoints sit on the
+        // bottom edge so the two never crowd the same rail.
         let (position, label) = match mark.kind {
             TimelineMarkKind::Chapter => (gtk::PositionType::Top, None),
+            TimelineMarkKind::Bookmark => (gtk::PositionType::Bottom, None),
             TimelineMarkKind::AbStart => (gtk::PositionType::Bottom, Some("A")),
             TimelineMarkKind::AbEnd => (gtk::PositionType::Bottom, Some("B")),
             TimelineMarkKind::AbLoop => (gtk::PositionType::Bottom, Some("A-B")),
@@ -285,7 +411,11 @@ pub(crate) fn update_timeline_marks(
     snapshot.replace(marks);
 }
 
-pub(crate) fn timeline_marks(chapters: &[Chapter], ab_loop: AbLoopState) -> Vec<TimelineMark> {
+pub(crate) fn timeline_marks(
+    chapters: &[Chapter],
+    bookmarks: &[f64],
+    ab_loop: AbLoopState,
+) -> Vec<TimelineMark> {
     let mut marks = chapters
         .iter()
         .map(|chapter| TimelineMark {
@@ -294,6 +424,17 @@ pub(crate) fn timeline_marks(chapters: &[Chapter], ab_loop: AbLoopState) -> Vec<
         })
         .filter(|mark| mark.time.is_finite() && mark.time > 0.0)
         .collect::<Vec<_>>();
+
+    marks.extend(
+        bookmarks
+            .iter()
+            .copied()
+            .filter(|time| time.is_finite() && *time > 0.0)
+            .map(|time| TimelineMark {
+                time,
+                kind: TimelineMarkKind::Bookmark,
+            }),
+    );
 
     let ab_start = ab_loop.a.filter(|time| time.is_finite() && *time >= 0.0);
     let ab_end = ab_loop.b.filter(|time| time.is_finite() && *time >= 0.0);
@@ -710,6 +851,9 @@ pub(crate) fn side_panel_preview_sample() -> SidePanelSnapshot {
         playlist,
         chapters,
         current_chapter: Some(2),
+        // A couple of user bookmarks so the Bookmarks section (heading, the add row and
+        // saved marks) is exercised by the visual smoke shot.
+        bookmarks: vec![468.0, 1180.0],
         ab_loop: AbLoopState::default(),
     }
 }
@@ -757,7 +901,7 @@ pub(crate) fn open_side_panel_preview(
     clear_list_box(&controls.up_next_list);
     let mut actions = Vec::new();
     match mode {
-        SidePanelMode::Chapters => render_chapters_panel(controls, &snapshot, &mut actions),
+        SidePanelMode::Chapters => render_chapters_panel(controls, state, &snapshot, &mut actions),
         SidePanelMode::UpNext => {
             let current_index = snapshot.playlist.iter().position(|item| {
                 item.is_current(

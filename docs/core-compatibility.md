@@ -167,6 +167,34 @@ behaves identically on both sides.
   list. Only NaN times (absurd input) would be placed differently (`CompareTo` sorts NaN
   first; `total_cmp` sorts positive NaN last).
 
+## Chapter bookmarks → `okp_core::bookmarks` (Linux parity increment)
+
+Windows leads pillar 3 (chapters editor + bookmarks): a viewer can drop position bookmarks and
+author titled `UserChapters`. This increment brings the **bookmark** half to Linux — create and
+remove position marks from the current playhead, surfaced in the Chapters side panel alongside
+the file's own chapters and on the seek timeline.
+
+- **Ported logic.** `okp_core::bookmarks` is the pure list math behind
+  `HistoryService.AddBookmark`/`RemoveBookmark`: `add` dedupes within `ADD_DEDUPE_EPSILON`
+  (0.5 s) and keeps the list sorted; `remove` matches within `REMOVE_MATCH_EPSILON` (0.01 s).
+  The spec is the `Bookmarks_AddDedupeRemove` case in `HistoryServiceTests.cs`. Storage stays
+  behind the shell seam: the GTK `HistoryStore` reads/writes `history::FileEntry::bookmarks` and
+  persists the same `history.json` as everything else. Non-finite/negative times are rejected in
+  the port — a Linux-side hardening; the shell only ever bookmarks a real playhead, so the C#
+  suite never hits it.
+- **Same schema field as Windows.** Marks persist in the shared `bookmarks` field (Windows
+  `Bookmarks`), so a bookmark authored on either platform round-trips to the other. Only local
+  files are bookmarkable (history keys off the file path; streams are not tracked), matching
+  Windows `IsTrackable`; creating a mark is suppressed in a private session, matching the Windows
+  incognito no-op (removing an existing mark is a deliberate edit and stays allowed).
+- **Write-back to embedded chapters is intentionally not offered.** A media file's own container
+  chapters stay read-only on Linux — editing them would mean remuxing the file, which the alpha
+  does not do. Renaming/retitling *user* chapters (Windows `UserChapters`) is likewise deferred;
+  Linux ships the position-bookmark flow now and leaves titled user-chapter editing as the
+  remaining Windows-leads gap. Existing chapter navigation, hover preview, thumbnails, and
+  timeline chapter ticks are unchanged — bookmarks render in their own panel section and on a
+  separate timeline rail (the bottom edge, away from the chapters' top rail).
+
 ## TrackTags → `okp_core::track_tags`
 
 - **Shapes only.** Nullable strings → `Option<&str>` in, `Option<String>` out. The `" - "`
@@ -346,12 +374,16 @@ untouched by this work; the Windows migration is exercised only by the Rust gold
   `→ (Some(false), None)` ("keep it off"), and any other id `→ (Some(true), Some(id))`. This is
   a best-effort reconciliation of the two per-file models; the secondary-subtitle, subtitle
   delay/scale, and speed preferences have no Windows counterpart and stay absent.
-- **Windows-only extras are preserved but Linux never writes them.** `title`, `poster_path`,
-  `bookmarks`, and `chapters` are carried through the canonical record (so a future Windows
-  consumer keeps them) and are `skip_serializing_if`-empty, so a Linux-shaped record serializes
-  exactly as the alpha dialect did. The Linux shell's `record()` replaces a file's progress
-  fields while preserving its stored `preferences`, exactly as before; on Linux the extras are
-  always empty, so behavior is unchanged.
+- **`bookmarks` is now written on Linux; the other extras are still preserved untouched.**
+  `title`, `poster_path`, and `chapters` (`UserChapters`) are carried through the canonical
+  record (so a future Windows consumer keeps them); with `bookmarks` they are
+  `skip_serializing_if`-empty, so a file with none serializes exactly as the alpha dialect did.
+  Linux now writes `bookmarks` — the side panel's position bookmarks persist here (see
+  "Chapter bookmarks → `okp_core::bookmarks`" above). To make that safe, the shell's `record()`
+  now refreshes a file's progress fields *in place*, preserving every other field (the stored
+  `preferences` as before, plus the shared-schema extras); it previously rebuilt the record from
+  `default()`, which silently dropped the extras — harmless only while Linux never wrote them,
+  but it would have wiped a bookmark on the next progress save.
 - **Path keys are carried verbatim.** History is keyed by the raw media path string on both
   platforms (Windows preserves backslashes and original case). Migration does not rewrite keys;
   a cross-platform consumer normalizes case at lookup time (the same note as `Playlist`).

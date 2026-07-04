@@ -395,6 +395,18 @@ pub(crate) fn command_popover_content(
     });
     content.append(&copy_time_button);
 
+    let add_bookmark_button = track_button("Add Bookmark", false);
+    add_bookmark_button.set_sensitive(has_local_media);
+    add_bookmark_button.set_tooltip_text(Some("Save a bookmark at the current position"));
+    let add_bookmark_state = Rc::clone(&state);
+    let add_bookmark_toast = Rc::clone(&status_toast);
+    let add_bookmark_popover = popover.clone();
+    add_bookmark_button.connect_clicked(move |_| {
+        add_bookmark_popover.popdown();
+        add_bookmark_at_position(&add_bookmark_state, &add_bookmark_toast);
+    });
+    content.append(&add_bookmark_button);
+
     let ab_loop_button = track_button("A-B loop", ab_loop_active);
     ab_loop_button.set_sensitive(has_media);
     ab_loop_button.set_tooltip_text(Some("Set A, set B, clear (L)"));
