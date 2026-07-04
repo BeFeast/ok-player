@@ -12,6 +12,23 @@ This workspace is the Linux-first foundation for the shared OK Player core.
 The Windows WinUI app remains in `src/` while Linux and the shared Rust core grow under
 `rust/`.
 
+## Streaming and YouTube URLs
+
+The GTK shell's **Open URL** entry point plays any direct stream mpv understands
+(`http(s)`, `smb`, `rtsp`, …) and recognizes YouTube links. YouTube playback
+rides mpv's `ytdl_hook`, which shells out to a resolver (`yt-dlp`, or the older
+`youtube-dl`); when none is on `PATH`, the dialog says so instead of handing mpv
+a link it would silently fail to open. Install one to enable YouTube links:
+
+```bash
+sudo apt-get install yt-dlp   # or: pipx install yt-dlp
+```
+
+This is the PRD §10.2 **Day-2** reservation: a clean entry point and a URL field
+that recognizes YouTube links — deliberately **not** an in-app browser or search
+UI. The classification and outcome rules live in `okp-core` (`youtube` module);
+the shell only probes the host and renders the result.
+
 ## Linux Dependencies
 
 Ubuntu/Debian-family development packages:

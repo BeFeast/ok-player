@@ -83,24 +83,118 @@ pub(crate) fn open_url_dialog(
     content.append(&command_dialog_title("Open URL"));
 
     let entry = gtk::Entry::new();
-    entry.set_placeholder_text(Some("https://example.com/video.mkv"));
+    entry.set_placeholder_text(Some("https://example.com/video.mkv or a YouTube link"));
     entry.set_activates_default(true);
     entry.set_width_chars(52);
     content.append(&entry);
 
+    // The YouTube slot stays honest without a browser: the field recognizes
+    // YouTube links and the hint below explains how they resolve — including
+    // when the host is missing the resolver they need (PRD §10.2, Day-2). The
+    // resolver probe reads the host `PATH` once here; it does not change while
+    // the dialog is open, so the classification stays cheap per keystroke.
+    let resolver_available = youtube_resolver_available();
+
+    let hint = gtk::Label::new(None);
+    hint.add_css_class("okp-info-label");
+    hint.set_xalign(0.0);
+    hint.set_wrap(true);
+    hint.set_max_width_chars(52);
+    content.append(&hint);
+    update_open_url_hint(&hint, "", resolver_available);
+
+    let hint_on_change = hint.clone();
+    entry.connect_changed(move |entry| {
+        entry.remove_css_class("is-error");
+        update_open_url_hint(&hint_on_change, entry.text().trim(), resolver_available);
+    });
+
     dialog.connect_response(move |dialog, response| {
-        if response == gtk::ResponseType::Accept {
-            let url = entry.text().trim().to_owned();
-            if media_formats::is_playable_url(Some(&url)) {
+        if response != gtk::ResponseType::Accept {
+            dialog.close();
+            return;
+        }
+        let url = entry.text().trim().to_owned();
+        match youtube::open_url_outcome(Some(&url), resolver_available) {
+            youtube::OpenUrlOutcome::Play => {
                 load_media_url(&state, url);
-            } else {
+                dialog.close();
+            }
+            youtube::OpenUrlOutcome::YouTubeToolingMissing => {
+                update_open_url_hint(&hint, &url, resolver_available);
+                status_toast.show("Install yt-dlp to play YouTube links");
+            }
+            youtube::OpenUrlOutcome::Reject => {
+                entry.add_css_class("is-error");
                 status_toast.show("Enter a valid stream URL");
             }
         }
-        dialog.close();
     });
 
     dialog.present();
+}
+
+/// True when the host has a resolver (`yt-dlp`/`youtube-dl`) mpv's `ytdl_hook`
+/// can drive, so a YouTube link is actually playable. A missing resolver is the
+/// in-app "missing tooling" state the Open-URL surface reports instead of
+/// handing mpv a link it would silently fail to open.
+pub(crate) fn youtube_resolver_available() -> bool {
+    resolver_on_path(env::var_os("PATH"), is_executable_file)
+}
+
+/// Pure `PATH` scan for any [`youtube::YOUTUBE_RESOLVERS`] entry, with the
+/// executable test injected so the classification is unit-testable without
+/// depending on what is actually installed on the test machine.
+pub(crate) fn resolver_on_path(
+    path_var: Option<std::ffi::OsString>,
+    is_executable: impl Fn(&Path) -> bool,
+) -> bool {
+    let Some(path_var) = path_var else {
+        return false;
+    };
+    env::split_paths(&path_var).any(|dir| {
+        youtube::YOUTUBE_RESOLVERS
+            .iter()
+            .any(|tool| is_executable(&dir.join(tool)))
+    })
+}
+
+/// A real host probe: the candidate must be a file with an execute bit set, so a
+/// same-named non-executable file does not read as an installed resolver.
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.metadata()
+        .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+/// The advisory line under the Open-URL field, chosen from what the typed text
+/// classifies as and whether a resolver is present. Returns the copy and whether
+/// it is a warning (a recognized YouTube link the host cannot yet play).
+pub(crate) fn open_url_hint(text: &str, resolver_available: bool) -> (&'static str, bool) {
+    match youtube::classify_url(Some(text)) {
+        youtube::UrlKind::YouTube if resolver_available => {
+            ("YouTube link — resolved through yt-dlp.", false)
+        }
+        youtube::UrlKind::YouTube => (
+            "yt-dlp was not found on PATH. Install it to play YouTube links.",
+            true,
+        ),
+        // Empty, still-being-typed, or a plain stream URL: the neutral invitation.
+        youtube::UrlKind::DirectStream | youtube::UrlKind::Unsupported => {
+            ("Plays direct stream URLs and YouTube links.", false)
+        }
+    }
+}
+
+fn update_open_url_hint(label: &gtk::Label, text: &str, resolver_available: bool) {
+    let (message, warn) = open_url_hint(text, resolver_available);
+    label.set_text(message);
+    if warn {
+        label.add_css_class("is-warning");
+    } else {
+        label.remove_css_class("is-warning");
+    }
 }
 
 pub(crate) fn open_go_to_time_dialog(

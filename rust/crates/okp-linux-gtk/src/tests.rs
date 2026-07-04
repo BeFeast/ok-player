@@ -1330,6 +1330,59 @@ fn linux_update_status_reflects_last_check_result() {
 }
 
 #[test]
+fn resolver_on_path_reports_missing_tooling_state() {
+    use std::ffi::OsString;
+
+    let joined = |dirs: &[&str]| Some(OsString::from(dirs.join(":")));
+
+    // No PATH at all -> nothing resolves, so a YouTube link is unplayable.
+    assert!(!resolver_on_path(None, |_| true));
+
+    // A PATH whose dirs hold an executable resolver -> available.
+    let holds_resolver =
+        |candidate: &Path| candidate.ends_with("yt-dlp") || candidate.ends_with("youtube-dl");
+    assert!(resolver_on_path(
+        joined(&["/opt/tools", "/usr/bin"]),
+        holds_resolver
+    ));
+
+    // Same PATH but nothing there is executable -> the missing-tooling state.
+    assert!(!resolver_on_path(
+        joined(&["/opt/tools", "/usr/bin"]),
+        |_| false
+    ));
+
+    // Only `youtube-dl` present (the fallback resolver) still counts.
+    let holds_youtube_dl = |candidate: &Path| candidate.ends_with("youtube-dl");
+    assert!(resolver_on_path(
+        joined(&["/usr/local/bin"]),
+        holds_youtube_dl
+    ));
+}
+
+#[test]
+fn open_url_hint_tracks_classification_and_tooling() {
+    // Empty or plain stream input keeps the neutral, non-warning invitation.
+    assert_eq!(
+        open_url_hint("", true),
+        ("Plays direct stream URLs and YouTube links.", false)
+    );
+    assert_eq!(
+        open_url_hint("https://example.com/video.mkv", false),
+        ("Plays direct stream URLs and YouTube links.", false)
+    );
+
+    // A YouTube link with a resolver present is playable — no warning.
+    let (_, youtube_ready_warns) = open_url_hint("https://youtu.be/x", true);
+    assert!(!youtube_ready_warns);
+
+    // A YouTube link with no resolver is the warned missing-tooling state.
+    let (missing_message, missing_warns) = open_url_hint("https://youtu.be/x", false);
+    assert!(missing_warns);
+    assert!(missing_message.contains("yt-dlp"));
+}
+
+#[test]
 fn deb_self_install_timeout_uses_positive_override_only() {
     assert_eq!(
         parse_deb_self_install_timeout(Some("5")),

@@ -20,6 +20,7 @@ const OKP_STYLESHEET: &str = "
         @define-color okp_danger_bright #ff6868;
         @define-color okp_warning #b07600;
         @define-color okp_warning_deep #6f4b00;
+        @define-color okp_warning_bright #e6a43c;
 
         .okp-root {
             background: @okp_bg;
@@ -957,6 +958,11 @@ const OKP_STYLESHEET: &str = "
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12px;
             font-weight: 500;
+        }
+
+        window.okp-command-dialog .okp-info-label.is-warning {
+            color: @okp_warning_bright;
+            font-weight: 600;
         }
 
         .okp-settings-window {
