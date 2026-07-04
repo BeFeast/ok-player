@@ -230,8 +230,14 @@ directly unit-tested, and renders it in the GTK shell; cache and network are def
   because its current path is always absolute; the Rust port instead resolves a bare filename to a
   sibling `.lrc`, which is the sensible result and is what the unit tests pin.
 - **Case sensitivity.** Windows leans on a case-insensitive `File.Exists`; Linux filesystems are
-  case-sensitive, so `read_sidecar` probes the lowercase `.lrc` first and then an uppercase `.LRC`
-  (two bounded reads, no directory scan) so a sheet exported as `Track.LRC` still resolves.
+  case-sensitive, so `read_sidecar` probes the canonical stem with the `.lrc` extension in every
+  ASCII-case spelling (`lrc`, `LRC`, `Lrc`, …). A sheet exported as `Track.LRC`, `Track.Lrc`, or any
+  mixed case therefore resolves. These are bounded direct reads, never a directory scan — a scan
+  could stall on a slow network mount and, worse, would run on every track with no sidecar at all
+  (the common case). Only the extension case is folded, not the stem: a Windows `File.Exists` also
+  matches a differently-cased *stem* (media `Song.flac` ↔ sidecar `song.lrc`), but export tools
+  always derive the sidecar name from the audio file, so its stem matches by construction, and
+  case-folding the stem would require the very directory scan this seam avoids.
 - **Never fails.** Any I/O error (an unmounted share, a permission error) resolves to "no lyrics",
   matching the C# `catch { return null; }`. Parsing then reuses `okp_core::lrc` unchanged.
 - **Audio gate.** The Windows overlay shows only when `MediaFormats.IsAudio(path)` **and** mpv

@@ -38,13 +38,14 @@ pub fn sidecar_path(media_path: &Path) -> Option<PathBuf> {
 /// sidecar on disk, or an unreadable one (an unmounted share, a permission error). Never fails: any
 /// I/O error resolves to "no lyrics", exactly like the Windows service's `catch { return null; }`.
 ///
-/// The lowercase [`sidecar_path`] is tried first; failing that — Linux filesystems are
-/// case-sensitive where the Windows original leaned on a case-insensitive `File.Exists` — an
-/// uppercase `.LRC` is accepted too, so a sheet exported as `Track.LRC` still resolves. The two
-/// bounded probes avoid scanning the directory (which could stall on a slow network mount).
+/// The Windows original leans on a case-insensitive `File.Exists`; Linux filesystems are
+/// case-sensitive, so [`sidecar_path`]'s canonical stem is probed with the `.lrc` extension in every
+/// ASCII-case spelling. A sheet exported as `Track.lrc`, `Track.LRC`, `Track.Lrc`, or any mixed case
+/// therefore resolves. These are bounded direct reads, never a directory scan (which could stall on
+/// a slow network mount, and would run on every track that has no sidecar at all — the common case).
 pub fn read_sidecar(media_path: &Path) -> Option<String> {
     let base = sidecar_path(media_path)?;
-    for extension in ["lrc", "LRC"] {
+    for extension in ["lrc", "LRC", "Lrc", "lrC", "lRc", "lRC", "LrC", "LRc"] {
         let candidate = base.with_extension(extension);
         if let Ok(text) = fs::read_to_string(&candidate) {
             return Some(text);
@@ -138,6 +139,28 @@ mod tests {
         assert_eq!(read_sidecar(&media).as_deref(), Some("plain words"));
 
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_sidecar_accepts_a_mixed_case_extension() {
+        // A title-cased `.Lrc` is neither the lowercase nor the all-uppercase spelling, yet the
+        // Windows case-insensitive `File.Exists` would find it. Every ASCII casing must resolve on a
+        // case-sensitive Linux filesystem too.
+        for extension in ["Lrc", "lRc", "lrC", "LRc"] {
+            let dir = unique_temp_dir("okp-lyrics-mixed");
+            fs::create_dir_all(&dir).expect("temp dir");
+            let media = dir.join("Track.flac");
+            fs::write(&media, b"x").expect("media file");
+            fs::write(dir.join(format!("Track.{extension}")), "mixed case").expect("sidecar");
+
+            assert_eq!(
+                read_sidecar(&media).as_deref(),
+                Some("mixed case"),
+                "Track.{extension}"
+            );
+
+            fs::remove_dir_all(&dir).ok();
+        }
     }
 
     #[test]
