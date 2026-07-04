@@ -357,8 +357,16 @@ pub(crate) fn settings_subtitle_track_section(
     if secondary && !subtitle_selection::can_use_secondary(tracks.len(), secondary_id.is_some()) {
         // A second caption needs a second track to sit alongside the primary;
         // offering the picker on a single-track file would only let the user
-        // point the secondary slot at the primary track.
-        section.append(&settings_empty_state("Needs a second subtitle track"));
+        // point the secondary slot at the primary track. When the file carries
+        // no subtitle track at all there is no first caption either, so report
+        // that plainly — matching the Primary section and popover — rather than
+        // implying a *second* track is missing.
+        let message = if tracks.is_empty() {
+            "No subtitle tracks"
+        } else {
+            "Needs a second subtitle track"
+        };
+        section.append(&settings_empty_state(message));
         return section;
     }
     // The secondary track also reports `selected`, so resolve the primary slot
