@@ -173,6 +173,18 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         mpris_commands,
     );
     connect_progress_persistence(&window, Rc::clone(&state));
+    // Visual smoke hook: render the Chapters/Up Next side panel with representative
+    // fixture rows so its layout can be screenshot-tested without loaded media.
+    // `OKP_OPEN_SIDE_PANEL_ON_STARTUP=up-next` previews the queue; any other value
+    // previews Chapters.
+    if let Some(value) = env::var_os("OKP_OPEN_SIDE_PANEL_ON_STARTUP") {
+        let mode = if value.eq_ignore_ascii_case("up-next") {
+            SidePanelMode::UpNext
+        } else {
+            SidePanelMode::Chapters
+        };
+        open_side_panel_preview(&controls, &state, &chrome, mode);
+    }
     connect_state_poll(
         &window,
         Rc::clone(&state),

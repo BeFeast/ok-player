@@ -5,6 +5,11 @@ pub(crate) fn update_up_next_panel(
     state: &Rc<RefCell<PlayerState>>,
     chrome: &ChromeVisibility,
 ) {
+    // The visual smoke hook owns the panel while it renders fixture rows.
+    if controls.side_panel_preview_frozen.get() {
+        return;
+    }
+
     let snapshot = {
         let state = state.borrow();
         let has_media = has_loaded_media_state(&state);
@@ -13,6 +18,11 @@ pub(crate) fn update_up_next_panel(
             .as_ref()
             .map(Mpv::observed_chapters)
             .unwrap_or_default();
+        let position = state
+            .mpv
+            .as_ref()
+            .and_then(|mpv| mpv.observed_playback_state().time_pos);
+        let current_chapter = current_chapter_index(&chapters, position);
 
         SidePanelSnapshot {
             has_media,
@@ -20,6 +30,7 @@ pub(crate) fn update_up_next_panel(
             current_url: state.current_url.clone(),
             playlist: state.playlist.items().to_vec(),
             chapters,
+            current_chapter,
             ab_loop: state.ab_loop,
         }
     };
@@ -138,16 +149,29 @@ pub(crate) fn render_chapters_panel(
     )));
     actions.push(SidePanelAction::None);
 
-    for chapter in &snapshot.chapters {
+    for (index, chapter) in snapshot.chapters.iter().enumerate() {
         let thumbnail = snapshot
             .current_file
             .as_ref()
             .and_then(|path| thumbnails::existing_thumbnail_path(path, chapter));
+        let is_current = snapshot.current_chapter == Some(index);
         controls
             .up_next_list
-            .append(&chapter_row(chapter, thumbnail));
+            .append(&chapter_row(chapter, thumbnail, is_current));
         actions.push(SidePanelAction::Chapter(chapter.time));
     }
+}
+
+/// Index of the chapter the playhead sits in, resolved through the shared core
+/// [`chapter_math::current_index`] logic (last start at/before `position`, within
+/// its default epsilon). `None` before the first chapter or without a position.
+pub(crate) fn current_chapter_index(chapters: &[Chapter], position: Option<f64>) -> Option<usize> {
+    let position = position.filter(|value| value.is_finite())?;
+    let times = chapters
+        .iter()
+        .map(|chapter| chapter.time)
+        .collect::<Vec<_>>();
+    chapter_math::current_index(&times, position, chapter_math::DEFAULT_EPSILON)
 }
 
 pub(crate) fn render_playlist_panel(
@@ -320,15 +344,24 @@ pub(crate) fn panel_empty_row(text: &str) -> gtk::ListBoxRow {
     let label = gtk::Label::new(Some(text));
     label.add_css_class("okp-panel-empty");
     label.set_wrap(true);
-    label.set_xalign(0.0);
+    label.set_justify(gtk::Justification::Center);
+    label.set_xalign(0.5);
     row.set_child(Some(&label));
     row
 }
 
-pub(crate) fn chapter_row(chapter: &Chapter, thumbnail: Option<PathBuf>) -> gtk::ListBoxRow {
+pub(crate) fn chapter_row(
+    chapter: &Chapter,
+    thumbnail: Option<PathBuf>,
+    is_current: bool,
+) -> gtk::ListBoxRow {
     let row = gtk::ListBoxRow::new();
     row.add_css_class("okp-up-next-row");
+    row.add_css_class("okp-chapter-row");
     row.set_selectable(false);
+    if is_current {
+        row.add_css_class("is-current");
+    }
 
     let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     row_box.set_hexpand(true);
@@ -336,11 +369,25 @@ pub(crate) fn chapter_row(chapter: &Chapter, thumbnail: Option<PathBuf>) -> gtk:
     let thumbnail_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
     thumbnail_box.add_css_class("okp-chapter-thumb");
     thumbnail_box.set_size_request(88, 50);
+    thumbnail_box.set_valign(gtk::Align::Center);
     if let Some(thumbnail) = thumbnail {
         let picture = gtk::Picture::for_filename(thumbnail);
         picture.set_size_request(88, 50);
         picture.set_can_shrink(true);
         thumbnail_box.append(&picture);
+    } else {
+        // No frame is cached yet (thumbnails warm asynchronously), so show a calm
+        // placeholder glyph rather than a bare grey rectangle — the row reads as
+        // "preview pending" instead of broken.
+        thumbnail_box.add_css_class("is-pending");
+        let placeholder = gtk::Image::from_icon_name("image-x-generic-symbolic");
+        placeholder.add_css_class("okp-chapter-thumb-placeholder");
+        placeholder.set_pixel_size(18);
+        placeholder.set_hexpand(true);
+        placeholder.set_vexpand(true);
+        placeholder.set_halign(gtk::Align::Center);
+        placeholder.set_valign(gtk::Align::Center);
+        thumbnail_box.append(&placeholder);
     }
 
     let title_text = chapter
@@ -350,12 +397,18 @@ pub(crate) fn chapter_row(chapter: &Chapter, thumbnail: Option<PathBuf>) -> gtk:
         .map(str::to_owned)
         .unwrap_or_else(|| format!("Chapter {}", chapter.index + 1));
 
-    let label_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    let label_box = gtk::Box::new(gtk::Orientation::Vertical, 3);
     label_box.set_hexpand(true);
+    label_box.set_valign(gtk::Align::Center);
 
+    let meta = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let time = gtk::Label::new(Some(&time_code::format_clock(chapter.time)));
     time.add_css_class("okp-up-next-marker");
     time.set_xalign(0.0);
+    meta.append(&time);
+    if is_current {
+        meta.append(&now_playing_badge("PLAYING"));
+    }
 
     let title = gtk::Label::new(Some(&title_text));
     title.add_css_class("okp-up-next-file");
@@ -363,12 +416,28 @@ pub(crate) fn chapter_row(chapter: &Chapter, thumbnail: Option<PathBuf>) -> gtk:
     title.set_hexpand(true);
     title.set_ellipsize(pango::EllipsizeMode::End);
 
-    label_box.append(&time);
+    label_box.append(&meta);
     label_box.append(&title);
     row_box.append(&thumbnail_box);
     row_box.append(&label_box);
     row.set_child(Some(&row_box));
     row
+}
+
+/// A small accent pill used to flag the now-playing chapter or queue item.
+pub(crate) fn now_playing_badge(text: &str) -> gtk::Label {
+    let badge = gtk::Label::new(Some(text));
+    badge.add_css_class("okp-now-badge");
+    badge.set_valign(gtk::Align::Center);
+    badge
+}
+
+/// A quieter pill used to flag the item that plays next in the queue.
+pub(crate) fn up_next_badge(text: &str) -> gtk::Label {
+    let badge = gtk::Label::new(Some(text));
+    badge.add_css_class("okp-next-badge");
+    badge.set_valign(gtk::Align::Center);
+    badge
 }
 
 pub(crate) fn clear_list_box(list: &gtk::ListBox) {
@@ -386,6 +455,7 @@ pub(crate) fn playlist_row(
 ) -> gtk::ListBoxRow {
     let is_current = current_index == Some(index);
     let is_next = current_index.is_some_and(|current| index == current + 1);
+    let is_behind = current_index.is_some_and(|current| index < current);
     let row = gtk::ListBoxRow::new();
     row.add_css_class("okp-up-next-row");
     row.set_activatable(!is_current);
@@ -393,21 +463,33 @@ pub(crate) fn playlist_row(
     row.set_tooltip_text(Some(&item.display_location()));
     if is_current {
         row.add_css_class("is-current");
+    } else if is_behind {
+        // Already played this session — dim it so the eye lands on what is next.
+        row.add_css_class("is-behind");
     }
 
     let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     row_box.set_hexpand(true);
 
-    let marker = gtk::Label::new(Some(if is_current {
-        "Now"
+    // A fixed-width lane keeps the now/next badge or queue number in a single
+    // column so the titles line up down the list.
+    let lane = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    lane.add_css_class("okp-up-next-lane");
+    lane.set_halign(gtk::Align::Start);
+    lane.set_valign(gtk::Align::Center);
+    if is_current {
+        lane.append(&now_playing_badge("NOW"));
     } else if is_next {
-        "Next"
+        lane.append(&up_next_badge("NEXT"));
     } else {
-        ""
-    }));
-    marker.add_css_class("okp-up-next-marker");
-    marker.set_width_chars(4);
-    marker.set_xalign(0.0);
+        let number = gtk::Label::new(Some(&format!("{}", index + 1)));
+        number.add_css_class("okp-up-next-index");
+        number.set_xalign(0.5);
+        number.set_hexpand(true);
+        lane.append(&number);
+    }
+
+    let icon = playlist_row_icon(item);
 
     let title = gtk::Label::new(Some(&item.display_name()));
     title.add_css_class("okp-up-next-file");
@@ -469,11 +551,26 @@ pub(crate) fn playlist_row(
     connect_playlist_row_drag_reorder(&row, &drag_handle, index, state);
 
     row_box.append(&drag_handle);
-    row_box.append(&marker);
+    row_box.append(&lane);
+    row_box.append(&icon);
     row_box.append(&title);
     row_box.append(&actions);
     row.set_child(Some(&row_box));
     row
+}
+
+/// A leading glyph that tells a local file apart from a stream URL, so the
+/// queue reads its source at a glance instead of only from the file name.
+pub(crate) fn playlist_row_icon(item: &PlaylistItem) -> gtk::Image {
+    let icon_name = match item {
+        PlaylistItem::Local(_) => "video-x-generic-symbolic",
+        PlaylistItem::Url(_) => "network-server-symbolic",
+    };
+    let icon = gtk::Image::from_icon_name(icon_name);
+    icon.add_css_class("okp-up-next-source-icon");
+    icon.set_pixel_size(14);
+    icon.set_valign(gtk::Align::Center);
+    icon
 }
 
 pub(crate) fn playlist_drag_handle() -> gtk::Box {
@@ -561,4 +658,105 @@ pub(crate) fn playlist_drop_target_index(
     };
 
     (target != source_index).then_some(target)
+}
+
+/// Representative Chapters/Up Next content used by the visual smoke hook
+/// (`OKP_OPEN_SIDE_PANEL_ON_STARTUP`). Fixture data only — the live panel always
+/// renders from `Mpv::observed_chapters` and the loaded playlist. It exercises the
+/// current-chapter state, a long chapter name that must ellipsize, and a queue
+/// whose current item sits in the middle so the played-behind, now-playing, and
+/// next rows — plus a mix of local files and a stream URL — are all covered.
+pub(crate) fn side_panel_preview_sample() -> SidePanelSnapshot {
+    let chapter = |index: i64, time: f64, title: &str| Chapter {
+        index,
+        time,
+        title: Some(title.to_owned()),
+    };
+    let chapters = vec![
+        chapter(0, 0.0, "Cold Open"),
+        chapter(1, 312.0, "Main Titles"),
+        chapter(
+            2,
+            933.0,
+            "The Long Walk Home — a chapter title long enough to prove it ellipsizes",
+        ),
+        chapter(3, 1780.0, "The Confrontation"),
+        chapter(4, 2540.0, "Resolution & End Credits"),
+    ];
+    let current_file = PathBuf::from("/media/films/Bonus — Behind the Scenes Featurette.mkv");
+    let playlist = vec![
+        PlaylistItem::Local(PathBuf::from(
+            "/media/films/Feature Presentation (2024).mkv",
+        )),
+        PlaylistItem::Local(current_file.clone()),
+        PlaylistItem::Url("https://stream.example.com/live/channel-one.m3u8".to_owned()),
+        PlaylistItem::Local(PathBuf::from(
+            "/media/films/Closing Short — A Director's Note.mkv",
+        )),
+    ];
+
+    SidePanelSnapshot {
+        has_media: true,
+        current_file: Some(current_file),
+        current_url: None,
+        playlist,
+        chapters,
+        current_chapter: Some(2),
+        ab_loop: AbLoopState::default(),
+    }
+}
+
+/// Freeze the live poll and render the side panel from fixture data so the
+/// Chapters and Up Next surfaces can be screenshot-tested without loaded media.
+/// Presentational smoke hook only; production code never calls this.
+pub(crate) fn open_side_panel_preview(
+    controls: &Controls,
+    state: &Rc<RefCell<PlayerState>>,
+    chrome: &ChromeVisibility,
+    mode: SidePanelMode,
+) {
+    controls.side_panel_preview_frozen.set(true);
+    let snapshot = side_panel_preview_sample();
+
+    controls.side_panel_mode.set(mode);
+    set_side_panel_user_visible(
+        &controls.up_next_revealer,
+        &controls.chapters_button,
+        &controls.side_panel_user_visible,
+        &controls.side_panel_pinned,
+        chrome,
+        true,
+    );
+
+    update_side_panel_tab_labels(
+        &controls.chapters_tab,
+        &controls.up_next_tab,
+        snapshot.chapters.len(),
+        snapshot.playlist.len(),
+    );
+    update_side_panel_tab_state(&controls.chapters_tab, &controls.up_next_tab, mode);
+    controls.up_next_title.set_text(match mode {
+        SidePanelMode::Chapters => "Chapters",
+        SidePanelMode::UpNext => "Up Next",
+    });
+    controls
+        .up_next_summary
+        .set_text(&side_panel_summary(&snapshot));
+
+    clear_list_box(&controls.up_next_list);
+    let mut actions = Vec::new();
+    match mode {
+        SidePanelMode::Chapters => render_chapters_panel(controls, &snapshot, &mut actions),
+        SidePanelMode::UpNext => {
+            let current_index = snapshot.playlist.iter().position(|item| {
+                item.is_current(
+                    snapshot.current_file.as_deref(),
+                    snapshot.current_url.as_deref(),
+                )
+            });
+            render_playlist_panel(controls, state, &snapshot, current_index, &mut actions);
+        }
+    }
+    controls.side_panel_actions.replace(actions);
+    controls.side_panel_snapshot.replace(snapshot);
 }

@@ -43,7 +43,7 @@ pub(crate) fn populate_subtitle_popover(
     }
 
     content.append(&divider());
-    content.append(&track_section_title("Secondary"));
+    content.append(&track_group_title("Secondary"));
 
     let secondary_off_button = track_button("Off", secondary_subtitle_id.is_none());
     let secondary_off_state = Rc::clone(&state);
@@ -63,7 +63,7 @@ pub(crate) fn populate_subtitle_popover(
     } else {
         for track in &tracks {
             let selected = secondary_subtitle_id == Some(track.id);
-            let button = track_button(&track_label_for(track, selected), selected);
+            let button = track_button(&track_label(track), selected);
             let track_state = Rc::clone(&state);
             let track_popover = popover.clone();
             let track_id = track.id;
@@ -138,7 +138,7 @@ pub(crate) fn populate_audio_popover(
     }
 
     content.append(&divider());
-    content.append(&track_section_title("Output Device"));
+    content.append(&track_group_title("Output Device"));
     let devices = read_audio_devices(&state);
     if devices.is_empty() {
         content.append(&empty_track_label("No output devices"));
@@ -408,8 +408,8 @@ pub(crate) fn command_popover_content(
     content.append(&ab_loop_button);
 
     content.append(&divider());
-    content.append(&track_section_title("Video"));
-    content.append(&track_section_title("Aspect ratio"));
+    content.append(&track_group_title("Video"));
+    content.append(&track_subgroup_title("Aspect ratio"));
     for (label, aspect) in VIDEO_ASPECT_PRESETS {
         let button = track_button(label, video_transform.aspect_override == aspect);
         button.set_sensitive(has_media);
@@ -457,7 +457,7 @@ pub(crate) fn command_popover_content(
     content.append(&reset_video_button);
 
     content.append(&divider());
-    content.append(&track_section_title("Screenshot"));
+    content.append(&track_group_title("Screenshot"));
 
     let save_frame_button = track_button("Save frame", false);
     save_frame_button.set_sensitive(has_media);
@@ -626,6 +626,25 @@ pub(crate) fn set_track_popover_child(popover: &gtk::Popover, content: gtk::Box)
 pub(crate) fn track_section_title(title: &str) -> gtk::Label {
     let title = gtk::Label::new(Some(title));
     title.add_css_class("okp-track-popover-title");
+    title.set_xalign(0.0);
+    title
+}
+
+/// An "eyebrow" header for a group inside a popover (e.g. Secondary, Output
+/// Device, Screenshot) — dimmer and smaller than the popover title so the
+/// primary heading stays dominant and the sections read as a clear hierarchy.
+pub(crate) fn track_group_title(title: &str) -> gtk::Label {
+    let title = gtk::Label::new(Some(title));
+    title.add_css_class("okp-track-group-title");
+    title.set_xalign(0.0);
+    title
+}
+
+/// A quieter sub-header nested under a group header (e.g. Aspect ratio under
+/// Video) so two stacked headers do not read as siblings.
+pub(crate) fn track_subgroup_title(title: &str) -> gtk::Label {
+    let title = gtk::Label::new(Some(title));
+    title.add_css_class("okp-track-subgroup-title");
     title.set_xalign(0.0);
     title
 }
@@ -937,10 +956,27 @@ pub(crate) fn track_button(text: &str, selected: bool) -> gtk::Button {
         button.add_css_class("is-selected");
     }
 
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+
+    // A reserved leading column carries the accent check for the selected row.
+    // Toggling opacity (rather than visibility) keeps every label aligned on the
+    // same left edge whether or not its row is selected, so the "Off"/track list
+    // reads as one column instead of jumping when the selection moves.
+    let check = gtk::Image::from_icon_name("object-select-symbolic");
+    check.add_css_class("okp-track-check");
+    check.set_pixel_size(14);
+    check.set_valign(gtk::Align::Center);
+    check.set_opacity(if selected { 1.0 } else { 0.0 });
+    row.append(&check);
+
     let label = gtk::Label::new(Some(text));
+    label.add_css_class("okp-track-row-label");
     label.set_xalign(0.0);
+    label.set_hexpand(true);
     label.set_ellipsize(pango::EllipsizeMode::End);
-    button.set_child(Some(&label));
+    row.append(&label);
+
+    button.set_child(Some(&row));
     button
 }
 
@@ -948,6 +984,7 @@ pub(crate) fn empty_track_label(text: &str) -> gtk::Label {
     let label = gtk::Label::new(Some(text));
     label.add_css_class("okp-track-empty");
     label.set_xalign(0.0);
+    label.set_wrap(true);
     label
 }
 
@@ -957,11 +994,10 @@ pub(crate) fn divider() -> gtk::Separator {
     divider
 }
 
+/// The one-line descriptor for a track row. Selection is shown by the row's
+/// leading check (see [`track_button`]), so the text carries only the track's
+/// name and its format tags — no "On" prefix that would shift long titles.
 pub(crate) fn track_label(track: &Track) -> String {
-    track_label_for(track, track.selected)
-}
-
-pub(crate) fn track_label_for(track: &Track, selected: bool) -> String {
     let mut parts = Vec::new();
     parts.push(track_base_label(track));
 
@@ -978,12 +1014,7 @@ pub(crate) fn track_label_for(track: &Track, selected: bool) -> String {
         parts.push("Default".to_owned());
     }
 
-    let label = parts.join(" · ");
-    if selected {
-        format!("On  {label}")
-    } else {
-        label
-    }
+    parts.join(" · ")
 }
 
 pub(crate) fn track_base_label(track: &Track) -> String {

@@ -395,6 +395,7 @@ pub(crate) fn build_controls(
         side_panel_manual_mode,
         side_panel_snapshot,
         side_panel_actions: up_next_actions,
+        side_panel_preview_frozen: Rc::new(Cell::new(false)),
         thumbnail_sender,
         thumbnail_events: RefCell::new(thumbnail_receiver),
     }

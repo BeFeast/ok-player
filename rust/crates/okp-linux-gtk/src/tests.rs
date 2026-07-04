@@ -659,6 +659,120 @@ fn timeline_marks_combine_degenerate_ab_loop_points() {
 }
 
 #[test]
+fn current_chapter_index_follows_the_playhead_through_core() {
+    let chapters = vec![
+        Chapter {
+            index: 0,
+            time: 0.0,
+            title: None,
+        },
+        Chapter {
+            index: 1,
+            time: 100.0,
+            title: None,
+        },
+        Chapter {
+            index: 2,
+            time: 200.0,
+            title: None,
+        },
+    ];
+
+    assert_eq!(current_chapter_index(&chapters, Some(150.0)), Some(1));
+    assert_eq!(current_chapter_index(&chapters, Some(250.0)), Some(2));
+    // Before the first chapter, on a missing position, and on a non-finite
+    // position there is no current chapter to highlight.
+    assert_eq!(current_chapter_index(&chapters, Some(-5.0)), None);
+    assert_eq!(current_chapter_index(&chapters, None), None);
+    assert_eq!(current_chapter_index(&chapters, Some(f64::NAN)), None);
+}
+
+#[test]
+fn track_label_shows_tags_without_a_selection_prefix() {
+    // Selection is shown by the row's leading check, so the label must never
+    // prepend "On " (which used to shift long titles and break alignment).
+    let subtitle = Track {
+        id: 3,
+        kind: TrackKind::Subtitle,
+        selected: true,
+        external: true,
+        default: false,
+        title: Some("English (SDH)".to_owned()),
+        lang: None,
+        codec: None,
+        audio_channels: None,
+    };
+    assert_eq!(track_label(&subtitle), "English (SDH) · EXT");
+
+    let audio = Track {
+        id: 1,
+        kind: TrackKind::Audio,
+        selected: true,
+        external: false,
+        default: true,
+        title: Some("English".to_owned()),
+        lang: None,
+        codec: Some("eac3".to_owned()),
+        audio_channels: Some("5.1".to_owned()),
+    };
+    assert_eq!(track_label(&audio), "English · 5.1 · EAC3");
+}
+
+#[test]
+fn side_panel_preview_sample_covers_chapters_and_queue() {
+    let sample = side_panel_preview_sample();
+
+    assert!(sample.has_media);
+    let current_file = sample
+        .current_file
+        .clone()
+        .expect("preview has current file");
+
+    // The Chapters surface must exercise the current-chapter state and a long
+    // title that has to ellipsize inside the panel.
+    let current = sample
+        .current_chapter
+        .expect("preview marks a current chapter");
+    assert!(current < sample.chapters.len());
+    assert!(
+        sample.chapters.iter().any(|chapter| chapter
+            .title
+            .as_deref()
+            .is_some_and(|title| title.len() > 40)),
+        "a long chapter name should be present to prove ellipsize",
+    );
+
+    // The Up Next surface must exercise the played-behind, now-playing, and next
+    // rows, so the current item sits in the middle of the queue (not first), and
+    // the queue mixes local files with a stream URL for the file/URL treatment.
+    let current_index = sample
+        .playlist
+        .iter()
+        .position(|item| item.is_current(sample.current_file.as_deref(), None))
+        .expect("current file is in the queue");
+    assert!(
+        current_index > 0 && current_index + 1 < sample.playlist.len(),
+        "current item should have both a behind row and a next row around it",
+    );
+    assert_eq!(
+        sample.playlist[current_index],
+        PlaylistItem::Local(current_file)
+    );
+    assert!(
+        sample
+            .playlist
+            .iter()
+            .any(|item| matches!(item, PlaylistItem::Local(_)))
+    );
+    assert!(
+        sample
+            .playlist
+            .iter()
+            .any(|item| matches!(item, PlaylistItem::Url(_)))
+    );
+}
+
+#[test]
 fn ab_loop_message_describes_cycle_state() {
     assert_eq!(
         ab_loop_message(

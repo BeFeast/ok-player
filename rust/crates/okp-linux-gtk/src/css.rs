@@ -318,11 +318,12 @@ pub(crate) fn install_css() {
         }
 
         .okp-status-toast {
-            padding: 8px 12px;
-            border-radius: 8px;
-            background: rgba(14, 15, 18, 0.9);
-            box-shadow: 0 12px 34px rgba(0, 0, 0, 0.38);
-            color: rgba(255, 255, 255, 0.9);
+            padding: 9px 14px;
+            border-radius: 10px;
+            background: rgba(14, 15, 18, 0.94);
+            border: 1px solid rgba(255, 255, 255, 0.10);
+            box-shadow: 0 14px 34px rgba(0, 0, 0, 0.42);
+            color: rgba(255, 255, 255, 0.92);
             font-size: 13px;
             font-weight: 600;
         }
@@ -358,23 +359,34 @@ pub(crate) fn install_css() {
 
         scale.okp-seek mark indicator {
             min-width: 2px;
-            min-height: 8px;
+            min-height: 7px;
             border-radius: 999px;
-            background: rgba(40, 179, 170, 0.84);
+            background: rgba(255, 255, 255, 0.42);
+        }
+
+        scale.okp-seek marks.top mark indicator {
+            background: rgba(255, 255, 255, 0.42);
+        }
+
+        scale.okp-seek marks.bottom mark indicator {
+            min-width: 3px;
+            min-height: 9px;
+            background: rgba(233, 176, 74, 0.96);
         }
 
         scale.okp-seek mark label {
-            color: rgba(40, 179, 170, 0.90);
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 10px;
-            font-weight: 700;
+            color: rgba(233, 176, 74, 0.98);
+            font-size: 9.5px;
+            font-weight: 800;
+            font-feature-settings: 'tnum';
         }
 
         .okp-seek-preview {
-            padding: 7px 10px;
-            border-radius: 7px;
-            background: rgba(14, 15, 18, 0.92);
-            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.34);
+            padding: 8px 10px;
+            border-radius: 9px;
+            background: rgba(14, 15, 18, 0.94);
+            border: 1px solid rgba(255, 255, 255, 0.10);
+            box-shadow: 0 12px 30px rgba(0, 0, 0, 0.40);
         }
 
         .okp-seek-preview-thumb {
@@ -477,16 +489,17 @@ pub(crate) fn install_css() {
         }
 
         .okp-panel-empty-row {
-            min-height: 58px;
-            padding: 14px 12px;
+            min-height: 64px;
+            margin: 4px 2px;
+            padding: 18px 14px;
             border-radius: 10px;
-            background: rgba(255, 255, 255, 0.055);
-            border: 1px solid rgba(255, 255, 255, 0.055);
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px dashed rgba(255, 255, 255, 0.14);
         }
 
         .okp-panel-empty {
-            color: rgba(255, 255, 255, 0.58);
-            font-size: 12px;
+            color: rgba(255, 255, 255, 0.56);
+            font-size: 12.5px;
         }
 
         .okp-up-next-row {
@@ -499,6 +512,10 @@ pub(crate) fn install_css() {
             color: rgba(255, 255, 255, 0.78);
         }
 
+        .okp-chapter-row {
+            min-height: 58px;
+        }
+
         .okp-chapter-thumb {
             min-width: 88px;
             min-height: 50px;
@@ -507,13 +524,42 @@ pub(crate) fn install_css() {
             border: 1px solid rgba(255, 255, 255, 0.06);
         }
 
+        .okp-chapter-thumb.is-pending {
+            background: rgba(255, 255, 255, 0.045);
+            border-style: dashed;
+            border-color: rgba(255, 255, 255, 0.09);
+        }
+
+        .okp-chapter-thumb-placeholder {
+            color: rgba(255, 255, 255, 0.26);
+        }
+
+        .okp-up-next-row.is-current .okp-chapter-thumb {
+            border-color: rgba(40, 179, 170, 0.55);
+        }
+
         .okp-up-next-row:hover {
             background: rgba(255, 255, 255, 0.08);
         }
 
         .okp-up-next-row.is-current {
             background: rgba(40, 179, 170, 0.18);
+            border-color: rgba(40, 179, 170, 0.32);
             color: rgba(255, 255, 255, 0.96);
+        }
+
+        .okp-up-next-row.is-behind {
+            background: transparent;
+            color: rgba(255, 255, 255, 0.44);
+        }
+
+        .okp-up-next-row.is-behind:hover {
+            background: rgba(255, 255, 255, 0.05);
+            color: rgba(255, 255, 255, 0.72);
+        }
+
+        .okp-up-next-row.is-behind .okp-up-next-source-icon {
+            opacity: 0.55;
         }
 
         .okp-up-next-row.is-drop-target {
@@ -523,7 +569,7 @@ pub(crate) fn install_css() {
 
         .okp-up-next-drag-handle {
             min-width: 18px;
-            color: rgba(255, 255, 255, 0.34);
+            color: rgba(255, 255, 255, 0.28);
         }
 
         .okp-up-next-drag-handle-icon {
@@ -535,10 +581,55 @@ pub(crate) fn install_css() {
             color: rgba(255, 255, 255, 0.78);
         }
 
+        .okp-up-next-lane {
+            min-width: 46px;
+        }
+
+        .okp-up-next-index {
+            min-width: 22px;
+            color: rgba(255, 255, 255, 0.40);
+            font-size: 11px;
+            font-weight: 620;
+            font-feature-settings: 'tnum';
+        }
+
+        .okp-up-next-source-icon {
+            color: rgba(255, 255, 255, 0.50);
+        }
+
+        .okp-up-next-row.is-current .okp-up-next-source-icon {
+            color: rgba(255, 255, 255, 0.82);
+        }
+
+        .okp-now-badge {
+            padding: 1px 7px;
+            border-radius: 999px;
+            background: #28b3aa;
+            color: #041110;
+            font-size: 9.5px;
+            font-weight: 800;
+            letter-spacing: 0;
+        }
+
+        .okp-next-badge {
+            padding: 1px 7px;
+            border-radius: 999px;
+            background: rgba(40, 179, 170, 0.18);
+            color: rgba(40, 179, 170, 0.98);
+            font-size: 9.5px;
+            font-weight: 760;
+            letter-spacing: 0;
+        }
+
         .okp-up-next-marker {
             color: rgba(40, 179, 170, 0.98);
             font-size: 11px;
             font-weight: 760;
+            font-feature-settings: 'tnum';
+        }
+
+        .okp-up-next-row.is-current .okp-up-next-marker {
+            color: rgba(255, 255, 255, 0.90);
         }
 
         .okp-up-next-file {
@@ -620,39 +711,88 @@ pub(crate) fn install_css() {
         }
 
         .okp-track-popover-title {
-            margin: 0 4px 6px 4px;
-            color: rgba(255, 255, 255, 0.92);
-            font-size: 13px;
-            font-weight: 700;
+            margin: 0 4px 8px 4px;
+            color: rgba(255, 255, 255, 0.94);
+            font-size: 13.5px;
+            font-weight: 760;
+        }
+
+        .okp-track-group-title {
+            margin: 10px 4px 4px 4px;
+            color: rgba(255, 255, 255, 0.42);
+            font-size: 10.5px;
+            font-weight: 720;
+        }
+
+        .okp-track-subgroup-title {
+            margin: 6px 4px 2px 4px;
+            color: rgba(255, 255, 255, 0.34);
+            font-size: 10px;
+            font-weight: 640;
         }
 
         button.okp-track-row {
             min-height: 34px;
-            padding: 7px 9px;
+            padding: 6px 9px;
             border-radius: 7px;
             background: transparent;
-            border: none;
+            border: 1px solid transparent;
             box-shadow: none;
             color: rgba(255, 255, 255, 0.82);
         }
 
         button.okp-track-row:hover {
             background: rgba(255, 255, 255, 0.08);
-        }
-
-        button.okp-track-row.is-selected {
-            background: rgba(40, 179, 170, 0.18);
             color: rgba(255, 255, 255, 0.96);
         }
 
+        button.okp-track-row:active {
+            background: rgba(255, 255, 255, 0.12);
+        }
+
+        button.okp-track-row.is-selected {
+            background: rgba(40, 179, 170, 0.16);
+            border-color: rgba(40, 179, 170, 0.30);
+            color: rgba(255, 255, 255, 0.98);
+        }
+
+        button.okp-track-row.is-selected .okp-track-row-label {
+            font-weight: 640;
+        }
+
+        button.okp-track-row:disabled {
+            background: transparent;
+            border-color: transparent;
+            color: rgba(255, 255, 255, 0.30);
+        }
+
+        button.okp-track-row:focus-visible {
+            outline: none;
+            box-shadow: inset 0 0 0 1px rgba(40, 179, 170, 0.6);
+        }
+
+        .okp-track-check {
+            min-width: 14px;
+            color: rgba(40, 179, 170, 0.98);
+        }
+
+        button.okp-track-row:disabled .okp-track-check {
+            color: rgba(255, 255, 255, 0.30);
+        }
+
         .okp-track-empty {
-            margin: 6px 9px;
-            color: rgba(255, 255, 255, 0.55);
-            font-size: 13px;
+            margin: 4px 6px 6px 6px;
+            padding: 12px 12px;
+            border-radius: 8px;
+            border: 1px dashed rgba(255, 255, 255, 0.14);
+            background: rgba(255, 255, 255, 0.02);
+            color: rgba(255, 255, 255, 0.50);
+            font-size: 12.5px;
         }
 
         .okp-track-divider {
-            margin: 5px 3px;
+            margin: 6px 3px;
+            background: rgba(255, 255, 255, 0.07);
         }
 
         .okp-sub-adjust-row {
