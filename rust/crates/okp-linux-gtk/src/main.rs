@@ -1166,6 +1166,7 @@ enum SidePanelAction {
     Chapter(f64),
     Playlist(usize),
     AddBookmark,
+    AddFiles,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

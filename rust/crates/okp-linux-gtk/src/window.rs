@@ -189,15 +189,21 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     connect_progress_persistence(&window, Rc::clone(&state));
     // Visual smoke hook: render the Chapters/Up Next side panel with representative
     // fixture rows so its layout can be screenshot-tested without loaded media.
-    // `OKP_OPEN_SIDE_PANEL_ON_STARTUP=up-next` previews the queue; any other value
-    // previews Chapters.
+    // `OKP_OPEN_SIDE_PANEL_ON_STARTUP=up-next` previews the queue; `=up-next-empty`
+    // previews the PRD §2.6 single-URL / short-queue state (now-playing pin + the
+    // "Add files" affordance); `=chapters-empty` previews the no-chapters stream
+    // state; any other value previews the full Chapters fixture.
     if let Some(value) = env::var_os("OKP_OPEN_SIDE_PANEL_ON_STARTUP") {
-        let mode = if value.eq_ignore_ascii_case("up-next") {
-            SidePanelMode::UpNext
+        let (mode, snapshot) = if value.eq_ignore_ascii_case("up-next") {
+            (SidePanelMode::UpNext, side_panel_preview_sample())
+        } else if value.eq_ignore_ascii_case("up-next-empty") {
+            (SidePanelMode::UpNext, side_panel_empty_up_next_sample())
+        } else if value.eq_ignore_ascii_case("chapters-empty") {
+            (SidePanelMode::Chapters, side_panel_empty_up_next_sample())
         } else {
-            SidePanelMode::Chapters
+            (SidePanelMode::Chapters, side_panel_preview_sample())
         };
-        open_side_panel_preview(&controls, &state, &chrome, mode);
+        open_side_panel_preview(&controls, &state, &chrome, mode, snapshot);
     }
     // Visual smoke hook: render the audio lyrics overlay with a representative sheet so its layout
     // and active-line state can be screenshot-tested without loaded media.

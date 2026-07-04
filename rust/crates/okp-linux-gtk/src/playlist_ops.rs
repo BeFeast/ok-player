@@ -355,11 +355,18 @@ pub(crate) fn queue_media_paths(
 
     let count = {
         let mut state = state.borrow_mut();
-        let Some(current_file) = state.current_file.clone() else {
+        let current_file = state.current_file.clone();
+        let current_url = state.current_url.clone();
+        if current_file.is_none() && current_url.is_none() {
             status_toast.show("Open local media first");
             return false;
-        };
-        let Some(count) = state.playlist.queue_insert(&current_file, additions, mode) else {
+        }
+        let Some(count) = state.playlist.queue_insert(
+            current_file.as_deref(),
+            current_url.as_deref(),
+            additions,
+            mode,
+        ) else {
             status_toast.show("Already in queue");
             return false;
         };

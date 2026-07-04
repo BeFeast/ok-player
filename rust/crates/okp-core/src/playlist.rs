@@ -396,31 +396,42 @@ impl Playlist {
         self.current_index = None;
     }
 
-    /// Queue `additions` around `current_file` per `mode`, returning how many were queued, or
-    /// `None` (playlist untouched) when nothing new would be added. `current_file` is inserted
-    /// first if missing so the queue always builds around the playing file, and the cursor lands
-    /// on it.
+    /// Queue `additions` around the current media per `mode`, returning how many were queued, or
+    /// `None` (playlist untouched) when nothing new would be added.
+    ///
+    /// `current_file` / `current_url` describe the loaded media (one or both may be `None`). A
+    /// local current file not yet represented in the playlist is synthesized at the head so the
+    /// queue always builds around the playing file, and the cursor lands on it; a stream URL is
+    /// always inserted by the load path, so it is never synthesized here. This lets a
+    /// single-URL / no-folder session grow a queue (PRD §2.6 short-queue state) — the URL stays
+    /// current and the new local files append after it.
     pub fn queue_insert(
         &mut self,
-        current_file: &Path,
+        current_file: Option<&Path>,
+        current_url: Option<&str>,
         additions: Vec<PathBuf>,
         mode: QueueInsertMode,
     ) -> Option<usize> {
         let mut items = self.items.clone();
-        if items.is_empty() {
-            items.push(PlaylistItem::Local(current_file.to_path_buf()));
-        }
-        if !items
-            .iter()
-            .any(|item| matches!(item, PlaylistItem::Local(path) if path.as_path() == current_file))
-        {
-            items.insert(0, PlaylistItem::Local(current_file.to_path_buf()));
+        if let Some(current) = current_file {
+            if items.is_empty() {
+                items.push(PlaylistItem::Local(current.to_path_buf()));
+            }
+            if !items
+                .iter()
+                .any(|item| matches!(item, PlaylistItem::Local(path) if path.as_path() == current))
+            {
+                items.insert(0, PlaylistItem::Local(current.to_path_buf()));
+            }
         }
 
-        let additions = additions
-            .into_iter()
-            .filter(|path| path.as_path() != current_file)
-            .collect::<Vec<_>>();
+        let additions = match current_file {
+            Some(current) => additions
+                .into_iter()
+                .filter(|path| path.as_path() != current)
+                .collect::<Vec<_>>(),
+            None => additions,
+        };
         if additions.is_empty() {
             return None;
         }
@@ -452,9 +463,7 @@ impl Playlist {
                 });
                 let current_index = items
                     .iter()
-                    .position(
-                        |item| matches!(item, PlaylistItem::Local(path) if path.as_path() == current_file),
-                    )
+                    .position(|item| item.is_current(current_file, current_url))
                     .unwrap_or(0);
                 let count = additions.len();
                 items.splice(
@@ -465,9 +474,9 @@ impl Playlist {
             }
         };
 
-        self.current_index = items.iter().position(
-            |item| matches!(item, PlaylistItem::Local(path) if path.as_path() == current_file),
-        );
+        self.current_index = items
+            .iter()
+            .position(|item| item.is_current(current_file, current_url));
         self.items = items;
         self.rebuild_order();
         Some(count)
@@ -767,7 +776,8 @@ mod tests {
 
         let count = playlist
             .queue_insert(
-                Path::new("/media/current.mkv"),
+                Some(Path::new("/media/current.mkv")),
+                None,
                 additions,
                 QueueInsertMode::Append,
             )
@@ -807,7 +817,8 @@ mod tests {
 
         let count = playlist
             .queue_insert(
-                Path::new("/media/current.mkv"),
+                Some(Path::new("/media/current.mkv")),
+                None,
                 additions,
                 QueueInsertMode::PlayNext,
             )
@@ -838,13 +849,95 @@ mod tests {
 
         assert_eq!(
             playlist.queue_insert(
-                Path::new("/media/current.mkv"),
+                Some(Path::new("/media/current.mkv")),
+                None,
                 vec![PathBuf::from("/media/current.mkv")],
                 QueueInsertMode::Append,
             ),
             None
         );
         assert_eq!(playlist.items(), [local("/media/current.mkv")]);
+    }
+
+    #[test]
+    fn queue_append_grows_a_single_url_short_queue() {
+        // PRD §2.6 short-queue state: one stream URL, no local file. The queue
+        // must still grow — the URL stays current and the new local files append
+        // after it — so the shell's "Add files to queue" affordance works for
+        // the single-URL session it is shown in.
+        let stream = "https://stream.example/live/channel-one.m3u8";
+        let current = url(stream);
+        let mut playlist = Playlist::from_items(vec![current.clone()], Some(&current), false);
+
+        let count = playlist
+            .queue_insert(
+                None,
+                Some(stream),
+                vec![
+                    PathBuf::from("/media/queued-a.mkv"),
+                    PathBuf::from("/media/queued-b.mp4"),
+                ],
+                QueueInsertMode::Append,
+            )
+            .expect("url short queue should grow");
+
+        assert_eq!(count, 2);
+        assert_eq!(
+            playlist.items(),
+            [
+                url(stream),
+                local("/media/queued-a.mkv"),
+                local("/media/queued-b.mp4")
+            ]
+        );
+        assert_eq!(playlist.current(), Some(&url(stream)));
+        assert_eq!(playlist.current_index(), Some(0));
+    }
+
+    #[test]
+    fn queue_play_next_inserts_after_a_single_url_current() {
+        let stream = "https://stream.example/live/channel-one.m3u8";
+        let current = url(stream);
+        let mut playlist = Playlist::from_items(vec![current.clone()], Some(&current), false);
+
+        let count = playlist
+            .queue_insert(
+                None,
+                Some(stream),
+                vec![PathBuf::from("/media/play-next.mkv")],
+                QueueInsertMode::PlayNext,
+            )
+            .expect("play next should insert after the url");
+
+        assert_eq!(count, 1);
+        assert_eq!(
+            playlist.items(),
+            [url(stream), local("/media/play-next.mkv")]
+        );
+        assert_eq!(playlist.current(), Some(&url(stream)));
+        assert_eq!(playlist.current_index(), Some(0));
+    }
+
+    #[test]
+    fn queue_append_rejects_when_additions_already_queued_for_url_current() {
+        let stream = "https://stream.example/live/channel-one.m3u8";
+        let current = url(stream);
+        let mut playlist = Playlist::from_items(
+            vec![current.clone(), local("/media/queued.mkv")],
+            Some(&current),
+            false,
+        );
+
+        assert_eq!(
+            playlist.queue_insert(
+                None,
+                Some(stream),
+                vec![PathBuf::from("/media/queued.mkv")],
+                QueueInsertMode::Append,
+            ),
+            None
+        );
+        assert_eq!(playlist.items(), [url(stream), local("/media/queued.mkv")]);
     }
 
     #[test]
