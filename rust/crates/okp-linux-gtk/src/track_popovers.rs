@@ -10,10 +10,20 @@ pub(crate) fn populate_subtitle_popover(
         .into_iter()
         .filter(|track| track.kind == TrackKind::Subtitle)
         .collect::<Vec<_>>();
-    let any_selected = tracks.iter().any(|track| track.selected);
     let secondary_subtitle_id = read_secondary_subtitle_id(&state);
+    // mpv reports `selected` for the secondary caption too, so the primary
+    // "Off" state and the primary checkmark must exclude the secondary track —
+    // otherwise a secondary-only file reads as though a primary were active and
+    // the secondary shows a stray check in the primary list. The rule is shared
+    // with the Windows shell and lives in okp-core (freeze-boundary).
+    let has_primary = okp_core::subtitle_tracks::has_primary_subtitle(
+        tracks.iter().map(|track| (track.id, track.selected)),
+        secondary_subtitle_id,
+    );
 
-    let off_button = track_button("Off", !any_selected);
+    content.append(&track_group_title("Primary"));
+
+    let off_button = track_button("Off", !has_primary);
     let off_state = Rc::clone(&state);
     let off_popover = popover.clone();
     off_button.connect_clicked(move |_| {
@@ -28,7 +38,12 @@ pub(crate) fn populate_subtitle_popover(
         content.append(&empty_track_label("No subtitle tracks"));
     } else {
         for track in &tracks {
-            let button = track_button(&track_label(track), track.selected);
+            let selected = okp_core::subtitle_tracks::is_primary_subtitle(
+                track.id,
+                track.selected,
+                secondary_subtitle_id,
+            );
+            let button = track_button(&track_label(track), selected);
             let track_state = Rc::clone(&state);
             let track_popover = popover.clone();
             let track_id = track.id;
@@ -42,27 +57,30 @@ pub(crate) fn populate_subtitle_popover(
         }
     }
 
-    content.append(&divider());
-    content.append(&track_group_title("Secondary"));
+    // The secondary picker only appears once a dual-subtitle choice exists (≥2
+    // tracks) or a secondary is already active — matching Windows — so a
+    // single-track file's flyout stays calm and short.
+    if okp_core::subtitle_tracks::can_offer_secondary(tracks.len(), secondary_subtitle_id.is_some())
+    {
+        content.append(&divider());
+        content.append(&track_group_title("Secondary"));
 
-    let secondary_off_button = track_button("Off", secondary_subtitle_id.is_none());
-    let secondary_off_state = Rc::clone(&state);
-    let secondary_off_popover = popover.clone();
-    secondary_off_button.connect_clicked(move |_| {
-        if with_mpv(&secondary_off_state, |mpv| {
-            mpv.select_secondary_subtitle(None)
-        }) {
-            save_current_preferences(&secondary_off_state);
-        }
-        secondary_off_popover.popdown();
-    });
-    content.append(&secondary_off_button);
+        let secondary_off_button = track_button("Off", secondary_subtitle_id.is_none());
+        let secondary_off_state = Rc::clone(&state);
+        let secondary_off_popover = popover.clone();
+        secondary_off_button.connect_clicked(move |_| {
+            if with_mpv(&secondary_off_state, |mpv| {
+                mpv.select_secondary_subtitle(None)
+            }) {
+                save_current_preferences(&secondary_off_state);
+            }
+            secondary_off_popover.popdown();
+        });
+        content.append(&secondary_off_button);
 
-    if tracks.is_empty() {
-        content.append(&empty_track_label("No subtitle tracks"));
-    } else {
         for track in &tracks {
-            let selected = secondary_subtitle_id == Some(track.id);
+            let selected =
+                okp_core::subtitle_tracks::is_secondary_subtitle(track.id, secondary_subtitle_id);
             let button = track_button(&track_label(track), selected);
             let track_state = Rc::clone(&state);
             let track_popover = popover.clone();

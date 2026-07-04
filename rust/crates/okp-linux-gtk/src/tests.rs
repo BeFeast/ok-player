@@ -93,6 +93,24 @@ fn media_info_preview_sample_covers_the_polished_surfaces() {
     );
     assert!(sample.tracks.iter().any(|track| track.external));
 
+    // The fixture showcases both caption slots so the media surface (and its
+    // screenshot) proves the primary and secondary subtitle read distinctly.
+    assert!(
+        sample
+            .tracks
+            .iter()
+            .any(|track| track.kind == TrackKind::Subtitle && track.detail.starts_with("Primary")),
+        "media info preview should name a primary subtitle"
+    );
+    assert!(
+        sample
+            .tracks
+            .iter()
+            .any(|track| track.kind == TrackKind::Subtitle
+                && track.detail.starts_with("Secondary")),
+        "media info preview should name a secondary subtitle"
+    );
+
     // The summary derives an HDR chip and the Video section carries the row it
     // condenses, so both the accent row and the chip stay covered.
     assert_eq!(

@@ -293,6 +293,28 @@ directly unit-tested, and renders it in the GTK shell; cache and network are def
   `SubDelayMs` on Windows. The shell previously rounded half away from zero; the two differed
   only at exact half-millisecond delays, unreachable through either shell's own controls.
 
+## Subtitle track roles → `okp_core::subtitle_tracks` (Linux shell extraction)
+
+- **No C# core counterpart; captures the Windows shell rule.** Windows has no `OkPlayer.Core`
+  module for this — the classification lives in the `PlayerViewModel.ReadTracks` shell method.
+  Its `isPrimary = selected && !isSecondary` guard (issue #195) exists because mpv reports
+  `track-list/N/selected = yes` for BOTH the primary and the secondary caption, so the raw flag
+  alone would draw a stray checkmark on the secondary track in the primary picker and make an
+  "active secondary, no primary" file read as though a primary were selected. `subtitle_track_role`
+  / `is_primary_subtitle` / `has_primary_subtitle` reproduce that rule for the Linux shell under
+  the freeze-boundary; the secondary is matched by id against `secondary-sid` (mpv resolves it to
+  a concrete id, never `auto`), and everything else mpv flags as selected — including an
+  auto/default pick — is the primary.
+- **`can_offer_secondary` mirrors `CanUseSecondarySubtitle`.** Windows gates the secondary picker
+  with `subs.Count >= 2 || !secondaryOff`; the Rust `can_offer_secondary(count, secondary_active)`
+  is the same predicate. Both shells offer the picker once a dual-subtitle choice exists or a
+  secondary is already active (so an mpv-carried `secondary-sid` in a single-track file can always
+  be switched back off), and hide it otherwise to keep a single-track flyout calm.
+- **Media surface wording is Linux-only.** The Linux Media Info window names each subtitle slot
+  `Primary` / `Secondary` in the track detail (`okp-mpv` reads `secondary-sid` alongside the
+  track list). Windows has no equivalent media-info surface; the wording is presentation local to
+  the GTK shell.
+
 ## Update selection → `okp_core::update_selection` (Linux shell extraction)
 
 - **No C# counterpart.** Windows updates flow through Velopack's static feed (`UpdateFeed`,

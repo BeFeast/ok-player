@@ -693,6 +693,10 @@ impl RawReader {
 
     fn info_tracks(&self) -> Result<Vec<InfoTrack>, MpvError> {
         let count = self.get_i64("track-list/count")?.unwrap_or(0).max(0);
+        // mpv flags both the primary and the secondary caption as `selected`, so
+        // read `secondary-sid` to name each subtitle slot explicitly instead of
+        // a bare "Selected" that would read the same on both.
+        let secondary_sid = self.secondary_subtitle_id()?;
         let mut tracks = Vec::new();
 
         for index in 0..count {
@@ -725,7 +729,15 @@ impl RawReader {
                 .unwrap_or(false);
 
             let mut details = Vec::new();
-            if selected {
+            if kind == TrackKind::Subtitle {
+                // Distinguish the two caption slots on the media surface; the
+                // secondary is matched by id since its `selected` flag is set too.
+                if secondary_sid == Some(id) {
+                    details.push("Secondary".to_owned());
+                } else if selected {
+                    details.push("Primary".to_owned());
+                }
+            } else if selected {
                 details.push("Selected".to_owned());
             }
             if let Some(language) = language {

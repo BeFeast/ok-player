@@ -63,18 +63,30 @@ pub(crate) fn settings_subtitles_page(
     summary.append(&actions);
     page.append(&summary);
 
+    // Mirror the flyout: only surface the secondary picker once a dual-subtitle
+    // choice exists (≥2 tracks) or a secondary is already active.
+    let offer_secondary = okp_core::subtitle_tracks::can_offer_secondary(
+        read_tracks(&state)
+            .into_iter()
+            .filter(|track| track.kind == TrackKind::Subtitle)
+            .count(),
+        read_secondary_subtitle_id(&state).is_some(),
+    );
+
     page.append(&settings_subtitle_track_section(
         "Primary Track",
         false,
         Rc::clone(&state),
         Rc::clone(&status_toast),
     ));
-    page.append(&settings_subtitle_track_section(
-        "Secondary Track",
-        true,
-        state,
-        status_toast,
-    ));
+    if offer_secondary {
+        page.append(&settings_subtitle_track_section(
+            "Secondary Track",
+            true,
+            state,
+            status_toast,
+        ));
+    }
 
     page
 }
@@ -295,9 +307,15 @@ pub(crate) fn settings_subtitle_snapshot(
         .into_iter()
         .filter(|track| track.kind == TrackKind::Subtitle)
         .collect::<Vec<_>>();
+    let secondary_id = read_secondary_subtitle_id(state);
+    // Exclude the secondary track from the primary readout: mpv reports it as
+    // selected too, so `find(selected)` could otherwise name the secondary as
+    // the primary when no primary is set (shared core rule).
     let primary = tracks
         .iter()
-        .find(|track| track.selected)
+        .find(|track| {
+            okp_core::subtitle_tracks::is_primary_subtitle(track.id, track.selected, secondary_id)
+        })
         .map(track_base_label)
         .unwrap_or_else(|| {
             if has_media {
@@ -306,7 +324,6 @@ pub(crate) fn settings_subtitle_snapshot(
                 "No media loaded".to_owned()
             }
         });
-    let secondary_id = read_secondary_subtitle_id(state);
     let secondary = secondary_id
         .and_then(|id| tracks.iter().find(|track| track.id == id))
         .map(track_base_label)
@@ -357,9 +374,18 @@ pub(crate) fn settings_subtitle_track_section(
     let selected_id = if secondary {
         read_secondary_subtitle_id(&state)
     } else {
+        // The primary picker excludes the secondary track so its checkmark never
+        // lands on the caption that belongs to the secondary slot.
+        let secondary_id = read_secondary_subtitle_id(&state);
         tracks
             .iter()
-            .find(|track| track.selected)
+            .find(|track| {
+                okp_core::subtitle_tracks::is_primary_subtitle(
+                    track.id,
+                    track.selected,
+                    secondary_id,
+                )
+            })
             .map(|track| track.id)
     };
     let buttons = Rc::new(RefCell::new(Vec::<gtk::Button>::new()));
