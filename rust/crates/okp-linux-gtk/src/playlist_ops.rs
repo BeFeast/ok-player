@@ -626,6 +626,9 @@ pub(crate) fn apply_playback_preferences(
     if let Some(scale) = preferences.subtitle_scale.and_then(finite_option) {
         mpv.set_subtitle_scale(scale)?;
     }
+    if let Some(delay) = preferences.audio_delay.and_then(finite_option) {
+        mpv.set_audio_delay(delay)?;
+    }
     if let Some(speed) = preferences.speed.and_then(finite_option) {
         mpv.set_speed(speed)?;
     }
@@ -634,6 +637,25 @@ pub(crate) fn apply_playback_preferences(
 }
 
 pub(crate) fn save_current_preferences(state: &Rc<RefCell<PlayerState>>) {
+    save_current_preferences_impl(state, None);
+}
+
+/// Save preferences right after applying an audio delay, persisting the value
+/// that was just set instead of re-reading `observed_audio_delay()`. The async
+/// pump snapshot may still report the previous delay, so re-reading it here
+/// could persist a stale value — a reset to `0` would otherwise re-save the old
+/// `+500 ms`.
+pub(crate) fn save_current_preferences_with_audio_delay(
+    state: &Rc<RefCell<PlayerState>>,
+    audio_delay: f64,
+) {
+    save_current_preferences_impl(state, Some(audio_delay));
+}
+
+fn save_current_preferences_impl(
+    state: &Rc<RefCell<PlayerState>>,
+    audio_delay_override: Option<f64>,
+) {
     let snapshot = {
         let state = state.borrow();
         if state.private_session {
@@ -642,9 +664,13 @@ pub(crate) fn save_current_preferences(state: &Rc<RefCell<PlayerState>>) {
         let Some(path) = state.current_file.clone() else {
             return;
         };
-        let Some(preferences) = state.mpv.as_ref().map(read_current_playback_preferences) else {
+        let Some(mut preferences) = state.mpv.as_ref().map(read_current_playback_preferences)
+        else {
             return;
         };
+        if let Some(audio_delay) = audio_delay_override {
+            preferences.audio_delay = finite_option(audio_delay);
+        }
 
         (path, preferences)
     };
@@ -682,6 +708,7 @@ pub(crate) fn read_current_playback_preferences(mpv: &Mpv) -> history::PlaybackP
         secondary_subtitle_track_id: secondary_subtitle_id,
         subtitle_delay: finite_option(mpv.observed_subtitle_delay()),
         subtitle_scale: finite_option(mpv.observed_subtitle_scale()),
+        audio_delay: finite_option(mpv.observed_audio_delay()),
         speed: finite_option(mpv.observed_speed()),
     }
 }

@@ -836,6 +836,49 @@ fn track_label_shows_tags_without_a_selection_prefix() {
 }
 
 #[test]
+fn audio_track_label_surfaces_language_and_format_tags() {
+    // A named commentary track keeps its title but now also exposes the
+    // language code alongside the channel layout and codec.
+    let commentary = Track {
+        id: 2,
+        kind: TrackKind::Audio,
+        selected: false,
+        external: false,
+        default: false,
+        title: Some("Director's Commentary".to_owned()),
+        lang: Some("eng".to_owned()),
+        codec: Some("ac3".to_owned()),
+        audio_channels: Some("2.0".to_owned()),
+    };
+    assert_eq!(
+        track_label(&commentary),
+        "Director's Commentary · ENG · 2.0 · AC3"
+    );
+
+    // An untitled foreign track falls back to its language code as the name and
+    // does not repeat it as a trailing tag.
+    let untitled = Track {
+        id: 3,
+        kind: TrackKind::Audio,
+        selected: true,
+        external: false,
+        default: false,
+        title: None,
+        lang: Some("jpn".to_owned()),
+        codec: Some("aac".to_owned()),
+        audio_channels: Some("5.1".to_owned()),
+    };
+    assert_eq!(track_label(&untitled), "jpn · 5.1 · AAC");
+}
+
+#[test]
+fn audio_delay_toast_mirrors_the_subtitle_readout_with_its_own_label() {
+    assert_eq!(audio_delay_toast(0.25), "Audio delay: +250 ms");
+    assert_eq!(audio_delay_toast(-0.125), "Audio delay: -125 ms");
+    assert_eq!(audio_delay_toast(0.0), "Audio delay: 0 ms");
+}
+
+#[test]
 fn side_panel_preview_sample_covers_chapters_and_queue() {
     let sample = side_panel_preview_sample();
 

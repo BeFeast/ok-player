@@ -138,6 +138,14 @@ pub(crate) fn populate_audio_popover(
     }
 
     content.append(&divider());
+    content.append(&track_group_title("Delay"));
+    content.append(&audio_delay_adjustment_row(
+        read_audio_delay(&state),
+        &state,
+        &status_toast,
+    ));
+
+    content.append(&divider());
     content.append(&track_group_title("Output Device"));
     let devices = read_audio_devices(&state);
     if devices.is_empty() {
@@ -860,9 +868,8 @@ pub(crate) fn apply_subtitle_delay_entry(
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
 ) {
-    let Some(delay_seconds) = subtitle_delay::parse_entry_seconds(entry.text().as_str()) else {
-        entry.add_css_class("is-error");
-        entry.grab_focus();
+    let Some(delay_seconds) = entry_delay_seconds(entry) else {
+        mark_delay_entry_error(entry);
         return;
     };
 
@@ -872,6 +879,180 @@ pub(crate) fn apply_subtitle_delay_entry(
 
 pub(crate) fn format_scale(scale: f64) -> String {
     format!("{:.0}%", scale * 100.0)
+}
+
+pub(crate) fn read_audio_delay(state: &Rc<RefCell<PlayerState>>) -> f64 {
+    state
+        .borrow()
+        .mpv
+        .as_ref()
+        .map(Mpv::observed_audio_delay)
+        .unwrap_or(0.0)
+}
+
+/// The OSD line echoed on an audio-delay change. Reuses the subtitle-delay
+/// readout format (`Audio delay: +250 ms`) so both sync nudges read the same,
+/// with an "Audio delay:" prefix that makes the surface unmistakable.
+pub(crate) fn audio_delay_toast(seconds: f64) -> String {
+    format!("Audio delay: {}", subtitle_delay::format_label(seconds))
+}
+
+/// Clamp an audio delay to the same ±ten-minute range the entry and the mpv
+/// setter accept, so the echoed value and the stored value never diverge.
+pub(crate) fn clamp_audio_delay(seconds: f64) -> f64 {
+    seconds.clamp(
+        -subtitle_delay::MAX_ENTRY_SECONDS,
+        subtitle_delay::MAX_ENTRY_SECONDS,
+    )
+}
+
+/// Set the audio delay to an absolute value through the shared runtime path: the
+/// mpv command, then the persisted per-file preference, then the OSD echo. Only
+/// the audio delay is touched, never the subtitle delay. Returns the clamped
+/// value that was applied so the caller can reflect it immediately — the pump
+/// snapshot refreshes asynchronously, so the row cannot read the new value back
+/// right away.
+pub(crate) fn apply_audio_delay(
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &Rc<StatusToast>,
+    target_seconds: f64,
+) -> Option<f64> {
+    let target = clamp_audio_delay(target_seconds);
+    if with_mpv(state, |mpv| mpv.set_audio_delay(target)) {
+        // Persist the value we just applied. `observed_audio_delay()` reads the
+        // async pump snapshot, which may still hold the previous delay, so a
+        // reset to `0` could otherwise re-save the old delay.
+        save_current_preferences_with_audio_delay(state, target);
+        status_toast.show(&audio_delay_toast(target));
+        Some(target)
+    } else {
+        None
+    }
+}
+
+pub(crate) fn audio_delay_adjustment_row(
+    delay_seconds: f64,
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &Rc<StatusToast>,
+) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    row.add_css_class("okp-sub-adjust-row");
+
+    let top = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let label = gtk::Label::new(Some("Delay"));
+    label.add_css_class("okp-sub-adjust-label");
+    label.set_xalign(0.0);
+    label.set_width_chars(6);
+    top.append(&label);
+
+    let entry = gtk::Entry::new();
+    entry.add_css_class("okp-sub-adjust-entry");
+    gtk::prelude::EntryExt::set_alignment(&entry, 1.0);
+    entry.set_input_purpose(gtk::InputPurpose::Number);
+    entry.set_text(&subtitle_delay::format_entry(delay_seconds));
+    entry.set_width_chars(8);
+    entry.set_placeholder_text(Some("0"));
+    top.append(&entry);
+
+    let unit = gtk::Label::new(Some("ms"));
+    unit.add_css_class("okp-sub-adjust-unit");
+    top.append(&unit);
+
+    let apply_button = gtk::Button::with_label("Apply");
+    apply_button.add_css_class("okp-sub-adjust-button");
+    top.append(&apply_button);
+
+    let reset_button = gtk::Button::with_label("Reset");
+    reset_button.add_css_class("okp-sub-adjust-button");
+    top.append(&reset_button);
+
+    row.append(&top);
+
+    // The entry is the row's source of truth for the current delay: each nudge
+    // reads it, applies the sum, and writes the clamped result straight back.
+    // This keeps rapid taps accumulating correctly and the readout live without
+    // waiting on the pump snapshot to catch up after the set.
+    let quick = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    quick.set_halign(gtk::Align::End);
+    for (text, delta) in [("-50", -0.05), ("+50", 0.05)] {
+        let button = gtk::Button::with_label(text);
+        button.add_css_class("okp-sub-adjust-button");
+        let button_state = Rc::clone(state);
+        let button_toast = Rc::clone(status_toast);
+        let button_entry = entry.clone();
+        button.connect_clicked(move |_| {
+            // Reject unparsable text rather than treating it as zero, so a nudge
+            // never silently replaces invalid input with a real delay.
+            let Some(current) = entry_delay_seconds(&button_entry) else {
+                mark_delay_entry_error(&button_entry);
+                return;
+            };
+            if let Some(applied) = apply_audio_delay(&button_state, &button_toast, current + delta)
+            {
+                button_entry.set_text(&subtitle_delay::format_entry(applied));
+            }
+        });
+        quick.append(&button);
+    }
+    row.append(&quick);
+
+    let apply_state = Rc::clone(state);
+    let apply_toast = Rc::clone(status_toast);
+    let apply_entry = entry.clone();
+    apply_button.connect_clicked(move |_| {
+        apply_audio_delay_entry(&apply_entry, Rc::clone(&apply_state), &apply_toast);
+    });
+
+    let activate_state = Rc::clone(state);
+    let activate_toast = Rc::clone(status_toast);
+    entry.connect_activate(move |entry| {
+        apply_audio_delay_entry(entry, Rc::clone(&activate_state), &activate_toast);
+    });
+
+    let reset_state = Rc::clone(state);
+    let reset_toast = Rc::clone(status_toast);
+    let reset_entry = entry.clone();
+    reset_button.connect_clicked(move |_| {
+        if let Some(applied) = apply_audio_delay(&reset_state, &reset_toast, 0.0) {
+            reset_entry.set_text(&subtitle_delay::format_entry(applied));
+        }
+    });
+
+    entry.connect_changed(|entry| {
+        entry.remove_css_class("is-error");
+    });
+
+    row
+}
+
+/// The delay the entry currently spells out, in seconds, or `None` when the
+/// text is not a valid delay. Callers reject invalid input the same way Apply
+/// does instead of substituting a value.
+pub(crate) fn entry_delay_seconds(entry: &gtk::Entry) -> Option<f64> {
+    subtitle_delay::parse_entry_seconds(entry.text().as_str())
+}
+
+/// Flag a delay entry as rejected: mark it errored and pull focus back so the
+/// user can correct the text.
+pub(crate) fn mark_delay_entry_error(entry: &gtk::Entry) {
+    entry.add_css_class("is-error");
+    entry.grab_focus();
+}
+
+pub(crate) fn apply_audio_delay_entry(
+    entry: &gtk::Entry,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: &Rc<StatusToast>,
+) {
+    let Some(delay_seconds) = entry_delay_seconds(entry) else {
+        mark_delay_entry_error(entry);
+        return;
+    };
+
+    if let Some(applied) = apply_audio_delay(&state, status_toast, delay_seconds) {
+        // Normalize the field to the stored/clamped whole-millisecond value.
+        entry.set_text(&subtitle_delay::format_entry(applied));
+    }
 }
 
 pub(crate) fn read_tracks(state: &Rc<RefCell<PlayerState>>) -> Vec<Track> {
@@ -1008,19 +1189,22 @@ pub(crate) fn divider() -> gtk::Separator {
 
 /// The one-line descriptor for a track row. Selection is shown by the row's
 /// leading check (see [`track_button`]), so the text carries only the track's
-/// name and its format tags — no "On" prefix that would shift long titles.
+/// name and its format tags — no "On" prefix that would shift long titles. The
+/// composition itself is portable domain logic and lives in
+/// [`okp_core::track_label`] (freeze-boundary); the shell only wires the string.
 pub(crate) fn track_label(track: &Track) -> String {
-    let mut parts = Vec::new();
-    parts.push(track_base_label(track));
-
     if track.kind == TrackKind::Audio {
-        if let Some(channels) = track.audio_channels.as_deref() {
-            parts.push(channels.to_owned());
-        }
-        if let Some(codec) = track.codec.as_deref() {
-            parts.push(codec.to_ascii_uppercase());
-        }
-    } else if track.external {
+        return okp_core::track_label::audio_track_label(
+            track.id,
+            track.title.as_deref(),
+            track.lang.as_deref(),
+            track.audio_channels.as_deref(),
+            track.codec.as_deref(),
+        );
+    }
+
+    let mut parts = vec![track_base_label(track)];
+    if track.external {
         parts.push("EXT".to_owned());
     } else if track.default {
         parts.push("Default".to_owned());
@@ -1030,13 +1214,11 @@ pub(crate) fn track_label(track: &Track) -> String {
 }
 
 pub(crate) fn track_base_label(track: &Track) -> String {
-    track
-        .title
-        .as_deref()
-        .or(track.lang.as_deref())
-        .filter(|label| !label.is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| format!("Track {}", track.id))
+    okp_core::track_label::primary_track_name(
+        track.id,
+        track.title.as_deref(),
+        track.lang.as_deref(),
+    )
 }
 
 pub(crate) fn drain_mpv_events(state: &Rc<RefCell<PlayerState>>) {

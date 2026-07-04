@@ -28,6 +28,7 @@ pub mod subtitle_lift;
 pub mod subtitle_style;
 pub mod subtitle_sync;
 pub mod time_code;
+pub mod track_label;
 pub mod track_tags;
 pub mod update_selection;
 

@@ -87,6 +87,8 @@ mod tests {
         assert!(parse_entry_seconds("").is_none());
         assert!(parse_entry_seconds("soon").is_none());
         assert!(parse_entry_seconds("nan").is_none());
+        assert!(parse_entry_seconds("-").is_none());
+        assert!(parse_entry_seconds("abc").is_none());
     }
 
     #[test]

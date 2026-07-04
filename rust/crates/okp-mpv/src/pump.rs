@@ -45,6 +45,8 @@ const OBSERVED_PROPERTIES: &[&str] = &[
     "sub-delay",
     "sub-scale",
     "secondary-sid",
+    // Audio sync offset surfaced in the audio popover / saved preferences.
+    "audio-delay",
     // A-B loop endpoints surfaced on the timeline.
     "ab-loop-a",
     "ab-loop-b",
@@ -63,6 +65,7 @@ pub(crate) struct Snapshot {
     pub(crate) ab_loop: AbLoopState,
     pub(crate) subtitle_delay: f64,
     pub(crate) subtitle_scale: f64,
+    pub(crate) audio_delay: f64,
     pub(crate) speed: f64,
     pub(crate) secondary_subtitle_id: Option<i64>,
     pub(crate) chapters: Vec<Chapter>,
@@ -77,6 +80,7 @@ impl Default for Snapshot {
             playback: PlaybackState::default(),
             ab_loop: AbLoopState::default(),
             subtitle_delay: 0.0,
+            audio_delay: 0.0,
             // Scale and speed report as 1.0 (100 % / normal) before mpv has a
             // value, matching the shell's historical `unwrap_or(1.0)` fallbacks.
             subtitle_scale: 1.0,
@@ -189,6 +193,10 @@ impl EventPump {
 
     pub(crate) fn subtitle_delay(&self) -> f64 {
         lock(&self.shared.snapshot).subtitle_delay
+    }
+
+    pub(crate) fn audio_delay(&self) -> f64 {
+        lock(&self.shared.snapshot).audio_delay
     }
 
     pub(crate) fn subtitle_scale(&self) -> f64 {
@@ -370,6 +378,7 @@ fn recompute(shared: &Arc<PumpShared>, flags: RecomputeFlags) {
     let playback = reader.playback_state().unwrap_or_default();
     let ab_loop = reader.ab_loop_state().unwrap_or_default();
     let subtitle_delay = reader.subtitle_delay().unwrap_or(0.0);
+    let audio_delay = reader.audio_delay().unwrap_or(0.0);
     let subtitle_scale = reader.subtitle_scale().unwrap_or(1.0);
     let speed = reader.speed().unwrap_or(1.0);
     let secondary_subtitle_id = reader.secondary_subtitle_id().unwrap_or_default();
@@ -390,6 +399,7 @@ fn recompute(shared: &Arc<PumpShared>, flags: RecomputeFlags) {
     snapshot.playback = playback;
     snapshot.ab_loop = ab_loop;
     snapshot.subtitle_delay = subtitle_delay;
+    snapshot.audio_delay = audio_delay;
     snapshot.subtitle_scale = subtitle_scale;
     snapshot.speed = speed;
     snapshot.secondary_subtitle_id = secondary_subtitle_id;
