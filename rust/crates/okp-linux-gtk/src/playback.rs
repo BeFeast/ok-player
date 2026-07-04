@@ -306,16 +306,14 @@ pub(crate) fn add_bookmark_at_position(
                 .filter(|time| time.is_finite() && *time >= 0.0);
             match position {
                 None => Err("Open media first"),
-                Some(position) => {
-                    if state.history.add_bookmark(&path, position) {
-                        if let Err(error) = state.history.save() {
-                            eprintln!("Failed to save bookmark: {error}");
-                        }
-                        Ok(position)
-                    } else {
-                        Err("Bookmark already here")
+                Some(position) => match state.history.add_bookmark_persisted(&path, position) {
+                    Ok(true) => Ok(position),
+                    Ok(false) => Err("Bookmark already here"),
+                    Err(error) => {
+                        eprintln!("Failed to save bookmark: {error}");
+                        Err("Couldn't save bookmark")
                     }
-                }
+                },
             }
         } else {
             Err("Bookmarks need a local file")
@@ -338,20 +336,24 @@ pub(crate) fn remove_bookmark_at(
     status_toast: &StatusToast,
     time: f64,
 ) {
-    let removed = {
+    let message = {
         let mut state = state.borrow_mut();
         let Some(path) = state.current_file.clone() else {
             return;
         };
-        let removed = state.history.remove_bookmark(&path, time);
-        if removed && let Err(error) = state.history.save() {
-            eprintln!("Failed to save history after removing bookmark: {error}");
+        match state.history.remove_bookmark_persisted(&path, time) {
+            Ok(true) => Some("Bookmark removed"),
+            // Nothing matched — the row is already gone, so stay quiet.
+            Ok(false) => None,
+            Err(error) => {
+                eprintln!("Failed to save history after removing bookmark: {error}");
+                Some("Couldn't remove bookmark")
+            }
         }
-        removed
     };
 
-    if removed {
-        status_toast.show("Bookmark removed");
+    if let Some(message) = message {
+        status_toast.show(message);
     }
 }
 

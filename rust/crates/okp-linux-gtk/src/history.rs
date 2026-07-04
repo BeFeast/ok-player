@@ -110,6 +110,42 @@ impl HistoryStore {
         removed
     }
 
+    /// Add a bookmark at `time` for `path` and persist it in the same step, undoing the
+    /// in-memory mark if the write fails. This keeps memory and the file on disk in
+    /// lock-step: a caller that reports "bookmarked" only after `Ok(true)` can never
+    /// advertise a mark that a crash-on-exit would silently lose. `Ok(false)` means a
+    /// mark already sat there (no write attempted); `Err` means the save failed and the
+    /// store was left exactly as it was found.
+    pub fn add_bookmark_persisted(&mut self, path: &Path, time: f64) -> io::Result<bool> {
+        if !self.add_bookmark(path, time) {
+            return Ok(false);
+        }
+        if let Err(error) = self.save() {
+            // The mark we just added is the only one within the remove window (an add
+            // only succeeds when nothing sits within the wider dedupe window), so this
+            // drops exactly it and restores the pre-add set.
+            self.remove_bookmark(path, time);
+            return Err(error);
+        }
+        Ok(true)
+    }
+
+    /// Remove the bookmark nearest `time` for `path` and persist the removal, re-adding
+    /// the mark if the write fails. Without the rollback a failed save would drop the
+    /// mark only in memory while it survives on disk, so it would reappear on the next
+    /// launch. `Ok(false)` means nothing matched (no write attempted); `Err` means the
+    /// save failed and the mark was put back.
+    pub fn remove_bookmark_persisted(&mut self, path: &Path, time: f64) -> io::Result<bool> {
+        if !self.remove_bookmark(path, time) {
+            return Ok(false);
+        }
+        if let Err(error) = self.save() {
+            self.add_bookmark(path, time);
+            return Err(error);
+        }
+        Ok(true)
+    }
+
     pub fn resume_position(&self, path: &Path) -> Option<f64> {
         let record = self.data.files.get(&history_key(path))?;
         if record.finished
@@ -218,6 +254,17 @@ mod tests {
     fn store() -> HistoryStore {
         HistoryStore {
             path: PathBuf::from("unused.json"),
+            data: HistoryFile::default(),
+            dirty: false,
+        }
+    }
+
+    /// A store whose path cannot be written: `/dev/null` exists but is not a directory,
+    /// so `create_dir_all` on the parent fails and every `save()` errors deterministically
+    /// without touching the real filesystem.
+    fn unwritable_store() -> HistoryStore {
+        HistoryStore {
+            path: PathBuf::from("/dev/null/history.json"),
             data: HistoryFile::default(),
             dirty: false,
         }
@@ -346,6 +393,51 @@ mod tests {
         assert!(history.remove_bookmark(path, 10.0));
         assert!(!history.remove_bookmark(path, 555.0));
         assert_eq!(history.bookmarks(path), vec![100.0]);
+    }
+
+    #[test]
+    fn add_bookmark_persisted_rolls_back_when_the_save_fails() {
+        let mut history = unwritable_store();
+        let path = Path::new("/media/movie.mkv");
+
+        let error = history
+            .add_bookmark_persisted(path, 42.0)
+            .expect_err("save must fail on an unwritable path");
+        assert!(!error.to_string().is_empty());
+        // The mark must not linger in memory once the write that would have persisted it
+        // failed — otherwise the UI reports success for a change that vanishes on restart.
+        assert!(history.bookmarks(path).is_empty());
+    }
+
+    #[test]
+    fn remove_bookmark_persisted_rolls_back_when_the_save_fails() {
+        let mut history = unwritable_store();
+        let path = Path::new("/media/movie.mkv");
+        // Seed a mark directly (no save) so we can exercise the failing removal.
+        assert!(history.add_bookmark(path, 42.0));
+
+        history
+            .remove_bookmark_persisted(path, 42.0)
+            .expect_err("save must fail on an unwritable path");
+        // The mark survives on disk, so it must survive in memory too; dropping it only
+        // in memory would make it reappear on the next launch.
+        assert_eq!(history.bookmarks(path), vec![42.0]);
+    }
+
+    #[test]
+    fn persisted_bookmark_helpers_skip_the_save_when_nothing_changes() {
+        let mut history = unwritable_store();
+        let path = Path::new("/media/movie.mkv");
+        assert!(history.add_bookmark(path, 42.0));
+
+        // A duplicate add and a no-match remove change nothing, so no save is attempted
+        // and the unwritable path is never reached.
+        assert_eq!(history.add_bookmark_persisted(path, 42.2).ok(), Some(false));
+        assert_eq!(
+            history.remove_bookmark_persisted(path, 900.0).ok(),
+            Some(false)
+        );
+        assert_eq!(history.bookmarks(path), vec![42.0]);
     }
 
     #[test]
