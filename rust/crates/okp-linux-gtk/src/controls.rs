@@ -175,6 +175,7 @@ pub(crate) fn build_controls(
     let up_next_actions = Rc::new(RefCell::new(Vec::<SidePanelAction>::new()));
     let row_actions = Rc::clone(&up_next_actions);
     let row_toast = Rc::clone(&status_toast);
+    let row_parent = window.clone();
     let (thumbnail_sender, thumbnail_receiver) = mpsc::channel();
     up_next_list.connect_row_activated(move |_, row| {
         let index = row.index();
@@ -194,6 +195,16 @@ pub(crate) fn build_controls(
                 jump_playlist_index(&up_next_state, index);
             }
             SidePanelAction::AddBookmark => add_bookmark_at_position(&up_next_state, &row_toast),
+            // The Up Next short-queue state's "Add files" affordance: opens the
+            // same multi-select media dialog the overflow menu's "Add to Queue"
+            // uses, so a single-URL / no-folder session can grow a queue without
+            // leaving the panel (PRD §2.6).
+            SidePanelAction::AddFiles => open_queue_media_dialog(
+                &row_parent,
+                Rc::clone(&up_next_state),
+                Rc::clone(&row_toast),
+                QueueInsertMode::Append,
+            ),
         }
     });
 

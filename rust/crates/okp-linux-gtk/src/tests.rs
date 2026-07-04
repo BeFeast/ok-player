@@ -1073,6 +1073,54 @@ fn side_panel_preview_sample_covers_chapters_and_queue() {
 }
 
 #[test]
+fn side_panel_empty_up_next_sample_covers_the_short_queue_state() {
+    // The PRD §2.6 "Empty (single URL / no folder)" state is what the Up Next
+    // panel renders for a stream with no folder queue: the lone now-playing URL
+    // pinned plus the "Add files to queue" affordance. The fixture must be a
+    // single-item URL queue with no chapters and no bookmarks so the visual
+    // smoke shot exercises exactly that short-queue path (and not the multi-item
+    // queue or the chapters surface).
+    let sample = side_panel_empty_up_next_sample();
+
+    assert!(sample.has_media);
+    assert!(sample.current_file.is_none());
+    let url = sample
+        .current_url
+        .clone()
+        .expect("preview is a stream with a current url");
+    assert_eq!(sample.playlist.len(), 1, "short-queue fixture has one item");
+    assert_eq!(sample.playlist[0], PlaylistItem::Url(url.clone()));
+    assert!(sample.playlist[0].is_current(None, Some(url.as_str())));
+    assert!(
+        sample.chapters.is_empty(),
+        "short-queue fixture has no chapters"
+    );
+    assert!(
+        sample.bookmarks.is_empty(),
+        "short-queue fixture has no bookmarks"
+    );
+    assert!(sample.current_chapter.is_none());
+}
+
+#[test]
+fn side_panel_summary_reports_the_single_item_queue_without_a_dead_string() {
+    // The short-queue state must never read as the old bare "No folder queue"
+    // dead string: the summary line still names the now-playing item and counts
+    // it as one item, so the panel header stays informative for a single URL.
+    let snapshot = side_panel_empty_up_next_sample();
+    let summary = side_panel_summary(&snapshot);
+
+    assert!(
+        summary.contains("1 item"),
+        "summary should count the single now-playing item: {summary}"
+    );
+    assert!(
+        !summary.contains("No media loaded"),
+        "summary should name the now-playing stream: {summary}"
+    );
+}
+
+#[test]
 fn lyrics_preview_sample_is_a_synced_sheet_with_a_mid_active_line() {
     let (document, position) = lyrics_preview_sample();
 

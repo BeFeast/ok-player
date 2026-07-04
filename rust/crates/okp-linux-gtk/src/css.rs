@@ -669,6 +669,30 @@ const OKP_STYLESHEET: &str = "
             color: alpha(@okp_accent, 0.92);
         }
 
+        .okp-add-files-row {
+            background: transparent;
+            border-style: dashed;
+            border-color: rgba(255, 255, 255, 0.16);
+            color: rgba(255, 255, 255, 0.62);
+        }
+
+        .okp-add-files-row:hover {
+            background: alpha(@okp_accent, 0.12);
+            border-color: alpha(@okp_accent, 0.48);
+            color: rgba(255, 255, 255, 0.92);
+        }
+
+        .okp-add-files-row .okp-add-files-icon {
+            color: alpha(@okp_accent, 0.92);
+        }
+
+        /* The lone now-playing card at the top of a short queue has no reorder /
+           remove controls, so give it a touch more breathing room than a regular
+           queue row so it reads as a pinned card rather than a stripped row. */
+        .okp-now-playing-pinned-row {
+            min-height: 46px;
+        }
+
         .okp-up-next-row.is-current .okp-chapter-thumb {
             border-color: alpha(@okp_accent, 0.55);
         }

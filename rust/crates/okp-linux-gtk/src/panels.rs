@@ -325,10 +325,7 @@ pub(crate) fn render_playlist_panel(
     actions: &mut Vec<SidePanelAction>,
 ) {
     if snapshot.playlist.len() <= 1 {
-        controls
-            .up_next_list
-            .append(&panel_empty_row("No folder queue for this media yet."));
-        actions.push(SidePanelAction::None);
+        render_short_queue_panel(controls, snapshot, current_index, actions);
         return;
     }
 
@@ -348,6 +345,108 @@ pub(crate) fn render_playlist_panel(
         ));
         actions.push(SidePanelAction::Playlist(index));
     }
+}
+
+/// The Up Next panel for a queue too short to scroll (PRD §2.6: a single URL / no
+/// folder session shows the now-playing item + an "Add files…" hint). The old
+/// branch rendered a bare "No folder queue for this media yet." dead string and
+/// dropped the now-playing item entirely, so the panel read as blank with no
+/// way back to growing a queue. The lone current item is pinned as a clean
+/// now-playing row (no reorder/remove controls — there is nothing to reorder or
+/// remove), then the dashed "Add files to queue" affordance opens the same
+/// multi-select media dialog the overflow menu's "Add to Queue" uses.
+pub(crate) fn render_short_queue_panel(
+    controls: &Controls,
+    snapshot: &SidePanelSnapshot,
+    current_index: Option<usize>,
+    actions: &mut Vec<SidePanelAction>,
+) {
+    if let Some(item) = snapshot.playlist.first() {
+        controls
+            .up_next_list
+            .append(&panel_heading_row("Up Next · 1"));
+        actions.push(SidePanelAction::None);
+
+        controls
+            .up_next_list
+            .append(&now_playing_pinned_row(item, current_index == Some(0)));
+        // The pinned now-playing row is non-activatable; reserve a slot so the
+        // Add files affordance below keeps a stable action index.
+        actions.push(SidePanelAction::None);
+    }
+
+    controls.up_next_list.append(&add_files_row());
+    actions.push(SidePanelAction::AddFiles);
+}
+
+/// The pinned now-playing row used at the top of a short queue. It mirrors the
+/// full queue's current row (NOW badge + source icon + ellipsizing title) but
+/// drops the reorder / remove action buttons — a single-item queue has nothing
+/// to reorder and the current item is not removable — so the lone entry reads as
+/// a calm pinned card instead of a row of greyed-out controls.
+pub(crate) fn now_playing_pinned_row(item: &PlaylistItem, is_current: bool) -> gtk::ListBoxRow {
+    let row = gtk::ListBoxRow::new();
+    row.add_css_class("okp-up-next-row");
+    row.add_css_class("okp-now-playing-pinned-row");
+    row.set_activatable(false);
+    row.set_selectable(false);
+    if is_current {
+        row.add_css_class("is-current");
+    }
+    row.set_tooltip_text(Some(&item.display_location()));
+
+    let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row_box.set_hexpand(true);
+
+    let lane = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    lane.add_css_class("okp-up-next-lane");
+    lane.set_halign(gtk::Align::Start);
+    lane.set_valign(gtk::Align::Center);
+    lane.append(&now_playing_badge("NOW"));
+
+    let icon = playlist_row_icon(item);
+    let title = gtk::Label::new(Some(&item.display_name()));
+    title.add_css_class("okp-up-next-file");
+    title.set_xalign(0.0);
+    title.set_hexpand(true);
+    title.set_ellipsize(pango::EllipsizeMode::End);
+
+    row_box.append(&lane);
+    row_box.append(&icon);
+    row_box.append(&title);
+    row.set_child(Some(&row_box));
+    row
+}
+
+/// The "Add files to queue" affordance row for the short-queue state. Activation
+/// is dispatched through [`SidePanelAction::AddFiles`] by the list's row-activated
+/// handler, so this only needs to render — keeping it a plain (state-free) widget
+/// the poll can rebuild, mirroring [`add_bookmark_row`].
+pub(crate) fn add_files_row() -> gtk::ListBoxRow {
+    let row = gtk::ListBoxRow::new();
+    row.add_css_class("okp-up-next-row");
+    row.add_css_class("okp-add-files-row");
+    row.set_selectable(false);
+    row.set_tooltip_text(Some("Append local media files to Up Next"));
+
+    let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row_box.set_hexpand(true);
+
+    let icon = gtk::Image::from_icon_name("list-add-symbolic");
+    icon.add_css_class("okp-add-files-icon");
+    icon.set_pixel_size(16);
+    icon.set_valign(gtk::Align::Center);
+
+    let label = gtk::Label::new(Some("Add files to queue"));
+    label.add_css_class("okp-up-next-file");
+    label.set_xalign(0.0);
+    label.set_hexpand(true);
+    label.set_ellipsize(pango::EllipsizeMode::End);
+
+    row_box.append(&icon);
+    row_box.append(&label);
+    row.set_child(Some(&row_box));
+    row
 }
 
 pub(crate) fn drain_thumbnail_events(controls: &Controls) {
@@ -882,6 +981,27 @@ pub(crate) fn side_panel_preview_sample() -> SidePanelSnapshot {
     }
 }
 
+/// Representative Up Next content for the short-queue / single-URL state used by
+/// the visual smoke hook (`OKP_OPEN_SIDE_PANEL_ON_STARTUP=up-next-empty`). Fixture
+/// data only — the live panel always renders from `Mpv::observed_chapters` and
+/// the loaded playlist. It exercises the PRD §2.6 "Empty (single URL / no folder)"
+/// state: one now-playing stream URL, no chapters, no bookmarks — the surface
+/// that used to render a bare dead "No folder queue" string and now pins the
+/// now-playing item plus the "Add files to queue" affordance.
+pub(crate) fn side_panel_empty_up_next_sample() -> SidePanelSnapshot {
+    let url = "https://stream.example.com/live/channel-one.m3u8".to_owned();
+    SidePanelSnapshot {
+        has_media: true,
+        current_file: None,
+        current_url: Some(url.clone()),
+        playlist: vec![PlaylistItem::Url(url)],
+        chapters: Vec::new(),
+        current_chapter: None,
+        bookmarks: Vec::new(),
+        ab_loop: AbLoopState::default(),
+    }
+}
+
 /// Freeze the live poll and render the side panel from fixture data so the
 /// Chapters and Up Next surfaces can be screenshot-tested without loaded media.
 /// The freeze lasts only until real media loads: [`update_up_next_panel`]
@@ -893,9 +1013,9 @@ pub(crate) fn open_side_panel_preview(
     state: &Rc<RefCell<PlayerState>>,
     chrome: &ChromeVisibility,
     mode: SidePanelMode,
+    snapshot: SidePanelSnapshot,
 ) {
     controls.side_panel_preview_frozen.set(true);
-    let snapshot = side_panel_preview_sample();
 
     controls.side_panel_mode.set(mode);
     set_side_panel_user_visible(
