@@ -526,30 +526,46 @@ pub(crate) fn build_empty_surface(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) -> EmptySurface {
-    let panel = gtk::Box::new(gtk::Orientation::Vertical, 16);
+    let panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
     panel.add_css_class("okp-empty-panel");
     panel.set_halign(gtk::Align::Center);
     panel.set_valign(gtk::Align::Center);
 
-    let logo = gtk::Image::from_icon_name("com.befeast.okplayer");
-    logo.add_css_class("okp-empty-logo");
-    logo.set_pixel_size(64);
+    let logo = empty_surface_logo();
     panel.append(&logo);
 
-    let title = gtk::Label::new(Some("OK Player"));
-    title.add_css_class("okp-empty-title");
-    title.set_xalign(0.5);
-    panel.append(&title);
+    let wordmark = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    wordmark.add_css_class("okp-empty-wordmark");
+    wordmark.set_halign(gtk::Align::Center);
+    let wordmark_ok = gtk::Label::new(Some("OK"));
+    wordmark_ok.add_css_class("okp-empty-wordmark-ok");
+    let wordmark_player = gtk::Label::new(Some(" Player"));
+    wordmark_player.add_css_class("okp-empty-wordmark-player");
+    wordmark.append(&wordmark_ok);
+    wordmark.append(&wordmark_player);
+    panel.append(&wordmark);
 
-    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-    actions.set_halign(gtk::Align::Center);
+    let tagline = gtk::Label::new(Some("Open a file to start playing."));
+    tagline.add_css_class("okp-empty-tagline");
+    tagline.set_justify(gtk::Justification::Center);
+    tagline.set_wrap(true);
+    tagline.set_max_width_chars(34);
+    panel.append(&tagline);
+
+    let actions = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    actions.add_css_class("okp-empty-actions");
 
     let open_button = gtk::Button::with_label("Open media");
     open_button.add_css_class("okp-empty-primary-button");
+    open_button.set_hexpand(true);
+    open_button.set_halign(gtk::Align::Fill);
     let open_parent = window.clone();
     let open_state = Rc::clone(&state);
     open_button.connect_clicked(move |_| open_media_dialog(&open_parent, Rc::clone(&open_state)));
     actions.append(&open_button);
+
+    let secondary_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    secondary_row.set_homogeneous(true);
 
     let folder_button = gtk::Button::with_label("Open folder");
     folder_button.add_css_class("okp-empty-secondary-button");
@@ -563,7 +579,7 @@ pub(crate) fn build_empty_surface(
             Rc::clone(&folder_toast),
         );
     });
-    actions.append(&folder_button);
+    secondary_row.append(&folder_button);
 
     let url_button = gtk::Button::with_label("Open URL");
     url_button.add_css_class("okp-empty-secondary-button");
@@ -573,9 +589,17 @@ pub(crate) fn build_empty_surface(
     url_button.connect_clicked(move |_| {
         open_url_dialog(&url_parent, Rc::clone(&url_state), Rc::clone(&url_toast));
     });
-    actions.append(&url_button);
+    secondary_row.append(&url_button);
 
+    actions.append(&secondary_row);
     panel.append(&actions);
+
+    let hint = gtk::Label::new(Some("Drop media here · press O to open"));
+    hint.add_css_class("okp-empty-hint");
+    hint.set_justify(gtk::Justification::Center);
+    hint.set_wrap(true);
+    hint.set_max_width_chars(40);
+    panel.append(&hint);
 
     let revealer = gtk::Revealer::new();
     revealer.add_css_class("okp-empty-surface");
@@ -587,4 +611,41 @@ pub(crate) fn build_empty_surface(
     revealer.set_child(Some(&panel));
 
     EmptySurface { revealer, panel }
+}
+
+/// The welcome surface anchors the OK Player identity with the app icon tile.
+/// It loads the bundled SVG directly so the mark renders crisply in development
+/// and packaged builds alike, falling back to the themed icon when the asset is
+/// not on disk (mirrors `about_illustration`).
+pub(crate) fn empty_surface_logo() -> gtk::Image {
+    if let Some(path) = empty_surface_logo_path() {
+        let image = gtk::Image::from_file(path);
+        image.add_css_class("okp-empty-logo");
+        image.set_size_request(64, 64);
+        image.set_pixel_size(64);
+        return image;
+    }
+
+    let image = gtk::Image::from_icon_name("com.befeast.okplayer");
+    image.add_css_class("okp-empty-logo");
+    image.set_pixel_size(64);
+    image
+}
+
+pub(crate) fn empty_surface_logo_path() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    candidates.push(PathBuf::from(
+        "/usr/share/icons/hicolor/scalable/apps/com.befeast.okplayer.svg",
+    ));
+    if let Ok(exe) = env::current_exe()
+        && let Some(parent) = exe.parent()
+    {
+        candidates.push(parent.join("com.befeast.okplayer.svg"));
+    }
+    candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packaging/linux/com.befeast.okplayer.svg"),
+    );
+
+    candidates.into_iter().find(|path| path.is_file())
 }
