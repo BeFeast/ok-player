@@ -159,6 +159,10 @@ struct PlayerState {
     render_target_size: Option<okp_mpv::RenderTargetSize>,
     video_transform: VideoTransformState,
     ab_loop: AbLoopState,
+    /// Last transient navigation projection, so rapid fine seeks / frame steps
+    /// accumulate their readouts instead of re-projecting the same stale
+    /// snapshot before mpv's pump republishes `time_pos`.
+    pending_nav: Option<seek_readout::PendingNav>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

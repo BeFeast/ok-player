@@ -62,6 +62,82 @@ pub fn frame_step_target(time_pos: f64, fps: Option<f64>, forward: bool, duratio
     }
 }
 
+/// A navigation projection carried between keypresses so rapid fine seeks or
+/// frame steps accumulate instead of re-projecting the same stale readout.
+///
+/// mpv applies relative seeks / frame steps asynchronously and republishes
+/// `time_pos` only when its event pump next runs. Pressing Left/Right or `.`/`,`
+/// several times before that happens queues several moves against the *same*
+/// observed snapshot; projecting each readout from that snapshot would report
+/// the first target every time even though playback keeps advancing. Carrying
+/// the last projection forward lets the next press build on where the previous
+/// one landed until the pump catches up.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PendingNav {
+    /// The observed `time_pos` this projection was based on. A later press whose
+    /// observed snapshot still matches this value means mpv's pump has not
+    /// republished `time_pos` yet, so the projection accumulates.
+    pub observed_base: f64,
+    /// The position the transient readout last reported for this run of presses.
+    pub projected_target: f64,
+}
+
+impl PendingNav {
+    /// The base a new projection should build on for the freshly observed
+    /// `time_pos`. While the observed snapshot is bit-identical to the one this
+    /// projection was based on (the pump has not republished `time_pos`), keep
+    /// accumulating from `projected_target`; otherwise the pump has caught up
+    /// (or an unrelated jump happened), so re-base on the observed position.
+    fn base_for(self, observed_time: f64) -> f64 {
+        // Bit equality, not `==`: we only reuse the projection when this is
+        // literally the same snapshot value, never an approximate match.
+        if self.observed_base.to_bits() == observed_time.to_bits() {
+            self.projected_target
+        } else {
+            observed_time
+        }
+    }
+}
+
+/// The base position a new projection should build on, given the freshly
+/// observed `time_pos` and any pending projection from a previous press.
+fn projection_base(observed_time: f64, pending: Option<PendingNav>) -> f64 {
+    pending.map_or(observed_time, |p| p.base_for(observed_time))
+}
+
+/// Project the next fine-seek readout target, accumulating across presses that
+/// arrive before mpv's pump republishes `time_pos`. Format the returned
+/// `projected_target` for the overlay and carry the value back for the next
+/// press so repeated seeks report where playback is actually heading.
+pub fn advance_seek(
+    observed_time: f64,
+    delta: f64,
+    duration: f64,
+    pending: Option<PendingNav>,
+) -> PendingNav {
+    let base = projection_base(observed_time, pending);
+    PendingNav {
+        observed_base: observed_time,
+        projected_target: seek_target(base, delta, duration),
+    }
+}
+
+/// Project the next frame-step readout target, accumulating across presses so
+/// repeated steps report successive frames rather than the first projected one.
+pub fn advance_frame_step(
+    observed_time: f64,
+    fps: Option<f64>,
+    forward: bool,
+    duration: f64,
+    pending: Option<PendingNav>,
+) -> PendingNav {
+    let base = projection_base(observed_time, pending);
+    PendingNav {
+        observed_base: observed_time,
+        projected_target: frame_step_target(base, fps, forward, duration),
+    }
+}
+
 /// The transient readout line for a position: the clock timecode, plus the
 /// frame number when the frame rate is known.
 pub fn format_readout(time_pos: f64, fps: Option<f64>) -> String {
@@ -165,5 +241,57 @@ mod tests {
         let target = frame_step_target(5.0, Some(24.0), true, 120.0);
         assert_eq!(frame_number(target, Some(24.0)), Some(121));
         assert_eq!(format_readout(target, Some(24.0)), "00:05 · Frame 121");
+    }
+
+    #[test]
+    fn repeated_fine_seeks_accumulate_before_the_pump_updates() {
+        // Two quick `→` presses from 30 s while the observed snapshot is still
+        // 30 s must project 35 s then 40 s, not 35 s twice.
+        let first = advance_seek(30.0, 5.0, 120.0, None);
+        assert_eq!(first.projected_target, 35.0);
+
+        let second = advance_seek(30.0, 5.0, 120.0, Some(first));
+        assert_eq!(second.projected_target, 40.0);
+        assert_eq!(
+            format_readout(second.projected_target, Some(24.0)),
+            "00:40 · Frame 960"
+        );
+    }
+
+    #[test]
+    fn fine_seek_rebases_once_the_pump_republishes_time_pos() {
+        // After the pump publishes a fresh position, the next press builds on the
+        // real observed time — including a keyframe landing that undershot 35 s.
+        let first = advance_seek(30.0, 5.0, 120.0, None);
+        let rebased = advance_seek(34.8, 5.0, 120.0, Some(first));
+        assert_eq!(rebased.projected_target, 39.8);
+    }
+
+    #[test]
+    fn repeated_frame_steps_walk_successive_frames_before_the_pump_updates() {
+        // Holding `.` from frame 120 (@24 fps) while the snapshot stays at 5.0 s
+        // must report 121 then 122, not 121 twice.
+        let first = advance_frame_step(5.0, Some(24.0), true, 120.0, None);
+        assert_eq!(frame_number(first.projected_target, Some(24.0)), Some(121));
+
+        let second = advance_frame_step(5.0, Some(24.0), true, 120.0, Some(first));
+        assert_eq!(frame_number(second.projected_target, Some(24.0)), Some(122));
+        assert_eq!(
+            format_readout(second.projected_target, Some(24.0)),
+            "00:05 · Frame 122"
+        );
+    }
+
+    #[test]
+    fn frame_step_rebases_once_the_pump_republishes_time_pos() {
+        // A fresh snapshot (pump caught up to frame 121) re-bases the next step
+        // to frame 122 rather than accumulating from a stale projection.
+        let first = advance_frame_step(5.0, Some(24.0), true, 120.0, None);
+        let observed = 121.0 / 24.0;
+        let rebased = advance_frame_step(observed, Some(24.0), true, 120.0, Some(first));
+        assert_eq!(
+            frame_number(rebased.projected_target, Some(24.0)),
+            Some(122)
+        );
     }
 }

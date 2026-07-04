@@ -358,7 +358,13 @@ pub(crate) fn remove_bookmark_at(
 }
 
 pub(crate) fn seek_to_time(state: &Rc<RefCell<PlayerState>>, time: f64) -> bool {
-    time.is_finite() && time >= 0.0 && with_mpv(state, |mpv| mpv.seek_absolute(time))
+    if !(time.is_finite() && time >= 0.0 && with_mpv(state, |mpv| mpv.seek_absolute(time))) {
+        return false;
+    }
+    // An absolute jump ends any run of relative seeks, so the next fine seek
+    // re-bases on the observed snapshot rather than a now-unrelated projection.
+    state.borrow_mut().pending_nav = None;
+    true
 }
 
 /// Latest observed playback scalars for a media session, or `None` when nothing
@@ -395,9 +401,14 @@ pub(crate) fn seek_relative_with_readout(
 
     let time = playback.time_pos.unwrap_or(0.0).max(0.0);
     let duration = playback.duration.unwrap_or(0.0).max(0.0);
-    let target = seek_readout::seek_target(time, delta, duration);
+    // Accumulate from the previous projection when the pump has not republished
+    // `time_pos` yet, so two quick `→` presses report 35s then 40s, not 35s
+    // twice while mpv queues both relative seeks.
+    let pending = state.borrow().pending_nav;
+    let next = seek_readout::advance_seek(time, delta, duration, pending);
+    state.borrow_mut().pending_nav = Some(next);
     status_toast.show(&seek_readout::format_readout(
-        target,
+        next.projected_target,
         playback.container_fps,
     ));
 }
@@ -426,9 +437,15 @@ pub(crate) fn frame_step_with_readout(
 
     let time = playback.time_pos.unwrap_or(0.0).max(0.0);
     let duration = playback.duration.unwrap_or(0.0).max(0.0);
-    let target = seek_readout::frame_step_target(time, playback.container_fps, forward, duration);
+    // Accumulate across repeated `.`/`,` presses so successive frame steps
+    // report frame N+1, N+2, … instead of the first projected frame while the
+    // pump has yet to republish `time_pos` for the paused, stepped video.
+    let pending = state.borrow().pending_nav;
+    let next =
+        seek_readout::advance_frame_step(time, playback.container_fps, forward, duration, pending);
+    state.borrow_mut().pending_nav = Some(next);
     status_toast.show(&seek_readout::format_readout(
-        target,
+        next.projected_target,
         playback.container_fps,
     ));
 }
