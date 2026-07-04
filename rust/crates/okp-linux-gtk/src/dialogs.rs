@@ -91,7 +91,9 @@ pub(crate) fn open_url_dialog(
     dialog.connect_response(move |dialog, response| {
         if response == gtk::ResponseType::Accept {
             let url = entry.text().trim().to_owned();
-            if media_formats::is_playable_url(Some(&url)) {
+            if let Some(notice) = reserved_uri_notice(&url) {
+                status_toast.show(&notice);
+            } else if media_formats::is_playable_url(Some(&url)) {
                 load_media_url(&state, url);
             } else {
                 status_toast.show("Enter a valid stream URL");

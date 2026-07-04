@@ -20,6 +20,15 @@ pub(crate) fn parse_launch_args_from_cwd(
         }
 
         if let Some(text) = arg.to_str() {
+            // The reserved ok-player:// scheme is checked before the URL/path branches so a
+            // control request is never mistaken for a stream URL and handed to the engine.
+            if let Some(notice) = reserved_uri_notice(text) {
+                if !launch.reserved_notices.contains(&notice) {
+                    launch.reserved_notices.push(notice);
+                }
+                continue;
+            }
+
             if media_formats::is_playable_url(Some(text)) {
                 push_unique_playlist_item(&mut launch.items, PlaylistItem::Url(text.to_owned()));
                 continue;
@@ -156,6 +165,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     window.set_child(Some(&overlay));
     connect_chrome_activity(&overlay, Rc::clone(&chrome));
 
+    let launch_reserved_notice = launch_args.reserved_notice().map(str::to_owned);
     connect_mpv(&video_area, Rc::clone(&state), launch_args);
     connect_video_clicks(
         &video_area,
@@ -239,12 +249,25 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     if auto_check_updates {
         check_updates_on_startup(Rc::clone(&state), Rc::clone(&status_toast));
     }
+    if let Some(notice) = launch_reserved_notice {
+        eprintln!("Ignoring reserved ok-player:// request: {notice}");
+        let notice_toast = Rc::clone(&status_toast);
+        glib::idle_add_local_once(move || notice_toast.show(&notice));
+    }
 
-    AppRuntime { window, state }
+    AppRuntime {
+        window,
+        state,
+        status_toast,
+    }
 }
 
 pub(crate) fn open_runtime_launch_args(runtime: &AppRuntime, launch_args: &LaunchArgs) {
     runtime.window.present();
+    if let Some(notice) = launch_args.reserved_notice() {
+        eprintln!("Ignoring reserved ok-player:// request: {notice}");
+        runtime.status_toast.show(notice);
+    }
     if launch_args.has_payload() {
         apply_launch_args(&runtime.state, launch_args);
     }

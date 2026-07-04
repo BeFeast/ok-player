@@ -21,8 +21,8 @@ use okp_core::shortcuts::{
 };
 use okp_core::update_selection::{self, DebFeed, DebUpdate, SHA256SUMS_ASSET};
 use okp_core::{
-    AppIdentity, chapter_math, lrc, m3u, media_formats, natural_compare, seek_readout, sha256sums,
-    subtitle_delay, time_code,
+    AppIdentity, chapter_math, lrc, m3u, media_formats, natural_compare, ok_player_uri,
+    seek_readout, sha256sums, subtitle_delay, time_code,
 };
 use okp_mpv::{
     AbLoopState, AudioDevice, Chapter, InfoRow, InfoSection, InfoTrack, MediaInfo, Mpv, MpvEvent,
@@ -121,6 +121,10 @@ const LINUX_KEY_MEDIA_MIME_TYPES: &[&str] = &[
     "audio/x-wav",
     "audio/ogg",
 ];
+// The reserved ok-player:// control scheme (PRD §13.4). The MIME type is what a desktop
+// entry advertises to claim the scheme; the display form is what diagnostics show.
+const LINUX_URI_SCHEME_MIME: &str = "x-scheme-handler/ok-player";
+const LINUX_RESERVED_URI_SCHEME: &str = "ok-player://";
 const VIDEO_ASPECT_AUTO: &str = "no";
 const VIDEO_ASPECT_PRESETS: [(&str, &str); 4] = [
     ("Auto", VIDEO_ASPECT_AUTO),
@@ -232,11 +236,21 @@ struct LaunchArgs {
     items: Vec<PlaylistItem>,
     playlists: Vec<PathBuf>,
     subtitles: Vec<PathBuf>,
+    /// Local diagnostics for reserved `ok-player://` requests seen on this launch — the
+    /// scheme is recognized but its external-control commands are [Later], so each is
+    /// reported rather than opened as media (PRD §13.4).
+    reserved_notices: Vec<String>,
 }
 
 impl LaunchArgs {
     fn has_payload(&self) -> bool {
         !self.items.is_empty() || !self.playlists.is_empty() || !self.subtitles.is_empty()
+    }
+
+    /// The message to surface for the first reserved `ok-player://` request on this launch,
+    /// if any. Only the first is shown so a batch of URIs cannot flood the toast.
+    fn reserved_notice(&self) -> Option<&str> {
+        self.reserved_notices.first().map(String::as_str)
     }
 }
 
@@ -244,6 +258,7 @@ impl LaunchArgs {
 struct AppRuntime {
     window: gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
 }
 
 #[derive(Clone)]
@@ -1319,6 +1334,8 @@ struct LinuxIntegrationSnapshot {
     desktop_entry_path: Option<PathBuf>,
     registered_key_mimes: usize,
     default_key_mimes: Option<usize>,
+    uri_scheme_registered: bool,
+    uri_scheme_default: Option<bool>,
     xdg_mime_available: bool,
     update_desktop_database_available: bool,
 }
@@ -1326,18 +1343,27 @@ struct LinuxIntegrationSnapshot {
 impl LinuxIntegrationSnapshot {
     fn capture() -> Self {
         let desktop_entry_path = linux_desktop_entry_path();
-        let registered_key_mimes = desktop_entry_path
+        let desktop_entry = desktop_entry_path
             .as_ref()
-            .and_then(|path| fs::read_to_string(path).ok())
-            .map(|contents| count_registered_key_media_mimes(&contents))
+            .and_then(|path| fs::read_to_string(path).ok());
+        let registered_key_mimes = desktop_entry
+            .as_deref()
+            .map(count_registered_key_media_mimes)
             .unwrap_or_default();
+        let uri_scheme_registered = desktop_entry
+            .as_deref()
+            .map(desktop_registers_uri_scheme)
+            .unwrap_or(false);
         let xdg_mime_available = find_executable("xdg-mime").is_some();
         let default_key_mimes = xdg_mime_available.then(count_default_key_media_mimes);
+        let uri_scheme_default = xdg_mime_available.then(uri_scheme_default_is_ok_player);
 
         Self {
             desktop_entry_path,
             registered_key_mimes,
             default_key_mimes,
+            uri_scheme_registered,
+            uri_scheme_default,
             xdg_mime_available,
             update_desktop_database_available: find_executable("update-desktop-database").is_some(),
         }

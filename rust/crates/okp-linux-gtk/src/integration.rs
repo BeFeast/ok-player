@@ -74,6 +74,15 @@ pub(crate) fn settings_integration_section(status_toast: Rc<StatusToast>) -> gtk
     );
     section.append(&defaults_row);
 
+    let (scheme_value, scheme_detail, scheme_status) =
+        uri_scheme_row_content(snapshot.uri_scheme_registered, snapshot.uri_scheme_default);
+    section.append(&integration_status_row(
+        "URI scheme",
+        scheme_value,
+        &scheme_detail,
+        scheme_status,
+    ));
+
     section.append(&integration_status_row(
         "System tools",
         linux_integration_tools_value(&snapshot),
@@ -334,6 +343,45 @@ pub(crate) fn count_registered_key_media_mimes(desktop_entry: &str) -> usize {
         .count()
 }
 
+pub(crate) fn desktop_registers_uri_scheme(desktop_entry: &str) -> bool {
+    parse_desktop_mime_types(desktop_entry)
+        .iter()
+        .any(|mime| mime == LINUX_URI_SCHEME_MIME)
+}
+
+pub(crate) fn uri_scheme_default_is_ok_player() -> bool {
+    query_default_app_for_mime(LINUX_URI_SCHEME_MIME)
+        .as_deref()
+        .is_some_and(default_app_matches_ok_player)
+}
+
+/// The pill value / detail / status for the reserved `ok-player://` scheme row.
+/// `registered` reflects the installed desktop entry advertising the scheme; `default` is
+/// the xdg-mime default-handler check (`Some(true)` when OK Player is the explicit default,
+/// `None` when xdg-mime is unavailable). Reserving the scheme *is* registration, so an
+/// advertised scheme reads Good regardless of the default handler — the default only
+/// enriches the detail line (a reserved scheme is claimed for later, not actively routed).
+pub(crate) fn uri_scheme_row_content(
+    registered: bool,
+    default: Option<bool>,
+) -> (&'static str, String, IntegrationStatus) {
+    if !registered {
+        return (
+            "Missing",
+            format!("{LINUX_RESERVED_URI_SCHEME} is not advertised by an installed desktop entry."),
+            IntegrationStatus::Bad,
+        );
+    }
+    let detail = match default {
+        Some(true) => format!("{LINUX_RESERVED_URI_SCHEME} is reserved and handled by OK Player."),
+        Some(false) => format!(
+            "{LINUX_RESERVED_URI_SCHEME} is advertised; not set as the system default handler."
+        ),
+        None => format!("{LINUX_RESERVED_URI_SCHEME} is advertised through the desktop entry."),
+    };
+    ("Reserved", detail, IntegrationStatus::Good)
+}
+
 pub(crate) fn count_default_key_media_mimes() -> usize {
     LINUX_KEY_MEDIA_MIME_TYPES
         .iter()
@@ -455,6 +503,17 @@ pub(crate) fn open_linux_default_apps_settings() -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+pub(crate) fn uri_scheme_diagnostics(snapshot: &LinuxIntegrationSnapshot) -> &'static str {
+    if !snapshot.uri_scheme_registered {
+        return "missing";
+    }
+    match snapshot.uri_scheme_default {
+        Some(true) => "registered (default handler)",
+        Some(false) => "registered (not default)",
+        None => "registered",
+    }
+}
+
 pub(crate) fn linux_integration_diagnostics(snapshot: &LinuxIntegrationSnapshot) -> String {
     let desktop_entry = snapshot
         .desktop_entry_path
@@ -465,8 +524,9 @@ pub(crate) fn linux_integration_diagnostics(snapshot: &LinuxIntegrationSnapshot)
         .default_key_mimes
         .map(|count| format!("{count}/{}", LINUX_KEY_MEDIA_MIME_TYPES.len()))
         .unwrap_or_else(|| "unavailable".to_owned());
+    let uri_scheme = uri_scheme_diagnostics(snapshot);
     format!(
-        "OK Player Linux Integration\nVersion: {APP_BUILD_VERSION}\nBuild: {APP_BUILD_SHA}\nDesktop ID: {LINUX_DESKTOP_ID}\nDesktop entry: {desktop_entry}\nRegistered key MIME types: {}/{}\nDefault key MIME types: {defaults}\nxdg-mime: {}\nupdate-desktop-database: {}\n",
+        "OK Player Linux Integration\nVersion: {APP_BUILD_VERSION}\nBuild: {APP_BUILD_SHA}\nDesktop ID: {LINUX_DESKTOP_ID}\nDesktop entry: {desktop_entry}\nRegistered key MIME types: {}/{}\nDefault key MIME types: {defaults}\nReserved URI scheme ({LINUX_RESERVED_URI_SCHEME}): {uri_scheme}\nxdg-mime: {}\nupdate-desktop-database: {}\n",
         snapshot.registered_key_mimes,
         LINUX_KEY_MEDIA_MIME_TYPES.len(),
         if snapshot.xdg_mime_available {

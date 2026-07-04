@@ -205,7 +205,10 @@ pub(crate) fn handle_mpris_command(
             }
         }
         MprisCommand::OpenUri(uri) => {
-            if let Some(path) = file_uri_path(&uri) {
+            if let Some(notice) = reserved_uri_notice(&uri) {
+                eprintln!("Ignoring reserved ok-player:// request from OpenUri: {notice}");
+                status_toast.show(&notice);
+            } else if let Some(path) = file_uri_path(&uri) {
                 load_media_path(state, path);
             } else if is_media_url(&uri) {
                 load_media_url(state, uri);

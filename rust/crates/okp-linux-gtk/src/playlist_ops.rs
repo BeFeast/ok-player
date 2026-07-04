@@ -845,6 +845,21 @@ pub(crate) fn is_media_url(url: &str) -> bool {
     media_formats::is_playable_url(Some(url))
 }
 
+/// The local diagnostic to surface when `text` uses the reserved `ok-player://` scheme
+/// (PRD §13.4), or `None` when it is a normal path/URL the caller should open as usual.
+/// Registering the scheme lets desktop integration advertise it, but external control is
+/// [Later], so a request is reported rather than played — this keeps an `ok-player://`
+/// token from ever reaching the media engine as undefined playback. See
+/// [`ok_player_uri::interpret`].
+pub(crate) fn reserved_uri_notice(text: &str) -> Option<String> {
+    ok_player_uri::interpret(text).map(|request| match request {
+        ok_player_uri::Request::Reserved { command } => {
+            format!("ok-player:// control is reserved — \"{command}\" is not available yet")
+        }
+        ok_player_uri::Request::Malformed => "Ignored a malformed ok-player:// request".to_owned(),
+    })
+}
+
 pub(crate) fn is_subtitle_path(path: &Path) -> bool {
     media_formats::is_subtitle(path)
 }

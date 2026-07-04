@@ -6,5 +6,5 @@ Exec=ok-player %U
 Icon=com.befeast.okplayer
 Terminal=false
 Categories=AudioVideo;Player;
-MimeType=video/mp4;video/x-matroska;video/x-msvideo;video/quicktime;video/webm;video/x-ms-wmv;video/mpeg;video/mp2t;video/x-flv;video/3gpp;video/3gpp2;video/ogg;application/ogg;audio/mpeg;audio/flac;audio/mp4;audio/aac;audio/ogg;audio/x-opus+ogg;audio/x-wav;audio/wav;audio/x-ms-wma;audio/x-matroska;audio/webm;
+MimeType=video/mp4;video/x-matroska;video/x-msvideo;video/quicktime;video/webm;video/x-ms-wmv;video/mpeg;video/mp2t;video/x-flv;video/3gpp;video/3gpp2;video/ogg;application/ogg;audio/mpeg;audio/flac;audio/mp4;audio/aac;audio/ogg;audio/x-opus+ogg;audio/x-wav;audio/wav;audio/x-ms-wma;audio/x-matroska;audio/webm;x-scheme-handler/ok-player;
 StartupNotify=true
