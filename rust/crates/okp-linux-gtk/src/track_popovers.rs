@@ -10,10 +10,15 @@ pub(crate) fn populate_subtitle_popover(
         .into_iter()
         .filter(|track| track.kind == TrackKind::Subtitle)
         .collect::<Vec<_>>();
-    let any_selected = tracks.iter().any(|track| track.selected);
     let secondary_subtitle_id = read_secondary_subtitle_id(&state);
+    // mpv reports the secondary-sid track as `selected` too, so resolve the
+    // primary through the shared classifier rather than the raw flag — otherwise
+    // the secondary would carry a stray primary checkmark.
+    let any_primary = tracks.iter().any(|track| {
+        subtitle_selection::is_primary(track.id, track.selected, secondary_subtitle_id)
+    });
 
-    let off_button = track_button("Off", !any_selected);
+    let off_button = track_button("Off", !any_primary);
     let off_state = Rc::clone(&state);
     let off_popover = popover.clone();
     off_button.connect_clicked(move |_| {
@@ -28,7 +33,9 @@ pub(crate) fn populate_subtitle_popover(
         content.append(&empty_track_label("No subtitle tracks"));
     } else {
         for track in &tracks {
-            let button = track_button(&track_label(track), track.selected);
+            let selected =
+                subtitle_selection::is_primary(track.id, track.selected, secondary_subtitle_id);
+            let button = track_button(&track_label(track), selected);
             let track_state = Rc::clone(&state);
             let track_popover = popover.clone();
             let track_id = track.id;
@@ -42,41 +49,12 @@ pub(crate) fn populate_subtitle_popover(
         }
     }
 
-    content.append(&divider());
-    content.append(&track_group_title("Secondary"));
-
-    let secondary_off_button = track_button("Off", secondary_subtitle_id.is_none());
-    let secondary_off_state = Rc::clone(&state);
-    let secondary_off_popover = popover.clone();
-    secondary_off_button.connect_clicked(move |_| {
-        if with_mpv(&secondary_off_state, |mpv| {
-            mpv.select_secondary_subtitle(None)
-        }) {
-            save_current_preferences(&secondary_off_state);
-        }
-        secondary_off_popover.popdown();
-    });
-    content.append(&secondary_off_button);
-
-    if tracks.is_empty() {
-        content.append(&empty_track_label("No subtitle tracks"));
-    } else {
-        for track in &tracks {
-            let selected = secondary_subtitle_id == Some(track.id);
-            let button = track_button(&track_label(track), selected);
-            let track_state = Rc::clone(&state);
-            let track_popover = popover.clone();
-            let track_id = track.id;
-            button.connect_clicked(move |_| {
-                if with_mpv(&track_state, |mpv| {
-                    mpv.select_secondary_subtitle(Some(track_id))
-                }) {
-                    save_current_preferences(&track_state);
-                }
-                track_popover.popdown();
-            });
-            content.append(&button);
-        }
+    // The secondary caption needs a second track to sit alongside the primary,
+    // so the group only appears once the file offers a real choice (or already
+    // carries a secondary the user may want to clear). This also keeps the
+    // popover compact on single-track files at narrow widths.
+    if subtitle_selection::can_use_secondary(tracks.len(), secondary_subtitle_id.is_some()) {
+        append_secondary_subtitle_group(popover, &content, &state, &tracks, secondary_subtitle_id);
     }
 
     content.append(&divider());
@@ -94,6 +72,51 @@ pub(crate) fn populate_subtitle_popover(
     content.append(&subtitle_adjustment_rows(popover, parent, &state));
 
     set_track_popover_child(popover, content);
+}
+
+/// Render the "Secondary" caption group — an Off row plus one row per subtitle
+/// track, checked against `secondary-sid`. Selecting a track here never touches
+/// the primary slot (`select_secondary_subtitle` writes `secondary-sid` alone),
+/// so switching or clearing the secondary leaves the primary caption in place.
+fn append_secondary_subtitle_group(
+    popover: &gtk::Popover,
+    content: &gtk::Box,
+    state: &Rc<RefCell<PlayerState>>,
+    tracks: &[Track],
+    secondary_subtitle_id: Option<i64>,
+) {
+    content.append(&divider());
+    content.append(&track_group_title("Secondary"));
+
+    let secondary_off_button = track_button("Off", secondary_subtitle_id.is_none());
+    let secondary_off_state = Rc::clone(state);
+    let secondary_off_popover = popover.clone();
+    secondary_off_button.connect_clicked(move |_| {
+        if with_mpv(&secondary_off_state, |mpv| {
+            mpv.select_secondary_subtitle(None)
+        }) {
+            save_current_preferences(&secondary_off_state);
+        }
+        secondary_off_popover.popdown();
+    });
+    content.append(&secondary_off_button);
+
+    for track in tracks {
+        let selected = subtitle_selection::is_secondary(track.id, secondary_subtitle_id);
+        let button = track_button(&track_label(track), selected);
+        let track_state = Rc::clone(state);
+        let track_popover = popover.clone();
+        let track_id = track.id;
+        button.connect_clicked(move |_| {
+            if with_mpv(&track_state, |mpv| {
+                mpv.select_secondary_subtitle(Some(track_id))
+            }) {
+                save_current_preferences(&track_state);
+            }
+            track_popover.popdown();
+        });
+        content.append(&button);
+    }
 }
 
 pub(crate) fn populate_audio_popover(

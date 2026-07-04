@@ -295,28 +295,27 @@ pub(crate) fn settings_subtitle_snapshot(
         .into_iter()
         .filter(|track| track.kind == TrackKind::Subtitle)
         .collect::<Vec<_>>();
-    let primary = tracks
-        .iter()
-        .find(|track| track.selected)
-        .map(track_base_label)
-        .unwrap_or_else(|| {
-            if has_media {
-                "Off".to_owned()
-            } else {
-                "No media loaded".to_owned()
-            }
-        });
     let secondary_id = read_secondary_subtitle_id(state);
-    let secondary = secondary_id
-        .and_then(|id| tracks.iter().find(|track| track.id == id))
-        .map(track_base_label)
-        .unwrap_or_else(|| {
-            if has_media {
-                "Off".to_owned()
-            } else {
-                "No media loaded".to_owned()
-            }
-        });
+    // The secondary track also reports `selected`, so resolve the primary label
+    // through the shared classifier — never the raw flag, which would otherwise
+    // show the secondary caption as the primary here.
+    let primary_id = subtitle_selection::primary_id(
+        tracks.iter().map(|track| (track.id, track.selected)),
+        secondary_id,
+    );
+    let track_label_or = |id: Option<i64>| {
+        id.and_then(|id| tracks.iter().find(|track| track.id == id))
+            .map(track_base_label)
+            .unwrap_or_else(|| {
+                if has_media {
+                    "Off".to_owned()
+                } else {
+                    "No media loaded".to_owned()
+                }
+            })
+    };
+    let primary = track_label_or(primary_id);
+    let secondary = track_label_or(secondary_id);
     let (delay_seconds, scale) = read_subtitle_adjustments(state);
 
     SettingsSubtitleSnapshot {
@@ -354,13 +353,23 @@ pub(crate) fn settings_subtitle_track_section(
         .into_iter()
         .filter(|track| track.kind == TrackKind::Subtitle)
         .collect::<Vec<_>>();
+    let secondary_id = read_secondary_subtitle_id(&state);
+    if secondary && !subtitle_selection::can_use_secondary(tracks.len(), secondary_id.is_some()) {
+        // A second caption needs a second track to sit alongside the primary;
+        // offering the picker on a single-track file would only let the user
+        // point the secondary slot at the primary track.
+        section.append(&settings_empty_state("Needs a second subtitle track"));
+        return section;
+    }
+    // The secondary track also reports `selected`, so resolve the primary slot
+    // through the shared classifier rather than the first `selected` track.
     let selected_id = if secondary {
-        read_secondary_subtitle_id(&state)
+        secondary_id
     } else {
-        tracks
-            .iter()
-            .find(|track| track.selected)
-            .map(|track| track.id)
+        subtitle_selection::primary_id(
+            tracks.iter().map(|track| (track.id, track.selected)),
+            secondary_id,
+        )
     };
     let buttons = Rc::new(RefCell::new(Vec::<gtk::Button>::new()));
 

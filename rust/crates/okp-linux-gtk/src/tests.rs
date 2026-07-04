@@ -107,6 +107,57 @@ fn media_info_preview_sample_covers_the_polished_surfaces() {
 }
 
 #[test]
+fn media_info_badges_distinguish_primary_and_secondary_subtitles() {
+    let sample = media_info_preview_sample();
+    let secondary = sample.secondary_subtitle_id;
+
+    let badge = |id: i64| {
+        sample
+            .tracks
+            .iter()
+            .find(|track| track.id == id)
+            .and_then(|track| media_info_track_badge(track, secondary))
+    };
+
+    // Both subtitle tracks report `selected` (mpv marks the secondary too), so
+    // the badge must lean on `secondary_subtitle_id` to keep the two slots
+    // distinct rather than flagging both as the current caption.
+    assert_eq!(badge(3), Some("PRIMARY"));
+    assert_eq!(badge(4), Some("SECONDARY"));
+    // The active audio track is simply the current one; the unselected audio
+    // carries no badge.
+    assert_eq!(badge(1), Some("CURRENT"));
+    assert_eq!(badge(2), None);
+
+    // The copied report mirrors the on-screen roles so a pasted dump still shows
+    // which caption is primary and which is secondary.
+    let copy = media_info_copy_text(&sample);
+    assert!(copy.contains("Subtitle #3: English (SDH) [Primary]"));
+    assert!(copy.contains("Subtitle #4: English [Secondary]"));
+}
+
+#[test]
+fn media_info_badge_without_a_secondary_marks_only_the_primary() {
+    let mut sample = media_info_preview_sample();
+    // Clearing the secondary slot must leave the primary caption untouched and
+    // drop the secondary track back to an unbadged, unselected row.
+    sample.secondary_subtitle_id = None;
+    if let Some(track) = sample.tracks.iter_mut().find(|track| track.id == 4) {
+        track.selected = false;
+    }
+
+    let badge = |sample: &MediaInfo, id: i64| {
+        sample
+            .tracks
+            .iter()
+            .find(|track| track.id == id)
+            .and_then(|track| media_info_track_badge(track, sample.secondary_subtitle_id))
+    };
+    assert_eq!(badge(&sample, 3), Some("PRIMARY"));
+    assert_eq!(badge(&sample, 4), None);
+}
+
+#[test]
 fn media_info_hdr_summary_keeps_leading_format_token() {
     // The live producer emits "HDR (transfer, primaries)"; the leading token
     // is what the chip shows.

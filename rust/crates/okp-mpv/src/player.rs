@@ -92,6 +92,11 @@ pub struct MediaInfo {
     pub path: Option<String>,
     pub sections: Vec<InfoSection>,
     pub tracks: Vec<InfoTrack>,
+    /// The active `secondary-sid` (`None` when the secondary caption is off), so
+    /// the shell can tell the primary and secondary subtitle tracks apart when
+    /// rendering the track list. mpv marks both `selected`, so `InfoTrack`'s flag
+    /// alone cannot distinguish them.
+    pub secondary_subtitle_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -591,6 +596,7 @@ impl RawReader {
             path: path_text,
             sections,
             tracks: self.info_tracks()?,
+            secondary_subtitle_id: self.secondary_subtitle_id()?,
         })
     }
 
