@@ -83,8 +83,8 @@ fn media_info_preview_sample_covers_the_polished_surfaces() {
     // The summary derives an HDR chip and the Video section carries the row it
     // condenses, so both the accent row and the chip stay covered.
     assert_eq!(
-        media_info_value(&sample, "Video", "HDR").map(media_info_hdr_summary),
-        Some("HDR10".to_owned())
+        media_info_value(&sample, "Video", "Dynamic Range").map(media_info_hdr_summary),
+        Some("HDR".to_owned())
     );
     let chip_labels: Vec<&str> = media_info_summary_chips(&sample)
         .iter()
@@ -95,6 +95,9 @@ fn media_info_preview_sample_covers_the_polished_surfaces() {
 
 #[test]
 fn media_info_hdr_summary_keeps_leading_format_token() {
+    // The live producer emits "HDR (transfer, primaries)"; the leading token
+    // is what the chip shows.
+    assert_eq!(media_info_hdr_summary("HDR (PQ / ST 2084, BT.2020)"), "HDR");
     assert_eq!(
         media_info_hdr_summary("HDR10 · BT.2020 · SMPTE ST 2084 (PQ)"),
         "HDR10"
@@ -105,10 +108,13 @@ fn media_info_hdr_summary_keeps_leading_format_token() {
 
 #[test]
 fn media_info_row_highlights_active_hdr_only() {
-    assert!(media_info_row_is_highlight("HDR", "HDR10 · BT.2020"));
-    assert!(media_info_row_is_highlight("hdr", "Dolby Vision"));
-    assert!(!media_info_row_is_highlight("HDR", "No"));
-    assert!(!media_info_row_is_highlight("HDR", "SDR"));
+    assert!(media_info_row_is_highlight(
+        "Dynamic Range",
+        "HDR (PQ / ST 2084, BT.2020)"
+    ));
+    assert!(media_info_row_is_highlight("dynamic range", "Dolby Vision"));
+    assert!(!media_info_row_is_highlight("Dynamic Range", "No"));
+    assert!(!media_info_row_is_highlight("Dynamic Range", "SDR"));
     assert!(!media_info_row_is_highlight("Codec", "HEVC (H.265)"));
 }
 

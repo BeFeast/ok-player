@@ -151,7 +151,7 @@ pub(crate) fn media_info_preview_sample() -> MediaInfo {
                     row("Resolution", "3840 × 2160"),
                     row("Frame rate", "23.976 fps"),
                     row("Bit depth", "10-bit"),
-                    row("HDR", "HDR10 · BT.2020 · SMPTE ST 2084 (PQ)"),
+                    row("Dynamic Range", "HDR (PQ / ST 2084, BT.2020)"),
                     row("Mastering display", "1000 cd/m² peak · 0.005 cd/m² black"),
                 ],
             },
@@ -256,8 +256,10 @@ pub(crate) fn media_info_summary_chips(media_info: &MediaInfo) -> Vec<(&'static 
     if let Some(resolution) = media_info_value(media_info, "Video", "Resolution") {
         chips.push(("Video", resolution.to_owned()));
     }
-    if let Some(hdr) = media_info_value(media_info, "Video", "HDR") {
-        chips.push(("HDR", media_info_hdr_summary(hdr)));
+    if let Some(range) = media_info_value(media_info, "Video", "Dynamic Range")
+        && dynamic_range_is_hdr(range)
+    {
+        chips.push(("HDR", media_info_hdr_summary(range)));
     }
 
     let audio_count = media_info
@@ -315,10 +317,10 @@ pub(crate) fn media_info_summary_chip(label: &str, value: &str) -> gtk::Box {
     chip
 }
 
-/// Condense a verbose HDR descriptor into a chip-sized token, keeping the
-/// leading format name (e.g. "HDR10 · BT.2020 · PQ" -> "HDR10").
+/// Condense a verbose Dynamic Range descriptor into a chip-sized token, keeping
+/// the leading format name (e.g. the live "HDR (PQ / ST 2084, BT.2020)" -> "HDR").
 pub(crate) fn media_info_hdr_summary(hdr: &str) -> String {
-    hdr.split('·')
+    hdr.split(['·', '('])
         .next()
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -350,11 +352,17 @@ pub(crate) fn media_info_section_widget(section: &InfoSection) -> gtk::Box {
 /// Rows that carry a headline diagnostic (currently active HDR) get an accent
 /// value so the most consequential capabilities stand out from the dense list.
 pub(crate) fn media_info_row_is_highlight(label: &str, value: &str) -> bool {
-    label.eq_ignore_ascii_case("HDR")
-        && !matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "" | "no" | "none" | "off" | "sdr"
-        )
+    label.eq_ignore_ascii_case("Dynamic Range") && dynamic_range_is_hdr(value)
+}
+
+/// Whether a `Dynamic Range` row value describes active HDR rather than SDR or
+/// an absent descriptor. Gates both the summary chip and the accented row so the
+/// live producer and the preview fixture agree on when HDR is present.
+fn dynamic_range_is_hdr(value: &str) -> bool {
+    !matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "" | "no" | "none" | "off" | "sdr"
+    )
 }
 
 pub(crate) fn media_info_row(label: &str, value: &str) -> gtk::Box {
