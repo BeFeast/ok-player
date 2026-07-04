@@ -18,6 +18,7 @@ pub(crate) fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
     state.pending_preferences = None;
     state.video_transform.reset();
     state.ab_loop = AbLoopState::default();
+    state.network_load.reset();
 }
 
 pub(crate) fn load_media_path(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
@@ -139,6 +140,7 @@ pub(crate) fn remember_loaded_media_with_playlist(
     };
     reset_video_transform_for_new_media(&mut state);
     state.ab_loop = AbLoopState::default();
+    state.network_load.reset();
     if let Some(mpv) = state.mpv.as_ref() {
         mpv.set_media_source(Some(path.clone()));
     }
@@ -213,6 +215,7 @@ pub(crate) fn remember_loaded_url_with_playlist(
     let mut state = state.borrow_mut();
     reset_video_transform_for_new_media(&mut state);
     state.ab_loop = AbLoopState::default();
+    state.network_load.reset();
     if let Some(mpv) = state.mpv.as_ref() {
         mpv.set_media_source(None);
     }
@@ -476,6 +479,19 @@ pub(crate) fn move_playlist_item(state: &Rc<RefCell<PlayerState>>, from: usize, 
 
 pub(crate) fn remove_playlist_item(state: &Rc<RefCell<PlayerState>>, index: usize) -> bool {
     state.borrow_mut().playlist.remove(index)
+}
+
+/// Reopen the current network source after a failure. Reloading resets the
+/// latched load state (see [`remember_loaded_url_with_playlist`]), so the poll
+/// classifies it as connecting again and the error surface gives way to the
+/// loading indicator.
+pub(crate) fn retry_current_network_media(state: &Rc<RefCell<PlayerState>>) -> bool {
+    let url = state.borrow().current_url.clone();
+    let Some(url) = url else {
+        return false;
+    };
+    load_media_url(state, url);
+    true
 }
 
 pub(crate) fn restart_current_file(state: &Rc<RefCell<PlayerState>>) -> bool {

@@ -43,6 +43,10 @@ pub struct PlaybackState {
     pub time_pos: Option<f64>,
     pub duration: Option<f64>,
     pub paused: bool,
+    /// mpv's `paused-for-cache`: playback is stalled because the demuxer cache
+    /// ran dry. The shell surfaces this as a re-buffering indicator for network
+    /// streams.
+    pub paused_for_cache: bool,
     pub volume: Option<f64>,
     pub speed: Option<f64>,
 }
@@ -169,6 +173,16 @@ impl EndFileReason {
     pub fn is_eof(self) -> bool {
         matches!(self, Self::Eof)
     }
+
+    /// The libmpv error code when the file ended because of an error (a failed
+    /// or dropped source), else `None`. Pair with [`error_string`] for a human
+    /// description.
+    pub fn error_code(self) -> Option<i32> {
+        match self {
+            Self::Error(code) => Some(code),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -216,6 +230,7 @@ impl RawReader {
             time_pos: self.get_double("time-pos")?,
             duration: self.get_double("duration")?,
             paused: self.get_flag("pause")?.unwrap_or(false),
+            paused_for_cache: self.get_flag("paused-for-cache")?.unwrap_or(false),
             volume: self.get_double("volume")?,
             speed: self.get_double("speed")?,
         })
@@ -1635,6 +1650,22 @@ fn check(code: c_int) -> Result<(), MpvError> {
     } else {
         Ok(())
     }
+}
+
+/// The libmpv description of an error code (`mpv_error_string`) — e.g. the code
+/// carried by [`EndFileReason::Error`]. Falls back to a generic label when
+/// libmpv returns no string. Safe from any thread: it reads a static table, not
+/// the client handle.
+pub fn error_string(code: i32) -> String {
+    let text = unsafe { ffi::mpv_error_string(code as c_int) };
+    if text.is_null() {
+        return format!("error {code}");
+    }
+    // SAFETY: `mpv_error_string` returns a static, NUL-terminated C string owned
+    // by libmpv that must not be freed.
+    unsafe { CStr::from_ptr(text) }
+        .to_string_lossy()
+        .into_owned()
 }
 
 pub(crate) fn end_file_reason(reason: c_int, error: c_int) -> EndFileReason {

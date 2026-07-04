@@ -277,6 +277,7 @@ pub(crate) fn connect_state_poll(
         chrome,
         empty_surface,
         lyrics_surface,
+        network_surface,
         mpris_snapshot,
         mpris_signals,
     } = context;
@@ -296,9 +297,19 @@ pub(crate) fn connect_state_poll(
             update_mpris_snapshot(&mpris_snapshot, &mpris_signals, &state, playback);
         }
         sync_ab_loop_state(&state, has_media);
-        // Hide the welcome surface behind an active lyrics preview so the fixture reads cleanly;
-        // in production the loaded audio already hides it (`is_preview_frozen` stays false).
-        empty_surface.set_has_media(has_media || lyrics_surface.is_preview_frozen());
+        // The visual smoke hook can freeze the network surface on a fixture state; skip
+        // clobbering it while frozen. Real media clears the freeze so a session that merely
+        // inherited the env var falls back to live behavior.
+        if network_surface.is_preview_frozen() && has_media {
+            network_surface.clear_preview_freeze();
+        }
+        if !network_surface.is_preview_frozen() {
+            // Hide the welcome surface behind an active lyrics preview so the fixture reads
+            // cleanly; in production the loaded audio already hides it (`is_preview_frozen`
+            // stays false).
+            empty_surface.set_has_media(has_media || lyrics_surface.is_preview_frozen());
+            update_network_status_surface(&network_surface, &state, playback);
+        }
         lyrics_surface.update(&state);
         drain_thumbnail_events(&controls);
         update_up_next_panel(&controls, &state, &chrome);
@@ -308,12 +319,7 @@ pub(crate) fn connect_state_poll(
             chrome.set_auto_hide_enabled(has_media && !playback.paused);
 
             let duration = playback.duration.unwrap_or(0.0).max(0.0);
-            let raw_time = playback.time_pos.unwrap_or(0.0).max(0.0);
-            let time_pos = if duration > 0.0 {
-                raw_time.min(duration)
-            } else {
-                raw_time
-            };
+            let readout = stream_state::timeline_readout(playback.time_pos, playback.duration);
             try_pending_resume(&state, duration);
 
             controls.play_button.set_sensitive(has_media);
@@ -341,11 +347,11 @@ pub(crate) fn connect_state_poll(
                 .speed_button
                 .set_label(&format_speed(playback.speed.unwrap_or(1.0)));
             update_fullscreen_button(&controls.fullscreen_button, window.is_fullscreen());
-            controls.seek.set_sensitive(has_media && duration > 0.0);
+            controls.seek.set_sensitive(has_media && readout.seekable);
 
             updating_seek.set(true);
-            controls.seek.set_range(0.0, duration.max(1.0));
-            controls.seek.set_value(time_pos);
+            controls.seek.set_range(0.0, readout.range_max);
+            controls.seek.set_value(readout.value);
             updating_seek.set(false);
 
             if let Some(volume) = playback.volume {
@@ -354,12 +360,8 @@ pub(crate) fn connect_state_poll(
                 updating_volume.set(false);
             }
 
-            controls
-                .elapsed_label
-                .set_text(&time_code::format_clock(time_pos));
-            controls
-                .duration_label
-                .set_text(&time_code::format_clock(duration));
+            controls.elapsed_label.set_text(&readout.elapsed_text);
+            controls.duration_label.set_text(&readout.duration_text);
         } else {
             chrome.set_auto_hide_enabled(false);
             controls.play_button.set_sensitive(has_media);
@@ -388,6 +390,90 @@ pub(crate) fn connect_state_poll(
 
         glib::ControlFlow::Continue
     });
+}
+
+/// Project the current network source's load phase onto the status surface: a
+/// loading/buffering indicator while it connects or re-buffers, the error card
+/// with recovery actions when it fails, and nothing otherwise. Local files never
+/// drive the surface (they load synchronously and have no network lifecycle).
+pub(crate) fn update_network_status_surface(
+    surface: &NetworkStatusSurface,
+    state: &Rc<RefCell<PlayerState>>,
+    playback: Option<PlaybackState>,
+) {
+    let (is_network, signals, failure) = {
+        let state = state.borrow();
+        let is_network = state.current_url.is_some();
+        let signals = StreamSignals {
+            has_media: is_network,
+            file_loaded: state.network_load.file_loaded,
+            failed: state.network_load.failure.is_some(),
+            paused_for_cache: playback.is_some_and(|playback| playback.paused_for_cache),
+        };
+        (is_network, signals, state.network_load.failure.clone())
+    };
+
+    if !is_network {
+        surface.hide();
+        return;
+    }
+
+    match stream_state::classify(signals) {
+        StreamPhase::Connecting => surface.show_busy("Connecting", "Opening the stream…"),
+        StreamPhase::Buffering => surface.show_busy("Buffering", "Filling the buffer…"),
+        StreamPhase::Failed => match failure.as_ref() {
+            Some(error) => surface.show_error(error),
+            None => surface.hide(),
+        },
+        StreamPhase::Active | StreamPhase::Idle => surface.hide(),
+    }
+}
+
+/// Latch a failed load for the current source so the poll can surface it. The
+/// friendly headline/hint come from [`okp_core::stream_state`]; the raw libmpv
+/// message is kept for the copyable detail block and the stderr log only.
+pub(crate) fn record_network_failure(state: &Rc<RefCell<PlayerState>>, code: i32) {
+    let source = {
+        let state = state.borrow();
+        match (state.current_url.as_deref(), state.current_file.as_deref()) {
+            (Some(url), _) => Some((url.to_owned(), true)),
+            (None, Some(path)) => Some((path.display().to_string(), false)),
+            (None, None) => None,
+        }
+    };
+    let Some((source, is_network)) = source else {
+        return; // A stray end-of-file error with nothing loaded: ignore.
+    };
+
+    let raw = okp_mpv::error_string(code);
+    eprintln!("Playback failed for {source}: {raw} (mpv error {code})");
+    let error = stream_state::stream_error(&source, is_network, code, Some(&raw));
+    state.borrow_mut().network_load.failure = Some(error);
+}
+
+/// Copy the failed source's technical detail block to the clipboard — the raw
+/// diagnostics kept out of the primary error card.
+pub(crate) fn copy_network_error_details(
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &StatusToast,
+) {
+    let detail = state
+        .borrow()
+        .network_load
+        .failure
+        .as_ref()
+        .map(|error| error.detail.clone());
+    let Some(detail) = detail else {
+        status_toast.show("No details to copy");
+        return;
+    };
+
+    if let Some(display) = gdk::Display::default() {
+        display.clipboard().set_text(&detail);
+        status_toast.show("Details copied");
+    } else {
+        status_toast.show("Clipboard unavailable");
+    }
 }
 
 pub(crate) fn connect_video_clicks(

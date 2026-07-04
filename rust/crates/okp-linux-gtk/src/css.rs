@@ -294,6 +294,84 @@ const OKP_STYLESHEET: &str = "
             font-weight: 500;
         }
 
+        .okp-network-surface {
+            background: alpha(@okp_bg, 0.72);
+        }
+
+        .okp-network-card {
+            padding: 30px 40px;
+            border-radius: 18px;
+            border: 1px solid rgba(255, 255, 255, 0.09);
+            background: linear-gradient(180deg, rgba(23, 25, 30, 0.96), rgba(13, 14, 18, 0.96));
+            box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+        }
+
+        .okp-network-spinner {
+            color: @okp_accent;
+            min-width: 32px;
+            min-height: 32px;
+        }
+
+        .okp-network-title {
+            color: rgba(255, 255, 255, 0.96);
+            font-size: 17px;
+            font-weight: 700;
+        }
+
+        .okp-network-message {
+            color: rgba(255, 255, 255, 0.56);
+            font-size: 13px;
+        }
+
+        .okp-network-actions {
+            margin-top: 10px;
+        }
+
+        .okp-network-primary-button,
+        .okp-network-secondary-button {
+            min-height: 36px;
+            padding: 8px 16px;
+            border-radius: 10px;
+            border: 1px solid transparent;
+            box-shadow: none;
+            font-size: 13px;
+            font-weight: 650;
+        }
+
+        .okp-network-primary-button {
+            background: @okp_accent;
+            color: #041110;
+        }
+
+        .okp-network-primary-button:hover {
+            background: @okp_accent_bright;
+        }
+
+        .okp-network-primary-button:active {
+            background: @okp_accent_deep;
+        }
+
+        .okp-network-primary-button:focus-visible,
+        .okp-network-secondary-button:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.55);
+        }
+
+        .okp-network-secondary-button {
+            background: rgba(255, 255, 255, 0.06);
+            border-color: rgba(255, 255, 255, 0.08);
+            color: rgba(255, 255, 255, 0.84);
+        }
+
+        .okp-network-secondary-button:hover {
+            background: rgba(255, 255, 255, 0.11);
+            color: rgba(255, 255, 255, 0.96);
+        }
+
+        .okp-network-secondary-button:active {
+            background: rgba(255, 255, 255, 0.15);
+        }
+
         .okp-controls {
             padding: 8px 10px;
             border-radius: 18px;

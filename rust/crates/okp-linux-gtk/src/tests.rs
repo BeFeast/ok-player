@@ -1439,3 +1439,90 @@ fn deb_self_install_timeout_uses_positive_override_only() {
         DEB_SELF_INSTALL_TIMEOUT
     );
 }
+
+#[test]
+fn loading_a_url_resets_stale_network_load_state() {
+    // A leftover FileLoaded/failure from a previous source must not survive into
+    // the next load, or the poll would misclassify the fresh stream.
+    let state = Rc::new(RefCell::new(PlayerState::default()));
+    {
+        let mut state = state.borrow_mut();
+        state.network_load.file_loaded = true;
+        state.network_load.failure = Some(stream_state::stream_error(
+            "https://old.example/x",
+            true,
+            -18,
+            None,
+        ));
+    }
+
+    load_media_url(&state, "https://example.test/live.m3u8".to_owned());
+
+    let state = state.borrow();
+    assert_eq!(
+        state.current_url.as_deref(),
+        Some("https://example.test/live.m3u8")
+    );
+    assert!(!state.network_load.file_loaded);
+    assert!(state.network_load.failure.is_none());
+}
+
+#[test]
+fn record_network_failure_latches_a_stream_error_for_the_current_url() {
+    let state = Rc::new(RefCell::new(PlayerState::default()));
+    state.borrow_mut().current_url = Some("https://example.test/live.m3u8".to_owned());
+
+    record_network_failure(&state, -18);
+
+    let state = state.borrow();
+    let failure = state
+        .network_load
+        .failure
+        .as_ref()
+        .expect("a failure should be recorded for the current stream");
+    assert_eq!(failure.title, "Can't play this stream");
+    assert!(failure.detail.contains("https://example.test/live.m3u8"));
+    assert!(failure.detail.contains("mpv error -18"));
+}
+
+#[test]
+fn record_network_failure_with_nothing_loaded_is_ignored() {
+    let state = Rc::new(RefCell::new(PlayerState::default()));
+
+    record_network_failure(&state, -18);
+
+    assert!(state.borrow().network_load.failure.is_none());
+}
+
+#[test]
+fn retry_current_network_media_reopens_and_clears_the_failure() {
+    let state = Rc::new(RefCell::new(PlayerState::default()));
+    {
+        let mut state = state.borrow_mut();
+        state.current_url = Some("https://example.test/live.m3u8".to_owned());
+        state.network_load.file_loaded = true;
+        state.network_load.failure = Some(stream_state::stream_error(
+            "https://example.test/live.m3u8",
+            true,
+            -18,
+            None,
+        ));
+    }
+
+    assert!(retry_current_network_media(&state));
+
+    let state = state.borrow();
+    // The source is reopened (still current) with a fresh, connecting load state.
+    assert_eq!(
+        state.current_url.as_deref(),
+        Some("https://example.test/live.m3u8")
+    );
+    assert!(!state.network_load.file_loaded);
+    assert!(state.network_load.failure.is_none());
+}
+
+#[test]
+fn retry_current_network_media_without_a_url_is_a_no_op() {
+    let state = Rc::new(RefCell::new(PlayerState::default()));
+    assert!(!retry_current_network_media(&state));
+}

@@ -19,6 +19,7 @@ use okp_core::playlist::{Playlist, PlaylistItem, QueueInsertMode, RepeatMode};
 use okp_core::shortcuts::{
     self, ShortcutAction, ShortcutBinding, ShortcutChord, ShortcutModifiers, ShortcutSlot,
 };
+use okp_core::stream_state::{self, StreamPhase, StreamSignals};
 use okp_core::update_selection::{self, DebFeed, DebUpdate, SHA256SUMS_ASSET};
 use okp_core::{
     AppIdentity, chapter_math, lrc, m3u, media_formats, natural_compare, sha256sums,
@@ -159,6 +160,26 @@ struct PlayerState {
     render_target_size: Option<okp_mpv::RenderTargetSize>,
     video_transform: VideoTransformState,
     ab_loop: AbLoopState,
+    network_load: NetworkLoad,
+}
+
+/// Latched lifecycle state for the currently-loaded source, used to classify its
+/// network/live-stream phase (see [`okp_core::stream_state`]). Reset whenever a
+/// new source is opened so a stale `FileLoaded`/error never leaks across loads.
+#[derive(Default)]
+struct NetworkLoad {
+    /// Whether mpv has reported `FileLoaded` for the current source.
+    file_loaded: bool,
+    /// The failure presentation when the current source failed to open or
+    /// dropped, else `None`.
+    failure: Option<stream_state::StreamError>,
+}
+
+impl NetworkLoad {
+    fn reset(&mut self) {
+        self.file_loaded = false;
+        self.failure = None;
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -720,6 +741,7 @@ struct StatePollContext {
     chrome: Rc<ChromeVisibility>,
     empty_surface: EmptySurface,
     lyrics_surface: LyricsSurface,
+    network_surface: NetworkStatusSurface,
     mpris_snapshot: Arc<Mutex<MprisSnapshot>>,
     mpris_signals: mpsc::Sender<MprisSignal>,
 }
@@ -826,6 +848,72 @@ impl EmptySurface {
         } else {
             self.panel.remove_css_class("is-drop-target");
         }
+    }
+}
+
+/// Centered overlay that reports a network/live source's loading, buffering, and
+/// error states over the video plane. The load classification lives in
+/// [`okp_core::stream_state`]; this only renders the phase the poll hands it and
+/// exposes the recovery actions (Retry / Open another / Copy details).
+#[derive(Clone)]
+struct NetworkStatusSurface {
+    revealer: gtk::Revealer,
+    spinner: gtk::Spinner,
+    title: gtk::Label,
+    message: gtk::Label,
+    actions: gtk::Box,
+    // Freezes the live poll's updates so the visual smoke hook
+    // (`OKP_OPEN_NETWORK_STATE_ON_STARTUP`) can hold a fixture state on screen.
+    // Cleared as soon as a real network source loads, so a session that merely
+    // inherited the env var falls back to live behavior.
+    preview_frozen: Rc<Cell<bool>>,
+}
+
+impl NetworkStatusSurface {
+    fn widget(&self) -> &gtk::Revealer {
+        &self.revealer
+    }
+
+    fn show_busy(&self, title: &str, message: &str) {
+        self.title.set_text(title);
+        self.message.set_text(message);
+        self.actions.set_visible(false);
+        self.spinner.set_visible(true);
+        self.spinner.start();
+        // Loading/buffering is passive: let clicks (double-click fullscreen,
+        // context menu) fall through to the video below.
+        self.reveal(true, false);
+    }
+
+    fn show_error(&self, error: &stream_state::StreamError) {
+        self.spinner.stop();
+        self.spinner.set_visible(false);
+        self.title.set_text(&error.title);
+        self.message.set_text(&error.hint);
+        self.actions.set_visible(true);
+        self.reveal(true, true);
+    }
+
+    fn hide(&self) {
+        self.spinner.stop();
+        self.reveal(false, false);
+    }
+
+    fn reveal(&self, revealed: bool, can_target: bool) {
+        self.revealer.set_reveal_child(revealed);
+        self.revealer.set_can_target(can_target);
+    }
+
+    fn freeze_preview(&self) {
+        self.preview_frozen.set(true);
+    }
+
+    fn is_preview_frozen(&self) -> bool {
+        self.preview_frozen.get()
+    }
+
+    fn clear_preview_freeze(&self) {
+        self.preview_frozen.set(false);
     }
 }
 

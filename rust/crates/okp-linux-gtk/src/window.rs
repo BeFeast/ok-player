@@ -137,6 +137,8 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     sync_player_window_chrome_fullscreen(&window_chrome, &window);
     let empty_surface = build_empty_surface(&window, Rc::clone(&state), Rc::clone(&status_toast));
     let lyrics_surface = build_lyrics_surface();
+    let network_surface =
+        build_network_status_surface(&window, Rc::clone(&state), Rc::clone(&status_toast));
     chrome.set_child(&control_bar);
     chrome.add_linked_revealer(&window_chrome);
     chrome.add_linked_revealer(&controls.up_next_revealer);
@@ -146,6 +148,9 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     // The lyrics surface sits above the (audio-black) video plane but below the window chrome, the
     // OSC, and the side panel, so those stay on top and interactive while lyrics play underneath.
     overlay.add_overlay(lyrics_surface.widget());
+    // The network status surface (loading/buffering/error) sits above the lyrics so a stream
+    // failure card is never hidden behind them, and still below the chrome/OSC.
+    overlay.add_overlay(network_surface.widget());
     overlay.add_overlay(&window_chrome);
     overlay.add_overlay(chrome.widget());
     overlay.add_overlay(&controls.up_next_revealer);
@@ -211,14 +216,25 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
             updating_seek: Rc::clone(&updating_seek),
             updating_volume: Rc::clone(&updating_volume),
             chrome: Rc::clone(&chrome),
-            empty_surface,
+            empty_surface: empty_surface.clone(),
             lyrics_surface,
+            network_surface: network_surface.clone(),
             mpris_snapshot: Arc::clone(&mpris_controller.snapshot),
             mpris_signals: mpris_controller.signals.clone(),
         },
     );
 
     window.present();
+    // Visual smoke hook: hold the network status surface on a fixture state so
+    // its loading/buffering/error layout can be screenshot-tested without a live
+    // stream. `OKP_OPEN_NETWORK_STATE_ON_STARTUP=error` previews the failure card
+    // (Retry / Open another / Copy details); `=buffering` previews re-buffering;
+    // any other value previews the connecting state.
+    if let Some(value) = env::var_os("OKP_OPEN_NETWORK_STATE_ON_STARTUP") {
+        // Hide the welcome surface so the card renders alone over the video plane.
+        empty_surface.set_has_media(true);
+        preview_network_status_surface(&network_surface, &value);
+    }
     if env::var_os("OKP_OPEN_SETTINGS_ON_STARTUP").is_some() {
         let settings_parent = window.clone();
         let settings_state = Rc::clone(&state);
@@ -651,6 +667,114 @@ pub(crate) fn build_empty_surface(
     revealer.set_child(Some(&panel));
 
     EmptySurface { revealer, panel }
+}
+
+pub(crate) fn build_network_status_surface(
+    window: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> NetworkStatusSurface {
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    card.add_css_class("okp-network-card");
+    card.set_halign(gtk::Align::Center);
+    card.set_valign(gtk::Align::Center);
+
+    let spinner = gtk::Spinner::new();
+    spinner.add_css_class("okp-network-spinner");
+    spinner.set_halign(gtk::Align::Center);
+    spinner.set_size_request(32, 32);
+    card.append(&spinner);
+
+    let title = gtk::Label::new(Some("Connecting"));
+    title.add_css_class("okp-network-title");
+    title.set_justify(gtk::Justification::Center);
+    card.append(&title);
+
+    let message = gtk::Label::new(None);
+    message.add_css_class("okp-network-message");
+    message.set_justify(gtk::Justification::Center);
+    message.set_wrap(true);
+    message.set_max_width_chars(40);
+    card.append(&message);
+
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    actions.add_css_class("okp-network-actions");
+    actions.set_halign(gtk::Align::Center);
+    actions.set_visible(false);
+
+    let retry_button = gtk::Button::with_label("Retry");
+    retry_button.add_css_class("okp-network-primary-button");
+    let retry_state = Rc::clone(&state);
+    let retry_toast = Rc::clone(&status_toast);
+    retry_button.connect_clicked(move |_| {
+        if !retry_current_network_media(&retry_state) {
+            retry_toast.show("No stream to retry");
+        }
+    });
+    actions.append(&retry_button);
+
+    let open_button = gtk::Button::with_label("Open another");
+    open_button.add_css_class("okp-network-secondary-button");
+    let open_parent = window.clone();
+    let open_state = Rc::clone(&state);
+    let open_toast = Rc::clone(&status_toast);
+    open_button.connect_clicked(move |_| {
+        open_url_dialog(&open_parent, Rc::clone(&open_state), Rc::clone(&open_toast));
+    });
+    actions.append(&open_button);
+
+    let copy_button = gtk::Button::with_label("Copy details");
+    copy_button.add_css_class("okp-network-secondary-button");
+    let copy_state = Rc::clone(&state);
+    let copy_toast = Rc::clone(&status_toast);
+    copy_button.connect_clicked(move |_| {
+        copy_network_error_details(&copy_state, &copy_toast);
+    });
+    actions.append(&copy_button);
+
+    card.append(&actions);
+
+    let revealer = gtk::Revealer::new();
+    revealer.add_css_class("okp-network-surface");
+    revealer.set_halign(gtk::Align::Fill);
+    revealer.set_valign(gtk::Align::Fill);
+    revealer.set_transition_duration(150);
+    revealer.set_transition_type(gtk::RevealerTransitionType::Crossfade);
+    revealer.set_reveal_child(false);
+    revealer.set_can_target(false);
+    revealer.set_child(Some(&card));
+
+    NetworkStatusSurface {
+        revealer,
+        spinner,
+        title,
+        message,
+        actions,
+        preview_frozen: Rc::new(Cell::new(false)),
+    }
+}
+
+/// Render a fixture network phase for the visual smoke hook and freeze the poll
+/// so it stays on screen. `error` previews the failure card; `buffering` the
+/// re-buffering state; anything else the connecting state.
+pub(crate) fn preview_network_status_surface(
+    surface: &NetworkStatusSurface,
+    value: &std::ffi::OsStr,
+) {
+    surface.freeze_preview();
+    if value.eq_ignore_ascii_case("error") {
+        let error = stream_state::stream_error(
+            "https://example.com/live/stream.m3u8",
+            true,
+            -18,
+            Some("Failed to recognize file format."),
+        );
+        surface.show_error(&error);
+    } else if value.eq_ignore_ascii_case("buffering") {
+        surface.show_busy("Buffering", "Filling the buffer…");
+    } else {
+        surface.show_busy("Connecting", "Opening the stream…");
+    }
 }
 
 /// The welcome surface anchors the OK Player identity with the app icon tile.

@@ -37,6 +37,8 @@ const OBSERVED_PROPERTIES: &[&str] = &[
     "time-pos",
     "duration",
     "pause",
+    // Re-buffering signal for network streams (cache ran dry).
+    "paused-for-cache",
     "volume",
     "speed",
     // Subtitle state surfaced in the subtitle popover / saved preferences.

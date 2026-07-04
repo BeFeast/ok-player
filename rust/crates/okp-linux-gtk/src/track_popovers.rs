@@ -1052,6 +1052,13 @@ pub(crate) fn drain_mpv_events(state: &Rc<RefCell<PlayerState>>) {
     for event in events {
         match event {
             MpvEvent::FileLoaded => {
+                {
+                    // The source reached the demuxer: it is no longer connecting,
+                    // and any prior failure (e.g. from a retried source) is stale.
+                    let mut state = state.borrow_mut();
+                    state.network_load.file_loaded = true;
+                    state.network_load.failure = None;
+                }
                 try_pending_audio_device_restore(state);
                 try_pending_playback_preferences(state);
             }
@@ -1060,6 +1067,11 @@ pub(crate) fn drain_mpv_events(state: &Rc<RefCell<PlayerState>>) {
                     save_current_progress(state, true);
                 }
                 advance_playlist_on_eof(state);
+            }
+            MpvEvent::EndFile { reason } => {
+                if let Some(code) = reason.error_code() {
+                    record_network_failure(state, code);
+                }
             }
             _ => {}
         }

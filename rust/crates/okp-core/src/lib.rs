@@ -21,6 +21,7 @@ pub mod settings;
 pub mod sha256sums;
 pub mod shortcuts;
 pub mod srt;
+pub mod stream_state;
 pub mod subtitle_delay;
 pub mod subtitle_lift;
 pub mod subtitle_style;
