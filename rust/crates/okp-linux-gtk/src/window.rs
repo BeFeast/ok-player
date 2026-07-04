@@ -136,12 +136,16 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     let window_chrome = build_player_window_chrome(&window);
     sync_player_window_chrome_fullscreen(&window_chrome, &window);
     let empty_surface = build_empty_surface(&window, Rc::clone(&state), Rc::clone(&status_toast));
+    let lyrics_surface = build_lyrics_surface();
     chrome.set_child(&control_bar);
     chrome.add_linked_revealer(&window_chrome);
     chrome.add_linked_revealer(&controls.up_next_revealer);
 
     overlay.set_child(Some(&video_area));
     overlay.add_overlay(empty_surface.widget());
+    // The lyrics surface sits above the (audio-black) video plane but below the window chrome, the
+    // OSC, and the side panel, so those stay on top and interactive while lyrics play underneath.
+    overlay.add_overlay(lyrics_surface.widget());
     overlay.add_overlay(&window_chrome);
     overlay.add_overlay(chrome.widget());
     overlay.add_overlay(&controls.up_next_revealer);
@@ -185,6 +189,20 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         };
         open_side_panel_preview(&controls, &state, &chrome, mode);
     }
+    // Visual smoke hook: render the audio lyrics overlay with a representative sheet so its layout
+    // and active-line state can be screenshot-tested without loaded media.
+    // `OKP_OPEN_LYRICS_ON_STARTUP=plain` previews untimed lyrics and `=empty` the no-lyrics state;
+    // any other value previews the synced sheet with a live highlight.
+    if let Some(value) = env::var_os("OKP_OPEN_LYRICS_ON_STARTUP") {
+        let mode = if value.eq_ignore_ascii_case("plain") {
+            LyricsPreviewMode::Plain
+        } else if value.eq_ignore_ascii_case("empty") {
+            LyricsPreviewMode::Empty
+        } else {
+            LyricsPreviewMode::Synced
+        };
+        lyrics_surface.open_preview(&state, mode);
+    }
     connect_state_poll(
         &window,
         Rc::clone(&state),
@@ -194,6 +212,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
             updating_volume: Rc::clone(&updating_volume),
             chrome: Rc::clone(&chrome),
             empty_surface,
+            lyrics_surface,
             mpris_snapshot: Arc::clone(&mpris_controller.snapshot),
             mpris_signals: mpris_controller.signals.clone(),
         },

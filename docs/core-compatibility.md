@@ -216,6 +216,41 @@ the file's own chapters and on the seek timeline.
   C#-on-Linux would return false before probing (a combination the C# suite never covers).
   On Windows the results are identical.
 
+## Lyrics sidecar discovery → `okp_core::lyrics` (Linux shell extraction)
+
+The Windows synced-lyrics feature resolves a sheet in four steps — sidecar `.lrc` → metadata-keyed
+cache → LRCLIB exact → LRCLIB fuzzy — inside `OkPlayer.App/Services/LyricsService.cs` (App layer,
+untested). The Linux slice (issue #189) ports **only the sidecar seam** to the core, where it is
+directly unit-tested, and renders it in the GTK shell; cache and network are deferred.
+
+- **Sidecar path rule.** `sidecar_path` mirrors the C# `TryReadSidecar`: same directory, same file
+  stem, a lowercase `.lrc` (`track.flac` → `track.lrc`, only the last extension replaced), and
+  `None` for any path containing `://` (a stream URL). One divergence: C# also returns null when
+  `GetDirectoryName` is empty (a bare, directory-less filename), a quirk the shell never hits
+  because its current path is always absolute; the Rust port instead resolves a bare filename to a
+  sibling `.lrc`, which is the sensible result and is what the unit tests pin.
+- **Case sensitivity.** Windows leans on a case-insensitive `File.Exists`; Linux filesystems are
+  case-sensitive, so `read_sidecar` probes the canonical stem with the `.lrc` extension in every
+  ASCII-case spelling (`lrc`, `LRC`, `Lrc`, …). A sheet exported as `Track.LRC`, `Track.Lrc`, or any
+  mixed case therefore resolves. These are bounded direct reads, never a directory scan — a scan
+  could stall on a slow network mount and, worse, would run on every track with no sidecar at all
+  (the common case). Only the extension case is folded, not the stem: a Windows `File.Exists` also
+  matches a differently-cased *stem* (media `Song.flac` ↔ sidecar `song.lrc`), but export tools
+  always derive the sidecar name from the audio file, so its stem matches by construction, and
+  case-folding the stem would require the very directory scan this seam avoids.
+- **Never fails.** Any I/O error (an unmounted share, a permission error) resolves to "no lyrics",
+  matching the C# `catch { return null; }`. Parsing then reuses `okp_core::lrc` unchanged.
+- **Audio gate.** The Windows overlay shows only when `MediaFormats.IsAudio(path)` **and** mpv
+  reports no video plane. The Linux surface uses the extension gate alone
+  (`okp_core::media_formats::is_audio`): it is portable, deterministic, and already keeps the
+  surface entirely off the video-first player, which is the guarantee that matters for this slice.
+- **Deferred LRCLIB seam (not stubbed).** The metadata-keyed cache and the LRCLIB exact/fuzzy fetch
+  are intentionally out of scope. On Windows the request is gated by the private-session flag
+  (`AllowNetwork`/`AllowCacheWrite` both flip off in a private session; only the sidecar is consulted
+  and no metadata leaves the machine). A later Linux port must wire that same policy through before
+  adding `read_cached`/`fetch_lrclib` beside `read_sidecar`; until then the Linux experience is
+  sidecar-first and fully local, so no private-session/history constraint is crossed.
+
 ## Shortcut/keybinding model → `okp_core::shortcuts` (Linux shell extraction)
 
 - **No C# counterpart.** This module was not ported from `src/OkPlayer.Core`; it is the

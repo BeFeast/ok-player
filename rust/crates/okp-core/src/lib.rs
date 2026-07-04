@@ -7,6 +7,7 @@ pub mod history_format;
 pub mod image_luma;
 pub mod launch_args;
 pub mod lrc;
+pub mod lyrics;
 pub mod m3u;
 pub mod media_formats;
 pub mod mpv_conf_text;
