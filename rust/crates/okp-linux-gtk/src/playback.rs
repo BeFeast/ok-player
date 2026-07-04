@@ -172,6 +172,9 @@ pub(crate) fn save_screenshot(
             status_toast.show(&format!("Screenshot saved: {filename}"));
         }
         Err(error) => {
+            // The path was reserved with an empty placeholder; drop it so a failed capture
+            // never leaves a 0-byte file behind (and frees the name for a retry).
+            let _ = fs::remove_file(&path);
             eprintln!("Failed to save screenshot to {}: {error}", path.display());
             status_toast.show("Screenshot failed");
         }

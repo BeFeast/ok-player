@@ -4,8 +4,8 @@
 //! shell owns filename or format rules). Path *resolution* — the XDG Pictures directory,
 //! the configured save folder, the temp dir for a clipboard frame — stays behind the shell
 //! seam, because it touches the environment and the filesystem. This module stays pure: it
-//! composes a name and resolves collisions against an injected existence probe, so it is
-//! unit-testable without a real filesystem.
+//! composes a name and resolves collisions against an injected *reservation* probe (the shell
+//! claims each candidate atomically), so it is unit-testable without a real filesystem.
 //!
 //! Capture itself is done by libmpv's `screenshot-to-file` against the *decoded* frame
 //! (mode `video` / `subtitles`), never a screen grab — so a confirmation toast or any other
@@ -130,7 +130,7 @@ pub fn time_slug(seconds: f64) -> String {
 /// Compose the base file *stem* (no extension) for a capture: `base[-position]-timestamp`.
 /// `media_stem` is the source file's stem (already extracted by the shell); a non-finite or
 /// negative position is dropped. The trailing millisecond `timestamp` makes the stem unique
-/// in practice, so [`resolve_unique_name`] almost never has to add a numeric suffix.
+/// in practice, so [`reserve_unique_name`] almost never has to add a numeric suffix.
 pub fn screenshot_stem(media_stem: Option<&str>, position: Option<f64>, timestamp: u128) -> String {
     let base = media_stem
         .map(sanitize_filename)
@@ -143,14 +143,22 @@ pub fn screenshot_stem(media_stem: Option<&str>, position: Option<f64>, timestam
     format!("{base}{position}-{timestamp}")
 }
 
-/// Resolve a collision-free file name for `stem`.`extension`, probing `exists` for each
-/// candidate: `stem.ext`, then `stem-1.ext`, `stem-2.ext`, … up to [`MAX_COLLISION_SUFFIX`].
-/// Returns the first free name, or `None` if every candidate is taken. The caller must treat
-/// `None` as a failure and surface it — a capture never overwrites an existing file.
-pub fn resolve_unique_name(
+/// Reserve a collision-free file name for `stem`.`extension`, handing each candidate to
+/// `try_reserve`: `stem.ext`, then `stem-1.ext`, `stem-2.ext`, … up to [`MAX_COLLISION_SUFFIX`].
+/// Returns the first name `try_reserve` claims, or `None` if every candidate is taken. The
+/// caller must treat `None` as a failure and surface it — a capture never overwrites an existing
+/// file.
+///
+/// `try_reserve` must claim the name **atomically** (create the file with `O_EXCL` semantics)
+/// and return `true` only when *this* call took ownership. A passive existence check is racy:
+/// two rapid captures — or another writer in the same directory — can each observe a candidate
+/// as free before either file exists and resolve to the same path, so the later
+/// `screenshot-to-file` overwrites the earlier capture. Folding the check and the claim into one
+/// filesystem operation closes that window.
+pub fn reserve_unique_name(
     stem: &str,
     extension: &str,
-    exists: impl Fn(&str) -> bool,
+    try_reserve: impl Fn(&str) -> bool,
 ) -> Option<String> {
     for suffix in 0..=MAX_COLLISION_SUFFIX {
         let name = if suffix == 0 {
@@ -158,7 +166,7 @@ pub fn resolve_unique_name(
         } else {
             format!("{stem}-{suffix}.{extension}")
         };
-        if !exists(&name) {
+        if try_reserve(&name) {
             return Some(name);
         }
     }
@@ -264,35 +272,55 @@ mod tests {
     }
 
     #[test]
-    fn resolve_unique_name_uses_the_bare_name_when_free() {
+    fn reserve_unique_name_uses_the_bare_name_when_free() {
+        // Nothing claimed yet, so the very first candidate is reserved.
         assert_eq!(
-            resolve_unique_name("shot", "png", |_| false),
+            reserve_unique_name("shot", "png", |_| true),
             Some("shot.png".to_owned())
         );
     }
 
     #[test]
-    fn resolve_unique_name_adds_the_first_free_numeric_suffix() {
+    fn reserve_unique_name_adds_the_first_free_numeric_suffix() {
         let taken: HashSet<&str> = ["shot.png", "shot-1.png", "shot-2.png"]
             .into_iter()
             .collect();
+        // A taken name can't be reserved; the first claimable candidate wins.
         assert_eq!(
-            resolve_unique_name("shot", "png", |name| taken.contains(name)),
+            reserve_unique_name("shot", "png", |name| !taken.contains(name)),
             Some("shot-3.png".to_owned())
         );
     }
 
     #[test]
-    fn resolve_unique_name_returns_none_rather_than_overwriting() {
-        // Every candidate is taken: the resolver refuses to overwrite and reports failure.
-        assert_eq!(resolve_unique_name("shot", "jpg", |_| true), None);
+    fn reserve_unique_name_returns_none_rather_than_overwriting() {
+        // No candidate can be claimed: the resolver refuses to overwrite and reports failure.
+        assert_eq!(reserve_unique_name("shot", "jpg", |_| false), None);
     }
 
     #[test]
-    fn resolve_unique_name_honours_the_requested_extension() {
+    fn reserve_unique_name_honours_the_requested_extension() {
         assert_eq!(
-            resolve_unique_name("frame-1700000000000", "webp", |_| false),
+            reserve_unique_name("frame-1700000000000", "webp", |_| true),
             Some("frame-1700000000000.webp".to_owned())
         );
+    }
+
+    #[test]
+    fn reserve_unique_name_claims_each_name_at_most_once() {
+        use std::cell::RefCell;
+
+        // `HashSet::insert` mirrors an atomic `O_EXCL` create: it returns `true` only the first
+        // time a name is seen, so a name is never handed out twice. Resolving the same stem
+        // twice — the rapid-repeat-capture race — must therefore yield two distinct paths.
+        let reserved = RefCell::new(HashSet::new());
+        let try_reserve = |name: &str| reserved.borrow_mut().insert(name.to_owned());
+
+        let first = reserve_unique_name("shot", "png", try_reserve);
+        let second = reserve_unique_name("shot", "png", try_reserve);
+
+        assert_eq!(first, Some("shot.png".to_owned()));
+        assert_eq!(second, Some("shot-1.png".to_owned()));
+        assert_ne!(first, second, "a claimed name is never reused");
     }
 }

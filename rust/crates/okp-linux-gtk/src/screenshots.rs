@@ -21,8 +21,9 @@ pub fn next_screenshot_path(
         .and_then(Path::file_stem)
         .and_then(|name| name.to_str());
     let stem = screenshot::screenshot_stem(media_stem, position, unix_millis());
-    let name =
-        screenshot::resolve_unique_name(&stem, format.extension(), |name| dir.join(name).exists())?;
+    let name = screenshot::reserve_unique_name(&stem, format.extension(), |name| {
+        reserve_path(&dir.join(name))
+    })?;
     Some(dir.join(name))
 }
 
@@ -33,8 +34,22 @@ pub fn next_clipboard_frame_path() -> Option<PathBuf> {
     let dir = env::temp_dir().join("ok-player");
     fs::create_dir_all(&dir).ok()?;
     let stem = format!("clipboard-frame-{}", unix_millis());
-    let name = screenshot::resolve_unique_name(&stem, "png", |name| dir.join(name).exists())?;
+    let name = screenshot::reserve_unique_name(&stem, "png", |name| reserve_path(&dir.join(name)))?;
     Some(dir.join(name))
+}
+
+/// Atomically claim `path` by creating it exclusively (`O_EXCL`): returns `true` only when this
+/// call created the file, reserving the name against a concurrent capture or another writer, and
+/// `false` if it already exists (or can't be created). The 0-byte placeholder is then overwritten
+/// by libmpv's `screenshot-to-file`; the caller removes it if the capture never happens. Folding
+/// the existence check and the claim into one syscall is what makes the no-overwrite contract
+/// hold under rapid repeated captures — a passive `exists()` probe would be racy.
+fn reserve_path(path: &Path) -> bool {
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .is_ok()
 }
 
 /// The directory captures are written to: the user's configured folder when set, otherwise
@@ -104,5 +119,43 @@ XDG_PICTURES_DIR="$HOME/Pictures"
             parse_xdg_pictures_dir(home, user_dirs),
             Some(PathBuf::from("/home/tester/Pictures"))
         );
+    }
+
+    #[test]
+    fn reserve_path_claims_a_name_at_most_once() {
+        let dir = okp_test_fixtures::unique_temp_dir("okp-gtk-reserve");
+        fs::create_dir_all(&dir).expect("temp dir should be creatable");
+        let path = dir.join("shot.png");
+
+        assert!(reserve_path(&path), "the first claim creates the file");
+        assert!(path.exists(), "a placeholder is left to hold the name");
+        assert!(
+            !reserve_path(&path),
+            "a second claim of the same path is refused, never overwriting"
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn colliding_stems_still_resolve_to_distinct_files_on_disk() {
+        let dir = okp_test_fixtures::unique_temp_dir("okp-gtk-collision");
+        fs::create_dir_all(&dir).expect("temp dir should be creatable");
+
+        // Two captures resolving the *same* stem (a rapid repeat landing in the same
+        // millisecond) must each get their own file: the atomic reservation creates the first
+        // placeholder before the second call probes, so the second is pushed to a fresh suffix.
+        let resolve = || {
+            screenshot::reserve_unique_name("frame", "png", |name| reserve_path(&dir.join(name)))
+                .map(|name| dir.join(name))
+        };
+        let first = resolve();
+        let second = resolve();
+
+        assert_eq!(first, Some(dir.join("frame.png")));
+        assert_eq!(second, Some(dir.join("frame-1.png")));
+        assert_ne!(first, second, "a rapid repeat capture never reuses a path");
+
+        fs::remove_dir_all(&dir).ok();
     }
 }
