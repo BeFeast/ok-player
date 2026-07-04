@@ -203,6 +203,12 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         };
         lyrics_surface.open_preview(&state, mode);
     }
+    // Visual smoke hook: pop the seek-bar hover tooltip with a representative timecode
+    // and chapter so the timeline tooltip's timecode-only fallback can be screenshot-
+    // tested without loaded media or a generated thumbnail.
+    if env::var_os("OKP_OPEN_SEEK_PREVIEW_ON_STARTUP").is_some() {
+        open_seek_preview(&controls);
+    }
     connect_state_poll(
         &window,
         Rc::clone(&state),

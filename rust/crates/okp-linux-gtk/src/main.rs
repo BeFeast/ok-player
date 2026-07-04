@@ -710,6 +710,10 @@ struct Controls {
     // The poll clears it as soon as real media loads, so a session that merely
     // inherited the env var falls back to live data instead of fixtures.
     side_panel_preview_frozen: Rc<Cell<bool>>,
+    // The seek-bar hover tooltip (thumbnail + timecode + chapter). Kept so the visual
+    // smoke hook (`OKP_OPEN_SEEK_PREVIEW_ON_STARTUP`) can pop it with fixture data to
+    // screenshot the timecode-only fallback without loaded media or a thumbnail source.
+    seek_hover_preview: Rc<SeekHoverPreview>,
     thumbnail_sender: mpsc::Sender<String>,
     thumbnail_events: RefCell<mpsc::Receiver<String>>,
 }
