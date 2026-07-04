@@ -159,6 +159,9 @@ struct PlayerState {
     render_target_size: Option<okp_mpv::RenderTargetSize>,
     video_transform: VideoTransformState,
     ab_loop: AbLoopState,
+    /// A short message queued when a load fails, drained by the state poll into
+    /// a toast so the failure is visible after the media unloads (§2.1 error).
+    pending_playback_error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -720,6 +723,7 @@ struct StatePollContext {
     chrome: Rc<ChromeVisibility>,
     empty_surface: EmptySurface,
     lyrics_surface: LyricsSurface,
+    status_toast: Rc<StatusToast>,
     mpris_snapshot: Arc<Mutex<MprisSnapshot>>,
     mpris_signals: mpsc::Sender<MprisSignal>,
 }

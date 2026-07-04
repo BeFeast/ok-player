@@ -61,6 +61,18 @@ pub fn format_clock(seconds: f64) -> String {
     }
 }
 
+/// Formats a media's total-duration readout for the OSC. A known, positive,
+/// finite duration renders as [`format_clock`]; an unknown duration — a live
+/// stream, a URL that reports no length, or a file still probing — renders the
+/// `--:--` placeholder instead of a misleading `00:00`, per the §2.3
+/// "Live/URL unknown duration" state in the PRD.
+pub fn format_total_clock(duration: Option<f64>) -> String {
+    match duration {
+        Some(seconds) if seconds.is_finite() && seconds > 0.0 => format_clock(seconds),
+        _ => "--:--".to_owned(),
+    }
+}
+
 fn parse_field(part: &str, allow_fraction: bool) -> Option<f64> {
     if part.is_empty() {
         return None;
@@ -181,6 +193,22 @@ mod tests {
         for (seconds, expected) in cases {
             assert_eq!(format_clock(seconds), expected);
         }
+    }
+
+    #[test]
+    fn format_total_clock_uses_placeholder_for_unknown_duration() {
+        // Known, positive, finite durations mirror the elapsed clock exactly...
+        assert_eq!(format_total_clock(Some(0.0)), "--:--");
+        assert_eq!(format_total_clock(Some(5.0)), "00:05");
+        assert_eq!(format_total_clock(Some(5025.0)), "01:23:45");
+
+        // ...but every "duration not known" case renders --:-- rather than a
+        // bogus 00:00 total: no reported duration (live/URL), zero, negative, or
+        // non-finite values that mpv can briefly surface while probing.
+        assert_eq!(format_total_clock(None), "--:--");
+        assert_eq!(format_total_clock(Some(-3.0)), "--:--");
+        assert_eq!(format_total_clock(Some(f64::NAN)), "--:--");
+        assert_eq!(format_total_clock(Some(f64::INFINITY)), "--:--");
     }
 
     #[test]

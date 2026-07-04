@@ -213,6 +213,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
             chrome: Rc::clone(&chrome),
             empty_surface,
             lyrics_surface,
+            status_toast: Rc::clone(&status_toast),
             mpris_snapshot: Arc::clone(&mpris_controller.snapshot),
             mpris_signals: mpris_controller.signals.clone(),
         },
@@ -235,6 +236,17 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         glib::timeout_add_local_once(Duration::from_millis(250), move || {
             show_media_info_window(&info_parent, &media_info_preview_sample(), info_toast);
         });
+    }
+    // Visual smoke hook: exercise the §2.1 failed-load recovery without a GL
+    // video pipeline. Pretend a file was opened and then failed to decode; the
+    // shell must unload it so the welcome surface returns instead of a dead
+    // black frame, and queue the error toast — both screenshot-testable headless.
+    if let Some(value) = env::var_os("OKP_SIMULATE_LOAD_ERROR_ON_STARTUP") {
+        let name = value.to_string_lossy().trim().to_owned();
+        if !name.is_empty() {
+            state.borrow_mut().current_file = Some(PathBuf::from(name));
+        }
+        handle_playback_load_error(&state);
     }
     if auto_check_updates {
         check_updates_on_startup(Rc::clone(&state), Rc::clone(&status_toast));

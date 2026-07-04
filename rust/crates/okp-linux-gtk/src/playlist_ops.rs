@@ -470,6 +470,33 @@ pub(crate) fn advance_playlist_on_eof(state: &Rc<RefCell<PlayerState>>) -> bool 
     true
 }
 
+/// Recovers from a file that failed to load or decode (mpv `EndFile` with an
+/// error reason). Without this the shell would strand the user on a black video
+/// plane behind a live OSC reading `00:00 / 00:00`, because `current_file` was
+/// already committed when `loadfile` was merely queued. Unloading returns the
+/// welcome surface (the tested no-media state), and a short message is queued
+/// for the poll loop to toast so the failure is visible and actionable (§2.1).
+pub(crate) fn handle_playback_load_error(state: &Rc<RefCell<PlayerState>>) {
+    let label = failed_media_label(&state.borrow());
+    clear_loaded_media_state(state);
+    state.borrow_mut().pending_playback_error = Some(match label {
+        Some(name) => format!("Couldn't play {name}"),
+        None => "Couldn't play that media".to_owned(),
+    });
+}
+
+/// A short, human-facing name for the media that just failed: the file's base
+/// name for a local path, or the raw URL otherwise. Read before the state is
+/// cleared so the toast can name what broke.
+fn failed_media_label(state: &PlayerState) -> Option<String> {
+    if let Some(path) = state.current_file.as_ref()
+        && let Some(name) = path.file_name().and_then(|name| name.to_str())
+    {
+        return Some(name.to_owned());
+    }
+    state.current_url.clone()
+}
+
 pub(crate) fn move_playlist_item(state: &Rc<RefCell<PlayerState>>, from: usize, to: usize) -> bool {
     state.borrow_mut().playlist.reorder(from, to)
 }
@@ -499,6 +526,19 @@ pub(crate) fn restart_current_file(state: &Rc<RefCell<PlayerState>>) -> bool {
     state.pending_resume = None;
     state.pending_preferences = preferences.map(|preferences| (path, preferences));
     true
+}
+
+/// Drains a queued load-error message (see [`handle_playback_load_error`]) into
+/// a toast. Runs from the state poll so the toast fires on the GTK main context
+/// after the media has unloaded and the welcome surface is back.
+pub(crate) fn try_pending_error_toast(
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &StatusToast,
+) {
+    let message = state.borrow_mut().pending_playback_error.take();
+    if let Some(message) = message {
+        status_toast.show(&message);
+    }
 }
 
 pub(crate) fn try_pending_resume(state: &Rc<RefCell<PlayerState>>, duration: f64) {

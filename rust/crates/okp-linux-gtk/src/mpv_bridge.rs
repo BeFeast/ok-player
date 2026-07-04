@@ -277,11 +277,13 @@ pub(crate) fn connect_state_poll(
         chrome,
         empty_surface,
         lyrics_surface,
+        status_toast,
         mpris_snapshot,
         mpris_signals,
     } = context;
     glib::timeout_add_local(Duration::from_millis(200), move || {
         drain_mpv_events(&state);
+        try_pending_error_toast(&state, &status_toast);
         try_pending_audio_device_restore(&state);
 
         let playback = state
@@ -357,9 +359,11 @@ pub(crate) fn connect_state_poll(
             controls
                 .elapsed_label
                 .set_text(&time_code::format_clock(time_pos));
+            // A live stream or a URL with no reported length shows --:-- for the
+            // total rather than a false 00:00 (§2.3 unknown-duration state).
             controls
                 .duration_label
-                .set_text(&time_code::format_clock(duration));
+                .set_text(&time_code::format_total_clock(playback.duration));
         } else {
             chrome.set_auto_hide_enabled(false);
             controls.play_button.set_sensitive(has_media);
@@ -383,7 +387,7 @@ pub(crate) fn connect_state_poll(
             controls.seek.set_value(0.0);
             updating_seek.set(false);
             controls.elapsed_label.set_text("00:00");
-            controls.duration_label.set_text("00:00");
+            controls.duration_label.set_text("--:--");
         }
 
         glib::ControlFlow::Continue

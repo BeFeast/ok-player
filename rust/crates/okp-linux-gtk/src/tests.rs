@@ -1194,6 +1194,63 @@ fn load_selected_local_paths_uses_explicit_playlist_for_multiple_media() {
 }
 
 #[test]
+fn failed_local_load_unloads_media_and_queues_a_named_error() {
+    // A broken file must not leave the shell on a black frame behind a live OSC.
+    // handle_playback_load_error unloads (so the welcome surface returns) and
+    // queues a toast naming the file that failed.
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(PathBuf::from("/media/Broken Episode.mkv")),
+        playlist: Playlist::from_items(
+            vec![
+                local_item("/media/Broken Episode.mkv"),
+                local_item("/media/Next.mkv"),
+            ],
+            Some(&local_item("/media/Broken Episode.mkv")),
+            false,
+        ),
+        ..PlayerState::default()
+    }));
+
+    handle_playback_load_error(&state);
+
+    let state = state.borrow();
+    assert!(
+        state.current_file.is_none(),
+        "media must unload on load error"
+    );
+    assert!(state.current_url.is_none());
+    assert!(
+        state.playlist.is_empty(),
+        "the queue must clear on load error"
+    );
+    assert_eq!(
+        state.pending_playback_error.as_deref(),
+        Some("Couldn't play Broken Episode.mkv")
+    );
+}
+
+#[test]
+fn failed_url_load_names_the_url_in_the_queued_error() {
+    // The URL case has no file name, so the toast falls back to the raw URL.
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_url: Some("https://example.test/stream.m3u8".to_owned()),
+        ..PlayerState::default()
+    }));
+
+    handle_playback_load_error(&state);
+
+    let state = state.borrow();
+    assert!(
+        state.current_url.is_none(),
+        "URL media must unload on load error"
+    );
+    assert_eq!(
+        state.pending_playback_error.as_deref(),
+        Some("Couldn't play https://example.test/stream.m3u8")
+    );
+}
+
+#[test]
 fn load_selected_local_paths_preserves_folder_playlist_for_single_media() {
     let root = unique_temp_dir("okp-selection");
     fs::create_dir_all(&root).expect("test folder should be created");

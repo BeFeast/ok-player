@@ -1061,6 +1061,9 @@ pub(crate) fn drain_mpv_events(state: &Rc<RefCell<PlayerState>>) {
                 }
                 advance_playlist_on_eof(state);
             }
+            MpvEvent::EndFile { reason } if reason.is_error() => {
+                handle_playback_load_error(state);
+            }
             _ => {}
         }
     }

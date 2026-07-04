@@ -169,6 +169,14 @@ impl EndFileReason {
     pub fn is_eof(self) -> bool {
         matches!(self, Self::Eof)
     }
+
+    /// Whether the file ended because it failed to load or decode, as opposed
+    /// to reaching its natural end (`Eof`) or being stopped/replaced (`Stop`,
+    /// `Quit`, `Redirect`). The GTK shell uses this to recover from a failed
+    /// open instead of stranding the player on a black frame.
+    pub fn is_error(self) -> bool {
+        matches!(self, Self::Error(_))
+    }
 }
 
 #[derive(Debug, Error)]
@@ -1812,6 +1820,30 @@ mod tests {
         assert_eq!(format_duration(0.0), "00:00");
         assert_eq!(format_duration(125.2), "02:05");
         assert_eq!(format_duration(6906.0), "01:55:06");
+    }
+
+    #[test]
+    fn end_file_reason_classifies_errors_apart_from_normal_ends() {
+        // A failed decode maps to Error and is the only reason the shell treats
+        // as a load failure; every normal end (eof/stop/quit/redirect) stays out
+        // of both the error and eof recovery paths where it does not belong.
+        let error = end_file_reason(ffi::MPV_END_FILE_REASON_ERROR, -12);
+        assert_eq!(error, EndFileReason::Error(-12));
+        assert!(error.is_error());
+        assert!(!error.is_eof());
+
+        let eof = end_file_reason(ffi::MPV_END_FILE_REASON_EOF, 0);
+        assert!(eof.is_eof());
+        assert!(!eof.is_error());
+
+        for reason in [
+            end_file_reason(ffi::MPV_END_FILE_REASON_STOP, 0),
+            end_file_reason(ffi::MPV_END_FILE_REASON_QUIT, 0),
+            end_file_reason(ffi::MPV_END_FILE_REASON_REDIRECT, 0),
+        ] {
+            assert!(!reason.is_error(), "{reason:?} must not read as an error");
+            assert!(!reason.is_eof(), "{reason:?} must not read as eof");
+        }
     }
 
     #[test]
