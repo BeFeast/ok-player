@@ -81,6 +81,30 @@ if [[ "$top_left_pixel" != "srgb(5,5,7)" ]]; then
   echo "Unexpected main window top-left pixel: ${top_left_pixel}" >&2
   exit 1
 fi
+
+# The empty player shell must render the OK Player welcome surface, not a blank
+# or overlapped viewport. The centered identity band (app mark + wordmark) is
+# the brightest thing in the middle of the window, so a near-black maximum there
+# means the welcome surface failed to draw.
+identity_max="$(
+  magick "$OUT_DIR/window.png" \
+    -crop 260x150+430+165 \
+    -colorspace gray \
+    -format '%[fx:maxima]' info:
+)"
+if ! awk -v max="$identity_max" 'BEGIN { exit !(max > 0.6) }'; then
+  echo "Empty welcome surface looks blank: identity band maxima=${identity_max}" >&2
+  exit 1
+fi
+
+# The primary "Open media" action carries the OK Player accent, so its band must
+# be clearly green-dominant (teal) rather than a stock grey GTK button.
+primary_red="$(magick "$OUT_DIR/window.png" -crop 160x20+480+360 -format '%[fx:mean.r]' info:)"
+primary_green="$(magick "$OUT_DIR/window.png" -crop 160x20+480+360 -format '%[fx:mean.g]' info:)"
+if ! awk -v r="$primary_red" -v g="$primary_green" 'BEGIN { exit !(g - r > 0.2) }'; then
+  echo "Primary action accent missing from welcome surface: red=${primary_red} green=${primary_green}" >&2
+  exit 1
+fi
 SMOKE
 then
   echo "Main window smoke failed. Session log: $OUT_DIR/session.log" >&2

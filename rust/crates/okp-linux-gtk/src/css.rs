@@ -68,6 +68,12 @@ pub(crate) fn install_css() {
             background: rgba(255, 255, 255, 0.18);
         }
 
+        .okp-player-window-controls button:focus-visible,
+        button.okp-player-window-control:focus-visible {
+            outline: none;
+            box-shadow: inset 0 0 0 1px rgba(40, 179, 170, 0.65);
+        }
+
         button.okp-player-window-close:hover {
             background: rgba(219, 59, 59, 0.86);
             color: #ffffff;
@@ -99,44 +105,99 @@ pub(crate) fn install_css() {
         }
 
         .okp-empty-panel {
-            min-width: 300px;
-            padding: 28px;
-            border-radius: 8px;
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            background: rgba(18, 19, 23, 0.84);
+            min-width: 360px;
+            padding: 40px 44px 34px 44px;
+            border-radius: 18px;
+            border: 1px solid rgba(255, 255, 255, 0.09);
+            background: linear-gradient(180deg, rgba(23, 25, 30, 0.94), rgba(13, 14, 18, 0.94));
+            box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
         }
 
         .okp-empty-panel.is-drop-target {
             border-color: rgba(40, 179, 170, 0.82);
-            background: rgba(22, 48, 49, 0.92);
-            box-shadow: 0 0 0 2px rgba(40, 179, 170, 0.18);
+            background: linear-gradient(180deg, rgba(19, 46, 47, 0.95), rgba(13, 32, 33, 0.95));
+            box-shadow: 0 0 0 2px rgba(40, 179, 170, 0.22), 0 30px 80px rgba(0, 0, 0, 0.55);
         }
 
         .okp-empty-logo {
-            color: #28b3aa;
+            margin-bottom: 2px;
         }
 
-        .okp-empty-title {
-            color: rgba(255, 255, 255, 0.96);
-            font-size: 24px;
-            font-weight: 750;
+        .okp-empty-wordmark {
+            margin-top: 12px;
+        }
+
+        .okp-empty-wordmark-ok {
+            color: rgba(255, 255, 255, 0.98);
+            font-size: 30px;
+            font-weight: 800;
+        }
+
+        .okp-empty-wordmark-player {
+            color: rgba(255, 255, 255, 0.60);
+            font-size: 30px;
+            font-weight: 300;
+        }
+
+        .okp-empty-tagline {
+            margin-top: 8px;
+            color: rgba(255, 255, 255, 0.52);
+            font-size: 13px;
+        }
+
+        .okp-empty-actions {
+            margin-top: 26px;
         }
 
         .okp-empty-primary-button,
         .okp-empty-secondary-button {
-            min-height: 36px;
-            padding: 6px 14px;
-            border-radius: 7px;
+            min-height: 38px;
+            padding: 8px 16px;
+            border-radius: 10px;
+            border: 1px solid transparent;
+            box-shadow: none;
+            font-size: 13px;
+            font-weight: 650;
         }
 
         .okp-empty-primary-button {
             background: #28b3aa;
-            color: #051011;
+            color: #041110;
+        }
+
+        .okp-empty-primary-button:hover {
+            background: #37cfc5;
+        }
+
+        .okp-empty-primary-button:active {
+            background: #229a92;
+        }
+
+        .okp-empty-primary-button:focus-visible,
+        .okp-empty-secondary-button:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(40, 179, 170, 0.55);
         }
 
         .okp-empty-secondary-button {
-            background: rgba(255, 255, 255, 0.08);
-            color: rgba(255, 255, 255, 0.86);
+            background: rgba(255, 255, 255, 0.06);
+            border-color: rgba(255, 255, 255, 0.08);
+            color: rgba(255, 255, 255, 0.84);
+        }
+
+        .okp-empty-secondary-button:hover {
+            background: rgba(255, 255, 255, 0.11);
+            color: rgba(255, 255, 255, 0.96);
+        }
+
+        .okp-empty-secondary-button:active {
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        .okp-empty-hint {
+            margin-top: 20px;
+            color: rgba(255, 255, 255, 0.34);
+            font-size: 11.5px;
         }
 
         .okp-controls {
@@ -199,6 +260,12 @@ pub(crate) fn install_css() {
             background: transparent;
             border-color: transparent;
             color: rgba(255, 255, 255, 0.32);
+        }
+
+        button.okp-control-button:focus-visible,
+        menubutton.okp-control-button > button:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(40, 179, 170, 0.55);
         }
 
         button.okp-play-button {
@@ -385,6 +452,11 @@ pub(crate) fn install_css() {
         button.okp-side-panel-tab.is-selected {
             background: rgba(40, 179, 170, 0.22);
             color: rgba(255, 255, 255, 0.96);
+        }
+
+        button.okp-side-panel-tab:focus-visible {
+            outline: none;
+            box-shadow: inset 0 0 0 1px rgba(40, 179, 170, 0.6);
         }
 
         .okp-up-next-list {

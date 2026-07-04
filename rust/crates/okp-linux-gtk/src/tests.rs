@@ -32,6 +32,19 @@ fn about_channel_separates_linux_release_track_from_version() {
 }
 
 #[test]
+fn empty_surface_logo_resolves_to_the_bundled_app_icon() {
+    // The welcome surface anchors the OK Player identity on the app icon tile.
+    // If the bundled SVG stops resolving, the logo silently falls back to the
+    // themed icon (blank outside an installed icon theme), so guard the asset.
+    let path = empty_surface_logo_path().expect("welcome surface icon should resolve");
+    assert!(path.is_file(), "resolved icon path should exist: {path:?}");
+    assert_eq!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some("com.befeast.okplayer.svg")
+    );
+}
+
+#[test]
 fn settings_shell_matches_windows_reference_geometry() {
     assert_eq!(SETTINGS_REFERENCE_WIDTH, 744);
     assert_eq!(SETTINGS_REFERENCE_HEIGHT, 1030);
