@@ -88,6 +88,11 @@ pub struct ProgressReporter {
     last_reported: Option<f64>,
     /// Whether the watched flag has already fired for the current media.
     watched_latched: bool,
+    /// The largest media duration observed since [`ProgressReporter::begin`]. Engines can report
+    /// a small provisional duration before the real one for progressive / network media; folding
+    /// against the largest seen keeps a provisional value from latching "watched" too early and
+    /// suppressing the genuine near-end signal.
+    max_duration: f64,
 }
 
 impl ProgressReporter {
@@ -105,6 +110,7 @@ impl ProgressReporter {
     pub fn begin(&mut self) {
         self.last_reported = None;
         self.watched_latched = false;
+        self.max_duration = 0.0;
     }
 
     /// Fold one playback tick. `position`/`duration` are the current playhead and media length
@@ -115,6 +121,19 @@ impl ProgressReporter {
         if private || !position.is_finite() || !duration.is_finite() || duration <= 0.0 {
             return ReportOutcome::default();
         }
+
+        // Engines can report a small provisional duration before the real one for progressive /
+        // network media (the same hazard `resume::resolve_resume` guards with `Wait`). Fold
+        // against the largest duration seen so far: when the duration grows, any watched latch
+        // set against the earlier, provisional value was premature, so lift it — the genuine
+        // near-end of the true duration then still reports.
+        if duration > self.max_duration {
+            if self.max_duration > 0.0 {
+                self.watched_latched = false;
+            }
+            self.max_duration = duration;
+        }
+        let duration = self.max_duration;
 
         let position = position.clamp(0.0, duration);
         let percent = (position / duration).clamp(0.0, 1.0);
@@ -220,6 +239,32 @@ mod tests {
         // Latched: staying in the final stretch does not re-report watched.
         assert!(!reporter.tick(575.0, 600.0, false).watched);
         assert!(!reporter.tick(600.0, 600.0, false).watched);
+    }
+
+    #[test]
+    fn a_provisional_duration_does_not_suppress_the_real_watched_signal() {
+        let mut reporter = ProgressReporter::default();
+        // Engines can report a small provisional duration first (progressive / network media);
+        // sitting near that provisional end must not latch the file watched for good.
+        reporter.tick(29.0, 30.0, false);
+        // When the real, longer duration arrives the reported length grows and the near-end has
+        // not actually been reached, so the premature latch is lifted.
+        let outcome = reporter.tick(35.0, 3600.0, false);
+        assert_eq!(outcome.progress.map(|p| p.duration), Some(3600.0));
+        assert!(!outcome.watched);
+        assert!(!reporter.tick(1000.0, 3600.0, false).watched);
+        // The genuine near-end of the true duration then still reports watched, exactly once.
+        assert!(reporter.tick(3580.0, 3600.0, false).watched);
+        assert!(!reporter.tick(3595.0, 3600.0, false).watched);
+    }
+
+    #[test]
+    fn a_later_duration_shrink_does_not_relatch_watched() {
+        let mut reporter = ProgressReporter::default();
+        // The true long duration is established first; the watched threshold tracks it.
+        assert!(!reporter.tick(1000.0, 3600.0, false).watched);
+        // A transient provisional shrink must not be treated as a new near-end.
+        assert!(!reporter.tick(29.0, 30.0, false).watched);
     }
 
     #[test]
