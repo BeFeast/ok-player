@@ -102,7 +102,21 @@ timeout 12s "$BINARY" >"$OUT_DIR/app-intervals.log" 2>&1 &
 app_pid=$!
 
 sleep 5
-window_id="$(xdotool search --name "OK Player" | head -n1)"
+xdotool search --name "OK Player" >"$OUT_DIR/window-intervals.ids"
+window_id="$(
+  awk '
+    NR == FNR { stale[$1] = 1; next }
+    !stale[$1] { print; exit }
+  ' "$OUT_DIR/window.ids" "$OUT_DIR/window-intervals.ids"
+)"
+if [[ -z "$window_id" ]]; then
+  echo "Could not find a new OK Player window after restart" >&2
+  echo "Initial window IDs:" >&2
+  cat "$OUT_DIR/window.ids" >&2
+  echo "Restart window IDs:" >&2
+  cat "$OUT_DIR/window-intervals.ids" >&2
+  exit 1
+fi
 import -window "$window_id" "$OUT_DIR/window-intervals.png"
 
 # The interval-fallback band carries the "Interval markers" heading, the marker
