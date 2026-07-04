@@ -473,16 +473,45 @@ pub(crate) fn advance_playlist_on_eof(state: &Rc<RefCell<PlayerState>>) -> bool 
 /// Recovers from a file that failed to load or decode (mpv `EndFile` with an
 /// error reason). Without this the shell would strand the user on a black video
 /// plane behind a live OSC reading `00:00 / 00:00`, because `current_file` was
-/// already committed when `loadfile` was merely queued. Unloading returns the
-/// welcome surface (the tested no-media state), and a short message is queued
-/// for the poll loop to toast so the failure is visible and actionable (§2.1).
+/// already committed when `loadfile` was merely queued. When the failed item has
+/// a successor in the queue we advance past it so the rest of the playlist is
+/// preserved; only a failure with nothing left to play unloads back to the
+/// welcome surface (the tested no-media state). Either way a short message is
+/// queued for the poll loop to toast so the failure is visible and actionable
+/// (§2.1).
 pub(crate) fn handle_playback_load_error(state: &Rc<RefCell<PlayerState>>) {
     let label = failed_media_label(&state.borrow());
-    clear_loaded_media_state(state);
+    if !advance_playlist_past_failure(state) {
+        clear_loaded_media_state(state);
+    }
     state.borrow_mut().pending_playback_error = Some(match label {
         Some(name) => format!("Couldn't play {name}"),
         None => "Couldn't play that media".to_owned(),
     });
+}
+
+/// Loads the item that follows a failed one in play order (see
+/// [`Playlist::advance_after_error_index`]), keeping the queue intact. Returns
+/// `false` when there is no successor to try or the successor itself refuses to
+/// load, so the caller can fall back to unloading to the welcome surface.
+fn advance_playlist_past_failure(state: &Rc<RefCell<PlayerState>>) -> bool {
+    let (index, item, playlist) = {
+        let state = state.borrow();
+        let Some(index) = state.playlist.advance_after_error_index() else {
+            return false;
+        };
+        let Some(item) = state.playlist.get(index).cloned() else {
+            return false;
+        };
+        (index, item, state.playlist.items().to_vec())
+    };
+
+    // Do not save progress for the file that just failed — it never played.
+    if !load_playlist_item_with_playlist(state, item, playlist, false) {
+        return false;
+    }
+    state.borrow_mut().playlist.set_current_index(index);
+    true
 }
 
 /// A short, human-facing name for the media that just failed: the file's base

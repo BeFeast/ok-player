@@ -1194,10 +1194,11 @@ fn load_selected_local_paths_uses_explicit_playlist_for_multiple_media() {
 }
 
 #[test]
-fn failed_local_load_unloads_media_and_queues_a_named_error() {
-    // A broken file must not leave the shell on a black frame behind a live OSC.
-    // handle_playback_load_error unloads (so the welcome surface returns) and
-    // queues a toast naming the file that failed.
+fn failed_local_load_advances_past_the_broken_item_and_keeps_the_queue() {
+    // A broken file must not leave the shell on a black frame behind a live OSC,
+    // but it also must not discard the rest of the queue. handle_playback_load_error
+    // advances past the failed item to its successor and queues a toast naming the
+    // file that failed.
     let state = Rc::new(RefCell::new(PlayerState {
         current_file: Some(PathBuf::from("/media/Broken Episode.mkv")),
         playlist: Playlist::from_items(
@@ -1214,18 +1215,58 @@ fn failed_local_load_unloads_media_and_queues_a_named_error() {
     handle_playback_load_error(&state);
 
     let state = state.borrow();
-    assert!(
-        state.current_file.is_none(),
-        "media must unload on load error"
+    assert_eq!(
+        state.current_file,
+        Some(PathBuf::from("/media/Next.mkv")),
+        "a load error must advance to the next queued item"
     );
     assert!(state.current_url.is_none());
-    assert!(
-        state.playlist.is_empty(),
-        "the queue must clear on load error"
+    assert_eq!(
+        state.playlist.items(),
+        [
+            local_item("/media/Broken Episode.mkv"),
+            local_item("/media/Next.mkv"),
+        ],
+        "the queue must be preserved on load error"
     );
+    assert_eq!(state.playlist.current_index(), Some(1));
     assert_eq!(
         state.pending_playback_error.as_deref(),
         Some("Couldn't play Broken Episode.mkv")
+    );
+}
+
+#[test]
+fn failed_last_queued_item_unloads_to_the_welcome_surface() {
+    // With nothing left to advance to, a load error still returns the shell to the
+    // tested no-media state instead of holding a dead frame.
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(PathBuf::from("/media/Last.mkv")),
+        playlist: Playlist::from_items(
+            vec![
+                local_item("/media/Earlier.mkv"),
+                local_item("/media/Last.mkv"),
+            ],
+            Some(&local_item("/media/Last.mkv")),
+            false,
+        ),
+        ..PlayerState::default()
+    }));
+
+    handle_playback_load_error(&state);
+
+    let state = state.borrow();
+    assert!(
+        state.current_file.is_none(),
+        "media must unload when the failed item has no successor"
+    );
+    assert!(
+        state.playlist.is_empty(),
+        "the queue must clear once the last item fails"
+    );
+    assert_eq!(
+        state.pending_playback_error.as_deref(),
+        Some("Couldn't play Last.mkv")
     );
 }
 

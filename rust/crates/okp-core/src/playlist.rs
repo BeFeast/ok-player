@@ -292,6 +292,19 @@ impl Playlist {
         self.neighbour(1)
     }
 
+    /// What to try after the current item fails to load or decode: the next item in play order,
+    /// skipping the one that just failed. Unlike [`Self::auto_advance_target_index`] it never
+    /// replays the failed item (so a broken file under Repeat=One doesn't loop) and never wraps
+    /// (so a fully broken queue terminates at the no-media surface instead of cycling forever). It
+    /// also ignores auto-advance: a failure isn't a user-intended stop, so the queue is kept alive
+    /// by moving on. `None` when the failed item is last in play order — the shell then clears to
+    /// the welcome surface.
+    pub fn advance_after_error_index(&self) -> Option<usize> {
+        let current = self.current_index?;
+        let position = self.order.iter().position(|&index| index == current)?;
+        self.order.get(position + 1).copied()
+    }
+
     /// Advance the cursor to the next item in play order and return it (`None` at the end).
     // Named for parity with the C# module; a playlist is not an iterator (prev, repeat, wrap).
     #[allow(clippy::should_implement_trait)]
@@ -1036,6 +1049,38 @@ mod tests {
 
         playlist.set_repeat(RepeatMode::One);
         assert_eq!(playlist.auto_advance_target_index(), Some(2)); // Repeat=One replays in place
+    }
+
+    #[test]
+    fn advance_after_error_index_skips_the_failed_item_without_replaying_or_wrapping() {
+        let items = vec![
+            local("/media/a.mkv"),
+            local("/media/b.mkv"),
+            local("/media/c.mkv"),
+        ];
+        let mut playlist = Playlist::from_items(items.clone(), Some(&items[0]), false);
+
+        assert_eq!(playlist.advance_after_error_index(), Some(1)); // a fails -> try b
+
+        // Repeat=One must not replay the broken item, otherwise a failure loops forever.
+        playlist.set_repeat(RepeatMode::One);
+        assert_eq!(playlist.advance_after_error_index(), Some(1));
+
+        // The last item has no successor even under Repeat=All: a fully broken queue must
+        // terminate at the welcome surface rather than cycling.
+        playlist.set_repeat(RepeatMode::All);
+        playlist.set_current_index(2);
+        assert_eq!(playlist.advance_after_error_index(), None);
+    }
+
+    #[test]
+    fn advance_after_error_index_ignores_auto_advance_being_off() {
+        let items = vec![local("/media/a.mkv"), local("/media/b.mkv")];
+        let mut playlist = Playlist::from_items(items.clone(), Some(&items[0]), false);
+        playlist.set_auto_advance(false);
+
+        // A failure is not a user-intended stop, so the queue is kept alive regardless.
+        assert_eq!(playlist.advance_after_error_index(), Some(1));
     }
 
     #[test]

@@ -12,7 +12,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BINARY="${1:-ok-player}"
 OUT_DIR="${2:-$ROOT/artifacts/manual-ui/linux-playback-error-smoke}"
 
-for tool in xvfb-run dbus-run-session xfwm4 xdotool xwininfo import magick; do
+for tool in xvfb-run dbus-run-session xfwm4 xdotool xwininfo import magick timeout head awk; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "Missing required tool: $tool" >&2
     exit 127
