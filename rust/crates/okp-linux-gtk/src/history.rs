@@ -6,6 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use okp_core::history::Preferences as PlaybackPreferences;
 use okp_core::history::{FileEntry as HistoryRecord, History as HistoryFile};
+use okp_core::media_formats;
 pub use okp_core::recents_shelf::completion_start;
 use okp_core::recents_shelf::{self, ContinueWatchingCard};
 
@@ -89,7 +90,7 @@ impl HistoryStore {
     /// resumable file, newest-opened first, projected by [`recents_shelf`]. `private` is threaded
     /// through so a private session yields an empty shelf (recents never leak); `max_cards` bounds
     /// the pool the shell draws from. Genuinely local-and-missing files are dropped so the shelf
-    /// never shows a dead path, but URLs and network paths are kept (a flaky share shouldn't hide
+    /// never shows a dead path, but playable stream URLs are kept (a flaky share shouldn't hide
     /// them) — the listability rule the Windows `HistoryService` applies, done here as shell IO.
     pub fn continue_watching(&self, private: bool, max_cards: usize) -> Vec<ContinueWatchingCard> {
         if private || max_cards == 0 {
@@ -171,11 +172,16 @@ fn new_history_record() -> HistoryRecord {
     }
 }
 
-/// Whether a tracked path should still surface in the recents shelf. A URL or stream is always
-/// kept; a local path is kept only while the file exists, so a deleted file stops appearing —
-/// mirrors `HistoryService.IsListable` on the Windows side.
+/// Whether a tracked path should still surface in the recents shelf, matching exactly what
+/// [`open_recent_media`](crate::open_recent_media) can actually open. A playable stream URL is
+/// always kept (a flaky share shouldn't hide it); everything else — a local path, or a non-playable
+/// `file://`/malformed `://` string the URL loader would reject and the file loader would treat as a
+/// literal path — is kept only while it exists on disk. So a deleted file, or an unopenable URI from
+/// a migrated/shared history, never lingers as a dead card. Mirrors `HistoryService.IsListable` on
+/// the Windows side, using `is_playable_url` (the same predicate the card click applies) instead of a
+/// bare `://` check so listability and openability can't diverge.
 fn is_listable(path: &str) -> bool {
-    path.contains("://") || Path::new(path).exists()
+    media_formats::is_playable_url(Some(path)) || Path::new(path).exists()
 }
 
 fn history_path() -> PathBuf {
@@ -345,6 +351,25 @@ mod tests {
         assert!(history.continue_watching(true, 10).is_empty());
 
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn continue_watching_keeps_playable_urls_and_drops_unopenable_uris() {
+        let mut history = store();
+
+        // A genuine stream URL: kept even without touching the filesystem, and `open_recent_media`
+        // routes it through the URL loader, so it stays clickable.
+        let url = Path::new("https://example.com/live.m3u8");
+        history.record(url, 120.0, 600.0, false);
+
+        // Both of these contain "://" yet fail `is_playable_url`, so a card click would send them to
+        // the file loader as a literal (non-existent) path — a dead card. They must not render.
+        history.record(Path::new("file:///home/user/gone.mkv"), 120.0, 600.0, false);
+        history.record(Path::new("nope://"), 120.0, 600.0, false);
+
+        let cards = history.continue_watching(false, 10);
+        let paths: Vec<&str> = cards.iter().map(|card| card.path.as_str()).collect();
+        assert_eq!(paths, ["https://example.com/live.m3u8"]);
     }
 
     #[test]
