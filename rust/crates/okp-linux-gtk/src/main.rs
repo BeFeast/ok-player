@@ -704,6 +704,10 @@ struct Controls {
     side_panel_manual_mode: Rc<Cell<bool>>,
     side_panel_snapshot: Rc<RefCell<SidePanelSnapshot>>,
     side_panel_actions: Rc<RefCell<Vec<SidePanelAction>>>,
+    // On-demand scene-detection state for the current media. Lives here (not derived from
+    // mpv) because it is driven by the user's explicit "Detect chapters" action; it resets
+    // to Idle whenever the loaded media changes.
+    chapter_detection: Rc<Cell<chapter_math::ChapterDetection>>,
     // When set, the live poll leaves the side panel alone so the visual smoke
     // hook (`OKP_OPEN_SIDE_PANEL_ON_STARTUP`) can render fixture rows that would
     // otherwise be cleared the moment the poll sees there is no loaded media.
@@ -1115,11 +1119,19 @@ struct SidePanelSnapshot {
     // raw position so the panel only re-renders when the playhead crosses a
     // chapter boundary, not on every poll tick.
     current_chapter: Option<usize>,
+    // Total media duration (when known), used to synthesize interval fallback markers for
+    // media that carries no embedded chapters. Carried in the snapshot so the panel and
+    // timeline re-render once the duration first resolves.
+    duration: Option<f64>,
     // The user's saved position bookmarks for the current local file (empty for streams
     // and unbookmarked media). Carried in the snapshot so the panel re-renders the
     // Bookmarks section the moment a mark is added or removed.
     bookmarks: Vec<f64>,
     ab_loop: AbLoopState,
+    // State of the on-demand "Detect chapters" action for the current media, mirrored into
+    // the snapshot so a click that flips it re-renders the panel (which otherwise short-
+    // circuits on an unchanged snapshot).
+    detection: chapter_math::ChapterDetection,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1131,6 +1143,10 @@ struct TimelineMark {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum TimelineMarkKind {
     Chapter,
+    // Synthesized interval fallback tick, shown only when the file has no embedded chapters.
+    // Ticks the top rail like a chapter but the scale carries an `is-interval` class so the
+    // rail reads as derived rather than authoritative.
+    Interval,
     Bookmark,
     AbStart,
     AbEnd,
@@ -1143,12 +1159,23 @@ enum SidePanelAction {
     Chapter(f64),
     Playlist(usize),
     AddBookmark,
+    DetectChapters,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SidePanelMode {
     Chapters,
     UpNext,
+}
+
+/// Which fixture the side-panel visual smoke hook renders. `Chapters`/`UpNext` show the
+/// embedded-chapter sample; `Intervals` shows the metadata-less interval-fallback sample.
+/// Presentational smoke hook only.
+#[derive(Clone, Copy)]
+enum SidePanelPreview {
+    Chapters,
+    UpNext,
+    Intervals,
 }
 
 fn main() -> glib::ExitCode {

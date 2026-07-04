@@ -618,6 +618,7 @@ fn timeline_marks_include_ab_loop_points() {
         timeline_marks(
             &chapters,
             &[],
+            &[],
             AbLoopState {
                 a: Some(0.0),
                 b: Some(120.0),
@@ -645,7 +646,7 @@ fn timeline_marks_include_bookmarks_and_drop_edge_and_nonfinite() {
     // Bookmarks tick alongside chapters; a mark at 0.0 (the very left edge) and a
     // non-finite time are dropped, exactly like the chapter filter.
     assert_eq!(
-        timeline_marks(&[], &[0.0, 90.0, f64::NAN], AbLoopState::default()),
+        timeline_marks(&[], &[], &[0.0, 90.0, f64::NAN], AbLoopState::default()),
         vec![TimelineMark {
             time: 90.0,
             kind: TimelineMarkKind::Bookmark,
@@ -654,9 +655,33 @@ fn timeline_marks_include_bookmarks_and_drop_edge_and_nonfinite() {
 }
 
 #[test]
+fn timeline_marks_interval_ticks_land_on_the_top_rail_and_drop_the_edge() {
+    // Interval fallback markers tick like chapters (top rail) but carry their own kind, and
+    // the 0.0 left-edge marker is dropped exactly like a chapter/bookmark at 0.0.
+    assert_eq!(
+        timeline_marks(&[], &[0.0, 300.0, 600.0], &[150.0], AbLoopState::default()),
+        vec![
+            TimelineMark {
+                time: 300.0,
+                kind: TimelineMarkKind::Interval,
+            },
+            TimelineMark {
+                time: 600.0,
+                kind: TimelineMarkKind::Interval,
+            },
+            TimelineMark {
+                time: 150.0,
+                kind: TimelineMarkKind::Bookmark,
+            },
+        ]
+    );
+}
+
+#[test]
 fn timeline_marks_combine_degenerate_ab_loop_points() {
     assert_eq!(
         timeline_marks(
+            &[],
             &[],
             &[],
             AbLoopState {
@@ -700,6 +725,62 @@ fn current_chapter_index_follows_the_playhead_through_core() {
     assert_eq!(current_chapter_index(&chapters, Some(-5.0)), None);
     assert_eq!(current_chapter_index(&chapters, None), None);
     assert_eq!(current_chapter_index(&chapters, Some(f64::NAN)), None);
+}
+
+#[test]
+fn snapshot_interval_chapters_fall_back_only_without_embedded_chapters() {
+    // No embedded chapters + a divisible duration -> interval markers (a one-hour clip
+    // snaps to twelve 5-minute markers via chapter_math::fallback_interval_chapters).
+    let fallback = SidePanelSnapshot {
+        duration: Some(3600.0),
+        ..Default::default()
+    };
+    assert_eq!(snapshot_interval_chapters(&fallback).len(), 12);
+
+    // Embedded chapters present -> no interval fallback: the file's own read-only spine
+    // always wins, so a synthesized marker never mixes into it.
+    let embedded = SidePanelSnapshot {
+        chapters: vec![Chapter {
+            index: 0,
+            time: 0.0,
+            title: None,
+        }],
+        duration: Some(3600.0),
+        ..Default::default()
+    };
+    assert!(snapshot_interval_chapters(&embedded).is_empty());
+
+    // No duration to divide (a live stream) -> nothing to synthesize.
+    let stream = SidePanelSnapshot {
+        duration: None,
+        ..Default::default()
+    };
+    assert!(snapshot_interval_chapters(&stream).is_empty());
+}
+
+#[test]
+fn detect_chapters_is_honestly_unavailable_without_an_engine() {
+    // The Linux build has no scene-detection engine wired, so the explicit action resolves
+    // to an honest Unavailable state (a toast plus an inline note) rather than faking a
+    // progress run that would never advance.
+    assert_eq!(
+        chapter_math::ChapterDetection::begin(SCENE_DETECTION_ENGINE_AVAILABLE),
+        chapter_math::ChapterDetection::Unavailable
+    );
+}
+
+#[test]
+fn side_panel_interval_preview_sample_shows_interval_detect_and_bookmark_sources() {
+    let sample = side_panel_interval_preview_sample();
+    // Stands in for a metadata-less file: no embedded chapters ...
+    assert!(sample.chapters.is_empty());
+    // ... but a duration that synthesizes interval markers as the immediate fallback ...
+    assert!(!snapshot_interval_chapters(&sample).is_empty());
+    // ... the detect entry point starts Idle (offered, not yet run) ...
+    assert_eq!(sample.detection, chapter_math::ChapterDetection::Idle);
+    // ... and a local file with a bookmark so the user-source section renders alongside.
+    assert!(sample.current_file.is_some());
+    assert!(!sample.bookmarks.is_empty());
 }
 
 #[test]

@@ -171,10 +171,13 @@ pub(crate) fn build_controls(
     let side_panel_manual_mode = Rc::new(Cell::new(false));
     let side_panel_snapshot = Rc::new(RefCell::new(SidePanelSnapshot::default()));
 
+    let chapter_detection = Rc::new(Cell::new(chapter_math::ChapterDetection::default()));
+
     let up_next_state = Rc::clone(&state);
     let up_next_actions = Rc::new(RefCell::new(Vec::<SidePanelAction>::new()));
     let row_actions = Rc::clone(&up_next_actions);
     let row_toast = Rc::clone(&status_toast);
+    let row_detection = Rc::clone(&chapter_detection);
     let (thumbnail_sender, thumbnail_receiver) = mpsc::channel();
     up_next_list.connect_row_activated(move |_, row| {
         let index = row.index();
@@ -194,6 +197,7 @@ pub(crate) fn build_controls(
                 jump_playlist_index(&up_next_state, index);
             }
             SidePanelAction::AddBookmark => add_bookmark_at_position(&up_next_state, &row_toast),
+            SidePanelAction::DetectChapters => detect_chapters(&row_detection, &row_toast),
         }
     });
 
@@ -398,6 +402,7 @@ pub(crate) fn build_controls(
         side_panel_manual_mode,
         side_panel_snapshot,
         side_panel_actions: up_next_actions,
+        chapter_detection,
         side_panel_preview_frozen: Rc::new(Cell::new(false)),
         thumbnail_sender,
         thumbnail_events: RefCell::new(thumbnail_receiver),

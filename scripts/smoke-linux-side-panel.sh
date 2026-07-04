@@ -87,6 +87,37 @@ if ! awk -v r="$panel_red" -v g="$panel_green" 'BEGIN { exit !(g - r > 0.01) }';
   echo "Side panel accent missing: red=${panel_red} green=${panel_green}" >&2
   exit 1
 fi
+
+# Second surface: the metadata-less interval fallback. A file with no embedded
+# chapters must still show useful interval markers and the explicit Detect
+# chapters entry point instead of a dead panel.
+kill "$app_pid" 2>/dev/null || true
+wait "$app_pid" 2>/dev/null || true
+sleep 1
+
+OKP_OPEN_SIDE_PANEL_ON_STARTUP=intervals \
+OKP_SKIP_OPEN_INSTALLER=1 \
+OKP_SKIP_DEB_SELF_INSTALL=1 \
+timeout 12s "$BINARY" >"$OUT_DIR/app-intervals.log" 2>&1 &
+app_pid=$!
+
+sleep 5
+window_id="$(xdotool search --name "OK Player" | head -n1)"
+import -window "$window_id" "$OUT_DIR/window-intervals.png"
+
+# The interval-fallback band carries the "Interval markers" heading, the marker
+# rows and the accent Detect chapters action over the near-black video, so a dark
+# maximum there means the fallback surface failed to draw.
+intervals_max="$(
+  magick "$OUT_DIR/window-intervals.png" \
+    -crop 300x440+772+64 \
+    -colorspace gray \
+    -format '%[fx:maxima]' info:
+)"
+if ! awk -v max="$intervals_max" 'BEGIN { exit !(max > 0.55) }'; then
+  echo "Interval fallback panel looks blank: content maxima=${intervals_max}" >&2
+  exit 1
+fi
 SMOKE
 then
   echo "Side panel smoke failed. Session log: $OUT_DIR/session.log" >&2
@@ -94,4 +125,4 @@ then
   exit 1
 fi
 
-echo "Side panel smoke passed. Screenshot: $OUT_DIR/window.png"
+echo "Side panel smoke passed. Screenshots: $OUT_DIR/window.png, $OUT_DIR/window-intervals.png"

@@ -463,6 +463,14 @@ const OKP_STYLESHEET: &str = "
             background: rgba(255, 255, 255, 0.42);
         }
 
+        /* When the top rail holds synthesized interval markers (never embedded chapters —
+           the two are mutually exclusive), dim it so the ticks read as a derived fallback
+           rather than the file's authoritative chapter divisions. */
+        scale.okp-seek.okp-seek-interval-marks marks.top mark indicator {
+            min-height: 6px;
+            background: rgba(255, 255, 255, 0.24);
+        }
+
         scale.okp-seek marks.bottom mark indicator {
             min-width: 3px;
             min-height: 9px;
@@ -667,6 +675,69 @@ const OKP_STYLESHEET: &str = "
 
         .okp-add-bookmark-row .okp-add-bookmark-icon {
             color: alpha(@okp_accent, 0.92);
+        }
+
+        .okp-panel-caption-row {
+            padding: 0 10px 6px 10px;
+        }
+
+        .okp-panel-caption {
+            color: rgba(255, 255, 255, 0.46);
+            font-size: 11.5px;
+        }
+
+        /* Synthesized interval markers: a lighter, thumbnail-less row that reads as a
+           derived preview point rather than one of the file's own chapters. */
+        .okp-interval-row {
+            background: rgba(255, 255, 255, 0.022);
+            border-style: dashed;
+            border-color: rgba(255, 255, 255, 0.10);
+        }
+
+        .okp-interval-row .okp-interval-icon {
+            color: rgba(255, 255, 255, 0.44);
+        }
+
+        .okp-interval-row .okp-up-next-marker {
+            color: rgba(255, 255, 255, 0.60);
+        }
+
+        /* The explicit Detect chapters entry point, keyed to the accent like the
+           add-bookmark affordance so it reads as an action rather than a data row. */
+        .okp-detect-row {
+            background: transparent;
+            border-style: dashed;
+            border-color: alpha(@okp_accent, 0.34);
+            color: rgba(255, 255, 255, 0.82);
+        }
+
+        .okp-detect-row:hover {
+            background: alpha(@okp_accent, 0.12);
+            border-color: alpha(@okp_accent, 0.52);
+            color: rgba(255, 255, 255, 0.95);
+        }
+
+        .okp-detect-row .okp-detect-icon {
+            color: alpha(@okp_accent, 0.92);
+        }
+
+        .okp-detect-subtitle {
+            color: rgba(255, 255, 255, 0.48);
+            font-size: 11px;
+        }
+
+        .okp-detect-status-row {
+            margin: 2px 0;
+            padding: 9px 10px;
+        }
+
+        .okp-detect-status-row .okp-detect-status-icon {
+            color: rgba(255, 255, 255, 0.40);
+        }
+
+        .okp-detect-status {
+            color: rgba(255, 255, 255, 0.56);
+            font-size: 12px;
         }
 
         .okp-up-next-row.is-current .okp-chapter-thumb {

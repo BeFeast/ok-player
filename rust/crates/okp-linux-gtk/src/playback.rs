@@ -285,6 +285,35 @@ pub(crate) fn seek_to_chapter(state: &Rc<RefCell<PlayerState>>, time: f64) {
     }
 }
 
+/// Whether a scene-detection engine is wired into this build. Linux has none yet, so the
+/// "Detect chapters" action resolves to an honest Unavailable state instead of faking a
+/// progress run — the entry point and its state machine are already in place for when an
+/// engine lands, at which point this flips to `true`.
+pub(crate) const SCENE_DETECTION_ENGINE_AVAILABLE: bool = false;
+
+/// The honest, user-facing reason shown (as a toast and an inline panel note) when the
+/// explicit detect action cannot run because no scene-detection engine is wired yet.
+pub(crate) const SCENE_DETECTION_UNAVAILABLE_MESSAGE: &str = "Scene detection isn't available yet";
+
+/// Handle the explicit "Detect chapters" action. This never blocks playback: with no engine
+/// wired it flips straight to an honest [`chapter_math::ChapterDetection::Unavailable`] state
+/// (surfaced as a toast now and an inline note on the next panel refresh) rather than running
+/// expensive work on the UI thread. A re-tap while a run is already in flight is a no-op.
+pub(crate) fn detect_chapters(
+    detection: &Rc<Cell<chapter_math::ChapterDetection>>,
+    status_toast: &StatusToast,
+) {
+    if detection.get().is_running() {
+        return;
+    }
+
+    let next = chapter_math::ChapterDetection::begin(SCENE_DETECTION_ENGINE_AVAILABLE);
+    detection.set(next);
+    if matches!(next, chapter_math::ChapterDetection::Unavailable) {
+        status_toast.show(SCENE_DETECTION_UNAVAILABLE_MESSAGE);
+    }
+}
+
 /// Drop a bookmark at the current playhead. Bookmarks are per-file position marks
 /// persisted in the shared history schema, so this needs a local file (streams are not
 /// tracked) and honours the private session — matching Windows `HistoryService`, whose
