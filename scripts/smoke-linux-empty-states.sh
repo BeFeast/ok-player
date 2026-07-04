@@ -42,6 +42,12 @@ kill_app() {
   kill "$app_pid" 2>/dev/null || true
 }
 
+# Let the window manager come up before any GTK window is created — the sibling
+# smoke scripts do the same. On a slower runner the app can start before xfwm4
+# is ready, which makes the later `xdotool` / capture checks fail even though the
+# UI rendered correctly.
+sleep 1
+
 # The side panel is anchored to the right (halign End, 344px wide, 24px inset).
 # Both empty states render bright text over the near-black video, so a dark
 # maximum in that band means the panel failed to draw. The Up Next short-queue
