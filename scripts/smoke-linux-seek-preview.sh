@@ -30,9 +30,12 @@ export XDG_CURRENT_DESKTOP=XFCE
 
 xfwm4 --sm-client-disable >"$OUT_DIR/xfwm4.log" 2>&1 &
 wm_pid=$!
+# Bind app_pid before installing the trap so cleanup stays safe under `set -u`
+# if setup exits before the app launches.
+app_pid=""
 
 cleanup() {
-  kill "$app_pid" 2>/dev/null || true
+  [[ -n "$app_pid" ]] && kill "$app_pid" 2>/dev/null || true
   kill "$wm_pid" 2>/dev/null || true
 }
 trap cleanup EXIT
