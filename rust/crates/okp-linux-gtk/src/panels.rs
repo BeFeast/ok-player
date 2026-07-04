@@ -58,6 +58,17 @@ pub(crate) fn update_up_next_panel(
         }
     }
 
+    // The length the seek scale is (or will be) ranged to. Timeline marks past the end
+    // are dropped so a stray chapter/bookmark can't collapse onto the right handle; a
+    // non-positive value means the duration is not known yet.
+    let media_duration = state
+        .borrow()
+        .mpv
+        .as_ref()
+        .and_then(|mpv| mpv.observed_playback_state().duration)
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(0.0);
+
     controls.chapters_button.set_sensitive(snapshot.has_media);
     if !snapshot.has_media {
         set_side_panel_user_visible(
@@ -76,6 +87,7 @@ pub(crate) fn update_up_next_panel(
             &[],
             &[],
             AbLoopState::default(),
+            0.0,
         );
         clear_list_box(&controls.up_next_list);
         return;
@@ -111,6 +123,7 @@ pub(crate) fn update_up_next_panel(
         &snapshot.chapters,
         &snapshot.bookmarks,
         snapshot.ab_loop,
+        media_duration,
     );
 
     let current_index = snapshot.playlist.iter().position(|item| {
@@ -389,8 +402,9 @@ pub(crate) fn update_timeline_marks(
     chapters: &[Chapter],
     bookmarks: &[f64],
     ab_loop: AbLoopState,
+    duration: f64,
 ) {
-    let marks = timeline_marks(chapters, bookmarks, ab_loop);
+    let marks = timeline_marks(chapters, bookmarks, ab_loop, duration);
     if *snapshot.borrow() == marks {
         return;
     }
@@ -415,6 +429,7 @@ pub(crate) fn timeline_marks(
     chapters: &[Chapter],
     bookmarks: &[f64],
     ab_loop: AbLoopState,
+    duration: f64,
 ) -> Vec<TimelineMark> {
     let mut marks = chapters
         .iter()
@@ -422,14 +437,14 @@ pub(crate) fn timeline_marks(
             time: chapter.time,
             kind: TimelineMarkKind::Chapter,
         })
-        .filter(|mark| mark.time.is_finite() && mark.time > 0.0)
+        .filter(|mark| timeline_mark_in_range(mark.time, duration))
         .collect::<Vec<_>>();
 
     marks.extend(
         bookmarks
             .iter()
             .copied()
-            .filter(|time| time.is_finite() && *time > 0.0)
+            .filter(|time| timeline_mark_in_range(*time, duration))
             .map(|time| TimelineMark {
                 time,
                 kind: TimelineMarkKind::Bookmark,
@@ -469,6 +484,15 @@ pub(crate) fn timeline_marks(
 
 pub(crate) fn should_combine_ab_loop_marks(a: f64, b: f64) -> bool {
     (a - b).abs() <= AB_LOOP_COMBINED_MARK_EPSILON_SECS
+}
+
+/// Whether a chapter or bookmark tick belongs on the timeline: it must be finite and
+/// sit strictly inside the media, so a mark on the very start handle (`<= 0.0`) or at
+/// or past the end (`>= duration`) is dropped rather than piling onto a handle. A
+/// non-positive `duration` means the length is not known yet, so the upper bound is
+/// skipped and the mark is kept until the real duration arrives.
+fn timeline_mark_in_range(time: f64, duration: f64) -> bool {
+    time.is_finite() && time > 0.0 && (duration <= 0.0 || time < duration)
 }
 
 pub(crate) fn panel_heading_row(text: &str) -> gtk::ListBoxRow {

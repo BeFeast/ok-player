@@ -357,7 +357,7 @@ pub(crate) fn build_controls(
 
         glib::Propagation::Proceed
     });
-    connect_seek_hover(&seek, Rc::clone(&state), thumbnail_sender.clone());
+    let seek_hover_preview = connect_seek_hover(&seek, Rc::clone(&state), thumbnail_sender.clone());
 
     let volume_state = Rc::clone(&state);
     volume.connect_change_value(move |_, _, value| {
@@ -399,6 +399,7 @@ pub(crate) fn build_controls(
         side_panel_snapshot,
         side_panel_actions: up_next_actions,
         side_panel_preview_frozen: Rc::new(Cell::new(false)),
+        seek_hover_preview,
         thumbnail_sender,
         thumbnail_events: RefCell::new(thumbnail_receiver),
     }
@@ -592,7 +593,7 @@ pub(crate) fn connect_seek_hover(
     seek: &gtk::Scale,
     state: Rc<RefCell<PlayerState>>,
     thumbnail_sender: mpsc::Sender<String>,
-) {
+) -> Rc<SeekHoverPreview> {
     let preview = Rc::new(SeekHoverPreview::new(seek));
     let motion = gtk::EventControllerMotion::new();
 
@@ -607,13 +608,12 @@ pub(crate) fn connect_seek_hover(
 
         let width = f64::from(motion_seek.width().max(1));
         let time = (x.clamp(0.0, width) / width * duration).clamp(0.0, duration);
-        let thumbnail = hover_thumbnail_for_time(
-            &motion_state,
-            &media_path,
-            time,
-            duration,
-            &thumbnail_sender,
-        );
+        // Only a local file can be sampled for a hover thumbnail; a stream (or any
+        // source without a file on disk) still gets the timecode + chapter preview,
+        // just with no thumbnail — the deliberate timecode-only fallback.
+        let thumbnail = media_path.as_deref().and_then(|path| {
+            hover_thumbnail_for_time(&motion_state, path, time, duration, &thumbnail_sender)
+        });
         motion_preview.show(
             &motion_seek,
             x,
@@ -623,18 +623,21 @@ pub(crate) fn connect_seek_hover(
         );
     });
 
+    let leave_preview = Rc::clone(&preview);
     motion.connect_leave(move |_| {
-        preview.hide();
+        leave_preview.hide();
     });
 
     seek.add_controller(motion);
+    preview
 }
 
 pub(crate) fn seek_hover_snapshot(
     state: &Rc<RefCell<PlayerState>>,
-) -> Option<(PathBuf, f64, Vec<Chapter>)> {
+) -> Option<(Option<PathBuf>, f64, Vec<Chapter>)> {
     let state = state.borrow();
-    let current_file = state.current_file.clone()?;
+    let thumbnail_source =
+        seek_hover_source(state.current_file.clone(), state.current_url.as_deref())?;
 
     state
         .mpv
@@ -642,7 +645,21 @@ pub(crate) fn seek_hover_snapshot(
         .map(|mpv| mpv.observed_playback_state())
         .and_then(|playback| playback.duration)
         .filter(|duration| duration.is_finite() && *duration > 0.0)
-        .map(|duration| (current_file, duration, state.chapters_snapshot.clone()))
+        .map(|duration| (thumbnail_source, duration, state.chapters_snapshot.clone()))
+}
+
+/// Resolve the hover-preview source for the loaded media: `None` when nothing is
+/// loaded (no preview at all), `Some(Some(file))` for a local file that can be
+/// sampled for a thumbnail, and `Some(None)` for a stream — which still previews the
+/// timecode and chapter but has no on-disk file to thumbnail.
+pub(crate) fn seek_hover_source(
+    current_file: Option<PathBuf>,
+    current_url: Option<&str>,
+) -> Option<Option<PathBuf>> {
+    if current_file.is_none() && current_url.is_none() {
+        return None;
+    }
+    Some(current_file)
 }
 
 pub(crate) fn chapter_at_time(chapters: &[Chapter], time: f64) -> Option<&Chapter> {
@@ -691,4 +708,23 @@ pub(crate) fn hover_thumbnail_for_time(
     }
 
     None
+}
+
+/// Visual smoke hook: pop the seek hover tooltip over the timeline with a
+/// representative timecode and chapter and no thumbnail — the deliberate
+/// timecode-only fallback the tooltip shows for a stream, a not-yet-generated frame,
+/// or an unavailable source. Presentational only; production code never calls this.
+/// The pop is deferred so the seek scale has a real allocation to anchor against.
+pub(crate) fn open_seek_preview(controls: &Controls) {
+    let seek = controls.seek.clone();
+    let preview = Rc::clone(&controls.seek_hover_preview);
+    glib::timeout_add_local_once(Duration::from_millis(300), move || {
+        let width = f64::from(seek.width().max(1));
+        let chapter = Chapter {
+            index: 2,
+            time: 933.0,
+            title: Some("The Long Walk Home".to_owned()),
+        };
+        preview.show(&seek, width / 2.0, chapter.time, Some(&chapter), None);
+    });
 }

@@ -724,6 +724,7 @@ fn timeline_marks_include_ab_loop_points() {
                 a: Some(0.0),
                 b: Some(120.0),
             },
+            300.0,
         ),
         vec![
             TimelineMark {
@@ -747,11 +748,79 @@ fn timeline_marks_include_bookmarks_and_drop_edge_and_nonfinite() {
     // Bookmarks tick alongside chapters; a mark at 0.0 (the very left edge) and a
     // non-finite time are dropped, exactly like the chapter filter.
     assert_eq!(
-        timeline_marks(&[], &[0.0, 90.0, f64::NAN], AbLoopState::default()),
+        timeline_marks(&[], &[0.0, 90.0, f64::NAN], AbLoopState::default(), 300.0),
         vec![TimelineMark {
             time: 90.0,
             kind: TimelineMarkKind::Bookmark,
         }]
+    );
+}
+
+#[test]
+fn timeline_marks_drop_chapters_and_bookmarks_at_or_past_duration() {
+    // Chapters and bookmarks must map inside the seek scale's [0, duration] range: a
+    // mark at exactly the end collapses onto the right handle and one past it would
+    // draw off the bar, so both are dropped. A mark comfortably inside survives.
+    let chapters = vec![
+        Chapter {
+            index: 0,
+            time: 30.0,
+            title: Some("Inside".to_owned()),
+        },
+        Chapter {
+            index: 1,
+            time: 120.0,
+            title: Some("At the end".to_owned()),
+        },
+        Chapter {
+            index: 2,
+            time: 150.0,
+            title: Some("Past the end".to_owned()),
+        },
+    ];
+
+    assert_eq!(
+        timeline_marks(
+            &chapters,
+            &[90.0, 120.0, 200.0],
+            AbLoopState::default(),
+            120.0
+        ),
+        vec![
+            TimelineMark {
+                time: 30.0,
+                kind: TimelineMarkKind::Chapter,
+            },
+            TimelineMark {
+                time: 90.0,
+                kind: TimelineMarkKind::Bookmark,
+            },
+        ]
+    );
+}
+
+#[test]
+fn timeline_marks_keep_all_when_duration_unknown() {
+    // Before the duration is observed (0.0) there is no upper bound to map against, so
+    // every finite, positive mark is kept until the real length arrives.
+    let chapters = vec![Chapter {
+        index: 0,
+        time: 500.0,
+        title: None,
+    }];
+
+    assert_eq!(
+        timeline_marks(&chapters, &[900.0], AbLoopState::default(), 0.0),
+        vec![
+            TimelineMark {
+                time: 500.0,
+                kind: TimelineMarkKind::Chapter,
+            },
+            TimelineMark {
+                time: 900.0,
+                kind: TimelineMarkKind::Bookmark,
+            },
+        ]
     );
 }
 
@@ -765,6 +834,7 @@ fn timeline_marks_combine_degenerate_ab_loop_points() {
                 a: Some(12.0),
                 b: Some(12.25),
             },
+            300.0,
         ),
         vec![TimelineMark {
             time: 12.125,
@@ -773,6 +843,58 @@ fn timeline_marks_combine_degenerate_ab_loop_points() {
     );
     assert!(should_combine_ab_loop_marks(12.0, 12.5));
     assert!(!should_combine_ab_loop_marks(12.0, 12.501));
+}
+
+#[test]
+fn seek_hover_source_falls_back_to_timecode_only_for_streams() {
+    let file = PathBuf::from("/media/films/Feature.mkv");
+
+    // A local file is the thumbnail source.
+    assert_eq!(
+        seek_hover_source(Some(file.clone()), None),
+        Some(Some(file.clone()))
+    );
+
+    // A stream previews the timecode and chapter but has no on-disk file to sample, so
+    // the source resolves to `Some(None)` — the deliberate timecode-only fallback.
+    assert_eq!(
+        seek_hover_source(None, Some("https://stream.example.com/live.m3u8")),
+        Some(None)
+    );
+
+    // With nothing loaded there is no preview at all.
+    assert_eq!(seek_hover_source(None, None), None);
+}
+
+#[test]
+fn chapter_at_time_maps_the_hover_time_to_the_last_started_chapter() {
+    let chapters = vec![
+        Chapter {
+            index: 0,
+            time: 0.0,
+            title: Some("Cold Open".to_owned()),
+        },
+        Chapter {
+            index: 1,
+            time: 60.0,
+            title: Some("Main Titles".to_owned()),
+        },
+        Chapter {
+            index: 2,
+            time: 180.0,
+            title: Some("Finale".to_owned()),
+        },
+    ];
+
+    // Before the first start there is no chapter to label the hover with.
+    assert!(chapter_at_time(&chapters, -5.0).is_none());
+    // Inside a chapter (and exactly on a boundary) resolves to that chapter.
+    assert_eq!(chapter_at_time(&chapters, 0.0).map(|c| c.index), Some(0));
+    assert_eq!(chapter_at_time(&chapters, 59.9).map(|c| c.index), Some(0));
+    assert_eq!(chapter_at_time(&chapters, 60.0).map(|c| c.index), Some(1));
+    assert_eq!(chapter_at_time(&chapters, 999.0).map(|c| c.index), Some(2));
+    // No chapters means no hover label.
+    assert!(chapter_at_time(&[], 42.0).is_none());
 }
 
 #[test]
