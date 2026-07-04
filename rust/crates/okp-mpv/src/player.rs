@@ -242,6 +242,10 @@ impl RawReader {
         Ok(self.get_double("sub-delay")?.unwrap_or(0.0))
     }
 
+    pub(crate) fn audio_delay(&self) -> Result<f64, MpvError> {
+        Ok(self.get_double("audio-delay")?.unwrap_or(0.0))
+    }
+
     pub(crate) fn subtitle_scale(&self) -> Result<f64, MpvError> {
         Ok(self.get_double("sub-scale")?.unwrap_or(1.0))
     }
@@ -869,6 +873,13 @@ impl Mpv {
             .unwrap_or(0.0)
     }
 
+    pub fn observed_audio_delay(&self) -> f64 {
+        self.pump
+            .as_ref()
+            .map(EventPump::audio_delay)
+            .unwrap_or(0.0)
+    }
+
     pub fn observed_subtitle_scale(&self) -> f64 {
         self.pump
             .as_ref()
@@ -1154,6 +1165,10 @@ impl Mpv {
 
     pub fn adjust_subtitle_delay(&self, delta_seconds: f64) -> Result<(), MpvError> {
         self.set_subtitle_delay(self.observed_subtitle_delay() + delta_seconds)
+    }
+
+    pub fn set_audio_delay(&self, seconds: f64) -> Result<(), MpvError> {
+        self.set_double("audio-delay", seconds.clamp(-600.0, 600.0))
     }
 
     pub fn set_subtitle_scale(&self, scale: f64) -> Result<(), MpvError> {

@@ -626,6 +626,9 @@ pub(crate) fn apply_playback_preferences(
     if let Some(scale) = preferences.subtitle_scale.and_then(finite_option) {
         mpv.set_subtitle_scale(scale)?;
     }
+    if let Some(delay) = preferences.audio_delay.and_then(finite_option) {
+        mpv.set_audio_delay(delay)?;
+    }
     if let Some(speed) = preferences.speed.and_then(finite_option) {
         mpv.set_speed(speed)?;
     }
@@ -682,6 +685,7 @@ pub(crate) fn read_current_playback_preferences(mpv: &Mpv) -> history::PlaybackP
         secondary_subtitle_track_id: secondary_subtitle_id,
         subtitle_delay: finite_option(mpv.observed_subtitle_delay()),
         subtitle_scale: finite_option(mpv.observed_subtitle_scale()),
+        audio_delay: finite_option(mpv.observed_audio_delay()),
         speed: finite_option(mpv.observed_speed()),
     }
 }

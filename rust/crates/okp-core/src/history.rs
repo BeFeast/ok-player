@@ -132,6 +132,11 @@ pub struct Preferences {
     pub subtitle_delay: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtitle_scale: Option<f64>,
+    /// Per-file audio delay in seconds, remembered like [`Self::subtitle_delay`]
+    /// so a sync correction survives across sessions. Held independently of the
+    /// subtitle delay: nudging one never disturbs the other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_delay: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed: Option<f64>,
 }
@@ -147,6 +152,7 @@ impl Preferences {
             && self.secondary_subtitle_track_id.is_none()
             && self.subtitle_delay.is_none()
             && self.subtitle_scale.is_none()
+            && self.audio_delay.is_none()
             && self.speed.is_none()
     }
 
@@ -171,6 +177,9 @@ impl Preferences {
         }
         if updated.subtitle_scale.is_some() {
             self.subtitle_scale = updated.subtitle_scale;
+        }
+        if updated.audio_delay.is_some() {
+            self.audio_delay = updated.audio_delay;
         }
         if updated.speed.is_some() {
             self.speed = updated.speed;
@@ -518,5 +527,55 @@ mod tests {
         assert_eq!(base.subtitle_enabled, Some(false));
         assert_eq!(base.subtitle_scale, Some(1.2));
         assert_eq!(base.speed, Some(0.75));
+    }
+
+    #[test]
+    fn audio_delay_is_remembered_independently_of_subtitle_delay() {
+        // A lone audio_delay counts as content, so the section is not dropped.
+        let mut base = Preferences {
+            audio_delay: Some(-0.12),
+            ..Preferences::default()
+        };
+        assert!(!base.is_empty());
+
+        // Merging a subtitle-delay change must leave the audio delay untouched,
+        // and vice versa — the two sync corrections never bleed into each other.
+        base.merge(Preferences {
+            subtitle_delay: Some(0.25),
+            ..Preferences::default()
+        });
+        assert_eq!(base.audio_delay, Some(-0.12));
+        assert_eq!(base.subtitle_delay, Some(0.25));
+
+        base.merge(Preferences {
+            audio_delay: Some(0.4),
+            ..Preferences::default()
+        });
+        assert_eq!(base.audio_delay, Some(0.4));
+        assert_eq!(base.subtitle_delay, Some(0.25));
+    }
+
+    #[test]
+    fn audio_delay_round_trips_through_json() {
+        let raw = r#"{
+            "version": 1,
+            "files": {
+                "/media/song.mka": {
+                    "position": 0.0,
+                    "duration": 200.0,
+                    "finished": false,
+                    "updated_at_unix": 1700000000,
+                    "preferences": { "audio_delay": 0.05 }
+                }
+            }
+        }"#;
+
+        let history = History::load(raw).expect("document with audio_delay should load");
+        let entry = history.files.get("/media/song.mka").expect("entry");
+        assert_eq!(entry.preferences.audio_delay, Some(0.05));
+
+        // The field survives a save/load round-trip and stays snake_case.
+        let serialized = serde_json::to_string(&history).expect("history serializes");
+        assert!(serialized.contains("\"audio_delay\":0.05"));
     }
 }
