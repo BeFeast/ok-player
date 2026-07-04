@@ -1421,6 +1421,68 @@ fn linux_update_status_reflects_last_check_result() {
 }
 
 #[test]
+fn fine_seek_readout_pairs_projected_timecode_with_frame_number() {
+    // Fine seek forward on a 24 fps clip: the shared projection lands on the
+    // exact target and the toast reports the matching frame number, exactly as
+    // `seek_relative_with_readout` composes it from the observed snapshot.
+    let playback = PlaybackState {
+        time_pos: Some(30.0),
+        duration: Some(120.0),
+        container_fps: Some(24.0),
+        ..PlaybackState::default()
+    };
+    let time = playback.time_pos.unwrap_or(0.0).max(0.0);
+    let duration = playback.duration.unwrap_or(0.0).max(0.0);
+    let target = seek_readout::seek_target(time, 5.0, duration);
+
+    assert_eq!(target, 35.0);
+    assert_eq!(
+        seek_readout::format_readout(target, playback.container_fps),
+        "00:35 · Frame 840"
+    );
+}
+
+#[test]
+fn frame_step_readout_reports_the_next_frame() {
+    // Frame-forward from frame 120 (@24 fps) reports frame 121, mirroring
+    // `frame_step_with_readout`.
+    let playback = PlaybackState {
+        time_pos: Some(5.0),
+        duration: Some(120.0),
+        container_fps: Some(24.0),
+        ..PlaybackState::default()
+    };
+    let time = playback.time_pos.unwrap_or(0.0).max(0.0);
+    let duration = playback.duration.unwrap_or(0.0).max(0.0);
+    let target = seek_readout::frame_step_target(time, playback.container_fps, true, duration);
+
+    assert_eq!(
+        seek_readout::format_readout(target, playback.container_fps),
+        "00:05 · Frame 121"
+    );
+}
+
+#[test]
+fn audio_only_seek_readout_shows_timecode_without_a_frame() {
+    // Audio-only source: no container fps, so the readout is a bare timecode
+    // and never emits a dangling "Frame" label.
+    let playback = PlaybackState {
+        time_pos: Some(58.0),
+        duration: Some(240.0),
+        container_fps: None,
+        ..PlaybackState::default()
+    };
+    let time = playback.time_pos.unwrap_or(0.0).max(0.0);
+    let duration = playback.duration.unwrap_or(0.0).max(0.0);
+    let target = seek_readout::seek_target(time, 5.0, duration);
+
+    assert_eq!(
+        seek_readout::format_readout(target, playback.container_fps),
+        "01:03"
+    );
+}
+
+#[test]
 fn deb_self_install_timeout_uses_positive_override_only() {
     assert_eq!(
         parse_deb_self_install_timeout(Some("5")),

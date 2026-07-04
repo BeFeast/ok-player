@@ -68,19 +68,19 @@ pub(crate) fn connect_keyboard(
                 glib::Propagation::Stop
             }
             Some(ShortcutAction::SeekBack) => {
-                with_mpv(&state, |mpv| mpv.seek_relative(-5.0));
+                seek_relative_with_readout(&state, &status_toast, -5.0);
                 glib::Propagation::Stop
             }
             Some(ShortcutAction::SeekForward) => {
-                with_mpv(&state, |mpv| mpv.seek_relative(5.0));
+                seek_relative_with_readout(&state, &status_toast, 5.0);
                 glib::Propagation::Stop
             }
             Some(ShortcutAction::FrameForward) => {
-                with_mpv(&state, |mpv| mpv.frame_step());
+                frame_step_with_readout(&state, &status_toast, true);
                 glib::Propagation::Stop
             }
             Some(ShortcutAction::FrameBack) => {
-                with_mpv(&state, |mpv| mpv.frame_back_step());
+                frame_step_with_readout(&state, &status_toast, false);
                 glib::Propagation::Stop
             }
             Some(ShortcutAction::PreviousItem) => {
