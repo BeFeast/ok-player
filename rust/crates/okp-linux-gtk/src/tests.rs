@@ -617,6 +617,7 @@ fn timeline_marks_include_ab_loop_points() {
     assert_eq!(
         timeline_marks(
             &chapters,
+            &[],
             AbLoopState {
                 a: Some(0.0),
                 b: Some(120.0),
@@ -640,9 +641,23 @@ fn timeline_marks_include_ab_loop_points() {
 }
 
 #[test]
+fn timeline_marks_include_bookmarks_and_drop_edge_and_nonfinite() {
+    // Bookmarks tick alongside chapters; a mark at 0.0 (the very left edge) and a
+    // non-finite time are dropped, exactly like the chapter filter.
+    assert_eq!(
+        timeline_marks(&[], &[0.0, 90.0, f64::NAN], AbLoopState::default()),
+        vec![TimelineMark {
+            time: 90.0,
+            kind: TimelineMarkKind::Bookmark,
+        }]
+    );
+}
+
+#[test]
 fn timeline_marks_combine_degenerate_ab_loop_points() {
     assert_eq!(
         timeline_marks(
+            &[],
             &[],
             AbLoopState {
                 a: Some(12.0),

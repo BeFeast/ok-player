@@ -174,6 +174,7 @@ pub(crate) fn build_controls(
     let up_next_state = Rc::clone(&state);
     let up_next_actions = Rc::new(RefCell::new(Vec::<SidePanelAction>::new()));
     let row_actions = Rc::clone(&up_next_actions);
+    let row_toast = Rc::clone(&status_toast);
     let (thumbnail_sender, thumbnail_receiver) = mpsc::channel();
     up_next_list.connect_row_activated(move |_, row| {
         let index = row.index();
@@ -192,6 +193,7 @@ pub(crate) fn build_controls(
             SidePanelAction::Playlist(index) => {
                 jump_playlist_index(&up_next_state, index);
             }
+            SidePanelAction::AddBookmark => add_bookmark_at_position(&up_next_state, &row_toast),
         }
     });
 
@@ -382,6 +384,7 @@ pub(crate) fn build_controls(
         elapsed_label,
         duration_label,
         volume,
+        status_toast,
         timeline_marks_snapshot: RefCell::new(Vec::new()),
         up_next_revealer,
         up_next_title,

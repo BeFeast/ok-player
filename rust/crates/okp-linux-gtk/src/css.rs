@@ -566,6 +566,27 @@ const OKP_STYLESHEET: &str = "
             color: rgba(255, 255, 255, 0.26);
         }
 
+        .okp-bookmark-row .okp-bookmark-icon {
+            color: alpha(@okp_accent, 0.92);
+        }
+
+        .okp-add-bookmark-row {
+            background: transparent;
+            border-style: dashed;
+            border-color: rgba(255, 255, 255, 0.16);
+            color: rgba(255, 255, 255, 0.62);
+        }
+
+        .okp-add-bookmark-row:hover {
+            background: alpha(@okp_accent, 0.12);
+            border-color: alpha(@okp_accent, 0.48);
+            color: rgba(255, 255, 255, 0.92);
+        }
+
+        .okp-add-bookmark-row .okp-add-bookmark-icon {
+            color: alpha(@okp_accent, 0.92);
+        }
+
         .okp-up-next-row.is-current .okp-chapter-thumb {
             border-color: alpha(@okp_accent, 0.55);
         }

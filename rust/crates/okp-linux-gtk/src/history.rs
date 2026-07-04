@@ -43,35 +43,71 @@ impl HistoryStore {
         let key = history_key(path);
         let complete_at = completion_start(duration);
         let final_stretch = position >= complete_at;
-        let existing_finished = self
-            .data
-            .files
-            .get(&key)
-            .is_some_and(|record| record.finished);
         let stored_position = if finished || final_stretch {
             0.0
         } else {
             position.clamp(0.0, duration)
         };
 
-        let preferences = self
+        // Mutate the existing record in place so the progress fields refresh while every
+        // other field carries through: the stored `preferences` as before, plus the
+        // shared-schema extras (`bookmarks`, `chapters`, `title`, `poster_path`). Before
+        // bookmarks existed this used `..HistoryRecord::default()`, which was harmless
+        // only because Linux never wrote those extras; now that a bookmark lives here, a
+        // progress save must not wipe it.
+        let mut record = self.data.files.remove(&key).unwrap_or_default();
+        let existing_finished = record.finished;
+        record.position = stored_position;
+        record.duration = duration;
+        record.finished = finished || (existing_finished && final_stretch);
+        record.updated_at_unix = unix_now();
+        self.data.files.insert(key, record);
+        self.dirty = true;
+    }
+
+    /// The user's saved position bookmarks for `path`, sorted (empty when none). Read by
+    /// the side panel to render the Bookmarks section.
+    pub fn bookmarks(&self, path: &Path) -> Vec<f64> {
+        self.data
+            .files
+            .get(&history_key(path))
+            .map(|record| record.bookmarks.clone())
+            .unwrap_or_default()
+    }
+
+    /// Add a bookmark at `time` for `path`, deduping and sorting through
+    /// [`okp_core::bookmarks::add`]. Returns `true` when a mark was added, `false` when
+    /// one already sits at that spot (or the time is unusable).
+    pub fn add_bookmark(&mut self, path: &Path, time: f64) -> bool {
+        let key = history_key(path);
+        let mut record = self
             .data
             .files
-            .get(&key)
-            .map(|record| record.preferences.clone())
-            .unwrap_or_default();
-        self.data.files.insert(
-            key,
-            HistoryRecord {
-                position: stored_position,
-                duration,
-                finished: finished || (existing_finished && final_stretch),
-                updated_at_unix: unix_now(),
-                preferences,
-                ..HistoryRecord::default()
-            },
-        );
-        self.dirty = true;
+            .remove(&key)
+            .unwrap_or_else(new_history_record);
+        let added = okp_core::bookmarks::add(&mut record.bookmarks, time);
+        if added {
+            record.updated_at_unix = unix_now();
+            self.dirty = true;
+        }
+        self.data.files.insert(key, record);
+        added
+    }
+
+    /// Remove the bookmark nearest `time` for `path` (via [`okp_core::bookmarks::remove`]).
+    /// Returns `true` when a mark was dropped.
+    pub fn remove_bookmark(&mut self, path: &Path, time: f64) -> bool {
+        let key = history_key(path);
+        let Some(mut record) = self.data.files.remove(&key) else {
+            return false;
+        };
+        let removed = okp_core::bookmarks::remove(&mut record.bookmarks, time);
+        if removed {
+            record.updated_at_unix = unix_now();
+            self.dirty = true;
+        }
+        self.data.files.insert(key, record);
+        removed
     }
 
     pub fn resume_position(&self, path: &Path) -> Option<f64> {
@@ -294,6 +330,36 @@ mod tests {
                 ..PlaybackPreferences::default()
             })
         );
+    }
+
+    #[test]
+    fn add_and_remove_bookmarks_round_trip_and_sort() {
+        let mut history = store();
+        let path = Path::new("/media/movie.mkv");
+
+        assert!(history.add_bookmark(path, 100.0));
+        assert!(history.add_bookmark(path, 10.0));
+        // A near-duplicate within half a second is refused.
+        assert!(!history.add_bookmark(path, 100.2));
+        assert_eq!(history.bookmarks(path), vec![10.0, 100.0]);
+
+        assert!(history.remove_bookmark(path, 10.0));
+        assert!(!history.remove_bookmark(path, 555.0));
+        assert_eq!(history.bookmarks(path), vec![100.0]);
+    }
+
+    #[test]
+    fn recording_progress_preserves_bookmarks() {
+        let mut history = store();
+        let path = Path::new("/media/movie.mkv");
+
+        history.add_bookmark(path, 42.0);
+        // A progress save must not wipe the bookmark the way the old
+        // `..HistoryRecord::default()` reset did.
+        history.record(path, 120.0, 600.0, false);
+
+        assert_eq!(history.bookmarks(path), vec![42.0]);
+        assert_eq!(history.resume_position(path), Some(120.0));
     }
 
     #[test]

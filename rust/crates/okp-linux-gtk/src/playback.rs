@@ -285,6 +285,76 @@ pub(crate) fn seek_to_chapter(state: &Rc<RefCell<PlayerState>>, time: f64) {
     }
 }
 
+/// Drop a bookmark at the current playhead. Bookmarks are per-file position marks
+/// persisted in the shared history schema, so this needs a local file (streams are not
+/// tracked) and honours the private session — matching Windows `HistoryService`, whose
+/// writers no-op when incognito. The outcome is toasted after the borrow is released.
+pub(crate) fn add_bookmark_at_position(
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &StatusToast,
+) {
+    let result: Result<f64, &'static str> = {
+        let mut state = state.borrow_mut();
+        if state.private_session {
+            Err("Private session — bookmark not saved")
+        } else if let Some(path) = state.current_file.clone() {
+            let position = state
+                .mpv
+                .as_ref()
+                .map(|mpv| mpv.observed_playback_state())
+                .and_then(|playback| playback.time_pos)
+                .filter(|time| time.is_finite() && *time >= 0.0);
+            match position {
+                None => Err("Open media first"),
+                Some(position) => {
+                    if state.history.add_bookmark(&path, position) {
+                        if let Err(error) = state.history.save() {
+                            eprintln!("Failed to save bookmark: {error}");
+                        }
+                        Ok(position)
+                    } else {
+                        Err("Bookmark already here")
+                    }
+                }
+            }
+        } else {
+            Err("Bookmarks need a local file")
+        }
+    };
+
+    match result {
+        Ok(position) => {
+            status_toast.show(&format!("Bookmarked {}", time_code::format_clock(position)))
+        }
+        Err(message) => status_toast.show(message),
+    }
+}
+
+/// Remove the bookmark at `time` for the current file (used by a bookmark row's own
+/// trash button). Removal is a deliberate edit, so it is allowed in a private session —
+/// only *creating* new marks is suppressed there.
+pub(crate) fn remove_bookmark_at(
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &StatusToast,
+    time: f64,
+) {
+    let removed = {
+        let mut state = state.borrow_mut();
+        let Some(path) = state.current_file.clone() else {
+            return;
+        };
+        let removed = state.history.remove_bookmark(&path, time);
+        if removed && let Err(error) = state.history.save() {
+            eprintln!("Failed to save history after removing bookmark: {error}");
+        }
+        removed
+    };
+
+    if removed {
+        status_toast.show("Bookmark removed");
+    }
+}
+
 pub(crate) fn seek_to_time(state: &Rc<RefCell<PlayerState>>, time: f64) -> bool {
     time.is_finite() && time >= 0.0 && with_mpv(state, |mpv| mpv.seek_absolute(time))
 }
