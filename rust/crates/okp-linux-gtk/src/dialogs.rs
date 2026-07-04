@@ -182,7 +182,7 @@ pub(crate) fn open_go_to_time_dialog(
         }
 
         if seek_to_time(&state, target) {
-            status_toast.show(&format!("Jumped to {}", time_code::format(target)));
+            status_toast.show(&nav_readout_for_target(&state, target));
             dialog.close();
         } else {
             status_toast.show("Could not seek");

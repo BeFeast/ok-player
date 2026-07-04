@@ -113,6 +113,22 @@ mod tests {
     }
 
     #[test]
+    fn parse_accepts_millisecond_input() {
+        // P4-N2: HH:MM:SS with optional `.mmm` on the seconds field seeks
+        // precisely, so fractions must survive parsing to full precision.
+        let cases = [
+            ("1:23:45.678", 5025.678),
+            ("0:00.250", 0.25),
+            ("2:05.5", 125.5),
+            ("90.125", 90.125),
+        ];
+
+        for (text, expected) in cases {
+            assert_eq!(parse(Some(text)), Some(expected));
+        }
+    }
+
+    #[test]
     fn parse_invalid_timecodes_returns_none() {
         let cases = [
             Some(""),

@@ -361,6 +361,78 @@ pub(crate) fn seek_to_time(state: &Rc<RefCell<PlayerState>>, time: f64) -> bool 
     time.is_finite() && time >= 0.0 && with_mpv(state, |mpv| mpv.seek_absolute(time))
 }
 
+/// Latest observed playback scalars for a media session, or `None` when nothing
+/// is loaded. A plain snapshot read (no blocking mpv call), safe on the UI
+/// thread, used to project navigation readouts.
+pub(crate) fn observed_playback(state: &Rc<RefCell<PlayerState>>) -> Option<PlaybackState> {
+    let state = state.borrow();
+    if !has_loaded_media_state(&state) {
+        return None;
+    }
+    state.mpv.as_ref().map(|mpv| mpv.observed_playback_state())
+}
+
+/// The transient navigation readout line (timecode + frame number when known)
+/// for a projected `target` position, built from the observed frame rate.
+pub(crate) fn nav_readout_for_target(state: &Rc<RefCell<PlayerState>>, target: f64) -> String {
+    let fps = observed_playback(state).and_then(|playback| playback.container_fps);
+    seek_readout::format_readout(target.max(0.0), fps)
+}
+
+/// Fine seek by `delta` seconds through the shared mpv seek command, then show
+/// the projected timecode/frame readout in the transient toast.
+pub(crate) fn seek_relative_with_readout(
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &StatusToast,
+    delta: f64,
+) {
+    let Some(playback) = observed_playback(state) else {
+        return;
+    };
+    if !with_mpv(state, |mpv| mpv.seek_relative(delta)) {
+        return;
+    }
+
+    let time = playback.time_pos.unwrap_or(0.0).max(0.0);
+    let duration = playback.duration.unwrap_or(0.0).max(0.0);
+    let target = seek_readout::seek_target(time, delta, duration);
+    status_toast.show(&seek_readout::format_readout(
+        target,
+        playback.container_fps,
+    ));
+}
+
+/// Step one frame (`forward` = `.`, otherwise `,`) through the shared mpv
+/// frame-step commands, which pause playback, then show the projected
+/// frame readout in the transient toast.
+pub(crate) fn frame_step_with_readout(
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &StatusToast,
+    forward: bool,
+) {
+    let Some(playback) = observed_playback(state) else {
+        return;
+    };
+    let stepped = with_mpv(state, |mpv| {
+        if forward {
+            mpv.frame_step()
+        } else {
+            mpv.frame_back_step()
+        }
+    });
+    if !stepped {
+        return;
+    }
+
+    let time = playback.time_pos.unwrap_or(0.0).max(0.0);
+    let duration = playback.duration.unwrap_or(0.0).max(0.0);
+    let target = seek_readout::frame_step_target(time, playback.container_fps, forward, duration);
+    status_toast.show(&seek_readout::format_readout(
+        target,
+        playback.container_fps,
+    ));
+}
+
 pub(crate) fn toggle_fullscreen(window: &gtk::ApplicationWindow) {
     if window.is_fullscreen() {
         window.unfullscreen();
