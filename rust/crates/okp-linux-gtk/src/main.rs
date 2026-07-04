@@ -24,7 +24,7 @@ use okp_core::{
     AppIdentity, m3u, media_formats, natural_compare, sha256sums, subtitle_delay, time_code,
 };
 use okp_mpv::{
-    AbLoopState, AudioDevice, Chapter, InfoSection, InfoTrack, MediaInfo, Mpv, MpvEvent,
+    AbLoopState, AudioDevice, Chapter, InfoRow, InfoSection, InfoTrack, MediaInfo, Mpv, MpvEvent,
     PlaybackState, Track, TrackKind, current_render_target_size, resolve_render_target_size,
 };
 use velopack::{

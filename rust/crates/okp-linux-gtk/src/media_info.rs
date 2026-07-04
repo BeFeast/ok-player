@@ -50,6 +50,10 @@ pub(crate) fn show_media_info_window(
     let title = gtk::Label::new(Some(&media_info.title));
     title.add_css_class("okp-info-title");
     title.set_xalign(0.0);
+    title.set_hexpand(true);
+    // Bound the natural width so a long title cannot stretch the transient
+    // window past its reference size; it fills the content column and ellipsizes.
+    title.set_width_chars(1);
     title.set_ellipsize(pango::EllipsizeMode::End);
     header.append(&title);
 
@@ -57,6 +61,8 @@ pub(crate) fn show_media_info_window(
         let path_label = gtk::Label::new(Some(path));
         path_label.add_css_class("okp-info-path");
         path_label.set_xalign(0.0);
+        path_label.set_hexpand(true);
+        path_label.set_width_chars(1);
         path_label.set_ellipsize(pango::EllipsizeMode::Middle);
         header.append(&path_label);
     }
@@ -115,6 +121,90 @@ pub(crate) fn show_media_info_window(
     window.present();
 }
 
+/// Representative Media Information used by the visual smoke hook
+/// (`OKP_OPEN_MEDIA_INFO_ON_STARTUP`). It is fixture data for screenshots and
+/// tests only; the live window always renders `Mpv::observed_media_info`.
+pub(crate) fn media_info_preview_sample() -> MediaInfo {
+    let row = |label: &str, value: &str| InfoRow {
+        label: label.to_owned(),
+        value: value.to_owned(),
+    };
+    MediaInfo {
+        title: "Blade Runner 2049 (2017) — 2160p HDR".to_owned(),
+        path: Some(
+            "/media/films/Blade Runner 2049 (2017)/Blade.Runner.2049.2160p.HDR.mkv".to_owned(),
+        ),
+        sections: vec![
+            InfoSection {
+                title: "File".to_owned(),
+                rows: vec![
+                    row("Container", "Matroska (MKV)"),
+                    row("Duration", "2:43:31"),
+                    row("Size", "24.7 GiB"),
+                    row("Overall bitrate", "21.6 Mb/s"),
+                ],
+            },
+            InfoSection {
+                title: "Video".to_owned(),
+                rows: vec![
+                    row("Codec", "HEVC (H.265) Main 10"),
+                    row("Resolution", "3840 × 2160"),
+                    row("Frame rate", "23.976 fps"),
+                    row("Bit depth", "10-bit"),
+                    row("Dynamic Range", "HDR (PQ / ST 2084, BT.2020)"),
+                    row("Mastering display", "1000 cd/m² peak · 0.005 cd/m² black"),
+                ],
+            },
+            InfoSection {
+                title: "Audio".to_owned(),
+                rows: vec![
+                    row("Codec", "TrueHD + Atmos"),
+                    row("Channels", "7.1 (8 ch)"),
+                    row("Sample rate", "48.0 kHz"),
+                ],
+            },
+        ],
+        tracks: vec![
+            InfoTrack {
+                id: 1,
+                kind: TrackKind::Audio,
+                selected: true,
+                external: false,
+                default: true,
+                title: "English · TrueHD Atmos".to_owned(),
+                detail: "7.1 · 48 kHz · default".to_owned(),
+            },
+            InfoTrack {
+                id: 2,
+                kind: TrackKind::Audio,
+                selected: false,
+                external: false,
+                default: false,
+                title: "English · AC-3 Commentary".to_owned(),
+                detail: "2.0 · 48 kHz".to_owned(),
+            },
+            InfoTrack {
+                id: 3,
+                kind: TrackKind::Subtitle,
+                selected: true,
+                external: false,
+                default: false,
+                title: "English (SDH)".to_owned(),
+                detail: "PGS · embedded".to_owned(),
+            },
+            InfoTrack {
+                id: 4,
+                kind: TrackKind::Subtitle,
+                selected: false,
+                external: true,
+                default: false,
+                title: "English".to_owned(),
+                detail: "SubRip (SRT) · external".to_owned(),
+            },
+        ],
+    }
+}
+
 pub(crate) fn media_info_action_button(label: &str, icon_name: &str) -> gtk::Button {
     let button = gtk::Button::new();
     button.set_has_frame(false);
@@ -130,17 +220,26 @@ pub(crate) fn media_info_action_button(label: &str, icon_name: &str) -> gtk::But
     button
 }
 
-pub(crate) fn media_info_summary_widget(media_info: &MediaInfo) -> Option<gtk::Box> {
+pub(crate) fn media_info_summary_widget(media_info: &MediaInfo) -> Option<gtk::FlowBox> {
     let chips = media_info_summary_chips(media_info);
     if chips.is_empty() {
         return None;
     }
 
-    let summary = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    // A flow layout keeps the at-a-glance strip on one row when it fits and
+    // wraps to a second row on narrow widths instead of clipping chip values.
+    let summary = gtk::FlowBox::new();
     summary.add_css_class("okp-info-summary");
+    summary.set_selection_mode(gtk::SelectionMode::None);
+    summary.set_activate_on_single_click(false);
+    summary.set_max_children_per_line(chips.len() as u32);
+    summary.set_min_children_per_line(1);
+    summary.set_column_spacing(8);
+    summary.set_row_spacing(8);
+    summary.set_homogeneous(false);
     summary.set_halign(gtk::Align::Start);
     for (label, value) in chips {
-        summary.append(&media_info_summary_chip(label, &value));
+        summary.insert(&media_info_summary_chip(label, &value), -1);
     }
     Some(summary)
 }
@@ -157,8 +256,10 @@ pub(crate) fn media_info_summary_chips(media_info: &MediaInfo) -> Vec<(&'static 
     if let Some(resolution) = media_info_value(media_info, "Video", "Resolution") {
         chips.push(("Video", resolution.to_owned()));
     }
-    if let Some(codec) = media_info_value(media_info, "Video", "Codec") {
-        chips.push(("Codec", codec.to_owned()));
+    if let Some(range) = media_info_value(media_info, "Video", "Dynamic Range")
+        && dynamic_range_is_hdr(range)
+    {
+        chips.push(("HDR", media_info_hdr_summary(range)));
     }
 
     let audio_count = media_info
@@ -210,10 +311,21 @@ pub(crate) fn media_info_summary_chip(label: &str, value: &str) -> gtk::Box {
     value.add_css_class("okp-info-chip-value");
     value.set_xalign(0.0);
     value.set_ellipsize(pango::EllipsizeMode::End);
-    value.set_max_width_chars(18);
+    value.set_max_width_chars(22);
     chip.append(&value);
 
     chip
+}
+
+/// Condense a verbose Dynamic Range descriptor into a chip-sized token, keeping
+/// the leading format name (e.g. the live "HDR (PQ / ST 2084, BT.2020)" -> "HDR").
+pub(crate) fn media_info_hdr_summary(hdr: &str) -> String {
+    hdr.split(['·', '('])
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(hdr)
+        .to_owned()
 }
 
 pub(crate) fn media_info_section_widget(section: &InfoSection) -> gtk::Box {
@@ -227,10 +339,30 @@ pub(crate) fn media_info_section_widget(section: &InfoSection) -> gtk::Box {
     content.append(&title);
 
     for row in &section.rows {
-        content.append(&media_info_row(&row.label, &row.value));
+        let row_widget = media_info_row(&row.label, &row.value);
+        if media_info_row_is_highlight(&row.label, &row.value) {
+            row_widget.add_css_class("is-highlight");
+        }
+        content.append(&row_widget);
     }
 
     content
+}
+
+/// Rows that carry a headline diagnostic (currently active HDR) get an accent
+/// value so the most consequential capabilities stand out from the dense list.
+pub(crate) fn media_info_row_is_highlight(label: &str, value: &str) -> bool {
+    label.eq_ignore_ascii_case("Dynamic Range") && dynamic_range_is_hdr(value)
+}
+
+/// Whether a `Dynamic Range` row value describes active HDR rather than SDR or
+/// an absent descriptor. Gates both the summary chip and the accented row so the
+/// live producer and the preview fixture agree on when HDR is present.
+fn dynamic_range_is_hdr(value: &str) -> bool {
+    !matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "" | "no" | "none" | "off" | "sdr"
+    )
 }
 
 pub(crate) fn media_info_row(label: &str, value: &str) -> gtk::Box {

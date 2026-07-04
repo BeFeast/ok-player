@@ -12,37 +12,30 @@ pub(crate) fn settings_subtitles_page(
     let summary = settings_section("Subtitles");
     summary.append(&settings_value_row("Primary", &snapshot.primary));
     summary.append(&settings_value_row("Secondary", &snapshot.secondary));
-    let (delay_row, delay_label) = settings_value_row_with_label(
+
+    // Group the fine-adjust controls inline with the value they change so the
+    // page stays within the reference content width instead of overflowing the
+    // window with a single seven-button row.
+    let (delay_row, delay_label, delay_buttons) = settings_stepper_row(
         "Delay",
         &subtitle_delay::format_label(snapshot.delay_seconds),
+        &[
+            ("-50 ms", SubtitleAdjustment::Delay(-0.05)),
+            ("+50 ms", SubtitleAdjustment::Delay(0.05)),
+            ("Reset", SubtitleAdjustment::SetDelay(0.0)),
+        ],
     );
-    summary.append(&delay_row);
-    let (scale_row, scale_label) =
-        settings_value_row_with_label("Size", &format_scale(snapshot.scale));
-    summary.append(&scale_row);
+    let (scale_row, scale_label, scale_buttons) = settings_stepper_row(
+        "Size",
+        &format_scale(snapshot.scale),
+        &[
+            ("Smaller", SubtitleAdjustment::Scale(-0.1)),
+            ("100%", SubtitleAdjustment::SetScale(1.0)),
+            ("Larger", SubtitleAdjustment::Scale(0.1)),
+        ],
+    );
 
-    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    actions.add_css_class("okp-settings-action-row");
-    actions.set_halign(gtk::Align::End);
-
-    let add_button = gtk::Button::with_label("Add subtitle...");
-    add_button.add_css_class("okp-settings-button");
-    add_button.set_sensitive(snapshot.has_media);
-    let add_parent = parent.clone();
-    let add_state = Rc::clone(&state);
-    add_button.connect_clicked(move |_| open_subtitle_dialog(&add_parent, Rc::clone(&add_state)));
-    actions.append(&add_button);
-
-    for (label, adjustment) in [
-        ("-50 ms", SubtitleAdjustment::Delay(-0.05)),
-        ("+50 ms", SubtitleAdjustment::Delay(0.05)),
-        ("Reset", SubtitleAdjustment::SetDelay(0.0)),
-        ("Smaller", SubtitleAdjustment::Scale(-0.1)),
-        ("100%", SubtitleAdjustment::SetScale(1.0)),
-        ("Larger", SubtitleAdjustment::Scale(0.1)),
-    ] {
-        let button = gtk::Button::with_label(label);
-        button.add_css_class("okp-settings-button");
+    for (button, adjustment) in delay_buttons.into_iter().chain(scale_buttons) {
         button.set_sensitive(snapshot.has_media);
         let button_state = Rc::clone(&state);
         let button_toast = Rc::clone(&status_toast);
@@ -53,8 +46,20 @@ pub(crate) fn settings_subtitles_page(
             refresh_settings_subtitle_values(&button_state, &button_delay, &button_scale);
             button_toast.show("Subtitle settings updated");
         });
-        actions.append(&button);
     }
+    summary.append(&delay_row);
+    summary.append(&scale_row);
+
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    actions.add_css_class("okp-settings-action-row");
+    actions.set_halign(gtk::Align::End);
+    let add_button = gtk::Button::with_label("Add subtitle...");
+    add_button.add_css_class("okp-settings-button");
+    add_button.set_sensitive(snapshot.has_media);
+    let add_parent = parent.clone();
+    let add_state = Rc::clone(&state);
+    add_button.connect_clicked(move |_| open_subtitle_dialog(&add_parent, Rc::clone(&add_state)));
+    actions.append(&add_button);
     summary.append(&actions);
     page.append(&summary);
 
@@ -531,11 +536,27 @@ pub(crate) fn settings_track_button(text: &str, selected: bool) -> gtk::Button {
     button
 }
 
-pub(crate) fn settings_empty_state(text: &str) -> gtk::Label {
+pub(crate) fn settings_empty_state(text: &str) -> gtk::Box {
+    let block = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    block.add_css_class("okp-empty-state");
+    block.set_halign(gtk::Align::Fill);
+
+    let inner = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    inner.set_halign(gtk::Align::Center);
+    inner.set_hexpand(true);
+
+    let icon = gtk::Image::from_icon_name("dialog-information-symbolic");
+    icon.set_pixel_size(15);
+    icon.add_css_class("okp-empty-state-icon");
+    inner.append(&icon);
+
     let label = gtk::Label::new(Some(text));
-    label.add_css_class("okp-update-status");
+    label.add_css_class("okp-empty-state-text");
     label.set_xalign(0.0);
-    label
+    inner.append(&label);
+
+    block.append(&inner);
+    block
 }
 
 pub(crate) fn selected_track_summary(state: &Rc<RefCell<PlayerState>>, kind: TrackKind) -> String {
@@ -1350,6 +1371,50 @@ pub(crate) fn settings_clear_history_row(
 
 pub(crate) fn settings_value_row(label: &str, value: &str) -> gtk::Box {
     settings_value_row_with_label(label, value).0
+}
+
+/// A value row that carries a trailing group of compact stepper buttons, so the
+/// control that changes a value sits next to the value it reports. Returns the
+/// row, its value label (for live refresh), and the created buttons paired with
+/// their adjustment so callers can wire behaviour without re-reading the group.
+pub(crate) fn settings_stepper_row(
+    label: &str,
+    value: &str,
+    buttons: &[(&str, SubtitleAdjustment)],
+) -> (gtk::Box, gtk::Label, Vec<(gtk::Button, SubtitleAdjustment)>) {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row.add_css_class("okp-settings-row");
+
+    let label_widget = gtk::Label::new(Some(label));
+    label_widget.add_css_class("okp-info-label");
+    label_widget.set_xalign(0.0);
+    label_widget.set_width_chars(14);
+    row.append(&label_widget);
+
+    let value_widget = gtk::Label::new(Some(value));
+    value_widget.add_css_class("okp-info-value");
+    value_widget.set_xalign(0.0);
+    value_widget.set_hexpand(true);
+    value_widget.set_width_chars(1);
+    value_widget.set_ellipsize(pango::EllipsizeMode::End);
+    row.append(&value_widget);
+
+    let group = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    group.add_css_class("okp-settings-stepper-group");
+    group.set_halign(gtk::Align::End);
+    group.set_valign(gtk::Align::Center);
+
+    let mut created = Vec::with_capacity(buttons.len());
+    for (text, adjustment) in buttons {
+        let button = gtk::Button::with_label(text);
+        button.add_css_class("okp-settings-button");
+        button.add_css_class("okp-settings-stepper-button");
+        group.append(&button);
+        created.push((button, *adjustment));
+    }
+    row.append(&group);
+
+    (row, value_widget, created)
 }
 
 pub(crate) fn settings_value_row_with_label(label: &str, value: &str) -> (gtk::Box, gtk::Label) {

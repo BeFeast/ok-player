@@ -196,6 +196,15 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
             open_settings_window(&settings_parent, settings_state, settings_toast);
         });
     }
+    // Visual smoke hook: render the Media Information window with representative
+    // fixture data so its layout can be screenshot-tested without loaded media.
+    if env::var_os("OKP_OPEN_MEDIA_INFO_ON_STARTUP").is_some() {
+        let info_parent = window.clone();
+        let info_toast = Rc::clone(&status_toast);
+        glib::timeout_add_local_once(Duration::from_millis(250), move || {
+            show_media_info_window(&info_parent, &media_info_preview_sample(), info_toast);
+        });
+    }
     if auto_check_updates {
         check_updates_on_startup(Rc::clone(&state), Rc::clone(&status_toast));
     }
