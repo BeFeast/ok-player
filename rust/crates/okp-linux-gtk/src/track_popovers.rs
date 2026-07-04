@@ -1,4 +1,8 @@
 use super::*;
+use okp_core::scribe_subtitles::{
+    ScribeSubtitleBackend, ScribeSubtitleBeginError, ScribeSubtitleJob, ScribeSubtitleRequest,
+    ScribeSubtitleState,
+};
 
 pub(crate) fn populate_subtitle_popover(
     popover: &gtk::Popover,
@@ -89,6 +93,7 @@ pub(crate) fn populate_subtitle_popover(
         open_subtitle_dialog(&add_parent, Rc::clone(&add_state));
     });
     content.append(&add_button);
+    append_scribe_subtitle_popover_rows(&content, popover, parent, &state);
 
     content.append(&divider());
     content.append(&subtitle_adjustment_rows(popover, parent, &state));
@@ -395,6 +400,21 @@ pub(crate) fn command_popover_content(
     });
     content.append(&copy_time_button);
 
+    content.append(&divider());
+    content.append(&track_group_title("Subtitles"));
+
+    let add_subtitle_button = track_button("Add subtitle file...", false);
+    add_subtitle_button.set_sensitive(has_media);
+    let add_subtitle_parent = parent.clone();
+    let add_subtitle_state = Rc::clone(&state);
+    let add_subtitle_popover = popover.clone();
+    add_subtitle_button.connect_clicked(move |_| {
+        add_subtitle_popover.popdown();
+        open_subtitle_dialog(&add_subtitle_parent, Rc::clone(&add_subtitle_state));
+    });
+    content.append(&add_subtitle_button);
+    append_scribe_subtitle_popover_rows(&content, popover, parent, &state);
+
     let add_bookmark_button = track_button("Add Bookmark", false);
     add_bookmark_button.set_sensitive(has_local_media);
     add_bookmark_button.set_tooltip_text(Some("Save a bookmark at the current position"));
@@ -633,6 +653,113 @@ pub(crate) fn set_track_popover_child(popover: &gtk::Popover, content: gtk::Box)
     scroll.set_propagate_natural_height(true);
     scroll.set_child(Some(&content));
     popover.set_child(Some(&scroll));
+}
+
+pub(crate) fn append_scribe_subtitle_popover_rows(
+    content: &gtk::Box,
+    popover: &gtk::Popover,
+    parent: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
+) {
+    let (label, sensitive, tooltip, active) = {
+        let state_ref = state.borrow();
+        (
+            scribe_subtitle_action_label(&state_ref.scribe_subtitles).to_owned(),
+            scribe_subtitle_action_enabled(&state_ref),
+            scribe_subtitle_unavailable_message(&state_ref).map(str::to_owned),
+            scribe_subtitle_generation_active(&state_ref.scribe_subtitles),
+        )
+    };
+
+    let generate_button = track_button(&label, false);
+    generate_button.set_sensitive(sensitive);
+    generate_button.set_tooltip_text(tooltip.as_deref());
+    let generate_state = Rc::clone(state);
+    let generate_popover = popover.clone();
+    let generate_parent = parent.clone();
+    generate_button.connect_clicked(move |_| {
+        begin_scribe_subtitle_generation(&generate_state);
+        populate_subtitle_popover(
+            &generate_popover,
+            &generate_parent,
+            Rc::clone(&generate_state),
+        );
+    });
+    content.append(&generate_button);
+
+    if active {
+        let cancel_button = track_button("Cancel subtitle generation", false);
+        let cancel_state = Rc::clone(state);
+        let cancel_popover = popover.clone();
+        let cancel_parent = parent.clone();
+        cancel_button.connect_clicked(move |_| {
+            cancel_state.borrow_mut().scribe_subtitles.cancel();
+            populate_subtitle_popover(&cancel_popover, &cancel_parent, Rc::clone(&cancel_state));
+        });
+        content.append(&cancel_button);
+    }
+}
+
+pub(crate) fn scribe_subtitle_action_label(state: &ScribeSubtitleState) -> &'static str {
+    match state.job() {
+        Some(ScribeSubtitleJob::Queued { .. }) => "Generating subtitles... queued",
+        Some(ScribeSubtitleJob::InProgress {
+            progress_percent: Some(_),
+            ..
+        }) => "Generating subtitles...",
+        Some(ScribeSubtitleJob::InProgress { .. }) => "Generating subtitles...",
+        Some(ScribeSubtitleJob::Ready { .. }) => "Generated subtitles ready",
+        Some(ScribeSubtitleJob::Failed { .. }) => "Generate subtitles...",
+        Some(ScribeSubtitleJob::Canceled) | None => "Generate subtitles...",
+    }
+}
+
+pub(crate) fn scribe_subtitle_action_enabled(state: &PlayerState) -> bool {
+    matches!(
+        &state.scribe_subtitles.config().backend,
+        ScribeSubtitleBackend::Supported { .. }
+    ) && state.current_file.is_some()
+        && !scribe_subtitle_generation_active(&state.scribe_subtitles)
+}
+
+pub(crate) fn scribe_subtitle_generation_active(state: &ScribeSubtitleState) -> bool {
+    matches!(
+        state.job(),
+        Some(ScribeSubtitleJob::Queued { .. } | ScribeSubtitleJob::InProgress { .. })
+    )
+}
+
+pub(crate) fn scribe_subtitle_unavailable_message(state: &PlayerState) -> Option<&'static str> {
+    if scribe_subtitle_action_enabled(state)
+        || scribe_subtitle_generation_active(&state.scribe_subtitles)
+    {
+        return None;
+    }
+
+    match &state.scribe_subtitles.config().backend {
+        ScribeSubtitleBackend::Unconfigured => {
+            Some(ScribeSubtitleBeginError::Unconfigured.message())
+        }
+        ScribeSubtitleBackend::Unsupported { .. } => {
+            Some(ScribeSubtitleBeginError::UnsupportedBackend.message())
+        }
+        ScribeSubtitleBackend::Supported { .. } if state.current_file.is_none() => {
+            Some(ScribeSubtitleBeginError::NoLocalMedia.message())
+        }
+        ScribeSubtitleBackend::Supported { .. } => None,
+    }
+}
+
+pub(crate) fn begin_scribe_subtitle_generation(state: &Rc<RefCell<PlayerState>>) -> bool {
+    let request = {
+        let state_ref = state.borrow();
+        state_ref
+            .current_file
+            .as_ref()
+            .and_then(|path| ScribeSubtitleRequest::for_media_path(path.clone()))
+    };
+
+    state.borrow_mut().scribe_subtitles.begin(request).is_ok()
 }
 
 pub(crate) fn track_section_title(title: &str) -> gtk::Label {

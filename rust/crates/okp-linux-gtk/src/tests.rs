@@ -58,6 +58,46 @@ fn settings_shell_matches_windows_reference_geometry() {
 }
 
 #[test]
+fn scribe_generate_subtitles_is_stable_but_disabled_by_default() {
+    let state = PlayerState::default();
+
+    assert_eq!(
+        scribe_subtitle_action_label(&state.scribe_subtitles),
+        "Generate subtitles..."
+    );
+    assert!(!scribe_subtitle_action_enabled(&state));
+    assert_eq!(
+        scribe_subtitle_unavailable_message(&state),
+        Some("Scribe subtitles are coming soon")
+    );
+}
+
+#[test]
+fn scribe_generate_subtitles_can_queue_for_future_supported_backend() {
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(PathBuf::from("/media/Movie.mkv")),
+        scribe_subtitles: okp_core::scribe_subtitles::ScribeSubtitleState::new(
+            okp_core::scribe_subtitles::ScribeSubtitleConfig {
+                backend: okp_core::scribe_subtitles::ScribeSubtitleBackend::Supported {
+                    endpoint: "https://scribe.example.test".to_owned(),
+                },
+            },
+        ),
+        ..PlayerState::default()
+    }));
+
+    assert!(scribe_subtitle_action_enabled(&state.borrow()));
+    assert!(begin_scribe_subtitle_generation(&state));
+    assert_eq!(
+        scribe_subtitle_action_label(&state.borrow().scribe_subtitles),
+        "Generating subtitles... queued"
+    );
+    assert!(scribe_subtitle_generation_active(
+        &state.borrow().scribe_subtitles
+    ));
+}
+
+#[test]
 fn settings_initial_page_env_accepts_known_pages_only() {
     assert_eq!(normalized_settings_page(" Shortcuts "), Some("shortcuts"));
     assert_eq!(normalized_settings_page("about"), Some("about"));

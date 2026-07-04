@@ -16,6 +16,7 @@ use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
 use okp_core::playlist::{Playlist, PlaylistItem, QueueInsertMode, RepeatMode};
+use okp_core::scribe_subtitles::ScribeSubtitleState;
 use okp_core::shortcuts::{
     self, ShortcutAction, ShortcutBinding, ShortcutChord, ShortcutModifiers, ShortcutSlot,
 };
@@ -155,6 +156,7 @@ struct PlayerState {
     history: history::HistoryStore,
     settings: settings::SettingsStore,
     linux_update_status: LinuxUpdateStatus,
+    scribe_subtitles: ScribeSubtitleState,
     pending_audio_device_restore: Option<PendingAudioDeviceRestore>,
     render_target_size: Option<okp_mpv::RenderTargetSize>,
     video_transform: VideoTransformState,

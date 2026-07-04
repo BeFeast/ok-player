@@ -60,6 +60,30 @@ pub(crate) fn settings_subtitles_page(
     let add_state = Rc::clone(&state);
     add_button.connect_clicked(move |_| open_subtitle_dialog(&add_parent, Rc::clone(&add_state)));
     actions.append(&add_button);
+
+    let (generate_label, generate_sensitive, generate_tooltip) = {
+        let state_ref = state.borrow();
+        (
+            scribe_subtitle_action_label(&state_ref.scribe_subtitles).to_owned(),
+            scribe_subtitle_action_enabled(&state_ref),
+            scribe_subtitle_unavailable_message(&state_ref).map(str::to_owned),
+        )
+    };
+    let generate_button = gtk::Button::with_label(&generate_label);
+    generate_button.add_css_class("okp-settings-button");
+    generate_button.set_sensitive(generate_sensitive);
+    generate_button.set_tooltip_text(generate_tooltip.as_deref());
+    let generate_state = Rc::clone(&state);
+    let generate_toast = Rc::clone(&status_toast);
+    generate_button.connect_clicked(move |_| {
+        if begin_scribe_subtitle_generation(&generate_state) {
+            generate_toast.show("Subtitle generation queued");
+        } else if let Some(message) = scribe_subtitle_unavailable_message(&generate_state.borrow())
+        {
+            generate_toast.show(message);
+        }
+    });
+    actions.append(&generate_button);
     summary.append(&actions);
     page.append(&summary);
 

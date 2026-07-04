@@ -17,6 +17,7 @@ pub mod nfo_metadata;
 pub mod player;
 pub mod playlist;
 pub mod recents_shelf;
+pub mod scribe_subtitles;
 pub mod settings;
 pub mod sha256sums;
 pub mod shortcuts;
