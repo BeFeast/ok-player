@@ -1835,3 +1835,277 @@ fn deb_self_install_timeout_uses_positive_override_only() {
         DEB_SELF_INSTALL_TIMEOUT
     );
 }
+
+/// Build a `PlayerState` whose only interesting field is the load-state surface, so the
+/// network/live-stream transition tests read clearly without the full mpv/playlist setup.
+fn load_state_fixture(load_state: network_media::MediaLoadState) -> Rc<RefCell<PlayerState>> {
+    Rc::new(RefCell::new(PlayerState {
+        media_load_state: load_state,
+        ..PlayerState::default()
+    }))
+}
+
+#[test]
+fn format_duration_unknown_shows_live_sentinel_in_shell() {
+    // The shell wires the duration total through the core helper, so a stream that
+    // never reports a duration renders the live `--:--` instead of the broken `00:00`.
+    assert_eq!(time_code::format_duration(None), "--:--");
+    assert_eq!(time_code::format_duration(Some(0.0)), "--:--");
+    assert_eq!(time_code::format_duration(Some(f64::NAN)), "--:--");
+    assert_eq!(time_code::format_duration(Some(90.0)), "01:30");
+}
+
+#[test]
+fn is_live_or_unknown_duration_only_for_urls_without_duration() {
+    // The shell decides progress-only / live readout from this predicate (pure core).
+    assert!(network_media::is_live_or_unknown_duration(true, None));
+    assert!(!network_media::is_live_or_unknown_duration(
+        true,
+        Some(120.0)
+    ));
+    assert!(!network_media::is_live_or_unknown_duration(false, None));
+}
+
+#[test]
+fn load_url_transitions_to_loading_and_records_retry_url() {
+    // Handing a URL to the engine flips the surface to Loading and remembers the URL
+    // for the failure dialog's Retry action.
+    let state = Rc::new(RefCell::new(PlayerState::default()));
+    remember_loaded_url_with_playlist(
+        &state,
+        "https://example.com/live.m3u8".to_owned(),
+        vec![url_item("https://example.com/live.m3u8")],
+    );
+
+    let state = state.borrow();
+    assert_eq!(
+        state.media_load_state,
+        network_media::MediaLoadState::Loading
+    );
+    assert_eq!(
+        state.last_load_url.as_deref(),
+        Some("https://example.com/live.m3u8")
+    );
+    assert!(state.last_load_error.is_none());
+    assert!(!state.load_failure_presented);
+}
+
+#[test]
+fn set_load_failure_transitions_and_rearms_dialog() {
+    let state = Rc::new(RefCell::new(PlayerState::default()));
+    set_load_failure(
+        &state,
+        "https://example.com/missing.mp4".to_owned(),
+        "libmpv error 404".to_owned(),
+    );
+
+    let state = state.borrow();
+    assert_eq!(
+        state.media_load_state,
+        network_media::MediaLoadState::Failed
+    );
+    assert_eq!(
+        state.last_load_url.as_deref(),
+        Some("https://example.com/missing.mp4")
+    );
+    assert_eq!(state.last_load_error.as_deref(), Some("libmpv error 404"));
+    assert!(!state.load_failure_presented);
+}
+
+#[test]
+fn set_local_load_failure_does_not_arm_url_dialog() {
+    // A local-file failure transitions the surface (the overlay line) but leaves
+    // last_load_url None, so the URL-only failure dialog never pops for it.
+    let state = Rc::new(RefCell::new(PlayerState::default()));
+    set_local_load_failure(&state, "libmpv error 7".to_owned());
+
+    let state = state.borrow();
+    assert_eq!(
+        state.media_load_state,
+        network_media::MediaLoadState::Failed
+    );
+    assert!(state.last_load_url.is_none());
+    assert_eq!(state.last_load_error.as_deref(), Some("libmpv error 7"));
+    assert!(!state.load_failure_presented);
+}
+
+#[test]
+fn pending_load_failure_yields_url_once_then_guards() {
+    // The first poll after a failure hands the dialog the URL + reason; subsequent
+    // polls see the presented guard and do nothing, so the dialog pops once.
+    let state = load_state_fixture(network_media::MediaLoadState::Failed);
+    set_load_failure(
+        &state,
+        "https://example.com/live.m3u8".to_owned(),
+        "libmpv error 412".to_owned(),
+    );
+
+    let first = pending_load_failure(&state);
+    assert_eq!(first.as_ref().unwrap().0, "https://example.com/live.m3u8");
+    assert_eq!(first.as_ref().unwrap().1, "libmpv error 412");
+
+    // The guard is now set — a second poll within the same failure yields nothing.
+    assert!(pending_load_failure(&state).is_none());
+}
+
+#[test]
+fn pending_load_failure_skips_idle_loading_and_playing() {
+    for state in [
+        load_state_fixture(network_media::MediaLoadState::Idle),
+        load_state_fixture(network_media::MediaLoadState::Loading),
+        load_state_fixture(network_media::MediaLoadState::Playing),
+    ] {
+        assert!(
+            pending_load_failure(&state).is_none(),
+            "non-failure should not pop"
+        );
+    }
+}
+
+#[test]
+fn set_local_load_failure_clears_stale_url_from_a_previous_load() {
+    // A URL loaded earlier arms `last_load_url` for its Retry action. If a later
+    // local-file `load_path` returns `Err`, the local failure must not leave the
+    // old URL in place — otherwise the next poll would treat the local failure as
+    // a URL failure and open Retry / Open another for the previous stream.
+    let state = Rc::new(RefCell::new(PlayerState::default()));
+    set_load_failure(
+        &state,
+        "https://example.com/live.m3u8".to_owned(),
+        "libmpv error 412".to_owned(),
+    );
+    assert!(state.borrow().last_load_url.is_some());
+
+    set_local_load_failure(&state, "libmpv error 7".to_owned());
+
+    let state = state.borrow();
+    assert_eq!(
+        state.media_load_state,
+        network_media::MediaLoadState::Failed
+    );
+    assert!(state.last_load_url.is_none());
+    assert_eq!(state.last_load_error.as_deref(), Some("libmpv error 7"));
+}
+
+#[test]
+fn apply_endfile_error_marks_current_source_failed() {
+    // A fresh EndFile::Error for the current URL transitions the surface to Failed
+    // and stores the short reason; the URL failure dialog pops once from the poll.
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_url: Some("https://example.com/live.m3u8".to_owned()),
+        media_load_state: network_media::MediaLoadState::Loading,
+        ..PlayerState::default()
+    }));
+
+    apply_endfile_error(&state, 412, Some("https://example.com/live.m3u8"));
+
+    let state = state.borrow();
+    assert_eq!(
+        state.media_load_state,
+        network_media::MediaLoadState::Failed
+    );
+    assert_eq!(state.last_load_error.as_deref(), Some("libmpv error 412"));
+    assert!(!state.load_failure_presented);
+}
+
+#[test]
+fn apply_endfile_error_drops_stale_error_for_a_superseded_source() {
+    // URL A fails, then the user starts URL B before the next poll drains the
+    // queue. A's stale EndFile::Error carries A's path; the current source is B,
+    // so the error must not fail B or arm the dialog with A's reason.
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_url: Some("https://example.com/b.m3u8".to_owned()),
+        media_load_state: network_media::MediaLoadState::Loading,
+        last_load_url: Some("https://example.com/b.m3u8".to_owned()),
+        ..PlayerState::default()
+    }));
+
+    apply_endfile_error(&state, 412, Some("https://example.com/a.m3u8"));
+
+    let state = state.borrow();
+    // The surface stays Loading for B; B's retry URL and the presented guard are
+    // untouched, so B's own lifecycle (FileLoaded / its own EndFile) resolves it.
+    assert_eq!(
+        state.media_load_state,
+        network_media::MediaLoadState::Loading
+    );
+    assert!(state.last_load_error.is_none());
+    assert_eq!(
+        state.last_load_url.as_deref(),
+        Some("https://example.com/b.m3u8")
+    );
+    assert!(!state.load_failure_presented);
+}
+
+#[test]
+fn apply_endfile_error_falls_back_to_applying_when_path_is_missing() {
+    // A missing path tag (mpv reported nothing to compare) falls back to applying
+    // so the helper never under-reports a genuine failure just because the tag was
+    // missing.
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_url: Some("https://example.com/live.m3u8".to_owned()),
+        media_load_state: network_media::MediaLoadState::Loading,
+        ..PlayerState::default()
+    }));
+
+    apply_endfile_error(&state, 412, None);
+
+    let state = state.borrow();
+    assert_eq!(
+        state.media_load_state,
+        network_media::MediaLoadState::Failed
+    );
+    assert_eq!(state.last_load_error.as_deref(), Some("libmpv error 412"));
+}
+
+#[test]
+fn pending_load_failure_skips_local_failures_without_url() {
+    // A local-file failure has no retry URL, so the URL-only dialog does not pop.
+    let state = load_state_fixture(network_media::MediaLoadState::Failed);
+    set_local_load_failure(&state, "libmpv error 7".to_owned());
+    assert!(pending_load_failure(&state).is_none());
+}
+
+#[test]
+fn clear_loaded_media_resets_load_state_surface() {
+    let state = Rc::new(RefCell::new(PlayerState::default()));
+    set_load_failure(
+        &state,
+        "https://example.com/live.m3u8".to_owned(),
+        "libmpv error 412".to_owned(),
+    );
+
+    clear_loaded_media_state(&state);
+
+    let state = state.borrow();
+    assert_eq!(state.media_load_state, network_media::MediaLoadState::Idle);
+    assert!(state.last_load_url.is_none());
+    assert!(state.last_load_error.is_none());
+    assert!(!state.load_failure_presented);
+}
+
+#[test]
+fn load_failure_actions_offer_retry_open_another_and_copy_details() {
+    // The ordered action row the failure dialog renders is the contract from the
+    // core model — Retry first, Open another second, Copy details last.
+    let labels: Vec<&'static str> = network_media::LOAD_FAILURE_ACTIONS
+        .iter()
+        .copied()
+        .map(network_media::LoadFailureAction::label)
+        .collect();
+    assert_eq!(labels, ["Retry", "Open another", "Copy details"]);
+}
+
+#[test]
+fn failure_detail_keeps_url_and_reason_out_of_primary_logs() {
+    // The Copy details action writes a short summary, never raw internal logs.
+    assert_eq!(
+        network_media::failure_detail("https://example.com/live.m3u8", "libmpv error 412"),
+        "OK Player could not open the stream.\nURL: https://example.com/live.m3u8\nReason: libmpv error 412"
+    );
+    // An empty reason is omitted so a transient failure still copies a clean line.
+    assert_eq!(
+        network_media::failure_detail("https://example.com/live.m3u8", ""),
+        "OK Player could not open the stream.\nURL: https://example.com/live.m3u8"
+    );
+}

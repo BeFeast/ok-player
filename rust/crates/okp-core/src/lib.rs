@@ -12,6 +12,7 @@ pub mod m3u;
 pub mod media_formats;
 pub mod mpv_conf_text;
 pub mod natural_compare;
+pub mod network_media;
 pub mod network_path;
 pub mod nfo_metadata;
 pub mod ok_player_uri;

@@ -21,12 +21,13 @@ use okp_core::shortcuts::{
 };
 use okp_core::update_selection::{self, DebFeed, DebUpdate, SHA256SUMS_ASSET};
 use okp_core::{
-    AppIdentity, chapter_math, lrc, m3u, media_formats, natural_compare, ok_player_uri,
-    seek_readout, sha256sums, subtitle_delay, time_code,
+    AppIdentity, chapter_math, lrc, m3u, media_formats, natural_compare, network_media,
+    ok_player_uri, seek_readout, sha256sums, subtitle_delay, time_code,
 };
 use okp_mpv::{
-    AbLoopState, AudioDevice, Chapter, InfoRow, InfoSection, InfoTrack, MediaInfo, Mpv, MpvEvent,
-    PlaybackState, Track, TrackKind, current_render_target_size, resolve_render_target_size,
+    AbLoopState, AudioDevice, Chapter, EndFileReason, InfoRow, InfoSection, InfoTrack, MediaInfo,
+    Mpv, MpvEvent, PlaybackState, Track, TrackKind, current_render_target_size,
+    resolve_render_target_size,
 };
 use velopack::{
     UpdateCheck, UpdateInfo, UpdateManager, UpdateOptions, VelopackApp, VelopackAsset,
@@ -167,6 +168,19 @@ struct PlayerState {
     /// accumulate their readouts instead of re-projecting the same stale
     /// snapshot before mpv's pump republishes `time_pos`.
     pending_nav: Option<seek_readout::PendingNav>,
+    /// The transport-surface state for the loaded source — the shared model the
+    /// loading, buffering, and error surfaces read from. Pure core (see
+    /// [`okp_core::network_media`]); the shell only transitions and renders it.
+    media_load_state: network_media::MediaLoadState,
+    /// The URL most recently handed to the engine, kept so the failure surface's
+    /// Retry action can replay the same source. Cleared on close / new load.
+    last_load_url: Option<String>,
+    /// The short, copyable reason for the most recent load failure — surfaced
+    /// through the failure dialog's Copy details action instead of raw logs.
+    last_load_error: Option<String>,
+    /// Guards the failure dialog so one failure pops it once, not every poll tick
+    /// until the next transition. Reset to `false` on a new load / clear.
+    load_failure_presented: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -743,6 +757,7 @@ struct StatePollContext {
     chrome: Rc<ChromeVisibility>,
     empty_surface: EmptySurface,
     lyrics_surface: LyricsSurface,
+    media_state_overlay: MediaStateOverlay,
     mpris_snapshot: Arc<Mutex<MprisSnapshot>>,
     mpris_signals: mpsc::Sender<MprisSignal>,
 }
@@ -849,6 +864,56 @@ impl EmptySurface {
         } else {
             self.panel.remove_css_class("is-drop-target");
         }
+    }
+}
+
+/// The loading / buffering / error overlay for a network source — a centered status line
+/// revealed over the (black) video plane while a stream opens or after it fails. It is
+/// the visual counterpart of [`network_media::MediaLoadState`]: shown for `Loading` and
+/// `Failed`, hidden for `Idle` and `Playing` (a frame is up, so the video speaks for
+/// itself). Non-interactive (`can_target = false`) so it never blocks the controls
+/// underneath while it is up.
+#[derive(Clone)]
+struct MediaStateOverlay {
+    revealer: gtk::Revealer,
+    label: gtk::Label,
+}
+
+impl MediaStateOverlay {
+    fn new() -> Self {
+        let label = gtk::Label::new(Some(""));
+        label.add_css_class("okp-media-state-text");
+        label.set_justify(gtk::Justification::Center);
+        label.set_wrap(true);
+        label.set_max_width_chars(40);
+        label.set_halign(gtk::Align::Center);
+        label.set_valign(gtk::Align::Center);
+
+        let revealer = gtk::Revealer::new();
+        revealer.add_css_class("okp-media-state-overlay");
+        revealer.set_halign(gtk::Align::Fill);
+        revealer.set_valign(gtk::Align::Fill);
+        revealer.set_transition_duration(180);
+        revealer.set_transition_type(gtk::RevealerTransitionType::Crossfade);
+        // The overlay never captures pointer events: the transport chrome stays
+        // clickable while the loading line is up.
+        revealer.set_can_target(false);
+        revealer.set_reveal_child(false);
+        revealer.set_child(Some(&label));
+
+        Self { revealer, label }
+    }
+
+    fn widget(&self) -> &gtk::Revealer {
+        &self.revealer
+    }
+
+    /// Reveal the overlay with `text`, or hide it for `None`. The text is set
+    /// before reveal so a transition never shows stale copy from the previous
+    /// source.
+    fn set_status(&self, text: Option<&str>) {
+        self.label.set_text(text.unwrap_or(""));
+        self.revealer.set_reveal_child(text.is_some());
     }
 }
 

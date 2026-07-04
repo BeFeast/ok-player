@@ -271,12 +271,14 @@ pub(crate) fn connect_state_poll(
     context: StatePollContext,
 ) {
     let window = window.clone();
+    let status_toast = controls.status_toast.clone();
     let StatePollContext {
         updating_seek,
         updating_volume,
         chrome,
         empty_surface,
         lyrics_surface,
+        media_state_overlay,
         mpris_snapshot,
         mpris_signals,
     } = context;
@@ -357,9 +359,20 @@ pub(crate) fn connect_state_poll(
             controls
                 .elapsed_label
                 .set_text(&time_code::format_clock(time_pos));
+            // Unknown duration shows the live `--:--` sentinel only for a network source
+            // whose duration has not resolved — a local file that has not reported a
+            // duration yet is just *loading*, so it renders `00:00` (PRD §3 Live/URL
+            // unknown-duration state). The gating lives in the pure core helper
+            // `format_duration_total` so the shell never owns the live classification.
+            // The seek range still clamps to 0 so the bar stays progress-only /
+            // disabled rather than running broken timeline math.
+            let is_url = state.borrow().current_url.is_some();
             controls
                 .duration_label
-                .set_text(&time_code::format_clock(duration));
+                .set_text(&network_media::format_duration_total(
+                    is_url,
+                    playback.duration,
+                ));
         } else {
             chrome.set_auto_hide_enabled(false);
             controls.play_button.set_sensitive(has_media);
@@ -386,8 +399,61 @@ pub(crate) fn connect_state_poll(
             controls.duration_label.set_text("00:00");
         }
 
+        // Project the shared load-state model onto the loading / error surface and pop the
+        // failure dialog once per failure. The pure model lives in `okp_core::network_media`;
+        // this only renders it so the shell never owns the state machine.
+        update_media_state_surface(&state, &media_state_overlay);
+        if let Some((url, reason)) = pending_load_failure(&state) {
+            open_load_failure_dialog(
+                &window,
+                Rc::clone(&state),
+                Rc::clone(&status_toast),
+                url,
+                reason,
+            );
+        }
+
         glib::ControlFlow::Continue
     });
+}
+
+/// Reveal the loading / buffering / error overlay for the current [`MediaLoadState`].
+/// `Loading` shows a buffering line over the black video plane; `Failed` shows the
+/// short failure line; `Idle` and `Playing` hide it (nothing loaded, or a frame is
+/// up and the video speaks for itself). The text never duplicates raw internal
+/// logs — the failure detail is kept for the Copy details action in the dialog.
+fn update_media_state_surface(state: &Rc<RefCell<PlayerState>>, overlay: &MediaStateOverlay) {
+    let (load_state, has_media) = {
+        let state = state.borrow();
+        (state.media_load_state, has_loaded_media_state(&state))
+    };
+    // The overlay reads over the (black) video plane, so it only shows when a source is
+    // actually loaded — an immediate load error (nothing ever loaded) is handled by
+    // the failure dialog alone, not a status line over the welcome surface.
+    let text = match load_state {
+        network_media::MediaLoadState::Loading if has_media => Some("Loading stream..."),
+        network_media::MediaLoadState::Failed if has_media => Some("Couldn't open stream"),
+        _ => None,
+    };
+    overlay.set_status(text);
+}
+
+/// If a URL load has failed and its failure dialog has not yet been shown, mark it
+/// shown and return the URL plus the short reason for the dialog to render. Returns
+/// `None` for an Idle / Loading / Playing state, or a local-file failure (the
+/// Retry/Open another actions are URL-only per the issue), so the dialog only pops
+/// for a failed network source.
+pub(crate) fn pending_load_failure(state: &Rc<RefCell<PlayerState>>) -> Option<(String, String)> {
+    let mut state = state.borrow_mut();
+    if state.media_load_state != network_media::MediaLoadState::Failed
+        || state.load_failure_presented
+    {
+        return None;
+    }
+    let url = state.last_load_url.clone()?;
+    let reason = state.last_load_error.clone().unwrap_or_default();
+    state.load_failure_presented = true;
+    Some((url, reason))
 }
 
 pub(crate) fn connect_video_clicks(

@@ -491,3 +491,41 @@ marshalling is the only thing the seam adds; no domain logic lives there (issue 
   ignored, and a stray `Paused` property echo reconciles the lifecycle only while playback is
   active (`Playing`/`Paused`) — so out-of-order engine wake-ups cannot manufacture a phantom
   transition. The `Ended` state keeps the media context current until the next `Open`/`Close`.
+
+## Network URL and live-stream state (Linux, PRD §3)
+
+Direct `http(s)://` playback plus polished loading, buffering, unknown-duration, and error
+states are a Linux-shell concern for now (issue #208); the portable model they read from is
+pure core so the Windows shell renders the same model once its port lands.
+
+- **Load-state model (`okp_core::network_media`).** `MediaLoadState` (`Idle` / `Loading` /
+  `Playing` / `Failed`) is the single source of truth the loading, buffering, and error
+  surfaces read from. The shell only *transitions* it — on `load_url`/`load_file`
+  (`Loading`), the engine's `FileLoaded` lifecycle event (`Playing`), and a reported failure
+  (`EndFile::Error` or a load command returning `Err` → `Failed`). `classify_load_state`
+  encodes the priority (a failure wins over a stale `FileLoaded` flag); the shell never owns
+  that state machine.
+- **Live / unknown-duration sentinel.** `network_media::format_duration_total(is_url,
+  duration)` renders the padded clock when the duration is known and the `--:--` sentinel
+  only for a URL whose duration has not resolved — the Live/URL unknown-duration readout,
+  not the broken `00:00` total. `is_live_or_unknown_duration(is_url, duration)` gates the
+  live classification: only a URL whose duration has not resolved reads as live, since a
+  local file with no observed duration is just *loading* and renders `00:00`. The shell's
+  seek range still clamps to 0 so the bar stays progress-only / disabled rather than running
+  broken timeline math. (`time_code::format_duration` remains the ungated core helper that
+  always uses the sentinel for an unknown duration.)
+- **Failure presentation (`okp_core::network_media`).** `LoadFailureAction`
+  (`Retry` / `OpenAnother` / `CopyDetails`, in that order via `LOAD_FAILURE_ACTIONS`) is the
+  contract the shell's failure dialog renders. `failure_detail(url, reason)` builds the
+  copyable summary — a short URL + reason line, never raw internal logs, so the primary UI
+  never dumps engine trace into the clipboard. The Linux failure dialog is URL-only: a
+  local-file error still transitions the surface (the overlay line) but does not arm the
+  Retry/Open-another dialog (`last_load_url` is cleared, so a previous URL's stale value
+  can't arm the dialog for a later local-file failure).
+- **Stale `EndFile::Error`.** A queued `EndFile::Error` can outlive the source it belongs to
+  (URL A fails, then the user starts URL B before the next poll drains the queue). The pump
+  snapshots the ended source's path/URL in `MpvEvent::EndFile { path }` (read from mpv's
+  `path` on the reader thread), and the shell's `apply_endfile_error` drops the error when
+  that path no longer matches the current source, so A's stale error can't fail B or arm the
+  dialog with A's reason. A missing path tag falls back to applying so a genuine failure is
+  never under-reported.

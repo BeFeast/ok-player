@@ -39,6 +39,20 @@ pub fn format(seconds: f64) -> String {
     }
 }
 
+/// Formats the on-screen **total** readout for an optional duration: the padded
+/// clock when the duration is known, or `--:--` when it is absent or not yet
+/// resolved — the live / unknown-duration sentinel (PRD §3 transport: Live/URL
+/// unknown-duration state). A non-finite or non-positive duration is treated as
+/// unknown, matching [`format_clock`]'s contract, so a stream that never reports
+/// a duration shows `--:--` instead of the broken `00:00` total. Pure core so the
+/// Linux and Windows shells render the same sentinel.
+pub fn format_duration(seconds: Option<f64>) -> String {
+    match seconds {
+        Some(value) if value.is_finite() && value > 0.0 => format_clock(value),
+        _ => "--:--".to_owned(),
+    }
+}
+
 /// Formats seconds as the on-screen clock: zero-padded `MM:SS`, or `HH:MM:SS`
 /// once the hour is reached. Non-finite and non-positive inputs render `00:00`.
 /// Fractional seconds truncate (never round): the clock shows second N until
@@ -204,5 +218,26 @@ mod tests {
         let seconds = parse(Some("1:23:45")).expect("valid timecode");
 
         assert_eq!(format(seconds), "1:23:45");
+    }
+
+    #[test]
+    fn format_duration_unknown_is_the_live_sentinel() {
+        // A stream that never reports a duration (or hasn't resolved one yet)
+        // shows the live `--:--` total instead of the broken `00:00`.
+        for seconds in [
+            None,
+            Some(0.0),
+            Some(-5.0),
+            Some(f64::NAN),
+            Some(f64::INFINITY),
+        ] {
+            assert_eq!(format_duration(seconds), "--:--", "{seconds:?}");
+        }
+    }
+
+    #[test]
+    fn format_duration_known_renders_the_padded_clock() {
+        assert_eq!(format_duration(Some(90.0)), "01:30");
+        assert_eq!(format_duration(Some(5025.0)), "01:23:45");
     }
 }

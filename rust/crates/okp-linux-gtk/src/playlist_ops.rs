@@ -2,6 +2,66 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::*;
 
+/// Record a network-source load failure: transition the transport-surface model to
+/// `Failed`, remember the URL for Retry, and store the short copyable reason. The
+/// failure dialog is re-armed (`load_failure_presented = false`) so it pops once for
+/// this failure.
+pub(crate) fn set_load_failure(state: &Rc<RefCell<PlayerState>>, url: String, reason: String) {
+    let mut state = state.borrow_mut();
+    state.media_load_state = network_media::MediaLoadState::Failed;
+    state.last_load_url = Some(url);
+    state.last_load_error = Some(reason);
+    state.load_failure_presented = false;
+}
+
+/// Record a local-file load failure. The Retry / Open another actions are URL-only, so a
+/// local failure only transitions the surface (the overlay line) without arming the
+/// URL failure dialog — `last_load_url` is cleared so a *previous* URL's stale value
+/// can't arm the URL failure dialog for this local failure (a URL loaded earlier would
+/// otherwise be retried / reopened from a local-file error), and [`pending_load_failure`]
+/// never fires for it.
+pub(crate) fn set_local_load_failure(state: &Rc<RefCell<PlayerState>>, reason: String) {
+    let mut state = state.borrow_mut();
+    state.media_load_state = network_media::MediaLoadState::Failed;
+    state.last_load_url = None;
+    state.last_load_error = Some(reason);
+    state.load_failure_presented = false;
+}
+
+/// Apply an `EndFile::Error` the engine fired asynchronously (a load command returned
+/// `Ok`, then mpv rejected the source later — e.g. a 404 stream). The pump snapshots
+/// the ended source's path/URL in the event; when it no longer matches the current
+/// source (URL A failed, then the user started URL B before the next poll drained the
+/// queue), the error belongs to A and must not fail B or arm the dialog with A's
+/// reason. A `None` ended path falls back to applying so a missing tag never
+/// under-reports a genuine failure.
+pub(crate) fn apply_endfile_error(
+    state: &Rc<RefCell<PlayerState>>,
+    error: std::ffi::c_int,
+    ended_path: Option<&str>,
+) {
+    eprintln!("libmpv ended the source with error {error}");
+    let current_source = {
+        let state = state.borrow();
+        state
+            .current_url
+            .clone()
+            .or_else(|| state.current_file.as_ref().map(|p| p.display().to_string()))
+    };
+    let stale = ended_path.is_some_and(|ended| current_source.as_deref() != Some(ended));
+    if stale {
+        eprintln!(
+            "ignoring stale EndFile::Error for a superseded source ({})",
+            ended_path.unwrap_or_default()
+        );
+        return;
+    }
+    let mut state = state.borrow_mut();
+    state.media_load_state = network_media::MediaLoadState::Failed;
+    state.last_load_error = Some(format!("libmpv error {error}"));
+    state.load_failure_presented = false;
+}
+
 pub(crate) fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
     let mut state = state.borrow_mut();
     if let Some(mpv) = state.mpv.as_ref() {
@@ -18,6 +78,11 @@ pub(crate) fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
     state.pending_preferences = None;
     state.video_transform.reset();
     state.ab_loop = AbLoopState::default();
+    // Reset the transport-surface model: nothing is loading or failed anymore.
+    state.media_load_state = network_media::MediaLoadState::Idle;
+    state.last_load_url = None;
+    state.last_load_error = None;
+    state.load_failure_presented = false;
 }
 
 pub(crate) fn load_media_path(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
@@ -38,7 +103,10 @@ pub(crate) fn load_media_url(state: &Rc<RefCell<PlayerState>>, url: String) {
 
     match result {
         Some(Ok(())) => remember_loaded_url(state, url),
-        Some(Err(error)) => eprintln!("Failed to load URL '{url}': {error}"),
+        Some(Err(error)) => {
+            eprintln!("Failed to load URL '{url}': {error}");
+            set_load_failure(state, url, format!("libmpv error {error}"));
+        }
         None => remember_loaded_url(state, url),
     }
 }
@@ -62,7 +130,10 @@ pub(crate) fn load_media_path_internal(
 
     match result {
         Some(Ok(())) => remember_loaded_media(state, path),
-        Some(Err(error)) => eprintln!("Failed to load media '{}': {error}", path.display()),
+        Some(Err(error)) => {
+            eprintln!("Failed to load media '{}': {error}", path.display());
+            set_local_load_failure(state, format!("libmpv error {error}"));
+        }
         None => remember_loaded_media(state, path),
     }
 }
@@ -97,6 +168,7 @@ pub(crate) fn load_media_path_with_playlist(
         }
         Some(Err(error)) => {
             eprintln!("Failed to load media '{}': {error}", path.display());
+            set_local_load_failure(state, format!("libmpv error {error}"));
             false
         }
         None => {
@@ -151,6 +223,12 @@ pub(crate) fn remember_loaded_media_with_playlist(
     state.pending_subtitles.clear();
     state.pending_resume = resume.map(|position| (resume_path, position));
     state.pending_preferences = preferences.map(|preferences| (preferences_path, preferences));
+    // A local file is also loading until `FileLoaded` fires (near-instant on a local
+    // disk, but the surface is shared with network sources for consistency).
+    state.media_load_state = network_media::MediaLoadState::Loading;
+    state.last_load_url = None;
+    state.last_load_error = None;
+    state.load_failure_presented = false;
 }
 
 pub(crate) fn remember_loaded_url(state: &Rc<RefCell<PlayerState>>, url: String) {
@@ -182,6 +260,7 @@ pub(crate) fn load_media_url_with_playlist(
         }
         Some(Err(error)) => {
             eprintln!("Failed to load URL '{url}': {error}");
+            set_load_failure(state, url, format!("libmpv error {error}"));
             false
         }
         None => {
@@ -226,6 +305,12 @@ pub(crate) fn remember_loaded_url_with_playlist(
     state.pending_subtitles.clear();
     state.pending_resume = None;
     state.pending_preferences = None;
+    // A network source is now handed to the engine — show the loading surface until
+    // the `FileLoaded` lifecycle event fires (or a failure is reported).
+    state.media_load_state = network_media::MediaLoadState::Loading;
+    state.last_load_url = state.current_url.clone();
+    state.last_load_error = None;
+    state.load_failure_presented = false;
 }
 
 pub(crate) fn load_playlist_item_with_playlist(

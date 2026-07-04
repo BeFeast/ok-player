@@ -338,7 +338,13 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
                 } else {
                     EndFileReason::Unknown(event.error)
                 };
-                lifecycle.push(MpvEvent::EndFile { reason });
+                // Snapshot the ended source's path/URL while the pump is on the reader
+                // thread (a blocking mpv read here is allowed). The shell compares it to
+                // the current source when draining, so a stale `EndFile::Error` whose
+                // source was superseded between the engine firing the event and the next
+                // poll is dropped instead of failing the new source.
+                let path = shared.reader.path();
+                lifecycle.push(MpvEvent::EndFile { reason, path });
             }
             ffi::MPV_EVENT_PROPERTY_CHANGE => {
                 if let Some(property) =

@@ -259,6 +259,74 @@ pub(crate) fn command_dialog_title(title: &str) -> gtk::Label {
     label
 }
 
+/// The failure surface for a network source that would not open (PRD §3 loading / error
+/// states). A short, copyable summary is shown — never raw internal logs — alongside the
+/// Retry / Open another / Copy details actions the model in [`okp_core::network_media`]
+/// exposes. Retry replays the same URL; Open another reopens the URL dialog; Copy details
+/// writes the summary to the clipboard.
+pub(crate) fn open_load_failure_dialog(
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+    url: String,
+    reason: String,
+) {
+    let dialog = gtk::Dialog::builder()
+        .title("Couldn't open stream")
+        .transient_for(parent)
+        .modal(true)
+        .build();
+    dialog.set_decorated(false);
+    dialog.add_css_class("okp-command-dialog");
+    dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+    dialog.add_button("Copy details", gtk::ResponseType::Other(1));
+    dialog.add_button("Open another", gtk::ResponseType::Other(2));
+    dialog.add_button("Retry", gtk::ResponseType::Accept);
+    dialog.set_default_response(gtk::ResponseType::Accept);
+
+    let content = dialog.content_area();
+    content.set_spacing(8);
+    content.set_margin_top(12);
+    content.set_margin_end(12);
+    content.set_margin_bottom(12);
+    content.set_margin_start(12);
+    content.append(&command_dialog_title("Couldn't open stream"));
+
+    let summary = gtk::Label::new(Some(&network_media::failure_detail(&url, &reason)));
+    summary.add_css_class("okp-info-label");
+    summary.set_xalign(0.0);
+    summary.set_wrap(true);
+    summary.set_max_width_chars(52);
+    summary.add_css_class("okp-load-failure-detail");
+    content.append(&summary);
+
+    let retry_state = Rc::clone(&state);
+    let retry_url = url.clone();
+    let copy_detail = network_media::failure_detail(&url, &reason);
+    let copy_toast = Rc::clone(&status_toast);
+    let open_parent = parent.clone();
+    let open_state = Rc::clone(&state);
+    let open_toast = Rc::clone(&status_toast);
+    dialog.connect_response(move |dialog, response| {
+        match response {
+            gtk::ResponseType::Accept => load_media_url(&retry_state, retry_url.clone()),
+            gtk::ResponseType::Other(2) => {
+                open_url_dialog(&open_parent, Rc::clone(&open_state), Rc::clone(&open_toast))
+            }
+            gtk::ResponseType::Other(1) => {
+                if let Some(display) = gdk::Display::default() {
+                    display.clipboard().set_text(&copy_detail);
+                    copy_toast.show("Copied details");
+                }
+            }
+            _ => {}
+        }
+        dialog.close();
+    });
+
+    dialog.present();
+}
+
 pub(crate) fn captionless_transient_window(
     parent: &gtk::ApplicationWindow,
     title: &str,
