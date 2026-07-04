@@ -105,7 +105,6 @@ pub(crate) fn install_css() {
         }
 
         .okp-empty-panel {
-            min-width: 360px;
             padding: 40px 44px 34px 44px;
             border-radius: 18px;
             border: 1px solid rgba(255, 255, 255, 0.09);
