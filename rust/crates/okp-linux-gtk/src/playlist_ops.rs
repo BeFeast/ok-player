@@ -637,6 +637,25 @@ pub(crate) fn apply_playback_preferences(
 }
 
 pub(crate) fn save_current_preferences(state: &Rc<RefCell<PlayerState>>) {
+    save_current_preferences_impl(state, None);
+}
+
+/// Save preferences right after applying an audio delay, persisting the value
+/// that was just set instead of re-reading `observed_audio_delay()`. The async
+/// pump snapshot may still report the previous delay, so re-reading it here
+/// could persist a stale value — a reset to `0` would otherwise re-save the old
+/// `+500 ms`.
+pub(crate) fn save_current_preferences_with_audio_delay(
+    state: &Rc<RefCell<PlayerState>>,
+    audio_delay: f64,
+) {
+    save_current_preferences_impl(state, Some(audio_delay));
+}
+
+fn save_current_preferences_impl(
+    state: &Rc<RefCell<PlayerState>>,
+    audio_delay_override: Option<f64>,
+) {
     let snapshot = {
         let state = state.borrow();
         if state.private_session {
@@ -645,9 +664,13 @@ pub(crate) fn save_current_preferences(state: &Rc<RefCell<PlayerState>>) {
         let Some(path) = state.current_file.clone() else {
             return;
         };
-        let Some(preferences) = state.mpv.as_ref().map(read_current_playback_preferences) else {
+        let Some(mut preferences) = state.mpv.as_ref().map(read_current_playback_preferences)
+        else {
             return;
         };
+        if let Some(audio_delay) = audio_delay_override {
+            preferences.audio_delay = finite_option(audio_delay);
+        }
 
         (path, preferences)
     };

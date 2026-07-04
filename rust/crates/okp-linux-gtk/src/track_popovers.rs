@@ -868,9 +868,8 @@ pub(crate) fn apply_subtitle_delay_entry(
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
 ) {
-    let Some(delay_seconds) = subtitle_delay::parse_entry_seconds(entry.text().as_str()) else {
-        entry.add_css_class("is-error");
-        entry.grab_focus();
+    let Some(delay_seconds) = entry_delay_seconds(entry) else {
+        mark_delay_entry_error(entry);
         return;
     };
 
@@ -920,7 +919,10 @@ pub(crate) fn apply_audio_delay(
 ) -> Option<f64> {
     let target = clamp_audio_delay(target_seconds);
     if with_mpv(state, |mpv| mpv.set_audio_delay(target)) {
-        save_current_preferences(state);
+        // Persist the value we just applied. `observed_audio_delay()` reads the
+        // async pump snapshot, which may still hold the previous delay, so a
+        // reset to `0` could otherwise re-save the old delay.
+        save_current_preferences_with_audio_delay(state, target);
         status_toast.show(&audio_delay_toast(target));
         Some(target)
     } else {
@@ -979,8 +981,14 @@ pub(crate) fn audio_delay_adjustment_row(
         let button_toast = Rc::clone(status_toast);
         let button_entry = entry.clone();
         button.connect_clicked(move |_| {
-            let target = entry_delay_seconds(&button_entry) + delta;
-            if let Some(applied) = apply_audio_delay(&button_state, &button_toast, target) {
+            // Reject unparsable text rather than treating it as zero, so a nudge
+            // never silently replaces invalid input with a real delay.
+            let Some(current) = entry_delay_seconds(&button_entry) else {
+                mark_delay_entry_error(&button_entry);
+                return;
+            };
+            if let Some(applied) = apply_audio_delay(&button_state, &button_toast, current + delta)
+            {
                 button_entry.set_text(&subtitle_delay::format_entry(applied));
             }
         });
@@ -1017,10 +1025,18 @@ pub(crate) fn audio_delay_adjustment_row(
     row
 }
 
-/// The delay the entry currently spells out, in seconds; unparsable text falls
-/// back to zero so a nudge still lands on a sane value.
-pub(crate) fn entry_delay_seconds(entry: &gtk::Entry) -> f64 {
-    subtitle_delay::parse_entry_seconds(entry.text().as_str()).unwrap_or(0.0)
+/// The delay the entry currently spells out, in seconds, or `None` when the
+/// text is not a valid delay. Callers reject invalid input the same way Apply
+/// does instead of substituting a value.
+pub(crate) fn entry_delay_seconds(entry: &gtk::Entry) -> Option<f64> {
+    subtitle_delay::parse_entry_seconds(entry.text().as_str())
+}
+
+/// Flag a delay entry as rejected: mark it errored and pull focus back so the
+/// user can correct the text.
+pub(crate) fn mark_delay_entry_error(entry: &gtk::Entry) {
+    entry.add_css_class("is-error");
+    entry.grab_focus();
 }
 
 pub(crate) fn apply_audio_delay_entry(
@@ -1028,9 +1044,8 @@ pub(crate) fn apply_audio_delay_entry(
     state: Rc<RefCell<PlayerState>>,
     status_toast: &Rc<StatusToast>,
 ) {
-    let Some(delay_seconds) = subtitle_delay::parse_entry_seconds(entry.text().as_str()) else {
-        entry.add_css_class("is-error");
-        entry.grab_focus();
+    let Some(delay_seconds) = entry_delay_seconds(entry) else {
+        mark_delay_entry_error(entry);
         return;
     };
 
