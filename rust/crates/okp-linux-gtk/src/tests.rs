@@ -595,6 +595,108 @@ fn default_app_match_is_exact_desktop_id() {
 }
 
 #[test]
+fn desktop_scheme_parser_detects_reserved_ok_player_scheme() {
+    let with_scheme = "\
+[Desktop Entry]
+MimeType=video/mp4;x-scheme-handler/ok-player;
+";
+    let without_scheme = "\
+[Desktop Entry]
+MimeType=video/mp4;audio/flac;
+";
+    assert!(desktop_registers_uri_scheme(with_scheme));
+    assert!(!desktop_registers_uri_scheme(without_scheme));
+}
+
+#[test]
+fn packaged_desktop_entry_advertises_reserved_scheme() {
+    // The installed .deb ships this desktop file; if it stops advertising the reserved
+    // scheme, `xdg-open ok-player://…` no longer routes to OK Player (PRD §13.4).
+    let desktop = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packaging/linux/com.befeast.okplayer.desktop"),
+    )
+    .expect("packaged desktop entry should be readable");
+    assert!(
+        desktop_registers_uri_scheme(&desktop),
+        "desktop entry MimeType must include {LINUX_URI_SCHEME_MIME}"
+    );
+    assert!(
+        desktop.contains("Exec=ok-player %U"),
+        "Exec must pass URIs (%U) so the scheme handler receives the request"
+    );
+}
+
+#[test]
+fn uri_scheme_row_reflects_registration_and_default_handler() {
+    // Not advertised by an installed desktop entry — the reservation is not in place.
+    assert!(matches!(
+        uri_scheme_row_content(false, None),
+        ("Missing", _, IntegrationStatus::Bad)
+    ));
+    assert!(matches!(
+        uri_scheme_row_content(false, Some(true)),
+        ("Missing", _, IntegrationStatus::Bad)
+    ));
+    // Advertised is the reservation, so it reads Good whatever the default handler is; the
+    // default only flavors the detail line.
+    for default in [None, Some(true), Some(false)] {
+        assert!(
+            matches!(
+                uri_scheme_row_content(true, default),
+                ("Reserved", _, IntegrationStatus::Good)
+            ),
+            "registered scheme should read Good for default={default:?}"
+        );
+    }
+    assert!(
+        uri_scheme_row_content(true, Some(true))
+            .1
+            .contains("handled by OK Player")
+    );
+}
+
+#[test]
+fn reserved_uri_notice_intercepts_scheme_but_leaves_media_urls() {
+    // A reserved request yields a local diagnostic naming the parsed command...
+    let reserved = reserved_uri_notice("ok-player://open?path=/media/a.mkv")
+        .expect("ok-player:// request should be reported");
+    assert!(reserved.contains("reserved"));
+    assert!(reserved.contains("open"));
+    // ...a malformed request is reported too, not silently accepted...
+    assert!(reserved_uri_notice("ok-player://").is_some());
+    // ...and ordinary media stays untouched so file/URL open behavior is unchanged.
+    assert_eq!(reserved_uri_notice("https://example.test/a.mp4"), None);
+    assert_eq!(reserved_uri_notice("/media/movie.mkv"), None);
+}
+
+#[test]
+fn launch_args_report_reserved_scheme_without_queuing_it_as_media() {
+    let launch = parse_launch_args_from(
+        [
+            "ok-player://play?id=42",
+            "https://example.test/a.mp4",
+            "/media/b.mkv",
+        ]
+        .into_iter()
+        .map(Into::into),
+    );
+
+    // The reserved request never becomes a playlist item, but the real media does.
+    assert_eq!(
+        launch.items,
+        vec![
+            url_item("https://example.test/a.mp4"),
+            local_item("/media/b.mkv"),
+        ]
+    );
+    let notice = launch
+        .reserved_notice()
+        .expect("reserved request should surface a launch notice");
+    assert!(notice.contains("play"));
+}
+
+#[test]
 fn timeline_marks_include_ab_loop_points() {
     let chapters = vec![
         Chapter {
@@ -1051,6 +1153,7 @@ fn load_launch_args_uses_explicit_playlist_for_multiple_items() {
         ],
         playlists: Vec::new(),
         subtitles: Vec::new(),
+        reserved_notices: Vec::new(),
     };
 
     assert!(load_launch_args(&state, &launch));

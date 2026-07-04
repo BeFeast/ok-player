@@ -113,3 +113,28 @@ OkPlayer.exe "C:\media\show\s01e03.mkv" --sub no          # start with subtitles
 - Applied as mpv selects the track on load; a malformed/missing value is ignored.
 - Track ids are file-specific — the library is expected to pass an id it learned from
   a prior probe of the same file.
+
+## Reserved `ok-player://` scheme (Linux)
+
+The player **reserves** the `ok-player://` URI scheme now (PRD §13.4) so packaging and
+desktop integration can register it cleanly, but external programmatic control through it
+is **[Later]**. Today the MVP handoff is process/CLI based (the launch-with-resume contract
+above); the scheme exists only to hold the seam.
+
+- **Registration.** The `.deb` desktop entry advertises `x-scheme-handler/ok-player` in its
+  `MimeType=` line and launches with `Exec=ok-player %U`, so `update-desktop-database`
+  (run from the package `postinst`) makes OK Player the handler for `ok-player://…`. The
+  Velopack/AppImage lane generates its own desktop entry; where its packaging cannot claim
+  the scheme, the app **diagnoses** the state instead of pretending it is registered.
+- **Diagnostics.** Settings → Integration shows a **URI scheme** row (and a
+  `Reserved URI scheme (ok-player://)` line in *Copy Diagnostics*) reporting whether the
+  scheme is advertised by an installed desktop entry and, where `xdg-mime` is available,
+  whether OK Player is its current handler.
+- **Handling.** A received `ok-player://…` request (from the launch command line, a
+  second-instance invocation, an `org.mpris…OpenUri` call, or the in-app Open URL box) is
+  **parsed and reported, never played**. A well-formed request surfaces a local notice that
+  external control is reserved and names the parsed command; a malformed request is rejected
+  the same way. No `ok-player://` token is ever handed to the media engine, so an
+  unsupported command fails with a clear local error rather than undefined playback. The
+  parser is the engine-agnostic `okp-core::ok_player_uri`; the scheme accepts no command
+  yet, so nothing is silently executed.
