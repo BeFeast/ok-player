@@ -1254,12 +1254,29 @@ pub(crate) fn drain_mpv_events(state: &Rc<RefCell<PlayerState>>) {
             MpvEvent::FileLoaded => {
                 try_pending_audio_device_restore(state);
                 try_pending_playback_preferences(state);
+                // A frame is up — the source is playing, not loading anymore.
+                let mut state = state.borrow_mut();
+                state.media_load_state = network_media::MediaLoadState::Playing;
+                state.last_load_error = None;
+                state.load_failure_presented = false;
             }
-            MpvEvent::EndFile { reason } if reason.is_eof() => {
+            MpvEvent::EndFile { reason, .. } if reason.is_eof() => {
                 if state.borrow().playlist.repeat() != RepeatMode::One {
                     save_current_progress(state, true);
                 }
                 advance_playlist_on_eof(state);
+            }
+            MpvEvent::EndFile {
+                reason: EndFileReason::Error(error),
+                path,
+            } => {
+                // The engine rejected the source (e.g. a 404 stream). Transition the
+                // transport surface to `Failed` and store the short reason for the Copy
+                // details action; the URL failure dialog pops once from the poll. A
+                // local-file error is surfaced too, but its dialog is URL-only. The
+                // staleness guard (drop an error whose source was superseded) lives in
+                // `apply_endfile_error` so it is unit-testable without an engine.
+                apply_endfile_error(state, error, path.as_deref());
             }
             _ => {}
         }

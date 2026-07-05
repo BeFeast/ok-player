@@ -157,6 +157,22 @@ const OKP_STYLESHEET: &str = "
             font-size: 13px;
         }
 
+        /* The loading / buffering / error overlay for a network source. Sits over the
+         * black video plane while a stream opens or after it fails; never captures
+         * pointer events so the transport chrome stays clickable. */
+        .okp-media-state-overlay {
+            background: transparent;
+        }
+
+        .okp-media-state-text {
+            padding: 10px 22px;
+            border-radius: 999px;
+            background: rgba(13, 14, 18, 0.72);
+            color: rgba(255, 255, 255, 0.92);
+            font-size: 14px;
+            font-weight: 600;
+        }
+
         .okp-empty-actions {
             margin-top: 26px;
         }
@@ -1026,6 +1042,13 @@ const OKP_STYLESHEET: &str = "
             color: rgba(255, 255, 255, 0.96);
             font-size: 16px;
             font-weight: 700;
+        }
+
+        /* The copyable summary on the URL load-failure dialog. Kept dimmer than the
+         * title and monospace-friendly so the URL stays readable and selectable. */
+        .okp-load-failure-detail {
+            color: rgba(255, 255, 255, 0.78);
+            font-size: 13px;
         }
 
         window.okp-command-dialog entry {

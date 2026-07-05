@@ -152,9 +152,18 @@ pub enum TrackKind {
     Subtitle,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Lifecycle events the engine fires, drained oldest-first via
+/// [`Mpv::take_lifecycle_events`](crate::Mpv::take_lifecycle_events). `EndFile`
+/// carries the `path` mpv reported for the entry that ended (the file path or URL
+/// string), so the shell can drop a stale `EndFile::Error` whose source has since
+/// been superseded (e.g. URL A fails, then the user starts URL B before the next
+/// poll). Not `Copy` because `path` is a `String`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MpvEvent {
-    EndFile { reason: EndFileReason },
+    EndFile {
+        reason: EndFileReason,
+        path: Option<String>,
+    },
     FileLoaded,
     Shutdown,
 }
@@ -213,6 +222,15 @@ impl RawReader {
 
     pub(crate) fn handle(&self) -> NonNull<ffi::mpv_handle> {
         self.handle
+    }
+
+    /// The path/URL mpv reports for the current entry — the file path for local media
+    /// or the URL string for a stream. Read by the pump at `EndFile` time so the
+    /// shell can match the ended source against the current one and drop a stale
+    /// `EndFile::Error` whose source was superseded. `None` when mpv has no current
+    /// entry (e.g. it cleared `path` before the pump read it).
+    pub(crate) fn path(&self) -> Option<String> {
+        self.get_string("path").ok().flatten()
     }
 
     pub(crate) fn playback_state(&self) -> Result<PlaybackState, MpvError> {

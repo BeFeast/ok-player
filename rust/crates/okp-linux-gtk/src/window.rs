@@ -146,12 +146,17 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     sync_player_window_chrome_fullscreen(&window_chrome, &window);
     let empty_surface = build_empty_surface(&window, Rc::clone(&state), Rc::clone(&status_toast));
     let lyrics_surface = build_lyrics_surface();
+    let media_state_overlay = MediaStateOverlay::new();
     chrome.set_child(&control_bar);
     chrome.add_linked_revealer(&window_chrome);
     chrome.add_linked_revealer(&controls.up_next_revealer);
 
     overlay.set_child(Some(&video_area));
     overlay.add_overlay(empty_surface.widget());
+    // The loading / buffering / error overlay sits just above the empty surface and
+    // lyrics — below the chrome and toast — so the transport stays on top while a
+    // stream's loading or failure status reads over the black video plane.
+    overlay.add_overlay(media_state_overlay.widget());
     // The lyrics surface sits above the (audio-black) video plane but below the window chrome, the
     // OSC, and the side panel, so those stay on top and interactive while lyrics play underneath.
     overlay.add_overlay(lyrics_surface.widget());
@@ -235,6 +240,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
             chrome: Rc::clone(&chrome),
             empty_surface,
             lyrics_surface,
+            media_state_overlay,
             mpris_snapshot: Arc::clone(&mpris_controller.snapshot),
             mpris_signals: mpris_controller.signals.clone(),
         },
