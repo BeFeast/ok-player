@@ -979,6 +979,16 @@ pub(crate) fn reserved_uri_notice(text: &str) -> Option<String> {
     })
 }
 
+/// True when the YouTube resolver ([`youtube_open::YOUTUBE_RESOLVER`]) is installed on the
+/// host `PATH`. mpv's `ytdl` hook shells out to it to turn a YouTube page URL into a real
+/// stream; without it a YouTube link has no engine path, so the "Open URL" surface shows the
+/// missing-tooling state ([`youtube_open::tooling_missing_notice`]) instead of handing the
+/// URL to libmpv only to fail with a generic error. This is a quick `PATH` scan (not a
+/// blocking engine read), so it is safe to call on the UI thread when the dialog is built.
+pub(crate) fn youtube_resolver_available() -> bool {
+    find_executable(youtube_open::YOUTUBE_RESOLVER).is_some()
+}
+
 pub(crate) fn is_subtitle_path(path: &Path) -> bool {
     media_formats::is_subtitle(path)
 }

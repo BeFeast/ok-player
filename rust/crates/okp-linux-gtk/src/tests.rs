@@ -689,6 +689,47 @@ fn reserved_uri_notice_intercepts_scheme_but_leaves_media_urls() {
 }
 
 #[test]
+fn youtube_resolver_probe_mirrors_a_path_lookup() {
+    // The Open URL surface gates YouTube on this probe, so it must agree with a direct PATH
+    // lookup for the named resolver and never panic when the tool is absent.
+    assert_eq!(
+        youtube_resolver_available(),
+        find_executable(youtube_open::YOUTUBE_RESOLVER).is_some()
+    );
+}
+
+#[test]
+fn open_url_checks_reserved_scheme_before_youtube_classification() {
+    use youtube_open::OpenUrlOutcome;
+
+    // The dialog checks the reserved ok-player:// scheme first, so a reserved request is
+    // reported and never reaches the YouTube / engine routing...
+    assert!(reserved_uri_notice("ok-player://open").is_some());
+
+    // ...a real YouTube link is not reserved and, with no resolver on the host, lands in the
+    // deliberate missing-tooling state rather than a silent hand-off to libmpv...
+    assert_eq!(reserved_uri_notice("https://youtu.be/abc123"), None);
+    assert_eq!(
+        youtube_open::resolve_open_url("https://youtu.be/abc123", false),
+        OpenUrlOutcome::YouTubeToolingMissing
+    );
+    // ...and with the resolver present it plays via mpv's ytdl hook.
+    assert_eq!(
+        youtube_open::resolve_open_url("https://youtu.be/abc123", true),
+        OpenUrlOutcome::PlayYouTube
+    );
+
+    // An arbitrary non-YouTube stream URL keeps the existing direct-to-engine outcome
+    // regardless of the resolver probe (existing http(s):// playback stays intact).
+    for available in [true, false] {
+        assert_eq!(
+            youtube_open::resolve_open_url("https://example.test/a.mp4", available),
+            OpenUrlOutcome::PlayDirect
+        );
+    }
+}
+
+#[test]
 fn launch_args_report_reserved_scheme_without_queuing_it_as_media() {
     let launch = parse_launch_args_from(
         [

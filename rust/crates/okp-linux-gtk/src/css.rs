@@ -1088,6 +1088,12 @@ const OKP_STYLESHEET: &str = "
             font-weight: 500;
         }
 
+        /* Missing-tooling hint (e.g. the YouTube resolver is not installed): a warm,
+           attention-drawing tint that stays calm — the state is informational, not an error. */
+        window.okp-command-dialog .okp-info-label.okp-info-label-muted {
+            color: @okp_warning;
+        }
+
         .okp-settings-window {
             background: transparent;
         }
