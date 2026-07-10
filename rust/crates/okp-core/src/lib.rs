@@ -33,5 +33,6 @@ pub mod time_code;
 pub mod track_label;
 pub mod track_tags;
 pub mod update_selection;
+pub mod youtube_open;
 
 pub use app::AppIdentity;

@@ -88,15 +88,40 @@ pub(crate) fn open_url_dialog(
     entry.set_width_chars(52);
     content.append(&entry);
 
+    // Probe the host for the YouTube resolver and show what it means up front. This reserves
+    // the YouTube slot honestly (PRD §10.2) without any search/browse widget — the surface
+    // takes a link, it is not a browser. The hint is a snapshot for guidance only; the submit
+    // handler re-probes so installing yt-dlp while the dialog is open takes effect on the next
+    // Open without a reopen (the two can only disagree in the user's favor — tool now present).
+    let resolver_available = youtube_resolver_available();
+    let youtube_hint = gtk::Label::new(Some(&youtube_open::youtube_support_hint(
+        resolver_available,
+    )));
+    youtube_hint.add_css_class("okp-info-label");
+    youtube_hint.set_xalign(0.0);
+    youtube_hint.set_wrap(true);
+    youtube_hint.set_max_width_chars(52);
+    if !resolver_available {
+        youtube_hint.add_css_class("okp-info-label-muted");
+    }
+    content.append(&youtube_hint);
+
     dialog.connect_response(move |dialog, response| {
         if response == gtk::ResponseType::Accept {
             let url = entry.text().trim().to_owned();
             if let Some(notice) = reserved_uri_notice(&url) {
                 status_toast.show(&notice);
-            } else if media_formats::is_playable_url(Some(&url)) {
-                load_media_url(&state, url);
             } else {
-                status_toast.show("Enter a valid stream URL");
+                match youtube_open::resolve_open_url(&url, youtube_resolver_available()) {
+                    youtube_open::OpenUrlOutcome::PlayDirect
+                    | youtube_open::OpenUrlOutcome::PlayYouTube => load_media_url(&state, url),
+                    youtube_open::OpenUrlOutcome::YouTubeToolingMissing => {
+                        status_toast.show(&youtube_open::tooling_missing_notice());
+                    }
+                    youtube_open::OpenUrlOutcome::Invalid => {
+                        status_toast.show("Enter a valid stream URL");
+                    }
+                }
             }
         }
         dialog.close();

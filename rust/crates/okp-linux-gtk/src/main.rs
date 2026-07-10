@@ -22,7 +22,7 @@ use okp_core::shortcuts::{
 use okp_core::update_selection::{self, DebFeed, DebUpdate, SHA256SUMS_ASSET};
 use okp_core::{
     AppIdentity, chapter_math, lrc, m3u, media_formats, natural_compare, network_media,
-    ok_player_uri, seek_readout, sha256sums, subtitle_delay, time_code,
+    ok_player_uri, seek_readout, sha256sums, subtitle_delay, time_code, youtube_open,
 };
 use okp_mpv::{
     AbLoopState, AudioDevice, Chapter, EndFileReason, InfoRow, InfoSection, InfoTrack, MediaInfo,
