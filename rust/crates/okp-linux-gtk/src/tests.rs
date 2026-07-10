@@ -699,6 +699,34 @@ fn youtube_resolver_probe_mirrors_a_path_lookup() {
 }
 
 #[test]
+fn find_executable_rejects_a_file_without_an_execute_bit() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // A resolver that sits on PATH but is not runnable must not count as "found": mpv's ytdl
+    // hook would spawn it and fail with a generic exec error instead of showing the deliberate
+    // missing-tooling state. `find_executable` is named for a runnable program, so it gates on
+    // the execute bit.
+    let dir = unique_temp_dir("okp-find-executable");
+    fs::create_dir_all(&dir).expect("temp dir should be created");
+    let tool = dir.join("yt-dlp");
+    fs::write(&tool, b"#!/bin/sh\n").expect("fixture tool should be written");
+
+    let tool_path = tool.to_str().expect("temp path should be valid UTF-8");
+
+    // Mode 0o644: readable data, no execute bit -> not an executable.
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o644))
+        .expect("non-executable mode should apply");
+    assert_eq!(find_executable(tool_path), None);
+
+    // Add the owner execute bit and the same file now resolves.
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755))
+        .expect("executable mode should apply");
+    assert_eq!(find_executable(tool_path).as_deref(), Some(tool.as_path()));
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn open_url_checks_reserved_scheme_before_youtube_classification() {
     use youtube_open::OpenUrlOutcome;
 

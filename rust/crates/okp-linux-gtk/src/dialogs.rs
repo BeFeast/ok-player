@@ -88,10 +88,11 @@ pub(crate) fn open_url_dialog(
     entry.set_width_chars(52);
     content.append(&entry);
 
-    // Probe the host for the YouTube resolver once, and show what it means up front. This
-    // reserves the YouTube slot honestly (PRD §10.2) without any search/browse widget — the
-    // surface takes a link, it is not a browser. The same probe result decides the outcome
-    // when the user submits a YouTube URL, so the hint and the action never disagree.
+    // Probe the host for the YouTube resolver and show what it means up front. This reserves
+    // the YouTube slot honestly (PRD §10.2) without any search/browse widget — the surface
+    // takes a link, it is not a browser. The hint is a snapshot for guidance only; the submit
+    // handler re-probes so installing yt-dlp while the dialog is open takes effect on the next
+    // Open without a reopen (the two can only disagree in the user's favor — tool now present).
     let resolver_available = youtube_resolver_available();
     let youtube_hint = gtk::Label::new(Some(&youtube_open::youtube_support_hint(
         resolver_available,
@@ -111,7 +112,7 @@ pub(crate) fn open_url_dialog(
             if let Some(notice) = reserved_uri_notice(&url) {
                 status_toast.show(&notice);
             } else {
-                match youtube_open::resolve_open_url(&url, resolver_available) {
+                match youtube_open::resolve_open_url(&url, youtube_resolver_available()) {
                     youtube_open::OpenUrlOutcome::PlayDirect
                     | youtube_open::OpenUrlOutcome::PlayYouTube => load_media_url(&state, url),
                     youtube_open::OpenUrlOutcome::YouTubeToolingMissing => {

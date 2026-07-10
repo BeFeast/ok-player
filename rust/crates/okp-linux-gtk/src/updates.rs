@@ -810,13 +810,25 @@ pub(crate) fn wait_for_child_with_timeout(
 pub(crate) fn find_executable(name: &str) -> Option<PathBuf> {
     if name.contains(std::path::MAIN_SEPARATOR) {
         let path = PathBuf::from(name);
-        return path.is_file().then_some(path);
+        return is_executable_file(&path).then_some(path);
     }
 
     let path_var = env::var_os("PATH")?;
     env::split_paths(&path_var)
         .map(|dir| dir.join(name))
-        .find(|path| path.is_file())
+        .find(|path| is_executable_file(path))
+}
+
+/// True when `path` resolves to a regular file that carries an execute bit — the Unix
+/// definition of a runnable program. A file on `PATH` with no execute permission cannot be
+/// spawned, so treating it as "found" would advertise a tool that then fails with a generic
+/// exec error; `find_executable` rejects it here, matching `command -v` / `which` semantics.
+/// `fs::metadata` follows symlinks, so a symlinked resolver is judged by its target's mode.
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path)
+        .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
 }
 
 pub(crate) fn open_deb_installer(path: &Path) -> Result<(), String> {
