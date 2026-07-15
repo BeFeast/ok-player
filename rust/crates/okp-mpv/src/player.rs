@@ -1,6 +1,7 @@
 use std::ffi::{CStr, CString, NulError};
 use std::path::{Path, PathBuf};
 use std::ptr::{self, NonNull};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
@@ -163,6 +164,10 @@ pub enum MpvEvent {
     EndFile {
         reason: EndFileReason,
         path: Option<String>,
+    },
+    CommandReply {
+        request_id: u64,
+        error: c_int,
     },
     FileLoaded,
     Shutdown,
@@ -807,6 +812,7 @@ pub struct Mpv {
     handle: NonNull<ffi::mpv_handle>,
     render_context: Option<NonNull<ffi::mpv_render_context>>,
     pump: Option<EventPump>,
+    next_request_id: AtomicU64,
     #[cfg(debug_assertions)]
     blocking_read_guard: crate::guard::BlockingReadGuard,
 }
@@ -830,6 +836,7 @@ impl Mpv {
             handle,
             render_context: None,
             pump: None,
+            next_request_id: AtomicU64::new(1),
             #[cfg(debug_assertions)]
             blocking_read_guard: Default::default(),
         };
@@ -1086,14 +1093,22 @@ impl Mpv {
         self.command(&["ab-loop"])
     }
 
-    pub fn screenshot_to_file(&self, path: &Path, include_subtitles: bool) -> Result<(), MpvError> {
+    pub fn screenshot_to_file_async(
+        &self,
+        path: &Path,
+        include_subtitles: bool,
+    ) -> Result<u64, MpvError> {
         let path = path.to_string_lossy();
-        let mode = if include_subtitles {
-            "subtitles"
-        } else {
-            "video"
-        };
-        self.command(&["screenshot-to-file", &path, mode])
+        let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
+        self.command_async_with_userdata(
+            &[
+                "screenshot-to-file",
+                &path,
+                screenshot_mode(include_subtitles),
+            ],
+            request_id,
+        )?;
+        Ok(request_id)
     }
 
     pub fn set_volume(&self, volume: f64) -> Result<(), MpvError> {
@@ -1298,8 +1313,12 @@ impl Mpv {
     /// controls (pause/seek/frame-step). It never blocks the caller on a busy
     /// core; the reply arrives as an event the pump drains and logs on failure.
     fn command_async(&self, args: &[&str]) -> Result<(), MpvError> {
+        self.command_async_with_userdata(args, 0)
+    }
+
+    fn command_async_with_userdata(&self, args: &[&str], request_id: u64) -> Result<(), MpvError> {
         let (_c_args, ptrs) = command_args(args)?;
-        check(unsafe { ffi::mpv_command_async(self.handle.as_ptr(), 0, ptrs.as_ptr()) })
+        check(unsafe { ffi::mpv_command_async(self.handle.as_ptr(), request_id, ptrs.as_ptr()) })
     }
 
     fn set_double(&self, name: &str, mut value: f64) -> Result<(), MpvError> {
@@ -1326,6 +1345,14 @@ fn command_args(args: &[&str]) -> Result<(Vec<CString>, Vec<*const c_char>), Mpv
     let mut ptrs = c_args.iter().map(|arg| arg.as_ptr()).collect::<Vec<_>>();
     ptrs.push(ptr::null());
     Ok((c_args, ptrs))
+}
+
+fn screenshot_mode(include_subtitles: bool) -> &'static str {
+    if include_subtitles {
+        "subtitles"
+    } else {
+        "video"
+    }
 }
 
 fn push_section(sections: &mut Vec<InfoSection>, section: InfoSection) {
@@ -1981,6 +2008,12 @@ mod tests {
     fn audio_normalization_filter_is_labelled() {
         assert_eq!(AUDIO_NORMALIZATION_FILTER_LABEL, "@okpnorm");
         assert_eq!(AUDIO_NORMALIZATION_FILTER, "@okpnorm:dynaudnorm");
+    }
+
+    #[test]
+    fn screenshot_modes_keep_clean_and_subtitled_captures_distinct() {
+        assert_eq!(screenshot_mode(false), "video");
+        assert_eq!(screenshot_mode(true), "subtitles");
     }
 
     #[test]

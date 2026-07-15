@@ -118,6 +118,163 @@ pub(crate) fn settings_audio_page(
     page
 }
 
+pub(crate) fn settings_screenshot_section(
+    parent: &gtk::Window,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let section = settings_section("Screenshots");
+
+    let format_row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    format_row.add_css_class("okp-settings-row");
+    let format_label = gtk::Label::new(Some("Format"));
+    format_label.add_css_class("okp-info-label");
+    format_label.set_xalign(0.0);
+    format_label.set_width_chars(14);
+    format_label.set_hexpand(true);
+    format_row.append(&format_label);
+
+    let selected_format = state.borrow().settings.screenshot_format();
+    let format_buttons = Rc::new(RefCell::new(Vec::<(
+        gtk::Button,
+        okp_core::settings::ScreenshotFormat,
+    )>::new()));
+    let format_group = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    format_group.add_css_class("okp-settings-stepper-group");
+    for format in okp_core::settings::ScreenshotFormat::ALL {
+        let button = gtk::Button::with_label(format.label());
+        button.add_css_class("okp-settings-button");
+        button.add_css_class("okp-screenshot-format-button");
+        if format == selected_format {
+            button.add_css_class("is-selected");
+        }
+        let button_state = Rc::clone(&state);
+        let button_toast = Rc::clone(&status_toast);
+        let buttons = Rc::clone(&format_buttons);
+        button.connect_clicked(move |_| {
+            let saved = {
+                let mut state = button_state.borrow_mut();
+                state.settings.set_screenshot_format(format);
+                save_settings_or_toast(&mut state, &button_toast)
+            };
+            for (button, button_format) in buttons.borrow().iter() {
+                if *button_format == format {
+                    button.add_css_class("is-selected");
+                } else {
+                    button.remove_css_class("is-selected");
+                }
+            }
+            if saved {
+                button_toast.show(&format!("Screenshot format: {}", format.label()));
+            }
+        });
+        format_group.append(&button);
+        format_buttons.borrow_mut().push((button, format));
+    }
+    format_row.append(&format_group);
+    section.append(&format_row);
+
+    let configured_directory = state.borrow().settings.screenshot_directory();
+    let displayed_directory = configured_directory
+        .clone()
+        .unwrap_or_else(screenshots::default_screenshot_dir);
+    let (directory_row, directory_label) =
+        settings_value_row_with_label("Save folder", &displayed_directory.to_string_lossy());
+
+    let reset = gtk::Button::with_label("Default");
+    reset.add_css_class("okp-settings-button");
+    reset.set_sensitive(configured_directory.is_some());
+
+    let choose = gtk::Button::with_label("Choose...");
+    choose.add_css_class("okp-settings-button");
+    let choose_parent = parent.clone();
+    let choose_state = Rc::clone(&state);
+    let choose_toast = Rc::clone(&status_toast);
+    let choose_label = directory_label.clone();
+    let choose_reset = reset.clone();
+    choose.connect_clicked(move |_| {
+        open_screenshot_folder_dialog(
+            &choose_parent,
+            Rc::clone(&choose_state),
+            Rc::clone(&choose_toast),
+            choose_label.clone(),
+            choose_reset.clone(),
+        );
+    });
+    directory_row.append(&choose);
+
+    let reset_state = state;
+    let reset_toast = status_toast;
+    let reset_label = directory_label;
+    reset.connect_clicked(move |button| {
+        let default_directory = screenshots::default_screenshot_dir();
+        let saved = {
+            let mut state = reset_state.borrow_mut();
+            state.settings.set_screenshot_directory(None);
+            save_settings_or_toast(&mut state, &reset_toast)
+        };
+        reset_label.set_text(&default_directory.to_string_lossy());
+        button.set_sensitive(false);
+        if saved {
+            reset_toast.show("Screenshot folder reset");
+        }
+    });
+    directory_row.append(&reset);
+    section.append(&directory_row);
+
+    section
+}
+
+fn open_screenshot_folder_dialog(
+    parent: &gtk::Window,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+    directory_label: gtk::Label,
+    reset_button: gtk::Button,
+) {
+    let dialog = gtk::FileChooserDialog::new(
+        Some("Choose screenshot folder"),
+        Some(parent),
+        gtk::FileChooserAction::SelectFolder,
+        &[
+            ("Cancel", gtk::ResponseType::Cancel),
+            ("Choose", gtk::ResponseType::Accept),
+        ],
+    );
+    dialog.set_modal(true);
+    dialog.set_decorated(false);
+    let current = state
+        .borrow()
+        .settings
+        .screenshot_directory()
+        .unwrap_or_else(screenshots::default_screenshot_dir);
+    let _ = dialog.set_current_folder(Some(&gtk::gio::File::for_path(current)));
+
+    dialog.connect_response(move |dialog, response| {
+        if response == gtk::ResponseType::Accept
+            && let Some(path) = dialog.file().and_then(|file| file.path())
+        {
+            let (accepted, saved) = {
+                let mut state = state.borrow_mut();
+                let accepted = state.settings.set_screenshot_directory(Some(&path));
+                let saved = accepted && save_settings_or_toast(&mut state, &status_toast);
+                (accepted, saved)
+            };
+            if accepted {
+                directory_label.set_text(&path.to_string_lossy());
+                reset_button.set_sensitive(true);
+                if saved {
+                    status_toast.show("Screenshot folder updated");
+                }
+            } else {
+                status_toast.show("Choose an absolute local folder");
+            }
+        }
+        dialog.close();
+    });
+    dialog.present();
+}
+
 pub(crate) fn settings_resume_row(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
@@ -292,10 +449,14 @@ pub(crate) fn settings_repeat_row(
     row
 }
 
-pub(crate) fn save_settings_or_toast(state: &mut PlayerState, status_toast: &StatusToast) {
-    if let Err(error) = state.settings.save() {
-        eprintln!("Failed to save settings: {error}");
-        status_toast.show("Could not save settings");
+pub(crate) fn save_settings_or_toast(state: &mut PlayerState, status_toast: &StatusToast) -> bool {
+    match state.settings.save() {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!("Failed to save settings: {error}");
+            status_toast.show("Could not save settings");
+            false
+        }
     }
 }
 

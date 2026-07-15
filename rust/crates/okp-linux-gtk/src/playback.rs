@@ -133,32 +133,26 @@ pub(crate) fn save_screenshot(
     include_subtitles: bool,
 ) {
     let Some((current_file, position)) = screenshot_context(state) else {
+        status_toast.show("Open media first");
         return;
     };
-    let path = screenshots::next_screenshot_path(current_file.as_deref(), position);
-
-    let result = {
+    let (directory, format) = {
         let state = state.borrow();
-        let Some(mpv) = state.mpv.as_ref() else {
-            return;
-        };
-        mpv.screenshot_to_file(&path, include_subtitles)
+        (
+            state
+                .settings
+                .screenshot_directory()
+                .unwrap_or_else(screenshots::default_screenshot_dir),
+            state.settings.screenshot_format(),
+        )
     };
-
-    match result {
-        Ok(()) => {
-            let filename = path
-                .file_name()
-                .map(|name| name.to_string_lossy())
-                .unwrap_or_else(|| "screenshot.png".into());
-            eprintln!("Screenshot saved to {}", path.display());
-            status_toast.show(&format!("Screenshot saved: {filename}"));
-        }
-        Err(error) => {
-            eprintln!("Failed to save screenshot to {}: {error}", path.display());
-            status_toast.show("Screenshot failed");
-        }
-    }
+    state.borrow().screenshot_jobs.prepare_saved(
+        directory,
+        current_file,
+        position,
+        format,
+        include_subtitles,
+    );
 }
 
 pub(crate) fn copy_frame_to_clipboard(
@@ -166,34 +160,121 @@ pub(crate) fn copy_frame_to_clipboard(
     status_toast: &StatusToast,
 ) {
     if screenshot_context(state).is_none() {
+        status_toast.show("Open media first");
         return;
     }
 
-    let path = screenshots::next_clipboard_frame_path();
-    let result = {
+    state.borrow().screenshot_jobs.prepare_clipboard();
+}
+
+pub(crate) fn drain_screenshot_jobs(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
+    let results = state.borrow().screenshot_jobs.drain();
+    for result in results {
+        match result {
+            screenshots::ScreenshotJobResult::SavedPrepared(Ok(target)) => {
+                dispatch_screenshot_capture(
+                    state,
+                    status_toast,
+                    screenshots::PendingCapture::Saved(target),
+                );
+            }
+            screenshots::ScreenshotJobResult::ClipboardPrepared(Ok(path)) => {
+                dispatch_screenshot_capture(
+                    state,
+                    status_toast,
+                    screenshots::PendingCapture::Clipboard(path),
+                );
+            }
+            screenshots::ScreenshotJobResult::SavedPublished(Ok(path)) => {
+                let filename = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy())
+                    .unwrap_or_else(|| "screenshot".into());
+                eprintln!("Screenshot saved to {}", path.display());
+                status_toast.show_screenshot(&format!("Saved {filename}"), &path);
+            }
+            screenshots::ScreenshotJobResult::SavedPrepared(Err(error))
+            | screenshots::ScreenshotJobResult::SavedPublished(Err(error)) => {
+                eprintln!("Failed to save screenshot: {error}");
+                status_toast.show("Screenshot failed");
+            }
+            screenshots::ScreenshotJobResult::ClipboardPrepared(Err(error)) => {
+                eprintln!("Failed to prepare clipboard capture: {error}");
+                status_toast.show("Couldn't copy the frame");
+            }
+        }
+    }
+}
+
+fn dispatch_screenshot_capture(
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &StatusToast,
+    capture: screenshots::PendingCapture,
+) {
+    let (path, include_subtitles) = match &capture {
+        screenshots::PendingCapture::Saved(target) => (&target.temp_path, target.include_subtitles),
+        screenshots::PendingCapture::Clipboard(path) => (path, false),
+    };
+    let request = {
         let state = state.borrow();
-        let Some(mpv) = state.mpv.as_ref() else {
-            return;
-        };
-        mpv.screenshot_to_file(&path, false)
+        state
+            .mpv
+            .as_ref()
+            .ok_or_else(|| "media closed".to_owned())
+            .and_then(|mpv| {
+                mpv.screenshot_to_file_async(path, include_subtitles)
+                    .map_err(|error| error.to_string())
+            })
     };
 
-    if let Err(error) = result {
-        eprintln!(
-            "Failed to capture frame for clipboard at {}: {error}",
-            path.display()
-        );
-        status_toast.show("Couldn't copy the frame");
-        let _ = fs::remove_file(&path);
+    match request {
+        Ok(request_id) => state
+            .borrow_mut()
+            .screenshot_jobs
+            .insert_pending(request_id, capture),
+        Err(error) => {
+            remove_pending_capture_temp(&capture);
+            eprintln!("Failed to start screenshot capture: {error}");
+            status_toast.show(capture_failure_message(&capture));
+        }
+    }
+}
+
+pub(crate) fn complete_screenshot_capture(
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &StatusToast,
+    request_id: u64,
+    error: i32,
+) {
+    let capture = state.borrow_mut().screenshot_jobs.take_pending(request_id);
+    let Some(capture) = capture else {
+        return;
+    };
+
+    if error < 0 {
+        remove_pending_capture_temp(&capture);
+        eprintln!("Screenshot command failed with code {error}");
+        status_toast.show(capture_failure_message(&capture));
         return;
     }
 
+    match capture {
+        screenshots::PendingCapture::Saved(target) => {
+            state.borrow().screenshot_jobs.publish_saved(target);
+        }
+        screenshots::PendingCapture::Clipboard(path) => {
+            finish_clipboard_capture(path, status_toast)
+        }
+    }
+}
+
+fn finish_clipboard_capture(path: PathBuf, status_toast: &StatusToast) {
     match gdk::Texture::from_filename(&path) {
         Ok(texture) => {
             if let Some(display) = gdk::Display::default() {
                 display.clipboard().set_texture(&texture);
                 eprintln!("Frame copied to clipboard from {}", path.display());
-                status_toast.show("Frame copied");
+                status_toast.show_screenshot("Frame copied", &path);
             } else {
                 status_toast.show("Clipboard unavailable");
             }
@@ -203,7 +284,23 @@ pub(crate) fn copy_frame_to_clipboard(
             status_toast.show("Couldn't copy the frame");
         }
     }
-    let _ = fs::remove_file(&path);
+    screenshots::remove_temporary_capture(&path);
+}
+
+fn remove_pending_capture_temp(capture: &screenshots::PendingCapture) {
+    match capture {
+        screenshots::PendingCapture::Saved(target) => {
+            screenshots::remove_temporary_capture(&target.temp_path)
+        }
+        screenshots::PendingCapture::Clipboard(path) => screenshots::remove_temporary_capture(path),
+    }
+}
+
+fn capture_failure_message(capture: &screenshots::PendingCapture) -> &'static str {
+    match capture {
+        screenshots::PendingCapture::Saved(_) => "Screenshot failed",
+        screenshots::PendingCapture::Clipboard(_) => "Couldn't copy the frame",
+    }
 }
 
 pub(crate) fn copy_current_time(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {

@@ -8,6 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 gtk.workspace = true
+libc.workspace = true
 okp-core = { path = "../okp-core" }
 okp-mpv = { path = "../okp-mpv" }
 relm4.workspace = true

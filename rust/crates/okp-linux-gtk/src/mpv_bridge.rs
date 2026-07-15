@@ -283,7 +283,8 @@ pub(crate) fn connect_state_poll(
         mpris_signals,
     } = context;
     glib::timeout_add_local(Duration::from_millis(200), move || {
-        drain_mpv_events(&state);
+        drain_mpv_events(&state, &status_toast);
+        drain_screenshot_jobs(&state, &status_toast);
         try_pending_audio_device_restore(&state);
 
         let playback = state

@@ -19,6 +19,7 @@ pub mod ok_player_uri;
 pub mod player;
 pub mod playlist;
 pub mod recents_shelf;
+pub mod screenshot;
 pub mod seek_readout;
 pub mod settings;
 pub mod sha256sums;

@@ -1,63 +1,228 @@
 use std::env;
+use std::ffi::CString;
 use std::fs;
+use std::io;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub fn next_screenshot_path(media_path: Option<&Path>, position: Option<f64>) -> PathBuf {
-    let base_name = media_path
-        .and_then(Path::file_stem)
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .map(sanitize_filename)
-        .unwrap_or_else(|| "ok-player".to_owned());
-    let position = position
-        .filter(|value| value.is_finite() && *value >= 0.0)
-        .map(|value| format!("-{}", time_slug(value)))
-        .unwrap_or_default();
-    let timestamp = unix_millis();
-    let dir = screenshot_dir();
-    let _ = fs::create_dir_all(&dir);
+use okp_core::screenshot::candidate_filename;
+use okp_core::settings::ScreenshotFormat;
 
-    for suffix in 0..100 {
-        let unique = if suffix == 0 {
-            String::new()
-        } else {
-            format!("-{suffix}")
-        };
-        let path = dir.join(format!("{base_name}{position}-{timestamp}{unique}.png"));
-        if !path.exists() {
-            return path;
+const MAX_COLLISION_ATTEMPTS: u32 = 1_000;
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Debug)]
+pub struct SavedCaptureTarget {
+    pub temp_path: PathBuf,
+    pub include_subtitles: bool,
+    directory: PathBuf,
+    media_path: Option<PathBuf>,
+    position: Option<f64>,
+    timestamp_millis: u128,
+    format: ScreenshotFormat,
+}
+
+#[derive(Debug)]
+pub enum PendingCapture {
+    Saved(SavedCaptureTarget),
+    Clipboard(PathBuf),
+}
+
+#[derive(Debug)]
+pub enum ScreenshotJobResult {
+    SavedPrepared(Result<SavedCaptureTarget, String>),
+    ClipboardPrepared(Result<PathBuf, String>),
+    SavedPublished(Result<PathBuf, String>),
+}
+
+#[derive(Debug)]
+pub struct ScreenshotJobs {
+    sender: mpsc::Sender<ScreenshotJobResult>,
+    receiver: mpsc::Receiver<ScreenshotJobResult>,
+    pending: std::collections::HashMap<u64, PendingCapture>,
+}
+
+impl Default for ScreenshotJobs {
+    fn default() -> Self {
+        let (sender, receiver) = mpsc::channel();
+        Self {
+            sender,
+            receiver,
+            pending: std::collections::HashMap::new(),
+        }
+    }
+}
+
+impl ScreenshotJobs {
+    pub fn prepare_saved(
+        &self,
+        directory: PathBuf,
+        media_path: Option<PathBuf>,
+        position: Option<f64>,
+        format: ScreenshotFormat,
+        include_subtitles: bool,
+    ) {
+        let sender = self.sender.clone();
+        thread::spawn(move || {
+            let result =
+                prepare_saved_capture(directory, media_path, position, format, include_subtitles)
+                    .map_err(|error| error.to_string());
+            let _ = sender.send(ScreenshotJobResult::SavedPrepared(result));
+        });
+    }
+
+    pub fn prepare_clipboard(&self) {
+        let sender = self.sender.clone();
+        thread::spawn(move || {
+            let result = prepare_clipboard_capture().map_err(|error| error.to_string());
+            let _ = sender.send(ScreenshotJobResult::ClipboardPrepared(result));
+        });
+    }
+
+    pub fn publish_saved(&self, target: SavedCaptureTarget) {
+        let sender = self.sender.clone();
+        thread::spawn(move || {
+            let result = publish_saved_capture(target).map_err(|error| error.to_string());
+            let _ = sender.send(ScreenshotJobResult::SavedPublished(result));
+        });
+    }
+
+    pub fn drain(&self) -> Vec<ScreenshotJobResult> {
+        self.receiver.try_iter().collect()
+    }
+
+    pub fn insert_pending(&mut self, request_id: u64, capture: PendingCapture) {
+        self.pending.insert(request_id, capture);
+    }
+
+    pub fn take_pending(&mut self, request_id: u64) -> Option<PendingCapture> {
+        self.pending.remove(&request_id)
+    }
+}
+
+pub fn prepare_saved_capture(
+    directory: PathBuf,
+    media_path: Option<PathBuf>,
+    position: Option<f64>,
+    format: ScreenshotFormat,
+    include_subtitles: bool,
+) -> io::Result<SavedCaptureTarget> {
+    fs::create_dir_all(&directory)?;
+    if !directory.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotADirectory,
+            "screenshot destination is not a directory",
+        ));
+    }
+
+    let timestamp_millis = unix_millis();
+    let temp_path = unique_temp_path(&directory, "saved-frame", format.extension())?;
+    Ok(SavedCaptureTarget {
+        temp_path,
+        include_subtitles,
+        directory,
+        media_path,
+        position,
+        timestamp_millis,
+        format,
+    })
+}
+
+pub fn publish_saved_capture(target: SavedCaptureTarget) -> io::Result<PathBuf> {
+    for suffix in 0..MAX_COLLISION_ATTEMPTS {
+        let filename = candidate_filename(
+            target.media_path.as_deref(),
+            target.position,
+            target.timestamp_millis,
+            target.format.extension(),
+            suffix,
+        );
+        let destination = target.directory.join(filename);
+        match rename_noreplace(&target.temp_path, &destination) {
+            Ok(()) => return Ok(destination),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                remove_temporary_capture(&target.temp_path);
+                return Err(error);
+            }
         }
     }
 
-    dir.join(format!("{base_name}{position}-{timestamp}-fallback.png"))
+    remove_temporary_capture(&target.temp_path);
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not allocate a collision-free screenshot filename",
+    ))
 }
 
-pub fn next_clipboard_frame_path() -> PathBuf {
-    let dir = env::temp_dir().join("ok-player");
-    let _ = fs::create_dir_all(&dir);
-    let timestamp = unix_millis();
-
-    for suffix in 0..100 {
-        let unique = if suffix == 0 {
-            String::new()
-        } else {
-            format!("-{suffix}")
-        };
-        let path = dir.join(format!("clipboard-frame-{timestamp}{unique}.png"));
-        if !path.exists() {
-            return path;
-        }
-    }
-
-    dir.join(format!("clipboard-frame-{timestamp}-fallback.png"))
+pub fn prepare_clipboard_capture() -> io::Result<PathBuf> {
+    let directory = env::temp_dir().join("ok-player");
+    fs::create_dir_all(&directory)?;
+    unique_temp_path(&directory, "clipboard-frame", "png")
 }
 
-fn screenshot_dir() -> PathBuf {
+pub fn default_screenshot_dir() -> PathBuf {
     xdg_pictures_dir()
         .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join("Pictures")))
         .unwrap_or_else(env::temp_dir)
         .join("OK Player")
+}
+
+pub fn remove_temporary_capture(path: &Path) {
+    let _ = fs::remove_file(path);
+}
+
+fn unique_temp_path(directory: &Path, purpose: &str, extension: &str) -> io::Result<PathBuf> {
+    let process = std::process::id();
+    let timestamp = unix_millis();
+    for _ in 0..MAX_COLLISION_ATTEMPTS {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path = directory.join(format!(
+            ".ok-player-{purpose}-{process}-{timestamp}-{sequence}.{extension}"
+        ));
+        if !path.exists() {
+            return Ok(path);
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not allocate a temporary screenshot path",
+    ))
+}
+
+fn rename_noreplace(source: &Path, destination: &Path) -> io::Result<()> {
+    let source_c = CString::new(source.as_os_str().as_bytes())?;
+    let destination_c = CString::new(destination.as_os_str().as_bytes())?;
+
+    // SAFETY: both C strings are NUL-terminated and remain alive for the call.
+    let result = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            source_c.as_ptr(),
+            libc::AT_FDCWD,
+            destination_c.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if result == 0 {
+        return Ok(());
+    }
+
+    let error = io::Error::last_os_error();
+    if matches!(
+        error.raw_os_error(),
+        Some(libc::ENOSYS) | Some(libc::EINVAL)
+    ) {
+        fs::hard_link(source, destination)?;
+        fs::remove_file(source)?;
+        return Ok(());
+    }
+    Err(error)
 }
 
 fn xdg_pictures_dir() -> Option<PathBuf> {
@@ -81,37 +246,6 @@ fn parse_xdg_pictures_dir(home: &Path, user_dirs: &str) -> Option<PathBuf> {
     None
 }
 
-fn sanitize_filename(value: &str) -> String {
-    let sanitized = value
-        .chars()
-        .map(|ch| match ch {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-',
-            ch if ch.is_control() => '-',
-            ch => ch,
-        })
-        .collect::<String>();
-
-    sanitized
-        .trim_matches(|ch| matches!(ch, ' ' | '.' | '-'))
-        .chars()
-        .take(80)
-        .collect::<String>()
-        .if_empty("ok-player")
-}
-
-fn time_slug(seconds: f64) -> String {
-    let total = seconds.round() as u64;
-    let hours = total / 3600;
-    let minutes = (total % 3600) / 60;
-    let seconds = total % 60;
-
-    if hours > 0 {
-        format!("{hours:02}h{minutes:02}m{seconds:02}s")
-    } else {
-        format!("{minutes:02}m{seconds:02}s")
-    }
-}
-
 fn unix_millis() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -119,38 +253,37 @@ fn unix_millis() -> u128 {
         .unwrap_or_default()
 }
 
-trait IfEmpty {
-    fn if_empty(self, fallback: &str) -> String;
-}
-
-impl IfEmpty for String {
-    fn if_empty(self, fallback: &str) -> String {
-        if self.is_empty() {
-            fallback.to_owned()
-        } else {
-            self
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use okp_test_fixtures::unique_temp_dir;
 
     #[test]
-    fn sanitize_filename_replaces_path_punctuation_and_trims() {
+    fn publish_saved_capture_never_overwrites_a_collision() {
+        let directory = unique_temp_dir("okp-screenshot-collision");
+        fs::create_dir_all(&directory).expect("temp directory");
+        let first_name = candidate_filename(None, None, 1234, "png", 0);
+        fs::write(directory.join(first_name), b"existing").expect("existing screenshot");
+        let temp_path = directory.join(".capture.png");
+        fs::write(&temp_path, b"new frame").expect("temporary screenshot");
+
+        let published = publish_saved_capture(SavedCaptureTarget {
+            temp_path,
+            include_subtitles: false,
+            directory: directory.clone(),
+            media_path: None,
+            position: None,
+            timestamp_millis: 1234,
+            format: ScreenshotFormat::Png,
+        })
+        .expect("publish screenshot");
+
+        assert_eq!(published, directory.join("ok-player-1234-1.png"));
         assert_eq!(
-            sanitize_filename("  Movie: Cut/Scene?.mkv  "),
-            "Movie- Cut-Scene-.mkv"
+            fs::read(directory.join("ok-player-1234.png")).unwrap(),
+            b"existing"
         );
-        assert_eq!(sanitize_filename("...---"), "ok-player");
-    }
-
-    #[test]
-    fn time_slug_formats_media_positions() {
-        assert_eq!(time_slug(53.2), "00m53s");
-        assert_eq!(time_slug(3222.0), "53m42s");
-        assert_eq!(time_slug(3906.0), "01h05m06s");
+        assert_eq!(fs::read(published).unwrap(), b"new frame");
     }
 
     #[test]
