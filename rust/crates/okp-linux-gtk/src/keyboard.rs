@@ -55,6 +55,11 @@ pub(crate) fn connect_keyboard(
     let controller = gtk::EventControllerKey::new();
     let shortcut_window = window.clone();
     controller.connect_key_pressed(move |_, key, _, modifiers| {
+        // The in-player Media Information surface owns its keyboard scope. Let
+        // focused modal controls receive keys without also driving playback.
+        if media_info_modal_is_open(&shortcut_window) {
+            return glib::Propagation::Proceed;
+        }
         chrome.show_for_activity();
 
         let action = {

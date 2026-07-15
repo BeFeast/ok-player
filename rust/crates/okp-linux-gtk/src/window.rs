@@ -325,13 +325,16 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
             open_settings_window(&settings_parent, settings_state, settings_toast);
         });
     }
-    // Visual smoke hook: render the Media Information window with representative
-    // fixture data so its layout can be screenshot-tested without loaded media.
+    // Visual smoke hook: render the in-player Media Information modal with
+    // representative fixture data so it can be screenshot-tested without media.
     if env::var_os("OKP_OPEN_MEDIA_INFO_ON_STARTUP").is_some() {
+        if let Some(substrate) = env::var_os("OKP_MEDIA_INFO_PREVIEW_SUBSTRATE") {
+            empty_surface.set_preview_substrate(substrate.eq_ignore_ascii_case("bright"));
+        }
         let info_parent = window.clone();
         let info_toast = Rc::clone(&status_toast);
         glib::timeout_add_local_once(Duration::from_millis(250), move || {
-            show_media_info_window(&info_parent, &media_info_preview_sample(), info_toast);
+            show_media_info_modal(&info_parent, &media_info_preview_from_env(), info_toast);
         });
     }
     if auto_check_updates {

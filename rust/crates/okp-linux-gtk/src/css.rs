@@ -2309,8 +2309,257 @@ const OKP_STYLESHEET: &str = "
             background: rgba(0, 0, 0, 0.07);
         }
 
-        .okp-info-window {
-            background: @okp_light_bg;
+        .okp-media-info-modal-layer {
+            background: transparent;
+        }
+
+        /* GTK4 CSS has no portable backdrop-filter. Keep the canonical 50%
+         * black scrim as the deterministic fallback; compositor blur remains
+         * an operator-QA concern rather than an unsupported CSS declaration. */
+        .okp-media-info-backdrop {
+            background: rgba(0, 0, 0, 0.50);
+        }
+
+        .okp-media-info-card {
+            background: #f7f7f5;
+            color: @okp_ink;
+            border: 1px solid rgba(0, 0, 0, 0.08);
+            border-radius: 11px;
+            box-shadow: 0 32px 90px rgba(0, 0, 0, 0.50);
+        }
+
+        .okp-media-info-header {
+            padding: 17px 20px 15px;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.07);
+        }
+
+        .okp-media-info-identity {
+            min-width: 38px;
+            min-height: 38px;
+            border-radius: 9px;
+            background: linear-gradient(150deg, @okp_teal, @okp_teal_deep);
+            box-shadow: 0 4px 12px rgba(14, 133, 132, 0.30);
+            color: #ffffff;
+        }
+
+        .okp-media-info-title {
+            color: #161616;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 17px;
+            font-weight: 600;
+        }
+
+        .okp-media-info-subtitle,
+        .okp-media-info-path {
+            color: rgba(0, 0, 0, 0.50);
+            font-family: 'Cascadia Code', 'Cascadia Mono', monospace;
+            font-size: 12px;
+            font-weight: 400;
+        }
+
+        button.okp-media-info-close {
+            min-width: 30px;
+            min-height: 30px;
+            padding: 0;
+            border: none;
+            border-radius: 7px;
+            background: rgba(0, 0, 0, 0.04);
+            box-shadow: none;
+            color: rgba(0, 0, 0, 0.55);
+        }
+
+        button.okp-media-info-close:hover {
+            background: rgba(0, 0, 0, 0.08);
+            color: rgba(0, 0, 0, 0.75);
+        }
+
+        .okp-media-info-tabs {
+            padding: 13px 20px 0;
+        }
+
+        .okp-media-info-tab-strip {
+            padding: 3px;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.05);
+        }
+
+        button.okp-media-info-tab {
+            min-width: 137px;
+            min-height: 30px;
+            padding: 0 8px;
+            border: none;
+            border-radius: 6px;
+            background: transparent;
+            box-shadow: none;
+            color: rgba(0, 0, 0, 0.50);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12.5px;
+            font-weight: 500;
+        }
+
+        button.okp-media-info-tab.is-active {
+            background: #ffffff;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.10);
+            color: @okp_teal_deep;
+            font-weight: 600;
+        }
+
+        button.okp-media-info-tab:hover:not(.is-active) {
+            background: rgba(255, 255, 255, 0.45);
+            color: rgba(0, 0, 0, 0.68);
+        }
+
+        .okp-media-info-stack,
+        .okp-media-info-scroller,
+        .okp-media-info-scroller > viewport {
+            background: #f7f7f5;
+        }
+
+        .okp-media-info-content {
+            padding: 16px 20px 20px;
+        }
+
+        .okp-media-info-card .okp-media-info-grid {
+            background: transparent;
+        }
+
+        .okp-media-info-scroller scrollbar {
+            background: transparent;
+            border: none;
+        }
+
+        .okp-media-info-scroller scrollbar trough {
+            background: transparent;
+            border: none;
+        }
+
+        .okp-media-info-scroller scrollbar slider {
+            min-width: 4px;
+            border-radius: 999px;
+            background: rgba(0, 0, 0, 0.22);
+        }
+
+        .okp-media-info-card .okp-info-section {
+            padding: 13px 16px;
+            border-radius: 8px;
+            background: #ffffff;
+            border: 1px solid rgba(0, 0, 0, 0.06);
+        }
+
+        .okp-media-info-card .okp-info-section-title {
+            margin-bottom: 11px;
+            color: #0c7c75;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .okp-media-info-card .okp-info-row {
+            min-height: 18px;
+        }
+
+        .okp-media-info-card .okp-info-label {
+            color: rgba(0, 0, 0, 0.50);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12.5px;
+            font-weight: 400;
+        }
+
+        .okp-media-info-card .okp-info-value {
+            color: #1a1a1a;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12.5px;
+            font-weight: 500;
+            font-feature-settings: 'tnum';
+        }
+
+        .okp-media-info-card .okp-info-row.is-highlight .okp-info-value {
+            color: @okp_teal_deep;
+            font-weight: 600;
+        }
+
+        .okp-media-info-card .okp-info-track-row {
+            min-height: 42px;
+            padding: 9px 11px;
+            border-radius: 7px;
+            background: transparent;
+            border: 1px solid transparent;
+        }
+
+        .okp-media-info-card .okp-info-track-row.is-selected {
+            background: alpha(@okp_teal, 0.07);
+            border-color: alpha(@okp_teal, 0.16);
+        }
+
+        .okp-media-info-card .okp-info-track-kind {
+            min-width: 34px;
+            color: rgba(0, 0, 0, 0.40);
+            font-family: 'Cascadia Code', 'Cascadia Mono', monospace;
+            font-size: 10px;
+            font-weight: 500;
+        }
+
+        .okp-media-info-card .okp-info-track-current {
+            background: alpha(@okp_teal, 0.14);
+            color: #0c7c75;
+            font-size: 9px;
+        }
+
+        .okp-media-info-empty {
+            color: rgba(0, 0, 0, 0.50);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12.5px;
+        }
+
+        .okp-media-info-footer {
+            padding: 12px 20px;
+            border-top: 1px solid rgba(0, 0, 0, 0.07);
+        }
+
+        .okp-media-info-path {
+            color: rgba(0, 0, 0, 0.40);
+            font-size: 11px;
+        }
+
+        button.okp-media-info-copy,
+        button.okp-media-info-done {
+            min-height: 32px;
+            padding: 0 14px;
+            border-radius: 7px;
+            box-shadow: none;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        button.okp-media-info-copy {
+            border: 1px solid rgba(0, 0, 0, 0.08);
+            background: rgba(0, 0, 0, 0.05);
+            color: #1a1a1a;
+        }
+
+        button.okp-media-info-copy:hover {
+            background: rgba(0, 0, 0, 0.08);
+        }
+
+        button.okp-media-info-done {
+            min-width: 70px;
+            padding: 0 18px;
+            border: none;
+            background: @okp_teal;
+            color: #ffffff;
+            box-shadow: 0 3px 10px alpha(@okp_teal, 0.28);
+        }
+
+        button.okp-media-info-done:hover {
+            background: #0c7c75;
+        }
+
+        button.okp-media-info-close:focus-visible,
+        button.okp-media-info-tab:focus-visible,
+        button.okp-media-info-copy:focus-visible,
+        button.okp-media-info-done:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 2px alpha(@okp_teal, 0.42);
         }
 
         window.okp-command-dialog {
@@ -2376,28 +2625,20 @@ const OKP_STYLESHEET: &str = "
             background: transparent;
         }
 
-        window.okp-settings-window > contents,
-        window.okp-info-window > contents {
+        window.okp-settings-window > contents {
             background: transparent;
             box-shadow: none;
             border: none;
         }
 
         window.okp-settings-window headerbar,
-        window.okp-info-window headerbar,
-        window.okp-settings-window decoration,
-        window.okp-info-window decoration {
+        window.okp-settings-window decoration {
             min-height: 0;
             margin: 0;
             padding: 0;
             border: none;
             background: transparent;
             box-shadow: none;
-        }
-
-        .okp-info-root {
-            background: @okp_light_bg;
-            color: @okp_ink;
         }
 
         .okp-settings-root {
@@ -2561,59 +2802,6 @@ const OKP_STYLESHEET: &str = "
 
         .okp-settings-page {
             padding: 28px 44px 28px 24px;
-        }
-
-        .okp-info-page {
-            background: @okp_light_bg;
-        }
-
-        .okp-info-hero {
-            min-height: 82px;
-        }
-
-        .okp-info-eyebrow {
-            color: rgba(0, 0, 0, 0.40);
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 11px;
-            font-weight: 600;
-            letter-spacing: 0;
-        }
-
-        .okp-info-title {
-            color: @okp_ink;
-            font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
-            font-size: 28px;
-            font-weight: 650;
-        }
-
-        .okp-info-path {
-            color: rgba(0, 0, 0, 0.46);
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 12px;
-        }
-
-        .okp-info-content {
-            padding-right: 4px;
-        }
-
-        window.okp-info-window scrolledwindow {
-            background: @okp_light_bg;
-        }
-
-        window.okp-info-window scrollbar {
-            background: transparent;
-            border: none;
-        }
-
-        window.okp-info-window scrollbar trough {
-            background: transparent;
-            border: none;
-        }
-
-        window.okp-info-window scrollbar slider {
-            min-width: 4px;
-            border-radius: 999px;
-            background: rgba(0, 0, 0, 0.22);
         }
 
         .okp-settings-content {
@@ -3006,52 +3194,6 @@ const OKP_STYLESHEET: &str = "
             font-size: 12px;
             font-weight: 500;
             font-feature-settings: 'tnum';
-        }
-
-        .okp-info-summary {
-            padding: 0;
-        }
-
-        .okp-info-chip {
-            min-width: 78px;
-            padding: 8px 10px;
-            border-radius: 8px;
-            background: #ffffff;
-            border: 1px solid rgba(0, 0, 0, 0.06);
-        }
-
-        .okp-info-chip-label {
-            color: rgba(0, 0, 0, 0.40);
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 10px;
-            font-weight: 600;
-            letter-spacing: 0;
-        }
-
-        .okp-info-chip-value {
-            color: @okp_ink;
-            font-family: 'Cascadia Code', 'Cascadia Mono', monospace;
-            font-size: 12px;
-            font-weight: 600;
-            font-feature-settings: 'tnum';
-        }
-
-        flowbox.okp-info-summary {
-            padding: 0;
-        }
-
-        .okp-info-summary flowboxchild {
-            min-height: 0;
-            padding: 0;
-            border-radius: 8px;
-            background: transparent;
-        }
-
-        .okp-info-summary flowboxchild:selected,
-        .okp-info-summary flowboxchild:focus {
-            background: transparent;
-            box-shadow: none;
-            outline: none;
         }
 
         .okp-info-row.is-highlight .okp-info-value {
@@ -3458,8 +3600,7 @@ const OKP_STYLESHEET: &str = "
         window.okp-settings-window.is-dark .okp-about-row-value,
         window.okp-settings-window.is-dark .okp-about-row-value-mono,
         window.okp-settings-window.is-dark .okp-info-value,
-        window.okp-settings-window.is-dark .okp-shortcut-action-title,
-        window.okp-settings-window.is-dark .okp-info-chip-value {
+        window.okp-settings-window.is-dark .okp-shortcut-action-title {
             color: rgba(255, 255, 255, 0.94);
         }
 
@@ -3475,8 +3616,7 @@ const OKP_STYLESHEET: &str = "
         window.okp-settings-window.is-dark .okp-about-card-title,
         window.okp-settings-window.is-dark .okp-about-row-detail,
         window.okp-settings-window.is-dark .okp-shortcut-action-id,
-        window.okp-settings-window.is-dark .okp-info-section-title,
-        window.okp-settings-window.is-dark .okp-info-chip-label {
+        window.okp-settings-window.is-dark .okp-info-section-title {
             color: rgba(255, 255, 255, 0.42);
         }
 
@@ -3490,8 +3630,7 @@ const OKP_STYLESHEET: &str = "
         }
 
         window.okp-settings-window.is-dark .okp-about-card,
-        window.okp-settings-window.is-dark .okp-info-section,
-        window.okp-settings-window.is-dark .okp-info-chip {
+        window.okp-settings-window.is-dark .okp-info-section {
             background: rgba(255, 255, 255, 0.035);
             border-color: rgba(255, 255, 255, 0.07);
         }
