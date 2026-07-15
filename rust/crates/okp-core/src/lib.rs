@@ -2,6 +2,7 @@ pub mod acceptance_evidence;
 pub mod app;
 pub mod aspect_resize;
 pub mod bookmarks;
+pub mod branding;
 pub mod chapter_math;
 pub mod history;
 pub mod history_format;

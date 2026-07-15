@@ -101,6 +101,7 @@ pub(crate) fn push_unique_playlist_item(items: &mut Vec<PlaylistItem>, item: Pla
 }
 
 pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> AppRuntime {
+    apply_gtk_theme_preview();
     install_css();
 
     let identity = AppIdentity::linux();
@@ -128,6 +129,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         .decorated(false)
         .build();
     window.add_css_class("okp-player-window");
+    window.set_icon_name(Some(LINUX_ICON_NAME));
 
     let overlay = gtk::Overlay::new();
     overlay.add_css_class("okp-root");
@@ -400,8 +402,7 @@ pub(crate) fn build_player_window_chrome(
     drag_zone.set_can_target(true);
     drag_zone.set_margin_start(14);
 
-    let media_icon = gtk::Image::from_icon_name("media-playback-start-symbolic");
-    media_icon.add_css_class("okp-window-media-icon");
+    let media_icon = canonical_brand_mark(20, 11, "okp-window-media-icon");
     media_icon.set_visible(false);
     let title_label = gtk::Label::new(None);
     title_label.add_css_class("okp-window-media-title");
@@ -919,6 +920,19 @@ fn idle_theme_is_dark() -> bool {
         _ => gtk::Settings::default()
             .map(|settings| settings.property::<bool>("gtk-application-prefer-dark-theme"))
             .unwrap_or(false),
+    }
+}
+
+fn apply_gtk_theme_preview() {
+    // Drive the same GtkSettings property GNOME uses so visual smoke exercises
+    // production theme resolution instead of only swapping app CSS classes.
+    let prefer_dark = match env::var("OKP_GTK_THEME_PREVIEW").ok().as_deref() {
+        Some("light") => Some(false),
+        Some("dark") => Some(true),
+        _ => None,
+    };
+    if let (Some(settings), Some(prefer_dark)) = (gtk::Settings::default(), prefer_dark) {
+        settings.set_gtk_application_prefer_dark_theme(prefer_dark);
     }
 }
 

@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ICON="${1:-$ROOT/rust/packaging/linux/com.befeast.okplayer.svg}"
+ICON_THEME_ROOT="$ROOT/rust/packaging/linux/icons/hicolor"
 OUT_DIR="${2:-$ROOT/artifacts/manual-ui/linux-icon-contact-sheet}"
 SIZES=(16 24 32 48 64 128 256)
 
@@ -23,8 +24,13 @@ mkdir -p "$OUT_DIR/tiles"
 
 tiles=()
 for size in "${SIZES[@]}"; do
+  source_icon="$ICON"
+  fixed_icon="$ICON_THEME_ROOT/${size}x${size}/apps/com.befeast.okplayer.svg"
+  if [[ -f "$fixed_icon" ]]; then
+    source_icon="$fixed_icon"
+  fi
   png="$OUT_DIR/ok-player-${size}.png"
-  rsvg-convert --width "$size" --height "$size" "$ICON" --output "$png"
+  rsvg-convert --width "$size" --height "$size" "$source_icon" --output "$png"
 
   dark="$OUT_DIR/tiles/dark-${size}.png"
   light="$OUT_DIR/tiles/light-${size}.png"

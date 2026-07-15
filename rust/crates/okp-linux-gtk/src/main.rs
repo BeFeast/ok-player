@@ -38,6 +38,7 @@ use velopack::{
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
 mod about;
+mod branding;
 mod controls;
 mod css;
 mod dialogs;
@@ -61,6 +62,7 @@ mod track_popovers;
 mod updates;
 mod window;
 pub(crate) use about::*;
+pub(crate) use branding::*;
 pub(crate) use controls::*;
 pub(crate) use css::*;
 pub(crate) use dialogs::*;
@@ -84,6 +86,7 @@ const SPEED_PRESETS: [f64; 6] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 const APP_BUILD_VERSION: &str = env!("OKP_BUILD_VERSION");
 const APP_BUILD_SHA: &str = env!("OKP_BUILD_SHA");
 const LINUX_DESKTOP_ID: &str = "com.befeast.okplayer.desktop";
+const LINUX_ICON_NAME: &str = "com.befeast.okplayer";
 const MPRIS_BUS_NAME: &str = "org.mpris.MediaPlayer2.okplayer";
 const MPRIS_OBJECT_PATH: &str = "/org/mpris/MediaPlayer2";
 const MPRIS_TRACK_PATH: &str = "/org/mpris/MediaPlayer2/Track/0";
@@ -762,7 +765,7 @@ struct Controls {
 #[derive(Clone)]
 struct PlayerWindowChrome {
     revealer: gtk::Revealer,
-    media_icon: gtk::Image,
+    media_icon: gtk::DrawingArea,
     title_label: gtk::Label,
 }
 

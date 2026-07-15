@@ -11,6 +11,7 @@ TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/rust/target}"
 PACK_DIR="$ROOT/artifacts/linux/velopack-packdir"
 OUTPUT_DIR="$ROOT/artifacts/linux/velopack"
 ICON="$ROOT/rust/packaging/linux/com.befeast.okplayer.svg"
+FIXED_ICONS="$ROOT/rust/packaging/linux/icons/hicolor"
 
 if command -v vpk >/dev/null 2>&1; then
   VPK="${VPK:-vpk}"
@@ -29,6 +30,12 @@ rm -rf "$PACK_DIR" "$OUTPUT_DIR"
 mkdir -p "$PACK_DIR" "$OUTPUT_DIR"
 install -Dm755 "$TARGET_DIR/release/okp-linux-gtk" "$PACK_DIR/ok-player"
 install -Dm644 "$ICON" "$PACK_DIR/com.befeast.okplayer.svg"
+install -Dm644 "$ICON" "$PACK_DIR/usr/share/icons/hicolor/scalable/apps/com.befeast.okplayer.svg"
+for size in 16 24 32 48 64; do
+  install -Dm644 \
+    "$FIXED_ICONS/${size}x${size}/apps/com.befeast.okplayer.svg" \
+    "$PACK_DIR/usr/share/icons/hicolor/${size}x${size}/apps/com.befeast.okplayer.svg"
+done
 
 "$VPK" pack \
   --packId "$PACK_ID" \
