@@ -4,9 +4,35 @@ use okp_core::recents_shelf::{HistoryItem, WelcomeShelf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const WELCOME_ITEM_LIMIT: usize = 3;
-const OPENED_CONTEXT_REFRESH_SECONDS: i64 = 60;
 const HISTORY_LOADING_MILLIS: u64 = 180;
 const HISTORY_SEARCH_THRESHOLD: usize = 5;
+
+const WELCOME_WRAPPER_WIDTH: i32 = 744;
+const WELCOME_HORIZONTAL_PADDING: i32 = 32;
+const RECENT_CARD_WIDTH: i32 = 194;
+const RECENT_CARD_HEIGHT: i32 = 110;
+const RECENT_SHELF_ROW_HEIGHT: i32 = 148;
+const RECENT_GAP: i32 = 14;
+const HISTORY_COLUMN_WIDTH: i32 = 48;
+const HISTORY_BUTTON_SIZE: i32 = 36;
+const HISTORY_BUTTON_INSET: i32 = (HISTORY_COLUMN_WIDTH - HISTORY_BUTTON_SIZE) / 2;
+const WELCOME_CONTENT_WIDTH: i32 = WELCOME_WRAPPER_WIDTH - 2 * WELCOME_HORIZONTAL_PADDING;
+const WELCOME_SHELF_TRAILING_SPACE: i32 = WELCOME_WRAPPER_WIDTH
+    - 2 * WELCOME_HORIZONTAL_PADDING
+    - 3 * RECENT_CARD_WIDTH
+    - HISTORY_COLUMN_WIDTH
+    - 3 * RECENT_GAP;
+const WELCOME_ACTION_COLUMN_WIDTH: i32 = 132;
+const WELCOME_ACTION_GAP: i32 = 14;
+#[cfg(test)]
+const WELCOME_DROP_TARGET_WIDTH: i32 =
+    WELCOME_CONTENT_WIDTH - WELCOME_ACTION_COLUMN_WIDTH - WELCOME_ACTION_GAP;
+const WELCOME_ACTION_ROW_HEIGHT: i32 = 84;
+const WELCOME_ACTION_BUTTON_GAP: i32 = 8;
+
+fn welcome_action_row_stacks(width: i32) -> bool {
+    width < WELCOME_CONTENT_WIDTH
+}
 
 impl EmptySurface {
     pub(crate) fn refresh(
@@ -15,7 +41,6 @@ impl EmptySurface {
         state: &Rc<RefCell<PlayerState>>,
         status_toast: Rc<StatusToast>,
     ) {
-        let now_unix = unix_now();
         let mut welcome_model = {
             let state = state.borrow();
             state
@@ -25,22 +50,17 @@ impl EmptySurface {
         if env::var("OKP_WELCOME_STATE").ok().as_deref() == Some("empty") {
             welcome_model = WelcomeShelf::Empty;
         }
-        let opened_context_bucket = welcome_opened_context_bucket(&welcome_model, now_unix);
-        if self.model.borrow().as_ref() != Some(&welcome_model)
-            || self.opened_context_bucket.get() != opened_context_bucket
-        {
+        if self.model.borrow().as_ref() != Some(&welcome_model) {
             *self.model.borrow_mut() = Some(welcome_model.clone());
-            self.opened_context_bucket.set(opened_context_bucket);
-            replace_box_child(
-                &self.welcome_host,
-                &welcome_page(
-                    parent,
-                    Rc::clone(state),
-                    Rc::clone(&status_toast),
-                    &welcome_model,
-                    now_unix,
-                ),
+            let (page, history_button) = welcome_page(
+                self.clone(),
+                parent,
+                Rc::clone(state),
+                Rc::clone(&status_toast),
+                &welcome_model,
             );
+            *self.welcome_history_button.borrow_mut() = history_button;
+            replace_box_child(&self.welcome_host, &page);
             self.footer
                 .set_visible(!matches!(welcome_model, WelcomeShelf::Empty));
             self.sync_footer(state.borrow().private_session);
@@ -130,18 +150,13 @@ impl EmptySurface {
     }
 }
 
-fn welcome_opened_context_bucket(model: &WelcomeShelf, now_unix: i64) -> Option<i64> {
-    matches!(model, WelcomeShelf::Items(_))
-        .then_some(now_unix.div_euclid(OPENED_CONTEXT_REFRESH_SECONDS))
-}
-
 fn welcome_page(
+    surface: EmptySurface,
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
     model: &WelcomeShelf,
-    now_unix: i64,
-) -> gtk::ScrolledWindow {
+) -> (gtk::ScrolledWindow, Option<gtk::Button>) {
     let scroller = gtk::ScrolledWindow::new();
     scroller.add_css_class("okp-idle-scroller");
     scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
@@ -151,16 +166,29 @@ fn welcome_page(
     let center = gtk::CenterBox::new();
     center.set_hexpand(true);
     center.set_vexpand(true);
-    let page = match model {
-        WelcomeShelf::Empty => first_run_welcome(parent, state, status_toast),
-        WelcomeShelf::Private => private_welcome(parent, state, status_toast),
+    let (page, history_button) = match model {
+        WelcomeShelf::Empty => (
+            first_run_welcome(parent, Rc::clone(&state), Rc::clone(&status_toast)),
+            None,
+        ),
+        WelcomeShelf::Private => (
+            private_welcome(parent, Rc::clone(&state), Rc::clone(&status_toast)),
+            None,
+        ),
         WelcomeShelf::Items(items) => {
-            continue_watching_welcome(parent, state, status_toast, items, now_unix)
+            let (page, button) = continue_watching_welcome(
+                surface.clone(),
+                parent,
+                Rc::clone(&state),
+                Rc::clone(&status_toast),
+                items,
+            );
+            (page, Some(button))
         }
     };
     center.set_center_widget(Some(&page));
     scroller.set_child(Some(&center));
-    scroller
+    (scroller, history_button)
 }
 
 fn first_run_welcome(
@@ -231,16 +259,16 @@ fn private_welcome(
 }
 
 fn continue_watching_welcome(
+    surface: EmptySurface,
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
     items: &[HistoryItem],
-    now_unix: i64,
-) -> gtk::Box {
+) -> (gtk::Box, gtk::Button) {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     content.add_css_class("okp-welcome-recents");
     content.set_halign(gtk::Align::Center);
-    content.set_valign(gtk::Align::Center);
+    content.set_valign(gtk::Align::Start);
 
     let title = gtk::Label::new(Some("Continue watching"));
     title.add_css_class("okp-welcome-recents-title");
@@ -254,53 +282,59 @@ fn continue_watching_welcome(
     let shelf = gtk::FlowBox::new();
     shelf.add_css_class("okp-recents-shelf");
     shelf.set_selection_mode(gtk::SelectionMode::None);
-    shelf.set_homogeneous(true);
+    shelf.set_homogeneous(false);
     shelf.set_min_children_per_line(1);
-    shelf.set_max_children_per_line(3);
-    shelf.set_column_spacing(14);
-    shelf.set_row_spacing(14);
-    shelf.set_halign(gtk::Align::Start);
+    shelf.set_max_children_per_line(4);
+    shelf.set_column_spacing(RECENT_GAP as u32);
+    shelf.set_row_spacing(RECENT_GAP as u32);
+    shelf.set_hexpand(true);
+    shelf.set_halign(gtk::Align::Fill);
     for item in items {
-        shelf.insert(&recent_card(item, Rc::clone(&state), now_unix), -1);
+        shelf.insert(&recent_card(item, Rc::clone(&state)), -1);
     }
+    let (history_child, history_button) = recent_history_column(
+        surface.clone(),
+        parent,
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    );
+    shelf.insert(&history_child, -1);
     content.append(&shelf);
 
-    let actions = gtk::FlowBox::new();
+    let action_column = gtk::Box::new(gtk::Orientation::Vertical, WELCOME_ACTION_BUTTON_GAP);
+    action_column.add_css_class("okp-welcome-action-column");
+    action_column.set_size_request(WELCOME_ACTION_COLUMN_WIDTH, WELCOME_ACTION_ROW_HEIGHT);
+    action_column.set_hexpand(false);
+    action_column.set_halign(gtk::Align::Start);
+    let open_file = open_file_button(parent, Rc::clone(&state), Rc::clone(&status_toast));
+    open_file.set_hexpand(true);
+    action_column.append(&open_file);
+    let open_url = open_url_button(parent, Rc::clone(&state), Rc::clone(&status_toast));
+    open_url.set_hexpand(true);
+    action_column.append(&open_url);
+    let drop_target = welcome_drop_target(parent, state, status_toast, false);
+    drop_target.set_size_request(-1, WELCOME_ACTION_ROW_HEIGHT);
+    drop_target.set_hexpand(true);
+    let actions = WelcomeActionRow::new(&action_column, &drop_target);
     actions.add_css_class("okp-welcome-action-row");
-    actions.set_selection_mode(gtk::SelectionMode::None);
-    actions.set_column_spacing(14);
-    actions.set_row_spacing(14);
-    actions.set_min_children_per_line(1);
-    actions.set_max_children_per_line(2);
-    let action_column = gtk::Box::new(gtk::Orientation::Vertical, 9);
-    action_column.append(&open_file_button(
-        parent,
-        Rc::clone(&state),
-        Rc::clone(&status_toast),
-    ));
-    action_column.append(&open_url_button(
-        parent,
-        Rc::clone(&state),
-        Rc::clone(&status_toast),
-    ));
-    actions.insert(&action_column, -1);
-    actions.insert(&welcome_drop_target(parent, state, status_toast, false), -1);
+    actions.set_hexpand(true);
+    actions.set_halign(gtk::Align::Fill);
     content.append(&actions);
-    content
+    (content, history_button)
 }
 
-fn recent_card(item: &HistoryItem, state: Rc<RefCell<PlayerState>>, now_unix: i64) -> gtk::Button {
+fn recent_card(item: &HistoryItem, state: Rc<RefCell<PlayerState>>) -> gtk::Button {
     let button = gtk::Button::new();
     button.add_css_class("okp-recent-card");
     button.set_has_frame(false);
     button.set_tooltip_text(Some(&item.path));
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    content.set_size_request(194, -1);
-    let thumbnail = history_thumbnail(item, 194, 110, false);
+    content.set_size_request(RECENT_CARD_WIDTH, -1);
+    let thumbnail = history_thumbnail(item, RECENT_CARD_WIDTH, RECENT_CARD_HEIGHT, false);
     let progress = gtk::ProgressBar::new();
     progress.add_css_class("okp-recent-progress");
-    progress.set_size_request(194, -1);
+    progress.set_size_request(RECENT_CARD_WIDTH, -1);
     progress.set_fraction(item.progress);
     progress.set_valign(gtk::Align::End);
     progress.set_halign(gtk::Align::Fill);
@@ -325,19 +359,43 @@ fn recent_card(item: &HistoryItem, state: Rc<RefCell<PlayerState>>, now_unix: i6
     location.set_xalign(0.0);
     location.set_ellipsize(pango::EllipsizeMode::Middle);
     content.append(&location);
-    let context = gtk::Label::new(Some(&format!(
-        "{} · {}",
-        okp_core::recents_shelf::runtime_label(item.duration),
-        okp_core::recents_shelf::opened_context(item.updated_at_unix, now_unix)
-    )));
-    context.add_css_class("okp-recent-context");
-    context.set_xalign(0.0);
-    content.append(&context);
     button.set_child(Some(&content));
 
     let path = PathBuf::from(&item.path);
     button.connect_clicked(move |_| load_media_path(&state, path.clone()));
     button
+}
+
+fn recent_history_column(
+    surface: EmptySurface,
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> (gtk::FlowBoxChild, gtk::Button) {
+    let button = gtk::Button::from_icon_name("go-next-symbolic");
+    button.add_css_class("okp-recents-history-button");
+    button.set_tooltip_text(Some("History"));
+    button.set_size_request(HISTORY_BUTTON_SIZE, HISTORY_BUTTON_SIZE);
+    button.set_margin_start(HISTORY_BUTTON_INSET);
+    button.set_margin_end(HISTORY_BUTTON_INSET + WELCOME_SHELF_TRAILING_SPACE);
+    let vertical_margin = (RECENT_SHELF_ROW_HEIGHT - HISTORY_BUTTON_SIZE) / 2;
+    button.set_margin_top(vertical_margin);
+    button.set_margin_bottom(vertical_margin);
+    let button_surface = surface.clone();
+    let button_parent = parent.clone();
+    let button_state = Rc::clone(&state);
+    let button_toast = Rc::clone(&status_toast);
+    button.connect_clicked(move |_| {
+        button_surface.show_history(
+            &button_parent,
+            Rc::clone(&button_state),
+            Rc::clone(&button_toast),
+        );
+    });
+
+    let child = gtk::FlowBoxChild::new();
+    child.set_child(Some(&button));
+    (child, button)
 }
 
 fn open_file_button(
@@ -920,22 +978,160 @@ fn unix_now() -> i64 {
         .unwrap_or_default()
 }
 
+// FlowBox gives both columns equal tracks. This widget keeps the canonical asymmetric wide
+// allocation while still reporting height-for-width stacking for narrow windows.
+mod welcome_action_row {
+    use super::*;
+    use gtk::subclass::prelude::*;
+    use gtk::{graphene, gsk};
+
+    #[derive(Default)]
+    pub(super) struct WelcomeActionRow {
+        pub(super) action: RefCell<Option<gtk::Widget>>,
+        pub(super) drop_target: RefCell<Option<gtk::Widget>>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for WelcomeActionRow {
+        const NAME: &'static str = "OkpWelcomeActionRow";
+        type Type = super::WelcomeActionRow;
+        type ParentType = gtk::Widget;
+    }
+
+    impl ObjectImpl for WelcomeActionRow {
+        fn dispose(&self) {
+            for child in [self.action.take(), self.drop_target.take()]
+                .into_iter()
+                .flatten()
+            {
+                child.unparent();
+            }
+        }
+    }
+
+    impl WidgetImpl for WelcomeActionRow {
+        fn request_mode(&self) -> gtk::SizeRequestMode {
+            gtk::SizeRequestMode::HeightForWidth
+        }
+
+        fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
+            let action = self.action.borrow();
+            let drop_target = self.drop_target.borrow();
+            let Some(action) = action.as_ref() else {
+                return (0, 0, -1, -1);
+            };
+            let Some(drop_target) = drop_target.as_ref() else {
+                return (0, 0, -1, -1);
+            };
+
+            match orientation {
+                gtk::Orientation::Horizontal => {
+                    let (action_min, _, _, _) = action.measure(orientation, -1);
+                    let (drop_min, _, _, _) = drop_target.measure(orientation, -1);
+                    (action_min.max(drop_min), WELCOME_CONTENT_WIDTH, -1, -1)
+                }
+                gtk::Orientation::Vertical => {
+                    let height = if for_size < 0 || !welcome_action_row_stacks(for_size) {
+                        WELCOME_ACTION_ROW_HEIGHT
+                    } else {
+                        2 * WELCOME_ACTION_ROW_HEIGHT + WELCOME_ACTION_GAP
+                    };
+                    (height, height, -1, -1)
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        fn size_allocate(&self, width: i32, _height: i32, baseline: i32) {
+            let action = self.action.borrow();
+            let drop_target = self.drop_target.borrow();
+            let (Some(action), Some(drop_target)) = (action.as_ref(), drop_target.as_ref()) else {
+                return;
+            };
+
+            action.allocate(
+                WELCOME_ACTION_COLUMN_WIDTH.min(width),
+                WELCOME_ACTION_ROW_HEIGHT,
+                baseline,
+                None,
+            );
+            let (drop_width, drop_y) = if welcome_action_row_stacks(width) {
+                (width, WELCOME_ACTION_ROW_HEIGHT + WELCOME_ACTION_GAP)
+            } else {
+                (width - WELCOME_ACTION_COLUMN_WIDTH - WELCOME_ACTION_GAP, 0)
+            };
+            let transform = gsk::Transform::new().translate(&graphene::Point::new(
+                if drop_y == 0 {
+                    (WELCOME_ACTION_COLUMN_WIDTH + WELCOME_ACTION_GAP) as f32
+                } else {
+                    0.0
+                },
+                drop_y as f32,
+            ));
+            drop_target.allocate(
+                drop_width,
+                WELCOME_ACTION_ROW_HEIGHT,
+                baseline,
+                Some(transform),
+            );
+        }
+
+        fn snapshot(&self, snapshot: &gtk::Snapshot) {
+            let widget = self.obj();
+            for child in [
+                self.action.borrow().clone(),
+                self.drop_target.borrow().clone(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                widget.snapshot_child(&child, snapshot);
+            }
+        }
+    }
+}
+
+glib::wrapper! {
+    struct WelcomeActionRow(ObjectSubclass<welcome_action_row::WelcomeActionRow>)
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
+
+impl WelcomeActionRow {
+    fn new(action: &impl IsA<gtk::Widget>, drop_target: &impl IsA<gtk::Widget>) -> Self {
+        use gtk::subclass::prelude::ObjectSubclassIsExt;
+
+        let row: Self = glib::Object::builder().build();
+        let imp = row.imp();
+        let action = action.clone().upcast::<gtk::Widget>();
+        let drop_target = drop_target.clone().upcast::<gtk::Widget>();
+        action.set_parent(&row);
+        drop_target.set_parent(&row);
+        imp.action.replace(Some(action));
+        imp.drop_target.replace(Some(drop_target));
+        row
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn welcome_items_refresh_relative_context_once_per_minute() {
-        let items = WelcomeShelf::Items(Vec::new());
-        assert_eq!(welcome_opened_context_bucket(&items, 119), Some(1));
-        assert_eq!(welcome_opened_context_bucket(&items, 120), Some(2));
-        assert_eq!(
-            welcome_opened_context_bucket(&WelcomeShelf::Empty, 120),
-            None
-        );
-        assert_eq!(
-            welcome_opened_context_bucket(&WelcomeShelf::Private, 120),
-            None
-        );
+    fn gtk_continue_watching_geometry_matches_the_design_artifact() {
+        let shelf_width = 3 * RECENT_CARD_WIDTH + HISTORY_COLUMN_WIDTH + 3 * RECENT_GAP;
+
+        assert_eq!(WELCOME_CONTENT_WIDTH, 680);
+        assert_eq!(shelf_width, 672);
+        assert_eq!(WELCOME_SHELF_TRAILING_SPACE, 8);
+        assert_eq!(RECENT_CARD_HEIGHT, 110);
+        assert_eq!(RECENT_SHELF_ROW_HEIGHT, 148);
+        assert_eq!(HISTORY_BUTTON_INSET, 6);
+        assert_eq!(WELCOME_ACTION_COLUMN_WIDTH, 132);
+        assert_eq!(WELCOME_DROP_TARGET_WIDTH, 534);
+        assert_eq!(WELCOME_ACTION_ROW_HEIGHT, 84);
+        assert!(!welcome_action_row_stacks(680));
+        assert!(welcome_action_row_stacks(679));
+        assert!(welcome_action_row_stacks(416));
     }
 }

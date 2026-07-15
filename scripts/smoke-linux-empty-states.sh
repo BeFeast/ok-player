@@ -108,6 +108,15 @@ capture() {
     xdotool windowsize "$window_id" "$width" "$height"
     sleep 1
   fi
+  if [[ "$shot" == history-via-recents-arrow-* ]]; then
+    import -window "$window_id" "$OUT_DIR/$shot-before.png"
+    xdotool mousemove --window "$window_id" 868 220 click 1
+    sleep 1
+    if xdotool search --name '^History$' >/dev/null 2>&1; then
+      echo "$shot: recents arrow opened a separate History window" >&2
+      exit 1
+    fi
+  fi
   import -window "$window_id" "$OUT_DIR/$shot.png"
   local actual_width actual_height
   actual_width="$(xwininfo -id "$window_id" | awk '/Width:/ {print $2; exit}')"
@@ -168,7 +177,9 @@ for theme in light dark; do
   capture "history-loading-$theme" 1120 680 OKP_IDLE_THEME="$theme" OKP_OPEN_HISTORY_ON_STARTUP=1 OKP_HISTORY_STATE=loading
   capture "history-no-match-$theme" 1120 680 OKP_IDLE_THEME="$theme" OKP_OPEN_HISTORY_ON_STARTUP=1 OKP_HISTORY_STATE=no-match
 done
+capture history-via-recents-arrow-light 1120 680 OKP_IDLE_THEME=light
 capture continue-watching-narrow 480 540 OKP_IDLE_THEME=light
+capture continue-watching-narrow-actions 480 760 OKP_IDLE_THEME=light
 capture history-has-data-narrow 480 540 OKP_IDLE_THEME=light OKP_OPEN_HISTORY_ON_STARTUP=1
 
 # First run: centered teal tile and one dashed Open/drop target on a full-window canvas.
@@ -189,6 +200,46 @@ done
 
 # Continue Watching: the center-bottom band must remain calm. The old disabled OSC
 # created a dense high-contrast bar here; the canonical canvas leaves only the footer.
+trim_offset() {
+  local image="$1" crop="$2" mode="$3"
+  local geometry offsets
+  if [[ "$mode" == direct ]]; then
+    geometry="$(magick "$image" -crop "$crop" +repage -colorspace gray -threshold 50% -trim -format '%g' info:)"
+  else
+    geometry="$(magick "$image" -crop "$crop" +repage -colorspace gray -edge 1 -threshold 12% -trim -format '%g' info:)"
+  fi
+  offsets="${geometry#*+}"
+  printf '%s %s\n' "${offsets%%+*}" "${offsets##*+}"
+}
+
+contrast_bounds() {
+  local image="$1" crop="$2" axis="$3" baseline_index="$4" delta="$5"
+  magick "$image" -crop "$crop" +repage -colorspace gray -depth 8 txt:- |
+    awk -v axis="$axis" -v baseline_index="$baseline_index" -v delta="$delta" '
+      NR > 1 {
+        position = $1
+        sub(/:/, "", position)
+        split(position, xy, ",")
+        coordinate = axis == "x" ? xy[1] : xy[2]
+        value = $0
+        sub(/^.*gray\(/, "", value)
+        sub(/\).*$/, "", value)
+        samples[coordinate] = value
+      }
+      END {
+        baseline = samples[baseline_index]
+        for (coordinate in samples) {
+          difference = samples[coordinate] - baseline
+          if (difference > delta || difference < -delta) {
+            if (minimum == "" || coordinate + 0 < minimum) minimum = coordinate + 0
+            if (maximum == "" || coordinate + 0 > maximum) maximum = coordinate + 0
+          }
+        }
+        if (minimum != "" && maximum != "") print minimum, maximum
+      }
+    '
+}
+
 for theme in light dark; do
   shot="$OUT_DIR/continue-watching-$theme.png"
   osc_stddev="$(magick "$shot" -crop 760x42+180+575 -colorspace gray -format '%[fx:standard_deviation]' info:)"
@@ -201,19 +252,123 @@ for theme in light dark; do
     echo "continue-watching-$theme: recent shelf did not render: edge=$shelf_edges" >&2
     exit 1
   fi
+
+  read -r heading_x heading_y < <(trim_offset "$shot" 500x70+180+60 direct)
+  read -r card_x card_y < <(trim_offset "$shot" 720x130+190+130 edge)
+  read -r action_x action_y < <(trim_offset "$shot" 720x170+190+300 edge)
+  read -r action_min_x action_max_x < <(contrast_bounds "$shot" 160x1+200+340 x 0 20)
+  read -r drop_min_x drop_max_x < <(contrast_bounds "$shot" 545x1+360+350 x 100 15)
+  read -r drop_min_y drop_max_y < <(contrast_bounds "$shot" 1x110+500+310 y 40 15)
+  if [[ -z "${action_min_x:-}" || -z "${drop_min_x:-}" || -z "${drop_min_y:-}" ]]; then
+    echo "continue-watching-$theme: action-row bounds could not be measured" >&2
+    exit 1
+  fi
+  read -r _ footer_y < <(trim_offset "$shot" 1000x40+60+630 edge)
+  heading_x=$((180 + heading_x))
+  heading_y=$((60 + heading_y))
+  card_x=$((190 + card_x))
+  card_y=$((130 + card_y))
+  action_x=$((190 + action_x))
+  action_y=$((300 + action_y))
+  action_column_x=$((200 + action_min_x))
+  action_column_width=$((action_max_x - action_min_x + 1))
+  drop_target_x=$((360 + drop_min_x + 1))
+  drop_target_width=$((drop_max_x - drop_min_x - 1))
+  action_row_height=$((drop_max_y - drop_min_y - 1))
+  footer_y=$((630 + footer_y))
+  if (( heading_y < 72 || heading_y > 76 )); then
+    echo "continue-watching-$theme: heading top is y=$heading_y, expected 74 +/- 2" >&2
+    exit 1
+  fi
+  if (( heading_x < 218 || heading_x > 224 || card_x < 218 || card_x > 222 )); then
+    echo "continue-watching-$theme: wrapper shifted: heading-x=$heading_x card-x=$card_x" >&2
+    exit 1
+  fi
+  if (( card_y < 144 || card_y > 148 )); then
+    echo "continue-watching-$theme: cards top is y=$card_y, expected about 146" >&2
+    exit 1
+  fi
+  if (( action_y < 318 || action_y > 322 )); then
+    echo "continue-watching-$theme: action row top is y=$action_y, expected about 320" >&2
+    exit 1
+  fi
+  if (( action_column_x < 219 || action_column_x > 221 || action_column_width < 130 || action_column_width > 134 )); then
+    echo "continue-watching-$theme: action column is x=$action_column_x width=$action_column_width, expected x=220 width about 132" >&2
+    exit 1
+  fi
+  if (( drop_target_x < 365 || drop_target_x > 367 || drop_target_width < 532 || drop_target_width > 536 )); then
+    echo "continue-watching-$theme: drop target is x=$drop_target_x width=$drop_target_width, expected x=366 width about 534" >&2
+    exit 1
+  fi
+  if (( action_row_height < 82 || action_row_height > 86 )); then
+    echo "continue-watching-$theme: action row height is $action_row_height, expected about 84" >&2
+    exit 1
+  fi
+  if (( footer_y < 636 || footer_y > 641 )); then
+    echo "continue-watching-$theme: footer moved: first edge y=$footer_y" >&2
+    exit 1
+  fi
+  arrow_edges="$(magick "$shot" -crop 48x148+844+146 -colorspace gray -edge 1 -format '%[fx:mean]' info:)"
+  if ! awk -v edge="$arrow_edges" 'BEGIN {exit !(edge > 0.006)}'; then
+    echo "continue-watching-$theme: trailing History arrow missing: edge=$arrow_edges" >&2
+    exit 1
+  fi
+  echo "continue-watching-$theme: heading=(${heading_x},${heading_y}) cards=(${card_x},${card_y}) actions=(${action_column_x},${action_y}) action-width=${action_column_width} drop=(${drop_target_x},${action_y}) drop-width=${drop_target_width} row-height=${action_row_height} footer-y=${footer_y} arrow-edge=${arrow_edges}"
 done
+
+arrow_history="$OUT_DIR/history-via-recents-arrow-light.png"
+arrow_history_before="$OUT_DIR/history-via-recents-arrow-light-before.png"
+arrow_history_rmse="$({ magick compare -metric RMSE "$arrow_history_before" "$arrow_history" null: || true; } 2>&1 | sed -n 's/.*(\([^)]*\)).*/\1/p')"
+if ! awk -v rmse="$arrow_history_rmse" 'BEGIN {exit !(rmse > 0.05)}'; then
+  echo "Recents arrow did not switch the in-canvas surface: normalized-rmse=$arrow_history_rmse" >&2
+  exit 1
+fi
 
 # Narrow capture must preserve a readable title and at least one complete 194px card
 # without entering the caption-control strip or clipping horizontally.
 narrow="$OUT_DIR/continue-watching-narrow.png"
 overlap_edges="$(magick "$narrow" -crop 320x24+0+34 -colorspace gray -edge 1 -format '%[fx:mean]' info:)"
 card_edges="$(magick "$narrow" -crop 210x135+35+140 -colorspace gray -edge 1 -format '%[fx:mean]' info:)"
+right_edges="$(magick "$narrow" -crop 8x390+472+70 -colorspace gray -edge 1 -format '%[fx:mean]' info:)"
 if ! awk -v edge="$overlap_edges" 'BEGIN {exit !(edge < 0.02)}'; then
   echo "Narrow Continue Watching overlaps the titlebar: edge=$overlap_edges" >&2
   exit 1
 fi
 if ! awk -v edge="$card_edges" 'BEGIN {exit !(edge > 0.012)}'; then
   echo "Narrow Continue Watching lost its card hierarchy: edge=$card_edges" >&2
+  exit 1
+fi
+if ! awk -v edge="$right_edges" 'BEGIN {exit !(edge < 0.005)}'; then
+  echo "Narrow Continue Watching clips content at the right edge: edge=$right_edges" >&2
+  exit 1
+fi
+
+# A taller capture at the same narrow width must show both complete action children above
+# the fixed footer; the initial 480x540 hierarchy capture alone cannot prove this reflow.
+narrow_actions="$OUT_DIR/continue-watching-narrow-actions.png"
+action_edges="$(magick "$narrow_actions" -crop 150x92+24+470 -colorspace gray -edge 1 -format '%[fx:mean]' info:)"
+drop_edges="$(magick "$narrow_actions" -crop 424x94+24+570 -colorspace gray -edge 1 -format '%[fx:mean]' info:)"
+drop_bottom_edges="$(magick "$narrow_actions" -crop 424x6+24+662 -colorspace gray -edge 1 -format '%[fx:mean]' info:)"
+footer_edges="$(magick "$narrow_actions" -crop 440x42+20+718 -colorspace gray -edge 1 -format '%[fx:mean]' info:)"
+tall_right_edges="$(magick "$narrow_actions" -crop 8x610+472+70 -colorspace gray -edge 1 -format '%[fx:mean]' info:)"
+if ! awk -v edge="$action_edges" 'BEGIN {exit !(edge > 0.01)}'; then
+  echo "Tall narrow Continue Watching lost the action column: edge=$action_edges" >&2
+  exit 1
+fi
+if ! awk -v edge="$drop_edges" 'BEGIN {exit !(edge > 0.005)}'; then
+  echo "Tall narrow Continue Watching lost the drop target: edge=$drop_edges" >&2
+  exit 1
+fi
+if ! awk -v edge="$drop_bottom_edges" 'BEGIN {exit !(edge > 0.02)}'; then
+  echo "Tall narrow drop target remains hidden behind the footer: edge=$drop_bottom_edges" >&2
+  exit 1
+fi
+if ! awk -v edge="$footer_edges" 'BEGIN {exit !(edge > 0.006)}'; then
+  echo "Tall narrow Continue Watching lost its fixed footer: edge=$footer_edges" >&2
+  exit 1
+fi
+if ! awk -v edge="$tall_right_edges" 'BEGIN {exit !(edge < 0.005)}'; then
+  echo "Tall narrow Continue Watching clips content at the right edge: edge=$tall_right_edges" >&2
   exit 1
 fi
 

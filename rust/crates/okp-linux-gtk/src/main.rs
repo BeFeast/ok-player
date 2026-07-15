@@ -865,7 +865,7 @@ struct EmptySurface {
     page: Rc<Cell<IdlePage>>,
     model: Rc<RefCell<Option<okp_core::recents_shelf::WelcomeShelf>>>,
     history_model: Rc<RefCell<Option<HistorySurfaceModel>>>,
-    opened_context_bucket: Rc<Cell<Option<i64>>>,
+    welcome_history_button: Rc<RefCell<Option<gtk::Button>>>,
     is_preview_substrate: Rc<Cell<bool>>,
 }
 

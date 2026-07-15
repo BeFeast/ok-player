@@ -887,9 +887,45 @@ pub(crate) fn build_empty_surface(
         page: Rc::new(Cell::new(IdlePage::Welcome)),
         model: Rc::new(RefCell::new(None)),
         history_model: Rc::new(RefCell::new(None)),
-        opened_context_bucket: Rc::new(Cell::new(None)),
+        welcome_history_button: Rc::new(RefCell::new(None)),
         is_preview_substrate: Rc::new(Cell::new(false)),
     };
+    // FlowBox can paint the margin-sized arrow column beyond its pointer allocation. Keep the
+    // native button for keyboard/accessibility activation, and route pointer presses through the
+    // window using the button's live bounds so wrapped narrow layouts remain correct.
+    let history_arrow_click = gtk::GestureClick::new();
+    history_arrow_click.set_button(gdk::BUTTON_PRIMARY);
+    history_arrow_click.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let history_arrow_surface = surface.clone();
+    let history_arrow_parent = window.clone();
+    let history_arrow_state = Rc::clone(&state);
+    let history_arrow_toast = Rc::clone(&status_toast);
+    history_arrow_click.connect_pressed(move |_, _, x, y| {
+        if history_arrow_surface.page.get() != IdlePage::Welcome
+            || !history_arrow_surface.revealer.can_target()
+        {
+            return;
+        }
+        let history_button = history_arrow_surface.welcome_history_button.borrow();
+        let Some(history_button) = history_button.as_ref() else {
+            return;
+        };
+        let Some(bounds) = history_button.compute_bounds(&history_arrow_parent) else {
+            return;
+        };
+        if x >= f64::from(bounds.x())
+            && x <= f64::from(bounds.x() + bounds.width())
+            && y >= f64::from(bounds.y())
+            && y <= f64::from(bounds.y() + bounds.height())
+        {
+            history_arrow_surface.show_history(
+                &history_arrow_parent,
+                Rc::clone(&history_arrow_state),
+                Rc::clone(&history_arrow_toast),
+            );
+        }
+    });
+    window.add_controller(history_arrow_click);
     let toggle_surface = surface.clone();
     let toggle_parent = window.clone();
     let toggle_state = Rc::clone(&state);
