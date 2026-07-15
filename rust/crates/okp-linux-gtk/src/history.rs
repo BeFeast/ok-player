@@ -6,6 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use okp_core::history::Preferences as PlaybackPreferences;
 use okp_core::history::{FileEntry as HistoryRecord, History as HistoryFile};
+use okp_core::recents_shelf::{HistoryItem, WelcomeShelf};
 
 #[derive(Debug)]
 pub struct HistoryStore {
@@ -186,6 +187,16 @@ impl HistoryStore {
             .filter(|preferences| !preferences.is_empty())
     }
 
+    /// Privacy-aware, ranked model for the idle Continue Watching shelf.
+    pub fn welcome_shelf(&self, private_session: bool, limit: usize) -> WelcomeShelf {
+        okp_core::recents_shelf::select(&self.data, private_session, limit)
+    }
+
+    /// Newest-first rows for the explicit History surface, filtered in shared core.
+    pub fn search(&self, query: &str) -> Vec<HistoryItem> {
+        okp_core::recents_shelf::search(&self.data, query)
+    }
+
     pub fn clear(&mut self) {
         if !self.data.files.is_empty() {
             self.data.files.clear();
@@ -221,7 +232,7 @@ fn new_history_record() -> HistoryRecord {
 }
 
 pub fn completion_start(duration: f64) -> f64 {
-    (duration * 0.95).max(duration - 30.0)
+    okp_core::recents_shelf::completion_start(duration)
 }
 
 fn history_path() -> PathBuf {

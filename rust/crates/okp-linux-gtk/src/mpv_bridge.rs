@@ -300,6 +300,7 @@ pub(crate) fn connect_state_poll(
         sync_ab_loop_state(&state, has_media);
         // Hide the welcome surface behind an active lyrics preview so the fixture reads cleanly;
         // in production the loaded audio already hides it (`is_preview_frozen` stays false).
+        empty_surface.refresh(&window, &state, Rc::clone(&status_toast));
         empty_surface.set_has_media(has_media || lyrics_surface.is_preview_frozen());
         lyrics_surface.update(&state);
         drain_thumbnail_events(&controls);

@@ -228,6 +228,323 @@ const OKP_STYLESHEET: &str = "
             font-size: 11.5px;
         }
 
+        .okp-welcome-scroller,
+        .okp-welcome-scroller > viewport {
+            background: transparent;
+        }
+
+        .okp-welcome-first-run,
+        .okp-welcome-private {
+            min-width: 320px;
+        }
+
+        .okp-welcome-recents {
+            min-width: 300px;
+        }
+
+        .okp-welcome-recents-title {
+            color: rgba(255, 255, 255, 0.97);
+            font-size: 30px;
+            font-weight: 760;
+        }
+
+        .okp-welcome-recents-subtitle {
+            margin-top: 6px;
+            color: rgba(255, 255, 255, 0.54);
+            font-size: 13.5px;
+        }
+
+        .okp-recents-shelf {
+            margin-top: 22px;
+        }
+
+        .okp-recents-shelf > flowboxchild {
+            padding: 0;
+            border: none;
+            background: transparent;
+        }
+
+        button.okp-recent-card {
+            min-width: 194px;
+            padding: 0;
+            border: none;
+            border-radius: 8px;
+            background: transparent;
+            box-shadow: none;
+            color: rgba(255, 255, 255, 0.94);
+        }
+
+        button.okp-recent-card:hover {
+            background: rgba(255, 255, 255, 0.055);
+        }
+
+        button.okp-recent-card:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.58);
+        }
+
+        .okp-history-thumbnail {
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .okp-history-thumbnail-placeholder {
+            border-radius: 8px;
+            background: linear-gradient(135deg, rgba(51, 57, 65, 0.96), rgba(25, 29, 35, 0.98));
+            border: 1px solid rgba(255, 255, 255, 0.07);
+        }
+
+        .okp-history-thumbnail-icon {
+            color: rgba(255, 255, 255, 0.30);
+        }
+
+        .okp-history-thumbnail-picture {
+            border-radius: 8px;
+        }
+
+        progressbar.okp-recent-progress {
+            min-height: 4px;
+            margin: 0;
+        }
+
+        progressbar.okp-recent-progress trough {
+            min-height: 4px;
+            border: none;
+            border-radius: 0 0 8px 8px;
+            background: rgba(255, 255, 255, 0.24);
+        }
+
+        progressbar.okp-recent-progress progress {
+            min-height: 4px;
+            border: none;
+            border-radius: 0 0 0 8px;
+            background: @okp_accent_bright;
+        }
+
+        .okp-recent-time-left {
+            padding: 3px 7px;
+            border-radius: 5px;
+            background: rgba(0, 0, 0, 0.72);
+            color: #ffffff;
+            font-size: 10px;
+            font-weight: 700;
+        }
+
+        .okp-recent-title {
+            margin-top: 8px;
+            color: rgba(255, 255, 255, 0.94);
+            font-size: 13px;
+            font-weight: 650;
+        }
+
+        .okp-recent-location {
+            margin-top: 2px;
+            color: rgba(255, 255, 255, 0.43);
+            font-size: 11px;
+        }
+
+        .okp-recent-context {
+            margin-top: 3px;
+            color: rgba(255, 255, 255, 0.58);
+            font-size: 11px;
+        }
+
+        .okp-welcome-footer {
+            min-height: 38px;
+            margin-top: 18px;
+            padding-top: 10px;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        button.okp-welcome-footer-button {
+            min-height: 30px;
+            padding: 4px 7px;
+            border: none;
+            border-radius: 7px;
+            background: transparent;
+            box-shadow: none;
+            color: rgba(255, 255, 255, 0.62);
+        }
+
+        button.okp-welcome-footer-button:hover {
+            background: rgba(255, 255, 255, 0.08);
+            color: rgba(255, 255, 255, 0.90);
+        }
+
+        .okp-welcome-footer-status {
+            color: rgba(255, 255, 255, 0.38);
+            font-size: 11px;
+        }
+
+        .okp-welcome-private-icon {
+            margin-bottom: 12px;
+            color: alpha(@okp_accent_bright, 0.88);
+        }
+
+        .okp-welcome-private-title {
+            color: rgba(255, 255, 255, 0.96);
+            font-size: 22px;
+            font-weight: 740;
+        }
+
+        .okp-welcome-private-body {
+            margin-top: 8px;
+            margin-bottom: 20px;
+            color: rgba(255, 255, 255, 0.56);
+            font-size: 13px;
+            line-height: 1.45;
+        }
+
+        .okp-welcome-private .okp-empty-actions {
+            margin-top: 12px;
+        }
+
+        window.okp-history-window,
+        .okp-history-root {
+            background: #0b0c0f;
+        }
+
+        window.okp-history-window .okp-settings-window-control,
+        window.okp-history-window .okp-settings-window-control-glyph {
+            color: rgba(255, 255, 255, 0.78);
+        }
+
+        window.okp-history-window .okp-settings-window-control:hover {
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        window.okp-history-window button.okp-settings-window-control:hover .okp-settings-window-control-glyph {
+            color: #ffffff;
+        }
+
+        .okp-history-page {
+            background: transparent;
+        }
+
+        .okp-history-title {
+            color: rgba(255, 255, 255, 0.97);
+            font-size: 30px;
+            font-weight: 760;
+        }
+
+        entry.okp-history-search {
+            min-width: 220px;
+            min-height: 38px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.10);
+            background: rgba(255, 255, 255, 0.06);
+            color: rgba(255, 255, 255, 0.92);
+            box-shadow: none;
+        }
+
+        entry.okp-history-search:focus-within {
+            border-color: alpha(@okp_accent, 0.75);
+            box-shadow: 0 0 0 1px alpha(@okp_accent, 0.32);
+        }
+
+        .okp-history-subtitle {
+            margin-top: 6px;
+            color: rgba(255, 255, 255, 0.48);
+            font-size: 13px;
+        }
+
+        .okp-history-private-banner {
+            margin-top: 14px;
+            padding: 10px 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(255, 255, 255, 0.045);
+            color: rgba(255, 255, 255, 0.58);
+            font-size: 12px;
+        }
+
+        .okp-history-result-caption {
+            margin-top: 18px;
+            margin-bottom: 8px;
+            color: rgba(255, 255, 255, 0.40);
+            font-size: 11px;
+            font-weight: 650;
+        }
+
+        .okp-history-scroller,
+        .okp-history-scroller > viewport {
+            background: transparent;
+        }
+
+        .okp-history-rows {
+            padding-bottom: 18px;
+        }
+
+        button.okp-history-row {
+            padding: 9px 10px;
+            border: none;
+            border-radius: 7px;
+            background: transparent;
+            box-shadow: none;
+            color: rgba(255, 255, 255, 0.92);
+        }
+
+        button.okp-history-row:hover {
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        button.okp-history-row:focus-visible {
+            outline: none;
+            box-shadow: inset 0 0 0 1px alpha(@okp_accent, 0.62);
+        }
+
+        .okp-history-row-title {
+            color: rgba(255, 255, 255, 0.92);
+            font-size: 13px;
+            font-weight: 650;
+        }
+
+        .okp-history-row-location {
+            color: rgba(255, 255, 255, 0.39);
+            font-size: 11px;
+        }
+
+        .okp-history-row-context,
+        .okp-history-row-progress-label {
+            color: rgba(255, 255, 255, 0.48);
+            font-size: 11px;
+        }
+
+        .okp-history-row-progress-label {
+            color: alpha(@okp_accent_bright, 0.86);
+            font-weight: 650;
+        }
+
+        progressbar.okp-history-row-progress {
+            min-height: 3px;
+            margin-top: 2px;
+        }
+
+        progressbar.okp-history-row-progress trough {
+            min-height: 3px;
+            border: none;
+            border-radius: 3px;
+            background: rgba(255, 255, 255, 0.10);
+        }
+
+        progressbar.okp-history-row-progress progress {
+            min-height: 3px;
+            border: none;
+            border-radius: 3px;
+            background: @okp_accent;
+        }
+
+        .okp-history-empty {
+            min-height: 260px;
+            color: rgba(255, 255, 255, 0.30);
+        }
+
+        .okp-history-empty-title {
+            color: rgba(255, 255, 255, 0.56);
+            font-size: 14px;
+            font-weight: 650;
+        }
+
         /* Audio lyrics overlay — an Apple-Music-style sheet over the (black) audio plane. The scrim
            is translucent so any embedded cover art shows dimly behind, the lines dim away from the
            active one, and the brand teal lands on the header so it reads at a glance. */

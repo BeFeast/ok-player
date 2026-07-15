@@ -84,6 +84,9 @@ pub(crate) fn build_lyrics_surface() -> LyricsSurface {
     revealer.set_transition_type(gtk::RevealerTransitionType::Crossfade);
     revealer.set_reveal_child(false);
     revealer.set_can_target(false);
+    // The scrim background lives on the revealer, so a collapsed child alone is not
+    // enough: the full-size overlay would still paint over video and the welcome canvas.
+    revealer.set_visible(false);
     revealer.set_child(Some(&content));
 
     LyricsSurface {
@@ -137,16 +140,18 @@ impl LyricsSurface {
     }
 
     fn reveal(&self) {
+        self.revealer.set_visible(true);
         self.revealer.set_reveal_child(true);
         self.revealer.set_can_target(true);
     }
 
     fn hide(&self) {
+        self.revealer.set_reveal_child(false);
+        self.revealer.set_can_target(false);
+        self.revealer.set_visible(false);
         if self.state.loaded_key.borrow().is_none() {
             return;
         }
-        self.revealer.set_reveal_child(false);
-        self.revealer.set_can_target(false);
         self.state.loaded_key.replace(None);
         self.state.active.set(None);
     }

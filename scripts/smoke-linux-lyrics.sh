@@ -15,10 +15,15 @@ done
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
+xvfb_args=(-a)
+if [[ -n "${OKP_XVFB_SERVER_NUM:-}" ]]; then
+  xvfb_args=(-n "$OKP_XVFB_SERVER_NUM")
+fi
+
 # The lyrics surface is pure GTK (no GL): render the shell through the software cairo path with GLX
 # disabled, so the smoke runs on headless hosts whose Xvfb has no (or a crashing) GLX. The video
 # GLArea stays black here, which is exactly the audio-playback state the lyrics surface targets.
-if ! xvfb-run -a --server-args='-screen 0 1280x900x24 -extension GLX -nolisten tcp' \
+if ! xvfb-run "${xvfb_args[@]}" --server-args='-screen 0 1280x900x24 -extension GLX -nolisten tcp' \
   dbus-run-session -- bash -s -- "$BINARY" "$OUT_DIR" >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
 set -euo pipefail
 
