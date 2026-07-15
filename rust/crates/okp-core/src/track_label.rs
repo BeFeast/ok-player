@@ -48,6 +48,41 @@ pub fn audio_track_label(
     parts.join(" · ")
 }
 
+/// The subtitle quick-switcher descriptor: the primary name followed by a
+/// normalized format tag and the source marker. WebVTT and SubRip are named
+/// explicitly so an external `.vtt` never reads like an SRT or an untyped
+/// embedded track. mpv remains responsible for parsing/rendering subtitle cue
+/// payloads; the core only classifies the track metadata it reports.
+pub fn subtitle_track_label(
+    id: i64,
+    title: Option<&str>,
+    lang: Option<&str>,
+    codec: Option<&str>,
+    external: bool,
+    default: bool,
+) -> String {
+    let mut parts = vec![primary_track_name(id, title, lang)];
+
+    if let Some(codec) = clean(codec) {
+        parts.push(subtitle_codec_label(&codec));
+    }
+    if external {
+        parts.push("EXT".to_owned());
+    } else if default {
+        parts.push("Default".to_owned());
+    }
+
+    parts.join(" · ")
+}
+
+fn subtitle_codec_label(codec: &str) -> String {
+    match codec.to_ascii_lowercase().as_str() {
+        "subrip" | "srt" => "SRT".to_owned(),
+        "webvtt" | "vtt" => "WebVTT".to_owned(),
+        _ => codec.to_ascii_uppercase(),
+    }
+}
+
 fn clean(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
@@ -115,6 +150,30 @@ mod tests {
         assert_eq!(
             audio_track_label(1, Some("English"), Some("  "), Some(""), Some("aac")),
             "English · AAC"
+        );
+    }
+
+    #[test]
+    fn subtitle_label_distinguishes_webvtt_from_external_srt() {
+        assert_eq!(
+            subtitle_track_label(2, Some("English"), None, Some("webvtt"), true, false),
+            "English · WebVTT · EXT"
+        );
+        assert_eq!(
+            subtitle_track_label(3, Some("English"), None, Some("subrip"), true, false),
+            "English · SRT · EXT"
+        );
+    }
+
+    #[test]
+    fn subtitle_label_distinguishes_embedded_and_default_tracks() {
+        assert_eq!(
+            subtitle_track_label(4, None, Some("eng"), Some("ass"), false, true),
+            "eng · ASS · Default"
+        );
+        assert_eq!(
+            subtitle_track_label(5, None, None, None, false, false),
+            "Track 5"
         );
     }
 }

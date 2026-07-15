@@ -13,3 +13,6 @@ thiserror.workspace = true
 
 [build-dependencies]
 pkg-config.workspace = true
+
+[dev-dependencies]
+okp-test-fixtures = { path = "../okp-test-fixtures" }

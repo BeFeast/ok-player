@@ -1221,14 +1221,14 @@ pub(crate) fn track_label(track: &Track) -> String {
         );
     }
 
-    let mut parts = vec![track_base_label(track)];
-    if track.external {
-        parts.push("EXT".to_owned());
-    } else if track.default {
-        parts.push("Default".to_owned());
-    }
-
-    parts.join(" · ")
+    okp_core::track_label::subtitle_track_label(
+        track.id,
+        track.title.as_deref(),
+        track.lang.as_deref(),
+        track.codec.as_deref(),
+        track.external,
+        track.default,
+    )
 }
 
 pub(crate) fn track_base_label(track: &Track) -> String {

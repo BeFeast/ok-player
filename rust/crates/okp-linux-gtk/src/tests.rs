@@ -1045,6 +1045,38 @@ fn track_label_shows_tags_without_a_selection_prefix() {
 }
 
 #[test]
+fn subtitle_track_label_distinguishes_webvtt_srt_and_embedded_sources() {
+    let webvtt = Track {
+        id: 3,
+        kind: TrackKind::Subtitle,
+        selected: true,
+        external: true,
+        default: false,
+        title: Some("English".to_owned()),
+        lang: Some("eng".to_owned()),
+        codec: Some("webvtt".to_owned()),
+        audio_channels: None,
+    };
+    assert_eq!(track_label(&webvtt), "English · WebVTT · EXT");
+
+    let srt = Track {
+        id: 4,
+        codec: Some("subrip".to_owned()),
+        ..webvtt.clone()
+    };
+    assert_eq!(track_label(&srt), "English · SRT · EXT");
+
+    let embedded = Track {
+        id: 5,
+        external: false,
+        default: true,
+        codec: Some("ass".to_owned()),
+        ..webvtt
+    };
+    assert_eq!(track_label(&embedded), "English · ASS · Default");
+}
+
+#[test]
 fn audio_track_label_surfaces_language_and_format_tags() {
     // A named commentary track keeps its title but now also exposes the
     // language code alongside the channel layout and codec.

@@ -1272,6 +1272,7 @@ name = "okp-mpv"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "okp-test-fixtures",
  "pkg-config",
  "thiserror",
 ]
