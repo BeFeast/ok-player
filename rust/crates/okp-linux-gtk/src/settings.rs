@@ -3,7 +3,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use okp_core::settings::Settings;
+use okp_core::settings::{ScreenshotFormat, Settings};
 
 const DEFAULT_VOLUME: f64 = 100.0;
 const MAX_VOLUME: f64 = 130.0;
@@ -148,6 +148,16 @@ impl SettingsStore {
         self.data.advanced.keybindings.as_deref().unwrap_or("")
     }
 
+    pub fn screenshot_format(&self) -> ScreenshotFormat {
+        self.data.screenshots.format.unwrap_or_default()
+    }
+
+    pub fn screenshot_directory(&self) -> Option<PathBuf> {
+        let directory = self.data.screenshots.directory.as_deref()?.trim();
+        let path = PathBuf::from(directory);
+        path.is_absolute().then_some(path)
+    }
+
     pub fn set_volume(&mut self, volume: f64) {
         let Some(volume) = normalized_volume(Some(volume)) else {
             return;
@@ -270,6 +280,35 @@ impl SettingsStore {
         }
     }
 
+    pub fn set_screenshot_format(&mut self, format: ScreenshotFormat) {
+        if self.screenshot_format() != format {
+            self.data.screenshots.format = Some(format);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_screenshot_directory(&mut self, directory: Option<&Path>) -> bool {
+        let updated = match directory {
+            None => None,
+            Some(directory) if directory.is_absolute() => {
+                let Some(directory) = directory.to_str().map(str::trim) else {
+                    return false;
+                };
+                if directory.is_empty() {
+                    return false;
+                }
+                Some(directory.to_owned())
+            }
+            Some(_) => return false,
+        };
+
+        if self.data.screenshots.directory != updated {
+            self.data.screenshots.directory = updated;
+            self.dirty = true;
+        }
+        true
+    }
+
     pub fn save(&mut self) -> io::Result<()> {
         if !self.dirty {
             return Ok(());
@@ -372,6 +411,7 @@ fn same_video_adjustment(current: Option<f64>, updated: f64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use okp_test_fixtures::unique_temp_dir;
 
     fn store() -> SettingsStore {
         SettingsStore {
@@ -691,5 +731,55 @@ mod tests {
         assert_eq!(settings.raw_keybindings_config(), "");
         assert_eq!(settings.data.advanced.keybindings, None);
         assert!(settings.dirty);
+    }
+
+    #[test]
+    fn screenshot_settings_default_validate_and_mark_dirty_once() {
+        let mut settings = store();
+        assert_eq!(settings.screenshot_format(), ScreenshotFormat::Png);
+        assert_eq!(settings.screenshot_directory(), None);
+
+        assert!(!settings.set_screenshot_directory(Some(Path::new("relative/captures"))));
+        assert!(!settings.dirty);
+
+        settings.set_screenshot_format(ScreenshotFormat::Jpeg);
+        assert!(settings.set_screenshot_directory(Some(Path::new("/captures"))));
+        assert_eq!(settings.screenshot_format(), ScreenshotFormat::Jpeg);
+        assert_eq!(
+            settings.screenshot_directory().as_deref(),
+            Some(Path::new("/captures"))
+        );
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_screenshot_format(ScreenshotFormat::Jpeg);
+        assert!(settings.set_screenshot_directory(Some(Path::new("/captures"))));
+        assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn screenshot_settings_persist_in_the_human_readable_document() {
+        let directory = unique_temp_dir("okp-screenshot-settings");
+        fs::create_dir_all(&directory).expect("temp directory");
+        let path = directory.join("settings.json");
+        let mut settings = SettingsStore {
+            path: path.clone(),
+            data: Settings::default(),
+            dirty: false,
+        };
+        settings.set_screenshot_format(ScreenshotFormat::Webp);
+        assert!(settings.set_screenshot_directory(Some(&directory)));
+
+        settings.save().expect("save settings");
+
+        let json = fs::read_to_string(path).expect("read settings");
+        assert!(json.contains("\"screenshots\""));
+        assert!(json.contains("\"format\": \"webp\""));
+        let restored = Settings::load(&json).expect("reload settings");
+        assert_eq!(restored.screenshots.format, Some(ScreenshotFormat::Webp));
+        assert_eq!(
+            restored.screenshots.directory.as_deref(),
+            directory.to_str()
+        );
     }
 }

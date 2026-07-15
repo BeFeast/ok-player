@@ -1256,6 +1256,7 @@ name = "okp-linux-gtk"
 version = "0.1.0"
 dependencies = [
  "gtk4",
+ "libc",
  "okp-core",
  "okp-mpv",
  "okp-test-fixtures",

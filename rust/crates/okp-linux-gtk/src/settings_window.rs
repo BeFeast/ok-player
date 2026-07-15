@@ -97,6 +97,11 @@ pub(crate) fn open_settings_window(
         Rc::clone(&status_toast),
     ));
     video_page.append(&video);
+    video_page.append(&settings_screenshot_section(
+        &window,
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    ));
     stack.add_named(&settings_scroller(&video_page), Some("video"));
 
     let audio_page = settings_audio_page(Rc::clone(&state), Rc::clone(&status_toast));

@@ -10,8 +10,8 @@
 //! widgets without ever touching mpv from the main context — the reads become
 //! plain in-memory lookups, so the guard stays green.
 //!
-//! Lifecycle events (`FileLoaded`, `EndFile`, `Shutdown`) are queued for the
-//! shell to drain in order; property changes only ever mutate the snapshot.
+//! Lifecycle and requested async-command events are queued for the shell to
+//! drain in order; property changes only ever mutate the snapshot.
 
 use std::ffi::{CStr, CString};
 use std::path::PathBuf;
@@ -364,6 +364,12 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
                         _ => {}
                     }
                 }
+            }
+            ffi::MPV_EVENT_COMMAND_REPLY if event.reply_userdata != 0 => {
+                lifecycle.push(MpvEvent::CommandReply {
+                    request_id: event.reply_userdata,
+                    error: event.error,
+                });
             }
             ffi::MPV_EVENT_COMMAND_REPLY if event.error < 0 => {
                 eprintln!("[okp-mpv] async command failed with code {}", event.error);

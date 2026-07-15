@@ -49,6 +49,8 @@ pub struct Settings {
     pub updates: UpdateSettings,
     #[serde(default)]
     pub advanced: AdvancedSettings,
+    #[serde(default, skip_serializing_if = "ScreenshotSettings::is_empty")]
+    pub screenshots: ScreenshotSettings,
     #[serde(default, skip_serializing_if = "PrivacySettings::is_empty")]
     pub privacy: PrivacySettings,
 }
@@ -64,6 +66,7 @@ impl Default for Settings {
             appearance: AppearanceSettings::default(),
             updates: UpdateSettings::default(),
             advanced: AdvancedSettings::default(),
+            screenshots: ScreenshotSettings::default(),
             privacy: PrivacySettings::default(),
         }
     }
@@ -214,6 +217,53 @@ pub struct AdvancedSettings {
     pub keybindings: Option<String>,
 }
 
+/// Screenshot capture preferences shared by desktop shells. The directory is a
+/// platform path string; each shell resolves and validates it before filesystem IO.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ScreenshotSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<ScreenshotFormat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directory: Option<String>,
+}
+
+impl ScreenshotSettings {
+    fn is_empty(&self) -> bool {
+        self.format.is_none() && self.directory.is_none()
+    }
+}
+
+/// Formats supported by mpv screenshot capture and the GTK clipboard loader.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ScreenshotFormat {
+    Jpeg,
+    Webp,
+    #[default]
+    #[serde(other)]
+    Png,
+}
+
+impl ScreenshotFormat {
+    pub const ALL: [Self; 3] = [Self::Png, Self::Jpeg, Self::Webp];
+
+    pub const fn extension(self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Jpeg => "jpg",
+            Self::Webp => "webp",
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Png => "PNG",
+            Self::Jpeg => "JPEG",
+            Self::Webp => "WebP",
+        }
+    }
+}
+
 /// Privacy, a Windows-only section.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PrivacySettings {
@@ -295,6 +345,7 @@ impl WindowsSettings {
                 auto_check: self.auto_check_updates.unwrap_or_else(default_auto_check),
             },
             advanced: AdvancedSettings::default(),
+            screenshots: ScreenshotSettings::default(),
             privacy: PrivacySettings {
                 history_retention_days: self.history_retention_days,
             },
@@ -363,6 +414,7 @@ mod tests {
         // Sections the alpha document never carried default to absent.
         assert!(settings.subtitles.is_empty());
         assert!(settings.appearance.is_empty());
+        assert!(settings.screenshots.is_empty());
         assert!(settings.privacy.is_empty());
     }
 
@@ -371,6 +423,8 @@ mod tests {
         let mut settings = Settings::default();
         settings.playback.volume = Some(55.0);
         settings.appearance.theme = Some("Dark".to_owned());
+        settings.screenshots.format = Some(ScreenshotFormat::Webp);
+        settings.screenshots.directory = Some("/captures".to_owned());
         settings.privacy.history_retention_days = Some(30);
 
         let json = serde_json::to_string(&settings).expect("serialize");
@@ -386,7 +440,23 @@ mod tests {
         let json = serde_json::to_string(&Settings::default()).expect("serialize");
         assert!(!json.contains("subtitles"));
         assert!(!json.contains("appearance"));
+        assert!(!json.contains("screenshots"));
         assert!(!json.contains("privacy"));
+    }
+
+    #[test]
+    fn screenshot_settings_round_trip_and_unknown_formats_fall_back_to_png() {
+        let raw = r#"{
+            "version": 2,
+            "screenshots": { "format": "webp", "directory": "/captures" }
+        }"#;
+        let settings = Settings::load(raw).expect("screenshot settings should load");
+        assert_eq!(settings.screenshots.format, Some(ScreenshotFormat::Webp));
+        assert_eq!(settings.screenshots.directory.as_deref(), Some("/captures"));
+
+        let unknown = Settings::load(r#"{ "version": 2, "screenshots": { "format": "tiff" } }"#)
+            .expect("unknown screenshot formats should not corrupt all settings");
+        assert_eq!(unknown.screenshots.format, Some(ScreenshotFormat::Png));
     }
 
     #[test]

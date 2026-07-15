@@ -439,6 +439,13 @@ const OKP_STYLESHEET: &str = "
             font-weight: 600;
         }
 
+        .okp-status-toast-thumbnail {
+            min-width: 64px;
+            min-height: 36px;
+            border-radius: 5px;
+            background: #050608;
+        }
+
         .okp-seek {
             min-width: 120px;
         }
@@ -1916,6 +1923,17 @@ const OKP_STYLESHEET: &str = "
 
         .okp-settings-button:hover {
             background: #f8fafb;
+        }
+
+        button.okp-screenshot-format-button {
+            min-width: 62px;
+        }
+
+        button.okp-screenshot-format-button.is-selected {
+            background: alpha(@okp_teal, 0.12);
+            border-color: alpha(@okp_teal, 0.38);
+            color: @okp_teal_deep;
+            font-weight: 650;
         }
 
         .okp-settings-button:disabled,

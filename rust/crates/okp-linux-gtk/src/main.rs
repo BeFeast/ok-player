@@ -159,6 +159,7 @@ struct PlayerState {
     private_session: bool,
     history: history::HistoryStore,
     settings: settings::SettingsStore,
+    screenshot_jobs: screenshots::ScreenshotJobs,
     linux_update_status: LinuxUpdateStatus,
     pending_audio_device_restore: Option<PendingAudioDeviceRestore>,
     render_target_size: Option<okp_mpv::RenderTargetSize>,
@@ -1047,16 +1048,28 @@ impl ChromeVisibility {
 
 struct StatusToast {
     revealer: gtk::Revealer,
+    thumbnail: gtk::Picture,
     label: gtk::Label,
     hide_source: Rc<RefCell<Option<glib::SourceId>>>,
 }
 
 impl StatusToast {
     fn new() -> Self {
+        let thumbnail = gtk::Picture::new();
+        thumbnail.add_css_class("okp-status-toast-thumbnail");
+        thumbnail.set_size_request(64, 36);
+        thumbnail.set_can_shrink(true);
+        thumbnail.set_keep_aspect_ratio(false);
+        thumbnail.set_visible(false);
+
         let label = gtk::Label::new(None);
-        label.add_css_class("okp-status-toast");
         label.set_ellipsize(pango::EllipsizeMode::Middle);
         label.set_max_width_chars(72);
+
+        let content = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        content.add_css_class("okp-status-toast");
+        content.append(&thumbnail);
+        content.append(&label);
 
         let revealer = gtk::Revealer::new();
         revealer.set_halign(gtk::Align::Center);
@@ -1066,10 +1079,11 @@ impl StatusToast {
         revealer.set_transition_type(gtk::RevealerTransitionType::Crossfade);
         revealer.set_reveal_child(false);
         revealer.set_can_target(false);
-        revealer.set_child(Some(&label));
+        revealer.set_child(Some(&content));
 
         Self {
             revealer,
+            thumbnail,
             label,
             hide_source: Rc::new(RefCell::new(None)),
         }
@@ -1080,6 +1094,23 @@ impl StatusToast {
     }
 
     fn show(&self, message: &str) {
+        self.thumbnail.set_visible(false);
+        self.thumbnail.set_paintable(None::<&gdk::Paintable>);
+        self.reveal(message);
+    }
+
+    fn show_screenshot(&self, message: &str, path: &Path) {
+        if let Ok(texture) = gdk::Texture::from_filename(path) {
+            self.thumbnail.set_paintable(Some(&texture));
+            self.thumbnail.set_visible(true);
+        } else {
+            self.thumbnail.set_visible(false);
+            self.thumbnail.set_paintable(None::<&gdk::Paintable>);
+        }
+        self.reveal(message);
+    }
+
+    fn reveal(&self, message: &str) {
         self.label.set_text(message);
         self.revealer.set_reveal_child(true);
 

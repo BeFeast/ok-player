@@ -1239,7 +1239,7 @@ pub(crate) fn track_base_label(track: &Track) -> String {
     )
 }
 
-pub(crate) fn drain_mpv_events(state: &Rc<RefCell<PlayerState>>) {
+pub(crate) fn drain_mpv_events(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
     let events = {
         let state = state.borrow();
         state
@@ -1277,6 +1277,9 @@ pub(crate) fn drain_mpv_events(state: &Rc<RefCell<PlayerState>>) {
                 // staleness guard (drop an error whose source was superseded) lives in
                 // `apply_endfile_error` so it is unit-testable without an engine.
                 apply_endfile_error(state, error, path.as_deref());
+            }
+            MpvEvent::CommandReply { request_id, error } => {
+                complete_screenshot_capture(state, status_toast, request_id, error);
             }
             _ => {}
         }
