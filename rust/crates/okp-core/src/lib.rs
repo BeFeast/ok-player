@@ -1,3 +1,4 @@
+pub mod acceptance_evidence;
 pub mod app;
 pub mod aspect_resize;
 pub mod bookmarks;
