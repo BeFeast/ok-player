@@ -154,9 +154,34 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     let lyrics_surface = build_lyrics_surface();
     let media_state_overlay = MediaStateOverlay::new();
     chrome.set_child(&control_bar);
-    chrome.add_linked_revealer(&window_chrome);
+    chrome.add_linked_motion_widget(window_chrome.widget());
+    chrome.add_linked_revealer(&controls.up_next_revealer);
 
     overlay.set_child(Some(&video_area));
+    // Visual smoke hook: Xvfb cannot present the libmpv GL frame reliably on every
+    // renderer, so deterministic bright/dark planes exercise chrome legibility while
+    // real media remains loaded underneath to drive the production visibility state.
+    if let Some(mode) = env::var_os("OKP_PLAYBACK_FRAME_PREVIEW") {
+        let preview = gtk::DrawingArea::new();
+        let color = if mode.eq_ignore_ascii_case("bright") {
+            (0.957, 0.961, 0.965)
+        } else {
+            (0.031, 0.035, 0.043)
+        };
+        preview.set_draw_func(move |_, cr, width, height| {
+            cr.set_source_rgb(color.0, color.1, color.2);
+            cr.rectangle(0.0, 0.0, f64::from(width), f64::from(height));
+            let _ = cr.fill();
+        });
+        preview.set_halign(gtk::Align::Fill);
+        preview.set_valign(gtk::Align::Fill);
+        preview.set_hexpand(true);
+        preview.set_vexpand(true);
+        preview.set_size_request(1120, 680);
+        preview.set_can_target(false);
+        overlay.add_overlay(&preview);
+        overlay.set_measure_overlay(&preview, true);
+    }
     overlay.add_overlay(empty_surface.widget());
     // The loading / buffering / error overlay sits just above the empty surface and
     // lyrics — below the chrome and toast — so the transport stays on top while a
@@ -165,7 +190,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     // The lyrics surface sits above the (audio-black) video plane but below the window chrome, the
     // OSC, and the side panel, so those stay on top and interactive while lyrics play underneath.
     overlay.add_overlay(lyrics_surface.widget());
-    overlay.add_overlay(&window_chrome);
+    overlay.add_overlay(window_chrome.widget());
     overlay.add_overlay(chrome.widget());
     overlay.add_overlay(&controls.up_next_revealer);
     overlay.add_overlay(status_toast.widget());
@@ -173,6 +198,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         overlay.add_overlay(&resize_handle);
     }
     window.set_child(Some(&overlay));
+    chrome.add_cursor_widget(&overlay);
     connect_chrome_activity(&overlay, Rc::clone(&chrome));
 
     let launch_reserved_notice = launch_args.reserved_notice().map(str::to_owned);
@@ -249,6 +275,8 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
             updating_seek: Rc::clone(&updating_seek),
             updating_volume: Rc::clone(&updating_volume),
             chrome: Rc::clone(&chrome),
+            window_chrome,
+            subtitle_position_snapshot: Rc::new(Cell::new(None)),
             empty_surface,
             lyrics_surface,
             media_state_overlay,
@@ -312,23 +340,36 @@ pub(crate) fn open_runtime_launch_args(runtime: &AppRuntime, launch_args: &Launc
 }
 
 pub(crate) fn sync_player_window_chrome_fullscreen(
-    window_chrome: &gtk::Revealer,
+    window_chrome: &PlayerWindowChrome,
     window: &gtk::ApplicationWindow,
 ) {
-    window_chrome.set_visible(!window.is_fullscreen());
+    window_chrome.widget().set_visible(!window.is_fullscreen());
 
-    let fullscreen_chrome = window_chrome.clone();
+    let fullscreen_chrome = window_chrome.widget().clone();
     window.connect_notify_local(Some("fullscreened"), move |window, _| {
         fullscreen_chrome.set_visible(!window.is_fullscreen());
     });
 }
 
-pub(crate) fn build_player_window_chrome(window: &gtk::ApplicationWindow) -> gtk::Revealer {
+impl PlayerWindowChrome {
+    pub(crate) fn widget(&self) -> &gtk::Revealer {
+        &self.revealer
+    }
+
+    pub(crate) fn set_title(&self, title: &str) {
+        self.title_label.set_text(title);
+        self.media_icon.set_visible(!title.is_empty());
+        self.title_label.set_visible(!title.is_empty());
+    }
+}
+
+pub(crate) fn build_player_window_chrome(window: &gtk::ApplicationWindow) -> PlayerWindowChrome {
     let revealer = gtk::Revealer::new();
+    revealer.add_css_class("okp-top-chrome-motion");
     revealer.set_halign(gtk::Align::Fill);
     revealer.set_valign(gtk::Align::Start);
-    revealer.set_transition_duration(140);
-    revealer.set_transition_type(gtk::RevealerTransitionType::SlideDown);
+    revealer.set_transition_duration(0);
+    revealer.set_transition_type(gtk::RevealerTransitionType::None);
     revealer.set_reveal_child(true);
     revealer.set_can_target(true);
 
@@ -338,18 +379,28 @@ pub(crate) fn build_player_window_chrome(window: &gtk::ApplicationWindow) -> gtk
     bar.set_valign(gtk::Align::Start);
     bar.set_margin_top(0);
 
-    let drag_zone = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    let drag_zone = gtk::Box::new(gtk::Orientation::Horizontal, 9);
     drag_zone.add_css_class("okp-window-drag-zone");
     drag_zone.set_hexpand(true);
     drag_zone.set_can_target(true);
+    drag_zone.set_margin_start(14);
+
+    let media_icon = gtk::Image::from_icon_name("media-playback-start-symbolic");
+    media_icon.add_css_class("okp-window-media-icon");
+    media_icon.set_visible(false);
+    let title_label = gtk::Label::new(None);
+    title_label.add_css_class("okp-window-media-title");
+    title_label.set_ellipsize(pango::EllipsizeMode::End);
+    title_label.set_xalign(0.0);
+    title_label.set_visible(false);
+    drag_zone.append(&media_icon);
+    drag_zone.append(&title_label);
     connect_player_window_drag(&drag_zone, window);
     bar.append(&drag_zone);
 
     let controls = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     controls.add_css_class("okp-player-window-controls");
     controls.set_halign(gtk::Align::End);
-    controls.set_margin_top(4);
-    controls.set_margin_end(6);
 
     let minimize = player_window_control(WindowControlKind::Minimize, "Minimize");
     let minimize_window = window.clone();
@@ -382,7 +433,11 @@ pub(crate) fn build_player_window_chrome(window: &gtk::ApplicationWindow) -> gtk
 
     bar.append(&controls);
     revealer.set_child(Some(&bar));
-    revealer
+    PlayerWindowChrome {
+        revealer,
+        media_icon,
+        title_label,
+    }
 }
 
 pub(crate) fn player_window_control(kind: WindowControlKind, tooltip: &str) -> gtk::Button {

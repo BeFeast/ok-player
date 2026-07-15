@@ -53,6 +53,21 @@ pub fn format_duration(seconds: Option<f64>) -> String {
     }
 }
 
+/// Formats the trailing transport readout as time remaining. A known duration
+/// renders a leading minus sign and clamps positions past the end to zero;
+/// unknown or invalid durations use the live `--:--` sentinel.
+pub fn format_remaining(position: f64, duration: Option<f64>) -> String {
+    let Some(duration) = duration.filter(|value| value.is_finite() && *value > 0.0) else {
+        return "--:--".to_owned();
+    };
+    let position = if position.is_finite() {
+        position.max(0.0)
+    } else {
+        0.0
+    };
+    format!("-{}", format_clock((duration - position).max(0.0)))
+}
+
 /// Formats seconds as the on-screen clock: zero-padded `MM:SS`, or `HH:MM:SS`
 /// once the hour is reached. Non-finite and non-positive inputs render `00:00`.
 /// Fractional seconds truncate (never round): the clock shows second N until
@@ -239,5 +254,14 @@ mod tests {
     fn format_duration_known_renders_the_padded_clock() {
         assert_eq!(format_duration(Some(90.0)), "01:30");
         assert_eq!(format_duration(Some(5025.0)), "01:23:45");
+    }
+
+    #[test]
+    fn format_remaining_clamps_and_uses_unknown_sentinel() {
+        assert_eq!(format_remaining(30.0, Some(90.0)), "-01:00");
+        assert_eq!(format_remaining(95.0, Some(90.0)), "-00:00");
+        assert_eq!(format_remaining(f64::NAN, Some(90.0)), "-01:30");
+        assert_eq!(format_remaining(10.0, None), "--:--");
+        assert_eq!(format_remaining(10.0, Some(f64::INFINITY)), "--:--");
     }
 }

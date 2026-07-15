@@ -210,6 +210,14 @@ capture_welcome "recents" "$OUT_DIR/continue-watching.png" 1120 680 "Continue Wa
 capture_welcome "recents" "$OUT_DIR/continue-watching-narrow.png" 480 540 "Continue Watching narrow"
 capture_welcome "private" "$OUT_DIR/private-session.png" 1120 680 "Private session"
 
+# Continue Watching has its own actions and footer; the standard playback OSC
+# must not leak into the empty-state bottom-left band.
+continue_bottom_max="$(magick "$OUT_DIR/continue-watching.png" -crop 250x70+0+610 -colorspace gray -format '%[fx:maxima]' info:)"
+if ! awk -v max="$continue_bottom_max" 'BEGIN { exit !(max < 0.12) }'; then
+  echo "Standard OSC leaked into Continue Watching: bottom maxima=${continue_bottom_max}" >&2
+  exit 1
+fi
+
 # The real recents fixture must render the identity/title, supporting copy, and
 # both actions with readable contrast at default and narrow widths. These
 # checks use broad semantic regions so renderer-level RGB drift cannot fail an

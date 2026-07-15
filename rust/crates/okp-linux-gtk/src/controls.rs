@@ -17,27 +17,27 @@ pub(crate) fn build_controls(
     play_button.set_tooltip_text(Some("Play / Pause (Space)"));
     play_button.set_sensitive(false);
 
-    let open_button = gtk::Button::with_label("Open");
-    open_button.set_has_frame(false);
-    open_button.add_css_class("okp-control-button");
-    open_button.add_css_class("okp-chip-button");
-    open_button.set_tooltip_text(Some("Open file (O)"));
-
-    let subtitle_button = gtk::MenuButton::builder().label("Sub").build();
+    let subtitle_button = gtk::MenuButton::builder()
+        .icon_name("media-view-subtitles-symbolic")
+        .build();
     subtitle_button.set_has_frame(false);
     subtitle_button.add_css_class("okp-control-button");
-    subtitle_button.add_css_class("okp-chip-button");
+    subtitle_button.add_css_class("okp-icon-button");
+    subtitle_button.add_css_class("okp-utility-button");
     subtitle_button.set_tooltip_text(Some("Subtitles"));
     subtitle_button.set_sensitive(false);
 
-    let audio_button = gtk::MenuButton::builder().label("Audio").build();
+    let audio_button = gtk::MenuButton::builder()
+        .icon_name("audio-speakers-symbolic")
+        .build();
     audio_button.set_has_frame(false);
     audio_button.add_css_class("okp-control-button");
-    audio_button.add_css_class("okp-chip-button");
+    audio_button.add_css_class("okp-icon-button");
+    audio_button.add_css_class("okp-utility-button");
     audio_button.set_tooltip_text(Some("Audio"));
     audio_button.set_sensitive(false);
 
-    let speed_button = gtk::MenuButton::builder().label("1.00x").build();
+    let speed_button = gtk::MenuButton::builder().label("1.00×").build();
     speed_button.set_has_frame(false);
     speed_button.add_css_class("okp-control-button");
     speed_button.add_css_class("okp-speed-chip");
@@ -50,11 +50,12 @@ pub(crate) fn build_controls(
     previous_button.set_has_frame(false);
     previous_button.add_css_class("okp-control-button");
     previous_button.add_css_class("okp-transport-button");
-    previous_button.set_tooltip_text(Some("Previous item (Page Up)"));
+    previous_button.set_tooltip_text(Some("Previous chapter"));
     previous_button.set_sensitive(false);
 
     let elapsed_label = gtk::Label::new(Some("00:00"));
     elapsed_label.add_css_class("okp-time-label");
+    elapsed_label.add_css_class("okp-elapsed-time");
 
     let next_button = gtk::Button::builder()
         .icon_name("media-skip-forward-symbolic")
@@ -62,7 +63,7 @@ pub(crate) fn build_controls(
     next_button.set_has_frame(false);
     next_button.add_css_class("okp-control-button");
     next_button.add_css_class("okp-transport-button");
-    next_button.set_tooltip_text(Some("Next item (Page Down)"));
+    next_button.set_tooltip_text(Some("Next chapter"));
     next_button.set_sensitive(false);
 
     let chapters_button = gtk::Button::builder()
@@ -71,6 +72,7 @@ pub(crate) fn build_controls(
     chapters_button.set_has_frame(false);
     chapters_button.add_css_class("okp-control-button");
     chapters_button.add_css_class("okp-icon-button");
+    chapters_button.add_css_class("okp-utility-button");
     chapters_button.set_tooltip_text(Some("Chapters / Up Next"));
     chapters_button.set_sensitive(false);
 
@@ -80,6 +82,7 @@ pub(crate) fn build_controls(
     screenshot_button.set_has_frame(false);
     screenshot_button.add_css_class("okp-control-button");
     screenshot_button.add_css_class("okp-icon-button");
+    screenshot_button.add_css_class("okp-utility-button");
     screenshot_button.set_tooltip_text(Some("Save frame to Pictures/OK Player (C)"));
     screenshot_button.set_sensitive(false);
 
@@ -89,6 +92,7 @@ pub(crate) fn build_controls(
     fullscreen_button.set_has_frame(false);
     fullscreen_button.add_css_class("okp-control-button");
     fullscreen_button.add_css_class("okp-icon-button");
+    fullscreen_button.add_css_class("okp-utility-button");
     fullscreen_button.set_tooltip_text(Some("Enter Fullscreen (F)"));
     fullscreen_button.set_sensitive(false);
 
@@ -98,10 +102,12 @@ pub(crate) fn build_controls(
     more_button.set_has_frame(false);
     more_button.add_css_class("okp-control-button");
     more_button.add_css_class("okp-icon-button");
+    more_button.add_css_class("okp-utility-button");
     more_button.set_tooltip_text(Some("More commands"));
 
-    let duration_label = gtk::Label::new(Some("00:00"));
+    let duration_label = gtk::Label::new(Some("-00:00"));
     duration_label.add_css_class("okp-time-label");
+    duration_label.add_css_class("okp-remaining-time");
 
     let seek = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 1.0);
     seek.set_draw_value(false);
@@ -305,32 +311,13 @@ pub(crate) fn build_controls(
         );
     });
 
-    let open_parent = window.clone();
-    let open_state = Rc::clone(&state);
-    let open_toast = Rc::clone(&status_toast);
-    open_button.connect_clicked(move |_| {
-        open_media_dialog(&open_parent, Rc::clone(&open_state), Rc::clone(&open_toast))
-    });
-
     let previous_state = Rc::clone(&state);
     previous_button.connect_clicked(move |_| {
-        navigate_playlist(&previous_state, -1);
+        jump_chapter(&previous_state, -1);
     });
 
     let play_state = Rc::clone(&state);
-    let play_open_parent = window.clone();
-    let play_open_toast = Rc::clone(&status_toast);
     play_button.connect_clicked(move |_| {
-        let has_media = has_loaded_media(&play_state);
-        if !has_media {
-            open_media_dialog(
-                &play_open_parent,
-                Rc::clone(&play_state),
-                Rc::clone(&play_open_toast),
-            );
-            return;
-        }
-
         if let Some(mpv) = play_state.borrow().mpv.as_ref()
             && let Err(error) = mpv.cycle_pause()
         {
@@ -340,7 +327,7 @@ pub(crate) fn build_controls(
 
     let next_state = Rc::clone(&state);
     next_button.connect_clicked(move |_| {
-        navigate_playlist(&next_state, 1);
+        jump_chapter(&next_state, 1);
     });
 
     let chapters_panel = up_next_revealer.clone();
@@ -407,7 +394,6 @@ pub(crate) fn build_controls(
     });
 
     Controls {
-        open_button,
         subtitle_button,
         audio_button,
         speed_button,
@@ -442,56 +428,51 @@ pub(crate) fn build_controls(
     }
 }
 
-pub(crate) fn controls_bar(controls: &Controls) -> gtk::Box {
-    let bar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+pub(crate) fn controls_bar(controls: &Controls) -> gtk::Overlay {
+    let bar = gtk::Box::new(gtk::Orientation::Horizontal, 16);
     bar.add_css_class("okp-controls");
     bar.set_halign(gtk::Align::Fill);
     bar.set_valign(gtk::Align::End);
-    bar.set_margin_start(14);
-    bar.set_margin_end(14);
-    bar.set_margin_bottom(14);
+    bar.set_margin_start(16);
+    bar.set_margin_end(16);
+    bar.set_margin_bottom(18);
 
-    let transport = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-    transport.add_css_class("okp-transport-group");
-    transport.append(&controls.previous_button);
-    transport.append(&controls.play_button);
-    transport.append(&controls.next_button);
+    let volume_group = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    volume_group.add_css_class("okp-volume-group");
+    let volume_icon = gtk::Image::from_icon_name("audio-volume-high-symbolic");
+    volume_icon.add_css_class("okp-volume-icon");
+    volume_group.append(&volume_icon);
+    volume_group.append(&controls.volume);
 
-    let primary = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    primary.add_css_class("okp-command-cluster");
-    primary.append(&controls.open_button);
-    primary.append(&transport);
+    bar.append(&controls.play_button);
+    bar.append(&controls.previous_button);
+    bar.append(&controls.next_button);
+    bar.append(&controls.elapsed_label);
+    bar.append(&controls.seek);
+    bar.append(&controls.duration_label);
+    bar.append(&volume_group);
+    bar.append(&controls.speed_button);
+    bar.append(&controls.subtitle_button);
+    bar.append(&controls.audio_button);
+    bar.append(&controls.chapters_button);
+    bar.append(&controls.screenshot_button);
+    bar.append(&controls.fullscreen_button);
+    bar.append(&controls.more_button);
 
-    let timeline = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    timeline.add_css_class("okp-timeline-group");
-    timeline.set_hexpand(true);
-    timeline.append(&controls.elapsed_label);
-    timeline.append(&controls.seek);
-    timeline.append(&controls.duration_label);
+    let scrim = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    scrim.add_css_class("okp-bottom-scrim");
+    scrim.set_halign(gtk::Align::Fill);
+    scrim.set_valign(gtk::Align::End);
+    scrim.set_height_request(220);
+    scrim.set_can_target(false);
 
-    let secondary = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-    secondary.add_css_class("okp-command-cluster");
-    secondary.append(&controls.volume);
-    secondary.append(&controls.speed_button);
-    secondary.append(&controls.subtitle_button);
-    secondary.append(&controls.audio_button);
-    secondary.append(&controls.chapters_button);
-    secondary.append(&controls.screenshot_button);
-    secondary.append(&controls.fullscreen_button);
-    secondary.append(&controls.more_button);
-
-    let primary_separator = gtk::Separator::new(gtk::Orientation::Vertical);
-    primary_separator.add_css_class("okp-control-separator");
-    let secondary_separator = gtk::Separator::new(gtk::Orientation::Vertical);
-    secondary_separator.add_css_class("okp-control-separator");
-
-    bar.append(&primary);
-    bar.append(&primary_separator);
-    bar.append(&timeline);
-    bar.append(&secondary_separator);
-    bar.append(&secondary);
-
-    bar
+    let chrome = gtk::Overlay::new();
+    chrome.add_css_class("okp-bottom-chrome");
+    chrome.set_halign(gtk::Align::Fill);
+    chrome.set_valign(gtk::Align::End);
+    chrome.set_child(Some(&scrim));
+    chrome.add_overlay(&bar);
+    chrome
 }
 
 pub(crate) fn connect_chrome_activity(overlay: &gtk::Overlay, chrome: Rc<ChromeVisibility>) {

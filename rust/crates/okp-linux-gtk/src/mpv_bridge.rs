@@ -276,6 +276,8 @@ pub(crate) fn connect_state_poll(
         updating_seek,
         updating_volume,
         chrome,
+        window_chrome,
+        subtitle_position_snapshot,
         empty_surface,
         lyrics_surface,
         media_state_overlay,
@@ -293,7 +295,58 @@ pub(crate) fn connect_state_poll(
             .as_ref()
             .map(|mpv| mpv.observed_playback_state());
         let has_media = has_loaded_media(&state);
-        let has_playlist = state.borrow().playlist.len() > 1;
+        let has_chapters = state
+            .borrow()
+            .mpv
+            .as_ref()
+            .is_some_and(|mpv| !mpv.observed_chapters().is_empty());
+        chrome.set_has_media(has_media);
+        let media_title = if has_media {
+            let state = state.borrow();
+            state
+                .mpv
+                .as_ref()
+                .and_then(Mpv::observed_media_info)
+                .map(|info| info.title)
+                .filter(|title| !title.trim().is_empty())
+                .or_else(|| {
+                    state
+                        .current_file
+                        .as_ref()
+                        .map(|path| PlaylistItem::Local(path.clone()).display_name())
+                })
+                .or_else(|| {
+                    state
+                        .current_url
+                        .as_ref()
+                        .map(|url| PlaylistItem::Url(url.clone()).display_name())
+                })
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        window_chrome.set_title(&media_title);
+        if has_media {
+            let lift = if chrome.is_revealed() {
+                okp_core::subtitle_lift::for_surface(
+                    f64::from(window.height()),
+                    OSC_CLEARANCE_DIP,
+                    OSC_SUBTITLE_LIFT_PERCENT,
+                )
+            } else {
+                0.0
+            };
+            let subtitle_position = (100.0 - lift).clamp(0.0, 100.0);
+            let position_key = (subtitle_position * 1000.0).round() as i64;
+            if subtitle_position_snapshot.replace(Some(position_key)) != Some(position_key)
+                && let Some(mpv) = state.borrow().mpv.as_ref()
+                && let Err(error) = mpv.set_subtitle_position(subtitle_position)
+            {
+                eprintln!("Failed to position subtitles above playback chrome: {error}");
+            }
+        } else {
+            subtitle_position_snapshot.set(None);
+        }
         {
             let state = state.borrow();
             update_mpris_snapshot(&mpris_snapshot, &mpris_signals, &state, playback);
@@ -327,8 +380,8 @@ pub(crate) fn connect_state_poll(
             controls.subtitle_button.set_sensitive(has_media);
             controls.audio_button.set_sensitive(has_media);
             controls.speed_button.set_sensitive(has_media);
-            controls.previous_button.set_sensitive(has_playlist);
-            controls.next_button.set_sensitive(has_playlist);
+            controls.previous_button.set_sensitive(has_chapters);
+            controls.next_button.set_sensitive(has_chapters);
             controls.chapters_button.set_sensitive(has_media);
             controls.screenshot_button.set_sensitive(has_media);
             controls.fullscreen_button.set_sensitive(has_media);
@@ -364,18 +417,17 @@ pub(crate) fn connect_state_poll(
             controls
                 .elapsed_label
                 .set_text(&time_code::format_clock(time_pos));
-            // Unknown duration shows the live `--:--` sentinel only for a network source
-            // whose duration has not resolved — a local file that has not reported a
-            // duration yet is just *loading*, so it renders `00:00` (PRD §3 Live/URL
-            // unknown-duration state). The gating lives in the pure core helper
-            // `format_duration_total` so the shell never owns the live classification.
+            // Unknown duration shows the live `--:--` sentinel only for a network source;
+            // local loading remains `-00:00`. The pure core helper owns that distinction
+            // and the remaining-time clamp so the shell only projects the value.
             // The seek range still clamps to 0 so the bar stays progress-only /
             // disabled rather than running broken timeline math.
             let is_url = state.borrow().current_url.is_some();
             controls
                 .duration_label
-                .set_text(&network_media::format_duration_total(
+                .set_text(&network_media::format_remaining_total(
                     is_url,
+                    time_pos,
                     playback.duration,
                 ));
         } else {
@@ -384,8 +436,8 @@ pub(crate) fn connect_state_poll(
             controls.subtitle_button.set_sensitive(has_media);
             controls.audio_button.set_sensitive(has_media);
             controls.speed_button.set_sensitive(has_media);
-            controls.previous_button.set_sensitive(has_playlist);
-            controls.next_button.set_sensitive(has_playlist);
+            controls.previous_button.set_sensitive(has_chapters);
+            controls.next_button.set_sensitive(has_chapters);
             controls.chapters_button.set_sensitive(has_media);
             controls.screenshot_button.set_sensitive(has_media);
             controls.fullscreen_button.set_sensitive(has_media);
@@ -393,7 +445,7 @@ pub(crate) fn connect_state_poll(
                 .play_button
                 .set_icon_name("media-playback-start-symbolic");
             controls.play_button.set_tooltip_text(Some("Play (Space)"));
-            controls.speed_button.set_label("1.00x");
+            controls.speed_button.set_label("1.00×");
             update_fullscreen_button(&controls.fullscreen_button, window.is_fullscreen());
             controls.seek.set_sensitive(false);
             updating_seek.set(true);
@@ -401,7 +453,7 @@ pub(crate) fn connect_state_poll(
             controls.seek.set_value(0.0);
             updating_seek.set(false);
             controls.elapsed_label.set_text("00:00");
-            controls.duration_label.set_text("00:00");
+            controls.duration_label.set_text("-00:00");
         }
 
         // Project the shared load-state model onto the loading / error surface and pop the

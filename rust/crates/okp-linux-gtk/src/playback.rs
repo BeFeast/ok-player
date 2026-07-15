@@ -420,6 +420,27 @@ pub(crate) fn seek_to_chapter(state: &Rc<RefCell<PlayerState>>, time: f64) {
     }
 }
 
+pub(crate) fn jump_chapter(state: &Rc<RefCell<PlayerState>>, delta: i32) {
+    let target = (|| {
+        let state = state.borrow();
+        let mpv = state.mpv.as_ref()?;
+        let chapters = mpv.observed_chapters();
+        let position = mpv.observed_playback_state().time_pos?;
+        let times = chapters
+            .iter()
+            .map(|chapter| chapter.time)
+            .collect::<Vec<_>>();
+        let current = chapter_math::current_index(&times, position, chapter_math::DEFAULT_EPSILON);
+        chapter_math::jump_target(current, delta, chapters.len())
+            .and_then(|index| chapters.get(index))
+            .map(|chapter| chapter.time)
+    })();
+
+    if let Some(target) = target {
+        seek_to_chapter(state, target);
+    }
+}
+
 /// Drop a bookmark at the current playhead. Bookmarks are per-file position marks
 /// persisted in the shared history schema, so this needs a local file (streams are not
 /// tracked) and honours the private session — matching Windows `HistoryService`, whose
