@@ -4,6 +4,17 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BINARY="${1:-ok-player}"
 OUT_DIR="${2:-$ROOT/artifacts/manual-ui/linux-settings-smoke}"
+PAGE="${3:-about}"
+COLOR_SCHEME="${4:-light}"
+
+case "$PAGE" in
+  about|appearance|playback|subtitles|video|audio|shortcuts|integration|advanced) ;;
+  *) echo "Unsupported Settings page: $PAGE" >&2; exit 2 ;;
+esac
+case "$COLOR_SCHEME" in
+  light|dark|high-contrast) ;;
+  *) echo "Unsupported Settings color scheme: $COLOR_SCHEME" >&2; exit 2 ;;
+esac
 
 for tool in xvfb-run dbus-run-session xfwm4 xdotool xwininfo import magick; do
   if ! command -v "$tool" >/dev/null 2>&1; then
@@ -15,18 +26,26 @@ done
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
-if ! xvfb-run -a --server-args='-screen 0 1280x1100x24 -nolisten tcp' \
-  dbus-run-session -- bash -s -- "$BINARY" "$OUT_DIR" >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
+if ! xvfb-run -a --server-args='-screen 0 1280x900x24 -nolisten tcp' \
+  dbus-run-session -- bash -s -- "$BINARY" "$OUT_DIR" "$PAGE" "$COLOR_SCHEME" >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
 set -euo pipefail
 
 BINARY="$1"
 OUT_DIR="$2"
+PAGE="$3"
+COLOR_SCHEME="$4"
 
 export GDK_BACKEND=x11
 export GTK_USE_PORTAL=0
 export NO_AT_BRIDGE=1
 export XDG_SESSION_TYPE=x11
 export XDG_CURRENT_DESKTOP=XFCE
+if [[ "$COLOR_SCHEME" == "high-contrast" ]]; then
+  export GTK_THEME=HighContrast
+  APP_COLOR_SCHEME=light
+else
+  APP_COLOR_SCHEME="$COLOR_SCHEME"
+fi
 
 xfwm4 --sm-client-disable >"$OUT_DIR/xfwm4.log" 2>&1 &
 wm_pid=$!
@@ -39,6 +58,8 @@ trap cleanup EXIT
 
 sleep 1
 OKP_OPEN_SETTINGS_ON_STARTUP=1 \
+OKP_OPEN_SETTINGS_PAGE_ON_STARTUP="$PAGE" \
+OKP_SETTINGS_COLOR_SCHEME="$APP_COLOR_SCHEME" \
 OKP_SKIP_OPEN_INSTALLER=1 \
 OKP_SKIP_DEB_SELF_INSTALL=1 \
 timeout 12s "$BINARY" >"$OUT_DIR/app.log" 2>&1 &
@@ -58,50 +79,44 @@ height="$(awk '/Height:/ { print $2; exit }' "$OUT_DIR/settings.xwininfo")"
 border="$(awk '/Border width:/ { print $3; exit }' "$OUT_DIR/settings.xwininfo")"
 state="$(awk -F': ' '/Map State:/ { print $2; exit }' "$OUT_DIR/settings.xwininfo")"
 
-if [[ "$width" != "744" || "$height" != "1030" || "$border" != "0" || "$state" != "IsViewable" ]]; then
+if [[ "$width" != "760" || "$height" != "560" || "$border" != "0" || "$state" != "IsViewable" ]]; then
   echo "Unexpected Settings geometry: ${width}x${height}, border=${border}, state=${state}" >&2
   exit 1
 fi
 
-# Regression guard for the old GTK caption/headerbar: it rendered a centered
-# "Settings" title in the top chrome. The Windows-reference shell keeps that
-# region blank; the only Settings title lives at the top-left rail.
-top_center_dark_pixels="$(
+# Regression guard for a GTK native caption/headerbar: the app-owned title is
+# left-aligned, leaving the center of the 42px strip visually quiet.
+top_center_variance="$(
   magick "$OUT_DIR/settings.png" \
-    -crop 180x45+282+5 \
+    -crop 180x36+290+3 \
     -colorspace gray \
-    -threshold 32% \
-    -format '%[fx:(1-mean)*w*h]' info:
+    -format '%[fx:standard_deviation]' info:
 )"
-top_center_dark_pixels="${top_center_dark_pixels%.*}"
-if (( top_center_dark_pixels > 120 )); then
-  echo "Unexpected centered caption pixels in Settings chrome: ${top_center_dark_pixels}" >&2
+if ! awk -v variance="$top_center_variance" 'BEGIN { exit !(variance < 0.025) }'; then
+  echo "Unexpected centered caption pixels in Settings chrome: variance=${top_center_variance}" >&2
   exit 1
 fi
 
-rail_top_mean="$(magick "$OUT_DIR/settings.png" -crop 120x28+0+0 -colorspace gray -format '%[fx:mean]' info:)"
-content_top_mean="$(magick "$OUT_DIR/settings.png" -crop 260x28+192+0 -colorspace gray -format '%[fx:mean]' info:)"
-if ! awk -v rail="$rail_top_mean" -v content="$content_top_mean" \
-  'BEGIN { exit !(rail > 0.78 && content > 0.78 && content - rail > -0.04 && content - rail < 0.08) }'; then
-  echo "Unexpected Settings top surface regions: rail=${rail_top_mean}, content=${content_top_mean}" >&2
+rail_mean="$(magick "$OUT_DIR/settings.png" -crop 120x80+20+60 -colorspace gray -format '%[fx:mean]' info:)"
+content_mean="$(magick "$OUT_DIR/settings.png" -crop 160x80+360+60 -colorspace gray -format '%[fx:mean]' info:)"
+if [[ "$COLOR_SCHEME" == "light" ]]; then
+  surface_ok="$(awk -v rail="$rail_mean" -v content="$content_mean" 'BEGIN { print (rail > 0.75 && content > 0.75) ? 1 : 0 }')"
+elif [[ "$COLOR_SCHEME" == "dark" ]]; then
+  surface_ok="$(awk -v rail="$rail_mean" -v content="$content_mean" 'BEGIN { print (rail < 0.30 && content < 0.30) ? 1 : 0 }')"
+else
+  surface_ok="$(awk -v content="$content_mean" 'BEGIN { print (content < 0.10) ? 1 : 0 }')"
+fi
+if [[ "$surface_ok" != "1" ]]; then
+  echo "Unexpected Settings ${COLOR_SCHEME} surfaces: rail=${rail_mean}, content=${content_mean}" >&2
   exit 1
 fi
 
-if [[ "${OKP_EXPECT_UPDATE_STATUS_UP_TO_DATE:-0}" == "1" ]]; then
-  # Optional network-backed guard: the About Updates status should settle on
-  # "Up to date" instead of the old dead-looking "Not checked yet". This uses
-  # a stable dark-pixel envelope for the right-aligned status text so the
-  # default smoke remains OCR-free and offline-friendly.
-  update_status_dark_pixels="$(
-    magick "$OUT_DIR/settings.png" \
-      -crop 125x24+560+444 \
-      -colorspace gray \
-      -threshold 50% \
-      -format '%[fx:(1-mean)*w*h]' info:
-  )"
-  update_status_dark_pixels="${update_status_dark_pixels%.*}"
-  if (( update_status_dark_pixels < 90 || update_status_dark_pixels > 190 )); then
-    echo "Unexpected update status text pixels: ${update_status_dark_pixels}" >&2
+if [[ "$PAGE" == "about" ]]; then
+  # The canonical identity sits in the first content row. A blank crop catches
+  # both launcher-image regressions and failed custom-drawing realization.
+  about_variance="$(magick "$OUT_DIR/settings.png" -crop 118x94+216+70 -colorspace gray -format '%[fx:standard_deviation]' info:)"
+  if ! awk -v variance="$about_variance" 'BEGIN { exit !(variance > 0.06) }'; then
+    echo "About illustration crop is unexpectedly flat: variance=${about_variance}" >&2
     exit 1
   fi
 fi
@@ -112,4 +127,4 @@ then
   exit 1
 fi
 
-echo "Settings smoke passed. Screenshot: $OUT_DIR/settings.png"
+echo "Settings smoke passed (${PAGE}, ${COLOR_SCHEME}). Screenshot: $OUT_DIR/settings.png"

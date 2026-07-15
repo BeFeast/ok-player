@@ -14,13 +14,9 @@ pub(crate) fn settings_about_section(
     divider.add_css_class("okp-about-identity-divider");
     pane.append(&divider);
 
-    let sheet = gtk::Box::new(gtk::Orientation::Vertical, 11);
+    let sheet = gtk::Box::new(gtk::Orientation::Vertical, 12);
     sheet.add_css_class("okp-about-sheet");
     sheet.append(&about_app_card(&snapshot));
-    sheet.append(&about_updates_card(
-        Rc::clone(&state),
-        Rc::clone(&status_toast),
-    ));
     sheet.append(&about_engine_card(&snapshot));
     sheet.append(&about_host_card(&snapshot));
     pane.append(&sheet);
@@ -79,12 +75,75 @@ pub(crate) fn about_identity_hero(snapshot: &AboutSnapshot) -> gtk::Box {
 }
 
 pub(crate) fn about_illustration() -> gtk::Widget {
-    app_identity_image(92, "okp-about-mark").upcast()
+    let area = gtk::DrawingArea::new();
+    area.add_css_class("okp-about-illustration-art");
+    area.set_size_request(116, 90);
+    area.set_draw_func(draw_about_illustration);
+    area.upcast()
 }
 
-#[cfg(test)]
-pub(crate) fn about_illustration_path() -> Option<PathBuf> {
-    app_icon_path()
+pub(crate) const ABOUT_FRAME_TICKS: [(f64, f64, f64, f64); 5] = [
+    (14.0, 43.5, 5.5, 9.0),
+    (22.0, 41.0, 5.5, 14.0),
+    (31.0, 38.0, 5.5, 20.0),
+    (40.5, 34.0, 5.5, 28.0),
+    (51.0, 30.0, 5.5, 36.0),
+];
+pub(crate) const ABOUT_FRAME_TICK_OPACITY: [f64; 5] = [0.10, 0.18, 0.30, 0.44, 0.62];
+
+pub(crate) fn draw_about_illustration(
+    area: &gtk::DrawingArea,
+    cr: &cairo::Context,
+    width: i32,
+    height: i32,
+) {
+    let scale = f64::min(width as f64 / 124.0, height as f64 / 96.0);
+    let tick = area.color();
+    let _ = cr.save();
+    cr.translate(
+        (width as f64 - 124.0 * scale) / 2.0,
+        (height as f64 - 96.0 * scale) / 2.0,
+    );
+    cr.scale(scale, scale);
+    cr.set_line_cap(cairo::LineCap::Round);
+    for ((x, y, tick_width, tick_height), opacity) in
+        ABOUT_FRAME_TICKS.into_iter().zip(ABOUT_FRAME_TICK_OPACITY)
+    {
+        cr.set_source_rgba(
+            tick.red().into(),
+            tick.green().into(),
+            tick.blue().into(),
+            opacity,
+        );
+        cr.set_line_width(tick_width);
+        let center_x = x + tick_width / 2.0;
+        cr.move_to(center_x, y + tick_width / 2.0);
+        cr.line_to(center_x, y + tick_height - tick_width / 2.0);
+        let _ = cr.stroke();
+    }
+
+    cr.set_line_join(cairo::LineJoin::Round);
+    cr.move_to(64.0, 28.0);
+    cr.line_to(108.0, 54.0);
+    cr.line_to(64.0, 80.0);
+    cr.close_path();
+    cr.set_source_rgba(0.039, 0.396, 0.373, 0.09);
+    cr.set_line_width(12.0);
+    let _ = cr.stroke();
+
+    cr.move_to(64.0, 22.0);
+    cr.line_to(108.0, 48.0);
+    cr.line_to(64.0, 74.0);
+    cr.close_path();
+    let gradient = cairo::LinearGradient::new(64.0, 22.0, 108.0, 74.0);
+    gradient.add_color_stop_rgb(0.0, 0.110, 0.686, 0.635);
+    gradient.add_color_stop_rgb(0.55, 0.067, 0.541, 0.502);
+    gradient.add_color_stop_rgb(1.0, 0.039, 0.396, 0.373);
+    let _ = cr.set_source(&gradient);
+    cr.set_line_width(6.0);
+    let _ = cr.fill_preserve();
+    let _ = cr.stroke();
+    let _ = cr.restore();
 }
 
 pub(crate) fn about_display_version(version: &str) -> String {
@@ -115,7 +174,7 @@ pub(crate) fn about_hero_channel(channel: &str) -> String {
 }
 
 pub(crate) fn about_app_card(snapshot: &AboutSnapshot) -> gtk::Box {
-    let rows = gtk::Box::new(gtk::Orientation::Vertical, 9);
+    let rows = gtk::Box::new(gtk::Orientation::Vertical, 10);
     rows.append(&about_spec_row("Version", &snapshot.version, true, None));
     rows.append(&about_spec_row("Channel", &snapshot.channel, false, None));
     rows.append(&about_spec_row("Build", &snapshot.build, true, None));
@@ -124,7 +183,7 @@ pub(crate) fn about_app_card(snapshot: &AboutSnapshot) -> gtk::Box {
 }
 
 pub(crate) fn about_engine_card(snapshot: &AboutSnapshot) -> gtk::Box {
-    let rows = gtk::Box::new(gtk::Orientation::Vertical, 9);
+    let rows = gtk::Box::new(gtk::Orientation::Vertical, 10);
     let hwdec_tag = if snapshot.hwdec == "off" {
         ("OFF", false)
     } else {
@@ -153,142 +212,12 @@ pub(crate) fn about_engine_card(snapshot: &AboutSnapshot) -> gtk::Box {
     about_card("ENGINE", &rows)
 }
 
-pub(crate) fn about_updates_card(
-    state: Rc<RefCell<PlayerState>>,
-    status_toast: Rc<StatusToast>,
-) -> gtk::Box {
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    let initial_update_status = state.borrow().linux_update_status.clone();
-
-    let status_row = about_spec_row(
-        "Status",
-        &initial_update_status.about_status_text(),
-        false,
-        None,
-    );
-    let status_label = status_row
-        .last_child()
-        .and_then(|wrap| wrap.first_child())
-        .and_then(|widget| widget.downcast::<gtk::Label>().ok())
-        .unwrap_or_else(|| gtk::Label::new(Some("Not checked")));
-    content.append(&status_row);
-
-    let auto_row = gtk::Box::new(gtk::Orientation::Horizontal, 14);
-    auto_row.add_css_class("okp-about-row");
-    let auto_text = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    auto_text.set_hexpand(true);
-    let auto_label = gtk::Label::new(Some("Check automatically"));
-    auto_label.add_css_class("okp-about-row-label");
-    auto_label.set_xalign(0.0);
-    auto_text.append(&auto_label);
-    let auto_detail = gtk::Label::new(Some("On launch"));
-    auto_detail.add_css_class("okp-about-row-detail");
-    auto_detail.set_xalign(0.0);
-    auto_text.append(&auto_detail);
-    auto_row.append(&auto_text);
-
-    let auto_check_enabled = state.borrow().settings.auto_check_updates();
-    let auto_switch = about_toggle_button(auto_check_enabled);
-    let auto_state = Rc::clone(&state);
-    let auto_toast = Rc::clone(&status_toast);
-    auto_switch.connect_clicked(move |button| {
-        let enabled = !button.has_css_class("is-active");
-        if enabled {
-            button.add_css_class("is-active");
-        } else {
-            button.remove_css_class("is-active");
-        }
-        if let Some(knob) = button.first_child() {
-            knob.set_halign(if enabled {
-                gtk::Align::End
-            } else {
-                gtk::Align::Start
-            });
-        }
-        {
-            let mut state = auto_state.borrow_mut();
-            state.settings.set_auto_check_updates(enabled);
-            if let Err(error) = state.settings.save() {
-                eprintln!("Failed to save update settings: {error}");
-                auto_toast.show("Could not save update setting");
-            }
-        }
-        auto_toast.show(if enabled {
-            "Automatic update checks on"
-        } else {
-            "Automatic update checks off"
-        });
-    });
-    auto_row.append(&auto_switch);
-    content.append(&auto_row);
-
-    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    actions.set_halign(gtk::Align::Start);
-    let pending_update = Rc::new(RefCell::new(initial_update_status.pending_update()));
-    let check_button = gtk::Button::with_label(&initial_update_status.action_label());
-    check_button.add_css_class("okp-about-check-button");
-    check_button.set_has_frame(false);
-    check_button.set_size_request(132, 34);
-    check_button.set_sensitive(!matches!(
-        initial_update_status,
-        LinuxUpdateStatus::Checking
-    ));
-    let check_status = status_label.clone();
-    let check_pending = Rc::clone(&pending_update);
-    let check_state = Rc::clone(&state);
-    let check_toast = Rc::clone(&status_toast);
-    check_button.connect_clicked(move |button| {
-        if let Some(update) = check_pending.borrow().clone() {
-            start_update_download(
-                button,
-                &check_status,
-                update,
-                Rc::clone(&check_state),
-                Rc::clone(&check_toast),
-            );
-            return;
-        }
-
-        start_update_check_for_ui(
-            button,
-            &check_status,
-            &check_pending,
-            Rc::clone(&check_state),
-            Rc::clone(&check_toast),
-            "Checking...",
-            true,
-        );
-    });
-    actions.append(&check_button);
-    if auto_check_enabled && matches!(initial_update_status, LinuxUpdateStatus::NotChecked) {
-        let auto_button = check_button.clone();
-        let auto_status = status_label.clone();
-        let auto_pending = Rc::clone(&pending_update);
-        let auto_state = Rc::clone(&state);
-        let auto_toast = Rc::clone(&status_toast);
-        glib::idle_add_local_once(move || {
-            start_update_check_for_ui(
-                &auto_button,
-                &auto_status,
-                &auto_pending,
-                auto_state,
-                auto_toast,
-                "Checking...",
-                false,
-            );
-        });
-    }
-    content.append(&actions);
-
-    about_card("UPDATES", &content)
-}
-
 pub(crate) fn about_host_card(snapshot: &AboutSnapshot) -> gtk::Box {
     let grid = gtk::Grid::new();
     grid.add_css_class("okp-about-host-grid");
     grid.set_column_homogeneous(true);
     grid.set_column_spacing(26);
-    grid.set_row_spacing(8);
+    grid.set_row_spacing(10);
     grid.attach(
         &about_spec_row("Linux", &snapshot.os, true, None),
         0,
@@ -314,13 +243,6 @@ pub(crate) fn about_host_card(snapshot: &AboutSnapshot) -> gtk::Box {
         &about_spec_row("Install", &snapshot.install, false, None),
         1,
         1,
-        1,
-        1,
-    );
-    grid.attach(
-        &about_spec_row("Updates", &snapshot.updates, false, Some(("ON", true))),
-        0,
-        2,
         1,
         1,
     );
@@ -361,26 +283,6 @@ pub(crate) fn set_about_toggle_active(button: &gtk::Button, active: bool) {
 pub(crate) fn about_card<T: IsA<gtk::Widget>>(title: &str, content: &T) -> gtk::Box {
     let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
     card.add_css_class("okp-about-card");
-    match title {
-        "APP" => {
-            card.add_css_class("okp-about-card-app");
-            card.set_size_request(-1, 151);
-        }
-        "UPDATES" => {
-            card.add_css_class("okp-about-card-updates");
-            card.set_size_request(-1, 164);
-        }
-        "ENGINE" => {
-            card.add_css_class("okp-about-card-engine");
-            card.set_size_request(-1, 176);
-        }
-        "HOST" => {
-            card.add_css_class("okp-about-card-host");
-            card.set_size_request(-1, 125);
-        }
-        _ => {}
-    }
-
     let label = gtk::Label::new(Some(title));
     label.add_css_class("okp-about-card-title");
     label.set_xalign(0.0);
@@ -502,7 +404,7 @@ pub(crate) fn about_link_button(label: &str) -> gtk::Button {
 
 pub(crate) fn about_diagnostics_text(snapshot: &AboutSnapshot) -> String {
     format!(
-        "OK Player {} ({})\nBuild {} - current\nLicense {}\n\nEngine\n  libmpv           {}\n  FFmpeg           {}\n  Render API       {}\n  Graphics         {}\n  Hardware decode  {}\n\nHost\n  Linux            {}\n  GTK              {}\n  CPU              {}\n  Install          {}\n  Updates          {}",
+        "OK Player {} ({})\nBuild {} - current\nLicense {}\n\nEngine\n  libmpv           {}\n  FFmpeg           {}\n  Render API       {}\n  Graphics         {}\n  Hardware decode  {}\n\nHost\n  Linux            {}\n  GTK              {}\n  CPU              {}\n  Install          {}",
         snapshot.package_version,
         snapshot.channel,
         snapshot.build,
@@ -515,8 +417,7 @@ pub(crate) fn about_diagnostics_text(snapshot: &AboutSnapshot) -> String {
         snapshot.os,
         snapshot.gtk,
         snapshot.cpu,
-        snapshot.install,
-        snapshot.updates
+        snapshot.install
     )
 }
 

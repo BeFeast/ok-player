@@ -854,9 +854,69 @@ pub(crate) fn open_external_url(url: &str) {
     }
 }
 
-pub(crate) fn settings_appearance_section() -> gtk::Box {
+pub(crate) fn settings_appearance_section(
+    window: &gtk::Window,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
     let section = settings_section("Appearance");
-    section.append(&settings_value_row("App theme", "Canonical light"));
+
+    let theme_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    theme_row.add_css_class("okp-settings-row");
+    let theme_text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    theme_text.set_hexpand(true);
+    let theme_label = gtk::Label::new(Some("App theme"));
+    theme_label.add_css_class("okp-info-label");
+    theme_label.set_xalign(0.0);
+    theme_text.append(&theme_label);
+    let theme_detail = gtk::Label::new(Some("Auto follows the desktop color scheme."));
+    theme_detail.add_css_class("okp-update-status");
+    theme_detail.set_xalign(0.0);
+    theme_text.append(&theme_detail);
+    theme_row.append(&theme_text);
+
+    let current = state.borrow().settings.appearance_theme();
+    let choices = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    choices.add_css_class("okp-settings-segmented");
+    let light = appearance_theme_button("Light", current == AppearanceTheme::Light);
+    let auto = appearance_theme_button("Auto", current != AppearanceTheme::Light);
+
+    let light_window = window.clone();
+    let light_state = Rc::clone(&state);
+    let light_toast = Rc::clone(&status_toast);
+    let light_button = light.clone();
+    let light_auto = auto.clone();
+    light.connect_clicked(move |_| {
+        set_appearance_theme(
+            AppearanceTheme::Light,
+            &light_window,
+            &light_state,
+            &light_toast,
+            &light_button,
+            &light_auto,
+        );
+    });
+    choices.append(&light);
+
+    let auto_window = window.clone();
+    let auto_state = state;
+    let auto_toast = status_toast;
+    let auto_button = auto.clone();
+    let auto_light = light.clone();
+    auto.connect_clicked(move |_| {
+        set_appearance_theme(
+            AppearanceTheme::Auto,
+            &auto_window,
+            &auto_state,
+            &auto_toast,
+            &auto_button,
+            &auto_light,
+        );
+    });
+    choices.append(&auto);
+    theme_row.append(&choices);
+    section.append(&theme_row);
+
     section.append(&settings_value_row("Player surface", "Dark video plane"));
     section.append(&settings_value_row(
         "Window chrome",
@@ -865,4 +925,41 @@ pub(crate) fn settings_appearance_section() -> gtk::Box {
     section.append(&settings_value_row("Fullscreen caption", "Hidden"));
     section.append(&settings_value_row("Accent", "OK teal"));
     section
+}
+
+fn appearance_theme_button(label: &str, selected: bool) -> gtk::Button {
+    let button = gtk::Button::with_label(label);
+    button.add_css_class("okp-settings-segment-button");
+    button.set_has_frame(false);
+    button.set_size_request(72, 30);
+    if selected {
+        button.add_css_class("is-selected");
+    }
+    button
+}
+
+fn set_appearance_theme(
+    theme: AppearanceTheme,
+    window: &gtk::Window,
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &StatusToast,
+    selected: &gtk::Button,
+    other: &gtk::Button,
+) {
+    {
+        let mut state = state.borrow_mut();
+        state.settings.set_appearance_theme(theme);
+        if let Err(error) = state.settings.save() {
+            eprintln!("Failed to save appearance theme: {error}");
+            status_toast.show("Could not save appearance theme");
+            return;
+        }
+    }
+    selected.add_css_class("is-selected");
+    other.remove_css_class("is-selected");
+    apply_settings_window_theme(window, theme);
+    status_toast.show(match theme {
+        AppearanceTheme::Light => "Light theme selected",
+        AppearanceTheme::Auto | AppearanceTheme::Dark => "Automatic theme selected",
+    });
 }

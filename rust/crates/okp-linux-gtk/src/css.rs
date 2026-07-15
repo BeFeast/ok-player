@@ -11,6 +11,8 @@ const OKP_STYLESHEET: &str = "
         @define-color okp_accent_deep #229a92;
         @define-color okp_light_bg #eef4f9;
         @define-color okp_light_rail #eaf0f5;
+        @define-color okp_settings_light #f7f7f5;
+        @define-color okp_settings_dark #1f1f1f;
         @define-color okp_ink #161616;
         @define-color okp_teal #10938a;
         @define-color okp_teal_deep #0a655f;
@@ -1459,43 +1461,56 @@ const OKP_STYLESHEET: &str = "
         }
 
         .okp-settings-root {
-            background: @okp_light_bg;
+            background: @okp_settings_light;
             color: @okp_ink;
             border: none;
             border-radius: 0;
         }
 
+        window.okp-settings-window {
+            background: @okp_settings_light;
+        }
+
+        .okp-settings-titlebar {
+            min-height: 41px;
+            padding: 0 144px 0 16px;
+            background: @okp_settings_light;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+        }
+
+        .okp-settings-titlebar-label {
+            color: rgba(0, 0, 0, 0.70);
+            font-family: 'Segoe UI Variable Text', 'Noto Sans', sans-serif;
+            font-size: 12.5px;
+            font-weight: 600;
+        }
+
+        .okp-settings-body {
+            background: @okp_settings_light;
+        }
+
         .okp-settings-rail-frame {
-            background: @okp_light_rail;
+            background: rgba(0, 0, 0, 0.015);
         }
 
         .okp-settings-rail {
-            padding: 16px 10px 14px 10px;
-            background: @okp_light_rail;
-            border-right: 1px solid #dde3e7;
-        }
-
-        .okp-settings-rail-title {
-            margin-left: 5px;
-            margin-bottom: 20px;
-            color: #3b3f42;
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 12.5px;
-            font-weight: 400;
+            padding: 12px 10px;
+            background: rgba(0, 0, 0, 0.015);
+            border-right: 1px solid rgba(0, 0, 0, 0.05);
         }
 
         .okp-settings-search {
             min-height: 16px;
-            margin-bottom: 11px;
+            margin-bottom: 6px;
             padding: 7px 10px;
             border-radius: 7px;
-            background: #f9fbfc;
-            border: 1px solid #d5dce2;
-            color: #6c747a;
+            background: #ffffff;
+            border: 1px solid rgba(0, 0, 0, 0.09);
+            color: rgba(0, 0, 0, 0.40);
         }
 
         .okp-settings-search-label {
-            color: #6c747a;
+            color: rgba(0, 0, 0, 0.40);
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12px;
             font-weight: 400;
@@ -1526,7 +1541,7 @@ const OKP_STYLESHEET: &str = "
             border-radius: 7px;
             background: transparent;
             box-shadow: none;
-            color: #3f464b;
+            color: rgba(0, 0, 0, 0.72);
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12.5px;
             font-weight: 400;
@@ -1537,7 +1552,7 @@ const OKP_STYLESHEET: &str = "
         }
 
         .okp-settings-nav-row.is-selected {
-            background: #cfe5e8;
+            background: alpha(@okp_teal, 0.12);
             box-shadow: inset 3px 0 0 @okp_teal;
             color: @okp_teal_deep;
             font-weight: 600;
@@ -1551,21 +1566,21 @@ const OKP_STYLESHEET: &str = "
 
         .okp-settings-rail-divider {
             margin: 6px 9px 8px;
-            background: #dbe2e7;
+            background: rgba(0, 0, 0, 0.05);
         }
 
         .okp-captionless-window-drag-layer {
-            min-height: 32px;
+            min-height: 42px;
             background: transparent;
         }
 
         .okp-settings-window-controls {
-            min-height: 32px;
+            min-height: 42px;
         }
 
         .okp-settings-window-control {
             min-width: 48px;
-            min-height: 32px;
+            min-height: 42px;
             padding: 0;
             border: none;
             border-radius: 0;
@@ -1597,15 +1612,15 @@ const OKP_STYLESHEET: &str = "
         }
 
         .okp-settings-stack {
-            background: @okp_light_bg;
+            background: @okp_settings_light;
         }
 
         .okp-settings-scroller {
-            background: @okp_light_bg;
+            background: @okp_settings_light;
         }
 
         .okp-settings-page {
-            padding: 70px 44px 28px 24px;
+            padding: 28px 44px 28px 24px;
         }
 
         .okp-info-page {
@@ -1666,12 +1681,12 @@ const OKP_STYLESHEET: &str = "
         }
 
         .okp-about-pane {
-            padding: 70px 44px 28px 24px;
-            background: @okp_light_bg;
+            padding: 28px 44px 28px 24px;
+            background: @okp_settings_light;
         }
 
         .okp-about-identity {
-            min-height: 112px;
+            min-height: 94px;
         }
 
         .okp-about-illustration {
@@ -1679,8 +1694,8 @@ const OKP_STYLESHEET: &str = "
             min-height: 94px;
         }
 
-        .okp-about-mark {
-            margin: 4px 10px;
+        .okp-about-illustration-art {
+            color: @okp_teal;
         }
 
         .okp-about-wordmark {
@@ -2388,6 +2403,311 @@ const OKP_STYLESHEET: &str = "
 
         .okp-info-footer-button:hover {
             background: #d9e1e7;
+        }
+
+        .okp-settings-segmented {
+            padding: 3px;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.055);
+        }
+
+        button.okp-settings-segment-button {
+            min-width: 72px;
+            min-height: 30px;
+            padding: 0 10px;
+            border: none;
+            border-radius: 6px;
+            background: transparent;
+            box-shadow: none;
+            color: rgba(0, 0, 0, 0.54);
+            font-family: 'Segoe UI Variable Text', 'Noto Sans', sans-serif;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        button.okp-settings-segment-button:hover {
+            background: rgba(255, 255, 255, 0.52);
+        }
+
+        button.okp-settings-segment-button.is-selected {
+            background: #ffffff;
+            color: @okp_ink;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+        }
+
+        window.okp-settings-window.is-dark,
+        window.okp-settings-window.is-dark .okp-settings-root,
+        window.okp-settings-window.is-dark .okp-settings-titlebar,
+        window.okp-settings-window.is-dark .okp-settings-body,
+        window.okp-settings-window.is-dark .okp-settings-stack,
+        window.okp-settings-window.is-dark .okp-settings-scroller,
+        window.okp-settings-window.is-dark .okp-settings-page,
+        window.okp-settings-window.is-dark .okp-about-pane {
+            background: @okp_settings_dark;
+            color: rgba(255, 255, 255, 0.94);
+        }
+
+        window.okp-settings-window.is-dark .okp-settings-titlebar {
+            border-bottom-color: rgba(255, 255, 255, 0.06);
+        }
+
+        window.okp-settings-window.is-dark .okp-settings-titlebar-label {
+            color: rgba(255, 255, 255, 0.74);
+        }
+
+        window.okp-settings-window.is-dark .okp-settings-rail-frame,
+        window.okp-settings-window.is-dark .okp-settings-rail {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        window.okp-settings-window.is-dark .okp-settings-rail {
+            border-right-color: rgba(255, 255, 255, 0.06);
+        }
+
+        window.okp-settings-window.is-dark .okp-settings-search,
+        window.okp-settings-window.is-dark entry.okp-shortcuts-search {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: rgba(255, 255, 255, 0.09);
+            color: rgba(255, 255, 255, 0.74);
+        }
+
+        window.okp-settings-window.is-dark .okp-settings-search-label {
+            color: rgba(255, 255, 255, 0.42);
+        }
+
+        window.okp-settings-window.is-dark .okp-settings-nav-row {
+            color: rgba(255, 255, 255, 0.74);
+        }
+
+        window.okp-settings-window.is-dark .okp-settings-nav-row:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        window.okp-settings-window.is-dark .okp-settings-nav-row.is-selected {
+            background: alpha(@okp_accent, 0.16);
+            box-shadow: inset 3px 0 0 @okp_accent;
+            color: @okp_accent;
+        }
+
+        window.okp-settings-window.is-dark .okp-settings-rail-divider {
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        window.okp-settings-window.is-dark .okp-settings-window-control,
+        window.okp-settings-window.is-dark .okp-settings-window-control-glyph {
+            color: rgba(255, 255, 255, 0.60);
+        }
+
+        window.okp-settings-window.is-dark .okp-settings-window-control:hover {
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        window.okp-settings-window.is-dark button.okp-settings-window-close:hover {
+            background: @okp_danger_dark;
+        }
+
+        window.okp-settings-window.is-dark button.okp-settings-window-control:hover .okp-settings-window-control-glyph {
+            color: rgba(255, 255, 255, 0.96);
+        }
+
+        window.okp-settings-window.is-dark .okp-about-illustration-art {
+            color: @okp_accent;
+        }
+
+        window.okp-settings-window.is-dark .okp-about-wordmark,
+        window.okp-settings-window.is-dark .okp-about-row-value,
+        window.okp-settings-window.is-dark .okp-about-row-value-mono,
+        window.okp-settings-window.is-dark .okp-info-value,
+        window.okp-settings-window.is-dark .okp-shortcut-action-title,
+        window.okp-settings-window.is-dark .okp-info-chip-value {
+            color: rgba(255, 255, 255, 0.94);
+        }
+
+        window.okp-settings-window.is-dark .okp-about-tagline,
+        window.okp-settings-window.is-dark .okp-about-row-label,
+        window.okp-settings-window.is-dark .okp-info-label,
+        window.okp-settings-window.is-dark .okp-update-status,
+        window.okp-settings-window.is-dark .okp-info-track-detail {
+            color: rgba(255, 255, 255, 0.56);
+        }
+
+        window.okp-settings-window.is-dark .okp-about-byline,
+        window.okp-settings-window.is-dark .okp-about-card-title,
+        window.okp-settings-window.is-dark .okp-about-row-detail,
+        window.okp-settings-window.is-dark .okp-shortcut-action-id,
+        window.okp-settings-window.is-dark .okp-info-section-title,
+        window.okp-settings-window.is-dark .okp-info-chip-label {
+            color: rgba(255, 255, 255, 0.42);
+        }
+
+        window.okp-settings-window.is-dark .okp-about-identity-divider {
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        window.okp-settings-window.is-dark .okp-about-footer,
+        window.okp-settings-window.is-dark .okp-shortcut-row {
+            border-color: rgba(255, 255, 255, 0.08);
+        }
+
+        window.okp-settings-window.is-dark .okp-about-card,
+        window.okp-settings-window.is-dark .okp-info-section,
+        window.okp-settings-window.is-dark .okp-info-chip {
+            background: rgba(255, 255, 255, 0.035);
+            border-color: rgba(255, 255, 255, 0.07);
+        }
+
+        window.okp-settings-window.is-dark .okp-about-version-chip,
+        window.okp-settings-window.is-dark .okp-about-tag,
+        window.okp-settings-window.is-dark .okp-about-copy-button {
+            background: rgba(255, 255, 255, 0.07);
+            border-color: rgba(255, 255, 255, 0.07);
+            color: rgba(255, 255, 255, 0.94);
+        }
+
+        window.okp-settings-window.is-dark .okp-about-channel-chip,
+        window.okp-settings-window.is-dark .okp-about-tag.is-accent,
+        window.okp-settings-window.is-dark .okp-settings-state-pill,
+        window.okp-settings-window.is-dark .okp-shortcut-badge,
+        window.okp-settings-window.is-dark .okp-info-track-current {
+            background: alpha(@okp_accent, 0.16);
+            color: @okp_accent;
+        }
+
+        window.okp-settings-window.is-dark .okp-about-link-button,
+        window.okp-settings-window.is-dark .okp-about-link-arrow,
+        window.okp-settings-window.is-dark button.okp-shortcut-reset,
+        window.okp-settings-window.is-dark .okp-info-row.is-highlight .okp-info-value {
+            color: @okp_accent;
+        }
+
+        window.okp-settings-window.is-dark .okp-about-link-dot {
+            color: rgba(255, 255, 255, 0.42);
+        }
+
+        window.okp-settings-window.is-dark .okp-settings-switch-row,
+        window.okp-settings-window.is-dark button.okp-settings-track-row,
+        window.okp-settings-window.is-dark .okp-info-track-row,
+        window.okp-settings-window.is-dark button.okp-shortcut-chip,
+        window.okp-settings-window.is-dark .okp-empty-state,
+        window.okp-settings-window.is-dark .okp-mpv-conf-scroller,
+        window.okp-settings-window.is-dark textview.okp-mpv-conf-editor,
+        window.okp-settings-window.is-dark textview.okp-mpv-conf-editor text,
+        window.okp-settings-window.is-dark .okp-settings-button {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: rgba(255, 255, 255, 0.07);
+            color: rgba(255, 255, 255, 0.90);
+        }
+
+        window.okp-settings-window.is-dark .okp-settings-button:hover,
+        window.okp-settings-window.is-dark button.okp-settings-track-row:hover,
+        window.okp-settings-window.is-dark button.okp-shortcut-chip:hover,
+        window.okp-settings-window.is-dark .okp-about-copy-button:hover {
+            background: rgba(255, 255, 255, 0.09);
+        }
+
+        scale.okp-settings-scale highlight {
+            background: @okp_teal;
+        }
+
+        window.okp-settings-window.is-dark scale.okp-settings-scale highlight,
+        window.okp-settings-window.is-dark switch.okp-settings-switch:checked,
+        window.okp-settings-window.is-dark button.okp-about-toggle.is-active {
+            background: @okp_accent;
+        }
+
+        window.okp-settings-window.is-dark switch.okp-settings-switch,
+        window.okp-settings-window.is-dark button.okp-about-toggle {
+            background: rgba(255, 255, 255, 0.20);
+        }
+
+        window.okp-settings-window.is-dark .okp-settings-segmented {
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        window.okp-settings-window.is-dark button.okp-settings-segment-button {
+            color: rgba(255, 255, 255, 0.58);
+        }
+
+        window.okp-settings-window.is-dark button.okp-settings-segment-button:hover {
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        window.okp-settings-window.is-dark button.okp-settings-segment-button.is-selected {
+            background: rgba(255, 255, 255, 0.12);
+            color: rgba(255, 255, 255, 0.94);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+        }
+
+        window.okp-settings-window.is-dark scrollbar,
+        window.okp-settings-window.is-dark scrollbar trough {
+            background: transparent;
+            border: none;
+        }
+
+        window.okp-settings-window.is-dark scrollbar slider {
+            background: rgba(255, 255, 255, 0.24);
+        }
+
+        window.okp-settings-window.is-high-contrast,
+        window.okp-settings-window.is-high-contrast .okp-settings-root,
+        window.okp-settings-window.is-high-contrast .okp-settings-titlebar,
+        window.okp-settings-window.is-high-contrast .okp-settings-body,
+        window.okp-settings-window.is-high-contrast .okp-settings-rail,
+        window.okp-settings-window.is-high-contrast .okp-settings-stack,
+        window.okp-settings-window.is-high-contrast .okp-settings-scroller,
+        window.okp-settings-window.is-high-contrast .okp-settings-page,
+        window.okp-settings-window.is-high-contrast .okp-about-pane {
+            background: #000000;
+            color: #ffffff;
+        }
+
+        window.okp-settings-window.is-high-contrast .okp-about-card,
+        window.okp-settings-window.is-high-contrast .okp-info-section,
+        window.okp-settings-window.is-high-contrast .okp-settings-switch-row,
+        window.okp-settings-window.is-high-contrast .okp-settings-button {
+            background: #000000;
+            border-color: #ffffff;
+            color: #ffffff;
+        }
+
+        window.okp-settings-window.is-high-contrast .okp-settings-titlebar-label,
+        window.okp-settings-window.is-high-contrast .okp-settings-search-label,
+        window.okp-settings-window.is-high-contrast .okp-settings-nav-row,
+        window.okp-settings-window.is-high-contrast .okp-settings-window-control,
+        window.okp-settings-window.is-high-contrast .okp-settings-window-control-glyph,
+        window.okp-settings-window.is-high-contrast .okp-about-wordmark,
+        window.okp-settings-window.is-high-contrast .okp-about-tagline,
+        window.okp-settings-window.is-high-contrast .okp-about-byline,
+        window.okp-settings-window.is-high-contrast .okp-about-card-title,
+        window.okp-settings-window.is-high-contrast .okp-about-row-label,
+        window.okp-settings-window.is-high-contrast .okp-about-row-detail,
+        window.okp-settings-window.is-high-contrast .okp-about-row-value,
+        window.okp-settings-window.is-high-contrast .okp-about-row-value-mono,
+        window.okp-settings-window.is-high-contrast .okp-about-link-button,
+        window.okp-settings-window.is-high-contrast .okp-about-link-arrow,
+        window.okp-settings-window.is-high-contrast .okp-info-label,
+        window.okp-settings-window.is-high-contrast .okp-info-value,
+        window.okp-settings-window.is-high-contrast .okp-update-status,
+        window.okp-settings-window.is-high-contrast .okp-shortcut-action-title,
+        window.okp-settings-window.is-high-contrast .okp-shortcut-action-id {
+            color: #ffffff;
+        }
+
+        window.okp-settings-window.is-high-contrast .okp-settings-search,
+        window.okp-settings-window.is-high-contrast entry.okp-shortcuts-search,
+        window.okp-settings-window.is-high-contrast button.okp-shortcut-chip,
+        window.okp-settings-window.is-high-contrast textview.okp-mpv-conf-editor,
+        window.okp-settings-window.is-high-contrast textview.okp-mpv-conf-editor text {
+            background: #000000;
+            border-color: #ffffff;
+            color: #ffffff;
+        }
+
+        window.okp-settings-window.is-high-contrast .okp-settings-nav-row.is-selected,
+        window.okp-settings-window.is-high-contrast button.okp-settings-segment-button.is-selected {
+            background: #ffffff;
+            color: #000000;
+            box-shadow: none;
         }
         ";
 
