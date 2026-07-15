@@ -277,7 +277,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
             chrome: Rc::clone(&chrome),
             window_chrome,
             subtitle_position_snapshot: Rc::new(Cell::new(None)),
-            empty_surface,
+            empty_surface: empty_surface.clone(),
             lyrics_surface,
             media_state_overlay,
             mpris_snapshot: Arc::clone(&mpris_controller.snapshot),
@@ -286,6 +286,15 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     );
 
     window.present();
+    if env::var_os("OKP_OPEN_HISTORY_ON_STARTUP").is_some() {
+        let history_surface = empty_surface.clone();
+        let history_parent = window.clone();
+        let history_state = Rc::clone(&state);
+        let history_toast = Rc::clone(&status_toast);
+        glib::timeout_add_local_once(Duration::from_millis(250), move || {
+            history_surface.show_history(&history_parent, history_state, history_toast);
+        });
+    }
     if env::var_os("OKP_OPEN_SETTINGS_ON_STARTUP").is_some() {
         let settings_parent = window.clone();
         let settings_state = Rc::clone(&state);
@@ -301,15 +310,6 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         let info_toast = Rc::clone(&status_toast);
         glib::timeout_add_local_once(Duration::from_millis(250), move || {
             show_media_info_window(&info_parent, &media_info_preview_sample(), info_toast);
-        });
-    }
-    // Visual smoke hook for the explicit searchable History surface.
-    if env::var_os("OKP_OPEN_HISTORY_ON_STARTUP").is_some() {
-        let history_parent = window.clone();
-        let history_state = Rc::clone(&state);
-        let history_toast = Rc::clone(&status_toast);
-        glib::timeout_add_local_once(Duration::from_millis(250), move || {
-            show_history_window(&history_parent, history_state, history_toast);
         });
     }
     if auto_check_updates {
@@ -682,22 +682,45 @@ pub(crate) fn build_empty_surface(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) -> EmptySurface {
-    let panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    panel.add_css_class("okp-empty-panel");
-    panel.set_halign(gtk::Align::Center);
-    panel.set_valign(gtk::Align::Center);
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    root.add_css_class("okp-idle-canvas");
+    root.add_css_class(if idle_theme_is_dark() {
+        "is-dark"
+    } else {
+        "is-light"
+    });
+    root.append(&idle_titlebar());
 
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    panel.append(&content);
+    let stack = gtk::Stack::new();
+    stack.add_css_class("okp-idle-stack");
+    stack.set_hexpand(true);
+    stack.set_vexpand(true);
+    let animations_enabled = env::var_os("OKP_REDUCED_MOTION").is_none()
+        && gtk::Settings::default()
+            .map(|settings| settings.property::<bool>("gtk-enable-animations"))
+            .unwrap_or(true);
+    stack.set_transition_type(if animations_enabled {
+        gtk::StackTransitionType::Crossfade
+    } else {
+        gtk::StackTransitionType::None
+    });
+    stack.set_transition_duration(if animations_enabled { 180 } else { 0 });
 
-    let scroller = gtk::ScrolledWindow::new();
-    scroller.add_css_class("okp-welcome-scroller");
-    scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-    scroller.set_halign(gtk::Align::Fill);
-    scroller.set_valign(gtk::Align::Fill);
-    scroller.set_margin_top(44);
-    scroller.set_margin_bottom(92);
-    scroller.set_child(Some(&panel));
+    let welcome_host = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    welcome_host.set_hexpand(true);
+    welcome_host.set_vexpand(true);
+    let history_host = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    history_host.set_hexpand(true);
+    history_host.set_vexpand(true);
+    stack.add_named(&welcome_host, Some("welcome"));
+    stack.add_named(&history_host, Some("history"));
+    stack.set_visible_child_name("welcome");
+    root.append(&stack);
+
+    let (footer, footer_left, footer_left_icon, footer_left_label, footer_status) =
+        idle_footer_widgets();
+    idle_footer_settings_button(&footer, window, Rc::clone(&state), Rc::clone(&status_toast));
+    root.append(&footer);
 
     let revealer = gtk::Revealer::new();
     revealer.add_css_class("okp-empty-surface");
@@ -710,44 +733,50 @@ pub(crate) fn build_empty_surface(
     revealer.set_transition_duration(0);
     revealer.set_transition_type(gtk::RevealerTransitionType::None);
     revealer.set_reveal_child(true);
-    revealer.set_child(Some(&scroller));
+    revealer.set_child(Some(&root));
 
     let surface = EmptySurface {
         revealer,
-        panel,
-        content,
+        stack,
+        welcome_host,
+        history_host,
+        footer,
+        footer_left_icon,
+        footer_left_label,
+        footer_status,
+        page: Rc::new(Cell::new(IdlePage::Welcome)),
         model: Rc::new(RefCell::new(None)),
+        history_model: Rc::new(RefCell::new(None)),
         opened_context_bucket: Rc::new(Cell::new(None)),
         is_preview_substrate: Rc::new(Cell::new(false)),
     };
-    surface.refresh(window, &state, status_toast);
+    let toggle_surface = surface.clone();
+    let toggle_parent = window.clone();
+    let toggle_state = Rc::clone(&state);
+    let toggle_toast = Rc::clone(&status_toast);
+    footer_left.connect_clicked(move |_| match toggle_surface.page.get() {
+        IdlePage::Welcome => toggle_surface.show_history(
+            &toggle_parent,
+            Rc::clone(&toggle_state),
+            Rc::clone(&toggle_toast),
+        ),
+        IdlePage::History => toggle_surface.show_welcome(),
+    });
+    surface.refresh(window, &state, Rc::clone(&status_toast));
     surface
 }
 
-/// The welcome surface anchors the OK Player identity with the shared app mark.
-/// It loads the bundled SVG directly so the mark renders crisply in development
-/// and packaged builds alike, falling back to the themed icon when the asset is
-/// not on disk (mirrors `about_illustration`).
-pub(crate) fn empty_surface_logo() -> gtk::Image {
-    app_identity_image(72, "okp-empty-logo")
-}
-
-pub(crate) fn app_identity_image(pixel_size: i32, css_class: &str) -> gtk::Image {
-    if let Some(path) = app_icon_path() {
-        let image = gtk::Image::from_file(path);
-        image.add_css_class(css_class);
-        image.set_size_request(pixel_size, pixel_size);
-        image.set_pixel_size(pixel_size);
-        return image;
+fn idle_theme_is_dark() -> bool {
+    match env::var("OKP_IDLE_THEME").ok().as_deref() {
+        Some("light") => false,
+        Some("dark") => true,
+        _ => gtk::Settings::default()
+            .map(|settings| settings.property::<bool>("gtk-application-prefer-dark-theme"))
+            .unwrap_or(false),
     }
-
-    let image = gtk::Image::from_icon_name("com.befeast.okplayer");
-    image.add_css_class(css_class);
-    image.set_size_request(pixel_size, pixel_size);
-    image.set_pixel_size(pixel_size);
-    image
 }
 
+#[cfg(test)]
 pub(crate) fn app_icon_path() -> Option<PathBuf> {
     let mut candidates = Vec::new();
     candidates.push(PathBuf::from(
@@ -762,6 +791,5 @@ pub(crate) fn app_icon_path() -> Option<PathBuf> {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../packaging/linux/com.befeast.okplayer.svg"),
     );
-
     candidates.into_iter().find(|path| path.is_file())
 }

@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# Visual smoke guard for the PRD §14 state-matrix surfaces: the no-chapters and
-# short-queue side-panel states, plus the Continue Watching and private-session
-# welcome states from issue #191. The welcome fixtures use an isolated history
-# document and capture both default and narrow geometry so cards, labels, and
-# placeholders cannot silently overlap or leak through private mode.
+# Deterministic visual smoke for the canonical idle canvas, Continue Watching,
+# in-place History states, and the two PRD side-panel empty states.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -31,7 +28,6 @@ set -euo pipefail
 
 BINARY="$1"
 OUT_DIR="$2"
-
 export GDK_BACKEND=x11
 export GSK_RENDERER=cairo
 export OKP_SKIP_UPDATE_CHECK=1
@@ -40,275 +36,205 @@ export NO_AT_BRIDGE=1
 export XDG_SESSION_TYPE=x11
 export XDG_CURRENT_DESKTOP=XFCE
 export XDG_STATE_HOME="$OUT_DIR/state"
+export XDG_CONFIG_HOME="$OUT_DIR/config"
 
 xfwm4 --sm-client-disable >"$OUT_DIR/xfwm4.log" 2>&1 &
 wm_pid=$!
+app_pid=""
 
-kill_app() {
-  [[ -n "${app_pid:-}" ]] && kill "$app_pid" 2>/dev/null || true
+cleanup() {
+  if [[ -n "$app_pid" ]]; then
+    kill "$app_pid" 2>/dev/null || true
+  fi
+  kill "$wm_pid" 2>/dev/null || true
 }
-
-# Let the window manager come up before any GTK window is created — the sibling
-# smoke scripts do the same. On a slower runner the app can start before xfwm4
-# is ready, which makes the later `xdotool` / capture checks fail even though the
-# UI rendered correctly.
+trap cleanup EXIT
 sleep 1
 
-# The side panel is anchored flush to the right at the canonical 316px width.
-# Both empty states render dark text over the light panel, so a low maximum in
-# that band means the panel failed to draw. The Up Next short-queue state also
-# carries teal in the pinned now-playing card and Add files affordance.
-panel_band_args=(292x520+816+52)
+mkdir -p "$XDG_STATE_HOME/ok-player" "$XDG_CONFIG_HOME/ok-player"
+cat >"$XDG_CONFIG_HOME/ok-player/settings.json" <<'JSON'
+{"version":2,"updates":{"auto_check":false}}
+JSON
 
-capture_state() {
-  local env_value="$1" shot="$2" label="$3"
-  rm -f "$OUT_DIR/app.log"
-  OKP_OPEN_SIDE_PANEL_ON_STARTUP="$env_value" \
-  OKP_SKIP_OPEN_INSTALLER=1 \
-  OKP_SKIP_DEB_SELF_INSTALL=1 \
-  timeout 12s "$BINARY" >"$OUT_DIR/app.log" 2>&1 &
-  app_pid=$!
-  trap kill_app EXIT
-
-  sleep 5
-  xdotool search --name "OK Player" >"$OUT_DIR/window.ids" || true
-  window_id="$(head -n1 "$OUT_DIR/window.ids" || true)"
-
-  if [[ -z "$window_id" ]]; then
-    echo "$label: main window did not appear" >&2
-    cat "$OUT_DIR/app.log" >&2 || true
-    exit 1
-  fi
-
-  import -window "$window_id" "$shot"
-
-  width="$(xwininfo -id "$window_id" | awk '/Width:/ { print $2; exit }')"
-  height="$(xwininfo -id "$window_id" | awk '/Height:/ { print $2; exit }')"
-  border="$(xwininfo -id "$window_id" | awk '/Border width:/ { print $3; exit }')"
-  state="$(xwininfo -id "$window_id" | awk -F': ' '/Map State:/ { print $2; exit }')"
-  if [[ "$width" != "1120" || "$height" != "680" || "$border" != "0" || "$state" != "IsViewable" ]]; then
-    echo "$label: unexpected window geometry: ${width}x${height}, border=${border}, state=${state}" >&2
-    exit 1
-  fi
-
-  panel_max="$(
-    magick "$shot" \
-      -crop "${panel_band_args[@]}" \
-      -colorspace gray \
-      -format '%[fx:maxima]' info:
-  )"
-  if ! awk -v max="$panel_max" 'BEGIN { exit !(max > 0.45) }'; then
-    echo "$label: side panel looks blank: content maxima=${panel_max}" >&2
-    exit 1
-  fi
-
-  echo "$label: panel maxima=${panel_max}"
-  kill_app
-  trap - EXIT
-  wait "$app_pid" 2>/dev/null || true
-}
-
-capture_state "up-next-empty" "$OUT_DIR/up-next-empty.png" "Up Next short-queue"
-capture_state "chapters-empty" "$OUT_DIR/chapters-empty.png" "Chapters no-chapters"
-
-mkdir -p "$XDG_STATE_HOME/ok-player"
 fixture_dir="$OUT_DIR/history-fixtures"
-mkdir -p "$fixture_dir/films" "$fixture_dir/shows/Season-02" "$fixture_dir/documentaries" "$fixture_dir/finished"
+mkdir -p "$fixture_dir/today" "$fixture_dir/yesterday" "$fixture_dir/week" "$fixture_dir/earlier"
 touch \
-  "$fixture_dir/films/Arrival.mkv" \
-  "$fixture_dir/shows/Season-02/Episode-04.mkv" \
-  "$fixture_dir/documentaries/Free-Solo.mp4" \
-  "$fixture_dir/finished/Old-Film.mkv"
+  "$fixture_dir/today/Dune.mkv" \
+  "$fixture_dir/today/Severance.mkv" \
+  "$fixture_dir/today/Blade-Runner-2049.mkv" \
+  "$fixture_dir/yesterday/interview.mov" \
+  "$fixture_dir/week/Free-Solo.mp4" \
+  "$fixture_dir/week/Wedding.mov" \
+  "$fixture_dir/earlier/Past-Lives.mkv" \
+  "$fixture_dir/earlier/Whiplash.mkv"
 now="$(date +%s)"
 cat >"$XDG_STATE_HOME/ok-player/history.json" <<JSON
 {
   "version": 2,
   "files": {
-    "$fixture_dir/films/Arrival.mkv": {
-      "position": 1320.0,
-      "duration": 6960.0,
-      "finished": false,
-      "updated_at_unix": $((now - 1800)),
-      "title": "Arrival"
-    },
-    "$fixture_dir/shows/Season-02/Episode-04.mkv": {
-      "position": 1180.0,
-      "duration": 3180.0,
-      "finished": false,
-      "updated_at_unix": $((now - 86000)),
-      "title": "Woe's Hollow"
-    },
-    "$fixture_dir/documentaries/Free-Solo.mp4": {
-      "position": 880.0,
-      "duration": 6000.0,
-      "finished": false,
-      "updated_at_unix": $((now - 260000))
-    },
-    "$fixture_dir/finished/Old-Film.mkv": {
-      "position": 0.0,
-      "duration": 5400.0,
-      "finished": true,
-      "updated_at_unix": $((now - 600))
-    }
+    "$fixture_dir/today/Dune.mkv": {"position":6840,"duration":7920,"finished":false,"updated_at_unix":$((now-600)),"title":"Dune: Part Two"},
+    "$fixture_dir/today/Severance.mkv": {"position":0,"duration":2520,"finished":true,"updated_at_unix":$((now-3600)),"title":"Severance — S02E07"},
+    "$fixture_dir/today/Blade-Runner-2049.mkv": {"position":1800,"duration":5400,"finished":false,"updated_at_unix":$((now-7200)),"title":"Blade Runner 2049"},
+    "$fixture_dir/yesterday/interview.mov": {"position":120,"duration":3240,"finished":false,"updated_at_unix":$((now-86400)),"title":"interview-raw-take3.mov"},
+    "$fixture_dir/week/Free-Solo.mp4": {"position":880,"duration":6000,"finished":false,"updated_at_unix":$((now-3*86400)),"title":"Free Solo"},
+    "$fixture_dir/week/Wedding.mov": {"position":180,"duration":5760,"finished":false,"updated_at_unix":$((now-5*86400)),"title":"wedding-ceremony-4k.mov"},
+    "$fixture_dir/earlier/Past-Lives.mkv": {"position":0,"duration":6360,"finished":true,"updated_at_unix":$((now-10*86400)),"title":"Past Lives"},
+    "$fixture_dir/earlier/Whiplash.mkv": {"position":0,"duration":6420,"finished":true,"updated_at_unix":$((now-40*86400)),"title":"Whiplash"}
   }
 }
 JSON
 
-capture_welcome() {
-  local mode="$1" shot="$2" width="$3" height="$4" label="$5"
-  rm -f "$OUT_DIR/app.log"
-  if [[ "$mode" == "private" ]]; then
-    OKP_PRIVATE_SESSION_ON_STARTUP=1 \
-    OKP_SKIP_OPEN_INSTALLER=1 \
-    OKP_SKIP_DEB_SELF_INSTALL=1 \
+capture() {
+  local shot="$1" width="$2" height="$3"
+  shift 3
+  rm -f "$OUT_DIR/app.log" "$OUT_DIR/window.ids"
+  env OKP_SKIP_OPEN_INSTALLER=1 OKP_SKIP_DEB_SELF_INSTALL=1 "$@" \
     timeout 12s "$BINARY" >"$OUT_DIR/app.log" 2>&1 &
-  else
-    OKP_SKIP_OPEN_INSTALLER=1 \
-    OKP_SKIP_DEB_SELF_INSTALL=1 \
-    timeout 12s "$BINARY" >"$OUT_DIR/app.log" 2>&1 &
-  fi
   app_pid=$!
-  trap kill_app EXIT
-
   sleep 5
   xdotool search --name "OK Player" >"$OUT_DIR/window.ids" || true
+  local window_id
   window_id="$(head -n1 "$OUT_DIR/window.ids" || true)"
   if [[ -z "$window_id" ]]; then
-    echo "$label: main window did not appear" >&2
+    echo "$shot: main window did not appear" >&2
     cat "$OUT_DIR/app.log" >&2 || true
     exit 1
   fi
-
-  if [[ "$width" != "1120" || "$height" != "680" ]]; then
+  if [[ "$shot" == history-* ]] && xdotool search --name '^History$' >/dev/null 2>&1; then
+    echo "$shot: History opened a separate window instead of replacing the idle canvas" >&2
+    exit 1
+  fi
+  if [[ "$width" != 1120 || "$height" != 680 ]]; then
     xdotool windowsize "$window_id" "$width" "$height"
     sleep 1
   fi
-  import -window "$window_id" "$shot"
-
-  actual_width="$(xwininfo -id "$window_id" | awk '/Width:/ { print $2; exit }')"
-  actual_height="$(xwininfo -id "$window_id" | awk '/Height:/ { print $2; exit }')"
-  if (( actual_width > width + 8 || actual_width < width - 8 || actual_height > height + 8 || actual_height < height - 8 )); then
-    echo "$label: unexpected geometry ${actual_width}x${actual_height}, expected ${width}x${height}" >&2
+  import -window "$window_id" "$OUT_DIR/$shot.png"
+  local actual_width actual_height
+  actual_width="$(xwininfo -id "$window_id" | awk '/Width:/ {print $2; exit}')"
+  actual_height="$(xwininfo -id "$window_id" | awk '/Height:/ {print $2; exit}')"
+  if (( actual_width < width - 8 || actual_width > width + 8 || actual_height < height - 8 || actual_height > height + 8 )); then
+    echo "$shot: unexpected geometry ${actual_width}x${actual_height}, expected ${width}x${height}" >&2
     exit 1
   fi
-
-  # Welcome copy, placeholders, and controls all carry bright pixels. A blank or
-  # clipped canvas stays near black across the center band.
-  center_max="$(magick "$shot" -crop "$((actual_width * 3 / 4))x$((actual_height * 3 / 4))+$((actual_width / 8))+$((actual_height / 8))" -colorspace gray -format '%[fx:maxima]' info:)"
-  if ! awk -v max="$center_max" 'BEGIN { exit !(max > 0.55) }'; then
-    echo "$label: welcome content looks blank or clipped: maxima=${center_max}" >&2
+  local maxima
+  maxima="$(magick "$OUT_DIR/$shot.png" -colorspace gray -format '%[fx:maxima]' info:)"
+  if ! awk -v max="$maxima" 'BEGIN {exit !(max > 0.45)}'; then
+    echo "$shot: surface looks blank: maxima=$maxima" >&2
     exit 1
   fi
-
-  echo "$label: geometry=${actual_width}x${actual_height} maxima=${center_max}"
-  kill_app
-  trap - EXIT
+  echo "$shot: geometry=${actual_width}x${actual_height} maxima=$maxima"
+  kill "$app_pid" 2>/dev/null || true
   wait "$app_pid" 2>/dev/null || true
+  app_pid=""
 }
 
-capture_welcome "recents" "$OUT_DIR/continue-watching.png" 1120 680 "Continue Watching"
-capture_welcome "recents" "$OUT_DIR/continue-watching-narrow.png" 480 540 "Continue Watching narrow"
-capture_welcome "private" "$OUT_DIR/private-session.png" 1120 680 "Private session"
+capture_panel() {
+  local mode="$1" shot="$2"
+  capture "$shot" 1120 680 OKP_IDLE_THEME=dark OKP_OPEN_SIDE_PANEL_ON_STARTUP="$mode"
+  local panel_max
+  panel_max="$(magick "$OUT_DIR/$shot.png" -crop 292x520+816+52 -colorspace gray -format '%[fx:maxima]' info:)"
+  if ! awk -v max="$panel_max" 'BEGIN {exit !(max > 0.45)}'; then
+    echo "$shot: side panel looks blank: maxima=$panel_max" >&2
+    exit 1
+  fi
+}
 
-# Continue Watching has its own actions and footer; the standard playback OSC
-# must not leak into the empty-state bottom-left band.
-continue_bottom_max="$(magick "$OUT_DIR/continue-watching.png" -crop 250x70+0+610 -colorspace gray -format '%[fx:maxima]' info:)"
-if ! awk -v max="$continue_bottom_max" 'BEGIN { exit !(max < 0.12) }'; then
-  echo "Standard OSC leaked into Continue Watching: bottom maxima=${continue_bottom_max}" >&2
-  exit 1
-fi
+capture_panel up-next-empty up-next-empty
+capture_panel chapters-empty chapters-empty
 
-# The real recents fixture must render the identity/title, supporting copy, and
-# both actions with readable contrast at default and narrow widths. These
-# checks use broad semantic regions so renderer-level RGB drift cannot fail an
-# otherwise identical surface.
-desktop_title_bright="$(magick "$OUT_DIR/continue-watching.png" -crop 420x70+250+95 -colorspace gray -threshold 62% -format '%[fx:mean*w*h]' info:)"
-desktop_copy_bright="$(magick "$OUT_DIR/continue-watching.png" -crop 420x35+300+140 -colorspace gray -threshold 42% -format '%[fx:mean*w*h]' info:)"
-desktop_action_red="$(magick "$OUT_DIR/continue-watching.png" -crop 265x70+425+185 -format '%[fx:mean.r]' info:)"
-desktop_action_green="$(magick "$OUT_DIR/continue-watching.png" -crop 265x70+425+185 -format '%[fx:mean.g]' info:)"
-desktop_title_bright="${desktop_title_bright%.*}"
-desktop_copy_bright="${desktop_copy_bright%.*}"
-if (( desktop_title_bright < 1200 || desktop_copy_bright < 300 )); then
-  echo "Continue Watching heading or copy is unreadable: title=${desktop_title_bright} copy=${desktop_copy_bright}" >&2
-  exit 1
-fi
-if ! awk -v r="$desktop_action_red" -v g="$desktop_action_green" 'BEGIN { exit !(g - r > 0.12) }'; then
-  echo "Continue Watching actions lack CTA hierarchy: red=${desktop_action_red} green=${desktop_action_green}" >&2
-  exit 1
-fi
-
-narrow_top_max="$(magick "$OUT_DIR/continue-watching-narrow.png" -crop 330x44+0+0 -colorspace gray -format '%[fx:maxima]' info:)"
-narrow_title_bright="$(magick "$OUT_DIR/continue-watching-narrow.png" -crop 350x60+90+65 -colorspace gray -threshold 62% -format '%[fx:mean*w*h]' info:)"
-narrow_copy_bright="$(magick "$OUT_DIR/continue-watching-narrow.png" -crop 340x45+90+118 -colorspace gray -threshold 42% -format '%[fx:mean*w*h]' info:)"
-narrow_action_red="$(magick "$OUT_DIR/continue-watching-narrow.png" -crop 275x72+100+175 -format '%[fx:mean.r]' info:)"
-narrow_action_green="$(magick "$OUT_DIR/continue-watching-narrow.png" -crop 275x72+100+175 -format '%[fx:mean.g]' info:)"
-narrow_title_bright="${narrow_title_bright%.*}"
-narrow_copy_bright="${narrow_copy_bright%.*}"
-if ! awk -v max="$narrow_top_max" 'BEGIN { exit !(max < 0.18) }'; then
-  echo "Continue Watching title overlaps narrow window chrome: top maxima=${narrow_top_max}" >&2
-  exit 1
-fi
-if (( narrow_title_bright < 1000 || narrow_copy_bright < 250 )); then
-  echo "Narrow Continue Watching heading or copy is unreadable: title=${narrow_title_bright} copy=${narrow_copy_bright}" >&2
-  exit 1
-fi
-if ! awk -v r="$narrow_action_red" -v g="$narrow_action_green" 'BEGIN { exit !(g - r > 0.12) }'; then
-  echo "Narrow Continue Watching actions are missing from the first viewport: red=${narrow_action_red} green=${narrow_action_green}" >&2
-  exit 1
-fi
-
-rm -f "$OUT_DIR/app.log"
-OKP_OPEN_HISTORY_ON_STARTUP=1 \
-OKP_SKIP_OPEN_INSTALLER=1 \
-OKP_SKIP_DEB_SELF_INSTALL=1 \
-timeout 12s "$BINARY" >"$OUT_DIR/app.log" 2>&1 &
-app_pid=$!
-trap kill_app EXIT
-sleep 5
-xdotool search --name "History" >"$OUT_DIR/history-window.ids" || true
-history_window_id="$(tail -n1 "$OUT_DIR/history-window.ids" || true)"
-if [[ -z "$history_window_id" ]]; then
-  echo "History: window did not appear" >&2
-  cat "$OUT_DIR/app.log" >&2 || true
-  exit 1
-fi
-import -window "$history_window_id" "$OUT_DIR/history.png"
-history_max="$(magick "$OUT_DIR/history.png" -colorspace gray -format '%[fx:maxima]' info:)"
-if ! awk -v max="$history_max" 'BEGIN { exit !(max > 0.65) }'; then
-  echo "History: surface looks blank: maxima=${history_max}" >&2
-  exit 1
-fi
-echo "History: maxima=${history_max}"
-kill_app
-trap - EXIT
-wait "$app_pid" 2>/dev/null || true
-
-# The Up Next short-queue state pins the now-playing item in the OK Player teal
-# accent and renders the dashed "Add files to queue" affordance, so across the
-# band the green channel should read stronger than the red one — a stock grey
-# panel (or the old bare dead string) would not.
+# The short queue pins its current item in teal and the no-chapters state must
+# render dark copy and its bookmark action over the light panel substrate.
 up_next_red="$(magick "$OUT_DIR/up-next-empty.png" -crop 280x70+820+94 -format '%[fx:mean.r]' info:)"
 up_next_green="$(magick "$OUT_DIR/up-next-empty.png" -crop 280x70+820+94 -format '%[fx:mean.g]' info:)"
-if ! awk -v r="$up_next_red" -v g="$up_next_green" 'BEGIN { exit !(g - r > 0.01) }'; then
-  echo "Up Next short-queue accent missing: red=${up_next_red} green=${up_next_green}" >&2
+if ! awk -v r="$up_next_red" -v g="$up_next_green" 'BEGIN {exit !(g-r > 0.01)}'; then
+  echo "Up Next short-queue accent missing: red=$up_next_red green=$up_next_green" >&2
   exit 1
 fi
-
-# The no-chapters state must render its message and bookmark CTA, not a blank
-# light panel. The left half carries dark copy while the CTA carries teal.
 left_dark="$(magick "$OUT_DIR/chapters-empty.png" -crop 150x300+816+90 -colorspace gray -threshold 50% -format '%[fx:(1-mean)*w*h]' info:)"
 left_dark="${left_dark%.*}"
 if (( left_dark < 40 )); then
-  echo "Chapters no-chapters message did not render (left dark pixels: ${left_dark})" >&2
+  echo "Chapters no-chapters message did not render (left dark pixels: $left_dark)" >&2
+  exit 1
+fi
+
+for theme in light dark; do
+  capture "first-run-$theme" 1120 680 OKP_IDLE_THEME="$theme" OKP_WELCOME_STATE=empty
+  capture "continue-watching-$theme" 1120 680 OKP_IDLE_THEME="$theme"
+  capture "history-has-data-$theme" 1120 680 OKP_IDLE_THEME="$theme" OKP_OPEN_HISTORY_ON_STARTUP=1
+  capture "history-private-$theme" 1120 680 OKP_IDLE_THEME="$theme" OKP_OPEN_HISTORY_ON_STARTUP=1 OKP_PRIVATE_SESSION_ON_STARTUP=1
+  capture "history-empty-$theme" 1120 680 OKP_IDLE_THEME="$theme" OKP_OPEN_HISTORY_ON_STARTUP=1 OKP_HISTORY_STATE=empty
+  capture "history-cleared-$theme" 1120 680 OKP_IDLE_THEME="$theme" OKP_OPEN_HISTORY_ON_STARTUP=1 OKP_HISTORY_STATE=cleared
+  capture "history-error-$theme" 1120 680 OKP_IDLE_THEME="$theme" OKP_OPEN_HISTORY_ON_STARTUP=1 OKP_HISTORY_STATE=error
+  capture "history-loading-$theme" 1120 680 OKP_IDLE_THEME="$theme" OKP_OPEN_HISTORY_ON_STARTUP=1 OKP_HISTORY_STATE=loading
+  capture "history-no-match-$theme" 1120 680 OKP_IDLE_THEME="$theme" OKP_OPEN_HISTORY_ON_STARTUP=1 OKP_HISTORY_STATE=no-match
+done
+capture continue-watching-narrow 480 540 OKP_IDLE_THEME=light
+capture history-has-data-narrow 480 540 OKP_IDLE_THEME=light OKP_OPEN_HISTORY_ON_STARTUP=1
+
+# First run: centered teal tile and one dashed Open/drop target on a full-window canvas.
+for theme in light dark; do
+  shot="$OUT_DIR/first-run-$theme.png"
+  tile_red="$(magick "$shot" -crop 80x80+520+225 -format '%[fx:mean.r]' info:)"
+  tile_green="$(magick "$shot" -crop 80x80+520+225 -format '%[fx:mean.g]' info:)"
+  if ! awk -v r="$tile_red" -v g="$tile_green" 'BEGIN {exit !(g-r > 0.05)}'; then
+    echo "first-run-$theme: teal brand tile missing: red=$tile_red green=$tile_green" >&2
+    exit 1
+  fi
+  open_edges="$(magick "$shot" -crop 330x115+395+345 -colorspace gray -edge 1 -format '%[fx:mean]' info:)"
+  if ! awk -v edge="$open_edges" 'BEGIN {exit !(edge > 0.01)}'; then
+    echo "first-run-$theme: dashed Open/drop target missing: edge=$open_edges" >&2
+    exit 1
+  fi
+done
+
+# Continue Watching: the center-bottom band must remain calm. The old disabled OSC
+# created a dense high-contrast bar here; the canonical canvas leaves only the footer.
+for theme in light dark; do
+  shot="$OUT_DIR/continue-watching-$theme.png"
+  osc_stddev="$(magick "$shot" -crop 760x42+180+575 -colorspace gray -format '%[fx:standard_deviation]' info:)"
+  if ! awk -v dev="$osc_stddev" 'BEGIN {exit !(dev < 0.08)}'; then
+    echo "continue-watching-$theme: idle OSC or duplicate chrome detected: stddev=$osc_stddev" >&2
+    exit 1
+  fi
+  shelf_edges="$(magick "$shot" -crop 650x190+230+185 -colorspace gray -edge 1 -format '%[fx:mean]' info:)"
+  if ! awk -v edge="$shelf_edges" 'BEGIN {exit !(edge > 0.015)}'; then
+    echo "continue-watching-$theme: recent shelf did not render: edge=$shelf_edges" >&2
+    exit 1
+  fi
+done
+
+# Narrow capture must preserve a readable title and at least one complete 194px card
+# without entering the caption-control strip or clipping horizontally.
+narrow="$OUT_DIR/continue-watching-narrow.png"
+overlap_edges="$(magick "$narrow" -crop 320x24+0+34 -colorspace gray -edge 1 -format '%[fx:mean]' info:)"
+card_edges="$(magick "$narrow" -crop 210x135+35+140 -colorspace gray -edge 1 -format '%[fx:mean]' info:)"
+if ! awk -v edge="$overlap_edges" 'BEGIN {exit !(edge < 0.02)}'; then
+  echo "Narrow Continue Watching overlaps the titlebar: edge=$overlap_edges" >&2
+  exit 1
+fi
+if ! awk -v edge="$card_edges" 'BEGIN {exit !(edge > 0.012)}'; then
+  echo "Narrow Continue Watching lost its card hierarchy: edge=$card_edges" >&2
+  exit 1
+fi
+
+history_narrow="$OUT_DIR/history-has-data-narrow.png"
+history_header_edges="$(magick "$history_narrow" -crop 430x90+20+55 -colorspace gray -edge 1 -format '%[fx:mean]' info:)"
+history_row_edges="$(magick "$history_narrow" -crop 430x210+20+150 -colorspace gray -edge 1 -format '%[fx:mean]' info:)"
+if ! awk -v edge="$history_header_edges" 'BEGIN {exit !(edge > 0.01)}'; then
+  echo "Narrow History lost its header hierarchy: edge=$history_header_edges" >&2
+  exit 1
+fi
+if ! awk -v edge="$history_row_edges" 'BEGIN {exit !(edge > 0.01)}'; then
+  echo "Narrow History rows are blank or clipped: edge=$history_row_edges" >&2
   exit 1
 fi
 
 kill "$wm_pid" 2>/dev/null || true
+trap - EXIT
 SMOKE
 then
-  echo "Empty-states smoke failed. Session log: $OUT_DIR/session.log" >&2
-  cat "$OUT_DIR/session.log" >&2
+  cat "$OUT_DIR/session.log" >&2 || true
   exit 1
 fi
 
-echo "Empty-states smoke passed. Screenshots: $OUT_DIR/up-next-empty.png $OUT_DIR/chapters-empty.png $OUT_DIR/continue-watching.png $OUT_DIR/continue-watching-narrow.png $OUT_DIR/private-session.png $OUT_DIR/history.png"
+echo "Linux canonical idle/history smoke captured in $OUT_DIR"

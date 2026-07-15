@@ -146,51 +146,9 @@ const OKP_STYLESHEET: &str = "
         .okp-empty-surface.is-preview-substrate.is-preview-bright {
             background: #f4f7fa;
         }
-
         .okp-empty-surface.has-media {
             background: transparent;
         }
-
-        .okp-empty-panel {
-            padding: 38px 44px 30px 44px;
-            border-radius: 12px;
-            border: 1px solid rgba(255, 255, 255, 0.15);
-            background: linear-gradient(180deg, rgba(25, 29, 35, 0.98), rgba(14, 17, 22, 0.98));
-            box-shadow: 0 24px 64px rgba(0, 0, 0, 0.58);
-        }
-
-        .okp-empty-panel.is-drop-target {
-            border-color: alpha(@okp_accent, 0.82);
-            background: linear-gradient(180deg, rgba(19, 46, 47, 0.95), rgba(13, 32, 33, 0.95));
-            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.22), 0 30px 80px rgba(0, 0, 0, 0.55);
-        }
-
-        .okp-empty-logo {
-            margin-bottom: 2px;
-        }
-
-        .okp-empty-wordmark {
-            margin-top: 12px;
-        }
-
-        .okp-empty-wordmark-ok {
-            color: rgba(255, 255, 255, 0.98);
-            font-size: 30px;
-            font-weight: 800;
-        }
-
-        .okp-empty-wordmark-player {
-            color: rgba(255, 255, 255, 0.72);
-            font-size: 30px;
-            font-weight: 300;
-        }
-
-        .okp-empty-tagline {
-            margin-top: 8px;
-            color: rgba(255, 255, 255, 0.72);
-            font-size: 13px;
-        }
-
         /* The loading / buffering / error overlay for a network source. Sits over the
          * black video plane while a stream opens or after it fails; never captures
          * pointer events so the transport chrome stays clickable. */
@@ -441,24 +399,6 @@ const OKP_STYLESHEET: &str = "
             margin-top: 12px;
         }
 
-        window.okp-history-window,
-        .okp-history-root {
-            background: #0b0c0f;
-        }
-
-        window.okp-history-window .okp-settings-window-control,
-        window.okp-history-window .okp-settings-window-control-glyph {
-            color: rgba(255, 255, 255, 0.78);
-        }
-
-        window.okp-history-window .okp-settings-window-control:hover {
-            background: rgba(255, 255, 255, 0.08);
-        }
-
-        window.okp-history-window button.okp-settings-window-control:hover .okp-settings-window-control-glyph {
-            color: #ffffff;
-        }
-
         .okp-history-page {
             background: transparent;
         }
@@ -586,6 +526,541 @@ const OKP_STYLESHEET: &str = "
             font-size: 14px;
             font-weight: 650;
         }
+
+        /* Canonical idle canvas and History takeover. The idle shell is neutral,
+         * theme-aware, and full-window; playback remains on the dark video plane. */
+        .okp-empty-surface {
+            background: transparent;
+        }
+
+        .okp-idle-canvas {
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+        }
+
+        .okp-idle-canvas.is-light {
+            background: linear-gradient(135deg, #f7f9fa, #edf3f6);
+            color: #161616;
+        }
+
+        .okp-idle-canvas.is-dark {
+            background: linear-gradient(135deg, #232629, #1b1e21);
+            color: rgba(255, 255, 255, 0.94);
+        }
+
+        .okp-idle-titlebar {
+            min-height: 34px;
+            padding-left: 15px;
+        }
+
+        .is-light .okp-idle-titlebar-mark { color: @okp_teal; }
+        .is-dark .okp-idle-titlebar-mark { color: @okp_accent; }
+
+        .okp-idle-titlebar-mark {
+            font-size: 11px;
+        }
+
+        .okp-idle-titlebar-text {
+            font-size: 12.5px;
+            font-weight: 600;
+        }
+
+        .is-light .okp-idle-titlebar-text { color: rgba(0, 0, 0, 0.72); }
+        .is-dark .okp-idle-titlebar-text { color: rgba(255, 255, 255, 0.76); }
+
+        .okp-idle-stack,
+        .okp-idle-scroller,
+        .okp-idle-scroller > viewport,
+        .okp-history-scroller,
+        .okp-history-scroller > viewport {
+            background: transparent;
+        }
+
+        .okp-brand-tile {
+            padding: 0;
+            border-radius: 14px;
+            background: linear-gradient(135deg, #15a89d, @okp_teal_deep);
+            box-shadow: 0 8px 22px alpha(@okp_teal_deep, 0.24);
+        }
+
+        .okp-brand-ok,
+        .okp-brand-play {
+            color: #ffffff;
+            font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
+            font-weight: 750;
+        }
+
+        .okp-brand-ok { font-size: 17px; }
+        .okp-brand-play { font-size: 12px; }
+
+        .okp-welcome-first-run {
+            padding: 34px 24px;
+        }
+
+        .okp-welcome-brand-tile { margin-bottom: 13px; }
+
+        .okp-first-run-title {
+            font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
+            font-size: 17px;
+            font-weight: 600;
+        }
+
+        .is-light .okp-first-run-title { color: #161616; }
+        .is-dark .okp-first-run-title { color: rgba(255, 255, 255, 0.94); }
+
+        .okp-first-run-copy {
+            margin-top: 5px;
+            font-size: 12.5px;
+        }
+
+        .is-light .okp-first-run-copy { color: rgba(0, 0, 0, 0.52); }
+        .is-dark .okp-first-run-copy { color: rgba(255, 255, 255, 0.58); }
+
+        button.okp-first-run-drop-target,
+        button.okp-welcome-drop-target {
+            border: 1.5px dashed rgba(128, 128, 128, 0.48);
+            box-shadow: none;
+        }
+
+        button.okp-first-run-drop-target {
+            min-width: 280px;
+            min-height: 70px;
+            margin-top: 13px;
+            padding: 12px 16px;
+            border-radius: 10px;
+        }
+
+        button.okp-welcome-drop-target {
+            min-width: 390px;
+            min-height: 92px;
+            padding: 12px 20px;
+            border-radius: 9px;
+        }
+
+        .is-light button.okp-first-run-drop-target,
+        .is-light button.okp-welcome-drop-target {
+            background: rgba(255, 255, 255, 0.52);
+            color: rgba(0, 0, 0, 0.56);
+        }
+
+        .is-dark button.okp-first-run-drop-target,
+        .is-dark button.okp-welcome-drop-target {
+            background: rgba(255, 255, 255, 0.035);
+            color: rgba(255, 255, 255, 0.58);
+        }
+
+        .okp-empty-surface.is-drop-target button.okp-first-run-drop-target,
+        .okp-empty-surface.is-drop-target button.okp-welcome-drop-target {
+            border-color: @okp_accent;
+            background: alpha(@okp_accent, 0.12);
+        }
+
+        .okp-drop-primary {
+            font-size: 12.5px;
+            font-weight: 600;
+        }
+
+        .is-light .okp-first-run-drop-target .okp-drop-primary { color: @okp_teal_deep; }
+        .is-dark .okp-first-run-drop-target .okp-drop-primary { color: @okp_accent_bright; }
+
+        .okp-drop-secondary {
+            font-size: 11px;
+        }
+
+        .okp-welcome-recents {
+            padding: 36px 44px;
+        }
+
+        .okp-welcome-recents-title {
+            font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
+            font-size: 30px;
+            font-weight: 600;
+            letter-spacing: 0;
+        }
+
+        .is-light .okp-welcome-recents-title { color: #161616; }
+        .is-dark .okp-welcome-recents-title { color: rgba(255, 255, 255, 0.94); }
+
+        .okp-welcome-recents-subtitle {
+            margin-top: 6px;
+            font-size: 13.5px;
+        }
+
+        .is-light .okp-welcome-recents-subtitle { color: rgba(0, 0, 0, 0.52); }
+        .is-dark .okp-welcome-recents-subtitle { color: rgba(255, 255, 255, 0.58); }
+
+        .okp-recents-shelf {
+            margin-top: 22px;
+        }
+
+        .okp-recents-shelf > flowboxchild,
+        .okp-welcome-action-row > flowboxchild {
+            padding: 0;
+            border: none;
+            background: transparent;
+        }
+
+        button.okp-recent-card {
+            min-width: 194px;
+            padding: 0;
+            border: none;
+            border-radius: 8px;
+            background: transparent;
+            box-shadow: none;
+        }
+
+        .is-light button.okp-recent-card { color: #161616; }
+        .is-dark button.okp-recent-card { color: rgba(255, 255, 255, 0.94); }
+
+        .is-light button.okp-recent-card:hover { background: rgba(0, 0, 0, 0.045); }
+        .is-dark button.okp-recent-card:hover { background: rgba(255, 255, 255, 0.055); }
+
+        .okp-history-thumbnail { border-radius: 8px; }
+
+        .is-light .okp-history-thumbnail-placeholder {
+            background: linear-gradient(135deg, #d9e3e8, #bdcbd2);
+            border: 1px solid rgba(0, 0, 0, 0.06);
+        }
+
+        .is-dark .okp-history-thumbnail-placeholder {
+            background: linear-gradient(135deg, #343a40, #202429);
+            border: 1px solid rgba(255, 255, 255, 0.07);
+        }
+
+        .okp-history-thumbnail.is-finished { opacity: 0.55; }
+
+        progressbar.okp-recent-progress,
+        progressbar.okp-history-thumb-progress {
+            min-width: 4px;
+            min-height: 4px;
+            margin: 0;
+        }
+
+        progressbar.okp-recent-progress trough,
+        progressbar.okp-history-thumb-progress trough {
+            min-height: 4px;
+            border: none;
+            border-radius: 0 0 8px 8px;
+            background: rgba(255, 255, 255, 0.30);
+        }
+
+        progressbar.okp-recent-progress progress,
+        progressbar.okp-history-thumb-progress progress {
+            min-height: 4px;
+            border: none;
+            background: @okp_accent;
+        }
+
+        .okp-recent-time-left {
+            padding: 2px 6px;
+            border-radius: 5px;
+            background: rgba(0, 0, 0, 0.58);
+            color: #ffffff;
+            font-size: 10px;
+            font-weight: 600;
+        }
+
+        .okp-recent-title {
+            margin-top: 9px;
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .is-light .okp-recent-title { color: #202020; }
+        .is-dark .okp-recent-title { color: rgba(255, 255, 255, 0.92); }
+
+        .okp-recent-location,
+        .okp-recent-context {
+            margin-top: 2px;
+            font-size: 11.5px;
+        }
+
+        .is-light .okp-recent-location,
+        .is-light .okp-recent-context { color: rgba(0, 0, 0, 0.46); }
+        .is-dark .okp-recent-location,
+        .is-dark .okp-recent-context { color: rgba(255, 255, 255, 0.48); }
+
+        .okp-welcome-action-row {
+            margin-top: 26px;
+        }
+
+        button.okp-idle-primary-button,
+        button.okp-idle-secondary-button {
+            min-height: 42px;
+            padding: 9px 18px;
+            border-radius: 7px;
+            box-shadow: none;
+            font-size: 12.5px;
+            font-weight: 600;
+        }
+
+        button.okp-idle-primary-button {
+            background: @okp_teal;
+            border: 1px solid @okp_teal;
+            color: #ffffff;
+        }
+
+        button.okp-idle-primary-button:hover { background: @okp_teal_deep; }
+
+        .is-light button.okp-idle-secondary-button {
+            background: rgba(0, 0, 0, 0.045);
+            border: 1px solid rgba(0, 0, 0, 0.08);
+            color: #202020;
+        }
+
+        .is-dark button.okp-idle-secondary-button {
+            background: rgba(255, 255, 255, 0.055);
+            border: 1px solid rgba(255, 255, 255, 0.09);
+            color: rgba(255, 255, 255, 0.90);
+        }
+
+        .okp-welcome-private {
+            padding: 36px 24px;
+        }
+
+        .okp-private-hero-icon { color: @okp_accent; }
+
+        .okp-private-hero-title {
+            margin-top: 12px;
+            font-size: 17px;
+            font-weight: 600;
+        }
+
+        .okp-private-hero-copy {
+            margin-top: 7px;
+            font-size: 12.5px;
+            line-height: 1.45;
+        }
+
+        .is-light .okp-private-hero-copy { color: rgba(0, 0, 0, 0.52); }
+        .is-dark .okp-private-hero-copy { color: rgba(255, 255, 255, 0.56); }
+
+        .okp-private-actions { margin-top: 20px; }
+
+        .okp-idle-footer {
+            min-height: 42px;
+            padding: 0 24px;
+            border-top: 1px solid rgba(128, 128, 128, 0.18);
+        }
+
+        button.okp-idle-footer-button {
+            min-height: 30px;
+            padding: 4px 7px;
+            border: none;
+            border-radius: 7px;
+            background: transparent;
+            box-shadow: none;
+        }
+
+        .is-light button.okp-idle-footer-button { color: rgba(0, 0, 0, 0.52); }
+        .is-dark button.okp-idle-footer-button { color: rgba(255, 255, 255, 0.56); }
+        .is-light button.okp-idle-footer-button:hover { background: rgba(0, 0, 0, 0.05); }
+        .is-dark button.okp-idle-footer-button:hover { background: rgba(255, 255, 255, 0.06); }
+
+        .okp-idle-footer-status {
+            font-size: 11px;
+        }
+
+        .is-light .okp-idle-footer-status { color: rgba(0, 0, 0, 0.40); }
+        .is-dark .okp-idle-footer-status { color: rgba(255, 255, 255, 0.42); }
+        .okp-idle-footer-status:not(.is-private) { color: @okp_teal; }
+
+        .okp-history-page {
+            padding: 30px 26px 40px;
+        }
+
+        .okp-history-header { min-height: 44px; }
+
+        button.okp-history-back-button {
+            min-width: 32px;
+            min-height: 32px;
+            padding: 0;
+            border: none;
+            border-radius: 8px;
+            box-shadow: none;
+        }
+
+        .is-light button.okp-history-back-button { background: rgba(0, 0, 0, 0.045); color: #202020; }
+        .is-dark button.okp-history-back-button { background: rgba(255, 255, 255, 0.055); color: #ffffff; }
+
+        .okp-history-title {
+            font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
+            font-size: 30px;
+            font-weight: 600;
+            letter-spacing: 0;
+        }
+
+        .is-light .okp-history-title { color: #161616; }
+        .is-dark .okp-history-title { color: rgba(255, 255, 255, 0.94); }
+
+        entry.okp-history-search {
+            min-width: 220px;
+            min-height: 36px;
+            border-radius: 8px;
+            box-shadow: none;
+        }
+
+        .is-light entry.okp-history-search {
+            background: rgba(0, 0, 0, 0.035);
+            border: 1px solid rgba(0, 0, 0, 0.08);
+            color: #161616;
+        }
+
+        .is-dark entry.okp-history-search {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.09);
+            color: rgba(255, 255, 255, 0.92);
+        }
+
+        .okp-history-subtitle {
+            margin-top: 8px;
+            font-size: 13.5px;
+        }
+
+        .is-light .okp-history-subtitle { color: rgba(0, 0, 0, 0.50); }
+        .is-dark .okp-history-subtitle { color: rgba(255, 255, 255, 0.54); }
+
+        .okp-history-divider { margin-top: 16px; }
+
+        .okp-history-private-banner {
+            margin-top: 16px;
+            padding: 9px 13px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .is-light .okp-history-private-banner {
+            background: rgba(0, 0, 0, 0.035);
+            border: 1px solid rgba(0, 0, 0, 0.07);
+            color: rgba(0, 0, 0, 0.52);
+        }
+
+        .is-dark .okp-history-private-banner {
+            background: rgba(255, 255, 255, 0.045);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            color: rgba(255, 255, 255, 0.56);
+        }
+
+        .okp-history-result-caption,
+        .okp-history-bucket {
+            margin-top: 18px;
+            padding: 0 12px 8px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .okp-history-bucket { letter-spacing: 1px; }
+
+        .is-light .okp-history-result-caption,
+        .is-light .okp-history-bucket { color: rgba(0, 0, 0, 0.48); }
+        .is-dark .okp-history-result-caption,
+        .is-dark .okp-history-bucket { color: rgba(255, 255, 255, 0.48); }
+
+        button.okp-history-row {
+            padding: 9px 12px;
+            border: none;
+            border-radius: 7px;
+            background: transparent;
+            box-shadow: none;
+        }
+
+        .is-light button.okp-history-row { color: #161616; }
+        .is-dark button.okp-history-row { color: rgba(255, 255, 255, 0.92); }
+        .is-light button.okp-history-row:hover { background: rgba(0, 0, 0, 0.04); }
+        .is-dark button.okp-history-row:hover { background: rgba(255, 255, 255, 0.05); }
+
+        .okp-history-row-title { font-size: 13px; font-weight: 500; }
+        .is-light .okp-history-row-title { color: #202020; }
+        .is-dark .okp-history-row-title { color: rgba(255, 255, 255, 0.92); }
+        .okp-history-row-location,
+        .okp-history-row-when,
+        .okp-history-progress-label,
+        .okp-history-barely-label { font-size: 11.5px; }
+
+        .okp-history-row-when,
+        .okp-history-progress-label,
+        .okp-history-barely-label {
+            font-feature-settings: 'tnum';
+        }
+
+        .is-light .okp-history-row-location,
+        .is-light .okp-history-row-when,
+        .is-light .okp-history-barely-label { color: rgba(0, 0, 0, 0.42); }
+        .is-dark .okp-history-row-location,
+        .is-dark .okp-history-row-when,
+        .is-dark .okp-history-barely-label { color: rgba(255, 255, 255, 0.42); }
+
+        .okp-history-progress-label { color: @okp_teal; font-weight: 600; }
+
+        .okp-history-finished-chip {
+            padding: 3px 7px;
+            border-radius: 6px;
+            font-size: 10.5px;
+            font-weight: 600;
+        }
+
+        .is-light .okp-history-finished-chip { background: rgba(0, 0, 0, 0.045); color: rgba(0, 0, 0, 0.52); }
+        .is-dark .okp-history-finished-chip { background: rgba(255, 255, 255, 0.055); color: rgba(255, 255, 255, 0.56); }
+
+        .okp-history-end-cap {
+            margin-top: 26px;
+            padding-top: 18px;
+            border-top: 1px solid rgba(128, 128, 128, 0.18);
+            font-size: 11px;
+        }
+
+        .is-light .okp-history-end-cap { color: rgba(0, 0, 0, 0.36); }
+        .is-dark .okp-history-end-cap { color: rgba(255, 255, 255, 0.36); }
+
+        .okp-history-state-card {
+            min-width: 360px;
+            margin-top: 30px;
+            padding: 34px 28px;
+            border-radius: 12px;
+        }
+
+        .is-light .okp-history-state-card { background: rgba(255, 255, 255, 0.52); border: 1px solid rgba(0, 0, 0, 0.07); }
+        .is-dark .okp-history-state-card { background: rgba(255, 255, 255, 0.035); border: 1px solid rgba(255, 255, 255, 0.08); }
+
+        .okp-history-state-icon-wrap {
+            min-width: 54px;
+            min-height: 54px;
+            border-radius: 14px;
+            background: alpha(@okp_accent, 0.12);
+            color: @okp_teal;
+        }
+
+        .okp-history-state-title { font-size: 16px; font-weight: 600; }
+
+        .okp-history-state-body { font-size: 12.5px; line-height: 1.55; }
+        .is-light .okp-history-state-body { color: rgba(0, 0, 0, 0.50); }
+        .is-dark .okp-history-state-body { color: rgba(255, 255, 255, 0.54); }
+
+        button.okp-history-state-button {
+            min-height: 34px;
+            padding: 7px 18px;
+            border-radius: 7px;
+            background: @okp_teal;
+            border: none;
+            color: #ffffff;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .okp-history-loading { margin-top: 18px; }
+        .okp-history-skeleton-row { padding: 9px 12px; }
+        .okp-history-skeleton-caption { min-width: 64px; min-height: 10px; margin: 0 12px 12px; border-radius: 4px; }
+        .okp-history-skeleton-thumb { min-width: 64px; min-height: 36px; border-radius: 6px; }
+        .okp-history-skeleton-line-1 { min-width: 280px; min-height: 11px; border-radius: 4px; }
+        .okp-history-skeleton-line-2 { min-width: 170px; min-height: 9px; border-radius: 4px; }
+        .is-light .okp-history-skeleton-caption,
+        .is-light .okp-history-skeleton-thumb,
+        .is-light .okp-history-skeleton-line-1,
+        .is-light .okp-history-skeleton-line-2 { background: rgba(0, 0, 0, 0.08); }
+        .is-dark .okp-history-skeleton-caption,
+        .is-dark .okp-history-skeleton-thumb,
+        .is-dark .okp-history-skeleton-line-1,
+        .is-dark .okp-history-skeleton-line-2 { background: rgba(255, 255, 255, 0.08); }
 
         /* Audio lyrics overlay — an Apple-Music-style sheet over the (black) audio plane. The scrim
            is translucent so any embedded cover art shows dimly behind, the lines dim away from the
@@ -2941,6 +3416,31 @@ mod tests {
         assert_ne!(dark, light);
         assert_ne!(dark, rail);
         assert!(dark.starts_with('#') && light.starts_with('#') && rail.starts_with('#'));
+    }
+
+    #[test]
+    fn canonical_idle_and_history_geometry_stays_pinned() {
+        for geometry in [
+            "min-height: 34px;",
+            "min-width: 280px;",
+            "min-width: 194px;",
+            "min-height: 42px;",
+            "font-size: 30px;",
+            "font-size: 13.5px;",
+            "min-width: 64px;",
+            "min-height: 36px;",
+            "min-height: 4px;",
+            "border-radius: 8px;",
+        ] {
+            assert!(
+                OKP_STYLESHEET.contains(geometry),
+                "canonical idle/history geometry missing `{geometry}`"
+            );
+        }
+        assert!(OKP_STYLESHEET.contains(".okp-idle-canvas.is-light"));
+        assert!(OKP_STYLESHEET.contains(".okp-idle-canvas.is-dark"));
+        assert!(OKP_STYLESHEET.contains(".okp-idle-footer"));
+        assert!(OKP_STYLESHEET.contains(".okp-history-bucket"));
     }
 
     #[test]

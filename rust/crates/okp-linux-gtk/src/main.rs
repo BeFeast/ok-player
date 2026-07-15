@@ -851,11 +851,34 @@ enum LinuxUpdateApplyResult {
 #[derive(Clone)]
 struct EmptySurface {
     revealer: gtk::Revealer,
-    panel: gtk::Box,
-    content: gtk::Box,
+    stack: gtk::Stack,
+    welcome_host: gtk::Box,
+    history_host: gtk::Box,
+    footer: gtk::Box,
+    footer_left_icon: gtk::Image,
+    footer_left_label: gtk::Label,
+    footer_status: gtk::Label,
+    page: Rc<Cell<IdlePage>>,
     model: Rc<RefCell<Option<okp_core::recents_shelf::WelcomeShelf>>>,
+    history_model: Rc<RefCell<Option<HistorySurfaceModel>>>,
     opened_context_bucket: Rc<Cell<Option<i64>>>,
     is_preview_substrate: Rc<Cell<bool>>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum IdlePage {
+    #[default]
+    Welcome,
+    History,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct HistorySurfaceModel {
+    items: Vec<okp_core::recents_shelf::HistoryItem>,
+    private_session: bool,
+    read_failed: bool,
+    cleared: bool,
+    no_match: bool,
 }
 
 impl EmptySurface {
@@ -880,7 +903,8 @@ impl EmptySurface {
 
     fn set_preview_substrate(&self, bright: bool) {
         self.is_preview_substrate.set(true);
-        self.panel.set_visible(false);
+        self.stack.set_visible(false);
+        self.footer.set_visible(false);
         self.revealer.add_css_class("is-preview-substrate");
         if bright {
             self.revealer.add_css_class("is-preview-bright");
@@ -895,14 +919,15 @@ impl EmptySurface {
         }
         self.revealer.remove_css_class("is-preview-bright");
         self.revealer.remove_css_class("is-preview-substrate");
-        self.panel.set_visible(true);
+        self.stack.set_visible(true);
+        self.footer.set_visible(true);
     }
 
     fn set_drop_active(&self, active: bool) {
         if active {
-            self.panel.add_css_class("is-drop-target");
+            self.revealer.add_css_class("is-drop-target");
         } else {
-            self.panel.remove_css_class("is-drop-target");
+            self.revealer.remove_css_class("is-drop-target");
         }
     }
 }
