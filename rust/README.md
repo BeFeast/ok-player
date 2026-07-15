@@ -70,3 +70,8 @@ Two package lanes are intentionally separate:
 - Debian lane: `.deb` for Debian/Ubuntu-family install flow. In-app checks can download the
   newest GitHub Release `.deb`, request admin approval via `pkexec apt-get install -y`, and
   fall back to opening the installer when privileged install is unavailable.
+
+Linux publishing is a two-phase gate. A non-publish workflow run builds the candidate and writes
+`package-identity.json` plus `acceptance-template.json`. After installed-package and live
+GNOME/Wayland rows are recorded, a publish run downloads that exact candidate run and validates
+the completed manifest before creating the release. See `docs/linux-release-acceptance.md`.

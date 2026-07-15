@@ -1,7 +1,8 @@
 name: Linux Release
 
-# Linux releases are cut deliberately — by pushing a `linux-v*` tag or dispatching this
-# workflow manually — never one release per commit; merges to `main` do NOT release.
+# Linux candidates are built deliberately by pushing a `linux-v*` tag or dispatching this
+# workflow manually. Publication is a second manual dispatch after package-specific operator
+# evidence is complete; merges to `main` do NOT build or release.
 # Both tracks now discover updates through the static GitHub Pages feeds (issues #131
 # Windows, #162 Linux), which no release-list churn can bury, so a published release
 # just needs its assets attached and the feeds refreshed (see the publish-feed job).
@@ -17,10 +18,18 @@ on:
         required: true
         type: string
       publish:
-        description: Publish to GitHub Releases
+        description: Publish an already-tested candidate to GitHub Releases
         required: true
         default: false
         type: boolean
+      candidate_run_id:
+        description: Candidate workflow run ID (required when publish is true)
+        required: false
+        type: string
+      acceptance_manifest_base64:
+        description: Base64 completed acceptance manifest for the exact candidate (required when publish is true)
+        required: false
+        type: string
       prerelease:
         description: Mark GitHub Release as pre-release
         required: true
@@ -29,6 +38,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   linux-release:
@@ -46,7 +56,7 @@ jobs:
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             tag="${GITHUB_REF_NAME}"
             version="${tag#linux-v}"
-            publish="true"
+            publish="false"
             prerelease="true"
           else
             version="${{ inputs.version }}"
@@ -61,6 +71,7 @@ jobs:
           echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
 
       - name: Install Linux dependencies
+        if: steps.release.outputs.publish != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev libmpv-dev libgl1-mesa-dev libegl1-mesa-dev libglx-dev mpv ffmpeg cmake ninja-build dpkg-dev unzip
@@ -78,13 +89,19 @@ jobs:
         run: dotnet tool install -g vpk
 
       - name: Test Rust workspace
+        if: steps.release.outputs.publish != 'true'
         working-directory: rust
-        run: cargo test --workspace
+        run: |
+          CC=/usr/bin/cc cargo fmt --all -- --check
+          CC=/usr/bin/cc cargo clippy --workspace --all-targets -- -D warnings
+          CC=/usr/bin/cc cargo test --workspace
 
       - name: Build Velopack AppImage lane
+        if: steps.release.outputs.publish != 'true'
         run: ./scripts/package-linux-velopack.sh "${{ steps.release.outputs.version }}"
 
       - name: Build Debian package lane
+        if: steps.release.outputs.publish != 'true'
         run: ./scripts/package-linux-deb.sh "${{ steps.release.outputs.version }}"
 
       # Checksum manifest for the user-facing installable assets: the Linux
@@ -96,6 +113,7 @@ jobs:
       # job on a missing input (set -e, exact filenames, unexpandable glob),
       # so a release can never ship with a silently partial manifest.
       - name: Generate SHA256SUMS
+        if: steps.release.outputs.publish != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -109,13 +127,90 @@ jobs:
           fi
           cat artifacts/linux/SHA256SUMS
 
+      - name: Bind acceptance template to candidate artifacts
+        if: steps.release.outputs.publish != 'true'
+        run: |
+          ./scripts/write-linux-acceptance-template.sh "${{ steps.release.outputs.version }}" "${{ github.sha }}"
+          jq '
+            .rows |= map(
+              if .level == "model-unit" then
+                .measurement_result = "pass"
+                | .measurements = [{name:"candidate-rust-gates",expected:1,actual:1,tolerance:0,unit:"boolean",status:"pass"}]
+                | .notes = "Recorded by the candidate workflow after cargo test --workspace passed."
+              else . end
+            )
+          ' artifacts/linux/acceptance-template.json > artifacts/linux/acceptance-template.tmp
+          mv artifacts/linux/acceptance-template.tmp artifacts/linux/acceptance-template.json
+
       - uses: actions/upload-artifact@v4
+        if: steps.release.outputs.publish != 'true'
         with:
           name: ok-player-linux-${{ steps.release.outputs.version }}
           path: |
             artifacts/linux/velopack/**
             artifacts/linux/deb/*.deb
             artifacts/linux/SHA256SUMS
+            artifacts/linux/package-identity.json
+            artifacts/linux/acceptance-template.json
+
+      - name: Require candidate and live acceptance inputs
+        if: steps.release.outputs.publish == 'true'
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          ACCEPTANCE_MANIFEST_BASE64: ${{ inputs.acceptance_manifest_base64 }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${CANDIDATE_RUN_ID}" || ! "${CANDIDATE_RUN_ID}" =~ ^[0-9]+$ ]]; then
+            echo "::error::Publishing requires a numeric candidate_run_id from a completed non-publish run."
+            exit 1
+          fi
+          if [[ -z "${ACCEPTANCE_MANIFEST_BASE64}" ]]; then
+            echo "::error::Publishing requires acceptance_manifest_base64 with every installed/live row recorded PASS."
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@v4
+        if: steps.release.outputs.publish == 'true'
+        with:
+          name: ok-player-linux-${{ steps.release.outputs.version }}
+          path: artifacts/linux
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.candidate_run_id }}
+
+      - name: Validate exact candidate and acceptance evidence
+        if: steps.release.outputs.publish == 'true'
+        env:
+          ACCEPTANCE_MANIFEST_BASE64: ${{ inputs.acceptance_manifest_base64 }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${ACCEPTANCE_MANIFEST_BASE64}" | base64 --decode > artifacts/linux/acceptance-manifest.json
+          jq -e \
+            --arg version "${{ steps.release.outputs.version }}" \
+            --arg commit "${{ github.sha }}" \
+            '.version == $version and .commit_sha == $commit' \
+            artifacts/linux/package-identity.json >/dev/null || {
+              echo "::error::Candidate package identity does not match this version and commit."
+              exit 1
+            }
+          cargo run --quiet --manifest-path rust/Cargo.toml \
+            -p okp-core --bin okp-acceptance-evidence -- \
+            identity \
+            --version "${{ steps.release.outputs.version }}" \
+            --commit "${{ github.sha }}" \
+            --deb "artifacts/linux/deb/ok-player_${{ steps.release.outputs.version }}_amd64.deb" \
+            --appimage "artifacts/linux/velopack/OK-Player-${{ steps.release.outputs.version }}-x86_64.AppImage" \
+            > artifacts/linux/package-identity-recomputed.json
+          if ! diff -u \
+            <(jq -S . artifacts/linux/package-identity.json) \
+            <(jq -S . artifacts/linux/package-identity-recomputed.json); then
+            echo "::error::Downloaded candidate artifact hashes do not match package-identity.json."
+            exit 1
+          fi
+          cargo run --quiet --manifest-path rust/Cargo.toml \
+            -p okp-core --bin okp-acceptance-evidence -- \
+            validate \
+            --manifest artifacts/linux/acceptance-manifest.json \
+            --identity artifacts/linux/package-identity.json
 
       - name: Publish Velopack AppImage feed
         if: steps.release.outputs.publish == 'true'
@@ -140,6 +235,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${{ steps.release.outputs.tag }}" artifacts/linux/SHA256SUMS --clobber
+
+      - name: Attach acceptance evidence to release
+        if: steps.release.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ steps.release.outputs.tag }}" artifacts/linux/acceptance-manifest.json --clobber
 
       - name: Attach versioned AppImage to release
         if: steps.release.outputs.publish == 'true'

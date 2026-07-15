@@ -52,3 +52,4 @@ fi
 chmod 755 "$VERSIONED_APPIMAGE"
 
 echo "Velopack Linux artifacts written to $OUTPUT_DIR"
+echo "Run write-linux-acceptance-template.sh after both package lanes complete; publishing requires evidence for this exact artifact hash."
