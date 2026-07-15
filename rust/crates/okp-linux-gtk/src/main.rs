@@ -731,8 +731,7 @@ struct Controls {
     status_toast: Rc<StatusToast>,
     timeline_marks_snapshot: RefCell<Vec<TimelineMark>>,
     up_next_revealer: gtk::Revealer,
-    up_next_title: gtk::Label,
-    up_next_summary: gtk::Label,
+    side_panel_fade_revealer: gtk::Revealer,
     chapters_tab: gtk::Button,
     up_next_tab: gtk::Button,
     up_next_list: gtk::ListBox,
@@ -854,6 +853,7 @@ struct EmptySurface {
     content: gtk::Box,
     model: Rc<RefCell<Option<okp_core::recents_shelf::WelcomeShelf>>>,
     opened_context_bucket: Rc<Cell<Option<i64>>>,
+    is_preview_substrate: Rc<Cell<bool>>,
 }
 
 impl EmptySurface {
@@ -862,8 +862,33 @@ impl EmptySurface {
     }
 
     fn set_has_media(&self, has_media: bool) {
+        if self.is_preview_substrate.get() {
+            self.revealer.set_reveal_child(true);
+            self.revealer.set_can_target(false);
+            return;
+        }
         self.revealer.set_reveal_child(!has_media);
         self.revealer.set_can_target(!has_media);
+    }
+
+    fn set_preview_substrate(&self, bright: bool) {
+        self.is_preview_substrate.set(true);
+        self.panel.set_visible(false);
+        self.revealer.add_css_class("is-preview-substrate");
+        if bright {
+            self.revealer.add_css_class("is-preview-bright");
+        }
+        self.revealer.set_reveal_child(true);
+        self.revealer.set_can_target(false);
+    }
+
+    fn clear_preview_substrate(&self) {
+        if !self.is_preview_substrate.replace(false) {
+            return;
+        }
+        self.revealer.remove_css_class("is-preview-bright");
+        self.revealer.remove_css_class("is-preview-substrate");
+        self.panel.set_visible(true);
     }
 
     fn set_drop_active(&self, active: bool) {
@@ -1277,6 +1302,11 @@ enum SidePanelMode {
     Chapters,
     UpNext,
 }
+
+const SIDE_PANEL_WIDTH: i32 = 316;
+const SIDE_PANEL_TOP_INSET: i32 = 44;
+const SIDE_PANEL_BOTTOM_INSET: i32 = 80;
+const SIDE_PANEL_TRANSITION_MS: u32 = 250;
 
 fn main() -> glib::ExitCode {
     VelopackApp::build().set_auto_apply_on_startup(false).run();

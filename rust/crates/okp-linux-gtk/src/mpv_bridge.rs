@@ -299,6 +299,9 @@ pub(crate) fn connect_state_poll(
             update_mpris_snapshot(&mpris_snapshot, &mpris_signals, &state, playback);
         }
         sync_ab_loop_state(&state, has_media);
+        if has_media {
+            empty_surface.clear_preview_substrate();
+        }
         // Hide the welcome surface behind an active lyrics preview so the fixture reads cleanly;
         // in production the loaded audio already hides it (`is_preview_frozen` stays false).
         empty_surface.refresh(&window, &state, Rc::clone(&status_toast));

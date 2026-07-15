@@ -111,7 +111,8 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         state.borrow_mut().private_session = true;
     }
     apply_playback_settings_defaults(&state);
-    let auto_check_updates = state.borrow().settings.auto_check_updates();
+    let auto_check_updates = state.borrow().settings.auto_check_updates()
+        && env::var_os("OKP_SKIP_UPDATE_CHECK").is_none();
     let updating_seek = Rc::new(Cell::new(false));
     let updating_volume = Rc::new(Cell::new(false));
     let status_toast = Rc::new(StatusToast::new());
@@ -154,7 +155,6 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     let media_state_overlay = MediaStateOverlay::new();
     chrome.set_child(&control_bar);
     chrome.add_linked_revealer(&window_chrome);
-    chrome.add_linked_revealer(&controls.up_next_revealer);
 
     overlay.set_child(Some(&video_area));
     overlay.add_overlay(empty_surface.widget());
@@ -199,17 +199,23 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     connect_progress_persistence(&window, Rc::clone(&state));
     // Visual smoke hook: render the Chapters/Up Next side panel with representative
     // fixture rows so its layout can be screenshot-tested without loaded media.
-    // `OKP_OPEN_SIDE_PANEL_ON_STARTUP=up-next` previews the queue; `=up-next-empty`
+    // `OKP_OPEN_SIDE_PANEL_ON_STARTUP=up-next` previews the queue; `=bookmarks`
+    // previews the user-authored section; `=up-next-empty`
     // previews the PRD §2.6 single-URL / short-queue state (now-playing pin + the
     // "Add files" affordance); `=chapters-empty` previews the no-chapters stream
     // state; any other value previews the full Chapters fixture.
     if let Some(value) = env::var_os("OKP_OPEN_SIDE_PANEL_ON_STARTUP") {
+        let bright_substrate = env::var_os("OKP_SIDE_PANEL_PREVIEW_SUBSTRATE")
+            .is_some_and(|value| value.eq_ignore_ascii_case("bright"));
+        empty_surface.set_preview_substrate(bright_substrate);
         let (mode, snapshot) = if value.eq_ignore_ascii_case("up-next") {
             (SidePanelMode::UpNext, side_panel_preview_sample())
+        } else if value.eq_ignore_ascii_case("bookmarks") {
+            (SidePanelMode::Chapters, side_panel_bookmarks_sample())
         } else if value.eq_ignore_ascii_case("up-next-empty") {
             (SidePanelMode::UpNext, side_panel_empty_up_next_sample())
         } else if value.eq_ignore_ascii_case("chapters-empty") {
-            (SidePanelMode::Chapters, side_panel_empty_up_next_sample())
+            (SidePanelMode::Chapters, side_panel_empty_chapters_sample())
         } else {
             (SidePanelMode::Chapters, side_panel_preview_sample())
         };
@@ -657,6 +663,7 @@ pub(crate) fn build_empty_surface(
         content,
         model: Rc::new(RefCell::new(None)),
         opened_context_bucket: Rc::new(Cell::new(None)),
+        is_preview_substrate: Rc::new(Cell::new(false)),
     };
     surface.refresh(window, &state, status_toast);
     surface

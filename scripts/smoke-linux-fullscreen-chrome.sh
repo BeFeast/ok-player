@@ -35,7 +35,7 @@ fi
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
-if ! xvfb-run -a --server-args='-screen 0 1280x900x24 -nolisten tcp' \
+if ! xvfb-run -a --server-args='-screen 0 1280x900x24 -nolisten tcp -extension GLX' \
   dbus-run-session -- bash -s -- "$BINARY" "$OUT_DIR" "$FIXTURE" >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
 set -euo pipefail
 
@@ -44,6 +44,8 @@ OUT_DIR="$2"
 FIXTURE="$3"
 
 export GDK_BACKEND=x11
+export GSK_RENDERER=cairo
+export OKP_SKIP_UPDATE_CHECK=1
 export GTK_USE_PORTAL=0
 export NO_AT_BRIDGE=1
 export XDG_SESSION_TYPE=x11
