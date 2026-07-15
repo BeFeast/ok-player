@@ -32,16 +32,52 @@ fn about_channel_separates_linux_release_track_from_version() {
 }
 
 #[test]
-fn empty_surface_logo_resolves_to_the_bundled_app_icon() {
-    // The welcome surface anchors the OK Player identity on the app icon tile.
+fn identity_surfaces_resolve_to_the_bundled_app_icon() {
+    // Welcome, About, MPRIS, and desktop packaging all share this one mark.
     // If the bundled SVG stops resolving, the logo silently falls back to the
     // themed icon (blank outside an installed icon theme), so guard the asset.
-    let path = empty_surface_logo_path().expect("welcome surface icon should resolve");
+    let path = app_icon_path().expect("shared app icon should resolve");
     assert!(path.is_file(), "resolved icon path should exist: {path:?}");
     assert_eq!(
         path.file_name().and_then(|name| name.to_str()),
         Some("com.befeast.okplayer.svg")
     );
+    assert_eq!(about_illustration_path(), Some(path));
+}
+
+#[test]
+fn shared_linux_icon_is_a_transparent_ok_mark_without_stale_identity_assets() {
+    let packaging = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packaging/linux");
+    let icon = fs::read_to_string(packaging.join("com.befeast.okplayer.svg"))
+        .expect("shared app icon should be readable");
+    assert!(icon.contains("<circle"));
+    assert!(icon.contains("#28b3aa"));
+    assert!(!icon.contains("<rect"), "icon must not bake in a tile");
+    assert!(!icon.contains("<polygon"), "icon must not be a play glyph");
+    assert!(
+        !packaging.join("com.befeast.okplayer.about.svg").exists(),
+        "About must not ship a second identity asset"
+    );
+}
+
+#[test]
+fn linux_packaging_installs_only_the_shared_desktop_icon() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let desktop =
+        fs::read_to_string(root.join("rust/packaging/linux/com.befeast.okplayer.desktop"))
+            .expect("desktop entry should be readable");
+    assert!(
+        desktop
+            .lines()
+            .any(|line| line == "Icon=com.befeast.okplayer")
+    );
+
+    for script in ["package-linux-deb.sh", "package-linux-velopack.sh"] {
+        let contents = fs::read_to_string(root.join("scripts").join(script))
+            .expect("packaging script should be readable");
+        assert!(contents.contains("com.befeast.okplayer.svg"));
+        assert!(!contents.contains("com.befeast.okplayer.about.svg"));
+    }
 }
 
 #[test]

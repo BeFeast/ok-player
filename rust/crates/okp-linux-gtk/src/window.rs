@@ -634,6 +634,7 @@ pub(crate) fn build_empty_surface(
     scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     scroller.set_halign(gtk::Align::Fill);
     scroller.set_valign(gtk::Align::Fill);
+    scroller.set_margin_top(44);
     scroller.set_margin_bottom(92);
     scroller.set_child(Some(&panel));
 
@@ -661,26 +662,31 @@ pub(crate) fn build_empty_surface(
     surface
 }
 
-/// The welcome surface anchors the OK Player identity with the app icon tile.
+/// The welcome surface anchors the OK Player identity with the shared app mark.
 /// It loads the bundled SVG directly so the mark renders crisply in development
 /// and packaged builds alike, falling back to the themed icon when the asset is
 /// not on disk (mirrors `about_illustration`).
 pub(crate) fn empty_surface_logo() -> gtk::Image {
-    if let Some(path) = empty_surface_logo_path() {
+    app_identity_image(72, "okp-empty-logo")
+}
+
+pub(crate) fn app_identity_image(pixel_size: i32, css_class: &str) -> gtk::Image {
+    if let Some(path) = app_icon_path() {
         let image = gtk::Image::from_file(path);
-        image.add_css_class("okp-empty-logo");
-        image.set_size_request(64, 64);
-        image.set_pixel_size(64);
+        image.add_css_class(css_class);
+        image.set_size_request(pixel_size, pixel_size);
+        image.set_pixel_size(pixel_size);
         return image;
     }
 
     let image = gtk::Image::from_icon_name("com.befeast.okplayer");
-    image.add_css_class("okp-empty-logo");
-    image.set_pixel_size(64);
+    image.add_css_class(css_class);
+    image.set_size_request(pixel_size, pixel_size);
+    image.set_pixel_size(pixel_size);
     image
 }
 
-pub(crate) fn empty_surface_logo_path() -> Option<PathBuf> {
+pub(crate) fn app_icon_path() -> Option<PathBuf> {
     let mut candidates = Vec::new();
     candidates.push(PathBuf::from(
         "/usr/share/icons/hicolor/scalable/apps/com.befeast.okplayer.svg",

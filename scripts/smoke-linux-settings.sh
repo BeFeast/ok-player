@@ -79,10 +79,11 @@ if (( top_center_dark_pixels > 120 )); then
   exit 1
 fi
 
-rail_top_pixel="$(magick "$OUT_DIR/settings.png" -format '%[pixel:p{20,16}]' info:)"
-content_top_pixel="$(magick "$OUT_DIR/settings.png" -format '%[pixel:p{220,16}]' info:)"
-if [[ "$rail_top_pixel" != "srgb(234,240,245)" || "$content_top_pixel" != "srgb(238,244,249)" ]]; then
-  echo "Unexpected Settings top strip colors: rail=${rail_top_pixel}, content=${content_top_pixel}" >&2
+rail_top_mean="$(magick "$OUT_DIR/settings.png" -crop 120x28+0+0 -colorspace gray -format '%[fx:mean]' info:)"
+content_top_mean="$(magick "$OUT_DIR/settings.png" -crop 260x28+192+0 -colorspace gray -format '%[fx:mean]' info:)"
+if ! awk -v rail="$rail_top_mean" -v content="$content_top_mean" \
+  'BEGIN { exit !(rail > 0.78 && content > 0.78 && content - rail > -0.04 && content - rail < 0.08) }'; then
+  echo "Unexpected Settings top surface regions: rail=${rail_top_mean}, content=${content_top_mean}" >&2
   exit 1
 fi
 

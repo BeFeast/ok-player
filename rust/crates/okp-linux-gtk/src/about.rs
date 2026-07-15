@@ -79,35 +79,12 @@ pub(crate) fn about_identity_hero(snapshot: &AboutSnapshot) -> gtk::Box {
 }
 
 pub(crate) fn about_illustration() -> gtk::Widget {
-    if let Some(path) = about_illustration_path() {
-        let image = gtk::Image::from_file(path);
-        image.set_size_request(116, 90);
-        image.set_pixel_size(116);
-        return image.upcast();
-    }
-
-    let image = gtk::Image::from_icon_name("com.befeast.okplayer");
-    image.set_size_request(116, 90);
-    image.set_pixel_size(90);
-    image.upcast()
+    app_identity_image(92, "okp-about-mark").upcast()
 }
 
+#[cfg(test)]
 pub(crate) fn about_illustration_path() -> Option<PathBuf> {
-    let mut candidates = Vec::new();
-    candidates.push(PathBuf::from(
-        "/usr/share/ok-player/com.befeast.okplayer.about.svg",
-    ));
-    if let Ok(exe) = env::current_exe()
-        && let Some(parent) = exe.parent()
-    {
-        candidates.push(parent.join("com.befeast.okplayer.about.svg"));
-    }
-    candidates.push(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../packaging/linux/com.befeast.okplayer.about.svg"),
-    );
-
-    candidates.into_iter().find(|path| path.is_file())
+    app_icon_path()
 }
 
 pub(crate) fn about_display_version(version: &str) -> String {

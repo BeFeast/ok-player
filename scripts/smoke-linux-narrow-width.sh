@@ -4,10 +4,10 @@
 # not clip or overlap. This script loads real media (to hide the welcome surface
 # and give a clean dark video plane), opens the Up Next side panel (which pins
 # the OSC visible for the duration), resizes the window down to a narrow floor
-# where the side panel still fits without clipping, and asserts on pixels that
+# where the side panel still fits without clipping, and asserts on regions that
 # the OSC controls and side-panel rows render without clipping and that the
-# panel does not slide down over the bar — pixel-based, like the sibling
-# smoke-linux-*.sh guards.
+# panel does not slide down over the bar. Guards use regions and derived layout
+# boundaries rather than any exact decorative pixel.
 #
 # Needs real media plus a window resize, which is why it is tracked separately
 # from the preview-fixture smokes. The tiny synthetic clip in
@@ -129,6 +129,26 @@ osc_h=$((height - 18 - osc_top))
 panel_left=$((width - 368))
 panel_right=$((width - 24))
 panel_w=$((panel_right - panel_left))
+panel_bottom=$((height - 92))
+
+if (( panel_left < 0 || panel_right > width || panel_bottom > osc_top - 12 )); then
+  echo "derived narrow layout overlaps: panel=[${panel_left},${panel_right}] bottom=${panel_bottom}, osc-top=${osc_top}" >&2
+  exit 1
+fi
+
+# The unified OSC is one continuous elevated surface. Its full-width region
+# must be visibly separated from the near-black video plane without relying on
+# a single corner/background color.
+osc_mean="$(
+  magick "$OUT_DIR/narrow.png" \
+    -crop "$((width - 28))x${osc_h}+14+${osc_top}" \
+    -colorspace gray \
+    -format '%[fx:mean]' info:
+)"
+if ! awk -v mean="$osc_mean" 'BEGIN { exit !(mean > 0.055) }'; then
+  echo "OSC surface lacks contrast at narrow width: mean=${osc_mean}" >&2
+  exit 1
+fi
 
 # Left controls not clipped: the primary group (open + transport) sits at the
 # far left of the bar, left of the side panel. A bright glyph there means the
@@ -178,7 +198,7 @@ if ! awk -v max="$panel_max" 'BEGIN { exit !(max > 0.5) }'; then
 fi
 
 echo "narrow floor: ${width}x${height}"
-echo "osc-left=${left_max} osc-panel=${panel_osc_max} panel=${panel_max}"
+echo "osc-mean=${osc_mean} osc-left=${left_max} osc-panel=${panel_osc_max} panel=${panel_max}"
 SMOKE
 then
   echo "Narrow-width smoke failed. Session log: $OUT_DIR/session.log" >&2
