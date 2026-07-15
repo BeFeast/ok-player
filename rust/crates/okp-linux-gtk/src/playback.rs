@@ -109,22 +109,30 @@ pub(crate) fn adjust_subtitle_scale(state: &Rc<RefCell<PlayerState>>, delta: f64
 
 pub(crate) fn screenshot_context(
     state: &Rc<RefCell<PlayerState>>,
-) -> Option<(Option<PathBuf>, Option<f64>)> {
-    let (has_mpv, current_file, position) = {
+) -> Option<(Option<PathBuf>, okp_core::screenshot::SavedCaptureContext)> {
+    let (has_media, current_file, context) = {
         let state = state.borrow();
         let position = state
             .mpv
             .as_ref()
             .map(|mpv| mpv.observed_playback_state())
             .and_then(|playback| playback.time_pos);
-        (state.mpv.is_some(), state.current_file.clone(), position)
+        (
+            has_loaded_media_state(&state) && state.mpv.is_some(),
+            state.current_file.clone(),
+            okp_core::screenshot::SavedCaptureContext {
+                source_generation: state.source_generation,
+                seek_generation: state.seek_generation,
+                position,
+            },
+        )
     };
 
-    if !has_mpv {
+    if !has_media {
         return None;
     }
 
-    Some((current_file, position))
+    Some((current_file, context))
 }
 
 pub(crate) fn save_screenshot(
@@ -132,7 +140,7 @@ pub(crate) fn save_screenshot(
     status_toast: &StatusToast,
     include_subtitles: bool,
 ) {
-    let Some((current_file, position)) = screenshot_context(state) else {
+    let Some((current_file, request_context)) = screenshot_context(state) else {
         status_toast.show("Open media first");
         return;
     };
@@ -149,7 +157,7 @@ pub(crate) fn save_screenshot(
     state.borrow().screenshot_jobs.prepare_saved(
         directory,
         current_file,
-        position,
+        request_context,
         format,
         include_subtitles,
     );
@@ -211,6 +219,36 @@ fn dispatch_screenshot_capture(
     status_toast: &StatusToast,
     capture: screenshots::PendingCapture,
 ) {
+    if let screenshots::PendingCapture::Saved(target) = &capture {
+        let current_context = {
+            let state = state.borrow();
+            if !has_loaded_media_state(&state) {
+                None
+            } else {
+                state
+                    .mpv
+                    .as_ref()
+                    .map(|mpv| okp_core::screenshot::SavedCaptureContext {
+                        source_generation: state.source_generation,
+                        seek_generation: state.seek_generation,
+                        position: mpv.observed_playback_state().time_pos,
+                    })
+            }
+        };
+        let stale = match current_context {
+            Some(current) => screenshots::cancel_saved_capture_if_stale(target, current),
+            None => {
+                screenshots::remove_temporary_capture(&target.temp_path);
+                Some(okp_core::screenshot::SavedCaptureValidity::SourceChanged)
+            }
+        };
+        if let Some(reason) = stale {
+            eprintln!("Canceled stale screenshot capture: {reason:?}");
+            status_toast.show("Screenshot canceled");
+            return;
+        }
+    }
+
     let (path, include_subtitles) = match &capture {
         screenshots::PendingCapture::Saved(target) => (&target.temp_path, target.include_subtitles),
         screenshots::PendingCapture::Clipboard(path) => (path, false),
@@ -378,7 +416,7 @@ pub(crate) fn try_file_manager_show_items(path: &Path) -> bool {
 
 pub(crate) fn seek_to_chapter(state: &Rc<RefCell<PlayerState>>, time: f64) {
     if time.is_finite() && time >= 0.0 {
-        with_mpv(state, |mpv| mpv.seek_absolute(time));
+        seek_absolute(state, time);
     }
 }
 
@@ -455,7 +493,7 @@ pub(crate) fn remove_bookmark_at(
 }
 
 pub(crate) fn seek_to_time(state: &Rc<RefCell<PlayerState>>, time: f64) -> bool {
-    if !(time.is_finite() && time >= 0.0 && with_mpv(state, |mpv| mpv.seek_absolute(time))) {
+    if !(time.is_finite() && time >= 0.0 && seek_absolute(state, time)) {
         return false;
     }
     // An absolute jump ends any run of relative seeks, so the next fine seek
@@ -492,7 +530,7 @@ pub(crate) fn seek_relative_with_readout(
     let Some(playback) = observed_playback(state) else {
         return;
     };
-    if !with_mpv(state, |mpv| mpv.seek_relative(delta)) {
+    if !seek_relative(state, delta) {
         return;
     }
 
@@ -521,13 +559,7 @@ pub(crate) fn frame_step_with_readout(
     let Some(playback) = observed_playback(state) else {
         return;
     };
-    let stepped = with_mpv(state, |mpv| {
-        if forward {
-            mpv.frame_step()
-        } else {
-            mpv.frame_back_step()
-        }
-    });
+    let stepped = step_frame(state, forward);
     if !stepped {
         return;
     }
@@ -545,6 +577,41 @@ pub(crate) fn frame_step_with_readout(
         next.projected_target,
         playback.container_fps,
     ));
+}
+
+pub(crate) fn seek_absolute(state: &Rc<RefCell<PlayerState>>, seconds: f64) -> bool {
+    let sent = with_mpv(state, |mpv| mpv.seek_absolute(seconds));
+    if sent {
+        advance_seek_generation(state);
+    }
+    sent
+}
+
+pub(crate) fn seek_relative(state: &Rc<RefCell<PlayerState>>, seconds: f64) -> bool {
+    let sent = with_mpv(state, |mpv| mpv.seek_relative(seconds));
+    if sent {
+        advance_seek_generation(state);
+    }
+    sent
+}
+
+pub(crate) fn step_frame(state: &Rc<RefCell<PlayerState>>, forward: bool) -> bool {
+    let sent = with_mpv(state, |mpv| {
+        if forward {
+            mpv.frame_step()
+        } else {
+            mpv.frame_back_step()
+        }
+    });
+    if sent {
+        advance_seek_generation(state);
+    }
+    sent
+}
+
+fn advance_seek_generation(state: &Rc<RefCell<PlayerState>>) {
+    let mut state = state.borrow_mut();
+    state.seek_generation = state.seek_generation.wrapping_add(1);
 }
 
 pub(crate) fn toggle_fullscreen(window: &gtk::ApplicationWindow) {
