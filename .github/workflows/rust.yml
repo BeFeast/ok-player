@@ -35,3 +35,6 @@ jobs:
       - name: Test
         working-directory: rust
         run: cargo test --workspace
+
+      - name: Native file dialog result smoke
+        run: ./scripts/smoke-linux-file-dialog.sh

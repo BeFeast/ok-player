@@ -1,31 +1,44 @@
 use super::*;
 
-pub(crate) fn open_media_dialog(parent: &gtk::ApplicationWindow, state: Rc<RefCell<PlayerState>>) {
-    let dialog = gtk::FileChooserDialog::new(
-        Some("Open media"),
+pub(crate) fn open_media_dialog(
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) {
+    let dialog = gtk::FileDialog::builder()
+        .title("Open media")
+        .accept_label("Open")
+        .modal(true)
+        .build();
+    let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
+    let media_filter = media_file_filter();
+    for filter in [
+        media_filter.clone(),
+        playlist_file_filter(),
+        subtitle_file_filter(),
+        all_files_filter(),
+    ] {
+        filters.append(&filter);
+    }
+    dialog.set_filters(Some(&filters));
+    dialog.set_default_filter(Some(&media_filter));
+
+    dialog.open_multiple(
         Some(parent),
-        gtk::FileChooserAction::Open,
-        &[
-            ("Cancel", gtk::ResponseType::Cancel),
-            ("Open", gtk::ResponseType::Accept),
-        ],
+        None::<&gtk::gio::Cancellable>,
+        move |result| match native_file_dialog_paths(result) {
+            NativeFileDialogResult::Selected(paths) => {
+                if !load_selected_local_paths(&state, paths) {
+                    status_toast.show("Could not open selected media");
+                }
+            }
+            NativeFileDialogResult::Cancelled => {}
+            NativeFileDialogResult::Failed(error) => {
+                eprintln!("Open media dialog failed: {error}");
+                status_toast.show("Could not open media chooser");
+            }
+        },
     );
-    dialog.set_modal(true);
-    dialog.set_decorated(false);
-    dialog.set_select_multiple(true);
-    dialog.add_filter(&media_file_filter());
-    dialog.add_filter(&playlist_file_filter());
-    dialog.add_filter(&subtitle_file_filter());
-    dialog.add_filter(&all_files_filter());
-
-    dialog.connect_response(move |dialog, response| {
-        if response == gtk::ResponseType::Accept {
-            load_selected_local_paths(&state, file_chooser_paths(dialog));
-        }
-        dialog.close();
-    });
-
-    dialog.present();
 }
 
 pub(crate) fn open_folder_dialog(
@@ -33,31 +46,78 @@ pub(crate) fn open_folder_dialog(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) {
-    let dialog = gtk::FileChooserDialog::new(
-        Some("Open folder"),
+    let dialog = gtk::FileDialog::builder()
+        .title("Open folder")
+        .accept_label("Open")
+        .modal(true)
+        .build();
+
+    dialog.select_multiple_folders(
         Some(parent),
-        gtk::FileChooserAction::SelectFolder,
-        &[
-            ("Cancel", gtk::ResponseType::Cancel),
-            ("Open", gtk::ResponseType::Accept),
-        ],
+        None::<&gtk::gio::Cancellable>,
+        move |result| match native_file_dialog_paths(result) {
+            NativeFileDialogResult::Selected(paths) => {
+                if !load_selected_local_paths(&state, paths) {
+                    status_toast.show("Folder has no playable media");
+                }
+            }
+            NativeFileDialogResult::Cancelled => {}
+            NativeFileDialogResult::Failed(error) => {
+                eprintln!("Open folder dialog failed: {error}");
+                status_toast.show("Could not open folder chooser");
+            }
+        },
     );
-    dialog.set_modal(true);
-    dialog.set_decorated(false);
-    dialog.set_select_multiple(true);
-
-    dialog.connect_response(move |dialog, response| {
-        if response == gtk::ResponseType::Accept
-            && !load_selected_local_paths(&state, file_chooser_paths(dialog))
-        {
-            status_toast.show("Folder has no playable media");
-        }
-        dialog.close();
-    });
-
-    dialog.present();
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum NativeFileDialogResult {
+    Selected(Vec<PathBuf>),
+    Cancelled,
+    Failed(String),
+}
+
+pub(crate) fn native_file_dialog_paths(
+    result: Result<gtk::gio::ListModel, glib::Error>,
+) -> NativeFileDialogResult {
+    match result {
+        Ok(files) => match local_paths_from_list_model(&files) {
+            Ok(paths) => NativeFileDialogResult::Selected(paths),
+            Err(error) => NativeFileDialogResult::Failed(error.to_owned()),
+        },
+        Err(error) if native_file_dialog_was_cancelled(&error) => NativeFileDialogResult::Cancelled,
+        Err(error) => NativeFileDialogResult::Failed(error.to_string()),
+    }
+}
+
+pub(crate) fn local_paths_from_list_model(
+    files: &gtk::gio::ListModel,
+) -> Result<Vec<PathBuf>, &'static str> {
+    if files.n_items() == 0 {
+        return Err("file dialog returned an empty selection");
+    }
+
+    let mut paths = Vec::with_capacity(files.n_items() as usize);
+    for index in 0..files.n_items() {
+        let file = files
+            .item(index)
+            .and_then(|object| object.downcast::<gtk::gio::File>().ok())
+            .ok_or("file dialog returned an invalid selection item")?;
+        let path = file
+            .path()
+            .ok_or("file dialog selection is not a local filesystem path")?;
+        paths.push(path);
+    }
+    Ok(paths)
+}
+
+pub(crate) fn native_file_dialog_was_cancelled(error: &glib::Error) -> bool {
+    error.matches(gtk::DialogError::Cancelled)
+        || error.matches(gtk::DialogError::Dismissed)
+        || error.matches(gtk::gio::IOErrorEnum::Cancelled)
+}
+
+#[allow(deprecated)]
 pub(crate) fn open_url_dialog(
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
@@ -130,6 +190,7 @@ pub(crate) fn open_url_dialog(
     dialog.present();
 }
 
+#[allow(deprecated)]
 pub(crate) fn open_go_to_time_dialog(
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
@@ -236,6 +297,7 @@ pub(crate) fn go_to_time_snapshot(state: &Rc<RefCell<PlayerState>>) -> Option<(f
     Some((position, duration))
 }
 
+#[allow(deprecated)]
 pub(crate) fn open_clear_history_dialog(
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
@@ -289,6 +351,7 @@ pub(crate) fn command_dialog_title(title: &str) -> gtk::Label {
 /// Retry / Open another / Copy details actions the model in [`okp_core::network_media`]
 /// exposes. Retry replays the same URL; Open another reopens the URL dialog; Copy details
 /// writes the summary to the clipboard.
+#[allow(deprecated)]
 pub(crate) fn open_load_failure_dialog(
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
@@ -371,6 +434,7 @@ pub(crate) fn captionless_transient_window(
     window
 }
 
+#[allow(deprecated)]
 pub(crate) fn open_subtitle_dialog(
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
@@ -401,6 +465,7 @@ pub(crate) fn open_subtitle_dialog(
     dialog.present();
 }
 
+#[allow(deprecated)]
 pub(crate) fn open_playlist_dialog(
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
@@ -432,6 +497,7 @@ pub(crate) fn open_playlist_dialog(
     dialog.present();
 }
 
+#[allow(deprecated)]
 pub(crate) fn save_playlist_dialog(
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
@@ -464,6 +530,7 @@ pub(crate) fn save_playlist_dialog(
     dialog.present();
 }
 
+#[allow(deprecated)]
 pub(crate) fn open_queue_media_dialog(
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
@@ -499,6 +566,7 @@ pub(crate) fn open_queue_media_dialog(
     dialog.present();
 }
 
+#[allow(deprecated)]
 pub(crate) fn file_chooser_paths(dialog: &gtk::FileChooserDialog) -> Vec<PathBuf> {
     let files = dialog.files();
     let mut paths = Vec::new();

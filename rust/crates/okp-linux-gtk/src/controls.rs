@@ -287,7 +287,10 @@ pub(crate) fn build_controls(
 
     let open_parent = window.clone();
     let open_state = Rc::clone(&state);
-    open_button.connect_clicked(move |_| open_media_dialog(&open_parent, Rc::clone(&open_state)));
+    let open_toast = Rc::clone(&status_toast);
+    open_button.connect_clicked(move |_| {
+        open_media_dialog(&open_parent, Rc::clone(&open_state), Rc::clone(&open_toast))
+    });
 
     let previous_state = Rc::clone(&state);
     previous_button.connect_clicked(move |_| {
@@ -296,10 +299,15 @@ pub(crate) fn build_controls(
 
     let play_state = Rc::clone(&state);
     let play_open_parent = window.clone();
+    let play_open_toast = Rc::clone(&status_toast);
     play_button.connect_clicked(move |_| {
         let has_media = has_loaded_media(&play_state);
         if !has_media {
-            open_media_dialog(&play_open_parent, Rc::clone(&play_state));
+            open_media_dialog(
+                &play_open_parent,
+                Rc::clone(&play_state),
+                Rc::clone(&play_open_toast),
+            );
             return;
         }
 

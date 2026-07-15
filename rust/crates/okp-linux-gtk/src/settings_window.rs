@@ -400,7 +400,7 @@ pub(crate) fn draw_window_control_icon(
     height: i32,
     kind: WindowControlKind,
 ) {
-    let color = area.style_context().color();
+    let color = area.color();
     let _ = cr.save();
     cr.translate(
         ((width as f64) - 10.0) / 2.0,
@@ -483,7 +483,7 @@ pub(crate) fn draw_settings_nav_icon(
     height: i32,
     icon: SettingsNavIcon,
 ) {
-    let color = area.style_context().color();
+    let color = area.color();
     let scale = f64::min(width as f64, height as f64) / 16.0;
     let _ = cr.save();
     cr.translate(
