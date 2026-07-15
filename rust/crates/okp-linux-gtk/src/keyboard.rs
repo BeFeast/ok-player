@@ -100,7 +100,11 @@ pub(crate) fn connect_keyboard(
                 glib::Propagation::Stop
             }
             Some(ShortcutAction::OpenFile) => {
-                open_media_dialog(&shortcut_window, Rc::clone(&state));
+                open_media_dialog(
+                    &shortcut_window,
+                    Rc::clone(&state),
+                    Rc::clone(&status_toast),
+                );
                 glib::Propagation::Stop
             }
             Some(ShortcutAction::AddSubtitle) => {

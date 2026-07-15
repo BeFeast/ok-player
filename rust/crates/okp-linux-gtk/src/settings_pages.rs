@@ -225,6 +225,7 @@ pub(crate) fn settings_screenshot_section(
     section
 }
 
+#[allow(deprecated)]
 fn open_screenshot_folder_dialog(
     parent: &gtk::Window,
     state: Rc<RefCell<PlayerState>>,

@@ -1066,7 +1066,7 @@ impl StatusToast {
         thumbnail.add_css_class("okp-status-toast-thumbnail");
         thumbnail.set_size_request(64, 36);
         thumbnail.set_can_shrink(true);
-        thumbnail.set_keep_aspect_ratio(false);
+        thumbnail.set_content_fit(gtk::ContentFit::Fill);
         thumbnail.set_visible(false);
 
         let label = gtk::Label::new(None);

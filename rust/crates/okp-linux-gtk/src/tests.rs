@@ -1600,6 +1600,64 @@ fn selected_playlist_path_picks_first_m3u_variant() {
 }
 
 #[test]
+fn native_file_dialog_result_preserves_selected_local_path_order() {
+    let files = gtk::gio::ListStore::new::<gtk::gio::File>();
+    files.append(&gtk::gio::File::for_path("/media/Episode 2.mkv"));
+    files.append(&gtk::gio::File::for_path("/media/Episode 10.mkv"));
+
+    assert_eq!(
+        native_file_dialog_paths(Ok(files.upcast())),
+        NativeFileDialogResult::Selected(vec![
+            PathBuf::from("/media/Episode 2.mkv"),
+            PathBuf::from("/media/Episode 10.mkv"),
+        ])
+    );
+}
+
+#[test]
+fn native_file_dialog_result_rejects_empty_or_non_local_selections() {
+    let empty = gtk::gio::ListStore::new::<gtk::gio::File>();
+    assert!(matches!(
+        native_file_dialog_paths(Ok(empty.upcast())),
+        NativeFileDialogResult::Failed(error) if error.contains("empty selection")
+    ));
+
+    let remote = gtk::gio::ListStore::new::<gtk::gio::File>();
+    remote.append(&gtk::gio::File::for_uri("https://example.com/movie.mkv"));
+    assert!(matches!(
+        native_file_dialog_paths(Ok(remote.upcast())),
+        NativeFileDialogResult::Failed(error) if error.contains("local filesystem path")
+    ));
+}
+
+#[test]
+fn native_file_dialog_result_treats_cancel_and_dismiss_as_no_op() {
+    for error in [
+        glib::Error::new(gtk::DialogError::Cancelled, "cancelled"),
+        glib::Error::new(gtk::DialogError::Dismissed, "dismissed"),
+        glib::Error::new(gtk::gio::IOErrorEnum::Cancelled, "cancelled"),
+    ] {
+        assert_eq!(
+            native_file_dialog_paths(Err(error)),
+            NativeFileDialogResult::Cancelled
+        );
+    }
+}
+
+#[test]
+fn native_file_dialog_result_keeps_failures_visible_to_the_caller() {
+    let result = native_file_dialog_paths(Err(glib::Error::new(
+        gtk::DialogError::Failed,
+        "portal unavailable",
+    )));
+
+    assert!(matches!(
+        result,
+        NativeFileDialogResult::Failed(error) if error.contains("portal unavailable")
+    ));
+}
+
+#[test]
 fn selected_media_paths_expands_folders_in_natural_order() {
     let root = unique_temp_dir("okp-folder-selection");
     fs::create_dir_all(&root).expect("test folder should be created");

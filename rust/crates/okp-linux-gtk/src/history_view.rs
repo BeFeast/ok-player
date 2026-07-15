@@ -309,7 +309,10 @@ fn welcome_actions(
     open_button.add_css_class("okp-empty-primary-button");
     let open_parent = parent.clone();
     let open_state = Rc::clone(&state);
-    open_button.connect_clicked(move |_| open_media_dialog(&open_parent, Rc::clone(&open_state)));
+    let open_toast = Rc::clone(&status_toast);
+    open_button.connect_clicked(move |_| {
+        open_media_dialog(&open_parent, Rc::clone(&open_state), Rc::clone(&open_toast))
+    });
     actions.append(&open_button);
 
     if include_folder {
