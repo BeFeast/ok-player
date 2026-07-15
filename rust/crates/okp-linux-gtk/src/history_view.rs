@@ -142,16 +142,31 @@ fn continue_watching_welcome(
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     content.add_css_class("okp-welcome-recents");
 
+    let heading = gtk::Box::new(gtk::Orientation::Horizontal, 14);
+    heading.add_css_class("okp-welcome-recents-heading");
+    heading.append(&app_identity_image(44, "okp-recents-mark"));
+
+    let heading_copy = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    heading_copy.set_hexpand(true);
     let title = gtk::Label::new(Some("Continue Watching"));
     title.add_css_class("okp-welcome-recents-title");
     title.set_xalign(0.0);
-    content.append(&title);
+    heading_copy.append(&title);
 
     let subtitle = gtk::Label::new(Some("Pick up where you left off, or open something new."));
     subtitle.add_css_class("okp-welcome-recents-subtitle");
     subtitle.set_xalign(0.0);
     subtitle.set_wrap(true);
-    content.append(&subtitle);
+    heading_copy.append(&subtitle);
+    heading.append(&heading_copy);
+    content.append(&heading);
+
+    content.append(&welcome_actions(
+        parent,
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+        false,
+    ));
 
     let shelf = gtk::FlowBox::new();
     shelf.add_css_class("okp-recents-shelf");
@@ -167,12 +182,6 @@ fn continue_watching_welcome(
     }
     content.append(&shelf);
 
-    content.append(&welcome_actions(
-        parent,
-        Rc::clone(&state),
-        Rc::clone(&status_toast),
-        false,
-    ));
     content.append(&welcome_hint());
     content.append(&welcome_footer(parent, state, status_toast, false));
     content

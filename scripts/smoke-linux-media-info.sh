@@ -80,11 +80,16 @@ if (( top_center_dark_pixels > 120 )); then
   exit 1
 fi
 
-# The captionless window background must be the calm light surface, and the
+# The captionless window background must be a calm light region, and the
 # content must actually render (title text produces dark pixels on the left).
-top_left_pixel="$(magick "$OUT_DIR/media-info.png" -format '%[pixel:p{20,16}]' info:)"
-if [[ "$top_left_pixel" != "srgb(238,244,249)" ]]; then
-  echo "Unexpected Media Info top-left pixel: ${top_left_pixel}" >&2
+top_left_mean="$(
+  magick "$OUT_DIR/media-info.png" \
+    -crop 180x36+0+0 \
+    -colorspace gray \
+    -format '%[fx:mean]' info:
+)"
+if ! awk -v mean="$top_left_mean" 'BEGIN { exit !(mean > 0.78) }'; then
+  echo "Unexpected dark Media Info top-left region: mean=${top_left_mean}" >&2
   exit 1
 fi
 

@@ -112,32 +112,39 @@ capture_state "up-next-empty" "$OUT_DIR/up-next-empty.png" "Up Next short-queue"
 capture_state "chapters-empty" "$OUT_DIR/chapters-empty.png" "Chapters no-chapters"
 
 mkdir -p "$XDG_STATE_HOME/ok-player"
+fixture_dir="$OUT_DIR/history-fixtures"
+mkdir -p "$fixture_dir/films" "$fixture_dir/shows/Season-02" "$fixture_dir/documentaries" "$fixture_dir/finished"
+touch \
+  "$fixture_dir/films/Arrival.mkv" \
+  "$fixture_dir/shows/Season-02/Episode-04.mkv" \
+  "$fixture_dir/documentaries/Free-Solo.mp4" \
+  "$fixture_dir/finished/Old-Film.mkv"
 now="$(date +%s)"
 cat >"$XDG_STATE_HOME/ok-player/history.json" <<JSON
 {
   "version": 2,
   "files": {
-    "/media/films/Arrival.mkv": {
+    "$fixture_dir/films/Arrival.mkv": {
       "position": 1320.0,
       "duration": 6960.0,
       "finished": false,
       "updated_at_unix": $((now - 1800)),
       "title": "Arrival"
     },
-    "/media/shows/Severance/Season 02/Episode 04.mkv": {
+    "$fixture_dir/shows/Season-02/Episode-04.mkv": {
       "position": 1180.0,
       "duration": 3180.0,
       "finished": false,
       "updated_at_unix": $((now - 86000)),
       "title": "Woe's Hollow"
     },
-    "/media/documentaries/Free Solo.mp4": {
+    "$fixture_dir/documentaries/Free-Solo.mp4": {
       "position": 880.0,
       "duration": 6000.0,
       "finished": false,
       "updated_at_unix": $((now - 260000))
     },
-    "/media/finished/Old Film.mkv": {
+    "$fixture_dir/finished/Old-Film.mkv": {
       "position": 0.0,
       "duration": 5400.0,
       "finished": true,
@@ -202,6 +209,45 @@ capture_welcome() {
 capture_welcome "recents" "$OUT_DIR/continue-watching.png" 1120 680 "Continue Watching"
 capture_welcome "recents" "$OUT_DIR/continue-watching-narrow.png" 480 540 "Continue Watching narrow"
 capture_welcome "private" "$OUT_DIR/private-session.png" 1120 680 "Private session"
+
+# The real recents fixture must render the identity/title, supporting copy, and
+# both actions with readable contrast at default and narrow widths. These
+# checks use broad semantic regions so renderer-level RGB drift cannot fail an
+# otherwise identical surface.
+desktop_title_bright="$(magick "$OUT_DIR/continue-watching.png" -crop 420x70+250+95 -colorspace gray -threshold 62% -format '%[fx:mean*w*h]' info:)"
+desktop_copy_bright="$(magick "$OUT_DIR/continue-watching.png" -crop 420x35+300+140 -colorspace gray -threshold 42% -format '%[fx:mean*w*h]' info:)"
+desktop_action_red="$(magick "$OUT_DIR/continue-watching.png" -crop 265x70+425+185 -format '%[fx:mean.r]' info:)"
+desktop_action_green="$(magick "$OUT_DIR/continue-watching.png" -crop 265x70+425+185 -format '%[fx:mean.g]' info:)"
+desktop_title_bright="${desktop_title_bright%.*}"
+desktop_copy_bright="${desktop_copy_bright%.*}"
+if (( desktop_title_bright < 1200 || desktop_copy_bright < 300 )); then
+  echo "Continue Watching heading or copy is unreadable: title=${desktop_title_bright} copy=${desktop_copy_bright}" >&2
+  exit 1
+fi
+if ! awk -v r="$desktop_action_red" -v g="$desktop_action_green" 'BEGIN { exit !(g - r > 0.12) }'; then
+  echo "Continue Watching actions lack CTA hierarchy: red=${desktop_action_red} green=${desktop_action_green}" >&2
+  exit 1
+fi
+
+narrow_top_max="$(magick "$OUT_DIR/continue-watching-narrow.png" -crop 330x44+0+0 -colorspace gray -format '%[fx:maxima]' info:)"
+narrow_title_bright="$(magick "$OUT_DIR/continue-watching-narrow.png" -crop 350x60+90+65 -colorspace gray -threshold 62% -format '%[fx:mean*w*h]' info:)"
+narrow_copy_bright="$(magick "$OUT_DIR/continue-watching-narrow.png" -crop 340x45+90+118 -colorspace gray -threshold 42% -format '%[fx:mean*w*h]' info:)"
+narrow_action_red="$(magick "$OUT_DIR/continue-watching-narrow.png" -crop 275x72+100+175 -format '%[fx:mean.r]' info:)"
+narrow_action_green="$(magick "$OUT_DIR/continue-watching-narrow.png" -crop 275x72+100+175 -format '%[fx:mean.g]' info:)"
+narrow_title_bright="${narrow_title_bright%.*}"
+narrow_copy_bright="${narrow_copy_bright%.*}"
+if ! awk -v max="$narrow_top_max" 'BEGIN { exit !(max < 0.18) }'; then
+  echo "Continue Watching title overlaps narrow window chrome: top maxima=${narrow_top_max}" >&2
+  exit 1
+fi
+if (( narrow_title_bright < 1000 || narrow_copy_bright < 250 )); then
+  echo "Narrow Continue Watching heading or copy is unreadable: title=${narrow_title_bright} copy=${narrow_copy_bright}" >&2
+  exit 1
+fi
+if ! awk -v r="$narrow_action_red" -v g="$narrow_action_green" 'BEGIN { exit !(g - r > 0.12) }'; then
+  echo "Narrow Continue Watching actions are missing from the first viewport: red=${narrow_action_red} green=${narrow_action_green}" >&2
+  exit 1
+fi
 
 rm -f "$OUT_DIR/app.log"
 OKP_OPEN_HISTORY_ON_STARTUP=1 \

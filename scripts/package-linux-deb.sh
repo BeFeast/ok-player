@@ -9,7 +9,6 @@ TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/rust/target}"
 DEB_DIR="$ROOT/artifacts/linux/deb"
 BUILD_ROOT="$DEB_DIR/${PACKAGE}_${VERSION}_${ARCH}"
 ICON="$ROOT/rust/packaging/linux/com.befeast.okplayer.svg"
-ABOUT_ICON="$ROOT/rust/packaging/linux/com.befeast.okplayer.about.svg"
 DESKTOP="$ROOT/rust/packaging/linux/com.befeast.okplayer.desktop"
 
 OKP_BUILD_VERSION="$VERSION" cargo build --manifest-path "$ROOT/rust/Cargo.toml" -p okp-linux-gtk --release
@@ -20,13 +19,11 @@ mkdir -p "$BUILD_ROOT/usr/lib/ok-player"
 mkdir -p "$BUILD_ROOT/usr/bin"
 mkdir -p "$BUILD_ROOT/usr/share/applications"
 mkdir -p "$BUILD_ROOT/usr/share/icons/hicolor/scalable/apps"
-mkdir -p "$BUILD_ROOT/usr/share/ok-player"
 
 install -Dm755 "$TARGET_DIR/release/okp-linux-gtk" "$BUILD_ROOT/usr/lib/ok-player/ok-player"
 ln -s ../lib/ok-player/ok-player "$BUILD_ROOT/usr/bin/ok-player"
 install -Dm644 "$DESKTOP" "$BUILD_ROOT/usr/share/applications/com.befeast.okplayer.desktop"
 install -Dm644 "$ICON" "$BUILD_ROOT/usr/share/icons/hicolor/scalable/apps/com.befeast.okplayer.svg"
-install -Dm644 "$ABOUT_ICON" "$BUILD_ROOT/usr/share/ok-player/com.befeast.okplayer.about.svg"
 
 cat > "$BUILD_ROOT/DEBIAN/control" <<CONTROL
 Package: $PACKAGE

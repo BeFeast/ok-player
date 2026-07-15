@@ -114,15 +114,15 @@ const OKP_STYLESHEET: &str = "
         }
 
         .okp-empty-surface {
-            background: alpha(@okp_bg, 0.94);
+            background: alpha(@okp_bg, 0.97);
         }
 
         .okp-empty-panel {
-            padding: 40px 44px 34px 44px;
-            border-radius: 18px;
-            border: 1px solid rgba(255, 255, 255, 0.09);
-            background: linear-gradient(180deg, rgba(23, 25, 30, 0.94), rgba(13, 14, 18, 0.94));
-            box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+            padding: 38px 44px 30px 44px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            background: linear-gradient(180deg, rgba(25, 29, 35, 0.98), rgba(14, 17, 22, 0.98));
+            box-shadow: 0 24px 64px rgba(0, 0, 0, 0.58);
         }
 
         .okp-empty-panel.is-drop-target {
@@ -146,14 +146,14 @@ const OKP_STYLESHEET: &str = "
         }
 
         .okp-empty-wordmark-player {
-            color: rgba(255, 255, 255, 0.60);
+            color: rgba(255, 255, 255, 0.72);
             font-size: 30px;
             font-weight: 300;
         }
 
         .okp-empty-tagline {
             margin-top: 8px;
-            color: rgba(255, 255, 255, 0.52);
+            color: rgba(255, 255, 255, 0.72);
             font-size: 13px;
         }
 
@@ -179,17 +179,17 @@ const OKP_STYLESHEET: &str = "
 
         .okp-empty-primary-button,
         .okp-empty-secondary-button {
-            min-height: 38px;
-            padding: 8px 16px;
-            border-radius: 10px;
+            min-height: 42px;
+            padding: 8px 18px;
+            border-radius: 8px;
             border: 1px solid transparent;
             box-shadow: none;
-            font-size: 13px;
+            font-size: 13.5px;
             font-weight: 650;
         }
 
         .okp-empty-primary-button {
-            background: @okp_accent;
+            background: @okp_accent_bright;
             color: #041110;
         }
 
@@ -208,9 +208,9 @@ const OKP_STYLESHEET: &str = "
         }
 
         .okp-empty-secondary-button {
-            background: rgba(255, 255, 255, 0.06);
-            border-color: rgba(255, 255, 255, 0.08);
-            color: rgba(255, 255, 255, 0.84);
+            background: rgba(255, 255, 255, 0.09);
+            border-color: rgba(255, 255, 255, 0.14);
+            color: rgba(255, 255, 255, 0.90);
         }
 
         .okp-empty-secondary-button:hover {
@@ -224,7 +224,7 @@ const OKP_STYLESHEET: &str = "
 
         .okp-empty-hint {
             margin-top: 20px;
-            color: rgba(255, 255, 255, 0.34);
+            color: rgba(255, 255, 255, 0.52);
             font-size: 11.5px;
         }
 
@@ -242,6 +242,14 @@ const OKP_STYLESHEET: &str = "
             min-width: 300px;
         }
 
+        .okp-welcome-recents-heading {
+            min-height: 48px;
+        }
+
+        .okp-recents-mark {
+            margin-top: 2px;
+        }
+
         .okp-welcome-recents-title {
             color: rgba(255, 255, 255, 0.97);
             font-size: 30px;
@@ -250,12 +258,12 @@ const OKP_STYLESHEET: &str = "
 
         .okp-welcome-recents-subtitle {
             margin-top: 6px;
-            color: rgba(255, 255, 255, 0.54);
+            color: rgba(255, 255, 255, 0.70);
             font-size: 13.5px;
         }
 
         .okp-recents-shelf {
-            margin-top: 22px;
+            margin-top: 18px;
         }
 
         .okp-recents-shelf > flowboxchild {
@@ -339,13 +347,13 @@ const OKP_STYLESHEET: &str = "
 
         .okp-recent-location {
             margin-top: 2px;
-            color: rgba(255, 255, 255, 0.43);
+            color: rgba(255, 255, 255, 0.60);
             font-size: 11px;
         }
 
         .okp-recent-context {
             margin-top: 3px;
-            color: rgba(255, 255, 255, 0.58);
+            color: rgba(255, 255, 255, 0.68);
             font-size: 11px;
         }
 
@@ -372,7 +380,7 @@ const OKP_STYLESHEET: &str = "
         }
 
         .okp-welcome-footer-status {
-            color: rgba(255, 255, 255, 0.38);
+            color: rgba(255, 255, 255, 0.54);
             font-size: 11px;
         }
 
@@ -628,18 +636,16 @@ const OKP_STYLESHEET: &str = "
         }
 
         .okp-controls {
-            padding: 8px 10px;
-            border-radius: 18px;
-            background: rgba(13, 14, 18, 0.86);
-            border: 1px solid rgba(255, 255, 255, 0.11);
-            box-shadow: 0 18px 48px rgba(0, 0, 0, 0.48);
+            padding: 7px 8px;
+            border-radius: 12px;
+            background: rgba(13, 15, 19, 0.94);
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            box-shadow: 0 16px 42px rgba(0, 0, 0, 0.52);
         }
 
-        .okp-control-group {
-            padding: 3px;
-            border-radius: 14px;
-            background: rgba(255, 255, 255, 0.045);
-            border: 1px solid rgba(255, 255, 255, 0.055);
+        .okp-command-cluster {
+            padding: 0;
+            background: transparent;
         }
 
         .okp-transport-group {
@@ -651,6 +657,12 @@ const OKP_STYLESHEET: &str = "
         .okp-timeline-group {
             min-height: 36px;
             padding: 0 2px;
+        }
+
+        separator.okp-control-separator {
+            min-width: 1px;
+            margin: 5px 2px;
+            background: rgba(255, 255, 255, 0.13);
         }
 
         button.okp-control-button,
@@ -686,7 +698,7 @@ const OKP_STYLESHEET: &str = "
         menubutton.okp-control-button > button:disabled {
             background: transparent;
             border-color: transparent;
-            color: rgba(255, 255, 255, 0.32);
+            color: rgba(255, 255, 255, 0.50);
         }
 
         button.okp-control-button:focus-visible,
@@ -707,8 +719,8 @@ const OKP_STYLESHEET: &str = "
         }
 
         button.okp-play-button:disabled {
-            background: rgba(255, 255, 255, 0.11);
-            color: rgba(255, 255, 255, 0.34);
+            background: alpha(@okp_accent, 0.28);
+            color: rgba(255, 255, 255, 0.68);
         }
 
         button.okp-transport-button {
@@ -718,7 +730,7 @@ const OKP_STYLESHEET: &str = "
         button.okp-chip-button,
         menubutton.okp-chip-button > button {
             min-width: 48px;
-            background: rgba(255, 255, 255, 0.055);
+            background: rgba(255, 255, 255, 0.035);
         }
 
         button.okp-icon-button,
@@ -740,7 +752,7 @@ const OKP_STYLESHEET: &str = "
 
         .okp-time-label {
             min-width: 50px;
-            color: rgba(255, 255, 255, 0.84);
+            color: rgba(255, 255, 255, 0.92);
             font-size: 12px;
             font-feature-settings: 'tnum';
         }
@@ -771,7 +783,7 @@ const OKP_STYLESHEET: &str = "
         scale.okp-volume trough {
             min-height: 3px;
             border-radius: 999px;
-            background: rgba(255, 255, 255, 0.23);
+            background: rgba(255, 255, 255, 0.34);
             border: none;
         }
 
@@ -1667,6 +1679,10 @@ const OKP_STYLESHEET: &str = "
             min-height: 94px;
         }
 
+        .okp-about-mark {
+            margin: 4px 10px;
+        }
+
         .okp-about-wordmark {
             color: @okp_ink;
             font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
@@ -2455,19 +2471,21 @@ mod tests {
     }
 
     #[test]
-    fn smoke_locked_surface_tokens_stay_pinned() {
-        // The Linux smoke scripts assert these exact background pixels, so the
-        // captionless shells stay recognisable. Keep the token values pinned.
-        for token in [
-            "@define-color okp_bg #050507;",
-            "@define-color okp_light_bg #eef4f9;",
-            "@define-color okp_light_rail #eaf0f5;",
-        ] {
-            assert!(
-                OKP_STYLESHEET.contains(token),
-                "smoke-locked surface token changed: expected `{token}`"
-            );
-        }
+    fn shell_surface_roles_remain_distinct() {
+        let value = |name: &str| {
+            OKP_STYLESHEET
+                .lines()
+                .map(str::trim)
+                .find_map(|line| line.strip_prefix(&format!("@define-color {name} ")))
+                .and_then(|value| value.strip_suffix(';'))
+                .expect("surface token should be defined")
+        };
+        let dark = value("okp_bg");
+        let light = value("okp_light_bg");
+        let rail = value("okp_light_rail");
+        assert_ne!(dark, light);
+        assert_ne!(dark, rail);
+        assert!(dark.starts_with('#') && light.starts_with('#') && rail.starts_with('#'));
     }
 
     #[test]

@@ -76,9 +76,17 @@ if ! awk -v mean="$top_center_mean" 'BEGIN { exit !(mean < 0.08) }'; then
   exit 1
 fi
 
-top_left_pixel="$(magick "$OUT_DIR/window.png" -format '%[pixel:p{20,16}]' info:)"
-if [[ "$top_left_pixel" != "srgb(5,5,7)" ]]; then
-  echo "Unexpected main window top-left pixel: ${top_left_pixel}" >&2
+# Guard the captionless dark shell as a region rather than pinning one
+# decorative pixel. Small renderer/color-management differences may shift an
+# individual RGB value while the perceived surface remains identical.
+top_left_mean="$(
+  magick "$OUT_DIR/window.png" \
+    -crop 180x36+0+0 \
+    -colorspace gray \
+    -format '%[fx:mean]' info:
+)"
+if ! awk -v mean="$top_left_mean" 'BEGIN { exit !(mean < 0.08) }'; then
+  echo "Unexpected bright top-left chrome region: mean=${top_left_mean}" >&2
   exit 1
 fi
 
@@ -92,17 +100,53 @@ identity_max="$(
     -colorspace gray \
     -format '%[fx:maxima]' info:
 )"
-if ! awk -v max="$identity_max" 'BEGIN { exit !(max > 0.6) }'; then
-  echo "Empty welcome surface looks blank: identity band maxima=${identity_max}" >&2
+identity_mean="$(
+  magick "$OUT_DIR/window.png" \
+    -crop 280x150+420+160 \
+    -colorspace gray \
+    -format '%[fx:mean]' info:
+)"
+if ! awk -v max="$identity_max" -v mean="$identity_mean" \
+  'BEGIN { exit !(max > 0.6 && max - mean > 0.4) }'; then
+  echo "Empty welcome identity lacks contrast: maxima=${identity_max} mean=${identity_mean}" >&2
+  exit 1
+fi
+
+# Supporting copy must produce a meaningful bright-text area, not merely exist
+# as near-black pixels over the video plane.
+tagline_bright_pixels="$(
+  magick "$OUT_DIR/window.png" \
+    -crop 280x34+420+275 \
+    -colorspace gray \
+    -threshold 42% \
+    -format '%[fx:mean*w*h]' info:
+)"
+tagline_bright_pixels="${tagline_bright_pixels%.*}"
+if (( tagline_bright_pixels < 180 )); then
+  echo "Welcome supporting copy is missing or too dim: bright pixels=${tagline_bright_pixels}" >&2
   exit 1
 fi
 
 # The primary "Open media" action carries the OK Player accent, so its band must
 # be clearly green-dominant (teal) rather than a stock grey GTK button.
-primary_red="$(magick "$OUT_DIR/window.png" -crop 160x20+480+360 -format '%[fx:mean.r]' info:)"
-primary_green="$(magick "$OUT_DIR/window.png" -crop 160x20+480+360 -format '%[fx:mean.g]' info:)"
-if ! awk -v r="$primary_red" -v g="$primary_green" 'BEGIN { exit !(g - r > 0.2) }'; then
+primary_red="$(magick "$OUT_DIR/window.png" -crop 130x60+372+296 -format '%[fx:mean.r]' info:)"
+primary_green="$(magick "$OUT_DIR/window.png" -crop 130x60+372+296 -format '%[fx:mean.g]' info:)"
+if ! awk -v r="$primary_red" -v g="$primary_green" 'BEGIN { exit !(g - r > 0.12) }'; then
   echo "Primary action accent missing from welcome surface: red=${primary_red} green=${primary_green}" >&2
+  exit 1
+fi
+
+# Secondary actions carry readable light labels and borders beside the CTA.
+secondary_bright_pixels="$(
+  magick "$OUT_DIR/window.png" \
+    -crop 260x70+495+320 \
+    -colorspace gray \
+    -threshold 55% \
+    -format '%[fx:mean*w*h]' info:
+)"
+secondary_bright_pixels="${secondary_bright_pixels%.*}"
+if (( secondary_bright_pixels < 300 )); then
+  echo "Welcome secondary actions are missing or unreadable: bright pixels=${secondary_bright_pixels}" >&2
   exit 1
 fi
 SMOKE

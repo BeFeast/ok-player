@@ -414,13 +414,13 @@ pub(crate) fn build_controls(
 }
 
 pub(crate) fn controls_bar(controls: &Controls) -> gtk::Box {
-    let bar = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let bar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     bar.add_css_class("okp-controls");
     bar.set_halign(gtk::Align::Fill);
     bar.set_valign(gtk::Align::End);
-    bar.set_margin_start(18);
-    bar.set_margin_end(18);
-    bar.set_margin_bottom(18);
+    bar.set_margin_start(14);
+    bar.set_margin_end(14);
+    bar.set_margin_bottom(14);
 
     let transport = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     transport.add_css_class("okp-transport-group");
@@ -429,7 +429,7 @@ pub(crate) fn controls_bar(controls: &Controls) -> gtk::Box {
     transport.append(&controls.next_button);
 
     let primary = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    primary.add_css_class("okp-control-group");
+    primary.add_css_class("okp-command-cluster");
     primary.append(&controls.open_button);
     primary.append(&transport);
 
@@ -441,7 +441,7 @@ pub(crate) fn controls_bar(controls: &Controls) -> gtk::Box {
     timeline.append(&controls.duration_label);
 
     let secondary = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-    secondary.add_css_class("okp-control-group");
+    secondary.add_css_class("okp-command-cluster");
     secondary.append(&controls.volume);
     secondary.append(&controls.speed_button);
     secondary.append(&controls.subtitle_button);
@@ -451,8 +451,15 @@ pub(crate) fn controls_bar(controls: &Controls) -> gtk::Box {
     secondary.append(&controls.fullscreen_button);
     secondary.append(&controls.more_button);
 
+    let primary_separator = gtk::Separator::new(gtk::Orientation::Vertical);
+    primary_separator.add_css_class("okp-control-separator");
+    let secondary_separator = gtk::Separator::new(gtk::Orientation::Vertical);
+    secondary_separator.add_css_class("okp-control-separator");
+
     bar.append(&primary);
+    bar.append(&primary_separator);
     bar.append(&timeline);
+    bar.append(&secondary_separator);
     bar.append(&secondary);
 
     bar
