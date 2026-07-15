@@ -1,3 +1,19 @@
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TrailingTimeMode {
+    Total,
+    #[default]
+    Remaining,
+}
+
+impl TrailingTimeMode {
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::Total => Self::Remaining,
+            Self::Remaining => Self::Total,
+        }
+    }
+}
+
 pub fn parse(text: Option<&str>) -> Option<f64> {
     let text = text?.trim();
     if text.is_empty() {
@@ -66,6 +82,22 @@ pub fn format_remaining(position: f64, duration: Option<f64>) -> String {
         0.0
     };
     format!("-{}", format_clock((duration - position).max(0.0)))
+}
+
+/// Format the clickable trailing OSC label in total or remaining mode while
+/// preserving the local-loading versus live-URL sentinel contract.
+pub fn format_trailing(
+    mode: TrailingTimeMode,
+    is_url: bool,
+    position: f64,
+    duration: Option<f64>,
+) -> String {
+    match mode {
+        TrailingTimeMode::Total => crate::network_media::format_duration_total(is_url, duration),
+        TrailingTimeMode::Remaining => {
+            crate::network_media::format_remaining_total(is_url, position, duration)
+        }
+    }
 }
 
 /// Formats seconds as the on-screen clock: zero-padded `MM:SS`, or `HH:MM:SS`
@@ -263,5 +295,26 @@ mod tests {
         assert_eq!(format_remaining(f64::NAN, Some(90.0)), "-01:30");
         assert_eq!(format_remaining(10.0, None), "--:--");
         assert_eq!(format_remaining(10.0, Some(f64::INFINITY)), "--:--");
+    }
+
+    #[test]
+    fn trailing_mode_toggles_total_and_remaining() {
+        let mode = TrailingTimeMode::default();
+        assert_eq!(mode, TrailingTimeMode::Remaining);
+        assert_eq!(mode.toggled(), TrailingTimeMode::Total);
+        assert_eq!(mode.toggled().toggled(), mode);
+
+        assert_eq!(
+            format_trailing(TrailingTimeMode::Remaining, false, 30.0, Some(90.0)),
+            "-01:00"
+        );
+        assert_eq!(
+            format_trailing(TrailingTimeMode::Total, false, 30.0, Some(90.0)),
+            "01:30"
+        );
+        assert_eq!(
+            format_trailing(TrailingTimeMode::Total, true, 30.0, None),
+            "--:--"
+        );
     }
 }

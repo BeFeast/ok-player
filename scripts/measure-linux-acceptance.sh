@@ -86,7 +86,7 @@ if [[ "$width" == "1120" && "$height" == "680" ]]; then
       ok=0; (( bright >= 900 )) && ok=1
       add_measurement left-heading-region-visible 1 "$ok" 0 boolean "$([[ "$ok" == 1 ]] && echo pass || echo fail)"
       ;;
-    loaded-paused-osc|bright-video-background|dark-video-background)
+    loaded-paused-osc|paused|buffered-timeline|chapter-context|bright-video-background|dark-video-background)
       bottom_max="$(magick "$IMAGE" -crop 1088x80+16+582 -colorspace gray -format '%[fx:maxima]' info:)"
       ok=0; awk -v value="$bottom_max" 'BEGIN { exit !(value > 0.45) }' && ok=1
       add_measurement osc-visible-in-canonical-bottom-band 1 "$ok" 0 boolean "$([[ "$ok" == 1 ]] && echo pass || echo fail)"
@@ -98,7 +98,37 @@ if [[ "$width" == "1120" && "$height" == "680" ]]; then
         frame_mean="$(magick "$IMAGE" -crop 700x360+120+100 -colorspace gray -format '%[fx:mean]' info:)"
         ok=0; awk -v value="$frame_mean" 'BEGIN { exit !(value < 0.12) }' && ok=1
         add_measurement dark-frame-visible 1 "$ok" 0 boolean "$([[ "$ok" == 1 ]] && echo pass || echo fail)"
+      elif [[ "$STATE" == "paused" ]]; then
+        cue_max="$(magick "$IMAGE" -crop 140x50+490+300 -colorspace gray -format '%[fx:maxima]' info:)"
+        ok=0; awk -v value="$cue_max" 'BEGIN { exit !(value > 0.45) }' && ok=1
+        add_measurement paused-cue-visible 1 "$ok" 0 boolean "$([[ "$ok" == 1 ]] && echo pass || echo fail)"
+      elif [[ "$STATE" == "buffered-timeline" ]]; then
+        rail_deviation="$(magick "$IMAGE" -crop 300x12+245+632 -colorspace gray -format '%[fx:standard_deviation]' info:)"
+        ok=0; awk -v value="$rail_deviation" 'BEGIN { exit !(value > 0.02) }' && ok=1
+        add_measurement buffered-band-visible 1 "$ok" 0 boolean "$([[ "$ok" == 1 ]] && echo pass || echo fail)"
+      elif [[ "$STATE" == "chapter-context" ]]; then
+        title_max="$(magick "$IMAGE" -crop 460x42+0+0 -colorspace gray -format '%[fx:maxima]' info:)"
+        ok=0; awk -v value="$title_max" 'BEGIN { exit !(value > 0.55) }' && ok=1
+        add_measurement chapter-context-title-visible 1 "$ok" 0 boolean "$([[ "$ok" == 1 ]] && echo pass || echo fail)"
       fi
+      ;;
+    buffering-loading)
+      center_max="$(magick "$IMAGE" -crop 180x100+470+270 -colorspace gray -format '%[fx:maxima]' info:)"
+      ok=0; awk -v value="$center_max" 'BEGIN { exit !(value > 0.45) }' && ok=1
+      add_measurement loading-ring-visible 1 "$ok" 0 boolean "$([[ "$ok" == 1 ]] && echo pass || echo fail)"
+      timeline_deviation="$(magick "$IMAGE" -crop 300x12+245+632 -colorspace gray -format '%[fx:standard_deviation]' info:)"
+      ok=0; awk -v value="$timeline_deviation" 'BEGIN { exit !(value > 0.02) }' && ok=1
+      add_measurement loading-timeline-shimmer-visible 1 "$ok" 0 boolean "$([[ "$ok" == 1 ]] && echo pass || echo fail)"
+      ;;
+    playback-error)
+      card_mean="$(magick "$IMAGE" -crop 360x180+380+240 -colorspace gray -format '%[fx:mean]' info:)"
+      ok=0; awk -v value="$card_mean" 'BEGIN { exit !(value > 0.035 && value < 0.55) }' && ok=1
+      add_measurement in-canvas-error-card-visible 1 "$ok" 0 boolean "$([[ "$ok" == 1 ]] && echo pass || echo fail)"
+      ;;
+    osd)
+      toast_max="$(magick "$IMAGE" -crop 300x60+410+52 -colorspace gray -format '%[fx:maxima]' info:)"
+      ok=0; awk -v value="$toast_max" 'BEGIN { exit !(value > 0.50) }' && ok=1
+      add_measurement top-osd-visible 1 "$ok" 0 boolean "$([[ "$ok" == 1 ]] && echo pass || echo fail)"
       ;;
     playing-idle)
       bottom_max="$(magick "$IMAGE" -crop 1120x96+0+584 -colorspace gray -format '%[fx:maxima]' info:)"

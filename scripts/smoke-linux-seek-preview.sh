@@ -15,7 +15,17 @@ done
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
-if ! xvfb-run -a --server-args='-screen 0 1280x900x24 -nolisten tcp' \
+if [[ -z "${__EGL_VENDOR_LIBRARY_FILENAMES:-}" && -f /usr/share/glvnd/egl_vendor.d/50_mesa.json ]]; then
+  export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json
+fi
+export LIBGL_ALWAYS_SOFTWARE=1
+
+xvfb_args=(-a)
+if [[ -n "${OKP_XVFB_SERVER_NUM:-}" ]]; then
+  xvfb_args=(-n "$OKP_XVFB_SERVER_NUM")
+fi
+
+if ! xvfb-run "${xvfb_args[@]}" --server-args='-screen 0 1280x900x24 -nolisten tcp' \
   dbus-run-session -- bash -s -- "$BINARY" "$OUT_DIR" >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
 set -euo pipefail
 
@@ -27,6 +37,7 @@ export GTK_USE_PORTAL=0
 export NO_AT_BRIDGE=1
 export XDG_SESSION_TYPE=x11
 export XDG_CURRENT_DESKTOP=XFCE
+export OKP_SKIP_UPDATE_CHECK=1
 
 xfwm4 --sm-client-disable >"$OUT_DIR/xfwm4.log" 2>&1 &
 wm_pid=$!
@@ -76,7 +87,7 @@ fi
 # maximum there means the timecode/chapter text drew.
 preview_max="$(
   magick "$OUT_DIR/root.png" \
-    -crop 200x28+262+574 \
+    -crop 138x45+201+583 \
     -colorspace gray \
     -format '%[fx:maxima]' info:
 )"
@@ -89,7 +100,7 @@ fi
 # stay low so a stray opaque rectangle can never masquerade as the tooltip.
 preview_mean="$(
   magick "$OUT_DIR/root.png" \
-    -crop 200x28+262+574 \
+    -crop 138x45+201+583 \
     -colorspace gray \
     -format '%[fx:mean]' info:
 )"

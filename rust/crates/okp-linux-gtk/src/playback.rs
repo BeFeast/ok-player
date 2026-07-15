@@ -53,7 +53,11 @@ pub(crate) fn set_volume_from_ui(state: &Rc<RefCell<PlayerState>>, volume: f64) 
     }
 }
 
-pub(crate) fn adjust_volume(state: &Rc<RefCell<PlayerState>>, delta: f64) {
+pub(crate) fn adjust_volume(
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &StatusToast,
+    delta: f64,
+) {
     let updated_volume = {
         let state = state.borrow();
         let Some(mpv) = state.mpv.as_ref() else {
@@ -69,6 +73,7 @@ pub(crate) fn adjust_volume(state: &Rc<RefCell<PlayerState>>, delta: f64) {
     };
 
     save_volume_setting(state, updated_volume);
+    status_toast.show(&format!("Volume {}%", updated_volume.round() as i64));
 }
 
 pub(crate) fn save_volume_setting(state: &Rc<RefCell<PlayerState>>, volume: f64) {

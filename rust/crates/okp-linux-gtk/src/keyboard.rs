@@ -92,11 +92,11 @@ pub(crate) fn connect_keyboard(
                 glib::Propagation::Stop
             }
             Some(ShortcutAction::VolumeDown) => {
-                adjust_volume(&state, -5.0);
+                adjust_volume(&state, &status_toast, -5.0);
                 glib::Propagation::Stop
             }
             Some(ShortcutAction::VolumeUp) => {
-                adjust_volume(&state, 5.0);
+                adjust_volume(&state, &status_toast, 5.0);
                 glib::Propagation::Stop
             }
             Some(ShortcutAction::OpenFile) => {

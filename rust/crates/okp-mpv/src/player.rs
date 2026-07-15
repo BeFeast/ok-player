@@ -46,6 +46,9 @@ pub struct PlaybackState {
     pub paused: bool,
     pub volume: Option<f64>,
     pub speed: Option<f64>,
+    /// Seconds currently cached ahead of the playhead. Observed by the event
+    /// pump so shells can render a buffered timeline without a UI-thread read.
+    pub cache_duration: Option<f64>,
     /// Container frame rate, present only for video with a declared FPS. Feeds
     /// the transient seek/frame-step readout (PRD P4-N4); `None` for audio-only
     /// or frame-rate-less sources, which then show a timecode without a frame.
@@ -245,6 +248,9 @@ impl RawReader {
             paused: self.get_flag("pause")?.unwrap_or(false),
             volume: self.get_double("volume")?,
             speed: self.get_double("speed")?,
+            cache_duration: self
+                .get_double("demuxer-cache-duration")?
+                .filter(|value| value.is_finite() && *value >= 0.0),
             container_fps: self
                 .get_double("container-fps")?
                 .filter(|fps| fps.is_finite() && *fps > 0.0),

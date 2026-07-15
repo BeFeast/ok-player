@@ -24,12 +24,12 @@ issue #250; the comparison accounts for the shared titlebar and OSC only.
 | Title inset | 14px | 14px with 13px media glyph and 12.5px title |
 | Top motion | 180ms, -10px | 180ms opacity and -10px translate |
 | OSC inset | 16px sides, 18px bottom | 16px sides, 18px bottom |
-| OSC interior | 18x11px padding, 18px radius, 16px gaps | Exact values |
-| Targets | 34x34px | 34x34px |
+| OSC interior | Compact playback family | 14x7px padding, 14px radius, 16px gaps (updated by #265) |
+| Targets | Compact primary targets | 32x32px (updated by #265) |
 | Glyphs | Play 22px; prev/next 17px; utility 19px | Exact optical sizes via symbolic icons |
 | Time | 12.5px, tabular, 54/62px | Exact values; trailing readout is remaining time |
 | Timeline | 4px rail, 12px thumb, at least 20px hit area | 4px rail, 12px thumb, 20px minimum height |
-| Material | `#C8161619`, `#24FFFFFF` top hairline | `rgba(22,22,25,.78)`, 14% white top hairline |
+| Material | Locked over-video material | `rgba(22,22,25,.50)` plus localized scrim and 12% hairline (#265 GTK blur fallback) |
 | Depth | Soft overlay shadow, 220px bottom scrim | 0 14 40 / 40% shadow, 220px scrim |
 | Accent | Fixed `#28B3AA` over video | Fixed `#28B3AA` seek/volume fill |
 | Hide motion | 180ms opacity, 200ms +16px | Exact values |

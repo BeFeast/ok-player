@@ -2,6 +2,7 @@ use std::env;
 use std::process::Command;
 
 fn main() {
+    println!("cargo:rustc-link-lib=X11");
     println!("cargo:rerun-if-env-changed=OKP_BUILD_VERSION");
     println!("cargo:rerun-if-changed=../../../.git/HEAD");
     println!("cargo:rerun-if-changed=../../../.git/refs/heads/main");

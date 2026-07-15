@@ -108,12 +108,49 @@ pub(crate) fn build_controls(
     let duration_label = gtk::Label::new(Some("-00:00"));
     duration_label.add_css_class("okp-time-label");
     duration_label.add_css_class("okp-remaining-time");
+    duration_label.set_tooltip_text(Some("Show total time"));
+    duration_label.set_can_target(true);
+    let trailing_time_mode = Rc::new(Cell::new(time_code::TrailingTimeMode::Remaining));
+    let time_click = gtk::GestureClick::new();
+    time_click.set_button(gdk::BUTTON_PRIMARY);
+    let time_mode = Rc::clone(&trailing_time_mode);
+    let time_label = duration_label.clone();
+    time_click.connect_released(move |_, press_count, _, _| {
+        if press_count != 1 {
+            return;
+        }
+        let mode = time_mode.get().toggled();
+        time_mode.set(mode);
+        if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+            eprintln!("interaction: time-label={mode:?}");
+        }
+        time_label.set_tooltip_text(Some(match mode {
+            time_code::TrailingTimeMode::Total => "Show remaining time",
+            time_code::TrailingTimeMode::Remaining => "Show total time",
+        }));
+    });
+    duration_label.add_controller(time_click);
 
     let seek = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 1.0);
     seek.set_draw_value(false);
     seek.set_hexpand(true);
     seek.set_sensitive(false);
     seek.add_css_class("okp-seek");
+
+    let buffered_progress = gtk::ProgressBar::new();
+    buffered_progress.add_css_class("okp-buffered-progress");
+    buffered_progress.set_fraction(0.0);
+    buffered_progress.set_size_request(120, 4);
+    buffered_progress.set_halign(gtk::Align::Fill);
+    buffered_progress.set_valign(gtk::Align::Center);
+    buffered_progress.set_hexpand(true);
+    buffered_progress.set_can_target(false);
+
+    let timeline = gtk::Overlay::new();
+    timeline.add_css_class("okp-timeline");
+    timeline.set_hexpand(true);
+    timeline.set_child(Some(&buffered_progress));
+    timeline.add_overlay(&seek);
 
     let volume = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 130.0, 1.0);
     volume.set_draw_value(false);
@@ -157,7 +194,11 @@ pub(crate) fn build_controls(
     up_next_panel.append(&up_next_scroller);
 
     let side_panel_fade_revealer = gtk::Revealer::new();
-    side_panel_fade_revealer.set_transition_duration(SIDE_PANEL_TRANSITION_MS);
+    side_panel_fade_revealer.set_transition_duration(if playback_animations_enabled() {
+        SIDE_PANEL_TRANSITION_MS
+    } else {
+        0
+    });
     side_panel_fade_revealer.set_transition_type(gtk::RevealerTransitionType::Crossfade);
     side_panel_fade_revealer.set_reveal_child(false);
     side_panel_fade_revealer.set_child(Some(&up_next_panel));
@@ -168,7 +209,11 @@ pub(crate) fn build_controls(
     up_next_revealer.set_margin_top(SIDE_PANEL_TOP_INSET);
     up_next_revealer.set_margin_end(0);
     up_next_revealer.set_margin_bottom(SIDE_PANEL_BOTTOM_INSET);
-    up_next_revealer.set_transition_duration(SIDE_PANEL_TRANSITION_MS);
+    up_next_revealer.set_transition_duration(if playback_animations_enabled() {
+        SIDE_PANEL_TRANSITION_MS
+    } else {
+        0
+    });
     up_next_revealer.set_transition_type(gtk::RevealerTransitionType::SlideRight);
     up_next_revealer.set_reveal_child(false);
     up_next_revealer.set_can_target(false);
@@ -404,9 +449,12 @@ pub(crate) fn build_controls(
         screenshot_button,
         fullscreen_button,
         more_button,
+        timeline,
         seek,
+        buffered_progress,
         elapsed_label,
         duration_label,
+        trailing_time_mode,
         volume,
         status_toast,
         timeline_marks_snapshot: RefCell::new(Vec::new()),
@@ -448,7 +496,7 @@ pub(crate) fn controls_bar(controls: &Controls) -> gtk::Overlay {
     bar.append(&controls.previous_button);
     bar.append(&controls.next_button);
     bar.append(&controls.elapsed_label);
-    bar.append(&controls.seek);
+    bar.append(&controls.timeline);
     bar.append(&controls.duration_label);
     bar.append(&volume_group);
     bar.append(&controls.speed_button);
