@@ -622,7 +622,7 @@ pub(crate) fn show_video_context_menu(
     y: f64,
 ) {
     let popover = gtk::Popover::new();
-    prepare_track_popover(&popover);
+    prepare_track_popover(&popover, PlayerPopoverKind::AdvancedCommands);
     popover.set_parent(video_area);
     popover.set_pointing_to(Some(&gdk::Rectangle::new(
         x.round() as i32,
@@ -630,8 +630,8 @@ pub(crate) fn show_video_context_menu(
         1,
         1,
     )));
-    let content = command_popover_content(&popover, parent, state, status_toast);
-    set_track_popover_child(&popover, content);
+    let content = advanced_command_popover_content(&popover, parent, state, status_toast);
+    set_track_popover_child(&popover, PlayerPopoverKind::AdvancedCommands, content);
     popover.connect_closed(|popover| popover.unparent());
     popover.popup();
 }

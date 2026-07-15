@@ -901,28 +901,29 @@ pub(crate) fn build_controls(
     });
 
     let subtitle_popover = gtk::Popover::new();
-    prepare_track_popover(&subtitle_popover);
+    prepare_track_popover(&subtitle_popover, PlayerPopoverKind::Subtitles);
     connect_popover_chrome_pin(&subtitle_popover, Rc::clone(&chrome));
+    connect_popover_focus_return(&subtitle_popover, &subtitle_button);
     subtitle_button.set_popover(Some(&subtitle_popover));
-    let subtitle_parent = window.clone();
     let subtitle_state = Rc::clone(&state);
     subtitle_popover.connect_show(move |popover| {
-        populate_subtitle_popover(popover, &subtitle_parent, Rc::clone(&subtitle_state));
+        populate_subtitle_popover(popover, Rc::clone(&subtitle_state));
     });
 
     let audio_popover = gtk::Popover::new();
-    prepare_track_popover(&audio_popover);
+    prepare_track_popover(&audio_popover, PlayerPopoverKind::Audio);
     connect_popover_chrome_pin(&audio_popover, Rc::clone(&chrome));
+    connect_popover_focus_return(&audio_popover, &audio_button);
     audio_button.set_popover(Some(&audio_popover));
     let audio_state = Rc::clone(&state);
-    let audio_toast = Rc::clone(&status_toast);
     audio_popover.connect_show(move |popover| {
-        populate_audio_popover(popover, Rc::clone(&audio_state), Rc::clone(&audio_toast));
+        populate_audio_popover(popover, Rc::clone(&audio_state));
     });
 
     let speed_popover = gtk::Popover::new();
-    prepare_track_popover(&speed_popover);
+    prepare_track_popover(&speed_popover, PlayerPopoverKind::Speed);
     connect_popover_chrome_pin(&speed_popover, Rc::clone(&chrome));
+    connect_popover_focus_return(&speed_popover, &speed_button);
     speed_button.set_popover(Some(&speed_popover));
     let speed_state = Rc::clone(&state);
     speed_popover.connect_show(move |popover| {
@@ -930,8 +931,9 @@ pub(crate) fn build_controls(
     });
 
     let more_popover = gtk::Popover::new();
-    prepare_track_popover(&more_popover);
+    prepare_track_popover(&more_popover, PlayerPopoverKind::More);
     connect_popover_chrome_pin(&more_popover, Rc::clone(&chrome));
+    connect_popover_focus_return(&more_popover, &more_button);
     more_button.set_popover(Some(&more_popover));
     let more_parent = window.clone();
     let more_state = Rc::clone(&state);
@@ -1120,9 +1122,18 @@ pub(crate) fn connect_popover_chrome_pin(popover: &gtk::Popover, chrome: Rc<Chro
     });
 }
 
-pub(crate) fn prepare_track_popover(popover: &gtk::Popover) {
+pub(crate) fn prepare_track_popover(popover: &gtk::Popover, kind: PlayerPopoverKind) {
     popover.add_css_class("okp-track-popover");
+    popover.add_css_class(kind.css_class());
     popover.set_has_arrow(false);
+    popover.set_position(gtk::PositionType::Top);
+}
+
+pub(crate) fn connect_popover_focus_return(popover: &gtk::Popover, source: &gtk::MenuButton) {
+    let source = source.clone();
+    popover.connect_closed(move |_| {
+        source.grab_focus();
+    });
 }
 
 pub(crate) fn side_panel_segment_button(label: &str, selected: bool) -> gtk::Button {
