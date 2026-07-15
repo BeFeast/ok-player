@@ -39,6 +39,7 @@ const OBSERVED_PROPERTIES: &[&str] = &[
     "pause",
     "volume",
     "speed",
+    "demuxer-cache-duration",
     // Container frame rate for the seek/frame-step readout; changes on load.
     "container-fps",
     // Subtitle state surfaced in the subtitle popover / saved preferences.

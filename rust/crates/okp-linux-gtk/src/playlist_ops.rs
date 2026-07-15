@@ -4,28 +4,22 @@ use super::*;
 
 /// Record a network-source load failure: transition the transport-surface model to
 /// `Failed`, remember the URL for Retry, and store the short copyable reason. The
-/// failure dialog is re-armed (`load_failure_presented = false`) so it pops once for
-/// this failure.
+/// the in-canvas failure card can offer Retry and Copy details.
 pub(crate) fn set_load_failure(state: &Rc<RefCell<PlayerState>>, url: String, reason: String) {
     let mut state = state.borrow_mut();
     state.media_load_state = network_media::MediaLoadState::Failed;
     state.last_load_url = Some(url);
     state.last_load_error = Some(reason);
-    state.load_failure_presented = false;
 }
 
-/// Record a local-file load failure. The Retry / Open another actions are URL-only, so a
-/// local failure only transitions the surface (the overlay line) without arming the
-/// URL failure dialog — `last_load_url` is cleared so a *previous* URL's stale value
-/// can't arm the URL failure dialog for this local failure (a URL loaded earlier would
-/// otherwise be retried / reopened from a local-file error), and [`pending_load_failure`]
-/// never fires for it.
+/// Record a local-file load failure. Retry is URL-only, so `last_load_url` is
+/// cleared and the in-canvas card cannot replay a stale stream after a later
+/// local-file error.
 pub(crate) fn set_local_load_failure(state: &Rc<RefCell<PlayerState>>, reason: String) {
     let mut state = state.borrow_mut();
     state.media_load_state = network_media::MediaLoadState::Failed;
     state.last_load_url = None;
     state.last_load_error = Some(reason);
-    state.load_failure_presented = false;
 }
 
 /// Apply an `EndFile::Error` the engine fired asynchronously (a load command returned
@@ -59,7 +53,6 @@ pub(crate) fn apply_endfile_error(
     let mut state = state.borrow_mut();
     state.media_load_state = network_media::MediaLoadState::Failed;
     state.last_load_error = Some(format!("libmpv error {error}"));
-    state.load_failure_presented = false;
 }
 
 pub(crate) fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
@@ -83,7 +76,6 @@ pub(crate) fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
     state.media_load_state = network_media::MediaLoadState::Idle;
     state.last_load_url = None;
     state.last_load_error = None;
-    state.load_failure_presented = false;
 }
 
 pub(crate) fn load_media_path(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
@@ -230,7 +222,6 @@ pub(crate) fn remember_loaded_media_with_playlist(
     state.media_load_state = network_media::MediaLoadState::Loading;
     state.last_load_url = None;
     state.last_load_error = None;
-    state.load_failure_presented = false;
 }
 
 pub(crate) fn remember_loaded_url(state: &Rc<RefCell<PlayerState>>, url: String) {
@@ -313,7 +304,6 @@ pub(crate) fn remember_loaded_url_with_playlist(
     state.media_load_state = network_media::MediaLoadState::Loading;
     state.last_load_url = state.current_url.clone();
     state.last_load_error = None;
-    state.load_failure_presented = false;
 }
 
 pub(crate) fn load_playlist_item_with_playlist(

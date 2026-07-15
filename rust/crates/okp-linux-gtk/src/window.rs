@@ -131,6 +131,9 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
 
     let overlay = gtk::Overlay::new();
     overlay.add_css_class("okp-root");
+    if !playback_animations_enabled() {
+        overlay.add_css_class("is-reduced-motion");
+    }
 
     let video_area = gtk::GLArea::new();
     video_area.set_hexpand(true);
@@ -148,11 +151,12 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         Rc::clone(&chrome),
     );
     let control_bar = controls_bar(&controls);
-    let window_chrome = build_player_window_chrome(&window);
+    let window_chrome = build_player_window_chrome(&window, Rc::clone(&status_toast));
     sync_player_window_chrome_fullscreen(&window_chrome, &window);
     let empty_surface = build_empty_surface(&window, Rc::clone(&state), Rc::clone(&status_toast));
     let lyrics_surface = build_lyrics_surface();
-    let media_state_overlay = MediaStateOverlay::new();
+    let media_state_overlay =
+        MediaStateOverlay::new(&window, Rc::clone(&state), Rc::clone(&status_toast));
     chrome.set_child(&control_bar);
     chrome.add_linked_motion_widget(window_chrome.widget());
     chrome.add_linked_revealer(&controls.up_next_revealer);
@@ -183,13 +187,12 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         overlay.set_measure_overlay(&preview, true);
     }
     overlay.add_overlay(empty_surface.widget());
-    // The loading / buffering / error overlay sits just above the empty surface and
-    // lyrics — below the chrome and toast — so the transport stays on top while a
-    // stream's loading or failure status reads over the black video plane.
-    overlay.add_overlay(media_state_overlay.widget());
     // The lyrics surface sits above the (audio-black) video plane but below the window chrome, the
     // OSC, and the side panel, so those stay on top and interactive while lyrics play underneath.
     overlay.add_overlay(lyrics_surface.widget());
+    // Playback state sits above video/lyrics but below chrome and toasts. Only
+    // the non-modal error card captures input; paused/loading leave the canvas usable.
+    overlay.add_overlay(media_state_overlay.widget());
     overlay.add_overlay(window_chrome.widget());
     overlay.add_overlay(chrome.widget());
     overlay.add_overlay(&controls.up_next_revealer);
@@ -265,6 +268,9 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     // and chapter so the timeline tooltip's timecode-only fallback can be screenshot-
     // tested without loaded media or a generated thumbnail.
     if env::var_os("OKP_OPEN_SEEK_PREVIEW_ON_STARTUP").is_some() {
+        empty_surface.set_preview_substrate(false);
+        chrome.set_has_media(true);
+        chrome.show_persistently();
         open_seek_preview(&controls);
     }
     connect_state_poll(
@@ -286,6 +292,12 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     );
 
     window.present();
+    if env::var_os("OKP_OSD_PREVIEW_ON_STARTUP").is_some() {
+        let preview_toast = Rc::clone(&status_toast);
+        glib::timeout_add_local_once(Duration::from_millis(500), move || {
+            preview_toast.show("Volume 72%");
+        });
+    }
     if env::var_os("OKP_OPEN_HISTORY_ON_STARTUP").is_some() {
         let history_surface = empty_surface.clone();
         let history_parent = window.clone();
@@ -363,7 +375,10 @@ impl PlayerWindowChrome {
     }
 }
 
-pub(crate) fn build_player_window_chrome(window: &gtk::ApplicationWindow) -> PlayerWindowChrome {
+pub(crate) fn build_player_window_chrome(
+    window: &gtk::ApplicationWindow,
+    status_toast: Rc<StatusToast>,
+) -> PlayerWindowChrome {
     let revealer = gtk::Revealer::new();
     revealer.add_css_class("okp-top-chrome-motion");
     revealer.set_halign(gtk::Align::Fill);
@@ -402,6 +417,33 @@ pub(crate) fn build_player_window_chrome(window: &gtk::ApplicationWindow) -> Pla
     controls.add_css_class("okp-player-window-controls");
     controls.set_halign(gtk::Align::End);
 
+    let pin = gtk::Button::from_icon_name("view-pin-symbolic");
+    pin.add_css_class("okp-player-window-control");
+    pin.add_css_class("okp-player-window-pin");
+    pin.set_has_frame(false);
+    pin.set_tooltip_text(Some("Always on top"));
+    let pin_window = window.clone();
+    let pin_button = pin.clone();
+    let pin_toast = Rc::clone(&status_toast);
+    let pinned = Rc::new(Cell::new(false));
+    let pin_state = Rc::clone(&pinned);
+    pin.connect_clicked(move |_| {
+        let enabled = !pin_state.get();
+        if set_window_always_on_top(&pin_window, enabled) {
+            pin_state.set(enabled);
+            if enabled {
+                pin_button.add_css_class("is-selected");
+                pin_button.set_tooltip_text(Some("Disable always on top"));
+            } else {
+                pin_button.remove_css_class("is-selected");
+                pin_button.set_tooltip_text(Some("Always on top"));
+            }
+        } else {
+            pin_toast.show("Always on top is unavailable on this desktop");
+        }
+    });
+    controls.append(&pin);
+
     let minimize = player_window_control(WindowControlKind::Minimize, "Minimize");
     let minimize_window = window.clone();
     minimize.connect_clicked(move |_| minimize_window.minimize());
@@ -437,6 +479,106 @@ pub(crate) fn build_player_window_chrome(window: &gtk::ApplicationWindow) -> Pla
         revealer,
         media_icon,
         title_label,
+    }
+}
+
+#[repr(C)]
+struct XDisplay {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+union XClientMessageData {
+    longs: [libc::c_long; 5],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct XClientMessageEvent {
+    type_: libc::c_int,
+    serial: libc::c_ulong,
+    send_event: libc::c_int,
+    display: *mut XDisplay,
+    window: libc::c_ulong,
+    message_type: libc::c_ulong,
+    format: libc::c_int,
+    data: XClientMessageData,
+}
+
+#[repr(C)]
+union XEvent {
+    client_message: XClientMessageEvent,
+    pad: [libc::c_long; 24],
+}
+
+unsafe extern "C" {
+    fn gdk_x11_display_get_xdisplay(display: *mut gtk::gdk::ffi::GdkDisplay) -> *mut XDisplay;
+    fn gdk_x11_surface_get_xid(surface: *mut gtk::gdk::ffi::GdkSurface) -> libc::c_ulong;
+    fn XDefaultRootWindow(display: *mut XDisplay) -> libc::c_ulong;
+    fn XInternAtom(
+        display: *mut XDisplay,
+        atom_name: *const libc::c_char,
+        only_if_exists: libc::c_int,
+    ) -> libc::c_ulong;
+    fn XSendEvent(
+        display: *mut XDisplay,
+        window: libc::c_ulong,
+        propagate: libc::c_int,
+        event_mask: libc::c_long,
+        event: *mut XEvent,
+    ) -> libc::c_int;
+    fn XFlush(display: *mut XDisplay) -> libc::c_int;
+}
+
+/// Ask an EWMH X11 window manager to add/remove `_NET_WM_STATE_ABOVE`.
+/// Wayland intentionally returns false: GTK exposes no portable protocol for
+/// clients to force this state, and modal/transient flags are not substitutes.
+pub(crate) fn set_window_always_on_top(window: &gtk::ApplicationWindow, enabled: bool) -> bool {
+    use gtk::glib::translate::ToGlibPtr;
+
+    let Some(display) = gdk::Display::default() else {
+        return false;
+    };
+    if display.type_().name() != "GdkX11Display" {
+        return false;
+    }
+    let Some(surface) = window.surface() else {
+        return false;
+    };
+
+    let state_name = c"_NET_WM_STATE";
+    let above_name = c"_NET_WM_STATE_ABOVE";
+    unsafe {
+        let xdisplay = gdk_x11_display_get_xdisplay(display.to_glib_none().0);
+        if xdisplay.is_null() {
+            return false;
+        }
+        let xid = gdk_x11_surface_get_xid(surface.to_glib_none().0);
+        let message_type = XInternAtom(xdisplay, state_name.as_ptr(), 0);
+        let above = XInternAtom(xdisplay, above_name.as_ptr(), 0);
+        if xid == 0 || message_type == 0 || above == 0 {
+            return false;
+        }
+
+        let client_message = XClientMessageEvent {
+            type_: 33,
+            serial: 0,
+            send_event: 1,
+            display: xdisplay,
+            window: xid,
+            message_type,
+            format: 32,
+            data: XClientMessageData {
+                longs: [if enabled { 1 } else { 0 }, above as libc::c_long, 0, 1, 0],
+            },
+        };
+        let mut event = XEvent { client_message };
+        let root = XDefaultRootWindow(xdisplay);
+        let mask = (1 << 20) | (1 << 19);
+        let sent = XSendEvent(xdisplay, root, 0, mask, &mut event);
+        XFlush(xdisplay);
+        sent != 0
     }
 }
 
@@ -695,10 +837,7 @@ pub(crate) fn build_empty_surface(
     stack.add_css_class("okp-idle-stack");
     stack.set_hexpand(true);
     stack.set_vexpand(true);
-    let animations_enabled = env::var_os("OKP_REDUCED_MOTION").is_none()
-        && gtk::Settings::default()
-            .map(|settings| settings.property::<bool>("gtk-enable-animations"))
-            .unwrap_or(true);
+    let animations_enabled = playback_animations_enabled();
     stack.set_transition_type(if animations_enabled {
         gtk::StackTransitionType::Crossfade
     } else {
@@ -764,6 +903,13 @@ pub(crate) fn build_empty_surface(
     });
     surface.refresh(window, &state, Rc::clone(&status_toast));
     surface
+}
+
+pub(crate) fn playback_animations_enabled() -> bool {
+    env::var_os("OKP_REDUCED_MOTION").is_none()
+        && gtk::Settings::default()
+            .map(|settings| settings.property::<bool>("gtk-enable-animations"))
+            .unwrap_or(true)
 }
 
 fn idle_theme_is_dark() -> bool {

@@ -295,15 +295,16 @@ pub(crate) fn connect_state_poll(
             .as_ref()
             .map(|mpv| mpv.observed_playback_state());
         let has_media = has_loaded_media(&state);
+        let seek_preview = env::var_os("OKP_OPEN_SEEK_PREVIEW_ON_STARTUP").is_some();
         let has_chapters = state
             .borrow()
             .mpv
             .as_ref()
             .is_some_and(|mpv| !mpv.observed_chapters().is_empty());
-        chrome.set_has_media(has_media);
+        chrome.set_has_media(has_media || seek_preview);
         let media_title = if has_media {
             let state = state.borrow();
-            state
+            let base = state
                 .mpv
                 .as_ref()
                 .and_then(Mpv::observed_media_info)
@@ -321,7 +322,23 @@ pub(crate) fn connect_state_poll(
                         .as_ref()
                         .map(|url| PlaylistItem::Url(url.clone()).display_name())
                 })
-                .unwrap_or_default()
+                .unwrap_or_default();
+            let chapter = playback
+                .and_then(|playback| playback.time_pos)
+                .and_then(|position| {
+                    let times = state
+                        .chapters_snapshot
+                        .iter()
+                        .map(|chapter| chapter.time)
+                        .collect::<Vec<_>>();
+                    chapter_math::current_index(&times, position, chapter_math::DEFAULT_EPSILON)
+                        .and_then(|index| state.chapters_snapshot.get(index))
+                })
+                .and_then(|chapter| chapter.title.as_deref())
+                .filter(|title| !title.trim().is_empty());
+            chapter
+                .map(|chapter| format!("{base} · {chapter}"))
+                .unwrap_or(base)
         } else {
             String::new()
         };
@@ -358,14 +375,27 @@ pub(crate) fn connect_state_poll(
         // Hide the welcome surface behind an active lyrics preview so the fixture reads cleanly;
         // in production the loaded audio already hides it (`is_preview_frozen` stays false).
         empty_surface.refresh(&window, &state, Rc::clone(&status_toast));
-        empty_surface.set_has_media(has_media || lyrics_surface.is_preview_frozen());
+        let failed = state.borrow().media_load_state == network_media::MediaLoadState::Failed;
+        empty_surface.set_has_media(
+            has_media
+                || failed
+                || env::var_os("OKP_PLAYBACK_STATE_PREVIEW").is_some()
+                || lyrics_surface.is_preview_frozen(),
+        );
         lyrics_surface.update(&state);
         drain_thumbnail_events(&controls);
         update_up_next_panel(&controls, &state, &chrome);
 
         if let Some(playback) = playback {
             try_pending_subtitles(&state);
-            chrome.set_auto_hide_enabled(has_media && !playback.paused);
+            let load_state = state.borrow().media_load_state;
+            let preview_state = env::var("OKP_PLAYBACK_STATE_PREVIEW").ok();
+            chrome.set_auto_hide_enabled(
+                has_media
+                    && load_state == network_media::MediaLoadState::Playing
+                    && preview_state.is_none()
+                    && !playback.paused,
+            );
 
             let duration = playback.duration.unwrap_or(0.0).max(0.0);
             let raw_time = playback.time_pos.unwrap_or(0.0).max(0.0);
@@ -408,6 +438,25 @@ pub(crate) fn connect_state_poll(
             controls.seek.set_value(time_pos);
             updating_seek.set(false);
 
+            if load_state == network_media::MediaLoadState::Loading
+                || preview_state.as_deref() == Some("loading")
+            {
+                controls.buffered_progress.add_css_class("is-loading");
+                controls.buffered_progress.pulse();
+            } else {
+                controls.buffered_progress.remove_css_class("is-loading");
+                let fraction = if env::var_os("OKP_BUFFERED_TIMELINE_PREVIEW").is_some() {
+                    0.72
+                } else {
+                    timeline_buffer::fraction(
+                        playback.time_pos,
+                        playback.cache_duration,
+                        playback.duration,
+                    )
+                };
+                controls.buffered_progress.set_fraction(fraction);
+            }
+
             if let Some(volume) = playback.volume {
                 updating_volume.set(true);
                 controls.volume.set_value(volume.clamp(0.0, 130.0));
@@ -425,7 +474,8 @@ pub(crate) fn connect_state_poll(
             let is_url = state.borrow().current_url.is_some();
             controls
                 .duration_label
-                .set_text(&network_media::format_remaining_total(
+                .set_text(&time_code::format_trailing(
+                    controls.trailing_time_mode.get(),
                     is_url,
                     time_pos,
                     playback.duration,
@@ -452,65 +502,37 @@ pub(crate) fn connect_state_poll(
             controls.seek.set_range(0.0, 1.0);
             controls.seek.set_value(0.0);
             updating_seek.set(false);
+            controls.buffered_progress.set_fraction(0.0);
+            controls.buffered_progress.remove_css_class("is-loading");
             controls.elapsed_label.set_text("00:00");
             controls.duration_label.set_text("-00:00");
         }
 
-        // Project the shared load-state model onto the loading / error surface and pop the
-        // failure dialog once per failure. The pure model lives in `okp_core::network_media`;
-        // this only renders it so the shell never owns the state machine.
-        update_media_state_surface(&state, &media_state_overlay);
-        if let Some((url, reason)) = pending_load_failure(&state) {
-            open_load_failure_dialog(
-                &window,
-                Rc::clone(&state),
-                Rc::clone(&status_toast),
-                url,
-                reason,
-            );
-        }
+        update_media_state_surface(&state, playback, has_media, &media_state_overlay);
 
         glib::ControlFlow::Continue
     });
 }
 
-/// Reveal the loading / buffering / error overlay for the current [`MediaLoadState`].
-/// `Loading` shows a buffering line over the black video plane; `Failed` shows the
-/// short failure line; `Idle` and `Playing` hide it (nothing loaded, or a frame is
-/// up and the video speaks for itself). The text never duplicates raw internal
-/// logs — the failure detail is kept for the Copy details action in the dialog.
-fn update_media_state_surface(state: &Rc<RefCell<PlayerState>>, overlay: &MediaStateOverlay) {
-    let (load_state, has_media) = {
+/// Project the shared load state and observed pause flag onto the in-canvas
+/// paused, loading, and recovery surfaces. Raw engine detail stays behind the
+/// error card's explicit Copy details action.
+fn update_media_state_surface(
+    state: &Rc<RefCell<PlayerState>>,
+    playback: Option<PlaybackState>,
+    has_media: bool,
+    overlay: &MediaStateOverlay,
+) {
+    let (load_state, can_retry) = {
         let state = state.borrow();
-        (state.media_load_state, has_loaded_media_state(&state))
+        (state.media_load_state, state.last_load_url.is_some())
     };
-    // The overlay reads over the (black) video plane, so it only shows when a source is
-    // actually loaded — an immediate load error (nothing ever loaded) is handled by
-    // the failure dialog alone, not a status line over the welcome surface.
-    let text = match load_state {
-        network_media::MediaLoadState::Loading if has_media => Some("Loading stream..."),
-        network_media::MediaLoadState::Failed if has_media => Some("Couldn't open stream"),
-        _ => None,
-    };
-    overlay.set_status(text);
-}
-
-/// If a URL load has failed and its failure dialog has not yet been shown, mark it
-/// shown and return the URL plus the short reason for the dialog to render. Returns
-/// `None` for an Idle / Loading / Playing state, or a local-file failure (the
-/// Retry/Open another actions are URL-only per the issue), so the dialog only pops
-/// for a failed network source.
-pub(crate) fn pending_load_failure(state: &Rc<RefCell<PlayerState>>) -> Option<(String, String)> {
-    let mut state = state.borrow_mut();
-    if state.media_load_state != network_media::MediaLoadState::Failed
-        || state.load_failure_presented
-    {
-        return None;
-    }
-    let url = state.last_load_url.clone()?;
-    let reason = state.last_load_error.clone().unwrap_or_default();
-    state.load_failure_presented = true;
-    Some((url, reason))
+    overlay.update(
+        load_state,
+        has_media,
+        playback.is_some_and(|playback| playback.paused),
+        can_retry,
+    );
 }
 
 pub(crate) fn connect_video_clicks(
@@ -520,12 +542,54 @@ pub(crate) fn connect_video_clicks(
     status_toast: Rc<StatusToast>,
 ) {
     let click = gtk::GestureClick::new();
-    click.set_button(1);
+    click.set_button(gdk::BUTTON_PRIMARY);
 
     let click_window = window.clone();
+    let click_state = Rc::clone(&state);
+    let pending_single_click = Rc::new(RefCell::new(None::<glib::SourceId>));
+    let pending_click = Rc::clone(&pending_single_click);
     click.connect_released(move |_, press_count, _, _| {
-        if press_count == 2 {
-            toggle_fullscreen(&click_window);
+        match video_click::release_intent(press_count) {
+            video_click::Intent::Ignore => {}
+            video_click::Intent::SchedulePlayPause => {
+                if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+                    eprintln!("interaction: video-single-click-scheduled");
+                }
+                if let Some(source_id) = pending_click.borrow_mut().take() {
+                    source_id.remove();
+                }
+                let delay_ms = gtk::Settings::default()
+                    .map(|settings| settings.property::<i32>("gtk-double-click-time").max(1) as u32)
+                    .unwrap_or(250);
+                let delayed_state = Rc::clone(&click_state);
+                let delayed_pending = Rc::clone(&pending_click);
+                let source_id = glib::timeout_add_local(
+                    Duration::from_millis(u64::from(delay_ms)),
+                    move || {
+                        delayed_pending.borrow_mut().take();
+                        if has_loaded_media(&delayed_state)
+                            && let Some(mpv) = delayed_state.borrow().mpv.as_ref()
+                            && let Err(error) = mpv.cycle_pause()
+                        {
+                            eprintln!("Failed to toggle playback: {error}");
+                        }
+                        if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+                            eprintln!("interaction: video-single-click-committed");
+                        }
+                        glib::ControlFlow::Break
+                    },
+                );
+                pending_click.borrow_mut().replace(source_id);
+            }
+            video_click::Intent::CancelPlayPauseAndToggleFullscreen => {
+                if let Some(source_id) = pending_click.borrow_mut().take() {
+                    source_id.remove();
+                }
+                if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+                    eprintln!("interaction: video-double-click-fullscreen");
+                }
+                toggle_fullscreen(&click_window);
+            }
         }
     });
 

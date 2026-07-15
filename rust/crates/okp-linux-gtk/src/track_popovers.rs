@@ -1258,7 +1258,6 @@ pub(crate) fn drain_mpv_events(state: &Rc<RefCell<PlayerState>>, status_toast: &
                 let mut state = state.borrow_mut();
                 state.media_load_state = network_media::MediaLoadState::Playing;
                 state.last_load_error = None;
-                state.load_failure_presented = false;
             }
             MpvEvent::EndFile { reason, .. } if reason.is_eof() => {
                 if state.borrow().playlist.repeat() != RepeatMode::One {
@@ -1272,8 +1271,8 @@ pub(crate) fn drain_mpv_events(state: &Rc<RefCell<PlayerState>>, status_toast: &
             } => {
                 // The engine rejected the source (e.g. a 404 stream). Transition the
                 // transport surface to `Failed` and store the short reason for the Copy
-                // details action; the URL failure dialog pops once from the poll. A
-                // local-file error is surfaced too, but its dialog is URL-only. The
+                // details action on the in-canvas card. A local-file error is surfaced
+                // too, with URL Retry disabled. The
                 // staleness guard (drop an error whose source was superseded) lives in
                 // `apply_endfile_error` so it is unit-testable without an engine.
                 apply_endfile_error(state, error, path.as_deref());

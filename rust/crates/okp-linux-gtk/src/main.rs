@@ -23,7 +23,8 @@ use okp_core::shortcuts::{
 use okp_core::update_selection::{self, DebFeed, DebUpdate, SHA256SUMS_ASSET};
 use okp_core::{
     AppIdentity, chapter_math, lrc, m3u, media_formats, natural_compare, network_media,
-    ok_player_uri, seek_readout, sha256sums, subtitle_delay, time_code, youtube_open,
+    ok_player_uri, seek_readout, sha256sums, subtitle_delay, time_code, timeline_buffer,
+    video_click, youtube_open,
 };
 use okp_mpv::{
     AbLoopState, AudioDevice, Chapter, EndFileReason, InfoRow, InfoSection, InfoTrack, MediaInfo,
@@ -185,11 +186,8 @@ struct PlayerState {
     /// Retry action can replay the same source. Cleared on close / new load.
     last_load_url: Option<String>,
     /// The short, copyable reason for the most recent load failure — surfaced
-    /// through the failure dialog's Copy details action instead of raw logs.
+    /// through the in-canvas card's Copy details action instead of raw logs.
     last_load_error: Option<String>,
-    /// Guards the failure dialog so one failure pops it once, not every poll tick
-    /// until the next transition. Reset to `false` on a new load / clear.
-    load_failure_presented: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -725,9 +723,12 @@ struct Controls {
     screenshot_button: gtk::Button,
     fullscreen_button: gtk::Button,
     more_button: gtk::MenuButton,
+    timeline: gtk::Overlay,
     seek: gtk::Scale,
+    buffered_progress: gtk::ProgressBar,
     elapsed_label: gtk::Label,
     duration_label: gtk::Label,
+    trailing_time_mode: Rc<Cell<time_code::TrailingTimeMode>>,
     volume: gtk::Scale,
     // Shared toast surface, kept so the side panel's own row handlers (add/remove a
     // bookmark) can report their outcome without threading a toast through every call.
@@ -932,53 +933,182 @@ impl EmptySurface {
     }
 }
 
-/// The loading / buffering / error overlay for a network source — a centered status line
-/// revealed over the (black) video plane while a stream opens or after it fails. It is
-/// the visual counterpart of [`network_media::MediaLoadState`]: shown for `Loading` and
-/// `Failed`, hidden for `Idle` and `Playing` (a frame is up, so the video speaks for
-/// itself). Non-interactive (`can_target = false`) so it never blocks the controls
-/// underneath while it is up.
+/// Canonical in-canvas playback state surface. The shared core owns the load
+/// state; this widget only projects paused, loading, and failed presentations.
 #[derive(Clone)]
 struct MediaStateOverlay {
     revealer: gtk::Revealer,
-    label: gtk::Label,
+    stack: gtk::Stack,
+    spinner: gtk::Spinner,
+    retry_button: gtk::Button,
 }
 
 impl MediaStateOverlay {
-    fn new() -> Self {
-        let label = gtk::Label::new(Some(""));
-        label.add_css_class("okp-media-state-text");
-        label.set_justify(gtk::Justification::Center);
-        label.set_wrap(true);
-        label.set_max_width_chars(40);
-        label.set_halign(gtk::Align::Center);
-        label.set_valign(gtk::Align::Center);
+    fn new(
+        parent: &gtk::ApplicationWindow,
+        state: Rc<RefCell<PlayerState>>,
+        status_toast: Rc<StatusToast>,
+    ) -> Self {
+        let paused = gtk::Label::new(Some("PAUSED"));
+        paused.add_css_class("okp-paused-cue");
+        paused.set_halign(gtk::Align::Center);
+        paused.set_valign(gtk::Align::Center);
+
+        let spinner = gtk::Spinner::new();
+        spinner.add_css_class("okp-loading-ring");
+        let loading_label = gtk::Label::new(Some("Loading"));
+        loading_label.add_css_class("okp-loading-label");
+        let loading = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        loading.add_css_class("okp-loading-state");
+        loading.set_halign(gtk::Align::Center);
+        loading.set_valign(gtk::Align::Center);
+        loading.append(&spinner);
+        loading.append(&loading_label);
+
+        let error_icon = gtk::Image::from_icon_name("dialog-error-symbolic");
+        error_icon.add_css_class("okp-error-icon");
+        let error_title = gtk::Label::new(Some("Playback failed"));
+        error_title.add_css_class("okp-error-title");
+        let error_body = gtk::Label::new(Some(
+            "OK Player could not open this source. You can retry or choose another.",
+        ));
+        error_body.add_css_class("okp-error-body");
+        error_body.set_wrap(true);
+        error_body.set_max_width_chars(46);
+        error_body.set_justify(gtk::Justification::Center);
+
+        let retry_button = gtk::Button::with_label("Retry");
+        retry_button.add_css_class("okp-error-primary");
+        let retry_state = Rc::clone(&state);
+        retry_button.connect_clicked(move |_| {
+            if let Some(url) = retry_state.borrow().last_load_url.clone() {
+                load_media_url(&retry_state, url);
+            }
+        });
+
+        let open_button = gtk::Button::with_label("Open another");
+        open_button.add_css_class("okp-error-secondary");
+        let open_parent = parent.clone();
+        let open_state = Rc::clone(&state);
+        let open_toast = Rc::clone(&status_toast);
+        open_button.connect_clicked(move |_| {
+            if open_state.borrow().last_load_url.is_some() {
+                open_url_dialog(&open_parent, Rc::clone(&open_state), Rc::clone(&open_toast));
+            } else {
+                open_media_dialog(&open_parent, Rc::clone(&open_state), Rc::clone(&open_toast));
+            }
+        });
+
+        let copy_button = gtk::Button::with_label("Copy details");
+        copy_button.add_css_class("okp-error-secondary");
+        let copy_state = Rc::clone(&state);
+        let copy_toast = Rc::clone(&status_toast);
+        copy_button.connect_clicked(move |_| {
+            let detail = {
+                let state = copy_state.borrow();
+                let reason = state.last_load_error.as_deref().unwrap_or("");
+                state
+                    .last_load_url
+                    .as_deref()
+                    .map(|url| network_media::failure_detail(url, reason))
+                    .unwrap_or_else(|| {
+                        if reason.trim().is_empty() {
+                            "OK Player could not open the media.".to_owned()
+                        } else {
+                            format!("OK Player could not open the media.\nReason: {reason}")
+                        }
+                    })
+            };
+            if let Some(display) = gdk::Display::default() {
+                display.clipboard().set_text(&detail);
+                copy_toast.show("Copied details");
+            }
+        });
+
+        let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        actions.set_halign(gtk::Align::Center);
+        actions.append(&retry_button);
+        actions.append(&open_button);
+        actions.append(&copy_button);
+
+        let error = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        error.add_css_class("okp-error-card");
+        error.set_halign(gtk::Align::Center);
+        error.set_valign(gtk::Align::Center);
+        error.append(&error_icon);
+        error.append(&error_title);
+        error.append(&error_body);
+        error.append(&actions);
+
+        let stack = gtk::Stack::new();
+        stack.set_halign(gtk::Align::Center);
+        stack.set_valign(gtk::Align::Center);
+        stack.add_named(&paused, Some("paused"));
+        stack.add_named(&loading, Some("loading"));
+        stack.add_named(&error, Some("error"));
 
         let revealer = gtk::Revealer::new();
         revealer.add_css_class("okp-media-state-overlay");
         revealer.set_halign(gtk::Align::Fill);
         revealer.set_valign(gtk::Align::Fill);
-        revealer.set_transition_duration(180);
+        revealer.set_transition_duration(if playback_animations_enabled() {
+            180
+        } else {
+            0
+        });
         revealer.set_transition_type(gtk::RevealerTransitionType::Crossfade);
-        // The overlay never captures pointer events: the transport chrome stays
-        // clickable while the loading line is up.
         revealer.set_can_target(false);
         revealer.set_reveal_child(false);
-        revealer.set_child(Some(&label));
+        revealer.set_child(Some(&stack));
 
-        Self { revealer, label }
+        Self {
+            revealer,
+            stack,
+            spinner,
+            retry_button,
+        }
     }
 
     fn widget(&self) -> &gtk::Revealer {
         &self.revealer
     }
 
-    /// Reveal the overlay with `text`, or hide it for `None`. The text is set
-    /// before reveal so a transition never shows stale copy from the previous
-    /// source.
-    fn set_status(&self, text: Option<&str>) {
-        self.label.set_text(text.unwrap_or(""));
-        self.revealer.set_reveal_child(text.is_some());
+    fn update(
+        &self,
+        load_state: network_media::MediaLoadState,
+        has_media: bool,
+        paused: bool,
+        can_retry: bool,
+    ) {
+        let preview = env::var("OKP_PLAYBACK_STATE_PREVIEW").ok();
+        let state = match preview.as_deref() {
+            Some("paused") => Some("paused"),
+            Some("loading") => Some("loading"),
+            Some("error") => Some("error"),
+            _ => match load_state {
+                network_media::MediaLoadState::Failed => Some("error"),
+                network_media::MediaLoadState::Loading if has_media => Some("loading"),
+                network_media::MediaLoadState::Playing if has_media && paused => Some("paused"),
+                _ => None,
+            },
+        };
+
+        if let Some(state) = state {
+            self.stack.set_visible_child_name(state);
+            self.revealer.set_reveal_child(true);
+            let is_error = state == "error";
+            self.revealer.set_can_target(is_error);
+            self.retry_button.set_sensitive(can_retry);
+            if state == "loading" {
+                self.spinner.start();
+            } else {
+                self.spinner.stop();
+            }
+        } else {
+            self.spinner.stop();
+            self.revealer.set_can_target(false);
+            self.revealer.set_reveal_child(false);
+        }
     }
 }
 
@@ -1166,18 +1296,19 @@ impl ChromeVisibility {
 
 struct StatusToast {
     revealer: gtk::Revealer,
-    thumbnail: gtk::Picture,
+    thumbnail: gtk::Image,
     label: gtk::Label,
     hide_source: Rc<RefCell<Option<glib::SourceId>>>,
 }
 
 impl StatusToast {
     fn new() -> Self {
-        let thumbnail = gtk::Picture::new();
+        let thumbnail = gtk::Image::new();
         thumbnail.add_css_class("okp-status-toast-thumbnail");
         thumbnail.set_size_request(64, 36);
-        thumbnail.set_can_shrink(true);
-        thumbnail.set_content_fit(gtk::ContentFit::Fill);
+        thumbnail.set_pixel_size(64);
+        thumbnail.set_halign(gtk::Align::Start);
+        thumbnail.set_valign(gtk::Align::Center);
         thumbnail.set_visible(false);
 
         let label = gtk::Label::new(None);
@@ -1192,8 +1323,12 @@ impl StatusToast {
         let revealer = gtk::Revealer::new();
         revealer.set_halign(gtk::Align::Center);
         revealer.set_valign(gtk::Align::Start);
-        revealer.set_margin_top(28);
-        revealer.set_transition_duration(140);
+        revealer.set_margin_top(64);
+        revealer.set_transition_duration(if playback_animations_enabled() {
+            150
+        } else {
+            0
+        });
         revealer.set_transition_type(gtk::RevealerTransitionType::Crossfade);
         revealer.set_reveal_child(false);
         revealer.set_can_target(false);
@@ -1238,7 +1373,7 @@ impl StatusToast {
 
         let revealer = self.revealer.clone();
         let hide_source = Rc::clone(&self.hide_source);
-        let source_id = glib::timeout_add_local(Duration::from_secs(3), move || {
+        let source_id = glib::timeout_add_local(Duration::from_millis(1700), move || {
             revealer.set_reveal_child(false);
             hide_source.borrow_mut().take();
             glib::ControlFlow::Break

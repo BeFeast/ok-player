@@ -35,7 +35,12 @@ fi
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
-if ! xvfb-run -a --server-args='-screen 0 1280x900x24 -nolisten tcp' \
+xvfb_args=(-a)
+if [[ -n "${OKP_XVFB_SERVER_NUM:-}" ]]; then
+  xvfb_args=(-n "$OKP_XVFB_SERVER_NUM")
+fi
+
+if ! xvfb-run "${xvfb_args[@]}" --server-args='-screen 0 1280x900x24 -nolisten tcp' \
   dbus-run-session -- bash -s -- "$BINARY" "$DARK" "$BRIGHT" "$OUT_DIR" >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
 set -euo pipefail
 
@@ -69,10 +74,12 @@ sleep 1
 
 launch() {
   local fixture="$1" log="$2"
-  OKP_DISABLE_MPRIS=1 \
-  OKP_SKIP_OPEN_INSTALLER=1 \
-  OKP_SKIP_DEB_SELF_INSTALL=1 \
-  timeout 45s "$BINARY" "$fixture" >"$log" 2>&1 &
+  shift 2
+  env "$@" \
+    OKP_DISABLE_MPRIS=1 \
+    OKP_SKIP_OPEN_INSTALLER=1 \
+    OKP_SKIP_DEB_SELF_INSTALL=1 \
+    timeout 45s "$BINARY" "$fixture" >"$log" 2>&1 &
   app_pid=$!
   sleep 6
   xdotool search --name "OK Player" >"$OUT_DIR/window.ids"
@@ -88,7 +95,7 @@ stop_app() {
   app_pid=""
 }
 
-launch "$DARK" "$OUT_DIR/dark-app.log"
+launch "$DARK" "$OUT_DIR/dark-app.log" OKP_BUFFERED_TIMELINE_PREVIEW=1
 xwininfo -id "$window_id" >"$OUT_DIR/window-default.xwininfo"
 width="$(awk '/Width:/ { print $2; exit }' "$OUT_DIR/window-default.xwininfo")"
 height="$(awk '/Height:/ { print $2; exit }' "$OUT_DIR/window-default.xwininfo")"
@@ -102,6 +109,14 @@ xdotool key --clearmodifiers space
 xdotool mousemove --window "$window_id" 560 340
 sleep 2
 import -window "$window_id" "$OUT_DIR/loaded-paused-osc.png"
+cp "$OUT_DIR/loaded-paused-osc.png" "$OUT_DIR/paused.png"
+cp "$OUT_DIR/loaded-paused-osc.png" "$OUT_DIR/buffered-timeline.png"
+cp "$OUT_DIR/loaded-paused-osc.png" "$OUT_DIR/chapter-context.png"
+
+# A precise seek readout uses the same one-slot OSD surface and lifetime.
+xdotool key --clearmodifiers Right
+sleep 1
+import -window "$window_id" "$OUT_DIR/osd.png"
 
 # Open the shared Chapters/Up Next panel through its real OSC button. The
 # generated 1120x680 fixture keeps this stable; the panel itself stays above the
@@ -111,7 +126,7 @@ for _ in 1 2 3; do
   xdotool windowactivate "$window_id" >/dev/null 2>&1 || true
   xdotool mousemove --window "$window_id" 560 340
   sleep 1
-  xdotool mousemove --window "$window_id" 960 640 click 1
+  xdotool mousemove --window "$window_id" 914 638 click 1
   sleep 2
   import -window "$window_id" "$OUT_DIR/chapters-loaded.png"
   panel_mean="$(magick "$OUT_DIR/chapters-loaded.png" -crop 316x500+780+24 -colorspace gray -format '%[fx:mean]' info:)"
@@ -125,7 +140,7 @@ if (( panel_visible == 0 )); then
   exit 1
 fi
 xdotool windowactivate "$window_id" >/dev/null 2>&1 || true
-xdotool key --clearmodifiers escape
+xdotool mousemove --window "$window_id" 1097 75 click 1
 sleep 1
 
 # Save a frame through the real screenshot action (C is the default saved capture).
@@ -157,8 +172,16 @@ fs_height="$(awk '/Height:/ { print $2; exit }' "$OUT_DIR/window-fullscreen.xwin
   echo "fullscreen geometry wrong: ${fs_width}x${fs_height}" >&2
   exit 1
 }
-xdotool key --clearmodifiers escape
+xdotool key --clearmodifiers Escape
 sleep 1
+stop_app
+
+launch "$DARK" "$OUT_DIR/loading-app.log" OKP_PLAYBACK_STATE_PREVIEW=loading
+import -window "$window_id" "$OUT_DIR/buffering-loading.png"
+stop_app
+
+launch "$DARK" "$OUT_DIR/error-app.log" OKP_PLAYBACK_STATE_PREVIEW=error
+import -window "$window_id" "$OUT_DIR/playback-error.png"
 stop_app
 
 launch "$BRIGHT" "$OUT_DIR/bright-app.log"

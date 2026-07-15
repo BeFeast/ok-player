@@ -82,6 +82,11 @@ const OKP_STYLESHEET: &str = "
             transform: translate(0, -10px);
         }
 
+        .okp-root.is-reduced-motion .okp-top-chrome-motion,
+        .okp-root.is-reduced-motion .okp-chrome-revealer {
+            transition: none;
+        }
+
         .okp-player-window-controls button:hover,
         button.okp-player-window-control:hover {
             background: rgba(255, 255, 255, 0.12);
@@ -101,6 +106,11 @@ const OKP_STYLESHEET: &str = "
         .okp-player-window-controls button:active,
         button.okp-player-window-control:active {
             background: rgba(255, 255, 255, 0.18);
+        }
+
+        button.okp-player-window-pin.is-selected {
+            background: alpha(@okp_accent, 0.24);
+            color: @okp_accent_bright;
         }
 
         .okp-player-window-controls button:focus-visible,
@@ -149,11 +159,90 @@ const OKP_STYLESHEET: &str = "
         .okp-empty-surface.has-media {
             background: transparent;
         }
-        /* The loading / buffering / error overlay for a network source. Sits over the
-         * black video plane while a stream opens or after it fails; never captures
-         * pointer events so the transport chrome stays clickable. */
+        /* Playback-state overlays stay in-canvas and never replace the player with
+         * a modal. Loading/paused do not capture input; the error card enables only
+         * its own recovery actions. */
         .okp-media-state-overlay {
             background: transparent;
+        }
+
+        .okp-paused-cue {
+            padding: 7px 12px;
+            border-radius: 8px;
+            background: rgba(22, 22, 25, 0.50);
+            border: 1px solid rgba(255, 255, 255, 0.10);
+            color: rgba(255, 255, 255, 0.72);
+            font-size: 10.5px;
+            font-weight: 700;
+        }
+
+        .okp-loading-state {
+            color: rgba(255, 255, 255, 0.88);
+        }
+
+        .okp-loading-ring {
+            min-width: 34px;
+            min-height: 34px;
+            color: @okp_accent_bright;
+        }
+
+        .okp-loading-label {
+            color: rgba(255, 255, 255, 0.72);
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .okp-error-card {
+            min-width: 340px;
+            padding: 22px 24px;
+            border-radius: 12px;
+            background: rgba(22, 22, 25, 0.88);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            box-shadow: 0 18px 46px rgba(0, 0, 0, 0.42);
+        }
+
+        .okp-error-icon {
+            color: @okp_danger_bright;
+            -gtk-icon-size: 24px;
+        }
+
+        .okp-error-title {
+            color: rgba(255, 255, 255, 0.96);
+            font-size: 16px;
+            font-weight: 700;
+        }
+
+        .okp-error-body {
+            color: rgba(255, 255, 255, 0.66);
+            font-size: 12.5px;
+        }
+
+        button.okp-error-primary,
+        button.okp-error-secondary {
+            min-height: 32px;
+            padding: 6px 12px;
+            border-radius: 7px;
+            box-shadow: none;
+            font-size: 12px;
+            font-weight: 650;
+        }
+
+        button.okp-error-primary {
+            background: @okp_accent;
+            border: 1px solid @okp_accent;
+            color: #041110;
+        }
+
+        button.okp-error-secondary {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: rgba(255, 255, 255, 0.88);
+        }
+
+        button.okp-error-primary:disabled {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(255, 255, 255, 0.08);
+            color: rgba(255, 255, 255, 0.34);
         }
 
         .okp-media-state-text {
@@ -1156,22 +1245,25 @@ const OKP_STYLESHEET: &str = "
         }
 
         .okp-bottom-scrim {
-            background: linear-gradient(to top, rgba(0, 0, 0, 0.42), rgba(0, 0, 0, 0));
+            background: linear-gradient(to top, rgba(0, 0, 0, 0.48), rgba(0, 0, 0, 0));
         }
 
         .okp-controls {
-            min-height: 34px;
-            padding: 11px 18px;
-            border-radius: 18px;
-            background: rgba(22, 22, 25, 0.78);
-            border-top: 1px solid rgba(255, 255, 255, 0.14);
-            box-shadow: 0 14px 40px rgba(0, 0, 0, 0.40);
+            min-height: 32px;
+            padding: 7px 14px;
+            border-radius: 14px;
+            /* GTK 4 has no portable backdrop-filter. This 50% tint plus the
+             * localized scrim is the deterministic fallback for the locked
+             * 24-26px blur/saturation material used on platforms that support it. */
+            background: rgba(22, 22, 25, 0.50);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            box-shadow: 0 12px 34px rgba(0, 0, 0, 0.34);
         }
 
         button.okp-control-button,
         menubutton.okp-control-button > button {
-            min-width: 34px;
-            min-height: 34px;
+            min-width: 32px;
+            min-height: 32px;
             padding: 0;
             border-radius: 8px;
             border: 1px solid transparent;
@@ -1211,7 +1303,7 @@ const OKP_STYLESHEET: &str = "
         }
 
         button.okp-play-button {
-            min-width: 34px;
+            min-width: 32px;
             border-radius: 8px;
             background: transparent;
             color: #ffffff;
@@ -1228,13 +1320,13 @@ const OKP_STYLESHEET: &str = "
         }
 
         button.okp-transport-button {
-            min-width: 34px;
+            min-width: 32px;
             -gtk-icon-size: 17px;
         }
 
         button.okp-icon-button,
         menubutton.okp-icon-button > button {
-            min-width: 34px;
+            min-width: 32px;
             padding: 0;
         }
 
@@ -1273,7 +1365,7 @@ const OKP_STYLESHEET: &str = "
         .okp-status-toast {
             padding: 9px 14px;
             border-radius: 10px;
-            background: rgba(14, 15, 18, 0.94);
+            background: rgba(22, 22, 25, 0.60);
             border: 1px solid rgba(255, 255, 255, 0.10);
             box-shadow: 0 14px 34px rgba(0, 0, 0, 0.42);
             color: rgba(255, 255, 255, 0.92);
@@ -1288,16 +1380,45 @@ const OKP_STYLESHEET: &str = "
             background: #050608;
         }
 
+        .okp-timeline,
         .okp-seek {
             min-width: 120px;
             min-height: 20px;
         }
 
-        scale.okp-seek trough,
+        progressbar.okp-buffered-progress {
+            min-height: 4px;
+        }
+
+        progressbar.okp-buffered-progress trough {
+            min-height: 4px;
+            border: none;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.22);
+        }
+
+        progressbar.okp-buffered-progress progress {
+            min-height: 4px;
+            border: none;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.46);
+        }
+
+        progressbar.okp-buffered-progress.is-loading progress {
+            background: rgba(255, 255, 255, 0.62);
+        }
+
         scale.okp-volume trough {
             min-height: 4px;
             border-radius: 999px;
             background: rgba(255, 255, 255, 0.34);
+            border: none;
+        }
+
+        scale.okp-seek trough {
+            min-height: 4px;
+            border-radius: 999px;
+            background: transparent;
             border: none;
         }
 
@@ -1393,7 +1514,7 @@ const OKP_STYLESHEET: &str = "
         }
 
         .okp-volume-group {
-            min-height: 34px;
+            min-height: 32px;
         }
 
         .okp-volume-icon {
@@ -1990,13 +2111,6 @@ const OKP_STYLESHEET: &str = "
             color: rgba(255, 255, 255, 0.96);
             font-size: 16px;
             font-weight: 700;
-        }
-
-        /* The copyable summary on the URL load-failure dialog. Kept dimmer than the
-         * title and monospace-friendly so the URL stays readable and selectable. */
-        .okp-load-failure-detail {
-            color: rgba(255, 255, 255, 0.78);
-            font-size: 13px;
         }
 
         window.okp-command-dialog entry {
@@ -3457,16 +3571,19 @@ mod tests {
         for required in [
             "min-height: 42px;",
             "min-width: 46px;",
-            "padding: 11px 18px;",
-            "border-radius: 18px;",
-            "background: rgba(22, 22, 25, 0.78);",
-            "border-top: 1px solid rgba(255, 255, 255, 0.14);",
+            "padding: 7px 14px;",
+            "border-radius: 14px;",
+            "background: rgba(22, 22, 25, 0.50);",
+            "background: rgba(22, 22, 25, 0.60);",
             "transform: translate(0, -10px);",
             "transform: translate(0, 16px);",
             "transition: opacity 180ms ease, transform 200ms ease;",
             "min-width: 54px;",
             "min-width: 62px;",
             "min-height: 20px;",
+            ".okp-buffered-progress",
+            ".okp-paused-cue",
+            ".okp-error-card",
         ] {
             assert!(
                 OKP_STYLESHEET.contains(required),

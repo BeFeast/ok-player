@@ -24,6 +24,7 @@ The encoded redlines include:
 | Player | `1120×680` |
 | Narrow player | `480×540` |
 | OSC | canonical bottom band with `16px` side and `18px` bottom insets |
+| Playback states | paused, buffering/loading, in-canvas error, OSD, buffered timeline, and chapter-context captures at `1120x680` |
 | Chapters / Up Next | `316px` panel, `24px` right/top inset, clear video strip to its left |
 | Settings/About | `760×560`, `192px` rail |
 | History | canvas state at the player viewport, not a mismatched standalone window |
