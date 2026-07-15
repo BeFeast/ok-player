@@ -99,6 +99,10 @@ pub(crate) fn connect_keyboard(
                 adjust_volume(&state, &status_toast, 5.0);
                 glib::Propagation::Stop
             }
+            Some(ShortcutAction::Mute) => {
+                toggle_volume_mute(&state);
+                glib::Propagation::Stop
+            }
             Some(ShortcutAction::OpenFile) => {
                 open_media_dialog(
                     &shortcut_window,

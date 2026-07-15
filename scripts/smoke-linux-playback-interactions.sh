@@ -80,7 +80,7 @@ awk -v value="$paused_bottom_max" 'BEGIN { exit !(value > 0.50) }' || {
 }
 
 # The trailing label is a real click target and toggles remaining -> total.
-xdotool mousemove --window "$window_id" 525 638 click 1
+xdotool mousemove --window "$window_id" 610 638 click 1
 sleep 1
 grep -q 'interaction: time-label=Total' "$OUT_DIR/app.log" || {
   echo "time label click did not toggle to total" >&2

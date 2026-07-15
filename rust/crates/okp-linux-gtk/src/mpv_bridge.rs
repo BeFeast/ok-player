@@ -274,7 +274,6 @@ pub(crate) fn connect_state_poll(
     let status_toast = controls.status_toast.clone();
     let StatePollContext {
         updating_seek,
-        updating_volume,
         chrome,
         window_chrome,
         subtitle_position_snapshot,
@@ -458,9 +457,7 @@ pub(crate) fn connect_state_poll(
             }
 
             if let Some(volume) = playback.volume {
-                updating_volume.set(true);
-                controls.volume.set_value(volume.clamp(0.0, 130.0));
-                updating_volume.set(false);
+                controls.volume.sync_level(volume);
             }
 
             controls

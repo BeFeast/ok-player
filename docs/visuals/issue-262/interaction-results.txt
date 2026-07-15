@@ -1,0 +1,17 @@
+initial: settings=78.000 observed-mpv=78.000
+rapid-pointer-wheel: settings=83.000 observed-mpv=83.000
+shift-fine-wheel: settings=83.100 observed-mpv=83.100
+exact-input-return-commit: settings=54.700 observed-mpv=54.700
+exact-input-blur-commit: settings=88.400 observed-mpv=88.400
+pointer-high-selection: settings=124.672 observed-mpv=124.672
+keyboard-arrow-step: settings=125.672 observed-mpv=125.672
+keyboard-focus-traversal: tabs=13
+wheel-upper-clamp: settings=130.000 observed-mpv=130.000
+keyboard-lower-clamp: settings=0.000 observed-mpv=0.000
+keyboard-repeat-lower-clamp: settings=0.000 observed-mpv=0.000
+focused-shift-fine-wheel: settings=0.100 observed-mpv=0.100
+keyboard-mute: settings=0.000 observed-mpv=0.000
+keyboard-mute-restore: settings=0.100 observed-mpv=0.100
+exact-input-return: decimal persisted through activation
+exact-input-blur-collapse: changed decimal persisted, outside target focused, capsule closed
+actual-hover-row-reflow: changed-pixels=0

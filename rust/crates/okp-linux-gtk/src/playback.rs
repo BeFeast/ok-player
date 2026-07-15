@@ -42,14 +42,29 @@ pub(crate) fn has_loaded_media_state(state: &PlayerState) -> bool {
 }
 
 pub(crate) fn set_volume_from_ui(state: &Rc<RefCell<PlayerState>>, volume: f64) {
+    let volume = {
+        let mut state = state.borrow_mut();
+        let volume = state.volume_state.set_level(volume);
+        state.pending_volume = Some(volume);
+        volume
+    };
     let result = state
         .borrow()
         .mpv
         .as_ref()
         .map(|mpv| mpv.set_volume(volume));
     match result {
-        Some(Ok(())) | None => save_volume_setting(state, volume),
-        Some(Err(error)) => eprintln!("Failed to set volume: {error}"),
+        Some(Ok(())) => {
+            save_volume_setting(state, volume);
+        }
+        None => {
+            state.borrow_mut().pending_volume = None;
+            save_volume_setting(state, volume);
+        }
+        Some(Err(error)) => {
+            state.borrow_mut().pending_volume = None;
+            eprintln!("Failed to set volume: {error}");
+        }
     }
 }
 
@@ -58,22 +73,42 @@ pub(crate) fn adjust_volume(
     status_toast: &StatusToast,
     delta: f64,
 ) {
+    if state.borrow().mpv.is_none() {
+        return;
+    }
     let updated_volume = {
-        let state = state.borrow();
-        let Some(mpv) = state.mpv.as_ref() else {
-            return;
-        };
-        let volume = mpv.observed_playback_state().volume.unwrap_or(100.0);
-        let updated_volume = (volume + delta).clamp(0.0, 130.0);
-        if let Err(error) = mpv.set_volume(updated_volume) {
-            eprintln!("Failed to set volume: {error}");
-            return;
-        }
-        updated_volume
+        let mut state = state.borrow_mut();
+        let volume = state.volume_state.nudge(delta);
+        state.pending_volume = Some(volume);
+        volume
     };
+
+    if !with_mpv(state, |mpv| mpv.set_volume(updated_volume)) {
+        state.borrow_mut().pending_volume = None;
+        return;
+    }
 
     save_volume_setting(state, updated_volume);
     status_toast.show(&format!("Volume {}%", updated_volume.round() as i64));
+}
+
+pub(crate) fn toggle_volume_mute(state: &Rc<RefCell<PlayerState>>) {
+    if state.borrow().mpv.is_none() {
+        return;
+    }
+    let updated_volume = {
+        let mut state = state.borrow_mut();
+        let volume = state.volume_state.toggle_mute();
+        state.pending_volume = Some(volume);
+        volume
+    };
+
+    if !with_mpv(state, |mpv| mpv.set_volume(updated_volume)) {
+        state.borrow_mut().pending_volume = None;
+        return;
+    }
+
+    save_volume_setting(state, updated_volume);
 }
 
 pub(crate) fn save_volume_setting(state: &Rc<RefCell<PlayerState>>, volume: f64) {

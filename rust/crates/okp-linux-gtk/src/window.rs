@@ -171,6 +171,8 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         let preview = gtk::DrawingArea::new();
         let color = if mode.eq_ignore_ascii_case("bright") {
             (0.957, 0.961, 0.965)
+        } else if mode.eq_ignore_ascii_case("light") {
+            (0.55, 0.59, 0.64)
         } else {
             (0.031, 0.035, 0.043)
         };
@@ -275,13 +277,14 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         chrome.show_persistently();
         open_seek_preview(&controls);
     }
+    let volume_preview = env::var_os("OKP_VOLUME_PREVIEW")
+        .map(|mode| (controls.volume.clone(), mode.to_string_lossy().into_owned()));
     connect_state_poll(
         &window,
         Rc::clone(&state),
         controls,
         StatePollContext {
             updating_seek: Rc::clone(&updating_seek),
-            updating_volume: Rc::clone(&updating_volume),
             chrome: Rc::clone(&chrome),
             window_chrome,
             subtitle_position_snapshot: Rc::new(Cell::new(None)),
@@ -298,6 +301,11 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         let preview_toast = Rc::clone(&status_toast);
         glib::timeout_add_local_once(Duration::from_millis(500), move || {
             preview_toast.show("Volume 72%");
+        });
+    }
+    if let Some((volume, mode)) = volume_preview {
+        glib::timeout_add_local_once(Duration::from_millis(500), move || {
+            volume.open_preview(&mode);
         });
     }
     if env::var_os("OKP_OPEN_HISTORY_ON_STARTUP").is_some() {
