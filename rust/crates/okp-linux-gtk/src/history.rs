@@ -15,6 +15,8 @@ pub struct HistoryStore {
     data: HistoryFile,
     listable_paths: BTreeSet<String>,
     dirty: bool,
+    read_failed: bool,
+    cleared: bool,
 }
 
 impl Default for HistoryStore {
@@ -26,10 +28,16 @@ impl Default for HistoryStore {
 impl HistoryStore {
     pub fn open() -> Self {
         let path = history_path();
-        let data = fs::read_to_string(&path)
-            .ok()
-            .and_then(|json| HistoryFile::load(&json))
-            .unwrap_or_default();
+        let (data, read_failed) = match fs::read_to_string(&path) {
+            Ok(json) => match HistoryFile::load(&json) {
+                Some(data) => (data, false),
+                None => (HistoryFile::default(), true),
+            },
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                (HistoryFile::default(), false)
+            }
+            Err(_) => (HistoryFile::default(), true),
+        };
         let listable_paths = data
             .files
             .keys()
@@ -42,7 +50,21 @@ impl HistoryStore {
             data,
             listable_paths,
             dirty: false,
+            read_failed,
+            cleared: false,
         }
+    }
+
+    pub fn read_failed(&self) -> bool {
+        self.read_failed
+    }
+
+    pub fn was_cleared(&self) -> bool {
+        self.cleared
+    }
+
+    pub fn retry_read(&mut self) {
+        *self = Self::open();
     }
 
     pub fn record(&mut self, path: &Path, position: f64, duration: f64, finished: bool) {
@@ -214,6 +236,8 @@ impl HistoryStore {
     }
 
     pub fn clear(&mut self) {
+        self.cleared = true;
+        self.read_failed = false;
         if !self.data.files.is_empty() {
             self.data.files.clear();
             self.listable_paths.clear();
@@ -235,6 +259,7 @@ impl HistoryStore {
         fs::write(&tmp, json)?;
         fs::rename(tmp, &self.path)?;
         self.dirty = false;
+        self.read_failed = false;
         Ok(())
     }
 }
@@ -291,6 +316,8 @@ mod tests {
             data: HistoryFile::default(),
             listable_paths: BTreeSet::new(),
             dirty: false,
+            read_failed: false,
+            cleared: false,
         }
     }
 
@@ -303,6 +330,8 @@ mod tests {
             data: HistoryFile::default(),
             listable_paths: BTreeSet::new(),
             dirty: false,
+            read_failed: false,
+            cleared: false,
         }
     }
 
@@ -508,6 +537,8 @@ mod tests {
         assert_eq!(history.resume_position(path), None);
         assert_eq!(history.playback_preferences(path), None);
         assert!(history.dirty);
+        assert!(history.was_cleared());
+        assert!(!history.read_failed());
     }
 
     #[test]

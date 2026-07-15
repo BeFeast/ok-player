@@ -1,9 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
-  <title>OK Player</title>
-  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <circle cx="42" cy="64" r="28" stroke="#061817" stroke-width="20"/>
-    <path d="M79 31V97M80 64L108 35M80 64L110 95" stroke="#061817" stroke-width="20"/>
-    <circle cx="42" cy="64" r="28" stroke="#f4f8f7" stroke-width="12"/>
-    <path d="M79 31V97M80 64L108 35M80 64L110 95" stroke="#28b3aa" stroke-width="12"/>
-  </g>
+  <defs>
+    <linearGradient id="tile" x1="0.1" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#15a89d"/>
+      <stop offset="1" stop-color="#0a655f"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="30" fill="url(#tile)"/>
+  <text x="23" y="78" fill="#ffffff" font-family="Segoe UI, sans-serif" font-size="49" font-weight="700">OK</text>
+  <path d="M91 43 L113 64 L91 85 Z" fill="#ffffff"/>
 </svg>

@@ -46,18 +46,20 @@ fn launcher_identity_resolves_without_replacing_the_about_illustration() {
 }
 
 #[test]
-fn shared_linux_icon_remains_a_transparent_launcher_mark() {
+fn linux_identity_preserves_launcher_tile_and_separate_about_illustration() {
     let packaging = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packaging/linux");
     let icon = fs::read_to_string(packaging.join("com.befeast.okplayer.svg"))
         .expect("shared app icon should be readable");
-    assert!(icon.contains("<circle"));
-    assert!(icon.contains("#28b3aa"));
-    assert!(!icon.contains("<rect"), "icon must not bake in a tile");
-    assert!(!icon.contains("<polygon"), "icon must not be a play glyph");
+    assert!(icon.contains("<rect"));
+    assert!(icon.contains("#15a89d"));
+    assert!(icon.contains(">OK</text>"));
+    assert!(icon.contains("M91 43 L113 64 L91 85 Z"));
+    assert_eq!(ABOUT_FRAME_TICKS.len(), 5);
+    assert_eq!(ABOUT_FRAME_TICK_OPACITY, [0.10, 0.18, 0.30, 0.44, 0.62]);
 }
 
 #[test]
-fn linux_packaging_installs_only_the_shared_desktop_icon() {
+fn linux_packaging_installs_launcher_identity_asset() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let desktop =
         fs::read_to_string(root.join("rust/packaging/linux/com.befeast.okplayer.desktop"))
@@ -72,7 +74,6 @@ fn linux_packaging_installs_only_the_shared_desktop_icon() {
         let contents = fs::read_to_string(root.join("scripts").join(script))
             .expect("packaging script should be readable");
         assert!(contents.contains("com.befeast.okplayer.svg"));
-        assert!(!contents.contains("com.befeast.okplayer.about.svg"));
     }
 }
 
