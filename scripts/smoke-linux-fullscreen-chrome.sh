@@ -109,7 +109,7 @@ if [[ "$width" != "1280" || "$height" != "900" || "$state" != "IsViewable" ]]; t
   exit 1
 fi
 
-# Wait well past the canonical idle timeout (~2.6 s) with no pointer/keyboard
+# Wait well past the canonical idle timeout (~2.5 s) with no pointer/keyboard
 # activity so the OSC auto-hide fires. The titlebar is hidden by the fullscreen
 # notify handler, so the top band should be pure letterbox/video and the bottom
 # band should be clear too.

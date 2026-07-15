@@ -822,7 +822,7 @@ pub(crate) fn read_playback_speed(state: &Rc<RefCell<PlayerState>>) -> f64 {
 }
 
 pub(crate) fn format_speed(speed: f64) -> String {
-    format!("{:.2}x", speed.clamp(0.25, 4.0))
+    format!("{:.2}×", speed.clamp(0.25, 4.0))
 }
 
 pub(crate) fn speed_matches(left: f64, right: f64) -> bool {

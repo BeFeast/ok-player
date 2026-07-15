@@ -30,34 +30,54 @@ const OKP_STYLESHEET: &str = "
         }
 
         .okp-window-chrome {
-            min-height: 40px;
-            background: transparent;
+            min-height: 42px;
+            background: linear-gradient(to bottom, rgba(0, 0, 0, 0.50), rgba(0, 0, 0, 0));
         }
 
         .okp-window-drag-zone {
-            min-height: 40px;
+            min-height: 42px;
             background: transparent;
         }
 
         .okp-player-window-controls {
-            min-height: 32px;
-            border-radius: 12px;
-            background: rgba(14, 15, 18, 0.42);
-            border: 1px solid rgba(255, 255, 255, 0.07);
+            min-height: 42px;
+            background: transparent;
         }
 
         .okp-player-window-controls button,
         button.okp-player-window-control {
-            min-width: 42px;
-            min-height: 32px;
+            min-width: 46px;
+            min-height: 42px;
             padding: 0;
             border: none;
-            border-radius: 8px;
+            border-radius: 0;
             background: transparent;
             box-shadow: none;
             color: rgba(255, 255, 255, 0.84);
             font-size: 15px;
             font-weight: 400;
+        }
+
+        .okp-window-media-icon {
+            color: rgba(255, 255, 255, 0.90);
+            -gtk-icon-size: 13px;
+        }
+
+        .okp-window-media-title {
+            color: rgba(255, 255, 255, 0.95);
+            font-size: 12.5px;
+            font-weight: 500;
+        }
+
+        .okp-top-chrome-motion {
+            opacity: 1;
+            transform: translate(0, 0);
+            transition: opacity 180ms ease, transform 180ms ease;
+        }
+
+        .okp-top-chrome-motion.is-hidden {
+            opacity: 0;
+            transform: translate(0, -10px);
         }
 
         .okp-player-window-controls button:hover,
@@ -123,6 +143,10 @@ const OKP_STYLESHEET: &str = "
 
         .okp-empty-surface.is-preview-substrate.is-preview-bright {
             background: #f4f7fa;
+        }
+
+        .okp-empty-surface.has-media {
+            background: transparent;
         }
 
         .okp-empty-panel {
@@ -643,47 +667,41 @@ const OKP_STYLESHEET: &str = "
             font-weight: 500;
         }
 
+        .okp-chrome-revealer {
+            opacity: 1;
+            transform: translate(0, 0);
+            transition: opacity 180ms ease, transform 200ms ease;
+        }
+
+        .okp-chrome-revealer.is-hidden {
+            opacity: 0;
+            transform: translate(0, 16px);
+        }
+
+        .okp-bottom-scrim {
+            background: linear-gradient(to top, rgba(0, 0, 0, 0.42), rgba(0, 0, 0, 0));
+        }
+
         .okp-controls {
-            padding: 7px 8px;
-            border-radius: 12px;
-            background: rgba(13, 15, 19, 0.94);
-            border: 1px solid rgba(255, 255, 255, 0.16);
-            box-shadow: 0 16px 42px rgba(0, 0, 0, 0.52);
-        }
-
-        .okp-command-cluster {
-            padding: 0;
-            background: transparent;
-        }
-
-        .okp-transport-group {
-            padding: 0;
-            border-radius: 12px;
-            background: transparent;
-        }
-
-        .okp-timeline-group {
-            min-height: 36px;
-            padding: 0 2px;
-        }
-
-        separator.okp-control-separator {
-            min-width: 1px;
-            margin: 5px 2px;
-            background: rgba(255, 255, 255, 0.13);
+            min-height: 34px;
+            padding: 11px 18px;
+            border-radius: 18px;
+            background: rgba(22, 22, 25, 0.78);
+            border-top: 1px solid rgba(255, 255, 255, 0.14);
+            box-shadow: 0 14px 40px rgba(0, 0, 0, 0.40);
         }
 
         button.okp-control-button,
         menubutton.okp-control-button > button {
             min-width: 34px;
-            min-height: 32px;
-            padding: 0 9px;
-            border-radius: 9px;
+            min-height: 34px;
+            padding: 0;
+            border-radius: 8px;
             border: 1px solid transparent;
             background: transparent;
             box-shadow: none;
             color: rgba(255, 255, 255, 0.86);
-            font-size: 12px;
+            font-size: 12.5px;
             font-weight: 600;
         }
 
@@ -716,29 +734,25 @@ const OKP_STYLESHEET: &str = "
         }
 
         button.okp-play-button {
-            min-width: 42px;
-            border-radius: 11px;
-            background: alpha(@okp_accent, 0.92);
+            min-width: 34px;
+            border-radius: 8px;
+            background: transparent;
             color: #ffffff;
+            -gtk-icon-size: 22px;
         }
 
         button.okp-play-button:hover {
-            background: alpha(@okp_accent_bright, 0.96);
+            background: rgba(255, 255, 255, 0.12);
         }
 
         button.okp-play-button:disabled {
-            background: alpha(@okp_accent, 0.28);
+            background: transparent;
             color: rgba(255, 255, 255, 0.68);
         }
 
         button.okp-transport-button {
             min-width: 34px;
-        }
-
-        button.okp-chip-button,
-        menubutton.okp-chip-button > button {
-            min-width: 48px;
-            background: rgba(255, 255, 255, 0.035);
+            -gtk-icon-size: 17px;
         }
 
         button.okp-icon-button,
@@ -747,10 +761,16 @@ const OKP_STYLESHEET: &str = "
             padding: 0;
         }
 
+        button.okp-utility-button,
+        menubutton.okp-utility-button > button {
+            -gtk-icon-size: 19px;
+        }
+
         menubutton.okp-speed-chip > button {
-            min-width: 56px;
-            background: rgba(255, 255, 255, 0.08);
-            color: alpha(@okp_accent, 0.98);
+            min-width: 50px;
+            padding: 0 8px;
+            background: rgba(255, 255, 255, 0.14);
+            color: rgba(255, 255, 255, 0.92);
             font-feature-settings: 'tnum';
         }
 
@@ -759,10 +779,18 @@ const OKP_STYLESHEET: &str = "
         }
 
         .okp-time-label {
-            min-width: 50px;
-            color: rgba(255, 255, 255, 0.92);
-            font-size: 12px;
+            color: rgba(255, 255, 255, 0.85);
+            font-size: 12.5px;
+            font-weight: 500;
             font-feature-settings: 'tnum';
+        }
+
+        .okp-elapsed-time {
+            min-width: 54px;
+        }
+
+        .okp-remaining-time {
+            min-width: 62px;
         }
 
         .okp-status-toast {
@@ -785,11 +813,12 @@ const OKP_STYLESHEET: &str = "
 
         .okp-seek {
             min-width: 120px;
+            min-height: 20px;
         }
 
         scale.okp-seek trough,
         scale.okp-volume trough {
-            min-height: 3px;
+            min-height: 4px;
             border-radius: 999px;
             background: rgba(255, 255, 255, 0.34);
             border: none;
@@ -797,16 +826,16 @@ const OKP_STYLESHEET: &str = "
 
         scale.okp-seek highlight,
         scale.okp-volume highlight {
-            min-height: 3px;
+            min-height: 4px;
             border-radius: 999px;
             background: @okp_accent;
         }
 
         scale.okp-seek slider,
         scale.okp-volume slider {
-            min-width: 13px;
-            min-height: 13px;
-            margin: -5px;
+            min-width: 12px;
+            min-height: 12px;
+            margin: -4px;
             border-radius: 999px;
             background: rgba(255, 255, 255, 0.96);
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.42);
@@ -883,7 +912,16 @@ const OKP_STYLESHEET: &str = "
         }
 
         .okp-volume {
-            min-width: 92px;
+            min-width: 58px;
+        }
+
+        .okp-volume-group {
+            min-height: 34px;
+        }
+
+        .okp-volume-icon {
+            color: rgba(255, 255, 255, 0.86);
+            -gtk-icon-size: 19px;
         }
 
         .okp-up-next-panel {
@@ -2591,6 +2629,33 @@ mod tests {
             OKP_STYLESHEET.matches('{').count(),
             OKP_STYLESHEET.matches('}').count(),
             "unbalanced CSS braces in the stylesheet"
+        );
+    }
+
+    #[test]
+    fn playback_chrome_keeps_the_canonical_redlines() {
+        for required in [
+            "min-height: 42px;",
+            "min-width: 46px;",
+            "padding: 11px 18px;",
+            "border-radius: 18px;",
+            "background: rgba(22, 22, 25, 0.78);",
+            "border-top: 1px solid rgba(255, 255, 255, 0.14);",
+            "transform: translate(0, -10px);",
+            "transform: translate(0, 16px);",
+            "transition: opacity 180ms ease, transform 200ms ease;",
+            "min-width: 54px;",
+            "min-width: 62px;",
+            "min-height: 20px;",
+        ] {
+            assert!(
+                OKP_STYLESHEET.contains(required),
+                "missing canonical playback chrome redline `{required}`"
+            );
+        }
+        assert!(
+            !OKP_STYLESHEET.contains("okp-control-separator"),
+            "the unified OSC must not regress to separated toolbar islands"
         );
     }
 }

@@ -15,7 +15,9 @@ done
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
-if ! xvfb-run -a --server-args='-screen 0 1280x900x24 -nolisten tcp' \
+if ! env __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
+  LIBGL_ALWAYS_SOFTWARE=1 \
+  xvfb-run -a --server-args='-screen 0 1280x900x24 -nolisten tcp' \
   dbus-run-session -- bash -s -- "$BINARY" "$OUT_DIR" >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
 set -euo pipefail
 
@@ -27,6 +29,16 @@ export GTK_USE_PORTAL=0
 export NO_AT_BRIDGE=1
 export XDG_SESSION_TYPE=x11
 export XDG_CURRENT_DESKTOP=XFCE
+export XDG_CONFIG_HOME="$OUT_DIR/config"
+export XDG_STATE_HOME="$OUT_DIR/state"
+
+mkdir -p "$XDG_CONFIG_HOME/ok-player"
+cat >"$XDG_CONFIG_HOME/ok-player/settings.json" <<'JSON'
+{
+  "version": 1,
+  "updates": { "auto_check": false }
+}
+JSON
 
 xfwm4 --sm-client-disable >"$OUT_DIR/xfwm4.log" 2>&1 &
 wm_pid=$!
@@ -59,6 +71,19 @@ state="$(awk -F': ' '/Map State:/ { print $2; exit }' "$OUT_DIR/window.xwininfo"
 
 if [[ "$width" != "1120" || "$height" != "680" || "$border" != "0" || "$state" != "IsViewable" ]]; then
   echo "Unexpected main window geometry: ${width}x${height}, border=${border}, state=${state}" >&2
+  exit 1
+fi
+
+# The first-run surface owns its own Open actions; the standard playback OSC
+# must not be present before media is loaded.
+empty_bottom_max="$(
+  magick "$OUT_DIR/window.png" \
+    -crop 1088x70+16+592 \
+    -colorspace gray \
+    -format '%[fx:maxima]' info:
+)"
+if ! awk -v max="$empty_bottom_max" 'BEGIN { exit !(max < 0.08) }'; then
+  echo "Standard OSC leaked into the empty state: bottom maxima=${empty_bottom_max}" >&2
   exit 1
 fi
 

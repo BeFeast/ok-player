@@ -1232,6 +1232,10 @@ impl Mpv {
         self.set_double("sub-scale", scale.clamp(0.25, 4.0))
     }
 
+    pub fn set_subtitle_position(&self, position: f64) -> Result<(), MpvError> {
+        self.set_double("sub-pos", position.clamp(0.0, 100.0))
+    }
+
     pub fn adjust_subtitle_scale(&self, delta: f64) -> Result<(), MpvError> {
         self.set_subtitle_scale(self.observed_subtitle_scale() + delta)
     }

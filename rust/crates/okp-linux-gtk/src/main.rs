@@ -138,6 +138,8 @@ const VIDEO_ASPECT_PRESETS: [(&str, &str); 4] = [
 const AUDIO_DEVICE_AUTO: &str = "auto";
 const AUDIO_DEVICE_RESTORE_MAX_ATTEMPTS: u8 = 50;
 const AB_LOOP_COMBINED_MARK_EPSILON_SECS: f64 = 0.5;
+const OSC_CLEARANCE_DIP: f64 = 88.0;
+const OSC_SUBTITLE_LIFT_PERCENT: f64 = 16.0;
 const PROTECTED_MPV_OPTIONS: &[&str] = &["config", "terminal", "idle", "force-window", "vo"];
 
 static MPRIS_SIDECAR_ART_CACHE: OnceLock<Mutex<HashMap<PathBuf, Option<String>>>> = OnceLock::new();
@@ -711,7 +713,6 @@ impl MprisPlayer {
 }
 
 struct Controls {
-    open_button: gtk::Button,
     subtitle_button: gtk::MenuButton,
     audio_button: gtk::MenuButton,
     speed_button: gtk::MenuButton,
@@ -755,10 +756,19 @@ struct Controls {
     thumbnail_events: RefCell<mpsc::Receiver<String>>,
 }
 
+#[derive(Clone)]
+struct PlayerWindowChrome {
+    revealer: gtk::Revealer,
+    media_icon: gtk::Image,
+    title_label: gtk::Label,
+}
+
 struct StatePollContext {
     updating_seek: Rc<Cell<bool>>,
     updating_volume: Rc<Cell<bool>>,
     chrome: Rc<ChromeVisibility>,
+    window_chrome: PlayerWindowChrome,
+    subtitle_position_snapshot: Rc<Cell<Option<i64>>>,
     empty_surface: EmptySurface,
     lyrics_surface: LyricsSurface,
     media_state_overlay: MediaStateOverlay,
@@ -869,6 +879,11 @@ impl EmptySurface {
         }
         self.revealer.set_reveal_child(!has_media);
         self.revealer.set_can_target(!has_media);
+        if has_media {
+            self.revealer.add_css_class("has-media");
+        } else {
+            self.revealer.remove_css_class("has-media");
+        }
     }
 
     fn set_preview_substrate(&self, bright: bool) {
@@ -953,6 +968,8 @@ impl MediaStateOverlay {
 struct ChromeVisibility {
     revealer: gtk::Revealer,
     linked_revealers: Rc<RefCell<Vec<gtk::Revealer>>>,
+    linked_motion_widgets: Rc<RefCell<Vec<gtk::Widget>>>,
+    cursor_widgets: Rc<RefCell<Vec<gtk::Widget>>>,
     hide_source: Rc<RefCell<Option<glib::SourceId>>>,
     pin_count: Rc<Cell<u32>>,
     auto_hide_enabled: Rc<Cell<bool>>,
@@ -965,14 +982,17 @@ impl ChromeVisibility {
         revealer.add_css_class("okp-chrome-revealer");
         revealer.set_halign(gtk::Align::Fill);
         revealer.set_valign(gtk::Align::End);
-        revealer.set_transition_duration(170);
-        revealer.set_transition_type(gtk::RevealerTransitionType::SlideUp);
+        revealer.set_transition_duration(0);
+        revealer.set_transition_type(gtk::RevealerTransitionType::None);
         revealer.set_reveal_child(true);
-        revealer.set_can_target(true);
+        revealer.set_can_target(false);
+        revealer.set_visible(false);
 
         Self {
             revealer,
             linked_revealers: Rc::new(RefCell::new(Vec::new())),
+            linked_motion_widgets: Rc::new(RefCell::new(Vec::new())),
+            cursor_widgets: Rc::new(RefCell::new(Vec::new())),
             hide_source: Rc::new(RefCell::new(None)),
             pin_count: Rc::new(Cell::new(0)),
             auto_hide_enabled: Rc::new(Cell::new(false)),
@@ -991,6 +1011,28 @@ impl ChromeVisibility {
     fn add_linked_revealer(&self, revealer: &gtk::Revealer) {
         Self::set_revealer_state(revealer, self.is_revealed.get());
         self.linked_revealers.borrow_mut().push(revealer.clone());
+    }
+
+    fn add_linked_motion_widget(&self, widget: &impl IsA<gtk::Widget>) {
+        let widget = widget.clone().upcast::<gtk::Widget>();
+        Self::set_motion_widget_state(&widget, self.is_revealed.get());
+        self.linked_motion_widgets.borrow_mut().push(widget);
+    }
+
+    fn add_cursor_widget(&self, widget: &impl IsA<gtk::Widget>) {
+        self.cursor_widgets
+            .borrow_mut()
+            .push(widget.clone().upcast::<gtk::Widget>());
+    }
+
+    fn is_revealed(&self) -> bool {
+        self.is_revealed.get()
+    }
+
+    fn set_has_media(&self, has_media: bool) {
+        self.revealer.set_visible(has_media);
+        self.revealer
+            .set_can_target(has_media && self.is_revealed.get());
     }
 
     fn set_auto_hide_enabled(&self, enabled: bool) {
@@ -1034,9 +1076,28 @@ impl ChromeVisibility {
     }
 
     fn set_all_revealed(&self, revealed: bool) {
-        Self::set_revealer_state(&self.revealer, revealed);
+        Self::set_motion_widget_state(&self.revealer, revealed);
+        for widget in self.linked_motion_widgets.borrow().iter() {
+            Self::set_motion_widget_state(widget, revealed);
+        }
         for revealer in self.linked_revealers.borrow().iter() {
             Self::set_revealer_state(revealer, revealed);
+        }
+        for widget in self.cursor_widgets.borrow().iter() {
+            Self::set_cursor_revealed(widget, revealed);
+        }
+    }
+
+    fn set_cursor_revealed(widget: &impl IsA<gtk::Widget>, revealed: bool) {
+        widget.set_cursor_from_name(if revealed { None } else { Some("none") });
+    }
+
+    fn set_motion_widget_state(widget: &impl IsA<gtk::Widget>, revealed: bool) {
+        widget.set_can_target(revealed);
+        if revealed {
+            widget.remove_css_class("is-hidden");
+        } else {
+            widget.add_css_class("is-hidden");
         }
     }
 
@@ -1053,17 +1114,25 @@ impl ChromeVisibility {
 
         let revealer = self.revealer.clone();
         let linked_revealers = Rc::clone(&self.linked_revealers);
+        let linked_motion_widgets = Rc::clone(&self.linked_motion_widgets);
+        let cursor_widgets = Rc::clone(&self.cursor_widgets);
         let hide_source = Rc::clone(&self.hide_source);
         let pin_count = Rc::clone(&self.pin_count);
         let auto_hide_enabled = Rc::clone(&self.auto_hide_enabled);
         let is_revealed = Rc::clone(&self.is_revealed);
-        let source_id = glib::timeout_add_local(Duration::from_millis(2600), move || {
+        let source_id = glib::timeout_add_local(Duration::from_millis(2500), move || {
             hide_source.borrow_mut().take();
             if auto_hide_enabled.get() && pin_count.get() == 0 {
                 is_revealed.set(false);
-                Self::set_revealer_state(&revealer, false);
+                Self::set_motion_widget_state(&revealer, false);
+                for widget in linked_motion_widgets.borrow().iter() {
+                    Self::set_motion_widget_state(widget, false);
+                }
                 for revealer in linked_revealers.borrow().iter() {
                     Self::set_revealer_state(revealer, false);
+                }
+                for widget in cursor_widgets.borrow().iter() {
+                    Self::set_cursor_revealed(widget, false);
                 }
             }
             glib::ControlFlow::Break

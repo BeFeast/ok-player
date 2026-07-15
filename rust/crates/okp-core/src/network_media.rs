@@ -58,6 +58,18 @@ pub fn format_duration_total(is_url: bool, duration: Option<f64>) -> String {
     }
 }
 
+/// Format the trailing transport readout as time remaining while preserving the
+/// local-loading versus live-URL distinction used by [`format_duration_total`].
+pub fn format_remaining_total(is_url: bool, position: f64, duration: Option<f64>) -> String {
+    if is_live_or_unknown_duration(is_url, duration) {
+        "--:--".to_owned()
+    } else if duration_is_known(duration) {
+        crate::time_code::format_remaining(position, duration)
+    } else {
+        "-00:00".to_owned()
+    }
+}
+
 /// Classify the transport-surface state for a source from what the shell has observed.
 /// `is_loaded` is whether a source is currently loaded (a file or URL was handed to the
 /// engine); `file_loaded` is whether the engine fired `FileLoaded`; `load_error` is a
@@ -160,6 +172,14 @@ mod tests {
         assert_eq!(format_duration_total(false, None), "00:00");
         assert_eq!(format_duration_total(false, Some(0.0)), "00:00");
         assert_eq!(format_duration_total(false, Some(5025.0)), "01:23:45");
+    }
+
+    #[test]
+    fn format_remaining_total_preserves_live_and_local_loading_states() {
+        assert_eq!(format_remaining_total(true, 30.0, None), "--:--");
+        assert_eq!(format_remaining_total(false, 30.0, None), "-00:00");
+        assert_eq!(format_remaining_total(false, 30.0, Some(90.0)), "-01:00");
+        assert_eq!(format_remaining_total(true, 95.0, Some(90.0)), "-00:00");
     }
 
     #[test]
