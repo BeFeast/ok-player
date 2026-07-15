@@ -34,12 +34,25 @@ pub enum WelcomeShelf {
 
 /// Select the newest resumable history rows for the welcome surface.
 pub fn select(history: &History, private_session: bool, limit: usize) -> WelcomeShelf {
+    select_where(history, private_session, limit, |_| true)
+}
+
+/// Select the newest resumable rows whose paths pass the shell-supplied availability check.
+/// Availability is injected because filesystem and network probing are platform concerns,
+/// while filtering before ranking and limiting must remain shared and deterministic.
+pub fn select_where(
+    history: &History,
+    private_session: bool,
+    limit: usize,
+    mut is_listable: impl FnMut(&str) -> bool,
+) -> WelcomeShelf {
     if private_session {
         return WelcomeShelf::Private;
     }
 
     let items = sorted_items(history)
         .into_iter()
+        .filter(|item| is_listable(&item.path))
         .filter(|item| history.files.get(&item.path).is_some_and(is_resumable))
         .take(limit)
         .collect::<Vec<_>>();
@@ -53,9 +66,19 @@ pub fn select(history: &History, private_session: bool, limit: usize) -> Welcome
 
 /// Return all history rows newest-first, filtered by title, location, or full path.
 pub fn search(history: &History, query: &str) -> Vec<HistoryItem> {
+    search_where(history, query, |_| true)
+}
+
+/// Return listable history rows newest-first, filtered by title, location, or full path.
+pub fn search_where(
+    history: &History,
+    query: &str,
+    mut is_listable: impl FnMut(&str) -> bool,
+) -> Vec<HistoryItem> {
     let query = query.trim().to_lowercase();
     sorted_items(history)
         .into_iter()
+        .filter(|item| is_listable(&item.path))
         .filter(|item| {
             query.is_empty()
                 || item.title.to_lowercase().contains(&query)
@@ -314,6 +337,29 @@ mod tests {
     }
 
     #[test]
+    fn select_where_filters_before_applying_the_limit() {
+        let history = history([
+            ("/missing/newest.mkv", entry(120.0, 600.0, false, 40)),
+            ("/missing/newer.mkv", entry(120.0, 600.0, false, 30)),
+            ("/media/available.mkv", entry(120.0, 600.0, false, 20)),
+            ("/media/older.mkv", entry(120.0, 600.0, false, 10)),
+        ]);
+
+        let WelcomeShelf::Items(items) =
+            select_where(&history, false, 2, |path| !path.starts_with("/missing/"))
+        else {
+            panic!("expected shelf items");
+        };
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.title.as_str())
+                .collect::<Vec<_>>(),
+            vec!["available", "older"]
+        );
+    }
+
+    #[test]
     fn search_matches_title_location_and_full_path_case_insensitively() {
         let mut titled = entry(120.0, 600.0, false, 40);
         titled.title = Some("The Interview".to_owned());
@@ -329,6 +375,20 @@ mod tests {
         assert_eq!(search(&history, "/films/").len(), 1);
         assert_eq!(search(&history, "missing").len(), 0);
         assert_eq!(search(&history, "").len(), 4);
+    }
+
+    #[test]
+    fn search_where_excludes_unlistable_rows() {
+        let history = history([
+            ("/missing/interview.mkv", entry(120.0, 600.0, false, 40)),
+            ("/media/interview.mkv", entry(120.0, 600.0, false, 30)),
+            ("/media/arrival.mkv", entry(120.0, 600.0, false, 20)),
+            ("/media/demo.mkv", entry(120.0, 600.0, false, 10)),
+        ]);
+
+        let items = search_where(&history, "interview", |path| !path.starts_with("/missing/"));
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].path, "/media/interview.mkv");
     }
 
     #[test]

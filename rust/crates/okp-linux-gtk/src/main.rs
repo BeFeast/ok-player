@@ -850,6 +850,7 @@ struct EmptySurface {
     panel: gtk::Box,
     content: gtk::Box,
     model: Rc<RefCell<Option<okp_core::recents_shelf::WelcomeShelf>>>,
+    opened_context_bucket: Rc<Cell<Option<i64>>>,
 }
 
 impl EmptySurface {

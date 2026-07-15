@@ -4,27 +4,33 @@ use okp_core::recents_shelf::{self, HistoryItem, WelcomeShelf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const WELCOME_ITEM_LIMIT: usize = 3;
+const OPENED_CONTEXT_REFRESH_SECONDS: i64 = 60;
 
 impl EmptySurface {
-    /// Refresh the idle canvas when history or private-session state changes. The equality
-    /// guard avoids rebuilding GTK widgets on every 200 ms player poll.
+    /// Refresh the idle canvas when history, private-session state, or the displayed minute
+    /// changes. The equality guard avoids rebuilding GTK widgets on every 200 ms player poll.
     pub(crate) fn refresh(
         &self,
         parent: &gtk::ApplicationWindow,
         state: &Rc<RefCell<PlayerState>>,
         status_toast: Rc<StatusToast>,
     ) {
+        let now_unix = unix_now();
         let model = {
             let state = state.borrow();
             state
                 .history
                 .welcome_shelf(state.private_session, WELCOME_ITEM_LIMIT)
         };
-        if self.model.borrow().as_ref() == Some(&model) {
+        let opened_context_bucket = welcome_opened_context_bucket(&model, now_unix);
+        if self.model.borrow().as_ref() == Some(&model)
+            && self.opened_context_bucket.get() == opened_context_bucket
+        {
             return;
         }
 
         *self.model.borrow_mut() = Some(model.clone());
+        self.opened_context_bucket.set(opened_context_bucket);
         clear_box(&self.content);
         match model {
             WelcomeShelf::Private => self.content.append(&private_welcome(
@@ -42,9 +48,15 @@ impl EmptySurface {
                 Rc::clone(state),
                 Rc::clone(&status_toast),
                 &items,
+                now_unix,
             )),
         }
     }
+}
+
+fn welcome_opened_context_bucket(model: &WelcomeShelf, now_unix: i64) -> Option<i64> {
+    matches!(model, WelcomeShelf::Items(_))
+        .then_some(now_unix.div_euclid(OPENED_CONTEXT_REFRESH_SECONDS))
 }
 
 fn first_run_welcome(
@@ -125,6 +137,7 @@ fn continue_watching_welcome(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
     items: &[HistoryItem],
+    now_unix: i64,
 ) -> gtk::Box {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     content.add_css_class("okp-welcome-recents");
@@ -150,7 +163,7 @@ fn continue_watching_welcome(
     shelf.set_row_spacing(14);
     shelf.set_halign(gtk::Align::Fill);
     for item in items {
-        shelf.insert(&recent_card(item, Rc::clone(&state)), -1);
+        shelf.insert(&recent_card(item, Rc::clone(&state), now_unix), -1);
     }
     content.append(&shelf);
 
@@ -165,7 +178,7 @@ fn continue_watching_welcome(
     content
 }
 
-fn recent_card(item: &HistoryItem, state: Rc<RefCell<PlayerState>>) -> gtk::Button {
+fn recent_card(item: &HistoryItem, state: Rc<RefCell<PlayerState>>, now_unix: i64) -> gtk::Button {
     let button = gtk::Button::new();
     button.add_css_class("okp-recent-card");
     button.set_has_frame(false);
@@ -211,7 +224,7 @@ fn recent_card(item: &HistoryItem, state: Rc<RefCell<PlayerState>>) -> gtk::Butt
     let context = gtk::Label::new(Some(&format!(
         "{} · {}",
         recents_shelf::runtime_label(item.duration),
-        recents_shelf::opened_context(item.updated_at_unix, unix_now())
+        recents_shelf::opened_context(item.updated_at_unix, now_unix)
     )));
     context.add_css_class("okp-recent-context");
     context.set_xalign(0.0);
@@ -603,4 +616,25 @@ fn unix_now() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn welcome_items_refresh_relative_context_once_per_minute() {
+        let items = WelcomeShelf::Items(Vec::new());
+
+        assert_eq!(welcome_opened_context_bucket(&items, 119), Some(1));
+        assert_eq!(welcome_opened_context_bucket(&items, 120), Some(2));
+        assert_eq!(
+            welcome_opened_context_bucket(&WelcomeShelf::Empty, 120),
+            None
+        );
+        assert_eq!(
+            welcome_opened_context_bucket(&WelcomeShelf::Private, 120),
+            None
+        );
+    }
 }

@@ -655,6 +655,7 @@ pub(crate) fn build_empty_surface(
         panel,
         content,
         model: Rc::new(RefCell::new(None)),
+        opened_context_bucket: Rc::new(Cell::new(None)),
     };
     surface.refresh(window, &state, status_toast);
     surface

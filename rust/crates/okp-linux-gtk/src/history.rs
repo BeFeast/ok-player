@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::env;
 use std::fs;
 use std::io;
@@ -12,6 +13,7 @@ use okp_core::recents_shelf::{HistoryItem, WelcomeShelf};
 pub struct HistoryStore {
     path: PathBuf,
     data: HistoryFile,
+    listable_paths: BTreeSet<String>,
     dirty: bool,
 }
 
@@ -28,10 +30,17 @@ impl HistoryStore {
             .ok()
             .and_then(|json| HistoryFile::load(&json))
             .unwrap_or_default();
+        let listable_paths = data
+            .files
+            .keys()
+            .filter(|path| is_history_path_listable(path))
+            .cloned()
+            .collect();
 
         Self {
             path,
             data,
+            listable_paths,
             dirty: false,
         }
     }
@@ -62,6 +71,7 @@ impl HistoryStore {
         record.duration = duration;
         record.finished = finished || (existing_finished && final_stretch);
         record.updated_at_unix = unix_now();
+        self.listable_paths.insert(key.clone());
         self.data.files.insert(key, record);
         self.dirty = true;
     }
@@ -89,6 +99,7 @@ impl HistoryStore {
         let added = okp_core::bookmarks::add(&mut record.bookmarks, time);
         if added {
             record.updated_at_unix = unix_now();
+            self.listable_paths.insert(key.clone());
             self.dirty = true;
         }
         self.data.files.insert(key, record);
@@ -175,6 +186,7 @@ impl HistoryStore {
             .unwrap_or_else(new_history_record);
         record.preferences.merge(preferences);
         record.updated_at_unix = unix_now();
+        self.listable_paths.insert(key.clone());
         self.data.files.insert(key, record);
         self.dirty = true;
     }
@@ -189,17 +201,22 @@ impl HistoryStore {
 
     /// Privacy-aware, ranked model for the idle Continue Watching shelf.
     pub fn welcome_shelf(&self, private_session: bool, limit: usize) -> WelcomeShelf {
-        okp_core::recents_shelf::select(&self.data, private_session, limit)
+        okp_core::recents_shelf::select_where(&self.data, private_session, limit, |path| {
+            self.listable_paths.contains(path)
+        })
     }
 
     /// Newest-first rows for the explicit History surface, filtered in shared core.
     pub fn search(&self, query: &str) -> Vec<HistoryItem> {
-        okp_core::recents_shelf::search(&self.data, query)
+        okp_core::recents_shelf::search_where(&self.data, query, |path| {
+            self.listable_paths.contains(path)
+        })
     }
 
     pub fn clear(&mut self) {
         if !self.data.files.is_empty() {
             self.data.files.clear();
+            self.listable_paths.clear();
             self.dirty = true;
         }
     }
@@ -251,6 +268,12 @@ fn history_key(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
+fn is_history_path_listable(path: &str) -> bool {
+    path.contains("://")
+        || okp_core::network_path::is_network(path, |_| None)
+        || Path::new(path).is_file()
+}
+
 fn unix_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -266,6 +289,7 @@ mod tests {
         HistoryStore {
             path: PathBuf::from("unused.json"),
             data: HistoryFile::default(),
+            listable_paths: BTreeSet::new(),
             dirty: false,
         }
     }
@@ -277,6 +301,7 @@ mod tests {
         HistoryStore {
             path: PathBuf::from("/dev/null/history.json"),
             data: HistoryFile::default(),
+            listable_paths: BTreeSet::new(),
             dirty: false,
         }
     }
@@ -483,5 +508,17 @@ mod tests {
         assert_eq!(history.resume_position(path), None);
         assert_eq!(history.playback_preferences(path), None);
         assert!(history.dirty);
+    }
+
+    #[test]
+    fn history_path_listability_hides_missing_local_files_but_keeps_remote_media() {
+        let existing = std::env::current_exe().expect("test executable path");
+
+        assert!(is_history_path_listable(&existing.to_string_lossy()));
+        assert!(!is_history_path_listable(
+            "/definitely/missing/ok-player-history-test.mkv"
+        ));
+        assert!(is_history_path_listable("https://example.com/movie.mkv"));
+        assert!(is_history_path_listable(r"\\server\share\movie.mkv"));
     }
 }
