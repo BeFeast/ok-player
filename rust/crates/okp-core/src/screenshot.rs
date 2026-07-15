@@ -2,6 +2,57 @@
 
 use std::path::Path;
 
+/// Natural playback may advance while the shell prepares a saved capture.
+/// A larger displacement means the requested frame is no longer the frame the
+/// user selected, even when no explicit seek was observed.
+pub const SAVED_CAPTURE_POSITION_TOLERANCE_SECONDS: f64 = 1.0;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SavedCaptureContext {
+    pub source_generation: u64,
+    pub seek_generation: u64,
+    pub position: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SavedCaptureValidity {
+    Valid,
+    SourceChanged,
+    Seeked,
+    PositionChanged,
+}
+
+/// Compare the click-time capture context with the latest non-blocking player
+/// snapshot before dispatching the screenshot command.
+pub fn saved_capture_validity(
+    requested: SavedCaptureContext,
+    current: SavedCaptureContext,
+) -> SavedCaptureValidity {
+    if requested.source_generation != current.source_generation {
+        return SavedCaptureValidity::SourceChanged;
+    }
+    if requested.seek_generation != current.seek_generation {
+        return SavedCaptureValidity::Seeked;
+    }
+
+    match (
+        finite_position(requested.position),
+        finite_position(current.position),
+    ) {
+        (None, None) => SavedCaptureValidity::Valid,
+        (Some(requested), Some(current))
+            if (requested - current).abs() <= SAVED_CAPTURE_POSITION_TOLERANCE_SECONDS =>
+        {
+            SavedCaptureValidity::Valid
+        }
+        _ => SavedCaptureValidity::PositionChanged,
+    }
+}
+
+fn finite_position(position: Option<f64>) -> Option<f64> {
+    position.filter(|value| value.is_finite() && *value >= 0.0)
+}
+
 /// Build a screenshot filename candidate. Filesystem probing and atomic
 /// publication remain platform concerns; `collision_suffix` is zero for the
 /// preferred name and increments after each collision.
@@ -119,6 +170,68 @@ mod tests {
         assert_eq!(
             candidate_filename(None, Some(f64::NAN), 55, "invalid", 0),
             "ok-player-55.png"
+        );
+    }
+
+    #[test]
+    fn saved_capture_rejects_a_superseded_media_generation() {
+        let requested = SavedCaptureContext {
+            source_generation: 4,
+            seek_generation: 2,
+            position: Some(18.0),
+        };
+        let current = SavedCaptureContext {
+            source_generation: 5,
+            ..requested
+        };
+
+        assert_eq!(
+            saved_capture_validity(requested, current),
+            SavedCaptureValidity::SourceChanged
+        );
+    }
+
+    #[test]
+    fn saved_capture_rejects_a_seek_even_before_position_is_republished() {
+        let requested = SavedCaptureContext {
+            source_generation: 4,
+            seek_generation: 2,
+            position: Some(18.0),
+        };
+        let current = SavedCaptureContext {
+            seek_generation: 3,
+            ..requested
+        };
+
+        assert_eq!(
+            saved_capture_validity(requested, current),
+            SavedCaptureValidity::Seeked
+        );
+    }
+
+    #[test]
+    fn saved_capture_allows_natural_drift_but_rejects_a_position_jump() {
+        let requested = SavedCaptureContext {
+            source_generation: 4,
+            seek_generation: 2,
+            position: Some(18.0),
+        };
+        let natural_playback = SavedCaptureContext {
+            position: Some(18.75),
+            ..requested
+        };
+        let position_jump = SavedCaptureContext {
+            position: Some(24.0),
+            ..requested
+        };
+
+        assert_eq!(
+            saved_capture_validity(requested, natural_playback),
+            SavedCaptureValidity::Valid
+        );
+        assert_eq!(
+            saved_capture_validity(requested, position_jump),
+            SavedCaptureValidity::PositionChanged
         );
     }
 }

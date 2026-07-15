@@ -164,11 +164,11 @@ pub(crate) fn handle_mpris_command(
         }
         MprisCommand::SeekBy(offset_us) => {
             let seconds = offset_us as f64 / 1_000_000.0;
-            with_mpv(state, |mpv| mpv.seek_relative(seconds));
+            seek_relative(state, seconds);
         }
         MprisCommand::SetPosition(position_us) => {
             let seconds = position_us.max(0) as f64 / 1_000_000.0;
-            with_mpv(state, |mpv| mpv.seek_absolute(seconds));
+            seek_absolute(state, seconds);
         }
         MprisCommand::SetVolume(volume) => {
             if let Some(volume) = mpris_volume_to_mpv_percent(volume) {

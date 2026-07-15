@@ -151,6 +151,8 @@ struct PlayerState {
     mpv: Option<Mpv>,
     current_file: Option<PathBuf>,
     current_url: Option<String>,
+    source_generation: u64,
+    seek_generation: u64,
     playlist: Playlist,
     pending_subtitles: Vec<PathBuf>,
     pending_resume: Option<(PathBuf, f64)>,

@@ -69,6 +69,7 @@ pub(crate) fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
     }
     state.current_file = None;
     state.current_url = None;
+    advance_source_generation(&mut state);
     state.playlist.clear();
     state.thumbnail_request_key = None;
     state.hover_thumbnail_request_key = None;
@@ -199,6 +200,7 @@ pub(crate) fn remember_loaded_media_with_playlist(
     let resume_path = path.clone();
     let preferences_path = path.clone();
     let mut state = state.borrow_mut();
+    advance_source_generation(&mut state);
     let resume = if state.private_session || !state.settings.resume_enabled() {
         None
     } else {
@@ -290,6 +292,7 @@ pub(crate) fn remember_loaded_url_with_playlist(
     }
 
     let mut state = state.borrow_mut();
+    advance_source_generation(&mut state);
     reset_video_transform_for_new_media(&mut state);
     state.ab_loop = AbLoopState::default();
     if let Some(mpv) = state.mpv.as_ref() {
@@ -625,15 +628,14 @@ pub(crate) fn try_pending_resume(state: &Rc<RefCell<PlayerState>>, duration: f64
         return;
     }
 
-    let result = {
-        let state = state.borrow();
-        state.mpv.as_ref().map(|mpv| mpv.seek_absolute(target))
-    };
-    if matches!(result, Some(Ok(()))) {
+    if seek_absolute(state, target) {
         state.borrow_mut().pending_resume = None;
-    } else if let Some(Err(error)) = result {
-        eprintln!("Failed to resume '{}': {error}", path.display());
     }
+}
+
+fn advance_source_generation(state: &mut PlayerState) {
+    state.source_generation = state.source_generation.wrapping_add(1);
+    state.seek_generation = 0;
 }
 
 pub(crate) fn try_pending_playback_preferences(state: &Rc<RefCell<PlayerState>>) {

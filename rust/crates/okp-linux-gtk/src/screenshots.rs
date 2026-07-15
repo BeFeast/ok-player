@@ -9,7 +9,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use okp_core::screenshot::candidate_filename;
+use okp_core::screenshot::{
+    SavedCaptureContext, SavedCaptureValidity, candidate_filename, saved_capture_validity,
+};
 use okp_core::settings::ScreenshotFormat;
 
 const MAX_COLLISION_ATTEMPTS: u32 = 1_000;
@@ -19,9 +21,9 @@ static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 pub struct SavedCaptureTarget {
     pub temp_path: PathBuf,
     pub include_subtitles: bool,
+    pub request_context: SavedCaptureContext,
     directory: PathBuf,
     media_path: Option<PathBuf>,
-    position: Option<f64>,
     timestamp_millis: u128,
     format: ScreenshotFormat,
 }
@@ -62,15 +64,20 @@ impl ScreenshotJobs {
         &self,
         directory: PathBuf,
         media_path: Option<PathBuf>,
-        position: Option<f64>,
+        request_context: SavedCaptureContext,
         format: ScreenshotFormat,
         include_subtitles: bool,
     ) {
         let sender = self.sender.clone();
         thread::spawn(move || {
-            let result =
-                prepare_saved_capture(directory, media_path, position, format, include_subtitles)
-                    .map_err(|error| error.to_string());
+            let result = prepare_saved_capture(
+                directory,
+                media_path,
+                request_context,
+                format,
+                include_subtitles,
+            )
+            .map_err(|error| error.to_string());
             let _ = sender.send(ScreenshotJobResult::SavedPrepared(result));
         });
     }
@@ -107,7 +114,7 @@ impl ScreenshotJobs {
 pub fn prepare_saved_capture(
     directory: PathBuf,
     media_path: Option<PathBuf>,
-    position: Option<f64>,
+    request_context: SavedCaptureContext,
     format: ScreenshotFormat,
     include_subtitles: bool,
 ) -> io::Result<SavedCaptureTarget> {
@@ -124,9 +131,9 @@ pub fn prepare_saved_capture(
     Ok(SavedCaptureTarget {
         temp_path,
         include_subtitles,
+        request_context,
         directory,
         media_path,
-        position,
         timestamp_millis,
         format,
     })
@@ -136,7 +143,7 @@ pub fn publish_saved_capture(target: SavedCaptureTarget) -> io::Result<PathBuf> 
     for suffix in 0..MAX_COLLISION_ATTEMPTS {
         let filename = candidate_filename(
             target.media_path.as_deref(),
-            target.position,
+            target.request_context.position,
             target.timestamp_millis,
             target.format.extension(),
             suffix,
@@ -157,6 +164,19 @@ pub fn publish_saved_capture(target: SavedCaptureTarget) -> io::Result<PathBuf> 
         io::ErrorKind::AlreadyExists,
         "could not allocate a collision-free screenshot filename",
     ))
+}
+
+pub fn cancel_saved_capture_if_stale(
+    target: &SavedCaptureTarget,
+    current_context: SavedCaptureContext,
+) -> Option<SavedCaptureValidity> {
+    let validity = saved_capture_validity(target.request_context, current_context);
+    if validity == SavedCaptureValidity::Valid {
+        return None;
+    }
+
+    remove_temporary_capture(&target.temp_path);
+    Some(validity)
 }
 
 pub fn prepare_clipboard_capture() -> io::Result<PathBuf> {
@@ -270,9 +290,13 @@ mod tests {
         let published = publish_saved_capture(SavedCaptureTarget {
             temp_path,
             include_subtitles: false,
+            request_context: SavedCaptureContext {
+                source_generation: 1,
+                seek_generation: 0,
+                position: None,
+            },
             directory: directory.clone(),
             media_path: None,
-            position: None,
             timestamp_millis: 1234,
             format: ScreenshotFormat::Png,
         })
@@ -284,6 +308,68 @@ mod tests {
             b"existing"
         );
         assert_eq!(fs::read(published).unwrap(), b"new frame");
+    }
+
+    #[test]
+    fn media_switch_cancels_prepared_capture_before_publication() {
+        let directory = unique_temp_dir("okp-screenshot-stale-source");
+        let requested = SavedCaptureContext {
+            source_generation: 7,
+            seek_generation: 2,
+            position: Some(42.0),
+        };
+        let target = prepare_saved_capture(
+            directory.clone(),
+            Some(PathBuf::from("old-media.mkv")),
+            requested,
+            ScreenshotFormat::Png,
+            false,
+        )
+        .expect("prepared capture");
+        fs::write(&target.temp_path, b"wrong frame").expect("temporary frame");
+
+        let validity = cancel_saved_capture_if_stale(
+            &target,
+            SavedCaptureContext {
+                source_generation: 8,
+                ..requested
+            },
+        );
+
+        assert_eq!(validity, Some(SavedCaptureValidity::SourceChanged));
+        assert!(!target.temp_path.exists());
+        assert!(fs::read_dir(directory).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn queued_seek_cancels_capture_before_observed_position_changes() {
+        let directory = unique_temp_dir("okp-screenshot-stale-seek");
+        let requested = SavedCaptureContext {
+            source_generation: 7,
+            seek_generation: 2,
+            position: Some(42.0),
+        };
+        let target = prepare_saved_capture(
+            directory.clone(),
+            Some(PathBuf::from("movie.mkv")),
+            requested,
+            ScreenshotFormat::Webp,
+            true,
+        )
+        .expect("prepared capture");
+        fs::write(&target.temp_path, b"wrong frame").expect("temporary frame");
+
+        let validity = cancel_saved_capture_if_stale(
+            &target,
+            SavedCaptureContext {
+                seek_generation: 3,
+                ..requested
+            },
+        );
+
+        assert_eq!(validity, Some(SavedCaptureValidity::Seeked));
+        assert!(!target.temp_path.exists());
+        assert!(fs::read_dir(directory).unwrap().next().is_none());
     }
 
     #[test]

@@ -359,11 +359,8 @@ pub(crate) fn build_controls(
 
     let seek_state = Rc::clone(&state);
     seek.connect_change_value(move |_, _, value| {
-        if !updating_seek.get()
-            && let Some(mpv) = seek_state.borrow().mpv.as_ref()
-            && let Err(error) = mpv.seek_absolute(value)
-        {
-            eprintln!("Failed to seek: {error}");
+        if !updating_seek.get() {
+            seek_absolute(&seek_state, value);
         }
 
         glib::Propagation::Proceed

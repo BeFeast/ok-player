@@ -1992,6 +1992,22 @@ fn load_url_transitions_to_loading_and_records_retry_url() {
 }
 
 #[test]
+fn source_generation_advances_on_reload_and_clear() {
+    let state = Rc::new(RefCell::new(PlayerState::default()));
+
+    remember_loaded_url(&state, "https://example.com/live.m3u8".to_owned());
+    assert_eq!(state.borrow().source_generation, 1);
+
+    remember_loaded_url(&state, "https://example.com/live.m3u8".to_owned());
+    assert_eq!(state.borrow().source_generation, 2);
+
+    clear_loaded_media_state(&state);
+    let state = state.borrow();
+    assert_eq!(state.source_generation, 3);
+    assert_eq!(state.seek_generation, 0);
+}
+
+#[test]
 fn set_load_failure_transitions_and_rearms_dialog() {
     let state = Rc::new(RefCell::new(PlayerState::default()));
     set_load_failure(
