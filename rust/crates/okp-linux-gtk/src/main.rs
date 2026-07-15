@@ -16,6 +16,7 @@ use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
 use okp_core::playlist::{Playlist, PlaylistItem, QueueInsertMode, RepeatMode};
+use okp_core::settings::AppearanceTheme;
 use okp_core::shortcuts::{
     self, ShortcutAction, ShortcutBinding, ShortcutChord, ShortcutModifiers, ShortcutSlot,
 };
@@ -105,13 +106,14 @@ const AB_LOOP_SETTLE_DELAY: Duration = Duration::from_millis(60);
 const LINUX_UPDATE_FEED_BASE_URL: &str = "https://befeast.github.io/ok-player/updates/linux";
 const LINUX_DEB_FEED_URL: &str = "https://befeast.github.io/ok-player/updates/linux/deb.linux.json";
 const LINUX_SHA256SUMS_MAX_BYTES: u64 = 1024 * 1024;
-const UPDATE_STATUS_NOT_CHECKED: &str = "Not checked yet";
 const DEB_SELF_INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
-const SETTINGS_REFERENCE_WIDTH: i32 = 744;
-const SETTINGS_REFERENCE_HEIGHT: i32 = 1030;
+const SETTINGS_REFERENCE_WIDTH: i32 = 760;
+const SETTINGS_REFERENCE_HEIGHT: i32 = 560;
+const SETTINGS_TITLEBAR_HEIGHT: i32 = 42;
+const SETTINGS_BODY_HEIGHT: i32 = SETTINGS_REFERENCE_HEIGHT - SETTINGS_TITLEBAR_HEIGHT;
 const SETTINGS_RAIL_WIDTH: i32 = 192;
 const SETTINGS_CONTENT_WIDTH: i32 = SETTINGS_REFERENCE_WIDTH - SETTINGS_RAIL_WIDTH;
-const CAPTIONLESS_DRAG_HEIGHT: i32 = 32;
+const CAPTIONLESS_DRAG_HEIGHT: i32 = SETTINGS_TITLEBAR_HEIGHT;
 const LINUX_KEY_MEDIA_MIME_TYPES: &[&str] = &[
     "video/mp4",
     "video/x-matroska",
@@ -819,16 +821,6 @@ impl LinuxUpdateStatus {
         }
     }
 
-    fn about_status_text(&self) -> String {
-        match self {
-            Self::NotChecked => UPDATE_STATUS_NOT_CHECKED.to_owned(),
-            Self::Checking => "Checking...".to_owned(),
-            Self::UpToDate => "Up to date".to_owned(),
-            Self::Available(update) => update.available_status(),
-            Self::Failed(_) => "Update check failed".to_owned(),
-        }
-    }
-
     fn settings_status_text(&self, auto_check_enabled: bool) -> String {
         match self {
             Self::NotChecked => update_status_intro(auto_check_enabled).to_owned(),
@@ -1385,13 +1377,11 @@ struct AboutSnapshot {
     gtk: String,
     cpu: String,
     install: String,
-    updates: String,
 }
 
 impl AboutSnapshot {
     fn capture(state: &Rc<RefCell<PlayerState>>) -> Self {
         let state = state.borrow();
-        let auto_updates = state.settings.auto_check_updates();
         let hwdec = state.settings.hardware_decode_label().to_owned();
         Self {
             version: about_display_version(APP_BUILD_VERSION),
@@ -1413,11 +1403,6 @@ impl AboutSnapshot {
             ),
             cpu: env::consts::ARCH.to_owned(),
             install: linux_update_install_status().to_owned(),
-            updates: if auto_updates {
-                "Automatic".to_owned()
-            } else {
-                "Manual".to_owned()
-            },
         }
     }
 }

@@ -17,9 +17,25 @@ pub(crate) fn open_settings_window(
         false,
     );
     window.add_css_class("okp-settings-window");
+    apply_settings_window_theme(&window, state.borrow().settings.appearance_theme());
+    watch_system_settings_theme(&window, Rc::clone(&state));
 
-    let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.add_css_class("okp-settings-root");
+
+    let titlebar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    titlebar.add_css_class("okp-settings-titlebar");
+    // GTK adds the 1px bottom border outside the requested content box.
+    titlebar.set_size_request(SETTINGS_REFERENCE_WIDTH, SETTINGS_TITLEBAR_HEIGHT - 1);
+    let title = gtk::Label::new(Some("Settings"));
+    title.add_css_class("okp-settings-titlebar-label");
+    title.set_xalign(0.0);
+    titlebar.append(&title);
+    root.append(&titlebar);
+
+    let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    body.add_css_class("okp-settings-body");
+    body.set_size_request(SETTINGS_REFERENCE_WIDTH, SETTINGS_BODY_HEIGHT);
 
     let stack = gtk::Stack::new();
     stack.add_css_class("okp-settings-stack");
@@ -36,7 +52,11 @@ pub(crate) fn open_settings_window(
 
     let appearance_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
     appearance_page.add_css_class("okp-settings-page");
-    appearance_page.append(&settings_appearance_section());
+    appearance_page.append(&settings_appearance_section(
+        &window,
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    ));
     stack.add_named(&settings_scroller(&appearance_page), Some("appearance"));
 
     let advanced_page = settings_advanced_page(Rc::clone(&state), Rc::clone(&status_toast));
@@ -143,13 +163,14 @@ pub(crate) fn open_settings_window(
     stack.add_named(&settings_scroller(&integration_page), Some("integration"));
 
     stack.set_visible_child_name(initial_page);
-    root.append(&settings_nav_rail_frame(settings_nav_rail(
+    body.append(&settings_nav_rail_frame(settings_nav_rail(
         &stack,
         initial_page,
     )));
 
-    stack.set_size_request(SETTINGS_CONTENT_WIDTH, SETTINGS_REFERENCE_HEIGHT);
-    root.append(&stack);
+    stack.set_size_request(SETTINGS_CONTENT_WIDTH, SETTINGS_BODY_HEIGHT);
+    body.append(&stack);
+    root.append(&body);
 
     let window_overlay = gtk::Overlay::new();
     window_overlay.set_child(Some(&root));
@@ -157,6 +178,68 @@ pub(crate) fn open_settings_window(
     window_overlay.add_overlay(&settings_window_controls(&window));
     window.set_child(Some(&window_overlay));
     window.present();
+}
+
+pub(crate) fn apply_settings_window_theme(window: &gtk::Window, theme: AppearanceTheme) {
+    let dark = match settings_theme_override().unwrap_or(theme) {
+        AppearanceTheme::Light => false,
+        AppearanceTheme::Dark => true,
+        AppearanceTheme::Auto => gtk::Settings::default()
+            .map(|settings| settings.is_gtk_application_prefer_dark_theme())
+            .unwrap_or(false),
+    };
+    if dark {
+        window.add_css_class("is-dark");
+    } else {
+        window.remove_css_class("is-dark");
+    }
+
+    let high_contrast = env::var("GTK_THEME")
+        .ok()
+        .map(|name| name.to_ascii_lowercase().contains("highcontrast"))
+        .unwrap_or(false)
+        || gtk::Settings::default()
+            .and_then(|settings| settings.gtk_theme_name())
+            .map(|name| name.to_ascii_lowercase().contains("highcontrast"))
+            .unwrap_or(false);
+    if high_contrast {
+        window.add_css_class("is-high-contrast");
+    } else {
+        window.remove_css_class("is-high-contrast");
+    }
+}
+
+fn settings_theme_override() -> Option<AppearanceTheme> {
+    match env::var("OKP_SETTINGS_COLOR_SCHEME")
+        .ok()?
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "light" => Some(AppearanceTheme::Light),
+        "dark" => Some(AppearanceTheme::Dark),
+        _ => None,
+    }
+}
+
+fn watch_system_settings_theme(window: &gtk::Window, state: Rc<RefCell<PlayerState>>) {
+    let Some(settings) = gtk::Settings::default() else {
+        return;
+    };
+    let weak_window = window.downgrade();
+    let color_state = Rc::clone(&state);
+    settings.connect_gtk_application_prefer_dark_theme_notify(move |_| {
+        if let Some(window) = weak_window.upgrade() {
+            apply_settings_window_theme(&window, color_state.borrow().settings.appearance_theme());
+        }
+    });
+
+    let weak_window = window.downgrade();
+    settings.connect_gtk_theme_name_notify(move |_| {
+        if let Some(window) = weak_window.upgrade() {
+            apply_settings_window_theme(&window, state.borrow().settings.appearance_theme());
+        }
+    });
 }
 
 pub(crate) fn normalized_settings_page(page: &str) -> Option<&'static str> {
@@ -194,7 +277,7 @@ pub(crate) fn settings_nav_rail_frame(rail: gtk::Box) -> gtk::ScrolledWindow {
     frame.set_min_content_width(SETTINGS_RAIL_WIDTH);
     frame.set_max_content_width(SETTINGS_RAIL_WIDTH);
     frame.set_propagate_natural_width(false);
-    frame.set_size_request(SETTINGS_RAIL_WIDTH, SETTINGS_REFERENCE_HEIGHT);
+    frame.set_size_request(SETTINGS_RAIL_WIDTH, SETTINGS_BODY_HEIGHT);
     frame.set_child(Some(&rail));
     frame
 }
@@ -202,12 +285,7 @@ pub(crate) fn settings_nav_rail_frame(rail: gtk::Box) -> gtk::ScrolledWindow {
 pub(crate) fn settings_nav_rail(stack: &gtk::Stack, selected_page: &str) -> gtk::Box {
     let rail = gtk::Box::new(gtk::Orientation::Vertical, 2);
     rail.add_css_class("okp-settings-rail");
-    rail.set_size_request(SETTINGS_RAIL_WIDTH, SETTINGS_REFERENCE_HEIGHT);
-
-    let title = gtk::Label::new(Some("Settings"));
-    title.add_css_class("okp-settings-rail-title");
-    title.set_xalign(0.0);
-    rail.append(&title);
+    rail.set_size_request(SETTINGS_RAIL_WIDTH, SETTINGS_BODY_HEIGHT);
 
     let search = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     search.add_css_class("okp-settings-search");

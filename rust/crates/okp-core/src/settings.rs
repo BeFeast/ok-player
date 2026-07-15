@@ -175,15 +175,41 @@ impl SubtitleSettings {
     }
 }
 
-/// Appearance, a Windows-only section (the Linux shell has no theme picker yet).
+/// Appearance preferences shared by the desktop shells.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AppearanceSettings {
-    /// Windows `Theme` — `Light` / `Dark` / `Auto`.
+    /// Desktop theme — `Light` / `Dark` / `Auto`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
     /// Windows `AccentSource` — `System` / `OkTeal`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accent_source: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum AppearanceTheme {
+    Light,
+    Dark,
+    #[default]
+    Auto,
+}
+
+impl AppearanceTheme {
+    pub fn from_setting(value: Option<&str>) -> Self {
+        match value.map(str::trim) {
+            Some(value) if value.eq_ignore_ascii_case("Light") => Self::Light,
+            Some(value) if value.eq_ignore_ascii_case("Dark") => Self::Dark,
+            _ => Self::Auto,
+        }
+    }
+
+    pub const fn as_setting(self) -> &'static str {
+        match self {
+            Self::Light => "Light",
+            Self::Dark => "Dark",
+            Self::Auto => "Auto",
+        }
+    }
 }
 
 impl AppearanceSettings {
@@ -367,6 +393,29 @@ mod tests {
     fn default_stamps_the_current_version() {
         assert_eq!(Settings::default().version, SETTINGS_VERSION);
         assert!(Settings::default().updates.auto_check);
+    }
+
+    #[test]
+    fn appearance_theme_parses_cross_shell_values() {
+        assert_eq!(
+            AppearanceTheme::from_setting(Some("Light")),
+            AppearanceTheme::Light
+        );
+        assert_eq!(
+            AppearanceTheme::from_setting(Some("dark")),
+            AppearanceTheme::Dark
+        );
+        assert_eq!(
+            AppearanceTheme::from_setting(Some("Auto")),
+            AppearanceTheme::Auto
+        );
+        assert_eq!(
+            AppearanceTheme::from_setting(Some("unknown")),
+            AppearanceTheme::Auto
+        );
+        assert_eq!(AppearanceTheme::from_setting(None), AppearanceTheme::Auto);
+        assert_eq!(AppearanceTheme::Light.as_setting(), "Light");
+        assert_eq!(AppearanceTheme::Auto.as_setting(), "Auto");
     }
 
     #[test]

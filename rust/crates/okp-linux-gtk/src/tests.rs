@@ -32,21 +32,21 @@ fn about_channel_separates_linux_release_track_from_version() {
 }
 
 #[test]
-fn identity_surfaces_resolve_to_the_bundled_app_icon() {
-    // Welcome, About, MPRIS, and desktop packaging all share this one mark.
-    // If the bundled SVG stops resolving, the logo silently falls back to the
-    // themed icon (blank outside an installed icon theme), so guard the asset.
+fn launcher_identity_resolves_without_replacing_the_about_illustration() {
+    // Welcome, MPRIS, and desktop packaging share the launcher mark. About is
+    // deliberately bespoke: five graduated frame ticks resolve into playback.
     let path = app_icon_path().expect("shared app icon should resolve");
     assert!(path.is_file(), "resolved icon path should exist: {path:?}");
     assert_eq!(
         path.file_name().and_then(|name| name.to_str()),
         Some("com.befeast.okplayer.svg")
     );
-    assert_eq!(about_illustration_path(), Some(path));
+    assert_eq!(ABOUT_FRAME_TICKS.len(), 5);
+    assert_eq!(ABOUT_FRAME_TICK_OPACITY, [0.10, 0.18, 0.30, 0.44, 0.62]);
 }
 
 #[test]
-fn shared_linux_icon_is_a_transparent_ok_mark_without_stale_identity_assets() {
+fn shared_linux_icon_remains_a_transparent_launcher_mark() {
     let packaging = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packaging/linux");
     let icon = fs::read_to_string(packaging.join("com.befeast.okplayer.svg"))
         .expect("shared app icon should be readable");
@@ -54,10 +54,6 @@ fn shared_linux_icon_is_a_transparent_ok_mark_without_stale_identity_assets() {
     assert!(icon.contains("#28b3aa"));
     assert!(!icon.contains("<rect"), "icon must not bake in a tile");
     assert!(!icon.contains("<polygon"), "icon must not be a play glyph");
-    assert!(
-        !packaging.join("com.befeast.okplayer.about.svg").exists(),
-        "About must not ship a second identity asset"
-    );
 }
 
 #[test]
@@ -82,15 +78,42 @@ fn linux_packaging_installs_only_the_shared_desktop_icon() {
 
 #[test]
 fn settings_shell_matches_windows_reference_geometry() {
-    assert_eq!(SETTINGS_REFERENCE_WIDTH, 744);
-    assert_eq!(SETTINGS_REFERENCE_HEIGHT, 1030);
+    assert_eq!(SETTINGS_REFERENCE_WIDTH, 760);
+    assert_eq!(SETTINGS_REFERENCE_HEIGHT, 560);
+    assert_eq!(SETTINGS_TITLEBAR_HEIGHT, 42);
+    assert_eq!(SETTINGS_BODY_HEIGHT, 518);
     assert_eq!(SETTINGS_RAIL_WIDTH, 192);
-    assert_eq!(SETTINGS_CONTENT_WIDTH, 552);
+    assert_eq!(SETTINGS_CONTENT_WIDTH, 568);
     assert_eq!(
         SETTINGS_RAIL_WIDTH + SETTINGS_CONTENT_WIDTH,
         SETTINGS_REFERENCE_WIDTH
     );
-    assert_eq!(CAPTIONLESS_DRAG_HEIGHT, 32);
+    assert_eq!(CAPTIONLESS_DRAG_HEIGHT, 42);
+}
+
+#[test]
+fn about_diagnostics_contains_only_app_engine_and_host_groups() {
+    let snapshot = AboutSnapshot {
+        version: "0.1.0".to_owned(),
+        package_version: "0.1.0-linux-alpha.113".to_owned(),
+        channel: "Linux alpha".to_owned(),
+        build: "abcdef0".to_owned(),
+        license: "GPL-3.0-or-later".to_owned(),
+        libmpv: "0.40.0".to_owned(),
+        ffmpeg: "8.0".to_owned(),
+        render_api: "libmpv render".to_owned(),
+        graphics: "OpenGL · GTK GLArea".to_owned(),
+        hwdec: "auto-safe".to_owned(),
+        os: "Linux".to_owned(),
+        gtk: "4.20.0".to_owned(),
+        cpu: "x86_64".to_owned(),
+        install: "Deb installer".to_owned(),
+    };
+    let text = about_diagnostics_text(&snapshot);
+    assert!(text.contains("\nEngine\n"));
+    assert!(text.contains("\nHost\n"));
+    assert!(!text.contains("\nUpdates\n"));
+    assert!(!text.contains("  Updates"));
 }
 
 #[test]
@@ -1920,7 +1943,6 @@ fn deb_update_action_requests_install() {
 #[test]
 fn linux_update_status_reflects_last_check_result() {
     let up_to_date = LinuxUpdateStatus::from_check_result(&LinuxUpdateCheckResult::UpToDate);
-    assert_eq!(up_to_date.about_status_text(), "Up to date");
     assert_eq!(
         up_to_date.settings_status_text(true),
         "OK Player is up to date"
@@ -1941,10 +1963,6 @@ fn linux_update_status_reflects_last_check_result() {
     let available =
         LinuxUpdateStatus::from_check_result(&LinuxUpdateCheckResult::Available(update));
     assert_eq!(
-        available.about_status_text(),
-        "Available: 0.1.0-linux-alpha.46"
-    );
-    assert_eq!(
         available.settings_status_text(true),
         "Available: 0.1.0-linux-alpha.46"
     );
@@ -1953,7 +1971,6 @@ fn linux_update_status_reflects_last_check_result() {
 
     let failed =
         LinuxUpdateStatus::from_check_result(&LinuxUpdateCheckResult::Failed("no feed".into()));
-    assert_eq!(failed.about_status_text(), "Update check failed");
     assert_eq!(
         failed.settings_status_text(true),
         "Update check failed: no feed"

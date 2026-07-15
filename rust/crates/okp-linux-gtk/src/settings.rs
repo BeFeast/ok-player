@@ -3,7 +3,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use okp_core::settings::{ScreenshotFormat, Settings};
+use okp_core::settings::{AppearanceTheme, ScreenshotFormat, Settings};
 
 const DEFAULT_VOLUME: f64 = 100.0;
 const MAX_VOLUME: f64 = 130.0;
@@ -97,6 +97,10 @@ impl SettingsStore {
 
     pub fn auto_check_updates(&self) -> bool {
         self.data.updates.auto_check
+    }
+
+    pub fn appearance_theme(&self) -> AppearanceTheme {
+        AppearanceTheme::from_setting(self.data.appearance.theme.as_deref())
     }
 
     pub fn hardware_decode_enabled(&self) -> bool {
@@ -216,6 +220,13 @@ impl SettingsStore {
     pub fn set_auto_check_updates(&mut self, enabled: bool) {
         if self.data.updates.auto_check != enabled {
             self.data.updates.auto_check = enabled;
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_appearance_theme(&mut self, theme: AppearanceTheme) {
+        if self.appearance_theme() != theme {
+            self.data.appearance.theme = Some(theme.as_setting().to_owned());
             self.dirty = true;
         }
     }
@@ -470,6 +481,16 @@ mod tests {
     #[test]
     fn auto_update_checks_default_on() {
         assert!(store().auto_check_updates());
+    }
+
+    #[test]
+    fn appearance_theme_defaults_to_auto_and_persists_light() {
+        let mut settings = store();
+        assert_eq!(settings.appearance_theme(), AppearanceTheme::Auto);
+
+        settings.set_appearance_theme(AppearanceTheme::Light);
+        assert_eq!(settings.appearance_theme(), AppearanceTheme::Light);
+        assert!(settings.dirty);
     }
 
     #[test]
