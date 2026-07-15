@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-# Visual smoke guard for the PRD §14 state-matrix empty surfaces (issue #209):
-# the no-chapters stream state (Chapters tab) and the single-URL / no-folder
-# short-queue state (Up Next tab). Both used to render a bare dead string with
-# no affordance; the panel now pins the now-playing item and exposes an
-# "Add files to queue" affordance (Up Next) or a calm no-chapters message
-# (Chapters). This script screenshot-tests both preview fixtures so a
-# regression that re-introduces a blank/dead panel is caught.
+# Visual smoke guard for the PRD §14 state-matrix surfaces: the no-chapters and
+# short-queue side-panel states, plus the Continue Watching and private-session
+# welcome states from issue #191. The welcome fixtures use an isolated history
+# document and capture both default and narrow geometry so cards, labels, and
+# placeholders cannot silently overlap or leak through private mode.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -22,7 +20,12 @@ done
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
-if ! xvfb-run -a --server-args='-screen 0 1280x900x24 -nolisten tcp' \
+xvfb_args=(-a)
+if [[ -n "${OKP_XVFB_SERVER_NUM:-}" ]]; then
+  xvfb_args=(-n "$OKP_XVFB_SERVER_NUM")
+fi
+
+if ! xvfb-run "${xvfb_args[@]}" --server-args='-screen 0 1280x900x24 -nolisten tcp' \
   dbus-run-session -- bash -s -- "$BINARY" "$OUT_DIR" >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
 set -euo pipefail
 
@@ -34,6 +37,7 @@ export GTK_USE_PORTAL=0
 export NO_AT_BRIDGE=1
 export XDG_SESSION_TYPE=x11
 export XDG_CURRENT_DESKTOP=XFCE
+export XDG_STATE_HOME="$OUT_DIR/state"
 
 xfwm4 --sm-client-disable >"$OUT_DIR/xfwm4.log" 2>&1 &
 wm_pid=$!
@@ -107,6 +111,124 @@ capture_state() {
 capture_state "up-next-empty" "$OUT_DIR/up-next-empty.png" "Up Next short-queue"
 capture_state "chapters-empty" "$OUT_DIR/chapters-empty.png" "Chapters no-chapters"
 
+mkdir -p "$XDG_STATE_HOME/ok-player"
+now="$(date +%s)"
+cat >"$XDG_STATE_HOME/ok-player/history.json" <<JSON
+{
+  "version": 2,
+  "files": {
+    "/media/films/Arrival.mkv": {
+      "position": 1320.0,
+      "duration": 6960.0,
+      "finished": false,
+      "updated_at_unix": $((now - 1800)),
+      "title": "Arrival"
+    },
+    "/media/shows/Severance/Season 02/Episode 04.mkv": {
+      "position": 1180.0,
+      "duration": 3180.0,
+      "finished": false,
+      "updated_at_unix": $((now - 86000)),
+      "title": "Woe's Hollow"
+    },
+    "/media/documentaries/Free Solo.mp4": {
+      "position": 880.0,
+      "duration": 6000.0,
+      "finished": false,
+      "updated_at_unix": $((now - 260000))
+    },
+    "/media/finished/Old Film.mkv": {
+      "position": 0.0,
+      "duration": 5400.0,
+      "finished": true,
+      "updated_at_unix": $((now - 600))
+    }
+  }
+}
+JSON
+
+capture_welcome() {
+  local mode="$1" shot="$2" width="$3" height="$4" label="$5"
+  rm -f "$OUT_DIR/app.log"
+  if [[ "$mode" == "private" ]]; then
+    OKP_PRIVATE_SESSION_ON_STARTUP=1 \
+    OKP_SKIP_OPEN_INSTALLER=1 \
+    OKP_SKIP_DEB_SELF_INSTALL=1 \
+    timeout 12s "$BINARY" >"$OUT_DIR/app.log" 2>&1 &
+  else
+    OKP_SKIP_OPEN_INSTALLER=1 \
+    OKP_SKIP_DEB_SELF_INSTALL=1 \
+    timeout 12s "$BINARY" >"$OUT_DIR/app.log" 2>&1 &
+  fi
+  app_pid=$!
+  trap kill_app EXIT
+
+  sleep 5
+  xdotool search --name "OK Player" >"$OUT_DIR/window.ids" || true
+  window_id="$(head -n1 "$OUT_DIR/window.ids" || true)"
+  if [[ -z "$window_id" ]]; then
+    echo "$label: main window did not appear" >&2
+    cat "$OUT_DIR/app.log" >&2 || true
+    exit 1
+  fi
+
+  if [[ "$width" != "1120" || "$height" != "680" ]]; then
+    xdotool windowsize "$window_id" "$width" "$height"
+    sleep 1
+  fi
+  import -window "$window_id" "$shot"
+
+  actual_width="$(xwininfo -id "$window_id" | awk '/Width:/ { print $2; exit }')"
+  actual_height="$(xwininfo -id "$window_id" | awk '/Height:/ { print $2; exit }')"
+  if (( actual_width > width + 8 || actual_width < width - 8 || actual_height > height + 8 || actual_height < height - 8 )); then
+    echo "$label: unexpected geometry ${actual_width}x${actual_height}, expected ${width}x${height}" >&2
+    exit 1
+  fi
+
+  # Welcome copy, placeholders, and controls all carry bright pixels. A blank or
+  # clipped canvas stays near black across the center band.
+  center_max="$(magick "$shot" -crop "$((actual_width * 3 / 4))x$((actual_height * 3 / 4))+$((actual_width / 8))+$((actual_height / 8))" -colorspace gray -format '%[fx:maxima]' info:)"
+  if ! awk -v max="$center_max" 'BEGIN { exit !(max > 0.55) }'; then
+    echo "$label: welcome content looks blank or clipped: maxima=${center_max}" >&2
+    exit 1
+  fi
+
+  echo "$label: geometry=${actual_width}x${actual_height} maxima=${center_max}"
+  kill_app
+  trap - EXIT
+  wait "$app_pid" 2>/dev/null || true
+}
+
+capture_welcome "recents" "$OUT_DIR/continue-watching.png" 1120 680 "Continue Watching"
+capture_welcome "recents" "$OUT_DIR/continue-watching-narrow.png" 480 540 "Continue Watching narrow"
+capture_welcome "private" "$OUT_DIR/private-session.png" 1120 680 "Private session"
+
+rm -f "$OUT_DIR/app.log"
+OKP_OPEN_HISTORY_ON_STARTUP=1 \
+OKP_SKIP_OPEN_INSTALLER=1 \
+OKP_SKIP_DEB_SELF_INSTALL=1 \
+timeout 12s "$BINARY" >"$OUT_DIR/app.log" 2>&1 &
+app_pid=$!
+trap kill_app EXIT
+sleep 5
+xdotool search --name "History" >"$OUT_DIR/history-window.ids" || true
+history_window_id="$(tail -n1 "$OUT_DIR/history-window.ids" || true)"
+if [[ -z "$history_window_id" ]]; then
+  echo "History: window did not appear" >&2
+  cat "$OUT_DIR/app.log" >&2 || true
+  exit 1
+fi
+import -window "$history_window_id" "$OUT_DIR/history.png"
+history_max="$(magick "$OUT_DIR/history.png" -colorspace gray -format '%[fx:maxima]' info:)"
+if ! awk -v max="$history_max" 'BEGIN { exit !(max > 0.65) }'; then
+  echo "History: surface looks blank: maxima=${history_max}" >&2
+  exit 1
+fi
+echo "History: maxima=${history_max}"
+kill_app
+trap - EXIT
+wait "$app_pid" 2>/dev/null || true
+
 # The Up Next short-queue state pins the now-playing item in the OK Player teal
 # accent and renders the dashed "Add files to queue" affordance, so across the
 # band the green channel should read stronger than the red one — a stock grey
@@ -137,4 +259,4 @@ then
   exit 1
 fi
 
-echo "Empty-states smoke passed. Screenshots: $OUT_DIR/up-next-empty.png $OUT_DIR/chapters-empty.png"
+echo "Empty-states smoke passed. Screenshots: $OUT_DIR/up-next-empty.png $OUT_DIR/chapters-empty.png $OUT_DIR/continue-watching.png $OUT_DIR/continue-watching-narrow.png $OUT_DIR/private-session.png $OUT_DIR/history.png"

@@ -40,6 +40,7 @@ mod controls;
 mod css;
 mod dialogs;
 mod history;
+mod history_view;
 mod integration;
 mod keyboard;
 mod lyrics;
@@ -61,6 +62,7 @@ pub(crate) use about::*;
 pub(crate) use controls::*;
 pub(crate) use css::*;
 pub(crate) use dialogs::*;
+pub(crate) use history_view::*;
 pub(crate) use integration::*;
 pub(crate) use keyboard::*;
 pub(crate) use lyrics::*;
@@ -846,6 +848,9 @@ enum LinuxUpdateApplyResult {
 struct EmptySurface {
     revealer: gtk::Revealer,
     panel: gtk::Box,
+    content: gtk::Box,
+    model: Rc<RefCell<Option<okp_core::recents_shelf::WelcomeShelf>>>,
+    opened_context_bucket: Rc<Cell<Option<i64>>>,
 }
 
 impl EmptySurface {

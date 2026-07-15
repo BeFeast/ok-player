@@ -105,6 +105,11 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
 
     let identity = AppIdentity::linux();
     let state = Rc::new(RefCell::new(PlayerState::default()));
+    // Visual smoke hook for the private welcome state. Private session is transient by
+    // design, so this changes only the in-memory session and never writes a setting.
+    if env::var_os("OKP_PRIVATE_SESSION_ON_STARTUP").is_some() {
+        state.borrow_mut().private_session = true;
+    }
     apply_playback_settings_defaults(&state);
     let auto_check_updates = state.borrow().settings.auto_check_updates();
     let updating_seek = Rc::new(Cell::new(false));
@@ -262,6 +267,15 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         let info_toast = Rc::clone(&status_toast);
         glib::timeout_add_local_once(Duration::from_millis(250), move || {
             show_media_info_window(&info_parent, &media_info_preview_sample(), info_toast);
+        });
+    }
+    // Visual smoke hook for the explicit searchable History surface.
+    if env::var_os("OKP_OPEN_HISTORY_ON_STARTUP").is_some() {
+        let history_parent = window.clone();
+        let history_state = Rc::clone(&state);
+        let history_toast = Rc::clone(&status_toast);
+        glib::timeout_add_local_once(Duration::from_millis(250), move || {
+            show_history_window(&history_parent, history_state, history_toast);
         });
     }
     if auto_check_updates {
@@ -612,86 +626,39 @@ pub(crate) fn build_empty_surface(
     panel.set_halign(gtk::Align::Center);
     panel.set_valign(gtk::Align::Center);
 
-    let logo = empty_surface_logo();
-    panel.append(&logo);
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    panel.append(&content);
 
-    let wordmark = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    wordmark.add_css_class("okp-empty-wordmark");
-    wordmark.set_halign(gtk::Align::Center);
-    let wordmark_ok = gtk::Label::new(Some("OK"));
-    wordmark_ok.add_css_class("okp-empty-wordmark-ok");
-    let wordmark_player = gtk::Label::new(Some(" Player"));
-    wordmark_player.add_css_class("okp-empty-wordmark-player");
-    wordmark.append(&wordmark_ok);
-    wordmark.append(&wordmark_player);
-    panel.append(&wordmark);
-
-    let tagline = gtk::Label::new(Some("Open a file to start playing."));
-    tagline.add_css_class("okp-empty-tagline");
-    tagline.set_justify(gtk::Justification::Center);
-    tagline.set_wrap(true);
-    tagline.set_max_width_chars(34);
-    panel.append(&tagline);
-
-    let actions = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    actions.add_css_class("okp-empty-actions");
-
-    let open_button = gtk::Button::with_label("Open media");
-    open_button.add_css_class("okp-empty-primary-button");
-    open_button.set_hexpand(true);
-    open_button.set_halign(gtk::Align::Fill);
-    let open_parent = window.clone();
-    let open_state = Rc::clone(&state);
-    open_button.connect_clicked(move |_| open_media_dialog(&open_parent, Rc::clone(&open_state)));
-    actions.append(&open_button);
-
-    let secondary_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    secondary_row.set_homogeneous(true);
-
-    let folder_button = gtk::Button::with_label("Open folder");
-    folder_button.add_css_class("okp-empty-secondary-button");
-    let folder_parent = window.clone();
-    let folder_state = Rc::clone(&state);
-    let folder_toast = Rc::clone(&status_toast);
-    folder_button.connect_clicked(move |_| {
-        open_folder_dialog(
-            &folder_parent,
-            Rc::clone(&folder_state),
-            Rc::clone(&folder_toast),
-        );
-    });
-    secondary_row.append(&folder_button);
-
-    let url_button = gtk::Button::with_label("Open URL");
-    url_button.add_css_class("okp-empty-secondary-button");
-    let url_parent = window.clone();
-    let url_state = Rc::clone(&state);
-    let url_toast = Rc::clone(&status_toast);
-    url_button.connect_clicked(move |_| {
-        open_url_dialog(&url_parent, Rc::clone(&url_state), Rc::clone(&url_toast));
-    });
-    secondary_row.append(&url_button);
-
-    actions.append(&secondary_row);
-    panel.append(&actions);
-
-    let hint = gtk::Label::new(Some("Drop media here · press O to open"));
-    hint.add_css_class("okp-empty-hint");
-    hint.set_justify(gtk::Justification::Center);
-    hint.set_wrap(true);
-    hint.set_max_width_chars(40);
-    panel.append(&hint);
+    let scroller = gtk::ScrolledWindow::new();
+    scroller.add_css_class("okp-welcome-scroller");
+    scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    scroller.set_halign(gtk::Align::Fill);
+    scroller.set_valign(gtk::Align::Fill);
+    scroller.set_margin_bottom(92);
+    scroller.set_child(Some(&panel));
 
     let revealer = gtk::Revealer::new();
     revealer.add_css_class("okp-empty-surface");
     revealer.set_halign(gtk::Align::Fill);
     revealer.set_valign(gtk::Align::Fill);
-    revealer.set_transition_duration(180);
-    revealer.set_transition_type(gtk::RevealerTransitionType::Crossfade);
+    // The idle surface is present before the window maps. A crossfade started in that
+    // pre-map state can remain partially opaque on GTK's software renderer, dimming the
+    // entire welcome canvas. Media loads already replace it atomically, so no transition
+    // is preferable to an unreadable first frame.
+    revealer.set_transition_duration(0);
+    revealer.set_transition_type(gtk::RevealerTransitionType::None);
     revealer.set_reveal_child(true);
-    revealer.set_child(Some(&panel));
+    revealer.set_child(Some(&scroller));
 
-    EmptySurface { revealer, panel }
+    let surface = EmptySurface {
+        revealer,
+        panel,
+        content,
+        model: Rc::new(RefCell::new(None)),
+        opened_context_bucket: Rc::new(Cell::new(None)),
+    };
+    surface.refresh(window, &state, status_toast);
+    surface
 }
 
 /// The welcome surface anchors the OK Player identity with the app icon tile.
