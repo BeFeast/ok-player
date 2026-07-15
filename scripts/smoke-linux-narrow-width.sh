@@ -36,7 +36,7 @@ fi
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
-if ! xvfb-run -a --server-args='-screen 0 1280x900x24 -nolisten tcp' \
+if ! xvfb-run -a --server-args='-screen 0 1280x900x24 -nolisten tcp -extension GLX' \
   dbus-run-session -- bash -s -- "$BINARY" "$OUT_DIR" "$FIXTURE" >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
 set -euo pipefail
 
@@ -45,6 +45,8 @@ OUT_DIR="$2"
 FIXTURE="$3"
 
 export GDK_BACKEND=x11
+export GSK_RENDERER=cairo
+export OKP_SKIP_UPDATE_CHECK=1
 export GTK_USE_PORTAL=0
 export NO_AT_BRIDGE=1
 export XDG_SESSION_TYPE=x11
@@ -94,7 +96,7 @@ fi
 
 # Shrink to a narrow floor: 480x540 is well below the default 1120x680 (so the
 # narrow-width surface is actually exercised) but wide enough that the side
-# panel (344 px + 24 px inset = 368 px) still fits without its rows clipping
+# panel (316 px) still fits without its rows clipping
 # off the left edge — the acceptance is "side-panel rows do not clip", so the
 # floor must stay just clear of the panel's own minimum.
 xdotool windowsize "$window_id" 480 540
@@ -124,12 +126,12 @@ import -window "$window_id" "$OUT_DIR/narrow.png"
 osc_top=$((height - 66))
 osc_h=$((height - 18 - osc_top))
 
-# The side panel is anchored to the right (halign End, 344 px wide, 24 px inset),
-# so its horizontal extent is [width-368, width-24].
-panel_left=$((width - 368))
-panel_right=$((width - 24))
+# The side panel is anchored flush to the right at the canonical 316 px width,
+# so its horizontal extent is [width-316, width].
+panel_left=$((width - 316))
+panel_right=$width
 panel_w=$((panel_right - panel_left))
-panel_bottom=$((height - 92))
+panel_bottom=$((height - 80))
 
 if (( panel_left < 0 || panel_right > width || panel_bottom > osc_top - 12 )); then
   echo "derived narrow layout overlaps: panel=[${panel_left},${panel_right}] bottom=${panel_bottom}, osc-top=${osc_top}" >&2
@@ -166,7 +168,7 @@ if ! awk -v max="$left_max" 'BEGIN { exit !(max > 0.4) }'; then
 fi
 
 # No panel-over-OSC overlap: the side panel renders above the bar (z-order)
-# with a 92 px bottom margin, so the OSC controls in the panel's horizontal
+# with an 80 px bottom inset, so the OSC controls in the panel's horizontal
 # extent stay visible. If that margin regresses the panel slides over the bar and
 # dims/covers these glyphs — so this same band guards the overlap. It also
 # catches the controls being clipped out of the panel's horizontal extent.

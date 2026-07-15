@@ -117,6 +117,14 @@ const OKP_STYLESHEET: &str = "
             background: alpha(@okp_bg, 0.97);
         }
 
+        .okp-empty-surface.is-preview-substrate {
+            background: #050507;
+        }
+
+        .okp-empty-surface.is-preview-substrate.is-preview-bright {
+            background: #f4f7fa;
+        }
+
         .okp-empty-panel {
             padding: 38px 44px 30px 44px;
             border-radius: 12px;
@@ -879,56 +887,45 @@ const OKP_STYLESHEET: &str = "
         }
 
         .okp-up-next-panel {
-            padding: 12px;
-            border-radius: 12px;
-            background: rgba(12, 13, 17, 0.94);
-            border: 1px solid rgba(255, 255, 255, 0.10);
-            box-shadow: 0 22px 58px rgba(0, 0, 0, 0.48);
+            border-radius: 12px 0 0 12px;
+            background: rgba(244, 244, 244, 0.96);
+            border-style: solid;
+            border-color: rgba(0, 0, 0, 0.12);
+            border-width: 1px 0 1px 1px;
+            box-shadow: -18px 18px 48px rgba(0, 0, 0, 0.30);
         }
 
         .okp-side-panel-header {
-            padding: 2px 2px 4px 2px;
-        }
-
-        .okp-up-next-title {
-            color: rgba(255, 255, 255, 0.94);
-            font-size: 17px;
-            font-weight: 760;
-        }
-
-        .okp-up-next-summary {
-            color: rgba(255, 255, 255, 0.54);
-            font-size: 11.5px;
+            padding: 14px 8px 6px 14px;
         }
 
         .okp-side-panel-tabs {
-            margin-top: 6px;
             padding: 3px;
-            border-radius: 10px;
-            background: rgba(255, 255, 255, 0.055);
-            border: 1px solid rgba(255, 255, 255, 0.055);
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.08);
         }
 
         button.okp-side-panel-tab {
-            min-height: 30px;
-            padding: 0 10px;
-            border-radius: 8px;
+            min-height: 28px;
+            padding: 0 16px;
+            border-radius: 6px;
             border: none;
             background: transparent;
             box-shadow: none;
-            color: rgba(255, 255, 255, 0.64);
-            font-size: 12px;
+            color: rgba(0, 0, 0, 0.50);
+            font-size: 12.5px;
             font-weight: 650;
         }
 
         button.okp-side-panel-tab:hover {
-            background: rgba(255, 255, 255, 0.07);
-            color: rgba(255, 255, 255, 0.86);
+            background: rgba(255, 255, 255, 0.55);
+            color: rgba(0, 0, 0, 0.74);
         }
 
         button.okp-side-panel-tab.is-selected {
-            background: alpha(@okp_accent, 0.22);
-            color: rgba(255, 255, 255, 0.96);
+            background: rgba(255, 255, 255, 0.96);
+            color: @okp_teal_deep;
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.16);
         }
 
         button.okp-side-panel-tab:focus-visible {
@@ -936,7 +933,29 @@ const OKP_STYLESHEET: &str = "
             box-shadow: inset 0 0 0 1px alpha(@okp_accent, 0.6);
         }
 
+        button.okp-side-panel-close {
+            min-width: 30px;
+            min-height: 30px;
+            padding: 0;
+            border: none;
+            border-radius: 6px;
+            background: transparent;
+            color: rgba(0, 0, 0, 0.46);
+            box-shadow: none;
+        }
+
+        button.okp-side-panel-close:hover {
+            background: rgba(0, 0, 0, 0.07);
+            color: rgba(0, 0, 0, 0.74);
+        }
+
+        button.okp-side-panel-close:focus-visible {
+            outline: none;
+            box-shadow: inset 0 0 0 1px alpha(@okp_accent, 0.6);
+        }
+
         .okp-up-next-list {
+            margin: 0 8px 10px 8px;
             background: transparent;
         }
 
@@ -945,93 +964,110 @@ const OKP_STYLESHEET: &str = "
         }
 
         .okp-panel-heading-row {
-            padding: 8px 10px 3px 10px;
+            padding: 6px 12px 4px 12px;
         }
 
         .okp-panel-heading {
-            color: rgba(255, 255, 255, 0.42);
-            font-size: 10.5px;
+            color: rgba(0, 0, 0, 0.42);
+            font-size: 11px;
             font-weight: 720;
         }
 
-        .okp-panel-empty-row {
-            min-height: 64px;
-            margin: 4px 2px;
-            padding: 18px 14px;
-            border-radius: 10px;
-            background: rgba(255, 255, 255, 0.02);
-            border: 1px dashed rgba(255, 255, 255, 0.14);
+        .okp-up-next-list row.okp-panel-empty-row {
+            min-height: 88px;
+            margin: 4px 6px 8px 6px;
+            padding: 20px 18px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.44);
+            border: 1px dashed rgba(0, 0, 0, 0.18);
         }
 
         .okp-panel-empty {
-            color: rgba(255, 255, 255, 0.56);
+            color: rgba(0, 0, 0, 0.58);
             font-size: 12.5px;
         }
 
         .okp-up-next-row {
-            min-height: 42px;
-            margin: 2px 0;
-            padding: 9px 10px;
-            border-radius: 9px;
+            min-height: 40px;
+            margin: 1px 0;
+            padding: 7px 8px;
+            border-radius: 6px;
             border: 1px solid transparent;
-            background: rgba(255, 255, 255, 0.035);
-            color: rgba(255, 255, 255, 0.78);
+            background: transparent;
+            color: rgba(0, 0, 0, 0.78);
         }
 
         .okp-chapter-row {
-            min-height: 58px;
+            min-height: 42px;
+            padding: 5px 0;
+        }
+
+        .okp-chapter-current-rail {
+            min-width: 3px;
+            min-height: 34px;
+            border-radius: 2px;
+            background: @okp_teal;
+            opacity: 0;
+        }
+
+        .okp-chapter-current-rail.is-current {
+            opacity: 1;
         }
 
         .okp-chapter-thumb {
-            min-width: 88px;
-            min-height: 50px;
-            border-radius: 7px;
-            background: rgba(255, 255, 255, 0.08);
-            border: 1px solid rgba(255, 255, 255, 0.06);
+            min-width: 56px;
+            min-height: 32px;
+            border-radius: 4px;
+            background: rgba(0, 0, 0, 0.08);
+            border: 1px solid rgba(0, 0, 0, 0.06);
         }
 
         .okp-chapter-thumb.is-pending {
-            background: rgba(255, 255, 255, 0.045);
+            background: rgba(0, 0, 0, 0.045);
             border-style: dashed;
-            border-color: rgba(255, 255, 255, 0.09);
+            border-color: rgba(0, 0, 0, 0.12);
         }
 
         .okp-chapter-thumb-placeholder {
-            color: rgba(255, 255, 255, 0.26);
+            color: rgba(0, 0, 0, 0.30);
         }
 
         .okp-bookmark-row .okp-bookmark-icon {
             color: alpha(@okp_accent, 0.92);
         }
 
-        .okp-add-bookmark-row {
-            background: transparent;
-            border-style: dashed;
-            border-color: rgba(255, 255, 255, 0.16);
-            color: rgba(255, 255, 255, 0.62);
+        .okp-up-next-list row.okp-add-bookmark-row {
+            margin-top: 6px;
+            background: @okp_teal;
+            border-color: @okp_teal;
+            color: #ffffff;
+            font-weight: 650;
         }
 
-        .okp-add-bookmark-row:hover {
-            background: alpha(@okp_accent, 0.12);
-            border-color: alpha(@okp_accent, 0.48);
-            color: rgba(255, 255, 255, 0.92);
+        .okp-up-next-list row.okp-add-bookmark-row:hover {
+            background: @okp_teal_deep;
+            border-color: @okp_teal_deep;
+            color: #ffffff;
         }
 
         .okp-add-bookmark-row .okp-add-bookmark-icon {
-            color: alpha(@okp_accent, 0.92);
+            color: #ffffff;
         }
 
-        .okp-add-files-row {
-            background: transparent;
+        .okp-up-next-list row.okp-add-files-row {
+            min-height: 70px;
+            margin: 6px;
+            background: rgba(255, 255, 255, 0.44);
             border-style: dashed;
-            border-color: rgba(255, 255, 255, 0.16);
-            color: rgba(255, 255, 255, 0.62);
+            border-color: alpha(@okp_teal, 0.42);
+            color: @okp_teal_deep;
+            font-weight: 650;
         }
 
-        .okp-add-files-row:hover {
-            background: alpha(@okp_accent, 0.12);
-            border-color: alpha(@okp_accent, 0.48);
-            color: rgba(255, 255, 255, 0.92);
+        .okp-up-next-list row.okp-add-files-row:hover {
+            background: alpha(@okp_teal, 0.12);
+            border-color: alpha(@okp_teal, 0.64);
+            color: @okp_teal_deep;
         }
 
         .okp-add-files-row .okp-add-files-icon {
@@ -1041,8 +1077,33 @@ const OKP_STYLESHEET: &str = "
         /* The lone now-playing card at the top of a short queue has no reorder /
            remove controls, so give it a touch more breathing room than a regular
            queue row so it reads as a pinned card rather than a stripped row. */
-        .okp-now-playing-pinned-row {
-            min-height: 46px;
+        .okp-up-next-list row.okp-now-playing-pinned-row {
+            min-height: 50px;
+            margin: 6px 6px 10px 6px;
+            padding: 8px;
+            border-radius: 8px;
+            background: alpha(@okp_teal, 0.12);
+            color: @okp_teal_deep;
+        }
+
+        .okp-now-playing-thumb {
+            min-width: 54px;
+            min-height: 34px;
+            border-radius: 5px;
+            background: linear-gradient(135deg, #16352b, @okp_teal);
+            color: rgba(255, 255, 255, 0.56);
+        }
+
+        .okp-now-playing-title {
+            color: @okp_teal_deep;
+            font-size: 12.5px;
+            font-weight: 650;
+        }
+
+        .okp-now-playing-state {
+            color: @okp_teal;
+            font-size: 10.5px;
+            font-weight: 650;
         }
 
         .okp-up-next-row.is-current .okp-chapter-thumb {
@@ -1050,23 +1111,23 @@ const OKP_STYLESHEET: &str = "
         }
 
         .okp-up-next-row:hover {
-            background: rgba(255, 255, 255, 0.08);
+            background: rgba(0, 0, 0, 0.055);
         }
 
         .okp-up-next-row.is-current {
-            background: alpha(@okp_accent, 0.18);
-            border-color: alpha(@okp_accent, 0.32);
-            color: rgba(255, 255, 255, 0.96);
+            background: alpha(@okp_accent, 0.10);
+            border-color: alpha(@okp_teal, 0.18);
+            color: @okp_teal_deep;
         }
 
         .okp-up-next-row.is-behind {
             background: transparent;
-            color: rgba(255, 255, 255, 0.44);
+            color: rgba(0, 0, 0, 0.42);
         }
 
         .okp-up-next-row.is-behind:hover {
-            background: rgba(255, 255, 255, 0.05);
-            color: rgba(255, 255, 255, 0.72);
+            background: rgba(0, 0, 0, 0.04);
+            color: rgba(0, 0, 0, 0.62);
         }
 
         .okp-up-next-row.is-behind .okp-up-next-source-icon {
@@ -1080,7 +1141,7 @@ const OKP_STYLESHEET: &str = "
 
         .okp-up-next-drag-handle {
             min-width: 18px;
-            color: rgba(255, 255, 255, 0.28);
+            color: rgba(0, 0, 0, 0.24);
         }
 
         .okp-up-next-drag-handle-icon {
@@ -1089,27 +1150,31 @@ const OKP_STYLESHEET: &str = "
 
         .okp-up-next-row:hover .okp-up-next-drag-handle,
         .okp-up-next-row.is-drop-target .okp-up-next-drag-handle {
-            color: rgba(255, 255, 255, 0.78);
+            color: rgba(0, 0, 0, 0.64);
         }
 
         .okp-up-next-lane {
-            min-width: 46px;
+            min-width: 42px;
         }
 
         .okp-up-next-index {
             min-width: 22px;
-            color: rgba(255, 255, 255, 0.40);
+            color: rgba(0, 0, 0, 0.40);
             font-size: 11px;
             font-weight: 620;
             font-feature-settings: 'tnum';
         }
 
+        .okp-up-next-watched-icon {
+            color: @okp_teal;
+        }
+
         .okp-up-next-source-icon {
-            color: rgba(255, 255, 255, 0.50);
+            color: rgba(0, 0, 0, 0.46);
         }
 
         .okp-up-next-row.is-current .okp-up-next-source-icon {
-            color: rgba(255, 255, 255, 0.82);
+            color: @okp_teal_deep;
         }
 
         .okp-now-badge {
@@ -1133,14 +1198,14 @@ const OKP_STYLESHEET: &str = "
         }
 
         .okp-up-next-marker {
-            color: alpha(@okp_accent, 0.98);
+            color: rgba(0, 0, 0, 0.45);
             font-size: 11px;
-            font-weight: 760;
+            font-weight: 560;
             font-feature-settings: 'tnum';
         }
 
         .okp-up-next-row.is-current .okp-up-next-marker {
-            color: rgba(255, 255, 255, 0.90);
+            color: @okp_teal_deep;
         }
 
         .okp-up-next-file {
@@ -1148,8 +1213,40 @@ const OKP_STYLESHEET: &str = "
             font-size: 13px;
         }
 
-        .okp-up-next-actions {
-            min-width: 104px;
+        menubutton.okp-up-next-actions-menu > button {
+            min-width: 26px;
+            min-height: 26px;
+            padding: 0;
+            border: none;
+            border-radius: 5px;
+            background: transparent;
+            color: rgba(0, 0, 0, 0.42);
+            box-shadow: none;
+        }
+
+        menubutton.okp-up-next-actions-menu > button:hover {
+            background: rgba(0, 0, 0, 0.07);
+            color: rgba(0, 0, 0, 0.72);
+        }
+
+        .okp-up-next-actions-popover {
+            min-width: 142px;
+            padding: 6px;
+            background: #f4f4f4;
+        }
+
+        button.okp-up-next-menu-action {
+            min-height: 30px;
+            padding: 5px 8px;
+            border: none;
+            border-radius: 5px;
+            background: transparent;
+            color: rgba(0, 0, 0, 0.78);
+            box-shadow: none;
+        }
+
+        button.okp-up-next-menu-action:hover {
+            background: rgba(0, 0, 0, 0.07);
         }
 
         button.okp-up-next-action-button {
@@ -1160,16 +1257,16 @@ const OKP_STYLESHEET: &str = "
             border-radius: 5px;
             background: transparent;
             box-shadow: none;
-            color: rgba(255, 255, 255, 0.58);
+            color: rgba(0, 0, 0, 0.46);
         }
 
         button.okp-up-next-action-button:hover {
-            background: rgba(255, 255, 255, 0.10);
-            color: rgba(255, 255, 255, 0.90);
+            background: rgba(0, 0, 0, 0.07);
+            color: rgba(0, 0, 0, 0.78);
         }
 
         button.okp-up-next-action-button:disabled {
-            color: rgba(255, 255, 255, 0.18);
+            color: rgba(0, 0, 0, 0.18);
         }
 
         .okp-up-next-panel scrolledwindow {
@@ -1185,7 +1282,7 @@ const OKP_STYLESHEET: &str = "
         .okp-up-next-panel scrollbar slider {
             min-width: 4px;
             border-radius: 999px;
-            background: rgba(255, 255, 255, 0.22);
+            background: rgba(0, 0, 0, 0.22);
         }
 
         .okp-track-popover-content {

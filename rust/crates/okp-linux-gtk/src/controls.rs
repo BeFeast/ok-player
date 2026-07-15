@@ -115,22 +115,20 @@ pub(crate) fn build_controls(
     volume.set_value(100.0);
     volume.add_css_class("okp-volume");
 
-    let up_next_title = gtk::Label::new(Some("Playback"));
-    up_next_title.add_css_class("okp-up-next-title");
-    up_next_title.set_xalign(0.0);
-
-    let up_next_summary = gtk::Label::new(Some("No media loaded"));
-    up_next_summary.add_css_class("okp-up-next-summary");
-    up_next_summary.set_xalign(0.0);
-    up_next_summary.set_ellipsize(pango::EllipsizeMode::End);
-
     let chapters_tab = side_panel_segment_button("Chapters", true);
     let up_next_tab = side_panel_segment_button("Up Next", false);
     let side_panel_mode = Rc::new(Cell::new(SidePanelMode::Chapters));
     let side_panel_tabs = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     side_panel_tabs.add_css_class("okp-side-panel-tabs");
+    side_panel_tabs.set_halign(gtk::Align::Start);
+    side_panel_tabs.set_hexpand(true);
     side_panel_tabs.append(&chapters_tab);
     side_panel_tabs.append(&up_next_tab);
+
+    let side_panel_close = gtk::Button::from_icon_name("window-close-symbolic");
+    side_panel_close.add_css_class("okp-side-panel-close");
+    side_panel_close.set_has_frame(false);
+    side_panel_close.set_tooltip_text(Some("Close panel"));
 
     let up_next_list = gtk::ListBox::new();
     up_next_list.add_css_class("okp-up-next-list");
@@ -141,35 +139,57 @@ pub(crate) fn build_controls(
     up_next_scroller.set_child(Some(&up_next_list));
     up_next_scroller.set_vexpand(true);
 
-    let up_next_header = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    let up_next_header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     up_next_header.add_css_class("okp-side-panel-header");
-    up_next_header.append(&up_next_title);
-    up_next_header.append(&up_next_summary);
     up_next_header.append(&side_panel_tabs);
+    up_next_header.append(&side_panel_close);
 
-    let up_next_panel = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    let up_next_panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
     up_next_panel.add_css_class("okp-up-next-panel");
-    up_next_panel.set_width_request(344);
+    up_next_panel.set_width_request(SIDE_PANEL_WIDTH);
     up_next_panel.append(&up_next_header);
     up_next_panel.append(&up_next_scroller);
+
+    let side_panel_fade_revealer = gtk::Revealer::new();
+    side_panel_fade_revealer.set_transition_duration(SIDE_PANEL_TRANSITION_MS);
+    side_panel_fade_revealer.set_transition_type(gtk::RevealerTransitionType::Crossfade);
+    side_panel_fade_revealer.set_reveal_child(false);
+    side_panel_fade_revealer.set_child(Some(&up_next_panel));
 
     let up_next_revealer = gtk::Revealer::new();
     up_next_revealer.set_halign(gtk::Align::End);
     up_next_revealer.set_valign(gtk::Align::Fill);
-    up_next_revealer.set_margin_top(24);
-    up_next_revealer.set_margin_end(24);
-    up_next_revealer.set_margin_bottom(92);
-    up_next_revealer.set_transition_duration(170);
+    up_next_revealer.set_margin_top(SIDE_PANEL_TOP_INSET);
+    up_next_revealer.set_margin_end(0);
+    up_next_revealer.set_margin_bottom(SIDE_PANEL_BOTTOM_INSET);
+    up_next_revealer.set_transition_duration(SIDE_PANEL_TRANSITION_MS);
     up_next_revealer.set_transition_type(gtk::RevealerTransitionType::SlideRight);
-    up_next_revealer.set_reveal_child(true);
-    up_next_revealer.set_can_target(true);
-    up_next_revealer.set_visible(false);
-    up_next_revealer.set_child(Some(&up_next_panel));
+    up_next_revealer.set_reveal_child(false);
+    up_next_revealer.set_can_target(false);
+    up_next_revealer.set_child(Some(&side_panel_fade_revealer));
 
     let side_panel_user_visible = Rc::new(Cell::new(false));
     let side_panel_pinned = Rc::new(Cell::new(false));
     let side_panel_manual_mode = Rc::new(Cell::new(false));
     let side_panel_snapshot = Rc::new(RefCell::new(SidePanelSnapshot::default()));
+
+    let close_panel = up_next_revealer.clone();
+    let close_fade = side_panel_fade_revealer.clone();
+    let close_toggle = chapters_button.clone();
+    let close_visible = Rc::clone(&side_panel_user_visible);
+    let close_pinned = Rc::clone(&side_panel_pinned);
+    let close_chrome = Rc::clone(&chrome);
+    side_panel_close.connect_clicked(move |_| {
+        set_side_panel_user_visible(
+            &close_panel,
+            &close_fade,
+            &close_toggle,
+            &close_visible,
+            &close_pinned,
+            &close_chrome,
+            false,
+        );
+    });
 
     let up_next_state = Rc::clone(&state);
     let up_next_actions = Rc::new(RefCell::new(Vec::<SidePanelAction>::new()));
@@ -324,6 +344,7 @@ pub(crate) fn build_controls(
     });
 
     let chapters_panel = up_next_revealer.clone();
+    let chapters_fade = side_panel_fade_revealer.clone();
     let chapters_toggle = chapters_button.clone();
     let chapters_visible = Rc::clone(&side_panel_user_visible);
     let chapters_pinned = Rc::clone(&side_panel_pinned);
@@ -349,6 +370,7 @@ pub(crate) fn build_controls(
         }
         set_side_panel_user_visible(
             &chapters_panel,
+            &chapters_fade,
             &chapters_toggle,
             &chapters_visible,
             &chapters_pinned,
@@ -403,8 +425,7 @@ pub(crate) fn build_controls(
         status_toast,
         timeline_marks_snapshot: RefCell::new(Vec::new()),
         up_next_revealer,
-        up_next_title,
-        up_next_summary,
+        side_panel_fade_revealer,
         chapters_tab,
         up_next_tab,
         up_next_list,
@@ -521,16 +542,6 @@ pub(crate) fn preferred_side_panel_mode(state: &Rc<RefCell<PlayerState>>) -> Sid
     }
 }
 
-pub(crate) fn update_side_panel_tab_labels(
-    chapters_tab: &gtk::Button,
-    up_next_tab: &gtk::Button,
-    chapters_count: usize,
-    playlist_count: usize,
-) {
-    chapters_tab.set_label(&format!("Chapters {chapters_count}"));
-    up_next_tab.set_label(&format!("Up Next {playlist_count}"));
-}
-
 pub(crate) fn update_side_panel_tab_state(
     chapters_tab: &gtk::Button,
     up_next_tab: &gtk::Button,
@@ -548,33 +559,9 @@ pub(crate) fn update_side_panel_tab_state(
     }
 }
 
-pub(crate) fn side_panel_summary(snapshot: &SidePanelSnapshot) -> String {
-    let current = snapshot
-        .current_file
-        .as_deref()
-        .map(display_file_name)
-        .or_else(|| {
-            snapshot
-                .current_url
-                .as_ref()
-                .map(|url| PlaylistItem::Url(url.clone()).display_name())
-        })
-        .unwrap_or_else(|| "No media loaded".to_owned());
-    let chapter_label = match snapshot.chapters.len() {
-        0 => "0 chapters".to_owned(),
-        1 => "1 chapter".to_owned(),
-        count => format!("{count} chapters"),
-    };
-    let item_label = match snapshot.playlist.len() {
-        0 => "0 items".to_owned(),
-        1 => "1 item".to_owned(),
-        count => format!("{count} items"),
-    };
-    format!("{current} · {chapter_label} · {item_label}")
-}
-
 pub(crate) fn set_side_panel_user_visible(
     revealer: &gtk::Revealer,
+    fade_revealer: &gtk::Revealer,
     toggle: &gtk::Button,
     user_visible: &Rc<Cell<bool>>,
     pinned: &Rc<Cell<bool>>,
@@ -582,7 +569,9 @@ pub(crate) fn set_side_panel_user_visible(
     visible: bool,
 ) {
     user_visible.set(visible);
-    revealer.set_visible(visible);
+    revealer.set_can_target(visible);
+    fade_revealer.set_reveal_child(visible);
+    revealer.set_reveal_child(visible);
 
     if visible {
         toggle.add_css_class("is-selected");

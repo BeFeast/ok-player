@@ -1005,14 +1005,6 @@ pub(crate) fn is_playlist_path(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-pub(crate) fn display_file_name(path: &Path) -> String {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| path.display().to_string())
-}
-
 pub(crate) fn shuffle_seed() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

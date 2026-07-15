@@ -25,7 +25,7 @@ if [[ -n "${OKP_XVFB_SERVER_NUM:-}" ]]; then
   xvfb_args=(-n "$OKP_XVFB_SERVER_NUM")
 fi
 
-if ! xvfb-run "${xvfb_args[@]}" --server-args='-screen 0 1280x900x24 -nolisten tcp' \
+if ! xvfb-run "${xvfb_args[@]}" --server-args='-screen 0 1280x900x24 -nolisten tcp -extension GLX' \
   dbus-run-session -- bash -s -- "$BINARY" "$OUT_DIR" >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
 set -euo pipefail
 
@@ -33,6 +33,8 @@ BINARY="$1"
 OUT_DIR="$2"
 
 export GDK_BACKEND=x11
+export GSK_RENDERER=cairo
+export OKP_SKIP_UPDATE_CHECK=1
 export GTK_USE_PORTAL=0
 export NO_AT_BRIDGE=1
 export XDG_SESSION_TYPE=x11
@@ -43,7 +45,7 @@ xfwm4 --sm-client-disable >"$OUT_DIR/xfwm4.log" 2>&1 &
 wm_pid=$!
 
 kill_app() {
-  kill "$app_pid" 2>/dev/null || true
+  [[ -n "${app_pid:-}" ]] && kill "$app_pid" 2>/dev/null || true
 }
 
 # Let the window manager come up before any GTK window is created — the sibling
@@ -52,13 +54,11 @@ kill_app() {
 # UI rendered correctly.
 sleep 1
 
-# The side panel is anchored to the right (halign End, 344px wide, 24px inset).
-# Both empty states render bright text over the near-black video, so a dark
-# maximum in that band means the panel failed to draw. The Up Next short-queue
-# state additionally carries the OK Player teal accent on the pinned now-playing
-# row and the "Add files" affordance, so the green channel should read stronger
-# than red there; the no-chapters Chapters state is a calm message row only.
-panel_band_args=(300x440+772+64)
+# The side panel is anchored flush to the right at the canonical 316px width.
+# Both empty states render dark text over the light panel, so a low maximum in
+# that band means the panel failed to draw. The Up Next short-queue state also
+# carries teal in the pinned now-playing card and Add files affordance.
+panel_band_args=(292x520+816+52)
 
 capture_state() {
   local env_value="$1" shot="$2" label="$3"
@@ -279,18 +279,16 @@ wait "$app_pid" 2>/dev/null || true
 # accent and renders the dashed "Add files to queue" affordance, so across the
 # band the green channel should read stronger than the red one — a stock grey
 # panel (or the old bare dead string) would not.
-up_next_red="$(magick "$OUT_DIR/up-next-empty.png" -crop "${panel_band_args[@]}" -format '%[fx:mean.r]' info:)"
-up_next_green="$(magick "$OUT_DIR/up-next-empty.png" -crop "${panel_band_args[@]}" -format '%[fx:mean.g]' info:)"
+up_next_red="$(magick "$OUT_DIR/up-next-empty.png" -crop 280x70+820+94 -format '%[fx:mean.r]' info:)"
+up_next_green="$(magick "$OUT_DIR/up-next-empty.png" -crop 280x70+820+94 -format '%[fx:mean.g]' info:)"
 if ! awk -v r="$up_next_red" -v g="$up_next_green" 'BEGIN { exit !(g - r > 0.01) }'; then
   echo "Up Next short-queue accent missing: red=${up_next_red} green=${up_next_green}" >&2
   exit 1
 fi
 
-# The no-chapters state must render its message text (dark pixels on the left of
-# the band) — not a blank panel. The calm message row sits left-aligned, so the
-# left third of the band should carry meaningfully more dark text than the empty
-# right third.
-left_dark="$(magick "$OUT_DIR/chapters-empty.png" -crop 100x440+772+64 -colorspace gray -threshold 50% -format '%[fx:(1-mean)*w*h]' info:)"
+# The no-chapters state must render its message and bookmark CTA, not a blank
+# light panel. The left half carries dark copy while the CTA carries teal.
+left_dark="$(magick "$OUT_DIR/chapters-empty.png" -crop 150x300+816+90 -colorspace gray -threshold 50% -format '%[fx:(1-mean)*w*h]' info:)"
 left_dark="${left_dark%.*}"
 if (( left_dark < 40 )); then
   echo "Chapters no-chapters message did not render (left dark pixels: ${left_dark})" >&2
