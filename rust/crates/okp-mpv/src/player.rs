@@ -840,6 +840,11 @@ impl Mpv {
         this.set_option("force-window", "no")?;
         this.set_option("vo", "libmpv")?;
         this.set_option("hwdec", hwdec)?;
+        // Exact same-stem subtitle discovery is an mpv passthrough boundary:
+        // libmpv parses and renders SRT/WebVTT cue payloads, while OK Player
+        // only surfaces the resulting track metadata. Keep this explicit so
+        // config=no cannot make sidecar support depend on mpv's default value.
+        this.set_option("sub-auto", "exact")?;
         this.apply_options(options)?;
         check(unsafe { ffi::mpv_initialize(this.handle.as_ptr()) })?;
 
@@ -1742,7 +1747,79 @@ fn path_to_cstring(path: &Path) -> Result<CString, NulError> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::time::{Duration, Instant};
+
+    use okp_test_fixtures::unique_temp_dir;
+
     use super::*;
+
+    fn fixture_media_path() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../tests/OkPlayer.IntegrationTests/fixtures/subtest.mkv")
+    }
+
+    fn assert_same_stem_sidecar_autoloaded(extension: &str, contents: &str, expected_codec: &str) {
+        let root = unique_temp_dir(&format!("okp-mpv-{extension}-autoload"));
+        fs::create_dir_all(&root).expect("sidecar fixture directory should be created");
+        let media = root.join("movie.mkv");
+        fs::copy(fixture_media_path(), &media).expect("media fixture should be copied");
+        fs::write(root.join(format!("movie.{extension}")), contents)
+            .expect("subtitle sidecar should be written");
+
+        let options = [
+            ("vo".to_owned(), "null".to_owned()),
+            ("ao".to_owned(), "null".to_owned()),
+        ];
+        let mut mpv = Mpv::new_with_options("no", &options)
+            .expect("libmpv must be loadable for okp-mpv tests");
+        mpv.start_event_pump();
+        mpv.load_file(&media).expect("media fixture should load");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut tracks = Vec::new();
+        while Instant::now() < deadline {
+            tracks = mpv.observed_tracks();
+            if tracks.iter().any(|track| {
+                track.kind == TrackKind::Subtitle
+                    && track.external
+                    && track.codec.as_deref() == Some(expected_codec)
+            }) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        assert!(
+            tracks.iter().any(|track| {
+                track.kind == TrackKind::Subtitle
+                    && track.external
+                    && track.codec.as_deref() == Some(expected_codec)
+            }),
+            "expected same-stem .{extension} sidecar as external {expected_codec} track, got {tracks:?}"
+        );
+
+        drop(mpv);
+        fs::remove_dir_all(root).expect("sidecar fixture directory should be removed");
+    }
+
+    #[test]
+    fn exact_same_stem_srt_sidecar_is_autoloaded() {
+        assert_same_stem_sidecar_autoloaded(
+            "srt",
+            "1\n00:00:00,000 --> 00:00:02,000\nSRT SIDECAR\n",
+            "subrip",
+        );
+    }
+
+    #[test]
+    fn exact_same_stem_webvtt_sidecar_is_autoloaded() {
+        assert_same_stem_sidecar_autoloaded(
+            "vtt",
+            "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nWEBVTT SIDECAR\n",
+            "webvtt",
+        );
+    }
 
     /// Real-libmpv twin of the Windows `MpvThreadGuardTests`: blocking reads
     /// on the marked UI thread must trip the debug guard, everything else must
