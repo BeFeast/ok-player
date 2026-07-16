@@ -1,4 +1,120 @@
 use super::*;
+use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+struct RenderProfile {
+    path: PathBuf,
+    started_at: Option<Instant>,
+    frame_clock_ticks: u64,
+    queued_redraws: u64,
+    render_calls: u64,
+    total_render_time: Duration,
+    max_render_time: Duration,
+}
+
+impl RenderProfile {
+    fn from_env() -> Option<Self> {
+        let path = env::var_os("OKP_RENDER_PROFILE_PATH").map(PathBuf::from)?;
+        Some(Self {
+            path,
+            started_at: None,
+            frame_clock_ticks: 0,
+            queued_redraws: 0,
+            render_calls: 0,
+            total_render_time: Duration::ZERO,
+            max_render_time: Duration::ZERO,
+        })
+    }
+
+    fn record_tick(&mut self) {
+        if self.started_at.is_some() {
+            self.frame_clock_ticks += 1;
+        }
+    }
+
+    fn record_queued_redraw(&mut self) {
+        if self.started_at.is_some() {
+            self.queued_redraws += 1;
+        }
+    }
+
+    fn record_render(&mut self, elapsed: Duration, media_active: bool) {
+        if !media_active {
+            return;
+        }
+        if self.started_at.is_none() {
+            self.started_at = Some(Instant::now());
+            self.frame_clock_ticks = 0;
+            self.queued_redraws = 0;
+            self.render_calls = 0;
+            self.total_render_time = Duration::ZERO;
+            self.max_render_time = Duration::ZERO;
+        }
+        self.render_calls += 1;
+        self.total_render_time += elapsed;
+        self.max_render_time = self.max_render_time.max(elapsed);
+    }
+
+    fn write(
+        &self,
+        configured_hwdec: &str,
+        performance: &okp_mpv::PlaybackPerformance,
+    ) -> io::Result<()> {
+        let Some(started_at) = self.started_at else {
+            return Ok(());
+        };
+        let elapsed_seconds = started_at.elapsed().as_secs_f64();
+        let render_fps = if elapsed_seconds > 0.0 {
+            self.render_calls as f64 / elapsed_seconds
+        } else {
+            0.0
+        };
+        let average_render_ms = if self.render_calls > 0 {
+            self.total_render_time.as_secs_f64() * 1000.0 / self.render_calls as f64
+        } else {
+            0.0
+        };
+        let payload = serde_json::json!({
+            "schema_version": 1,
+            "elapsed_seconds": elapsed_seconds,
+            "configured_hwdec": configured_hwdec,
+            "hwdec_current": performance.hwdec_current,
+            "estimated_video_fps": performance.estimated_video_fps,
+            "display_fps": performance.display_fps,
+            "vo_dropped_frames": performance.vo_dropped_frames,
+            "decoder_dropped_frames": performance.decoder_dropped_frames,
+            "frame_clock_ticks": self.frame_clock_ticks,
+            "queued_redraws": self.queued_redraws,
+            "render_calls": self.render_calls,
+            "render_fps": render_fps,
+            "average_render_ms": average_render_ms,
+            "max_render_ms": self.max_render_time.as_secs_f64() * 1000.0,
+        });
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let payload = serde_json::to_vec_pretty(&payload).map_err(io::Error::other)?;
+        fs::write(&self.path, payload)
+    }
+}
+
+fn with_render_profile(
+    profile: &Arc<Mutex<RenderProfile>>,
+    update: impl FnOnce(&mut RenderProfile),
+) {
+    let mut profile = profile
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    update(&mut profile);
+}
+
+fn claim_render_wakeup(pending: &AtomicBool) -> bool {
+    !pending.swap(true, Ordering::AcqRel)
+}
+
+fn complete_render_wakeup(pending: &AtomicBool) {
+    pending.store(false, Ordering::Release);
+}
 
 #[cfg(target_os = "linux")]
 use gtk::glib::translate::ToGlibPtr;
@@ -48,7 +164,14 @@ pub(crate) fn connect_mpv(
     state: Rc<RefCell<PlayerState>>,
     launch_args: LaunchArgs,
 ) {
+    let render_profile = RenderProfile::from_env().map(|profile| Arc::new(Mutex::new(profile)));
+    let profile_enabled = render_profile.is_some();
+    let render_wakeup_pending = Arc::new(AtomicBool::new(false));
+    let render_main_context = glib::MainContext::default();
+    let render_area: glib::SendWeakRef<gtk::GLArea> = video_area.downgrade().into();
     let realize_state = Rc::clone(&state);
+    let realize_render_profile = render_profile.clone();
+    let realize_render_pending = Arc::clone(&render_wakeup_pending);
     video_area.connect_realize(move |area| {
         area.make_current();
         if let Some(error) = area.error() {
@@ -131,10 +254,42 @@ pub(crate) fn connect_mpv(
             return;
         }
 
+        realize_render_pending.store(false, Ordering::Release);
+        let wakeup_pending = Arc::clone(&realize_render_pending);
+        let wakeup_context = render_main_context.clone();
+        let wakeup_area = render_area.clone();
+        let wakeup_profile = realize_render_profile.clone();
+        if let Err(error) = mpv.set_render_update_callback(move || {
+            if !claim_render_wakeup(&wakeup_pending) {
+                return;
+            }
+
+            let pending = Arc::clone(&wakeup_pending);
+            let area = wakeup_area.clone();
+            let profile = wakeup_profile.clone();
+            wakeup_context.spawn(async move {
+                if let Some(area) = area.upgrade() {
+                    area.queue_render();
+                    if let Some(profile) = profile.as_ref() {
+                        with_render_profile(profile, RenderProfile::record_queued_redraw);
+                    }
+                } else {
+                    complete_render_wakeup(&pending);
+                }
+            });
+        }) {
+            eprintln!("Failed to register mpv render update callback: {error}");
+            mpv.destroy_render_context();
+            return;
+        }
+
         // Start the background event pump: from here on the shell reads playback
         // state from its observed snapshot rather than polling mpv from this
         // (GLib main-context) thread, so the tripwire armed above stays green.
         mpv.start_event_pump();
+        if profile_enabled {
+            mpv.enable_playback_performance_observation();
+        }
 
         realize_state.borrow_mut().mpv = Some(mpv);
         schedule_audio_device_restore(&realize_state);
@@ -144,13 +299,22 @@ pub(crate) fn connect_mpv(
     });
 
     let resize_state = Rc::clone(&state);
-    video_area.connect_resize(move |_, width, height| {
+    video_area.connect_resize(move |area, width, height| {
         resize_state.borrow_mut().render_target_size =
             (width > 0 && height > 0).then_some(okp_mpv::RenderTargetSize { width, height });
+        area.queue_render();
     });
+    video_area.connect_scale_factor_notify(gtk::GLArea::queue_render);
 
     let render_state = Rc::clone(&state);
+    let render_callback_profile = render_profile.clone();
+    let render_callback_pending = Arc::clone(&render_wakeup_pending);
     video_area.connect_render(move |area, _context| {
+        // This queued redraw is now being serviced. Clear the gate before
+        // mpv_render_context_update() so a callback raised during or after the
+        // update can schedule the next frame without being lost.
+        complete_render_wakeup(&render_callback_pending);
+        let render_started_at = render_callback_profile.as_ref().map(|_| Instant::now());
         area.make_current();
         area.attach_buffers();
         let viewport_size = current_render_target_size();
@@ -165,28 +329,67 @@ pub(crate) fn connect_mpv(
             widget_height,
             scale_factor,
         );
+        let media_active = state
+            .mpv
+            .as_ref()
+            .is_some_and(|mpv| mpv.observed_playback_state().container_fps.is_some());
         if let Some(mpv) = state.mpv.as_mut()
             && let Err(error) = mpv.render(target_size.width, target_size.height)
         {
             eprintln!("mpv render failed: {error}");
+        }
+        drop(state);
+        if let (Some(profile), Some(started_at)) =
+            (render_callback_profile.as_ref(), render_started_at)
+        {
+            with_render_profile(profile, |profile| {
+                profile.record_render(started_at.elapsed(), media_active);
+            });
         }
 
         glib::Propagation::Stop
     });
 
     let unrealize_state = Rc::clone(&state);
+    let unrealize_render_pending = Arc::clone(&render_wakeup_pending);
     video_area.connect_unrealize(move |area| {
+        complete_render_wakeup(&unrealize_render_pending);
         area.make_current();
         if let Some(mpv) = unrealize_state.borrow_mut().mpv.as_mut() {
             mpv.destroy_render_context();
         }
     });
 
-    let tick_area = video_area.clone();
-    glib::timeout_add_local(Duration::from_millis(16), move || {
-        tick_area.queue_render();
-        glib::ControlFlow::Continue
-    });
+    if let Some(profile) = render_profile {
+        let tick_profile = Arc::clone(&profile);
+        video_area.add_tick_callback(move |_, _| {
+            with_render_profile(&tick_profile, RenderProfile::record_tick);
+            glib::ControlFlow::Continue
+        });
+
+        let profile_state = Rc::clone(&state);
+        glib::timeout_add_local(Duration::from_secs(1), move || {
+            let (configured_hwdec, performance) = {
+                let state = profile_state.borrow();
+                (
+                    state.settings.hardware_decode_mpv_option(),
+                    state
+                        .mpv
+                        .as_ref()
+                        .map(Mpv::observed_playback_performance)
+                        .unwrap_or_default(),
+                )
+            };
+            let result = profile
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .write(configured_hwdec, &performance);
+            if let Err(error) = result {
+                eprintln!("Failed to write render profile: {error}");
+            }
+            glib::ControlFlow::Continue
+        });
+    }
 }
 
 pub(crate) fn parse_raw_mpv_config(text: &str) -> Result<Vec<(String, String)>, RawMpvConfigError> {
@@ -751,4 +954,21 @@ pub(crate) fn show_player_context_menu(
     set_track_popover_child(&popover, PlayerPopoverKind::AdvancedCommands, content);
     popover.connect_closed(|popover| popover.unparent());
     popover.popup();
+}
+
+#[cfg(test)]
+mod render_wakeup_tests {
+    use super::*;
+
+    #[test]
+    fn render_wakeup_coalesces_until_the_queued_render_begins() {
+        let pending = AtomicBool::new(false);
+
+        assert!(claim_render_wakeup(&pending));
+        assert!(!claim_render_wakeup(&pending));
+
+        complete_render_wakeup(&pending);
+
+        assert!(claim_render_wakeup(&pending));
+    }
 }
