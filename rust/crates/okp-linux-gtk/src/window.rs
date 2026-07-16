@@ -154,6 +154,10 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         Rc::clone(&chrome),
     );
     let control_bar = controls_bar(&controls);
+    control_bar.add_css_class("okp-window-drag-excluded");
+    controls
+        .up_next_revealer
+        .add_css_class("okp-window-drag-excluded");
     let window_chrome =
         build_player_window_chrome(&window, Rc::clone(&state), Rc::clone(&status_toast));
     sync_player_window_chrome_fullscreen(&window_chrome, &window);
@@ -212,12 +216,18 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         overlay.add_overlay(&resize_handle);
     }
     window.set_child(Some(&overlay));
+    let suppress_video_click = connect_player_background_window_drag(&window);
     chrome.add_cursor_widget(&overlay);
     connect_chrome_activity(&overlay, Rc::clone(&chrome));
 
     let launch_reserved_notice = launch_args.reserved_notice().map(str::to_owned);
     connect_mpv(&video_area, Rc::clone(&state), launch_args);
-    connect_video_clicks(&video_area, &window, Rc::clone(&state));
+    connect_video_clicks(
+        &video_area,
+        &window,
+        Rc::clone(&state),
+        suppress_video_click,
+    );
     connect_player_context_menu(
         &overlay,
         &window,
@@ -606,7 +616,7 @@ pub(crate) fn build_player_window_chrome(
     title_content.append(&media_icon);
     title_content.append(&title_label);
     drag_zone.append(&title_content);
-    connect_player_window_drag(&drag_zone, window);
+    connect_player_title_double_click(&drag_zone, window);
     bar.append(&drag_zone);
 
     let controls = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -886,42 +896,182 @@ pub(crate) fn set_player_window_control_kind(button: &gtk::Button, kind: WindowC
     }
 }
 
-pub(crate) fn connect_player_window_drag(
+pub(crate) fn connect_player_title_double_click(
     widget: &impl IsA<gtk::Widget>,
     window: &gtk::ApplicationWindow,
 ) {
     let gesture = gtk::GestureClick::new();
     gesture.set_button(gdk::BUTTON_PRIMARY);
-    let drag_window = window.clone();
-    gesture.connect_pressed(move |gesture, n_press, x, y| {
+    let title_window = window.clone();
+    gesture.connect_pressed(move |_, n_press, _, _| {
         if n_press == 2 {
-            if drag_window.is_maximized() {
-                drag_window.unmaximize();
+            if title_window.is_maximized() {
+                title_window.unmaximize();
             } else {
-                drag_window.maximize();
+                title_window.maximize();
             }
-            return;
         }
-
-        let Some(device) = gesture.current_event_device() else {
-            return;
-        };
-        let Some(surface) = drag_window.surface() else {
-            return;
-        };
-        let Ok(toplevel) = surface.downcast::<gdk::Toplevel>() else {
-            return;
-        };
-
-        toplevel.begin_move(
-            &device,
-            gesture.current_button() as i32,
-            x,
-            y,
-            gesture.current_event_time(),
-        );
     });
     widget.add_controller(gesture);
+}
+
+pub(crate) fn connect_player_background_window_drag(
+    window: &gtk::ApplicationWindow,
+) -> Rc<Cell<bool>> {
+    #[derive(Clone)]
+    struct NativeMoveStart {
+        device: gdk::Device,
+        button: i32,
+        x: f64,
+        y: f64,
+        timestamp: u32,
+    }
+
+    let tracker = Rc::new(RefCell::new(video_click::WindowMoveGesture::default()));
+    let native_start = Rc::new(RefCell::new(None::<NativeMoveStart>));
+    let suppress_video_click = Rc::new(Cell::new(false));
+
+    let controller = gtk::EventControllerLegacy::new();
+    controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let event_window = window.clone();
+    let event_suppression = Rc::clone(&suppress_video_click);
+    controller.connect_event(move |_, event| {
+        match event.event_type() {
+            gdk::EventType::ButtonPress => {
+                let Some(button) = event.downcast_ref::<gdk::ButtonEvent>() else {
+                    return glib::Propagation::Proceed;
+                };
+                if button.button() != gdk::BUTTON_PRIMARY {
+                    return glib::Propagation::Proceed;
+                }
+                let Some((x, y)) = event.position() else {
+                    return glib::Propagation::Proceed;
+                };
+
+                event_suppression.set(false);
+                let target = player_window_move_target(&event_window, x, y);
+                let mode = if event_window.is_fullscreen() {
+                    video_click::WindowMode::Fullscreen
+                } else if event_window.is_maximized() {
+                    video_click::WindowMode::Maximized
+                } else {
+                    video_click::WindowMode::Restored
+                };
+                tracker.borrow_mut().begin(target, mode);
+
+                let start = if target == video_click::WindowMoveTarget::Background {
+                    event.device().map(|device| NativeMoveStart {
+                        device,
+                        button: button.button() as i32,
+                        x,
+                        y,
+                        timestamp: event.time(),
+                    })
+                } else {
+                    None
+                };
+                native_start.replace(start);
+            }
+            gdk::EventType::MotionNotify => {
+                if !event
+                    .modifier_state()
+                    .contains(gdk::ModifierType::BUTTON1_MASK)
+                {
+                    tracker.borrow_mut().cancel();
+                    native_start.borrow_mut().take();
+                    return glib::Propagation::Proceed;
+                }
+                let Some((x, y)) = event.position() else {
+                    return glib::Propagation::Proceed;
+                };
+                let Some(start) = native_start.borrow().clone() else {
+                    return glib::Propagation::Proceed;
+                };
+
+                let intent = tracker.borrow_mut().update(x - start.x, y - start.y);
+                match intent {
+                    video_click::WindowMoveIntent::None => {}
+                    video_click::WindowMoveIntent::SuppressClick => {
+                        event_suppression.set(true);
+                    }
+                    video_click::WindowMoveIntent::StartNativeMove => {
+                        event_suppression.set(true);
+                        let Some(surface) = event_window.surface() else {
+                            tracker.borrow_mut().cancel();
+                            return glib::Propagation::Proceed;
+                        };
+                        let Ok(toplevel) = surface.downcast::<gdk::Toplevel>() else {
+                            tracker.borrow_mut().cancel();
+                            return glib::Propagation::Proceed;
+                        };
+                        toplevel.begin_move(
+                            &start.device,
+                            start.button,
+                            start.x,
+                            start.y,
+                            start.timestamp,
+                        );
+                        if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+                            eprintln!("interaction: native-window-move-started");
+                        }
+                    }
+                }
+            }
+            gdk::EventType::ButtonRelease => {
+                let Some(button) = event.downcast_ref::<gdk::ButtonEvent>() else {
+                    return glib::Propagation::Proceed;
+                };
+                if button.button() != gdk::BUTTON_PRIMARY {
+                    return glib::Propagation::Proceed;
+                }
+                tracker.borrow_mut().finish();
+                native_start.borrow_mut().take();
+            }
+            _ => {}
+        }
+        glib::Propagation::Proceed
+    });
+    window.add_controller(controller);
+
+    suppress_video_click
+}
+
+pub(crate) fn player_window_move_target(
+    window: &gtk::ApplicationWindow,
+    x: f64,
+    y: f64,
+) -> video_click::WindowMoveTarget {
+    let Some(mut widget) = window.pick(x, y, gtk::PickFlags::DEFAULT) else {
+        return video_click::WindowMoveTarget::Background;
+    };
+    let window_widget = window.clone().upcast::<gtk::Widget>();
+
+    while widget != window_widget {
+        if widget.has_css_class("okp-resize-handle") {
+            return video_click::WindowMoveTarget::ResizeHandle;
+        }
+        if widget.has_css_class("okp-window-drag-excluded")
+            || widget.is_focusable()
+            || widget.is::<gtk::Button>()
+            || widget.is::<gtk::MenuButton>()
+            || widget.is::<gtk::Range>()
+            || widget.is::<gtk::Editable>()
+            || widget.is::<gtk::TextView>()
+            || widget.is::<gtk::ScrolledWindow>()
+            || widget.is::<gtk::ListBox>()
+            || widget.is::<gtk::FlowBox>()
+            || widget.is::<gtk::Popover>()
+        {
+            return video_click::WindowMoveTarget::InteractiveControl;
+        }
+
+        let Some(parent) = widget.parent() else {
+            break;
+        };
+        widget = parent;
+    }
+
+    video_click::WindowMoveTarget::Background
 }
 
 pub(crate) fn build_player_resize_handles(window: &gtk::ApplicationWindow) -> Vec<gtk::Box> {

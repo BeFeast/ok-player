@@ -1601,6 +1601,51 @@ fn player_context_menu_preserves_control_and_popover_interactions() {
 }
 
 #[test]
+fn captionless_window_drag_uses_native_movement_and_excludes_interactive_surfaces() {
+    let window = include_str!("window.rs");
+    for native_gesture_marker in [
+        "gtk::EventControllerLegacy::new()",
+        "gtk::PropagationPhase::Capture",
+        "video_click::WindowMoveGesture::default()",
+        "gdk::EventType::MotionNotify",
+        "toplevel.begin_move(",
+        "timestamp: event.time()",
+    ] {
+        assert!(
+            window.contains(native_gesture_marker),
+            "missing native window gesture marker: {native_gesture_marker}"
+        );
+    }
+    for exclusion in [
+        "okp-resize-handle",
+        "okp-window-drag-excluded",
+        "gtk::Button",
+        "gtk::MenuButton",
+        "gtk::Range",
+        "gtk::Editable",
+        "gtk::TextView",
+        "gtk::ScrolledWindow",
+        "gtk::ListBox",
+        "gtk::FlowBox",
+        "gtk::Popover",
+    ] {
+        assert!(
+            window.contains(exclusion),
+            "missing window-drag exclusion: {exclusion}"
+        );
+    }
+    assert!(window.contains("event_window.is_fullscreen()"));
+    assert!(window.contains("event_window.is_maximized()"));
+
+    let controls = include_str!("controls.rs");
+    assert!(controls.contains("duration_label.add_css_class(\"okp-window-drag-excluded\")"));
+
+    let video_clicks = include_str!("mpv_bridge.rs");
+    assert!(video_clicks.contains("suppress_video_click.replace(false)"));
+    assert!(video_clicks.contains("video-click-suppressed-by-window-drag"));
+}
+
+#[test]
 fn subtitle_delay_projection_drives_quick_popover_and_settings_refresh() {
     // Both visible surfaces retain the exact projected delay instead of
     // immediately replacing it with the asynchronous mpv observer snapshot.

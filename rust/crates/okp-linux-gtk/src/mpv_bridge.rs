@@ -538,6 +538,7 @@ pub(crate) fn connect_video_clicks(
     video_area: &gtk::GLArea,
     window: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
+    suppress_video_click: Rc<Cell<bool>>,
 ) {
     let click = gtk::GestureClick::new();
     click.set_button(gdk::BUTTON_PRIMARY);
@@ -547,6 +548,15 @@ pub(crate) fn connect_video_clicks(
     let pending_single_click = Rc::new(RefCell::new(None::<glib::SourceId>));
     let pending_click = Rc::clone(&pending_single_click);
     click.connect_released(move |_, press_count, _, _| {
+        if suppress_video_click.replace(false) {
+            if let Some(source_id) = pending_click.borrow_mut().take() {
+                source_id.remove();
+            }
+            if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+                eprintln!("interaction: video-click-suppressed-by-window-drag");
+            }
+            return;
+        }
         match video_click::release_intent(press_count) {
             video_click::Intent::Ignore => {}
             video_click::Intent::SchedulePlayPause => {

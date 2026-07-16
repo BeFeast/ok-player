@@ -995,6 +995,7 @@ pub(crate) fn build_controls(
     let duration_label = gtk::Label::new(Some("-00:00"));
     duration_label.add_css_class("okp-time-label");
     duration_label.add_css_class("okp-remaining-time");
+    duration_label.add_css_class("okp-window-drag-excluded");
     duration_label.set_tooltip_text(Some("Show total time"));
     duration_label.set_can_target(true);
     let trailing_time_mode = Rc::new(Cell::new(time_code::TrailingTimeMode::Remaining));
