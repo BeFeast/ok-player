@@ -2718,6 +2718,24 @@ fn apply_endfile_error_drops_ended_path_when_no_source_is_current() {
 }
 
 #[test]
+fn apply_endfile_error_drops_missing_ended_path_when_no_source_is_current() {
+    // mpv can omit the path on a late EndFile::Error. Once the player has no
+    // current source, the missing path must not reopen a failed surface with no
+    // retryable source.
+    let state = Rc::new(RefCell::new(PlayerState {
+        media_load_state: network_media::MediaLoadState::Idle,
+        ..PlayerState::default()
+    }));
+
+    apply_endfile_error(&state, 7, None);
+
+    let state = state.borrow();
+    assert_eq!(state.media_load_state, network_media::MediaLoadState::Idle);
+    assert!(state.retry_load_source.is_none());
+    assert!(state.last_load_error.is_none());
+}
+
+#[test]
 fn apply_endfile_error_falls_back_to_applying_when_path_is_missing() {
     // A missing path tag (mpv reported nothing to compare) falls back to applying
     // so the helper never under-reports a genuine failure just because the tag was

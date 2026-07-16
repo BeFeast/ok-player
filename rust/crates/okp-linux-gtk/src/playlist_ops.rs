@@ -30,8 +30,9 @@ pub(crate) fn set_local_load_failure(
 /// the ended source's path/URL in the event; when it no longer matches the current
 /// source (URL A failed, then the user started URL B before the next poll drained the
 /// queue), the error belongs to A and must not fail B or arm the dialog with A's
-/// reason. A `None` ended path falls back to applying so a missing tag never
-/// under-reports a genuine failure.
+/// reason. If no source is current anymore, the event is stale even when mpv omitted
+/// the ended path. A `None` ended path only falls back to applying while a source is
+/// active, so a missing tag never under-reports a genuine failure.
 pub(crate) fn apply_endfile_error(
     state: &Rc<RefCell<PlayerState>>,
     error: std::ffi::c_int,
@@ -51,11 +52,11 @@ pub(crate) fn apply_endfile_error(
                     .map(|path| network_media::LoadFailureSource::local(path.clone()))
             })
     };
-    let stale = ended_path.is_some_and(|ended| {
-        current_source
-            .as_ref()
-            .is_none_or(|source| !source.matches_engine_path(ended))
-    });
+    let Some(current_source) = current_source else {
+        eprintln!("ignoring stale EndFile::Error after the source was cleared");
+        return;
+    };
+    let stale = ended_path.is_some_and(|ended| !current_source.matches_engine_path(ended));
     if stale {
         eprintln!(
             "ignoring stale EndFile::Error for a superseded source ({})",
@@ -65,7 +66,7 @@ pub(crate) fn apply_endfile_error(
     }
     let mut state = state.borrow_mut();
     state.media_load_state = network_media::MediaLoadState::Failed;
-    state.retry_load_source = current_source;
+    state.retry_load_source = Some(current_source);
     state.last_load_error = Some(format!("libmpv error {error}"));
 }
 
