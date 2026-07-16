@@ -232,6 +232,39 @@ fn gtk_identity_uses_vector_widgets_instead_of_host_font_marks() {
 }
 
 #[test]
+fn player_settings_entry_stays_outside_auto_hidden_caption_chrome() {
+    let source = include_str!("window.rs");
+
+    assert!(source.contains("gtk::Button::from_icon_name(\"emblem-system-symbolic\")"));
+    assert!(source.contains("gtk::accessible::Property::Label(\"Settings\")"));
+    assert!(source.contains("interaction: player-settings-focus=true"));
+    assert!(source.contains("interaction: player-settings-clicked=true"));
+    assert!(source.contains("controls.append(&settings);"));
+    assert!(source.contains("persistent_widgets: vec![settings.upcast()]"));
+    assert_eq!(
+        source
+            .matches("add_css_class(\"okp-top-chrome-motion\")")
+            .count(),
+        4
+    );
+    assert!(source.contains("transient_controls.append(&pin);"));
+    assert!(
+        source.contains(
+            "scrim.upcast(),\n            title_content.upcast(),\n            transient_controls.upcast(),"
+        )
+    );
+    assert!(!source.contains("chrome.add_linked_motion_widget(window_chrome.widget())"));
+
+    let chrome = include_str!("main.rs");
+    assert!(chrome.contains("widget.set_sensitive(revealed);"));
+    assert!(chrome.contains("widget.add_css_class(\"is-isolated\")"));
+
+    let css = include_str!("css.rs");
+    assert!(css.contains("button.okp-player-settings-control.is-isolated"));
+    assert!(css.contains("background: rgba(0, 0, 0, 0.32);"));
+}
+
+#[test]
 fn settings_shell_matches_windows_reference_geometry() {
     assert_eq!(SETTINGS_REFERENCE_WIDTH, 760);
     assert_eq!(SETTINGS_REFERENCE_HEIGHT, 560);

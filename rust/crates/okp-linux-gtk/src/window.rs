@@ -154,14 +154,20 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         Rc::clone(&chrome),
     );
     let control_bar = controls_bar(&controls);
-    let window_chrome = build_player_window_chrome(&window, Rc::clone(&status_toast));
+    let window_chrome =
+        build_player_window_chrome(&window, Rc::clone(&state), Rc::clone(&status_toast));
     sync_player_window_chrome_fullscreen(&window_chrome, &window);
     let empty_surface = build_empty_surface(&window, Rc::clone(&state), Rc::clone(&status_toast));
     let lyrics_surface = build_lyrics_surface();
     let media_state_overlay =
         MediaStateOverlay::new(&window, Rc::clone(&state), Rc::clone(&status_toast));
     chrome.set_child(&control_bar);
-    chrome.add_linked_motion_widget(window_chrome.widget());
+    for widget in window_chrome.auto_hide_widgets() {
+        chrome.add_linked_motion_widget(widget);
+    }
+    for widget in window_chrome.persistent_widgets() {
+        chrome.add_persistent_widget(widget);
+    }
     chrome.add_linked_revealer(&controls.up_next_revealer);
 
     overlay.set_child(Some(&video_area));
@@ -551,10 +557,19 @@ impl PlayerWindowChrome {
         self.media_icon.set_visible(!title.is_empty());
         self.title_label.set_visible(!title.is_empty());
     }
+
+    pub(crate) fn auto_hide_widgets(&self) -> &[gtk::Widget] {
+        &self.auto_hide_widgets
+    }
+
+    pub(crate) fn persistent_widgets(&self) -> &[gtk::Widget] {
+        &self.persistent_widgets
+    }
 }
 
 pub(crate) fn build_player_window_chrome(
     window: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) -> PlayerWindowChrome {
     let revealer = gtk::Revealer::new();
@@ -572,12 +587,15 @@ pub(crate) fn build_player_window_chrome(
     bar.set_valign(gtk::Align::Start);
     bar.set_margin_top(0);
 
-    let drag_zone = gtk::Box::new(gtk::Orientation::Horizontal, 9);
+    let drag_zone = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     drag_zone.add_css_class("okp-window-drag-zone");
     drag_zone.set_hexpand(true);
     drag_zone.set_can_target(true);
     drag_zone.set_margin_start(14);
 
+    let title_content = gtk::Box::new(gtk::Orientation::Horizontal, 9);
+    title_content.add_css_class("okp-top-chrome-motion");
+    title_content.add_css_class("okp-window-title-content");
     let media_icon = canonical_brand_mark(20, 11, "okp-window-media-icon");
     media_icon.set_visible(false);
     let title_label = gtk::Label::new(None);
@@ -585,14 +603,45 @@ pub(crate) fn build_player_window_chrome(
     title_label.set_ellipsize(pango::EllipsizeMode::End);
     title_label.set_xalign(0.0);
     title_label.set_visible(false);
-    drag_zone.append(&media_icon);
-    drag_zone.append(&title_label);
+    title_content.append(&media_icon);
+    title_content.append(&title_label);
+    drag_zone.append(&title_content);
     connect_player_window_drag(&drag_zone, window);
     bar.append(&drag_zone);
 
     let controls = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     controls.add_css_class("okp-player-window-controls");
     controls.set_halign(gtk::Align::End);
+
+    let settings = gtk::Button::from_icon_name("emblem-system-symbolic");
+    settings.add_css_class("okp-player-window-control");
+    settings.add_css_class("okp-player-settings-control");
+    settings.set_has_frame(false);
+    settings.set_tooltip_text(Some("Settings"));
+    settings.update_property(&[gtk::accessible::Property::Label("Settings")]);
+    settings.connect_has_focus_notify(|button| {
+        if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() && button.has_focus() {
+            eprintln!("interaction: player-settings-focus=true");
+        }
+    });
+    let settings_window = window.clone();
+    let settings_state = Rc::clone(&state);
+    let settings_toast = Rc::clone(&status_toast);
+    settings.connect_clicked(move |_| {
+        if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+            eprintln!("interaction: player-settings-clicked=true");
+        }
+        open_settings_window(
+            &settings_window,
+            Rc::clone(&settings_state),
+            Rc::clone(&settings_toast),
+        );
+    });
+    controls.append(&settings);
+
+    let transient_controls = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    transient_controls.add_css_class("okp-top-chrome-motion");
+    transient_controls.add_css_class("okp-player-transient-window-controls");
 
     let pin = gtk::Button::from_icon_name("view-pin-symbolic");
     pin.add_css_class("okp-player-window-control");
@@ -622,12 +671,12 @@ pub(crate) fn build_player_window_chrome(
             }
         }
     });
-    controls.append(&pin);
+    transient_controls.append(&pin);
 
     let minimize = player_window_control(WindowControlKind::Minimize, "Minimize");
     let minimize_window = window.clone();
     minimize.connect_clicked(move |_| minimize_window.minimize());
-    controls.append(&minimize);
+    transient_controls.append(&minimize);
 
     let maximize = player_window_control(WindowControlKind::Maximize, "Maximize");
     sync_player_maximize_icon(&maximize, window);
@@ -645,18 +694,34 @@ pub(crate) fn build_player_window_chrome(
     window.connect_maximized_notify(move |window| {
         sync_player_maximize_icon(&notify_button, window);
     });
-    controls.append(&maximize);
+    transient_controls.append(&maximize);
 
     let close = player_window_control(WindowControlKind::Close, "Close");
     close.add_css_class("okp-player-window-close");
     let close_window = window.clone();
     close.connect_clicked(move |_| close_window.close());
-    controls.append(&close);
+    transient_controls.append(&close);
+    controls.append(&transient_controls);
 
     bar.append(&controls);
-    revealer.set_child(Some(&bar));
+
+    let scrim = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    scrim.add_css_class("okp-top-chrome-motion");
+    scrim.add_css_class("okp-window-title-scrim");
+    scrim.set_can_target(false);
+
+    let chrome_surface = gtk::Overlay::new();
+    chrome_surface.set_child(Some(&scrim));
+    chrome_surface.add_overlay(&bar);
+    revealer.set_child(Some(&chrome_surface));
     PlayerWindowChrome {
         revealer,
+        auto_hide_widgets: vec![
+            scrim.upcast(),
+            title_content.upcast(),
+            transient_controls.upcast(),
+        ],
+        persistent_widgets: vec![settings.upcast()],
         media_icon,
         title_label,
     }

@@ -33,6 +33,11 @@ const OKP_STYLESHEET: &str = "
 
         .okp-window-chrome {
             min-height: 42px;
+            background: transparent;
+        }
+
+        .okp-window-title-scrim {
+            min-height: 42px;
             background: linear-gradient(to bottom, rgba(0, 0, 0, 0.50), rgba(0, 0, 0, 0));
         }
 
@@ -110,6 +115,14 @@ const OKP_STYLESHEET: &str = "
         button.okp-player-window-pin.is-selected {
             background: alpha(@okp_accent, 0.24);
             color: @okp_accent_bright;
+        }
+
+        button.okp-player-settings-control.is-isolated {
+            background: rgba(0, 0, 0, 0.32);
+        }
+
+        button.okp-player-settings-control.is-isolated:hover {
+            background: rgba(0, 0, 0, 0.46);
         }
 
         .okp-player-window-controls button:focus-visible,

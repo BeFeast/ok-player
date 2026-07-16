@@ -36,6 +36,7 @@ OUT_DIR="$2"
 DARK_FIXTURE="$3"
 
 export GDK_BACKEND=x11
+export GSK_RENDERER=cairo
 export GTK_USE_PORTAL=0
 export NO_AT_BRIDGE=1
 export XDG_SESSION_TYPE=x11
@@ -69,9 +70,10 @@ launch_player() {
   local frame_preview="$2"
   OKP_PLAYBACK_FRAME_PREVIEW="$frame_preview" \
   OKP_FIXED_VIEWPORT_SMOKE=1 \
+  OKP_DEBUG_INTERACTIONS=1 \
   OKP_SKIP_OPEN_INSTALLER=1 \
   OKP_SKIP_DEB_SELF_INSTALL=1 \
-  timeout 35s "$BINARY" "$source" >"$OUT_DIR/app.log" 2>&1 &
+  timeout 45s "$BINARY" "$source" >"$OUT_DIR/app.log" 2>&1 &
   app_pid=$!
   sleep 3
   window_id="$(xdotool search --name 'OK Player' | tail -n1)"
@@ -83,11 +85,11 @@ launch_player() {
   xdotool windowactivate "$window_id" >/dev/null 2>&1 || true
   sleep 1
   xwininfo -id "$window_id" >"$OUT_DIR/window.xwininfo"
-  local width height
-  width="$(awk '/Width:/ { print $2; exit }' "$OUT_DIR/window.xwininfo")"
+  local height
+  player_width="$(awk '/Width:/ { print $2; exit }' "$OUT_DIR/window.xwininfo")"
   height="$(awk '/Height:/ { print $2; exit }' "$OUT_DIR/window.xwininfo")"
-  if [[ "$width" != "1120" || "$height" != "680" ]]; then
-    echo "unexpected playback geometry: ${width}x${height}" >&2
+  if [[ "$player_width" != "1120" || "$height" != "680" ]]; then
+    echo "unexpected playback geometry: ${player_width}x${height}" >&2
     exit 1
   fi
 }
@@ -116,8 +118,43 @@ xdotool mousemove --window "$window_id" 560 340
 sleep 1
 capture_window "$OUT_DIR/bright-playing-active.png"
 
-sleep 4
+sleep 6
 capture_window "$OUT_DIR/bright-playing-idle.png"
+
+# The persistent Settings entry is the first 46px cell immediately left of the
+# four auto-hidden pin/caption cells. Keyboard traversal must still reach it
+# after the transport and transient title chrome have cleared.
+settings_focused=0
+for _ in $(seq 1 24); do
+  xdotool key --clearmodifiers Tab
+  sleep 0.05
+  if grep -q 'interaction: player-settings-focus=true' "$OUT_DIR/app.log"; then
+    settings_focused=1
+    break
+  fi
+done
+if [[ "$settings_focused" != 1 ]]; then
+  echo "keyboard traversal did not focus Settings from idle playback" >&2
+  exit 1
+fi
+xdotool mousemove --window "$window_id" $((player_width - 207)) 21
+sleep 0.5
+xdotool click 1
+settings_window_id=""
+for _ in $(seq 1 20); do
+  settings_window_id="$(xdotool search --name 'Settings' | tail -n1 || true)"
+  [[ -n "$settings_window_id" ]] && break
+  sleep 0.25
+done
+if [[ -z "$settings_window_id" ]]; then
+  echo "persistent Settings control did not open Settings from idle playback" >&2
+  exit 1
+fi
+import -window "$settings_window_id" "$OUT_DIR/settings-from-idle-playback.png"
+xdotool windowactivate "$settings_window_id" >/dev/null 2>&1 || true
+xdotool key --clearmodifiers alt+F4
+sleep 1
+xdotool windowactivate "$window_id" >/dev/null 2>&1 || true
 
 xdotool key --clearmodifiers f
 sleep 4
@@ -153,6 +190,17 @@ if ! awk -v active="$active_bottom_mean" -v idle="$idle_bottom_mean" \
   exit 1
 fi
 
+# Windowed idle retains exactly the caption-sized Settings cell. Its localized
+# material must remain legible on a bright frame without keeping the full top
+# scrim or the neighboring pin/caption controls visible.
+idle_settings_mean="$(magick "$OUT_DIR/bright-playing-idle.png" -crop 46x42+890+0 -colorspace gray -format '%[fx:mean]' info:)"
+idle_settings_max="$(magick "$OUT_DIR/bright-playing-idle.png" -crop 46x42+890+0 -colorspace gray -format '%[fx:maxima]' info:)"
+if ! awk -v mean="$idle_settings_mean" -v max="$idle_settings_max" \
+  'BEGIN { exit !(mean < 0.82 && max > 0.72) }'; then
+  echo "persistent Settings cell lacks bright-frame legibility: mean=${idle_settings_mean} max=${idle_settings_max}" >&2
+  exit 1
+fi
+
 # Fullscreen idle must be the bright frame edge-to-edge with no titlebar or OSC.
 fullscreen_top_mean="$(magick "$OUT_DIR/fullscreen-idle.png" -crop 1280x50+0+0 -colorspace gray -format '%[fx:mean]' info:)"
 fullscreen_bottom_mean="$(magick "$OUT_DIR/fullscreen-idle.png" -crop 1280x100+0+800 -colorspace gray -format '%[fx:mean]' info:)"
@@ -172,6 +220,7 @@ if ! awk -v max="$dark_osc_max" -v mean="$dark_osc_mean" \
 fi
 
 echo "bright chrome: frame=${bright_frame_mean} osc=${bright_osc_mean} idle=${idle_bottom_mean}"
+echo "idle settings: mean=${idle_settings_mean} max=${idle_settings_max}"
 echo "dark chrome: max=${dark_osc_max} mean=${dark_osc_mean}"
 SMOKE
 then
