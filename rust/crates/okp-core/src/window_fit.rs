@@ -6,11 +6,133 @@
 /// This matches the Windows player's existing fit-to-video behavior.
 pub const WORK_AREA_FILL: f64 = 0.94;
 
+/// Reserve the canonical custom titlebar band in addition to the desktop edge
+/// margin. The titlebar overlays the video, but keeping its full logical height
+/// inside the fit budget prevents the caption controls from settling against or
+/// beyond a monitor edge.
+pub const PLAYER_CHROME_RESERVE: i32 = 42;
+
 /// A logical client size requested from the platform windowing API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowSize {
     pub width: i32,
     pub height: i32,
+}
+
+/// A logical point in the desktop coordinate space.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowPoint {
+    pub x: i32,
+    pub y: i32,
+}
+
+/// A monitor work area in logical desktop coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+/// The one-time logical size and preferred desktop position for a loaded video.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowPlacement {
+    pub size: WindowSize,
+    pub position: WindowPoint,
+}
+
+/// Fit physical video pixels into a logical monitor work area.
+///
+/// `monitor_scale` maps logical/application pixels to physical device pixels.
+/// The result never exceeds the video's natural physical size, uses one scale
+/// for both axes, reserves the Windows-compatible 6% edge budget plus the
+/// canonical player chrome band, and is centered inside the work area.
+pub fn fit_physical_video_to_work_area(
+    video_width: i32,
+    video_height: i32,
+    monitor_scale: f64,
+    work_area: WindowRect,
+) -> Option<WindowPlacement> {
+    if video_width <= 0
+        || video_height <= 0
+        || !monitor_scale.is_finite()
+        || monitor_scale <= 0.0
+        || work_area.width <= 0
+        || work_area.height <= 0
+    {
+        return None;
+    }
+
+    let budget = work_area_budget(work_area.width, work_area.height)?;
+    let scale = (1.0 / monitor_scale)
+        .min(f64::from(budget.width) / f64::from(video_width))
+        .min(f64::from(budget.height) / f64::from(video_height));
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+
+    let size = WindowSize {
+        // Floor rather than round: a half logical pixel becomes a real device
+        // pixel at HiDPI scale, so rounding up can cross either the work area
+        // or the video's natural physical size.
+        width: (f64::from(video_width) * scale).floor().max(1.0) as i32,
+        height: (f64::from(video_height) * scale).floor().max(1.0) as i32,
+    };
+    Some(WindowPlacement {
+        size,
+        position: centered_position(size, work_area),
+    })
+}
+
+/// The largest whole-window size available after the standard edge and chrome
+/// reservations have been applied.
+pub fn work_area_budget(work_width: i32, work_height: i32) -> Option<WindowSize> {
+    if work_width <= 0 || work_height <= 0 {
+        return None;
+    }
+    let width = (f64::from(work_width) * WORK_AREA_FILL).floor() as i32;
+    let height = (f64::from(work_height) * WORK_AREA_FILL).floor() as i32 - PLAYER_CHROME_RESERVE;
+    (width > 0 && height > 0).then_some(WindowSize { width, height })
+}
+
+/// Center a window in the work area, then clamp the result for defensive use
+/// with off-origin monitors and compositor-adjusted sizes.
+pub fn centered_position(size: WindowSize, work_area: WindowRect) -> WindowPoint {
+    let x =
+        i64::from(work_area.x) + (i64::from(work_area.width) - i64::from(size.width)).max(0) / 2;
+    let y =
+        i64::from(work_area.y) + (i64::from(work_area.height) - i64::from(size.height)).max(0) / 2;
+    clamp_position(
+        WindowPoint {
+            x: x.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+            y: y.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+        },
+        size,
+        work_area,
+    )
+}
+
+/// Clamp a requested logical position so all window edges remain within the
+/// work area. If the compositor made the window larger than the work area,
+/// anchor it to that work area's origin instead of producing an inverted range.
+pub fn clamp_position(
+    requested: WindowPoint,
+    size: WindowSize,
+    work_area: WindowRect,
+) -> WindowPoint {
+    let max_x =
+        i64::from(work_area.x) + (i64::from(work_area.width) - i64::from(size.width)).max(0);
+    let max_y =
+        i64::from(work_area.y) + (i64::from(work_area.height) - i64::from(size.height)).max(0);
+    WindowPoint {
+        x: i64::from(requested.x)
+            .clamp(i64::from(work_area.x), max_x)
+            .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+        y: i64::from(requested.y)
+            .clamp(i64::from(work_area.y), max_y)
+            .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+    }
 }
 
 /// Return the video's native logical size, scaled down only when it would exceed
@@ -133,6 +255,155 @@ mod tests {
                 width: 1203,
                 height: 677
             })
+        );
+    }
+
+    #[test]
+    fn physical_video_is_converted_to_logical_size_without_upscale() {
+        assert_eq!(
+            fit_physical_video_to_work_area(
+                320,
+                180,
+                2.0,
+                WindowRect {
+                    x: 0,
+                    y: 0,
+                    width: 1280,
+                    height: 900,
+                }
+            ),
+            Some(WindowPlacement {
+                size: WindowSize {
+                    width: 160,
+                    height: 90,
+                },
+                position: WindowPoint { x: 560, y: 405 },
+            })
+        );
+    }
+
+    #[test]
+    fn fractional_monitor_scale_keeps_the_physical_natural_size_ceiling() {
+        let placement = fit_physical_video_to_work_area(
+            300,
+            150,
+            1.5,
+            WindowRect {
+                x: 0,
+                y: 0,
+                width: 1280,
+                height: 900,
+            },
+        )
+        .expect("valid fractional-scale fit");
+        assert_eq!(
+            placement.size,
+            WindowSize {
+                width: 200,
+                height: 100,
+            }
+        );
+    }
+
+    #[test]
+    fn scaled_four_k_video_reserves_edges_and_chrome() {
+        let placement = fit_physical_video_to_work_area(
+            3840,
+            2160,
+            2.0,
+            WindowRect {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1040,
+            },
+        )
+        .expect("valid scaled fit");
+
+        assert_eq!(
+            work_area_budget(1920, 1040),
+            Some(WindowSize {
+                width: 1804,
+                height: 935,
+            })
+        );
+        assert_eq!(
+            placement,
+            WindowPlacement {
+                size: WindowSize {
+                    width: 1662,
+                    height: 935,
+                },
+                position: WindowPoint { x: 129, y: 52 },
+            }
+        );
+        assert!(placement.size.width * 2 <= 3840);
+        assert!(placement.size.height * 2 <= 2160);
+    }
+
+    #[test]
+    fn oversized_video_is_aspect_fit_and_centered_on_offset_monitor() {
+        assert_eq!(
+            fit_physical_video_to_work_area(
+                3840,
+                2160,
+                1.0,
+                WindowRect {
+                    x: 1920,
+                    y: -120,
+                    width: 1024,
+                    height: 768,
+                }
+            ),
+            Some(WindowPlacement {
+                size: WindowSize {
+                    width: 962,
+                    height: 541,
+                },
+                position: WindowPoint { x: 1951, y: -7 },
+            })
+        );
+    }
+
+    #[test]
+    fn requested_position_is_clamped_to_every_workarea_edge() {
+        let work_area = WindowRect {
+            x: -1920,
+            y: 24,
+            width: 1920,
+            height: 1056,
+        };
+        let size = WindowSize {
+            width: 1200,
+            height: 800,
+        };
+        assert_eq!(
+            clamp_position(WindowPoint { x: -2500, y: -100 }, size, work_area),
+            WindowPoint { x: -1920, y: 24 }
+        );
+        assert_eq!(
+            clamp_position(WindowPoint { x: -100, y: 900 }, size, work_area),
+            WindowPoint { x: -1200, y: 280 }
+        );
+    }
+
+    #[test]
+    fn window_larger_than_workarea_clamps_to_origin() {
+        assert_eq!(
+            clamp_position(
+                WindowPoint { x: 900, y: 900 },
+                WindowSize {
+                    width: 1200,
+                    height: 900,
+                },
+                WindowRect {
+                    x: 100,
+                    y: 50,
+                    width: 800,
+                    height: 600,
+                }
+            ),
+            WindowPoint { x: 100, y: 50 }
         );
     }
 
