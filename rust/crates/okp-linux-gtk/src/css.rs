@@ -1732,6 +1732,15 @@ const OKP_STYLESHEET: &str = "
             font-size: 12.5px;
         }
 
+        .okp-panel-caption-row {
+            padding: 0 12px 6px 12px;
+        }
+
+        .okp-panel-caption {
+            color: rgba(0, 0, 0, 0.48);
+            font-size: 11.5px;
+        }
+
         .okp-up-next-row {
             min-height: 40px;
             margin: 1px 0;
@@ -1779,6 +1788,66 @@ const OKP_STYLESHEET: &str = "
 
         .okp-bookmark-row .okp-bookmark-icon {
             color: alpha(@okp_accent, 0.92);
+        }
+
+        .okp-up-next-list row.okp-interval-row {
+            background: alpha(@okp_teal, 0.045);
+            border-style: dashed;
+            border-color: rgba(0, 0, 0, 0.13);
+        }
+
+        .okp-interval-row .okp-interval-icon {
+            color: rgba(0, 0, 0, 0.42);
+        }
+
+        .okp-interval-row .okp-up-next-marker {
+            color: rgba(0, 0, 0, 0.52);
+        }
+
+        .okp-up-next-list row.okp-detect-row {
+            min-height: 52px;
+            margin: 2px 6px 8px 6px;
+            background: alpha(@okp_teal, 0.11);
+            border-color: alpha(@okp_teal, 0.40);
+            color: @okp_teal_deep;
+        }
+
+        .okp-up-next-list row.okp-detect-row:hover {
+            background: alpha(@okp_teal, 0.17);
+            border-color: alpha(@okp_teal, 0.62);
+            color: @okp_teal_deep;
+        }
+
+        .okp-detect-row .okp-detect-icon {
+            color: @okp_teal;
+        }
+
+        .okp-detect-subtitle {
+            color: rgba(0, 0, 0, 0.52);
+            font-size: 11px;
+        }
+
+        .okp-detect-status-row {
+            margin: 2px 6px 8px 6px;
+            padding: 9px 10px;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.44);
+            border: 1px dashed rgba(0, 0, 0, 0.16);
+        }
+
+        .okp-detect-status-icon {
+            color: rgba(0, 0, 0, 0.40);
+        }
+
+        .okp-detect-status {
+            color: rgba(0, 0, 0, 0.58);
+            font-size: 12px;
+        }
+
+        .okp-up-next-list row.okp-interval-row:focus-visible,
+        .okp-up-next-list row.okp-detect-row:focus-visible {
+            outline: none;
+            box-shadow: inset 0 0 0 2px alpha(@okp_teal, 0.58);
         }
 
         .okp-up-next-list row.okp-add-bookmark-row {

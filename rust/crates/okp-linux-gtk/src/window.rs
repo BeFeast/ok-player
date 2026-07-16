@@ -235,8 +235,10 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     // `OKP_OPEN_SIDE_PANEL_ON_STARTUP=up-next` previews the queue; `=bookmarks`
     // previews the user-authored section; `=up-next-empty`
     // previews the PRD §2.6 single-URL / short-queue state (now-playing pin + the
-    // "Add files" affordance); `=chapters-empty` previews the no-chapters stream
-    // state; any other value previews the full Chapters fixture.
+    // "Add files" affordance); `=chapters-empty` previews the no-duration empty
+    // state; `=intervals` previews the metadata-less interval fallback and explicit
+    // Detect chapters action; `=intervals-unavailable` previews its resolved no-engine
+    // state; any other value previews embedded Chapters.
     if let Some(value) = env::var_os("OKP_OPEN_SIDE_PANEL_ON_STARTUP") {
         let bright_substrate = env::var_os("OKP_SIDE_PANEL_PREVIEW_SUBSTRATE")
             .is_some_and(|value| value.eq_ignore_ascii_case("bright"));
@@ -249,6 +251,15 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
             (SidePanelMode::UpNext, side_panel_empty_up_next_sample())
         } else if value.eq_ignore_ascii_case("chapters-empty") {
             (SidePanelMode::Chapters, side_panel_empty_chapters_sample())
+        } else if value.eq_ignore_ascii_case("intervals-unavailable") {
+            let mut snapshot = side_panel_interval_preview_sample();
+            snapshot.detection = chapter_math::ChapterDetection::Unavailable;
+            (SidePanelMode::Chapters, snapshot)
+        } else if value.eq_ignore_ascii_case("intervals") {
+            (
+                SidePanelMode::Chapters,
+                side_panel_interval_preview_sample(),
+            )
         } else {
             (SidePanelMode::Chapters, side_panel_preview_sample())
         };

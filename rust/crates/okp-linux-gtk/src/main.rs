@@ -786,6 +786,9 @@ struct Controls {
     side_panel_manual_mode: Rc<Cell<bool>>,
     side_panel_snapshot: Rc<RefCell<SidePanelSnapshot>>,
     side_panel_actions: Rc<RefCell<Vec<SidePanelAction>>>,
+    // State for the explicit scene-detection action. The portable transition model lives in
+    // okp-core; this cell only mirrors the current media's UI state.
+    chapter_detection: Rc<Cell<chapter_math::ChapterDetection>>,
     // When set, the live poll leaves the side panel alone so the visual smoke
     // hook (`OKP_OPEN_SIDE_PANEL_ON_STARTUP`) can render fixture rows that would
     // otherwise be cleared the moment the poll sees there is no loaded media.
@@ -1538,11 +1541,14 @@ struct SidePanelSnapshot {
     // raw position so the panel only re-renders when the playhead crosses a
     // chapter boundary, not on every poll tick.
     current_chapter: Option<usize>,
+    // Known media duration, used by the core model to synthesize interval fallback markers.
+    duration: Option<f64>,
     // The user's saved position bookmarks for the current local file (empty for streams
     // and unbookmarked media). Carried in the snapshot so the panel re-renders the
     // Bookmarks section the moment a mark is added or removed.
     bookmarks: Vec<f64>,
     ab_loop: AbLoopState,
+    detection: chapter_math::ChapterDetection,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1554,6 +1560,7 @@ struct TimelineMark {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum TimelineMarkKind {
     Chapter,
+    Interval,
     Bookmark,
     AbStart,
     AbEnd,
@@ -1567,6 +1574,7 @@ enum SidePanelAction {
     Playlist(usize),
     AddBookmark,
     AddFiles,
+    DetectChapters,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

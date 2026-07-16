@@ -460,6 +460,32 @@ pub(crate) fn seek_to_chapter(state: &Rc<RefCell<PlayerState>>, time: f64) {
     }
 }
 
+/// Linux does not have a scene-detection engine wired yet. Keeping this capability explicit
+/// lets the action report an honest unavailable state without starting blocking work.
+pub(crate) const SCENE_DETECTION_ENGINE_AVAILABLE: bool = false;
+
+pub(crate) const SCENE_DETECTION_UNAVAILABLE_MESSAGE: &str = "Scene detection isn't available yet";
+
+/// Handle the explicit Detect chapters action. A future engine can transition into progress;
+/// today the core model resolves immediately to Unavailable and playback continues untouched.
+pub(crate) fn detect_chapters(
+    detection: &Rc<Cell<chapter_math::ChapterDetection>>,
+    status_toast: &StatusToast,
+) {
+    if detection.get().is_running() {
+        return;
+    }
+
+    let next = chapter_math::ChapterDetection::begin(SCENE_DETECTION_ENGINE_AVAILABLE);
+    detection.set(next);
+    if matches!(next, chapter_math::ChapterDetection::Unavailable) {
+        if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+            eprintln!("interaction: chapter-detection=unavailable");
+        }
+        status_toast.show(SCENE_DETECTION_UNAVAILABLE_MESSAGE);
+    }
+}
+
 pub(crate) fn jump_chapter(state: &Rc<RefCell<PlayerState>>, delta: i32) {
     let target = (|| {
         let state = state.borrow();

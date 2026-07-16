@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Canonical Chapters / Up Next visual guard for issue #251. Captures the three
-# populated acceptance states at 1120x680 plus a bright-video substrate proof,
-# and checks the exact Windows-contract geometry before launching GTK.
+# Canonical Chapters / Up Next visual guard. Captures the established states plus
+# the metadata-less interval fallback and its honest Detect chapters outcome at
+# 1120x680, and checks the exact Windows-contract geometry before launching GTK.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -66,6 +66,7 @@ capture_state() {
   rm -f "$OUT_DIR/app.log" "$OUT_DIR/window.ids"
   OKP_OPEN_SIDE_PANEL_ON_STARTUP="$fixture" \
   OKP_SIDE_PANEL_PREVIEW_SUBSTRATE="$substrate" \
+  OKP_DEBUG_INTERACTIONS=1 \
   OKP_SKIP_OPEN_INSTALLER=1 \
   OKP_SKIP_DEB_SELF_INSTALL=1 \
   timeout 12s "$BINARY" >"$OUT_DIR/app.log" 2>&1 &
@@ -124,6 +125,20 @@ capture_state() {
     exit 1
   fi
 
+  if [[ "$fixture" == "intervals" ]]; then
+    # The Detect chapters row is deliberately kept at the initial scroll position.
+    # Activate it and require the no-engine build to report an honest unavailable
+    # state instead of starting fake progress or blocking playback.
+    xdotool mousemove --window "$window_id" 950 145 click 1
+    sleep 1
+    if ! rg -q '^interaction: chapter-detection=unavailable$' "$OUT_DIR/app.log"; then
+      echo "$label: Detect chapters did not resolve to the honest unavailable state" >&2
+      cat "$OUT_DIR/app.log" >&2 || true
+      exit 1
+    fi
+    import -window "$window_id" "$OUT_DIR/intervals-toast.png"
+  fi
+
   echo "$label: panel=${panel_x},${panel_y} ${panel_w}x${panel_h} material=${panel_mean} substrate=${left_mean}"
   kill_app
   wait "$app_pid" 2>/dev/null || true
@@ -134,6 +149,8 @@ capture_state "chapters" "$OUT_DIR/chapters-populated.png" "chapters-populated" 
 capture_state "bookmarks" "$OUT_DIR/bookmarks.png" "bookmarks" "dark"
 capture_state "up-next" "$OUT_DIR/up-next-populated.png" "up-next-populated" "dark"
 capture_state "chapters" "$OUT_DIR/chapters-bright.png" "chapters-bright" "bright"
+capture_state "intervals" "$OUT_DIR/intervals.png" "intervals" "dark"
+capture_state "intervals-unavailable" "$OUT_DIR/intervals-unavailable.png" "intervals-unavailable" "dark"
 SMOKE
 then
   echo "Side panel smoke failed. Session log: $OUT_DIR/session.log" >&2
@@ -141,4 +158,4 @@ then
   exit 1
 fi
 
-echo "Side panel smoke passed. Screenshots: $OUT_DIR/chapters-populated.png $OUT_DIR/bookmarks.png $OUT_DIR/up-next-populated.png $OUT_DIR/chapters-bright.png"
+echo "Side panel smoke passed. Screenshots: $OUT_DIR/chapters-populated.png $OUT_DIR/bookmarks.png $OUT_DIR/up-next-populated.png $OUT_DIR/chapters-bright.png $OUT_DIR/intervals.png $OUT_DIR/intervals-toast.png $OUT_DIR/intervals-unavailable.png"
