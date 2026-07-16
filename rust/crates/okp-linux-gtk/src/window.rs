@@ -211,11 +211,13 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
 
     let launch_reserved_notice = launch_args.reserved_notice().map(str::to_owned);
     connect_mpv(&video_area, Rc::clone(&state), launch_args);
-    connect_video_clicks(
-        &video_area,
+    connect_video_clicks(&video_area, &window, Rc::clone(&state));
+    connect_player_context_menu(
+        &overlay,
         &window,
         Rc::clone(&state),
         Rc::clone(&status_toast),
+        Rc::clone(&chrome),
     );
     connect_drop(&window, Rc::clone(&state), empty_surface.clone());
     connect_keyboard(

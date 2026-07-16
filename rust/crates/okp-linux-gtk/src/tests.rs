@@ -1444,7 +1444,7 @@ fn player_popovers_keep_their_canonical_independent_widths() {
 }
 
 #[test]
-fn more_stays_curated_while_video_right_click_keeps_legacy_commands() {
+fn more_stays_curated_while_player_context_menu_keeps_legacy_commands() {
     let source = include_str!("track_popovers.rs");
     let more = source
         .split_once("pub(crate) fn more_popover_content")
@@ -1523,10 +1523,48 @@ fn more_stays_curated_while_video_right_click_keeps_legacy_commands() {
         );
     }
 
-    let video_clicks = include_str!("mpv_bridge.rs");
-    assert!(video_clicks.contains("context_click.set_button(3)"));
-    assert!(video_clicks.contains("show_video_context_menu("));
-    assert!(video_clicks.contains("advanced_command_popover_content("));
+    let player_clicks = include_str!("mpv_bridge.rs");
+    assert!(player_clicks.contains("context_click.set_button(gdk::BUTTON_SECONDARY)"));
+    assert!(player_clicks.contains("context_root.pick(x, y, gtk::PickFlags::INSENSITIVE)"));
+    assert!(player_clicks.contains("player_context_menu_target_is_interactive("));
+    assert!(player_clicks.contains("show_player_context_menu("));
+    assert!(player_clicks.contains("popover.set_parent(player_root)"));
+    assert!(player_clicks.contains("connect_popover_chrome_pin(&popover, chrome)"));
+    assert!(player_clicks.contains("advanced_command_popover_content("));
+
+    let window = include_str!("window.rs");
+    assert!(window.contains("connect_player_context_menu("));
+}
+
+#[test]
+fn player_context_menu_preserves_control_and_popover_interactions() {
+    let player_clicks = include_str!("mpv_bridge.rs");
+    for blocker in [
+        "gtk::Button",
+        "gtk::MenuButton",
+        "gtk::Scale",
+        "gtk::Scrollbar",
+        "gtk::Entry",
+        "gtk::TextView",
+        "gtk::SpinButton",
+        "gtk::DropDown",
+        "gtk::Switch",
+        "gtk::ListBoxRow",
+        "gtk::Popover",
+        "okp-time-label",
+        "okp-timeline",
+        "okp-volume-control",
+        "okp-up-next-panel",
+        "okp-resize-handle",
+    ] {
+        assert!(
+            player_clicks.contains(blocker),
+            "missing context-menu interaction blocker: {blocker}"
+        );
+    }
+    assert!(player_clicks.contains("gesture.set_state(gtk::EventSequenceState::Claimed)"));
+    assert!(player_clicks.contains("gtk::PropagationPhase::Bubble"));
+    assert!(!player_clicks.contains("video_area.add_controller(context_click)"));
 }
 
 #[test]
