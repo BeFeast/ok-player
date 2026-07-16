@@ -22,6 +22,11 @@ pub struct RenderTargetSize {
     pub height: i32,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RenderUpdate {
+    pub frame_requested: bool,
+}
+
 /// Display dimensions carried by lifecycle events after mpv has applied pixel
 /// aspect and rotation. Shells consume this payload instead of issuing a
 /// blocking property read from their UI thread.
@@ -34,10 +39,6 @@ pub struct VideoDimensions {
 impl RenderTargetSize {
     fn is_valid(self) -> bool {
         self.width > 0 && self.height > 0
-    }
-
-    fn area(self) -> i64 {
-        i64::from(self.width) * i64::from(self.height)
     }
 
     fn max_components(self, other: RenderTargetSize) -> RenderTargetSize {
@@ -1354,18 +1355,19 @@ impl Mpv {
         self.set_subtitle_scale(self.observed_subtitle_scale() + delta)
     }
 
-    pub fn render(&mut self, width: i32, height: i32) -> Result<(), MpvError> {
+    pub fn render(&mut self, width: i32, height: i32) -> Result<RenderUpdate, MpvError> {
         if width <= 0 || height <= 0 {
-            return Ok(());
+            return Ok(RenderUpdate::default());
         }
 
         let context = self
             .render_context
             .ok_or(MpvError::MissingRenderContext)?
             .as_ptr();
-        unsafe {
-            let _ = ffi::mpv_render_context_update(context);
-        }
+        let update_flags = unsafe { ffi::mpv_render_context_update(context) };
+        let update = RenderUpdate {
+            frame_requested: update_flags & ffi::MPV_RENDER_UPDATE_FRAME != 0,
+        };
 
         let mut framebuffer: c_int = 0;
         unsafe {
@@ -1400,7 +1402,7 @@ impl Mpv {
             ffi::mpv_render_context_report_swap(context);
         }
 
-        Ok(())
+        Ok(update)
     }
 
     pub fn destroy_render_context(&mut self) {
@@ -1821,6 +1823,15 @@ pub fn resolve_render_target_size(
     widget_height: i32,
     scale_factor: i32,
 ) -> RenderTargetSize {
+    // GTK owns the GLArea framebuffer. Once attach_buffers() has made a valid
+    // viewport current, those physical dimensions are the hard render bound.
+    // Allocation/scale snapshots are fallbacks only: rendering a larger FBO
+    // than GTK actually attached wastes substantial GPU/CPU work and can turn
+    // a scaled 4K allocation into an accidental 8K render target.
+    if let Some(viewport) = viewport.filter(|size| size.is_valid()) {
+        return viewport;
+    }
+
     let widget_size = RenderTargetSize {
         width: widget_width.max(1),
         height: widget_height.max(1),
@@ -1831,20 +1842,10 @@ pub fn resolve_render_target_size(
         height: widget_size.height.saturating_mul(scale_factor),
     };
 
-    let mut target = resize
+    resize
         .filter(|size| size.is_valid())
         .unwrap_or(widget_size)
-        .max_components(scaled_widget_size);
-
-    if let Some(viewport) = viewport.filter(|size| size.is_valid())
-        && viewport.width >= target.width
-        && viewport.height >= target.height
-        && viewport.area() >= target.area()
-    {
-        target = viewport;
-    }
-
-    target
+        .max_components(scaled_widget_size)
 }
 
 impl Drop for Mpv {
@@ -2336,7 +2337,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_too_small_gl_viewport_snapshot() {
+    fn attached_gl_viewport_is_the_render_target_bound() {
         let target = resolve_render_target_size(
             Some(RenderTargetSize {
                 width: 640,
@@ -2354,8 +2355,33 @@ mod tests {
         assert_eq!(
             target,
             RenderTargetSize {
-                width: 2048,
-                height: 1152,
+                width: 640,
+                height: 360,
+            }
+        );
+    }
+
+    #[test]
+    fn bounded_glarea_does_not_expand_to_raw_video_dimensions() {
+        let target = resolve_render_target_size(
+            Some(RenderTargetSize {
+                width: 2240,
+                height: 1360,
+            }),
+            Some(RenderTargetSize {
+                width: 3840,
+                height: 2160,
+            }),
+            1120,
+            680,
+            2,
+        );
+
+        assert_eq!(
+            target,
+            RenderTargetSize {
+                width: 2240,
+                height: 1360,
             }
         );
     }

@@ -2,44 +2,90 @@ use super::*;
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+const RENDER_FALLBACK_INTERVAL: Duration = Duration::from_millis(16);
+
 #[derive(Default)]
 struct RedrawScheduler {
     pending: AtomicBool,
+    notifications: AtomicU64,
+    scheduled: AtomicU64,
+    coalesced: AtomicU64,
 }
 
 impl RedrawScheduler {
     fn try_schedule(&self) -> bool {
-        !self.pending.swap(true, Ordering::AcqRel)
+        self.notifications.fetch_add(1, Ordering::Relaxed);
+        if self.pending.swap(true, Ordering::AcqRel) {
+            self.coalesced.fetch_add(1, Ordering::Relaxed);
+            false
+        } else {
+            self.scheduled.fetch_add(1, Ordering::Relaxed);
+            true
+        }
     }
 
     fn render_started(&self) {
         self.pending.store(false, Ordering::Release);
     }
+
+    fn snapshot(&self) -> RedrawSchedulerSnapshot {
+        RedrawSchedulerSnapshot {
+            notifications: self.notifications.load(Ordering::Acquire),
+            scheduled: self.scheduled.load(Ordering::Acquire),
+            coalesced: self.coalesced.load(Ordering::Acquire),
+        }
+    }
+}
+
+#[derive(Default, Clone, Copy)]
+struct RedrawSchedulerSnapshot {
+    notifications: u64,
+    scheduled: u64,
+    coalesced: u64,
 }
 
 struct RenderProfile {
     path: PathBuf,
     started_at: Option<Instant>,
+    last_active_at: Option<Instant>,
     frame_clock_ticks: u64,
+    redraw_scheduler: Arc<RedrawScheduler>,
+    redraw_scheduler_baseline: RedrawSchedulerSnapshot,
     queued_redraws: Arc<AtomicU64>,
     queued_redraw_baseline: u64,
+    fallback_redraws: Arc<AtomicU64>,
+    fallback_redraw_baseline: u64,
     render_calls: u64,
+    update_frame_requests: u64,
     total_render_time: Duration,
     max_render_time: Duration,
+    render_target_size: okp_mpv::RenderTargetSize,
+    max_render_target_pixels: i64,
 }
 
 impl RenderProfile {
-    fn from_env() -> Option<Self> {
+    fn from_env(redraw_scheduler: Arc<RedrawScheduler>) -> Option<Self> {
         let path = env::var_os("OKP_RENDER_PROFILE_PATH").map(PathBuf::from)?;
         Some(Self {
             path,
             started_at: None,
+            last_active_at: None,
             frame_clock_ticks: 0,
+            redraw_scheduler,
+            redraw_scheduler_baseline: RedrawSchedulerSnapshot::default(),
             queued_redraws: Arc::new(AtomicU64::new(0)),
             queued_redraw_baseline: 0,
+            fallback_redraws: Arc::new(AtomicU64::new(0)),
+            fallback_redraw_baseline: 0,
             render_calls: 0,
+            update_frame_requests: 0,
             total_render_time: Duration::ZERO,
             max_render_time: Duration::ZERO,
+            render_target_size: okp_mpv::RenderTargetSize {
+                width: 0,
+                height: 0,
+            },
+            max_render_target_pixels: 0,
         })
     }
 
@@ -47,30 +93,59 @@ impl RenderProfile {
         Arc::clone(&self.queued_redraws)
     }
 
-    fn record_tick(&mut self) {
-        if self.started_at.is_some() {
+    fn fallback_redraw_counter(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.fallback_redraws)
+    }
+
+    fn record_tick(&mut self, media_active: bool) {
+        if self.started_at.is_some() && media_active {
             self.frame_clock_ticks += 1;
         }
     }
 
-    fn record_render(&mut self, elapsed: Duration, media_active: bool) {
+    fn record_render(
+        &mut self,
+        elapsed: Duration,
+        media_active: bool,
+        target_size: okp_mpv::RenderTargetSize,
+        update_frame_requested: bool,
+    ) {
         if !media_active {
             return;
         }
+        let now = Instant::now();
         if self.started_at.is_none() {
-            self.started_at = Some(Instant::now());
+            self.started_at = Some(now);
             self.frame_clock_ticks = 0;
+            let wakeups = self.redraw_scheduler.snapshot();
+            self.redraw_scheduler_baseline = RedrawSchedulerSnapshot {
+                notifications: wakeups.notifications.saturating_sub(1),
+                scheduled: wakeups.scheduled.saturating_sub(1),
+                coalesced: wakeups.coalesced,
+            };
             self.queued_redraw_baseline = self
                 .queued_redraws
                 .load(Ordering::Acquire)
                 .saturating_sub(1);
+            self.fallback_redraw_baseline = self
+                .fallback_redraws
+                .load(Ordering::Acquire)
+                .saturating_sub(1);
             self.render_calls = 0;
+            self.update_frame_requests = 0;
             self.total_render_time = Duration::ZERO;
             self.max_render_time = Duration::ZERO;
+            self.max_render_target_pixels = 0;
         }
+        self.last_active_at = Some(now);
         self.render_calls += 1;
+        self.update_frame_requests += u64::from(update_frame_requested);
         self.total_render_time += elapsed;
         self.max_render_time = self.max_render_time.max(elapsed);
+        self.render_target_size = target_size;
+        self.max_render_target_pixels = self
+            .max_render_target_pixels
+            .max(i64::from(target_size.width).saturating_mul(i64::from(target_size.height)));
     }
 
     fn write(
@@ -78,10 +153,11 @@ impl RenderProfile {
         configured_hwdec: &str,
         performance: &okp_mpv::PlaybackPerformance,
     ) -> io::Result<()> {
-        let Some(started_at) = self.started_at else {
+        let (Some(started_at), Some(last_active_at)) = (self.started_at, self.last_active_at)
+        else {
             return Ok(());
         };
-        let elapsed_seconds = started_at.elapsed().as_secs_f64();
+        let elapsed_seconds = last_active_at.duration_since(started_at).as_secs_f64();
         let render_fps = if elapsed_seconds > 0.0 {
             self.render_calls as f64 / elapsed_seconds
         } else {
@@ -96,8 +172,13 @@ impl RenderProfile {
             .queued_redraws
             .load(Ordering::Acquire)
             .saturating_sub(self.queued_redraw_baseline);
+        let fallback_redraws = self
+            .fallback_redraws
+            .load(Ordering::Acquire)
+            .saturating_sub(self.fallback_redraw_baseline);
+        let wakeups = self.redraw_scheduler.snapshot();
         let payload = serde_json::json!({
-            "schema_version": 1,
+            "schema_version": 2,
             "elapsed_seconds": elapsed_seconds,
             "configured_hwdec": configured_hwdec,
             "hwdec_current": performance.hwdec_current,
@@ -107,10 +188,18 @@ impl RenderProfile {
             "decoder_dropped_frames": performance.decoder_dropped_frames,
             "frame_clock_ticks": self.frame_clock_ticks,
             "queued_redraws": queued_redraws,
+            "callback_notifications": wakeups.notifications.saturating_sub(self.redraw_scheduler_baseline.notifications),
+            "callback_redraws": wakeups.scheduled.saturating_sub(self.redraw_scheduler_baseline.scheduled),
+            "callback_coalesced": wakeups.coalesced.saturating_sub(self.redraw_scheduler_baseline.coalesced),
+            "fallback_redraws": fallback_redraws,
             "render_calls": self.render_calls,
+            "update_frame_requests": self.update_frame_requests,
             "render_fps": render_fps,
             "average_render_ms": average_render_ms,
             "max_render_ms": self.max_render_time.as_secs_f64() * 1000.0,
+            "render_target_width": self.render_target_size.width,
+            "render_target_height": self.render_target_size.height,
+            "max_render_target_pixels": self.max_render_target_pixels,
         });
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
@@ -120,20 +209,36 @@ impl RenderProfile {
     }
 }
 
+fn active_video_playback(playback: okp_mpv::PlaybackState) -> bool {
+    if playback.paused || playback.container_fps.is_none() {
+        return false;
+    }
+
+    !matches!(
+        (playback.time_pos, playback.duration),
+        (Some(position), Some(duration)) if duration > 0.0 && position >= duration
+    )
+}
+
 pub(crate) fn connect_mpv(
     video_area: &gtk::GLArea,
     state: Rc<RefCell<PlayerState>>,
     launch_args: LaunchArgs,
 ) {
-    let render_profile = RenderProfile::from_env().map(|profile| Rc::new(RefCell::new(profile)));
-    let profile_enabled = render_profile.is_some();
     let redraw_scheduler = Arc::new(RedrawScheduler::default());
+    let render_profile = RenderProfile::from_env(Arc::clone(&redraw_scheduler))
+        .map(|profile| Rc::new(RefCell::new(profile)));
+    let profile_enabled = render_profile.is_some();
     let realize_redraw_scheduler = Arc::clone(&redraw_scheduler);
     let redraw_context = glib::MainContext::ref_thread_default();
     let redraw_area = glib::SendWeakRef::from(video_area.downgrade());
     let queued_redraws = render_profile
         .as_ref()
         .map(|profile| profile.borrow().queued_redraw_counter());
+    let fallback_redraws = render_profile
+        .as_ref()
+        .map(|profile| profile.borrow().fallback_redraw_counter());
+    let realize_queued_redraws = queued_redraws.clone();
     let realize_state = Rc::clone(&state);
     video_area.connect_realize(move |area| {
         area.make_current();
@@ -213,7 +318,7 @@ pub(crate) fn connect_mpv(
         let callback_scheduler = Arc::clone(&realize_redraw_scheduler);
         let callback_context = redraw_context.clone();
         let callback_area = redraw_area.clone();
-        let callback_queued_redraws = queued_redraws.clone();
+        let callback_queued_redraws = realize_queued_redraws.clone();
         if let Err(error) = mpv.set_render_update_callback(move || {
             if !callback_scheduler.try_schedule() {
                 return;
@@ -222,7 +327,7 @@ pub(crate) fn connect_mpv(
             let scheduled = Arc::clone(&callback_scheduler);
             let area = callback_area.clone();
             let queued_redraws = callback_queued_redraws.clone();
-            callback_context.spawn(async move {
+            callback_context.spawn_with_priority(glib::Priority::HIGH, async move {
                 let Some(area) = area.upgrade() else {
                     scheduled.render_started();
                     return;
@@ -284,22 +389,35 @@ pub(crate) fn connect_mpv(
             widget_height,
             scale_factor,
         );
-        let media_active = state
+        let playback = state
             .mpv
             .as_ref()
-            .is_some_and(|mpv| mpv.observed_playback_state().container_fps.is_some());
-        if let Some(mpv) = state.mpv.as_mut()
-            && let Err(error) = mpv.render(target_size.width, target_size.height)
-        {
-            eprintln!("mpv render failed: {error}");
-        }
+            .map(Mpv::observed_playback_state)
+            .unwrap_or_default();
+        let media_active = active_video_playback(playback);
+        let render_update = state
+            .mpv
+            .as_mut()
+            .map(|mpv| mpv.render(target_size.width, target_size.height))
+            .transpose();
+        let render_update = match render_update {
+            Ok(Some(update)) => update,
+            Ok(None) => okp_mpv::RenderUpdate::default(),
+            Err(error) => {
+                eprintln!("mpv render failed: {error}");
+                okp_mpv::RenderUpdate::default()
+            }
+        };
         drop(state);
         if let (Some(profile), Some(started_at)) =
             (render_callback_profile.as_ref(), render_started_at)
         {
-            profile
-                .borrow_mut()
-                .record_render(started_at.elapsed(), media_active);
+            profile.borrow_mut().record_render(
+                started_at.elapsed(),
+                media_active,
+                target_size,
+                render_update.frame_requested,
+            );
         }
 
         glib::Propagation::Stop
@@ -313,10 +431,45 @@ pub(crate) fn connect_mpv(
         }
     });
 
+    // libmpv's update callback is a coalescing wakeup, not a contractual
+    // per-frame clock. Keep it for low-latency still/resize redraws, but while
+    // video is actively playing provide GTK with a bounded render opportunity
+    // every 16 ms. queue_render() is main-context-only and all OpenGL work
+    // remains in GLArea::render.
+    let fallback_area = video_area.downgrade();
+    let fallback_state = Rc::clone(&state);
+    let fallback_queued_redraws = queued_redraws.clone();
+    glib::timeout_add_local_full(RENDER_FALLBACK_INTERVAL, glib::Priority::HIGH, move || {
+        let Some(area) = fallback_area.upgrade() else {
+            return glib::ControlFlow::Break;
+        };
+        let active = fallback_state
+            .borrow()
+            .mpv
+            .as_ref()
+            .is_some_and(|mpv| active_video_playback(mpv.observed_playback_state()));
+        if active {
+            if let Some(redraws) = fallback_redraws.as_ref() {
+                redraws.fetch_add(1, Ordering::Relaxed);
+            }
+            if let Some(redraws) = fallback_queued_redraws.as_ref() {
+                redraws.fetch_add(1, Ordering::Relaxed);
+            }
+            area.queue_render();
+        }
+        glib::ControlFlow::Continue
+    });
+
     if let Some(profile) = render_profile.as_ref() {
         let profile = Rc::clone(profile);
+        let profile_state = Rc::clone(&state);
         video_area.add_tick_callback(move |_, _| {
-            profile.borrow_mut().record_tick();
+            let active = profile_state
+                .borrow()
+                .mpv
+                .as_ref()
+                .is_some_and(|mpv| active_video_playback(mpv.observed_playback_state()));
+            profile.borrow_mut().record_tick(active);
             glib::ControlFlow::Continue
         });
     }
@@ -853,9 +1006,18 @@ mod render_wakeup_tests {
         assert!(scheduler.try_schedule());
         assert!(!scheduler.try_schedule());
 
+        let first = scheduler.snapshot();
+        assert_eq!(first.notifications, 2);
+        assert_eq!(first.scheduled, 1);
+        assert_eq!(first.coalesced, 1);
+
         scheduler.render_started();
 
         assert!(scheduler.try_schedule());
+        let rearmed = scheduler.snapshot();
+        assert_eq!(rearmed.notifications, 3);
+        assert_eq!(rearmed.scheduled, 2);
+        assert_eq!(rearmed.coalesced, 1);
     }
 
     #[test]
@@ -871,5 +1033,33 @@ mod render_wakeup_tests {
             .count();
 
         assert_eq!(scheduled, 1);
+        let snapshot = scheduler.snapshot();
+        assert_eq!(snapshot.notifications, 16);
+        assert_eq!(snapshot.scheduled, 1);
+        assert_eq!(snapshot.coalesced, 15);
+    }
+
+    #[test]
+    fn fallback_runs_only_for_active_video() {
+        let active = okp_mpv::PlaybackState {
+            time_pos: Some(5.0),
+            duration: Some(10.0),
+            container_fps: Some(60.0),
+            ..Default::default()
+        };
+        assert!(active_video_playback(active));
+
+        assert!(!active_video_playback(okp_mpv::PlaybackState {
+            paused: true,
+            ..active
+        }));
+        assert!(!active_video_playback(okp_mpv::PlaybackState {
+            time_pos: Some(10.0),
+            ..active
+        }));
+        assert!(!active_video_playback(okp_mpv::PlaybackState {
+            container_fps: None,
+            ..active
+        }));
     }
 }

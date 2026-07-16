@@ -41,7 +41,28 @@ EOF
 cat >"$BIN_DIR/ok-player" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-printf '%s\n' '{"completed":true}' >"$OKP_RENDER_PROFILE_PATH"
+test "$OKP_FIXED_VIEWPORT_SMOKE" = 1
+if [[ "$OKP_RENDER_PROFILE_PATH" == *auto-safe.json ]]; then
+  hwdec='"vaapi-copy"'
+  configured='auto-safe'
+else
+  hwdec='null'
+  configured='no'
+fi
+printf '%s\n' "{\
+\"schema_version\":2,\
+\"configured_hwdec\":\"$configured\",\
+\"hwdec_current\":$hwdec,\
+\"render_fps\":60.0,\
+\"render_calls\":600,\
+\"update_frame_requests\":600,\
+\"fallback_redraws\":600,\
+\"frame_clock_ticks\":600,\
+\"callback_notifications\":87,\
+\"vo_dropped_frames\":0,\
+\"decoder_dropped_frames\":0,\
+\"render_target_width\":1120,\
+\"render_target_height\":680}" >"$OKP_RENDER_PROFILE_PATH"
 EOF
 
 chmod +x "$BIN_DIR"/*
@@ -56,5 +77,6 @@ PATH="$BIN_DIR:$PATH" \
 test -s "$OUT_DIR/ok-player-no.json"
 test -s "$OUT_DIR/ok-player-auto-safe.json"
 test "$(wc -l <"$CALL_LOG")" -eq 2
+rg -q '4K60 acceptance passed' "$TEMP_ROOT/profile.log"
 
 echo "profile-linux-4k60 timeout smoke passed"

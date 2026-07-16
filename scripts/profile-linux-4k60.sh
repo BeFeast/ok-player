@@ -61,7 +61,7 @@ if [[ "$COMMAND" == "generate" ]]; then
   exit 0
 fi
 
-for tool in mpv timeout; do
+for tool in mpv python3 timeout; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "Missing required tool: $tool" >&2
     exit 127
@@ -115,6 +115,7 @@ run_ok_player() {
   timeout --signal=TERM "${DURATION_SECONDS}s" \
     env XDG_CONFIG_HOME="$config_root" \
       OKP_RENDER_PROFILE_PATH="$profile_path" \
+      OKP_FIXED_VIEWPORT_SMOKE=1 \
       OKP_SKIP_OPEN_INSTALLER=1 \
       OKP_SKIP_DEB_SELF_INSTALL=1 \
       "$BINARY" "$FIXTURE" >"$log" 2>&1
@@ -130,10 +131,64 @@ run_ok_player() {
   fi
 }
 
+validate_auto_safe_profile() {
+  local profile_path="$OUT_DIR/ok-player-auto-safe.json"
+  python3 - "$profile_path" "$FRAME_COUNT" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+frame_count = int(sys.argv[2])
+with open(path, encoding="utf-8") as stream:
+    profile = json.load(stream)
+
+failures = []
+if profile.get("schema_version") != 2:
+    failures.append("profile schema is not version 2")
+if profile.get("configured_hwdec") != "auto-safe":
+    failures.append("configured_hwdec is not auto-safe")
+if profile.get("hwdec_current") in (None, "", "no"):
+    failures.append("hwdec_current does not report an active hardware path")
+if profile.get("render_fps", 0) < 50:
+    failures.append("render_fps is below 50")
+if profile.get("render_calls", 0) < max(1, int(frame_count * 0.85)):
+    failures.append("render_calls do not track the fixture frame count")
+if profile.get("update_frame_requests", 0) < max(1, int(frame_count * 0.85)):
+    failures.append("MPV_RENDER_UPDATE_FRAME requests do not track the fixture frame count")
+if profile.get("fallback_redraws", 0) < max(1, int(frame_count * 0.5)):
+    failures.append("the bounded GTK fallback did not stay active")
+if profile.get("frame_clock_ticks", 0) < max(1, int(frame_count * 0.85)):
+    failures.append("GTK frame-clock ticks do not track active playback")
+if profile.get("vo_dropped_frames", 0) > max(5, frame_count // 100):
+    failures.append("VO dropped-frame count is too high")
+if profile.get("decoder_dropped_frames", 0) > max(5, frame_count // 100):
+    failures.append("decoder dropped-frame count is too high")
+if profile.get("render_target_width", 0) <= 0 or profile.get("render_target_height", 0) <= 0:
+    failures.append("render target dimensions were not captured")
+
+if failures:
+    for failure in failures:
+        print(f"4K60 acceptance failed: {failure}", file=sys.stderr)
+    sys.exit(1)
+
+print(
+    "4K60 acceptance passed: "
+    f"render_fps={profile['render_fps']:.2f} "
+    f"render_calls={profile['render_calls']} "
+    f"update_frame_requests={profile['update_frame_requests']} "
+    f"callback_notifications={profile.get('callback_notifications', 0)} "
+    f"fallback_redraws={profile['fallback_redraws']} "
+    f"target={profile['render_target_width']}x{profile['render_target_height']}"
+)
+PY
+}
+
 for mode in no auto-safe; do
   run_plain_mpv "$mode"
   run_ok_player "$mode"
 done
+
+validate_auto_safe_profile
 
 echo "4K60 profiles written to $OUT_DIR"
 for profile_path in "$OUT_DIR"/ok-player-*.json; do
