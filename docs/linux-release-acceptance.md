@@ -17,6 +17,12 @@ The runner generates media, captures all fixed states, writes `xvfb-rows.json`, 
 
 Generated fixtures include dark and moving-bright 30-second H.264 media, a 60-second buffered-playback source, chapter metadata, and a `natural-queue` folder containing `Episode 1`, `Episode 2`, and `Episode 10` plus a non-media file. The playback harness serves media from localhost to induce a delayed real load, a throttled partial demuxer cache, and a real HTTP 404/retry path. Xvfb also exercises direct file open, playback/duration, panel actions, screenshot file creation, X11 fullscreen, and the EWMH Always-on-top state. The live GNOME folder-chooser row uses the generated queue and records its natural order; the headless run must not mark that chooser row `PASS`.
 
+The playback harness also launches the binary with `--resume 12` and requires the explicit one-shot
+seek to be accepted by libmpv. This proves process-argument parsing and seek dispatch in the packaged
+shell; model-unit tests prove explicit-over-remembered precedence, zero/near-end handling, watched
+thresholds, and private-session report suppression. It does not prove a future companion IPC
+transport, because the MVP report sink is deliberately local and no-op.
+
 The encoded redlines include:
 
 | Surface | Bounds / region contract |

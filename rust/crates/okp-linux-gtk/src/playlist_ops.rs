@@ -84,6 +84,8 @@ pub(crate) fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
     state.chapters_snapshot.clear();
     state.pending_subtitles.clear();
     state.pending_resume = None;
+    state.pending_launch_tracks = None;
+    state.next_launch_directives = None;
     state.pending_preferences = None;
     state.video_transform.reset();
     state.ab_loop = AbLoopState::default();
@@ -205,11 +207,11 @@ pub(crate) fn remember_loaded_media_with_playlist(
         playlist.insert(0, PlaylistItem::Local(path.clone()));
     }
     let retry_source = network_media::LoadFailureSource::local(path.clone());
-    let resume_path = path.clone();
     let preferences_path = path.clone();
     let mut state = state.borrow_mut();
     advance_source_generation(&mut state);
-    let resume = if state.private_session || !state.settings.resume_enabled() {
+    let directives = state.next_launch_directives.take().unwrap_or_default();
+    let remembered_resume = if state.private_session || !state.settings.resume_enabled() {
         None
     } else {
         state.history.resume_position(&path)
@@ -231,7 +233,18 @@ pub(crate) fn remember_loaded_media_with_playlist(
     state.thumbnail_request_key = None;
     state.hover_thumbnail_request_key = None;
     state.pending_subtitles.clear();
-    state.pending_resume = resume.map(|position| (resume_path, position));
+    state.pending_resume =
+        launch_args::resolve_resume(directives.resume_seconds, remembered_resume).map(|target| {
+            PendingResume {
+                source_generation: state.source_generation,
+                target,
+            }
+        });
+    state.pending_launch_tracks = directives.has_tracks().then_some(PendingLaunchTracks {
+        source_generation: state.source_generation,
+        subtitle: directives.subtitle,
+        audio: directives.audio,
+    });
     state.pending_preferences = preferences.map(|preferences| (preferences_path, preferences));
     // A local file is also loading until `FileLoaded` fires (near-instant on a local
     // disk, but the surface is shared with network sources for consistency).
@@ -300,6 +313,7 @@ pub(crate) fn remember_loaded_url_with_playlist(
 
     let mut state = state.borrow_mut();
     advance_source_generation(&mut state);
+    let directives = state.next_launch_directives.take().unwrap_or_default();
     reset_video_transform_for_new_media(&mut state);
     state.ab_loop = AbLoopState::default();
     if let Some(mpv) = state.mpv.as_ref() {
@@ -313,7 +327,16 @@ pub(crate) fn remember_loaded_url_with_playlist(
     state.hover_thumbnail_request_key = None;
     state.chapters_snapshot.clear();
     state.pending_subtitles.clear();
-    state.pending_resume = None;
+    state.pending_resume =
+        launch_args::resolve_resume(directives.resume_seconds, None).map(|target| PendingResume {
+            source_generation: state.source_generation,
+            target,
+        });
+    state.pending_launch_tracks = directives.has_tracks().then_some(PendingLaunchTracks {
+        source_generation: state.source_generation,
+        subtitle: directives.subtitle,
+        audio: directives.audio,
+    });
     state.pending_preferences = None;
     // A network source is now handed to the engine — show the loading surface until
     // the `FileLoaded` lifecycle event fires (or a failure is reported).
@@ -612,33 +635,60 @@ pub(crate) fn try_pending_resume(state: &Rc<RefCell<PlayerState>>, duration: f64
 
     let pending = {
         let state = state.borrow();
-        state.pending_resume.clone()
+        state.pending_resume
     };
-    let Some((path, target)) = pending else {
+    let Some(pending) = pending else {
         return;
     };
 
-    let is_current = state
-        .borrow()
-        .current_file
-        .as_ref()
-        .is_some_and(|current| current == &path);
-    if !is_current {
+    if state.borrow().source_generation != pending.source_generation {
         state.borrow_mut().pending_resume = None;
         return;
     }
 
-    if target > duration {
-        return;
-    }
-
-    if target <= duration * 0.05 || target >= history::completion_start(duration) {
+    let Some(target) = pending.target.seek_position(duration) else {
         state.borrow_mut().pending_resume = None;
         return;
-    }
+    };
 
     if seek_absolute(state, target) {
+        if pending.target.origin == launch_args::ResumeOrigin::ExplicitLaunch {
+            eprintln!("Applied explicit launch resume at {target:.3}s");
+        }
         state.borrow_mut().pending_resume = None;
+    }
+}
+
+pub(crate) fn try_pending_launch_tracks(state: &Rc<RefCell<PlayerState>>) {
+    let Some(pending) = state.borrow_mut().pending_launch_tracks.take() else {
+        return;
+    };
+    if state.borrow().source_generation != pending.source_generation {
+        return;
+    }
+
+    let state = state.borrow();
+    let Some(mpv) = state.mpv.as_ref() else {
+        return;
+    };
+    if let Some(selection) = pending.audio {
+        let id = track_selection_id(selection);
+        if let Err(error) = mpv.select_audio(id) {
+            eprintln!("Failed to apply launch audio track hint: {error}");
+        }
+    }
+    if let Some(selection) = pending.subtitle {
+        let id = track_selection_id(selection);
+        if let Err(error) = mpv.select_subtitle(id) {
+            eprintln!("Failed to apply launch subtitle track hint: {error}");
+        }
+    }
+}
+
+fn track_selection_id(selection: launch_args::TrackSelection) -> Option<i64> {
+    match selection {
+        launch_args::TrackSelection::Off => None,
+        launch_args::TrackSelection::Id(id) => Some(i64::from(id)),
     }
 }
 
@@ -873,25 +923,24 @@ pub(crate) fn video_aspect_value(value: &str) -> &'static str {
 pub(crate) fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: bool) {
     let snapshot = {
         let state = state.borrow();
-        if state.private_session {
-            return;
-        }
         let Some(path) = state.current_file.clone() else {
             return;
         };
         let Some(playback) = state.mpv.as_ref().map(|mpv| mpv.observed_playback_state()) else {
             return;
         };
-        let preferences = state
-            .mpv
-            .as_ref()
-            .map(read_current_playback_preferences)
-            .unwrap_or_default();
+        let preferences = (!state.private_session).then(|| {
+            state
+                .mpv
+                .as_ref()
+                .map(read_current_playback_preferences)
+                .unwrap_or_default()
+        });
 
-        (path, playback, preferences)
+        (state.private_session, path, playback, preferences)
     };
 
-    let (path, playback, preferences) = snapshot;
+    let (private_session, path, playback, preferences) = snapshot;
     let Some(duration) = playback.duration else {
         return;
     };
@@ -901,13 +950,24 @@ pub(crate) fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: 
     }
 
     let mut state = state.borrow_mut();
-    state
-        .history
-        .record(&path, position.clamp(0.0, duration), duration, finished);
-    state.history.record_preferences(&path, preferences);
-    if let Err(error) = state.history.save() {
-        eprintln!("Failed to save history: {error}");
+    if !private_session {
+        state
+            .history
+            .record(&path, position.clamp(0.0, duration), duration, finished);
+        state
+            .history
+            .record_preferences(&path, preferences.unwrap_or_default());
+        if let Err(error) = state.history.save() {
+            eprintln!("Failed to save history: {error}");
+        }
     }
+    state.progress_reporter.observe(
+        private_session,
+        path.to_string_lossy().as_ref(),
+        position,
+        duration,
+        finished,
+    );
 }
 
 pub(crate) fn build_folder_playlist(path: &Path) -> Vec<PlaylistItem> {

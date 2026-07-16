@@ -22,9 +22,9 @@ use okp_core::shortcuts::{
 };
 use okp_core::update_selection::{self, DebFeed, DebUpdate, SHA256SUMS_ASSET};
 use okp_core::{
-    AppIdentity, chapter_math, lrc, m3u, media_formats, natural_compare, network_media,
-    ok_player_uri, seek_readout, sha256sums, subtitle_delay, time_code, timeline_buffer,
-    video_click, volume, youtube_open,
+    AppIdentity, chapter_math, launch_args, lrc, m3u, media_formats, natural_compare,
+    network_media, ok_player_uri, progress_report, seek_readout, sha256sums, subtitle_delay,
+    time_code, timeline_buffer, video_click, volume, youtube_open,
 };
 use okp_mpv::{
     AbLoopState, AudioDevice, Chapter, EndFileReason, InfoRow, InfoSection, InfoTrack, MediaInfo,
@@ -163,12 +163,15 @@ struct PlayerState {
     seek_generation: u64,
     playlist: Playlist,
     pending_subtitles: Vec<PathBuf>,
-    pending_resume: Option<(PathBuf, f64)>,
+    pending_resume: Option<PendingResume>,
+    pending_launch_tracks: Option<PendingLaunchTracks>,
+    next_launch_directives: Option<LaunchDirectives>,
     pending_preferences: Option<(PathBuf, history::PlaybackPreferences)>,
     thumbnail_request_key: Option<String>,
     hover_thumbnail_request_key: Option<String>,
     chapters_snapshot: Vec<Chapter>,
     private_session: bool,
+    progress_reporter: progress_report::ProgressReporter,
     history: history::HistoryStore,
     settings: settings::SettingsStore,
     screenshot_jobs: screenshots::ScreenshotJobs,
@@ -196,6 +199,32 @@ struct PlayerState {
     /// The short, copyable reason for the most recent load failure — surfaced
     /// through the in-canvas card's Copy details action instead of raw logs.
     last_load_error: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PendingResume {
+    source_generation: u64,
+    target: launch_args::ResumeTarget,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PendingLaunchTracks {
+    source_generation: u64,
+    subtitle: Option<launch_args::TrackSelection>,
+    audio: Option<launch_args::TrackSelection>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct LaunchDirectives {
+    resume_seconds: Option<f64>,
+    subtitle: Option<launch_args::TrackSelection>,
+    audio: Option<launch_args::TrackSelection>,
+}
+
+impl LaunchDirectives {
+    fn has_tracks(self) -> bool {
+        self.subtitle.is_some() || self.audio.is_some()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -265,6 +294,7 @@ struct LaunchArgs {
     items: Vec<PlaylistItem>,
     playlists: Vec<PathBuf>,
     subtitles: Vec<PathBuf>,
+    directives: LaunchDirectives,
     /// Local diagnostics for reserved `ok-player://` requests seen on this launch — the
     /// scheme is recognized but its external-control commands are [Later], so each is
     /// reported rather than opened as media (PRD §13.4).
@@ -280,6 +310,10 @@ impl LaunchArgs {
     /// if any. Only the first is shown so a batch of URIs cannot flood the toast.
     fn reserved_notice(&self) -> Option<&str> {
         self.reserved_notices.first().map(String::as_str)
+    }
+
+    fn has_media_payload(&self) -> bool {
+        !self.items.is_empty() || !self.playlists.is_empty()
     }
 }
 

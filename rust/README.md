@@ -41,6 +41,21 @@ cargo test --workspace
 cargo run -p okp-linux-gtk
 ```
 
+## Companion launch contract
+
+The Linux shell accepts the PRD §13.1 handoff through ordinary process invocation:
+
+```bash
+okp-linux-gtk /media/movie.mkv --resume 1:23:45 --sub 2 --audio 1
+```
+
+- `--resume` accepts seconds or a timecode and overrides remembered resume for that open only.
+- `--sub` and `--audio` accept a 1-based mpv track id, or `off`/`no`.
+- `--sub /media/captions.srt` remains supported for loading an external subtitle file.
+- Progress and watched transitions feed a local pluggable sink. The MVP sink is intentionally a
+  no-op until a companion transport is configured; private sessions suppress both that channel and
+  history writes. No database or remote endpoint is involved.
+
 ## UI-Thread Blocking-Read Guard
 
 A synchronous mpv property read on the thread that drives the UI can deadlock

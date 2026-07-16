@@ -190,7 +190,7 @@ launch() {
     OKP_SKIP_UPDATE_CHECK=1 \
     OKP_SKIP_OPEN_INSTALLER=1 \
     OKP_SKIP_DEB_SELF_INSTALL=1 \
-    "$@" timeout 45s "$BINARY" "$source" >"$OUT_DIR/$name-app.log" 2>&1 &
+    timeout 45s "$BINARY" "$source" "$@" >"$OUT_DIR/$name-app.log" 2>&1 &
   app_pid=$!
 
   window_id=""
@@ -281,6 +281,17 @@ xdotool key --clearmodifiers space
 wake_chrome
 sleep 1
 capture paused
+stop_app
+
+# The companion launch contract is ordinary process invocation. This row proves the packaged GTK
+# shell parsed the explicit target and libmpv accepted the one-shot absolute seek; core unit tests
+# separately cover precedence over remembered state, zero, near-end, and private reporting.
+launch "$DARK" explicit-launch-resume 4 --resume 12
+grep -q 'Applied explicit launch resume at 12.000s' "$OUT_DIR/explicit-launch-resume-app.log" || {
+  echo "explicit launch resume was not applied" >&2
+  cat "$OUT_DIR/explicit-launch-resume-app.log" >&2 || true
+  exit 1
+}
 stop_app
 
 # A throttled real HTTP source produces an observed demuxer cache ahead of the
