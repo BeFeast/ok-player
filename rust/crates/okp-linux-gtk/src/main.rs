@@ -815,7 +815,7 @@ struct PlayerWindowChrome {
 #[derive(Clone)]
 struct PlayerWindowBounds {
     monitor: Option<gdk::Monitor>,
-    work_area: window_fit::WindowSize,
+    work_area: window_fit::WindowRect,
 }
 
 struct StatePollContext {

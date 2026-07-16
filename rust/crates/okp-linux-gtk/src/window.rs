@@ -397,10 +397,17 @@ pub(crate) fn track_player_window_bounds(
         toplevel.connect_compute_size(move |toplevel, size| {
             let (width, height) = size.bounds();
             if width > 0 && height > 0 {
-                compute_bounds.replace(Some(PlayerWindowBounds {
-                    monitor: toplevel.display().monitor_at_surface(toplevel),
-                    work_area: window_fit::WindowSize { width, height },
-                }));
+                let monitor = toplevel.display().monitor_at_surface(toplevel);
+                let work_area = monitor
+                    .as_ref()
+                    .map(|monitor| bounded_monitor_work_area(monitor.geometry(), width, height))
+                    .unwrap_or(window_fit::WindowRect {
+                        x: 0,
+                        y: 0,
+                        width,
+                        height,
+                    });
+                compute_bounds.replace(Some(PlayerWindowBounds { monitor, work_area }));
             }
         });
     });
@@ -410,13 +417,15 @@ pub(crate) fn track_player_window_bounds(
 pub(crate) fn current_player_work_area(
     window: &gtk::ApplicationWindow,
     reported_bounds: &RefCell<Option<PlayerWindowBounds>>,
-) -> Option<window_fit::WindowSize> {
+) -> Option<window_fit::WindowRect> {
     let current_monitor = window.surface().and_then(|surface| {
         let monitor = surface.display().monitor_at_surface(&surface)?;
         let geometry = monitor.geometry();
         (geometry.width() > 0 && geometry.height() > 0).then_some((
             monitor,
-            window_fit::WindowSize {
+            window_fit::WindowRect {
+                x: geometry.x(),
+                y: geometry.y(),
                 width: geometry.width(),
                 height: geometry.height(),
             },
@@ -428,15 +437,55 @@ pub(crate) fn current_player_work_area(
         (Some(bounds), Some((monitor, monitor_size)))
             if bounds.monitor.as_ref() == Some(&monitor) =>
         {
-            Some(window_fit::WindowSize {
-                width: bounds.work_area.width.min(monitor_size.width),
-                height: bounds.work_area.height.min(monitor_size.height),
-            })
+            Some(bounded_monitor_work_area(
+                monitor.geometry(),
+                bounds.work_area.width.min(monitor_size.width),
+                bounds.work_area.height.min(monitor_size.height),
+            ))
         }
         (_, Some((_, monitor_size))) => Some(monitor_size),
         (Some(bounds), None) => Some(bounds.work_area),
         (None, None) => None,
     }
+}
+
+fn bounded_monitor_work_area(
+    geometry: gdk::Rectangle,
+    bounds_width: i32,
+    bounds_height: i32,
+) -> window_fit::WindowRect {
+    let width = bounds_width.min(geometry.width()).max(1);
+    let height = bounds_height.min(geometry.height()).max(1);
+    window_fit::WindowRect {
+        // GDK's toplevel bounds expose only a size. Centering a smaller bound
+        // within monitor geometry is the least-assumptive logical origin; on
+        // Wayland Mutter remains authoritative for final placement.
+        x: geometry.x() + (geometry.width() - width).max(0) / 2,
+        y: geometry.y() + (geometry.height() - height).max(0) / 2,
+        width,
+        height,
+    }
+}
+
+fn current_player_scale(window: &gtk::ApplicationWindow) -> f64 {
+    window
+        .surface()
+        .map(|surface| {
+            // GTK 4.14+ exposes fractional surface scale as a property. Keep
+            // the crate's GTK 4.10 floor by discovering it dynamically, with
+            // the integer ceiling as the older-runtime fallback.
+            let scale = if surface.find_property("scale").is_some() {
+                surface.property::<f64>("scale")
+            } else {
+                f64::from(surface.scale_factor())
+            };
+            if scale.is_finite() && scale > 0.0 {
+                scale
+            } else {
+                1.0
+            }
+        })
+        .unwrap_or(1.0)
 }
 
 pub(crate) fn fit_player_window_to_video(
@@ -470,57 +519,100 @@ pub(crate) fn fit_player_window_to_video(
         }
         return;
     };
-    let Some(target) =
-        window_fit::fit_to_work_area(video.width, video.height, work_area.width, work_area.height)
-    else {
+    let monitor_scale = current_player_scale(window);
+    let Some(placement) = window_fit::fit_physical_video_to_work_area(
+        video.width,
+        video.height,
+        monitor_scale,
+        work_area,
+    ) else {
         return;
     };
 
     if debug {
         eprintln!(
-            "window fit request: video={}x{} workarea={}x{} target={}x{}",
+            "window fit request: video={}x{} scale={:.2} workarea={}x{}+{},{} target={}x{}+{},{}",
             video.width,
             video.height,
+            monitor_scale,
             work_area.width,
             work_area.height,
-            target.width,
-            target.height
+            work_area.x,
+            work_area.y,
+            placement.size.width,
+            placement.size.height,
+            placement.position.x,
+            placement.position.y,
         );
     }
-    window.set_default_size(target.width, target.height);
+    window.set_default_size(placement.size.width, placement.size.height);
+    let moved = move_resize_player_window_on_x11(window, placement.position, placement.size);
 
     let settled_window = window.clone();
     let settled_state = Rc::clone(state);
     let settled_bounds = Rc::clone(reported_bounds);
-    glib::timeout_add_local_once(Duration::from_millis(80), move || {
+    glib::timeout_add_local_once(Duration::from_millis(300), move || {
         if settled_state.borrow().source_generation != source_generation
             || settled_window.is_fullscreen()
             || settled_window.is_maximized()
         {
             return;
         }
-        let Some(work_area) = current_player_work_area(&settled_window, &settled_bounds) else {
-            return;
-        };
         let actual_width = settled_window.width();
         let actual_height = settled_window.height();
-        if let Some(corrected) = window_fit::fill_client_to_work_area(
-            video.width,
-            video.height,
-            actual_width,
-            actual_height,
-            work_area.width,
-            work_area.height,
-        ) {
+        if actual_width <= placement.size.width
+            && actual_height <= placement.size.height
+            && let Some(corrected) = window_fit::fill_client(
+                video.width,
+                video.height,
+                actual_width,
+                actual_height,
+                placement.size.width,
+                placement.size.height,
+            )
+        {
             settled_window.set_default_size(corrected.width, corrected.height);
         }
         if debug {
             eprintln!(
-                "window fit settled: client={}x{}",
+                "window fit settled: client={}x{} backend={}",
                 settled_window.width(),
-                settled_window.height()
+                settled_window.height(),
+                if moved { "x11" } else { "compositor" }
             );
         }
+
+        let positioned_window = settled_window.clone();
+        let positioned_state = Rc::clone(&settled_state);
+        let positioned_bounds = Rc::clone(&settled_bounds);
+        glib::timeout_add_local_once(Duration::from_millis(150), move || {
+            if positioned_state.borrow().source_generation != source_generation
+                || positioned_window.is_fullscreen()
+                || positioned_window.is_maximized()
+            {
+                return;
+            }
+            let Some(work_area) = current_player_work_area(&positioned_window, &positioned_bounds)
+            else {
+                return;
+            };
+            let final_size = window_fit::WindowSize {
+                width: positioned_window.width(),
+                height: positioned_window.height(),
+            };
+            let position = window_fit::centered_position(final_size, work_area);
+            let moved = move_resize_player_window_on_x11(&positioned_window, position, final_size);
+            if debug {
+                eprintln!(
+                    "window fit positioned: client={}x{} target=+{},{} backend={}",
+                    final_size.width,
+                    final_size.height,
+                    position.x,
+                    position.y,
+                    if moved { "x11" } else { "compositor" }
+                );
+            }
+        });
     });
 }
 
@@ -773,6 +865,14 @@ unsafe extern "C" {
         event_mask: libc::c_long,
         event: *mut XEvent,
     ) -> libc::c_int;
+    fn XMoveResizeWindow(
+        display: *mut XDisplay,
+        window: libc::c_ulong,
+        x: libc::c_int,
+        y: libc::c_int,
+        width: libc::c_uint,
+        height: libc::c_uint,
+    ) -> libc::c_int;
     fn XFlush(display: *mut XDisplay) -> libc::c_int;
 }
 
@@ -793,6 +893,79 @@ pub(crate) fn always_on_top_backend(display_type_name: &str) -> AlwaysOnTopBacke
         AlwaysOnTopBackend::X11Ewmh
     } else {
         AlwaysOnTopBackend::Unavailable
+    }
+}
+
+/// Center the fitted window where X11 permits explicit toplevel positioning.
+/// Wayland intentionally exposes no client-controlled global coordinates, so
+/// Mutter remains responsible for keeping the already-bounded surface visible.
+fn move_resize_player_window_on_x11(
+    window: &gtk::ApplicationWindow,
+    position: window_fit::WindowPoint,
+    size: window_fit::WindowSize,
+) -> bool {
+    use gtk::glib::translate::ToGlibPtr;
+
+    let Some(display) = gdk::Display::default() else {
+        return false;
+    };
+    if display.type_().name() != "GdkX11Display" {
+        return false;
+    }
+    let Some(surface) = window.surface() else {
+        return false;
+    };
+    let scale_factor = surface.scale_factor().max(1);
+    let x = position.x.saturating_mul(scale_factor);
+    let y = position.y.saturating_mul(scale_factor);
+
+    unsafe {
+        let xdisplay = gdk_x11_display_get_xdisplay(display.to_glib_none().0);
+        if xdisplay.is_null() {
+            return false;
+        }
+        let xid = gdk_x11_surface_get_xid(surface.to_glib_none().0);
+        if xid == 0 {
+            return false;
+        }
+        let move_resize = XInternAtom(xdisplay, c"_NET_MOVERESIZE_WINDOW".as_ptr(), 0);
+        let moved = if move_resize != 0 {
+            let client_message = XClientMessageEvent {
+                type_: 33,
+                serial: 0,
+                send_event: 1,
+                display: xdisplay,
+                window: xid,
+                message_type: move_resize,
+                format: 32,
+                // EWMH: x/y/width/height are present (bits 8-11), source is a
+                // normal application (1 in bits 12-15).
+                data: XClientMessageData {
+                    longs: [
+                        (1 << 8) | (1 << 9) | (1 << 10) | (1 << 11) | (1 << 12),
+                        libc::c_long::from(x),
+                        libc::c_long::from(y),
+                        libc::c_long::from(size.width),
+                        libc::c_long::from(size.height),
+                    ],
+                },
+            };
+            let mut event = XEvent { client_message };
+            let root = XDefaultRootWindow(xdisplay);
+            let mask = (1 << 20) | (1 << 19);
+            XSendEvent(xdisplay, root, 0, mask, &mut event)
+        } else {
+            XMoveResizeWindow(
+                xdisplay,
+                xid,
+                x,
+                y,
+                size.width.max(1) as libc::c_uint,
+                size.height.max(1) as libc::c_uint,
+            )
+        };
+        XFlush(xdisplay);
+        moved != 0
     }
 }
 
