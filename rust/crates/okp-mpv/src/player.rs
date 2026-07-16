@@ -22,6 +22,15 @@ pub struct RenderTargetSize {
     pub height: i32,
 }
 
+/// Display dimensions carried by lifecycle events after mpv has applied pixel
+/// aspect and rotation. Shells consume this payload instead of issuing a
+/// blocking property read from their UI thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VideoDimensions {
+    pub width: i32,
+    pub height: i32,
+}
+
 impl RenderTargetSize {
     fn is_valid(self) -> bool {
         self.width > 0 && self.height > 0
@@ -157,11 +166,12 @@ pub enum TrackKind {
 }
 
 /// Lifecycle events the engine fires, drained oldest-first via
-/// [`Mpv::take_lifecycle_events`](crate::Mpv::take_lifecycle_events). `EndFile`
-/// carries the `path` mpv reported for the entry that ended (the file path or URL
-/// string), so the shell can drop a stale `EndFile::Error` whose source has since
-/// been superseded (e.g. URL A fails, then the user starts URL B before the next
-/// poll). Not `Copy` because `path` is a `String`.
+/// [`Mpv::take_lifecycle_events`](crate::Mpv::take_lifecycle_events). Load and
+/// reconfiguration events carry display dimensions read by the background pump,
+/// while `EndFile` carries the path mpv reported for the entry that ended. The
+/// shell can therefore react without a blocking UI-thread property read and can
+/// drop a stale error whose source has already been superseded. Not `Copy`
+/// because `path` is a `String`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MpvEvent {
     EndFile {
@@ -172,7 +182,12 @@ pub enum MpvEvent {
         request_id: u64,
         error: c_int,
     },
-    FileLoaded,
+    FileLoaded {
+        video_dimensions: Option<VideoDimensions>,
+    },
+    VideoReconfig {
+        video_dimensions: Option<VideoDimensions>,
+    },
     Shutdown,
 }
 
@@ -255,6 +270,32 @@ impl RawReader {
                 .get_double("container-fps")?
                 .filter(|fps| fps.is_finite() && *fps > 0.0),
         })
+    }
+
+    pub(crate) fn video_dimensions(&self) -> Result<Option<VideoDimensions>, MpvError> {
+        let width =
+            self.first_positive_i64(&["video-params/dw", "dwidth", "video-params/w", "width"])?;
+        let height =
+            self.first_positive_i64(&["video-params/dh", "dheight", "video-params/h", "height"])?;
+
+        Ok(match (width, height) {
+            (Some(width), Some(height)) => match (i32::try_from(width), i32::try_from(height)) {
+                (Ok(width), Ok(height)) => Some(VideoDimensions { width, height }),
+                _ => None,
+            },
+            _ => None,
+        })
+    }
+
+    fn first_positive_i64(&self, names: &[&str]) -> Result<Option<i64>, MpvError> {
+        for name in names {
+            if let Some(value) = self.get_i64(name)?
+                && value > 0
+            {
+                return Ok(Some(value));
+            }
+        }
+        Ok(None)
     }
 
     pub(crate) fn ab_loop_state(&self) -> Result<AbLoopState, MpvError> {
@@ -1916,6 +1957,49 @@ mod tests {
         );
 
         // Dropping here exercises pump shutdown + terminate ordering.
+    }
+
+    #[test]
+    fn lifecycle_events_carry_display_dimensions_from_the_pump_thread() {
+        let options = [
+            ("vo".to_owned(), "null".to_owned()),
+            ("ao".to_owned(), "null".to_owned()),
+        ];
+        let mut mpv = Mpv::new_with_options("no", &options)
+            .expect("libmpv must be loadable for okp-mpv tests");
+        mpv.mark_ui_thread();
+        mpv.start_event_pump();
+        mpv.load_file(&fixture_media_path())
+            .expect("video fixture should load");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut dimensions = None;
+        while Instant::now() < deadline && dimensions.is_none() {
+            for event in mpv.take_lifecycle_events() {
+                match event {
+                    MpvEvent::FileLoaded { video_dimensions }
+                    | MpvEvent::VideoReconfig { video_dimensions } => {
+                        dimensions = dimensions.or(video_dimensions);
+                    }
+                    _ => {}
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        assert_eq!(
+            dimensions,
+            Some(VideoDimensions {
+                width: 1280,
+                height: 720
+            })
+        );
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            mpv.blocking_read_violations(),
+            0,
+            "event payload generation must stay off the marked UI thread"
+        );
     }
 
     /// Recording a media source after the `FileLoaded` recompute has already

@@ -287,11 +287,19 @@ pub(crate) fn connect_state_poll(
         empty_surface,
         lyrics_surface,
         media_state_overlay,
+        window_bounds,
         mpris_snapshot,
         mpris_signals,
     } = context;
+    let last_auto_fit_generation = Cell::new(None);
     glib::timeout_add_local(Duration::from_millis(200), move || {
-        drain_mpv_events(&state, &status_toast);
+        let auto_fit_dimensions = drain_mpv_events(&state, &status_toast);
+        if let Some(dimensions) = auto_fit_dimensions {
+            let generation = state.borrow().source_generation;
+            if last_auto_fit_generation.replace(Some(generation)) != Some(generation) {
+                fit_player_window_to_video(&window, &state, &window_bounds, generation, dimensions);
+            }
+        }
         drain_screenshot_jobs(&state, &status_toast);
         try_pending_audio_device_restore(&state);
 

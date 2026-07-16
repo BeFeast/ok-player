@@ -1408,7 +1408,10 @@ pub(crate) fn track_base_label(track: &Track) -> String {
     )
 }
 
-pub(crate) fn drain_mpv_events(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
+pub(crate) fn drain_mpv_events(
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &StatusToast,
+) -> Option<VideoDimensions> {
     let events = {
         let state = state.borrow();
         state
@@ -1418,9 +1421,11 @@ pub(crate) fn drain_mpv_events(state: &Rc<RefCell<PlayerState>>, status_toast: &
             .unwrap_or_default()
     };
 
+    let mut auto_fit_dimensions = None;
     for event in events {
         match event {
-            MpvEvent::FileLoaded => {
+            MpvEvent::FileLoaded { video_dimensions } => {
+                auto_fit_dimensions = auto_fit_dimensions.or(video_dimensions);
                 try_pending_audio_device_restore(state);
                 try_pending_playback_preferences(state);
                 // Companion launch hints win over remembered track preferences for this open only.
@@ -1429,6 +1434,9 @@ pub(crate) fn drain_mpv_events(state: &Rc<RefCell<PlayerState>>, status_toast: &
                 let mut state = state.borrow_mut();
                 state.media_load_state = network_media::MediaLoadState::Playing;
                 state.last_load_error = None;
+            }
+            MpvEvent::VideoReconfig { video_dimensions } => {
+                auto_fit_dimensions = auto_fit_dimensions.or(video_dimensions);
             }
             MpvEvent::EndFile { reason, .. } if reason.is_eof() => {
                 if state.borrow().playlist.repeat() != RepeatMode::One {
@@ -1454,4 +1462,6 @@ pub(crate) fn drain_mpv_events(state: &Rc<RefCell<PlayerState>>, status_toast: &
             _ => {}
         }
     }
+
+    auto_fit_dimensions
 }

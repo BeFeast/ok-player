@@ -68,6 +68,7 @@ launch_player() {
   local source="$1"
   local frame_preview="$2"
   OKP_PLAYBACK_FRAME_PREVIEW="$frame_preview" \
+  OKP_FIXED_VIEWPORT_SMOKE=1 \
   OKP_SKIP_OPEN_INSTALLER=1 \
   OKP_SKIP_DEB_SELF_INSTALL=1 \
   timeout 35s "$BINARY" "$source" >"$OUT_DIR/app.log" 2>&1 &

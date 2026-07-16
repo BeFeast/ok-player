@@ -130,6 +130,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         .build();
     window.add_css_class("okp-player-window");
     window.set_icon_name(Some(LINUX_ICON_NAME));
+    let window_bounds = track_player_window_bounds(&window);
 
     let overlay = gtk::Overlay::new();
     overlay.add_css_class("okp-root");
@@ -302,11 +303,19 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
             empty_surface: empty_surface.clone(),
             lyrics_surface,
             media_state_overlay,
+            window_bounds,
             mpris_snapshot: Arc::clone(&mpris_controller.snapshot),
             mpris_signals: mpris_controller.signals.clone(),
         },
     );
 
+    // Deterministic smoke hook for the load-time resize guard. The production
+    // path reaches the same state through the caption button/window manager.
+    if env::var_os("OKP_START_FULLSCREEN").is_some() {
+        window.fullscreen();
+    } else if env::var_os("OKP_START_MAXIMIZED").is_some() {
+        window.maximize();
+    }
     window.present();
     if env::var_os("OKP_OSD_PREVIEW_ON_STARTUP").is_some() {
         let preview_toast = Rc::clone(&status_toast);
@@ -362,6 +371,149 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         state,
         status_toast,
     }
+}
+
+pub(crate) fn track_player_window_bounds(
+    window: &gtk::ApplicationWindow,
+) -> Rc<RefCell<Option<PlayerWindowBounds>>> {
+    let bounds = Rc::new(RefCell::new(None));
+    let realize_bounds = Rc::clone(&bounds);
+    window.connect_realize(move |window| {
+        let Some(surface) = window.surface() else {
+            return;
+        };
+        let Ok(toplevel) = surface.downcast::<gdk::Toplevel>() else {
+            return;
+        };
+        let compute_bounds = Rc::clone(&realize_bounds);
+        toplevel.connect_compute_size(move |toplevel, size| {
+            let (width, height) = size.bounds();
+            if width > 0 && height > 0 {
+                compute_bounds.replace(Some(PlayerWindowBounds {
+                    monitor: toplevel.display().monitor_at_surface(toplevel),
+                    work_area: window_fit::WindowSize { width, height },
+                }));
+            }
+        });
+    });
+    bounds
+}
+
+pub(crate) fn current_player_work_area(
+    window: &gtk::ApplicationWindow,
+    reported_bounds: &RefCell<Option<PlayerWindowBounds>>,
+) -> Option<window_fit::WindowSize> {
+    let current_monitor = window.surface().and_then(|surface| {
+        let monitor = surface.display().monitor_at_surface(&surface)?;
+        let geometry = monitor.geometry();
+        (geometry.width() > 0 && geometry.height() > 0).then_some((
+            monitor,
+            window_fit::WindowSize {
+                width: geometry.width(),
+                height: geometry.height(),
+            },
+        ))
+    });
+
+    let reported = reported_bounds.borrow();
+    match (reported.as_ref(), current_monitor) {
+        (Some(bounds), Some((monitor, monitor_size)))
+            if bounds.monitor.as_ref() == Some(&monitor) =>
+        {
+            Some(window_fit::WindowSize {
+                width: bounds.work_area.width.min(monitor_size.width),
+                height: bounds.work_area.height.min(monitor_size.height),
+            })
+        }
+        (_, Some((_, monitor_size))) => Some(monitor_size),
+        (Some(bounds), None) => Some(bounds.work_area),
+        (None, None) => None,
+    }
+}
+
+pub(crate) fn fit_player_window_to_video(
+    window: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
+    reported_bounds: &Rc<RefCell<Option<PlayerWindowBounds>>>,
+    source_generation: u64,
+    video: VideoDimensions,
+) {
+    let debug = env::var_os("OKP_DEBUG_WINDOW_FIT").is_some();
+    // Existing pixel-redline smokes intentionally hold the canonical 1120x680
+    // viewport. The dedicated main-window fit smoke leaves this unset and
+    // exercises the production behavior with real media dimensions.
+    if env::var_os("OKP_FIXED_VIEWPORT_SMOKE").is_some() {
+        return;
+    }
+    if window.is_fullscreen() || window.is_maximized() {
+        if debug {
+            eprintln!(
+                "window fit skipped: fullscreen={} maximized={}",
+                window.is_fullscreen(),
+                window.is_maximized()
+            );
+        }
+        return;
+    }
+
+    let Some(work_area) = current_player_work_area(window, reported_bounds) else {
+        if debug {
+            eprintln!("window fit skipped: workarea unavailable");
+        }
+        return;
+    };
+    let Some(target) =
+        window_fit::fit_to_work_area(video.width, video.height, work_area.width, work_area.height)
+    else {
+        return;
+    };
+
+    if debug {
+        eprintln!(
+            "window fit request: video={}x{} workarea={}x{} target={}x{}",
+            video.width,
+            video.height,
+            work_area.width,
+            work_area.height,
+            target.width,
+            target.height
+        );
+    }
+    window.set_default_size(target.width, target.height);
+
+    let settled_window = window.clone();
+    let settled_state = Rc::clone(state);
+    let settled_bounds = Rc::clone(reported_bounds);
+    glib::timeout_add_local_once(Duration::from_millis(80), move || {
+        if settled_state.borrow().source_generation != source_generation
+            || settled_window.is_fullscreen()
+            || settled_window.is_maximized()
+        {
+            return;
+        }
+        let Some(work_area) = current_player_work_area(&settled_window, &settled_bounds) else {
+            return;
+        };
+        let actual_width = settled_window.width();
+        let actual_height = settled_window.height();
+        if let Some(corrected) = window_fit::fill_client_to_work_area(
+            video.width,
+            video.height,
+            actual_width,
+            actual_height,
+            work_area.width,
+            work_area.height,
+        ) {
+            settled_window.set_default_size(corrected.width, corrected.height);
+        }
+        if debug {
+            eprintln!(
+                "window fit settled: client={}x{}",
+                settled_window.width(),
+                settled_window.height()
+            );
+        }
+    });
 }
 
 pub(crate) fn open_runtime_launch_args(runtime: &AppRuntime, launch_args: &LaunchArgs) {
