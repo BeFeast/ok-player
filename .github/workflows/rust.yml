@@ -38,3 +38,8 @@ jobs:
 
       - name: Native file dialog result smoke
         run: ./scripts/smoke-linux-file-dialog.sh
+
+      - name: Generate 4K60 HEVC Main10 profile fixture
+        env:
+          OKP_4K60_FRAMES: 1
+        run: ./scripts/profile-linux-4k60.sh generate "$RUNNER_TEMP/ok-player-4k60"
