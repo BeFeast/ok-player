@@ -216,7 +216,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     connect_chrome_activity(&overlay, Rc::clone(&chrome));
 
     let launch_reserved_notice = launch_args.reserved_notice().map(str::to_owned);
-    connect_mpv(&video_area, Rc::clone(&state), launch_args);
+    let mpv_render_surface = connect_mpv(&video_area, Rc::clone(&state), launch_args);
     connect_video_clicks(&video_area, &window, Rc::clone(&state));
     connect_player_context_menu(
         &overlay,
@@ -312,6 +312,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
             lyrics_surface,
             media_state_overlay,
             window_bounds,
+            mpv_render_surface,
             mpris_snapshot: Arc::clone(&mpris_controller.snapshot),
             mpris_signals: mpris_controller.signals.clone(),
         },
@@ -492,6 +493,7 @@ pub(crate) fn fit_player_window_to_video(
     window: &gtk::ApplicationWindow,
     state: &Rc<RefCell<PlayerState>>,
     reported_bounds: &Rc<RefCell<Option<PlayerWindowBounds>>>,
+    mpv_render_surface: &MpvRenderSurface,
     source_generation: u64,
     video: VideoDimensions,
 ) {
@@ -545,9 +547,101 @@ pub(crate) fn fit_player_window_to_video(
             placement.position.y,
         );
     }
-    window.set_default_size(placement.size.width, placement.size.height);
-    let moved = move_resize_player_window_on_x11(window, placement.position, placement.size);
+    let display_type_name = gtk::prelude::WidgetExt::display(window).type_().name();
+    let force_remap = env::var_os("OKP_WINDOW_FIT_FORCE_SAFE_REMAP").is_some();
+    match player_window_fit_backend(display_type_name, force_remap) {
+        PlayerWindowFitBackend::X11MoveResize => {
+            window.set_default_size(placement.size.width, placement.size.height);
+            move_resize_player_window_on_x11(window, placement.position, placement.size);
+            schedule_player_window_fit_settle(
+                window,
+                state,
+                reported_bounds,
+                source_generation,
+                video,
+                placement,
+                debug,
+            );
+        }
+        PlayerWindowFitBackend::SafeRemap => {
+            if mpv_render_surface.suspend_for_toplevel_remap() {
+                if debug {
+                    eprintln!("window fit remap: render-context=suspended");
+                }
+                window.set_visible(false);
 
+                let remap_window = window.clone();
+                let remap_state = Rc::clone(state);
+                let remap_bounds = Rc::clone(reported_bounds);
+                glib::idle_add_local_once(move || {
+                    if remap_state.borrow().source_generation != source_generation
+                        || remap_window.is_fullscreen()
+                        || remap_window.is_maximized()
+                    {
+                        remap_window.present();
+                        if debug {
+                            eprintln!("window fit remap cancelled: player state changed");
+                        }
+                        return;
+                    }
+                    remap_window.set_default_size(placement.size.width, placement.size.height);
+                    remap_window.present();
+                    if debug {
+                        eprintln!(
+                            "window fit remap: presented target={}x{}",
+                            placement.size.width, placement.size.height
+                        );
+                    }
+                    schedule_player_window_fit_settle(
+                        &remap_window,
+                        &remap_state,
+                        &remap_bounds,
+                        source_generation,
+                        video,
+                        placement,
+                        debug,
+                    );
+                });
+            } else {
+                if debug {
+                    eprintln!("window fit remap skipped: render-context unavailable");
+                }
+                window.set_default_size(placement.size.width, placement.size.height);
+                schedule_player_window_fit_settle(
+                    window,
+                    state,
+                    reported_bounds,
+                    source_generation,
+                    video,
+                    placement,
+                    debug,
+                );
+            }
+        }
+        PlayerWindowFitBackend::CompositorResize => {
+            window.set_default_size(placement.size.width, placement.size.height);
+            schedule_player_window_fit_settle(
+                window,
+                state,
+                reported_bounds,
+                source_generation,
+                video,
+                placement,
+                debug,
+            );
+        }
+    }
+}
+
+fn schedule_player_window_fit_settle(
+    window: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
+    reported_bounds: &Rc<RefCell<Option<PlayerWindowBounds>>>,
+    source_generation: u64,
+    video: VideoDimensions,
+    placement: window_fit::WindowPlacement,
+    debug: bool,
+) {
     let settled_window = window.clone();
     let settled_state = Rc::clone(state);
     let settled_bounds = Rc::clone(reported_bounds);
@@ -575,10 +669,9 @@ pub(crate) fn fit_player_window_to_video(
         }
         if debug {
             eprintln!(
-                "window fit settled: client={}x{} backend={}",
+                "window fit settled: client={}x{}",
                 settled_window.width(),
-                settled_window.height(),
-                if moved { "x11" } else { "compositor" }
+                settled_window.height()
             );
         }
 
@@ -888,11 +981,31 @@ pub(crate) enum AlwaysOnTopResult {
     Unavailable,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlayerWindowFitBackend {
+    X11MoveResize,
+    SafeRemap,
+    CompositorResize,
+}
+
 pub(crate) fn always_on_top_backend(display_type_name: &str) -> AlwaysOnTopBackend {
     if display_type_name == "GdkX11Display" {
         AlwaysOnTopBackend::X11Ewmh
     } else {
         AlwaysOnTopBackend::Unavailable
+    }
+}
+
+pub(crate) fn player_window_fit_backend(
+    display_type_name: &str,
+    force_safe_remap: bool,
+) -> PlayerWindowFitBackend {
+    if force_safe_remap || display_type_name == "GdkWaylandDisplay" {
+        PlayerWindowFitBackend::SafeRemap
+    } else if display_type_name == "GdkX11Display" {
+        PlayerWindowFitBackend::X11MoveResize
+    } else {
+        PlayerWindowFitBackend::CompositorResize
     }
 }
 

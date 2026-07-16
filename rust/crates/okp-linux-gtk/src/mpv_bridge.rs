@@ -1,10 +1,78 @@
 use super::*;
 
+#[derive(Clone)]
+pub(crate) struct MpvRenderSurface {
+    area: gtk::GLArea,
+    state: Rc<RefCell<PlayerState>>,
+    remap_pending: Rc<Cell<bool>>,
+}
+
+impl MpvRenderSurface {
+    pub(crate) fn suspend_for_toplevel_remap(&self) -> bool {
+        if self.remap_pending.get() {
+            return false;
+        }
+
+        self.area.make_current();
+        if let Some(error) = self.area.error() {
+            eprintln!("Cannot suspend mpv rendering for window remap: {error}");
+            return false;
+        }
+
+        let mut state = self.state.borrow_mut();
+        let Some(mpv) = state.mpv.as_mut() else {
+            return false;
+        };
+        mpv.destroy_render_context();
+        self.remap_pending.set(true);
+        true
+    }
+
+    fn resume_after_toplevel_map(&self) {
+        if !self.remap_pending.get() {
+            return;
+        }
+
+        self.area.make_current();
+        if let Some(error) = self.area.error() {
+            eprintln!("Cannot restore mpv rendering after window remap: {error}");
+            return;
+        }
+
+        let result = self
+            .state
+            .borrow_mut()
+            .mpv
+            .as_mut()
+            .map(Mpv::create_render_context);
+        match result {
+            Some(Ok(())) => {
+                self.remap_pending.set(false);
+                self.area.queue_render();
+                if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
+                    eprintln!("window fit remap: render-context=restored");
+                }
+            }
+            Some(Err(error)) => {
+                eprintln!("Failed to restore mpv render context after window remap: {error}");
+            }
+            None => {
+                eprintln!("Cannot restore mpv rendering after window remap: player unavailable");
+            }
+        }
+    }
+}
+
 pub(crate) fn connect_mpv(
     video_area: &gtk::GLArea,
     state: Rc<RefCell<PlayerState>>,
     launch_args: LaunchArgs,
-) {
+) -> MpvRenderSurface {
+    let render_surface = MpvRenderSurface {
+        area: video_area.clone(),
+        state: Rc::clone(&state),
+        remap_pending: Rc::new(Cell::new(false)),
+    };
     let realize_state = Rc::clone(&state);
     video_area.connect_realize(move |area| {
         area.make_current();
@@ -100,7 +168,11 @@ pub(crate) fn connect_mpv(
     });
 
     let render_state = Rc::clone(&state);
+    let render_remap_pending = Rc::clone(&render_surface.remap_pending);
     video_area.connect_render(move |area, _context| {
+        if render_remap_pending.get() {
+            return glib::Propagation::Stop;
+        }
         area.make_current();
         area.attach_buffers();
         let viewport_size = current_render_target_size();
@@ -132,11 +204,18 @@ pub(crate) fn connect_mpv(
         }
     });
 
+    let mapped_render_surface = render_surface.clone();
+    video_area.connect_map(move |_| {
+        mapped_render_surface.resume_after_toplevel_map();
+    });
+
     let tick_area = video_area.clone();
     glib::timeout_add_local(Duration::from_millis(16), move || {
         tick_area.queue_render();
         glib::ControlFlow::Continue
     });
+
+    render_surface
 }
 
 pub(crate) fn parse_raw_mpv_config(text: &str) -> Result<Vec<(String, String)>, RawMpvConfigError> {
@@ -288,6 +367,7 @@ pub(crate) fn connect_state_poll(
         lyrics_surface,
         media_state_overlay,
         window_bounds,
+        mpv_render_surface,
         mpris_snapshot,
         mpris_signals,
     } = context;
@@ -297,7 +377,14 @@ pub(crate) fn connect_state_poll(
         if let Some(dimensions) = auto_fit_dimensions {
             let generation = state.borrow().source_generation;
             if last_auto_fit_generation.replace(Some(generation)) != Some(generation) {
-                fit_player_window_to_video(&window, &state, &window_bounds, generation, dimensions);
+                fit_player_window_to_video(
+                    &window,
+                    &state,
+                    &window_bounds,
+                    &mpv_render_surface,
+                    generation,
+                    dimensions,
+                );
             }
         }
         drain_screenshot_jobs(&state, &status_toast);

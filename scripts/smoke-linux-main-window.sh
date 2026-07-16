@@ -332,6 +332,32 @@ stop_app
 OKP_SKIP_OPEN_INSTALLER=1 \
 OKP_SKIP_DEB_SELF_INSTALL=1 \
 OKP_DEBUG_WINDOW_FIT=1 \
+OKP_WINDOW_FIT_FORCE_SAFE_REMAP=1 \
+  "$BINARY" "$FIXTURES/fit-small.mkv" >"$OUT_DIR/fit-safe-remap-app.log" 2>&1 &
+app_pid=$!
+wait_for_window "$OUT_DIR/fit-safe-remap-window.ids" >/dev/null
+wait_for_fit_log "fit-safe-remap-app.log" "window fit remap: render-context=restored"
+wait_for_fit_log "fit-safe-remap-app.log" "window fit positioned"
+sleep 1
+xdotool search --name "OK Player" >"$OUT_DIR/fit-safe-remap-window.ids"
+remap_id="$(head -n1 "$OUT_DIR/fit-safe-remap-window.ids")"
+capture_geometry "$remap_id" "fit-safe-remap-window"
+remap_width="$(geometry_value "$OUT_DIR/fit-safe-remap-window.xwininfo" Width)"
+remap_height="$(geometry_value "$OUT_DIR/fit-safe-remap-window.xwininfo" Height)"
+remap_state="$(awk -F': ' '/Map State:/ { print $2; exit }' "$OUT_DIR/fit-safe-remap-window.xwininfo")"
+if [[ "$remap_width" != "320" || "$remap_height" != "180" || "$remap_state" != "IsViewable" ]]; then
+  echo "Safe remap did not restore a visible native-size player: ${remap_width}x${remap_height}, state=${remap_state}" >&2
+  exit 1
+fi
+if rg -q "Cannot (suspend|restore)|Failed to restore" "$OUT_DIR/fit-safe-remap-app.log"; then
+  echo "Safe remap reported a render-context lifecycle failure" >&2
+  exit 1
+fi
+stop_app
+
+OKP_SKIP_OPEN_INSTALLER=1 \
+OKP_SKIP_DEB_SELF_INSTALL=1 \
+OKP_DEBUG_WINDOW_FIT=1 \
 OKP_START_MAXIMIZED=1 \
   "$BINARY" "$FIXTURES/fit-small.mkv" >"$OUT_DIR/fit-maximized-app.log" 2>&1 &
 app_pid=$!
@@ -506,4 +532,4 @@ then
   exit 1
 fi
 
-echo "Main window fit smoke passed. Screenshots: $OUT_DIR/fit-small-window.png, $OUT_DIR/fit-4k-right-monitor-window.png, $OUT_DIR/fit-4k-scale-2-window.png"
+echo "Main window fit smoke passed. Screenshots: $OUT_DIR/fit-small-window.png, $OUT_DIR/fit-safe-remap-window.png, $OUT_DIR/fit-4k-right-monitor-window.png, $OUT_DIR/fit-4k-scale-2-window.png"

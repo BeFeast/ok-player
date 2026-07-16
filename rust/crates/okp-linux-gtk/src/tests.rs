@@ -1429,6 +1429,26 @@ fn always_on_top_backend_is_explicit_for_x11_and_unsupported_displays() {
 }
 
 #[test]
+fn window_fit_uses_safe_remap_only_where_global_positioning_is_unavailable() {
+    assert_eq!(
+        player_window_fit_backend("GdkX11Display", false),
+        PlayerWindowFitBackend::X11MoveResize
+    );
+    assert_eq!(
+        player_window_fit_backend("GdkWaylandDisplay", false),
+        PlayerWindowFitBackend::SafeRemap
+    );
+    assert_eq!(
+        player_window_fit_backend("GdkBroadwayDisplay", false),
+        PlayerWindowFitBackend::CompositorResize
+    );
+    assert_eq!(
+        player_window_fit_backend("GdkX11Display", true),
+        PlayerWindowFitBackend::SafeRemap
+    );
+}
+
+#[test]
 fn track_label_shows_tags_without_a_selection_prefix() {
     // Selection is shown by the row's leading check, so the label must never
     // prepend "On " (which used to shift long titles and break alignment).

@@ -827,6 +827,7 @@ struct StatePollContext {
     lyrics_surface: LyricsSurface,
     media_state_overlay: MediaStateOverlay,
     window_bounds: Rc<RefCell<Option<PlayerWindowBounds>>>,
+    mpv_render_surface: MpvRenderSurface,
     mpris_snapshot: Arc<Mutex<MprisSnapshot>>,
     mpris_signals: mpsc::Sender<MprisSignal>,
 }

@@ -40,16 +40,25 @@ the player composition and control styling are unchanged.
 - Behavior: fitting remains one-time per media generation. Fullscreen and
   maximized loads are skipped; a later manual 700×500 resize remains stable.
   Lifecycle dimensions now carry their engine path, so a queued event from
-  source A cannot consume source B's one-time fit.
+  source A cannot consume source B's one-time fit. X11 applies the centered
+  move/resize directly. Wayland suspends the libmpv render context before the
+  fitted toplevel is unmapped, remaps it on the next main-loop turn so Mutter
+  chooses a fresh visible placement, and restores rendering only after the
+  GLArea maps again. This avoids the active-GLArea remap that produced Wayland
+  protocol error 71 in the rejected snapshot.
 
 ## Evidence boundary and operator gate
 
 Xvfb/XFWM proves deterministic physical-to-logical conversion, HEVC Main10
 fixture dimensions, chrome/margin reservation, aspect fit, scale-1/scale-2
-centering, edge containment, fullscreen/maximized guards, and post-load manual
-resize stability on X11. It does not prove Mutter's Wayland toplevel placement
-policy: Wayland intentionally exposes no client-controlled global toplevel
-coordinates, so GTK supplies the bounded size and GNOME owns final placement.
+centering, edge containment, fullscreen/maximized guards, post-load manual
+resize stability on X11, and the real GTK/libmpv render-context suspend/remap/
+restore sequence through the forced safe-remap smoke hook. It does not prove
+Mutter's Wayland placement policy or protocol behavior: Wayland intentionally
+exposes no client-controlled global toplevel coordinates, so GNOME owns the
+fresh mapped placement. The fitted GLArea/FBO assertion also depends on #298 /
+PR #299, which removes the stale previous-frame viewport as a render-target
+source rather than duplicating that separate fix here.
 
 Before this PR is marked ready, operator QA must run the generated `fit-4k.mkv`
 fixture on the real GNOME/Wayland 4K display at 100% and a non-100% scale, then
