@@ -827,7 +827,7 @@ pub(crate) fn connect_state_poll(
         let failed = state.borrow().media_load_state == network_media::MediaLoadState::Failed;
         empty_surface.set_has_media(has_media || failed || lyrics_surface.is_preview_frozen());
         lyrics_surface.update(&state);
-        drain_thumbnail_events(&controls);
+        drain_thumbnail_events(&controls, &state);
         update_up_next_panel(&controls, &state, &chrome);
 
         if let Some(playback) = playback {

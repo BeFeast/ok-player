@@ -557,16 +557,36 @@ pub(crate) fn add_files_row() -> gtk::ListBoxRow {
     row
 }
 
-pub(crate) fn drain_thumbnail_events(controls: &Controls) {
+pub(crate) fn drain_thumbnail_events(controls: &Controls, state: &Rc<RefCell<PlayerState>>) {
     let mut changed = false;
-    while controls.thumbnail_events.borrow().try_recv().is_ok() {
-        changed = true;
+    while let Ok(event) = controls.thumbnail_events.borrow().try_recv() {
+        match event {
+            thumbnails::ThumbnailEvent::ChapterReady => {
+                changed = true;
+            }
+            thumbnails::ThumbnailEvent::HoverReady { request_key, path } => {
+                clear_hover_thumbnail_request(state, &request_key);
+                controls
+                    .seek_hover_preview
+                    .show_thumbnail_if_current(&request_key, &path);
+            }
+            thumbnails::ThumbnailEvent::HoverFailed { request_key } => {
+                clear_hover_thumbnail_request(state, &request_key);
+            }
+        }
     }
 
     if changed {
         controls
             .side_panel_snapshot
             .replace(SidePanelSnapshot::default());
+    }
+}
+
+fn clear_hover_thumbnail_request(state: &Rc<RefCell<PlayerState>>, request_key: &str) {
+    let mut state = state.borrow_mut();
+    if state.hover_thumbnail_request_key.as_deref() == Some(request_key) {
+        state.hover_thumbnail_request_key = None;
     }
 }
 
@@ -597,7 +617,6 @@ pub(crate) fn request_chapter_thumbnail_warm(
         thumbnails::warm_chapter_thumbnails(
             media_path.clone(),
             snapshot.chapters.clone(),
-            key,
             controls.thumbnail_sender.clone(),
         );
     }

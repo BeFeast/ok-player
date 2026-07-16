@@ -1343,7 +1343,12 @@ pub(crate) fn build_controls(
 
         glib::Propagation::Proceed
     });
-    let seek_hover_preview = connect_seek_hover(&seek, Rc::clone(&state), thumbnail_sender.clone());
+    let seek_hover_preview = connect_seek_hover(
+        &seek,
+        Rc::clone(&state),
+        thumbnail_sender.clone(),
+        Rc::clone(&chrome),
+    );
 
     Controls {
         subtitle_button,
@@ -1432,6 +1437,7 @@ pub(crate) fn controls_bar(controls: &Controls) -> gtk::Overlay {
     controls.more_button.set_margin_end(30);
     controls.more_button.set_margin_bottom(25);
     chrome.add_overlay(&controls.more_button);
+    chrome.add_overlay(controls.seek_hover_preview.widget());
     chrome
 }
 
@@ -1554,17 +1560,39 @@ pub(crate) fn update_fullscreen_button(button: &gtk::Button, is_fullscreen: bool
 pub(crate) fn connect_seek_hover(
     seek: &gtk::Scale,
     state: Rc<RefCell<PlayerState>>,
-    thumbnail_sender: mpsc::Sender<String>,
+    thumbnail_sender: mpsc::Sender<thumbnails::ThumbnailEvent>,
+    chrome: Rc<ChromeVisibility>,
 ) -> Rc<SeekHoverPreview> {
-    let preview = Rc::new(SeekHoverPreview::new(seek));
+    let preview = Rc::new(SeekHoverPreview::new());
+    let thumbnail_gate = thumbnails::HoverThumbnailGate::default();
+    let chrome_pinned = Rc::new(Cell::new(false));
     let motion = gtk::EventControllerMotion::new();
+
+    let enter_chrome = Rc::clone(&chrome);
+    let enter_pinned = Rc::clone(&chrome_pinned);
+    motion.connect_enter(move |_, _, _| {
+        if !enter_pinned.replace(true) {
+            enter_chrome.pin();
+        }
+        if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+            eprintln!("interaction: seek-hover=entered");
+        }
+    });
 
     let motion_seek = seek.clone();
     let motion_state = Rc::clone(&state);
     let motion_preview = Rc::clone(&preview);
+    let motion_chrome = Rc::clone(&chrome);
+    let motion_pinned = Rc::clone(&chrome_pinned);
     motion.connect_motion(move |_, x, _| {
         let Some((media_path, duration, chapters)) = seek_hover_snapshot(&motion_state) else {
             motion_preview.hide();
+            if motion_pinned.replace(false) {
+                motion_chrome.unpin();
+            }
+            if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+                eprintln!("interaction: seek-hover=unavailable");
+            }
             return;
         };
 
@@ -1573,21 +1601,43 @@ pub(crate) fn connect_seek_hover(
         // Only a local file can be sampled for a hover thumbnail; a stream (or any
         // source without a file on disk) still gets the timecode + chapter preview,
         // just with no thumbnail — the deliberate timecode-only fallback.
-        let thumbnail = media_path.as_deref().and_then(|path| {
-            hover_thumbnail_for_time(&motion_state, path, time, duration, &thumbnail_sender)
-        });
+        let (thumbnail_request_key, thumbnail) = media_path
+            .as_deref()
+            .map(|path| {
+                hover_thumbnail_for_time(
+                    &motion_state,
+                    path,
+                    time,
+                    duration,
+                    &thumbnail_gate,
+                    &thumbnail_sender,
+                )
+            })
+            .map(|(request_key, thumbnail)| (Some(request_key), thumbnail))
+            .unwrap_or((None, None));
         motion_preview.show(
             &motion_seek,
             x,
             time,
             chapter_at_time(&chapters, time),
             thumbnail,
+            thumbnail_request_key,
         );
+        if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+            eprintln!("interaction: seek-hover=shown");
+        }
     });
 
     let leave_preview = Rc::clone(&preview);
+    let leave_pinned = Rc::clone(&chrome_pinned);
     motion.connect_leave(move |_| {
         leave_preview.hide();
+        if leave_pinned.replace(false) {
+            chrome.unpin();
+        }
+        if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+            eprintln!("interaction: seek-hover=left");
+        }
     });
 
     seek.add_controller(motion);
@@ -1642,34 +1692,56 @@ pub(crate) fn hover_thumbnail_for_time(
     media_path: &Path,
     time: f64,
     duration: f64,
-    sender: &mpsc::Sender<String>,
-) -> Option<PathBuf> {
+    gate: &thumbnails::HoverThumbnailGate,
+    sender: &mpsc::Sender<thumbnails::ThumbnailEvent>,
+) -> (String, Option<PathBuf>) {
     let thumbnail_time = thumbnails::hover_thumbnail_time(time, duration);
-    if let Some(path) = thumbnails::existing_hover_thumbnail_path(media_path, thumbnail_time) {
-        return Some(path);
-    }
-
     let request_key = thumbnails::hover_request_key(media_path, thumbnail_time);
+    gate.select(&request_key);
+    let thumbnail = thumbnails::existing_hover_thumbnail_path(media_path, thumbnail_time);
+
     let should_start = {
         let mut state = state.borrow_mut();
-        if state.hover_thumbnail_request_key.as_deref() == Some(request_key.as_str()) {
-            false
-        } else {
-            state.hover_thumbnail_request_key = Some(request_key.clone());
-            true
-        }
+        update_hover_thumbnail_request(
+            &mut state.hover_thumbnail_request_key,
+            &request_key,
+            thumbnail.is_some(),
+        )
     };
+
+    if thumbnail.is_some() {
+        return (request_key, thumbnail);
+    }
 
     if should_start {
         thumbnails::warm_hover_thumbnail(
             media_path.to_path_buf(),
             thumbnail_time,
-            request_key,
+            request_key.clone(),
+            gate.clone(),
             sender.clone(),
         );
     }
 
-    None
+    (request_key, None)
+}
+
+fn update_hover_thumbnail_request(
+    in_flight_request_key: &mut Option<String>,
+    selected_request_key: &str,
+    is_cached: bool,
+) -> bool {
+    if is_cached {
+        *in_flight_request_key = None;
+        return false;
+    }
+
+    if in_flight_request_key.as_deref() == Some(selected_request_key) {
+        return false;
+    }
+
+    *in_flight_request_key = Some(selected_request_key.to_owned());
+    true
 }
 
 /// Visual smoke hook: pop the seek hover tooltip over the timeline with a
@@ -1687,6 +1759,49 @@ pub(crate) fn open_seek_preview(controls: &Controls) {
             time: 933.0,
             title: Some("The Long Walk Home".to_owned()),
         };
-        preview.show(&seek, width / 2.0, chapter.time, Some(&chapter), None);
+        preview.show(&seek, width / 2.0, chapter.time, Some(&chapter), None, None);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::update_hover_thumbnail_request;
+
+    #[test]
+    fn cached_hover_clears_superseded_request_so_it_can_be_retried() {
+        let mut in_flight = None;
+
+        assert!(update_hover_thumbnail_request(
+            &mut in_flight,
+            "uncached-a",
+            false
+        ));
+        assert_eq!(in_flight.as_deref(), Some("uncached-a"));
+
+        assert!(!update_hover_thumbnail_request(
+            &mut in_flight,
+            "cached-b",
+            true
+        ));
+        assert_eq!(in_flight, None);
+
+        assert!(update_hover_thumbnail_request(
+            &mut in_flight,
+            "uncached-a",
+            false
+        ));
+        assert_eq!(in_flight.as_deref(), Some("uncached-a"));
+    }
+
+    #[test]
+    fn repeated_uncached_hover_does_not_duplicate_an_active_request() {
+        let mut in_flight = Some("uncached-a".to_owned());
+
+        assert!(!update_hover_thumbnail_request(
+            &mut in_flight,
+            "uncached-a",
+            false
+        ));
+        assert_eq!(in_flight.as_deref(), Some("uncached-a"));
+    }
 }

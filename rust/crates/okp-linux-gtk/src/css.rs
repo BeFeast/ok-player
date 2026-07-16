@@ -1441,25 +1441,6 @@ const OKP_STYLESHEET: &str = "
             box-shadow: none;
         }
 
-        /* Strip the default popover chrome so the seek-hover preview shows only
-           its own dark card, matching the normalized track popovers instead of a
-           stock light popover frame. */
-        popover.okp-seek-popover,
-        popover.okp-seek-popover > contents {
-            padding: 0;
-            background: transparent;
-            border: none;
-            box-shadow: none;
-        }
-
-        popover.okp-seek-popover > arrow {
-            min-width: 0;
-            min-height: 0;
-            background: transparent;
-            border: none;
-            box-shadow: none;
-        }
-
         .okp-seek-preview {
             padding: 8px 10px;
             border-radius: 9px;

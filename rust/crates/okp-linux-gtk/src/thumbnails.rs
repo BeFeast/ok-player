@@ -4,7 +4,7 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex, mpsc::Sender};
 use std::thread;
 use std::time::UNIX_EPOCH;
 
@@ -13,6 +13,40 @@ use okp_mpv::Chapter;
 const THUMB_WIDTH: u32 = 144;
 const THUMB_HEIGHT: u32 = 81;
 const HOVER_BUCKET_SECONDS: f64 = 10.0;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ThumbnailEvent {
+    ChapterReady,
+    HoverReady { request_key: String, path: PathBuf },
+    HoverFailed { request_key: String },
+}
+
+/// Serializes expensive ffmpeg hover-frame decodes and lets queued workers
+/// discard requests that the pointer has already superseded. A single 4K HEVC
+/// decode can consume hundreds of megabytes, so unbounded parallel extraction is
+/// not safe while the user scrubs across several timeline buckets.
+#[derive(Clone, Default)]
+pub struct HoverThumbnailGate {
+    latest_request: Arc<Mutex<Option<String>>>,
+    generation: Arc<Mutex<()>>,
+}
+
+impl HoverThumbnailGate {
+    pub fn select(&self, request_key: &str) {
+        *self
+            .latest_request
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(request_key.to_owned());
+    }
+
+    fn is_latest(&self, request_key: &str) -> bool {
+        self.latest_request
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_deref()
+            == Some(request_key)
+    }
+}
 
 pub fn request_key(media_path: &Path, chapters: &[Chapter]) -> String {
     let mut hasher = DefaultHasher::new();
@@ -78,8 +112,7 @@ pub fn existing_hover_thumbnail_path(media_path: &Path, seconds: f64) -> Option<
 pub fn warm_chapter_thumbnails(
     media_path: PathBuf,
     chapters: Vec<Chapter>,
-    request_key: String,
-    sender: Sender<String>,
+    sender: Sender<ThumbnailEvent>,
 ) {
     thread::spawn(move || {
         let mut wrote_any = false;
@@ -98,12 +131,12 @@ pub fn warm_chapter_thumbnails(
 
             if generate_thumbnail(&media_path, chapter.time, &output) {
                 wrote_any = true;
-                let _ = sender.send(request_key.clone());
+                let _ = sender.send(ThumbnailEvent::ChapterReady);
             }
         }
 
         if wrote_any {
-            let _ = sender.send(request_key);
+            let _ = sender.send(ThumbnailEvent::ChapterReady);
         }
     });
 }
@@ -112,12 +145,33 @@ pub fn warm_hover_thumbnail(
     media_path: PathBuf,
     seconds: f64,
     request_key: String,
-    sender: Sender<String>,
+    gate: HoverThumbnailGate,
+    sender: Sender<ThumbnailEvent>,
 ) {
+    if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+        eprintln!("interaction: seek-thumbnail=queued");
+    }
     thread::spawn(move || {
+        let _generation = gate
+            .generation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !gate.is_latest(&request_key) {
+            if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+                eprintln!("interaction: seek-thumbnail=superseded");
+            }
+            return;
+        }
+
         let output = hover_thumbnail_path(&media_path, seconds);
         if output.exists() {
-            let _ = sender.send(request_key);
+            if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+                eprintln!("interaction: seek-thumbnail=cached");
+            }
+            let _ = sender.send(ThumbnailEvent::HoverReady {
+                request_key,
+                path: output,
+            });
             return;
         }
 
@@ -125,11 +179,23 @@ pub fn warm_hover_thumbnail(
             && let Err(error) = fs::create_dir_all(parent)
         {
             eprintln!("Failed to create hover thumbnail cache: {error}");
+            let _ = sender.send(ThumbnailEvent::HoverFailed { request_key });
             return;
         }
 
         if generate_thumbnail(&media_path, seconds, &output) {
-            let _ = sender.send(request_key);
+            if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+                eprintln!("interaction: seek-thumbnail=generated");
+            }
+            let _ = sender.send(ThumbnailEvent::HoverReady {
+                request_key,
+                path: output,
+            });
+        } else {
+            if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+                eprintln!("interaction: seek-thumbnail=failed");
+            }
+            let _ = sender.send(ThumbnailEvent::HoverFailed { request_key });
         }
     });
 }
@@ -227,5 +293,16 @@ mod tests {
         assert_eq!(hover_thumbnail_time(f64::NAN, 120.0), 0.0);
         assert_eq!(hover_thumbnail_time(-1.0, 120.0), 0.0);
         assert_eq!(hover_thumbnail_time(118.0, 116.0), 116.0);
+    }
+
+    #[test]
+    fn hover_thumbnail_gate_tracks_only_the_latest_request() {
+        let gate = HoverThumbnailGate::default();
+        gate.select("first");
+        assert!(gate.is_latest("first"));
+
+        gate.select("second");
+        assert!(!gate.is_latest("first"));
+        assert!(gate.is_latest("second"));
     }
 }
