@@ -41,7 +41,7 @@ case "$STATE" in
     theme=light
     reference=about-handoff
     expected_width=760
-    expected_height=560
+    expected_height=751
     ;;
   history)
     theme=light

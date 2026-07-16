@@ -23,8 +23,8 @@ use okp_core::shortcuts::{
 use okp_core::update_selection::{self, DebFeed, DebUpdate, SHA256SUMS_ASSET};
 use okp_core::{
     AppIdentity, chapter_math, launch_args, lrc, m3u, media_formats, natural_compare,
-    network_media, ok_player_uri, progress_report, seek_readout, sha256sums, subtitle_delay,
-    time_code, timeline_buffer, video_click, volume, window_fit, youtube_open,
+    network_media, ok_player_uri, progress_report, seek_readout, settings_geometry, sha256sums,
+    subtitle_delay, time_code, timeline_buffer, video_click, volume, window_fit, youtube_open,
 };
 use okp_mpv::{
     AbLoopState, AudioDevice, Chapter, EndFileReason, InfoRow, InfoSection, InfoTrack, MediaInfo,
@@ -114,7 +114,6 @@ const DEB_SELF_INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
 const SETTINGS_REFERENCE_WIDTH: i32 = 760;
 const SETTINGS_REFERENCE_HEIGHT: i32 = 560;
 const SETTINGS_TITLEBAR_HEIGHT: i32 = 42;
-const SETTINGS_BODY_HEIGHT: i32 = SETTINGS_REFERENCE_HEIGHT - SETTINGS_TITLEBAR_HEIGHT;
 const SETTINGS_RAIL_WIDTH: i32 = 192;
 const SETTINGS_CONTENT_WIDTH: i32 = SETTINGS_REFERENCE_WIDTH - SETTINGS_RAIL_WIDTH;
 const CAPTIONLESS_DRAG_HEIGHT: i32 = SETTINGS_TITLEBAR_HEIGHT;

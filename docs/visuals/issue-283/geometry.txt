@@ -1,0 +1,9 @@
+about-height=751
+appearance-height=465
+restored-about-height=751
+constrained-workarea-height=480
+constrained-window-height=416
+canonical-width=760
+titlebar-height=42
+rail-width=192
+workarea-margin=64

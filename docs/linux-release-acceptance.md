@@ -32,7 +32,7 @@ The encoded redlines include:
 | OSC | canonical bottom band with `16px` side and `18px` bottom insets |
 | Playback states | paused, buffering/loading, in-canvas error, OSD, buffered timeline, and chapter-context captures at `1120x680` |
 | Chapters / Up Next | `316px` panel, `24px` right/top inset, clear video strip to its left |
-| Settings/About | `760×560`, `192px` rail |
+| Settings/About | `760×751` natural acceptance height on the canonical fixture, `192px` rail; shorter pages shrink and constrained workareas scroll only the body regions |
 | History | canvas state at the player viewport, not a mismatched standalone window |
 | Playing idle | bottom chrome band fully clear after the canonical timeout |
 | Bright/dark fixtures | actual frame luminance plus visible OSC material |

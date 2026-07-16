@@ -232,11 +232,9 @@ fn gtk_identity_uses_vector_widgets_instead_of_host_font_marks() {
 }
 
 #[test]
-fn settings_shell_matches_windows_reference_geometry() {
+fn settings_shell_preserves_the_canonical_horizontal_geometry() {
     assert_eq!(SETTINGS_REFERENCE_WIDTH, 760);
-    assert_eq!(SETTINGS_REFERENCE_HEIGHT, 560);
     assert_eq!(SETTINGS_TITLEBAR_HEIGHT, 42);
-    assert_eq!(SETTINGS_BODY_HEIGHT, 518);
     assert_eq!(SETTINGS_RAIL_WIDTH, 192);
     assert_eq!(SETTINGS_CONTENT_WIDTH, 568);
     assert_eq!(
@@ -276,6 +274,20 @@ fn settings_initial_page_env_accepts_known_pages_only() {
     assert_eq!(normalized_settings_page(" Shortcuts "), Some("shortcuts"));
     assert_eq!(normalized_settings_page("about"), Some("about"));
     assert_eq!(normalized_settings_page("native-caption"), None);
+}
+
+#[test]
+fn gtk_settings_shell_applies_shared_bounded_geometry() {
+    let shell = include_str!("settings_window.rs");
+    assert!(shell.contains("settings_geometry::body_height_cap"));
+    assert!(shell.contains("settings_geometry::bounded_window_height"));
+    assert!(shell.contains("connect_visible_child_notify"));
+    assert!(shell.contains("connect_enter_monitor"));
+    assert!(shell.contains("connect_geometry_notify"));
+    assert!(shell.contains("connect_scale_factor_notify"));
+    assert!(shell.contains("bounds.rail_scrolls"));
+    assert!(shell.contains("self.body.set_height_request(bounds.body)"));
+    assert!(!shell.contains("SETTINGS_BODY_HEIGHT"));
 }
 
 #[test]
