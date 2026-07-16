@@ -25,12 +25,13 @@ jq -e '
   .[0].pix_fmt == "yuv420p10le" and
   .[0].width == 3840 and
   .[0].height == 2160 and
-  .[0].avg_frame_rate == "60/1"
+  (.[0].avg_frame_rate == "60/1" or .[0].avg_frame_rate == "60000/1001")
 ' <<<"$probe" >/dev/null || {
-  echo "Fixture must be exactly 3840x2160 HEVC Main10 yuv420p10le 60/1" >&2
+  echo "Fixture must be 3840x2160 HEVC Main10 yuv420p10le at 60/1 or 60000/1001" >&2
   jq . <<<"$probe" >&2
   exit 2
 }
+fixture_rate="$(jq -r '.streams[0].avg_frame_rate' <<<"$probe")"
 
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
@@ -85,9 +86,10 @@ run_backend gtk
 )
 
 jq -n \
+  --arg fixture_rate "$fixture_rate" \
   --slurpfile native "$OUT_DIR/native/summary.json" \
   --slurpfile gtk "$OUT_DIR/gtk/summary.json" \
-  '{fixture:"3840x2160 HEVC Main10 60/1",native:$native[0],gtk_glarea:$gtk[0]}' \
+  '{fixture:("3840x2160 HEVC Main10 " + $fixture_rate),native:$native[0],gtk_glarea:$gtk[0]}' \
   >"$OUT_DIR/comparison.json"
 
 echo "Live Wayland native presentation passed. Evidence: $OUT_DIR/comparison.json"
