@@ -1,5 +1,48 @@
 use super::*;
 
+#[cfg(target_os = "linux")]
+use gtk::glib::translate::ToGlibPtr;
+#[cfg(target_os = "linux")]
+use std::ptr::NonNull;
+
+pub(crate) fn is_wayland_display(display_type_name: &str) -> bool {
+    display_type_name == "GdkWaylandDisplay"
+}
+
+#[cfg(target_os = "linux")]
+fn wayland_display_resource(display: &gdk::Display) -> Option<NativeWaylandDisplay> {
+    type GetWaylandDisplay =
+        unsafe extern "C" fn(display: *mut gtk::gdk::ffi::GdkDisplay) -> *mut libc::c_void;
+
+    if !is_wayland_display(display.type_().name()) {
+        return None;
+    }
+
+    // Resolve the backend accessor at runtime: GTK builds without Wayland
+    // support keep compiling and use the existing no-native-display path.
+    let symbol = unsafe {
+        libc::dlsym(
+            libc::RTLD_DEFAULT,
+            c"gdk_wayland_display_get_wl_display".as_ptr(),
+        )
+    };
+    if symbol.is_null() {
+        return None;
+    }
+
+    let get_wayland_display =
+        unsafe { std::mem::transmute::<*mut libc::c_void, GetWaylandDisplay>(symbol) };
+    let pointer = NonNull::new(unsafe { get_wayland_display(display.to_glib_none().0) })?;
+    // GDK owns the wl_display. Its cloned GObject reference is retained by
+    // okp-mpv until the render context has been freed.
+    Some(unsafe { NativeWaylandDisplay::new(pointer, display.clone()) })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn wayland_display_resource(_display: &gdk::Display) -> Option<NativeWaylandDisplay> {
+    None
+}
+
 pub(crate) fn connect_mpv(
     video_area: &gtk::GLArea,
     state: Rc<RefCell<PlayerState>>,
@@ -76,7 +119,14 @@ pub(crate) fn connect_mpv(
             eprintln!("Failed to restore audio normalization: {error}");
         }
 
-        if let Err(error) = mpv.create_render_context() {
+        let display = area.display();
+        let native_wayland_display = wayland_display_resource(&display);
+        if is_wayland_display(display.type_().name()) && native_wayland_display.is_none() {
+            eprintln!(
+                "GDK Wayland native display is unavailable; continuing without zero-copy display interop"
+            );
+        }
+        if let Err(error) = mpv.create_render_context(native_wayland_display) {
             eprintln!("Failed to create mpv render context: {error}");
             return;
         }
