@@ -26,7 +26,9 @@ done
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
-if ! xvfb-run -a --server-args='-screen 0 1280x900x24 -nolisten tcp' \
+if ! env __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
+  LIBGL_ALWAYS_SOFTWARE=1 \
+  xvfb-run -a --server-args='-screen 0 1280x900x24 -nolisten tcp' \
   dbus-run-session -- bash -s -- "$BINARY" "$OUT_DIR" "$PAGE" "$COLOR_SCHEME" >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
 set -euo pipefail
 
@@ -40,6 +42,7 @@ export GTK_USE_PORTAL=0
 export NO_AT_BRIDGE=1
 export XDG_SESSION_TYPE=x11
 export XDG_CURRENT_DESKTOP=XFCE
+export LIBGL_ALWAYS_SOFTWARE=1
 if [[ "$COLOR_SCHEME" == "high-contrast" ]]; then
   export GTK_THEME=HighContrast
   APP_COLOR_SCHEME=light
@@ -79,7 +82,7 @@ height="$(awk '/Height:/ { print $2; exit }' "$OUT_DIR/settings.xwininfo")"
 border="$(awk '/Border width:/ { print $3; exit }' "$OUT_DIR/settings.xwininfo")"
 state="$(awk -F': ' '/Map State:/ { print $2; exit }' "$OUT_DIR/settings.xwininfo")"
 
-if [[ "$width" != "760" || "$height" != "560" || "$border" != "0" || "$state" != "IsViewable" ]]; then
+if [[ "$width" != "760" || "$height" -lt 300 || "$height" -gt 852 || "$border" != "0" || "$state" != "IsViewable" ]]; then
   echo "Unexpected Settings geometry: ${width}x${height}, border=${border}, state=${state}" >&2
   exit 1
 fi

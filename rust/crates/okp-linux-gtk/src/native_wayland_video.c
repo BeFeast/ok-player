@@ -8,6 +8,19 @@
 #include <wayland-client.h>
 #include <wayland-egl.h>
 
+#ifndef EGL_CONTEXT_MAJOR_VERSION
+#define EGL_CONTEXT_MAJOR_VERSION 0x3098
+#endif
+#ifndef EGL_CONTEXT_MINOR_VERSION
+#define EGL_CONTEXT_MINOR_VERSION 0x30FB
+#endif
+#ifndef EGL_CONTEXT_OPENGL_PROFILE_MASK
+#define EGL_CONTEXT_OPENGL_PROFILE_MASK 0x30FD
+#endif
+#ifndef EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT
+#define EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT 0x00000001
+#endif
+
 struct okp_wayland_video_plane {
     struct wl_display *display;
     struct wl_compositor *compositor;
@@ -42,6 +55,29 @@ static void write_egl_error(char *buffer, size_t length, const char *operation) 
     }
     snprintf(buffer, length, "%s failed with EGL error 0x%04x", operation,
              (unsigned int)eglGetError());
+}
+
+static EGLContext create_mpv_style_context(EGLDisplay display, EGLConfig config) {
+    static const EGLint versions[][3] = {
+        {4, 4, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT},
+        {3, 2, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT},
+        {2, 1, 0},
+    };
+    for (size_t index = 0; index < sizeof(versions) / sizeof(versions[0]); index++) {
+        EGLint attributes[] = {
+            EGL_CONTEXT_MAJOR_VERSION, versions[index][0],
+            EGL_CONTEXT_MINOR_VERSION, versions[index][1],
+            EGL_CONTEXT_OPENGL_PROFILE_MASK, versions[index][2],
+            EGL_NONE,
+        };
+        EGLContext context =
+            eglCreateContext(display, config, EGL_NO_CONTEXT, attributes);
+        if (context != EGL_NO_CONTEXT) {
+            return context;
+        }
+    }
+    return eglCreateContext(display, config, EGL_NO_CONTEXT,
+                            (EGLint[]){EGL_NONE});
 }
 
 static void registry_global(void *data, struct wl_registry *registry, uint32_t name,
@@ -202,6 +238,7 @@ struct okp_wayland_video_plane *okp_wayland_video_plane_create(
         EGL_RED_SIZE, 8,
         EGL_GREEN_SIZE, 8,
         EGL_BLUE_SIZE, 8,
+        EGL_ALPHA_SIZE, 0,
         EGL_NONE,
     };
     EGLConfig config = NULL;
@@ -217,8 +254,7 @@ struct okp_wayland_video_plane *okp_wayland_video_plane_create(
         destroy_plane(plane);
         return NULL;
     }
-    plane->egl_context = eglCreateContext(
-        plane->egl_display, config, EGL_NO_CONTEXT, (EGLint[]){EGL_NONE});
+    plane->egl_context = create_mpv_style_context(plane->egl_display, config);
     if (plane->egl_context == EGL_NO_CONTEXT) {
         write_egl_error(error, error_length, "eglCreateContext");
         destroy_plane(plane);
@@ -246,7 +282,18 @@ struct okp_wayland_video_plane *okp_wayland_video_plane_create(
         destroy_plane(plane);
         return NULL;
     }
-    if (!eglSwapInterval(plane->egl_display, 1)) {
+    if (getenv("OKP_DEBUG_WINDOW_FIT") != NULL) {
+        fprintf(stderr, "native GL context: version=%s vendor=%s renderer=%s\n",
+                (const char *)glGetString(GL_VERSION),
+                (const char *)glGetString(GL_VENDOR),
+                (const char *)glGetString(GL_RENDERER));
+    }
+    /* Match mpv's native Wayland OpenGL context. Blocking EGL presentation
+     * misses the next vblank once a 4K render consumes part of the frame
+     * budget; mpv uses interval 0 and performs Wayland frame pacing outside
+     * EGL instead. libmpv's update callback provides the first-stage pacing
+     * for this embedded surface. */
+    if (!eglSwapInterval(plane->egl_display, 0)) {
         write_egl_error(error, error_length, "eglSwapInterval");
         destroy_plane(plane);
         return NULL;
@@ -272,6 +319,12 @@ bool okp_wayland_video_plane_make_current(struct okp_wayland_video_plane *plane)
     return plane != NULL &&
            eglMakeCurrent(plane->egl_display, plane->egl_surface, plane->egl_surface,
                           plane->egl_context);
+}
+
+bool okp_wayland_video_plane_release_current(struct okp_wayland_video_plane *plane) {
+    return plane != NULL &&
+           eglMakeCurrent(plane->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
+                          EGL_NO_CONTEXT);
 }
 
 bool okp_wayland_video_plane_swap(struct okp_wayland_video_plane *plane) {

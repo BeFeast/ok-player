@@ -42,6 +42,74 @@ pub struct WindowPlacement {
     pub position: WindowPoint,
 }
 
+/// One source generation waiting for its one-time initial window fit.
+///
+/// Shells feed dimensions from event payloads, then consume the request for one
+/// bounded initial-fit transaction. Keeping the one-shot state here prevents
+/// duplicate reconfigure events from turning window sizing into a shell-owned
+/// state machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InitialFitRequest {
+    pub source_generation: u64,
+    pub video: WindowSize,
+}
+
+/// Portable lifecycle for the one-time fit attached to each media generation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct InitialFitState {
+    source_generation: Option<u64>,
+    video: Option<WindowSize>,
+    consumed: bool,
+}
+
+impl InitialFitState {
+    /// Start waiting for dimensions from a newly loaded source.
+    pub fn begin_source(&mut self, source_generation: u64) {
+        self.source_generation = Some(source_generation);
+        self.video = None;
+        self.consumed = false;
+    }
+
+    /// Record the first valid dimension payload for the current source.
+    pub fn observe_dimensions(
+        &mut self,
+        source_generation: u64,
+        video_width: i32,
+        video_height: i32,
+    ) -> bool {
+        if self.source_generation != Some(source_generation)
+            || self.consumed
+            || self.video.is_some()
+            || video_width <= 0
+            || video_height <= 0
+        {
+            return false;
+        }
+        self.video = Some(WindowSize {
+            width: video_width,
+            height: video_height,
+        });
+        true
+    }
+
+    /// Whether a valid fit is ready without consuming it.
+    pub fn is_ready(&self, source_generation: u64) -> bool {
+        self.source_generation == Some(source_generation) && self.video.is_some() && !self.consumed
+    }
+
+    /// Consume the fit once for the current source generation.
+    pub fn take(&mut self, source_generation: u64) -> Option<InitialFitRequest> {
+        if !self.is_ready(source_generation) {
+            return None;
+        }
+        self.consumed = true;
+        Some(InitialFitRequest {
+            source_generation,
+            video: self.video?,
+        })
+    }
+}
+
 /// Fit physical video pixels into a logical monitor work area.
 ///
 /// `monitor_scale` maps logical/application pixels to physical device pixels.
@@ -83,6 +151,27 @@ pub fn fit_physical_video_to_work_area(
         size,
         position: centered_position(size, work_area),
     })
+}
+
+/// Refit only when the compositor-selected work area requires a smaller
+/// client than the one already requested.
+///
+/// Initial placement is compositor-owned on Wayland. A compositor may move a
+/// newly resized toplevel to another monitor; in that case retaining a target
+/// calculated from the previous monitor can crop the window. This correction
+/// is deliberately monotonic: it may shrink once to remain visible, but never
+/// grows and therefore cannot fight a user resize or bounce between monitors.
+pub fn smaller_fit_for_work_area(
+    video_width: i32,
+    video_height: i32,
+    monitor_scale: f64,
+    work_area: WindowRect,
+    requested: WindowPlacement,
+) -> Option<WindowPlacement> {
+    let current =
+        fit_physical_video_to_work_area(video_width, video_height, monitor_scale, work_area)?;
+    (current.size.width < requested.size.width || current.size.height < requested.size.height)
+        .then_some(current)
 }
 
 /// The largest whole-window size available after the standard edge and chrome
@@ -283,6 +372,32 @@ mod tests {
     }
 
     #[test]
+    fn initial_fit_state_consumes_each_source_once() {
+        let mut state = InitialFitState::default();
+        state.begin_source(7);
+        assert!(!state.observe_dimensions(6, 3840, 2160));
+        assert!(!state.observe_dimensions(7, 0, 2160));
+        assert!(state.observe_dimensions(7, 3840, 2160));
+        assert!(!state.observe_dimensions(7, 1920, 1080));
+        assert_eq!(
+            state.take(7),
+            Some(InitialFitRequest {
+                source_generation: 7,
+                video: WindowSize {
+                    width: 3840,
+                    height: 2160,
+                },
+            })
+        );
+        assert_eq!(state.take(7), None);
+
+        state.begin_source(8);
+        assert!(state.observe_dimensions(8, 1920, 1080));
+        assert_eq!(state.take(7), None);
+        assert_eq!(state.take(8).map(|request| request.video.width), Some(1920));
+    }
+
+    #[test]
     fn fractional_monitor_scale_keeps_the_physical_natural_size_ceiling() {
         let placement = fit_physical_video_to_work_area(
             300,
@@ -362,6 +477,82 @@ mod tests {
                 },
                 position: WindowPoint { x: 1951, y: -7 },
             })
+        );
+    }
+
+    #[test]
+    fn compositor_move_to_smaller_monitor_retargets_without_stale_size() {
+        let large = fit_physical_video_to_work_area(
+            3840,
+            2160,
+            2.0,
+            WindowRect {
+                x: 0,
+                y: 14,
+                width: 1920,
+                height: 1051,
+            },
+        )
+        .expect("large-monitor fit");
+        assert_eq!(
+            large.size,
+            WindowSize {
+                width: 1680,
+                height: 945
+            }
+        );
+
+        let corrected = smaller_fit_for_work_area(
+            3840,
+            2160,
+            2.0,
+            WindowRect {
+                x: 1920,
+                y: 432,
+                width: 1152,
+                height: 648,
+            },
+            large,
+        )
+        .expect("smaller monitor must replace the stale target");
+        assert_eq!(
+            corrected.size,
+            WindowSize {
+                width: 1008,
+                height: 567
+            }
+        );
+        assert_eq!(corrected.position, WindowPoint { x: 1992, y: 472 });
+    }
+
+    #[test]
+    fn compositor_move_to_larger_monitor_never_grows_the_initial_target() {
+        let small = fit_physical_video_to_work_area(
+            3840,
+            2160,
+            2.0,
+            WindowRect {
+                x: 1920,
+                y: 432,
+                width: 1152,
+                height: 648,
+            },
+        )
+        .expect("small-monitor fit");
+        assert_eq!(
+            smaller_fit_for_work_area(
+                3840,
+                2160,
+                2.0,
+                WindowRect {
+                    x: 0,
+                    y: 14,
+                    width: 1920,
+                    height: 1051,
+                },
+                small,
+            ),
+            None
         );
     }
 

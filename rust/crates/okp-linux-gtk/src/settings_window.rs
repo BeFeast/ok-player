@@ -9,13 +9,10 @@ pub(crate) fn open_settings_window(
         .ok()
         .and_then(|page| normalized_settings_page(&page))
         .unwrap_or("about");
-    let window = captionless_transient_window(
-        parent,
-        "Settings",
-        SETTINGS_REFERENCE_WIDTH,
-        SETTINGS_REFERENCE_HEIGHT,
-        false,
-    );
+    let max_window_height = settings_window_height_cap(parent);
+    let max_body_height = (max_window_height - SETTINGS_TITLEBAR_HEIGHT).max(1);
+    let window =
+        captionless_transient_window(parent, "Settings", SETTINGS_REFERENCE_WIDTH, -1, true);
     window.add_css_class("okp-settings-window");
     apply_settings_window_theme(&window, state.borrow().settings.appearance_theme());
     watch_system_settings_theme(&window, Rc::clone(&state));
@@ -35,7 +32,7 @@ pub(crate) fn open_settings_window(
 
     let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     body.add_css_class("okp-settings-body");
-    body.set_size_request(SETTINGS_REFERENCE_WIDTH, SETTINGS_BODY_HEIGHT);
+    body.set_size_request(SETTINGS_REFERENCE_WIDTH, -1);
 
     let stack = gtk::Stack::new();
     stack.add_css_class("okp-settings-stack");
@@ -44,10 +41,10 @@ pub(crate) fn open_settings_window(
     stack.set_hexpand(true);
     stack.set_vexpand(true);
 
-    let about_page = settings_scroller(&settings_about_section(
-        Rc::clone(&state),
-        Rc::clone(&status_toast),
-    ));
+    let about_page = settings_scroller(
+        &settings_about_section(Rc::clone(&state), Rc::clone(&status_toast)),
+        max_body_height,
+    );
     stack.add_named(&about_page, Some("about"));
 
     let appearance_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
@@ -57,10 +54,16 @@ pub(crate) fn open_settings_window(
         Rc::clone(&state),
         Rc::clone(&status_toast),
     ));
-    stack.add_named(&settings_scroller(&appearance_page), Some("appearance"));
+    stack.add_named(
+        &settings_scroller(&appearance_page, max_body_height),
+        Some("appearance"),
+    );
 
     let advanced_page = settings_advanced_page(Rc::clone(&state), Rc::clone(&status_toast));
-    stack.add_named(&settings_scroller(&advanced_page), Some("advanced"));
+    stack.add_named(
+        &settings_scroller(&advanced_page, max_body_height),
+        Some("advanced"),
+    );
 
     let playback_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
     playback_page.add_css_class("okp-settings-page");
@@ -83,11 +86,17 @@ pub(crate) fn open_settings_window(
     ));
     playback.append(&settings_volume_row(Rc::clone(&state)));
     playback_page.append(&playback);
-    stack.add_named(&settings_scroller(&playback_page), Some("playback"));
+    stack.add_named(
+        &settings_scroller(&playback_page, max_body_height),
+        Some("playback"),
+    );
 
     let subtitles_page =
         settings_subtitles_page(parent, Rc::clone(&state), Rc::clone(&status_toast));
-    stack.add_named(&settings_scroller(&subtitles_page), Some("subtitles"));
+    stack.add_named(
+        &settings_scroller(&subtitles_page, max_body_height),
+        Some("subtitles"),
+    );
 
     let video_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
     video_page.add_css_class("okp-settings-page");
@@ -122,10 +131,16 @@ pub(crate) fn open_settings_window(
         Rc::clone(&state),
         Rc::clone(&status_toast),
     ));
-    stack.add_named(&settings_scroller(&video_page), Some("video"));
+    stack.add_named(
+        &settings_scroller(&video_page, max_body_height),
+        Some("video"),
+    );
 
     let audio_page = settings_audio_page(Rc::clone(&state), Rc::clone(&status_toast));
-    stack.add_named(&settings_scroller(&audio_page), Some("audio"));
+    stack.add_named(
+        &settings_scroller(&audio_page, max_body_height),
+        Some("audio"),
+    );
 
     let shortcuts_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
     shortcuts_page.add_css_class("okp-settings-page");
@@ -133,7 +148,10 @@ pub(crate) fn open_settings_window(
         Rc::clone(&state),
         Rc::clone(&status_toast),
     ));
-    stack.add_named(&settings_scroller(&shortcuts_page), Some("shortcuts"));
+    stack.add_named(
+        &settings_scroller(&shortcuts_page, max_body_height),
+        Some("shortcuts"),
+    );
 
     let integration_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
     integration_page.add_css_class("okp-settings-page");
@@ -160,15 +178,24 @@ pub(crate) fn open_settings_window(
         .into_owned();
     storage.append(&settings_value_row("Settings file", &settings_path));
     integration_page.append(&storage);
-    stack.add_named(&settings_scroller(&integration_page), Some("integration"));
+    stack.add_named(
+        &settings_scroller(&integration_page, max_body_height),
+        Some("integration"),
+    );
 
     stack.set_visible_child_name(initial_page);
-    body.append(&settings_nav_rail_frame(settings_nav_rail(
-        &stack,
-        initial_page,
-    )));
+    body.append(&settings_nav_rail_frame(
+        settings_nav_rail(&stack, initial_page),
+        max_body_height,
+    ));
 
-    stack.set_size_request(SETTINGS_CONTENT_WIDTH, SETTINGS_BODY_HEIGHT);
+    stack.set_size_request(SETTINGS_CONTENT_WIDTH, -1);
+    stack.set_vexpand(false);
+    let resize_window = window.clone();
+    stack.connect_visible_child_name_notify(move |_| {
+        resize_window.set_default_size(SETTINGS_REFERENCE_WIDTH, -1);
+        resize_window.queue_resize();
+    });
     body.append(&stack);
     root.append(&body);
 
@@ -257,27 +284,48 @@ pub(crate) fn normalized_settings_page(page: &str) -> Option<&'static str> {
     }
 }
 
-pub(crate) fn settings_scroller<T: IsA<gtk::Widget>>(child: &T) -> gtk::ScrolledWindow {
+pub(crate) fn settings_window_height_cap(parent: &gtk::ApplicationWindow) -> i32 {
+    parent
+        .surface()
+        .and_then(|surface| surface.display().monitor_at_surface(&surface))
+        .map(|monitor| settings_window_height_cap_for_monitor(monitor.geometry().height()))
+        .unwrap_or(SETTINGS_REFERENCE_HEIGHT)
+}
+
+pub(crate) fn settings_window_height_cap_for_monitor(monitor_height: i32) -> i32 {
+    monitor_height.saturating_sub(48).max(1)
+}
+
+pub(crate) fn settings_scroller<T: IsA<gtk::Widget>>(
+    child: &T,
+    max_content_height: i32,
+) -> gtk::ScrolledWindow {
     let scroller = gtk::ScrolledWindow::new();
     scroller.add_css_class("okp-settings-scroller");
     scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     scroller.set_min_content_width(SETTINGS_CONTENT_WIDTH);
     scroller.set_max_content_width(SETTINGS_CONTENT_WIDTH);
     scroller.set_propagate_natural_width(false);
+    scroller.set_max_content_height(max_content_height);
+    scroller.set_propagate_natural_height(true);
     scroller.set_hexpand(true);
-    scroller.set_vexpand(true);
+    scroller.set_vexpand(false);
     scroller.set_child(Some(child));
     scroller
 }
 
-pub(crate) fn settings_nav_rail_frame(rail: gtk::Box) -> gtk::ScrolledWindow {
+pub(crate) fn settings_nav_rail_frame(
+    rail: gtk::Box,
+    max_content_height: i32,
+) -> gtk::ScrolledWindow {
     let frame = gtk::ScrolledWindow::new();
     frame.add_css_class("okp-settings-rail-frame");
-    frame.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Never);
+    frame.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     frame.set_min_content_width(SETTINGS_RAIL_WIDTH);
     frame.set_max_content_width(SETTINGS_RAIL_WIDTH);
     frame.set_propagate_natural_width(false);
-    frame.set_size_request(SETTINGS_RAIL_WIDTH, SETTINGS_BODY_HEIGHT);
+    frame.set_max_content_height(max_content_height);
+    frame.set_propagate_natural_height(true);
     frame.set_child(Some(&rail));
     frame
 }
@@ -285,7 +333,7 @@ pub(crate) fn settings_nav_rail_frame(rail: gtk::Box) -> gtk::ScrolledWindow {
 pub(crate) fn settings_nav_rail(stack: &gtk::Stack, selected_page: &str) -> gtk::Box {
     let rail = gtk::Box::new(gtk::Orientation::Vertical, 2);
     rail.add_css_class("okp-settings-rail");
-    rail.set_size_request(SETTINGS_RAIL_WIDTH, SETTINGS_BODY_HEIGHT);
+    rail.set_size_request(SETTINGS_RAIL_WIDTH, -1);
 
     let search = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     search.add_css_class("okp-settings-search");

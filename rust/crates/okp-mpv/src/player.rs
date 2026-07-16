@@ -1174,6 +1174,11 @@ impl Mpv {
         }
 
         let api = CString::new("opengl")?;
+        let get_proc_address = if native_wayland_display.is_some() {
+            get_egl_proc_address as unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void
+        } else {
+            get_proc_address as unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void
+        };
         let mut init_params = ffi::mpv_opengl_init_params {
             get_proc_address: Some(get_proc_address),
             get_proc_address_ctx: ptr::null_mut(),
@@ -1378,6 +1383,10 @@ impl Mpv {
         } else {
             Ok(())
         }
+    }
+
+    pub fn set_downmix_surround_to_stereo(&self, enabled: bool) -> Result<(), MpvError> {
+        self.command(&["set", "audio-channels", downmix_audio_channels(enabled)])
     }
 
     pub fn select_subtitle(&self, id: Option<i64>) -> Result<(), MpvError> {
@@ -1931,6 +1940,15 @@ unsafe extern "C" fn get_proc_address(_ctx: *mut c_void, name: *const c_char) ->
     unsafe { ffi::eglGetProcAddress(name) }
 }
 
+unsafe extern "C" fn get_egl_proc_address(_ctx: *mut c_void, name: *const c_char) -> *mut c_void {
+    let egl = unsafe { ffi::eglGetProcAddress(name) };
+    if !egl.is_null() {
+        return egl;
+    }
+
+    unsafe { ffi::glXGetProcAddressARB(name.cast::<u8>()) }
+}
+
 fn check(code: c_int) -> Result<(), MpvError> {
     if code < 0 {
         Err(MpvError::LibMpv(code))
@@ -1962,6 +1980,10 @@ fn normalized_audio_device_name(name: &str) -> &str {
     } else {
         name
     }
+}
+
+fn downmix_audio_channels(enabled: bool) -> &'static str {
+    if enabled { "stereo" } else { "auto-safe" }
 }
 
 fn audio_device_selected(name: &str, current: &str) -> bool {
@@ -2327,6 +2349,35 @@ mod tests {
     fn audio_normalization_filter_is_labelled() {
         assert_eq!(AUDIO_NORMALIZATION_FILTER_LABEL, "@okpnorm");
         assert_eq!(AUDIO_NORMALIZATION_FILTER, "@okpnorm:dynaudnorm");
+    }
+
+    #[test]
+    fn surround_downmix_uses_mpv_stereo_and_auto_safe_layouts() {
+        assert_eq!(downmix_audio_channels(true), "stereo");
+        assert_eq!(downmix_audio_channels(false), "auto-safe");
+    }
+
+    #[test]
+    fn surround_downmix_is_accepted_by_real_libmpv() {
+        let mpv = Mpv::new().expect("libmpv should initialize");
+        mpv.set_downmix_surround_to_stereo(true)
+            .expect("stereo layout should be accepted");
+        assert_eq!(
+            mpv.reader()
+                .get_string("audio-channels")
+                .unwrap()
+                .as_deref(),
+            Some("stereo")
+        );
+        mpv.set_downmix_surround_to_stereo(false)
+            .expect("automatic layout should be restored");
+        assert_eq!(
+            mpv.reader()
+                .get_string("audio-channels")
+                .unwrap()
+                .as_deref(),
+            Some("auto-safe")
+        );
     }
 
     #[test]

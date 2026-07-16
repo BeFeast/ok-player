@@ -123,14 +123,6 @@ const OKP_STYLESHEET: &str = "
             color: @okp_accent_bright;
         }
 
-        button.okp-player-settings-control.is-isolated {
-            background: rgba(0, 0, 0, 0.32);
-        }
-
-        button.okp-player-settings-control.is-isolated:hover {
-            background: rgba(0, 0, 0, 0.46);
-        }
-
         .okp-player-window-controls button:focus-visible,
         button.okp-player-window-control:focus-visible {
             outline: none;

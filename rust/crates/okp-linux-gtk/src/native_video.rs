@@ -23,6 +23,7 @@ unsafe extern "C" {
     ) -> *mut NativePlaneOpaque;
     fn okp_wayland_video_plane_destroy(plane: *mut NativePlaneOpaque);
     fn okp_wayland_video_plane_make_current(plane: *mut NativePlaneOpaque) -> bool;
+    fn okp_wayland_video_plane_release_current(plane: *mut NativePlaneOpaque) -> bool;
     fn okp_wayland_video_plane_swap(plane: *mut NativePlaneOpaque) -> bool;
     fn okp_wayland_video_plane_resize(
         plane: *mut NativePlaneOpaque,
@@ -40,12 +41,15 @@ pub(crate) struct NativeVideoPlane {
     width: AtomicI32,
     height: AtomicI32,
     scale: AtomicI32,
+    applied_width: AtomicI32,
+    applied_height: AtomicI32,
+    applied_scale: AtomicI32,
     alive: AtomicBool,
 }
 
-// SAFETY: the native plane is created, resized, rendered, and destroyed only by
-// closures running on GTK's main context. The render callback shares the Arc so
-// it can schedule that work, but never calls the C surface functions itself.
+// SAFETY: after creation releases the EGL context from GTK's thread, all native
+// resize/render/swap calls run on the dedicated render thread. Teardown joins
+// that thread before GTK makes the context current again and destroys it.
 unsafe impl Send for NativeVideoPlane {}
 unsafe impl Sync for NativeVideoPlane {}
 
@@ -97,6 +101,9 @@ impl NativeVideoPlane {
             width: AtomicI32::new(width),
             height: AtomicI32::new(height),
             scale: AtomicI32::new(scale),
+            applied_width: AtomicI32::new(width),
+            applied_height: AtomicI32::new(height),
+            applied_scale: AtomicI32::new(scale),
             alive: AtomicBool::new(true),
         }))
     }
@@ -104,6 +111,10 @@ impl NativeVideoPlane {
     pub(crate) fn make_current(&self) -> bool {
         self.alive.load(Ordering::Acquire)
             && unsafe { okp_wayland_video_plane_make_current(self.pointer.as_ptr()) }
+    }
+
+    pub(crate) fn release_current(&self) -> bool {
+        unsafe { okp_wayland_video_plane_release_current(self.pointer.as_ptr()) }
     }
 
     pub(crate) fn swap(&self) -> bool {
@@ -121,24 +132,31 @@ impl NativeVideoPlane {
         self.width.store(width, Ordering::Release);
         self.height.store(height, Ordering::Release);
         self.scale.store(scale, Ordering::Release);
-        unsafe {
-            okp_wayland_video_plane_resize(self.pointer.as_ptr(), width, height, scale);
-        }
     }
 
-    pub(crate) fn render_size(&self) -> okp_mpv::RenderTargetSize {
-        okp_mpv::RenderTargetSize {
-            width: self.width.load(Ordering::Acquire) * self.scale.load(Ordering::Acquire),
-            height: self.height.load(Ordering::Acquire) * self.scale.load(Ordering::Acquire),
+    pub(crate) fn prepare_frame(&self) -> Option<okp_mpv::RenderTargetSize> {
+        if !self.alive.load(Ordering::Acquire) {
+            return None;
         }
+        let width = self.width.load(Ordering::Acquire);
+        let height = self.height.load(Ordering::Acquire);
+        let scale = self.scale.load(Ordering::Acquire);
+        let changed = self.applied_width.swap(width, Ordering::AcqRel) != width
+            || self.applied_height.swap(height, Ordering::AcqRel) != height
+            || self.applied_scale.swap(scale, Ordering::AcqRel) != scale;
+        if changed {
+            unsafe {
+                okp_wayland_video_plane_resize(self.pointer.as_ptr(), width, height, scale);
+            }
+        }
+        Some(okp_mpv::RenderTargetSize {
+            width: width * scale,
+            height: height * scale,
+        })
     }
 
     pub(crate) fn disable(&self) {
         self.alive.store(false, Ordering::Release);
-    }
-
-    pub(crate) fn is_alive(&self) -> bool {
-        self.alive.load(Ordering::Acquire)
     }
 }
 
@@ -184,14 +202,17 @@ mod tests {
             width: AtomicI32::new(1708),
             height: AtomicI32::new(961),
             scale: AtomicI32::new(2),
-            alive: AtomicBool::new(false),
+            applied_width: AtomicI32::new(1708),
+            applied_height: AtomicI32::new(961),
+            applied_scale: AtomicI32::new(2),
+            alive: AtomicBool::new(true),
         };
         assert_eq!(
-            plane.render_size(),
-            okp_mpv::RenderTargetSize {
+            plane.prepare_frame(),
+            Some(okp_mpv::RenderTargetSize {
                 width: 3416,
                 height: 1922
-            }
+            })
         );
         std::mem::forget(plane);
     }

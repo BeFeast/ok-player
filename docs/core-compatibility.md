@@ -157,6 +157,21 @@ behaves identically on both sides.
   `(left, top, right, bottom)` tuple in and out rather than four scalars. `Math.Round`'s
   banker's rounding is preserved via `round_ties_even`.
 
+## WindowFit → `okp_core::window_fit`
+
+- **Geometry parity.** `fit_to_work_area`, `fill_client_to_work_area`, and `fill_client` port the
+  complete C# `WindowFitTests` contract. Rust uses explicit `WindowSize`/`WindowRect` values and
+  `Option` for invalid inputs; the C# module uses tuples and nullable tuples. The shared 94% work
+  area budget, aspect preservation, no-upscale rule, correction thresholds, and tie-to-even
+  rounding are unchanged.
+- **Linux initial-fit lifecycle has no C# counterpart.** `InitialFitState` and
+  `smaller_fit_for_work_area` extract the portable one-shot/monotonic-retarget decisions from the
+  GTK shell. WinUI can address a concrete monitor and window position through `AppWindow`; a
+  Wayland compositor owns normal toplevel placement, so Linux may shrink one pending initial fit
+  when compositor placement selects a smaller work area. It never grows or repeats after the
+  source generation consumes the request. These helpers add platform-neutral policy around the
+  ported arithmetic without changing any C# test case.
+
 ## ChapterMath → `okp_core::chapter_math`
 
 - **Index sentinels.** `CurrentIndex` returns `-1` before the first chapter →

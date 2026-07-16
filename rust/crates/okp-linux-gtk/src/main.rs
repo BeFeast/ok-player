@@ -118,7 +118,6 @@ const DEB_SELF_INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
 const SETTINGS_REFERENCE_WIDTH: i32 = 760;
 const SETTINGS_REFERENCE_HEIGHT: i32 = 560;
 const SETTINGS_TITLEBAR_HEIGHT: i32 = 42;
-const SETTINGS_BODY_HEIGHT: i32 = SETTINGS_REFERENCE_HEIGHT - SETTINGS_TITLEBAR_HEIGHT;
 const SETTINGS_RAIL_WIDTH: i32 = 192;
 const SETTINGS_CONTENT_WIDTH: i32 = SETTINGS_REFERENCE_WIDTH - SETTINGS_RAIL_WIDTH;
 const CAPTIONLESS_DRAG_HEIGHT: i32 = SETTINGS_TITLEBAR_HEIGHT;
@@ -164,7 +163,7 @@ struct PlayerState {
     current_file: Option<PathBuf>,
     current_url: Option<String>,
     source_generation: u64,
-    initial_window_fit_generation: Option<u64>,
+    initial_window_fit: window_fit::InitialFitState,
     seek_generation: u64,
     playlist: Playlist,
     pending_subtitles: Vec<PathBuf>,
@@ -184,7 +183,7 @@ struct PlayerState {
     pending_audio_device_restore: Option<PendingAudioDeviceRestore>,
     render_target_size: Option<okp_mpv::RenderTargetSize>,
     native_video_plane: Option<Arc<NativeVideoPlane>>,
-    native_render_notifier: Option<Arc<NativeRenderNotifier>>,
+    native_render_loop: Option<NativeRenderLoop>,
     presentation_recorder: Option<Arc<PresentationRecorder>>,
     presentation_exercise: Option<okp_core::presentation_evidence::PresentationExercise>,
     video_transform: VideoTransformState,
@@ -829,6 +828,7 @@ struct PlayerWindowBounds {
 
 struct StatePollContext {
     updating_seek: Rc<Cell<bool>>,
+    initial_map_pending: Rc<Cell<bool>>,
     chrome: Rc<ChromeVisibility>,
     window_chrome: PlayerWindowChrome,
     subtitle_position_snapshot: Rc<Cell<Option<i64>>>,

@@ -7,70 +7,123 @@ use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(crate) struct NativeRenderNotifier {
-    plane: Arc<NativeVideoPlane>,
-    update_handle: okp_mpv::RenderUpdateHandle,
-    recorder: Option<Arc<PresentationRecorder>>,
     alive: AtomicBool,
+    pending: Mutex<bool>,
+    wake: std::sync::Condvar,
 }
 
-// SAFETY: the foreign callback only calls `notify`, which schedules all native
-// plane and libmpv render work onto GTK's main context. Teardown clears the mpv
-// callback and flips `alive` before freeing either native resource.
-unsafe impl Send for NativeRenderNotifier {}
-unsafe impl Sync for NativeRenderNotifier {}
-
 impl NativeRenderNotifier {
-    fn new(
-        plane: Arc<NativeVideoPlane>,
-        update_handle: okp_mpv::RenderUpdateHandle,
-        recorder: Option<Arc<PresentationRecorder>>,
-    ) -> Arc<Self> {
+    fn new() -> Arc<Self> {
         Arc::new(Self {
-            plane,
-            update_handle,
-            recorder,
             alive: AtomicBool::new(true),
+            pending: Mutex::new(false),
+            wake: std::sync::Condvar::new(),
         })
     }
 
     fn notify(&self) {
-        let plane = Arc::clone(&self.plane);
-        let update_handle = self.update_handle;
-        let recorder = self.recorder.clone();
-        let alive = self.alive.load(Ordering::Acquire);
-        if !alive {
+        if !self.alive.load(Ordering::Acquire) {
             return;
         }
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *pending = true;
+        self.wake.notify_one();
+    }
 
-        glib::idle_add_full(glib::Priority::HIGH, move || {
-            if !plane.is_alive() || !update_handle.update_has_frame() {
-                return glib::ControlFlow::Break;
-            }
-            if !plane.make_current() {
-                eprintln!("Failed to make the native Wayland/EGL video plane current");
-                return glib::ControlFlow::Break;
-            }
-            let size = plane.render_size();
-            if let Err(error) = update_handle.render_current_frame(size.width, size.height) {
-                eprintln!("mpv native render failed: {error}");
-                return glib::ControlFlow::Break;
-            }
-            if !plane.swap() {
-                eprintln!("Native Wayland/EGL video swap failed");
-                return glib::ControlFlow::Break;
-            }
-            // Report the swap only after the final EGL surface boundary has
-            // accepted it; GtkGLArea historically reported before GTK/GDK's swap.
-            update_handle.report_swap();
-            if let Some(recorder) = recorder.as_ref() {
-                recorder.record_present(size, "egl-swap-buffers");
-            }
-            glib::ControlFlow::Break
-        });
+    fn wait(&self) -> bool {
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        while !*pending && self.alive.load(Ordering::Acquire) {
+            pending = self
+                .wake
+                .wait(pending)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+        if !self.alive.load(Ordering::Acquire) {
+            return false;
+        }
+        *pending = false;
+        true
     }
 
     fn disable(&self) {
         self.alive.store(false, Ordering::Release);
+        self.wake.notify_all();
+    }
+}
+
+pub(crate) struct NativeRenderLoop {
+    notifier: Arc<NativeRenderNotifier>,
+    join: Option<std::thread::JoinHandle<()>>,
+}
+
+impl NativeRenderLoop {
+    fn start(
+        plane: Arc<NativeVideoPlane>,
+        update_handle: okp_mpv::RenderUpdateHandle,
+        recorder: Option<Arc<PresentationRecorder>>,
+    ) -> Result<Self, String> {
+        let notifier = NativeRenderNotifier::new();
+        let thread_notifier = Arc::clone(&notifier);
+        let join = std::thread::Builder::new()
+            .name("okp-native-render".to_owned())
+            .spawn(move || {
+                if !plane.make_current() {
+                    eprintln!("Failed to activate the native Wayland/EGL render thread");
+                    return;
+                }
+                while thread_notifier.wait() {
+                    if !update_handle.update_has_frame() {
+                        continue;
+                    }
+                    let Some(size) = plane.prepare_frame() else {
+                        break;
+                    };
+                    if let Err(error) = update_handle.render_current_frame(size.width, size.height)
+                    {
+                        eprintln!("mpv native render failed: {error}");
+                        break;
+                    }
+                    if !plane.swap() {
+                        eprintln!("Native Wayland/EGL video swap failed");
+                        break;
+                    }
+                    update_handle.report_swap();
+                    if let Some(recorder) = recorder.as_ref() {
+                        recorder.record_present(size, "egl-swap-buffers");
+                    }
+                }
+                let _ = plane.release_current();
+            })
+            .map_err(|error| format!("spawning the native render thread failed: {error}"))?;
+        Ok(Self {
+            notifier,
+            join: Some(join),
+        })
+    }
+
+    fn callback_context(&self) -> *mut libc::c_void {
+        Arc::as_ptr(&self.notifier) as *mut libc::c_void
+    }
+
+    fn stop_and_join(&mut self) {
+        self.notifier.disable();
+        if let Some(join) = self.join.take()
+            && join.join().is_err()
+        {
+            eprintln!("Native Wayland/EGL render thread panicked");
+        }
+    }
+}
+
+impl Drop for NativeRenderLoop {
+    fn drop(&mut self) {
+        self.stop_and_join();
     }
 }
 
@@ -171,14 +224,31 @@ fn connect_native_mpv(
             }
         };
         let recorder = realize_state.borrow().presentation_recorder.clone();
-        let notifier = NativeRenderNotifier::new(Arc::clone(&plane), update_handle, recorder);
+        if !plane.release_current() {
+            eprintln!("Failed to transfer the native Wayland/EGL context to the render thread");
+            mpv.destroy_render_context();
+            return;
+        }
+        let render_loop = match NativeRenderLoop::start(Arc::clone(&plane), update_handle, recorder)
+        {
+            Ok(render_loop) => render_loop,
+            Err(error) => {
+                eprintln!("{error}");
+                let _ = plane.make_current();
+                mpv.destroy_render_context();
+                return;
+            }
+        };
         if let Err(error) = unsafe {
             mpv.set_render_update_callback(
                 Some(native_render_update_trampoline),
-                Arc::as_ptr(&notifier) as *mut libc::c_void,
+                render_loop.callback_context(),
             )
         } {
             eprintln!("Failed to install the mpv native render callback: {error}");
+            drop(render_loop);
+            let _ = plane.make_current();
+            mpv.destroy_render_context();
             return;
         }
 
@@ -186,7 +256,7 @@ fn connect_native_mpv(
         {
             let mut state = realize_state.borrow_mut();
             state.native_video_plane = Some(plane);
-            state.native_render_notifier = Some(notifier);
+            state.native_render_loop = Some(render_loop);
             state.mpv = Some(mpv);
         }
         schedule_audio_device_restore(&realize_state);
@@ -205,20 +275,21 @@ fn connect_native_mpv(
     let unrealize_state = Rc::clone(&state);
     video_area.connect_unrealize(move |_| {
         let mut state = unrealize_state.borrow_mut();
-        if let Some(notifier) = state.native_render_notifier.as_ref() {
-            notifier.disable();
+        if let Some(mpv) = state.mpv.as_mut() {
+            let _ = unsafe { mpv.set_render_update_callback(None, std::ptr::null_mut()) };
+        }
+        if let Some(mut render_loop) = state.native_render_loop.take() {
+            render_loop.stop_and_join();
         }
         if let Some(plane) = state.native_video_plane.as_ref() {
             let _ = plane.make_current();
         }
         if let Some(mpv) = state.mpv.as_mut() {
-            let _ = unsafe { mpv.set_render_update_callback(None, std::ptr::null_mut()) };
             mpv.destroy_render_context();
         }
         if let Some(plane) = state.native_video_plane.as_ref() {
             plane.disable();
         }
-        state.native_render_notifier = None;
         state.native_video_plane = None;
     });
 }
@@ -250,6 +321,9 @@ fn connect_gtk_mpv(
         if let Err(error) = mpv.create_render_context(native_wayland_display) {
             eprintln!("Failed to create mpv render context: {error}");
             return;
+        }
+        if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
+            eprintln!("mpv render context initialized before source load");
         }
 
         // Start the background event pump: from here on the shell reads playback
@@ -368,6 +442,10 @@ fn create_configured_mpv(state: &Rc<RefCell<PlayerState>>) -> Option<Mpv> {
     let audio_normalization = state.borrow().settings.audio_normalization_enabled();
     if let Err(error) = mpv.set_audio_normalization(audio_normalization) {
         eprintln!("Failed to restore audio normalization: {error}");
+    }
+    let downmix_surround = state.borrow().settings.downmix_surround_to_stereo_enabled();
+    if let Err(error) = mpv.set_downmix_surround_to_stereo(downmix_surround) {
+        eprintln!("Failed to restore surround downmix: {error}");
     }
     Some(mpv)
 }
@@ -514,6 +592,7 @@ pub(crate) fn connect_state_poll(
     let status_toast = controls.status_toast.clone();
     let StatePollContext {
         updating_seek,
+        initial_map_pending,
         chrome,
         window_chrome,
         subtitle_position_snapshot,
@@ -526,10 +605,25 @@ pub(crate) fn connect_state_poll(
     } = context;
     glib::timeout_add_local(Duration::from_millis(200), move || {
         let auto_fit_dimensions = drain_mpv_events(&state, &status_toast);
-        if let Some((generation, dimensions)) =
-            consume_initial_window_fit(&state, auto_fit_dimensions)
+        observe_initial_window_fit(&state, auto_fit_dimensions);
+        // A normally realized-but-not-yet-mapped surface may already expose
+        // its compositor-selected bounds. Use that opportunity without forcing
+        // realization; otherwise keep the core request pending until mapping.
+        if (window.is_mapped() || current_player_work_area(&window, &window_bounds).is_some())
+            && let Some(request) = take_initial_window_fit(&state)
         {
-            fit_player_window_to_video(&window, &state, &window_bounds, generation, dimensions);
+            let deferred_launch_fit = initial_map_pending.get();
+            fit_player_window_to_video(
+                &window,
+                &state,
+                &window_bounds,
+                request.source_generation,
+                request.video,
+                deferred_launch_fit,
+            );
+            if initial_map_pending.replace(false) {
+                window.present();
+            }
         }
         drain_screenshot_jobs(&state, &status_toast);
         try_pending_audio_device_restore(&state);
@@ -753,18 +847,28 @@ pub(crate) fn connect_state_poll(
     });
 }
 
-pub(crate) fn consume_initial_window_fit(
+pub(crate) fn observe_initial_window_fit(
     state: &Rc<RefCell<PlayerState>>,
     video_dimensions: Option<VideoDimensions>,
-) -> Option<(u64, VideoDimensions)> {
-    let video_dimensions = video_dimensions?;
+) -> bool {
+    let Some(video_dimensions) = video_dimensions else {
+        return false;
+    };
     let mut state = state.borrow_mut();
     let source_generation = state.source_generation;
-    if state.initial_window_fit_generation == Some(source_generation) {
-        return None;
-    }
-    state.initial_window_fit_generation = Some(source_generation);
-    Some((source_generation, video_dimensions))
+    state.initial_window_fit.observe_dimensions(
+        source_generation,
+        video_dimensions.width,
+        video_dimensions.height,
+    )
+}
+
+pub(crate) fn take_initial_window_fit(
+    state: &Rc<RefCell<PlayerState>>,
+) -> Option<window_fit::InitialFitRequest> {
+    let mut state = state.borrow_mut();
+    let source_generation = state.source_generation;
+    state.initial_window_fit.take(source_generation)
 }
 
 fn run_presentation_exercise(state: &Rc<RefCell<PlayerState>>, playback: Option<PlaybackState>) {
