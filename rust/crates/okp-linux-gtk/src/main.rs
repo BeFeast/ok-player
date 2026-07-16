@@ -28,8 +28,7 @@ use okp_core::{
 };
 use okp_mpv::{
     AbLoopState, AudioDevice, Chapter, EndFileReason, InfoRow, InfoSection, InfoTrack, MediaInfo,
-    Mpv, MpvEvent, PlaybackState, Track, TrackKind, VideoDimensions, current_render_target_size,
-    resolve_render_target_size,
+    Mpv, MpvEvent, PlaybackState, Track, TrackKind, VideoDimensions, resolve_render_target_size,
 };
 use velopack::{
     UpdateCheck, UpdateInfo, UpdateManager, UpdateOptions, VelopackApp, VelopackAsset,
@@ -177,7 +176,6 @@ struct PlayerState {
     screenshot_jobs: screenshots::ScreenshotJobs,
     linux_update_status: LinuxUpdateStatus,
     pending_audio_device_restore: Option<PendingAudioDeviceRestore>,
-    render_target_size: Option<okp_mpv::RenderTargetSize>,
     video_transform: VideoTransformState,
     ab_loop: AbLoopState,
     /// Last transient navigation projection, so rapid fine seeks / frame steps

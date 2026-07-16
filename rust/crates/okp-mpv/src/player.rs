@@ -31,23 +31,6 @@ pub struct VideoDimensions {
     pub height: i32,
 }
 
-impl RenderTargetSize {
-    fn is_valid(self) -> bool {
-        self.width > 0 && self.height > 0
-    }
-
-    fn area(self) -> i64 {
-        i64::from(self.width) * i64::from(self.height)
-    }
-
-    fn max_components(self, other: RenderTargetSize) -> RenderTargetSize {
-        RenderTargetSize {
-            width: self.width.max(other.width),
-            height: self.height.max(other.height),
-        }
-    }
-}
-
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PlaybackState {
     pub time_pos: Option<f64>,
@@ -1692,52 +1675,23 @@ fn format_duration(seconds: f64) -> String {
     }
 }
 
-pub fn current_render_target_size() -> Option<RenderTargetSize> {
-    let mut viewport: [c_int; 4] = [0; 4];
-    unsafe {
-        ffi::glGetIntegerv(ffi::GL_VIEWPORT, viewport.as_mut_ptr());
-    }
-
-    let width = viewport[2];
-    let height = viewport[3];
-    if width > 0 && height > 0 {
-        Some(RenderTargetSize { width, height })
-    } else {
-        None
-    }
-}
-
 pub fn resolve_render_target_size(
-    viewport: Option<RenderTargetSize>,
-    resize: Option<RenderTargetSize>,
     widget_width: i32,
     widget_height: i32,
     scale_factor: i32,
 ) -> RenderTargetSize {
+    // Mpv::render() writes GL_VIEWPORT, so reading it on the next frame would
+    // only recover the previous app-selected target. GTK's current GLArea
+    // allocation and scale are the non-circular framebuffer-size source.
     let widget_size = RenderTargetSize {
         width: widget_width.max(1),
         height: widget_height.max(1),
     };
     let scale_factor = scale_factor.max(1);
-    let scaled_widget_size = RenderTargetSize {
+    RenderTargetSize {
         width: widget_size.width.saturating_mul(scale_factor),
         height: widget_size.height.saturating_mul(scale_factor),
-    };
-
-    let mut target = resize
-        .filter(|size| size.is_valid())
-        .unwrap_or(widget_size)
-        .max_components(scaled_widget_size);
-
-    if let Some(viewport) = viewport.filter(|size| size.is_valid())
-        && viewport.width >= target.width
-        && viewport.height >= target.height
-        && viewport.area() >= target.area()
-    {
-        target = viewport;
     }
-
-    target
 }
 
 impl Drop for Mpv {
@@ -2136,16 +2090,7 @@ mod tests {
 
     #[test]
     fn resolves_hidpi_logical_resize_to_scaled_widget_size() {
-        let target = resolve_render_target_size(
-            None,
-            Some(RenderTargetSize {
-                width: 1024,
-                height: 576,
-            }),
-            1024,
-            576,
-            2,
-        );
+        let target = resolve_render_target_size(1024, 576, 2);
 
         assert_eq!(
             target,
@@ -2157,73 +2102,35 @@ mod tests {
     }
 
     #[test]
-    fn keeps_physical_resize_size_when_it_matches_scaled_widget() {
-        let target = resolve_render_target_size(
-            None,
-            Some(RenderTargetSize {
-                width: 2048,
-                height: 1152,
-            }),
-            1024,
-            576,
-            2,
-        );
+    fn clamps_invalid_widget_dimensions_before_scaling() {
+        let target = resolve_render_target_size(0, -1, 2);
 
         assert_eq!(
             target,
             RenderTargetSize {
-                width: 2048,
-                height: 1152,
+                width: 2,
+                height: 2,
             }
         );
     }
 
     #[test]
-    fn prefers_larger_gl_viewport_for_fractional_or_backend_scaling() {
-        let target = resolve_render_target_size(
-            Some(RenderTargetSize {
-                width: 1536,
-                height: 864,
-            }),
-            Some(RenderTargetSize {
-                width: 1024,
-                height: 576,
-            }),
-            1024,
-            576,
-            1,
-        );
+    fn scaled_widget_resize_replaces_oversized_previous_target() {
+        let previous_target = resolve_render_target_size(1920, 1051, 2);
+        let resized_target = resolve_render_target_size(1708, 961, 2);
 
         assert_eq!(
-            target,
+            previous_target,
             RenderTargetSize {
-                width: 1536,
-                height: 864,
+                width: 3840,
+                height: 2102,
             }
         );
-    }
-
-    #[test]
-    fn ignores_too_small_gl_viewport_snapshot() {
-        let target = resolve_render_target_size(
-            Some(RenderTargetSize {
-                width: 640,
-                height: 360,
-            }),
-            Some(RenderTargetSize {
-                width: 1024,
-                height: 576,
-            }),
-            1024,
-            576,
-            2,
-        );
-
         assert_eq!(
-            target,
+            resized_target,
             RenderTargetSize {
-                width: 2048,
-                height: 1152,
+                width: 3416,
+                height: 1922,
             }
         );
     }

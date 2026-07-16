@@ -79,7 +79,6 @@ pub const MPV_FORMAT_FLAG: c_int = 3;
 pub const MPV_FORMAT_INT64: c_int = 4;
 pub const MPV_FORMAT_DOUBLE: c_int = 5;
 pub const GL_FRAMEBUFFER_BINDING: c_uint = 0x8CA6;
-pub const GL_VIEWPORT: c_uint = 0x0BA2;
 
 unsafe extern "C" {
     pub fn mpv_create() -> *mut mpv_handle;
