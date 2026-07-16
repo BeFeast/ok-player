@@ -59,6 +59,13 @@ impl VolumeState {
         self.set_level(self.level + finite_or_zero(delta))
     }
 
+    /// Ctrl+primary-click quick reset: land on exactly unity and clear mute,
+    /// regardless of whether the prior level was below unity, boosted, or muted.
+    /// The remembered level re-bases to unity so a later mute round-trips to 100%.
+    pub fn reset_to_unity(&mut self) -> f64 {
+        self.set_level(UNITY_VOLUME)
+    }
+
     pub fn toggle_mute(&mut self) -> f64 {
         if self.is_muted() {
             self.level = self.remembered_nonzero;
@@ -164,6 +171,33 @@ mod tests {
         assert!(volume.is_muted());
         assert_eq!(volume.remembered_nonzero(), 72.5);
         assert_eq!(volume.toggle_mute(), 72.5);
+    }
+
+    #[test]
+    fn ctrl_click_reset_lands_on_exact_unity_from_every_starting_state() {
+        let mut below = VolumeState::new(54.7);
+        assert_eq!(below.reset_to_unity(), UNITY_VOLUME);
+        assert!(!below.is_muted());
+        assert!(!below.is_boosted());
+        assert_eq!(below.level(), 100.0);
+
+        let mut boosted = VolumeState::new(124.0);
+        assert!(boosted.is_boosted());
+        assert_eq!(boosted.reset_to_unity(), UNITY_VOLUME);
+        assert!(!boosted.is_boosted());
+
+        let mut muted = VolumeState::new(72.0);
+        muted.toggle_mute();
+        assert!(muted.is_muted());
+        assert_eq!(muted.reset_to_unity(), UNITY_VOLUME);
+        assert!(!muted.is_muted());
+        assert_eq!(muted.readout(), "100%");
+
+        // The reset re-bases the remembered level, so mute after a reset
+        // restores unity instead of the pre-reset value.
+        assert_eq!(muted.remembered_nonzero(), UNITY_VOLUME);
+        assert_eq!(muted.toggle_mute(), 0.0);
+        assert_eq!(muted.toggle_mute(), UNITY_VOLUME);
     }
 
     #[test]

@@ -388,6 +388,42 @@ xdotool key --clearmodifiers m
 wait_for_volume 0.0 keyboard-mute
 xdotool key --clearmodifiers m
 wait_for_volume "$restore_level" keyboard-mute-restore
+
+# Ctrl+left-click on the speaker resets a below-100 level to exactly 100% and
+# must not also fire the plain-click mute action (issue #282).
+xdotool mousemove --sync --window "$window_id" 660 629
+sleep 0.4
+xdotool keydown ctrl
+xdotool click 1
+xdotool keyup ctrl
+wait_for_volume 100.0 ctrl-click-reset-from-low
+
+# A plain click on the same speaker still mutes: the modifier path did not
+# replace or shadow the unmodified action.
+xdotool click 1
+wait_for_volume 0.0 plain-click-mute
+
+# Ctrl+left-click while muted clears mute straight to an audible 100%.
+xdotool keydown ctrl
+xdotool click 1
+xdotool keyup ctrl
+wait_for_volume 100.0 ctrl-click-reset-from-muted
+
+# Pointer-select a boosted level on the real track, then Ctrl+left-click the
+# slider itself: the reset lands on exactly 100% instead of a jump-to-position.
+xdotool mousemove --sync --window "$window_id" 702 579
+xdotool click 1
+boost_selected="$(wait_for_settled_range)"
+if ! awk -v level="$boost_selected" 'BEGIN { exit !(level > 120.0) }'; then
+  echo "pointer boost selection was unexpectedly low: $boost_selected" >&2
+  exit 1
+fi
+printf 'pointer-boost-selection: settings=%.3f observed-mpv=%.3f\n' \
+  "$boost_selected" "$(mpris_volume)" >>"$REPORT"
+xdotool keydown ctrl
+xdotool click 1
+xdotool keyup ctrl
+wait_for_volume 100.0 ctrl-click-reset-from-boost
 INTERACTION
   then
     echo "Failed real volume interaction verification. Log: $log" >&2
@@ -417,6 +453,18 @@ INTERACTION
   printf 'exact-input-return: decimal persisted through activation\n' \
     >>"$OUT_DIR/interaction-results.txt"
   printf 'exact-input-blur-collapse: changed decimal persisted, outside target focused, capsule closed\n' \
+    >>"$OUT_DIR/interaction-results.txt"
+
+  # Exactly three Ctrl+click resets fired (low, muted, boost); the volume
+  # settling at 0 between the first and second proves the plain click still
+  # muted and the modifier path never doubled into the mute toggle.
+  ctrl_resets="$(grep -c 'interaction: volume-ctrl-click=unity' "$log" || true)"
+  if [[ "$ctrl_resets" != "3" ]]; then
+    echo "expected exactly 3 Ctrl+click unity resets, saw $ctrl_resets" >&2
+    cat "$log" >&2
+    exit 1
+  fi
+  printf 'ctrl-click-reset: 3 modifier resets, plain click still muted between them\n' \
     >>"$OUT_DIR/interaction-results.txt"
 
   magick "$OUT_DIR/interaction-rest.png" -crop 382x49+706+613 "$OUT_DIR/interaction-rest-row.png"

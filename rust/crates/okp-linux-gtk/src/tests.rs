@@ -84,6 +84,24 @@ fn mute_is_a_bindable_m_shortcut() {
 }
 
 #[test]
+fn ctrl_primary_click_is_the_only_pointer_path_that_resets_volume() {
+    assert!(volume_click_resets(gdk::ModifierType::CONTROL_MASK));
+    assert!(volume_click_resets(
+        gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::LOCK_MASK
+    ));
+    assert!(!volume_click_resets(gdk::ModifierType::empty()));
+    assert!(!volume_click_resets(gdk::ModifierType::SHIFT_MASK));
+    assert!(!volume_click_resets(gdk::ModifierType::ALT_MASK));
+
+    // The reset gesture must claim the sequence in the capture phase so the
+    // plain-click mute toggle and slider jump never fire alongside it.
+    let controls = include_str!("controls.rs");
+    assert!(controls.contains("gtk::PropagationPhase::Capture"));
+    assert!(controls.contains("gtk::EventSequenceState::Claimed"));
+    assert!(controls.contains("reset.reset_to_unity()"));
+}
+
+#[test]
 fn volume_wheel_and_arrow_events_map_to_the_canonical_steps() {
     assert_eq!(volume_scroll_delta(-1.0, false), Some(1.0));
     assert_eq!(volume_scroll_delta(1.0, false), Some(-1.0));

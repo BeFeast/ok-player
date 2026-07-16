@@ -363,7 +363,7 @@ impl VolumeControl {
         button.add_css_class("okp-volume-button");
         button.set_has_frame(false);
         button.set_size_request(VOLUME_RESTING_SIZE, VOLUME_RESTING_SIZE);
-        button.set_tooltip_text(Some("Mute (M)"));
+        button.set_tooltip_text(Some("Mute (M) \u{00B7} Ctrl-click: 100%"));
         button.set_child(Some(&resting));
 
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -516,6 +516,30 @@ impl VolumeControl {
         let clicked = self.clone();
         self.button.connect_clicked(move |_| clicked.toggle_mute());
 
+        // Ctrl+primary-click is the canonical quick reset to exactly 100%
+        // (matching the Windows control). The gesture lives on the ancestors
+        // of the mute button and the slider: capture-phase claims only cancel
+        // gestures further down the propagation chain, so claiming here (and
+        // not on the widgets themselves) is what keeps the plain-click action
+        // (mute toggle, slider jump-to-position) from also firing.
+        let track_stack = self
+            .scale
+            .parent()
+            .expect("volume scale is parented to its track overlay");
+        for widget in [self.root.clone().upcast::<gtk::Widget>(), track_stack] {
+            let gesture = gtk::GestureClick::new();
+            gesture.set_button(gdk::BUTTON_PRIMARY);
+            gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
+            let reset = self.clone();
+            gesture.connect_pressed(move |gesture, _, _, _| {
+                if volume_click_resets(gesture.current_event_state()) {
+                    gesture.set_state(gtk::EventSequenceState::Claimed);
+                    reset.reset_to_unity();
+                }
+            });
+            widget.add_controller(gesture);
+        }
+
         let changed = self.clone();
         self.scale.connect_change_value(move |_, _, value| {
             if !changed.updating.get() {
@@ -642,6 +666,17 @@ impl VolumeControl {
         set_volume_from_ui(&self.state, level);
     }
 
+    fn reset_to_unity(&self) {
+        let mut model = self.model.get();
+        let level = model.reset_to_unity();
+        self.model.set(model);
+        self.project();
+        set_volume_from_ui(&self.state, level);
+        if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+            eprintln!("interaction: volume-ctrl-click=unity");
+        }
+    }
+
     fn begin_exact_input(&self) {
         let level = self.model.get().level();
         self.readout_input.set_text(&format!("{level:.1}"));
@@ -704,9 +739,9 @@ impl VolumeControl {
         }));
         self.readout.set_label(&model.readout());
         self.button.set_tooltip_text(Some(if model.is_muted() {
-            "Unmute (M)"
+            "Unmute (M) \u{00B7} Ctrl-click: 100%"
         } else {
-            "Mute (M)"
+            "Mute (M) \u{00B7} Ctrl-click: 100%"
         }));
         set_state_class(&self.root, "is-muted", model.is_muted());
         set_state_class(&self.root, "is-boosted", model.is_boosted());
@@ -808,6 +843,13 @@ pub(crate) fn volume_scroll_delta(dy: f64, fine: bool) -> Option<f64> {
     }
     let step = if fine { 0.1 } else { 1.0 };
     Some(if dy < 0.0 { step } else { -step })
+}
+
+/// A primary click resets to unity whenever Ctrl is held, matching the
+/// Windows control's `CtrlDown()` policy (other concurrent modifiers are
+/// ignored rather than cancelling the reset).
+pub(crate) fn volume_click_resets(state: gdk::ModifierType) -> bool {
+    state.contains(gdk::ModifierType::CONTROL_MASK)
 }
 
 pub(crate) fn volume_key_delta(key: gdk::Key) -> Option<f64> {

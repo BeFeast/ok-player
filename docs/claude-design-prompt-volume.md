@@ -37,6 +37,9 @@ but recommend what's most elegant and discoverable; justify the choice.
 ## Interactions to specify (behaviour + affordance)
 
 - **Drag / click** the bar to set level; **scroll** to adjust, **Shift-scroll** for a fine step.
+- **Ctrl-click** the speaker or the bar is the quick reset: it lands on **exactly 100%** and clears
+  mute from any starting state (below unity, boosted, or muted), and it must **not** also fire the
+  plain-click action.
 - **Click the readout to type an exact value** (e.g. `54.71%`, `132%`).
 - **Mute toggle** (also the `M` key) — remembers the level.
 - Define hover-in / hover-out and expand / collapse **motion** (durations + easing), animating
