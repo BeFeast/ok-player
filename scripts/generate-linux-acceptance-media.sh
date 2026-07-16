@@ -15,9 +15,9 @@ rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR/natural-queue"
 
 generate_video() {
-  local color="$1" output="$2"
+  local color="$1" output="$2" duration="${3:-30}"
   ffmpeg -hide_banner -loglevel error -y \
-    -f lavfi -i "color=c=${color}:s=1280x720:r=24:d=30" \
+    -f lavfi -i "color=c=${color}:s=1280x720:r=24:d=${duration}" \
     -map 0:v:0 \
     -c:v libx264 -preset medium -tune stillimage -profile:v high -level:v 3.1 \
     -pix_fmt yuv420p -g 48 -an \
@@ -26,6 +26,8 @@ generate_video() {
 }
 
 generate_video "0x08090b" "$OUT_DIR/dark.mkv"
+# Long enough to produce useful 30-second interval markers, with no chapter metadata.
+generate_video "0x08090b" "$OUT_DIR/dark-no-chapters-long.mkv" 90
 ffmpeg -hide_banner -loglevel error -y \
   -f lavfi -i "color=c=0xf2f4f5:s=1280x720:r=24:d=30" \
   -map 0:v:0 -vf "noise=alls=3:allf=t" \
@@ -77,6 +79,7 @@ printf 'not media\n' >"$OUT_DIR/natural-queue/notes.txt"
 dark_duration="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$OUT_DIR/dark-with-chapters.mkv")"
 bright_duration="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$OUT_DIR/bright.mkv")"
 buffered_duration="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$OUT_DIR/buffered.mkv")"
+interval_duration="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$OUT_DIR/dark-no-chapters-long.mkv")"
 
 cat >"$OUT_DIR/fixtures.json" <<JSON
 {
@@ -84,6 +87,7 @@ cat >"$OUT_DIR/fixtures.json" <<JSON
   "media": [
     {"id": "dark", "path": "dark.mkv", "duration_seconds": $dark_duration, "chapters": 0},
     {"id": "dark-with-chapters", "path": "dark-with-chapters.mkv", "duration_seconds": $dark_duration, "chapters": 3},
+    {"id": "dark-no-chapters-long", "path": "dark-no-chapters-long.mkv", "duration_seconds": $interval_duration, "chapters": 0},
     {"id": "bright", "path": "bright.mkv", "duration_seconds": $bright_duration, "chapters": 0},
     {"id": "buffered", "path": "buffered.mkv", "duration_seconds": $buffered_duration, "chapters": 0}
   ],

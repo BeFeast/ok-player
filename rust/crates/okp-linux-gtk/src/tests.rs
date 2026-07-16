@@ -1094,6 +1094,7 @@ fn timeline_marks_include_ab_loop_points() {
         timeline_marks(
             &chapters,
             &[],
+            &[],
             AbLoopState {
                 a: Some(0.0),
                 b: Some(120.0),
@@ -1122,7 +1123,13 @@ fn timeline_marks_include_bookmarks_and_drop_edge_and_nonfinite() {
     // Bookmarks tick alongside chapters; a mark at 0.0 (the very left edge) and a
     // non-finite time are dropped, exactly like the chapter filter.
     assert_eq!(
-        timeline_marks(&[], &[0.0, 90.0, f64::NAN], AbLoopState::default(), 300.0),
+        timeline_marks(
+            &[],
+            &[],
+            &[0.0, 90.0, f64::NAN],
+            AbLoopState::default(),
+            300.0,
+        ),
         vec![TimelineMark {
             time: 90.0,
             kind: TimelineMarkKind::Bookmark,
@@ -1156,6 +1163,7 @@ fn timeline_marks_drop_chapters_and_bookmarks_at_or_past_duration() {
     assert_eq!(
         timeline_marks(
             &chapters,
+            &[],
             &[90.0, 120.0, 200.0],
             AbLoopState::default(),
             120.0
@@ -1184,7 +1192,7 @@ fn timeline_marks_keep_all_when_duration_unknown() {
     }];
 
     assert_eq!(
-        timeline_marks(&chapters, &[900.0], AbLoopState::default(), 0.0),
+        timeline_marks(&chapters, &[], &[900.0], AbLoopState::default(), 0.0),
         vec![
             TimelineMark {
                 time: 500.0,
@@ -1204,6 +1212,7 @@ fn timeline_marks_combine_degenerate_ab_loop_points() {
         timeline_marks(
             &[],
             &[],
+            &[],
             AbLoopState {
                 a: Some(12.0),
                 b: Some(12.25),
@@ -1217,6 +1226,77 @@ fn timeline_marks_combine_degenerate_ab_loop_points() {
     );
     assert!(should_combine_ab_loop_marks(12.0, 12.5));
     assert!(!should_combine_ab_loop_marks(12.0, 12.501));
+}
+
+#[test]
+fn timeline_marks_keep_interval_ticks_distinct_and_in_range() {
+    assert_eq!(
+        timeline_marks(
+            &[],
+            &[0.0, 300.0, 600.0, 900.0],
+            &[150.0],
+            AbLoopState::default(),
+            900.0,
+        ),
+        vec![
+            TimelineMark {
+                time: 300.0,
+                kind: TimelineMarkKind::Interval,
+            },
+            TimelineMark {
+                time: 600.0,
+                kind: TimelineMarkKind::Interval,
+            },
+            TimelineMark {
+                time: 150.0,
+                kind: TimelineMarkKind::Bookmark,
+            },
+        ]
+    );
+}
+
+#[test]
+fn snapshot_interval_fallback_never_mixes_with_embedded_chapters() {
+    let fallback = SidePanelSnapshot {
+        duration: Some(3600.0),
+        ..Default::default()
+    };
+    assert!(snapshot_has_chapter_surface(&fallback));
+    assert_eq!(snapshot_interval_chapters(&fallback).len(), 12);
+
+    let embedded = SidePanelSnapshot {
+        chapters: vec![Chapter {
+            index: 0,
+            time: 0.0,
+            title: Some("Intro".to_owned()),
+        }],
+        duration: Some(3600.0),
+        ..Default::default()
+    };
+    assert!(snapshot_has_chapter_surface(&embedded));
+    assert!(snapshot_interval_chapters(&embedded).is_empty());
+
+    let unknown_duration = SidePanelSnapshot::default();
+    assert!(!snapshot_has_chapter_surface(&unknown_duration));
+    assert!(snapshot_interval_chapters(&unknown_duration).is_empty());
+}
+
+#[test]
+fn detect_chapters_is_honestly_unavailable_without_an_engine() {
+    assert_eq!(
+        chapter_math::ChapterDetection::begin(SCENE_DETECTION_ENGINE_AVAILABLE),
+        chapter_math::ChapterDetection::Unavailable
+    );
+}
+
+#[test]
+fn interval_preview_covers_interval_detection_and_bookmark_sources() {
+    let sample = side_panel_interval_preview_sample();
+    assert!(sample.chapters.is_empty());
+    assert_eq!(snapshot_interval_chapters(&sample).len(), 12);
+    assert_eq!(sample.detection, chapter_math::ChapterDetection::Idle);
+    assert!(sample.current_file.is_some());
+    assert!(!sample.bookmarks.is_empty());
 }
 
 #[test]

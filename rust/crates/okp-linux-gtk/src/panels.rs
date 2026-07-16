@@ -18,6 +18,19 @@ pub(crate) fn update_up_next_panel(
         }
     }
 
+    // Detection state belongs to one media item. Reset it when the source identity changes so
+    // an unavailable/error result never leaks into the next file.
+    {
+        let state = state.borrow();
+        let previous = controls.side_panel_snapshot.borrow();
+        if previous.current_file != state.current_file || previous.current_url != state.current_url
+        {
+            controls
+                .chapter_detection
+                .set(chapter_math::ChapterDetection::default());
+        }
+    }
+
     let snapshot = {
         let state = state.borrow();
         let has_media = has_loaded_media_state(&state);
@@ -26,10 +39,11 @@ pub(crate) fn update_up_next_panel(
             .as_ref()
             .map(Mpv::observed_chapters)
             .unwrap_or_default();
-        let position = state
-            .mpv
-            .as_ref()
-            .and_then(|mpv| mpv.observed_playback_state().time_pos);
+        let playback = state.mpv.as_ref().map(|mpv| mpv.observed_playback_state());
+        let position = playback.and_then(|playback| playback.time_pos);
+        let duration = playback
+            .and_then(|playback| playback.duration)
+            .filter(|value| value.is_finite() && *value > 0.0);
         let current_chapter = current_chapter_index(&chapters, position);
         // Only a local file carries persistent per-file bookmarks (streams are not
         // tracked, exactly as history keys off `current_file`).
@@ -46,8 +60,10 @@ pub(crate) fn update_up_next_panel(
             playlist: state.playlist.items().to_vec(),
             chapters,
             current_chapter,
+            duration,
             bookmarks,
             ab_loop: state.ab_loop,
+            detection: controls.chapter_detection.get(),
         }
     };
 
@@ -61,13 +77,7 @@ pub(crate) fn update_up_next_panel(
     // The length the seek scale is (or will be) ranged to. Timeline marks past the end
     // are dropped so a stray chapter/bookmark can't collapse onto the right handle; a
     // non-positive value means the duration is not known yet.
-    let media_duration = state
-        .borrow()
-        .mpv
-        .as_ref()
-        .and_then(|mpv| mpv.observed_playback_state().duration)
-        .filter(|value| value.is_finite() && *value > 0.0)
-        .unwrap_or(0.0);
+    let media_duration = snapshot.duration.unwrap_or(0.0);
 
     controls.chapters_button.set_sensitive(snapshot.has_media);
     if !snapshot.has_media {
@@ -84,6 +94,7 @@ pub(crate) fn update_up_next_panel(
         controls.side_panel_actions.borrow_mut().clear();
         update_timeline_marks(
             &controls.timeline_rail,
+            &[],
             &[],
             &[],
             AbLoopState::default(),
@@ -109,16 +120,21 @@ pub(crate) fn update_up_next_panel(
 
     if panel_visible
         && !controls.side_panel_manual_mode.get()
-        && previous_snapshot.chapters.is_empty()
-        && !snapshot.chapters.is_empty()
+        && !snapshot_has_chapter_surface(&previous_snapshot)
+        && snapshot_has_chapter_surface(&snapshot)
     {
         controls.side_panel_mode.set(SidePanelMode::Chapters);
     }
 
     controls.side_panel_snapshot.replace(snapshot.clone());
+    let interval_times = snapshot_interval_chapters(&snapshot)
+        .into_iter()
+        .map(|chapter| chapter.time)
+        .collect::<Vec<_>>();
     update_timeline_marks(
         &controls.timeline_rail,
         &snapshot.chapters,
+        &interval_times,
         &snapshot.bookmarks,
         snapshot.ab_loop,
         media_duration,
@@ -152,8 +168,8 @@ pub(crate) fn render_chapters_panel(
     snapshot: &SidePanelSnapshot,
     actions: &mut Vec<SidePanelAction>,
 ) {
-    let has_chapters = !snapshot.chapters.is_empty();
-    if has_chapters {
+    if !snapshot.chapters.is_empty() {
+        // Embedded metadata remains the authoritative, read-only chapter spine.
         controls.up_next_list.append(&panel_heading_row(&format!(
             "CHAPTERS · {}",
             snapshot.chapters.len()
@@ -172,10 +188,10 @@ pub(crate) fn render_chapters_panel(
             actions.push(SidePanelAction::Chapter(chapter.time));
         }
     } else {
-        controls.up_next_list.append(&panel_empty_row(
-            "No chapters. Add a bookmark to mark moments.",
-        ));
-        actions.push(SidePanelAction::None);
+        // Keep the explicit detection action above the interval list so it remains visible at
+        // the initial scroll position even when the fallback reaches its marker cap.
+        render_detect_chapters_section(controls, snapshot, actions);
+        render_interval_section(controls, snapshot, actions);
     }
 
     // Bookmarks live alongside the file's own chapters but stay in their own section so
@@ -183,6 +199,100 @@ pub(crate) fn render_chapters_panel(
     // Only a local file can carry persistent bookmarks, so a stream shows no section.
     if snapshot.current_file.is_some() {
         render_bookmarks_section(controls, state, snapshot, actions);
+    }
+}
+
+pub(crate) fn snapshot_has_chapter_surface(snapshot: &SidePanelSnapshot) -> bool {
+    chapter_math::active_chapter_source(
+        !snapshot.chapters.is_empty(),
+        snapshot.duration.unwrap_or(0.0),
+    )
+    .is_some()
+}
+
+/// Interval markers for metadata-less media. Embedded chapters always win and are never
+/// mixed with synthesized fallback markers.
+pub(crate) fn snapshot_interval_chapters(
+    snapshot: &SidePanelSnapshot,
+) -> Vec<chapter_math::IntervalChapter> {
+    if matches!(
+        chapter_math::active_chapter_source(
+            !snapshot.chapters.is_empty(),
+            snapshot.duration.unwrap_or(0.0),
+        ),
+        Some(chapter_math::ChapterSource::Interval)
+    ) {
+        chapter_math::fallback_interval_chapters(snapshot.duration.unwrap_or(0.0))
+    } else {
+        Vec::new()
+    }
+}
+
+pub(crate) fn render_interval_section(
+    controls: &Controls,
+    snapshot: &SidePanelSnapshot,
+    actions: &mut Vec<SidePanelAction>,
+) {
+    let intervals = snapshot_interval_chapters(snapshot);
+    if intervals.is_empty() {
+        controls
+            .up_next_list
+            .append(&panel_empty_row("No chapters in this media yet."));
+        actions.push(SidePanelAction::None);
+        return;
+    }
+
+    controls.up_next_list.append(&panel_heading_row(&format!(
+        "INTERVAL MARKERS · {}",
+        intervals.len()
+    )));
+    actions.push(SidePanelAction::None);
+    controls.up_next_list.append(&panel_caption_row(
+        "Evenly spaced preview points for media without chapter metadata.",
+    ));
+    actions.push(SidePanelAction::None);
+
+    for interval in intervals {
+        controls
+            .up_next_list
+            .append(&interval_row(interval.index, interval.time));
+        actions.push(SidePanelAction::Chapter(interval.time));
+    }
+}
+
+pub(crate) fn render_detect_chapters_section(
+    controls: &Controls,
+    snapshot: &SidePanelSnapshot,
+    actions: &mut Vec<SidePanelAction>,
+) {
+    controls
+        .up_next_list
+        .append(&panel_heading_row("SCENE DETECTION"));
+    actions.push(SidePanelAction::None);
+
+    match snapshot.detection {
+        chapter_math::ChapterDetection::Idle => {
+            controls.up_next_list.append(&detect_chapters_row());
+            actions.push(SidePanelAction::DetectChapters);
+        }
+        chapter_math::ChapterDetection::Detecting { percent } => {
+            controls.up_next_list.append(&detection_status_row(&format!(
+                "Detecting chapters… {percent}%"
+            )));
+            actions.push(SidePanelAction::None);
+        }
+        chapter_math::ChapterDetection::Done { count } => {
+            controls
+                .up_next_list
+                .append(&detection_status_row(&format!("Detected {count} chapters")));
+            actions.push(SidePanelAction::None);
+        }
+        chapter_math::ChapterDetection::Unavailable => {
+            controls
+                .up_next_list
+                .append(&detection_status_row(SCENE_DETECTION_UNAVAILABLE_MESSAGE));
+            actions.push(SidePanelAction::None);
+        }
     }
 }
 
@@ -496,16 +606,18 @@ pub(crate) fn request_chapter_thumbnail_warm(
 pub(crate) fn update_timeline_marks(
     rail: &TimelineRail,
     chapters: &[Chapter],
+    intervals: &[f64],
     bookmarks: &[f64],
     ab_loop: AbLoopState,
     duration: f64,
 ) {
-    let marks = timeline_marks(chapters, bookmarks, ab_loop, duration);
+    let marks = timeline_marks(chapters, intervals, bookmarks, ab_loop, duration);
     rail.set_marks(marks);
 }
 
 pub(crate) fn timeline_marks(
     chapters: &[Chapter],
+    intervals: &[f64],
     bookmarks: &[f64],
     ab_loop: AbLoopState,
     duration: f64,
@@ -518,6 +630,17 @@ pub(crate) fn timeline_marks(
         })
         .filter(|mark| timeline_mark_in_range(mark.time, duration))
         .collect::<Vec<_>>();
+
+    marks.extend(
+        intervals
+            .iter()
+            .copied()
+            .filter(|time| timeline_mark_in_range(*time, duration))
+            .map(|time| TimelineMark {
+                time,
+                kind: TimelineMarkKind::Interval,
+            }),
+    );
 
     marks.extend(
         bookmarks
@@ -587,6 +710,21 @@ pub(crate) fn panel_heading_row(text: &str) -> gtk::ListBoxRow {
     row
 }
 
+pub(crate) fn panel_caption_row(text: &str) -> gtk::ListBoxRow {
+    let row = gtk::ListBoxRow::new();
+    row.add_css_class("okp-panel-caption-row");
+    row.set_activatable(false);
+    row.set_selectable(false);
+
+    let label = gtk::Label::new(Some(text));
+    label.add_css_class("okp-panel-caption");
+    label.set_xalign(0.0);
+    label.set_wrap(true);
+    label.set_wrap_mode(pango::WrapMode::WordChar);
+    row.set_child(Some(&label));
+    row
+}
+
 pub(crate) fn panel_empty_row(text: &str) -> gtk::ListBoxRow {
     let row = gtk::ListBoxRow::new();
     row.add_css_class("okp-panel-empty-row");
@@ -599,6 +737,106 @@ pub(crate) fn panel_empty_row(text: &str) -> gtk::ListBoxRow {
     label.set_justify(gtk::Justification::Center);
     label.set_xalign(0.5);
     row.set_child(Some(&label));
+    row
+}
+
+pub(crate) fn interval_row(index: usize, time: f64) -> gtk::ListBoxRow {
+    let row = gtk::ListBoxRow::new();
+    row.add_css_class("okp-up-next-row");
+    row.add_css_class("okp-interval-row");
+    row.set_selectable(false);
+    row.set_tooltip_text(Some("Jump to this interval marker"));
+
+    let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row_box.set_hexpand(true);
+
+    let icon = gtk::Image::from_icon_name("media-seek-forward-symbolic");
+    icon.add_css_class("okp-interval-icon");
+    icon.set_pixel_size(15);
+    icon.set_valign(gtk::Align::Center);
+
+    let label_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    label_box.set_hexpand(true);
+    label_box.set_valign(gtk::Align::Center);
+
+    let title = gtk::Label::new(Some(&format!(
+        "{} {}",
+        chapter_math::ChapterSource::Interval.label(),
+        index + 1
+    )));
+    title.add_css_class("okp-up-next-file");
+    title.set_xalign(0.0);
+
+    let marker = gtk::Label::new(Some(&time_code::format_clock(time)));
+    marker.add_css_class("okp-up-next-marker");
+    marker.set_xalign(0.0);
+
+    label_box.append(&title);
+    label_box.append(&marker);
+    row_box.append(&icon);
+    row_box.append(&label_box);
+    row.set_child(Some(&row_box));
+    row
+}
+
+pub(crate) fn detect_chapters_row() -> gtk::ListBoxRow {
+    let row = gtk::ListBoxRow::new();
+    row.add_css_class("okp-up-next-row");
+    row.add_css_class("okp-detect-row");
+    row.set_selectable(false);
+    row.set_tooltip_text(Some("Scan the video for scene changes"));
+
+    let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row_box.set_hexpand(true);
+
+    let icon = gtk::Image::from_icon_name("system-search-symbolic");
+    icon.add_css_class("okp-detect-icon");
+    icon.set_pixel_size(16);
+    icon.set_valign(gtk::Align::Center);
+
+    let label_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    label_box.set_hexpand(true);
+    label_box.set_valign(gtk::Align::Center);
+
+    let title = gtk::Label::new(Some("Detect chapters"));
+    title.add_css_class("okp-up-next-file");
+    title.set_xalign(0.0);
+
+    let subtitle = gtk::Label::new(Some("Scan for scene changes in the background"));
+    subtitle.add_css_class("okp-detect-subtitle");
+    subtitle.set_xalign(0.0);
+
+    label_box.append(&title);
+    label_box.append(&subtitle);
+    row_box.append(&icon);
+    row_box.append(&label_box);
+    row.set_child(Some(&row_box));
+    row
+}
+
+pub(crate) fn detection_status_row(text: &str) -> gtk::ListBoxRow {
+    let row = gtk::ListBoxRow::new();
+    row.add_css_class("okp-detect-status-row");
+    row.set_activatable(false);
+    row.set_selectable(false);
+
+    let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    row_box.set_hexpand(true);
+
+    let icon = gtk::Image::from_icon_name("dialog-information-symbolic");
+    icon.add_css_class("okp-detect-status-icon");
+    icon.set_pixel_size(14);
+    icon.set_valign(gtk::Align::Center);
+
+    let label = gtk::Label::new(Some(text));
+    label.add_css_class("okp-detect-status");
+    label.set_xalign(0.0);
+    label.set_wrap(true);
+    label.set_wrap_mode(pango::WrapMode::WordChar);
+
+    row_box.append(&icon);
+    row_box.append(&label);
+    row.set_child(Some(&row_box));
     row
 }
 
@@ -1000,10 +1238,12 @@ pub(crate) fn side_panel_preview_sample() -> SidePanelSnapshot {
         playlist,
         chapters,
         current_chapter: Some(2),
+        duration: Some(2705.0),
         // A couple of user bookmarks so the Bookmarks section (heading, the add row and
         // saved marks) is exercised by the visual smoke shot.
         bookmarks: vec![468.0, 1180.0],
         ab_loop: AbLoopState::default(),
+        detection: chapter_math::ChapterDetection::default(),
     }
 }
 
@@ -1024,8 +1264,10 @@ pub(crate) fn side_panel_empty_chapters_sample() -> SidePanelSnapshot {
         playlist: vec![PlaylistItem::Local(current_file)],
         chapters: Vec::new(),
         current_chapter: None,
+        duration: None,
         bookmarks: Vec::new(),
         ab_loop: AbLoopState::default(),
+        detection: chapter_math::ChapterDetection::default(),
     }
 }
 
@@ -1045,8 +1287,28 @@ pub(crate) fn side_panel_empty_up_next_sample() -> SidePanelSnapshot {
         playlist: vec![PlaylistItem::Url(url)],
         chapters: Vec::new(),
         current_chapter: None,
+        duration: None,
         bookmarks: Vec::new(),
         ab_loop: AbLoopState::default(),
+        detection: chapter_math::ChapterDetection::default(),
+    }
+}
+
+/// Metadata-less local media with a known duration, used by the interval-fallback visual
+/// smoke state. A bookmark is included so the three source types remain visibly separate.
+pub(crate) fn side_panel_interval_preview_sample() -> SidePanelSnapshot {
+    let current_file = PathBuf::from("/media/home-video/Cabin Weekend.mp4");
+    SidePanelSnapshot {
+        has_media: true,
+        current_file: Some(current_file.clone()),
+        current_url: None,
+        playlist: vec![PlaylistItem::Local(current_file)],
+        chapters: Vec::new(),
+        current_chapter: None,
+        duration: Some(3600.0),
+        bookmarks: vec![742.0],
+        ab_loop: AbLoopState::default(),
+        detection: chapter_math::ChapterDetection::default(),
     }
 }
 
@@ -1093,5 +1355,21 @@ pub(crate) fn open_side_panel_preview(
         }
     }
     controls.side_panel_actions.replace(actions);
+    let duration = snapshot.duration.unwrap_or(0.0);
+    if duration > 0.0 {
+        controls.seek.set_range(0.0, duration);
+    }
+    let intervals = snapshot_interval_chapters(&snapshot)
+        .into_iter()
+        .map(|chapter| chapter.time)
+        .collect::<Vec<_>>();
+    update_timeline_marks(
+        &controls.timeline_rail,
+        &snapshot.chapters,
+        &intervals,
+        &snapshot.bookmarks,
+        snapshot.ab_loop,
+        duration,
+    );
     controls.side_panel_snapshot.replace(snapshot);
 }

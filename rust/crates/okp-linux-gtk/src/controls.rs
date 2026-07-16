@@ -204,6 +204,7 @@ fn draw_timeline_rail(
         let x = geometry.trough.x + geometry.trough.width * fraction;
         let (mark_width, mark_height, color, label) = match mark.kind {
             TimelineMarkKind::Chapter => (2.0, 7.0, (1.0, 1.0, 1.0, 0.42), None),
+            TimelineMarkKind::Interval => (1.5, 5.0, (1.0, 1.0, 1.0, 0.25), None),
             TimelineMarkKind::Bookmark => (3.0, 9.0, (0.91, 0.69, 0.29, 0.96), None),
             TimelineMarkKind::AbStart => (3.0, 9.0, (0.91, 0.69, 0.29, 0.96), Some("A")),
             TimelineMarkKind::AbEnd => (3.0, 9.0, (0.91, 0.69, 0.29, 0.96), Some("B")),
@@ -1127,9 +1128,11 @@ pub(crate) fn build_controls(
 
     let up_next_state = Rc::clone(&state);
     let up_next_actions = Rc::new(RefCell::new(Vec::<SidePanelAction>::new()));
+    let chapter_detection = Rc::new(Cell::new(chapter_math::ChapterDetection::default()));
     let row_actions = Rc::clone(&up_next_actions);
     let row_toast = Rc::clone(&status_toast);
     let row_parent = window.clone();
+    let row_detection = Rc::clone(&chapter_detection);
     let (thumbnail_sender, thumbnail_receiver) = mpsc::channel();
     up_next_list.connect_row_activated(move |_, row| {
         let index = row.index();
@@ -1159,6 +1162,7 @@ pub(crate) fn build_controls(
                 Rc::clone(&row_toast),
                 QueueInsertMode::Append,
             ),
+            SidePanelAction::DetectChapters => detect_chapters(&row_detection, &row_toast),
         }
     });
 
@@ -1349,6 +1353,7 @@ pub(crate) fn build_controls(
         side_panel_manual_mode,
         side_panel_snapshot,
         side_panel_actions: up_next_actions,
+        chapter_detection,
         side_panel_preview_frozen: Rc::new(Cell::new(false)),
         seek_hover_preview,
         thumbnail_sender,
@@ -1441,12 +1446,12 @@ pub(crate) fn side_panel_segment_button(label: &str, selected: bool) -> gtk::But
 
 pub(crate) fn preferred_side_panel_mode(state: &Rc<RefCell<PlayerState>>) -> SidePanelMode {
     let state = state.borrow();
-    let has_chapters = state
-        .mpv
-        .as_ref()
-        .map(Mpv::observed_chapters)
-        .is_some_and(|chapters| !chapters.is_empty());
-    if has_chapters {
+    let source = state.mpv.as_ref().and_then(|mpv| {
+        let has_embedded = !mpv.observed_chapters().is_empty();
+        let duration = mpv.observed_playback_state().duration.unwrap_or(0.0);
+        chapter_math::active_chapter_source(has_embedded, duration)
+    });
+    if source.is_some() {
         SidePanelMode::Chapters
     } else {
         SidePanelMode::UpNext

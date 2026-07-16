@@ -13,16 +13,17 @@ fi
 
 DARK="$FIXTURE_DIR/dark.mkv"
 CHAPTERS="$FIXTURE_DIR/dark-with-chapters.mkv"
+INTERVALS="$FIXTURE_DIR/dark-no-chapters-long.mkv"
 BRIGHT="$FIXTURE_DIR/bright.mkv"
 BUFFERED="$FIXTURE_DIR/buffered.mkv"
 
-for tool in xvfb-run dbus-run-session xfwm4 xdotool xwininfo import magick ffprobe python3 sha256sum; do
+for tool in xvfb-run dbus-run-session xfwm4 xdotool xwininfo import magick ffprobe python3 sha256sum rg; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "Missing required tool: $tool" >&2
     exit 127
   fi
 done
-for fixture in "$DARK" "$CHAPTERS" "$BRIGHT" "$BUFFERED"; do
+for fixture in "$DARK" "$CHAPTERS" "$INTERVALS" "$BRIGHT" "$BUFFERED"; do
   if [[ ! -f "$fixture" ]]; then
     echo "Missing generated fixture: $fixture" >&2
     exit 127
@@ -42,16 +43,17 @@ if [[ -n "${OKP_XVFB_SERVER_NUM:-}" ]]; then
 fi
 
 if ! xvfb-run "${xvfb_args[@]}" --server-args='-screen 0 1280x900x24 -nolisten tcp' \
-  dbus-run-session -- bash -s -- "$BINARY" "$DARK" "$CHAPTERS" "$BRIGHT" "$BUFFERED" "$OUT_DIR" \
+  dbus-run-session -- bash -s -- "$BINARY" "$DARK" "$CHAPTERS" "$INTERVALS" "$BRIGHT" "$BUFFERED" "$OUT_DIR" \
   >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
 set -euo pipefail
 
 BINARY="$1"
 DARK="$2"
 CHAPTERS="$3"
-BRIGHT="$4"
-BUFFERED="$5"
-OUT_DIR="$6"
+INTERVALS="$4"
+BRIGHT="$5"
+BUFFERED="$6"
+OUT_DIR="$7"
 FIXTURE_DIR="$(dirname "$DARK")"
 
 export GDK_BACKEND=x11
@@ -341,6 +343,35 @@ sleep 4
 capture playing-idle
 stop_app
 
+# A real local file with known duration but no embedded chapter metadata opens on
+# the interval fallback surface. The explicit Detect chapters action remains at
+# the initial scroll position and resolves honestly while no engine is wired.
+launch "$INTERVALS" interval-chapters 4 OKP_DEBUG_INTERACTIONS=1
+xdotool key --clearmodifiers space
+panel_visible=0
+for _ in 1 2 3; do
+  wake_chrome
+  sleep 0.5
+  xdotool mousemove --window "$window_id" 914 638 click 1
+  sleep 1
+  capture intervals-loaded
+  panel_mean="$(magick "$OUT_DIR/intervals-loaded.png" -crop 300x480+812+52 -colorspace gray -format '%[fx:mean]' info:)"
+  if awk -v value="$panel_mean" 'BEGIN { exit !(value > 0.50) }'; then
+    panel_visible=1
+    break
+  fi
+done
+(( panel_visible == 1 )) || { echo "interval fallback panel did not render for metadata-less media" >&2; exit 1; }
+xdotool mousemove --window "$window_id" 950 145 click 1
+sleep 1
+rg -q '^interaction: chapter-detection=unavailable$' "$OUT_DIR/interval-chapters-app.log" || {
+  echo "Detect chapters did not report the honest no-engine state" >&2
+  cat "$OUT_DIR/interval-chapters-app.log" >&2 || true
+  exit 1
+}
+capture intervals-unavailable
+stop_app
+
 # Loading is a real URL whose response headers are deliberately delayed.
 launch "$LOADING_URL" buffering-loading 1
 capture buffering-loading
@@ -473,6 +504,7 @@ wide_alignment="$(sed -n '2s/.*spread=//p' "$OUT_DIR/timeline-alignment.txt")"
 
 state_images=(
   loaded-paused-osc paused buffered-timeline buffered-timeline-wide chapter-context osd chapters-loaded
+  intervals-loaded intervals-unavailable
   playing-idle buffering-loading playback-error bright-video-background dark-video-background
 )
 for state in "${state_images[@]}"; do
@@ -511,6 +543,8 @@ cat >"$OUT_DIR/functional-results.json" <<JSON
   "real_delayed_loading": "pass",
   "real_404_failure_and_retry": "pass",
   "chapters_panel_action": "pass",
+  "metadata_less_interval_fallback": "pass",
+  "detect_chapters_unavailable_state": "pass",
   "saved_screenshot": "pass",
   "distinct_state_hashes": "pass",
   "buffered_http_bytes": $buffered_bytes,
