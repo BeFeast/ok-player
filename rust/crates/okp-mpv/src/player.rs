@@ -1,4 +1,6 @@
+use std::any::Any;
 use std::ffi::{CStr, CString, NulError};
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -20,6 +22,43 @@ const AUDIO_DEVICE_AUTO: &str = "auto";
 pub struct RenderTargetSize {
     pub width: i32,
     pub height: i32,
+}
+
+/// An opaque native Wayland display kept alive for an mpv render context.
+///
+/// The owner is type-erased so shells can retain their toolkit display object
+/// without making `okp-mpv` depend on toolkit-specific types.
+pub struct NativeWaylandDisplay {
+    pointer: NonNull<c_void>,
+    _owner: Box<dyn Any>,
+}
+
+impl NativeWaylandDisplay {
+    /// Wrap a native `wl_display*` together with the resource that owns it.
+    ///
+    /// # Safety
+    ///
+    /// `pointer` must identify the `wl_display` owned by `owner`, and it must
+    /// remain valid for as long as retaining `owner` keeps that display alive.
+    pub unsafe fn new<T: 'static>(pointer: NonNull<c_void>, owner: T) -> Self {
+        Self {
+            pointer,
+            _owner: Box::new(owner),
+        }
+    }
+
+    fn pointer(&self) -> NonNull<c_void> {
+        self.pointer
+    }
+}
+
+impl fmt::Debug for NativeWaylandDisplay {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("NativeWaylandDisplay")
+            .field("pointer", &self.pointer)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Display dimensions carried by lifecycle events after mpv has applied pixel
@@ -855,9 +894,40 @@ impl RawReader {
     }
 }
 
+fn render_context_parameters(
+    api: &CStr,
+    init_params: &mut ffi::mpv_opengl_init_params,
+    native_wayland_display: Option<NonNull<c_void>>,
+) -> Vec<ffi::mpv_render_param> {
+    let mut params = vec![
+        ffi::mpv_render_param {
+            param_type: ffi::MPV_RENDER_PARAM_API_TYPE,
+            data: api.as_ptr().cast_mut().cast(),
+        },
+        ffi::mpv_render_param {
+            param_type: ffi::MPV_RENDER_PARAM_OPENGL_INIT_PARAMS,
+            data: ptr::from_mut(init_params).cast(),
+        },
+    ];
+    if let Some(display) = native_wayland_display {
+        params.push(ffi::mpv_render_param {
+            param_type: ffi::MPV_RENDER_PARAM_WL_DISPLAY,
+            data: display.as_ptr(),
+        });
+    }
+    params.push(ffi::mpv_render_param {
+        param_type: ffi::MPV_RENDER_PARAM_INVALID,
+        data: ptr::null_mut(),
+    });
+    params
+}
+
 pub struct Mpv {
     handle: NonNull<ffi::mpv_handle>,
     render_context: Option<NonNull<ffi::mpv_render_context>>,
+    // Must be released after `mpv_render_context_free`: libmpv may use the
+    // native display until that call returns.
+    render_context_native_wayland_display: Option<NativeWaylandDisplay>,
     pump: Option<EventPump>,
     next_request_id: AtomicU64,
     #[cfg(debug_assertions)]
@@ -882,6 +952,7 @@ impl Mpv {
         let this = Self {
             handle,
             render_context: None,
+            render_context_native_wayland_display: None,
             pump: None,
             next_request_id: AtomicU64::new(1),
             #[cfg(debug_assertions)]
@@ -1035,7 +1106,15 @@ impl Mpv {
         }
     }
 
-    pub fn create_render_context(&mut self) -> Result<(), MpvError> {
+    /// Create the OpenGL render context, optionally enabling Wayland native
+    /// display interop for direct hardware decoding.
+    ///
+    /// When supplied, the display resource is retained until
+    /// [`Self::destroy_render_context`] frees the libmpv render context.
+    pub fn create_render_context(
+        &mut self,
+        native_wayland_display: Option<NativeWaylandDisplay>,
+    ) -> Result<(), MpvError> {
         if self.render_context.is_some() {
             return Ok(());
         }
@@ -1045,26 +1124,22 @@ impl Mpv {
             get_proc_address: Some(get_proc_address),
             get_proc_address_ctx: ptr::null_mut(),
         };
-        let mut params = [
-            ffi::mpv_render_param {
-                param_type: ffi::MPV_RENDER_PARAM_API_TYPE,
-                data: api.as_ptr() as *mut c_void,
-            },
-            ffi::mpv_render_param {
-                param_type: ffi::MPV_RENDER_PARAM_OPENGL_INIT_PARAMS,
-                data: &mut init_params as *mut _ as *mut c_void,
-            },
-            ffi::mpv_render_param {
-                param_type: ffi::MPV_RENDER_PARAM_INVALID,
-                data: ptr::null_mut(),
-            },
-        ];
+        let mut params = render_context_parameters(
+            &api,
+            &mut init_params,
+            native_wayland_display
+                .as_ref()
+                .map(NativeWaylandDisplay::pointer),
+        );
 
         let mut context = ptr::null_mut();
         check(unsafe {
             ffi::mpv_render_context_create(&mut context, self.handle.as_ptr(), params.as_mut_ptr())
         })?;
         self.render_context = NonNull::new(context);
+        if self.render_context.is_some() {
+            self.render_context_native_wayland_display = native_wayland_display;
+        }
 
         Ok(())
     }
@@ -1342,6 +1417,7 @@ impl Mpv {
                 ffi::mpv_render_context_free(context.as_ptr());
             }
         }
+        self.render_context_native_wayland_display.take();
     }
 
     fn set_option(&self, name: &str, value: &str) -> Result<(), MpvError> {
@@ -1825,12 +1901,70 @@ fn path_to_cstring(path: &Path) -> Result<CString, NulError> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::fs;
+    use std::rc::Rc;
     use std::time::{Duration, Instant};
 
     use okp_test_fixtures::unique_temp_dir;
 
     use super::*;
+
+    #[test]
+    fn render_context_parameters_include_wayland_display_only_when_present() {
+        let mut init_params = ffi::mpv_opengl_init_params {
+            get_proc_address: None,
+            get_proc_address_ctx: ptr::null_mut(),
+        };
+        let without_wayland = render_context_parameters(c"opengl", &mut init_params, None);
+        assert_eq!(
+            without_wayland
+                .iter()
+                .map(|parameter| parameter.param_type)
+                .collect::<Vec<_>>(),
+            vec![
+                ffi::MPV_RENDER_PARAM_API_TYPE,
+                ffi::MPV_RENDER_PARAM_OPENGL_INIT_PARAMS,
+                ffi::MPV_RENDER_PARAM_INVALID,
+            ]
+        );
+
+        let display = NonNull::<c_void>::dangling();
+        let with_wayland = render_context_parameters(c"opengl", &mut init_params, Some(display));
+        assert_eq!(
+            with_wayland
+                .iter()
+                .map(|parameter| parameter.param_type)
+                .collect::<Vec<_>>(),
+            vec![
+                ffi::MPV_RENDER_PARAM_API_TYPE,
+                ffi::MPV_RENDER_PARAM_OPENGL_INIT_PARAMS,
+                ffi::MPV_RENDER_PARAM_WL_DISPLAY,
+                ffi::MPV_RENDER_PARAM_INVALID,
+            ]
+        );
+        assert_eq!(with_wayland[2].data, display.as_ptr());
+        assert!(with_wayland[3].data.is_null());
+    }
+
+    #[test]
+    fn native_wayland_display_retains_its_owner_until_drop() {
+        struct Owner(Rc<Cell<bool>>);
+
+        impl Drop for Owner {
+            fn drop(&mut self) {
+                self.0.set(true);
+            }
+        }
+
+        let dropped = Rc::new(Cell::new(false));
+        let display = unsafe {
+            NativeWaylandDisplay::new(NonNull::<c_void>::dangling(), Owner(Rc::clone(&dropped)))
+        };
+        assert!(!dropped.get());
+        drop(display);
+        assert!(dropped.get());
+    }
 
     fn fixture_media_path() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))

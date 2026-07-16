@@ -1429,6 +1429,14 @@ fn always_on_top_backend_is_explicit_for_x11_and_unsupported_displays() {
 }
 
 #[test]
+fn native_display_interop_is_requested_only_for_wayland() {
+    assert!(is_wayland_display("GdkWaylandDisplay"));
+    for display in ["GdkX11Display", "GdkBroadwayDisplay", ""] {
+        assert!(!is_wayland_display(display), "{display}");
+    }
+}
+
+#[test]
 fn track_label_shows_tags_without_a_selection_prefix() {
     // Selection is shown by the row's leading check, so the label must never
     // prepend "On " (which used to shift long titles and break alignment).

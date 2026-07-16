@@ -27,3 +27,12 @@ native/
   is supplied by the GL binding layer.
 
 When distributing, add `THIRD-PARTY-NOTICES.md` (mpv/GPL + ANGLE notices) at the repo root.
+
+## Linux native display interop
+
+The Linux client links the system GTK and libmpv packages rather than bundling native binaries.
+When its `GtkGLArea` is realized on Wayland, the shell obtains that GDK display's `wl_display*`
+on the GTK render thread and supplies it to libmpv as `MPV_RENDER_PARAM_WL_DISPLAY`. The GDK
+display reference is retained until the mpv render context is freed, as required by libmpv for
+direct hardware-decoding interop. X11, headless, and GTK builds without the Wayland accessor omit
+the parameter and continue through the existing OpenGL path.
