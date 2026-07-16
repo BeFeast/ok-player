@@ -190,9 +190,9 @@ struct PlayerState {
     /// Latest optimistic UI/shortcut projection awaiting the matching mpv observation.
     /// This prevents the poll loop from rebasing rapid nudges on an older snapshot.
     pending_volume: Option<f64>,
-    /// The URL most recently handed to the engine, kept so the failure surface's
-    /// Retry action can replay the same source. Cleared on close / new load.
-    last_load_url: Option<String>,
+    /// The source most recently handed to the engine, kept so the failure surface's
+    /// Retry action can replay the same source. Cleared on close.
+    retry_load_source: Option<network_media::LoadFailureSource>,
     /// The short, copyable reason for the most recent load failure — surfaced
     /// through the in-canvas card's Copy details action instead of raw logs.
     last_load_error: Option<String>,
@@ -992,9 +992,15 @@ impl MediaStateOverlay {
         retry_button.add_css_class("okp-error-primary");
         let retry_state = Rc::clone(&state);
         retry_button.connect_clicked(move |_| {
-            let url = retry_state.borrow().last_load_url.clone();
-            if let Some(url) = url {
-                load_media_url(&retry_state, url);
+            let source = retry_state.borrow().retry_load_source.clone();
+            match source {
+                Some(network_media::LoadFailureSource::Url(url)) => {
+                    load_media_url(&retry_state, url)
+                }
+                Some(network_media::LoadFailureSource::Local(path)) => {
+                    load_media_path(&retry_state, path)
+                }
+                None => {}
             }
         });
 
@@ -1004,7 +1010,12 @@ impl MediaStateOverlay {
         let open_state = Rc::clone(&state);
         let open_toast = Rc::clone(&status_toast);
         open_button.connect_clicked(move |_| {
-            if open_state.borrow().last_load_url.is_some() {
+            if open_state
+                .borrow()
+                .retry_load_source
+                .as_ref()
+                .is_some_and(network_media::LoadFailureSource::is_url)
+            {
                 open_url_dialog(&open_parent, Rc::clone(&open_state), Rc::clone(&open_toast));
             } else {
                 open_media_dialog(&open_parent, Rc::clone(&open_state), Rc::clone(&open_toast));
@@ -1020,9 +1031,9 @@ impl MediaStateOverlay {
                 let state = copy_state.borrow();
                 let reason = state.last_load_error.as_deref().unwrap_or("");
                 state
-                    .last_load_url
-                    .as_deref()
-                    .map(|url| network_media::failure_detail(url, reason))
+                    .retry_load_source
+                    .as_ref()
+                    .map(|source| network_media::failure_detail(source, reason))
                     .unwrap_or_else(|| {
                         if reason.trim().is_empty() {
                             "OK Player could not open the media.".to_owned()

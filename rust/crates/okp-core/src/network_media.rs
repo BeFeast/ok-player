@@ -1,12 +1,13 @@
-//! Network URL and live-stream UI state — the pure model the Linux shell renders for a
-//! non-file source (PRD §3 transport: loading, buffering, unknown-duration, and error
-//! states). Shell-free so the classification is unit-testable; the shell only projects it
-//! onto widgets.
+//! Media loading and live-stream UI state — the pure model the Linux shell renders for
+//! loading, buffering, unknown-duration, and error states. Shell-free so the
+//! classification is unit-testable; the shell only projects it onto widgets.
 //!
 //! No parsing, state-machine, schema, or business logic belongs in a shell
 //! (freeze-boundary), so the load-state machine, the live/unknown-duration predicate,
 //! and the failure-action model live here. The Linux shell renders the model today; the
 //! Windows shell renders the same model once its port lands.
+
+use std::path::{Path, PathBuf};
 
 /// The transport-surface state for the loaded source, derived from what the shell has
 /// observed from the engine. The shell transitions this on `load_url`/`load_file`, the
@@ -87,14 +88,52 @@ pub fn classify_load_state(is_loaded: bool, file_loaded: bool, load_error: bool)
     }
 }
 
-/// The recoverable actions offered when a URL load fails (PRD §3, retry / copy details).
+/// The source that can be retried from a failed load card.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoadFailureSource {
+    /// A local media file.
+    Local(PathBuf),
+    /// A network stream or URL.
+    Url(String),
+}
+
+impl LoadFailureSource {
+    /// Build a local-file retry source.
+    pub fn local(path: impl Into<PathBuf>) -> Self {
+        Self::Local(path.into())
+    }
+
+    /// Build a URL retry source.
+    pub fn url(url: impl Into<String>) -> Self {
+        Self::Url(url.into())
+    }
+
+    /// True when the failed source was a URL.
+    pub fn is_url(&self) -> bool {
+        matches!(self, Self::Url(_))
+    }
+
+    /// True when the engine's ended path identifies this source.
+    pub fn matches_engine_path(&self, ended_path: &str) -> bool {
+        match self {
+            Self::Local(path) => engine_path_matches_local(path, ended_path),
+            Self::Url(url) => url == ended_path,
+        }
+    }
+}
+
+fn engine_path_matches_local(path: &Path, ended_path: &str) -> bool {
+    path.to_string_lossy() == ended_path
+}
+
+/// The recoverable actions offered when a load fails (PRD §2.1, retry / copy details).
 /// The ordered set is exposed via [`LOAD_FAILURE_ACTIONS`] so the shell renders a
 /// consistent action row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoadFailureAction {
-    /// Retry the same URL.
+    /// Retry the same source.
     Retry,
-    /// Open a different URL.
+    /// Open a different source.
     OpenAnother,
     /// Copy a short, copyable diagnostic (not raw internal logs).
     CopyDetails,
@@ -118,17 +157,30 @@ impl LoadFailureAction {
     }
 }
 
-/// Build the copyable diagnostic line for a failed URL load — a short, stable summary
-/// (URL + reason) rather than the raw internal log, so the primary UI never dumps
+/// Build the copyable diagnostic line for a failed load — a short, stable summary
+/// (source + reason) rather than the raw internal log, so the primary UI never dumps
 /// engine trace into the clipboard. `reason` is the short human-readable cause the
 /// shell already produced (e.g. `libmpv error 412`), not a verbatim log buffer; an
 /// empty reason is omitted so a transient failure still copies a clean line.
-pub fn failure_detail(url: &str, reason: &str) -> String {
+pub fn failure_detail(source: &LoadFailureSource, reason: &str) -> String {
     let reason = reason.trim();
-    if reason.is_empty() {
-        format!("OK Player could not open the stream.\nURL: {url}")
-    } else {
-        format!("OK Player could not open the stream.\nURL: {url}\nReason: {reason}")
+    match source {
+        LoadFailureSource::Url(url) if reason.is_empty() => {
+            format!("OK Player could not open the stream.\nURL: {url}")
+        }
+        LoadFailureSource::Url(url) => {
+            format!("OK Player could not open the stream.\nURL: {url}\nReason: {reason}")
+        }
+        LoadFailureSource::Local(path) if reason.is_empty() => {
+            format!(
+                "OK Player could not open the media.\nPath: {}",
+                path.display()
+            )
+        }
+        LoadFailureSource::Local(path) => format!(
+            "OK Player could not open the media.\nPath: {}\nReason: {reason}",
+            path.display()
+        ),
     }
 }
 
@@ -232,20 +284,51 @@ mod tests {
     }
 
     #[test]
-    fn failure_detail_includes_url_and_reason_without_raw_logs() {
+    fn load_failure_source_matches_engine_path() {
+        assert!(
+            LoadFailureSource::local("/media/movie.mkv").matches_engine_path("/media/movie.mkv")
+        );
+        assert!(
+            !LoadFailureSource::local("/media/movie.mkv").matches_engine_path("/media/other.mkv")
+        );
+        assert!(
+            LoadFailureSource::url("https://example.com/live.m3u8")
+                .matches_engine_path("https://example.com/live.m3u8")
+        );
+        assert!(
+            !LoadFailureSource::url("https://example.com/live.m3u8")
+                .matches_engine_path("https://example.com/other.m3u8")
+        );
+        assert!(LoadFailureSource::url("https://example.com/live.m3u8").is_url());
+        assert!(!LoadFailureSource::local("/media/movie.mkv").is_url());
+    }
+
+    #[test]
+    fn failure_detail_includes_source_and_reason_without_raw_logs() {
+        let url = LoadFailureSource::url("https://example.com/live.m3u8");
         assert_eq!(
-            failure_detail("https://example.com/live.m3u8", "libmpv error 412"),
+            failure_detail(&url, "libmpv error 412"),
             "OK Player could not open the stream.\nURL: https://example.com/live.m3u8\nReason: libmpv error 412"
         );
         // An empty reason is omitted so a transient failure still copies a clean line.
         assert_eq!(
-            failure_detail("https://example.com/live.m3u8", ""),
+            failure_detail(&url, ""),
             "OK Player could not open the stream.\nURL: https://example.com/live.m3u8"
         );
         // Whitespace-only reason is treated as empty.
         assert_eq!(
-            failure_detail("https://example.com/live.m3u8", "   "),
+            failure_detail(&url, "   "),
             "OK Player could not open the stream.\nURL: https://example.com/live.m3u8"
+        );
+
+        let local = LoadFailureSource::local("/media/movie.mkv");
+        assert_eq!(
+            failure_detail(&local, "libmpv error 7"),
+            "OK Player could not open the media.\nPath: /media/movie.mkv\nReason: libmpv error 7"
+        );
+        assert_eq!(
+            failure_detail(&local, ""),
+            "OK Player could not open the media.\nPath: /media/movie.mkv"
         );
     }
 }
