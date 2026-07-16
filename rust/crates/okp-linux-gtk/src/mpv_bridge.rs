@@ -130,6 +130,9 @@ pub(crate) fn connect_mpv(
             eprintln!("Failed to create mpv render context: {error}");
             return;
         }
+        if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
+            eprintln!("mpv render context initialized before source load");
+        }
 
         // Start the background event pump: from here on the shell reads playback
         // state from its observed snapshot rather than polling mpv from this
@@ -343,10 +346,20 @@ pub(crate) fn connect_state_poll(
     } = context;
     glib::timeout_add_local(Duration::from_millis(200), move || {
         let auto_fit_dimensions = drain_mpv_events(&state, &status_toast);
-        if let Some((generation, dimensions)) =
-            consume_initial_window_fit(&state, auto_fit_dimensions)
+        observe_initial_window_fit(&state, auto_fit_dimensions);
+        // A normally realized-but-not-yet-mapped surface may already expose
+        // its compositor-selected bounds. Use that opportunity without forcing
+        // realization; otherwise keep the core request pending until mapping.
+        if (window.is_mapped() || current_player_work_area(&window, &window_bounds).is_some())
+            && let Some(request) = take_initial_window_fit(&state)
         {
-            fit_player_window_to_video(&window, &state, &window_bounds, generation, dimensions);
+            fit_player_window_to_video(
+                &window,
+                &state,
+                &window_bounds,
+                request.source_generation,
+                request.video,
+            );
         }
         drain_screenshot_jobs(&state, &status_toast);
         try_pending_audio_device_restore(&state);
@@ -561,18 +574,28 @@ pub(crate) fn connect_state_poll(
     });
 }
 
-pub(crate) fn consume_initial_window_fit(
+pub(crate) fn observe_initial_window_fit(
     state: &Rc<RefCell<PlayerState>>,
     video_dimensions: Option<VideoDimensions>,
-) -> Option<(u64, VideoDimensions)> {
-    let video_dimensions = video_dimensions?;
+) -> bool {
+    let Some(video_dimensions) = video_dimensions else {
+        return false;
+    };
     let mut state = state.borrow_mut();
     let source_generation = state.source_generation;
-    if state.initial_window_fit_generation == Some(source_generation) {
-        return None;
-    }
-    state.initial_window_fit_generation = Some(source_generation);
-    Some((source_generation, video_dimensions))
+    state.initial_window_fit.observe_dimensions(
+        source_generation,
+        video_dimensions.width,
+        video_dimensions.height,
+    )
+}
+
+pub(crate) fn take_initial_window_fit(
+    state: &Rc<RefCell<PlayerState>>,
+) -> Option<window_fit::InitialFitRequest> {
+    let mut state = state.borrow_mut();
+    let source_generation = state.source_generation;
+    state.initial_window_fit.take(source_generation)
 }
 
 /// Project the shared load state and observed pause flag onto the in-canvas

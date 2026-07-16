@@ -280,6 +280,20 @@ geometry_value() {
   awk -v label="$label" '$1 == label ":" { print $2; exit }' "$file"
 }
 
+wait_for_log() {
+  local file="$1" pattern="$2"
+  for _ in $(seq 1 50); do
+    if rg -q "$pattern" "$file"; then
+      return 0
+    fi
+    if [[ -n "$app_pid" ]] && ! kill -0 "$app_pid" 2>/dev/null; then
+      return 1
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
 export DISPLAY="$PRIMARY_DISPLAY"
 start_app "fit-small-app.log" "$FIXTURES/fit-small.mkv"
 small_id="$(wait_for_window "$OUT_DIR/fit-small-window.ids")"
@@ -291,6 +305,32 @@ small_width="$(geometry_value "$OUT_DIR/fit-small-window.xwininfo" Width)"
 small_height="$(geometry_value "$OUT_DIR/fit-small-window.xwininfo" Height)"
 if [[ "$small_width" != "320" || "$small_height" != "180" ]]; then
   echo "Small video did not use native size: ${small_width}x${small_height}" >&2
+  exit 1
+fi
+for expected in \
+  "mpv render context initialized before source load" \
+  "window fit request: video=320x180" \
+  "window fit settled: client=320x180"; do
+  if ! wait_for_log "$OUT_DIR/fit-small-app.log" "$expected"; then
+    echo "Initial-fit sequence did not log: $expected" >&2
+    cat "$OUT_DIR/fit-small-app.log" >&2
+    exit 1
+  fi
+done
+
+# Playback and the original render context remain live through initial sizing
+# and ordinary seek input. The 12-second fixture accepts +10 then -10 without
+# ending the source, which catches the prior active-source teardown failure.
+xdotool key --clearmodifiers Right Left
+sleep 1
+if ! kill -0 "$app_pid" 2>/dev/null; then
+  echo "Player exited after initial sizing and seek input" >&2
+  cat "$OUT_DIR/fit-small-app.log" >&2
+  exit 1
+fi
+if rg -qi "error -15|protocol error 71" "$OUT_DIR/fit-small-app.log"; then
+  echo "Initial sizing reproduced a forbidden playback/protocol error" >&2
+  cat "$OUT_DIR/fit-small-app.log" >&2
   exit 1
 fi
 
@@ -327,7 +367,8 @@ if (( max_width < 1200 || max_height < 840 )); then
   echo "Media load resized a maximized window: ${max_width}x${max_height}" >&2
   exit 1
 fi
-if ! rg -q "window fit skipped: fullscreen=false maximized=true" "$OUT_DIR/fit-maximized-app.log"; then
+if ! wait_for_log "$OUT_DIR/fit-maximized-app.log" \
+  "window fit skipped: fullscreen=false maximized=true"; then
   echo "Maximized load did not exercise the window-fit guard" >&2
   exit 1
 fi
@@ -348,7 +389,8 @@ if (( fullscreen_width < 1270 || fullscreen_height < 890 )); then
   echo "Media load resized a fullscreen window: ${fullscreen_width}x${fullscreen_height}" >&2
   exit 1
 fi
-if ! rg -q "window fit skipped: fullscreen=true maximized=false" "$OUT_DIR/fit-fullscreen-app.log"; then
+if ! wait_for_log "$OUT_DIR/fit-fullscreen-app.log" \
+  "window fit skipped: fullscreen=true maximized=false"; then
   echo "Fullscreen load did not exercise the window-fit guard" >&2
   exit 1
 fi

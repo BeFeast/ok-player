@@ -694,7 +694,9 @@ fn track_selection_id(selection: launch_args::TrackSelection) -> Option<i64> {
 
 fn advance_source_generation(state: &mut PlayerState) {
     state.source_generation = state.source_generation.wrapping_add(1);
-    state.initial_window_fit_generation = None;
+    state
+        .initial_window_fit
+        .begin_source(state.source_generation);
     state.seek_generation = 0;
 }
 

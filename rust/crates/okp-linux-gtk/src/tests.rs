@@ -2790,16 +2790,25 @@ fn initial_window_fit_is_consumed_once_per_source_generation() {
     };
 
     remember_loaded_url(&state, "https://example.com/movie.mp4".to_owned());
+    assert!(observe_initial_window_fit(&state, Some(dimensions)));
     assert_eq!(
-        consume_initial_window_fit(&state, Some(dimensions)),
-        Some((1, dimensions))
+        take_initial_window_fit(&state),
+        Some(window_fit::InitialFitRequest {
+            source_generation: 1,
+            video: window_fit::WindowSize {
+                width: 3840,
+                height: 2160,
+            },
+        })
     );
-    assert_eq!(consume_initial_window_fit(&state, Some(dimensions)), None);
+    assert!(!observe_initial_window_fit(&state, Some(dimensions)));
+    assert_eq!(take_initial_window_fit(&state), None);
 
     remember_loaded_url(&state, "https://example.com/movie.mp4".to_owned());
+    assert!(observe_initial_window_fit(&state, Some(dimensions)));
     assert_eq!(
-        consume_initial_window_fit(&state, Some(dimensions)),
-        Some((2, dimensions))
+        take_initial_window_fit(&state).map(|request| request.source_generation),
+        Some(2)
     );
 }
 
@@ -2812,12 +2821,18 @@ fn missing_file_loaded_dimensions_do_not_consume_initial_window_fit() {
     };
 
     remember_loaded_url(&state, "https://example.com/live.m3u8".to_owned());
-    assert_eq!(consume_initial_window_fit(&state, None), None);
+    assert!(!observe_initial_window_fit(&state, None));
+    assert_eq!(take_initial_window_fit(&state), None);
+    assert!(observe_initial_window_fit(&state, Some(dimensions)));
     assert_eq!(
-        consume_initial_window_fit(&state, Some(dimensions)),
-        Some((1, dimensions))
+        take_initial_window_fit(&state).map(|request| request.video),
+        Some(window_fit::WindowSize {
+            width: 1920,
+            height: 1080,
+        })
     );
-    assert_eq!(consume_initial_window_fit(&state, Some(dimensions)), None);
+    assert!(!observe_initial_window_fit(&state, Some(dimensions)));
+    assert_eq!(take_initial_window_fit(&state), None);
 }
 
 #[test]

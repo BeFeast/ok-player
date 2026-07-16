@@ -493,7 +493,7 @@ pub(crate) fn fit_player_window_to_video(
     state: &Rc<RefCell<PlayerState>>,
     reported_bounds: &Rc<RefCell<Option<PlayerWindowBounds>>>,
     source_generation: u64,
-    video: VideoDimensions,
+    video: window_fit::WindowSize,
 ) {
     let debug = env::var_os("OKP_DEBUG_WINDOW_FIT").is_some();
     // Existing pixel-redline smokes intentionally hold the canonical 1120x680
@@ -546,67 +546,139 @@ pub(crate) fn fit_player_window_to_video(
         );
     }
     window.set_default_size(placement.size.width, placement.size.height);
-    let moved = move_resize_player_window_on_x11(window, placement.position, placement.size);
+    move_resize_player_window_on_x11(window, placement.position, placement.size);
+    schedule_player_window_fit_settle(
+        window,
+        state,
+        reported_bounds,
+        source_generation,
+        video,
+        work_area,
+        placement,
+    );
+}
 
+fn schedule_player_window_fit_settle(
+    window: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
+    reported_bounds: &Rc<RefCell<Option<PlayerWindowBounds>>>,
+    source_generation: u64,
+    video: window_fit::WindowSize,
+    requested_work_area: window_fit::WindowRect,
+    requested: window_fit::WindowPlacement,
+) {
     let settled_window = window.clone();
     let settled_state = Rc::clone(state);
     let settled_bounds = Rc::clone(reported_bounds);
     glib::timeout_add_local_once(Duration::from_millis(300), move || {
-        if settled_state.borrow().source_generation != source_generation
-            || settled_window.is_fullscreen()
-            || settled_window.is_maximized()
-        {
+        if !window_fit_generation_is_current(&settled_window, &settled_state, source_generation) {
             return;
         }
-        let actual_width = settled_window.width();
-        let actual_height = settled_window.height();
-        if actual_width <= placement.size.width
-            && actual_height <= placement.size.height
+        let Some(current_work_area) = current_player_work_area(&settled_window, &settled_bounds)
+        else {
+            return;
+        };
+        let current_scale = current_player_scale(&settled_window);
+        let retargeted = window_fit::smaller_fit_for_work_area(
+            video.width,
+            video.height,
+            current_scale,
+            current_work_area,
+            requested,
+        );
+        if let Some(retargeted) = retargeted {
+            settled_window.set_default_size(retargeted.size.width, retargeted.size.height);
+            move_resize_player_window_on_x11(&settled_window, retargeted.position, retargeted.size);
+            if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
+                eprintln!(
+                    "window fit retargeted: previous-workarea={}x{}+{},{} current-workarea={}x{}+{},{} target={}x{}",
+                    requested_work_area.width,
+                    requested_work_area.height,
+                    requested_work_area.x,
+                    requested_work_area.y,
+                    current_work_area.width,
+                    current_work_area.height,
+                    current_work_area.x,
+                    current_work_area.y,
+                    retargeted.size.width,
+                    retargeted.size.height,
+                );
+            }
+            finish_player_window_fit_after(
+                settled_window,
+                settled_state,
+                settled_bounds,
+                source_generation,
+                video,
+                retargeted,
+                Duration::from_millis(300),
+            );
+        } else {
+            finish_player_window_fit_after(
+                settled_window,
+                settled_state,
+                settled_bounds,
+                source_generation,
+                video,
+                requested,
+                Duration::ZERO,
+            );
+        }
+    });
+}
+
+fn finish_player_window_fit_after(
+    window: gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    reported_bounds: Rc<RefCell<Option<PlayerWindowBounds>>>,
+    source_generation: u64,
+    video: window_fit::WindowSize,
+    target: window_fit::WindowPlacement,
+    delay: Duration,
+) {
+    glib::timeout_add_local_once(delay, move || {
+        if !window_fit_generation_is_current(&window, &state, source_generation) {
+            return;
+        }
+        let actual_width = window.width();
+        let actual_height = window.height();
+        let mut position_delay = Duration::ZERO;
+        if actual_width <= target.size.width
+            && actual_height <= target.size.height
             && let Some(corrected) = window_fit::fill_client(
                 video.width,
                 video.height,
                 actual_width,
                 actual_height,
-                placement.size.width,
-                placement.size.height,
+                target.size.width,
+                target.size.height,
             )
         {
-            settled_window.set_default_size(corrected.width, corrected.height);
+            window.set_default_size(corrected.width, corrected.height);
+            position_delay = Duration::from_millis(150);
         }
-        if debug {
-            eprintln!(
-                "window fit settled: client={}x{} backend={}",
-                settled_window.width(),
-                settled_window.height(),
-                if moved { "x11" } else { "compositor" }
-            );
-        }
-
-        let positioned_window = settled_window.clone();
-        let positioned_state = Rc::clone(&settled_state);
-        let positioned_bounds = Rc::clone(&settled_bounds);
-        glib::timeout_add_local_once(Duration::from_millis(150), move || {
-            if positioned_state.borrow().source_generation != source_generation
-                || positioned_window.is_fullscreen()
-                || positioned_window.is_maximized()
-            {
+        glib::timeout_add_local_once(position_delay, move || {
+            if !window_fit_generation_is_current(&window, &state, source_generation) {
                 return;
             }
-            let Some(work_area) = current_player_work_area(&positioned_window, &positioned_bounds)
-            else {
+            let Some(work_area) = current_player_work_area(&window, &reported_bounds) else {
                 return;
             };
             let final_size = window_fit::WindowSize {
-                width: positioned_window.width(),
-                height: positioned_window.height(),
+                width: window.width(),
+                height: window.height(),
             };
             let position = window_fit::centered_position(final_size, work_area);
-            let moved = move_resize_player_window_on_x11(&positioned_window, position, final_size);
-            if debug {
+            let moved = move_resize_player_window_on_x11(&window, position, final_size);
+            if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
                 eprintln!(
-                    "window fit positioned: client={}x{} target=+{},{} backend={}",
+                    "window fit settled: client={}x{} workarea={}x{}+{},{} target=+{},{} backend={}",
                     final_size.width,
                     final_size.height,
+                    work_area.width,
+                    work_area.height,
+                    work_area.x,
+                    work_area.y,
                     position.x,
                     position.y,
                     if moved { "x11" } else { "compositor" }
@@ -614,6 +686,16 @@ pub(crate) fn fit_player_window_to_video(
             }
         });
     });
+}
+
+fn window_fit_generation_is_current(
+    window: &gtk::ApplicationWindow,
+    state: &RefCell<PlayerState>,
+    source_generation: u64,
+) -> bool {
+    state.borrow().source_generation == source_generation
+        && !window.is_fullscreen()
+        && !window.is_maximized()
 }
 
 pub(crate) fn open_runtime_launch_args(runtime: &AppRuntime, launch_args: &LaunchArgs) {

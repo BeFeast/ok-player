@@ -160,7 +160,7 @@ struct PlayerState {
     current_file: Option<PathBuf>,
     current_url: Option<String>,
     source_generation: u64,
-    initial_window_fit_generation: Option<u64>,
+    initial_window_fit: window_fit::InitialFitState,
     seek_generation: u64,
     playlist: Playlist,
     pending_subtitles: Vec<PathBuf>,
