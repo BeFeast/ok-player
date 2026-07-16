@@ -27,8 +27,26 @@ pub fn audio_track_label(
     channels: Option<&str>,
     codec: Option<&str>,
 ) -> String {
+    let (name, detail) = audio_track_parts(id, title, lang, channels, codec);
+    if detail.is_empty() {
+        name
+    } else {
+        format!("{name} · {detail}")
+    }
+}
+
+/// The compact audio-switcher hierarchy: a stable primary name followed by an
+/// optional language/channel/codec detail line. Shells can render the two parts
+/// natively without duplicating normalization or language deduplication.
+pub fn audio_track_parts(
+    id: i64,
+    title: Option<&str>,
+    lang: Option<&str>,
+    channels: Option<&str>,
+    codec: Option<&str>,
+) -> (String, String) {
     let primary = primary_track_name(id, title, lang);
-    let mut parts = vec![primary.clone()];
+    let mut detail = Vec::new();
 
     if clean(title).is_some()
         && let Some(lang) = clean(lang)
@@ -36,16 +54,16 @@ pub fn audio_track_label(
             .to_ascii_lowercase()
             .contains(&lang.to_ascii_lowercase())
     {
-        parts.push(lang.to_ascii_uppercase());
+        detail.push(lang.to_ascii_uppercase());
     }
     if let Some(channels) = clean(channels) {
-        parts.push(channels);
+        detail.push(channels);
     }
     if let Some(codec) = clean(codec) {
-        parts.push(codec.to_ascii_uppercase());
+        detail.push(codec.to_ascii_uppercase());
     }
 
-    parts.join(" · ")
+    (primary, detail.join(" · "))
 }
 
 /// The subtitle quick-switcher descriptor: the primary name followed by a
@@ -125,6 +143,39 @@ mod tests {
                 Some("ac3"),
             ),
             "Director's Commentary · ENG · 2.0 · AC3"
+        );
+    }
+
+    #[test]
+    fn audio_parts_preserve_the_compact_two_line_hierarchy() {
+        assert_eq!(
+            audio_track_parts(
+                3,
+                Some("Director's Commentary"),
+                Some("eng"),
+                Some("2.0"),
+                Some("ac3"),
+            ),
+            (
+                "Director's Commentary".to_owned(),
+                "ENG · 2.0 · AC3".to_owned()
+            )
+        );
+        assert_eq!(
+            audio_track_parts(7, None, None, None, None),
+            ("Track 7".to_owned(), String::new())
+        );
+    }
+
+    #[test]
+    fn audio_parts_do_not_repeat_a_language_used_as_the_primary_name() {
+        assert_eq!(
+            audio_track_parts(4, None, Some("jpn"), Some("2.0"), Some("aac")),
+            ("jpn".to_owned(), "2.0 · AAC".to_owned())
+        );
+        assert_eq!(
+            audio_track_parts(1, Some("English"), Some("eng"), Some("5.1"), Some("eac3")),
+            ("English".to_owned(), "5.1 · EAC3".to_owned())
         );
     }
 

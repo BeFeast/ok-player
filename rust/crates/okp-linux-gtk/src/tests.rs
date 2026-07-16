@@ -1244,6 +1244,164 @@ fn track_label_shows_tags_without_a_selection_prefix() {
 }
 
 #[test]
+fn player_popovers_keep_their_canonical_independent_widths() {
+    assert_eq!(PlayerPopoverKind::Speed.width(), 120);
+    assert_eq!(PlayerPopoverKind::Subtitles.width(), 262);
+    assert_eq!(PlayerPopoverKind::Audio.width(), 248);
+    assert_eq!(PlayerPopoverKind::More.width(), 210);
+
+    let quick_widths = [
+        PlayerPopoverKind::Speed.width(),
+        PlayerPopoverKind::Subtitles.width(),
+        PlayerPopoverKind::Audio.width(),
+        PlayerPopoverKind::More.width(),
+    ];
+    assert!(!quick_widths.contains(&PlayerPopoverKind::AdvancedCommands.width()));
+    assert_eq!(PlayerPopoverKind::AdvancedCommands.width(), 320);
+}
+
+#[test]
+fn more_stays_curated_while_video_right_click_keeps_legacy_commands() {
+    let source = include_str!("track_popovers.rs");
+    let more = source
+        .split_once("pub(crate) fn more_popover_content")
+        .expect("More popover implementation")
+        .1
+        .split_once("pub(crate) fn advanced_command_popover_content")
+        .expect("advanced popover follows More")
+        .0;
+    let advanced = source
+        .split_once("pub(crate) fn advanced_command_popover_content")
+        .expect("advanced popover implementation")
+        .1
+        .split_once("pub(crate) fn track_popover_content")
+        .expect("track popover helper follows advanced commands")
+        .0;
+
+    let curated_more = [
+        "Open file...",
+        "Close file",
+        "A-B loop",
+        "Screenshot with subtitles",
+        "Copy frame to clipboard",
+        "Media info...",
+        "Settings...",
+    ];
+    assert_eq!(more.matches("command_button(").count(), curated_more.len());
+    for label in curated_more {
+        assert!(more.contains(&format!("command_button(\"{label}\"")));
+    }
+    assert!(!more.contains("Open URL..."));
+    assert!(!more.contains("Clear History..."));
+
+    for label in [
+        "Open URL...",
+        "Open Folder...",
+        "Open Playlist...",
+        "Add to Queue...",
+        "Play Next...",
+        "Save Playlist...",
+        "Settings...",
+        "Media Info...",
+        "Open File Location",
+        "Go to Time...",
+        "Copy Current Time",
+        "Add Bookmark",
+        "A-B loop",
+        "Rotate 90°",
+        "Fill screen (crop bars)",
+        "Reset video",
+        "Save frame",
+        "Save frame with subtitles",
+        "Copy frame to clipboard",
+        "Close Media",
+        "Clear History...",
+    ] {
+        assert!(
+            advanced.contains(label),
+            "missing advanced command: {label}"
+        );
+    }
+    for implementation_marker in [
+        "VIDEO_ASPECT_PRESETS",
+        "Enter Fullscreen",
+        "Exit Fullscreen",
+        "Private Session On",
+        "Private Session Off",
+        "repeat_mode_label(repeat_mode)",
+        "Shuffle On",
+        "Shuffle Off",
+        "Auto-advance On",
+        "Auto-advance Off",
+    ] {
+        assert!(
+            advanced.contains(implementation_marker),
+            "missing advanced command family: {implementation_marker}"
+        );
+    }
+
+    let video_clicks = include_str!("mpv_bridge.rs");
+    assert!(video_clicks.contains("context_click.set_button(3)"));
+    assert!(video_clicks.contains("show_video_context_menu("));
+    assert!(video_clicks.contains("advanced_command_popover_content("));
+}
+
+#[test]
+fn subtitle_delay_projection_drives_quick_popover_and_settings_refresh() {
+    // Both visible surfaces retain the exact projected delay instead of
+    // immediately replacing it with the asynchronous mpv observer snapshot.
+    let quick_popover = include_str!("track_popovers.rs");
+    assert!(quick_popover.contains("button_delay.set(applied_delay)"));
+    assert!(quick_popover.contains("format_label(applied_delay)"));
+
+    let settings = include_str!("settings_pages.rs");
+    assert!(settings.contains("projected_delay.set(applied_delay)"));
+    assert!(settings.contains("format_label(projected_delay)"));
+
+    let target = subtitle_delay_target(-0.25, SubtitleAdjustment::Delay(0.05))
+        .expect("delay adjustment should produce an exact target");
+    assert_eq!(target, -0.2);
+
+    let next_target = subtitle_delay_target(target, SubtitleAdjustment::Delay(0.05))
+        .expect("rapid delay adjustments should accumulate from the projection");
+    okp_test_fixtures::assert_close(next_target, -0.15, f64::EPSILON);
+}
+
+#[test]
+fn subtitle_delay_override_persists_the_applied_settings_value() {
+    let target = subtitle_delay_target(-0.25, SubtitleAdjustment::Delay(0.05))
+        .expect("delay adjustment should produce an exact target");
+
+    let observed = history::PlaybackPreferences {
+        subtitle_delay: Some(-0.25),
+        subtitle_scale: Some(1.2),
+        audio_delay: Some(0.1),
+        ..history::PlaybackPreferences::default()
+    };
+
+    let persisted = playback_preferences_with_delay_overrides(observed, Some(target), None);
+
+    assert_eq!(persisted.subtitle_delay, Some(-0.2));
+    assert_eq!(persisted.subtitle_scale, Some(1.2));
+    assert_eq!(persisted.audio_delay, Some(0.1));
+}
+
+#[test]
+fn player_popovers_have_scoped_presenter_classes() {
+    assert_eq!(PlayerPopoverKind::Speed.css_class(), "okp-speed-popover");
+    assert_eq!(
+        PlayerPopoverKind::Subtitles.css_class(),
+        "okp-subtitle-popover"
+    );
+    assert_eq!(PlayerPopoverKind::Audio.css_class(), "okp-audio-popover");
+    assert_eq!(PlayerPopoverKind::More.css_class(), "okp-more-popover");
+    assert_eq!(
+        PlayerPopoverKind::AdvancedCommands.css_class(),
+        "okp-advanced-command-popover"
+    );
+}
+
+#[test]
 fn subtitle_track_label_distinguishes_webvtt_srt_and_embedded_sources() {
     let webvtt = Track {
         id: 3,

@@ -2063,8 +2063,14 @@ const OKP_STYLESHEET: &str = "
         }
 
         .okp-track-popover-content {
-            padding: 10px;
-            background: #121317;
+            padding: 8px;
+            background: #f7f7f5;
+            color: #17191c;
+        }
+
+        .okp-track-popover-content.okp-speed-popover,
+        .okp-track-popover-content.okp-more-popover {
+            padding: 6px;
         }
 
         popover.okp-track-popover {
@@ -2077,10 +2083,10 @@ const OKP_STYLESHEET: &str = "
         popover.okp-track-popover > contents,
         popover.okp-track-popover contents {
             padding: 0;
-            border-radius: 10px;
-            background: #121317;
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            box-shadow: 0 18px 46px rgba(0, 0, 0, 0.46);
+            border-radius: 8px;
+            background: #f7f7f5;
+            border: 1px solid rgba(0, 0, 0, 0.16);
+            box-shadow: 0 12px 34px rgba(0, 0, 0, 0.26);
         }
 
         popover.okp-track-popover arrow {
@@ -2092,146 +2098,215 @@ const OKP_STYLESHEET: &str = "
         }
 
         .okp-track-popover-scroll {
-            background: #121317;
+            background: #f7f7f5;
         }
 
         .okp-track-popover-title {
-            margin: 0 4px 8px 4px;
-            color: rgba(255, 255, 255, 0.94);
-            font-size: 13.5px;
-            font-weight: 760;
+            min-height: 24px;
+            margin: 0 6px 4px 6px;
+            color: #17191c;
+            font-size: 12.5px;
+            font-weight: 700;
         }
 
         .okp-track-group-title {
             margin: 10px 4px 4px 4px;
-            color: rgba(255, 255, 255, 0.42);
+            color: rgba(23, 25, 28, 0.58);
             font-size: 10.5px;
             font-weight: 720;
         }
 
         .okp-track-subgroup-title {
             margin: 6px 4px 2px 4px;
-            color: rgba(255, 255, 255, 0.34);
+            color: rgba(23, 25, 28, 0.52);
             font-size: 10px;
             font-weight: 640;
         }
 
         button.okp-track-row {
-            min-height: 34px;
-            padding: 6px 9px;
-            border-radius: 7px;
+            min-height: 32px;
+            padding: 5px 7px;
+            border-radius: 4px;
             background: transparent;
             border: 1px solid transparent;
             box-shadow: none;
-            color: rgba(255, 255, 255, 0.82);
+            color: rgba(23, 25, 28, 0.88);
+            font-size: 12px;
         }
 
         button.okp-track-row:hover {
-            background: rgba(255, 255, 255, 0.08);
-            color: rgba(255, 255, 255, 0.96);
+            background: rgba(0, 0, 0, 0.055);
+            color: #111316;
         }
 
         button.okp-track-row:active {
-            background: rgba(255, 255, 255, 0.12);
+            background: rgba(0, 0, 0, 0.09);
         }
 
         button.okp-track-row.is-selected {
-            background: alpha(@okp_accent, 0.16);
-            border-color: alpha(@okp_accent, 0.30);
-            color: rgba(255, 255, 255, 0.98);
+            background: alpha(@okp_teal, 0.12);
+            border-color: alpha(@okp_teal, 0.22);
+            color: #0a5f59;
         }
 
         button.okp-track-row.is-selected .okp-track-row-label {
             font-weight: 640;
         }
 
+        button.okp-audio-track-row {
+            min-height: 42px;
+        }
+
+        .okp-audio-track-name {
+            color: inherit;
+            font-size: 12px;
+        }
+
+        .okp-audio-track-detail {
+            color: rgba(23, 25, 28, 0.54);
+            font-size: 10.5px;
+        }
+
+        button.okp-audio-track-row.is-selected .okp-audio-track-name {
+            font-weight: 640;
+        }
+
         button.okp-track-row:disabled {
             background: transparent;
             border-color: transparent;
-            color: rgba(255, 255, 255, 0.30);
+            color: rgba(23, 25, 28, 0.38);
         }
 
         button.okp-track-row:focus-visible {
             outline: none;
-            box-shadow: inset 0 0 0 1px alpha(@okp_accent, 0.6);
+            box-shadow: inset 0 0 0 1px alpha(@okp_teal, 0.72);
         }
 
         .okp-track-check {
             min-width: 14px;
-            color: alpha(@okp_accent, 0.98);
+            min-height: 14px;
         }
 
-        button.okp-track-row:disabled .okp-track-check {
-            color: rgba(255, 255, 255, 0.30);
+        .okp-speed-popover button.okp-track-row {
+            min-height: 30px;
+            padding-left: 5px;
+            padding-right: 5px;
+        }
+
+        button.okp-command-row {
+            min-height: 31px;
+        }
+
+        button.okp-scribe-row {
+            color: #0a655f;
+        }
+
+        button.okp-scribe-row:disabled {
+            color: rgba(10, 101, 95, 0.54);
         }
 
         .okp-track-empty {
-            margin: 4px 6px 6px 6px;
-            padding: 12px 12px;
-            border-radius: 8px;
-            border: 1px dashed rgba(255, 255, 255, 0.14);
-            background: rgba(255, 255, 255, 0.02);
-            color: rgba(255, 255, 255, 0.50);
-            font-size: 12.5px;
+            min-height: 32px;
+            margin: 0;
+            padding: 5px 8px 5px 29px;
+            border-radius: 4px;
+            border: 1px solid transparent;
+            background: transparent;
+            color: rgba(23, 25, 28, 0.48);
+            font-size: 12px;
         }
 
         .okp-track-divider {
-            margin: 6px 3px;
-            background: rgba(255, 255, 255, 0.07);
+            margin: 5px 4px;
+            background: rgba(0, 0, 0, 0.11);
         }
 
-        .okp-sub-adjust-row {
-            margin: 0 2px;
+        .okp-quick-delay-row {
+            min-height: 34px;
+            margin-top: 2px;
+            padding: 2px 4px 0 7px;
         }
 
-        .okp-sub-adjust-label {
-            color: rgba(255, 255, 255, 0.62);
+        .okp-quick-delay-label {
+            color: rgba(23, 25, 28, 0.72);
             font-size: 12px;
         }
 
-        .okp-sub-adjust-value {
-            color: rgba(255, 255, 255, 0.9);
-            font-size: 12px;
+        .okp-quick-delay-value {
+            color: #0a655f;
+            font-size: 11.5px;
+            font-weight: 650;
             font-feature-settings: 'tnum';
         }
 
-        entry.okp-sub-adjust-entry {
+        button.okp-quick-delay-button {
+            min-width: 26px;
+            min-height: 26px;
+            padding: 0;
+            border-radius: 4px;
+            border: 1px solid transparent;
+            background: transparent;
+            box-shadow: none;
+        }
+
+        button.okp-quick-delay-button:hover {
+            background: rgba(0, 0, 0, 0.06);
+        }
+
+        button.okp-quick-delay-button:focus-visible {
+            outline: none;
+            box-shadow: inset 0 0 0 1px alpha(@okp_teal, 0.72);
+        }
+
+        .okp-settings-audio-delay-row {
+            margin: 0;
+            padding: 10px 0;
+            border-top: 1px solid rgba(0, 0, 0, 0.08);
+        }
+
+        .okp-settings-audio-delay-row .okp-sub-adjust-label {
+            color: rgba(23, 25, 28, 0.72);
+            font-size: 12px;
+        }
+
+        .okp-settings-audio-delay-row entry.okp-sub-adjust-entry {
             min-width: 74px;
             min-height: 28px;
             padding: 4px 7px;
             border-radius: 6px;
-            border: 1px solid rgba(255, 255, 255, 0.14);
-            background: rgba(255, 255, 255, 0.08);
-            color: rgba(255, 255, 255, 0.9);
+            border: 1px solid rgba(0, 0, 0, 0.16);
+            background: #ffffff;
+            color: #17191c;
             font-feature-settings: 'tnum';
         }
 
-        entry.okp-sub-adjust-entry:focus {
-            border-color: alpha(@okp_accent, 0.72);
-            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.16);
+        .okp-settings-audio-delay-row entry.okp-sub-adjust-entry:focus {
+            border-color: alpha(@okp_teal, 0.72);
+            box-shadow: 0 0 0 2px alpha(@okp_teal, 0.14);
         }
 
-        entry.okp-sub-adjust-entry.is-error {
-            border-color: alpha(@okp_danger_bright, 0.88);
-            box-shadow: 0 0 0 2px alpha(@okp_danger_bright, 0.18);
+        .okp-settings-audio-delay-row entry.okp-sub-adjust-entry.is-error {
+            border-color: rgba(196, 43, 28, 0.88);
+            box-shadow: 0 0 0 2px rgba(196, 43, 28, 0.14);
         }
 
-        .okp-sub-adjust-unit {
-            color: rgba(255, 255, 255, 0.58);
+        .okp-settings-audio-delay-row .okp-sub-adjust-unit {
+            color: rgba(23, 25, 28, 0.58);
             font-size: 12px;
         }
 
-        .okp-sub-adjust-button {
+        .okp-settings-audio-delay-row .okp-sub-adjust-button {
             min-width: 44px;
             min-height: 28px;
             padding: 4px 7px;
             border-radius: 6px;
-            background: rgba(255, 255, 255, 0.08);
-            color: rgba(255, 255, 255, 0.86);
+            border: 1px solid rgba(0, 0, 0, 0.10);
+            background: rgba(0, 0, 0, 0.035);
+            color: rgba(23, 25, 28, 0.86);
         }
 
-        .okp-sub-adjust-button:hover {
-            background: rgba(255, 255, 255, 0.13);
+        .okp-settings-audio-delay-row .okp-sub-adjust-button:hover {
+            background: rgba(0, 0, 0, 0.07);
         }
 
         .okp-info-window {

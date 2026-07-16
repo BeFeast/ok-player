@@ -34,6 +34,7 @@ pub(crate) fn settings_subtitles_page(
             ("Larger", SubtitleAdjustment::Scale(0.1)),
         ],
     );
+    let projected_delay = Rc::new(Cell::new(snapshot.delay_seconds));
 
     for (button, adjustment) in delay_buttons.into_iter().chain(scale_buttons) {
         button.set_sensitive(snapshot.has_media);
@@ -41,9 +42,19 @@ pub(crate) fn settings_subtitles_page(
         let button_toast = Rc::clone(&status_toast);
         let button_delay = delay_label.clone();
         let button_scale = scale_label.clone();
+        let projected_delay = Rc::clone(&projected_delay);
         button.connect_clicked(move |_| {
-            apply_subtitle_adjustment(&button_state, adjustment);
-            refresh_settings_subtitle_values(&button_state, &button_delay, &button_scale);
+            if let Some(applied_delay) =
+                apply_subtitle_adjustment(&button_state, adjustment, projected_delay.get())
+            {
+                projected_delay.set(applied_delay);
+            }
+            refresh_settings_subtitle_values(
+                &button_state,
+                &button_delay,
+                &button_scale,
+                projected_delay.get(),
+            );
             button_toast.show("Subtitle settings updated");
         });
     }
@@ -104,6 +115,9 @@ pub(crate) fn settings_audio_page(
         &selected_track_summary(&state, TrackKind::Audio),
     ));
     summary.append(&settings_volume_row(Rc::clone(&state)));
+    let audio_delay = audio_delay_adjustment_row(read_audio_delay(&state), &state, &status_toast);
+    audio_delay.add_css_class("okp-settings-audio-delay-row");
+    summary.append(&audio_delay);
     summary.append(&settings_audio_normalization_row(
         Rc::clone(&state),
         Rc::clone(&status_toast),
@@ -511,9 +525,10 @@ pub(crate) fn refresh_settings_subtitle_values(
     state: &Rc<RefCell<PlayerState>>,
     delay_label: &gtk::Label,
     scale_label: &gtk::Label,
+    projected_delay: f64,
 ) {
-    let (delay_seconds, scale) = read_subtitle_adjustments(state);
-    delay_label.set_text(&subtitle_delay::format_label(delay_seconds));
+    let (_, scale) = read_subtitle_adjustments(state);
+    delay_label.set_text(&subtitle_delay::format_label(projected_delay));
     scale_label.set_text(&format_scale(scale));
 }
 
