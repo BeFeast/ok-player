@@ -18,7 +18,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BINARY="${1:-ok-player}"
 OUT_DIR="${2:-$ROOT/artifacts/manual-ui/linux-fullscreen-chrome-smoke}"
-FIXTURE="$ROOT/tests/OkPlayer.IntegrationTests/fixtures/subtest.mkv"
+FIXTURE="${3:-$ROOT/tests/OkPlayer.IntegrationTests/fixtures/subtest.mkv}"
+SUBSTRATE="${4:-dark}"
 
 for tool in xvfb-run dbus-run-session xfwm4 xdotool xwininfo import magick; do
   if ! command -v "$tool" >/dev/null 2>&1; then
@@ -31,17 +32,22 @@ if [[ ! -f "$FIXTURE" ]]; then
   echo "Missing media fixture: $FIXTURE" >&2
   exit 127
 fi
+if [[ "$SUBSTRATE" != dark && "$SUBSTRATE" != bright ]]; then
+  echo "Fullscreen substrate must be 'dark' or 'bright': $SUBSTRATE" >&2
+  exit 2
+fi
 
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
 if ! xvfb-run -a --server-args='-screen 0 1280x900x24 -nolisten tcp -extension GLX' \
-  dbus-run-session -- bash -s -- "$BINARY" "$OUT_DIR" "$FIXTURE" >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
+  dbus-run-session -- bash -s -- "$BINARY" "$OUT_DIR" "$FIXTURE" "$SUBSTRATE" >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
 set -euo pipefail
 
 BINARY="$1"
 OUT_DIR="$2"
 FIXTURE="$3"
+SUBSTRATE="$4"
 
 export GDK_BACKEND=x11
 export GSK_RENDERER=cairo
@@ -126,22 +132,25 @@ top_max="$(
     -colorspace gray \
     -format '%[fx:maxima]' info:
 )"
-if ! awk -v max="$top_max" 'BEGIN { exit !(max < 0.12) }'; then
-  echo "fullscreen titlebar did not clear: top maxima=${top_max}" >&2
-  exit 1
-fi
+top_mean="$(magick "$OUT_DIR/fullscreen-playing.png" -crop 1280x50+0+0 -colorspace gray -format '%[fx:mean]' info:)"
 
 # Bottom band: the OSC revealer sits at the bottom (valign End, ~18 px margin).
 # When auto-hidden while playing, this strip is letterbox/video only, so a dark
 # maximum means the chrome band cleared.
 bottom_max="$(
   magick "$OUT_DIR/fullscreen-playing.png" \
-    -crop 1280x100+0+800 \
+    -crop 1280x90+0+810 \
     -colorspace gray \
     -format '%[fx:maxima]' info:
 )"
-if ! awk -v max="$bottom_max" 'BEGIN { exit !(max < 0.12) }'; then
-  echo "fullscreen OSC did not auto-hide while playing: bottom maxima=${bottom_max}" >&2
+bottom_mean="$(magick "$OUT_DIR/fullscreen-playing.png" -crop 1280x90+0+810 -colorspace gray -format '%[fx:mean]' info:)"
+frame_mean="$(magick "$OUT_DIR/fullscreen-playing.png" -crop 700x360+290+180 -colorspace gray -format '%[fx:mean]' info:)"
+if ! awk -v top="$top_max" -v bottom="$bottom_max" 'BEGIN { exit !(top < 0.12 && bottom < 0.12) }'; then
+  echo "fullscreen chrome did not clear over the letterbox bands: top=${top_max} bottom=${bottom_max}" >&2
+  exit 1
+fi
+if [[ "$SUBSTRATE" == bright ]] && ! awk -v frame="$frame_mean" 'BEGIN { exit !(frame > 0.75) }'; then
+  echo "bright fullscreen video is not visible: frame=${frame_mean}" >&2
   exit 1
 fi
 
@@ -156,7 +165,7 @@ import -window root "$OUT_DIR/fullscreen-paused.png"
 # maximum in the bottom band means the chrome returned when playback paused.
 bottom_paused_max="$(
   magick "$OUT_DIR/fullscreen-paused.png" \
-    -crop 1280x100+0+800 \
+    -crop 1280x90+0+810 \
     -colorspace gray \
     -format '%[fx:maxima]' info:
 )"
@@ -173,13 +182,15 @@ top_paused_max="$(
     -colorspace gray \
     -format '%[fx:maxima]' info:
 )"
+top_paused_mean="$(magick "$OUT_DIR/fullscreen-paused.png" -crop 1280x50+0+0 -colorspace gray -format '%[fx:mean]' info:)"
+bottom_paused_mean="$(magick "$OUT_DIR/fullscreen-paused.png" -crop 1280x90+0+810 -colorspace gray -format '%[fx:mean]' info:)"
 if ! awk -v max="$top_paused_max" 'BEGIN { exit !(max < 0.12) }'; then
   echo "fullscreen titlebar reappeared on pause: top maxima=${top_paused_max}" >&2
   exit 1
 fi
 
-echo "fullscreen-playing: top=${top_max} bottom=${bottom_max}"
-echo "fullscreen-paused:  top=${top_paused_max} bottom=${bottom_paused_max}"
+echo "fullscreen-playing: substrate=${SUBSTRATE} frame-mean=${frame_mean} top-max=${top_max} top-mean=${top_mean} bottom-max=${bottom_max} bottom-mean=${bottom_mean}"
+echo "fullscreen-paused:  top-max=${top_paused_max} top-mean=${top_paused_mean} bottom-max=${bottom_paused_max} bottom-mean=${bottom_paused_mean}"
 SMOKE
 then
   echo "Fullscreen chrome smoke failed. Session log: $OUT_DIR/session.log" >&2

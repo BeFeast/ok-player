@@ -35,6 +35,8 @@ pub const REQUIRED_XVFB_STATES: &[&str] = &[
     "narrow-layout",
     "bright-video-background",
     "dark-video-background",
+    "fullscreen",
+    "always-on-top",
 ];
 
 pub const REQUIRED_INSTALLED_CHECKS: &[&str] = &["installed-launch", "installed-package-version"];
@@ -46,8 +48,34 @@ pub const REQUIRED_LIVE_CHECKS: &[&str] = &[
     "wayland-clipboard",
     "desktop-portal",
     "wayland-compositor-fullscreen",
+    "wayland-always-on-top-unavailable",
     "keyboard-focus-navigation",
 ];
+
+fn xvfb_viewport(state: &str) -> Viewport {
+    match state {
+        "narrow-layout" => Viewport {
+            width: 480,
+            height: 540,
+        },
+        "fullscreen" => Viewport {
+            width: 1280,
+            height: 900,
+        },
+        _ => Viewport {
+            width: 1120,
+            height: 680,
+        },
+    }
+}
+
+fn xvfb_theme(state: &str) -> EvidenceTheme {
+    if matches!(state, "continue-watching" | "history" | "settings-about") {
+        EvidenceTheme::Light
+    } else {
+        EvidenceTheme::Dark
+    }
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -154,22 +182,8 @@ impl EvidenceManifest {
         rows.extend(REQUIRED_XVFB_STATES.iter().map(|state| EvidenceRow {
             id: format!("xvfb-{state}"),
             level: EvidenceLevel::XvfbRender,
-            viewport: Some(if *state == "narrow-layout" {
-                Viewport {
-                    width: 480,
-                    height: 540,
-                }
-            } else {
-                Viewport {
-                    width: 1120,
-                    height: 680,
-                }
-            }),
-            theme: if matches!(*state, "continue-watching" | "history" | "settings-about") {
-                EvidenceTheme::Light
-            } else {
-                EvidenceTheme::Dark
-            },
+            viewport: Some(xvfb_viewport(state)),
+            theme: xvfb_theme(state),
             state: (*state).to_owned(),
             reference: String::new(),
             measurement_result: EvidenceStatus::NotRun,
@@ -316,22 +330,8 @@ impl EvidenceManifest {
             require_viewport_and_theme(
                 &states,
                 state,
-                if *state == "narrow-layout" {
-                    Viewport {
-                        width: 480,
-                        height: 540,
-                    }
-                } else {
-                    Viewport {
-                        width: 1120,
-                        height: 680,
-                    }
-                },
-                if matches!(*state, "continue-watching" | "history" | "settings-about") {
-                    EvidenceTheme::Light
-                } else {
-                    EvidenceTheme::Dark
-                },
+                xvfb_viewport(state),
+                xvfb_theme(state),
                 &mut errors,
             );
         }
@@ -518,6 +518,32 @@ mod tests {
     fn complete_exact_manifest_is_release_ready() {
         let manifest = passing_manifest();
         assert_eq!(manifest.validate_release_ready(&package()), Ok(()));
+    }
+
+    #[test]
+    fn template_records_fullscreen_and_wayland_always_on_top_boundaries() {
+        let manifest = EvidenceManifest::template(package());
+        let fullscreen = manifest
+            .rows
+            .iter()
+            .find(|row| row.state == "fullscreen")
+            .expect("fullscreen row");
+        assert_eq!(
+            fullscreen.viewport,
+            Some(Viewport {
+                width: 1280,
+                height: 900
+            })
+        );
+        assert_eq!(fullscreen.level, EvidenceLevel::XvfbRender);
+
+        let unavailable = manifest
+            .rows
+            .iter()
+            .find(|row| row.state == "wayland-always-on-top-unavailable")
+            .expect("Wayland always-on-top row");
+        assert_eq!(unavailable.level, EvidenceLevel::GnomeWaylandOperator);
+        assert_eq!(unavailable.operator_status, EvidenceStatus::NotRun);
     }
 
     #[test]

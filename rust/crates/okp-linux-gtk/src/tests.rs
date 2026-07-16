@@ -37,6 +37,21 @@ fn floating_volume_control_keeps_a_fixed_osc_footprint() {
 }
 
 #[test]
+fn timeline_layers_share_one_vertical_center_at_normal_and_live_widths() {
+    for width in [300, 900] {
+        let geometry = timeline_geometry(width, TIMELINE_HEIGHT, 0.25, 0.70);
+        assert_eq!(geometry.trough.y, geometry.buffered.y);
+        assert_eq!(geometry.trough.y, geometry.played.y);
+        assert_eq!(geometry.trough.height, geometry.buffered.height);
+        assert_eq!(geometry.trough.height, geometry.played.height);
+        assert_eq!(geometry.trough.center_y(), geometry.buffered.center_y());
+        assert_eq!(geometry.trough.center_y(), geometry.played.center_y());
+        assert_eq!(geometry.trough.center_y(), geometry.thumb_center_y);
+        assert_eq!(geometry.trough.height, TIMELINE_RAIL_HEIGHT);
+    }
+}
+
+#[test]
 fn floating_volume_css_pins_capsule_geometry_motion_and_state_colors() {
     let css = include_str!("css.rs");
     for required in [
@@ -1283,6 +1298,21 @@ fn current_chapter_index_follows_the_playhead_through_core() {
     assert_eq!(current_chapter_index(&chapters, Some(-5.0)), None);
     assert_eq!(current_chapter_index(&chapters, None), None);
     assert_eq!(current_chapter_index(&chapters, Some(f64::NAN)), None);
+}
+
+#[test]
+fn always_on_top_backend_is_explicit_for_x11_and_unsupported_displays() {
+    assert_eq!(
+        always_on_top_backend("GdkX11Display"),
+        AlwaysOnTopBackend::X11Ewmh
+    );
+    for display in ["GdkWaylandDisplay", "GdkBroadwayDisplay", ""] {
+        assert_eq!(
+            always_on_top_backend(display),
+            AlwaysOnTopBackend::Unavailable,
+            "{display}"
+        );
+    }
 }
 
 #[test]

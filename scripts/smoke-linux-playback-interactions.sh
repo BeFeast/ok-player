@@ -137,6 +137,7 @@ xdotool key --clearmodifiers Escape
 sleep 1
 
 # The canonical pin is a real EWMH above-state action on X11.
+import -window "$window_id" "$OUT_DIR/always-on-top-off.png"
 xdotool mousemove --window "$window_id" 959 21 click 1
 sleep 1
 xprop -id "$window_id" _NET_WM_STATE >"$OUT_DIR/window-state.txt"
@@ -145,6 +146,16 @@ grep -q '_NET_WM_STATE_ABOVE' "$OUT_DIR/window-state.txt" || {
   cat "$OUT_DIR/window-state.txt" >&2
   exit 1
 }
+import -window "$window_id" "$OUT_DIR/always-on-top.png"
+pin_delta="$(magick compare -metric RMSE \
+  <(magick "$OUT_DIR/always-on-top-off.png" -crop 50x42+935+0 +repage png:-) \
+  <(magick "$OUT_DIR/always-on-top.png" -crop 50x42+935+0 +repage png:-) \
+  null: 2>&1 || true)"
+pin_delta_normalized="$(sed -n 's/.*(\([^()]\+\)).*/\1/p' <<<"$pin_delta")"
+if [[ -z "$pin_delta_normalized" ]] || ! awk -v value="$pin_delta_normalized" 'BEGIN { exit !(value > 0.005) }'; then
+  echo "always-on-top selected state did not render distinctly: RMSE=$pin_delta" >&2
+  exit 1
+fi
 
 scheduled="$(grep -c 'video-single-click-scheduled' "$OUT_DIR/app.log" || true)"
 committed="$(grep -c 'video-single-click-committed' "$OUT_DIR/app.log" || true)"
@@ -154,7 +165,19 @@ printf '%s\n' \
   "double_click_fullscreen=pass" \
   "time_label_toggle=pass" \
   "seek_panel_isolation=pass" \
-  "always_on_top=pass" >"$OUT_DIR/results.txt"
+  "always_on_top=pass" \
+  "always_on_top_pin_delta=$pin_delta_normalized" >"$OUT_DIR/results.txt"
+
+cat >"$OUT_DIR/results.json" <<JSON
+{
+  "schema_version": 1,
+  "x11_ewmh_always_on_top": "pass",
+  "x11_state_atom": "_NET_WM_STATE_ABOVE",
+  "selected_pin_image_delta": $pin_delta_normalized,
+  "unsupported_compositor_result": "operator-required",
+  "unsupported_compositor_expected_ui": "Always on top is unavailable on this desktop"
+}
+JSON
 SMOKE
 then
   echo "Playback interaction smoke failed. Session log: $OUT_DIR/session.log" >&2

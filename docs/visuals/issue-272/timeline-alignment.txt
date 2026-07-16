@@ -1,0 +1,2 @@
+canonical-1120x680 played-center=631.5 buffered-center=631.5 trough-center=631.5 spread=0
+wide-1240x760 played-center=711.5 buffered-center=711.5 trough-center=711.5 spread=0

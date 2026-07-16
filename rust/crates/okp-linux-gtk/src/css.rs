@@ -635,6 +635,14 @@ const OKP_STYLESHEET: &str = "
             color: rgba(255, 255, 255, 0.94);
         }
 
+        .okp-idle-canvas.is-preview-substrate {
+            background: #050507;
+        }
+
+        .okp-idle-canvas.is-preview-substrate.is-preview-bright {
+            background: #f4f7fa;
+        }
+
         .okp-idle-titlebar {
             min-height: 34px;
             padding-left: 15px;
@@ -1394,72 +1402,32 @@ const OKP_STYLESHEET: &str = "
             min-height: 20px;
         }
 
-        progressbar.okp-buffered-progress {
-            min-height: 4px;
-        }
-
-        progressbar.okp-buffered-progress trough {
-            min-height: 4px;
-            border: none;
-            border-radius: 999px;
-            background: rgba(255, 255, 255, 0.22);
-        }
-
-        progressbar.okp-buffered-progress progress {
-            min-height: 4px;
-            border: none;
-            border-radius: 999px;
-            background: rgba(255, 255, 255, 0.46);
-        }
-
-        progressbar.okp-buffered-progress.is-loading progress {
-            background: rgba(255, 255, 255, 0.62);
+        .okp-timeline-rail {
+            min-width: 120px;
+            min-height: 20px;
         }
 
         scale.okp-seek trough {
             min-height: 4px;
-            border-radius: 999px;
             background: transparent;
             border: none;
+            box-shadow: none;
         }
 
         scale.okp-seek highlight {
             min-height: 4px;
-            border-radius: 999px;
-            background: @okp_accent;
+            background: transparent;
+            border: none;
+            box-shadow: none;
         }
 
         scale.okp-seek slider {
             min-width: 12px;
             min-height: 12px;
-            margin: -4px;
-            border-radius: 999px;
-            background: rgba(255, 255, 255, 0.96);
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.42);
-        }
-
-        scale.okp-seek mark indicator {
-            min-width: 2px;
-            min-height: 7px;
-            border-radius: 999px;
-            background: rgba(255, 255, 255, 0.42);
-        }
-
-        scale.okp-seek marks.top mark indicator {
-            background: rgba(255, 255, 255, 0.42);
-        }
-
-        scale.okp-seek marks.bottom mark indicator {
-            min-width: 3px;
-            min-height: 9px;
-            background: rgba(233, 176, 74, 0.96);
-        }
-
-        scale.okp-seek mark label {
-            color: rgba(233, 176, 74, 0.98);
-            font-size: 9.5px;
-            font-weight: 800;
-            font-feature-settings: 'tnum';
+            margin: 0;
+            background: transparent;
+            border: none;
+            box-shadow: none;
         }
 
         /* Strip the default popover chrome so the seek-hover preview shows only
@@ -3910,6 +3878,7 @@ mod tests {
         }
         assert!(OKP_STYLESHEET.contains(".okp-idle-canvas.is-light"));
         assert!(OKP_STYLESHEET.contains(".okp-idle-canvas.is-dark"));
+        assert!(OKP_STYLESHEET.contains(".okp-idle-canvas.is-preview-substrate"));
         assert!(OKP_STYLESHEET.contains(".okp-idle-footer"));
         assert!(OKP_STYLESHEET.contains(".okp-history-bucket"));
         assert!(OKP_STYLESHEET.contains("padding: 34px 32px 0;"));
@@ -3947,7 +3916,7 @@ mod tests {
             "min-width: 54px;",
             "min-width: 62px;",
             "min-height: 20px;",
-            ".okp-buffered-progress",
+            ".okp-timeline-rail",
             ".okp-paused-cue",
             ".okp-error-card",
         ] {

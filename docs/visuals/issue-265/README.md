@@ -39,6 +39,11 @@ here.
 
 ## Deterministic evidence
 
+The original delivery copied `loaded-paused-osc.png` into the paused,
+buffered-timeline, and chapter-context slots. Issue #272 removes those preview
+shortcuts and publishes the repaired real-state evidence in
+[`../issue-272/`](../issue-272/README.md).
+
 The release harness records exact `1120x680` captures for:
 
 - paused

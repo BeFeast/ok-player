@@ -24,6 +24,12 @@ expected_width=1120
 expected_height=680
 
 case "$STATE" in
+  fullscreen)
+    viewport_width=1280
+    viewport_height=900
+    expected_width=1280
+    expected_height=900
+    ;;
   narrow-layout)
     viewport_width=480
     viewport_height=540
@@ -130,6 +136,11 @@ if [[ "$width" == "1120" && "$height" == "680" ]]; then
       ok=0; awk -v value="$toast_max" 'BEGIN { exit !(value > 0.50) }' && ok=1
       add_measurement top-osd-visible 1 "$ok" 0 boolean "$([[ "$ok" == 1 ]] && echo pass || echo fail)"
       ;;
+    always-on-top)
+      pin_max="$(magick "$IMAGE" -crop 50x42+935+0 -colorspace gray -format '%[fx:maxima]' info:)"
+      ok=0; awk -v value="$pin_max" 'BEGIN { exit !(value > 0.55) }' && ok=1
+      add_measurement selected-pin-visible 1 "$ok" 0 boolean "$([[ "$ok" == 1 ]] && echo pass || echo fail)"
+      ;;
     playing-idle)
       bottom_max="$(magick "$IMAGE" -crop 1120x96+0+584 -colorspace gray -format '%[fx:maxima]' info:)"
       ok=0; awk -v value="$bottom_max" 'BEGIN { exit !(value < 0.18) }' && ok=1
@@ -146,6 +157,16 @@ if [[ "$width" == "1120" && "$height" == "680" ]]; then
       add_measurement panel-content-visible 1 "$ok" 0 boolean "$([[ "$ok" == 1 ]] && echo pass || echo fail)"
       ;;
   esac
+fi
+
+if [[ "$STATE" == "fullscreen" && "$width" == 1280 && "$height" == 900 ]]; then
+  top_max="$(magick "$IMAGE" -crop 1280x50+0+0 -colorspace gray -format '%[fx:maxima]' info:)"
+  bottom_max="$(magick "$IMAGE" -crop 1280x90+0+810 -colorspace gray -format '%[fx:maxima]' info:)"
+  frame_mean="$(magick "$IMAGE" -crop 700x360+290+180 -colorspace gray -format '%[fx:mean]' info:)"
+  ok=0; awk -v top="$top_max" -v bottom="$bottom_max" 'BEGIN { exit !(top < 0.12 && bottom < 0.12) }' && ok=1
+  add_measurement fullscreen-chrome-cleared 1 "$ok" 0 boolean "$([[ "$ok" == 1 ]] && echo pass || echo fail)"
+  frame_ok=0; awk -v frame="$frame_mean" 'BEGIN { exit !(frame > 0.015) }' && frame_ok=1
+  add_measurement fullscreen-video-visible 1 "$frame_ok" 0 boolean "$([[ "$frame_ok" == 1 ]] && echo pass || echo fail)"
 fi
 
 measurements="$(jq -s '.' "$tmp")"

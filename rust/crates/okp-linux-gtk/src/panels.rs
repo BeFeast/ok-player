@@ -83,8 +83,7 @@ pub(crate) fn update_up_next_panel(
         controls.side_panel_snapshot.replace(snapshot);
         controls.side_panel_actions.borrow_mut().clear();
         update_timeline_marks(
-            &controls.seek,
-            &controls.timeline_marks_snapshot,
+            &controls.timeline_rail,
             &[],
             &[],
             AbLoopState::default(),
@@ -118,8 +117,7 @@ pub(crate) fn update_up_next_panel(
 
     controls.side_panel_snapshot.replace(snapshot.clone());
     update_timeline_marks(
-        &controls.seek,
-        &controls.timeline_marks_snapshot,
+        &controls.timeline_rail,
         &snapshot.chapters,
         &snapshot.bookmarks,
         snapshot.ab_loop,
@@ -496,32 +494,14 @@ pub(crate) fn request_chapter_thumbnail_warm(
 }
 
 pub(crate) fn update_timeline_marks(
-    seek: &gtk::Scale,
-    snapshot: &RefCell<Vec<TimelineMark>>,
+    rail: &TimelineRail,
     chapters: &[Chapter],
     bookmarks: &[f64],
     ab_loop: AbLoopState,
     duration: f64,
 ) {
     let marks = timeline_marks(chapters, bookmarks, ab_loop, duration);
-    if *snapshot.borrow() == marks {
-        return;
-    }
-
-    seek.clear_marks();
-    for mark in &marks {
-        // Chapters tick along the top edge; bookmarks and the A-B endpoints sit on the
-        // bottom edge so the two never crowd the same rail.
-        let (position, label) = match mark.kind {
-            TimelineMarkKind::Chapter => (gtk::PositionType::Top, None),
-            TimelineMarkKind::Bookmark => (gtk::PositionType::Bottom, None),
-            TimelineMarkKind::AbStart => (gtk::PositionType::Bottom, Some("A")),
-            TimelineMarkKind::AbEnd => (gtk::PositionType::Bottom, Some("B")),
-            TimelineMarkKind::AbLoop => (gtk::PositionType::Bottom, Some("A-B")),
-        };
-        seek.add_mark(mark.time, position, label);
-    }
-    snapshot.replace(marks);
+    rail.set_marks(marks);
 }
 
 pub(crate) fn timeline_marks(
