@@ -13,9 +13,9 @@ Generate deterministic media and captures:
 ./scripts/run-linux-acceptance-harness.sh ok-player artifacts/linux-acceptance
 ```
 
-The runner generates media, captures all fixed states, writes `xvfb-rows.json`, and exits non-zero when any canonical redline fails. The required state names are defined by `okp_core::acceptance_evidence::REQUIRED_XVFB_STATES`. References use public logical IDs such as `windows-player-redlines`, `history-handoff`, and `about-handoff`; local source locations must never be written into evidence.
+The runner generates media, captures all fixed states, writes `xvfb-rows.json`, and exits non-zero when any canonical redline fails. First-run evidence comes from the canonical dark empty-state suite, which also verifies the light variant; the obsolete pre-recovery main-window smoke is not part of the release harness. The required state names are defined by `okp_core::acceptance_evidence::REQUIRED_XVFB_STATES`. References use public logical IDs such as `windows-player-redlines`, `history-handoff`, and `about-handoff`; local source locations must never be written into evidence.
 
-Generated fixtures include dark and bright 30-second H.264 media, chapter metadata, and a `natural-queue` folder containing `Episode 1`, `Episode 2`, and `Episode 10` plus a non-media file. Xvfb exercises direct file open, playback/duration, panel actions, screenshot file creation, and X11 fullscreen. The live GNOME folder-chooser row uses the generated queue and records its natural order; the headless run must not mark that chooser row `PASS`.
+Generated fixtures include dark and moving-bright 30-second H.264 media, a 60-second buffered-playback source, chapter metadata, and a `natural-queue` folder containing `Episode 1`, `Episode 2`, and `Episode 10` plus a non-media file. The playback harness serves media from localhost to induce a delayed real load, a throttled partial demuxer cache, and a real HTTP 404/retry path. Xvfb also exercises direct file open, playback/duration, panel actions, screenshot file creation, X11 fullscreen, and the EWMH Always-on-top state. The live GNOME folder-chooser row uses the generated queue and records its natural order; the headless run must not mark that chooser row `PASS`.
 
 The encoded redlines include:
 
@@ -30,6 +30,8 @@ The encoded redlines include:
 | History | canvas state at the player viewport, not a mismatched standalone window |
 | Playing idle | bottom chrome band fully clear after the canonical timeout |
 | Bright/dark fixtures | actual frame luminance plus visible OSC material |
+| Fullscreen | real `1280x900` X11 transition with titlebar and OSC fully clear at idle |
+| Always on top | selected pin plus actual `_NET_WM_STATE_ABOVE`; unsupported Wayland result remains operator-only |
 
 When canonical reference captures are available, name them identically to the implementation captures and create exact-size sheets:
 

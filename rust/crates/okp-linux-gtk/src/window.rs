@@ -441,17 +441,20 @@ pub(crate) fn build_player_window_chrome(
     let pin_state = Rc::clone(&pinned);
     pin.connect_clicked(move |_| {
         let enabled = !pin_state.get();
-        if set_window_always_on_top(&pin_window, enabled) {
-            pin_state.set(enabled);
-            if enabled {
-                pin_button.add_css_class("is-selected");
-                pin_button.set_tooltip_text(Some("Disable always on top"));
-            } else {
-                pin_button.remove_css_class("is-selected");
-                pin_button.set_tooltip_text(Some("Always on top"));
+        match set_window_always_on_top(&pin_window, enabled) {
+            AlwaysOnTopResult::Applied => {
+                pin_state.set(enabled);
+                if enabled {
+                    pin_button.add_css_class("is-selected");
+                    pin_button.set_tooltip_text(Some("Disable always on top"));
+                } else {
+                    pin_button.remove_css_class("is-selected");
+                    pin_button.set_tooltip_text(Some("Always on top"));
+                }
             }
-        } else {
-            pin_toast.show("Always on top is unavailable on this desktop");
+            AlwaysOnTopResult::Unavailable => {
+                pin_toast.show("Always on top is unavailable on this desktop");
+            }
         }
     });
     controls.append(&pin);
@@ -543,20 +546,44 @@ unsafe extern "C" {
     fn XFlush(display: *mut XDisplay) -> libc::c_int;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AlwaysOnTopBackend {
+    X11Ewmh,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AlwaysOnTopResult {
+    Applied,
+    Unavailable,
+}
+
+pub(crate) fn always_on_top_backend(display_type_name: &str) -> AlwaysOnTopBackend {
+    if display_type_name == "GdkX11Display" {
+        AlwaysOnTopBackend::X11Ewmh
+    } else {
+        AlwaysOnTopBackend::Unavailable
+    }
+}
+
 /// Ask an EWMH X11 window manager to add/remove `_NET_WM_STATE_ABOVE`.
-/// Wayland intentionally returns false: GTK exposes no portable protocol for
-/// clients to force this state, and modal/transient flags are not substitutes.
-pub(crate) fn set_window_always_on_top(window: &gtk::ApplicationWindow, enabled: bool) -> bool {
+/// Wayland returns [`AlwaysOnTopResult::Unavailable`]: GTK exposes no portable
+/// protocol for clients to force this state, and modal/transient flags are not
+/// substitutes.
+pub(crate) fn set_window_always_on_top(
+    window: &gtk::ApplicationWindow,
+    enabled: bool,
+) -> AlwaysOnTopResult {
     use gtk::glib::translate::ToGlibPtr;
 
     let Some(display) = gdk::Display::default() else {
-        return false;
+        return AlwaysOnTopResult::Unavailable;
     };
-    if display.type_().name() != "GdkX11Display" {
-        return false;
+    if always_on_top_backend(display.type_().name()) != AlwaysOnTopBackend::X11Ewmh {
+        return AlwaysOnTopResult::Unavailable;
     }
     let Some(surface) = window.surface() else {
-        return false;
+        return AlwaysOnTopResult::Unavailable;
     };
 
     let state_name = c"_NET_WM_STATE";
@@ -564,13 +591,13 @@ pub(crate) fn set_window_always_on_top(window: &gtk::ApplicationWindow, enabled:
     unsafe {
         let xdisplay = gdk_x11_display_get_xdisplay(display.to_glib_none().0);
         if xdisplay.is_null() {
-            return false;
+            return AlwaysOnTopResult::Unavailable;
         }
         let xid = gdk_x11_surface_get_xid(surface.to_glib_none().0);
         let message_type = XInternAtom(xdisplay, state_name.as_ptr(), 0);
         let above = XInternAtom(xdisplay, above_name.as_ptr(), 0);
         if xid == 0 || message_type == 0 || above == 0 {
-            return false;
+            return AlwaysOnTopResult::Unavailable;
         }
 
         let client_message = XClientMessageEvent {
@@ -590,7 +617,11 @@ pub(crate) fn set_window_always_on_top(window: &gtk::ApplicationWindow, enabled:
         let mask = (1 << 20) | (1 << 19);
         let sent = XSendEvent(xdisplay, root, 0, mask, &mut event);
         XFlush(xdisplay);
-        sent != 0
+        if sent != 0 {
+            AlwaysOnTopResult::Applied
+        } else {
+            AlwaysOnTopResult::Unavailable
+        }
     }
 }
 
@@ -888,6 +919,7 @@ pub(crate) fn build_empty_surface(
 
     let surface = EmptySurface {
         revealer,
+        canvas: root,
         stack,
         welcome_host,
         history_host,

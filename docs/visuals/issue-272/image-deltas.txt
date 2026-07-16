@@ -1,0 +1,8 @@
+bright-paused-vs-dark-paused rmse=0.815416 threshold=0.20
+paused-vs-real-buffered-rail rmse=0.0780466 threshold=0.02
+paused-vs-chapter-title-context rmse=0.112834 threshold=0.005
+chapter-context-vs-seek-osd rmse=0.0365479 threshold=0.01
+paused-vs-real-loading rmse=0.0881781 threshold=0.01
+paused-vs-real-load-failure rmse=0.159376 threshold=0.01
+bright-paused-vs-bright-playing rmse=0.0560069 threshold=0.005
+dark-playing-idle-vs-dark-active rmse=0.117319 threshold=0.02

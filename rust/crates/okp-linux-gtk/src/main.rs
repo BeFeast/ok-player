@@ -733,7 +733,7 @@ struct Controls {
     more_button: gtk::MenuButton,
     timeline: gtk::Overlay,
     seek: gtk::Scale,
-    buffered_progress: gtk::ProgressBar,
+    timeline_rail: TimelineRail,
     elapsed_label: gtk::Label,
     duration_label: gtk::Label,
     trailing_time_mode: Rc<Cell<time_code::TrailingTimeMode>>,
@@ -741,7 +741,6 @@ struct Controls {
     // Shared toast surface, kept so the side panel's own row handlers (add/remove a
     // bookmark) can report their outcome without threading a toast through every call.
     status_toast: Rc<StatusToast>,
-    timeline_marks_snapshot: RefCell<Vec<TimelineMark>>,
     up_next_revealer: gtk::Revealer,
     side_panel_fade_revealer: gtk::Revealer,
     chapters_tab: gtk::Button,
@@ -859,6 +858,7 @@ enum LinuxUpdateApplyResult {
 #[derive(Clone)]
 struct EmptySurface {
     revealer: gtk::Revealer,
+    canvas: gtk::Box,
     stack: gtk::Stack,
     welcome_host: gtk::Box,
     history_host: gtk::Box,
@@ -914,8 +914,10 @@ impl EmptySurface {
         self.stack.set_visible(false);
         self.footer.set_visible(false);
         self.revealer.add_css_class("is-preview-substrate");
+        self.canvas.add_css_class("is-preview-substrate");
         if bright {
             self.revealer.add_css_class("is-preview-bright");
+            self.canvas.add_css_class("is-preview-bright");
         }
         self.revealer.set_reveal_child(true);
         self.revealer.set_can_target(false);
@@ -927,6 +929,8 @@ impl EmptySurface {
         }
         self.revealer.remove_css_class("is-preview-bright");
         self.revealer.remove_css_class("is-preview-substrate");
+        self.canvas.remove_css_class("is-preview-bright");
+        self.canvas.remove_css_class("is-preview-substrate");
         self.stack.set_visible(true);
         self.footer.set_visible(true);
     }
@@ -988,7 +992,8 @@ impl MediaStateOverlay {
         retry_button.add_css_class("okp-error-primary");
         let retry_state = Rc::clone(&state);
         retry_button.connect_clicked(move |_| {
-            if let Some(url) = retry_state.borrow().last_load_url.clone() {
+            let url = retry_state.borrow().last_load_url.clone();
+            if let Some(url) = url {
                 load_media_url(&retry_state, url);
             }
         });
@@ -1087,17 +1092,11 @@ impl MediaStateOverlay {
         paused: bool,
         can_retry: bool,
     ) {
-        let preview = env::var("OKP_PLAYBACK_STATE_PREVIEW").ok();
-        let state = match preview.as_deref() {
-            Some("paused") => Some("paused"),
-            Some("loading") => Some("loading"),
-            Some("error") => Some("error"),
-            _ => match load_state {
-                network_media::MediaLoadState::Failed => Some("error"),
-                network_media::MediaLoadState::Loading if has_media => Some("loading"),
-                network_media::MediaLoadState::Playing if has_media && paused => Some("paused"),
-                _ => None,
-            },
+        let state = match load_state {
+            network_media::MediaLoadState::Failed => Some("error"),
+            network_media::MediaLoadState::Loading if has_media => Some("loading"),
+            network_media::MediaLoadState::Playing if has_media && paused => Some("paused"),
+            _ => None,
         };
 
         if let Some(state) = state {

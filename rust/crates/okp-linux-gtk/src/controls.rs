@@ -9,6 +9,303 @@ pub(crate) const VOLUME_THUMB_SIZE: i32 = 14;
 pub(crate) const VOLUME_CAPSULE_OFFSET: i32 = 10;
 pub(crate) const VOLUME_COLLAPSE_MS: u64 = 120;
 pub(crate) const VOLUME_HOVER_GRACE_MS: u64 = 220;
+pub(crate) const TIMELINE_HEIGHT: i32 = 20;
+pub(crate) const TIMELINE_RAIL_HEIGHT: f64 = 4.0;
+pub(crate) const TIMELINE_THUMB_DIAMETER: f64 = 12.0;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TimelineLayerGeometry {
+    pub(crate) x: f64,
+    pub(crate) y: f64,
+    pub(crate) width: f64,
+    pub(crate) height: f64,
+}
+
+impl TimelineLayerGeometry {
+    pub(crate) fn center_y(self) -> f64 {
+        self.y + self.height / 2.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TimelineGeometry {
+    pub(crate) trough: TimelineLayerGeometry,
+    pub(crate) buffered: TimelineLayerGeometry,
+    pub(crate) played: TimelineLayerGeometry,
+    pub(crate) thumb_center_x: f64,
+    pub(crate) thumb_center_y: f64,
+}
+
+pub(crate) fn timeline_geometry(
+    width: i32,
+    height: i32,
+    played_fraction: f64,
+    buffered_fraction: f64,
+) -> TimelineGeometry {
+    let inset = TIMELINE_THUMB_DIAMETER / 2.0;
+    let rail_width = (f64::from(width) - TIMELINE_THUMB_DIAMETER).max(0.0);
+    let center_y = f64::from(height) / 2.0;
+    let rail_y = center_y - TIMELINE_RAIL_HEIGHT / 2.0;
+    let played_fraction = played_fraction.clamp(0.0, 1.0);
+    let buffered_fraction = buffered_fraction.clamp(played_fraction, 1.0);
+    let layer = |fraction: f64| TimelineLayerGeometry {
+        x: inset,
+        y: rail_y,
+        width: rail_width * fraction,
+        height: TIMELINE_RAIL_HEIGHT,
+    };
+
+    TimelineGeometry {
+        trough: layer(1.0),
+        buffered: layer(buffered_fraction),
+        played: layer(played_fraction),
+        thumb_center_x: inset + rail_width * played_fraction,
+        thumb_center_y: center_y,
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct TimelineRail {
+    area: gtk::DrawingArea,
+    buffered_fraction: Rc<Cell<f64>>,
+    loading: Rc<Cell<bool>>,
+    loading_phase: Rc<Cell<f64>>,
+    marks: Rc<RefCell<Vec<TimelineMark>>>,
+}
+
+impl TimelineRail {
+    fn new(adjustment: &gtk::Adjustment) -> Self {
+        let area = gtk::DrawingArea::new();
+        area.add_css_class("okp-timeline-rail");
+        area.set_content_width(120);
+        area.set_content_height(TIMELINE_HEIGHT);
+        area.set_hexpand(true);
+        area.set_can_target(false);
+
+        let buffered_fraction = Rc::new(Cell::new(0.0));
+        let loading = Rc::new(Cell::new(false));
+        let loading_phase = Rc::new(Cell::new(0.0));
+        let marks = Rc::new(RefCell::new(Vec::new()));
+        let draw_adjustment = adjustment.clone();
+        let draw_buffered_fraction = Rc::clone(&buffered_fraction);
+        let draw_loading = Rc::clone(&loading);
+        let draw_loading_phase = Rc::clone(&loading_phase);
+        let draw_marks = Rc::clone(&marks);
+        area.set_draw_func(move |_, cr, width, height| {
+            let marks = draw_marks.borrow();
+            let snapshot = TimelineDrawSnapshot {
+                adjustment: &draw_adjustment,
+                buffered_fraction: draw_buffered_fraction.get(),
+                loading: draw_loading.get(),
+                loading_phase: draw_loading_phase.get(),
+                marks: &marks,
+            };
+            draw_timeline_rail(cr, width, height, snapshot);
+        });
+
+        let redraw = area.clone();
+        adjustment.connect_value_changed(move |_| redraw.queue_draw());
+        let redraw = area.clone();
+        adjustment.connect_changed(move |_| redraw.queue_draw());
+
+        Self {
+            area,
+            buffered_fraction,
+            loading,
+            loading_phase,
+            marks,
+        }
+    }
+
+    fn widget(&self) -> &gtk::DrawingArea {
+        &self.area
+    }
+
+    pub(crate) fn set_buffered_fraction(&self, fraction: f64) {
+        self.buffered_fraction.set(fraction.clamp(0.0, 1.0));
+        self.area.queue_draw();
+    }
+
+    pub(crate) fn set_loading(&self, loading: bool) {
+        if self.loading.replace(loading) != loading {
+            self.area.queue_draw();
+        }
+    }
+
+    pub(crate) fn pulse(&self) {
+        self.loading_phase
+            .set((self.loading_phase.get() + 0.08).rem_euclid(1.0));
+        self.area.queue_draw();
+    }
+
+    pub(crate) fn set_marks(&self, marks: Vec<TimelineMark>) {
+        if *self.marks.borrow() == marks {
+            return;
+        }
+        self.marks.replace(marks);
+        self.area.queue_draw();
+    }
+}
+
+struct TimelineDrawSnapshot<'a> {
+    adjustment: &'a gtk::Adjustment,
+    buffered_fraction: f64,
+    loading: bool,
+    loading_phase: f64,
+    marks: &'a [TimelineMark],
+}
+
+fn draw_timeline_rail(
+    cr: &cairo::Context,
+    width: i32,
+    height: i32,
+    snapshot: TimelineDrawSnapshot<'_>,
+) {
+    let lower = snapshot.adjustment.lower();
+    let upper = snapshot.adjustment.upper();
+    let range = upper - lower;
+    let played_fraction = if range.is_finite() && range > 0.0 {
+        ((snapshot.adjustment.value() - lower) / range).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let geometry = timeline_geometry(width, height, played_fraction, snapshot.buffered_fraction);
+    let rail_center_y = geometry.trough.center_y();
+
+    fill_timeline_layer(cr, geometry.trough, (1.0, 1.0, 1.0, 0.22));
+    if snapshot.loading {
+        let segment_fraction = 0.22;
+        let travel = geometry.trough.width * (1.0 + segment_fraction);
+        let segment_x = geometry.trough.x - geometry.trough.width * segment_fraction
+            + travel * snapshot.loading_phase;
+        let segment = TimelineLayerGeometry {
+            x: segment_x.max(geometry.trough.x),
+            y: geometry.trough.y,
+            width: (geometry.trough.width * segment_fraction)
+                .min(geometry.trough.x + geometry.trough.width - segment_x)
+                .max(0.0),
+            height: geometry.trough.height,
+        };
+        fill_timeline_layer(cr, segment, (1.0, 1.0, 1.0, 0.62));
+    } else {
+        fill_timeline_layer(cr, geometry.buffered, (1.0, 1.0, 1.0, 0.46));
+    }
+    fill_timeline_layer(
+        cr,
+        geometry.played,
+        (40.0 / 255.0, 179.0 / 255.0, 170.0 / 255.0, 1.0),
+    );
+
+    for mark in snapshot.marks {
+        if !range.is_finite() || range <= 0.0 {
+            continue;
+        }
+        let fraction = ((mark.time - lower) / range).clamp(0.0, 1.0);
+        let x = geometry.trough.x + geometry.trough.width * fraction;
+        let (mark_width, mark_height, color, label) = match mark.kind {
+            TimelineMarkKind::Chapter => (2.0, 7.0, (1.0, 1.0, 1.0, 0.42), None),
+            TimelineMarkKind::Bookmark => (3.0, 9.0, (0.91, 0.69, 0.29, 0.96), None),
+            TimelineMarkKind::AbStart => (3.0, 9.0, (0.91, 0.69, 0.29, 0.96), Some("A")),
+            TimelineMarkKind::AbEnd => (3.0, 9.0, (0.91, 0.69, 0.29, 0.96), Some("B")),
+            TimelineMarkKind::AbLoop => (3.0, 9.0, (0.91, 0.69, 0.29, 0.96), Some("A-B")),
+        };
+        let marker = TimelineLayerGeometry {
+            x: x - mark_width / 2.0,
+            y: rail_center_y - mark_height / 2.0,
+            width: mark_width,
+            height: mark_height,
+        };
+        fill_timeline_layer(cr, marker, color);
+        if let Some(label) = label {
+            cr.set_source_rgba(0.91, 0.69, 0.29, 0.98);
+            cr.select_font_face("sans", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
+            cr.set_font_size(8.0);
+            cr.move_to(x + 3.0, f64::from(height) - 1.0);
+            let _ = cr.show_text(label);
+        }
+    }
+
+    cr.set_source_rgba(0.0, 0.0, 0.0, 0.42);
+    cr.arc(
+        geometry.thumb_center_x,
+        rail_center_y + 1.0,
+        TIMELINE_THUMB_DIAMETER / 2.0 + 1.0,
+        0.0,
+        std::f64::consts::TAU,
+    );
+    let _ = cr.fill();
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.96);
+    cr.arc(
+        geometry.thumb_center_x,
+        rail_center_y,
+        TIMELINE_THUMB_DIAMETER / 2.0,
+        0.0,
+        std::f64::consts::TAU,
+    );
+    let _ = cr.fill();
+}
+
+fn fill_timeline_layer(
+    cr: &cairo::Context,
+    layer: TimelineLayerGeometry,
+    color: (f64, f64, f64, f64),
+) {
+    if layer.width <= 0.0 || layer.height <= 0.0 {
+        return;
+    }
+    timeline_rounded_rect(
+        cr,
+        layer.x,
+        layer.y,
+        layer.width,
+        layer.height,
+        layer.height / 2.0,
+    );
+    cr.set_source_rgba(color.0, color.1, color.2, color.3);
+    let _ = cr.fill();
+}
+
+fn timeline_rounded_rect(
+    cr: &cairo::Context,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    radius: f64,
+) {
+    let right = x + width;
+    let bottom = y + height;
+    cr.new_sub_path();
+    cr.arc(
+        right - radius,
+        y + radius,
+        radius,
+        -std::f64::consts::FRAC_PI_2,
+        0.0,
+    );
+    cr.arc(
+        right - radius,
+        bottom - radius,
+        radius,
+        0.0,
+        std::f64::consts::FRAC_PI_2,
+    );
+    cr.arc(
+        x + radius,
+        bottom - radius,
+        radius,
+        std::f64::consts::FRAC_PI_2,
+        std::f64::consts::PI,
+    );
+    cr.arc(
+        x + radius,
+        y + radius,
+        radius,
+        std::f64::consts::PI,
+        std::f64::consts::PI * 1.5,
+    );
+    cr.close_path();
+}
 
 #[derive(Clone)]
 pub(crate) struct VolumeControl {
@@ -724,22 +1021,19 @@ pub(crate) fn build_controls(
     seek.set_draw_value(false);
     seek.set_hexpand(true);
     seek.set_sensitive(false);
+    seek.set_size_request(120, TIMELINE_HEIGHT);
     seek.add_css_class("okp-seek");
 
-    let buffered_progress = gtk::ProgressBar::new();
-    buffered_progress.add_css_class("okp-buffered-progress");
-    buffered_progress.set_fraction(0.0);
-    buffered_progress.set_size_request(120, 4);
-    buffered_progress.set_halign(gtk::Align::Fill);
-    buffered_progress.set_valign(gtk::Align::Center);
-    buffered_progress.set_hexpand(true);
-    buffered_progress.set_can_target(false);
+    let timeline_rail = TimelineRail::new(&seek.adjustment());
 
     let timeline = gtk::Overlay::new();
     timeline.add_css_class("okp-timeline");
     timeline.set_hexpand(true);
-    timeline.set_child(Some(&buffered_progress));
+    timeline.set_valign(gtk::Align::Center);
+    timeline.set_size_request(120, TIMELINE_HEIGHT);
+    timeline.set_child(Some(timeline_rail.widget()));
     timeline.add_overlay(&seek);
+    timeline.set_measure_overlay(&seek, true);
 
     let volume = VolumeControl::new(
         Rc::clone(&state),
@@ -1038,13 +1332,12 @@ pub(crate) fn build_controls(
         more_button,
         timeline,
         seek,
-        buffered_progress,
+        timeline_rail,
         elapsed_label,
         duration_label,
         trailing_time_mode,
         volume,
         status_toast,
-        timeline_marks_snapshot: RefCell::new(Vec::new()),
         up_next_revealer,
         side_panel_fade_revealer,
         chapters_tab,

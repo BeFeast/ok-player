@@ -375,12 +375,7 @@ pub(crate) fn connect_state_poll(
         // in production the loaded audio already hides it (`is_preview_frozen` stays false).
         empty_surface.refresh(&window, &state, Rc::clone(&status_toast));
         let failed = state.borrow().media_load_state == network_media::MediaLoadState::Failed;
-        empty_surface.set_has_media(
-            has_media
-                || failed
-                || env::var_os("OKP_PLAYBACK_STATE_PREVIEW").is_some()
-                || lyrics_surface.is_preview_frozen(),
-        );
+        empty_surface.set_has_media(has_media || failed || lyrics_surface.is_preview_frozen());
         lyrics_surface.update(&state);
         drain_thumbnail_events(&controls);
         update_up_next_panel(&controls, &state, &chrome);
@@ -388,11 +383,9 @@ pub(crate) fn connect_state_poll(
         if let Some(playback) = playback {
             try_pending_subtitles(&state);
             let load_state = state.borrow().media_load_state;
-            let preview_state = env::var("OKP_PLAYBACK_STATE_PREVIEW").ok();
             chrome.set_auto_hide_enabled(
                 has_media
                     && load_state == network_media::MediaLoadState::Playing
-                    && preview_state.is_none()
                     && !playback.paused,
             );
 
@@ -437,23 +430,17 @@ pub(crate) fn connect_state_poll(
             controls.seek.set_value(time_pos);
             updating_seek.set(false);
 
-            if load_state == network_media::MediaLoadState::Loading
-                || preview_state.as_deref() == Some("loading")
-            {
-                controls.buffered_progress.add_css_class("is-loading");
-                controls.buffered_progress.pulse();
+            if load_state == network_media::MediaLoadState::Loading {
+                controls.timeline_rail.set_loading(true);
+                controls.timeline_rail.pulse();
             } else {
-                controls.buffered_progress.remove_css_class("is-loading");
-                let fraction = if env::var_os("OKP_BUFFERED_TIMELINE_PREVIEW").is_some() {
-                    0.72
-                } else {
-                    timeline_buffer::fraction(
-                        playback.time_pos,
-                        playback.cache_duration,
-                        playback.duration,
-                    )
-                };
-                controls.buffered_progress.set_fraction(fraction);
+                controls.timeline_rail.set_loading(false);
+                let fraction = timeline_buffer::fraction(
+                    playback.time_pos,
+                    playback.cache_duration,
+                    playback.duration,
+                );
+                controls.timeline_rail.set_buffered_fraction(fraction);
             }
 
             if let Some(volume) = playback.volume {
@@ -499,8 +486,8 @@ pub(crate) fn connect_state_poll(
             controls.seek.set_range(0.0, 1.0);
             controls.seek.set_value(0.0);
             updating_seek.set(false);
-            controls.buffered_progress.set_fraction(0.0);
-            controls.buffered_progress.remove_css_class("is-loading");
+            controls.timeline_rail.set_buffered_fraction(0.0);
+            controls.timeline_rail.set_loading(false);
             controls.elapsed_label.set_text("00:00");
             controls.duration_label.set_text("-00:00");
         }
