@@ -24,7 +24,7 @@ use okp_core::update_selection::{self, DebFeed, DebUpdate, SHA256SUMS_ASSET};
 use okp_core::{
     AppIdentity, chapter_math, lrc, m3u, media_formats, natural_compare, network_media,
     ok_player_uri, seek_readout, sha256sums, subtitle_delay, time_code, timeline_buffer,
-    video_click, youtube_open,
+    video_click, volume, youtube_open,
 };
 use okp_mpv::{
     AbLoopState, AudioDevice, Chapter, EndFileReason, InfoRow, InfoSection, InfoTrack, MediaInfo,
@@ -185,6 +185,11 @@ struct PlayerState {
     /// loading, buffering, and error surfaces read from. Pure core (see
     /// [`okp_core::network_media`]); the shell only transitions and renders it.
     media_load_state: network_media::MediaLoadState,
+    /// Portable mute/restore memory shared by the OSC button and keyboard path.
+    volume_state: volume::VolumeState,
+    /// Latest optimistic UI/shortcut projection awaiting the matching mpv observation.
+    /// This prevents the poll loop from rebasing rapid nudges on an older snapshot.
+    pending_volume: Option<f64>,
     /// The URL most recently handed to the engine, kept so the failure surface's
     /// Retry action can replay the same source. Cleared on close / new load.
     last_load_url: Option<String>,
@@ -732,7 +737,7 @@ struct Controls {
     elapsed_label: gtk::Label,
     duration_label: gtk::Label,
     trailing_time_mode: Rc<Cell<time_code::TrailingTimeMode>>,
-    volume: gtk::Scale,
+    volume: VolumeControl,
     // Shared toast surface, kept so the side panel's own row handlers (add/remove a
     // bookmark) can report their outcome without threading a toast through every call.
     status_toast: Rc<StatusToast>,
@@ -771,7 +776,6 @@ struct PlayerWindowChrome {
 
 struct StatePollContext {
     updating_seek: Rc<Cell<bool>>,
-    updating_volume: Rc<Cell<bool>>,
     chrome: Rc<ChromeVisibility>,
     window_chrome: PlayerWindowChrome,
     subtitle_position_snapshot: Rc<Cell<Option<i64>>>,

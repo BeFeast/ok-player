@@ -1,5 +1,594 @@
 use super::*;
 
+pub(crate) const VOLUME_RESTING_SIZE: i32 = 34;
+pub(crate) const VOLUME_WICK_WIDTH: i32 = 18;
+pub(crate) const VOLUME_WICK_HEIGHT: i32 = 3;
+pub(crate) const VOLUME_TRACK_WIDTH: i32 = 122;
+pub(crate) const VOLUME_TRACK_HEIGHT: i32 = 6;
+pub(crate) const VOLUME_THUMB_SIZE: i32 = 14;
+pub(crate) const VOLUME_CAPSULE_OFFSET: i32 = 10;
+pub(crate) const VOLUME_COLLAPSE_MS: u64 = 120;
+pub(crate) const VOLUME_HOVER_GRACE_MS: u64 = 220;
+
+#[derive(Clone)]
+pub(crate) struct VolumeControl {
+    root: gtk::Box,
+    button: gtk::Button,
+    icon: gtk::Image,
+    wick: gtk::DrawingArea,
+    scale: gtk::Scale,
+    track: gtk::DrawingArea,
+    readout: gtk::Button,
+    readout_input: gtk::Entry,
+    capsule: gtk::Box,
+    popover: gtk::Popover,
+    model: Rc<Cell<volume::VolumeState>>,
+    state: Rc<RefCell<PlayerState>>,
+    updating: Rc<Cell<bool>>,
+    close_source: Rc<RefCell<Option<glib::SourceId>>>,
+    preview_override: Rc<Cell<bool>>,
+    exact_input_active: Rc<Cell<bool>>,
+    exact_input_focused: Rc<Cell<bool>>,
+    animations_enabled: bool,
+}
+
+impl VolumeControl {
+    fn new(
+        state: Rc<RefCell<PlayerState>>,
+        updating: Rc<Cell<bool>>,
+        chrome: Rc<ChromeVisibility>,
+    ) -> Self {
+        let initial_level = state.borrow().settings.volume();
+        state.borrow_mut().volume_state.set_level(initial_level);
+        let model = Rc::new(Cell::new(volume::VolumeState::new(initial_level)));
+
+        let icon = gtk::Image::from_icon_name("audio-volume-high-symbolic");
+        icon.add_css_class("okp-volume-icon");
+
+        let wick = gtk::DrawingArea::new();
+        wick.add_css_class("okp-volume-wick");
+        wick.set_content_width(VOLUME_WICK_WIDTH);
+        wick.set_content_height(VOLUME_WICK_HEIGHT);
+        wick.set_can_target(false);
+        let wick_model = Rc::clone(&model);
+        wick.set_draw_func(move |_, cr, width, height| {
+            draw_volume_wick(cr, width, height, wick_model.get());
+        });
+
+        let resting = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        resting.set_halign(gtk::Align::Center);
+        resting.set_valign(gtk::Align::Center);
+        resting.append(&icon);
+        resting.append(&wick);
+
+        let button = gtk::Button::builder().focus_on_click(false).build();
+        button.add_css_class("okp-volume-button");
+        button.set_has_frame(false);
+        button.set_size_request(VOLUME_RESTING_SIZE, VOLUME_RESTING_SIZE);
+        button.set_tooltip_text(Some("Mute (M)"));
+        button.set_child(Some(&resting));
+
+        let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        root.add_css_class("okp-volume-control");
+        root.set_size_request(VOLUME_RESTING_SIZE, VOLUME_RESTING_SIZE);
+        root.set_halign(gtk::Align::Center);
+        root.set_valign(gtk::Align::Center);
+        root.append(&button);
+
+        let track = gtk::DrawingArea::new();
+        track.add_css_class("okp-volume-track");
+        track.set_content_width(VOLUME_TRACK_WIDTH);
+        track.set_content_height(VOLUME_THUMB_SIZE);
+        track.set_can_target(false);
+        let track_model = Rc::clone(&model);
+        track.set_draw_func(move |_, cr, width, height| {
+            draw_volume_track(cr, width, height, track_model.get());
+        });
+
+        let scale = gtk::Scale::with_range(
+            gtk::Orientation::Horizontal,
+            volume::MIN_VOLUME,
+            volume::MAX_VOLUME,
+            1.0,
+        );
+        scale.add_css_class("okp-volume-slider");
+        scale.set_draw_value(false);
+        scale.set_increments(1.0, 10.0);
+        scale.set_round_digits(1);
+        scale.set_size_request(VOLUME_TRACK_WIDTH, VOLUME_THUMB_SIZE);
+        scale.set_value(initial_level);
+
+        let track_stack = gtk::Overlay::new();
+        track_stack.add_css_class("okp-volume-track-stack");
+        track_stack.set_child(Some(&track));
+        track_stack.add_overlay(&scale);
+        track_stack.set_measure_overlay(&scale, true);
+
+        let readout = gtk::Button::builder()
+            .label("100%")
+            .focus_on_click(true)
+            .build();
+        readout.add_css_class("okp-volume-readout");
+        readout.set_has_frame(false);
+        readout.set_tooltip_text(Some("Enter an exact volume"));
+
+        let readout_input = gtk::Entry::new();
+        readout_input.add_css_class("okp-volume-readout-input");
+        readout_input.set_width_chars(5);
+        readout_input.set_max_width_chars(6);
+        readout_input.set_visible(false);
+        readout_input.set_focusable(true);
+        readout_input.set_input_purpose(gtk::InputPurpose::Number);
+
+        let readout_stack = gtk::Overlay::new();
+        readout_stack.add_css_class("okp-volume-readout-stack");
+        readout_stack.set_child(Some(&readout));
+        readout_stack.add_overlay(&readout_input);
+        readout_stack.set_measure_overlay(&readout_input, true);
+
+        let capsule = gtk::Box::new(gtk::Orientation::Horizontal, 11);
+        capsule.add_css_class("okp-volume-capsule");
+        capsule.append(&track_stack);
+        capsule.append(&readout_stack);
+
+        let popover = gtk::Popover::new();
+        popover.add_css_class("okp-volume-popover");
+        popover.set_autohide(false);
+        popover.set_has_arrow(false);
+        popover.set_position(gtk::PositionType::Top);
+        popover.set_offset(0, -VOLUME_CAPSULE_OFFSET);
+        popover.set_child(Some(&capsule));
+        popover.set_parent(&root);
+        connect_popover_chrome_pin(&popover, chrome);
+
+        let animations_enabled =
+            gtk::Settings::default().is_none_or(|settings| settings.is_gtk_enable_animations());
+        if !animations_enabled {
+            capsule.add_css_class("reduce-motion");
+        }
+
+        let control = Self {
+            root,
+            button,
+            icon,
+            wick,
+            scale,
+            track,
+            readout,
+            readout_input,
+            capsule,
+            popover,
+            model,
+            state,
+            updating,
+            close_source: Rc::new(RefCell::new(None)),
+            preview_override: Rc::new(Cell::new(false)),
+            exact_input_active: Rc::new(Cell::new(false)),
+            exact_input_focused: Rc::new(Cell::new(false)),
+            animations_enabled,
+        };
+        control.connect_events();
+        control.project();
+        control
+    }
+
+    pub(crate) fn widget(&self) -> &gtk::Box {
+        &self.root
+    }
+
+    pub(crate) fn sync_level(&self, level: f64) {
+        if self.preview_override.get() {
+            return;
+        }
+        let level = {
+            let mut state = self.state.borrow_mut();
+            let Some(level) = volume::reconcile_observed_level(&mut state.pending_volume, level)
+            else {
+                return;
+            };
+            state.volume_state.set_level(level)
+        };
+        let mut model = self.model.get();
+        model.set_level(level);
+        self.model.set(model);
+        self.project();
+    }
+
+    pub(crate) fn open_preview(&self, mode: &str) {
+        let level = match mode {
+            "zero" | "muted" => 0.0,
+            "normal" => 64.0,
+            "unity" => 100.0,
+            "boost" => 124.0,
+            _ => 78.0,
+        };
+        self.preview_override.set(true);
+        let mut model = volume::VolumeState::new(if mode == "muted" { 72.0 } else { level });
+        if mode == "muted" {
+            model.toggle_mute();
+        }
+        self.model.set(model);
+        self.project();
+        if mode != "rest" {
+            self.open();
+        }
+    }
+
+    fn connect_events(&self) {
+        let clicked = self.clone();
+        self.button.connect_clicked(move |_| clicked.toggle_mute());
+
+        let changed = self.clone();
+        self.scale.connect_change_value(move |_, _, value| {
+            if !changed.updating.get() {
+                changed.set_level_from_ui(value);
+            }
+            glib::Propagation::Proceed
+        });
+
+        let exact = self.clone();
+        self.readout
+            .connect_clicked(move |_| exact.begin_exact_input());
+        let apply = self.clone();
+        self.readout_input
+            .connect_activate(move |_| apply.apply_exact_input());
+        let exact_focus = gtk::EventControllerFocus::new();
+        let focused = self.clone();
+        exact_focus.connect_enter(move |_| {
+            focused.exact_input_focused.set(true);
+            focused.open();
+            if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+                eprintln!("interaction: volume-exact-focus=entry");
+            }
+        });
+        let blurred = self.clone();
+        exact_focus.connect_leave(move |_| {
+            if blurred.exact_input_focused.replace(false) && blurred.exact_input_active.get() {
+                blurred.commit_exact_input_on_blur();
+            }
+            blurred.schedule_close();
+        });
+        self.readout_input.add_controller(exact_focus);
+        let dismiss = self.clone();
+        self.popover.connect_closed(move |_| {
+            if dismiss.exact_input_active.get() {
+                dismiss.commit_exact_input_on_blur();
+            }
+        });
+
+        let motion = gtk::EventControllerMotion::new();
+        let enter = self.clone();
+        motion.connect_enter(move |_, _, _| enter.open());
+        let leave = self.clone();
+        motion.connect_leave(move |_| leave.schedule_close());
+        self.root.add_controller(motion);
+
+        let capsule_motion = gtk::EventControllerMotion::new();
+        let enter = self.clone();
+        capsule_motion.connect_enter(move |_, _, _| enter.open());
+        let leave = self.clone();
+        capsule_motion.connect_leave(move |_| leave.schedule_close());
+        self.capsule.add_controller(capsule_motion);
+
+        for widget in [
+            self.button.clone().upcast::<gtk::Widget>(),
+            self.scale.clone().upcast::<gtk::Widget>(),
+            self.readout.clone().upcast::<gtk::Widget>(),
+        ] {
+            let focus = self.clone();
+            widget.connect_has_focus_notify(move |widget| {
+                if widget.has_focus() {
+                    focus.open();
+                } else {
+                    focus.schedule_close();
+                }
+            });
+        }
+
+        for widget in [
+            self.root.clone().upcast::<gtk::Widget>(),
+            self.capsule.clone().upcast::<gtk::Widget>(),
+        ] {
+            let scroll = gtk::EventControllerScroll::new(
+                gtk::EventControllerScrollFlags::VERTICAL
+                    | gtk::EventControllerScrollFlags::DISCRETE,
+            );
+            let scrolled = self.clone();
+            scroll.connect_scroll(move |controller, _, dy| {
+                let fine = controller
+                    .current_event_state()
+                    .contains(gdk::ModifierType::SHIFT_MASK);
+                let Some(delta) = volume_scroll_delta(dy, fine) else {
+                    return glib::Propagation::Proceed;
+                };
+                scrolled.nudge(delta);
+                glib::Propagation::Stop
+            });
+            widget.add_controller(scroll);
+        }
+
+        let keys = gtk::EventControllerKey::new();
+        let keyed = self.clone();
+        keys.connect_key_pressed(move |_, key, _, _| {
+            if let Some(delta) = volume_key_delta(key) {
+                keyed.nudge(delta);
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
+            }
+        });
+        self.button.add_controller(keys);
+    }
+
+    fn set_level_from_ui(&self, level: f64) {
+        let mut model = self.model.get();
+        let level = model.set_level(level);
+        self.model.set(model);
+        self.project();
+        set_volume_from_ui(&self.state, level);
+    }
+
+    fn nudge(&self, delta: f64) {
+        let mut model = self.model.get();
+        let level = model.nudge(delta);
+        self.model.set(model);
+        self.project();
+        set_volume_from_ui(&self.state, level);
+    }
+
+    fn toggle_mute(&self) {
+        let mut model = self.model.get();
+        let level = model.toggle_mute();
+        self.model.set(model);
+        self.project();
+        set_volume_from_ui(&self.state, level);
+    }
+
+    fn begin_exact_input(&self) {
+        let level = self.model.get().level();
+        self.readout_input.set_text(&format!("{level:.1}"));
+        self.exact_input_active.set(true);
+        self.exact_input_focused.set(false);
+        self.readout.set_visible(false);
+        self.readout_input.set_visible(true);
+        self.open();
+        let input = self.readout_input.clone();
+        glib::idle_add_local_once(move || {
+            // Use GtkEntry's focus path so focus lands inside its editable child.
+            // Setting root focus directly targets only the composite entry widget,
+            // which reports focus while text input and activation are lost.
+            input.grab_focus_without_selecting();
+            input.select_region(0, -1);
+        });
+    }
+
+    fn apply_exact_input(&self) {
+        if self.commit_exact_input() {
+            if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+                eprintln!("interaction: volume-exact-commit=activate");
+            }
+            self.scale.grab_focus();
+        }
+    }
+
+    fn commit_exact_input_on_blur(&self) {
+        if self.commit_exact_input() && env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+            eprintln!("interaction: volume-exact-commit=blur");
+        }
+    }
+
+    fn commit_exact_input(&self) -> bool {
+        if !self.exact_input_active.replace(false) {
+            return false;
+        }
+        let text = self.readout_input.text();
+        if let Some(level) = volume::parse_readout(text.as_str()) {
+            self.set_level_from_ui(level);
+        }
+        self.readout_input.set_visible(false);
+        self.readout.set_visible(true);
+        self.exact_input_focused.set(false);
+        true
+    }
+
+    fn project(&self) {
+        let model = self.model.get();
+        self.updating.set(true);
+        self.scale.set_value(model.level());
+        self.updating.set(false);
+
+        self.icon.set_icon_name(Some(if model.is_muted() {
+            "audio-volume-muted-symbolic"
+        } else if model.level() < 50.0 {
+            "audio-volume-low-symbolic"
+        } else {
+            "audio-volume-high-symbolic"
+        }));
+        self.readout.set_label(&model.readout());
+        self.button.set_tooltip_text(Some(if model.is_muted() {
+            "Unmute (M)"
+        } else {
+            "Mute (M)"
+        }));
+        set_state_class(&self.root, "is-muted", model.is_muted());
+        set_state_class(&self.root, "is-boosted", model.is_boosted());
+        set_state_class(&self.capsule, "is-muted", model.is_muted());
+        set_state_class(&self.capsule, "is-boosted", model.is_boosted());
+        self.wick.queue_draw();
+        self.track.queue_draw();
+
+        let value_text = model.readout();
+        self.scale.update_property(&[
+            gtk::accessible::Property::Label("Volume"),
+            gtk::accessible::Property::ValueMin(volume::MIN_VOLUME),
+            gtk::accessible::Property::ValueMax(volume::MAX_VOLUME),
+            gtk::accessible::Property::ValueNow(model.level()),
+            gtk::accessible::Property::ValueText(&value_text),
+        ]);
+        let button_label = if model.is_muted() {
+            format!("Unmute volume to {:.1}%", model.remembered_nonzero())
+        } else {
+            format!("Mute volume at {:.1}%", model.level())
+        };
+        self.button
+            .update_property(&[gtk::accessible::Property::Label(&button_label)]);
+    }
+
+    fn open(&self) {
+        self.cancel_close();
+        self.capsule.remove_css_class("is-closing");
+        if !self.capsule.has_css_class("is-open") {
+            self.capsule.remove_css_class("is-open");
+            self.popover.popup();
+            if self.animations_enabled {
+                let capsule = self.capsule.clone();
+                glib::timeout_add_local_once(Duration::from_millis(16), move || {
+                    capsule.add_css_class("is-open");
+                });
+            } else {
+                self.capsule.add_css_class("is-open");
+            }
+        } else {
+            self.popover.popup();
+        }
+    }
+
+    fn schedule_close(&self) {
+        if self.preview_override.get() {
+            return;
+        }
+        self.cancel_close();
+        let control = self.clone();
+        let source =
+            glib::timeout_add_local(Duration::from_millis(VOLUME_HOVER_GRACE_MS), move || {
+                control.close_source.borrow_mut().take();
+                control.collapse();
+                glib::ControlFlow::Break
+            });
+        self.close_source.borrow_mut().replace(source);
+    }
+
+    fn collapse(&self) {
+        if self.exact_input_active.get() {
+            return;
+        }
+        self.capsule.remove_css_class("is-open");
+        self.capsule.add_css_class("is-closing");
+        if !self.animations_enabled {
+            self.popover.popdown();
+            if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+                eprintln!("interaction: volume-capsule=closed");
+            }
+            return;
+        }
+        let popover = self.popover.clone();
+        let capsule = self.capsule.clone();
+        let close_source = Rc::clone(&self.close_source);
+        let source =
+            glib::timeout_add_local(Duration::from_millis(VOLUME_COLLAPSE_MS), move || {
+                close_source.borrow_mut().take();
+                capsule.remove_css_class("is-closing");
+                popover.popdown();
+                if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+                    eprintln!("interaction: volume-capsule=closed");
+                }
+                glib::ControlFlow::Break
+            });
+        self.close_source.borrow_mut().replace(source);
+    }
+
+    fn cancel_close(&self) {
+        if let Some(source) = self.close_source.borrow_mut().take() {
+            source.remove();
+        }
+    }
+}
+
+pub(crate) fn volume_scroll_delta(dy: f64, fine: bool) -> Option<f64> {
+    if !dy.is_finite() || dy == 0.0 {
+        return None;
+    }
+    let step = if fine { 0.1 } else { 1.0 };
+    Some(if dy < 0.0 { step } else { -step })
+}
+
+pub(crate) fn volume_key_delta(key: gdk::Key) -> Option<f64> {
+    match key {
+        gdk::Key::Up | gdk::Key::Right => Some(1.0),
+        gdk::Key::Down | gdk::Key::Left => Some(-1.0),
+        _ => None,
+    }
+}
+
+fn set_state_class(widget: &impl IsA<gtk::Widget>, class: &str, enabled: bool) {
+    if enabled {
+        widget.add_css_class(class);
+    } else {
+        widget.remove_css_class(class);
+    }
+}
+
+fn draw_volume_wick(cr: &cairo::Context, width: i32, height: i32, state: volume::VolumeState) {
+    let y = f64::from(height) / 2.0;
+    cr.set_line_width(f64::from(VOLUME_WICK_HEIGHT));
+    cr.set_line_cap(cairo::LineCap::Round);
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.19);
+    cr.move_to(1.5, y);
+    cr.line_to(f64::from(width) - 1.5, y);
+    let _ = cr.stroke();
+
+    if !state.is_muted() {
+        let fill = (f64::from(width) - 3.0) * state.level_fraction();
+        let color = if state.is_boosted() {
+            (0.941, 0.722, 0.251)
+        } else {
+            (0.157, 0.702, 0.667)
+        };
+        cr.set_source_rgb(color.0, color.1, color.2);
+        cr.move_to(1.5, y);
+        cr.line_to(1.5 + fill, y);
+        let _ = cr.stroke();
+    }
+}
+
+fn draw_volume_track(cr: &cairo::Context, width: i32, height: i32, state: volume::VolumeState) {
+    let width = f64::from(width);
+    let y = f64::from(height) / 2.0;
+    cr.set_line_width(f64::from(VOLUME_TRACK_HEIGHT));
+    cr.set_line_cap(cairo::LineCap::Round);
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.20);
+    cr.move_to(3.0, y);
+    cr.line_to(width - 3.0, y);
+    let _ = cr.stroke();
+
+    let track_span = width - 6.0;
+    let teal_end = 3.0 + track_span * state.teal_fraction();
+    if teal_end > 3.0 {
+        cr.set_source_rgba(
+            0.157,
+            0.702,
+            0.667,
+            if state.is_muted() { 0.38 } else { 1.0 },
+        );
+        cr.move_to(3.0, y);
+        cr.line_to(teal_end, y);
+        let _ = cr.stroke();
+    }
+    if state.is_boosted() && !state.is_muted() {
+        let boost_start = 3.0 + track_span * volume::VolumeState::unity_fraction();
+        let boost_end = boost_start + track_span * state.boost_fraction();
+        cr.set_source_rgb(0.941, 0.722, 0.251);
+        cr.move_to(boost_start, y);
+        cr.line_to(boost_end, y);
+        let _ = cr.stroke();
+    }
+
+    let marker_x = 3.0 + track_span * volume::VolumeState::unity_fraction();
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.50);
+    cr.rectangle(marker_x - 1.0, 1.0, 2.0, f64::from(height - 2));
+    let _ = cr.fill();
+}
+
 pub(crate) fn build_controls(
     window: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
@@ -152,11 +741,11 @@ pub(crate) fn build_controls(
     timeline.set_child(Some(&buffered_progress));
     timeline.add_overlay(&seek);
 
-    let volume = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 130.0, 1.0);
-    volume.set_draw_value(false);
-    volume.set_width_request(68);
-    volume.set_value(100.0);
-    volume.add_css_class("okp-volume");
+    let volume = VolumeControl::new(
+        Rc::clone(&state),
+        Rc::clone(&updating_volume),
+        Rc::clone(&chrome),
+    );
 
     let chapters_tab = side_panel_segment_button("Chapters", true);
     let up_next_tab = side_panel_segment_button("Up Next", false);
@@ -369,6 +958,11 @@ pub(crate) fn build_controls(
             eprintln!("Failed to toggle playback: {error}");
         }
     });
+    play_button.connect_has_focus_notify(|button| {
+        if button.has_focus() && env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+            eprintln!("interaction: outside-target=play-focused");
+        }
+    });
 
     let next_state = Rc::clone(&state);
     next_button.connect_clicked(move |_| {
@@ -429,15 +1023,6 @@ pub(crate) fn build_controls(
     });
     let seek_hover_preview = connect_seek_hover(&seek, Rc::clone(&state), thumbnail_sender.clone());
 
-    let volume_state = Rc::clone(&state);
-    volume.connect_change_value(move |_, _, value| {
-        if !updating_volume.get() {
-            set_volume_from_ui(&volume_state, value);
-        }
-
-        glib::Propagation::Proceed
-    });
-
     Controls {
         subtitle_button,
         audio_button,
@@ -485,20 +1070,13 @@ pub(crate) fn controls_bar(controls: &Controls) -> gtk::Overlay {
     bar.set_margin_end(16);
     bar.set_margin_bottom(18);
 
-    let volume_group = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    volume_group.add_css_class("okp-volume-group");
-    let volume_icon = gtk::Image::from_icon_name("audio-volume-high-symbolic");
-    volume_icon.add_css_class("okp-volume-icon");
-    volume_group.append(&volume_icon);
-    volume_group.append(&controls.volume);
-
     bar.append(&controls.play_button);
     bar.append(&controls.previous_button);
     bar.append(&controls.next_button);
     bar.append(&controls.elapsed_label);
     bar.append(&controls.timeline);
     bar.append(&controls.duration_label);
-    bar.append(&volume_group);
+    bar.append(controls.volume.widget());
     bar.append(&controls.speed_button);
     bar.append(&controls.subtitle_button);
     bar.append(&controls.audio_button);

@@ -24,6 +24,65 @@ fn about_display_version_keeps_about_layout_compact() {
 }
 
 #[test]
+fn floating_volume_control_keeps_a_fixed_osc_footprint() {
+    assert_eq!(VOLUME_RESTING_SIZE, 34);
+    assert_eq!(VOLUME_WICK_WIDTH, 18);
+    assert_eq!(VOLUME_WICK_HEIGHT, 3);
+    assert_eq!(VOLUME_TRACK_WIDTH, 122);
+    assert_eq!(VOLUME_TRACK_HEIGHT, 6);
+    assert_eq!(VOLUME_THUMB_SIZE, 14);
+    assert_eq!(VOLUME_CAPSULE_OFFSET, 10);
+    assert_eq!(VOLUME_HOVER_GRACE_MS, 220);
+    assert_eq!(VOLUME_COLLAPSE_MS, 120);
+}
+
+#[test]
+fn floating_volume_css_pins_capsule_geometry_motion_and_state_colors() {
+    let css = include_str!("css.rs");
+    for required in [
+        "padding: 9px 13px;",
+        "border-radius: 13px;",
+        "background: rgba(28, 28, 32, 0.72);",
+        "min-width: 122px;",
+        "min-height: 14px;",
+        "transition: opacity 150ms cubic-bezier(0.25, 0.1, 0.25, 1), transform 150ms cubic-bezier(0.25, 0.1, 0.25, 1);",
+        "transition: opacity 120ms cubic-bezier(0.25, 0.1, 0.25, 1), transform 120ms cubic-bezier(0.25, 0.1, 0.25, 1);",
+        "#F0B840",
+    ] {
+        assert!(css.contains(required), "missing volume CSS: {required}");
+    }
+
+    let controls = include_str!("controls.rs");
+    assert!(controls.contains("(0.157, 0.702, 0.667)")); // #28B3AA
+    assert!(controls.contains("VolumeState::unity_fraction()"));
+}
+
+#[test]
+fn mute_is_a_bindable_m_shortcut() {
+    assert_eq!(ShortcutAction::Mute.id(), "mute");
+    assert_eq!(ShortcutAction::Mute.default_shortcut(), "M");
+    assert!(
+        shortcuts::default_bindings().iter().any(|binding| {
+            binding.action == ShortcutAction::Mute && binding.chord.label() == "M"
+        })
+    );
+}
+
+#[test]
+fn volume_wheel_and_arrow_events_map_to_the_canonical_steps() {
+    assert_eq!(volume_scroll_delta(-1.0, false), Some(1.0));
+    assert_eq!(volume_scroll_delta(1.0, false), Some(-1.0));
+    assert_eq!(volume_scroll_delta(-1.0, true), Some(0.1));
+    assert_eq!(volume_scroll_delta(1.0, true), Some(-0.1));
+    assert_eq!(volume_scroll_delta(0.0, false), None);
+    assert_eq!(volume_key_delta(gdk::Key::Up), Some(1.0));
+    assert_eq!(volume_key_delta(gdk::Key::Right), Some(1.0));
+    assert_eq!(volume_key_delta(gdk::Key::Down), Some(-1.0));
+    assert_eq!(volume_key_delta(gdk::Key::Left), Some(-1.0));
+    assert_eq!(volume_key_delta(gdk::Key::space), None);
+}
+
+#[test]
 fn about_channel_separates_linux_release_track_from_version() {
     assert_eq!(about_display_channel("0.1.0-linux-alpha.77"), "Linux alpha");
     assert_eq!(about_hero_channel("Linux alpha"), "ALPHA");

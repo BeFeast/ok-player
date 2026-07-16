@@ -38,6 +38,7 @@ pub mod track_label;
 pub mod track_tags;
 pub mod update_selection;
 pub mod video_click;
+pub mod volume;
 pub mod youtube_open;
 
 pub use app::AppIdentity;

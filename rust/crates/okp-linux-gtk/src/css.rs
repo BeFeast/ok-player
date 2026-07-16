@@ -1416,13 +1416,6 @@ const OKP_STYLESHEET: &str = "
             background: rgba(255, 255, 255, 0.62);
         }
 
-        scale.okp-volume trough {
-            min-height: 4px;
-            border-radius: 999px;
-            background: rgba(255, 255, 255, 0.34);
-            border: none;
-        }
-
         scale.okp-seek trough {
             min-height: 4px;
             border-radius: 999px;
@@ -1430,15 +1423,13 @@ const OKP_STYLESHEET: &str = "
             border: none;
         }
 
-        scale.okp-seek highlight,
-        scale.okp-volume highlight {
+        scale.okp-seek highlight {
             min-height: 4px;
             border-radius: 999px;
             background: @okp_accent;
         }
 
-        scale.okp-seek slider,
-        scale.okp-volume slider {
+        scale.okp-seek slider {
             min-width: 12px;
             min-height: 12px;
             margin: -4px;
@@ -1517,17 +1508,159 @@ const OKP_STYLESHEET: &str = "
             font-size: 11px;
         }
 
-        .okp-volume {
-            min-width: 58px;
+        .okp-volume-control,
+        button.okp-volume-button {
+            min-width: 34px;
+            min-height: 34px;
         }
 
-        .okp-volume-group {
-            min-height: 32px;
+        button.okp-volume-button {
+            padding: 0;
+            margin: 0;
+            border: none;
+            border-radius: 6px;
+            background: transparent;
+            box-shadow: none;
+        }
+
+        button.okp-volume-button:hover,
+        button.okp-volume-button:focus-visible {
+            background: rgba(255, 255, 255, 0.10);
         }
 
         .okp-volume-icon {
             color: rgba(255, 255, 255, 0.86);
-            -gtk-icon-size: 19px;
+            -gtk-icon-size: 18px;
+        }
+
+        .okp-volume-wick {
+            min-width: 18px;
+            min-height: 3px;
+            margin-top: -2px;
+        }
+
+        .okp-volume-control.is-boosted .okp-volume-icon,
+        .okp-volume-control.is-muted .okp-volume-icon {
+            color: #F0B840;
+        }
+
+        popover.okp-volume-popover,
+        popover.okp-volume-popover > contents {
+            padding: 0;
+            background: transparent;
+            border: none;
+            box-shadow: none;
+        }
+
+        popover.okp-volume-popover > arrow {
+            min-width: 0;
+            min-height: 0;
+            background: transparent;
+            border: none;
+            box-shadow: none;
+        }
+
+        .okp-volume-capsule {
+            padding: 9px 13px;
+            border-radius: 13px;
+            background: rgba(28, 28, 32, 0.72);
+            border: 1px solid rgba(255, 255, 255, 0.13);
+            box-shadow: 0 14px 34px rgba(0, 0, 0, 0.42);
+            opacity: 0;
+            transform: translate(0, 6px) scale(0.96);
+            transition: opacity 150ms cubic-bezier(0.25, 0.1, 0.25, 1), transform 150ms cubic-bezier(0.25, 0.1, 0.25, 1);
+        }
+
+        .okp-volume-capsule.is-open {
+            opacity: 1;
+            transform: translate(0, 0) scale(1);
+        }
+
+        .okp-volume-capsule.is-closing {
+            transition: opacity 120ms cubic-bezier(0.25, 0.1, 0.25, 1), transform 120ms cubic-bezier(0.25, 0.1, 0.25, 1);
+        }
+
+        .okp-volume-capsule.reduce-motion {
+            transition: none;
+        }
+
+        .okp-volume-track-stack,
+        .okp-volume-track,
+        scale.okp-volume-slider {
+            min-width: 122px;
+            min-height: 14px;
+        }
+
+        scale.okp-volume-slider {
+            padding: 0;
+            margin: 0;
+        }
+
+        scale.okp-volume-slider trough,
+        scale.okp-volume-slider highlight {
+            min-width: 0;
+            min-height: 6px;
+            padding: 0;
+            margin: 0;
+            background: transparent;
+            border: none;
+            box-shadow: none;
+        }
+
+        scale.okp-volume-slider slider {
+            min-width: 14px;
+            min-height: 14px;
+            margin: 0;
+            border: none;
+            border-radius: 7px;
+            background: rgba(255, 255, 255, 0.98);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.46);
+        }
+
+        .okp-volume-capsule.is-boosted scale.okp-volume-slider slider {
+            background: #F0B840;
+        }
+
+        .okp-volume-capsule.is-muted scale.okp-volume-slider slider {
+            opacity: 0.54;
+        }
+
+        .okp-volume-readout-stack,
+        button.okp-volume-readout,
+        entry.okp-volume-readout-input {
+            min-width: 48px;
+            min-height: 26px;
+        }
+
+        button.okp-volume-readout {
+            padding: 0 2px;
+            border: none;
+            background: transparent;
+            box-shadow: none;
+            color: rgba(255, 255, 255, 0.94);
+            font-size: 12px;
+            font-weight: 700;
+            font-feature-settings: 'tnum';
+        }
+
+        button.okp-volume-readout:hover,
+        button.okp-volume-readout:focus-visible {
+            background: rgba(255, 255, 255, 0.09);
+        }
+
+        .okp-volume-capsule.is-boosted button.okp-volume-readout,
+        .okp-volume-capsule.is-muted button.okp-volume-readout {
+            color: #F0B840;
+        }
+
+        entry.okp-volume-readout-input {
+            padding: 2px 5px;
+            border-radius: 5px;
+            background: rgba(255, 255, 255, 0.10);
+            border: 1px solid @okp_accent;
+            color: rgba(255, 255, 255, 0.96);
+            font-size: 12px;
+            font-feature-settings: 'tnum';
         }
 
         .okp-up-next-panel {
