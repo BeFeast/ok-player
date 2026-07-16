@@ -509,7 +509,7 @@ fn update_media_state_surface(
 ) {
     let (load_state, can_retry) = {
         let state = state.borrow();
-        (state.media_load_state, state.last_load_url.is_some())
+        (state.media_load_state, state.retry_load_source.is_some())
     };
     overlay.update(
         load_state,

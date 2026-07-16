@@ -2498,8 +2498,34 @@ fn load_url_transitions_to_loading_and_records_retry_url() {
         network_media::MediaLoadState::Loading
     );
     assert_eq!(
-        state.last_load_url.as_deref(),
-        Some("https://example.com/live.m3u8")
+        state.retry_load_source.as_ref(),
+        Some(&network_media::LoadFailureSource::url(
+            "https://example.com/live.m3u8"
+        ))
+    );
+    assert!(state.last_load_error.is_none());
+}
+
+#[test]
+fn load_path_transitions_to_loading_and_records_retry_path() {
+    // Handing a local file to the engine uses the same Loading surface and records
+    // the path for the in-canvas failure card's Retry action.
+    let state = Rc::new(RefCell::new(PlayerState::default()));
+    let path = PathBuf::from("/media/movie.mkv");
+    remember_loaded_media_with_playlist(
+        &state,
+        path.clone(),
+        vec![PlaylistItem::Local(path.clone())],
+    );
+
+    let state = state.borrow();
+    assert_eq!(
+        state.media_load_state,
+        network_media::MediaLoadState::Loading
+    );
+    assert_eq!(
+        state.retry_load_source.as_ref(),
+        Some(&network_media::LoadFailureSource::local(path))
     );
     assert!(state.last_load_error.is_none());
 }
@@ -2535,50 +2561,58 @@ fn set_load_failure_transitions_and_records_card_actions() {
         network_media::MediaLoadState::Failed
     );
     assert_eq!(
-        state.last_load_url.as_deref(),
-        Some("https://example.com/missing.mp4")
+        state.retry_load_source.as_ref(),
+        Some(&network_media::LoadFailureSource::url(
+            "https://example.com/missing.mp4"
+        ))
     );
     assert_eq!(state.last_load_error.as_deref(), Some("libmpv error 404"));
 }
 
 #[test]
-fn set_local_load_failure_does_not_offer_url_retry() {
-    // A local-file failure transitions the in-canvas surface but leaves
-    // last_load_url None, so Retry is disabled instead of replaying a stale URL.
+fn set_local_load_failure_records_retry_path() {
+    // A local-file failure transitions the in-canvas surface and records the
+    // path so Retry replays that same file.
     let state = Rc::new(RefCell::new(PlayerState::default()));
-    set_local_load_failure(&state, "libmpv error 7".to_owned());
+    let path = PathBuf::from("/media/movie.mkv");
+    set_local_load_failure(&state, path.clone(), "libmpv error 7".to_owned());
 
     let state = state.borrow();
     assert_eq!(
         state.media_load_state,
         network_media::MediaLoadState::Failed
     );
-    assert!(state.last_load_url.is_none());
+    assert_eq!(
+        state.retry_load_source.as_ref(),
+        Some(&network_media::LoadFailureSource::local(path))
+    );
     assert_eq!(state.last_load_error.as_deref(), Some("libmpv error 7"));
 }
 
 #[test]
-fn set_local_load_failure_clears_stale_url_from_a_previous_load() {
-    // A URL loaded earlier arms `last_load_url` for its Retry action. If a later
-    // local-file `load_path` returns `Err`, the local failure must not leave the
-    // old URL in place — otherwise the next poll would treat the local failure as
-    // a URL failure and open Retry / Open another for the previous stream.
+fn set_local_load_failure_replaces_stale_url_from_a_previous_load() {
+    // A URL loaded earlier arms Retry for the stream. If a later local-file
+    // `load_path` returns `Err`, the local failure must replace the old URL.
     let state = Rc::new(RefCell::new(PlayerState::default()));
     set_load_failure(
         &state,
         "https://example.com/live.m3u8".to_owned(),
         "libmpv error 412".to_owned(),
     );
-    assert!(state.borrow().last_load_url.is_some());
+    assert!(state.borrow().retry_load_source.is_some());
 
-    set_local_load_failure(&state, "libmpv error 7".to_owned());
+    let path = PathBuf::from("/media/movie.mkv");
+    set_local_load_failure(&state, path.clone(), "libmpv error 7".to_owned());
 
     let state = state.borrow();
     assert_eq!(
         state.media_load_state,
         network_media::MediaLoadState::Failed
     );
-    assert!(state.last_load_url.is_none());
+    assert_eq!(
+        state.retry_load_source.as_ref(),
+        Some(&network_media::LoadFailureSource::local(path))
+    );
     assert_eq!(state.last_load_error.as_deref(), Some("libmpv error 7"));
 }
 
@@ -2599,7 +2633,38 @@ fn apply_endfile_error_marks_current_source_failed() {
         state.media_load_state,
         network_media::MediaLoadState::Failed
     );
+    assert_eq!(
+        state.retry_load_source.as_ref(),
+        Some(&network_media::LoadFailureSource::url(
+            "https://example.com/live.m3u8"
+        ))
+    );
     assert_eq!(state.last_load_error.as_deref(), Some("libmpv error 412"));
+}
+
+#[test]
+fn apply_endfile_error_marks_current_local_source_failed() {
+    // A fresh EndFile::Error for the current local file transitions the surface
+    // to Failed and keeps the local source retryable.
+    let path = PathBuf::from("/media/movie.mkv");
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(path.clone()),
+        media_load_state: network_media::MediaLoadState::Loading,
+        ..PlayerState::default()
+    }));
+
+    apply_endfile_error(&state, 7, Some("/media/movie.mkv"));
+
+    let state = state.borrow();
+    assert_eq!(
+        state.media_load_state,
+        network_media::MediaLoadState::Failed
+    );
+    assert_eq!(
+        state.retry_load_source.as_ref(),
+        Some(&network_media::LoadFailureSource::local(path))
+    );
+    assert_eq!(state.last_load_error.as_deref(), Some("libmpv error 7"));
 }
 
 #[test]
@@ -2610,7 +2675,9 @@ fn apply_endfile_error_drops_stale_error_for_a_superseded_source() {
     let state = Rc::new(RefCell::new(PlayerState {
         current_url: Some("https://example.com/b.m3u8".to_owned()),
         media_load_state: network_media::MediaLoadState::Loading,
-        last_load_url: Some("https://example.com/b.m3u8".to_owned()),
+        retry_load_source: Some(network_media::LoadFailureSource::url(
+            "https://example.com/b.m3u8",
+        )),
         ..PlayerState::default()
     }));
 
@@ -2625,9 +2692,47 @@ fn apply_endfile_error_drops_stale_error_for_a_superseded_source() {
     );
     assert!(state.last_load_error.is_none());
     assert_eq!(
-        state.last_load_url.as_deref(),
-        Some("https://example.com/b.m3u8")
+        state.retry_load_source.as_ref(),
+        Some(&network_media::LoadFailureSource::url(
+            "https://example.com/b.m3u8"
+        ))
     );
+}
+
+#[test]
+fn apply_endfile_error_drops_ended_path_when_no_source_is_current() {
+    // A close can clear the current source before a late EndFile::Error is
+    // drained. If the event still names a path, it is stale and must not reopen
+    // the failed surface after the player returned to idle.
+    let state = Rc::new(RefCell::new(PlayerState {
+        media_load_state: network_media::MediaLoadState::Idle,
+        ..PlayerState::default()
+    }));
+
+    apply_endfile_error(&state, 7, Some("/media/movie.mkv"));
+
+    let state = state.borrow();
+    assert_eq!(state.media_load_state, network_media::MediaLoadState::Idle);
+    assert!(state.retry_load_source.is_none());
+    assert!(state.last_load_error.is_none());
+}
+
+#[test]
+fn apply_endfile_error_drops_missing_ended_path_when_no_source_is_current() {
+    // mpv can omit the path on a late EndFile::Error. Once the player has no
+    // current source, the missing path must not reopen a failed surface with no
+    // retryable source.
+    let state = Rc::new(RefCell::new(PlayerState {
+        media_load_state: network_media::MediaLoadState::Idle,
+        ..PlayerState::default()
+    }));
+
+    apply_endfile_error(&state, 7, None);
+
+    let state = state.borrow();
+    assert_eq!(state.media_load_state, network_media::MediaLoadState::Idle);
+    assert!(state.retry_load_source.is_none());
+    assert!(state.last_load_error.is_none());
 }
 
 #[test]
@@ -2648,6 +2753,12 @@ fn apply_endfile_error_falls_back_to_applying_when_path_is_missing() {
         state.media_load_state,
         network_media::MediaLoadState::Failed
     );
+    assert_eq!(
+        state.retry_load_source.as_ref(),
+        Some(&network_media::LoadFailureSource::url(
+            "https://example.com/live.m3u8"
+        ))
+    );
     assert_eq!(state.last_load_error.as_deref(), Some("libmpv error 412"));
 }
 
@@ -2664,7 +2775,7 @@ fn clear_loaded_media_resets_load_state_surface() {
 
     let state = state.borrow();
     assert_eq!(state.media_load_state, network_media::MediaLoadState::Idle);
-    assert!(state.last_load_url.is_none());
+    assert!(state.retry_load_source.is_none());
     assert!(state.last_load_error.is_none());
 }
 
@@ -2683,13 +2794,20 @@ fn load_failure_actions_offer_retry_open_another_and_copy_details() {
 #[test]
 fn failure_detail_keeps_url_and_reason_out_of_primary_logs() {
     // The Copy details action writes a short summary, never raw internal logs.
+    let source = network_media::LoadFailureSource::url("https://example.com/live.m3u8");
     assert_eq!(
-        network_media::failure_detail("https://example.com/live.m3u8", "libmpv error 412"),
+        network_media::failure_detail(&source, "libmpv error 412"),
         "OK Player could not open the stream.\nURL: https://example.com/live.m3u8\nReason: libmpv error 412"
     );
     // An empty reason is omitted so a transient failure still copies a clean line.
     assert_eq!(
-        network_media::failure_detail("https://example.com/live.m3u8", ""),
+        network_media::failure_detail(&source, ""),
         "OK Player could not open the stream.\nURL: https://example.com/live.m3u8"
+    );
+
+    let source = network_media::LoadFailureSource::local("/media/movie.mkv");
+    assert_eq!(
+        network_media::failure_detail(&source, "libmpv error 7"),
+        "OK Player could not open the media.\nPath: /media/movie.mkv\nReason: libmpv error 7"
     );
 }
