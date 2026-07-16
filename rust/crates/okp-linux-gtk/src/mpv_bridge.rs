@@ -538,7 +538,6 @@ pub(crate) fn connect_video_clicks(
     video_area: &gtk::GLArea,
     window: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
-    status_toast: Rc<StatusToast>,
 ) {
     let click = gtk::GestureClick::new();
     click.set_button(gdk::BUTTON_PRIMARY);
@@ -593,39 +592,105 @@ pub(crate) fn connect_video_clicks(
     });
 
     video_area.add_controller(click);
+}
 
+pub(crate) fn connect_player_context_menu(
+    player_root: &gtk::Overlay,
+    window: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+    chrome: Rc<ChromeVisibility>,
+) {
     let context_click = gtk::GestureClick::new();
-    context_click.set_button(3);
+    context_click.set_button(gdk::BUTTON_SECONDARY);
+    context_click.set_propagation_phase(gtk::PropagationPhase::Bubble);
 
-    let context_area = video_area.clone();
+    let context_root = player_root.clone();
     let context_window = window.clone();
     let context_state = Rc::clone(&state);
     let context_toast = Rc::clone(&status_toast);
-    context_click.connect_pressed(move |_, _, x, y| {
-        show_video_context_menu(
-            &context_area,
+    let context_chrome = Rc::clone(&chrome);
+    context_click.connect_pressed(move |gesture, _, x, y| {
+        let Some(target) = context_root.pick(x, y, gtk::PickFlags::INSENSITIVE) else {
+            return;
+        };
+        if player_context_menu_target_is_interactive(&context_root, &target) {
+            if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+                eprintln!("interaction: player-context-menu-suppressed");
+            }
+            return;
+        }
+
+        gesture.set_state(gtk::EventSequenceState::Claimed);
+        if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+            eprintln!("interaction: player-context-menu-open x={x:.0} y={y:.0}");
+        }
+        show_player_context_menu(
+            &context_root,
             &context_window,
             Rc::clone(&context_state),
             Rc::clone(&context_toast),
+            Rc::clone(&context_chrome),
             x,
             y,
         );
     });
 
-    video_area.add_controller(context_click);
+    player_root.add_controller(context_click);
 }
 
-pub(crate) fn show_video_context_menu(
-    video_area: &gtk::GLArea,
+pub(crate) fn player_context_menu_target_is_interactive(
+    player_root: &gtk::Overlay,
+    target: &gtk::Widget,
+) -> bool {
+    const BLOCKING_CSS_CLASSES: [&str; 5] = [
+        "okp-time-label",
+        "okp-timeline",
+        "okp-volume-control",
+        "okp-up-next-panel",
+        "okp-resize-handle",
+    ];
+
+    let mut current = Some(target.clone());
+    while let Some(widget) = current {
+        if widget == *player_root {
+            return false;
+        }
+        if widget.is::<gtk::Button>()
+            || widget.is::<gtk::MenuButton>()
+            || widget.is::<gtk::Scale>()
+            || widget.is::<gtk::Scrollbar>()
+            || widget.is::<gtk::Entry>()
+            || widget.is::<gtk::TextView>()
+            || widget.is::<gtk::SpinButton>()
+            || widget.is::<gtk::DropDown>()
+            || widget.is::<gtk::Switch>()
+            || widget.is::<gtk::ListBoxRow>()
+            || widget.is::<gtk::Popover>()
+            || BLOCKING_CSS_CLASSES
+                .iter()
+                .any(|class| widget.has_css_class(class))
+        {
+            return true;
+        }
+        current = widget.parent();
+    }
+    false
+}
+
+pub(crate) fn show_player_context_menu(
+    player_root: &gtk::Overlay,
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
+    chrome: Rc<ChromeVisibility>,
     x: f64,
     y: f64,
 ) {
     let popover = gtk::Popover::new();
     prepare_track_popover(&popover, PlayerPopoverKind::AdvancedCommands);
-    popover.set_parent(video_area);
+    connect_popover_chrome_pin(&popover, chrome);
+    popover.set_parent(player_root);
     popover.set_pointing_to(Some(&gdk::Rectangle::new(
         x.round() as i32,
         y.round() as i32,
