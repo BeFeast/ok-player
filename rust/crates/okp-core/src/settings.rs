@@ -133,6 +133,9 @@ pub struct PlaybackSettings {
 pub struct AudioSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub normalization: Option<bool>,
+    /// Force multichannel sources through mpv's stereo channel layout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub downmix_surround_to_stereo: Option<bool>,
     /// mpv output device id; absent means the platform default (`auto`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device: Option<String>,
@@ -347,6 +350,7 @@ impl WindowsSettings {
             },
             audio: AudioSettings {
                 normalization: self.audio_normalization,
+                downmix_surround_to_stereo: None,
                 // Windows uses "" for "device not remembered"; the canonical form uses
                 // absent, matching the Linux `auto` convention.
                 device: self.audio_device.filter(|device| !device.is_empty()),

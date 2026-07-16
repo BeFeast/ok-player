@@ -24,6 +24,18 @@ pub struct RenderTargetSize {
     pub height: i32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RenderUpdateHandle {
+    context: NonNull<ffi::mpv_render_context>,
+}
+
+// SAFETY: libmpv explicitly allows `mpv_render_context_update()` to be called
+// from the application's chosen render thread. The GTK shell only transports
+// this pointer through a callback notifier; actual update/render calls are
+// scheduled back onto the GTK main context before the context is destroyed.
+unsafe impl Send for RenderUpdateHandle {}
+unsafe impl Sync for RenderUpdateHandle {}
+
 /// An opaque native Wayland display kept alive for an mpv render context.
 ///
 /// The owner is type-erased so shells can retain their toolkit display object
@@ -87,6 +99,23 @@ impl RenderTargetSize {
     }
 }
 
+impl RenderUpdateHandle {
+    pub fn update_has_frame(self) -> bool {
+        let flags = unsafe { ffi::mpv_render_context_update(self.context.as_ptr()) };
+        flags & ffi::MPV_RENDER_UPDATE_FRAME != 0
+    }
+
+    pub fn render_current_frame(self, width: i32, height: i32) -> Result<(), MpvError> {
+        render_context_frame(self.context, width, height)
+    }
+
+    pub fn report_swap(self) {
+        unsafe {
+            ffi::mpv_render_context_report_swap(self.context.as_ptr());
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PlaybackState {
     pub time_pos: Option<f64>,
@@ -101,6 +130,13 @@ pub struct PlaybackState {
     /// the transient seek/frame-step readout (PRD P4-N4); `None` for audio-only
     /// or frame-rate-less sources, which then show a timecode without a frame.
     pub container_fps: Option<f64>,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct PlaybackDiagnostics {
+    pub hwdec_current: Option<String>,
+    pub decoder_drops: i64,
+    pub vo_drops: i64,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -308,6 +344,17 @@ impl RawReader {
             container_fps: self
                 .get_double("container-fps")?
                 .filter(|fps| fps.is_finite() && *fps > 0.0),
+        })
+    }
+
+    pub(crate) fn playback_diagnostics(&self) -> Result<PlaybackDiagnostics, MpvError> {
+        Ok(PlaybackDiagnostics {
+            hwdec_current: self.get_string("hwdec-current")?,
+            decoder_drops: self
+                .get_i64("decoder-frame-drop-count")?
+                .unwrap_or(0)
+                .max(0),
+            vo_drops: self.get_i64("frame-drop-count")?.unwrap_or(0).max(0),
         })
     }
 
@@ -1026,6 +1073,13 @@ impl Mpv {
             .unwrap_or_default()
     }
 
+    pub fn observed_playback_diagnostics(&self) -> PlaybackDiagnostics {
+        self.pump
+            .as_ref()
+            .map(EventPump::playback_diagnostics)
+            .unwrap_or_default()
+    }
+
     pub fn observed_ab_loop_state(&self) -> AbLoopState {
         self.pump
             .as_ref()
@@ -1120,6 +1174,11 @@ impl Mpv {
         }
 
         let api = CString::new("opengl")?;
+        let get_proc_address = if native_wayland_display.is_some() {
+            get_egl_proc_address as unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void
+        } else {
+            get_proc_address as unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void
+        };
         let mut init_params = ffi::mpv_opengl_init_params {
             get_proc_address: Some(get_proc_address),
             get_proc_address_ctx: ptr::null_mut(),
@@ -1141,6 +1200,34 @@ impl Mpv {
             self.render_context_native_wayland_display = native_wayland_display;
         }
 
+        Ok(())
+    }
+
+    pub fn render_update_handle(&self) -> Result<RenderUpdateHandle, MpvError> {
+        Ok(RenderUpdateHandle {
+            context: self.render_context.ok_or(MpvError::MissingRenderContext)?,
+        })
+    }
+
+    /// Install libmpv's render update callback.
+    ///
+    /// # Safety
+    ///
+    /// `callback_ctx` must remain valid until this method is called with `None`
+    /// or the render context is destroyed. The callback must only wake the
+    /// application's render thread; it must not call libmpv directly.
+    pub unsafe fn set_render_update_callback(
+        &mut self,
+        callback: Option<unsafe extern "C" fn(*mut c_void)>,
+        callback_ctx: *mut c_void,
+    ) -> Result<(), MpvError> {
+        let context = self
+            .render_context
+            .ok_or(MpvError::MissingRenderContext)?
+            .as_ptr();
+        unsafe {
+            ffi::mpv_render_context_set_update_callback(context, callback, callback_ctx);
+        }
         Ok(())
     }
 
@@ -1298,6 +1385,10 @@ impl Mpv {
         }
     }
 
+    pub fn set_downmix_surround_to_stereo(&self, enabled: bool) -> Result<(), MpvError> {
+        self.command(&["set", "audio-channels", downmix_audio_channels(enabled)])
+    }
+
     pub fn select_subtitle(&self, id: Option<i64>) -> Result<(), MpvError> {
         let value = track_id_or_off(id);
         self.command(&["set", "sid", &value])
@@ -1367,46 +1458,10 @@ impl Mpv {
             return Ok(());
         }
 
-        let context = self
-            .render_context
-            .ok_or(MpvError::MissingRenderContext)?
-            .as_ptr();
-        unsafe {
-            let _ = ffi::mpv_render_context_update(context);
-        }
-
-        let mut framebuffer: c_int = 0;
-        unsafe {
-            ffi::glGetIntegerv(ffi::GL_FRAMEBUFFER_BINDING, &mut framebuffer);
-            ffi::glViewport(0, 0, width, height);
-        }
-
-        let mut fbo = ffi::mpv_opengl_fbo {
-            fbo: framebuffer,
-            w: width,
-            h: height,
-            internal_format: 0,
-        };
-        let mut flip_y: c_int = 1;
-        let mut params = [
-            ffi::mpv_render_param {
-                param_type: ffi::MPV_RENDER_PARAM_OPENGL_FBO,
-                data: &mut fbo as *mut _ as *mut c_void,
-            },
-            ffi::mpv_render_param {
-                param_type: ffi::MPV_RENDER_PARAM_FLIP_Y,
-                data: &mut flip_y as *mut _ as *mut c_void,
-            },
-            ffi::mpv_render_param {
-                param_type: ffi::MPV_RENDER_PARAM_INVALID,
-                data: ptr::null_mut(),
-            },
-        ];
-
-        check(unsafe { ffi::mpv_render_context_render(context, params.as_mut_ptr()) })?;
-        unsafe {
-            ffi::mpv_render_context_report_swap(context);
-        }
+        let handle = self.render_update_handle()?;
+        let _ = handle.update_has_frame();
+        handle.render_current_frame(width, height)?;
+        handle.report_swap();
 
         Ok(())
     }
@@ -1414,6 +1469,11 @@ impl Mpv {
     pub fn destroy_render_context(&mut self) {
         if let Some(context) = self.render_context.take() {
             unsafe {
+                ffi::mpv_render_context_set_update_callback(
+                    context.as_ptr(),
+                    None,
+                    ptr::null_mut(),
+                );
                 ffi::mpv_render_context_free(context.as_ptr());
             }
         }
@@ -1460,6 +1520,46 @@ impl Mpv {
             )
         })
     }
+}
+
+fn render_context_frame(
+    context: NonNull<ffi::mpv_render_context>,
+    width: i32,
+    height: i32,
+) -> Result<(), MpvError> {
+    if width <= 0 || height <= 0 {
+        return Ok(());
+    }
+
+    let mut framebuffer: c_int = 0;
+    unsafe {
+        ffi::glGetIntegerv(ffi::GL_FRAMEBUFFER_BINDING, &mut framebuffer);
+        ffi::glViewport(0, 0, width, height);
+    }
+
+    let mut fbo = ffi::mpv_opengl_fbo {
+        fbo: framebuffer,
+        w: width,
+        h: height,
+        internal_format: 0,
+    };
+    let mut flip_y: c_int = 1;
+    let mut params = [
+        ffi::mpv_render_param {
+            param_type: ffi::MPV_RENDER_PARAM_OPENGL_FBO,
+            data: ptr::from_mut(&mut fbo).cast(),
+        },
+        ffi::mpv_render_param {
+            param_type: ffi::MPV_RENDER_PARAM_FLIP_Y,
+            data: ptr::from_mut(&mut flip_y).cast(),
+        },
+        ffi::mpv_render_param {
+            param_type: ffi::MPV_RENDER_PARAM_INVALID,
+            data: ptr::null_mut(),
+        },
+    ];
+
+    check(unsafe { ffi::mpv_render_context_render(context.as_ptr(), params.as_mut_ptr()) })
 }
 
 /// Build the NUL-terminated argv libmpv expects. The `CString` vector must be
@@ -1840,6 +1940,15 @@ unsafe extern "C" fn get_proc_address(_ctx: *mut c_void, name: *const c_char) ->
     unsafe { ffi::eglGetProcAddress(name) }
 }
 
+unsafe extern "C" fn get_egl_proc_address(_ctx: *mut c_void, name: *const c_char) -> *mut c_void {
+    let egl = unsafe { ffi::eglGetProcAddress(name) };
+    if !egl.is_null() {
+        return egl;
+    }
+
+    unsafe { ffi::glXGetProcAddressARB(name.cast::<u8>()) }
+}
+
 fn check(code: c_int) -> Result<(), MpvError> {
     if code < 0 {
         Err(MpvError::LibMpv(code))
@@ -1871,6 +1980,10 @@ fn normalized_audio_device_name(name: &str) -> &str {
     } else {
         name
     }
+}
+
+fn downmix_audio_channels(enabled: bool) -> &'static str {
+    if enabled { "stereo" } else { "auto-safe" }
 }
 
 fn audio_device_selected(name: &str, current: &str) -> bool {
@@ -2236,6 +2349,35 @@ mod tests {
     fn audio_normalization_filter_is_labelled() {
         assert_eq!(AUDIO_NORMALIZATION_FILTER_LABEL, "@okpnorm");
         assert_eq!(AUDIO_NORMALIZATION_FILTER, "@okpnorm:dynaudnorm");
+    }
+
+    #[test]
+    fn surround_downmix_uses_mpv_stereo_and_auto_safe_layouts() {
+        assert_eq!(downmix_audio_channels(true), "stereo");
+        assert_eq!(downmix_audio_channels(false), "auto-safe");
+    }
+
+    #[test]
+    fn surround_downmix_is_accepted_by_real_libmpv() {
+        let mpv = Mpv::new().expect("libmpv should initialize");
+        mpv.set_downmix_surround_to_stereo(true)
+            .expect("stereo layout should be accepted");
+        assert_eq!(
+            mpv.reader()
+                .get_string("audio-channels")
+                .unwrap()
+                .as_deref(),
+            Some("stereo")
+        );
+        mpv.set_downmix_surround_to_stereo(false)
+            .expect("automatic layout should be restored");
+        assert_eq!(
+            mpv.reader()
+                .get_string("audio-channels")
+                .unwrap()
+                .as_deref(),
+            Some("auto-safe")
+        );
     }
 
     #[test]

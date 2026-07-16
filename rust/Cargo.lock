@@ -1255,11 +1255,13 @@ dependencies = [
 name = "okp-linux-gtk"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "gtk4",
  "libc",
  "okp-core",
  "okp-mpv",
  "okp-test-fixtures",
+ "pkg-config",
  "relm4",
  "serde",
  "serde_json",

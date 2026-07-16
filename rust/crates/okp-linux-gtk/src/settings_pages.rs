@@ -122,6 +122,10 @@ pub(crate) fn settings_audio_page(
         Rc::clone(&state),
         Rc::clone(&status_toast),
     ));
+    summary.append(&settings_surround_downmix_row(
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    ));
     page.append(&summary);
     page.append(&settings_audio_device_section(
         Rc::clone(&state),
@@ -864,6 +868,77 @@ pub(crate) fn settings_audio_normalization_row(
                 "Loudness normalization on"
             } else {
                 "Loudness normalization off"
+            });
+        }
+    });
+    row.append(&toggle);
+
+    row
+}
+
+pub(crate) fn settings_surround_downmix_row(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let active = state.borrow().settings.downmix_surround_to_stereo_enabled();
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row.add_css_class("okp-settings-switch-row");
+
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    text.set_hexpand(true);
+    let label = gtk::Label::new(Some("Downmix surround to stereo"));
+    label.add_css_class("okp-info-label");
+    label.set_xalign(0.0);
+    text.append(&label);
+    let detail = gtk::Label::new(Some(
+        "Mixes 5.1 and 7.1 sources to two-channel output; stereo sources stay stereo.",
+    ));
+    detail.add_css_class("okp-update-status");
+    detail.set_xalign(0.0);
+    detail.set_width_chars(1);
+    detail.set_max_width_chars(50);
+    detail.set_wrap(true);
+    text.append(&detail);
+    row.append(&text);
+
+    let state_label = gtk::Label::new(Some(if active { "Stereo" } else { "Auto" }));
+    state_label.add_css_class("okp-settings-state-pill");
+    state_label.set_valign(gtk::Align::Center);
+    row.append(&state_label);
+
+    let toggle = about_toggle_button(active);
+    let toggle_state = Rc::clone(&state);
+    let toggle_toast = Rc::clone(&status_toast);
+    let toggle_state_label = state_label.clone();
+    toggle.connect_clicked(move |button| {
+        let enabled = !button.has_css_class("is-active");
+        set_about_toggle_active(button, enabled);
+
+        let (save_result, live_result) = {
+            let mut state = toggle_state.borrow_mut();
+            state
+                .settings
+                .set_downmix_surround_to_stereo_enabled(enabled);
+            let save_result = state.settings.save();
+            let live_result = state
+                .mpv
+                .as_ref()
+                .map(|mpv| mpv.set_downmix_surround_to_stereo(enabled));
+            (save_result, live_result)
+        };
+
+        toggle_state_label.set_text(if enabled { "Stereo" } else { "Auto" });
+        if let Err(error) = save_result {
+            eprintln!("Failed to save surround downmix setting: {error}");
+            toggle_toast.show("Could not save surround downmix");
+        } else if let Some(Err(error)) = live_result {
+            eprintln!("Failed to update surround downmix: {error}");
+            toggle_toast.show("Could not update surround downmix");
+        } else {
+            toggle_toast.show(if enabled {
+                "Surround downmix: stereo"
+            } else {
+                "Surround downmix: automatic"
             });
         }
     });

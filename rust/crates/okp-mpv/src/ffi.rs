@@ -76,6 +76,7 @@ pub const MPV_RENDER_PARAM_OPENGL_INIT_PARAMS: c_int = 2;
 pub const MPV_RENDER_PARAM_OPENGL_FBO: c_int = 3;
 pub const MPV_RENDER_PARAM_FLIP_Y: c_int = 4;
 pub const MPV_RENDER_PARAM_WL_DISPLAY: c_int = 9;
+pub const MPV_RENDER_UPDATE_FRAME: u64 = 1 << 0;
 pub const MPV_FORMAT_FLAG: c_int = 3;
 pub const MPV_FORMAT_INT64: c_int = 4;
 pub const MPV_FORMAT_DOUBLE: c_int = 5;
@@ -129,6 +130,11 @@ unsafe extern "C" {
         mpv: *mut mpv_handle,
         params: *mut mpv_render_param,
     ) -> c_int;
+    pub fn mpv_render_context_set_update_callback(
+        ctx: *mut mpv_render_context,
+        callback: Option<unsafe extern "C" fn(callback_ctx: *mut c_void)>,
+        callback_ctx: *mut c_void,
+    );
     pub fn mpv_render_context_update(ctx: *mut mpv_render_context) -> u64;
     pub fn mpv_render_context_render(
         ctx: *mut mpv_render_context,

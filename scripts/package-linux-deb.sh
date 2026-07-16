@@ -38,7 +38,7 @@ Section: video
 Priority: optional
 Architecture: $ARCH
 Maintainer: BeFeast <noreply@github.com>
-Depends: libgtk-4-1, libmpv2, libgl1, libegl1, libglx0, ffmpeg
+Depends: libgtk-4-1, libmpv2, libgl1, libegl1, libglx0, libwayland-client0, libwayland-egl1, ffmpeg
 Homepage: https://github.com/BeFeast/ok-player
 Description: Elegant mpv-based media player
  OK Player is a native desktop media player built over libmpv.

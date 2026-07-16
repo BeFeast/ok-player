@@ -293,15 +293,23 @@ xdotool mousemove --sync --window "$window_id" 660 629
 sleep 0.4
 capture_window "$OUT_DIR/interaction-open.png"
 
+# Ctrl-click on the volume affordance must reset to audible unity instead of
+# activating the underlying speaker/track action (Windows parity contract).
+xdotool mousemove --sync --window "$window_id" 678 629
+xdotool keydown Control_L
+xdotool click 1
+xdotool keyup Control_L
+wait_for_volume 100.0 ctrl-click-unity-reset
+
 # Five rapid pointer-wheel events complete inside one 200ms poll interval. The
-# final 83% assertion proves stale observations cannot reset the nudge base.
+# final 105% assertion proves stale observations cannot reset the nudge base.
 xdotool click --repeat 5 --delay 20 4
-wait_for_volume 83.0 rapid-pointer-wheel
+wait_for_volume 105.0 rapid-pointer-wheel
 
 xdotool keydown Shift_L
 xdotool click 4
 xdotool keyup Shift_L
-wait_for_volume 83.1 shift-fine-wheel
+wait_for_volume 105.1 shift-fine-wheel
 
 # Enter exact-value editing through the real readout, replace the selected text with
 # a changed decimal, and press Return. This proves keyboard events reach GtkEntry's
@@ -369,9 +377,11 @@ fi
 wait_for_volume "$arrow_expected" keyboard-arrow-step
 printf 'keyboard-focus-traversal: tabs=%s\n' "$focused_tab" >>"$REPORT"
 
-xdotool mousemove --sync --window "$window_id" 660 629
-xdotool click --repeat 5 --delay 20 4
-wait_for_volume 130.0 wheel-upper-clamp
+# The button is still focused after traversal. Wheel input was already proven by
+# the 100 -> 105 exercise above; use the independent focused-keyboard path here
+# to verify that the shared volume model clamps at the upper bound.
+xdotool key --clearmodifiers --repeat 20 --delay 80 Right
+wait_for_volume 130.0 keyboard-upper-clamp
 
 # The focused volume button uses the same 1% arrow step and shared clamp.
 xdotool key --clearmodifiers --repeat 140 --delay 5 Left
@@ -379,6 +389,8 @@ wait_for_volume 0.0 keyboard-lower-clamp
 xdotool key --clearmodifiers --repeat 3 --delay 20 Left
 wait_for_volume 0.0 keyboard-repeat-lower-clamp
 
+xdotool mousemove --sync --window "$window_id" 678 629
+sleep 0.5
 xdotool keydown Shift_L
 xdotool click 4
 xdotool keyup Shift_L
@@ -398,6 +410,7 @@ INTERACTION
   fi
 
   if ! awk '
+    /interaction: volume-reset=100/ { reset = NR }
     /interaction: volume-exact-focus=entry/ {
       focus_count += 1
       if (focus_count == 1) first_focus = NR
@@ -407,7 +420,7 @@ INTERACTION
     /interaction: volume-exact-commit=blur/ { blur = NR }
     /interaction: outside-target=play-focused/ { target = NR }
     /interaction: volume-capsule=closed/ {
-      if (first_focus && activate > first_focus && second_focus > activate &&
+      if (reset && first_focus > reset && activate > first_focus && second_focus > activate &&
           blur > second_focus && target > blur && NR > target) passed = 1
     }
     END { exit !passed }

@@ -14,6 +14,7 @@ const REPEAT_OFF: &str = "off";
 const REPEAT_ONE: &str = "one";
 const REPEAT_ALL: &str = "all";
 const DEFAULT_AUDIO_NORMALIZATION: bool = false;
+const DEFAULT_DOWNMIX_SURROUND_TO_STEREO: bool = false;
 const DEFAULT_AUDIO_DEVICE: &str = "auto";
 const HWDEC_OFF: &str = "no";
 const HWDEC_AUTO_SAFE: &str = "auto-safe";
@@ -85,6 +86,13 @@ impl SettingsStore {
             .audio
             .normalization
             .unwrap_or(DEFAULT_AUDIO_NORMALIZATION)
+    }
+
+    pub fn downmix_surround_to_stereo_enabled(&self) -> bool {
+        self.data
+            .audio
+            .downmix_surround_to_stereo
+            .unwrap_or(DEFAULT_DOWNMIX_SURROUND_TO_STEREO)
     }
 
     pub fn audio_device(&self) -> &str {
@@ -205,6 +213,13 @@ impl SettingsStore {
     pub fn set_audio_normalization_enabled(&mut self, enabled: bool) {
         if self.audio_normalization_enabled() != enabled {
             self.data.audio.normalization = Some(enabled);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_downmix_surround_to_stereo_enabled(&mut self, enabled: bool) {
+        if self.downmix_surround_to_stereo_enabled() != enabled {
+            self.data.audio.downmix_surround_to_stereo = Some(enabled);
             self.dirty = true;
         }
     }
@@ -396,7 +411,12 @@ fn raw_mpv_config_setting(text: &str) -> Option<String> {
 fn normalized_hwdec(hwdec: Option<&str>) -> &'static str {
     match hwdec {
         Some(HWDEC_AUTO_SAFE) => HWDEC_AUTO_SAFE,
-        _ => HWDEC_OFF,
+        Some(HWDEC_OFF) => HWDEC_OFF,
+        // Match mpv's practical desktop default on supported systems: a clean
+        // install must not fall back to software decoding for 4K HEVC. Users
+        // who explicitly disable hardware decoding keep the persisted `no`.
+        None => HWDEC_AUTO_SAFE,
+        Some(_) => HWDEC_OFF,
     }
 }
 
@@ -514,6 +534,20 @@ mod tests {
     }
 
     #[test]
+    fn surround_downmix_defaults_off_and_toggle_marks_dirty_once() {
+        let mut settings = store();
+
+        assert!(!settings.downmix_surround_to_stereo_enabled());
+        settings.set_downmix_surround_to_stereo_enabled(true);
+        assert!(settings.downmix_surround_to_stereo_enabled());
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_downmix_surround_to_stereo_enabled(true);
+        assert!(!settings.dirty);
+    }
+
+    #[test]
     fn audio_device_defaults_to_auto() {
         assert_eq!(store().audio_device(), "auto");
     }
@@ -595,29 +629,34 @@ mod tests {
     }
 
     #[test]
-    fn hardware_decode_defaults_off() {
+    fn hardware_decode_defaults_on() {
         let settings = store();
 
-        assert!(!settings.hardware_decode_enabled());
-        assert_eq!(settings.hardware_decode_mpv_option(), "no");
-        assert_eq!(settings.hardware_decode_label(), "off");
+        assert!(settings.hardware_decode_enabled());
+        assert_eq!(settings.hardware_decode_mpv_option(), "auto-safe");
+        assert_eq!(settings.hardware_decode_label(), "auto-safe");
     }
 
     #[test]
     fn hardware_decode_toggle_marks_dirty_once() {
         let mut settings = store();
 
-        settings.set_hardware_decode_enabled(true);
+        settings.set_hardware_decode_enabled(false);
 
-        assert!(settings.hardware_decode_enabled());
-        assert_eq!(settings.hardware_decode_mpv_option(), "auto-safe");
-        assert_eq!(settings.hardware_decode_label(), "auto-safe");
+        assert!(!settings.hardware_decode_enabled());
+        assert_eq!(settings.hardware_decode_mpv_option(), "no");
+        assert_eq!(settings.hardware_decode_label(), "off");
         assert!(settings.dirty);
 
         settings.dirty = false;
-        settings.set_hardware_decode_enabled(true);
+        settings.set_hardware_decode_enabled(false);
 
         assert!(!settings.dirty);
+
+        settings.set_hardware_decode_enabled(true);
+        assert!(settings.hardware_decode_enabled());
+        assert_eq!(settings.hardware_decode_mpv_option(), "auto-safe");
+        assert!(settings.dirty);
     }
 
     #[test]

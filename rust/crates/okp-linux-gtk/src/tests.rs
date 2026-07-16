@@ -232,36 +232,35 @@ fn gtk_identity_uses_vector_widgets_instead_of_host_font_marks() {
 }
 
 #[test]
-fn player_settings_entry_stays_outside_auto_hidden_caption_chrome() {
-    let source = include_str!("window.rs");
+fn settings_stays_in_the_width_safe_bottom_more_menu() {
+    let window = include_str!("window.rs");
+    let controls = include_str!("controls.rs");
+    let popovers = include_str!("track_popovers.rs");
 
-    assert!(source.contains("gtk::Button::from_icon_name(\"emblem-system-symbolic\")"));
-    assert!(source.contains("gtk::accessible::Property::Label(\"Settings\")"));
-    assert!(source.contains("interaction: player-settings-focus=true"));
-    assert!(source.contains("interaction: player-settings-clicked=true"));
-    assert!(source.contains("controls.append(&settings);"));
-    assert!(source.contains("persistent_widgets: vec![settings.upcast()]"));
+    assert!(!window.contains("gtk::Button::from_icon_name(\"emblem-system-symbolic\")"));
+    assert!(window.contains("persistent_widgets: Vec::new()"));
+    assert!(controls.contains("more_slot.set_size_request(32, 1)"));
+    assert!(controls.contains("chrome.add_overlay(&controls.more_button)"));
+    assert!(popovers.contains("command_button(\"Settings...\", false)"));
     assert_eq!(
-        source
+        window
             .matches("add_css_class(\"okp-top-chrome-motion\")")
             .count(),
         4
     );
-    assert!(source.contains("transient_controls.append(&pin);"));
+    assert!(window.contains("transient_controls.append(&pin);"));
     assert!(
-        source.contains(
+        window.contains(
             "scrim.upcast(),\n            title_content.upcast(),\n            transient_controls.upcast(),"
         )
     );
-    assert!(!source.contains("chrome.add_linked_motion_widget(window_chrome.widget())"));
+    assert!(!window.contains("chrome.add_linked_motion_widget(window_chrome.widget())"));
 
     let chrome = include_str!("main.rs");
     assert!(chrome.contains("widget.set_sensitive(revealed);"));
-    assert!(chrome.contains("widget.add_css_class(\"is-isolated\")"));
 
     let css = include_str!("css.rs");
-    assert!(css.contains("button.okp-player-settings-control.is-isolated"));
-    assert!(css.contains("background: rgba(0, 0, 0, 0.32);"));
+    assert!(!css.contains("button.okp-player-settings-control.is-isolated"));
 }
 
 #[test]
@@ -269,7 +268,6 @@ fn settings_shell_matches_windows_reference_geometry() {
     assert_eq!(SETTINGS_REFERENCE_WIDTH, 760);
     assert_eq!(SETTINGS_REFERENCE_HEIGHT, 560);
     assert_eq!(SETTINGS_TITLEBAR_HEIGHT, 42);
-    assert_eq!(SETTINGS_BODY_HEIGHT, 518);
     assert_eq!(SETTINGS_RAIL_WIDTH, 192);
     assert_eq!(SETTINGS_CONTENT_WIDTH, 568);
     assert_eq!(
@@ -277,6 +275,14 @@ fn settings_shell_matches_windows_reference_geometry() {
         SETTINGS_REFERENCE_WIDTH
     );
     assert_eq!(CAPTIONLESS_DRAG_HEIGHT, 42);
+}
+
+#[test]
+fn settings_natural_height_is_capped_inside_the_monitor() {
+    assert_eq!(settings_window_height_cap_for_monitor(1080), 1032);
+    assert_eq!(settings_window_height_cap_for_monitor(900), 852);
+    assert_eq!(settings_window_height_cap_for_monitor(648), 600);
+    assert_eq!(settings_window_height_cap_for_monitor(32), 1);
 }
 
 #[test]
@@ -2790,16 +2796,25 @@ fn initial_window_fit_is_consumed_once_per_source_generation() {
     };
 
     remember_loaded_url(&state, "https://example.com/movie.mp4".to_owned());
+    assert!(observe_initial_window_fit(&state, Some(dimensions)));
     assert_eq!(
-        consume_initial_window_fit(&state, Some(dimensions)),
-        Some((1, dimensions))
+        take_initial_window_fit(&state),
+        Some(window_fit::InitialFitRequest {
+            source_generation: 1,
+            video: window_fit::WindowSize {
+                width: 3840,
+                height: 2160,
+            },
+        })
     );
-    assert_eq!(consume_initial_window_fit(&state, Some(dimensions)), None);
+    assert!(!observe_initial_window_fit(&state, Some(dimensions)));
+    assert_eq!(take_initial_window_fit(&state), None);
 
     remember_loaded_url(&state, "https://example.com/movie.mp4".to_owned());
+    assert!(observe_initial_window_fit(&state, Some(dimensions)));
     assert_eq!(
-        consume_initial_window_fit(&state, Some(dimensions)),
-        Some((2, dimensions))
+        take_initial_window_fit(&state).map(|request| request.source_generation),
+        Some(2)
     );
 }
 
@@ -2812,12 +2827,18 @@ fn missing_file_loaded_dimensions_do_not_consume_initial_window_fit() {
     };
 
     remember_loaded_url(&state, "https://example.com/live.m3u8".to_owned());
-    assert_eq!(consume_initial_window_fit(&state, None), None);
+    assert!(!observe_initial_window_fit(&state, None));
+    assert_eq!(take_initial_window_fit(&state), None);
+    assert!(observe_initial_window_fit(&state, Some(dimensions)));
     assert_eq!(
-        consume_initial_window_fit(&state, Some(dimensions)),
-        Some((1, dimensions))
+        take_initial_window_fit(&state).map(|request| request.video),
+        Some(window_fit::WindowSize {
+            width: 1920,
+            height: 1080,
+        })
     );
-    assert_eq!(consume_initial_window_fit(&state, Some(dimensions)), None);
+    assert!(!observe_initial_window_fit(&state, Some(dimensions)));
+    assert_eq!(take_initial_window_fit(&state), None);
 }
 
 #[test]

@@ -363,7 +363,7 @@ impl VolumeControl {
         button.add_css_class("okp-volume-button");
         button.set_has_frame(false);
         button.set_size_request(VOLUME_RESTING_SIZE, VOLUME_RESTING_SIZE);
-        button.set_tooltip_text(Some("Mute (M)"));
+        button.set_tooltip_text(Some("Mute (M) · Ctrl-click: 100%"));
         button.set_child(Some(&resting));
 
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -513,6 +513,28 @@ impl VolumeControl {
     }
 
     fn connect_events(&self) {
+        // Keep parity with the Windows volume control: Ctrl-click anywhere in
+        // the volume affordance resets to audible unity instead of applying
+        // the underlying mute/track click. Capture the sequence before the
+        // child GtkButton/GtkScale gestures see it.
+        let reset_click = gtk::GestureClick::new();
+        reset_click.set_button(gdk::BUTTON_PRIMARY);
+        reset_click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let reset = self.clone();
+        reset_click.connect_pressed(move |gesture, _, _, _| {
+            if gesture
+                .current_event_state()
+                .contains(gdk::ModifierType::CONTROL_MASK)
+            {
+                reset.set_level_from_ui(volume::UNITY_VOLUME);
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+                    eprintln!("interaction: volume-reset=100");
+                }
+            }
+        });
+        self.root.add_controller(reset_click);
+
         let clicked = self.clone();
         self.button.connect_clicked(move |_| clicked.toggle_mute());
 
@@ -1383,7 +1405,14 @@ pub(crate) fn controls_bar(controls: &Controls) -> gtk::Overlay {
     bar.append(&controls.chapters_button);
     bar.append(&controls.screenshot_button);
     bar.append(&controls.fullscreen_button);
-    bar.append(&controls.more_button);
+    // Reserve the final row slot while the real More button is anchored by
+    // the surrounding overlay. A GtkBox narrower than its aggregate minimum
+    // clips its final child first; keeping More out of that allocation makes
+    // the required Settings entry reachable at every window width.
+    let more_slot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    more_slot.set_size_request(32, 1);
+    more_slot.set_can_target(false);
+    bar.append(&more_slot);
 
     let scrim = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     scrim.add_css_class("okp-bottom-scrim");
@@ -1398,6 +1427,11 @@ pub(crate) fn controls_bar(controls: &Controls) -> gtk::Overlay {
     chrome.set_valign(gtk::Align::End);
     chrome.set_child(Some(&scrim));
     chrome.add_overlay(&bar);
+    controls.more_button.set_halign(gtk::Align::End);
+    controls.more_button.set_valign(gtk::Align::End);
+    controls.more_button.set_margin_end(30);
+    controls.more_button.set_margin_bottom(25);
+    chrome.add_overlay(&controls.more_button);
     chrome
 }
 

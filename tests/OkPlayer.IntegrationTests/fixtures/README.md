@@ -23,3 +23,12 @@ ffmpeg -i base.mkv -i subtest.srt -map 0:v:0 -map 1:0 -c:v copy -c:s srt -t 3 su
 ```
 
 White text on a near-black frame so the test can separate caption pixels from background by a simple luma cut.
+
+## Live Linux 4K60 fixture
+
+The issue #312 acceptance clip is intentionally not committed. The operator supplies the same
+private media file to standalone mpv and OK Player. The Wayland presentation harness rejects the
+file unless `ffprobe` reports exactly one selected video stream with `codec_name=hevc`,
+`profile=Main 10`, `pix_fmt=yuv420p10le`, `width=3840`, `height=2160`, and
+`avg_frame_rate=60/1`. Source metadata alone is not success evidence; the harness measures the
+final native EGL swap boundary for a continuous 15-second window.

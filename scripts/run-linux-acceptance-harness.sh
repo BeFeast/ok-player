@@ -3,6 +3,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ "${1:-}" == "--wayland-presentation" ]]; then
+  shift
+  exec "$ROOT/scripts/run-linux-wayland-presentation.sh" "$@"
+fi
 BINARY="${1:-ok-player}"
 OUT_DIR="${2:-$ROOT/artifacts/linux-acceptance}"
 REFERENCE_DIR="${3:-}"

@@ -28,11 +28,13 @@ native/
 
 When distributing, add `THIRD-PARTY-NOTICES.md` (mpv/GPL + ANGLE notices) at the repo root.
 
-## Linux native display interop
+## Linux native presentation
 
-The Linux client links the system GTK and libmpv packages rather than bundling native binaries.
-When its `GtkGLArea` is realized on Wayland, the shell obtains that GDK display's `wl_display*`
-on the GTK render thread and supplies it to libmpv as `MPV_RENDER_PARAM_WL_DISPLAY`. The GDK
-display reference is retained until the mpv render context is freed, as required by libmpv for
-direct hardware-decoding interop. X11, headless, and GTK builds without the Wayland accessor omit
-the parameter and continue through the existing OpenGL path.
+The Linux client links the system GTK, Wayland/EGL, and libmpv packages rather than bundling
+native binaries. On Wayland, video renders into a desynchronized `wl_subsurface` with its own EGL
+window and swap boundary. The subsurface sits below the transparent GTK shell, so titlebar, OSC,
+panels, popovers, subtitles rendered by libmpv, and input remain unchanged while video presentation
+bypasses `GtkGLArea` and GSK composition. The shell supplies GDK's `wl_display*` to libmpv as
+`MPV_RENDER_PARAM_WL_DISPLAY`, retaining the GDK display until the render context is freed for
+direct VAAPI interop. X11 uses the compatibility `GtkGLArea` path; a Wayland A/B run can explicitly
+select it with `OKP_VIDEO_BACKEND=gtk`.

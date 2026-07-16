@@ -7,6 +7,15 @@ Linux release evidence is package-specific and has four levels:
 3. `installed-package`: launch and version checks against the candidate `.deb` or AppImage.
 4. `gnome-wayland-operator`: live GNOME/Wayland acceptance. Only this level may mark chooser, drag/drop, clipboard, portal, compositor, or focus rows `PASS`.
 
+Issue-specific 4K60 presentation evidence is also operator-only. Run
+`scripts/run-linux-acceptance-harness.sh --wayland-presentation <binary> <fixture> <output>` inside
+the target GNOME Wayland session. It rejects X11/Xvfb, verifies the fixture is exactly 3840×2160
+HEVC Main10 `yuv420p10le` at 60/1, and records both the native Wayland/EGL plane and the retained
+`GtkGLArea` A/B path. Native acceptance requires at least 55 completed EGL swaps per second over a
+continuous 15-second post-warmup window, `hwdec-current=vaapi`, zero decoder-drop growth, no
+sustained VO-drop growth, and a 1x playback clock within five percent. The generated private logs
+and comparison JSON are evidence artifacts, not repository fixtures.
+
 Generate deterministic media and captures:
 
 ```bash
