@@ -2782,6 +2782,45 @@ fn source_generation_advances_on_reload_and_clear() {
 }
 
 #[test]
+fn initial_window_fit_is_consumed_once_per_source_generation() {
+    let state = Rc::new(RefCell::new(PlayerState::default()));
+    let dimensions = VideoDimensions {
+        width: 3840,
+        height: 2160,
+    };
+
+    remember_loaded_url(&state, "https://example.com/movie.mp4".to_owned());
+    assert_eq!(
+        consume_initial_window_fit(&state, Some(dimensions)),
+        Some((1, dimensions))
+    );
+    assert_eq!(consume_initial_window_fit(&state, Some(dimensions)), None);
+
+    remember_loaded_url(&state, "https://example.com/movie.mp4".to_owned());
+    assert_eq!(
+        consume_initial_window_fit(&state, Some(dimensions)),
+        Some((2, dimensions))
+    );
+}
+
+#[test]
+fn missing_file_loaded_dimensions_do_not_consume_initial_window_fit() {
+    let state = Rc::new(RefCell::new(PlayerState::default()));
+    let dimensions = VideoDimensions {
+        width: 1920,
+        height: 1080,
+    };
+
+    remember_loaded_url(&state, "https://example.com/live.m3u8".to_owned());
+    assert_eq!(consume_initial_window_fit(&state, None), None);
+    assert_eq!(
+        consume_initial_window_fit(&state, Some(dimensions)),
+        Some((1, dimensions))
+    );
+    assert_eq!(consume_initial_window_fit(&state, Some(dimensions)), None);
+}
+
+#[test]
 fn set_load_failure_transitions_and_records_card_actions() {
     let state = Rc::new(RefCell::new(PlayerState::default()));
     set_load_failure(
