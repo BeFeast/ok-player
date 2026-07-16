@@ -1075,12 +1075,12 @@ impl Mpv {
     pub fn load_file(&self, path: &Path) -> Result<(), MpvError> {
         let command = CString::new("loadfile")?;
         let path_arg = path_to_cstring(path)?;
-        let previous_source = self.replace_event_source(Some(path.to_string_lossy().into_owned()));
+        let event_source = self.queue_event_source(path.to_string_lossy().into_owned());
         let args = [command.as_ptr(), path_arg.as_ptr(), ptr::null()];
 
         let result = check(unsafe { ffi::mpv_command(self.handle.as_ptr(), args.as_ptr()) });
-        if result.is_err() {
-            self.replace_event_source(previous_source);
+        if let (Err(_), Some(event_source)) = (&result, event_source) {
+            self.cancel_event_source(event_source);
         }
         result
     }
@@ -1088,20 +1088,26 @@ impl Mpv {
     pub fn load_url(&self, url: &str) -> Result<(), MpvError> {
         let command = CString::new("loadfile")?;
         let url_arg = CString::new(url)?;
-        let previous_source = self.replace_event_source(Some(url.to_owned()));
+        let event_source = self.queue_event_source(url.to_owned());
         let args = [command.as_ptr(), url_arg.as_ptr(), ptr::null()];
 
         let result = check(unsafe { ffi::mpv_command(self.handle.as_ptr(), args.as_ptr()) });
-        if result.is_err() {
-            self.replace_event_source(previous_source);
+        if let (Err(_), Some(event_source)) = (&result, event_source) {
+            self.cancel_event_source(event_source);
         }
         result
     }
 
-    fn replace_event_source(&self, source: Option<String>) -> Option<String> {
+    fn queue_event_source(&self, source: String) -> Option<u64> {
         self.pump
             .as_ref()
-            .and_then(|pump| pump.replace_event_source(source))
+            .map(|pump| pump.queue_event_source(source))
+    }
+
+    fn cancel_event_source(&self, id: u64) {
+        if let Some(pump) = self.pump.as_ref() {
+            pump.cancel_event_source(id);
+        }
     }
 
     pub fn add_subtitle_file(&self, path: &Path) -> Result<(), MpvError> {

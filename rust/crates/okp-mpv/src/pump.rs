@@ -13,6 +13,7 @@
 //! Lifecycle and requested async-command events are queued for the shell to
 //! drain in order; property changes only ever mutate the snapshot.
 
+use std::collections::VecDeque;
 use std::ffi::{CStr, CString};
 use std::path::PathBuf;
 use std::ptr::{self, NonNull};
@@ -123,15 +124,54 @@ struct PumpShared {
     snapshot: Mutex<Snapshot>,
     events: Mutex<Vec<MpvEvent>>,
     media_source: Mutex<Option<PathBuf>>,
-    /// Exact file/URL identity recorded immediately before each load command. Lifecycle
-    /// payloads carry this token so a shell can reject dimensions from a superseded load.
-    event_source: Mutex<Option<String>>,
+    /// File/URL identities queued in command order and advanced only by mpv's
+    /// ordered `START_FILE` events. A later accepted load therefore cannot
+    /// relabel lifecycle events that still belong to the active entry.
+    event_sources: Mutex<EventSourceTracker>,
     /// Set when the shell records a new media source so the next pump pass
     /// rebuilds `media_info` against it, even without a fresh mpv event.
     media_info_dirty: AtomicBool,
     wake: Mutex<bool>,
     condvar: Condvar,
     running: AtomicBool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct PendingEventSource {
+    id: u64,
+    source: String,
+}
+
+#[derive(Debug, Default)]
+struct EventSourceTracker {
+    next_id: u64,
+    pending: VecDeque<PendingEventSource>,
+    active: Option<String>,
+}
+
+impl EventSourceTracker {
+    fn queue(&mut self, source: String) -> u64 {
+        self.next_id = self.next_id.wrapping_add(1).max(1);
+        let id = self.next_id;
+        self.pending.push_back(PendingEventSource { id, source });
+        id
+    }
+
+    fn cancel(&mut self, id: u64) {
+        if let Some(index) = self.pending.iter().position(|entry| entry.id == id) {
+            self.pending.remove(index);
+        }
+    }
+
+    fn start_next(&mut self) {
+        if let Some(entry) = self.pending.pop_front() {
+            self.active = Some(entry.source);
+        }
+    }
+
+    fn active(&self) -> Option<String> {
+        self.active.clone()
+    }
 }
 
 pub(crate) struct EventPump {
@@ -150,7 +190,7 @@ impl EventPump {
             snapshot: Mutex::new(Snapshot::default()),
             events: Mutex::new(Vec::new()),
             media_source: Mutex::new(None),
-            event_source: Mutex::new(None),
+            event_sources: Mutex::new(EventSourceTracker::default()),
             media_info_dirty: AtomicBool::new(false),
             // Start "pending" so the pump populates the snapshot immediately.
             wake: Mutex::new(true),
@@ -252,8 +292,12 @@ impl EventPump {
         self.shared.condvar.notify_one();
     }
 
-    pub(crate) fn replace_event_source(&self, source: Option<String>) -> Option<String> {
-        std::mem::replace(&mut *lock(&self.shared.event_source), source)
+    pub(crate) fn queue_event_source(&self, source: String) -> u64 {
+        lock(&self.shared.event_sources).queue(source)
+    }
+
+    pub(crate) fn cancel_event_source(&self, id: u64) {
+        lock(&self.shared.event_sources).cancel(id);
     }
 
     /// Stop the wakeup callback, wake the pump so it observes the shutdown flag,
@@ -333,6 +377,9 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
                 lifecycle.push(MpvEvent::Shutdown);
                 shared.running.store(false, Ordering::Release);
             }
+            ffi::MPV_EVENT_START_FILE => {
+                lock(&shared.event_sources).start_next();
+            }
             ffi::MPV_EVENT_FILE_LOADED => {
                 let (source, video_dimensions) = lifecycle_video_payload(shared);
                 lifecycle.push(MpvEvent::FileLoaded {
@@ -405,12 +452,12 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
 fn lifecycle_video_payload(
     shared: &PumpShared,
 ) -> (Option<String>, Option<crate::player::VideoDimensions>) {
-    // Keep the load identity stable across the mpv property read. A concurrent
-    // load command waits on this short guard before replacing the token, so a
-    // payload can never combine source A with dimensions observed for source B.
-    let source = lock(&shared.event_source);
+    // `START_FILE` establishes the source for this entry. Merely queuing a
+    // later load does not change it, so an already-pending lifecycle event can
+    // never be stamped with the later command's identity.
+    let source = lock(&shared.event_sources).active();
     let video_dimensions = shared.reader.video_dimensions().ok().flatten();
-    (source.clone(), video_dimensions)
+    (source, video_dimensions)
 }
 
 /// Read the current values off the background thread and publish them. Scalars
@@ -467,4 +514,36 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EventSourceTracker;
+
+    #[test]
+    fn queued_load_does_not_relabel_the_active_entry() {
+        let mut sources = EventSourceTracker::default();
+        sources.queue("source-a".to_owned());
+        sources.start_next();
+
+        sources.queue("source-b".to_owned());
+
+        assert_eq!(sources.active().as_deref(), Some("source-a"));
+        sources.start_next();
+        assert_eq!(sources.active().as_deref(), Some("source-b"));
+    }
+
+    #[test]
+    fn rejected_load_is_removed_without_disturbing_the_active_entry() {
+        let mut sources = EventSourceTracker::default();
+        sources.queue("source-a".to_owned());
+        sources.start_next();
+        let rejected = sources.queue("source-b".to_owned());
+
+        sources.cancel(rejected);
+        assert_eq!(sources.active().as_deref(), Some("source-a"));
+        sources.start_next();
+
+        assert_eq!(sources.active().as_deref(), Some("source-a"));
+    }
 }
