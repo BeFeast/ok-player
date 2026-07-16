@@ -77,6 +77,9 @@ PATH="$BIN_DIR:$PATH" \
 test -s "$OUT_DIR/ok-player-no.json"
 test -s "$OUT_DIR/ok-player-auto-safe.json"
 test "$(wc -l <"$CALL_LOG")" -eq 2
-rg -q '4K60 acceptance passed' "$TEMP_ROOT/profile.log"
+if [[ "$(<"$TEMP_ROOT/profile.log")" != *"4K60 acceptance passed"* ]]; then
+  echo "profile validation success was not reported" >&2
+  exit 1
+fi
 
 echo "profile-linux-4k60 timeout smoke passed"
