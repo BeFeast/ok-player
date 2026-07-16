@@ -799,8 +799,8 @@ struct Controls {
     // smoke hook (`OKP_OPEN_SEEK_PREVIEW_ON_STARTUP`) can pop it with fixture data to
     // screenshot the timecode-only fallback without loaded media or a thumbnail source.
     seek_hover_preview: Rc<SeekHoverPreview>,
-    thumbnail_sender: mpsc::Sender<String>,
-    thumbnail_events: RefCell<mpsc::Receiver<String>>,
+    thumbnail_sender: mpsc::Sender<thumbnails::ThumbnailEvent>,
+    thumbnail_events: RefCell<mpsc::Receiver<thumbnails::ThumbnailEvent>>,
 }
 
 #[derive(Clone)]
@@ -1444,15 +1444,18 @@ impl StatusToast {
 }
 
 struct SeekHoverPreview {
-    popover: gtk::Popover,
+    root: gtk::Fixed,
+    content: gtk::Box,
     thumbnail: gtk::Picture,
     thumbnail_snapshot: RefCell<Option<PathBuf>>,
+    thumbnail_request_key: RefCell<Option<String>>,
+    anchor: Cell<Option<(f64, f64)>>,
     time_label: gtk::Label,
     chapter_label: gtk::Label,
 }
 
 impl SeekHoverPreview {
-    fn new(seek: &gtk::Scale) -> Self {
+    fn new() -> Self {
         let thumbnail = gtk::Picture::new();
         thumbnail.add_css_class("okp-seek-preview-thumb");
         thumbnail.set_size_request(144, 81);
@@ -1469,25 +1472,34 @@ impl SeekHoverPreview {
 
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
         content.add_css_class("okp-seek-preview");
+        content.set_can_target(false);
+        content.set_visible(false);
         content.append(&thumbnail);
         content.append(&time_label);
         content.append(&chapter_label);
 
-        let popover = gtk::Popover::new();
-        popover.add_css_class("okp-seek-popover");
-        popover.set_autohide(false);
-        popover.set_has_arrow(false);
-        popover.set_position(gtk::PositionType::Top);
-        popover.set_child(Some(&content));
-        popover.set_parent(seek);
+        let root = gtk::Fixed::new();
+        root.set_hexpand(true);
+        root.set_vexpand(true);
+        root.set_halign(gtk::Align::Fill);
+        root.set_valign(gtk::Align::Fill);
+        root.set_can_target(false);
+        root.put(&content, 0.0, 0.0);
 
         Self {
-            popover,
+            root,
+            content,
             thumbnail,
             thumbnail_snapshot: RefCell::new(None),
+            thumbnail_request_key: RefCell::new(None),
+            anchor: Cell::new(None),
             time_label,
             chapter_label,
         }
+    }
+
+    fn widget(&self) -> &gtk::Fixed {
+        &self.root
     }
 
     fn show(
@@ -1497,10 +1509,10 @@ impl SeekHoverPreview {
         time: f64,
         chapter: Option<&Chapter>,
         thumbnail: Option<PathBuf>,
+        thumbnail_request_key: Option<String>,
     ) {
         let width = seek.width().max(1);
-        let height = seek.height().max(1);
-        let x = x.clamp(0.0, f64::from(width)).round() as i32;
+        let x = x.clamp(0.0, f64::from(width));
         if let Some(thumbnail_path) = thumbnail {
             let mut snapshot = self.thumbnail_snapshot.borrow_mut();
             if snapshot.as_ref() != Some(&thumbnail_path) {
@@ -1512,6 +1524,7 @@ impl SeekHoverPreview {
             self.thumbnail.set_visible(false);
             self.thumbnail_snapshot.borrow_mut().take();
         }
+        self.thumbnail_request_key.replace(thumbnail_request_key);
 
         self.time_label.set_text(&time_code::format_clock(time));
         if let Some(chapter) = chapter {
@@ -1526,13 +1539,51 @@ impl SeekHoverPreview {
         } else {
             self.chapter_label.set_visible(false);
         }
-        self.popover
-            .set_pointing_to(Some(&gdk::Rectangle::new(x, 0, 1, height)));
-        self.popover.popup();
+
+        let Some(bounds) = seek.compute_bounds(&self.root) else {
+            self.hide();
+            return;
+        };
+        self.content.set_visible(true);
+        self.anchor
+            .set(Some((f64::from(bounds.x()) + x, f64::from(bounds.y()))));
+        self.position_at_anchor();
+    }
+
+    fn show_thumbnail_if_current(&self, request_key: &str, path: &Path) {
+        if self.thumbnail_request_key.borrow().as_deref() != Some(request_key) {
+            return;
+        }
+
+        let path = path.to_path_buf();
+        let mut snapshot = self.thumbnail_snapshot.borrow_mut();
+        if snapshot.as_ref() != Some(&path) {
+            self.thumbnail.set_filename(Some(&path));
+            *snapshot = Some(path);
+        }
+        self.thumbnail.set_visible(true);
+        self.position_at_anchor();
     }
 
     fn hide(&self) {
-        self.popover.popdown();
+        self.thumbnail_request_key.borrow_mut().take();
+        self.anchor.set(None);
+        self.content.set_visible(false);
+    }
+
+    fn position_at_anchor(&self) {
+        let Some((anchor_x, anchor_y)) = self.anchor.get() else {
+            return;
+        };
+        let (_, width, _, _) = self.content.measure(gtk::Orientation::Horizontal, -1);
+        let (_, height, _, _) = self.content.measure(gtk::Orientation::Vertical, width);
+        let width = width.max(1);
+        let height = height.max(1);
+        let root_width = self.root.width().max(width + 16);
+        let left = (anchor_x - f64::from(width) / 2.0)
+            .clamp(8.0, f64::from((root_width - width - 8).max(8)));
+        let top = (anchor_y - f64::from(height) - 8.0).max(8.0);
+        self.root.move_(&self.content, left, top);
     }
 }
 
