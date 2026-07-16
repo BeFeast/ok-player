@@ -22,6 +22,12 @@ pub struct RenderTargetSize {
     pub height: i32,
 }
 
+impl RenderTargetSize {
+    fn is_valid(self) -> bool {
+        self.width > 0 && self.height > 0
+    }
+}
+
 /// Display dimensions carried by lifecycle events after mpv has applied pixel
 /// aspect and rotation. Shells consume this payload instead of issuing a
 /// blocking property read from their UI thread.
@@ -1676,22 +1682,28 @@ fn format_duration(seconds: f64) -> String {
 }
 
 pub fn resolve_render_target_size(
+    gtk_viewport: Option<RenderTargetSize>,
     widget_width: i32,
     widget_height: i32,
     scale_factor: i32,
 ) -> RenderTargetSize {
     // Mpv::render() writes GL_VIEWPORT, so reading it on the next frame would
-    // only recover the previous app-selected target. GTK's current GLArea
-    // allocation and scale are the non-circular framebuffer-size source.
+    // only recover the previous app-selected target. GTK's resize signal is
+    // emitted with the current framebuffer viewport immediately before render,
+    // including any backend scaling beyond the widget's integer scale factor.
     let widget_size = RenderTargetSize {
         width: widget_width.max(1),
         height: widget_height.max(1),
     };
     let scale_factor = scale_factor.max(1);
-    RenderTargetSize {
+    let scaled_widget_size = RenderTargetSize {
         width: widget_size.width.saturating_mul(scale_factor),
         height: widget_size.height.saturating_mul(scale_factor),
-    }
+    };
+
+    gtk_viewport
+        .filter(|size| size.is_valid())
+        .unwrap_or(scaled_widget_size)
 }
 
 impl Drop for Mpv {
@@ -2090,7 +2102,7 @@ mod tests {
 
     #[test]
     fn resolves_hidpi_logical_resize_to_scaled_widget_size() {
-        let target = resolve_render_target_size(1024, 576, 2);
+        let target = resolve_render_target_size(None, 1024, 576, 2);
 
         assert_eq!(
             target,
@@ -2103,7 +2115,7 @@ mod tests {
 
     #[test]
     fn clamps_invalid_widget_dimensions_before_scaling() {
-        let target = resolve_render_target_size(0, -1, 2);
+        let target = resolve_render_target_size(None, 0, -1, 2);
 
         assert_eq!(
             target,
@@ -2115,9 +2127,46 @@ mod tests {
     }
 
     #[test]
+    fn uses_current_gtk_viewport_for_fractional_backend_scaling() {
+        let target = resolve_render_target_size(
+            Some(RenderTargetSize {
+                width: 1536,
+                height: 864,
+            }),
+            1024,
+            576,
+            1,
+        );
+
+        assert_eq!(
+            target,
+            RenderTargetSize {
+                width: 1536,
+                height: 864,
+            }
+        );
+    }
+
+    #[test]
     fn scaled_widget_resize_replaces_oversized_previous_target() {
-        let previous_target = resolve_render_target_size(1920, 1051, 2);
-        let resized_target = resolve_render_target_size(1708, 961, 2);
+        let previous_target = resolve_render_target_size(
+            Some(RenderTargetSize {
+                width: 3840,
+                height: 2102,
+            }),
+            1920,
+            1051,
+            2,
+        );
+        let resized_target = resolve_render_target_size(
+            Some(RenderTargetSize {
+                width: 3416,
+                height: 1922,
+            }),
+            1708,
+            961,
+            2,
+        );
 
         assert_eq!(
             previous_target,
@@ -2131,6 +2180,27 @@ mod tests {
             RenderTargetSize {
                 width: 3416,
                 height: 1922,
+            }
+        );
+    }
+
+    #[test]
+    fn ignores_invalid_gtk_viewport() {
+        let target = resolve_render_target_size(
+            Some(RenderTargetSize {
+                width: 0,
+                height: 1152,
+            }),
+            1024,
+            576,
+            2,
+        );
+
+        assert_eq!(
+            target,
+            RenderTargetSize {
+                width: 2048,
+                height: 1152,
             }
         );
     }

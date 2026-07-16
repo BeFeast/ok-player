@@ -28,7 +28,8 @@ use okp_core::{
 };
 use okp_mpv::{
     AbLoopState, AudioDevice, Chapter, EndFileReason, InfoRow, InfoSection, InfoTrack, MediaInfo,
-    Mpv, MpvEvent, PlaybackState, Track, TrackKind, VideoDimensions, resolve_render_target_size,
+    Mpv, MpvEvent, PlaybackState, RenderTargetSize, Track, TrackKind, VideoDimensions,
+    resolve_render_target_size,
 };
 use velopack::{
     UpdateCheck, UpdateInfo, UpdateManager, UpdateOptions, VelopackApp, VelopackAsset,

@@ -93,11 +93,18 @@ pub(crate) fn connect_mpv(
         apply_launch_args(&realize_state, &launch_args);
     });
 
-    video_area.connect_resize(move |area, _, _| {
-        area.queue_render();
+    let render_target_size = Rc::new(Cell::new(None));
+    let resize_target_size = Rc::clone(&render_target_size);
+    video_area.connect_resize(move |area, width, height| {
+        let target_size = (width > 0 && height > 0).then_some(RenderTargetSize { width, height });
+        resize_target_size.set(target_size);
+        if target_size.is_some() {
+            area.queue_render();
+        }
     });
 
     let render_state = Rc::clone(&state);
+    let render_target_size = Rc::clone(&render_target_size);
     video_area.connect_render(move |area, _context| {
         area.make_current();
         area.attach_buffers();
@@ -105,7 +112,12 @@ pub(crate) fn connect_mpv(
         let widget_height = area.height();
         let scale_factor = area.scale_factor();
         let mut state = render_state.borrow_mut();
-        let target_size = resolve_render_target_size(widget_width, widget_height, scale_factor);
+        let target_size = resolve_render_target_size(
+            render_target_size.get(),
+            widget_width,
+            widget_height,
+            scale_factor,
+        );
         if let Some(mpv) = state.mpv.as_mut()
             && let Err(error) = mpv.render(target_size.width, target_size.height)
         {
