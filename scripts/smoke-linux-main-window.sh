@@ -255,6 +255,18 @@ wait_for_window() {
   return 1
 }
 
+wait_for_fit_log() {
+  local log="$1" pattern="$2"
+  for _ in $(seq 1 120); do
+    if rg -q "$pattern" "$OUT_DIR/$log" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for window-fit state '$pattern' in $log" >&2
+  return 1
+}
+
 stop_app() {
   kill "$app_pid" 2>/dev/null || true
   wait "$app_pid" 2>/dev/null || true
@@ -280,17 +292,29 @@ geometry_value() {
   awk -v label="$label" '$1 == label ":" { print $2; exit }' "$file"
 }
 
+window_position_value() {
+  local file="$1" axis="$2"
+  awk -v axis="$axis" '$1 == "Absolute" && $2 == "upper-left" && $3 == axis ":" { print $4; exit }' "$file"
+}
+
 export DISPLAY="$PRIMARY_DISPLAY"
 start_app "fit-small-app.log" "$FIXTURES/fit-small.mkv"
 small_id="$(wait_for_window "$OUT_DIR/fit-small-window.ids")"
-sleep 4
+wait_for_fit_log "fit-small-app.log" "window fit positioned"
+sleep 1
 xdotool mousemove 1200 850
 sleep 3
 capture_geometry "$small_id" "fit-small-window"
 small_width="$(geometry_value "$OUT_DIR/fit-small-window.xwininfo" Width)"
 small_height="$(geometry_value "$OUT_DIR/fit-small-window.xwininfo" Height)"
+small_x="$(window_position_value "$OUT_DIR/fit-small-window.xwininfo" X)"
+small_y="$(window_position_value "$OUT_DIR/fit-small-window.xwininfo" Y)"
 if [[ "$small_width" != "320" || "$small_height" != "180" ]]; then
   echo "Small video did not use native size: ${small_width}x${small_height}" >&2
+  exit 1
+fi
+if [[ "$small_x" != "480" || "$small_y" != "360" ]]; then
+  echo "Small video was not centered in the 1280x900 workarea: +${small_x},${small_y}" >&2
   exit 1
 fi
 
@@ -312,7 +336,8 @@ OKP_START_MAXIMIZED=1 \
   "$BINARY" "$FIXTURES/fit-small.mkv" >"$OUT_DIR/fit-maximized-app.log" 2>&1 &
 app_pid=$!
 max_id="$(wait_for_window "$OUT_DIR/fit-maximized-window.ids")"
-sleep 4
+wait_for_fit_log "fit-maximized-app.log" "window fit skipped: fullscreen=false maximized=true"
+sleep 1
 capture_geometry "$max_id" "fit-maximized-before-load"
 before_max_width="$(geometry_value "$OUT_DIR/fit-maximized-before-load.xwininfo" Width)"
 before_max_height="$(geometry_value "$OUT_DIR/fit-maximized-before-load.xwininfo" Height)"
@@ -340,7 +365,8 @@ OKP_START_FULLSCREEN=1 \
   "$BINARY" "$FIXTURES/fit-small.mkv" >"$OUT_DIR/fit-fullscreen-app.log" 2>&1 &
 app_pid=$!
 fullscreen_id="$(wait_for_window "$OUT_DIR/fit-fullscreen-window.ids")"
-sleep 4
+wait_for_fit_log "fit-fullscreen-app.log" "window fit skipped: fullscreen=true maximized=false"
+sleep 1
 capture_geometry "$fullscreen_id" "fit-fullscreen-window"
 fullscreen_width="$(geometry_value "$OUT_DIR/fit-fullscreen-window.xwininfo" Width)"
 fullscreen_height="$(geometry_value "$OUT_DIR/fit-fullscreen-window.xwininfo" Height)"
@@ -357,10 +383,13 @@ stop_app
 export DISPLAY="$SECONDARY_DISPLAY"
 start_app "fit-4k-right-monitor-app.log" "$FIXTURES/fit-4k.mkv"
 right_id="$(wait_for_window "$OUT_DIR/fit-4k-right-monitor-window.ids")"
-sleep 4
+wait_for_fit_log "fit-4k-right-monitor-app.log" "window fit positioned"
+sleep 1
 capture_geometry "$right_id" "fit-4k-right-monitor-window"
 fit_width="$(geometry_value "$OUT_DIR/fit-4k-right-monitor-window.xwininfo" Width)"
 fit_height="$(geometry_value "$OUT_DIR/fit-4k-right-monitor-window.xwininfo" Height)"
+fit_x="$(window_position_value "$OUT_DIR/fit-4k-right-monitor-window.xwininfo" X)"
+fit_y="$(window_position_value "$OUT_DIR/fit-4k-right-monitor-window.xwininfo" Y)"
 if (( fit_width < 958 || fit_width > 964 || fit_height < 538 || fit_height > 543 )); then
   echo "4K video did not fit the active 1024x768 monitor: ${fit_width}x${fit_height}" >&2
   exit 1
@@ -374,6 +403,11 @@ if ! rg -q "workarea=1024x768" "$OUT_DIR/fit-4k-right-monitor-app.log"; then
   echo "4K load did not use the monitor containing the player window" >&2
   exit 1
 fi
+if (( fit_x < 28 || fit_x > 34 || fit_y < 110 || fit_y > 116 \
+      || fit_x + fit_width > 1024 || fit_y + fit_height > 768 )); then
+  echo "4K fitted window was not centered/clamped inside the monitor: ${fit_width}x${fit_height}+${fit_x},${fit_y}" >&2
+  exit 1
+fi
 stop_app
 FIT_SMOKE
 then
@@ -382,4 +416,94 @@ then
   exit 1
 fi
 
-echo "Main window fit smoke passed. Screenshots: $OUT_DIR/fit-small-window.png, $OUT_DIR/fit-4k-right-monitor-window.png"
+# Keep the HiDPI case on its own X server. Multi-screen Xvfb window-manager
+# ownership is backend-dependent and can make a scale-2 app land on the small
+# secondary screen, which tests monitor selection rather than scaling.
+if ! env __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
+  LIBGL_ALWAYS_SOFTWARE=1 \
+  xvfb-run -a --server-args='-screen 0 3840x2160x24 -nolisten tcp' \
+  dbus-run-session -- bash -s -- "$BINARY" "$OUT_DIR" >"$OUT_DIR/window-fit-scale-2-session.log" 2>&1 <<'SCALE_SMOKE'
+set -euo pipefail
+
+BINARY="$1"
+OUT_DIR="$2"
+FIXTURE="$OUT_DIR/fixtures/fit-4k.mkv"
+
+export GDK_BACKEND=x11
+export GDK_SCALE=2
+export GTK_USE_PORTAL=0
+export NO_AT_BRIDGE=1
+export XDG_SESSION_TYPE=x11
+export XDG_CURRENT_DESKTOP=XFCE
+export XDG_CONFIG_HOME="$OUT_DIR/fit-scale-2-config"
+export XDG_STATE_HOME="$OUT_DIR/fit-scale-2-state"
+
+mkdir -p "$XDG_CONFIG_HOME/ok-player"
+cat >"$XDG_CONFIG_HOME/ok-player/settings.json" <<'JSON'
+{
+  "version": 1,
+  "updates": { "auto_check": false }
+}
+JSON
+
+xfwm4 --sm-client-disable >"$OUT_DIR/window-fit-xfwm4-scale-2.log" 2>&1 &
+wm_pid=$!
+app_pid=""
+
+cleanup() {
+  if [[ -n "$app_pid" ]]; then
+    kill "$app_pid" 2>/dev/null || true
+  fi
+  kill "$wm_pid" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+sleep 1
+OKP_SKIP_OPEN_INSTALLER=1 \
+OKP_SKIP_DEB_SELF_INSTALL=1 \
+OKP_DEBUG_WINDOW_FIT=1 \
+  "$BINARY" "$FIXTURE" >"$OUT_DIR/fit-4k-scale-2-app.log" 2>&1 &
+app_pid=$!
+
+for _ in $(seq 1 120); do
+  if xdotool search --name "OK Player" >"$OUT_DIR/fit-4k-scale-2-window.ids" 2>/dev/null \
+      && rg -q "window fit positioned" "$OUT_DIR/fit-4k-scale-2-app.log" 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
+if ! rg -q "window fit positioned" "$OUT_DIR/fit-4k-scale-2-app.log" 2>/dev/null; then
+  echo "Timed out waiting for the scale-2 window fit" >&2
+  exit 1
+fi
+scaled_id="$(head -n1 "$OUT_DIR/fit-4k-scale-2-window.ids")"
+sleep 1
+xwininfo -id "$scaled_id" >"$OUT_DIR/fit-4k-scale-2-window.xwininfo"
+import -window "$scaled_id" "$OUT_DIR/fit-4k-scale-2-window.png"
+
+scaled_width="$(awk '/Width:/ { print $2; exit }' "$OUT_DIR/fit-4k-scale-2-window.xwininfo")"
+scaled_height="$(awk '/Height:/ { print $2; exit }' "$OUT_DIR/fit-4k-scale-2-window.xwininfo")"
+scaled_x="$(awk '$1 == "Absolute" && $2 == "upper-left" && $3 == "X:" { print $4; exit }' "$OUT_DIR/fit-4k-scale-2-window.xwininfo")"
+scaled_y="$(awk '$1 == "Absolute" && $2 == "upper-left" && $3 == "Y:" { print $4; exit }' "$OUT_DIR/fit-4k-scale-2-window.xwininfo")"
+
+if (( scaled_width < 1727 || scaled_width > 1731 || scaled_height < 971 || scaled_height > 975 )); then
+  echo "Scaled 4K video did not fit the logical 1920x1080 workarea: ${scaled_width}x${scaled_height}" >&2
+  exit 1
+fi
+if (( scaled_x < 188 || scaled_x > 194 || scaled_y < 104 || scaled_y > 110 \
+      || scaled_x + scaled_width > 1920 || scaled_y + scaled_height > 1080 )); then
+  echo "Scaled 4K fitted window was not centered/clamped: ${scaled_width}x${scaled_height}+${scaled_x},${scaled_y}" >&2
+  exit 1
+fi
+if ! rg -q "scale=2.00 workarea=1920x1080" "$OUT_DIR/fit-4k-scale-2-app.log"; then
+  echo "Scale-2 load did not convert the monitor workarea to logical coordinates" >&2
+  exit 1
+fi
+SCALE_SMOKE
+then
+  echo "Scale-2 window-fit smoke failed. Session log: $OUT_DIR/window-fit-scale-2-session.log" >&2
+  cat "$OUT_DIR/window-fit-scale-2-session.log" >&2
+  exit 1
+fi
+
+echo "Main window fit smoke passed. Screenshots: $OUT_DIR/fit-small-window.png, $OUT_DIR/fit-4k-right-monitor-window.png, $OUT_DIR/fit-4k-scale-2-window.png"

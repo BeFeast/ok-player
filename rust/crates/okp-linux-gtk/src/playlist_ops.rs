@@ -70,6 +70,27 @@ pub(crate) fn apply_endfile_error(
     state.last_load_error = Some(format!("libmpv error {error}"));
 }
 
+pub(crate) fn current_source_matches_engine_path(
+    state: &Rc<RefCell<PlayerState>>,
+    engine_path: Option<&str>,
+) -> bool {
+    let Some(engine_path) = engine_path else {
+        return false;
+    };
+    let state = state.borrow();
+    state
+        .current_url
+        .as_ref()
+        .map(|url| network_media::LoadFailureSource::url(url.clone()))
+        .or_else(|| {
+            state
+                .current_file
+                .as_ref()
+                .map(|path| network_media::LoadFailureSource::local(path.clone()))
+        })
+        .is_some_and(|source| source.matches_engine_path(engine_path))
+}
+
 pub(crate) fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
     let mut state = state.borrow_mut();
     if let Some(mpv) = state.mpv.as_ref() {

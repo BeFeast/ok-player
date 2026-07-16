@@ -7,7 +7,7 @@
 //! and the failure-action model live here. The Linux shell renders the model today; the
 //! Windows shell renders the same model once its port lands.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// The transport-surface state for the loaded source, derived from what the shell has
 /// observed from the engine. The shell transitions this on `load_url`/`load_file`, the
@@ -123,7 +123,30 @@ impl LoadFailureSource {
 }
 
 fn engine_path_matches_local(path: &Path, ended_path: &str) -> bool {
-    path.to_string_lossy() == ended_path
+    normalize_path_lexically(path) == normalize_path_lexically(Path::new(ended_path))
+}
+
+fn normalize_path_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(
+                    normalized.components().next_back(),
+                    Some(Component::Normal(_))
+                ) {
+                    normalized.pop();
+                } else if !normalized.has_root() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+        }
+    }
+    normalized
 }
 
 /// The recoverable actions offered when a load fails (PRD §2.1, retry / copy details).
@@ -298,6 +321,10 @@ mod tests {
         assert!(
             !LoadFailureSource::url("https://example.com/live.m3u8")
                 .matches_engine_path("https://example.com/other.m3u8")
+        );
+        assert!(
+            LoadFailureSource::local("/workspace/rust/crate/../../media/movie.mkv")
+                .matches_engine_path("/workspace/media/movie.mkv")
         );
         assert!(LoadFailureSource::url("https://example.com/live.m3u8").is_url());
         assert!(!LoadFailureSource::local("/media/movie.mkv").is_url());

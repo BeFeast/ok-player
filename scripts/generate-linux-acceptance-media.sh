@@ -45,8 +45,24 @@ generate_window_fit_video() {
 
 generate_window_fit_video \
   "320x180" "0x17313a" "OK Player small window-fit fixture" "$OUT_DIR/fit-small.mkv"
-generate_window_fit_video \
-  "3840x2160" "0x241b35" "OK Player 4K window-fit fixture" "$OUT_DIR/fit-4k.mkv"
+
+# The live GNOME/Wayland regression surface uses the same decode shape as the
+# operator report: 3840x2160 HEVC Main10. Only 24 solid-color frames are needed
+# for deterministic geometry, keeping generation and software decode bounded.
+ffmpeg -hide_banner -loglevel error -y \
+  -f lavfi -i "color=c=0x241b35:s=3840x2160:r=2:d=12" \
+  -map 0:v:0 \
+  -c:v libx265 -preset ultrafast -profile:v main10 -pix_fmt yuv420p10le \
+  -x265-params 'log-level=error:keyint=4:min-keyint=4:scenecut=0' -an \
+  -metadata title="OK Player 4K HEVC Main10 window-fit fixture" \
+  "$OUT_DIR/fit-4k.mkv"
+
+fit_4k_codec="$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=nw=1:nk=1 "$OUT_DIR/fit-4k.mkv")"
+fit_4k_pixel_format="$(ffprobe -v error -select_streams v:0 -show_entries stream=pix_fmt -of default=nw=1:nk=1 "$OUT_DIR/fit-4k.mkv")"
+if [[ "$fit_4k_codec" != "hevc" || "$fit_4k_pixel_format" != "yuv420p10le" ]]; then
+  echo "Unexpected 4K fit fixture format: codec=${fit_4k_codec} pix_fmt=${fit_4k_pixel_format}" >&2
+  exit 1
+fi
 
 ffmpeg -hide_banner -loglevel error -y \
   -f lavfi -i "color=c=0xf2f4f5:s=1280x720:r=24:d=30" \

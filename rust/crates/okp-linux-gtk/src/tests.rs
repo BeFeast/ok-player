@@ -2895,6 +2895,33 @@ fn apply_endfile_error_marks_current_local_source_failed() {
 }
 
 #[test]
+fn lifecycle_dimensions_match_only_the_current_engine_source() {
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_url: Some("https://example.com/b.m3u8".to_owned()),
+        ..PlayerState::default()
+    }));
+
+    assert!(current_source_matches_engine_path(
+        &state,
+        Some("https://example.com/b.m3u8")
+    ));
+    assert!(!current_source_matches_engine_path(
+        &state,
+        Some("https://example.com/a.m3u8")
+    ));
+    assert!(!current_source_matches_engine_path(&state, None));
+
+    let local = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(PathBuf::from("/media/movie.mkv")),
+        ..PlayerState::default()
+    }));
+    assert!(current_source_matches_engine_path(
+        &local,
+        Some("/media/movie.mkv")
+    ));
+}
+
+#[test]
 fn apply_endfile_error_drops_stale_error_for_a_superseded_source() {
     // URL A fails, then the user starts URL B before the next poll drains the
     // queue. A's stale EndFile::Error carries A's path; the current source is B,

@@ -184,9 +184,11 @@ pub enum MpvEvent {
     },
     FileLoaded {
         video_dimensions: Option<VideoDimensions>,
+        path: Option<String>,
     },
     VideoReconfig {
         video_dimensions: Option<VideoDimensions>,
+        path: Option<String>,
     },
     Shutdown,
 }
@@ -1974,12 +1976,20 @@ mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut dimensions = None;
+        let mut loaded_path = None;
         while Instant::now() < deadline && dimensions.is_none() {
             for event in mpv.take_lifecycle_events() {
                 match event {
-                    MpvEvent::FileLoaded { video_dimensions }
-                    | MpvEvent::VideoReconfig { video_dimensions } => {
+                    MpvEvent::FileLoaded {
+                        video_dimensions,
+                        path,
+                    }
+                    | MpvEvent::VideoReconfig {
+                        video_dimensions,
+                        path,
+                    } => {
                         dimensions = dimensions.or(video_dimensions);
+                        loaded_path = loaded_path.or(path);
                     }
                     _ => {}
                 }
@@ -1993,6 +2003,12 @@ mod tests {
                 width: 1280,
                 height: 720
             })
+        );
+        assert!(
+            loaded_path.as_deref().is_some_and(|path| {
+                std::fs::canonicalize(path).ok() == std::fs::canonicalize(fixture_media_path()).ok()
+            }),
+            "lifecycle event should identify the loaded fixture: {loaded_path:?}"
         );
         #[cfg(debug_assertions)]
         assert_eq!(

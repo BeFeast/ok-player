@@ -523,5 +523,20 @@ mod tests {
         assert_eq!(fit_to_work_area(0, 180, 1280, 900), None);
         assert_eq!(fit_to_work_area(320, 180, 0, 900), None);
         assert_eq!(fill_client_to_work_area(640, 480, 704, 480, 0, 900), None);
+        assert_eq!(
+            fit_physical_video_to_work_area(
+                320,
+                180,
+                0.0,
+                WindowRect {
+                    x: 0,
+                    y: 0,
+                    width: 1280,
+                    height: 900,
+                }
+            ),
+            None
+        );
+        assert_eq!(work_area_budget(40, PLAYER_CHROME_RESERVE), None);
     }
 }

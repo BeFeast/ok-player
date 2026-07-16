@@ -1424,7 +1424,14 @@ pub(crate) fn drain_mpv_events(
     let mut auto_fit_dimensions = None;
     for event in events {
         match event {
-            MpvEvent::FileLoaded { video_dimensions } => {
+            MpvEvent::FileLoaded {
+                video_dimensions,
+                path,
+            } => {
+                if !current_source_matches_engine_path(state, path.as_deref()) {
+                    eprintln!("ignoring stale FileLoaded event for a superseded source");
+                    continue;
+                }
                 auto_fit_dimensions = auto_fit_dimensions.or(video_dimensions);
                 try_pending_audio_device_restore(state);
                 try_pending_playback_preferences(state);
@@ -1435,8 +1442,15 @@ pub(crate) fn drain_mpv_events(
                 state.media_load_state = network_media::MediaLoadState::Playing;
                 state.last_load_error = None;
             }
-            MpvEvent::VideoReconfig { video_dimensions } => {
-                auto_fit_dimensions = auto_fit_dimensions.or(video_dimensions);
+            MpvEvent::VideoReconfig {
+                video_dimensions,
+                path,
+            } => {
+                if current_source_matches_engine_path(state, path.as_deref()) {
+                    auto_fit_dimensions = auto_fit_dimensions.or(video_dimensions);
+                } else {
+                    eprintln!("ignoring stale VideoReconfig event for a superseded source");
+                }
             }
             MpvEvent::EndFile { reason, .. } if reason.is_eof() => {
                 if state.borrow().playlist.repeat() != RepeatMode::One {
