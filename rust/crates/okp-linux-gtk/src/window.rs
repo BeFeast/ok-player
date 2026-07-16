@@ -925,6 +925,7 @@ pub(crate) fn connect_player_background_window_drag(
         x: f64,
         y: f64,
         timestamp: u32,
+        suppress_video_click: bool,
     }
 
     let tracker = Rc::new(RefCell::new(video_click::WindowMoveGesture::default()));
@@ -949,7 +950,7 @@ pub(crate) fn connect_player_background_window_drag(
                 };
 
                 event_suppression.set(false);
-                let target = player_window_move_target(&event_window, x, y);
+                let (target, suppress_video_click) = player_window_move_target(&event_window, x, y);
                 let mode = if event_window.is_fullscreen() {
                     video_click::WindowMode::Fullscreen
                 } else if event_window.is_maximized() {
@@ -966,6 +967,7 @@ pub(crate) fn connect_player_background_window_drag(
                         x,
                         y,
                         timestamp: event.time(),
+                        suppress_video_click,
                     })
                 } else {
                     None
@@ -989,13 +991,13 @@ pub(crate) fn connect_player_background_window_drag(
                 };
 
                 let intent = tracker.borrow_mut().update(x - start.x, y - start.y);
+                if should_suppress_dragged_video_click(start.suppress_video_click, intent) {
+                    event_suppression.set(true);
+                }
                 match intent {
                     video_click::WindowMoveIntent::None => {}
-                    video_click::WindowMoveIntent::SuppressClick => {
-                        event_suppression.set(true);
-                    }
+                    video_click::WindowMoveIntent::SuppressClick => {}
                     video_click::WindowMoveIntent::StartNativeMove => {
-                        event_suppression.set(true);
                         let Some(surface) = event_window.surface() else {
                             tracker.borrow_mut().cancel();
                             return glib::Propagation::Proceed;
@@ -1036,19 +1038,35 @@ pub(crate) fn connect_player_background_window_drag(
     suppress_video_click
 }
 
+pub(crate) fn should_suppress_dragged_video_click(
+    started_on_video: bool,
+    intent: video_click::WindowMoveIntent,
+) -> bool {
+    started_on_video
+        && matches!(
+            intent,
+            video_click::WindowMoveIntent::SuppressClick
+                | video_click::WindowMoveIntent::StartNativeMove
+        )
+}
+
 pub(crate) fn player_window_move_target(
     window: &gtk::ApplicationWindow,
     x: f64,
     y: f64,
-) -> video_click::WindowMoveTarget {
+) -> (video_click::WindowMoveTarget, bool) {
     let Some(mut widget) = window.pick(x, y, gtk::PickFlags::DEFAULT) else {
-        return video_click::WindowMoveTarget::Background;
+        return (video_click::WindowMoveTarget::Background, false);
     };
     let window_widget = window.clone().upcast::<gtk::Widget>();
+    let mut suppress_video_click = false;
 
     while widget != window_widget {
+        if widget.has_css_class("okp-video-plane") {
+            suppress_video_click = true;
+        }
         if widget.has_css_class("okp-resize-handle") {
-            return video_click::WindowMoveTarget::ResizeHandle;
+            return (video_click::WindowMoveTarget::ResizeHandle, false);
         }
         if widget.has_css_class("okp-window-drag-excluded")
             || widget.is_focusable()
@@ -1062,7 +1080,7 @@ pub(crate) fn player_window_move_target(
             || widget.is::<gtk::FlowBox>()
             || widget.is::<gtk::Popover>()
         {
-            return video_click::WindowMoveTarget::InteractiveControl;
+            return (video_click::WindowMoveTarget::InteractiveControl, false);
         }
 
         let Some(parent) = widget.parent() else {
@@ -1071,7 +1089,10 @@ pub(crate) fn player_window_move_target(
         widget = parent;
     }
 
-    video_click::WindowMoveTarget::Background
+    (
+        video_click::WindowMoveTarget::Background,
+        suppress_video_click,
+    )
 }
 
 pub(crate) fn build_player_resize_handles(window: &gtk::ApplicationWindow) -> Vec<gtk::Box> {

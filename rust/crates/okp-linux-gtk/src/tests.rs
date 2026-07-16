@@ -1636,6 +1636,8 @@ fn captionless_window_drag_uses_native_movement_and_excludes_interactive_surface
     }
     assert!(window.contains("event_window.is_fullscreen()"));
     assert!(window.contains("event_window.is_maximized()"));
+    assert!(window.contains("widget.has_css_class(\"okp-video-plane\")"));
+    assert!(window.contains("should_suppress_dragged_video_click("));
 
     let controls = include_str!("controls.rs");
     assert!(controls.contains("duration_label.add_css_class(\"okp-window-drag-excluded\")"));
@@ -1643,6 +1645,21 @@ fn captionless_window_drag_uses_native_movement_and_excludes_interactive_surface
     let video_clicks = include_str!("mpv_bridge.rs");
     assert!(video_clicks.contains("suppress_video_click.replace(false)"));
     assert!(video_clicks.contains("video-click-suppressed-by-window-drag"));
+}
+
+#[test]
+fn only_video_origin_window_drags_suppress_the_video_click() {
+    for intent in [
+        video_click::WindowMoveIntent::StartNativeMove,
+        video_click::WindowMoveIntent::SuppressClick,
+    ] {
+        assert!(should_suppress_dragged_video_click(true, intent));
+        assert!(!should_suppress_dragged_video_click(false, intent));
+    }
+    assert!(!should_suppress_dragged_video_click(
+        true,
+        video_click::WindowMoveIntent::None
+    ));
 }
 
 #[test]
