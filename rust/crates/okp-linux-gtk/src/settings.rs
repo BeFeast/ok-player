@@ -395,8 +395,8 @@ fn raw_mpv_config_setting(text: &str) -> Option<String> {
 
 fn normalized_hwdec(hwdec: Option<&str>) -> &'static str {
     match hwdec {
-        Some(HWDEC_AUTO_SAFE) => HWDEC_AUTO_SAFE,
-        _ => HWDEC_OFF,
+        Some(HWDEC_OFF) => HWDEC_OFF,
+        _ => HWDEC_AUTO_SAFE,
     }
 }
 
@@ -595,17 +595,29 @@ mod tests {
     }
 
     #[test]
-    fn hardware_decode_defaults_off() {
+    fn hardware_decode_defaults_to_auto_safe() {
         let settings = store();
 
-        assert!(!settings.hardware_decode_enabled());
-        assert_eq!(settings.hardware_decode_mpv_option(), "no");
-        assert_eq!(settings.hardware_decode_label(), "off");
+        assert!(settings.hardware_decode_enabled());
+        assert_eq!(settings.hardware_decode_mpv_option(), "auto-safe");
+        assert_eq!(settings.hardware_decode_label(), "auto-safe");
     }
 
     #[test]
     fn hardware_decode_toggle_marks_dirty_once() {
         let mut settings = store();
+
+        settings.set_hardware_decode_enabled(false);
+
+        assert!(!settings.hardware_decode_enabled());
+        assert_eq!(settings.hardware_decode_mpv_option(), "no");
+        assert_eq!(settings.hardware_decode_label(), "off");
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_hardware_decode_enabled(false);
+
+        assert!(!settings.dirty);
 
         settings.set_hardware_decode_enabled(true);
 
@@ -613,20 +625,25 @@ mod tests {
         assert_eq!(settings.hardware_decode_mpv_option(), "auto-safe");
         assert_eq!(settings.hardware_decode_label(), "auto-safe");
         assert!(settings.dirty);
-
-        settings.dirty = false;
-        settings.set_hardware_decode_enabled(true);
-
-        assert!(!settings.dirty);
     }
 
     #[test]
-    fn unknown_hardware_decode_value_falls_back_to_off() {
+    fn unknown_hardware_decode_value_falls_back_to_auto_safe() {
         let mut settings = store();
         settings.data.video.hwdec = Some("yes-please".to_owned());
 
+        assert!(settings.hardware_decode_enabled());
+        assert_eq!(settings.hardware_decode_mpv_option(), "auto-safe");
+    }
+
+    #[test]
+    fn explicit_hardware_decode_off_is_preserved() {
+        let mut settings = store();
+        settings.data.video.hwdec = Some(HWDEC_OFF.to_owned());
+
         assert!(!settings.hardware_decode_enabled());
         assert_eq!(settings.hardware_decode_mpv_option(), "no");
+        assert_eq!(settings.hardware_decode_label(), "off");
     }
 
     #[test]

@@ -24,8 +24,8 @@ use libc::c_void;
 
 use crate::ffi;
 use crate::player::{
-    AbLoopState, AudioDevice, Chapter, EndFileReason, MediaInfo, MpvEvent, PlaybackState,
-    RawReader, Track, end_file_reason,
+    AbLoopState, AudioDevice, Chapter, EndFileReason, MediaInfo, MpvEvent, PlaybackPerformance,
+    PlaybackState, RawReader, Track, end_file_reason,
 };
 
 /// Properties the pump observes so mpv wakes it (and refreshes the snapshot)
@@ -58,11 +58,20 @@ const OBSERVED_PROPERTIES: &[&str] = &[
     "audio-device",
 ];
 
+const PERFORMANCE_PROPERTIES: &[&str] = &[
+    "estimated-vf-fps",
+    "display-fps",
+    "vo-drop-frame-count",
+    "decoder-frame-drop-count",
+    "hwdec-current",
+];
+
 /// The observed state the shell projects onto its widgets. Cloned out of the
 /// pump under a short lock; never holds an mpv handle.
 #[derive(Clone)]
 pub(crate) struct Snapshot {
     pub(crate) playback: PlaybackState,
+    pub(crate) playback_performance: PlaybackPerformance,
     pub(crate) ab_loop: AbLoopState,
     pub(crate) subtitle_delay: f64,
     pub(crate) subtitle_scale: f64,
@@ -79,6 +88,7 @@ impl Default for Snapshot {
     fn default() -> Self {
         Self {
             playback: PlaybackState::default(),
+            playback_performance: PlaybackPerformance::default(),
             ab_loop: AbLoopState::default(),
             subtitle_delay: 0.0,
             audio_delay: 0.0,
@@ -126,6 +136,7 @@ struct PumpShared {
     /// Set when the shell records a new media source so the next pump pass
     /// rebuilds `media_info` against it, even without a fresh mpv event.
     media_info_dirty: AtomicBool,
+    performance_enabled: AtomicBool,
     wake: Mutex<bool>,
     condvar: Condvar,
     running: AtomicBool,
@@ -148,6 +159,7 @@ impl EventPump {
             events: Mutex::new(Vec::new()),
             media_source: Mutex::new(None),
             media_info_dirty: AtomicBool::new(false),
+            performance_enabled: AtomicBool::new(false),
             // Start "pending" so the pump populates the snapshot immediately.
             wake: Mutex::new(true),
             condvar: Condvar::new(),
@@ -186,6 +198,29 @@ impl EventPump {
 
     pub(crate) fn playback_state(&self) -> PlaybackState {
         lock(&self.shared.snapshot).playback
+    }
+
+    pub(crate) fn playback_performance(&self) -> PlaybackPerformance {
+        lock(&self.shared.snapshot).playback_performance.clone()
+    }
+
+    pub(crate) fn enable_playback_performance_observation(&self) {
+        if self.shared.performance_enabled.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        for name in PERFORMANCE_PROPERTIES {
+            let cname = CString::new(*name).expect("observed property names never contain nul");
+            unsafe {
+                ffi::mpv_observe_property(
+                    self.handle.as_ptr(),
+                    0,
+                    cname.as_ptr(),
+                    ffi::MPV_FORMAT_NONE,
+                );
+            }
+        }
+        *lock(&self.shared.wake) = true;
+        self.shared.condvar.notify_one();
     }
 
     pub(crate) fn ab_loop_state(&self) -> AbLoopState {
@@ -397,6 +432,10 @@ fn recompute(shared: &Arc<PumpShared>, flags: RecomputeFlags) {
     let reader = shared.reader;
 
     let playback = reader.playback_state().unwrap_or_default();
+    let playback_performance = shared
+        .performance_enabled
+        .load(Ordering::Acquire)
+        .then(|| reader.playback_performance().unwrap_or_default());
     let ab_loop = reader.ab_loop_state().unwrap_or_default();
     let subtitle_delay = reader.subtitle_delay().unwrap_or(0.0);
     let audio_delay = reader.audio_delay().unwrap_or(0.0);
@@ -418,6 +457,9 @@ fn recompute(shared: &Arc<PumpShared>, flags: RecomputeFlags) {
 
     let mut snapshot = lock(&shared.snapshot);
     snapshot.playback = playback;
+    if let Some(playback_performance) = playback_performance {
+        snapshot.playback_performance = playback_performance;
+    }
     snapshot.ab_loop = ab_loop;
     snapshot.subtitle_delay = subtitle_delay;
     snapshot.audio_delay = audio_delay;

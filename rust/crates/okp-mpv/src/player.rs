@@ -64,6 +64,15 @@ pub struct PlaybackState {
     pub container_fps: Option<f64>,
 }
 
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct PlaybackPerformance {
+    pub estimated_video_fps: Option<f64>,
+    pub display_fps: Option<f64>,
+    pub vo_dropped_frames: i64,
+    pub decoder_dropped_frames: i64,
+    pub hwdec_current: Option<String>,
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct AbLoopState {
     pub a: Option<f64>,
@@ -269,6 +278,23 @@ impl RawReader {
             container_fps: self
                 .get_double("container-fps")?
                 .filter(|fps| fps.is_finite() && *fps > 0.0),
+        })
+    }
+
+    pub(crate) fn playback_performance(&self) -> Result<PlaybackPerformance, MpvError> {
+        Ok(PlaybackPerformance {
+            estimated_video_fps: self
+                .get_double("estimated-vf-fps")?
+                .filter(|fps| fps.is_finite() && *fps > 0.0),
+            display_fps: self
+                .get_double("display-fps")?
+                .filter(|fps| fps.is_finite() && *fps > 0.0),
+            vo_dropped_frames: self.get_i64("vo-drop-frame-count")?.unwrap_or(0).max(0),
+            decoder_dropped_frames: self
+                .get_i64("decoder-frame-drop-count")?
+                .unwrap_or(0)
+                .max(0),
+            hwdec_current: self.get_string("hwdec-current")?,
         })
     }
 
@@ -858,6 +884,7 @@ impl RawReader {
 pub struct Mpv {
     handle: NonNull<ffi::mpv_handle>,
     render_context: Option<NonNull<ffi::mpv_render_context>>,
+    render_update_callback: Option<Box<RenderUpdateCallback>>,
     pump: Option<EventPump>,
     next_request_id: AtomicU64,
     #[cfg(debug_assertions)]
@@ -882,6 +909,7 @@ impl Mpv {
         let this = Self {
             handle,
             render_context: None,
+            render_update_callback: None,
             pump: None,
             next_request_id: AtomicU64::new(1),
             #[cfg(debug_assertions)]
@@ -953,6 +981,19 @@ impl Mpv {
             .as_ref()
             .map(EventPump::playback_state)
             .unwrap_or_default()
+    }
+
+    pub fn observed_playback_performance(&self) -> PlaybackPerformance {
+        self.pump
+            .as_ref()
+            .map(EventPump::playback_performance)
+            .unwrap_or_default()
+    }
+
+    pub fn enable_playback_performance_observation(&self) {
+        if let Some(pump) = self.pump.as_ref() {
+            pump.enable_playback_performance_observation();
+        }
     }
 
     pub fn observed_ab_loop_state(&self) -> AbLoopState {
@@ -1064,7 +1105,33 @@ impl Mpv {
         check(unsafe {
             ffi::mpv_render_context_create(&mut context, self.handle.as_ptr(), params.as_mut_ptr())
         })?;
-        self.render_context = NonNull::new(context);
+        self.render_context = Some(NonNull::new(context).ok_or(MpvError::MissingRenderContext)?);
+
+        Ok(())
+    }
+
+    /// Register a notification-only callback for libmpv render updates. The
+    /// callback can run on any libmpv thread and must only wake the render
+    /// thread; it must not call mpv or OpenGL APIs itself.
+    pub fn set_render_update_callback<F>(&mut self, callback: F) -> Result<(), MpvError>
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        let context = self.render_context.ok_or(MpvError::MissingRenderContext)?;
+        self.clear_render_update_callback();
+
+        let callback = Box::new(RenderUpdateCallback::new(callback));
+        let callback_context = (&*callback as *const RenderUpdateCallback)
+            .cast_mut()
+            .cast();
+        self.render_update_callback = Some(callback);
+        unsafe {
+            ffi::mpv_render_context_set_update_callback(
+                context.as_ptr(),
+                Some(render_update_callback_trampoline),
+                callback_context,
+            );
+        }
 
         Ok(())
     }
@@ -1337,11 +1404,28 @@ impl Mpv {
     }
 
     pub fn destroy_render_context(&mut self) {
+        self.clear_render_update_callback();
         if let Some(context) = self.render_context.take() {
             unsafe {
                 ffi::mpv_render_context_free(context.as_ptr());
             }
         }
+    }
+
+    fn clear_render_update_callback(&mut self) {
+        if self.render_update_callback.is_none() {
+            return;
+        }
+        if let Some(context) = self.render_context {
+            unsafe {
+                ffi::mpv_render_context_set_update_callback(
+                    context.as_ptr(),
+                    None,
+                    ptr::null_mut(),
+                );
+            }
+        }
+        self.render_update_callback = None;
     }
 
     fn set_option(&self, name: &str, value: &str) -> Result<(), MpvError> {
@@ -1384,6 +1468,29 @@ impl Mpv {
             )
         })
     }
+}
+
+struct RenderUpdateCallback {
+    callback: Box<dyn Fn() + Send + Sync>,
+}
+
+impl RenderUpdateCallback {
+    fn new(callback: impl Fn() + Send + Sync + 'static) -> Self {
+        Self {
+            callback: Box::new(callback),
+        }
+    }
+
+    fn notify(&self) {
+        (self.callback)();
+    }
+}
+
+unsafe extern "C" fn render_update_callback_trampoline(context: *mut c_void) {
+    let Some(callback) = (unsafe { (context as *const RenderUpdateCallback).as_ref() }) else {
+        return;
+    };
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback.notify()));
 }
 
 /// Build the NUL-terminated argv libmpv expects. The `CString` vector must be
@@ -1825,12 +1932,37 @@ fn path_to_cstring(path: &Path) -> Result<CString, NulError> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     use std::fs;
     use std::time::{Duration, Instant};
 
     use okp_test_fixtures::unique_temp_dir;
 
     use super::*;
+
+    #[test]
+    fn render_update_callback_dispatches_notifications() {
+        let calls = Arc::new(AtomicU64::new(0));
+        let callback_calls = Arc::clone(&calls);
+        let callback = RenderUpdateCallback::new(move || {
+            callback_calls.fetch_add(1, Ordering::Relaxed);
+        });
+        let context = (&callback as *const RenderUpdateCallback).cast_mut().cast();
+
+        unsafe {
+            render_update_callback_trampoline(context);
+            render_update_callback_trampoline(context);
+        }
+
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn render_update_callback_ignores_a_null_context() {
+        unsafe { render_update_callback_trampoline(ptr::null_mut()) };
+    }
 
     fn fixture_media_path() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))

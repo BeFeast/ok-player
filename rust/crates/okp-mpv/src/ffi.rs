@@ -128,6 +128,11 @@ unsafe extern "C" {
         mpv: *mut mpv_handle,
         params: *mut mpv_render_param,
     ) -> c_int;
+    pub fn mpv_render_context_set_update_callback(
+        ctx: *mut mpv_render_context,
+        callback: Option<unsafe extern "C" fn(ctx: *mut c_void)>,
+        callback_ctx: *mut c_void,
+    );
     pub fn mpv_render_context_update(ctx: *mut mpv_render_context) -> u64;
     pub fn mpv_render_context_render(
         ctx: *mut mpv_render_context,

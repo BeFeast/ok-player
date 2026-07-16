@@ -140,9 +140,12 @@ pub struct AudioSettings {
 
 /// Video preferences. `hwdec` holds the mpv option string (`no` / `auto-safe`); the
 /// four adjustments are the Linux-only picture controls.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct VideoSettings {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default = "default_hwdec_setting",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub hwdec: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brightness: Option<f64>,
@@ -152,6 +155,18 @@ pub struct VideoSettings {
     pub saturation: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gamma: Option<f64>,
+}
+
+impl Default for VideoSettings {
+    fn default() -> Self {
+        Self {
+            hwdec: default_hwdec_setting(),
+            brightness: None,
+            contrast: None,
+            saturation: None,
+            gamma: None,
+        }
+    }
 }
 
 /// Default-subtitle presentation, currently a Windows-only section (Linux stores
@@ -352,7 +367,10 @@ impl WindowsSettings {
                 device: self.audio_device.filter(|device| !device.is_empty()),
             },
             video: VideoSettings {
-                hwdec: self.hardware_decoding.map(|on| hwdec_option(on).to_owned()),
+                hwdec: self
+                    .hardware_decoding
+                    .map(|on| hwdec_option(on).to_owned())
+                    .or_else(default_hwdec_setting),
                 brightness: None,
                 contrast: None,
                 saturation: None,
@@ -385,14 +403,21 @@ fn hwdec_option(enabled: bool) -> &'static str {
     if enabled { HWDEC_AUTO_SAFE } else { HWDEC_OFF }
 }
 
+fn default_hwdec_setting() -> Option<String> {
+    Some(HWDEC_AUTO_SAFE.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn default_stamps_the_current_version() {
-        assert_eq!(Settings::default().version, SETTINGS_VERSION);
-        assert!(Settings::default().updates.auto_check);
+        let settings = Settings::default();
+
+        assert_eq!(settings.version, SETTINGS_VERSION);
+        assert!(settings.updates.auto_check);
+        assert_eq!(settings.video.hwdec.as_deref(), Some("auto-safe"));
     }
 
     #[test]
@@ -465,6 +490,25 @@ mod tests {
         assert!(settings.appearance.is_empty());
         assert!(settings.screenshots.is_empty());
         assert!(settings.privacy.is_empty());
+    }
+
+    #[test]
+    fn native_document_without_hwdec_defaults_to_auto_safe() {
+        let missing_video = Settings::load(r#"{ "version": 1 }"#)
+            .expect("document without video settings should load");
+        let missing_hwdec = Settings::load(r#"{ "version": 2, "video": {} }"#)
+            .expect("document without hwdec should load");
+
+        assert_eq!(missing_video.video.hwdec.as_deref(), Some("auto-safe"));
+        assert_eq!(missing_hwdec.video.hwdec.as_deref(), Some("auto-safe"));
+    }
+
+    #[test]
+    fn native_document_preserves_explicit_hwdec_off() {
+        let settings = Settings::load(r#"{ "version": 2, "video": { "hwdec": "no" } }"#)
+            .expect("document with explicit hwdec off should load");
+
+        assert_eq!(settings.video.hwdec.as_deref(), Some("no"));
     }
 
     #[test]
@@ -583,6 +627,7 @@ mod tests {
         let settings = Settings::load(raw).expect("windows document should load");
         assert_eq!(settings.version, SETTINGS_VERSION);
         assert_eq!(settings.playback.volume, None);
+        assert_eq!(settings.video.hwdec.as_deref(), Some("auto-safe"));
         assert!(settings.updates.auto_check); // default-on when the key is absent
     }
 }
