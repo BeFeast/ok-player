@@ -22,7 +22,8 @@ sudo apt-get install build-essential pkg-config libgtk-4-dev libadwaita-1-dev li
 
 Notes:
 
-- GTK4 provides the `GtkGLArea` video host planned for libmpv rendering.
+- GTK 4.14 or newer provides the `GtkGLArea` video host and fractional monitor
+  scale used by the player workarea-fit path.
 - `libmpv-dev` provides headers and `mpv.pc` for build-time detection.
 - `libgl1-mesa-dev`, `libegl1-mesa-dev`, and `libglx-dev` provide the OpenGL
   symbols used by the first `GtkGLArea` render spike.

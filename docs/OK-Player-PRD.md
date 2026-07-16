@@ -654,6 +654,7 @@ Curated defaults (`?` opens a cheat overlay):
 
 ### 15.3 Window behaviors [MVP]
 - **Custom Mica titlebar:** translucent, fused with content; integrated min/max/close; video extends beneath; auto-hides in fullscreen. Title text uses the media display title with graceful truncation.
+- **Initial video fit:** on the first valid dimensions for each loaded source, convert the video's physical display pixels into the active monitor's logical coordinates, preserve its aspect, never upscale past its natural size, and fit the captionless player inside the usable workarea with a 24 logical-pixel edge inset plus the 42 logical-pixel titlebar/chrome reserve. Center the fitted toplevel or let the compositor clamp it fully on-screen; later user resize/move remains authoritative.
 - **Multi-window / multi-instance:** every "New window" is an independent player (own media, own state).
 - **Open-from-Explorer = new window** by default; **configurable** (Settings → Playback/Integration) to "reuse existing window / add to queue."
 - **Window modes (all MVP):** Standard ↔ Fullscreen ↔ Mini-player/PiP ↔ Compact music; transitions animate (mac-style).

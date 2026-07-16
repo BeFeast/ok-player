@@ -815,8 +815,12 @@ struct PlayerWindowChrome {
 #[derive(Clone)]
 struct PlayerWindowBounds {
     monitor: Option<gdk::Monitor>,
-    work_area: window_fit::WindowSize,
+    work_area: window_fit::WindowRect,
+    scale_factor: f64,
 }
+
+type PlayerWindowBoundsState = Rc<RefCell<Option<PlayerWindowBounds>>>;
+type PlayerWindowFitRequest = Rc<Cell<Option<window_fit::WindowSize>>>;
 
 struct StatePollContext {
     updating_seek: Rc<Cell<bool>>,
@@ -826,7 +830,8 @@ struct StatePollContext {
     empty_surface: EmptySurface,
     lyrics_surface: LyricsSurface,
     media_state_overlay: MediaStateOverlay,
-    window_bounds: Rc<RefCell<Option<PlayerWindowBounds>>>,
+    window_bounds: PlayerWindowBoundsState,
+    window_fit_request: PlayerWindowFitRequest,
     mpris_snapshot: Arc<Mutex<MprisSnapshot>>,
     mpris_signals: mpsc::Sender<MprisSignal>,
 }

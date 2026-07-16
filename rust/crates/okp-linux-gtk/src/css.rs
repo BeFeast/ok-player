@@ -3846,7 +3846,7 @@ pub(crate) fn install_css() {
     };
 
     let provider = gtk::CssProvider::new();
-    provider.load_from_data(OKP_STYLESHEET);
+    provider.load_from_string(OKP_STYLESHEET);
     gtk::style_context_add_provider_for_display(
         &display,
         &provider,

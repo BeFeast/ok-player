@@ -2774,6 +2774,34 @@ fn source_generation_advances_on_reload_and_clear() {
 }
 
 #[test]
+fn lifecycle_dimensions_only_match_the_current_media_source() {
+    let state = Rc::new(RefCell::new(PlayerState::default()));
+    remember_loaded_url(&state, "https://example.com/current.m3u8".to_owned());
+
+    assert!(lifecycle_source_matches_current(
+        &state,
+        Some("https://example.com/current.m3u8")
+    ));
+    assert!(!lifecycle_source_matches_current(
+        &state,
+        Some("https://example.com/superseded.m3u8")
+    ));
+    assert!(!lifecycle_source_matches_current(&state, None));
+
+    let path = PathBuf::from("/media/current.mkv");
+    remember_loaded_media_with_playlist(
+        &state,
+        path.clone(),
+        vec![PlaylistItem::Local(path.clone())],
+    );
+    assert!(lifecycle_source_matches_current(&state, path.to_str()));
+    assert!(!lifecycle_source_matches_current(
+        &state,
+        Some("/media/superseded.mkv")
+    ));
+}
+
+#[test]
 fn set_load_failure_transitions_and_records_card_actions() {
     let state = Rc::new(RefCell::new(PlayerState::default()));
     set_load_failure(

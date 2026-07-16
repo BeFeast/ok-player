@@ -1424,7 +1424,17 @@ pub(crate) fn drain_mpv_events(
     let mut auto_fit_dimensions = None;
     for event in events {
         match event {
-            MpvEvent::FileLoaded { video_dimensions } => {
+            MpvEvent::FileLoaded {
+                source,
+                video_dimensions,
+            } => {
+                if !lifecycle_source_matches_current(state, source.as_deref()) {
+                    eprintln!(
+                        "ignoring FileLoaded dimensions for superseded source ({})",
+                        source.as_deref().unwrap_or("unknown")
+                    );
+                    continue;
+                }
                 auto_fit_dimensions = auto_fit_dimensions.or(video_dimensions);
                 try_pending_audio_device_restore(state);
                 try_pending_playback_preferences(state);
@@ -1435,7 +1445,13 @@ pub(crate) fn drain_mpv_events(
                 state.media_load_state = network_media::MediaLoadState::Playing;
                 state.last_load_error = None;
             }
-            MpvEvent::VideoReconfig { video_dimensions } => {
+            MpvEvent::VideoReconfig {
+                source,
+                video_dimensions,
+            } => {
+                if !lifecycle_source_matches_current(state, source.as_deref()) {
+                    continue;
+                }
                 auto_fit_dimensions = auto_fit_dimensions.or(video_dimensions);
             }
             MpvEvent::EndFile { reason, .. } if reason.is_eof() => {
@@ -1464,4 +1480,25 @@ pub(crate) fn drain_mpv_events(
     }
 
     auto_fit_dimensions
+}
+
+pub(crate) fn lifecycle_source_matches_current(
+    state: &Rc<RefCell<PlayerState>>,
+    event_source: Option<&str>,
+) -> bool {
+    let Some(event_source) = event_source else {
+        return false;
+    };
+    let state = state.borrow();
+    state
+        .current_url
+        .as_ref()
+        .map(|url| network_media::LoadFailureSource::url(url.clone()))
+        .or_else(|| {
+            state
+                .current_file
+                .as_ref()
+                .map(|path| network_media::LoadFailureSource::local(path.clone()))
+        })
+        .is_some_and(|source| source.matches_engine_path(event_source))
 }

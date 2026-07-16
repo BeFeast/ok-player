@@ -130,7 +130,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         .build();
     window.add_css_class("okp-player-window");
     window.set_icon_name(Some(LINUX_ICON_NAME));
-    let window_bounds = track_player_window_bounds(&window);
+    let (window_bounds, window_fit_request) = track_player_window_bounds(&window);
 
     let overlay = gtk::Overlay::new();
     overlay.add_css_class("okp-root");
@@ -312,6 +312,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
             lyrics_surface,
             media_state_overlay,
             window_bounds,
+            window_fit_request,
             mpris_snapshot: Arc::clone(&mpris_controller.snapshot),
             mpris_signals: mpris_controller.signals.clone(),
         },
@@ -383,9 +384,11 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
 
 pub(crate) fn track_player_window_bounds(
     window: &gtk::ApplicationWindow,
-) -> Rc<RefCell<Option<PlayerWindowBounds>>> {
+) -> (PlayerWindowBoundsState, PlayerWindowFitRequest) {
     let bounds = Rc::new(RefCell::new(None));
+    let requested_size = Rc::new(Cell::new(None::<window_fit::WindowSize>));
     let realize_bounds = Rc::clone(&bounds);
+    let realize_requested_size = Rc::clone(&requested_size);
     window.connect_realize(move |window| {
         let Some(surface) = window.surface() else {
             return;
@@ -394,55 +397,131 @@ pub(crate) fn track_player_window_bounds(
             return;
         };
         let compute_bounds = Rc::clone(&realize_bounds);
+        let compute_requested_size = Rc::clone(&realize_requested_size);
         toplevel.connect_compute_size(move |toplevel, size| {
             let (width, height) = size.bounds();
             if width > 0 && height > 0 {
+                let monitor = toplevel.display().monitor_at_surface(toplevel);
+                let geometry = monitor.as_ref().map(|monitor| monitor.geometry());
                 compute_bounds.replace(Some(PlayerWindowBounds {
-                    monitor: toplevel.display().monitor_at_surface(toplevel),
-                    work_area: window_fit::WindowSize { width, height },
+                    scale_factor: monitor
+                        .as_ref()
+                        .map(|monitor| window_fit_monitor_scale(monitor.scale()))
+                        .unwrap_or_else(|| window_fit_monitor_scale(toplevel.scale())),
+                    monitor,
+                    work_area: window_fit::WindowRect {
+                        x: geometry.as_ref().map_or(0, |geometry| geometry.x()),
+                        y: geometry.as_ref().map_or(0, |geometry| geometry.y()),
+                        width: geometry
+                            .as_ref()
+                            .map_or(width, |geometry| geometry.width())
+                            .min(width),
+                        height: geometry
+                            .as_ref()
+                            .map_or(height, |geometry| geometry.height())
+                            .min(height),
+                    },
                 }));
+            }
+            if let Some(requested) = compute_requested_size.take() {
+                // The loaded playback chrome can transiently report the old
+                // 1120×680 allocation as its minimum during a late HEVC load.
+                // This one configure is the explicit fit request; clear that
+                // stale floor so both axes can reach the aspect-correct target.
+                size.set_min_size(1, 1);
+                size.set_size(requested.width, requested.height);
             }
         });
     });
-    bounds
+    (bounds, requested_size)
 }
 
 pub(crate) fn current_player_work_area(
     window: &gtk::ApplicationWindow,
     reported_bounds: &RefCell<Option<PlayerWindowBounds>>,
-) -> Option<window_fit::WindowSize> {
+) -> Option<PlayerWindowBounds> {
     let current_monitor = window.surface().and_then(|surface| {
         let monitor = surface.display().monitor_at_surface(&surface)?;
         let geometry = monitor.geometry();
         (geometry.width() > 0 && geometry.height() > 0).then_some((
-            monitor,
-            window_fit::WindowSize {
-                width: geometry.width(),
-                height: geometry.height(),
+            monitor.clone(),
+            PlayerWindowBounds {
+                scale_factor: window_fit_monitor_scale(monitor.scale()),
+                monitor: Some(monitor),
+                work_area: window_fit::WindowRect {
+                    x: geometry.x(),
+                    y: geometry.y(),
+                    width: geometry.width(),
+                    height: geometry.height(),
+                },
             },
         ))
     });
 
     let reported = reported_bounds.borrow();
     match (reported.as_ref(), current_monitor) {
-        (Some(bounds), Some((monitor, monitor_size)))
+        (Some(bounds), Some((monitor, mut current)))
             if bounds.monitor.as_ref() == Some(&monitor) =>
         {
-            Some(window_fit::WindowSize {
-                width: bounds.work_area.width.min(monitor_size.width),
-                height: bounds.work_area.height.min(monitor_size.height),
-            })
+            let right = (i64::from(bounds.work_area.x) + i64::from(bounds.work_area.width))
+                .min(i64::from(current.work_area.x) + i64::from(current.work_area.width));
+            let bottom = (i64::from(bounds.work_area.y) + i64::from(bounds.work_area.height))
+                .min(i64::from(current.work_area.y) + i64::from(current.work_area.height));
+            let x = bounds.work_area.x.max(current.work_area.x);
+            let y = bounds.work_area.y.max(current.work_area.y);
+            current.work_area = window_fit::WindowRect {
+                x,
+                y,
+                width: (right - i64::from(x)).clamp(0, i64::from(i32::MAX)) as i32,
+                height: (bottom - i64::from(y)).clamp(0, i64::from(i32::MAX)) as i32,
+            };
+            current.scale_factor = bounds.scale_factor.max(1.0);
+            Some(current)
         }
-        (_, Some((_, monitor_size))) => Some(monitor_size),
-        (Some(bounds), None) => Some(bounds.work_area),
+        (_, Some((_, current))) => Some(current),
+        (Some(bounds), None) => Some(bounds.clone()),
         (None, None) => None,
     }
+}
+
+fn window_fit_monitor_scale(native_scale: f64) -> f64 {
+    // Deterministic Xvfb hook: X11 cannot model a HiDPI monitor's logical
+    // geometry independently from its device-pixel root window. Production
+    // always uses GDK's scale unless this explicit fit-smoke override supplies
+    // a finite positive value.
+    env::var("OKP_WINDOW_FIT_SCALE")
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(native_scale)
+        .max(1.0)
+}
+
+fn resize_player_window(
+    window: &gtk::ApplicationWindow,
+    requested_size: &PlayerWindowFitRequest,
+    size: window_fit::WindowSize,
+) {
+    // A mapped GTK4 toplevel may already have updated `default-size` to the
+    // compositor's initial allocation. Feed the one-shot target through GDK's
+    // compute-size contract as well, then consume it on that configure pass.
+    // The request cell is empty immediately afterward, so later user resizes are
+    // not constrained and cannot enter a resize loop.
+    requested_size.set(Some(size));
+    window.set_resizable(false);
+    window.set_default_size(size.width, size.height);
+    window.queue_resize();
+    let release_window = window.clone();
+    glib::timeout_add_local_once(Duration::from_millis(250), move || {
+        release_window.set_resizable(true);
+    });
 }
 
 pub(crate) fn fit_player_window_to_video(
     window: &gtk::ApplicationWindow,
     state: &Rc<RefCell<PlayerState>>,
-    reported_bounds: &Rc<RefCell<Option<PlayerWindowBounds>>>,
+    reported_bounds: &PlayerWindowBoundsState,
+    requested_size: &PlayerWindowFitRequest,
     source_generation: u64,
     video: VideoDimensions,
 ) {
@@ -470,29 +549,47 @@ pub(crate) fn fit_player_window_to_video(
         }
         return;
     };
-    let Some(target) =
-        window_fit::fit_to_work_area(video.width, video.height, work_area.width, work_area.height)
-    else {
+    let Some(fit) = window_fit::fit_window_to_work_area(
+        video.width,
+        video.height,
+        work_area.work_area,
+        work_area.scale_factor,
+    ) else {
         return;
     };
 
     if debug {
         eprintln!(
-            "window fit request: video={}x{} workarea={}x{} target={}x{}",
+            "window fit request: video={}x{} scale={} logical={}x{} workarea={}x{}+{}+{} target={}x{}+{}+{}",
             video.width,
             video.height,
-            work_area.width,
-            work_area.height,
-            target.width,
-            target.height
+            work_area.scale_factor,
+            fit.video.width,
+            fit.video.height,
+            work_area.work_area.width,
+            work_area.work_area.height,
+            work_area.work_area.x,
+            work_area.work_area.y,
+            fit.window.width,
+            fit.window.height,
+            fit.window.x,
+            fit.window.y
         );
     }
-    window.set_default_size(target.width, target.height);
+    resize_player_window(
+        window,
+        requested_size,
+        window_fit::WindowSize {
+            width: fit.window.width,
+            height: fit.window.height,
+        },
+    );
 
     let settled_window = window.clone();
     let settled_state = Rc::clone(state);
     let settled_bounds = Rc::clone(reported_bounds);
-    glib::timeout_add_local_once(Duration::from_millis(80), move || {
+    let settled_requested_size = Rc::clone(requested_size);
+    glib::timeout_add_local_once(Duration::from_millis(120), move || {
         if settled_state.borrow().source_generation != source_generation
             || settled_window.is_fullscreen()
             || settled_window.is_maximized()
@@ -502,17 +599,21 @@ pub(crate) fn fit_player_window_to_video(
         let Some(work_area) = current_player_work_area(&settled_window, &settled_bounds) else {
             return;
         };
+        let Some(logical_video) =
+            window_fit::physical_to_logical(video.width, video.height, work_area.scale_factor)
+        else {
+            return;
+        };
         let actual_width = settled_window.width();
         let actual_height = settled_window.height();
         if let Some(corrected) = window_fit::fill_client_to_work_area(
-            video.width,
-            video.height,
+            logical_video.width,
+            logical_video.height,
             actual_width,
             actual_height,
-            work_area.width,
-            work_area.height,
+            work_area.work_area,
         ) {
-            settled_window.set_default_size(corrected.width, corrected.height);
+            resize_player_window(&settled_window, &settled_requested_size, corrected);
         }
         if debug {
             eprintln!(

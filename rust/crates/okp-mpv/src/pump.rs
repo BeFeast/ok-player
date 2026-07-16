@@ -123,6 +123,9 @@ struct PumpShared {
     snapshot: Mutex<Snapshot>,
     events: Mutex<Vec<MpvEvent>>,
     media_source: Mutex<Option<PathBuf>>,
+    /// Exact file/URL identity recorded immediately before each load command. Lifecycle
+    /// payloads carry this token so a shell can reject dimensions from a superseded load.
+    event_source: Mutex<Option<String>>,
     /// Set when the shell records a new media source so the next pump pass
     /// rebuilds `media_info` against it, even without a fresh mpv event.
     media_info_dirty: AtomicBool,
@@ -147,6 +150,7 @@ impl EventPump {
             snapshot: Mutex::new(Snapshot::default()),
             events: Mutex::new(Vec::new()),
             media_source: Mutex::new(None),
+            event_source: Mutex::new(None),
             media_info_dirty: AtomicBool::new(false),
             // Start "pending" so the pump populates the snapshot immediately.
             wake: Mutex::new(true),
@@ -248,6 +252,10 @@ impl EventPump {
         self.shared.condvar.notify_one();
     }
 
+    pub(crate) fn replace_event_source(&self, source: Option<String>) -> Option<String> {
+        std::mem::replace(&mut *lock(&self.shared.event_source), source)
+    }
+
     /// Stop the wakeup callback, wake the pump so it observes the shutdown flag,
     /// and join it. Must run before the handle is destroyed.
     pub(crate) fn shutdown(mut self) {
@@ -326,16 +334,20 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
                 shared.running.store(false, Ordering::Release);
             }
             ffi::MPV_EVENT_FILE_LOADED => {
+                let (source, video_dimensions) = lifecycle_video_payload(shared);
                 lifecycle.push(MpvEvent::FileLoaded {
-                    video_dimensions: shared.reader.video_dimensions().ok().flatten(),
+                    source,
+                    video_dimensions,
                 });
                 flags.tracks = true;
                 flags.chapters = true;
                 flags.media_info = true;
             }
             ffi::MPV_EVENT_VIDEO_RECONFIG => {
+                let (source, video_dimensions) = lifecycle_video_payload(shared);
                 lifecycle.push(MpvEvent::VideoReconfig {
-                    video_dimensions: shared.reader.video_dimensions().ok().flatten(),
+                    source,
+                    video_dimensions,
                 });
                 flags.media_info = true;
             }
@@ -388,6 +400,17 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
     }
 
     (lifecycle, flags)
+}
+
+fn lifecycle_video_payload(
+    shared: &PumpShared,
+) -> (Option<String>, Option<crate::player::VideoDimensions>) {
+    // Keep the load identity stable across the mpv property read. A concurrent
+    // load command waits on this short guard before replacing the token, so a
+    // payload can never combine source A with dimensions observed for source B.
+    let source = lock(&shared.event_source);
+    let video_dimensions = shared.reader.video_dimensions().ok().flatten();
+    (source.clone(), video_dimensions)
 }
 
 /// Read the current values off the background thread and publish them. Scalars

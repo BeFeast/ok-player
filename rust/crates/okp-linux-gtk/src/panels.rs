@@ -1166,7 +1166,7 @@ pub(crate) fn connect_playlist_row_drag_reorder(
         let Ok(source_index) = value.get::<u32>() else {
             return false;
         };
-        let drop_after = y >= f64::from(drop_row.allocated_height()) / 2.0;
+        let drop_after = y >= f64::from(drop_row.height()) / 2.0;
         let Some(target_index) =
             playlist_drop_target_index(source_index as usize, index, drop_after)
         else {

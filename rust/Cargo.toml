@@ -15,7 +15,7 @@ repository = "https://github.com/BeFeast/ok-player"
 rust-version = "1.96"
 
 [workspace.dependencies]
-gtk = { package = "gtk4", version = "0.11.4", features = ["v4_10"] }
+gtk = { package = "gtk4", version = "0.11.4", features = ["v4_14"] }
 libc = "0.2.186"
 pkg-config = "0.3.33"
 relm4 = "0.11.0"

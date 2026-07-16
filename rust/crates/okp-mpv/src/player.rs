@@ -167,11 +167,12 @@ pub enum TrackKind {
 
 /// Lifecycle events the engine fires, drained oldest-first via
 /// [`Mpv::take_lifecycle_events`](crate::Mpv::take_lifecycle_events). Load and
-/// reconfiguration events carry display dimensions read by the background pump,
+/// reconfiguration events carry display dimensions and the load source recorded by
+/// the background pump,
 /// while `EndFile` carries the path mpv reported for the entry that ended. The
 /// shell can therefore react without a blocking UI-thread property read and can
 /// drop a stale error whose source has already been superseded. Not `Copy`
-/// because `path` is a `String`.
+/// because source/path identities are strings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MpvEvent {
     EndFile {
@@ -183,9 +184,11 @@ pub enum MpvEvent {
         error: c_int,
     },
     FileLoaded {
+        source: Option<String>,
         video_dimensions: Option<VideoDimensions>,
     },
     VideoReconfig {
+        source: Option<String>,
         video_dimensions: Option<VideoDimensions>,
     },
     Shutdown,
@@ -1071,18 +1074,34 @@ impl Mpv {
 
     pub fn load_file(&self, path: &Path) -> Result<(), MpvError> {
         let command = CString::new("loadfile")?;
-        let path = path_to_cstring(path)?;
-        let args = [command.as_ptr(), path.as_ptr(), ptr::null()];
+        let path_arg = path_to_cstring(path)?;
+        let previous_source = self.replace_event_source(Some(path.to_string_lossy().into_owned()));
+        let args = [command.as_ptr(), path_arg.as_ptr(), ptr::null()];
 
-        check(unsafe { ffi::mpv_command(self.handle.as_ptr(), args.as_ptr()) })
+        let result = check(unsafe { ffi::mpv_command(self.handle.as_ptr(), args.as_ptr()) });
+        if result.is_err() {
+            self.replace_event_source(previous_source);
+        }
+        result
     }
 
     pub fn load_url(&self, url: &str) -> Result<(), MpvError> {
         let command = CString::new("loadfile")?;
-        let url = CString::new(url)?;
-        let args = [command.as_ptr(), url.as_ptr(), ptr::null()];
+        let url_arg = CString::new(url)?;
+        let previous_source = self.replace_event_source(Some(url.to_owned()));
+        let args = [command.as_ptr(), url_arg.as_ptr(), ptr::null()];
 
-        check(unsafe { ffi::mpv_command(self.handle.as_ptr(), args.as_ptr()) })
+        let result = check(unsafe { ffi::mpv_command(self.handle.as_ptr(), args.as_ptr()) });
+        if result.is_err() {
+            self.replace_event_source(previous_source);
+        }
+        result
+    }
+
+    fn replace_event_source(&self, source: Option<String>) -> Option<String> {
+        self.pump
+            .as_ref()
+            .and_then(|pump| pump.replace_event_source(source))
     }
 
     pub fn add_subtitle_file(&self, path: &Path) -> Result<(), MpvError> {
@@ -1973,12 +1992,22 @@ mod tests {
             .expect("video fixture should load");
 
         let deadline = Instant::now() + Duration::from_secs(5);
+        let fixture = fixture_media_path();
+        let expected_source = fixture.to_string_lossy().into_owned();
         let mut dimensions = None;
+        let mut source = None;
         while Instant::now() < deadline && dimensions.is_none() {
             for event in mpv.take_lifecycle_events() {
                 match event {
-                    MpvEvent::FileLoaded { video_dimensions }
-                    | MpvEvent::VideoReconfig { video_dimensions } => {
+                    MpvEvent::FileLoaded {
+                        source: event_source,
+                        video_dimensions,
+                    }
+                    | MpvEvent::VideoReconfig {
+                        source: event_source,
+                        video_dimensions,
+                    } => {
+                        source = source.or(event_source);
                         dimensions = dimensions.or(video_dimensions);
                     }
                     _ => {}
@@ -1994,6 +2023,7 @@ mod tests {
                 height: 720
             })
         );
+        assert_eq!(source.as_deref(), Some(expected_source.as_str()));
         #[cfg(debug_assertions)]
         assert_eq!(
             mpv.blocking_read_violations(),

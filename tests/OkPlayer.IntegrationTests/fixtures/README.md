@@ -23,3 +23,16 @@ ffmpeg -i base.mkv -i subtest.srt -map 0:v:0 -map 1:0 -c:v copy -c:s srt -t 3 su
 ```
 
 White text on a near-black frame so the test can separate caption pixels from background by a simple luma cut.
+
+## Linux scaled-workarea fixture
+
+`scripts/generate-linux-acceptance-media.sh` deterministically generates
+`fit-4k.mkv`, a 3840×2160 HEVC Main10 (`yuv420p10le`) solid-frame clip used by
+the Linux main-window fit smoke and real GNOME/Wayland acceptance. The generated
+manifest records and validates the codec and pixel format so a local ffmpeg
+default cannot silently downgrade the acceptance source.
+
+The headless smoke repeats the clip on a 1024×768 workarea and on a simulated
+3840×2160 display at scale factor 2. Real GNOME/Wayland acceptance must still
+repeat those states on the target 4K display because Xvfb does not prove
+compositor placement, desktop panel reservations, or fractional-scale policy.

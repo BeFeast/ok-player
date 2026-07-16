@@ -288,6 +288,7 @@ pub(crate) fn connect_state_poll(
         lyrics_surface,
         media_state_overlay,
         window_bounds,
+        window_fit_request,
         mpris_snapshot,
         mpris_signals,
     } = context;
@@ -297,7 +298,14 @@ pub(crate) fn connect_state_poll(
         if let Some(dimensions) = auto_fit_dimensions {
             let generation = state.borrow().source_generation;
             if last_auto_fit_generation.replace(Some(generation)) != Some(generation) {
-                fit_player_window_to_video(&window, &state, &window_bounds, generation, dimensions);
+                fit_player_window_to_video(
+                    &window,
+                    &state,
+                    &window_bounds,
+                    &window_fit_request,
+                    generation,
+                    dimensions,
+                );
             }
         }
         drain_screenshot_jobs(&state, &status_toast);
