@@ -24,11 +24,11 @@ use okp_core::update_selection::{self, DebFeed, DebUpdate, SHA256SUMS_ASSET};
 use okp_core::{
     AppIdentity, chapter_math, launch_args, lrc, m3u, media_formats, natural_compare,
     network_media, ok_player_uri, progress_report, seek_readout, sha256sums, subtitle_delay,
-    time_code, timeline_buffer, video_click, volume, youtube_open,
+    time_code, timeline_buffer, video_click, volume, window_fit, youtube_open,
 };
 use okp_mpv::{
     AbLoopState, AudioDevice, Chapter, EndFileReason, InfoRow, InfoSection, InfoTrack, MediaInfo,
-    Mpv, MpvEvent, PlaybackState, Track, TrackKind, current_render_target_size,
+    Mpv, MpvEvent, PlaybackState, Track, TrackKind, VideoDimensions, current_render_target_size,
     resolve_render_target_size,
 };
 use velopack::{
@@ -810,6 +810,12 @@ struct PlayerWindowChrome {
     title_label: gtk::Label,
 }
 
+#[derive(Clone)]
+struct PlayerWindowBounds {
+    monitor: Option<gdk::Monitor>,
+    work_area: window_fit::WindowSize,
+}
+
 struct StatePollContext {
     updating_seek: Rc<Cell<bool>>,
     chrome: Rc<ChromeVisibility>,
@@ -818,6 +824,7 @@ struct StatePollContext {
     empty_surface: EmptySurface,
     lyrics_surface: LyricsSurface,
     media_state_overlay: MediaStateOverlay,
+    window_bounds: Rc<RefCell<Option<PlayerWindowBounds>>>,
     mpris_snapshot: Arc<Mutex<MprisSnapshot>>,
     mpris_signals: mpsc::Sender<MprisSignal>,
 }

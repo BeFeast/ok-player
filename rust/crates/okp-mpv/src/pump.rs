@@ -326,9 +326,17 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
                 shared.running.store(false, Ordering::Release);
             }
             ffi::MPV_EVENT_FILE_LOADED => {
-                lifecycle.push(MpvEvent::FileLoaded);
+                lifecycle.push(MpvEvent::FileLoaded {
+                    video_dimensions: shared.reader.video_dimensions().ok().flatten(),
+                });
                 flags.tracks = true;
                 flags.chapters = true;
+                flags.media_info = true;
+            }
+            ffi::MPV_EVENT_VIDEO_RECONFIG => {
+                lifecycle.push(MpvEvent::VideoReconfig {
+                    video_dimensions: shared.reader.video_dimensions().ok().flatten(),
+                });
                 flags.media_info = true;
             }
             ffi::MPV_EVENT_END_FILE => {
