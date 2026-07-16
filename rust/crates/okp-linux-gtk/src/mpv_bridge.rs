@@ -194,10 +194,12 @@ pub(crate) fn connect_mpv(
     });
 
     let resize_state = Rc::clone(&state);
-    video_area.connect_resize(move |_, width, height| {
+    video_area.connect_resize(move |area, width, height| {
         resize_state.borrow_mut().render_target_size =
             (width > 0 && height > 0).then_some(okp_mpv::RenderTargetSize { width, height });
+        area.queue_render();
     });
+    video_area.connect_scale_factor_notify(gtk::GLArea::queue_render);
 
     let render_state = Rc::clone(&state);
     let render_callback_profile = render_profile.clone();

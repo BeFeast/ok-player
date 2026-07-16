@@ -81,12 +81,19 @@ DURATION_SECONDS="$(( (FRAME_COUNT + 59) / 60 + 5 ))"
 run_plain_mpv() {
   local mode="$1"
   local log="$OUT_DIR/plain-mpv-${mode}.log"
+  set +e
   timeout --signal=TERM "${DURATION_SECONDS}s" \
     mpv --no-config --vo=gpu --gpu-api=opengl --audio=no --keep-open=no \
       --hwdec="$mode" --frames="$FRAME_COUNT" \
       --msg-level=all=no,status=status \
       --term-status-msg='hwdec=${hwdec-current} estimated_fps=${estimated-vf-fps} display_fps=${display-fps} vo_drops=${vo-drop-frame-count} decoder_drops=${decoder-frame-drop-count}' \
       "$FIXTURE" >"$log" 2>&1
+  local status=$?
+  set -e
+  if [[ "$status" -ne 0 && "$status" -ne 124 ]]; then
+    echo "Plain mpv profile failed for hwdec=$mode (status $status): $log" >&2
+    exit "$status"
+  fi
 }
 
 run_ok_player() {

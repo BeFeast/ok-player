@@ -43,3 +43,6 @@ jobs:
         env:
           OKP_4K60_FRAMES: 1
         run: ./scripts/profile-linux-4k60.sh generate "$RUNNER_TEMP/ok-player-4k60"
+
+      - name: Profile timeout smoke
+        run: ./scripts/test-profile-linux-4k60.sh
