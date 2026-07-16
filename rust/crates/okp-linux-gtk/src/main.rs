@@ -806,6 +806,8 @@ struct Controls {
 #[derive(Clone)]
 struct PlayerWindowChrome {
     revealer: gtk::Revealer,
+    auto_hide_widgets: Vec<gtk::Widget>,
+    persistent_widgets: Vec<gtk::Widget>,
     media_icon: gtk::DrawingArea,
     title_label: gtk::Label,
 }
@@ -1177,6 +1179,7 @@ struct ChromeVisibility {
     revealer: gtk::Revealer,
     linked_revealers: Rc<RefCell<Vec<gtk::Revealer>>>,
     linked_motion_widgets: Rc<RefCell<Vec<gtk::Widget>>>,
+    linked_persistent_widgets: Rc<RefCell<Vec<gtk::Widget>>>,
     cursor_widgets: Rc<RefCell<Vec<gtk::Widget>>>,
     hide_source: Rc<RefCell<Option<glib::SourceId>>>,
     pin_count: Rc<Cell<u32>>,
@@ -1200,6 +1203,7 @@ impl ChromeVisibility {
             revealer,
             linked_revealers: Rc::new(RefCell::new(Vec::new())),
             linked_motion_widgets: Rc::new(RefCell::new(Vec::new())),
+            linked_persistent_widgets: Rc::new(RefCell::new(Vec::new())),
             cursor_widgets: Rc::new(RefCell::new(Vec::new())),
             hide_source: Rc::new(RefCell::new(None)),
             pin_count: Rc::new(Cell::new(0)),
@@ -1225,6 +1229,12 @@ impl ChromeVisibility {
         let widget = widget.clone().upcast::<gtk::Widget>();
         Self::set_motion_widget_state(&widget, self.is_revealed.get());
         self.linked_motion_widgets.borrow_mut().push(widget);
+    }
+
+    fn add_persistent_widget(&self, widget: &impl IsA<gtk::Widget>) {
+        let widget = widget.clone().upcast::<gtk::Widget>();
+        Self::set_persistent_widget_state(&widget, self.is_revealed.get());
+        self.linked_persistent_widgets.borrow_mut().push(widget);
     }
 
     fn add_cursor_widget(&self, widget: &impl IsA<gtk::Widget>) {
@@ -1288,6 +1298,9 @@ impl ChromeVisibility {
         for widget in self.linked_motion_widgets.borrow().iter() {
             Self::set_motion_widget_state(widget, revealed);
         }
+        for widget in self.linked_persistent_widgets.borrow().iter() {
+            Self::set_persistent_widget_state(widget, revealed);
+        }
         for revealer in self.linked_revealers.borrow().iter() {
             Self::set_revealer_state(revealer, revealed);
         }
@@ -1302,10 +1315,19 @@ impl ChromeVisibility {
 
     fn set_motion_widget_state(widget: &impl IsA<gtk::Widget>, revealed: bool) {
         widget.set_can_target(revealed);
+        widget.set_sensitive(revealed);
         if revealed {
             widget.remove_css_class("is-hidden");
         } else {
             widget.add_css_class("is-hidden");
+        }
+    }
+
+    fn set_persistent_widget_state(widget: &impl IsA<gtk::Widget>, chrome_revealed: bool) {
+        if chrome_revealed {
+            widget.remove_css_class("is-isolated");
+        } else {
+            widget.add_css_class("is-isolated");
         }
     }
 
@@ -1323,6 +1345,7 @@ impl ChromeVisibility {
         let revealer = self.revealer.clone();
         let linked_revealers = Rc::clone(&self.linked_revealers);
         let linked_motion_widgets = Rc::clone(&self.linked_motion_widgets);
+        let linked_persistent_widgets = Rc::clone(&self.linked_persistent_widgets);
         let cursor_widgets = Rc::clone(&self.cursor_widgets);
         let hide_source = Rc::clone(&self.hide_source);
         let pin_count = Rc::clone(&self.pin_count);
@@ -1335,6 +1358,9 @@ impl ChromeVisibility {
                 Self::set_motion_widget_state(&revealer, false);
                 for widget in linked_motion_widgets.borrow().iter() {
                     Self::set_motion_widget_state(widget, false);
+                }
+                for widget in linked_persistent_widgets.borrow().iter() {
+                    Self::set_persistent_widget_state(widget, false);
                 }
                 for revealer in linked_revealers.borrow().iter() {
                     Self::set_revealer_state(revealer, false);
