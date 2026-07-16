@@ -367,8 +367,25 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         });
     }
     if let Some((volume, mode)) = volume_preview {
-        glib::timeout_add_local_once(Duration::from_millis(500), move || {
-            volume.open_preview(&mode);
+        // Media launches can deliberately defer the first map until video
+        // dimensions are available. Calling GtkPopover::popup before its
+        // anchor is mapped is a no-op, which made the deterministic volume
+        // captures compare two closed states. Wait for the real anchor with a
+        // bounded test-only poll instead of relying on launch timing.
+        let preview_anchor = volume.widget().clone();
+        let preview_attempts = Rc::new(Cell::new(0_u8));
+        glib::timeout_add_local(Duration::from_millis(100), move || {
+            if preview_anchor.is_mapped() {
+                volume.open_preview(&mode);
+                return glib::ControlFlow::Break;
+            }
+            let attempts = preview_attempts.get().saturating_add(1);
+            preview_attempts.set(attempts);
+            if attempts >= 50 {
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
         });
     }
     if env::var_os("OKP_OPEN_HISTORY_ON_STARTUP").is_some() {
