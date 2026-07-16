@@ -704,9 +704,9 @@ const OKP_STYLESHEET: &str = "
         }
 
         button.okp-welcome-drop-target {
-            min-width: 390px;
-            min-height: 92px;
-            padding: 12px 20px;
+            min-width: 280px;
+            min-height: 82px;
+            padding: 0 16px;
             border-radius: 9px;
         }
 
@@ -741,7 +741,7 @@ const OKP_STYLESHEET: &str = "
         }
 
         .okp-welcome-recents {
-            padding: 36px 44px;
+            padding: 34px 32px 0;
         }
 
         .okp-welcome-recents-title {
@@ -763,11 +763,10 @@ const OKP_STYLESHEET: &str = "
         .is-dark .okp-welcome-recents-subtitle { color: rgba(255, 255, 255, 0.58); }
 
         .okp-recents-shelf {
-            margin-top: 22px;
+            margin-top: 20px;
         }
 
-        .okp-recents-shelf > flowboxchild,
-        .okp-welcome-action-row > flowboxchild {
+        .okp-recents-shelf > flowboxchild {
             padding: 0;
             border: none;
             background: transparent;
@@ -781,6 +780,28 @@ const OKP_STYLESHEET: &str = "
             background: transparent;
             box-shadow: none;
         }
+
+        button.okp-recents-history-button {
+            min-width: 36px;
+            min-height: 36px;
+            padding: 0;
+            border: none;
+            border-radius: 18px;
+            box-shadow: none;
+        }
+
+        .is-light button.okp-recents-history-button {
+            background: rgba(0, 0, 0, 0.045);
+            color: rgba(0, 0, 0, 0.52);
+        }
+
+        .is-dark button.okp-recents-history-button {
+            background: rgba(255, 255, 255, 0.055);
+            color: rgba(255, 255, 255, 0.58);
+        }
+
+        .is-light button.okp-recents-history-button:hover { background: rgba(0, 0, 0, 0.08); }
+        .is-dark button.okp-recents-history-button:hover { background: rgba(255, 255, 255, 0.10); }
 
         .is-light button.okp-recent-card { color: #161616; }
         .is-dark button.okp-recent-card { color: rgba(255, 255, 255, 0.94); }
@@ -842,25 +863,27 @@ const OKP_STYLESHEET: &str = "
         .is-light .okp-recent-title { color: #202020; }
         .is-dark .okp-recent-title { color: rgba(255, 255, 255, 0.92); }
 
-        .okp-recent-location,
-        .okp-recent-context {
+        .okp-recent-location {
             margin-top: 2px;
             font-size: 11.5px;
         }
 
-        .is-light .okp-recent-location,
-        .is-light .okp-recent-context { color: rgba(0, 0, 0, 0.46); }
-        .is-dark .okp-recent-location,
-        .is-dark .okp-recent-context { color: rgba(255, 255, 255, 0.48); }
+        .is-light .okp-recent-location { color: rgba(0, 0, 0, 0.46); }
+        .is-dark .okp-recent-location { color: rgba(255, 255, 255, 0.48); }
 
         .okp-welcome-action-row {
-            margin-top: 26px;
+            margin-top: 24px;
+        }
+
+        .okp-welcome-action-column {
+            min-width: 132px;
+            min-height: 84px;
         }
 
         button.okp-idle-primary-button,
         button.okp-idle-secondary-button {
-            min-height: 42px;
-            padding: 9px 18px;
+            min-height: 36px;
+            padding: 0 12px;
             border-radius: 7px;
             box-shadow: none;
             font-size: 12.5px;
@@ -3523,7 +3546,9 @@ mod tests {
             "min-height: 34px;",
             "min-width: 280px;",
             "min-width: 194px;",
-            "min-height: 42px;",
+            "min-width: 36px;",
+            "min-height: 82px;",
+            "min-height: 84px;",
             "font-size: 30px;",
             "font-size: 13.5px;",
             "min-width: 64px;",
@@ -3540,6 +3565,15 @@ mod tests {
         assert!(OKP_STYLESHEET.contains(".okp-idle-canvas.is-dark"));
         assert!(OKP_STYLESHEET.contains(".okp-idle-footer"));
         assert!(OKP_STYLESHEET.contains(".okp-history-bucket"));
+        assert!(OKP_STYLESHEET.contains("padding: 34px 32px 0;"));
+        assert!(OKP_STYLESHEET.contains("margin-top: 20px;"));
+        assert!(OKP_STYLESHEET.contains("margin-top: 24px;"));
+        assert!(OKP_STYLESHEET.contains("button.okp-recents-history-button"));
+        assert!(OKP_STYLESHEET.contains("border-radius: 18px;"));
+        assert!(OKP_STYLESHEET.contains(".okp-welcome-action-column"));
+        assert!(OKP_STYLESHEET.contains("min-width: 132px;"));
+        assert!(OKP_STYLESHEET.contains("padding: 0 12px;"));
+        assert!(OKP_STYLESHEET.contains("padding: 0 16px;"));
     }
 
     #[test]
