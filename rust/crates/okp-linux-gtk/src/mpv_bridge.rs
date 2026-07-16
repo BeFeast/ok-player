@@ -178,29 +178,50 @@ pub(crate) fn connect_mpv(
     launch_args: LaunchArgs,
 ) {
     match video_host {
-        VideoHost::Native(area) => connect_native_mpv(area, state, launch_args),
+        VideoHost::Native {
+            area,
+            container,
+            auto_fallback,
+        } => connect_native_mpv(area, container, *auto_fallback, state, launch_args),
         VideoHost::Gtk(area) => connect_gtk_mpv(area, state, launch_args),
     }
 }
 
 fn connect_native_mpv(
     video_area: &gtk::DrawingArea,
+    container: &gtk::Stack,
+    auto_fallback: bool,
     state: Rc<RefCell<PlayerState>>,
     launch_args: LaunchArgs,
 ) {
     let realize_state = Rc::clone(&state);
+    let fallback_container = container.clone();
+    let fallback_started = Rc::new(Cell::new(false));
+    let realize_fallback_started = Rc::clone(&fallback_started);
     video_area.connect_realize(move |area| {
         let plane = match NativeVideoPlane::create(area) {
             Ok(plane) => plane,
             Err(error) => {
-                eprintln!(
-                    "Failed to create the native Wayland/EGL video plane: {error}. Set OKP_VIDEO_BACKEND=gtk to use the compatibility path."
+                schedule_gtk_mpv_fallback(
+                    &fallback_container,
+                    &realize_fallback_started,
+                    &realize_state,
+                    &launch_args,
+                    auto_fallback,
+                    format!("Failed to create the native Wayland/EGL video plane: {error}"),
                 );
                 return;
             }
         };
         if !plane.make_current() {
-            eprintln!("Failed to activate the native Wayland/EGL video context");
+            schedule_gtk_mpv_fallback(
+                &fallback_container,
+                &realize_fallback_started,
+                &realize_state,
+                &launch_args,
+                auto_fallback,
+                "Failed to activate the native Wayland/EGL video context".to_owned(),
+            );
             return;
         }
         let Some(mut mpv) = create_configured_mpv(&realize_state) else {
@@ -209,33 +230,69 @@ fn connect_native_mpv(
         let display = area.display();
         let native_wayland_display = wayland_display_resource(&display);
         if native_wayland_display.is_none() {
-            eprintln!("GDK Wayland native display is unavailable for direct VAAPI interop");
+            schedule_gtk_mpv_fallback(
+                &fallback_container,
+                &realize_fallback_started,
+                &realize_state,
+                &launch_args,
+                auto_fallback,
+                "GDK Wayland native display is unavailable for direct VAAPI interop".to_owned(),
+            );
             return;
         }
         if let Err(error) = mpv.create_render_context(native_wayland_display) {
-            eprintln!("Failed to create mpv native render context: {error}");
+            schedule_gtk_mpv_fallback(
+                &fallback_container,
+                &realize_fallback_started,
+                &realize_state,
+                &launch_args,
+                auto_fallback,
+                format!("Failed to create mpv native render context: {error}"),
+            );
             return;
         }
         let update_handle = match mpv.render_update_handle() {
             Ok(handle) => handle,
             Err(error) => {
-                eprintln!("Failed to capture the mpv native render handle: {error}");
+                mpv.destroy_render_context();
+                schedule_gtk_mpv_fallback(
+                    &fallback_container,
+                    &realize_fallback_started,
+                    &realize_state,
+                    &launch_args,
+                    auto_fallback,
+                    format!("Failed to capture the mpv native render handle: {error}"),
+                );
                 return;
             }
         };
         let recorder = realize_state.borrow().presentation_recorder.clone();
         if !plane.release_current() {
-            eprintln!("Failed to transfer the native Wayland/EGL context to the render thread");
             mpv.destroy_render_context();
+            schedule_gtk_mpv_fallback(
+                &fallback_container,
+                &realize_fallback_started,
+                &realize_state,
+                &launch_args,
+                auto_fallback,
+                "Failed to transfer the native Wayland/EGL context to the render thread".to_owned(),
+            );
             return;
         }
         let render_loop = match NativeRenderLoop::start(Arc::clone(&plane), update_handle, recorder)
         {
             Ok(render_loop) => render_loop,
             Err(error) => {
-                eprintln!("{error}");
                 let _ = plane.make_current();
                 mpv.destroy_render_context();
+                schedule_gtk_mpv_fallback(
+                    &fallback_container,
+                    &realize_fallback_started,
+                    &realize_state,
+                    &launch_args,
+                    auto_fallback,
+                    error,
+                );
                 return;
             }
         };
@@ -249,6 +306,14 @@ fn connect_native_mpv(
             drop(render_loop);
             let _ = plane.make_current();
             mpv.destroy_render_context();
+            schedule_gtk_mpv_fallback(
+                &fallback_container,
+                &realize_fallback_started,
+                &realize_state,
+                &launch_args,
+                auto_fallback,
+                format!("Failed to install the mpv native render callback: {error}"),
+            );
             return;
         }
 
@@ -291,6 +356,42 @@ fn connect_native_mpv(
             plane.disable();
         }
         state.native_video_plane = None;
+    });
+}
+
+fn schedule_gtk_mpv_fallback(
+    container: &gtk::Stack,
+    fallback_started: &Rc<Cell<bool>>,
+    state: &Rc<RefCell<PlayerState>>,
+    launch_args: &LaunchArgs,
+    auto_fallback: bool,
+    reason: String,
+) {
+    if !auto_fallback {
+        eprintln!("{reason}. Set OKP_VIDEO_BACKEND=gtk to use the compatibility path.");
+        return;
+    }
+    if fallback_started.replace(true) {
+        return;
+    }
+
+    eprintln!("{reason}; falling back to GtkGLArea");
+    let container = container.clone();
+    let state = Rc::clone(state);
+    let launch_args = launch_args.clone();
+    glib::idle_add_local_once(move || {
+        state.borrow_mut().presentation_recorder = PresentationRecorder::from_env(
+            okp_core::presentation_evidence::PresentationBackend::GtkGlArea,
+        );
+        let area = gtk_video_area();
+        connect_gtk_mpv(&area, Rc::clone(&state), launch_args);
+        container.add_named(&area, Some("gtk-glarea-fallback"));
+        container.set_visible_child(&area);
+        // The media-launch window is intentionally realized but not mapped
+        // until dimensions arrive. A child added during native fallback does
+        // not realize automatically in that state, so start Gtk/libmpv now
+        // instead of waiting for the five-second map escape hatch.
+        gtk::prelude::WidgetExt::realize(&area);
     });
 }
 

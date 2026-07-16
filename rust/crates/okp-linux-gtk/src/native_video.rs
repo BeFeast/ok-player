@@ -57,6 +57,12 @@ impl NativeVideoPlane {
     pub(crate) fn create(widget: &impl IsA<gtk::Widget>) -> Result<Arc<Self>, String> {
         use gtk::glib::translate::ToGlibPtr;
 
+        // Deterministic live-Wayland QA hook for the automatic GtkGLArea
+        // fallback. Production never sets this variable.
+        if env::var_os("OKP_TEST_NATIVE_VIDEO_INIT_FAILURE").is_some() {
+            return Err("forced native video initialization failure".to_owned());
+        }
+
         let display = widget.display();
         if !is_wayland_display(display.type_().name()) {
             return Err("the active GDK display is not Wayland".to_owned());
