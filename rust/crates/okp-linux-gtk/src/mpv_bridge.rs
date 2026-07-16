@@ -75,6 +75,10 @@ pub(crate) fn connect_mpv(
         if let Err(error) = mpv.set_audio_normalization(audio_normalization) {
             eprintln!("Failed to restore audio normalization: {error}");
         }
+        let stereo_downmix = realize_state.borrow().settings.stereo_downmix_preference();
+        if let Err(error) = mpv.apply_stereo_downmix_preference(stereo_downmix) {
+            eprintln!("Failed to restore stereo downmix: {error}");
+        }
 
         if let Err(error) = mpv.create_render_context() {
             eprintln!("Failed to create mpv render context: {error}");

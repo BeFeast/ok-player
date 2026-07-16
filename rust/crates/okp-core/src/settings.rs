@@ -136,6 +136,55 @@ pub struct AudioSettings {
     /// mpv output device id; absent means the platform default (`auto`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device: Option<String>,
+    /// Force multichannel (5.1/7.1) tracks down to stereo. Absent means the
+    /// shell inherits the engine configuration (normally automatic/native),
+    /// `true` forces stereo, and `false` explicitly restores automatic/native
+    /// selection. Canonical-only for now — the Windows dialect has no
+    /// counterpart field yet, so migration leaves it absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stereo_downmix: Option<bool>,
+}
+
+/// Portable precedence for projecting the downmix setting into an engine.
+/// `Inherit` preserves advanced engine configuration from older documents;
+/// the explicit variants take precedence after the user changes the toggle.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum StereoDownmixPreference {
+    #[default]
+    Inherit,
+    ForceStereo,
+    Automatic,
+}
+
+impl AudioSettings {
+    /// Effective UI state. Inherited engine configuration is not a forced
+    /// downmix, so older documents keep the toggle off.
+    pub const fn stereo_downmix_enabled(&self) -> bool {
+        matches!(
+            self.stereo_downmix_preference(),
+            StereoDownmixPreference::ForceStereo
+        )
+    }
+
+    pub const fn stereo_downmix_preference(&self) -> StereoDownmixPreference {
+        match self.stereo_downmix {
+            None => StereoDownmixPreference::Inherit,
+            Some(true) => StereoDownmixPreference::ForceStereo,
+            Some(false) => StereoDownmixPreference::Automatic,
+        }
+    }
+
+    /// Record an explicit channel-routing choice. Returns whether the
+    /// effective setting changed so persistence shells can track dirty state
+    /// without reimplementing the default policy.
+    pub fn set_stereo_downmix_enabled(&mut self, enabled: bool) -> bool {
+        if self.stereo_downmix_enabled() == enabled {
+            return false;
+        }
+
+        self.stereo_downmix = Some(enabled);
+        true
+    }
 }
 
 /// Video preferences. `hwdec` holds the mpv option string (`no` / `auto-safe`); the
@@ -350,6 +399,9 @@ impl WindowsSettings {
                 // Windows uses "" for "device not remembered"; the canonical form uses
                 // absent, matching the Linux `auto` convention.
                 device: self.audio_device.filter(|device| !device.is_empty()),
+                // No Windows counterpart yet; the WinUI projection will adopt the
+                // canonical field when it lands.
+                stereo_downmix: None,
             },
             video: VideoSettings {
                 hwdec: self.hardware_decoding.map(|on| hwdec_option(on).to_owned()),
@@ -468,9 +520,60 @@ mod tests {
     }
 
     #[test]
+    fn stereo_downmix_defaults_absent_and_survives_migration() {
+        // A Linux alpha (version 1) document never carried the field: it must
+        // migrate to "absent" (off), never to a silent on.
+        let alpha = Settings::load(r#"{ "version": 1, "audio": { "normalization": true } }"#)
+            .expect("linux alpha document should load");
+        assert_eq!(alpha.audio.stereo_downmix, None);
+        assert!(!alpha.audio.stereo_downmix_enabled());
+        assert_eq!(
+            alpha.audio.stereo_downmix_preference(),
+            StereoDownmixPreference::Inherit
+        );
+
+        // A canonical document that persisted the toggle keeps it.
+        let on = Settings::load(r#"{ "version": 2, "audio": { "stereo_downmix": true } }"#)
+            .expect("canonical document should load");
+        assert_eq!(on.audio.stereo_downmix, Some(true));
+        assert!(on.audio.stereo_downmix_enabled());
+        assert_eq!(
+            on.audio.stereo_downmix_preference(),
+            StereoDownmixPreference::ForceStereo
+        );
+
+        // The default (absent) field is omitted from the serialized document.
+        let json = serde_json::to_string(&Settings::default()).expect("serialize");
+        assert!(!json.contains("stereo_downmix"));
+    }
+
+    #[test]
+    fn stereo_downmix_policy_records_only_effective_changes() {
+        let mut audio = AudioSettings::default();
+
+        assert!(!audio.set_stereo_downmix_enabled(false));
+        assert_eq!(audio.stereo_downmix, None);
+
+        assert!(audio.set_stereo_downmix_enabled(true));
+        assert!(audio.stereo_downmix_enabled());
+        assert_eq!(audio.stereo_downmix, Some(true));
+
+        assert!(!audio.set_stereo_downmix_enabled(true));
+
+        assert!(audio.set_stereo_downmix_enabled(false));
+        assert!(!audio.stereo_downmix_enabled());
+        assert_eq!(audio.stereo_downmix, Some(false));
+        assert_eq!(
+            audio.stereo_downmix_preference(),
+            StereoDownmixPreference::Automatic
+        );
+    }
+
+    #[test]
     fn a_canonical_document_round_trips() {
         let mut settings = Settings::default();
         settings.playback.volume = Some(55.0);
+        settings.audio.stereo_downmix = Some(true);
         settings.appearance.theme = Some("Dark".to_owned());
         settings.screenshots.format = Some(ScreenshotFormat::Webp);
         settings.screenshots.directory = Some("/captures".to_owned());
@@ -548,6 +651,8 @@ mod tests {
         assert_eq!(settings.playback.hide_controls_when_paused, Some(false));
         assert_eq!(settings.audio.normalization, Some(true));
         assert_eq!(settings.audio.device.as_deref(), Some("wasapi/headphones"));
+        // No Windows counterpart yet: migration must leave the downmix off.
+        assert_eq!(settings.audio.stereo_downmix, None);
         // Windows stores a hardware-decoding bool; the canonical form is the mpv string.
         assert_eq!(settings.video.hwdec.as_deref(), Some("auto-safe"));
         assert_eq!(settings.subtitles.scale, Some(1.4));

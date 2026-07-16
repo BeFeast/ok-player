@@ -9,6 +9,7 @@ links = "mpv"
 
 [dependencies]
 libc.workspace = true
+okp-core = { path = "../okp-core" }
 thiserror.workspace = true
 
 [build-dependencies]

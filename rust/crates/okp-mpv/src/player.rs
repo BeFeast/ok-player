@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::os::unix::ffi::OsStrExt;
 
 use libc::{c_char, c_int, c_void};
+use okp_core::settings::StereoDownmixPreference;
 use thiserror::Error;
 
 use crate::ffi;
@@ -14,6 +15,11 @@ use crate::pump::EventPump;
 
 const AUDIO_NORMALIZATION_FILTER_LABEL: &str = "@okpnorm";
 const AUDIO_NORMALIZATION_FILTER: &str = "@okpnorm:dynaudnorm";
+/// Forced stereo downmix value for mpv `audio-channels`: libmpv's native
+/// channel routing downmixes any multichannel layout to two channels.
+const AUDIO_CHANNELS_STEREO: &str = "stereo";
+/// mpv's default `audio-channels` value — automatic/native channel selection.
+const AUDIO_CHANNELS_AUTO: &str = "auto-safe";
 const AUDIO_DEVICE_AUTO: &str = "auto";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1223,6 +1229,33 @@ impl Mpv {
         }
     }
 
+    /// Force multichannel audio down to stereo, or restore automatic/native
+    /// channel selection. Sets the single-valued `audio-channels` option, so
+    /// repeated calls cannot accumulate routing state, stereo sources remain
+    /// unchanged, mono sources remain valid on the two-channel output, and mpv
+    /// reconfigures the running audio chain live — no media reload.
+    pub fn set_stereo_downmix(&self, enabled: bool) -> Result<(), MpvError> {
+        let preference = if enabled {
+            StereoDownmixPreference::ForceStereo
+        } else {
+            StereoDownmixPreference::Automatic
+        };
+        self.apply_stereo_downmix_preference(preference)
+    }
+
+    /// Project the persisted portable preference at engine startup. Inherited
+    /// state issues no command, preserving an Advanced `mpv.conf`
+    /// `audio-channels` value; either explicit toggle state takes precedence.
+    pub fn apply_stereo_downmix_preference(
+        &self,
+        preference: StereoDownmixPreference,
+    ) -> Result<(), MpvError> {
+        let Some(option) = stereo_downmix_option(preference) else {
+            return Ok(());
+        };
+        self.command(&["set", "audio-channels", option])
+    }
+
     pub fn select_subtitle(&self, id: Option<i64>) -> Result<(), MpvError> {
         let value = track_id_or_off(id);
         self.command(&["set", "sid", &value])
@@ -1788,6 +1821,14 @@ fn track_id_or_off(id: Option<i64>) -> String {
         .unwrap_or_else(|| "no".to_owned())
 }
 
+fn stereo_downmix_option(preference: StereoDownmixPreference) -> Option<&'static str> {
+    match preference {
+        StereoDownmixPreference::Inherit => None,
+        StereoDownmixPreference::ForceStereo => Some(AUDIO_CHANNELS_STEREO),
+        StereoDownmixPreference::Automatic => Some(AUDIO_CHANNELS_AUTO),
+    }
+}
+
 fn normalized_audio_device_name(name: &str) -> &str {
     let name = name.trim();
     if name.is_empty() {
@@ -1835,6 +1876,42 @@ mod tests {
     fn fixture_media_path() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../tests/OkPlayer.IntegrationTests/fixtures/subtest.mkv")
+    }
+
+    fn downmix_fixture_path(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../tests/OkPlayer.IntegrationTests/fixtures")
+            .join(name)
+    }
+
+    /// Engine for the downmix tests: null outputs, looping so the audio chain
+    /// stays live across reconfigurations of a two-second fixture.
+    fn downmix_test_engine() -> Mpv {
+        let options = [
+            ("vo".to_owned(), "null".to_owned()),
+            ("ao".to_owned(), "null".to_owned()),
+            ("loop-file".to_owned(), "inf".to_owned()),
+        ];
+        Mpv::new_with_options("no", &options).expect("libmpv must be loadable for okp-mpv tests")
+    }
+
+    /// Poll `audio-out-params/channel-count` until it reports `want` or the
+    /// deadline passes; returns the last observed value either way.
+    fn wait_for_output_channels(mpv: &Mpv, want: i64) -> Option<i64> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut observed = None;
+        while Instant::now() < deadline {
+            observed = mpv
+                .reader()
+                .get_i64("audio-out-params/channel-count")
+                .ok()
+                .flatten();
+            if observed == Some(want) {
+                return observed;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        observed
     }
 
     fn assert_same_stem_sidecar_autoloaded(extension: &str, contents: &str, expected_codec: &str) {
@@ -2102,6 +2179,132 @@ mod tests {
     fn audio_normalization_filter_is_labelled() {
         assert_eq!(AUDIO_NORMALIZATION_FILTER_LABEL, "@okpnorm");
         assert_eq!(AUDIO_NORMALIZATION_FILTER, "@okpnorm:dynaudnorm");
+    }
+
+    #[test]
+    fn stereo_downmix_preference_maps_to_the_mpv_audio_channels_values() {
+        assert_eq!(
+            stereo_downmix_option(StereoDownmixPreference::Inherit),
+            None
+        );
+        assert_eq!(
+            stereo_downmix_option(StereoDownmixPreference::ForceStereo),
+            Some("stereo")
+        );
+        assert_eq!(
+            stereo_downmix_option(StereoDownmixPreference::Automatic),
+            Some("auto-safe")
+        );
+    }
+
+    #[test]
+    fn inherited_downmix_preserves_raw_audio_channels_until_an_explicit_choice() {
+        let options = [
+            ("vo".to_owned(), "null".to_owned()),
+            ("ao".to_owned(), "null".to_owned()),
+            ("audio-channels".to_owned(), "5.1".to_owned()),
+        ];
+        let mpv = Mpv::new_with_options("no", &options)
+            .expect("libmpv must accept the advanced audio-channels option");
+
+        mpv.apply_stereo_downmix_preference(StereoDownmixPreference::Inherit)
+            .expect("inherited routing must be a no-op");
+        assert_eq!(
+            mpv.reader()
+                .get_string("audio-channels")
+                .expect("audio-channels must be readable")
+                .as_deref(),
+            Some("5.1")
+        );
+
+        mpv.apply_stereo_downmix_preference(StereoDownmixPreference::Automatic)
+            .expect("an explicit off preference must restore automatic routing");
+        assert_eq!(
+            mpv.reader()
+                .get_string("audio-channels")
+                .expect("audio-channels must be readable")
+                .as_deref(),
+            Some("auto-safe")
+        );
+    }
+
+    /// Downmix contract on the real engine, per multichannel layout: enabling
+    /// forces two output channels live (no reload), re-enabling is idempotent,
+    /// and disabling restores the source's native channel count. Needs real
+    /// libmpv (same contract as the guard tests above).
+    fn assert_downmix_forces_stereo_and_restores_native(fixture: &str, native_channels: i64) {
+        let mpv = downmix_test_engine();
+        mpv.load_file(&downmix_fixture_path(fixture))
+            .expect("downmix fixture should load");
+
+        assert_eq!(
+            wait_for_output_channels(&mpv, native_channels),
+            Some(native_channels),
+            "{fixture}: native layout must reach the AO before the downmix is enabled"
+        );
+
+        mpv.set_stereo_downmix(true)
+            .expect("enabling the stereo downmix must succeed");
+        assert_eq!(
+            wait_for_output_channels(&mpv, 2),
+            Some(2),
+            "{fixture}: enabling the downmix must reconfigure the live chain to stereo"
+        );
+
+        // Idempotence: a second enable must not error or change the output.
+        mpv.set_stereo_downmix(true)
+            .expect("re-enabling the stereo downmix must stay valid");
+        assert_eq!(
+            wait_for_output_channels(&mpv, 2),
+            Some(2),
+            "{fixture}: re-enabling the downmix must keep stereo output"
+        );
+
+        mpv.set_stereo_downmix(false)
+            .expect("disabling the stereo downmix must succeed");
+        assert_eq!(
+            wait_for_output_channels(&mpv, native_channels),
+            Some(native_channels),
+            "{fixture}: disabling the downmix must restore native channel selection"
+        );
+    }
+
+    #[test]
+    fn stereo_downmix_forces_5_1_to_stereo_and_restores_native() {
+        assert_downmix_forces_stereo_and_restores_native("downmix-5_1.mka", 6);
+    }
+
+    #[test]
+    fn stereo_downmix_forces_7_1_to_stereo_and_restores_native() {
+        assert_downmix_forces_stereo_and_restores_native("downmix-7_1.mka", 8);
+    }
+
+    /// Stereo and mono sources must stay valid with the downmix on: forcing
+    /// stereo is a no-op for two channels and a plain upmix for mono, and
+    /// toggling must not accumulate any routing state.
+    #[test]
+    fn stereo_downmix_keeps_stereo_and_mono_sources_valid() {
+        for (fixture, native_channels) in [("downmix-stereo.mka", 2), ("downmix-mono.mka", 1)] {
+            let mpv = downmix_test_engine();
+            mpv.set_stereo_downmix(true)
+                .expect("enabling the stereo downmix before load must succeed");
+            mpv.load_file(&downmix_fixture_path(fixture))
+                .expect("downmix fixture should load");
+
+            assert_eq!(
+                wait_for_output_channels(&mpv, 2),
+                Some(2),
+                "{fixture}: the forced-stereo chain must stay valid and play two channels"
+            );
+
+            mpv.set_stereo_downmix(false)
+                .expect("disabling the stereo downmix must succeed");
+            assert_eq!(
+                wait_for_output_channels(&mpv, native_channels),
+                Some(native_channels),
+                "{fixture}: disabling must restore the source's native channel count"
+            );
+        }
     }
 
     #[test]

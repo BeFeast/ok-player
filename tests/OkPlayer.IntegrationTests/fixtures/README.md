@@ -23,3 +23,30 @@ ffmpeg -i base.mkv -i subtest.srt -map 0:v:0 -map 1:0 -c:v copy -c:s srt -t 3 su
 ```
 
 White text on a near-black frame so the test can separate caption pixels from background by a simple luma cut.
+
+# Stereo-downmix fixtures
+
+Tiny (~1 KB) silent FLAC-in-Matroska clips used by the `okp-mpv` `stereo_downmix_*` tests to prove,
+on the real engine, that the forced stereo downmix (`audio-channels=stereo`) reconfigures the live
+audio chain to two output channels, that disabling restores the native channel count, and that
+stereo/mono sources stay valid with the toggle in either state. Each is 2 s of `anullsrc` at 48 kHz.
+
+| File | Channel layout |
+|------|----------------|
+| `downmix-5_1.mka` | 5.1 (6 ch) |
+| `downmix-7_1.mka` | 7.1 (8 ch) |
+| `downmix-stereo.mka` | stereo (2 ch) |
+| `downmix-mono.mka` | mono (1 ch) |
+
+Regenerate with ffmpeg:
+
+```sh
+for spec in "5.1:downmix-5_1.mka" "7.1:downmix-7_1.mka" "stereo:downmix-stereo.mka" "mono:downmix-mono.mka"; do
+  layout="${spec%%:*}" out="${spec##*:}"
+  ffmpeg -f lavfi -i "anullsrc=channel_layout=${layout}:sample_rate=48000" \
+    -t 2 -c:a flac -metadata title="OK Player downmix fixture ${layout}" "$out"
+done
+```
+
+Silence keeps the files tiny and deterministic; the tests only assert channel-count topology on
+`audio-out-params`, never audible content.

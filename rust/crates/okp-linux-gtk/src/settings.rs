@@ -3,7 +3,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use okp_core::settings::{AppearanceTheme, ScreenshotFormat, Settings};
+use okp_core::settings::{AppearanceTheme, ScreenshotFormat, Settings, StereoDownmixPreference};
 
 const DEFAULT_VOLUME: f64 = 100.0;
 const MAX_VOLUME: f64 = 130.0;
@@ -85,6 +85,14 @@ impl SettingsStore {
             .audio
             .normalization
             .unwrap_or(DEFAULT_AUDIO_NORMALIZATION)
+    }
+
+    pub fn stereo_downmix_enabled(&self) -> bool {
+        self.data.audio.stereo_downmix_enabled()
+    }
+
+    pub fn stereo_downmix_preference(&self) -> StereoDownmixPreference {
+        self.data.audio.stereo_downmix_preference()
     }
 
     pub fn audio_device(&self) -> &str {
@@ -205,6 +213,12 @@ impl SettingsStore {
     pub fn set_audio_normalization_enabled(&mut self, enabled: bool) {
         if self.audio_normalization_enabled() != enabled {
             self.data.audio.normalization = Some(enabled);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_stereo_downmix_enabled(&mut self, enabled: bool) {
+        if self.data.audio.set_stereo_downmix_enabled(enabled) {
             self.dirty = true;
         }
     }
@@ -511,6 +525,71 @@ mod tests {
         settings.set_audio_normalization_enabled(true);
 
         assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn stereo_downmix_defaults_off() {
+        let settings = store();
+
+        assert!(!settings.stereo_downmix_enabled());
+        assert_eq!(
+            settings.stereo_downmix_preference(),
+            StereoDownmixPreference::Inherit
+        );
+    }
+
+    #[test]
+    fn stereo_downmix_toggle_marks_dirty_once() {
+        let mut settings = store();
+
+        settings.set_stereo_downmix_enabled(true);
+
+        assert!(settings.stereo_downmix_enabled());
+        assert_eq!(settings.data.audio.stereo_downmix, Some(true));
+        assert_eq!(
+            settings.stereo_downmix_preference(),
+            StereoDownmixPreference::ForceStereo
+        );
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_stereo_downmix_enabled(true);
+
+        assert!(!settings.dirty);
+
+        settings.set_stereo_downmix_enabled(false);
+        assert!(!settings.stereo_downmix_enabled());
+        assert_eq!(settings.data.audio.stereo_downmix, Some(false));
+        assert_eq!(
+            settings.stereo_downmix_preference(),
+            StereoDownmixPreference::Automatic
+        );
+        assert!(settings.dirty);
+    }
+
+    #[test]
+    fn stereo_downmix_persists_across_restart() {
+        let directory = unique_temp_dir("okp-stereo-downmix-settings");
+        fs::create_dir_all(&directory).expect("temp directory");
+        let path = directory.join("settings.json");
+        let mut settings = SettingsStore {
+            path: path.clone(),
+            data: Settings::default(),
+            dirty: false,
+        };
+
+        settings.set_stereo_downmix_enabled(true);
+        settings.save().expect("save enabled setting");
+        let enabled = Settings::load(&fs::read_to_string(&path).expect("read enabled setting"))
+            .expect("reload enabled setting");
+        assert!(enabled.audio.stereo_downmix_enabled());
+
+        settings.set_stereo_downmix_enabled(false);
+        settings.save().expect("save disabled setting");
+        let disabled = Settings::load(&fs::read_to_string(path).expect("read disabled setting"))
+            .expect("reload disabled setting");
+        assert!(!disabled.audio.stereo_downmix_enabled());
+        assert_eq!(disabled.audio.stereo_downmix, Some(false));
     }
 
     #[test]

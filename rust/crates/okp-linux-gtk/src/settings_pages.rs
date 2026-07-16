@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::settings::SettingsStore;
+
 pub(crate) fn settings_subtitles_page(
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
@@ -119,6 +121,10 @@ pub(crate) fn settings_audio_page(
     audio_delay.add_css_class("okp-settings-audio-delay-row");
     summary.append(&audio_delay);
     summary.append(&settings_audio_normalization_row(
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    ));
+    summary.append(&settings_stereo_downmix_row(
         Rc::clone(&state),
         Rc::clone(&status_toast),
     ));
@@ -802,23 +808,81 @@ pub(crate) fn settings_volume_row(state: Rc<RefCell<PlayerState>>) -> gtk::Box {
     row
 }
 
+/// Copy shared by the persisted audio engine toggles: labels, toast strings,
+/// and the settings/engine appliers for one toggle row.
+pub(crate) struct AudioToggleRowSpec {
+    pub(crate) label: &'static str,
+    pub(crate) detail: &'static str,
+    pub(crate) save_failed_toast: &'static str,
+    pub(crate) live_failed_toast: &'static str,
+    pub(crate) on_toast: &'static str,
+    pub(crate) off_toast: &'static str,
+    /// Persist the new value into the settings store.
+    pub(crate) apply_setting: fn(&mut SettingsStore, bool),
+    /// Apply the new value to the live engine.
+    pub(crate) apply_live: fn(&Mpv, bool) -> Result<(), okp_mpv::MpvError>,
+}
+
 pub(crate) fn settings_audio_normalization_row(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) -> gtk::Box {
     let active = state.borrow().settings.audio_normalization_enabled();
+    settings_audio_toggle_row(
+        state,
+        status_toast,
+        active,
+        AudioToggleRowSpec {
+            label: "Loudness normalization",
+            detail: "Night mode: smooths quiet dialogue and loud effects using mpv dynaudnorm.",
+            save_failed_toast: "Could not save audio normalization",
+            live_failed_toast: "Could not update audio normalization",
+            on_toast: "Loudness normalization on",
+            off_toast: "Loudness normalization off",
+            apply_setting: SettingsStore::set_audio_normalization_enabled,
+            apply_live: Mpv::set_audio_normalization,
+        },
+    )
+}
+
+pub(crate) fn settings_stereo_downmix_row(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let active = state.borrow().settings.stereo_downmix_enabled();
+    settings_audio_toggle_row(
+        state,
+        status_toast,
+        active,
+        AudioToggleRowSpec {
+            label: "Downmix to stereo",
+            detail: "Mix 5.1 and 7.1 audio down to two channels for headphones and stereo speakers. Off keeps the native channel layout.",
+            save_failed_toast: "Could not save stereo downmix",
+            live_failed_toast: "Could not update stereo downmix",
+            on_toast: "Stereo downmix on",
+            off_toast: "Stereo downmix off",
+            apply_setting: SettingsStore::set_stereo_downmix_enabled,
+            apply_live: Mpv::set_stereo_downmix,
+        },
+    )
+}
+
+fn settings_audio_toggle_row(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+    active: bool,
+    spec: AudioToggleRowSpec,
+) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     row.add_css_class("okp-settings-switch-row");
 
     let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
     text.set_hexpand(true);
-    let label = gtk::Label::new(Some("Loudness normalization"));
+    let label = gtk::Label::new(Some(spec.label));
     label.add_css_class("okp-info-label");
     label.set_xalign(0.0);
     text.append(&label);
-    let detail = gtk::Label::new(Some(
-        "Night mode: smooths quiet dialogue and loud effects using mpv dynaudnorm.",
-    ));
+    let detail = gtk::Label::new(Some(spec.detail));
     detail.add_css_class("okp-update-status");
     detail.set_xalign(0.0);
     detail.set_width_chars(1);
@@ -842,28 +906,28 @@ pub(crate) fn settings_audio_normalization_row(
 
         let (save_result, live_result) = {
             let mut state = toggle_state.borrow_mut();
-            state.settings.set_audio_normalization_enabled(enabled);
+            (spec.apply_setting)(&mut state.settings, enabled);
             let save_result = state.settings.save();
             let live_result = state
                 .mpv
                 .as_ref()
-                .map(|mpv| mpv.set_audio_normalization(enabled));
+                .map(|mpv| (spec.apply_live)(mpv, enabled));
             (save_result, live_result)
         };
 
         toggle_state_label.set_text(if enabled { "On" } else { "Off" });
 
         if let Err(error) = save_result {
-            eprintln!("Failed to save audio normalization setting: {error}");
-            toggle_toast.show("Could not save audio normalization");
+            eprintln!("Failed to save setting ({}): {error}", spec.label);
+            toggle_toast.show(spec.save_failed_toast);
         } else if let Some(Err(error)) = live_result {
-            eprintln!("Failed to update audio normalization: {error}");
-            toggle_toast.show("Could not update audio normalization");
+            eprintln!("Failed to update setting ({}): {error}", spec.label);
+            toggle_toast.show(spec.live_failed_toast);
         } else {
             toggle_toast.show(if enabled {
-                "Loudness normalization on"
+                spec.on_toast
             } else {
-                "Loudness normalization off"
+                spec.off_toast
             });
         }
     });

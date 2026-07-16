@@ -405,6 +405,14 @@ untouched by this work; the Windows migration is exercised only by the Rust gold
   today. Each shell reads the subset it understands and carries the rest through untouched on
   save, so the shared schema grows without either side dropping the other's state. The three
   Windows-only sections are `skip_serializing_if`-empty, so a Linux document never writes them.
+- **`audio.stereo_downmix` has no Windows counterpart yet.** The forced 5.1/7.1-to-stereo
+  downmix toggle is canonical-only: the Windows `AppSettings` document carries no such field, so
+  migrating a Windows document leaves it absent (off). The WinUI shell adopts the canonical field
+  when its projection lands; the encoding is a plain optional bool where absent inherits the engine
+  configuration (normally automatic/native, while preserving any existing Advanced `mpv.conf`
+  `audio-channels` value), `true` forces stereo, and an explicit `false` restores automatic/native
+  selection. The effective default and mutation policy live on `AudioSettings`; platform stores only
+  track dirty state and project the shared choice into their engine and UI.
 
 ### History field map (Windows → canonical)
 
