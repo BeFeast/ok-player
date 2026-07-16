@@ -173,7 +173,7 @@ fn first_run_welcome(
     content.set_halign(gtk::Align::Center);
     content.set_valign(gtk::Align::Center);
 
-    content.append(&brand_tile(52, "okp-welcome-brand-tile"));
+    content.append(&launcher_brand_tile(48, "okp-welcome-brand-tile"));
     let title = gtk::Label::new(Some("Welcome to OK Player"));
     title.add_css_class("okp-first-run-title");
     content.append(&title);
@@ -409,27 +409,10 @@ fn welcome_drop_target(
     button
 }
 
-pub(crate) fn brand_tile(size: i32, css_class: &str) -> gtk::Box {
-    let tile = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-    tile.add_css_class("okp-brand-tile");
-    tile.add_css_class(css_class);
-    tile.set_size_request(size, size);
-    tile.set_halign(gtk::Align::Center);
-    tile.set_valign(gtk::Align::Center);
-    let ok = gtk::Label::new(Some("OK"));
-    ok.add_css_class("okp-brand-ok");
-    let play = gtk::Label::new(Some("▶"));
-    play.add_css_class("okp-brand-play");
-    tile.append(&ok);
-    tile.append(&play);
-    tile
-}
-
 pub(crate) fn idle_titlebar() -> gtk::Box {
     let titlebar = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     titlebar.add_css_class("okp-idle-titlebar");
-    let mark = gtk::Label::new(Some("▶"));
-    mark.add_css_class("okp-idle-titlebar-mark");
+    let mark = canonical_brand_mark(20, 11, "okp-idle-titlebar-mark");
     titlebar.append(&mark);
     let title = gtk::Label::new(Some("OK Player"));
     title.add_css_class("okp-idle-titlebar-text");

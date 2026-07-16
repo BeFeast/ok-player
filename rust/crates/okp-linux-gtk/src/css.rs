@@ -62,7 +62,6 @@ const OKP_STYLESHEET: &str = "
 
         .okp-window-media-icon {
             color: rgba(255, 255, 255, 0.90);
-            -gtk-icon-size: 13px;
         }
 
         .okp-window-media-title {
@@ -644,10 +643,6 @@ const OKP_STYLESHEET: &str = "
         .is-light .okp-idle-titlebar-mark { color: @okp_teal; }
         .is-dark .okp-idle-titlebar-mark { color: @okp_accent; }
 
-        .okp-idle-titlebar-mark {
-            font-size: 11px;
-        }
-
         .okp-idle-titlebar-text {
             font-size: 12.5px;
             font-weight: 600;
@@ -666,20 +661,10 @@ const OKP_STYLESHEET: &str = "
 
         .okp-brand-tile {
             padding: 0;
-            border-radius: 14px;
-            background: linear-gradient(135deg, #15a89d, @okp_teal_deep);
+            border-radius: 11px;
+            background: transparent;
             box-shadow: 0 8px 22px alpha(@okp_teal_deep, 0.24);
         }
-
-        .okp-brand-ok,
-        .okp-brand-play {
-            color: #ffffff;
-            font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
-            font-weight: 750;
-        }
-
-        .okp-brand-ok { font-size: 17px; }
-        .okp-brand-play { font-size: 12px; }
 
         .okp-welcome-first-run {
             padding: 34px 24px;

@@ -52,8 +52,61 @@ fn linux_identity_preserves_launcher_tile_and_separate_about_illustration() {
         .expect("shared app icon should be readable");
     assert!(icon.contains("<rect"));
     assert!(icon.contains("#15a89d"));
-    assert!(icon.contains(">OK</text>"));
-    assert!(icon.contains("M91 43 L113 64 L91 85 Z"));
+    assert!(icon.contains("cx=\"46\" cy=\"48\" r=\"33\""));
+    assert!(icon.contains("x=\"92\" y=\"12\" width=\"15\" height=\"72\" rx=\"4\""));
+    assert!(icon.contains("M111 14 L111 82 L161 48 Z"));
+    assert!(!icon.contains("<text"));
+
+    let fixed_icons = packaging.join("icons/hicolor");
+    for (size, expected_path, expected_transform, forbidden_shape) in [
+        (
+            64,
+            "M111 13 L111 83 L162 48 Z",
+            "translate(11 20.5454545) scale(0.2386363636)",
+            "M9 7 L9 17",
+        ),
+        (
+            48,
+            "M111 12 L111 84 L163 48 Z",
+            "translate(8.4166667 15.5) scale(0.1770833333)",
+            "M9 7 L9 17",
+        ),
+        (
+            32,
+            "M111 11 L111 85 L164 48 Z",
+            "translate(5.9166667 10.5) scale(0.1145833333)",
+            "M9 7 L9 17",
+        ),
+        (
+            24,
+            "M9 7 L9 17 L17 12 Z",
+            "translate(4.5 4.5) scale(0.625)",
+            "<circle",
+        ),
+        (
+            16,
+            "M9 7 L9 17 L16 12 Z",
+            "translate(3 3) scale(0.4166666667)",
+            "<circle",
+        ),
+    ] {
+        let icon = fs::read_to_string(
+            fixed_icons
+                .join(format!("{size}x{size}/apps"))
+                .join("com.befeast.okplayer.svg"),
+        )
+        .expect("fixed-size app icon should be readable");
+        assert!(icon.contains(expected_path), "wrong {size}px icon variant");
+        assert!(
+            icon.contains(expected_transform),
+            "wrong {size}px optical fit"
+        );
+        assert!(
+            !icon.contains(forbidden_shape),
+            "forbidden geometry in {size}px icon"
+        );
+        assert!(!icon.contains("<text"), "{size}px icon uses a font glyph");
+    }
     assert_eq!(ABOUT_FRAME_TICKS.len(), 5);
     assert_eq!(ABOUT_FRAME_TICK_OPACITY, [0.10, 0.18, 0.30, 0.44, 0.62]);
 }
@@ -74,7 +127,34 @@ fn linux_packaging_installs_launcher_identity_asset() {
         let contents = fs::read_to_string(root.join("scripts").join(script))
             .expect("packaging script should be readable");
         assert!(contents.contains("com.befeast.okplayer.svg"));
+        assert!(contents.contains("for size in 16 24 32 48 64"));
+        assert!(contents.contains("usr/share/icons/hicolor/${size}x${size}/apps"));
     }
+}
+
+#[test]
+fn gtk_identity_uses_vector_widgets_instead_of_host_font_marks() {
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let history = fs::read_to_string(source.join("history_view.rs"))
+        .expect("history view source should be readable");
+    let window =
+        fs::read_to_string(source.join("window.rs")).expect("window source should be readable");
+    let branding =
+        fs::read_to_string(source.join("branding.rs")).expect("branding source should be readable");
+
+    assert!(history.contains("launcher_brand_tile(48"));
+    assert!(history.contains("canonical_brand_mark(20, 11"));
+    assert!(!history.contains("gtk::Label::new(Some(\"▶\"))"));
+    assert!(!history.contains("gtk::Label::new(Some(\"OK\"))"));
+    assert!(window.contains("canonical_brand_mark(20, 11"));
+    assert!(!window.contains("media-playback-start-symbolic"));
+    assert!(branding.contains("full_mark_for_icon_size"));
+    assert!(branding.contains("CANONICAL_FULL_MARK"));
+    assert!(branding.contains("draw_launcher_brand_tile"));
+    assert!(branding.contains("cairo::LinearGradient::new"));
+    assert!(branding.contains("gdk::MemoryTexture::new"));
+    assert!(branding.contains("gtk::Picture::for_paintable"));
+    assert!(window.contains("apply_gtk_theme_preview();"));
 }
 
 #[test]
