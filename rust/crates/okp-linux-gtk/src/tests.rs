@@ -267,8 +267,8 @@ fn settings_initial_page_env_accepts_known_pages_only() {
 fn media_info_preview_sample_covers_the_polished_surfaces() {
     let sample = media_info_preview_sample();
 
-    // The visual smoke fixture must exercise the summary strip, the section
-    // list, and the track list so screenshots catch regressions in each.
+    // The visual smoke fixture must exercise both tabs and both track groups so
+    // screenshots catch regressions across the complete modal.
     assert!(sample.path.is_some());
     let section_titles: Vec<&str> = sample
         .sections
@@ -277,6 +277,7 @@ fn media_info_preview_sample_covers_the_polished_surfaces() {
         .collect();
     assert!(section_titles.contains(&"File"));
     assert!(section_titles.contains(&"Video"));
+    assert!(section_titles.contains(&"Playback"));
 
     assert!(
         sample
@@ -310,30 +311,102 @@ fn media_info_preview_sample_covers_the_polished_surfaces() {
         "media info preview should name a secondary subtitle"
     );
 
-    // The summary derives an HDR chip and the Video section carries the row it
-    // condenses, so both the accent row and the chip stay covered.
-    assert_eq!(
-        media_info_value(&sample, "Video", "Dynamic Range").map(media_info_hdr_summary),
-        Some("HDR".to_owned())
-    );
-    let chip_labels: Vec<&str> = media_info_summary_chips(&sample)
+    let stream_sections = media_info_stream_sections(&sample);
+    let stream_titles: Vec<&str> = stream_sections
         .iter()
-        .map(|(label, _)| *label)
+        .map(|section| section.title.as_str())
         .collect();
-    assert!(chip_labels.contains(&"HDR"));
+    assert!(!stream_titles.contains(&"Playback"));
+
+    let stats_sections = media_info_stats_sections(&sample);
+    let stats_titles: Vec<&str> = stats_sections
+        .iter()
+        .map(|section| section.title.as_str())
+        .collect();
+    assert_eq!(
+        stats_titles,
+        vec!["Decode · Render", "Live · Performance", "Display · Output"]
+    );
 }
 
 #[test]
-fn media_info_hdr_summary_keeps_leading_format_token() {
-    // The live producer emits "HDR (transfer, primaries)"; the leading token
-    // is what the chip shows.
-    assert_eq!(media_info_hdr_summary("HDR (PQ / ST 2084, BT.2020)"), "HDR");
-    assert_eq!(
-        media_info_hdr_summary("HDR10 · BT.2020 · SMPTE ST 2084 (PQ)"),
-        "HDR10"
-    );
-    assert_eq!(media_info_hdr_summary("Dolby Vision"), "Dolby Vision");
-    assert_eq!(media_info_hdr_summary(""), "");
+fn media_info_modal_geometry_matches_reference_and_narrow_clamp() {
+    assert_eq!(media_info_modal_geometry(1120, 680), (720, 571));
+    assert_eq!(media_info_modal_geometry(480, 540), (441, 453));
+    assert_eq!(media_info_modal_geometry(700, 400), (644, 336));
+}
+
+#[test]
+fn media_info_identity_is_app_owned_cairo_geometry() {
+    assert_eq!(MEDIA_INFO_IDENTITY_BADGE_SIZE, 38);
+    assert_eq!(MEDIA_INFO_IDENTITY_VIEWBOX_SIZE, 20.0);
+    assert_eq!(MEDIA_INFO_IDENTITY_RING_RADIUS, 7.5);
+
+    let source = include_str!("media_info.rs");
+    let identity_constructor = source
+        .split("fn media_info_identity()")
+        .nth(1)
+        .and_then(|source| source.split("fn draw_media_info_identity(").next())
+        .expect("media-info identity constructor should remain inspectable");
+    assert!(identity_constructor.contains("gtk::DrawingArea::new()"));
+    assert!(identity_constructor.contains("set_draw_func(draw_media_info_identity)"));
+    assert!(!identity_constructor.contains("from_icon_name"));
+    assert!(!source.contains("help-about-symbolic"));
+}
+
+#[test]
+fn media_info_modal_classes_have_scoped_css() {
+    let stylesheet = include_str!("css.rs");
+    for class in [
+        "okp-media-info-modal-layer",
+        "okp-media-info-backdrop",
+        "okp-media-info-card",
+        "okp-media-info-header",
+        "okp-media-info-identity",
+        "okp-media-info-title",
+        "okp-media-info-subtitle",
+        "okp-media-info-close",
+        "okp-media-info-tabs",
+        "okp-media-info-tab-strip",
+        "okp-media-info-tab",
+        "okp-media-info-stack",
+        "okp-media-info-scroller",
+        "okp-media-info-content",
+        "okp-media-info-grid",
+        "okp-media-info-empty",
+        "okp-media-info-footer",
+        "okp-media-info-path",
+        "okp-media-info-copy",
+        "okp-media-info-done",
+    ] {
+        assert!(
+            stylesheet.contains(&format!(".{class}")),
+            "Media Information class {class} must have modal-scoped CSS"
+        );
+    }
+}
+
+#[test]
+fn both_media_info_menu_entries_use_the_in_player_modal_entry_point() {
+    let source = include_str!("track_popovers.rs");
+    let more = source
+        .split_once("pub(crate) fn more_popover_content")
+        .expect("More popover implementation")
+        .1
+        .split_once("pub(crate) fn advanced_command_popover_content")
+        .expect("advanced popover follows More")
+        .0;
+    let advanced = source
+        .split_once("pub(crate) fn advanced_command_popover_content")
+        .expect("advanced popover implementation")
+        .1
+        .split_once("pub(crate) fn track_popover_content")
+        .expect("track popover helper follows advanced popover")
+        .0;
+
+    assert_eq!(more.matches("open_media_info_window(").count(), 1);
+    assert_eq!(advanced.matches("open_media_info_window(").count(), 1);
+    assert!(!source.contains("show_media_info_window"));
 }
 
 #[test]
