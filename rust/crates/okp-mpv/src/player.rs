@@ -24,6 +24,17 @@ pub struct RenderTargetSize {
     pub height: i32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RenderUpdateHandle {
+    context: NonNull<ffi::mpv_render_context>,
+}
+
+// libmpv allows the embedding application to call render-context update from
+// its selected render thread. GTK schedules this handle back onto the main
+// context and drops pending callbacks before freeing the render context.
+unsafe impl Send for RenderUpdateHandle {}
+unsafe impl Sync for RenderUpdateHandle {}
+
 /// An opaque native Wayland display kept alive for an mpv render context.
 ///
 /// The owner is type-erased so shells can retain their toolkit display object
@@ -58,6 +69,13 @@ impl fmt::Debug for NativeWaylandDisplay {
             .debug_struct("NativeWaylandDisplay")
             .field("pointer", &self.pointer)
             .finish_non_exhaustive()
+    }
+}
+
+impl RenderUpdateHandle {
+    pub fn update_has_frame(self) -> bool {
+        let flags = unsafe { ffi::mpv_render_context_update(self.context.as_ptr()) };
+        flags & ffi::MPV_RENDER_UPDATE_FRAME != 0
     }
 }
 
@@ -1144,6 +1162,34 @@ impl Mpv {
         Ok(())
     }
 
+    pub fn render_update_handle(&self) -> Result<RenderUpdateHandle, MpvError> {
+        Ok(RenderUpdateHandle {
+            context: self.render_context.ok_or(MpvError::MissingRenderContext)?,
+        })
+    }
+
+    /// Install libmpv's render update callback.
+    ///
+    /// # Safety
+    ///
+    /// `callback_ctx` must remain valid until this method is called again with
+    /// `None` or the render context is destroyed. The callback must not call
+    /// back into mpv; it may only wake the render/UI thread.
+    pub unsafe fn set_render_update_callback(
+        &mut self,
+        callback: Option<unsafe extern "C" fn(*mut c_void)>,
+        callback_ctx: *mut c_void,
+    ) -> Result<(), MpvError> {
+        let context = self
+            .render_context
+            .ok_or(MpvError::MissingRenderContext)?
+            .as_ptr();
+        unsafe {
+            ffi::mpv_render_context_set_update_callback(context, callback, callback_ctx);
+        }
+        Ok(())
+    }
+
     pub fn load_file(&self, path: &Path) -> Result<(), MpvError> {
         let command = CString::new("loadfile")?;
         let path = path_to_cstring(path)?;
@@ -1371,9 +1417,6 @@ impl Mpv {
             .render_context
             .ok_or(MpvError::MissingRenderContext)?
             .as_ptr();
-        unsafe {
-            let _ = ffi::mpv_render_context_update(context);
-        }
 
         let mut framebuffer: c_int = 0;
         unsafe {
@@ -1414,6 +1457,11 @@ impl Mpv {
     pub fn destroy_render_context(&mut self) {
         if let Some(context) = self.render_context.take() {
             unsafe {
+                ffi::mpv_render_context_set_update_callback(
+                    context.as_ptr(),
+                    None,
+                    ptr::null_mut(),
+                );
                 ffi::mpv_render_context_free(context.as_ptr());
             }
         }

@@ -175,6 +175,7 @@ struct PlayerState {
     history: history::HistoryStore,
     settings: settings::SettingsStore,
     screenshot_jobs: screenshots::ScreenshotJobs,
+    render_update_notifier: Option<Arc<RenderUpdateNotifier>>,
     linux_update_status: LinuxUpdateStatus,
     pending_audio_device_restore: Option<PendingAudioDeviceRestore>,
     render_target_size: Option<okp_mpv::RenderTargetSize>,

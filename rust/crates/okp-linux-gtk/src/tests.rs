@@ -1437,6 +1437,23 @@ fn native_display_interop_is_requested_only_for_wayland() {
 }
 
 #[test]
+fn mpv_gl_area_presentation_is_update_callback_driven() {
+    let bridge = include_str!("mpv_bridge.rs");
+    assert!(bridge.contains("set_render_update_callback"));
+    assert!(bridge.contains("render_update_trampoline"));
+    assert!(bridge.contains("glib::Priority::HIGH"));
+    assert!(bridge.contains("update_has_frame()"));
+    assert!(!bridge.contains("Priority::HIGH_IDLE"));
+    assert!(!bridge.contains("Duration::from_millis(16)"));
+    assert!(!bridge.contains("queued"));
+
+    let player = include_str!("../../okp-mpv/src/player.rs");
+    assert!(player.contains("MPV_RENDER_UPDATE_FRAME"));
+    assert!(player.contains("mpv_render_context_set_update_callback"));
+    assert!(!player.contains("let _ = ffi::mpv_render_context_update(context);"));
+}
+
+#[test]
 fn track_label_shows_tags_without_a_selection_prefix() {
     // Selection is shown by the row's leading check, so the label must never
     // prepend "On " (which used to shift long titles and break alignment).

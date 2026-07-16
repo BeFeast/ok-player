@@ -1,9 +1,54 @@
 use super::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(target_os = "linux")]
 use gtk::glib::translate::ToGlibPtr;
 #[cfg(target_os = "linux")]
 use std::ptr::NonNull;
+
+pub(crate) struct RenderUpdateNotifier {
+    area: gtk::glib::SendWeakRef<gtk::GLArea>,
+    update_handle: okp_mpv::RenderUpdateHandle,
+    alive: Arc<AtomicBool>,
+}
+
+impl RenderUpdateNotifier {
+    fn new(area: &gtk::GLArea, update_handle: okp_mpv::RenderUpdateHandle) -> Arc<Self> {
+        Arc::new(Self {
+            area: area.downgrade().into(),
+            update_handle,
+            alive: Arc::new(AtomicBool::new(true)),
+        })
+    }
+
+    fn notify(&self) {
+        let area = self.area.clone();
+        let update_handle = self.update_handle;
+        let alive = Arc::clone(&self.alive);
+        glib::idle_add_full(glib::Priority::HIGH, move || {
+            if !alive.load(Ordering::Acquire) || !update_handle.update_has_frame() {
+                return glib::ControlFlow::Break;
+            }
+
+            let weak_area = area.clone().into_weak_ref();
+            if let Some(area) = weak_area.upgrade() {
+                area.queue_render();
+            }
+            glib::ControlFlow::Break
+        });
+    }
+
+    fn disable(&self) {
+        self.alive.store(false, Ordering::Release);
+    }
+}
+
+unsafe extern "C" fn render_update_trampoline(ctx: *mut libc::c_void) {
+    let Some(notifier) = (unsafe { (ctx as *const RenderUpdateNotifier).as_ref() }) else {
+        return;
+    };
+    notifier.notify();
+}
 
 pub(crate) fn is_wayland_display(display_type_name: &str) -> bool {
     display_type_name == "GdkWaylandDisplay"
@@ -130,13 +175,34 @@ pub(crate) fn connect_mpv(
             eprintln!("Failed to create mpv render context: {error}");
             return;
         }
+        let render_notifier = match mpv.render_update_handle() {
+            Ok(handle) => RenderUpdateNotifier::new(area, handle),
+            Err(error) => {
+                eprintln!("Failed to capture mpv render update handle: {error}");
+                return;
+            }
+        };
+        let callback_result = unsafe {
+            mpv.set_render_update_callback(
+                Some(render_update_trampoline),
+                Arc::as_ptr(&render_notifier) as *mut libc::c_void,
+            )
+        };
+        if let Err(error) = callback_result {
+            eprintln!("Failed to install mpv render update callback: {error}");
+            return;
+        }
 
         // Start the background event pump: from here on the shell reads playback
         // state from its observed snapshot rather than polling mpv from this
         // (GLib main-context) thread, so the tripwire armed above stays green.
         mpv.start_event_pump();
 
-        realize_state.borrow_mut().mpv = Some(mpv);
+        {
+            let mut state = realize_state.borrow_mut();
+            state.render_update_notifier = Some(render_notifier);
+            state.mpv = Some(mpv);
+        }
         schedule_audio_device_restore(&realize_state);
         try_pending_audio_device_restore(&realize_state);
 
@@ -144,9 +210,11 @@ pub(crate) fn connect_mpv(
     });
 
     let resize_state = Rc::clone(&state);
-    video_area.connect_resize(move |_, width, height| {
-        resize_state.borrow_mut().render_target_size =
+    video_area.connect_resize(move |area, width, height| {
+        let mut state = resize_state.borrow_mut();
+        state.render_target_size =
             (width > 0 && height > 0).then_some(okp_mpv::RenderTargetSize { width, height });
+        area.queue_render();
     });
 
     let render_state = Rc::clone(&state);
@@ -165,6 +233,7 @@ pub(crate) fn connect_mpv(
             widget_height,
             scale_factor,
         );
+        state.render_target_size = Some(target_size);
         if let Some(mpv) = state.mpv.as_mut()
             && let Err(error) = mpv.render(target_size.width, target_size.height)
         {
@@ -177,15 +246,15 @@ pub(crate) fn connect_mpv(
     let unrealize_state = Rc::clone(&state);
     video_area.connect_unrealize(move |area| {
         area.make_current();
-        if let Some(mpv) = unrealize_state.borrow_mut().mpv.as_mut() {
+        let mut state = unrealize_state.borrow_mut();
+        if let Some(notifier) = state.render_update_notifier.as_ref() {
+            notifier.disable();
+        }
+        if let Some(mpv) = state.mpv.as_mut() {
+            let _ = unsafe { mpv.set_render_update_callback(None, std::ptr::null_mut()) };
             mpv.destroy_render_context();
         }
-    });
-
-    let tick_area = video_area.clone();
-    glib::timeout_add_local(Duration::from_millis(16), move || {
-        tick_area.queue_render();
-        glib::ControlFlow::Continue
+        state.render_update_notifier = None;
     });
 }
 
