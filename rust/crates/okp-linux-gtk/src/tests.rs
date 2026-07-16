@@ -1905,6 +1905,46 @@ fn launch_args_keep_ordered_media_urls_and_subtitles() {
         ]
     );
     assert!(launch.playlists.is_empty());
+    assert_eq!(launch.directives, LaunchDirectives::default());
+}
+
+#[test]
+fn launch_args_parse_explicit_resume_and_track_hints_without_treating_ids_as_files() {
+    let launch = parse_launch_args_from(
+        [
+            "--resume=1:30",
+            "/media/movie.mkv",
+            "--sub",
+            "3",
+            "--audio=2",
+        ]
+        .into_iter()
+        .map(Into::into),
+    );
+
+    assert_eq!(launch.items, vec![local_item("/media/movie.mkv")]);
+    assert_eq!(
+        launch.directives,
+        LaunchDirectives {
+            resume_seconds: Some(90.0),
+            subtitle: Some(launch_args::TrackSelection::Id(3)),
+            audio: Some(launch_args::TrackSelection::Id(2)),
+        }
+    );
+    assert!(launch.subtitles.is_empty());
+}
+
+#[test]
+fn launch_subtitle_file_flag_remains_compatible_with_track_hint_parser() {
+    let launch = parse_launch_args_from(
+        ["/media/movie.mkv", "--sub", "/media/forced.ass"]
+            .into_iter()
+            .map(Into::into),
+    );
+
+    assert_eq!(launch.items, vec![local_item("/media/movie.mkv")]);
+    assert_eq!(launch.subtitles, vec![PathBuf::from("/media/forced.ass")]);
+    assert_eq!(launch.directives.subtitle, None);
 }
 
 #[test]
@@ -1956,6 +1996,7 @@ fn load_launch_args_uses_explicit_playlist_for_multiple_items() {
         ],
         playlists: Vec::new(),
         subtitles: Vec::new(),
+        directives: LaunchDirectives::default(),
         reserved_notices: Vec::new(),
     };
 
@@ -1965,6 +2006,41 @@ fn load_launch_args_uses_explicit_playlist_for_multiple_items() {
     assert_eq!(state.current_file, Some(PathBuf::from("/media/a.mkv")));
     assert_eq!(state.current_url, None);
     assert_eq!(state.playlist.items(), launch.items.as_slice());
+}
+
+#[test]
+fn explicit_launch_resume_overrides_remembered_position_for_one_open_only() {
+    let path = PathBuf::from("/media/resume-precedence.mkv");
+    let state = Rc::new(RefCell::new(PlayerState::default()));
+    state
+        .borrow_mut()
+        .history
+        .record(&path, 240.0, 600.0, false);
+
+    state.borrow_mut().next_launch_directives = Some(LaunchDirectives {
+        resume_seconds: Some(90.0),
+        ..LaunchDirectives::default()
+    });
+    remember_loaded_media_with_playlist(
+        &state,
+        path.clone(),
+        vec![PlaylistItem::Local(path.clone())],
+    );
+    let explicit = state.borrow().pending_resume.expect("explicit resume");
+    assert_eq!(
+        explicit.target.origin,
+        launch_args::ResumeOrigin::ExplicitLaunch
+    );
+    assert_eq!(explicit.target.seconds, 90.0);
+
+    // A later ordinary open has no leftover launch directive and resolves the unchanged history.
+    remember_loaded_media_with_playlist(&state, path.clone(), vec![PlaylistItem::Local(path)]);
+    let remembered = state.borrow().pending_resume.expect("remembered resume");
+    assert_eq!(
+        remembered.target.origin,
+        launch_args::ResumeOrigin::Remembered
+    );
+    assert_eq!(remembered.target.seconds, 240.0);
 }
 
 #[test]

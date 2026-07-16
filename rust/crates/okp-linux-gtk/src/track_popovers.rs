@@ -1423,6 +1423,8 @@ pub(crate) fn drain_mpv_events(state: &Rc<RefCell<PlayerState>>, status_toast: &
             MpvEvent::FileLoaded => {
                 try_pending_audio_device_restore(state);
                 try_pending_playback_preferences(state);
+                // Companion launch hints win over remembered track preferences for this open only.
+                try_pending_launch_tracks(state);
                 // A frame is up — the source is playing, not loading anymore.
                 let mut state = state.borrow_mut();
                 state.media_load_state = network_media::MediaLoadState::Playing;

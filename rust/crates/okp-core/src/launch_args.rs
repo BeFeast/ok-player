@@ -8,6 +8,65 @@
 
 use crate::time_code;
 
+/// Why a resume target was selected. Explicit companion launch positions are applied exactly for
+/// that launch; remembered positions remain subject to the normal barely-started / near-end rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResumeOrigin {
+    ExplicitLaunch,
+    Remembered,
+}
+
+/// A resolved resume target after explicit-launch precedence has been applied.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ResumeTarget {
+    pub seconds: f64,
+    pub origin: ResumeOrigin,
+}
+
+impl ResumeTarget {
+    /// Return the seek position for a known media duration. Explicit launch targets deliberately
+    /// bypass remembered-position thresholds (including an explicit zero); remembered targets use
+    /// the PRD §12.1 5% / completion-window policy.
+    #[must_use]
+    pub fn seek_position(self, duration: f64) -> Option<f64> {
+        if !duration.is_finite() || duration <= 0.0 {
+            return None;
+        }
+
+        match self.origin {
+            ResumeOrigin::ExplicitLaunch => Some(self.seconds.min(duration)),
+            ResumeOrigin::Remembered
+                if self.seconds > duration * 0.05
+                    && self.seconds < crate::recents_shelf::completion_start(duration) =>
+            {
+                Some(self.seconds)
+            }
+            ResumeOrigin::Remembered => None,
+        }
+    }
+}
+
+/// Choose the one-shot resume target for an open. A valid explicit launch target always wins over
+/// remembered state, but does not mutate it; callers consume the returned value for this open only.
+#[must_use]
+pub fn resolve_resume(explicit: Option<f64>, remembered: Option<f64>) -> Option<ResumeTarget> {
+    valid_resume(explicit)
+        .map(|seconds| ResumeTarget {
+            seconds,
+            origin: ResumeOrigin::ExplicitLaunch,
+        })
+        .or_else(|| {
+            valid_resume(remembered).map(|seconds| ResumeTarget {
+                seconds,
+                origin: ResumeOrigin::Remembered,
+            })
+        })
+}
+
+fn valid_resume(value: Option<f64>) -> Option<f64> {
+    value.filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+}
+
 /// An explicit `--sub`/`--audio` preselection: a 1-based mpv track id, or off
 /// (`no`/`off` on the command line — "select none").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -332,5 +391,47 @@ mod tests {
     fn parse_later_valid_repeat_wins() {
         let parsed = parse(&[MOVIE, "--resume=90", "--resume=120"]);
         assert_eq!(parsed.resume_seconds, Some(120.0));
+    }
+
+    #[test]
+    fn explicit_resume_wins_without_mutating_remembered_value() {
+        let remembered = Some(240.0);
+        let target = resolve_resume(Some(90.0), remembered).expect("explicit resume");
+
+        assert_eq!(
+            target,
+            ResumeTarget {
+                seconds: 90.0,
+                origin: ResumeOrigin::ExplicitLaunch,
+            }
+        );
+        assert_eq!(remembered, Some(240.0));
+    }
+
+    #[test]
+    fn explicit_zero_and_near_end_targets_bypass_remembered_resume_thresholds() {
+        let zero = resolve_resume(Some(0.0), Some(240.0)).expect("explicit zero");
+        let near_end = resolve_resume(Some(590.0), Some(240.0)).expect("explicit near end");
+
+        assert_eq!(zero.seek_position(600.0), Some(0.0));
+        assert_eq!(near_end.seek_position(600.0), Some(590.0));
+    }
+
+    #[test]
+    fn remembered_resume_still_uses_barely_started_and_completion_thresholds() {
+        let barely_started = resolve_resume(None, Some(30.0)).expect("remembered start");
+        let middle = resolve_resume(None, Some(120.0)).expect("remembered middle");
+        let near_end = resolve_resume(None, Some(570.0)).expect("remembered end");
+
+        assert_eq!(barely_started.seek_position(600.0), None);
+        assert_eq!(middle.seek_position(600.0), Some(120.0));
+        assert_eq!(near_end.seek_position(600.0), None);
+    }
+
+    #[test]
+    fn invalid_explicit_resume_falls_back_to_valid_remembered_position() {
+        let target = resolve_resume(Some(f64::NAN), Some(120.0)).expect("remembered fallback");
+        assert_eq!(target.origin, ResumeOrigin::Remembered);
+        assert_eq!(target.seek_position(600.0), Some(120.0));
     }
 }

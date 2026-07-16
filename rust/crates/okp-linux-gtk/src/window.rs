@@ -7,63 +7,63 @@ pub(crate) fn parse_launch_args_from(args: impl Iterator<Item = std::ffi::OsStri
 }
 
 pub(crate) fn parse_launch_args_from_cwd(
-    mut args: impl Iterator<Item = std::ffi::OsString>,
+    args: impl Iterator<Item = std::ffi::OsString>,
     cwd: Option<&Path>,
 ) -> LaunchArgs {
-    let mut launch = LaunchArgs::default();
-    while let Some(arg) = args.next() {
-        if arg == "--sub" {
-            if let Some(arg) = args.next() {
-                add_launch_subtitle_arg(&mut launch, arg, cwd);
-            }
-            continue;
-        }
+    let args = args.collect::<Vec<_>>();
+    let utf8_args = args
+        .iter()
+        .filter_map(|arg| arg.to_str())
+        .collect::<Vec<_>>();
+    let parsed = launch_args::parse(&utf8_args);
+    let mut launch = LaunchArgs {
+        directives: LaunchDirectives {
+            resume_seconds: parsed.resume_seconds,
+            subtitle: parsed.sub,
+            audio: parsed.audio,
+        },
+        ..LaunchArgs::default()
+    };
 
-        if let Some(text) = arg.to_str() {
-            // The reserved ok-player:// scheme is checked before the URL/path branches so a
-            // control request is never mistaken for a stream URL and handed to the engine.
-            if let Some(notice) = reserved_uri_notice(text) {
-                if !launch.reserved_notices.contains(&notice) {
-                    launch.reserved_notices.push(notice);
-                }
-                continue;
-            }
+    for text in parsed.files {
+        add_launch_text_arg(&mut launch, &text, cwd);
+    }
 
-            if media_formats::is_playable_url(Some(text)) {
-                push_unique_playlist_item(&mut launch.items, PlaylistItem::Url(text.to_owned()));
-                continue;
-            }
-
-            if let Some(path) = file_uri_path(text) {
-                add_launch_path_arg(&mut launch, path);
-                continue;
-            }
-        }
-
+    // Preserve non-UTF-8 POSIX paths. The portable parser intentionally handles strings only;
+    // raw filesystem arguments still follow the existing path classification in the shell.
+    for arg in args.into_iter().filter(|arg| arg.to_str().is_none()) {
         add_launch_path_arg(&mut launch, launch_path_arg(arg, cwd));
     }
 
     launch
 }
 
-pub(crate) fn file_uri_path(text: &str) -> Option<PathBuf> {
-    text.strip_prefix("file://")?;
-    gtk::gio::File::for_uri(text).path()
-}
-
-pub(crate) fn add_launch_subtitle_arg(
-    launch: &mut LaunchArgs,
-    arg: std::ffi::OsString,
-    cwd: Option<&Path>,
-) {
-    if let Some(text) = arg.to_str()
-        && let Some(path) = file_uri_path(text)
-    {
-        add_unique_launch_subtitle(launch, path);
+pub(crate) fn add_launch_text_arg(launch: &mut LaunchArgs, text: &str, cwd: Option<&Path>) {
+    // The reserved ok-player:// scheme is checked before the URL/path branches so a control
+    // request is never mistaken for a stream URL and handed to the engine.
+    if let Some(notice) = reserved_uri_notice(text) {
+        if !launch.reserved_notices.contains(&notice) {
+            launch.reserved_notices.push(notice);
+        }
         return;
     }
 
-    add_unique_launch_subtitle(launch, launch_path_arg(arg, cwd));
+    if media_formats::is_playable_url(Some(text)) {
+        push_unique_playlist_item(&mut launch.items, PlaylistItem::Url(text.to_owned()));
+        return;
+    }
+
+    if let Some(path) = file_uri_path(text) {
+        add_launch_path_arg(launch, path);
+        return;
+    }
+
+    add_launch_path_arg(launch, launch_path_arg(text.into(), cwd));
+}
+
+pub(crate) fn file_uri_path(text: &str) -> Option<PathBuf> {
+    text.strip_prefix("file://")?;
+    gtk::gio::File::for_uri(text).path()
 }
 
 pub(crate) fn launch_path_arg(arg: std::ffi::OsString, cwd: Option<&Path>) -> PathBuf {

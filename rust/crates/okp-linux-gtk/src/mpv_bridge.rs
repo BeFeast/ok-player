@@ -213,7 +213,14 @@ pub(crate) fn apply_launch_args(
         );
     }
 
+    if launch_args.has_media_payload() {
+        state.borrow_mut().next_launch_directives = Some(launch_args.directives);
+    }
+
     let loaded = load_launch_args(state, launch_args);
+    if !loaded {
+        state.borrow_mut().next_launch_directives = None;
+    }
     let subtitles_loaded = apply_launch_subtitles(state, &launch_args.subtitles);
     loaded || subtitles_loaded
 }

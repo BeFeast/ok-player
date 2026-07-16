@@ -20,6 +20,7 @@ pub mod nfo_metadata;
 pub mod ok_player_uri;
 pub mod player;
 pub mod playlist;
+pub mod progress_report;
 pub mod recents_shelf;
 pub mod screenshot;
 pub mod seek_readout;
