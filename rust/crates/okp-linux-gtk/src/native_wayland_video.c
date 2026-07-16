@@ -1,0 +1,293 @@
+#include <EGL/egl.h>
+#include <GL/gl.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <wayland-client.h>
+#include <wayland-egl.h>
+
+struct okp_wayland_video_plane {
+    struct wl_display *display;
+    struct wl_compositor *compositor;
+    struct wl_event_queue *queue;
+    struct wl_registry *registry;
+    struct wl_subcompositor *subcompositor;
+    struct wl_surface *surface;
+    struct wl_subsurface *subsurface;
+    struct wl_egl_window *egl_window;
+    EGLDisplay egl_display;
+    EGLContext egl_context;
+    EGLSurface egl_surface;
+    int logical_width;
+    int logical_height;
+    int scale;
+};
+
+struct registry_state {
+    struct wl_subcompositor *subcompositor;
+};
+
+static void write_error(char *buffer, size_t length, const char *message) {
+    if (buffer == NULL || length == 0) {
+        return;
+    }
+    snprintf(buffer, length, "%s", message);
+}
+
+static void write_egl_error(char *buffer, size_t length, const char *operation) {
+    if (buffer == NULL || length == 0) {
+        return;
+    }
+    snprintf(buffer, length, "%s failed with EGL error 0x%04x", operation,
+             (unsigned int)eglGetError());
+}
+
+static void registry_global(void *data, struct wl_registry *registry, uint32_t name,
+                            const char *interface, uint32_t version) {
+    struct registry_state *state = data;
+    if (strcmp(interface, wl_subcompositor_interface.name) == 0) {
+        state->subcompositor = wl_registry_bind(
+            registry, name, &wl_subcompositor_interface, version < 1 ? version : 1);
+    }
+}
+
+static void registry_global_remove(void *data, struct wl_registry *registry, uint32_t name) {
+    (void)data;
+    (void)registry;
+    (void)name;
+}
+
+static const struct wl_registry_listener registry_listener = {
+    .global = registry_global,
+    .global_remove = registry_global_remove,
+};
+
+static struct wl_subcompositor *bind_subcompositor(
+    struct okp_wayland_video_plane *plane, char *error, size_t error_length) {
+    struct registry_state state = {0};
+    struct wl_proxy *display_wrapper = wl_proxy_create_wrapper(plane->display);
+    if (display_wrapper == NULL) {
+        write_error(error, error_length, "wl_proxy_create_wrapper failed");
+        return NULL;
+    }
+
+    plane->queue = wl_display_create_queue(plane->display);
+    if (plane->queue == NULL) {
+        wl_proxy_wrapper_destroy(display_wrapper);
+        write_error(error, error_length, "wl_display_create_queue failed");
+        return NULL;
+    }
+    wl_proxy_set_queue(display_wrapper, plane->queue);
+    plane->registry = wl_display_get_registry((struct wl_display *)display_wrapper);
+    wl_proxy_wrapper_destroy(display_wrapper);
+    if (plane->registry == NULL) {
+        write_error(error, error_length, "wl_display_get_registry failed");
+        return NULL;
+    }
+    wl_registry_add_listener(plane->registry, &registry_listener, &state);
+    if (wl_display_roundtrip_queue(plane->display, plane->queue) < 0) {
+        write_error(error, error_length, "Wayland registry roundtrip failed");
+        return NULL;
+    }
+    if (state.subcompositor == NULL) {
+        write_error(error, error_length, "the Wayland compositor has no wl_subcompositor");
+        return NULL;
+    }
+    return state.subcompositor;
+}
+
+static void set_regions(struct okp_wayland_video_plane *plane) {
+    struct wl_region *input = wl_compositor_create_region(plane->compositor);
+    if (input != NULL) {
+        wl_surface_set_input_region(plane->surface, input);
+        wl_region_destroy(input);
+    }
+
+    struct wl_region *opaque = wl_compositor_create_region(plane->compositor);
+    if (opaque != NULL) {
+        wl_region_add(opaque, 0, 0, plane->logical_width, plane->logical_height);
+        wl_surface_set_opaque_region(plane->surface, opaque);
+        wl_region_destroy(opaque);
+    }
+}
+
+static void destroy_plane(struct okp_wayland_video_plane *plane) {
+    if (plane == NULL) {
+        return;
+    }
+    if (plane->egl_display != EGL_NO_DISPLAY) {
+        eglMakeCurrent(plane->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        if (plane->egl_surface != EGL_NO_SURFACE) {
+            eglDestroySurface(plane->egl_display, plane->egl_surface);
+        }
+        if (plane->egl_context != EGL_NO_CONTEXT) {
+            eglDestroyContext(plane->egl_display, plane->egl_context);
+        }
+    }
+    if (plane->egl_window != NULL) {
+        wl_egl_window_destroy(plane->egl_window);
+    }
+    if (plane->subsurface != NULL) {
+        wl_subsurface_destroy(plane->subsurface);
+    }
+    if (plane->surface != NULL) {
+        wl_surface_destroy(plane->surface);
+    }
+    if (plane->subcompositor != NULL) {
+        wl_subcompositor_destroy(plane->subcompositor);
+    }
+    if (plane->registry != NULL) {
+        wl_registry_destroy(plane->registry);
+    }
+    if (plane->queue != NULL) {
+        wl_event_queue_destroy(plane->queue);
+    }
+    free(plane);
+}
+
+struct okp_wayland_video_plane *okp_wayland_video_plane_create(
+    void *display_pointer, void *compositor_pointer, void *parent_surface_pointer,
+    void *egl_display_pointer, int width, int height, int scale, char *error,
+    size_t error_length) {
+    if (display_pointer == NULL || compositor_pointer == NULL ||
+        parent_surface_pointer == NULL || egl_display_pointer == NULL) {
+        write_error(error, error_length, "GDK did not expose the required Wayland/EGL handles");
+        return NULL;
+    }
+
+    struct okp_wayland_video_plane *plane = calloc(1, sizeof(*plane));
+    if (plane == NULL) {
+        write_error(error, error_length, "allocating the native video plane failed");
+        return NULL;
+    }
+    plane->display = display_pointer;
+    plane->compositor = compositor_pointer;
+    plane->egl_display = (EGLDisplay)egl_display_pointer;
+    plane->egl_context = EGL_NO_CONTEXT;
+    plane->egl_surface = EGL_NO_SURFACE;
+    plane->logical_width = width > 0 ? width : 1;
+    plane->logical_height = height > 0 ? height : 1;
+    plane->scale = scale > 0 ? scale : 1;
+
+    plane->subcompositor = bind_subcompositor(plane, error, error_length);
+    if (plane->subcompositor == NULL) {
+        destroy_plane(plane);
+        return NULL;
+    }
+    plane->surface = wl_compositor_create_surface(plane->compositor);
+    if (plane->surface == NULL) {
+        write_error(error, error_length, "wl_compositor_create_surface failed");
+        destroy_plane(plane);
+        return NULL;
+    }
+    plane->subsurface = wl_subcompositor_get_subsurface(
+        plane->subcompositor, plane->surface, parent_surface_pointer);
+    if (plane->subsurface == NULL) {
+        write_error(error, error_length, "wl_subcompositor_get_subsurface failed");
+        destroy_plane(plane);
+        return NULL;
+    }
+    wl_subsurface_set_position(plane->subsurface, 0, 0);
+    wl_subsurface_place_below(plane->subsurface, parent_surface_pointer);
+    // The video plane must commit independently of GTK's GSK/frame-clock path.
+    wl_subsurface_set_desync(plane->subsurface);
+    wl_surface_set_buffer_scale(plane->surface, plane->scale);
+    set_regions(plane);
+
+    EGLint config_attributes[] = {
+        EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+        EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
+        EGL_RED_SIZE, 8,
+        EGL_GREEN_SIZE, 8,
+        EGL_BLUE_SIZE, 8,
+        EGL_NONE,
+    };
+    EGLConfig config = NULL;
+    EGLint config_count = 0;
+    if (!eglBindAPI(EGL_OPENGL_API)) {
+        write_egl_error(error, error_length, "eglBindAPI");
+        destroy_plane(plane);
+        return NULL;
+    }
+    if (!eglChooseConfig(plane->egl_display, config_attributes, &config, 1,
+                         &config_count) || config_count < 1) {
+        write_egl_error(error, error_length, "eglChooseConfig");
+        destroy_plane(plane);
+        return NULL;
+    }
+    plane->egl_context = eglCreateContext(
+        plane->egl_display, config, EGL_NO_CONTEXT, (EGLint[]){EGL_NONE});
+    if (plane->egl_context == EGL_NO_CONTEXT) {
+        write_egl_error(error, error_length, "eglCreateContext");
+        destroy_plane(plane);
+        return NULL;
+    }
+
+    int buffer_width = plane->logical_width * plane->scale;
+    int buffer_height = plane->logical_height * plane->scale;
+    plane->egl_window = wl_egl_window_create(plane->surface, buffer_width, buffer_height);
+    if (plane->egl_window == NULL) {
+        write_error(error, error_length, "wl_egl_window_create failed");
+        destroy_plane(plane);
+        return NULL;
+    }
+    plane->egl_surface = eglCreateWindowSurface(
+        plane->egl_display, config, (EGLNativeWindowType)plane->egl_window, NULL);
+    if (plane->egl_surface == EGL_NO_SURFACE) {
+        write_egl_error(error, error_length, "eglCreateWindowSurface");
+        destroy_plane(plane);
+        return NULL;
+    }
+    if (!eglMakeCurrent(plane->egl_display, plane->egl_surface, plane->egl_surface,
+                        plane->egl_context)) {
+        write_egl_error(error, error_length, "eglMakeCurrent");
+        destroy_plane(plane);
+        return NULL;
+    }
+    if (!eglSwapInterval(plane->egl_display, 1)) {
+        write_egl_error(error, error_length, "eglSwapInterval");
+        destroy_plane(plane);
+        return NULL;
+    }
+
+    glViewport(0, 0, buffer_width, buffer_height);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    if (!eglSwapBuffers(plane->egl_display, plane->egl_surface)) {
+        write_egl_error(error, error_length, "initial eglSwapBuffers");
+        destroy_plane(plane);
+        return NULL;
+    }
+    wl_display_flush(plane->display);
+    return plane;
+}
+
+void okp_wayland_video_plane_destroy(struct okp_wayland_video_plane *plane) {
+    destroy_plane(plane);
+}
+
+bool okp_wayland_video_plane_make_current(struct okp_wayland_video_plane *plane) {
+    return plane != NULL &&
+           eglMakeCurrent(plane->egl_display, plane->egl_surface, plane->egl_surface,
+                          plane->egl_context);
+}
+
+bool okp_wayland_video_plane_swap(struct okp_wayland_video_plane *plane) {
+    return plane != NULL && eglSwapBuffers(plane->egl_display, plane->egl_surface);
+}
+
+void okp_wayland_video_plane_resize(struct okp_wayland_video_plane *plane, int width,
+                                    int height, int scale) {
+    if (plane == NULL) {
+        return;
+    }
+    plane->logical_width = width > 0 ? width : 1;
+    plane->logical_height = height > 0 ? height : 1;
+    plane->scale = scale > 0 ? scale : 1;
+    wl_surface_set_buffer_scale(plane->surface, plane->scale);
+    wl_egl_window_resize(plane->egl_window, plane->logical_width * plane->scale,
+                         plane->logical_height * plane->scale, 0, 0);
+    set_regions(plane);
+}

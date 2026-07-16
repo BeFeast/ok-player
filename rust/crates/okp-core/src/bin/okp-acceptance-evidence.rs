@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 use okp_core::acceptance_evidence::{
     ArtifactKind, EvidenceManifest, PackageArtifact, PackageIdentity,
 };
+use okp_core::presentation_evidence::{
+    PresentationRecord, PresentationThresholds, exercise_errors, summarize_window,
+};
 use okp_core::sha256sums::sha256_hex;
 
 fn main() {
@@ -20,7 +23,56 @@ fn run() -> Result<(), String> {
         Some("identity") => write_identity(&args[1..]),
         Some("template") => write_template(&args[1..]),
         Some("validate") => validate(&args[1..]),
+        Some("presentation") => presentation(&args[1..]),
         _ => Err(usage()),
+    }
+}
+
+fn presentation(args: &[String]) -> Result<(), String> {
+    let log_path = value(args, "--log")?;
+    let warmup_seconds = optional_value(args, "--warmup-seconds")
+        .unwrap_or("3")
+        .parse::<f64>()
+        .map_err(|error| format!("invalid --warmup-seconds: {error}"))?;
+    if !warmup_seconds.is_finite() || warmup_seconds < 0.0 {
+        return Err("--warmup-seconds must be a finite non-negative number".to_owned());
+    }
+    let report_only = args.iter().any(|arg| arg == "--report-only");
+    let text = fs::read_to_string(log_path).map_err(|error| format!("{log_path}: {error}"))?;
+    let records = text
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| !line.trim().is_empty())
+        .map(|(index, line)| {
+            serde_json::from_str::<PresentationRecord>(line)
+                .map_err(|error| format!("{log_path}:{}: {error}", index + 1))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let first_present_ns = records
+        .iter()
+        .find_map(|record| match record {
+            PresentationRecord::Present { monotonic_ns, .. } => Some(*monotonic_ns),
+            _ => None,
+        })
+        .ok_or_else(|| "presentation log contains no final-boundary present records".to_owned())?;
+    let warmup_ns = (warmup_seconds * 1_000_000_000.0).round() as u64;
+    let thresholds = PresentationThresholds::default();
+    let mut summary = summarize_window(
+        &records,
+        first_present_ns.saturating_add(warmup_ns),
+        thresholds,
+    );
+    if records
+        .iter()
+        .any(|record| matches!(record, PresentationRecord::Action { .. }))
+    {
+        summary.errors.extend(exercise_errors(&records, thresholds));
+    }
+    print_json(&summary)?;
+    if summary.passed() || report_only {
+        Ok(())
+    } else {
+        Err(summary.errors.join("\n"))
     }
 }
 
@@ -109,6 +161,12 @@ fn value<'a>(args: &'a [String], name: &str) -> Result<&'a str, String> {
         .ok_or_else(|| format!("missing {name}\n{}", usage()))
 }
 
+fn optional_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
+    args.windows(2)
+        .find(|pair| pair[0] == name)
+        .map(|pair| pair[1].as_str())
+}
+
 fn usage() -> String {
-    "usage:\n  okp-acceptance-evidence identity --version V --commit SHA --deb PATH --appimage PATH\n  okp-acceptance-evidence template --version V --commit SHA --deb PATH --appimage PATH\n  okp-acceptance-evidence validate --manifest PATH --identity PATH".to_owned()
+    "usage:\n  okp-acceptance-evidence identity --version V --commit SHA --deb PATH --appimage PATH\n  okp-acceptance-evidence template --version V --commit SHA --deb PATH --appimage PATH\n  okp-acceptance-evidence validate --manifest PATH --identity PATH\n  okp-acceptance-evidence presentation --log PATH [--warmup-seconds N] [--report-only]".to_owned()
 }

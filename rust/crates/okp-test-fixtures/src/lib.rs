@@ -9,6 +9,25 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExactVideoFixture {
+    pub codec: &'static str,
+    pub profile: &'static str,
+    pub pixel_format: &'static str,
+    pub width: u32,
+    pub height: u32,
+    pub frame_rate: &'static str,
+}
+
+pub const HEVC_MAIN10_4K60: ExactVideoFixture = ExactVideoFixture {
+    codec: "hevc",
+    profile: "Main 10",
+    pixel_format: "yuv420p10le",
+    width: 3840,
+    height: 2160,
+    frame_rate: "60/1",
+};
+
 /// Assert that `actual` is within `tolerance` of `expected`, panicking with a message that
 /// shows all three values.
 ///
@@ -76,5 +95,15 @@ mod tests {
             name.starts_with("okp-fixtures-selftest-"),
             "unexpected name: {name}"
         );
+    }
+
+    #[test]
+    fn live_wayland_fixture_contract_is_exact_4k_hevc_main10_60() {
+        assert_eq!(HEVC_MAIN10_4K60.width, 3840);
+        assert_eq!(HEVC_MAIN10_4K60.height, 2160);
+        assert_eq!(HEVC_MAIN10_4K60.codec, "hevc");
+        assert_eq!(HEVC_MAIN10_4K60.profile, "Main 10");
+        assert_eq!(HEVC_MAIN10_4K60.pixel_format, "yuv420p10le");
+        assert_eq!(HEVC_MAIN10_4K60.frame_rate, "60/1");
     }
 }

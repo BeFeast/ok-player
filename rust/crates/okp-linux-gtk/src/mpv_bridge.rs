@@ -4,6 +4,82 @@ use super::*;
 use gtk::glib::translate::ToGlibPtr;
 #[cfg(target_os = "linux")]
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+pub(crate) struct NativeRenderNotifier {
+    plane: Arc<NativeVideoPlane>,
+    update_handle: okp_mpv::RenderUpdateHandle,
+    recorder: Option<Arc<PresentationRecorder>>,
+    alive: AtomicBool,
+}
+
+// SAFETY: the foreign callback only calls `notify`, which schedules all native
+// plane and libmpv render work onto GTK's main context. Teardown clears the mpv
+// callback and flips `alive` before freeing either native resource.
+unsafe impl Send for NativeRenderNotifier {}
+unsafe impl Sync for NativeRenderNotifier {}
+
+impl NativeRenderNotifier {
+    fn new(
+        plane: Arc<NativeVideoPlane>,
+        update_handle: okp_mpv::RenderUpdateHandle,
+        recorder: Option<Arc<PresentationRecorder>>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            plane,
+            update_handle,
+            recorder,
+            alive: AtomicBool::new(true),
+        })
+    }
+
+    fn notify(&self) {
+        let plane = Arc::clone(&self.plane);
+        let update_handle = self.update_handle;
+        let recorder = self.recorder.clone();
+        let alive = self.alive.load(Ordering::Acquire);
+        if !alive {
+            return;
+        }
+
+        glib::idle_add_full(glib::Priority::HIGH, move || {
+            if !plane.is_alive() || !update_handle.update_has_frame() {
+                return glib::ControlFlow::Break;
+            }
+            if !plane.make_current() {
+                eprintln!("Failed to make the native Wayland/EGL video plane current");
+                return glib::ControlFlow::Break;
+            }
+            let size = plane.render_size();
+            if let Err(error) = update_handle.render_current_frame(size.width, size.height) {
+                eprintln!("mpv native render failed: {error}");
+                return glib::ControlFlow::Break;
+            }
+            if !plane.swap() {
+                eprintln!("Native Wayland/EGL video swap failed");
+                return glib::ControlFlow::Break;
+            }
+            // Report the swap only after the final EGL surface boundary has
+            // accepted it; GtkGLArea historically reported before GTK/GDK's swap.
+            update_handle.report_swap();
+            if let Some(recorder) = recorder.as_ref() {
+                recorder.record_present(size, "egl-swap-buffers");
+            }
+            glib::ControlFlow::Break
+        });
+    }
+
+    fn disable(&self) {
+        self.alive.store(false, Ordering::Release);
+    }
+}
+
+unsafe extern "C" fn native_render_update_trampoline(ctx: *mut libc::c_void) {
+    let Some(notifier) = (unsafe { (ctx as *const NativeRenderNotifier).as_ref() }) else {
+        return;
+    };
+    notifier.notify();
+}
 
 pub(crate) fn is_wayland_display(display_type_name: &str) -> bool {
     display_type_name == "GdkWaylandDisplay"
@@ -44,6 +120,110 @@ fn wayland_display_resource(_display: &gdk::Display) -> Option<NativeWaylandDisp
 }
 
 pub(crate) fn connect_mpv(
+    video_host: &VideoHost,
+    state: Rc<RefCell<PlayerState>>,
+    launch_args: LaunchArgs,
+) {
+    match video_host {
+        VideoHost::Native(area) => connect_native_mpv(area, state, launch_args),
+        VideoHost::Gtk(area) => connect_gtk_mpv(area, state, launch_args),
+    }
+}
+
+fn connect_native_mpv(
+    video_area: &gtk::DrawingArea,
+    state: Rc<RefCell<PlayerState>>,
+    launch_args: LaunchArgs,
+) {
+    let realize_state = Rc::clone(&state);
+    video_area.connect_realize(move |area| {
+        let plane = match NativeVideoPlane::create(area) {
+            Ok(plane) => plane,
+            Err(error) => {
+                eprintln!(
+                    "Failed to create the native Wayland/EGL video plane: {error}. Set OKP_VIDEO_BACKEND=gtk to use the compatibility path."
+                );
+                return;
+            }
+        };
+        if !plane.make_current() {
+            eprintln!("Failed to activate the native Wayland/EGL video context");
+            return;
+        }
+        let Some(mut mpv) = create_configured_mpv(&realize_state) else {
+            return;
+        };
+        let display = area.display();
+        let native_wayland_display = wayland_display_resource(&display);
+        if native_wayland_display.is_none() {
+            eprintln!("GDK Wayland native display is unavailable for direct VAAPI interop");
+            return;
+        }
+        if let Err(error) = mpv.create_render_context(native_wayland_display) {
+            eprintln!("Failed to create mpv native render context: {error}");
+            return;
+        }
+        let update_handle = match mpv.render_update_handle() {
+            Ok(handle) => handle,
+            Err(error) => {
+                eprintln!("Failed to capture the mpv native render handle: {error}");
+                return;
+            }
+        };
+        let recorder = realize_state.borrow().presentation_recorder.clone();
+        let notifier = NativeRenderNotifier::new(Arc::clone(&plane), update_handle, recorder);
+        if let Err(error) = unsafe {
+            mpv.set_render_update_callback(
+                Some(native_render_update_trampoline),
+                Arc::as_ptr(&notifier) as *mut libc::c_void,
+            )
+        } {
+            eprintln!("Failed to install the mpv native render callback: {error}");
+            return;
+        }
+
+        mpv.start_event_pump();
+        {
+            let mut state = realize_state.borrow_mut();
+            state.native_video_plane = Some(plane);
+            state.native_render_notifier = Some(notifier);
+            state.mpv = Some(mpv);
+        }
+        schedule_audio_device_restore(&realize_state);
+        try_pending_audio_device_restore(&realize_state);
+        apply_launch_args(&realize_state, &launch_args);
+        area.queue_draw();
+    });
+
+    let resize_state = Rc::clone(&state);
+    video_area.connect_resize(move |area, width, height| {
+        if let Some(plane) = resize_state.borrow().native_video_plane.as_ref() {
+            plane.resize(width, height, area.scale_factor());
+        }
+    });
+
+    let unrealize_state = Rc::clone(&state);
+    video_area.connect_unrealize(move |_| {
+        let mut state = unrealize_state.borrow_mut();
+        if let Some(notifier) = state.native_render_notifier.as_ref() {
+            notifier.disable();
+        }
+        if let Some(plane) = state.native_video_plane.as_ref() {
+            let _ = plane.make_current();
+        }
+        if let Some(mpv) = state.mpv.as_mut() {
+            let _ = unsafe { mpv.set_render_update_callback(None, std::ptr::null_mut()) };
+            mpv.destroy_render_context();
+        }
+        if let Some(plane) = state.native_video_plane.as_ref() {
+            plane.disable();
+        }
+        state.native_render_notifier = None;
+        state.native_video_plane = None;
+    });
+}
+
+fn connect_gtk_mpv(
     video_area: &gtk::GLArea,
     state: Rc<RefCell<PlayerState>>,
     launch_args: LaunchArgs,
@@ -56,68 +236,9 @@ pub(crate) fn connect_mpv(
             return;
         }
 
-        let (hwdec, raw_mpv_config) = {
-            let state = realize_state.borrow();
-            (
-                state.settings.hardware_decode_mpv_option().to_owned(),
-                state.settings.raw_mpv_config().to_owned(),
-            )
+        let Some(mut mpv) = create_configured_mpv(&realize_state) else {
+            return;
         };
-        let raw_mpv_options = match parse_raw_mpv_config(&raw_mpv_config) {
-            Ok(options) => options,
-            Err(error) => {
-                eprintln!(
-                    "Ignoring custom mpv.conf option at line {}: {}",
-                    error.line, error.message
-                );
-                Vec::new()
-            }
-        };
-
-        let mut mpv = match Mpv::new_with_options(&hwdec, &raw_mpv_options) {
-            Ok(mpv) => mpv,
-            Err(error) if !raw_mpv_options.is_empty() => {
-                eprintln!(
-                    "Failed to create mpv with custom mpv.conf options: {error}; retrying without them"
-                );
-                match Mpv::new_with_hwdec(&hwdec) {
-                    Ok(mpv) => mpv,
-                    Err(error) => {
-                        eprintln!("Failed to create mpv: {error}");
-                        return;
-                    }
-                }
-            }
-            Err(error) => {
-                eprintln!("Failed to create mpv: {error}");
-                return;
-            }
-        };
-        // The realize handler runs on the GLib main context: arm the debug
-        // tripwire so blocking property reads issued from this thread are
-        // hard-logged with a backtrace (the deadlock class from the Windows
-        // #33 postmortem). No-op in release builds.
-        mpv.mark_ui_thread();
-        let saved_volume = realize_state.borrow().settings.volume();
-        if let Err(error) = mpv.set_volume(saved_volume) {
-            eprintln!("Failed to restore saved volume: {error}");
-        }
-        let video_adjustments = realize_state.borrow().settings.video_adjustments();
-        if let Err(error) = mpv.set_video_adjustments(
-            video_adjustments.brightness,
-            video_adjustments.contrast,
-            video_adjustments.saturation,
-            video_adjustments.gamma,
-        ) {
-            eprintln!("Failed to restore video adjustments: {error}");
-        }
-        let audio_normalization = realize_state
-            .borrow()
-            .settings
-            .audio_normalization_enabled();
-        if let Err(error) = mpv.set_audio_normalization(audio_normalization) {
-            eprintln!("Failed to restore audio normalization: {error}");
-        }
 
         let display = area.display();
         let native_wayland_display = wayland_display_resource(&display);
@@ -170,6 +291,9 @@ pub(crate) fn connect_mpv(
         {
             eprintln!("mpv render failed: {error}");
         }
+        if let Some(recorder) = state.presentation_recorder.as_ref() {
+            recorder.record_present(target_size, "gtk-glarea-render");
+        }
 
         glib::Propagation::Stop
     });
@@ -187,6 +311,65 @@ pub(crate) fn connect_mpv(
         tick_area.queue_render();
         glib::ControlFlow::Continue
     });
+}
+
+fn create_configured_mpv(state: &Rc<RefCell<PlayerState>>) -> Option<Mpv> {
+    let (hwdec, raw_mpv_config) = {
+        let state = state.borrow();
+        (
+            state.settings.hardware_decode_mpv_option().to_owned(),
+            state.settings.raw_mpv_config().to_owned(),
+        )
+    };
+    let raw_mpv_options = match parse_raw_mpv_config(&raw_mpv_config) {
+        Ok(options) => options,
+        Err(error) => {
+            eprintln!(
+                "Ignoring custom mpv.conf option at line {}: {}",
+                error.line, error.message
+            );
+            Vec::new()
+        }
+    };
+
+    let mpv = match Mpv::new_with_options(&hwdec, &raw_mpv_options) {
+        Ok(mpv) => mpv,
+        Err(error) if !raw_mpv_options.is_empty() => {
+            eprintln!(
+                "Failed to create mpv with custom mpv.conf options: {error}; retrying without them"
+            );
+            match Mpv::new_with_hwdec(&hwdec) {
+                Ok(mpv) => mpv,
+                Err(error) => {
+                    eprintln!("Failed to create mpv: {error}");
+                    return None;
+                }
+            }
+        }
+        Err(error) => {
+            eprintln!("Failed to create mpv: {error}");
+            return None;
+        }
+    };
+    mpv.mark_ui_thread();
+    let saved_volume = state.borrow().settings.volume();
+    if let Err(error) = mpv.set_volume(saved_volume) {
+        eprintln!("Failed to restore saved volume: {error}");
+    }
+    let video_adjustments = state.borrow().settings.video_adjustments();
+    if let Err(error) = mpv.set_video_adjustments(
+        video_adjustments.brightness,
+        video_adjustments.contrast,
+        video_adjustments.saturation,
+        video_adjustments.gamma,
+    ) {
+        eprintln!("Failed to restore video adjustments: {error}");
+    }
+    let audio_normalization = state.borrow().settings.audio_normalization_enabled();
+    if let Err(error) = mpv.set_audio_normalization(audio_normalization) {
+        eprintln!("Failed to restore audio normalization: {error}");
+    }
+    Some(mpv)
 }
 
 pub(crate) fn parse_raw_mpv_config(text: &str) -> Result<Vec<(String, String)>, RawMpvConfigError> {
@@ -356,6 +539,15 @@ pub(crate) fn connect_state_poll(
             .mpv
             .as_ref()
             .map(|mpv| mpv.observed_playback_state());
+        if let Some(playback) = playback {
+            let state = state.borrow();
+            if let (Some(recorder), Some(mpv)) =
+                (state.presentation_recorder.as_ref(), state.mpv.as_ref())
+            {
+                recorder.record_playback(playback, mpv.observed_playback_diagnostics());
+            }
+        }
+        run_presentation_exercise(&state, playback);
         let has_media = has_loaded_media(&state);
         let seek_preview = env::var_os("OKP_OPEN_SEEK_PREVIEW_ON_STARTUP").is_some();
         let has_chapters = state
@@ -575,6 +767,41 @@ pub(crate) fn consume_initial_window_fit(
     Some((source_generation, video_dimensions))
 }
 
+fn run_presentation_exercise(state: &Rc<RefCell<PlayerState>>, playback: Option<PlaybackState>) {
+    use okp_core::presentation_evidence::PresentationAction;
+
+    let playing = playback.is_some_and(|playback| !playback.paused && playback.time_pos.is_some());
+    let action = {
+        let mut state = state.borrow_mut();
+        state
+            .presentation_exercise
+            .as_mut()
+            .and_then(|exercise| exercise.poll(monotonic_ns(), playing))
+    };
+    let Some(action) = action else {
+        return;
+    };
+    let state = state.borrow();
+    let Some(mpv) = state.mpv.as_ref() else {
+        return;
+    };
+    let result = match action {
+        PresentationAction::SeekForward | PresentationAction::SeekBackward => {
+            mpv.seek_relative(action.seek_seconds().unwrap_or_default())
+        }
+        PresentationAction::SpeedDouble | PresentationAction::SpeedNormal => {
+            mpv.set_speed(action.speed().unwrap_or(1.0))
+        }
+    };
+    if let Err(error) = result {
+        eprintln!("Presentation exercise action {action:?} failed: {error}");
+        return;
+    }
+    if let Some(recorder) = state.presentation_recorder.as_ref() {
+        recorder.record_action(action);
+    }
+}
+
 /// Project the shared load state and observed pause flag onto the in-canvas
 /// paused, loading, and recovery surfaces. Raw engine detail stays behind the
 /// error card's explicit Copy details action.
@@ -597,7 +824,7 @@ fn update_media_state_surface(
 }
 
 pub(crate) fn connect_video_clicks(
-    video_area: &gtk::GLArea,
+    video_area: &gtk::Widget,
     window: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
 ) {

@@ -24,8 +24,8 @@ use libc::c_void;
 
 use crate::ffi;
 use crate::player::{
-    AbLoopState, AudioDevice, Chapter, EndFileReason, MediaInfo, MpvEvent, PlaybackState,
-    RawReader, Track, end_file_reason,
+    AbLoopState, AudioDevice, Chapter, EndFileReason, MediaInfo, MpvEvent, PlaybackDiagnostics,
+    PlaybackState, RawReader, Track, end_file_reason,
 };
 
 /// Properties the pump observes so mpv wakes it (and refreshes the snapshot)
@@ -42,6 +42,11 @@ const OBSERVED_PROPERTIES: &[&str] = &[
     "demuxer-cache-duration",
     // Container frame rate for the seek/frame-step readout; changes on load.
     "container-fps",
+    // Live acceptance diagnostics. Reads remain on the pump thread; the GTK
+    // main context only consumes the published snapshot.
+    "hwdec-current",
+    "decoder-frame-drop-count",
+    "frame-drop-count",
     // Subtitle state surfaced in the subtitle popover / saved preferences.
     "sub-delay",
     "sub-scale",
@@ -63,6 +68,7 @@ const OBSERVED_PROPERTIES: &[&str] = &[
 #[derive(Clone)]
 pub(crate) struct Snapshot {
     pub(crate) playback: PlaybackState,
+    pub(crate) playback_diagnostics: PlaybackDiagnostics,
     pub(crate) ab_loop: AbLoopState,
     pub(crate) subtitle_delay: f64,
     pub(crate) subtitle_scale: f64,
@@ -79,6 +85,7 @@ impl Default for Snapshot {
     fn default() -> Self {
         Self {
             playback: PlaybackState::default(),
+            playback_diagnostics: PlaybackDiagnostics::default(),
             ab_loop: AbLoopState::default(),
             subtitle_delay: 0.0,
             audio_delay: 0.0,
@@ -186,6 +193,10 @@ impl EventPump {
 
     pub(crate) fn playback_state(&self) -> PlaybackState {
         lock(&self.shared.snapshot).playback
+    }
+
+    pub(crate) fn playback_diagnostics(&self) -> PlaybackDiagnostics {
+        lock(&self.shared.snapshot).playback_diagnostics.clone()
     }
 
     pub(crate) fn ab_loop_state(&self) -> AbLoopState {
@@ -397,6 +408,7 @@ fn recompute(shared: &Arc<PumpShared>, flags: RecomputeFlags) {
     let reader = shared.reader;
 
     let playback = reader.playback_state().unwrap_or_default();
+    let playback_diagnostics = reader.playback_diagnostics().unwrap_or_default();
     let ab_loop = reader.ab_loop_state().unwrap_or_default();
     let subtitle_delay = reader.subtitle_delay().unwrap_or(0.0);
     let audio_delay = reader.audio_delay().unwrap_or(0.0);
@@ -418,6 +430,7 @@ fn recompute(shared: &Arc<PumpShared>, flags: RecomputeFlags) {
 
     let mut snapshot = lock(&shared.snapshot);
     snapshot.playback = playback;
+    snapshot.playback_diagnostics = playback_diagnostics;
     snapshot.ab_loop = ab_loop;
     snapshot.subtitle_delay = subtitle_delay;
     snapshot.audio_delay = audio_delay;

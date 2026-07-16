@@ -132,18 +132,19 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     window.set_icon_name(Some(LINUX_ICON_NAME));
     let window_bounds = track_player_window_bounds(&window);
 
+    let video_host = VideoHost::for_display(&gtk::prelude::WidgetExt::display(&window));
+    if video_host.is_native() {
+        window.add_css_class("okp-native-video");
+    }
+
     let overlay = gtk::Overlay::new();
     overlay.add_css_class("okp-root");
+    if video_host.is_native() {
+        overlay.add_css_class("okp-native-video");
+    }
     if !playback_animations_enabled() {
         overlay.add_css_class("is-reduced-motion");
     }
-
-    let video_area = gtk::GLArea::new();
-    video_area.set_hexpand(true);
-    video_area.set_vexpand(true);
-    video_area.set_auto_render(false);
-    video_area.set_required_version(3, 2);
-    video_area.add_css_class("okp-video-plane");
 
     let controls = build_controls(
         &window,
@@ -170,7 +171,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     }
     chrome.add_linked_revealer(&controls.up_next_revealer);
 
-    overlay.set_child(Some(&video_area));
+    overlay.set_child(Some(video_host.widget()));
     // Visual smoke hook: Xvfb cannot present the libmpv GL frame reliably on every
     // renderer, so deterministic bright/dark planes exercise chrome legibility while
     // real media remains loaded underneath to drive the production visibility state.
@@ -216,8 +217,12 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     connect_chrome_activity(&overlay, Rc::clone(&chrome));
 
     let launch_reserved_notice = launch_args.reserved_notice().map(str::to_owned);
-    connect_mpv(&video_area, Rc::clone(&state), launch_args);
-    connect_video_clicks(&video_area, &window, Rc::clone(&state));
+    state.borrow_mut().presentation_recorder = PresentationRecorder::from_env(video_host.backend());
+    if env::var_os("OKP_PRESENT_EXERCISE").is_some() {
+        state.borrow_mut().presentation_exercise = Some(Default::default());
+    }
+    connect_mpv(&video_host, Rc::clone(&state), launch_args);
+    connect_video_clicks(video_host.widget(), &window, Rc::clone(&state));
     connect_player_context_menu(
         &overlay,
         &window,
@@ -378,6 +383,71 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         window,
         state,
         status_toast,
+    }
+}
+
+#[derive(Clone)]
+pub(crate) enum VideoHost {
+    Native(gtk::DrawingArea),
+    Gtk(gtk::GLArea),
+}
+
+impl VideoHost {
+    fn for_display(display: &gdk::Display) -> Self {
+        let requested = env::var("OKP_VIDEO_BACKEND").unwrap_or_else(|_| "auto".to_owned());
+        let wayland = is_wayland_display(display.type_().name());
+        let use_native = match requested.as_str() {
+            "gtk" | "gtk-glarea" => false,
+            "native" | "native-wayland-egl" if wayland => true,
+            "native" | "native-wayland-egl" => {
+                eprintln!(
+                    "Native Wayland/EGL video was requested on a non-Wayland display; using GtkGLArea"
+                );
+                false
+            }
+            "auto" | "" => wayland,
+            value => {
+                eprintln!("Unknown OKP_VIDEO_BACKEND={value}; using the automatic backend");
+                wayland
+            }
+        };
+
+        if use_native {
+            let area = gtk::DrawingArea::new();
+            area.set_hexpand(true);
+            area.set_vexpand(true);
+            area.add_css_class("okp-video-plane");
+            area.add_css_class("okp-native-video");
+            Self::Native(area)
+        } else {
+            let area = gtk::GLArea::new();
+            area.set_hexpand(true);
+            area.set_vexpand(true);
+            area.set_auto_render(false);
+            area.set_required_version(3, 2);
+            area.add_css_class("okp-video-plane");
+            Self::Gtk(area)
+        }
+    }
+
+    pub(crate) fn widget(&self) -> &gtk::Widget {
+        match self {
+            Self::Native(area) => area.upcast_ref(),
+            Self::Gtk(area) => area.upcast_ref(),
+        }
+    }
+
+    pub(crate) fn is_native(&self) -> bool {
+        matches!(self, Self::Native(_))
+    }
+
+    pub(crate) fn backend(&self) -> okp_core::presentation_evidence::PresentationBackend {
+        match self {
+            Self::Native(_) => {
+                okp_core::presentation_evidence::PresentationBackend::NativeWaylandEgl
+            }
+            Self::Gtk(_) => okp_core::presentation_evidence::PresentationBackend::GtkGlArea,
+        }
     }
 }
 

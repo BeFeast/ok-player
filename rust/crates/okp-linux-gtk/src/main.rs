@@ -50,9 +50,11 @@ mod lyrics;
 mod media_info;
 mod mpris;
 mod mpv_bridge;
+mod native_video;
 mod panels;
 mod playback;
 mod playlist_ops;
+mod presentation;
 mod screenshots;
 mod settings;
 mod settings_pages;
@@ -73,9 +75,11 @@ pub(crate) use lyrics::*;
 pub(crate) use media_info::*;
 pub(crate) use mpris::*;
 pub(crate) use mpv_bridge::*;
+pub(crate) use native_video::*;
 pub(crate) use panels::*;
 pub(crate) use playback::*;
 pub(crate) use playlist_ops::*;
+pub(crate) use presentation::*;
 pub(crate) use settings_pages::*;
 pub(crate) use settings_window::*;
 pub(crate) use track_popovers::*;
@@ -179,6 +183,10 @@ struct PlayerState {
     linux_update_status: LinuxUpdateStatus,
     pending_audio_device_restore: Option<PendingAudioDeviceRestore>,
     render_target_size: Option<okp_mpv::RenderTargetSize>,
+    native_video_plane: Option<Arc<NativeVideoPlane>>,
+    native_render_notifier: Option<Arc<NativeRenderNotifier>>,
+    presentation_recorder: Option<Arc<PresentationRecorder>>,
+    presentation_exercise: Option<okp_core::presentation_evidence::PresentationExercise>,
     video_transform: VideoTransformState,
     ab_loop: AbLoopState,
     /// Last transient navigation projection, so rapid fine seeks / frame steps

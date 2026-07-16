@@ -771,6 +771,9 @@ A proper remap editor in **Settings → Shortcuts**: curated sensible defaults (
 
 ### 19.2 Engine architecture — libmpv via the render API
 - A **GUI wrapper over libmpv** (the IINA / mpv.net lineage), not a from-scratch decoder.
+- On Linux Wayland, the video plane uses a desynchronized native EGL subsurface below the GTK
+  chrome. This preserves the single-plane overlay composition while keeping video presents out of
+  GTK/GSK; X11 retains the `GtkGLArea` compatibility path.
 - **Use the mpv render API** so the app composites overlay controls (OSC, panels, thumbnails, indicators) *on top of* the video surface — this enables the immersive controls-over-video chrome.
 - **Child-window (`wid`) embedding is an acceptable fallback** if render-API integration with WinUI 3 / Composition proves problematic, but the render-API path is strongly preferred (the overlay design depends on it). **Flag the WinUI3 ↔ mpv render-API seam as a known tech risk to prototype early — it gates the core UX.**
 

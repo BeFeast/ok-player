@@ -3,6 +3,18 @@ use std::process::Command;
 
 fn main() {
     println!("cargo:rustc-link-lib=X11");
+    if cfg!(target_os = "linux") {
+        for library in ["wayland-client", "wayland-egl", "egl"] {
+            pkg_config::Config::new()
+                .probe(library)
+                .unwrap_or_else(|_| panic!("{library} development files are required"));
+        }
+        cc::Build::new()
+            .file("src/native_wayland_video.c")
+            .warnings(true)
+            .compile("okp_native_wayland_video");
+        println!("cargo:rerun-if-changed=src/native_wayland_video.c");
+    }
     println!("cargo:rerun-if-env-changed=OKP_BUILD_VERSION");
     println!("cargo:rerun-if-changed=../../../.git/HEAD");
     println!("cargo:rerun-if-changed=../../../.git/refs/heads/main");

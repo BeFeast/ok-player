@@ -27,6 +27,12 @@ const OKP_STYLESHEET: &str = "
             background: @okp_bg;
         }
 
+        .okp-root.okp-native-video,
+        window.okp-player-window.okp-native-video,
+        .okp-video-plane.okp-native-video {
+            background: transparent;
+        }
+
         window.okp-player-window {
             background: @okp_bg;
         }
