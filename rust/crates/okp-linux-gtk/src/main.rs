@@ -85,6 +85,8 @@ pub(crate) use window::*;
 const SPEED_PRESETS: [f64; 6] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 const APP_BUILD_VERSION: &str = env!("OKP_BUILD_VERSION");
 const APP_BUILD_SHA: &str = env!("OKP_BUILD_SHA");
+const GSK_RENDERER_ENV: &str = "GSK_RENDERER";
+const DEFAULT_GSK_RENDERER: &str = "gl";
 const LINUX_DESKTOP_ID: &str = "com.befeast.okplayer.desktop";
 const LINUX_ICON_NAME: &str = "com.befeast.okplayer";
 const MPRIS_BUS_NAME: &str = "org.mpris.MediaPlayer2.okplayer";
@@ -1621,7 +1623,26 @@ const SIDE_PANEL_TOP_INSET: i32 = 44;
 const SIDE_PANEL_BOTTOM_INSET: i32 = 80;
 const SIDE_PANEL_TRANSITION_MS: u32 = 250;
 
+fn gtk_renderer_default(current: Option<&std::ffi::OsStr>) -> Option<&'static str> {
+    current.is_none().then_some(DEFAULT_GSK_RENDERER)
+}
+
+fn configure_gtk_renderer() {
+    let current = env::var_os(GSK_RENDERER_ENV);
+    let Some(renderer) = gtk_renderer_default(current.as_deref()) else {
+        return;
+    };
+
+    // SAFETY: this is the first operation in `main`, before Velopack, GTK/GDK,
+    // or any worker thread starts and can concurrently read the environment.
+    unsafe {
+        env::set_var(GSK_RENDERER_ENV, renderer);
+    }
+}
+
 fn main() -> glib::ExitCode {
+    configure_gtk_renderer();
+
     VelopackApp::build().set_auto_apply_on_startup(false).run();
 
     let app = gtk::Application::builder()

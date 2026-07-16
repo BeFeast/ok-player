@@ -5,6 +5,19 @@ fn local_item(path: &str) -> PlaylistItem {
     PlaylistItem::Local(PathBuf::from(path))
 }
 
+#[test]
+fn gtk_renderer_defaults_to_gl_only_without_an_operator_override() {
+    assert_eq!(gtk_renderer_default(None), Some("gl"));
+
+    for renderer in ["gl", "cairo", ""] {
+        assert_eq!(
+            gtk_renderer_default(Some(std::ffi::OsStr::new(renderer))),
+            None,
+            "explicit GSK_RENDERER={renderer:?} must be preserved"
+        );
+    }
+}
+
 fn url_item(url: &str) -> PlaylistItem {
     PlaylistItem::Url(url.to_owned())
 }
