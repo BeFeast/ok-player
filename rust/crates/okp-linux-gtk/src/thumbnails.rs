@@ -1,13 +1,21 @@
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashSet, VecDeque};
 use std::env;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Condvar, Mutex, mpsc::Sender};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, mpsc::Sender};
 use std::thread;
 use std::time::UNIX_EPOCH;
 
+use okp_core::image_luma;
+use okp_core::poster_frame::{
+    PosterFrameScorer, PosterSource, PosterVerdict, classify_source, poster_cache_key,
+    poster_sample_offsets,
+};
+use okp_core::recents_shelf::HistoryItem;
 use okp_mpv::Chapter;
 
 const THUMB_WIDTH: u32 = 144;
@@ -293,15 +301,22 @@ fn generate_thumbnail(media_path: &Path, seconds: f64, output: &Path) -> bool {
 }
 
 fn cache_root() -> PathBuf {
+    cache_base().join("chapter-thumbnails")
+}
+
+/// The `ok-player` root under the XDG cache home (with `$HOME/.cache` and the system temp dir
+/// as fallbacks). Every thumbnail family — chapter, hover, and Continue Watching posters —
+/// hangs off this so they share one prunable location.
+fn cache_base() -> PathBuf {
     if let Some(cache_home) = env::var_os("XDG_CACHE_HOME").filter(|value| !value.is_empty()) {
-        return PathBuf::from(cache_home).join("ok-player/chapter-thumbnails");
+        return PathBuf::from(cache_home).join("ok-player");
     }
 
     if let Some(home) = env::var_os("HOME").filter(|value| !value.is_empty()) {
-        return PathBuf::from(home).join(".cache/ok-player/chapter-thumbnails");
+        return PathBuf::from(home).join(".cache/ok-player");
     }
 
-    env::temp_dir().join("ok-player/chapter-thumbnails")
+    env::temp_dir().join("ok-player")
 }
 
 fn media_fingerprint(path: &Path) -> String {
@@ -323,6 +338,355 @@ fn media_fingerprint(path: &Path) -> String {
 
 fn chapter_time_key(seconds: f64) -> i64 {
     (seconds.max(0.0) * 1000.0).round() as i64
+}
+
+// ---- Continue Watching / History posters -------------------------------------------------
+//
+// The idle welcome shelf and the full History list render a representative frame for every
+// resumable local video. Generation is bounded and asynchronous: a single background worker
+// decodes candidate frames with ffmpeg (the same tool the hover/chapter thumbnails already
+// use), scores them with the shared [`okp_core::poster_frame`] policy, and writes one small
+// JPEG per file into the XDG cache. The GTK side is a thin projection: on each idle poll it
+// resolves each row's poster from the cache and, for any still missing, enqueues one bounded
+// generation. The pure identity/scoring/sampling rules live in the core so both surfaces (and
+// a future non-GTK shell) share one cached result and one selection policy.
+
+/// The scoring decode is deliberately tiny — mean luma does not need a full-resolution frame,
+/// and a small scale keeps each probe cheap so sampling several positions stays bounded.
+const POSTER_SCORE_WIDTH: u32 = 128;
+const POSTER_SCORE_HEIGHT: u32 = 72;
+
+/// A queued poster generation: the media to sample, its duration hint, and the cache targets
+/// derived from the file's identity key.
+#[derive(Clone, Debug)]
+struct PosterJob {
+    media_path: PathBuf,
+    duration: f64,
+    /// Where a usable frame is written.
+    poster: PathBuf,
+    /// The durable "no usable frame" sentinel written when even the brightest sample is black.
+    sentinel: PathBuf,
+}
+
+/// A cheap, cloneable shutdown signal handed to the worker's processor so a long sampling run
+/// can bail promptly when the shelf is dropped.
+#[derive(Clone)]
+struct PosterCancel(Arc<AtomicBool>);
+
+impl PosterCancel {
+    fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+#[derive(Default)]
+struct PosterQueue {
+    pending: VecDeque<PosterJob>,
+    /// Keys queued or in flight — dedupes concurrent requests for the same file.
+    active: HashSet<String>,
+    /// Keys resolved this session (any outcome). Prevents a transient failure — which leaves
+    /// neither a poster nor a sentinel on disk — from re-enqueuing on every 200 ms poll (a hot
+    /// loop). It is in-memory only, so a genuinely transient failure still retries next launch,
+    /// while a durable black-film verdict is remembered by the on-disk sentinel across launches.
+    done: HashSet<String>,
+    shutdown: bool,
+}
+
+struct PosterShared {
+    state: Mutex<PosterQueue>,
+    wake: Condvar,
+}
+
+/// Bounded, asynchronous poster generation for the idle surfaces. Owns a single worker thread
+/// (decoder concurrency of one, so a burst of resumable videos never spawns a pile of native
+/// decodes) and the cache directory the projection reads from.
+pub(crate) struct PosterShelf {
+    dir: PathBuf,
+    shared: Arc<PosterShared>,
+    cancel: Arc<AtomicBool>,
+}
+
+impl PosterShelf {
+    /// The production shelf: decode with ffmpeg and score with the shared luma policy.
+    fn production(dir: PathBuf) -> Self {
+        Self::with_processor(dir, process_poster)
+    }
+
+    /// Construct a shelf with an injected processor so the queue/dedup/cancellation behaviour
+    /// can be unit-tested without a decoder.
+    fn with_processor<F>(dir: PathBuf, mut process: F) -> Self
+    where
+        F: FnMut(&PosterJob, &PosterCancel) + Send + 'static,
+    {
+        let shared = Arc::new(PosterShared {
+            state: Mutex::new(PosterQueue::default()),
+            wake: Condvar::new(),
+        });
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_shared = Arc::clone(&shared);
+        let worker_cancel = PosterCancel(Arc::clone(&cancel));
+        thread::spawn(move || {
+            loop {
+                let job = {
+                    let mut state = worker_shared
+                        .state
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    while state.pending.is_empty() && !state.shutdown {
+                        state = worker_shared
+                            .wake
+                            .wait(state)
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    }
+                    if state.shutdown {
+                        return;
+                    }
+                    state
+                        .pending
+                        .pop_front()
+                        .expect("pending job checked above")
+                };
+
+                process(&job, &worker_cancel);
+
+                let mut state = worker_shared
+                    .state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                state.active.remove(&poster_key_of(&job));
+                state.done.insert(poster_key_of(&job));
+            }
+        });
+
+        Self {
+            dir,
+            shared,
+            cancel,
+        }
+    }
+
+    /// Fill each row's `poster_path` from the cache and, unless the session is private, kick
+    /// off bounded generation for any still missing. A private session exposes no posters and
+    /// writes none: the requirement is that private-session viewing leaves no poster trace.
+    fn project(&self, items: &mut [HistoryItem], private_session: bool) {
+        for item in items.iter_mut() {
+            item.poster_path = if private_session {
+                None
+            } else {
+                self.resolve(item)
+            };
+        }
+    }
+
+    /// Resolve one row to a poster path if the cache already holds one, enqueuing bounded
+    /// generation when it does not. Returns `None` (an honest placeholder) for anything that
+    /// is not a present local video, and for a file whose durable sentinel says it has no
+    /// usable frame — without ever re-deriving it.
+    fn resolve(&self, item: &HistoryItem) -> Option<String> {
+        // Deterministic render hook for the visual smokes: a poster placed by file stem in
+        // OKP_POSTER_FIXTURE_DIR is used verbatim, so the render/projection path can be proven
+        // without invoking a decoder. Never enqueues generation.
+        if let Some(fixture) = poster_fixture_dir()
+            && let Some(stem) = Path::new(&item.path)
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+        {
+            let candidate = fixture.join(format!("{stem}.jpg"));
+            if is_nonempty_file(&candidate) {
+                return Some(candidate.to_string_lossy().into_owned());
+            }
+        }
+
+        if classify_source(&item.path) != PosterSource::LocalVideo {
+            return None; // audio-only / URL / network: honest non-video fallback, no decode
+        }
+        let metadata = fs::metadata(&item.path).ok()?;
+        if !metadata.is_file() {
+            return None; // missing/deleted since it was listed — placeholder, no retry loop
+        }
+        let (modified_secs, modified_nanos) = modified_parts(&metadata);
+        let key = poster_cache_key(&item.path, metadata.len(), modified_secs, modified_nanos);
+        let poster = self.dir.join(format!("{key}.jpg"));
+        if is_nonempty_file(&poster) {
+            return Some(poster.to_string_lossy().into_owned());
+        }
+        // A zero-byte leftover (an interrupted write that somehow reached the final name) is
+        // treated as absent and cleared so a healthy frame can replace it.
+        if poster.exists() {
+            let _ = fs::remove_file(&poster);
+        }
+        let sentinel = self.dir.join(format!("{key}.none"));
+        if sentinel.is_file() {
+            return None; // durably no usable frame — keep the placeholder, never re-derive
+        }
+
+        self.enqueue(PosterJob {
+            media_path: PathBuf::from(&item.path),
+            duration: item.duration,
+            poster,
+            sentinel,
+        });
+        None
+    }
+
+    fn enqueue(&self, job: PosterJob) {
+        let key = poster_key_of(&job);
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.shutdown || state.active.contains(&key) || state.done.contains(&key) {
+            return;
+        }
+        state.active.insert(key);
+        state.pending.push_back(job);
+        self.shared.wake.notify_one();
+    }
+}
+
+impl Drop for PosterShelf {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.shutdown = true;
+        state.pending.clear();
+        self.shared.wake.notify_all();
+    }
+}
+
+/// The process-wide shelf. Lazily started on first idle projection, so the worker thread and
+/// its cache directory come from the environment in effect at first use (the smokes set
+/// `XDG_CACHE_HOME` before launch).
+fn poster_shelf() -> &'static PosterShelf {
+    static SHELF: OnceLock<PosterShelf> = OnceLock::new();
+    SHELF.get_or_init(|| PosterShelf::production(poster_cache_dir()))
+}
+
+/// Fill the rows' posters from the cache and enqueue any missing generations. The single entry
+/// point both idle surfaces call so they share one cached result and one crop/selection policy.
+pub(crate) fn project_posters(items: &mut [HistoryItem], private_session: bool) {
+    poster_shelf().project(items, private_session);
+}
+
+fn poster_cache_dir() -> PathBuf {
+    cache_base().join("continue-watching-posters")
+}
+
+fn poster_fixture_dir() -> Option<PathBuf> {
+    env::var_os("OKP_POSTER_FIXTURE_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+fn poster_key_of(job: &PosterJob) -> String {
+    job.poster
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(str::to_owned)
+        .unwrap_or_default()
+}
+
+fn is_nonempty_file(path: &Path) -> bool {
+    fs::metadata(path).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
+}
+
+fn modified_parts(metadata: &fs::Metadata) -> (u64, u32) {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| (duration.as_secs(), duration.subsec_nanos()))
+        .unwrap_or((0, 0))
+}
+
+/// Sample the media at the bounded plan, keep the brightest lit frame, and write the poster —
+/// or the durable "no usable frame" sentinel when the whole file reads as black. Nothing is
+/// written on a purely transient decode failure, so a momentarily-unreadable file is retried
+/// on the next launch instead of being marked posterless forever.
+fn process_poster(job: &PosterJob, cancel: &PosterCancel) {
+    if let Some(parent) = job.poster.parent()
+        && let Err(error) = fs::create_dir_all(parent)
+    {
+        eprintln!("Failed to create poster cache: {error}");
+        return;
+    }
+
+    let mut scorer = PosterFrameScorer::new();
+    for offset in poster_sample_offsets(job.duration) {
+        if cancel.is_cancelled() {
+            return; // shutting down — do not cache a verdict from a half-finished sampling run
+        }
+        if let Some(luma) = decode_frame_luma(&job.media_path, offset) {
+            scorer.observe(offset, luma);
+            if scorer.is_satisfied() {
+                break;
+            }
+        }
+    }
+
+    match scorer.verdict() {
+        PosterVerdict::Usable { offset, .. } => {
+            // Reuse the atomic (tmp + rename) JPEG writer the hover/chapter path already uses.
+            let _ = generate_thumbnail(&job.media_path, offset, &job.poster);
+        }
+        PosterVerdict::Unusable => write_poster_sentinel(&job.sentinel),
+        PosterVerdict::NoFrame => { /* transient — leave the cache clean and retry next launch */
+        }
+    }
+}
+
+/// Mean luma (0–255) of a single frame at `seconds`, decoded to a small raw BGRA buffer by
+/// ffmpeg and scored by the shared [`image_luma`] policy. Input-side `-ss` gives a fast
+/// keyframe seek, which is plenty accurate for a poster. Returns `None` when nothing decodes.
+fn decode_frame_luma(media_path: &Path, seconds: f64) -> Option<f64> {
+    if !seconds.is_finite() || seconds < 0.0 {
+        return None;
+    }
+    let timestamp = format!("{:.3}", seconds.max(0.0));
+    let filter = format!("scale={POSTER_SCORE_WIDTH}:{POSTER_SCORE_HEIGHT}");
+    let output = Command::new("ffmpeg")
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-ss")
+        .arg(&timestamp)
+        .arg("-i")
+        .arg(media_path)
+        .arg("-frames:v")
+        .arg("1")
+        .arg("-vf")
+        .arg(filter)
+        .arg("-f")
+        .arg("rawvideo")
+        .arg("-pix_fmt")
+        .arg("bgra")
+        .arg("-")
+        .output()
+        .ok()?;
+    if !output.status.success() || output.stdout.is_empty() {
+        return None;
+    }
+    Some(image_luma::mean_bgra(
+        &output.stdout,
+        image_luma::DEFAULT_STRIDE,
+    ))
+}
+
+fn write_poster_sentinel(sentinel: &Path) {
+    if let Some(parent) = sentinel.parent()
+        && fs::create_dir_all(parent).is_err()
+    {
+        return;
+    }
+    let tmp = sentinel.with_extension("none.tmp");
+    if fs::write(&tmp, []).is_ok() && fs::rename(&tmp, sentinel).is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
 }
 
 #[cfg(test)]
@@ -380,6 +744,290 @@ mod tests {
             processed_receiver
                 .recv_timeout(Duration::from_millis(50))
                 .is_err()
+        );
+    }
+
+    // ---- Continue Watching / History posters ----
+
+    use std::sync::atomic::AtomicUsize;
+
+    fn unique_dir(tag: &str) -> PathBuf {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = env::temp_dir().join(format!("okp-poster-test-{}-{tag}-{n}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create test dir");
+        dir
+    }
+
+    fn touch(path: &Path, bytes: &[u8]) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create parent");
+        }
+        fs::write(path, bytes).expect("write file");
+    }
+
+    fn video_item(path: &str, duration: f64) -> HistoryItem {
+        HistoryItem {
+            path: path.to_owned(),
+            title: "Title".to_owned(),
+            location: "loc".to_owned(),
+            position: 10.0,
+            duration,
+            progress: 0.2,
+            state_kind: okp_core::history_format::HistoryStateKind::Progress,
+            state_label: "20%".to_owned(),
+            updated_at_unix: 0,
+            poster_path: None,
+        }
+    }
+
+    /// The cache key the shelf will derive for a media file that exists on disk.
+    fn key_for(media: &Path) -> String {
+        let metadata = fs::metadata(media).expect("media metadata");
+        let (secs, nanos) = modified_parts(&metadata);
+        poster_cache_key(&media.to_string_lossy(), metadata.len(), secs, nanos)
+    }
+
+    /// A shelf whose injected processor records each processed media path, so queue/dedup
+    /// behaviour is observable without a decoder.
+    fn recording_shelf(dir: PathBuf) -> (PosterShelf, mpsc::Receiver<PathBuf>) {
+        let (sender, receiver) = mpsc::channel();
+        let shelf = PosterShelf::with_processor(dir, move |job, _cancel| {
+            sender.send(job.media_path.clone()).unwrap();
+        });
+        (shelf, receiver)
+    }
+
+    #[test]
+    fn resolve_serves_a_cached_poster_without_enqueuing() {
+        let dir = unique_dir("cached");
+        let media = dir.join("movie.mkv");
+        touch(&media, b"fake video bytes");
+        let poster = dir.join(format!("{}.jpg", key_for(&media)));
+        touch(&poster, b"jpeg");
+
+        let (shelf, processed) = recording_shelf(dir.clone());
+        let mut items = vec![video_item(&media.to_string_lossy(), 600.0)];
+        shelf.project(&mut items, false);
+
+        assert_eq!(
+            items[0].poster_path.as_deref(),
+            Some(poster.to_str().unwrap())
+        );
+        assert!(
+            processed.recv_timeout(Duration::from_millis(100)).is_err(),
+            "a cache hit must not enqueue generation"
+        );
+    }
+
+    #[test]
+    fn resolve_enqueues_generation_for_a_missing_poster() {
+        let dir = unique_dir("missing-poster");
+        let media = dir.join("movie.mkv");
+        touch(&media, b"fake video bytes");
+
+        let (shelf, processed) = recording_shelf(dir.clone());
+        let mut items = vec![video_item(&media.to_string_lossy(), 600.0)];
+        shelf.project(&mut items, false);
+
+        assert_eq!(items[0].poster_path, None, "placeholder while pending");
+        assert_eq!(
+            processed.recv_timeout(Duration::from_secs(1)),
+            Ok(media.clone())
+        );
+    }
+
+    #[test]
+    fn concurrent_requests_for_the_same_file_are_deduplicated() {
+        let dir = unique_dir("dedup");
+        let media = dir.join("movie.mkv");
+        touch(&media, b"fake video bytes");
+
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let (done_tx, done_rx) = mpsc::channel();
+        let shelf = PosterShelf::with_processor(dir.clone(), move |job, _cancel| {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap(); // hold the key "active" across the second request
+            done_tx.send(job.media_path.clone()).unwrap();
+        });
+
+        let mut first = vec![video_item(&media.to_string_lossy(), 600.0)];
+        shelf.project(&mut first, false);
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        // A second poll for the same still-missing file must not enqueue a duplicate.
+        let mut second = vec![video_item(&media.to_string_lossy(), 600.0)];
+        shelf.project(&mut second, false);
+        release_tx.send(()).unwrap();
+
+        assert_eq!(done_rx.recv_timeout(Duration::from_secs(1)), Ok(media));
+        assert!(
+            done_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            "only one generation should have run"
+        );
+    }
+
+    #[test]
+    fn a_resolved_key_is_not_re_enqueued_on_the_next_poll() {
+        // A transient failure leaves neither a poster nor a sentinel on disk; the in-memory
+        // "done" set must still stop the 200 ms poll from re-enqueuing it in a hot loop.
+        let dir = unique_dir("no-hot-loop");
+        let media = dir.join("movie.mkv");
+        touch(&media, b"fake video bytes");
+
+        let (shelf, processed) = recording_shelf(dir.clone());
+        let mut items = vec![video_item(&media.to_string_lossy(), 600.0)];
+        shelf.project(&mut items, false);
+        assert_eq!(
+            processed.recv_timeout(Duration::from_secs(1)),
+            Ok(media.clone())
+        );
+
+        // Second poll: the key is done, so nothing is enqueued.
+        let mut again = vec![video_item(&media.to_string_lossy(), 600.0)];
+        shelf.project(&mut again, false);
+        assert!(processed.recv_timeout(Duration::from_millis(100)).is_err());
+    }
+
+    #[test]
+    fn a_private_session_exposes_and_generates_no_posters() {
+        let dir = unique_dir("private");
+        let media = dir.join("movie.mkv");
+        touch(&media, b"fake video bytes");
+        // Even a poster already on disk stays hidden while the session is private.
+        touch(&dir.join(format!("{}.jpg", key_for(&media))), b"jpeg");
+
+        let (shelf, processed) = recording_shelf(dir.clone());
+        let mut items = vec![video_item(&media.to_string_lossy(), 600.0)];
+        shelf.project(&mut items, true);
+
+        assert_eq!(items[0].poster_path, None);
+        assert!(processed.recv_timeout(Duration::from_millis(100)).is_err());
+    }
+
+    #[test]
+    fn missing_url_and_audio_rows_keep_an_honest_fallback_without_enqueuing() {
+        let dir = unique_dir("fallbacks");
+        let audio = dir.join("song.flac");
+        touch(&audio, b"fake audio bytes");
+
+        let (shelf, processed) = recording_shelf(dir.clone());
+        let mut items = vec![
+            video_item(&dir.join("gone.mkv").to_string_lossy(), 600.0), // never existed
+            video_item("https://example.com/live.mkv", 600.0),          // URL
+            video_item(&audio.to_string_lossy(), 300.0),                // audio-only
+        ];
+        shelf.project(&mut items, false);
+
+        assert!(items.iter().all(|item| item.poster_path.is_none()));
+        assert!(
+            processed.recv_timeout(Duration::from_millis(100)).is_err(),
+            "no decode should be attempted for missing/url/audio rows"
+        );
+    }
+
+    #[test]
+    fn a_durable_sentinel_keeps_the_placeholder_without_re_deriving() {
+        let dir = unique_dir("sentinel");
+        let media = dir.join("black-film.mkv");
+        touch(&media, b"fake video bytes");
+        touch(&dir.join(format!("{}.none", key_for(&media))), b"");
+
+        let (shelf, processed) = recording_shelf(dir.clone());
+        let mut items = vec![video_item(&media.to_string_lossy(), 600.0)];
+        shelf.project(&mut items, false);
+
+        assert_eq!(items[0].poster_path, None);
+        assert!(processed.recv_timeout(Duration::from_millis(100)).is_err());
+    }
+
+    #[test]
+    fn a_zero_byte_poster_is_treated_as_corrupt_and_regenerated() {
+        let dir = unique_dir("corrupt");
+        let media = dir.join("movie.mkv");
+        touch(&media, b"fake video bytes");
+        let poster = dir.join(format!("{}.jpg", key_for(&media)));
+        touch(&poster, b""); // interrupted write left a 0-byte file at the final name
+
+        let (shelf, processed) = recording_shelf(dir.clone());
+        let mut items = vec![video_item(&media.to_string_lossy(), 600.0)];
+        shelf.project(&mut items, false);
+
+        assert_eq!(items[0].poster_path, None);
+        assert!(!poster.exists(), "the corrupt leftover is cleared");
+        assert_eq!(processed.recv_timeout(Duration::from_secs(1)), Ok(media));
+    }
+
+    #[test]
+    fn a_changed_file_invalidates_its_old_poster() {
+        let dir = unique_dir("invalidate");
+        let media = dir.join("movie.mkv");
+        touch(&media, b"original bytes");
+        let old_poster = dir.join(format!("{}.jpg", key_for(&media)));
+        touch(&old_poster, b"jpeg");
+
+        // The unchanged file serves the cached poster.
+        let (shelf, processed) = recording_shelf(dir.clone());
+        let mut items = vec![video_item(&media.to_string_lossy(), 600.0)];
+        shelf.project(&mut items, false);
+        assert_eq!(
+            items[0].poster_path.as_deref(),
+            Some(old_poster.to_str().unwrap())
+        );
+        assert!(processed.recv_timeout(Duration::from_millis(100)).is_err());
+
+        // Replacing the file changes its size, so the derived key — and thus the expected
+        // poster path — changes: the stale frame is no longer served and a fresh one is queued.
+        touch(&media, b"a longer set of replacement bytes");
+        let mut items = vec![video_item(&media.to_string_lossy(), 600.0)];
+        shelf.project(&mut items, false);
+        assert_eq!(items[0].poster_path, None);
+        assert_eq!(processed.recv_timeout(Duration::from_secs(1)), Ok(media));
+    }
+
+    #[test]
+    fn shutdown_cancels_pending_work_and_stops_the_worker() {
+        let dir = unique_dir("cancel");
+        let first = dir.join("first.mkv");
+        let second = dir.join("second.mkv");
+        touch(&first, b"fake video bytes");
+        touch(&second, b"other video bytes");
+
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let (done_tx, done_rx) = mpsc::channel();
+        let cancel_seen = Arc::new(AtomicBool::new(false));
+        let worker_cancel_seen = Arc::clone(&cancel_seen);
+        let shelf = PosterShelf::with_processor(dir.clone(), move |job, cancel| {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            if cancel.is_cancelled() {
+                worker_cancel_seen.store(true, Ordering::Relaxed);
+            }
+            done_tx.send(job.media_path.clone()).unwrap();
+        });
+
+        // Job A starts and blocks; job B queues behind it.
+        let mut items = vec![video_item(&first.to_string_lossy(), 600.0)];
+        shelf.project(&mut items, false);
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let mut items = vec![video_item(&second.to_string_lossy(), 600.0)];
+        shelf.project(&mut items, false);
+
+        // Drop signals shutdown + cancellation and clears the pending queue (job B).
+        drop(shelf);
+        release_tx.send(()).unwrap();
+
+        assert_eq!(done_rx.recv_timeout(Duration::from_secs(1)), Ok(first));
+        assert!(
+            done_rx.recv_timeout(Duration::from_millis(200)).is_err(),
+            "the pending second job must be dropped on shutdown"
+        );
+        assert!(
+            cancel_seen.load(Ordering::Relaxed),
+            "the in-flight processor observes the cancellation signal"
         );
     }
 }
