@@ -58,6 +58,7 @@ mod mpris;
 mod mpv_bridge;
 mod native_video;
 mod nfo_title;
+mod osc_bar;
 mod panels;
 mod playback;
 mod playlist_ops;
@@ -751,6 +752,10 @@ struct Controls {
     screenshot_button: gtk::Button,
     fullscreen_button: gtk::Button,
     more_button: gtk::MenuButton,
+    // Mirrors the controls the adaptive OscBar folded into the overflow menu at
+    // the current window width, so `controls_bar` can point the bar at the same
+    // vec the `…` popover reads (issue #328).
+    overflow_collapsed: Rc<RefCell<Vec<okp_core::osc_overflow::OscControlId>>>,
     timeline: gtk::Overlay,
     seek: gtk::Scale,
     timeline_rail: TimelineRail,

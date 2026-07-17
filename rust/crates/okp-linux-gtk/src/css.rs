@@ -1426,7 +1426,10 @@ const OKP_STYLESHEET: &str = "
 
         .okp-controls {
             min-height: 32px;
-            padding: 7px 14px;
+            /* The adaptive OscBar owns the 7px/14px content inset in its own
+             * allocation (issue #328), so the CSS padding is zeroed to avoid
+             * double-insetting the controls. */
+            padding: 0;
             border-radius: 14px;
             /* GTK 4 has no portable backdrop-filter. This 50% tint plus the
              * localized scrim is the deterministic fallback for the locked
@@ -4179,7 +4182,6 @@ mod tests {
         for required in [
             "min-height: 42px;",
             "min-width: 46px;",
-            "padding: 7px 14px;",
             "border-radius: 14px;",
             "background: rgba(22, 22, 25, 0.50);",
             "background: rgba(22, 22, 25, 0.60);",
@@ -4202,5 +4204,11 @@ mod tests {
             !OKP_STYLESHEET.contains("okp-control-separator"),
             "the unified OSC must not regress to separated toolbar islands"
         );
+        // The 7px/14px OSC pill inset moved out of CSS and into the adaptive
+        // OscBar's own allocation (issue #328); the canonical redline lives
+        // there now so the geometry is unchanged.
+        let osc_bar = include_str!("osc_bar.rs");
+        assert!(osc_bar.contains("pub(crate) const PAD_HORIZONTAL: i32 = 14;"));
+        assert!(osc_bar.contains("pub(crate) const PAD_VERTICAL: i32 = 7;"));
     }
 }

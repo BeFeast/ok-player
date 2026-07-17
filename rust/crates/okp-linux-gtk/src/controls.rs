@@ -1,4 +1,6 @@
 use super::*;
+use crate::osc_bar::OscBar;
+use okp_core::osc_overflow::OscControlId;
 
 pub(crate) const VOLUME_RESTING_SIZE: i32 = 34;
 pub(crate) const VOLUME_WICK_WIDTH: i32 = 18;
@@ -1269,12 +1271,23 @@ pub(crate) fn build_controls(
     let more_parent = window.clone();
     let more_state = Rc::clone(&state);
     let more_toast = Rc::clone(&status_toast);
+    // Shared with the adaptive OscBar (see `controls_bar`): the bar writes the
+    // controls it folded at the current width, and the overflow popover reads
+    // them to keep every collapsed action reachable (issue #328).
+    let overflow_collapsed: Rc<RefCell<Vec<OscControlId>>> = Rc::new(RefCell::new(Vec::new()));
+    let more_reach = OverflowReach {
+        collapsed: Rc::clone(&overflow_collapsed),
+        screenshot: screenshot_button.clone(),
+        fullscreen: fullscreen_button.clone(),
+        chapters: chapters_button.clone(),
+    };
     more_popover.connect_show(move |popover| {
         populate_command_popover(
             popover,
             &more_parent,
             Rc::clone(&more_state),
             Rc::clone(&more_toast),
+            &more_reach,
         );
     });
 
@@ -1374,6 +1387,7 @@ pub(crate) fn build_controls(
         screenshot_button,
         fullscreen_button,
         more_button,
+        overflow_collapsed,
         timeline,
         seek,
         timeline_rail,
@@ -1402,7 +1416,14 @@ pub(crate) fn build_controls(
 }
 
 pub(crate) fn controls_bar(controls: &Controls) -> gtk::Overlay {
-    let bar = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+    // The adaptive OSC container reports only the floor as its horizontal
+    // minimum, so a narrow window hands it its real allocation and the
+    // okp-core overflow policy folds lower-priority controls into the `…`
+    // menu before anything overlaps. The overflow button is the final in-flow
+    // action with a reserved, exclusive band — never a separate overlay that
+    // could paint over its neighbour (issue #328).
+    let bar = OscBar::new();
+    bar.set_collapsed_sink(Rc::clone(&controls.overflow_collapsed));
     bar.add_css_class("okp-controls");
     bar.set_halign(gtk::Align::Fill);
     bar.set_valign(gtk::Align::End);
@@ -1410,27 +1431,20 @@ pub(crate) fn controls_bar(controls: &Controls) -> gtk::Overlay {
     bar.set_margin_end(16);
     bar.set_margin_bottom(18);
 
-    bar.append(&controls.play_button);
-    bar.append(&controls.previous_button);
-    bar.append(&controls.next_button);
-    bar.append(&controls.elapsed_label);
-    bar.append(&controls.timeline);
-    bar.append(&controls.duration_label);
-    bar.append(controls.volume.widget());
-    bar.append(&controls.speed_button);
-    bar.append(&controls.subtitle_button);
-    bar.append(&controls.audio_button);
-    bar.append(&controls.chapters_button);
-    bar.append(&controls.screenshot_button);
-    bar.append(&controls.fullscreen_button);
-    // Reserve the final row slot while the real More button is anchored by
-    // the surrounding overlay. A GtkBox narrower than its aggregate minimum
-    // clips its final child first; keeping More out of that allocation makes
-    // the required Settings entry reachable at every window width.
-    let more_slot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    more_slot.set_size_request(32, 1);
-    more_slot.set_can_target(false);
-    bar.append(&more_slot);
+    bar.push(&controls.play_button, OscControlId::Play);
+    bar.push(&controls.previous_button, OscControlId::Previous);
+    bar.push(&controls.next_button, OscControlId::Next);
+    bar.push(&controls.elapsed_label, OscControlId::Elapsed);
+    bar.push(&controls.timeline, OscControlId::Timeline);
+    bar.push(&controls.duration_label, OscControlId::Duration);
+    bar.push(controls.volume.widget(), OscControlId::Volume);
+    bar.push(&controls.speed_button, OscControlId::Speed);
+    bar.push(&controls.subtitle_button, OscControlId::Subtitles);
+    bar.push(&controls.audio_button, OscControlId::Audio);
+    bar.push(&controls.chapters_button, OscControlId::Chapters);
+    bar.push(&controls.screenshot_button, OscControlId::Screenshot);
+    bar.push(&controls.fullscreen_button, OscControlId::Fullscreen);
+    bar.push(&controls.more_button, OscControlId::Overflow);
 
     let scrim = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     scrim.add_css_class("okp-bottom-scrim");
@@ -1445,11 +1459,6 @@ pub(crate) fn controls_bar(controls: &Controls) -> gtk::Overlay {
     chrome.set_valign(gtk::Align::End);
     chrome.set_child(Some(&scrim));
     chrome.add_overlay(&bar);
-    controls.more_button.set_halign(gtk::Align::End);
-    controls.more_button.set_valign(gtk::Align::End);
-    controls.more_button.set_margin_end(30);
-    controls.more_button.set_margin_bottom(25);
-    chrome.add_overlay(&controls.more_button);
     chrome.add_overlay(controls.seek_hover_preview.widget());
     chrome
 }
