@@ -74,7 +74,7 @@ jobs:
         if: steps.release.outputs.publish != 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev libmpv-dev libgl1-mesa-dev libegl1-mesa-dev libglx-dev mpv ffmpeg cmake ninja-build dpkg-dev unzip
+          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev libmpv-dev libgl1-mesa-dev libegl1-mesa-dev libglx-dev mpv ffmpeg cmake ninja-build dpkg-dev unzip appstream appstream-compose
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -103,6 +103,13 @@ jobs:
       - name: Build Debian package lane
         if: steps.release.outputs.publish != 'true'
         run: ./scripts/package-linux-deb.sh "${{ steps.release.outputs.version }}"
+
+      # Acceptance for issue #342: install the exact built .deb, confirm the
+      # AppStream MetaInfo lands and validates, is discoverable by name and
+      # desktop id in a local AppStream query, and is removed on uninstall.
+      - name: AppStream MetaInfo package acceptance
+        if: steps.release.outputs.publish != 'true'
+        run: ./scripts/smoke-linux-appstream-deb.sh "artifacts/linux/deb/ok-player_${{ steps.release.outputs.version }}_amd64.deb"
 
       # Checksum manifest for the user-facing installable assets: the Linux
       # app verifies a downloaded .deb against this manifest before handing

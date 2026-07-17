@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Canonical AppStream MetaInfo for OK Player (Linux track).
+     Packaging-neutral source shared by the Debian package and future
+     Flatpak/RPM lanes. Installed to /usr/share/metainfo/. -->
+<component type="desktop-application">
+  <id>com.befeast.okplayer</id>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <name>OK Player</name>
+  <summary>Elegant mpv-based media player</summary>
+
+  <description>
+    <p>
+      OK Player is a native desktop media player built over the mpv engine
+      (libmpv). It is a pure player: it opens a file or URL and plays it
+      beautifully, with a refined interface over mpv's full playback
+      capabilities.
+    </p>
+    <p>
+      This Linux build is an early GTK4/Rust alpha that tracks the Windows
+      reference design. It focuses on:
+    </p>
+    <ul>
+      <li>An immersive window with an auto-hiding on-screen control bar.</li>
+      <li>Comfortable subtitle handling with style presets and sync controls.</li>
+      <li>Clean and with-subtitles frame capture, frame stepping, and timecode navigation.</li>
+      <li>Folder-as-playlist playback with resume and per-file memory.</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">com.befeast.okplayer.desktop</launchable>
+
+  <categories>
+    <category>AudioVideo</category>
+    <category>Player</category>
+  </categories>
+
+  <keywords>
+    <keyword>mpv</keyword>
+    <keyword>video</keyword>
+    <keyword>audio</keyword>
+    <keyword>player</keyword>
+    <keyword>subtitles</keyword>
+  </keywords>
+
+  <url type="homepage">https://github.com/BeFeast/ok-player</url>
+  <url type="bugtracker">https://github.com/BeFeast/ok-player/issues</url>
+  <url type="vcs-browser">https://github.com/BeFeast/ok-player</url>
+
+  <developer id="com.befeast">
+    <name>BeFeast</name>
+  </developer>
+
+  <update_contact>noreply_at_github.com</update_contact>
+
+  <!-- No age-restricted content: the OARS type with no set attributes marks the
+       application as suitable for all audiences. -->
+  <content_rating type="oars-1.1" />
+
+  <provides>
+    <binary>ok-player</binary>
+  </provides>
+
+  <!-- Screenshots are a Flathub store requirement. The final approved Linux
+       captures are not yet published; the release gate in
+       scripts/smoke-linux-appstream.sh keeps this element honest rather than
+       shipping an invented URL. See docs/linux-appstream.md. -->
+
+  <releases>
+    <release version="0.1.0-linux-alpha.1" type="development" date="2026-07-17">
+      <description>
+        <p>First Linux GTK4/Rust alpha packaging foundation.</p>
+      </description>
+    </release>
+  </releases>
+</component>
