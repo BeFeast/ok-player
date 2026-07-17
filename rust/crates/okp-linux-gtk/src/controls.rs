@@ -11,6 +11,7 @@ pub(crate) const VOLUME_THUMB_SIZE: i32 = 14;
 pub(crate) const VOLUME_CAPSULE_OFFSET: i32 = 10;
 pub(crate) const VOLUME_COLLAPSE_MS: u64 = 120;
 pub(crate) const VOLUME_HOVER_GRACE_MS: u64 = 220;
+pub(crate) const AUDIO_TRACK_ICON_SIZE: i32 = 19;
 pub(crate) const TIMELINE_HEIGHT: i32 = 20;
 pub(crate) const TIMELINE_RAIL_HEIGHT: f64 = 4.0;
 pub(crate) const TIMELINE_THUMB_DIAMETER: f64 = 12.0;
@@ -911,6 +912,80 @@ fn draw_volume_track(cr: &cairo::Context, width: i32, height: i32, state: volume
     let _ = cr.fill();
 }
 
+/// Theme-independent audio-track identity used by both the OSC and its adaptive
+/// overflow row. The canonical Windows/Claude composition uses a music-track
+/// note here, keeping the speaker silhouette exclusively owned by Volume.
+pub(crate) fn audio_track_icon(size: i32) -> gtk::DrawingArea {
+    let icon = gtk::DrawingArea::new();
+    icon.add_css_class("okp-audio-track-icon");
+    icon.set_content_width(size);
+    icon.set_content_height(size);
+    icon.set_can_target(false);
+    icon.set_focusable(false);
+    let bounds_logged = Rc::new(Cell::new(false));
+    icon.set_draw_func(move |widget, cr, width, height| {
+        let glyph_size = size.min(width).min(height);
+        cr.save().ok();
+        cr.translate(
+            f64::from(width - glyph_size) / 2.0,
+            f64::from(height - glyph_size) / 2.0,
+        );
+        draw_audio_track_glyph(cr, glyph_size, glyph_size, widget.color());
+        cr.restore().ok();
+        if env::var_os("OKP_DEBUG_OSC_LAYOUT").is_some()
+            && !bounds_logged.replace(true)
+            && let Some(label) = widget.widget_name().strip_prefix("okp-debug-")
+            && let Some(root) = widget.root()
+            && let Ok(window) = root.downcast::<gtk::Window>()
+            && let Some(bounds) = widget.compute_bounds(&window)
+        {
+            eprintln!(
+                "osc-widget-bounds: label={label} x={} y={} width={} height={}",
+                bounds.x().round() as i32,
+                bounds.y().round() as i32,
+                bounds.width().round() as i32,
+                bounds.height().round() as i32
+            );
+        }
+    });
+    icon
+}
+
+pub(crate) fn draw_audio_track_glyph(
+    cr: &cairo::Context,
+    width: i32,
+    height: i32,
+    color: gdk::RGBA,
+) {
+    let scale = f64::from(width.min(height)) / 24.0;
+    let offset_x = (f64::from(width) - 24.0 * scale) / 2.0;
+    let offset_y = (f64::from(height) - 24.0 * scale) / 2.0;
+    cr.save().ok();
+    cr.translate(offset_x, offset_y);
+    cr.scale(scale, scale);
+    cr.set_source_rgba(
+        f64::from(color.red()),
+        f64::from(color.green()),
+        f64::from(color.blue()),
+        f64::from(color.alpha()),
+    );
+    cr.set_line_width(1.7);
+    cr.set_line_cap(cairo::LineCap::Round);
+    cr.set_line_join(cairo::LineJoin::Round);
+
+    // Double eighth note from the canonical compact-mode audio action.
+    cr.move_to(9.0, 18.0);
+    cr.line_to(9.0, 7.0);
+    cr.line_to(18.0, 5.0);
+    cr.line_to(18.0, 16.0);
+    let _ = cr.stroke();
+    cr.arc(6.5, 18.0, 2.2, 0.0, std::f64::consts::TAU);
+    let _ = cr.stroke();
+    cr.arc(15.5, 16.0, 2.2, 0.0, std::f64::consts::TAU);
+    let _ = cr.stroke();
+    cr.restore().ok();
+}
+
 pub(crate) fn build_controls(
     window: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
@@ -938,12 +1013,15 @@ pub(crate) fn build_controls(
     subtitle_button.set_tooltip_text(Some("Subtitles"));
     subtitle_button.set_sensitive(false);
 
-    // Headphones glyph (not a second speaker): the volume control owns the
-    // speaker/level icon, so the audio-track/output action must read as a
-    // distinct semantic to keep the two OSC buttons tellable apart.
-    let audio_button = gtk::MenuButton::builder()
-        .icon_name("audio-headphones-symbolic")
-        .build();
+    // Render the canonical music-track note ourselves instead of asking the
+    // host icon theme for a symbolic name. Packaged desktops may omit optional
+    // theme glyphs; a missing resource must never leave an empty OSC button.
+    let audio_button = gtk::MenuButton::new();
+    let audio_icon = audio_track_icon(AUDIO_TRACK_ICON_SIZE);
+    if env::var_os("OKP_DEBUG_OSC_LAYOUT").is_some() {
+        audio_icon.set_widget_name("okp-debug-audio-osc-icon");
+    }
+    audio_button.set_child(Some(&audio_icon));
     audio_button.set_has_frame(false);
     audio_button.add_css_class("okp-control-button");
     audio_button.add_css_class("okp-icon-button");
@@ -1250,6 +1328,9 @@ pub(crate) fn build_controls(
     audio_button.set_popover(Some(&audio_popover));
     let audio_state = Rc::clone(&state);
     audio_popover.connect_show(move |popover| {
+        if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+            eprintln!("interaction: audio-popover=shown");
+        }
         populate_audio_popover(popover, Rc::clone(&audio_state));
     });
 

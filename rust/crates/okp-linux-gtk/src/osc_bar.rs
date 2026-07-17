@@ -61,6 +61,7 @@ mod imp {
         /// menu at the current width. The overflow popover reads it to surface
         /// the collapsed actions. Written only when the set actually changes.
         pub(super) collapsed_sink: RefCell<Option<Rc<RefCell<Vec<OscControlId>>>>>,
+        pub(super) debug_last_size: Cell<Option<(i32, i32)>>,
     }
 
     #[glib::object_subclass]
@@ -117,6 +118,8 @@ mod imp {
             let slots = measure_slots(&children);
             let layout = osc_overflow::plan(&slots, width, SPACING, PAD_HORIZONTAL, PAD_HORIZONTAL);
             let content_height = (height - PAD_VERTICAL * 2).max(0);
+            let log_layout = env::var_os("OKP_DEBUG_OSC_LAYOUT").is_some()
+                && self.debug_last_size.replace(Some((width, height))) != Some((width, height));
 
             if let Some(sink) = self.collapsed_sink.borrow().as_ref() {
                 let collapsed = layout.collapsed();
@@ -136,6 +139,16 @@ mod imp {
                     // Unmaps the control: it stops being painted, focusable, or
                     // hit-testable, and its action lives on in the overflow menu.
                     child.set_child_visible(false);
+                    if log_layout
+                        && matches!(
+                            id,
+                            OscControlId::Volume | OscControlId::Audio | OscControlId::Overflow
+                        )
+                    {
+                        eprintln!(
+                            "osc-layout: id={id:?} visible=false bar_width={width} bar_height={height}"
+                        );
+                    }
                     continue;
                 }
                 child.set_child_visible(true);
@@ -149,6 +162,20 @@ mod imp {
                 // Each control is allocated the content height and centres
                 // itself with its own valign, matching the previous GtkBox.
                 child.allocate(placement.width, content_height, -1, Some(transform));
+                if log_layout
+                    && matches!(
+                        id,
+                        OscControlId::Volume | OscControlId::Audio | OscControlId::Overflow
+                    )
+                {
+                    eprintln!(
+                        "osc-layout: id={id:?} visible=true x={} y={} width={} height={} bar_width={width} bar_height={height}",
+                        PAD_HORIZONTAL + placement.x,
+                        PAD_VERTICAL,
+                        placement.width,
+                        content_height
+                    );
+                }
             }
         }
 

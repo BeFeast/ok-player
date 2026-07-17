@@ -357,6 +357,7 @@ fn gtk_identity_uses_vector_widgets_instead_of_host_font_marks() {
 #[test]
 fn volume_and_audio_track_actions_use_distinct_icon_identities() {
     let controls = include_str!("controls.rs");
+    let track_popovers = include_str!("track_popovers.rs");
 
     // Volume keeps the speaker/level glyph in both resting and reactive states.
     assert!(
@@ -364,21 +365,48 @@ fn volume_and_audio_track_actions_use_distinct_icon_identities() {
         "volume control must keep the speaker/level icon"
     );
 
-    // The audio-track/output action reads as a distinct semantic (headphones),
-    // never a second speaker glyph, so the two OSC buttons stay tellable apart.
+    // The audio-track/output action reads as a distinct music-track semantic,
+    // rendered in-process so a sparse packaged icon theme cannot erase it.
     assert!(
-        controls.contains(".icon_name(\"audio-headphones-symbolic\")"),
-        "audio-track/output action must use the distinct headphones glyph"
+        controls.contains("audio_track_icon(AUDIO_TRACK_ICON_SIZE)"),
+        "audio-track/output action must use the bundled music-track glyph"
     );
     assert!(
         !controls.contains("audio-speakers-symbolic"),
         "regression guard: no second speaker glyph on the audio action"
     );
+    assert!(!controls.contains("audio-headphones-symbolic"));
+    assert!(track_popovers.contains("audio_command_button(\"Audio tracks / output\")"));
 
     // Distinct accessible names and tooltips: Volume versus Audio tracks / output.
     assert!(controls.contains("gtk::accessible::Property::Label(\"Volume\")"));
     assert!(controls.contains("set_tooltip_text(Some(\"Audio tracks / output\"))"));
     assert!(controls.contains("gtk::accessible::Property::Label(\"Audio tracks / output\")"));
+}
+
+#[test]
+fn audio_track_glyph_paints_real_pixels_without_an_icon_theme() {
+    let mut surface =
+        cairo::ImageSurface::create(cairo::Format::ARgb32, 19, 19).expect("audio glyph surface");
+    let cr = cairo::Context::new(&surface).expect("audio glyph context");
+    draw_audio_track_glyph(&cr, 19, 19, gdk::RGBA::WHITE);
+    drop(cr);
+    surface.flush();
+
+    let painted_bytes = surface
+        .data()
+        .expect("audio glyph pixels")
+        .iter()
+        .filter(|&&channel| channel != 0)
+        .count();
+    assert!(
+        painted_bytes > 80,
+        "music-track glyph rendered no usable pixels"
+    );
+    assert!(
+        painted_bytes < 900,
+        "music-track glyph unexpectedly filled its allocation"
+    );
 }
 
 #[test]
