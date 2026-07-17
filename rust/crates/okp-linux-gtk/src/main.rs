@@ -17,6 +17,7 @@ use gtk::pango;
 use gtk::prelude::*;
 use okp_core::candidate_channel::{self, CandidateAppImage, CandidateFeed, CandidateUpdate};
 use okp_core::clip_export::{self, ClipExportEligibility, ClipExportLimits, ClipExportTooling};
+use okp_core::companion_window::{self as companion_window_core, CompanionWindowKind};
 use okp_core::gapless::{GaplessPlaybackCapability, PlaylistTransitionPath};
 use okp_core::hdr::HdrHandlingState;
 use okp_core::key_press::KeyPressLatch;
@@ -49,6 +50,7 @@ use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 mod about;
 mod branding;
 mod compact_mode;
+mod companion_window;
 mod controls;
 mod css;
 mod dialogs;
@@ -78,6 +80,7 @@ mod window;
 pub(crate) use about::*;
 pub(crate) use branding::*;
 pub(crate) use compact_mode::*;
+pub(crate) use companion_window::*;
 pub(crate) use controls::*;
 pub(crate) use css::*;
 pub(crate) use dialogs::*;
@@ -236,6 +239,7 @@ struct PlayerState {
     /// from this eagerly-flipped intent and reconciles it with the `fullscreened`
     /// notify. See [`fullscreen_toggle`].
     fullscreen_toggle: fullscreen_toggle::FullscreenToggle,
+    companion_windows: CompanionWindows,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

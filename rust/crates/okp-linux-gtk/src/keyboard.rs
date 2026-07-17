@@ -135,12 +135,6 @@ pub(crate) fn connect_keyboard(
     connect_space_release(&controller, Rc::clone(&space_latch));
     let shortcut_window = window.clone();
     controller.connect_key_pressed(move |_, key, _, modifiers| {
-        // The in-player Media Information surface owns its keyboard scope. Let
-        // focused modal controls receive keys without also driving playback.
-        if media_info_modal_is_open(&shortcut_window) {
-            return glib::Propagation::Proceed;
-        }
-
         if let Some(propagation) =
             handle_player_space(&shortcut_window, &space_latch, key, modifiers, || {
                 chrome.show_for_activity();
@@ -148,11 +142,11 @@ pub(crate) fn connect_keyboard(
                     eprintln!("interaction: keyboard-play-pause-dispatch context=player");
                 }
                 toggle_play_pause(&state);
+                log_keyboard_interaction("play-pause");
             })
         {
             return propagation;
         }
-
         chrome.show_for_activity();
 
         let action = {
@@ -163,6 +157,7 @@ pub(crate) fn connect_keyboard(
         match action {
             Some(ShortcutAction::PlayPause) => {
                 toggle_play_pause(&state);
+                log_keyboard_interaction("play-pause");
                 glib::Propagation::Stop
             }
             Some(ShortcutAction::SeekBack) => {
@@ -171,6 +166,7 @@ pub(crate) fn connect_keyboard(
             }
             Some(ShortcutAction::SeekForward) => {
                 seek_relative_with_readout(&state, &status_toast, 5.0);
+                log_keyboard_interaction("seek-forward");
                 glib::Propagation::Stop
             }
             Some(ShortcutAction::FrameForward) => {
@@ -195,6 +191,7 @@ pub(crate) fn connect_keyboard(
             }
             Some(ShortcutAction::VolumeUp) => {
                 adjust_volume(&state, &status_toast, 5.0);
+                log_keyboard_interaction("volume-up");
                 glib::Propagation::Stop
             }
             Some(ShortcutAction::Mute) => {
@@ -275,6 +272,7 @@ pub(crate) fn connect_keyboard(
             }
             Some(ShortcutAction::Fullscreen) => {
                 toggle_fullscreen(&shortcut_window, &state);
+                log_keyboard_interaction("fullscreen");
                 glib::Propagation::Stop
             }
             Some(ShortcutAction::EscapeFullscreen) if shortcut_window.is_fullscreen() => {
@@ -298,6 +296,12 @@ pub(crate) fn connect_keyboard(
     window.add_controller(controller);
 }
 
+fn log_keyboard_interaction(action: &str) {
+    if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+        eprintln!("interaction: keyboard={action}");
+    }
+}
+
 pub(crate) fn connect_progress_persistence(
     window: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
@@ -310,6 +314,7 @@ pub(crate) fn connect_progress_persistence(
 
     let close_state = Rc::clone(&state);
     window.connect_close_request(move |_| {
+        close_companion_windows(&close_state);
         save_current_progress(&close_state, false);
         glib::Propagation::Proceed
     });

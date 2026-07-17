@@ -455,10 +455,15 @@ Z-order, bottom → top:
 1. **Video plane** (mpv render surface; black when no media).
 2. **Mica titlebar** (translucent, fused, always present; auto-hides in fullscreen).
 3. **OSC** (bottom floating bar) + **seek thumbnail tooltip**.
-4. **Overlays/panels** (Chapters, Playlist, Settings) — slide-in from edges.
+4. **Overlays/panels** (Chapters, Playlist) — slide-in from edges.
 5. **Quick-switchers** (Subtitle/Audio popovers) — anchored to their OSC buttons.
 6. **OSD toasts** (volume, speed, subtitle-delay, seek readout) — transient, top-center or corner.
 7. **Context menu** — at cursor.
+
+Long-lived app-owned utilities such as Settings and Media Information are separate non-modal,
+movable, resizable top-level windows. They never block player input, never force always-on-top,
+reuse an existing instance when reopened, and close with their owning player. Confirmations,
+destructive prompts, errors that require acknowledgement, and file pickers remain modal.
 
 > **Global visibility rule (one rule everywhere):** chrome (titlebar + OSC + cursor) shows on pointer movement / keypress and auto-hides after the **canonical idle timeout (~2.5 s, the single value defined in P1-D6) only while playing**. While paused, chrome stays visible. Any open panel, popover, or context menu **pins** chrome and suspends the idle timer.
 
@@ -577,7 +582,9 @@ Track list (name + lang + channels), current selected; **Audio delay −/+** wit
 **States:** Single track · Multi-track (radio list) · Delay adjusting (live value + OSD echo) · Device changing (brief "switching output").
 
 #### 2.9 Settings — `[MVP]`
-**Shell:** left rail of 8 panels (Fluent nav) + right content pane; opens as its own window (preferred) or modal overlay; search box at top of rail (nice-to-have). Curated-simplicity = 3/10 — smart defaults visible, power tucked.
+**Shell:** left rail of 8 panels (Fluent nav) + right content pane; opens as its own non-modal,
+movable, resizable window; search box at top of rail (nice-to-have). Reopening raises the existing
+instance instead of stacking another. Curated-simplicity = 3/10 — smart defaults visible, power tucked.
 
 | Panel | Contains | Notes |
 |---|---|---|
@@ -659,6 +666,8 @@ Curated defaults (`?` opens a cheat overlay):
 - **Open-from-Explorer = new window** by default; **configurable** (Settings → Playback/Integration) to "reuse existing window / add to queue."
 - **Window modes (all MVP):** Standard ↔ Fullscreen ↔ Mini-player/PiP ↔ Compact music; transitions animate (mac-style).
 - **Always-on-top:** intrinsic to mini-player; manual toggle in standard mode.
+- **Companion windows:** Settings and Media Information remain independent, non-modal, resizable
+  utilities. Closing them never pauses or closes playback; closing the player cleans them up.
 
 ---
 

@@ -2611,15 +2611,15 @@ const OKP_STYLESHEET: &str = "
             background: rgba(0, 0, 0, 0.07);
         }
 
-        .okp-media-info-modal-layer {
+        window.okp-companion-window,
+        window.okp-companion-window > contents {
             background: transparent;
+            box-shadow: none;
+            border: none;
         }
 
-        /* GTK4 CSS has no portable backdrop-filter. Keep the canonical 50%
-         * black scrim as the deterministic fallback; compositor blur remains
-         * an operator-QA concern rather than an unsupported CSS declaration. */
-        .okp-media-info-backdrop {
-            background: rgba(0, 0, 0, 0.50);
+        .okp-companion-resize-zone {
+            background: transparent;
         }
 
         .okp-media-info-card {
@@ -2627,7 +2627,7 @@ const OKP_STYLESHEET: &str = "
             color: @okp_ink;
             border: 1px solid rgba(0, 0, 0, 0.08);
             border-radius: 11px;
-            box-shadow: 0 32px 90px rgba(0, 0, 0, 0.50);
+            box-shadow: 0 12px 34px rgba(0, 0, 0, 0.28);
         }
 
         .okp-media-info-header {
@@ -2862,6 +2862,90 @@ const OKP_STYLESHEET: &str = "
         button.okp-media-info-done:focus-visible {
             outline: none;
             box-shadow: 0 0 0 2px alpha(@okp_teal, 0.42);
+        }
+
+        window.okp-media-info-window.is-dark .okp-media-info-card,
+        window.okp-media-info-window.is-dark .okp-media-info-stack,
+        window.okp-media-info-window.is-dark .okp-media-info-scroller,
+        window.okp-media-info-window.is-dark .okp-media-info-scroller > viewport {
+            background: #17191d;
+            color: rgba(255, 255, 255, 0.94);
+        }
+
+        window.okp-media-info-window.is-dark .okp-media-info-card {
+            border-color: rgba(255, 255, 255, 0.10);
+        }
+
+        window.okp-media-info-window.is-dark .okp-media-info-header,
+        window.okp-media-info-window.is-dark .okp-media-info-footer {
+            border-color: rgba(255, 255, 255, 0.08);
+        }
+
+        window.okp-media-info-window.is-dark .okp-media-info-title,
+        window.okp-media-info-window.is-dark .okp-info-value,
+        window.okp-media-info-window.is-dark button.okp-media-info-copy {
+            color: rgba(255, 255, 255, 0.94);
+        }
+
+        window.okp-media-info-window.is-dark .okp-media-info-subtitle,
+        window.okp-media-info-window.is-dark .okp-media-info-path,
+        window.okp-media-info-window.is-dark .okp-info-label,
+        window.okp-media-info-window.is-dark .okp-info-track-kind,
+        window.okp-media-info-window.is-dark .okp-media-info-empty {
+            color: rgba(255, 255, 255, 0.56);
+        }
+
+        window.okp-media-info-window.is-dark .okp-media-info-tab-strip,
+        window.okp-media-info-window.is-dark button.okp-media-info-close,
+        window.okp-media-info-window.is-dark button.okp-media-info-copy {
+            background: rgba(255, 255, 255, 0.07);
+            border-color: rgba(255, 255, 255, 0.08);
+        }
+
+        window.okp-media-info-window.is-dark button.okp-media-info-tab {
+            color: rgba(255, 255, 255, 0.58);
+        }
+
+        window.okp-media-info-window.is-dark button.okp-media-info-tab.is-active,
+        window.okp-media-info-window.is-dark .okp-info-section {
+            background: rgba(255, 255, 255, 0.07);
+            border-color: rgba(255, 255, 255, 0.08);
+            color: rgba(255, 255, 255, 0.94);
+        }
+
+        window.okp-media-info-window.is-dark button.okp-media-info-tab.is-active,
+        window.okp-media-info-window.is-dark .okp-info-section-title,
+        window.okp-media-info-window.is-dark .okp-info-row.is-highlight .okp-info-value,
+        window.okp-media-info-window.is-dark .okp-info-track-current {
+            color: @okp_accent;
+        }
+
+        window.okp-media-info-window.is-dark .okp-media-info-scroller scrollbar slider {
+            background: rgba(255, 255, 255, 0.24);
+        }
+
+        window.okp-media-info-window.is-high-contrast .okp-media-info-card,
+        window.okp-media-info-window.is-high-contrast .okp-media-info-stack,
+        window.okp-media-info-window.is-high-contrast .okp-media-info-scroller,
+        window.okp-media-info-window.is-high-contrast .okp-media-info-scroller > viewport,
+        window.okp-media-info-window.is-high-contrast .okp-info-section {
+            background: #000000;
+            border-color: #ffffff;
+            color: #ffffff;
+        }
+
+        window.okp-media-info-window.is-high-contrast .okp-media-info-title,
+        window.okp-media-info-window.is-high-contrast .okp-media-info-subtitle,
+        window.okp-media-info-window.is-high-contrast .okp-media-info-path,
+        window.okp-media-info-window.is-high-contrast .okp-info-label,
+        window.okp-media-info-window.is-high-contrast .okp-info-value,
+        window.okp-media-info-window.is-high-contrast .okp-info-section-title,
+        window.okp-media-info-window.is-high-contrast .okp-info-track-kind,
+        window.okp-media-info-window.is-high-contrast .okp-media-info-empty,
+        window.okp-media-info-window.is-high-contrast button.okp-media-info-tab,
+        window.okp-media-info-window.is-high-contrast button.okp-media-info-copy,
+        window.okp-media-info-window.is-high-contrast button.okp-media-info-close {
+            color: #ffffff;
         }
 
         window.okp-command-dialog {
