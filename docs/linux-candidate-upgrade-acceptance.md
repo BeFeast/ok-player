@@ -104,5 +104,6 @@ For Debian, `installable_sha256` and `update_payload_sha256` both identify the `
 manifest-bound full `.nupkg` consumed by Velopack. Do not substitute one for the other.
 
 The validator exits non-zero for a missing lane/check, non-monotonic versions, mismatched restart
-identity, changed user state, changed public feed, invalid hashes, or any non-PASS row. A successful
-result is the cleanup authorization; screenshots, chat messages, or a verbal operator claim are not.
+identity, changed user state, changed public feed, invalid or lane-inconsistent updater-payload
+hashes, or any non-PASS row. A successful result is the cleanup authorization; screenshots, chat
+messages, or a verbal operator claim are not.

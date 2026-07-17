@@ -629,6 +629,27 @@ fn validate_candidate_upgrade_lane(lane: &CandidateUpgradeLaneEvidence, errors: 
             &stage.update_payload_sha256,
             errors,
         );
+        match lane.kind {
+            ArtifactKind::Debian
+                if !stage
+                    .installable_sha256
+                    .eq_ignore_ascii_case(&stage.update_payload_sha256) =>
+            {
+                errors.push(format!(
+                    "Debian {name} update payload does not match its installable .deb"
+                ));
+            }
+            ArtifactKind::AppImage
+                if stage
+                    .installable_sha256
+                    .eq_ignore_ascii_case(&stage.update_payload_sha256) =>
+            {
+                errors.push(format!(
+                    "AppImage {name} update payload must identify the distinct Velopack full package"
+                ));
+            }
+            _ => {}
+        }
     }
 
     if compare_versions(
@@ -871,21 +892,26 @@ mod tests {
     }
 
     fn passing_candidate_upgrade_evidence() -> CandidateUpgradeEvidence {
-        let stage = |version: &str, digest: char| CandidateUpgradeStage {
-            version: version.to_owned(),
-            commit_sha: digest.to_string().repeat(40),
-            feed_sha256: digest.to_string().repeat(64),
-            installable_sha256: digest.to_string().repeat(64),
-            update_payload_sha256: digest.to_string().repeat(64),
-        };
+        let stage =
+            |version: &str, digest: char, update_payload_digest: char| CandidateUpgradeStage {
+                version: version.to_owned(),
+                commit_sha: digest.to_string().repeat(40),
+                feed_sha256: digest.to_string().repeat(64),
+                installable_sha256: digest.to_string().repeat(64),
+                update_payload_sha256: update_payload_digest.to_string().repeat(64),
+            };
         let lane = |kind| {
+            let payload_digests = match kind {
+                ArtifactKind::Debian => ['a', 'b', 'c', 'f'],
+                ArtifactKind::AppImage => ['1', '2', '3', '4'],
+            };
             CandidateUpgradeLaneEvidence {
             kind,
-            public_predecessor: stage("0.1.0-linux-alpha.112", 'a'),
-            defective_candidate: stage("0.11.0-beta.0.10", 'b'),
+            public_predecessor: stage("0.1.0-linux-alpha.112", 'a', payload_digests[0]),
+            defective_candidate: stage("0.11.0-beta.0.10", 'b', payload_digests[1]),
             recovery_path: CandidateRecoveryPath::ExplicitBootstrap,
-            candidate_n: stage("0.11.0-beta.0.12", 'c'),
-            candidate_n_plus_one: stage("0.11.0-beta.0.13", 'f'),
+            candidate_n: stage("0.11.0-beta.0.12", 'c', payload_digests[2]),
+            candidate_n_plus_one: stage("0.11.0-beta.0.13", 'f', payload_digests[3]),
             candidate_n_plus_one_applied_via_settings: true,
             restarted_version: "0.11.0-beta.0.13".to_owned(),
             restarted_commit_sha: "f".repeat(40),
@@ -1014,6 +1040,33 @@ mod tests {
             errors
                 .iter()
                 .any(|error| error.contains("defective candidate does not match"))
+        );
+    }
+
+    #[test]
+    fn candidate_upgrade_evidence_rejects_copied_appimage_installable_sha() {
+        let mut evidence = passing_candidate_upgrade_evidence();
+        let appimage = evidence
+            .lanes
+            .iter_mut()
+            .find(|lane| lane.kind == ArtifactKind::AppImage)
+            .expect("AppImage lane");
+        for stage in [
+            &mut appimage.public_predecessor,
+            &mut appimage.defective_candidate,
+            &mut appimage.candidate_n,
+            &mut appimage.candidate_n_plus_one,
+        ] {
+            stage.update_payload_sha256 = stage.installable_sha256.clone();
+        }
+
+        let errors = evidence.validate_cleanup_ready().unwrap_err();
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|error| error.contains("distinct Velopack full package"))
+                .count(),
+            4
         );
     }
 
