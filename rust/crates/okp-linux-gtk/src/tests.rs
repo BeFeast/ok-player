@@ -261,6 +261,33 @@ fn gtk_identity_uses_vector_widgets_instead_of_host_font_marks() {
 }
 
 #[test]
+fn volume_and_audio_track_actions_use_distinct_icon_identities() {
+    let controls = include_str!("controls.rs");
+
+    // Volume keeps the speaker/level glyph in both resting and reactive states.
+    assert!(
+        controls.contains("gtk::Image::from_icon_name(\"audio-volume-high-symbolic\")"),
+        "volume control must keep the speaker/level icon"
+    );
+
+    // The audio-track/output action reads as a distinct semantic (headphones),
+    // never a second speaker glyph, so the two OSC buttons stay tellable apart.
+    assert!(
+        controls.contains(".icon_name(\"audio-headphones-symbolic\")"),
+        "audio-track/output action must use the distinct headphones glyph"
+    );
+    assert!(
+        !controls.contains("audio-speakers-symbolic"),
+        "regression guard: no second speaker glyph on the audio action"
+    );
+
+    // Distinct accessible names and tooltips: Volume versus Audio tracks / output.
+    assert!(controls.contains("gtk::accessible::Property::Label(\"Volume\")"));
+    assert!(controls.contains("set_tooltip_text(Some(\"Audio tracks / output\"))"));
+    assert!(controls.contains("gtk::accessible::Property::Label(\"Audio tracks / output\")"));
+}
+
+#[test]
 fn settings_stays_in_the_width_safe_bottom_more_menu() {
     let window = include_str!("window.rs");
     let controls = include_str!("controls.rs");
