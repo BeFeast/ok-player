@@ -1998,6 +1998,37 @@ fn subtitle_presentation_overrides_persist_the_applied_values() {
 }
 
 #[test]
+fn new_source_load_resets_global_subtitle_scale_before_dispatch() {
+    let mut mpv = Mpv::new().expect("libmpv must be loadable for the source-boundary test");
+    mpv.start_event_pump();
+    mpv.set_subtitle_scale(1.4)
+        .expect("per-file subtitle size should apply");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    while (mpv.observed_subtitle_scale() - 1.4).abs() >= 0.005
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!((mpv.observed_subtitle_scale() - 1.4).abs() < 0.005);
+
+    let mut dispatched = false;
+    load_new_source_with_global_subtitle_scale(&mpv, 1.0, |mpv| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while (mpv.observed_subtitle_scale() - 1.0).abs() >= 0.005
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!((mpv.observed_subtitle_scale() - 1.0).abs() < 0.005);
+        dispatched = true;
+        Ok(())
+    })
+    .expect("source load should dispatch after the reset");
+
+    assert!(dispatched);
+}
+
+#[test]
 fn player_popovers_have_scoped_presenter_classes() {
     assert_eq!(PlayerPopoverKind::Speed.css_class(), "okp-speed-popover");
     assert_eq!(

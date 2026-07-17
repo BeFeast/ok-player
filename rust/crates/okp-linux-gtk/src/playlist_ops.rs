@@ -110,7 +110,7 @@ pub(crate) fn load_media_url(state: &Rc<RefCell<PlayerState>>, url: String) {
 
     let result = {
         let state = state.borrow();
-        state.mpv.as_ref().map(|mpv| mpv.load_url(&url))
+        load_new_source(&state, |mpv| mpv.load_url(&url))
     };
 
     match result {
@@ -137,7 +137,7 @@ pub(crate) fn load_media_path_internal(
 
     let result = {
         let state = state.borrow();
-        state.mpv.as_ref().map(|mpv| mpv.load_file(&path))
+        load_new_source(&state, |mpv| mpv.load_file(&path))
     };
 
     match result {
@@ -170,7 +170,7 @@ pub(crate) fn load_media_path_with_playlist(
 
     let result = {
         let state = state.borrow();
-        state.mpv.as_ref().map(|mpv| mpv.load_file(&path))
+        load_new_source(&state, |mpv| mpv.load_file(&path))
     };
 
     match result {
@@ -279,7 +279,7 @@ pub(crate) fn load_media_url_with_playlist(
 
     let result = {
         let state = state.borrow();
-        state.mpv.as_ref().map(|mpv| mpv.load_url(&url))
+        load_new_source(&state, |mpv| mpv.load_url(&url))
     };
 
     match result {
@@ -297,6 +297,29 @@ pub(crate) fn load_media_url_with_playlist(
             true
         }
     }
+}
+
+fn load_new_source(
+    state: &PlayerState,
+    load: impl FnOnce(&Mpv) -> Result<(), okp_mpv::MpvError>,
+) -> Option<Result<(), okp_mpv::MpvError>> {
+    let mpv = state.mpv.as_ref()?;
+    Some(load_new_source_with_global_subtitle_scale(
+        mpv,
+        state.settings.subtitle_scale(),
+        load,
+    ))
+}
+
+pub(crate) fn load_new_source_with_global_subtitle_scale(
+    mpv: &Mpv,
+    global_scale: f64,
+    load: impl FnOnce(&Mpv) -> Result<(), okp_mpv::MpvError>,
+) -> Result<(), okp_mpv::MpvError> {
+    if let Err(error) = mpv.set_subtitle_scale(global_scale) {
+        eprintln!("Failed to reset subtitle size for new media: {error}");
+    }
+    load(mpv)
 }
 
 pub(crate) fn remember_loaded_url_with_playlist(
