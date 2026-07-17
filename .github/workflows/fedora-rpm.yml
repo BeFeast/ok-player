@@ -1,0 +1,28 @@
+name: Fedora RPM
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  rpm:
+    name: Fedora ${{ matrix.release }} native RPM
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        release: [43, 44]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build in clean mock chroot and test package lifecycle
+        run: sudo -E ./scripts/test-linux-rpm.sh "${{ matrix.release }}"
+
+      - name: Upload RPM evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fedora-${{ matrix.release }}-rpm
+          path: artifacts/linux/fedora-${{ matrix.release }}/
+          if-no-files-found: warn

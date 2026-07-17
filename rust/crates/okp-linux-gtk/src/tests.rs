@@ -3795,6 +3795,40 @@ fn apply_endfile_error_marks_current_local_source_failed() {
 }
 
 #[test]
+fn apply_endfile_error_classifies_missing_codec_from_event_payload() {
+    let path = PathBuf::from("/media/movie.mkv");
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(path),
+        media_load_state: network_media::MediaLoadState::Loading,
+        ..PlayerState::default()
+    }));
+
+    apply_endfile_error_with_diagnostics(
+        &state,
+        -13,
+        Some("/media/movie.mkv"),
+        &["vd: Failed to initialize a decoder for codec 'hevc'.".to_owned()],
+    );
+
+    let state = state.borrow();
+    let diagnostic = state
+        .last_load_diagnostic
+        .as_ref()
+        .expect("missing codec should produce a diagnostic");
+    assert_eq!(
+        diagnostic.kind,
+        okp_core::playback_failure::PlaybackFailureKind::MissingCodec
+    );
+    assert_eq!(diagnostic.title, "Codec unavailable");
+    assert!(
+        state
+            .last_load_error
+            .as_deref()
+            .is_some_and(|detail| detail.contains("Failed to initialize a decoder for codec"))
+    );
+}
+
+#[test]
 fn apply_endfile_error_drops_stale_error_for_a_superseded_source() {
     // URL A fails, then the user starts URL B before the next poll drains the
     // queue. A's stale EndFile::Error carries A's path; the current source is B,

@@ -26,6 +26,7 @@ pub mod network_path;
 pub mod nfo_metadata;
 pub mod ok_player_uri;
 pub mod osc_overflow;
+pub mod playback_failure;
 pub mod player;
 pub mod playlist;
 pub mod poster_frame;

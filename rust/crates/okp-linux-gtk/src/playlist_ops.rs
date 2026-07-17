@@ -2,6 +2,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::*;
 
+fn failure_environment() -> okp_core::playback_failure::PlaybackFailureEnvironment {
+    if APP_PACKAGE_FLAVOR == "fedora-native" {
+        okp_core::playback_failure::PlaybackFailureEnvironment::FedoraNative
+    } else {
+        okp_core::playback_failure::PlaybackFailureEnvironment::Generic
+    }
+}
+
+fn diagnostic_from_reason(reason: &str) -> PlaybackFailureDiagnostic {
+    okp_core::playback_failure::diagnose_mpv_failure(0, &[reason.to_owned()], failure_environment())
+}
+
 /// Record a network-source load failure: transition the transport-surface model to
 /// `Failed`, remember the URL for Retry, and store the short copyable reason. The
 /// the in-canvas failure card can offer Retry and Copy details.
@@ -9,6 +21,7 @@ pub(crate) fn set_load_failure(state: &Rc<RefCell<PlayerState>>, url: String, re
     let mut state = state.borrow_mut();
     state.media_load_state = network_media::MediaLoadState::Failed;
     state.retry_load_source = Some(network_media::LoadFailureSource::url(url));
+    state.last_load_diagnostic = Some(diagnostic_from_reason(&reason));
     state.last_load_error = Some(reason);
 }
 
@@ -22,6 +35,7 @@ pub(crate) fn set_local_load_failure(
     let mut state = state.borrow_mut();
     state.media_load_state = network_media::MediaLoadState::Failed;
     state.retry_load_source = Some(network_media::LoadFailureSource::local(path));
+    state.last_load_diagnostic = Some(diagnostic_from_reason(&reason));
     state.last_load_error = Some(reason);
 }
 
@@ -33,10 +47,20 @@ pub(crate) fn set_local_load_failure(
 /// reason. If no source is current anymore, the event is stale even when mpv omitted
 /// the ended path. A `None` ended path only falls back to applying while a source is
 /// active, so a missing tag never under-reports a genuine failure.
+#[cfg(test)]
 pub(crate) fn apply_endfile_error(
     state: &Rc<RefCell<PlayerState>>,
     error: std::ffi::c_int,
     ended_path: Option<&str>,
+) {
+    apply_endfile_error_with_diagnostics(state, error, ended_path, &[]);
+}
+
+pub(crate) fn apply_endfile_error_with_diagnostics(
+    state: &Rc<RefCell<PlayerState>>,
+    error: std::ffi::c_int,
+    ended_path: Option<&str>,
+    diagnostics: &[String],
 ) {
     eprintln!("libmpv ended the source with error {error}");
     let current_source = {
@@ -65,9 +89,12 @@ pub(crate) fn apply_endfile_error(
         return;
     }
     let mut state = state.borrow_mut();
+    let diagnostic =
+        okp_core::playback_failure::diagnose_mpv_failure(error, diagnostics, failure_environment());
     state.media_load_state = network_media::MediaLoadState::Failed;
     state.retry_load_source = Some(current_source);
-    state.last_load_error = Some(format!("libmpv error {error}"));
+    state.last_load_error = Some(diagnostic.details.clone());
+    state.last_load_diagnostic = Some(diagnostic);
 }
 
 pub(crate) fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
@@ -95,6 +122,7 @@ pub(crate) fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
     state.media_load_state = network_media::MediaLoadState::Idle;
     state.retry_load_source = None;
     state.last_load_error = None;
+    state.last_load_diagnostic = None;
 }
 
 pub(crate) fn load_media_path(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
@@ -258,6 +286,7 @@ pub(crate) fn remember_loaded_media_with_playlist(
     state.media_load_state = network_media::MediaLoadState::Loading;
     state.retry_load_source = Some(retry_source);
     state.last_load_error = None;
+    state.last_load_diagnostic = None;
 }
 
 pub(crate) fn remember_loaded_url(state: &Rc<RefCell<PlayerState>>, url: String) {
@@ -377,6 +406,7 @@ pub(crate) fn remember_loaded_url_with_playlist(
         .clone()
         .map(network_media::LoadFailureSource::url);
     state.last_load_error = None;
+    state.last_load_diagnostic = None;
 }
 
 pub(crate) fn load_playlist_item_with_playlist(

@@ -254,6 +254,7 @@ pub enum MpvEvent {
     EndFile {
         reason: EndFileReason,
         path: Option<String>,
+        diagnostics: Vec<String>,
     },
     CommandReply {
         request_id: u64,
@@ -1038,6 +1039,7 @@ impl Mpv {
         this.set_option_if_supported("secondary-sub-ass-override", "scale")?;
         this.apply_options(options)?;
         check(unsafe { ffi::mpv_initialize(this.handle.as_ptr()) })?;
+        check(unsafe { ffi::mpv_request_log_messages(this.handle.as_ptr(), c"warn".as_ptr()) })?;
 
         Ok(this)
     }

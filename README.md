@@ -42,7 +42,7 @@ Download the latest installer from [Releases](https://github.com/BeFeast/ok-play
 
 ### Install on Linux
 
-Linux builds are published on the [Releases](https://github.com/BeFeast/ok-player/releases) page under `linux-v*` tags. Two package lanes are supported:
+Linux builds are published on the [Releases](https://github.com/BeFeast/ok-player/releases) page under `linux-v*` tags. Three package lanes are supported:
 
 **Debian / Ubuntu (`.deb`)**
 
@@ -53,6 +53,14 @@ sudo apt install ./ok-player_<version>_amd64.deb
 ```
 
 The `.deb` self-updates through the static feed: it fetches the newest release's `.deb`, verifies it against the release's `SHA256SUMS`, and installs it via `pkexec`.
+
+**Fedora 43 / 44 (native RPM beta)**
+
+The native RPM/COPR lane builds against Fedora's system `mpv-libs` and installs
+using only official Fedora dependencies. Stock Fedora may not decode every
+patent-encumbered format; OK Player reports a missing codec distinctly and
+offers RPM Fusion only as an optional, user-controlled remediation. See
+[`docs/fedora-rpm.md`](docs/fedora-rpm.md).
 
 **AppImage (distro-independent)**
 
@@ -75,11 +83,17 @@ The AppImage self-updates in place through the same static HTTPS feed (Velopack)
 sudo apt install ./ok-player_<older-version>_amd64.deb
 sudo apt remove ok-player
 
+# RPM: install a specific earlier candidate to roll back, or remove entirely
+sudo dnf downgrade ./ok-player-<older-version>.x86_64.rpm
+sudo dnf remove ok-player
+
 # AppImage: delete the file you downloaded (and, if you added one, its .desktop entry)
 rm OK-Player-<version>-x86_64.AppImage
 ```
 
-Per-user settings and playback history live in human-readable JSON under your config directory and are left in place by `apt remove`; delete them by hand if you want a clean slate.
+Per-user settings and playback history live in human-readable JSON under your
+config directory and are left in place by `apt remove` / `dnf remove`; delete
+them by hand if you want a clean slate.
 
 ### Supported environments
 

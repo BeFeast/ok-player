@@ -166,6 +166,24 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     let lyrics_surface = build_lyrics_surface();
     let media_state_overlay =
         MediaStateOverlay::new(&window, Rc::clone(&state), Rc::clone(&status_toast));
+    if env::var_os("OKP_PLAYBACK_FAILURE_PREVIEW").is_some_and(|value| value == "fedora-codec") {
+        let diagnostic = okp_core::playback_failure::diagnose_mpv_failure(
+            -13,
+            &["vd: Failed to initialize a decoder for codec 'hevc'.".to_owned()],
+            okp_core::playback_failure::PlaybackFailureEnvironment::FedoraNative,
+        );
+        eprintln!(
+            "preview: playback-failure-title={} body={}",
+            diagnostic.title, diagnostic.body
+        );
+        let mut preview_state = state.borrow_mut();
+        preview_state.media_load_state = network_media::MediaLoadState::Failed;
+        preview_state.retry_load_source = Some(network_media::LoadFailureSource::local(
+            PathBuf::from("/tmp/unsupported-codec.mkv"),
+        ));
+        preview_state.last_load_error = Some(diagnostic.details.clone());
+        preview_state.last_load_diagnostic = Some(diagnostic);
+    }
     chrome.set_child(&control_bar);
     for widget in window_chrome.auto_hide_widgets() {
         chrome.add_linked_motion_widget(widget);

@@ -51,6 +51,14 @@ pub struct mpv_event_end_file {
 }
 
 #[repr(C)]
+pub struct mpv_event_log_message {
+    pub prefix: *const c_char,
+    pub level: *const c_char,
+    pub text: *const c_char,
+    pub log_level: c_int,
+}
+
+#[repr(C)]
 pub struct mpv_event_property {
     pub name: *const c_char,
     pub format: c_int,
@@ -59,6 +67,7 @@ pub struct mpv_event_property {
 
 pub const MPV_EVENT_NONE: c_int = 0;
 pub const MPV_EVENT_SHUTDOWN: c_int = 1;
+pub const MPV_EVENT_LOG_MESSAGE: c_int = 2;
 pub const MPV_EVENT_COMMAND_REPLY: c_int = 5;
 pub const MPV_EVENT_END_FILE: c_int = 7;
 pub const MPV_EVENT_FILE_LOADED: c_int = 8;
@@ -87,6 +96,7 @@ pub const GL_VIEWPORT: c_uint = 0x0BA2;
 unsafe extern "C" {
     pub fn mpv_create() -> *mut mpv_handle;
     pub fn mpv_initialize(ctx: *mut mpv_handle) -> c_int;
+    pub fn mpv_request_log_messages(ctx: *mut mpv_handle, min_level: *const c_char) -> c_int;
     pub fn mpv_terminate_destroy(ctx: *mut mpv_handle);
     pub fn mpv_set_option_string(
         ctx: *mut mpv_handle,

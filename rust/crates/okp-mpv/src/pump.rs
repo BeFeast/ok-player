@@ -13,6 +13,7 @@
 //! Lifecycle and requested async-command events are queued for the shell to
 //! drain in order; property changes only ever mutate the snapshot.
 
+use std::collections::VecDeque;
 use std::ffi::{CStr, CString};
 use std::path::PathBuf;
 use std::ptr::{self, NonNull};
@@ -131,6 +132,7 @@ struct PumpShared {
     reader: RawReader,
     snapshot: Mutex<Snapshot>,
     events: Mutex<Vec<MpvEvent>>,
+    recent_failure_logs: Mutex<VecDeque<String>>,
     media_source: Mutex<Option<PathBuf>>,
     /// Set when the shell records a new media source so the next pump pass
     /// rebuilds `media_info` against it, even without a fresh mpv event.
@@ -155,6 +157,7 @@ impl EventPump {
             reader: RawReader::new(handle),
             snapshot: Mutex::new(Snapshot::default()),
             events: Mutex::new(Vec::new()),
+            recent_failure_logs: Mutex::new(VecDeque::new()),
             media_source: Mutex::new(None),
             media_info_dirty: AtomicBool::new(false),
             // Start "pending" so the pump populates the snapshot immediately.
@@ -247,6 +250,7 @@ impl EventPump {
 
     pub(crate) fn begin_media_load(&self) {
         lock(&self.shared.snapshot).video_dimensions = None;
+        lock(&self.shared.recent_failure_logs).clear();
     }
 
     /// Drain the lifecycle events queued since the last call, oldest first.
@@ -349,10 +353,30 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
             ffi::MPV_EVENT_FILE_LOADED => {
                 let video_dimensions = shared.reader.video_dimensions().ok().flatten();
                 lock(&shared.snapshot).video_dimensions = video_dimensions;
+                // The source crossed the load boundary successfully. Discard
+                // fallback warnings so a later, unrelated failure cannot be
+                // misclassified from stale decoder or output messages.
+                lock(&shared.recent_failure_logs).clear();
                 lifecycle.push(MpvEvent::FileLoaded { video_dimensions });
                 flags.tracks = true;
                 flags.chapters = true;
                 flags.media_info = true;
+            }
+            ffi::MPV_EVENT_LOG_MESSAGE => {
+                if let Some(message) =
+                    unsafe { event.data.cast::<ffi::mpv_event_log_message>().as_ref() }
+                    && let Some(text) = c_string(message.text)
+                {
+                    let prefix = c_string(message.prefix).unwrap_or_else(|| "libmpv".to_owned());
+                    let line = format!("{prefix}: {}", text.trim());
+                    if !line.ends_with(":") {
+                        let mut logs = lock(&shared.recent_failure_logs);
+                        logs.push_back(line);
+                        while logs.len() > 32 {
+                            logs.pop_front();
+                        }
+                    }
+                }
             }
             ffi::MPV_EVENT_VIDEO_RECONFIG => {
                 let video_dimensions = shared.reader.video_dimensions().ok().flatten();
@@ -376,7 +400,12 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
                 // source was superseded between the engine firing the event and the next
                 // poll is dropped instead of failing the new source.
                 let path = shared.reader.path();
-                lifecycle.push(MpvEvent::EndFile { reason, path });
+                let diagnostics = lock(&shared.recent_failure_logs).iter().cloned().collect();
+                lifecycle.push(MpvEvent::EndFile {
+                    reason,
+                    path,
+                    diagnostics,
+                });
             }
             ffi::MPV_EVENT_PROPERTY_CHANGE => {
                 if let Some(property) =
@@ -461,6 +490,14 @@ fn recompute(shared: &Arc<PumpShared>, flags: RecomputeFlags) {
     if let Some(media_info) = media_info {
         snapshot.media_info = media_info;
     }
+}
+
+fn c_string(value: *const libc::c_char) -> Option<String> {
+    if value.is_null() {
+        return None;
+    }
+    let value = unsafe { CStr::from_ptr(value) }.to_string_lossy();
+    Some(value.chars().take(2_048).collect())
 }
 
 /// Lock a mutex, recovering the guard if the pump thread poisoned it — a busy

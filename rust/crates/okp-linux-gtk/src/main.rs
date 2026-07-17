@@ -19,6 +19,7 @@ use okp_core::candidate_channel::{self, CandidateAppImage, CandidateFeed, Candid
 use okp_core::clip_export::{self, ClipExportEligibility, ClipExportLimits, ClipExportTooling};
 use okp_core::gapless::{GaplessPlaybackCapability, PlaylistTransitionPath};
 use okp_core::hdr::HdrHandlingState;
+use okp_core::playback_failure::PlaybackFailureDiagnostic;
 use okp_core::playlist::{Playlist, PlaylistItem, QueueInsertMode, RepeatMode};
 use okp_core::settings::{AppearanceTheme, UpdateChannel};
 use okp_core::shortcuts::{
@@ -102,6 +103,7 @@ pub(crate) use window::*;
 const SPEED_PRESETS: [f64; 6] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 const APP_BUILD_VERSION: &str = env!("OKP_BUILD_VERSION");
 const APP_BUILD_SHA: &str = env!("OKP_BUILD_SHA");
+const APP_PACKAGE_FLAVOR: &str = env!("OKP_PACKAGE_FLAVOR");
 const LINUX_DESKTOP_ID: &str = "com.befeast.okplayer.desktop";
 const LINUX_ICON_NAME: &str = "com.befeast.okplayer";
 const MPRIS_BUS_NAME: &str = "org.mpris.MediaPlayer2.okplayer";
@@ -230,6 +232,9 @@ struct PlayerState {
     /// The short, copyable reason for the most recent load failure — surfaced
     /// through the in-canvas card's Copy details action instead of raw logs.
     last_load_error: Option<String>,
+    /// Portable failure classification and human copy. The shell only renders
+    /// this core-produced model and keeps the raw payload behind Copy details.
+    last_load_diagnostic: Option<PlaybackFailureDiagnostic>,
     /// Intended fullscreen state for the double-click contract. The window's own
     /// `is_fullscreen` lags the Wayland compositor, so every toggle path decides
     /// from this eagerly-flipped intent and reconciles it with the `fullscreened`
@@ -1004,6 +1009,8 @@ struct MediaStateOverlay {
     stack: gtk::Stack,
     spinner: gtk::Spinner,
     retry_button: gtk::Button,
+    error_title: gtk::Label,
+    error_body: gtk::Label,
 }
 
 impl MediaStateOverlay {
@@ -1141,6 +1148,8 @@ impl MediaStateOverlay {
             stack,
             spinner,
             retry_button,
+            error_title,
+            error_body,
         }
     }
 
@@ -1154,6 +1163,7 @@ impl MediaStateOverlay {
         has_media: bool,
         paused: bool,
         can_retry: bool,
+        diagnostic: Option<&PlaybackFailureDiagnostic>,
     ) {
         let state = match load_state {
             network_media::MediaLoadState::Failed => Some("error"),
@@ -1168,6 +1178,20 @@ impl MediaStateOverlay {
             let is_error = state == "error";
             self.revealer.set_can_target(is_error);
             self.retry_button.set_sensitive(can_retry);
+            if is_error {
+                self.error_title.set_text(
+                    diagnostic
+                        .map(|diagnostic| diagnostic.title)
+                        .unwrap_or("Playback failed"),
+                );
+                self.error_body.set_text(
+                    diagnostic
+                        .map(|diagnostic| diagnostic.body.as_str())
+                        .unwrap_or(
+                            "OK Player could not open this source. You can retry or choose another.",
+                        ),
+                );
+            }
             if state == "loading" {
                 self.spinner.start();
             } else {

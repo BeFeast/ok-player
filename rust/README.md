@@ -74,11 +74,12 @@ Release builds compile the guard out entirely.
 
 ## Linux Packaging
 
-Two package lanes are intentionally separate:
+Three package lanes are intentionally separate:
 
 ```bash
 ./scripts/package-linux-velopack.sh 0.1.0-linux-alpha.1
 ./scripts/package-linux-deb.sh 0.1.0-linux-alpha.1
+./scripts/package-linux-rpm.sh --version 0.11.0-beta.1
 ```
 
 - Velopack lane: AppImage + `releases.linux.json` feed for self-updating GitHub Releases.
@@ -90,6 +91,9 @@ Two package lanes are intentionally separate:
 - Debian lane: `.deb` for Debian/Ubuntu-family install flow. In-app checks can download the
   newest GitHub Release `.deb`, request admin approval via `pkexec apt-get install -y`, and
   fall back to opening the installer when privileged install is unavailable.
+- Fedora lane: reproducible vendored SRPM plus a native RPM linked to Fedora's
+  system `mpv-libs`. Fedora 43/44 clean-chroot, rpmlint, install/upgrade/remove,
+  and config-preservation checks are documented in `docs/fedora-rpm.md`.
 
 Linux publishing is a two-phase gate. A non-publish workflow run builds the candidate and writes
 `package-identity.json` plus `acceptance-template.json`. After installed-package and live
