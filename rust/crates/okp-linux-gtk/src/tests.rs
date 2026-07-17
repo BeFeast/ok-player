@@ -672,6 +672,101 @@ fn mpris_app_icon_art_fallback_is_available_in_dev_tree() {
 }
 
 #[test]
+fn nfo_title_projects_only_to_the_current_local_item() {
+    let current = PathBuf::from("/media/Movie.mkv");
+    let other = PlaylistItem::Local(PathBuf::from("/media/Bonus.mkv"));
+    let current_item = PlaylistItem::Local(current.clone());
+    let state = PlayerState {
+        current_file: Some(current),
+        current_nfo_title: okp_core::nfo_metadata::NfoTitleState::Resolved(Some(
+            "Curated Movie Title".to_owned(),
+        )),
+        ..PlayerState::default()
+    };
+
+    assert_eq!(current_media_title(&state), "Curated Movie Title");
+    assert_eq!(
+        playlist_item_title(&state, &current_item),
+        "Curated Movie Title"
+    );
+    assert_eq!(playlist_item_title(&state, &other), "Bonus.mkv");
+}
+
+#[test]
+fn nfo_results_require_matching_generation_and_path() {
+    let result = NfoTitleResult {
+        source_generation: 7,
+        media_path: PathBuf::from("/media/Movie.mkv"),
+        title: Some("Curated Movie Title".to_owned()),
+    };
+
+    assert!(nfo_result_matches(
+        &result,
+        7,
+        Some(Path::new("/media/Movie.mkv"))
+    ));
+    assert!(!nfo_result_matches(
+        &result,
+        8,
+        Some(Path::new("/media/Movie.mkv"))
+    ));
+    assert!(!nfo_result_matches(
+        &result,
+        7,
+        Some(Path::new("/media/Other.mkv"))
+    ));
+    assert!(!nfo_result_matches(&result, 7, None));
+}
+
+#[test]
+fn nfo_job_reads_same_basename_sidecar_off_thread() {
+    let root = unique_temp_dir("okp-linux-nfo-job");
+    fs::create_dir_all(&root).expect("test folder should be created");
+    let media = root.join("Movie.mkv");
+    fs::write(&media, b"media").expect("test media should be written");
+    fs::write(
+        root.join("Movie.nfo"),
+        b"<movie><title>Curated Movie Title</title></movie>",
+    )
+    .expect("test nfo should be written");
+
+    let jobs = NfoTitleJobs::default();
+    jobs.resolve(11, media.clone());
+    let result = jobs
+        .recv_timeout(Duration::from_secs(2))
+        .expect("worker should return the local sidecar result");
+
+    assert_eq!(result.source_generation, 11);
+    assert_eq!(result.media_path, media);
+    assert_eq!(result.title.as_deref(), Some("Curated Movie Title"));
+
+    fs::remove_dir_all(root).expect("test folder should be removed");
+}
+
+#[test]
+fn source_changes_reset_nfo_state_before_async_resolution() {
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_nfo_title: okp_core::nfo_metadata::NfoTitleState::Resolved(Some(
+            "Old Title".to_owned(),
+        )),
+        ..PlayerState::default()
+    }));
+
+    let path = PathBuf::from("/media/Movie.mkv");
+    remember_loaded_media_with_playlist(&state, path.clone(), vec![PlaylistItem::Local(path)]);
+    assert_eq!(
+        state.borrow().current_nfo_title,
+        okp_core::nfo_metadata::NfoTitleState::Pending
+    );
+
+    remember_loaded_url(&state, "https://example.com/live.m3u8".to_owned());
+    assert_eq!(
+        state.borrow().current_nfo_title,
+        okp_core::nfo_metadata::NfoTitleState::NotApplicable
+    );
+}
+
+#[test]
 fn mpris_tracklist_window_limits_context_around_current_track() {
     assert_eq!(mpris_tracklist_window(3, 1), (0, 3));
     assert_eq!(
@@ -697,6 +792,9 @@ fn mpris_tracklist_metadata_uses_current_track_id() {
 
     let mut state = PlayerState {
         current_file: Some(second.clone()),
+        current_nfo_title: okp_core::nfo_metadata::NfoTitleState::Resolved(Some(
+            "Episode Two Curated".to_owned(),
+        )),
         playlist: Playlist::from_items(
             vec![
                 PlaylistItem::Local(first.clone()),
@@ -712,7 +810,7 @@ fn mpris_tracklist_metadata_uses_current_track_id() {
     let tracks = mpris_tracklist_from_state(&state, Some(42_000_000));
 
     assert_eq!(tracks.len(), 3);
-    assert_eq!(tracks[1].title, "Episode 2.mkv");
+    assert_eq!(tracks[1].title, "Episode Two Curated");
     assert_eq!(tracks[1].duration_us, Some(42_000_000));
     assert_eq!(
         mpris_tracklist_target_for_id(&state, tracks[1].id.as_str()),
@@ -720,12 +818,14 @@ fn mpris_tracklist_metadata_uses_current_track_id() {
     );
 
     let snapshot = mpris_snapshot_from_state(&state, None);
+    assert_eq!(snapshot.title, "Episode Two Curated");
     assert_eq!(snapshot.current_track_id, Some(snapshot.track_id.clone()));
     assert!(snapshot.tracklist_track_ids().contains(&snapshot.track_id));
     assert!(mpris_metadata(&snapshot).contains_key("mpris:trackid"));
     assert!(mpris_track_metadata(&tracks[1]).contains_key("mpris:trackid"));
 
     state.current_file = Some(third);
+    state.current_nfo_title = okp_core::nfo_metadata::NfoTitleState::NotApplicable;
     let moved = mpris_snapshot_from_state(&state, None);
     assert_ne!(snapshot.current_track_id, moved.current_track_id);
     assert!(mpris_tracklist_replaced_signal(&snapshot, &moved).is_some());

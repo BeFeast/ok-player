@@ -51,6 +51,7 @@ mod media_info;
 mod mpris;
 mod mpv_bridge;
 mod native_video;
+mod nfo_title;
 mod panels;
 mod playback;
 mod playlist_ops;
@@ -76,6 +77,7 @@ pub(crate) use media_info::*;
 pub(crate) use mpris::*;
 pub(crate) use mpv_bridge::*;
 pub(crate) use native_video::*;
+pub(crate) use nfo_title::*;
 pub(crate) use panels::*;
 pub(crate) use playback::*;
 pub(crate) use playlist_ops::*;
@@ -162,6 +164,8 @@ struct PlayerState {
     mpv: Option<Mpv>,
     current_file: Option<PathBuf>,
     current_url: Option<String>,
+    current_nfo_title: okp_core::nfo_metadata::NfoTitleState,
+    nfo_title_jobs: NfoTitleJobs,
     source_generation: u64,
     initial_window_fit: window_fit::InitialFitState,
     seek_generation: u64,
@@ -1627,6 +1631,7 @@ struct SidePanelSnapshot {
     has_media: bool,
     current_file: Option<PathBuf>,
     current_url: Option<String>,
+    current_title: Option<String>,
     playlist: Vec<PlaylistItem>,
     chapters: Vec<Chapter>,
     // Index of the chapter the playhead currently sits in (via

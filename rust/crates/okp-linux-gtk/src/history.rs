@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use okp_core::history::Preferences as PlaybackPreferences;
 use okp_core::history::{FileEntry as HistoryRecord, History as HistoryFile};
+use okp_core::nfo_metadata::HistoryTitleUpdate;
 use okp_core::recents_shelf::{HistoryItem, WelcomeShelf};
 
 #[derive(Debug)]
@@ -67,7 +68,25 @@ impl HistoryStore {
         *self = Self::open();
     }
 
+    #[cfg(test)]
     pub fn record(&mut self, path: &Path, position: f64, duration: f64, finished: bool) {
+        self.record_with_title(
+            path,
+            position,
+            duration,
+            finished,
+            HistoryTitleUpdate::Preserve,
+        );
+    }
+
+    pub fn record_with_title(
+        &mut self,
+        path: &Path,
+        position: f64,
+        duration: f64,
+        finished: bool,
+        title_update: HistoryTitleUpdate,
+    ) {
         if !duration.is_finite() || duration <= 0.0 || !position.is_finite() {
             return;
         }
@@ -93,6 +112,11 @@ impl HistoryStore {
         record.duration = duration;
         record.finished = finished || (existing_finished && final_stretch);
         record.updated_at_unix = unix_now();
+        match title_update {
+            HistoryTitleUpdate::Preserve => {}
+            HistoryTitleUpdate::Clear => record.title = None,
+            HistoryTitleUpdate::Set(title) => record.title = Some(title),
+        }
         self.listable_paths.insert(key.clone());
         self.data.files.insert(key, record);
         self.dirty = true;
@@ -400,6 +424,30 @@ mod tests {
                 ..PlaybackPreferences::default()
             })
         );
+    }
+
+    #[test]
+    fn resolved_nfo_title_flows_to_recents_and_completed_miss_restores_fallback() {
+        let mut history = store();
+        let path = Path::new("/media/Movie.mkv");
+
+        history.record_with_title(
+            path,
+            120.0,
+            600.0,
+            false,
+            HistoryTitleUpdate::Set("Curated Movie Title".to_owned()),
+        );
+        assert_eq!(history.search("")[0].title, "Curated Movie Title");
+
+        // A save while the next read is still pending preserves the last known title.
+        history.record_with_title(path, 130.0, 600.0, false, HistoryTitleUpdate::Preserve);
+        assert_eq!(history.search("")[0].title, "Curated Movie Title");
+
+        // Once discovery completes with no usable sidecar, recents return to the
+        // existing filename-stem fallback instead of retaining stale metadata.
+        history.record_with_title(path, 140.0, 600.0, false, HistoryTitleUpdate::Clear);
+        assert_eq!(history.search("")[0].title, "Movie");
     }
 
     #[test]

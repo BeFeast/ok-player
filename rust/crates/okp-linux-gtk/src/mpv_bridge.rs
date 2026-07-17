@@ -706,6 +706,7 @@ pub(crate) fn connect_state_poll(
     } = context;
     glib::timeout_add_local(Duration::from_millis(200), move || {
         let auto_fit_dimensions = drain_mpv_events(&state, &status_toast);
+        apply_pending_nfo_titles(&state);
         observe_initial_window_fit(&state, auto_fit_dimensions);
         // A normally realized-but-not-yet-mapped surface may already expose
         // its compositor-selected bounds. Use that opportunity without forcing
@@ -753,25 +754,7 @@ pub(crate) fn connect_state_poll(
         chrome.set_has_media(has_media || seek_preview);
         let media_title = if has_media {
             let state = state.borrow();
-            let base = state
-                .mpv
-                .as_ref()
-                .and_then(Mpv::observed_media_info)
-                .map(|info| info.title)
-                .filter(|title| !title.trim().is_empty())
-                .or_else(|| {
-                    state
-                        .current_file
-                        .as_ref()
-                        .map(|path| PlaylistItem::Local(path.clone()).display_name())
-                })
-                .or_else(|| {
-                    state
-                        .current_url
-                        .as_ref()
-                        .map(|url| PlaylistItem::Url(url.clone()).display_name())
-                })
-                .unwrap_or_default();
+            let base = current_media_title(&state);
             let chapter = playback
                 .and_then(|playback| playback.time_pos)
                 .and_then(|position| {
