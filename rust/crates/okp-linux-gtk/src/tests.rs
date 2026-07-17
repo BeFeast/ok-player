@@ -565,6 +565,27 @@ fn overflow_menu_surfaces_every_collapsed_control_action() {
 }
 
 #[test]
+fn screenshot_surfaces_share_the_same_capture_implementation() {
+    let controls = include_str!("controls.rs");
+    let keyboard = include_str!("keyboard.rs");
+    let playback = include_str!("playback.rs");
+    let popovers = include_str!("track_popovers.rs");
+
+    assert!(controls.contains(
+        "connect_clicked(move |_| save_screenshot(&screenshot_state, &screenshot_toast, false))"
+    ));
+    assert!(keyboard.contains("Some(ShortcutAction::SaveScreenshot)"));
+    assert!(keyboard.contains("save_screenshot(&state, &status_toast, false);"));
+    assert!(keyboard.contains("copy_frame_to_clipboard(&state, &status_toast);"));
+    assert!(popovers.contains("Id::SaveFrame =>"));
+    assert!(popovers.contains("reach.screenshot.emit_clicked();"));
+    assert!(popovers.contains("save_screenshot(state, status_toast, true);"));
+    assert!(popovers.contains("copy_frame_to_clipboard(state, status_toast);"));
+    assert!(playback.contains("mpv.screenshot_to_file_async(path, include_subtitles)"));
+    assert!(playback.contains("render_loop.render_for_screenshot();"));
+}
+
+#[test]
 fn settings_shell_matches_windows_reference_geometry() {
     assert_eq!(SETTINGS_REFERENCE_WIDTH, 760);
     assert_eq!(SETTINGS_REFERENCE_HEIGHT, 560);

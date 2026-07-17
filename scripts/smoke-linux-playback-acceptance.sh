@@ -65,7 +65,7 @@ export LIBGL_ALWAYS_SOFTWARE=1
 export XDG_CONFIG_HOME="$OUT_DIR/config"
 export XDG_CACHE_HOME="$OUT_DIR/cache"
 export HOME="$OUT_DIR/home"
-mkdir -p "$HOME/Pictures/OK Player" "$XDG_CONFIG_HOME/ok-player"
+mkdir -p "$HOME" "$XDG_CONFIG_HOME/ok-player"
 cat >"$XDG_CONFIG_HOME/ok-player/settings.json" <<'JSON'
 {"version":2,"updates":{"auto_check":false}}
 JSON
@@ -342,12 +342,33 @@ done
 xdotool mousemove --window "$window_id" 1097 75 click 1
 sleep 1
 
-# Save a frame through the real screenshot action.
-before_count="$(find "$HOME/Pictures/OK Player" -maxdepth 1 -type f | wc -l)"
+# Save a frame through the real screenshot action. The clean fixture starts
+# without Pictures/OK Player so this also proves the default destination is
+# created on demand instead of failing at the installed-package boundary.
+screenshot_dir="$HOME/Pictures/OK Player"
+[[ ! -e "$screenshot_dir" ]] || { echo "screenshot destination unexpectedly exists" >&2; exit 1; }
 xdotool key --clearmodifiers c
-sleep 3
-after_count="$(find "$HOME/Pictures/OK Player" -maxdepth 1 -type f | wc -l)"
-(( after_count > before_count )) || { echo "screenshot action did not create a file" >&2; exit 1; }
+for _ in $(seq 1 60); do
+  shopt -s nullglob
+  screenshot_files=("$screenshot_dir"/*)
+  shopt -u nullglob
+  ((${#screenshot_files[@]} > 0)) && break
+  sleep 0.1
+done
+after_count="${#screenshot_files[@]}"
+(( after_count == 1 )) || { echo "screenshot action created $after_count files, expected 1" >&2; exit 1; }
+screenshot_path="${screenshot_files[0]}"
+[[ -s "$screenshot_path" ]] || { echo "screenshot output is missing or empty" >&2; exit 1; }
+screenshot_sha256="$(sha256sum "$screenshot_path" | awk '{print $1}')"
+for _ in $(seq 1 20); do
+  grep -Fq "Screenshot saved to $screenshot_path" "$OUT_DIR/chapter-context-app.log" && break
+  sleep 0.1
+done
+grep -Fq "Screenshot saved to $screenshot_path" "$OUT_DIR/chapter-context-app.log" || {
+  echo "screenshot completion did not report the exact saved path" >&2
+  cat "$OUT_DIR/chapter-context-app.log" >&2
+  exit 1
+}
 
 # Resume and wait past the canonical idle timeout.
 xdotool key --clearmodifiers space
@@ -425,6 +446,8 @@ stop_app
 printf '%s\n' \
   "default=1120x680" \
   "screenshot_files=$after_count" \
+  "screenshot_path=$screenshot_path" \
+  "screenshot_sha256=$screenshot_sha256" \
   "retry_real_404_count=$error_count" >"$OUT_DIR/functional-results.txt"
 SMOKE
 then
@@ -432,6 +455,13 @@ then
   cat "$OUT_DIR/session.log" >&2
   exit 1
 fi
+
+screenshot_path="$(sed -n 's/^screenshot_path=//p' "$OUT_DIR/functional-results.txt")"
+screenshot_sha256="$(sed -n 's/^screenshot_sha256=//p' "$OUT_DIR/functional-results.txt")"
+[[ -n "$screenshot_path" && -s "$screenshot_path" && -n "$screenshot_sha256" ]] || {
+  echo "Playback acceptance screenshot evidence is incomplete" >&2
+  exit 1
+}
 
 assert_distinct() {
   local baseline="$1" candidate="$2" crop="$3" minimum="$4" label="$5"
@@ -558,6 +588,8 @@ cat >"$OUT_DIR/functional-results.json" <<JSON
   "metadata_less_interval_fallback": "pass",
   "detect_chapters_unavailable_state": "pass",
   "saved_screenshot": "pass",
+  "saved_screenshot_path": "$screenshot_path",
+  "saved_screenshot_sha256": "$screenshot_sha256",
   "distinct_state_hashes": "pass",
   "buffered_http_bytes": $buffered_bytes,
   "evidence_level": "xvfb-render",

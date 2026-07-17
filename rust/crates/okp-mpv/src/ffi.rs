@@ -112,6 +112,7 @@ pub const GL_FRAMEBUFFER_BINDING: c_uint = 0x8CA6;
 pub const GL_VIEWPORT: c_uint = 0x0BA2;
 
 unsafe extern "C" {
+    pub fn mpv_error_string(error: c_int) -> *const c_char;
     pub fn mpv_create() -> *mut mpv_handle;
     pub fn mpv_initialize(ctx: *mut mpv_handle) -> c_int;
     pub fn mpv_terminate_destroy(ctx: *mut mpv_handle);

@@ -266,17 +266,13 @@ pub(crate) fn drain_screenshot_jobs(state: &Rc<RefCell<PlayerState>>, status_toa
                 );
             }
             screenshots::ScreenshotJobResult::SavedPublished(Ok(path)) => {
-                let filename = path
-                    .file_name()
-                    .map(|name| name.to_string_lossy())
-                    .unwrap_or_else(|| "screenshot".into());
                 eprintln!("Screenshot saved to {}", path.display());
-                status_toast.show_screenshot(&format!("Saved {filename}"), &path);
+                status_toast.show_screenshot(&format!("Saved to {}", path.display()), &path);
             }
             screenshots::ScreenshotJobResult::SavedPrepared(Err(error))
             | screenshots::ScreenshotJobResult::SavedPublished(Err(error)) => {
                 eprintln!("Failed to save screenshot: {error}");
-                status_toast.show("Screenshot failed");
+                status_toast.show(&error);
             }
             screenshots::ScreenshotJobResult::ClipboardPrepared(Err(error)) => {
                 eprintln!("Failed to prepare clipboard capture: {error}");
@@ -338,10 +334,13 @@ fn dispatch_screenshot_capture(
     };
 
     match request {
-        Ok(request_id) => state
-            .borrow_mut()
-            .screenshot_jobs
-            .insert_pending(request_id, capture),
+        Ok(request_id) => {
+            let mut state = state.borrow_mut();
+            state.screenshot_jobs.insert_pending(request_id, capture);
+            if let Some(render_loop) = state.native_render_loop.as_ref() {
+                render_loop.render_for_screenshot();
+            }
+        }
         Err(error) => {
             remove_pending_capture_temp(&capture);
             eprintln!("Failed to start screenshot capture: {error}");
@@ -363,8 +362,9 @@ pub(crate) fn complete_screenshot_capture(
 
     if error < 0 {
         remove_pending_capture_temp(&capture);
-        eprintln!("Screenshot command failed with code {error}");
-        status_toast.show(capture_failure_message(&capture));
+        let detail = okp_mpv::error_description(error);
+        eprintln!("Screenshot command failed with code {error}: {detail}");
+        status_toast.show(&format!("{}: {detail}", capture_failure_message(&capture)));
         return;
     }
 

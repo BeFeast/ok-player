@@ -182,6 +182,38 @@ run_gate package-identity package_identity_gate
 run_gate install-upgrade-uninstall-smoke \
   "$CHECKOUT/scripts/smoke-linux-install-upgrade.sh" "$DEB" "$OUT_DIR/install-smoke"
 
+# Exercise the screenshot shortcut from the exact Debian payload, not merely
+# the build-tree binary. The resulting image and hash travel with the verified
+# candidate bundle; compositor and clipboard claims remain operator-only.
+deb_screenshot_smoke() {
+  local smoke_root="$OUT_DIR/deb-screenshot-root"
+  local smoke_output="$OUT_DIR/deb-screenshot-smoke"
+  local fixture_dir="$OUT_DIR/deb-screenshot-fixtures"
+  mkdir -p "$smoke_root" "$CHECKOUT/artifacts/linux/acceptance"
+  dpkg-deb -x "$DEB" "$smoke_root"
+  "$CHECKOUT/scripts/generate-linux-acceptance-media.sh" "$fixture_dir"
+  "$CHECKOUT/scripts/smoke-linux-screenshot.sh" \
+    "$smoke_root/usr/lib/ok-player/ok-player" \
+    "$fixture_dir/dark-with-chapters.mkv" \
+    "$smoke_output"
+
+  local saved_path saved_sha256 artifact
+  saved_path="$(sed -n 's/^screenshot_path=//p' "$smoke_output/results.txt")"
+  saved_sha256="$(sed -n 's/^screenshot_sha256=//p' "$smoke_output/results.txt")"
+  [[ -n "$saved_path" && -s "$saved_path" && -n "$saved_sha256" ]]
+  artifact="$CHECKOUT/artifacts/linux/acceptance/deb-screenshot.png"
+  cp "$saved_path" "$artifact"
+  [[ "$(sha256sum "$artifact" | awk '{print $1}')" == "$saved_sha256" ]]
+  printf '%s\n' \
+    'evidence_level=xvfb-render' \
+    'package=debian-payload' \
+    'artifact=acceptance/deb-screenshot.png' \
+    "sha256=$saved_sha256" \
+    'not_proven=GNOME Wayland, clipboard, compositor, portal, focus' \
+    >"$CHECKOUT/artifacts/linux/acceptance/deb-screenshot.txt"
+}
+run_gate deb-screenshot-smoke deb_screenshot_smoke
+
 # Headless launch smoke: the app must come up under Xvfb.
 run_gate headless-launch-smoke \
   "$CHECKOUT/scripts/smoke-linux-main-window.sh" \

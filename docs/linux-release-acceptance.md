@@ -19,6 +19,29 @@ Linux release evidence is package-specific and has four levels:
 3. `installed-package`: launch and version checks against the candidate `.deb` or AppImage.
 4. `gnome-wayland-operator`: live GNOME/Wayland acceptance. Only this level may mark chooser, drag/drop, clipboard, portal, compositor, or focus rows `PASS`.
 
+## Screenshot acceptance
+
+Every candidate bundle includes `acceptance/deb-screenshot.png` plus
+`acceptance/deb-screenshot.txt`. The builder extracts the exact Debian payload,
+starts real local playback under Xvfb, invokes the shared Screenshot shortcut,
+creates a previously missing default destination, requires a non-empty readable
+image, and records its SHA-256. This is `xvfb-render` evidence only.
+
+Before a screenshot regression is accepted on hardware, install that exact
+candidate `.deb` and record all of the following from a real GNOME/Wayland
+session:
+
+- the exact path and SHA-256 of a saved frame while paused;
+- the exact path and SHA-256 of a saved frame while playing;
+- separate frame-only and with-subtitles captures from media with visible subtitles;
+- a pasted Wayland clipboard image from Copy frame, with no retained screenshot file;
+- creation of a missing default screenshot directory;
+- an invalid or unwritable configured destination failing promptly with the destination and cause, and without a success message.
+
+The saved images must be non-empty and decodable. Xvfb, package extraction, or
+the presence of a toast cannot mark the Wayland clipboard or native compositor
+rows as passing.
+
 Issue-specific 4K60 presentation evidence is also operator-only. Run
 `scripts/run-linux-acceptance-harness.sh --wayland-presentation <binary> <fixture> <output>` inside
 the target GNOME Wayland session. It rejects X11/Xvfb, verifies the fixture is exactly 3840×2160

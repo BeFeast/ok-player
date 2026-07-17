@@ -8,47 +8,63 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(crate) struct NativeRenderNotifier {
     alive: AtomicBool,
-    pending: Mutex<bool>,
+    pending: Mutex<NativeRenderRequest>,
     wake: std::sync::Condvar,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct NativeRenderRequest {
+    pending: bool,
+    force: bool,
 }
 
 impl NativeRenderNotifier {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             alive: AtomicBool::new(true),
-            pending: Mutex::new(false),
+            pending: Mutex::new(NativeRenderRequest::default()),
             wake: std::sync::Condvar::new(),
         })
     }
 
     fn notify(&self) {
+        self.queue(false);
+    }
+
+    fn force_render(&self) {
+        self.queue(true);
+    }
+
+    fn queue(&self, force: bool) {
         if !self.alive.load(Ordering::Acquire) {
             return;
         }
-        let mut pending = self
+        let mut request = self
             .pending
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        *pending = true;
+        request.pending = true;
+        request.force |= force;
         self.wake.notify_one();
     }
 
-    fn wait(&self) -> bool {
-        let mut pending = self
+    fn wait(&self) -> Option<NativeRenderRequest> {
+        let mut request = self
             .pending
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        while !*pending && self.alive.load(Ordering::Acquire) {
-            pending = self
+        while !request.pending && self.alive.load(Ordering::Acquire) {
+            request = self
                 .wake
-                .wait(pending)
+                .wait(request)
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
         }
         if !self.alive.load(Ordering::Acquire) {
-            return false;
+            return None;
         }
-        *pending = false;
-        true
+        let next = *request;
+        *request = NativeRenderRequest::default();
+        Some(next)
     }
 
     fn disable(&self) {
@@ -77,8 +93,9 @@ impl NativeRenderLoop {
                     eprintln!("Failed to activate the native Wayland/EGL render thread");
                     return;
                 }
-                while thread_notifier.wait() {
-                    if !update_handle.update_has_frame() {
+                while let Some(request) = thread_notifier.wait() {
+                    let has_frame = update_handle.update_has_frame();
+                    if !request.force && !has_frame {
                         continue;
                     }
                     let Some(size) = plane.prepare_frame() else {
@@ -109,6 +126,13 @@ impl NativeRenderLoop {
 
     fn callback_context(&self) -> *mut libc::c_void {
         Arc::as_ptr(&self.notifier) as *mut libc::c_void
+    }
+
+    pub(crate) fn render_for_screenshot(&self) {
+        // The native Wayland path is callback-driven, unlike GtkGLArea's 16 ms
+        // tick. A paused video may otherwise have no render after mpv accepts
+        // screenshot-to-file, starving the capture of the current libmpv frame.
+        self.notifier.force_render();
     }
 
     fn stop_and_join(&mut self) {
@@ -1294,4 +1318,25 @@ pub(crate) fn show_player_context_menu(
     );
     popover.connect_closed(|popover| popover.unparent());
     popover.popup();
+}
+
+#[cfg(test)]
+mod native_render_notifier_tests {
+    use super::*;
+
+    #[test]
+    fn screenshot_render_upgrades_a_coalesced_update() {
+        let notifier = NativeRenderNotifier::new();
+
+        notifier.notify();
+        notifier.force_render();
+
+        assert_eq!(
+            notifier.wait(),
+            Some(NativeRenderRequest {
+                pending: true,
+                force: true,
+            })
+        );
+    }
 }
