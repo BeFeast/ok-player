@@ -1,0 +1,72 @@
+{
+  "$comment": [
+    "Single source of truth for the Windows development-VM toolchain that lives OUTSIDE the",
+    "repository (system-provisioned tools). In-repo, version-pinned dependencies are NOT copied",
+    "here to avoid drift: the .NET target framework and Windows SDK build live in the csproj files,",
+    "and the Windows App SDK / Windows SDK BuildTools versions live in Directory.Packages.props.",
+    "scripts/bootstrap-windows-dev-vm.ps1 installs from this manifest; scripts/report-windows-env.ps1",
+    "verifies the running VM against it and derives the in-repo versions from their real sources.",
+    "No hostnames, usernames, network addresses, licenses, or secrets belong in this file."
+  ],
+  "schema": 1,
+  "vmEnvelope": {
+    "vcpu": 8,
+    "memoryGiB": 16,
+    "diskGiB": 160,
+    "note": "Recommended development baseline for a comfortable WinUI + Rust build/test loop. This is NOT a runtime requirement for OK Player itself; the shipped app targets ordinary Windows 11 hardware."
+  },
+  "os": {
+    "product": "Windows 11",
+    "minBuild": 22621,
+    "note": "22621 matches TargetPlatformMinVersion in src/OkPlayer.App/OkPlayer.App.csproj. The Windows SDK build the app compiles against (26100) is provisioned by the Visual Studio workload below, not by the OS build."
+  },
+  "tools": {
+    "dotnetSdk": {
+      "wingetId": "Microsoft.DotNet.SDK.9",
+      "channel": "9.0",
+      "minVersion": "9.0.100",
+      "note": "Matches the net9.0 / net9.0-windows target frameworks and the setup-dotnet 9.0.x pin in .github/workflows/ci.yml."
+    },
+    "git": {
+      "wingetId": "Git.Git",
+      "minVersion": "2.40.0"
+    },
+    "cmake": {
+      "wingetId": "Kitware.CMake",
+      "minVersion": "3.28.0",
+      "note": "Only required when building libmpv/ffmpeg from source (scripts/build-local-mpv.sh path). Prebuilt natives via scripts/fetch-natives.ps1 do not need it."
+    },
+    "ninja": {
+      "wingetId": "Ninja-build.Ninja",
+      "minVersion": "1.11.0",
+      "note": "Same scope as cmake: source native builds only."
+    },
+    "rustup": {
+      "wingetId": "Rustlang.Rustup",
+      "minVersion": "1.26.0",
+      "toolchain": "stable",
+      "target": "x86_64-pc-windows-msvc",
+      "note": "The MSVC (not GNU) toolchain is required so the future okp-ffi C ABI links against the same runtime as the WinUI shell."
+    },
+    "visualStudio": {
+      "wingetId": "Microsoft.VisualStudio.2026.BuildTools",
+      "alternativeWingetIds": [
+        "Microsoft.VisualStudio.2026.Community",
+        "Microsoft.VisualStudio.2022.BuildTools"
+      ],
+      "minVersion": "18.0.0",
+      "components": [
+        "Microsoft.VisualStudio.Workload.ManagedDesktop",
+        "Microsoft.VisualStudio.Workload.NativeDesktop",
+        "Microsoft.VisualStudio.Component.Windows11SDK.26100",
+        "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+        "Microsoft.VisualStudio.ComponentGroup.WindowsAppSDK.Cs"
+      ],
+      "note": "Build Tools is sufficient for command-line build/test/package. Community is the full IDE alternative. The Windows11SDK.26100 component provides the SDK build the WinUI shell compiles against."
+    }
+  },
+  "natives": {
+    "fetchScript": "scripts/fetch-natives.ps1",
+    "note": "libmpv (GPL, x86_64) and ffmpeg (GPL, win64) track their own upstream release cadence and are fetched, not version-pinned here. The report records the resolved libmpv-2.dll product version at scan time."
+  }
+}

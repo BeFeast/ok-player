@@ -24,6 +24,7 @@ OK Player is a Windows-native **media player**: a refined GUI over the **mpv** e
 
 - 📋 **[Product Requirements](docs/OK-Player-PRD.md)** — the full spec: pillars, information architecture, every screen and state, roadmap, open questions.
 - 🎨 **[Claude Design prompt](docs/claude-design-prompt.md)** — orientation brief / input for the UI design phase.
+- 🖥️ **[Windows development VM](docs/windows-dev-vm.md)** — reproducible VM bootstrap, environment report, and the VM-valid vs. real-hardware acceptance gates.
 
 ## Roadmap (summary)
 

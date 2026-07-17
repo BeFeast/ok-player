@@ -41,3 +41,39 @@ jobs:
       # Debug so the (DEBUG-only) render-thread guard is compiled in and its assertions run.
       - name: Test
         run: dotnet test tests/OkPlayer.IntegrationTests/OkPlayer.IntegrationTests.csproj -c Debug --logger "console;verbosity=normal"
+
+  powershell-lint:
+    name: PowerShell lint (bootstrap + repo scripts)
+    runs-on: ubuntu-latest # pwsh is preinstalled; the scripts are parsed/analyzed, not executed
+    steps:
+      - uses: actions/checkout@v4
+
+      # Static checks only, so lint runs cheaply off-Windows. Two layers guard the bootstrap scripts:
+      #   1. AST parse of every .ps1 — catches syntax errors that would only surface on a real VM run.
+      #   2. PSScriptAnalyzer at Error severity — flags real defects without failing on the repo's
+      #      deliberate Write-Host style (a Warning-severity rule), so existing scripts stay green.
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser -ErrorAction Stop
+
+      - name: Parse + analyze PowerShell scripts
+        shell: pwsh
+        run: |
+          $scripts = Get-ChildItem -Path scripts, installer -Filter *.ps1 -Recurse -File
+          $failed = $false
+          foreach ($s in $scripts) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($s.FullName, [ref]$null, [ref]$errors) | Out-Null
+            if ($errors) {
+              $failed = $true
+              Write-Host "::error file=$($s.FullName)::$($errors.Count) parse error(s)"
+              $errors | ForEach-Object { Write-Host "  $($_.Extent.StartLineNumber): $($_.Message)" }
+            }
+          }
+          $findings = Invoke-ScriptAnalyzer -Path scripts, installer -Recurse -Severity Error
+          if ($findings) {
+            $failed = $true
+            $findings | Format-Table -AutoSize | Out-String | Write-Host
+          }
+          if ($failed) { throw 'PowerShell lint failed (see parse errors / analyzer findings above).' }
+          Write-Host "Parsed and analyzed $($scripts.Count) PowerShell script(s); no errors."
