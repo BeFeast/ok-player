@@ -57,6 +57,29 @@ pub struct mpv_event_property {
     pub data: *mut c_void,
 }
 
+#[repr(C)]
+pub union mpv_node_value {
+    pub string: *mut c_char,
+    pub flag: c_int,
+    pub int64: i64,
+    pub double_: f64,
+    pub list: *mut mpv_node_list,
+    pub byte_array: *mut c_void,
+}
+
+#[repr(C)]
+pub struct mpv_node {
+    pub value: mpv_node_value,
+    pub format: c_int,
+}
+
+#[repr(C)]
+pub struct mpv_node_list {
+    pub num: c_int,
+    pub values: *mut mpv_node,
+    pub keys: *mut *mut c_char,
+}
+
 pub const MPV_EVENT_NONE: c_int = 0;
 pub const MPV_EVENT_SHUTDOWN: c_int = 1;
 pub const MPV_EVENT_COMMAND_REPLY: c_int = 5;
@@ -71,6 +94,7 @@ pub const MPV_END_FILE_REASON_QUIT: c_int = 3;
 pub const MPV_END_FILE_REASON_ERROR: c_int = 4;
 pub const MPV_END_FILE_REASON_REDIRECT: c_int = 5;
 pub const MPV_FORMAT_NONE: c_int = 0;
+pub const MPV_FORMAT_STRING: c_int = 1;
 pub const MPV_RENDER_PARAM_INVALID: c_int = 0;
 pub const MPV_RENDER_PARAM_API_TYPE: c_int = 1;
 pub const MPV_RENDER_PARAM_OPENGL_INIT_PARAMS: c_int = 2;
@@ -81,6 +105,9 @@ pub const MPV_RENDER_UPDATE_FRAME: u64 = 1 << 0;
 pub const MPV_FORMAT_FLAG: c_int = 3;
 pub const MPV_FORMAT_INT64: c_int = 4;
 pub const MPV_FORMAT_DOUBLE: c_int = 5;
+pub const MPV_FORMAT_NODE: c_int = 6;
+pub const MPV_FORMAT_NODE_ARRAY: c_int = 7;
+pub const MPV_FORMAT_NODE_MAP: c_int = 8;
 pub const GL_FRAMEBUFFER_BINDING: c_uint = 0x8CA6;
 pub const GL_VIEWPORT: c_uint = 0x0BA2;
 
