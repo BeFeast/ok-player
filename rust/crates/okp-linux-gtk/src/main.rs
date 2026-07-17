@@ -26,10 +26,10 @@ use okp_core::shortcuts::{
 use okp_core::update_selection::{self, DebFeed, DebUpdate, SHA256SUMS_ASSET};
 use okp_core::video_geometry::{VideoAspect, VideoGeometry, VideoGeometryAction};
 use okp_core::{
-    AppIdentity, chapter_math, fullscreen_toggle, launch_args, lrc, m3u, media_formats,
-    natural_compare, network_media, ok_player_uri, progress_report, seek_readout, sha256sums,
-    subtitle_delay, subtitle_search, time_code, timeline_buffer, video_click, volume, window_fit,
-    youtube_open,
+    AppIdentity, aspect_resize, chapter_math, fullscreen_toggle, launch_args, lrc, m3u,
+    media_formats, natural_compare, network_media, ok_player_uri, progress_report, seek_readout,
+    sha256sums, subtitle_delay, subtitle_search, time_code, timeline_buffer, video_click, volume,
+    window_fit, youtube_open,
 };
 use okp_mpv::{
     AbLoopState, AudioDevice, Chapter, EndFileReason, InfoRow, InfoSection, InfoTrack, MediaInfo,
@@ -222,6 +222,15 @@ struct PlayerState {
     /// from this eagerly-flipped intent and reconciles it with the `fullscreened`
     /// notify. See [`fullscreen_toggle`].
     fullscreen_toggle: fullscreen_toggle::FullscreenToggle,
+    /// Active Shift-resize aspect lock (issue #331). Seeded at resize-handle
+    /// press from the modifier state and the loaded video's display aspect; the
+    /// state-poll loop applies the pure [`aspect_resize`] geometry while it is
+    /// locking, then clears it once the drag settles. `None` means ordinary
+    /// freeform resize.
+    aspect_resize_session: Option<aspect_resize::AspectResizeSession>,
+    /// Last client size the aspect-lock corrector observed, so it can tell a
+    /// still-moving drag from a settled one and end the session deterministically.
+    aspect_resize_last_size: Option<aspect_resize::ClientSize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

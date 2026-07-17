@@ -215,7 +215,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     overlay.add_overlay(window_chrome.widget());
     overlay.add_overlay(chrome.widget());
     overlay.add_overlay(&controls.up_next_revealer);
-    let resize_handles = build_player_resize_handles(&window);
+    let resize_handles = build_player_resize_handles(&window, &state);
     let compact_mode = CompactMode::build(
         &window,
         CompactModeInputs {
@@ -286,6 +286,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         mpris_commands,
     );
     connect_progress_persistence(&window, Rc::clone(&state));
+    connect_aspect_resize_shift_tracking(&window, &state);
     // Visual smoke hook: render the Chapters/Up Next side panel with representative
     // fixture rows so its layout can be screenshot-tested without loaded media.
     // `OKP_OPEN_SIDE_PANEL_ON_STARTUP=up-next` previews the queue; `=bookmarks`
@@ -1568,7 +1569,35 @@ pub(crate) fn connect_player_window_drag(
     widget.add_controller(gesture);
 }
 
-pub(crate) fn build_player_resize_handles(window: &gtk::ApplicationWindow) -> Vec<gtk::Box> {
+/// Map a GDK interactive-resize edge to the pure-core [`aspect_resize::ResizeEdge`]
+/// so the shell can seed an aspect-lock session without duplicating the
+/// leading-axis rules.
+fn resize_edge_for_surface_edge(edge: gdk::SurfaceEdge) -> Option<aspect_resize::ResizeEdge> {
+    Some(match edge {
+        gdk::SurfaceEdge::North => aspect_resize::ResizeEdge::Top,
+        gdk::SurfaceEdge::South => aspect_resize::ResizeEdge::Bottom,
+        gdk::SurfaceEdge::West => aspect_resize::ResizeEdge::Left,
+        gdk::SurfaceEdge::East => aspect_resize::ResizeEdge::Right,
+        gdk::SurfaceEdge::NorthWest => aspect_resize::ResizeEdge::TopLeft,
+        gdk::SurfaceEdge::NorthEast => aspect_resize::ResizeEdge::TopRight,
+        gdk::SurfaceEdge::SouthWest => aspect_resize::ResizeEdge::BottomLeft,
+        gdk::SurfaceEdge::SouthEast => aspect_resize::ResizeEdge::BottomRight,
+        _ => return None,
+    })
+}
+
+/// The loaded video's display aspect (width/height), or `None` when nothing is
+/// loaded — the aspect lock only engages once a real ratio is known.
+fn current_video_aspect(state: &Rc<RefCell<PlayerState>>) -> Option<f64> {
+    let dimensions = state.borrow().current_video_dimensions?;
+    (dimensions.width > 0 && dimensions.height > 0)
+        .then(|| f64::from(dimensions.width) / f64::from(dimensions.height))
+}
+
+pub(crate) fn build_player_resize_handles(
+    window: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
+) -> Vec<gtk::Box> {
     let specs = [
         (
             gdk::SurfaceEdge::NorthWest,
@@ -1661,7 +1690,7 @@ pub(crate) fn build_player_resize_handles(window: &gtk::ApplicationWindow) -> Ve
                 if height > 0 {
                     handle.set_height_request(height);
                 }
-                connect_player_window_resize(&handle, window, edge);
+                connect_player_window_resize(&handle, window, edge, state);
                 handle
             },
         )
@@ -1672,21 +1701,28 @@ pub(crate) fn connect_player_window_resize(
     widget: &gtk::Box,
     window: &gtk::ApplicationWindow,
     edge: gdk::SurfaceEdge,
+    state: &Rc<RefCell<PlayerState>>,
 ) {
     let gesture = gtk::GestureClick::new();
     gesture.set_button(gdk::BUTTON_PRIMARY);
     let resize_window = window.clone();
     let resize_widget = widget.clone();
+    let resize_state = Rc::clone(state);
     gesture.connect_pressed(move |gesture, _, x, y| {
         let debug_resize = env::var_os("OKP_DEBUG_WINDOW_RESIZE").is_some();
         if debug_resize {
             eprintln!("resize press edge={edge:?} local=({x:.1},{y:.1})");
         }
 
+        // Each drag re-seeds the aspect-lock decision from the live modifier
+        // state, so a stale session can never leak into a later freeform resize.
+        seed_aspect_resize_session(&resize_state, &resize_window, edge, gesture);
+
         if resize_window.is_fullscreen() || resize_window.is_maximized() {
             if debug_resize {
                 eprintln!("resize ignored: fullscreen/maximized");
             }
+            resize_state.borrow_mut().aspect_resize_session = None;
             return;
         }
 
@@ -1734,6 +1770,144 @@ pub(crate) fn connect_player_window_resize(
         );
     });
     widget.add_controller(gesture);
+}
+
+/// Seed (or clear) the aspect-lock session for a resize drag that is just
+/// starting. The lock only engages when the edge maps, a video aspect is known,
+/// and the window is a normal (non-fullscreen/maximized) toplevel.
+fn seed_aspect_resize_session(
+    state: &Rc<RefCell<PlayerState>>,
+    window: &gtk::ApplicationWindow,
+    edge: gdk::SurfaceEdge,
+    gesture: &gtk::GestureClick,
+) {
+    let (Some(core_edge), Some(aspect)) = (
+        resize_edge_for_surface_edge(edge),
+        current_video_aspect(state),
+    ) else {
+        clear_aspect_resize_session(state);
+        return;
+    };
+    if window.is_fullscreen() || window.is_maximized() {
+        clear_aspect_resize_session(state);
+        return;
+    }
+    let shift_held = gesture
+        .current_event_state()
+        .contains(gdk::ModifierType::SHIFT_MASK);
+    let mut state = state.borrow_mut();
+    state.aspect_resize_session = Some(aspect_resize::AspectResizeSession::begin(
+        core_edge, aspect, shift_held,
+    ));
+    state.aspect_resize_last_size = None;
+}
+
+fn clear_aspect_resize_session(state: &Rc<RefCell<PlayerState>>) {
+    let mut state = state.borrow_mut();
+    state.aspect_resize_session = None;
+    state.aspect_resize_last_size = None;
+}
+
+/// Track Shift transitions during an active resize so the lock can engage or
+/// release mid-drag (issue #331). On Wayland the compositor owns the pointer
+/// grab, so a mid-drag transition is only observed where the toolkit still
+/// delivers key events; the press-time decision in [`seed_aspect_resize_session`]
+/// is the deterministic fallback and is what the pure-core tests exercise.
+pub(crate) fn connect_aspect_resize_shift_tracking(
+    window: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
+) {
+    let controller = gtk::EventControllerKey::new();
+    controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let press_state = Rc::clone(state);
+    controller.connect_key_pressed(move |_, key, _, _| {
+        update_aspect_resize_shift(&press_state, key, true);
+        glib::Propagation::Proceed
+    });
+    let release_state = Rc::clone(state);
+    controller.connect_key_released(move |_, key, _, _| {
+        update_aspect_resize_shift(&release_state, key, false);
+    });
+    window.add_controller(controller);
+}
+
+fn update_aspect_resize_shift(state: &Rc<RefCell<PlayerState>>, key: gdk::Key, held: bool) {
+    if !matches!(key, gdk::Key::Shift_L | gdk::Key::Shift_R) {
+        return;
+    }
+    if let Some(session) = state.borrow_mut().aspect_resize_session.as_mut() {
+        session.set_shift(held);
+    }
+}
+
+/// Apply the aspect lock during an active Shift-resize. Called from the
+/// state-poll loop (like compact mode's aspect correction) so corrections land
+/// between compositor configure cycles rather than fighting the interactive
+/// grab per frame. The pure geometry lives in [`aspect_resize`]; this only
+/// samples the live window and re-requests a size when it drifts past the
+/// physical-pixel tolerance.
+pub(crate) fn apply_aspect_resize_lock(
+    window: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
+    reported_bounds: &Rc<RefCell<Option<PlayerWindowBounds>>>,
+) {
+    let Some(session) = state.borrow().aspect_resize_session else {
+        return;
+    };
+    if !session.is_locking() || window.is_fullscreen() || window.is_maximized() {
+        // Shift released, or the window entered a managed state: end the session
+        // and keep whatever size the drag has already reached.
+        clear_aspect_resize_session(state);
+        return;
+    }
+
+    let current = aspect_resize::ClientSize {
+        width: window.width(),
+        height: window.height(),
+    };
+    if current.width <= 1 || current.height <= 1 {
+        return;
+    }
+
+    let Some(work_area) = current_player_work_area(window, reported_bounds) else {
+        return;
+    };
+    let Some(budget) = window_fit::work_area_budget(work_area.width, work_area.height) else {
+        return;
+    };
+    let bounds = aspect_resize::ResizeBounds::from_work_area_budget(budget);
+    let scale = current_player_scale(window);
+
+    let moved_since_last = state.borrow().aspect_resize_last_size != Some(current);
+    state.borrow_mut().aspect_resize_last_size = Some(current);
+
+    match session.resolve(current, bounds) {
+        Some(target) if aspect_resize::exceeds_resize_tolerance(current, target, scale) => {
+            window.set_default_size(target.width, target.height);
+            resize_player_window_on_x11(
+                window,
+                window_fit::WindowSize {
+                    width: target.width,
+                    height: target.height,
+                },
+            );
+            if env::var_os("OKP_DEBUG_WINDOW_RESIZE").is_some() {
+                eprintln!(
+                    "aspect resize lock: current={}x{} target={}x{} scale={scale:.2}",
+                    current.width, current.height, target.width, target.height,
+                );
+            }
+        }
+        _ => {
+            // The size already satisfies the aspect (or cannot be resolved). Once
+            // it has also stopped changing, the drag has settled — end the
+            // session so the corrector never fights an idle or later freeform
+            // window.
+            if !moved_since_last {
+                clear_aspect_resize_session(state);
+            }
+        }
+    }
 }
 
 pub(crate) fn build_empty_surface(
@@ -1905,4 +2079,31 @@ pub(crate) fn app_icon_path() -> Option<PathBuf> {
             .join("../../packaging/linux/com.befeast.okplayer.svg"),
     );
     candidates.into_iter().find(|path| path.is_file())
+}
+
+#[cfg(test)]
+mod aspect_resize_wiring_tests {
+    use super::*;
+
+    #[test]
+    fn every_resize_edge_maps_to_a_core_edge() {
+        use aspect_resize::ResizeEdge;
+        let cases = [
+            (gdk::SurfaceEdge::North, ResizeEdge::Top),
+            (gdk::SurfaceEdge::South, ResizeEdge::Bottom),
+            (gdk::SurfaceEdge::West, ResizeEdge::Left),
+            (gdk::SurfaceEdge::East, ResizeEdge::Right),
+            (gdk::SurfaceEdge::NorthWest, ResizeEdge::TopLeft),
+            (gdk::SurfaceEdge::NorthEast, ResizeEdge::TopRight),
+            (gdk::SurfaceEdge::SouthWest, ResizeEdge::BottomLeft),
+            (gdk::SurfaceEdge::SouthEast, ResizeEdge::BottomRight),
+        ];
+        for (surface_edge, expected) in cases {
+            assert_eq!(
+                resize_edge_for_surface_edge(surface_edge),
+                Some(expected),
+                "edge {surface_edge:?}",
+            );
+        }
+    }
 }

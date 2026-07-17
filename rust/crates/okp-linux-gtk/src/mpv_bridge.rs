@@ -741,6 +741,8 @@ pub(crate) fn connect_state_poll(
                 window.present();
             }
         }
+        // Hold the video/client aspect while a Shift-resize is active (issue #331).
+        apply_aspect_resize_lock(&window, &state, &window_bounds);
         drain_screenshot_jobs(&state, &status_toast);
         try_pending_audio_device_restore(&state);
 
