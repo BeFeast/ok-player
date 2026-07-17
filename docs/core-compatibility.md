@@ -317,7 +317,7 @@ directly unit-tested, and renders it in the GTK shell; cache and network are def
   `SubDelayMs` on Windows. The shell previously rounded half away from zero; the two differed
   only at exact half-millisecond delays, unreachable through either shell's own controls.
 
-## Subtitle track roles → `okp_core::subtitle_tracks` (Linux shell extraction)
+## Subtitle track roles and format boundary → `okp_core::subtitle_tracks` / `subtitle_format` (Linux shell extraction)
 
 - **No C# core counterpart; captures the Windows shell rule.** Windows has no `OkPlayer.Core`
   module for this — the classification lives in the `PlayerViewModel.ReadTracks` shell method.
@@ -334,6 +334,15 @@ directly unit-tested, and renders it in the GTK shell; cache and network are def
   is the same predicate. Both shells offer the picker once a dual-subtitle choice exists or a
   secondary is already active (so an mpv-carried `secondary-sid` in a single-track file can always
   be switched back off), and hide it otherwise to keep a single-track flyout calm.
+- **ASS/SSA preset applicability is currently Linux-only.** Windows already states in Settings
+  that ASS/SSA keeps built-in styling, but it has no portable format classifier or per-track
+  applicability state. `subtitle_format` extends its merged text/image classification with mpv
+  codec metadata plus the external filename extension (needed because FFmpeg commonly reports SSA
+  as `ass`) to distinguish supported text, native-style, image, and unknown preset states.
+  `subtitle_tracks` projects that state from the selected primary track. The Linux picker then
+  disables its preset cycle for native/image/unknown tracks while preserving the global preset for
+  supported text tracks. This is an intentional compatibility note for issue #227, not a port of
+  untested C# shell logic.
 - **Media surface wording is Linux-only.** The Linux Media Info window names each subtitle slot
   `Primary` / `Secondary` in the track detail (`okp-mpv` reads `secondary-sid` alongside the
   track list). Windows has no equivalent media-info surface; the wording is presentation local to

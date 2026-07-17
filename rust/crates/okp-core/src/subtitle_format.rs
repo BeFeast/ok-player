@@ -15,9 +15,10 @@
 //!
 //! mpv exposes the codec as the ffmpeg short name (e.g. `hdmv_pgs_subtitle`); we
 //! match the known bitmap families case-insensitively and treat everything else —
-//! SubRip, WebVTT, ASS/SSA, an unknown or absent codec — as text. Unknown-as-text
-//! is the safe default: a novel or missing codec keeps the existing text
-//! behaviour rather than hiding controls for a track that might in fact be text.
+//! SubRip, WebVTT, ASS/SSA, an unknown or absent codec — as text for the coarse
+//! rendering classification. Appearance-preset applicability is stricter: it
+//! distinguishes ASS/SSA native styling and leaves unknown metadata unsupported
+//! rather than promising that curated text styling will work.
 
 /// How mpv presents a subtitle track's cues.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +27,66 @@ pub enum SubtitleFormat {
     Text,
     /// Pre-rendered bitmap graphics (PGS, VobSub, DVB, XSUB).
     Image,
+}
+
+/// Format families that affect OK Player's curated appearance preset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubtitlePresetFormat {
+    /// SubRip/plain SRT text rendered with the curated preset.
+    SubRip,
+    /// WebVTT text rendered with the curated preset.
+    WebVtt,
+    /// Another known plain-text subtitle codec rendered by mpv's text renderer.
+    OtherText,
+    /// Advanced SubStation Alpha with authored native styling.
+    Ass,
+    /// SubStation Alpha with authored native styling.
+    Ssa,
+    /// Pre-rendered bitmap graphics (PGS, VobSub, DVB, XSUB).
+    Image,
+    /// Missing or unrecognized metadata. Preset support cannot be promised.
+    Unknown,
+}
+
+impl SubtitlePresetFormat {
+    /// Short user-facing format name when the family has a stable label.
+    #[must_use]
+    pub const fn label(self) -> Option<&'static str> {
+        match self {
+            Self::SubRip => Some("SRT"),
+            Self::WebVtt => Some("WebVTT"),
+            Self::Ass => Some("ASS"),
+            Self::Ssa => Some("SSA"),
+            Self::OtherText | Self::Image | Self::Unknown => None,
+        }
+    }
+
+    /// User-facing name for applicability explanations in pickers and settings.
+    #[must_use]
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::SubRip => "SRT",
+            Self::WebVtt => "WebVTT",
+            Self::OtherText => "text subtitle",
+            Self::Ass => "ASS",
+            Self::Ssa => "SSA",
+            Self::Image => "image subtitle",
+            Self::Unknown => "unknown subtitle",
+        }
+    }
+}
+
+/// Whether a selected subtitle can use OK Player's appearance preset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubtitlePresetApplicability {
+    /// A known text track rendered with the curated preset.
+    Applies(SubtitlePresetFormat),
+    /// ASS/SSA owns its authored styling; OK Player preserves it.
+    NativeStyle(SubtitlePresetFormat),
+    /// The format is image-based or unknown, so preset support cannot be claimed.
+    Unsupported(SubtitlePresetFormat),
+    /// No primary subtitle is selected.
+    NoActiveTrack,
 }
 
 impl SubtitleFormat {
@@ -56,7 +117,63 @@ pub fn is_image_subtitle(codec: Option<&str>) -> bool {
 /// draws verbatim. Size and vertical position are a separate concern and still
 /// apply to image tracks, so this gate is only about the appearance preset.
 pub fn appearance_presets_apply(codec: Option<&str>) -> bool {
-    !is_image_subtitle(codec)
+    matches!(
+        preset_applicability(codec, None),
+        SubtitlePresetApplicability::Applies(_)
+    )
+}
+
+/// Classify the subtitle format for appearance-preset behavior. The external
+/// filename extension wins for `.ass`/`.ssa` because FFmpeg commonly reports
+/// both as codec `ass`; this preserves the actual user-visible format.
+#[must_use]
+pub fn preset_format(codec: Option<&str>, external_filename: Option<&str>) -> SubtitlePresetFormat {
+    match external_extension(external_filename).as_deref() {
+        Some("ass") => return SubtitlePresetFormat::Ass,
+        Some("ssa") => return SubtitlePresetFormat::Ssa,
+        _ => {}
+    }
+
+    if is_image_subtitle(codec) {
+        return SubtitlePresetFormat::Image;
+    }
+
+    let codec = clean(codec).map(|value| value.to_ascii_lowercase());
+    match codec.as_deref() {
+        Some("ass") => SubtitlePresetFormat::Ass,
+        Some("ssa") => SubtitlePresetFormat::Ssa,
+        Some("subrip" | "srt") => SubtitlePresetFormat::SubRip,
+        Some("webvtt" | "vtt") => SubtitlePresetFormat::WebVtt,
+        Some(
+            "text" | "mov_text" | "microdvd" | "subviewer" | "subviewer1" | "jacosub" | "sami"
+            | "realtext" | "stl" | "eia_608" | "eia_708",
+        ) => SubtitlePresetFormat::OtherText,
+        _ => match external_extension(external_filename).as_deref() {
+            Some("srt") => SubtitlePresetFormat::SubRip,
+            Some("vtt" | "webvtt") => SubtitlePresetFormat::WebVtt,
+            _ => SubtitlePresetFormat::Unknown,
+        },
+    }
+}
+
+/// Resolve the honest preset state from raw mpv track metadata.
+#[must_use]
+pub fn preset_applicability(
+    codec: Option<&str>,
+    external_filename: Option<&str>,
+) -> SubtitlePresetApplicability {
+    let format = preset_format(codec, external_filename);
+    match format {
+        SubtitlePresetFormat::SubRip
+        | SubtitlePresetFormat::WebVtt
+        | SubtitlePresetFormat::OtherText => SubtitlePresetApplicability::Applies(format),
+        SubtitlePresetFormat::Ass | SubtitlePresetFormat::Ssa => {
+            SubtitlePresetApplicability::NativeStyle(format)
+        }
+        SubtitlePresetFormat::Image | SubtitlePresetFormat::Unknown => {
+            SubtitlePresetApplicability::Unsupported(format)
+        }
+    }
 }
 
 /// A short, human-readable name for a known image subtitle codec — `PGS`,
@@ -72,6 +189,17 @@ pub fn image_format_name(codec: Option<&str>) -> Option<&'static str> {
         "xsub" => "XSUB",
         _ => return None,
     })
+}
+
+fn clean(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn external_extension(filename: Option<&str>) -> Option<String> {
+    let filename = clean(filename)?;
+    let basename = filename.rsplit(['/', '\\']).next().unwrap_or(filename);
+    let extension = basename.rsplit_once('.')?.1.trim();
+    (!extension.is_empty()).then(|| extension.to_ascii_lowercase())
 }
 
 #[cfg(test)]
@@ -125,14 +253,86 @@ mod tests {
     }
 
     #[test]
-    fn appearance_presets_apply_only_to_text_tracks() {
+    fn appearance_presets_apply_only_to_supported_plain_text_tracks() {
         // Image tracks: the appearance preset cannot restyle a bitmap.
         assert!(!appearance_presets_apply(Some("hdmv_pgs_subtitle")));
         assert!(!appearance_presets_apply(Some("dvd_subtitle")));
-        // Text tracks and unclassified codecs keep the presets available.
+        // ASS/SSA owns authored styling, while unknown metadata cannot safely
+        // promise preset support.
+        assert!(!appearance_presets_apply(Some("ass")));
+        assert!(!appearance_presets_apply(Some("ssa")));
+        assert!(!appearance_presets_apply(None));
+        // Known plain-text tracks keep the presets available.
         assert!(appearance_presets_apply(Some("subrip")));
-        assert!(appearance_presets_apply(Some("ass")));
-        assert!(appearance_presets_apply(None));
+        assert!(appearance_presets_apply(Some("webvtt")));
+        assert!(appearance_presets_apply(Some("mov_text")));
+    }
+
+    #[test]
+    fn preset_format_distinguishes_ass_and_ssa_with_filename_fallback() {
+        assert_eq!(preset_format(Some("ass"), None), SubtitlePresetFormat::Ass);
+        assert_eq!(preset_format(Some("ssa"), None), SubtitlePresetFormat::Ssa);
+        assert_eq!(
+            preset_format(Some("ass"), Some("/media/Feature.EN.SSA")),
+            SubtitlePresetFormat::Ssa
+        );
+        assert_eq!(
+            preset_format(None, Some(r"C:\media\Feature.ass")),
+            SubtitlePresetFormat::Ass
+        );
+    }
+
+    #[test]
+    fn preset_format_classifies_supported_image_and_unknown_states() {
+        assert_eq!(
+            preset_format(Some("subrip"), None),
+            SubtitlePresetFormat::SubRip
+        );
+        assert_eq!(
+            preset_format(None, Some("Feature.vtt")),
+            SubtitlePresetFormat::WebVtt
+        );
+        assert_eq!(
+            preset_format(Some("mov_text"), None),
+            SubtitlePresetFormat::OtherText
+        );
+        assert_eq!(
+            preset_format(Some("hdmv_pgs_subtitle"), None),
+            SubtitlePresetFormat::Image
+        );
+        assert_eq!(preset_format(None, None), SubtitlePresetFormat::Unknown);
+        assert_eq!(
+            SubtitlePresetFormat::OtherText.display_name(),
+            "text subtitle"
+        );
+        assert_eq!(
+            SubtitlePresetFormat::Unknown.display_name(),
+            "unknown subtitle"
+        );
+    }
+
+    #[test]
+    fn preset_applicability_preserves_native_styles_and_safe_fallbacks() {
+        assert_eq!(
+            preset_applicability(Some("subrip"), None),
+            SubtitlePresetApplicability::Applies(SubtitlePresetFormat::SubRip)
+        );
+        assert_eq!(
+            preset_applicability(Some("ass"), None),
+            SubtitlePresetApplicability::NativeStyle(SubtitlePresetFormat::Ass)
+        );
+        assert_eq!(
+            preset_applicability(Some("ass"), Some("Feature.ssa")),
+            SubtitlePresetApplicability::NativeStyle(SubtitlePresetFormat::Ssa)
+        );
+        assert_eq!(
+            preset_applicability(Some("pgs"), None),
+            SubtitlePresetApplicability::Unsupported(SubtitlePresetFormat::Image)
+        );
+        assert_eq!(
+            preset_applicability(None, None),
+            SubtitlePresetApplicability::Unsupported(SubtitlePresetFormat::Unknown)
+        );
     }
 
     #[test]
