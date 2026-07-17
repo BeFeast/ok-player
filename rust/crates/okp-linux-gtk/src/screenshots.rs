@@ -1,7 +1,7 @@
 use std::env;
 use std::ffi::CString;
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -70,6 +70,7 @@ impl ScreenshotJobs {
     ) {
         let sender = self.sender.clone();
         thread::spawn(move || {
+            let error_directory = directory.clone();
             let result = prepare_saved_capture(
                 directory,
                 media_path,
@@ -77,7 +78,7 @@ impl ScreenshotJobs {
                 format,
                 include_subtitles,
             )
-            .map_err(|error| error.to_string());
+            .map_err(|error| destination_error(&error_directory, error));
             let _ = sender.send(ScreenshotJobResult::SavedPrepared(result));
         });
     }
@@ -93,7 +94,9 @@ impl ScreenshotJobs {
     pub fn publish_saved(&self, target: SavedCaptureTarget) {
         let sender = self.sender.clone();
         thread::spawn(move || {
-            let result = publish_saved_capture(target).map_err(|error| error.to_string());
+            let error_directory = target.directory.clone();
+            let result = publish_saved_capture(target)
+                .map_err(|error| destination_error(&error_directory, error));
             let _ = sender.send(ScreenshotJobResult::SavedPublished(result));
         });
     }
@@ -125,6 +128,7 @@ pub fn prepare_saved_capture(
             "screenshot destination is not a directory",
         ));
     }
+    verify_directory_writable(&directory)?;
 
     let timestamp_millis = unix_millis();
     let temp_path = unique_temp_path(&directory, "saved-frame", format.extension())?;
@@ -140,6 +144,11 @@ pub fn prepare_saved_capture(
 }
 
 pub fn publish_saved_capture(target: SavedCaptureTarget) -> io::Result<PathBuf> {
+    if let Err(error) = validate_capture_output(&target.temp_path) {
+        remove_temporary_capture(&target.temp_path);
+        return Err(error);
+    }
+
     for suffix in 0..MAX_COLLISION_ATTEMPTS {
         let filename = candidate_filename(
             target.media_path.as_deref(),
@@ -215,6 +224,43 @@ fn unique_temp_path(directory: &Path, purpose: &str, extension: &str) -> io::Res
     ))
 }
 
+fn verify_directory_writable(directory: &Path) -> io::Result<()> {
+    let probe = unique_temp_path(directory, "write-test", "tmp")?;
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)?;
+    fs::remove_file(probe)
+}
+
+fn validate_capture_output(path: &Path) -> io::Result<()> {
+    let metadata = fs::metadata(path)?;
+    if !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "libmpv did not produce a regular screenshot file",
+        ));
+    }
+    if metadata.len() == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "libmpv produced an empty screenshot file",
+        ));
+    }
+
+    let mut file = fs::File::open(path)?;
+    let mut first_byte = [0_u8; 1];
+    file.read_exact(&mut first_byte)?;
+    Ok(())
+}
+
+fn destination_error(directory: &Path, error: io::Error) -> String {
+    format!(
+        "Couldn't save screenshot to {}: {error}",
+        directory.display()
+    )
+}
+
 fn rename_noreplace(source: &Path, destination: &Path) -> io::Result<()> {
     let source_c = CString::new(source.as_os_str().as_bytes())?;
     let destination_c = CString::new(destination.as_os_str().as_bytes())?;
@@ -234,10 +280,7 @@ fn rename_noreplace(source: &Path, destination: &Path) -> io::Result<()> {
     }
 
     let error = io::Error::last_os_error();
-    if matches!(
-        error.raw_os_error(),
-        Some(libc::ENOSYS) | Some(libc::EINVAL)
-    ) {
+    if renameat2_is_unsupported(&error) {
         fs::hard_link(source, destination)?;
         fs::remove_file(source)?;
         return Ok(());
@@ -245,9 +288,22 @@ fn rename_noreplace(source: &Path, destination: &Path) -> io::Result<()> {
     Err(error)
 }
 
+fn renameat2_is_unsupported(error: &io::Error) -> bool {
+    error.raw_os_error().is_some_and(|code| {
+        code == libc::ENOSYS
+            || code == libc::EINVAL
+            || code == libc::EOPNOTSUPP
+            || code == libc::ENOTSUP
+    })
+}
+
 fn xdg_pictures_dir() -> Option<PathBuf> {
     let home = env::var_os("HOME").map(PathBuf::from)?;
-    let user_dirs = fs::read_to_string(home.join(".config/user-dirs.dirs")).ok()?;
+    let config_home = env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| home.join(".config"));
+    let user_dirs = fs::read_to_string(config_home.join("user-dirs.dirs")).ok()?;
     parse_xdg_pictures_dir(&home, &user_dirs)
 }
 
@@ -307,6 +363,91 @@ mod tests {
             b"existing"
         );
         assert_eq!(fs::read(published).unwrap(), b"new frame");
+    }
+
+    #[test]
+    fn prepare_saved_capture_creates_a_missing_writable_destination() {
+        let root = unique_temp_dir("okp-screenshot-create-destination");
+        let directory = root.path().join("Pictures/OK Player");
+
+        let target = prepare_saved_capture(
+            directory.clone(),
+            None,
+            SavedCaptureContext {
+                source_generation: 1,
+                seek_generation: 0,
+                position: Some(3.0),
+            },
+            ScreenshotFormat::Png,
+            false,
+        )
+        .expect("missing screenshot destination should be created");
+
+        assert!(directory.is_dir());
+        assert!(!target.temp_path.exists());
+        assert!(fs::read_dir(directory).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn prepare_saved_capture_rejects_a_file_as_the_destination() {
+        let root = unique_temp_dir("okp-screenshot-invalid-destination");
+        let destination = root.path().join("not-a-directory");
+        fs::write(&destination, b"occupied").expect("destination fixture");
+
+        let error = prepare_saved_capture(
+            destination,
+            None,
+            SavedCaptureContext {
+                source_generation: 1,
+                seek_generation: 0,
+                position: None,
+            },
+            ScreenshotFormat::Png,
+            false,
+        )
+        .expect_err("a file cannot be used as a screenshot directory");
+
+        assert!(matches!(
+            error.kind(),
+            io::ErrorKind::AlreadyExists | io::ErrorKind::NotADirectory
+        ));
+    }
+
+    #[test]
+    fn publish_rejects_missing_and_empty_libmpv_output() {
+        let root = unique_temp_dir("okp-screenshot-output-validation");
+        let request_context = SavedCaptureContext {
+            source_generation: 1,
+            seek_generation: 0,
+            position: None,
+        };
+        let missing = root.path().join("missing.png");
+        let missing_error = publish_saved_capture(SavedCaptureTarget {
+            temp_path: missing,
+            include_subtitles: false,
+            request_context,
+            directory: root.path().to_owned(),
+            media_path: None,
+            timestamp_millis: 1234,
+            format: ScreenshotFormat::Png,
+        })
+        .expect_err("a successful command reply without output must not publish");
+        assert_eq!(missing_error.kind(), io::ErrorKind::NotFound);
+
+        let empty = root.path().join("empty.png");
+        fs::write(&empty, []).expect("empty screenshot fixture");
+        let empty_error = publish_saved_capture(SavedCaptureTarget {
+            temp_path: empty.clone(),
+            include_subtitles: false,
+            request_context,
+            directory: root.path().to_owned(),
+            media_path: None,
+            timestamp_millis: 1234,
+            format: ScreenshotFormat::Png,
+        })
+        .expect_err("an empty screenshot must not publish");
+        assert_eq!(empty_error.kind(), io::ErrorKind::UnexpectedEof);
+        assert!(!empty.exists());
     }
 
     #[test]

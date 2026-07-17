@@ -77,6 +77,7 @@ lock after their direct parent returns.
    - Debian and AppImage/Velopack packaging
    - package identity + SHA-256 verification (`SHA256SUMS`, `package-identity.json`)
    - clean install / upgrade / uninstall smoke in a disposable environment
+   - real playback and screenshot capture from the exact Debian payload, with a bundled image and SHA-256
    - headless launch smoke (Xvfb)
    - optional native-hardware smoke (only when `OKP_CANDIDATE_NATIVE_SMOKE` is set)
 5. Emit the artifact bundle and check promotability.

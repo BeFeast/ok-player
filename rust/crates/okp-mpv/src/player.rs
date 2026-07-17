@@ -299,6 +299,17 @@ pub enum MpvError {
     MissingRenderContext,
 }
 
+pub fn error_description(code: c_int) -> String {
+    let description = unsafe { ffi::mpv_error_string(code) };
+    if description.is_null() {
+        return format!("libmpv error {code}");
+    }
+
+    unsafe { CStr::from_ptr(description) }
+        .to_string_lossy()
+        .into_owned()
+}
+
 /// A bare, non-owning handle over which every mpv property read is issued.
 ///
 /// It carries no debug guard, so it is safe to use from the background event
@@ -2354,6 +2365,27 @@ mod tests {
             .join("../../../tests/OkPlayer.IntegrationTests/fixtures/subtest.mkv")
     }
 
+    fn wait_for_command_reply(mpv: &Mpv, request_id: u64) -> Option<c_int> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if let Some(error) = mpv.take_lifecycle_events().into_iter().find_map(|event| {
+                if let MpvEvent::CommandReply {
+                    request_id: reply_id,
+                    error,
+                } = event
+                    && reply_id == request_id
+                {
+                    return Some(error);
+                }
+                None
+            }) {
+                return Some(error);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        None
+    }
+
     fn assert_same_stem_sidecar_autoloaded(extension: &str, contents: &str, expected_codec: &str) {
         let case = format!("same-stem-{extension}");
         let test_name = match extension {
@@ -2881,6 +2913,63 @@ mod tests {
     fn screenshot_modes_keep_clean_and_subtitled_captures_distinct() {
         assert_eq!(screenshot_mode(false), "video");
         assert_eq!(screenshot_mode(true), "subtitles");
+    }
+
+    #[test]
+    fn screenshot_command_writes_a_non_empty_image() {
+        if !enter_real_mpv_case(
+            "screenshot-command",
+            "player::tests::screenshot_command_writes_a_non_empty_image",
+        ) {
+            return;
+        }
+        let root = unique_temp_dir("okp-mpv-screenshot");
+        let options = [
+            ("vo".to_owned(), "null".to_owned()),
+            ("ao".to_owned(), "null".to_owned()),
+            ("pause".to_owned(), "yes".to_owned()),
+        ];
+        let mut mpv = Mpv::new_with_options("no", &options)
+            .expect("libmpv must be loadable for okp-mpv tests");
+        mpv.start_event_pump_without_audio_devices();
+        mpv.load_file(&fixture_media_path())
+            .expect("video fixture should load");
+
+        let loaded_deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < loaded_deadline && mpv.observed_video_dimensions().is_none() {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            mpv.observed_video_dimensions().is_some(),
+            "video fixture should publish dimensions before capture"
+        );
+
+        for (name, include_subtitles) in [("frame.png", false), ("frame-with-subtitles.png", true)]
+        {
+            let output = root.path().join(name);
+            let request_id = mpv
+                .screenshot_to_file_async(&output, include_subtitles)
+                .expect("screenshot command should dispatch");
+            assert_eq!(
+                wait_for_command_reply(&mpv, request_id),
+                Some(0),
+                "screenshot command should succeed for {name}"
+            );
+            assert!(
+                fs::metadata(&output).is_ok_and(|metadata| metadata.len() > 0),
+                "screenshot output should exist and be non-empty for {name}"
+            );
+        }
+
+        let invalid_output = root.path().join("missing-parent/frame.png");
+        let failed_request_id = mpv
+            .screenshot_to_file_async(&invalid_output, true)
+            .expect("invalid screenshot command should still dispatch asynchronously");
+        let error = wait_for_command_reply(&mpv, failed_request_id)
+            .expect("invalid screenshot command should return a reply");
+        assert!(error < 0, "libmpv failure must propagate through the reply");
+        assert!(!error_description(error).is_empty());
+        assert!(!invalid_output.exists());
     }
 
     #[test]

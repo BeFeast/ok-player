@@ -51,6 +51,7 @@ pub const REQUIRED_CANDIDATE_GATES: &[&str] = &[
     "appimage-package",
     "package-identity",
     "install-upgrade-uninstall-smoke",
+    "deb-screenshot-smoke",
     "headless-launch-smoke",
 ];
 
