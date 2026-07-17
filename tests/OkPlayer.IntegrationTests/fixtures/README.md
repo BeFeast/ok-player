@@ -24,6 +24,16 @@ ffmpeg -i base.mkv -i subtest.srt -map 0:v:0 -map 1:0 -c:v copy -c:s srt -t 3 su
 
 White text on a near-black frame so the test can separate caption pixels from background by a simple luma cut.
 
+## Temporary fixture lifetime
+
+Rust filesystem tests use the shared `okp_test_fixtures::unique_temp_dir` guard. Keep that guard in
+scope until the final filesystem access; derived paths do not retain the fixture. Tests that start a
+detached NFO read must wait for its existing completion signal before explicitly closing the guard.
+
+The guard removes fixtures after normal return and panic unwind. Destructors do not run after abort,
+`process::exit`, `SIGKILL`, or OOM termination, so the external worker lease/runtime cleanup remains
+responsible for those cases.
+
 ## Live Linux 4K60 fixture
 
 The issue #312 acceptance clip is intentionally not committed. The operator supplies the same

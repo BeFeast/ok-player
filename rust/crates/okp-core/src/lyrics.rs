@@ -117,28 +117,22 @@ mod tests {
     #[test]
     fn read_sidecar_reads_a_same_named_lrc() {
         let dir = unique_temp_dir("okp-lyrics-read");
-        fs::create_dir_all(&dir).expect("temp dir");
-        let media = dir.join("Song.flac");
+        let media = dir.path().join("Song.flac");
         fs::write(&media, b"not really audio").expect("media file");
-        fs::write(dir.join("Song.lrc"), "[00:01.00]hello").expect("sidecar");
+        fs::write(dir.path().join("Song.lrc"), "[00:01.00]hello").expect("sidecar");
 
         assert_eq!(read_sidecar(&media).as_deref(), Some("[00:01.00]hello"));
-
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn read_sidecar_accepts_an_uppercase_extension() {
         let dir = unique_temp_dir("okp-lyrics-upper");
-        fs::create_dir_all(&dir).expect("temp dir");
-        let media = dir.join("Track.mp3");
+        let media = dir.path().join("Track.mp3");
         fs::write(&media, b"x").expect("media file");
         // Only an uppercase-extension sheet exists; the lowercase probe misses, the fallback hits.
-        fs::write(dir.join("Track.LRC"), "plain words").expect("sidecar");
+        fs::write(dir.path().join("Track.LRC"), "plain words").expect("sidecar");
 
         assert_eq!(read_sidecar(&media).as_deref(), Some("plain words"));
-
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -148,31 +142,26 @@ mod tests {
         // case-sensitive Linux filesystem too.
         for extension in ["Lrc", "lRc", "lrC", "LRc"] {
             let dir = unique_temp_dir("okp-lyrics-mixed");
-            fs::create_dir_all(&dir).expect("temp dir");
-            let media = dir.join("Track.flac");
+            let media = dir.path().join("Track.flac");
             fs::write(&media, b"x").expect("media file");
-            fs::write(dir.join(format!("Track.{extension}")), "mixed case").expect("sidecar");
+            fs::write(dir.path().join(format!("Track.{extension}")), "mixed case")
+                .expect("sidecar");
 
             assert_eq!(
                 read_sidecar(&media).as_deref(),
                 Some("mixed case"),
                 "Track.{extension}"
             );
-
-            fs::remove_dir_all(&dir).ok();
         }
     }
 
     #[test]
     fn read_sidecar_is_none_when_absent() {
         let dir = unique_temp_dir("okp-lyrics-absent");
-        fs::create_dir_all(&dir).expect("temp dir");
-        let media = dir.join("Lonely.opus");
+        let media = dir.path().join("Lonely.opus");
         fs::write(&media, b"x").expect("media file");
 
         assert_eq!(read_sidecar(&media), None);
-
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

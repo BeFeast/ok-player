@@ -845,12 +845,12 @@ mod tests {
     #[test]
     fn native_bundle_to_enrolled_selection_preserves_exact_identity_and_public_feed() {
         let root = unique_temp_dir("okp-candidate-contract");
-        let bundle = root.join("bundle");
+        let bundle = root.path().join("bundle");
         let deb_dir = bundle.join("artifacts/deb");
         let velopack_dir = bundle.join("artifacts/velopack");
         fs::create_dir_all(&deb_dir).unwrap();
         fs::create_dir_all(&velopack_dir).unwrap();
-        let public_feed = root.join("public-feed.json");
+        let public_feed = root.path().join("public-feed.json");
         fs::write(&public_feed, b"public-feed-byte-for-byte\n").unwrap();
         let public_before = fs::read(&public_feed).unwrap();
 
@@ -946,14 +946,13 @@ mod tests {
         assert_eq!(update.appimage.sha256, sha256_hex(nupkg_bytes));
         assert_eq!(fs::read(&public_feed).unwrap(), public_before);
 
-        fs::remove_dir_all(root).unwrap();
+        root.close().unwrap();
     }
 
     #[test]
     fn feed_assembly_retains_complete_previous_recovery_points_and_prunes_older_assets() {
         let root = unique_temp_dir("okp-candidate-retention");
-        fs::create_dir_all(&root).unwrap();
-        let deb_path = root.join("ok-player_0.11.0-beta.1.42_amd64.deb");
+        let deb_path = root.path().join("ok-player_0.11.0-beta.1.42_amd64.deb");
         fs::write(&deb_path, b"deb").unwrap();
         let version = "0.11.0-beta.1.42";
         let record = CandidateBuild::new(
@@ -1036,7 +1035,7 @@ mod tests {
             ],
         );
         assert_eq!(plan, vec![obsolete, obsolete_full]);
-        fs::remove_dir_all(root).unwrap();
+        root.close().unwrap();
     }
 
     #[test]

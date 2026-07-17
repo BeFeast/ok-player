@@ -859,7 +859,7 @@ mod tests {
     #[test]
     fn subtitle_presentation_survives_save_and_reload() {
         let root = unique_temp_dir("okp-subtitle-settings");
-        let path = root.join("settings.json");
+        let path = root.path().join("missing-parent/settings.json");
         let mut settings = SettingsStore {
             path: path.clone(),
             data: Settings::default(),
@@ -877,7 +877,8 @@ mod tests {
         assert_eq!(reloaded.subtitles.position, Some(90));
         assert_eq!(reloaded.subtitles.style.as_deref(), Some("Contrast"));
 
-        fs::remove_dir_all(root).expect("temporary settings directory should be removed");
+        root.close()
+            .expect("temporary settings directory should be removed");
     }
 
     #[test]
@@ -974,15 +975,14 @@ mod tests {
     #[test]
     fn screenshot_settings_persist_in_the_human_readable_document() {
         let directory = unique_temp_dir("okp-screenshot-settings");
-        fs::create_dir_all(&directory).expect("temp directory");
-        let path = directory.join("settings.json");
+        let path = directory.path().join("settings.json");
         let mut settings = SettingsStore {
             path: path.clone(),
             data: Settings::default(),
             dirty: false,
         };
         settings.set_screenshot_format(ScreenshotFormat::Webp);
-        assert!(settings.set_screenshot_directory(Some(&directory)));
+        assert!(settings.set_screenshot_directory(Some(directory.path())));
 
         settings.save().expect("save settings");
 
@@ -993,7 +993,7 @@ mod tests {
         assert_eq!(restored.screenshots.format, Some(ScreenshotFormat::Webp));
         assert_eq!(
             restored.screenshots.directory.as_deref(),
-            directory.to_str()
+            directory.path().to_str()
         );
     }
 }

@@ -281,10 +281,9 @@ mod tests {
     #[test]
     fn publish_saved_capture_never_overwrites_a_collision() {
         let directory = unique_temp_dir("okp-screenshot-collision");
-        fs::create_dir_all(&directory).expect("temp directory");
         let first_name = candidate_filename(None, None, 1234, "png", 0);
-        fs::write(directory.join(first_name), b"existing").expect("existing screenshot");
-        let temp_path = directory.join(".capture.png");
+        fs::write(directory.path().join(first_name), b"existing").expect("existing screenshot");
+        let temp_path = directory.path().join(".capture.png");
         fs::write(&temp_path, b"new frame").expect("temporary screenshot");
 
         let published = publish_saved_capture(SavedCaptureTarget {
@@ -295,16 +294,16 @@ mod tests {
                 seek_generation: 0,
                 position: None,
             },
-            directory: directory.clone(),
+            directory: directory.path().to_owned(),
             media_path: None,
             timestamp_millis: 1234,
             format: ScreenshotFormat::Png,
         })
         .expect("publish screenshot");
 
-        assert_eq!(published, directory.join("ok-player-1234-1.png"));
+        assert_eq!(published, directory.path().join("ok-player-1234-1.png"));
         assert_eq!(
-            fs::read(directory.join("ok-player-1234.png")).unwrap(),
+            fs::read(directory.path().join("ok-player-1234.png")).unwrap(),
             b"existing"
         );
         assert_eq!(fs::read(published).unwrap(), b"new frame");
@@ -312,7 +311,8 @@ mod tests {
 
     #[test]
     fn media_switch_cancels_prepared_capture_before_publication() {
-        let directory = unique_temp_dir("okp-screenshot-stale-source");
+        let root = unique_temp_dir("okp-screenshot-stale-source");
+        let directory = root.path().join("missing-captures");
         let requested = SavedCaptureContext {
             source_generation: 7,
             seek_generation: 2,
@@ -343,7 +343,8 @@ mod tests {
 
     #[test]
     fn queued_seek_cancels_capture_before_observed_position_changes() {
-        let directory = unique_temp_dir("okp-screenshot-stale-seek");
+        let root = unique_temp_dir("okp-screenshot-stale-seek");
+        let directory = root.path().join("missing-captures");
         let requested = SavedCaptureContext {
             source_generation: 7,
             seek_generation: 2,

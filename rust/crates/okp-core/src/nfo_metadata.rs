@@ -348,16 +348,15 @@ mod tests {
     #[test]
     fn read_sidecar_uses_same_basename_title() {
         let dir = unique_temp_dir("okp-nfo-same-basename");
-        fs::create_dir_all(&dir).expect("temp dir");
-        let media = dir.join("Movie.mkv");
+        let media = dir.path().join("Movie.mkv");
         fs::write(&media, b"media").expect("media fixture");
         fs::write(
-            dir.join("Movie.nfo"),
+            dir.path().join("Movie.nfo"),
             b"<movie><title>Curated Movie Title</title><year>2024</year></movie>",
         )
         .expect("nfo fixture");
         fs::write(
-            dir.join("movie.nfo"),
+            dir.path().join("movie.nfo"),
             b"<movie><title>Folder Fallback</title></movie>",
         )
         .expect("folder nfo fixture");
@@ -365,19 +364,16 @@ mod tests {
         let metadata = read_sidecar(&media).expect("usable sidecar");
         assert_eq!(metadata.title, "Curated Movie Title");
         assert_eq!(metadata.year, Some(2024));
-
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn read_sidecar_falls_through_malformed_same_basename() {
         let dir = unique_temp_dir("okp-nfo-folder-fallback");
-        fs::create_dir_all(&dir).expect("temp dir");
-        let media = dir.join("Movie.mkv");
+        let media = dir.path().join("Movie.mkv");
         fs::write(&media, b"media").expect("media fixture");
-        fs::write(dir.join("Movie.nfo"), b"not xml <<<").expect("malformed nfo");
+        fs::write(dir.path().join("Movie.nfo"), b"not xml <<<").expect("malformed nfo");
         fs::write(
-            dir.join("movie.nfo"),
+            dir.path().join("movie.nfo"),
             b"<movie><title>Folder Fallback</title></movie>",
         )
         .expect("folder nfo fixture");
@@ -386,50 +382,42 @@ mod tests {
             read_sidecar(&media).map(|metadata| metadata.title),
             Some("Folder Fallback".to_owned())
         );
-
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn read_sidecar_accepts_utf16_bom() {
         let dir = unique_temp_dir("okp-nfo-utf16");
-        fs::create_dir_all(&dir).expect("temp dir");
-        let media = dir.join("Movie.mkv");
+        let media = dir.path().join("Movie.mkv");
         fs::write(&media, b"media").expect("media fixture");
         let mut bytes = vec![0xFF, 0xFE];
         for unit in "<movie><title>Wide Title</title></movie>".encode_utf16() {
             bytes.extend_from_slice(&unit.to_le_bytes());
         }
-        fs::write(dir.join("Movie.nfo"), bytes).expect("utf16 nfo fixture");
+        fs::write(dir.path().join("Movie.nfo"), bytes).expect("utf16 nfo fixture");
 
         assert_eq!(
             read_sidecar(&media).map(|metadata| metadata.title),
             Some("Wide Title".to_owned())
         );
-
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn read_sidecar_fails_quietly_when_missing_malformed_or_oversized() {
         let dir = unique_temp_dir("okp-nfo-failures");
-        fs::create_dir_all(&dir).expect("temp dir");
-        let media = dir.join("Movie.mkv");
+        let media = dir.path().join("Movie.mkv");
         fs::write(&media, b"media").expect("media fixture");
 
         assert_eq!(read_sidecar(&media), None);
 
-        fs::write(dir.join("Movie.nfo"), b"not xml <<<").expect("malformed nfo");
+        fs::write(dir.path().join("Movie.nfo"), b"not xml <<<").expect("malformed nfo");
         assert_eq!(read_sidecar(&media), None);
 
         fs::write(
-            dir.join("Movie.nfo"),
+            dir.path().join("Movie.nfo"),
             vec![b'x'; MAX_SIDECAR_BYTES as usize + 1],
         )
         .expect("oversized nfo");
         assert_eq!(read_sidecar(&media), None);
-
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

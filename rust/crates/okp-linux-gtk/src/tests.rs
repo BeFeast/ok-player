@@ -1023,10 +1023,9 @@ fn mpris_metadata_invalidates_when_art_url_changes() {
 #[test]
 fn mpris_sidecar_art_prefers_same_named_image() {
     let root = unique_temp_dir("okp-mpris-art-same-name");
-    fs::create_dir_all(&root).expect("test folder should be created");
-    let media = root.join("Track 01.flac");
-    let folder_cover = root.join("cover.jpg");
-    let same_named = root.join("Track 01.png");
+    let media = root.path().join("Track 01.flac");
+    let folder_cover = root.path().join("cover.jpg");
+    let same_named = root.path().join("Track 01.png");
     fs::write(&media, []).expect("test media should be written");
     write_jpeg_header(&folder_cover);
     write_png_header(&same_named);
@@ -1037,17 +1036,16 @@ fn mpris_sidecar_art_prefers_same_named_image() {
         Some(local_file_uri(&same_named))
     );
 
-    fs::remove_dir_all(root).expect("test folder should be removed");
+    root.close().expect("test folder should be removed");
 }
 
 #[test]
 fn mpris_sidecar_art_uses_folder_priority_and_skips_junk() {
     let root = unique_temp_dir("okp-mpris-art-folder");
-    fs::create_dir_all(&root).expect("test folder should be created");
-    let media = root.join("Episode 1.mkv");
-    let bad_cover = root.join("cover.jpg");
-    let folder_cover = root.join("folder.jpg");
-    let poster = root.join("poster.png");
+    let media = root.path().join("Episode 1.mkv");
+    let bad_cover = root.path().join("cover.jpg");
+    let folder_cover = root.path().join("folder.jpg");
+    let poster = root.path().join("poster.png");
     fs::write(&media, []).expect("test media should be written");
     fs::write(&bad_cover, []).expect("junk cover should be written");
     write_jpeg_header(&folder_cover);
@@ -1055,15 +1053,14 @@ fn mpris_sidecar_art_uses_folder_priority_and_skips_junk() {
 
     assert_eq!(mpris_sidecar_art_path(&media), Some(folder_cover));
 
-    fs::remove_dir_all(root).expect("test folder should be removed");
+    root.close().expect("test folder should be removed");
 }
 
 #[test]
 fn mpris_local_art_prefers_sidecar_before_embedded_art() {
     let root = unique_temp_dir("okp-mpris-art-sidecar-first");
-    fs::create_dir_all(&root).expect("test folder should be created");
-    let media = root.join("Song.flac");
-    let sidecar = root.join("Song.jpg");
+    let media = root.path().join("Song.flac");
+    let sidecar = root.path().join("Song.jpg");
     fs::write(&media, b"not a real flac").expect("test media should be written");
     write_jpeg_header(&sidecar);
 
@@ -1078,27 +1075,25 @@ fn mpris_local_art_prefers_sidecar_before_embedded_art() {
             .contains_key(&key)
     );
 
-    fs::remove_dir_all(root).expect("test folder should be removed");
+    root.close().expect("test folder should be removed");
 }
 
 #[test]
 fn mpris_embedded_art_is_audio_only() {
     let root = unique_temp_dir("okp-mpris-art-video-skip");
-    fs::create_dir_all(&root).expect("test folder should be created");
-    let media = root.join("Movie.mkv");
+    let media = root.path().join("Movie.mkv");
     fs::write(&media, b"not a real video").expect("test media should be written");
 
     assert_eq!(mpris_embedded_art_url(&media), None);
 
-    fs::remove_dir_all(root).expect("test folder should be removed");
+    root.close().expect("test folder should be removed");
 }
 
 #[test]
 fn mpris_embedded_art_cache_path_changes_when_media_changes() {
     let root = unique_temp_dir("okp-mpris-art-cache-key");
-    fs::create_dir_all(&root).expect("test folder should be created");
-    let media = root.join("Song.flac");
-    let cache_dir = root.join("cache");
+    let media = root.path().join("Song.flac");
+    let cache_dir = root.path().join("cache");
     fs::write(&media, [1_u8]).expect("test media should be written");
     let before = mpris_embedded_art_cache_key(&media).expect("cache key should resolve");
 
@@ -1111,7 +1106,7 @@ fn mpris_embedded_art_cache_path_changes_when_media_changes() {
         mpris_embedded_art_cache_path_in_dir(&after, &cache_dir)
     );
 
-    fs::remove_dir_all(root).expect("test folder should be removed");
+    root.close().expect("test folder should be removed");
 }
 
 #[test]
@@ -1172,11 +1167,10 @@ fn nfo_results_require_matching_generation_and_path() {
 #[test]
 fn nfo_job_reads_same_basename_sidecar_off_thread() {
     let root = unique_temp_dir("okp-linux-nfo-job");
-    fs::create_dir_all(&root).expect("test folder should be created");
-    let media = root.join("Movie.mkv");
+    let media = root.path().join("Movie.mkv");
     fs::write(&media, b"media").expect("test media should be written");
     fs::write(
-        root.join("Movie.nfo"),
+        root.path().join("Movie.nfo"),
         b"<movie><title>Curated Movie Title</title></movie>",
     )
     .expect("test nfo should be written");
@@ -1191,7 +1185,7 @@ fn nfo_job_reads_same_basename_sidecar_off_thread() {
     assert_eq!(result.media_path, media);
     assert_eq!(result.title.as_deref(), Some("Curated Movie Title"));
 
-    fs::remove_dir_all(root).expect("test folder should be removed");
+    root.close().expect("test folder should be removed");
 }
 
 #[test]
@@ -1233,10 +1227,9 @@ fn mpris_tracklist_window_limits_context_around_current_track() {
 #[test]
 fn mpris_tracklist_metadata_uses_current_track_id() {
     let root = unique_temp_dir("okp-mpris-tracklist");
-    fs::create_dir_all(&root).expect("test folder should be created");
-    let first = root.join("Episode 1.mkv");
-    let second = root.join("Episode 2.mkv");
-    let third = root.join("Episode 3.mkv");
+    let first = root.path().join("Episode 1.mkv");
+    let second = root.path().join("Episode 2.mkv");
+    let third = root.path().join("Episode 3.mkv");
     fs::write(&first, []).expect("test media should be written");
     fs::write(&second, []).expect("test media should be written");
     fs::write(&third, []).expect("test media should be written");
@@ -1282,7 +1275,7 @@ fn mpris_tracklist_metadata_uses_current_track_id() {
     assert!(mpris_tracklist_replaced_signal(&snapshot, &moved).is_some());
     assert!(mpris_tracklist_invalidated_properties(&snapshot, &moved).is_empty());
 
-    fs::remove_dir_all(root).expect("test folder should be removed");
+    root.close().expect("test folder should be removed");
 }
 
 #[test]
@@ -1598,8 +1591,7 @@ fn find_executable_rejects_a_file_without_an_execute_bit() {
     // missing-tooling state. `find_executable` is named for a runnable program, so it gates on
     // the execute bit.
     let dir = unique_temp_dir("okp-find-executable");
-    fs::create_dir_all(&dir).expect("temp dir should be created");
-    let tool = dir.join("yt-dlp");
+    let tool = dir.path().join("yt-dlp");
     fs::write(&tool, b"#!/bin/sh\n").expect("fixture tool should be written");
 
     let tool_path = tool.to_str().expect("temp path should be valid UTF-8");
@@ -1613,8 +1605,6 @@ fn find_executable_rejects_a_file_without_an_execute_bit() {
     fs::set_permissions(&tool, fs::Permissions::from_mode(0o755))
         .expect("executable mode should apply");
     assert_eq!(find_executable(tool_path).as_deref(), Some(tool.as_path()));
-
-    fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -2757,10 +2747,13 @@ fn sidecar_lyrics_next_to_audio_parse_as_a_synced_sheet() {
     // A local audio file with a matching `.lrc` resolves to synchronized lyrics (the shell's
     // discover → parse expression, end to end on disk).
     let dir = unique_temp_dir("okp-gtk-lyrics-synced");
-    fs::create_dir_all(&dir).expect("temp dir");
-    let media = dir.join("Song.mp3");
+    let media = dir.path().join("Song.mp3");
     fs::write(&media, b"x").expect("media file");
-    fs::write(dir.join("Song.lrc"), "[00:01.00]one\n[00:02.50]two\n").expect("sidecar");
+    fs::write(
+        dir.path().join("Song.lrc"),
+        "[00:01.00]one\n[00:02.50]two\n",
+    )
+    .expect("sidecar");
 
     let document = okp_core::lyrics::read_sidecar(&media)
         .map(|text| lrc::parse(Some(&text)))
@@ -2769,8 +2762,6 @@ fn sidecar_lyrics_next_to_audio_parse_as_a_synced_sheet() {
     assert!(document.has_timings);
     assert_eq!(document.lines.len(), 2);
     assert_eq!(document.lines[1].text, "two");
-
-    fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -2778,8 +2769,7 @@ fn missing_sidecar_resolves_to_an_empty_document_for_the_empty_state() {
     // A local audio file with no sidecar yields the calm empty state, never debug text: the
     // discover → parse expression produces the empty document `rebuild` renders as "No lyrics".
     let dir = unique_temp_dir("okp-gtk-lyrics-empty");
-    fs::create_dir_all(&dir).expect("temp dir");
-    let media = dir.join("Instrumental.flac");
+    let media = dir.path().join("Instrumental.flac");
     fs::write(&media, b"x").expect("media file");
 
     let document = okp_core::lyrics::read_sidecar(&media)
@@ -2788,8 +2778,6 @@ fn missing_sidecar_resolves_to_an_empty_document_for_the_empty_state() {
 
     assert!(document.is_empty());
     assert!(!document.has_timings);
-
-    fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -3219,29 +3207,28 @@ fn native_file_dialog_result_keeps_failures_visible_to_the_caller() {
 #[test]
 fn selected_media_paths_expands_folders_in_natural_order() {
     let root = unique_temp_dir("okp-folder-selection");
-    fs::create_dir_all(&root).expect("test folder should be created");
-    let first = root.join("Episode 1.mp4");
-    let second = root.join("Episode 2.mkv");
-    let tenth = root.join("Episode 10.mkv");
+    let first = root.path().join("Episode 1.mp4");
+    let second = root.path().join("Episode 2.mkv");
+    let tenth = root.path().join("Episode 10.mkv");
     fs::write(&tenth, []).expect("test media should be created");
     fs::write(&first, []).expect("test media should be created");
-    fs::write(root.join("Episode 2.srt"), []).expect("test subtitle should be created");
+    fs::write(root.path().join("Episode 2.srt"), []).expect("test subtitle should be created");
     fs::write(&second, []).expect("test media should be created");
-    fs::write(root.join("cover.jpg"), []).expect("test ignored file should be created");
+    fs::write(root.path().join("cover.jpg"), []).expect("test ignored file should be created");
 
     assert_eq!(
-        selected_media_paths(std::slice::from_ref(&root)),
+        selected_media_paths(&[root.path().to_owned()]),
         vec![first, second, tenth]
     );
 
-    fs::remove_dir_all(root).expect("test folder should be removed");
+    root.close().expect("test folder should be removed");
 }
 
 #[test]
 fn selected_media_paths_expands_multiple_folders_in_selection_order() {
     let root = unique_temp_dir("okp-folder-multi-selection");
-    let season_one = root.join("Season 1");
-    let season_two = root.join("Season 2");
+    let season_one = root.path().join("Season 1");
+    let season_two = root.path().join("Season 2");
     fs::create_dir_all(&season_one).expect("first test folder should be created");
     fs::create_dir_all(&season_two).expect("second test folder should be created");
     let s1e1 = season_one.join("Episode 1.mkv");
@@ -3258,7 +3245,7 @@ fn selected_media_paths_expands_multiple_folders_in_selection_order() {
         vec![s2e1, s2e10, s1e1, s1e2]
     );
 
-    fs::remove_dir_all(root).expect("test folders should be removed");
+    root.close().expect("test folders should be removed");
 }
 
 #[test]
@@ -3284,10 +3271,9 @@ fn load_selected_local_paths_uses_explicit_playlist_for_multiple_media() {
 #[test]
 fn load_selected_local_paths_preserves_folder_playlist_for_single_media() {
     let root = unique_temp_dir("okp-selection");
-    fs::create_dir_all(&root).expect("test folder should be created");
-    let first = root.join("Episode 1.mkv");
-    let second = root.join("Episode 2.mkv");
-    let subtitle = root.join("Episode 2.srt");
+    let first = root.path().join("Episode 1.mkv");
+    let second = root.path().join("Episode 2.mkv");
+    let subtitle = root.path().join("Episode 2.srt");
     fs::write(&first, []).expect("test media should be created");
     fs::write(&second, []).expect("test media should be created");
     fs::write(&subtitle, []).expect("test subtitle should be created");
@@ -3307,21 +3293,23 @@ fn load_selected_local_paths_preserves_folder_playlist_for_single_media() {
     );
     drop(state_ref);
 
-    fs::remove_dir_all(root).expect("test folder should be removed");
+    root.close().expect("test folder should be removed");
 }
 
 #[test]
 fn load_selected_local_paths_opens_folder_as_playlist() {
     let root = unique_temp_dir("okp-folder-load");
-    fs::create_dir_all(&root).expect("test folder should be created");
-    let first = root.join("Episode 1.mkv");
-    let second = root.join("Episode 2.mkv");
+    let first = root.path().join("Episode 1.mkv");
+    let second = root.path().join("Episode 2.mkv");
     fs::write(&second, []).expect("test media should be created");
     fs::write(&first, []).expect("test media should be created");
 
     let state = Rc::new(RefCell::new(PlayerState::default()));
 
-    assert!(load_selected_local_paths(&state, vec![root.clone()]));
+    assert!(load_selected_local_paths(
+        &state,
+        vec![root.path().to_owned()]
+    ));
 
     let state_ref = state.borrow();
     assert_eq!(state_ref.current_file, Some(first.clone()));
@@ -3334,7 +3322,7 @@ fn load_selected_local_paths_opens_folder_as_playlist() {
     );
     drop(state_ref);
 
-    fs::remove_dir_all(root).expect("test folder should be removed");
+    root.close().expect("test folder should be removed");
 }
 
 #[test]
@@ -3374,14 +3362,13 @@ fn deb_checksum_download_refuses_release_without_manifest() {
 #[test]
 fn staged_deb_with_one_flipped_byte_is_refused_and_discarded() {
     let cache_dir = unique_temp_dir("okp-deb-verify-tamper");
-    fs::create_dir_all(&cache_dir).expect("cache dir should be created");
     let name = "ok-player_0.1.0-linux-alpha.46_amd64.deb";
     let payload = b"pretend this is a .deb archive".to_vec();
     let manifest = format!("{}  {name}\n", sha256sums::sha256_hex(&payload));
     let mut tampered = payload.clone();
     tampered[payload.len() / 2] ^= 0x01;
 
-    let error = stage_verified_deb(&tampered, &manifest, name, &cache_dir)
+    let error = stage_verified_deb(&tampered, &manifest, name, cache_dir.path())
         .expect_err("tampered payload should be refused");
 
     assert!(
@@ -3395,19 +3382,18 @@ fn staged_deb_with_one_flipped_byte_is_refused_and_discarded() {
     // Neither the staged temp file nor the install target may survive:
     // the install path only ever hands a successfully returned target
     // path to pkexec, and nothing verifiable-as-bad is left behind.
-    assert!(!cache_dir.join(name).exists());
-    assert!(!cache_dir.join(format!("{name}.part")).exists());
-    fs::remove_dir_all(&cache_dir).expect("cache dir should be removed");
+    assert!(!cache_dir.path().join(name).exists());
+    assert!(!cache_dir.path().join(format!("{name}.part")).exists());
+    cache_dir.close().expect("cache dir should be removed");
 }
 
 #[test]
 fn staged_deb_tampered_on_disk_after_write_is_refused() {
     let cache_dir = unique_temp_dir("okp-deb-verify-disk");
-    fs::create_dir_all(&cache_dir).expect("cache dir should be created");
     let name = "ok-player_0.1.0-linux-alpha.46_amd64.deb";
     let payload = b"pretend this is a .deb archive".to_vec();
     let manifest = format!("{}  {name}\n", sha256sums::sha256_hex(&payload));
-    let staged = cache_dir.join(name);
+    let staged = cache_dir.path().join(name);
     fs::write(&staged, &payload).expect("staged payload should be written");
 
     assert!(verify_staged_deb(&staged, name, &manifest).is_ok());
@@ -3422,13 +3408,12 @@ fn staged_deb_tampered_on_disk_after_write_is_refused() {
         error.contains("sha256 mismatch"),
         "unexpected error: {error}"
     );
-    fs::remove_dir_all(&cache_dir).expect("cache dir should be removed");
+    cache_dir.close().expect("cache dir should be removed");
 }
 
 #[test]
 fn staged_deb_matching_manifest_is_finalized() {
     let cache_dir = unique_temp_dir("okp-deb-verify-ok");
-    fs::create_dir_all(&cache_dir).expect("cache dir should be created");
     let name = "ok-player_0.1.0-linux-alpha.46_amd64.deb";
     let payload = b"pretend this is a .deb archive".to_vec();
     let manifest = format!(
@@ -3437,16 +3422,16 @@ fn staged_deb_matching_manifest_is_finalized() {
         sha256sums::sha256_hex(b"another asset")
     );
 
-    let target = stage_verified_deb(&payload, &manifest, name, &cache_dir)
+    let target = stage_verified_deb(&payload, &manifest, name, cache_dir.path())
         .expect("verified payload should be staged");
 
-    assert_eq!(target, cache_dir.join(name));
+    assert_eq!(target, cache_dir.path().join(name));
     assert_eq!(
         fs::read(&target).expect("target should be readable"),
         payload
     );
-    assert!(!cache_dir.join(format!("{name}.part")).exists());
-    fs::remove_dir_all(&cache_dir).expect("cache dir should be removed");
+    assert!(!cache_dir.path().join(format!("{name}.part")).exists());
+    cache_dir.close().expect("cache dir should be removed");
 }
 
 #[test]
