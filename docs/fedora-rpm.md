@@ -40,12 +40,15 @@ complete build/lint/transaction gate:
 FEDORA_VERSION=44 ./scripts/run-linux-rpm-checks.sh
 ```
 
-That command installs BuildRequires from the SRPM, rebuilds a lower-release
-candidate and the current RPM, runs `rpmlint`, then uses `dnf` to exercise clean
-install, upgrade, removal, declared dependency resolution, dynamic system
-libmpv linkage, and preservation of per-user JSON configuration. `rpmlint`
-errors fail the beta gate. Warnings are retained in `rpmlint.txt` and must be
-accounted for in the PR/release evidence rather than hidden.
+That command first produces the complete source set twice and requires every
+source archive, checksum manifest, and SRPM to be byte-identical. It then
+installs BuildRequires from the SRPM, rebuilds a lower-release candidate and
+the current RPM, runs `rpmlint`, and uses `dnf` to exercise clean install,
+upgrade, removal, declared dependency resolution, dynamic system libmpv
+linkage, and preservation of per-user JSON configuration under
+`XDG_CONFIG_HOME`. `rpmlint` errors fail the beta gate. Warnings are retained in
+`rpmlint.txt` and must be accounted for in the PR/release evidence rather than
+hidden.
 
 The `Fedora RPM` GitHub workflow repeats this in clean Fedora 43 and 44
 container roots. COPR remains the authoritative clean `mock` chroot surface.

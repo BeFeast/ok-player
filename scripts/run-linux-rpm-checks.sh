@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FEDORA_VERSION="${FEDORA_VERSION:-unknown}"
 OUT_DIR="${1:-$ROOT/artifacts/linux/rpm/fedora-$FEDORA_VERSION}"
 
-for tool in dnf rpmbuild rpmlint; do
+for tool in dnf rpmbuild rpmlint cmp sha256sum; do
   command -v "$tool" >/dev/null 2>&1 || { echo "Missing required tool: $tool" >&2; exit 127; }
 done
 
@@ -14,6 +14,23 @@ SOURCE_DIR="$OUT_DIR/source"
 "$ROOT/scripts/package-linux-rpm-source.sh" "$SOURCE_DIR"
 SRPM="$(find "$SOURCE_DIR" -maxdepth 1 -name '*.src.rpm' -print -quit)"
 [[ -n "$SRPM" ]] || { echo "SRPM was not produced" >&2; exit 2; }
+
+REPRO_SOURCE_DIR="$(mktemp -d)"
+trap 'rm -rf "$REPRO_SOURCE_DIR"' EXIT
+"$ROOT/scripts/package-linux-rpm-source.sh" "$REPRO_SOURCE_DIR"
+for artifact in "$SOURCE_DIR"/*; do
+  counterpart="$REPRO_SOURCE_DIR/$(basename "$artifact")"
+  [[ -f "$counterpart" ]] || { echo "Reproducibility build omitted $(basename "$artifact")" >&2; exit 1; }
+  cmp "$artifact" "$counterpart" || {
+    echo "Fedora source artifact is not reproducible: $(basename "$artifact")" >&2
+    exit 1
+  }
+done
+(
+  cd "$SOURCE_DIR"
+  sha256sum *
+) > "$OUT_DIR/source-reproducibility.txt"
+echo "Fedora source artifacts are byte-identical across two clean builds" >> "$OUT_DIR/source-reproducibility.txt"
 
 dnf builddep -y "$SRPM"
 

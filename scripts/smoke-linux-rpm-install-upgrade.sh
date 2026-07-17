@@ -12,6 +12,7 @@ command -v dnf >/dev/null 2>&1 || { echo "dnf is required" >&2; exit 127; }
 
 CONFIG_DIR="$(mktemp -d)"
 trap 'rm -rf "$CONFIG_DIR"' EXIT
+export XDG_CONFIG_HOME="$CONFIG_DIR"
 mkdir -p "$CONFIG_DIR/ok-player"
 printf '{"preserve":true}\n' > "$CONFIG_DIR/ok-player/settings.json"
 

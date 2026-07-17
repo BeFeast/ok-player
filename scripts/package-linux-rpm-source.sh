@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SPEC="$ROOT/rust/packaging/fedora/ok-player.spec"
 OUT_DIR="${1:-$ROOT/artifacts/linux/rpm/source}"
 
-for tool in cargo git rpmbuild tar gzip zstd; do
+for tool in cargo git rpmbuild tar gzip zstd sha256sum touch; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "Missing required tool: $tool" >&2
     exit 127
@@ -25,6 +25,7 @@ SOURCE_COMMIT="$(git -C "$ROOT" rev-parse HEAD)"
 PREFIX="ok-player-$UPSTREAM_VERSION"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
+export SOURCE_DATE_EPOCH="$SOURCE_EPOCH"
 
 mkdir -p "$OUT_DIR" "$TMP_DIR/rpmbuild/SOURCES" "$TMP_DIR/rpmbuild/SRPMS"
 
@@ -46,6 +47,10 @@ tar \
   -cf - vendor \
   | zstd -10 -T1 -q -o "$OUT_DIR/$PREFIX-vendor.tar.zst"
 printf '%s\n' "$SOURCE_COMMIT" > "$OUT_DIR/$PREFIX-source-commit"
+touch --date="@$SOURCE_EPOCH" \
+  "$OUT_DIR/$PREFIX.tar.gz" \
+  "$OUT_DIR/$PREFIX-vendor.tar.zst" \
+  "$OUT_DIR/$PREFIX-source-commit"
 
 cp "$OUT_DIR/$PREFIX.tar.gz" "$TMP_DIR/rpmbuild/SOURCES/"
 cp "$OUT_DIR/$PREFIX-vendor.tar.zst" "$TMP_DIR/rpmbuild/SOURCES/"
@@ -53,14 +58,20 @@ cp "$OUT_DIR/$PREFIX-source-commit" "$TMP_DIR/rpmbuild/SOURCES/"
 rpmbuild -bs "$SPEC" \
   --define "_topdir $TMP_DIR/rpmbuild" \
   --define "upstream_version $UPSTREAM_VERSION" \
+  --define "_buildhost reproducible.invalid" \
+  --define "use_source_date_epoch_as_buildtime 1" \
+  --define "clamp_mtime_to_source_date_epoch 1" \
   --define "_source_filedigest_algorithm 8" \
   --define "_binary_filedigest_algorithm 8"
 cp "$TMP_DIR"/rpmbuild/SRPMS/*.src.rpm "$OUT_DIR/"
 
-sha256sum \
-  "$OUT_DIR/$PREFIX.tar.gz" \
-  "$OUT_DIR/$PREFIX-vendor.tar.zst" \
-  "$OUT_DIR/$PREFIX-source-commit" \
-  "$OUT_DIR"/*.src.rpm > "$OUT_DIR/SHA256SUMS"
+(
+  cd "$OUT_DIR"
+  sha256sum \
+    "$PREFIX.tar.gz" \
+    "$PREFIX-vendor.tar.zst" \
+    "$PREFIX-source-commit" \
+    ./*.src.rpm > SHA256SUMS
+)
 
 echo "Fedora source artifacts written to $OUT_DIR"
