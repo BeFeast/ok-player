@@ -26,7 +26,13 @@ pub(crate) fn open_media_info_window(
             return;
         };
 
-        mpv.observed_media_info()
+        mpv.observed_media_info().map(|mut media_info| {
+            let display_title = current_media_title(&state);
+            if !display_title.is_empty() {
+                media_info.title = display_title;
+            }
+            media_info
+        })
     };
 
     match media_info {

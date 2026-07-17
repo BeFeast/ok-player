@@ -57,6 +57,9 @@ pub(crate) fn update_up_next_panel(
             has_media,
             current_file: state.current_file.clone(),
             current_url: state.current_url.clone(),
+            current_title: has_media
+                .then(|| current_media_title(&state))
+                .filter(|title| !title.is_empty()),
             playlist: state.playlist.items().to_vec(),
             chapters,
             current_chapter,
@@ -425,9 +428,11 @@ pub(crate) fn render_playlist_panel(
     }
 
     if let Some(current) = current_index.and_then(|index| snapshot.playlist.get(index)) {
-        controls
-            .up_next_list
-            .append(&now_playing_pinned_row(current, true));
+        controls.up_next_list.append(&now_playing_pinned_row(
+            current,
+            true,
+            snapshot.current_title.as_deref(),
+        ));
         actions.push(SidePanelAction::None);
     }
 
@@ -442,6 +447,7 @@ pub(crate) fn render_playlist_panel(
             item,
             index,
             current_index,
+            snapshot.current_title.as_deref(),
             snapshot.playlist.len(),
             Rc::clone(state),
         ));
@@ -464,9 +470,11 @@ pub(crate) fn render_short_queue_panel(
     actions: &mut Vec<SidePanelAction>,
 ) {
     if let Some(item) = snapshot.playlist.first() {
-        controls
-            .up_next_list
-            .append(&now_playing_pinned_row(item, current_index == Some(0)));
+        controls.up_next_list.append(&now_playing_pinned_row(
+            item,
+            current_index == Some(0),
+            snapshot.current_title.as_deref(),
+        ));
         // The pinned now-playing row is non-activatable; reserve a slot so the
         // Add files affordance below keeps a stable action index.
         actions.push(SidePanelAction::None);
@@ -481,7 +489,11 @@ pub(crate) fn render_short_queue_panel(
 /// drops the reorder / remove action buttons — a single-item queue has nothing
 /// to reorder and the current item is not removable — so the lone entry reads as
 /// a calm pinned card instead of a row of greyed-out controls.
-pub(crate) fn now_playing_pinned_row(item: &PlaylistItem, is_current: bool) -> gtk::ListBoxRow {
+pub(crate) fn now_playing_pinned_row(
+    item: &PlaylistItem,
+    is_current: bool,
+    current_title: Option<&str>,
+) -> gtk::ListBoxRow {
     let row = gtk::ListBoxRow::new();
     row.add_css_class("okp-now-playing-pinned-row");
     row.set_activatable(false);
@@ -509,7 +521,10 @@ pub(crate) fn now_playing_pinned_row(item: &PlaylistItem, is_current: bool) -> g
     let labels = gtk::Box::new(gtk::Orientation::Vertical, 1);
     labels.set_hexpand(true);
     labels.set_valign(gtk::Align::Center);
-    let title = gtk::Label::new(Some(&item.display_name()));
+    let display_title = current_title
+        .map(str::to_owned)
+        .unwrap_or_else(|| item.display_name());
+    let title = gtk::Label::new(Some(&display_title));
     title.add_css_class("okp-now-playing-title");
     title.set_xalign(0.0);
     title.set_hexpand(true);
@@ -959,6 +974,7 @@ pub(crate) fn playlist_row(
     item: &PlaylistItem,
     index: usize,
     current_index: Option<usize>,
+    current_title: Option<&str>,
     playlist_len: usize,
     state: Rc<RefCell<PlayerState>>,
 ) -> gtk::ListBoxRow {
@@ -1007,7 +1023,14 @@ pub(crate) fn playlist_row(
 
     let icon = playlist_row_icon(item);
 
-    let title = gtk::Label::new(Some(&item.display_name()));
+    let display_title = if is_current {
+        current_title
+            .map(str::to_owned)
+            .unwrap_or_else(|| item.display_name())
+    } else {
+        item.display_name()
+    };
+    let title = gtk::Label::new(Some(&display_title));
     title.add_css_class("okp-up-next-file");
     title.set_xalign(0.0);
     title.set_hexpand(true);
@@ -1254,6 +1277,7 @@ pub(crate) fn side_panel_preview_sample() -> SidePanelSnapshot {
         has_media: true,
         current_file: Some(current_file),
         current_url: None,
+        current_title: None,
         playlist,
         chapters,
         current_chapter: Some(2),
@@ -1280,6 +1304,7 @@ pub(crate) fn side_panel_empty_chapters_sample() -> SidePanelSnapshot {
         has_media: true,
         current_file: Some(current_file.clone()),
         current_url: None,
+        current_title: None,
         playlist: vec![PlaylistItem::Local(current_file)],
         chapters: Vec::new(),
         current_chapter: None,
@@ -1303,6 +1328,7 @@ pub(crate) fn side_panel_empty_up_next_sample() -> SidePanelSnapshot {
         has_media: true,
         current_file: None,
         current_url: Some(url.clone()),
+        current_title: None,
         playlist: vec![PlaylistItem::Url(url)],
         chapters: Vec::new(),
         current_chapter: None,
@@ -1321,6 +1347,7 @@ pub(crate) fn side_panel_interval_preview_sample() -> SidePanelSnapshot {
         has_media: true,
         current_file: Some(current_file.clone()),
         current_url: None,
+        current_title: None,
         playlist: vec![PlaylistItem::Local(current_file)],
         chapters: Vec::new(),
         current_chapter: None,

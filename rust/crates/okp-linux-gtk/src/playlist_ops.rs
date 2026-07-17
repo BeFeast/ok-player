@@ -77,6 +77,7 @@ pub(crate) fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
     }
     state.current_file = None;
     state.current_url = None;
+    state.current_nfo_title = okp_core::nfo_metadata::NfoTitleState::NotApplicable;
     advance_source_generation(&mut state);
     state.playlist.clear();
     state.thumbnail_request_key = None;
@@ -208,6 +209,7 @@ pub(crate) fn remember_loaded_media_with_playlist(
     }
     let retry_source = network_media::LoadFailureSource::local(path.clone());
     let preferences_path = path.clone();
+    let nfo_path = path.clone();
     let mut state = state.borrow_mut();
     advance_source_generation(&mut state);
     let directives = state.next_launch_directives.take().unwrap_or_default();
@@ -229,6 +231,10 @@ pub(crate) fn remember_loaded_media_with_playlist(
     let current = PlaylistItem::Local(path.clone());
     state.current_file = Some(path);
     state.current_url = None;
+    state.current_nfo_title = okp_core::nfo_metadata::NfoTitleState::Pending;
+    state
+        .nfo_title_jobs
+        .resolve(state.source_generation, nfo_path);
     state.playlist.reset(playlist, &current);
     state.thumbnail_request_key = None;
     state.hover_thumbnail_request_key = None;
@@ -322,6 +328,7 @@ pub(crate) fn remember_loaded_url_with_playlist(
     let current = PlaylistItem::Url(url.clone());
     state.current_file = None;
     state.current_url = Some(url);
+    state.current_nfo_title = okp_core::nfo_metadata::NfoTitleState::NotApplicable;
     state.playlist.reset(playlist, &current);
     state.thumbnail_request_key = None;
     state.hover_thumbnail_request_key = None;
@@ -940,10 +947,18 @@ pub(crate) fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: 
                 .unwrap_or_default()
         });
 
-        (state.private_session, path, playback, preferences)
+        (
+            state.private_session,
+            path,
+            playback,
+            preferences,
+            state
+                .current_nfo_title
+                .history_update(state.private_session),
+        )
     };
 
-    let (private_session, path, playback, preferences) = snapshot;
+    let (private_session, path, playback, preferences, title_update) = snapshot;
     let Some(duration) = playback.duration else {
         return;
     };
@@ -954,9 +969,13 @@ pub(crate) fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: 
 
     let mut state = state.borrow_mut();
     if !private_session {
-        state
-            .history
-            .record(&path, position.clamp(0.0, duration), duration, finished);
+        state.history.record_with_title(
+            &path,
+            position.clamp(0.0, duration),
+            duration,
+            finished,
+            title_update,
+        );
         state
             .history
             .record_preferences(&path, preferences.unwrap_or_default());

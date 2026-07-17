@@ -468,7 +468,7 @@ pub(crate) fn mpris_tracklist_from_state(
             let is_current = index == current_index;
             MprisTrack {
                 id,
-                title: item.display_name(),
+                title: playlist_item_title(state, item),
                 uri,
                 duration_us: is_current.then_some(current_duration_us).flatten(),
                 art_url: mpris_playlist_item_art_url(item),
@@ -574,11 +574,7 @@ pub(crate) fn mpris_title_uri_and_art(
     state: &PlayerState,
 ) -> (String, Option<String>, Option<String>) {
     if let Some(path) = state.current_file.as_ref() {
-        let title = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(str::to_owned)
-            .unwrap_or_else(|| path.display().to_string());
+        let title = current_media_title(state);
         let uri = local_file_uri(path);
         let art_url = mpris_local_art_url(path);
         return (title, Some(uri), art_url);
