@@ -200,8 +200,40 @@ if ! awk -v max="$panel_max" 'BEGIN { exit !(max > 0.5) }'; then
   exit 1
 fi
 
+# Overflow entry reachable and unobstructed at narrow width (issue #328): the
+# adaptive OSC folds lower-priority controls into the `…` menu, keeping the
+# overflow entry as the final in-flow action at the far right. It must render a
+# bright glyph (not be clipped) and must not share bounds with its neighbour —
+# a dark seam separates them. The overflow button sits ~30 px in from the right
+# edge; the seam is the ~16 px gap immediately to its left.
+overflow_w=34
+overflow_x=$((width - 14 - overflow_w))
+overflow_max="$(
+  magick "$OUT_DIR/narrow.png" \
+    -crop ${overflow_w}x${osc_h}+${overflow_x}+${osc_top} \
+    -colorspace gray \
+    -format '%[fx:maxima]' info:
+)"
+if ! awk -v max="$overflow_max" 'BEGIN { exit !(max > 0.4) }'; then
+  echo "overflow entry clipped or occluded at narrow width: maxima=${overflow_max}" >&2
+  exit 1
+fi
+seam_w=8
+seam_x=$((overflow_x - seam_w - 4))
+seam_max="$(
+  magick "$OUT_DIR/narrow.png" \
+    -crop ${seam_w}x${osc_h}+${seam_x}+${osc_top} \
+    -colorspace gray \
+    -format '%[fx:maxima]' info:
+)"
+if ! awk -v max="$seam_max" 'BEGIN { exit !(max < 0.35) }'; then
+  echo "no disjoint seam left of the overflow entry (neighbour shares bounds): maxima=${seam_max}" >&2
+  exit 1
+fi
+
 echo "narrow floor: ${width}x${height}"
 echo "osc-mean=${osc_mean} osc-left=${left_max} osc-panel=${panel_osc_max} panel=${panel_max}"
+echo "overflow-glyph=${overflow_max} overflow-seam=${seam_max}"
 SMOKE
 then
   echo "Narrow-width smoke failed. Session log: $OUT_DIR/session.log" >&2

@@ -295,8 +295,12 @@ fn settings_stays_in_the_width_safe_bottom_more_menu() {
 
     assert!(!window.contains("gtk::Button::from_icon_name(\"emblem-system-symbolic\")"));
     assert!(window.contains("persistent_widgets: Vec::new()"));
-    assert!(controls.contains("more_slot.set_size_request(32, 1)"));
-    assert!(controls.contains("chrome.add_overlay(&controls.more_button)"));
+    // The overflow entry is the final in-flow OSC action inside the adaptive
+    // OscBar, never a floating overlay that could paint over its neighbour.
+    assert!(controls.contains("let bar = OscBar::new();"));
+    assert!(controls.contains("bar.push(&controls.more_button, OscControlId::Overflow);"));
+    assert!(!controls.contains("more_slot"));
+    assert!(!controls.contains("chrome.add_overlay(&controls.more_button)"));
     assert!(popovers.contains("command_button(\"Settings...\", false)"));
     assert_eq!(
         window
@@ -317,6 +321,60 @@ fn settings_stays_in_the_width_safe_bottom_more_menu() {
 
     let css = include_str!("css.rs");
     assert!(!css.contains("button.okp-player-settings-control.is-isolated"));
+}
+
+#[test]
+fn adaptive_osc_bar_collapses_into_overflow_without_overlap() {
+    let osc = include_str!("osc_bar.rs");
+    let controls = include_str!("controls.rs");
+    let css = include_str!("css.rs");
+
+    // The bar reports only the floor as its horizontal minimum, so a narrow
+    // window hands it the real allocation instead of forcing the full width and
+    // clipping the trailing overflow entry.
+    assert!(osc.contains("osc_overflow::floor_min_width(&slots, SPACING)"));
+    assert!(osc.contains("osc_overflow::plan(&slots, width, SPACING"));
+    // Collapsed controls are unmapped: not painted, focusable, or hit-testable.
+    assert!(osc.contains("child.set_child_visible(false)"));
+    // The row mirrors for right-to-left locales, keeping the layout RTL-safe.
+    assert!(osc.contains("gtk::TextDirection::Rtl"));
+    // The overflow entry is the final in-flow action, not a floating overlay.
+    assert!(controls.contains("bar.push(&controls.more_button, OscControlId::Overflow);"));
+    assert!(controls.contains("bar.set_collapsed_sink("));
+    // The custom container owns the pill inset, so the `.okp-controls` CSS
+    // padding is zeroed to avoid double-insetting the controls.
+    let controls_block = css
+        .split_once(".okp-controls {")
+        .expect("controls pill block")
+        .1
+        .split_once('}')
+        .expect("controls pill block close")
+        .0;
+    assert!(controls_block.contains("padding: 0;"));
+    assert!(!controls_block.contains("padding: 7px 14px;"));
+    assert!(osc.contains("pub(crate) const PAD_HORIZONTAL: i32 = 14;"));
+    assert!(osc.contains("pub(crate) const PAD_VERTICAL: i32 = 7;"));
+}
+
+#[test]
+fn overflow_menu_surfaces_every_collapsed_control_action() {
+    let popovers = include_str!("track_popovers.rs");
+
+    // Selection controls drill into their picker inside the same popover.
+    assert!(popovers.contains("OscControlId::Speed =>"));
+    assert!(popovers.contains("OscControlId::Subtitles =>"));
+    assert!(popovers.contains("OscControlId::Audio =>"));
+    assert!(popovers.contains("populate_speed_popover(&drill_popover"));
+    assert!(popovers.contains("populate_subtitle_popover("));
+    assert!(popovers.contains("populate_audio_popover(&drill_popover"));
+    // Direct-action controls reuse their real OSC button via `clicked`, so no
+    // behaviour is duplicated and the button's wiring runs while it is folded.
+    assert!(popovers.contains("reach_emit_button(\"Chapters & Up Next\""));
+    assert!(popovers.contains("reach_emit_button(\"Take screenshot\""));
+    assert!(popovers.contains("reach_emit_button(\"Fullscreen\""));
+    assert!(popovers.contains("emit_target.emit_clicked();"));
+    // Settings stays reachable in the overflow menu at every width.
+    assert!(popovers.contains("command_button(\"Settings...\", false)"));
 }
 
 #[test]

@@ -1,4 +1,5 @@
 use super::*;
+use okp_core::osc_overflow::OscControlId;
 
 pub(crate) const SPEED_POPOVER_WIDTH: i32 = 120;
 pub(crate) const SUBTITLE_POPOVER_WIDTH: i32 = 262;
@@ -195,13 +196,109 @@ pub(crate) fn populate_speed_popover(popover: &gtk::Popover, state: Rc<RefCell<P
     set_track_popover_child(popover, PlayerPopoverKind::Speed, content);
 }
 
+/// Handles the overflow menu uses to surface the actions of controls the
+/// adaptive OSC folded away at the current window width (issue #328). The
+/// direct-action controls are driven through their real OSC buttons so the
+/// existing wiring is reused verbatim; the selection controls (speed, audio,
+/// subtitles) drill into their picker inside the same popover.
+#[derive(Clone)]
+pub(crate) struct OverflowReach {
+    pub(crate) collapsed: Rc<RefCell<Vec<OscControlId>>>,
+    pub(crate) screenshot: gtk::Button,
+    pub(crate) fullscreen: gtk::Button,
+    pub(crate) chapters: gtk::Button,
+}
+
+/// Append rows for every currently-collapsed control at the top of the overflow
+/// menu, followed by a divider. The section is empty (and no divider is drawn)
+/// while the bar is wide enough to show every control, keeping the menu curated.
+fn append_collapsed_controls_section(
+    content: &gtk::Box,
+    popover: &gtk::Popover,
+    parent: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &Rc<StatusToast>,
+    reach: &OverflowReach,
+) {
+    let collapsed = reach.collapsed.borrow().clone();
+    let mut added = false;
+    for id in collapsed {
+        let row = match id {
+            OscControlId::Speed => {
+                let button = command_button("Playback speed", false);
+                let drill_popover = popover.clone();
+                let drill_state = Rc::clone(state);
+                button.connect_clicked(move |_| {
+                    populate_speed_popover(&drill_popover, Rc::clone(&drill_state));
+                });
+                button
+            }
+            OscControlId::Subtitles => {
+                let button = command_button("Subtitles", false);
+                let drill_popover = popover.clone();
+                let drill_parent = parent.clone();
+                let drill_state = Rc::clone(state);
+                let drill_toast = Rc::clone(status_toast);
+                button.connect_clicked(move |_| {
+                    populate_subtitle_popover(
+                        &drill_popover,
+                        &drill_parent,
+                        Rc::clone(&drill_state),
+                        Rc::clone(&drill_toast),
+                    );
+                });
+                button
+            }
+            OscControlId::Audio => {
+                let button = command_button("Audio track", false);
+                let drill_popover = popover.clone();
+                let drill_state = Rc::clone(state);
+                button.connect_clicked(move |_| {
+                    populate_audio_popover(&drill_popover, Rc::clone(&drill_state));
+                });
+                button
+            }
+            OscControlId::Chapters => {
+                reach_emit_button("Chapters & Up Next", popover, &reach.chapters)
+            }
+            OscControlId::Screenshot => {
+                reach_emit_button("Take screenshot", popover, &reach.screenshot)
+            }
+            OscControlId::Fullscreen => reach_emit_button("Fullscreen", popover, &reach.fullscreen),
+            // Elapsed/Duration are informational time labels with no discrete
+            // action; the timeline still conveys position when they fold.
+            _ => continue,
+        };
+        content.append(&row);
+        added = true;
+    }
+    if added {
+        content.append(&divider());
+    }
+}
+
+/// A row that forwards to a real OSC button through its `clicked` signal, so the
+/// button's existing handler runs even while the button itself is folded away
+/// (unmapped). No behaviour is duplicated.
+fn reach_emit_button(label: &str, popover: &gtk::Popover, button: &gtk::Button) -> gtk::Button {
+    let row = command_button(label, false);
+    let emit_popover = popover.clone();
+    let emit_target = button.clone();
+    row.connect_clicked(move |_| {
+        emit_popover.popdown();
+        emit_target.emit_clicked();
+    });
+    row
+}
+
 pub(crate) fn populate_command_popover(
     popover: &gtk::Popover,
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
+    reach: &OverflowReach,
 ) {
-    let content = more_popover_content(popover, parent, state, status_toast);
+    let content = more_popover_content(popover, parent, state, status_toast, reach);
     set_track_popover_child(popover, PlayerPopoverKind::More, content);
 }
 
@@ -210,8 +307,10 @@ pub(crate) fn more_popover_content(
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
+    reach: &OverflowReach,
 ) -> gtk::Box {
     let content = track_popover_content(PlayerPopoverKind::More, None);
+    append_collapsed_controls_section(&content, popover, parent, &state, &status_toast, reach);
     let (mut has_media, ab_loop_active) = {
         let state = state.borrow();
         (has_loaded_media_state(&state), state.ab_loop.is_active())
