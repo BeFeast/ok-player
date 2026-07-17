@@ -4,15 +4,15 @@
   Produce a machine-readable environment report for an OK Player Windows development VM and verify it
   against the toolchain baseline in scripts/windows-dev-versions.json.
 .DESCRIPTION
-  Captures the versions that define a reproducible build/test surface — OS, Windows SDK, MSVC compiler /
+  Captures the versions that define a reproducible build/test surface -- OS, Windows SDK, MSVC compiler /
   Visual Studio, Rust (MSVC toolchain + target), .NET SDK, WinUI / Windows App SDK, Git, CMake, Ninja,
-  PowerShell, and the resolved libmpv native — and emits them as a single JSON document. The WinUI /
+  PowerShell, and the resolved libmpv native -- and emits them as a single JSON document. The WinUI /
   Windows App SDK and Windows SDK BuildTools versions are read from Directory.Packages.props and the app
   csproj (their real source of truth in this repo), never duplicated, so the report cannot drift from what
   the build actually restores.
 
   Each captured value is checked against its baseline. The overall result is `ok` only when every REQUIRED
-  tool is present and at/above its minimum. Optional tools (CMake/Ninja — needed only for source native
+  tool is present and at/above its minimum. Optional tools (CMake/Ninja -- needed only for source native
   builds) are reported but never fail the run.
 
   Contains no hostnames, usernames, network addresses, licenses, or secrets: only tool identities and
@@ -125,7 +125,7 @@ if (Test-Path $vswhere) {
     $vsHasWorkloads = [bool]$wl
 }
 
-# In-repo pinned versions (source of truth — not duplicated in the manifest).
+# In-repo pinned versions (source of truth -- not duplicated in the manifest).
 $packagesProps = Join-Path $repoRoot 'Directory.Packages.props'
 $appCsproj = Join-Path $repoRoot 'src\OkPlayer.App\OkPlayer.App.csproj'
 $winAppSdk = Get-PropsVersion -File $packagesProps -PackageId 'Microsoft.WindowsAppSDK'
@@ -153,7 +153,7 @@ $okNinja = Test-ToolVersion -Name 'Ninja' -Found $ninjaVersion -Min $manifest.to
 
 # OS build floor: the toolchain can be fully installed on an older Windows build, but the VM must still
 # meet the documented baseline (manifest os.minBuild, == the app's TargetPlatformMinVersion). Compare as
-# integers — the OS build is a single number, not a dotted version.
+# integers -- the OS build is a single number, not a dotted version.
 $minBuild = [int]$manifest.os.minBuild
 $osBuildNum = 0
 $osBuildOk = [int]::TryParse([string]$osBuild, [ref]$osBuildNum) -and ($osBuildNum -ge $minBuild)
