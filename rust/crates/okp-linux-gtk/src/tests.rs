@@ -1838,6 +1838,7 @@ fn more_stays_curated_while_player_context_menu_keeps_legacy_commands() {
     for label in curated_more {
         assert!(more.contains(&format!("command_button(\"{label}\"")));
     }
+    assert!(more.contains("append_clip_export_placeholder(&content, &state, true)"));
     assert!(!more.contains("Open URL..."));
     assert!(!more.contains("Clear History..."));
     assert!(!more.contains("Zoom in"));
@@ -1857,6 +1858,7 @@ fn more_stays_curated_while_player_context_menu_keeps_legacy_commands() {
         "Copy Current Time",
         "Add Bookmark",
         "A-B loop",
+        "Export clip/GIF...",
         "Zoom in",
         "Zoom out",
         "Pan left",
@@ -1880,6 +1882,7 @@ fn more_stays_curated_while_player_context_menu_keeps_legacy_commands() {
             "missing advanced command: {label}"
         );
     }
+    assert!(advanced.contains("append_clip_export_placeholder(&content, &state, false)"));
     for implementation_marker in [
         "VideoAspect::ALL",
         "VideoGeometryAction::SetAspect",
@@ -2486,6 +2489,45 @@ fn ab_loop_message_describes_cycle_state() {
         Some("A-B loop cleared".to_owned())
     );
     assert_eq!(ab_loop_message(AbLoopState::default(), false), None);
+}
+
+#[test]
+fn clip_export_placeholder_explains_every_eligibility_state() {
+    assert_eq!(
+        clip_export_placeholder_reason(ClipExportEligibility::NoSelection),
+        "Set both A and B to prepare export"
+    );
+    assert_eq!(
+        clip_export_placeholder_reason(ClipExportEligibility::InvalidRange),
+        "Set B after A"
+    );
+    assert_eq!(
+        clip_export_placeholder_reason(ClipExportEligibility::SelectionTooShort {
+            duration_seconds: 0.5,
+            min_seconds: 1.0,
+        }),
+        "Select at least 1 second"
+    );
+    assert_eq!(
+        clip_export_placeholder_reason(ClipExportEligibility::SelectionTooLong {
+            duration_seconds: 301.0,
+            max_seconds: 300.0,
+        }),
+        "Select 5 minutes or less"
+    );
+    assert_eq!(
+        clip_export_placeholder_reason(ClipExportEligibility::MissingTooling),
+        "Install FFmpeg to export"
+    );
+    assert_eq!(
+        clip_export_placeholder_reason(ClipExportEligibility::Ready(
+            okp_core::clip_export::ClipExportSelection {
+                start_seconds: 12.0,
+                end_seconds: 42.0,
+            }
+        )),
+        "Selection ready (00:30); encoder not enabled"
+    );
 }
 
 #[test]

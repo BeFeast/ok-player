@@ -262,6 +262,8 @@ pub(crate) fn more_popover_content(
     });
     content.append(&ab_loop_button);
 
+    append_clip_export_placeholder(&content, &state, true);
+
     content.append(&divider());
 
     let save_subs_button = command_button("Screenshot with subtitles", false);
@@ -551,6 +553,8 @@ pub(crate) fn advanced_command_popover_content(
     });
     content.append(&ab_loop_button);
 
+    append_clip_export_placeholder(&content, &state, false);
+
     content.append(&divider());
     content.append(&track_group_title("Video"));
     if video_available {
@@ -769,6 +773,109 @@ pub(crate) fn advanced_command_popover_content(
     content.append(&auto_advance_button);
 
     content
+}
+
+pub(crate) fn append_clip_export_placeholder(
+    content: &gtk::Box,
+    state: &Rc<RefCell<PlayerState>>,
+    compact: bool,
+) {
+    if env::var_os("OKP_CLIP_EXPORT_PREVIEW_STATE")
+        .is_some_and(|state| state.eq_ignore_ascii_case("hidden"))
+    {
+        return;
+    }
+    let eligibility = current_clip_export_eligibility(state);
+    let reason = clip_export_placeholder_reason(eligibility);
+    let button = if compact {
+        command_button("Export clip/GIF...", false)
+    } else {
+        track_button("Export clip/GIF...", false)
+    };
+    // Issue #228 deliberately reserves the interaction and command model but
+    // does not ship an encoder. Keep the row disabled until the future worker
+    // consumes `ClipExportEligibility::request`, while still explaining the
+    // exact selection/tooling state instead of presenting a silent dead item.
+    button.set_sensitive(false);
+    button.set_tooltip_text(Some(&reason));
+    content.append(&button);
+    content.append(&empty_track_label(&reason));
+}
+
+pub(crate) fn current_clip_export_eligibility(
+    state: &Rc<RefCell<PlayerState>>,
+) -> ClipExportEligibility {
+    if let Some(preview) = clip_export_preview_eligibility() {
+        return preview;
+    }
+
+    let ab_loop = state.borrow().ab_loop;
+    let tooling = if find_executable("ffmpeg").is_some() {
+        ClipExportTooling::Available
+    } else {
+        ClipExportTooling::MissingFfmpeg
+    };
+    clip_export::clip_export_eligibility(ab_loop.a, ab_loop.b, tooling, ClipExportLimits::default())
+}
+
+pub(crate) fn clip_export_preview_eligibility() -> Option<ClipExportEligibility> {
+    let state = env::var("OKP_CLIP_EXPORT_PREVIEW_STATE").ok()?;
+    let limits = ClipExportLimits::default();
+    match state.as_str() {
+        "no-selection" => Some(ClipExportEligibility::NoSelection),
+        "invalid-range" => Some(ClipExportEligibility::InvalidRange),
+        "too-short" => Some(ClipExportEligibility::SelectionTooShort {
+            duration_seconds: limits.min_seconds / 2.0,
+            min_seconds: limits.min_seconds,
+        }),
+        "too-long" => Some(ClipExportEligibility::SelectionTooLong {
+            duration_seconds: limits.max_seconds + 1.0,
+            max_seconds: limits.max_seconds,
+        }),
+        "missing-tooling" => Some(ClipExportEligibility::MissingTooling),
+        "ready" => Some(ClipExportEligibility::Ready(
+            okp_core::clip_export::ClipExportSelection {
+                start_seconds: 12.0,
+                end_seconds: 42.0,
+            },
+        )),
+        _ => None,
+    }
+}
+
+pub(crate) fn clip_export_placeholder_reason(eligibility: ClipExportEligibility) -> String {
+    match eligibility {
+        ClipExportEligibility::NoSelection => "Set both A and B to prepare export".to_owned(),
+        ClipExportEligibility::InvalidRange => "Set B after A".to_owned(),
+        ClipExportEligibility::SelectionTooShort { min_seconds, .. } => {
+            format!("Select at least {}", export_limit_label(min_seconds))
+        }
+        ClipExportEligibility::SelectionTooLong { max_seconds, .. } => {
+            format!("Select {} or less", export_limit_label(max_seconds))
+        }
+        ClipExportEligibility::MissingTooling => "Install FFmpeg to export".to_owned(),
+        ClipExportEligibility::Ready(selection) => format!(
+            "Selection ready ({}); encoder not enabled",
+            time_code::format_clock(selection.duration_seconds())
+        ),
+    }
+}
+
+pub(crate) fn export_limit_label(seconds: f64) -> String {
+    if seconds >= 60.0 && seconds % 60.0 == 0.0 {
+        let minutes = seconds / 60.0;
+        format!(
+            "{} {}",
+            minutes as u64,
+            if minutes == 1.0 { "minute" } else { "minutes" }
+        )
+    } else {
+        format!(
+            "{} {}",
+            seconds as u64,
+            if seconds == 1.0 { "second" } else { "seconds" }
+        )
+    }
 }
 
 pub(crate) fn track_popover_content(kind: PlayerPopoverKind, title: Option<&str>) -> gtk::Box {
