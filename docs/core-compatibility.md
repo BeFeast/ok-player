@@ -165,6 +165,19 @@ behaves identically on both sides.
   unrepresentable rather than silently treated as a corner. The proposed rect is one
   `(left, top, right, bottom)` tuple in and out rather than four scalars. `Math.Round`'s
   banker's rounding is preserved via `round_ties_even`.
+- **Linux client-size Shift-resize has no C# counterpart.** Windows drives aspect from `WM_SIZING`
+  on an outer rect with explicit non-client insets (`constrain`). Wayland has no client-visible
+  window position and GTK4 dropped `GDK_HINT_ASPECT`, so the interactive Shift-resize (issue #331)
+  works in logical *client* size instead: `lock_client_size` projects a compositor-proposed size
+  back onto the locked aspect line (dragged axis leads, free axis derived; corners follow the
+  dominant pointer axis) and clamps it to the OSC-minimum floor and monitor ceiling, with the
+  workarea winning when the two conflict. `AspectResize` is the per-drag state machine that owns the
+  deterministic mid-drag Shift transitions — pressing Shift locks to the proportions on screen at
+  that instant, releasing returns to freeform and keeps the size. All of this is engine- and
+  UI-free and lives in core so neither shell re-implements it. The GTK shell only observes Shift,
+  the dragged edge, and the proposed size, and applies the result in the compositor's `compute-size`
+  negotiation; whether that path tracks smoothly on a given Mutter build is verified by
+  `gnome-wayland-operator` acceptance (see `docs/linux-release-acceptance.md`).
 
 ## WindowFit → `okp_core::window_fit`
 
