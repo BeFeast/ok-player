@@ -14,6 +14,7 @@ pub mod hdr;
 pub mod history;
 pub mod history_format;
 pub mod image_luma;
+pub mod key_press;
 pub mod launch_args;
 pub mod lrc;
 pub mod lyrics;

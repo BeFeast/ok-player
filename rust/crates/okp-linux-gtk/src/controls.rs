@@ -1379,11 +1379,10 @@ pub(crate) fn build_controls(
 
     let play_state = Rc::clone(&state);
     play_button.connect_clicked(move |_| {
-        if let Some(mpv) = play_state.borrow().mpv.as_ref()
-            && let Err(error) = mpv.cycle_pause()
-        {
-            eprintln!("Failed to toggle playback: {error}");
+        if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+            eprintln!("interaction: play-button-activate");
         }
+        toggle_play_pause(&play_state);
     });
     play_button.connect_has_focus_notify(|button| {
         if button.has_focus() && env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {

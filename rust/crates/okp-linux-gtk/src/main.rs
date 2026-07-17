@@ -19,6 +19,7 @@ use okp_core::candidate_channel::{self, CandidateAppImage, CandidateFeed, Candid
 use okp_core::clip_export::{self, ClipExportEligibility, ClipExportLimits, ClipExportTooling};
 use okp_core::gapless::{GaplessPlaybackCapability, PlaylistTransitionPath};
 use okp_core::hdr::HdrHandlingState;
+use okp_core::key_press::KeyPressLatch;
 use okp_core::playlist::{Playlist, PlaylistItem, QueueInsertMode, RepeatMode};
 use okp_core::settings::{AppearanceTheme, UpdateChannel};
 use okp_core::shortcuts::{

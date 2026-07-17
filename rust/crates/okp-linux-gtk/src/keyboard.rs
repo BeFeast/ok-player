@@ -46,6 +46,83 @@ pub(crate) fn shortcut_chord_from_event(
     )
 }
 
+pub(crate) fn is_canonical_player_space(key: gdk::Key, modifiers: gdk::ModifierType) -> bool {
+    key == gdk::Key::space
+        && shortcut_modifiers_from_event(modifiers) == ShortcutModifiers::default()
+}
+
+fn focus_owns_space(window: &impl IsA<gtk::Window>) -> bool {
+    let mut current = gtk::prelude::GtkWindowExt::focus(window);
+    while let Some(widget) = current {
+        if widget.has_css_class("is-capturing") {
+            return true;
+        }
+        if let Ok(editable) = widget.clone().downcast::<gtk::Editable>()
+            && editable.is_editable()
+        {
+            return true;
+        }
+        if let Ok(text_view) = widget.clone().downcast::<gtk::TextView>()
+            && text_view.is_editable()
+        {
+            return true;
+        }
+        current = widget.parent();
+    }
+    false
+}
+
+fn handle_player_space(
+    window: &impl IsA<gtk::Window>,
+    latch: &RefCell<KeyPressLatch>,
+    key: gdk::Key,
+    modifiers: gdk::ModifierType,
+    dispatch: impl FnOnce(),
+) -> Option<glib::Propagation> {
+    if !is_canonical_player_space(key, modifiers) {
+        return None;
+    }
+    if latch.borrow().is_pressed() {
+        return Some(glib::Propagation::Stop);
+    }
+    if focus_owns_space(window) {
+        return Some(glib::Propagation::Proceed);
+    }
+
+    latch.borrow_mut().press();
+    dispatch();
+    Some(glib::Propagation::Stop)
+}
+
+fn connect_space_release(controller: &gtk::EventControllerKey, latch: Rc<RefCell<KeyPressLatch>>) {
+    controller.connect_key_released(move |_, key, _, _| {
+        if key == gdk::Key::space {
+            latch.borrow_mut().release();
+        }
+    });
+}
+
+pub(crate) fn connect_companion_play_pause_space(
+    window: &gtk::Window,
+    state: Rc<RefCell<PlayerState>>,
+) {
+    let controller = gtk::EventControllerKey::new();
+    controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let space_latch = Rc::new(RefCell::new(KeyPressLatch::default()));
+    connect_space_release(&controller, Rc::clone(&space_latch));
+    let shortcut_window = window.clone();
+    controller.connect_key_pressed(move |_, key, _, modifiers| {
+        handle_player_space(&shortcut_window, &space_latch, key, modifiers, || {
+            if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+                eprintln!("interaction: keyboard-play-pause-dispatch context=settings");
+            }
+            toggle_play_pause(&state);
+        })
+        .unwrap_or(glib::Propagation::Proceed)
+    });
+    window.add_controller(controller);
+}
+
 pub(crate) fn connect_keyboard(
     window: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
@@ -53,6 +130,9 @@ pub(crate) fn connect_keyboard(
     chrome: Rc<ChromeVisibility>,
 ) {
     let controller = gtk::EventControllerKey::new();
+    controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let space_latch = Rc::new(RefCell::new(KeyPressLatch::default()));
+    connect_space_release(&controller, Rc::clone(&space_latch));
     let shortcut_window = window.clone();
     controller.connect_key_pressed(move |_, key, _, modifiers| {
         // The in-player Media Information surface owns its keyboard scope. Let
@@ -60,6 +140,19 @@ pub(crate) fn connect_keyboard(
         if media_info_modal_is_open(&shortcut_window) {
             return glib::Propagation::Proceed;
         }
+
+        if let Some(propagation) =
+            handle_player_space(&shortcut_window, &space_latch, key, modifiers, || {
+                chrome.show_for_activity();
+                if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+                    eprintln!("interaction: keyboard-play-pause-dispatch context=player");
+                }
+                toggle_play_pause(&state);
+            })
+        {
+            return propagation;
+        }
+
         chrome.show_for_activity();
 
         let action = {
@@ -69,7 +162,7 @@ pub(crate) fn connect_keyboard(
 
         match action {
             Some(ShortcutAction::PlayPause) => {
-                with_mpv(&state, |mpv| mpv.cycle_pause());
+                toggle_play_pause(&state);
                 glib::Propagation::Stop
             }
             Some(ShortcutAction::SeekBack) => {

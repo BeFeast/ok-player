@@ -166,7 +166,7 @@ impl CompactMode {
 
         let play_state = Rc::clone(&state);
         mode.play_button.connect_clicked(move |_| {
-            with_mpv(&play_state, |mpv| mpv.cycle_pause());
+            toggle_play_pause(&play_state);
         });
 
         let seek_state = Rc::clone(&state);

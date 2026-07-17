@@ -209,6 +209,7 @@ pub(crate) fn open_settings_window(
     window_overlay.add_overlay(&captionless_window_drag_layer(&window));
     window_overlay.add_overlay(&settings_window_controls(&window));
     window.set_child(Some(&window_overlay));
+    connect_companion_play_pause_space(&window, Rc::clone(&state));
     window.present();
 }
 
