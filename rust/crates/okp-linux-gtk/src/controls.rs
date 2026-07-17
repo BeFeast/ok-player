@@ -936,14 +936,18 @@ pub(crate) fn build_controls(
     subtitle_button.set_tooltip_text(Some("Subtitles"));
     subtitle_button.set_sensitive(false);
 
+    // Headphones glyph (not a second speaker): the volume control owns the
+    // speaker/level icon, so the audio-track/output action must read as a
+    // distinct semantic to keep the two OSC buttons tellable apart.
     let audio_button = gtk::MenuButton::builder()
-        .icon_name("audio-speakers-symbolic")
+        .icon_name("audio-headphones-symbolic")
         .build();
     audio_button.set_has_frame(false);
     audio_button.add_css_class("okp-control-button");
     audio_button.add_css_class("okp-icon-button");
     audio_button.add_css_class("okp-utility-button");
-    audio_button.set_tooltip_text(Some("Audio"));
+    audio_button.set_tooltip_text(Some("Audio tracks / output"));
+    audio_button.update_property(&[gtk::accessible::Property::Label("Audio tracks / output")]);
     audio_button.set_sensitive(false);
 
     let speed_button = gtk::MenuButton::builder().label("1.00×").build();
