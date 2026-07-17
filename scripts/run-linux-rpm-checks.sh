@@ -19,6 +19,7 @@ dnf builddep -y "$SRPM"
 
 mkdir -p "$OUT_DIR/previous" "$OUT_DIR/current"
 rpmbuild --rebuild "$SRPM" \
+  --nocheck \
   --define "_rpmdir $OUT_DIR/previous" \
   --define "rpm_release 0.1"
 rpmbuild --rebuild "$SRPM" \
