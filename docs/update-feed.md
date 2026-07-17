@@ -93,6 +93,9 @@ It is isolated from the three feeds above by construction:
   at least two previous known-good packages for rollback, and uploads build-versioned packages and
   checksums before the shared `candidate.linux.json` pointer. That pointer gates both package lanes,
   so an interrupted promotion leaves the previous candidate usable.
+- The scheduled native workflow holds one close-on-exec critical section across build, exact-bundle
+  resolution, and candidate publication. An unchanged-SHA retry reuses `last-bundle.path`; it cannot
+  silently rebuild a different commit before moving the rolling pointer.
 - Candidate packing consumes Velopack's separate `releases.linux-candidate.json` build output and
   channel-qualified Full nupkg. It never rewrites or publishes the public `releases.linux.json`;
   the public package path continues to use the `linux` channel unchanged.

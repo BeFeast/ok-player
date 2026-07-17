@@ -37,7 +37,7 @@ Configuration (all optional; no host-specific value is baked in):
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `OKP_CANDIDATE_STATE_DIR` | `${XDG_STATE_HOME:-$HOME/.local/state}/ok-player-candidate` | Persistent state, lock, heartbeats, bundles |
+| `OKP_CANDIDATE_STATE_DIR` | `${XDG_STATE_HOME:-$HOME/.local/state}/ok-player-candidate` | Persistent state, lock owner diagnostics, heartbeats, bundles |
 | `OKP_CANDIDATE_REPO_URL` | public GitHub repo | Clone source |
 | `OKP_CANDIDATE_BRANCH` | `main` | Branch to track |
 | `OKP_CANDIDATE_VERSION_BASE` | `0.11.0-beta.0` | Candidate version base; the build number is appended |
@@ -57,9 +57,13 @@ The override changes only the candidate version base. The monotonic build
 number, exact bundle identity, candidate/public feed isolation, and separate
 promotion step remain unchanged.
 
-A single-run lock (`flock` on `build.lock`) makes overlapping schedules safe:
-a second invocation sees the lock, records an idle heartbeat, and exits. Two
-simultaneous invocations therefore cannot publish two competing candidates.
+A single-run lock (`build.lock`) makes overlapping schedules safe. The Rust
+coordinator owns a close-on-exec descriptor and records its phase, process ID,
+workflow run ID when available, and source SHA when known in
+`build.lock.owner.json`. A second invocation reports those owner diagnostics
+and is rejected or coalesced according to the entry point. Package, Xvfb, and
+headless-smoke children never inherit the descriptor, so they cannot retain the
+lock after their direct parent returns.
 
 ## What a build does
 
@@ -120,13 +124,13 @@ exact bundle with the rolling pointer last, and records the promoted SHA only
 after publication succeeds.
 
 `release-linux-candidate.yml` is the repository-side schedule: every 15 minutes
-it invokes the builder on a generic self-hosted Linux x86_64 runner, publishes a
-new verified SHA when present, and reports heartbeat activity. An unchanged
-`main` remains an expected idle run; manual dispatch can republish the last
-verified bundle without rebuilding it. The `always()` summary reads the raw
-heartbeat first and treats the release CLI and handoff outputs as optional, so
-an early gate failure remains the named failure instead of causing a second
-summary-step error.
+it holds one `build-and-publish` critical section while the builder runs,
+resolves `last-bundle.path`, and publishes that exact verified bundle. There is
+no unlocked step boundary between build and publish. An unchanged `main`
+remains an expected idle run; manual dispatch reuses the last verified bundle
+without rebuilding it. The `always()` summary reads the raw heartbeat first and
+treats the handoff outputs as optional, so an early gate failure remains the
+named failure instead of causing a second summary-step error.
 
 ## Heartbeats and the watchdog
 

@@ -24,6 +24,7 @@
 set -euo pipefail
 
 STATE_DIR="${OKP_CANDIDATE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/ok-player-candidate}"
+SCRIPT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_URL="${OKP_CANDIDATE_REPO_URL:-https://github.com/BeFeast/ok-player.git}"
 BRANCH="${OKP_CANDIDATE_BRANCH:-main}"
 VERSION_BASE="${OKP_CANDIDATE_VERSION_BASE:-0.11.0-beta.0}"
@@ -33,11 +34,34 @@ MIRROR="$STATE_DIR/mirror.git"
 CHECKOUT="$STATE_DIR/checkout"
 OUT_ROOT="$STATE_DIR/out"
 LOCK="$STATE_DIR/build.lock"
+LOCK_OWNER="$STATE_DIR/build.lock.owner.json"
 LAST_BUILT="$STATE_DIR/last-built.sha"
 BUILD_NUMBER_FILE="$STATE_DIR/build-number"
 HEARTBEAT="$STATE_DIR/heartbeat.jsonl"
 
 mkdir -p "$STATE_DIR"
+
+# Direct invocations acquire through the Rust coordinator. Its descriptor is
+# close-on-exec, so a delayed package/headless child cannot retain the lock.
+# The repository workflow sets OKP_CANDIDATE_LOCK_HELD while it owns one
+# build-and-publish critical section around this script and the publisher.
+if [[ "${OKP_CANDIDATE_LOCK_HELD:-}" != "1" ]]; then
+  if [[ -n "${OKP_CANDIDATE_LOCK_CLI:-}" ]]; then
+    LOCK_CLI="$OKP_CANDIDATE_LOCK_CLI"
+  else
+    CC="${CC:-/usr/bin/cc}" cargo build --quiet \
+      --manifest-path "$SCRIPT_ROOT/rust/Cargo.toml" \
+      -p okp-core --bin okp-candidate
+    LOCK_CLI="$SCRIPT_ROOT/rust/target/debug/okp-candidate"
+  fi
+  [[ -x "$LOCK_CLI" ]] || { echo "candidate lock coordinator not found: $LOCK_CLI" >&2; exit 1; }
+  exec "$LOCK_CLI" lock-run \
+    --lock "$LOCK" \
+    --owner "$LOCK_OWNER" \
+    --phase build \
+    --coalesce \
+    -- "$0" "$@"
+fi
 
 # Publish the stall threshold the external watchdog should use with
 # `okp-candidate classify --stall-after`. Kept beside the heartbeats so the
@@ -54,13 +78,6 @@ heartbeat() {
     "$phase" "$(now_unix)" "$note" "$sha" >>"$HEARTBEAT"
   echo "[$(now_utc)] $phase: $note"
 }
-
-# --- Single-run lock: overlapping schedules cannot race on one builder -------
-exec 9>"$LOCK"
-if ! flock -n 9; then
-  heartbeat idle "another candidate build holds the lock; exiting"
-  exit 0
-fi
 
 # --- Resolve origin/main and decide whether to build -------------------------
 if [[ ! -d "$MIRROR" ]]; then

@@ -14,10 +14,13 @@
 //!       [--stall-after N]
 //!   okp-candidate stage-velopack --output-dir DIR --channel CHANNEL \
 //!       --package-id ID --version VERSION --versioned-appimage FILE
+//!   okp-candidate lock-run --lock PATH --owner PATH --phase PHASE \
+//!       [--coalesce] -- COMMAND [ARG ...]
 
 use std::env;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 
 use okp_core::acceptance_evidence::{ArtifactKind, PackageArtifact, PackageIdentity};
 use okp_core::candidate_build::{
@@ -26,6 +29,9 @@ use okp_core::candidate_build::{
     verify_candidate_bundle,
 };
 use okp_core::candidate_channel::{AcceptanceStatus, CandidateFeed};
+use okp_core::candidate_lock::{
+    CandidateLock, CandidateLockError, CandidateLockOwner, CandidateLockPhase,
+};
 use okp_core::sha256sums::sha256_hex;
 use okp_core::velopack_artifacts::stage_versioned_appimage;
 
@@ -48,7 +54,58 @@ fn run() -> Result<(), String> {
         Some("version") => version(&args[1..]),
         Some("classify") => classify(&args[1..]),
         Some("stage-velopack") => stage_velopack(&args[1..]),
+        Some("lock-run") => lock_run(&args[1..]),
         _ => Err(usage()),
+    }
+}
+
+fn lock_run(args: &[String]) -> Result<(), String> {
+    let lock_path = Path::new(value(args, "--lock")?);
+    let owner_path = Path::new(value(args, "--owner")?);
+    let phase = parse_lock_phase(value(args, "--phase")?)?;
+    let separator = args
+        .iter()
+        .position(|arg| arg == "--")
+        .ok_or_else(|| format!("lock-run requires -- COMMAND\n{}", usage()))?;
+    let command = args
+        .get(separator + 1)
+        .ok_or_else(|| format!("lock-run requires a command after --\n{}", usage()))?;
+    let command_args = &args[separator + 2..];
+    let owner = CandidateLockOwner::current(
+        phase,
+        env::var("GITHUB_RUN_ID").ok(),
+        optional_value(args, "--source-sha").map(str::to_owned),
+    );
+    let lock = match CandidateLock::try_acquire(lock_path, owner_path, owner) {
+        Ok(lock) => lock,
+        Err(CandidateLockError::Busy(owner)) if args.iter().any(|arg| arg == "--coalesce") => {
+            eprintln!("{}", CandidateLockError::Busy(owner));
+            return Ok(());
+        }
+        Err(error) => return Err(error.to_string()),
+    };
+    eprintln!("candidate lock acquired ({})", lock.owner().diagnostic());
+
+    let status = Command::new(command)
+        .args(command_args)
+        .env("OKP_CANDIDATE_LOCK_HELD", "1")
+        .status()
+        .map_err(|error| format!("launch {command}: {error}"))?;
+    if !status.success() {
+        return Err(format!("{command} exited with {status}"));
+    }
+    Ok(())
+}
+
+fn parse_lock_phase(value: &str) -> Result<CandidateLockPhase, String> {
+    match value {
+        "build" => Ok(CandidateLockPhase::Build),
+        "publish" => Ok(CandidateLockPhase::Publish),
+        "promote" => Ok(CandidateLockPhase::Promote),
+        "build-and-publish" => Ok(CandidateLockPhase::BuildAndPublish),
+        other => Err(format!(
+            "invalid --phase {other:?}; expected build|publish|promote|build-and-publish"
+        )),
     }
 }
 
@@ -279,5 +336,5 @@ fn optional_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 }
 
 fn usage() -> String {
-    "usage:\n  okp-candidate decide --head SHA [--last SHA]\n  okp-candidate record --source-sha SHA --build-number N --version V --started-at TS --finished-at TS [--require-native-hardware] --deb PATH --appimage PATH --gate name:status[:detail] ...\n  okp-candidate promotable --record PATH\n  okp-candidate verify-bundle --bundle DIR\n  okp-candidate feed --bundle DIR --base-url URL --acceptance pending|accepted|rejected [--previous PATH] --output PATH\n  okp-candidate prune-plan --feed PATH --assets PATH\n  okp-candidate version --base VERSION --build N\n  okp-candidate classify --phase idle|building --age-seconds N [--stall-after N]\n  okp-candidate stage-velopack --output-dir DIR --channel CHANNEL --package-id ID --version VERSION --versioned-appimage FILE".to_owned()
+    "usage:\n  okp-candidate decide --head SHA [--last SHA]\n  okp-candidate record --source-sha SHA --build-number N --version V --started-at TS --finished-at TS [--require-native-hardware] --deb PATH --appimage PATH --gate name:status[:detail] ...\n  okp-candidate promotable --record PATH\n  okp-candidate verify-bundle --bundle DIR\n  okp-candidate feed --bundle DIR --base-url URL --acceptance pending|accepted|rejected [--previous PATH] --output PATH\n  okp-candidate prune-plan --feed PATH --assets PATH\n  okp-candidate version --base VERSION --build N\n  okp-candidate classify --phase idle|building --age-seconds N [--stall-after N]\n  okp-candidate stage-velopack --output-dir DIR --channel CHANNEL --package-id ID --version VERSION --versioned-appimage FILE\n  okp-candidate lock-run --lock PATH --owner PATH --phase build|publish|promote|build-and-publish [--source-sha SHA] [--coalesce] -- COMMAND [ARG ...]".to_owned()
 }
