@@ -250,7 +250,7 @@ fn append_collapsed_controls_section(
                 button
             }
             OscControlId::Audio => {
-                let button = command_button("Audio track", false);
+                let button = audio_command_button("Audio tracks / output");
                 let drill_popover = popover.clone();
                 let drill_state = Rc::clone(state);
                 button.connect_clicked(move |_| {
@@ -2030,6 +2030,32 @@ pub(crate) fn audio_track_button(name: &str, detail: &str, selected: bool) -> gt
 pub(crate) fn command_button(text: &str, selected: bool) -> gtk::Button {
     let button = track_button(text, selected);
     button.add_css_class("okp-command-row");
+    button
+}
+
+pub(crate) fn audio_command_button(text: &str) -> gtk::Button {
+    let button = gtk::Button::new();
+    button.add_css_class("okp-track-row");
+    button.add_css_class("okp-command-row");
+
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let check = selection_check_icon();
+    check.set_opacity(0.0);
+    row.append(&check);
+    let icon = audio_track_icon(16);
+    if env::var_os("OKP_DEBUG_OSC_LAYOUT").is_some() {
+        icon.set_widget_name("okp-debug-audio-overflow-icon");
+    }
+    row.append(&icon);
+
+    let label = gtk::Label::new(Some(text));
+    label.add_css_class("okp-track-row-label");
+    label.set_xalign(0.0);
+    label.set_hexpand(true);
+    label.set_ellipsize(pango::EllipsizeMode::End);
+    row.append(&label);
+
+    button.set_child(Some(&row));
     button
 }
 
