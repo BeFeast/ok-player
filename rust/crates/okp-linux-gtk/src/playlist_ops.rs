@@ -78,6 +78,7 @@ pub(crate) fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
     state.current_file = None;
     state.current_url = None;
     state.current_nfo_title = okp_core::nfo_metadata::NfoTitleState::NotApplicable;
+    state.current_video_dimensions = None;
     advance_source_generation(&mut state);
     state.playlist.clear();
     state.thumbnail_request_key = None;
@@ -701,6 +702,7 @@ fn track_selection_id(selection: launch_args::TrackSelection) -> Option<i64> {
 
 fn advance_source_generation(state: &mut PlayerState) {
     state.source_generation = state.source_generation.wrapping_add(1);
+    state.current_video_dimensions = None;
     state
         .initial_window_fit
         .begin_source(state.source_generation);

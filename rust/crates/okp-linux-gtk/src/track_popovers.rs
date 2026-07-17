@@ -232,6 +232,16 @@ pub(crate) fn more_popover_content(
     });
     content.append(&close_button);
 
+    let compact_button = command_button("Mini player", window_compact_mode_active(parent));
+    compact_button.set_sensitive(has_media);
+    let compact_parent = parent.clone();
+    let compact_popover = popover.clone();
+    compact_button.connect_clicked(move |_| {
+        compact_popover.popdown();
+        toggle_compact_mode(&compact_parent);
+    });
+    content.append(&compact_button);
+
     let ab_loop_button = command_button("A-B loop", ab_loop_active);
     ab_loop_button.set_sensitive(has_media);
     let ab_loop_state = Rc::clone(&state);
@@ -640,6 +650,16 @@ pub(crate) fn advanced_command_popover_content(
         close_current_media(&close_state, &close_toast);
     });
     content.append(&close_button);
+
+    let compact_button = track_button("Mini player", window_compact_mode_active(parent));
+    compact_button.set_sensitive(has_media);
+    let compact_parent = parent.clone();
+    let compact_popover = popover.clone();
+    compact_button.connect_clicked(move |_| {
+        compact_popover.popdown();
+        toggle_compact_mode(&compact_parent);
+    });
+    content.append(&compact_button);
 
     let fullscreen_label = if parent.is_fullscreen() {
         "Exit Fullscreen"

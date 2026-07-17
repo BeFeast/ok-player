@@ -41,6 +41,7 @@ use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
 mod about;
 mod branding;
+mod compact_mode;
 mod controls;
 mod css;
 mod dialogs;
@@ -68,6 +69,7 @@ mod updates;
 mod window;
 pub(crate) use about::*;
 pub(crate) use branding::*;
+pub(crate) use compact_mode::*;
 pub(crate) use controls::*;
 pub(crate) use css::*;
 pub(crate) use dialogs::*;
@@ -167,6 +169,7 @@ struct PlayerState {
     nfo_title_jobs: NfoTitleJobs,
     source_generation: u64,
     initial_window_fit: window_fit::InitialFitState,
+    current_video_dimensions: Option<VideoDimensions>,
     seek_generation: u64,
     playlist: Playlist,
     pending_subtitles: Vec<PathBuf>,
@@ -784,6 +787,7 @@ struct PlayerWindowChrome {
     persistent_widgets: Vec<gtk::Widget>,
     media_icon: gtk::DrawingArea,
     title_label: gtk::Label,
+    always_on_top: Rc<Cell<bool>>,
 }
 
 #[derive(Clone)]
@@ -796,6 +800,7 @@ struct StatePollContext {
     updating_seek: Rc<Cell<bool>>,
     initial_map_pending: Rc<Cell<bool>>,
     chrome: Rc<ChromeVisibility>,
+    compact_mode: CompactMode,
     window_chrome: PlayerWindowChrome,
     subtitle_position_snapshot: Rc<Cell<Option<i64>>>,
     empty_surface: EmptySurface,
@@ -1159,6 +1164,7 @@ struct ChromeVisibility {
     hide_source: Rc<RefCell<Option<glib::SourceId>>>,
     pin_count: Rc<Cell<u32>>,
     auto_hide_enabled: Rc<Cell<bool>>,
+    surface_suppressed: Rc<Cell<bool>>,
     is_revealed: Rc<Cell<bool>>,
 }
 
@@ -1183,6 +1189,7 @@ impl ChromeVisibility {
             hide_source: Rc::new(RefCell::new(None)),
             pin_count: Rc::new(Cell::new(0)),
             auto_hide_enabled: Rc::new(Cell::new(false)),
+            surface_suppressed: Rc::new(Cell::new(false)),
             is_revealed: Rc::new(Cell::new(true)),
         }
     }
@@ -1223,9 +1230,17 @@ impl ChromeVisibility {
     }
 
     fn set_has_media(&self, has_media: bool) {
-        self.revealer.set_visible(has_media);
+        self.revealer
+            .set_visible(has_media && !self.surface_suppressed.get());
         self.revealer
             .set_can_target(has_media && self.is_revealed.get());
+    }
+
+    fn set_surface_suppressed(&self, suppressed: bool) {
+        self.surface_suppressed.set(suppressed);
+        if suppressed {
+            self.revealer.set_visible(false);
+        }
     }
 
     fn set_auto_hide_enabled(&self, enabled: bool) {

@@ -37,6 +37,16 @@ const OKP_STYLESHEET: &str = "
             background: @okp_bg;
         }
 
+        window.okp-player-window.is-compact-mode,
+        window.okp-player-window.is-compact-mode .okp-root {
+            border-radius: 14px;
+            background: @okp_bg;
+        }
+
+        window.okp-player-window.is-compact-mode {
+            box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+        }
+
         .okp-window-chrome {
             min-height: 42px;
             background: transparent;
@@ -149,6 +159,14 @@ const OKP_STYLESHEET: &str = "
         .okp-resize-corner {
             min-width: 16px;
             min-height: 16px;
+        }
+
+        .okp-resize-edge-horizontal.is-compact {
+            min-height: 8px;
+        }
+
+        .okp-resize-edge-vertical.is-compact {
+            min-width: 8px;
         }
 
         .okp-video-plane {
@@ -414,6 +432,7 @@ const OKP_STYLESHEET: &str = "
         }
 
         progressbar.okp-recent-progress progress {
+            min-width: 0;
             min-height: 4px;
             border: none;
             border-radius: 0 0 0 8px;
@@ -609,6 +628,7 @@ const OKP_STYLESHEET: &str = "
         }
 
         progressbar.okp-history-row-progress progress {
+            min-width: 0;
             min-height: 3px;
             border: none;
             border-radius: 3px;
@@ -859,6 +879,7 @@ const OKP_STYLESHEET: &str = "
 
         progressbar.okp-recent-progress progress,
         progressbar.okp-history-thumb-progress progress {
+            min-width: 0;
             min-height: 4px;
             border: none;
             background: @okp_accent;
@@ -1269,6 +1290,134 @@ const OKP_STYLESHEET: &str = "
         .okp-chrome-revealer.is-hidden {
             opacity: 0;
             transform: translate(0, 16px);
+        }
+
+        .okp-compact-motion {
+            opacity: 1;
+            transform: translate(0, 0);
+            transition: opacity 180ms ease, transform 180ms ease;
+        }
+
+        .okp-compact-motion.is-hidden {
+            opacity: 0;
+            transform: translate(0, 8px);
+        }
+
+        .okp-compact-top-bar,
+        .okp-compact-bottom-bar {
+            min-height: 28px;
+            padding: 6px 8px;
+            border-radius: 14px;
+            background: rgba(22, 22, 25, 0.56);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            box-shadow: 0 14px 40px rgba(0, 0, 0, 0.32);
+        }
+
+        .okp-compact-top-bar {
+            background-image: radial-gradient(ellipse at top, rgba(0, 0, 0, 0.50), rgba(22, 22, 25, 0.56) 72%);
+        }
+
+        .okp-compact-bottom-bar {
+            background-image: radial-gradient(ellipse at bottom, rgba(0, 0, 0, 0.50), rgba(22, 22, 25, 0.56) 72%);
+        }
+
+        button.okp-compact-button {
+            min-width: 28px;
+            min-height: 28px;
+            padding: 0;
+            border: 1px solid transparent;
+            border-radius: 8px;
+            background: transparent;
+            box-shadow: none;
+            color: rgba(255, 255, 255, 0.95);
+            -gtk-icon-size: 16px;
+        }
+
+        button.okp-compact-button:hover {
+            background: rgba(255, 255, 255, 0.12);
+        }
+
+        button.okp-compact-button:active {
+            background: rgba(255, 255, 255, 0.18);
+        }
+
+        button.okp-compact-button:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.60);
+        }
+
+        button.okp-compact-close:hover {
+            background: alpha(@okp_danger_dark, 0.86);
+        }
+
+        button.okp-compact-play {
+            min-width: 42px;
+            min-height: 42px;
+            border-radius: 21px;
+            background: rgba(22, 22, 25, 0.56);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.40);
+            -gtk-icon-size: 21px;
+        }
+
+        .okp-compact-title {
+            color: rgba(255, 255, 255, 0.95);
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .okp-compact-time {
+            color: rgba(255, 255, 255, 0.82);
+            font-size: 10px;
+            font-weight: 500;
+            font-feature-settings: 'tnum';
+        }
+
+        scale.okp-compact-seek {
+            min-width: 80px;
+            min-height: 20px;
+            margin: 0;
+            padding: 0;
+        }
+
+        scale.okp-compact-seek trough {
+            min-height: 3px;
+            border: none;
+            border-radius: 2px;
+            background: rgba(255, 255, 255, 0.30);
+            box-shadow: none;
+        }
+
+        scale.okp-compact-seek highlight {
+            min-width: 2px;
+            min-height: 3px;
+            border: none;
+            border-radius: 2px;
+            background: @okp_accent;
+        }
+
+        scale.okp-compact-seek slider {
+            min-width: 10px;
+            min-height: 10px;
+            margin: 0;
+            border: none;
+            border-radius: 6px;
+            background: #ffffff;
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+        }
+
+        window.okp-player-window.is-high-contrast .okp-compact-top-bar,
+        window.okp-player-window.is-high-contrast .okp-compact-bottom-bar,
+        window.okp-player-window.is-reduced-transparency .okp-compact-top-bar,
+        window.okp-player-window.is-reduced-transparency .okp-compact-bottom-bar {
+            background: #161619;
+            background-image: none;
+            border-color: #ffffff;
+            box-shadow: none;
+        }
+
+        .okp-root.is-reduced-motion .okp-compact-motion {
+            transition: none;
         }
 
         .okp-bottom-scrim {

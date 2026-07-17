@@ -1722,6 +1722,7 @@ fn more_stays_curated_while_player_context_menu_keeps_legacy_commands() {
     let curated_more = [
         "Open file...",
         "Close file",
+        "Mini player",
         "A-B loop",
         "Screenshot with subtitles",
         "Copy frame to clipboard",
@@ -1766,6 +1767,7 @@ fn more_stays_curated_while_player_context_menu_keeps_legacy_commands() {
         "Save frame with subtitles",
         "Copy frame to clipboard",
         "Close Media",
+        "Mini player",
         "Clear History...",
     ] {
         assert!(
@@ -1831,6 +1833,52 @@ fn video_geometry_toasts_report_the_applied_core_state() {
         video_geometry_message(VideoGeometryAction::ToggleDeinterlace, geometry),
         "Deinterlace on"
     );
+}
+
+#[test]
+fn compact_mode_keeps_the_render_surface_and_restores_standard_chrome() {
+    let compact = include_str!("compact_mode.rs");
+    for required in [
+        "view-restore-symbolic",
+        "window-close-symbolic",
+        "media-playback-start-symbolic",
+        "okp-compact-seek",
+        "COMPACT_DEFAULT_SHORT_EDGE",
+        "COMPACT_MIN_SHORT_EDGE",
+        "set_window_always_on_top(&self.window, true)",
+        ".set_visible(!compact && !self.window.is_fullscreen())",
+        "self.standard_osc.set_visible(!compact)",
+        "close_current_media(&close_state, &close_toast)",
+        "restore_compact_mode",
+    ] {
+        assert!(
+            compact.contains(required),
+            "missing compact seam: {required}"
+        );
+    }
+    assert!(!compact.contains("Mpv::new"));
+    assert!(!compact.contains("load_media_path"));
+
+    let window = include_str!("window.rs");
+    assert!(window.contains("connect_mpv(&video_host"));
+    assert!(window.contains("CompactMode::build("));
+    assert_eq!(window.matches("connect_mpv(&video_host").count(), 1);
+
+    let css = include_str!("css.rs");
+    for required in [
+        "border-radius: 14px;",
+        "min-width: 28px;",
+        "min-height: 28px;",
+        "background: rgba(22, 22, 25, 0.56);",
+        "background: @okp_accent;",
+        "min-width: 80px;",
+        "min-height: 20px;",
+        "font-feature-settings: 'tnum';",
+        "is-reduced-transparency",
+        "is-high-contrast",
+    ] {
+        assert!(css.contains(required), "missing compact CSS: {required}");
+    }
 }
 
 #[test]

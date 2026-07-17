@@ -12,6 +12,18 @@ pub const WORK_AREA_FILL: f64 = 0.94;
 /// beyond a monitor edge.
 pub const PLAYER_CHROME_RESERVE: i32 = 42;
 
+/// Canonical compact-player shorter edge from the compact-modes handoff.
+pub const COMPACT_DEFAULT_SHORT_EDGE: i32 = 270;
+
+/// Smallest compact-player shorter edge that still leaves the transport usable.
+pub const COMPACT_MIN_SHORT_EDGE: i32 = 160;
+
+/// Canonical desktop inset for a compact-player corner rest.
+pub const COMPACT_SNAP_INSET: i32 = 16;
+
+/// Maximum release distance on each axis that settles into a corner rest.
+pub const COMPACT_SNAP_THRESHOLD: i32 = 48;
+
 /// A logical client size requested from the platform windowing API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowSize {
@@ -40,6 +52,83 @@ pub struct WindowRect {
 pub struct WindowPlacement {
     pub size: WindowSize,
     pub position: WindowPoint,
+}
+
+/// Size a compact video window from the real display aspect, keeping the
+/// shorter edge fixed and letting the longer edge follow the source.
+pub fn compact_size_for_video(
+    video_width: i32,
+    video_height: i32,
+    short_edge: i32,
+) -> Option<WindowSize> {
+    if video_width <= 0 || video_height <= 0 || short_edge <= 0 {
+        return None;
+    }
+
+    let scale = if video_width >= video_height {
+        f64::from(short_edge) / f64::from(video_height)
+    } else {
+        f64::from(short_edge) / f64::from(video_width)
+    };
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+
+    Some(WindowSize {
+        width: (f64::from(video_width) * scale).round_ties_even().max(1.0) as i32,
+        height: (f64::from(video_height) * scale).round_ties_even().max(1.0) as i32,
+    })
+}
+
+/// Settle a compact window into the nearest work-area corner when the release
+/// position is within the configured threshold on both axes.
+pub fn compact_corner_snap(
+    position: WindowPoint,
+    size: WindowSize,
+    work_area: WindowRect,
+    inset: i32,
+    threshold: i32,
+) -> Option<WindowPoint> {
+    if size.width <= 0
+        || size.height <= 0
+        || work_area.width <= 0
+        || work_area.height <= 0
+        || inset < 0
+        || threshold < 0
+    {
+        return None;
+    }
+    let left = work_area.x.saturating_add(inset);
+    let top = work_area.y.saturating_add(inset);
+    let right = i64::from(work_area.x)
+        .saturating_add(i64::from(work_area.width))
+        .saturating_sub(i64::from(size.width))
+        .saturating_sub(i64::from(inset))
+        .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+    let bottom = i64::from(work_area.y)
+        .saturating_add(i64::from(work_area.height))
+        .saturating_sub(i64::from(size.height))
+        .saturating_sub(i64::from(inset))
+        .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+    let corners = [
+        WindowPoint { x: left, y: top },
+        WindowPoint { x: right, y: top },
+        WindowPoint { x: left, y: bottom },
+        WindowPoint {
+            x: right,
+            y: bottom,
+        },
+    ];
+    corners
+        .into_iter()
+        .filter(|corner| {
+            i64::from(position.x).abs_diff(i64::from(corner.x)) <= threshold as u64
+                && i64::from(position.y).abs_diff(i64::from(corner.y)) <= threshold as u64
+        })
+        .min_by_key(|corner| {
+            i64::from(position.x).abs_diff(i64::from(corner.x)).pow(2)
+                + i64::from(position.y).abs_diff(i64::from(corner.y)).pow(2)
+        })
 }
 
 /// One source generation waiting for its one-time initial window fit.
@@ -324,6 +413,115 @@ mod tests {
 
     const NO_CAP_WIDTH: i32 = 4096;
     const NO_CAP_HEIGHT: i32 = 4096;
+
+    #[test]
+    fn compact_sizes_follow_real_video_aspect() {
+        assert_eq!(
+            compact_size_for_video(1920, 1080, COMPACT_DEFAULT_SHORT_EDGE),
+            Some(WindowSize {
+                width: 480,
+                height: 270
+            })
+        );
+        assert_eq!(
+            compact_size_for_video(1080, 1920, COMPACT_DEFAULT_SHORT_EDGE),
+            Some(WindowSize {
+                width: 270,
+                height: 480
+            })
+        );
+        assert_eq!(
+            compact_size_for_video(2390, 1000, COMPACT_DEFAULT_SHORT_EDGE),
+            Some(WindowSize {
+                width: 645,
+                height: 270
+            })
+        );
+    }
+
+    #[test]
+    fn compact_floor_uses_the_limiting_dimension() {
+        assert_eq!(
+            compact_size_for_video(1920, 1080, COMPACT_MIN_SHORT_EDGE),
+            Some(WindowSize {
+                width: 284,
+                height: 160
+            })
+        );
+        assert_eq!(
+            compact_size_for_video(1080, 1920, COMPACT_MIN_SHORT_EDGE),
+            Some(WindowSize {
+                width: 160,
+                height: 284
+            })
+        );
+    }
+
+    #[test]
+    fn compact_size_rejects_non_positive_inputs() {
+        assert_eq!(compact_size_for_video(0, 1080, 270), None);
+        assert_eq!(compact_size_for_video(1920, 0, 270), None);
+        assert_eq!(compact_size_for_video(1920, 1080, 0), None);
+    }
+
+    #[test]
+    fn compact_window_snaps_to_each_inset_corner() {
+        let work_area = WindowRect {
+            x: 100,
+            y: 50,
+            width: 1280,
+            height: 900,
+        };
+        let size = WindowSize {
+            width: 480,
+            height: 270,
+        };
+        for (release, expected) in [
+            (WindowPoint { x: 120, y: 70 }, WindowPoint { x: 116, y: 66 }),
+            (WindowPoint { x: 870, y: 75 }, WindowPoint { x: 884, y: 66 }),
+            (
+                WindowPoint { x: 110, y: 650 },
+                WindowPoint { x: 116, y: 664 },
+            ),
+            (
+                WindowPoint { x: 900, y: 680 },
+                WindowPoint { x: 884, y: 664 },
+            ),
+        ] {
+            assert_eq!(
+                compact_corner_snap(
+                    release,
+                    size,
+                    work_area,
+                    COMPACT_SNAP_INSET,
+                    COMPACT_SNAP_THRESHOLD,
+                ),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn compact_window_does_not_snap_from_the_middle() {
+        assert_eq!(
+            compact_corner_snap(
+                WindowPoint { x: 400, y: 300 },
+                WindowSize {
+                    width: 480,
+                    height: 270,
+                },
+                WindowRect {
+                    x: 0,
+                    y: 0,
+                    width: 1280,
+                    height: 900,
+                },
+                COMPACT_SNAP_INSET,
+                COMPACT_SNAP_THRESHOLD,
+            ),
+            None
+        );
+    }
 
     #[test]
     fn small_video_keeps_native_size() {

@@ -188,6 +188,9 @@ pub(crate) fn connect_keyboard(
                 shortcut_window.unfullscreen();
                 glib::Propagation::Stop
             }
+            Some(ShortcutAction::EscapeFullscreen) if restore_compact_mode(&shortcut_window) => {
+                glib::Propagation::Stop
+            }
             Some(ShortcutAction::OpenSettings) => {
                 open_settings_window(
                     &shortcut_window,

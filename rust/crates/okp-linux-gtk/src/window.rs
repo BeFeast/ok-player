@@ -133,6 +133,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         .decorated(false)
         .build();
     window.add_css_class("okp-player-window");
+    apply_compact_accessibility_classes(&window);
     window.set_icon_name(Some(LINUX_ICON_NAME));
     let window_bounds = track_player_window_bounds(&window);
 
@@ -196,10 +197,13 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         preview.set_valign(gtk::Align::Fill);
         preview.set_hexpand(true);
         preview.set_vexpand(true);
-        preview.set_size_request(1120, 680);
+        let compact_preview = env::var_os("OKP_START_COMPACT").is_some();
+        if !compact_preview {
+            preview.set_size_request(1120, 680);
+        }
         preview.set_can_target(false);
         overlay.add_overlay(&preview);
-        overlay.set_measure_overlay(&preview, true);
+        overlay.set_measure_overlay(&preview, !compact_preview);
     }
     overlay.add_overlay(empty_surface.widget());
     // The lyrics surface sits above the (audio-black) video plane but below the window chrome, the
@@ -211,8 +215,24 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     overlay.add_overlay(window_chrome.widget());
     overlay.add_overlay(chrome.widget());
     overlay.add_overlay(&controls.up_next_revealer);
+    let resize_handles = build_player_resize_handles(&window);
+    let compact_mode = CompactMode::build(
+        &window,
+        CompactModeInputs {
+            state: Rc::clone(&state),
+            status_toast: Rc::clone(&status_toast),
+            chrome: &chrome,
+            window_chrome: &window_chrome,
+            controls: &controls,
+            empty_surface: &empty_surface,
+            resize_handles: resize_handles.clone(),
+        },
+    );
+    for compact_overlay in compact_mode.overlays() {
+        overlay.add_overlay(compact_overlay);
+    }
     overlay.add_overlay(status_toast.widget());
-    for resize_handle in build_player_resize_handles(&window) {
+    for resize_handle in resize_handles {
         overlay.add_overlay(&resize_handle);
     }
     window.set_child(Some(&overlay));
@@ -226,6 +246,12 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     }
     connect_mpv(&video_host, Rc::clone(&state), launch_args);
     connect_video_clicks(video_host.widget(), &window, Rc::clone(&state));
+    connect_compact_video_interactions(
+        video_host.widget(),
+        &window,
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    );
     connect_player_context_menu(
         &overlay,
         &window,
@@ -315,6 +341,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
             updating_seek: Rc::clone(&updating_seek),
             initial_map_pending: Rc::clone(&initial_map_pending),
             chrome: Rc::clone(&chrome),
+            compact_mode,
             window_chrome,
             subtitle_position_snapshot: Rc::new(Cell::new(None)),
             empty_surface: empty_surface.clone(),
@@ -958,6 +985,10 @@ impl PlayerWindowChrome {
     pub(crate) fn persistent_widgets(&self) -> &[gtk::Widget] {
         &self.persistent_widgets
     }
+
+    pub(crate) fn always_on_top_state(&self) -> Rc<Cell<bool>> {
+        Rc::clone(&self.always_on_top)
+    }
 }
 
 pub(crate) fn build_player_window_chrome(
@@ -1090,6 +1121,7 @@ pub(crate) fn build_player_window_chrome(
         persistent_widgets: Vec::new(),
         media_icon,
         title_label,
+        always_on_top: pinned,
     }
 }
 
@@ -1147,7 +1179,138 @@ unsafe extern "C" {
         width: libc::c_uint,
         height: libc::c_uint,
     ) -> libc::c_int;
+    fn XResizeWindow(
+        display: *mut XDisplay,
+        window: libc::c_ulong,
+        width: libc::c_uint,
+        height: libc::c_uint,
+    ) -> libc::c_int;
+    fn XTranslateCoordinates(
+        display: *mut XDisplay,
+        src_window: libc::c_ulong,
+        dest_window: libc::c_ulong,
+        src_x: libc::c_int,
+        src_y: libc::c_int,
+        dest_x: *mut libc::c_int,
+        dest_y: *mut libc::c_int,
+        child: *mut libc::c_ulong,
+    ) -> libc::c_int;
+    fn XQueryPointer(
+        display: *mut XDisplay,
+        window: libc::c_ulong,
+        root_return: *mut libc::c_ulong,
+        child_return: *mut libc::c_ulong,
+        root_x: *mut libc::c_int,
+        root_y: *mut libc::c_int,
+        win_x: *mut libc::c_int,
+        win_y: *mut libc::c_int,
+        mask_return: *mut libc::c_uint,
+    ) -> libc::c_int;
     fn XFlush(display: *mut XDisplay) -> libc::c_int;
+}
+
+/// Resize a mapped player toplevel where X11 permits a direct request. Wayland
+/// uses the matching `GtkWindow::set_default_size` request made by the caller.
+pub(crate) fn resize_player_window_on_x11(
+    window: &gtk::ApplicationWindow,
+    size: window_fit::WindowSize,
+) -> bool {
+    use gtk::glib::translate::ToGlibPtr;
+
+    let Some(display) = gdk::Display::default() else {
+        return false;
+    };
+    if display.type_().name() != "GdkX11Display" {
+        return false;
+    }
+    let Some(surface) = window.surface() else {
+        return false;
+    };
+    unsafe {
+        let xdisplay = gdk_x11_display_get_xdisplay(display.to_glib_none().0);
+        if xdisplay.is_null() {
+            return false;
+        }
+        let xid = gdk_x11_surface_get_xid(surface.to_glib_none().0);
+        if xid == 0 {
+            return false;
+        }
+        let resized = XResizeWindow(
+            xdisplay,
+            xid,
+            size.width.max(1) as libc::c_uint,
+            size.height.max(1) as libc::c_uint,
+        );
+        XFlush(xdisplay);
+        resized != 0
+    }
+}
+
+pub(crate) fn current_player_position_on_x11(
+    window: &gtk::ApplicationWindow,
+) -> Option<window_fit::WindowPoint> {
+    use gtk::glib::translate::ToGlibPtr;
+
+    let display = gdk::Display::default()?;
+    if display.type_().name() != "GdkX11Display" {
+        return None;
+    }
+    let surface = window.surface()?;
+    let scale = surface.scale_factor().max(1);
+    unsafe {
+        let xdisplay = gdk_x11_display_get_xdisplay(display.to_glib_none().0);
+        if xdisplay.is_null() {
+            return None;
+        }
+        let xid = gdk_x11_surface_get_xid(surface.to_glib_none().0);
+        let root = XDefaultRootWindow(xdisplay);
+        let mut x = 0;
+        let mut y = 0;
+        let mut child = 0;
+        (xid != 0
+            && XTranslateCoordinates(xdisplay, xid, root, 0, 0, &mut x, &mut y, &mut child) != 0)
+            .then_some(window_fit::WindowPoint {
+                x: x / scale,
+                y: y / scale,
+            })
+    }
+}
+
+pub(crate) fn primary_pointer_down_on_x11(window: &gtk::ApplicationWindow) -> Option<bool> {
+    use gtk::glib::translate::ToGlibPtr;
+
+    let display = gdk::Display::default()?;
+    if display.type_().name() != "GdkX11Display" {
+        return None;
+    }
+    let surface = window.surface()?;
+    unsafe {
+        let xdisplay = gdk_x11_display_get_xdisplay(display.to_glib_none().0);
+        if xdisplay.is_null() {
+            return None;
+        }
+        let xid = gdk_x11_surface_get_xid(surface.to_glib_none().0);
+        let mut root = 0;
+        let mut child = 0;
+        let mut root_x = 0;
+        let mut root_y = 0;
+        let mut win_x = 0;
+        let mut win_y = 0;
+        let mut mask = 0;
+        (xid != 0
+            && XQueryPointer(
+                xdisplay,
+                xid,
+                &mut root,
+                &mut child,
+                &mut root_x,
+                &mut root_y,
+                &mut win_x,
+                &mut win_y,
+                &mut mask,
+            ) != 0)
+            .then_some(mask & (1 << 8) != 0)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1173,7 +1336,7 @@ pub(crate) fn always_on_top_backend(display_type_name: &str) -> AlwaysOnTopBacke
 /// Center the fitted window where X11 permits explicit toplevel positioning.
 /// Wayland intentionally exposes no client-controlled global coordinates, so
 /// Mutter remains responsible for keeping the already-bounded surface visible.
-fn move_resize_player_window_on_x11(
+pub(crate) fn move_resize_player_window_on_x11(
     window: &gtk::ApplicationWindow,
     position: window_fit::WindowPoint,
     size: window_fit::WindowSize,
