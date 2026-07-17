@@ -45,7 +45,7 @@ cat > rust/.cargo/config.toml <<'EOF'
 replace-with = "vendored-sources"
 
 [source.vendored-sources]
-directory = "../vendor"
+directory = "../../vendor"
 
 [net]
 offline = true

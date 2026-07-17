@@ -44,7 +44,7 @@ tar \
   --numeric-owner \
   -C "$TMP_DIR" \
   -cf - vendor \
-  | zstd -19 -T1 -q -o "$OUT_DIR/$PREFIX-vendor.tar.zst"
+  | zstd -10 -T1 -q -o "$OUT_DIR/$PREFIX-vendor.tar.zst"
 printf '%s\n' "$SOURCE_COMMIT" > "$OUT_DIR/$PREFIX-source-commit"
 
 cp "$OUT_DIR/$PREFIX.tar.gz" "$TMP_DIR/rpmbuild/SOURCES/"
