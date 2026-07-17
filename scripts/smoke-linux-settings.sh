@@ -68,9 +68,18 @@ OKP_SKIP_DEB_SELF_INSTALL=1 \
 timeout 12s "$BINARY" >"$OUT_DIR/app.log" 2>&1 &
 app_pid=$!
 
-sleep 6
-xdotool search --name "Settings" >"$OUT_DIR/settings.ids"
-settings_id="$(head -n1 "$OUT_DIR/settings.ids")"
+settings_id=""
+for _ in {1..20}; do
+  xdotool search --name "Settings" >"$OUT_DIR/settings.ids" 2>/dev/null || true
+  settings_id="$(head -n1 "$OUT_DIR/settings.ids")"
+  [[ -n "$settings_id" ]] && break
+  sleep 0.5
+done
+if [[ -z "$settings_id" ]]; then
+  echo "Settings window did not appear" >&2
+  exit 1
+fi
+sleep 1
 
 xwininfo -root -tree >"$OUT_DIR/tree.txt"
 xwininfo -id "$settings_id" >"$OUT_DIR/settings.xwininfo"

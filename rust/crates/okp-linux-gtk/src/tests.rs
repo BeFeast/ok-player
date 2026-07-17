@@ -2018,6 +2018,22 @@ fn playlist_path_detects_m3u_variants() {
 }
 
 #[test]
+fn gapless_settings_copy_is_honest_for_the_application_managed_queue() {
+    let presentation =
+        gapless_settings_presentation(okp_core::gapless::GaplessPlaybackSettingState::Deferred);
+
+    assert!(!presentation.active);
+    assert!(!presentation.sensitive);
+    assert_eq!(presentation.state_label, "Deferred");
+    assert!(presentation.detail.contains("after end-of-file"));
+    assert!(
+        presentation
+            .detail
+            .contains("Auto-advance, repeat, and shuffle are unchanged")
+    );
+}
+
+#[test]
 fn m3u_playlist_items_keep_urls_and_skip_subtitles_unknown_entries() {
     let entries = vec![
         "/media/ep2.mkv".to_owned(),

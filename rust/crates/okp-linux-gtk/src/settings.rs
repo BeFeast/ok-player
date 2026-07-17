@@ -3,6 +3,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use okp_core::gapless::{GaplessPlaybackCapability, GaplessPlaybackState};
 use okp_core::settings::{AppearanceTheme, ScreenshotFormat, Settings};
 
 const DEFAULT_VOLUME: f64 = 100.0;
@@ -10,6 +11,7 @@ const MAX_VOLUME: f64 = 130.0;
 const DEFAULT_RESUME: bool = true;
 const DEFAULT_AUTO_ADVANCE: bool = true;
 const DEFAULT_SHUFFLE: bool = false;
+const DEFAULT_GAPLESS: bool = false;
 const REPEAT_OFF: &str = "off";
 const REPEAT_ONE: &str = "one";
 const REPEAT_ALL: &str = "all";
@@ -34,6 +36,7 @@ pub struct VideoAdjustments {
 pub struct SettingsStore {
     path: PathBuf,
     data: Settings,
+    gapless_capability: GaplessPlaybackCapability,
     dirty: bool,
 }
 
@@ -54,6 +57,9 @@ impl SettingsStore {
         Self {
             path,
             data,
+            // The GTK shell owns queue order and sends a replacement `loadfile`
+            // only after EndFile::Eof. mpv therefore cannot prepare the next entry.
+            gapless_capability: GaplessPlaybackCapability::ApplicationManagedAfterEof,
             dirty: false,
         }
     }
@@ -79,6 +85,13 @@ impl SettingsStore {
 
     pub fn repeat_mode(&self) -> &'static str {
         normalized_repeat(self.data.playback.repeat.as_deref())
+    }
+
+    pub fn gapless_state(&self) -> GaplessPlaybackState {
+        GaplessPlaybackState::new(
+            self.gapless_capability,
+            self.data.playback.gapless.unwrap_or(DEFAULT_GAPLESS),
+        )
     }
 
     pub fn audio_normalization_enabled(&self) -> bool {
@@ -208,6 +221,21 @@ impl SettingsStore {
             self.data.playback.repeat = Some(repeat.to_owned());
             self.dirty = true;
         }
+    }
+
+    /// Persist the preference only when the active backend can honor it.
+    /// The current GTK application-managed queue deliberately rejects the request.
+    pub fn set_gapless_enabled(&mut self, enabled: bool) -> bool {
+        let mut state = self.gapless_state();
+        if !state.try_set_enabled(enabled) {
+            return false;
+        }
+
+        if self.data.playback.gapless != Some(state.requested()) {
+            self.data.playback.gapless = Some(state.requested());
+            self.dirty = true;
+        }
+        true
     }
 
     pub fn set_audio_normalization_enabled(&mut self, enabled: bool) {
@@ -448,6 +476,7 @@ mod tests {
         SettingsStore {
             path: PathBuf::from("unused.json"),
             data: Settings::default(),
+            gapless_capability: GaplessPlaybackCapability::ApplicationManagedAfterEof,
             dirty: false,
         }
     }
@@ -465,6 +494,10 @@ mod tests {
         assert!(settings.auto_advance_enabled());
         assert!(!settings.shuffle_enabled());
         assert_eq!(settings.repeat_mode(), "off");
+        assert_eq!(
+            settings.gapless_state().setting_state(),
+            okp_core::gapless::GaplessPlaybackSettingState::Deferred
+        );
     }
 
     #[test]
@@ -618,6 +651,60 @@ mod tests {
         settings.set_repeat_mode("all");
 
         assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn gapless_setting_is_gated_by_the_playback_backend() {
+        let mut settings = store();
+
+        assert!(!settings.set_gapless_enabled(true));
+        assert_eq!(settings.data.playback.gapless, None);
+        assert!(!settings.dirty);
+
+        settings.data.playback.gapless = Some(true);
+        assert_eq!(
+            settings.gapless_state().setting_state(),
+            okp_core::gapless::GaplessPlaybackSettingState::Deferred
+        );
+        assert!(!settings.set_gapless_enabled(false));
+        assert_eq!(settings.data.playback.gapless, Some(true));
+
+        settings.data.playback.gapless = None;
+        settings.gapless_capability = GaplessPlaybackCapability::EngineManagedPlaylist;
+        assert!(settings.set_gapless_enabled(true));
+        assert!(settings.gapless_state().is_enabled());
+        assert_eq!(settings.data.playback.gapless, Some(true));
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        assert!(settings.set_gapless_enabled(true));
+        assert!(!settings.dirty);
+        assert!(settings.auto_advance_enabled());
+        assert!(!settings.shuffle_enabled());
+        assert_eq!(settings.repeat_mode(), "off");
+    }
+
+    #[test]
+    fn supported_gapless_setting_persists_in_the_human_readable_document() {
+        let directory = unique_temp_dir("okp-gapless-settings");
+        fs::create_dir_all(&directory).expect("create temp directory");
+        let path = directory.join("settings.json");
+        let mut settings = SettingsStore {
+            path: path.clone(),
+            data: Settings::default(),
+            gapless_capability: GaplessPlaybackCapability::EngineManagedPlaylist,
+            dirty: false,
+        };
+
+        assert!(settings.set_gapless_enabled(true));
+        settings.save().expect("save settings");
+
+        let json = fs::read_to_string(path).expect("read settings");
+        assert!(json.contains("\"gapless\": true"));
+        let restored = Settings::load(&json).expect("reload settings");
+        assert_eq!(restored.playback.gapless, Some(true));
+
+        fs::remove_dir_all(directory).expect("clean temp directory");
     }
 
     #[test]
@@ -825,6 +912,7 @@ mod tests {
         let mut settings = SettingsStore {
             path: path.clone(),
             data: Settings::default(),
+            gapless_capability: GaplessPlaybackCapability::EngineManagedPlaylist,
             dirty: false,
         };
         settings.set_screenshot_format(ScreenshotFormat::Webp);

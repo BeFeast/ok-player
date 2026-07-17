@@ -7,6 +7,23 @@ Linux release evidence is package-specific and has four levels:
 3. `installed-package`: launch and version checks against the candidate `.deb` or AppImage.
 4. `gnome-wayland-operator`: live GNOME/Wayland acceptance. Only this level may mark chooser, drag/drop, clipboard, portal, compositor, or focus rows `PASS`.
 
+## Gapless playback capability
+
+Linux currently reports gapless playback as **Deferred** on Settings → Playback. The
+queue order, repeat, shuffle, and auto-advance policy live in `okp-core`, while the GTK
+shell waits for libmpv's EOF event and then sends a replacement `loadfile` command for
+the selected next item. mpv's `gapless-audio` option is intended for consecutive entries
+already owned by its native playlist; enabling the option on the current shell-managed
+transition path would not let mpv prepare the next item and would overstate support.
+
+The model-unit gate covers both capability branches: an engine-managed playlist may
+persist and resolve the preference to On/Off, while the current application-managed
+queue resolves any persisted intent to Deferred and rejects setting changes. The GTK
+presentation test pins the disabled control, Deferred status, and unchanged
+auto-advance/repeat/shuffle disclosure. The regular queue suites remain the regression
+evidence for transition behavior. The Settings Xvfb smoke can capture the deterministic
+surface, but it does not prove an audible zero-gap transition.
+
 Issue-specific 4K60 presentation evidence is also operator-only. Run
 `scripts/run-linux-acceptance-harness.sh --wayland-presentation <binary> <fixture> <output>` inside
 the target GNOME Wayland session. It rejects X11/Xvfb, verifies the fixture is exactly 3840×2160

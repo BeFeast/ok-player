@@ -348,10 +348,102 @@ pub(crate) fn settings_shuffle_row(
     )
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GaplessSettingsPresentation {
+    pub active: bool,
+    pub sensitive: bool,
+    pub state_label: &'static str,
+    pub detail: &'static str,
+}
+
+#[derive(Clone, Copy)]
+struct PlaybackSwitchState {
+    active: bool,
+    sensitive: bool,
+    label: &'static str,
+}
+
+pub(crate) fn gapless_settings_presentation(
+    state: okp_core::gapless::GaplessPlaybackSettingState,
+) -> GaplessSettingsPresentation {
+    use okp_core::gapless::GaplessPlaybackSettingState::{Deferred, Off, On};
+
+    match state {
+        Off => GaplessSettingsPresentation {
+            active: false,
+            sensitive: true,
+            state_label: "Off",
+            detail: "Keep normal transitions between consecutive audio items.",
+        },
+        On => GaplessSettingsPresentation {
+            active: true,
+            sensitive: true,
+            state_label: "On",
+            detail: "Ask mpv to keep consecutive audio items on one continuous output path.",
+        },
+        Deferred => GaplessSettingsPresentation {
+            active: false,
+            sensitive: false,
+            state_label: "Deferred",
+            detail: "Unavailable while OK Player loads the next queue item after end-of-file. Auto-advance, repeat, and shuffle are unchanged.",
+        },
+    }
+}
+
+pub(crate) fn settings_gapless_row(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let presentation =
+        gapless_settings_presentation(state.borrow().settings.gapless_state().setting_state());
+    settings_playback_switch_row_with_state(
+        "Gapless playback",
+        presentation.detail,
+        PlaybackSwitchState {
+            active: presentation.active,
+            sensitive: presentation.sensitive,
+            label: presentation.state_label,
+        },
+        state,
+        status_toast,
+        |state, enabled| {
+            state.settings.set_gapless_enabled(enabled);
+        },
+        "Gapless playback",
+    )
+}
+
 pub(crate) fn settings_playback_switch_row<F>(
     title: &str,
     detail: &str,
     active: bool,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+    apply: F,
+    toast_subject: &'static str,
+) -> gtk::Box
+where
+    F: Fn(&mut PlayerState, bool) + 'static,
+{
+    settings_playback_switch_row_with_state(
+        title,
+        detail,
+        PlaybackSwitchState {
+            active,
+            sensitive: true,
+            label: if active { "On" } else { "Off" },
+        },
+        state,
+        status_toast,
+        apply,
+        toast_subject,
+    )
+}
+
+fn settings_playback_switch_row_with_state<F>(
+    title: &str,
+    detail: &str,
+    presentation: PlaybackSwitchState,
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
     apply: F,
@@ -378,12 +470,13 @@ where
     text.append(&detail);
     row.append(&text);
 
-    let state_label = gtk::Label::new(Some(if active { "On" } else { "Off" }));
+    let state_label = gtk::Label::new(Some(presentation.label));
     state_label.add_css_class("okp-settings-state-pill");
     state_label.set_valign(gtk::Align::Center);
     row.append(&state_label);
 
-    let toggle = about_toggle_button(active);
+    let toggle = about_toggle_button(presentation.active);
+    toggle.set_sensitive(presentation.sensitive);
     let toggle_state = Rc::clone(&state);
     let toggle_toast = Rc::clone(&status_toast);
     let toggle_state_label = state_label.clone();

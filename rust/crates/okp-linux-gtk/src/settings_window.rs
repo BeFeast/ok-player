@@ -84,10 +84,16 @@ pub(crate) fn open_settings_window(
         Rc::clone(&state),
         Rc::clone(&status_toast),
     ));
+    playback.append(&settings_gapless_row(
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    ));
     playback.append(&settings_volume_row(Rc::clone(&state)));
     playback_page.append(&playback);
+    let playback_body_height =
+        max_body_height.min(SETTINGS_REFERENCE_HEIGHT - SETTINGS_TITLEBAR_HEIGHT);
     stack.add_named(
-        &settings_scroller(&playback_page, max_body_height),
+        &settings_scroller(&playback_page, playback_body_height),
         Some("playback"),
     );
 

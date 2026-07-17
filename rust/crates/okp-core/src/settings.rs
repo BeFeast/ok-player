@@ -103,7 +103,7 @@ impl Settings {
     }
 }
 
-/// Playback preferences. The first five fields are the Linux alpha set; the last three
+/// Playback preferences. The first six fields are the Linux set; the last three
 /// are Windows-only defaults carried for the shared schema.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PlaybackSettings {
@@ -117,6 +117,10 @@ pub struct PlaybackSettings {
     pub repeat: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shuffle: Option<bool>,
+    /// Whether gapless transitions are requested. The active shell must resolve this
+    /// through its playback-backend capability before presenting or applying it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gapless: Option<bool>,
     /// Windows `DefaultSpeed` — the speed a newly opened file starts at.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_speed: Option<f64>,
@@ -344,6 +348,7 @@ impl WindowsSettings {
                 auto_advance: None,
                 repeat: None,
                 shuffle: None,
+                gapless: None,
                 default_speed: self.default_speed,
                 skip_step_seconds: self.skip_step,
                 hide_controls_when_paused: self.hide_controls_when_paused,
@@ -451,6 +456,7 @@ mod tests {
         assert_eq!(settings.playback.resume, Some(false));
         assert_eq!(settings.playback.repeat.as_deref(), Some("all"));
         assert_eq!(settings.playback.shuffle, Some(true));
+        assert_eq!(settings.playback.gapless, None);
         assert_eq!(settings.audio.normalization, Some(true));
         assert_eq!(settings.audio.device.as_deref(), Some("pulse/device"));
         assert_eq!(settings.video.hwdec.as_deref(), Some("auto-safe"));
@@ -475,6 +481,7 @@ mod tests {
     fn a_canonical_document_round_trips() {
         let mut settings = Settings::default();
         settings.playback.volume = Some(55.0);
+        settings.playback.gapless = Some(true);
         settings.appearance.theme = Some("Dark".to_owned());
         settings.screenshots.format = Some(ScreenshotFormat::Webp);
         settings.screenshots.directory = Some("/captures".to_owned());
@@ -484,6 +491,7 @@ mod tests {
         let restored = Settings::load(&json).expect("canonical document should load");
 
         assert_eq!(restored, settings);
+        assert!(restored.playback.gapless.unwrap_or(false));
     }
 
     #[test]
