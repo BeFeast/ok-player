@@ -25,12 +25,19 @@ jobs:
       matrix:
         fedora: ['43', '44']
     steps:
-      - name: Install checkout prerequisite
+      - name: Disable nonessential repositories before checkout
         run: |
-          dnf install -y --disablerepo=fedora-cisco-openh264 git dnf-plugins-core
+          dnf install -y dnf-plugins-core
           dnf config-manager setopt fedora-cisco-openh264.enabled=0
+          dnf install -y git
 
       - uses: actions/checkout@v4
+
+      - name: Establish Git source identity
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" status --short
+          git -C "$GITHUB_WORKSPACE" log -1 --oneline
 
       - name: Install Fedora build tooling
         run: |

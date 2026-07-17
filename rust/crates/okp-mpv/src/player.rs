@@ -2937,7 +2937,6 @@ mod tests {
         ) {
             return;
         }
-        let root = unique_temp_dir("okp-mpv-screenshot");
         let options = [
             ("vo".to_owned(), "null".to_owned()),
             ("ao".to_owned(), "null".to_owned()),
@@ -2946,8 +2945,10 @@ mod tests {
         let mut mpv = Mpv::new_with_options("no", &options)
             .expect("libmpv must be loadable for okp-mpv tests");
         mpv.start_event_pump_without_audio_devices();
-        mpv.load_file(&fixture_media_path())
-            .expect("video fixture should load");
+        let root = unique_temp_dir("okp-mpv-screenshot");
+        let media = root.path().join("frame.ppm");
+        write_codec_neutral_media_fixture(&media);
+        mpv.load_file(&media).expect("video fixture should load");
 
         let loaded_deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < loaded_deadline && mpv.observed_video_dimensions().is_none() {

@@ -5,7 +5,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SPEC="$ROOT/rust/packaging/fedora/ok-player.spec"
 OUT_DIR="${1:-$ROOT/artifacts/linux/rpm/source}"
-GIT=(git --git-dir="$ROOT/.git" --work-tree="$ROOT")
 
 for tool in cargo git rpmbuild tar gzip zstd sha256sum touch flock; do
   command -v "$tool" >/dev/null 2>&1 || {
@@ -14,20 +13,33 @@ for tool in cargo git rpmbuild tar gzip zstd sha256sum touch flock; do
   }
 done
 
-if ! "${GIT[@]}" rev-parse --verify HEAD >/dev/null 2>&1; then
+# Run all Git commands from the resolved repository root. In GitHub Actions
+# container jobs the checkout may be a fresh shallow clone with detached HEAD and
+# a safe.directory config stored in a temporary HOME directory. Explicit
+# --git-dir/--work-tree can fail in that environment, so let git discover the
+# repository from the workspace itself and preserve the strict dirty-tree guard
+# for real worktrees.
+cd "$ROOT"
+
+if ! git rev-parse --git-dir >/dev/null 2>&1; then
+  echo "RPM source builds require a committed Git checkout at $ROOT." >&2
+  exit 2
+fi
+
+if ! git rev-parse --verify HEAD >/dev/null 2>&1; then
   echo "RPM source builds require a committed Git checkout at $ROOT." >&2
   exit 2
 fi
 
 if [[ "${OKP_RPM_ALLOW_DIRTY:-0}" != "1" ]] &&
-  { ! "${GIT[@]}" diff --quiet || ! "${GIT[@]}" diff --cached --quiet; }; then
+  { ! git diff --quiet || ! git diff --cached --quiet; }; then
   echo "RPM source builds require a clean committed tree (set OKP_RPM_ALLOW_DIRTY=1 only for local experiments)." >&2
   exit 2
 fi
 
 UPSTREAM_VERSION="${OKP_RPM_UPSTREAM_VERSION:-0.11.0-beta.1}"
-SOURCE_EPOCH="${SOURCE_DATE_EPOCH:-$("${GIT[@]}" log -1 --format=%ct HEAD)}"
-SOURCE_COMMIT="$("${GIT[@]}" rev-parse HEAD)"
+SOURCE_EPOCH="${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct HEAD)}"
+SOURCE_COMMIT="$(git rev-parse HEAD)"
 PREFIX="ok-player-$UPSTREAM_VERSION"
 TMP_DIR="$(mktemp -d)"
 RPM_TOPDIR="/tmp/ok-player-rpmbuild"
@@ -57,7 +69,7 @@ fi
 rm -f "$RPM_TOPDIR"
 ln -s "$TMP_DIR/rpmbuild" "$RPM_TOPDIR"
 
-"${GIT[@]}" archive --format=tar --prefix="$PREFIX/" HEAD \
+git archive --format=tar --prefix="$PREFIX/" HEAD \
   | gzip -n -9 > "$OUT_DIR/$PREFIX.tar.gz"
 
 cargo vendor \

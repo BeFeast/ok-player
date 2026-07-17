@@ -396,6 +396,11 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
             ffi::MPV_EVENT_FILE_LOADED => {
                 let video_dimensions = shared.reader.video_dimensions().ok().flatten();
                 lock(&shared.snapshot).video_dimensions = video_dimensions;
+                // A successful load finalizes the previous source; discard any
+                // stale log messages so they cannot be misattributed to a later
+                // failure. Logs from the currently ending source are captured
+                // when `EndFile` drains the buffer.
+                lock(&shared.diagnostic_messages).clear();
                 lifecycle.push(MpvEvent::FileLoaded { video_dimensions });
                 flags.tracks = true;
                 flags.chapters = true;
