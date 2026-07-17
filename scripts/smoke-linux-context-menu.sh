@@ -158,6 +158,35 @@ if [[ "${OKP_CONTEXT_SMOKE_SKIP_DRAG:-0}" != 1 ]]; then
   }
   xdotool windowmove "$window_id" 0 0
   sleep 1
+
+  # #329 whole-surface move: a left-drag that clears the threshold over the video
+  # canvas (not the title bar) must also begin a compositor move, without
+  # committing the pending play/pause single click.
+  video_commits_before="$(grep -c 'video-single-click-committed' "$OUT_DIR/app.log" || true)"
+  xwininfo -id "$window_id" >"$OUT_DIR/before-video-drag.xwininfo"
+  before_video_x="$(awk '/Absolute upper-left X:/ {print $4; exit}' "$OUT_DIR/before-video-drag.xwininfo")"
+  before_video_y="$(awk '/Absolute upper-left Y:/ {print $4; exit}' "$OUT_DIR/before-video-drag.xwininfo")"
+  xdotool mousemove --window "$window_id" 560 330 mousedown 1 sleep 0.25 \
+    mousemove_relative --sync 90 70 sleep 0.25 mouseup 1
+  sleep 1
+  xwininfo -id "$window_id" >"$OUT_DIR/after-video-drag.xwininfo"
+  after_video_x="$(awk '/Absolute upper-left X:/ {print $4; exit}' "$OUT_DIR/after-video-drag.xwininfo")"
+  after_video_y="$(awk '/Absolute upper-left Y:/ {print $4; exit}' "$OUT_DIR/after-video-drag.xwininfo")"
+  [[ "$before_video_x" != "$after_video_x" || "$before_video_y" != "$after_video_y" ]] || {
+    echo "primary-button video-surface drag did not move the window" >&2
+    exit 1
+  }
+  grep -q 'interaction: player-window-move' "$OUT_DIR/app.log" || {
+    echo "video-surface drag did not report a window move" >&2
+    exit 1
+  }
+  video_commits_after="$(grep -c 'video-single-click-committed' "$OUT_DIR/app.log" || true)"
+  [[ "$video_commits_before" == "$video_commits_after" ]] || {
+    echo "video-surface drag leaked a play/pause single click" >&2
+    exit 1
+  }
+  xdotool windowmove "$window_id" 0 0
+  sleep 1
 else
   drag_result=skipped
 fi

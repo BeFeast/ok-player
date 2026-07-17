@@ -2273,6 +2273,35 @@ fn player_context_menu_preserves_control_and_popover_interactions() {
 }
 
 #[test]
+fn player_window_move_drags_the_whole_non_interactive_surface() {
+    // A left-drag that clears the shared threshold anywhere on a non-OSC surface
+    // begins a compositor-native move; short clicks stay play/pause and a
+    // stationary double-click stays fullscreen. The gesture policy is verified
+    // in okp-core; here we lock the shell wiring that feeds it.
+    let bridge = include_str!("mpv_bridge.rs");
+    assert!(bridge.contains("pub(crate) fn connect_player_window_move("));
+    // Left-button drag with a movement threshold, not an immediate press grab.
+    assert!(bridge.contains("gtk::GestureDrag::new()"));
+    assert!(bridge.contains("drag.set_button(gdk::BUTTON_PRIMARY)"));
+    assert!(bridge.contains("video_click::window_drag_action("));
+    assert!(bridge.contains("video_click::WindowDragAction::BeginMove"));
+    // Reuse the right-click interactive classifier so OSC/sliders/buttons/panels
+    // keep their input, and fail safe to a click when the pick is missing.
+    assert!(bridge.contains("player_context_menu_target_is_interactive("));
+    assert!(bridge.contains(".unwrap_or(true)"));
+    // Fullscreen/maximized guards and compact-mode handoff.
+    assert!(bridge.contains("move_window.is_fullscreen()"));
+    assert!(bridge.contains("move_window.is_maximized()"));
+    assert!(bridge.contains("window_compact_mode_active(&move_window)"));
+    // Wayland-native move: claim the sequence, then hand off to the compositor.
+    assert!(bridge.contains("gesture.set_state(gtk::EventSequenceState::Claimed)"));
+    assert!(bridge.contains("toplevel.begin_move("));
+
+    let window = include_str!("window.rs");
+    assert!(window.contains("connect_player_window_move(&overlay, &window)"));
+}
+
+#[test]
 fn subtitle_delay_projection_drives_quick_popover_and_settings_refresh() {
     // Both visible surfaces retain the exact projected delay instead of
     // immediately replacing it with the asynchronous mpv observer snapshot.

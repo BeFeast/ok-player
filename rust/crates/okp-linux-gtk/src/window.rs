@@ -283,6 +283,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
             window_bounds: Rc::clone(&window_bounds),
         },
     );
+    connect_player_window_move(&overlay, &window);
     connect_drop(&window, Rc::clone(&state), empty_surface.clone());
     connect_keyboard(
         &window,
