@@ -22,6 +22,7 @@ use okp_core::hdr::HdrHandlingState;
 use okp_core::key_press::KeyPressLatch;
 use okp_core::playlist::{Playlist, PlaylistItem, QueueInsertMode, RepeatMode};
 use okp_core::settings::{AppearanceTheme, UpdateChannel};
+use okp_core::settings_navigation::{SETTINGS_RAIL_ORDER, SettingsPage, search_settings};
 use okp_core::shortcuts::{
     self, ShortcutAction, ShortcutBinding, ShortcutChord, ShortcutModifiers, ShortcutSlot,
 };
@@ -1785,6 +1786,7 @@ enum SettingsNavIcon {
     Audio,
     Shortcuts,
     Integration,
+    Updates,
     Advanced,
     About,
 }

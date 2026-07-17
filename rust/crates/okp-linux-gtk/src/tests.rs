@@ -611,9 +611,43 @@ fn about_diagnostics_contains_only_app_engine_and_host_groups() {
 
 #[test]
 fn settings_initial_page_env_accepts_known_pages_only() {
-    assert_eq!(normalized_settings_page(" Shortcuts "), Some("shortcuts"));
-    assert_eq!(normalized_settings_page("about"), Some("about"));
+    assert_eq!(
+        normalized_settings_page(" Shortcuts "),
+        Some(SettingsPage::Shortcuts)
+    );
+    assert_eq!(
+        normalized_settings_page("UPDATES"),
+        Some(SettingsPage::Updates)
+    );
+    assert_eq!(normalized_settings_page("about"), Some(SettingsPage::About));
     assert_eq!(normalized_settings_page("native-caption"), None);
+}
+
+#[test]
+fn settings_updates_has_one_dedicated_content_owner() {
+    let updates = include_str!("updates.rs");
+    let advanced_page = updates
+        .split_once("pub(crate) fn settings_advanced_page(")
+        .expect("Advanced page")
+        .1
+        .split_once("pub(crate) fn settings_updates_page(")
+        .expect("Updates page follows Advanced")
+        .0;
+    assert!(!advanced_page.contains("settings_updates_section"));
+
+    let updates_page = updates
+        .split_once("pub(crate) fn settings_updates_page(")
+        .expect("dedicated Updates page")
+        .1
+        .split_once("pub(crate) fn settings_raw_mpv_section(")
+        .expect("raw mpv section follows page constructors")
+        .0;
+    assert_eq!(updates_page.matches("settings_updates_section").count(), 1);
+
+    let window = include_str!("settings_window.rs");
+    assert!(window.contains("Some(\"updates\")"));
+    assert!(window.contains("SettingsNavIcon::Updates"));
+    assert!(window.contains("search_settings(entry.text().as_str())"));
 }
 
 #[test]

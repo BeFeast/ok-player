@@ -6,10 +6,16 @@ pub(crate) fn settings_advanced_page(
 ) -> gtk::Box {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
     page.add_css_class("okp-settings-page");
-    page.append(&settings_raw_mpv_section(
-        Rc::clone(&state),
-        Rc::clone(&status_toast),
-    ));
+    page.append(&settings_raw_mpv_section(state, status_toast));
+    page
+}
+
+pub(crate) fn settings_updates_page(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    page.add_css_class("okp-settings-page");
     page.append(&settings_updates_section(state, status_toast));
     page
 }
@@ -171,7 +177,10 @@ pub(crate) fn settings_updates_section(
     row.add_css_class("okp-settings-row");
 
     let auto_check_enabled = state.borrow().settings.auto_check_updates();
-    let initial_update_status = state.borrow().linux_update_status.clone();
+    let preview_status = settings_update_preview_status();
+    let initial_update_status = preview_status
+        .clone()
+        .unwrap_or_else(|| state.borrow().linux_update_status.clone());
     let status = gtk::Label::new(Some(
         &initial_update_status.settings_status_text(auto_check_enabled),
     ));
@@ -271,7 +280,10 @@ pub(crate) fn settings_updates_section(
         );
     });
     actions.append(&check_button);
-    if auto_check_enabled && matches!(initial_update_status, LinuxUpdateStatus::NotChecked) {
+    if preview_status.is_none()
+        && auto_check_enabled
+        && matches!(initial_update_status, LinuxUpdateStatus::NotChecked)
+    {
         let auto_button = check_button.clone();
         let auto_status = status.clone();
         let auto_pending = Rc::clone(&pending_update);
@@ -301,6 +313,33 @@ pub(crate) fn settings_updates_section(
     section.append(&row);
 
     section
+}
+
+pub(crate) fn settings_update_preview_status() -> Option<LinuxUpdateStatus> {
+    match env::var("OKP_SETTINGS_UPDATE_PREVIEW")
+        .ok()?
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "up-to-date" => Some(LinuxUpdateStatus::UpToDate),
+        "checking" => Some(LinuxUpdateStatus::Checking),
+        "available" => Some(LinuxUpdateStatus::Available(PendingLinuxUpdate {
+            manager: None,
+            target: LinuxUpdateTarget::Deb(DebUpdate {
+                version: "0.11.0-beta.2".to_owned(),
+                name: "ok-player_0.11.0-beta.2_amd64.deb".to_owned(),
+                url: "https://example.invalid/ok-player.deb".to_owned(),
+                size: Some(42),
+                sums_url: None,
+                expected_sha256: None,
+            }),
+        })),
+        "error" => Some(LinuxUpdateStatus::Failed(
+            "the update feed is temporarily unavailable".to_owned(),
+        )),
+        _ => None,
+    }
 }
 
 pub(crate) fn update_status_intro(auto_check_enabled: bool) -> &'static str {

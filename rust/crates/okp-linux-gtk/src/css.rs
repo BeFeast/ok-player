@@ -2982,20 +2982,51 @@ const OKP_STYLESHEET: &str = "
             border-right: 1px solid rgba(0, 0, 0, 0.05);
         }
 
-        .okp-settings-search {
+        entry.okp-settings-search {
             min-height: 16px;
             margin-bottom: 6px;
             padding: 7px 10px;
             border-radius: 7px;
             background: #ffffff;
             border: 1px solid rgba(0, 0, 0, 0.09);
-            color: rgba(0, 0, 0, 0.40);
-        }
-
-        .okp-settings-search-label {
+            box-shadow: none;
             color: rgba(0, 0, 0, 0.40);
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12px;
+            font-weight: 400;
+        }
+
+        entry.okp-settings-search:focus {
+            border-color: alpha(@okp_teal, 0.68);
+            box-shadow: 0 0 0 1px alpha(@okp_teal, 0.18);
+        }
+
+        button.okp-settings-search-result {
+            min-height: 40px;
+            margin: -2px 0 5px;
+            padding: 6px 10px;
+            border: none;
+            border-radius: 7px;
+            background: alpha(@okp_teal, 0.08);
+            box-shadow: inset 2px 0 0 alpha(@okp_teal, 0.65);
+            color: @okp_ink;
+        }
+
+        button.okp-settings-search-result:hover {
+            background: alpha(@okp_teal, 0.13);
+        }
+
+        .okp-settings-search-result-label {
+            color: inherit;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 11.5px;
+            font-weight: 600;
+        }
+
+        .okp-settings-search-result-page {
+            color: rgba(0, 0, 0, 0.45);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 10.5px;
             font-weight: 400;
         }
 
@@ -3862,15 +3893,25 @@ const OKP_STYLESHEET: &str = "
             border-right-color: rgba(255, 255, 255, 0.06);
         }
 
-        window.okp-settings-window.is-dark .okp-settings-search,
+        window.okp-settings-window.is-dark entry.okp-settings-search,
         window.okp-settings-window.is-dark entry.okp-shortcuts-search {
             background: rgba(255, 255, 255, 0.05);
             border-color: rgba(255, 255, 255, 0.09);
             color: rgba(255, 255, 255, 0.74);
         }
 
-        window.okp-settings-window.is-dark .okp-settings-search-label {
-            color: rgba(255, 255, 255, 0.42);
+        window.okp-settings-window.is-dark button.okp-settings-search-result {
+            background: alpha(@okp_accent, 0.10);
+            box-shadow: inset 2px 0 0 alpha(@okp_accent, 0.70);
+            color: rgba(255, 255, 255, 0.90);
+        }
+
+        window.okp-settings-window.is-dark button.okp-settings-search-result:hover {
+            background: alpha(@okp_accent, 0.16);
+        }
+
+        window.okp-settings-window.is-dark .okp-settings-search-result-page {
+            color: rgba(255, 255, 255, 0.48);
         }
 
         window.okp-settings-window.is-dark .okp-settings-nav-row {
@@ -4070,7 +4111,6 @@ const OKP_STYLESHEET: &str = "
         }
 
         window.okp-settings-window.is-high-contrast .okp-settings-titlebar-label,
-        window.okp-settings-window.is-high-contrast .okp-settings-search-label,
         window.okp-settings-window.is-high-contrast .okp-settings-nav-row,
         window.okp-settings-window.is-high-contrast .okp-settings-window-control,
         window.okp-settings-window.is-high-contrast .okp-settings-window-control-glyph,
@@ -4096,13 +4136,24 @@ const OKP_STYLESHEET: &str = "
             color: #ffffff;
         }
 
-        window.okp-settings-window.is-high-contrast .okp-settings-search,
+        window.okp-settings-window.is-high-contrast entry.okp-settings-search,
         window.okp-settings-window.is-high-contrast entry.okp-shortcuts-search,
         window.okp-settings-window.is-high-contrast button.okp-shortcut-chip,
         window.okp-settings-window.is-high-contrast textview.okp-mpv-conf-editor,
         window.okp-settings-window.is-high-contrast textview.okp-mpv-conf-editor text {
             background: #000000;
             border-color: #ffffff;
+            color: #ffffff;
+        }
+
+        window.okp-settings-window.is-high-contrast button.okp-settings-search-result {
+            background: #000000;
+            border: 1px solid #ffffff;
+            box-shadow: none;
+            color: #ffffff;
+        }
+
+        window.okp-settings-window.is-high-contrast .okp-settings-search-result-page {
             color: #ffffff;
         }
 
