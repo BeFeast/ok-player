@@ -1101,6 +1101,7 @@ pub(crate) fn connect_player_context_menu(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
     chrome: Rc<ChromeVisibility>,
+    reach: PlayerCommandReach,
 ) {
     let context_click = gtk::GestureClick::new();
     context_click.set_button(gdk::BUTTON_SECONDARY);
@@ -1111,6 +1112,7 @@ pub(crate) fn connect_player_context_menu(
     let context_state = Rc::clone(&state);
     let context_toast = Rc::clone(&status_toast);
     let context_chrome = Rc::clone(&chrome);
+    let context_reach = reach.clone();
     context_click.connect_pressed(move |gesture, _, x, y| {
         let Some(target) = context_root.pick(x, y, gtk::PickFlags::INSENSITIVE) else {
             return;
@@ -1132,8 +1134,8 @@ pub(crate) fn connect_player_context_menu(
             Rc::clone(&context_state),
             Rc::clone(&context_toast),
             Rc::clone(&context_chrome),
-            x,
-            y,
+            &context_reach,
+            (x, y),
         );
     });
 
@@ -1263,11 +1265,17 @@ pub(crate) fn show_player_context_menu(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
     chrome: Rc<ChromeVisibility>,
-    x: f64,
-    y: f64,
+    reach: &PlayerCommandReach,
+    point: (f64, f64),
 ) {
+    let (x, y) = point;
     let popover = gtk::Popover::new();
     prepare_track_popover(&popover, PlayerPopoverKind::AdvancedCommands);
+    popover.set_position(if y < f64::from(parent.height()) / 2.0 {
+        gtk::PositionType::Bottom
+    } else {
+        gtk::PositionType::Top
+    });
     connect_popover_chrome_pin(&popover, chrome);
     popover.set_parent(player_root);
     popover.set_pointing_to(Some(&gdk::Rectangle::new(
@@ -1276,8 +1284,14 @@ pub(crate) fn show_player_context_menu(
         1,
         1,
     )));
-    let content = advanced_command_popover_content(&popover, parent, state, status_toast);
-    set_track_popover_child(&popover, PlayerPopoverKind::AdvancedCommands, content);
+    populate_command_popover(
+        &popover,
+        parent,
+        state,
+        status_toast,
+        reach,
+        PlayerCommandSurface::ContextMenu,
+    );
     popover.connect_closed(|popover| popover.unparent());
     popover.popup();
 }

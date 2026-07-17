@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Deterministic visual smoke for the four canonical OSC popovers in issue #264.
+# Deterministic visual smoke for the quick pickers plus the shared searchable
+# command surfaces from issues #264 and #377.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -89,6 +90,10 @@ capture() {
   local click_button="${7:-1}"
   local anchor_y="${8:-630}"
   local verify_anchor="${9:-yes}"
+  local query="${10:-}"
+  local target_width="${11:-1120}"
+  local target_height="${12:-680}"
+  local narrow_fixture="${13:-no}"
   local state_dir="$OUT_DIR/state-$shot"
   local config_dir="$OUT_DIR/config-$shot"
   mkdir -p "$state_dir" "$config_dir/ok-player"
@@ -98,19 +103,40 @@ capture() {
   local env_args=(
     "XDG_STATE_HOME=$state_dir"
     "XDG_CONFIG_HOME=$config_dir"
-    "OKP_PLAYBACK_FRAME_PREVIEW=$substrate"
+    "OKP_GTK_THEME_PREVIEW=$([[ "$substrate" == dark ]] && echo dark || echo light)"
   )
+  if [[ "$target_width" == 1120 && "$target_height" == 680 ]]; then
+    env_args+=("OKP_PLAYBACK_FRAME_PREVIEW=$substrate")
+  else
+    env_args+=("OKP_NARROW_COMMAND_PREVIEW=1")
+    env_args+=("OKP_PLAYBACK_FRAME_PREVIEW=$substrate")
+  fi
   if [[ -n "$preview_state" ]]; then
     env_args+=("OKP_PLAYER_POPOVER_PREVIEW_STATE=$preview_state")
   fi
+  if [[ -n "$query" ]]; then
+    env_args+=("OKP_COMMAND_SEARCH_QUERY=$query")
+  fi
 
-  env "${env_args[@]}" timeout 20s "$BINARY" "$FIXTURE" \
+  local launch_env=(env)
+  local app_args=()
+  if [[ "$target_width" == 1120 && "$target_height" == 680 || "$narrow_fixture" == yes ]]; then
+    app_args+=("$FIXTURE")
+  fi
+  "${launch_env[@]}" "${env_args[@]}" timeout 20s "$BINARY" "${app_args[@]}" \
     >"$OUT_DIR/$shot-app.log" 2>&1 &
   app_pid=$!
 
   local window_id=""
-  for _ in $(seq 1 100); do
-    window_id="$(xdotool search --onlyvisible --name 'OK Player' 2>/dev/null | tail -n1 || true)"
+  for _ in $(seq 1 200); do
+    while read -r candidate; do
+      [[ -n "$candidate" ]] || continue
+      candidate_width="$(xwininfo -id "$candidate" 2>/dev/null | awk '/Width:/ {print $2; exit}')"
+      if [[ -n "$candidate_width" ]] && (( candidate_width > 400 )); then
+        window_id="$candidate"
+        break
+      fi
+    done < <(xdotool search --onlyvisible --name 'OK Player' 2>/dev/null || true)
     [[ -n "$window_id" ]] && break
     sleep 0.1
   done
@@ -120,6 +146,11 @@ capture() {
     exit 1
   fi
   xdotool windowactivate "$window_id" >/dev/null 2>&1 || true
+  if [[ "$target_width" != 1120 || "$target_height" != 680 ]]; then
+    sleep 4
+    xdotool windowsize "$window_id" "$target_width" "$target_height"
+    sleep 1
+  fi
   xdotool key --clearmodifiers space
   xdotool mousemove --window "$window_id" 560 340
   sleep 1
@@ -129,8 +160,8 @@ capture() {
   window_width="$(awk '/Width:/ {print $2; exit}' "$OUT_DIR/$shot-window.xwininfo")"
   window_height="$(awk '/Height:/ {print $2; exit}' "$OUT_DIR/$shot-window.xwininfo")"
   window_x="$(awk -F': ' '/Absolute upper-left X:/ {print $2; exit}' "$OUT_DIR/$shot-window.xwininfo" | xargs)"
-  if [[ "$window_width" != 1120 || "$window_height" != 680 ]]; then
-    echo "$shot: unexpected player geometry ${window_width}x${window_height}" >&2
+  if [[ "$window_width" != "$target_width" || "$window_height" != "$target_height" ]]; then
+    echo "$shot: unexpected player geometry ${window_width}x${window_height}; expected ${target_width}x${target_height}" >&2
     exit 1
   fi
 
@@ -170,8 +201,13 @@ capture() {
   local material_mean edge_mean
   material_mean="$(magick "$OUT_DIR/$shot-popover.png" -colorspace gray -format '%[fx:mean]' info:)"
   edge_mean="$(magick "$OUT_DIR/$shot-popover.png" -colorspace gray -edge 1 -format '%[fx:mean]' info:)"
-  if ! awk -v mean="$material_mean" -v edge="$edge_mean" \
-    'BEGIN {exit !(mean > 0.72 && edge > 0.003)}'; then
+  local material_ok
+  if [[ "$substrate" == dark && ( "$popover" == more || "$popover" == context ) ]]; then
+    material_ok="$(awk -v mean="$material_mean" -v edge="$edge_mean" 'BEGIN {print (mean > 0.08 && mean < 0.45 && edge > 0.003) ? "yes" : "no"}')"
+  else
+    material_ok="$(awk -v mean="$material_mean" -v edge="$edge_mean" 'BEGIN {print (mean > 0.72 && edge > 0.003) ? "yes" : "no"}')"
+  fi
+  if [[ "$material_ok" != yes ]]; then
     echo "$shot: popover material/content failed: mean=$material_mean edge=$edge_mean" >&2
     exit 1
   fi
@@ -209,25 +245,41 @@ capture() {
   kill "$app_pid" 2>/dev/null || true
   wait "$app_pid" 2>/dev/null || true
   app_pid=""
-  sleep 0.25
+  sleep 1
 }
 
-capture subtitle-srt-selected-dark dark subtitles 822 262 subtitle-srt-selected
+capture_set="${OKP_COMMAND_CAPTURE_SET:-all}"
 
-for substrate in bright dark; do
-  capture "speed-selected-$substrate" "$substrate" speed 749 120
-  capture "subtitle-selected-$substrate" "$substrate" subtitles 822 262 subtitle-selected
-  capture "audio-selected-$substrate" "$substrate" audio 874 248 audio-selected
-  capture "more-$substrate" "$substrate" more 1072 210
-done
+if [[ "${OKP_COMMAND_SURFACES_ONLY:-0}" != 1 && "$capture_set" == all ]]; then
+  capture subtitle-srt-selected-dark dark subtitles 822 262 subtitle-srt-selected
+  for substrate in bright dark; do
+    capture "speed-selected-$substrate" "$substrate" speed 749 120
+    capture "subtitle-selected-$substrate" "$substrate" subtitles 822 262 subtitle-selected
+    capture "audio-selected-$substrate" "$substrate" audio 874 248 audio-selected
+  done
+  capture subtitle-empty-dark dark subtitles 822 262 subtitle-empty
+  capture subtitle-searchable-dark dark subtitles 822 262 subtitle-searchable
+  capture audio-empty-dark dark audio 874 248 audio-empty
+fi
 
-capture subtitle-empty-dark dark subtitles 822 262 subtitle-empty
-capture subtitle-searchable-dark dark subtitles 822 262 subtitle-searchable
-capture audio-empty-dark dark audio 874 248 audio-empty
-capture more-disabled-bright bright more 1072 210 more-disabled
-# The full legacy command tree is a deliberate advanced escape hatch reached
-# from the video plane itself, not another row in the compact More popover.
-capture advanced-right-click-bright bright advanced 560 320 "" 3 340 no
+if [[ "$capture_set" == all || "$capture_set" == more ]]; then
+  for substrate in bright dark; do
+    capture "more-$substrate" "$substrate" more 1072 340 "" 1 630 no
+  done
+  capture more-disabled-bright bright more 1072 340 more-disabled 1 630 no
+  capture more-search-window-dark dark more 1072 340 "" 1 630 no window
+  capture more-no-results-light bright more 1072 340 "" 1 630 no zzz-no-command
+fi
+# Right-click is a second presentation of the same command registry, geometry,
+# search, and action dispatcher.
+if [[ "$capture_set" == all || "$capture_set" == context ]]; then
+  capture context-right-click-bright bright context 560 340 "" 3 340 no
+  capture context-search-window-dark dark context 560 340 "" 3 340 no window
+  capture context-no-results-light bright context 560 340 "" 3 340 no zzz-no-command
+fi
+if [[ "$capture_set" == all || "$capture_set" == narrow ]]; then
+  capture more-narrow-light bright more 432 340 "" 1 220 no "" 480 270 yes
+fi
 
 kill "$wm_pid" 2>/dev/null || true
 trap - EXIT
