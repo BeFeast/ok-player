@@ -19,49 +19,55 @@ use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
-use libc::c_void;
+use libc::{c_char, c_void};
 
 use crate::ffi;
 use crate::player::{
     AbLoopState, AudioDevice, Chapter, EndFileReason, MediaInfo, MpvEvent, PlaybackDiagnostics,
-    PlaybackState, RawReader, Track, VideoDimensions, end_file_reason,
+    PlaybackState, RawReader, Track, VideoDimensions, audio_device_selected,
+    audio_devices_from_entries, end_file_reason, media_info_with_source,
 };
 
 /// Properties the pump observes so mpv wakes it (and refreshes the snapshot)
-/// whenever any of them changes. All are observed with `MPV_FORMAT_NONE`: the
-/// pump re-reads the current value off the background thread, which keeps the
-/// observation registration trivial and avoids decoding node payloads.
-const OBSERVED_PROPERTIES: &[&str] = &[
+/// whenever any of them changes. Most use `MPV_FORMAT_NONE` and are re-read on
+/// the background thread. Audio devices deliberately consume typed event
+/// payloads: querying that backend synchronously can block during PipeWire
+/// teardown and must never hold the main event pump hostage.
+const OBSERVED_PROPERTIES: &[(&str, libc::c_int)] = &[
     // Playback scalars projected onto the transport bar.
-    "time-pos",
-    "duration",
-    "pause",
-    "volume",
-    "speed",
-    "demuxer-cache-duration",
+    ("time-pos", ffi::MPV_FORMAT_NONE),
+    ("duration", ffi::MPV_FORMAT_NONE),
+    ("pause", ffi::MPV_FORMAT_NONE),
+    ("volume", ffi::MPV_FORMAT_NONE),
+    ("speed", ffi::MPV_FORMAT_NONE),
+    ("demuxer-cache-duration", ffi::MPV_FORMAT_NONE),
     // Container frame rate for the seek/frame-step readout; changes on load.
-    "container-fps",
+    ("container-fps", ffi::MPV_FORMAT_NONE),
     // Live acceptance diagnostics. Reads remain on the pump thread; the GTK
     // main context only consumes the published snapshot.
-    "hwdec-current",
-    "decoder-frame-drop-count",
-    "frame-drop-count",
+    ("hwdec-current", ffi::MPV_FORMAT_NONE),
+    ("decoder-frame-drop-count", ffi::MPV_FORMAT_NONE),
+    ("frame-drop-count", ffi::MPV_FORMAT_NONE),
     // Subtitle state surfaced in the subtitle popover / saved preferences.
-    "sub-delay",
-    "sub-scale",
-    "secondary-sid",
+    ("sub-delay", ffi::MPV_FORMAT_NONE),
+    ("sub-scale", ffi::MPV_FORMAT_NONE),
+    ("secondary-sid", ffi::MPV_FORMAT_NONE),
     // Audio sync offset surfaced in the audio popover / saved preferences.
-    "audio-delay",
+    ("audio-delay", ffi::MPV_FORMAT_NONE),
     // A-B loop endpoints surfaced on the timeline.
-    "ab-loop-a",
-    "ab-loop-b",
+    ("ab-loop-a", ffi::MPV_FORMAT_NONE),
+    ("ab-loop-b", ffi::MPV_FORMAT_NONE),
     // Lists that only change on load / track or device selection.
-    "track-list",
-    "chapter-list",
-    "audio-device-list",
-    "audio-device",
+    ("track-list", ffi::MPV_FORMAT_NONE),
+    ("chapter-list", ffi::MPV_FORMAT_NONE),
+    ("audio-device-list", ffi::MPV_FORMAT_NODE),
+    ("audio-device", ffi::MPV_FORMAT_STRING),
 ];
+
+const SHUTDOWN_JOIN_TIMEOUT: Duration = Duration::from_millis(250);
+const SHUTDOWN_JOIN_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 /// The observed state the shell projects onto its widgets. Cloned out of the
 /// pump under a short lock; never holds an mpv handle.
@@ -108,7 +114,6 @@ impl Default for Snapshot {
 struct RecomputeFlags {
     tracks: bool,
     chapters: bool,
-    audio_devices: bool,
     media_info: bool,
 }
 
@@ -117,8 +122,9 @@ impl RecomputeFlags {
         Self {
             tracks: true,
             chapters: true,
-            audio_devices: true,
-            media_info: true,
+            // No media is loaded at startup, so a full metadata walk here only
+            // adds dozens of blocking reads before the first useful event.
+            media_info: false,
         }
     }
 }
@@ -132,9 +138,7 @@ struct PumpShared {
     snapshot: Mutex<Snapshot>,
     events: Mutex<Vec<MpvEvent>>,
     media_source: Mutex<Option<PathBuf>>,
-    /// Set when the shell records a new media source so the next pump pass
-    /// rebuilds `media_info` against it, even without a fresh mpv event.
-    media_info_dirty: AtomicBool,
+    audio_device_current: Mutex<String>,
     wake: Mutex<bool>,
     condvar: Condvar,
     running: AtomicBool,
@@ -151,22 +155,37 @@ impl EventPump {
     /// background pump. Must be called on the thread that owns `handle` (the UI
     /// thread) after `mpv_initialize`.
     pub(crate) fn start(handle: NonNull<ffi::mpv_handle>) -> Self {
+        Self::start_with_audio_devices(handle, true)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn start_without_audio_devices(handle: NonNull<ffi::mpv_handle>) -> Self {
+        Self::start_with_audio_devices(handle, false)
+    }
+
+    fn start_with_audio_devices(
+        handle: NonNull<ffi::mpv_handle>,
+        observe_audio_devices: bool,
+    ) -> Self {
         let shared = Arc::new(PumpShared {
             reader: RawReader::new(handle),
             snapshot: Mutex::new(Snapshot::default()),
             events: Mutex::new(Vec::new()),
             media_source: Mutex::new(None),
-            media_info_dirty: AtomicBool::new(false),
+            audio_device_current: Mutex::new("auto".to_owned()),
             // Start "pending" so the pump populates the snapshot immediately.
             wake: Mutex::new(true),
             condvar: Condvar::new(),
             running: AtomicBool::new(true),
         });
 
-        for name in OBSERVED_PROPERTIES {
+        for (name, format) in OBSERVED_PROPERTIES {
+            if !observe_audio_devices && matches!(*name, "audio-device-list" | "audio-device") {
+                continue;
+            }
             let cname = CString::new(*name).expect("observed property names never contain nul");
             unsafe {
-                ffi::mpv_observe_property(handle.as_ptr(), 0, cname.as_ptr(), ffi::MPV_FORMAT_NONE);
+                ffi::mpv_observe_property(handle.as_ptr(), 0, cname.as_ptr(), *format);
             }
         }
 
@@ -246,7 +265,9 @@ impl EventPump {
     }
 
     pub(crate) fn begin_media_load(&self) {
-        lock(&self.shared.snapshot).video_dimensions = None;
+        let mut snapshot = lock(&self.shared.snapshot);
+        snapshot.video_dimensions = None;
+        snapshot.media_info = None;
     }
 
     /// Drain the lifecycle events queued since the last call, oldest first.
@@ -255,32 +276,50 @@ impl EventPump {
     }
 
     /// Record the local path backing the current media so `media-info` reports
-    /// the same title/path the shell would have passed synchronously. `None`
-    /// for streams (matching the shell's URL handling).
-    ///
-    /// The `FileLoaded` recompute usually runs before the shell gets a chance to
-    /// call this, so it builds `media_info` with no source. Flag `media_info`
-    /// dirty and wake the pump so it rebuilds the snapshot against the path we
-    /// just recorded instead of waiting for an unrelated list change.
+    /// the same title/path the shell would have passed synchronously. Source
+    /// identity is a local projection, so update it without another libmpv
+    /// metadata walk; the next `FileLoaded` refresh fills the engine fields.
     pub(crate) fn set_media_source(&self, source: Option<PathBuf>) {
-        *lock(&self.shared.media_source) = source;
-        self.shared.media_info_dirty.store(true, Ordering::Release);
-        *lock(&self.shared.wake) = true;
-        self.shared.condvar.notify_one();
+        let mut stored_source = lock(&self.shared.media_source);
+        *stored_source = source;
+        let mut snapshot = lock(&self.shared.snapshot);
+        snapshot.media_info = stored_source
+            .as_deref()
+            .map(|source| media_info_with_source(snapshot.media_info.take(), source));
     }
 
-    /// Stop the wakeup callback, wake the pump so it observes the shutdown flag,
-    /// and join it. Must run before the handle is destroyed.
-    pub(crate) fn shutdown(mut self) {
+    /// Stop the wakeup callback and wake the pump so it observes the shutdown
+    /// flag. A prompt worker is joined here; a worker blocked inside libmpv is
+    /// returned to the owner so handle destruction can be deferred without
+    /// blocking the caller or racing the in-flight API call.
+    pub(crate) fn shutdown(mut self) -> Option<JoinHandle<()>> {
         unsafe {
             ffi::mpv_set_wakeup_callback(self.handle.as_ptr(), None, ptr::null_mut());
         }
         self.shared.running.store(false, Ordering::Release);
         self.shared.condvar.notify_all();
-        if let Some(join) = self.join.take() {
-            let _ = join.join();
+        let blocked = self
+            .join
+            .take()
+            .and_then(|join| join_with_timeout(join, SHUTDOWN_JOIN_TIMEOUT).err());
+        if blocked.is_some() {
+            eprintln!("[okp-mpv] event pump exceeded the shutdown deadline; deferring teardown");
         }
+        blocked
     }
+}
+
+fn join_with_timeout(join: JoinHandle<()>, timeout: Duration) -> Result<(), JoinHandle<()>> {
+    let deadline = Instant::now() + timeout;
+    while !join.is_finished() {
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(join);
+        }
+        thread::sleep((deadline - now).min(SHUTDOWN_JOIN_POLL_INTERVAL));
+    }
+    let _ = join.join();
+    Ok(())
 }
 
 /// Wakeup callback invoked by mpv on a foreign thread whenever events are
@@ -313,13 +352,7 @@ fn pump_loop(shared: &Arc<PumpShared>) {
             break;
         }
 
-        let (lifecycle, mut flags) = drain_events(shared);
-        // A `set_media_source` between the `FileLoaded` recompute and now only
-        // updates the stored path, so fold its pending flag in here to rebuild
-        // `media_info` against it.
-        if shared.media_info_dirty.swap(false, Ordering::AcqRel) {
-            flags.media_info = true;
-        }
+        let (lifecycle, flags) = drain_events(shared);
         // Refresh the snapshot *before* the lifecycle events become visible, so
         // a shell handler that reacts to `FileLoaded` already sees fresh tracks.
         recompute(shared, flags);
@@ -392,7 +425,21 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
                             flags.chapters = true;
                             flags.media_info = true;
                         }
-                        b"audio-device-list" | b"audio-device" => flags.audio_devices = true,
+                        b"audio-device-list" => {
+                            if let Some(entries) = unsafe { audio_device_entries(property) } {
+                                let current = lock(&shared.audio_device_current).clone();
+                                lock(&shared.snapshot).audio_devices =
+                                    audio_devices_from_entries(entries, &current);
+                            }
+                        }
+                        b"audio-device" => {
+                            if let Some(current) = unsafe { property_string(property) } {
+                                *lock(&shared.audio_device_current) = current.clone();
+                                for device in &mut lock(&shared.snapshot).audio_devices {
+                                    device.selected = audio_device_selected(&device.name, &current);
+                                }
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -429,38 +476,115 @@ fn recompute(shared: &Arc<PumpShared>, flags: RecomputeFlags) {
     let secondary_subtitle_id = reader.secondary_subtitle_id().unwrap_or_default();
 
     let tracks = flags.tracks.then(|| reader.tracks().unwrap_or_default());
-    let chapters = flags
-        .chapters
-        .then(|| reader.chapters().unwrap_or_default());
-    let audio_devices = flags
-        .audio_devices
-        .then(|| reader.audio_devices().unwrap_or_default());
-    let media_info = flags.media_info.then(|| {
-        let source = lock(&shared.media_source).clone();
-        reader.media_info(source.as_deref()).ok()
-    });
+    {
+        let mut snapshot = lock(&shared.snapshot);
+        snapshot.playback = playback;
+        snapshot.playback_diagnostics = playback_diagnostics;
+        snapshot.ab_loop = ab_loop;
+        snapshot.subtitle_delay = subtitle_delay;
+        snapshot.audio_delay = audio_delay;
+        snapshot.subtitle_scale = subtitle_scale;
+        snapshot.speed = speed;
+        snapshot.secondary_subtitle_id = secondary_subtitle_id;
+        if let Some(tracks) = tracks {
+            snapshot.tracks = tracks;
+        }
+    }
 
-    let mut snapshot = lock(&shared.snapshot);
-    snapshot.playback = playback;
-    snapshot.playback_diagnostics = playback_diagnostics;
-    snapshot.ab_loop = ab_loop;
-    snapshot.subtitle_delay = subtitle_delay;
-    snapshot.audio_delay = audio_delay;
-    snapshot.subtitle_scale = subtitle_scale;
-    snapshot.speed = speed;
-    snapshot.secondary_subtitle_id = secondary_subtitle_id;
-    if let Some(tracks) = tracks {
-        snapshot.tracks = tracks;
+    // Publish track changes before the larger chapter/media-info walks. A
+    // slower optional metadata field must not hide a subtitle list the pump has
+    // already read from the loaded file.
+    if flags.chapters {
+        let chapters = reader.chapters().unwrap_or_default();
+        lock(&shared.snapshot).chapters = chapters;
     }
-    if let Some(chapters) = chapters {
-        snapshot.chapters = chapters;
+    if flags.media_info {
+        let media_info = reader.media_info(None).ok();
+        let source = lock(&shared.media_source);
+        lock(&shared.snapshot).media_info = match source.as_deref() {
+            Some(source) => Some(media_info_with_source(media_info, source)),
+            None => media_info,
+        };
     }
-    if let Some(audio_devices) = audio_devices {
-        snapshot.audio_devices = audio_devices;
+}
+
+unsafe fn audio_device_entries(
+    property: &ffi::mpv_event_property,
+) -> Option<Vec<(String, Option<String>)>> {
+    if property.format != ffi::MPV_FORMAT_NODE || property.data.is_null() {
+        return None;
     }
-    if let Some(media_info) = media_info {
-        snapshot.media_info = media_info;
+    let node = unsafe { property.data.cast::<ffi::mpv_node>().as_ref() }?;
+    if node.format != ffi::MPV_FORMAT_NODE_ARRAY {
+        return None;
     }
+    let list = unsafe { node.value.list.as_ref() }?;
+    if list.num < 0 || (list.num > 0 && list.values.is_null()) {
+        return None;
+    }
+    if list.num == 0 {
+        return Some(Vec::new());
+    }
+
+    let values = unsafe { std::slice::from_raw_parts(list.values, list.num as usize) };
+    Some(
+        values
+            .iter()
+            .filter_map(|entry| {
+                let name = unsafe { node_map_string(entry, b"name") }?;
+                let description = unsafe { node_map_string(entry, b"description") };
+                Some((name, description))
+            })
+            .collect(),
+    )
+}
+
+unsafe fn node_map_string(node: &ffi::mpv_node, wanted: &[u8]) -> Option<String> {
+    if node.format != ffi::MPV_FORMAT_NODE_MAP {
+        return None;
+    }
+    let list = unsafe { node.value.list.as_ref() }?;
+    if list.num < 0 || (list.num > 0 && (list.values.is_null() || list.keys.is_null())) {
+        return None;
+    }
+    if list.num == 0 {
+        return None;
+    }
+
+    let values = unsafe { std::slice::from_raw_parts(list.values, list.num as usize) };
+    let keys = unsafe { std::slice::from_raw_parts(list.keys, list.num as usize) };
+    for (key, value) in keys.iter().zip(values) {
+        if key.is_null() || value.format != ffi::MPV_FORMAT_STRING {
+            continue;
+        }
+        if unsafe { CStr::from_ptr(*key) }.to_bytes() == wanted {
+            let string = unsafe { value.value.string };
+            if string.is_null() {
+                return None;
+            }
+            return Some(
+                unsafe { CStr::from_ptr(string) }
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+    }
+    None
+}
+
+unsafe fn property_string(property: &ffi::mpv_event_property) -> Option<String> {
+    if property.format != ffi::MPV_FORMAT_STRING || property.data.is_null() {
+        return None;
+    }
+    let string = unsafe { *property.data.cast::<*const c_char>() };
+    if string.is_null() {
+        return None;
+    }
+    Some(
+        unsafe { CStr::from_ptr(string) }
+            .to_string_lossy()
+            .into_owned(),
+    )
 }
 
 /// Lock a mutex, recovering the guard if the pump thread poisoned it — a busy
@@ -469,4 +593,106 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use super::*;
+
+    #[test]
+    fn typed_audio_device_payloads_are_copied_from_the_event() {
+        let name_key = CString::new("name").unwrap();
+        let description_key = CString::new("description").unwrap();
+        let name = CString::new("pulse/speakers").unwrap();
+        let description = CString::new("Speakers").unwrap();
+        let mut map_values = [
+            ffi::mpv_node {
+                value: ffi::mpv_node_value {
+                    string: name.as_ptr().cast_mut(),
+                },
+                format: ffi::MPV_FORMAT_STRING,
+            },
+            ffi::mpv_node {
+                value: ffi::mpv_node_value {
+                    string: description.as_ptr().cast_mut(),
+                },
+                format: ffi::MPV_FORMAT_STRING,
+            },
+        ];
+        let mut map_keys = [
+            name_key.as_ptr().cast_mut(),
+            description_key.as_ptr().cast_mut(),
+        ];
+        let mut map = ffi::mpv_node_list {
+            num: 2,
+            values: map_values.as_mut_ptr(),
+            keys: map_keys.as_mut_ptr(),
+        };
+        let mut array_values = [ffi::mpv_node {
+            value: ffi::mpv_node_value {
+                list: std::ptr::from_mut(&mut map),
+            },
+            format: ffi::MPV_FORMAT_NODE_MAP,
+        }];
+        let mut array = ffi::mpv_node_list {
+            num: 1,
+            values: array_values.as_mut_ptr(),
+            keys: ptr::null_mut(),
+        };
+        let mut root = ffi::mpv_node {
+            value: ffi::mpv_node_value {
+                list: std::ptr::from_mut(&mut array),
+            },
+            format: ffi::MPV_FORMAT_NODE_ARRAY,
+        };
+        let property = ffi::mpv_event_property {
+            name: ptr::null(),
+            format: ffi::MPV_FORMAT_NODE,
+            data: std::ptr::from_mut(&mut root).cast(),
+        };
+
+        assert_eq!(
+            unsafe { audio_device_entries(&property) },
+            Some(vec![(
+                "pulse/speakers".to_owned(),
+                Some("Speakers".to_owned())
+            )])
+        );
+
+        let current = CString::new("pulse/speakers").unwrap();
+        let mut current_ptr = current.as_ptr();
+        let current_property = ffi::mpv_event_property {
+            name: ptr::null(),
+            format: ffi::MPV_FORMAT_STRING,
+            data: std::ptr::from_mut(&mut current_ptr).cast(),
+        };
+        assert_eq!(
+            unsafe { property_string(&current_property) }.as_deref(),
+            Some("pulse/speakers")
+        );
+    }
+
+    #[test]
+    fn blocked_worker_is_returned_before_the_candidate_stall_guard() {
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let join = thread::spawn(move || {
+            ready_tx.send(()).expect("test worker should report ready");
+            release_rx.recv().expect("test worker should be released");
+        });
+        ready_rx.recv().expect("test worker should start");
+
+        let started = Instant::now();
+        let join = join_with_timeout(join, Duration::from_millis(25))
+            .expect_err("a blocked worker must be handed back to the caller");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "bounded shutdown must fail fast instead of reaching the candidate watchdog"
+        );
+
+        release_tx.send(()).expect("test worker should be released");
+        join.join().expect("test worker should finish cleanly");
+    }
 }
