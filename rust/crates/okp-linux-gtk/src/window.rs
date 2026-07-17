@@ -405,6 +405,18 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
             open_settings_window(&settings_parent, settings_state, settings_toast);
         });
     }
+    // Deterministic visual smoke hook for the active-query and matching-cue
+    // states. The production entry loads and indexes on its background path;
+    // this hook supplies an in-memory fixture so screenshot tests do not depend
+    // on a desktop file chooser or launch timing.
+    if env::var_os("OKP_OPEN_SUBTITLE_SEARCH_ON_STARTUP").is_some() {
+        let search_parent = window.clone();
+        let search_state = Rc::clone(&state);
+        let search_toast = Rc::clone(&status_toast);
+        glib::timeout_add_local_once(Duration::from_millis(250), move || {
+            open_subtitle_search_preview(&search_parent, search_state, search_toast);
+        });
+    }
     // Visual smoke hook: render the in-player Media Information modal with
     // representative fixture data so it can be screenshot-tested without media.
     if env::var_os("OKP_OPEN_MEDIA_INFO_ON_STARTUP").is_some() {
