@@ -173,13 +173,35 @@ capture() {
     exit 1
   fi
 
+  local preference_variance="n/a"
+  if [[ "$popover" == "subtitles" ]]; then
+    local minimum_height=290
+    [[ "$preview_state" == "subtitle-selected" ]] && minimum_height=380
+    if (( visible_height < minimum_height )); then
+      echo "$shot: subtitle preference controls are missing; height=${visible_height}, minimum=${minimum_height}" >&2
+      exit 1
+    fi
+    local preference_y=$((visible_height - 120))
+    preference_variance="$(
+      magick "$OUT_DIR/$shot-popover.png" \
+        -crop "250x115+7+${preference_y}" \
+        -colorspace gray \
+        -format '%[fx:standard_deviation]' info:
+    )"
+    if ! awk -v variance="$preference_variance" 'BEGIN { exit !(variance > 0.05) }'; then
+      echo "$shot: subtitle Size/Style band is unexpectedly flat: variance=${preference_variance}" >&2
+      exit 1
+    fi
+  fi
+
   printf '%s\n' \
     "popover=$popover" \
     "requested_width=$requested_width" \
     "visible_geometry=${visible_width}x${visible_height}" \
     "anchor_delta=$anchor_delta" \
     "material_mean=$material_mean" \
-    "edge_mean=$edge_mean" >"$OUT_DIR/$shot.txt"
+    "edge_mean=$edge_mean" \
+    "preference_variance=$preference_variance" >"$OUT_DIR/$shot.txt"
 
   kill "$app_pid" 2>/dev/null || true
   wait "$app_pid" 2>/dev/null || true

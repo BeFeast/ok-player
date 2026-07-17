@@ -2436,6 +2436,35 @@ const OKP_STYLESHEET: &str = "
             box-shadow: inset 0 0 0 1px alpha(@okp_teal, 0.72);
         }
 
+        .okp-quick-style-row {
+            min-height: 34px;
+            padding: 2px 4px 2px 7px;
+        }
+
+        button.okp-quick-style-button {
+            min-height: 26px;
+            padding: 2px 8px;
+            border-radius: 5px;
+            border: 1px solid transparent;
+            background: rgba(0, 0, 0, 0.055);
+            box-shadow: none;
+            color: rgba(23, 25, 28, 0.86);
+            font-size: 11.5px;
+            font-weight: 600;
+        }
+
+        button.okp-quick-style-button:hover {
+            background: rgba(0, 0, 0, 0.09);
+        }
+
+        .okp-quick-preference-footer {
+            margin: 4px -8px -8px;
+            padding: 8px 14px;
+            border-top: 1px solid rgba(0, 0, 0, 0.08);
+            color: rgba(23, 25, 28, 0.48);
+            font-size: 10.5px;
+        }
+
         .okp-settings-audio-delay-row {
             margin: 0;
             padding: 10px 0;
@@ -3387,6 +3416,14 @@ const OKP_STYLESHEET: &str = "
             margin-top: 8px;
         }
 
+        .okp-settings-hint {
+            margin-top: 6px;
+            color: rgba(0, 0, 0, 0.46);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 11.5px;
+            font-weight: 400;
+        }
+
         .okp-shortcuts-list {
             margin-top: 4px;
         }
@@ -3695,6 +3732,12 @@ const OKP_STYLESHEET: &str = "
             box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
         }
 
+        button.okp-settings-segment-button.okp-subtitle-style-choice {
+            min-width: 52px;
+            padding: 0 6px;
+            font-size: 11.5px;
+        }
+
         window.okp-settings-window.is-dark,
         window.okp-settings-window.is-dark .okp-settings-root,
         window.okp-settings-window.is-dark .okp-settings-titlebar,
@@ -3788,6 +3831,10 @@ const OKP_STYLESHEET: &str = "
         window.okp-settings-window.is-dark .okp-update-status,
         window.okp-settings-window.is-dark .okp-info-track-detail {
             color: rgba(255, 255, 255, 0.56);
+        }
+
+        window.okp-settings-window.is-dark .okp-settings-hint {
+            color: rgba(255, 255, 255, 0.50);
         }
 
         window.okp-settings-window.is-dark .okp-about-byline,
@@ -3947,6 +3994,10 @@ const OKP_STYLESHEET: &str = "
         window.okp-settings-window.is-high-contrast .okp-update-status,
         window.okp-settings-window.is-high-contrast .okp-shortcut-action-title,
         window.okp-settings-window.is-high-contrast .okp-shortcut-action-id {
+            color: #ffffff;
+        }
+
+        window.okp-settings-window.is-high-contrast .okp-settings-hint {
             color: #ffffff;
         }
 

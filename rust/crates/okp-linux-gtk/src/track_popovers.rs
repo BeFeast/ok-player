@@ -125,6 +125,15 @@ pub(crate) fn populate_subtitle_popover(
         read_subtitle_adjustments(&state).0,
         &state,
     ));
+    content.append(&compact_subtitle_size_row(
+        read_subtitle_adjustments(&state).1,
+        &state,
+    ));
+    content.append(&compact_subtitle_style_row(&state));
+    let footer = gtk::Label::new(Some("More in Settings → Subtitles"));
+    footer.add_css_class("okp-quick-preference-footer");
+    footer.set_xalign(0.0);
+    content.append(&footer);
 
     set_track_popover_child(popover, PlayerPopoverKind::Subtitles, content);
 }
@@ -894,6 +903,96 @@ pub(crate) fn compact_subtitle_delay_row(
     row
 }
 
+pub(crate) fn compact_subtitle_size_row(scale: f64, state: &Rc<RefCell<PlayerState>>) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    row.add_css_class("okp-quick-delay-row");
+
+    let label = gtk::Label::new(Some("Size"));
+    label.add_css_class("okp-quick-delay-label");
+    label.set_xalign(0.0);
+    label.set_hexpand(true);
+    row.append(&label);
+
+    let value = gtk::Label::new(Some(&format_scale(scale)));
+    value.add_css_class("okp-quick-delay-value");
+    value.set_width_chars(5);
+    value.set_xalign(1.0);
+    row.append(&value);
+    let projected_scale = Rc::new(Cell::new(scale));
+
+    for (icon, tooltip, delta) in [
+        (QuickControlIcon::Minus, "Make subtitles smaller", -0.1),
+        (QuickControlIcon::Reset, "Reset subtitle size", 0.0),
+        (QuickControlIcon::Plus, "Make subtitles larger", 0.1),
+    ] {
+        let button = gtk::Button::new();
+        button.add_css_class("okp-quick-delay-button");
+        button.set_tooltip_text(Some(tooltip));
+        button.set_child(Some(&quick_control_icon(icon)));
+        let button_state = Rc::clone(state);
+        let button_value = value.clone();
+        let button_scale = Rc::clone(&projected_scale);
+        button.connect_clicked(move |_| {
+            let target = if delta == 0.0 {
+                okp_core::subtitle_style::DEFAULT_SCALE
+            } else {
+                okp_core::subtitle_style::normalized_scale(Some(button_scale.get() + delta))
+            };
+            if set_current_subtitle_scale(&button_state, target) {
+                button_scale.set(target);
+                button_value.set_text(&format_scale(target));
+            }
+        });
+        row.append(&button);
+    }
+
+    row
+}
+
+pub(crate) fn compact_subtitle_style_row(state: &Rc<RefCell<PlayerState>>) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    row.add_css_class("okp-quick-style-row");
+
+    let label = gtk::Label::new(Some("Style"));
+    label.add_css_class("okp-quick-delay-label");
+    label.set_xalign(0.0);
+    label.set_hexpand(true);
+    row.append(&label);
+
+    let current = state.borrow().settings.subtitle_style();
+    let button = gtk::Button::with_label(&format!("{}  ›", subtitle_style_label(current.key)));
+    button.add_css_class("okp-quick-style-button");
+    let button_state = Rc::clone(state);
+    let button_label = button.clone();
+    button.connect_clicked(move |_| {
+        let current = button_state.borrow().settings.subtitle_style();
+        let next = okp_core::subtitle_style::next(current);
+        if set_subtitle_style_setting(&button_state, next.key).is_ok() {
+            button_label.set_label(&format!("{}  ›", subtitle_style_label(next.key)));
+        }
+    });
+    row.append(&button);
+    row
+}
+
+pub(crate) fn subtitle_style_label(key: &str) -> &'static str {
+    match key {
+        "Bold" => "Bold",
+        "Classic" => "Classic",
+        "Contrast" => "High contrast",
+        _ => "Default",
+    }
+}
+
+pub(crate) fn set_current_subtitle_scale(state: &Rc<RefCell<PlayerState>>, scale: f64) -> bool {
+    if with_mpv(state, |mpv| mpv.set_subtitle_scale(scale)) {
+        save_current_preferences_with_subtitle_scale(state, scale);
+        true
+    } else {
+        false
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum QuickControlIcon {
     Minus,
@@ -984,8 +1083,6 @@ pub(crate) fn apply_subtitle_adjustment(
         SubtitleAdjustment::Delay(_) | SubtitleAdjustment::SetDelay(_) => {
             mpv.set_subtitle_delay(applied_delay.unwrap_or_default())
         }
-        SubtitleAdjustment::Scale(delta) => mpv.adjust_subtitle_scale(delta),
-        SubtitleAdjustment::SetScale(value) => mpv.set_subtitle_scale(value),
     }) {
         if let Some(delay) = applied_delay {
             save_current_preferences_with_subtitle_delay(state, delay);
@@ -1011,7 +1108,6 @@ pub(crate) fn subtitle_delay_target(
             -subtitle_delay::MAX_ENTRY_SECONDS,
             subtitle_delay::MAX_ENTRY_SECONDS,
         )),
-        SubtitleAdjustment::Scale(_) | SubtitleAdjustment::SetScale(_) => None,
     }
 }
 

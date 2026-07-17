@@ -25,7 +25,7 @@ public class SubtitleStyleTests
         // from any preset to any other repaints every field and leaves no residual state (e.g. Classic's
         // yellow can't linger after picking Default). If a preset adds or drops an option, that breaks.
         var expected = SubtitleStyle.Default.Options.Select(o => o.Key).OrderBy(k => k).ToArray();
-        Assert.Equal(6, expected.Length);
+        Assert.Equal(7, expected.Length);
         foreach (var style in SubtitleStyle.All)
         {
             var names = style.Options.Select(o => o.Key).OrderBy(k => k).ToArray();
@@ -69,11 +69,28 @@ public class SubtitleStyleTests
     }
 
     [Fact]
-    public void AllColors_UseSixDigitRrggbb_TheUniversallyAcceptedMpvForm()
+    public void ContrastPreset_UsesSemiTransparentBackgroundBox()
     {
-        // Colour-valued options must be #RRGGBB (no alpha byte), so they parse identically regardless of
-        // whether a libmpv build expects a leading alpha. Catches a stray #AARRGGBB / #RRGGBBAA slipping in.
-        var colorKeys = new[] { "sub-color", "sub-border-color", "sub-shadow-color" };
+        var opts = SubtitleStyle.Contrast.Options.ToDictionary(o => o.Key, o => o.Value);
+        Assert.Equal("background-box", opts["sub-border-style"]);
+        Assert.Equal("0.0/0.0/0.0/0.72", opts["sub-back-color"]);
+    }
+
+    [Fact]
+    public void NonBoxedPresets_RestoreOutlineAndShadow()
+    {
+        foreach (var style in new[] { SubtitleStyle.Default, SubtitleStyle.Bold, SubtitleStyle.Classic })
+        {
+            var opts = style.Options.ToDictionary(o => o.Key, o => o.Value);
+            Assert.Equal("outline-and-shadow", opts["sub-border-style"]);
+            Assert.Equal("#000000", opts["sub-back-color"]);
+        }
+    }
+
+    [Fact]
+    public void OpaqueColors_UseSixDigitRrggbb()
+    {
+        var colorKeys = new[] { "sub-color", "sub-border-color" };
         var rrggbb = new Regex("^#[0-9A-Fa-f]{6}$");
         foreach (var style in SubtitleStyle.All)
             foreach (var (name, value) in style.Options)

@@ -27,4 +27,9 @@ public static class SubtitleLift
         double lift = needed > floorPercent ? needed : floorPercent;
         return lift < 100.0 ? lift : 100.0;
     }
+
+    /// <summary>Combine the user's configured <c>sub-pos</c> baseline with the transient OSC lift. Both are
+    /// percentage points; the result is clamped to mpv's valid range.</summary>
+    public static double ApplyToPosition(double basePosition, double lift)
+        => System.Math.Clamp(basePosition - lift, 0, 100);
 }

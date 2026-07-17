@@ -9,13 +9,15 @@ pub(crate) fn settings_subtitles_page(
     page.add_css_class("okp-settings-page");
 
     let snapshot = settings_subtitle_snapshot(&state);
-    let summary = settings_section("Subtitles");
+    page.append(&settings_subtitle_presentation_section(
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+    ));
+
+    let summary = settings_section("Current Media");
     summary.append(&settings_value_row("Primary", &snapshot.primary));
     summary.append(&settings_value_row("Secondary", &snapshot.secondary));
 
-    // Group the fine-adjust controls inline with the value they change so the
-    // page stays within the reference content width instead of overflowing the
-    // window with a single seven-button row.
     let (delay_row, delay_label, delay_buttons) = settings_stepper_row(
         "Delay",
         &subtitle_delay::format_label(snapshot.delay_seconds),
@@ -25,23 +27,13 @@ pub(crate) fn settings_subtitles_page(
             ("Reset", SubtitleAdjustment::SetDelay(0.0)),
         ],
     );
-    let (scale_row, scale_label, scale_buttons) = settings_stepper_row(
-        "Size",
-        &format_scale(snapshot.scale),
-        &[
-            ("Smaller", SubtitleAdjustment::Scale(-0.1)),
-            ("100%", SubtitleAdjustment::SetScale(1.0)),
-            ("Larger", SubtitleAdjustment::Scale(0.1)),
-        ],
-    );
     let projected_delay = Rc::new(Cell::new(snapshot.delay_seconds));
 
-    for (button, adjustment) in delay_buttons.into_iter().chain(scale_buttons) {
+    for (button, adjustment) in delay_buttons {
         button.set_sensitive(snapshot.has_media);
         let button_state = Rc::clone(&state);
         let button_toast = Rc::clone(&status_toast);
         let button_delay = delay_label.clone();
-        let button_scale = scale_label.clone();
         let projected_delay = Rc::clone(&projected_delay);
         button.connect_clicked(move |_| {
             if let Some(applied_delay) =
@@ -49,17 +41,11 @@ pub(crate) fn settings_subtitles_page(
             {
                 projected_delay.set(applied_delay);
             }
-            refresh_settings_subtitle_values(
-                &button_state,
-                &button_delay,
-                &button_scale,
-                projected_delay.get(),
-            );
+            button_delay.set_text(&subtitle_delay::format_label(projected_delay.get()));
             button_toast.show("Subtitle settings updated");
         });
     }
     summary.append(&delay_row);
-    summary.append(&scale_row);
 
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     actions.add_css_class("okp-settings-action-row");
@@ -100,6 +86,189 @@ pub(crate) fn settings_subtitles_page(
     }
 
     page
+}
+
+pub(crate) fn settings_subtitle_presentation_section(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let section = settings_section("Presentation");
+    let (scale, position, style) = {
+        let state = state.borrow();
+        (
+            state.settings.subtitle_scale(),
+            state.settings.subtitle_position(),
+            state.settings.subtitle_style(),
+        )
+    };
+
+    let scale_values = [0.8, 1.0, 1.4];
+    let (scale_row, scale_buttons) = settings_segmented_choice_row(
+        "Size",
+        &[
+            ("Small", (scale - scale_values[0]).abs() < 0.001),
+            ("Normal", (scale - scale_values[1]).abs() < 0.001),
+            ("Large", (scale - scale_values[2]).abs() < 0.001),
+        ],
+    );
+    let scale_buttons = Rc::new(RefCell::new(scale_buttons));
+    for (button, value) in scale_buttons.borrow().iter().cloned().zip(scale_values) {
+        let selected = button.clone();
+        let buttons = Rc::clone(&scale_buttons);
+        let button_state = Rc::clone(&state);
+        let button_toast = Rc::clone(&status_toast);
+        button.connect_clicked(move |_| {
+            if save_subtitle_scale_default(&button_state, value, &button_toast) {
+                mark_settings_track_selected(&buttons, &selected);
+            }
+        });
+    }
+    section.append(&scale_row);
+
+    let position_values = [100_i64, 90_i64];
+    let (position_row, position_buttons) = settings_segmented_choice_row(
+        "Position",
+        &[
+            ("Standard", position == position_values[0]),
+            ("Raised", position == position_values[1]),
+        ],
+    );
+    let position_buttons = Rc::new(RefCell::new(position_buttons));
+    for (button, value) in position_buttons
+        .borrow()
+        .iter()
+        .cloned()
+        .zip(position_values)
+    {
+        let selected = button.clone();
+        let buttons = Rc::clone(&position_buttons);
+        let button_state = Rc::clone(&state);
+        let button_toast = Rc::clone(&status_toast);
+        button.connect_clicked(move |_| {
+            if save_subtitle_position_default(&button_state, value, &button_toast) {
+                mark_settings_track_selected(&buttons, &selected);
+            }
+        });
+    }
+    section.append(&position_row);
+
+    let style_values = ["Default", "Bold", "Classic", "Contrast"];
+    let (style_row, style_buttons) = settings_segmented_choice_row(
+        "Style",
+        &[
+            ("Default", style.key == style_values[0]),
+            ("Bold", style.key == style_values[1]),
+            ("Classic", style.key == style_values[2]),
+            ("High contrast", style.key == style_values[3]),
+        ],
+    );
+    for button in &style_buttons {
+        button.add_css_class("okp-subtitle-style-choice");
+    }
+    let style_buttons = Rc::new(RefCell::new(style_buttons));
+    for (button, key) in style_buttons.borrow().iter().cloned().zip(style_values) {
+        let selected = button.clone();
+        let buttons = Rc::clone(&style_buttons);
+        let button_state = Rc::clone(&state);
+        let button_toast = Rc::clone(&status_toast);
+        button.connect_clicked(move |_| {
+            if save_subtitle_style_default(&button_state, key, &button_toast) {
+                mark_settings_track_selected(&buttons, &selected);
+            }
+        });
+    }
+    section.append(&style_row);
+
+    let hint = gtk::Label::new(Some(
+        "Appearance presets apply to text subtitles. ASS/SSA tracks keep their authored style; size and position still apply.",
+    ));
+    hint.add_css_class("okp-settings-hint");
+    hint.set_xalign(0.0);
+    hint.set_wrap(true);
+    hint.set_max_width_chars(52);
+    section.append(&hint);
+
+    section
+}
+
+pub(crate) fn settings_segmented_choice_row(
+    label: &str,
+    choices: &[(&str, bool)],
+) -> (gtk::Box, Vec<gtk::Button>) {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    row.add_css_class("okp-settings-row");
+
+    let label = gtk::Label::new(Some(label));
+    label.add_css_class("okp-info-label");
+    label.set_xalign(0.0);
+    label.set_width_chars(10);
+    label.set_hexpand(true);
+    row.append(&label);
+
+    let group = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    group.add_css_class("okp-settings-segmented");
+    group.set_halign(gtk::Align::End);
+    let mut buttons = Vec::with_capacity(choices.len());
+    for (label, selected) in choices {
+        let button = gtk::Button::with_label(label);
+        button.add_css_class("okp-settings-segment-button");
+        button.set_has_frame(false);
+        if *selected {
+            button.add_css_class("is-selected");
+        }
+        group.append(&button);
+        buttons.push(button);
+    }
+    row.append(&group);
+    (row, buttons)
+}
+
+pub(crate) fn save_subtitle_scale_default(
+    state: &Rc<RefCell<PlayerState>>,
+    scale: f64,
+    status_toast: &StatusToast,
+) -> bool {
+    {
+        let mut state = state.borrow_mut();
+        state.settings.set_subtitle_scale(scale);
+        if !save_settings_or_toast(&mut state, status_toast) {
+            return false;
+        }
+    }
+    if with_mpv(state, |mpv| mpv.set_subtitle_scale(scale)) {
+        save_current_preferences_with_subtitle_scale(state, scale);
+    }
+    status_toast.show("Subtitle size updated");
+    true
+}
+
+pub(crate) fn save_subtitle_position_default(
+    state: &Rc<RefCell<PlayerState>>,
+    position: i64,
+    status_toast: &StatusToast,
+) -> bool {
+    let mut state = state.borrow_mut();
+    state.settings.set_subtitle_position(position);
+    if save_settings_or_toast(&mut state, status_toast) {
+        status_toast.show("Subtitle position updated");
+        true
+    } else {
+        false
+    }
+}
+
+pub(crate) fn save_subtitle_style_default(
+    state: &Rc<RefCell<PlayerState>>,
+    key: &str,
+    status_toast: &StatusToast,
+) -> bool {
+    if let Err(message) = set_subtitle_style_setting(state, key) {
+        status_toast.show(message);
+        false
+    } else {
+        status_toast.show("Subtitle style updated");
+        true
+    }
 }
 
 pub(crate) fn settings_audio_page(
@@ -630,26 +799,14 @@ pub(crate) fn settings_subtitle_snapshot(
                 "No media loaded".to_owned()
             }
         });
-    let (delay_seconds, scale) = read_subtitle_adjustments(state);
+    let (delay_seconds, _) = read_subtitle_adjustments(state);
 
     SettingsSubtitleSnapshot {
         has_media,
         primary,
         secondary,
         delay_seconds,
-        scale,
     }
-}
-
-pub(crate) fn refresh_settings_subtitle_values(
-    state: &Rc<RefCell<PlayerState>>,
-    delay_label: &gtk::Label,
-    scale_label: &gtk::Label,
-    projected_delay: f64,
-) {
-    let (_, scale) = read_subtitle_adjustments(state);
-    delay_label.set_text(&subtitle_delay::format_label(projected_delay));
-    scale_label.set_text(&format_scale(scale));
 }
 
 pub(crate) fn settings_subtitle_track_section(

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use okp_core::gapless::{GaplessPlaybackCapability, effective_gapless_enabled};
 use okp_core::settings::{AppearanceTheme, ScreenshotFormat, Settings};
+use okp_core::subtitle_style::{self, SubtitleStyle};
 
 const DEFAULT_VOLUME: f64 = 100.0;
 const MAX_VOLUME: f64 = 130.0;
@@ -143,6 +144,18 @@ impl SettingsStore {
             saturation: self.saturation(),
             gamma: self.gamma(),
         }
+    }
+
+    pub fn subtitle_scale(&self) -> f64 {
+        subtitle_style::normalized_scale(self.data.subtitles.scale)
+    }
+
+    pub fn subtitle_position(&self) -> i64 {
+        subtitle_style::normalized_position(self.data.subtitles.position)
+    }
+
+    pub fn subtitle_style(&self) -> &'static SubtitleStyle {
+        subtitle_style::from_key(self.data.subtitles.style.as_deref())
     }
 
     pub fn brightness(&self) -> f64 {
@@ -310,6 +323,30 @@ impl SettingsStore {
             && !same_video_adjustment(self.data.video.gamma, value)
         {
             self.data.video.gamma = video_adjustment_setting(value);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_subtitle_scale(&mut self, value: f64) {
+        let value = subtitle_style::normalized_scale(Some(value));
+        if (self.subtitle_scale() - value).abs() >= 0.005 {
+            self.data.subtitles.scale = Some(value);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_subtitle_position(&mut self, value: i64) {
+        let value = subtitle_style::normalized_position(Some(value));
+        if self.subtitle_position() != value {
+            self.data.subtitles.position = Some(value);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_subtitle_style(&mut self, key: &str) {
+        let style = subtitle_style::from_key(Some(key));
+        if self.subtitle_style().key != style.key {
+            self.data.subtitles.style = Some(style.key.to_owned());
             self.dirty = true;
         }
     }
@@ -765,6 +802,75 @@ mod tests {
         assert_eq!(settings.brightness(), 0.0);
         assert_eq!(settings.data.video.brightness, None);
         assert!(settings.dirty);
+    }
+
+    #[test]
+    fn subtitle_presentation_defaults_match_windows() {
+        let settings = store();
+
+        assert_eq!(settings.subtitle_scale(), 1.0);
+        assert_eq!(settings.subtitle_position(), 100);
+        assert_eq!(settings.subtitle_style().key, "Default");
+    }
+
+    #[test]
+    fn subtitle_presentation_normalizes_and_marks_dirty_once() {
+        let mut settings = store();
+
+        settings.set_subtitle_scale(9.0);
+        settings.set_subtitle_position(-10);
+        settings.set_subtitle_style("contrast");
+
+        assert_eq!(settings.subtitle_scale(), 4.0);
+        assert_eq!(settings.subtitle_position(), 0);
+        assert_eq!(settings.subtitle_style().key, "Contrast");
+        assert_eq!(settings.data.subtitles.style.as_deref(), Some("Contrast"));
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_subtitle_scale(4.0);
+        settings.set_subtitle_position(0);
+        settings.set_subtitle_style("Contrast");
+        assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn unknown_subtitle_style_falls_back_without_persisting_an_invalid_key() {
+        let mut settings = store();
+        settings.data.subtitles.style = Some("Cinema".to_owned());
+
+        assert_eq!(settings.subtitle_style().key, "Default");
+        settings.set_subtitle_style("unknown");
+        assert_eq!(settings.data.subtitles.style.as_deref(), Some("Cinema"));
+        assert!(!settings.dirty);
+
+        settings.set_subtitle_style("Bold");
+        assert_eq!(settings.data.subtitles.style.as_deref(), Some("Bold"));
+        assert!(settings.dirty);
+    }
+
+    #[test]
+    fn subtitle_presentation_survives_save_and_reload() {
+        let root = unique_temp_dir("okp-subtitle-settings");
+        let path = root.join("settings.json");
+        let mut settings = SettingsStore {
+            path: path.clone(),
+            data: Settings::default(),
+            dirty: false,
+        };
+
+        settings.set_subtitle_scale(1.4);
+        settings.set_subtitle_position(90);
+        settings.set_subtitle_style("Contrast");
+        settings.save().expect("subtitle settings should save");
+
+        let data = fs::read_to_string(&path).expect("saved settings should be readable");
+        let reloaded = Settings::load(&data).expect("saved settings should reload");
+        assert_eq!(reloaded.subtitles.scale, Some(1.4));
+        assert_eq!(reloaded.subtitles.position, Some(90));
+        assert_eq!(reloaded.subtitles.style.as_deref(), Some("Contrast"));
+
+        fs::remove_dir_all(root).expect("temporary settings directory should be removed");
     }
 
     #[test]

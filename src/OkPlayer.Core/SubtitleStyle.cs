@@ -19,8 +19,8 @@ public sealed class SubtitleStyle
     public string Key { get; }
 
     /// <summary>Ordered mpv option → value pairs. Applied via set-property at engine init and on a live
-    /// settings change. Colors are <c>#RRGGBB</c> (fully opaque) — the universally-accepted mpv color form,
-    /// so they parse identically regardless of whether a build expects a leading alpha byte.</summary>
+    /// settings change. Opaque colors use <c>#RRGGBB</c>; the boxed preset uses mpv's documented
+    /// <c>r/g/b/a</c> form for a semi-transparent background.</summary>
     public IReadOnlyList<KeyValuePair<string, string>> Options { get; }
 
     private SubtitleStyle(string key, params (string Name, string Value)[] options)
@@ -32,24 +32,29 @@ public sealed class SubtitleStyle
         Options = list;
     }
 
-    // The exact set of options every preset writes. Listing all six in each preset (rather than only the ones
+    // The exact set of options every preset writes. Listing all seven in each preset (rather than only the ones
     // that differ from mpv's defaults) is deliberate: switching from any preset to any other then restores
-    // every field, so e.g. going Classic → Default actually repaints yellow back to white.
+    // every field, so e.g. going Classic → Default repaints yellow back to white and going Contrast → Default
+    // removes the background box.
     public static readonly SubtitleStyle Default = new("Default",
         ("sub-color", "#FFFFFF"), ("sub-border-color", "#000000"), ("sub-border-size", "3"),
-        ("sub-shadow-offset", "0"), ("sub-shadow-color", "#000000"), ("sub-bold", "no"));
+        ("sub-border-style", "outline-and-shadow"), ("sub-shadow-offset", "0"),
+        ("sub-back-color", "#000000"), ("sub-bold", "no"));
 
     public static readonly SubtitleStyle Bold = new("Bold",
         ("sub-color", "#FFFFFF"), ("sub-border-color", "#000000"), ("sub-border-size", "3.2"),
-        ("sub-shadow-offset", "0"), ("sub-shadow-color", "#000000"), ("sub-bold", "yes"));
+        ("sub-border-style", "outline-and-shadow"), ("sub-shadow-offset", "0"),
+        ("sub-back-color", "#000000"), ("sub-bold", "yes"));
 
     public static readonly SubtitleStyle Classic = new("Classic",
         ("sub-color", "#FFFF00"), ("sub-border-color", "#000000"), ("sub-border-size", "3"),
-        ("sub-shadow-offset", "0"), ("sub-shadow-color", "#000000"), ("sub-bold", "no"));
+        ("sub-border-style", "outline-and-shadow"), ("sub-shadow-offset", "0"),
+        ("sub-back-color", "#000000"), ("sub-bold", "no"));
 
     public static readonly SubtitleStyle Contrast = new("Contrast",
-        ("sub-color", "#FFFFFF"), ("sub-border-color", "#000000"), ("sub-border-size", "4"),
-        ("sub-shadow-offset", "1.5"), ("sub-shadow-color", "#000000"), ("sub-bold", "no"));
+        ("sub-color", "#FFFFFF"), ("sub-border-color", "#000000"), ("sub-border-size", "2"),
+        ("sub-border-style", "background-box"), ("sub-shadow-offset", "4"),
+        ("sub-back-color", "0.0/0.0/0.0/0.72"), ("sub-bold", "no"));
 
     /// <summary>All presets in display order (the order the Settings buttons render).</summary>
     public static readonly IReadOnlyList<SubtitleStyle> All = new[] { Default, Bold, Classic, Contrast };
