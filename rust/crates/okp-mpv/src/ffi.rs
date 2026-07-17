@@ -64,6 +64,7 @@ pub const MPV_EVENT_END_FILE: c_int = 7;
 pub const MPV_EVENT_FILE_LOADED: c_int = 8;
 pub const MPV_EVENT_VIDEO_RECONFIG: c_int = 17;
 pub const MPV_EVENT_PROPERTY_CHANGE: c_int = 22;
+pub const MPV_ERROR_OPTION_NOT_FOUND: c_int = -5;
 pub const MPV_END_FILE_REASON_EOF: c_int = 0;
 pub const MPV_END_FILE_REASON_STOP: c_int = 2;
 pub const MPV_END_FILE_REASON_QUIT: c_int = 3;

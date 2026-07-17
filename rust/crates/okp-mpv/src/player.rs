@@ -1027,6 +1027,15 @@ impl Mpv {
         // only surfaces the resulting track metadata. Keep this explicit so
         // config=no cannot make sidecar support depend on mpv's default value.
         this.set_option("sub-auto", "exact")?;
+        // Preserve authored ASS/SSA styling. `scale` is deliberate: mpv keeps
+        // script fonts, colors, inline layout, and signs, but still honors OK
+        // Player's explicit sub-scale/sub-pos controls. Older supported libmpv
+        // builds do not expose the secondary-slot equivalent, so that option is
+        // best-effort while every other setup error remains fatal. The GTK raw-
+        // config parser protects both names so a preset cannot silently cross
+        // the native-style boundary.
+        this.set_option("sub-ass-override", "scale")?;
+        this.set_option_if_supported("secondary-sub-ass-override", "scale")?;
         this.apply_options(options)?;
         check(unsafe { ffi::mpv_initialize(this.handle.as_ptr()) })?;
 
@@ -1565,6 +1574,16 @@ impl Mpv {
         })
     }
 
+    fn set_option_if_supported(&self, name: &str, value: &str) -> Result<bool, MpvError> {
+        let name = CString::new(name)?;
+        let value = CString::new(value)?;
+        let code = unsafe {
+            ffi::mpv_set_option_string(self.handle.as_ptr(), name.as_ptr(), value.as_ptr())
+        };
+
+        optional_option_result(code)
+    }
+
     fn command(&self, args: &[&str]) -> Result<(), MpvError> {
         // `_c_args` owns the CString buffers `ptrs` points into; it must outlive
         // the mpv call, so it is bound (not dropped) for the whole scope.
@@ -2079,6 +2098,16 @@ fn check(code: c_int) -> Result<(), MpvError> {
     }
 }
 
+fn optional_option_result(code: c_int) -> Result<bool, MpvError> {
+    if code >= 0 {
+        Ok(true)
+    } else if code == ffi::MPV_ERROR_OPTION_NOT_FOUND {
+        Ok(false)
+    } else {
+        Err(MpvError::LibMpv(code))
+    }
+}
+
 pub(crate) fn end_file_reason(reason: c_int, error: c_int) -> EndFileReason {
     match reason {
         ffi::MPV_END_FILE_REASON_EOF => EndFileReason::Eof,
@@ -2257,6 +2286,40 @@ mod tests {
             "1\n00:00:00,000 --> 00:00:02,000\nSRT SIDECAR\n",
             "subrip",
         );
+    }
+
+    #[test]
+    fn ass_override_boundary_preserves_authored_styles_with_legacy_fallback() {
+        let mpv = Mpv::new().expect("libmpv must be loadable for okp-mpv tests");
+
+        assert_eq!(
+            mpv.reader()
+                .get_string("sub-ass-override")
+                .expect("read primary ASS override mode")
+                .as_deref(),
+            Some("scale")
+        );
+        let secondary = mpv
+            .reader()
+            .get_string("secondary-sub-ass-override")
+            .expect("read secondary ASS override mode when available");
+        assert!(
+            secondary.is_none() || secondary.as_deref() == Some("scale"),
+            "supported secondary override must preserve native styling: {secondary:?}"
+        );
+    }
+
+    #[test]
+    fn optional_option_fallback_ignores_only_unknown_option_names() {
+        assert!(optional_option_result(0).expect("success"));
+        assert!(
+            !optional_option_result(ffi::MPV_ERROR_OPTION_NOT_FOUND)
+                .expect("an older libmpv may omit the optional setting")
+        );
+        assert!(matches!(
+            optional_option_result(-7),
+            Err(MpvError::LibMpv(-7))
+        ));
     }
 
     #[test]

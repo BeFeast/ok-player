@@ -65,6 +65,8 @@ pub(crate) fn populate_subtitle_popover(
         tracks.iter().map(|track| (track.id, track.selected)),
         secondary_subtitle_id,
     );
+    let preset_applicability =
+        primary_subtitle_preset_applicability(&tracks, secondary_subtitle_id);
 
     let off_button = track_button("Off", !has_primary);
     let off_state = Rc::clone(&state);
@@ -129,7 +131,8 @@ pub(crate) fn populate_subtitle_popover(
         read_subtitle_adjustments(&state).1,
         &state,
     ));
-    content.append(&compact_subtitle_style_row(&state));
+    content.append(&subtitle_preset_status_label(preset_applicability));
+    content.append(&compact_subtitle_style_row(&state, preset_applicability));
     let footer = gtk::Label::new(Some("More in Settings → Subtitles"));
     footer.add_css_class("okp-quick-preference-footer");
     footer.set_xalign(0.0);
@@ -1057,7 +1060,10 @@ pub(crate) fn compact_subtitle_size_row(scale: f64, state: &Rc<RefCell<PlayerSta
     row
 }
 
-pub(crate) fn compact_subtitle_style_row(state: &Rc<RefCell<PlayerState>>) -> gtk::Box {
+pub(crate) fn compact_subtitle_style_row(
+    state: &Rc<RefCell<PlayerState>>,
+    applicability: okp_core::subtitle_tracks::SubtitlePresetApplicability,
+) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     row.add_css_class("okp-quick-style-row");
 
@@ -1068,8 +1074,25 @@ pub(crate) fn compact_subtitle_style_row(state: &Rc<RefCell<PlayerState>>) -> gt
     row.append(&label);
 
     let current = state.borrow().settings.subtitle_style();
-    let button = gtk::Button::with_label(&format!("{}  ›", subtitle_style_label(current.key)));
+    let button_label = match applicability {
+        okp_core::subtitle_tracks::SubtitlePresetApplicability::Applies(_) => {
+            format!("{}  ›", subtitle_style_label(current.key))
+        }
+        okp_core::subtitle_tracks::SubtitlePresetApplicability::NativeStyle(_) => {
+            "Native".to_owned()
+        }
+        okp_core::subtitle_tracks::SubtitlePresetApplicability::Unsupported(_)
+        | okp_core::subtitle_tracks::SubtitlePresetApplicability::NoActiveTrack => {
+            "Unavailable".to_owned()
+        }
+    };
+    let button = gtk::Button::with_label(&button_label);
     button.add_css_class("okp-quick-style-button");
+    button.set_sensitive(matches!(
+        applicability,
+        okp_core::subtitle_tracks::SubtitlePresetApplicability::Applies(_)
+    ));
+    button.set_tooltip_text(Some(&subtitle_preset_status_text(applicability)));
     let button_state = Rc::clone(state);
     let button_label = button.clone();
     button.connect_clicked(move |_| {
@@ -1081,6 +1104,43 @@ pub(crate) fn compact_subtitle_style_row(state: &Rc<RefCell<PlayerState>>) -> gt
     });
     row.append(&button);
     row
+}
+
+pub(crate) fn subtitle_preset_status_label(
+    applicability: okp_core::subtitle_tracks::SubtitlePresetApplicability,
+) -> gtk::Label {
+    let label = gtk::Label::new(Some(&subtitle_preset_status_text(applicability)));
+    label.add_css_class("okp-subtitle-preset-status");
+    label.set_xalign(0.0);
+    label.set_wrap(true);
+    label.set_max_width_chars(34);
+    label
+}
+
+pub(crate) fn subtitle_preset_status_text(
+    applicability: okp_core::subtitle_tracks::SubtitlePresetApplicability,
+) -> String {
+    use okp_core::subtitle_tracks::{SubtitlePresetApplicability, SubtitlePresetFormat};
+
+    match applicability {
+        SubtitlePresetApplicability::Applies(format) => format!(
+            "OK Player preset applies to this {} track.",
+            format.display_name()
+        ),
+        SubtitlePresetApplicability::NativeStyle(format) => format!(
+            "{} native style; OK Player preset is not applied.",
+            format.display_name()
+        ),
+        SubtitlePresetApplicability::Unsupported(SubtitlePresetFormat::Image) => {
+            "Image subtitle; style presets are unavailable.".to_owned()
+        }
+        SubtitlePresetApplicability::Unsupported(_) => {
+            "Style support is unavailable for this subtitle format.".to_owned()
+        }
+        SubtitlePresetApplicability::NoActiveTrack => {
+            "Select a subtitle track to use style presets.".to_owned()
+        }
+    }
 }
 
 pub(crate) fn subtitle_style_label(key: &str) -> &'static str {
@@ -1788,6 +1848,23 @@ pub(crate) fn read_secondary_subtitle_id(state: &Rc<RefCell<PlayerState>>) -> Op
         .and_then(Mpv::observed_secondary_subtitle_id)
 }
 
+pub(crate) fn primary_subtitle_preset_applicability(
+    tracks: &[Track],
+    secondary_subtitle_id: Option<i64>,
+) -> okp_core::subtitle_tracks::SubtitlePresetApplicability {
+    okp_core::subtitle_tracks::primary_preset_applicability(
+        tracks
+            .iter()
+            .map(|track| okp_core::subtitle_tracks::SubtitleTrackMetadata {
+                id: track.id,
+                selected: track.selected,
+                codec: track.codec.as_deref(),
+                external_filename: track.external_filename.as_deref(),
+            }),
+        secondary_subtitle_id,
+    )
+}
+
 pub(crate) fn track_button(text: &str, selected: bool) -> gtk::Button {
     let button = gtk::Button::new();
     button.add_css_class("okp-track-row");
@@ -1934,6 +2011,18 @@ pub(crate) fn preview_tracks(kind: TrackKind) -> Option<Vec<Track>> {
             },
         ],
         ("subtitle-empty", TrackKind::Subtitle) => Vec::new(),
+        ("subtitle-srt-selected", TrackKind::Subtitle) => vec![Track {
+            id: 2,
+            kind,
+            selected: true,
+            external: true,
+            external_filename: Some("Episode 1.en.srt".to_owned()),
+            default: false,
+            title: Some("English SDH".to_owned()),
+            lang: Some("eng".to_owned()),
+            codec: Some("subrip".to_owned()),
+            audio_channels: None,
+        }],
         ("subtitle-searchable", TrackKind::Subtitle) => vec![Track {
             id: 2,
             kind,
@@ -1999,6 +2088,7 @@ pub(crate) fn track_label(track: &Track) -> String {
         track.title.as_deref(),
         track.lang.as_deref(),
         track.codec.as_deref(),
+        track.external_filename.as_deref(),
         track.external,
         track.default,
     )

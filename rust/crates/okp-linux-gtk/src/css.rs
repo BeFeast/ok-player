@@ -2441,6 +2441,13 @@ const OKP_STYLESHEET: &str = "
             padding: 2px 4px 2px 7px;
         }
 
+        .okp-subtitle-preset-status {
+            margin: 2px 7px 0;
+            color: rgba(23, 25, 28, 0.56);
+            font-size: 10.5px;
+            line-height: 1.25;
+        }
+
         button.okp-quick-style-button {
             min-height: 26px;
             padding: 2px 8px;
@@ -2455,6 +2462,11 @@ const OKP_STYLESHEET: &str = "
 
         button.okp-quick-style-button:hover {
             background: rgba(0, 0, 0, 0.09);
+        }
+
+        button.okp-quick-style-button:disabled {
+            background: rgba(0, 0, 0, 0.035);
+            color: rgba(23, 25, 28, 0.48);
         }
 
         .okp-quick-preference-footer {
