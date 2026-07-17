@@ -36,6 +36,7 @@ pub mod recents_shelf;
 pub mod screenshot;
 pub mod seek_readout;
 pub mod settings;
+pub mod settings_navigation;
 pub mod sha256sums;
 pub mod shortcuts;
 pub mod srt;
