@@ -1727,8 +1727,6 @@ struct RawMpvConfigError {
 enum SubtitleAdjustment {
     Delay(f64),
     SetDelay(f64),
-    Scale(f64),
-    SetScale(f64),
 }
 
 #[derive(Clone, Copy)]
@@ -1889,7 +1887,6 @@ struct SettingsSubtitleSnapshot {
     primary: String,
     secondary: String,
     delay_seconds: f64,
-    scale: f64,
 }
 
 #[derive(Clone, Copy)]

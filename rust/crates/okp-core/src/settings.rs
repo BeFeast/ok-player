@@ -161,8 +161,9 @@ pub struct VideoSettings {
     pub gamma: Option<f64>,
 }
 
-/// Default-subtitle presentation, currently a Windows-only section (Linux stores
-/// subtitle scale per file in the history document, not as a global default).
+/// Default-subtitle presentation shared by both desktop shells. Linux additionally stores
+/// per-file scale overrides in history; these values remain the defaults for new media and own
+/// global position/style.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SubtitleSettings {
     /// Windows `SubtitleScale` — size multiplier.
@@ -516,6 +517,22 @@ mod tests {
         assert!(!json.contains("appearance"));
         assert!(!json.contains("screenshots"));
         assert!(!json.contains("privacy"));
+    }
+
+    #[test]
+    fn subtitle_defaults_round_trip_in_the_canonical_document() {
+        let raw = r#"{
+            "version": 2,
+            "subtitles": { "scale": 1.4, "position": 90, "style": "Contrast" }
+        }"#;
+        let settings = Settings::load(raw).expect("subtitle defaults should load");
+
+        assert_eq!(settings.subtitles.scale, Some(1.4));
+        assert_eq!(settings.subtitles.position, Some(90));
+        assert_eq!(settings.subtitles.style.as_deref(), Some("Contrast"));
+
+        let json = serde_json::to_string(&settings).expect("serialize");
+        assert_eq!(Settings::load(&json), Some(settings));
     }
 
     #[test]

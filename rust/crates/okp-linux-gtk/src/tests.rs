@@ -1029,6 +1029,18 @@ fn raw_mpv_config_parser_rejects_protected_options() {
     assert!(error.message.contains("managed by OK Player"));
 
     assert!(parse_raw_mpv_config("VO=gpu").is_err());
+
+    for option in [
+        "sub-scale=1.4",
+        "sub-pos=90",
+        "sub-border-style=background-box",
+        "SUB-BACK-COLOR=0/0/0/0.7",
+        "sub-outline-size=6",
+        "sub-shadow-color=#000000",
+    ] {
+        let error = parse_raw_mpv_config(option).expect_err("subtitle option should be managed");
+        assert!(error.message.contains("managed by OK Player"));
+    }
 }
 
 #[test]
@@ -1835,7 +1847,7 @@ fn subtitle_delay_projection_drives_quick_popover_and_settings_refresh() {
 
     let settings = include_str!("settings_pages.rs");
     assert!(settings.contains("projected_delay.set(applied_delay)"));
-    assert!(settings.contains("format_label(projected_delay)"));
+    assert!(settings.contains("format_label(projected_delay.get())"));
 
     let target = subtitle_delay_target(-0.25, SubtitleAdjustment::Delay(0.05))
         .expect("delay adjustment should produce an exact target");
@@ -1847,7 +1859,40 @@ fn subtitle_delay_projection_drives_quick_popover_and_settings_refresh() {
 }
 
 #[test]
-fn subtitle_delay_override_persists_the_applied_settings_value() {
+fn subtitle_presentation_surfaces_stay_curated_and_width_safe() {
+    let settings = include_str!("settings_pages.rs");
+    for choice in [
+        "Small",
+        "Normal",
+        "Large",
+        "Standard",
+        "Raised",
+        "High contrast",
+    ] {
+        assert!(
+            settings.contains(choice),
+            "missing Settings choice {choice}"
+        );
+    }
+    assert!(settings.contains("okp-settings-segmented"));
+    assert!(!settings.contains("sub-border-size"));
+    assert!(!settings.contains("sub-back-color"));
+
+    let popover = include_str!("track_popovers.rs");
+    assert!(popover.contains("compact_subtitle_size_row"));
+    assert!(popover.contains("compact_subtitle_style_row"));
+    assert!(popover.contains("More in Settings → Subtitles"));
+    assert_eq!(subtitle_style_label("Default"), "Default");
+    assert_eq!(subtitle_style_label("Contrast"), "High contrast");
+    assert_eq!(format_scale(1.4), "140%");
+
+    let css = include_str!("css.rs");
+    assert!(css.contains(".okp-quick-style-row"));
+    assert!(css.contains(".okp-settings-hint"));
+}
+
+#[test]
+fn subtitle_presentation_overrides_persist_the_applied_values() {
     let target = subtitle_delay_target(-0.25, SubtitleAdjustment::Delay(0.05))
         .expect("delay adjustment should produce an exact target");
 
@@ -1858,10 +1903,10 @@ fn subtitle_delay_override_persists_the_applied_settings_value() {
         ..history::PlaybackPreferences::default()
     };
 
-    let persisted = playback_preferences_with_delay_overrides(observed, Some(target), None);
+    let persisted = playback_preferences_with_overrides(observed, Some(target), Some(1.4), None);
 
     assert_eq!(persisted.subtitle_delay, Some(-0.2));
-    assert_eq!(persisted.subtitle_scale, Some(1.2));
+    assert_eq!(persisted.subtitle_scale, Some(1.4));
     assert_eq!(persisted.audio_delay, Some(0.1));
 }
 

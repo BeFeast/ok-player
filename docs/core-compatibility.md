@@ -35,8 +35,12 @@ behaves identically on both sides.
   other input falls back to Default on both sides.
 - **Preset data shape.** C# exposes `IReadOnlyList<KeyValuePair<string, string>>` built at class
   init; Rust exposes the same ordered pairs as `'static` slices. Keys, values, ordering, and the
-  invariant that every preset writes the same six options are identical (pinned by the ported
+  invariant that every preset writes the same seven options are identical (pinned by the ported
   suite).
+- **Linux presentation helpers.** `next`, `normalized_scale`, `normalized_position`, and
+  `is_managed_option` are Rust-side extractions for the GTK shell. They encode the same Windows
+  defaults/ranges and preset order, plus the advanced-config protection needed when Linux merges
+  its raw `mpv.conf` text. They do not alter the shared preset data.
 
 ## Playlist → `okp_core::playlist`
 

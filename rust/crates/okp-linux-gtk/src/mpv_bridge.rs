@@ -489,11 +489,14 @@ fn connect_gtk_mpv(
 }
 
 fn create_configured_mpv(state: &Rc<RefCell<PlayerState>>) -> Option<Mpv> {
-    let (hwdec, raw_mpv_config) = {
+    let (hwdec, raw_mpv_config, subtitle_scale, subtitle_position, subtitle_style) = {
         let state = state.borrow();
         (
             state.settings.hardware_decode_mpv_option().to_owned(),
             state.settings.raw_mpv_config().to_owned(),
+            state.settings.subtitle_scale(),
+            state.settings.subtitle_position(),
+            state.settings.subtitle_style(),
         )
     };
     let raw_mpv_options = match parse_raw_mpv_config(&raw_mpv_config) {
@@ -548,6 +551,15 @@ fn create_configured_mpv(state: &Rc<RefCell<PlayerState>>) -> Option<Mpv> {
     if let Err(error) = mpv.set_downmix_surround_to_stereo(downmix_surround) {
         eprintln!("Failed to restore surround downmix: {error}");
     }
+    if let Err(error) = mpv.set_subtitle_scale(subtitle_scale) {
+        eprintln!("Failed to restore subtitle size: {error}");
+    }
+    if let Err(error) = mpv.set_subtitle_position(subtitle_position as f64) {
+        eprintln!("Failed to restore subtitle position: {error}");
+    }
+    if let Err(error) = mpv.set_subtitle_style(subtitle_style.options) {
+        eprintln!("Failed to restore subtitle style: {error}");
+    }
     Some(mpv)
 }
 
@@ -592,6 +604,7 @@ pub(crate) fn parse_raw_mpv_config(text: &str) -> Result<Vec<(String, String)>, 
         if PROTECTED_MPV_OPTIONS
             .iter()
             .any(|protected| name.eq_ignore_ascii_case(protected))
+            || okp_core::subtitle_style::is_managed_option(name)
         {
             return Err(raw_mpv_config_error(
                 line_number,
@@ -785,7 +798,8 @@ pub(crate) fn connect_state_poll(
             } else {
                 0.0
             };
-            let subtitle_position = (100.0 - lift).clamp(0.0, 100.0);
+            let base_position = state.borrow().settings.subtitle_position() as f64;
+            let subtitle_position = okp_core::subtitle_lift::apply_to_position(base_position, lift);
             let position_key = (subtitle_position * 1000.0).round() as i64;
             if subtitle_position_snapshot.replace(Some(position_key)) != Some(position_key)
                 && let Some(mpv) = state.borrow().mpv.as_ref()

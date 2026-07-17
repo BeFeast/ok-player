@@ -1459,6 +1459,16 @@ impl Mpv {
         self.set_double("sub-pos", position.clamp(0.0, 100.0))
     }
 
+    /// Apply one curated subtitle appearance preset live. The shell supplies the trusted option
+    /// map from `okp-core`; keeping this as a narrow batch avoids exposing an arbitrary property
+    /// string setter across the engine boundary.
+    pub fn set_subtitle_style(&self, options: &[(&str, &str)]) -> Result<(), MpvError> {
+        for (name, value) in options {
+            self.command(&["set", name, value])?;
+        }
+        Ok(())
+    }
+
     pub fn adjust_subtitle_scale(&self, delta: f64) -> Result<(), MpvError> {
         self.set_subtitle_scale(self.observed_subtitle_scale() + delta)
     }
@@ -2144,6 +2154,38 @@ mod tests {
             "srt",
             "1\n00:00:00,000 --> 00:00:02,000\nSRT SIDECAR\n",
             "subrip",
+        );
+    }
+
+    #[test]
+    fn curated_subtitle_style_options_apply_live() {
+        let mpv = Mpv::new().expect("libmpv must be loadable for okp-mpv tests");
+        mpv.set_subtitle_style(&[
+            ("sub-border-style", "background-box"),
+            ("sub-border-size", "2"),
+            ("sub-shadow-offset", "4"),
+            ("sub-back-color", "0.0/0.0/0.0/0.72"),
+        ])
+        .expect("curated style should apply");
+
+        assert_eq!(
+            mpv.reader()
+                .get_string("sub-border-style")
+                .expect("read border style")
+                .as_deref(),
+            Some("background-box")
+        );
+        assert_eq!(
+            mpv.reader()
+                .get_double("sub-border-size")
+                .expect("read border size"),
+            Some(2.0)
+        );
+        assert_eq!(
+            mpv.reader()
+                .get_double("sub-shadow-offset")
+                .expect("read background margin"),
+            Some(4.0)
         );
     }
 
