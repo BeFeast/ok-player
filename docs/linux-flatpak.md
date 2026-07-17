@@ -13,7 +13,9 @@ updates must keep the matching Freedesktop Rust SDK extension and codec/VAAPI
 extension branches aligned.
 
 `libmpv` 0.41.0, libplacebo 7.360.1, and libass 0.17.5 are built from pinned,
-redistributable upstream sources. Cargo dependencies are expanded from
+redistributable upstream sources. The application source is also pinned to an
+immutable repository commit so the manifest can move directly to the external
+Flathub repository without a branch or local-directory source. Cargo dependencies are expanded from
 `rust/Cargo.lock` into `rust/packaging/flatpak/cargo-sources.json`; every crate
 has a checksum and Cargo runs with `--offline --locked`. The build script first
 downloads declared sources and then rebuilds with `--disable-download`, so an
@@ -64,6 +66,7 @@ Install the SDKs once:
 ```sh
 flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
 flatpak install --user -y flathub \
+  org.gnome.Platform//50 \
   org.gnome.Sdk//50 \
   org.freedesktop.Sdk.Extension.rust-stable//25.08
 ```

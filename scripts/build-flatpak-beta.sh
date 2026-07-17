@@ -20,11 +20,11 @@ done
 
 mkdir -p "$OUT_DIR" "$STATE_DIR" "$REPO_DIR"
 
-flatpak-builder --user --download-only --force-clean \
+flatpak-builder --user --download-only --force-clean --disable-rofiles-fuse \
   --state-dir="$STATE_DIR" \
   "$BUILD_DIR" "$MANIFEST"
 
-flatpak-builder --user --disable-download --force-clean \
+flatpak-builder --user --disable-download --force-clean --disable-rofiles-fuse \
   --state-dir="$STATE_DIR" \
   --repo="$REPO_DIR" \
   --default-branch=beta \

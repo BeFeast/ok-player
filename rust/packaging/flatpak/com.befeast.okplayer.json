@@ -67,14 +67,9 @@
             ],
             "sources": [
                 {
-                    "type": "dir",
-                    "path": "../../..",
-                    "skip": [
-                        ".git",
-                        ".flatpak-builder",
-                        "artifacts",
-                        "rust/target"
-                    ]
+                    "type": "git",
+                    "url": "https://github.com/BeFeast/ok-player.git",
+                    "commit": "96d95566e1318317c11e480780b29aeda95eebd1"
                 },
                 "cargo-sources.json"
             ],
@@ -92,9 +87,9 @@
                         "-Dvaapi-wayland=enabled"
                     ],
                     "post-install": [
-                        "install -Dm644 Copyright /app/share/licenses/com.befeast.okplayer/mpv-Copyright",
-                        "install -Dm644 LICENSE.GPL /app/share/licenses/com.befeast.okplayer/mpv-LICENSE.GPL",
-                        "install -Dm644 LICENSE.LGPL /app/share/licenses/com.befeast.okplayer/mpv-LICENSE.LGPL"
+                        "install -Dm644 ../Copyright /app/share/licenses/com.befeast.okplayer/mpv-Copyright",
+                        "install -Dm644 ../LICENSE.GPL /app/share/licenses/com.befeast.okplayer/mpv-LICENSE.GPL",
+                        "install -Dm644 ../LICENSE.LGPL /app/share/licenses/com.befeast.okplayer/mpv-LICENSE.LGPL"
                     ],
                     "sources": [
                         {
@@ -119,7 +114,7 @@
                                 "-Dtests=false"
                             ],
                             "post-install": [
-                                "install -Dm644 LICENSE /app/share/licenses/com.befeast.okplayer/libplacebo-LICENSE"
+                                "install -Dm644 ../LICENSE /app/share/licenses/com.befeast.okplayer/libplacebo-LICENSE"
                             ],
                             "sources": [
                                 {
@@ -141,7 +136,7 @@
                                 "-Ddefault_library=shared"
                             ],
                             "post-install": [
-                                "install -Dm644 COPYING /app/share/licenses/com.befeast.okplayer/libass-COPYING"
+                                "install -Dm644 ../COPYING /app/share/licenses/com.befeast.okplayer/libass-COPYING"
                             ],
                             "sources": [
                                 {

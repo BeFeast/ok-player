@@ -52,6 +52,10 @@ app = manifest["modules"][0]
 assert "cargo --offline build --locked" in app["build-commands"][0]
 assert app["build-options"]["env"]["CARGO_NET_OFFLINE"] == "true"
 assert "cargo-sources.json" in app["sources"]
+app_source = app["sources"][0]
+assert app_source["type"] == "git"
+assert app_source["url"] == "https://github.com/BeFeast/ok-player.git"
+assert len(app_source.get("commit", "")) == 40
 
 native_sources = []
 def collect(value):
@@ -63,6 +67,7 @@ def collect(value):
     elif isinstance(value, list):
         for child in value:
             collect(child)
+collect(app["sources"][0])
 collect(app.get("modules", []))
 for source in native_sources:
     if source["type"] == "archive":
