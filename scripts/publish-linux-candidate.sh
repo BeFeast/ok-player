@@ -9,8 +9,10 @@ BUNDLE="${1:?usage: publish-linux-candidate.sh <bundle-dir> <owner/repo> [accept
 REPO="${2:?usage: publish-linux-candidate.sh <bundle-dir> <owner/repo> [acceptance]}"
 ACCEPTANCE="${3:-accepted}"
 STATE_DIR="${OKP_CANDIDATE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/ok-player-candidate}"
+SCRIPT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 TAG="${OKP_CANDIDATE_TAG:-linux-candidate}"
 LOCK="$STATE_DIR/build.lock"
+LOCK_OWNER="$STATE_DIR/build.lock.owner.json"
 PROMOTED="$STATE_DIR/last-promoted.sha"
 CLI="${OKP_CANDIDATE_CLI:-$STATE_DIR/checkout/rust/target/release/okp-candidate}"
 
@@ -22,25 +24,79 @@ case "$ACCEPTANCE" in
 esac
 
 mkdir -p "$STATE_DIR"
-exec 9>"$LOCK"
-flock -n 9 || { echo "another candidate build/publish holds the lock" >&2; exit 1; }
+if [[ "${OKP_CANDIDATE_LOCK_HELD:-}" != "1" ]]; then
+  if [[ -n "${OKP_CANDIDATE_LOCK_CLI:-}" ]]; then
+    LOCK_CLI="$OKP_CANDIDATE_LOCK_CLI"
+  else
+    CC="${CC:-/usr/bin/cc}" cargo build --quiet \
+      --manifest-path "$SCRIPT_ROOT/rust/Cargo.toml" \
+      -p okp-core --bin okp-candidate
+    LOCK_CLI="$SCRIPT_ROOT/rust/target/debug/okp-candidate"
+  fi
+  [[ -x "$LOCK_CLI" ]] || { echo "candidate lock coordinator not found: $LOCK_CLI" >&2; exit 1; }
+  exec "$LOCK_CLI" lock-run \
+    --lock "$LOCK" \
+    --owner "$LOCK_OWNER" \
+    --phase publish \
+    --source-sha "$(jq -r '.source_sha' "$BUNDLE/candidate-build.json")" \
+    -- "$0" "$@"
+fi
 
 "$CLI" verify-bundle --bundle "$BUNDLE"
 
 work="$(mktemp -d)"
-trap 'rm -rf -- "$work"' EXIT
-previous="$work/previous.candidate.linux.json"
+previous_dir="$work/previous"
+existing_dir="$work/existing"
+mkdir -p "$previous_dir" "$existing_dir"
+previous="$previous_dir/candidate.linux.json"
 feed="$work/candidate.linux.json"
 assets_json="$work/assets.json"
+preexisting_assets="$work/preexisting-assets.json"
 prune_plan="$work/prune-plan.txt"
+pointer_attempted=false
+pointer_committed=false
+expected_assets=()
+
+cleanup() {
+  local status="$?"
+  trap - EXIT
+  if [[ "$status" -ne 0 && "$pointer_committed" != "true" ]]; then
+    if [[ "$pointer_attempted" == "true" ]]; then
+      if [[ -s "$previous" ]]; then
+        gh release upload "$TAG" --repo "$REPO" "$previous" --clobber >/dev/null 2>&1 \
+          || echo "warning: failed to restore the previous candidate pointer" >&2
+      else
+        gh release delete-asset "$TAG" candidate.linux.json --repo "$REPO" --yes \
+          >/dev/null 2>&1 || true
+      fi
+    fi
+    for asset in "${expected_assets[@]}"; do
+      if ! jq -e --arg name "$asset" 'index($name) != null' "$preexisting_assets" \
+        >/dev/null 2>&1; then
+        gh release delete-asset "$TAG" "$asset" --repo "$REPO" --yes \
+          >/dev/null 2>&1 || true
+      fi
+    done
+  fi
+  rm -rf -- "$work"
+  exit "$status"
+}
+trap cleanup EXIT
 
 if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
   gh release create "$TAG" --repo "$REPO" --prerelease \
     --title "OK Player Linux candidate (rolling)" \
     --notes "Mutable rolling QA candidate. Assets are replaced in place; this is not a permanent product release."
 fi
-if ! gh release download "$TAG" --repo "$REPO" --pattern candidate.linux.json \
-  --output "$previous" --clobber 2>/dev/null; then
+gh release view "$TAG" --repo "$REPO" --json assets --jq '[.assets[].name]' \
+  >"$preexisting_assets"
+if jq -e 'index("candidate.linux.json") != null' "$preexisting_assets" >/dev/null; then
+  gh release download "$TAG" --repo "$REPO" --pattern candidate.linux.json \
+    --dir "$previous_dir" --clobber || {
+      echo "failed to preserve the existing candidate pointer before publication" >&2
+      exit 1
+    }
+else
   rm -f -- "$previous"
 fi
 
@@ -60,28 +116,56 @@ appimage_name="$(jq -r '.package.artifacts[] | select(.kind == "app-image") | .f
 velopack_name="$(jq -r '.appimage.name' "$feed")"
 sums_name="SHA256SUMS-${build}.txt"
 cp "$BUNDLE/artifacts/SHA256SUMS" "$work/$sums_name"
+expected_assets=("$deb_name" "$appimage_name" "$velopack_name" "$sums_name")
+
+upload_exact_asset() {
+  local source="$1" name="$2"
+  if jq -e --arg name "$name" 'index($name) != null' "$preexisting_assets" >/dev/null; then
+    rm -f -- "$existing_dir/$name"
+    gh release download "$TAG" --repo "$REPO" --pattern "$name" \
+      --dir "$existing_dir" --clobber >/dev/null
+    cmp -s -- "$source" "$existing_dir/$name" || {
+      echo "existing candidate asset $name does not match the verified bundle" >&2
+      return 1
+    }
+    echo "Reusing verified candidate asset $name."
+  else
+    gh release upload "$TAG" --repo "$REPO" "$source"
+  fi
+}
 
 # Upload immutable/versioned bytes first. candidate.linux.json is the single
 # accepted pointer for both lanes and is deliberately uploaded last.
-gh release upload "$TAG" --repo "$REPO" "$BUNDLE/artifacts/deb/$deb_name" --clobber
-gh release upload "$TAG" --repo "$REPO" "$BUNDLE/artifacts/velopack/$appimage_name" --clobber
-gh release upload "$TAG" --repo "$REPO" "$BUNDLE/artifacts/velopack/$velopack_name" --clobber
-gh release upload "$TAG" --repo "$REPO" "$work/$sums_name" --clobber
+upload_exact_asset "$BUNDLE/artifacts/deb/$deb_name" "$deb_name"
+upload_exact_asset "$BUNDLE/artifacts/velopack/$appimage_name" "$appimage_name"
+upload_exact_asset "$BUNDLE/artifacts/velopack/$velopack_name" "$velopack_name"
+upload_exact_asset "$work/$sums_name" "$sums_name"
+pointer_attempted=true
 gh release upload "$TAG" --repo "$REPO" "$feed" --clobber
+pointer_committed=true
 
 # Bound the mutable surface only after the new pointer is usable. The core
 # decides which recognized candidate assets are outside current + history.
-gh release view "$TAG" --repo "$REPO" --json assets --jq '[.assets[].name]' >"$assets_json"
-"$CLI" prune-plan --feed "$feed" --assets "$assets_json" >"$prune_plan"
-while IFS= read -r asset; do
-  [[ -n "$asset" ]] || continue
-  gh release delete-asset "$TAG" "$asset" --repo "$REPO" --yes
-done <"$prune_plan"
+# Cleanup is post-commit maintenance: a pruning failure must not report the
+# already-live pointer as a failed publication.
+if gh release view "$TAG" --repo "$REPO" --json assets --jq '[.assets[].name]' >"$assets_json" \
+  && "$CLI" prune-plan --feed "$feed" --assets "$assets_json" >"$prune_plan"; then
+  while IFS= read -r asset; do
+    [[ -n "$asset" ]] || continue
+    gh release delete-asset "$TAG" "$asset" --repo "$REPO" --yes \
+      || echo "warning: failed to prune candidate asset $asset" >&2
+  done <"$prune_plan"
+else
+  echo "warning: failed to calculate candidate asset pruning after publication" >&2
+fi
 
 if [[ "$ACCEPTANCE" == "accepted" ]]; then
   marker_tmp="$(mktemp -- "$STATE_DIR/last-promoted.sha.XXXXXX")"
   printf '%s\n' "$source_sha" >"$marker_tmp"
-  mv -f -- "$marker_tmp" "$PROMOTED"
+  if ! mv -f -- "$marker_tmp" "$PROMOTED"; then
+    rm -f -- "$marker_tmp"
+    echo "warning: candidate is live but the local promoted marker was not updated" >&2
+  fi
 fi
 
 echo "Published ${version} build ${build} (${source_sha}) to rolling candidate ${TAG}."

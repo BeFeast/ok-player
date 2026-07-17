@@ -16,8 +16,10 @@
 set -euo pipefail
 
 BUNDLE="${1:?usage: promote-linux-candidate.sh <bundle-dir>}"
+SCRIPT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 STATE_DIR="${OKP_CANDIDATE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/ok-player-candidate}"
 LOCK="$STATE_DIR/build.lock"
+LOCK_OWNER="$STATE_DIR/build.lock.owner.json"
 PROMOTED="$STATE_DIR/last-promoted.sha"
 
 RECORD="$BUNDLE/candidate-build.json"
@@ -35,10 +37,22 @@ else
 fi
 
 mkdir -p "$STATE_DIR"
-exec 9>"$LOCK"
-if ! flock -n 9; then
-  echo "another candidate build/promotion holds the lock; refusing to promote concurrently" >&2
-  exit 1
+if [[ "${OKP_CANDIDATE_LOCK_HELD:-}" != "1" ]]; then
+  if [[ -n "${OKP_CANDIDATE_LOCK_CLI:-}" ]]; then
+    LOCK_CLI="$OKP_CANDIDATE_LOCK_CLI"
+  else
+    CC="${CC:-/usr/bin/cc}" cargo build --quiet \
+      --manifest-path "$SCRIPT_ROOT/rust/Cargo.toml" \
+      -p okp-core --bin okp-candidate
+    LOCK_CLI="$SCRIPT_ROOT/rust/target/debug/okp-candidate"
+  fi
+  [[ -x "$LOCK_CLI" ]] || { echo "candidate lock coordinator not found: $LOCK_CLI" >&2; exit 1; }
+  exec "$LOCK_CLI" lock-run \
+    --lock "$LOCK" \
+    --owner "$LOCK_OWNER" \
+    --phase promote \
+    --source-sha "$(jq -r '.source_sha' "$RECORD")" \
+    -- "$0" "$@"
 fi
 
 # Recompute the bundle's package/checksum/Velopack identities immediately

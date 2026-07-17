@@ -11,7 +11,7 @@ The candidate channel lets explicitly enrolled Linux QA installs update from fre
 
 ## Native-builder handoff
 
-`release-linux-candidate.yml` runs every 15 minutes on a generic self-hosted Linux x86_64 runner. It invokes `scripts/build-linux-candidate.sh`, which coalesces all changes at the latest `origin/main`, skips an unchanged SHA, and emits the #340 native bundle. Publication then consumes that exact bundle with `scripts/publish-linux-candidate.sh`; it does not rebuild on `ubuntu-latest`.
+`release-linux-candidate.yml` runs every 15 minutes on a generic self-hosted Linux x86_64 runner. One close-on-exec coordination lock covers `scripts/build-linux-candidate.sh`, the verified-bundle handoff, and `scripts/publish-linux-candidate.sh`. The builder coalesces all changes at the latest `origin/main`, skips an unchanged SHA, and emits the #340 native bundle; publication consumes that exact bundle and never rebuilds on `ubuntu-latest`.
 
 The scheduled path records an `idle`, `building`, or `stalled` heartbeat summary. Manual dispatch remains an operator override for republishing the last verified bundle or changing its acceptance status.
 

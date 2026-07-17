@@ -40,46 +40,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build latest eligible main SHA
-        id: build
+      - name: Build lock coordinator
         env:
           CC: /usr/bin/cc
-        run: ./scripts/build-linux-candidate.sh
+        run: >-
+          cargo build --quiet --manifest-path rust/Cargo.toml
+          -p okp-core --bin okp-candidate
 
-      - name: Resolve verified bundle handoff
-        id: handoff
+      - name: Build and publish exact native bundle
+        id: candidate
         shell: bash
         env:
-          FORCE_REPUBLISH: ${{ inputs.republish_last_bundle || 'false' }}
-          REQUESTED_ACCEPTANCE: ${{ inputs.acceptance || 'accepted' }}
+          CC: /usr/bin/cc
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OKP_CANDIDATE_ACCEPTANCE: ${{ inputs.acceptance || 'accepted' }}
+          OKP_CANDIDATE_FORCE_REPUBLISH: ${{ inputs.republish_last_bundle || 'false' }}
+          OKP_CANDIDATE_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           state_dir="${OKP_CANDIDATE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/ok-player-candidate}"
-          bundle="$(cat "$state_dir/last-bundle.path")"
-          source_sha="$(jq -r '.source_sha' "$bundle/candidate-build.json")"
-          promoted_sha="$(cat "$state_dir/last-promoted.sha" 2>/dev/null || true)"
-          should_publish=false
-          if [[ "$source_sha" != "$promoted_sha" || "$FORCE_REPUBLISH" == "true" ]]; then
-            should_publish=true
-          fi
-          {
-            echo "bundle=$bundle"
-            echo "source_sha=$source_sha"
-            echo "acceptance=$REQUESTED_ACCEPTANCE"
-            echo "should_publish=$should_publish"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Publish exact native bundle
-        id: publish
-        if: steps.handoff.outputs.should_publish == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          state_dir="${OKP_CANDIDATE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/ok-player-candidate}"
-          "$state_dir/checkout/scripts/publish-linux-candidate.sh" \
-            "${{ steps.handoff.outputs.bundle }}" \
-            "${{ github.repository }}" \
-            "${{ steps.handoff.outputs.acceptance }}"
+          rust/target/debug/okp-candidate lock-run \
+            --lock "$state_dir/build.lock" \
+            --owner "$state_dir/build.lock.owner.json" \
+            --phase build-and-publish \
+            --coalesce \
+            -- ./scripts/run-linux-candidate-workflow.sh
 
       - name: Heartbeat and handoff summary
         if: always()
@@ -103,10 +88,10 @@ jobs:
             fi
           fi
 
-          source_sha="${{ steps.handoff.outputs.source_sha }}"
+          source_sha="${{ steps.candidate.outputs.source_sha }}"
           [[ -n "$source_sha" ]] || source_sha="$heartbeat_source_sha"
           [[ -n "$source_sha" ]] || source_sha="${{ github.sha }}"
-          publication_requested="${{ steps.handoff.outputs.should_publish }}"
+          publication_requested="${{ steps.candidate.outputs.should_publish }}"
           [[ -n "$publication_requested" ]] || publication_requested="not reached"
 
           activity="unavailable"
@@ -122,9 +107,8 @@ jobs:
           {
             echo "### Linux candidate handoff"
             echo ""
-            echo "- build step: \`${{ steps.build.outcome }}\`"
-            echo "- handoff step: \`${{ steps.handoff.outcome }}\`"
-            echo "- publish step: \`${{ steps.publish.outcome }}\`"
+            echo "- locked build/publish step: \`${{ steps.candidate.outcome }}\`"
+            echo "- publish result: \`${{ steps.candidate.outputs.publish_result || 'not reached' }}\`"
             echo "- source SHA: \`${source_sha}\`"
             echo "- latest phase: \`${phase}\`"
             echo "- latest detail: ${detail}"

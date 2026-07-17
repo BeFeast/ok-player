@@ -3564,6 +3564,44 @@ fn candidate_builder_defaults_below_beta_one_until_the_base_is_overridden() {
 }
 
 #[test]
+fn candidate_workflow_holds_one_close_on_exec_build_publish_section() {
+    let workflow = include_str!("../../../../.github/workflows/release-linux-candidate.yml");
+    let runner = include_str!("../../../../scripts/run-linux-candidate-workflow.sh");
+    let builder = include_str!("../../../../scripts/build-linux-candidate.sh");
+    let publisher = include_str!("../../../../scripts/publish-linux-candidate.sh");
+
+    assert!(workflow.contains("--phase build-and-publish"));
+    assert!(workflow.contains("-- ./scripts/run-linux-candidate-workflow.sh"));
+    assert!(runner.contains("\"$ROOT/scripts/build-linux-candidate.sh\""));
+    assert!(runner.contains("\"$STATE_DIR/checkout/scripts/publish-linux-candidate.sh\""));
+    assert!(runner.contains("BUNDLE=\"$(cat \"$STATE_DIR/last-bundle.path\")\""));
+    assert!(builder.contains("OKP_CANDIDATE_LOCK_HELD"));
+    assert!(publisher.contains("OKP_CANDIDATE_LOCK_HELD"));
+    assert!(!builder.contains("exec 9>"));
+    assert!(!publisher.contains("exec 9>"));
+}
+
+#[test]
+fn candidate_publish_retry_reuses_exact_assets_and_keeps_pointer_last() {
+    let publisher = include_str!("../../../../scripts/publish-linux-candidate.sh");
+    let reuse = publisher
+        .find("upload_exact_asset \"$BUNDLE/artifacts/deb/$deb_name\"")
+        .expect("versioned asset reuse should be present");
+    let pointer = publisher
+        .find("gh release upload \"$TAG\" --repo \"$REPO\" \"$feed\" --clobber")
+        .expect("candidate pointer upload should be present");
+
+    assert!(
+        reuse < pointer,
+        "the rolling pointer must remain the commit point"
+    );
+    assert!(publisher.contains("cmp -s -- \"$source\" \"$existing_dir/$name\""));
+    assert!(publisher.contains("pointer_committed=false"));
+    assert!(publisher.contains("failed to restore the previous candidate pointer"));
+    assert!(publisher.contains("gh release delete-asset \"$TAG\" \"$asset\""));
+}
+
+#[test]
 fn fine_seek_readout_pairs_projected_timecode_with_frame_number() {
     // Fine seek forward on a 24 fps clip: the shared projection lands on the
     // exact target and the toast reports the matching frame number, exactly as

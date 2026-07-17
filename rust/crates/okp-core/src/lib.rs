@@ -5,6 +5,7 @@ pub mod bookmarks;
 pub mod branding;
 pub mod candidate_build;
 pub mod candidate_channel;
+pub mod candidate_lock;
 pub mod chapter_math;
 pub mod clip_export;
 pub mod companion_window;
