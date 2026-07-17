@@ -81,7 +81,10 @@ impl BuildDecision {
             normalize_sha(head_sha).ok_or_else(|| format!("invalid head SHA: {head_sha:?}"))?;
         // A missing or blank marker means "never built"; only a valid, equal
         // marker skips.
-        if let Some(last) = last_built_sha.map(str::trim).filter(|last| !last.is_empty()) {
+        if let Some(last) = last_built_sha
+            .map(str::trim)
+            .filter(|last| !last.is_empty())
+        {
             let last =
                 normalize_sha(last).ok_or_else(|| format!("invalid last-built SHA: {last:?}"))?;
             if last == head {

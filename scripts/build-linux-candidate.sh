@@ -39,6 +39,11 @@ HEARTBEAT="$STATE_DIR/heartbeat.jsonl"
 
 mkdir -p "$STATE_DIR"
 
+# Publish the stall threshold the external watchdog should use with
+# `okp-candidate classify --stall-after`. Kept beside the heartbeats so the
+# builder and watchdog agree without a private out-of-band value.
+printf '%s\n' "$STALL_SECONDS" >"$STATE_DIR/stall-after-seconds"
+
 now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 now_unix() { date -u +%s; }
 

@@ -42,7 +42,7 @@ Configuration (all optional; no host-specific value is baked in):
 | `OKP_CANDIDATE_BRANCH` | `main` | Branch to track |
 | `OKP_CANDIDATE_VERSION_BASE` | `0.1.0` | Version prefix |
 | `OKP_CANDIDATE_NATIVE_SMOKE` | unset | Optional native-hardware smoke command; when set its evidence is **required** |
-| `OKP_CANDIDATE_STALL_SECONDS` | `900` | Watchdog stall threshold (reference) |
+| `OKP_CANDIDATE_STALL_SECONDS` | `900` | Watchdog stall threshold, published to `stall-after-seconds` |
 
 A single-run lock (`flock` on `build.lock`) makes overlapping schedules safe:
 a second invocation sees the lock, records an idle heartbeat, and exits. Two
