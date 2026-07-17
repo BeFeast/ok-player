@@ -65,7 +65,9 @@ fn fedora_validate(args: &[String]) -> Result<(), String> {
     print_json(&outcome)?;
     match outcome.verdict {
         AcceptanceVerdict::Pass => {
-            println!("Fedora acceptance: PASS");
+            // The banner goes to stderr so stdout stays a parseable outcome JSON
+            // when the harness redirects it to fedora-acceptance-outcome.json.
+            eprintln!("Fedora acceptance: PASS");
             Ok(())
         }
         AcceptanceVerdict::Blocked => {

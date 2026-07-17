@@ -50,6 +50,13 @@ pub const REQUIRED_COVERAGE_AREAS: &[FedoraCoverageArea] = &[
     FedoraCoverageArea::WindowGeometry,
 ];
 
+/// Media capability profiles every acceptance run must account for exactly once.
+/// The low-resource profile must actually run; the real-hardware profile is
+/// skipped-with-evidence on a virtual GPU. A manifest that omits either profile
+/// is structurally incomplete rather than an implicit pass.
+pub const REQUIRED_MEDIA_PROFILES: &[MediaProfile] =
+    &[MediaProfile::LowResource, MediaProfile::RealHardware];
+
 /// Coverage areas that can only be attested in a live desktop session (portals,
 /// drag/drop, window dragging via the compositor). A headless collector leaves
 /// these `NotRun` for operator QA; the contract never lets them be reported
@@ -416,6 +423,22 @@ impl FedoraAcceptanceManifest {
                     "codec {}: RPM Fusion source is not valid in the stock-repos state",
                     check.codec
                 ));
+            }
+        }
+
+        // Media profiles must name every required profile exactly once, so an
+        // empty `media_profiles` can never skip the low-resource gate or the
+        // real-hardware skip check and slip through as a pass.
+        for profile in REQUIRED_MEDIA_PROFILES {
+            let count = self
+                .media_profiles
+                .iter()
+                .filter(|result| result.profile == *profile)
+                .count();
+            match count {
+                1 => {}
+                0 => errors.push(format!("missing required media profile {profile:?}")),
+                _ => errors.push(format!("duplicate media profile {profile:?}")),
             }
         }
 
@@ -873,6 +896,44 @@ mod tests {
             .retain(|c| c.area != FedoraCoverageArea::AppStream);
         let errors = manifest.validate_structure().unwrap_err();
         assert!(errors.iter().any(|e| e.contains("AppStream")));
+    }
+
+    #[test]
+    fn empty_media_profiles_is_a_structural_error_not_a_pass() {
+        let mut manifest = passing_stock_manifest();
+        manifest.media_profiles.clear();
+        let errors = manifest.validate_structure().unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("LowResource")));
+        assert!(errors.iter().any(|e| e.contains("RealHardware")));
+        // The structural gap must fail the verdict rather than pass silently.
+        assert_eq!(manifest.evaluate().verdict, AcceptanceVerdict::Fail);
+    }
+
+    #[test]
+    fn missing_low_resource_profile_is_a_structural_error() {
+        let mut manifest = passing_stock_manifest();
+        manifest
+            .media_profiles
+            .retain(|result| result.profile != MediaProfile::LowResource);
+        let errors = manifest.validate_structure().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("missing required media profile LowResource"))
+        );
+    }
+
+    #[test]
+    fn duplicate_media_profile_is_a_structural_error() {
+        let mut manifest = passing_stock_manifest();
+        let low = manifest.media_profiles[0].clone();
+        manifest.media_profiles.push(low);
+        let errors = manifest.validate_structure().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("duplicate media profile LowResource"))
+        );
     }
 
     #[test]
