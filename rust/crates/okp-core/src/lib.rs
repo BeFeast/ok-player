@@ -4,6 +4,7 @@ pub mod aspect_resize;
 pub mod bookmarks;
 pub mod branding;
 pub mod chapter_math;
+pub mod clip_export;
 pub mod fullscreen_toggle;
 pub mod gapless;
 pub mod hdr;

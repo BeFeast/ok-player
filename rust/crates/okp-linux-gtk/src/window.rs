@@ -344,6 +344,8 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         chrome.show_persistently();
         open_seek_preview(&controls);
     }
+    let more_popover_preview =
+        env::var_os("OKP_OPEN_MORE_POPOVER_ON_STARTUP").map(|_| controls.more_button.clone());
     let volume_preview = env::var_os("OKP_VOLUME_PREVIEW")
         .map(|mode| (controls.volume.clone(), mode.to_string_lossy().into_owned()));
     connect_state_poll(
@@ -399,6 +401,25 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         });
     } else {
         window.present();
+    }
+    if let Some(more_button) = more_popover_preview {
+        // Test-only mapped-anchor poll, symmetric with the volume preview below.
+        // Media launches may defer the initial map while dimensions settle, and
+        // GtkMenuButton::popup is a no-op until its anchor is mapped.
+        let preview_attempts = Rc::new(Cell::new(0_u8));
+        glib::timeout_add_local(Duration::from_millis(100), move || {
+            if more_button.is_mapped() {
+                more_button.popup();
+                return glib::ControlFlow::Break;
+            }
+            let attempts = preview_attempts.get().saturating_add(1);
+            preview_attempts.set(attempts);
+            if attempts >= 50 {
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
     }
     if env::var_os("OKP_OSD_PREVIEW_ON_STARTUP").is_some() {
         let preview_toast = Rc::clone(&status_toast);
