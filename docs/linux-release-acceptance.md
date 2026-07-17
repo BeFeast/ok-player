@@ -58,6 +58,23 @@ path. Settings → Playback renders the current state as a disabled **Deferred /
 and `scripts/smoke-linux-settings.sh <binary> <output> playback` verifies that the packaged shell
 reports that state while rendering the page.
 
+## Shift-locked interactive resize
+
+Holding **Shift** while dragging any window edge or corner locks the current video/client aspect
+ratio; releasing Shift returns to ordinary freeform resize and keeps the size reached so far
+(issue #331). The geometry and the deterministic mid-drag Shift transitions are pure and unit-tested
+in `okp_core::aspect_resize` (all edges/corners, landscape/portrait/square media, minimum-OSC and
+workarea clamps, scale invariance, and Shift press/release mid-drag). The GTK shell keeps the
+compositor-native `begin_resize` path and enforces the lock only through the toplevel `compute-size`
+negotiation, so there is no per-motion `set_default_size` and no configure/resize feedback loop.
+
+Continuous, non-jittering resize and a stable aspect ratio within a small rounding tolerance are a
+`gnome-wayland-operator` row: they depend on the live Mutter build surfacing the compositor's
+proposed size at `compute-size` time and cannot be proven under Xvfb. The operator confirms, in a
+real GNOME/Wayland session, that a Shift-drag from every edge/corner follows the pointer smoothly,
+holds the aspect, never snaps back or drifts off-screen, and that a normal (no-Shift) drag, initial
+fit, fullscreen, maximize/restore, and window drag remain unaffected.
+
 ## Rarely-used video geometry
 
 Aspect, zoom/pan, quarter-turn rotation, fill-screen crop, and deinterlace live only in the
