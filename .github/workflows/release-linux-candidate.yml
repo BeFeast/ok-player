@@ -41,6 +41,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build latest eligible main SHA
+        id: build
         env:
           CC: /usr/bin/cc
         run: ./scripts/build-linux-candidate.sh
@@ -61,12 +62,15 @@ jobs:
           if [[ "$source_sha" != "$promoted_sha" || "$FORCE_REPUBLISH" == "true" ]]; then
             should_publish=true
           fi
-          echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
-          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
-          echo "acceptance=$REQUESTED_ACCEPTANCE" >> "$GITHUB_OUTPUT"
-          echo "should_publish=$should_publish" >> "$GITHUB_OUTPUT"
+          {
+            echo "bundle=$bundle"
+            echo "source_sha=$source_sha"
+            echo "acceptance=$REQUESTED_ACCEPTANCE"
+            echo "should_publish=$should_publish"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Publish exact native bundle
+        id: publish
         if: steps.handoff.outputs.should_publish == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -81,21 +85,52 @@ jobs:
         if: always()
         shell: bash
         run: |
-          set -euo pipefail
+          set +e
           state_dir="${OKP_CANDIDATE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/ok-player-candidate}"
-          heartbeat="$(tail -n 1 "$state_dir/heartbeat.jsonl")"
-          phase="$(jq -r '.phase' <<<"$heartbeat")"
-          timestamp="$(jq -r '.unix_seconds' <<<"$heartbeat")"
-          age="$(( $(date -u +%s) - timestamp ))"
-          stall_after="$(cat "$state_dir/stall-after-seconds")"
+          phase="unavailable"
+          detail="no heartbeat was recorded"
+          heartbeat_source_sha=""
+          timestamp=""
+          if [[ -s "$state_dir/heartbeat.jsonl" ]]; then
+            heartbeat="$(tail -n 1 "$state_dir/heartbeat.jsonl" 2>/dev/null)"
+            if jq -e 'type == "object"' >/dev/null 2>&1 <<<"$heartbeat"; then
+              phase="$(jq -r '.phase // "unavailable"' <<<"$heartbeat")"
+              detail="$(jq -r '.note // ""' <<<"$heartbeat")"
+              heartbeat_source_sha="$(jq -r '.source_sha // ""' <<<"$heartbeat")"
+              timestamp="$(jq -r '.unix_seconds // ""' <<<"$heartbeat")"
+            else
+              detail="latest heartbeat is not valid JSON"
+            fi
+          fi
+
+          source_sha="${{ steps.handoff.outputs.source_sha }}"
+          [[ -n "$source_sha" ]] || source_sha="$heartbeat_source_sha"
+          [[ -n "$source_sha" ]] || source_sha="${{ github.sha }}"
+          publication_requested="${{ steps.handoff.outputs.should_publish }}"
+          [[ -n "$publication_requested" ]] || publication_requested="not reached"
+
+          activity="unavailable"
+          stall_after="$(cat "$state_dir/stall-after-seconds" 2>/dev/null)"
           cli="$state_dir/checkout/rust/target/release/okp-candidate"
-          activity="$($cli classify --phase "$phase" --age-seconds "$age" --stall-after "$stall_after" | jq -r '.')"
+          if [[ -x "$cli" && "$timestamp" =~ ^[0-9]+$ && "$stall_after" =~ ^[0-9]+$ ]]; then
+            age="$(( $(date -u +%s) - timestamp ))"
+            if classified="$($cli classify --phase "$phase" --age-seconds "$age" --stall-after "$stall_after" 2>/dev/null)"; then
+              activity="$(jq -r '.' <<<"$classified" 2>/dev/null)"
+              [[ -n "$activity" ]] || activity="unavailable"
+            fi
+          fi
           {
             echo "### Linux candidate handoff"
             echo ""
-            echo "- source SHA: \`${{ steps.handoff.outputs.source_sha }}\`"
-            echo "- publication requested: \`${{ steps.handoff.outputs.should_publish }}\`"
+            echo "- build step: \`${{ steps.build.outcome }}\`"
+            echo "- handoff step: \`${{ steps.handoff.outcome }}\`"
+            echo "- publish step: \`${{ steps.publish.outcome }}\`"
+            echo "- source SHA: \`${source_sha}\`"
+            echo "- latest phase: \`${phase}\`"
+            echo "- latest detail: ${detail}"
+            echo "- publication requested: \`${publication_requested}\`"
             echo "- heartbeat activity: \`${activity}\`"
             echo "- rolling surface: \`linux-candidate\`"
             echo "- public feed: untouched"
           } >> "$GITHUB_STEP_SUMMARY"
+          exit 0

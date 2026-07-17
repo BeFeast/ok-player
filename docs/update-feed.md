@@ -93,6 +93,9 @@ It is isolated from the three feeds above by construction:
   at least two previous known-good packages for rollback, and uploads build-versioned packages and
   checksums before the shared `candidate.linux.json` pointer. That pointer gates both package lanes,
   so an interrupted promotion leaves the previous candidate usable.
+- Candidate packing consumes Velopack's separate `releases.linux-candidate.json` build output and
+  channel-qualified Full nupkg. It never rewrites or publishes the public `releases.linux.json`;
+  the public package path continues to use the `linux` channel unchanged.
 - **Only** an install with `Settings.updates.channel == candidate` (or `OKP_LINUX_UPDATE_CHANNEL=
   candidate`) fetches it. Every default install is `public` and never touches the candidate surface.
 

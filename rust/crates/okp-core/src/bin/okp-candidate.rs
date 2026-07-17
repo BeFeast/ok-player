@@ -12,6 +12,8 @@
 //!   okp-candidate promotable --record PATH
 //!   okp-candidate classify --phase idle|building --age-seconds N \
 //!       [--stall-after N]
+//!   okp-candidate stage-velopack --output-dir DIR --channel CHANNEL \
+//!       --package-id ID --version VERSION --versioned-appimage FILE
 
 use std::env;
 use std::fs;
@@ -25,6 +27,7 @@ use okp_core::candidate_build::{
 };
 use okp_core::candidate_channel::{AcceptanceStatus, CandidateFeed};
 use okp_core::sha256sums::sha256_hex;
+use okp_core::velopack_artifacts::stage_versioned_appimage;
 
 fn main() {
     if let Err(error) = run() {
@@ -44,8 +47,20 @@ fn run() -> Result<(), String> {
         Some("prune-plan") => prune_plan(&args[1..]),
         Some("version") => version(&args[1..]),
         Some("classify") => classify(&args[1..]),
+        Some("stage-velopack") => stage_velopack(&args[1..]),
         _ => Err(usage()),
     }
+}
+
+fn stage_velopack(args: &[String]) -> Result<(), String> {
+    let identity = stage_versioned_appimage(
+        Path::new(value(args, "--output-dir")?),
+        value(args, "--channel")?,
+        value(args, "--package-id")?,
+        value(args, "--version")?,
+        value(args, "--versioned-appimage")?,
+    )?;
+    print_json(&identity)
 }
 
 fn verify_bundle(args: &[String]) -> Result<(), String> {
@@ -264,5 +279,5 @@ fn optional_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 }
 
 fn usage() -> String {
-    "usage:\n  okp-candidate decide --head SHA [--last SHA]\n  okp-candidate record --source-sha SHA --build-number N --version V --started-at TS --finished-at TS [--require-native-hardware] --deb PATH --appimage PATH --gate name:status[:detail] ...\n  okp-candidate promotable --record PATH\n  okp-candidate verify-bundle --bundle DIR\n  okp-candidate feed --bundle DIR --base-url URL --acceptance pending|accepted|rejected [--previous PATH] --output PATH\n  okp-candidate prune-plan --feed PATH --assets PATH\n  okp-candidate version --base VERSION --build N\n  okp-candidate classify --phase idle|building --age-seconds N [--stall-after N]".to_owned()
+    "usage:\n  okp-candidate decide --head SHA [--last SHA]\n  okp-candidate record --source-sha SHA --build-number N --version V --started-at TS --finished-at TS [--require-native-hardware] --deb PATH --appimage PATH --gate name:status[:detail] ...\n  okp-candidate promotable --record PATH\n  okp-candidate verify-bundle --bundle DIR\n  okp-candidate feed --bundle DIR --base-url URL --acceptance pending|accepted|rejected [--previous PATH] --output PATH\n  okp-candidate prune-plan --feed PATH --assets PATH\n  okp-candidate version --base VERSION --build N\n  okp-candidate classify --phase idle|building --age-seconds N [--stall-after N]\n  okp-candidate stage-velopack --output-dir DIR --channel CHANNEL --package-id ID --version VERSION --versioned-appimage FILE".to_owned()
 }

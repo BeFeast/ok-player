@@ -233,6 +233,100 @@ fn linux_packaging_installs_launcher_identity_asset() {
         assert!(contents.contains("for size in 16 24 32 48 64"));
         assert!(contents.contains("usr/share/icons/hicolor/${size}x${size}/apps"));
     }
+
+    let velopack = fs::read_to_string(root.join("scripts/package-linux-velopack.sh"))
+        .expect("Velopack packaging script should be readable");
+    assert!(velopack.contains("okp-candidate\" stage-velopack"));
+    assert!(!velopack.contains("$PACK_ID.AppImage"));
+    assert!(!velopack.contains("$PACK_ID-$VERSION-linux-full.nupkg"));
+}
+
+#[test]
+fn real_velopack_pack_resolves_candidate_channel_artifact_identities() {
+    if std::env::var_os("OKP_RUN_VELOPACK_PACK_TEST").is_none() {
+        return;
+    }
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let version = "0.11.0-beta.0.367";
+    let channel = "linux-candidate";
+    let package_id = okp_core::velopack_artifacts::LINUX_VELOPACK_PACKAGE_ID;
+    let fixture = okp_test_fixtures::run_velopack_pack(
+        package_id,
+        version,
+        channel,
+        &root.join("rust/packaging/linux/com.befeast.okplayer.svg"),
+    )
+    .expect("real Velopack candidate pack should succeed");
+    let versioned_name = format!("OK-Player-{version}-x86_64.AppImage");
+    let identity = okp_core::velopack_artifacts::stage_versioned_appimage(
+        &fixture.output_dir,
+        channel,
+        package_id,
+        version,
+        &versioned_name,
+    )
+    .expect("channel-qualified Velopack outputs should resolve and stage");
+
+    assert_eq!(identity.feed_file_name, "releases.linux-candidate.json");
+    assert_eq!(identity.package_id, package_id);
+    assert_eq!(identity.version, version);
+    assert_eq!(
+        identity.full_package_file_name,
+        format!("{package_id}-{version}-linux-candidate-full.nupkg")
+    );
+    assert_eq!(
+        identity.appimage_file_name,
+        format!("{package_id}-linux-candidate.AppImage")
+    );
+    assert!(identity.full_package_size > 0);
+    assert!(identity.appimage_size > 0);
+    let source = fs::read(fixture.output_dir.join(&identity.appimage_file_name))
+        .expect("standalone AppImage should be readable");
+    let staged = fs::read(fixture.output_dir.join(&versioned_name))
+        .expect("versioned AppImage should be readable");
+    assert_eq!(staged, source);
+
+    fs::write(fixture.output_dir.join(&identity.appimage_file_name), [])
+        .expect("standalone AppImage should be corruptible for the failure regression");
+    let error = okp_core::velopack_artifacts::stage_versioned_appimage(
+        &fixture.output_dir,
+        channel,
+        package_id,
+        version,
+        &versioned_name,
+    )
+    .expect_err("a corrupt standalone AppImage must fail staging");
+    assert!(error.contains("standalone AppImage matching the Full package"));
+    assert!(
+        !fixture.output_dir.join(&versioned_name).exists(),
+        "failure must remove the apparently versioned output"
+    );
+
+    let public_fixture = okp_test_fixtures::run_velopack_pack(
+        package_id,
+        version,
+        "linux",
+        &root.join("rust/packaging/linux/com.befeast.okplayer.svg"),
+    )
+    .expect("real Velopack public pack should succeed");
+    let public_identity = okp_core::velopack_artifacts::stage_versioned_appimage(
+        &public_fixture.output_dir,
+        "linux",
+        package_id,
+        version,
+        &versioned_name,
+    )
+    .expect("public-channel Velopack outputs should remain supported");
+    assert_eq!(public_identity.feed_file_name, "releases.linux.json");
+    assert_eq!(
+        public_identity.full_package_file_name,
+        format!("{package_id}-{version}-linux-full.nupkg")
+    );
+    assert_eq!(
+        public_identity.appimage_file_name,
+        format!("{package_id}.AppImage")
+    );
 }
 
 #[test]
@@ -3307,7 +3401,7 @@ fn candidate_deb_feed_sha_mismatch_is_refused_before_download() {
 fn candidate_appimage_source_uses_the_manifest_bound_full_package() {
     let package = CandidateAppImage {
         package_id: "com.befeast.okplayer".to_owned(),
-        name: "com.befeast.okplayer-0.11.0-beta.1.42-linux-full.nupkg".to_owned(),
+        name: "com.befeast.okplayer-0.11.0-beta.1.42-linux-candidate-full.nupkg".to_owned(),
         url: "https://example.invalid/linux-candidate/full.nupkg".to_owned(),
         size: 1234,
         sha256: "a".repeat(64),

@@ -291,9 +291,9 @@ mod tests {
     fn appimage(version: &str, sha256: &str) -> CandidateAppImage {
         CandidateAppImage {
             package_id: "com.befeast.okplayer".to_owned(),
-            name: format!("com.befeast.okplayer-{version}-linux-full.nupkg"),
+            name: format!("com.befeast.okplayer-{version}-linux-candidate-full.nupkg"),
             url: format!(
-                "https://example.invalid/rolling/com.befeast.okplayer-{version}-linux-full.nupkg"
+                "https://example.invalid/rolling/com.befeast.okplayer-{version}-linux-candidate-full.nupkg"
             ),
             size: 8484,
             sha256: sha256.to_owned(),
@@ -484,8 +484,8 @@ mod tests {
             },
             "appimage": {
                 "package_id": "com.befeast.okplayer",
-                "name": "com.befeast.okplayer-0.11.0-beta.0.108-linux-full.nupkg",
-                "url": "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/com.befeast.okplayer-0.11.0-beta.0.108-linux-full.nupkg",
+                "name": "com.befeast.okplayer-0.11.0-beta.0.108-linux-candidate-full.nupkg",
+                "url": "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/com.befeast.okplayer-0.11.0-beta.0.108-linux-candidate-full.nupkg",
                 "size": 7654321,
                 "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
                 "sha1": "1111111111111111111111111111111111111111"
@@ -502,8 +502,8 @@ mod tests {
                     },
                     "appimage": {
                         "package_id": "com.befeast.okplayer",
-                        "name": "com.befeast.okplayer-0.11.0-beta.0.107-linux-full.nupkg",
-                        "url": "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/com.befeast.okplayer-0.11.0-beta.0.107-linux-full.nupkg",
+                        "name": "com.befeast.okplayer-0.11.0-beta.0.107-linux-candidate-full.nupkg",
+                        "url": "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/com.befeast.okplayer-0.11.0-beta.0.107-linux-candidate-full.nupkg",
                         "size": 7000,
                         "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
                         "sha1": "2222222222222222222222222222222222222222"
@@ -520,8 +520,8 @@ mod tests {
                     },
                     "appimage": {
                         "package_id": "com.befeast.okplayer",
-                        "name": "com.befeast.okplayer-0.11.0-beta.0.106-linux-full.nupkg",
-                        "url": "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/com.befeast.okplayer-0.11.0-beta.0.106-linux-full.nupkg",
+                        "name": "com.befeast.okplayer-0.11.0-beta.0.106-linux-candidate-full.nupkg",
+                        "url": "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/com.befeast.okplayer-0.11.0-beta.0.106-linux-candidate-full.nupkg",
                         "size": 6000,
                         "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         "sha1": "3333333333333333333333333333333333333333"
@@ -543,7 +543,7 @@ mod tests {
         assert_eq!(update.package.name, "ok-player_0.11.0-beta.0.108_amd64.deb");
         assert_eq!(
             update.appimage.name,
-            "com.befeast.okplayer-0.11.0-beta.0.108-linux-full.nupkg"
+            "com.befeast.okplayer-0.11.0-beta.0.108-linux-candidate-full.nupkg"
         );
         assert_eq!(
             update.commit_sha,
