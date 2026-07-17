@@ -5,6 +5,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SPEC="$ROOT/rust/packaging/fedora/ok-player.spec"
 OUT_DIR="${1:-$ROOT/artifacts/linux/rpm/source}"
+GIT=(git --git-dir="$ROOT/.git" --work-tree="$ROOT")
 
 for tool in cargo git rpmbuild tar gzip zstd sha256sum touch flock; do
   command -v "$tool" >/dev/null 2>&1 || {
@@ -13,15 +14,20 @@ for tool in cargo git rpmbuild tar gzip zstd sha256sum touch flock; do
   }
 done
 
+if ! "${GIT[@]}" rev-parse --verify HEAD >/dev/null 2>&1; then
+  echo "RPM source builds require a committed Git checkout at $ROOT." >&2
+  exit 2
+fi
+
 if [[ "${OKP_RPM_ALLOW_DIRTY:-0}" != "1" ]] &&
-  { ! git -C "$ROOT" diff --quiet || ! git -C "$ROOT" diff --cached --quiet; }; then
+  { ! "${GIT[@]}" diff --quiet || ! "${GIT[@]}" diff --cached --quiet; }; then
   echo "RPM source builds require a clean committed tree (set OKP_RPM_ALLOW_DIRTY=1 only for local experiments)." >&2
   exit 2
 fi
 
 UPSTREAM_VERSION="${OKP_RPM_UPSTREAM_VERSION:-0.11.0-beta.1}"
-SOURCE_EPOCH="${SOURCE_DATE_EPOCH:-$(git -C "$ROOT" log -1 --format=%ct HEAD)}"
-SOURCE_COMMIT="$(git -C "$ROOT" rev-parse HEAD)"
+SOURCE_EPOCH="${SOURCE_DATE_EPOCH:-$("${GIT[@]}" log -1 --format=%ct HEAD)}"
+SOURCE_COMMIT="$("${GIT[@]}" rev-parse HEAD)"
 PREFIX="ok-player-$UPSTREAM_VERSION"
 TMP_DIR="$(mktemp -d)"
 RPM_TOPDIR="/tmp/ok-player-rpmbuild"
@@ -51,7 +57,7 @@ fi
 rm -f "$RPM_TOPDIR"
 ln -s "$TMP_DIR/rpmbuild" "$RPM_TOPDIR"
 
-git -C "$ROOT" archive --format=tar --prefix="$PREFIX/" HEAD \
+"${GIT[@]}" archive --format=tar --prefix="$PREFIX/" HEAD \
   | gzip -n -9 > "$OUT_DIR/$PREFIX.tar.gz"
 
 cargo vendor \

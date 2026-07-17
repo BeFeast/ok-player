@@ -25,16 +25,21 @@ jobs:
       matrix:
         fedora: ['43', '44']
     steps:
+      - name: Install checkout prerequisite
+        run: |
+          dnf install -y --disablerepo=fedora-cisco-openh264 git dnf-plugins-core
+          dnf config-manager setopt fedora-cisco-openh264.enabled=0
+
+      - uses: actions/checkout@v4
+
       - name: Install Fedora build tooling
         run: |
           dnf install -y \
-            cargo rust git gcc gcc-c++ make findutils diffutils which \
-            rpm-build rpmdevtools rpmlint dnf-plugins-core zstd gzip tar \
+            cargo rust gcc gcc-c++ make findutils diffutils which \
+            rpm-build rpmdevtools rpmlint zstd gzip tar \
             pkgconf-pkg-config gtk4-devel mpv-devel libX11-devel \
             wayland-devel mesa-libEGL-devel mesa-libGL-devel \
             desktop-file-utils appstream xdg-utils
-
-      - uses: actions/checkout@v4
 
       - name: Build, lint, install, upgrade, and remove
         env:

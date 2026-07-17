@@ -28,7 +28,7 @@ for artifact in "$SOURCE_DIR"/*; do
 done
 (
   cd "$SOURCE_DIR"
-  sha256sum *
+  sha256sum -- ./*
 ) > "$OUT_DIR/source-reproducibility.txt"
 echo "Fedora source artifacts are byte-identical across two clean builds" >> "$OUT_DIR/source-reproducibility.txt"
 
