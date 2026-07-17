@@ -1190,8 +1190,10 @@ struct ChromeVisibility {
     hide_source: Rc<RefCell<Option<glib::SourceId>>>,
     pin_count: Rc<Cell<u32>>,
     auto_hide_enabled: Rc<Cell<bool>>,
+    has_media: Rc<Cell<bool>>,
     surface_suppressed: Rc<Cell<bool>>,
     is_revealed: Rc<Cell<bool>>,
+    osc_visibility: Rc<Cell<okp_core::osc_visibility::OscVisibility>>,
 }
 
 impl ChromeVisibility {
@@ -1204,6 +1206,7 @@ impl ChromeVisibility {
         revealer.set_transition_type(gtk::RevealerTransitionType::None);
         revealer.set_reveal_child(true);
         revealer.set_can_target(false);
+        revealer.set_sensitive(false);
         revealer.set_visible(false);
 
         Self {
@@ -1215,8 +1218,10 @@ impl ChromeVisibility {
             hide_source: Rc::new(RefCell::new(None)),
             pin_count: Rc::new(Cell::new(0)),
             auto_hide_enabled: Rc::new(Cell::new(false)),
+            has_media: Rc::new(Cell::new(false)),
             surface_suppressed: Rc::new(Cell::new(false)),
             is_revealed: Rc::new(Cell::new(true)),
+            osc_visibility: Rc::new(Cell::new(okp_core::osc_visibility::OscVisibility::HIDDEN)),
         }
     }
 
@@ -1256,16 +1261,44 @@ impl ChromeVisibility {
     }
 
     fn set_has_media(&self, has_media: bool) {
-        self.revealer
-            .set_visible(has_media && !self.surface_suppressed.get());
-        self.revealer
-            .set_can_target(has_media && self.is_revealed.get());
+        if self.has_media.replace(has_media) != has_media {
+            self.sync_osc_visibility();
+        }
     }
 
     fn set_surface_suppressed(&self, suppressed: bool) {
-        self.surface_suppressed.set(suppressed);
-        if suppressed {
-            self.revealer.set_visible(false);
+        if self.surface_suppressed.replace(suppressed) != suppressed {
+            self.sync_osc_visibility();
+        }
+    }
+
+    fn sync_osc_visibility(&self) {
+        Self::apply_osc_visibility(
+            &self.revealer,
+            self.has_media.get(),
+            self.surface_suppressed.get(),
+            self.is_revealed.get(),
+            &self.osc_visibility,
+        );
+    }
+
+    fn apply_osc_visibility(
+        revealer: &gtk::Revealer,
+        has_media: bool,
+        surface_suppressed: bool,
+        revealed: bool,
+        previous: &Cell<okp_core::osc_visibility::OscVisibility>,
+    ) {
+        let next = okp_core::osc_visibility::project(has_media, surface_suppressed, revealed);
+        let old = previous.replace(next);
+        if old.visible != next.visible {
+            revealer.set_visible(next.visible);
+        }
+        if old.focusable != next.focusable {
+            revealer.set_sensitive(next.focusable);
+        }
+        if old.hit_testable != next.hit_testable {
+            revealer.set_can_target(next.hit_testable);
         }
     }
 
@@ -1310,7 +1343,8 @@ impl ChromeVisibility {
     }
 
     fn set_all_revealed(&self, revealed: bool) {
-        Self::set_motion_widget_state(&self.revealer, revealed);
+        self.sync_osc_visibility();
+        Self::set_motion_widget_class(&self.revealer, revealed);
         for widget in self.linked_motion_widgets.borrow().iter() {
             Self::set_motion_widget_state(widget, revealed);
         }
@@ -1332,6 +1366,10 @@ impl ChromeVisibility {
     fn set_motion_widget_state(widget: &impl IsA<gtk::Widget>, revealed: bool) {
         widget.set_can_target(revealed);
         widget.set_sensitive(revealed);
+        Self::set_motion_widget_class(widget, revealed);
+    }
+
+    fn set_motion_widget_class(widget: &impl IsA<gtk::Widget>, revealed: bool) {
         if revealed {
             widget.remove_css_class("is-hidden");
         } else {
@@ -1366,12 +1404,22 @@ impl ChromeVisibility {
         let hide_source = Rc::clone(&self.hide_source);
         let pin_count = Rc::clone(&self.pin_count);
         let auto_hide_enabled = Rc::clone(&self.auto_hide_enabled);
+        let has_media = Rc::clone(&self.has_media);
+        let surface_suppressed = Rc::clone(&self.surface_suppressed);
         let is_revealed = Rc::clone(&self.is_revealed);
+        let osc_visibility = Rc::clone(&self.osc_visibility);
         let source_id = glib::timeout_add_local(Duration::from_millis(2500), move || {
             hide_source.borrow_mut().take();
             if auto_hide_enabled.get() && pin_count.get() == 0 {
                 is_revealed.set(false);
-                Self::set_motion_widget_state(&revealer, false);
+                Self::apply_osc_visibility(
+                    &revealer,
+                    has_media.get(),
+                    surface_suppressed.get(),
+                    false,
+                    &osc_visibility,
+                );
+                Self::set_motion_widget_class(&revealer, false);
                 for widget in linked_motion_widgets.borrow().iter() {
                     Self::set_motion_widget_state(widget, false);
                 }

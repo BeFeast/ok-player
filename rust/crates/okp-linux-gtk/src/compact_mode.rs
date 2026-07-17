@@ -46,7 +46,6 @@ pub(crate) struct CompactMode {
     seek: gtk::Scale,
     updating_seek: Rc<Cell<bool>>,
     standard_chrome: gtk::Revealer,
-    standard_osc: gtk::Revealer,
     side_panel: gtk::Revealer,
     empty_surface: gtk::Revealer,
     resize_handles: Vec<gtk::Box>,
@@ -148,7 +147,6 @@ impl CompactMode {
             seek,
             updating_seek: Rc::new(Cell::new(false)),
             standard_chrome: window_chrome.widget().clone(),
-            standard_osc: chrome.widget().clone(),
             side_panel: controls.up_next_revealer.clone(),
             empty_surface: empty_surface.widget().clone(),
             resize_handles,
@@ -186,7 +184,6 @@ impl CompactMode {
             mode.play_button.set_visible(false);
             mode.bottom_bar.set_visible(false);
             mode.standard_chrome.set_visible(false);
-            mode.standard_osc.set_visible(false);
             mode.side_panel.set_visible(false);
             mode.empty_surface.set_visible(false);
             mode.chrome.set_surface_suppressed(true);
@@ -384,7 +381,6 @@ impl CompactMode {
         self.play_button.set_visible(false);
         self.bottom_bar.set_visible(false);
         self.standard_chrome.set_visible(false);
-        self.standard_osc.set_visible(false);
         self.side_panel.set_visible(false);
         self.empty_surface.set_visible(false);
         self.chrome.set_surface_suppressed(true);
@@ -449,7 +445,6 @@ impl CompactMode {
         self.bottom_bar.set_visible(compact);
         self.standard_chrome
             .set_visible(!compact && !self.window.is_fullscreen());
-        self.standard_osc.set_visible(!compact);
         self.side_panel.set_visible(!compact);
         self.empty_surface.set_visible(!compact);
         self.chrome.set_surface_suppressed(compact);
