@@ -853,6 +853,7 @@ enum LinuxUpdateTarget {
 }
 
 enum LinuxUpdateCheckResult {
+    ManagedExternally,
     UpToDate,
     Available(PendingLinuxUpdate),
     Failed(String),
@@ -863,6 +864,7 @@ enum LinuxUpdateStatus {
     #[default]
     NotChecked,
     Checking,
+    ManagedExternally,
     UpToDate,
     Available(PendingLinuxUpdate),
     Failed(String),
@@ -871,6 +873,7 @@ enum LinuxUpdateStatus {
 impl LinuxUpdateStatus {
     fn from_check_result(result: &LinuxUpdateCheckResult) -> Self {
         match result {
+            LinuxUpdateCheckResult::ManagedExternally => Self::ManagedExternally,
             LinuxUpdateCheckResult::UpToDate => Self::UpToDate,
             LinuxUpdateCheckResult::Available(update) => Self::Available(update.clone()),
             LinuxUpdateCheckResult::Failed(error) => Self::Failed(error.clone()),
@@ -894,6 +897,7 @@ impl LinuxUpdateStatus {
 
     fn settings_status_text(&self, auto_check_enabled: bool) -> String {
         match self {
+            Self::ManagedExternally => "Updates are managed by Flatpak".to_owned(),
             Self::NotChecked => update_status_intro(auto_check_enabled).to_owned(),
             Self::Checking => "Checking the update feed...".to_owned(),
             Self::UpToDate => "OK Player is up to date".to_owned(),

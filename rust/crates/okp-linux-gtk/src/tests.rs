@@ -3466,6 +3466,30 @@ fn deb_update_action_requests_install() {
 }
 
 #[test]
+fn flatpak_install_detection_uses_id_or_sandbox_marker() {
+    use std::ffi::OsStr;
+
+    assert!(flatpak_install_detected(
+        Some(OsStr::new("com.befeast.okplayer")),
+        false
+    ));
+    assert!(flatpak_install_detected(None, true));
+    assert!(!flatpak_install_detected(None, false));
+    assert!(!flatpak_install_detected(Some(OsStr::new("")), false));
+}
+
+#[test]
+fn externally_managed_updates_are_inert_and_honest() {
+    let managed = LinuxUpdateStatus::from_check_result(&LinuxUpdateCheckResult::ManagedExternally);
+    assert_eq!(
+        managed.settings_status_text(true),
+        "Updates are managed by Flatpak"
+    );
+    assert_eq!(managed.action_label(), "Check for updates");
+    assert!(managed.pending_update().is_none());
+}
+
+#[test]
 fn linux_update_status_reflects_last_check_result() {
     let up_to_date = LinuxUpdateStatus::from_check_result(&LinuxUpdateCheckResult::UpToDate);
     assert_eq!(

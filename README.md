@@ -42,7 +42,7 @@ Download the latest installer from [Releases](https://github.com/BeFeast/ok-play
 
 ### Install on Linux
 
-Linux builds are published on the [Releases](https://github.com/BeFeast/ok-player/releases) page under `linux-v*` tags. Two package lanes are supported:
+Linux builds are published on the [Releases](https://github.com/BeFeast/ok-player/releases) page under `linux-v*` tags. The `.deb` and AppImage lanes are release packages; a separate Flatpak beta repository exists for packaging acceptance and is not yet a Flathub listing.
 
 **Debian / Ubuntu (`.deb`)**
 
@@ -64,9 +64,17 @@ chmod +x OK-Player-<version>-x86_64.AppImage
 
 The AppImage self-updates in place through the same static HTTPS feed (Velopack).
 
+**Flatpak beta (test repository)**
+
+The source-pinned Flatpak lane builds and exports a local `beta` repository.
+It uses Flatpak-managed updates and the Freedesktop `codecs-extra` extension.
+See [Linux Flatpak beta lane](docs/linux-flatpak.md) for build, install,
+update, uninstall, codec-mask, and live-desktop acceptance instructions.
+OK Player is not available on Flathub until an external submission is accepted.
+
 **Runtime requirements.** A GTK4 desktop with libmpv available; hardware video decode uses VA-API where present. OK Player runs under X11 and Wayland; some behaviors (drag/drop, portals, compositor fullscreen) are validated only on GNOME/Wayland — see [Supported environments](#supported-environments).
 
-**Update.** Both lanes check the static feed and apply updates in place; there is no separate command to run.
+**Update.** The `.deb` and AppImage lanes check the static feed and apply updates in place; Flatpak updates are owned by the configured Flatpak repository.
 
 **Rollback / uninstall.**
 
@@ -83,12 +91,13 @@ Per-user settings and playback history live in human-readable JSON under your co
 
 ### Supported environments
 
-The `.deb` targets current Debian/Ubuntu; the AppImage targets any glibc desktop new enough for GTK4. Linux acceptance is graded by evidence level (model-unit, headless Xvfb render, installed-package, and live GNOME/Wayland operator) — see [`docs/linux-release-acceptance.md`](docs/linux-release-acceptance.md). Rows that require a real desktop (file/folder chooser, drag/drop, clipboard, portals, compositor fullscreen, keyboard focus) are only ever marked passing by the live operator level; headless runs leave them unverified. The distro/session/package matrix for a given release is recorded in that release's notes.
+The `.deb` targets current Debian/Ubuntu; the AppImage targets any glibc desktop new enough for GTK4; the Flatpak beta targets GNOME/Freedesktop 50/25.08 and must be tested on GNOME and KDE Wayland. Linux acceptance is graded by evidence level (model-unit, headless Xvfb render, installed-package, and live GNOME/Wayland operator) — see [`docs/linux-release-acceptance.md`](docs/linux-release-acceptance.md). Rows that require a real desktop (file/folder chooser, drag/drop, clipboard, portals, compositor fullscreen, keyboard focus) are only ever marked passing by the live operator level; headless runs leave them unverified. The distro/session/package matrix for a given release is recorded in that release's notes.
 
 ## Docs
 
 - 📋 **[Product Requirements](docs/OK-Player-PRD.md)** — the full spec: pillars, information architecture, every screen and state, roadmap, open questions. (Authored as the Windows product spec; the Linux shell tracks the same behavior natively.)
 - 📦 **[Linux release acceptance](docs/linux-release-acceptance.md)** — how Linux release evidence is graded and what each level may claim.
+- 📦 **[Linux Flatpak beta lane](docs/linux-flatpak.md)** — source policy, permissions, codecs, local beta repository, and operator acceptance.
 - 🔄 **[Update feeds](docs/update-feed.md)** — how installed Windows and Linux builds discover updates.
 - 📝 **[Release notes template — `0.11.0-beta.1`](docs/release-notes/0.11.0-beta.1.md)** — the presentation template for the first Linux public beta.
 - 🖥️ **[Windows development VM](docs/windows-dev-vm.md)** — reproducible VM bootstrap, environment report, and the VM-valid vs. real-hardware acceptance gates.
