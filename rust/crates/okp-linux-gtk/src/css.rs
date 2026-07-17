@@ -864,13 +864,16 @@ const OKP_STYLESHEET: &str = "
 
         progressbar.okp-recent-progress,
         progressbar.okp-history-thumb-progress {
-            min-width: 4px;
             min-height: 4px;
             margin: 0;
         }
 
+        progressbar.okp-recent-progress { min-width: 4px; }
+        progressbar.okp-history-thumb-progress { min-width: 0; }
+
         progressbar.okp-recent-progress trough,
         progressbar.okp-history-thumb-progress trough {
+            min-width: 0;
             min-height: 4px;
             border: none;
             border-radius: 0 0 8px 8px;
@@ -1080,7 +1083,7 @@ const OKP_STYLESHEET: &str = "
 
         .okp-history-result-caption,
         .okp-history-bucket {
-            margin-top: 18px;
+            margin-top: 20px;
             padding: 0 12px 8px;
             font-size: 11px;
             font-weight: 600;
@@ -1094,7 +1097,8 @@ const OKP_STYLESHEET: &str = "
         .is-dark .okp-history-bucket { color: rgba(255, 255, 255, 0.48); }
 
         button.okp-history-row {
-            padding: 9px 12px;
+            margin-bottom: 4px;
+            padding: 12px;
             border: none;
             border-radius: 7px;
             background: transparent;
@@ -1148,6 +1152,82 @@ const OKP_STYLESHEET: &str = "
 
         .is-light .okp-history-end-cap { color: rgba(0, 0, 0, 0.36); }
         .is-dark .okp-history-end-cap { color: rgba(255, 255, 255, 0.36); }
+
+        .okp-idle-canvas.is-high-contrast {
+            background: #000000;
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-idle-titlebar-text,
+        .is-high-contrast .okp-history-title,
+        .is-high-contrast .okp-history-subtitle,
+        .is-high-contrast .okp-history-result-caption,
+        .is-high-contrast .okp-history-bucket,
+        .is-high-contrast .okp-history-row-title,
+        .is-high-contrast .okp-history-row-location,
+        .is-high-contrast .okp-history-row-when,
+        .is-high-contrast .okp-history-progress-label,
+        .is-high-contrast .okp-history-barely-label,
+        .is-high-contrast .okp-history-end-cap,
+        .is-high-contrast .okp-idle-footer-status,
+        .is-high-contrast button.okp-idle-footer-button {
+            color: #ffffff;
+        }
+
+        .is-high-contrast button.okp-history-back-button,
+        .is-high-contrast entry.okp-history-search,
+        .is-high-contrast .okp-history-finished-chip,
+        .is-high-contrast button.okp-history-row {
+            background: #000000;
+            border: 1px solid #ffffff;
+            color: #ffffff;
+        }
+
+        .is-high-contrast button.okp-history-row:hover,
+        .is-high-contrast button.okp-history-row:focus-visible {
+            background: #ffffff;
+            color: #000000;
+            box-shadow: none;
+        }
+
+        .is-high-contrast button.okp-history-row:hover .okp-history-row-title,
+        .is-high-contrast button.okp-history-row:hover .okp-history-row-location,
+        .is-high-contrast button.okp-history-row:hover .okp-history-row-when,
+        .is-high-contrast button.okp-history-row:hover .okp-history-progress-label,
+        .is-high-contrast button.okp-history-row:hover .okp-history-barely-label,
+        .is-high-contrast button.okp-history-row:hover .okp-history-finished-chip,
+        .is-high-contrast button.okp-history-row:focus-visible .okp-history-row-title,
+        .is-high-contrast button.okp-history-row:focus-visible .okp-history-row-location,
+        .is-high-contrast button.okp-history-row:focus-visible .okp-history-row-when,
+        .is-high-contrast button.okp-history-row:focus-visible .okp-history-progress-label,
+        .is-high-contrast button.okp-history-row:focus-visible .okp-history-barely-label,
+        .is-high-contrast button.okp-history-row:focus-visible .okp-history-finished-chip {
+            color: #000000;
+        }
+
+        .is-high-contrast .okp-history-divider,
+        .is-high-contrast .okp-history-end-cap,
+        .is-high-contrast .okp-idle-footer {
+            border-color: #ffffff;
+        }
+
+        .is-high-contrast .okp-history-divider {
+            background: #ffffff;
+        }
+
+        .is-high-contrast .okp-history-thumbnail-placeholder {
+            background: #000000;
+            border: 1px solid #ffffff;
+        }
+
+        .is-high-contrast progressbar.okp-history-thumb-progress trough {
+            background: #000000;
+            border: 1px solid #ffffff;
+        }
+
+        .is-high-contrast progressbar.okp-history-thumb-progress progress {
+            background: #ffffff;
+        }
 
         .okp-history-state-card {
             min-width: 360px;

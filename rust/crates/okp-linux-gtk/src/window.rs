@@ -1804,6 +1804,9 @@ pub(crate) fn build_empty_surface(
     } else {
         "is-light"
     });
+    if idle_theme_is_high_contrast() {
+        root.add_css_class("is-high-contrast");
+    }
     root.append(&idle_titlebar());
 
     let stack = gtk::Stack::new();
@@ -1930,6 +1933,17 @@ fn idle_theme_is_dark() -> bool {
             .map(|settings| settings.property::<bool>("gtk-application-prefer-dark-theme"))
             .unwrap_or(false),
     }
+}
+
+fn idle_theme_is_high_contrast() -> bool {
+    env::var("GTK_THEME")
+        .ok()
+        .map(|name| name.to_ascii_lowercase().contains("highcontrast"))
+        .unwrap_or(false)
+        || gtk::Settings::default()
+            .and_then(|settings| settings.gtk_theme_name())
+            .map(|name| name.to_ascii_lowercase().contains("highcontrast"))
+            .unwrap_or(false)
 }
 
 fn apply_gtk_theme_preview() {
