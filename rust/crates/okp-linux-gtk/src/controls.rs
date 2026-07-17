@@ -1564,7 +1564,7 @@ pub(crate) fn connect_seek_hover(
     chrome: Rc<ChromeVisibility>,
 ) -> Rc<SeekHoverPreview> {
     let preview = Rc::new(SeekHoverPreview::new());
-    let thumbnail_gate = thumbnails::HoverThumbnailGate::default();
+    let thumbnail_worker = thumbnails::HoverThumbnailWorker::new(thumbnail_sender.clone());
     let chrome_pinned = Rc::new(Cell::new(false));
     let motion = gtk::EventControllerMotion::new();
 
@@ -1604,14 +1604,7 @@ pub(crate) fn connect_seek_hover(
         let (thumbnail_request_key, thumbnail) = media_path
             .as_deref()
             .map(|path| {
-                hover_thumbnail_for_time(
-                    &motion_state,
-                    path,
-                    time,
-                    duration,
-                    &thumbnail_gate,
-                    &thumbnail_sender,
-                )
+                hover_thumbnail_for_time(&motion_state, path, time, duration, &thumbnail_worker)
             })
             .map(|(request_key, thumbnail)| (Some(request_key), thumbnail))
             .unwrap_or((None, None));
@@ -1692,12 +1685,10 @@ pub(crate) fn hover_thumbnail_for_time(
     media_path: &Path,
     time: f64,
     duration: f64,
-    gate: &thumbnails::HoverThumbnailGate,
-    sender: &mpsc::Sender<thumbnails::ThumbnailEvent>,
+    worker: &thumbnails::HoverThumbnailWorker,
 ) -> (String, Option<PathBuf>) {
     let thumbnail_time = thumbnails::hover_thumbnail_time(time, duration);
     let request_key = thumbnails::hover_request_key(media_path, thumbnail_time);
-    gate.select(&request_key);
     let thumbnail = thumbnails::existing_hover_thumbnail_path(media_path, thumbnail_time);
 
     let should_start = {
@@ -1714,12 +1705,10 @@ pub(crate) fn hover_thumbnail_for_time(
     }
 
     if should_start {
-        thumbnails::warm_hover_thumbnail(
+        worker.enqueue(
             media_path.to_path_buf(),
             thumbnail_time,
             request_key.clone(),
-            gate.clone(),
-            sender.clone(),
         );
     }
 
