@@ -272,6 +272,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         Rc::clone(&status_toast),
         Rc::clone(&chrome),
     );
+    connect_player_window_move(&overlay, &window);
     connect_drop(&window, Rc::clone(&state), empty_surface.clone());
     connect_keyboard(
         &window,

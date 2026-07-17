@@ -1140,6 +1140,84 @@ pub(crate) fn connect_player_context_menu(
     player_root.add_controller(context_click);
 }
 
+/// Restore #281's whole-surface behavior: a left-drag that clears the movement
+/// threshold anywhere on a non-interactive, non-OSC surface (video, letterbox,
+/// empty/title background, idle canvas) begins a compositor-native window move.
+/// A click that stays under the threshold falls through to the play/pause and
+/// double-click-fullscreen gestures untouched, and interactive surfaces keep
+/// their own input.
+pub(crate) fn connect_player_window_move(
+    player_root: &gtk::Overlay,
+    window: &gtk::ApplicationWindow,
+) {
+    let drag = gtk::GestureDrag::new();
+    drag.set_button(gdk::BUTTON_PRIMARY);
+    drag.set_propagation_phase(gtk::PropagationPhase::Bubble);
+
+    let move_root = player_root.clone();
+    let move_window = window.clone();
+    let already_moving = Rc::new(Cell::new(false));
+    let update_moving = Rc::clone(&already_moving);
+    drag.connect_drag_update(move |gesture, offset_x, offset_y| {
+        // Compact mode owns its own drag-to-move (and snap) gesture; leave it be
+        // so a single drag never begins two moves.
+        if window_compact_mode_active(&move_window) {
+            return;
+        }
+
+        // The press target decides interactivity, so classify the drag's start
+        // point with the same rules the right-click menu uses. A missing pick is
+        // treated as interactive to fail safe and preserve the click.
+        let over_interactive = gesture
+            .start_point()
+            .and_then(|(x, y)| move_root.pick(x, y, gtk::PickFlags::INSENSITIVE))
+            .map(|target| player_context_menu_target_is_interactive(&move_root, &target))
+            .unwrap_or(true);
+
+        let context = video_click::WindowDragContext {
+            fullscreen: move_window.is_fullscreen(),
+            maximized: move_window.is_maximized(),
+            over_interactive,
+            already_moving: update_moving.get(),
+        };
+        match video_click::window_drag_action(context, offset_x, offset_y) {
+            video_click::WindowDragAction::Hold => {}
+            video_click::WindowDragAction::BeginMove => {
+                let Some(device) = gesture.current_event_device() else {
+                    return;
+                };
+                let Some(surface) = move_window.surface() else {
+                    return;
+                };
+                let Ok(toplevel) = surface.downcast::<gdk::Toplevel>() else {
+                    return;
+                };
+                let Some((x, y)) = gesture.bounding_box_center() else {
+                    return;
+                };
+                update_moving.set(true);
+                // Claim the sequence so the pending play/pause click is cancelled
+                // rather than committed when the compositor hands the drag back.
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                toplevel.begin_move(
+                    &device,
+                    gesture.current_button() as i32,
+                    x,
+                    y,
+                    gesture.current_event_time(),
+                );
+                if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+                    eprintln!("interaction: player-window-move");
+                }
+            }
+        }
+    });
+    let end_moving = Rc::clone(&already_moving);
+    drag.connect_drag_end(move |_, _, _| end_moving.set(false));
+
+    player_root.add_controller(drag);
+}
+
 pub(crate) fn player_context_menu_target_is_interactive(
     player_root: &gtk::Overlay,
     target: &gtk::Widget,
