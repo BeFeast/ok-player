@@ -2329,8 +2329,7 @@ const OKP_STYLESHEET: &str = "
             color: #17191c;
         }
 
-        .okp-track-popover-content.okp-speed-popover,
-        .okp-track-popover-content.okp-more-popover {
+        .okp-track-popover-content.okp-speed-popover {
             padding: 6px;
         }
 
@@ -2356,6 +2355,150 @@ const OKP_STYLESHEET: &str = "
             background: transparent;
             border: none;
             box-shadow: none;
+        }
+
+        .okp-command-surface {
+            padding: 6px;
+            background: #f7f7f5;
+        }
+
+        entry.okp-command-search {
+            min-height: 34px;
+            margin: 0 0 6px 0;
+            padding: 0 9px;
+            border-radius: 7px;
+            border: 1px solid rgba(0, 0, 0, 0.10);
+            background: rgba(0, 0, 0, 0.035);
+            color: #17191c;
+            box-shadow: none;
+            font-size: 12.5px;
+        }
+
+        entry.okp-command-search:focus-within {
+            border-color: alpha(@okp_teal, 0.62);
+            box-shadow: inset 0 0 0 1px alpha(@okp_teal, 0.20);
+        }
+
+        .okp-command-scroll,
+        .okp-command-results {
+            background: transparent;
+        }
+
+        .okp-command-group-title {
+            margin: 10px 8px 4px 8px;
+            color: rgba(23, 25, 28, 0.50);
+            font-size: 10px;
+            font-weight: 720;
+            letter-spacing: 0.04em;
+        }
+
+        button.okp-command-row {
+            min-height: 34px;
+            padding: 5px 8px;
+            border-radius: 6px;
+            border: 1px solid transparent;
+            background: transparent;
+            box-shadow: none;
+            color: rgba(23, 25, 28, 0.88);
+            font-size: 12px;
+        }
+
+        button.okp-command-row:hover {
+            background: rgba(0, 0, 0, 0.055);
+            color: #111316;
+        }
+
+        button.okp-command-row:active {
+            background: rgba(0, 0, 0, 0.09);
+        }
+
+        button.okp-command-row.is-selected {
+            background: alpha(@okp_teal, 0.11);
+            border-color: alpha(@okp_teal, 0.20);
+            color: #0a5f59;
+        }
+
+        button.okp-command-row:disabled {
+            background: transparent;
+            border-color: transparent;
+            color: rgba(23, 25, 28, 0.34);
+        }
+
+        button.okp-command-row:focus-visible {
+            outline: none;
+            box-shadow: inset 0 0 0 1px alpha(@okp_teal, 0.72);
+        }
+
+        .okp-command-row-label {
+            color: inherit;
+        }
+
+        .okp-command-shortcut {
+            color: rgba(23, 25, 28, 0.46);
+            font-size: 10.5px;
+            font-feature-settings: 'tnum';
+        }
+
+        .okp-command-no-results {
+            min-height: 116px;
+            padding: 28px 18px;
+        }
+
+        .okp-command-no-results-title {
+            color: rgba(23, 25, 28, 0.84);
+            font-size: 13px;
+            font-weight: 650;
+        }
+
+        .okp-command-no-results-hint {
+            color: rgba(23, 25, 28, 0.48);
+            font-size: 11.5px;
+        }
+
+        popover.okp-command-popover.is-dark > contents,
+        popover.okp-command-popover.is-dark contents,
+        popover.okp-command-popover.is-dark .okp-command-surface {
+            background: #252528;
+            border-color: rgba(255, 255, 255, 0.11);
+        }
+
+        popover.okp-command-popover.is-dark entry.okp-command-search {
+            background: rgba(255, 255, 255, 0.055);
+            border-color: rgba(255, 255, 255, 0.12);
+            color: rgba(255, 255, 255, 0.92);
+        }
+
+        popover.okp-command-popover.is-dark .okp-command-group-title,
+        popover.okp-command-popover.is-dark .okp-command-shortcut,
+        popover.okp-command-popover.is-dark .okp-command-no-results-hint {
+            color: rgba(255, 255, 255, 0.48);
+        }
+
+        popover.okp-command-popover.is-dark button.okp-command-row {
+            color: rgba(255, 255, 255, 0.88);
+        }
+
+        popover.okp-command-popover.is-dark button.okp-command-row:hover {
+            background: rgba(255, 255, 255, 0.075);
+            color: #ffffff;
+        }
+
+        popover.okp-command-popover.is-dark button.okp-command-row:active {
+            background: rgba(255, 255, 255, 0.12);
+        }
+
+        popover.okp-command-popover.is-dark button.okp-command-row.is-selected {
+            background: alpha(@okp_accent, 0.16);
+            border-color: alpha(@okp_accent, 0.25);
+            color: @okp_accent_bright;
+        }
+
+        popover.okp-command-popover.is-dark button.okp-command-row:disabled {
+            color: rgba(255, 255, 255, 0.30);
+        }
+
+        popover.okp-command-popover.is-dark .okp-command-no-results-title {
+            color: rgba(255, 255, 255, 0.86);
         }
 
         .okp-track-popover-scroll {
@@ -2452,10 +2595,6 @@ const OKP_STYLESHEET: &str = "
             min-height: 30px;
             padding-left: 5px;
             padding-right: 5px;
-        }
-
-        button.okp-command-row {
-            min-height: 31px;
         }
 
         button.okp-scribe-row {

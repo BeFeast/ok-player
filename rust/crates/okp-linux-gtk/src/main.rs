@@ -21,6 +21,10 @@ use okp_core::companion_window::{self as companion_window_core, CompanionWindowK
 use okp_core::gapless::{GaplessPlaybackCapability, PlaylistTransitionPath};
 use okp_core::hdr::HdrHandlingState;
 use okp_core::key_press::KeyPressLatch;
+use okp_core::player_commands::{
+    self, PlayerCommandContext, PlayerCommandGroup, PlayerCommandId, PlayerCommandSurface,
+    ResolvedPlayerCommand,
+};
 use okp_core::playlist::{Playlist, PlaylistItem, QueueInsertMode, RepeatMode};
 use okp_core::settings::{AppearanceTheme, UpdateChannel};
 use okp_core::settings_navigation::{SETTINGS_RAIL_ORDER, SettingsPage, search_settings};
@@ -28,7 +32,7 @@ use okp_core::shortcuts::{
     self, ShortcutAction, ShortcutBinding, ShortcutChord, ShortcutModifiers, ShortcutSlot,
 };
 use okp_core::update_selection::{self, DebFeed, DebUpdate, SHA256SUMS_ASSET};
-use okp_core::video_geometry::{VideoAspect, VideoGeometry, VideoGeometryAction};
+use okp_core::video_geometry::{VideoGeometry, VideoGeometryAction};
 use okp_core::{
     AppIdentity, chapter_math, fullscreen_toggle, launch_args, lrc, m3u, media_formats,
     natural_compare, network_media, ok_player_uri, progress_report, seek_readout, sha256sums,
@@ -770,9 +774,9 @@ struct Controls {
     screenshot_button: gtk::Button,
     fullscreen_button: gtk::Button,
     more_button: gtk::MenuButton,
-    // Mirrors the controls the adaptive OscBar folded into the overflow menu at
-    // the current window width, so `controls_bar` can point the bar at the same
-    // vec the `…` popover reads (issue #328).
+    // Mirrors the controls the adaptive OscBar folded at the current width for
+    // its layout contract and regression coverage. The command registry, not
+    // this width-dependent set, owns the `…` menu contents.
     overflow_collapsed: Rc<RefCell<Vec<okp_core::osc_overflow::OscControlId>>>,
     timeline: gtk::Overlay,
     seek: gtk::Scale,

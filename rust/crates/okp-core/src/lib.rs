@@ -30,6 +30,7 @@ pub mod ok_player_uri;
 pub mod osc_overflow;
 pub mod osc_visibility;
 pub mod player;
+pub mod player_commands;
 pub mod playlist;
 pub mod poster_frame;
 pub mod presentation_evidence;

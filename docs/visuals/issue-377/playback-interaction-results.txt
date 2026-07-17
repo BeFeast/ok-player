@@ -1,0 +1,9 @@
+single_click_scheduled=7
+single_click_committed=2
+double_click_fullscreen=pass
+repeated_double_click_cycles=pass
+time_label_toggle=pass
+seek_panel_isolation=pass
+always_on_top=pass
+close_media_idle_osc=pass
+always_on_top_pin_delta=0.115981

@@ -1,11 +1,10 @@
 use super::*;
-use okp_core::osc_overflow::OscControlId;
 
 pub(crate) const SPEED_POPOVER_WIDTH: i32 = 120;
 pub(crate) const SUBTITLE_POPOVER_WIDTH: i32 = 262;
 pub(crate) const AUDIO_POPOVER_WIDTH: i32 = 248;
-pub(crate) const MORE_POPOVER_WIDTH: i32 = 210;
-const ADVANCED_COMMAND_POPOVER_WIDTH: i32 = 320;
+pub(crate) const COMMAND_POPOVER_WIDTH: i32 =
+    player_commands::PLAYER_COMMAND_SURFACE_PREFERRED_WIDTH;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PlayerPopoverKind {
@@ -22,8 +21,7 @@ impl PlayerPopoverKind {
             Self::Speed => SPEED_POPOVER_WIDTH,
             Self::Subtitles => SUBTITLE_POPOVER_WIDTH,
             Self::Audio => AUDIO_POPOVER_WIDTH,
-            Self::More => MORE_POPOVER_WIDTH,
-            Self::AdvancedCommands => ADVANCED_COMMAND_POPOVER_WIDTH,
+            Self::More | Self::AdvancedCommands => COMMAND_POPOVER_WIDTH,
         }
     }
 
@@ -32,8 +30,7 @@ impl PlayerPopoverKind {
             Self::Speed => "okp-speed-popover",
             Self::Subtitles => "okp-subtitle-popover",
             Self::Audio => "okp-audio-popover",
-            Self::More => "okp-more-popover",
-            Self::AdvancedCommands => "okp-advanced-command-popover",
+            Self::More | Self::AdvancedCommands => "okp-command-popover",
         }
     }
 }
@@ -196,99 +193,14 @@ pub(crate) fn populate_speed_popover(popover: &gtk::Popover, state: Rc<RefCell<P
     set_track_popover_child(popover, PlayerPopoverKind::Speed, content);
 }
 
-/// Handles the overflow menu uses to surface the actions of controls the
-/// adaptive OSC folded away at the current window width (issue #328). The
-/// direct-action controls are driven through their real OSC buttons so the
-/// existing wiring is reused verbatim; the selection controls (speed, audio,
-/// subtitles) drill into their picker inside the same popover.
+/// Existing OSC controls reused by the canonical command dispatcher so both
+/// command surfaces invoke the exact same handlers as their direct controls.
 #[derive(Clone)]
-pub(crate) struct OverflowReach {
-    pub(crate) collapsed: Rc<RefCell<Vec<OscControlId>>>,
+pub(crate) struct PlayerCommandReach {
     pub(crate) screenshot: gtk::Button,
     pub(crate) fullscreen: gtk::Button,
     pub(crate) chapters: gtk::Button,
-}
-
-/// Append rows for every currently-collapsed control at the top of the overflow
-/// menu, followed by a divider. The section is empty (and no divider is drawn)
-/// while the bar is wide enough to show every control, keeping the menu curated.
-fn append_collapsed_controls_section(
-    content: &gtk::Box,
-    popover: &gtk::Popover,
-    parent: &gtk::ApplicationWindow,
-    state: &Rc<RefCell<PlayerState>>,
-    status_toast: &Rc<StatusToast>,
-    reach: &OverflowReach,
-) {
-    let collapsed = reach.collapsed.borrow().clone();
-    let mut added = false;
-    for id in collapsed {
-        let row = match id {
-            OscControlId::Speed => {
-                let button = command_button("Playback speed", false);
-                let drill_popover = popover.clone();
-                let drill_state = Rc::clone(state);
-                button.connect_clicked(move |_| {
-                    populate_speed_popover(&drill_popover, Rc::clone(&drill_state));
-                });
-                button
-            }
-            OscControlId::Subtitles => {
-                let button = command_button("Subtitles", false);
-                let drill_popover = popover.clone();
-                let drill_parent = parent.clone();
-                let drill_state = Rc::clone(state);
-                let drill_toast = Rc::clone(status_toast);
-                button.connect_clicked(move |_| {
-                    populate_subtitle_popover(
-                        &drill_popover,
-                        &drill_parent,
-                        Rc::clone(&drill_state),
-                        Rc::clone(&drill_toast),
-                    );
-                });
-                button
-            }
-            OscControlId::Audio => {
-                let button = audio_command_button("Audio tracks / output");
-                let drill_popover = popover.clone();
-                let drill_state = Rc::clone(state);
-                button.connect_clicked(move |_| {
-                    populate_audio_popover(&drill_popover, Rc::clone(&drill_state));
-                });
-                button
-            }
-            OscControlId::Chapters => {
-                reach_emit_button("Chapters & Up Next", popover, &reach.chapters)
-            }
-            OscControlId::Screenshot => {
-                reach_emit_button("Take screenshot", popover, &reach.screenshot)
-            }
-            OscControlId::Fullscreen => reach_emit_button("Fullscreen", popover, &reach.fullscreen),
-            // Elapsed/Duration are informational time labels with no discrete
-            // action; the timeline still conveys position when they fold.
-            _ => continue,
-        };
-        content.append(&row);
-        added = true;
-    }
-    if added {
-        content.append(&divider());
-    }
-}
-
-/// A row that forwards to a real OSC button through its `clicked` signal, so the
-/// button's existing handler runs even while the button itself is folded away
-/// (unmapped). No behaviour is duplicated.
-fn reach_emit_button(label: &str, popover: &gtk::Popover, button: &gtk::Button) -> gtk::Button {
-    let row = command_button(label, false);
-    let emit_popover = popover.clone();
-    let emit_target = button.clone();
-    row.connect_clicked(move |_| {
-        emit_popover.popdown();
-        emit_target.emit_clicked();
-    });
-    row
+    pub(crate) window_bounds: Rc<RefCell<Option<PlayerWindowBounds>>>,
 }
 
 pub(crate) fn populate_command_popover(
@@ -296,612 +208,533 @@ pub(crate) fn populate_command_popover(
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
-    reach: &OverflowReach,
+    reach: &PlayerCommandReach,
+    surface: PlayerCommandSurface,
 ) {
-    let content = more_popover_content(popover, parent, state, status_toast, reach);
-    set_track_popover_child(popover, PlayerPopoverKind::More, content);
+    if idle_theme_is_dark() {
+        popover.add_css_class("is-dark");
+    } else {
+        popover.remove_css_class("is-dark");
+    }
+    let commands = resolved_player_commands(surface, parent, &state);
+    let content = searchable_player_command_content(
+        popover,
+        parent,
+        state,
+        status_toast,
+        reach,
+        surface,
+        commands,
+    );
+    set_player_command_popover_child(popover, parent, &reach.window_bounds, surface, content);
 }
 
-pub(crate) fn more_popover_content(
-    popover: &gtk::Popover,
+pub(crate) fn resolved_player_commands(
+    surface: PlayerCommandSurface,
     parent: &gtk::ApplicationWindow,
-    state: Rc<RefCell<PlayerState>>,
-    status_toast: Rc<StatusToast>,
-    reach: &OverflowReach,
-) -> gtk::Box {
-    let content = track_popover_content(PlayerPopoverKind::More, None);
-    append_collapsed_controls_section(&content, popover, parent, &state, &status_toast, reach);
-    let (mut has_media, ab_loop_active) = {
+    state: &Rc<RefCell<PlayerState>>,
+) -> Vec<ResolvedPlayerCommand> {
+    let (mut context, bindings) = {
         let state = state.borrow();
-        (has_loaded_media_state(&state), state.ab_loop.is_active())
+        let bindings = resolved_shortcut_bindings(&state.settings).unwrap_or_else(|error| {
+            eprintln!(
+                "Ignoring custom keybindings at line {}: {}",
+                error.line, error.message
+            );
+            shortcuts::default_bindings()
+        });
+        (
+            PlayerCommandContext {
+                has_media: has_loaded_media_state(&state),
+                has_local_media: state.current_file.is_some(),
+                has_video_geometry: state.current_video_dimensions.is_some(),
+                playlist_count: state.playlist.len(),
+                repeat_mode: state.playlist.repeat(),
+                shuffle_enabled: state.playlist.shuffle(),
+                auto_advance_enabled: state.playlist.auto_advance(),
+                private_session: state.private_session,
+                ab_loop_active: state.ab_loop.is_active(),
+                compact_mode: window_compact_mode_active(parent),
+                fullscreen: parent.is_fullscreen(),
+                video_geometry: state.video_transform,
+            },
+            bindings,
+        )
     };
     if env::var_os("OKP_PLAYER_POPOVER_PREVIEW_STATE")
         .is_some_and(|state| state.eq_ignore_ascii_case("more-disabled"))
     {
-        has_media = false;
+        context.has_media = false;
+        context.has_local_media = false;
+        context.has_video_geometry = false;
+        context.playlist_count = 0;
     }
 
-    let open_button = command_button("Open file...", false);
-    let open_parent = parent.clone();
-    let open_state = Rc::clone(&state);
-    let open_toast = Rc::clone(&status_toast);
-    let open_popover = popover.clone();
-    open_button.connect_clicked(move |_| {
-        open_popover.popdown();
-        open_media_dialog(&open_parent, Rc::clone(&open_state), Rc::clone(&open_toast));
-    });
-    content.append(&open_button);
-
-    let close_button = command_button("Close file", false);
-    close_button.set_sensitive(has_media);
-    let close_state = Rc::clone(&state);
-    let close_toast = Rc::clone(&status_toast);
-    let close_popover = popover.clone();
-    close_button.connect_clicked(move |_| {
-        close_popover.popdown();
-        close_current_media(&close_state, &close_toast);
-    });
-    content.append(&close_button);
-
-    let compact_button = command_button("Mini player", window_compact_mode_active(parent));
-    compact_button.set_sensitive(has_media);
-    let compact_parent = parent.clone();
-    let compact_popover = popover.clone();
-    compact_button.connect_clicked(move |_| {
-        compact_popover.popdown();
-        toggle_compact_mode(&compact_parent);
-    });
-    content.append(&compact_button);
-
-    let ab_loop_button = command_button("A-B loop", ab_loop_active);
-    ab_loop_button.set_sensitive(has_media);
-    let ab_loop_state = Rc::clone(&state);
-    let ab_loop_toast = Rc::clone(&status_toast);
-    let ab_loop_popover = popover.clone();
-    ab_loop_button.connect_clicked(move |_| {
-        ab_loop_popover.popdown();
-        toggle_ab_loop(&ab_loop_state, &ab_loop_toast);
-    });
-    content.append(&ab_loop_button);
-
-    append_clip_export_placeholder(&content, &state, true);
-
-    content.append(&divider());
-
-    let save_subs_button = command_button("Screenshot with subtitles", false);
-    save_subs_button.set_sensitive(has_media);
-    let save_subs_state = Rc::clone(&state);
-    let save_subs_toast = Rc::clone(&status_toast);
-    let save_subs_popover = popover.clone();
-    save_subs_button.connect_clicked(move |_| {
-        save_subs_popover.popdown();
-        save_screenshot(&save_subs_state, &save_subs_toast, true);
-    });
-    content.append(&save_subs_button);
-
-    let copy_frame_button = command_button("Copy frame to clipboard", false);
-    copy_frame_button.set_sensitive(has_media);
-    let copy_frame_state = Rc::clone(&state);
-    let copy_frame_toast = Rc::clone(&status_toast);
-    let copy_frame_popover = popover.clone();
-    copy_frame_button.connect_clicked(move |_| {
-        copy_frame_popover.popdown();
-        copy_frame_to_clipboard(&copy_frame_state, &copy_frame_toast);
-    });
-    content.append(&copy_frame_button);
-
-    content.append(&divider());
-
-    let info_button = command_button("Media info...", false);
-    info_button.set_sensitive(has_media);
-    let info_parent = parent.clone();
-    let info_state = Rc::clone(&state);
-    let info_toast = Rc::clone(&status_toast);
-    let info_popover = popover.clone();
-    info_button.connect_clicked(move |_| {
-        info_popover.popdown();
-        open_media_info_window(&info_parent, &info_state, Rc::clone(&info_toast));
-    });
-    content.append(&info_button);
-
-    let settings_button = command_button("Settings...", false);
-    let settings_parent = parent.clone();
-    let settings_state = Rc::clone(&state);
-    let settings_toast = Rc::clone(&status_toast);
-    let settings_popover = popover.clone();
-    settings_button.connect_clicked(move |_| {
-        settings_popover.popdown();
-        open_settings_window(
-            &settings_parent,
-            Rc::clone(&settings_state),
-            Rc::clone(&settings_toast),
-        );
-    });
-    content.append(&settings_button);
-
-    content
+    player_commands::resolve_player_commands(surface, context, |action| {
+        let labels = shortcuts::chords_for_action(&bindings, action)
+            .into_iter()
+            .map(|chord| chord.label())
+            .collect::<Vec<_>>();
+        (!labels.is_empty()).then(|| labels.join(" / "))
+    })
 }
 
-pub(crate) fn advanced_command_popover_content(
+fn searchable_player_command_content(
     popover: &gtk::Popover,
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
+    reach: &PlayerCommandReach,
+    surface: PlayerCommandSurface,
+    commands: Vec<ResolvedPlayerCommand>,
 ) -> gtk::Box {
-    let content = track_popover_content(
-        PlayerPopoverKind::AdvancedCommands,
-        Some("Advanced commands"),
-    );
-    let (
-        has_media,
-        repeat_mode,
-        shuffle_enabled,
-        auto_advance_enabled,
-        private_session,
-        playlist_count,
-        has_local_media,
-        video_available,
-        video_transform,
-        ab_loop_active,
-    ) = {
-        let state = state.borrow();
-        (
-            has_loaded_media_state(&state),
-            state.playlist.repeat(),
-            state.playlist.shuffle(),
-            state.playlist.auto_advance(),
-            state.private_session,
-            state.playlist.len(),
-            state.current_file.is_some(),
-            has_loaded_media_state(&state)
-                && state
-                    .mpv
-                    .as_ref()
-                    .and_then(Mpv::observed_video_dimensions)
-                    .is_some(),
-            state.video_transform,
-            state.ab_loop.is_active(),
-        )
+    let shell = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    shell.add_css_class("okp-command-surface");
+
+    let search = gtk::SearchEntry::new();
+    search.add_css_class("okp-command-search");
+    search.set_placeholder_text(Some("Search commands"));
+    search.set_accessible_role(gtk::AccessibleRole::SearchBox);
+    shell.append(&search);
+
+    let rows_host = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    rows_host.add_css_class("okp-command-results");
+    let focus_rows = Rc::new(RefCell::new(Vec::<gtk::Button>::new()));
+
+    let render = {
+        let rows_host = rows_host.clone();
+        let search = search.clone();
+        let commands = Rc::new(commands);
+        let focus_rows = Rc::clone(&focus_rows);
+        let popover = popover.clone();
+        let parent = parent.clone();
+        let state = Rc::clone(&state);
+        let status_toast = Rc::clone(&status_toast);
+        let reach = reach.clone();
+        Rc::new(move |query: &str| {
+            render_player_command_rows(
+                &rows_host,
+                &search,
+                &commands,
+                query,
+                &focus_rows,
+                &popover,
+                &parent,
+                Rc::clone(&state),
+                Rc::clone(&status_toast),
+                &reach,
+                surface,
+            );
+        })
     };
 
-    let open_url_button = track_button("Open URL...", false);
-    let open_url_parent = parent.clone();
-    let open_url_state = Rc::clone(&state);
-    let open_url_toast = Rc::clone(&status_toast);
-    let open_url_popover = popover.clone();
-    open_url_button.connect_clicked(move |_| {
-        open_url_popover.popdown();
-        open_url_dialog(
-            &open_url_parent,
-            Rc::clone(&open_url_state),
-            Rc::clone(&open_url_toast),
-        );
-    });
-    content.append(&open_url_button);
-
-    let open_folder_button = track_button("Open Folder...", false);
-    let open_folder_parent = parent.clone();
-    let open_folder_state = Rc::clone(&state);
-    let open_folder_toast = Rc::clone(&status_toast);
-    let open_folder_popover = popover.clone();
-    open_folder_button.connect_clicked(move |_| {
-        open_folder_popover.popdown();
-        open_folder_dialog(
-            &open_folder_parent,
-            Rc::clone(&open_folder_state),
-            Rc::clone(&open_folder_toast),
-        );
-    });
-    content.append(&open_folder_button);
-
-    let open_playlist_button = track_button("Open Playlist...", false);
-    let open_playlist_parent = parent.clone();
-    let open_playlist_state = Rc::clone(&state);
-    let open_playlist_toast = Rc::clone(&status_toast);
-    let open_playlist_popover = popover.clone();
-    open_playlist_button.connect_clicked(move |_| {
-        open_playlist_popover.popdown();
-        open_playlist_dialog(
-            &open_playlist_parent,
-            Rc::clone(&open_playlist_state),
-            Rc::clone(&open_playlist_toast),
-        );
-    });
-    content.append(&open_playlist_button);
-
-    let add_queue_button = track_button("Add to Queue...", false);
-    add_queue_button.set_sensitive(has_local_media);
-    add_queue_button.set_tooltip_text(Some("Append local media files to Up Next"));
-    let add_queue_parent = parent.clone();
-    let add_queue_state = Rc::clone(&state);
-    let add_queue_toast = Rc::clone(&status_toast);
-    let add_queue_popover = popover.clone();
-    add_queue_button.connect_clicked(move |_| {
-        add_queue_popover.popdown();
-        open_queue_media_dialog(
-            &add_queue_parent,
-            Rc::clone(&add_queue_state),
-            Rc::clone(&add_queue_toast),
-            QueueInsertMode::Append,
-        );
-    });
-    content.append(&add_queue_button);
-
-    let play_next_button = track_button("Play Next...", false);
-    play_next_button.set_sensitive(has_local_media);
-    play_next_button.set_tooltip_text(Some("Insert local media files after the current item"));
-    let play_next_parent = parent.clone();
-    let play_next_state = Rc::clone(&state);
-    let play_next_toast = Rc::clone(&status_toast);
-    let play_next_popover = popover.clone();
-    play_next_button.connect_clicked(move |_| {
-        play_next_popover.popdown();
-        open_queue_media_dialog(
-            &play_next_parent,
-            Rc::clone(&play_next_state),
-            Rc::clone(&play_next_toast),
-            QueueInsertMode::PlayNext,
-        );
-    });
-    content.append(&play_next_button);
-
-    let save_playlist_button = track_button("Save Playlist...", false);
-    save_playlist_button.set_sensitive(playlist_count > 0);
-    save_playlist_button.set_tooltip_text(Some("Save current Up Next list as M3U"));
-    let save_playlist_parent = parent.clone();
-    let save_playlist_state = Rc::clone(&state);
-    let save_playlist_toast = Rc::clone(&status_toast);
-    let save_playlist_popover = popover.clone();
-    save_playlist_button.connect_clicked(move |_| {
-        save_playlist_popover.popdown();
-        save_playlist_dialog(
-            &save_playlist_parent,
-            Rc::clone(&save_playlist_state),
-            Rc::clone(&save_playlist_toast),
-        );
-    });
-    content.append(&save_playlist_button);
-
-    let settings_button = track_button("Settings...", false);
-    let settings_parent = parent.clone();
-    let settings_state = Rc::clone(&state);
-    let settings_toast = Rc::clone(&status_toast);
-    let settings_popover = popover.clone();
-    settings_button.connect_clicked(move |_| {
-        settings_popover.popdown();
-        open_settings_window(
-            &settings_parent,
-            Rc::clone(&settings_state),
-            Rc::clone(&settings_toast),
-        );
-    });
-    content.append(&settings_button);
-
-    let info_button = track_button("Media Info...", false);
-    info_button.set_sensitive(has_media);
-    info_button.set_tooltip_text(Some("Media Information (I)"));
-    let info_parent = parent.clone();
-    let info_state = Rc::clone(&state);
-    let info_toast = Rc::clone(&status_toast);
-    let info_popover = popover.clone();
-    info_button.connect_clicked(move |_| {
-        info_popover.popdown();
-        open_media_info_window(&info_parent, &info_state, Rc::clone(&info_toast));
-    });
-    content.append(&info_button);
-
-    let location_button = track_button("Open File Location", false);
-    location_button.set_sensitive(has_local_media);
-    location_button.set_tooltip_text(Some("Open the current file in the file manager"));
-    let location_state = Rc::clone(&state);
-    let location_toast = Rc::clone(&status_toast);
-    let location_popover = popover.clone();
-    location_button.connect_clicked(move |_| {
-        location_popover.popdown();
-        open_current_file_location(&location_state, &location_toast);
-    });
-    content.append(&location_button);
-
-    let go_to_time_button = track_button("Go to Time...", false);
-    go_to_time_button.set_sensitive(has_media);
-    go_to_time_button.set_tooltip_text(Some("Go to timecode (J)"));
-    let go_to_time_parent = parent.clone();
-    let go_to_time_state = Rc::clone(&state);
-    let go_to_time_toast = Rc::clone(&status_toast);
-    let go_to_time_popover = popover.clone();
-    go_to_time_button.connect_clicked(move |_| {
-        go_to_time_popover.popdown();
-        open_go_to_time_dialog(
-            &go_to_time_parent,
-            Rc::clone(&go_to_time_state),
-            Rc::clone(&go_to_time_toast),
-        );
-    });
-    content.append(&go_to_time_button);
-
-    let copy_time_button = track_button("Copy Current Time", false);
-    copy_time_button.set_sensitive(has_media);
-    copy_time_button.set_tooltip_text(Some("Copy the current timecode"));
-    let copy_time_state = Rc::clone(&state);
-    let copy_time_toast = Rc::clone(&status_toast);
-    let copy_time_popover = popover.clone();
-    copy_time_button.connect_clicked(move |_| {
-        copy_time_popover.popdown();
-        copy_current_time(&copy_time_state, &copy_time_toast);
-    });
-    content.append(&copy_time_button);
-
-    let add_bookmark_button = track_button("Add Bookmark", false);
-    add_bookmark_button.set_sensitive(has_local_media);
-    add_bookmark_button.set_tooltip_text(Some("Save a bookmark at the current position"));
-    let add_bookmark_state = Rc::clone(&state);
-    let add_bookmark_toast = Rc::clone(&status_toast);
-    let add_bookmark_popover = popover.clone();
-    add_bookmark_button.connect_clicked(move |_| {
-        add_bookmark_popover.popdown();
-        add_bookmark_at_position(&add_bookmark_state, &add_bookmark_toast);
-    });
-    content.append(&add_bookmark_button);
-
-    let ab_loop_button = track_button("A-B loop", ab_loop_active);
-    ab_loop_button.set_sensitive(has_media);
-    ab_loop_button.set_tooltip_text(Some("Set A, set B, clear (L)"));
-    let ab_loop_state = Rc::clone(&state);
-    let ab_loop_toast = Rc::clone(&status_toast);
-    let ab_loop_popover = popover.clone();
-    ab_loop_button.connect_clicked(move |_| {
-        ab_loop_popover.popdown();
-        toggle_ab_loop(&ab_loop_state, &ab_loop_toast);
-    });
-    content.append(&ab_loop_button);
-
-    append_clip_export_placeholder(&content, &state, false);
-
-    content.append(&divider());
-    content.append(&track_group_title("Video"));
-    if video_available {
-        content.append(&track_subgroup_title("Aspect ratio"));
-        let append_geometry_action = |label: &str, action: VideoGeometryAction, selected: bool| {
-            let button = track_button(label, selected);
-            button.set_sensitive(video_transform.action_enabled(true, action));
-            let action_state = Rc::clone(&state);
-            let action_toast = Rc::clone(&status_toast);
-            let action_popover = popover.clone();
-            button.connect_clicked(move |_| {
-                action_popover.popdown();
-                apply_video_geometry_action(&action_state, action, &action_toast);
-            });
-            content.append(&button);
-        };
-
-        for aspect in VideoAspect::ALL {
-            append_geometry_action(
-                aspect.label(),
-                VideoGeometryAction::SetAspect(aspect),
-                video_transform.aspect == aspect,
-            );
-        }
-
-        content.append(&track_subgroup_title(&format!(
-            "Zoom / pan · {}%",
-            video_transform.zoom_percent()
-        )));
-        for (label, action) in [
-            ("Zoom in", VideoGeometryAction::ZoomIn),
-            ("Zoom out", VideoGeometryAction::ZoomOut),
-            ("Pan left", VideoGeometryAction::PanLeft),
-            ("Pan right", VideoGeometryAction::PanRight),
-            ("Pan up", VideoGeometryAction::PanUp),
-            ("Pan down", VideoGeometryAction::PanDown),
-            ("Center image", VideoGeometryAction::Center),
-        ] {
-            append_geometry_action(label, action, false);
-        }
-
-        content.append(&track_subgroup_title("Transform"));
-        append_geometry_action("Rotate 90°", VideoGeometryAction::RotateClockwise, false);
-        append_geometry_action(
-            "Fill screen (crop bars)",
-            VideoGeometryAction::ToggleFillScreen,
-            video_transform.fill_screen,
-        );
-        append_geometry_action(
-            "Deinterlace",
-            VideoGeometryAction::ToggleDeinterlace,
-            video_transform.deinterlace,
-        );
-        append_geometry_action("Reset video", VideoGeometryAction::Reset, false);
-    } else {
-        content.append(&empty_track_label(if has_media {
-            "No video track"
-        } else {
-            "Open video to use geometry"
-        }));
+    let render_changed = Rc::clone(&render);
+    search.connect_search_changed(move |entry| render_changed(entry.text().as_str()));
+    render("");
+    if let Ok(query) = env::var("OKP_COMMAND_SEARCH_QUERY") {
+        search.set_text(&query);
     }
 
-    content.append(&divider());
-    content.append(&track_group_title("Screenshot"));
-
-    let save_frame_button = track_button("Save frame", false);
-    save_frame_button.set_sensitive(has_media);
-    let save_frame_state = Rc::clone(&state);
-    let save_frame_toast = Rc::clone(&status_toast);
-    let save_frame_popover = popover.clone();
-    save_frame_button.connect_clicked(move |_| {
-        save_frame_popover.popdown();
-        save_screenshot(&save_frame_state, &save_frame_toast, false);
+    let activate_rows = Rc::clone(&focus_rows);
+    search.connect_activate(move |_| {
+        if let Some(button) = activate_rows
+            .borrow()
+            .iter()
+            .find(|button| button.is_sensitive())
+        {
+            button.emit_clicked();
+        }
     });
-    content.append(&save_frame_button);
 
-    let save_subs_button = track_button("Save frame with subtitles", false);
-    save_subs_button.set_sensitive(has_media);
-    let save_subs_state = Rc::clone(&state);
-    let save_subs_toast = Rc::clone(&status_toast);
-    let save_subs_popover = popover.clone();
-    save_subs_button.connect_clicked(move |_| {
-        save_subs_popover.popdown();
-        save_screenshot(&save_subs_state, &save_subs_toast, true);
+    let key_rows = Rc::clone(&focus_rows);
+    let key_popover = popover.clone();
+    let key_search = search.clone();
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    keys.connect_key_pressed(move |_, key, _, _| match key {
+        gdk::Key::Escape => {
+            if key_search.text().is_empty() {
+                key_popover.popdown();
+            } else {
+                key_search.set_text("");
+                key_search.grab_focus();
+            }
+            glib::Propagation::Stop
+        }
+        gdk::Key::Down if key_search.has_focus() => {
+            if let Some(button) = key_rows
+                .borrow()
+                .iter()
+                .find(|button| button.is_sensitive())
+            {
+                button.grab_focus();
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
+            }
+        }
+        _ => glib::Propagation::Proceed,
     });
-    content.append(&save_subs_button);
+    shell.add_controller(keys);
 
-    let copy_frame_button = track_button("Copy frame to clipboard", false);
-    copy_frame_button.set_sensitive(has_media);
-    let copy_frame_state = Rc::clone(&state);
-    let copy_frame_toast = Rc::clone(&status_toast);
-    let copy_frame_popover = popover.clone();
-    copy_frame_button.connect_clicked(move |_| {
-        copy_frame_popover.popdown();
-        copy_frame_to_clipboard(&copy_frame_state, &copy_frame_toast);
+    let search_focus = search.clone();
+    glib::idle_add_local_once(move || {
+        search_focus.grab_focus();
     });
-    content.append(&copy_frame_button);
 
-    let close_button = track_button("Close Media", false);
-    close_button.set_sensitive(has_media);
-    let close_state = Rc::clone(&state);
-    let close_toast = Rc::clone(&status_toast);
-    let close_popover = popover.clone();
-    close_button.connect_clicked(move |_| {
-        close_popover.popdown();
-        close_current_media(&close_state, &close_toast);
-    });
-    content.append(&close_button);
-
-    let compact_button = track_button("Mini player", window_compact_mode_active(parent));
-    compact_button.set_sensitive(has_media);
-    let compact_parent = parent.clone();
-    let compact_popover = popover.clone();
-    compact_button.connect_clicked(move |_| {
-        compact_popover.popdown();
-        toggle_compact_mode(&compact_parent);
-    });
-    content.append(&compact_button);
-
-    let fullscreen_label = if parent.is_fullscreen() {
-        "Exit Fullscreen"
-    } else {
-        "Enter Fullscreen"
-    };
-    let fullscreen_button = track_button(fullscreen_label, parent.is_fullscreen());
-    let fullscreen_parent = parent.clone();
-    let fullscreen_popover = popover.clone();
-    let fullscreen_state = Rc::clone(&state);
-    fullscreen_button.connect_clicked(move |_| {
-        fullscreen_popover.popdown();
-        toggle_fullscreen(&fullscreen_parent, &fullscreen_state);
-    });
-    content.append(&fullscreen_button);
-
-    content.append(&divider());
-
-    let private_button = track_button(
-        if private_session {
-            "Private Session On"
-        } else {
-            "Private Session Off"
-        },
-        private_session,
-    );
-    let private_state = Rc::clone(&state);
-    let private_toast = Rc::clone(&status_toast);
-    let private_popover = popover.clone();
-    private_button.connect_clicked(move |_| {
-        toggle_private_session(&private_state, &private_toast);
-        private_popover.popdown();
-    });
-    content.append(&private_button);
-
-    let clear_history_button = track_button("Clear History...", false);
-    let clear_history_parent = parent.clone();
-    let clear_history_state = Rc::clone(&state);
-    let clear_history_toast = Rc::clone(&status_toast);
-    let clear_history_popover = popover.clone();
-    clear_history_button.connect_clicked(move |_| {
-        clear_history_popover.popdown();
-        open_clear_history_dialog(
-            &clear_history_parent,
-            Rc::clone(&clear_history_state),
-            Rc::clone(&clear_history_toast),
-        );
-    });
-    content.append(&clear_history_button);
-
-    content.append(&divider());
-
-    let repeat_button = track_button(
-        repeat_mode_label(repeat_mode),
-        repeat_mode != RepeatMode::Off,
-    );
-    let repeat_state = Rc::clone(&state);
-    let repeat_toast = Rc::clone(&status_toast);
-    let repeat_popover = popover.clone();
-    repeat_button.connect_clicked(move |_| {
-        cycle_repeat_mode(&repeat_state, &repeat_toast);
-        repeat_popover.popdown();
-    });
-    content.append(&repeat_button);
-
-    let shuffle_button = track_button(
-        if shuffle_enabled {
-            "Shuffle On"
-        } else {
-            "Shuffle Off"
-        },
-        shuffle_enabled,
-    );
-    let shuffle_state = Rc::clone(&state);
-    let shuffle_toast = Rc::clone(&status_toast);
-    let shuffle_popover = popover.clone();
-    shuffle_button.connect_clicked(move |_| {
-        toggle_shuffle(&shuffle_state, &shuffle_toast);
-        shuffle_popover.popdown();
-    });
-    content.append(&shuffle_button);
-
-    let auto_advance_button = track_button(
-        if auto_advance_enabled {
-            "Auto-advance On"
-        } else {
-            "Auto-advance Off"
-        },
-        auto_advance_enabled,
-    );
-    let auto_advance_state = Rc::clone(&state);
-    let auto_advance_toast = Rc::clone(&status_toast);
-    let auto_advance_popover = popover.clone();
-    auto_advance_button.connect_clicked(move |_| {
-        toggle_auto_advance(&auto_advance_state, &auto_advance_toast);
-        auto_advance_popover.popdown();
-    });
-    content.append(&auto_advance_button);
-
-    content
+    shell.append(&rows_host);
+    shell
 }
 
-pub(crate) fn append_clip_export_placeholder(
-    content: &gtk::Box,
-    state: &Rc<RefCell<PlayerState>>,
-    compact: bool,
+#[allow(clippy::too_many_arguments)]
+fn render_player_command_rows(
+    rows_host: &gtk::Box,
+    search: &gtk::SearchEntry,
+    commands: &[ResolvedPlayerCommand],
+    query: &str,
+    focus_rows: &Rc<RefCell<Vec<gtk::Button>>>,
+    popover: &gtk::Popover,
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+    reach: &PlayerCommandReach,
+    surface: PlayerCommandSurface,
 ) {
-    if env::var_os("OKP_CLIP_EXPORT_PREVIEW_STATE")
-        .is_some_and(|state| state.eq_ignore_ascii_case("hidden"))
-    {
+    while let Some(child) = rows_host.first_child() {
+        rows_host.remove(&child);
+    }
+    focus_rows.borrow_mut().clear();
+
+    let filtered = player_commands::filter_player_commands(commands, query);
+    if filtered.is_empty() {
+        let empty = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        empty.add_css_class("okp-command-no-results");
+        let title = gtk::Label::new(Some("No commands found"));
+        title.add_css_class("okp-command-no-results-title");
+        let hint = gtk::Label::new(Some("Try a command name or related term."));
+        hint.add_css_class("okp-command-no-results-hint");
+        empty.append(&title);
+        empty.append(&hint);
+        rows_host.append(&empty);
         return;
     }
-    let eligibility = current_clip_export_eligibility(state);
-    let reason = clip_export_placeholder_reason(eligibility);
-    let button = if compact {
-        command_button("Export clip/GIF...", false)
+
+    let mut current_group = None;
+    for command in filtered {
+        if current_group != Some(command.group) {
+            current_group = Some(command.group);
+            rows_host.append(&player_command_group_title(command.group));
+        }
+
+        let button = player_command_button(&command);
+        if command.id == PlayerCommandId::ExportClip {
+            button.set_tooltip_text(Some(&clip_export_placeholder_reason(
+                current_clip_export_eligibility(&state),
+            )));
+        }
+        let activate_popover = popover.clone();
+        let activate_parent = parent.clone();
+        let activate_state = Rc::clone(&state);
+        let activate_toast = Rc::clone(&status_toast);
+        let activate_reach = reach.clone();
+        let id = command.id;
+        button.connect_clicked(move |_| {
+            player_commands::dispatch_player_command(surface, id, |id| {
+                dispatch_player_command_action(
+                    id,
+                    &activate_popover,
+                    &activate_parent,
+                    &activate_state,
+                    &activate_toast,
+                    &activate_reach,
+                );
+            });
+        });
+        rows_host.append(&button);
+        focus_rows.borrow_mut().push(button);
+    }
+
+    let row_snapshot = focus_rows.borrow().clone();
+    for (index, button) in row_snapshot.iter().enumerate() {
+        let navigation_rows = Rc::clone(focus_rows);
+        let navigation_search = search.clone();
+        let keys = gtk::EventControllerKey::new();
+        keys.connect_key_pressed(move |_, key, _, _| {
+            let rows = navigation_rows.borrow();
+            let target = match key {
+                gdk::Key::Down => rows
+                    .iter()
+                    .skip(index + 1)
+                    .find(|button| button.is_sensitive())
+                    .cloned(),
+                gdk::Key::Up => rows[..index]
+                    .iter()
+                    .rev()
+                    .find(|button| button.is_sensitive())
+                    .cloned(),
+                _ => return glib::Propagation::Proceed,
+            };
+            if let Some(target) = target {
+                target.grab_focus();
+            } else if key == gdk::Key::Up {
+                navigation_search.grab_focus();
+            }
+            glib::Propagation::Stop
+        });
+        button.add_controller(keys);
+    }
+}
+
+fn player_command_group_title(group: PlayerCommandGroup) -> gtk::Label {
+    let label = gtk::Label::new(Some(group.label()));
+    label.add_css_class("okp-command-group-title");
+    label.set_xalign(0.0);
+    label
+}
+
+fn player_command_button(command: &ResolvedPlayerCommand) -> gtk::Button {
+    let button = gtk::Button::new();
+    button.add_css_class("okp-command-row");
+    button.set_sensitive(command.enabled);
+    if command.checked {
+        button.add_css_class("is-selected");
+    }
+
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let check = selection_check_icon();
+    check.set_opacity(if command.checked { 1.0 } else { 0.0 });
+    row.append(&check);
+
+    let label = gtk::Label::new(Some(&command.label));
+    label.add_css_class("okp-command-row-label");
+    label.set_xalign(0.0);
+    label.set_hexpand(true);
+    label.set_ellipsize(pango::EllipsizeMode::End);
+    row.append(&label);
+
+    if let Some(shortcut) = &command.shortcut {
+        let shortcut = gtk::Label::new(Some(shortcut));
+        shortcut.add_css_class("okp-command-shortcut");
+        shortcut.set_xalign(1.0);
+        row.append(&shortcut);
+    }
+
+    button.set_child(Some(&row));
+    button.update_property(&[gtk::accessible::Property::Label(&command.label)]);
+    button
+}
+
+fn set_player_command_popover_child(
+    popover: &gtk::Popover,
+    parent: &gtk::ApplicationWindow,
+    reported_bounds: &Rc<RefCell<Option<PlayerWindowBounds>>>,
+    surface: PlayerCommandSurface,
+    content: gtk::Box,
+) {
+    let work_area = current_player_work_area(parent, reported_bounds).or_else(|| {
+        parent.surface().and_then(|surface| {
+            let monitor = surface.display().monitor_at_surface(&surface)?;
+            let geometry = monitor.geometry();
+            Some(window_fit::WindowRect {
+                x: geometry.x(),
+                y: geometry.y(),
+                width: geometry.width(),
+                height: geometry.height(),
+            })
+        })
+    });
+    let size = work_area
+        .map(|area| player_commands::player_command_surface_size(area.width, area.height))
+        .unwrap_or(window_fit::WindowSize {
+            width: COMMAND_POPOVER_WIDTH,
+            height: 520,
+        });
+
+    let height = if surface == PlayerCommandSurface::ContextMenu {
+        size.height.min(400)
     } else {
-        track_button("Export clip/GIF...", false)
+        size.height
     };
-    // Issue #228 deliberately reserves the interaction and command model but
-    // does not ship an encoder. Keep the row disabled until the future worker
-    // consumes `ClipExportEligibility::request`, while still explaining the
-    // exact selection/tooling state instead of presenting a silent dead item.
-    button.set_sensitive(false);
-    button.set_tooltip_text(Some(&reason));
-    content.append(&button);
-    content.append(&empty_track_label(&reason));
+    content.set_width_request(size.width);
+    let scroll = gtk::ScrolledWindow::new();
+    scroll.add_css_class("okp-command-scroll");
+    scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    scroll.set_min_content_width(size.width);
+    scroll.set_max_content_width(size.width);
+    scroll.set_max_content_height((height - 50).max(1));
+    scroll.set_propagate_natural_height(true);
+
+    let shell = content;
+    let rows = shell
+        .last_child()
+        .expect("command shell always contains the results host");
+    shell.remove(&rows);
+    scroll.set_child(Some(&rows));
+    shell.append(&scroll);
+    popover.set_child(Some(&shell));
+}
+
+pub(crate) fn dispatch_player_command_action(
+    id: PlayerCommandId,
+    popover: &gtk::Popover,
+    parent: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &Rc<StatusToast>,
+    reach: &PlayerCommandReach,
+) {
+    use PlayerCommandId as Id;
+
+    if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+        eprintln!("interaction: player-command={}", id.id());
+    }
+
+    if let Some(action) = player_commands::geometry_action(id) {
+        popover.popdown();
+        apply_video_geometry_action(state, action, status_toast);
+        return;
+    }
+
+    match id {
+        Id::GoToTime => {
+            popover.popdown();
+            open_go_to_time_dialog(parent, Rc::clone(state), Rc::clone(status_toast));
+        }
+        Id::CopyCurrentTime => {
+            popover.popdown();
+            copy_current_time(state, status_toast);
+        }
+        Id::AddBookmark => {
+            popover.popdown();
+            add_bookmark_at_position(state, status_toast);
+        }
+        Id::AbLoop => {
+            popover.popdown();
+            toggle_ab_loop(state, status_toast);
+        }
+        Id::RepeatMode => {
+            popover.popdown();
+            cycle_repeat_mode(state, status_toast);
+        }
+        Id::Shuffle => {
+            popover.popdown();
+            toggle_shuffle(state, status_toast);
+        }
+        Id::AutoAdvance => {
+            popover.popdown();
+            toggle_auto_advance(state, status_toast);
+        }
+        Id::PlaybackSpeed => populate_speed_popover(popover, Rc::clone(state)),
+        Id::Subtitles => {
+            populate_subtitle_popover(popover, parent, Rc::clone(state), Rc::clone(status_toast));
+        }
+        Id::AudioTrack => populate_audio_popover(popover, Rc::clone(state)),
+        Id::ChaptersUpNext => {
+            popover.popdown();
+            reach.chapters.emit_clicked();
+        }
+        Id::FitWindowToMedia => {
+            popover.popdown();
+            fit_player_window_to_current_media(parent, state, &reach.window_bounds, status_toast);
+        }
+        Id::MiniPlayer => {
+            popover.popdown();
+            toggle_compact_mode(parent);
+        }
+        Id::Fullscreen => {
+            popover.popdown();
+            reach.fullscreen.emit_clicked();
+        }
+        Id::OpenFile => {
+            popover.popdown();
+            open_media_dialog(parent, Rc::clone(state), Rc::clone(status_toast));
+        }
+        Id::OpenUrl => {
+            popover.popdown();
+            open_url_dialog(parent, Rc::clone(state), Rc::clone(status_toast));
+        }
+        Id::OpenFolder => {
+            popover.popdown();
+            open_folder_dialog(parent, Rc::clone(state), Rc::clone(status_toast));
+        }
+        Id::OpenPlaylist => {
+            popover.popdown();
+            open_playlist_dialog(parent, Rc::clone(state), Rc::clone(status_toast));
+        }
+        Id::AddToQueue => {
+            popover.popdown();
+            open_queue_media_dialog(
+                parent,
+                Rc::clone(state),
+                Rc::clone(status_toast),
+                QueueInsertMode::Append,
+            );
+        }
+        Id::PlayNext => {
+            popover.popdown();
+            open_queue_media_dialog(
+                parent,
+                Rc::clone(state),
+                Rc::clone(status_toast),
+                QueueInsertMode::PlayNext,
+            );
+        }
+        Id::SavePlaylist => {
+            popover.popdown();
+            save_playlist_dialog(parent, Rc::clone(state), Rc::clone(status_toast));
+        }
+        Id::CloseMedia => {
+            popover.popdown();
+            close_current_media(state, status_toast);
+        }
+        Id::MediaInfo => {
+            popover.popdown();
+            open_media_info_window(parent, state, Rc::clone(status_toast));
+        }
+        Id::OpenFileLocation => {
+            popover.popdown();
+            open_current_file_location(state, status_toast);
+        }
+        Id::SaveFrame => {
+            popover.popdown();
+            reach.screenshot.emit_clicked();
+        }
+        Id::SaveFrameWithSubtitles => {
+            popover.popdown();
+            save_screenshot(state, status_toast, true);
+        }
+        Id::CopyFrame => {
+            popover.popdown();
+            copy_frame_to_clipboard(state, status_toast);
+        }
+        Id::ExportClip => {}
+        Id::PrivateSession => {
+            popover.popdown();
+            toggle_private_session(state, status_toast);
+        }
+        Id::ClearHistory => {
+            popover.popdown();
+            open_clear_history_dialog(parent, Rc::clone(state), Rc::clone(status_toast));
+        }
+        Id::OpenSettings => {
+            popover.popdown();
+            open_settings_window(parent, Rc::clone(state), Rc::clone(status_toast));
+        }
+        Id::AspectAuto
+        | Id::AspectWide
+        | Id::AspectStandard
+        | Id::AspectCinema
+        | Id::ZoomIn
+        | Id::ZoomOut
+        | Id::PanLeft
+        | Id::PanRight
+        | Id::PanUp
+        | Id::PanDown
+        | Id::CenterImage
+        | Id::RotateClockwise
+        | Id::FillScreen
+        | Id::Deinterlace
+        | Id::ResetVideo => unreachable!("video geometry commands dispatch above"),
+    }
 }
 
 pub(crate) fn current_clip_export_eligibility(
@@ -1019,22 +852,6 @@ pub(crate) fn track_section_title(title: &str) -> gtk::Label {
 /// An "eyebrow" header for a group inside a popover (e.g. Secondary, Output
 /// Device, Screenshot) — dimmer and smaller than the popover title so the
 /// primary heading stays dominant and the sections read as a clear hierarchy.
-pub(crate) fn track_group_title(title: &str) -> gtk::Label {
-    let title = gtk::Label::new(Some(title));
-    title.add_css_class("okp-track-group-title");
-    title.set_xalign(0.0);
-    title
-}
-
-/// A quieter sub-header nested under a group header (e.g. Aspect ratio under
-/// Video) so two stacked headers do not read as siblings.
-pub(crate) fn track_subgroup_title(title: &str) -> gtk::Label {
-    let title = gtk::Label::new(Some(title));
-    title.add_css_class("okp-track-subgroup-title");
-    title.set_xalign(0.0);
-    title
-}
-
 pub(crate) fn scribe_subtitle_button() -> gtk::Button {
     let button = gtk::Button::new();
     button.add_css_class("okp-track-row");
@@ -2023,38 +1840,6 @@ pub(crate) fn audio_track_button(name: &str, detail: &str, selected: bool) -> gt
     }
 
     row.append(&labels);
-    button.set_child(Some(&row));
-    button
-}
-
-pub(crate) fn command_button(text: &str, selected: bool) -> gtk::Button {
-    let button = track_button(text, selected);
-    button.add_css_class("okp-command-row");
-    button
-}
-
-pub(crate) fn audio_command_button(text: &str) -> gtk::Button {
-    let button = gtk::Button::new();
-    button.add_css_class("okp-track-row");
-    button.add_css_class("okp-command-row");
-
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    let check = selection_check_icon();
-    check.set_opacity(0.0);
-    row.append(&check);
-    let icon = audio_track_icon(16);
-    if env::var_os("OKP_DEBUG_OSC_LAYOUT").is_some() {
-        icon.set_widget_name("okp-debug-audio-overflow-icon");
-    }
-    row.append(&icon);
-
-    let label = gtk::Label::new(Some(text));
-    label.add_css_class("okp-track-row-label");
-    label.set_xalign(0.0);
-    label.set_hexpand(true);
-    label.set_ellipsize(pango::EllipsizeMode::End);
-    row.append(&label);
-
     button.set_child(Some(&row));
     button
 }

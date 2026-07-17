@@ -988,6 +988,7 @@ pub(crate) fn draw_audio_track_glyph(
 
 pub(crate) fn build_controls(
     window: &gtk::ApplicationWindow,
+    window_bounds: Rc<RefCell<Option<PlayerWindowBounds>>>,
     state: Rc<RefCell<PlayerState>>,
     updating_seek: Rc<Cell<bool>>,
     updating_volume: Rc<Cell<bool>>,
@@ -1352,15 +1353,15 @@ pub(crate) fn build_controls(
     let more_parent = window.clone();
     let more_state = Rc::clone(&state);
     let more_toast = Rc::clone(&status_toast);
-    // Shared with the adaptive OscBar (see `controls_bar`): the bar writes the
-    // controls it folded at the current width, and the overflow popover reads
-    // them to keep every collapsed action reachable (issue #328).
+    // Keep the adaptive OscBar's collapsed set observable for its layout
+    // contract and regression coverage. Command availability comes from the
+    // canonical registry rather than this width-dependent list.
     let overflow_collapsed: Rc<RefCell<Vec<OscControlId>>> = Rc::new(RefCell::new(Vec::new()));
-    let more_reach = OverflowReach {
-        collapsed: Rc::clone(&overflow_collapsed),
+    let more_reach = PlayerCommandReach {
         screenshot: screenshot_button.clone(),
         fullscreen: fullscreen_button.clone(),
         chapters: chapters_button.clone(),
+        window_bounds,
     };
     more_popover.connect_show(move |popover| {
         populate_command_popover(
@@ -1369,6 +1370,7 @@ pub(crate) fn build_controls(
             Rc::clone(&more_state),
             Rc::clone(&more_toast),
             &more_reach,
+            PlayerCommandSurface::More,
         );
     });
 

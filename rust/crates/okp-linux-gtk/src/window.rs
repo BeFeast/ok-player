@@ -132,6 +132,9 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         .default_height(680)
         .decorated(false)
         .build();
+    if env::var_os("OKP_NARROW_COMMAND_PREVIEW").is_some() {
+        window.set_default_size(480, 270);
+    }
     window.add_css_class("okp-player-window");
     apply_compact_accessibility_classes(&window);
     window.set_icon_name(Some(LINUX_ICON_NAME));
@@ -153,6 +156,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
 
     let controls = build_controls(
         &window,
+        Rc::clone(&window_bounds),
         Rc::clone(&state),
         Rc::clone(&updating_seek),
         Rc::clone(&updating_volume),
@@ -198,7 +202,8 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         preview.set_hexpand(true);
         preview.set_vexpand(true);
         let compact_preview = env::var_os("OKP_START_COMPACT").is_some();
-        if !compact_preview {
+        let narrow_command_preview = env::var_os("OKP_NARROW_COMMAND_PREVIEW").is_some();
+        if !compact_preview && !narrow_command_preview {
             preview.set_size_request(1120, 680);
         }
         preview.set_can_target(false);
@@ -271,6 +276,12 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         Rc::clone(&state),
         Rc::clone(&status_toast),
         Rc::clone(&chrome),
+        PlayerCommandReach {
+            screenshot: controls.screenshot_button.clone(),
+            fullscreen: controls.fullscreen_button.clone(),
+            chapters: controls.chapters_button.clone(),
+            window_bounds: Rc::clone(&window_bounds),
+        },
     );
     connect_player_window_move(&overlay, &window);
     connect_drop(&window, Rc::clone(&state), empty_surface.clone());
@@ -810,6 +821,108 @@ pub(crate) fn fit_player_window_to_video(
         work_area,
         placement,
     );
+}
+
+pub(crate) fn fit_player_window_to_current_media(
+    window: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
+    reported_bounds: &Rc<RefCell<Option<PlayerWindowBounds>>>,
+    status_toast: &StatusToast,
+) {
+    let (source_generation, video) = {
+        let state = state.borrow();
+        let Some(dimensions) = state.current_video_dimensions else {
+            status_toast.show("Media dimensions are not available");
+            return;
+        };
+        (
+            state.source_generation,
+            window_fit::WindowSize {
+                width: dimensions.width,
+                height: dimensions.height,
+            },
+        )
+    };
+
+    let compact = window_compact_mode_active(window);
+    match window_fit::explicit_window_fit_action(
+        true,
+        window.is_fullscreen(),
+        window.is_maximized() || compact,
+    ) {
+        window_fit::ExplicitWindowFitAction::Disabled => {
+            status_toast.show("Media dimensions are not available");
+        }
+        window_fit::ExplicitWindowFitAction::FitWindowed => {
+            fit_player_window_to_video(
+                window,
+                state,
+                reported_bounds,
+                source_generation,
+                video,
+                false,
+            );
+            status_toast.show("Window fitted to media");
+        }
+        window_fit::ExplicitWindowFitAction::RestoreWindowedAndFit => {
+            state.borrow_mut().fullscreen_toggle.observe(false);
+            window.unfullscreen();
+            window.unmaximize();
+            restore_compact_mode(window);
+            schedule_explicit_player_window_fit(
+                window,
+                state,
+                reported_bounds,
+                source_generation,
+                video,
+            );
+            status_toast.show("Restoring window and fitting to media");
+        }
+    }
+}
+
+fn schedule_explicit_player_window_fit(
+    window: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
+    reported_bounds: &Rc<RefCell<Option<PlayerWindowBounds>>>,
+    source_generation: u64,
+    video: window_fit::WindowSize,
+) {
+    let window = window.clone();
+    let state = Rc::clone(state);
+    let reported_bounds = Rc::clone(reported_bounds);
+    let attempts = Rc::new(Cell::new(0_u8));
+    glib::timeout_add_local(Duration::from_millis(50), move || {
+        if state.borrow().source_generation != source_generation {
+            return glib::ControlFlow::Break;
+        }
+
+        if window.is_fullscreen() {
+            window.unfullscreen();
+        }
+        if window.is_maximized() {
+            window.unmaximize();
+        }
+        if window.is_fullscreen() || window.is_maximized() {
+            let next = attempts.get().saturating_add(1);
+            attempts.set(next);
+            return if next < 40 {
+                glib::ControlFlow::Continue
+            } else {
+                glib::ControlFlow::Break
+            };
+        }
+
+        fit_player_window_to_video(
+            &window,
+            &state,
+            &reported_bounds,
+            source_generation,
+            video,
+            false,
+        );
+        glib::ControlFlow::Break
+    });
 }
 
 fn settle_deferred_launch_fit_on_map(
@@ -1933,7 +2046,7 @@ pub(crate) fn playback_animations_enabled() -> bool {
             .unwrap_or(true)
 }
 
-fn idle_theme_is_dark() -> bool {
+pub(crate) fn idle_theme_is_dark() -> bool {
     match env::var("OKP_IDLE_THEME").ok().as_deref() {
         Some("light") => false,
         Some("dark") => true,
