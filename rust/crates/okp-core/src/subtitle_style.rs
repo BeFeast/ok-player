@@ -7,11 +7,12 @@
 //! in either desktop shell.
 //!
 //! These options style mpv's OWN text-subtitle renderer (SRT / plain text). ASS/SSA subtitles
-//! carry their own embedded styling, which mpv respects by design (`sub-ass-override` defaults
-//! to `scale`), so a preset deliberately does NOT repaint them — the same asymmetry that forced
-//! the OSC lift onto `sub-pos` rather than `sub-margin-y` (see [`crate::subtitle_lift`]). Every
-//! preset sets the SAME set of options, so switching presets fully overrides the previous one
-//! with no residual state.
+//! carry their own embedded styling. The engine adapter pins `sub-ass-override=scale` (and the
+//! secondary equivalent), which deliberately preserves authored fonts, colors, inline layout,
+//! and signs while still allowing OK Player's explicit size/position controls. A preset therefore
+//! does NOT repaint ASS/SSA — the same asymmetry that forced the OSC lift onto `sub-pos` rather
+//! than `sub-margin-y` (see [`crate::subtitle_lift`]). Every preset sets the SAME set of options,
+//! so switching presets fully overrides the previous one with no residual state.
 
 /// A named subtitle appearance preset. All presets are `'static`; obtain one from [`ALL`] or
 /// [`from_key`].
@@ -133,7 +134,9 @@ pub fn normalized_position(position: Option<i64>) -> i64 {
 /// Whether an mpv option is owned by the curated subtitle presentation surface. Raw `mpv.conf`
 /// remains available for advanced options, but it must not silently override a Settings choice.
 pub fn is_managed_option(name: &str) -> bool {
-    name.eq_ignore_ascii_case("sub-scale")
+    name.eq_ignore_ascii_case("sub-ass-override")
+        || name.eq_ignore_ascii_case("secondary-sub-ass-override")
+        || name.eq_ignore_ascii_case("sub-scale")
         || name.eq_ignore_ascii_case("sub-pos")
         || ["sub-outline-color", "sub-outline-size", "sub-shadow-color"]
             .iter()
@@ -291,6 +294,8 @@ mod tests {
     fn managed_options_cover_size_position_and_every_style_field() {
         assert!(is_managed_option("sub-scale"));
         assert!(is_managed_option("SUB-POS"));
+        assert!(is_managed_option("sub-ass-override"));
+        assert!(is_managed_option("SECONDARY-SUB-ASS-OVERRIDE"));
         assert!(is_managed_option("sub-outline-size"));
         assert!(is_managed_option("sub-shadow-color"));
         for (name, _) in DEFAULT.options {

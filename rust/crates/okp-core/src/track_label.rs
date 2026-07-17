@@ -5,6 +5,8 @@
 //! builds its flyout rows in XAML — so this is Linux-lane logic that a future
 //! port can share verbatim.
 
+use crate::subtitle_format::{self, SubtitlePresetFormat};
+
 /// The primary name shown for a track: its title, else its language code, else
 /// a `Track {id}` placeholder. Blank or whitespace-only values count as absent.
 pub fn primary_track_name(id: i64, title: Option<&str>, lang: Option<&str>) -> String {
@@ -79,12 +81,16 @@ pub fn subtitle_track_label(
     title: Option<&str>,
     lang: Option<&str>,
     codec: Option<&str>,
+    external_filename: Option<&str>,
     external: bool,
     default: bool,
 ) -> String {
     let mut parts = vec![primary_track_name(id, title, lang)];
 
-    if let Some(codec) = clean(codec) {
+    let format = subtitle_format::preset_format(codec, external_filename);
+    if let Some(label) = format.label() {
+        parts.push(label.to_owned());
+    } else if let Some(codec) = clean(codec) {
         parts.push(subtitle_codec_label(&codec));
         // The format name (PGS/VobSub/…) already implies a bitmap to an informed
         // eye, but the explicit tag makes the "not a text track" status
@@ -92,6 +98,12 @@ pub fn subtitle_track_label(
         if crate::subtitle_format::is_image_subtitle(Some(&codec)) {
             parts.push("Image".to_owned());
         }
+    }
+    if matches!(
+        format,
+        SubtitlePresetFormat::Ass | SubtitlePresetFormat::Ssa
+    ) {
+        parts.push("Native style".to_owned());
     }
     if external {
         parts.push("EXT".to_owned());
@@ -219,11 +231,27 @@ mod tests {
     #[test]
     fn subtitle_label_distinguishes_webvtt_from_external_srt() {
         assert_eq!(
-            subtitle_track_label(2, Some("English"), None, Some("webvtt"), true, false),
+            subtitle_track_label(
+                2,
+                Some("English"),
+                None,
+                Some("webvtt"),
+                Some("Feature.vtt"),
+                true,
+                false,
+            ),
             "English · WebVTT · EXT"
         );
         assert_eq!(
-            subtitle_track_label(3, Some("English"), None, Some("subrip"), true, false),
+            subtitle_track_label(
+                3,
+                Some("English"),
+                None,
+                Some("subrip"),
+                Some("Feature.srt"),
+                true,
+                false,
+            ),
             "English · SRT · EXT"
         );
     }
@@ -238,6 +266,7 @@ mod tests {
                 Some("English SDH"),
                 Some("eng"),
                 Some("hdmv_pgs_subtitle"),
+                None,
                 false,
                 true
             ),
@@ -245,7 +274,15 @@ mod tests {
         );
         // A VobSub DVD track loaded externally.
         assert_eq!(
-            subtitle_track_label(4, None, Some("fre"), Some("dvd_subtitle"), true, false),
+            subtitle_track_label(
+                4,
+                None,
+                Some("fre"),
+                Some("dvd_subtitle"),
+                Some("Feature.fre.sub"),
+                true,
+                false,
+            ),
             "fre · VobSub · Image · EXT"
         );
     }
@@ -253,7 +290,8 @@ mod tests {
     #[test]
     fn subtitle_label_does_not_tag_text_tracks_as_image() {
         for codec in ["subrip", "webvtt", "ass"] {
-            let label = subtitle_track_label(2, Some("English"), None, Some(codec), false, false);
+            let label =
+                subtitle_track_label(2, Some("English"), None, Some(codec), None, false, false);
             assert!(
                 !label.contains("Image"),
                 "{codec} should not be tagged Image: {label}"
@@ -262,14 +300,26 @@ mod tests {
     }
 
     #[test]
-    fn subtitle_label_distinguishes_embedded_and_default_tracks() {
+    fn subtitle_label_marks_native_styling_and_distinguishes_ssa_sidecars() {
         assert_eq!(
-            subtitle_track_label(4, None, Some("eng"), Some("ass"), false, true),
-            "eng · ASS · Default"
+            subtitle_track_label(4, None, Some("eng"), Some("ass"), None, false, true),
+            "eng · ASS · Native style · Default"
         );
         assert_eq!(
-            subtitle_track_label(5, None, None, None, false, false),
-            "Track 5"
+            subtitle_track_label(
+                5,
+                Some("Signs"),
+                None,
+                Some("ass"),
+                Some("Feature.signs.ssa"),
+                true,
+                false,
+            ),
+            "Signs · SSA · Native style · EXT"
+        );
+        assert_eq!(
+            subtitle_track_label(6, None, None, None, None, false, false),
+            "Track 6"
         );
     }
 }

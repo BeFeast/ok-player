@@ -1027,6 +1027,13 @@ impl Mpv {
         // only surfaces the resulting track metadata. Keep this explicit so
         // config=no cannot make sidecar support depend on mpv's default value.
         this.set_option("sub-auto", "exact")?;
+        // Preserve authored ASS/SSA styling for both subtitle slots. `scale` is
+        // deliberate: mpv keeps script fonts, colors, inline layout, and signs, but
+        // still honors OK Player's explicit sub-scale/sub-pos controls. The GTK
+        // raw-config parser protects these options so a preset cannot silently
+        // cross the native-style boundary.
+        this.set_option("sub-ass-override", "scale")?;
+        this.set_option("secondary-sub-ass-override", "scale")?;
         this.apply_options(options)?;
         check(unsafe { ffi::mpv_initialize(this.handle.as_ptr()) })?;
 
@@ -2256,6 +2263,26 @@ mod tests {
             "srt",
             "1\n00:00:00,000 --> 00:00:02,000\nSRT SIDECAR\n",
             "subrip",
+        );
+    }
+
+    #[test]
+    fn ass_override_boundary_preserves_authored_styles_in_both_slots() {
+        let mpv = Mpv::new().expect("libmpv must be loadable for okp-mpv tests");
+
+        assert_eq!(
+            mpv.reader()
+                .get_string("sub-ass-override")
+                .expect("read primary ASS override mode")
+                .as_deref(),
+            Some("scale")
+        );
+        assert_eq!(
+            mpv.reader()
+                .get_string("secondary-sub-ass-override")
+                .expect("read secondary ASS override mode")
+                .as_deref(),
+            Some("scale")
         );
     }
 

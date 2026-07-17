@@ -1060,6 +1060,8 @@ fn raw_mpv_config_parser_rejects_protected_options() {
     for option in [
         "sub-scale=1.4",
         "sub-pos=90",
+        "sub-ass-override=force",
+        "secondary-sub-ass-override=strip",
         "sub-border-style=background-box",
         "SUB-BACK-COLOR=0/0/0/0.7",
         "sub-outline-size=6",
@@ -1626,7 +1628,7 @@ fn track_label_shows_tags_without_a_selection_prefix() {
         codec: None,
         audio_channels: None,
     };
-    assert_eq!(track_label(&subtitle), "English (SDH) · EXT");
+    assert_eq!(track_label(&subtitle), "English (SDH) · SRT · EXT");
 
     let audio = Track {
         id: 1,
@@ -1995,6 +1997,7 @@ fn subtitle_presentation_surfaces_stay_curated_and_width_safe() {
     let popover = include_str!("track_popovers.rs");
     assert!(popover.contains("compact_subtitle_size_row"));
     assert!(popover.contains("compact_subtitle_style_row"));
+    assert!(popover.contains("subtitle_preset_status_label"));
     assert!(popover.contains("More in Settings → Subtitles"));
     assert_eq!(subtitle_style_label("Default"), "Default");
     assert_eq!(subtitle_style_label("Contrast"), "High contrast");
@@ -2002,7 +2005,39 @@ fn subtitle_presentation_surfaces_stay_curated_and_width_safe() {
 
     let css = include_str!("css.rs");
     assert!(css.contains(".okp-quick-style-row"));
+    assert!(css.contains(".okp-subtitle-preset-status"));
     assert!(css.contains(".okp-settings-hint"));
+}
+
+#[test]
+fn subtitle_preset_surfaces_explain_native_supported_and_fallback_states() {
+    use okp_core::subtitle_tracks::{SubtitlePresetApplicability, SubtitlePresetFormat};
+
+    let ass = SubtitlePresetApplicability::NativeStyle(SubtitlePresetFormat::Ass);
+    assert_eq!(
+        subtitle_preset_status_text(ass),
+        "ASS native style; OK Player preset is not applied."
+    );
+    assert!(settings_subtitle_preset_hint(ass).contains("authored native styling"));
+
+    let srt = SubtitlePresetApplicability::Applies(SubtitlePresetFormat::SubRip);
+    assert_eq!(
+        subtitle_preset_status_text(srt),
+        "OK Player preset applies to this SRT track."
+    );
+    assert!(settings_subtitle_preset_hint(srt).contains("uses the selected"));
+
+    let unknown = SubtitlePresetApplicability::Unsupported(SubtitlePresetFormat::Unknown);
+    assert_eq!(
+        subtitle_preset_status_text(unknown),
+        "Style support is unavailable for this subtitle format."
+    );
+    assert!(settings_subtitle_preset_hint(unknown).contains("unavailable"));
+
+    assert_eq!(
+        subtitle_preset_status_text(SubtitlePresetApplicability::NoActiveTrack),
+        "Select a subtitle track to use style presets."
+    );
 }
 
 #[test]
@@ -2071,7 +2106,7 @@ fn player_popovers_have_scoped_presenter_classes() {
 }
 
 #[test]
-fn subtitle_track_label_distinguishes_webvtt_srt_and_embedded_sources() {
+fn subtitle_track_label_distinguishes_webvtt_srt_and_native_styled_sources() {
     let webvtt = Track {
         id: 3,
         kind: TrackKind::Subtitle,
@@ -2101,7 +2136,23 @@ fn subtitle_track_label_distinguishes_webvtt_srt_and_embedded_sources() {
         codec: Some("ass".to_owned()),
         ..webvtt
     };
-    assert_eq!(track_label(&embedded), "English · ASS · Default");
+    assert_eq!(
+        track_label(&embedded),
+        "English · ASS · Native style · Default"
+    );
+
+    let external_ssa = Track {
+        id: 6,
+        external: true,
+        external_filename: Some("/tmp/example.ssa".to_owned()),
+        default: false,
+        codec: Some("ass".to_owned()),
+        ..embedded
+    };
+    assert_eq!(
+        track_label(&external_ssa),
+        "English · SSA · Native style · EXT"
+    );
 }
 
 #[test]
