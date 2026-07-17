@@ -57,4 +57,13 @@ public class SubtitleLiftTests
         double lift = SubtitleLift.ForSurface(40, Osc, Floor); // 88/40 = 220%
         Assert.Equal(100.0, lift);
     }
+
+    [Theory]
+    [InlineData(100, 0, 100)]
+    [InlineData(100, 16, 84)]
+    [InlineData(90, 16, 74)]
+    [InlineData(20, 36.7, 0)]
+    [InlineData(120, 0, 100)]
+    public void ApplyToPosition_ComposesConfiguredPositionAndOscLift(double position, double lift, double expected)
+        => Assert.Equal(expected, SubtitleLift.ApplyToPosition(position, lift));
 }

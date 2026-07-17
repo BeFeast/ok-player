@@ -2,7 +2,9 @@
 //! `tests/OkPlayer.Tests/SubtitleStyleTests.cs` is the executable spec. A preset is one of a
 //! small, curated set of looks the user picks from in Settings → Subtitles: a fixed map of mpv
 //! subtitle-style options, kept as pure data so the option set is unit-testable and one
-//! definition drives both the engine (apply) and the UI label.
+//! definition drives both the engine (apply) and the UI label. Size and vertical position are
+//! curated alongside the appearance preset, so their normalization also lives here rather than
+//! in either desktop shell.
 //!
 //! These options style mpv's OWN text-subtitle renderer (SRT / plain text). ASS/SSA subtitles
 //! carry their own embedded styling, which mpv respects by design (`sub-ass-override` defaults
@@ -19,24 +21,31 @@ pub struct SubtitleStyle {
     /// key and the option set; display text is the shell's concern.
     pub key: &'static str,
     /// Ordered mpv option → value pairs. Applied via set-property at engine init and on a live
-    /// settings change. Colors are `#RRGGBB` (fully opaque) — the universally-accepted mpv color
-    /// form, so they parse identically regardless of whether a build expects a leading alpha
-    /// byte.
+    /// settings change. Opaque colors are `#RRGGBB`; the boxed preset uses mpv's documented
+    /// `r/g/b/a` form because it is the portable way to request a semi-transparent background.
     pub options: &'static [(&'static str, &'static str)],
 }
 
-// The exact set of options every preset writes. Listing all six in each preset (rather than only
+pub const DEFAULT_SCALE: f64 = 1.0;
+pub const MIN_SCALE: f64 = 0.25;
+pub const MAX_SCALE: f64 = 4.0;
+pub const DEFAULT_POSITION: i64 = 100;
+pub const MIN_POSITION: i64 = 0;
+pub const MAX_POSITION: i64 = 100;
+
+// The exact set of options every preset writes. Listing all seven in each preset (rather than only
 // the ones that differ from mpv's defaults) is deliberate: switching from any preset to any
 // other then restores every field, so e.g. going Classic → Default actually repaints yellow back
-// to white.
+// to white and going Contrast → Default removes the background box.
 pub static DEFAULT: SubtitleStyle = SubtitleStyle {
     key: "Default",
     options: &[
         ("sub-color", "#FFFFFF"),
         ("sub-border-color", "#000000"),
         ("sub-border-size", "3"),
+        ("sub-border-style", "outline-and-shadow"),
         ("sub-shadow-offset", "0"),
-        ("sub-shadow-color", "#000000"),
+        ("sub-back-color", "#000000"),
         ("sub-bold", "no"),
     ],
 };
@@ -47,8 +56,9 @@ pub static BOLD: SubtitleStyle = SubtitleStyle {
         ("sub-color", "#FFFFFF"),
         ("sub-border-color", "#000000"),
         ("sub-border-size", "3.2"),
+        ("sub-border-style", "outline-and-shadow"),
         ("sub-shadow-offset", "0"),
-        ("sub-shadow-color", "#000000"),
+        ("sub-back-color", "#000000"),
         ("sub-bold", "yes"),
     ],
 };
@@ -59,8 +69,9 @@ pub static CLASSIC: SubtitleStyle = SubtitleStyle {
         ("sub-color", "#FFFF00"),
         ("sub-border-color", "#000000"),
         ("sub-border-size", "3"),
+        ("sub-border-style", "outline-and-shadow"),
         ("sub-shadow-offset", "0"),
-        ("sub-shadow-color", "#000000"),
+        ("sub-back-color", "#000000"),
         ("sub-bold", "no"),
     ],
 };
@@ -70,9 +81,10 @@ pub static CONTRAST: SubtitleStyle = SubtitleStyle {
     options: &[
         ("sub-color", "#FFFFFF"),
         ("sub-border-color", "#000000"),
-        ("sub-border-size", "4"),
-        ("sub-shadow-offset", "1.5"),
-        ("sub-shadow-color", "#000000"),
+        ("sub-border-size", "2"),
+        ("sub-border-style", "background-box"),
+        ("sub-shadow-offset", "4"),
+        ("sub-back-color", "0.0/0.0/0.0/0.72"),
         ("sub-bold", "no"),
     ],
 };
@@ -91,6 +103,45 @@ pub fn from_key(key: Option<&str>) -> &'static SubtitleStyle {
         }
     }
     &DEFAULT
+}
+
+/// The next preset in display order, wrapping from the last preset back to the default. Used by
+/// the compact subtitle switcher's one-click Style shortcut.
+pub fn next(style: &SubtitleStyle) -> &'static SubtitleStyle {
+    let index = ALL
+        .iter()
+        .position(|candidate| std::ptr::eq(*candidate, style))
+        .unwrap_or(0);
+    ALL[(index + 1) % ALL.len()]
+}
+
+/// Resolve a persisted subtitle scale to a finite value accepted by mpv.
+pub fn normalized_scale(scale: Option<f64>) -> f64 {
+    scale
+        .filter(|scale| scale.is_finite())
+        .unwrap_or(DEFAULT_SCALE)
+        .clamp(MIN_SCALE, MAX_SCALE)
+}
+
+/// Resolve a persisted `sub-pos` value to mpv's valid percentage range.
+pub fn normalized_position(position: Option<i64>) -> i64 {
+    position
+        .unwrap_or(DEFAULT_POSITION)
+        .clamp(MIN_POSITION, MAX_POSITION)
+}
+
+/// Whether an mpv option is owned by the curated subtitle presentation surface. Raw `mpv.conf`
+/// remains available for advanced options, but it must not silently override a Settings choice.
+pub fn is_managed_option(name: &str) -> bool {
+    name.eq_ignore_ascii_case("sub-scale")
+        || name.eq_ignore_ascii_case("sub-pos")
+        || ["sub-outline-color", "sub-outline-size", "sub-shadow-color"]
+            .iter()
+            .any(|alias| name.eq_ignore_ascii_case(alias))
+        || DEFAULT
+            .options
+            .iter()
+            .any(|(option, _)| name.eq_ignore_ascii_case(option))
 }
 
 #[cfg(test)]
@@ -122,7 +173,7 @@ mod tests {
         // drops an option, that breaks.
         let mut expected: Vec<&str> = DEFAULT.options.iter().map(|(name, _)| *name).collect();
         expected.sort_unstable();
-        assert_eq!(6, expected.len());
+        assert_eq!(7, expected.len());
         for style in ALL {
             let mut names: Vec<&str> = style.options.iter().map(|(name, _)| *name).collect();
             names.sort_unstable();
@@ -173,11 +224,31 @@ mod tests {
     }
 
     #[test]
-    fn all_colors_use_six_digit_rrggbb_the_universally_accepted_mpv_form() {
-        // Colour-valued options must be #RRGGBB (no alpha byte), so they parse identically
-        // regardless of whether a libmpv build expects a leading alpha. Catches a stray
-        // #AARRGGBB / #RRGGBBAA slipping in.
-        let color_keys = ["sub-color", "sub-border-color", "sub-shadow-color"];
+    fn contrast_preset_uses_a_semi_transparent_background_box() {
+        assert_eq!(
+            Some("background-box"),
+            option_value(&CONTRAST, "sub-border-style")
+        );
+        assert_eq!(
+            Some("0.0/0.0/0.0/0.72"),
+            option_value(&CONTRAST, "sub-back-color")
+        );
+    }
+
+    #[test]
+    fn non_boxed_presets_restore_outline_and_shadow() {
+        for style in [&DEFAULT, &BOLD, &CLASSIC] {
+            assert_eq!(
+                Some("outline-and-shadow"),
+                option_value(style, "sub-border-style")
+            );
+            assert_eq!(Some("#000000"), option_value(style, "sub-back-color"));
+        }
+    }
+
+    #[test]
+    fn opaque_colors_use_six_digit_rrggbb() {
+        let color_keys = ["sub-color", "sub-border-color"];
         for style in ALL {
             for (name, value) in style.options {
                 if color_keys.contains(name) {
@@ -192,5 +263,40 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn next_cycles_in_display_order_and_wraps() {
+        assert!(std::ptr::eq(next(&DEFAULT), &BOLD));
+        assert!(std::ptr::eq(next(&BOLD), &CLASSIC));
+        assert!(std::ptr::eq(next(&CLASSIC), &CONTRAST));
+        assert!(std::ptr::eq(next(&CONTRAST), &DEFAULT));
+    }
+
+    #[test]
+    fn presentation_values_default_and_clamp_safely() {
+        assert_eq!(DEFAULT_SCALE, normalized_scale(None));
+        assert_eq!(DEFAULT_SCALE, normalized_scale(Some(f64::NAN)));
+        assert_eq!(MIN_SCALE, normalized_scale(Some(-1.0)));
+        assert_eq!(MAX_SCALE, normalized_scale(Some(9.0)));
+        assert_eq!(1.4, normalized_scale(Some(1.4)));
+
+        assert_eq!(DEFAULT_POSITION, normalized_position(None));
+        assert_eq!(MIN_POSITION, normalized_position(Some(-20)));
+        assert_eq!(MAX_POSITION, normalized_position(Some(120)));
+        assert_eq!(90, normalized_position(Some(90)));
+    }
+
+    #[test]
+    fn managed_options_cover_size_position_and_every_style_field() {
+        assert!(is_managed_option("sub-scale"));
+        assert!(is_managed_option("SUB-POS"));
+        assert!(is_managed_option("sub-outline-size"));
+        assert!(is_managed_option("sub-shadow-color"));
+        for (name, _) in DEFAULT.options {
+            assert!(is_managed_option(name), "{name} should be protected");
+        }
+        assert!(!is_managed_option("sub-font"));
+        assert!(!is_managed_option("profile"));
     }
 }

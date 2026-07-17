@@ -142,9 +142,37 @@ pub(crate) fn adjust_subtitle_delay(state: &Rc<RefCell<PlayerState>>, delta_seco
 }
 
 pub(crate) fn adjust_subtitle_scale(state: &Rc<RefCell<PlayerState>>, delta: f64) {
-    if with_mpv(state, |mpv| mpv.adjust_subtitle_scale(delta)) {
-        save_current_preferences(state);
+    let current = state
+        .borrow()
+        .mpv
+        .as_ref()
+        .map(Mpv::observed_subtitle_scale)
+        .unwrap_or(okp_core::subtitle_style::DEFAULT_SCALE);
+    let target = okp_core::subtitle_style::normalized_scale(Some(current + delta));
+    if with_mpv(state, |mpv| mpv.set_subtitle_scale(target)) {
+        save_current_preferences_with_subtitle_scale(state, target);
     }
+}
+
+pub(crate) fn set_subtitle_style_setting(
+    state: &Rc<RefCell<PlayerState>>,
+    key: &str,
+) -> Result<(), &'static str> {
+    let style = okp_core::subtitle_style::from_key(Some(key));
+    {
+        let mut state = state.borrow_mut();
+        state.settings.set_subtitle_style(style.key);
+        if let Err(error) = state.settings.save() {
+            eprintln!("Failed to save subtitle style: {error}");
+            return Err("Could not save subtitle style");
+        }
+    }
+    if !with_mpv(state, |mpv| mpv.set_subtitle_style(style.options)) && state.borrow().mpv.is_some()
+    {
+        eprintln!("Failed to apply subtitle style");
+        return Err("Could not apply subtitle style");
+    }
+    Ok(())
 }
 
 pub(crate) fn screenshot_context(

@@ -130,6 +130,22 @@ if [[ "$PAGE" == "playback" ]]; then
     exit 1
   fi
 fi
+
+if [[ "$PAGE" == "subtitles" ]]; then
+  # The Presentation card occupies the top of the 500px-wide content column. Its three segmented
+  # rows must render without forcing the canonical 760px window wider (geometry check above) or
+  # collapsing into a flat/blank card.
+  presentation_variance="$(
+    magick "$OUT_DIR/settings.png" \
+      -crop 500x235+216+70 \
+      -colorspace gray \
+      -format '%[fx:standard_deviation]' info:
+  )"
+  if ! awk -v variance="$presentation_variance" 'BEGIN { exit !(variance > 0.05) }'; then
+    echo "Subtitle Presentation controls are unexpectedly flat: variance=${presentation_variance}" >&2
+    exit 1
+  fi
+fi
 SMOKE
 then
   echo "Settings smoke failed. Session log: $OUT_DIR/session.log" >&2
