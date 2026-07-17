@@ -17,7 +17,7 @@
     * libmpv / ffmpeg native binaries via scripts/fetch-natives.ps1
 
   Each step checks for the tool first and only installs what is missing, so the script is safe to run on
-  a fresh VM, on a half-provisioned VM, and on an already-complete VM — every run converges to the same
+  a fresh VM, on a half-provisioned VM, and on an already-complete VM -- every run converges to the same
   state. It never touches any parked physical verification checkout: it provisions the machine it runs on
   and clones/mutates nothing outside this repository.
 
@@ -28,7 +28,7 @@
   readable environment report so the VM's verified state is captured alongside the run.
 .PARAMETER CheckOnly
   Verify the toolchain and emit the environment report WITHOUT installing anything. Exit code is non-zero
-  when a required tool is missing or below its baseline — use this in CI or a snapshot gate.
+  when a required tool is missing or below its baseline -- use this in CI or a snapshot gate.
 .PARAMETER SkipVisualStudio
   Do not install/modify Visual Studio. Useful when the IDE is provisioned by a separate image step.
 .PARAMETER SkipNatives
@@ -77,28 +77,58 @@ deliberately does not shell out to an unverified installer to add winget itself.
     return $wg.Source
 }
 
-# Idempotent winget install: skip when the package id is already present, otherwise install it pinned by
-# id (exact match). winget itself is convergent, but the pre-check keeps re-runs quiet and offline-fast.
+# Returns the first winget id from the supplied list that `winget list` reports as installed,
+# or $null when none of them are present. Exact-id matching keeps re-runs quiet and offline-fast.
+function Find-InstalledWingetPackage {
+    param([Parameter(Mandatory)][string[]]$Ids)
+    foreach ($id in $Ids) {
+        $listed = winget list --id $id -e --accept-source-agreements 2>$null
+        if ($LASTEXITCODE -eq 0 -and ($listed -match [regex]::Escape($id))) { return $id }
+    }
+    return $null
+}
+
+# Returns the first winget id from the supplied list that `winget search` can resolve in the configured
+# source, or $null when none of the ids are available. This lets the bootstrap fall back to an alternative
+# package id when the primary id is not (yet) published to winget.
+function Find-AvailableWingetPackage {
+    param([Parameter(Mandatory)][string[]]$Ids)
+    foreach ($id in $Ids) {
+        $found = winget search --id $id -e --accept-source-agreements 2>$null
+        if ($LASTEXITCODE -eq 0 -and ($found -match [regex]::Escape($id))) { return $id }
+    }
+    return $null
+}
+
+# Idempotent winget install: skip when one of the supplied ids is already present, otherwise install the
+# first id that winget can resolve. winget itself is convergent, but the pre-check keeps re-runs quiet.
 function Install-WingetPackage {
     param(
         [Parameter(Mandatory)][string]$Id,
         [string]$Name = $Id,
+        [string[]]$AlternativeIds,
         [string[]]$OverrideArgs
     )
+    $candidates = @($Id)
+    if ($AlternativeIds) { $candidates += $AlternativeIds }
+
     Write-Step "Ensuring $Name ($Id)"
-    $listed = winget list --id $Id -e --accept-source-agreements 2>$null
-    if ($LASTEXITCODE -eq 0 -and ($listed -match [regex]::Escape($Id))) {
-        Write-Skip "$Name already installed"
+    $installedId = Find-InstalledWingetPackage -Ids $candidates
+    if ($installedId) {
+        Write-Skip "$Name already installed ($installedId)"
         return
     }
     if ($CheckOnly) { Write-Host "  would install $Name" -ForegroundColor Yellow; return }
 
-    $wingetArgs = @('install', '--id', $Id, '-e', '--accept-source-agreements',
+    $chosenId = Find-AvailableWingetPackage -Ids $candidates
+    if (-not $chosenId) { throw "No winget package found for $Name among ids: $($candidates -join ', ')" }
+
+    $wingetArgs = @('install', '--id', $chosenId, '-e', '--accept-source-agreements',
         '--accept-package-agreements', '--disable-interactivity')
     if ($OverrideArgs) { $wingetArgs += $OverrideArgs }
     winget @wingetArgs
-    if ($LASTEXITCODE -ne 0) { throw "winget failed to install $Name ($Id); exit code $LASTEXITCODE" }
-    Write-Ok "$Name installed"
+    if ($LASTEXITCODE -ne 0) { throw "winget failed to install $Name ($chosenId); exit code $LASTEXITCODE" }
+    Write-Ok "$Name installed ($chosenId)"
 }
 
 function Get-VsWherePath {
@@ -130,8 +160,9 @@ function Install-VisualStudio {
     $override = @('--quiet', '--wait', '--norestart')
     foreach ($c in $components) { $override += @('--add', $c) }
     $overrideStr = ($override -join ' ')
+    $altIds = if ($vs.alternativeWingetIds) { @($vs.alternativeWingetIds) } else { @() }
     Install-WingetPackage -Id $vs.wingetId -Name 'Visual Studio 2026 Build Tools' `
-        -OverrideArgs @('--override', $overrideStr)
+        -AlternativeIds $altIds -OverrideArgs @('--override', $overrideStr)
 }
 
 function Install-RustMsvc {
@@ -156,7 +187,7 @@ function Install-RustMsvc {
 
 # ---- Provision -----------------------------------------------------------------------------------
 Write-Host ''
-Write-Host "OK Player — Windows development VM bootstrap" -ForegroundColor White
+Write-Host "OK Player -- Windows development VM bootstrap" -ForegroundColor White
 Write-Host "Baseline VM envelope: $($manifest.vmEnvelope.vcpu) vCPU, $($manifest.vmEnvelope.memoryGiB) GiB RAM, $($manifest.vmEnvelope.diskGiB) GiB SSD (development baseline, not an app requirement)" -ForegroundColor DarkGray
 Write-Host ''
 
@@ -182,7 +213,7 @@ else {
     Write-Step 'Fetching libmpv/ffmpeg native binaries'
     $fetchScript = Join-Path $PSScriptRoot 'fetch-natives.ps1'
     if ($PSVersionTable.PSEdition -eq 'Core') {
-        # Already running under PowerShell 7 — invoke in-process.
+        # Already running under PowerShell 7 -- invoke in-process.
         & $fetchScript
         if ($LASTEXITCODE) { throw "fetch-natives.ps1 failed; exit code $LASTEXITCODE" }
     }
@@ -220,7 +251,7 @@ $reportExit = $LASTEXITCODE
 
 Write-Host ''
 if ($reportExit -eq 0) {
-    Write-Host 'Bootstrap complete — toolchain meets the OK Player baseline.' -ForegroundColor Green
+    Write-Host 'Bootstrap complete -- toolchain meets the OK Player baseline.' -ForegroundColor Green
 }
 else {
     Write-Host 'Bootstrap finished but the toolchain does NOT meet the baseline (see report above).' -ForegroundColor Yellow

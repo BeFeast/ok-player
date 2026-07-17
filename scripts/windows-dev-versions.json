@@ -49,9 +49,9 @@
       "note": "The MSVC (not GNU) toolchain is required so the future okp-ffi C ABI links against the same runtime as the WinUI shell."
     },
     "visualStudio": {
-      "wingetId": "Microsoft.VisualStudio.2026.BuildTools",
+      "wingetId": "Microsoft.VisualStudio.BuildTools",
       "alternativeWingetIds": [
-        "Microsoft.VisualStudio.2026.Community",
+        "Microsoft.VisualStudio.Community",
         "Microsoft.VisualStudio.2022.BuildTools"
       ],
       "minVersion": "18.0.0",
