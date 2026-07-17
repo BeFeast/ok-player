@@ -31,6 +31,13 @@ pub fn for_surface(surface_height_dip: f64, osc_clearance_dip: f64, floor_percen
     if lift < 100.0 { lift } else { 100.0 }
 }
 
+/// Combine the user's configured `sub-pos` baseline with the transient OSC lift. Both inputs are
+/// percentage points; the result is clamped to mpv's valid range so an extreme small-window lift
+/// can never move captions past the top edge.
+pub fn apply_to_position(base_position: f64, lift: f64) -> f64 {
+    (base_position - lift).clamp(0.0, 100.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,5 +107,14 @@ mod tests {
     fn lift_is_clamped_below_100_so_it_never_inverts_sub_pos() {
         // A pathological surface shorter than the OSC clearance must not push sub-pos negative.
         assert_eq!(100.0, for_surface(40.0, OSC, FLOOR)); // 88/40 = 220%
+    }
+
+    #[test]
+    fn configured_position_and_osc_lift_compose_without_leaving_mpv_range() {
+        assert_eq!(100.0, apply_to_position(100.0, 0.0));
+        assert_eq!(84.0, apply_to_position(100.0, 16.0));
+        assert_eq!(74.0, apply_to_position(90.0, 16.0));
+        assert_eq!(0.0, apply_to_position(20.0, 36.7));
+        assert_eq!(100.0, apply_to_position(120.0, 0.0));
     }
 }

@@ -110,7 +110,7 @@ pub(crate) fn load_media_url(state: &Rc<RefCell<PlayerState>>, url: String) {
 
     let result = {
         let state = state.borrow();
-        state.mpv.as_ref().map(|mpv| mpv.load_url(&url))
+        load_new_source(&state, |mpv| mpv.load_url(&url))
     };
 
     match result {
@@ -137,7 +137,7 @@ pub(crate) fn load_media_path_internal(
 
     let result = {
         let state = state.borrow();
-        state.mpv.as_ref().map(|mpv| mpv.load_file(&path))
+        load_new_source(&state, |mpv| mpv.load_file(&path))
     };
 
     match result {
@@ -170,7 +170,7 @@ pub(crate) fn load_media_path_with_playlist(
 
     let result = {
         let state = state.borrow();
-        state.mpv.as_ref().map(|mpv| mpv.load_file(&path))
+        load_new_source(&state, |mpv| mpv.load_file(&path))
     };
 
     match result {
@@ -279,7 +279,7 @@ pub(crate) fn load_media_url_with_playlist(
 
     let result = {
         let state = state.borrow();
-        state.mpv.as_ref().map(|mpv| mpv.load_url(&url))
+        load_new_source(&state, |mpv| mpv.load_url(&url))
     };
 
     match result {
@@ -297,6 +297,29 @@ pub(crate) fn load_media_url_with_playlist(
             true
         }
     }
+}
+
+fn load_new_source(
+    state: &PlayerState,
+    load: impl FnOnce(&Mpv) -> Result<(), okp_mpv::MpvError>,
+) -> Option<Result<(), okp_mpv::MpvError>> {
+    let mpv = state.mpv.as_ref()?;
+    Some(load_new_source_with_global_subtitle_scale(
+        mpv,
+        state.settings.subtitle_scale(),
+        load,
+    ))
+}
+
+pub(crate) fn load_new_source_with_global_subtitle_scale(
+    mpv: &Mpv,
+    global_scale: f64,
+    load: impl FnOnce(&Mpv) -> Result<(), okp_mpv::MpvError>,
+) -> Result<(), okp_mpv::MpvError> {
+    if let Err(error) = mpv.set_subtitle_scale(global_scale) {
+        eprintln!("Failed to reset subtitle size for new media: {error}");
+    }
+    load(mpv)
 }
 
 pub(crate) fn remember_loaded_url_with_playlist(
@@ -835,7 +858,7 @@ pub(crate) fn apply_video_geometry_to_mpv(
 }
 
 pub(crate) fn save_current_preferences(state: &Rc<RefCell<PlayerState>>) {
-    save_current_preferences_impl(state, None, None);
+    save_current_preferences_impl(state, None, None, None);
 }
 
 /// Persist the subtitle delay just sent to mpv instead of re-reading the
@@ -844,7 +867,16 @@ pub(crate) fn save_current_preferences_with_subtitle_delay(
     state: &Rc<RefCell<PlayerState>>,
     subtitle_delay: f64,
 ) {
-    save_current_preferences_impl(state, Some(subtitle_delay), None);
+    save_current_preferences_impl(state, Some(subtitle_delay), None, None);
+}
+
+/// Persist the subtitle scale just sent to mpv instead of re-reading the asynchronous observed
+/// snapshot, which may still expose the previous value.
+pub(crate) fn save_current_preferences_with_subtitle_scale(
+    state: &Rc<RefCell<PlayerState>>,
+    subtitle_scale: f64,
+) {
+    save_current_preferences_impl(state, None, Some(subtitle_scale), None);
 }
 
 /// Save preferences right after applying an audio delay, persisting the value
@@ -856,12 +888,13 @@ pub(crate) fn save_current_preferences_with_audio_delay(
     state: &Rc<RefCell<PlayerState>>,
     audio_delay: f64,
 ) {
-    save_current_preferences_impl(state, None, Some(audio_delay));
+    save_current_preferences_impl(state, None, None, Some(audio_delay));
 }
 
 fn save_current_preferences_impl(
     state: &Rc<RefCell<PlayerState>>,
     subtitle_delay_override: Option<f64>,
+    subtitle_scale_override: Option<f64>,
     audio_delay_override: Option<f64>,
 ) {
     let snapshot = {
@@ -875,9 +908,10 @@ fn save_current_preferences_impl(
         let Some(preferences) = state.mpv.as_ref().map(read_current_playback_preferences) else {
             return;
         };
-        let preferences = playback_preferences_with_delay_overrides(
+        let preferences = playback_preferences_with_overrides(
             preferences,
             subtitle_delay_override,
+            subtitle_scale_override,
             audio_delay_override,
         );
 
@@ -920,13 +954,17 @@ pub(crate) fn save_current_video_geometry(
     }
 }
 
-pub(crate) fn playback_preferences_with_delay_overrides(
+pub(crate) fn playback_preferences_with_overrides(
     mut preferences: history::PlaybackPreferences,
     subtitle_delay: Option<f64>,
+    subtitle_scale: Option<f64>,
     audio_delay: Option<f64>,
 ) -> history::PlaybackPreferences {
     if let Some(subtitle_delay) = subtitle_delay {
         preferences.subtitle_delay = finite_option(subtitle_delay);
+    }
+    if let Some(subtitle_scale) = subtitle_scale {
+        preferences.subtitle_scale = finite_option(subtitle_scale);
     }
     if let Some(audio_delay) = audio_delay {
         preferences.audio_delay = finite_option(audio_delay);

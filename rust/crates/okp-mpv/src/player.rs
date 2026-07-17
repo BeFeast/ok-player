@@ -17,6 +17,7 @@ use crate::pump::EventPump;
 const AUDIO_NORMALIZATION_FILTER_LABEL: &str = "@okpnorm";
 const AUDIO_NORMALIZATION_FILTER: &str = "@okpnorm:dynaudnorm";
 const AUDIO_DEVICE_AUTO: &str = "auto";
+const LEGACY_TRANSPARENT_SUBTITLE_BACKGROUND: &str = "0.0/0.0";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RenderTargetSize {
@@ -1485,6 +1486,38 @@ impl Mpv {
         self.set_double("sub-pos", position.clamp(0.0, 100.0))
     }
 
+    /// Apply one curated subtitle appearance preset live. The shell supplies the trusted option
+    /// map from `okp-core`; keeping this as a narrow batch avoids exposing an arbitrary property
+    /// string setter across the engine boundary. mpv 0.39 added `sub-border-style`; Ubuntu 24.04
+    /// still ships mpv 0.37, where a non-transparent `sub-back-color` implicitly selects the
+    /// background box. Probe the modern property with the requested trusted value, then translate
+    /// the same preset intent to the legacy shadow/background fields when that command is rejected.
+    pub fn set_subtitle_style(&self, options: &[(&str, &str)]) -> Result<(), MpvError> {
+        let border_style = options
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("sub-border-style"))
+            .map(|(_, value)| *value);
+        let explicit_border_style = if let Some(value) = border_style {
+            match self.command(&["set", "sub-border-style", value]) {
+                Ok(()) => true,
+                Err(MpvError::LibMpv(_)) => false,
+                Err(error) => return Err(error),
+            }
+        } else {
+            for (name, value) in options {
+                self.command(&["set", name, value])?;
+            }
+            return Ok(());
+        };
+
+        for (name, value) in
+            subtitle_style_options_for_engine(options, border_style, explicit_border_style)
+        {
+            self.command(&["set", name, value])?;
+        }
+        Ok(())
+    }
+
     pub fn adjust_subtitle_scale(&self, delta: f64) -> Result<(), MpvError> {
         self.set_subtitle_scale(self.observed_subtitle_scale() + delta)
     }
@@ -1556,6 +1589,30 @@ impl Mpv {
             )
         })
     }
+}
+
+fn subtitle_style_options_for_engine<'a>(
+    options: &'a [(&'a str, &'a str)],
+    border_style: Option<&str>,
+    explicit_border_style: bool,
+) -> Vec<(&'a str, &'a str)> {
+    let legacy_outline = !explicit_border_style
+        && border_style.is_some_and(|style| style.eq_ignore_ascii_case("outline-and-shadow"));
+    let mut resolved = Vec::with_capacity(options.len() + usize::from(legacy_outline));
+
+    for &(name, value) in options {
+        if name.eq_ignore_ascii_case("sub-border-style") {
+            continue;
+        }
+        if legacy_outline && name.eq_ignore_ascii_case("sub-back-color") {
+            resolved.push(("sub-shadow-color", value));
+            resolved.push(("sub-back-color", LEGACY_TRANSPARENT_SUBTITLE_BACKGROUND));
+        } else {
+            resolved.push((name, value));
+        }
+    }
+
+    resolved
 }
 
 fn render_context_frame(
@@ -2186,6 +2243,93 @@ mod tests {
             "srt",
             "1\n00:00:00,000 --> 00:00:02,000\nSRT SIDECAR\n",
             "subrip",
+        );
+    }
+
+    #[test]
+    fn curated_subtitle_style_options_apply_live() {
+        let mpv = Mpv::new().expect("libmpv must be loadable for okp-mpv tests");
+        mpv.set_subtitle_style(&[
+            ("sub-border-style", "background-box"),
+            ("sub-border-size", "2"),
+            ("sub-shadow-offset", "4"),
+            ("sub-back-color", "0.0/0.0/0.0/0.72"),
+        ])
+        .expect("curated style should apply");
+
+        let border_style = mpv
+            .reader()
+            .get_string("sub-border-style")
+            .expect("read border style when supported");
+        assert!(
+            border_style.is_none() || border_style.as_deref() == Some("background-box"),
+            "unexpected border style {border_style:?}"
+        );
+        assert_eq!(
+            mpv.reader()
+                .get_double("sub-border-size")
+                .expect("read border size"),
+            Some(2.0)
+        );
+        assert_eq!(
+            mpv.reader()
+                .get_double("sub-shadow-offset")
+                .expect("read background margin"),
+            Some(4.0)
+        );
+
+        mpv.set_subtitle_style(&[
+            ("sub-border-style", "outline-and-shadow"),
+            ("sub-shadow-offset", "0"),
+            ("sub-back-color", "#000000"),
+        ])
+        .expect("outline style should restore after the background box");
+        if border_style.is_some() {
+            assert_eq!(
+                mpv.reader()
+                    .get_string("sub-border-style")
+                    .expect("read restored border style")
+                    .as_deref(),
+                Some("outline-and-shadow")
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_subtitle_style_mapping_restores_outline_and_background_box_states() {
+        let outline = subtitle_style_options_for_engine(
+            &[
+                ("sub-border-style", "outline-and-shadow"),
+                ("sub-shadow-offset", "0"),
+                ("sub-back-color", "#000000"),
+            ],
+            Some("outline-and-shadow"),
+            false,
+        );
+        assert_eq!(
+            outline,
+            [
+                ("sub-shadow-offset", "0"),
+                ("sub-shadow-color", "#000000"),
+                ("sub-back-color", LEGACY_TRANSPARENT_SUBTITLE_BACKGROUND),
+            ]
+        );
+
+        let background_box = subtitle_style_options_for_engine(
+            &[
+                ("sub-border-style", "background-box"),
+                ("sub-shadow-offset", "4"),
+                ("sub-back-color", "0.0/0.0/0.0/0.72"),
+            ],
+            Some("background-box"),
+            false,
+        );
+        assert_eq!(
+            background_box,
+            [
+                ("sub-shadow-offset", "4"),
+                ("sub-back-color", "0.0/0.0/0.0/0.72"),
+            ]
         );
     }
 

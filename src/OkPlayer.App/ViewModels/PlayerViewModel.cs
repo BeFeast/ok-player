@@ -917,7 +917,7 @@ public partial class PlayerViewModel : ObservableObject
     /// hidden, else the OSC-clearance lift the View computes for the current surface size). Works for ASS, text
     /// and bitmap subtitles alike (unlike <c>sub-margin-y</c>, which libass ignores for ASS).</summary>
     public void ApplySubtitlePosition(double basePos, double lift)
-        => Set("sub-pos", System.Math.Max(0, basePos - lift));
+        => Set("sub-pos", SubtitleLift.ApplyToPosition(basePos, lift));
 
     private static string FormatTime(double seconds)
     {
