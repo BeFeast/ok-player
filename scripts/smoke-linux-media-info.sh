@@ -29,6 +29,7 @@ BINARY="$1"
 OUT_DIR="$2"
 
 export GDK_BACKEND=x11
+export GSK_RENDERER=cairo
 export GTK_USE_PORTAL=0
 export NO_AT_BRIDGE=1
 export XDG_SESSION_TYPE=x11

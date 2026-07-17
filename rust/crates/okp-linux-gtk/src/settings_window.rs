@@ -109,6 +109,7 @@ pub(crate) fn open_settings_window(
         Rc::clone(&state),
         Rc::clone(&status_toast),
     ));
+    video.append(&settings_hdr_handling_row());
     video.append(&settings_video_adjustment_row(
         VideoAdjustment::Brightness,
         Rc::clone(&state),

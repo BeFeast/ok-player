@@ -131,6 +131,13 @@ if [[ "$PAGE" == "playback" ]]; then
   fi
 fi
 
+if [[ "$PAGE" == "video" ]]; then
+  if ! grep -q 'video capability: hdr=engine-managed controls=unavailable' "$OUT_DIR/app.log"; then
+    echo "Video Settings did not report the reserved engine-managed HDR state" >&2
+    exit 1
+  fi
+fi
+
 if [[ "$PAGE" == "subtitles" ]]; then
   # The Presentation card occupies the top of the 500px-wide content column. Its three segmented
   # rows must render without forcing the canonical 760px window wider (geometry check above) or

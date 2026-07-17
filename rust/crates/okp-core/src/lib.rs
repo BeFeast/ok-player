@@ -6,6 +6,7 @@ pub mod branding;
 pub mod chapter_math;
 pub mod fullscreen_toggle;
 pub mod gapless;
+pub mod hdr;
 pub mod history;
 pub mod history_format;
 pub mod image_luma;
