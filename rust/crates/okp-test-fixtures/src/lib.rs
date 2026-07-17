@@ -9,7 +9,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use tempfile::{Builder, TempDir};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ExactVideoFixture {
@@ -45,33 +45,27 @@ pub fn assert_close(actual: f64, expected: f64, tolerance: f64) {
     );
 }
 
-/// A time-stamped path under the system temp directory for a filesystem fixture.
+/// An owned directory under the system temp directory for a filesystem fixture.
 ///
-/// The directory is NOT created — callers build exactly the layout their test needs. The
-/// nanosecond suffix keeps runs that share a `prefix` from colliding on disk in practice; give
-/// each test a distinct `prefix` so a failure names the test that left the directory behind.
-pub fn unique_temp_dir(prefix: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "{prefix}-{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock should be after epoch")
-            .as_nanos()
-    ))
+/// The directory is created immediately and removed when the returned guard is dropped, including
+/// during panic unwind. The generated name begins with `{prefix}-`; give each test a distinct
+/// prefix so a live fixture remains attributable while the test is running.
+///
+/// Destructors do not run after abort, `process::exit`, `SIGKILL`, or OOM termination. External
+/// worker lease/runtime cleanup remains responsible for those cases.
+pub fn unique_temp_dir(prefix: &str) -> TempDir {
+    Builder::new()
+        .prefix(&format!("{prefix}-"))
+        .tempdir_in(std::env::temp_dir())
+        .expect("temporary fixture directory should be created")
 }
 
 /// Output from a real Velopack pack invocation used by packaging contract
 /// tests. Dropping the fixture removes its temporary package tree.
 #[derive(Debug)]
 pub struct VelopackPackFixture {
-    pub root: PathBuf,
+    _root: TempDir,
     pub output_dir: PathBuf,
-}
-
-impl Drop for VelopackPackFixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.root);
-    }
 }
 
 /// Run the installed Velopack CLI against a minimal real Linux executable.
@@ -84,9 +78,12 @@ pub fn run_velopack_pack(
     icon: &Path,
 ) -> Result<VelopackPackFixture, String> {
     let root = unique_temp_dir("okp-real-velopack-pack");
-    let pack_dir = root.join("pack");
-    let output_dir = root.join("output");
-    let fixture = VelopackPackFixture { root, output_dir };
+    let pack_dir = root.path().join("pack");
+    let output_dir = root.path().join("output");
+    let fixture = VelopackPackFixture {
+        _root: root,
+        output_dir,
+    };
     fs::create_dir_all(&pack_dir).map_err(|error| format!("{}: {error}", pack_dir.display()))?;
     fs::create_dir_all(&fixture.output_dir)
         .map_err(|error| format!("{}: {error}", fixture.output_dir.display()))?;
@@ -186,8 +183,9 @@ mod tests {
     fn unique_temp_dir_sits_under_temp_with_the_prefix() {
         let dir = unique_temp_dir("okp-fixtures-selftest");
 
-        assert!(dir.starts_with(std::env::temp_dir()));
+        assert!(dir.path().starts_with(std::env::temp_dir()));
         let name = dir
+            .path()
             .file_name()
             .expect("has a file name")
             .to_string_lossy()
@@ -195,6 +193,39 @@ mod tests {
         assert!(
             name.starts_with("okp-fixtures-selftest-"),
             "unexpected name: {name}"
+        );
+    }
+
+    #[test]
+    fn unique_temp_dir_cleans_up_after_normal_return() {
+        let path = {
+            let dir = unique_temp_dir("okp-fixtures-normal-cleanup");
+            let path = dir.path().to_owned();
+            assert!(path.is_dir());
+            path
+        };
+
+        assert!(!path.exists(), "fixture should be removed after return");
+    }
+
+    #[test]
+    fn unique_temp_dir_cleans_up_during_panic_without_masking_the_panic() {
+        let mut path = None;
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let dir = unique_temp_dir("okp-fixtures-panic-cleanup");
+            path = Some(dir.path().to_owned());
+            panic!("fixture panic sentinel");
+        }))
+        .expect_err("fixture scope should panic");
+
+        assert_eq!(
+            panic.downcast_ref::<&str>(),
+            Some(&"fixture panic sentinel"),
+            "cleanup must not replace the original panic"
+        );
+        assert!(
+            !path.expect("fixture path should be recorded").exists(),
+            "fixture should be removed during panic unwind"
         );
     }
 

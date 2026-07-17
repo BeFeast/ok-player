@@ -2365,10 +2365,9 @@ mod tests {
             return;
         }
         let root = unique_temp_dir(&format!("okp-mpv-{extension}-autoload"));
-        fs::create_dir_all(&root).expect("sidecar fixture directory should be created");
-        let media = root.join("movie.mkv");
+        let media = root.path().join("movie.mkv");
         fs::copy(fixture_media_path(), &media).expect("media fixture should be copied");
-        fs::write(root.join(format!("movie.{extension}")), contents)
+        fs::write(root.path().join(format!("movie.{extension}")), contents)
             .expect("subtitle sidecar should be written");
 
         let options = [
@@ -2408,7 +2407,8 @@ mod tests {
         );
 
         drop(mpv);
-        fs::remove_dir_all(root).expect("sidecar fixture directory should be removed");
+        root.close()
+            .expect("sidecar fixture directory should be removed");
     }
 
     #[test]

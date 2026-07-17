@@ -1285,6 +1285,9 @@ dependencies = [
 [[package]]
 name = "okp-test-fixtures"
 version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
 
 [[package]]
 name = "once_cell"
