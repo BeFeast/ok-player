@@ -15,6 +15,7 @@ use gtk::gdk;
 use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
+use okp_core::gapless::{GaplessPlaybackCapability, PlaylistTransitionPath};
 use okp_core::playlist::{Playlist, PlaylistItem, QueueInsertMode, RepeatMode};
 use okp_core::settings::AppearanceTheme;
 use okp_core::shortcuts::{
@@ -150,6 +151,10 @@ const AB_LOOP_COMBINED_MARK_EPSILON_SECS: f64 = 0.5;
 const OSC_CLEARANCE_DIP: f64 = 88.0;
 const OSC_SUBTITLE_LIFT_PERCENT: f64 = 16.0;
 const PROTECTED_MPV_OPTIONS: &[&str] = &["config", "terminal", "idle", "force-window", "vo"];
+const LINUX_GAPLESS_CAPABILITY: GaplessPlaybackCapability =
+    GaplessPlaybackCapability::for_transition_path(
+        PlaylistTransitionPath::ShellManagedAfterEndFile,
+    );
 
 static MPRIS_SIDECAR_ART_CACHE: OnceLock<Mutex<HashMap<PathBuf, Option<String>>>> = OnceLock::new();
 static MPRIS_EMBEDDED_ART_CACHE: OnceLock<

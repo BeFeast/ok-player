@@ -32,6 +32,20 @@ shell; model-unit tests prove explicit-over-remembered precedence, zero/near-end
 thresholds, and private-session report suppression. It does not prove a future companion IPC
 transport, because the MVP report sink is deliberately local and no-op.
 
+## Gapless playback capability
+
+Linux deliberately reports gapless playback as **Deferred**. The GTK shell owns queue order and
+waits for libmpv's end-of-file event before issuing a new `loadfile` command. libmpv's gapless-audio
+mode only provides a safe basis when the engine owns the playlist transition, so enabling it on the
+current path would claim continuity the player cannot guarantee and could disturb the existing
+auto-advance, repeat, shuffle, and per-file restore lifecycle.
+
+The capability decision and effective-preference gate are unit-tested in `okp-core`; the canonical
+settings schema preserves the optional `playback.gapless` preference for a future engine-managed
+path. Settings → Playback renders the current state as a disabled **Deferred / Unavailable** row,
+and `scripts/smoke-linux-settings.sh <binary> <output> playback` verifies that the packaged shell
+reports that state while rendering the page.
+
 The encoded redlines include:
 
 | Surface | Bounds / region contract |

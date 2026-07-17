@@ -348,6 +348,122 @@ pub(crate) fn settings_shuffle_row(
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GaplessSettingState {
+    pub enabled: bool,
+    pub can_toggle: bool,
+    pub state_label: &'static str,
+    pub action_label: &'static str,
+    pub detail: &'static str,
+}
+
+pub(crate) fn gapless_setting_state(
+    enabled: bool,
+    capability: GaplessPlaybackCapability,
+) -> GaplessSettingState {
+    match capability {
+        GaplessPlaybackCapability::Available => GaplessSettingState {
+            enabled,
+            can_toggle: true,
+            state_label: if enabled { "On" } else { "Off" },
+            action_label: if enabled { "Turn off" } else { "Turn on" },
+            detail: "Keep compatible playlist entries on one continuous audio output path.",
+        },
+        GaplessPlaybackCapability::Deferred => GaplessSettingState {
+            enabled: false,
+            can_toggle: false,
+            state_label: "Deferred",
+            action_label: "Unavailable",
+            detail: "OK Player currently loads the next item after end-of-file, so continuous audio cannot be guaranteed.",
+        },
+    }
+}
+
+pub(crate) fn settings_gapless_row(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let setting = gapless_setting_state(
+        state
+            .borrow()
+            .settings
+            .gapless_enabled(LINUX_GAPLESS_CAPABILITY),
+        LINUX_GAPLESS_CAPABILITY,
+    );
+    eprintln!(
+        "playback capability: gapless={}",
+        if setting.can_toggle {
+            "available"
+        } else {
+            "deferred"
+        }
+    );
+
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row.add_css_class("okp-settings-switch-row");
+
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    text.set_hexpand(true);
+    let label = gtk::Label::new(Some("Gapless playback"));
+    label.add_css_class("okp-info-label");
+    label.set_xalign(0.0);
+    text.append(&label);
+    let detail = gtk::Label::new(Some(setting.detail));
+    detail.add_css_class("okp-update-status");
+    detail.set_xalign(0.0);
+    detail.set_width_chars(1);
+    detail.set_max_width_chars(50);
+    detail.set_wrap(true);
+    text.append(&detail);
+    row.append(&text);
+
+    let state_label = gtk::Label::new(Some(setting.state_label));
+    state_label.add_css_class("okp-settings-state-pill");
+    state_label.set_valign(gtk::Align::Center);
+    row.append(&state_label);
+
+    let button = gtk::Button::with_label(setting.action_label);
+    button.add_css_class("okp-settings-button");
+    button.set_valign(gtk::Align::Center);
+    button.set_sensitive(setting.can_toggle);
+    let button_state = Rc::clone(&state);
+    let button_toast = Rc::clone(&status_toast);
+    let button_state_label = state_label.clone();
+    button.connect_clicked(move |button| {
+        let current = gapless_setting_state(
+            button_state
+                .borrow()
+                .settings
+                .gapless_enabled(LINUX_GAPLESS_CAPABILITY),
+            LINUX_GAPLESS_CAPABILITY,
+        );
+        if !current.can_toggle {
+            return;
+        }
+        let enabled = !current.enabled;
+        {
+            let mut state = button_state.borrow_mut();
+            if !state
+                .settings
+                .set_gapless_enabled(LINUX_GAPLESS_CAPABILITY, enabled)
+            {
+                return;
+            }
+            save_settings_or_toast(&mut state, &button_toast);
+        }
+        button_state_label.set_text(if enabled { "On" } else { "Off" });
+        button.set_label(if enabled { "Turn off" } else { "Turn on" });
+        button_toast.show(if enabled {
+            "Gapless playback on"
+        } else {
+            "Gapless playback off"
+        });
+    });
+    row.append(&button);
+
+    row
+}
+
 pub(crate) fn settings_playback_switch_row<F>(
     title: &str,
     detail: &str,
