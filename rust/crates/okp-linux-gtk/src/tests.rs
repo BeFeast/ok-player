@@ -2105,6 +2105,46 @@ fn subtitle_track_label_distinguishes_webvtt_srt_and_embedded_sources() {
 }
 
 #[test]
+fn subtitle_track_label_names_and_flags_image_tracks() {
+    // A PGS Blu-ray track the shell wires through the core classifier: named
+    // cleanly and flagged Image so the picker never reads it as a text track the
+    // appearance presets could restyle.
+    let pgs = Track {
+        id: 3,
+        kind: TrackKind::Subtitle,
+        selected: false,
+        external: false,
+        external_filename: None,
+        default: true,
+        title: Some("English SDH".to_owned()),
+        lang: Some("eng".to_owned()),
+        codec: Some("hdmv_pgs_subtitle".to_owned()),
+        audio_channels: None,
+    };
+    assert_eq!(track_label(&pgs), "English SDH · PGS · Image · Default");
+
+    let vobsub = Track {
+        id: 4,
+        title: None,
+        lang: Some("fre".to_owned()),
+        external: true,
+        external_filename: Some("/tmp/movie.fr.sub".to_owned()),
+        default: false,
+        codec: Some("dvd_subtitle".to_owned()),
+        ..pgs.clone()
+    };
+    assert_eq!(track_label(&vobsub), "fre · VobSub · Image · EXT");
+
+    // A neighbouring SRT track keeps its text label with no Image flag.
+    let srt = Track {
+        id: 5,
+        codec: Some("subrip".to_owned()),
+        ..pgs
+    };
+    assert!(!track_label(&srt).contains("Image"));
+}
+
+#[test]
 fn audio_track_label_surfaces_language_and_format_tags() {
     // A named commentary track keeps its title but now also exposes the
     // language code alongside the channel layout and codec.

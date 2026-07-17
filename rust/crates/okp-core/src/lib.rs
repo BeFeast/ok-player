@@ -31,6 +31,7 @@ pub mod sha256sums;
 pub mod shortcuts;
 pub mod srt;
 pub mod subtitle_delay;
+pub mod subtitle_format;
 pub mod subtitle_lift;
 pub mod subtitle_search;
 pub mod subtitle_style;

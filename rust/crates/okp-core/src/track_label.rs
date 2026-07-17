@@ -69,8 +69,11 @@ pub fn audio_track_parts(
 /// The subtitle quick-switcher descriptor: the primary name followed by a
 /// normalized format tag and the source marker. WebVTT and SubRip are named
 /// explicitly so an external `.vtt` never reads like an SRT or an untyped
-/// embedded track. mpv remains responsible for parsing/rendering subtitle cue
-/// payloads; the core only classifies the track metadata it reports.
+/// embedded track, and image (bitmap) formats — PGS, VobSub, DVB, XSUB — are
+/// both named and tagged `Image` so they never read as ordinary text tracks the
+/// appearance presets could restyle. mpv remains responsible for
+/// parsing/rendering subtitle cue payloads; the core only classifies the track
+/// metadata it reports (see [`crate::subtitle_format`]).
 pub fn subtitle_track_label(
     id: i64,
     title: Option<&str>,
@@ -83,6 +86,12 @@ pub fn subtitle_track_label(
 
     if let Some(codec) = clean(codec) {
         parts.push(subtitle_codec_label(&codec));
+        // The format name (PGS/VobSub/…) already implies a bitmap to an informed
+        // eye, but the explicit tag makes the "not a text track" status
+        // unmistakable in the picker and keeps it screen-reader legible.
+        if crate::subtitle_format::is_image_subtitle(Some(&codec)) {
+            parts.push("Image".to_owned());
+        }
     }
     if external {
         parts.push("EXT".to_owned());
@@ -94,6 +103,9 @@ pub fn subtitle_track_label(
 }
 
 fn subtitle_codec_label(codec: &str) -> String {
+    if let Some(name) = crate::subtitle_format::image_format_name(Some(codec)) {
+        return name.to_owned();
+    }
     match codec.to_ascii_lowercase().as_str() {
         "subrip" | "srt" => "SRT".to_owned(),
         "webvtt" | "vtt" => "WebVTT".to_owned(),
@@ -214,6 +226,39 @@ mod tests {
             subtitle_track_label(3, Some("English"), None, Some("subrip"), true, false),
             "English · SRT · EXT"
         );
+    }
+
+    #[test]
+    fn subtitle_label_names_and_tags_image_tracks() {
+        // A PGS Blu-ray track: named cleanly (not "HDMV_PGS_SUBTITLE") and tagged
+        // Image so it never reads as an ordinary text track.
+        assert_eq!(
+            subtitle_track_label(
+                3,
+                Some("English SDH"),
+                Some("eng"),
+                Some("hdmv_pgs_subtitle"),
+                false,
+                true
+            ),
+            "English SDH · PGS · Image · Default"
+        );
+        // A VobSub DVD track loaded externally.
+        assert_eq!(
+            subtitle_track_label(4, None, Some("fre"), Some("dvd_subtitle"), true, false),
+            "fre · VobSub · Image · EXT"
+        );
+    }
+
+    #[test]
+    fn subtitle_label_does_not_tag_text_tracks_as_image() {
+        for codec in ["subrip", "webvtt", "ass"] {
+            let label = subtitle_track_label(2, Some("English"), None, Some(codec), false, false);
+            assert!(
+                !label.contains("Image"),
+                "{codec} should not be tagged Image: {label}"
+            );
+        }
     }
 
     #[test]

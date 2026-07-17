@@ -8,6 +8,7 @@ rust-version.workspace = true
 links = "mpv"
 
 [dependencies]
+okp-core = { path = "../okp-core" }
 libc.workspace = true
 thiserror.workspace = true
 
