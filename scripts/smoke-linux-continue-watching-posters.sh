@@ -11,6 +11,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BINARY="${1:-ok-player}"
 OUT_DIR="${2:-$ROOT/artifacts/manual-ui/linux-continue-watching-posters-smoke}"
+IDLE_OSC_ASSERT="$ROOT/scripts/assert-linux-idle-osc-absent.sh"
 
 for tool in xvfb-run dbus-run-session ffmpeg xfwm4 xdotool xwininfo import magick; do
   if ! command -v "$tool" >/dev/null 2>&1; then
@@ -50,12 +51,13 @@ if [[ -n "${OKP_XVFB_SERVER_NUM:-}" ]]; then
 fi
 
 if ! xvfb-run "${xvfb_args[@]}" --server-args='-screen 0 1280x900x24 -nolisten tcp -extension GLX' \
-  dbus-run-session -- bash -s -- "$BINARY" "$OUT_DIR" "$media_dir" >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
+  dbus-run-session -- bash -s -- "$BINARY" "$OUT_DIR" "$media_dir" "$IDLE_OSC_ASSERT" >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
 set -euo pipefail
 
 BINARY="$1"
 OUT_DIR="$2"
 MEDIA_DIR="$3"
+IDLE_OSC_ASSERT="$4"
 export GDK_BACKEND=x11
 export GSK_RENDERER=cairo
 export OKP_SKIP_UPDATE_CHECK=1
@@ -127,7 +129,7 @@ assert_dominant() {
   local image="$1" crop="$2" channel="$3" label="$4"
   local r g b
   read -r r g b < <(magick "$image" -crop "$crop" +repage \
-    -format '%[fx:mean.r] %[fx:mean.g] %[fx:mean.b]' info:)
+    -format '%[fx:mean.r] %[fx:mean.g] %[fx:mean.b]\n' info:)
   awk -v r="$r" -v g="$g" -v b="$b" -v ch="$channel" -v label="$label" 'BEGIN {
     margin = 0.10
     if (ch == "r" && (r - g > margin) && (r - b > margin)) { ok = 1 }
@@ -152,6 +154,7 @@ fi
 wait_for_posters
 sleep 2 # let the 200 ms idle poll re-project the freshly cached frames onto the cards
 import -window "$wid" "$OUT_DIR/continue-watching.png"
+"$IDLE_OSC_ASSERT" "$OUT_DIR/continue-watching.png" "Continue Watching"
 
 # The three cards sit at x≈220, 428, 636 (194px + 14px gap), thumbnails y≈146..256. Sample an
 # inner region that avoids the progress bar and the time-left label.
@@ -163,7 +166,8 @@ assert_dominant "$OUT_DIR/continue-watching.png" "140x60+651+160" b "card-3 Harb
 # would make these identical.
 d12="$(magick compare -metric RMSE \
   "(" "$OUT_DIR/continue-watching.png" -crop 140x60+235+160 +repage ")" \
-  "(" "$OUT_DIR/continue-watching.png" -crop 140x60+443+160 +repage ")" null: 2>&1 | sed -n 's/.*(\([^)]*\)).*/\1/p')"
+  "(" "$OUT_DIR/continue-watching.png" -crop 140x60+443+160 +repage ")" null: 2>&1 || true)"
+d12="$(sed -n 's/.*(\([^)]*\)).*/\1/p' <<<"$d12")"
 awk -v d="$d12" 'BEGIN { if (!(d > 0.05)) { print "cards 1 and 2 are identical — placeholder, not real posters" > "/dev/stderr"; exit 1 } }'
 
 # ---- History surface (shares the same cache), opened in-canvas via the recents arrow ----
@@ -178,9 +182,10 @@ if xdotool search --name '^History$' >/dev/null 2>&1; then
   exit 1
 fi
 import -window "$wid" "$OUT_DIR/history.png"
-# The row thumbnails stack on the left. The column must carry saturated colour (real posters),
-# not the near-grey of the placeholder glyph.
-history_sat="$(magick "$OUT_DIR/history.png" -crop 64x260+232+150 +repage \
+"$IDLE_OSC_ASSERT" "$OUT_DIR/history.png" "History"
+# The centered History column stacks the three row thumbnails at x≈402 and
+# y≈197..341. It must carry saturated colour, not the near-grey placeholder.
+history_sat="$(magick "$OUT_DIR/history.png" -crop 64x160+402+190 +repage \
   -colorspace HSL -channel G -separate -format '%[fx:mean]' info:)"
 awk -v s="$history_sat" 'BEGIN {
   printf "history thumbnail column saturation: %.3f\n", s

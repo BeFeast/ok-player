@@ -451,6 +451,26 @@ fn adaptive_osc_bar_collapses_into_overflow_without_overlap() {
 }
 
 #[test]
+fn media_presence_is_the_single_owner_of_standard_osc_mapping() {
+    let chrome = include_str!("main.rs");
+    let compact = include_str!("compact_mode.rs");
+
+    assert!(chrome.contains("okp_core::osc_visibility::project("));
+    assert!(chrome.contains("revealer.set_visible(next.visible)"));
+    assert!(chrome.contains("revealer.set_sensitive(next.focusable)"));
+    assert!(chrome.contains("revealer.set_can_target(next.hit_testable)"));
+    assert!(chrome.contains("if old.visible != next.visible"));
+    assert!(chrome.contains("if old.focusable != next.focusable"));
+    assert!(chrome.contains("if old.hit_testable != next.hit_testable"));
+    assert!(chrome.contains("self.has_media.replace(has_media) != has_media"));
+    assert!(chrome.contains("self.surface_suppressed.replace(suppressed) != suppressed"));
+
+    assert!(!compact.contains("standard_osc"));
+    assert!(!compact.contains("self.chrome.widget().set_visible"));
+    assert!(compact.contains("self.chrome.set_surface_suppressed(compact)"));
+}
+
+#[test]
 fn overflow_menu_surfaces_every_collapsed_control_action() {
     let popovers = include_str!("track_popovers.rs");
 
@@ -2109,7 +2129,7 @@ fn compact_mode_keeps_the_render_surface_and_restores_standard_chrome() {
         "COMPACT_MIN_SHORT_EDGE",
         "set_window_always_on_top(&self.window, true)",
         ".set_visible(!compact && !self.window.is_fullscreen())",
-        "self.standard_osc.set_visible(!compact)",
+        "self.chrome.set_surface_suppressed(compact)",
         "close_current_media(&close_state, &close_toast)",
         "restore_compact_mode",
     ] {
