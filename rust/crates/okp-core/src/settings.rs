@@ -226,17 +226,55 @@ impl AppearanceSettings {
     }
 }
 
+/// Which update channel an install discovers builds from. `Public` is the
+/// default: it discovers the public beta/stable feed and its user behavior is
+/// unchanged. `Candidate` is an *explicit* opt-in for QA installs that follow the
+/// rolling Linux candidate channel (issue #339); a default install never selects
+/// it, so the public feed stays byte-for-byte the fleet's only source.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum UpdateChannel {
+    #[default]
+    Public,
+    Candidate,
+}
+
+impl UpdateChannel {
+    /// Parses the cross-shell string encoding, defaulting to `Public` for any
+    /// unknown or absent value so a typo never silently enrolls an install in
+    /// the candidate channel.
+    pub fn from_setting(value: Option<&str>) -> Self {
+        match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+            Some("candidate") => Self::Candidate,
+            _ => Self::Public,
+        }
+    }
+
+    /// The persisted string encoding.
+    pub fn as_setting(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Candidate => "candidate",
+        }
+    }
+}
+
 /// Update-check preference. Always serialized (matching both shells), default on.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UpdateSettings {
     #[serde(default = "default_auto_check")]
     pub auto_check: bool,
+    /// Discovery channel; absent in older files, which load as `Public` so no
+    /// existing install is silently moved off the public feed.
+    #[serde(default)]
+    pub channel: UpdateChannel,
 }
 
 impl Default for UpdateSettings {
     fn default() -> Self {
         Self {
             auto_check: default_auto_check(),
+            channel: UpdateChannel::default(),
         }
     }
 }
@@ -379,6 +417,8 @@ impl WindowsSettings {
             },
             updates: UpdateSettings {
                 auto_check: self.auto_check_updates.unwrap_or_else(default_auto_check),
+                // Windows has no candidate channel; migrated installs stay public.
+                channel: UpdateChannel::Public,
             },
             advanced: AdvancedSettings::default(),
             screenshots: ScreenshotSettings::default(),
@@ -403,6 +443,43 @@ mod tests {
     fn default_stamps_the_current_version() {
         assert_eq!(Settings::default().version, SETTINGS_VERSION);
         assert!(Settings::default().updates.auto_check);
+        // A default install is on the public channel; enrollment is explicit.
+        assert_eq!(Settings::default().updates.channel, UpdateChannel::Public);
+    }
+
+    #[test]
+    fn update_channel_parses_and_defaults_to_public() {
+        assert_eq!(
+            UpdateChannel::from_setting(Some("candidate")),
+            UpdateChannel::Candidate
+        );
+        assert_eq!(
+            UpdateChannel::from_setting(Some("Candidate")),
+            UpdateChannel::Candidate
+        );
+        assert_eq!(
+            UpdateChannel::from_setting(Some("public")),
+            UpdateChannel::Public
+        );
+        // Unknown or absent never silently enrolls in the candidate channel.
+        assert_eq!(
+            UpdateChannel::from_setting(Some("beta")),
+            UpdateChannel::Public
+        );
+        assert_eq!(UpdateChannel::from_setting(None), UpdateChannel::Public);
+        assert_eq!(UpdateChannel::Candidate.as_setting(), "candidate");
+        assert_eq!(UpdateChannel::Public.as_setting(), "public");
+    }
+
+    #[test]
+    fn update_channel_absent_in_older_files_loads_as_public() {
+        let updates: UpdateSettings =
+            serde_json::from_str(r#"{"auto_check":true}"#).expect("older files omit channel");
+        assert_eq!(updates.channel, UpdateChannel::Public);
+        let enrolled: UpdateSettings =
+            serde_json::from_str(r#"{"auto_check":true,"channel":"candidate"}"#)
+                .expect("channel round-trips");
+        assert_eq!(enrolled.channel, UpdateChannel::Candidate);
     }
 
     #[test]

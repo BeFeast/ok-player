@@ -15,11 +15,12 @@ use gtk::gdk;
 use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
+use okp_core::candidate_channel::{self, CandidateFeed};
 use okp_core::clip_export::{self, ClipExportEligibility, ClipExportLimits, ClipExportTooling};
 use okp_core::gapless::{GaplessPlaybackCapability, PlaylistTransitionPath};
 use okp_core::hdr::HdrHandlingState;
 use okp_core::playlist::{Playlist, PlaylistItem, QueueInsertMode, RepeatMode};
-use okp_core::settings::AppearanceTheme;
+use okp_core::settings::{AppearanceTheme, UpdateChannel};
 use okp_core::shortcuts::{
     self, ShortcutAction, ShortcutBinding, ShortcutChord, ShortcutModifiers, ShortcutSlot,
 };
@@ -123,6 +124,15 @@ const AB_LOOP_SETTLE_DELAY: Duration = Duration::from_millis(60);
 // OKP_LINUX_DEB_FEED_URL.
 const LINUX_UPDATE_FEED_BASE_URL: &str = "https://befeast.github.io/ok-player/updates/linux";
 const LINUX_DEB_FEED_URL: &str = "https://befeast.github.io/ok-player/updates/linux/deb.linux.json";
+// The rolling Linux candidate channel (issue #339). Only an explicitly enrolled
+// QA install (Settings.updates.channel == Candidate, or OKP_LINUX_UPDATE_CHANNEL=
+// candidate) fetches this; a default install never touches it, so the public
+// feed above and its user behavior are untouched. Unlike deb.linux.json it is
+// served from a single mutable "rolling" surface — one candidate at a time, no
+// new GitHub Release per build. Overridable for local testing via
+// OKP_LINUX_CANDIDATE_FEED_URL.
+const LINUX_CANDIDATE_FEED_URL: &str =
+    "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/candidate.linux.json";
 const LINUX_SHA256SUMS_MAX_BYTES: u64 = 1024 * 1024;
 const DEB_SELF_INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
 const SETTINGS_REFERENCE_WIDTH: i32 = 760;

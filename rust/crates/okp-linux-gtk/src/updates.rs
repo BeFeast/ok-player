@@ -155,8 +155,13 @@ pub(crate) fn settings_updates_section(
 ) -> gtk::Box {
     let section = settings_section("Updates");
     section.append(&settings_value_row("Current version", APP_BUILD_VERSION));
-    section.append(&settings_value_row("Channel", "linux"));
-    section.append(&settings_value_row("Feed", "Static (GitHub Pages)"));
+    let channel = effective_update_channel(state.borrow().settings.update_channel());
+    let (channel_label, feed_label) = match channel {
+        UpdateChannel::Public => ("linux", "Static (GitHub Pages)"),
+        UpdateChannel::Candidate => ("candidate (QA)", "Rolling candidate"),
+    };
+    section.append(&settings_value_row("Channel", channel_label));
+    section.append(&settings_value_row("Feed", feed_label));
     section.append(&settings_value_row(
         "Install",
         linux_update_install_status(),
@@ -321,9 +326,10 @@ pub(crate) fn start_update_check_for_ui(
     pending.borrow_mut().take();
     state.borrow_mut().linux_update_status = LinuxUpdateStatus::Checking;
 
+    let channel = state.borrow().settings.update_channel();
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = sender.send(check_for_linux_update());
+        let _ = sender.send(check_for_linux_update(channel));
     });
 
     let button = button.clone();
@@ -466,9 +472,10 @@ pub(crate) fn check_updates_on_startup(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) {
+    let channel = state.borrow().settings.update_channel();
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = sender.send(check_for_linux_update());
+        let _ = sender.send(check_for_linux_update(channel));
     });
 
     glib::timeout_add_local(Duration::from_millis(500), move || {
@@ -496,11 +503,11 @@ pub(crate) fn check_updates_on_startup(
     });
 }
 
-pub(crate) fn check_for_linux_update() -> LinuxUpdateCheckResult {
+pub(crate) fn check_for_linux_update(channel: UpdateChannel) -> LinuxUpdateCheckResult {
     let manager = match linux_update_manager() {
         Ok(manager) => manager,
         Err(manager_error) => {
-            return match check_for_linux_deb_update() {
+            return match check_for_linux_channel_update(channel) {
                 Ok(Some(update)) => LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
                     manager: None,
                     target: LinuxUpdateTarget::Deb(update),
@@ -616,6 +623,69 @@ pub(crate) fn check_for_linux_deb_update() -> Result<Option<DebUpdate>, String> 
 
 pub(crate) fn linux_deb_feed_url() -> String {
     env::var("OKP_LINUX_DEB_FEED_URL").unwrap_or_else(|_| LINUX_DEB_FEED_URL.to_owned())
+}
+
+/// Resolves the effective discovery channel: the persisted enrollment, unless
+/// `OKP_LINUX_UPDATE_CHANNEL=candidate` explicitly overrides it for a QA test
+/// run. The override can only *enrol* — any other value leaves the install on
+/// its persisted channel, so it can never silently move a candidate install back
+/// to public or vice versa by accident.
+pub(crate) fn effective_update_channel(persisted: UpdateChannel) -> UpdateChannel {
+    match env::var("OKP_LINUX_UPDATE_CHANNEL") {
+        Ok(value) if value.trim().eq_ignore_ascii_case("candidate") => UpdateChannel::Candidate,
+        _ => persisted,
+    }
+}
+
+/// Dispatches the `.deb`-lane update check to the enrolled channel's feed. The
+/// public channel reads `deb.linux.json`; an explicitly enrolled candidate
+/// install reads the rolling `candidate.linux.json` instead. Both yield a
+/// [`DebUpdate`] for the same download/verify/install path, so channel choice
+/// changes only *what* is discovered, never *how* it is installed.
+pub(crate) fn check_for_linux_channel_update(
+    channel: UpdateChannel,
+) -> Result<Option<DebUpdate>, String> {
+    match effective_update_channel(channel) {
+        UpdateChannel::Public => check_for_linux_deb_update(),
+        UpdateChannel::Candidate => check_for_linux_candidate_update(),
+    }
+}
+
+pub(crate) fn linux_candidate_feed_url() -> String {
+    env::var("OKP_LINUX_CANDIDATE_FEED_URL").unwrap_or_else(|_| LINUX_CANDIDATE_FEED_URL.to_owned())
+}
+
+/// Checks the rolling candidate feed for an enrolled install. A fetch or parse
+/// failure surfaces as `Err` ("couldn't check"); an accepted-but-not-newer,
+/// pending, rejected, or non-candidate feed returns `Ok(None)` ("up to date").
+/// The two stay distinct exactly as on the public lane (issue #339). Selection
+/// gates on acceptance status in okp-core, so a pending candidate on the rolling
+/// surface is never offered to the fleet.
+pub(crate) fn check_for_linux_candidate_update() -> Result<Option<DebUpdate>, String> {
+    let url = linux_candidate_feed_url();
+    let mut response = ureq::get(&url)
+        .header("Accept", "application/json")
+        .header("User-Agent", "OK Player Linux")
+        .call()
+        .map_err(|error| format!("candidate update check failed: {error}"))?;
+    let body = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|error| format!("candidate update check failed: {error}"))?;
+    let feed: CandidateFeed = serde_json::from_str(&body)
+        .map_err(|error| format!("candidate update feed was invalid: {error}"))?;
+
+    Ok(
+        candidate_channel::select_candidate_update_from_feed(feed, APP_BUILD_VERSION).map(
+            |candidate| DebUpdate {
+                version: candidate.version,
+                name: candidate.name,
+                url: candidate.url,
+                size: candidate.size,
+                sums_url: candidate.sums_url,
+            },
+        ),
+    )
 }
 
 pub(crate) fn download_deb_update(update: DebUpdate) -> Result<PathBuf, String> {
