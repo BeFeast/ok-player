@@ -28,6 +28,7 @@ BuildRequires:  pkgconfig(gl)
 BuildRequires:  desktop-file-utils
 BuildRequires:  appstream
 BuildRequires:  zstd
+BuildRequires:  jq
 
 Requires:       mpv-libs%{?_isa}
 Requires:       xdg-utils
