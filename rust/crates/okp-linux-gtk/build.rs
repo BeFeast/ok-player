@@ -13,6 +13,10 @@ fn main() {
             .file("src/native_wayland_video.c")
             .warnings(true)
             .compile("okp_native_wayland_video");
+        // Cargo places pkg-config libraries before this package's static archive.
+        // Repeat the direct Wayland dependencies at the end so --as-needed links
+        // the archive and system libmpv references correctly in Fedora RPM builds.
+        println!("cargo:rustc-link-arg=-Wl,-lwayland-egl,-lwayland-client");
         println!("cargo:rerun-if-changed=src/native_wayland_video.c");
     }
     println!("cargo:rerun-if-env-changed=OKP_BUILD_VERSION");
