@@ -9,13 +9,17 @@ mirrors mpv.net and IINA.
 ## libmpv (mpv)
 
 - **Project:** mpv — <https://mpv.io> · <https://github.com/mpv-player/mpv>
-- **Component bundled:** `libmpv-2.dll` (the mpv client library).
+- **Components bundled:** `libmpv-2.dll` in Windows packages and a source-built
+  `libmpv.so` in the Flatpak beta package.
 - **License:** GPL-2.0-or-later when built with GPL components (as bundled here); core mpv is
   otherwise LGPL-2.1-or-later. Full text: <https://github.com/mpv-player/mpv/blob/master/LICENSE.GPL>
 - **Copyright:** © the mpv developers and the MPlayer/mplayer2 projects it descends from.
 
-mpv in turn incorporates, among others, FFmpeg, libass, and zlib. The dominant licenses of the
-bundled build are listed below; the authoritative, per-file licensing is in each upstream project.
+mpv in turn incorporates or links, among others, FFmpeg, libass, libplacebo,
+and zlib. The dominant licenses of the bundled build are listed below; the
+authoritative, per-file licensing is in each upstream project. Flatpak installs
+the upstream mpv copyright and GPL/LGPL license texts in the application license
+directory.
 
 ## FFmpeg
 
@@ -28,10 +32,21 @@ bundled build are listed below; the authoritative, per-file licensing is in each
   Full text: <https://www.ffmpeg.org/legal.html>
 - **Copyright:** © the FFmpeg developers.
 
+The Flatpak beta links libmpv against the GNOME/Freedesktop runtime FFmpeg
+libraries. The optional `org.freedesktop.Platform.codecs-extra` extension can
+replace those runtime libraries with the expanded codec build; the extension is
+distributed and licensed independently by Freedesktop/Flathub.
+
 ## libass
 
 - **Project:** libass — <https://github.com/libass/libass>
 - **License:** ISC. **Copyright:** © the libass developers.
+
+## libplacebo
+
+- **Project:** libplacebo — <https://github.com/haasn/libplacebo>
+- **Component bundled:** the source-built rendering library in the Flatpak beta.
+- **License:** LGPL-2.1-or-later. **Copyright:** © libplacebo contributors.
 
 ## zlib
 

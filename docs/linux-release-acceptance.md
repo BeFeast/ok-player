@@ -3,7 +3,9 @@
 Fedora has its own acceptance contract — stock vs RPM Fusion codecs, enforcing
 SELinux with AVC collection, Flatpak/RPM/COPR states, and virtual-GPU skip
 evidence — documented in [`fedora-acceptance.md`](fedora-acceptance.md). This
-document covers the general Debian/AppImage evidence levels.
+document covers the general Debian/AppImage evidence levels. Flatpak-specific
+source, codec-extension, permission, and beta-repository requirements are in
+[`linux-flatpak.md`](linux-flatpak.md).
 
 > **Candidate channel:** QA candidates for explicitly enrolled installs are published to the rolling
 > `linux-candidate` pre-release, not to a permanent `linux-v*` Release (issue #339). A candidate is
@@ -16,7 +18,7 @@ Linux release evidence is package-specific and has four levels:
 
 1. `model-unit`: pure Rust model/schema tests.
 2. `xvfb-render`: deterministic X11 rendering and scripted mpv interaction. This can prove geometry, pixels, playback state, screenshot file creation, and X11 fullscreen transitions.
-3. `installed-package`: launch and version checks against the candidate `.deb` or AppImage.
+3. `installed-package`: launch and version checks against the candidate `.deb`, AppImage, or Flatpak beta repository.
 4. `gnome-wayland-operator`: live GNOME/Wayland acceptance. Only this level may mark chooser, drag/drop, clipboard, portal, compositor, or focus rows `PASS`.
 
 Issue-specific 4K60 presentation evidence is also operator-only. Run
@@ -125,3 +127,9 @@ Required live rows are:
 - keyboard focus navigation
 
 Headless evidence must leave all of these `not-run`.
+
+For Flatpak, record the package identity and extension state with every live
+row: GNOME or KDE Wayland, runtime branch, codecs-extra present or masked, and
+renderer diagnostics showing hardware decode or the explicit fallback. The
+same exported beta repository must pass fresh install, repository update, and
+uninstall; rebuilding between those steps is not equivalent evidence.

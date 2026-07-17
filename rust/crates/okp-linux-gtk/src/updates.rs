@@ -153,6 +153,7 @@ pub(crate) fn settings_updates_section(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) -> gtk::Box {
+    let flatpak_managed = flatpak_update_managed();
     let section = settings_section("Updates");
     section.append(&settings_value_row("Current version", APP_BUILD_VERSION));
     let channel = effective_update_channel(state.borrow().settings.update_channel());
@@ -170,8 +171,12 @@ pub(crate) fn settings_updates_section(
     let row = gtk::Box::new(gtk::Orientation::Vertical, 8);
     row.add_css_class("okp-settings-row");
 
-    let auto_check_enabled = state.borrow().settings.auto_check_updates();
-    let initial_update_status = state.borrow().linux_update_status.clone();
+    let auto_check_enabled = state.borrow().settings.auto_check_updates() && !flatpak_managed;
+    let initial_update_status = if flatpak_managed {
+        LinuxUpdateStatus::ManagedExternally
+    } else {
+        state.borrow().linux_update_status.clone()
+    };
     let status = gtk::Label::new(Some(
         &initial_update_status.settings_status_text(auto_check_enabled),
     ));
@@ -190,9 +195,11 @@ pub(crate) fn settings_updates_section(
     auto_label.add_css_class("okp-info-label");
     auto_label.set_xalign(0.0);
     auto_text.append(&auto_label);
-    let auto_detail = gtk::Label::new(Some(
-        "Check the linux pre-release feed on startup and show a toast when an update is ready.",
-    ));
+    let auto_detail = gtk::Label::new(Some(if flatpak_managed {
+        "Flatpak installs are updated by their configured repository."
+    } else {
+        "Check the linux pre-release feed on startup and show a toast when an update is ready."
+    }));
     auto_detail.add_css_class("okp-update-status");
     auto_detail.set_xalign(0.0);
     auto_detail.set_width_chars(1);
@@ -207,6 +214,7 @@ pub(crate) fn settings_updates_section(
     auto_row.append(&auto_state_label);
 
     let auto_switch = about_toggle_button(auto_check_enabled);
+    auto_switch.set_sensitive(!flatpak_managed);
     let auto_state = Rc::clone(&state);
     let auto_toast = Rc::clone(&status_toast);
     let auto_status = status.clone();
@@ -242,7 +250,7 @@ pub(crate) fn settings_updates_section(
     check_button.add_css_class("okp-settings-button");
     check_button.set_sensitive(!matches!(
         initial_update_status,
-        LinuxUpdateStatus::Checking
+        LinuxUpdateStatus::Checking | LinuxUpdateStatus::ManagedExternally
     ));
     let check_status = status.clone();
     let check_pending = Rc::clone(&pending_update);
@@ -309,6 +317,20 @@ pub(crate) fn update_status_intro(auto_check_enabled: bool) -> &'static str {
     } else {
         "Automatic update checks are off. Use Check for updates any time."
     }
+}
+
+pub(crate) fn flatpak_update_managed() -> bool {
+    flatpak_install_detected(
+        env::var_os("FLATPAK_ID").as_deref(),
+        Path::new("/.flatpak-info").is_file(),
+    )
+}
+
+pub(crate) fn flatpak_install_detected(
+    flatpak_id: Option<&std::ffi::OsStr>,
+    flatpak_info_exists: bool,
+) -> bool {
+    flatpak_id.is_some_and(|value| !value.is_empty()) || flatpak_info_exists
 }
 
 pub(crate) fn start_update_check_for_ui(
@@ -439,6 +461,12 @@ pub(crate) fn apply_update_check_result(
     state.borrow_mut().linux_update_status = LinuxUpdateStatus::from_check_result(&result);
     button.set_sensitive(true);
     match result {
+        LinuxUpdateCheckResult::ManagedExternally => {
+            pending.borrow_mut().take();
+            button.set_label("Check for updates");
+            button.set_sensitive(false);
+            status.set_text("Updates are managed by Flatpak");
+        }
         LinuxUpdateCheckResult::UpToDate => {
             pending.borrow_mut().take();
             button.set_label("Check for updates");
@@ -484,6 +512,7 @@ pub(crate) fn check_updates_on_startup(
                 state.borrow_mut().linux_update_status =
                     LinuxUpdateStatus::from_check_result(&result);
                 match result {
+                    LinuxUpdateCheckResult::ManagedExternally => {}
                     LinuxUpdateCheckResult::Available(update) => {
                         let version = update
                             .target_version()
@@ -504,6 +533,10 @@ pub(crate) fn check_updates_on_startup(
 }
 
 pub(crate) fn check_for_linux_update(channel: UpdateChannel) -> LinuxUpdateCheckResult {
+    if flatpak_update_managed() {
+        return LinuxUpdateCheckResult::ManagedExternally;
+    }
+
     let channel = effective_update_channel(channel);
     if channel == UpdateChannel::Candidate {
         return check_for_linux_candidate_channel_update();

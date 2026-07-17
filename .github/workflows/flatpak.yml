@@ -1,0 +1,43 @@
+name: Flatpak
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/flatpak.yml'
+      - 'docs/linux-flatpak.md'
+      - 'rust/Cargo.lock'
+      - 'rust/Cargo.toml'
+      - 'rust/crates/**'
+      - 'rust/packaging/**'
+      - 'scripts/build-flatpak-beta.sh'
+      - 'scripts/smoke-linux-flatpak.sh'
+  workflow_dispatch:
+
+jobs:
+  flatpak:
+    name: Offline Flatpak beta build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Flatpak tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder appstream desktop-file-utils
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y flathub \
+            org.gnome.Sdk//50 \
+            org.freedesktop.Sdk.Extension.rust-stable//25.08
+
+      - name: Validate manifest and metadata
+        run: ./scripts/smoke-linux-flatpak.sh
+
+      - name: Build offline beta repository
+        run: ./scripts/build-flatpak-beta.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ok-player-flatpak-beta
+          path: |
+            artifacts/linux/flatpak/repo/**
+            artifacts/linux/flatpak/OK-Player-0.11.0-beta.1.flatpak

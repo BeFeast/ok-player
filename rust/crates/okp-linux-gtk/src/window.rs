@@ -113,7 +113,8 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     }
     apply_playback_settings_defaults(&state);
     let auto_check_updates = state.borrow().settings.auto_check_updates()
-        && env::var_os("OKP_SKIP_UPDATE_CHECK").is_none();
+        && env::var_os("OKP_SKIP_UPDATE_CHECK").is_none()
+        && !flatpak_update_managed();
     let updating_seek = Rc::new(Cell::new(false));
     let defer_initial_map = launch_args.has_media_payload()
         && env::var_os("OKP_START_FULLSCREEN").is_none()
