@@ -39,13 +39,13 @@ provided by the enabled Fedora repositories.
 
 %prep
 %autosetup -n %{name}-%{upstream_version} -a 1
-mkdir -p rust/.cargo
-cat > rust/.cargo/config.toml <<'EOF'
+mkdir -p .cargo
+cat > .cargo/config.toml <<'EOF'
 [source.crates-io]
 replace-with = "vendored-sources"
 
 [source.vendored-sources]
-directory = "../../vendor"
+directory = "../vendor"
 
 [net]
 offline = true
