@@ -3551,3 +3551,70 @@ fn failure_detail_keeps_url_and_reason_out_of_primary_logs() {
         "OK Player could not open the media.\nPath: /media/movie.mkv\nReason: libmpv error 7"
     );
 }
+
+#[test]
+fn video_double_click_fullscreen_contract_covers_each_gesture_state() {
+    use fullscreen_toggle::{FullscreenAction, FullscreenToggle};
+    use video_click::Intent;
+
+    // Single click schedules the delayed play/pause and never toggles fullscreen.
+    assert_eq!(video_click::release_intent(1), Intent::SchedulePlayPause);
+
+    // A double click cancels that pending single click before toggling, so the
+    // canvas never flashes a pause between the two presses.
+    assert_eq!(
+        video_click::release_intent(2),
+        Intent::CancelPlayPauseAndToggleFullscreen
+    );
+
+    // A slow double click — two releases beyond the platform double-click window —
+    // arrives as two independent single clicks (two play/pause), not a fullscreen
+    // toggle. Both are honoured; neither is silently dropped.
+    assert_eq!(video_click::release_intent(1), Intent::SchedulePlayPause);
+    assert_eq!(video_click::release_intent(1), Intent::SchedulePlayPause);
+
+    // A stationary double-click press stays under the move threshold, so the
+    // second click still reaches the toggle instead of starting a window move.
+    assert!(!video_click::drag_exceeds_move_threshold(0.0, 0.0, 6.0));
+    assert!(video_click::drag_exceeds_move_threshold(6.0, 0.0, 6.0));
+
+    // Entering and leaving fullscreen is decided from the eagerly-flipped intent,
+    // so repeated double-clicks alternate even when the compositor's own state
+    // has not caught up between them.
+    let mut toggle = FullscreenToggle::new(false);
+    assert_eq!(toggle.toggle(), FullscreenAction::Enter);
+    assert_eq!(toggle.toggle(), FullscreenAction::Leave);
+
+    // A maximized window is orthogonal: the fullscreen intent tracks only
+    // fullscreen, and reconciles with the compositor's authoritative notify.
+    toggle.observe(true);
+    assert!(toggle.intended());
+    assert_eq!(toggle.toggle(), FullscreenAction::Leave);
+}
+
+#[test]
+fn fullscreen_toggle_wiring_decides_from_intent_not_the_lagging_platform_state() {
+    // The double-click path routes through the intent policy, cancelling the
+    // pending single click before toggling.
+    let mpv_bridge = include_str!("mpv_bridge.rs");
+    assert!(mpv_bridge.contains("video_click::release_intent(press_count)"));
+    assert!(mpv_bridge.contains("toggle_fullscreen(&click_window, &click_state)"));
+
+    // `toggle_fullscreen` decides Enter/Leave from the flipped intent rather than
+    // reading the compositor's lagging `is_fullscreen`.
+    let playback = include_str!("playback.rs");
+    assert!(playback.contains("fullscreen_toggle.toggle()"));
+    assert!(playback.contains("FullscreenAction::Enter => window.fullscreen()"));
+    assert!(playback.contains("FullscreenAction::Leave => window.unfullscreen()"));
+
+    // The `fullscreened` notify reconciles the intent so Escape / window-manager
+    // toggles keep the next double-click honest.
+    let window = include_str!("window.rs");
+    assert!(window.contains(r#"connect_notify_local(Some("fullscreened")"#));
+    assert!(window.contains(".observe(window.is_fullscreen())"));
+
+    // The compact drag still promotes to a window move only past the shared
+    // threshold, so a stationary double-click there never starts a move.
+    let compact = include_str!("compact_mode.rs");
+    assert!(compact.contains("video_click::drag_exceeds_move_threshold(offset_x, offset_y, 6.0)"));
+}

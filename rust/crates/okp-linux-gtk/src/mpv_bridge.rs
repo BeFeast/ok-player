@@ -1086,7 +1086,7 @@ pub(crate) fn connect_video_clicks(
                     if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
                         eprintln!("interaction: video-double-click-fullscreen");
                     }
-                    toggle_fullscreen(&click_window);
+                    toggle_fullscreen(&click_window, &click_state);
                 }
             }
         }

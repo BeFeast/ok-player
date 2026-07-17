@@ -729,16 +729,22 @@ fn advance_seek_generation(state: &Rc<RefCell<PlayerState>>) {
     state.seek_generation = state.seek_generation.wrapping_add(1);
 }
 
-pub(crate) fn toggle_fullscreen(window: &gtk::ApplicationWindow) {
+pub(crate) fn toggle_fullscreen(window: &gtk::ApplicationWindow, state: &Rc<RefCell<PlayerState>>) {
     if restore_compact_mode(window) {
+        // Compact mode is never itself fullscreen, so leaving it always resolves
+        // to entering fullscreen. Record the intent now and defer the request
+        // until the restored chrome has laid out.
+        state.borrow_mut().fullscreen_toggle.observe(true);
         let window = window.clone();
         glib::idle_add_local_once(move || window.fullscreen());
         return;
     }
-    if window.is_fullscreen() {
-        window.unfullscreen();
-    } else {
-        window.fullscreen();
+    // Decide from the eagerly-flipped intent, not the compositor's lagging
+    // `is_fullscreen`, so a rapid second toggle still alternates instead of
+    // repeating the previous request. See [`fullscreen_toggle`].
+    match state.borrow_mut().fullscreen_toggle.toggle() {
+        fullscreen_toggle::FullscreenAction::Enter => window.fullscreen(),
+        fullscreen_toggle::FullscreenAction::Leave => window.unfullscreen(),
     }
 }
 

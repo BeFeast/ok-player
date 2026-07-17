@@ -245,6 +245,19 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         state.borrow_mut().presentation_exercise = Some(Default::default());
     }
     connect_mpv(&video_host, Rc::clone(&state), launch_args);
+    // Keep the fullscreen intent aligned with the compositor's authoritative
+    // state so toggles driven outside the double-click path (Escape, a
+    // window-manager shortcut) leave the next double-click pointing the right
+    // way. See [`fullscreen_toggle`].
+    {
+        let notify_state = Rc::clone(&state);
+        window.connect_notify_local(Some("fullscreened"), move |window, _| {
+            notify_state
+                .borrow_mut()
+                .fullscreen_toggle
+                .observe(window.is_fullscreen());
+        });
+    }
     connect_video_clicks(video_host.widget(), &window, Rc::clone(&state));
     connect_compact_video_interactions(
         video_host.widget(),

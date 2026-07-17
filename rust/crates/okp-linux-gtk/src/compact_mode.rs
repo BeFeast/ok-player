@@ -505,7 +505,7 @@ pub(crate) fn connect_compact_video_interactions(
     drag.connect_drag_update(move |gesture, offset_x, offset_y| {
         if update_started.get()
             || !window_compact_mode_active(&drag_window)
-            || offset_x.hypot(offset_y) < 6.0
+            || !video_click::drag_exceeds_move_threshold(offset_x, offset_y, 6.0)
         {
             return;
         }

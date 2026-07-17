@@ -137,6 +137,39 @@ grep -q 'interaction: video-double-click-fullscreen' "$OUT_DIR/app.log" || {
 xdotool key --clearmodifiers Escape
 sleep 1
 
+# Repeated enter/exit cycles must alternate deterministically with no missed
+# toggle — the P0 double-click regression (#330). Each double-click flips the
+# window between windowed and fullscreen; the intent policy keeps a rapid toggle
+# from repeating a stale request instead of reversing it.
+double_click_toggles_before="$(grep -c 'video-double-click-fullscreen' "$OUT_DIR/app.log" || true)"
+for cycle in 1 2 3 4; do
+  xdotool mousemove --window "$window_id" 560 330 click --repeat 2 --delay 100 1
+  sleep 1
+  cycle_width="$(xwininfo -id "$window_id" | awk '/Width:/ {print $2; exit}')"
+  if (( cycle % 2 == 1 )); then
+    [[ "$cycle_width" == 1280 ]] || {
+      echo "cycle $cycle did not enter fullscreen: width=$cycle_width" >&2
+      exit 1
+    }
+  else
+    [[ "$cycle_width" != 1280 ]] || {
+      echo "cycle $cycle did not leave fullscreen: width=$cycle_width" >&2
+      exit 1
+    }
+  fi
+done
+double_click_toggles_after="$(grep -c 'video-double-click-fullscreen' "$OUT_DIR/app.log" || true)"
+[[ "$double_click_toggles_after" -ge $((double_click_toggles_before + 4)) ]] || {
+  echo "repeated double-click cycles missed a toggle: before=$double_click_toggles_before after=$double_click_toggles_after" >&2
+  exit 1
+}
+# Restore the windowed geometry so the trailing chrome interactions run in a
+# known state.
+if [[ "$(xwininfo -id "$window_id" | awk '/Width:/ {print $2; exit}')" == 1280 ]]; then
+  xdotool mousemove --window "$window_id" 560 330 click --repeat 2 --delay 100 1
+  sleep 1
+fi
+
 # The canonical pin is a real EWMH above-state action on X11.
 import -window "$window_id" "$OUT_DIR/always-on-top-off.png"
 xdotool mousemove --window "$window_id" 959 21 click 1
@@ -164,6 +197,7 @@ printf '%s\n' \
   "single_click_scheduled=$scheduled" \
   "single_click_committed=$committed" \
   "double_click_fullscreen=pass" \
+  "repeated_double_click_cycles=pass" \
   "time_label_toggle=pass" \
   "seek_panel_isolation=pass" \
   "always_on_top=pass" \
