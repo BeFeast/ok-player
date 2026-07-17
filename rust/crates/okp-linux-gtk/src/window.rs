@@ -766,15 +766,25 @@ pub(crate) fn fit_player_window_to_video(
     // Sampling the surface monitor immediately after that map observes GNOME's
     // transient placement negotiation (on the dual-monitor QA host it reports
     // the laptop twice before settling on the primary display) and can shrink a
-    // correctly requested primary-monitor size. Keep the pre-map request, but
-    // also guard against Mutter's `auto-maximize` policy: a near-workarea 4K fit
-    // can be maximized shortly after mapping even though the app never requested
-    // that state. Explicit fullscreen/maximized launches never take this path.
-    if !was_mapped || deferred_launch_fit {
+    // correctly requested primary-monitor size. Keep the pre-map request,
+    // complete that same transaction on the first map, and also guard against
+    // Mutter's `auto-maximize` policy: a near-workarea 4K fit can be maximized
+    // shortly after mapping even though the app never requested that state.
+    // Explicit fullscreen/maximized launches never take this path.
+    if !was_mapped {
         if debug {
             eprintln!("window fit launch: keeping initial compositor request mapped={was_mapped}");
         }
         if deferred_launch_fit {
+            settle_deferred_launch_fit_on_map(
+                window,
+                state,
+                reported_bounds,
+                source_generation,
+                video,
+                work_area,
+                placement,
+            );
             restore_deferred_launch_fit_after_compositor(
                 window,
                 state,
@@ -793,6 +803,52 @@ pub(crate) fn fit_player_window_to_video(
         work_area,
         placement,
     );
+}
+
+fn settle_deferred_launch_fit_on_map(
+    window: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
+    reported_bounds: &Rc<RefCell<Option<PlayerWindowBounds>>>,
+    source_generation: u64,
+    video: window_fit::WindowSize,
+    requested_work_area: window_fit::WindowRect,
+    requested: window_fit::WindowPlacement,
+) {
+    let mapped_state = Rc::clone(state);
+    let mapped_bounds = Rc::clone(reported_bounds);
+    let pending = Rc::new(Cell::new(true));
+    window.connect_map(move |mapped_window| {
+        if !pending.replace(false)
+            || !window_fit_generation_is_current(mapped_window, &mapped_state, source_generation)
+        {
+            return;
+        }
+
+        // `GtkWindow::present` may restore the builder's default geometry when
+        // a realized launch is mapped after the video dimensions arrive. This
+        // is still the original load-time fit transaction: re-issue it once on
+        // the mapped toplevel, then use the normal monitor-aware settle path.
+        mapped_window.set_default_size(requested.size.width, requested.size.height);
+        move_resize_player_window_on_x11(mapped_window, requested.position, requested.size);
+        if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
+            eprintln!(
+                "window fit mapped launch: target={}x{}+{},{}",
+                requested.size.width,
+                requested.size.height,
+                requested.position.x,
+                requested.position.y,
+            );
+        }
+        schedule_player_window_fit_settle(
+            mapped_window,
+            &mapped_state,
+            &mapped_bounds,
+            source_generation,
+            video,
+            requested_work_area,
+            requested,
+        );
+    });
 }
 
 fn restore_deferred_launch_fit_after_compositor(
