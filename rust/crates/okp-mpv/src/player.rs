@@ -2365,9 +2365,18 @@ mod tests {
         assert!(dropped.get());
     }
 
-    fn fixture_media_path() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/OkPlayer.IntegrationTests/fixtures/subtest.mkv")
+    fn write_codec_neutral_media_fixture(path: &Path) -> VideoDimensions {
+        let dimensions = VideoDimensions {
+            width: 16,
+            height: 9,
+        };
+        let mut ppm = format!("P6\n{} {}\n255\n", dimensions.width, dimensions.height).into_bytes();
+        ppm.resize(
+            ppm.len() + (dimensions.width * dimensions.height * 3) as usize,
+            0x20,
+        );
+        fs::write(path, ppm).expect("portable pixmap fixture should be written");
+        dimensions
     }
 
     fn wait_for_command_reply(mpv: &Mpv, request_id: u64) -> Option<c_int> {
@@ -2402,8 +2411,8 @@ mod tests {
             return;
         }
         let root = unique_temp_dir(&format!("okp-mpv-{extension}-autoload"));
-        let media = root.path().join("movie.mkv");
-        fs::copy(fixture_media_path(), &media).expect("media fixture should be copied");
+        let media = root.path().join("movie.ppm");
+        write_codec_neutral_media_fixture(&media);
         fs::write(root.path().join(format!("movie.{extension}")), contents)
             .expect("subtitle sidecar should be written");
 
@@ -2690,8 +2699,10 @@ mod tests {
             .expect("libmpv must be loadable for okp-mpv tests");
         mpv.mark_ui_thread();
         mpv.start_event_pump_without_audio_devices();
-        mpv.load_file(&fixture_media_path())
-            .expect("video fixture should load");
+        let root = unique_temp_dir("okp-mpv-lifecycle-dimensions");
+        let media = root.path().join("dimensions.ppm");
+        let expected_dimensions = write_codec_neutral_media_fixture(&media);
+        mpv.load_file(&media).expect("video fixture should load");
 
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut dimensions = None;
@@ -2708,13 +2719,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
 
-        assert_eq!(
-            dimensions,
-            Some(VideoDimensions {
-                width: 1280,
-                height: 720
-            })
-        );
+        assert_eq!(dimensions, Some(expected_dimensions));
         assert_eq!(mpv.observed_video_dimensions(), dimensions);
         #[cfg(debug_assertions)]
         assert_eq!(
@@ -2722,6 +2727,10 @@ mod tests {
             0,
             "event payload generation must stay off the marked UI thread"
         );
+
+        drop(mpv);
+        root.close()
+            .expect("dimension fixture directory should be removed");
     }
 
     /// Recording a source is local snapshot projection, not a reason to repeat
