@@ -63,7 +63,7 @@ public beta project should use:
 - the public repository clone URL and the intended branch/tag;
 - custom source (`make srpm`) so `.copr/Makefile` emits the SRPM;
 - source-builder packages `cargo`, `git`, `rpm-build`, `tar`, `gzip`, and
-  `zstd`.
+  `zstd` (with `flock` from the standard `util-linux` base package).
 
 Do not store COPR API tokens, private hostnames, builder addresses, or account
 specific project IDs in this repository. Enabling the resulting beta COPR is

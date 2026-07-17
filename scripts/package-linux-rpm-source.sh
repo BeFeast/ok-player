@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SPEC="$ROOT/rust/packaging/fedora/ok-player.spec"
 OUT_DIR="${1:-$ROOT/artifacts/linux/rpm/source}"
 
-for tool in cargo git rpmbuild tar gzip zstd sha256sum touch; do
+for tool in cargo git rpmbuild tar gzip zstd sha256sum touch flock; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "Missing required tool: $tool" >&2
     exit 127
@@ -24,10 +24,26 @@ SOURCE_EPOCH="${SOURCE_DATE_EPOCH:-$(git -C "$ROOT" log -1 --format=%ct HEAD)}"
 SOURCE_COMMIT="$(git -C "$ROOT" rev-parse HEAD)"
 PREFIX="ok-player-$UPSTREAM_VERSION"
 TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "$TMP_DIR"' EXIT
+RPM_TOPDIR="/tmp/ok-player-rpmbuild"
+RPM_LOCK="/tmp/ok-player-rpmbuild.lock"
+cleanup() {
+  if [[ -L "$RPM_TOPDIR" ]]; then
+    rm -f "$RPM_TOPDIR"
+  fi
+  rm -rf "$TMP_DIR"
+}
+trap cleanup EXIT
 export SOURCE_DATE_EPOCH="$SOURCE_EPOCH"
 
 mkdir -p "$OUT_DIR" "$TMP_DIR/rpmbuild/SOURCES" "$TMP_DIR/rpmbuild/SRPMS"
+exec 9>"$RPM_LOCK"
+flock 9
+if [[ -e "$RPM_TOPDIR" && ! -L "$RPM_TOPDIR" ]]; then
+  echo "Refusing to replace non-symlink RPM build path: $RPM_TOPDIR" >&2
+  exit 2
+fi
+rm -f "$RPM_TOPDIR"
+ln -s "$TMP_DIR/rpmbuild" "$RPM_TOPDIR"
 
 git -C "$ROOT" archive --format=tar --prefix="$PREFIX/" HEAD \
   | gzip -n -9 > "$OUT_DIR/$PREFIX.tar.gz"
@@ -56,14 +72,14 @@ cp "$OUT_DIR/$PREFIX.tar.gz" "$TMP_DIR/rpmbuild/SOURCES/"
 cp "$OUT_DIR/$PREFIX-vendor.tar.zst" "$TMP_DIR/rpmbuild/SOURCES/"
 cp "$OUT_DIR/$PREFIX-source-commit" "$TMP_DIR/rpmbuild/SOURCES/"
 rpmbuild -bs "$SPEC" \
-  --define "_topdir $TMP_DIR/rpmbuild" \
+  --define "_topdir $RPM_TOPDIR" \
   --define "upstream_version $UPSTREAM_VERSION" \
   --define "_buildhost reproducible.invalid" \
   --define "use_source_date_epoch_as_buildtime 1" \
   --define "clamp_mtime_to_source_date_epoch 1" \
   --define "_source_filedigest_algorithm 8" \
   --define "_binary_filedigest_algorithm 8"
-cp "$TMP_DIR"/rpmbuild/SRPMS/*.src.rpm "$OUT_DIR/"
+cp "$RPM_TOPDIR"/SRPMS/*.src.rpm "$OUT_DIR/"
 
 (
   cd "$OUT_DIR"
