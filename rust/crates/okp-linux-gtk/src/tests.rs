@@ -2313,6 +2313,39 @@ fn player_window_move_drags_the_whole_non_interactive_surface() {
 }
 
 #[test]
+fn player_shift_resize_owns_pointer_geometry_without_configure_feedback() {
+    let window = include_str!("window.rs");
+    for required in [
+        "gtk::GestureDrag::new()",
+        "connect_drag_begin",
+        "connect_drag_update",
+        "connect_drag_end",
+        "connect_modifiers",
+        "gdk::ModifierType::SHIFT_MASK",
+        "aspect_resize::client_max_for_anchor(",
+        "session.resolve(pointer)",
+        "update_window.set_default_size(",
+        "move_resize_player_window_on_x11(",
+        "current_pointer_position_on_x11(",
+    ] {
+        assert!(window.contains(required), "missing resize seam: {required}");
+    }
+    assert!(!window.contains("size.set_size(resolved.width, resolved.height)"));
+    for edge in [
+        "gdk::SurfaceEdge::North",
+        "gdk::SurfaceEdge::South",
+        "gdk::SurfaceEdge::West",
+        "gdk::SurfaceEdge::East",
+        "gdk::SurfaceEdge::NorthWest",
+        "gdk::SurfaceEdge::NorthEast",
+        "gdk::SurfaceEdge::SouthWest",
+        "gdk::SurfaceEdge::SouthEast",
+    ] {
+        assert!(window.contains(edge), "missing resize edge: {edge}");
+    }
+}
+
+#[test]
 fn subtitle_delay_projection_drives_quick_popover_and_settings_refresh() {
     // Both visible surfaces retain the exact projected delay instead of
     // immediately replacing it with the asynchronous mpv observer snapshot.

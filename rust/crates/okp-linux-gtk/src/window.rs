@@ -644,22 +644,7 @@ pub(crate) fn track_player_window_bounds(
                         height,
                     });
                 compute_bounds.replace(Some(PlayerWindowBounds { monitor, work_area }));
-            }
-
-            // Enforce the aspect lock in the compositor's size negotiation. The
-            // proposed size is the surface size GDK holds for this configure; the
-            // core session projects it back onto the locked aspect line (clamped
-            // to the OSC floor and monitor ceiling). Freeform (unlocked) drags
-            // record the size but never override it.
-            if let Some(session) = compute_resize.session.borrow_mut().as_mut() {
-                let proposed = window_fit::WindowSize {
-                    width: toplevel.width().max(1),
-                    height: toplevel.height().max(1),
-                };
-                let resolved = session.resolve(proposed);
-                if session.is_locked() {
-                    size.set_size(resolved.width, resolved.height);
-                }
+                compute_resize.work_area.set(Some(work_area));
             }
         });
     });
@@ -1507,6 +1492,49 @@ pub(crate) fn current_player_position_on_x11(
     }
 }
 
+pub(crate) fn current_pointer_position_on_x11(
+    window: &gtk::ApplicationWindow,
+) -> Option<window_fit::WindowPoint> {
+    use gtk::glib::translate::ToGlibPtr;
+
+    let display = gdk::Display::default()?;
+    if display.type_().name() != "GdkX11Display" {
+        return None;
+    }
+    let surface = window.surface()?;
+    let scale = surface.scale_factor().max(1);
+    unsafe {
+        let xdisplay = gdk_x11_display_get_xdisplay(display.to_glib_none().0);
+        if xdisplay.is_null() {
+            return None;
+        }
+        let xid = gdk_x11_surface_get_xid(surface.to_glib_none().0);
+        let mut root = 0;
+        let mut child = 0;
+        let mut root_x = 0;
+        let mut root_y = 0;
+        let mut win_x = 0;
+        let mut win_y = 0;
+        let mut mask = 0;
+        (xid != 0
+            && XQueryPointer(
+                xdisplay,
+                xid,
+                &mut root,
+                &mut child,
+                &mut root_x,
+                &mut root_y,
+                &mut win_x,
+                &mut win_y,
+                &mut mask,
+            ) != 0)
+            .then_some(window_fit::WindowPoint {
+                x: root_x / scale,
+                y: root_y / scale,
+            })
+    }
+}
+
 pub(crate) fn primary_pointer_down_on_x11(window: &gtk::ApplicationWindow) -> Option<bool> {
     use gtk::glib::translate::ToGlibPtr;
 
@@ -1776,15 +1804,19 @@ const MIN_RESIZE_CLIENT: window_fit::WindowSize = window_fit::WindowSize {
 
 /// Shared live state for the Shift-locked interactive resize (issue #331).
 ///
-/// One drag session at a time is created by a resize handle press and consulted
-/// by the toplevel `compute-size` negotiation; `shift_held` is tracked by a
-/// window-level key controller so pressing or releasing Shift mid-drag is
+/// One drag session at a time is created by a resize handle and resolved from
+/// its pointer updates; `shift_held` is tracked by a window-level modifier
+/// controller so pressing or releasing either Shift key mid-drag is
 /// deterministic. All geometry/state decisions live in `okp_core::aspect_resize`;
 /// this only shuttles observations in and applies the answer.
 #[derive(Clone)]
 pub(crate) struct AspectResizeState {
     session: Rc<RefCell<Option<aspect_resize::AspectResize>>>,
     shift_held: Rc<Cell<bool>>,
+    work_area: Rc<Cell<Option<window_fit::WindowRect>>>,
+    start_position_x11: Rc<Cell<Option<window_fit::WindowPoint>>>,
+    start_pointer_x11: Rc<Cell<Option<window_fit::WindowPoint>>>,
+    last_requested: Rc<Cell<Option<window_fit::WindowSize>>>,
 }
 
 impl AspectResizeState {
@@ -1792,6 +1824,10 @@ impl AspectResizeState {
         Self {
             session: Rc::new(RefCell::new(None)),
             shift_held: Rc::new(Cell::new(false)),
+            work_area: Rc::new(Cell::new(None)),
+            start_position_x11: Rc::new(Cell::new(None)),
+            start_pointer_x11: Rc::new(Cell::new(None)),
+            last_requested: Rc::new(Cell::new(None)),
         }
     }
 }
@@ -1803,23 +1839,32 @@ fn current_client_size(window: &gtk::ApplicationWindow) -> window_fit::WindowSiz
     }
 }
 
-/// The monitor's logical geometry as the interactive-resize ceiling. GTK4 reports
-/// monitor geometry in application (logical) pixels, matching the logical sizes
-/// the `compute-size` handshake negotiates, so aspect clamping is scale-invariant.
-fn monitor_client_max(window: &gtk::ApplicationWindow) -> window_fit::WindowSize {
-    window
-        .surface()
-        .and_then(|surface| surface.display().monitor_at_surface(&surface))
-        .map(|monitor| monitor.geometry())
-        .filter(|geometry| geometry.width() > 0 && geometry.height() > 0)
-        .map(|geometry| window_fit::WindowSize {
-            width: geometry.width(),
-            height: geometry.height(),
-        })
-        .unwrap_or(window_fit::WindowSize {
-            width: i32::MAX,
-            height: i32::MAX,
-        })
+/// GTK reports the compositor's logical toplevel bounds through `compute-size`;
+/// on GNOME those bounds are the usable workarea rather than the full monitor.
+/// Fall back to monitor geometry only before the first bounds report arrives.
+fn current_resize_work_area(
+    window: &gtk::ApplicationWindow,
+    state: &AspectResizeState,
+) -> window_fit::WindowRect {
+    state.work_area.get().unwrap_or_else(|| {
+        window
+            .surface()
+            .and_then(|surface| surface.display().monitor_at_surface(&surface))
+            .map(|monitor| monitor.geometry())
+            .filter(|geometry| geometry.width() > 0 && geometry.height() > 0)
+            .map(|geometry| window_fit::WindowRect {
+                x: geometry.x(),
+                y: geometry.y(),
+                width: geometry.width(),
+                height: geometry.height(),
+            })
+            .unwrap_or(window_fit::WindowRect {
+                x: 0,
+                y: 0,
+                width: i32::MAX,
+                height: i32::MAX,
+            })
+    })
 }
 
 fn aspect_resize_edge(edge: gdk::SurfaceEdge) -> aspect_resize::ResizeEdge {
@@ -1837,48 +1882,35 @@ fn aspect_resize_edge(edge: gdk::SurfaceEdge) -> aspect_resize::ResizeEdge {
     }
 }
 
-/// Track Shift so a press or release *during* an active resize retargets the lock
-/// deterministically, and clear the session when the drag's button is released.
-///
-/// On Wayland the compositor takes an implicit pointer grab for the duration of
-/// `begin_resize`, so the client does not see pointer motion, but keyboard focus
-/// is retained — Shift transitions arrive here as normal key events, and the
-/// button release that ends the resize is delivered when the grab lifts.
+/// Track the aggregate modifier mask so left and right Shift remain independent:
+/// releasing one key while the other is held leaves the lock active. The resize
+/// gesture remains app-owned, so modifier transitions and pointer updates share
+/// one deterministic core session.
 pub(crate) fn connect_aspect_resize_shift(
     window: &gtk::ApplicationWindow,
     state: &AspectResizeState,
 ) {
     let keys = gtk::EventControllerKey::new();
     keys.set_propagation_phase(gtk::PropagationPhase::Capture);
-    let press_state = state.clone();
-    let press_window = window.clone();
-    keys.connect_key_pressed(move |_, key, _, _| {
-        if is_shift_key(key) {
-            apply_shift(&press_state, &press_window, true);
-        }
+    let modifiers_state = state.clone();
+    keys.connect_modifiers(move |_, modifiers| {
+        apply_shift(
+            &modifiers_state,
+            modifiers.contains(gdk::ModifierType::SHIFT_MASK),
+        );
         glib::Propagation::Proceed
-    });
-    let release_state = state.clone();
-    let release_window = window.clone();
-    keys.connect_key_released(move |_, key, _, _| {
-        if is_shift_key(key) {
-            apply_shift(&release_state, &release_window, false);
-        }
     });
     window.add_controller(keys);
 
-    // Clear the session when the resize's button is released. `begin_resize`
-    // hands the pointer to a compositor grab, which *cancels* ordinary gestures
-    // rather than releasing them, so a plain GestureClick would never see the
-    // end of the drag and the locked session could hijack a later resize. A
-    // legacy controller still receives the raw button-release event that the
-    // compositor delivers when the grab lifts, keeping the final on-screen size.
+    // GestureDrag normally ends the session. Keep a raw release failsafe for a
+    // compositor/window-state interruption so stale geometry cannot affect a
+    // later drag.
     let legacy = gtk::EventControllerLegacy::new();
     legacy.set_propagation_phase(gtk::PropagationPhase::Capture);
     let end_state = state.clone();
     legacy.connect_event(move |_, event| {
         if event.event_type() == gdk::EventType::ButtonRelease {
-            end_state.session.borrow_mut().take();
+            clear_aspect_resize_session(&end_state);
         }
         glib::Propagation::Proceed
     });
@@ -1896,22 +1928,21 @@ pub(crate) fn connect_aspect_resize_shift(
 
 /// Abandon any in-flight aspect-lock session. Called when the window enters a
 /// state that supersedes an interactive resize (maximize/fullscreen), so a
-/// lingering lock can never distort a later size negotiation.
+/// lingering lock can never distort a later drag.
 pub(crate) fn clear_aspect_resize_session(state: &AspectResizeState) {
     state.session.borrow_mut().take();
+    state.start_position_x11.set(None);
+    state.start_pointer_x11.set(None);
+    state.last_requested.set(None);
 }
 
-fn is_shift_key(key: gdk::Key) -> bool {
-    matches!(key, gdk::Key::Shift_L | gdk::Key::Shift_R)
-}
-
-fn apply_shift(state: &AspectResizeState, window: &gtk::ApplicationWindow, pressed: bool) {
+fn apply_shift(state: &AspectResizeState, pressed: bool) {
     if state.shift_held.get() == pressed {
         return;
     }
     state.shift_held.set(pressed);
     if let Some(session) = state.session.borrow_mut().as_mut() {
-        session.set_shift(pressed, current_client_size(window));
+        session.set_shift(pressed);
     }
 }
 
@@ -2024,15 +2055,14 @@ pub(crate) fn connect_player_window_resize(
     edge: gdk::SurfaceEdge,
     aspect_resize_state: &AspectResizeState,
 ) {
-    let gesture = gtk::GestureClick::new();
+    let gesture = gtk::GestureDrag::new();
     gesture.set_button(gdk::BUTTON_PRIMARY);
     let resize_window = window.clone();
-    let resize_widget = widget.clone();
     let resize_state = aspect_resize_state.clone();
-    gesture.connect_pressed(move |gesture, _, x, y| {
+    gesture.connect_drag_begin(move |gesture, x, y| {
         let debug_resize = env::var_os("OKP_DEBUG_WINDOW_RESIZE").is_some();
         if debug_resize {
-            eprintln!("resize press edge={edge:?} local=({x:.1},{y:.1})");
+            eprintln!("resize drag begin edge={edge:?} local=({x:.1},{y:.1})");
         }
 
         if resize_window.is_fullscreen() || resize_window.is_maximized() {
@@ -2041,71 +2071,110 @@ pub(crate) fn connect_player_window_resize(
             }
             return;
         }
-
-        let Some(device) = gesture.current_event_device() else {
-            if debug_resize {
-                eprintln!("resize ignored: no device");
-            }
-            return;
-        };
-        let Some(surface) = resize_window.surface() else {
-            if debug_resize {
-                eprintln!("resize ignored: no surface");
-            }
-            return;
-        };
-        let Ok(toplevel) = surface.downcast::<gdk::Toplevel>() else {
-            if debug_resize {
-                eprintln!("resize ignored: surface is not a toplevel");
-            }
-            return;
-        };
-        let window_point = resize_widget
-            .compute_point(
-                &resize_window,
-                &gtk::graphene::Point::new(x as f32, y as f32),
-            )
-            .map(|point| (f64::from(point.x()), f64::from(point.y())))
-            .unwrap_or((x, y));
-        if debug_resize {
-            eprintln!(
-                "resize begin edge={edge:?} window=({:.1},{:.1}) button={}",
-                window_point.0,
-                window_point.1,
-                gesture.current_button()
-            );
-        }
-
-        // Start a session for this drag. Without Shift it is a freeform passthrough
-        // (ordinary compositor resize); with Shift held it locks to the current
-        // client proportions immediately. Either way the compositor-native
-        // `begin_resize` still drives the pointer; aspect is enforced only through
-        // the `compute-size` negotiation, so there is no configure/resize loop.
+        apply_shift(
+            &resize_state,
+            gesture
+                .current_event_state()
+                .contains(gdk::ModifierType::SHIFT_MASK),
+        );
+        let start_size = current_client_size(&resize_window);
+        let start_position = current_player_position_on_x11(&resize_window);
+        let max = aspect_resize::client_max_for_anchor(
+            aspect_resize_edge(edge),
+            start_size,
+            start_position,
+            current_resize_work_area(&resize_window, &resize_state),
+        );
         resize_state
             .session
             .replace(Some(aspect_resize::AspectResize::begin(
                 aspect_resize_edge(edge),
-                current_client_size(&resize_window),
+                start_size,
                 MIN_RESIZE_CLIENT,
-                monitor_client_max(&resize_window),
+                max,
                 resize_state.shift_held.get(),
             )));
+        resize_state.start_position_x11.set(start_position);
+        resize_state
+            .start_pointer_x11
+            .set(current_pointer_position_on_x11(&resize_window));
+        resize_state.last_requested.set(Some(start_size));
+        gesture.set_state(gtk::EventSequenceState::Claimed);
         if debug_resize {
             eprintln!(
-                "resize session begin edge={edge:?} locked={}",
-                resize_state.shift_held.get()
+                "resize session begin edge={edge:?} locked={} start={}x{} max={}x{} x11_anchor={}",
+                resize_state.shift_held.get(),
+                start_size.width,
+                start_size.height,
+                max.width,
+                max.height,
+                start_position.is_some()
             );
         }
-
-        toplevel.begin_resize(
-            edge,
-            Some(&device),
-            gesture.current_button() as i32,
-            window_point.0,
-            window_point.1,
-            gesture.current_event_time(),
-        );
     });
+
+    let update_window = window.clone();
+    let update_state = aspect_resize_state.clone();
+    gesture.connect_drag_update(move |gesture, offset_x, offset_y| {
+        apply_shift(
+            &update_state,
+            gesture
+                .current_event_state()
+                .contains(gdk::ModifierType::SHIFT_MASK),
+        );
+        let pointer = match (
+            update_state.start_pointer_x11.get(),
+            current_pointer_position_on_x11(&update_window),
+        ) {
+            (Some(start), Some(current)) => aspect_resize::PointerDelta {
+                x: f64::from(current.x.saturating_sub(start.x)),
+                y: f64::from(current.y.saturating_sub(start.y)),
+            },
+            _ => aspect_resize::PointerDelta {
+                x: offset_x,
+                y: offset_y,
+            },
+        };
+        let Some(resolved) = update_state
+            .session
+            .borrow_mut()
+            .as_mut()
+            .map(|session| session.resolve(pointer))
+        else {
+            return;
+        };
+        if update_state.last_requested.get() == Some(resolved.size) {
+            return;
+        }
+        update_state.last_requested.set(Some(resolved.size));
+
+        update_window.set_default_size(resolved.size.width, resolved.size.height);
+        if let Some(start) = update_state.start_position_x11.get() {
+            move_resize_player_window_on_x11(
+                &update_window,
+                window_fit::WindowPoint {
+                    x: start.x.saturating_add(resolved.position_delta.x),
+                    y: start.y.saturating_add(resolved.position_delta.y),
+                },
+                resolved.size,
+            );
+        }
+        if env::var_os("OKP_DEBUG_WINDOW_RESIZE").is_some() {
+            eprintln!(
+                "resize update edge={edge:?} shift={} pointer=({:.1},{:.1}) size={}x{} anchor=({}, {})",
+                update_state.shift_held.get(),
+                pointer.x,
+                pointer.y,
+                resolved.size.width,
+                resolved.size.height,
+                resolved.position_delta.x,
+                resolved.position_delta.y
+            );
+        }
+    });
+
+    let end_state = aspect_resize_state.clone();
+    gesture.connect_drag_end(move |_, _, _| clear_aspect_resize_session(&end_state));
     widget.add_controller(gesture);
 }
 
