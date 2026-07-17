@@ -69,7 +69,7 @@
                 {
                     "type": "git",
                     "url": "https://github.com/BeFeast/ok-player.git",
-                    "commit": "96d95566e1318317c11e480780b29aeda95eebd1"
+                    "commit": "0957d89a87214990cd2550f9ba784c1c1b8465b9"
                 },
                 "cargo-sources.json"
             ],
