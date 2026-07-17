@@ -91,6 +91,7 @@ The `.deb` targets current Debian/Ubuntu; the AppImage targets any glibc desktop
 - 📦 **[Linux release acceptance](docs/linux-release-acceptance.md)** — how Linux release evidence is graded and what each level may claim.
 - 🔄 **[Update feeds](docs/update-feed.md)** — how installed Windows and Linux builds discover updates.
 - 📝 **[Release notes template — `0.11.0-beta.1`](docs/release-notes/0.11.0-beta.1.md)** — the presentation template for the first Linux public beta.
+- 🖥️ **[Windows development VM](docs/windows-dev-vm.md)** — reproducible VM bootstrap, environment report, and the VM-valid vs. real-hardware acceptance gates.
 - 🎨 **[Claude Design prompt](docs/claude-design-prompt.md)** — original orientation brief from the UI design phase.
 
 ## Roadmap (summary)
