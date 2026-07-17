@@ -46,6 +46,25 @@ path. Settings → Playback renders the current state as a disabled **Deferred /
 and `scripts/smoke-linux-settings.sh <binary> <output> playback` verifies that the packaged shell
 reports that state while rendering the page.
 
+## Rarely-used video geometry
+
+Aspect, zoom/pan, quarter-turn rotation, fill-screen crop, and deinterlace live only in the
+player-wide right-click **Advanced commands → Video** group. The primary OSC and its curated More
+popover must not contain geometry commands. Pan actions are available only after zooming above
+100%; bounded zoom/pan actions and Reset disable at their current limits rather than becoming dead
+commands.
+
+`okp_core::video_geometry` unit tests prove action transitions, bounds, menu eligibility, and the
+linear-to-libmpv zoom mapping. Shared-history tests prove local-file geometry round-trips through
+`preferences.video_geometry`, survives progress saves, and normalizes before restore. Real-libmpv
+tests prove the `video-zoom`, `video-pan-x/y`, `video-rotate`, `panscan`, and `deinterlace` command
+path. `scripts/smoke-linux-context-menu.sh <binary> <output>` captures the `1280×900` context-menu
+state and confirms the primary More popover remains a separate surface.
+
+Xvfb can prove deterministic menu composition, disabled/selected rendering, scrolling, and the X11
+command path. It does not prove GNOME/Wayland compositor placement, fractional scaling, or desktop
+focus quality; those remain operator QA boundaries and do not change the geometry state contract.
+
 The encoded redlines include:
 
 | Surface | Bounds / region contract |

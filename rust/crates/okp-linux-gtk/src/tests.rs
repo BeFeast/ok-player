@@ -1734,6 +1734,8 @@ fn more_stays_curated_while_player_context_menu_keeps_legacy_commands() {
     }
     assert!(!more.contains("Open URL..."));
     assert!(!more.contains("Clear History..."));
+    assert!(!more.contains("Zoom in"));
+    assert!(!more.contains("Deinterlace"));
 
     for label in [
         "Open URL...",
@@ -1749,8 +1751,16 @@ fn more_stays_curated_while_player_context_menu_keeps_legacy_commands() {
         "Copy Current Time",
         "Add Bookmark",
         "A-B loop",
+        "Zoom in",
+        "Zoom out",
+        "Pan left",
+        "Pan right",
+        "Pan up",
+        "Pan down",
+        "Center image",
         "Rotate 90°",
         "Fill screen (crop bars)",
+        "Deinterlace",
         "Reset video",
         "Save frame",
         "Save frame with subtitles",
@@ -1764,7 +1774,14 @@ fn more_stays_curated_while_player_context_menu_keeps_legacy_commands() {
         );
     }
     for implementation_marker in [
-        "VIDEO_ASPECT_PRESETS",
+        "VideoAspect::ALL",
+        "VideoGeometryAction::SetAspect",
+        "VideoGeometryAction::ZoomIn",
+        "VideoGeometryAction::ToggleDeinterlace",
+        "if video_available",
+        "video_transform.action_enabled(true, action)",
+        "No video track",
+        "Open video to use geometry",
         "Enter Fullscreen",
         "Exit Fullscreen",
         "Private Session On",
@@ -1792,6 +1809,28 @@ fn more_stays_curated_while_player_context_menu_keeps_legacy_commands() {
 
     let window = include_str!("window.rs");
     assert!(window.contains("connect_player_context_menu("));
+}
+
+#[test]
+fn video_geometry_toasts_report_the_applied_core_state() {
+    let mut geometry = VideoGeometry::default();
+    geometry.apply(VideoGeometryAction::ZoomIn);
+    assert_eq!(
+        video_geometry_message(VideoGeometryAction::ZoomIn, geometry),
+        "Zoom: 125%"
+    );
+
+    geometry.apply(VideoGeometryAction::RotateClockwise);
+    assert_eq!(
+        video_geometry_message(VideoGeometryAction::RotateClockwise, geometry),
+        "Rotation: 90°"
+    );
+
+    geometry.apply(VideoGeometryAction::ToggleDeinterlace);
+    assert_eq!(
+        video_geometry_message(VideoGeometryAction::ToggleDeinterlace, geometry),
+        "Deinterlace on"
+    );
 }
 
 #[test]

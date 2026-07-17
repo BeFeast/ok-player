@@ -447,6 +447,16 @@ untouched by this work; the Windows migration is exercised only by the Rust gold
   `→ (Some(false), None)` ("keep it off"), and any other id `→ (Some(true), Some(id))`. This is
   a best-effort reconciliation of the two per-file models; the secondary-subtitle, subtitle
   delay/scale, and speed preferences have no Windows counterpart and stay absent.
+- **Video geometry is a Linux-led canonical preference.** `preferences.video_geometry` stores
+  the normalized aspect preset, linear zoom multiplier, pan offsets, quarter-turn rotation,
+  fill-screen crop choice, and deinterlace toggle in the app index. The pure
+  `okp_core::video_geometry` model owns bounds, menu eligibility, and action transitions; the GTK
+  shell only renders it and maps the resulting values to libmpv. Linux writes this field only for
+  local files and only outside private sessions, then restores it through the same pending
+  preference path as tracks, delays, and speed. The current Windows `FileRecord` has no geometry
+  fields and its context-menu adjustments remain session-only, so a Windows-dialect migration
+  leaves `video_geometry` absent; this is the recorded parity gap until Windows adopts the
+  canonical history document.
 - **`bookmarks` is now written on Linux; the other extras are still preserved untouched.**
   `title`, `poster_path`, and `chapters` (`UserChapters`) are carried through the canonical
   record (so a future Windows consumer keeps them); with `bookmarks` they are

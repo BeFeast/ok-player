@@ -22,6 +22,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::video_geometry::VideoGeometry;
+
 /// Version stamped into the canonical document. Bumped from the Linux alpha `1` to mark
 /// the unified cross-platform schema; a loaded `1` document upgrades to this.
 pub const HISTORY_VERSION: u32 = 2;
@@ -64,6 +66,7 @@ impl History {
                 return None;
             }
             history.version = HISTORY_VERSION;
+            history.normalize_preferences();
             Some(history)
         } else {
             let windows: BTreeMap<String, WindowsFileRecord> =
@@ -76,6 +79,14 @@ impl History {
                 version: HISTORY_VERSION,
                 files,
             })
+        }
+    }
+
+    fn normalize_preferences(&mut self) {
+        for entry in self.files.values_mut() {
+            if let Some(geometry) = entry.preferences.video_geometry.as_mut() {
+                *geometry = geometry.normalized();
+            }
         }
     }
 }
@@ -139,6 +150,9 @@ pub struct Preferences {
     pub audio_delay: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed: Option<f64>,
+    /// Per-file aspect, zoom/pan, rotation, fill, and deinterlace choices.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_geometry: Option<VideoGeometry>,
 }
 
 impl Preferences {
@@ -154,6 +168,7 @@ impl Preferences {
             && self.subtitle_scale.is_none()
             && self.audio_delay.is_none()
             && self.speed.is_none()
+            && self.video_geometry.is_none()
     }
 
     /// Overlay the set fields of `updated` onto `self`, leaving untouched fields intact.
@@ -183,6 +198,9 @@ impl Preferences {
         }
         if updated.speed.is_some() {
             self.speed = updated.speed;
+        }
+        if updated.video_geometry.is_some() {
+            self.video_geometry = updated.video_geometry.map(VideoGeometry::normalized);
         }
     }
 }
@@ -527,6 +545,111 @@ mod tests {
         assert_eq!(base.subtitle_enabled, Some(false));
         assert_eq!(base.subtitle_scale, Some(1.2));
         assert_eq!(base.speed, Some(0.75));
+    }
+
+    #[test]
+    fn video_geometry_round_trips_in_the_shared_preferences_schema() {
+        let raw = r#"{
+            "version": 2,
+            "files": {
+                "/media/movie.mkv": {
+                    "position": 120.0,
+                    "duration": 600.0,
+                    "finished": false,
+                    "updated_at_unix": 1700000000,
+                    "preferences": {
+                        "video_geometry": {
+                            "aspect": "2.35:1",
+                            "zoom": 1.5,
+                            "pan_x": -0.2,
+                            "pan_y": 0.1,
+                            "rotation_degrees": 90,
+                            "fill_screen": true,
+                            "deinterlace": true
+                        }
+                    }
+                }
+            }
+        }"#;
+
+        let history = History::load(raw).expect("geometry document should load");
+        let geometry = history.files["/media/movie.mkv"]
+            .preferences
+            .video_geometry
+            .expect("geometry");
+        assert_eq!(geometry.aspect, crate::video_geometry::VideoAspect::Cinema);
+        assert_eq!(geometry.zoom, 1.5);
+        assert_eq!(geometry.pan_x, -0.2);
+        assert_eq!(geometry.pan_y, 0.1);
+        assert_eq!(geometry.rotation_degrees, 90);
+        assert!(geometry.fill_screen);
+        assert!(geometry.deinterlace);
+
+        let serialized = serde_json::to_string(&history).expect("serialize");
+        assert!(serialized.contains("\"video_geometry\""));
+        assert_eq!(History::load(&serialized), Some(history));
+    }
+
+    #[test]
+    fn video_geometry_merge_replaces_only_geometry_and_normalizes_it() {
+        let mut preferences = Preferences {
+            subtitle_delay: Some(0.25),
+            speed: Some(0.75),
+            video_geometry: Some(VideoGeometry {
+                zoom: 1.5,
+                ..VideoGeometry::default()
+            }),
+            ..Preferences::default()
+        };
+        preferences.merge(Preferences {
+            video_geometry: Some(VideoGeometry {
+                zoom: 99.0,
+                pan_x: 0.4,
+                rotation_degrees: -90,
+                ..VideoGeometry::default()
+            }),
+            ..Preferences::default()
+        });
+
+        assert_eq!(preferences.subtitle_delay, Some(0.25));
+        assert_eq!(preferences.speed, Some(0.75));
+        let geometry = preferences.video_geometry.expect("geometry");
+        assert_eq!(geometry.zoom, crate::video_geometry::ZOOM_MAX);
+        assert_eq!(geometry.pan_x, 0.4);
+        assert_eq!(geometry.rotation_degrees, 270);
+    }
+
+    #[test]
+    fn loaded_geometry_is_normalized_before_the_shell_can_apply_it() {
+        let raw = r#"{
+            "version": 2,
+            "files": {
+                "/media/movie.mkv": {
+                    "position": 0.0,
+                    "duration": 0.0,
+                    "finished": false,
+                    "updated_at_unix": 0,
+                    "preferences": {
+                        "video_geometry": {
+                            "zoom": 0.25,
+                            "pan_x": 8.0,
+                            "pan_y": -8.0,
+                            "rotation_degrees": 91
+                        }
+                    }
+                }
+            }
+        }"#;
+
+        let history = History::load(raw).expect("geometry document should load");
+        let geometry = history.files["/media/movie.mkv"]
+            .preferences
+            .video_geometry
+            .expect("geometry");
+        assert_eq!(geometry.zoom, 1.0);
+        assert_eq!(geometry.pan_x, 0.0);
+        assert_eq!(geometry.pan_y, 0.0);
+        assert_eq!(geometry.rotation_degrees, 90);
     }
 
     #[test]

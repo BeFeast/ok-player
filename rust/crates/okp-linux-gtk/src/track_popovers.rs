@@ -317,6 +317,7 @@ pub(crate) fn advanced_command_popover_content(
         private_session,
         playlist_count,
         has_local_media,
+        video_available,
         video_transform,
         ab_loop_active,
     ) = {
@@ -329,7 +330,13 @@ pub(crate) fn advanced_command_popover_content(
             state.private_session,
             state.playlist.len(),
             state.current_file.is_some(),
-            state.video_transform.clone(),
+            has_loaded_media_state(&state)
+                && state
+                    .mpv
+                    .as_ref()
+                    .and_then(Mpv::observed_video_dimensions)
+                    .is_some(),
+            state.video_transform,
             state.ab_loop.is_active(),
         )
     };
@@ -527,52 +534,65 @@ pub(crate) fn advanced_command_popover_content(
 
     content.append(&divider());
     content.append(&track_group_title("Video"));
-    content.append(&track_subgroup_title("Aspect ratio"));
-    for (label, aspect) in VIDEO_ASPECT_PRESETS {
-        let button = track_button(label, video_transform.aspect_override == aspect);
-        button.set_sensitive(has_media);
-        let aspect_state = Rc::clone(&state);
-        let aspect_toast = Rc::clone(&status_toast);
-        let aspect_popover = popover.clone();
-        button.connect_clicked(move |_| {
-            aspect_popover.popdown();
-            set_video_aspect(&aspect_state, aspect, &aspect_toast);
-        });
-        content.append(&button);
+    if video_available {
+        content.append(&track_subgroup_title("Aspect ratio"));
+        let append_geometry_action = |label: &str, action: VideoGeometryAction, selected: bool| {
+            let button = track_button(label, selected);
+            button.set_sensitive(video_transform.action_enabled(true, action));
+            let action_state = Rc::clone(&state);
+            let action_toast = Rc::clone(&status_toast);
+            let action_popover = popover.clone();
+            button.connect_clicked(move |_| {
+                action_popover.popdown();
+                apply_video_geometry_action(&action_state, action, &action_toast);
+            });
+            content.append(&button);
+        };
+
+        for aspect in VideoAspect::ALL {
+            append_geometry_action(
+                aspect.label(),
+                VideoGeometryAction::SetAspect(aspect),
+                video_transform.aspect == aspect,
+            );
+        }
+
+        content.append(&track_subgroup_title(&format!(
+            "Zoom / pan · {}%",
+            video_transform.zoom_percent()
+        )));
+        for (label, action) in [
+            ("Zoom in", VideoGeometryAction::ZoomIn),
+            ("Zoom out", VideoGeometryAction::ZoomOut),
+            ("Pan left", VideoGeometryAction::PanLeft),
+            ("Pan right", VideoGeometryAction::PanRight),
+            ("Pan up", VideoGeometryAction::PanUp),
+            ("Pan down", VideoGeometryAction::PanDown),
+            ("Center image", VideoGeometryAction::Center),
+        ] {
+            append_geometry_action(label, action, false);
+        }
+
+        content.append(&track_subgroup_title("Transform"));
+        append_geometry_action("Rotate 90°", VideoGeometryAction::RotateClockwise, false);
+        append_geometry_action(
+            "Fill screen (crop bars)",
+            VideoGeometryAction::ToggleFillScreen,
+            video_transform.fill_screen,
+        );
+        append_geometry_action(
+            "Deinterlace",
+            VideoGeometryAction::ToggleDeinterlace,
+            video_transform.deinterlace,
+        );
+        append_geometry_action("Reset video", VideoGeometryAction::Reset, false);
+    } else {
+        content.append(&empty_track_label(if has_media {
+            "No video track"
+        } else {
+            "Open video to use geometry"
+        }));
     }
-
-    let rotate_button = track_button("Rotate 90°", false);
-    rotate_button.set_sensitive(has_media);
-    let rotate_state = Rc::clone(&state);
-    let rotate_toast = Rc::clone(&status_toast);
-    let rotate_popover = popover.clone();
-    rotate_button.connect_clicked(move |_| {
-        rotate_popover.popdown();
-        rotate_video_clockwise(&rotate_state, &rotate_toast);
-    });
-    content.append(&rotate_button);
-
-    let fill_button = track_button("Fill screen (crop bars)", video_transform.fill_screen);
-    fill_button.set_sensitive(has_media);
-    let fill_state = Rc::clone(&state);
-    let fill_toast = Rc::clone(&status_toast);
-    let fill_popover = popover.clone();
-    fill_button.connect_clicked(move |_| {
-        fill_popover.popdown();
-        toggle_video_fill_screen(&fill_state, &fill_toast);
-    });
-    content.append(&fill_button);
-
-    let reset_video_button = track_button("Reset video", false);
-    reset_video_button.set_sensitive(has_media);
-    let reset_video_state = Rc::clone(&state);
-    let reset_video_toast = Rc::clone(&status_toast);
-    let reset_video_popover = popover.clone();
-    reset_video_button.connect_clicked(move |_| {
-        reset_video_popover.popdown();
-        reset_video_transform(&reset_video_state, &reset_video_toast);
-    });
-    content.append(&reset_video_button);
 
     content.append(&divider());
     content.append(&track_group_title("Screenshot"));

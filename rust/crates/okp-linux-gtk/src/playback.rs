@@ -768,63 +768,76 @@ pub(crate) fn ab_loop_message(ab_loop: AbLoopState, was_active: bool) -> Option<
     }
 }
 
-pub(crate) fn set_video_aspect(
+pub(crate) fn apply_video_geometry_action(
     state: &Rc<RefCell<PlayerState>>,
-    aspect: &str,
+    action: VideoGeometryAction,
     status_toast: &StatusToast,
 ) {
-    let aspect = video_aspect_value(aspect);
-    if with_mpv(state, |mpv| mpv.set_video_aspect_override(aspect)) {
-        state.borrow_mut().video_transform.set_aspect(aspect);
-        if aspect == VIDEO_ASPECT_AUTO {
-            status_toast.show("Aspect: Auto");
-        } else {
-            status_toast.show(&format!("Aspect: {aspect}"));
+    let target = {
+        let state = state.borrow();
+        let video_available = has_loaded_media_state(&state)
+            && state
+                .mpv
+                .as_ref()
+                .and_then(Mpv::observed_video_dimensions)
+                .is_some();
+        if !state
+            .video_transform
+            .action_enabled(video_available, action)
+        {
+            return;
         }
+        let mut target = state.video_transform;
+        target.apply(action);
+        target
+    };
+
+    if with_mpv(state, |mpv| apply_video_geometry_to_mpv(mpv, target)) {
+        state.borrow_mut().video_transform = target;
+        save_current_video_geometry(state, target);
+        if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+            eprintln!(
+                "interaction: video-geometry={action:?} zoom={} pan=({:.1},{:.1}) rotation={} fill={} deinterlace={}",
+                target.zoom_percent(),
+                target.pan_x,
+                target.pan_y,
+                target.rotation_degrees,
+                target.fill_screen,
+                target.deinterlace
+            );
+        }
+        status_toast.show(&video_geometry_message(action, target));
     } else {
         status_toast.show("Could not update video");
     }
 }
 
-pub(crate) fn rotate_video_clockwise(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
-    let rotation = {
-        let state = state.borrow();
-        (state.video_transform.rotation + 90).rem_euclid(360)
-    };
-    if with_mpv(state, |mpv| mpv.set_video_rotation(rotation)) {
-        state.borrow_mut().video_transform.rotate_clockwise();
-        status_toast.show("Rotated 90°");
-    } else {
-        status_toast.show("Could not rotate video");
-    }
-}
-
-pub(crate) fn toggle_video_fill_screen(
-    state: &Rc<RefCell<PlayerState>>,
-    status_toast: &StatusToast,
-) {
-    let enabled = {
-        let state = state.borrow();
-        !state.video_transform.fill_screen
-    };
-    if with_mpv(state, |mpv| mpv.set_video_fill_screen(enabled)) {
-        state.borrow_mut().video_transform.toggle_fill_screen();
-        status_toast.show(if enabled {
-            "Fill screen on"
-        } else {
-            "Fill screen off"
-        });
-    } else {
-        status_toast.show("Could not update video");
-    }
-}
-
-pub(crate) fn reset_video_transform(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
-    if with_mpv(state, |mpv| mpv.reset_video_transform()) {
-        state.borrow_mut().video_transform.reset();
-        status_toast.show("Video reset");
-    } else {
-        status_toast.show("Could not reset video");
+pub(crate) fn video_geometry_message(
+    action: VideoGeometryAction,
+    geometry: VideoGeometry,
+) -> String {
+    match action {
+        VideoGeometryAction::SetAspect(aspect) => format!("Aspect: {}", aspect.label()),
+        VideoGeometryAction::ZoomIn | VideoGeometryAction::ZoomOut => {
+            format!("Zoom: {}%", geometry.zoom_percent())
+        }
+        VideoGeometryAction::PanLeft => "Pan: left".to_owned(),
+        VideoGeometryAction::PanRight => "Pan: right".to_owned(),
+        VideoGeometryAction::PanUp => "Pan: up".to_owned(),
+        VideoGeometryAction::PanDown => "Pan: down".to_owned(),
+        VideoGeometryAction::Center => "Image centered".to_owned(),
+        VideoGeometryAction::RotateClockwise => {
+            format!("Rotation: {}°", geometry.rotation_degrees)
+        }
+        VideoGeometryAction::ToggleFillScreen => format!(
+            "Fill screen {}",
+            if geometry.fill_screen { "on" } else { "off" }
+        ),
+        VideoGeometryAction::ToggleDeinterlace => format!(
+            "Deinterlace {}",
+            if geometry.deinterlace { "on" } else { "off" }
+        ),
+        VideoGeometryAction::Reset => "Video reset".to_owned(),
     }
 }
 

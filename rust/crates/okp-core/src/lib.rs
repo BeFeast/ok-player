@@ -42,6 +42,7 @@ pub mod track_label;
 pub mod track_tags;
 pub mod update_selection;
 pub mod video_click;
+pub mod video_geometry;
 pub mod volume;
 pub mod window_fit;
 pub mod youtube_open;
