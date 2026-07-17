@@ -113,6 +113,49 @@ fn mute_is_a_bindable_m_shortcut() {
 }
 
 #[test]
+fn bare_space_is_the_canonical_player_command_with_lock_masks_ignored() {
+    assert!(is_canonical_player_space(
+        gdk::Key::space,
+        gdk::ModifierType::empty()
+    ));
+    assert!(is_canonical_player_space(
+        gdk::Key::space,
+        gdk::ModifierType::LOCK_MASK
+    ));
+    assert!(!is_canonical_player_space(
+        gdk::Key::space,
+        gdk::ModifierType::SHIFT_MASK
+    ));
+    assert!(!is_canonical_player_space(
+        gdk::Key::Return,
+        gdk::ModifierType::empty()
+    ));
+}
+
+#[test]
+fn player_space_capture_precedes_button_activation_and_preserves_editors() {
+    let keyboard = include_str!("keyboard.rs");
+    for required in [
+        "gtk::PropagationPhase::Capture",
+        "connect_key_released",
+        "gtk::Editable",
+        "gtk::TextView",
+        "is-capturing",
+        "toggle_play_pause(&state)",
+        "glib::Propagation::Stop",
+    ] {
+        assert!(
+            keyboard.contains(required),
+            "missing Space contract: {required}"
+        );
+    }
+    assert!(!keyboard.contains("mpv.cycle_pause()"));
+
+    let settings = include_str!("settings_window.rs");
+    assert!(settings.contains("connect_companion_play_pause_space"));
+}
+
+#[test]
 fn volume_wheel_and_arrow_events_map_to_the_canonical_steps() {
     assert_eq!(volume_scroll_delta(-1.0, false), Some(1.0));
     assert_eq!(volume_scroll_delta(1.0, false), Some(-1.0));
