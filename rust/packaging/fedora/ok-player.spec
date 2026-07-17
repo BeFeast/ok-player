@@ -5,7 +5,7 @@
 Name:           ok-player
 Version:        %{rpm_version}
 Release:        %{rpm_release}%{?dist}
-Summary:        Native GTK4 media player built over libmpv
+Summary:        Native GTK4 media player
 License:        GPL-3.0-or-later
 URL:            https://github.com/BeFeast/ok-player
 Source0:        %{name}-%{upstream_version}.tar.gz
@@ -33,9 +33,9 @@ Requires:       mpv-libs%{?_isa}
 Requires:       xdg-utils
 
 %description
-OK Player is a native GTK4 desktop media player built over libmpv. The Fedora
-package dynamically links Fedora's system mpv-libs and uses the codec support
-provided by the enabled Fedora repositories.
+OK Player is a native GTK4 desktop media player. The Fedora package dynamically
+links Fedora's system playback libraries and uses the codec support provided by
+the enabled Fedora repositories.
 
 %prep
 %autosetup -n %{name}-%{upstream_version} -a 1
