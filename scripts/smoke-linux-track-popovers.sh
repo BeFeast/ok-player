@@ -195,6 +195,7 @@ for substrate in bright dark; do
 done
 
 capture subtitle-empty-dark dark subtitles 822 262 subtitle-empty
+capture subtitle-searchable-dark dark subtitles 822 262 subtitle-searchable
 capture audio-empty-dark dark audio 874 248 audio-empty
 capture more-disabled-bright bright more 1072 210 more-disabled
 # The full legacy command tree is a deliberate advanced escape hatch reached

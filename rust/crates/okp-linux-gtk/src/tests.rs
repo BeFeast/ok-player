@@ -1580,6 +1580,7 @@ fn track_label_shows_tags_without_a_selection_prefix() {
         kind: TrackKind::Subtitle,
         selected: true,
         external: true,
+        external_filename: Some("/tmp/example.srt".to_owned()),
         default: false,
         title: Some("English (SDH)".to_owned()),
         lang: None,
@@ -1593,6 +1594,7 @@ fn track_label_shows_tags_without_a_selection_prefix() {
         kind: TrackKind::Audio,
         selected: true,
         external: false,
+        external_filename: None,
         default: true,
         title: Some("English".to_owned()),
         lang: None,
@@ -1600,6 +1602,86 @@ fn track_label_shows_tags_without_a_selection_prefix() {
         audio_channels: Some("5.1".to_owned()),
     };
     assert_eq!(track_label(&audio), "English · 5.1 · EAC3");
+}
+
+#[test]
+fn subtitle_search_source_reports_explicit_no_track_and_format_states() {
+    assert_eq!(
+        selected_subtitle_search_source(&[], None, Some(Path::new("/media/Episode 1.mkv"))),
+        SubtitleSearchSource::NoActiveTrack
+    );
+
+    let embedded = Track {
+        id: 3,
+        kind: TrackKind::Subtitle,
+        selected: true,
+        external: false,
+        external_filename: None,
+        default: false,
+        title: Some("English".to_owned()),
+        lang: None,
+        codec: Some("subrip".to_owned()),
+        audio_channels: None,
+    };
+    assert_eq!(
+        selected_subtitle_search_source(&[embedded], None, Some(Path::new("/media/Episode 1.mkv"))),
+        SubtitleSearchSource::NotExternal
+    );
+
+    let unsupported = Track {
+        id: 4,
+        kind: TrackKind::Subtitle,
+        selected: true,
+        external: true,
+        external_filename: Some("/tmp/Episode 1.ass".to_owned()),
+        default: false,
+        title: Some("English".to_owned()),
+        lang: None,
+        codec: Some("ass".to_owned()),
+        audio_channels: None,
+    };
+    assert_eq!(
+        selected_subtitle_search_source(
+            &[unsupported],
+            None,
+            Some(Path::new("/media/Episode 1.mkv"))
+        ),
+        SubtitleSearchSource::UnsupportedFormat
+    );
+}
+
+#[test]
+fn subtitle_search_source_resolves_relative_primary_external_track() {
+    let primary = Track {
+        id: 4,
+        kind: TrackKind::Subtitle,
+        selected: true,
+        external: true,
+        external_filename: Some("subs/Episode 1.srt".to_owned()),
+        default: false,
+        title: Some("English".to_owned()),
+        lang: None,
+        codec: Some("subrip".to_owned()),
+        audio_channels: None,
+    };
+    let secondary = Track {
+        id: 5,
+        external_filename: Some("subs/Episode 1.es.lrc".to_owned()),
+        ..primary.clone()
+    };
+
+    assert_eq!(
+        selected_subtitle_search_source(
+            &[secondary, primary.clone()],
+            Some(5),
+            Some(Path::new("/media/Episode 1.mkv"))
+        ),
+        SubtitleSearchSource::Available(PathBuf::from("/media/subs/Episode 1.srt"))
+    );
+    assert_eq!(
+        selected_subtitle_search_source(&[primary], None, None),
+        SubtitleSearchSource::MissingPath
+    );
 }
 
 #[test]
@@ -1805,6 +1887,7 @@ fn subtitle_track_label_distinguishes_webvtt_srt_and_embedded_sources() {
         kind: TrackKind::Subtitle,
         selected: true,
         external: true,
+        external_filename: Some("/tmp/example.vtt".to_owned()),
         default: false,
         title: Some("English".to_owned()),
         lang: Some("eng".to_owned()),
@@ -1823,6 +1906,7 @@ fn subtitle_track_label_distinguishes_webvtt_srt_and_embedded_sources() {
     let embedded = Track {
         id: 5,
         external: false,
+        external_filename: None,
         default: true,
         codec: Some("ass".to_owned()),
         ..webvtt
@@ -1839,6 +1923,7 @@ fn audio_track_label_surfaces_language_and_format_tags() {
         kind: TrackKind::Audio,
         selected: false,
         external: false,
+        external_filename: None,
         default: false,
         title: Some("Director's Commentary".to_owned()),
         lang: Some("eng".to_owned()),
@@ -1857,6 +1942,7 @@ fn audio_track_label_surfaces_language_and_format_tags() {
         kind: TrackKind::Audio,
         selected: true,
         external: false,
+        external_filename: None,
         default: false,
         title: None,
         lang: Some("jpn".to_owned()),

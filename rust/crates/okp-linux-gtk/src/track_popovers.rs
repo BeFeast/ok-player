@@ -37,7 +37,12 @@ impl PlayerPopoverKind {
     }
 }
 
-pub(crate) fn populate_subtitle_popover(popover: &gtk::Popover, state: Rc<RefCell<PlayerState>>) {
+pub(crate) fn populate_subtitle_popover(
+    popover: &gtk::Popover,
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) {
     let content = track_popover_content(PlayerPopoverKind::Subtitles, Some("Subtitles"));
     let preview_tracks = preview_tracks(TrackKind::Subtitle);
     let previewing_tracks = preview_tracks.is_some();
@@ -92,6 +97,29 @@ pub(crate) fn populate_subtitle_popover(popover: &gtk::Popover, state: Rc<RefCel
     }
 
     content.append(&divider());
+    let current_file = state.borrow().current_file.clone();
+    let search_source =
+        selected_subtitle_search_source(&tracks, secondary_subtitle_id, current_file.as_deref());
+    let search_button = track_button("Search subtitles...", false);
+    search_button.set_sensitive(matches!(search_source, SubtitleSearchSource::Available(_)));
+    search_button.set_tooltip_text(Some(search_source.message()));
+    let search_parent = parent.clone();
+    let search_state = Rc::clone(&state);
+    let search_toast = Rc::clone(&status_toast);
+    let search_popover = popover.clone();
+    search_button.connect_clicked(move |_| {
+        search_popover.popdown();
+        open_subtitle_search_dialog(
+            &search_parent,
+            Rc::clone(&search_state),
+            Rc::clone(&search_toast),
+        );
+    });
+    content.append(&search_button);
+    if !matches!(search_source, SubtitleSearchSource::Available(_)) {
+        content.append(&empty_track_label(search_source.message()));
+    }
+
     content.append(&scribe_subtitle_button());
     content.append(&compact_subtitle_delay_row(
         read_subtitle_adjustments(&state).0,
@@ -1134,6 +1162,310 @@ pub(crate) fn read_tracks(state: &Rc<RefCell<PlayerState>>) -> Vec<Track> {
         .unwrap_or_default()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SubtitleSearchSource {
+    Available(PathBuf),
+    NoActiveTrack,
+    NotExternal,
+    UnsupportedFormat,
+    MissingPath,
+}
+
+impl SubtitleSearchSource {
+    fn message(&self) -> &'static str {
+        match self {
+            Self::Available(_) => "Search the selected external SRT/LRC subtitle track",
+            Self::NoActiveTrack => "Select a subtitle track to search",
+            Self::NotExternal => "Search supports external SRT/LRC subtitle files",
+            Self::UnsupportedFormat => "Search supports SRT and LRC subtitle files",
+            Self::MissingPath => "Subtitle file path is unavailable",
+        }
+    }
+}
+
+pub(crate) fn selected_subtitle_search_source(
+    tracks: &[Track],
+    secondary_subtitle_id: Option<i64>,
+    current_file: Option<&Path>,
+) -> SubtitleSearchSource {
+    let Some(track) = tracks.iter().find(|track| {
+        track.kind == TrackKind::Subtitle
+            && okp_core::subtitle_tracks::is_primary_subtitle(
+                track.id,
+                track.selected,
+                secondary_subtitle_id,
+            )
+    }) else {
+        return SubtitleSearchSource::NoActiveTrack;
+    };
+
+    if !track.external {
+        return SubtitleSearchSource::NotExternal;
+    }
+
+    let Some(path) = track
+        .external_filename
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .and_then(|path| resolve_external_subtitle_path(path, current_file))
+    else {
+        return SubtitleSearchSource::MissingPath;
+    };
+
+    if subtitle_search::is_supported_subtitle_path(&path) {
+        SubtitleSearchSource::Available(path)
+    } else {
+        SubtitleSearchSource::UnsupportedFormat
+    }
+}
+
+fn resolve_external_subtitle_path(path: &str, current_file: Option<&Path>) -> Option<PathBuf> {
+    let path = PathBuf::from(path);
+    if path.is_absolute() {
+        return Some(path);
+    }
+
+    let media_dir = current_file?.parent()?;
+    if !media_dir.is_absolute() {
+        return None;
+    }
+    Some(media_dir.join(path))
+}
+
+pub(crate) fn open_subtitle_search_dialog(
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) {
+    let (current_file, source_generation) = {
+        let state = state.borrow();
+        (state.current_file.clone(), state.source_generation)
+    };
+    let source = selected_subtitle_search_source(
+        &read_tracks(&state),
+        read_secondary_subtitle_id(&state),
+        current_file.as_deref(),
+    );
+    let SubtitleSearchSource::Available(path) = source else {
+        status_toast.show(source.message());
+        return;
+    };
+
+    status_toast.show("Loading subtitle search");
+    let expected_path = path.clone();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let result = load_subtitle_search_index(path);
+        let _ = sender.send(result);
+    });
+
+    let parent = parent.clone();
+    glib::timeout_add_local(Duration::from_millis(40), move || {
+        match receiver.try_recv() {
+            Ok(Ok(index)) => {
+                let current_file = {
+                    let current = state.borrow();
+                    if current.source_generation != source_generation {
+                        status_toast.show("Subtitle track changed while loading");
+                        return glib::ControlFlow::Break;
+                    }
+                    current.current_file.clone()
+                };
+                let current_source = selected_subtitle_search_source(
+                    &read_tracks(&state),
+                    read_secondary_subtitle_id(&state),
+                    current_file.as_deref(),
+                );
+                if current_source != SubtitleSearchSource::Available(expected_path.clone()) {
+                    status_toast.show("Subtitle track changed while loading");
+                    return glib::ControlFlow::Break;
+                }
+
+                show_subtitle_search_dialog(
+                    &parent,
+                    Rc::clone(&state),
+                    Rc::clone(&status_toast),
+                    index,
+                );
+                glib::ControlFlow::Break
+            }
+            Ok(Err(SubtitleSearchLoadError::ReadFailed { path, error })) => {
+                eprintln!("Failed to read subtitle file '{}': {error}", path.display());
+                status_toast.show("Could not read subtitle file");
+                glib::ControlFlow::Break
+            }
+            Ok(Err(SubtitleSearchLoadError::UnsupportedFormat)) => {
+                status_toast.show("Search supports SRT and LRC subtitle files");
+                glib::ControlFlow::Break
+            }
+            Ok(Err(SubtitleSearchLoadError::Empty)) => {
+                status_toast.show("No searchable subtitle cues");
+                glib::ControlFlow::Break
+            }
+            Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                status_toast.show("Could not read subtitle file");
+                glib::ControlFlow::Break
+            }
+        }
+    });
+}
+
+#[derive(Debug)]
+enum SubtitleSearchLoadError {
+    ReadFailed {
+        path: PathBuf,
+        error: std::io::Error,
+    },
+    UnsupportedFormat,
+    Empty,
+}
+
+fn load_subtitle_search_index(
+    path: PathBuf,
+) -> Result<subtitle_search::SubtitleCueIndex, SubtitleSearchLoadError> {
+    let text = fs::read_to_string(&path).map_err(|error| SubtitleSearchLoadError::ReadFailed {
+        path: path.clone(),
+        error,
+    })?;
+    let Some(index) = subtitle_search::SubtitleCueIndex::from_path_text(&path, Some(&text)) else {
+        return Err(SubtitleSearchLoadError::UnsupportedFormat);
+    };
+
+    if index.is_empty() {
+        return Err(SubtitleSearchLoadError::Empty);
+    }
+
+    Ok(index)
+}
+
+#[allow(deprecated)]
+fn show_subtitle_search_dialog(
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+    index: subtitle_search::SubtitleCueIndex,
+) {
+    let dialog = gtk::Dialog::builder()
+        .title("Search Subtitles")
+        .transient_for(parent)
+        .modal(true)
+        .default_width(460)
+        .build();
+    dialog.set_decorated(false);
+    dialog.add_css_class("okp-command-dialog");
+    dialog.add_button("Close", gtk::ResponseType::Close);
+
+    let content = dialog.content_area();
+    content.set_spacing(10);
+    content.set_margin_top(12);
+    content.set_margin_bottom(12);
+    content.set_margin_start(12);
+    content.set_margin_end(12);
+
+    content.append(&command_dialog_title("Search Subtitles"));
+
+    let entry_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let entry = gtk::Entry::new();
+    entry.set_hexpand(true);
+    entry.set_placeholder_text(Some("Cue text"));
+    entry_row.append(&entry);
+
+    let search_button = gtk::Button::with_label("Search");
+    search_button.add_css_class("okp-sub-adjust-button");
+    entry_row.append(&search_button);
+    content.append(&entry_row);
+
+    let status = gtk::Label::new(Some("Enter subtitle text"));
+    status.add_css_class("okp-info-label");
+    status.set_xalign(0.0);
+    status.set_wrap(true);
+    content.append(&status);
+
+    let results = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    content.append(&results);
+
+    let index = Rc::new(index);
+    let render_results = Rc::new({
+        let results = results.clone();
+        let status = status.clone();
+        let state = Rc::clone(&state);
+        let status_toast = Rc::clone(&status_toast);
+        move |query: &str| {
+            clear_subtitle_search_results(&results);
+            let matches = index.search(query, 8);
+            if query.trim().is_empty() {
+                status.set_text("Enter subtitle text");
+                return;
+            }
+            if matches.is_empty() {
+                status.set_text("No matching cues");
+                return;
+            }
+
+            status.set_text(&format!(
+                "{} matching cue{}",
+                matches.len(),
+                plural_s(matches.len())
+            ));
+            for cue in matches {
+                let label = format!("{}  {}", time_code::format(cue.start_seconds), cue.text);
+                let button = track_button(&label, false);
+                let seek_state = Rc::clone(&state);
+                let seek_toast = Rc::clone(&status_toast);
+                button.connect_clicked(move |_| {
+                    let subtitle_delay = read_subtitle_adjustments(&seek_state).0;
+                    let Some(target) =
+                        subtitle_search::delayed_cue_seek_target(cue.start_seconds, subtitle_delay)
+                    else {
+                        seek_toast.show("Could not seek");
+                        return;
+                    };
+                    if seek_to_time(&seek_state, target) {
+                        seek_toast.show(&format!("Jumped to {}", time_code::format(target)));
+                    } else {
+                        seek_toast.show("Could not seek");
+                    }
+                });
+                results.append(&button);
+            }
+        }
+    });
+
+    let button_entry = entry.clone();
+    let button_render = Rc::clone(&render_results);
+    search_button.connect_clicked(move |_| {
+        button_render(button_entry.text().as_str());
+    });
+
+    let activate_render = Rc::clone(&render_results);
+    entry.connect_activate(move |entry| {
+        activate_render(entry.text().as_str());
+    });
+
+    dialog.connect_response(|dialog, _| dialog.close());
+    dialog.present();
+    entry.grab_focus();
+}
+
+pub(crate) fn open_subtitle_search_preview(
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) {
+    let index = subtitle_search::SubtitleCueIndex::from_srt_text(Some(
+        "1\n00:00:04,500 --> 00:00:06,000\nThe first matching subtitle line\n\n\
+         2\n00:00:12,250 --> 00:00:14,000\nAnother matching cue",
+    ));
+    show_subtitle_search_dialog(parent, state, status_toast, index);
+}
+
+fn clear_subtitle_search_results(container: &gtk::Box) {
+    while let Some(child) = container.first_child() {
+        container.remove(&child);
+    }
+}
+
 pub(crate) fn read_audio_devices(state: &Rc<RefCell<PlayerState>>) -> Vec<AudioDevice> {
     let state = state.borrow();
     state
@@ -1325,6 +1657,7 @@ pub(crate) fn preview_tracks(kind: TrackKind) -> Option<Vec<Track>> {
                 kind,
                 selected: true,
                 external: false,
+                external_filename: None,
                 default: true,
                 title: Some("English".to_owned()),
                 lang: Some("eng".to_owned()),
@@ -1336,6 +1669,7 @@ pub(crate) fn preview_tracks(kind: TrackKind) -> Option<Vec<Track>> {
                 kind,
                 selected: false,
                 external: true,
+                external_filename: Some("Episode 1.en.srt".to_owned()),
                 default: false,
                 title: Some("English SDH".to_owned()),
                 lang: Some("eng".to_owned()),
@@ -1344,12 +1678,25 @@ pub(crate) fn preview_tracks(kind: TrackKind) -> Option<Vec<Track>> {
             },
         ],
         ("subtitle-empty", TrackKind::Subtitle) => Vec::new(),
+        ("subtitle-searchable", TrackKind::Subtitle) => vec![Track {
+            id: 2,
+            kind,
+            selected: true,
+            external: true,
+            external_filename: Some("subtest.srt".to_owned()),
+            default: false,
+            title: Some("English SDH".to_owned()),
+            lang: Some("eng".to_owned()),
+            codec: Some("subrip".to_owned()),
+            audio_channels: None,
+        }],
         ("audio-selected", TrackKind::Audio) => vec![
             Track {
                 id: 1,
                 kind,
                 selected: true,
                 external: false,
+                external_filename: None,
                 default: true,
                 title: Some("English".to_owned()),
                 lang: Some("eng".to_owned()),
@@ -1361,6 +1708,7 @@ pub(crate) fn preview_tracks(kind: TrackKind) -> Option<Vec<Track>> {
                 kind,
                 selected: false,
                 external: false,
+                external_filename: None,
                 default: false,
                 title: Some("Director's Commentary".to_owned()),
                 lang: Some("eng".to_owned()),

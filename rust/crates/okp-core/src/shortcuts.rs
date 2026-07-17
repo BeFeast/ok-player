@@ -42,6 +42,8 @@ pub enum ShortcutAction {
     SubtitleDelayBack,
     SubtitleSizeDown,
     SubtitleSizeUp,
+    SubtitlePreviousCue,
+    SubtitleNextCue,
     Fullscreen,
     EscapeFullscreen,
     OpenSettings,
@@ -74,6 +76,8 @@ impl ShortcutAction {
             Self::SubtitleDelayBack => "subtitle-delay-back",
             Self::SubtitleSizeDown => "subtitle-size-down",
             Self::SubtitleSizeUp => "subtitle-size-up",
+            Self::SubtitlePreviousCue => "subtitle-previous-cue",
+            Self::SubtitleNextCue => "subtitle-next-cue",
             Self::Fullscreen => "fullscreen",
             Self::EscapeFullscreen => "escape-fullscreen",
             Self::OpenSettings => "open-settings",
@@ -106,6 +110,8 @@ impl ShortcutAction {
             Self::SubtitleDelayBack => "Subtitle Delay Back",
             Self::SubtitleSizeDown => "Subtitle Size Down",
             Self::SubtitleSizeUp => "Subtitle Size Up",
+            Self::SubtitlePreviousCue => "Previous Subtitle Cue",
+            Self::SubtitleNextCue => "Next Subtitle Cue",
             Self::Fullscreen => "Fullscreen",
             Self::EscapeFullscreen => "Exit Fullscreen",
             Self::OpenSettings => "Settings",
@@ -138,6 +144,8 @@ impl ShortcutAction {
             Self::SubtitleDelayBack => "Shift+Z",
             Self::SubtitleSizeDown => "[",
             Self::SubtitleSizeUp => "]",
+            Self::SubtitlePreviousCue => "Ctrl+Left",
+            Self::SubtitleNextCue => "Ctrl+Right",
             Self::Fullscreen => "F",
             Self::EscapeFullscreen => "Escape",
             Self::OpenSettings => "Ctrl+,",
@@ -178,6 +186,8 @@ pub const SHORTCUT_ACTIONS: &[ShortcutAction] = &[
     ShortcutAction::SubtitleDelayBack,
     ShortcutAction::SubtitleSizeDown,
     ShortcutAction::SubtitleSizeUp,
+    ShortcutAction::SubtitlePreviousCue,
+    ShortcutAction::SubtitleNextCue,
     ShortcutAction::Fullscreen,
     ShortcutAction::EscapeFullscreen,
     ShortcutAction::OpenSettings,
@@ -324,6 +334,10 @@ pub fn resolved_bindings_from_text(
 ) -> Result<Vec<ShortcutBinding>, ShortcutConfigError> {
     let mut bindings = default_bindings();
     let overrides = parse_config_overrides(text, key_names)?;
+    let override_chords = overrides
+        .iter()
+        .map(|(_, chord)| chord.clone())
+        .collect::<Vec<_>>();
     for action in SHORTCUT_ACTIONS {
         let action_overrides = overrides
             .iter()
@@ -340,8 +354,26 @@ pub fn resolved_bindings_from_text(
             chord,
         }));
     }
+    // These defaults were added after keybinding persistence shipped. An older
+    // config may already use Ctrl+Left/Right for another action; keep that
+    // user's binding instead of rejecting the entire config and falling back
+    // to every default.
+    bindings.retain(|binding| {
+        overrides
+            .iter()
+            .any(|(action, _)| *action == binding.action)
+            || !is_upgrade_shadowable_default(binding.action)
+            || !override_chords.contains(&binding.chord)
+    });
     validate_conflicts(&bindings)?;
     Ok(bindings)
+}
+
+fn is_upgrade_shadowable_default(action: ShortcutAction) -> bool {
+    matches!(
+        action,
+        ShortcutAction::SubtitlePreviousCue | ShortcutAction::SubtitleNextCue
+    )
 }
 
 /// Serialise bindings back to config text: only actions whose chords differ from the default
@@ -758,6 +790,21 @@ play-pause=P
 
         assert_eq!(error.line, 0);
         assert!(error.message.contains("conflicts"));
+    }
+
+    #[test]
+    fn shortcut_parser_keeps_saved_binding_that_conflicts_with_new_default() {
+        let bindings = resolved_bindings_from_text("seek-back=Ctrl+Left", &PortableKeyNames)
+            .expect("saved shortcut should override a newly introduced default");
+
+        assert_eq!(
+            action_for_key(&bindings, "Left", ctrl()),
+            Some(ShortcutAction::SeekBack)
+        );
+        assert!(!bindings.iter().any(|binding| {
+            binding.action == ShortcutAction::SubtitlePreviousCue
+                && binding.chord == portable_chord("Ctrl+Left")
+        }));
     }
 
     #[test]
