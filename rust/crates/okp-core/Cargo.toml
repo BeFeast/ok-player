@@ -11,7 +11,7 @@ roxmltree.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+zip.workspace = true
 
 [dev-dependencies]
 okp-test-fixtures = { path = "../okp-test-fixtures" }
-

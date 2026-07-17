@@ -16,7 +16,14 @@ jobs:
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev libmpv-dev libgl1-mesa-dev libegl1-mesa-dev libglx-dev mpv ffmpeg cmake ninja-build appstream appstream-compose
+          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev libmpv-dev libgl1-mesa-dev libegl1-mesa-dev libglx-dev mpv ffmpeg cmake ninja-build appstream appstream-compose squashfs-tools unzip
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Install Velopack CLI
+        run: dotnet tool install -g vpk --version 1.2.0
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -34,6 +41,8 @@ jobs:
 
       - name: Test
         working-directory: rust
+        env:
+          OKP_RUN_VELOPACK_PACK_TEST: 1
         run: cargo test --workspace
 
       - name: AppStream MetaInfo validation smoke

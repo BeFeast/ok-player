@@ -97,8 +97,11 @@ Each build writes a bundle under `$OKP_CANDIDATE_STATE_DIR/out/<build-number>/`:
 
 This bundle is sufficient for candidate-channel promotion by #339 **without
 rebuilding**. AppImage packaging is forced to the `linux-candidate` Velopack
-channel, and promotion requires the bundle's `releases.linux-candidate.json`
-full-package identity to match its bytes.
+channel. The package gate resolves the generated channel-qualified standalone
+AppImage and Full nupkg from `releases.linux-candidate.json`, verifies feed
+hash/size plus standalone-versus-embedded AppImage byte identity, and writes the
+versioned AppImage atomically. Promotion requires that same candidate Full
+package identity to match its staged bytes.
 
 ## Build vs promotion
 
@@ -120,7 +123,10 @@ after publication succeeds.
 it invokes the builder on a generic self-hosted Linux x86_64 runner, publishes a
 new verified SHA when present, and reports heartbeat activity. An unchanged
 `main` remains an expected idle run; manual dispatch can republish the last
-verified bundle without rebuilding it.
+verified bundle without rebuilding it. The `always()` summary reads the raw
+heartbeat first and treats the release CLI and handoff outputs as optional, so
+an early gate failure remains the named failure instead of causing a second
+summary-step error.
 
 ## Heartbeats and the watchdog
 

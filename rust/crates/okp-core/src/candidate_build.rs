@@ -31,6 +31,7 @@ use crate::candidate_channel::{
 };
 use crate::sha256sums::{Sha256Sums, sha256_hex};
 use crate::update_selection::compare_versions;
+use crate::velopack_artifacts::LINUX_VELOPACK_PACKAGE_ID;
 
 /// Schema version of the `candidate-build.json` artifact contract.
 pub const CANDIDATE_SCHEMA_VERSION: u32 = 1;
@@ -194,13 +195,16 @@ pub fn verify_candidate_bundle(bundle: &Path) -> Result<VerifiedCandidateBundle,
             .assets
             .into_iter()
             .filter(|asset| {
-                asset.version == record.version && asset.kind.eq_ignore_ascii_case("full")
+                asset.package_id == LINUX_VELOPACK_PACKAGE_ID
+                    && asset.version == record.version
+                    && asset.kind.eq_ignore_ascii_case("full")
             })
             .collect::<Vec<_>>();
         if matches.len() != 1 {
             errors.push(format!(
-                "{} must contain exactly one Full asset for {}",
+                "{} must contain exactly one Full asset for package {} version {}",
                 velopack_feed_path.display(),
+                LINUX_VELOPACK_PACKAGE_ID,
                 record.version
             ));
         } else if let Some(asset) = matches.into_iter().next() {
@@ -353,7 +357,9 @@ pub fn candidate_prune_plan(feed: &CandidateFeed, release_assets: &[String]) -> 
 fn is_candidate_package_asset(name: &str) -> bool {
     (name.starts_with("ok-player_") && name.ends_with("_amd64.deb"))
         || (name.starts_with("OK-Player-") && name.ends_with("-x86_64.AppImage"))
-        || (name.starts_with("com.befeast.okplayer-") && name.ends_with("-linux-full.nupkg"))
+        || (name.starts_with("com.befeast.okplayer-")
+            && (name.ends_with("-linux-candidate-full.nupkg")
+                || name.ends_with("-linux-full.nupkg")))
         || (name.starts_with("SHA256SUMS-") && name.ends_with(".txt"))
 }
 
@@ -852,7 +858,7 @@ mod tests {
         let version = candidate_version("0.11.0-beta.1", build_number).unwrap();
         let deb_name = format!("ok-player_{version}_amd64.deb");
         let appimage_name = format!("OK-Player-{version}-x86_64.AppImage");
-        let nupkg_name = format!("com.befeast.okplayer-{version}-linux-full.nupkg");
+        let nupkg_name = format!("com.befeast.okplayer-{version}-linux-candidate-full.nupkg");
         let deb_bytes = b"native deb bytes";
         let appimage_bytes = b"native appimage bytes";
         let nupkg_bytes = b"native velopack bytes";
@@ -962,7 +968,7 @@ mod tests {
         );
         let appimage = |version: &str| CandidateAppImage {
             package_id: "com.befeast.okplayer".to_owned(),
-            name: format!("com.befeast.okplayer-{version}-linux-full.nupkg"),
+            name: format!("com.befeast.okplayer-{version}-linux-candidate-full.nupkg"),
             url: format!("https://example.invalid/{version}.nupkg"),
             size: 100,
             sha256: "d".repeat(64),
@@ -1017,12 +1023,19 @@ mod tests {
         assert!(feed.has_sufficient_recovery());
 
         let obsolete = "ok-player_0.11.0-beta.1.10_amd64.deb".to_owned();
+        let obsolete_full =
+            "com.befeast.okplayer-0.11.0-beta.1.10-linux-candidate-full.nupkg".to_owned();
         let unknown = "operator-note.txt".to_owned();
         let plan = candidate_prune_plan(
             &feed,
-            &[feed.package.name.clone(), obsolete.clone(), unknown],
+            &[
+                feed.package.name.clone(),
+                obsolete.clone(),
+                obsolete_full.clone(),
+                unknown,
+            ],
         );
-        assert_eq!(plan, vec![obsolete]);
+        assert_eq!(plan, vec![obsolete, obsolete_full]);
         fs::remove_dir_all(root).unwrap();
     }
 

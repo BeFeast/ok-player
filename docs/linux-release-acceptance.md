@@ -99,7 +99,14 @@ When canonical reference captures are available, name them identically to the im
 ./scripts/run-linux-acceptance-harness.sh ok-player artifacts/linux-acceptance references
 ```
 
-Packaging writes `package-identity.json` and `acceptance-template.json`. Fill the template without changing its package identity. A publish run accepts the candidate workflow run ID plus the base64-encoded completed manifest, validates every required row, and publishes the exact artifacts from that candidate run. Rebuilding after operator acceptance is intentionally not allowed because it would change the package hash.
+Packaging writes `package-identity.json` and `acceptance-template.json`. The model-unit packaging
+contract also runs the real Velopack CLI for both `linux-candidate` and public `linux` channels,
+then verifies the generated feed, Full nupkg, standalone AppImage, and atomically staged versioned
+AppImage identities. This proves package naming and byte identity, not installed desktop behavior.
+Fill the template without changing its package identity. A publish run accepts the candidate
+workflow run ID plus the base64-encoded completed manifest, validates every required row, and
+publishes the exact artifacts from that candidate run. Rebuilding after operator acceptance is
+intentionally not allowed because it would change the package hash.
 
 Merge deterministic rows before recording installed/live results:
 

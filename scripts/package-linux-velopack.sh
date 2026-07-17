@@ -25,7 +25,13 @@ fi
 
 export DOTNET_ROOT="${DOTNET_ROOT:-$HOME/.dotnet}"
 
-OKP_BUILD_VERSION="$VERSION" cargo build --manifest-path "$ROOT/rust/Cargo.toml" -p okp-linux-gtk --release
+OKP_BUILD_VERSION="$VERSION" cargo build \
+  --manifest-path "$ROOT/rust/Cargo.toml" \
+  --release \
+  -p okp-linux-gtk \
+  -p okp-core \
+  --bin okp-linux-gtk \
+  --bin okp-candidate
 
 rm -rf "$PACK_DIR" "$OUTPUT_DIR"
 mkdir -p "$PACK_DIR" "$OUTPUT_DIR"
@@ -51,14 +57,12 @@ done
   --icon "$ICON" \
   --categories "AudioVideo;Player"
 
-GENERIC_APPIMAGE="$OUTPUT_DIR/$PACK_ID.AppImage"
-VERSIONED_APPIMAGE="$OUTPUT_DIR/OK-Player-$VERSION-x86_64.AppImage"
-if [ -f "$GENERIC_APPIMAGE" ]; then
-  cp "$GENERIC_APPIMAGE" "$VERSIONED_APPIMAGE"
-else
-  unzip -p "$OUTPUT_DIR/$PACK_ID-$VERSION-linux-full.nupkg" "lib/app/$PACK_ID.AppImage" > "$VERSIONED_APPIMAGE"
-fi
-chmod 755 "$VERSIONED_APPIMAGE"
+"$TARGET_DIR/release/okp-candidate" stage-velopack \
+  --output-dir "$OUTPUT_DIR" \
+  --channel "$CHANNEL" \
+  --package-id "$PACK_ID" \
+  --version "$VERSION" \
+  --versioned-appimage "OK-Player-$VERSION-x86_64.AppImage"
 
 echo "Velopack Linux artifacts written to $OUTPUT_DIR"
 echo "Run write-linux-acceptance-template.sh after both package lanes complete; publishing requires evidence for this exact artifact hash."

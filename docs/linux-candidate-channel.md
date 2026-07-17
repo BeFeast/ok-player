@@ -46,7 +46,19 @@ Every `candidate.linux.json` records:
 - exact Velopack full-package name, size, URL, SHA-256, and package identity;
 - a build-versioned checksum URL (`SHA256SUMS-<build>.txt`).
 
-Only `accepted` candidates are selected. Immediately before publication, `okp-candidate verify-bundle` re-reads the native bundle, recomputes the `.deb`, AppImage, and Velopack full-package hashes, compares `candidate-build.json` with `package-identity.json`, validates `SHA256SUMS`, and requires `releases.linux-candidate.json` to contain exactly one matching Full package. Replacing bytes after the build therefore blocks promotion.
+Only `accepted` candidates are selected. Velopack's candidate pack names are channel-qualified:
+`com.befeast.okplayer-linux-candidate.AppImage`,
+`com.befeast.okplayer-<version>-linux-candidate-full.nupkg`, and
+`releases.linux-candidate.json`. Packaging resolves those generated identities from the feed and
+package bytes rather than guessing public-channel names. It proves that the standalone AppImage is
+byte-identical to the AppImage embedded in the Full nupkg, then atomically stages the user-facing
+`OK-Player-<version>-x86_64.AppImage`; a failed copy leaves no versioned partial.
+
+Immediately before publication, `okp-candidate verify-bundle` re-reads the native bundle,
+recomputes the `.deb`, AppImage, and Velopack full-package hashes, compares
+`candidate-build.json` with `package-identity.json`, validates `SHA256SUMS`, and requires
+`releases.linux-candidate.json` to contain exactly one matching candidate Full package. Replacing
+bytes after the build therefore blocks promotion.
 
 For `.deb` installs, the updater first checks that the candidate manifest's SHA matches the build-versioned `SHA256SUMS`, then verifies the downloaded bytes against that manifest. For AppImage installs, the exact manifest-bound Velopack asset is the update source; Velopack verifies its size and digest while downloading.
 

@@ -131,6 +131,7 @@ run_gate() {
 
 export CC="${CC:-/usr/bin/cc}"
 export OKP_SKIP_UPDATE_CHECK=1
+export OKP_RUN_VELOPACK_PACK_TEST=1
 
 # --- Bounded gates -----------------------------------------------------------
 run_gate fmt \

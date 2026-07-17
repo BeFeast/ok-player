@@ -82,6 +82,11 @@ Two package lanes are intentionally separate:
 ```
 
 - Velopack lane: AppImage + `releases.linux.json` feed for self-updating GitHub Releases.
+- Candidate packaging sets `OKP_LINUX_CHANNEL=linux-candidate`; `okp-core` resolves the generated
+  channel-qualified AppImage, Full nupkg, and feed names, verifies their hashes/sizes, and stages
+  the versioned AppImage atomically. Run the real CLI contract test with
+  `OKP_RUN_VELOPACK_PACK_TEST=1 cargo test -p okp-linux-gtk real_velopack_pack` after installing
+  Velopack CLI 1.2.0 and `squashfs-tools`.
 - Debian lane: `.deb` for Debian/Ubuntu-family install flow. In-app checks can download the
   newest GitHub Release `.deb`, request admin approval via `pkexec apt-get install -y`, and
   fall back to opening the installer when privileged install is unavailable.

@@ -28,3 +28,4 @@ thiserror = "2.0.17"
 ureq = "3.3.0"
 velopack = { version = "1.2.0", features = ["public-utils"] }
 zbus = "5.16.0"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
