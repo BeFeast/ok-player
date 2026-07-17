@@ -1,6 +1,7 @@
 # OK Player — Product Requirements Document
 
-> **Status:** MVP scope locked · **Platform:** Windows 11 only · **Engine:** libmpv (via render API) · **UI:** C#/.NET + WinUI 3 + Mica
+> **Status:** Implemented and shipping (pre-1.0). This document is the **Windows** product spec — **Platform:** Windows 11 · **Engine:** libmpv (via render API) · **UI:** C#/.NET + WinUI 3 + Mica.
+> **Cross-platform note:** OK Player also ships a **native Linux** shell (GTK4/Relm4 over libmpv) sharing the pure-Rust `okp-core`; the Linux shell tracks this same behavior natively rather than porting the UI. See the repository [README](../README.md) and [`docs/linux-release-acceptance.md`](linux-release-acceptance.md).
 > **Audience for this doc:** the UI/UX designer (Claude Design) producing screens, plus the engineer prototyping the engine seam.
 > **Priority legend:** `[MVP]` ship now · `[Day-2]` reserve the slot now, build next · `[Later]` design must not preclude it; do not build.
 
