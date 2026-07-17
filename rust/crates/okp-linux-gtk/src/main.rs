@@ -1830,7 +1830,10 @@ struct AboutSnapshot {
 }
 
 impl AboutSnapshot {
-    fn capture(state: &Rc<RefCell<PlayerState>>) -> Self {
+    /// Capture the fields that are available instantly (environment, GTK build,
+    /// settings, and compile-time constants). Expensive metadata is loaded
+    /// asynchronously so the Settings/About surface can map without blocking.
+    fn capture_cheap(state: &Rc<RefCell<PlayerState>>) -> Self {
         let state = state.borrow();
         let hwdec = state.settings.hardware_decode_label().to_owned();
         Self {
@@ -1839,12 +1842,12 @@ impl AboutSnapshot {
             channel: about_display_channel(APP_BUILD_VERSION),
             build: APP_BUILD_SHA.to_owned(),
             license: "GPL-3.0-or-later".to_owned(),
-            libmpv: pkg_config_version("mpv").unwrap_or_else(|| "system".to_owned()),
-            ffmpeg: ffmpeg_version().unwrap_or_else(|| "system".to_owned()),
+            libmpv: "—".to_owned(),
+            ffmpeg: "—".to_owned(),
             render_api: "libmpv render".to_owned(),
             graphics: "OpenGL · GTK GLArea".to_owned(),
             hwdec,
-            os: linux_os_label(),
+            os: "—".to_owned(),
             gtk: format!(
                 "{}.{}.{}",
                 gtk::major_version(),
@@ -1852,7 +1855,7 @@ impl AboutSnapshot {
                 gtk::micro_version()
             ),
             cpu: env::consts::ARCH.to_owned(),
-            install: linux_update_install_status().to_owned(),
+            install: "—".to_owned(),
         }
     }
 }

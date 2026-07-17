@@ -4223,3 +4223,54 @@ fn fullscreen_toggle_wiring_decides_from_intent_not_the_lagging_platform_state()
     let compact = include_str!("compact_mode.rs");
     assert!(compact.contains("video_click::drag_exceeds_move_threshold(offset_x, offset_y, 6.0)"));
 }
+
+#[test]
+fn settings_and_about_open_path_does_not_block_on_metadata_probes() {
+    // The synchronous activation path must not call the expensive metadata probes
+    // that previously stalled the first mapped frame of the Settings window.
+    let settings_window = include_str!("settings_window.rs");
+    let about = include_str!("about.rs");
+    let updates = include_str!("updates.rs");
+
+    for probe in [
+        "pkg_config_version",
+        "ffmpeg_version",
+        "linux_os_label",
+        "linux_update_install_status",
+    ] {
+        assert!(
+            !settings_window.contains(probe),
+            "settings_window.rs must not call {probe} synchronously"
+        );
+    }
+
+    // Expensive metadata is captured in a dedicated async helper and dispatched from
+    // a background thread so the UI maps before the probes resolve.
+    assert!(
+        about.contains("AboutDeferredFields"),
+        "about.rs must have a deferred metadata struct"
+    );
+    assert!(
+        about.contains("std::thread::spawn"),
+        "about.rs must spawn the deferred capture"
+    );
+    assert!(
+        about.contains("AboutDeferredFields::capture()"),
+        "about.rs must capture deferred metadata via the helper"
+    );
+    assert!(
+        about.contains("capture_cheap"),
+        "about.rs must use the cheap synchronous snapshot for the first frame"
+    );
+
+    // The Updates page also resolves the install mode off the main thread.
+    assert!(updates.contains("linux_update_install_status"));
+    let updates_after_spawn = updates
+        .split("std::thread::spawn")
+        .nth(1)
+        .expect("updates.rs spawns a thread for the install probe");
+    assert!(
+        updates_after_spawn.contains("linux_update_install_status"),
+        "updates.rs must probe install status in a background thread"
+    );
+}

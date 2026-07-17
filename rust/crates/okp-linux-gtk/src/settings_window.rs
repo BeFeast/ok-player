@@ -5,14 +5,21 @@ pub(crate) fn open_settings_window(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) {
-    if present_existing_companion_window(&state, CompanionWindowKind::Settings) {
-        return;
-    }
-
+    let started = Instant::now();
     let initial_page = env::var("OKP_OPEN_SETTINGS_PAGE_ON_STARTUP")
         .ok()
         .and_then(|page| normalized_settings_page(&page))
         .unwrap_or(SettingsPage::About);
+    let page_id = initial_page.id();
+
+    if present_existing_companion_window(&state, CompanionWindowKind::Settings) {
+        eprintln!(
+            "okp-companion-present: kind=settings page={page_id} warm=true ms={}",
+            started.elapsed().as_millis()
+        );
+        return;
+    }
+
     let max_window_height = settings_window_height_cap(parent);
     let max_body_height = (max_window_height - SETTINGS_TITLEBAR_HEIGHT).max(1);
     let window = build_companion_window(parent, &state, CompanionWindowKind::Settings, "Settings");
@@ -219,7 +226,19 @@ pub(crate) fn open_settings_window(
     window_overlay.add_overlay(&settings_window_controls(&window));
     window.set_child(Some(&window_overlay));
     connect_companion_play_pause_space(&window, Rc::clone(&state));
+
+    let map_started = started;
+    window.connect_map(move |_| {
+        eprintln!(
+            "okp-companion-map: kind=settings page={page_id} ms={}",
+            map_started.elapsed().as_millis()
+        );
+    });
     window.present();
+    eprintln!(
+        "okp-companion-present: kind=settings page={page_id} warm=false ms={}",
+        started.elapsed().as_millis()
+    );
 }
 
 pub(crate) fn apply_settings_window_theme(window: &gtk::Window, theme: AppearanceTheme) {
