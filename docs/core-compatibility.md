@@ -158,6 +158,32 @@ behaves identically on both sides.
   in C# — is unrepresentable); the `stride = 52` default parameter becomes the
   `DEFAULT_STRIDE` const; `ReadOnlySpan<byte>` → `&[u8]`. Scores are identical.
 
+## Poster-frame selection → `okp_core::poster_frame` (Linux Continue Watching/History)
+
+- **Selection policy ported.** `poster_sample_offsets`, `PosterFrameScorer`, and the
+  `POSTER_LIT_ENOUGH` / `POSTER_MIN_USABLE_LUMA` thresholds port the Windows
+  `PlayerView.PickRepresentativeFrameAsync` + `GeneratePostersAsync` gate: the same
+  `{0.15, 0.25, 0.38, 0.50, 0.62, 0.75, 0.82}` sampling spread (each floored to a 3s minimum),
+  the same `litEnough = 48` early-stop and `minUsableLuma = 22` usable floor, and the same
+  "keep the brightest, one fixed 30s grab when the duration is unknown" behaviour. The shell
+  decodes candidate frames and feeds their [`image_luma`] scores in; the pick/verdict is shared.
+- **Cache identity is stronger than the Windows poster filename.** Windows names the poster PNG
+  by `SHA1(path)` alone and re-validates its luma on every pass; the port's `poster_cache_key`
+  hashes path **plus byte length plus mtime** (matching the Windows *thumbnail* file key and the
+  Linux hover/chapter fingerprint), so a replaced file derives a new key and its stale poster is
+  never served — the invalidation the regression requires. The Linux shell therefore derives the
+  poster path from current file identity each pass rather than persisting `poster_path` into
+  `history.json`; the shared `FileEntry.poster_path` field stays the Windows carry-through.
+- **Durable "no usable frame" verdict.** `PosterVerdict::Unusable` is the Rust form of the
+  Windows `NoUsablePoster` sentinel (an all-black film keeps its placeholder and is not
+  re-derived); `NoFrame` distinguishes a transient decode miss (retry later) from that durable
+  verdict. On Linux the sentinel is an on-disk `<key>.none` marker in the cache rather than a
+  string stored in history.
+- **Audio cover art is out of scope here.** Windows' poster pass also fills audio recents from
+  sidecar/embedded cover art (`EnsureAudioPosterAsync`); the Linux poster path classifies audio
+  (and URL/network) sources as a non-video fallback and generates no frame for them. This
+  regression is specifically the local-video representative-frame path.
+
 ## AspectResize → `okp_core::aspect_resize`
 
 - **Edge codes.** C# takes the raw Win32 `WMSZ_*` int (any unknown code falls into the corner

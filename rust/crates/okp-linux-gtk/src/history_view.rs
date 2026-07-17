@@ -50,6 +50,12 @@ impl EmptySurface {
         if env::var("OKP_WELCOME_STATE").ok().as_deref() == Some("empty") {
             welcome_model = WelcomeShelf::Empty;
         }
+        // Fill each resumable card's poster from the cache (enqueuing bounded generation for
+        // any still missing). The welcome shelf never carries items during a private session —
+        // `welcome_shelf` returns `Private` — so these rows are always non-private.
+        if let WelcomeShelf::Items(items) = &mut welcome_model {
+            crate::thumbnails::project_posters(items, false);
+        }
         if self.model.borrow().as_ref() != Some(&welcome_model) {
             *self.model.borrow_mut() = Some(welcome_model.clone());
             let (page, history_button) = welcome_page(
@@ -529,6 +535,9 @@ fn history_surface_model(state: &Rc<RefCell<PlayerState>>) -> HistorySurfaceMode
     ) {
         items.clear();
     }
+    // Share the same cached posters and generation queue as the welcome shelf. A private
+    // session exposes no posters here (and enqueues none), so private viewing leaves no trace.
+    crate::thumbnails::project_posters(&mut items, state.private_session);
     HistorySurfaceModel {
         items,
         private_session: state.private_session,
@@ -853,6 +862,9 @@ fn history_thumbnail(item: &HistoryItem, width: i32, height: i32, finished: bool
         picture.add_css_class("okp-history-thumbnail-picture");
         picture.set_size_request(width, height);
         picture.set_can_shrink(true);
+        // Both the welcome card and the History row fill their (16:9) frame with the same
+        // cover crop, so a poster reads identically on either surface.
+        picture.set_content_fit(gtk::ContentFit::Cover);
         overlay.add_overlay(&picture);
     }
     if item.state_kind == HistoryStateKind::Progress {

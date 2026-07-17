@@ -26,6 +26,7 @@ pub mod nfo_metadata;
 pub mod ok_player_uri;
 pub mod player;
 pub mod playlist;
+pub mod poster_frame;
 pub mod presentation_evidence;
 pub mod progress_report;
 pub mod recents_shelf;
