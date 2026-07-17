@@ -22,8 +22,8 @@ assert_installed() {
   test -f /usr/share/icons/hicolor/scalable/apps/com.befeast.okplayer.svg
   test -f /usr/share/licenses/ok-player/LICENSE
   test -f /usr/share/doc/ok-player/THIRD-PARTY-NOTICES.md
-  rpm -q --requires ok-player | grep -q '^mpv-libs'
-  ldd /usr/bin/ok-player | grep -q 'libmpv\.so'
+  rpm -q --requires ok-player | grep '^mpv-libs' >/dev/null
+  ldd /usr/bin/ok-player | grep 'libmpv\.so' >/dev/null
 }
 
 dnf install -y "$PREVIOUS_RPM"
