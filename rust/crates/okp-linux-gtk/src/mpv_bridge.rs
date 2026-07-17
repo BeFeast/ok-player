@@ -695,6 +695,7 @@ pub(crate) fn connect_state_poll(
         updating_seek,
         initial_map_pending,
         chrome,
+        compact_mode,
         window_chrome,
         subtitle_position_snapshot,
         empty_surface,
@@ -774,6 +775,7 @@ pub(crate) fn connect_state_poll(
         } else {
             String::new()
         };
+        compact_mode.update(has_media, playback, &media_title);
         window_chrome.set_title(&media_title);
         if has_media {
             let lift = if chrome.is_revealed() {
@@ -926,6 +928,7 @@ pub(crate) fn connect_state_poll(
         }
 
         update_media_state_surface(&state, playback, has_media, &media_state_overlay);
+        compact_mode.sync_surface_visibility();
 
         glib::ControlFlow::Continue
     });
@@ -939,6 +942,7 @@ pub(crate) fn observe_initial_window_fit(
         return false;
     };
     let mut state = state.borrow_mut();
+    state.current_video_dimensions = Some(video_dimensions);
     let source_generation = state.source_generation;
     state.initial_window_fit.observe_dimensions(
         source_generation,
@@ -1060,10 +1064,16 @@ pub(crate) fn connect_video_clicks(
                 if let Some(source_id) = pending_click.borrow_mut().take() {
                     source_id.remove();
                 }
-                if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
-                    eprintln!("interaction: video-double-click-fullscreen");
+                if restore_compact_mode(&click_window) {
+                    if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+                        eprintln!("interaction: video-double-click-compact-restore");
+                    }
+                } else {
+                    if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+                        eprintln!("interaction: video-double-click-fullscreen");
+                    }
+                    toggle_fullscreen(&click_window);
                 }
-                toggle_fullscreen(&click_window);
             }
         }
     });

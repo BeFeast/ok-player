@@ -702,6 +702,11 @@ fn advance_seek_generation(state: &Rc<RefCell<PlayerState>>) {
 }
 
 pub(crate) fn toggle_fullscreen(window: &gtk::ApplicationWindow) {
+    if restore_compact_mode(window) {
+        let window = window.clone();
+        glib::idle_add_local_once(move || window.fullscreen());
+        return;
+    }
     if window.is_fullscreen() {
         window.unfullscreen();
     } else {
