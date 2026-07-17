@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BINARY="${1:-ok-player}"
 OUT_DIR="${2:-$ROOT/artifacts/manual-ui/linux-seek-preview-smoke}"
 
-for tool in xvfb-run dbus-run-session xfwm4 xdotool xwininfo import magick; do
+for tool in xvfb-run dbus-run-session ffmpeg xfwm4 xdotool xwininfo import magick rg; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "Missing required tool: $tool" >&2
     exit 127
@@ -14,6 +14,22 @@ done
 
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
+
+# Exercise the production hover path with a real, deterministic video. The old
+# fixture-only hook proved popover styling but never delivered pointer motion,
+# launched ffmpeg, or refreshed a stationary card when the worker completed.
+ffmpeg \
+  -hide_banner \
+  -loglevel error \
+  -f lavfi \
+  -i 'testsrc2=size=640x360:rate=30' \
+  -t 12 \
+  -c:v libx264 \
+  -pix_fmt yuv420p \
+  -g 30 \
+  -an \
+  -y \
+  "$OUT_DIR/seek-preview.mp4"
 
 if [[ -z "${__EGL_VENDOR_LIBRARY_FILENAMES:-}" && -f /usr/share/glvnd/egl_vendor.d/50_mesa.json ]]; then
   export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json
@@ -37,7 +53,9 @@ export GTK_USE_PORTAL=0
 export NO_AT_BRIDGE=1
 export XDG_SESSION_TYPE=x11
 export XDG_CURRENT_DESKTOP=XFCE
+export OKP_DEBUG_INTERACTIONS=1
 export OKP_SKIP_UPDATE_CHECK=1
+export XDG_CACHE_HOME="$OUT_DIR/cache"
 
 xfwm4 --sm-client-disable >"$OUT_DIR/xfwm4.log" 2>&1 &
 wm_pid=$!
@@ -52,23 +70,29 @@ cleanup() {
 trap cleanup EXIT
 
 sleep 1
-# The seek-preview hook pops the timeline hover tooltip with a representative
-# timecode and chapter and no thumbnail: the deliberate timecode-only fallback the
-# tooltip shows for a stream, a not-yet-generated frame, or an unavailable source.
-OKP_OPEN_SEEK_PREVIEW_ON_STARTUP=1 \
 OKP_SKIP_OPEN_INSTALLER=1 \
 OKP_SKIP_DEB_SELF_INSTALL=1 \
-timeout 12s "$BINARY" >"$OUT_DIR/app.log" 2>&1 &
+OKP_PLAYBACK_FRAME_PREVIEW=dark \
+timeout 16s "$BINARY" "$OUT_DIR/seek-preview.mp4" >"$OUT_DIR/app.log" 2>&1 &
 app_pid=$!
 
 sleep 5
 xdotool search --name "OK Player" >"$OUT_DIR/window.ids"
 window_id="$(head -n1 "$OUT_DIR/window.ids")"
 
+# The first motion reveals hidden chrome; the second enters the now-targetable
+# seek scale. Leave the pointer stationary for longer than the 2.5 s OSC hide
+# timeout so the capture proves timeline hover pins the chrome and that the
+# completed worker pushes its frame into the already-open card.
+xdotool mousemove --window "$window_id" 400 400
+sleep 0.2
+xdotool mousemove --window "$window_id" 400 632
+sleep 4
+
 xwininfo -root -tree >"$OUT_DIR/tree.txt"
 xwininfo -id "$window_id" >"$OUT_DIR/window.xwininfo"
-# The tooltip is a popover surface anchored above the seek bar, so it is captured
-# from the root window rather than the main window pixmap.
+# Capture both the desktop and the main window: the preview is now composed in
+# the player overlay, while the root image remains useful for z-order diagnosis.
 import -window root "$OUT_DIR/root.png"
 import -window "$window_id" "$OUT_DIR/window.png"
 
@@ -82,30 +106,28 @@ if [[ "$width" != "1120" || "$height" != "680" || "$border" != "0" || "$state" !
   exit 1
 fi
 
-# The tooltip pops just above the seek bar and below the welcome card, over the
-# near-black video. That band is empty (black) without the tooltip, so a bright
-# maximum there means the timecode/chapter text drew.
-preview_max="$(
+# The thumbnail occupies the colored upper band of the card. It is black when
+# the worker result never reaches the stationary hover, and the whole band is
+# black when the unpinned OSC auto-hides underneath the pointer.
+thumbnail_mean="$(
   magick "$OUT_DIR/root.png" \
-    -crop 138x45+201+583 \
-    -colorspace gray \
-    -format '%[fx:maxima]' info:
+    -crop 132x69+334+494 \
+    -colorspace sRGB \
+    -format '%[fx:mean]' info:
 )"
-if ! awk -v max="$preview_max" 'BEGIN { exit !(max > 0.55) }'; then
-  echo "Seek preview tooltip looks blank: content maxima=${preview_max}" >&2
+if ! awk -v mean="$thumbnail_mean" 'BEGIN { exit !(mean > 0.08) }'; then
+  echo "Seek preview thumbnail looks blank or the hover card disappeared: mean=${thumbnail_mean}" >&2
   exit 1
 fi
 
-# The fallback is bright text on a dark card, not a solid fill: the band's mean must
-# stay low so a stray opaque rectangle can never masquerade as the tooltip.
-preview_mean="$(
-  magick "$OUT_DIR/root.png" \
-    -crop 138x45+201+583 \
-    -colorspace gray \
-    -format '%[fx:mean]' info:
-)"
-if ! awk -v mean="$preview_mean" 'BEGIN { exit !(mean < 0.45) }'; then
-  echo "Seek preview tooltip is not a text-on-dark tooltip: mean=${preview_mean}" >&2
+thumbnail_path="$(rg --files "$XDG_CACHE_HOME/ok-player/chapter-thumbnails" -g '**/hover/*.jpg' | head -n1)"
+if [[ -z "$thumbnail_path" ]]; then
+  echo "Seek hover did not generate a cached thumbnail" >&2
+  exit 1
+fi
+thumbnail_geometry="$(magick identify -format '%wx%h' "$thumbnail_path")"
+if [[ "$thumbnail_geometry" != "144x80" && "$thumbnail_geometry" != "144x81" ]]; then
+  echo "Unexpected seek thumbnail geometry: $thumbnail_geometry" >&2
   exit 1
 fi
 SMOKE
