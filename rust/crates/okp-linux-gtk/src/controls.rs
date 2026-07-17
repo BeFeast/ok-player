@@ -1344,7 +1344,9 @@ pub(crate) fn build_controls(
         .connect_clicked(move |_| save_screenshot(&screenshot_state, &screenshot_toast, false));
 
     let fullscreen_parent = window.clone();
-    fullscreen_button.connect_clicked(move |_| toggle_fullscreen(&fullscreen_parent));
+    let fullscreen_state = Rc::clone(&state);
+    fullscreen_button
+        .connect_clicked(move |_| toggle_fullscreen(&fullscreen_parent, &fullscreen_state));
 
     let seek_state = Rc::clone(&state);
     seek.connect_change_value(move |_, _, value| {

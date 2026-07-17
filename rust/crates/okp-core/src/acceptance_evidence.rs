@@ -48,6 +48,7 @@ pub const REQUIRED_LIVE_CHECKS: &[&str] = &[
     "wayland-clipboard",
     "desktop-portal",
     "wayland-compositor-fullscreen",
+    "wayland-double-click-fullscreen",
     "wayland-always-on-top-unavailable",
     "keyboard-focus-navigation",
 ];
@@ -544,6 +545,17 @@ mod tests {
             .expect("Wayland always-on-top row");
         assert_eq!(unavailable.level, EvidenceLevel::GnomeWaylandOperator);
         assert_eq!(unavailable.operator_status, EvidenceStatus::NotRun);
+
+        // The repeated double-click fullscreen toggle (issue #330) is live GNOME/
+        // Wayland behavior: deterministic tests and Xvfb cannot attest that 20
+        // real double-clicks each land, so it is operator-required.
+        let double_click = manifest
+            .rows
+            .iter()
+            .find(|row| row.state == "wayland-double-click-fullscreen")
+            .expect("Wayland double-click fullscreen row");
+        assert_eq!(double_click.level, EvidenceLevel::GnomeWaylandOperator);
+        assert_eq!(double_click.operator_status, EvidenceStatus::NotRun);
     }
 
     #[test]

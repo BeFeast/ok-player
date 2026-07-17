@@ -181,7 +181,7 @@ pub(crate) fn connect_keyboard(
                 glib::Propagation::Stop
             }
             Some(ShortcutAction::Fullscreen) => {
-                toggle_fullscreen(&shortcut_window);
+                toggle_fullscreen(&shortcut_window, &state);
                 glib::Propagation::Stop
             }
             Some(ShortcutAction::EscapeFullscreen) if shortcut_window.is_fullscreen() => {

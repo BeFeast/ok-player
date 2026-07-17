@@ -24,9 +24,10 @@ use okp_core::shortcuts::{
 use okp_core::update_selection::{self, DebFeed, DebUpdate, SHA256SUMS_ASSET};
 use okp_core::video_geometry::{VideoAspect, VideoGeometry, VideoGeometryAction};
 use okp_core::{
-    AppIdentity, chapter_math, launch_args, lrc, m3u, media_formats, natural_compare,
-    network_media, ok_player_uri, progress_report, seek_readout, sha256sums, subtitle_delay,
-    subtitle_search, time_code, timeline_buffer, video_click, volume, window_fit, youtube_open,
+    AppIdentity, chapter_math, fullscreen_toggle, launch_args, lrc, m3u, media_formats,
+    natural_compare, network_media, ok_player_uri, progress_report, seek_readout, sha256sums,
+    subtitle_delay, subtitle_search, time_code, timeline_buffer, video_click, volume, window_fit,
+    youtube_open,
 };
 use okp_mpv::{
     AbLoopState, AudioDevice, Chapter, EndFileReason, InfoRow, InfoSection, InfoTrack, MediaInfo,
@@ -213,6 +214,11 @@ struct PlayerState {
     /// The short, copyable reason for the most recent load failure — surfaced
     /// through the in-canvas card's Copy details action instead of raw logs.
     last_load_error: Option<String>,
+    /// Intended fullscreen state for the double-click contract. The window's own
+    /// `is_fullscreen` lags the Wayland compositor, so every toggle path decides
+    /// from this eagerly-flipped intent and reconciles it with the `fullscreened`
+    /// notify. See [`fullscreen_toggle`].
+    fullscreen_toggle: fullscreen_toggle::FullscreenToggle,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

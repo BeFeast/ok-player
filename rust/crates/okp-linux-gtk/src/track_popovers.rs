@@ -678,9 +678,10 @@ pub(crate) fn advanced_command_popover_content(
     let fullscreen_button = track_button(fullscreen_label, parent.is_fullscreen());
     let fullscreen_parent = parent.clone();
     let fullscreen_popover = popover.clone();
+    let fullscreen_state = Rc::clone(&state);
     fullscreen_button.connect_clicked(move |_| {
         fullscreen_popover.popdown();
-        toggle_fullscreen(&fullscreen_parent);
+        toggle_fullscreen(&fullscreen_parent, &fullscreen_state);
     });
     content.append(&fullscreen_button);
 
