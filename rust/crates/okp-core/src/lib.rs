@@ -7,6 +7,7 @@ pub mod candidate_build;
 pub mod candidate_channel;
 pub mod chapter_math;
 pub mod clip_export;
+pub mod companion_window;
 pub mod fedora_acceptance;
 pub mod fullscreen_toggle;
 pub mod gapless;

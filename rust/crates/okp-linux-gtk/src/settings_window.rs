@@ -5,14 +5,17 @@ pub(crate) fn open_settings_window(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) {
+    if present_existing_companion_window(&state, CompanionWindowKind::Settings) {
+        return;
+    }
+
     let initial_page = env::var("OKP_OPEN_SETTINGS_PAGE_ON_STARTUP")
         .ok()
         .and_then(|page| normalized_settings_page(&page))
         .unwrap_or(SettingsPage::About);
     let max_window_height = settings_window_height_cap(parent);
     let max_body_height = (max_window_height - SETTINGS_TITLEBAR_HEIGHT).max(1);
-    let window =
-        captionless_transient_window(parent, "Settings", SETTINGS_REFERENCE_WIDTH, -1, true);
+    let window = build_companion_window(parent, &state, CompanionWindowKind::Settings, "Settings");
     window.add_css_class("okp-settings-window");
     apply_settings_window_theme(&window, state.borrow().settings.appearance_theme());
     watch_system_settings_theme(&window, Rc::clone(&state));
@@ -23,7 +26,7 @@ pub(crate) fn open_settings_window(
     let titlebar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     titlebar.add_css_class("okp-settings-titlebar");
     // GTK adds the 1px bottom border outside the requested content box.
-    titlebar.set_size_request(SETTINGS_REFERENCE_WIDTH, SETTINGS_TITLEBAR_HEIGHT - 1);
+    titlebar.set_height_request(SETTINGS_TITLEBAR_HEIGHT - 1);
     let title = gtk::Label::new(Some("Settings"));
     title.add_css_class("okp-settings-titlebar-label");
     title.set_xalign(0.0);
@@ -32,7 +35,7 @@ pub(crate) fn open_settings_window(
 
     let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     body.add_css_class("okp-settings-body");
-    body.set_size_request(SETTINGS_REFERENCE_WIDTH, -1);
+    body.set_hexpand(true);
 
     let stack = gtk::Stack::new();
     stack.add_css_class("okp-settings-stack");
@@ -200,11 +203,11 @@ pub(crate) fn open_settings_window(
     body.append(&settings_nav_rail_frame(rail, max_body_height));
 
     stack.set_size_request(SETTINGS_CONTENT_WIDTH, -1);
+    stack.set_hexpand(true);
     stack.set_vexpand(false);
-    let resize_window = window.clone();
+    let resize_stack = stack.clone();
     stack.connect_visible_child_name_notify(move |_| {
-        resize_window.set_default_size(SETTINGS_REFERENCE_WIDTH, -1);
-        resize_window.queue_resize();
+        resize_stack.queue_resize();
     });
     body.append(&stack);
     root.append(&body);
@@ -212,6 +215,7 @@ pub(crate) fn open_settings_window(
     let window_overlay = gtk::Overlay::new();
     window_overlay.set_child(Some(&root));
     window_overlay.add_overlay(&captionless_window_drag_layer(&window));
+    add_companion_window_resize_zones(&window_overlay, &window);
     window_overlay.add_overlay(&settings_window_controls(&window));
     window.set_child(Some(&window_overlay));
     connect_companion_play_pause_space(&window, Rc::clone(&state));
@@ -260,7 +264,7 @@ fn settings_theme_override() -> Option<AppearanceTheme> {
     }
 }
 
-fn watch_system_settings_theme(window: &gtk::Window, state: Rc<RefCell<PlayerState>>) {
+pub(crate) fn watch_system_settings_theme(window: &gtk::Window, state: Rc<RefCell<PlayerState>>) {
     let Some(settings) = gtk::Settings::default() else {
         return;
     };
@@ -304,7 +308,7 @@ pub(crate) fn settings_scroller<T: IsA<gtk::Widget>>(
     scroller.add_css_class("okp-settings-scroller");
     scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     scroller.set_min_content_width(SETTINGS_CONTENT_WIDTH);
-    scroller.set_max_content_width(SETTINGS_CONTENT_WIDTH);
+    scroller.set_max_content_width(-1);
     scroller.set_propagate_natural_width(false);
     scroller.set_max_content_height(max_content_height);
     scroller.set_propagate_natural_height(true);
@@ -507,55 +511,6 @@ pub(crate) fn settings_window_controls(window: &gtk::Window) -> gtk::Box {
     controls.append(&close);
 
     controls
-}
-
-pub(crate) fn captionless_window_drag_layer(window: &gtk::Window) -> gtk::Box {
-    let drag_layer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    drag_layer.add_css_class("okp-captionless-window-drag-layer");
-    drag_layer.set_halign(gtk::Align::Fill);
-    drag_layer.set_valign(gtk::Align::Start);
-    drag_layer.set_can_target(true);
-    drag_layer.set_height_request(CAPTIONLESS_DRAG_HEIGHT);
-    connect_captionless_window_drag(&drag_layer, window);
-    drag_layer
-}
-
-pub(crate) fn connect_captionless_window_drag(
-    widget: &impl IsA<gtk::Widget>,
-    window: &gtk::Window,
-) {
-    let gesture = gtk::GestureClick::new();
-    gesture.set_button(gdk::BUTTON_PRIMARY);
-    let drag_window = window.clone();
-    gesture.connect_pressed(move |gesture, n_press, x, y| {
-        if n_press == 2 {
-            if drag_window.is_maximized() {
-                drag_window.unmaximize();
-            } else {
-                drag_window.maximize();
-            }
-            return;
-        }
-
-        let Some(device) = gesture.current_event_device() else {
-            return;
-        };
-        let Some(surface) = drag_window.surface() else {
-            return;
-        };
-        let Ok(toplevel) = surface.downcast::<gdk::Toplevel>() else {
-            return;
-        };
-
-        toplevel.begin_move(
-            &device,
-            gesture.current_button() as i32,
-            x,
-            y,
-            gesture.current_event_time(),
-        );
-    });
-    widget.add_controller(gesture);
 }
 
 pub(crate) fn settings_window_control(kind: WindowControlKind, tooltip: &str) -> gtk::Button {

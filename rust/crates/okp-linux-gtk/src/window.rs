@@ -478,16 +478,22 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
             open_subtitle_search_preview(&search_parent, search_state, search_toast);
         });
     }
-    // Visual smoke hook: render the in-player Media Information modal with
+    // Visual smoke hook: render the Media Information companion window with
     // representative fixture data so it can be screenshot-tested without media.
     if env::var_os("OKP_OPEN_MEDIA_INFO_ON_STARTUP").is_some() {
         if let Some(substrate) = env::var_os("OKP_MEDIA_INFO_PREVIEW_SUBSTRATE") {
             empty_surface.set_preview_substrate(substrate.eq_ignore_ascii_case("bright"));
         }
         let info_parent = window.clone();
+        let info_state = Rc::clone(&state);
         let info_toast = Rc::clone(&status_toast);
         glib::timeout_add_local_once(Duration::from_millis(250), move || {
-            show_media_info_modal(&info_parent, &media_info_preview_from_env(), info_toast);
+            show_media_info_window(
+                &info_parent,
+                &info_state,
+                &media_info_preview_from_env(),
+                info_toast,
+            );
         });
     }
     if auto_check_updates {
@@ -1427,12 +1433,13 @@ pub(crate) fn always_on_top_backend(display_type_name: &str) -> AlwaysOnTopBacke
 /// Wayland intentionally exposes no client-controlled global coordinates, so
 /// Mutter remains responsible for keeping the already-bounded surface visible.
 pub(crate) fn move_resize_player_window_on_x11(
-    window: &gtk::ApplicationWindow,
+    window: &impl IsA<gtk::Window>,
     position: window_fit::WindowPoint,
     size: window_fit::WindowSize,
 ) -> bool {
     use gtk::glib::translate::ToGlibPtr;
 
+    let window = window.upcast_ref::<gtk::Window>();
     let Some(display) = gdk::Display::default() else {
         return false;
     };

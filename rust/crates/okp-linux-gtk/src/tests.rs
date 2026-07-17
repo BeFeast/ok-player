@@ -782,10 +782,38 @@ fn hdr_settings_reservation_has_no_toggle_or_action() {
 }
 
 #[test]
-fn media_info_modal_geometry_matches_reference_and_narrow_clamp() {
-    assert_eq!(media_info_modal_geometry(1120, 680), (720, 571));
-    assert_eq!(media_info_modal_geometry(480, 540), (441, 453));
-    assert_eq!(media_info_modal_geometry(700, 400), (644, 336));
+fn companion_window_geometry_clamps_natural_and_restored_sizes() {
+    let work_area = window_fit::WindowRect {
+        x: 0,
+        y: 0,
+        width: 1280,
+        height: 852,
+    };
+    assert_eq!(
+        companion_window_core::companion_window_size(
+            CompanionWindowKind::MediaInfo,
+            None,
+            work_area,
+        ),
+        window_fit::WindowSize {
+            width: 720,
+            height: 571,
+        }
+    );
+    assert_eq!(
+        companion_window_core::companion_window_size(
+            CompanionWindowKind::Settings,
+            Some(window_fit::WindowSize {
+                width: 1600,
+                height: 1000,
+            }),
+            work_area,
+        ),
+        window_fit::WindowSize {
+            width: 1280,
+            height: 852,
+        }
+    );
 }
 
 #[test]
@@ -807,11 +835,12 @@ fn media_info_identity_is_app_owned_cairo_geometry() {
 }
 
 #[test]
-fn media_info_modal_classes_have_scoped_css() {
+fn media_info_window_classes_have_scoped_css() {
     let stylesheet = include_str!("css.rs");
     for class in [
-        "okp-media-info-modal-layer",
-        "okp-media-info-backdrop",
+        "okp-companion-window",
+        "okp-companion-resize-zone",
+        "okp-media-info-window",
         "okp-media-info-card",
         "okp-media-info-header",
         "okp-media-info-identity",
@@ -833,13 +862,14 @@ fn media_info_modal_classes_have_scoped_css() {
     ] {
         assert!(
             stylesheet.contains(&format!(".{class}")),
-            "Media Information class {class} must have modal-scoped CSS"
+            "Media Information class {class} must have window-scoped CSS"
         );
     }
+    assert!(!stylesheet.contains("okp-media-info-backdrop"));
 }
 
 #[test]
-fn both_media_info_menu_entries_use_the_in_player_modal_entry_point() {
+fn both_media_info_menu_entries_use_the_companion_window_entry_point() {
     let source = include_str!("track_popovers.rs");
     let more = source
         .split_once("pub(crate) fn more_popover_content")
@@ -858,7 +888,34 @@ fn both_media_info_menu_entries_use_the_in_player_modal_entry_point() {
 
     assert_eq!(more.matches("open_media_info_window(").count(), 1);
     assert_eq!(advanced.matches("open_media_info_window(").count(), 1);
-    assert!(!source.contains("show_media_info_window"));
+    assert!(!source.contains("show_media_info_modal"));
+}
+
+#[test]
+fn long_lived_surfaces_share_non_modal_single_instance_window_semantics() {
+    let helper = include_str!("companion_window.rs");
+    let settings = include_str!("settings_window.rs");
+    let media_info = include_str!("media_info.rs");
+
+    assert!(helper.contains(".modal(policy.modal)"));
+    assert!(helper.contains(".resizable(policy.resizable)"));
+    assert!(!helper.contains(".transient_for("));
+    assert!(helper.contains("present_existing_companion_window"));
+    assert!(helper.contains("add_companion_window_resize_zones"));
+    assert!(settings.contains("CompanionWindowKind::Settings"));
+    assert!(media_info.contains("CompanionWindowKind::MediaInfo"));
+    assert!(settings.contains("present_existing_companion_window"));
+    assert!(media_info.contains("present_existing_companion_window"));
+}
+
+#[test]
+fn command_confirmations_and_file_pickers_remain_modal() {
+    let dialogs = include_str!("dialogs.rs");
+    let subtitle_search = include_str!("track_popovers.rs");
+
+    assert!(dialogs.matches(".modal(true)").count() >= 5);
+    assert!(dialogs.matches("dialog.set_modal(true)").count() >= 4);
+    assert!(subtitle_search.contains(".modal(true)"));
 }
 
 #[test]
