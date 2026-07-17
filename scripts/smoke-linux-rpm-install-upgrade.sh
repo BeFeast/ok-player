@@ -10,6 +10,15 @@ PREVIOUS_RPM="${2:-$CURRENT_RPM}"
 [[ "$(id -u)" == "0" ]] || { echo "RPM transaction smoke must run as root in a disposable Fedora root." >&2; exit 2; }
 command -v dnf >/dev/null 2>&1 || { echo "dnf is required" >&2; exit 127; }
 
+# Fedora's minimal container image sets tsflags=nodocs. Clear it for these
+# transactions so the smoke test validates the packaged license and notices,
+# and remove an interrupted prior run so the install/upgrade sequence is
+# repeatable in the same disposable root.
+DNF=(dnf --setopt=tsflags=)
+if rpm -q ok-player >/dev/null 2>&1; then
+  "${DNF[@]}" remove -y ok-player
+fi
+
 CONFIG_DIR="$(mktemp -d)"
 trap 'rm -rf "$CONFIG_DIR"' EXIT
 export XDG_CONFIG_HOME="$CONFIG_DIR"
@@ -27,13 +36,13 @@ assert_installed() {
   ldd /usr/bin/ok-player | grep 'libmpv\.so' >/dev/null
 }
 
-dnf install -y "$PREVIOUS_RPM"
+"${DNF[@]}" install -y "$PREVIOUS_RPM"
 assert_installed
 
-dnf upgrade -y "$CURRENT_RPM"
+"${DNF[@]}" upgrade -y "$CURRENT_RPM"
 assert_installed
 
-dnf remove -y ok-player
+"${DNF[@]}" remove -y ok-player
 test ! -e /usr/bin/ok-player
 test -f "$CONFIG_DIR/ok-player/settings.json"
 grep -q '"preserve":true' "$CONFIG_DIR/ok-player/settings.json"
