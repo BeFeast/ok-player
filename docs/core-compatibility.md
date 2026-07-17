@@ -41,6 +41,11 @@ behaves identically on both sides.
   `is_managed_option` are Rust-side extractions for the GTK shell. They encode the same Windows
   defaults/ranges and preset order, plus the advanced-config protection needed when Linux merges
   its raw `mpv.conf` text. They do not alter the shared preset data.
+- **libmpv compatibility.** `okp-mpv` applies the shared modern option set directly when
+  `sub-border-style` exists. On mpv 0.37 it translates outline presets to a transparent legacy
+  background plus `sub-shadow-color`; a non-transparent `sub-back-color` retains the same High
+  contrast background-box intent. This engine adapter does not change persisted keys or preset
+  semantics.
 
 ## Playlist → `okp_core::playlist`
 
