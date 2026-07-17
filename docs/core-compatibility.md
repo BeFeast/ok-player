@@ -416,10 +416,11 @@ untouched by this work; the Windows migration is exercised only by the Rust gold
   that file on its own). `advanced.keybindings` is likewise Linux-only.
 - **Linux-only vs Windows-only fields coexist.** The picture adjustments
   (`video.brightness`/`contrast`/`saturation`/`gamma`), `playback.auto_advance`, `repeat`, and
-  `shuffle` are Linux-only; the `subtitles`, `appearance`, and `privacy` sections are Windows-only
-  today. Each shell reads the subset it understands and carries the rest through untouched on
-  save, so the shared schema grows without either side dropping the other's state. The three
-  Windows-only sections are `skip_serializing_if`-empty, so a Linux document never writes them.
+  `shuffle` are Linux-only; `playback.gapless` is a shared reserved preference that shells must
+  capability-gate before applying; the `subtitles`, `appearance`, and `privacy` sections are
+  Windows-only today. Each shell reads the subset it understands and carries the rest through
+  untouched on save, so the shared schema grows without either side dropping the other's state.
+  The three Windows-only sections are `skip_serializing_if`-empty, so a Linux document never writes them.
 
 ### History field map (Windows → canonical)
 

@@ -24,6 +24,35 @@ fn about_display_version_keeps_about_layout_compact() {
 }
 
 #[test]
+fn linux_gapless_setting_is_honestly_deferred() {
+    assert_eq!(
+        LINUX_GAPLESS_CAPABILITY,
+        GaplessPlaybackCapability::Deferred
+    );
+
+    let setting = gapless_setting_state(true, LINUX_GAPLESS_CAPABILITY);
+    assert!(!setting.enabled);
+    assert!(!setting.can_toggle);
+    assert_eq!(setting.state_label, "Deferred");
+    assert_eq!(setting.action_label, "Unavailable");
+    assert!(setting.detail.contains("after end-of-file"));
+}
+
+#[test]
+fn available_gapless_setting_reflects_the_persisted_preference() {
+    let off = gapless_setting_state(false, GaplessPlaybackCapability::Available);
+    assert!(!off.enabled);
+    assert!(off.can_toggle);
+    assert_eq!(off.state_label, "Off");
+    assert_eq!(off.action_label, "Turn on");
+
+    let on = gapless_setting_state(true, GaplessPlaybackCapability::Available);
+    assert!(on.enabled);
+    assert_eq!(on.state_label, "On");
+    assert_eq!(on.action_label, "Turn off");
+}
+
+#[test]
 fn floating_volume_control_keeps_a_fixed_osc_footprint() {
     assert_eq!(VOLUME_RESTING_SIZE, 34);
     assert_eq!(VOLUME_WICK_WIDTH, 18);

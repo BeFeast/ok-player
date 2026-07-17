@@ -123,6 +123,13 @@ if [[ "$PAGE" == "about" ]]; then
     exit 1
   fi
 fi
+
+if [[ "$PAGE" == "playback" ]]; then
+  if ! grep -q 'playback capability: gapless=deferred' "$OUT_DIR/app.log"; then
+    echo "Playback Settings did not report the deferred gapless capability" >&2
+    exit 1
+  fi
+fi
 SMOKE
 then
   echo "Settings smoke failed. Session log: $OUT_DIR/session.log" >&2

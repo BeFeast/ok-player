@@ -3,6 +3,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use okp_core::gapless::{GaplessPlaybackCapability, effective_gapless_enabled};
 use okp_core::settings::{AppearanceTheme, ScreenshotFormat, Settings};
 
 const DEFAULT_VOLUME: f64 = 100.0;
@@ -10,6 +11,7 @@ const MAX_VOLUME: f64 = 130.0;
 const DEFAULT_RESUME: bool = true;
 const DEFAULT_AUTO_ADVANCE: bool = true;
 const DEFAULT_SHUFFLE: bool = false;
+const DEFAULT_GAPLESS: bool = false;
 const REPEAT_OFF: &str = "off";
 const REPEAT_ONE: &str = "one";
 const REPEAT_ALL: &str = "all";
@@ -79,6 +81,13 @@ impl SettingsStore {
 
     pub fn repeat_mode(&self) -> &'static str {
         normalized_repeat(self.data.playback.repeat.as_deref())
+    }
+
+    pub fn gapless_enabled(&self, capability: GaplessPlaybackCapability) -> bool {
+        effective_gapless_enabled(
+            self.data.playback.gapless.unwrap_or(DEFAULT_GAPLESS),
+            capability,
+        )
     }
 
     pub fn audio_normalization_enabled(&self) -> bool {
@@ -208,6 +217,21 @@ impl SettingsStore {
             self.data.playback.repeat = Some(repeat.to_owned());
             self.dirty = true;
         }
+    }
+
+    pub fn set_gapless_enabled(
+        &mut self,
+        capability: GaplessPlaybackCapability,
+        enabled: bool,
+    ) -> bool {
+        if !capability.allows_enablement() {
+            return false;
+        }
+        if self.gapless_enabled(capability) != enabled {
+            self.data.playback.gapless = Some(enabled);
+            self.dirty = true;
+        }
+        true
     }
 
     pub fn set_audio_normalization_enabled(&mut self, enabled: bool) {
@@ -465,6 +489,7 @@ mod tests {
         assert!(settings.auto_advance_enabled());
         assert!(!settings.shuffle_enabled());
         assert_eq!(settings.repeat_mode(), "off");
+        assert!(!settings.gapless_enabled(GaplessPlaybackCapability::Available));
     }
 
     #[test]
@@ -618,6 +643,22 @@ mod tests {
         settings.set_repeat_mode("all");
 
         assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn gapless_setting_is_persisted_only_when_capability_allows_it() {
+        let mut settings = store();
+
+        assert!(!settings.set_gapless_enabled(GaplessPlaybackCapability::Deferred, true));
+        assert_eq!(settings.data.playback.gapless, None);
+        assert!(!settings.dirty);
+
+        assert!(settings.set_gapless_enabled(GaplessPlaybackCapability::Available, true));
+        assert!(settings.gapless_enabled(GaplessPlaybackCapability::Available));
+        assert_eq!(settings.data.playback.gapless, Some(true));
+        assert!(settings.dirty);
+
+        assert!(!settings.gapless_enabled(GaplessPlaybackCapability::Deferred));
     }
 
     #[test]

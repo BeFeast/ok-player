@@ -103,8 +103,8 @@ impl Settings {
     }
 }
 
-/// Playback preferences. The first five fields are the Linux alpha set; the last three
-/// are Windows-only defaults carried for the shared schema.
+/// Playback preferences. The first five fields are the Linux alpha set, `gapless` is
+/// the shared reserved preference, and the last three are Windows-only defaults.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PlaybackSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -117,6 +117,10 @@ pub struct PlaybackSettings {
     pub repeat: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shuffle: Option<bool>,
+    /// User preference reserved for an engine-managed playlist path. Shells must
+    /// capability-gate this value before applying or exposing it as enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gapless: Option<bool>,
     /// Windows `DefaultSpeed` — the speed a newly opened file starts at.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_speed: Option<f64>,
@@ -344,6 +348,7 @@ impl WindowsSettings {
                 auto_advance: None,
                 repeat: None,
                 shuffle: None,
+                gapless: None,
                 default_speed: self.default_speed,
                 skip_step_seconds: self.skip_step,
                 hide_controls_when_paused: self.hide_controls_when_paused,
@@ -475,6 +480,7 @@ mod tests {
     fn a_canonical_document_round_trips() {
         let mut settings = Settings::default();
         settings.playback.volume = Some(55.0);
+        settings.playback.gapless = Some(true);
         settings.appearance.theme = Some("Dark".to_owned());
         settings.screenshots.format = Some(ScreenshotFormat::Webp);
         settings.screenshots.directory = Some("/captures".to_owned());
@@ -484,6 +490,21 @@ mod tests {
         let restored = Settings::load(&json).expect("canonical document should load");
 
         assert_eq!(restored, settings);
+    }
+
+    #[test]
+    fn gapless_preference_persists_in_the_canonical_playback_section() {
+        let raw = r#"{
+            "version": 2,
+            "playback": { "gapless": true }
+        }"#;
+
+        let settings = Settings::load(raw).expect("gapless preference should load");
+        assert_eq!(settings.playback.gapless, Some(true));
+
+        let json = serde_json::to_string(&settings).expect("serialize");
+        assert!(json.contains("\"gapless\":true"));
+        assert_eq!(Settings::load(&json), Some(settings));
     }
 
     #[test]
