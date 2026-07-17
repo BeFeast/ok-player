@@ -471,11 +471,9 @@ pub(crate) fn linux_os_label() -> String {
 }
 
 pub(crate) fn linux_update_install_status() -> &'static str {
-    if linux_update_manager(UpdateChannel::Public).is_ok() {
-        "Self-update enabled"
-    } else if deb_self_install_available() {
-        "Deb self-install"
-    } else {
-        "Deb installer"
+    match linux_install_lane() {
+        CandidateInstallLane::AppImage => "Self-update enabled",
+        CandidateInstallLane::Debian if deb_self_install_available() => "Deb self-install",
+        CandidateInstallLane::Debian => "Deb installer",
     }
 }

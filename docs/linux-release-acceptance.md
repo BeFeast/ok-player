@@ -12,6 +12,12 @@ document covers the general Debian/AppImage evidence levels.
 > `rejected` while completing additional evidence. The public feed is untouched throughout. See
 > [linux-candidate-channel.md](linux-candidate-channel.md).
 
+The installed public predecessor -> defective candidate -> fixed candidate N -> candidate N+1
+gate, failure/recovery matrix, retained migration anchors, and machine-readable cleanup
+authorization are defined in
+[linux-candidate-upgrade-acceptance.md](linux-candidate-upgrade-acceptance.md). This is a live
+GNOME/Wayland operator gate; Xvfb cannot mark it complete.
+
 Linux release evidence is package-specific and has four levels:
 
 1. `model-unit`: pure Rust model/schema tests.

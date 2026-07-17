@@ -60,7 +60,9 @@ recomputes the `.deb`, AppImage, and Velopack full-package hashes, compares
 `releases.linux-candidate.json` to contain exactly one matching candidate Full package. Replacing
 bytes after the build therefore blocks promotion.
 
-For `.deb` installs, the updater first checks that the candidate manifest's SHA matches the build-versioned `SHA256SUMS`, then verifies the downloaded bytes against that manifest. For AppImage installs, the exact manifest-bound Velopack asset is the update source; Velopack verifies its size and digest while downloading.
+Each packaged binary is stamped with its install lane. A `.deb` build routes an accepted newer candidate directly to the manifest-bound Debian package and never asks Velopack whether that package exists. An AppImage build routes only through Velopack; after the candidate pointer has selected a newer version, Velopack's `NoUpdateAvailable` and `RemoteIsEmpty` outcomes are reported as distinct check failures rather than as “up to date.” Development builds use the Debian path for non-destructive local testing.
+
+For `.deb` installs, the updater first checks that the candidate manifest's SHA matches the build-versioned `SHA256SUMS`, then verifies the downloaded bytes against that manifest. For AppImage installs, the exact manifest-bound Velopack asset is the update source; Velopack verifies its size and digest while downloading. Candidate checks log the fetched version/build/SHA, core selection, stamped install lane, Velopack result when applicable, and final route so installed-package evidence can account for every decision stage without exposing local machine paths.
 
 ## Atomic promotion
 
@@ -75,10 +77,13 @@ Promotion uploads immutable, versioned assets first:
 
 ## Retention and rollback
 
-The manifest history stores complete previous accepted recovery points: version/build, `.deb`, Velopack full package, and versioned checksum URL. After the new pointer is live, `okp-core` computes a prune plan that keeps the current candidate plus up to five previous accepted candidates, always retaining at least two once the channel has accumulated them. Unknown assets are not deleted.
+The manifest history stores complete previous accepted recovery points: version/build, `.deb`, Velopack full package, and versioned checksum URL. After the new pointer is live, `okp-core` computes a prune plan that keeps the current candidate plus up to five previous accepted candidates, always retaining at least two once the channel has accumulated them. Temporary migration anchors named by the installed-upgrade acceptance contract are retained in addition to that rolling window until machine-readable cleanup evidence passes. Unknown assets are not deleted.
 
 Rollback is an operator action: republish a retained verified bundle as the current pointer, or mark a bad current bundle `rejected`. The rolling release is mutable; permanent public artifacts remain on normal `linux-v*` releases.
 
 ## Verification boundary
 
 The core end-to-end contract test creates a native bundle fixture and proves exact source SHA → verified package identities → candidate feed → enrolled updater selection while a public-feed fixture remains byte-for-byte unchanged. Real GitHub asset upload/order and a live installed AppImage/`.deb` update remain operator/CI integration surfaces.
+
+The operator procedure and cleanup evidence contract for those installed updates are in
+[`linux-candidate-upgrade-acceptance.md`](linux-candidate-upgrade-acceptance.md).

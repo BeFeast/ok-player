@@ -9,7 +9,23 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::update_selection::compare_versions;
+
 pub const EVIDENCE_SCHEMA_VERSION: u32 = 1;
+pub const CANDIDATE_UPGRADE_EVIDENCE_SCHEMA_VERSION: u32 = 1;
+
+pub const REQUIRED_CANDIDATE_UPGRADE_CHECKS: &[&str] = &[
+    "interrupted-download-rejected",
+    "corrupt-checksum-rejected",
+    "feed-identity-mismatch-rejected",
+    "unavailable-feed-reported-failed",
+    "pkexec-insufficient-privilege-recovery",
+    "pkexec-cancelled-recovery",
+    "rollback-reinstall-recovery",
+    "non-enrolled-install-isolated",
+    "public-feed-unchanged",
+    "no-update-distinct-from-check-failure",
+];
 
 pub const REQUIRED_MODEL_CHECKS: &[&str] = &[
     "rust-workspace-gates",
@@ -97,6 +113,180 @@ pub struct PackageIdentity {
     pub version: String,
     pub commit_sha: String,
     pub artifacts: Vec<PackageArtifact>,
+}
+
+/// Exact identity observed at one point in an installed candidate upgrade
+/// chain. Feed and artifact digests bind the operator result to published bytes
+/// rather than a verbal version claim.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CandidateUpgradeStage {
+    pub version: String,
+    pub commit_sha: String,
+    pub feed_sha256: String,
+    /// SHA-256 of the user-facing `.deb` or AppImage installed at this stage.
+    pub installable_sha256: String,
+    /// SHA-256 of the updater payload selected by the feed. This equals the
+    /// `.deb` digest on Debian and the full `.nupkg` digest on AppImage.
+    pub update_payload_sha256: String,
+}
+
+/// How an unchanged install on the defective candidate reached the first build
+/// containing the updater fix.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CandidateRecoveryPath {
+    /// A feed or artifact correction let the unchanged defective install apply
+    /// the fixed candidate through its built-in updater.
+    FeedSideBuiltIn,
+    /// The old updater could not be repaired remotely, so the operator applied
+    /// one explicitly documented bootstrap package.
+    ExplicitBootstrap,
+}
+
+/// Public predecessor -> defective candidate -> fixed candidate N -> candidate
+/// N+1 evidence for one package lane.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CandidateUpgradeLaneEvidence {
+    pub kind: ArtifactKind,
+    pub public_predecessor: CandidateUpgradeStage,
+    pub defective_candidate: CandidateUpgradeStage,
+    pub recovery_path: CandidateRecoveryPath,
+    pub candidate_n: CandidateUpgradeStage,
+    pub candidate_n_plus_one: CandidateUpgradeStage,
+    pub candidate_n_plus_one_applied_via_settings: bool,
+    pub restarted_version: String,
+    pub restarted_commit_sha: String,
+    pub settings_probe_sha256_before: String,
+    pub settings_probe_sha256_after: String,
+    pub history_probe_sha256_before: String,
+    pub history_probe_sha256_after: String,
+    pub status: EvidenceStatus,
+    #[serde(default)]
+    pub notes: String,
+}
+
+/// One required negative/recovery scenario in the installed updater matrix.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CandidateUpgradeCheck {
+    pub id: String,
+    pub status: EvidenceStatus,
+    #[serde(default)]
+    pub notes: String,
+}
+
+/// Machine-readable gate for deleting historical Linux migration anchors.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CandidateUpgradeEvidence {
+    pub schema_version: u32,
+    pub migration_anchors: Vec<PackageIdentity>,
+    pub public_feed_sha256_before: String,
+    pub public_feed_sha256_after: String,
+    pub lanes: Vec<CandidateUpgradeLaneEvidence>,
+    pub checks: Vec<CandidateUpgradeCheck>,
+}
+
+impl CandidateUpgradeEvidence {
+    /// Validate both installed lanes, exact restart/state identity, public-feed
+    /// isolation, and every required failure/recovery scenario. Only a complete
+    /// PASS is sufficient to remove the migration anchor.
+    pub fn validate_cleanup_ready(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        if self.schema_version != CANDIDATE_UPGRADE_EVIDENCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "unsupported candidate upgrade evidence schema {}, expected {}",
+                self.schema_version, CANDIDATE_UPGRADE_EVIDENCE_SCHEMA_VERSION
+            ));
+        }
+        if self.migration_anchors.len() != 2 {
+            errors.push(
+                "candidate upgrade evidence must contain exactly the public and defective migration anchors"
+                    .to_owned(),
+            );
+        }
+        let mut anchor_versions = BTreeSet::new();
+        for anchor in &self.migration_anchors {
+            validate_package_identity(anchor, &mut errors);
+            if !anchor_versions.insert(anchor.version.as_str()) {
+                errors.push(format!(
+                    "duplicate migration anchor version: {}",
+                    anchor.version
+                ));
+            }
+        }
+        validate_sha256(
+            "public_feed_sha256_before",
+            &self.public_feed_sha256_before,
+            &mut errors,
+        );
+        validate_sha256(
+            "public_feed_sha256_after",
+            &self.public_feed_sha256_after,
+            &mut errors,
+        );
+        if !self
+            .public_feed_sha256_before
+            .eq_ignore_ascii_case(&self.public_feed_sha256_after)
+        {
+            errors.push("public feed changed during candidate acceptance".to_owned());
+        }
+
+        for kind in [ArtifactKind::Debian, ArtifactKind::AppImage] {
+            let matching = self
+                .lanes
+                .iter()
+                .filter(|lane| lane.kind == kind)
+                .collect::<Vec<_>>();
+            if matching.len() != 1 {
+                errors.push(format!(
+                    "candidate upgrade evidence must contain exactly one {kind:?} lane"
+                ));
+                continue;
+            }
+            let lane = matching[0];
+            validate_candidate_upgrade_lane(lane, &mut errors);
+            validate_candidate_migration_anchor(
+                &self.migration_anchors,
+                kind,
+                "public predecessor",
+                &lane.public_predecessor,
+                &mut errors,
+            );
+            validate_candidate_migration_anchor(
+                &self.migration_anchors,
+                kind,
+                "defective candidate",
+                &lane.defective_candidate,
+                &mut errors,
+            );
+        }
+
+        let mut check_ids = BTreeSet::new();
+        for check in &self.checks {
+            if !check_ids.insert(check.id.as_str()) {
+                errors.push(format!("duplicate candidate upgrade check: {}", check.id));
+            }
+        }
+        for required in REQUIRED_CANDIDATE_UPGRADE_CHECKS {
+            let matching = self
+                .checks
+                .iter()
+                .filter(|check| check.id == *required)
+                .collect::<Vec<_>>();
+            if matching.len() != 1 {
+                errors.push(format!(
+                    "candidate upgrade check {required} must appear exactly once"
+                ));
+            } else if matching[0].status != EvidenceStatus::Pass {
+                errors.push(format!("candidate upgrade check {required} is not PASS"));
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -403,6 +593,171 @@ fn validate_package_identity(package: &PackageIdentity, errors: &mut Vec<String>
     }
 }
 
+fn validate_candidate_upgrade_lane(lane: &CandidateUpgradeLaneEvidence, errors: &mut Vec<String>) {
+    for (name, stage) in [
+        ("public_predecessor", &lane.public_predecessor),
+        ("defective_candidate", &lane.defective_candidate),
+        ("candidate_n", &lane.candidate_n),
+        ("candidate_n_plus_one", &lane.candidate_n_plus_one),
+    ] {
+        if stage.version.trim().is_empty() {
+            errors.push(format!("{:?} {name} version is empty", lane.kind));
+        }
+        if stage.commit_sha.len() != 40
+            || !stage
+                .commit_sha
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            errors.push(format!(
+                "{:?} {name} commit_sha must be a full 40-character hex SHA",
+                lane.kind
+            ));
+        }
+        validate_sha256(
+            &format!("{:?} {name} feed_sha256", lane.kind),
+            &stage.feed_sha256,
+            errors,
+        );
+        validate_sha256(
+            &format!("{:?} {name} installable_sha256", lane.kind),
+            &stage.installable_sha256,
+            errors,
+        );
+        validate_sha256(
+            &format!("{:?} {name} update_payload_sha256", lane.kind),
+            &stage.update_payload_sha256,
+            errors,
+        );
+    }
+
+    if compare_versions(
+        &lane.defective_candidate.version,
+        &lane.public_predecessor.version,
+    ) != std::cmp::Ordering::Greater
+    {
+        errors.push(format!(
+            "{:?} defective candidate is not newer than its public predecessor",
+            lane.kind
+        ));
+    }
+    if compare_versions(&lane.candidate_n.version, &lane.defective_candidate.version)
+        != std::cmp::Ordering::Greater
+    {
+        errors.push(format!(
+            "{:?} candidate N is not newer than the defective candidate",
+            lane.kind
+        ));
+    }
+    if compare_versions(
+        &lane.candidate_n_plus_one.version,
+        &lane.candidate_n.version,
+    ) != std::cmp::Ordering::Greater
+    {
+        errors.push(format!(
+            "{:?} candidate N+1 is not newer than candidate N",
+            lane.kind
+        ));
+    }
+    if !lane.candidate_n_plus_one_applied_via_settings {
+        errors.push(format!(
+            "{:?} candidate N+1 was not applied through Settings",
+            lane.kind
+        ));
+    }
+    if lane.restarted_version != lane.candidate_n_plus_one.version
+        || lane.restarted_commit_sha != lane.candidate_n_plus_one.commit_sha
+    {
+        errors.push(format!(
+            "{:?} restart identity does not match candidate N+1",
+            lane.kind
+        ));
+    }
+    for (name, value) in [
+        (
+            "settings_probe_sha256_before",
+            &lane.settings_probe_sha256_before,
+        ),
+        (
+            "settings_probe_sha256_after",
+            &lane.settings_probe_sha256_after,
+        ),
+        (
+            "history_probe_sha256_before",
+            &lane.history_probe_sha256_before,
+        ),
+        (
+            "history_probe_sha256_after",
+            &lane.history_probe_sha256_after,
+        ),
+    ] {
+        validate_sha256(&format!("{:?} {name}", lane.kind), value, errors);
+    }
+    if !lane
+        .settings_probe_sha256_before
+        .eq_ignore_ascii_case(&lane.settings_probe_sha256_after)
+    {
+        errors.push(format!("{:?} settings changed across upgrades", lane.kind));
+    }
+    if !lane
+        .history_probe_sha256_before
+        .eq_ignore_ascii_case(&lane.history_probe_sha256_after)
+    {
+        errors.push(format!("{:?} history changed across upgrades", lane.kind));
+    }
+    if lane.status != EvidenceStatus::Pass {
+        errors.push(format!(
+            "{:?} candidate upgrade lane is not PASS",
+            lane.kind
+        ));
+    }
+    if lane.notes.trim().is_empty() {
+        errors.push(format!(
+            "{:?} candidate upgrade lane must document its {:?} recovery path",
+            lane.kind, lane.recovery_path
+        ));
+    }
+}
+
+fn validate_candidate_migration_anchor(
+    anchors: &[PackageIdentity],
+    kind: ArtifactKind,
+    label: &str,
+    stage: &CandidateUpgradeStage,
+    errors: &mut Vec<String>,
+) {
+    let matching = anchors
+        .iter()
+        .filter(|anchor| anchor.version == stage.version && anchor.commit_sha == stage.commit_sha)
+        .collect::<Vec<_>>();
+    if matching.len() != 1 {
+        errors.push(format!(
+            "{kind:?} {label} does not match exactly one retained migration anchor"
+        ));
+        return;
+    }
+    let artifacts = matching[0]
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.kind == kind)
+        .collect::<Vec<_>>();
+    if artifacts.len() == 1
+        && !artifacts[0]
+            .sha256
+            .eq_ignore_ascii_case(&stage.installable_sha256)
+    {
+        errors.push(format!(
+            "{kind:?} {label} artifact does not match its retained migration anchor"
+        ));
+    }
+}
+
+fn validate_sha256(name: &str, value: &str, errors: &mut Vec<String>) {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        errors.push(format!("{name} must be 64 hex characters"));
+    }
+}
+
 fn rows_by_state(rows: &[EvidenceRow]) -> BTreeMap<&str, Vec<&EvidenceRow>> {
     let mut states = BTreeMap::<&str, Vec<&EvidenceRow>>::new();
     for row in rows {
@@ -515,10 +870,151 @@ mod tests {
         manifest
     }
 
+    fn passing_candidate_upgrade_evidence() -> CandidateUpgradeEvidence {
+        let stage = |version: &str, digest: char| CandidateUpgradeStage {
+            version: version.to_owned(),
+            commit_sha: digest.to_string().repeat(40),
+            feed_sha256: digest.to_string().repeat(64),
+            installable_sha256: digest.to_string().repeat(64),
+            update_payload_sha256: digest.to_string().repeat(64),
+        };
+        let lane = |kind| {
+            CandidateUpgradeLaneEvidence {
+            kind,
+            public_predecessor: stage("0.1.0-linux-alpha.112", 'a'),
+            defective_candidate: stage("0.11.0-beta.0.10", 'b'),
+            recovery_path: CandidateRecoveryPath::ExplicitBootstrap,
+            candidate_n: stage("0.11.0-beta.0.12", 'c'),
+            candidate_n_plus_one: stage("0.11.0-beta.0.13", 'f'),
+            candidate_n_plus_one_applied_via_settings: true,
+            restarted_version: "0.11.0-beta.0.13".to_owned(),
+            restarted_commit_sha: "f".repeat(40),
+            settings_probe_sha256_before: "d".repeat(64),
+            settings_probe_sha256_after: "d".repeat(64),
+            history_probe_sha256_before: "e".repeat(64),
+            history_probe_sha256_after: "e".repeat(64),
+            status: EvidenceStatus::Pass,
+            notes: "Installed candidate N once as the documented recovery bootstrap, then applied candidate N+1 through Settings."
+                .to_owned(),
+        }
+        };
+        CandidateUpgradeEvidence {
+            schema_version: CANDIDATE_UPGRADE_EVIDENCE_SCHEMA_VERSION,
+            migration_anchors: {
+                let mut public = package();
+                public.version = "0.1.0-linux-alpha.112".to_owned();
+                public.commit_sha = "a".repeat(40);
+                for artifact in &mut public.artifacts {
+                    artifact.sha256 = "a".repeat(64);
+                }
+                let mut private = package();
+                private.version = "0.11.0-beta.0.10".to_owned();
+                private.commit_sha = "b".repeat(40);
+                for artifact in &mut private.artifacts {
+                    artifact.sha256 = "b".repeat(64);
+                }
+                vec![public, private]
+            },
+            public_feed_sha256_before: "f".repeat(64),
+            public_feed_sha256_after: "f".repeat(64),
+            lanes: vec![lane(ArtifactKind::Debian), lane(ArtifactKind::AppImage)],
+            checks: REQUIRED_CANDIDATE_UPGRADE_CHECKS
+                .iter()
+                .map(|id| CandidateUpgradeCheck {
+                    id: (*id).to_owned(),
+                    status: EvidenceStatus::Pass,
+                    notes: String::new(),
+                })
+                .collect(),
+        }
+    }
+
     #[test]
     fn complete_exact_manifest_is_release_ready() {
         let manifest = passing_manifest();
         assert_eq!(manifest.validate_release_ready(&package()), Ok(()));
+    }
+
+    #[test]
+    fn complete_candidate_upgrade_evidence_unblocks_anchor_cleanup() {
+        assert_eq!(
+            passing_candidate_upgrade_evidence().validate_cleanup_ready(),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn candidate_upgrade_evidence_rejects_state_loss_and_public_feed_drift() {
+        let mut evidence = passing_candidate_upgrade_evidence();
+        evidence.public_feed_sha256_after = "1".repeat(64);
+        evidence.lanes[0].history_probe_sha256_after = "2".repeat(64);
+
+        let errors = evidence.validate_cleanup_ready().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("public feed changed"))
+        );
+        assert!(errors.iter().any(|error| error.contains("history changed")));
+    }
+
+    #[test]
+    fn candidate_upgrade_evidence_requires_every_failure_scenario() {
+        let mut evidence = passing_candidate_upgrade_evidence();
+        evidence
+            .checks
+            .retain(|check| check.id != "pkexec-cancelled-recovery");
+
+        let errors = evidence.validate_cleanup_ready().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("pkexec-cancelled-recovery"))
+        );
+    }
+
+    #[test]
+    fn candidate_upgrade_evidence_requires_defective_install_recovery_accounting() {
+        let mut evidence = passing_candidate_upgrade_evidence();
+        evidence.lanes[0].notes.clear();
+        evidence.lanes[1].candidate_n = evidence.lanes[1].defective_candidate.clone();
+        evidence.lanes[1].candidate_n_plus_one_applied_via_settings = false;
+
+        let errors = evidence.validate_cleanup_ready().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("must document its ExplicitBootstrap recovery path"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("not newer than the defective candidate"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("candidate N+1 was not applied through Settings"))
+        );
+    }
+
+    #[test]
+    fn candidate_upgrade_evidence_binds_lane_stages_to_retained_anchor_bytes() {
+        let mut evidence = passing_candidate_upgrade_evidence();
+        evidence.migration_anchors[0].artifacts[0].sha256 = "0".repeat(64);
+        evidence.lanes[1].defective_candidate.commit_sha = "1".repeat(40);
+
+        let errors = evidence.validate_cleanup_ready().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("public predecessor artifact"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("defective candidate does not match"))
+        );
     }
 
     #[test]

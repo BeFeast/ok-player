@@ -3532,6 +3532,15 @@ fn candidate_appimage_source_uses_the_manifest_bound_full_package() {
 }
 
 #[test]
+fn linux_packages_stamp_their_update_install_lane() {
+    let deb = include_str!("../../../../scripts/package-linux-deb.sh");
+    let appimage = include_str!("../../../../scripts/package-linux-velopack.sh");
+
+    assert!(deb.contains("OKP_PACKAGE_KIND=deb"));
+    assert!(appimage.contains("OKP_PACKAGE_KIND=appimage"));
+}
+
+#[test]
 fn candidate_builder_defaults_below_beta_one_until_the_base_is_overridden() {
     use okp_core::candidate_build::candidate_version;
     use okp_core::update_selection::compare_versions;

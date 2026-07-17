@@ -25,7 +25,7 @@ fi
 
 export DOTNET_ROOT="${DOTNET_ROOT:-$HOME/.dotnet}"
 
-OKP_BUILD_VERSION="$VERSION" cargo build \
+OKP_BUILD_VERSION="$VERSION" OKP_PACKAGE_KIND=appimage cargo build \
   --manifest-path "$ROOT/rust/Cargo.toml" \
   --release \
   -p okp-linux-gtk \

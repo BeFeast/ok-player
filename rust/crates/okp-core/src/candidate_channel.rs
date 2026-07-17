@@ -44,6 +44,11 @@ pub const CANDIDATE_CHANNEL: &str = "candidate";
 /// [`CandidateFeed::has_sufficient_recovery`] check pins the invariant.
 pub const MIN_RETAINED_PREVIOUS: usize = 2;
 
+/// Candidate versions that remain on the rolling surface until their installed
+/// migration evidence passes. Remove an entry only with a completed
+/// `CandidateUpgradeEvidence` cleanup authorization.
+pub const TEMPORARY_MIGRATION_ANCHORS: &[&str] = &["0.11.0-beta.0.10"];
+
 /// Acceptance state of a candidate build. Only [`AcceptanceStatus::Accepted`]
 /// builds are offered to enrolled installs; `Pending` (evidence not yet
 /// complete) and `Rejected` (failed acceptance) are discoverable in the feed for
@@ -238,6 +243,112 @@ pub struct CandidateUpdate {
     pub sums_url: Option<String>,
 }
 
+/// Installed package lane that must apply a selected Linux candidate. The
+/// package build stamps this identity into the binary so a Debian install never
+/// asks Velopack to decide whether its `.deb` update exists, and an AppImage
+/// install never falls through to a privileged Debian installer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CandidateInstallLane {
+    Debian,
+    AppImage,
+}
+
+/// Velopack's result after the accepted candidate manifest has already proved
+/// that a newer AppImage candidate exists. Keeping the two empty outcomes
+/// separate prevents either one from being presented as a genuine
+/// channel-level "up to date" result.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CandidateAppImageCheck {
+    PendingRestart { version: String, sha256: String },
+    UpdateAvailable { version: String, sha256: String },
+    NoUpdateAvailable,
+    RemoteIsEmpty,
+}
+
+/// Package-specific action selected for an accepted, newer candidate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CandidateUpdateRoute {
+    Debian,
+    PendingAppImage,
+    AppImage,
+}
+
+/// A package-lane result that contradicts the accepted candidate pointer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CandidateUpdateRouteError {
+    MissingAppImageCheck,
+    AppImageIdentityMismatch,
+    AppImageReportedNoUpdate,
+    AppImageRemoteIsEmpty,
+}
+
+impl std::fmt::Display for CandidateUpdateRouteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingAppImageCheck => write!(f, "candidate AppImage lane was not checked"),
+            Self::AppImageIdentityMismatch => write!(
+                f,
+                "candidate AppImage feed does not match candidate.linux.json"
+            ),
+            Self::AppImageReportedNoUpdate => write!(
+                f,
+                "candidate AppImage lane reported no update for a newer accepted candidate"
+            ),
+            Self::AppImageRemoteIsEmpty => write!(
+                f,
+                "candidate AppImage lane reported an empty feed for a newer accepted candidate"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for CandidateUpdateRouteError {}
+
+/// Routes an already-selected candidate through the installed package lane.
+/// Debian installs always receive the manifest-bound `.deb`; only AppImage
+/// installs consult Velopack, whose result must repeat the exact version and
+/// SHA-256 from the accepted candidate pointer.
+pub fn route_candidate_update(
+    candidate: &CandidateUpdate,
+    lane: CandidateInstallLane,
+    appimage_check: Option<&CandidateAppImageCheck>,
+) -> Result<CandidateUpdateRoute, CandidateUpdateRouteError> {
+    if lane == CandidateInstallLane::Debian {
+        return Ok(CandidateUpdateRoute::Debian);
+    }
+
+    match appimage_check.ok_or(CandidateUpdateRouteError::MissingAppImageCheck)? {
+        CandidateAppImageCheck::PendingRestart { version, sha256 } => {
+            if candidate_appimage_identity_matches(candidate, version, sha256) {
+                Ok(CandidateUpdateRoute::PendingAppImage)
+            } else {
+                Err(CandidateUpdateRouteError::AppImageIdentityMismatch)
+            }
+        }
+        CandidateAppImageCheck::UpdateAvailable { version, sha256 } => {
+            if candidate_appimage_identity_matches(candidate, version, sha256) {
+                Ok(CandidateUpdateRoute::AppImage)
+            } else {
+                Err(CandidateUpdateRouteError::AppImageIdentityMismatch)
+            }
+        }
+        CandidateAppImageCheck::NoUpdateAvailable => {
+            Err(CandidateUpdateRouteError::AppImageReportedNoUpdate)
+        }
+        CandidateAppImageCheck::RemoteIsEmpty => {
+            Err(CandidateUpdateRouteError::AppImageRemoteIsEmpty)
+        }
+    }
+}
+
+fn candidate_appimage_identity_matches(
+    candidate: &CandidateUpdate,
+    version: &str,
+    sha256: &str,
+) -> bool {
+    version == candidate.version && sha256.eq_ignore_ascii_case(&candidate.appimage.sha256)
+}
+
 /// Selects the feed's candidate when an *enrolled* install should install it:
 /// the feed is a candidate feed, the build is `Accepted`, and its version is
 /// strictly newer than `current_version`. Returns `None` otherwise — a
@@ -385,6 +496,115 @@ mod tests {
                 "0.11.0-beta.1"
             )
             .is_none()
+        );
+    }
+
+    #[test]
+    fn accepted_beta_0_11_routes_beta_0_10_through_each_install_lane() {
+        let exact_feed = r#"
+        {
+          "channel": "candidate",
+          "version": "0.11.0-beta.0.11",
+          "build": 11,
+          "commit_sha": "6964a63cafc1695e8a0269966343fb336d632081",
+          "timestamp_utc": "2026-07-17T19:08:17Z",
+          "acceptance": "accepted",
+          "package": {
+            "name": "ok-player_0.11.0-beta.0.11_amd64.deb",
+            "url": "https://example.invalid/ok-player_0.11.0-beta.0.11_amd64.deb",
+            "size": 3248832,
+            "sha256": "5125384bead5f7aa0a0f0d527f962dbf3aa51d936eb0e9debb7425073981f0bb"
+          },
+          "appimage": {
+            "package_id": "com.befeast.okplayer",
+            "name": "com.befeast.okplayer-0.11.0-beta.0.11-linux-candidate-full.nupkg",
+            "url": "https://example.invalid/com.befeast.okplayer-0.11.0-beta.0.11-linux-candidate-full.nupkg",
+            "size": 7197854,
+            "sha256": "7b9911befd71c8a62ffa1a73d437805e06f772822441b7835ecba37abe14686d",
+            "sha1": "8D2BEFC37D71A18E75C053A75B56F7CF9E868F3A"
+          },
+          "sha256sums_url": "https://example.invalid/SHA256SUMS-11.txt"
+        }
+        "#;
+        let feed: CandidateFeed = serde_json::from_str(exact_feed).unwrap();
+        let candidate = select_candidate_update_from_feed(feed, "0.11.0-beta.0.10")
+            .expect("the accepted .11 pointer must be newer than installed .10");
+
+        assert_eq!(
+            route_candidate_update(&candidate, CandidateInstallLane::Debian, None),
+            Ok(CandidateUpdateRoute::Debian),
+            "a Debian install must not let Velopack override the selected .deb"
+        );
+
+        let appimage = CandidateAppImageCheck::UpdateAvailable {
+            version: candidate.version.clone(),
+            sha256: candidate.appimage.sha256.to_ascii_uppercase(),
+        };
+        assert_eq!(
+            route_candidate_update(&candidate, CandidateInstallLane::AppImage, Some(&appimage)),
+            Ok(CandidateUpdateRoute::AppImage)
+        );
+    }
+
+    #[test]
+    fn newer_candidate_keeps_velopack_empty_outcomes_distinct() {
+        let candidate = select_candidate_update_from_feed(
+            feed("0.11.0-beta.0.11", 11, AcceptanceStatus::Accepted),
+            "0.11.0-beta.0.10",
+        )
+        .unwrap();
+
+        assert_eq!(
+            route_candidate_update(
+                &candidate,
+                CandidateInstallLane::AppImage,
+                Some(&CandidateAppImageCheck::NoUpdateAvailable)
+            ),
+            Err(CandidateUpdateRouteError::AppImageReportedNoUpdate)
+        );
+        assert_eq!(
+            route_candidate_update(
+                &candidate,
+                CandidateInstallLane::AppImage,
+                Some(&CandidateAppImageCheck::RemoteIsEmpty)
+            ),
+            Err(CandidateUpdateRouteError::AppImageRemoteIsEmpty)
+        );
+    }
+
+    #[test]
+    fn appimage_route_requires_a_manifest_matching_velopack_result() {
+        let candidate = select_candidate_update_from_feed(
+            feed("0.11.0-beta.0.11", 11, AcceptanceStatus::Accepted),
+            "0.11.0-beta.0.10",
+        )
+        .unwrap();
+
+        assert_eq!(
+            route_candidate_update(&candidate, CandidateInstallLane::AppImage, None),
+            Err(CandidateUpdateRouteError::MissingAppImageCheck)
+        );
+        assert_eq!(
+            route_candidate_update(
+                &candidate,
+                CandidateInstallLane::AppImage,
+                Some(&CandidateAppImageCheck::UpdateAvailable {
+                    version: "0.11.0-beta.0.12".to_owned(),
+                    sha256: candidate.appimage.sha256.clone(),
+                })
+            ),
+            Err(CandidateUpdateRouteError::AppImageIdentityMismatch)
+        );
+        assert_eq!(
+            route_candidate_update(
+                &candidate,
+                CandidateInstallLane::AppImage,
+                Some(&CandidateAppImageCheck::UpdateAvailable {
+                    version: candidate.version.clone(),
+                    sha256: "0".repeat(64),
+                })
+            ),
+            Err(CandidateUpdateRouteError::AppImageIdentityMismatch)
         );
     }
 

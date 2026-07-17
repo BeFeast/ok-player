@@ -16,6 +16,7 @@ fn main() {
         println!("cargo:rerun-if-changed=src/native_wayland_video.c");
     }
     println!("cargo:rerun-if-env-changed=OKP_BUILD_VERSION");
+    println!("cargo:rerun-if-env-changed=OKP_PACKAGE_KIND");
     println!("cargo:rerun-if-changed=../../../.git/HEAD");
     println!("cargo:rerun-if-changed=../../../.git/refs/heads/main");
 
@@ -23,6 +24,13 @@ fn main() {
         .or_else(|_| env::var("CARGO_PKG_VERSION"))
         .unwrap_or_else(|_| "0.0.0-dev".to_owned());
     println!("cargo:rustc-env=OKP_BUILD_VERSION={version}");
+
+    let package_kind = env::var("OKP_PACKAGE_KIND").unwrap_or_else(|_| "development".to_owned());
+    assert!(
+        matches!(package_kind.as_str(), "deb" | "appimage" | "development"),
+        "OKP_PACKAGE_KIND must be deb, appimage, or development"
+    );
+    println!("cargo:rustc-env=OKP_PACKAGE_KIND={package_kind}");
 
     let sha = Command::new("git")
         .args(["rev-parse", "--short=7", "HEAD"])
