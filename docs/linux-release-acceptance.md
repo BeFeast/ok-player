@@ -7,9 +7,10 @@ document covers the general Debian/AppImage evidence levels.
 
 > **Candidate channel:** QA candidates for explicitly enrolled installs are published to the rolling
 > `linux-candidate` pre-release, not to a permanent `linux-v*` Release (issue #339). A candidate is
-> published `pending`, its acceptance evidence is completed against that exact build, and it is then
-> re-published `accepted` to promote it to the enrolled fleet. The public feed is untouched
-> throughout. See [linux-candidate-channel.md](linux-candidate-channel.md).
+> published from one exact native-builder bundle. The scheduled path marks a bundle `accepted` only
+> after its required build gates pass; an operator may use manual dispatch to publish `pending` or
+> `rejected` while completing additional evidence. The public feed is untouched throughout. See
+> [linux-candidate-channel.md](linux-candidate-channel.md).
 
 Linux release evidence is package-specific and has four levels:
 

@@ -41,8 +41,10 @@ if ! flock -n 9; then
   exit 1
 fi
 
-# Re-validate: a non-promotable bundle must never move the feed.
-"$CANDIDATE_CLI" promotable --record "$RECORD"
+# Recompute the bundle's package/checksum/Velopack identities immediately
+# before promotion. A post-build byte replacement must never advance the
+# marker or reach the rolling publisher.
+"$CANDIDATE_CLI" verify-bundle --bundle "$BUNDLE"
 
 SHA="$(jq -r '.source_sha' "$RECORD")"
 [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "could not read source_sha from $RECORD" >&2; exit 1; }

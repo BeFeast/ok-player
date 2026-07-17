@@ -1,201 +1,101 @@
 name: Linux Candidate
 
-# Rolling Linux candidate channel (issue #339).
-#
-# QA candidates are development checkpoints, not products. The public Linux release pipeline
-# (release-linux.yml) mints one permanent GitHub Release per build; this workflow instead publishes
-# every candidate to a SINGLE mutable "rolling" pre-release tagged `linux-candidate`, clobbering its
-# assets in place. No new Release is created per build, so the release list stops accumulating
-# throwaway checkpoints. Only an explicitly enrolled QA install discovers this channel
-# (Settings.updates.channel == candidate, or OKP_LINUX_UPDATE_CHANNEL=candidate); the public feed is
-# never touched here, so it stays byte-for-byte the fleet's only source.
-#
-# Isolation from the public feed is structural: this workflow never runs scripts/build-linux-feed.sh
-# and never deploys to GitHub Pages. It writes only the `linux-candidate` pre-release's assets.
+# Scheduled native-builder handoff for the rolling QA channel (issues #339/#340).
+# The self-hosted Ubuntu x86_64 builder produces one verified bundle from exact
+# origin/main bytes; publication consumes that bundle without rebuilding. The
+# public GitHub Pages feeds are never read or written by this workflow.
 
 on:
+  schedule:
+    - cron: '*/15 * * * *'
   workflow_dispatch:
     inputs:
-      version:
-        description: Candidate SemVer identity, e.g. 0.11.0-beta.0.108 (pre-beta.1) or 0.11.0-beta.1
-        required: true
-        type: string
       acceptance:
-        description: Acceptance status recorded in the manifest; only "accepted" is offered to enrolled installs
+        description: Candidate acceptance recorded in the rolling manifest
         required: true
-        default: pending
+        default: accepted
         type: choice
         options:
-          - pending
           - accepted
+          - pending
           - rejected
+      republish_last_bundle:
+        description: Republish the last verified bundle even when its SHA is already promoted
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: write
 
 concurrency:
-  # Serialize candidate publishes so two runs never race on the single rolling pre-release.
-  group: linux-candidate
+  group: linux-candidate-native
   cancel-in-progress: false
 
-env:
-  CANDIDATE_TAG: linux-candidate
-
 jobs:
-  candidate:
-    name: Publish rolling candidate
-    runs-on: ubuntu-latest
+  build-and-publish:
+    name: Native build and rolling publish
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Linux dependencies
+      - name: Build latest eligible main SHA
+        env:
+          CC: /usr/bin/cc
+        run: ./scripts/build-linux-candidate.sh
+
+      - name: Resolve verified bundle handoff
+        id: handoff
+        shell: bash
+        env:
+          FORCE_REPUBLISH: ${{ inputs.republish_last_bundle || 'false' }}
+          REQUESTED_ACCEPTANCE: ${{ inputs.acceptance || 'accepted' }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev libmpv-dev libgl1-mesa-dev libegl1-mesa-dev libglx-dev mpv ffmpeg cmake ninja-build dpkg-dev unzip jq
+          set -euo pipefail
+          state_dir="${OKP_CANDIDATE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/ok-player-candidate}"
+          bundle="$(cat "$state_dir/last-bundle.path")"
+          source_sha="$(jq -r '.source_sha' "$bundle/candidate-build.json")"
+          promoted_sha="$(cat "$state_dir/last-promoted.sha" 2>/dev/null || true)"
+          should_publish=false
+          if [[ "$source_sha" != "$promoted_sha" || "$FORCE_REPUBLISH" == "true" ]]; then
+            should_publish=true
+          fi
+          echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "acceptance=$REQUESTED_ACCEPTANCE" >> "$GITHUB_OUTPUT"
+          echo "should_publish=$should_publish" >> "$GITHUB_OUTPUT"
 
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain: stable
-          cache-workspaces: rust
-
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '9.0.x'
-
-      - name: Install Velopack CLI
-        run: dotnet tool install -g vpk
-
-      - name: Rust workspace gates
-        working-directory: rust
+      - name: Publish exact native bundle
+        if: steps.handoff.outputs.should_publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          CC=/usr/bin/cc cargo fmt --all -- --check
-          CC=/usr/bin/cc cargo clippy --workspace --all-targets -- -D warnings
-          CC=/usr/bin/cc cargo test --workspace
+          state_dir="${OKP_CANDIDATE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/ok-player-candidate}"
+          "$state_dir/checkout/scripts/publish-linux-candidate.sh" \
+            "${{ steps.handoff.outputs.bundle }}" \
+            "${{ github.repository }}" \
+            "${{ steps.handoff.outputs.acceptance }}"
 
-      - name: Build Velopack AppImage lane
-        run: ./scripts/package-linux-velopack.sh "${{ inputs.version }}"
-
-      - name: Build Debian package lane
-        run: ./scripts/package-linux-deb.sh "${{ inputs.version }}"
-
-      # Same user-facing checksum manifest the .deb self-updater verifies against (issue #132); the
-      # candidate feed generator cross-checks the .deb's real digest against this and refuses to
-      # publish a feed/package SHA mismatch.
-      - name: Generate SHA256SUMS
+      - name: Heartbeat and handoff summary
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
+          state_dir="${OKP_CANDIDATE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/ok-player-candidate}"
+          heartbeat="$(tail -n 1 "$state_dir/heartbeat.jsonl")"
+          phase="$(jq -r '.phase' <<<"$heartbeat")"
+          timestamp="$(jq -r '.unix_seconds' <<<"$heartbeat")"
+          age="$(( $(date -u +%s) - timestamp ))"
+          stall_after="$(cat "$state_dir/stall-after-seconds")"
+          cli="$state_dir/checkout/rust/target/release/okp-candidate"
+          activity="$($cli classify --phase "$phase" --age-seconds "$age" --stall-after "$stall_after" | jq -r '.')"
           {
-            (cd artifacts/linux/deb && sha256sum -- *.deb)
-            (cd artifacts/linux/velopack && sha256sum -- "OK-Player-${{ inputs.version }}-x86_64.AppImage")
-          } > artifacts/linux/SHA256SUMS
-          cat artifacts/linux/SHA256SUMS
-
-      # Ensure the single rolling pre-release exists. Creating it is idempotent; on subsequent runs
-      # this is a no-op and the existing tag/assets stay put. It is a pre-release, never promoted to
-      # a full Release, and it is reused for every candidate — the whole point of a rolling surface.
-      - name: Ensure rolling pre-release exists
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          if ! gh release view "${CANDIDATE_TAG}" >/dev/null 2>&1; then
-            gh release create "${CANDIDATE_TAG}" \
-              --prerelease \
-              --title "OK Player Linux candidate (rolling)" \
-              --notes "Mutable rolling QA candidate. Assets are replaced in place per build; do not treat this as a permanent release (issue #339)."
-          fi
-
-      # Pull the current candidate manifest (if any) so the new manifest can fold it into history for
-      # rollback. A missing manifest (first ever candidate) is fine — the generator starts empty.
-      - name: Fetch previous candidate manifest
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          if gh release download "${CANDIDATE_TAG}" --pattern candidate.linux.json --output previous.candidate.linux.json --clobber 2>/dev/null; then
-            echo "Found previous candidate manifest."
-          else
-            echo "No previous candidate manifest; starting a fresh rolling history."
-            : > previous.candidate.linux.json
-          fi
-
-      - name: Assemble candidate feed
-        run: |
-          set -euo pipefail
-          prev_arg=()
-          if [[ -s previous.candidate.linux.json ]]; then
-            prev_arg=(--previous previous.candidate.linux.json)
-          fi
-          ./scripts/build-linux-candidate-feed.sh \
-            --version "${{ inputs.version }}" \
-            --build "${{ github.run_number }}" \
-            --commit "${{ github.sha }}" \
-            --acceptance "${{ inputs.acceptance }}" \
-            --deb "artifacts/linux/deb/ok-player_${{ inputs.version }}_amd64.deb" \
-            --sha256sums artifacts/linux/SHA256SUMS \
-            --base-url "https://github.com/${{ github.repository }}/releases/download/${{ env.CANDIDATE_TAG }}" \
-            "${prev_arg[@]}" \
-            --output candidate.linux.json
-
-      # Publish order makes an interrupted promotion safe. The .deb, AppImage, and SHA256SUMS go up
-      # first; candidate.linux.json — the pointer the fleet reads — is uploaded LAST. If the run dies
-      # before that final step, the previous candidate.linux.json still points at the previous,
-      # still-present package, so an enrolled install keeps updating to a known-good build.
-      - name: Upload candidate package and checksums
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          gh release upload "${CANDIDATE_TAG}" "artifacts/linux/deb/ok-player_${{ inputs.version }}_amd64.deb" --clobber
-          gh release upload "${CANDIDATE_TAG}" "artifacts/linux/velopack/OK-Player-${{ inputs.version }}-x86_64.AppImage" --clobber
-          gh release upload "${CANDIDATE_TAG}" artifacts/linux/SHA256SUMS --clobber
-
-      # Retention: keep the current package plus the packages named in the new manifest's history,
-      # and delete every other .deb/.AppImage asset on the rolling release. This bounds the surface
-      # while guaranteeing the current candidate plus at least two previous known-good packages
-      # remain for recovery. candidate.linux.json and SHA256SUMS are never pruned.
-      - name: Prune superseded packages
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          # Keep every retained build's BOTH artifacts. History stores .deb names; derive each
-          # build's version from ok-player_<version>_amd64.deb and keep the matching AppImage too,
-          # so the current candidate's AppImage is never pruned right after upload.
-          mapfile -t keep_versions < <(jq -r '[.package.name] + [.history[].name] | .[] | sub("^ok-player_"; "") | sub("_amd64\\.deb$"; "")' candidate.linux.json)
-          keep=()
-          for v in "${keep_versions[@]}"; do
-            keep+=("ok-player_${v}_amd64.deb" "OK-Player-${v}-x86_64.AppImage")
-          done
-          mapfile -t assets < <(gh release view "${CANDIDATE_TAG}" --json assets --jq '.assets[].name')
-          for asset in "${assets[@]}"; do
-            case "$asset" in
-              candidate.linux.json|SHA256SUMS) continue ;;
-            esac
-            if printf '%s\n' "${keep[@]}" | grep -Fxq -- "$asset"; then
-              continue
-            fi
-            # Only prune package artifacts; leave anything unexpected in place for an operator to see.
-            case "$asset" in
-              *.deb|*.AppImage)
-                echo "Pruning superseded asset: $asset"
-                gh release delete-asset "${CANDIDATE_TAG}" "$asset" --yes ;;
-              *) echo "Leaving unrecognized asset in place: $asset" ;;
-            esac
-          done
-
-      - name: Publish rolling pointer
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${CANDIDATE_TAG}" candidate.linux.json --clobber
-
-      - name: Summary
-        run: |
-          {
-            echo "### Linux candidate published"
+            echo "### Linux candidate handoff"
             echo ""
-            jq -r '"- version: `\(.version)`\n- build: `\(.build)`\n- acceptance: `\(.acceptance)`\n- retained previous: `\(.history | length)`"' candidate.linux.json
-            echo ""
-            echo "Rolling surface: \`${CANDIDATE_TAG}\` (mutable pre-release). The public feed is untouched."
+            echo "- source SHA: \`${{ steps.handoff.outputs.source_sha }}\`"
+            echo "- publication requested: \`${{ steps.handoff.outputs.should_publish }}\`"
+            echo "- heartbeat activity: \`${activity}\`"
+            echo "- rolling surface: \`linux-candidate\`"
+            echo "- public feed: untouched"
           } >> "$GITHUB_STEP_SUMMARY"

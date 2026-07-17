@@ -75,6 +75,32 @@ pub struct CandidatePackage {
     pub sha256: String,
 }
 
+/// Velopack full-package identity for an AppImage candidate. These fields map
+/// directly to one `releases.linux-candidate.json` full asset, but live in the
+/// candidate manifest so both Linux package lanes are gated by the same
+/// accepted, atomically-published pointer.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CandidateAppImage {
+    pub package_id: String,
+    pub name: String,
+    pub url: String,
+    pub size: u64,
+    pub sha256: String,
+    #[serde(default)]
+    pub sha1: String,
+}
+
+/// One previous accepted candidate retained as a complete recovery point for
+/// both Linux package lanes.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CandidateHistoryEntry {
+    pub version: String,
+    pub build: u64,
+    pub package: CandidatePackage,
+    pub appimage: CandidateAppImage,
+    pub sha256sums_url: String,
+}
+
 impl CandidatePackage {
     /// Rejects a feed/package SHA mismatch: the digest this feed *declares* for
     /// the package must equal the digest `SHA256SUMS` *publishes* for the same
@@ -154,6 +180,8 @@ pub struct CandidateFeed {
     pub acceptance: AcceptanceStatus,
     /// The current candidate package.
     pub package: CandidatePackage,
+    /// The exact Velopack full package used by an enrolled AppImage install.
+    pub appimage: CandidateAppImage,
     /// Absolute URL of the candidate `SHA256SUMS`; the shell verifies the
     /// download against it before installing.
     #[serde(default)]
@@ -161,7 +189,7 @@ pub struct CandidateFeed {
     /// Previous known-good packages retained for rollback, newest first. The
     /// publisher keeps at least [`MIN_RETAINED_PREVIOUS`] of these.
     #[serde(default)]
-    pub history: Vec<CandidatePackage>,
+    pub history: Vec<CandidateHistoryEntry>,
 }
 
 impl CandidateFeed {
@@ -177,6 +205,24 @@ impl CandidateFeed {
     pub fn has_sufficient_recovery(&self) -> bool {
         self.history.len() >= MIN_RETAINED_PREVIOUS
     }
+
+    /// The accepted pointer must carry complete cryptographic identities for
+    /// both package lanes. In particular, an empty AppImage SHA256 must not
+    /// make Velopack fall back to the weaker legacy SHA1 field.
+    pub fn has_valid_identity(&self) -> bool {
+        is_hex(&self.commit_sha, 40)
+            && is_hex(&self.package.sha256, 64)
+            && is_hex(&self.appimage.sha256, 64)
+            && !self.package.name.trim().is_empty()
+            && !self.package.url.trim().is_empty()
+            && !self.appimage.name.trim().is_empty()
+            && !self.appimage.url.trim().is_empty()
+            && !self.appimage.package_id.trim().is_empty()
+    }
+}
+
+fn is_hex(value: &str, length: usize) -> bool {
+    value.len() == length && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// A candidate selected from the feed, ready for the shell to download, verify,
@@ -187,10 +233,8 @@ pub struct CandidateUpdate {
     pub version: String,
     pub build: u64,
     pub commit_sha: String,
-    pub name: String,
-    pub url: String,
-    pub size: Option<u64>,
-    pub sha256: String,
+    pub package: CandidatePackage,
+    pub appimage: CandidateAppImage,
     pub sums_url: Option<String>,
 }
 
@@ -215,6 +259,9 @@ pub fn select_candidate_update_from_feed(
     if feed.acceptance != AcceptanceStatus::Accepted {
         return None;
     }
+    if !feed.has_valid_identity() {
+        return None;
+    }
     if compare_versions(&feed.version, current_version) != Ordering::Greater {
         return None;
     }
@@ -222,10 +269,8 @@ pub fn select_candidate_update_from_feed(
         version: feed.version,
         build: feed.build,
         commit_sha: feed.commit_sha,
-        name: feed.package.name,
-        url: feed.package.url,
-        size: feed.package.size,
-        sha256: feed.package.sha256,
+        package: feed.package,
+        appimage: feed.appimage,
         sums_url: feed.sha256sums_url,
     })
 }
@@ -243,6 +288,29 @@ mod tests {
         }
     }
 
+    fn appimage(version: &str, sha256: &str) -> CandidateAppImage {
+        CandidateAppImage {
+            package_id: "com.befeast.okplayer".to_owned(),
+            name: format!("com.befeast.okplayer-{version}-linux-full.nupkg"),
+            url: format!(
+                "https://example.invalid/rolling/com.befeast.okplayer-{version}-linux-full.nupkg"
+            ),
+            size: 8484,
+            sha256: sha256.to_owned(),
+            sha1: "1".repeat(40),
+        }
+    }
+
+    fn history(version: &str, build: u64, digest: char) -> CandidateHistoryEntry {
+        CandidateHistoryEntry {
+            version: version.to_owned(),
+            build,
+            package: package(version, &digest.to_string().repeat(64)),
+            appimage: appimage(version, &digest.to_ascii_uppercase().to_string().repeat(64)),
+            sha256sums_url: format!("https://example.invalid/rolling/SHA256SUMS-{build}.txt"),
+        }
+    }
+
     fn feed(version: &str, build: u64, acceptance: AcceptanceStatus) -> CandidateFeed {
         CandidateFeed {
             channel: CANDIDATE_CHANNEL.to_owned(),
@@ -252,10 +320,13 @@ mod tests {
             timestamp_utc: "2026-07-17T09:41:00Z".to_owned(),
             acceptance,
             package: package(version, &"a".repeat(64)),
-            sha256sums_url: Some("https://example.invalid/rolling/SHA256SUMS".to_owned()),
+            appimage: appimage(version, &"f".repeat(64)),
+            sha256sums_url: Some(format!(
+                "https://example.invalid/rolling/SHA256SUMS-{build}.txt"
+            )),
             history: vec![
-                package("0.11.0-beta.0.106", &"b".repeat(64)),
-                package("0.11.0-beta.0.107", &"c".repeat(64)),
+                history("0.11.0-beta.0.107", 107, 'c'),
+                history("0.11.0-beta.0.106", 106, 'b'),
             ],
         }
     }
@@ -349,6 +420,14 @@ mod tests {
     }
 
     #[test]
+    fn incomplete_appimage_identity_is_refused() {
+        let mut invalid = feed("0.11.0-beta.1.42", 42, AcceptanceStatus::Accepted);
+        invalid.appimage.sha256.clear();
+        assert!(!invalid.has_valid_identity());
+        assert!(select_candidate_update_from_feed(invalid, "0.11.0-beta.1.41").is_none());
+    }
+
+    #[test]
     fn rolling_surface_keeps_at_least_two_previous_packages() {
         assert!(
             feed("0.11.0-beta.0.108", 108, AcceptanceStatus::Accepted).has_sufficient_recovery()
@@ -403,17 +482,51 @@ mod tests {
                 "size": 12345678,
                 "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             },
-            "sha256sums_url": "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/SHA256SUMS",
+            "appimage": {
+                "package_id": "com.befeast.okplayer",
+                "name": "com.befeast.okplayer-0.11.0-beta.0.108-linux-full.nupkg",
+                "url": "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/com.befeast.okplayer-0.11.0-beta.0.108-linux-full.nupkg",
+                "size": 7654321,
+                "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                "sha1": "1111111111111111111111111111111111111111"
+            },
+            "sha256sums_url": "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/SHA256SUMS-108.txt",
             "history": [
                 {
-                    "name": "ok-player_0.11.0-beta.0.107_amd64.deb",
-                    "url": "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/ok-player_0.11.0-beta.0.107_amd64.deb",
-                    "sha256": "ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                    "version": "0.11.0-beta.0.107",
+                    "build": 107,
+                    "package": {
+                        "name": "ok-player_0.11.0-beta.0.107_amd64.deb",
+                        "url": "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/ok-player_0.11.0-beta.0.107_amd64.deb",
+                        "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                    },
+                    "appimage": {
+                        "package_id": "com.befeast.okplayer",
+                        "name": "com.befeast.okplayer-0.11.0-beta.0.107-linux-full.nupkg",
+                        "url": "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/com.befeast.okplayer-0.11.0-beta.0.107-linux-full.nupkg",
+                        "size": 7000,
+                        "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                        "sha1": "2222222222222222222222222222222222222222"
+                    },
+                    "sha256sums_url": "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/SHA256SUMS-107.txt"
                 },
                 {
-                    "name": "ok-player_0.11.0-beta.0.106_amd64.deb",
-                    "url": "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/ok-player_0.11.0-beta.0.106_amd64.deb",
-                    "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb00"
+                    "version": "0.11.0-beta.0.106",
+                    "build": 106,
+                    "package": {
+                        "name": "ok-player_0.11.0-beta.0.106_amd64.deb",
+                        "url": "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/ok-player_0.11.0-beta.0.106_amd64.deb",
+                        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    },
+                    "appimage": {
+                        "package_id": "com.befeast.okplayer",
+                        "name": "com.befeast.okplayer-0.11.0-beta.0.106-linux-full.nupkg",
+                        "url": "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/com.befeast.okplayer-0.11.0-beta.0.106-linux-full.nupkg",
+                        "size": 6000,
+                        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                        "sha1": "3333333333333333333333333333333333333333"
+                    },
+                    "sha256sums_url": "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/SHA256SUMS-106.txt"
                 }
             ]
         }"#;
@@ -427,7 +540,11 @@ mod tests {
 
         let update = select_candidate_update_from_feed(feed, "0.11.0-beta.0.107")
             .expect("beta.0.108 is newer than beta.0.107");
-        assert_eq!(update.name, "ok-player_0.11.0-beta.0.108_amd64.deb");
+        assert_eq!(update.package.name, "ok-player_0.11.0-beta.0.108_amd64.deb");
+        assert_eq!(
+            update.appimage.name,
+            "com.befeast.okplayer-0.11.0-beta.0.108-linux-full.nupkg"
+        );
         assert_eq!(
             update.commit_sha,
             "0123456789abcdef0123456789abcdef01234567"

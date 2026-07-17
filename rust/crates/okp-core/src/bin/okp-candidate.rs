@@ -20,8 +20,10 @@ use std::path::Path;
 use okp_core::acceptance_evidence::{ArtifactKind, PackageArtifact, PackageIdentity};
 use okp_core::candidate_build::{
     BuildDecision, BuildPhase, CandidateBuild, DEFAULT_STALL_AFTER_SECONDS, GateResult, GateStatus,
-    classify_activity,
+    assemble_candidate_feed, candidate_prune_plan, candidate_version, classify_activity,
+    verify_candidate_bundle,
 };
+use okp_core::candidate_channel::{AcceptanceStatus, CandidateFeed};
 use okp_core::sha256sums::sha256_hex;
 
 fn main() {
@@ -37,9 +39,66 @@ fn run() -> Result<(), String> {
         Some("decide") => decide(&args[1..]),
         Some("record") => record(&args[1..]),
         Some("promotable") => promotable(&args[1..]),
+        Some("verify-bundle") => verify_bundle(&args[1..]),
+        Some("feed") => feed(&args[1..]),
+        Some("prune-plan") => prune_plan(&args[1..]),
+        Some("version") => version(&args[1..]),
         Some("classify") => classify(&args[1..]),
         _ => Err(usage()),
     }
+}
+
+fn verify_bundle(args: &[String]) -> Result<(), String> {
+    let bundle = Path::new(value(args, "--bundle")?);
+    let verified = verify_candidate_bundle(bundle).map_err(|errors| errors.join("\n"))?;
+    println!(
+        "Candidate bundle {} (source {}) is verified.",
+        verified.record.version, verified.record.source_sha
+    );
+    Ok(())
+}
+
+fn feed(args: &[String]) -> Result<(), String> {
+    let bundle = Path::new(value(args, "--bundle")?);
+    let base_url = value(args, "--base-url")?;
+    let output = value(args, "--output")?;
+    let acceptance = match value(args, "--acceptance")? {
+        "pending" => AcceptanceStatus::Pending,
+        "accepted" => AcceptanceStatus::Accepted,
+        "rejected" => AcceptanceStatus::Rejected,
+        other => return Err(format!("invalid --acceptance {other:?}")),
+    };
+    let previous = optional_value(args, "--previous")
+        .map(|path| read_json::<CandidateFeed>(Path::new(path)))
+        .transpose()?;
+    let verified = verify_candidate_bundle(bundle).map_err(|errors| errors.join("\n"))?;
+    let feed = assemble_candidate_feed(&verified, base_url, acceptance, previous.as_ref())?;
+    let output_path = Path::new(output);
+    let temp_path = output_path.with_extension(format!("tmp-{}", std::process::id()));
+    let bytes = serde_json::to_vec_pretty(&feed).map_err(|error| error.to_string())?;
+    fs::write(&temp_path, bytes).map_err(|error| format!("{}: {error}", temp_path.display()))?;
+    if let Err(error) = fs::rename(&temp_path, output_path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(format!("{output}: {error}"));
+    }
+    Ok(())
+}
+
+fn prune_plan(args: &[String]) -> Result<(), String> {
+    let feed = read_json::<CandidateFeed>(Path::new(value(args, "--feed")?))?;
+    let assets = read_json::<Vec<String>>(Path::new(value(args, "--assets")?))?;
+    for asset in candidate_prune_plan(&feed, &assets) {
+        println!("{asset}");
+    }
+    Ok(())
+}
+
+fn version(args: &[String]) -> Result<(), String> {
+    let build = value(args, "--build")?
+        .parse::<u64>()
+        .map_err(|error| format!("invalid --build: {error}"))?;
+    println!("{}", candidate_version(value(args, "--base")?, build)?);
+    Ok(())
 }
 
 fn decide(args: &[String]) -> Result<(), String> {
@@ -186,6 +245,11 @@ fn print_json(value: &impl serde::Serialize) -> Result<(), String> {
     Ok(())
 }
 
+fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
+    let text = fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    serde_json::from_str(&text).map_err(|error| format!("{}: {error}", path.display()))
+}
+
 fn value<'a>(args: &'a [String], name: &str) -> Result<&'a str, String> {
     args.windows(2)
         .find(|pair| pair[0] == name)
@@ -200,5 +264,5 @@ fn optional_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 }
 
 fn usage() -> String {
-    "usage:\n  okp-candidate decide --head SHA [--last SHA]\n  okp-candidate record --source-sha SHA --build-number N --version V --started-at TS --finished-at TS [--require-native-hardware] --deb PATH --appimage PATH --gate name:status[:detail] ...\n  okp-candidate promotable --record PATH\n  okp-candidate classify --phase idle|building --age-seconds N [--stall-after N]".to_owned()
+    "usage:\n  okp-candidate decide --head SHA [--last SHA]\n  okp-candidate record --source-sha SHA --build-number N --version V --started-at TS --finished-at TS [--require-native-hardware] --deb PATH --appimage PATH --gate name:status[:detail] ...\n  okp-candidate promotable --record PATH\n  okp-candidate verify-bundle --bundle DIR\n  okp-candidate feed --bundle DIR --base-url URL --acceptance pending|accepted|rejected [--previous PATH] --output PATH\n  okp-candidate prune-plan --feed PATH --assets PATH\n  okp-candidate version --base VERSION --build N\n  okp-candidate classify --phase idle|building --age-seconds N [--stall-after N]".to_owned()
 }

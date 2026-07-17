@@ -83,16 +83,16 @@ already accumulated more than a hundred such objects).
 
 It is isolated from the three feeds above by construction:
 
-- Candidates are published to a single **mutable** pre-release tagged `linux-candidate`
-  (`release-linux-candidate.yml`), never to the GitHub Pages site. The candidate publisher writes
-  only that pre-release's assets and never runs `build-linux-feed.sh` or deploys Pages, so **the
-  public Linux feed is byte-for-byte unaffected by candidate promotion** — Pages is only ever
-  rewritten by this workflow, which the candidate workflow does not invoke.
+- Candidates are published from the verified native-builder bundle to a single **mutable**
+  pre-release tagged `linux-candidate` (`release-linux-candidate.yml`), never to the GitHub Pages
+  site. The candidate publisher does not rebuild, run `build-linux-feed.sh`, or deploy Pages, so
+  **the public Linux feed is byte-for-byte unaffected by candidate promotion**.
 - The candidate feed is `candidate.linux.json` (`okp_core::candidate_channel::CandidateFeed`), a
   distinct schema and URL. It carries per-build provenance (git SHA, monotonic build number, UTC
-  timestamp, artifact SHA-256, acceptance status), keeps the current plus at least two previous
-  known-good packages for rollback, and promotes atomically (temp-file rename + pointer-uploaded-last
-  ordering) so an interrupted promotion leaves the previous candidate usable.
+  timestamp, exact `.deb` and Velopack package SHA-256, acceptance status), keeps the current plus
+  at least two previous known-good packages for rollback, and uploads build-versioned packages and
+  checksums before the shared `candidate.linux.json` pointer. That pointer gates both package lanes,
+  so an interrupted promotion leaves the previous candidate usable.
 - **Only** an install with `Settings.updates.channel == candidate` (or `OKP_LINUX_UPDATE_CHANNEL=
   candidate`) fetches it. Every default install is `public` and never touches the candidate surface.
 

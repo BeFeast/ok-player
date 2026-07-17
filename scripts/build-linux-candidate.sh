@@ -18,7 +18,7 @@
 #                             (default: ${XDG_STATE_HOME:-$HOME/.local/state}/ok-player-candidate)
 #   OKP_CANDIDATE_REPO_URL    clone source (default: public GitHub repo)
 #   OKP_CANDIDATE_BRANCH      branch to track (default: main)
-#   OKP_CANDIDATE_VERSION_BASE  version prefix (default: 0.1.0)
+#   OKP_CANDIDATE_VERSION_BASE  current public-beta identity (default: 0.11.0-beta.1)
 #   OKP_CANDIDATE_NATIVE_SMOKE  optional command; when set its evidence is required
 #   OKP_CANDIDATE_STALL_SECONDS watchdog stall threshold recorded for reference
 set -euo pipefail
@@ -26,7 +26,7 @@ set -euo pipefail
 STATE_DIR="${OKP_CANDIDATE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/ok-player-candidate}"
 REPO_URL="${OKP_CANDIDATE_REPO_URL:-https://github.com/BeFeast/ok-player.git}"
 BRANCH="${OKP_CANDIDATE_BRANCH:-main}"
-VERSION_BASE="${OKP_CANDIDATE_VERSION_BASE:-0.1.0}"
+VERSION_BASE="${OKP_CANDIDATE_VERSION_BASE:-0.11.0-beta.1}"
 STALL_SECONDS="${OKP_CANDIDATE_STALL_SECONDS:-900}"
 
 MIRROR="$STATE_DIR/mirror.git"
@@ -93,7 +93,10 @@ BUILD_SHA="$(git -C "$CHECKOUT" rev-parse HEAD)"
 # --- Version and monotonic build number --------------------------------------
 BUILD_NUMBER="$(( $(cat "$BUILD_NUMBER_FILE" 2>/dev/null || echo 0) + 1 ))"
 echo "$BUILD_NUMBER" >"$BUILD_NUMBER_FILE"
-VERSION="${VERSION_BASE}-linux-candidate.${BUILD_NUMBER}"
+VERSION="$(CC=/usr/bin/cc cargo run --quiet \
+  --manifest-path "$CHECKOUT/rust/Cargo.toml" \
+  -p okp-core --bin okp-candidate -- \
+  version --base "$VERSION_BASE" --build "$BUILD_NUMBER")"
 STARTED_AT="$(now_utc)"
 
 OUT_DIR="$OUT_ROOT/${BUILD_NUMBER}"
@@ -141,6 +144,7 @@ run_gate workspace-tests \
 run_gate deb-package \
   "$CHECKOUT/scripts/package-linux-deb.sh" "$VERSION"
 run_gate appimage-package \
+  env OKP_LINUX_CHANNEL=linux-candidate \
   "$CHECKOUT/scripts/package-linux-velopack.sh" "$VERSION"
 
 DEB="$CHECKOUT/artifacts/linux/deb/ok-player_${VERSION}_amd64.deb"
@@ -181,6 +185,9 @@ cp -a "$CHECKOUT/artifacts/linux/." "$OUT_DIR/artifacts/"
 cargo build --manifest-path "$CHECKOUT/rust/Cargo.toml" --release -p okp-core --bin okp-candidate
 
 FINISHED_AT="$(now_utc)"
+STAGED_DEB="$OUT_DIR/artifacts/deb/$(basename -- "$DEB")"
+STAGED_APPIMAGE="$OUT_DIR/artifacts/velopack/$(basename -- "$APPIMAGE")"
+
 "$CANDIDATE_CLI" record \
   --source-sha "$BUILD_SHA" \
   --build-number "$BUILD_NUMBER" \
@@ -188,8 +195,8 @@ FINISHED_AT="$(now_utc)"
   --started-at "$STARTED_AT" \
   --finished-at "$FINISHED_AT" \
   "${REQUIRE_NATIVE[@]}" \
-  --deb "$DEB" \
-  --appimage "$APPIMAGE" \
+  --deb "$STAGED_DEB" \
+  --appimage "$STAGED_APPIMAGE" \
   "${GATE_ARGS[@]}" \
   >"$OUT_DIR/candidate-build.json"
 
@@ -197,6 +204,10 @@ FINISHED_AT="$(now_utc)"
 if ! "$CANDIDATE_CLI" promotable --record "$OUT_DIR/candidate-build.json"; then
   heartbeat building "build ${VERSION} is not promotable; marker untouched" "$BUILD_SHA"
   echo "candidate build ${VERSION} is not promotable" >&2
+  exit 1
+fi
+if ! "$CANDIDATE_CLI" verify-bundle --bundle "$OUT_DIR"; then
+  heartbeat building "bundle verification failed; marker untouched" "$BUILD_SHA"
   exit 1
 fi
 

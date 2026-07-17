@@ -504,10 +504,15 @@ pub(crate) fn check_updates_on_startup(
 }
 
 pub(crate) fn check_for_linux_update(channel: UpdateChannel) -> LinuxUpdateCheckResult {
-    let manager = match linux_update_manager() {
+    let channel = effective_update_channel(channel);
+    if channel == UpdateChannel::Candidate {
+        return check_for_linux_candidate_channel_update();
+    }
+
+    let manager = match linux_update_manager(UpdateChannel::Public) {
         Ok(manager) => manager,
         Err(manager_error) => {
-            return match check_for_linux_channel_update(channel) {
+            return match check_for_linux_deb_update() {
                 Ok(Some(update)) => LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
                     manager: None,
                     target: LinuxUpdateTarget::Deb(update),
@@ -541,7 +546,8 @@ pub(crate) fn check_for_linux_update(channel: UpdateChannel) -> LinuxUpdateCheck
     }
 }
 
-pub(crate) fn linux_update_manager() -> Result<UpdateManager, String> {
+pub(crate) fn linux_update_manager(channel: UpdateChannel) -> Result<UpdateManager, String> {
+    debug_assert_eq!(channel, UpdateChannel::Public);
     let source = HttpSource::new(linux_update_feed_base_url());
     let options = UpdateOptions {
         ExplicitChannel: Some("linux".to_owned()),
@@ -551,6 +557,124 @@ pub(crate) fn linux_update_manager() -> Result<UpdateManager, String> {
         velopack::Error::NotInstalled(_) => "This install cannot self-update.".to_owned(),
         other => other.to_string(),
     })
+}
+
+#[derive(Clone)]
+struct CandidateVelopackSource {
+    asset: VelopackAsset,
+    download_url: String,
+}
+
+impl UpdateSource for CandidateVelopackSource {
+    fn get_release_feed(
+        &self,
+        _channel: &str,
+        _app: &Manifest,
+        _staged_user_id: &str,
+    ) -> Result<VelopackAssetFeed, velopack::Error> {
+        Ok(VelopackAssetFeed {
+            Assets: vec![self.asset.clone()],
+        })
+    }
+
+    fn download_release_entry(
+        &self,
+        asset: &VelopackAsset,
+        local_file: &Path,
+        progress_sender: Option<mpsc::Sender<i16>>,
+    ) -> Result<(), velopack::Error> {
+        debug_assert_eq!(asset.FileName, self.asset.FileName);
+        velopack::download::download_url_to_file(&self.download_url, local_file, move |progress| {
+            if let Some(sender) = &progress_sender {
+                let _ = sender.send(progress);
+            }
+        })
+    }
+}
+
+pub(crate) fn candidate_velopack_asset(
+    candidate: &CandidateAppImage,
+    version: &str,
+) -> VelopackAsset {
+    VelopackAsset {
+        PackageId: candidate.package_id.clone(),
+        Version: version.to_owned(),
+        Type: "Full".to_owned(),
+        FileName: candidate.name.clone(),
+        SHA1: candidate.sha1.clone(),
+        SHA256: candidate.sha256.clone(),
+        Size: candidate.size,
+        NotesMarkdown: String::new(),
+        NotesHtml: String::new(),
+    }
+}
+
+fn linux_candidate_update_manager(candidate: &CandidateUpdate) -> Result<UpdateManager, String> {
+    let source = CandidateVelopackSource {
+        asset: candidate_velopack_asset(&candidate.appimage, &candidate.version),
+        download_url: candidate.appimage.url.clone(),
+    };
+    let options = UpdateOptions {
+        ExplicitChannel: Some("linux-candidate".to_owned()),
+        ..Default::default()
+    };
+    UpdateManager::new(source, Some(options), None).map_err(|error| match error {
+        velopack::Error::NotInstalled(_) => "This install cannot self-update.".to_owned(),
+        other => other.to_string(),
+    })
+}
+
+fn check_for_linux_candidate_channel_update() -> LinuxUpdateCheckResult {
+    let candidate = match fetch_linux_candidate_update() {
+        Ok(Some(candidate)) => candidate,
+        Ok(None) => return LinuxUpdateCheckResult::UpToDate,
+        Err(error) => return LinuxUpdateCheckResult::Failed(error),
+    };
+    let deb_update = candidate_deb_update(&candidate);
+    let manager = match linux_candidate_update_manager(&candidate) {
+        Ok(manager) => manager,
+        Err(manager_error) => {
+            eprintln!("Candidate AppImage updater unavailable; using .deb lane: {manager_error}");
+            return LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
+                manager: None,
+                target: LinuxUpdateTarget::Deb(deb_update),
+            });
+        }
+    };
+
+    if let Some(asset) = manager.get_update_pending_restart()
+        && asset.Version == candidate.version
+        && asset
+            .SHA256
+            .eq_ignore_ascii_case(&candidate.appimage.sha256)
+    {
+        return LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
+            manager: Some(manager),
+            target: LinuxUpdateTarget::Asset(Box::new(asset)),
+        });
+    }
+
+    match manager.check_for_updates() {
+        Ok(UpdateCheck::UpdateAvailable(update))
+            if update.TargetFullRelease.Version == candidate.version
+                && update
+                    .TargetFullRelease
+                    .SHA256
+                    .eq_ignore_ascii_case(&candidate.appimage.sha256) =>
+        {
+            LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
+                manager: Some(manager),
+                target: LinuxUpdateTarget::Info(update),
+            })
+        }
+        Ok(UpdateCheck::UpdateAvailable(_)) => LinuxUpdateCheckResult::Failed(
+            "candidate AppImage feed does not match candidate.linux.json".to_owned(),
+        ),
+        Ok(UpdateCheck::NoUpdateAvailable | UpdateCheck::RemoteIsEmpty) => {
+            LinuxUpdateCheckResult::UpToDate
+        }
+        Err(error) => LinuxUpdateCheckResult::Failed(error.to_string()),
+    }
 }
 
 pub(crate) fn linux_update_feed_base_url() -> String {
@@ -637,20 +761,6 @@ pub(crate) fn effective_update_channel(persisted: UpdateChannel) -> UpdateChanne
     }
 }
 
-/// Dispatches the `.deb`-lane update check to the enrolled channel's feed. The
-/// public channel reads `deb.linux.json`; an explicitly enrolled candidate
-/// install reads the rolling `candidate.linux.json` instead. Both yield a
-/// [`DebUpdate`] for the same download/verify/install path, so channel choice
-/// changes only *what* is discovered, never *how* it is installed.
-pub(crate) fn check_for_linux_channel_update(
-    channel: UpdateChannel,
-) -> Result<Option<DebUpdate>, String> {
-    match effective_update_channel(channel) {
-        UpdateChannel::Public => check_for_linux_deb_update(),
-        UpdateChannel::Candidate => check_for_linux_candidate_update(),
-    }
-}
-
 pub(crate) fn linux_candidate_feed_url() -> String {
     env::var("OKP_LINUX_CANDIDATE_FEED_URL").unwrap_or_else(|_| LINUX_CANDIDATE_FEED_URL.to_owned())
 }
@@ -661,7 +771,7 @@ pub(crate) fn linux_candidate_feed_url() -> String {
 /// The two stay distinct exactly as on the public lane (issue #339). Selection
 /// gates on acceptance status in okp-core, so a pending candidate on the rolling
 /// surface is never offered to the fleet.
-pub(crate) fn check_for_linux_candidate_update() -> Result<Option<DebUpdate>, String> {
+fn fetch_linux_candidate_update() -> Result<Option<CandidateUpdate>, String> {
     let url = linux_candidate_feed_url();
     let mut response = ureq::get(&url)
         .header("Accept", "application/json")
@@ -675,17 +785,21 @@ pub(crate) fn check_for_linux_candidate_update() -> Result<Option<DebUpdate>, St
     let feed: CandidateFeed = serde_json::from_str(&body)
         .map_err(|error| format!("candidate update feed was invalid: {error}"))?;
 
-    Ok(
-        candidate_channel::select_candidate_update_from_feed(feed, APP_BUILD_VERSION).map(
-            |candidate| DebUpdate {
-                version: candidate.version,
-                name: candidate.name,
-                url: candidate.url,
-                size: candidate.size,
-                sums_url: candidate.sums_url,
-            },
-        ),
-    )
+    Ok(candidate_channel::select_candidate_update_from_feed(
+        feed,
+        APP_BUILD_VERSION,
+    ))
+}
+
+fn candidate_deb_update(candidate: &CandidateUpdate) -> DebUpdate {
+    DebUpdate {
+        version: candidate.version.clone(),
+        name: candidate.package.name.clone(),
+        url: candidate.package.url.clone(),
+        size: candidate.package.size,
+        sums_url: candidate.sums_url.clone(),
+        expected_sha256: Some(candidate.package.sha256.clone()),
+    }
 }
 
 pub(crate) fn download_deb_update(update: DebUpdate) -> Result<PathBuf, String> {
@@ -730,12 +844,31 @@ pub(crate) fn download_deb_checksums(update: &DebUpdate) -> Result<String, Strin
         .header("User-Agent", "OK Player Linux")
         .call()
         .map_err(|error| format!("Checksum download failed: {error}"))?;
-    response
+    let manifest = response
         .body_mut()
         .with_config()
         .limit(LINUX_SHA256SUMS_MAX_BYTES)
         .read_to_string()
-        .map_err(|error| format!("Checksum download failed: {error}"))
+        .map_err(|error| format!("Checksum download failed: {error}"))?;
+    verify_deb_feed_identity(update, &manifest)?;
+    Ok(manifest)
+}
+
+pub(crate) fn verify_deb_feed_identity(update: &DebUpdate, manifest: &str) -> Result<(), String> {
+    let Some(expected_sha256) = update.expected_sha256.as_deref() else {
+        return Ok(());
+    };
+    let sums = sha256sums::Sha256Sums::parse(manifest)
+        .map_err(|error| format!("Candidate identity check failed: {error}"))?;
+    let package = candidate_channel::CandidatePackage {
+        name: update.name.clone(),
+        url: update.url.clone(),
+        size: update.size,
+        sha256: expected_sha256.to_owned(),
+    };
+    package
+        .matches_sums(&sums)
+        .map_err(|error| format!("Candidate identity check failed: {error}"))
 }
 
 /// Stages the downloaded package and verifies it against the manifest

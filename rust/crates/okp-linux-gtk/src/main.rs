@@ -15,7 +15,7 @@ use gtk::gdk;
 use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
-use okp_core::candidate_channel::{self, CandidateFeed};
+use okp_core::candidate_channel::{self, CandidateAppImage, CandidateFeed, CandidateUpdate};
 use okp_core::clip_export::{self, ClipExportEligibility, ClipExportLimits, ClipExportTooling};
 use okp_core::gapless::{GaplessPlaybackCapability, PlaylistTransitionPath};
 use okp_core::hdr::HdrHandlingState;
@@ -39,7 +39,9 @@ use okp_mpv::{
 };
 use velopack::{
     UpdateCheck, UpdateInfo, UpdateManager, UpdateOptions, VelopackApp, VelopackAsset,
-    sources::HttpSource,
+    VelopackAssetFeed,
+    bundle::Manifest,
+    sources::{HttpSource, UpdateSource},
 };
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
