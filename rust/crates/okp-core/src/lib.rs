@@ -5,6 +5,7 @@ pub mod bookmarks;
 pub mod branding;
 pub mod chapter_math;
 pub mod clip_export;
+pub mod fedora_acceptance;
 pub mod fullscreen_toggle;
 pub mod gapless;
 pub mod hdr;

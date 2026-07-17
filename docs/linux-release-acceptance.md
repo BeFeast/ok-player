@@ -1,5 +1,10 @@
 # Linux release acceptance
 
+Fedora has its own acceptance contract — stock vs RPM Fusion codecs, enforcing
+SELinux with AVC collection, Flatpak/RPM/COPR states, and virtual-GPU skip
+evidence — documented in [`fedora-acceptance.md`](fedora-acceptance.md). This
+document covers the general Debian/AppImage evidence levels.
+
 Linux release evidence is package-specific and has four levels:
 
 1. `model-unit`: pure Rust model/schema tests.
