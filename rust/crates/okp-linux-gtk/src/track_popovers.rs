@@ -1812,6 +1812,18 @@ pub(crate) fn preview_tracks(kind: TrackKind) -> Option<Vec<Track>> {
                 codec: Some("subrip".to_owned()),
                 audio_channels: None,
             },
+            Track {
+                id: 3,
+                kind,
+                selected: false,
+                external: false,
+                external_filename: None,
+                default: false,
+                title: Some("English Forced".to_owned()),
+                lang: Some("eng".to_owned()),
+                codec: Some("hdmv_pgs_subtitle".to_owned()),
+                audio_channels: None,
+            },
         ],
         ("subtitle-empty", TrackKind::Subtitle) => Vec::new(),
         ("subtitle-searchable", TrackKind::Subtitle) => vec![Track {

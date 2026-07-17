@@ -180,7 +180,7 @@ pub(crate) fn settings_subtitle_presentation_section(
     section.append(&style_row);
 
     let hint = gtk::Label::new(Some(
-        "Appearance presets apply to text subtitles. ASS/SSA tracks keep their authored style; size and position still apply.",
+        "Appearance presets apply to text subtitles. ASS/SSA and image subtitles (PGS, VobSub) keep their own look; size and position still apply.",
     ));
     hint.add_css_class("okp-settings-hint");
     hint.set_xalign(0.0);

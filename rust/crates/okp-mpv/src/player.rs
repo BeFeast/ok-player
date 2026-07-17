@@ -904,6 +904,13 @@ impl RawReader {
             }
             if let Some(codec) = codec {
                 details.push(friendly_codec(&codec));
+                // Tag bitmap subtitle tracks so the media surface never presents
+                // them as text tracks the appearance presets could restyle.
+                if kind == TrackKind::Subtitle
+                    && okp_core::subtitle_format::is_image_subtitle(Some(&codec))
+                {
+                    details.push("Image".to_owned());
+                }
             }
             if kind == TrackKind::Audio {
                 if let Some(channels) = self.get_string(&format!("{prefix}/audio-channels"))? {
@@ -1709,6 +1716,12 @@ fn friendly_container(container: &str) -> String {
 }
 
 fn friendly_codec(codec: &str) -> String {
+    // Image (bitmap) subtitle codecs get their curated name (PGS/VobSub/…) from
+    // the shared core classifier so the media-info detail never echoes the raw
+    // ffmpeg id (`hdmv_pgs_subtitle`).
+    if let Some(name) = okp_core::subtitle_format::image_format_name(Some(codec)) {
+        return name.to_owned();
+    }
     match codec.to_ascii_lowercase().as_str() {
         "h264" | "avc1" => "H.264 / AVC".to_owned(),
         "hevc" | "h265" => "H.265 / HEVC".to_owned(),
@@ -2751,6 +2764,9 @@ mod tests {
         assert_eq!(friendly_codec("h264"), "H.264 / AVC");
         assert_eq!(friendly_codec("eac3"), "E-AC-3");
         assert_eq!(friendly_codec("subrip"), "SRT");
+        // Image subtitle codecs get the curated name, not the raw ffmpeg id.
+        assert_eq!(friendly_codec("hdmv_pgs_subtitle"), "PGS");
+        assert_eq!(friendly_codec("dvd_subtitle"), "VobSub");
     }
 
     #[test]

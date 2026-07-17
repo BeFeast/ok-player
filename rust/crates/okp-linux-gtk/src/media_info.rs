@@ -658,7 +658,7 @@ pub(crate) fn media_info_preview_sample() -> MediaInfo {
                 external: false,
                 default: false,
                 title: "English (SDH)".to_owned(),
-                detail: "Primary · PGS · embedded".to_owned(),
+                detail: "Primary · PGS · Image · embedded".to_owned(),
             },
             InfoTrack {
                 id: 4,
