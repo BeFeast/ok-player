@@ -18,7 +18,7 @@
 #                             (default: ${XDG_STATE_HOME:-$HOME/.local/state}/ok-player-candidate)
 #   OKP_CANDIDATE_REPO_URL    clone source (default: public GitHub repo)
 #   OKP_CANDIDATE_BRANCH      branch to track (default: main)
-#   OKP_CANDIDATE_VERSION_BASE  current public-beta identity (default: 0.11.0-beta.1)
+#   OKP_CANDIDATE_VERSION_BASE  candidate version base (default: 0.11.0-beta.0)
 #   OKP_CANDIDATE_NATIVE_SMOKE  optional command; when set its evidence is required
 #   OKP_CANDIDATE_STALL_SECONDS watchdog stall threshold recorded for reference
 set -euo pipefail
@@ -26,7 +26,7 @@ set -euo pipefail
 STATE_DIR="${OKP_CANDIDATE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/ok-player-candidate}"
 REPO_URL="${OKP_CANDIDATE_REPO_URL:-https://github.com/BeFeast/ok-player.git}"
 BRANCH="${OKP_CANDIDATE_BRANCH:-main}"
-VERSION_BASE="${OKP_CANDIDATE_VERSION_BASE:-0.11.0-beta.1}"
+VERSION_BASE="${OKP_CANDIDATE_VERSION_BASE:-0.11.0-beta.0}"
 STALL_SECONDS="${OKP_CANDIDATE_STALL_SECONDS:-900}"
 
 MIRROR="$STATE_DIR/mirror.git"

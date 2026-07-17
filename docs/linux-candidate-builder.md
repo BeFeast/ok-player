@@ -40,9 +40,22 @@ Configuration (all optional; no host-specific value is baked in):
 | `OKP_CANDIDATE_STATE_DIR` | `${XDG_STATE_HOME:-$HOME/.local/state}/ok-player-candidate` | Persistent state, lock, heartbeats, bundles |
 | `OKP_CANDIDATE_REPO_URL` | public GitHub repo | Clone source |
 | `OKP_CANDIDATE_BRANCH` | `main` | Branch to track |
-| `OKP_CANDIDATE_VERSION_BASE` | `0.11.0-beta.1` | Current public-beta identity; the build number is appended |
+| `OKP_CANDIDATE_VERSION_BASE` | `0.11.0-beta.0` | Candidate version base; the build number is appended |
 | `OKP_CANDIDATE_NATIVE_SMOKE` | unset | Optional native-hardware smoke command; when set its evidence is **required** |
 | `OKP_CANDIDATE_STALL_SECONDS` | `900` | Watchdog stall threshold, published to `stall-after-seconds` |
+
+Until the first public beta is deliberately published, a clean invocation uses
+the default base and records `0.11.0-beta.0.<build-number>` in
+`candidate-build.json`. After `0.11.0-beta.1` is published, the operator moves
+the rolling channel past that public identity by setting the explicit override:
+
+```bash
+OKP_CANDIDATE_VERSION_BASE=0.11.0-beta.1 scripts/build-linux-candidate.sh
+```
+
+The override changes only the candidate version base. The monotonic build
+number, exact bundle identity, candidate/public feed isolation, and separate
+promotion step remain unchanged.
 
 A single-run lock (`flock` on `build.lock`) makes overlapping schedules safe:
 a second invocation sees the lock, records an idle heartbeat, and exits. Two

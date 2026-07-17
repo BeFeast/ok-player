@@ -3326,6 +3326,38 @@ fn candidate_appimage_source_uses_the_manifest_bound_full_package() {
 }
 
 #[test]
+fn candidate_builder_defaults_below_beta_one_until_the_base_is_overridden() {
+    use okp_core::candidate_build::candidate_version;
+    use okp_core::update_selection::compare_versions;
+    use std::cmp::Ordering;
+
+    let builder = include_str!("../../../../scripts/build-linux-candidate.sh");
+    assert!(
+        builder.contains("VERSION_BASE=\"${OKP_CANDIDATE_VERSION_BASE:-0.11.0-beta.0}\""),
+        "a clean builder invocation must use the pre-beta base while preserving the override"
+    );
+    assert!(builder.contains("version --base \"$VERSION_BASE\" --build \"$BUILD_NUMBER\""));
+    assert!(builder.contains("--version \"$VERSION\""));
+    assert!(builder.contains(">\"$OUT_DIR/candidate-build.json\""));
+
+    let first = candidate_version("0.11.0-beta.0", 108).unwrap();
+    let second = candidate_version("0.11.0-beta.0", 109).unwrap();
+    assert_eq!(compare_versions(&second, &first), Ordering::Greater);
+    assert_eq!(
+        compare_versions("0.11.0-beta.1", &second),
+        Ordering::Greater,
+        "sequential pre-beta candidates must remain below the first public beta"
+    );
+
+    let post_beta = candidate_version("0.11.0-beta.1", 110).unwrap();
+    assert_eq!(
+        compare_versions(&post_beta, "0.11.0-beta.1"),
+        Ordering::Greater,
+        "the explicit post-beta base must move candidates above the public beta"
+    );
+}
+
+#[test]
 fn fine_seek_readout_pairs_projected_timecode_with_frame_number() {
     // Fine seek forward on a 24 fps clip: the shared projection lands on the
     // exact target and the toast reports the matching frame number, exactly as

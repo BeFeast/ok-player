@@ -26,7 +26,14 @@ Candidates follow the issue's SemVer ladder:
 | after beta 1 | `0.11.0-beta.1.<build>` |
 | public beta 2 | `0.11.0-beta.2` |
 
-The native builder currently defaults its base to `0.11.0-beta.1`, producing post-beta-1 candidates such as `0.11.0-beta.1.42`. `okp-core` owns version construction and monotonic comparisons. Tests cover sequential candidate discovery and the transition to `0.11.0-beta.1`.
+The first public beta has not been published yet, so the native builder defaults
+to `0.11.0-beta.0` and produces pre-beta candidates such as
+`0.11.0-beta.0.42`. Once `0.11.0-beta.1` is deliberately published, the
+operator sets `OKP_CANDIDATE_VERSION_BASE=0.11.0-beta.1` to produce subsequent
+candidates such as `0.11.0-beta.1.43`. `okp-core` owns version construction and
+monotonic comparisons. Tests cover sequential pre-beta candidate discovery,
+the transition to the public `0.11.0-beta.1`, and the explicit post-beta base
+change.
 
 ## Exact identity and acceptance
 
