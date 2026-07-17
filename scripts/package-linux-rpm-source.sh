@@ -36,6 +36,12 @@ trap cleanup EXIT
 export SOURCE_DATE_EPOCH="$SOURCE_EPOCH"
 
 mkdir -p "$OUT_DIR" "$TMP_DIR/rpmbuild/SOURCES" "$TMP_DIR/rpmbuild/SRPMS"
+rm -f \
+  "$OUT_DIR/$PREFIX.tar.gz" \
+  "$OUT_DIR/$PREFIX-vendor.tar.zst" \
+  "$OUT_DIR/$PREFIX-source-commit" \
+  "$OUT_DIR/SHA256SUMS" \
+  "$OUT_DIR"/*.src.rpm
 exec 9>"$RPM_LOCK"
 flock 9
 if [[ -e "$RPM_TOPDIR" && ! -L "$RPM_TOPDIR" ]]; then

@@ -34,6 +34,7 @@ echo "Fedora source artifacts are byte-identical across two clean builds" >> "$O
 
 dnf builddep -y "$SRPM"
 
+rm -rf "$OUT_DIR/previous" "$OUT_DIR/current"
 mkdir -p "$OUT_DIR/previous" "$OUT_DIR/current"
 rpmbuild --rebuild "$SRPM" \
   --nocheck \
