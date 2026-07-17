@@ -5,14 +5,17 @@ pub(crate) fn open_settings_window(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) {
+    if present_existing_companion_window(&state, CompanionWindowKind::Settings) {
+        return;
+    }
+
     let initial_page = env::var("OKP_OPEN_SETTINGS_PAGE_ON_STARTUP")
         .ok()
         .and_then(|page| normalized_settings_page(&page))
-        .unwrap_or("about");
+        .unwrap_or(SettingsPage::About);
     let max_window_height = settings_window_height_cap(parent);
     let max_body_height = (max_window_height - SETTINGS_TITLEBAR_HEIGHT).max(1);
-    let window =
-        captionless_transient_window(parent, "Settings", SETTINGS_REFERENCE_WIDTH, -1, true);
+    let window = build_companion_window(parent, &state, CompanionWindowKind::Settings, "Settings");
     window.add_css_class("okp-settings-window");
     apply_settings_window_theme(&window, state.borrow().settings.appearance_theme());
     watch_system_settings_theme(&window, Rc::clone(&state));
@@ -23,7 +26,7 @@ pub(crate) fn open_settings_window(
     let titlebar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     titlebar.add_css_class("okp-settings-titlebar");
     // GTK adds the 1px bottom border outside the requested content box.
-    titlebar.set_size_request(SETTINGS_REFERENCE_WIDTH, SETTINGS_TITLEBAR_HEIGHT - 1);
+    titlebar.set_height_request(SETTINGS_TITLEBAR_HEIGHT - 1);
     let title = gtk::Label::new(Some("Settings"));
     title.add_css_class("okp-settings-titlebar-label");
     title.set_xalign(0.0);
@@ -32,7 +35,7 @@ pub(crate) fn open_settings_window(
 
     let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     body.add_css_class("okp-settings-body");
-    body.set_size_request(SETTINGS_REFERENCE_WIDTH, -1);
+    body.set_hexpand(true);
 
     let stack = gtk::Stack::new();
     stack.add_css_class("okp-settings-stack");
@@ -63,6 +66,12 @@ pub(crate) fn open_settings_window(
     stack.add_named(
         &settings_scroller(&advanced_page, max_body_height),
         Some("advanced"),
+    );
+
+    let updates_page = settings_updates_page(Rc::clone(&state), Rc::clone(&status_toast));
+    stack.add_named(
+        &settings_scroller(&updates_page, max_body_height),
+        Some("updates"),
     );
 
     let playback_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
@@ -188,18 +197,17 @@ pub(crate) fn open_settings_window(
         Some("integration"),
     );
 
-    stack.set_visible_child_name(initial_page);
-    body.append(&settings_nav_rail_frame(
-        settings_nav_rail(&stack, initial_page),
-        max_body_height,
-    ));
+    stack.set_visible_child_name(initial_page.id());
+    let (rail, search) = settings_nav_rail(&stack, initial_page);
+    connect_settings_search_shortcut(&window, &search);
+    body.append(&settings_nav_rail_frame(rail, max_body_height));
 
     stack.set_size_request(SETTINGS_CONTENT_WIDTH, -1);
+    stack.set_hexpand(true);
     stack.set_vexpand(false);
-    let resize_window = window.clone();
+    let resize_stack = stack.clone();
     stack.connect_visible_child_name_notify(move |_| {
-        resize_window.set_default_size(SETTINGS_REFERENCE_WIDTH, -1);
-        resize_window.queue_resize();
+        resize_stack.queue_resize();
     });
     body.append(&stack);
     root.append(&body);
@@ -207,8 +215,10 @@ pub(crate) fn open_settings_window(
     let window_overlay = gtk::Overlay::new();
     window_overlay.set_child(Some(&root));
     window_overlay.add_overlay(&captionless_window_drag_layer(&window));
+    add_companion_window_resize_zones(&window_overlay, &window);
     window_overlay.add_overlay(&settings_window_controls(&window));
     window.set_child(Some(&window_overlay));
+    connect_companion_play_pause_space(&window, Rc::clone(&state));
     window.present();
 }
 
@@ -254,7 +264,7 @@ fn settings_theme_override() -> Option<AppearanceTheme> {
     }
 }
 
-fn watch_system_settings_theme(window: &gtk::Window, state: Rc<RefCell<PlayerState>>) {
+pub(crate) fn watch_system_settings_theme(window: &gtk::Window, state: Rc<RefCell<PlayerState>>) {
     let Some(settings) = gtk::Settings::default() else {
         return;
     };
@@ -274,19 +284,8 @@ fn watch_system_settings_theme(window: &gtk::Window, state: Rc<RefCell<PlayerSta
     });
 }
 
-pub(crate) fn normalized_settings_page(page: &str) -> Option<&'static str> {
-    match page.trim().to_ascii_lowercase().as_str() {
-        "appearance" => Some("appearance"),
-        "playback" => Some("playback"),
-        "subtitles" => Some("subtitles"),
-        "video" => Some("video"),
-        "audio" => Some("audio"),
-        "shortcuts" => Some("shortcuts"),
-        "integration" => Some("integration"),
-        "advanced" => Some("advanced"),
-        "about" => Some("about"),
-        _ => None,
-    }
+pub(crate) fn normalized_settings_page(page: &str) -> Option<SettingsPage> {
+    SettingsPage::from_id(page)
 }
 
 pub(crate) fn settings_window_height_cap(parent: &gtk::ApplicationWindow) -> i32 {
@@ -309,7 +308,7 @@ pub(crate) fn settings_scroller<T: IsA<gtk::Widget>>(
     scroller.add_css_class("okp-settings-scroller");
     scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     scroller.set_min_content_width(SETTINGS_CONTENT_WIDTH);
-    scroller.set_max_content_width(SETTINGS_CONTENT_WIDTH);
+    scroller.set_max_content_width(-1);
     scroller.set_propagate_natural_width(false);
     scroller.set_max_content_height(max_content_height);
     scroller.set_propagate_natural_height(true);
@@ -335,49 +334,92 @@ pub(crate) fn settings_nav_rail_frame(
     frame
 }
 
-pub(crate) fn settings_nav_rail(stack: &gtk::Stack, selected_page: &str) -> gtk::Box {
+pub(crate) fn settings_nav_rail(
+    stack: &gtk::Stack,
+    selected_page: SettingsPage,
+) -> (gtk::Box, gtk::SearchEntry) {
     let rail = gtk::Box::new(gtk::Orientation::Vertical, 2);
     rail.add_css_class("okp-settings-rail");
     rail.set_size_request(SETTINGS_RAIL_WIDTH, -1);
 
-    let search = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let buttons = Rc::new(RefCell::new(Vec::<(SettingsPage, gtk::Button)>::new()));
+
+    let search = gtk::SearchEntry::new();
     search.add_css_class("okp-settings-search");
     search.set_size_request(171, 30);
-    let search_icon = gtk::Image::from_icon_name("system-search-symbolic");
-    search_icon.set_pixel_size(14);
-    search.append(&search_icon);
-    let search_label = gtk::Label::new(Some("Search"));
-    search_label.add_css_class("okp-settings-search-label");
-    search_label.set_xalign(0.0);
-    search.append(&search_label);
+    search.set_placeholder_text(Some("Search settings"));
+    search.update_property(&[gtk::accessible::Property::Label("Search settings")]);
     rail.append(&search);
 
-    let buttons = Rc::new(RefCell::new(Vec::<gtk::Button>::new()));
-    let nav_items = [
-        (
-            "Appearance",
-            SettingsNavIcon::Appearance,
-            Some("appearance"),
-        ),
-        ("Playback", SettingsNavIcon::Playback, Some("playback")),
-        ("Subtitles", SettingsNavIcon::Subtitles, Some("subtitles")),
-        ("Video", SettingsNavIcon::Video, Some("video")),
-        ("Audio", SettingsNavIcon::Audio, Some("audio")),
-        ("Shortcuts", SettingsNavIcon::Shortcuts, Some("shortcuts")),
-        (
-            "Integration",
-            SettingsNavIcon::Integration,
-            Some("integration"),
-        ),
-        ("Advanced", SettingsNavIcon::Advanced, Some("advanced")),
-    ];
+    let search_result = gtk::Button::new();
+    search_result.add_css_class("okp-settings-search-result");
+    search_result.set_has_frame(false);
+    search_result.set_visible(false);
+    let result_content = gtk::Box::new(gtk::Orientation::Vertical, 1);
+    let result_label = gtk::Label::new(None);
+    result_label.add_css_class("okp-settings-search-result-label");
+    result_label.set_xalign(0.0);
+    result_label.set_ellipsize(pango::EllipsizeMode::End);
+    result_content.append(&result_label);
+    let result_page = gtk::Label::new(None);
+    result_page.add_css_class("okp-settings-search-result-page");
+    result_page.set_xalign(0.0);
+    result_content.append(&result_page);
+    search_result.set_child(Some(&result_content));
+    rail.append(&search_result);
 
-    for (label, icon, page) in nav_items {
-        let row = settings_nav_row(label, icon, page == Some(selected_page));
-        if let Some(page) = page {
-            connect_settings_nav_row(&row, page, stack, &buttons);
-            buttons.borrow_mut().push(row.clone());
+    let active_result = Rc::new(Cell::new(None::<SettingsPage>));
+    let result_active = Rc::clone(&active_result);
+    let result_label_changed = result_label.clone();
+    let result_page_changed = result_page.clone();
+    let result_button_changed = search_result.clone();
+    search.connect_search_changed(move |entry| {
+        let result = search_settings(entry.text().as_str()).into_iter().next();
+        result_active.set(result.map(|result| result.page));
+        if let Some(result) = result {
+            result_label_changed.set_text(result.label);
+            result_page_changed.set_text(result.page.title());
+            result_button_changed.update_property(&[gtk::accessible::Property::Label(&format!(
+                "{} — {}",
+                result.label,
+                result.page.title()
+            ))]);
+            result_button_changed.set_visible(true);
+        } else {
+            result_button_changed.set_visible(false);
         }
+    });
+
+    let activate_stack = stack.clone();
+    let activate_buttons = Rc::clone(&buttons);
+    let activate_result = Rc::clone(&active_result);
+    let activate_search = search.clone();
+    search.connect_activate(move |_| {
+        if let Some(page) = activate_result.get() {
+            navigate_settings_page(page, &activate_stack, &activate_buttons);
+            activate_search.set_text("");
+        }
+    });
+
+    let click_stack = stack.clone();
+    let click_buttons = Rc::clone(&buttons);
+    let click_result = Rc::clone(&active_result);
+    let click_search = search.clone();
+    search_result.connect_clicked(move |_| {
+        if let Some(page) = click_result.get() {
+            navigate_settings_page(page, &click_stack, &click_buttons);
+            click_search.set_text("");
+        }
+    });
+
+    for page in SETTINGS_RAIL_ORDER {
+        let row = settings_nav_row(
+            page.title(),
+            settings_nav_icon_for_page(page),
+            page == selected_page,
+        );
+        connect_settings_nav_row(&row, page, stack, &buttons);
+        buttons.borrow_mut().push((page, row.clone()));
         rail.append(&row);
     }
 
@@ -389,12 +431,48 @@ pub(crate) fn settings_nav_rail(stack: &gtk::Stack, selected_page: &str) -> gtk:
     divider.add_css_class("okp-settings-rail-divider");
     rail.append(&divider);
 
-    let about = settings_nav_row("About", SettingsNavIcon::About, selected_page == "about");
-    connect_settings_nav_row(&about, "about", stack, &buttons);
-    buttons.borrow_mut().push(about.clone());
+    let about = settings_nav_row(
+        SettingsPage::About.title(),
+        SettingsNavIcon::About,
+        selected_page == SettingsPage::About,
+    );
+    connect_settings_nav_row(&about, SettingsPage::About, stack, &buttons);
+    buttons
+        .borrow_mut()
+        .push((SettingsPage::About, about.clone()));
     rail.append(&about);
 
-    rail
+    (rail, search)
+}
+
+pub(crate) fn connect_settings_search_shortcut(window: &gtk::Window, search: &gtk::SearchEntry) {
+    let controller = gtk::EventControllerKey::new();
+    controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let search = search.clone();
+    controller.connect_key_pressed(move |_, key, _, modifiers| {
+        if modifiers.contains(gdk::ModifierType::CONTROL_MASK) && key == gdk::Key::f {
+            search.grab_focus();
+            search.select_region(0, -1);
+            return glib::Propagation::Stop;
+        }
+        glib::Propagation::Proceed
+    });
+    window.add_controller(controller);
+}
+
+pub(crate) fn settings_nav_icon_for_page(page: SettingsPage) -> SettingsNavIcon {
+    match page {
+        SettingsPage::Appearance => SettingsNavIcon::Appearance,
+        SettingsPage::Playback => SettingsNavIcon::Playback,
+        SettingsPage::Subtitles => SettingsNavIcon::Subtitles,
+        SettingsPage::Video => SettingsNavIcon::Video,
+        SettingsPage::Audio => SettingsNavIcon::Audio,
+        SettingsPage::Shortcuts => SettingsNavIcon::Shortcuts,
+        SettingsPage::Integration => SettingsNavIcon::Integration,
+        SettingsPage::Updates => SettingsNavIcon::Updates,
+        SettingsPage::Advanced => SettingsNavIcon::Advanced,
+        SettingsPage::About => SettingsNavIcon::About,
+    }
 }
 
 pub(crate) fn settings_window_controls(window: &gtk::Window) -> gtk::Box {
@@ -433,55 +511,6 @@ pub(crate) fn settings_window_controls(window: &gtk::Window) -> gtk::Box {
     controls.append(&close);
 
     controls
-}
-
-pub(crate) fn captionless_window_drag_layer(window: &gtk::Window) -> gtk::Box {
-    let drag_layer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    drag_layer.add_css_class("okp-captionless-window-drag-layer");
-    drag_layer.set_halign(gtk::Align::Fill);
-    drag_layer.set_valign(gtk::Align::Start);
-    drag_layer.set_can_target(true);
-    drag_layer.set_height_request(CAPTIONLESS_DRAG_HEIGHT);
-    connect_captionless_window_drag(&drag_layer, window);
-    drag_layer
-}
-
-pub(crate) fn connect_captionless_window_drag(
-    widget: &impl IsA<gtk::Widget>,
-    window: &gtk::Window,
-) {
-    let gesture = gtk::GestureClick::new();
-    gesture.set_button(gdk::BUTTON_PRIMARY);
-    let drag_window = window.clone();
-    gesture.connect_pressed(move |gesture, n_press, x, y| {
-        if n_press == 2 {
-            if drag_window.is_maximized() {
-                drag_window.unmaximize();
-            } else {
-                drag_window.maximize();
-            }
-            return;
-        }
-
-        let Some(device) = gesture.current_event_device() else {
-            return;
-        };
-        let Some(surface) = drag_window.surface() else {
-            return;
-        };
-        let Ok(toplevel) = surface.downcast::<gdk::Toplevel>() else {
-            return;
-        };
-
-        toplevel.begin_move(
-            &device,
-            gesture.current_button() as i32,
-            x,
-            y,
-            gesture.current_event_time(),
-        );
-    });
-    widget.add_controller(gesture);
 }
 
 pub(crate) fn settings_window_control(kind: WindowControlKind, tooltip: &str) -> gtk::Button {
@@ -704,6 +733,16 @@ pub(crate) fn draw_settings_nav_icon(
             let _ = cr.stroke();
             let _ = cr.restore();
         }
+        SettingsNavIcon::Updates => {
+            cr.move_to(8.0, 2.3);
+            cr.line_to(8.0, 9.1);
+            cr.move_to(5.2, 6.4);
+            cr.line_to(8.0, 9.2);
+            cr.line_to(10.8, 6.4);
+            let _ = cr.stroke();
+            cairo_rounded_rect(cr, 2.5, 10.5, 11.0, 3.0, 1.0);
+            let _ = cr.stroke();
+        }
         SettingsNavIcon::Advanced => {
             cr.move_to(6.6, 2.6);
             cr.curve_to(4.6, 2.6, 5.2, 5.2, 4.0, 6.2);
@@ -754,20 +793,30 @@ pub(crate) fn cairo_rounded_rect(cr: &cairo::Context, x: f64, y: f64, w: f64, h:
 
 pub(crate) fn connect_settings_nav_row(
     button: &gtk::Button,
-    page: &str,
+    page: SettingsPage,
     stack: &gtk::Stack,
-    buttons: &Rc<RefCell<Vec<gtk::Button>>>,
+    buttons: &Rc<RefCell<Vec<(SettingsPage, gtk::Button)>>>,
 ) {
-    let page = page.to_owned();
     let stack = stack.clone();
     let buttons = Rc::clone(buttons);
-    button.connect_clicked(move |button| {
-        stack.set_visible_child_name(&page);
-        for row in buttons.borrow().iter() {
+    button.connect_clicked(move |_| {
+        navigate_settings_page(page, &stack, &buttons);
+    });
+}
+
+pub(crate) fn navigate_settings_page(
+    page: SettingsPage,
+    stack: &gtk::Stack,
+    buttons: &Rc<RefCell<Vec<(SettingsPage, gtk::Button)>>>,
+) {
+    stack.set_visible_child_name(page.id());
+    for (row_page, row) in buttons.borrow().iter() {
+        if *row_page == page {
+            row.add_css_class("is-selected");
+        } else {
             row.remove_css_class("is-selected");
         }
-        button.add_css_class("is-selected");
-    });
+    }
 }
 
 pub(crate) fn settings_section(title: &str) -> gtk::Box {

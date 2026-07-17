@@ -864,13 +864,16 @@ const OKP_STYLESHEET: &str = "
 
         progressbar.okp-recent-progress,
         progressbar.okp-history-thumb-progress {
-            min-width: 4px;
             min-height: 4px;
             margin: 0;
         }
 
+        progressbar.okp-recent-progress { min-width: 4px; }
+        progressbar.okp-history-thumb-progress { min-width: 0; }
+
         progressbar.okp-recent-progress trough,
         progressbar.okp-history-thumb-progress trough {
+            min-width: 0;
             min-height: 4px;
             border: none;
             border-radius: 0 0 8px 8px;
@@ -1080,7 +1083,7 @@ const OKP_STYLESHEET: &str = "
 
         .okp-history-result-caption,
         .okp-history-bucket {
-            margin-top: 18px;
+            margin-top: 20px;
             padding: 0 12px 8px;
             font-size: 11px;
             font-weight: 600;
@@ -1094,7 +1097,8 @@ const OKP_STYLESHEET: &str = "
         .is-dark .okp-history-bucket { color: rgba(255, 255, 255, 0.48); }
 
         button.okp-history-row {
-            padding: 9px 12px;
+            margin-bottom: 4px;
+            padding: 12px;
             border: none;
             border-radius: 7px;
             background: transparent;
@@ -1148,6 +1152,82 @@ const OKP_STYLESHEET: &str = "
 
         .is-light .okp-history-end-cap { color: rgba(0, 0, 0, 0.36); }
         .is-dark .okp-history-end-cap { color: rgba(255, 255, 255, 0.36); }
+
+        .okp-idle-canvas.is-high-contrast {
+            background: #000000;
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-idle-titlebar-text,
+        .is-high-contrast .okp-history-title,
+        .is-high-contrast .okp-history-subtitle,
+        .is-high-contrast .okp-history-result-caption,
+        .is-high-contrast .okp-history-bucket,
+        .is-high-contrast .okp-history-row-title,
+        .is-high-contrast .okp-history-row-location,
+        .is-high-contrast .okp-history-row-when,
+        .is-high-contrast .okp-history-progress-label,
+        .is-high-contrast .okp-history-barely-label,
+        .is-high-contrast .okp-history-end-cap,
+        .is-high-contrast .okp-idle-footer-status,
+        .is-high-contrast button.okp-idle-footer-button {
+            color: #ffffff;
+        }
+
+        .is-high-contrast button.okp-history-back-button,
+        .is-high-contrast entry.okp-history-search,
+        .is-high-contrast .okp-history-finished-chip,
+        .is-high-contrast button.okp-history-row {
+            background: #000000;
+            border: 1px solid #ffffff;
+            color: #ffffff;
+        }
+
+        .is-high-contrast button.okp-history-row:hover,
+        .is-high-contrast button.okp-history-row:focus-visible {
+            background: #ffffff;
+            color: #000000;
+            box-shadow: none;
+        }
+
+        .is-high-contrast button.okp-history-row:hover .okp-history-row-title,
+        .is-high-contrast button.okp-history-row:hover .okp-history-row-location,
+        .is-high-contrast button.okp-history-row:hover .okp-history-row-when,
+        .is-high-contrast button.okp-history-row:hover .okp-history-progress-label,
+        .is-high-contrast button.okp-history-row:hover .okp-history-barely-label,
+        .is-high-contrast button.okp-history-row:hover .okp-history-finished-chip,
+        .is-high-contrast button.okp-history-row:focus-visible .okp-history-row-title,
+        .is-high-contrast button.okp-history-row:focus-visible .okp-history-row-location,
+        .is-high-contrast button.okp-history-row:focus-visible .okp-history-row-when,
+        .is-high-contrast button.okp-history-row:focus-visible .okp-history-progress-label,
+        .is-high-contrast button.okp-history-row:focus-visible .okp-history-barely-label,
+        .is-high-contrast button.okp-history-row:focus-visible .okp-history-finished-chip {
+            color: #000000;
+        }
+
+        .is-high-contrast .okp-history-divider,
+        .is-high-contrast .okp-history-end-cap,
+        .is-high-contrast .okp-idle-footer {
+            border-color: #ffffff;
+        }
+
+        .is-high-contrast .okp-history-divider {
+            background: #ffffff;
+        }
+
+        .is-high-contrast .okp-history-thumbnail-placeholder {
+            background: #000000;
+            border: 1px solid #ffffff;
+        }
+
+        .is-high-contrast progressbar.okp-history-thumb-progress trough {
+            background: #000000;
+            border: 1px solid #ffffff;
+        }
+
+        .is-high-contrast progressbar.okp-history-thumb-progress progress {
+            background: #ffffff;
+        }
 
         .okp-history-state-card {
             min-width: 360px;
@@ -1426,7 +1506,10 @@ const OKP_STYLESHEET: &str = "
 
         .okp-controls {
             min-height: 32px;
-            padding: 7px 14px;
+            /* The adaptive OscBar owns the 7px/14px content inset in its own
+             * allocation (issue #328), so the CSS padding is zeroed to avoid
+             * double-insetting the controls. */
+            padding: 0;
             border-radius: 14px;
             /* GTK 4 has no portable backdrop-filter. This 50% tint plus the
              * localized scrim is the deterministic fallback for the locked
@@ -2441,6 +2524,13 @@ const OKP_STYLESHEET: &str = "
             padding: 2px 4px 2px 7px;
         }
 
+        .okp-subtitle-preset-status {
+            margin: 2px 7px 0;
+            color: rgba(23, 25, 28, 0.56);
+            font-size: 10.5px;
+            line-height: 1.25;
+        }
+
         button.okp-quick-style-button {
             min-height: 26px;
             padding: 2px 8px;
@@ -2455,6 +2545,11 @@ const OKP_STYLESHEET: &str = "
 
         button.okp-quick-style-button:hover {
             background: rgba(0, 0, 0, 0.09);
+        }
+
+        button.okp-quick-style-button:disabled {
+            background: rgba(0, 0, 0, 0.035);
+            color: rgba(23, 25, 28, 0.48);
         }
 
         .okp-quick-preference-footer {
@@ -2516,15 +2611,15 @@ const OKP_STYLESHEET: &str = "
             background: rgba(0, 0, 0, 0.07);
         }
 
-        .okp-media-info-modal-layer {
+        window.okp-companion-window,
+        window.okp-companion-window > contents {
             background: transparent;
+            box-shadow: none;
+            border: none;
         }
 
-        /* GTK4 CSS has no portable backdrop-filter. Keep the canonical 50%
-         * black scrim as the deterministic fallback; compositor blur remains
-         * an operator-QA concern rather than an unsupported CSS declaration. */
-        .okp-media-info-backdrop {
-            background: rgba(0, 0, 0, 0.50);
+        .okp-companion-resize-zone {
+            background: transparent;
         }
 
         .okp-media-info-card {
@@ -2532,7 +2627,7 @@ const OKP_STYLESHEET: &str = "
             color: @okp_ink;
             border: 1px solid rgba(0, 0, 0, 0.08);
             border-radius: 11px;
-            box-shadow: 0 32px 90px rgba(0, 0, 0, 0.50);
+            box-shadow: 0 12px 34px rgba(0, 0, 0, 0.28);
         }
 
         .okp-media-info-header {
@@ -2769,6 +2864,90 @@ const OKP_STYLESHEET: &str = "
             box-shadow: 0 0 0 2px alpha(@okp_teal, 0.42);
         }
 
+        window.okp-media-info-window.is-dark .okp-media-info-card,
+        window.okp-media-info-window.is-dark .okp-media-info-stack,
+        window.okp-media-info-window.is-dark .okp-media-info-scroller,
+        window.okp-media-info-window.is-dark .okp-media-info-scroller > viewport {
+            background: #17191d;
+            color: rgba(255, 255, 255, 0.94);
+        }
+
+        window.okp-media-info-window.is-dark .okp-media-info-card {
+            border-color: rgba(255, 255, 255, 0.10);
+        }
+
+        window.okp-media-info-window.is-dark .okp-media-info-header,
+        window.okp-media-info-window.is-dark .okp-media-info-footer {
+            border-color: rgba(255, 255, 255, 0.08);
+        }
+
+        window.okp-media-info-window.is-dark .okp-media-info-title,
+        window.okp-media-info-window.is-dark .okp-info-value,
+        window.okp-media-info-window.is-dark button.okp-media-info-copy {
+            color: rgba(255, 255, 255, 0.94);
+        }
+
+        window.okp-media-info-window.is-dark .okp-media-info-subtitle,
+        window.okp-media-info-window.is-dark .okp-media-info-path,
+        window.okp-media-info-window.is-dark .okp-info-label,
+        window.okp-media-info-window.is-dark .okp-info-track-kind,
+        window.okp-media-info-window.is-dark .okp-media-info-empty {
+            color: rgba(255, 255, 255, 0.56);
+        }
+
+        window.okp-media-info-window.is-dark .okp-media-info-tab-strip,
+        window.okp-media-info-window.is-dark button.okp-media-info-close,
+        window.okp-media-info-window.is-dark button.okp-media-info-copy {
+            background: rgba(255, 255, 255, 0.07);
+            border-color: rgba(255, 255, 255, 0.08);
+        }
+
+        window.okp-media-info-window.is-dark button.okp-media-info-tab {
+            color: rgba(255, 255, 255, 0.58);
+        }
+
+        window.okp-media-info-window.is-dark button.okp-media-info-tab.is-active,
+        window.okp-media-info-window.is-dark .okp-info-section {
+            background: rgba(255, 255, 255, 0.07);
+            border-color: rgba(255, 255, 255, 0.08);
+            color: rgba(255, 255, 255, 0.94);
+        }
+
+        window.okp-media-info-window.is-dark button.okp-media-info-tab.is-active,
+        window.okp-media-info-window.is-dark .okp-info-section-title,
+        window.okp-media-info-window.is-dark .okp-info-row.is-highlight .okp-info-value,
+        window.okp-media-info-window.is-dark .okp-info-track-current {
+            color: @okp_accent;
+        }
+
+        window.okp-media-info-window.is-dark .okp-media-info-scroller scrollbar slider {
+            background: rgba(255, 255, 255, 0.24);
+        }
+
+        window.okp-media-info-window.is-high-contrast .okp-media-info-card,
+        window.okp-media-info-window.is-high-contrast .okp-media-info-stack,
+        window.okp-media-info-window.is-high-contrast .okp-media-info-scroller,
+        window.okp-media-info-window.is-high-contrast .okp-media-info-scroller > viewport,
+        window.okp-media-info-window.is-high-contrast .okp-info-section {
+            background: #000000;
+            border-color: #ffffff;
+            color: #ffffff;
+        }
+
+        window.okp-media-info-window.is-high-contrast .okp-media-info-title,
+        window.okp-media-info-window.is-high-contrast .okp-media-info-subtitle,
+        window.okp-media-info-window.is-high-contrast .okp-media-info-path,
+        window.okp-media-info-window.is-high-contrast .okp-info-label,
+        window.okp-media-info-window.is-high-contrast .okp-info-value,
+        window.okp-media-info-window.is-high-contrast .okp-info-section-title,
+        window.okp-media-info-window.is-high-contrast .okp-info-track-kind,
+        window.okp-media-info-window.is-high-contrast .okp-media-info-empty,
+        window.okp-media-info-window.is-high-contrast button.okp-media-info-tab,
+        window.okp-media-info-window.is-high-contrast button.okp-media-info-copy,
+        window.okp-media-info-window.is-high-contrast button.okp-media-info-close {
+            color: #ffffff;
+        }
+
         window.okp-command-dialog {
             background: #101115;
             color: rgba(255, 255, 255, 0.9);
@@ -2887,20 +3066,51 @@ const OKP_STYLESHEET: &str = "
             border-right: 1px solid rgba(0, 0, 0, 0.05);
         }
 
-        .okp-settings-search {
+        entry.okp-settings-search {
             min-height: 16px;
             margin-bottom: 6px;
             padding: 7px 10px;
             border-radius: 7px;
             background: #ffffff;
             border: 1px solid rgba(0, 0, 0, 0.09);
-            color: rgba(0, 0, 0, 0.40);
-        }
-
-        .okp-settings-search-label {
+            box-shadow: none;
             color: rgba(0, 0, 0, 0.40);
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12px;
+            font-weight: 400;
+        }
+
+        entry.okp-settings-search:focus {
+            border-color: alpha(@okp_teal, 0.68);
+            box-shadow: 0 0 0 1px alpha(@okp_teal, 0.18);
+        }
+
+        button.okp-settings-search-result {
+            min-height: 40px;
+            margin: -2px 0 5px;
+            padding: 6px 10px;
+            border: none;
+            border-radius: 7px;
+            background: alpha(@okp_teal, 0.08);
+            box-shadow: inset 2px 0 0 alpha(@okp_teal, 0.65);
+            color: @okp_ink;
+        }
+
+        button.okp-settings-search-result:hover {
+            background: alpha(@okp_teal, 0.13);
+        }
+
+        .okp-settings-search-result-label {
+            color: inherit;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 11.5px;
+            font-weight: 600;
+        }
+
+        .okp-settings-search-result-page {
+            color: rgba(0, 0, 0, 0.45);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 10.5px;
             font-weight: 400;
         }
 
@@ -3767,15 +3977,25 @@ const OKP_STYLESHEET: &str = "
             border-right-color: rgba(255, 255, 255, 0.06);
         }
 
-        window.okp-settings-window.is-dark .okp-settings-search,
+        window.okp-settings-window.is-dark entry.okp-settings-search,
         window.okp-settings-window.is-dark entry.okp-shortcuts-search {
             background: rgba(255, 255, 255, 0.05);
             border-color: rgba(255, 255, 255, 0.09);
             color: rgba(255, 255, 255, 0.74);
         }
 
-        window.okp-settings-window.is-dark .okp-settings-search-label {
-            color: rgba(255, 255, 255, 0.42);
+        window.okp-settings-window.is-dark button.okp-settings-search-result {
+            background: alpha(@okp_accent, 0.10);
+            box-shadow: inset 2px 0 0 alpha(@okp_accent, 0.70);
+            color: rgba(255, 255, 255, 0.90);
+        }
+
+        window.okp-settings-window.is-dark button.okp-settings-search-result:hover {
+            background: alpha(@okp_accent, 0.16);
+        }
+
+        window.okp-settings-window.is-dark .okp-settings-search-result-page {
+            color: rgba(255, 255, 255, 0.48);
         }
 
         window.okp-settings-window.is-dark .okp-settings-nav-row {
@@ -3975,7 +4195,6 @@ const OKP_STYLESHEET: &str = "
         }
 
         window.okp-settings-window.is-high-contrast .okp-settings-titlebar-label,
-        window.okp-settings-window.is-high-contrast .okp-settings-search-label,
         window.okp-settings-window.is-high-contrast .okp-settings-nav-row,
         window.okp-settings-window.is-high-contrast .okp-settings-window-control,
         window.okp-settings-window.is-high-contrast .okp-settings-window-control-glyph,
@@ -4001,13 +4220,24 @@ const OKP_STYLESHEET: &str = "
             color: #ffffff;
         }
 
-        window.okp-settings-window.is-high-contrast .okp-settings-search,
+        window.okp-settings-window.is-high-contrast entry.okp-settings-search,
         window.okp-settings-window.is-high-contrast entry.okp-shortcuts-search,
         window.okp-settings-window.is-high-contrast button.okp-shortcut-chip,
         window.okp-settings-window.is-high-contrast textview.okp-mpv-conf-editor,
         window.okp-settings-window.is-high-contrast textview.okp-mpv-conf-editor text {
             background: #000000;
             border-color: #ffffff;
+            color: #ffffff;
+        }
+
+        window.okp-settings-window.is-high-contrast button.okp-settings-search-result {
+            background: #000000;
+            border: 1px solid #ffffff;
+            box-shadow: none;
+            color: #ffffff;
+        }
+
+        window.okp-settings-window.is-high-contrast .okp-settings-search-result-page {
             color: #ffffff;
         }
 
@@ -4167,7 +4397,6 @@ mod tests {
         for required in [
             "min-height: 42px;",
             "min-width: 46px;",
-            "padding: 7px 14px;",
             "border-radius: 14px;",
             "background: rgba(22, 22, 25, 0.50);",
             "background: rgba(22, 22, 25, 0.60);",
@@ -4190,5 +4419,11 @@ mod tests {
             !OKP_STYLESHEET.contains("okp-control-separator"),
             "the unified OSC must not regress to separated toolbar islands"
         );
+        // The 7px/14px OSC pill inset moved out of CSS and into the adaptive
+        // OscBar's own allocation (issue #328); the canonical redline lives
+        // there now so the geometry is unchanged.
+        let osc_bar = include_str!("osc_bar.rs");
+        assert!(osc_bar.contains("pub(crate) const PAD_HORIZONTAL: i32 = 14;"));
+        assert!(osc_bar.contains("pub(crate) const PAD_VERTICAL: i32 = 7;"));
     }
 }

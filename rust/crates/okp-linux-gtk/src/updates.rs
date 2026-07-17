@@ -6,10 +6,16 @@ pub(crate) fn settings_advanced_page(
 ) -> gtk::Box {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
     page.add_css_class("okp-settings-page");
-    page.append(&settings_raw_mpv_section(
-        Rc::clone(&state),
-        Rc::clone(&status_toast),
-    ));
+    page.append(&settings_raw_mpv_section(state, status_toast));
+    page
+}
+
+pub(crate) fn settings_updates_page(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    page.add_css_class("okp-settings-page");
     page.append(&settings_updates_section(state, status_toast));
     page
 }
@@ -155,8 +161,13 @@ pub(crate) fn settings_updates_section(
 ) -> gtk::Box {
     let section = settings_section("Updates");
     section.append(&settings_value_row("Current version", APP_BUILD_VERSION));
-    section.append(&settings_value_row("Channel", "linux"));
-    section.append(&settings_value_row("Feed", "Static (GitHub Pages)"));
+    let channel = effective_update_channel(state.borrow().settings.update_channel());
+    let (channel_label, feed_label) = match channel {
+        UpdateChannel::Public => ("linux", "Static (GitHub Pages)"),
+        UpdateChannel::Candidate => ("candidate (QA)", "Rolling candidate"),
+    };
+    section.append(&settings_value_row("Channel", channel_label));
+    section.append(&settings_value_row("Feed", feed_label));
     section.append(&settings_value_row(
         "Install",
         linux_update_install_status(),
@@ -166,7 +177,10 @@ pub(crate) fn settings_updates_section(
     row.add_css_class("okp-settings-row");
 
     let auto_check_enabled = state.borrow().settings.auto_check_updates();
-    let initial_update_status = state.borrow().linux_update_status.clone();
+    let preview_status = settings_update_preview_status();
+    let initial_update_status = preview_status
+        .clone()
+        .unwrap_or_else(|| state.borrow().linux_update_status.clone());
     let status = gtk::Label::new(Some(
         &initial_update_status.settings_status_text(auto_check_enabled),
     ));
@@ -266,7 +280,10 @@ pub(crate) fn settings_updates_section(
         );
     });
     actions.append(&check_button);
-    if auto_check_enabled && matches!(initial_update_status, LinuxUpdateStatus::NotChecked) {
+    if preview_status.is_none()
+        && auto_check_enabled
+        && matches!(initial_update_status, LinuxUpdateStatus::NotChecked)
+    {
         let auto_button = check_button.clone();
         let auto_status = status.clone();
         let auto_pending = Rc::clone(&pending_update);
@@ -298,6 +315,33 @@ pub(crate) fn settings_updates_section(
     section
 }
 
+pub(crate) fn settings_update_preview_status() -> Option<LinuxUpdateStatus> {
+    match env::var("OKP_SETTINGS_UPDATE_PREVIEW")
+        .ok()?
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "up-to-date" => Some(LinuxUpdateStatus::UpToDate),
+        "checking" => Some(LinuxUpdateStatus::Checking),
+        "available" => Some(LinuxUpdateStatus::Available(PendingLinuxUpdate {
+            manager: None,
+            target: LinuxUpdateTarget::Deb(DebUpdate {
+                version: "0.11.0-beta.2".to_owned(),
+                name: "ok-player_0.11.0-beta.2_amd64.deb".to_owned(),
+                url: "https://example.invalid/ok-player.deb".to_owned(),
+                size: Some(42),
+                sums_url: None,
+                expected_sha256: None,
+            }),
+        })),
+        "error" => Some(LinuxUpdateStatus::Failed(
+            "the update feed is temporarily unavailable".to_owned(),
+        )),
+        _ => None,
+    }
+}
+
 pub(crate) fn update_status_intro(auto_check_enabled: bool) -> &'static str {
     if auto_check_enabled {
         "Automatic update checks are on. AppImage installs restart in place; .deb installs request admin approval and fall back to opening the installer."
@@ -321,9 +365,10 @@ pub(crate) fn start_update_check_for_ui(
     pending.borrow_mut().take();
     state.borrow_mut().linux_update_status = LinuxUpdateStatus::Checking;
 
+    let channel = state.borrow().settings.update_channel();
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = sender.send(check_for_linux_update());
+        let _ = sender.send(check_for_linux_update(channel));
     });
 
     let button = button.clone();
@@ -466,9 +511,10 @@ pub(crate) fn check_updates_on_startup(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) {
+    let channel = state.borrow().settings.update_channel();
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = sender.send(check_for_linux_update());
+        let _ = sender.send(check_for_linux_update(channel));
     });
 
     glib::timeout_add_local(Duration::from_millis(500), move || {
@@ -496,8 +542,13 @@ pub(crate) fn check_updates_on_startup(
     });
 }
 
-pub(crate) fn check_for_linux_update() -> LinuxUpdateCheckResult {
-    let manager = match linux_update_manager() {
+pub(crate) fn check_for_linux_update(channel: UpdateChannel) -> LinuxUpdateCheckResult {
+    let channel = effective_update_channel(channel);
+    if channel == UpdateChannel::Candidate {
+        return check_for_linux_candidate_channel_update();
+    }
+
+    let manager = match linux_update_manager(UpdateChannel::Public) {
         Ok(manager) => manager,
         Err(manager_error) => {
             return match check_for_linux_deb_update() {
@@ -534,7 +585,8 @@ pub(crate) fn check_for_linux_update() -> LinuxUpdateCheckResult {
     }
 }
 
-pub(crate) fn linux_update_manager() -> Result<UpdateManager, String> {
+pub(crate) fn linux_update_manager(channel: UpdateChannel) -> Result<UpdateManager, String> {
+    debug_assert_eq!(channel, UpdateChannel::Public);
     let source = HttpSource::new(linux_update_feed_base_url());
     let options = UpdateOptions {
         ExplicitChannel: Some("linux".to_owned()),
@@ -544,6 +596,124 @@ pub(crate) fn linux_update_manager() -> Result<UpdateManager, String> {
         velopack::Error::NotInstalled(_) => "This install cannot self-update.".to_owned(),
         other => other.to_string(),
     })
+}
+
+#[derive(Clone)]
+struct CandidateVelopackSource {
+    asset: VelopackAsset,
+    download_url: String,
+}
+
+impl UpdateSource for CandidateVelopackSource {
+    fn get_release_feed(
+        &self,
+        _channel: &str,
+        _app: &Manifest,
+        _staged_user_id: &str,
+    ) -> Result<VelopackAssetFeed, velopack::Error> {
+        Ok(VelopackAssetFeed {
+            Assets: vec![self.asset.clone()],
+        })
+    }
+
+    fn download_release_entry(
+        &self,
+        asset: &VelopackAsset,
+        local_file: &Path,
+        progress_sender: Option<mpsc::Sender<i16>>,
+    ) -> Result<(), velopack::Error> {
+        debug_assert_eq!(asset.FileName, self.asset.FileName);
+        velopack::download::download_url_to_file(&self.download_url, local_file, move |progress| {
+            if let Some(sender) = &progress_sender {
+                let _ = sender.send(progress);
+            }
+        })
+    }
+}
+
+pub(crate) fn candidate_velopack_asset(
+    candidate: &CandidateAppImage,
+    version: &str,
+) -> VelopackAsset {
+    VelopackAsset {
+        PackageId: candidate.package_id.clone(),
+        Version: version.to_owned(),
+        Type: "Full".to_owned(),
+        FileName: candidate.name.clone(),
+        SHA1: candidate.sha1.clone(),
+        SHA256: candidate.sha256.clone(),
+        Size: candidate.size,
+        NotesMarkdown: String::new(),
+        NotesHtml: String::new(),
+    }
+}
+
+fn linux_candidate_update_manager(candidate: &CandidateUpdate) -> Result<UpdateManager, String> {
+    let source = CandidateVelopackSource {
+        asset: candidate_velopack_asset(&candidate.appimage, &candidate.version),
+        download_url: candidate.appimage.url.clone(),
+    };
+    let options = UpdateOptions {
+        ExplicitChannel: Some("linux-candidate".to_owned()),
+        ..Default::default()
+    };
+    UpdateManager::new(source, Some(options), None).map_err(|error| match error {
+        velopack::Error::NotInstalled(_) => "This install cannot self-update.".to_owned(),
+        other => other.to_string(),
+    })
+}
+
+fn check_for_linux_candidate_channel_update() -> LinuxUpdateCheckResult {
+    let candidate = match fetch_linux_candidate_update() {
+        Ok(Some(candidate)) => candidate,
+        Ok(None) => return LinuxUpdateCheckResult::UpToDate,
+        Err(error) => return LinuxUpdateCheckResult::Failed(error),
+    };
+    let deb_update = candidate_deb_update(&candidate);
+    let manager = match linux_candidate_update_manager(&candidate) {
+        Ok(manager) => manager,
+        Err(manager_error) => {
+            eprintln!("Candidate AppImage updater unavailable; using .deb lane: {manager_error}");
+            return LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
+                manager: None,
+                target: LinuxUpdateTarget::Deb(deb_update),
+            });
+        }
+    };
+
+    if let Some(asset) = manager.get_update_pending_restart()
+        && asset.Version == candidate.version
+        && asset
+            .SHA256
+            .eq_ignore_ascii_case(&candidate.appimage.sha256)
+    {
+        return LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
+            manager: Some(manager),
+            target: LinuxUpdateTarget::Asset(Box::new(asset)),
+        });
+    }
+
+    match manager.check_for_updates() {
+        Ok(UpdateCheck::UpdateAvailable(update))
+            if update.TargetFullRelease.Version == candidate.version
+                && update
+                    .TargetFullRelease
+                    .SHA256
+                    .eq_ignore_ascii_case(&candidate.appimage.sha256) =>
+        {
+            LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
+                manager: Some(manager),
+                target: LinuxUpdateTarget::Info(update),
+            })
+        }
+        Ok(UpdateCheck::UpdateAvailable(_)) => LinuxUpdateCheckResult::Failed(
+            "candidate AppImage feed does not match candidate.linux.json".to_owned(),
+        ),
+        Ok(UpdateCheck::NoUpdateAvailable | UpdateCheck::RemoteIsEmpty) => {
+            LinuxUpdateCheckResult::UpToDate
+        }
+        Err(error) => LinuxUpdateCheckResult::Failed(error.to_string()),
+    }
 }
 
 pub(crate) fn linux_update_feed_base_url() -> String {
@@ -618,6 +788,59 @@ pub(crate) fn linux_deb_feed_url() -> String {
     env::var("OKP_LINUX_DEB_FEED_URL").unwrap_or_else(|_| LINUX_DEB_FEED_URL.to_owned())
 }
 
+/// Resolves the effective discovery channel: the persisted enrollment, unless
+/// `OKP_LINUX_UPDATE_CHANNEL=candidate` explicitly overrides it for a QA test
+/// run. The override can only *enrol* — any other value leaves the install on
+/// its persisted channel, so it can never silently move a candidate install back
+/// to public or vice versa by accident.
+pub(crate) fn effective_update_channel(persisted: UpdateChannel) -> UpdateChannel {
+    match env::var("OKP_LINUX_UPDATE_CHANNEL") {
+        Ok(value) if value.trim().eq_ignore_ascii_case("candidate") => UpdateChannel::Candidate,
+        _ => persisted,
+    }
+}
+
+pub(crate) fn linux_candidate_feed_url() -> String {
+    env::var("OKP_LINUX_CANDIDATE_FEED_URL").unwrap_or_else(|_| LINUX_CANDIDATE_FEED_URL.to_owned())
+}
+
+/// Checks the rolling candidate feed for an enrolled install. A fetch or parse
+/// failure surfaces as `Err` ("couldn't check"); an accepted-but-not-newer,
+/// pending, rejected, or non-candidate feed returns `Ok(None)` ("up to date").
+/// The two stay distinct exactly as on the public lane (issue #339). Selection
+/// gates on acceptance status in okp-core, so a pending candidate on the rolling
+/// surface is never offered to the fleet.
+fn fetch_linux_candidate_update() -> Result<Option<CandidateUpdate>, String> {
+    let url = linux_candidate_feed_url();
+    let mut response = ureq::get(&url)
+        .header("Accept", "application/json")
+        .header("User-Agent", "OK Player Linux")
+        .call()
+        .map_err(|error| format!("candidate update check failed: {error}"))?;
+    let body = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|error| format!("candidate update check failed: {error}"))?;
+    let feed: CandidateFeed = serde_json::from_str(&body)
+        .map_err(|error| format!("candidate update feed was invalid: {error}"))?;
+
+    Ok(candidate_channel::select_candidate_update_from_feed(
+        feed,
+        APP_BUILD_VERSION,
+    ))
+}
+
+fn candidate_deb_update(candidate: &CandidateUpdate) -> DebUpdate {
+    DebUpdate {
+        version: candidate.version.clone(),
+        name: candidate.package.name.clone(),
+        url: candidate.package.url.clone(),
+        size: candidate.package.size,
+        sums_url: candidate.sums_url.clone(),
+        expected_sha256: Some(candidate.package.sha256.clone()),
+    }
+}
+
 pub(crate) fn download_deb_update(update: DebUpdate) -> Result<PathBuf, String> {
     let cache_dir = linux_update_cache_dir();
     fs::create_dir_all(&cache_dir)
@@ -660,12 +883,31 @@ pub(crate) fn download_deb_checksums(update: &DebUpdate) -> Result<String, Strin
         .header("User-Agent", "OK Player Linux")
         .call()
         .map_err(|error| format!("Checksum download failed: {error}"))?;
-    response
+    let manifest = response
         .body_mut()
         .with_config()
         .limit(LINUX_SHA256SUMS_MAX_BYTES)
         .read_to_string()
-        .map_err(|error| format!("Checksum download failed: {error}"))
+        .map_err(|error| format!("Checksum download failed: {error}"))?;
+    verify_deb_feed_identity(update, &manifest)?;
+    Ok(manifest)
+}
+
+pub(crate) fn verify_deb_feed_identity(update: &DebUpdate, manifest: &str) -> Result<(), String> {
+    let Some(expected_sha256) = update.expected_sha256.as_deref() else {
+        return Ok(());
+    };
+    let sums = sha256sums::Sha256Sums::parse(manifest)
+        .map_err(|error| format!("Candidate identity check failed: {error}"))?;
+    let package = candidate_channel::CandidatePackage {
+        name: update.name.clone(),
+        url: update.url.clone(),
+        size: update.size,
+        sha256: expected_sha256.to_owned(),
+    };
+    package
+        .matches_sums(&sums)
+        .map_err(|error| format!("Candidate identity check failed: {error}"))
 }
 
 /// Stages the downloaded package and verifies it against the manifest

@@ -346,25 +346,6 @@ pub(crate) fn command_dialog_title(title: &str) -> gtk::Label {
     label
 }
 
-pub(crate) fn captionless_transient_window(
-    parent: &gtk::ApplicationWindow,
-    title: &str,
-    default_width: i32,
-    default_height: i32,
-    resizable: bool,
-) -> gtk::Window {
-    let window = gtk::Window::builder()
-        .title(title)
-        .transient_for(parent)
-        .default_width(default_width)
-        .default_height(default_height)
-        .resizable(resizable)
-        .decorated(false)
-        .build();
-    window.set_decorated(false);
-    window
-}
-
 #[allow(deprecated)]
 pub(crate) fn open_subtitle_dialog(
     parent: &gtk::ApplicationWindow,

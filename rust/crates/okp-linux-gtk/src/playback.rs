@@ -33,6 +33,10 @@ pub(crate) fn with_mpv(
     state.borrow().mpv.is_some()
 }
 
+pub(crate) fn toggle_play_pause(state: &Rc<RefCell<PlayerState>>) {
+    with_mpv(state, |mpv| mpv.cycle_pause());
+}
+
 pub(crate) fn has_loaded_media(state: &Rc<RefCell<PlayerState>>) -> bool {
     has_loaded_media_state(&state.borrow())
 }

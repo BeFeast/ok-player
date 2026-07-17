@@ -1,4 +1,6 @@
 use super::*;
+use crate::osc_bar::OscBar;
+use okp_core::osc_overflow::OscControlId;
 
 pub(crate) const VOLUME_RESTING_SIZE: i32 = 34;
 pub(crate) const VOLUME_WICK_WIDTH: i32 = 18;
@@ -9,6 +11,7 @@ pub(crate) const VOLUME_THUMB_SIZE: i32 = 14;
 pub(crate) const VOLUME_CAPSULE_OFFSET: i32 = 10;
 pub(crate) const VOLUME_COLLAPSE_MS: u64 = 120;
 pub(crate) const VOLUME_HOVER_GRACE_MS: u64 = 220;
+pub(crate) const AUDIO_TRACK_ICON_SIZE: i32 = 19;
 pub(crate) const TIMELINE_HEIGHT: i32 = 20;
 pub(crate) const TIMELINE_RAIL_HEIGHT: f64 = 4.0;
 pub(crate) const TIMELINE_THUMB_DIAMETER: f64 = 12.0;
@@ -909,6 +912,80 @@ fn draw_volume_track(cr: &cairo::Context, width: i32, height: i32, state: volume
     let _ = cr.fill();
 }
 
+/// Theme-independent audio-track identity used by both the OSC and its adaptive
+/// overflow row. The canonical Windows/Claude composition uses a music-track
+/// note here, keeping the speaker silhouette exclusively owned by Volume.
+pub(crate) fn audio_track_icon(size: i32) -> gtk::DrawingArea {
+    let icon = gtk::DrawingArea::new();
+    icon.add_css_class("okp-audio-track-icon");
+    icon.set_content_width(size);
+    icon.set_content_height(size);
+    icon.set_can_target(false);
+    icon.set_focusable(false);
+    let bounds_logged = Rc::new(Cell::new(false));
+    icon.set_draw_func(move |widget, cr, width, height| {
+        let glyph_size = size.min(width).min(height);
+        cr.save().ok();
+        cr.translate(
+            f64::from(width - glyph_size) / 2.0,
+            f64::from(height - glyph_size) / 2.0,
+        );
+        draw_audio_track_glyph(cr, glyph_size, glyph_size, widget.color());
+        cr.restore().ok();
+        if env::var_os("OKP_DEBUG_OSC_LAYOUT").is_some()
+            && !bounds_logged.replace(true)
+            && let Some(label) = widget.widget_name().strip_prefix("okp-debug-")
+            && let Some(root) = widget.root()
+            && let Ok(window) = root.downcast::<gtk::Window>()
+            && let Some(bounds) = widget.compute_bounds(&window)
+        {
+            eprintln!(
+                "osc-widget-bounds: label={label} x={} y={} width={} height={}",
+                bounds.x().round() as i32,
+                bounds.y().round() as i32,
+                bounds.width().round() as i32,
+                bounds.height().round() as i32
+            );
+        }
+    });
+    icon
+}
+
+pub(crate) fn draw_audio_track_glyph(
+    cr: &cairo::Context,
+    width: i32,
+    height: i32,
+    color: gdk::RGBA,
+) {
+    let scale = f64::from(width.min(height)) / 24.0;
+    let offset_x = (f64::from(width) - 24.0 * scale) / 2.0;
+    let offset_y = (f64::from(height) - 24.0 * scale) / 2.0;
+    cr.save().ok();
+    cr.translate(offset_x, offset_y);
+    cr.scale(scale, scale);
+    cr.set_source_rgba(
+        f64::from(color.red()),
+        f64::from(color.green()),
+        f64::from(color.blue()),
+        f64::from(color.alpha()),
+    );
+    cr.set_line_width(1.7);
+    cr.set_line_cap(cairo::LineCap::Round);
+    cr.set_line_join(cairo::LineJoin::Round);
+
+    // Double eighth note from the canonical compact-mode audio action.
+    cr.move_to(9.0, 18.0);
+    cr.line_to(9.0, 7.0);
+    cr.line_to(18.0, 5.0);
+    cr.line_to(18.0, 16.0);
+    let _ = cr.stroke();
+    cr.arc(6.5, 18.0, 2.2, 0.0, std::f64::consts::TAU);
+    let _ = cr.stroke();
+    cr.arc(15.5, 16.0, 2.2, 0.0, std::f64::consts::TAU);
+    let _ = cr.stroke();
+    cr.restore().ok();
+}
+
 pub(crate) fn build_controls(
     window: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
@@ -936,12 +1013,15 @@ pub(crate) fn build_controls(
     subtitle_button.set_tooltip_text(Some("Subtitles"));
     subtitle_button.set_sensitive(false);
 
-    // Headphones glyph (not a second speaker): the volume control owns the
-    // speaker/level icon, so the audio-track/output action must read as a
-    // distinct semantic to keep the two OSC buttons tellable apart.
-    let audio_button = gtk::MenuButton::builder()
-        .icon_name("audio-headphones-symbolic")
-        .build();
+    // Render the canonical music-track note ourselves instead of asking the
+    // host icon theme for a symbolic name. Packaged desktops may omit optional
+    // theme glyphs; a missing resource must never leave an empty OSC button.
+    let audio_button = gtk::MenuButton::new();
+    let audio_icon = audio_track_icon(AUDIO_TRACK_ICON_SIZE);
+    if env::var_os("OKP_DEBUG_OSC_LAYOUT").is_some() {
+        audio_icon.set_widget_name("okp-debug-audio-osc-icon");
+    }
+    audio_button.set_child(Some(&audio_icon));
     audio_button.set_has_frame(false);
     audio_button.add_css_class("okp-control-button");
     audio_button.add_css_class("okp-icon-button");
@@ -1248,6 +1328,9 @@ pub(crate) fn build_controls(
     audio_button.set_popover(Some(&audio_popover));
     let audio_state = Rc::clone(&state);
     audio_popover.connect_show(move |popover| {
+        if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+            eprintln!("interaction: audio-popover=shown");
+        }
         populate_audio_popover(popover, Rc::clone(&audio_state));
     });
 
@@ -1269,12 +1352,23 @@ pub(crate) fn build_controls(
     let more_parent = window.clone();
     let more_state = Rc::clone(&state);
     let more_toast = Rc::clone(&status_toast);
+    // Shared with the adaptive OscBar (see `controls_bar`): the bar writes the
+    // controls it folded at the current width, and the overflow popover reads
+    // them to keep every collapsed action reachable (issue #328).
+    let overflow_collapsed: Rc<RefCell<Vec<OscControlId>>> = Rc::new(RefCell::new(Vec::new()));
+    let more_reach = OverflowReach {
+        collapsed: Rc::clone(&overflow_collapsed),
+        screenshot: screenshot_button.clone(),
+        fullscreen: fullscreen_button.clone(),
+        chapters: chapters_button.clone(),
+    };
     more_popover.connect_show(move |popover| {
         populate_command_popover(
             popover,
             &more_parent,
             Rc::clone(&more_state),
             Rc::clone(&more_toast),
+            &more_reach,
         );
     });
 
@@ -1285,11 +1379,10 @@ pub(crate) fn build_controls(
 
     let play_state = Rc::clone(&state);
     play_button.connect_clicked(move |_| {
-        if let Some(mpv) = play_state.borrow().mpv.as_ref()
-            && let Err(error) = mpv.cycle_pause()
-        {
-            eprintln!("Failed to toggle playback: {error}");
+        if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+            eprintln!("interaction: play-button-activate");
         }
+        toggle_play_pause(&play_state);
     });
     play_button.connect_has_focus_notify(|button| {
         if button.has_focus() && env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
@@ -1374,6 +1467,7 @@ pub(crate) fn build_controls(
         screenshot_button,
         fullscreen_button,
         more_button,
+        overflow_collapsed,
         timeline,
         seek,
         timeline_rail,
@@ -1402,7 +1496,14 @@ pub(crate) fn build_controls(
 }
 
 pub(crate) fn controls_bar(controls: &Controls) -> gtk::Overlay {
-    let bar = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+    // The adaptive OSC container reports only the floor as its horizontal
+    // minimum, so a narrow window hands it its real allocation and the
+    // okp-core overflow policy folds lower-priority controls into the `…`
+    // menu before anything overlaps. The overflow button is the final in-flow
+    // action with a reserved, exclusive band — never a separate overlay that
+    // could paint over its neighbour (issue #328).
+    let bar = OscBar::new();
+    bar.set_collapsed_sink(Rc::clone(&controls.overflow_collapsed));
     bar.add_css_class("okp-controls");
     bar.set_halign(gtk::Align::Fill);
     bar.set_valign(gtk::Align::End);
@@ -1410,27 +1511,20 @@ pub(crate) fn controls_bar(controls: &Controls) -> gtk::Overlay {
     bar.set_margin_end(16);
     bar.set_margin_bottom(18);
 
-    bar.append(&controls.play_button);
-    bar.append(&controls.previous_button);
-    bar.append(&controls.next_button);
-    bar.append(&controls.elapsed_label);
-    bar.append(&controls.timeline);
-    bar.append(&controls.duration_label);
-    bar.append(controls.volume.widget());
-    bar.append(&controls.speed_button);
-    bar.append(&controls.subtitle_button);
-    bar.append(&controls.audio_button);
-    bar.append(&controls.chapters_button);
-    bar.append(&controls.screenshot_button);
-    bar.append(&controls.fullscreen_button);
-    // Reserve the final row slot while the real More button is anchored by
-    // the surrounding overlay. A GtkBox narrower than its aggregate minimum
-    // clips its final child first; keeping More out of that allocation makes
-    // the required Settings entry reachable at every window width.
-    let more_slot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    more_slot.set_size_request(32, 1);
-    more_slot.set_can_target(false);
-    bar.append(&more_slot);
+    bar.push(&controls.play_button, OscControlId::Play);
+    bar.push(&controls.previous_button, OscControlId::Previous);
+    bar.push(&controls.next_button, OscControlId::Next);
+    bar.push(&controls.elapsed_label, OscControlId::Elapsed);
+    bar.push(&controls.timeline, OscControlId::Timeline);
+    bar.push(&controls.duration_label, OscControlId::Duration);
+    bar.push(controls.volume.widget(), OscControlId::Volume);
+    bar.push(&controls.speed_button, OscControlId::Speed);
+    bar.push(&controls.subtitle_button, OscControlId::Subtitles);
+    bar.push(&controls.audio_button, OscControlId::Audio);
+    bar.push(&controls.chapters_button, OscControlId::Chapters);
+    bar.push(&controls.screenshot_button, OscControlId::Screenshot);
+    bar.push(&controls.fullscreen_button, OscControlId::Fullscreen);
+    bar.push(&controls.more_button, OscControlId::Overflow);
 
     let scrim = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     scrim.add_css_class("okp-bottom-scrim");
@@ -1445,11 +1539,6 @@ pub(crate) fn controls_bar(controls: &Controls) -> gtk::Overlay {
     chrome.set_valign(gtk::Align::End);
     chrome.set_child(Some(&scrim));
     chrome.add_overlay(&bar);
-    controls.more_button.set_halign(gtk::Align::End);
-    controls.more_button.set_valign(gtk::Align::End);
-    controls.more_button.set_margin_end(30);
-    controls.more_button.set_margin_bottom(25);
-    chrome.add_overlay(&controls.more_button);
     chrome.add_overlay(controls.seek_hover_preview.widget());
     chrome
 }

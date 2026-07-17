@@ -1,10 +1,5 @@
 use super::*;
 
-const MEDIA_INFO_REFERENCE_WIDTH: i32 = 720;
-const MEDIA_INFO_WIDTH_PERCENT: i32 = 92;
-const MEDIA_INFO_HEIGHT_PERCENT: i32 = 84;
-// Header, segmented navigation, footer, and CSS hairlines outside the body scroller.
-const MEDIA_INFO_FIXED_HEIGHT: i32 = 181;
 pub(crate) const MEDIA_INFO_IDENTITY_BADGE_SIZE: i32 = 38;
 pub(crate) const MEDIA_INFO_IDENTITY_VIEWBOX_SIZE: f64 = 20.0;
 pub(crate) const MEDIA_INFO_IDENTITY_RING_RADIUS: f64 = 7.5;
@@ -20,6 +15,10 @@ pub(crate) fn open_media_info_window(
     state: &Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) {
+    if present_existing_companion_window(state, CompanionWindowKind::MediaInfo) {
+        return;
+    }
+
     let media_info = {
         let state = state.borrow();
         let Some(mpv) = state.mpv.as_ref() else {
@@ -36,51 +35,39 @@ pub(crate) fn open_media_info_window(
     };
 
     match media_info {
-        Some(media_info) => show_media_info_modal(parent, &media_info, status_toast),
+        Some(media_info) => show_media_info_window(parent, state, &media_info, status_toast),
         None => {
             status_toast.show("Media information unavailable");
         }
     }
 }
 
-pub(crate) fn media_info_modal_is_open(parent: &gtk::ApplicationWindow) -> bool {
-    player_overlay(parent).is_some_and(|overlay| active_media_info_layer(&overlay).is_some())
-}
-
-pub(crate) fn show_media_info_modal(
+pub(crate) fn show_media_info_window(
     parent: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
     media_info: &MediaInfo,
     status_toast: Rc<StatusToast>,
 ) {
-    let Some(host) = player_overlay(parent) else {
-        status_toast.show("Media information unavailable");
-        return;
-    };
-    if let Some(layer) = active_media_info_layer(&host) {
-        layer.grab_focus();
+    if present_existing_companion_window(state, CompanionWindowKind::MediaInfo) {
         return;
     }
 
-    let return_focus = gtk::prelude::GtkWindowExt::focus(parent);
-    let layer = gtk::Overlay::new();
-    layer.add_css_class("okp-media-info-modal-layer");
-    layer.set_halign(gtk::Align::Fill);
-    layer.set_valign(gtk::Align::Fill);
-    layer.set_hexpand(true);
-    layer.set_vexpand(true);
-
-    let backdrop = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    backdrop.add_css_class("okp-media-info-backdrop");
-    backdrop.set_halign(gtk::Align::Fill);
-    backdrop.set_valign(gtk::Align::Fill);
-    backdrop.set_hexpand(true);
-    backdrop.set_vexpand(true);
-    layer.set_child(Some(&backdrop));
+    let window = build_companion_window(
+        parent,
+        state,
+        CompanionWindowKind::MediaInfo,
+        "Media Information",
+    );
+    window.add_css_class("okp-media-info-window");
+    apply_settings_window_theme(&window, state.borrow().settings.appearance_theme());
+    watch_system_settings_theme(&window, Rc::clone(state));
 
     let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
     card.add_css_class("okp-media-info-card");
     card.set_halign(gtk::Align::Fill);
-    card.set_valign(gtk::Align::Center);
+    card.set_valign(gtk::Align::Fill);
+    card.set_hexpand(true);
+    card.set_vexpand(true);
     card.set_overflow(gtk::Overflow::Hidden);
 
     let header = gtk::Box::new(gtk::Orientation::Horizontal, 13);
@@ -129,6 +116,8 @@ pub(crate) fn show_media_info_modal(
     let stats_scroller = media_info_scroller(&media_info_stats_content(media_info));
     let stack = gtk::Stack::new();
     stack.add_css_class("okp-media-info-stack");
+    stack.set_hexpand(true);
+    stack.set_vexpand(true);
     stack.set_hhomogeneous(true);
     stack.set_vhomogeneous(false);
     stack.set_transition_type(gtk::StackTransitionType::None);
@@ -163,17 +152,10 @@ pub(crate) fn show_media_info_modal(
     done_button.set_has_frame(false);
     footer.append(&done_button);
     card.append(&footer);
-    layer.add_overlay(&card);
-
-    let close = media_info_close_action(&host, &layer, return_focus.as_ref());
-    let close_from_button = Rc::clone(&close);
-    close_button.connect_clicked(move |_| close_from_button());
-    let close_from_done = Rc::clone(&close);
-    done_button.connect_clicked(move |_| close_from_done());
-    let close_from_backdrop = Rc::clone(&close);
-    let backdrop_click = gtk::GestureClick::new();
-    backdrop_click.connect_released(move |_, _, _, _| close_from_backdrop());
-    backdrop.add_controller(backdrop_click);
+    let close_window = window.clone();
+    close_button.connect_clicked(move |_| close_window.close());
+    let done_window = window.clone();
+    done_button.connect_clicked(move |_| done_window.close());
 
     let current_tab = Rc::new(Cell::new(media_info_preview_tab()));
     set_media_info_tab(current_tab.get(), &stack, &streams_button, &stats_button);
@@ -199,16 +181,9 @@ pub(crate) fn show_media_info_modal(
         set_media_info_tab(MediaInfoTab::Stats, &stats_stack, &stats_peer, &stats_tab);
     });
 
-    let focusables: Vec<gtk::Widget> = vec![
-        streams_button.clone().upcast(),
-        stats_button.clone().upcast(),
-        close_button.clone().upcast(),
-        copy_button.clone().upcast(),
-        done_button.clone().upcast(),
-    ];
     let key_controller = gtk::EventControllerKey::new();
     key_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
-    let close_from_key = Rc::clone(&close);
+    let close_from_key = window.clone();
     let key_stack = stack.clone();
     let key_streams = streams_button.clone();
     let key_stats = stats_button.clone();
@@ -223,13 +198,7 @@ pub(crate) fn show_media_info_modal(
                         | gdk::ModifierType::SUPER_MASK,
                 ))
         {
-            close_from_key();
-            return glib::Propagation::Stop;
-        }
-        if key == gdk::Key::Tab || key == gdk::Key::ISO_Left_Tab {
-            let backwards =
-                key == gdk::Key::ISO_Left_Tab || modifiers.contains(gdk::ModifierType::SHIFT_MASK);
-            focus_media_info_target(&focusables, backwards);
+            close_from_key.close();
             return glib::Propagation::Stop;
         }
         if key == gdk::Key::Left || key == gdk::Key::Right {
@@ -248,34 +217,17 @@ pub(crate) fn show_media_info_modal(
         }
         glib::Propagation::Proceed
     });
-    layer.add_controller(key_controller);
+    window.add_controller(key_controller);
 
-    update_media_info_geometry(
-        parent,
-        &card,
-        &[streams_scroller.clone(), stats_scroller.clone()],
-    );
-    let geometry_parent = parent.downgrade();
-    let geometry_card = card.downgrade();
-    let geometry_streams = streams_scroller.downgrade();
-    let geometry_stats = stats_scroller.downgrade();
-    layer.add_tick_callback(move |layer, _| {
-        if layer.root().is_none() {
-            return glib::ControlFlow::Break;
-        }
-        if let (Some(parent), Some(card), Some(streams), Some(stats)) = (
-            geometry_parent.upgrade(),
-            geometry_card.upgrade(),
-            geometry_streams.upgrade(),
-            geometry_stats.upgrade(),
-        ) {
-            update_media_info_geometry(&parent, &card, &[streams, stats]);
-        }
-        glib::ControlFlow::Continue
-    });
-
-    host.add_overlay(&layer);
-    host.set_measure_overlay(&layer, false);
+    let window_overlay = gtk::Overlay::new();
+    window_overlay.set_child(Some(&card));
+    let drag_layer = captionless_window_drag_layer(&window);
+    drag_layer.set_margin_end(42);
+    window_overlay.add_overlay(&drag_layer);
+    add_companion_window_resize_zones(&window_overlay, &window);
+    window.set_child(Some(&window_overlay));
+    connect_companion_play_pause_space(&window, Rc::clone(state));
+    window.present();
     if current_tab.get() == MediaInfoTab::Stats {
         stats_button.grab_focus();
     } else {
@@ -346,80 +298,6 @@ fn draw_media_info_identity(area: &gtk::DrawingArea, cr: &cairo::Context, width:
     let _ = cr.restore();
 }
 
-fn player_overlay(parent: &gtk::ApplicationWindow) -> Option<gtk::Overlay> {
-    find_widget_with_css_class(parent.upcast_ref(), "okp-root")?
-        .downcast()
-        .ok()
-}
-
-fn find_widget_with_css_class(root: &gtk::Widget, css_class: &str) -> Option<gtk::Widget> {
-    if root.has_css_class(css_class) {
-        return Some(root.clone());
-    }
-    let mut child = root.first_child();
-    while let Some(widget) = child {
-        if let Some(found) = find_widget_with_css_class(&widget, css_class) {
-            return Some(found);
-        }
-        child = widget.next_sibling();
-    }
-    None
-}
-
-fn active_media_info_layer(host: &gtk::Overlay) -> Option<gtk::Widget> {
-    let mut child = host.first_child();
-    while let Some(widget) = child {
-        if widget.has_css_class("okp-media-info-modal-layer") {
-            return Some(widget);
-        }
-        child = widget.next_sibling();
-    }
-    None
-}
-
-fn media_info_close_action(
-    host: &gtk::Overlay,
-    layer: &gtk::Overlay,
-    return_focus: Option<&gtk::Widget>,
-) -> Rc<dyn Fn()> {
-    let host = host.downgrade();
-    let layer = layer.downgrade();
-    let return_focus = return_focus.map(gtk::Widget::downgrade);
-    Rc::new(move || {
-        if let (Some(host), Some(layer)) = (host.upgrade(), layer.upgrade()) {
-            host.remove_overlay(&layer);
-        }
-        if let Some(focus) = return_focus.as_ref().and_then(glib::WeakRef::upgrade) {
-            focus.grab_focus();
-        }
-    })
-}
-
-pub(crate) fn media_info_modal_geometry(player_width: i32, player_height: i32) -> (i32, i32) {
-    let width =
-        (player_width.max(1) * MEDIA_INFO_WIDTH_PERCENT / 100).min(MEDIA_INFO_REFERENCE_WIDTH);
-    let height = player_height.max(1) * MEDIA_INFO_HEIGHT_PERCENT / 100;
-    (width, height)
-}
-
-fn update_media_info_geometry(
-    parent: &gtk::ApplicationWindow,
-    card: &gtk::Box,
-    scrollers: &[gtk::ScrolledWindow],
-) {
-    let (width, max_height) = media_info_modal_geometry(parent.width(), parent.height());
-    let horizontal_space = (parent.width() - width).max(0);
-    card.set_margin_start(horizontal_space / 2);
-    card.set_margin_end(horizontal_space - horizontal_space / 2);
-    card.set_width_request(-1);
-    let body_height = (max_height - MEDIA_INFO_FIXED_HEIGHT).max(96);
-    for scroller in scrollers {
-        scroller.set_min_content_width(1);
-        scroller.set_max_content_width(width.max(1));
-        scroller.set_max_content_height(body_height);
-    }
-}
-
 fn media_info_tab_button(label: &str) -> gtk::Button {
     let button = gtk::Button::with_label(label);
     button.add_css_class("okp-media-info-tab");
@@ -445,17 +323,6 @@ fn set_media_info_tab(
     }
 }
 
-fn focus_media_info_target(focusables: &[gtk::Widget], backwards: bool) {
-    let current = focusables.iter().position(|widget| widget.has_focus());
-    let next = match (current, backwards) {
-        (Some(0), true) | (None, true) => focusables.len() - 1,
-        (Some(index), true) => index - 1,
-        (Some(index), false) => (index + 1) % focusables.len(),
-        (None, false) => 0,
-    };
-    focusables[next].grab_focus();
-}
-
 fn media_info_preview_tab() -> MediaInfoTab {
     if env::var("OKP_MEDIA_INFO_TAB")
         .ok()
@@ -473,6 +340,8 @@ fn media_info_scroller(content: &gtk::Box) -> gtk::ScrolledWindow {
     scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     scroller.set_propagate_natural_width(false);
     scroller.set_propagate_natural_height(true);
+    scroller.set_hexpand(true);
+    scroller.set_vexpand(true);
     scroller.set_child(Some(content));
     scroller
 }

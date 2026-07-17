@@ -101,6 +101,12 @@ pub(crate) fn settings_subtitle_presentation_section(
             state.settings.subtitle_style(),
         )
     };
+    let tracks = read_tracks(&state)
+        .into_iter()
+        .filter(|track| track.kind == TrackKind::Subtitle)
+        .collect::<Vec<_>>();
+    let applicability =
+        primary_subtitle_preset_applicability(&tracks, read_secondary_subtitle_id(&state));
 
     let scale_values = [0.8, 1.0, 1.4];
     let (scale_row, scale_buttons) = settings_segmented_choice_row(
@@ -179,9 +185,7 @@ pub(crate) fn settings_subtitle_presentation_section(
     }
     section.append(&style_row);
 
-    let hint = gtk::Label::new(Some(
-        "Appearance presets apply to text subtitles. ASS/SSA and image subtitles (PGS, VobSub) keep their own look; size and position still apply.",
-    ));
+    let hint = gtk::Label::new(Some(&settings_subtitle_preset_hint(applicability)));
     hint.add_css_class("okp-settings-hint");
     hint.set_xalign(0.0);
     hint.set_wrap(true);
@@ -189,6 +193,32 @@ pub(crate) fn settings_subtitle_presentation_section(
     section.append(&hint);
 
     section
+}
+
+pub(crate) fn settings_subtitle_preset_hint(
+    applicability: okp_core::subtitle_tracks::SubtitlePresetApplicability,
+) -> String {
+    use okp_core::subtitle_tracks::{SubtitlePresetApplicability, SubtitlePresetFormat};
+
+    match applicability {
+        SubtitlePresetApplicability::Applies(format) => format!(
+            "The current {} track uses the selected OK Player preset.",
+            format.display_name()
+        ),
+        SubtitlePresetApplicability::NativeStyle(format) => format!(
+            "The current {} track keeps its authored native styling. Preset changes are saved for text tracks; size and position still apply.",
+            format.display_name()
+        ),
+        SubtitlePresetApplicability::Unsupported(SubtitlePresetFormat::Image) => {
+            "The current image subtitle cannot use appearance presets. Preset changes are saved for supported text tracks.".to_owned()
+        }
+        SubtitlePresetApplicability::Unsupported(_) => {
+            "Preset support is unavailable for the current subtitle format. Changes are saved for supported text tracks.".to_owned()
+        }
+        SubtitlePresetApplicability::NoActiveTrack => {
+            "Presets apply to supported text subtitles. ASS/SSA keeps authored native styling, and image subtitles keep their bitmap appearance; size and position still apply.".to_owned()
+        }
+    }
 }
 
 pub(crate) fn settings_segmented_choice_row(

@@ -9,6 +9,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BINARY="${1:-ok-player}"
 OUT_DIR="${2:-$ROOT/artifacts/manual-ui/linux-playback-interactions-smoke}"
 FIXTURE="$ROOT/tests/OkPlayer.IntegrationTests/fixtures/subtest.mkv"
+IDLE_OSC_ASSERT="$ROOT/scripts/assert-linux-idle-osc-absent.sh"
 
 for tool in xvfb-run dbus-run-session xfwm4 xdotool xwininfo import magick xprop; do
   if ! command -v "$tool" >/dev/null 2>&1; then
@@ -29,13 +30,14 @@ fi
 if ! env __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
   LIBGL_ALWAYS_SOFTWARE=1 \
   xvfb-run "${xvfb_args[@]}" --server-args='-screen 0 1280x900x24 -nolisten tcp' \
-  dbus-run-session -- bash -s -- "$BINARY" "$FIXTURE" "$OUT_DIR" \
+  dbus-run-session -- bash -s -- "$BINARY" "$FIXTURE" "$OUT_DIR" "$IDLE_OSC_ASSERT" \
     >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
 set -euo pipefail
 
 BINARY="$1"
 FIXTURE="$2"
 OUT_DIR="$3"
+IDLE_OSC_ASSERT="$4"
 
 export GDK_BACKEND=x11
 export GTK_USE_PORTAL=0
@@ -191,6 +193,20 @@ if [[ -z "$pin_delta_normalized" ]] || ! awk -v value="$pin_delta_normalized" 'B
   exit 1
 fi
 
+# Close Media returns to the idle canvas. The standard OSC must be gone from
+# painting, focus traversal, and hit testing; the core projection covers the
+# latter two, while this real-window capture guards the actual unmap/render
+# transition after the X shortcut unloads mpv.
+xdotool key --clearmodifiers x
+sleep 2
+import -window "$window_id" "$OUT_DIR/close-media.png"
+"$IDLE_OSC_ASSERT" "$OUT_DIR/close-media.png" "Close Media idle canvas"
+closed_identity_max="$(magick "$OUT_DIR/close-media.png" -crop 260x150+430+165 -colorspace gray -format '%[fx:maxima]' info:)"
+awk -v value="$closed_identity_max" 'BEGIN { exit !(value > 0.60) }' || {
+  echo "Close Media did not restore idle-canvas content: identity maxima=$closed_identity_max" >&2
+  exit 1
+}
+
 scheduled="$(grep -c 'video-single-click-scheduled' "$OUT_DIR/app.log" || true)"
 committed="$(grep -c 'video-single-click-committed' "$OUT_DIR/app.log" || true)"
 printf '%s\n' \
@@ -201,6 +217,7 @@ printf '%s\n' \
   "time_label_toggle=pass" \
   "seek_panel_isolation=pass" \
   "always_on_top=pass" \
+  "close_media_idle_osc=pass" \
   "always_on_top_pin_delta=$pin_delta_normalized" >"$OUT_DIR/results.txt"
 
 cat >"$OUT_DIR/results.json" <<JSON

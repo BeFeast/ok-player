@@ -107,10 +107,13 @@ capture() {
   env "${env_args[@]}" timeout 20s "$BINARY" "$FIXTURE" \
     >"$OUT_DIR/$shot-app.log" 2>&1 &
   app_pid=$!
-  sleep 4
 
-  local window_id
-  window_id="$(xdotool search --name 'OK Player' | tail -n1)"
+  local window_id=""
+  for _ in $(seq 1 100); do
+    window_id="$(xdotool search --onlyvisible --name 'OK Player' 2>/dev/null | tail -n1 || true)"
+    [[ -n "$window_id" ]] && break
+    sleep 0.1
+  done
   if [[ -z "$window_id" ]]; then
     echo "$shot: main window did not appear" >&2
     cat "$OUT_DIR/$shot-app.log" >&2 || true
@@ -208,6 +211,8 @@ capture() {
   app_pid=""
   sleep 0.25
 }
+
+capture subtitle-srt-selected-dark dark subtitles 822 262 subtitle-srt-selected
 
 for substrate in bright dark; do
   capture "speed-selected-$substrate" "$substrate" speed 749 120

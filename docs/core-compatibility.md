@@ -158,6 +158,32 @@ behaves identically on both sides.
   in C# — is unrepresentable); the `stride = 52` default parameter becomes the
   `DEFAULT_STRIDE` const; `ReadOnlySpan<byte>` → `&[u8]`. Scores are identical.
 
+## Poster-frame selection → `okp_core::poster_frame` (Linux Continue Watching/History)
+
+- **Selection policy ported.** `poster_sample_offsets`, `PosterFrameScorer`, and the
+  `POSTER_LIT_ENOUGH` / `POSTER_MIN_USABLE_LUMA` thresholds port the Windows
+  `PlayerView.PickRepresentativeFrameAsync` + `GeneratePostersAsync` gate: the same
+  `{0.15, 0.25, 0.38, 0.50, 0.62, 0.75, 0.82}` sampling spread (each floored to a 3s minimum),
+  the same `litEnough = 48` early-stop and `minUsableLuma = 22` usable floor, and the same
+  "keep the brightest, one fixed 30s grab when the duration is unknown" behaviour. The shell
+  decodes candidate frames and feeds their [`image_luma`] scores in; the pick/verdict is shared.
+- **Cache identity is stronger than the Windows poster filename.** Windows names the poster PNG
+  by `SHA1(path)` alone and re-validates its luma on every pass; the port's `poster_cache_key`
+  hashes path **plus byte length plus mtime** (matching the Windows *thumbnail* file key and the
+  Linux hover/chapter fingerprint), so a replaced file derives a new key and its stale poster is
+  never served — the invalidation the regression requires. The Linux shell therefore derives the
+  poster path from current file identity each pass rather than persisting `poster_path` into
+  `history.json`; the shared `FileEntry.poster_path` field stays the Windows carry-through.
+- **Durable "no usable frame" verdict.** `PosterVerdict::Unusable` is the Rust form of the
+  Windows `NoUsablePoster` sentinel (an all-black film keeps its placeholder and is not
+  re-derived); `NoFrame` distinguishes a transient decode miss (retry later) from that durable
+  verdict. On Linux the sentinel is an on-disk `<key>.none` marker in the cache rather than a
+  string stored in history.
+- **Audio cover art is out of scope here.** Windows' poster pass also fills audio recents from
+  sidecar/embedded cover art (`EnsureAudioPosterAsync`); the Linux poster path classifies audio
+  (and URL/network) sources as a non-video fallback and generates no frame for them. This
+  regression is specifically the local-video representative-frame path.
+
 ## AspectResize → `okp_core::aspect_resize`
 
 - **Edge codes.** C# takes the raw Win32 `WMSZ_*` int (any unknown code falls into the corner
@@ -317,7 +343,7 @@ directly unit-tested, and renders it in the GTK shell; cache and network are def
   `SubDelayMs` on Windows. The shell previously rounded half away from zero; the two differed
   only at exact half-millisecond delays, unreachable through either shell's own controls.
 
-## Subtitle track roles → `okp_core::subtitle_tracks` (Linux shell extraction)
+## Subtitle track roles and format boundary → `okp_core::subtitle_tracks` / `subtitle_format` (Linux shell extraction)
 
 - **No C# core counterpart; captures the Windows shell rule.** Windows has no `OkPlayer.Core`
   module for this — the classification lives in the `PlayerViewModel.ReadTracks` shell method.
@@ -334,6 +360,15 @@ directly unit-tested, and renders it in the GTK shell; cache and network are def
   is the same predicate. Both shells offer the picker once a dual-subtitle choice exists or a
   secondary is already active (so an mpv-carried `secondary-sid` in a single-track file can always
   be switched back off), and hide it otherwise to keep a single-track flyout calm.
+- **ASS/SSA preset applicability is currently Linux-only.** Windows already states in Settings
+  that ASS/SSA keeps built-in styling, but it has no portable format classifier or per-track
+  applicability state. `subtitle_format` extends its merged text/image classification with mpv
+  codec metadata plus the external filename extension (needed because FFmpeg commonly reports SSA
+  as `ass`) to distinguish supported text, native-style, image, and unknown preset states.
+  `subtitle_tracks` projects that state from the selected primary track. The Linux picker then
+  disables its preset cycle for native/image/unknown tracks while preserving the global preset for
+  supported text tracks. This is an intentional compatibility note for issue #227, not a port of
+  untested C# shell logic.
 - **Media surface wording is Linux-only.** The Linux Media Info window names each subtitle slot
   `Primary` / `Secondary` in the track detail (`okp-mpv` reads `secondary-sid` alongside the
   track list). Windows has no equivalent media-info surface; the wording is presentation local to

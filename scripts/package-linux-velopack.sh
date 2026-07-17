@@ -12,6 +12,7 @@ PACK_DIR="$ROOT/artifacts/linux/velopack-packdir"
 OUTPUT_DIR="$ROOT/artifacts/linux/velopack"
 ICON="$ROOT/rust/packaging/linux/com.befeast.okplayer.svg"
 FIXED_ICONS="$ROOT/rust/packaging/linux/icons/hicolor"
+METAINFO="$ROOT/rust/packaging/linux/com.befeast.okplayer.metainfo.xml"
 
 if command -v vpk >/dev/null 2>&1; then
   VPK="${VPK:-vpk}"
@@ -24,13 +25,20 @@ fi
 
 export DOTNET_ROOT="${DOTNET_ROOT:-$HOME/.dotnet}"
 
-OKP_BUILD_VERSION="$VERSION" cargo build --manifest-path "$ROOT/rust/Cargo.toml" -p okp-linux-gtk --release
+OKP_BUILD_VERSION="$VERSION" cargo build \
+  --manifest-path "$ROOT/rust/Cargo.toml" \
+  --release \
+  -p okp-linux-gtk \
+  -p okp-core \
+  --bin okp-linux-gtk \
+  --bin okp-candidate
 
 rm -rf "$PACK_DIR" "$OUTPUT_DIR"
 mkdir -p "$PACK_DIR" "$OUTPUT_DIR"
 install -Dm755 "$TARGET_DIR/release/okp-linux-gtk" "$PACK_DIR/ok-player"
 install -Dm644 "$ICON" "$PACK_DIR/com.befeast.okplayer.svg"
 install -Dm644 "$ICON" "$PACK_DIR/usr/share/icons/hicolor/scalable/apps/com.befeast.okplayer.svg"
+install -Dm644 "$METAINFO" "$PACK_DIR/usr/share/metainfo/com.befeast.okplayer.metainfo.xml"
 for size in 16 24 32 48 64; do
   install -Dm644 \
     "$FIXED_ICONS/${size}x${size}/apps/com.befeast.okplayer.svg" \
@@ -49,14 +57,12 @@ done
   --icon "$ICON" \
   --categories "AudioVideo;Player"
 
-GENERIC_APPIMAGE="$OUTPUT_DIR/$PACK_ID.AppImage"
-VERSIONED_APPIMAGE="$OUTPUT_DIR/OK-Player-$VERSION-x86_64.AppImage"
-if [ -f "$GENERIC_APPIMAGE" ]; then
-  cp "$GENERIC_APPIMAGE" "$VERSIONED_APPIMAGE"
-else
-  unzip -p "$OUTPUT_DIR/$PACK_ID-$VERSION-linux-full.nupkg" "lib/app/$PACK_ID.AppImage" > "$VERSIONED_APPIMAGE"
-fi
-chmod 755 "$VERSIONED_APPIMAGE"
+"$TARGET_DIR/release/okp-candidate" stage-velopack \
+  --output-dir "$OUTPUT_DIR" \
+  --channel "$CHANNEL" \
+  --package-id "$PACK_ID" \
+  --version "$VERSION" \
+  --versioned-appimage "OK-Player-$VERSION-x86_64.AppImage"
 
 echo "Velopack Linux artifacts written to $OUTPUT_DIR"
 echo "Run write-linux-acceptance-template.sh after both package lanes complete; publishing requires evidence for this exact artifact hash."

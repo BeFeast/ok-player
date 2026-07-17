@@ -57,12 +57,14 @@ cat >"$XDG_CONFIG_HOME/ok-player/settings.json" <<'JSON'
 JSON
 
 fixture_dir="$OUT_DIR/history-fixtures"
-mkdir -p "$fixture_dir/today" "$fixture_dir/yesterday" "$fixture_dir/week" "$fixture_dir/earlier"
+camera_dir="$fixture_dir/yesterday/Camera Originals/2026-07-16 Production Day/Primary Camera A"
+camera_file="A001_C014_0716QZ_001-super-long-camera-original-filename-with-scene-and-take.mov"
+mkdir -p "$fixture_dir/today" "$camera_dir" "$fixture_dir/week" "$fixture_dir/earlier"
 touch \
   "$fixture_dir/today/Dune.mkv" \
   "$fixture_dir/today/Severance.mkv" \
   "$fixture_dir/today/Blade-Runner-2049.mkv" \
-  "$fixture_dir/yesterday/interview.mov" \
+  "$camera_dir/$camera_file" \
   "$fixture_dir/week/Free-Solo.mp4" \
   "$fixture_dir/week/Wedding.mov" \
   "$fixture_dir/earlier/Past-Lives.mkv" \
@@ -75,7 +77,7 @@ cat >"$XDG_STATE_HOME/ok-player/history.json" <<JSON
     "$fixture_dir/today/Dune.mkv": {"position":6840,"duration":7920,"finished":false,"updated_at_unix":$((now-600)),"title":"Dune: Part Two"},
     "$fixture_dir/today/Severance.mkv": {"position":0,"duration":2520,"finished":true,"updated_at_unix":$((now-3600)),"title":"Severance — S02E07"},
     "$fixture_dir/today/Blade-Runner-2049.mkv": {"position":1800,"duration":5400,"finished":false,"updated_at_unix":$((now-7200)),"title":"Blade Runner 2049"},
-    "$fixture_dir/yesterday/interview.mov": {"position":120,"duration":3240,"finished":false,"updated_at_unix":$((now-86400)),"title":"interview-raw-take3.mov"},
+    "$camera_dir/$camera_file": {"position":120,"duration":3240,"finished":false,"updated_at_unix":$((now-86400)),"title":"$camera_file"},
     "$fixture_dir/week/Free-Solo.mp4": {"position":880,"duration":6000,"finished":false,"updated_at_unix":$((now-3*86400)),"title":"Free Solo"},
     "$fixture_dir/week/Wedding.mov": {"position":180,"duration":5760,"finished":false,"updated_at_unix":$((now-5*86400)),"title":"wedding-ceremony-4k.mov"},
     "$fixture_dir/earlier/Past-Lives.mkv": {"position":0,"duration":6360,"finished":true,"updated_at_unix":$((now-10*86400)),"title":"Past Lives"},
@@ -177,10 +179,12 @@ for theme in light dark; do
   capture "history-loading-$theme" 1120 680 OKP_IDLE_THEME="$theme" OKP_OPEN_HISTORY_ON_STARTUP=1 OKP_HISTORY_STATE=loading
   capture "history-no-match-$theme" 1120 680 OKP_IDLE_THEME="$theme" OKP_OPEN_HISTORY_ON_STARTUP=1 OKP_HISTORY_STATE=no-match
 done
+capture history-has-data-high-contrast 1120 680 GTK_THEME=HighContrast OKP_IDLE_THEME=dark OKP_OPEN_HISTORY_ON_STARTUP=1
 capture history-via-recents-arrow-light 1120 680 OKP_IDLE_THEME=light
 capture continue-watching-narrow 480 540 OKP_IDLE_THEME=light
 capture continue-watching-narrow-actions 480 760 OKP_IDLE_THEME=light
 capture history-has-data-narrow 480 540 OKP_IDLE_THEME=light OKP_OPEN_HISTORY_ON_STARTUP=1
+capture history-long-path-narrow 480 760 OKP_IDLE_THEME=dark OKP_OPEN_HISTORY_ON_STARTUP=1
 
 # First run: centered teal tile and one dashed Open/drop target on a full-window canvas.
 for theme in light dark; do
@@ -383,6 +387,110 @@ if ! awk -v edge="$history_row_edges" 'BEGIN {exit !(edge > 0.01)}'; then
   echo "Narrow History rows are blank or clipped: edge=$history_row_edges" >&2
   exit 1
 fi
+
+# History must use the canonical 792px desktop wrapper instead of retaining its compact
+# natural width. The divider spans the 740px inner content area at x=190..929.
+read -r history_divider_min history_divider_max < <(
+  contrast_bounds "$OUT_DIR/history-has-data-light.png" 1000x1+60+148 x 0 4
+)
+history_divider_min=$((60 + history_divider_min))
+history_divider_max=$((60 + history_divider_max))
+if (( history_divider_min < 188 || history_divider_min > 192 || history_divider_max < 927 || history_divider_max > 931 )); then
+  echo "Desktop History wrapper drifted: divider=${history_divider_min}..${history_divider_max}, expected 190..929" >&2
+  exit 1
+fi
+
+# The first and third progress rows are separated by two deliberate 65px row pitches.
+# Their progress fill must remain inside the 64px thumbnail rather than taking GTK's
+# default progress-bar minimum width and colliding with the title column.
+mapfile -t history_progress_runs < <(
+  magick "$OUT_DIR/history-has-data-light.png" -crop 1x240+203+180 +repage -depth 8 txt:- |
+    awk '
+      NR > 1 {
+        coordinate = $1
+        sub(/:.*/, "", coordinate)
+        split(coordinate, xy, ",")
+        value = $0
+        sub(/^.*srgb\(/, "", value)
+        sub(/\).*$/, "", value)
+        split(value, rgb, ",")
+        hit = rgb[2] - rgb[1] > 35 && rgb[2] - rgb[3] > 0
+        if (hit && !inside) {
+          print xy[2]
+          inside = 1
+        } else if (!hit) {
+          inside = 0
+        }
+      }
+    '
+)
+if (( ${#history_progress_runs[@]} < 2 )); then
+  echo "History progress rows could not be measured" >&2
+  exit 1
+fi
+history_row_pitch=$((history_progress_runs[1] - history_progress_runs[0]))
+if (( history_row_pitch < 128 || history_row_pitch > 132 )); then
+  echo "History row rhythm drifted: two-row pitch=$history_row_pitch, expected about 130" >&2
+  exit 1
+fi
+read -r _ _ history_progress_width < <(
+  magick "$OUT_DIR/history-has-data-light.png" -crop 300x1+180+235 +repage -depth 8 txt:- |
+    awk '
+      NR > 1 {
+        coordinate = $1
+        sub(/:.*/, "", coordinate)
+        split(coordinate, xy, ",")
+        value = $0
+        sub(/^.*srgb\(/, "", value)
+        sub(/\).*$/, "", value)
+        split(value, rgb, ",")
+        if (rgb[2] - rgb[1] > 35 && rgb[2] - rgb[3] > 0) {
+          if (minimum == "") minimum = xy[1]
+          maximum = xy[1]
+        }
+      }
+      END {
+        if (minimum != "") print minimum, maximum, maximum - minimum + 1
+      }
+    '
+)
+if (( history_progress_width < 45 || history_progress_width > 64 )); then
+  echo "History thumbnail progress escaped its 64px frame: width=$history_progress_width" >&2
+  exit 1
+fi
+
+# Four complete rows, including the long camera filename/path, remain visible in the
+# standard viewport. At 480px the title/path still ellipsize before the reserved metadata
+# block, with neither column drawing into the right-edge clip probe.
+history_long_row_edges="$(magick "$OUT_DIR/history-has-data-light.png" -crop 740x52+190+430 -colorspace gray -edge 1 -format '%[fx:mean]' info:)"
+history_narrow_metadata_edges="$(magick "$history_narrow" -crop 90x260+365+190 -colorspace gray -edge 1 -format '%[fx:mean]' info:)"
+history_narrow_right_edges="$(magick "$history_narrow" -crop 8x400+472+70 -colorspace gray -edge 1 -format '%[fx:mean]' info:)"
+if ! awk -v edge="$history_long_row_edges" 'BEGIN {exit !(edge > 0.012)}'; then
+  echo "Desktop History lost the fourth long-path row: edge=$history_long_row_edges" >&2
+  exit 1
+fi
+if ! awk -v edge="$history_narrow_metadata_edges" 'BEGIN {exit !(edge > 0.01)}'; then
+  echo "Narrow History lost its right metadata block: edge=$history_narrow_metadata_edges" >&2
+  exit 1
+fi
+if ! awk -v edge="$history_narrow_right_edges" 'BEGIN {exit !(edge < 0.005)}'; then
+  echo "Narrow History clips content at the right edge: edge=$history_narrow_right_edges" >&2
+  exit 1
+fi
+
+history_hc="$OUT_DIR/history-has-data-high-contrast.png"
+history_hc_mean="$(magick "$history_hc" -colorspace gray -format '%[fx:mean]' info:)"
+history_hc_row_edges="$(magick "$history_hc" -crop 740x250+190+180 -colorspace gray -edge 1 -format '%[fx:mean]' info:)"
+if ! awk -v mean="$history_hc_mean" 'BEGIN {exit !(mean < 0.12)}'; then
+  echo "High-contrast History did not use the solid dark substrate: mean=$history_hc_mean" >&2
+  exit 1
+fi
+if ! awk -v edge="$history_hc_row_edges" 'BEGIN {exit !(edge > 0.02)}'; then
+  echo "High-contrast History lost row boundaries and text: edge=$history_hc_row_edges" >&2
+  exit 1
+fi
+
+echo "history-redline: divider=${history_divider_min}..${history_divider_max} two-row-pitch=$history_row_pitch progress-width=$history_progress_width long-row-edge=$history_long_row_edges narrow-metadata-edge=$history_narrow_metadata_edges high-contrast-edge=$history_hc_row_edges"
 
 kill "$wm_pid" 2>/dev/null || true
 trap - EXIT

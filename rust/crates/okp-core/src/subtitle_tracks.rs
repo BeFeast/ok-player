@@ -20,6 +20,8 @@
 //! the primary picker and make an "active secondary, no primary" file read as
 //! though a primary were selected.
 
+pub use crate::subtitle_format::{SubtitlePresetApplicability, SubtitlePresetFormat};
+
 /// The slot a subtitle track occupies in the current selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubtitleTrackRole {
@@ -29,6 +31,32 @@ pub enum SubtitleTrackRole {
     Primary,
     /// The secondary caption (mpv `secondary-sid`), rendered at the top.
     Secondary,
+}
+
+/// Borrowed track metadata needed to classify the selected primary subtitle.
+#[derive(Debug, Clone, Copy)]
+pub struct SubtitleTrackMetadata<'a> {
+    pub id: i64,
+    pub selected: bool,
+    pub codec: Option<&'a str>,
+    pub external_filename: Option<&'a str>,
+}
+
+/// Resolve preset applicability for the selected primary subtitle. The same
+/// secondary-track exclusion used by the picker is applied here so a
+/// secondary-only file never enables or explains the primary preset controls.
+#[must_use]
+pub fn primary_preset_applicability<'a>(
+    tracks: impl IntoIterator<Item = SubtitleTrackMetadata<'a>>,
+    secondary_sid: Option<i64>,
+) -> SubtitlePresetApplicability {
+    tracks
+        .into_iter()
+        .find(|track| is_primary_subtitle(track.id, track.selected, secondary_sid))
+        .map(|track| {
+            crate::subtitle_format::preset_applicability(track.codec, track.external_filename)
+        })
+        .unwrap_or(SubtitlePresetApplicability::NoActiveTrack)
 }
 
 /// Classify one subtitle track from its raw mpv `selected` flag and the current
@@ -87,6 +115,48 @@ pub fn can_offer_secondary(subtitle_track_count: usize, secondary_active: bool) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn metadata<'a>(
+        id: i64,
+        selected: bool,
+        codec: Option<&'a str>,
+        external_filename: Option<&'a str>,
+    ) -> SubtitleTrackMetadata<'a> {
+        SubtitleTrackMetadata {
+            id,
+            selected,
+            codec,
+            external_filename,
+        }
+    }
+
+    #[test]
+    fn selected_primary_track_drives_preset_applicability() {
+        let tracks = [
+            metadata(2, true, Some("ass"), None),
+            metadata(3, true, Some("subrip"), Some("Feature.en.srt")),
+        ];
+        assert_eq!(
+            primary_preset_applicability(tracks, Some(2)),
+            SubtitlePresetApplicability::Applies(SubtitlePresetFormat::SubRip)
+        );
+
+        assert_eq!(
+            primary_preset_applicability(
+                [metadata(2, true, Some("ass"), Some("Feature.ssa"))],
+                None,
+            ),
+            SubtitlePresetApplicability::NativeStyle(SubtitlePresetFormat::Ssa)
+        );
+        assert_eq!(
+            primary_preset_applicability([metadata(2, true, Some("ass"), None)], Some(2),),
+            SubtitlePresetApplicability::NoActiveTrack
+        );
+        assert_eq!(
+            primary_preset_applicability(std::iter::empty(), None),
+            SubtitlePresetApplicability::NoActiveTrack
+        );
+    }
 
     #[test]
     fn selected_non_secondary_track_is_primary() {

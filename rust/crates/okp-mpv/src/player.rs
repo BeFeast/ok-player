@@ -4,6 +4,8 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
+use std::time::Duration;
 
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
@@ -18,6 +20,7 @@ const AUDIO_NORMALIZATION_FILTER_LABEL: &str = "@okpnorm";
 const AUDIO_NORMALIZATION_FILTER: &str = "@okpnorm:dynaudnorm";
 const AUDIO_DEVICE_AUTO: &str = "auto";
 const LEGACY_TRANSPARENT_SUBTITLE_BACKGROUND: &str = "0.0/0.0";
+const DEFERRED_TERMINATE_TIMEOUT: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RenderTargetSize {
@@ -455,46 +458,6 @@ impl RawReader {
         }
 
         Ok(tracks)
-    }
-
-    pub(crate) fn audio_devices(&self) -> Result<Vec<AudioDevice>, MpvError> {
-        let count = self.get_i64("audio-device-list/count")?.unwrap_or(0).max(0);
-        let current = self
-            .get_string("audio-device")?
-            .unwrap_or_else(|| AUDIO_DEVICE_AUTO.to_owned());
-        let mut devices = Vec::new();
-        let mut saw_auto = false;
-
-        for index in 0..count {
-            let prefix = format!("audio-device-list/{index}");
-            let Some(name) = self.get_string(&format!("{prefix}/name"))? else {
-                continue;
-            };
-            if name == AUDIO_DEVICE_AUTO {
-                saw_auto = true;
-            }
-            devices.push(AudioDevice {
-                selected: audio_device_selected(&name, &current),
-                label: audio_device_label(
-                    &name,
-                    self.get_string(&format!("{prefix}/description"))?,
-                ),
-                name,
-            });
-        }
-
-        if !saw_auto {
-            devices.insert(
-                0,
-                AudioDevice {
-                    name: AUDIO_DEVICE_AUTO.to_owned(),
-                    label: "Automatic".to_owned(),
-                    selected: audio_device_selected(AUDIO_DEVICE_AUTO, &current),
-                },
-            );
-        }
-
-        Ok(devices)
     }
 
     pub(crate) fn chapters(&self) -> Result<Vec<Chapter>, MpvError> {
@@ -1027,6 +990,15 @@ impl Mpv {
         // only surfaces the resulting track metadata. Keep this explicit so
         // config=no cannot make sidecar support depend on mpv's default value.
         this.set_option("sub-auto", "exact")?;
+        // Preserve authored ASS/SSA styling. `scale` is deliberate: mpv keeps
+        // script fonts, colors, inline layout, and signs, but still honors OK
+        // Player's explicit sub-scale/sub-pos controls. Older supported libmpv
+        // builds do not expose the secondary-slot equivalent, so that option is
+        // best-effort while every other setup error remains fatal. The GTK raw-
+        // config parser protects both names so a preset cannot silently cross
+        // the native-style boundary.
+        this.set_option("sub-ass-override", "scale")?;
+        this.set_option_if_supported("secondary-sub-ass-override", "scale")?;
         this.apply_options(options)?;
         check(unsafe { ffi::mpv_initialize(this.handle.as_ptr()) })?;
 
@@ -1057,6 +1029,13 @@ impl Mpv {
     pub fn start_event_pump(&mut self) {
         if self.pump.is_none() {
             self.pump = Some(EventPump::start(self.handle));
+        }
+    }
+
+    #[cfg(test)]
+    fn start_event_pump_without_audio_devices(&mut self) {
+        if self.pump.is_none() {
+            self.pump = Some(EventPump::start_without_audio_devices(self.handle));
         }
     }
 
@@ -1565,6 +1544,16 @@ impl Mpv {
         })
     }
 
+    fn set_option_if_supported(&self, name: &str, value: &str) -> Result<bool, MpvError> {
+        let name = CString::new(name)?;
+        let value = CString::new(value)?;
+        let code = unsafe {
+            ffi::mpv_set_option_string(self.handle.as_ptr(), name.as_ptr(), value.as_ptr())
+        };
+
+        optional_option_result(code)
+    }
+
     fn command(&self, args: &[&str]) -> Result<(), MpvError> {
         // `_c_args` owns the CString buffers `ptrs` points into; it must outlive
         // the mpv call, so it is bound (not dropped) for the whole scope.
@@ -2040,15 +2029,55 @@ pub fn resolve_render_target_size(
 
 impl Drop for Mpv {
     fn drop(&mut self) {
-        // Stop the pump before the handle is destroyed: it unsets the wakeup
-        // callback and joins the background thread so no event reception or
-        // property read can race `mpv_terminate_destroy`.
-        if let Some(pump) = self.pump.take() {
-            pump.shutdown();
-        }
+        // Stop the pump before the handle is destroyed. A prompt worker joins
+        // here; if libmpv has it blocked in a property/backend call, shutdown
+        // hands that worker to a reaper so Drop remains bounded while handle
+        // destruction still waits for the in-flight API call to finish.
+        let had_pump = self.pump.is_some();
+        let deferred_pump = self.pump.take().and_then(EventPump::shutdown);
         self.destroy_render_context();
-        unsafe {
-            ffi::mpv_terminate_destroy(self.handle.as_ptr());
+        if had_pump {
+            terminate_destroy_bounded(self.handle, deferred_pump);
+        } else {
+            unsafe {
+                ffi::mpv_terminate_destroy(self.handle.as_ptr());
+            }
+        }
+    }
+}
+
+fn terminate_destroy_bounded(
+    handle: NonNull<ffi::mpv_handle>,
+    pump: Option<std::thread::JoinHandle<()>>,
+) {
+    let handle_address = handle.as_ptr() as usize;
+    let (finished_tx, finished_rx) = mpsc::channel();
+    let reaper = std::thread::Builder::new()
+        .name("okp-mpv-reaper".to_owned())
+        .spawn(move || {
+            if let Some(pump) = pump {
+                let _ = pump.join();
+            }
+            unsafe {
+                ffi::mpv_terminate_destroy(handle_address as *mut ffi::mpv_handle);
+            }
+            let _ = finished_tx.send(());
+        });
+    match reaper {
+        Ok(reaper) => {
+            if finished_rx.recv_timeout(DEFERRED_TERMINATE_TIMEOUT).is_ok() {
+                let _ = reaper.join();
+            } else {
+                eprintln!(
+                    "[okp-mpv] libmpv teardown exceeded the shutdown deadline; continuing in the reaper"
+                );
+            }
+        }
+        Err(error) => {
+            // The pump JoinHandle was detached when the failed spawn dropped
+            // its closure. The raw libmpv handle must intentionally remain
+            // alive rather than being destroyed under an in-flight API call.
+            eprintln!("[okp-mpv] deferred teardown unavailable; leaking libmpv handle: {error}");
         }
     }
 }
@@ -2076,6 +2105,16 @@ fn check(code: c_int) -> Result<(), MpvError> {
         Err(MpvError::LibMpv(code))
     } else {
         Ok(())
+    }
+}
+
+fn optional_option_result(code: c_int) -> Result<bool, MpvError> {
+    if code >= 0 {
+        Ok(true)
+    } else if code == ffi::MPV_ERROR_OPTION_NOT_FOUND {
+        Ok(false)
+    } else {
+        Err(MpvError::LibMpv(code))
     }
 }
 
@@ -2108,11 +2147,11 @@ fn downmix_audio_channels(enabled: bool) -> &'static str {
     if enabled { "stereo" } else { "auto-safe" }
 }
 
-fn audio_device_selected(name: &str, current: &str) -> bool {
+pub(crate) fn audio_device_selected(name: &str, current: &str) -> bool {
     name == normalized_audio_device_name(current)
 }
 
-fn audio_device_label(name: &str, description: Option<String>) -> String {
+pub(crate) fn audio_device_label(name: &str, description: Option<String>) -> String {
     let description = description
         .as_deref()
         .map(str::trim)
@@ -2122,6 +2161,46 @@ fn audio_device_label(name: &str, description: Option<String>) -> String {
     } else {
         description.unwrap_or(name).to_owned()
     }
+}
+
+pub(crate) fn audio_devices_from_entries(
+    entries: Vec<(String, Option<String>)>,
+    current: &str,
+) -> Vec<AudioDevice> {
+    let mut devices = entries
+        .into_iter()
+        .map(|(name, description)| AudioDevice {
+            selected: audio_device_selected(&name, current),
+            label: audio_device_label(&name, description),
+            name,
+        })
+        .collect::<Vec<_>>();
+    if !devices
+        .iter()
+        .any(|device| device.name == AUDIO_DEVICE_AUTO)
+    {
+        devices.insert(
+            0,
+            AudioDevice {
+                name: AUDIO_DEVICE_AUTO.to_owned(),
+                label: "Automatic".to_owned(),
+                selected: audio_device_selected(AUDIO_DEVICE_AUTO, current),
+            },
+        );
+    }
+    devices
+}
+
+pub(crate) fn media_info_with_source(info: Option<MediaInfo>, source: &Path) -> MediaInfo {
+    let mut info = info.unwrap_or_else(|| MediaInfo {
+        title: String::new(),
+        path: None,
+        sections: Vec::new(),
+        tracks: Vec::new(),
+    });
+    info.title = display_path_name(source);
+    info.path = Some(source.display().to_string());
+    info
 }
 
 #[cfg(unix)]
@@ -2138,12 +2217,81 @@ fn path_to_cstring(path: &Path) -> Result<CString, NulError> {
 mod tests {
     use std::cell::Cell;
     use std::fs;
+    use std::process::{Command, Stdio};
     use std::rc::Rc;
+    use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
 
     use okp_test_fixtures::unique_temp_dir;
 
     use super::*;
+
+    const REAL_MPV_CASE_ENV: &str = "OKP_REAL_MPV_TEST_CASE";
+    const REAL_MPV_CASE_TIMEOUT: Duration = Duration::from_secs(10);
+
+    fn enter_real_mpv_case(case: &str, test_name: &str) -> bool {
+        if std::env::var(REAL_MPV_CASE_ENV).as_deref() == Ok(case) {
+            return true;
+        }
+
+        // Each case gets process isolation, while this lock keeps those child
+        // processes from tearing the same host audio backend down concurrently.
+        // Pure unit tests in the parent harness remain fully parallel.
+        static REAL_MPV_SUBPROCESS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let _guard = REAL_MPV_SUBPROCESS_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let mut child = Command::new(std::env::current_exe().expect("test binary path"))
+            .args(["--exact", test_name, "--nocapture"])
+            .env(REAL_MPV_CASE_ENV, case)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("real libmpv test subprocess should start");
+        let deadline = Instant::now() + REAL_MPV_CASE_TIMEOUT;
+        loop {
+            if child
+                .try_wait()
+                .expect("real libmpv test subprocess should be observable")
+                .is_some()
+            {
+                let output = child
+                    .wait_with_output()
+                    .expect("real libmpv test subprocess output should be readable");
+                assert!(
+                    output.status.success(),
+                    "real libmpv case {case} failed\nstdout:\n{}\nstderr:\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                return false;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let output = child
+                    .wait_with_output()
+                    .expect("timed-out real libmpv test subprocess should be reaped");
+                panic!(
+                    "real libmpv case {case} exceeded {} seconds\nstdout:\n{}\nstderr:\n{}",
+                    REAL_MPV_CASE_TIMEOUT.as_secs(),
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn test_mpv() -> Mpv {
+        let options = [
+            ("vo".to_owned(), "null".to_owned()),
+            ("ao".to_owned(), "null".to_owned()),
+            ("pause".to_owned(), "yes".to_owned()),
+        ];
+        Mpv::new_with_options("no", &options).expect("libmpv must be loadable for okp-mpv tests")
+    }
 
     #[test]
     fn render_context_parameters_include_wayland_display_only_when_present() {
@@ -2207,6 +2355,15 @@ mod tests {
     }
 
     fn assert_same_stem_sidecar_autoloaded(extension: &str, contents: &str, expected_codec: &str) {
+        let case = format!("same-stem-{extension}");
+        let test_name = match extension {
+            "srt" => "player::tests::exact_same_stem_srt_sidecar_is_autoloaded",
+            "vtt" => "player::tests::exact_same_stem_webvtt_sidecar_is_autoloaded",
+            _ => panic!("unsupported sidecar extension {extension}"),
+        };
+        if !enter_real_mpv_case(&case, test_name) {
+            return;
+        }
         let root = unique_temp_dir(&format!("okp-mpv-{extension}-autoload"));
         fs::create_dir_all(&root).expect("sidecar fixture directory should be created");
         let media = root.join("movie.mkv");
@@ -2217,10 +2374,14 @@ mod tests {
         let options = [
             ("vo".to_owned(), "null".to_owned()),
             ("ao".to_owned(), "null".to_owned()),
+            // Null outputs can consume the short fixture faster than a busy
+            // parallel test process polls the pump. Keep the loaded track list
+            // stable instead of racing end-of-file cleanup.
+            ("pause".to_owned(), "yes".to_owned()),
         ];
         let mut mpv = Mpv::new_with_options("no", &options)
             .expect("libmpv must be loadable for okp-mpv tests");
-        mpv.start_event_pump();
+        mpv.start_event_pump_without_audio_devices();
         mpv.load_file(&media).expect("media fixture should load");
 
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -2260,8 +2421,54 @@ mod tests {
     }
 
     #[test]
+    fn ass_override_boundary_preserves_authored_styles_with_legacy_fallback() {
+        if !enter_real_mpv_case(
+            "ass-override",
+            "player::tests::ass_override_boundary_preserves_authored_styles_with_legacy_fallback",
+        ) {
+            return;
+        }
+        let mpv = test_mpv();
+
+        assert_eq!(
+            mpv.reader()
+                .get_string("sub-ass-override")
+                .expect("read primary ASS override mode")
+                .as_deref(),
+            Some("scale")
+        );
+        let secondary = mpv
+            .reader()
+            .get_string("secondary-sub-ass-override")
+            .expect("read secondary ASS override mode when available");
+        assert!(
+            secondary.is_none() || secondary.as_deref() == Some("scale"),
+            "supported secondary override must preserve native styling: {secondary:?}"
+        );
+    }
+
+    #[test]
+    fn optional_option_fallback_ignores_only_unknown_option_names() {
+        assert!(optional_option_result(0).expect("success"));
+        assert!(
+            !optional_option_result(ffi::MPV_ERROR_OPTION_NOT_FOUND)
+                .expect("an older libmpv may omit the optional setting")
+        );
+        assert!(matches!(
+            optional_option_result(-7),
+            Err(MpvError::LibMpv(-7))
+        ));
+    }
+
+    #[test]
     fn curated_subtitle_style_options_apply_live() {
-        let mpv = Mpv::new().expect("libmpv must be loadable for okp-mpv tests");
+        if !enter_real_mpv_case(
+            "curated-subtitle-style",
+            "player::tests::curated_subtitle_style_options_apply_live",
+        ) {
+            return;
+        }
+        let mpv = test_mpv();
         mpv.set_subtitle_style(&[
             ("sub-border-style", "background-box"),
             ("sub-border-size", "2"),
@@ -2362,7 +2569,13 @@ mod tests {
     #[test]
     #[cfg(debug_assertions)]
     fn blocking_reads_on_the_marked_ui_thread_trip_the_guard() {
-        let mpv = Mpv::new().expect("libmpv must be loadable for okp-mpv tests");
+        if !enter_real_mpv_case(
+            "blocking-read-guard",
+            "player::tests::blocking_reads_on_the_marked_ui_thread_trip_the_guard",
+        ) {
+            return;
+        }
+        let mpv = test_mpv();
 
         let _ = mpv
             .playback_state()
@@ -2389,9 +2602,15 @@ mod tests {
     /// the guard even after the UI thread is marked, because they never call mpv.
     #[test]
     fn event_pump_publishes_observed_state_and_shuts_down_cleanly() {
-        let mut mpv = Mpv::new().expect("libmpv must be loadable for okp-mpv tests");
+        if !enter_real_mpv_case(
+            "event-pump-shutdown",
+            "player::tests::event_pump_publishes_observed_state_and_shuts_down_cleanly",
+        ) {
+            return;
+        }
+        let mut mpv = test_mpv();
         mpv.mark_ui_thread();
-        mpv.start_event_pump();
+        mpv.start_event_pump_without_audio_devices();
 
         // Give the pump a moment to observe the initial property values.
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -2404,6 +2623,7 @@ mod tests {
         assert!(mpv.observed_playback_state().time_pos.is_none());
         assert!(mpv.observed_video_dimensions().is_none());
         let _ = mpv.observed_tracks();
+        let _ = mpv.observed_audio_devices();
         let _ = mpv.take_lifecycle_events();
 
         #[cfg(debug_assertions)]
@@ -2418,14 +2638,21 @@ mod tests {
 
     #[test]
     fn lifecycle_events_carry_display_dimensions_from_the_pump_thread() {
+        if !enter_real_mpv_case(
+            "lifecycle-dimensions",
+            "player::tests::lifecycle_events_carry_display_dimensions_from_the_pump_thread",
+        ) {
+            return;
+        }
         let options = [
             ("vo".to_owned(), "null".to_owned()),
             ("ao".to_owned(), "null".to_owned()),
+            ("pause".to_owned(), "yes".to_owned()),
         ];
         let mut mpv = Mpv::new_with_options("no", &options)
             .expect("libmpv must be loadable for okp-mpv tests");
         mpv.mark_ui_thread();
-        mpv.start_event_pump();
+        mpv.start_event_pump_without_audio_devices();
         mpv.load_file(&fixture_media_path())
             .expect("video fixture should load");
 
@@ -2460,18 +2687,22 @@ mod tests {
         );
     }
 
-    /// Recording a media source after the `FileLoaded` recompute has already
-    /// run must still refresh `media_info`: `set_media_source` has to wake the
-    /// pump and rebuild the snapshot against the new path instead of waiting for
-    /// an unrelated `track-list`/`chapter-list` change. Needs real libmpv.
+    /// Recording a source is local snapshot projection, not a reason to repeat
+    /// the full blocking libmpv metadata walk. The next `FileLoaded` event fills
+    /// engine fields while the path becomes visible immediately.
     #[test]
-    fn setting_the_media_source_refreshes_media_info() {
-        let mut mpv = Mpv::new().expect("libmpv must be loadable for okp-mpv tests");
+    fn setting_the_media_source_projects_path_without_a_blocking_refresh() {
+        if !enter_real_mpv_case(
+            "media-source-projection",
+            "player::tests::setting_the_media_source_projects_path_without_a_blocking_refresh",
+        ) {
+            return;
+        }
+        let mut mpv = test_mpv();
         mpv.mark_ui_thread();
-        mpv.start_event_pump();
+        mpv.start_event_pump_without_audio_devices();
 
-        // Let the initial recompute settle; with no source recorded yet it
-        // builds `media_info` with no local path.
+        // No source is recorded yet, so the snapshot has no local path.
         std::thread::sleep(std::time::Duration::from_millis(100));
         assert_eq!(
             mpv.observed_media_info().and_then(|info| info.path),
@@ -2482,10 +2713,9 @@ mod tests {
         let source = PathBuf::from("/tmp/okp-media-source-refresh.mkv");
         mpv.set_media_source(Some(source.clone()));
 
-        // The setter wakes the pump, so the snapshot rebuilds without any
-        // further mpv event. Poll for the rebuild instead of asserting after a
-        // single fixed delay: the cross-thread wake can take longer than 100 ms
-        // on a loaded CI runner, which made the fixed-sleep assertion flaky.
+        // The setter updates the in-memory projection synchronously. Keep a
+        // short poll so the assertion remains valid if that implementation is
+        // later moved behind a nonblocking publication channel.
         let want = Some(source.display().to_string());
         let mut observed = None;
         for _ in 0..200 {
@@ -2497,7 +2727,7 @@ mod tests {
         }
         assert_eq!(
             observed, want,
-            "set_media_source must wake the pump and rebuild media_info"
+            "set_media_source must project the path without a blocking metadata refresh"
         );
 
         #[cfg(debug_assertions)]
@@ -2553,7 +2783,13 @@ mod tests {
 
     #[test]
     fn video_geometry_commands_are_accepted_by_real_libmpv() {
-        let mpv = Mpv::new().expect("libmpv should initialize");
+        if !enter_real_mpv_case(
+            "video-geometry",
+            "player::tests::video_geometry_commands_are_accepted_by_real_libmpv",
+        ) {
+            return;
+        }
+        let mpv = test_mpv();
         mpv.set_video_rotation(90).expect("rotation");
         mpv.set_video_zoom(0.5).expect("zoom");
         mpv.set_video_pan(-0.2, 0.3).expect("pan");
@@ -2614,7 +2850,13 @@ mod tests {
 
     #[test]
     fn surround_downmix_is_accepted_by_real_libmpv() {
-        let mpv = Mpv::new().expect("libmpv should initialize");
+        if !enter_real_mpv_case(
+            "surround-downmix",
+            "player::tests::surround_downmix_is_accepted_by_real_libmpv",
+        ) {
+            return;
+        }
+        let mpv = test_mpv();
         mpv.set_downmix_surround_to_stereo(true)
             .expect("stereo layout should be accepted");
         assert_eq!(
@@ -2663,6 +2905,24 @@ mod tests {
             "Speakers"
         );
         assert_eq!(audio_device_label("pulse/device", None), "pulse/device");
+    }
+
+    #[test]
+    fn audio_device_payload_entries_add_auto_and_select_the_current_device() {
+        let devices = audio_devices_from_entries(
+            vec![
+                ("pulse/speakers".to_owned(), Some(" Speakers ".to_owned())),
+                ("pulse/headphones".to_owned(), None),
+            ],
+            "pulse/headphones",
+        );
+
+        assert_eq!(devices[0].name, "auto");
+        assert_eq!(devices[0].label, "Automatic");
+        assert!(!devices[0].selected);
+        assert_eq!(devices[1].label, "Speakers");
+        assert!(!devices[1].selected);
+        assert!(devices[2].selected);
     }
 
     #[test]

@@ -345,6 +345,8 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         chrome.show_persistently();
         open_seek_preview(&controls);
     }
+    let more_popover_preview =
+        env::var_os("OKP_OPEN_MORE_POPOVER_ON_STARTUP").map(|_| controls.more_button.clone());
     let volume_preview = env::var_os("OKP_VOLUME_PREVIEW")
         .map(|mode| (controls.volume.clone(), mode.to_string_lossy().into_owned()));
     connect_state_poll(
@@ -400,6 +402,25 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         });
     } else {
         window.present();
+    }
+    if let Some(more_button) = more_popover_preview {
+        // Test-only mapped-anchor poll, symmetric with the volume preview below.
+        // Media launches may defer the initial map while dimensions settle, and
+        // GtkMenuButton::popup is a no-op until its anchor is mapped.
+        let preview_attempts = Rc::new(Cell::new(0_u8));
+        glib::timeout_add_local(Duration::from_millis(100), move || {
+            if more_button.is_mapped() {
+                more_button.popup();
+                return glib::ControlFlow::Break;
+            }
+            let attempts = preview_attempts.get().saturating_add(1);
+            preview_attempts.set(attempts);
+            if attempts >= 50 {
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
     }
     if env::var_os("OKP_OSD_PREVIEW_ON_STARTUP").is_some() {
         let preview_toast = Rc::clone(&status_toast);
@@ -458,16 +479,22 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
             open_subtitle_search_preview(&search_parent, search_state, search_toast);
         });
     }
-    // Visual smoke hook: render the in-player Media Information modal with
+    // Visual smoke hook: render the Media Information companion window with
     // representative fixture data so it can be screenshot-tested without media.
     if env::var_os("OKP_OPEN_MEDIA_INFO_ON_STARTUP").is_some() {
         if let Some(substrate) = env::var_os("OKP_MEDIA_INFO_PREVIEW_SUBSTRATE") {
             empty_surface.set_preview_substrate(substrate.eq_ignore_ascii_case("bright"));
         }
         let info_parent = window.clone();
+        let info_state = Rc::clone(&state);
         let info_toast = Rc::clone(&status_toast);
         glib::timeout_add_local_once(Duration::from_millis(250), move || {
-            show_media_info_modal(&info_parent, &media_info_preview_from_env(), info_toast);
+            show_media_info_window(
+                &info_parent,
+                &info_state,
+                &media_info_preview_from_env(),
+                info_toast,
+            );
         });
     }
     if auto_check_updates {
@@ -746,15 +773,25 @@ pub(crate) fn fit_player_window_to_video(
     // Sampling the surface monitor immediately after that map observes GNOME's
     // transient placement negotiation (on the dual-monitor QA host it reports
     // the laptop twice before settling on the primary display) and can shrink a
-    // correctly requested primary-monitor size. Keep the pre-map request, but
-    // also guard against Mutter's `auto-maximize` policy: a near-workarea 4K fit
-    // can be maximized shortly after mapping even though the app never requested
-    // that state. Explicit fullscreen/maximized launches never take this path.
-    if !was_mapped || deferred_launch_fit {
+    // correctly requested primary-monitor size. Keep the pre-map request,
+    // complete that same transaction on the first map, and also guard against
+    // Mutter's `auto-maximize` policy: a near-workarea 4K fit can be maximized
+    // shortly after mapping even though the app never requested that state.
+    // Explicit fullscreen/maximized launches never take this path.
+    if !was_mapped {
         if debug {
             eprintln!("window fit launch: keeping initial compositor request mapped={was_mapped}");
         }
         if deferred_launch_fit {
+            settle_deferred_launch_fit_on_map(
+                window,
+                state,
+                reported_bounds,
+                source_generation,
+                video,
+                work_area,
+                placement,
+            );
             restore_deferred_launch_fit_after_compositor(
                 window,
                 state,
@@ -773,6 +810,52 @@ pub(crate) fn fit_player_window_to_video(
         work_area,
         placement,
     );
+}
+
+fn settle_deferred_launch_fit_on_map(
+    window: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
+    reported_bounds: &Rc<RefCell<Option<PlayerWindowBounds>>>,
+    source_generation: u64,
+    video: window_fit::WindowSize,
+    requested_work_area: window_fit::WindowRect,
+    requested: window_fit::WindowPlacement,
+) {
+    let mapped_state = Rc::clone(state);
+    let mapped_bounds = Rc::clone(reported_bounds);
+    let pending = Rc::new(Cell::new(true));
+    window.connect_map(move |mapped_window| {
+        if !pending.replace(false)
+            || !window_fit_generation_is_current(mapped_window, &mapped_state, source_generation)
+        {
+            return;
+        }
+
+        // `GtkWindow::present` may restore the builder's default geometry when
+        // a realized launch is mapped after the video dimensions arrive. This
+        // is still the original load-time fit transaction: re-issue it once on
+        // the mapped toplevel, then use the normal monitor-aware settle path.
+        mapped_window.set_default_size(requested.size.width, requested.size.height);
+        move_resize_player_window_on_x11(mapped_window, requested.position, requested.size);
+        if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
+            eprintln!(
+                "window fit mapped launch: target={}x{}+{},{}",
+                requested.size.width,
+                requested.size.height,
+                requested.position.x,
+                requested.position.y,
+            );
+        }
+        schedule_player_window_fit_settle(
+            mapped_window,
+            &mapped_state,
+            &mapped_bounds,
+            source_generation,
+            video,
+            requested_work_area,
+            requested,
+        );
+    });
 }
 
 fn restore_deferred_launch_fit_after_compositor(
@@ -1351,12 +1434,13 @@ pub(crate) fn always_on_top_backend(display_type_name: &str) -> AlwaysOnTopBacke
 /// Wayland intentionally exposes no client-controlled global coordinates, so
 /// Mutter remains responsible for keeping the already-bounded surface visible.
 pub(crate) fn move_resize_player_window_on_x11(
-    window: &gtk::ApplicationWindow,
+    window: &impl IsA<gtk::Window>,
     position: window_fit::WindowPoint,
     size: window_fit::WindowSize,
 ) -> bool {
     use gtk::glib::translate::ToGlibPtr;
 
+    let window = window.upcast_ref::<gtk::Window>();
     let Some(display) = gdk::Display::default() else {
         return false;
     };
@@ -1728,6 +1812,9 @@ pub(crate) fn build_empty_surface(
     } else {
         "is-light"
     });
+    if idle_theme_is_high_contrast() {
+        root.add_css_class("is-high-contrast");
+    }
     root.append(&idle_titlebar());
 
     let stack = gtk::Stack::new();
@@ -1854,6 +1941,17 @@ fn idle_theme_is_dark() -> bool {
             .map(|settings| settings.property::<bool>("gtk-application-prefer-dark-theme"))
             .unwrap_or(false),
     }
+}
+
+fn idle_theme_is_high_contrast() -> bool {
+    env::var("GTK_THEME")
+        .ok()
+        .map(|name| name.to_ascii_lowercase().contains("highcontrast"))
+        .unwrap_or(false)
+        || gtk::Settings::default()
+            .and_then(|settings| settings.gtk_theme_name())
+            .map(|name| name.to_ascii_lowercase().contains("highcontrast"))
+            .unwrap_or(false)
 }
 
 fn apply_gtk_theme_preview() {
