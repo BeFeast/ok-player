@@ -1,4 +1,5 @@
 use super::*;
+use okp_core::osc_overflow::OscControlId;
 
 pub(crate) const SPEED_POPOVER_WIDTH: i32 = 120;
 pub(crate) const SUBTITLE_POPOVER_WIDTH: i32 = 262;
@@ -65,6 +66,8 @@ pub(crate) fn populate_subtitle_popover(
         tracks.iter().map(|track| (track.id, track.selected)),
         secondary_subtitle_id,
     );
+    let preset_applicability =
+        primary_subtitle_preset_applicability(&tracks, secondary_subtitle_id);
 
     let off_button = track_button("Off", !has_primary);
     let off_state = Rc::clone(&state);
@@ -129,7 +132,8 @@ pub(crate) fn populate_subtitle_popover(
         read_subtitle_adjustments(&state).1,
         &state,
     ));
-    content.append(&compact_subtitle_style_row(&state));
+    content.append(&subtitle_preset_status_label(preset_applicability));
+    content.append(&compact_subtitle_style_row(&state, preset_applicability));
     let footer = gtk::Label::new(Some("More in Settings → Subtitles"));
     footer.add_css_class("okp-quick-preference-footer");
     footer.set_xalign(0.0);
@@ -192,13 +196,109 @@ pub(crate) fn populate_speed_popover(popover: &gtk::Popover, state: Rc<RefCell<P
     set_track_popover_child(popover, PlayerPopoverKind::Speed, content);
 }
 
+/// Handles the overflow menu uses to surface the actions of controls the
+/// adaptive OSC folded away at the current window width (issue #328). The
+/// direct-action controls are driven through their real OSC buttons so the
+/// existing wiring is reused verbatim; the selection controls (speed, audio,
+/// subtitles) drill into their picker inside the same popover.
+#[derive(Clone)]
+pub(crate) struct OverflowReach {
+    pub(crate) collapsed: Rc<RefCell<Vec<OscControlId>>>,
+    pub(crate) screenshot: gtk::Button,
+    pub(crate) fullscreen: gtk::Button,
+    pub(crate) chapters: gtk::Button,
+}
+
+/// Append rows for every currently-collapsed control at the top of the overflow
+/// menu, followed by a divider. The section is empty (and no divider is drawn)
+/// while the bar is wide enough to show every control, keeping the menu curated.
+fn append_collapsed_controls_section(
+    content: &gtk::Box,
+    popover: &gtk::Popover,
+    parent: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &Rc<StatusToast>,
+    reach: &OverflowReach,
+) {
+    let collapsed = reach.collapsed.borrow().clone();
+    let mut added = false;
+    for id in collapsed {
+        let row = match id {
+            OscControlId::Speed => {
+                let button = command_button("Playback speed", false);
+                let drill_popover = popover.clone();
+                let drill_state = Rc::clone(state);
+                button.connect_clicked(move |_| {
+                    populate_speed_popover(&drill_popover, Rc::clone(&drill_state));
+                });
+                button
+            }
+            OscControlId::Subtitles => {
+                let button = command_button("Subtitles", false);
+                let drill_popover = popover.clone();
+                let drill_parent = parent.clone();
+                let drill_state = Rc::clone(state);
+                let drill_toast = Rc::clone(status_toast);
+                button.connect_clicked(move |_| {
+                    populate_subtitle_popover(
+                        &drill_popover,
+                        &drill_parent,
+                        Rc::clone(&drill_state),
+                        Rc::clone(&drill_toast),
+                    );
+                });
+                button
+            }
+            OscControlId::Audio => {
+                let button = audio_command_button("Audio tracks / output");
+                let drill_popover = popover.clone();
+                let drill_state = Rc::clone(state);
+                button.connect_clicked(move |_| {
+                    populate_audio_popover(&drill_popover, Rc::clone(&drill_state));
+                });
+                button
+            }
+            OscControlId::Chapters => {
+                reach_emit_button("Chapters & Up Next", popover, &reach.chapters)
+            }
+            OscControlId::Screenshot => {
+                reach_emit_button("Take screenshot", popover, &reach.screenshot)
+            }
+            OscControlId::Fullscreen => reach_emit_button("Fullscreen", popover, &reach.fullscreen),
+            // Elapsed/Duration are informational time labels with no discrete
+            // action; the timeline still conveys position when they fold.
+            _ => continue,
+        };
+        content.append(&row);
+        added = true;
+    }
+    if added {
+        content.append(&divider());
+    }
+}
+
+/// A row that forwards to a real OSC button through its `clicked` signal, so the
+/// button's existing handler runs even while the button itself is folded away
+/// (unmapped). No behaviour is duplicated.
+fn reach_emit_button(label: &str, popover: &gtk::Popover, button: &gtk::Button) -> gtk::Button {
+    let row = command_button(label, false);
+    let emit_popover = popover.clone();
+    let emit_target = button.clone();
+    row.connect_clicked(move |_| {
+        emit_popover.popdown();
+        emit_target.emit_clicked();
+    });
+    row
+}
+
 pub(crate) fn populate_command_popover(
     popover: &gtk::Popover,
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
+    reach: &OverflowReach,
 ) {
-    let content = more_popover_content(popover, parent, state, status_toast);
+    let content = more_popover_content(popover, parent, state, status_toast, reach);
     set_track_popover_child(popover, PlayerPopoverKind::More, content);
 }
 
@@ -207,8 +307,10 @@ pub(crate) fn more_popover_content(
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
+    reach: &OverflowReach,
 ) -> gtk::Box {
     let content = track_popover_content(PlayerPopoverKind::More, None);
+    append_collapsed_controls_section(&content, popover, parent, &state, &status_toast, reach);
     let (mut has_media, ab_loop_active) = {
         let state = state.borrow();
         (has_loaded_media_state(&state), state.ab_loop.is_active())
@@ -261,6 +363,8 @@ pub(crate) fn more_popover_content(
         toggle_ab_loop(&ab_loop_state, &ab_loop_toast);
     });
     content.append(&ab_loop_button);
+
+    append_clip_export_placeholder(&content, &state, true);
 
     content.append(&divider());
 
@@ -551,6 +655,8 @@ pub(crate) fn advanced_command_popover_content(
     });
     content.append(&ab_loop_button);
 
+    append_clip_export_placeholder(&content, &state, false);
+
     content.append(&divider());
     content.append(&track_group_title("Video"));
     if video_available {
@@ -771,6 +877,109 @@ pub(crate) fn advanced_command_popover_content(
     content
 }
 
+pub(crate) fn append_clip_export_placeholder(
+    content: &gtk::Box,
+    state: &Rc<RefCell<PlayerState>>,
+    compact: bool,
+) {
+    if env::var_os("OKP_CLIP_EXPORT_PREVIEW_STATE")
+        .is_some_and(|state| state.eq_ignore_ascii_case("hidden"))
+    {
+        return;
+    }
+    let eligibility = current_clip_export_eligibility(state);
+    let reason = clip_export_placeholder_reason(eligibility);
+    let button = if compact {
+        command_button("Export clip/GIF...", false)
+    } else {
+        track_button("Export clip/GIF...", false)
+    };
+    // Issue #228 deliberately reserves the interaction and command model but
+    // does not ship an encoder. Keep the row disabled until the future worker
+    // consumes `ClipExportEligibility::request`, while still explaining the
+    // exact selection/tooling state instead of presenting a silent dead item.
+    button.set_sensitive(false);
+    button.set_tooltip_text(Some(&reason));
+    content.append(&button);
+    content.append(&empty_track_label(&reason));
+}
+
+pub(crate) fn current_clip_export_eligibility(
+    state: &Rc<RefCell<PlayerState>>,
+) -> ClipExportEligibility {
+    if let Some(preview) = clip_export_preview_eligibility() {
+        return preview;
+    }
+
+    let ab_loop = state.borrow().ab_loop;
+    let tooling = if find_executable("ffmpeg").is_some() {
+        ClipExportTooling::Available
+    } else {
+        ClipExportTooling::MissingFfmpeg
+    };
+    clip_export::clip_export_eligibility(ab_loop.a, ab_loop.b, tooling, ClipExportLimits::default())
+}
+
+pub(crate) fn clip_export_preview_eligibility() -> Option<ClipExportEligibility> {
+    let state = env::var("OKP_CLIP_EXPORT_PREVIEW_STATE").ok()?;
+    let limits = ClipExportLimits::default();
+    match state.as_str() {
+        "no-selection" => Some(ClipExportEligibility::NoSelection),
+        "invalid-range" => Some(ClipExportEligibility::InvalidRange),
+        "too-short" => Some(ClipExportEligibility::SelectionTooShort {
+            duration_seconds: limits.min_seconds / 2.0,
+            min_seconds: limits.min_seconds,
+        }),
+        "too-long" => Some(ClipExportEligibility::SelectionTooLong {
+            duration_seconds: limits.max_seconds + 1.0,
+            max_seconds: limits.max_seconds,
+        }),
+        "missing-tooling" => Some(ClipExportEligibility::MissingTooling),
+        "ready" => Some(ClipExportEligibility::Ready(
+            okp_core::clip_export::ClipExportSelection {
+                start_seconds: 12.0,
+                end_seconds: 42.0,
+            },
+        )),
+        _ => None,
+    }
+}
+
+pub(crate) fn clip_export_placeholder_reason(eligibility: ClipExportEligibility) -> String {
+    match eligibility {
+        ClipExportEligibility::NoSelection => "Set both A and B to prepare export".to_owned(),
+        ClipExportEligibility::InvalidRange => "Set B after A".to_owned(),
+        ClipExportEligibility::SelectionTooShort { min_seconds, .. } => {
+            format!("Select at least {}", export_limit_label(min_seconds))
+        }
+        ClipExportEligibility::SelectionTooLong { max_seconds, .. } => {
+            format!("Select {} or less", export_limit_label(max_seconds))
+        }
+        ClipExportEligibility::MissingTooling => "Install FFmpeg to export".to_owned(),
+        ClipExportEligibility::Ready(selection) => format!(
+            "Selection ready ({}); encoder not enabled",
+            time_code::format_clock(selection.duration_seconds())
+        ),
+    }
+}
+
+pub(crate) fn export_limit_label(seconds: f64) -> String {
+    if seconds >= 60.0 && seconds % 60.0 == 0.0 {
+        let minutes = seconds / 60.0;
+        format!(
+            "{} {}",
+            minutes as u64,
+            if minutes == 1.0 { "minute" } else { "minutes" }
+        )
+    } else {
+        format!(
+            "{} {}",
+            seconds as u64,
+            if seconds == 1.0 { "second" } else { "seconds" }
+        )
+    }
+}
+
 pub(crate) fn track_popover_content(kind: PlayerPopoverKind, title: Option<&str>) -> gtk::Box {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 2);
     content.add_css_class("okp-track-popover-content");
@@ -950,7 +1159,10 @@ pub(crate) fn compact_subtitle_size_row(scale: f64, state: &Rc<RefCell<PlayerSta
     row
 }
 
-pub(crate) fn compact_subtitle_style_row(state: &Rc<RefCell<PlayerState>>) -> gtk::Box {
+pub(crate) fn compact_subtitle_style_row(
+    state: &Rc<RefCell<PlayerState>>,
+    applicability: okp_core::subtitle_tracks::SubtitlePresetApplicability,
+) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     row.add_css_class("okp-quick-style-row");
 
@@ -961,8 +1173,25 @@ pub(crate) fn compact_subtitle_style_row(state: &Rc<RefCell<PlayerState>>) -> gt
     row.append(&label);
 
     let current = state.borrow().settings.subtitle_style();
-    let button = gtk::Button::with_label(&format!("{}  ›", subtitle_style_label(current.key)));
+    let button_label = match applicability {
+        okp_core::subtitle_tracks::SubtitlePresetApplicability::Applies(_) => {
+            format!("{}  ›", subtitle_style_label(current.key))
+        }
+        okp_core::subtitle_tracks::SubtitlePresetApplicability::NativeStyle(_) => {
+            "Native".to_owned()
+        }
+        okp_core::subtitle_tracks::SubtitlePresetApplicability::Unsupported(_)
+        | okp_core::subtitle_tracks::SubtitlePresetApplicability::NoActiveTrack => {
+            "Unavailable".to_owned()
+        }
+    };
+    let button = gtk::Button::with_label(&button_label);
     button.add_css_class("okp-quick-style-button");
+    button.set_sensitive(matches!(
+        applicability,
+        okp_core::subtitle_tracks::SubtitlePresetApplicability::Applies(_)
+    ));
+    button.set_tooltip_text(Some(&subtitle_preset_status_text(applicability)));
     let button_state = Rc::clone(state);
     let button_label = button.clone();
     button.connect_clicked(move |_| {
@@ -974,6 +1203,43 @@ pub(crate) fn compact_subtitle_style_row(state: &Rc<RefCell<PlayerState>>) -> gt
     });
     row.append(&button);
     row
+}
+
+pub(crate) fn subtitle_preset_status_label(
+    applicability: okp_core::subtitle_tracks::SubtitlePresetApplicability,
+) -> gtk::Label {
+    let label = gtk::Label::new(Some(&subtitle_preset_status_text(applicability)));
+    label.add_css_class("okp-subtitle-preset-status");
+    label.set_xalign(0.0);
+    label.set_wrap(true);
+    label.set_max_width_chars(34);
+    label
+}
+
+pub(crate) fn subtitle_preset_status_text(
+    applicability: okp_core::subtitle_tracks::SubtitlePresetApplicability,
+) -> String {
+    use okp_core::subtitle_tracks::{SubtitlePresetApplicability, SubtitlePresetFormat};
+
+    match applicability {
+        SubtitlePresetApplicability::Applies(format) => format!(
+            "OK Player preset applies to this {} track.",
+            format.display_name()
+        ),
+        SubtitlePresetApplicability::NativeStyle(format) => format!(
+            "{} native style; OK Player preset is not applied.",
+            format.display_name()
+        ),
+        SubtitlePresetApplicability::Unsupported(SubtitlePresetFormat::Image) => {
+            "Image subtitle; style presets are unavailable.".to_owned()
+        }
+        SubtitlePresetApplicability::Unsupported(_) => {
+            "Style support is unavailable for this subtitle format.".to_owned()
+        }
+        SubtitlePresetApplicability::NoActiveTrack => {
+            "Select a subtitle track to use style presets.".to_owned()
+        }
+    }
 }
 
 pub(crate) fn subtitle_style_label(key: &str) -> &'static str {
@@ -1681,6 +1947,23 @@ pub(crate) fn read_secondary_subtitle_id(state: &Rc<RefCell<PlayerState>>) -> Op
         .and_then(Mpv::observed_secondary_subtitle_id)
 }
 
+pub(crate) fn primary_subtitle_preset_applicability(
+    tracks: &[Track],
+    secondary_subtitle_id: Option<i64>,
+) -> okp_core::subtitle_tracks::SubtitlePresetApplicability {
+    okp_core::subtitle_tracks::primary_preset_applicability(
+        tracks
+            .iter()
+            .map(|track| okp_core::subtitle_tracks::SubtitleTrackMetadata {
+                id: track.id,
+                selected: track.selected,
+                codec: track.codec.as_deref(),
+                external_filename: track.external_filename.as_deref(),
+            }),
+        secondary_subtitle_id,
+    )
+}
+
 pub(crate) fn track_button(text: &str, selected: bool) -> gtk::Button {
     let button = gtk::Button::new();
     button.add_css_class("okp-track-row");
@@ -1747,6 +2030,32 @@ pub(crate) fn audio_track_button(name: &str, detail: &str, selected: bool) -> gt
 pub(crate) fn command_button(text: &str, selected: bool) -> gtk::Button {
     let button = track_button(text, selected);
     button.add_css_class("okp-command-row");
+    button
+}
+
+pub(crate) fn audio_command_button(text: &str) -> gtk::Button {
+    let button = gtk::Button::new();
+    button.add_css_class("okp-track-row");
+    button.add_css_class("okp-command-row");
+
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let check = selection_check_icon();
+    check.set_opacity(0.0);
+    row.append(&check);
+    let icon = audio_track_icon(16);
+    if env::var_os("OKP_DEBUG_OSC_LAYOUT").is_some() {
+        icon.set_widget_name("okp-debug-audio-overflow-icon");
+    }
+    row.append(&icon);
+
+    let label = gtk::Label::new(Some(text));
+    label.add_css_class("okp-track-row-label");
+    label.set_xalign(0.0);
+    label.set_hexpand(true);
+    label.set_ellipsize(pango::EllipsizeMode::End);
+    row.append(&label);
+
+    button.set_child(Some(&row));
     button
 }
 
@@ -1827,6 +2136,18 @@ pub(crate) fn preview_tracks(kind: TrackKind) -> Option<Vec<Track>> {
             },
         ],
         ("subtitle-empty", TrackKind::Subtitle) => Vec::new(),
+        ("subtitle-srt-selected", TrackKind::Subtitle) => vec![Track {
+            id: 2,
+            kind,
+            selected: true,
+            external: true,
+            external_filename: Some("Episode 1.en.srt".to_owned()),
+            default: false,
+            title: Some("English SDH".to_owned()),
+            lang: Some("eng".to_owned()),
+            codec: Some("subrip".to_owned()),
+            audio_channels: None,
+        }],
         ("subtitle-searchable", TrackKind::Subtitle) => vec![Track {
             id: 2,
             kind,
@@ -1892,6 +2213,7 @@ pub(crate) fn track_label(track: &Track) -> String {
         track.title.as_deref(),
         track.lang.as_deref(),
         track.codec.as_deref(),
+        track.external_filename.as_deref(),
         track.external,
         track.default,
     )

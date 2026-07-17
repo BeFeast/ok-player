@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 use okp_core::acceptance_evidence::{
     ArtifactKind, EvidenceManifest, PackageArtifact, PackageIdentity,
 };
+use okp_core::fedora_acceptance::{
+    AcceptanceVerdict, FedoraAcceptanceManifest, FedoraArtifact, FedoraArtifactKind,
+};
 use okp_core::presentation_evidence::{
     PresentationRecord, PresentationThresholds, exercise_errors, summarize_window,
 };
@@ -24,7 +27,57 @@ fn run() -> Result<(), String> {
         Some("template") => write_template(&args[1..]),
         Some("validate") => validate(&args[1..]),
         Some("presentation") => presentation(&args[1..]),
+        Some("fedora-artifact") => fedora_artifact(&args[1..]),
+        Some("fedora-validate") => fedora_validate(&args[1..]),
         _ => Err(usage()),
+    }
+}
+
+/// Hash a Fedora package file into a `FedoraArtifact` JSON fragment so the
+/// collector never re-implements SHA-256 or the artifact shape.
+fn fedora_artifact(args: &[String]) -> Result<(), String> {
+    let kind = match value(args, "--kind")? {
+        "flatpak" => FedoraArtifactKind::Flatpak,
+        "rpm" => FedoraArtifactKind::Rpm,
+        "copr" => FedoraArtifactKind::Copr,
+        other => return Err(format!("unknown --kind {other}; expected flatpak|rpm|copr")),
+    };
+    let path = PathBuf::from(value(args, "--file")?);
+    let payload = fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("{} has no UTF-8 file name", path.display()))?;
+    print_json(&FedoraArtifact {
+        kind,
+        file_name: file_name.to_owned(),
+        sha256: sha256_hex(&payload),
+    })
+}
+
+/// Evaluate a collected Fedora acceptance manifest. Pass exits 0, a blocked
+/// precondition exits 3 (distinct from a real failure), and a failure exits 1.
+/// Blocked is never silently treated as a pass.
+fn fedora_validate(args: &[String]) -> Result<(), String> {
+    let manifest_path = value(args, "--manifest")?;
+    let manifest: FedoraAcceptanceManifest = read_json(manifest_path)?;
+    let outcome = manifest.evaluate();
+    print_json(&outcome)?;
+    match outcome.verdict {
+        AcceptanceVerdict::Pass => {
+            // The banner goes to stderr so stdout stays a parseable outcome JSON
+            // when the harness redirects it to fedora-acceptance-outcome.json.
+            eprintln!("Fedora acceptance: PASS");
+            Ok(())
+        }
+        AcceptanceVerdict::Blocked => {
+            eprintln!("Fedora acceptance: BLOCKED (precondition unmet, not a pass)");
+            std::process::exit(3);
+        }
+        AcceptanceVerdict::Fail => Err(format!(
+            "Fedora acceptance: FAIL\n{}",
+            outcome.failures.join("\n")
+        )),
     }
 }
 
@@ -168,5 +221,5 @@ fn optional_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 }
 
 fn usage() -> String {
-    "usage:\n  okp-acceptance-evidence identity --version V --commit SHA --deb PATH --appimage PATH\n  okp-acceptance-evidence template --version V --commit SHA --deb PATH --appimage PATH\n  okp-acceptance-evidence validate --manifest PATH --identity PATH\n  okp-acceptance-evidence presentation --log PATH [--warmup-seconds N] [--report-only]".to_owned()
+    "usage:\n  okp-acceptance-evidence identity --version V --commit SHA --deb PATH --appimage PATH\n  okp-acceptance-evidence template --version V --commit SHA --deb PATH --appimage PATH\n  okp-acceptance-evidence validate --manifest PATH --identity PATH\n  okp-acceptance-evidence presentation --log PATH [--warmup-seconds N] [--report-only]\n  okp-acceptance-evidence fedora-artifact --kind flatpak|rpm|copr --file PATH\n  okp-acceptance-evidence fedora-validate --manifest PATH".to_owned()
 }

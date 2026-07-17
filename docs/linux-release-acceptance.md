@@ -1,5 +1,17 @@
 # Linux release acceptance
 
+Fedora has its own acceptance contract — stock vs RPM Fusion codecs, enforcing
+SELinux with AVC collection, Flatpak/RPM/COPR states, and virtual-GPU skip
+evidence — documented in [`fedora-acceptance.md`](fedora-acceptance.md). This
+document covers the general Debian/AppImage evidence levels.
+
+> **Candidate channel:** QA candidates for explicitly enrolled installs are published to the rolling
+> `linux-candidate` pre-release, not to a permanent `linux-v*` Release (issue #339). A candidate is
+> published from one exact native-builder bundle. The scheduled path marks a bundle `accepted` only
+> after its required build gates pass; an operator may use manual dispatch to publish `pending` or
+> `rejected` while completing additional evidence. The public feed is untouched throughout. See
+> [linux-candidate-channel.md](linux-candidate-channel.md).
+
 Linux release evidence is package-specific and has four levels:
 
 1. `model-unit`: pure Rust model/schema tests.
@@ -104,7 +116,14 @@ When canonical reference captures are available, name them identically to the im
 ./scripts/run-linux-acceptance-harness.sh ok-player artifacts/linux-acceptance references
 ```
 
-Packaging writes `package-identity.json` and `acceptance-template.json`. Fill the template without changing its package identity. A publish run accepts the candidate workflow run ID plus the base64-encoded completed manifest, validates every required row, and publishes the exact artifacts from that candidate run. Rebuilding after operator acceptance is intentionally not allowed because it would change the package hash.
+Packaging writes `package-identity.json` and `acceptance-template.json`. The model-unit packaging
+contract also runs the real Velopack CLI for both `linux-candidate` and public `linux` channels,
+then verifies the generated feed, Full nupkg, standalone AppImage, and atomically staged versioned
+AppImage identities. This proves package naming and byte identity, not installed desktop behavior.
+Fill the template without changing its package identity. A publish run accepts the candidate
+workflow run ID plus the base64-encoded completed manifest, validates every required row, and
+publishes the exact artifacts from that candidate run. Rebuilding after operator acceptance is
+intentionally not allowed because it would change the package hash.
 
 Merge deterministic rows before recording installed/live results:
 

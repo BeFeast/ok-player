@@ -29,6 +29,13 @@ const WELCOME_DROP_TARGET_WIDTH: i32 =
     WELCOME_CONTENT_WIDTH - WELCOME_ACTION_COLUMN_WIDTH - WELCOME_ACTION_GAP;
 const WELCOME_ACTION_ROW_HEIGHT: i32 = 84;
 const WELCOME_ACTION_BUTTON_GAP: i32 = 8;
+const HISTORY_WRAPPER_WIDTH: i32 = 792;
+const HISTORY_ROW_MIN_HEIGHT: i32 = 60;
+const HISTORY_METADATA_WIDTH: i32 = 104;
+
+fn history_page_width(viewport_width: i32) -> i32 {
+    viewport_width.clamp(0, HISTORY_WRAPPER_WIDTH)
+}
 
 fn welcome_action_row_stacks(width: i32) -> bool {
     width < WELCOME_CONTENT_WIDTH
@@ -49,6 +56,12 @@ impl EmptySurface {
         };
         if env::var("OKP_WELCOME_STATE").ok().as_deref() == Some("empty") {
             welcome_model = WelcomeShelf::Empty;
+        }
+        // Fill each resumable card's poster from the cache (enqueuing bounded generation for
+        // any still missing). The welcome shelf never carries items during a private session —
+        // `welcome_shelf` returns `Private` — so these rows are always non-private.
+        if let WelcomeShelf::Items(items) = &mut welcome_model {
+            crate::thumbnails::project_posters(items, false);
         }
         if self.model.borrow().as_ref() != Some(&welcome_model) {
             *self.model.borrow_mut() = Some(welcome_model.clone());
@@ -529,6 +542,9 @@ fn history_surface_model(state: &Rc<RefCell<PlayerState>>) -> HistorySurfaceMode
     ) {
         items.clear();
     }
+    // Share the same cached posters and generation queue as the welcome shelf. A private
+    // session exposes no posters here (and enqueues none), so private viewing leaves no trace.
+    crate::thumbnails::project_posters(&mut items, state.private_session);
     HistorySurfaceModel {
         items,
         private_session: state.private_session,
@@ -664,8 +680,10 @@ fn history_page_shell() -> (gtk::ScrolledWindow, gtk::Box) {
     scroller.set_vexpand(true);
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     content.add_css_class("okp-history-page");
-    content.set_halign(gtk::Align::Center);
-    scroller.set_child(Some(&content));
+    content.set_halign(gtk::Align::Fill);
+    let page = HistoryPage::new(&content);
+    page.set_hexpand(true);
+    scroller.set_child(Some(&page));
     (scroller, content)
 }
 
@@ -757,6 +775,7 @@ fn history_row(
     button.add_css_class("okp-history-row");
     button.set_has_frame(false);
     button.set_hexpand(true);
+    button.set_size_request(-1, HISTORY_ROW_MIN_HEIGHT);
     button.set_tooltip_text(Some(&item.path));
 
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 13);
@@ -768,27 +787,34 @@ fn history_row(
     ));
     let text = gtk::Box::new(gtk::Orientation::Vertical, 3);
     text.set_hexpand(true);
+    text.set_valign(gtk::Align::Center);
     let title = gtk::Label::new(Some(&item.title));
     title.add_css_class("okp-history-row-title");
     title.set_xalign(0.0);
     title.set_width_chars(1);
     title.set_ellipsize(pango::EllipsizeMode::End);
+    title.set_tooltip_text(Some(&item.title));
     text.append(&title);
     let location = gtk::Label::new(Some(&item.location));
     location.add_css_class("okp-history-row-location");
     location.set_xalign(0.0);
+    location.set_width_chars(1);
     location.set_ellipsize(pango::EllipsizeMode::End);
+    location.set_tooltip_text(Some(&item.path));
     text.append(&location);
     row.append(&text);
 
     let right = gtk::Box::new(gtk::Orientation::Vertical, 5);
     right.set_halign(gtk::Align::End);
+    right.set_valign(gtk::Align::Center);
+    right.set_size_request(HISTORY_METADATA_WIDTH, -1);
     let when = local_datetime(item.updated_at_unix)
         .map(|value| history_format::when_label(value, fallback_local_datetime()))
         .unwrap_or_else(|| "Opened previously".to_owned());
     let when = gtk::Label::new(Some(&when));
     when.add_css_class("okp-history-row-when");
-    when.set_halign(gtk::Align::End);
+    when.set_hexpand(true);
+    when.set_xalign(1.0);
     right.append(&when);
     match item.state_kind {
         HistoryStateKind::Finished => {
@@ -800,13 +826,15 @@ fn history_row(
         HistoryStateKind::Progress => {
             let state_label = gtk::Label::new(Some(&item.state_label));
             state_label.add_css_class("okp-history-progress-label");
-            state_label.set_halign(gtk::Align::End);
+            state_label.set_hexpand(true);
+            state_label.set_xalign(1.0);
             right.append(&state_label);
         }
         HistoryStateKind::Barely => {
             let state_label = gtk::Label::new(Some(&item.state_label));
             state_label.add_css_class("okp-history-barely-label");
-            state_label.set_halign(gtk::Align::End);
+            state_label.set_hexpand(true);
+            state_label.set_xalign(1.0);
             right.append(&state_label);
         }
     }
@@ -853,6 +881,9 @@ fn history_thumbnail(item: &HistoryItem, width: i32, height: i32, finished: bool
         picture.add_css_class("okp-history-thumbnail-picture");
         picture.set_size_request(width, height);
         picture.set_can_shrink(true);
+        // Both the welcome card and the History row fill their (16:9) frame with the same
+        // cover crop, so a poster reads identically on either surface.
+        picture.set_content_fit(gtk::ContentFit::Cover);
         overlay.add_overlay(&picture);
     }
     if item.state_kind == HistoryStateKind::Progress {
@@ -861,6 +892,7 @@ fn history_thumbnail(item: &HistoryItem, width: i32, height: i32, finished: bool
         progress.set_size_request(width, -1);
         progress.set_fraction(item.progress);
         progress.set_valign(gtk::Align::End);
+        progress.set_halign(gtk::Align::Fill);
         overlay.add_overlay(&progress);
     }
     overlay
@@ -1113,6 +1145,98 @@ impl WelcomeActionRow {
     }
 }
 
+// GtkScrolledWindow otherwise gives a centered child only its compact natural width. This
+// wrapper reports the canonical desktop width while allocating the page down to the viewport
+// on narrow windows, preserving the same 26px inner gutter at every supported size.
+mod history_page {
+    use super::*;
+    use gtk::subclass::prelude::*;
+    use gtk::{graphene, gsk};
+
+    #[derive(Default)]
+    pub(super) struct HistoryPage {
+        pub(super) child: RefCell<Option<gtk::Widget>>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for HistoryPage {
+        const NAME: &'static str = "OkpHistoryPage";
+        type Type = super::HistoryPage;
+        type ParentType = gtk::Widget;
+    }
+
+    impl ObjectImpl for HistoryPage {
+        fn dispose(&self) {
+            if let Some(child) = self.child.take() {
+                child.unparent();
+            }
+        }
+    }
+
+    impl WidgetImpl for HistoryPage {
+        fn request_mode(&self) -> gtk::SizeRequestMode {
+            gtk::SizeRequestMode::HeightForWidth
+        }
+
+        fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
+            let child = self.child.borrow();
+            let Some(child) = child.as_ref() else {
+                return (0, 0, -1, -1);
+            };
+
+            match orientation {
+                gtk::Orientation::Horizontal => (0, HISTORY_WRAPPER_WIDTH, -1, -1),
+                gtk::Orientation::Vertical => child.measure(
+                    orientation,
+                    history_page_width(if for_size < 0 {
+                        HISTORY_WRAPPER_WIDTH
+                    } else {
+                        for_size
+                    }),
+                ),
+                _ => unreachable!(),
+            }
+        }
+
+        fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
+            let child = self.child.borrow();
+            let Some(child) = child.as_ref() else {
+                return;
+            };
+            let child_width = history_page_width(width);
+            let transform = gsk::Transform::new().translate(&graphene::Point::new(
+                ((width - child_width) / 2) as f32,
+                0.0,
+            ));
+            child.allocate(child_width, height, baseline, Some(transform));
+        }
+
+        fn snapshot(&self, snapshot: &gtk::Snapshot) {
+            if let Some(child) = self.child.borrow().as_ref() {
+                self.obj().snapshot_child(child, snapshot);
+            }
+        }
+    }
+}
+
+glib::wrapper! {
+    struct HistoryPage(ObjectSubclass<history_page::HistoryPage>)
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
+
+impl HistoryPage {
+    fn new(child: &impl IsA<gtk::Widget>) -> Self {
+        use gtk::subclass::prelude::ObjectSubclassIsExt;
+
+        let page: Self = glib::Object::builder().build();
+        let child = child.clone().upcast::<gtk::Widget>();
+        child.set_parent(&page);
+        page.imp().child.replace(Some(child));
+        page
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1133,5 +1257,14 @@ mod tests {
         assert!(!welcome_action_row_stacks(680));
         assert!(welcome_action_row_stacks(679));
         assert!(welcome_action_row_stacks(416));
+    }
+
+    #[test]
+    fn gtk_history_geometry_uses_the_desktop_canvas_and_shrinks_to_the_viewport() {
+        assert_eq!(history_page_width(1120), 792);
+        assert_eq!(history_page_width(792), 792);
+        assert_eq!(history_page_width(480), 480);
+        assert_eq!(HISTORY_ROW_MIN_HEIGHT, 60);
+        assert_eq!(HISTORY_METADATA_WIDTH, 104);
     }
 }

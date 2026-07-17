@@ -63,6 +63,10 @@ pub struct DebUpdate {
     pub url: String,
     pub size: Option<u64>,
     pub sums_url: Option<String>,
+    /// Candidate feeds bind the package to an exact digest in addition to the
+    /// checksum manifest. Public feeds leave this unset and retain their
+    /// existing SHA256SUMS-only contract.
+    pub expected_sha256: Option<String>,
 }
 
 /// Selects the feed's `.deb` when it is strictly newer than `current_version`.
@@ -82,6 +86,7 @@ pub fn select_deb_update_from_feed(feed: DebFeed, current_version: &str) -> Opti
         url: feed.package.url,
         size: feed.package.size,
         sums_url: feed.sha256sums_url,
+        expected_sha256: None,
     })
 }
 

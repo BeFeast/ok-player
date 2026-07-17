@@ -113,6 +113,49 @@ fn mute_is_a_bindable_m_shortcut() {
 }
 
 #[test]
+fn bare_space_is_the_canonical_player_command_with_lock_masks_ignored() {
+    assert!(is_canonical_player_space(
+        gdk::Key::space,
+        gdk::ModifierType::empty()
+    ));
+    assert!(is_canonical_player_space(
+        gdk::Key::space,
+        gdk::ModifierType::LOCK_MASK
+    ));
+    assert!(!is_canonical_player_space(
+        gdk::Key::space,
+        gdk::ModifierType::SHIFT_MASK
+    ));
+    assert!(!is_canonical_player_space(
+        gdk::Key::Return,
+        gdk::ModifierType::empty()
+    ));
+}
+
+#[test]
+fn player_space_capture_precedes_button_activation_and_preserves_editors() {
+    let keyboard = include_str!("keyboard.rs");
+    for required in [
+        "gtk::PropagationPhase::Capture",
+        "connect_key_released",
+        "gtk::Editable",
+        "gtk::TextView",
+        "is-capturing",
+        "toggle_play_pause(&state)",
+        "glib::Propagation::Stop",
+    ] {
+        assert!(
+            keyboard.contains(required),
+            "missing Space contract: {required}"
+        );
+    }
+    assert!(!keyboard.contains("mpv.cycle_pause()"));
+
+    let settings = include_str!("settings_window.rs");
+    assert!(settings.contains("connect_companion_play_pause_space"));
+}
+
+#[test]
 fn volume_wheel_and_arrow_events_map_to_the_canonical_steps() {
     assert_eq!(volume_scroll_delta(-1.0, false), Some(1.0));
     assert_eq!(volume_scroll_delta(1.0, false), Some(-1.0));
@@ -233,6 +276,100 @@ fn linux_packaging_installs_launcher_identity_asset() {
         assert!(contents.contains("for size in 16 24 32 48 64"));
         assert!(contents.contains("usr/share/icons/hicolor/${size}x${size}/apps"));
     }
+
+    let velopack = fs::read_to_string(root.join("scripts/package-linux-velopack.sh"))
+        .expect("Velopack packaging script should be readable");
+    assert!(velopack.contains("okp-candidate\" stage-velopack"));
+    assert!(!velopack.contains("$PACK_ID.AppImage"));
+    assert!(!velopack.contains("$PACK_ID-$VERSION-linux-full.nupkg"));
+}
+
+#[test]
+fn real_velopack_pack_resolves_candidate_channel_artifact_identities() {
+    if std::env::var_os("OKP_RUN_VELOPACK_PACK_TEST").is_none() {
+        return;
+    }
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let version = "0.11.0-beta.0.367";
+    let channel = "linux-candidate";
+    let package_id = okp_core::velopack_artifacts::LINUX_VELOPACK_PACKAGE_ID;
+    let fixture = okp_test_fixtures::run_velopack_pack(
+        package_id,
+        version,
+        channel,
+        &root.join("rust/packaging/linux/com.befeast.okplayer.svg"),
+    )
+    .expect("real Velopack candidate pack should succeed");
+    let versioned_name = format!("OK-Player-{version}-x86_64.AppImage");
+    let identity = okp_core::velopack_artifacts::stage_versioned_appimage(
+        &fixture.output_dir,
+        channel,
+        package_id,
+        version,
+        &versioned_name,
+    )
+    .expect("channel-qualified Velopack outputs should resolve and stage");
+
+    assert_eq!(identity.feed_file_name, "releases.linux-candidate.json");
+    assert_eq!(identity.package_id, package_id);
+    assert_eq!(identity.version, version);
+    assert_eq!(
+        identity.full_package_file_name,
+        format!("{package_id}-{version}-linux-candidate-full.nupkg")
+    );
+    assert_eq!(
+        identity.appimage_file_name,
+        format!("{package_id}-linux-candidate.AppImage")
+    );
+    assert!(identity.full_package_size > 0);
+    assert!(identity.appimage_size > 0);
+    let source = fs::read(fixture.output_dir.join(&identity.appimage_file_name))
+        .expect("standalone AppImage should be readable");
+    let staged = fs::read(fixture.output_dir.join(&versioned_name))
+        .expect("versioned AppImage should be readable");
+    assert_eq!(staged, source);
+
+    fs::write(fixture.output_dir.join(&identity.appimage_file_name), [])
+        .expect("standalone AppImage should be corruptible for the failure regression");
+    let error = okp_core::velopack_artifacts::stage_versioned_appimage(
+        &fixture.output_dir,
+        channel,
+        package_id,
+        version,
+        &versioned_name,
+    )
+    .expect_err("a corrupt standalone AppImage must fail staging");
+    assert!(error.contains("standalone AppImage matching the Full package"));
+    assert!(
+        !fixture.output_dir.join(&versioned_name).exists(),
+        "failure must remove the apparently versioned output"
+    );
+
+    let public_fixture = okp_test_fixtures::run_velopack_pack(
+        package_id,
+        version,
+        "linux",
+        &root.join("rust/packaging/linux/com.befeast.okplayer.svg"),
+    )
+    .expect("real Velopack public pack should succeed");
+    let public_identity = okp_core::velopack_artifacts::stage_versioned_appimage(
+        &public_fixture.output_dir,
+        "linux",
+        package_id,
+        version,
+        &versioned_name,
+    )
+    .expect("public-channel Velopack outputs should remain supported");
+    assert_eq!(public_identity.feed_file_name, "releases.linux.json");
+    assert_eq!(
+        public_identity.full_package_file_name,
+        format!("{package_id}-{version}-linux-full.nupkg")
+    );
+    assert_eq!(
+        public_identity.appimage_file_name,
+        format!("{package_id}.AppImage")
+    );
 }
 
 #[test]
@@ -263,6 +400,7 @@ fn gtk_identity_uses_vector_widgets_instead_of_host_font_marks() {
 #[test]
 fn volume_and_audio_track_actions_use_distinct_icon_identities() {
     let controls = include_str!("controls.rs");
+    let track_popovers = include_str!("track_popovers.rs");
 
     // Volume keeps the speaker/level glyph in both resting and reactive states.
     assert!(
@@ -270,21 +408,48 @@ fn volume_and_audio_track_actions_use_distinct_icon_identities() {
         "volume control must keep the speaker/level icon"
     );
 
-    // The audio-track/output action reads as a distinct semantic (headphones),
-    // never a second speaker glyph, so the two OSC buttons stay tellable apart.
+    // The audio-track/output action reads as a distinct music-track semantic,
+    // rendered in-process so a sparse packaged icon theme cannot erase it.
     assert!(
-        controls.contains(".icon_name(\"audio-headphones-symbolic\")"),
-        "audio-track/output action must use the distinct headphones glyph"
+        controls.contains("audio_track_icon(AUDIO_TRACK_ICON_SIZE)"),
+        "audio-track/output action must use the bundled music-track glyph"
     );
     assert!(
         !controls.contains("audio-speakers-symbolic"),
         "regression guard: no second speaker glyph on the audio action"
     );
+    assert!(!controls.contains("audio-headphones-symbolic"));
+    assert!(track_popovers.contains("audio_command_button(\"Audio tracks / output\")"));
 
     // Distinct accessible names and tooltips: Volume versus Audio tracks / output.
     assert!(controls.contains("gtk::accessible::Property::Label(\"Volume\")"));
     assert!(controls.contains("set_tooltip_text(Some(\"Audio tracks / output\"))"));
     assert!(controls.contains("gtk::accessible::Property::Label(\"Audio tracks / output\")"));
+}
+
+#[test]
+fn audio_track_glyph_paints_real_pixels_without_an_icon_theme() {
+    let mut surface =
+        cairo::ImageSurface::create(cairo::Format::ARgb32, 19, 19).expect("audio glyph surface");
+    let cr = cairo::Context::new(&surface).expect("audio glyph context");
+    draw_audio_track_glyph(&cr, 19, 19, gdk::RGBA::WHITE);
+    drop(cr);
+    surface.flush();
+
+    let painted_bytes = surface
+        .data()
+        .expect("audio glyph pixels")
+        .iter()
+        .filter(|&&channel| channel != 0)
+        .count();
+    assert!(
+        painted_bytes > 80,
+        "music-track glyph rendered no usable pixels"
+    );
+    assert!(
+        painted_bytes < 900,
+        "music-track glyph unexpectedly filled its allocation"
+    );
 }
 
 #[test]
@@ -295,8 +460,12 @@ fn settings_stays_in_the_width_safe_bottom_more_menu() {
 
     assert!(!window.contains("gtk::Button::from_icon_name(\"emblem-system-symbolic\")"));
     assert!(window.contains("persistent_widgets: Vec::new()"));
-    assert!(controls.contains("more_slot.set_size_request(32, 1)"));
-    assert!(controls.contains("chrome.add_overlay(&controls.more_button)"));
+    // The overflow entry is the final in-flow OSC action inside the adaptive
+    // OscBar, never a floating overlay that could paint over its neighbour.
+    assert!(controls.contains("let bar = OscBar::new();"));
+    assert!(controls.contains("bar.push(&controls.more_button, OscControlId::Overflow);"));
+    assert!(!controls.contains("more_slot"));
+    assert!(!controls.contains("chrome.add_overlay(&controls.more_button)"));
     assert!(popovers.contains("command_button(\"Settings...\", false)"));
     assert_eq!(
         window
@@ -317,6 +486,80 @@ fn settings_stays_in_the_width_safe_bottom_more_menu() {
 
     let css = include_str!("css.rs");
     assert!(!css.contains("button.okp-player-settings-control.is-isolated"));
+}
+
+#[test]
+fn adaptive_osc_bar_collapses_into_overflow_without_overlap() {
+    let osc = include_str!("osc_bar.rs");
+    let controls = include_str!("controls.rs");
+    let css = include_str!("css.rs");
+
+    // The bar reports only the floor as its horizontal minimum, so a narrow
+    // window hands it the real allocation instead of forcing the full width and
+    // clipping the trailing overflow entry.
+    assert!(osc.contains("osc_overflow::floor_min_width(&slots, SPACING)"));
+    assert!(osc.contains("osc_overflow::plan(&slots, width, SPACING"));
+    // Collapsed controls are unmapped: not painted, focusable, or hit-testable.
+    assert!(osc.contains("child.set_child_visible(false)"));
+    // The row mirrors for right-to-left locales, keeping the layout RTL-safe.
+    assert!(osc.contains("gtk::TextDirection::Rtl"));
+    // The overflow entry is the final in-flow action, not a floating overlay.
+    assert!(controls.contains("bar.push(&controls.more_button, OscControlId::Overflow);"));
+    assert!(controls.contains("bar.set_collapsed_sink("));
+    // The custom container owns the pill inset, so the `.okp-controls` CSS
+    // padding is zeroed to avoid double-insetting the controls.
+    let controls_block = css
+        .split_once(".okp-controls {")
+        .expect("controls pill block")
+        .1
+        .split_once('}')
+        .expect("controls pill block close")
+        .0;
+    assert!(controls_block.contains("padding: 0;"));
+    assert!(!controls_block.contains("padding: 7px 14px;"));
+    assert!(osc.contains("pub(crate) const PAD_HORIZONTAL: i32 = 14;"));
+    assert!(osc.contains("pub(crate) const PAD_VERTICAL: i32 = 7;"));
+}
+
+#[test]
+fn media_presence_is_the_single_owner_of_standard_osc_mapping() {
+    let chrome = include_str!("main.rs");
+    let compact = include_str!("compact_mode.rs");
+
+    assert!(chrome.contains("okp_core::osc_visibility::project("));
+    assert!(chrome.contains("revealer.set_visible(next.visible)"));
+    assert!(chrome.contains("revealer.set_sensitive(next.focusable)"));
+    assert!(chrome.contains("revealer.set_can_target(next.hit_testable)"));
+    assert!(chrome.contains("if old.visible != next.visible"));
+    assert!(chrome.contains("if old.focusable != next.focusable"));
+    assert!(chrome.contains("if old.hit_testable != next.hit_testable"));
+    assert!(chrome.contains("self.has_media.replace(has_media) != has_media"));
+    assert!(chrome.contains("self.surface_suppressed.replace(suppressed) != suppressed"));
+
+    assert!(!compact.contains("standard_osc"));
+    assert!(!compact.contains("self.chrome.widget().set_visible"));
+    assert!(compact.contains("self.chrome.set_surface_suppressed(compact)"));
+}
+
+#[test]
+fn overflow_menu_surfaces_every_collapsed_control_action() {
+    let popovers = include_str!("track_popovers.rs");
+
+    // Selection controls drill into their picker inside the same popover.
+    assert!(popovers.contains("OscControlId::Speed =>"));
+    assert!(popovers.contains("OscControlId::Subtitles =>"));
+    assert!(popovers.contains("OscControlId::Audio =>"));
+    assert!(popovers.contains("populate_speed_popover(&drill_popover"));
+    assert!(popovers.contains("populate_subtitle_popover("));
+    assert!(popovers.contains("populate_audio_popover(&drill_popover"));
+    // Direct-action controls reuse their real OSC button via `clicked`, so no
+    // behaviour is duplicated and the button's wiring runs while it is folded.
+    assert!(popovers.contains("reach_emit_button(\"Chapters & Up Next\""));
+    assert!(popovers.contains("reach_emit_button(\"Take screenshot\""));
+    assert!(popovers.contains("reach_emit_button(\"Fullscreen\""));
+    assert!(popovers.contains("emit_target.emit_clicked();"));
+    // Settings stays reachable in the overflow menu at every width.
+    assert!(popovers.contains("command_button(\"Settings...\", false)"));
 }
 
 #[test]
@@ -368,9 +611,43 @@ fn about_diagnostics_contains_only_app_engine_and_host_groups() {
 
 #[test]
 fn settings_initial_page_env_accepts_known_pages_only() {
-    assert_eq!(normalized_settings_page(" Shortcuts "), Some("shortcuts"));
-    assert_eq!(normalized_settings_page("about"), Some("about"));
+    assert_eq!(
+        normalized_settings_page(" Shortcuts "),
+        Some(SettingsPage::Shortcuts)
+    );
+    assert_eq!(
+        normalized_settings_page("UPDATES"),
+        Some(SettingsPage::Updates)
+    );
+    assert_eq!(normalized_settings_page("about"), Some(SettingsPage::About));
     assert_eq!(normalized_settings_page("native-caption"), None);
+}
+
+#[test]
+fn settings_updates_has_one_dedicated_content_owner() {
+    let updates = include_str!("updates.rs");
+    let advanced_page = updates
+        .split_once("pub(crate) fn settings_advanced_page(")
+        .expect("Advanced page")
+        .1
+        .split_once("pub(crate) fn settings_updates_page(")
+        .expect("Updates page follows Advanced")
+        .0;
+    assert!(!advanced_page.contains("settings_updates_section"));
+
+    let updates_page = updates
+        .split_once("pub(crate) fn settings_updates_page(")
+        .expect("dedicated Updates page")
+        .1
+        .split_once("pub(crate) fn settings_raw_mpv_section(")
+        .expect("raw mpv section follows page constructors")
+        .0;
+    assert_eq!(updates_page.matches("settings_updates_section").count(), 1);
+
+    let window = include_str!("settings_window.rs");
+    assert!(window.contains("Some(\"updates\")"));
+    assert!(window.contains("SettingsNavIcon::Updates"));
+    assert!(window.contains("search_settings(entry.text().as_str())"));
 }
 
 #[test]
@@ -427,6 +704,20 @@ fn media_info_preview_sample_covers_the_polished_surfaces() {
         .map(|section| section.title.as_str())
         .collect();
     assert!(!stream_titles.contains(&"Playback"));
+    let video = stream_sections
+        .iter()
+        .find(|section| section.title == "Video")
+        .expect("video stream section");
+    let dynamic_range_index = video
+        .rows
+        .iter()
+        .position(|row| row.label == "Dynamic Range")
+        .expect("dynamic range row");
+    assert_eq!(video.rows[dynamic_range_index + 1].label, "HDR Handling");
+    assert_eq!(
+        video.rows[dynamic_range_index + 1].value,
+        "Automatic · engine-managed"
+    );
 
     let stats_sections = media_info_stats_sections(&sample);
     let stats_titles: Vec<&str> = stats_sections
@@ -437,13 +728,92 @@ fn media_info_preview_sample_covers_the_polished_surfaces() {
         stats_titles,
         vec!["Decode · Render", "Live · Performance", "Display · Output"]
     );
+    let decode = stats_sections
+        .iter()
+        .find(|section| section.title == "Decode · Render")
+        .expect("decode diagnostics");
+    assert!(
+        decode
+            .rows
+            .iter()
+            .any(|row| row.label == "Engine Tone Mapping")
+    );
+    assert!(!decode.rows.iter().any(|row| row.label == "Tone Mapping"));
 }
 
 #[test]
-fn media_info_modal_geometry_matches_reference_and_narrow_clamp() {
-    assert_eq!(media_info_modal_geometry(1120, 680), (720, 571));
-    assert_eq!(media_info_modal_geometry(480, 540), (441, 453));
-    assert_eq!(media_info_modal_geometry(700, 400), (644, 336));
+fn media_info_hdr_handling_is_reserved_only_for_hdr_sources() {
+    let mut sample = media_info_preview_sample();
+    let video = sample
+        .sections
+        .iter_mut()
+        .find(|section| section.title == "Video")
+        .expect("video section");
+    let dynamic_range = video
+        .rows
+        .iter_mut()
+        .find(|row| row.label == "Dynamic Range")
+        .expect("dynamic range row");
+    dynamic_range.value = "SDR".to_owned();
+
+    let video = media_info_stream_sections(&sample)
+        .into_iter()
+        .find(|section| section.title == "Video")
+        .expect("video stream section");
+    assert!(!video.rows.iter().any(|row| row.label == "HDR Handling"));
+}
+
+#[test]
+fn hdr_settings_reservation_has_no_toggle_or_action() {
+    let source = include_str!("settings_pages.rs");
+    let function = source
+        .split_once("pub(crate) fn settings_hdr_handling_row()")
+        .expect("HDR settings row")
+        .1
+        .split_once("pub(crate) fn settings_shortcuts_section")
+        .expect("next settings function")
+        .0;
+
+    assert!(function.contains("HDR handling"));
+    assert!(function.contains("settings_label"));
+    assert!(!function.contains("gtk::Switch"));
+    assert!(!function.contains("gtk::Button"));
+    assert!(!function.contains("connect_"));
+}
+
+#[test]
+fn companion_window_geometry_clamps_natural_and_restored_sizes() {
+    let work_area = window_fit::WindowRect {
+        x: 0,
+        y: 0,
+        width: 1280,
+        height: 852,
+    };
+    assert_eq!(
+        companion_window_core::companion_window_size(
+            CompanionWindowKind::MediaInfo,
+            None,
+            work_area,
+        ),
+        window_fit::WindowSize {
+            width: 720,
+            height: 571,
+        }
+    );
+    assert_eq!(
+        companion_window_core::companion_window_size(
+            CompanionWindowKind::Settings,
+            Some(window_fit::WindowSize {
+                width: 1600,
+                height: 1000,
+            }),
+            work_area,
+        ),
+        window_fit::WindowSize {
+            width: 1280,
+            height: 852,
+        }
+    );
 }
 
 #[test]
@@ -465,11 +835,12 @@ fn media_info_identity_is_app_owned_cairo_geometry() {
 }
 
 #[test]
-fn media_info_modal_classes_have_scoped_css() {
+fn media_info_window_classes_have_scoped_css() {
     let stylesheet = include_str!("css.rs");
     for class in [
-        "okp-media-info-modal-layer",
-        "okp-media-info-backdrop",
+        "okp-companion-window",
+        "okp-companion-resize-zone",
+        "okp-media-info-window",
         "okp-media-info-card",
         "okp-media-info-header",
         "okp-media-info-identity",
@@ -491,13 +862,14 @@ fn media_info_modal_classes_have_scoped_css() {
     ] {
         assert!(
             stylesheet.contains(&format!(".{class}")),
-            "Media Information class {class} must have modal-scoped CSS"
+            "Media Information class {class} must have window-scoped CSS"
         );
     }
+    assert!(!stylesheet.contains("okp-media-info-backdrop"));
 }
 
 #[test]
-fn both_media_info_menu_entries_use_the_in_player_modal_entry_point() {
+fn both_media_info_menu_entries_use_the_companion_window_entry_point() {
     let source = include_str!("track_popovers.rs");
     let more = source
         .split_once("pub(crate) fn more_popover_content")
@@ -516,7 +888,34 @@ fn both_media_info_menu_entries_use_the_in_player_modal_entry_point() {
 
     assert_eq!(more.matches("open_media_info_window(").count(), 1);
     assert_eq!(advanced.matches("open_media_info_window(").count(), 1);
-    assert!(!source.contains("show_media_info_window"));
+    assert!(!source.contains("show_media_info_modal"));
+}
+
+#[test]
+fn long_lived_surfaces_share_non_modal_single_instance_window_semantics() {
+    let helper = include_str!("companion_window.rs");
+    let settings = include_str!("settings_window.rs");
+    let media_info = include_str!("media_info.rs");
+
+    assert!(helper.contains(".modal(policy.modal)"));
+    assert!(helper.contains(".resizable(policy.resizable)"));
+    assert!(!helper.contains(".transient_for("));
+    assert!(helper.contains("present_existing_companion_window"));
+    assert!(helper.contains("add_companion_window_resize_zones"));
+    assert!(settings.contains("CompanionWindowKind::Settings"));
+    assert!(media_info.contains("CompanionWindowKind::MediaInfo"));
+    assert!(settings.contains("present_existing_companion_window"));
+    assert!(media_info.contains("present_existing_companion_window"));
+}
+
+#[test]
+fn command_confirmations_and_file_pickers_remain_modal() {
+    let dialogs = include_str!("dialogs.rs");
+    let subtitle_search = include_str!("track_popovers.rs");
+
+    assert!(dialogs.matches(".modal(true)").count() >= 5);
+    assert!(dialogs.matches("dialog.set_modal(true)").count() >= 4);
+    assert!(subtitle_search.contains(".modal(true)"));
 }
 
 #[test]
@@ -528,6 +927,7 @@ fn media_info_row_highlights_active_hdr_only() {
     assert!(media_info_row_is_highlight("dynamic range", "Dolby Vision"));
     assert!(!media_info_row_is_highlight("Dynamic Range", "No"));
     assert!(!media_info_row_is_highlight("Dynamic Range", "SDR"));
+    assert!(!media_info_row_is_highlight("Dynamic Range", "Unknown"));
     assert!(!media_info_row_is_highlight("Codec", "HEVC (H.265)"));
 }
 
@@ -1060,6 +1460,8 @@ fn raw_mpv_config_parser_rejects_protected_options() {
     for option in [
         "sub-scale=1.4",
         "sub-pos=90",
+        "sub-ass-override=force",
+        "secondary-sub-ass-override=strip",
         "sub-border-style=background-box",
         "SUB-BACK-COLOR=0/0/0/0.7",
         "sub-outline-size=6",
@@ -1626,7 +2028,7 @@ fn track_label_shows_tags_without_a_selection_prefix() {
         codec: None,
         audio_channels: None,
     };
-    assert_eq!(track_label(&subtitle), "English (SDH) · EXT");
+    assert_eq!(track_label(&subtitle), "English (SDH) · SRT · EXT");
 
     let audio = Track {
         id: 1,
@@ -1772,6 +2174,7 @@ fn more_stays_curated_while_player_context_menu_keeps_legacy_commands() {
     for label in curated_more {
         assert!(more.contains(&format!("command_button(\"{label}\"")));
     }
+    assert!(more.contains("append_clip_export_placeholder(&content, &state, true)"));
     assert!(!more.contains("Open URL..."));
     assert!(!more.contains("Clear History..."));
     assert!(!more.contains("Zoom in"));
@@ -1791,6 +2194,7 @@ fn more_stays_curated_while_player_context_menu_keeps_legacy_commands() {
         "Copy Current Time",
         "Add Bookmark",
         "A-B loop",
+        "Export clip/GIF...",
         "Zoom in",
         "Zoom out",
         "Pan left",
@@ -1814,6 +2218,7 @@ fn more_stays_curated_while_player_context_menu_keeps_legacy_commands() {
             "missing advanced command: {label}"
         );
     }
+    assert!(advanced.contains("append_clip_export_placeholder(&content, &state, false)"));
     for implementation_marker in [
         "VideoAspect::ALL",
         "VideoGeometryAction::SetAspect",
@@ -1886,7 +2291,7 @@ fn compact_mode_keeps_the_render_surface_and_restores_standard_chrome() {
         "COMPACT_MIN_SHORT_EDGE",
         "set_window_always_on_top(&self.window, true)",
         ".set_visible(!compact && !self.window.is_fullscreen())",
-        "self.standard_osc.set_visible(!compact)",
+        "self.chrome.set_surface_suppressed(compact)",
         "close_current_media(&close_state, &close_toast)",
         "restore_compact_mode",
     ] {
@@ -1952,6 +2357,35 @@ fn player_context_menu_preserves_control_and_popover_interactions() {
 }
 
 #[test]
+fn player_window_move_drags_the_whole_non_interactive_surface() {
+    // A left-drag that clears the shared threshold anywhere on a non-OSC surface
+    // begins a compositor-native move; short clicks stay play/pause and a
+    // stationary double-click stays fullscreen. The gesture policy is verified
+    // in okp-core; here we lock the shell wiring that feeds it.
+    let bridge = include_str!("mpv_bridge.rs");
+    assert!(bridge.contains("pub(crate) fn connect_player_window_move("));
+    // Left-button drag with a movement threshold, not an immediate press grab.
+    assert!(bridge.contains("gtk::GestureDrag::new()"));
+    assert!(bridge.contains("drag.set_button(gdk::BUTTON_PRIMARY)"));
+    assert!(bridge.contains("video_click::window_drag_action("));
+    assert!(bridge.contains("video_click::WindowDragAction::BeginMove"));
+    // Reuse the right-click interactive classifier so OSC/sliders/buttons/panels
+    // keep their input, and fail safe to a click when the pick is missing.
+    assert!(bridge.contains("player_context_menu_target_is_interactive("));
+    assert!(bridge.contains(".unwrap_or(true)"));
+    // Fullscreen/maximized guards and compact-mode handoff.
+    assert!(bridge.contains("move_window.is_fullscreen()"));
+    assert!(bridge.contains("move_window.is_maximized()"));
+    assert!(bridge.contains("window_compact_mode_active(&move_window)"));
+    // Wayland-native move: claim the sequence, then hand off to the compositor.
+    assert!(bridge.contains("gesture.set_state(gtk::EventSequenceState::Claimed)"));
+    assert!(bridge.contains("toplevel.begin_move("));
+
+    let window = include_str!("window.rs");
+    assert!(window.contains("connect_player_window_move(&overlay, &window)"));
+}
+
+#[test]
 fn subtitle_delay_projection_drives_quick_popover_and_settings_refresh() {
     // Both visible surfaces retain the exact projected delay instead of
     // immediately replacing it with the asynchronous mpv observer snapshot.
@@ -1995,6 +2429,7 @@ fn subtitle_presentation_surfaces_stay_curated_and_width_safe() {
     let popover = include_str!("track_popovers.rs");
     assert!(popover.contains("compact_subtitle_size_row"));
     assert!(popover.contains("compact_subtitle_style_row"));
+    assert!(popover.contains("subtitle_preset_status_label"));
     assert!(popover.contains("More in Settings → Subtitles"));
     assert_eq!(subtitle_style_label("Default"), "Default");
     assert_eq!(subtitle_style_label("Contrast"), "High contrast");
@@ -2002,7 +2437,39 @@ fn subtitle_presentation_surfaces_stay_curated_and_width_safe() {
 
     let css = include_str!("css.rs");
     assert!(css.contains(".okp-quick-style-row"));
+    assert!(css.contains(".okp-subtitle-preset-status"));
     assert!(css.contains(".okp-settings-hint"));
+}
+
+#[test]
+fn subtitle_preset_surfaces_explain_native_supported_and_fallback_states() {
+    use okp_core::subtitle_tracks::{SubtitlePresetApplicability, SubtitlePresetFormat};
+
+    let ass = SubtitlePresetApplicability::NativeStyle(SubtitlePresetFormat::Ass);
+    assert_eq!(
+        subtitle_preset_status_text(ass),
+        "ASS native style; OK Player preset is not applied."
+    );
+    assert!(settings_subtitle_preset_hint(ass).contains("authored native styling"));
+
+    let srt = SubtitlePresetApplicability::Applies(SubtitlePresetFormat::SubRip);
+    assert_eq!(
+        subtitle_preset_status_text(srt),
+        "OK Player preset applies to this SRT track."
+    );
+    assert!(settings_subtitle_preset_hint(srt).contains("uses the selected"));
+
+    let unknown = SubtitlePresetApplicability::Unsupported(SubtitlePresetFormat::Unknown);
+    assert_eq!(
+        subtitle_preset_status_text(unknown),
+        "Style support is unavailable for this subtitle format."
+    );
+    assert!(settings_subtitle_preset_hint(unknown).contains("unavailable"));
+
+    assert_eq!(
+        subtitle_preset_status_text(SubtitlePresetApplicability::NoActiveTrack),
+        "Select a subtitle track to use style presets."
+    );
 }
 
 #[test]
@@ -2071,7 +2538,7 @@ fn player_popovers_have_scoped_presenter_classes() {
 }
 
 #[test]
-fn subtitle_track_label_distinguishes_webvtt_srt_and_embedded_sources() {
+fn subtitle_track_label_distinguishes_webvtt_srt_and_native_styled_sources() {
     let webvtt = Track {
         id: 3,
         kind: TrackKind::Subtitle,
@@ -2101,7 +2568,23 @@ fn subtitle_track_label_distinguishes_webvtt_srt_and_embedded_sources() {
         codec: Some("ass".to_owned()),
         ..webvtt
     };
-    assert_eq!(track_label(&embedded), "English · ASS · Default");
+    assert_eq!(
+        track_label(&embedded),
+        "English · ASS · Native style · Default"
+    );
+
+    let external_ssa = Track {
+        id: 6,
+        external: true,
+        external_filename: Some("/tmp/example.ssa".to_owned()),
+        default: false,
+        codec: Some("ass".to_owned()),
+        ..embedded
+    };
+    assert_eq!(
+        track_label(&external_ssa),
+        "English · SSA · Native style · EXT"
+    );
 }
 
 #[test]
@@ -2420,6 +2903,45 @@ fn ab_loop_message_describes_cycle_state() {
         Some("A-B loop cleared".to_owned())
     );
     assert_eq!(ab_loop_message(AbLoopState::default(), false), None);
+}
+
+#[test]
+fn clip_export_placeholder_explains_every_eligibility_state() {
+    assert_eq!(
+        clip_export_placeholder_reason(ClipExportEligibility::NoSelection),
+        "Set both A and B to prepare export"
+    );
+    assert_eq!(
+        clip_export_placeholder_reason(ClipExportEligibility::InvalidRange),
+        "Set B after A"
+    );
+    assert_eq!(
+        clip_export_placeholder_reason(ClipExportEligibility::SelectionTooShort {
+            duration_seconds: 0.5,
+            min_seconds: 1.0,
+        }),
+        "Select at least 1 second"
+    );
+    assert_eq!(
+        clip_export_placeholder_reason(ClipExportEligibility::SelectionTooLong {
+            duration_seconds: 301.0,
+            max_seconds: 300.0,
+        }),
+        "Select 5 minutes or less"
+    );
+    assert_eq!(
+        clip_export_placeholder_reason(ClipExportEligibility::MissingTooling),
+        "Install FFmpeg to export"
+    );
+    assert_eq!(
+        clip_export_placeholder_reason(ClipExportEligibility::Ready(
+            okp_core::clip_export::ClipExportSelection {
+                start_seconds: 12.0,
+                end_seconds: 42.0,
+            }
+        )),
+        "Selection ready (00:30); encoder not enabled"
+    );
 }
 
 #[test]
@@ -2923,6 +3445,7 @@ fn deb_checksum_download_refuses_release_without_manifest() {
         url: "https://example.invalid/update.deb".to_owned(),
         size: Some(42),
         sums_url: None,
+        expected_sha256: None,
     };
 
     let error = download_deb_checksums(&update).expect_err("missing manifest should refuse");
@@ -3020,6 +3543,7 @@ fn deb_update_action_requests_install() {
             url: "https://example.invalid/update.deb".to_owned(),
             size: Some(42),
             sums_url: None,
+            expected_sha256: None,
         }),
     };
 
@@ -3045,6 +3569,7 @@ fn linux_update_status_reflects_last_check_result() {
             url: "https://example.invalid/update.deb".to_owned(),
             size: Some(42),
             sums_url: None,
+            expected_sha256: None,
         }),
     };
     let available =
@@ -3061,6 +3586,79 @@ fn linux_update_status_reflects_last_check_result() {
     assert_eq!(
         failed.settings_status_text(true),
         "Update check failed: no feed"
+    );
+}
+
+#[test]
+fn candidate_deb_feed_sha_mismatch_is_refused_before_download() {
+    let name = "ok-player_0.11.0-beta.1.42_amd64.deb";
+    let update = DebUpdate {
+        version: "0.11.0-beta.1.42".to_owned(),
+        name: name.to_owned(),
+        url: "https://example.invalid/update.deb".to_owned(),
+        size: Some(42),
+        sums_url: Some("https://example.invalid/SHA256SUMS-42.txt".to_owned()),
+        expected_sha256: Some("a".repeat(64)),
+    };
+    let manifest = format!("{}  {name}\n", "b".repeat(64));
+
+    let error = verify_deb_feed_identity(&update, &manifest)
+        .expect_err("candidate feed and checksum manifest must agree");
+    assert!(error.contains("Candidate identity check failed"));
+    assert!(error.contains("SHA mismatch"));
+}
+
+#[test]
+fn candidate_appimage_source_uses_the_manifest_bound_full_package() {
+    let package = CandidateAppImage {
+        package_id: "com.befeast.okplayer".to_owned(),
+        name: "com.befeast.okplayer-0.11.0-beta.1.42-linux-candidate-full.nupkg".to_owned(),
+        url: "https://example.invalid/linux-candidate/full.nupkg".to_owned(),
+        size: 1234,
+        sha256: "a".repeat(64),
+        sha1: "b".repeat(40),
+    };
+    let asset = candidate_velopack_asset(&package, "0.11.0-beta.1.42");
+
+    assert_eq!(asset.PackageId, package.package_id);
+    assert_eq!(asset.Version, "0.11.0-beta.1.42");
+    assert_eq!(asset.Type, "Full");
+    assert_eq!(asset.FileName, package.name);
+    assert_eq!(asset.SHA256, package.sha256);
+
+    let builder = include_str!("../../../../scripts/build-linux-candidate.sh");
+    assert!(builder.contains("OKP_LINUX_CHANNEL=linux-candidate"));
+}
+
+#[test]
+fn candidate_builder_defaults_below_beta_one_until_the_base_is_overridden() {
+    use okp_core::candidate_build::candidate_version;
+    use okp_core::update_selection::compare_versions;
+    use std::cmp::Ordering;
+
+    let builder = include_str!("../../../../scripts/build-linux-candidate.sh");
+    assert!(
+        builder.contains("VERSION_BASE=\"${OKP_CANDIDATE_VERSION_BASE:-0.11.0-beta.0}\""),
+        "a clean builder invocation must use the pre-beta base while preserving the override"
+    );
+    assert!(builder.contains("version --base \"$VERSION_BASE\" --build \"$BUILD_NUMBER\""));
+    assert!(builder.contains("--version \"$VERSION\""));
+    assert!(builder.contains(">\"$OUT_DIR/candidate-build.json\""));
+
+    let first = candidate_version("0.11.0-beta.0", 108).unwrap();
+    let second = candidate_version("0.11.0-beta.0", 109).unwrap();
+    assert_eq!(compare_versions(&second, &first), Ordering::Greater);
+    assert_eq!(
+        compare_versions("0.11.0-beta.1", &second),
+        Ordering::Greater,
+        "sequential pre-beta candidates must remain below the first public beta"
+    );
+
+    let post_beta = candidate_version("0.11.0-beta.1", 110).unwrap();
+    assert_eq!(
+        compare_versions(&post_beta, "0.11.0-beta.1"),
+        Ordering::Greater,
+        "the explicit post-beta base must move candidates above the public beta"
     );
 }
 

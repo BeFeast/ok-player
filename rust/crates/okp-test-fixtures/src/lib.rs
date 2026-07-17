@@ -6,7 +6,9 @@
 //! Add media-specific helpers to a future `okp-media` crate only once the first one lands —
 //! this crate stays engine- and media-free.
 
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,6 +58,105 @@ pub fn unique_temp_dir(prefix: &str) -> PathBuf {
             .expect("clock should be after epoch")
             .as_nanos()
     ))
+}
+
+/// Output from a real Velopack pack invocation used by packaging contract
+/// tests. Dropping the fixture removes its temporary package tree.
+#[derive(Debug)]
+pub struct VelopackPackFixture {
+    pub root: PathBuf,
+    pub output_dir: PathBuf,
+}
+
+impl Drop for VelopackPackFixture {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+/// Run the installed Velopack CLI against a minimal real Linux executable.
+/// Callers opt in with `OKP_RUN_VELOPACK_PACK_TEST=1` so ordinary unit-test
+/// loops do not require the external release CLI.
+pub fn run_velopack_pack(
+    package_id: &str,
+    version: &str,
+    channel: &str,
+    icon: &Path,
+) -> Result<VelopackPackFixture, String> {
+    let root = unique_temp_dir("okp-real-velopack-pack");
+    let pack_dir = root.join("pack");
+    let output_dir = root.join("output");
+    let fixture = VelopackPackFixture { root, output_dir };
+    fs::create_dir_all(&pack_dir).map_err(|error| format!("{}: {error}", pack_dir.display()))?;
+    fs::create_dir_all(&fixture.output_dir)
+        .map_err(|error| format!("{}: {error}", fixture.output_dir.display()))?;
+    let executable = pack_dir.join("ok-player");
+    fs::copy("/bin/true", &executable)
+        .map_err(|error| format!("{}: {error}", executable.display()))?;
+
+    let vpk = velopack_cli().ok_or_else(|| {
+        "vpk is required when OKP_RUN_VELOPACK_PACK_TEST=1; install Velopack CLI 1.2.0".to_owned()
+    })?;
+    let mut command = Command::new(&vpk);
+    command.args([
+        "pack",
+        "--packId",
+        package_id,
+        "--packVersion",
+        version,
+        "--packDir",
+    ]);
+    command.arg(&pack_dir);
+    command.args(["--mainExe", "ok-player", "--outputDir"]);
+    command.arg(&fixture.output_dir);
+    command.args([
+        "--channel",
+        channel,
+        "--packTitle",
+        "OK Player packaging contract",
+        "--packAuthors",
+        "BeFeast",
+        "--icon",
+    ]);
+    command.arg(icon);
+    command.args([
+        "--categories",
+        "AudioVideo;Player",
+        "--skip-updates",
+        "true",
+    ]);
+    if std::env::var_os("DOTNET_ROOT").is_none()
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        let dotnet_root = PathBuf::from(home).join(".dotnet");
+        if dotnet_root.is_dir() {
+            command.env("DOTNET_ROOT", dotnet_root);
+        }
+    }
+    let output = command
+        .output()
+        .map_err(|error| format!("{}: {error}", vpk.display()))?;
+    if !output.status.success() {
+        return Err(format!(
+            "vpk pack failed with {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(fixture)
+}
+
+fn velopack_cli() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("VPK") {
+        return Some(PathBuf::from(path));
+    }
+    if Command::new("vpk").arg("--help").output().is_ok() {
+        return Some(PathBuf::from("vpk"));
+    }
+    let home = std::env::var_os("HOME")?;
+    let path = PathBuf::from(home).join(".dotnet/tools/vpk");
+    path.is_file().then_some(path)
 }
 
 #[cfg(test)]

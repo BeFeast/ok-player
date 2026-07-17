@@ -15,9 +15,15 @@ use gtk::gdk;
 use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
+use okp_core::candidate_channel::{self, CandidateAppImage, CandidateFeed, CandidateUpdate};
+use okp_core::clip_export::{self, ClipExportEligibility, ClipExportLimits, ClipExportTooling};
+use okp_core::companion_window::{self as companion_window_core, CompanionWindowKind};
 use okp_core::gapless::{GaplessPlaybackCapability, PlaylistTransitionPath};
+use okp_core::hdr::HdrHandlingState;
+use okp_core::key_press::KeyPressLatch;
 use okp_core::playlist::{Playlist, PlaylistItem, QueueInsertMode, RepeatMode};
-use okp_core::settings::AppearanceTheme;
+use okp_core::settings::{AppearanceTheme, UpdateChannel};
+use okp_core::settings_navigation::{SETTINGS_RAIL_ORDER, SettingsPage, search_settings};
 use okp_core::shortcuts::{
     self, ShortcutAction, ShortcutBinding, ShortcutChord, ShortcutModifiers, ShortcutSlot,
 };
@@ -36,13 +42,16 @@ use okp_mpv::{
 };
 use velopack::{
     UpdateCheck, UpdateInfo, UpdateManager, UpdateOptions, VelopackApp, VelopackAsset,
-    sources::HttpSource,
+    VelopackAssetFeed,
+    bundle::Manifest,
+    sources::{HttpSource, UpdateSource},
 };
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
 mod about;
 mod branding;
 mod compact_mode;
+mod companion_window;
 mod controls;
 mod css;
 mod dialogs;
@@ -56,6 +65,7 @@ mod mpris;
 mod mpv_bridge;
 mod native_video;
 mod nfo_title;
+mod osc_bar;
 mod panels;
 mod playback;
 mod playlist_ops;
@@ -71,6 +81,7 @@ mod window;
 pub(crate) use about::*;
 pub(crate) use branding::*;
 pub(crate) use compact_mode::*;
+pub(crate) use companion_window::*;
 pub(crate) use controls::*;
 pub(crate) use css::*;
 pub(crate) use dialogs::*;
@@ -120,6 +131,15 @@ const AB_LOOP_SETTLE_DELAY: Duration = Duration::from_millis(60);
 // OKP_LINUX_DEB_FEED_URL.
 const LINUX_UPDATE_FEED_BASE_URL: &str = "https://befeast.github.io/ok-player/updates/linux";
 const LINUX_DEB_FEED_URL: &str = "https://befeast.github.io/ok-player/updates/linux/deb.linux.json";
+// The rolling Linux candidate channel (issue #339). Only an explicitly enrolled
+// QA install (Settings.updates.channel == Candidate, or OKP_LINUX_UPDATE_CHANNEL=
+// candidate) fetches this; a default install never touches it, so the public
+// feed above and its user behavior are untouched. Unlike deb.linux.json it is
+// served from a single mutable "rolling" surface — one candidate at a time, no
+// new GitHub Release per build. Overridable for local testing via
+// OKP_LINUX_CANDIDATE_FEED_URL.
+const LINUX_CANDIDATE_FEED_URL: &str =
+    "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/candidate.linux.json";
 const LINUX_SHA256SUMS_MAX_BYTES: u64 = 1024 * 1024;
 const DEB_SELF_INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
 const SETTINGS_REFERENCE_WIDTH: i32 = 760;
@@ -154,6 +174,7 @@ const LINUX_GAPLESS_CAPABILITY: GaplessPlaybackCapability =
     GaplessPlaybackCapability::for_transition_path(
         PlaylistTransitionPath::ShellManagedAfterEndFile,
     );
+const LINUX_HDR_HANDLING: HdrHandlingState = HdrHandlingState::EngineManaged;
 
 static MPRIS_SIDECAR_ART_CACHE: OnceLock<Mutex<HashMap<PathBuf, Option<String>>>> = OnceLock::new();
 static MPRIS_EMBEDDED_ART_CACHE: OnceLock<
@@ -219,6 +240,7 @@ struct PlayerState {
     /// from this eagerly-flipped intent and reconciles it with the `fullscreened`
     /// notify. See [`fullscreen_toggle`].
     fullscreen_toggle: fullscreen_toggle::FullscreenToggle,
+    companion_windows: CompanionWindows,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -748,6 +770,10 @@ struct Controls {
     screenshot_button: gtk::Button,
     fullscreen_button: gtk::Button,
     more_button: gtk::MenuButton,
+    // Mirrors the controls the adaptive OscBar folded into the overflow menu at
+    // the current window width, so `controls_bar` can point the bar at the same
+    // vec the `…` popover reads (issue #328).
+    overflow_collapsed: Rc<RefCell<Vec<okp_core::osc_overflow::OscControlId>>>,
     timeline: gtk::Overlay,
     seek: gtk::Scale,
     timeline_rail: TimelineRail,
@@ -1170,8 +1196,10 @@ struct ChromeVisibility {
     hide_source: Rc<RefCell<Option<glib::SourceId>>>,
     pin_count: Rc<Cell<u32>>,
     auto_hide_enabled: Rc<Cell<bool>>,
+    has_media: Rc<Cell<bool>>,
     surface_suppressed: Rc<Cell<bool>>,
     is_revealed: Rc<Cell<bool>>,
+    osc_visibility: Rc<Cell<okp_core::osc_visibility::OscVisibility>>,
 }
 
 impl ChromeVisibility {
@@ -1184,6 +1212,7 @@ impl ChromeVisibility {
         revealer.set_transition_type(gtk::RevealerTransitionType::None);
         revealer.set_reveal_child(true);
         revealer.set_can_target(false);
+        revealer.set_sensitive(false);
         revealer.set_visible(false);
 
         Self {
@@ -1195,8 +1224,10 @@ impl ChromeVisibility {
             hide_source: Rc::new(RefCell::new(None)),
             pin_count: Rc::new(Cell::new(0)),
             auto_hide_enabled: Rc::new(Cell::new(false)),
+            has_media: Rc::new(Cell::new(false)),
             surface_suppressed: Rc::new(Cell::new(false)),
             is_revealed: Rc::new(Cell::new(true)),
+            osc_visibility: Rc::new(Cell::new(okp_core::osc_visibility::OscVisibility::HIDDEN)),
         }
     }
 
@@ -1236,16 +1267,44 @@ impl ChromeVisibility {
     }
 
     fn set_has_media(&self, has_media: bool) {
-        self.revealer
-            .set_visible(has_media && !self.surface_suppressed.get());
-        self.revealer
-            .set_can_target(has_media && self.is_revealed.get());
+        if self.has_media.replace(has_media) != has_media {
+            self.sync_osc_visibility();
+        }
     }
 
     fn set_surface_suppressed(&self, suppressed: bool) {
-        self.surface_suppressed.set(suppressed);
-        if suppressed {
-            self.revealer.set_visible(false);
+        if self.surface_suppressed.replace(suppressed) != suppressed {
+            self.sync_osc_visibility();
+        }
+    }
+
+    fn sync_osc_visibility(&self) {
+        Self::apply_osc_visibility(
+            &self.revealer,
+            self.has_media.get(),
+            self.surface_suppressed.get(),
+            self.is_revealed.get(),
+            &self.osc_visibility,
+        );
+    }
+
+    fn apply_osc_visibility(
+        revealer: &gtk::Revealer,
+        has_media: bool,
+        surface_suppressed: bool,
+        revealed: bool,
+        previous: &Cell<okp_core::osc_visibility::OscVisibility>,
+    ) {
+        let next = okp_core::osc_visibility::project(has_media, surface_suppressed, revealed);
+        let old = previous.replace(next);
+        if old.visible != next.visible {
+            revealer.set_visible(next.visible);
+        }
+        if old.focusable != next.focusable {
+            revealer.set_sensitive(next.focusable);
+        }
+        if old.hit_testable != next.hit_testable {
+            revealer.set_can_target(next.hit_testable);
         }
     }
 
@@ -1290,7 +1349,8 @@ impl ChromeVisibility {
     }
 
     fn set_all_revealed(&self, revealed: bool) {
-        Self::set_motion_widget_state(&self.revealer, revealed);
+        self.sync_osc_visibility();
+        Self::set_motion_widget_class(&self.revealer, revealed);
         for widget in self.linked_motion_widgets.borrow().iter() {
             Self::set_motion_widget_state(widget, revealed);
         }
@@ -1312,6 +1372,10 @@ impl ChromeVisibility {
     fn set_motion_widget_state(widget: &impl IsA<gtk::Widget>, revealed: bool) {
         widget.set_can_target(revealed);
         widget.set_sensitive(revealed);
+        Self::set_motion_widget_class(widget, revealed);
+    }
+
+    fn set_motion_widget_class(widget: &impl IsA<gtk::Widget>, revealed: bool) {
         if revealed {
             widget.remove_css_class("is-hidden");
         } else {
@@ -1346,12 +1410,22 @@ impl ChromeVisibility {
         let hide_source = Rc::clone(&self.hide_source);
         let pin_count = Rc::clone(&self.pin_count);
         let auto_hide_enabled = Rc::clone(&self.auto_hide_enabled);
+        let has_media = Rc::clone(&self.has_media);
+        let surface_suppressed = Rc::clone(&self.surface_suppressed);
         let is_revealed = Rc::clone(&self.is_revealed);
+        let osc_visibility = Rc::clone(&self.osc_visibility);
         let source_id = glib::timeout_add_local(Duration::from_millis(2500), move || {
             hide_source.borrow_mut().take();
             if auto_hide_enabled.get() && pin_count.get() == 0 {
                 is_revealed.set(false);
-                Self::set_motion_widget_state(&revealer, false);
+                Self::apply_osc_visibility(
+                    &revealer,
+                    has_media.get(),
+                    surface_suppressed.get(),
+                    false,
+                    &osc_visibility,
+                );
+                Self::set_motion_widget_class(&revealer, false);
                 for widget in linked_motion_widgets.borrow().iter() {
                     Self::set_motion_widget_state(widget, false);
                 }
@@ -1716,6 +1790,7 @@ enum SettingsNavIcon {
     Audio,
     Shortcuts,
     Integration,
+    Updates,
     Advanced,
     About,
 }
