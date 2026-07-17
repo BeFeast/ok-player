@@ -1,0 +1,15 @@
+video_surface=pass
+title_background=pass
+chrome_gap=pass
+workarea_edge_anchor=pass
+control_isolation=pass
+popover_isolation=pass
+keyboard_traversal=pass
+geometry_zoom=pass
+geometry_pan=pass
+geometry_deinterlace=pass
+empty_canvas=pass
+left_drag=skipped
+double_click_fullscreen=pass
+playback_menu_open_count=9
+empty_menu_open_count=1

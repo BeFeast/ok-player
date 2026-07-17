@@ -54,6 +54,34 @@ pub struct WindowPlacement {
     pub position: WindowPoint,
 }
 
+/// Predictable contract for the explicit "Fit window to media" command.
+///
+/// Automatic source-load fitting never exits a user-selected window state.
+/// The explicit command is different: choosing it authorizes the shell to
+/// restore a normal window first, then run the same monitor-aware fit
+/// transaction. Playback and media loading are intentionally absent from this
+/// plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExplicitWindowFitAction {
+    Disabled,
+    FitWindowed,
+    RestoreWindowedAndFit,
+}
+
+pub const fn explicit_window_fit_action(
+    has_media_geometry: bool,
+    fullscreen: bool,
+    maximized: bool,
+) -> ExplicitWindowFitAction {
+    if !has_media_geometry {
+        ExplicitWindowFitAction::Disabled
+    } else if fullscreen || maximized {
+        ExplicitWindowFitAction::RestoreWindowedAndFit
+    } else {
+        ExplicitWindowFitAction::FitWindowed
+    }
+}
+
 /// Size a compact video window from the real display aspect, keeping the
 /// shorter edge fixed and letting the longer edge follow the source.
 pub fn compact_size_for_video(
@@ -436,6 +464,26 @@ mod tests {
                 width: 645,
                 height: 270
             })
+        );
+    }
+
+    #[test]
+    fn explicit_fit_only_restores_window_state_after_deliberate_activation() {
+        assert_eq!(
+            explicit_window_fit_action(false, true, true),
+            ExplicitWindowFitAction::Disabled
+        );
+        assert_eq!(
+            explicit_window_fit_action(true, false, false),
+            ExplicitWindowFitAction::FitWindowed
+        );
+        assert_eq!(
+            explicit_window_fit_action(true, true, false),
+            ExplicitWindowFitAction::RestoreWindowedAndFit
+        );
+        assert_eq!(
+            explicit_window_fit_action(true, false, true),
+            ExplicitWindowFitAction::RestoreWindowedAndFit
         );
     }
 

@@ -400,7 +400,6 @@ fn gtk_identity_uses_vector_widgets_instead_of_host_font_marks() {
 #[test]
 fn volume_and_audio_track_actions_use_distinct_icon_identities() {
     let controls = include_str!("controls.rs");
-    let track_popovers = include_str!("track_popovers.rs");
 
     // Volume keeps the speaker/level glyph in both resting and reactive states.
     assert!(
@@ -419,7 +418,6 @@ fn volume_and_audio_track_actions_use_distinct_icon_identities() {
         "regression guard: no second speaker glyph on the audio action"
     );
     assert!(!controls.contains("audio-headphones-symbolic"));
-    assert!(track_popovers.contains("audio_command_button(\"Audio tracks / output\")"));
 
     // Distinct accessible names and tooltips: Volume versus Audio tracks / output.
     assert!(controls.contains("gtk::accessible::Property::Label(\"Volume\")"));
@@ -466,7 +464,8 @@ fn settings_stays_in_the_width_safe_bottom_more_menu() {
     assert!(controls.contains("bar.push(&controls.more_button, OscControlId::Overflow);"));
     assert!(!controls.contains("more_slot"));
     assert!(!controls.contains("chrome.add_overlay(&controls.more_button)"));
-    assert!(popovers.contains("command_button(\"Settings...\", false)"));
+    assert!(popovers.contains("Id::OpenSettings =>"));
+    assert!(controls.contains("PlayerCommandSurface::More"));
     assert_eq!(
         window
             .matches("add_css_class(\"okp-top-chrome-motion\")")
@@ -544,22 +543,25 @@ fn media_presence_is_the_single_owner_of_standard_osc_mapping() {
 #[test]
 fn overflow_menu_surfaces_every_collapsed_control_action() {
     let popovers = include_str!("track_popovers.rs");
+    let registry = player_commands::player_command_registry();
 
-    // Selection controls drill into their picker inside the same popover.
-    assert!(popovers.contains("OscControlId::Speed =>"));
-    assert!(popovers.contains("OscControlId::Subtitles =>"));
-    assert!(popovers.contains("OscControlId::Audio =>"));
-    assert!(popovers.contains("populate_speed_popover(&drill_popover"));
+    for id in [
+        PlayerCommandId::PlaybackSpeed,
+        PlayerCommandId::Subtitles,
+        PlayerCommandId::AudioTrack,
+        PlayerCommandId::ChaptersUpNext,
+        PlayerCommandId::SaveFrame,
+        PlayerCommandId::Fullscreen,
+        PlayerCommandId::OpenSettings,
+    ] {
+        assert!(registry.iter().any(|command| command.id == id));
+    }
+    assert!(popovers.contains("populate_speed_popover(popover"));
     assert!(popovers.contains("populate_subtitle_popover("));
-    assert!(popovers.contains("populate_audio_popover(&drill_popover"));
-    // Direct-action controls reuse their real OSC button via `clicked`, so no
-    // behaviour is duplicated and the button's wiring runs while it is folded.
-    assert!(popovers.contains("reach_emit_button(\"Chapters & Up Next\""));
-    assert!(popovers.contains("reach_emit_button(\"Take screenshot\""));
-    assert!(popovers.contains("reach_emit_button(\"Fullscreen\""));
-    assert!(popovers.contains("emit_target.emit_clicked();"));
-    // Settings stays reachable in the overflow menu at every width.
-    assert!(popovers.contains("command_button(\"Settings...\", false)"));
+    assert!(popovers.contains("populate_audio_popover(popover"));
+    assert!(popovers.contains("reach.chapters.emit_clicked();"));
+    assert!(popovers.contains("reach.screenshot.emit_clicked();"));
+    assert!(popovers.contains("reach.fullscreen.emit_clicked();"));
 }
 
 #[test]
@@ -869,26 +871,19 @@ fn media_info_window_classes_have_scoped_css() {
 }
 
 #[test]
-fn both_media_info_menu_entries_use_the_companion_window_entry_point() {
+fn media_info_command_uses_the_companion_window_entry_point() {
     let source = include_str!("track_popovers.rs");
-    let more = source
-        .split_once("pub(crate) fn more_popover_content")
-        .expect("More popover implementation")
-        .1
-        .split_once("pub(crate) fn advanced_command_popover_content")
-        .expect("advanced popover follows More")
-        .0;
-    let advanced = source
-        .split_once("pub(crate) fn advanced_command_popover_content")
-        .expect("advanced popover implementation")
-        .1
-        .split_once("pub(crate) fn track_popover_content")
-        .expect("track popover helper follows advanced popover")
-        .0;
-
-    assert_eq!(more.matches("open_media_info_window(").count(), 1);
-    assert_eq!(advanced.matches("open_media_info_window(").count(), 1);
+    assert_eq!(
+        player_commands::player_command_registry()
+            .iter()
+            .filter(|command| command.id == PlayerCommandId::MediaInfo)
+            .count(),
+        1
+    );
+    assert_eq!(source.matches("open_media_info_window(").count(), 1);
+    assert!(source.contains("dispatch_player_command_action("));
     assert!(!source.contains("show_media_info_modal"));
+    assert!(!source.contains("show_media_info_window"));
 }
 
 #[test]
@@ -2130,119 +2125,39 @@ fn player_popovers_keep_their_canonical_independent_widths() {
     assert_eq!(PlayerPopoverKind::Speed.width(), 120);
     assert_eq!(PlayerPopoverKind::Subtitles.width(), 262);
     assert_eq!(PlayerPopoverKind::Audio.width(), 248);
-    assert_eq!(PlayerPopoverKind::More.width(), 210);
+    assert_eq!(PlayerPopoverKind::More.width(), COMMAND_POPOVER_WIDTH);
 
     let quick_widths = [
         PlayerPopoverKind::Speed.width(),
         PlayerPopoverKind::Subtitles.width(),
         PlayerPopoverKind::Audio.width(),
-        PlayerPopoverKind::More.width(),
     ];
-    assert!(!quick_widths.contains(&PlayerPopoverKind::AdvancedCommands.width()));
-    assert_eq!(PlayerPopoverKind::AdvancedCommands.width(), 320);
+    assert!(!quick_widths.contains(&PlayerPopoverKind::More.width()));
+    assert_eq!(
+        PlayerPopoverKind::More.width(),
+        PlayerPopoverKind::AdvancedCommands.width()
+    );
 }
 
 #[test]
-fn more_stays_curated_while_player_context_menu_keeps_legacy_commands() {
+fn more_and_context_menu_share_one_registry_renderer_and_dispatcher() {
     let source = include_str!("track_popovers.rs");
-    let more = source
-        .split_once("pub(crate) fn more_popover_content")
-        .expect("More popover implementation")
-        .1
-        .split_once("pub(crate) fn advanced_command_popover_content")
-        .expect("advanced popover follows More")
-        .0;
-    let advanced = source
-        .split_once("pub(crate) fn advanced_command_popover_content")
-        .expect("advanced popover implementation")
-        .1
-        .split_once("pub(crate) fn track_popover_content")
-        .expect("track popover helper follows advanced commands")
-        .0;
-
-    let curated_more = [
-        "Open file...",
-        "Close file",
-        "Mini player",
-        "A-B loop",
-        "Screenshot with subtitles",
-        "Copy frame to clipboard",
-        "Media info...",
-        "Settings...",
-    ];
-    assert_eq!(more.matches("command_button(").count(), curated_more.len());
-    for label in curated_more {
-        assert!(more.contains(&format!("command_button(\"{label}\"")));
-    }
-    assert!(more.contains("append_clip_export_placeholder(&content, &state, true)"));
-    assert!(!more.contains("Open URL..."));
-    assert!(!more.contains("Clear History..."));
-    assert!(!more.contains("Zoom in"));
-    assert!(!more.contains("Deinterlace"));
-
-    for label in [
-        "Open URL...",
-        "Open Folder...",
-        "Open Playlist...",
-        "Add to Queue...",
-        "Play Next...",
-        "Save Playlist...",
-        "Settings...",
-        "Media Info...",
-        "Open File Location",
-        "Go to Time...",
-        "Copy Current Time",
-        "Add Bookmark",
-        "A-B loop",
-        "Export clip/GIF...",
-        "Zoom in",
-        "Zoom out",
-        "Pan left",
-        "Pan right",
-        "Pan up",
-        "Pan down",
-        "Center image",
-        "Rotate 90°",
-        "Fill screen (crop bars)",
-        "Deinterlace",
-        "Reset video",
-        "Save frame",
-        "Save frame with subtitles",
-        "Copy frame to clipboard",
-        "Close Media",
-        "Mini player",
-        "Clear History...",
-    ] {
-        assert!(
-            advanced.contains(label),
-            "missing advanced command: {label}"
-        );
-    }
-    assert!(advanced.contains("append_clip_export_placeholder(&content, &state, false)"));
-    for implementation_marker in [
-        "VideoAspect::ALL",
-        "VideoGeometryAction::SetAspect",
-        "VideoGeometryAction::ZoomIn",
-        "VideoGeometryAction::ToggleDeinterlace",
-        "if video_available",
-        "video_transform.action_enabled(true, action)",
-        "No video track",
-        "Open video to use geometry",
-        "Enter Fullscreen",
-        "Exit Fullscreen",
-        "Private Session On",
-        "Private Session Off",
-        "repeat_mode_label(repeat_mode)",
-        "Shuffle On",
-        "Shuffle Off",
-        "Auto-advance On",
-        "Auto-advance Off",
-    ] {
-        assert!(
-            advanced.contains(implementation_marker),
-            "missing advanced command family: {implementation_marker}"
-        );
-    }
+    let controls = include_str!("controls.rs");
+    assert_eq!(
+        source
+            .matches("pub(crate) fn populate_command_popover(")
+            .count(),
+        1
+    );
+    assert_eq!(
+        source
+            .matches("pub(crate) fn dispatch_player_command_action(")
+            .count(),
+        1
+    );
+    assert!(source.contains("player_commands::resolve_player_commands(surface"));
+    assert!(source.contains("player_commands::filter_player_commands(commands, query)"));
+    assert!(controls.contains("PlayerCommandSurface::More"));
 
     let player_clicks = include_str!("mpv_bridge.rs");
     assert!(player_clicks.contains("context_click.set_button(gdk::BUTTON_SECONDARY)"));
@@ -2251,7 +2166,8 @@ fn more_stays_curated_while_player_context_menu_keeps_legacy_commands() {
     assert!(player_clicks.contains("show_player_context_menu("));
     assert!(player_clicks.contains("popover.set_parent(player_root)"));
     assert!(player_clicks.contains("connect_popover_chrome_pin(&popover, chrome)"));
-    assert!(player_clicks.contains("advanced_command_popover_content("));
+    assert!(player_clicks.contains("PlayerCommandSurface::ContextMenu"));
+    assert!(player_clicks.contains("populate_command_popover("));
 
     let window = include_str!("window.rs");
     assert!(window.contains("connect_player_context_menu("));
@@ -2501,10 +2417,10 @@ fn player_popovers_have_scoped_presenter_classes() {
         "okp-subtitle-popover"
     );
     assert_eq!(PlayerPopoverKind::Audio.css_class(), "okp-audio-popover");
-    assert_eq!(PlayerPopoverKind::More.css_class(), "okp-more-popover");
+    assert_eq!(PlayerPopoverKind::More.css_class(), "okp-command-popover");
     assert_eq!(
         PlayerPopoverKind::AdvancedCommands.css_class(),
-        "okp-advanced-command-popover"
+        "okp-command-popover"
     );
 }
 

@@ -83,19 +83,18 @@ open_context() {
   }
   import -window root "$OUT_DIR/$capture"
   xdotool key --clearmodifiers Escape
+  xdotool key --clearmodifiers Escape
   sleep 1
 }
 
 activate_context_action() {
-  local window_id="$1" tab_count="$2" action="$3" capture="$4"
+  local window_id="$1" query="$2" action="$3" capture="$4"
   local before_context before_action after_context after_action
   before_context="$(context_count)"
   before_action="$(grep -c "interaction: video-geometry=${action}" "$OUT_DIR/app.log" || true)"
   xdotool mousemove --window "$window_id" 560 330 click 3
   sleep 1
-  for ((tab = 0; tab < tab_count; tab++)); do
-    xdotool key --clearmodifiers Tab
-  done
+  xdotool type --clearmodifiers --delay 25 "$query"
   sleep 1
   import -window root "$OUT_DIR/$capture"
   xdotool key --clearmodifiers Return
@@ -113,16 +112,16 @@ activate_context_action() {
 }
 
 capture_context_focus() {
-  local window_id="$1" tab_count="$2" capture="$3"
+  local window_id="$1" query="$2" capture="$3"
   local before after
   before="$(context_count)"
   xdotool mousemove --window "$window_id" 560 330 click 3
   sleep 1
-  for ((tab = 0; tab < tab_count; tab++)); do
-    xdotool key --clearmodifiers Tab
-  done
+  xdotool type --clearmodifiers --delay 25 "$query"
+  xdotool key --clearmodifiers Down
   sleep 1
   import -window root "$OUT_DIR/$capture"
+  xdotool key --clearmodifiers Escape
   xdotool key --clearmodifiers Escape
   sleep 1
   after="$(context_count)"
@@ -164,7 +163,8 @@ else
 fi
 
 # Video/canvas, title/background, and an empty OSC gap all route to the same
-# Advanced commands popover. Each click must produce exactly one open event.
+# canonical searchable command popover. Each click must produce exactly one
+# open event.
 open_context "$window_id" 560 330 video-context.png
 open_context "$window_id" 300 20 title-context.png
 open_context "$window_id" 650 638 chrome-gap-context.png
@@ -231,14 +231,16 @@ after_popover="$(context_count)"
 xdotool key --clearmodifiers Escape
 sleep 1
 
-# Tab focus remains inside the canonical menu and Escape closes it, preserving
-# native keyboard traversal without adding a second menu implementation.
+# Search receives initial focus, Down enters the result list, and Escape first
+# clears the query then closes the canonical menu.
 before_keyboard="$(context_count)"
 xdotool mousemove --window "$window_id" 560 330 click 3
 sleep 1
-xdotool key --clearmodifiers Tab
+xdotool type --clearmodifiers --delay 25 'window'
+xdotool key --clearmodifiers Down
 sleep 1
 import -window root "$OUT_DIR/keyboard-focus-context.png"
+xdotool key --clearmodifiers Escape
 xdotool key --clearmodifiers Escape
 sleep 1
 after_keyboard="$(context_count)"
@@ -247,14 +249,12 @@ after_keyboard="$(context_count)"
   exit 1
 }
 
-# The tucked-away Video group is keyboard reachable inside the canonical
-# context menu. Exercise the real libmpv command path and capture the focused
-# zoom/pan/deinterlace rows after GTK scrolls them into view. These commands do
-# not exist in the primary More popover captured above.
-activate_context_action "$window_id" 17 ZoomIn geometry-zoom-in-focus.png
-activate_context_action "$window_id" 19 PanLeft geometry-pan-left-focus.png
-activate_context_action "$window_id" 26 ToggleDeinterlace geometry-deinterlace-focus.png
-capture_context_focus "$window_id" 26 geometry-deinterlace-selected.png
+# Search reaches geometry commands by label/keywords and Enter exercises their
+# real libmpv action path without relying on brittle tab counts.
+activate_context_action "$window_id" 'Zoom in' ZoomIn geometry-zoom-in-focus.png
+activate_context_action "$window_id" 'Pan left' PanLeft geometry-pan-left-focus.png
+activate_context_action "$window_id" Deinterlace ToggleDeinterlace geometry-deinterlace-focus.png
+capture_context_focus "$window_id" Deinterlace geometry-deinterlace-selected.png
 
 # Repeat with no media: the welcome card's surrounding empty canvas is still a
 # player surface, while its actual buttons remain protected by the same filter.

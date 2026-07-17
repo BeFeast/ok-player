@@ -248,6 +248,8 @@ start_app() {
   OKP_SKIP_OPEN_INSTALLER=1 \
   OKP_SKIP_DEB_SELF_INSTALL=1 \
   OKP_DEBUG_WINDOW_FIT=1 \
+  OKP_DEBUG_INTERACTIONS=1 \
+  OKP_COMMAND_SEARCH_QUERY='Fit window to media' \
   "$BINARY" "$@" >"$OUT_DIR/$log" 2>&1 &
   app_pid=$!
 }
@@ -283,6 +285,17 @@ capture_geometry() {
   local window_id="$1" stem="$2"
   xwininfo -id "$window_id" >"$OUT_DIR/$stem.xwininfo"
   import -window "$window_id" "$OUT_DIR/$stem.png"
+}
+
+activate_fit_window_command() {
+  local window_id="$1"
+  local width height
+  width="$(xwininfo -id "$window_id" | awk '/Width:/ {print $2; exit}')"
+  height="$(xwininfo -id "$window_id" | awk '/Height:/ {print $2; exit}')"
+  xdotool mousemove --window "$window_id" $((width / 2)) $((height / 2)) click 3
+  sleep 1
+  xdotool key --clearmodifiers Return
+  sleep 3
 }
 
 geometry_value() {
@@ -358,6 +371,8 @@ stop_app
 OKP_SKIP_OPEN_INSTALLER=1 \
 OKP_SKIP_DEB_SELF_INSTALL=1 \
 OKP_DEBUG_WINDOW_FIT=1 \
+OKP_DEBUG_INTERACTIONS=1 \
+OKP_COMMAND_SEARCH_QUERY='Fit window to media' \
 OKP_START_MAXIMIZED=1 \
   "$BINARY" "$FIXTURES/fit-small.mkv" >"$OUT_DIR/fit-maximized-app.log" 2>&1 &
 app_pid=$!
@@ -382,11 +397,25 @@ if ! wait_for_log "$OUT_DIR/fit-maximized-app.log" \
   echo "Maximized load did not exercise the window-fit guard" >&2
   exit 1
 fi
+activate_fit_window_command "$max_id"
+capture_geometry "$max_id" "fit-maximized-explicit-command"
+explicit_max_width="$(geometry_value "$OUT_DIR/fit-maximized-explicit-command.xwininfo" Width)"
+explicit_max_height="$(geometry_value "$OUT_DIR/fit-maximized-explicit-command.xwininfo" Height)"
+if [[ "$explicit_max_width" != "320" || "$explicit_max_height" != "180" ]]; then
+  echo "Explicit Fit did not restore a maximized window: ${explicit_max_width}x${explicit_max_height}" >&2
+  exit 1
+fi
+rg -q 'interaction: player-command=fit-window-to-media' "$OUT_DIR/fit-maximized-app.log" || {
+  echo "Explicit Fit command was not dispatched from the shared menu" >&2
+  exit 1
+}
 stop_app
 
 OKP_SKIP_OPEN_INSTALLER=1 \
 OKP_SKIP_DEB_SELF_INSTALL=1 \
 OKP_DEBUG_WINDOW_FIT=1 \
+OKP_DEBUG_INTERACTIONS=1 \
+OKP_COMMAND_SEARCH_QUERY='Fit window to media' \
 OKP_START_FULLSCREEN=1 \
   "$BINARY" "$FIXTURES/fit-small.mkv" >"$OUT_DIR/fit-fullscreen-app.log" 2>&1 &
 app_pid=$!
@@ -402,6 +431,14 @@ fi
 if ! wait_for_log "$OUT_DIR/fit-fullscreen-app.log" \
   "window fit skipped: fullscreen=true maximized=false"; then
   echo "Fullscreen load did not exercise the window-fit guard" >&2
+  exit 1
+fi
+activate_fit_window_command "$fullscreen_id"
+capture_geometry "$fullscreen_id" "fit-fullscreen-explicit-command"
+explicit_fullscreen_width="$(geometry_value "$OUT_DIR/fit-fullscreen-explicit-command.xwininfo" Width)"
+explicit_fullscreen_height="$(geometry_value "$OUT_DIR/fit-fullscreen-explicit-command.xwininfo" Height)"
+if [[ "$explicit_fullscreen_width" != "320" || "$explicit_fullscreen_height" != "180" ]]; then
+  echo "Explicit Fit did not restore a fullscreen window: ${explicit_fullscreen_width}x${explicit_fullscreen_height}" >&2
   exit 1
 fi
 stop_app
@@ -424,6 +461,16 @@ if ! awk -v w="$fit_width" -v h="$fit_height" \
 fi
 if ! rg -q "workarea=1024x768" "$OUT_DIR/fit-4k-right-monitor-app.log"; then
   echo "4K load did not use the monitor containing the player window" >&2
+  exit 1
+fi
+xdotool windowsize "$right_id" 700 500
+sleep 1
+activate_fit_window_command "$right_id"
+capture_geometry "$right_id" "fit-4k-explicit-command"
+explicit_4k_width="$(geometry_value "$OUT_DIR/fit-4k-explicit-command.xwininfo" Width)"
+explicit_4k_height="$(geometry_value "$OUT_DIR/fit-4k-explicit-command.xwininfo" Height)"
+if (( explicit_4k_width < 958 || explicit_4k_width > 964 || explicit_4k_height < 538 || explicit_4k_height > 543 )); then
+  echo "Explicit Fit did not restore the 4K media geometry: ${explicit_4k_width}x${explicit_4k_height}" >&2
   exit 1
 fi
 stop_app
