@@ -1423,6 +1423,46 @@ pub(crate) fn settings_hwdec_row(
     row
 }
 
+pub(crate) fn settings_hdr_handling_row() -> gtk::Box {
+    let handling = LINUX_HDR_HANDLING;
+    eprintln!(
+        "video capability: hdr={} controls={}",
+        handling.key(),
+        if handling.controls_available() {
+            "available"
+        } else {
+            "unavailable"
+        }
+    );
+
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row.add_css_class("okp-settings-switch-row");
+
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    text.set_hexpand(true);
+
+    let label = gtk::Label::new(Some("HDR handling"));
+    label.add_css_class("okp-info-label");
+    label.set_xalign(0.0);
+    text.append(&label);
+
+    let detail = gtk::Label::new(Some(handling.detail()));
+    detail.add_css_class("okp-update-status");
+    detail.set_xalign(0.0);
+    detail.set_width_chars(1);
+    detail.set_max_width_chars(50);
+    detail.set_wrap(true);
+    text.append(&detail);
+    row.append(&text);
+
+    let state_label = gtk::Label::new(Some(handling.settings_label()));
+    state_label.add_css_class("okp-settings-state-pill");
+    state_label.set_valign(gtk::Align::Center);
+    row.append(&state_label);
+
+    row
+}
+
 pub(crate) fn settings_shortcuts_section(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,

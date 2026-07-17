@@ -427,6 +427,20 @@ fn media_info_preview_sample_covers_the_polished_surfaces() {
         .map(|section| section.title.as_str())
         .collect();
     assert!(!stream_titles.contains(&"Playback"));
+    let video = stream_sections
+        .iter()
+        .find(|section| section.title == "Video")
+        .expect("video stream section");
+    let dynamic_range_index = video
+        .rows
+        .iter()
+        .position(|row| row.label == "Dynamic Range")
+        .expect("dynamic range row");
+    assert_eq!(video.rows[dynamic_range_index + 1].label, "HDR Handling");
+    assert_eq!(
+        video.rows[dynamic_range_index + 1].value,
+        "Automatic · engine-managed"
+    );
 
     let stats_sections = media_info_stats_sections(&sample);
     let stats_titles: Vec<&str> = stats_sections
@@ -437,6 +451,57 @@ fn media_info_preview_sample_covers_the_polished_surfaces() {
         stats_titles,
         vec!["Decode · Render", "Live · Performance", "Display · Output"]
     );
+    let decode = stats_sections
+        .iter()
+        .find(|section| section.title == "Decode · Render")
+        .expect("decode diagnostics");
+    assert!(
+        decode
+            .rows
+            .iter()
+            .any(|row| row.label == "Engine Tone Mapping")
+    );
+    assert!(!decode.rows.iter().any(|row| row.label == "Tone Mapping"));
+}
+
+#[test]
+fn media_info_hdr_handling_is_reserved_only_for_hdr_sources() {
+    let mut sample = media_info_preview_sample();
+    let video = sample
+        .sections
+        .iter_mut()
+        .find(|section| section.title == "Video")
+        .expect("video section");
+    let dynamic_range = video
+        .rows
+        .iter_mut()
+        .find(|row| row.label == "Dynamic Range")
+        .expect("dynamic range row");
+    dynamic_range.value = "SDR".to_owned();
+
+    let video = media_info_stream_sections(&sample)
+        .into_iter()
+        .find(|section| section.title == "Video")
+        .expect("video stream section");
+    assert!(!video.rows.iter().any(|row| row.label == "HDR Handling"));
+}
+
+#[test]
+fn hdr_settings_reservation_has_no_toggle_or_action() {
+    let source = include_str!("settings_pages.rs");
+    let function = source
+        .split_once("pub(crate) fn settings_hdr_handling_row()")
+        .expect("HDR settings row")
+        .1
+        .split_once("pub(crate) fn settings_shortcuts_section")
+        .expect("next settings function")
+        .0;
+
+    assert!(function.contains("HDR handling"));
+    assert!(function.contains("settings_label"));
+    assert!(!function.contains("gtk::Switch"));
+    assert!(!function.contains("gtk::Button"));
+    assert!(!function.contains("connect_"));
 }
 
 #[test]
@@ -528,6 +593,7 @@ fn media_info_row_highlights_active_hdr_only() {
     assert!(media_info_row_is_highlight("dynamic range", "Dolby Vision"));
     assert!(!media_info_row_is_highlight("Dynamic Range", "No"));
     assert!(!media_info_row_is_highlight("Dynamic Range", "SDR"));
+    assert!(!media_info_row_is_highlight("Dynamic Range", "Unknown"));
     assert!(!media_info_row_is_highlight("Codec", "HEVC (H.265)"));
 }
 

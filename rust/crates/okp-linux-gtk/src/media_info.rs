@@ -288,7 +288,7 @@ pub(crate) fn show_media_info_modal(
         } else {
             streams_scroller
         };
-        glib::idle_add_local_once(move || {
+        glib::timeout_add_local_once(Duration::from_millis(250), move || {
             let adjustment = scroller.vadjustment();
             adjustment.set_value((adjustment.upper() - adjustment.page_size()).max(0.0));
         });
@@ -525,18 +525,7 @@ pub(crate) fn media_info_stream_sections(media_info: &MediaInfo) -> Vec<InfoSect
         .sections
         .iter()
         .filter(|section| !section.title.eq_ignore_ascii_case("Playback"))
-        .filter_map(|section| {
-            let rows: Vec<InfoRow> = section
-                .rows
-                .iter()
-                .filter(|row| !row.label.eq_ignore_ascii_case("Path"))
-                .cloned()
-                .collect();
-            (!rows.is_empty()).then(|| InfoSection {
-                title: section.title.clone(),
-                rows,
-            })
-        })
+        .filter_map(|section| media_info_display_section(section, true))
         .collect()
 }
 
@@ -561,18 +550,67 @@ pub(crate) fn media_info_stats_sections(media_info: &MediaInfo) -> Vec<InfoSecti
         title: "Display · Output".to_owned(),
         rows: Vec::new(),
     };
-    for row in &playback.rows {
+    let Some(playback) = media_info_display_section(playback, false) else {
+        return Vec::new();
+    };
+    for row in playback.rows {
         let target = match row.label.as_str() {
-            "Hardware Decode" | "Video Output" | "Scaler" | "Tone Mapping" => &mut decode,
+            "Hardware Decode" | "Video Output" | "Scaler" | "Engine Tone Mapping" => &mut decode,
             "A/V Sync" | "Dropped Frames" | "Cache" => &mut live,
             _ => &mut display,
         };
-        target.rows.push(row.clone());
+        target.rows.push(row);
     }
     [decode, live, display]
         .into_iter()
         .filter(|section| !section.rows.is_empty())
         .collect()
+}
+
+fn media_info_display_section(section: &InfoSection, exclude_path: bool) -> Option<InfoSection> {
+    let mut rows: Vec<InfoRow> = section
+        .rows
+        .iter()
+        .filter(|row| !exclude_path || !row.label.eq_ignore_ascii_case("Path"))
+        .cloned()
+        .collect();
+
+    if section.title.eq_ignore_ascii_case("Video") {
+        let hdr_row = rows
+            .iter()
+            .position(|row| row.label.eq_ignore_ascii_case("Dynamic Range"))
+            .filter(|index| {
+                okp_core::hdr::DynamicRangeState::from_media_info_value(Some(
+                    rows[*index].value.as_str(),
+                )) == okp_core::hdr::DynamicRangeState::Hdr
+            });
+        if let Some(index) = hdr_row
+            && !rows
+                .iter()
+                .any(|row| row.label.eq_ignore_ascii_case("HDR Handling"))
+        {
+            rows.insert(
+                index + 1,
+                InfoRow {
+                    label: "HDR Handling".to_owned(),
+                    value: LINUX_HDR_HANDLING.diagnostic_label().to_owned(),
+                },
+            );
+        }
+    }
+
+    if section.title.eq_ignore_ascii_case("Playback") {
+        for row in &mut rows {
+            if row.label.eq_ignore_ascii_case("Tone Mapping") {
+                row.label = "Engine Tone Mapping".to_owned();
+            }
+        }
+    }
+
+    (!rows.is_empty()).then(|| InfoSection {
+        title: section.title.clone(),
+        rows,
+    })
 }
 
 /// Representative Media Information used by the visual smoke hook
@@ -769,16 +807,9 @@ pub(crate) fn media_info_section_widget(section: &InfoSection) -> gtk::Box {
 /// Rows that carry a headline diagnostic (currently active HDR) get an accent
 /// value so the most consequential capabilities stand out from the dense list.
 pub(crate) fn media_info_row_is_highlight(label: &str, value: &str) -> bool {
-    label.eq_ignore_ascii_case("Dynamic Range") && dynamic_range_is_hdr(value)
-}
-
-/// Whether a `Dynamic Range` row value describes active HDR rather than SDR or
-/// an absent descriptor.
-fn dynamic_range_is_hdr(value: &str) -> bool {
-    !matches!(
-        value.trim().to_ascii_lowercase().as_str(),
-        "" | "no" | "none" | "off" | "sdr"
-    )
+    label.eq_ignore_ascii_case("Dynamic Range")
+        && okp_core::hdr::DynamicRangeState::from_media_info_value(Some(value))
+            == okp_core::hdr::DynamicRangeState::Hdr
 }
 
 pub(crate) fn media_info_row(label: &str, value: &str) -> gtk::Box {
@@ -900,10 +931,14 @@ pub(crate) fn media_info_copy_text(media_info: &MediaInfo) -> String {
         lines.push(format!("Path: {path}"));
     }
 
-    for section in &media_info.sections {
+    for section in media_info
+        .sections
+        .iter()
+        .filter_map(|section| media_info_display_section(section, false))
+    {
         lines.push(String::new());
-        lines.push(section.title.clone());
-        for row in &section.rows {
+        lines.push(section.title);
+        for row in section.rows {
             lines.push(format!("{}: {}", row.label, row.value));
         }
     }
