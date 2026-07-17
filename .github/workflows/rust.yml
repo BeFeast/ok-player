@@ -16,7 +16,7 @@ jobs:
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev libmpv-dev libgl1-mesa-dev libegl1-mesa-dev libglx-dev mpv ffmpeg cmake ninja-build
+          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev libmpv-dev libgl1-mesa-dev libegl1-mesa-dev libglx-dev mpv ffmpeg cmake ninja-build appstream appstream-compose
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -35,6 +35,9 @@ jobs:
       - name: Test
         working-directory: rust
         run: cargo test --workspace
+
+      - name: AppStream MetaInfo validation smoke
+        run: ./scripts/smoke-linux-appstream.sh
 
       - name: Native file dialog result smoke
         run: ./scripts/smoke-linux-file-dialog.sh
