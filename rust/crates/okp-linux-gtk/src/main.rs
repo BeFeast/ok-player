@@ -22,6 +22,7 @@ use okp_core::shortcuts::{
     self, ShortcutAction, ShortcutBinding, ShortcutChord, ShortcutModifiers, ShortcutSlot,
 };
 use okp_core::update_selection::{self, DebFeed, DebUpdate, SHA256SUMS_ASSET};
+use okp_core::video_geometry::{VideoAspect, VideoGeometry, VideoGeometryAction};
 use okp_core::{
     AppIdentity, chapter_math, launch_args, lrc, m3u, media_formats, natural_compare,
     network_media, ok_player_uri, progress_report, seek_readout, sha256sums, subtitle_delay,
@@ -140,13 +141,6 @@ const LINUX_KEY_MEDIA_MIME_TYPES: &[&str] = &[
 // entry advertises to claim the scheme; the display form is what diagnostics show.
 const LINUX_URI_SCHEME_MIME: &str = "x-scheme-handler/ok-player";
 const LINUX_RESERVED_URI_SCHEME: &str = "ok-player://";
-const VIDEO_ASPECT_AUTO: &str = "no";
-const VIDEO_ASPECT_PRESETS: [(&str, &str); 4] = [
-    ("Auto", VIDEO_ASPECT_AUTO),
-    ("16:9", "16:9"),
-    ("4:3", "4:3"),
-    ("2.35:1", "2.35:1"),
-];
 const AUDIO_DEVICE_AUTO: &str = "auto";
 const AUDIO_DEVICE_RESTORE_MAX_ATTEMPTS: u8 = 50;
 const AB_LOOP_COMBINED_MARK_EPSILON_SECS: f64 = 0.5;
@@ -195,7 +189,7 @@ struct PlayerState {
     native_render_loop: Option<NativeRenderLoop>,
     presentation_recorder: Option<Arc<PresentationRecorder>>,
     presentation_exercise: Option<okp_core::presentation_evidence::PresentationExercise>,
-    video_transform: VideoTransformState,
+    video_transform: VideoGeometry,
     ab_loop: AbLoopState,
     /// Last transient navigation projection, so rapid fine seeks / frame steps
     /// accumulate their readouts instead of re-projecting the same stale
@@ -266,43 +260,6 @@ enum MprisEmbeddedArtCacheEntry {
 impl PendingAudioDeviceRestore {
     fn new(name: String) -> Self {
         Self { name, attempts: 0 }
-    }
-}
-
-#[derive(Clone, PartialEq, Eq)]
-struct VideoTransformState {
-    rotation: i64,
-    fill_screen: bool,
-    aspect_override: String,
-}
-
-impl Default for VideoTransformState {
-    fn default() -> Self {
-        Self {
-            rotation: 0,
-            fill_screen: false,
-            aspect_override: VIDEO_ASPECT_AUTO.to_owned(),
-        }
-    }
-}
-
-impl VideoTransformState {
-    fn rotate_clockwise(&mut self) -> i64 {
-        self.rotation = (self.rotation + 90).rem_euclid(360);
-        self.rotation
-    }
-
-    fn set_aspect(&mut self, aspect: &str) {
-        self.aspect_override = video_aspect_value(aspect).to_owned();
-    }
-
-    fn toggle_fill_screen(&mut self) -> bool {
-        self.fill_screen = !self.fill_screen;
-        self.fill_screen
-    }
-
-    fn reset(&mut self) {
-        *self = Self::default();
     }
 }
 

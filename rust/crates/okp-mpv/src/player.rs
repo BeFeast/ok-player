@@ -1120,6 +1120,10 @@ impl Mpv {
             .and_then(EventPump::secondary_subtitle_id)
     }
 
+    pub fn observed_video_dimensions(&self) -> Option<VideoDimensions> {
+        self.pump.as_ref().and_then(EventPump::video_dimensions)
+    }
+
     pub fn observed_chapters(&self) -> Vec<Chapter> {
         self.pump
             .as_ref()
@@ -1234,6 +1238,9 @@ impl Mpv {
     }
 
     pub fn load_file(&self, path: &Path) -> Result<(), MpvError> {
+        if let Some(pump) = self.pump.as_ref() {
+            pump.begin_media_load();
+        }
         let command = CString::new("loadfile")?;
         let path = path_to_cstring(path)?;
         let args = [command.as_ptr(), path.as_ptr(), ptr::null()];
@@ -1242,6 +1249,9 @@ impl Mpv {
     }
 
     pub fn load_url(&self, url: &str) -> Result<(), MpvError> {
+        if let Some(pump) = self.pump.as_ref() {
+            pump.begin_media_load();
+        }
         let command = CString::new("loadfile")?;
         let url = CString::new(url)?;
         let args = [command.as_ptr(), url.as_ptr(), ptr::null()];
@@ -1376,13 +1386,29 @@ impl Mpv {
         self.command(&["set", "video-rotate", &degrees])
     }
 
+    pub fn set_video_zoom(&self, value: f64) -> Result<(), MpvError> {
+        self.set_double("video-zoom", video_zoom(value))
+    }
+
+    pub fn set_video_pan(&self, x: f64, y: f64) -> Result<(), MpvError> {
+        self.set_double("video-pan-x", video_pan(x))?;
+        self.set_double("video-pan-y", video_pan(y))
+    }
+
     pub fn set_video_fill_screen(&self, enabled: bool) -> Result<(), MpvError> {
         self.set_double("panscan", if enabled { 1.0 } else { 0.0 })
     }
 
+    pub fn set_video_deinterlace(&self, enabled: bool) -> Result<(), MpvError> {
+        self.command(&["set", "deinterlace", if enabled { "yes" } else { "no" }])
+    }
+
     pub fn reset_video_transform(&self) -> Result<(), MpvError> {
         self.set_video_rotation(0)?;
+        self.set_video_zoom(0.0)?;
+        self.set_video_pan(0.0, 0.0)?;
         self.set_video_fill_screen(false)?;
+        self.set_video_deinterlace(false)?;
         self.set_video_aspect_override("no")
     }
 
@@ -1828,6 +1854,22 @@ fn normalized_video_rotation(degrees: i64) -> i64 {
     degrees.rem_euclid(360) / 90 * 90
 }
 
+fn video_zoom(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(-20.0, 20.0)
+    } else {
+        0.0
+    }
+}
+
+fn video_pan(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(-3.0, 3.0)
+    } else {
+        0.0
+    }
+}
+
 fn video_aspect_override(value: &str) -> &str {
     match value {
         "16:9" => "16:9",
@@ -2203,6 +2245,7 @@ mod tests {
         assert_eq!(mpv.observed_subtitle_scale(), 1.0);
         assert_eq!(mpv.observed_speed(), 1.0);
         assert!(mpv.observed_playback_state().time_pos.is_none());
+        assert!(mpv.observed_video_dimensions().is_none());
         let _ = mpv.observed_tracks();
         let _ = mpv.take_lifecycle_events();
 
@@ -2251,6 +2294,7 @@ mod tests {
                 height: 720
             })
         );
+        assert_eq!(mpv.observed_video_dimensions(), dimensions);
         #[cfg(debug_assertions)]
         assert_eq!(
             mpv.blocking_read_violations(),
@@ -2341,9 +2385,53 @@ mod tests {
         assert_eq!(normalized_video_rotation(90), 90);
         assert_eq!(normalized_video_rotation(450), 90);
         assert_eq!(normalized_video_rotation(-90), 270);
+        assert_eq!(video_zoom(25.0), 20.0);
+        assert_eq!(video_zoom(f64::NAN), 0.0);
+        assert_eq!(video_pan(-4.0), -3.0);
+        assert_eq!(video_pan(f64::INFINITY), 0.0);
         assert_eq!(video_aspect_override("16:9"), "16:9");
         assert_eq!(video_aspect_override("2.35:1"), "2.35:1");
         assert_eq!(video_aspect_override("-1"), "no");
+    }
+
+    #[test]
+    fn video_geometry_commands_are_accepted_by_real_libmpv() {
+        let mpv = Mpv::new().expect("libmpv should initialize");
+        mpv.set_video_rotation(90).expect("rotation");
+        mpv.set_video_zoom(0.5).expect("zoom");
+        mpv.set_video_pan(-0.2, 0.3).expect("pan");
+        mpv.set_video_fill_screen(true).expect("fill");
+        mpv.set_video_deinterlace(true).expect("deinterlace");
+
+        let reader = mpv.reader();
+        assert_eq!(reader.get_i64("video-rotate").expect("rotation"), Some(90));
+        assert_eq!(reader.get_double("video-zoom").expect("zoom"), Some(0.5));
+        let pan_x = reader
+            .get_double("video-pan-x")
+            .expect("pan x")
+            .expect("pan x value");
+        let pan_y = reader
+            .get_double("video-pan-y")
+            .expect("pan y")
+            .expect("pan y value");
+        assert!((pan_x + 0.2).abs() < 1e-6, "pan x = {pan_x}");
+        assert!((pan_y - 0.3).abs() < 1e-6, "pan y = {pan_y}");
+        assert_eq!(reader.get_double("panscan").expect("fill"), Some(1.0));
+        assert_eq!(
+            reader.get_flag("deinterlace").expect("deinterlace"),
+            Some(true)
+        );
+
+        mpv.reset_video_transform().expect("reset geometry");
+        assert_eq!(reader.get_i64("video-rotate").expect("rotation"), Some(0));
+        assert_eq!(reader.get_double("video-zoom").expect("zoom"), Some(0.0));
+        assert_eq!(reader.get_double("video-pan-x").expect("pan x"), Some(0.0));
+        assert_eq!(reader.get_double("video-pan-y").expect("pan y"), Some(0.0));
+        assert_eq!(reader.get_double("panscan").expect("fill"), Some(0.0));
+        assert_eq!(
+            reader.get_flag("deinterlace").expect("deinterlace"),
+            Some(false)
+        );
     }
 
     #[test]

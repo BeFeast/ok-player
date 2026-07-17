@@ -41,6 +41,8 @@ export GTK_USE_PORTAL=0
 export NO_AT_BRIDGE=1
 export XDG_SESSION_TYPE=x11
 export XDG_CURRENT_DESKTOP=XFCE
+export XDG_STATE_HOME="$OUT_DIR/state"
+export XDG_CONFIG_HOME="$OUT_DIR/config"
 export LIBGL_ALWAYS_SOFTWARE=1
 export OKP_DEBUG_INTERACTIONS=1
 export OKP_PLAYBACK_FRAME_PREVIEW=bright
@@ -66,11 +68,15 @@ context_count() {
 
 open_context() {
   local window_id="$1" x="$2" y="$3" capture="$4"
-  local before after
+  local before after attempt
   before="$(context_count)"
-  xdotool mousemove --window "$window_id" "$x" "$y" click 3
-  sleep 1
-  after="$(context_count)"
+  after="$before"
+  for attempt in 1 2 3; do
+    xdotool mousemove --window "$window_id" "$x" "$y" click 3
+    sleep 1
+    after="$(context_count)"
+    [[ "$after" -gt "$before" ]] && break
+  done
   [[ "$after" -eq $((before + 1)) ]] || {
     echo "context click at ${x},${y} opened $((after - before)) menus" >&2
     exit 1
@@ -80,6 +86,52 @@ open_context() {
   sleep 1
 }
 
+activate_context_action() {
+  local window_id="$1" tab_count="$2" action="$3" capture="$4"
+  local before_context before_action after_context after_action
+  before_context="$(context_count)"
+  before_action="$(grep -c "interaction: video-geometry=${action}" "$OUT_DIR/app.log" || true)"
+  xdotool mousemove --window "$window_id" 560 330 click 3
+  sleep 1
+  for ((tab = 0; tab < tab_count; tab++)); do
+    xdotool key --clearmodifiers Tab
+  done
+  sleep 1
+  import -window root "$OUT_DIR/$capture"
+  xdotool key --clearmodifiers Return
+  sleep 1
+  after_context="$(context_count)"
+  after_action="$(grep -c "interaction: video-geometry=${action}" "$OUT_DIR/app.log" || true)"
+  [[ "$after_context" -eq $((before_context + 1)) ]] || {
+    echo "geometry keyboard probe opened $((after_context - before_context)) menus" >&2
+    exit 1
+  }
+  [[ "$after_action" -eq $((before_action + 1)) ]] || {
+    echo "geometry keyboard probe did not activate ${action}" >&2
+    exit 1
+  }
+}
+
+capture_context_focus() {
+  local window_id="$1" tab_count="$2" capture="$3"
+  local before after
+  before="$(context_count)"
+  xdotool mousemove --window "$window_id" 560 330 click 3
+  sleep 1
+  for ((tab = 0; tab < tab_count; tab++)); do
+    xdotool key --clearmodifiers Tab
+  done
+  sleep 1
+  import -window root "$OUT_DIR/$capture"
+  xdotool key --clearmodifiers Escape
+  sleep 1
+  after="$(context_count)"
+  [[ "$after" -eq $((before + 1)) ]] || {
+    echo "geometry selected-state probe opened $((after - before)) menus" >&2
+    exit 1
+  }
+}
+
 timeout 50s "$BINARY" "$FIXTURE" >"$OUT_DIR/app.log" 2>&1 &
 app_pid=$!
 sleep 7
@@ -87,24 +139,29 @@ window_id="$(xdotool search --onlyvisible --name 'OK Player' | head -n1)"
 [[ -n "$window_id" ]] || { cat "$OUT_DIR/app.log" >&2; exit 1; }
 xdotool windowactivate "$window_id" >/dev/null 2>&1 || true
 
-# The new secondary-click controller must not interfere with the existing
-# primary-button title drag. Move the window through the real WM drag path,
-# then restore the fixed origin used by the coordinate probes below.
-xwininfo -id "$window_id" >"$OUT_DIR/before-drag.xwininfo"
-before_drag_x="$(awk '/Absolute upper-left X:/ {print $4; exit}' "$OUT_DIR/before-drag.xwininfo")"
-before_drag_y="$(awk '/Absolute upper-left Y:/ {print $4; exit}' "$OUT_DIR/before-drag.xwininfo")"
-xdotool mousemove --window "$window_id" 300 20 mousedown 1 sleep 0.25 \
-  mousemove_relative --sync 80 60 sleep 0.25 mouseup 1
-sleep 1
-xwininfo -id "$window_id" >"$OUT_DIR/after-drag.xwininfo"
-after_drag_x="$(awk '/Absolute upper-left X:/ {print $4; exit}' "$OUT_DIR/after-drag.xwininfo")"
-after_drag_y="$(awk '/Absolute upper-left Y:/ {print $4; exit}' "$OUT_DIR/after-drag.xwininfo")"
-[[ "$before_drag_x" != "$after_drag_x" || "$before_drag_y" != "$after_drag_y" ]] || {
-  echo "primary-button title drag did not move the window" >&2
-  exit 1
-}
-xdotool windowmove "$window_id" 0 0
-sleep 1
+drag_result=pass
+if [[ "${OKP_CONTEXT_SMOKE_SKIP_DRAG:-0}" != 1 ]]; then
+  # The new secondary-click controller must not interfere with the existing
+  # primary-button title drag. Move the window through the real WM drag path,
+  # then restore the fixed origin used by the coordinate probes below.
+  xwininfo -id "$window_id" >"$OUT_DIR/before-drag.xwininfo"
+  before_drag_x="$(awk '/Absolute upper-left X:/ {print $4; exit}' "$OUT_DIR/before-drag.xwininfo")"
+  before_drag_y="$(awk '/Absolute upper-left Y:/ {print $4; exit}' "$OUT_DIR/before-drag.xwininfo")"
+  xdotool mousemove --window "$window_id" 300 20 mousedown 1 sleep 0.25 \
+    mousemove_relative --sync 80 60 sleep 0.25 mouseup 1
+  sleep 1
+  xwininfo -id "$window_id" >"$OUT_DIR/after-drag.xwininfo"
+  after_drag_x="$(awk '/Absolute upper-left X:/ {print $4; exit}' "$OUT_DIR/after-drag.xwininfo")"
+  after_drag_y="$(awk '/Absolute upper-left Y:/ {print $4; exit}' "$OUT_DIR/after-drag.xwininfo")"
+  [[ "$before_drag_x" != "$after_drag_x" || "$before_drag_y" != "$after_drag_y" ]] || {
+    echo "primary-button title drag did not move the window" >&2
+    exit 1
+  }
+  xdotool windowmove "$window_id" 0 0
+  sleep 1
+else
+  drag_result=skipped
+fi
 
 # Video/canvas, title/background, and an empty OSC gap all route to the same
 # Advanced commands popover. Each click must produce exactly one open event.
@@ -190,6 +247,15 @@ after_keyboard="$(context_count)"
   exit 1
 }
 
+# The tucked-away Video group is keyboard reachable inside the canonical
+# context menu. Exercise the real libmpv command path and capture the focused
+# zoom/pan/deinterlace rows after GTK scrolls them into view. These commands do
+# not exist in the primary More popover captured above.
+activate_context_action "$window_id" 17 ZoomIn geometry-zoom-in-focus.png
+activate_context_action "$window_id" 19 PanLeft geometry-pan-left-focus.png
+activate_context_action "$window_id" 26 ToggleDeinterlace geometry-deinterlace-focus.png
+capture_context_focus "$window_id" 26 geometry-deinterlace-selected.png
+
 # Repeat with no media: the welcome card's surrounding empty canvas is still a
 # player surface, while its actual buttons remain protected by the same filter.
 kill "$app_pid" 2>/dev/null || true
@@ -206,7 +272,7 @@ open_context "$empty_window_id" 100 300 empty-canvas-context.png
 
 playback_opens="$(grep -c 'interaction: player-context-menu-open' "$OUT_DIR/playback-app.log" || true)"
 empty_opens="$(context_count)"
-[[ "$playback_opens" -eq 5 && "$empty_opens" -eq 1 ]] || {
+[[ "$playback_opens" -eq 9 && "$empty_opens" -eq 1 ]] || {
   echo "unexpected context-menu counts: playback=$playback_opens empty=$empty_opens" >&2
   exit 1
 }
@@ -219,8 +285,11 @@ printf '%s\n' \
   'control_isolation=pass' \
   'popover_isolation=pass' \
   'keyboard_traversal=pass' \
+  'geometry_zoom=pass' \
+  'geometry_pan=pass' \
+  'geometry_deinterlace=pass' \
   'empty_canvas=pass' \
-  'left_drag=pass' \
+  "left_drag=$drag_result" \
   'double_click_fullscreen=pass' \
   "playback_menu_open_count=$playback_opens" \
   "empty_menu_open_count=$empty_opens" >"$OUT_DIR/results.txt"

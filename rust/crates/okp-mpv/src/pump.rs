@@ -25,7 +25,7 @@ use libc::c_void;
 use crate::ffi;
 use crate::player::{
     AbLoopState, AudioDevice, Chapter, EndFileReason, MediaInfo, MpvEvent, PlaybackDiagnostics,
-    PlaybackState, RawReader, Track, end_file_reason,
+    PlaybackState, RawReader, Track, VideoDimensions, end_file_reason,
 };
 
 /// Properties the pump observes so mpv wakes it (and refreshes the snapshot)
@@ -75,6 +75,7 @@ pub(crate) struct Snapshot {
     pub(crate) audio_delay: f64,
     pub(crate) speed: f64,
     pub(crate) secondary_subtitle_id: Option<i64>,
+    pub(crate) video_dimensions: Option<VideoDimensions>,
     pub(crate) chapters: Vec<Chapter>,
     pub(crate) tracks: Vec<Track>,
     pub(crate) audio_devices: Vec<AudioDevice>,
@@ -94,6 +95,7 @@ impl Default for Snapshot {
             subtitle_scale: 1.0,
             speed: 1.0,
             secondary_subtitle_id: None,
+            video_dimensions: None,
             chapters: Vec::new(),
             tracks: Vec::new(),
             audio_devices: Vec::new(),
@@ -223,6 +225,10 @@ impl EventPump {
         lock(&self.shared.snapshot).secondary_subtitle_id
     }
 
+    pub(crate) fn video_dimensions(&self) -> Option<VideoDimensions> {
+        lock(&self.shared.snapshot).video_dimensions
+    }
+
     pub(crate) fn chapters(&self) -> Vec<Chapter> {
         lock(&self.shared.snapshot).chapters.clone()
     }
@@ -237,6 +243,10 @@ impl EventPump {
 
     pub(crate) fn media_info(&self) -> Option<MediaInfo> {
         lock(&self.shared.snapshot).media_info.clone()
+    }
+
+    pub(crate) fn begin_media_load(&self) {
+        lock(&self.shared.snapshot).video_dimensions = None;
     }
 
     /// Drain the lifecycle events queued since the last call, oldest first.
@@ -337,17 +347,19 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
                 shared.running.store(false, Ordering::Release);
             }
             ffi::MPV_EVENT_FILE_LOADED => {
-                lifecycle.push(MpvEvent::FileLoaded {
-                    video_dimensions: shared.reader.video_dimensions().ok().flatten(),
-                });
+                let video_dimensions = shared.reader.video_dimensions().ok().flatten();
+                lock(&shared.snapshot).video_dimensions = video_dimensions;
+                lifecycle.push(MpvEvent::FileLoaded { video_dimensions });
                 flags.tracks = true;
                 flags.chapters = true;
                 flags.media_info = true;
             }
             ffi::MPV_EVENT_VIDEO_RECONFIG => {
-                lifecycle.push(MpvEvent::VideoReconfig {
-                    video_dimensions: shared.reader.video_dimensions().ok().flatten(),
-                });
+                let video_dimensions = shared.reader.video_dimensions().ok().flatten();
+                if video_dimensions.is_some() {
+                    lock(&shared.snapshot).video_dimensions = video_dimensions;
+                }
+                lifecycle.push(MpvEvent::VideoReconfig { video_dimensions });
                 flags.media_info = true;
             }
             ffi::MPV_EVENT_END_FILE => {

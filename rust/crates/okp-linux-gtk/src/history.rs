@@ -493,6 +493,39 @@ mod tests {
     }
 
     #[test]
+    fn per_file_video_geometry_persists_through_the_shared_history_path() {
+        use okp_core::video_geometry::{VideoAspect, VideoGeometry};
+
+        let mut history = store();
+        let path = Path::new("/media/movie.mkv");
+        let geometry = VideoGeometry {
+            aspect: VideoAspect::Cinema,
+            zoom: 1.5,
+            pan_x: -0.2,
+            pan_y: 0.1,
+            rotation_degrees: 90,
+            fill_screen: true,
+            deinterlace: true,
+        };
+
+        history.record_preferences(
+            path,
+            PlaybackPreferences {
+                video_geometry: Some(geometry),
+                ..PlaybackPreferences::default()
+            },
+        );
+        history.record(path, 120.0, 600.0, false);
+
+        assert_eq!(
+            history
+                .playback_preferences(path)
+                .and_then(|preferences| preferences.video_geometry),
+            Some(geometry)
+        );
+    }
+
+    #[test]
     fn add_and_remove_bookmarks_round_trip_and_sort() {
         let mut history = store();
         let path = Path::new("/media/movie.mkv");

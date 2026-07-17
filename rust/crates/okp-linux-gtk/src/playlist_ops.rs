@@ -726,16 +726,32 @@ pub(crate) fn try_pending_playback_preferences(state: &Rc<RefCell<PlayerState>>)
         return;
     }
 
-    let result = {
+    let (result, video_available) = {
         let state = state.borrow();
-        state
+        let video_available = state
             .mpv
             .as_ref()
-            .map(|mpv| apply_playback_preferences(mpv, &preferences))
+            .and_then(Mpv::observed_video_dimensions)
+            .is_some();
+        (
+            state
+                .mpv
+                .as_ref()
+                .map(|mpv| apply_playback_preferences(mpv, &preferences, video_available)),
+            video_available,
+        )
     };
 
     match result {
-        Some(Ok(())) => state.borrow_mut().pending_preferences = None,
+        Some(Ok(())) => {
+            let mut state = state.borrow_mut();
+            state.video_transform = if video_available {
+                preferences.video_geometry.unwrap_or_default().normalized()
+            } else {
+                VideoGeometry::default()
+            };
+            state.pending_preferences = None;
+        }
         Some(Err(error)) => eprintln!("Failed to restore playback preferences: {error}"),
         None => {}
     }
@@ -744,6 +760,7 @@ pub(crate) fn try_pending_playback_preferences(state: &Rc<RefCell<PlayerState>>)
 pub(crate) fn apply_playback_preferences(
     mpv: &Mpv,
     preferences: &history::PlaybackPreferences,
+    video_available: bool,
 ) -> Result<(), okp_mpv::MpvError> {
     let tracks = mpv.observed_tracks();
 
@@ -795,8 +812,24 @@ pub(crate) fn apply_playback_preferences(
     if let Some(speed) = preferences.speed.and_then(finite_option) {
         mpv.set_speed(speed)?;
     }
+    if video_available && let Some(geometry) = preferences.video_geometry {
+        apply_video_geometry_to_mpv(mpv, geometry)?;
+    }
 
     Ok(())
+}
+
+pub(crate) fn apply_video_geometry_to_mpv(
+    mpv: &Mpv,
+    geometry: VideoGeometry,
+) -> Result<(), okp_mpv::MpvError> {
+    let geometry = geometry.normalized();
+    mpv.set_video_aspect_override(geometry.aspect.mpv_value())?;
+    mpv.set_video_zoom(geometry.mpv_zoom())?;
+    mpv.set_video_pan(geometry.pan_x, geometry.pan_y)?;
+    mpv.set_video_rotation(geometry.rotation_degrees)?;
+    mpv.set_video_fill_screen(geometry.fill_screen)?;
+    mpv.set_video_deinterlace(geometry.deinterlace)
 }
 
 pub(crate) fn save_current_preferences(state: &Rc<RefCell<PlayerState>>) {
@@ -857,6 +890,34 @@ fn save_current_preferences_impl(
     }
 }
 
+pub(crate) fn save_current_video_geometry(
+    state: &Rc<RefCell<PlayerState>>,
+    geometry: VideoGeometry,
+) {
+    let path = {
+        let state = state.borrow();
+        if state.private_session {
+            return;
+        }
+        let Some(path) = state.current_file.clone() else {
+            return;
+        };
+        path
+    };
+
+    let mut state = state.borrow_mut();
+    state.history.record_preferences(
+        &path,
+        history::PlaybackPreferences {
+            video_geometry: Some(geometry.normalized()),
+            ..history::PlaybackPreferences::default()
+        },
+    );
+    if let Err(error) = state.history.save() {
+        eprintln!("Failed to save video geometry: {error}");
+    }
+}
+
 pub(crate) fn playback_preferences_with_delay_overrides(
     mut preferences: history::PlaybackPreferences,
     subtitle_delay: Option<f64>,
@@ -898,6 +959,7 @@ pub(crate) fn read_current_playback_preferences(mpv: &Mpv) -> history::PlaybackP
         subtitle_scale: finite_option(mpv.observed_subtitle_scale()),
         audio_delay: finite_option(mpv.observed_audio_delay()),
         speed: finite_option(mpv.observed_speed()),
+        video_geometry: None,
     }
 }
 
@@ -921,13 +983,6 @@ pub(crate) fn format_speed(speed: f64) -> String {
 
 pub(crate) fn speed_matches(left: f64, right: f64) -> bool {
     (left - right).abs() < 0.005
-}
-
-pub(crate) fn video_aspect_value(value: &str) -> &'static str {
-    VIDEO_ASPECT_PRESETS
-        .iter()
-        .find_map(|(_, preset)| (*preset == value).then_some(*preset))
-        .unwrap_or(VIDEO_ASPECT_AUTO)
 }
 
 pub(crate) fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: bool) {
