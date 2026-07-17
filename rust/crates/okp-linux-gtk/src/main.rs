@@ -242,7 +242,7 @@ struct PlayerState {
     retry_load_source: Option<network_media::LoadFailureSource>,
     /// The short, copyable reason for the most recent load failure — surfaced
     /// through the in-canvas card's Copy details action instead of raw logs.
-    last_load_error: Option<String>,
+    last_load_diagnostic: Option<okp_core::playback_failure::PlaybackFailureDiagnostic>,
     /// Intended fullscreen state for the double-click contract. The window's own
     /// `is_fullscreen` lags the Wayland compositor, so every toggle path decides
     /// from this eagerly-flipped intent and reconciles it with the `fullscreened`
@@ -1018,6 +1018,8 @@ struct MediaStateOverlay {
     stack: gtk::Stack,
     spinner: gtk::Spinner,
     retry_button: gtk::Button,
+    error_title: gtk::Label,
+    error_body: gtk::Label,
 }
 
 impl MediaStateOverlay {
@@ -1095,7 +1097,11 @@ impl MediaStateOverlay {
         copy_button.connect_clicked(move |_| {
             let detail = {
                 let state = copy_state.borrow();
-                let reason = state.last_load_error.as_deref().unwrap_or("");
+                let reason = state
+                    .last_load_diagnostic
+                    .as_ref()
+                    .map(|diagnostic| diagnostic.detail.as_str())
+                    .unwrap_or("");
                 state
                     .retry_load_source
                     .as_ref()
@@ -1155,6 +1161,8 @@ impl MediaStateOverlay {
             stack,
             spinner,
             retry_button,
+            error_title,
+            error_body,
         }
     }
 
@@ -1168,6 +1176,7 @@ impl MediaStateOverlay {
         has_media: bool,
         paused: bool,
         can_retry: bool,
+        failure: Option<&okp_core::playback_failure::PlaybackFailureDiagnostic>,
     ) {
         let state = match load_state {
             network_media::MediaLoadState::Failed => Some("error"),
@@ -1182,6 +1191,10 @@ impl MediaStateOverlay {
             let is_error = state == "error";
             self.revealer.set_can_target(is_error);
             self.retry_button.set_sensitive(can_retry);
+            if let Some(failure) = failure {
+                self.error_title.set_text(&failure.title);
+                self.error_body.set_text(&failure.message);
+            }
             if state == "loading" {
                 self.spinner.start();
             } else {

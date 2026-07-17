@@ -26,6 +26,8 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 pub const FEDORA_ACCEPTANCE_SCHEMA_VERSION: u32 = 1;
+pub const SUPPORTED_FEDORA_RELEASES: &[&str] = &["43", "44"];
+pub const REQUIRED_CODEC_CHECKS: &[&str] = &["h264", "hevc"];
 
 /// Coverage areas the Fedora acceptance run must account for. Each area carries a
 /// status; areas that are live-desktop only may remain `NotRun` for operator QA,
@@ -74,7 +76,7 @@ pub enum FedoraDesktop {
     KdePlasma,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SessionType {
     Wayland,
@@ -145,7 +147,7 @@ pub struct FedoraArtifact {
 /// Which repository provided the codec under test. Stock and RPM Fusion results
 /// are always recorded on distinct sources so a codec-complete pass can never be
 /// confused with a stock pass.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CodecSource {
     StockFedora,
@@ -393,6 +395,12 @@ impl FedoraAcceptanceManifest {
         }
         if self.environment.fedora_version.trim().is_empty() {
             errors.push("environment.fedora_version is empty".to_owned());
+        } else if !SUPPORTED_FEDORA_RELEASES.contains(&self.environment.fedora_version.as_str()) {
+            errors.push(format!(
+                "Fedora {} is outside the supported release set ({})",
+                self.environment.fedora_version,
+                SUPPORTED_FEDORA_RELEASES.join(", ")
+            ));
         }
 
         if let Some(artifact) = &self.artifact {
@@ -412,10 +420,21 @@ impl FedoraAcceptanceManifest {
             }
         }
 
+        let mut codec_keys = BTreeSet::new();
+        let mut codec_sources = BTreeSet::new();
         for check in &self.codec_checks {
             if check.codec.trim().is_empty() {
                 errors.push("codec check has an empty codec label".to_owned());
+                continue;
             }
+            let normalized = normalized_codec(&check.codec);
+            if !codec_keys.insert((normalized.clone(), check.source)) {
+                errors.push(format!(
+                    "duplicate codec check for {} from {:?}",
+                    check.codec, check.source
+                ));
+            }
+            codec_sources.insert(check.source);
             if check.source == CodecSource::RpmFusion
                 && self.test_state == FedoraTestState::StockRepos
             {
@@ -424,6 +443,32 @@ impl FedoraAcceptanceManifest {
                     check.codec
                 ));
             }
+            if check.source == CodecSource::StockFedora
+                && self.test_state == FedoraTestState::RpmFusionCodecs
+            {
+                errors.push(format!(
+                    "codec {}: stock Fedora source is not valid in the rpm-fusion-codecs state",
+                    check.codec
+                ));
+            }
+        }
+        for required in REQUIRED_CODEC_CHECKS {
+            let count = self
+                .codec_checks
+                .iter()
+                .filter(|check| normalized_codec(&check.codec) == *required)
+                .count();
+            match count {
+                1 => {}
+                0 => errors.push(format!("missing required codec check {required}")),
+                _ => errors.push(format!("codec {required} must be reported exactly once")),
+            }
+        }
+        if self.test_state == FedoraTestState::NativeRpmCopr && codec_sources.len() > 1 {
+            errors.push(
+                "native RPM codec evidence must use one repository state per manifest; record stock Fedora and RPM Fusion runs separately"
+                    .to_owned(),
+            );
         }
 
         // Media profiles must name every required profile exactly once, so an
@@ -590,13 +635,21 @@ impl FedoraAcceptanceManifest {
     }
 }
 
+fn normalized_codec(codec: &str) -> String {
+    match codec.trim().to_ascii_lowercase().as_str() {
+        "avc" | "avc1" => "h264".to_owned(),
+        "h265" => "hevc".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn environment() -> FedoraEnvironment {
         FedoraEnvironment {
-            fedora_version: "42".to_owned(),
+            fedora_version: "43".to_owned(),
             desktop: FedoraDesktop::KdePlasma,
             session: SessionType::Wayland,
         }
@@ -621,10 +674,11 @@ mod tests {
         );
         manifest.codec_checks = vec![
             CodecCheck {
-                codec: "vp9".to_owned(),
+                codec: "h264".to_owned(),
                 source: CodecSource::StockFedora,
-                outcome: CodecOutcome::Decoded,
-                diagnostic: String::new(),
+                outcome: CodecOutcome::DiagnosedUnsupported,
+                diagnostic: "H.264 decoder unavailable in stock Fedora; optional RPM Fusion remediation was shown"
+                    .to_owned(),
             },
             CodecCheck {
                 codec: "hevc".to_owned(),
@@ -745,14 +799,54 @@ mod tests {
     fn rpm_fusion_state_records_distinct_source() {
         let mut manifest = passing_stock_manifest();
         manifest.test_state = FedoraTestState::RpmFusionCodecs;
-        manifest.codec_checks = vec![CodecCheck {
-            codec: "hevc".to_owned(),
-            source: CodecSource::RpmFusion,
-            outcome: CodecOutcome::Decoded,
-            diagnostic: String::new(),
-        }];
+        manifest.codec_checks = ["h264", "hevc"]
+            .into_iter()
+            .map(|codec| CodecCheck {
+                codec: codec.to_owned(),
+                source: CodecSource::RpmFusion,
+                outcome: CodecOutcome::Decoded,
+                diagnostic: String::new(),
+            })
+            .collect();
         let outcome = manifest.evaluate();
         assert_eq!(outcome.verdict, AcceptanceVerdict::Pass, "{outcome:?}");
+    }
+
+    #[test]
+    fn native_rpm_stock_and_rpm_fusion_results_cannot_be_mixed() {
+        let mut manifest = passing_stock_manifest();
+        manifest.test_state = FedoraTestState::NativeRpmCopr;
+        manifest.artifact = Some(FedoraArtifact {
+            kind: FedoraArtifactKind::Rpm,
+            file_name: "ok-player.rpm".to_owned(),
+            sha256: "a".repeat(64),
+        });
+        manifest.codec_checks[1].source = CodecSource::RpmFusion;
+
+        let errors = manifest.validate_structure().unwrap_err();
+        assert!(errors.iter().any(|error| error.contains("separately")));
+    }
+
+    #[test]
+    fn h264_and_hevc_are_both_required() {
+        let mut manifest = passing_stock_manifest();
+        manifest.codec_checks.retain(|check| check.codec != "h264");
+
+        let errors = manifest.validate_structure().unwrap_err();
+        assert!(errors.iter().any(|error| error.contains("h264")));
+    }
+
+    #[test]
+    fn unsupported_fedora_release_is_rejected() {
+        let mut manifest = passing_stock_manifest();
+        manifest.environment.fedora_version = "42".to_owned();
+
+        let errors = manifest.validate_structure().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("supported release"))
+        );
     }
 
     #[test]

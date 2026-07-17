@@ -6,6 +6,10 @@ public release workflow. Merges to `main` never build or publish a public
 release; a candidate is a private updater candidate the candidate channel
 (#339) can promote.
 
+The Fedora RPM/COPR beta is intentionally a separate lane. It uses the shared
+source commit and Rust gates but does not add RPM artifacts to this Ubuntu
+candidate bundle or updater feed. See [`fedora-rpm.md`](fedora-rpm.md).
+
 Host registration, credentials, and machine-specific service configuration live
 outside this repository. Everything here is host-agnostic and reads its paths
 from the environment.

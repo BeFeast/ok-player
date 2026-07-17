@@ -11,6 +11,11 @@ The Debian/AppImage acceptance levels remain the general Linux contract
 ([`linux-release-acceptance.md`](linux-release-acceptance.md)); this document adds
 the Fedora-specific gates.
 
+The current native RPM matrix is Fedora **43** and **44** on x86_64. The core
+validator rejects an older/newer release being presented as current acceptance.
+RPM construction and COPR setup are documented in
+[`fedora-rpm.md`](fedora-rpm.md).
+
 ## Test states
 
 A run targets exactly one test state. The state selects which repositories and
@@ -28,6 +33,9 @@ precondition:
 Stock and RPM Fusion codec results are recorded on distinct `CodecSource`
 values, so a codec-complete pass can never be confused with a stock pass. An
 RPM Fusion codec source is rejected outright in the `stock-repos` state.
+H.264 and H.265/HEVC are required in every codec report. A native RPM manifest
+may describe either a stock or RPM Fusion run, but never both: the validator
+rejects mixed sources so the two reports remain independently auditable.
 
 ## SELinux stays enforcing
 
@@ -52,6 +60,10 @@ success. Each codec check records one of:
   diagnostic text is required);
 - `silent-failure` — playback reported success or hung producing no frames and
   no diagnostic. This always fails.
+
+For the Fedora RPM, the missing-codec diagnostic names the system codec boundary
+and gives optional RPM Fusion remediation without enabling or requiring it.
+Renderer/GPU failures are classified separately and do not show codec advice.
 
 ## Media profiles
 

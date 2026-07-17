@@ -9,7 +9,8 @@ pub(crate) fn set_load_failure(state: &Rc<RefCell<PlayerState>>, url: String, re
     let mut state = state.borrow_mut();
     state.media_load_state = network_media::MediaLoadState::Failed;
     state.retry_load_source = Some(network_media::LoadFailureSource::url(url));
-    state.last_load_error = Some(reason);
+    state.last_load_diagnostic =
+        Some(okp_core::playback_failure::PlaybackFailureDiagnostic::application(reason));
 }
 
 /// Record a local-file load failure. The path replaces any previous retry source so
@@ -22,7 +23,8 @@ pub(crate) fn set_local_load_failure(
     let mut state = state.borrow_mut();
     state.media_load_state = network_media::MediaLoadState::Failed;
     state.retry_load_source = Some(network_media::LoadFailureSource::local(path));
-    state.last_load_error = Some(reason);
+    state.last_load_diagnostic =
+        Some(okp_core::playback_failure::PlaybackFailureDiagnostic::application(reason));
 }
 
 /// Apply an `EndFile::Error` the engine fired asynchronously (a load command returned
@@ -37,6 +39,7 @@ pub(crate) fn apply_endfile_error(
     state: &Rc<RefCell<PlayerState>>,
     error: std::ffi::c_int,
     ended_path: Option<&str>,
+    diagnostic_messages: &[String],
 ) {
     eprintln!("libmpv ended the source with error {error}");
     let current_source = {
@@ -67,7 +70,11 @@ pub(crate) fn apply_endfile_error(
     let mut state = state.borrow_mut();
     state.media_load_state = network_media::MediaLoadState::Failed;
     state.retry_load_source = Some(current_source);
-    state.last_load_error = Some(format!("libmpv error {error}"));
+    state.last_load_diagnostic = Some(okp_core::playback_failure::diagnose_mpv_failure(
+        error,
+        diagnostic_messages,
+        option_env!("OKP_FEDORA_RPM") == Some("1"),
+    ));
 }
 
 pub(crate) fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
@@ -94,7 +101,7 @@ pub(crate) fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
     // Reset the transport-surface model: nothing is loading or failed anymore.
     state.media_load_state = network_media::MediaLoadState::Idle;
     state.retry_load_source = None;
-    state.last_load_error = None;
+    state.last_load_diagnostic = None;
 }
 
 pub(crate) fn load_media_path(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
@@ -257,7 +264,7 @@ pub(crate) fn remember_loaded_media_with_playlist(
     // disk, but the surface is shared with network sources for consistency).
     state.media_load_state = network_media::MediaLoadState::Loading;
     state.retry_load_source = Some(retry_source);
-    state.last_load_error = None;
+    state.last_load_diagnostic = None;
 }
 
 pub(crate) fn remember_loaded_url(state: &Rc<RefCell<PlayerState>>, url: String) {
@@ -376,7 +383,7 @@ pub(crate) fn remember_loaded_url_with_playlist(
         .current_url
         .clone()
         .map(network_media::LoadFailureSource::url);
-    state.last_load_error = None;
+    state.last_load_diagnostic = None;
 }
 
 pub(crate) fn load_playlist_item_with_playlist(

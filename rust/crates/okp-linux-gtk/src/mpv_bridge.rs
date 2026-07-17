@@ -1041,15 +1041,20 @@ fn update_media_state_surface(
     has_media: bool,
     overlay: &MediaStateOverlay,
 ) {
-    let (load_state, can_retry) = {
+    let (load_state, can_retry, failure) = {
         let state = state.borrow();
-        (state.media_load_state, state.retry_load_source.is_some())
+        (
+            state.media_load_state,
+            state.retry_load_source.is_some(),
+            state.last_load_diagnostic.clone(),
+        )
     };
     overlay.update(
         load_state,
         has_media,
         playback.is_some_and(|playback| playback.paused),
         can_retry,
+        failure.as_ref(),
     );
 }
 
