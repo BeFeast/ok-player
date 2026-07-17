@@ -18,6 +18,99 @@ fn write_png_header(path: &Path) {
 }
 
 #[test]
+fn local_nfo_title_prefers_same_basename_and_falls_back_quietly() {
+    let root = unique_temp_dir("okp-nfo-title");
+    fs::create_dir_all(&root).expect("nfo fixture directory");
+    let media = root.join("Movie.mkv");
+    fs::write(&media, b"media").expect("media fixture");
+    fs::write(
+        root.join("Movie.nfo"),
+        b"<movie><title>Same Basename</title></movie>",
+    )
+    .expect("same basename nfo");
+    fs::write(
+        root.join("movie.nfo"),
+        b"<movie><title>Folder Fallback</title></movie>",
+    )
+    .expect("folder nfo");
+
+    assert_eq!(
+        resolve_local_nfo_title(&media).as_deref(),
+        Some("Same Basename")
+    );
+
+    fs::write(root.join("Movie.nfo"), b"malformed").expect("malformed nfo");
+    assert_eq!(
+        resolve_local_nfo_title(&media).as_deref(),
+        Some("Folder Fallback")
+    );
+
+    fs::remove_file(root.join("movie.nfo")).expect("remove fallback nfo");
+    assert_eq!(resolve_local_nfo_title(&media), None);
+    fs::remove_dir_all(root).expect("clean nfo fixtures");
+}
+
+#[test]
+fn local_nfo_title_rejects_huge_sidecar_without_fallback() {
+    let root = unique_temp_dir("okp-nfo-huge");
+    fs::create_dir_all(&root).expect("nfo fixture directory");
+    let media = root.join("Movie.mkv");
+    fs::write(&media, b"media").expect("media fixture");
+    fs::write(
+        root.join("Movie.nfo"),
+        vec![b'x'; okp_core::nfo_metadata::MAX_NFO_BYTES + 1],
+    )
+    .expect("huge nfo");
+
+    assert_eq!(resolve_local_nfo_title(&media), None);
+    fs::remove_dir_all(root).expect("clean nfo fixtures");
+}
+
+#[test]
+fn nfo_title_result_is_source_generation_and_path_safe() {
+    let current = PathBuf::from("/media/current.mkv");
+    let mut state = PlayerState {
+        current_file: Some(current.clone()),
+        source_generation: 7,
+        ..PlayerState::default()
+    };
+
+    assert!(!apply_nfo_title_result(
+        &mut state,
+        NfoTitleResult {
+            source_generation: 6,
+            path: current.clone(),
+            title: Some("Stale".to_owned()),
+        }
+    ));
+    assert_eq!(state.nfo_title, None);
+
+    assert!(apply_nfo_title_result(
+        &mut state,
+        NfoTitleResult {
+            source_generation: 7,
+            path: current,
+            title: Some("Current title".to_owned()),
+        }
+    ));
+    assert_eq!(current_media_title(&state), "Current title");
+    assert_eq!(
+        current_history_title(&state).as_deref(),
+        Some("Current title")
+    );
+}
+
+#[test]
+fn history_title_falls_back_to_filename_stem() {
+    let state = PlayerState {
+        current_file: Some(PathBuf::from("/media/Movie.mkv")),
+        ..PlayerState::default()
+    };
+
+    assert_eq!(current_history_title(&state).as_deref(), Some("Movie"));
+}
+
+#[test]
 fn about_display_version_keeps_about_layout_compact() {
     assert_eq!(about_display_version("0.1.0-linux-alpha.77"), "0.1.0");
     assert_eq!(about_display_version("1.0.0"), "1.0.0");
@@ -2180,7 +2273,7 @@ fn explicit_launch_resume_overrides_remembered_position_for_one_open_only() {
     state
         .borrow_mut()
         .history
-        .record(&path, 240.0, 600.0, false);
+        .record(&path, 240.0, 600.0, false, None);
 
     state.borrow_mut().next_launch_directives = Some(LaunchDirectives {
         resume_seconds: Some(90.0),

@@ -7,7 +7,14 @@
 //! `None` for a non-XML `.nfo` (some are just a bare scraper URL) or one with no usable
 //! title. Engine- and UI-free.
 
+use std::path::{Path, PathBuf};
+
 use roxmltree::{Document, Node};
+
+/// Maximum accepted sidecar size. Real NFO documents are normally a few KiB; this
+/// keeps an accidentally selected media-sized or otherwise pathological file out of
+/// the parser.
+pub const MAX_NFO_BYTES: usize = 2 * 1024 * 1024;
 
 /// The usable fields of a `.nfo` document.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,6 +22,50 @@ pub struct NfoMetadata {
     pub title: String,
     pub year: Option<i32>,
     pub plot: Option<String>,
+}
+
+/// Candidate sidecars for a local media path, in precedence order: the common
+/// same-basename file first, then Kodi's single-movie-folder `movie.nfo` convention.
+/// Duplicate candidates (for example `movie.mkv`) are returned only once.
+pub fn sidecar_candidates(media_path: &Path) -> Vec<PathBuf> {
+    let Some(parent) = media_path.parent() else {
+        return Vec::new();
+    };
+    let Some(stem) = media_path.file_stem().filter(|stem| !stem.is_empty()) else {
+        return Vec::new();
+    };
+
+    let same_basename = parent.join(stem).with_extension("nfo");
+    let folder_movie = parent.join("movie.nfo");
+    if same_basename == folder_movie {
+        vec![same_basename]
+    } else {
+        vec![same_basename, folder_movie]
+    }
+}
+
+/// Resolve metadata for `media_path` through a caller-supplied local reader. Keeping
+/// filesystem access behind the callback leaves candidate precedence, size policy,
+/// decoding, and fallback behavior reusable and deterministic in the shared core.
+pub fn resolve_with(
+    media_path: &Path,
+    mut read_candidate: impl FnMut(&Path) -> Option<Vec<u8>>,
+) -> Option<NfoMetadata> {
+    sidecar_candidates(media_path)
+        .into_iter()
+        .find_map(|candidate| parse_bytes(read_candidate(&candidate).as_deref()))
+}
+
+/// Parse a bounded NFO byte buffer. UTF-8 (with or without BOM) and BOM-marked
+/// UTF-16LE/BE match the encodings handled by the Windows sidecar reader.
+pub fn parse_bytes(bytes: Option<&[u8]>) -> Option<NfoMetadata> {
+    let bytes = bytes?;
+    if bytes.is_empty() || bytes.len() > MAX_NFO_BYTES {
+        return None;
+    }
+
+    let text = decode_text(bytes)?;
+    parse(Some(&text))
 }
 
 /// Parse a `.nfo` document. `None` when the text isn't XML or carries no title.
@@ -89,6 +140,30 @@ fn element_value(element: Node) -> String {
         .filter(|node| node.is_text())
         .filter_map(|node| node.text())
         .collect()
+}
+
+fn decode_text(bytes: &[u8]) -> Option<String> {
+    if let Some(bytes) = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]) {
+        return String::from_utf8(bytes.to_vec()).ok();
+    }
+    if let Some(bytes) = bytes.strip_prefix(&[0xff, 0xfe]) {
+        return decode_utf16(bytes, u16::from_le_bytes);
+    }
+    if let Some(bytes) = bytes.strip_prefix(&[0xfe, 0xff]) {
+        return decode_utf16(bytes, u16::from_be_bytes);
+    }
+    String::from_utf8(bytes.to_vec()).ok()
+}
+
+fn decode_utf16(bytes: &[u8], decode: fn([u8; 2]) -> u16) -> Option<String> {
+    let chunks = bytes.chunks_exact(2);
+    if !chunks.remainder().is_empty() {
+        return None;
+    }
+    let units = chunks.map(|chunk| decode([chunk[0], chunk[1]]));
+    char::decode_utf16(units)
+        .collect::<Result<String, _>>()
+        .ok()
 }
 
 #[cfg(test)]
@@ -181,5 +256,51 @@ mod tests {
         let nfo =
             parse(Some("<movie><title>X</title><year>n/a</year></movie>")).expect("usable nfo");
         assert_eq!(nfo.year, None);
+    }
+
+    #[test]
+    fn sidecar_candidates_prefer_same_basename_then_folder_movie() {
+        assert_eq!(
+            sidecar_candidates(Path::new("/media/Films/Arrival.mkv")),
+            vec![
+                PathBuf::from("/media/Films/Arrival.nfo"),
+                PathBuf::from("/media/Films/movie.nfo")
+            ]
+        );
+        assert_eq!(
+            sidecar_candidates(Path::new("/media/Films/movie.mkv")),
+            vec![PathBuf::from("/media/Films/movie.nfo")]
+        );
+    }
+
+    #[test]
+    fn resolve_falls_back_after_missing_or_malformed_candidates() {
+        let media = Path::new("/media/Films/Arrival.mkv");
+        let resolved = resolve_with(media, |candidate| {
+            match candidate.file_name()?.to_str()? {
+                "Arrival.nfo" => Some(b"not xml".to_vec()),
+                "movie.nfo" => Some(b"<movie><title>Arrival</title></movie>".to_vec()),
+                _ => None,
+            }
+        })
+        .expect("folder fallback");
+        assert_eq!(resolved.title, "Arrival");
+
+        assert_eq!(resolve_with(media, |_| None), None);
+    }
+
+    #[test]
+    fn parse_bytes_accepts_utf_boms_and_rejects_huge_or_invalid_input() {
+        let utf8 = b"\xef\xbb\xbf<movie><title>Moon</title></movie>";
+        assert_eq!(parse_bytes(Some(utf8)).expect("utf-8 BOM").title, "Moon");
+
+        let utf16_text = "<movie><title>Heat</title></movie>";
+        let mut utf16 = vec![0xff, 0xfe];
+        utf16.extend(utf16_text.encode_utf16().flat_map(u16::to_le_bytes));
+        assert_eq!(parse_bytes(Some(&utf16)).expect("utf-16 BOM").title, "Heat");
+
+        assert_eq!(parse_bytes(Some(&vec![b'x'; MAX_NFO_BYTES + 1])), None);
+        assert_eq!(parse_bytes(Some(&[0xff, 0xfe, 0x3c])), None);
+        assert_eq!(parse_bytes(Some(&[0xff, 0xff, 0xff])), None);
     }
 }

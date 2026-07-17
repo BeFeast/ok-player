@@ -115,6 +115,11 @@ behaves identically on both sides.
   text/CDATA, matching `XElement.Value`.
 - **Shapes.** `Parse(string?)` → `parse(Option<&str>)`; the record's `int?`/`string?` fields →
   `Option<i32>`/`Option<String>`.
+- **Sidecar resolution.** The shared Rust module also owns the Windows service's candidate
+  order (same-basename `.nfo`, then folder-level `movie.nfo`), the 2 MiB rejection limit,
+  and UTF-8/UTF-16 BOM decoding. Filesystem reads remain injected by the shell so Linux can
+  perform them off the GTK main context; missing, unreadable, malformed, and oversized
+  candidates all continue quietly to the next candidate or the existing filename fallback.
 - **Name matching.** C# matches element local names with `OrdinalIgnoreCase`; the port uses
   `eq_ignore_ascii_case` — the looked-up names are ASCII, so only non-ASCII lookalike tags
   differ, and those match on neither side's conventions (same note as SubtitleStyle). The

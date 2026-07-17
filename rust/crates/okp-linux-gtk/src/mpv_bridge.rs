@@ -743,6 +743,7 @@ pub(crate) fn connect_state_poll(
             }
         }
         run_presentation_exercise(&state, playback);
+        drain_nfo_title_jobs(&state);
         let has_media = has_loaded_media(&state);
         let seek_preview = env::var_os("OKP_OPEN_SEEK_PREVIEW_ON_STARTUP").is_some();
         let has_chapters = state
@@ -753,25 +754,7 @@ pub(crate) fn connect_state_poll(
         chrome.set_has_media(has_media || seek_preview);
         let media_title = if has_media {
             let state = state.borrow();
-            let base = state
-                .mpv
-                .as_ref()
-                .and_then(Mpv::observed_media_info)
-                .map(|info| info.title)
-                .filter(|title| !title.trim().is_empty())
-                .or_else(|| {
-                    state
-                        .current_file
-                        .as_ref()
-                        .map(|path| PlaylistItem::Local(path.clone()).display_name())
-                })
-                .or_else(|| {
-                    state
-                        .current_url
-                        .as_ref()
-                        .map(|url| PlaylistItem::Url(url.clone()).display_name())
-                })
-                .unwrap_or_default();
+            let base = current_media_title(&state);
             let chapter = playback
                 .and_then(|playback| playback.time_pos)
                 .and_then(|position| {

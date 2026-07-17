@@ -77,6 +77,7 @@ pub(crate) fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
     }
     state.current_file = None;
     state.current_url = None;
+    state.nfo_title = None;
     advance_source_generation(&mut state);
     state.playlist.clear();
     state.thumbnail_request_key = None;
@@ -208,8 +209,12 @@ pub(crate) fn remember_loaded_media_with_playlist(
     }
     let retry_source = network_media::LoadFailureSource::local(path.clone());
     let preferences_path = path.clone();
+    let nfo_path = path.clone();
     let mut state = state.borrow_mut();
     advance_source_generation(&mut state);
+    let source_generation = state.source_generation;
+    state.nfo_title = None;
+    state.nfo_title_jobs.start(source_generation, nfo_path);
     let directives = state.next_launch_directives.take().unwrap_or_default();
     let remembered_resume = if state.private_session || !state.settings.resume_enabled() {
         None
@@ -313,6 +318,7 @@ pub(crate) fn remember_loaded_url_with_playlist(
 
     let mut state = state.borrow_mut();
     advance_source_generation(&mut state);
+    state.nfo_title = None;
     let directives = state.next_launch_directives.take().unwrap_or_default();
     reset_video_transform_for_new_media(&mut state);
     state.ab_loop = AbLoopState::default();
@@ -939,11 +945,18 @@ pub(crate) fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: 
                 .map(read_current_playback_preferences)
                 .unwrap_or_default()
         });
+        let history_title = current_history_title(&state);
 
-        (state.private_session, path, playback, preferences)
+        (
+            state.private_session,
+            path,
+            playback,
+            preferences,
+            history_title,
+        )
     };
 
-    let (private_session, path, playback, preferences) = snapshot;
+    let (private_session, path, playback, preferences, history_title) = snapshot;
     let Some(duration) = playback.duration else {
         return;
     };
@@ -954,9 +967,13 @@ pub(crate) fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: 
 
     let mut state = state.borrow_mut();
     if !private_session {
-        state
-            .history
-            .record(&path, position.clamp(0.0, duration), duration, finished);
+        state.history.record(
+            &path,
+            position.clamp(0.0, duration),
+            duration,
+            finished,
+            history_title.as_deref(),
+        );
         state
             .history
             .record_preferences(&path, preferences.unwrap_or_default());

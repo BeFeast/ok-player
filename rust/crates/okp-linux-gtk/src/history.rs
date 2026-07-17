@@ -67,7 +67,14 @@ impl HistoryStore {
         *self = Self::open();
     }
 
-    pub fn record(&mut self, path: &Path, position: f64, duration: f64, finished: bool) {
+    pub fn record(
+        &mut self,
+        path: &Path,
+        position: f64,
+        duration: f64,
+        finished: bool,
+        title: Option<&str>,
+    ) {
         if !duration.is_finite() || duration <= 0.0 || !position.is_finite() {
             return;
         }
@@ -93,6 +100,9 @@ impl HistoryStore {
         record.duration = duration;
         record.finished = finished || (existing_finished && final_stretch);
         record.updated_at_unix = unix_now();
+        if let Some(title) = title.map(str::trim).filter(|title| !title.is_empty()) {
+            record.title = Some(title.to_owned());
+        }
         self.listable_paths.insert(key.clone());
         self.data.files.insert(key, record);
         self.dirty = true;
@@ -340,7 +350,7 @@ mod tests {
         let mut history = store();
         let path = Path::new("/media/movie.mkv");
 
-        history.record(path, 120.0, 600.0, false);
+        history.record(path, 120.0, 600.0, false, None);
 
         assert_eq!(history.resume_position(path), Some(120.0));
     }
@@ -350,7 +360,7 @@ mod tests {
         let mut history = store();
         let path = Path::new("/media/movie.mkv");
 
-        history.record(path, 30.0, 600.0, false);
+        history.record(path, 30.0, 600.0, false, None);
 
         assert_eq!(history.resume_position(path), None);
     }
@@ -360,7 +370,7 @@ mod tests {
         let mut history = store();
         let path = Path::new("/media/movie.mkv");
 
-        history.record(path, completion_start(600.0), 600.0, false);
+        history.record(path, completion_start(600.0), 600.0, false, None);
 
         assert_eq!(history.resume_position(path), None);
     }
@@ -370,9 +380,28 @@ mod tests {
         let mut history = store();
         let path = Path::new("/media/movie.mkv");
 
-        history.record(path, 599.0, 600.0, true);
+        history.record(path, 599.0, 600.0, true, None);
 
         assert_eq!(history.resume_position(path), None);
+    }
+
+    #[test]
+    fn progress_record_caches_and_replaces_display_title() {
+        let mut history = store();
+        let path = Path::new("/media/Movie.mkv");
+
+        history.record(path, 120.0, 600.0, false, Some("Curated Movie"));
+        let WelcomeShelf::Items(items) = history.welcome_shelf(false, 1) else {
+            panic!("recorded progress should appear on the welcome shelf");
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "Curated Movie");
+
+        history.record(path, 130.0, 600.0, false, Some("Movie"));
+        assert_eq!(
+            history.data.files["/media/Movie.mkv"].title.as_deref(),
+            Some("Movie")
+        );
     }
 
     #[test]
@@ -389,7 +418,7 @@ mod tests {
                 ..PlaybackPreferences::default()
             },
         );
-        history.record(path, 120.0, 600.0, false);
+        history.record(path, 120.0, 600.0, false, None);
 
         assert_eq!(
             history.playback_preferences(path),
@@ -513,7 +542,7 @@ mod tests {
         history.add_bookmark(path, 42.0);
         // A progress save must not wipe the bookmark the way the old
         // `..HistoryRecord::default()` reset did.
-        history.record(path, 120.0, 600.0, false);
+        history.record(path, 120.0, 600.0, false, None);
 
         assert_eq!(history.bookmarks(path), vec![42.0]);
         assert_eq!(history.resume_position(path), Some(120.0));
@@ -524,7 +553,7 @@ mod tests {
         let mut history = store();
         let path = Path::new("/media/movie.mkv");
 
-        history.record(path, 120.0, 600.0, false);
+        history.record(path, 120.0, 600.0, false, None);
         history.record_preferences(
             path,
             PlaybackPreferences {

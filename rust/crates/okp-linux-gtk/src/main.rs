@@ -51,6 +51,7 @@ mod media_info;
 mod mpris;
 mod mpv_bridge;
 mod native_video;
+mod nfo;
 mod panels;
 mod playback;
 mod playlist_ops;
@@ -76,6 +77,7 @@ pub(crate) use media_info::*;
 pub(crate) use mpris::*;
 pub(crate) use mpv_bridge::*;
 pub(crate) use native_video::*;
+pub(crate) use nfo::*;
 pub(crate) use panels::*;
 pub(crate) use playback::*;
 pub(crate) use playlist_ops::*;
@@ -162,6 +164,10 @@ struct PlayerState {
     mpv: Option<Mpv>,
     current_file: Option<PathBuf>,
     current_url: Option<String>,
+    /// Curated local title from the current file's NFO sidecar. The worker result
+    /// is generation-tagged, so a slow read cannot relabel a newer source.
+    nfo_title: Option<String>,
+    nfo_title_jobs: NfoTitleJobs,
     source_generation: u64,
     initial_window_fit: window_fit::InitialFitState,
     seek_generation: u64,
