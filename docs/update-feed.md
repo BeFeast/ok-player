@@ -74,6 +74,31 @@ Triggers:
   tracks — no manual step.
 - **push to `main`** touching the site or a generator, and manual **`workflow_dispatch`**.
 
+## The Linux candidate channel (issue #339)
+
+There is a fourth, deliberately separate Linux channel for **explicitly enrolled QA installs**: the
+rolling candidate channel. It exists so QA candidates — development checkpoints, not products — can
+update frequently without minting one permanent GitHub Release per build (the release list had
+already accumulated more than a hundred such objects).
+
+It is isolated from the three feeds above by construction:
+
+- Candidates are published from the verified native-builder bundle to a single **mutable**
+  pre-release tagged `linux-candidate` (`release-linux-candidate.yml`), never to the GitHub Pages
+  site. The candidate publisher does not rebuild, run `build-linux-feed.sh`, or deploy Pages, so
+  **the public Linux feed is byte-for-byte unaffected by candidate promotion**.
+- The candidate feed is `candidate.linux.json` (`okp_core::candidate_channel::CandidateFeed`), a
+  distinct schema and URL. It carries per-build provenance (git SHA, monotonic build number, UTC
+  timestamp, exact `.deb` and Velopack package SHA-256, acceptance status), keeps the current plus
+  at least two previous known-good packages for rollback, and uploads build-versioned packages and
+  checksums before the shared `candidate.linux.json` pointer. That pointer gates both package lanes,
+  so an interrupted promotion leaves the previous candidate usable.
+- **Only** an install with `Settings.updates.channel == candidate` (or `OKP_LINUX_UPDATE_CHANNEL=
+  candidate`) fetches it. Every default install is `public` and never touches the candidate surface.
+
+See [linux-candidate-channel.md](linux-candidate-channel.md) for channel isolation, retention,
+rollback, and the mutable nature of the rolling surface.
+
 ## Operator notes
 
 - **One-time Pages setup:** the workflow's `configure-pages` step has `enablement: true` and

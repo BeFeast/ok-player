@@ -3140,6 +3140,7 @@ fn deb_checksum_download_refuses_release_without_manifest() {
         url: "https://example.invalid/update.deb".to_owned(),
         size: Some(42),
         sums_url: None,
+        expected_sha256: None,
     };
 
     let error = download_deb_checksums(&update).expect_err("missing manifest should refuse");
@@ -3237,6 +3238,7 @@ fn deb_update_action_requests_install() {
             url: "https://example.invalid/update.deb".to_owned(),
             size: Some(42),
             sums_url: None,
+            expected_sha256: None,
         }),
     };
 
@@ -3262,6 +3264,7 @@ fn linux_update_status_reflects_last_check_result() {
             url: "https://example.invalid/update.deb".to_owned(),
             size: Some(42),
             sums_url: None,
+            expected_sha256: None,
         }),
     };
     let available =
@@ -3279,6 +3282,47 @@ fn linux_update_status_reflects_last_check_result() {
         failed.settings_status_text(true),
         "Update check failed: no feed"
     );
+}
+
+#[test]
+fn candidate_deb_feed_sha_mismatch_is_refused_before_download() {
+    let name = "ok-player_0.11.0-beta.1.42_amd64.deb";
+    let update = DebUpdate {
+        version: "0.11.0-beta.1.42".to_owned(),
+        name: name.to_owned(),
+        url: "https://example.invalid/update.deb".to_owned(),
+        size: Some(42),
+        sums_url: Some("https://example.invalid/SHA256SUMS-42.txt".to_owned()),
+        expected_sha256: Some("a".repeat(64)),
+    };
+    let manifest = format!("{}  {name}\n", "b".repeat(64));
+
+    let error = verify_deb_feed_identity(&update, &manifest)
+        .expect_err("candidate feed and checksum manifest must agree");
+    assert!(error.contains("Candidate identity check failed"));
+    assert!(error.contains("SHA mismatch"));
+}
+
+#[test]
+fn candidate_appimage_source_uses_the_manifest_bound_full_package() {
+    let package = CandidateAppImage {
+        package_id: "com.befeast.okplayer".to_owned(),
+        name: "com.befeast.okplayer-0.11.0-beta.1.42-linux-full.nupkg".to_owned(),
+        url: "https://example.invalid/linux-candidate/full.nupkg".to_owned(),
+        size: 1234,
+        sha256: "a".repeat(64),
+        sha1: "b".repeat(40),
+    };
+    let asset = candidate_velopack_asset(&package, "0.11.0-beta.1.42");
+
+    assert_eq!(asset.PackageId, package.package_id);
+    assert_eq!(asset.Version, "0.11.0-beta.1.42");
+    assert_eq!(asset.Type, "Full");
+    assert_eq!(asset.FileName, package.name);
+    assert_eq!(asset.SHA256, package.sha256);
+
+    let builder = include_str!("../../../../scripts/build-linux-candidate.sh");
+    assert!(builder.contains("OKP_LINUX_CHANNEL=linux-candidate"));
 }
 
 #[test]

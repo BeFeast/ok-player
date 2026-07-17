@@ -40,7 +40,7 @@ Configuration (all optional; no host-specific value is baked in):
 | `OKP_CANDIDATE_STATE_DIR` | `${XDG_STATE_HOME:-$HOME/.local/state}/ok-player-candidate` | Persistent state, lock, heartbeats, bundles |
 | `OKP_CANDIDATE_REPO_URL` | public GitHub repo | Clone source |
 | `OKP_CANDIDATE_BRANCH` | `main` | Branch to track |
-| `OKP_CANDIDATE_VERSION_BASE` | `0.1.0` | Version prefix |
+| `OKP_CANDIDATE_VERSION_BASE` | `0.11.0-beta.1` | Current public-beta identity; the build number is appended |
 | `OKP_CANDIDATE_NATIVE_SMOKE` | unset | Optional native-hardware smoke command; when set its evidence is **required** |
 | `OKP_CANDIDATE_STALL_SECONDS` | `900` | Watchdog stall threshold, published to `stall-after-seconds` |
 
@@ -83,7 +83,9 @@ Each build writes a bundle under `$OKP_CANDIDATE_STATE_DIR/out/<build-number>/`:
   `SHA256SUMS`, `package-identity.json`, and the acceptance template.
 
 This bundle is sufficient for candidate-channel promotion by #339 **without
-rebuilding**.
+rebuilding**. AppImage packaging is forced to the `linux-candidate` Velopack
+channel, and promotion requires the bundle's `releases.linux-candidate.json`
+full-package identity to match its bytes.
 
 ## Build vs promotion
 
@@ -94,11 +96,18 @@ a bundle; it never moves a feed. Promotion is an explicit second step:
 scripts/promote-linux-candidate.sh "$OKP_CANDIDATE_STATE_DIR/out/<build-number>"
 ```
 
-`promote-linux-candidate.sh` re-validates the bundle (`okp-candidate
-promotable`) and records `last-promoted.sha` under the same single-run lock, so
-a non-promotable bundle can never move the feed and two promotions cannot race.
-Movement of the actual updater feed is owned by #339, which consumes this same
-validated bundle.
+`promote-linux-candidate.sh` re-hashes and re-validates the complete bundle
+(`okp-candidate verify-bundle`) before recording `last-promoted.sha` under the
+same single-run lock. The scheduled #339 workflow uses
+`publish-linux-candidate.sh`, which performs the same verification, uploads the
+exact bundle with the rolling pointer last, and records the promoted SHA only
+after publication succeeds.
+
+`release-linux-candidate.yml` is the repository-side schedule: every 15 minutes
+it invokes the builder on a generic self-hosted Linux x86_64 runner, publishes a
+new verified SHA when present, and reports heartbeat activity. An unchanged
+`main` remains an expected idle run; manual dispatch can republish the last
+verified bundle without rebuilding it.
 
 ## Heartbeats and the watchdog
 

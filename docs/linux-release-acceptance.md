@@ -5,6 +5,13 @@ SELinux with AVC collection, Flatpak/RPM/COPR states, and virtual-GPU skip
 evidence — documented in [`fedora-acceptance.md`](fedora-acceptance.md). This
 document covers the general Debian/AppImage evidence levels.
 
+> **Candidate channel:** QA candidates for explicitly enrolled installs are published to the rolling
+> `linux-candidate` pre-release, not to a permanent `linux-v*` Release (issue #339). A candidate is
+> published from one exact native-builder bundle. The scheduled path marks a bundle `accepted` only
+> after its required build gates pass; an operator may use manual dispatch to publish `pending` or
+> `rejected` while completing additional evidence. The public feed is untouched throughout. See
+> [linux-candidate-channel.md](linux-candidate-channel.md).
+
 Linux release evidence is package-specific and has four levels:
 
 1. `model-unit`: pure Rust model/schema tests.

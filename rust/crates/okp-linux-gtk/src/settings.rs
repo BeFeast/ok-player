@@ -4,7 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use okp_core::gapless::{GaplessPlaybackCapability, effective_gapless_enabled};
-use okp_core::settings::{AppearanceTheme, ScreenshotFormat, Settings};
+use okp_core::settings::{AppearanceTheme, ScreenshotFormat, Settings, UpdateChannel};
 use okp_core::subtitle_style::{self, SubtitleStyle};
 
 const DEFAULT_VOLUME: f64 = 100.0;
@@ -115,6 +115,13 @@ impl SettingsStore {
 
     pub fn auto_check_updates(&self) -> bool {
         self.data.updates.auto_check
+    }
+
+    /// The persisted update channel. `Public` for every default install;
+    /// `Candidate` only when the operator has explicitly enrolled this QA
+    /// install in the rolling candidate channel (issue #339).
+    pub fn update_channel(&self) -> UpdateChannel {
+        self.data.updates.channel
     }
 
     pub fn appearance_theme(&self) -> AppearanceTheme {

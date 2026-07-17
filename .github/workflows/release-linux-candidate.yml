@@ -1,0 +1,101 @@
+name: Linux Candidate
+
+# Scheduled native-builder handoff for the rolling QA channel (issues #339/#340).
+# The self-hosted Ubuntu x86_64 builder produces one verified bundle from exact
+# origin/main bytes; publication consumes that bundle without rebuilding. The
+# public GitHub Pages feeds are never read or written by this workflow.
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      acceptance:
+        description: Candidate acceptance recorded in the rolling manifest
+        required: true
+        default: accepted
+        type: choice
+        options:
+          - accepted
+          - pending
+          - rejected
+      republish_last_bundle:
+        description: Republish the last verified bundle even when its SHA is already promoted
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: linux-candidate-native
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    name: Native build and rolling publish
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build latest eligible main SHA
+        env:
+          CC: /usr/bin/cc
+        run: ./scripts/build-linux-candidate.sh
+
+      - name: Resolve verified bundle handoff
+        id: handoff
+        shell: bash
+        env:
+          FORCE_REPUBLISH: ${{ inputs.republish_last_bundle || 'false' }}
+          REQUESTED_ACCEPTANCE: ${{ inputs.acceptance || 'accepted' }}
+        run: |
+          set -euo pipefail
+          state_dir="${OKP_CANDIDATE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/ok-player-candidate}"
+          bundle="$(cat "$state_dir/last-bundle.path")"
+          source_sha="$(jq -r '.source_sha' "$bundle/candidate-build.json")"
+          promoted_sha="$(cat "$state_dir/last-promoted.sha" 2>/dev/null || true)"
+          should_publish=false
+          if [[ "$source_sha" != "$promoted_sha" || "$FORCE_REPUBLISH" == "true" ]]; then
+            should_publish=true
+          fi
+          echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "acceptance=$REQUESTED_ACCEPTANCE" >> "$GITHUB_OUTPUT"
+          echo "should_publish=$should_publish" >> "$GITHUB_OUTPUT"
+
+      - name: Publish exact native bundle
+        if: steps.handoff.outputs.should_publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          state_dir="${OKP_CANDIDATE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/ok-player-candidate}"
+          "$state_dir/checkout/scripts/publish-linux-candidate.sh" \
+            "${{ steps.handoff.outputs.bundle }}" \
+            "${{ github.repository }}" \
+            "${{ steps.handoff.outputs.acceptance }}"
+
+      - name: Heartbeat and handoff summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          state_dir="${OKP_CANDIDATE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/ok-player-candidate}"
+          heartbeat="$(tail -n 1 "$state_dir/heartbeat.jsonl")"
+          phase="$(jq -r '.phase' <<<"$heartbeat")"
+          timestamp="$(jq -r '.unix_seconds' <<<"$heartbeat")"
+          age="$(( $(date -u +%s) - timestamp ))"
+          stall_after="$(cat "$state_dir/stall-after-seconds")"
+          cli="$state_dir/checkout/rust/target/release/okp-candidate"
+          activity="$($cli classify --phase "$phase" --age-seconds "$age" --stall-after "$stall_after" | jq -r '.')"
+          {
+            echo "### Linux candidate handoff"
+            echo ""
+            echo "- source SHA: \`${{ steps.handoff.outputs.source_sha }}\`"
+            echo "- publication requested: \`${{ steps.handoff.outputs.should_publish }}\`"
+            echo "- heartbeat activity: \`${activity}\`"
+            echo "- rolling surface: \`linux-candidate\`"
+            echo "- public feed: untouched"
+          } >> "$GITHUB_STEP_SUMMARY"
