@@ -376,10 +376,65 @@ impl ScreenshotFormat {
     }
 }
 
-/// Privacy, a Windows-only section.
+/// The supported watch-history retention windows. The persisted schema keeps the
+/// cross-shell integer encoding (`0` = forever), while shells render these fixed
+/// choices natively.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum HistoryRetention {
+    #[default]
+    Forever,
+    Days7,
+    Days30,
+    Days90,
+    Days365,
+}
+
+impl HistoryRetention {
+    pub const ALL: [Self; 5] = [
+        Self::Forever,
+        Self::Days7,
+        Self::Days30,
+        Self::Days90,
+        Self::Days365,
+    ];
+
+    pub const fn days(self) -> i64 {
+        match self {
+            Self::Forever => 0,
+            Self::Days7 => 7,
+            Self::Days30 => 30,
+            Self::Days90 => 90,
+            Self::Days365 => 365,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Forever => "Forever",
+            Self::Days7 => "7 days",
+            Self::Days30 => "30 days",
+            Self::Days90 => "90 days",
+            Self::Days365 => "365 days",
+        }
+    }
+
+    /// Unknown or invalid stored values fall back to the non-destructive default:
+    /// keep history forever.
+    pub const fn from_days(days: Option<i64>) -> Self {
+        match days {
+            Some(7) => Self::Days7,
+            Some(30) => Self::Days30,
+            Some(90) => Self::Days90,
+            Some(365) => Self::Days365,
+            _ => Self::Forever,
+        }
+    }
+}
+
+/// Watch-history privacy preferences shared by both desktop shells.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PrivacySettings {
-    /// Windows `HistoryRetentionDays` — prune history older than N days; 0 = keep forever.
+    /// Prune history older than N days; 0 = keep forever.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_retention_days: Option<i64>,
 }
@@ -486,6 +541,36 @@ mod tests {
         assert!(Settings::default().updates.auto_check);
         // A default install is on the public channel; enrollment is explicit.
         assert_eq!(Settings::default().updates.channel, UpdateChannel::Public);
+    }
+
+    #[test]
+    fn history_retention_accepts_only_the_shared_choices() {
+        assert_eq!(HistoryRetention::from_days(None), HistoryRetention::Forever);
+        assert_eq!(
+            HistoryRetention::from_days(Some(0)),
+            HistoryRetention::Forever
+        );
+        assert_eq!(
+            HistoryRetention::from_days(Some(7)),
+            HistoryRetention::Days7
+        );
+        assert_eq!(
+            HistoryRetention::from_days(Some(30)),
+            HistoryRetention::Days30
+        );
+        assert_eq!(
+            HistoryRetention::from_days(Some(90)),
+            HistoryRetention::Days90
+        );
+        assert_eq!(
+            HistoryRetention::from_days(Some(365)),
+            HistoryRetention::Days365
+        );
+        assert_eq!(
+            HistoryRetention::from_days(Some(14)),
+            HistoryRetention::Forever
+        );
+        assert_eq!(HistoryRetention::Days365.label(), "365 days");
     }
 
     #[test]

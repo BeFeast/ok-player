@@ -114,6 +114,22 @@ const SETTINGS_SEARCH_INDEX: &[SettingsSearchResult] = &[
         page: SettingsPage::Integration,
     },
     SettingsSearchResult {
+        label: "Private session",
+        page: SettingsPage::Integration,
+    },
+    SettingsSearchResult {
+        label: "History retention",
+        page: SettingsPage::Integration,
+    },
+    SettingsSearchResult {
+        label: "Keep history for",
+        page: SettingsPage::Integration,
+    },
+    SettingsSearchResult {
+        label: "Clear watch history",
+        page: SettingsPage::Integration,
+    },
+    SettingsSearchResult {
         label: "Updates",
         page: SettingsPage::Updates,
     },
@@ -225,6 +241,23 @@ mod tests {
                     .iter()
                     .any(|result| result.page == SettingsPage::Updates),
                 "missing Updates search route for {query}"
+            );
+        }
+    }
+
+    #[test]
+    fn privacy_controls_route_to_integration() {
+        for query in [
+            "private session",
+            "history retention",
+            "keep history",
+            "clear watch history",
+        ] {
+            assert!(
+                search_settings(query)
+                    .iter()
+                    .any(|result| result.page == SettingsPage::Integration),
+                "missing Integration search route for {query}"
             );
         }
     }

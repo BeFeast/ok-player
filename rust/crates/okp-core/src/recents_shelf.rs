@@ -2,8 +2,9 @@
 //!
 //! The fit math is a port of `src/OkPlayer.Core/RecentsShelf.cs`; the C# suite in
 //! `tests/OkPlayer.Tests/RecentsShelfTests.cs` is the executable spec. Linux also uses this
-//! module for reusable history ranking, resumable filtering, private-session suppression,
-//! and search matching so the GTK shell only renders the resulting model.
+//! module for reusable history ranking, resumable filtering, and search matching so the GTK
+//! shell only renders the resulting model. Private sessions gate writes, not reads: persisted
+//! recents remain available while recording is paused.
 
 use crate::history::{FileEntry, History};
 use crate::history_format::{self, HistoryStateKind};
@@ -23,18 +24,15 @@ pub struct HistoryItem {
     pub poster_path: Option<String>,
 }
 
-/// The welcome shelf's privacy-aware state. A private session deliberately carries no items,
-/// even when the persisted history has resumable records.
 #[derive(Clone, Debug, PartialEq)]
 pub enum WelcomeShelf {
-    Private,
     Empty,
     Items(Vec<HistoryItem>),
 }
 
 /// Select the newest resumable history rows for the welcome surface.
-pub fn select(history: &History, private_session: bool, limit: usize) -> WelcomeShelf {
-    select_where(history, private_session, limit, |_| true)
+pub fn select(history: &History, limit: usize) -> WelcomeShelf {
+    select_where(history, limit, |_| true)
 }
 
 /// Select the newest resumable rows whose paths pass the shell-supplied availability check.
@@ -42,14 +40,9 @@ pub fn select(history: &History, private_session: bool, limit: usize) -> Welcome
 /// while filtering before ranking and limiting must remain shared and deterministic.
 pub fn select_where(
     history: &History,
-    private_session: bool,
     limit: usize,
     mut is_listable: impl FnMut(&str) -> bool,
 ) -> WelcomeShelf {
-    if private_session {
-        return WelcomeShelf::Private;
-    }
-
     let items = sorted_items(history)
         .into_iter()
         .filter(|item| is_listable(&item.path))
@@ -312,7 +305,7 @@ mod tests {
             ("/media/newer.mkv", entry(240.0, 600.0, false, 20)),
         ]);
 
-        let WelcomeShelf::Items(items) = select(&history, false, 10) else {
+        let WelcomeShelf::Items(items) = select(&history, 10) else {
             panic!("expected shelf items");
         };
         assert_eq!(
@@ -325,7 +318,7 @@ mod tests {
     }
 
     #[test]
-    fn select_hides_all_persisted_items_during_private_session() {
+    fn persisted_items_remain_readable_while_private_recording_is_active() {
         let history = history([
             ("/media/a.mkv", entry(120.0, 600.0, false, 40)),
             ("/media/b.mkv", entry(120.0, 600.0, false, 30)),
@@ -333,7 +326,10 @@ mod tests {
             ("/media/d.mkv", entry(120.0, 600.0, false, 10)),
         ]);
 
-        assert_eq!(select(&history, true, 10), WelcomeShelf::Private);
+        let WelcomeShelf::Items(items) = select(&history, 10) else {
+            panic!("expected persisted shelf items");
+        };
+        assert_eq!(items.len(), 4);
     }
 
     #[test]
@@ -346,7 +342,7 @@ mod tests {
         ]);
 
         let WelcomeShelf::Items(items) =
-            select_where(&history, false, 2, |path| !path.starts_with("/missing/"))
+            select_where(&history, 2, |path| !path.starts_with("/missing/"))
         else {
             panic!("expected shelf items");
         };

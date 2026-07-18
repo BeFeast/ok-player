@@ -50,18 +50,15 @@ impl EmptySurface {
     ) {
         let mut welcome_model = {
             let state = state.borrow();
-            state
-                .history
-                .welcome_shelf(state.private_session, WELCOME_ITEM_LIMIT)
+            state.history.welcome_shelf(WELCOME_ITEM_LIMIT)
         };
         if env::var("OKP_WELCOME_STATE").ok().as_deref() == Some("empty") {
             welcome_model = WelcomeShelf::Empty;
         }
-        // Fill each resumable card's poster from the cache (enqueuing bounded generation for
-        // any still missing). The welcome shelf never carries items during a private session —
-        // `welcome_shelf` returns `Private` — so these rows are always non-private.
+        // Existing recents remain fully readable in a private session. Cached posters stay
+        // visible, while missing poster generation is paused so the session creates no trace.
         if let WelcomeShelf::Items(items) = &mut welcome_model {
-            crate::thumbnails::project_posters(items, false);
+            crate::thumbnails::project_posters(items, state.borrow().private_session);
         }
         if self.model.borrow().as_ref() != Some(&welcome_model) {
             *self.model.borrow_mut() = Some(welcome_model.clone());
@@ -76,8 +73,8 @@ impl EmptySurface {
             replace_box_child(&self.welcome_host, &page);
             self.footer
                 .set_visible(!matches!(welcome_model, WelcomeShelf::Empty));
-            self.sync_footer(state.borrow().private_session);
         }
+        self.sync_footer(state.borrow().private_session);
 
         if self.page.get() == IdlePage::History
             && env::var("OKP_HISTORY_STATE").ok().as_deref() != Some("loading")
@@ -184,10 +181,6 @@ fn welcome_page(
             first_run_welcome(parent, Rc::clone(&state), Rc::clone(&status_toast)),
             None,
         ),
-        WelcomeShelf::Private => (
-            private_welcome(parent, Rc::clone(&state), Rc::clone(&status_toast)),
-            None,
-        ),
         WelcomeShelf::Items(items) => {
             let (page, button) = continue_watching_welcome(
                 surface.clone(),
@@ -224,50 +217,6 @@ fn first_run_welcome(
     content.append(&copy);
 
     content.append(&welcome_drop_target(parent, state, status_toast, true));
-    content
-}
-
-fn private_welcome(
-    parent: &gtk::ApplicationWindow,
-    state: Rc<RefCell<PlayerState>>,
-    status_toast: Rc<StatusToast>,
-) -> gtk::Box {
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    content.add_css_class("okp-welcome-private");
-    content.set_halign(gtk::Align::Center);
-    content.set_valign(gtk::Align::Center);
-
-    let icon = gtk::Image::from_icon_name("changes-prevent-symbolic");
-    icon.add_css_class("okp-private-hero-icon");
-    icon.set_pixel_size(30);
-    content.append(&icon);
-    let title = gtk::Label::new(Some("Private session"));
-    title.add_css_class("okp-private-hero-title");
-    content.append(&title);
-    let body = gtk::Label::new(Some(
-        "Continue Watching is hidden. New opens will not be recorded or resumed later.",
-    ));
-    body.add_css_class("okp-private-hero-copy");
-    body.set_wrap(true);
-    body.set_justify(gtk::Justification::Center);
-    body.set_max_width_chars(48);
-    content.append(&body);
-
-    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    actions.add_css_class("okp-private-actions");
-    let disable = gtk::Button::with_label("Turn off private session");
-    disable.add_css_class("okp-idle-primary-button");
-    let private_state = Rc::clone(&state);
-    let private_toast = Rc::clone(&status_toast);
-    disable.connect_clicked(move |_| toggle_private_session(&private_state, &private_toast));
-    actions.append(&disable);
-    actions.append(&open_file_button(
-        parent,
-        Rc::clone(&state),
-        Rc::clone(&status_toast),
-    ));
-    actions.append(&open_url_button(parent, state, status_toast));
-    content.append(&actions);
     content
 }
 
@@ -542,12 +491,13 @@ fn history_surface_model(state: &Rc<RefCell<PlayerState>>) -> HistorySurfaceMode
     ) {
         items.clear();
     }
-    // Share the same cached posters and generation queue as the welcome shelf. A private
-    // session exposes no posters here (and enqueues none), so private viewing leaves no trace.
+    // Share the same cached posters and generation queue as the welcome shelf. Private
+    // sessions expose cached posters but enqueue no new generation work.
     crate::thumbnails::project_posters(&mut items, state.private_session);
     HistorySurfaceModel {
         items,
         private_session: state.private_session,
+        retention: state.settings.history_retention(),
         read_failed,
         cleared,
         no_match,
@@ -604,7 +554,7 @@ fn history_page(
     header.append(&title);
     content.append(&header);
 
-    let subtitle = gtk::Label::new(Some("Everything you’ve opened · keeping last 90 days"));
+    let subtitle = gtk::Label::new(Some(&history_format::retention_summary(model.retention)));
     subtitle.add_css_class("okp-history-subtitle");
     subtitle.set_xalign(0.0);
     content.append(&subtitle);
@@ -643,6 +593,7 @@ fn history_page(
         let state = Rc::clone(&state);
         let parent = parent.clone();
         let status_toast = Rc::clone(&status_toast);
+        let retention = model.retention;
         move |query: &str| {
             render_history_rows(
                 &rows_host,
@@ -651,6 +602,7 @@ fn history_page(
                 Rc::clone(&state),
                 &parent,
                 Rc::clone(&status_toast),
+                retention,
             );
         }
     };
@@ -694,6 +646,7 @@ fn render_history_rows(
     state: Rc<RefCell<PlayerState>>,
     parent: &gtk::ApplicationWindow,
     status_toast: Rc<StatusToast>,
+    retention: HistoryRetention,
 ) {
     clear_box(host);
     let query = query.trim().to_lowercase();
@@ -760,7 +713,7 @@ fn render_history_rows(
             ));
         }
     }
-    let end = gtk::Label::new(Some("End of history · keeping last 90 days"));
+    let end = gtk::Label::new(Some(&history_format::retention_end_cap(retention)));
     end.add_css_class("okp-history-end-cap");
     host.append(&end);
 }

@@ -304,7 +304,7 @@ pub(crate) fn open_clear_history_dialog(
     status_toast: Rc<StatusToast>,
 ) {
     let dialog = gtk::Dialog::builder()
-        .title("Clear History")
+        .title("Clear watch history?")
         .transient_for(parent)
         .modal(true)
         .build();
@@ -320,10 +320,10 @@ pub(crate) fn open_clear_history_dialog(
     content.set_margin_end(14);
     content.set_margin_bottom(14);
     content.set_margin_start(14);
-    content.append(&command_dialog_title("Clear History"));
+    content.append(&command_dialog_title("Clear watch history?"));
 
     let message = gtk::Label::new(Some(
-        "Clear saved resume positions and per-file playback preferences?",
+        "This removes all resume positions, Continue Watching entries, bookmarks and your added chapters. This can’t be undone.",
     ));
     message.set_xalign(0.0);
     message.set_wrap(true);

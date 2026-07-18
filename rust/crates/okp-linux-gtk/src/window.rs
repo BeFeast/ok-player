@@ -106,6 +106,21 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
 
     let identity = AppIdentity::linux();
     let state = Rc::new(RefCell::new(PlayerState::default()));
+    let retention = state.borrow().settings.history_retention();
+    match state
+        .borrow_mut()
+        .history
+        .prune_older_than_persisted(retention.days())
+    {
+        Ok(removed) if removed > 0 => {
+            eprintln!(
+                "Pruned {removed} history items using {} retention",
+                retention.label()
+            );
+        }
+        Ok(_) => {}
+        Err(error) => eprintln!("Failed to apply history retention on launch: {error}"),
+    }
     let update_preview =
         linux_update_preview_status(state.borrow().settings.skipped_update_versions());
     if let Some(preview) = update_preview {

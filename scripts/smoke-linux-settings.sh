@@ -49,6 +49,16 @@ export NO_AT_BRIDGE=1
 export XDG_SESSION_TYPE=x11
 export XDG_CURRENT_DESKTOP=XFCE
 export LIBGL_ALWAYS_SOFTWARE=1
+export XDG_CONFIG_HOME="$OUT_DIR/xdg-config"
+export XDG_STATE_HOME="$OUT_DIR/xdg-state"
+export XDG_CACHE_HOME="$OUT_DIR/xdg-cache"
+mkdir -p "$XDG_CONFIG_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+if [[ "$PAGE" == "integration" ]]; then
+  mkdir -p "$XDG_STATE_HOME/ok-player"
+  now_unix="$(date +%s)"
+  printf '{\n  "version": 2,\n  "files": {\n    "/media/old.mkv": { "position": 120.0, "duration": 600.0, "finished": false, "updated_at_unix": 1 },\n    "/media/recent.mkv": { "position": 120.0, "duration": 600.0, "finished": false, "updated_at_unix": %s }\n  }\n}\n' \
+    "$now_unix" >"$XDG_STATE_HOME/ok-player/history.json"
+fi
 if [[ "$COLOR_SCHEME" == "high-contrast" ]]; then
   export GTK_THEME=HighContrast
   APP_COLOR_SCHEME=light
@@ -76,23 +86,47 @@ OKP_SKIP_DEB_SELF_INSTALL=1 \
 timeout 30s "$BINARY" >"$OUT_DIR/app.log" 2>&1 &
 app_pid=$!
 
-for _ in $(seq 1 30); do
-  if xdotool search --name "Settings" >"$OUT_DIR/settings.ids" 2>/dev/null \
+settings_id=""
+for _ in $(seq 1 60); do
+  if xdotool search --onlyvisible --name '^Settings$' >"$OUT_DIR/settings.ids" 2>/dev/null \
     && [[ -s "$OUT_DIR/settings.ids" ]]; then
-    break
+    while IFS= read -r candidate; do
+      candidate_info="$(xwininfo -id "$candidate" 2>/dev/null || true)"
+      candidate_width="$(awk '/Width:/ { print $2; exit }' <<<"$candidate_info")"
+      candidate_state="$(awk -F': ' '/Map State:/ { print $2; exit }' <<<"$candidate_info")"
+      if [[ "$candidate_width" -gt 1 && "$candidate_state" == "IsViewable" ]]; then
+        settings_id="$candidate"
+        break 2
+      fi
+    done <"$OUT_DIR/settings.ids"
   fi
-  sleep 0.5
+  sleep 0.25
 done
-if [[ ! -s "$OUT_DIR/settings.ids" ]]; then
+if [[ -z "$settings_id" ]]; then
   echo "Settings window did not appear" >&2
   exit 1
 fi
-settings_id="$(head -n1 "$OUT_DIR/settings.ids")"
+printf '%s\n' "$settings_id" >"$OUT_DIR/settings.ids"
+xdotool windowactivate --sync "$settings_id"
+sleep 0.25
+
+capture_window() {
+  local window_id="$1" output="$2" info x y width height root_capture
+  info="$(xwininfo -id "$window_id")"
+  x="$(awk '/Absolute upper-left X:/ { print $4; exit }' <<<"$info")"
+  y="$(awk '/Absolute upper-left Y:/ { print $4; exit }' <<<"$info")"
+  width="$(awk '/Width:/ { print $2; exit }' <<<"$info")"
+  height="$(awk '/Height:/ { print $2; exit }' <<<"$info")"
+  root_capture="${output%.png}-root.png"
+  import -window root "$root_capture"
+  magick "$root_capture" -crop "${width}x${height}+${x}+${y}" +repage "$output"
+  rm -f "$root_capture"
+}
 
 xwininfo -root -tree >"$OUT_DIR/tree.txt"
 xwininfo -id "$settings_id" >"$OUT_DIR/settings.xwininfo"
 import -window root "$OUT_DIR/root.png"
-import -window "$settings_id" "$OUT_DIR/settings.png"
+capture_window "$settings_id" "$OUT_DIR/settings.png"
 
 width="$(awk '/Width:/ { print $2; exit }' "$OUT_DIR/settings.xwininfo")"
 height="$(awk '/Height:/ { print $2; exit }' "$OUT_DIR/settings.xwininfo")"
@@ -171,6 +205,80 @@ if [[ "$PAGE" == "subtitles" ]]; then
   fi
 fi
 
+if [[ "$PAGE" == "integration" ]]; then
+  # The Integration page is intentionally long. Scroll the independent content pane until the
+  # Privacy card is fully visible, then capture the actual controls rather than treating the
+  # section header at the fold as evidence.
+  xdotool mousemove --window "$settings_id" 620 470
+  xdotool click --repeat 7 --delay 45 5
+  sleep 0.5
+  capture_window "$settings_id" "$OUT_DIR/settings-privacy.png"
+
+  privacy_variance="$(
+    magick "$OUT_DIR/settings-privacy.png" \
+      -crop 500x250+216+170 \
+      -colorspace gray \
+      -format '%[fx:standard_deviation]' info:
+  )"
+  if ! awk -v variance="$privacy_variance" 'BEGIN { exit !(variance > 0.04) }'; then
+    echo "Privacy controls are unexpectedly flat: variance=${privacy_variance}" >&2
+    exit 1
+  fi
+
+  # Private session is transient: toggle it on and prove the native control updates in place.
+  xdotool mousemove --window "$settings_id" 640 291 click 1
+  sleep 0.25
+  capture_window "$settings_id" "$OUT_DIR/settings-private-on.png"
+  private_difference="$(
+    magick "$OUT_DIR/settings-privacy.png" "$OUT_DIR/settings-private-on.png" \
+      -compose difference -composite \
+      -crop 116x42+582+270 \
+      -colorspace gray \
+      -format '%[fx:mean]' info:
+  )"
+  if ! awk -v difference="$private_difference" 'BEGIN { exit !(difference > 0.002) }'; then
+    echo "Private session control did not update: difference=${private_difference}" >&2
+    exit 1
+  fi
+
+  # Move Forever to 7 days through the native dropdown. The setting must persist and prune
+  # the seeded stale entry immediately while preserving the recent one.
+  xdotool mousemove --window "$settings_id" 620 339 click 1
+  xdotool key Down Return
+  sleep 0.4
+  settings_json="$XDG_CONFIG_HOME/ok-player/settings.json"
+  history_json="$XDG_STATE_HOME/ok-player/history.json"
+  if ! grep -q '"history_retention_days": 7' "$settings_json"; then
+    echo "History retention selection was not persisted as 7 days" >&2
+    exit 1
+  fi
+  if grep -q 'old.mkv' "$history_json" || ! grep -q 'recent.mkv' "$history_json"; then
+    echo "History retention did not prune only the stale seeded entry" >&2
+    exit 1
+  fi
+
+  # The destructive action must open a confirmation with Cancel as the safe default.
+  xdotool mousemove --window "$settings_id" 615 388 click 1
+  clear_dialog_id=""
+  for _ in $(seq 1 20); do
+    xdotool search --onlyvisible --name 'Clear watch history' >"$OUT_DIR/clear-dialog.ids" 2>/dev/null || true
+    clear_dialog_id="$(head -n1 "$OUT_DIR/clear-dialog.ids" 2>/dev/null || true)"
+    [[ -n "$clear_dialog_id" ]] && break
+    sleep 0.1
+  done
+  if [[ -z "$clear_dialog_id" ]]; then
+    echo "Clear watch history confirmation did not appear" >&2
+    exit 1
+  fi
+  xwininfo -id "$clear_dialog_id" >"$OUT_DIR/clear-dialog.xwininfo"
+  xdotool key Tab Return
+  sleep 0.3
+  if grep -q 'recent.mkv' "$history_json"; then
+    echo "Confirmed Clear watch history action did not empty history.json" >&2
+    exit 1
+  fi
+fi
+
 if [[ "$PAGE" == "updates" ]]; then
   # Initial-page routing must open the dedicated page with a non-flat card at
   # the canonical minimum width.
@@ -188,10 +296,10 @@ if [[ "$PAGE" == "updates" ]]; then
   # Mouse navigation: Updates sits immediately before Advanced.
   xdotool mousemove --window "$settings_id" 90 414 click 1
   sleep 1
-  import -window "$settings_id" "$OUT_DIR/settings-advanced.png"
+  capture_window "$settings_id" "$OUT_DIR/settings-advanced.png"
   xdotool mousemove --window "$settings_id" 90 376 click 1
   sleep 1
-  import -window "$settings_id" "$OUT_DIR/settings-mouse.png"
+  capture_window "$settings_id" "$OUT_DIR/settings-mouse.png"
 
   # Keyboard + Settings search: focus the field, type a major Updates control,
   # then activate the result with Enter.
@@ -200,10 +308,10 @@ if [[ "$PAGE" == "updates" ]]; then
   xdotool mousemove --window "$settings_id" 90 70 click 1
   xdotool type --delay 35 'automatic checks'
   sleep 1
-  import -window "$settings_id" "$OUT_DIR/settings-search-result.png"
+  capture_window "$settings_id" "$OUT_DIR/settings-search-result.png"
   xdotool key Return
   sleep 1
-  import -window "$settings_id" "$OUT_DIR/settings-search.png"
+  capture_window "$settings_id" "$OUT_DIR/settings-search.png"
 
   mouse_difference="$(
     magick "$OUT_DIR/settings-advanced.png" "$OUT_DIR/settings-mouse.png" \
@@ -230,7 +338,7 @@ if [[ "$PAGE" == "updates" ]]; then
   xdotool windowsize --sync "$settings_id" 760 480
   sleep 1
   xwininfo -id "$settings_id" >"$OUT_DIR/settings-minimum.xwininfo"
-  import -window "$settings_id" "$OUT_DIR/settings-minimum.png"
+  capture_window "$settings_id" "$OUT_DIR/settings-minimum.png"
   min_width="$(awk '/Width:/ { print $2; exit }' "$OUT_DIR/settings-minimum.xwininfo")"
   min_height="$(awk '/Height:/ { print $2; exit }' "$OUT_DIR/settings-minimum.xwininfo")"
   if [[ "$min_width" != "760" || "$min_height" != "480" ]]; then
