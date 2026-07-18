@@ -77,7 +77,9 @@ named window, and the GTK/MPRIS/AT-SPI D-Bus names to be gone before the next
 launch, and preserves PID/XID/map-state, geometry, guard, explicit-command,
 app-log, Xfwm ownership, and session-bus diagnostics.
 The wrapper proves the fresh bus was reachable during the command and
-unreachable after teardown, and reaps any orphan retaining that bus address;
+unreachable after teardown. Its Linux child subreaper terminates and waits for
+orphaned command or D-Bus descendants before verifying that no process retains
+the bus address;
 the Xvfb supervisor records readiness, confirms the
 server remained alive through the command, explicitly reaps it, and removes its
 private display state before returning. GLX remains enabled under the pinned

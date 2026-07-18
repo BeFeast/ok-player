@@ -9,12 +9,19 @@ shift
   exit 2
 }
 
-for tool in dbus-run-session gdbus tr; do
+for tool in dbus-run-session gdbus python3 tr; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "Missing required tool: $tool" >&2
     exit 127
   fi
 done
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SUBREAPER="$SCRIPT_DIR/run-linux-child-subreaper.py"
+if [[ ! -f "$SUBREAPER" ]]; then
+  echo "Missing required helper: run-linux-child-subreaper.py" >&2
+  exit 127
+fi
 
 mkdir -p "$(dirname "$EVIDENCE_FILE")"
 address_file="${EVIDENCE_FILE}.address"
@@ -27,7 +34,7 @@ cleanup() {
 trap cleanup EXIT
 
 set +e
-dbus-run-session -- bash -c '
+python3 "$SUBREAPER" dbus-run-session -- bash -c '
 set -euo pipefail
 address_file="$1"
 shift
@@ -70,7 +77,7 @@ session_pids() {
         matches=true
         break
       fi
-    done < <(tr '\0' '\n' <"$environ" 2>/dev/null || true)
+    done < <(tr '\0' '\n' 2>/dev/null <"$environ" || true)
     if [[ "$matches" == "true" ]]; then
       pid="${environ#/proc/}"
       printf '%s\n' "${pid%/environ}"

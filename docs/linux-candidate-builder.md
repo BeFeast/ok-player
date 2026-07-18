@@ -121,7 +121,9 @@ The headless output also retains `headless-launch/fit-series/run-{1,2,3}/` and
 viewable map state and geometry, maximized/fullscreen guards, explicit Fit
 dispatch, small/4K results, private XDG cache/runtime paths, clean
 GTK/MPRIS/AT-SPI registration release, and fresh session-bus startup/teardown.
-The bus supervisor also reaps any orphan that retains the isolated bus address.
+The bus supervisor runs as a Linux child subreaper, terminates and waits for
+orphaned command or D-Bus descendants, and then verifies that no process still
+retains the isolated bus address.
 Xfwm is started once and must publish ownership on
 both X roots before the player launches; starting one Xfwm process per screen is
 invalid because each process probes every screen and the two instances race for

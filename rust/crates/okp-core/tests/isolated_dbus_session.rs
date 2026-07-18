@@ -1,8 +1,8 @@
-#![cfg(unix)]
+#![cfg(target_os = "linux")]
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use okp_test_fixtures::unique_temp_dir;
 
@@ -46,7 +46,7 @@ fn command_failure_still_waits_for_session_bus_teardown() {
 }
 
 #[test]
-fn orphaned_session_child_is_terminated_before_the_next_session() {
+fn orphaned_session_child_is_reaped_before_the_next_session() {
     let root = unique_temp_dir("okp-isolated-dbus-orphan");
     let script = session_script();
     let evidence = root.path().join("orphan-evidence.txt");
@@ -54,46 +54,40 @@ fn orphaned_session_child_is_terminated_before_the_next_session() {
     let output = Command::new("bash")
         .arg(script)
         .arg(&evidence)
-        .arg("bash")
+        .arg("python3")
         .arg("-c")
-        .arg("sleep 60 </dev/null >/dev/null 2>&1 & printf '%s\\n' \"$!\" >\"$1\"")
-        .arg("bash")
+        .arg(ORPHANED_CHILD)
         .arg(&pid_file)
         .output()
         .expect("isolated session wrapper should run");
 
     assert_success(&output);
     let pid = fs::read_to_string(pid_file).expect("orphan PID should be recorded");
-    assert!(
-        !process_is_running(pid.trim()),
-        "isolated session child was not terminated"
-    );
+    let status = Command::new("kill")
+        .args(["-0", pid.trim()])
+        .stderr(Stdio::null())
+        .status()
+        .expect("process liveness probe should run");
+    assert!(!status.success(), "isolated session child was not reaped");
     assert_clean_evidence(
         &fs::read_to_string(evidence).expect("orphan evidence should be captured"),
     );
 }
 
-fn process_is_running(pid: &str) -> bool {
-    let stat_path = Path::new("/proc").join(pid).join("stat");
-    let Ok(stat) = fs::read_to_string(stat_path) else {
-        return false;
-    };
-    process_stat_is_running(&stat)
-}
+const ORPHANED_CHILD: &str = r#"
+import os
+import sys
+import time
 
-fn process_stat_is_running(stat: &str) -> bool {
-    let (_, fields) = stat
-        .rsplit_once(") ")
-        .expect("Linux process stat should contain a command delimiter");
-    !matches!(fields.chars().next(), Some('Z' | 'X'))
-}
+pid = os.fork()
+if pid == 0:
+    os.setsid()
+    time.sleep(60)
+    os._exit(0)
 
-#[test]
-fn zombie_process_stat_is_not_running() {
-    assert!(!process_stat_is_running("123 (sleep) Z 1 2 3"));
-    assert!(!process_stat_is_running("123 (odd) name) X 1 2 3"));
-    assert!(process_stat_is_running("123 (sleep) S 1 2 3"));
-}
+with open(sys.argv[1], "w", encoding="utf-8") as pid_file:
+    print(pid, file=pid_file)
+"#;
 
 fn assert_success(output: &Output) {
     assert!(
