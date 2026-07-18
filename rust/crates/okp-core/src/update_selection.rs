@@ -17,6 +17,8 @@ use std::cmp::Ordering;
 
 use serde::Deserialize;
 
+use crate::settings::{SkippedUpdateVersions, UpdateChannel};
+
 /// Name of the checksum-manifest asset every Linux release publishes; the
 /// selected update carries its URL so the shell can verify the download.
 pub const SHA256SUMS_ASSET: &str = "SHA256SUMS";
@@ -106,6 +108,126 @@ pub fn compare_versions(left: &str, right: &str) -> Ordering {
         }
     }
     left.cmp(right)
+}
+
+/// User-visible lifecycle for one discovered update. The shell retains the
+/// verified package/update-manager payload beside this portable projection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UpdateOfferPhase {
+    Available,
+    Skipped,
+    Installing,
+    InstallFailed(String),
+    Installed,
+}
+
+/// Portable update decision state shared by automatic and manual checks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpdateOfferState {
+    channel: UpdateChannel,
+    version: String,
+    phase: UpdateOfferPhase,
+}
+
+impl UpdateOfferState {
+    pub fn discovered(
+        channel: UpdateChannel,
+        version: impl Into<String>,
+        skipped_versions: &SkippedUpdateVersions,
+    ) -> Self {
+        let version = version.into();
+        let phase = if skipped_versions.is_skipped(channel, &version) {
+            UpdateOfferPhase::Skipped
+        } else {
+            UpdateOfferPhase::Available
+        };
+        Self {
+            channel,
+            version,
+            phase,
+        }
+    }
+
+    pub const fn channel(&self) -> UpdateChannel {
+        self.channel
+    }
+
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+
+    pub fn phase(&self) -> &UpdateOfferPhase {
+        &self.phase
+    }
+
+    /// Automatic prompts stay hidden for an exact skipped version. Once the
+    /// user has chosen Update, the same surface remains visible for progress
+    /// and retryable failure instead of collapsing back into a toast.
+    pub fn persistent_surface_visible(&self) -> bool {
+        matches!(
+            self.phase,
+            UpdateOfferPhase::Available
+                | UpdateOfferPhase::Installing
+                | UpdateOfferPhase::InstallFailed(_)
+        )
+    }
+
+    pub fn primary_action_label(&self) -> Option<&'static str> {
+        match self.phase {
+            UpdateOfferPhase::Available | UpdateOfferPhase::InstallFailed(_) => Some("Update"),
+            UpdateOfferPhase::Skipped => Some("Install anyway"),
+            UpdateOfferPhase::Installing => Some("Updating…"),
+            UpdateOfferPhase::Installed => None,
+        }
+    }
+
+    pub fn can_skip(&self) -> bool {
+        matches!(
+            self.phase,
+            UpdateOfferPhase::Available | UpdateOfferPhase::InstallFailed(_)
+        )
+    }
+
+    pub fn start_install(&mut self) -> bool {
+        if matches!(
+            self.phase,
+            UpdateOfferPhase::Available
+                | UpdateOfferPhase::Skipped
+                | UpdateOfferPhase::InstallFailed(_)
+        ) {
+            self.phase = UpdateOfferPhase::Installing;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn skip(&mut self) -> bool {
+        if self.can_skip() {
+            self.phase = UpdateOfferPhase::Skipped;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn install_failed(&mut self, error: impl Into<String>) -> bool {
+        if matches!(self.phase, UpdateOfferPhase::Installing) {
+            self.phase = UpdateOfferPhase::InstallFailed(error.into());
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn install_succeeded(&mut self) -> bool {
+        if matches!(self.phase, UpdateOfferPhase::Installing) {
+            self.phase = UpdateOfferPhase::Installed;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 fn version_sort_key(version: &str) -> Vec<u64> {
@@ -243,5 +365,105 @@ mod tests {
         let feed: DebFeed = serde_json::from_str(json).expect("size and sums are optional");
         assert!(feed.package.size.is_none());
         assert!(feed.sha256sums_url.is_none());
+    }
+
+    #[test]
+    fn available_update_stays_actionable_until_the_user_acts() {
+        let offer = UpdateOfferState::discovered(
+            UpdateChannel::Public,
+            "0.11.0-beta.2",
+            &SkippedUpdateVersions::default(),
+        );
+
+        assert_eq!(offer.phase(), &UpdateOfferPhase::Available);
+        assert!(offer.persistent_surface_visible());
+        assert_eq!(offer.primary_action_label(), Some("Update"));
+        assert!(offer.can_skip());
+    }
+
+    #[test]
+    fn exact_skipped_version_is_suppressed_but_manual_install_remains_available() {
+        let skipped = SkippedUpdateVersions {
+            public: Some("0.11.0-beta.2".to_owned()),
+            candidate: None,
+        };
+        let offer = UpdateOfferState::discovered(UpdateChannel::Public, "0.11.0-beta.2", &skipped);
+
+        assert_eq!(offer.phase(), &UpdateOfferPhase::Skipped);
+        assert!(!offer.persistent_surface_visible());
+        assert_eq!(offer.primary_action_label(), Some("Install anyway"));
+        assert!(!offer.can_skip());
+    }
+
+    #[test]
+    fn newer_version_is_offered_after_the_previous_version_was_skipped() {
+        let skipped = SkippedUpdateVersions {
+            public: Some("0.11.0-beta.2".to_owned()),
+            candidate: None,
+        };
+        let offer = UpdateOfferState::discovered(UpdateChannel::Public, "0.11.0-beta.3", &skipped);
+
+        assert_eq!(offer.phase(), &UpdateOfferPhase::Available);
+        assert!(offer.persistent_surface_visible());
+    }
+
+    #[test]
+    fn public_and_candidate_skip_state_remains_independent() {
+        let skipped = SkippedUpdateVersions {
+            public: Some("0.11.0-beta.2".to_owned()),
+            candidate: Some("0.11.0-beta.2.41".to_owned()),
+        };
+
+        assert!(skipped.is_skipped(UpdateChannel::Public, "0.11.0-beta.2"));
+        assert!(!skipped.is_skipped(UpdateChannel::Candidate, "0.11.0-beta.2"));
+        assert!(skipped.is_skipped(UpdateChannel::Candidate, "0.11.0-beta.2.41"));
+        assert!(!skipped.is_skipped(UpdateChannel::Public, "0.11.0-beta.2.41"));
+    }
+
+    #[test]
+    fn candidate_n_skip_does_not_suppress_candidate_n_plus_one() {
+        let skipped = SkippedUpdateVersions {
+            public: None,
+            candidate: Some("0.11.0-beta.2.41".to_owned()),
+        };
+        let offer =
+            UpdateOfferState::discovered(UpdateChannel::Candidate, "0.11.0-beta.2.42", &skipped);
+
+        assert_eq!(offer.phase(), &UpdateOfferPhase::Available);
+    }
+
+    #[test]
+    fn failed_install_keeps_the_same_version_retryable() {
+        let mut offer = UpdateOfferState::discovered(
+            UpdateChannel::Public,
+            "0.11.0-beta.2",
+            &SkippedUpdateVersions::default(),
+        );
+
+        assert!(offer.start_install());
+        assert!(offer.install_failed("network unavailable"));
+        assert_eq!(offer.version(), "0.11.0-beta.2");
+        assert_eq!(
+            offer.phase(),
+            &UpdateOfferPhase::InstallFailed("network unavailable".to_owned())
+        );
+        assert!(offer.persistent_surface_visible());
+        assert_eq!(offer.primary_action_label(), Some("Update"));
+        assert!(offer.start_install());
+    }
+
+    #[test]
+    fn successful_install_completes_the_offer() {
+        let mut offer = UpdateOfferState::discovered(
+            UpdateChannel::Public,
+            "0.11.0-beta.2",
+            &SkippedUpdateVersions::default(),
+        );
+
+        assert!(offer.start_install());
+        assert!(offer.install_succeeded());
+        assert_eq!(offer.phase(), &UpdateOfferPhase::Installed);
+        assert!(!offer.persistent_surface_visible());
+        assert_eq!(offer.primary_action_label(), None);
     }
 }

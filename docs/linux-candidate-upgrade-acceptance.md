@@ -55,6 +55,30 @@ accounted for, but it must not be recorded as a successful `.10 -> .11` lane. Ca
 first fixed build reached through the declared recovery path, and candidate N+1 is the next accepted
 build applied by that fixed updater. Keep `.10` as the regression anchor until both lanes pass.
 
+## Persistent decision-surface acceptance
+
+For candidate N → N+1 in both package lanes, record the installed GTK behavior
+on live GNOME/Wayland:
+
+1. Let an automatic check discover N+1. Record the target version and both
+   visible actions, **Update** and **Skip this version**.
+2. Leave the app untouched beyond the former toast lifetime and prove the same
+   surface remains keyboard reachable and actionable. Open Settings → Updates
+   and prove it projects the same target and actions.
+3. Choose Skip, restart the unchanged app, and prove the exact candidate remains
+   suppressed automatically. Run manual **Check for updates** and prove it says
+   the version was skipped and exposes **Install anyway**.
+4. Publish or point to a newer accepted candidate and prove it is offered normally.
+5. Exercise one failed verified-install attempt and prove the error is visible
+   while Update remains retryable for the same version; then complete the real
+   update successfully.
+6. Switch between public and candidate enrollment with distinct skipped values
+   and prove neither channel reads the other's slot.
+
+Capture keyboard focus and a screen-reader announcement for the group and both
+actions. Xvfb evidence in `docs/visuals/issue-394` is composition/state evidence
+only; it does not satisfy this installed live-desktop gate.
+
 ## Failure and recovery matrix
 
 Each ID below is mandatory in the evidence manifest:

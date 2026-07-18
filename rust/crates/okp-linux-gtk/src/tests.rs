@@ -682,6 +682,28 @@ fn settings_updates_has_one_dedicated_content_owner() {
 }
 
 #[test]
+fn update_decision_surfaces_are_shared_persistent_and_accessible() {
+    let updates = include_str!("updates.rs");
+    let window = include_str!("window.rs");
+    let dialogs = include_str!("dialogs.rs");
+
+    assert!(window.contains("persistent_update_surface("));
+    assert!(window.contains("overlay.add_overlay(&update_surface)"));
+    assert!(updates.contains("LinuxUpdateViewKind::Persistent"));
+    assert!(updates.contains("LinuxUpdateViewKind::Settings"));
+    assert!(updates.contains("refresh_linux_update_views"));
+    assert!(updates.contains("gtk::Button::with_label(\"Update\")"));
+    assert!(updates.contains("gtk::Button::with_label(\"Skip this version\")"));
+    assert!(updates.contains("\"Install anyway\""));
+    assert!(updates.contains("gtk::AccessibleRole::Group"));
+    assert!(updates.contains("gtk::accessible::Property::Label(\"Available update actions\")"));
+    assert!(updates.contains("gtk::accessible::Property::Label(\"Update OK Player\")"));
+    assert!(updates.contains("gtk::accessible::Property::Label(\"Skip this update version\")"));
+    assert!(!dialogs.contains("Update available"));
+    assert!(!updates.contains("status_toast.show(&format!(\"Update available:"));
+}
+
+#[test]
 fn media_info_preview_sample_covers_the_polished_surfaces() {
     let sample = media_info_preview_sample();
 
@@ -3573,7 +3595,7 @@ fn staged_deb_matching_manifest_is_finalized() {
 }
 
 #[test]
-fn deb_update_action_requests_install() {
+fn deb_update_exposes_the_target_version_to_the_shared_offer() {
     let update = PendingLinuxUpdate {
         manager: None,
         target: LinuxUpdateTarget::Deb(DebUpdate {
@@ -3586,27 +3608,36 @@ fn deb_update_action_requests_install() {
         }),
     };
 
-    assert_eq!(update.action_label(), "Install .deb");
-    assert_eq!(update.available_status(), "Available: 0.1.0-linux-alpha.46");
+    assert_eq!(
+        update.target_version().as_deref(),
+        Some("0.1.0-linux-alpha.46")
+    );
 }
 
 #[test]
 fn linux_update_status_reflects_last_check_result() {
-    let up_to_date = LinuxUpdateStatus::from_check_result(&LinuxUpdateCheckResult::UpToDate);
+    let skipped = SkippedUpdateVersions::default();
+    let up_to_date = LinuxUpdateStatus::from_check_result(
+        &LinuxUpdateCheckResult::UpToDate,
+        UpdateChannel::Public,
+        &skipped,
+    );
     assert_eq!(
         up_to_date.settings_status_text(true),
         "OK Player is up to date"
     );
-    assert_eq!(up_to_date.action_label(), "Check for updates");
-    assert!(up_to_date.pending_update().is_none());
+    assert!(up_to_date.pending_offer().is_none());
 
-    let managed = LinuxUpdateStatus::from_check_result(&LinuxUpdateCheckResult::ManagedExternally);
+    let managed = LinuxUpdateStatus::from_check_result(
+        &LinuxUpdateCheckResult::ManagedExternally,
+        UpdateChannel::Public,
+        &skipped,
+    );
     assert_eq!(
         managed.settings_status_text(true),
         "Updates are managed by DNF."
     );
-    assert_eq!(managed.action_label(), "Managed by DNF");
-    assert!(managed.pending_update().is_none());
+    assert!(managed.pending_offer().is_none());
 
     let update = PendingLinuxUpdate {
         manager: None,
@@ -3619,21 +3650,63 @@ fn linux_update_status_reflects_last_check_result() {
             expected_sha256: None,
         }),
     };
-    let available =
-        LinuxUpdateStatus::from_check_result(&LinuxUpdateCheckResult::Available(update));
+    let available = LinuxUpdateStatus::from_check_result(
+        &LinuxUpdateCheckResult::Available(update),
+        UpdateChannel::Public,
+        &skipped,
+    );
     assert_eq!(
         available.settings_status_text(true),
-        "Available: 0.1.0-linux-alpha.46"
+        "Version 0.1.0-linux-alpha.46 is available."
     );
-    assert_eq!(available.action_label(), "Install .deb");
-    assert!(available.pending_update().is_some());
+    let offer = available.pending_offer().expect("available update offer");
+    assert_eq!(offer.state.primary_action_label(), Some("Update"));
+    assert!(offer.state.can_skip());
 
-    let failed =
-        LinuxUpdateStatus::from_check_result(&LinuxUpdateCheckResult::Failed("no feed".into()));
+    let failed = LinuxUpdateStatus::from_check_result(
+        &LinuxUpdateCheckResult::Failed("no feed".into()),
+        UpdateChannel::Public,
+        &skipped,
+    );
     assert_eq!(
         failed.settings_status_text(true),
         "Update check failed: no feed"
     );
+}
+
+#[test]
+fn failed_manual_recheck_keeps_the_previous_update_offer() {
+    let update = PendingLinuxUpdate {
+        manager: None,
+        target: LinuxUpdateTarget::Deb(DebUpdate {
+            version: "0.11.0-beta.2".to_owned(),
+            name: "ok-player_0.11.0-beta.2_amd64.deb".to_owned(),
+            url: "https://example.invalid/update.deb".to_owned(),
+            size: Some(42),
+            sums_url: None,
+            expected_sha256: None,
+        }),
+    };
+    let available = LinuxUpdateStatus::from_check_result(
+        &LinuxUpdateCheckResult::Available(update),
+        UpdateChannel::Public,
+        &SkippedUpdateVersions::default(),
+    );
+    let previous = available.pending_offer().expect("available offer");
+    let state = Rc::new(RefCell::new(PlayerState {
+        linux_update_status: LinuxUpdateStatus::Checking(Some(previous)),
+        ..PlayerState::default()
+    }));
+
+    restore_after_failed_check(&state, "feed unavailable");
+
+    let restored = state
+        .borrow()
+        .linux_update_status
+        .pending_offer()
+        .expect("offer should survive a failed refresh");
+    assert_eq!(restored.state.version(), "0.11.0-beta.2");
+    assert_eq!(restored.state.phase(), &UpdateOfferPhase::Available);
 }
 
 #[test]

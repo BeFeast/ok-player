@@ -13,7 +13,7 @@ case "$PAGE" in
   *) echo "Unsupported Settings page: $PAGE" >&2; exit 2 ;;
 esac
 case "$UPDATE_PREVIEW" in
-  ""|up-to-date|checking|available|error) ;;
+  ""|up-to-date|checking|available|skipped|install-error|error) ;;
   *) echo "Unsupported Settings update preview: $UPDATE_PREVIEW" >&2; exit 2 ;;
 esac
 case "$COLOR_SCHEME" in
@@ -227,13 +227,13 @@ if [[ "$PAGE" == "updates" ]]; then
 
   # At the minimum supported 760px width, height can contract and both the rail
   # and content remain independently scrollable.
-  xdotool windowsize --sync "$settings_id" 760 360
+  xdotool windowsize --sync "$settings_id" 760 480
   sleep 1
   xwininfo -id "$settings_id" >"$OUT_DIR/settings-minimum.xwininfo"
   import -window "$settings_id" "$OUT_DIR/settings-minimum.png"
   min_width="$(awk '/Width:/ { print $2; exit }' "$OUT_DIR/settings-minimum.xwininfo")"
   min_height="$(awk '/Height:/ { print $2; exit }' "$OUT_DIR/settings-minimum.xwininfo")"
-  if [[ "$min_width" != "760" || "$min_height" != "360" ]]; then
+  if [[ "$min_width" != "760" || "$min_height" != "480" ]]; then
     echo "Unexpected minimum Settings geometry: ${min_width}x${min_height}" >&2
     exit 1
   fi

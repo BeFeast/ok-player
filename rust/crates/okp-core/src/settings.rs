@@ -268,6 +268,11 @@ pub struct UpdateSettings {
     /// existing install is silently moved off the public feed.
     #[serde(default)]
     pub channel: UpdateChannel,
+    /// Exact versions the user skipped, isolated by discovery channel. A skip
+    /// suppresses only the matching version; a newer version is offered
+    /// normally. Empty channel entries stay out of the human-readable JSON.
+    #[serde(default, skip_serializing_if = "SkippedUpdateVersions::is_empty")]
+    pub skipped_versions: SkippedUpdateVersions,
 }
 
 impl Default for UpdateSettings {
@@ -275,7 +280,42 @@ impl Default for UpdateSettings {
         Self {
             auto_check: default_auto_check(),
             channel: UpdateChannel::default(),
+            skipped_versions: SkippedUpdateVersions::default(),
         }
+    }
+}
+
+/// Per-channel exact-version update suppression. Public and rolling candidate
+/// installs never share a skip slot.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SkippedUpdateVersions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate: Option<String>,
+}
+
+impl SkippedUpdateVersions {
+    pub fn version(&self, channel: UpdateChannel) -> Option<&str> {
+        match channel {
+            UpdateChannel::Public => self.public.as_deref(),
+            UpdateChannel::Candidate => self.candidate.as_deref(),
+        }
+    }
+
+    pub fn set(&mut self, channel: UpdateChannel, version: Option<String>) {
+        match channel {
+            UpdateChannel::Public => self.public = version,
+            UpdateChannel::Candidate => self.candidate = version,
+        }
+    }
+
+    pub fn is_skipped(&self, channel: UpdateChannel, version: &str) -> bool {
+        self.version(channel) == Some(version)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.public.is_none() && self.candidate.is_none()
     }
 }
 
@@ -419,6 +459,7 @@ impl WindowsSettings {
                 auto_check: self.auto_check_updates.unwrap_or_else(default_auto_check),
                 // Windows has no candidate channel; migrated installs stay public.
                 channel: UpdateChannel::Public,
+                skipped_versions: SkippedUpdateVersions::default(),
             },
             advanced: AdvancedSettings::default(),
             screenshots: ScreenshotSettings::default(),
@@ -480,6 +521,63 @@ mod tests {
             serde_json::from_str(r#"{"auto_check":true,"channel":"candidate"}"#)
                 .expect("channel round-trips");
         assert_eq!(enrolled.channel, UpdateChannel::Candidate);
+    }
+
+    #[test]
+    fn skipped_update_versions_round_trip_per_channel() {
+        let mut settings = Settings::default();
+        settings
+            .updates
+            .skipped_versions
+            .set(UpdateChannel::Public, Some("0.11.0-beta.2".to_owned()));
+        settings.updates.skipped_versions.set(
+            UpdateChannel::Candidate,
+            Some("0.11.0-beta.2.41".to_owned()),
+        );
+
+        let json = serde_json::to_string_pretty(&settings).expect("settings should serialize");
+        let loaded = Settings::load(&json).expect("settings should reload");
+
+        assert_eq!(
+            loaded
+                .updates
+                .skipped_versions
+                .version(UpdateChannel::Public),
+            Some("0.11.0-beta.2")
+        );
+        assert_eq!(
+            loaded
+                .updates
+                .skipped_versions
+                .version(UpdateChannel::Candidate),
+            Some("0.11.0-beta.2.41")
+        );
+    }
+
+    #[test]
+    fn older_settings_without_skip_state_load_with_empty_channel_slots() {
+        let settings = Settings::load(
+            r#"{
+                "version": 2,
+                "updates": { "auto_check": true, "channel": "candidate" }
+            }"#,
+        )
+        .expect("older canonical settings should load");
+
+        assert!(
+            settings
+                .updates
+                .skipped_versions
+                .version(UpdateChannel::Public)
+                .is_none()
+        );
+        assert!(
+            settings
+                .updates
+                .skipped_versions
+                .version(UpdateChannel::Candidate)
+                .is_none()
+        );
     }
 
     #[test]

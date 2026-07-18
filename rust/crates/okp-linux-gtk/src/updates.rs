@@ -155,6 +155,169 @@ pub(crate) fn text_buffer_string(buffer: &gtk::TextBuffer) -> String {
         .to_string()
 }
 
+pub(crate) fn persistent_update_surface(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let surface =
+        build_update_action_surface(LinuxUpdateViewKind::Persistent, state, status_toast, None);
+    surface.add_css_class("okp-persistent-update");
+    surface.set_halign(gtk::Align::Center);
+    surface.set_valign(gtk::Align::Start);
+    surface.set_margin_top(58);
+    surface.set_margin_start(24);
+    surface.set_margin_end(24);
+    surface
+}
+
+fn build_update_action_surface(
+    kind: LinuxUpdateViewKind,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+    check: Option<&gtk::Button>,
+) -> gtk::Box {
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    root.add_css_class("okp-update-action-surface");
+    root.set_accessible_role(gtk::AccessibleRole::Group);
+    root.update_property(&[gtk::accessible::Property::Label("Available update actions")]);
+
+    let copy = gtk::Box::new(gtk::Orientation::Vertical, 3);
+    copy.set_hexpand(true);
+    let title = gtk::Label::new(Some("Update status"));
+    title.add_css_class("okp-update-action-title");
+    title.set_xalign(0.0);
+    let status = gtk::Label::new(None);
+    status.add_css_class("okp-update-action-detail");
+    status.set_xalign(0.0);
+    status.set_width_chars(1);
+    status.set_max_width_chars(if kind == LinuxUpdateViewKind::Persistent {
+        52
+    } else {
+        44
+    });
+    status.set_wrap(true);
+    copy.append(&title);
+    copy.append(&status);
+    root.append(&copy);
+
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    actions.set_halign(gtk::Align::End);
+    actions.set_valign(gtk::Align::Center);
+
+    let skip = gtk::Button::with_label("Skip this version");
+    skip.add_css_class("okp-settings-button");
+    skip.update_property(&[gtk::accessible::Property::Label("Skip this update version")]);
+    let skip_state = Rc::clone(&state);
+    let skip_toast = Rc::clone(&status_toast);
+    skip.connect_clicked(move |_| skip_current_update(&skip_state, &skip_toast));
+    actions.append(&skip);
+
+    let primary = gtk::Button::with_label("Update");
+    primary.add_css_class("okp-update-primary-button");
+    primary.update_property(&[gtk::accessible::Property::Label("Update OK Player")]);
+    let primary_state = Rc::clone(&state);
+    let primary_toast = Rc::clone(&status_toast);
+    primary.connect_clicked(move |_| {
+        start_update_download(Rc::clone(&primary_state), Rc::clone(&primary_toast));
+    });
+    actions.append(&primary);
+    root.append(&actions);
+
+    let root_widget = root.clone().upcast::<gtk::Widget>();
+    state.borrow_mut().linux_update_views.push(LinuxUpdateView {
+        kind,
+        root: root_widget.downgrade(),
+        title: title.downgrade(),
+        status: status.downgrade(),
+        primary: primary.downgrade(),
+        skip: skip.downgrade(),
+        check: check.map(|button| button.downgrade()),
+    });
+    refresh_linux_update_views(&state);
+    root
+}
+
+pub(crate) fn refresh_linux_update_views(state: &Rc<RefCell<PlayerState>>) {
+    let (update_status, auto_check_enabled) = {
+        let state = state.borrow();
+        (
+            state.linux_update_status.clone(),
+            state.settings.auto_check_updates(),
+        )
+    };
+    let offer = update_status.pending_offer();
+    let status_text = update_status.settings_status_text(auto_check_enabled);
+    let checking = matches!(update_status, LinuxUpdateStatus::Checking(_));
+
+    state.borrow_mut().linux_update_views.retain(|view| {
+        let Some(root) = view.root.upgrade() else {
+            return false;
+        };
+        let Some(title) = view.title.upgrade() else {
+            return false;
+        };
+        let Some(status) = view.status.upgrade() else {
+            return false;
+        };
+        let Some(primary) = view.primary.upgrade() else {
+            return false;
+        };
+        let Some(skip) = view.skip.upgrade() else {
+            return false;
+        };
+
+        let persistent_visible = offer
+            .as_ref()
+            .is_some_and(|offer| offer.state.persistent_surface_visible());
+        root.set_visible(view.kind == LinuxUpdateViewKind::Settings || persistent_visible);
+        title.set_text(
+            offer
+                .as_ref()
+                .map(LinuxUpdateOffer::title_text)
+                .as_deref()
+                .unwrap_or("Update status"),
+        );
+        status.set_text(&status_text);
+
+        let primary_label = offer
+            .as_ref()
+            .and_then(|offer| offer.state.primary_action_label());
+        primary.set_visible(primary_label.is_some());
+        if let Some(label) = primary_label {
+            primary.set_label(label);
+            primary.set_sensitive(
+                !checking
+                    && !matches!(
+                        offer.as_ref().map(|offer| offer.state.phase()),
+                        Some(UpdateOfferPhase::Installing)
+                    ),
+            );
+            primary.update_property(&[gtk::accessible::Property::Label(
+                if label == "Install anyway" {
+                    "Install the skipped update anyway"
+                } else {
+                    "Update OK Player"
+                },
+            )]);
+        }
+
+        let can_skip = offer.as_ref().is_some_and(|offer| offer.state.can_skip());
+        skip.set_visible(can_skip);
+        skip.set_sensitive(can_skip && !checking);
+
+        if let Some(check) = view.check.as_ref().and_then(glib::WeakRef::upgrade) {
+            let managed = matches!(update_status, LinuxUpdateStatus::ManagedExternally);
+            check.set_label(if managed {
+                "Managed by DNF"
+            } else {
+                "Check for updates"
+            });
+            check.set_sensitive(!managed && !checking);
+        }
+        true
+    });
+}
+
 pub(crate) fn settings_updates_section(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
@@ -191,19 +354,7 @@ pub(crate) fn settings_updates_section(
     row.add_css_class("okp-settings-row");
 
     let auto_check_enabled = state.borrow().settings.auto_check_updates();
-    let preview_status = settings_update_preview_status();
-    let initial_update_status = preview_status
-        .clone()
-        .unwrap_or_else(|| state.borrow().linux_update_status.clone());
-    let status = gtk::Label::new(Some(
-        &initial_update_status.settings_status_text(auto_check_enabled),
-    ));
-    status.add_css_class("okp-update-status");
-    status.set_xalign(0.0);
-    status.set_width_chars(1);
-    status.set_max_width_chars(58);
-    status.set_wrap(true);
-    row.append(&status);
+    let initial_update_status = state.borrow().linux_update_status.clone();
 
     let auto_row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     auto_row.add_css_class("okp-settings-switch-row");
@@ -214,7 +365,7 @@ pub(crate) fn settings_updates_section(
     auto_label.set_xalign(0.0);
     auto_text.append(&auto_label);
     let auto_detail = gtk::Label::new(Some(
-        "Check the linux pre-release feed on startup and show a toast when an update is ready.",
+        "Check the selected Linux feed on startup and keep available updates actionable until you choose.",
     ));
     auto_detail.add_css_class("okp-update-status");
     auto_detail.set_xalign(0.0);
@@ -232,7 +383,6 @@ pub(crate) fn settings_updates_section(
     let auto_switch = about_toggle_button(auto_check_enabled);
     let auto_state = Rc::clone(&state);
     let auto_toast = Rc::clone(&status_toast);
-    let auto_status = status.clone();
     let auto_state_text = auto_state_label.clone();
     auto_switch.connect_clicked(move |button| {
         let enabled = !button.has_css_class("is-active");
@@ -245,8 +395,8 @@ pub(crate) fn settings_updates_section(
                 auto_toast.show("Could not save update setting");
             }
         }
-        auto_status.set_text(update_status_intro(enabled));
         auto_state_text.set_text(if enabled { "On" } else { "Off" });
+        refresh_linux_update_views(&auto_state);
         auto_toast.show(if enabled {
             "Automatic update checks on"
         } else {
@@ -259,60 +409,19 @@ pub(crate) fn settings_updates_section(
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     actions.set_halign(gtk::Align::End);
 
-    let pending_update = Rc::new(RefCell::new(initial_update_status.pending_update()));
-
-    let check_button = gtk::Button::with_label(&initial_update_status.action_label());
+    let check_button = gtk::Button::with_label("Check for updates");
     check_button.add_css_class("okp-settings-button");
-    check_button.set_sensitive(!matches!(
-        initial_update_status,
-        LinuxUpdateStatus::Checking
-    ));
-    let check_status = status.clone();
-    let check_pending = Rc::clone(&pending_update);
     let check_state = Rc::clone(&state);
     let check_toast = Rc::clone(&status_toast);
-    check_button.connect_clicked(move |button| {
-        if let Some(update) = check_pending.borrow().clone() {
-            start_update_download(
-                button,
-                &check_status,
-                update,
-                Rc::clone(&check_state),
-                Rc::clone(&check_toast),
-            );
-            return;
-        }
-
-        start_update_check_for_ui(
-            button,
-            &check_status,
-            &check_pending,
-            Rc::clone(&check_state),
-            Rc::clone(&check_toast),
-            "Checking the update feed...",
-            true,
-        );
+    check_button.connect_clicked(move |_| {
+        start_update_check_for_ui(Rc::clone(&check_state), Rc::clone(&check_toast), true);
     });
     actions.append(&check_button);
-    if preview_status.is_none()
-        && auto_check_enabled
-        && matches!(initial_update_status, LinuxUpdateStatus::NotChecked)
-    {
-        let auto_button = check_button.clone();
-        let auto_status = status.clone();
-        let auto_pending = Rc::clone(&pending_update);
+    if auto_check_enabled && matches!(initial_update_status, LinuxUpdateStatus::NotChecked) {
         let auto_state = Rc::clone(&state);
         let auto_toast = Rc::clone(&status_toast);
         glib::idle_add_local_once(move || {
-            start_update_check_for_ui(
-                &auto_button,
-                &auto_status,
-                &auto_pending,
-                auto_state,
-                auto_toast,
-                "Checking the update feed...",
-                false,
-            );
+            start_update_check_for_ui(auto_state, auto_toast, false);
         });
     }
 
@@ -323,13 +432,21 @@ pub(crate) fn settings_updates_section(
     });
     actions.append(&releases_button);
 
+    row.append(&build_update_action_surface(
+        LinuxUpdateViewKind::Settings,
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+        Some(&check_button),
+    ));
     row.append(&actions);
     section.append(&row);
 
     section
 }
 
-pub(crate) fn settings_update_preview_status() -> Option<LinuxUpdateStatus> {
+pub(crate) fn linux_update_preview_status(
+    persisted_skips: &SkippedUpdateVersions,
+) -> Option<LinuxUpdateStatus> {
     match env::var("OKP_SETTINGS_UPDATE_PREVIEW")
         .ok()?
         .trim()
@@ -337,19 +454,63 @@ pub(crate) fn settings_update_preview_status() -> Option<LinuxUpdateStatus> {
         .as_str()
     {
         "up-to-date" => Some(LinuxUpdateStatus::UpToDate),
-        "checking" => Some(LinuxUpdateStatus::Checking),
-        "available" => Some(LinuxUpdateStatus::Available(PendingLinuxUpdate {
-            manager: None,
-            target: LinuxUpdateTarget::Deb(DebUpdate {
-                version: "0.11.0-beta.2".to_owned(),
-                name: "ok-player_0.11.0-beta.2_amd64.deb".to_owned(),
-                url: "https://example.invalid/ok-player.deb".to_owned(),
-                size: Some(42),
-                sums_url: None,
-                expected_sha256: None,
-            }),
-        })),
+        "checking" => Some(LinuxUpdateStatus::Checking(None)),
+        "available" => Some(preview_update_offer(persisted_skips.clone(), false)),
+        "skipped" => {
+            let mut skipped = persisted_skips.clone();
+            skipped.set(UpdateChannel::Public, Some("0.11.0-beta.2".to_owned()));
+            Some(preview_update_offer(skipped, false))
+        }
+        "install-error" => Some(preview_update_offer(persisted_skips.clone(), true)),
         "error" => Some(LinuxUpdateStatus::Failed(
+            "the update feed is temporarily unavailable".to_owned(),
+        )),
+        _ => None,
+    }
+}
+
+fn preview_update_offer(
+    skipped_versions: SkippedUpdateVersions,
+    install_error: bool,
+) -> LinuxUpdateStatus {
+    let result = LinuxUpdateCheckResult::Available(preview_pending_update());
+    let mut status =
+        LinuxUpdateStatus::from_check_result(&result, UpdateChannel::Public, &skipped_versions);
+    if install_error && let LinuxUpdateStatus::Offer(offer) = &mut status {
+        offer.state.start_install();
+        offer
+            .state
+            .install_failed("the package download was interrupted");
+    }
+    status
+}
+
+fn preview_pending_update() -> PendingLinuxUpdate {
+    PendingLinuxUpdate {
+        manager: None,
+        target: LinuxUpdateTarget::Deb(DebUpdate {
+            version: "0.11.0-beta.2".to_owned(),
+            name: "ok-player_0.11.0-beta.2_amd64.deb".to_owned(),
+            url: "https://example.invalid/ok-player.deb".to_owned(),
+            size: Some(42),
+            sums_url: None,
+            expected_sha256: None,
+        }),
+    }
+}
+
+fn linux_update_preview_check_result() -> Option<LinuxUpdateCheckResult> {
+    match env::var("OKP_SETTINGS_UPDATE_PREVIEW")
+        .ok()?
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "up-to-date" => Some(LinuxUpdateCheckResult::UpToDate),
+        "available" | "skipped" | "install-error" => {
+            Some(LinuxUpdateCheckResult::Available(preview_pending_update()))
+        }
+        "error" => Some(LinuxUpdateCheckResult::Failed(
             "the update feed is temporarily unavailable".to_owned(),
         )),
         _ => None,
@@ -365,50 +526,36 @@ pub(crate) fn update_status_intro(auto_check_enabled: bool) -> &'static str {
 }
 
 pub(crate) fn start_update_check_for_ui(
-    button: &gtk::Button,
-    status: &gtk::Label,
-    pending: &Rc<RefCell<Option<PendingLinuxUpdate>>>,
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
-    checking_status: &str,
     show_toast: bool,
 ) {
-    button.set_sensitive(false);
-    button.set_label("Checking...");
-    status.set_text(checking_status);
-    pending.borrow_mut().take();
-    state.borrow_mut().linux_update_status = LinuxUpdateStatus::Checking;
+    let previous = state.borrow().linux_update_status.pending_offer();
+    state.borrow_mut().linux_update_status = LinuxUpdateStatus::Checking(previous);
+    refresh_linux_update_views(&state);
 
-    let channel = state.borrow().settings.update_channel();
+    let channel = effective_update_channel(state.borrow().settings.update_channel());
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         let _ = sender.send(check_for_linux_update(channel));
     });
 
-    let button = button.clone();
-    let status = status.clone();
-    let pending = Rc::clone(pending);
     glib::timeout_add_local(Duration::from_millis(120), move || {
         match receiver.try_recv() {
             Ok(result) => {
                 apply_update_check_result(
-                    &button,
-                    &status,
-                    &pending,
                     Rc::clone(&state),
                     &status_toast,
                     show_toast,
+                    channel,
                     result,
                 );
                 glib::ControlFlow::Break
             }
             Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
             Err(mpsc::TryRecvError::Disconnected) => {
-                button.set_sensitive(true);
-                button.set_label("Check for updates");
-                status.set_text("Update check failed");
-                state.borrow_mut().linux_update_status =
-                    LinuxUpdateStatus::Failed("update check channel closed".to_owned());
+                restore_after_failed_check(&state, "update check channel closed");
+                refresh_linux_update_views(&state);
                 glib::ControlFlow::Break
             }
         }
@@ -416,110 +563,172 @@ pub(crate) fn start_update_check_for_ui(
 }
 
 pub(crate) fn start_update_download(
-    button: &gtk::Button,
-    status: &gtk::Label,
-    update: PendingLinuxUpdate,
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) {
+    let update = {
+        let mut state = state.borrow_mut();
+        let LinuxUpdateStatus::Offer(offer) = &mut state.linux_update_status else {
+            return;
+        };
+        if !offer.state.start_install() {
+            return;
+        }
+        offer.completion_message = None;
+        offer.update.clone()
+    };
     save_current_progress(&state, false);
-    button.set_sensitive(false);
-    button.set_label("Downloading...");
-    status.set_text(&format!(
-        "Downloading {}...",
-        update
-            .target_version()
-            .unwrap_or_else(|| "update".to_owned())
-    ));
-    status_toast.show("Downloading update");
+    refresh_linux_update_views(&state);
 
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         let _ = sender.send(download_and_apply_linux_update(update));
     });
 
-    let button = button.clone();
-    let status = status.clone();
     let toast = Rc::clone(&status_toast);
     glib::timeout_add_local(Duration::from_millis(150), move || {
         match receiver.try_recv() {
             Ok(Ok(LinuxUpdateApplyResult::Restarting)) => {
-                button.set_label("Restarting...");
-                status.set_text("Restarting to apply update...");
+                finish_update_install(&state, "Restarting to apply the update…".to_owned());
                 glib::ControlFlow::Break
             }
             Ok(Ok(LinuxUpdateApplyResult::DebInstalled(_path))) => {
-                button.set_sensitive(true);
-                button.set_label("Check for updates");
-                status.set_text("Installed. Restart OK Player to finish.");
+                finish_update_install(&state, "Installed. Restart OK Player to finish.".to_owned());
                 toast.show("Update installed");
                 glib::ControlFlow::Break
             }
             Ok(Ok(LinuxUpdateApplyResult::InstallerOpened(_path))) => {
-                button.set_sensitive(true);
-                button.set_label("Check for updates");
-                status.set_text("Installer opened. Complete it to update.");
+                finish_update_install(
+                    &state,
+                    "Installer opened. Complete it to update.".to_owned(),
+                );
                 toast.show("Installer opened");
                 glib::ControlFlow::Break
             }
             Ok(Err(error)) => {
-                button.set_sensitive(true);
-                button.set_label("Check for updates");
-                status.set_text(&format!("Update failed: {error}"));
-                toast.show("Update failed");
+                fail_update_install(&state, error);
                 glib::ControlFlow::Break
             }
             Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
             Err(mpsc::TryRecvError::Disconnected) => {
-                button.set_sensitive(true);
-                button.set_label("Check for updates");
-                status.set_text("Update failed.");
+                fail_update_install(&state, "update worker channel closed".to_owned());
                 glib::ControlFlow::Break
             }
         }
     });
 }
 
+pub(crate) fn restore_after_failed_check(state: &Rc<RefCell<PlayerState>>, error: &str) {
+    let previous = match &state.borrow().linux_update_status {
+        LinuxUpdateStatus::Checking(offer) => offer.clone(),
+        _ => None,
+    };
+    state.borrow_mut().linux_update_status = previous
+        .map(LinuxUpdateStatus::Offer)
+        .unwrap_or_else(|| LinuxUpdateStatus::Failed(error.to_owned()));
+}
+
+fn finish_update_install(state: &Rc<RefCell<PlayerState>>, message: String) {
+    if let LinuxUpdateStatus::Offer(offer) = &mut state.borrow_mut().linux_update_status {
+        offer.state.install_succeeded();
+        offer.completion_message = Some(message);
+    }
+    refresh_linux_update_views(state);
+}
+
+fn fail_update_install(state: &Rc<RefCell<PlayerState>>, error: String) {
+    if let LinuxUpdateStatus::Offer(offer) = &mut state.borrow_mut().linux_update_status {
+        offer.state.install_failed(error);
+    }
+    refresh_linux_update_views(state);
+}
+
+fn skip_current_update(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
+    let (channel, version) = {
+        let state = state.borrow();
+        let LinuxUpdateStatus::Offer(offer) = &state.linux_update_status else {
+            return;
+        };
+        if !offer.state.can_skip() {
+            return;
+        }
+        (offer.state.channel(), offer.state.version().to_owned())
+    };
+
+    let save_result = {
+        let mut state = state.borrow_mut();
+        let previous = state
+            .settings
+            .skipped_update_version(channel)
+            .map(str::to_owned);
+        state
+            .settings
+            .set_skipped_update_version(channel, Some(version.clone()));
+        match state.settings.save() {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                state.settings.set_skipped_update_version(channel, previous);
+                Err(error)
+            }
+        }
+    };
+    if let Err(error) = save_result {
+        eprintln!("Failed to save skipped update version: {error}");
+        status_toast.show("Could not save skipped version");
+        return;
+    }
+
+    if let LinuxUpdateStatus::Offer(offer) = &mut state.borrow_mut().linux_update_status {
+        offer.state.skip();
+    }
+    refresh_linux_update_views(state);
+    status_toast.show(&format!("Skipped version {version}"));
+}
+
 pub(crate) fn apply_update_check_result(
-    button: &gtk::Button,
-    status: &gtk::Label,
-    pending: &Rc<RefCell<Option<PendingLinuxUpdate>>>,
     state: Rc<RefCell<PlayerState>>,
     status_toast: &StatusToast,
     show_toast: bool,
+    channel: UpdateChannel,
     result: LinuxUpdateCheckResult,
 ) {
-    state.borrow_mut().linux_update_status = LinuxUpdateStatus::from_check_result(&result);
-    button.set_sensitive(true);
-    match result {
+    let previous_offer = match &state.borrow().linux_update_status {
+        LinuxUpdateStatus::Checking(offer) => offer.clone(),
+        _ => None,
+    };
+    let status = {
+        let state = state.borrow();
+        match (&result, previous_offer) {
+            (LinuxUpdateCheckResult::Failed(_), Some(offer)) => LinuxUpdateStatus::Offer(offer),
+            _ => LinuxUpdateStatus::from_check_result(
+                &result,
+                channel,
+                state.settings.skipped_update_versions(),
+            ),
+        }
+    };
+    state.borrow_mut().linux_update_status = status.clone();
+    refresh_linux_update_views(&state);
+    match &result {
         LinuxUpdateCheckResult::UpToDate => {
-            pending.borrow_mut().take();
-            button.set_label("Check for updates");
-            status.set_text("Up to date");
             if show_toast {
                 status_toast.show("OK Player is up to date");
             }
         }
-        LinuxUpdateCheckResult::ManagedExternally => {
-            pending.borrow_mut().take();
-            button.set_label("Managed by DNF");
-            button.set_sensitive(false);
-            status.set_text("Updates are managed by DNF.");
-        }
-        LinuxUpdateCheckResult::Available(update) => {
-            let status_text = update.available_status();
-            let action_label = update.action_label();
-            pending.borrow_mut().replace(update);
-            button.set_label(action_label);
-            status.set_text(&status_text);
+        LinuxUpdateCheckResult::ManagedExternally => {}
+        LinuxUpdateCheckResult::Available(_) => {
             if show_toast {
-                status_toast.show("Update available");
+                match status {
+                    LinuxUpdateStatus::Offer(offer)
+                        if matches!(offer.state.phase(), UpdateOfferPhase::Skipped) =>
+                    {
+                        status_toast.show("This version was skipped");
+                    }
+                    _ => status_toast.show("Update available"),
+                }
             }
         }
-        LinuxUpdateCheckResult::Failed(error) => {
-            pending.borrow_mut().take();
-            button.set_label("Check for updates");
-            status.set_text(&format!("Update check failed: {error}"));
+        LinuxUpdateCheckResult::Failed(_) => {
             if show_toast {
                 status_toast.show("Update check failed");
             }
@@ -531,7 +740,9 @@ pub(crate) fn check_updates_on_startup(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) {
-    let channel = state.borrow().settings.update_channel();
+    state.borrow_mut().linux_update_status = LinuxUpdateStatus::Checking(None);
+    refresh_linux_update_views(&state);
+    let channel = effective_update_channel(state.borrow().settings.update_channel());
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         let _ = sender.send(check_for_linux_update(channel));
@@ -540,20 +751,17 @@ pub(crate) fn check_updates_on_startup(
     glib::timeout_add_local(Duration::from_millis(500), move || {
         match receiver.try_recv() {
             Ok(result) => {
-                state.borrow_mut().linux_update_status =
-                    LinuxUpdateStatus::from_check_result(&result);
-                match result {
-                    LinuxUpdateCheckResult::Available(update) => {
-                        let version = update
-                            .target_version()
-                            .unwrap_or_else(|| "new version".to_owned());
-                        status_toast.show(&format!("Update available: {version}"));
+                apply_update_check_result(Rc::clone(&state), &status_toast, false, channel, result);
+                match &state.borrow().linux_update_status {
+                    LinuxUpdateStatus::Offer(offer)
+                        if matches!(offer.state.phase(), UpdateOfferPhase::Available) =>
+                    {
+                        eprintln!("Update available: {}", offer.state.version());
                     }
-                    LinuxUpdateCheckResult::Failed(error) => {
+                    LinuxUpdateStatus::Failed(error) => {
                         eprintln!("Startup update check failed: {error}");
                     }
-                    LinuxUpdateCheckResult::UpToDate
-                    | LinuxUpdateCheckResult::ManagedExternally => {}
+                    _ => {}
                 }
                 glib::ControlFlow::Break
             }
@@ -564,6 +772,9 @@ pub(crate) fn check_updates_on_startup(
 }
 
 pub(crate) fn check_for_linux_update(channel: UpdateChannel) -> LinuxUpdateCheckResult {
+    if let Some(preview) = linux_update_preview_check_result() {
+        return preview;
+    }
     let install_lane = linux_install_lane();
     if install_lane == CandidateInstallLane::SystemPackage {
         return LinuxUpdateCheckResult::ManagedExternally;
