@@ -39,6 +39,7 @@ pub mod presentation_evidence;
 pub mod progress_report;
 pub mod project_health;
 pub mod recents_shelf;
+pub mod release_preparation;
 pub mod screenshot;
 pub mod seek_readout;
 pub mod settings;
