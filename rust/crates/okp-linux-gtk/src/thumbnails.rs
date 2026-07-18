@@ -466,15 +466,11 @@ impl PosterShelf {
     }
 
     /// Fill each row's `poster_path` from the cache and, unless the session is private, kick
-    /// off bounded generation for any still missing. A private session exposes no posters and
-    /// writes none: the requirement is that private-session viewing leaves no poster trace.
+    /// off bounded generation for any still missing. Private sessions keep existing history
+    /// fully readable but never generate a new poster trace.
     fn project(&self, items: &mut [HistoryItem], private_session: bool) {
         for item in items.iter_mut() {
-            item.poster_path = if private_session {
-                None
-            } else {
-                self.resolve(item)
-            };
+            item.poster_path = self.resolve(item, !private_session);
         }
     }
 
@@ -482,7 +478,7 @@ impl PosterShelf {
     /// generation when it does not. Returns `None` (an honest placeholder) for anything that
     /// is not a present local video, and for a file whose durable sentinel says it has no
     /// usable frame — without ever re-deriving it.
-    fn resolve(&self, item: &HistoryItem) -> Option<String> {
+    fn resolve(&self, item: &HistoryItem, allow_generation: bool) -> Option<String> {
         // Deterministic render hook for the visual smokes: a poster placed by file stem in
         // OKP_POSTER_FIXTURE_DIR is used verbatim, so the render/projection path can be proven
         // without invoking a decoder. Never enqueues generation.
@@ -520,12 +516,14 @@ impl PosterShelf {
             return None; // durably no usable frame — keep the placeholder, never re-derive
         }
 
-        self.enqueue(PosterJob {
-            media_path: PathBuf::from(&item.path),
-            duration: item.duration,
-            poster,
-            sentinel,
-        });
+        if allow_generation {
+            self.enqueue(PosterJob {
+                media_path: PathBuf::from(&item.path),
+                duration: item.duration,
+                poster,
+                sentinel,
+            });
+        }
         None
     }
 
@@ -892,14 +890,28 @@ mod tests {
     }
 
     #[test]
-    fn a_private_session_exposes_and_generates_no_posters() {
+    fn a_private_session_exposes_cached_posters_without_generating_new_ones() {
         let dir = unique_dir("private");
         let media = dir.join("movie.mkv");
         touch(&media, b"fake video bytes");
-        // Even a poster already on disk stays hidden while the session is private.
-        touch(&dir.join(format!("{}.jpg", key_for(&media))), b"jpeg");
+        let poster = dir.join(format!("{}.jpg", key_for(&media)));
+        touch(&poster, b"jpeg");
 
         let (shelf, processed) = recording_shelf(dir.clone());
+        let mut items = vec![video_item(&media.to_string_lossy(), 600.0)];
+        shelf.project(&mut items, true);
+
+        assert_eq!(items[0].poster_path.as_deref(), poster.to_str());
+        assert!(processed.recv_timeout(Duration::from_millis(100)).is_err());
+    }
+
+    #[test]
+    fn a_private_session_does_not_generate_a_missing_poster() {
+        let dir = unique_dir("private-missing");
+        let media = dir.join("movie.mkv");
+        touch(&media, b"fake video bytes");
+
+        let (shelf, processed) = recording_shelf(dir);
         let mut items = vec![video_item(&media.to_string_lossy(), 600.0)];
         shelf.project(&mut items, true);
 

@@ -1941,7 +1941,7 @@ pub(crate) fn settings_private_session_row(
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     row.add_css_class("okp-settings-row");
 
-    let label = gtk::Label::new(Some("Private Session"));
+    let label = gtk::Label::new(Some("Private session"));
     label.add_css_class("okp-info-label");
     label.set_xalign(0.0);
     label.set_hexpand(true);
@@ -1960,6 +1960,71 @@ pub(crate) fn settings_private_session_row(
     row
 }
 
+pub(crate) fn settings_history_retention_row(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row.add_css_class("okp-settings-row");
+
+    let label = gtk::Label::new(Some("Keep history for"));
+    label.add_css_class("okp-info-label");
+    label.set_xalign(0.0);
+    label.set_hexpand(true);
+    row.append(&label);
+
+    let labels = HistoryRetention::ALL.map(HistoryRetention::label);
+    let dropdown = gtk::DropDown::from_strings(&labels);
+    dropdown.add_css_class("okp-history-retention");
+    dropdown.update_property(&[gtk::accessible::Property::Label("Keep history for")]);
+    let selected = HistoryRetention::ALL
+        .iter()
+        .position(|retention| *retention == state.borrow().settings.history_retention())
+        .unwrap_or_default();
+    dropdown.set_selected(selected as u32);
+    dropdown.connect_selected_notify(move |dropdown| {
+        let Some(retention) = HistoryRetention::ALL
+            .get(dropdown.selected() as usize)
+            .copied()
+        else {
+            return;
+        };
+
+        let result = {
+            let mut state = state.borrow_mut();
+            state.settings.set_history_retention(retention);
+            state
+                .settings
+                .save()
+                .map_err(|error| ("settings", error))
+                .and_then(|()| {
+                    state
+                        .history
+                        .prune_older_than_persisted(retention.days())
+                        .map_err(|error| ("history", error))
+                })
+        };
+
+        match result {
+            Ok(removed) if removed > 0 => status_toast.show(&format!(
+                "Retention updated — removed {removed} older item{}",
+                if removed == 1 { "" } else { "s" }
+            )),
+            Ok(_) if retention == HistoryRetention::Forever => {
+                status_toast.show("History kept forever")
+            }
+            Ok(_) => status_toast.show("History retention updated"),
+            Err((kind, error)) => {
+                eprintln!("Failed to save {kind} retention state: {error}");
+                status_toast.show("Could not update history retention");
+            }
+        }
+    });
+    row.append(&dropdown);
+
+    row
+}
+
 pub(crate) fn settings_clear_history_row(
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
@@ -1968,13 +2033,13 @@ pub(crate) fn settings_clear_history_row(
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     row.add_css_class("okp-settings-row");
 
-    let label = gtk::Label::new(Some("History"));
+    let label = gtk::Label::new(Some("Watch history"));
     label.add_css_class("okp-info-label");
     label.set_xalign(0.0);
     label.set_hexpand(true);
     row.append(&label);
 
-    let button = gtk::Button::with_label("Clear...");
+    let button = gtk::Button::with_label("Clear watch history...");
     button.add_css_class("okp-settings-button");
     let parent = parent.clone();
     button.connect_clicked(move |_| {

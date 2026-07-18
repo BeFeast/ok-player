@@ -129,7 +129,20 @@ impl SettingsPageBuilder {
                 page.append(&settings_integration_section(Rc::clone(&self.status_toast)));
 
                 let privacy = settings_section("Privacy");
+                let detail = gtk::Label::new(Some(
+                    "OK Player remembers what you watched so it can resume and show Continue Watching. Private sessions pause new recording; existing history stays readable.",
+                ));
+                detail.add_css_class("okp-update-status");
+                detail.set_xalign(0.0);
+                detail.set_width_chars(1);
+                detail.set_max_width_chars(58);
+                detail.set_wrap(true);
+                privacy.append(&detail);
                 privacy.append(&settings_private_session_row(
+                    Rc::clone(&self.state),
+                    Rc::clone(&self.status_toast),
+                ));
+                privacy.append(&settings_history_retention_row(
                     Rc::clone(&self.state),
                     Rc::clone(&self.status_toast),
                 ));

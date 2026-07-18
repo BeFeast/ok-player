@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use okp_core::history::Preferences as PlaybackPreferences;
-use okp_core::history::{FileEntry as HistoryRecord, History as HistoryFile};
+use okp_core::history::{
+    History as HistoryFile, HistoryProgressUpdate, HistoryWriteMode, HistoryWriteResult,
+};
 use okp_core::nfo_metadata::HistoryTitleUpdate;
 use okp_core::recents_shelf::{HistoryItem, WelcomeShelf};
 
@@ -75,6 +77,7 @@ impl HistoryStore {
             position,
             duration,
             finished,
+            false,
             HistoryTitleUpdate::Preserve,
         );
     }
@@ -85,41 +88,25 @@ impl HistoryStore {
         position: f64,
         duration: f64,
         finished: bool,
+        private_session: bool,
         title_update: HistoryTitleUpdate,
     ) {
-        if !duration.is_finite() || duration <= 0.0 || !position.is_finite() {
-            return;
-        }
-
         let key = history_key(path);
-        let complete_at = completion_start(duration);
-        let final_stretch = position >= complete_at;
-        let stored_position = if finished || final_stretch {
-            0.0
-        } else {
-            position.clamp(0.0, duration)
-        };
-
-        // Mutate the existing record in place so the progress fields refresh while every
-        // other field carries through: the stored `preferences` as before, plus the
-        // shared-schema extras (`bookmarks`, `chapters`, `title`, `poster_path`). Before
-        // bookmarks existed this used `..HistoryRecord::default()`, which was harmless
-        // only because Linux never wrote those extras; now that a bookmark lives here, a
-        // progress save must not wipe it.
-        let mut record = self.data.files.remove(&key).unwrap_or_default();
-        let existing_finished = record.finished;
-        record.position = stored_position;
-        record.duration = duration;
-        record.finished = finished || (existing_finished && final_stretch);
-        record.updated_at_unix = unix_now();
-        match title_update {
-            HistoryTitleUpdate::Preserve => {}
-            HistoryTitleUpdate::Clear => record.title = None,
-            HistoryTitleUpdate::Set(title) => record.title = Some(title),
+        let result = self.data.record_progress(
+            &key,
+            HistoryProgressUpdate {
+                position,
+                duration,
+                finished,
+                updated_at_unix: unix_now(),
+                title: title_update,
+            },
+            HistoryWriteMode::from_private(private_session),
+        );
+        if result == HistoryWriteResult::Changed {
+            self.listable_paths.insert(key);
+            self.dirty = true;
         }
-        self.listable_paths.insert(key.clone());
-        self.data.files.insert(key, record);
-        self.dirty = true;
     }
 
     /// The user's saved position bookmarks for `path`, sorted (empty when none). Read by
@@ -132,73 +119,75 @@ impl HistoryStore {
             .unwrap_or_default()
     }
 
-    /// Add a bookmark at `time` for `path`, deduping and sorting through
-    /// [`okp_core::bookmarks::add`]. Returns `true` when a mark was added, `false` when
-    /// one already sits at that spot (or the time is unusable).
-    pub fn add_bookmark(&mut self, path: &Path, time: f64) -> bool {
+    /// Add a bookmark at `time` for `path`, with shared-core dedupe and
+    /// private-session gating.
+    pub fn add_bookmark(
+        &mut self,
+        path: &Path,
+        time: f64,
+        private_session: bool,
+    ) -> HistoryWriteResult {
         let key = history_key(path);
-        let mut record = self
-            .data
-            .files
-            .remove(&key)
-            .unwrap_or_else(new_history_record);
-        let added = okp_core::bookmarks::add(&mut record.bookmarks, time);
-        if added {
-            record.updated_at_unix = unix_now();
-            self.listable_paths.insert(key.clone());
+        let result = self.data.add_bookmark(
+            &key,
+            time,
+            unix_now(),
+            HistoryWriteMode::from_private(private_session),
+        );
+        if result == HistoryWriteResult::Changed {
+            self.listable_paths.insert(key);
             self.dirty = true;
         }
-        self.data.files.insert(key, record);
-        added
+        result
     }
 
     /// Remove the bookmark nearest `time` for `path` (via [`okp_core::bookmarks::remove`]).
     /// Returns `true` when a mark was dropped.
     pub fn remove_bookmark(&mut self, path: &Path, time: f64) -> bool {
         let key = history_key(path);
-        let Some(mut record) = self.data.files.remove(&key) else {
-            return false;
-        };
-        let removed = okp_core::bookmarks::remove(&mut record.bookmarks, time);
+        let removed = self.data.remove_bookmark(&key, time);
         if removed {
-            record.updated_at_unix = unix_now();
             self.dirty = true;
         }
-        self.data.files.insert(key, record);
         removed
     }
 
     /// Add a bookmark at `time` for `path` and persist it in the same step, undoing the
     /// in-memory mark if the write fails. This keeps memory and the file on disk in
-    /// lock-step: a caller that reports "bookmarked" only after `Ok(true)` can never
-    /// advertise a mark that a crash-on-exit would silently lose. `Ok(false)` means a
-    /// mark already sat there (no write attempted); `Err` means the save failed and the
-    /// store was left exactly as it was found.
-    pub fn add_bookmark_persisted(&mut self, path: &Path, time: f64) -> io::Result<bool> {
-        if !self.add_bookmark(path, time) {
-            return Ok(false);
+    /// lock-step: a caller that reports "bookmarked" only after `Changed` can never
+    /// advertise a mark that a crash-on-exit would silently lose. `Unchanged` means a
+    /// mark already sat there, `Suppressed` means the private session gated it, and `Err`
+    /// means the save failed with the store restored exactly as it was found.
+    pub fn add_bookmark_persisted(
+        &mut self,
+        path: &Path,
+        time: f64,
+        private_session: bool,
+    ) -> io::Result<HistoryWriteResult> {
+        let before = self.snapshot();
+        let result = self.add_bookmark(path, time, private_session);
+        if result != HistoryWriteResult::Changed {
+            return Ok(result);
         }
         if let Err(error) = self.save() {
-            // The mark we just added is the only one within the remove window (an add
-            // only succeeds when nothing sits within the wider dedupe window), so this
-            // drops exactly it and restores the pre-add set.
-            self.remove_bookmark(path, time);
+            self.restore(before);
             return Err(error);
         }
-        Ok(true)
+        Ok(result)
     }
 
-    /// Remove the bookmark nearest `time` for `path` and persist the removal, re-adding
-    /// the mark if the write fails. Without the rollback a failed save would drop the
+    /// Remove the bookmark nearest `time` for `path` and persist the removal, restoring
+    /// the prior store if the write fails. Without the rollback a failed save would drop the
     /// mark only in memory while it survives on disk, so it would reappear on the next
     /// launch. `Ok(false)` means nothing matched (no write attempted); `Err` means the
     /// save failed and the mark was put back.
     pub fn remove_bookmark_persisted(&mut self, path: &Path, time: f64) -> io::Result<bool> {
+        let before = self.snapshot();
         if !self.remove_bookmark(path, time) {
             return Ok(false);
         }
         if let Err(error) = self.save() {
-            self.add_bookmark(path, time);
+            self.restore(before);
             return Err(error);
         }
         Ok(true)
@@ -219,22 +208,23 @@ impl HistoryStore {
         Some(record.position)
     }
 
-    pub fn record_preferences(&mut self, path: &Path, preferences: PlaybackPreferences) {
-        if preferences.is_empty() {
-            return;
-        }
-
+    pub fn record_preferences(
+        &mut self,
+        path: &Path,
+        preferences: PlaybackPreferences,
+        private_session: bool,
+    ) {
         let key = history_key(path);
-        let mut record = self
-            .data
-            .files
-            .remove(&key)
-            .unwrap_or_else(new_history_record);
-        record.preferences.merge(preferences);
-        record.updated_at_unix = unix_now();
-        self.listable_paths.insert(key.clone());
-        self.data.files.insert(key, record);
-        self.dirty = true;
+        let result = self.data.record_preferences(
+            &key,
+            preferences,
+            unix_now(),
+            HistoryWriteMode::from_private(private_session),
+        );
+        if result == HistoryWriteResult::Changed {
+            self.listable_paths.insert(key);
+            self.dirty = true;
+        }
     }
 
     pub fn playback_preferences(&self, path: &Path) -> Option<PlaybackPreferences> {
@@ -245,9 +235,10 @@ impl HistoryStore {
             .filter(|preferences| !preferences.is_empty())
     }
 
-    /// Privacy-aware, ranked model for the idle Continue Watching shelf.
-    pub fn welcome_shelf(&self, private_session: bool, limit: usize) -> WelcomeShelf {
-        okp_core::recents_shelf::select_where(&self.data, private_session, limit, |path| {
+    /// Ranked model for the idle Continue Watching shelf. Private sessions gate
+    /// writes only; existing records remain readable.
+    pub fn welcome_shelf(&self, limit: usize) -> WelcomeShelf {
+        okp_core::recents_shelf::select_where(&self.data, limit, |path| {
             self.listable_paths.contains(path)
         })
     }
@@ -262,11 +253,37 @@ impl HistoryStore {
     pub fn clear(&mut self) {
         self.cleared = true;
         self.read_failed = false;
-        if !self.data.files.is_empty() {
-            self.data.files.clear();
+        if self.data.clear() > 0 {
             self.listable_paths.clear();
             self.dirty = true;
         }
+    }
+
+    pub fn clear_persisted(&mut self) -> io::Result<usize> {
+        let before = self.snapshot();
+        let removed = self.data.files.len();
+        self.clear();
+        if let Err(error) = self.save() {
+            self.restore(before);
+            return Err(error);
+        }
+        Ok(removed)
+    }
+
+    pub fn prune_older_than_persisted(&mut self, days: i64) -> io::Result<usize> {
+        let before = self.snapshot();
+        let removed = self.data.prune_older_than(unix_now(), days);
+        if removed == 0 {
+            return Ok(0);
+        }
+        self.listable_paths
+            .retain(|path| self.data.files.contains_key(path));
+        self.dirty = true;
+        if let Err(error) = self.save() {
+            self.restore(before);
+            return Err(error);
+        }
+        Ok(removed)
     }
 
     pub fn save(&mut self) -> io::Result<()> {
@@ -286,15 +303,32 @@ impl HistoryStore {
         self.read_failed = false;
         Ok(())
     }
+
+    fn snapshot(&self) -> HistoryStoreSnapshot {
+        HistoryStoreSnapshot {
+            data: self.data.clone(),
+            listable_paths: self.listable_paths.clone(),
+            dirty: self.dirty,
+            read_failed: self.read_failed,
+            cleared: self.cleared,
+        }
+    }
+
+    fn restore(&mut self, snapshot: HistoryStoreSnapshot) {
+        self.data = snapshot.data;
+        self.listable_paths = snapshot.listable_paths;
+        self.dirty = snapshot.dirty;
+        self.read_failed = snapshot.read_failed;
+        self.cleared = snapshot.cleared;
+    }
 }
 
-/// A fresh record stamped with the current time — the starting point when preferences
-/// are recorded for a file that has no progress entry yet.
-fn new_history_record() -> HistoryRecord {
-    HistoryRecord {
-        updated_at_unix: unix_now(),
-        ..HistoryRecord::default()
-    }
+struct HistoryStoreSnapshot {
+    data: HistoryFile,
+    listable_paths: BTreeSet<String>,
+    dirty: bool,
+    read_failed: bool,
+    cleared: bool,
 }
 
 pub fn completion_start(duration: f64) -> f64 {
@@ -412,6 +446,7 @@ mod tests {
                 subtitle_delay: Some(0.25),
                 ..PlaybackPreferences::default()
             },
+            false,
         );
         history.record(path, 120.0, 600.0, false);
 
@@ -436,17 +471,25 @@ mod tests {
             120.0,
             600.0,
             false,
+            false,
             HistoryTitleUpdate::Set("Curated Movie Title".to_owned()),
         );
         assert_eq!(history.search("")[0].title, "Curated Movie Title");
 
         // A save while the next read is still pending preserves the last known title.
-        history.record_with_title(path, 130.0, 600.0, false, HistoryTitleUpdate::Preserve);
+        history.record_with_title(
+            path,
+            130.0,
+            600.0,
+            false,
+            false,
+            HistoryTitleUpdate::Preserve,
+        );
         assert_eq!(history.search("")[0].title, "Curated Movie Title");
 
         // Once discovery completes with no usable sidecar, recents return to the
         // existing filename-stem fallback instead of retaining stale metadata.
-        history.record_with_title(path, 140.0, 600.0, false, HistoryTitleUpdate::Clear);
+        history.record_with_title(path, 140.0, 600.0, false, false, HistoryTitleUpdate::Clear);
         assert_eq!(history.search("")[0].title, "Movie");
     }
 
@@ -466,6 +509,7 @@ mod tests {
                 speed: Some(0.75),
                 ..PlaybackPreferences::default()
             },
+            false,
         );
         history.record_preferences(
             path,
@@ -474,6 +518,7 @@ mod tests {
                 subtitle_scale: Some(1.2),
                 ..PlaybackPreferences::default()
             },
+            false,
         );
 
         assert_eq!(
@@ -514,6 +559,7 @@ mod tests {
                 video_geometry: Some(geometry),
                 ..PlaybackPreferences::default()
             },
+            false,
         );
         history.record(path, 120.0, 600.0, false);
 
@@ -530,10 +576,19 @@ mod tests {
         let mut history = store();
         let path = Path::new("/media/movie.mkv");
 
-        assert!(history.add_bookmark(path, 100.0));
-        assert!(history.add_bookmark(path, 10.0));
+        assert_eq!(
+            history.add_bookmark(path, 100.0, false),
+            HistoryWriteResult::Changed
+        );
+        assert_eq!(
+            history.add_bookmark(path, 10.0, false),
+            HistoryWriteResult::Changed
+        );
         // A near-duplicate within half a second is refused.
-        assert!(!history.add_bookmark(path, 100.2));
+        assert_eq!(
+            history.add_bookmark(path, 100.2, false),
+            HistoryWriteResult::Unchanged
+        );
         assert_eq!(history.bookmarks(path), vec![10.0, 100.0]);
 
         assert!(history.remove_bookmark(path, 10.0));
@@ -547,7 +602,7 @@ mod tests {
         let path = Path::new("/media/movie.mkv");
 
         let error = history
-            .add_bookmark_persisted(path, 42.0)
+            .add_bookmark_persisted(path, 42.0, false)
             .expect_err("save must fail on an unwritable path");
         assert!(!error.to_string().is_empty());
         // The mark must not linger in memory once the write that would have persisted it
@@ -560,7 +615,10 @@ mod tests {
         let mut history = unwritable_store();
         let path = Path::new("/media/movie.mkv");
         // Seed a mark directly (no save) so we can exercise the failing removal.
-        assert!(history.add_bookmark(path, 42.0));
+        assert_eq!(
+            history.add_bookmark(path, 42.0, false),
+            HistoryWriteResult::Changed
+        );
 
         history
             .remove_bookmark_persisted(path, 42.0)
@@ -574,11 +632,17 @@ mod tests {
     fn persisted_bookmark_helpers_skip_the_save_when_nothing_changes() {
         let mut history = unwritable_store();
         let path = Path::new("/media/movie.mkv");
-        assert!(history.add_bookmark(path, 42.0));
+        assert_eq!(
+            history.add_bookmark(path, 42.0, false),
+            HistoryWriteResult::Changed
+        );
 
         // A duplicate add and a no-match remove change nothing, so no save is attempted
         // and the unwritable path is never reached.
-        assert_eq!(history.add_bookmark_persisted(path, 42.2).ok(), Some(false));
+        assert_eq!(
+            history.add_bookmark_persisted(path, 42.2, false).ok(),
+            Some(HistoryWriteResult::Unchanged)
+        );
         assert_eq!(
             history.remove_bookmark_persisted(path, 900.0).ok(),
             Some(false)
@@ -591,7 +655,7 @@ mod tests {
         let mut history = store();
         let path = Path::new("/media/movie.mkv");
 
-        history.add_bookmark(path, 42.0);
+        history.add_bookmark(path, 42.0, false);
         // A progress save must not wipe the bookmark the way the old
         // `..HistoryRecord::default()` reset did.
         history.record(path, 120.0, 600.0, false);
@@ -601,7 +665,7 @@ mod tests {
     }
 
     #[test]
-    fn clear_removes_progress_and_preferences() {
+    fn clear_removes_open_file_progress_preferences_bookmarks_and_chapters() {
         let mut history = store();
         let path = Path::new("/media/movie.mkv");
 
@@ -612,14 +676,69 @@ mod tests {
                 speed: Some(1.25),
                 ..PlaybackPreferences::default()
             },
+            false,
         );
+        assert_eq!(
+            history.add_bookmark(path, 42.0, false),
+            HistoryWriteResult::Changed
+        );
+        history
+            .data
+            .files
+            .get_mut(&history_key(path))
+            .expect("current file entry")
+            .chapters
+            .push(okp_core::history::ChapterMark {
+                time: 75.0,
+                title: "Scene".to_owned(),
+            });
         history.clear();
 
         assert_eq!(history.resume_position(path), None);
         assert_eq!(history.playback_preferences(path), None);
+        assert!(history.bookmarks(path).is_empty());
+        assert!(!history.data.files.contains_key(&history_key(path)));
         assert!(history.dirty);
         assert!(history.was_cleared());
         assert!(!history.read_failed());
+    }
+
+    #[test]
+    fn persisted_clear_rolls_back_all_open_file_state_when_the_save_fails() {
+        let mut history = unwritable_store();
+        let path = Path::new("/media/movie.mkv");
+        history.record(path, 120.0, 600.0, false);
+        assert_eq!(
+            history.add_bookmark(path, 42.0, false),
+            HistoryWriteResult::Changed
+        );
+
+        history
+            .clear_persisted()
+            .expect_err("save must fail on an unwritable path");
+
+        assert_eq!(history.resume_position(path), Some(120.0));
+        assert_eq!(history.bookmarks(path), vec![42.0]);
+        assert!(!history.was_cleared());
+    }
+
+    #[test]
+    fn persisted_retention_rolls_back_when_the_save_fails() {
+        let mut history = unwritable_store();
+        let path = Path::new("/media/old.mkv");
+        history.record(path, 120.0, 600.0, false);
+        history
+            .data
+            .files
+            .get_mut(&history_key(path))
+            .expect("old entry")
+            .updated_at_unix = 1;
+
+        history
+            .prune_older_than_persisted(7)
+            .expect_err("save must fail on an unwritable path");
+
+        assert_eq!(history.resume_position(path), Some(120.0));
     }
 
     #[test]

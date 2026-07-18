@@ -6,6 +6,8 @@
 //! deriveState, the bucket table and the master "when" strings) exactly, with invariant
 //! weekday/month names so the English UI never localizes to "вт"/"июн".
 
+use crate::settings::HistoryRetention;
+
 /// Which day-group a history row falls into. Rows are bucketed by how long ago the file was
 /// last opened, then shown under a header ([`bucket_header`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,6 +197,25 @@ pub fn folder_label(path: &str) -> String {
     dirs[dirs.len() - take..].join(" › ")
 }
 
+/// Read-only retention echo for the History canvas. Management remains in
+/// Settings; this copy simply reflects the persisted shared setting.
+pub fn retention_summary(retention: HistoryRetention) -> String {
+    match retention {
+        HistoryRetention::Forever => "Everything you’ve opened · kept forever".to_owned(),
+        retention => format!(
+            "Everything you’ve opened · keeping last {}",
+            retention.label()
+        ),
+    }
+}
+
+pub fn retention_end_cap(retention: HistoryRetention) -> String {
+    match retention {
+        HistoryRetention::Forever => "End of history · kept forever".to_owned(),
+        retention => format!("End of history · keeping last {}", retention.label()),
+    }
+}
+
 /// A two-character segment ending in ':' — a bare drive root like "C:".
 fn is_bare_drive(segment: &str) -> bool {
     let mut chars = segment.chars();
@@ -346,5 +367,25 @@ mod tests {
         for (path, expected) in cases {
             assert_eq!(folder_label(path), expected, "{path}");
         }
+    }
+
+    #[test]
+    fn retention_summary_matches_the_history_design_copy() {
+        assert_eq!(
+            retention_summary(HistoryRetention::Forever),
+            "Everything you’ve opened · kept forever"
+        );
+        assert_eq!(
+            retention_summary(HistoryRetention::Days90),
+            "Everything you’ve opened · keeping last 90 days"
+        );
+        assert_eq!(
+            retention_end_cap(HistoryRetention::Forever),
+            "End of history · kept forever"
+        );
+        assert_eq!(
+            retention_end_cap(HistoryRetention::Days365),
+            "End of history · keeping last 365 days"
+        );
     }
 }

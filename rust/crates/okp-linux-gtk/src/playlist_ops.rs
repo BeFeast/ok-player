@@ -931,9 +931,6 @@ fn save_current_preferences_impl(
 ) {
     let snapshot = {
         let state = state.borrow();
-        if state.private_session {
-            return;
-        }
         let Some(path) = state.current_file.clone() else {
             return;
         };
@@ -947,12 +944,14 @@ fn save_current_preferences_impl(
             audio_delay_override,
         );
 
-        (path, preferences)
+        (path, preferences, state.private_session)
     };
 
-    let (path, preferences) = snapshot;
+    let (path, preferences, private_session) = snapshot;
     let mut state = state.borrow_mut();
-    state.history.record_preferences(&path, preferences);
+    state
+        .history
+        .record_preferences(&path, preferences, private_session);
     if let Err(error) = state.history.save() {
         eprintln!("Failed to save playback preferences: {error}");
     }
@@ -962,15 +961,12 @@ pub(crate) fn save_current_video_geometry(
     state: &Rc<RefCell<PlayerState>>,
     geometry: VideoGeometry,
 ) {
-    let path = {
+    let (path, private_session) = {
         let state = state.borrow();
-        if state.private_session {
-            return;
-        }
         let Some(path) = state.current_file.clone() else {
             return;
         };
-        path
+        (path, state.private_session)
     };
 
     let mut state = state.borrow_mut();
@@ -980,6 +976,7 @@ pub(crate) fn save_current_video_geometry(
             video_geometry: Some(geometry.normalized()),
             ..history::PlaybackPreferences::default()
         },
+        private_session,
     );
     if let Err(error) = state.history.save() {
         eprintln!("Failed to save video geometry: {error}");
@@ -1066,13 +1063,11 @@ pub(crate) fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: 
         let Some(playback) = state.mpv.as_ref().map(|mpv| mpv.observed_playback_state()) else {
             return;
         };
-        let preferences = (!state.private_session).then(|| {
-            state
-                .mpv
-                .as_ref()
-                .map(read_current_playback_preferences)
-                .unwrap_or_default()
-        });
+        let preferences = state
+            .mpv
+            .as_ref()
+            .map(read_current_playback_preferences)
+            .unwrap_or_default();
 
         (
             state.private_session,
@@ -1095,20 +1090,19 @@ pub(crate) fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: 
     }
 
     let mut state = state.borrow_mut();
-    if !private_session {
-        state.history.record_with_title(
-            &path,
-            position.clamp(0.0, duration),
-            duration,
-            finished,
-            title_update,
-        );
-        state
-            .history
-            .record_preferences(&path, preferences.unwrap_or_default());
-        if let Err(error) = state.history.save() {
-            eprintln!("Failed to save history: {error}");
-        }
+    state.history.record_with_title(
+        &path,
+        position.clamp(0.0, duration),
+        duration,
+        finished,
+        private_session,
+        title_update,
+    );
+    state
+        .history
+        .record_preferences(&path, preferences, private_session);
+    if let Err(error) = state.history.save() {
+        eprintln!("Failed to save history: {error}");
     }
     state.progress_reporter.observe(
         private_session,

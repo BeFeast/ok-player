@@ -549,9 +549,7 @@ pub(crate) fn add_bookmark_at_position(
 ) {
     let result: Result<f64, &'static str> = {
         let mut state = state.borrow_mut();
-        if state.private_session {
-            Err("Private session — bookmark not saved")
-        } else if let Some(path) = state.current_file.clone() {
+        if let Some(path) = state.current_file.clone() {
             let position = state
                 .mpv
                 .as_ref()
@@ -560,14 +558,25 @@ pub(crate) fn add_bookmark_at_position(
                 .filter(|time| time.is_finite() && *time >= 0.0);
             match position {
                 None => Err("Open media first"),
-                Some(position) => match state.history.add_bookmark_persisted(&path, position) {
-                    Ok(true) => Ok(position),
-                    Ok(false) => Err("Bookmark already here"),
-                    Err(error) => {
-                        eprintln!("Failed to save bookmark: {error}");
-                        Err("Couldn't save bookmark")
+                Some(position) => {
+                    let private_session = state.private_session;
+                    match state
+                        .history
+                        .add_bookmark_persisted(&path, position, private_session)
+                    {
+                        Ok(okp_core::history::HistoryWriteResult::Changed) => Ok(position),
+                        Ok(okp_core::history::HistoryWriteResult::Unchanged) => {
+                            Err("Bookmark already here")
+                        }
+                        Ok(okp_core::history::HistoryWriteResult::Suppressed) => {
+                            Err("Private session — bookmark not saved")
+                        }
+                        Err(error) => {
+                            eprintln!("Failed to save bookmark: {error}");
+                            Err("Couldn't save bookmark")
+                        }
                     }
-                },
+                }
             }
         } else {
             Err("Bookmarks need a local file")
@@ -951,7 +960,7 @@ pub(crate) fn toggle_private_session(state: &Rc<RefCell<PlayerState>>, status_to
     };
 
     status_toast.show(if enabled {
-        "Private session on"
+        "Private session on — not saving history"
     } else {
         "Private session off"
     });
@@ -959,11 +968,19 @@ pub(crate) fn toggle_private_session(state: &Rc<RefCell<PlayerState>>, status_to
 
 pub(crate) fn clear_history(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
     let mut state = state.borrow_mut();
-    state.history.clear();
-    state.pending_resume = None;
-    state.pending_preferences = None;
-    match state.history.save() {
-        Ok(()) => status_toast.show("History cleared"),
+    match state.history.clear_persisted() {
+        Ok(removed) => {
+            // The side panel and History/Continue Watching surfaces read directly from
+            // this store on their next UI poll. Clearing the pending restore state keeps
+            // the currently open file from re-applying data that no longer exists.
+            state.pending_resume = None;
+            state.pending_preferences = None;
+            status_toast.show(if removed == 0 {
+                "History was already empty"
+            } else {
+                "Watch history cleared"
+            });
+        }
         Err(error) => {
             eprintln!("Failed to clear history: {error}");
             status_toast.show("Could not clear history");

@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 
 use okp_core::gapless::{GaplessPlaybackCapability, effective_gapless_enabled};
 use okp_core::settings::{
-    AppearanceTheme, ScreenshotFormat, Settings, SkippedUpdateVersions, UpdateChannel,
+    AppearanceTheme, HistoryRetention, ScreenshotFormat, Settings, SkippedUpdateVersions,
+    UpdateChannel,
 };
 use okp_core::subtitle_style::{self, SubtitleStyle};
 
@@ -207,6 +208,10 @@ impl SettingsStore {
         let directory = self.data.screenshots.directory.as_deref()?.trim();
         let path = PathBuf::from(directory);
         path.is_absolute().then_some(path)
+    }
+
+    pub fn history_retention(&self) -> HistoryRetention {
+        HistoryRetention::from_days(self.data.privacy.history_retention_days)
     }
 
     pub fn set_volume(&mut self, volume: f64) {
@@ -420,6 +425,13 @@ impl SettingsStore {
         true
     }
 
+    pub fn set_history_retention(&mut self, retention: HistoryRetention) {
+        if self.history_retention() != retention {
+            self.data.privacy.history_retention_days = Some(retention.days());
+            self.dirty = true;
+        }
+    }
+
     pub fn save(&mut self) -> io::Result<()> {
         if !self.dirty {
             return Ok(());
@@ -597,6 +609,44 @@ mod tests {
         settings.set_appearance_theme(AppearanceTheme::Light);
         assert_eq!(settings.appearance_theme(), AppearanceTheme::Light);
         assert!(settings.dirty);
+    }
+
+    #[test]
+    fn history_retention_defaults_to_forever_and_marks_changes_dirty_once() {
+        let mut settings = store();
+        assert_eq!(settings.history_retention(), HistoryRetention::Forever);
+
+        settings.set_history_retention(HistoryRetention::Days30);
+        assert_eq!(settings.history_retention(), HistoryRetention::Days30);
+        assert_eq!(settings.data.privacy.history_retention_days, Some(30));
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_history_retention(HistoryRetention::Days30);
+        assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn history_retention_saves_as_human_readable_json_and_reloads() {
+        let dir = unique_temp_dir("okp-history-retention-settings");
+        let path = dir.path().join("settings.json");
+        let mut settings = SettingsStore {
+            path: path.clone(),
+            data: Settings::default(),
+            dirty: false,
+        };
+
+        settings.set_history_retention(HistoryRetention::Days365);
+        settings.save().expect("retention setting should save");
+
+        let json = fs::read_to_string(&path).expect("settings should be readable");
+        assert!(json.contains("\"history_retention_days\": 365"));
+        let reloaded = Settings::load(&json).expect("settings should reload");
+        assert_eq!(
+            HistoryRetention::from_days(reloaded.privacy.history_retention_days),
+            HistoryRetention::Days365
+        );
+        dir.close().expect("temp settings dir should be removed");
     }
 
     #[test]

@@ -4105,6 +4105,23 @@ const OKP_STYLESHEET: &str = "
             background: #f8fafb;
         }
 
+        dropdown.okp-history-retention button {
+            min-width: 132px;
+            min-height: 32px;
+            padding: 0 10px;
+            border-radius: 7px;
+            background: #ffffff;
+            border: 1px solid rgba(0, 0, 0, 0.06);
+            box-shadow: none;
+            color: @okp_ink;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12px;
+        }
+
+        dropdown.okp-history-retention button:hover {
+            background: #f8fafb;
+        }
+
         button.okp-screenshot-format-button {
             min-width: 62px;
         }
@@ -4444,13 +4461,15 @@ const OKP_STYLESHEET: &str = "
         window.okp-settings-window.is-dark .okp-mpv-conf-scroller,
         window.okp-settings-window.is-dark textview.okp-mpv-conf-editor,
         window.okp-settings-window.is-dark textview.okp-mpv-conf-editor text,
-        window.okp-settings-window.is-dark .okp-settings-button {
+        window.okp-settings-window.is-dark .okp-settings-button,
+        window.okp-settings-window.is-dark dropdown.okp-history-retention button {
             background: rgba(255, 255, 255, 0.05);
             border-color: rgba(255, 255, 255, 0.07);
             color: rgba(255, 255, 255, 0.90);
         }
 
         window.okp-settings-window.is-dark .okp-settings-button:hover,
+        window.okp-settings-window.is-dark dropdown.okp-history-retention button:hover,
         window.okp-settings-window.is-dark button.okp-settings-track-row:hover,
         window.okp-settings-window.is-dark button.okp-shortcut-chip:hover,
         window.okp-settings-window.is-dark .okp-about-copy-button:hover {
@@ -4517,7 +4536,8 @@ const OKP_STYLESHEET: &str = "
         window.okp-settings-window.is-high-contrast .okp-info-section,
         window.okp-settings-window.is-high-contrast .okp-settings-switch-row,
         window.okp-settings-window.is-high-contrast .okp-update-action-surface,
-        window.okp-settings-window.is-high-contrast .okp-settings-button {
+        window.okp-settings-window.is-high-contrast .okp-settings-button,
+        window.okp-settings-window.is-high-contrast dropdown.okp-history-retention button {
             background: #000000;
             border-color: #ffffff;
             color: #ffffff;

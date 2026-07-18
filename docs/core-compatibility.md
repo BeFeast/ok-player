@@ -485,10 +485,11 @@ untouched by this work; the Windows migration is exercised only by the Rust gold
 - **Linux-only vs Windows-only fields coexist.** The picture adjustments
   (`video.brightness`/`contrast`/`saturation`/`gamma`), `playback.auto_advance`, `repeat`, and
   `shuffle` are Linux-only; `playback.gapless` is a shared reserved preference that shells must
-  capability-gate before applying; the `subtitles`, `appearance`, and `privacy` sections are
-  Windows-only today. Each shell reads the subset it understands and carries the rest through
-  untouched on save, so the shared schema grows without either side dropping the other's state.
-  The three Windows-only sections are `skip_serializing_if`-empty, so a Linux document never writes them.
+  capability-gate before applying. `subtitles` and `appearance` still carry fields one shell may
+  not expose, while `privacy.history_retention_days` is now read and written by both desktop
+  tracks. Each shell reads the subset it understands and carries the rest through untouched on
+  save, so the shared schema grows without either side dropping the other's state. Empty optional
+  sections remain omitted from a default Linux document.
 
 ### History field map (Windows → canonical)
 
@@ -538,6 +539,20 @@ untouched by this work; the Windows migration is exercised only by the Rust gold
 - **Path keys are carried verbatim.** History is keyed by the raw media path string on both
   platforms (Windows preserves backslashes and original case). Migration does not rewrite keys;
   a cross-platform consumer normalizes case at lookup time (the same note as `Playlist`).
+- **Retention and private-session mutation policy are now shared behavior.**
+  `History::prune_older_than` ports the Windows `HistoryService.PruneOlderThan` cases: a zero or
+  negative window keeps everything, records strictly older than the cutoff are removed, records
+  inside the window remain, and an absent/unparseable timestamp (canonical `0`) is preserved.
+  `HistoryWriteMode` gates progress, playback-preference, and bookmark creation in private mode;
+  existing records remain readable and explicit deletions (`clear`, bookmark removal) remain
+  available. The core tests cover those Windows privacy/retention cases, while the GTK store owns
+  atomic JSON IO and rolls an in-memory clear/prune back if persistence fails.
+- **Poster and titled-user-chapter authoring remain the documented Linux gap.** Windows also gates
+  `SetPoster` and `AddUserChapter` in private mode. Linux does not persist poster paths or author
+  titled `UserChapters`: it derives posters into a cache and currently exposes position bookmarks
+  only. The GTK projection therefore keeps cached posters readable in private mode but schedules no
+  new poster generation, and there is no Linux user-chapter writer to gate. The existing schema
+  fields still round-trip untouched for future parity.
 
 ## Player state machine + command/event contract → `okp_core::player` (new C-ABI seam)
 

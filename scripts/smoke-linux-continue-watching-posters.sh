@@ -185,12 +185,52 @@ import -window "$wid" "$OUT_DIR/history.png"
 "$IDLE_OSC_ASSERT" "$OUT_DIR/history.png" "History"
 # The centered History column stacks the three row thumbnails at x≈402 and
 # y≈197..341. It must carry saturated colour, not the near-grey placeholder.
-history_sat="$(magick "$OUT_DIR/history.png" -crop 64x160+402+190 +repage \
+history_sat="$(magick "$OUT_DIR/history.png" -crop 64x160+202+190 +repage \
   -colorspace HSL -channel G -separate -format '%[fx:mean]' info:)"
 awk -v s="$history_sat" 'BEGIN {
   printf "history thumbnail column saturation: %.3f\n", s
   if (!(s > 0.10)) { print "History rows show placeholders, not cached posters" > "/dev/stderr"; exit 1 }
 }'
+
+# ---- Private session: existing recents stay readable, writes stay frozen ----
+history_before="$(sha256sum "$XDG_STATE_HOME/ok-player/history.json" | awk '{print $1}')"
+kill "$app_pid" 2>/dev/null || true
+wait "$app_pid" 2>/dev/null || true
+app_pid=""
+
+launch OKP_PRIVATE_SESSION_ON_STARTUP=1
+sleep 4
+wid="$(window_id || true)"
+if [[ -z "$wid" ]]; then
+  echo "private-session main window did not appear" >&2
+  cat "$OUT_DIR/app.log" >&2 || true
+  exit 1
+fi
+import -window "$wid" "$OUT_DIR/private-continue-watching.png"
+"$IDLE_OSC_ASSERT" "$OUT_DIR/private-continue-watching.png" "Private Continue Watching"
+assert_dominant "$OUT_DIR/private-continue-watching.png" "140x60+235+160" r "private card-1 Crimson"
+assert_dominant "$OUT_DIR/private-continue-watching.png" "140x60+443+160" g "private card-2 Forest"
+assert_dominant "$OUT_DIR/private-continue-watching.png" "140x60+651+160" b "private card-3 Harbor"
+
+private_footer_difference="$(
+  magick "$OUT_DIR/continue-watching.png" "$OUT_DIR/private-continue-watching.png" \
+    -compose difference -composite \
+    -crop 240x40+440+640 \
+    -colorspace gray \
+    -format '%[fx:mean]' info:
+)"
+awk -v difference="$private_footer_difference" 'BEGIN {
+  if (!(difference > 0.002)) {
+    print "private-session footer did not change from the recording state" > "/dev/stderr"
+    exit 1
+  }
+}'
+
+history_after="$(sha256sum "$XDG_STATE_HOME/ok-player/history.json" | awk '{print $1}')"
+if [[ "$history_before" != "$history_after" ]]; then
+  echo "private-session idle projection changed history.json" >&2
+  exit 1
+fi
 
 kill "$app_pid" 2>/dev/null || true
 wait "$app_pid" 2>/dev/null || true

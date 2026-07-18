@@ -22,6 +22,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::nfo_metadata::HistoryTitleUpdate;
 use crate::video_geometry::VideoGeometry;
 
 /// Version stamped into the canonical document. Bumped from the Linux alpha `1` to mark
@@ -44,6 +45,46 @@ impl Default for History {
             files: BTreeMap::new(),
         }
     }
+}
+
+/// Session-scoped policy for writes that would add or update watch-history data.
+/// Explicit deletions remain available in a private session, matching the Windows
+/// behavior: privacy prevents new traces without making existing records immutable.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum HistoryWriteMode {
+    #[default]
+    Record,
+    Private,
+}
+
+impl HistoryWriteMode {
+    pub const fn from_private(private_session: bool) -> Self {
+        if private_session {
+            Self::Private
+        } else {
+            Self::Record
+        }
+    }
+}
+
+/// Outcome of a portable history mutation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HistoryWriteResult {
+    Changed,
+    Unchanged,
+    Suppressed,
+}
+
+/// Progress fields captured from the engine event snapshot. The shell supplies
+/// the clock and title projection; the shared core owns validation, completion,
+/// merge, and private-session behavior.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HistoryProgressUpdate {
+    pub position: f64,
+    pub duration: f64,
+    pub finished: bool,
+    pub updated_at_unix: i64,
+    pub title: HistoryTitleUpdate,
 }
 
 impl History {
@@ -88,6 +129,119 @@ impl History {
                 *geometry = geometry.normalized();
             }
         }
+    }
+
+    /// Record progress without disturbing bookmarks, chapters, poster state, or
+    /// unrelated preferences already carried by the file entry.
+    pub fn record_progress(
+        &mut self,
+        key: &str,
+        update: HistoryProgressUpdate,
+        mode: HistoryWriteMode,
+    ) -> HistoryWriteResult {
+        if mode == HistoryWriteMode::Private {
+            return HistoryWriteResult::Suppressed;
+        }
+        if key.is_empty()
+            || !update.duration.is_finite()
+            || update.duration <= 0.0
+            || !update.position.is_finite()
+        {
+            return HistoryWriteResult::Unchanged;
+        }
+
+        let complete_at = crate::recents_shelf::completion_start(update.duration);
+        let final_stretch = update.position >= complete_at;
+        let stored_position = if update.finished || final_stretch {
+            0.0
+        } else {
+            update.position.clamp(0.0, update.duration)
+        };
+
+        let record = self.files.entry(key.to_owned()).or_default();
+        let existing_finished = record.finished;
+        record.position = stored_position;
+        record.duration = update.duration;
+        record.finished = update.finished || (existing_finished && final_stretch);
+        record.updated_at_unix = update.updated_at_unix;
+        match update.title {
+            HistoryTitleUpdate::Preserve => {}
+            HistoryTitleUpdate::Clear => record.title = None,
+            HistoryTitleUpdate::Set(title) => record.title = Some(title),
+        }
+        HistoryWriteResult::Changed
+    }
+
+    /// Merge per-file playback preferences through the same private-session gate
+    /// as progress writes.
+    pub fn record_preferences(
+        &mut self,
+        key: &str,
+        preferences: Preferences,
+        updated_at_unix: i64,
+        mode: HistoryWriteMode,
+    ) -> HistoryWriteResult {
+        if mode == HistoryWriteMode::Private {
+            return HistoryWriteResult::Suppressed;
+        }
+        if key.is_empty() || preferences.is_empty() {
+            return HistoryWriteResult::Unchanged;
+        }
+
+        let record = self.files.entry(key.to_owned()).or_default();
+        record.preferences.merge(preferences);
+        record.updated_at_unix = updated_at_unix;
+        HistoryWriteResult::Changed
+    }
+
+    /// Add a user bookmark through the same write gate. Deleting an existing mark
+    /// remains an explicit management action and is intentionally not gated.
+    pub fn add_bookmark(
+        &mut self,
+        key: &str,
+        time: f64,
+        updated_at_unix: i64,
+        mode: HistoryWriteMode,
+    ) -> HistoryWriteResult {
+        if mode == HistoryWriteMode::Private {
+            return HistoryWriteResult::Suppressed;
+        }
+        if key.is_empty() {
+            return HistoryWriteResult::Unchanged;
+        }
+
+        let record = self.files.entry(key.to_owned()).or_default();
+        if !crate::bookmarks::add(&mut record.bookmarks, time) {
+            return HistoryWriteResult::Unchanged;
+        }
+        record.updated_at_unix = updated_at_unix;
+        HistoryWriteResult::Changed
+    }
+
+    pub fn remove_bookmark(&mut self, key: &str, time: f64) -> bool {
+        self.files
+            .get_mut(key)
+            .is_some_and(|record| crate::bookmarks::remove(&mut record.bookmarks, time))
+    }
+
+    /// Remove every record and return how many were present.
+    pub fn clear(&mut self) -> usize {
+        let removed = self.files.len();
+        self.files.clear();
+        removed
+    }
+
+    /// Remove records strictly older than the retention cutoff. A non-positive
+    /// window keeps everything, and records without a usable timestamp are kept.
+    pub fn prune_older_than(&mut self, now_unix: i64, days: i64) -> usize {
+        if days <= 0 {
+            return 0;
+        }
+        let cutoff = now_unix.saturating_sub(days.saturating_mul(86_400));
+        let before = self.files.len();
+        self.files
+            .retain(|_, record| record.updated_at_unix <= 0 || record.updated_at_unix >= cutoff);
+        before - self.files.len()
     }
 }
 
@@ -700,5 +854,88 @@ mod tests {
         // The field survives a save/load round-trip and stays snake_case.
         let serialized = serde_json::to_string(&history).expect("history serializes");
         assert!(serialized.contains("\"audio_delay\":0.05"));
+    }
+
+    #[test]
+    fn private_session_suppresses_every_new_history_write() {
+        let mut history = History::default();
+        history.files.insert(
+            "/media/existing.mkv".to_owned(),
+            FileEntry {
+                position: 120.0,
+                duration: 600.0,
+                updated_at_unix: 1_700_000_000,
+                ..FileEntry::default()
+            },
+        );
+        let before = history.clone();
+
+        assert_eq!(
+            history.record_progress(
+                "/media/private.mkv",
+                HistoryProgressUpdate {
+                    position: 90.0,
+                    duration: 600.0,
+                    finished: false,
+                    updated_at_unix: 1_800_000_000,
+                    title: HistoryTitleUpdate::Set("Private".to_owned()),
+                },
+                HistoryWriteMode::Private,
+            ),
+            HistoryWriteResult::Suppressed
+        );
+        assert_eq!(
+            history.record_preferences(
+                "/media/existing.mkv",
+                Preferences {
+                    speed: Some(1.5),
+                    ..Preferences::default()
+                },
+                1_800_000_000,
+                HistoryWriteMode::Private,
+            ),
+            HistoryWriteResult::Suppressed
+        );
+        assert_eq!(
+            history.add_bookmark(
+                "/media/existing.mkv",
+                42.0,
+                1_800_000_000,
+                HistoryWriteMode::Private,
+            ),
+            HistoryWriteResult::Suppressed
+        );
+        assert_eq!(history, before);
+        assert_eq!(crate::recents_shelf::search(&history, "").len(), 1);
+        assert_eq!(history.clear(), 1);
+        assert!(history.files.is_empty());
+    }
+
+    #[test]
+    fn retention_prunes_only_records_strictly_older_than_the_cutoff() {
+        let now = 2_000_000_000;
+        let cutoff = now - 30 * 86_400;
+        let mut history = History::default();
+        for (path, updated_at_unix) in [
+            ("/media/stale.mkv", cutoff - 1),
+            ("/media/cutoff.mkv", cutoff),
+            ("/media/recent.mkv", now - 60),
+            ("/media/unknown.mkv", 0),
+        ] {
+            history.files.insert(
+                path.to_owned(),
+                FileEntry {
+                    updated_at_unix,
+                    ..FileEntry::default()
+                },
+            );
+        }
+
+        assert_eq!(history.prune_older_than(now, 30), 1);
+        assert!(!history.files.contains_key("/media/stale.mkv"));
+        assert!(history.files.contains_key("/media/cutoff.mkv"));
+        assert!(history.files.contains_key("/media/recent.mkv"));
+        assert!(history.files.contains_key("/media/unknown.mkv"));
+        assert_eq!(history.prune_older_than(now, 0), 0);
     }
 }

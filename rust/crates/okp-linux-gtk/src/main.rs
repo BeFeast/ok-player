@@ -30,7 +30,7 @@ use okp_core::player_commands::{
     ResolvedPlayerCommand,
 };
 use okp_core::playlist::{Playlist, PlaylistItem, QueueInsertMode, RepeatMode};
-use okp_core::settings::{AppearanceTheme, SkippedUpdateVersions, UpdateChannel};
+use okp_core::settings::{AppearanceTheme, HistoryRetention, SkippedUpdateVersions, UpdateChannel};
 use okp_core::settings_navigation::{SETTINGS_RAIL_ORDER, SettingsPage, search_settings};
 use okp_core::shortcuts::{
     self, ShortcutAction, ShortcutBinding, ShortcutChord, ShortcutModifiers, ShortcutSlot,
@@ -1003,6 +1003,7 @@ enum IdlePage {
 struct HistorySurfaceModel {
     items: Vec<okp_core::recents_shelf::HistoryItem>,
     private_session: bool,
+    retention: HistoryRetention,
     read_failed: bool,
     cleared: bool,
     no_match: bool,
