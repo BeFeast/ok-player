@@ -11,13 +11,18 @@ ACCEPTANCE="${3:-accepted}"
 STATE_DIR="${OKP_CANDIDATE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/ok-player-candidate}"
 SCRIPT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 TAG="${OKP_CANDIDATE_TAG:-linux-candidate}"
+BRANCH="${OKP_CANDIDATE_BRANCH:-main}"
+REQUESTED_SHA="${OKP_CANDIDATE_REQUESTED_SHA:?OKP_CANDIDATE_REQUESTED_SHA is required}"
 LOCK="$STATE_DIR/build.lock"
 LOCK_OWNER="$STATE_DIR/build.lock.owner.json"
 PROMOTED="$STATE_DIR/last-promoted.sha"
+BUILD_NUMBER_FILE="$STATE_DIR/build-number"
+DECISION_OUTPUT="${OKP_CANDIDATE_PUBLISH_DECISION:-$STATE_DIR/last-publish-decision.json}"
 CLI="${OKP_CANDIDATE_CLI:-$STATE_DIR/checkout/rust/target/release/okp-candidate}"
 
 [[ -x "$CLI" ]] || { echo "okp-candidate binary not found: $CLI" >&2; exit 1; }
 [[ -f "$BUNDLE/candidate-build.json" ]] || { echo "candidate-build.json missing from $BUNDLE" >&2; exit 1; }
+[[ -s "$BUILD_NUMBER_FILE" ]] || { echo "candidate build-number state is missing" >&2; exit 1; }
 case "$ACCEPTANCE" in
   pending|accepted|rejected) ;;
   *) echo "acceptance must be pending, accepted, or rejected" >&2; exit 1 ;;
@@ -56,6 +61,7 @@ prune_plan="$work/prune-plan.txt"
 pointer_attempted=false
 pointer_committed=false
 expected_assets=()
+release_exists=false
 
 cleanup() {
   local status="$?"
@@ -83,21 +89,58 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+  release_exists=true
+  gh release view "$TAG" --repo "$REPO" --json assets --jq '[.assets[].name]' \
+    >"$preexisting_assets"
+  if jq -e 'index("candidate.linux.json") != null' "$preexisting_assets" >/dev/null; then
+    gh release download "$TAG" --repo "$REPO" --pattern candidate.linux.json \
+      --dir "$previous_dir" --clobber || {
+        echo "failed to preserve the existing candidate pointer before publication" >&2
+        exit 1
+      }
+  else
+    rm -f -- "$previous"
+  fi
+else
+  printf '[]\n' >"$preexisting_assets"
+  rm -f -- "$previous"
+fi
+
+version="$(jq -r '.version' "$BUNDLE/candidate-build.json")"
+build="$(jq -r '.build_number' "$BUNDLE/candidate-build.json")"
+source_sha="$(jq -r '.source_sha' "$BUNDLE/candidate-build.json")"
+allocated_build="$(cat "$BUILD_NUMBER_FILE")"
+current_sha="$(gh api "repos/${REPO}/git/ref/heads/${BRANCH}" --jq '.object.sha')"
+
+decision_args=()
+if [[ -s "$previous" ]]; then
+  decision_args=(--published-feed "$previous")
+fi
+decision="$work/publish-decision.json"
+"$CLI" publish-decision \
+  --requested-sha "$REQUESTED_SHA" \
+  --build-sha "$source_sha" \
+  --current-sha "$current_sha" \
+  --build-number "$build" \
+  --allocated-build "$allocated_build" \
+  "${decision_args[@]}" >"$decision"
+
+decision_parent="$(dirname -- "$DECISION_OUTPUT")"
+mkdir -p "$decision_parent"
+decision_tmp="$(mktemp -- "$decision_parent/.publish-decision.XXXXXX")"
+cp "$decision" "$decision_tmp"
+mv -f -- "$decision_tmp" "$DECISION_OUTPUT"
+
+if [[ "$(jq -r '.outcome' "$decision")" == "stale_generation" ]]; then
+  echo "Candidate publication is a stale_generation no-op: $(jq -c . "$decision")"
+  exit 0
+fi
+
+if [[ "$release_exists" != "true" ]]; then
   gh release create "$TAG" --repo "$REPO" --prerelease \
     --title "OK Player Linux candidate (rolling)" \
     --notes "Mutable rolling QA candidate. Assets are replaced in place; this is not a permanent product release."
-fi
-gh release view "$TAG" --repo "$REPO" --json assets --jq '[.assets[].name]' \
-  >"$preexisting_assets"
-if jq -e 'index("candidate.linux.json") != null' "$preexisting_assets" >/dev/null; then
-  gh release download "$TAG" --repo "$REPO" --pattern candidate.linux.json \
-    --dir "$previous_dir" --clobber || {
-      echo "failed to preserve the existing candidate pointer before publication" >&2
-      exit 1
-    }
-else
-  rm -f -- "$previous"
 fi
 
 previous_args=()
@@ -108,9 +151,6 @@ base_url="https://github.com/${REPO}/releases/download/${TAG}"
 "$CLI" feed --bundle "$BUNDLE" --base-url "$base_url" \
   --acceptance "$ACCEPTANCE" "${previous_args[@]}" --output "$feed"
 
-version="$(jq -r '.version' "$BUNDLE/candidate-build.json")"
-build="$(jq -r '.build_number' "$BUNDLE/candidate-build.json")"
-source_sha="$(jq -r '.source_sha' "$BUNDLE/candidate-build.json")"
 deb_name="$(jq -r '.package.artifacts[] | select(.kind == "debian") | .file_name' "$BUNDLE/candidate-build.json")"
 appimage_name="$(jq -r '.package.artifacts[] | select(.kind == "app-image") | .file_name' "$BUNDLE/candidate-build.json")"
 velopack_name="$(jq -r '.appimage.name' "$feed")"

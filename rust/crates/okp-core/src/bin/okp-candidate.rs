@@ -10,6 +10,9 @@
 //!       --started-at TS --finished-at TS [--require-native-hardware] \
 //!       --deb PATH --appimage PATH --gate name:status[:detail] ...
 //!   okp-candidate promotable --record PATH
+//!   okp-candidate publish-decision --requested-sha SHA --build-sha SHA \
+//!       --current-sha SHA --build-number N --allocated-build N \
+//!       [--published-feed PATH]
 //!   okp-candidate classify --phase idle|building --age-seconds N \
 //!       [--stall-after N]
 //!   okp-candidate stage-velopack --output-dir DIR --channel CHANNEL \
@@ -28,7 +31,7 @@ use okp_core::candidate_build::{
     assemble_candidate_feed, candidate_prune_plan, candidate_version, classify_activity,
     verify_candidate_bundle,
 };
-use okp_core::candidate_channel::{AcceptanceStatus, CandidateFeed};
+use okp_core::candidate_channel::{AcceptanceStatus, CandidateFeed, decide_candidate_publish};
 use okp_core::candidate_lock::{
     CandidateLock, CandidateLockError, CandidateLockOwner, CandidateLockPhase,
 };
@@ -50,6 +53,7 @@ fn run() -> Result<(), String> {
         Some("promotable") => promotable(&args[1..]),
         Some("verify-bundle") => verify_bundle(&args[1..]),
         Some("feed") => feed(&args[1..]),
+        Some("publish-decision") => publish_decision(&args[1..]),
         Some("prune-plan") => prune_plan(&args[1..]),
         Some("version") => version(&args[1..]),
         Some("classify") => classify(&args[1..]),
@@ -154,6 +158,27 @@ fn feed(args: &[String]) -> Result<(), String> {
         return Err(format!("{output}: {error}"));
     }
     Ok(())
+}
+
+fn publish_decision(args: &[String]) -> Result<(), String> {
+    let build_number = value(args, "--build-number")?
+        .parse::<u64>()
+        .map_err(|error| format!("invalid --build-number: {error}"))?;
+    let allocated_build = value(args, "--allocated-build")?
+        .parse::<u64>()
+        .map_err(|error| format!("invalid --allocated-build: {error}"))?;
+    let published = optional_value(args, "--published-feed")
+        .map(|path| read_json::<CandidateFeed>(Path::new(path)))
+        .transpose()?;
+    let decision = decide_candidate_publish(
+        value(args, "--requested-sha")?,
+        value(args, "--build-sha")?,
+        value(args, "--current-sha")?,
+        build_number,
+        allocated_build,
+        published.as_ref(),
+    )?;
+    print_json(&decision)
 }
 
 fn prune_plan(args: &[String]) -> Result<(), String> {
@@ -336,5 +361,5 @@ fn optional_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 }
 
 fn usage() -> String {
-    "usage:\n  okp-candidate decide --head SHA [--last SHA]\n  okp-candidate record --source-sha SHA --build-number N --version V --started-at TS --finished-at TS [--require-native-hardware] --deb PATH --appimage PATH --gate name:status[:detail] ...\n  okp-candidate promotable --record PATH\n  okp-candidate verify-bundle --bundle DIR\n  okp-candidate feed --bundle DIR --base-url URL --acceptance pending|accepted|rejected [--previous PATH] --output PATH\n  okp-candidate prune-plan --feed PATH --assets PATH\n  okp-candidate version --base VERSION --build N\n  okp-candidate classify --phase idle|building --age-seconds N [--stall-after N]\n  okp-candidate stage-velopack --output-dir DIR --channel CHANNEL --package-id ID --version VERSION --versioned-appimage FILE\n  okp-candidate lock-run --lock PATH --owner PATH --phase build|publish|promote|build-and-publish [--source-sha SHA] [--coalesce] -- COMMAND [ARG ...]".to_owned()
+    "usage:\n  okp-candidate decide --head SHA [--last SHA]\n  okp-candidate record --source-sha SHA --build-number N --version V --started-at TS --finished-at TS [--require-native-hardware] --deb PATH --appimage PATH --gate name:status[:detail] ...\n  okp-candidate promotable --record PATH\n  okp-candidate verify-bundle --bundle DIR\n  okp-candidate feed --bundle DIR --base-url URL --acceptance pending|accepted|rejected [--previous PATH] --output PATH\n  okp-candidate publish-decision --requested-sha SHA --build-sha SHA --current-sha SHA --build-number N --allocated-build N [--published-feed PATH]\n  okp-candidate prune-plan --feed PATH --assets PATH\n  okp-candidate version --base VERSION --build N\n  okp-candidate classify --phase idle|building --age-seconds N [--stall-after N]\n  okp-candidate stage-velopack --output-dir DIR --channel CHANNEL --package-id ID --version VERSION --versioned-appimage FILE\n  okp-candidate lock-run --lock PATH --owner PATH --phase build|publish|promote|build-and-publish [--source-sha SHA] [--coalesce] -- COMMAND [ARG ...]".to_owned()
 }

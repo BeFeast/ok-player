@@ -13,6 +13,8 @@ STATE_DIR="${OKP_CANDIDATE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/ok-p
 REPO="${OKP_CANDIDATE_REPOSITORY:?OKP_CANDIDATE_REPOSITORY is required}"
 ACCEPTANCE="${OKP_CANDIDATE_ACCEPTANCE:-accepted}"
 FORCE_REPUBLISH="${OKP_CANDIDATE_FORCE_REPUBLISH:-false}"
+DECISION_OUTPUT="$STATE_DIR/last-publish-decision.json"
+DECISION_REACHED=false
 
 "$ROOT/scripts/build-linux-candidate.sh"
 
@@ -23,9 +25,15 @@ SHOULD_PUBLISH=false
 PUBLISH_RESULT=skipped
 if [[ "$SOURCE_SHA" != "$PROMOTED_SHA" || "$FORCE_REPUBLISH" == "true" ]]; then
   SHOULD_PUBLISH=true
-  "$STATE_DIR/checkout/scripts/publish-linux-candidate.sh" \
+  OKP_CANDIDATE_PUBLISH_DECISION="$DECISION_OUTPUT" \
+    "$STATE_DIR/checkout/scripts/publish-linux-candidate.sh" \
     "$BUNDLE" "$REPO" "$ACCEPTANCE"
-  PUBLISH_RESULT=published
+  DECISION_REACHED=true
+  case "$(jq -r '.outcome' "$DECISION_OUTPUT")" in
+    eligible) PUBLISH_RESULT=published ;;
+    stale_generation) PUBLISH_RESULT=stale_generation ;;
+    *) echo "candidate publisher returned invalid decision evidence" >&2; exit 1 ;;
+  esac
 fi
 
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
@@ -35,5 +43,15 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     echo "acceptance=$ACCEPTANCE"
     echo "should_publish=$SHOULD_PUBLISH"
     echo "publish_result=$PUBLISH_RESULT"
+    if [[ "$DECISION_REACHED" == "true" && -s "$DECISION_OUTPUT" ]]; then
+      echo "requested_sha=$(jq -r '.requested_sha' "$DECISION_OUTPUT")"
+      echo "build_sha=$(jq -r '.build_sha' "$DECISION_OUTPUT")"
+      echo "current_sha=$(jq -r '.current_sha' "$DECISION_OUTPUT")"
+      echo "build_number=$(jq -r '.build_number' "$DECISION_OUTPUT")"
+      echo "allocated_build=$(jq -r '.allocated_build' "$DECISION_OUTPUT")"
+      published_build="$(jq -r '.published_build // "none"' "$DECISION_OUTPUT")"
+      echo "published_build=$published_build"
+      echo "stale_reasons=$(jq -c '.stale_reasons // []' "$DECISION_OUTPUT")"
+    fi
   } >> "$GITHUB_OUTPUT"
 fi

@@ -75,6 +75,30 @@ Promotion uploads immutable, versioned assets first:
 
 `candidate.linux.json` is uploaded last and is the acceptance pointer for both lanes. A failure before that final upload leaves the previous pointer, package URLs, and versioned checksum file usable. A retry is idempotent for the same source/build and may safely change only its acceptance state.
 
+## Stale-generation fence
+
+Immediately before any rolling GitHub Release mutation, the publisher performs
+one final decision under the same build/publish lock. It compares:
+
+- the SHA that scheduled or dispatched the workflow;
+- the SHA recorded by the verified bundle and all of its gates;
+- the current candidate-policy head (`main`);
+- the bundle generation against the newest locally allocated generation; and
+- the bundle generation/SHA against the existing rolling pointer, when present.
+
+Publication is eligible only when the requested, built, and current SHAs are
+identical, no later generation has been allocated, and the rolling pointer has
+no newer or conflicting generation. The remote pointer is downloaded and the
+current branch head is read before release creation or asset upload.
+
+A queued or coalesced run that fails this fence exits successfully as
+`stale_generation`. Its machine-readable evidence records the requested, built,
+current, and previously published SHAs and generation counters plus every stale
+reason. It does not create a release, upload or delete an asset, move
+`candidate.linux.json`, prune history, or update `last-promoted.sha`. A later run
+whose requested SHA matches the already-built current bundle may publish that
+same verified generation without rebuilding it.
+
 ## Retention and rollback
 
 The manifest history stores complete previous accepted recovery points: version/build, `.deb`, Velopack full package, and versioned checksum URL. After the new pointer is live, `okp-core` computes a prune plan that keeps the current candidate plus up to five previous accepted candidates, always retaining at least two once the channel has accumulated them. Temporary migration anchors named by the installed-upgrade acceptance contract are retained in addition to that rolling window until machine-readable cleanup evidence passes. Unknown assets are not deleted.
@@ -83,7 +107,7 @@ Rollback is an operator action: republish a retained verified bundle as the curr
 
 ## Verification boundary
 
-The core end-to-end contract test creates a native bundle fixture and proves exact source SHA → verified package identities → candidate feed → enrolled updater selection while a public-feed fixture remains byte-for-byte unchanged. Real GitHub asset upload/order and a live installed AppImage/`.deb` update remain operator/CI integration surfaces.
+The core end-to-end contract test creates a native bundle fixture and proves exact source SHA → verified package identities → candidate feed → enrolled updater selection while a public-feed fixture remains byte-for-byte unchanged. One publisher regression covers a coalesced run requested on SHA A but built from current SHA B. The overlap regression starts another run A on SHA/generation A and holds it after bundle verification but before any remote read or mutation. Run B then advances the isolated head/generation and publishes the exact verified SHA B bundle once. When A resumes, it records `stale_generation` while the B pointer, versioned asset bytes and hashes, mutation log, decision evidence, updater selection, and promoted marker remain unchanged. Real GitHub asset upload/order and a live installed AppImage/`.deb` update remain operator/CI integration surfaces.
 
 The operator procedure and cleanup evidence contract for those installed updates are in
 [`linux-candidate-upgrade-acceptance.md`](linux-candidate-upgrade-acceptance.md).

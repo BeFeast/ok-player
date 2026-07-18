@@ -56,6 +56,7 @@ jobs:
           OKP_CANDIDATE_ACCEPTANCE: ${{ inputs.acceptance || 'accepted' }}
           OKP_CANDIDATE_FORCE_REPUBLISH: ${{ inputs.republish_last_bundle || 'false' }}
           OKP_CANDIDATE_REPOSITORY: ${{ github.repository }}
+          OKP_CANDIDATE_REQUESTED_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           state_dir="${OKP_CANDIDATE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/ok-player-candidate}"
@@ -91,6 +92,8 @@ jobs:
           source_sha="${{ steps.candidate.outputs.source_sha }}"
           [[ -n "$source_sha" ]] || source_sha="$heartbeat_source_sha"
           [[ -n "$source_sha" ]] || source_sha="${{ github.sha }}"
+          built_sha="${{ steps.candidate.outputs.build_sha }}"
+          [[ -n "$built_sha" ]] || built_sha="$source_sha"
           publication_requested="${{ steps.candidate.outputs.should_publish }}"
           [[ -n "$publication_requested" ]] || publication_requested="not reached"
 
@@ -109,7 +112,13 @@ jobs:
             echo ""
             echo "- locked build/publish step: \`${{ steps.candidate.outcome }}\`"
             echo "- publish result: \`${{ steps.candidate.outputs.publish_result || 'not reached' }}\`"
-            echo "- source SHA: \`${source_sha}\`"
+            echo "- requested SHA: \`${{ steps.candidate.outputs.requested_sha || github.sha }}\`"
+            echo "- built SHA: \`${built_sha}\`"
+            echo "- current candidate head: \`${{ steps.candidate.outputs.current_sha || 'not revalidated' }}\`"
+            echo "- bundle generation: \`${{ steps.candidate.outputs.build_number || 'not reached' }}\`"
+            echo "- newest allocated generation: \`${{ steps.candidate.outputs.allocated_build || 'not reached' }}\`"
+            echo "- published generation before run: \`${{ steps.candidate.outputs.published_build || 'not read' }}\`"
+            echo "- stale reasons: \`${{ steps.candidate.outputs.stale_reasons || '[]' }}\`"
             echo "- latest phase: \`${phase}\`"
             echo "- latest detail: ${detail}"
             echo "- publication requested: \`${publication_requested}\`"
