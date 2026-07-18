@@ -107,3 +107,28 @@ The validator exits non-zero for a missing lane/check, non-monotonic versions, m
 identity, changed user state, changed public feed, invalid or lane-inconsistent updater-payload
 hashes, or any non-PASS row. A successful result is the cleanup authorization; screenshots, chat
 messages, or a verbal operator claim are not.
+
+## Queued-generation publication race
+
+Release acceptance must also preserve evidence for the candidate workflow race:
+
+1. Snapshot the rolling release asset names and hashes plus the exact
+   `candidate.linux.json` body.
+2. Queue run A while SHA A is the workflow-requested head.
+3. Advance `main` to SHA B and queue run B without cancelling run A.
+4. Hold run A after its requested SHA and verified bundle identity are captured,
+   but before it reads or mutates the rolling release.
+5. Let run B finish. Require exactly one eligible publication, with the pointer
+   SHA/build and Debian, AppImage, Full-package, and checksum hashes matching its
+   verified bundle. An enrolled updater must observe only that newest accepted
+   generation.
+6. Snapshot the B pointer, every release asset and hash, decision evidence, and
+   promoted marker. Resume run A and require a successful `stale_generation`
+   result whose evidence names requested/built SHA A, current/published SHA B,
+   and all relevant generation counters. Re-snapshot the surface and require
+   byte-for-byte equality with the B snapshot and no additional mutation.
+
+The Rust workspace regression exercises the same A/B ordering with a fake
+rolling release and is part of normal CI. Live acceptance still records the
+real GitHub run IDs, summaries, asset hashes, and updater observation because a
+local fixture cannot attest the hosted release surface.

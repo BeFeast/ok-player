@@ -197,6 +197,121 @@ pub struct CandidateFeed {
     pub history: Vec<CandidateHistoryEntry>,
 }
 
+/// Publish-boundary result for one candidate generation.
+///
+/// This evidence is emitted before any rolling-release mutation. A stale run is
+/// a successful no-op and carries the exact requested, built, and current SHAs
+/// plus the local and published generation counters that caused the decision.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CandidatePublishOutcome {
+    Eligible,
+    StaleGeneration,
+}
+
+/// One policy mismatch that makes a candidate generation stale.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CandidatePublishStaleReason {
+    RequestedHeadChanged,
+    BuildDoesNotMatchRequest,
+    NewerGenerationAllocated,
+    NewerGenerationPublished,
+    PublishedGenerationConflict,
+}
+
+/// Machine-readable evidence for the final candidate publish decision.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CandidatePublishDecision {
+    pub outcome: CandidatePublishOutcome,
+    pub requested_sha: String,
+    pub build_sha: String,
+    pub current_sha: String,
+    pub build_number: u64,
+    pub allocated_build: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published_build: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published_sha: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published_acceptance: Option<AcceptanceStatus>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stale_reasons: Vec<CandidatePublishStaleReason>,
+}
+
+/// Revalidate a candidate generation immediately before the rolling release is
+/// mutated. The caller holds the candidate build/publish lock while supplying
+/// the current channel head and generation state.
+pub fn decide_candidate_publish(
+    requested_sha: &str,
+    build_sha: &str,
+    current_sha: &str,
+    build_number: u64,
+    allocated_build: u64,
+    published: Option<&CandidateFeed>,
+) -> Result<CandidatePublishDecision, String> {
+    let requested_sha = normalize_publish_sha("requested", requested_sha)?;
+    let build_sha = normalize_publish_sha("build", build_sha)?;
+    let current_sha = normalize_publish_sha("current", current_sha)?;
+    if build_number == 0 {
+        return Err("candidate build number must be greater than zero".to_owned());
+    }
+    if allocated_build < build_number {
+        return Err(format!(
+            "allocated candidate generation {allocated_build} is behind bundle generation {build_number}"
+        ));
+    }
+
+    let mut stale_reasons = Vec::new();
+    if requested_sha != current_sha {
+        stale_reasons.push(CandidatePublishStaleReason::RequestedHeadChanged);
+    }
+    if build_sha != requested_sha {
+        stale_reasons.push(CandidatePublishStaleReason::BuildDoesNotMatchRequest);
+    }
+    if allocated_build > build_number {
+        stale_reasons.push(CandidatePublishStaleReason::NewerGenerationAllocated);
+    }
+
+    let (published_build, published_sha, published_acceptance) = if let Some(feed) = published {
+        if !feed.is_candidate_channel() {
+            return Err(format!(
+                "published feed channel must be {CANDIDATE_CHANNEL}, got {:?}",
+                feed.channel
+            ));
+        }
+        if feed.build == 0 {
+            return Err("published candidate build must be greater than zero".to_owned());
+        }
+        let published_sha = normalize_publish_sha("published", &feed.commit_sha)?;
+        if feed.build > build_number {
+            stale_reasons.push(CandidatePublishStaleReason::NewerGenerationPublished);
+        } else if feed.build == build_number && published_sha != build_sha {
+            stale_reasons.push(CandidatePublishStaleReason::PublishedGenerationConflict);
+        }
+        (Some(feed.build), Some(published_sha), Some(feed.acceptance))
+    } else {
+        (None, None, None)
+    };
+
+    Ok(CandidatePublishDecision {
+        outcome: if stale_reasons.is_empty() {
+            CandidatePublishOutcome::Eligible
+        } else {
+            CandidatePublishOutcome::StaleGeneration
+        },
+        requested_sha,
+        build_sha,
+        current_sha,
+        build_number,
+        allocated_build,
+        published_build,
+        published_sha,
+        published_acceptance,
+        stale_reasons,
+    })
+}
+
 impl CandidateFeed {
     /// True when this feed declares the candidate channel. A feed that fails
     /// this is not consulted — the shell must never treat a non-candidate
@@ -228,6 +343,17 @@ impl CandidateFeed {
 
 fn is_hex(value: &str, length: usize) -> bool {
     value.len() == length && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn normalize_publish_sha(label: &str, sha: &str) -> Result<String, String> {
+    let normalized = sha.trim().to_ascii_lowercase();
+    if is_hex(&normalized, 40) {
+        Ok(normalized)
+    } else {
+        Err(format!(
+            "{label} SHA must be a full 40-character hexadecimal value"
+        ))
+    }
 }
 
 /// A candidate selected from the feed, ready for the shell to download, verify,
@@ -411,6 +537,9 @@ pub fn select_candidate_update_from_feed(
 mod tests {
     use super::*;
 
+    const SHA_A: &str = "0123456789abcdef0123456789abcdef01234567";
+    const SHA_B: &str = "89abcdef0123456789abcdef0123456789abcdef";
+
     fn package(version: &str, sha256: &str) -> CandidatePackage {
         CandidatePackage {
             name: format!("ok-player_{version}_amd64.deb"),
@@ -461,6 +590,81 @@ mod tests {
                 history("0.11.0-beta.0.106", 106, 'b'),
             ],
         }
+    }
+
+    #[test]
+    fn exact_current_generation_is_eligible_to_publish() {
+        let previous = feed("0.11.0-beta.0.41", 41, AcceptanceStatus::Accepted);
+        let decision = decide_candidate_publish(SHA_B, SHA_B, SHA_B, 42, 42, Some(&previous))
+            .expect("exact current generation should be decidable");
+
+        assert_eq!(decision.outcome, CandidatePublishOutcome::Eligible);
+        assert!(decision.stale_reasons.is_empty());
+        assert_eq!(decision.requested_sha, SHA_B);
+        assert_eq!(decision.build_sha, SHA_B);
+        assert_eq!(decision.current_sha, SHA_B);
+        assert_eq!(decision.published_build, Some(41));
+    }
+
+    #[test]
+    fn queued_run_that_coalesces_to_a_new_head_is_stale() {
+        let decision = decide_candidate_publish(SHA_A, SHA_B, SHA_B, 42, 42, None)
+            .expect("coalesced queued generation should be decidable");
+
+        assert_eq!(decision.outcome, CandidatePublishOutcome::StaleGeneration);
+        assert_eq!(
+            decision.stale_reasons,
+            vec![
+                CandidatePublishStaleReason::RequestedHeadChanged,
+                CandidatePublishStaleReason::BuildDoesNotMatchRequest,
+            ]
+        );
+        assert_eq!(decision.requested_sha, SHA_A);
+        assert_eq!(decision.build_sha, SHA_B);
+        assert_eq!(decision.current_sha, SHA_B);
+    }
+
+    #[test]
+    fn newer_allocated_or_published_generation_makes_an_old_bundle_stale() {
+        let mut published = feed("0.11.0-beta.0.43", 43, AcceptanceStatus::Pending);
+        published.commit_sha = SHA_B.to_owned();
+        let decision = decide_candidate_publish(SHA_A, SHA_A, SHA_A, 42, 43, Some(&published))
+            .expect("older generation should be classified as stale");
+
+        assert_eq!(decision.outcome, CandidatePublishOutcome::StaleGeneration);
+        assert_eq!(
+            decision.stale_reasons,
+            vec![
+                CandidatePublishStaleReason::NewerGenerationAllocated,
+                CandidatePublishStaleReason::NewerGenerationPublished,
+            ]
+        );
+        assert_eq!(decision.published_build, Some(43));
+        assert_eq!(decision.published_sha.as_deref(), Some(SHA_B));
+        assert_eq!(
+            decision.published_acceptance,
+            Some(AcceptanceStatus::Pending)
+        );
+    }
+
+    #[test]
+    fn conflicting_sha_for_the_same_published_generation_is_stale() {
+        let mut published = feed("0.11.0-beta.0.42", 42, AcceptanceStatus::Accepted);
+        published.commit_sha = SHA_B.to_owned();
+        let decision = decide_candidate_publish(SHA_A, SHA_A, SHA_A, 42, 42, Some(&published))
+            .expect("conflicting published identity should be classified");
+
+        assert_eq!(
+            decision.stale_reasons,
+            vec![CandidatePublishStaleReason::PublishedGenerationConflict]
+        );
+    }
+
+    #[test]
+    fn allocated_generation_cannot_move_backwards() {
+        let error = decide_candidate_publish(SHA_A, SHA_A, SHA_A, 42, 41, None)
+            .expect_err("generation regression must fail closed");
+        assert!(error.contains("behind bundle generation 42"));
     }
 
     #[test]

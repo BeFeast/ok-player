@@ -137,6 +137,23 @@ without rebuilding it. The `always()` summary reads the raw heartbeat first and
 treats the handoff outputs as optional, so an early gate failure remains the
 named failure instead of causing a second summary-step error.
 
+Before the publisher creates the rolling release or changes any asset, it
+revalidates the workflow-requested SHA, bundle SHA, current `main` SHA, local
+`build-number`, and existing `candidate.linux.json`. The pure-core
+`okp-candidate publish-decision` command owns this policy. A mismatch is a
+successful `stale_generation` no-op with machine-readable evidence in
+`last-publish-decision.json` and the Actions summary. The evidence includes all
+three SHAs, the bundle/newest-allocated/published generation numbers, and the
+specific stale reasons.
+
+This preserves coalescing without letting an old queued workflow publish. If
+run A was requested on SHA A but starts after `main` advances to SHA B, the
+builder may produce the exact SHA B bundle. Run A still stops at the publish
+fence because its requested SHA is A. Run B, requested on B, may then reuse and
+publish that same verified bundle. If run A built A before B landed, it stops
+because A is no longer current and run B allocates the next monotonic generation
+for B. No counter is reused or decremented in either case.
+
 ## Heartbeats and the watchdog
 
 The builder appends JSON heartbeat lines to
