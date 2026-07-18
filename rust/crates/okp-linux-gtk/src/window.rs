@@ -358,8 +358,11 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         chrome.show_persistently();
         open_seek_preview(&controls);
     }
-    let more_popover_preview =
-        env::var_os("OKP_OPEN_MORE_POPOVER_ON_STARTUP").map(|_| controls.more_button.clone());
+    let more_popover_preview = env::var_os("OKP_OPEN_MORE_POPOVER_ON_STARTUP").map(|_| {
+        chrome.set_has_media(true);
+        chrome.show_persistently();
+        controls.more_button.clone()
+    });
     let volume_preview = env::var_os("OKP_VOLUME_PREVIEW")
         .map(|mode| (controls.volume.clone(), mode.to_string_lossy().into_owned()));
     connect_state_poll(
@@ -2339,7 +2342,7 @@ pub(crate) fn idle_theme_is_dark() -> bool {
     }
 }
 
-fn idle_theme_is_high_contrast() -> bool {
+pub(crate) fn idle_theme_is_high_contrast() -> bool {
     env::var("GTK_THEME")
         .ok()
         .map(|name| name.to_ascii_lowercase().contains("highcontrast"))

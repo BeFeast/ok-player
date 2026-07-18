@@ -2363,20 +2363,45 @@ const OKP_STYLESHEET: &str = "
         }
 
         entry.okp-command-search {
-            min-height: 34px;
+            min-height: 24px;
             margin: 0 0 6px 0;
-            padding: 0 9px;
-            border-radius: 7px;
+            padding: 4px 10px 4px 0;
+            border-radius: 6px;
             border: 1px solid rgba(0, 0, 0, 0.10);
             background: rgba(0, 0, 0, 0.035);
-            color: #17191c;
+            color: rgba(23, 25, 28, 0.92);
             box-shadow: none;
-            font-size: 12.5px;
+            font-size: 12px;
+        }
+
+        entry.okp-command-search > image {
+            margin: 0 6px 0 8px;
+            color: rgba(23, 25, 28, 0.48);
+        }
+
+        entry.okp-command-search > text > placeholder {
+            color: rgba(23, 25, 28, 0.48);
+        }
+
+        entry.okp-command-search:hover {
+            background: rgba(0, 0, 0, 0.055);
+            border-color: rgba(0, 0, 0, 0.14);
         }
 
         entry.okp-command-search:focus-within {
             border-color: alpha(@okp_teal, 0.62);
             box-shadow: inset 0 0 0 1px alpha(@okp_teal, 0.20);
+            background: rgba(0, 0, 0, 0.045);
+        }
+
+        entry.okp-command-search:disabled {
+            background: rgba(0, 0, 0, 0.02);
+            border-color: rgba(0, 0, 0, 0.06);
+            color: rgba(23, 25, 28, 0.42);
+        }
+
+        entry.okp-command-search:disabled > image {
+            color: rgba(23, 25, 28, 0.30);
         }
 
         .okp-command-scroll,
@@ -2466,6 +2491,95 @@ const OKP_STYLESHEET: &str = "
             background: rgba(255, 255, 255, 0.055);
             border-color: rgba(255, 255, 255, 0.12);
             color: rgba(255, 255, 255, 0.92);
+        }
+
+        popover.okp-command-popover.is-dark entry.okp-command-search > image {
+            color: rgba(255, 255, 255, 0.48);
+        }
+
+        popover.okp-command-popover.is-dark entry.okp-command-search > text > placeholder {
+            color: rgba(255, 255, 255, 0.48);
+        }
+
+        popover.okp-command-popover.is-dark entry.okp-command-search:hover {
+            background: rgba(255, 255, 255, 0.075);
+            border-color: rgba(255, 255, 255, 0.16);
+        }
+
+        popover.okp-command-popover.is-dark entry.okp-command-search:focus-within {
+            border-color: alpha(@okp_accent, 0.62);
+            box-shadow: inset 0 0 0 1px alpha(@okp_accent, 0.22);
+            background: rgba(255, 255, 255, 0.065);
+        }
+
+        popover.okp-command-popover.is-dark entry.okp-command-search:disabled {
+            background: rgba(255, 255, 255, 0.03);
+            border-color: rgba(255, 255, 255, 0.08);
+            color: rgba(255, 255, 255, 0.42);
+        }
+
+        popover.okp-command-popover.is-dark entry.okp-command-search:disabled > image {
+            color: rgba(255, 255, 255, 0.30);
+        }
+
+        popover.okp-command-popover.is-high-contrast entry.okp-command-search {
+            min-height: 24px;
+            border: 1px solid #000000;
+            background: #ffffff;
+            color: #000000;
+        }
+
+        popover.okp-command-popover.is-high-contrast entry.okp-command-search > image {
+            color: #000000;
+        }
+
+        popover.okp-command-popover.is-high-contrast entry.okp-command-search > text > placeholder {
+            color: #000000;
+        }
+
+        popover.okp-command-popover.is-high-contrast entry.okp-command-search:hover {
+            background: #f0f0f0;
+        }
+
+        popover.okp-command-popover.is-high-contrast entry.okp-command-search:focus-within {
+            border-color: #000000;
+            box-shadow: inset 0 0 0 1px #000000;
+            background: #ffffff;
+        }
+
+        popover.okp-command-popover.is-high-contrast entry.okp-command-search:disabled {
+            background: #e8e8e8;
+            border-color: #000000;
+            color: #000000;
+        }
+
+        popover.okp-command-popover.is-dark.is-high-contrast entry.okp-command-search,
+        popover.okp-command-popover.is-high-contrast.is-dark entry.okp-command-search {
+            background: #000000;
+            border-color: #ffffff;
+            color: #ffffff;
+        }
+
+        popover.okp-command-popover.is-dark.is-high-contrast entry.okp-command-search > image,
+        popover.okp-command-popover.is-high-contrast.is-dark entry.okp-command-search > image {
+            color: #ffffff;
+        }
+
+        popover.okp-command-popover.is-dark.is-high-contrast entry.okp-command-search > text > placeholder,
+        popover.okp-command-popover.is-high-contrast.is-dark entry.okp-command-search > text > placeholder {
+            color: #ffffff;
+        }
+
+        popover.okp-command-popover.is-dark.is-high-contrast entry.okp-command-search:hover,
+        popover.okp-command-popover.is-high-contrast.is-dark entry.okp-command-search:hover {
+            background: #1a1a1a;
+        }
+
+        popover.okp-command-popover.is-dark.is-high-contrast entry.okp-command-search:focus-within,
+        popover.okp-command-popover.is-high-contrast.is-dark entry.okp-command-search:focus-within {
+            border-color: #ffffff;
+            box-shadow: inset 0 0 0 1px #ffffff;
+            background: #000000;
         }
 
         popover.okp-command-popover.is-dark .okp-command-group-title,
