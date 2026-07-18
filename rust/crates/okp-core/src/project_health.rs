@@ -15,6 +15,7 @@ use crate::update_selection::compare_versions;
 use crate::velopack_artifacts::LINUX_VELOPACK_PACKAGE_ID;
 
 pub const DEFAULT_MAX_UNPUBLISHED_MAIN_LAG_SECONDS: u64 = 120 * 60;
+pub const DEFAULT_MAX_CANDIDATE_SCHEDULE_AGE_SECONDS: u64 = 45 * 60;
 pub const DEFAULT_FUTURE_SKEW_SECONDS: u64 = 5 * 60;
 pub const STABLE_RELEASE_FRESH_SECONDS: u64 = 48 * 60 * 60;
 
@@ -36,6 +37,29 @@ pub struct WorkflowSnapshot {
     pub conclusion: String,
     #[serde(default)]
     pub url: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ScheduleRunSnapshot {
+    pub head_sha: String,
+    pub event: String,
+    pub status: String,
+    pub conclusion: String,
+    pub completed_at_utc: String,
+    #[serde(default)]
+    pub url: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CandidateWorkflowSnapshot {
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub state_error: Option<String>,
+    #[serde(default)]
+    pub latest_completed_schedule: Option<ScheduleRunSnapshot>,
+    #[serde(default)]
+    pub schedule_error: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -71,6 +95,8 @@ pub struct SourceSnapshot {
     #[serde(default)]
     pub workflows: Vec<WorkflowSnapshot>,
     #[serde(default)]
+    pub candidate_workflow: CandidateWorkflowSnapshot,
+    #[serde(default)]
     pub candidate: CandidateSourceSnapshot,
     #[serde(default)]
     pub error: Option<String>,
@@ -81,6 +107,8 @@ pub struct ProjectHealthSnapshot {
     pub checked_at_unix: u64,
     #[serde(default = "default_max_unpublished_main_lag")]
     pub max_unpublished_main_lag_seconds: u64,
+    #[serde(default = "default_max_candidate_schedule_age")]
+    pub max_candidate_schedule_age_seconds: u64,
     #[serde(default = "default_future_skew")]
     pub future_skew_seconds: u64,
     pub source: SourceSnapshot,
@@ -91,6 +119,10 @@ pub struct ProjectHealthSnapshot {
 
 fn default_max_unpublished_main_lag() -> u64 {
     DEFAULT_MAX_UNPUBLISHED_MAIN_LAG_SECONDS
+}
+
+fn default_max_candidate_schedule_age() -> u64 {
+    DEFAULT_MAX_CANDIDATE_SCHEDULE_AGE_SECONDS
 }
 
 fn default_future_skew() -> u64 {
@@ -114,6 +146,8 @@ pub struct HealthCheck {
     pub summary: String,
     #[serde(default)]
     pub details: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reason_codes: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -121,6 +155,7 @@ pub struct ProjectHealthOutcome {
     pub healthy: bool,
     pub checked_at_unix: u64,
     pub max_unpublished_main_lag_seconds: u64,
+    pub max_candidate_schedule_age_seconds: u64,
     pub checks: Vec<HealthCheck>,
 }
 
@@ -134,6 +169,7 @@ impl ProjectHealthSnapshot {
                 &self.source,
                 self.checked_at_unix,
                 self.max_unpublished_main_lag_seconds,
+                self.max_candidate_schedule_age_seconds,
                 self.future_skew_seconds,
             ),
             evaluate_stable_release(&self.stable_linux_releases, self.checked_at_unix),
@@ -145,6 +181,7 @@ impl ProjectHealthSnapshot {
             healthy,
             checked_at_unix: self.checked_at_unix,
             max_unpublished_main_lag_seconds: self.max_unpublished_main_lag_seconds,
+            max_candidate_schedule_age_seconds: self.max_candidate_schedule_age_seconds,
             checks,
         }
     }
@@ -260,12 +297,22 @@ fn evaluate_candidate(
     source: &SourceSnapshot,
     now: u64,
     max_lag: u64,
+    max_schedule_age: u64,
     future_skew: u64,
 ) -> HealthCheck {
-    let mut details = fetch_failure(fetch, "Linux candidate feed");
+    let mut details = Vec::new();
+    let mut reason_codes = Vec::new();
     let mut summary = format!("Linux candidate feed is healthy at {}", fetch.url);
+    validate_candidate_workflow_state(source, &mut details, &mut reason_codes);
+    details.extend(fetch_failure(fetch, "Linux candidate feed"));
     if !details.is_empty() {
-        return check("linux-candidate-delivery", true, details, summary);
+        return check_with_reason_codes(
+            "linux-candidate-delivery",
+            true,
+            details,
+            summary,
+            reason_codes,
+        );
     }
 
     let body = fetch.body.as_deref().unwrap_or_default();
@@ -273,7 +320,13 @@ fn evaluate_candidate(
         Ok(value) => value,
         Err(error) => {
             details.push(format!("Linux candidate feed is malformed JSON: {error}"));
-            return check("linux-candidate-delivery", true, details, summary);
+            return check_with_reason_codes(
+                "linux-candidate-delivery",
+                true,
+                details,
+                summary,
+                reason_codes,
+            );
         }
     };
     let missing = missing_candidate_identity(&value);
@@ -282,13 +335,25 @@ fn evaluate_candidate(
             "Linux candidate package identity is incomplete: missing {}",
             missing.join(", ")
         ));
-        return check("linux-candidate-delivery", true, details, summary);
+        return check_with_reason_codes(
+            "linux-candidate-delivery",
+            true,
+            details,
+            summary,
+            reason_codes,
+        );
     }
     let feed = match serde_json::from_value::<CandidateFeed>(value) {
         Ok(feed) => feed,
         Err(error) => {
             details.push(format!("Linux candidate feed schema is invalid: {error}"));
-            return check("linux-candidate-delivery", true, details, summary);
+            return check_with_reason_codes(
+                "linux-candidate-delivery",
+                true,
+                details,
+                summary,
+                reason_codes,
+            );
         }
     };
 
@@ -313,6 +378,20 @@ fn evaluate_candidate(
     if max_lag == 0 {
         details.push("Linux candidate unpublished-main lag limit must be positive".to_owned());
     }
+    if max_schedule_age == 0 {
+        details.push("Linux candidate schedule freshness limit must be positive".to_owned());
+    }
+
+    let source_relation = classify_candidate_source(&source.candidate, &source.head_sha);
+    validate_candidate_schedule(
+        source,
+        source_relation,
+        now,
+        max_schedule_age,
+        future_skew,
+        &mut details,
+        &mut reason_codes,
+    );
 
     let candidate_timestamp = validate_timestamp(
         "Linux candidate timestamp",
@@ -345,7 +424,97 @@ fn evaluate_candidate(
         ));
     }
 
-    check("linux-candidate-delivery", true, details, summary)
+    check_with_reason_codes(
+        "linux-candidate-delivery",
+        true,
+        details,
+        summary,
+        reason_codes,
+    )
+}
+
+fn validate_candidate_workflow_state(
+    source: &SourceSnapshot,
+    details: &mut Vec<String>,
+    reason_codes: &mut Vec<String>,
+) {
+    let workflow = &source.candidate_workflow;
+    if let Some(error) = nonempty(workflow.state_error.as_deref()) {
+        details.push(format!(
+            "Linux Candidate workflow state query failed: {error}"
+        ));
+        reason_codes.push("candidate-workflow-state-unavailable".to_owned());
+        return;
+    }
+    if workflow.state.trim().is_empty() {
+        details.push("Linux Candidate workflow state is unavailable".to_owned());
+        reason_codes.push("candidate-workflow-state-unavailable".to_owned());
+    } else if workflow.state != "active" {
+        details.push(format!(
+            "Linux Candidate workflow state is {}, expected active",
+            workflow.state
+        ));
+        reason_codes.push("candidate-workflow-inactive".to_owned());
+    }
+}
+
+fn validate_candidate_schedule(
+    source: &SourceSnapshot,
+    source_relation: CandidateSourceRelation,
+    now: u64,
+    max_schedule_age: u64,
+    future_skew: u64,
+    details: &mut Vec<String>,
+    reason_codes: &mut Vec<String>,
+) {
+    let workflow = &source.candidate_workflow;
+    if workflow.state != "active" || source_relation != CandidateSourceRelation::Ancestor {
+        return;
+    }
+    if let Some(error) = nonempty(workflow.schedule_error.as_deref()) {
+        details.push(format!(
+            "Linux Candidate completed schedule query failed while main has advanced: {error}"
+        ));
+        reason_codes.push("candidate-schedule-unavailable".to_owned());
+        return;
+    }
+    let Some(run) = workflow.latest_completed_schedule.as_ref() else {
+        details.push(format!(
+            "Linux Candidate workflow has no completed schedule run within {max_schedule_age}s while main has advanced"
+        ));
+        reason_codes.push("candidate-schedule-stale".to_owned());
+        return;
+    };
+    if run.event != "schedule" || run.status != "completed" {
+        details.push(format!(
+            "Linux Candidate schedule evidence is {}/{}, expected schedule/completed",
+            run.event, run.status
+        ));
+        reason_codes.push("candidate-schedule-unavailable".to_owned());
+        return;
+    }
+    let previous_detail_count = details.len();
+    let Some(completed_at) = validate_timestamp(
+        "Linux Candidate completed schedule timestamp",
+        &run.completed_at_utc,
+        now,
+        future_skew,
+        details,
+    ) else {
+        reason_codes.push("candidate-schedule-unavailable".to_owned());
+        return;
+    };
+    if details.len() != previous_detail_count {
+        reason_codes.push("candidate-schedule-unavailable".to_owned());
+        return;
+    }
+    let age = now.saturating_sub(completed_at);
+    if age > max_schedule_age {
+        details.push(format!(
+            "Linux Candidate workflow has no completed schedule run within {max_schedule_age}s while main has advanced; latest completed schedule run is {age}s old"
+        ));
+        reason_codes.push("candidate-schedule-stale".to_owned());
+    }
 }
 
 fn validate_candidate_source(
@@ -631,6 +800,7 @@ fn evaluate_stable_release(fetch: &FetchSnapshot, now: u64) -> HealthCheck {
             status: HealthStatus::Unknown,
             summary: error.clone(),
             details: Vec::new(),
+            reason_codes: Vec::new(),
         };
     }
     let releases =
@@ -644,6 +814,7 @@ fn evaluate_stable_release(fetch: &FetchSnapshot, now: u64) -> HealthCheck {
                     status: HealthStatus::Unknown,
                     summary: format!("Stable Linux release query is malformed: {error}"),
                     details: Vec::new(),
+                    reason_codes: Vec::new(),
                 };
             }
         };
@@ -666,6 +837,7 @@ fn evaluate_stable_release(fetch: &FetchSnapshot, now: u64) -> HealthCheck {
             summary: "No published permanent linux-v* release with a valid UTC timestamp was found"
                 .to_owned(),
             details: Vec::new(),
+            reason_codes: Vec::new(),
         };
     };
     let age = now.saturating_sub(timestamp);
@@ -683,6 +855,7 @@ fn evaluate_stable_release(fetch: &FetchSnapshot, now: u64) -> HealthCheck {
             latest.tag_name
         ),
         details: Vec::new(),
+        reason_codes: Vec::new(),
     }
 }
 
@@ -721,6 +894,16 @@ fn missing_candidate_identity(value: &Value) -> Vec<&'static str> {
 }
 
 fn check(name: &str, blocking: bool, details: Vec<String>, passing_summary: String) -> HealthCheck {
+    check_with_reason_codes(name, blocking, details, passing_summary, Vec::new())
+}
+
+fn check_with_reason_codes(
+    name: &str,
+    blocking: bool,
+    details: Vec<String>,
+    passing_summary: String,
+    reason_codes: Vec<String>,
+) -> HealthCheck {
     let status = if details.is_empty() {
         HealthStatus::Pass
     } else {
@@ -733,6 +916,7 @@ fn check(name: &str, blocking: bool, details: Vec<String>, passing_summary: Stri
         status,
         summary,
         details,
+        reason_codes,
     }
 }
 

@@ -37,6 +37,14 @@ The overall result is healthy only when all three blocking surfaces pass:
    SHA-256 identities plus the versioned checksum URL; and contain a strict
    descending history when history is present.
 
+The Linux Candidate workflow itself must report GitHub state `active`. Any
+other state is blocking and emits the machine-readable reason code
+`candidate-workflow-inactive` while naming the observed state in the detail.
+When the accepted candidate is behind `main`, the newest completed `schedule`
+run must also be fresh. The default freshness window is **45 minutes**, three
+times the 15-minute cron interval. No completed schedule run inside that window
+emits `candidate-schedule-stale`, independently of candidate publication lag.
+
 Candidate and commit timestamps are strict UTC (`YYYY-MM-DDTHH:MM:SSZ`) and may
 not be more than five minutes in the future. The candidate timestamp must not
 predate its source commit. Timestamp age is evidence, not the delivery clock:
@@ -57,6 +65,13 @@ graph evidence makes snapshot evaluation deterministic. Operators may
 temporarily select another positive lag bound with
 `OKP_PROJECT_HEALTH_MAX_UNPUBLISHED_MAIN_LAG_SECONDS`, but the versioned default
 is the project contract.
+
+Operators may separately set a positive schedule window with
+`OKP_PROJECT_HEALTH_MAX_CANDIDATE_SCHEDULE_AGE_SECONDS`. Workflow state and the
+latest completed schedule run are collected with bounded list/API queries; the
+workflow-state API response is cached for five minutes. Schedule freshness is
+not blocking while the accepted candidate already equals `main`, because no
+new delivery is pending.
 
 An unreachable, malformed, pending/rejected, partial, identity-incomplete,
 source-divergent, or over-SLA candidate fails with a specific reason. The
@@ -96,7 +111,8 @@ executable, the command exits `2` with instructions to build it outside the
 healthcheck.
 
 `okp-core` fixtures cover old accepted/equal, ancestor within SLA, ancestor
-beyond SLA, fresh non-ancestor, unaccepted, malformed, missing-package-identity,
+beyond SLA, inactive workflow state, stale completed schedules while `main` has
+advanced, fresh non-ancestor, unaccepted, malformed, missing-package-identity,
 and unreachable candidate outcomes. The public release warning is separately
 pinned as non-blocking.
 
