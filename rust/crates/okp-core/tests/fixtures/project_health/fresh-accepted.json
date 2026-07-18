@@ -1,0 +1,44 @@
+{
+  "channel": "candidate",
+  "version": "0.11.0-beta.0.15",
+  "build": 15,
+  "commit_sha": "d5d531a58c830a01a7e25615e850593e9ff4493f",
+  "timestamp_utc": "2026-07-18T01:00:47Z",
+  "acceptance": "accepted",
+  "package": {
+    "name": "ok-player_0.11.0-beta.0.15_amd64.deb",
+    "url": "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/ok-player_0.11.0-beta.0.15_amd64.deb",
+    "size": 3145688,
+    "sha256": "9f613a543161679e0a170d94a929f43ccf080ab9807a82e96705654856e5c231"
+  },
+  "appimage": {
+    "package_id": "com.befeast.okplayer",
+    "name": "com.befeast.okplayer-0.11.0-beta.0.15-linux-candidate-full.nupkg",
+    "url": "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/com.befeast.okplayer-0.11.0-beta.0.15-linux-candidate-full.nupkg",
+    "size": 7203922,
+    "sha256": "2967b9865f36975a93e0660513f122ab8c4e86bf20f3c470b398e1a4f4ca62cb",
+    "sha1": "9875943029A83B83234B3FBC0DE9B7B313F1B37A"
+  },
+  "sha256sums_url": "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/SHA256SUMS-15.txt",
+  "history": [
+    {
+      "version": "0.11.0-beta.0.14",
+      "build": 14,
+      "package": {
+        "name": "ok-player_0.11.0-beta.0.14_amd64.deb",
+        "url": "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/ok-player_0.11.0-beta.0.14_amd64.deb",
+        "size": 3133728,
+        "sha256": "5e9a19caae21b6717ab9ca854f63d119cedecb140772a3f7811641fa466b16ad"
+      },
+      "appimage": {
+        "package_id": "com.befeast.okplayer",
+        "name": "com.befeast.okplayer-0.11.0-beta.0.14-linux-candidate-full.nupkg",
+        "url": "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/com.befeast.okplayer-0.11.0-beta.0.14-linux-candidate-full.nupkg",
+        "size": 7186478,
+        "sha256": "9f3239c5f6dba3bab757f846b46eaed3cf8ffc8227ac16eb3d6d5aa544fd518e",
+        "sha1": "1D5F1D7D26B10757390A43569D73E0A1ECAA1721"
+      },
+      "sha256sums_url": "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/SHA256SUMS-14.txt"
+    }
+  ]
+}

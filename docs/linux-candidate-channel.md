@@ -109,5 +109,16 @@ Rollback is an operator action: republish a retained verified bundle as the curr
 
 The core end-to-end contract test creates a native bundle fixture and proves exact source SHA → verified package identities → candidate feed → enrolled updater selection while a public-feed fixture remains byte-for-byte unchanged. One publisher regression covers a coalesced run requested on SHA A but built from current SHA B. The overlap regression starts another run A on SHA/generation A and holds it after bundle verification but before any remote read or mutation. Run B then advances the isolated head/generation and publishes the exact verified SHA B bundle once. When A resumes, it records `stale_generation` while the B pointer, versioned asset bytes and hashes, mutation log, decision evidence, updater selection, and promoted marker remain unchanged. Real GitHub asset upload/order and a live installed AppImage/`.deb` update remain operator/CI integration surfaces.
 
+Development-delivery health is evaluated separately by the versioned,
+read-only [`check-project-outcome.sh`](../scripts/check-project-outcome.sh).
+That check accepts only an `accepted` pointer with complete source and package
+identities whose source equals or is an ancestor of current `main`. Equal
+sources remain healthy without unchanged rebuilds; an ancestor source has 120
+minutes from the first unpublished `main` commit. Permanent `linux-v*` release
+age remains a non-blocking release-cadence diagnostic; it cannot override a
+healthy rolling QA delivery signal. See
+[`project-outcome-health.md`](project-outcome-health.md) for the precise bound
+and safe post-merge cutover.
+
 The operator procedure and cleanup evidence contract for those installed updates are in
 [`linux-candidate-upgrade-acceptance.md`](linux-candidate-upgrade-acceptance.md).

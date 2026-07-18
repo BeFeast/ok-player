@@ -19,6 +19,7 @@
 //!       --package-id ID --version VERSION --versioned-appimage FILE
 //!   okp-candidate lock-run --lock PATH --owner PATH --phase PHASE \
 //!       [--coalesce] -- COMMAND [ARG ...]
+//!   okp-candidate project-health --snapshot PATH
 
 use std::env;
 use std::fs;
@@ -35,6 +36,7 @@ use okp_core::candidate_channel::{AcceptanceStatus, CandidateFeed, decide_candid
 use okp_core::candidate_lock::{
     CandidateLock, CandidateLockError, CandidateLockOwner, CandidateLockPhase,
 };
+use okp_core::project_health::ProjectHealthSnapshot;
 use okp_core::sha256sums::sha256_hex;
 use okp_core::velopack_artifacts::stage_versioned_appimage;
 
@@ -59,7 +61,32 @@ fn run() -> Result<(), String> {
         Some("classify") => classify(&args[1..]),
         Some("stage-velopack") => stage_velopack(&args[1..]),
         Some("lock-run") => lock_run(&args[1..]),
+        Some("project-health") => project_health(&args[1..]),
         _ => Err(usage()),
+    }
+}
+
+fn project_health(args: &[String]) -> Result<(), String> {
+    let snapshot_path = match value(args, "--snapshot") {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+    };
+    let snapshot = match read_json::<ProjectHealthSnapshot>(Path::new(snapshot_path)) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+    };
+    let outcome = snapshot.evaluate();
+    print_json(&outcome)?;
+    if outcome.healthy {
+        Ok(())
+    } else {
+        std::process::exit(1);
     }
 }
 
@@ -361,5 +388,5 @@ fn optional_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 }
 
 fn usage() -> String {
-    "usage:\n  okp-candidate decide --head SHA [--last SHA]\n  okp-candidate record --source-sha SHA --build-number N --version V --started-at TS --finished-at TS [--require-native-hardware] --deb PATH --appimage PATH --gate name:status[:detail] ...\n  okp-candidate promotable --record PATH\n  okp-candidate verify-bundle --bundle DIR\n  okp-candidate feed --bundle DIR --base-url URL --acceptance pending|accepted|rejected [--previous PATH] --output PATH\n  okp-candidate publish-decision --requested-sha SHA --build-sha SHA --current-sha SHA --build-number N --allocated-build N [--published-feed PATH]\n  okp-candidate prune-plan --feed PATH --assets PATH\n  okp-candidate version --base VERSION --build N\n  okp-candidate classify --phase idle|building --age-seconds N [--stall-after N]\n  okp-candidate stage-velopack --output-dir DIR --channel CHANNEL --package-id ID --version VERSION --versioned-appimage FILE\n  okp-candidate lock-run --lock PATH --owner PATH --phase build|publish|promote|build-and-publish [--source-sha SHA] [--coalesce] -- COMMAND [ARG ...]".to_owned()
+    "usage:\n  okp-candidate decide --head SHA [--last SHA]\n  okp-candidate record --source-sha SHA --build-number N --version V --started-at TS --finished-at TS [--require-native-hardware] --deb PATH --appimage PATH --gate name:status[:detail] ...\n  okp-candidate promotable --record PATH\n  okp-candidate verify-bundle --bundle DIR\n  okp-candidate feed --bundle DIR --base-url URL --acceptance pending|accepted|rejected [--previous PATH] --output PATH\n  okp-candidate publish-decision --requested-sha SHA --build-sha SHA --current-sha SHA --build-number N --allocated-build N [--published-feed PATH]\n  okp-candidate prune-plan --feed PATH --assets PATH\n  okp-candidate version --base VERSION --build N\n  okp-candidate classify --phase idle|building --age-seconds N [--stall-after N]\n  okp-candidate stage-velopack --output-dir DIR --channel CHANNEL --package-id ID --version VERSION --versioned-appimage FILE\n  okp-candidate lock-run --lock PATH --owner PATH --phase build|publish|promote|build-and-publish [--source-sha SHA] [--coalesce] -- COMMAND [ARG ...]\n  okp-candidate project-health --snapshot PATH".to_owned()
 }
