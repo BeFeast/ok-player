@@ -43,6 +43,7 @@ Set-StrictMode -Version Latest
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $manifestPath = Join-Path $PSScriptRoot 'windows-dev-versions.json'
 $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+. (Join-Path $PSScriptRoot 'windows-dev-vs.ps1')
 
 # --- helpers --------------------------------------------------------------------------------------
 function Get-CmdOutput {
@@ -121,15 +122,28 @@ $cargoVersion = Get-CmdOutput 'cargo' @('--version')
 $rustupToolchain = Get-CmdOutput 'rustup' @('show', 'active-toolchain')
 $rustTargets = Get-CmdOutput 'rustup' @('target', 'list', '--installed')
 
-# Visual Studio / MSVC via vswhere (products * so Build Tools counts, not only the IDE editions).
-$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-$vsVersion = $null; $vsProduct = $null; $vsHasWorkloads = $false
-if (Test-Path $vswhere) {
-    $vsVersion = Get-CmdOutput $vswhere @('-products', '*', '-latest', '-prerelease', '-property', 'installationVersion')
-    $vsProduct = Get-CmdOutput $vswhere @('-products', '*', '-latest', '-prerelease', '-property', 'displayName')
+# Visual Studio / MSVC via one-instance vswhere queries (products * includes Build Tools editions).
+$vswhere = Get-VisualStudioWherePath
+$vsVersion = $null; $vsProduct = $null; $vsHasWorkloads = $false; $vsQualified = $false
+if ($vswhere) {
     $req = @($manifest.tools.visualStudio.components)
-    $wl = & $vswhere -products '*' -latest -prerelease -requires @req -property installationPath 2>$null
-    $vsHasWorkloads = [bool]$wl
+    $qualifiedInstance = Get-VisualStudioInstance -VsWherePath $vswhere -RequiredComponents $req -MinimumVersion $manifest.tools.visualStudio.minVersion
+    $workloadInstance = if ($qualifiedInstance) {
+        $qualifiedInstance
+    } else {
+        Get-VisualStudioInstance -VsWherePath $vswhere -RequiredComponents $req
+    }
+    $observedInstance = if ($workloadInstance) {
+        $workloadInstance
+    } else {
+        Get-VisualStudioInstance -VsWherePath $vswhere
+    }
+    if ($observedInstance) {
+        $vsVersion = [string]$observedInstance.installationVersion
+        $vsProduct = [string]$observedInstance.displayName
+    }
+    $vsHasWorkloads = [bool]$workloadInstance
+    $vsQualified = [bool]$qualifiedInstance
 }
 
 # In-repo pinned versions (source of truth -- not duplicated in the manifest).
@@ -161,10 +175,7 @@ $okRustc = Test-ToolVersion -Name 'Rust (rustc)' -Found $rustcVersion -Min $mani
 $targetName = $manifest.tools.rustup.target
 $okTarget = Add-Check -Name "Rust target $targetName" -Found ($(if ($rustTargets -match [regex]::Escape($targetName)) { $targetName } else { '(missing)' })) -Min $targetName -Required $true -Ok:([bool]($rustTargets -match [regex]::Escape($targetName)))
 $vsFound = if (-not $vsVersion) { '(missing)' } elseif (-not $vsHasWorkloads) { "$vsProduct $vsVersion (workloads missing)" } else { "$vsProduct $vsVersion" }
-$vsInstalledVersion = Get-VersionTriple $vsVersion
-$vsMinimumVersion = Get-VersionTriple $manifest.tools.visualStudio.minVersion
-$vsMeetsMinimum = [bool]($vsInstalledVersion -and $vsMinimumVersion -and ($vsInstalledVersion -ge $vsMinimumVersion))
-$okVs = Add-Check -Name 'Visual Studio + workloads' -Found $vsFound -Min $manifest.tools.visualStudio.minVersion -Required $true -Ok:($vsHasWorkloads -and $vsMeetsMinimum)
+$okVs = Add-Check -Name 'Visual Studio + workloads' -Found $vsFound -Min $manifest.tools.visualStudio.minVersion -Required $true -Ok:$vsQualified
 $okCmake = Test-ToolVersion -Name 'CMake' -Found $cmakeVersion -Min $manifest.tools.cmake.minVersion -Required:$false
 $okNinja = Test-ToolVersion -Name 'Ninja' -Found $ninjaVersion -Min $manifest.tools.ninja.minVersion -Required:$false
 

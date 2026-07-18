@@ -61,6 +61,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $manifestPath = Join-Path $PSScriptRoot 'windows-dev-versions.json'
 if (-not (Test-Path $manifestPath)) { throw "Version manifest not found: $manifestPath" }
 $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+. (Join-Path $PSScriptRoot 'windows-dev-vs.ps1')
 
 function Write-Step { param([string]$Message) Write-Host "==> $Message" -ForegroundColor Cyan }
 function Write-Ok { param([string]$Message) Write-Host "  ok  $Message" -ForegroundColor Green }
@@ -127,37 +128,14 @@ function Install-WingetPackage {
     throw "winget failed to install $Name; last exit code $lastExit"
 }
 
-function Get-VsWherePath {
-    $p = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-    if (Test-Path $p) { return $p }
-    return $null
-}
-
-function Test-VisualStudioComponents {
-    param([string[]]$Required)
-    $vswhere = Get-VsWherePath
-    if (-not $vswhere) { return $false }
-    # -products * so Build Tools (not only the IDE editions) count; -requires all listed components.
-    $found = & $vswhere -products '*' -latest -prerelease -requires @Required -property installationPath 2>$null
-    return [bool]$found
-}
-
-function Test-VisualStudioVersion {
-    param([string]$Minimum)
-    $vswhere = Get-VsWherePath
-    if (-not $vswhere) { return $false }
-    $found = & $vswhere -products '*' -latest -prerelease -property installationVersion 2>$null
-    if (-not $found) { return $false }
-    try { return ([version]$found -ge [version]$Minimum) }
-    catch { return $false }
-}
-
 function Install-VisualStudio {
     $vs = $manifest.tools.visualStudio
     $components = @($vs.components)
-    $hasComponents = Test-VisualStudioComponents -Required $components
-    $meetsVersion = Test-VisualStudioVersion -Minimum $vs.minVersion
-    if ($hasComponents -and $meetsVersion) {
+    $vswhere = Get-VisualStudioWherePath
+    $qualifiedInstance = if ($vswhere) {
+        Get-VisualStudioInstance -VsWherePath $vswhere -RequiredComponents $components -MinimumVersion $vs.minVersion
+    } else { $null }
+    if ($qualifiedInstance) {
         Write-Skip 'Visual Studio workloads already present (Managed Desktop Build Tools, VCTools, Win11 SDK 26100)'
         return
     }
