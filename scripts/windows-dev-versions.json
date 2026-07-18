@@ -31,6 +31,11 @@
       "wingetId": "Git.Git",
       "minVersion": "2.40.0"
     },
+    "sevenZip": {
+      "wingetId": "7zip.7zip",
+      "minVersion": "24.0.0",
+      "note": "Required by scripts/fetch-natives.ps1 to extract the libmpv and ffmpeg archives."
+    },
     "cmake": {
       "wingetId": "Kitware.CMake",
       "minVersion": "3.28.0",

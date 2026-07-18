@@ -5,7 +5,7 @@
   against the toolchain baseline in scripts/windows-dev-versions.json.
 .DESCRIPTION
   Captures the versions that define a reproducible build/test surface -- OS, Windows SDK, MSVC compiler /
-  Visual Studio, Rust (MSVC toolchain + target), .NET SDK, WinUI / Windows App SDK, Git, CMake, Ninja,
+  Visual Studio, Rust (MSVC toolchain + target), .NET SDK, WinUI / Windows App SDK, Git, 7-Zip, CMake, Ninja,
   PowerShell, and the resolved libmpv native -- and emits them as a single JSON document. The WinUI /
   Windows App SDK and Windows SDK BuildTools versions are read from Directory.Packages.props and the app
   csproj (their real source of truth in this repo), never duplicated, so the report cannot drift from what
@@ -107,6 +107,12 @@ $osBuild = if ($os) { $os.BuildNumber } else { ([System.Environment]::OSVersion.
 $dotnetVersion = Get-CmdOutput 'dotnet' @('--version')
 $dotnetSdks = Get-CmdOutput 'dotnet' @('--list-sdks')
 $gitVersion = Get-CmdOutput 'git' @('--version')
+$sevenZipExe = '7z'
+if (-not (Get-Command $sevenZipExe -ErrorAction SilentlyContinue)) {
+    $sevenZipDefault = Join-Path $env:ProgramFiles '7-Zip\7z.exe'
+    if (Test-Path $sevenZipDefault) { $sevenZipExe = $sevenZipDefault }
+}
+$sevenZipVersion = Get-CmdOutput $sevenZipExe @()
 $cmakeVersion = Get-CmdOutput 'cmake' @('--version')
 $ninjaVersion = Get-CmdOutput 'ninja' @('--version')
 $rustcVersion = Get-CmdOutput 'rustc' @('--version')
@@ -144,10 +150,15 @@ if (Test-Path $libmpvDll) {
 # --- checks (required unless noted) ---------------------------------------------------------------
 $okDotnet = Test-ToolVersion -Name '.NET SDK' -Found $dotnetVersion -Min $manifest.tools.dotnetSdk.minVersion
 $okGit = Test-ToolVersion -Name 'Git' -Found $gitVersion -Min $manifest.tools.git.minVersion
+$okSevenZip = Test-ToolVersion -Name '7-Zip' -Found $sevenZipVersion -Min $manifest.tools.sevenZip.minVersion
 $okRustc = Test-ToolVersion -Name 'Rust (rustc)' -Found $rustcVersion -Min $manifest.tools.rustup.minVersion
 $targetName = $manifest.tools.rustup.target
 $okTarget = Add-Check -Name "Rust target $targetName" -Found ($(if ($rustTargets -match [regex]::Escape($targetName)) { $targetName } else { '(missing)' })) -Min $targetName -Required $true -Ok:([bool]($rustTargets -match [regex]::Escape($targetName)))
-$okVs = Add-Check -Name 'Visual Studio workloads' -Found ($(if ($vsHasWorkloads) { "$vsProduct $vsVersion" } else { '(workloads missing)' })) -Min $manifest.tools.visualStudio.minVersion -Required $true -Ok:$vsHasWorkloads
+$vsFound = if (-not $vsVersion) { '(missing)' } elseif (-not $vsHasWorkloads) { "$vsProduct $vsVersion (workloads missing)" } else { "$vsProduct $vsVersion" }
+$vsInstalledVersion = Get-VersionTriple $vsVersion
+$vsMinimumVersion = Get-VersionTriple $manifest.tools.visualStudio.minVersion
+$vsMeetsMinimum = [bool]($vsInstalledVersion -and $vsMinimumVersion -and ($vsInstalledVersion -ge $vsMinimumVersion))
+$okVs = Add-Check -Name 'Visual Studio + workloads' -Found $vsFound -Min $manifest.tools.visualStudio.minVersion -Required $true -Ok:($vsHasWorkloads -and $vsMeetsMinimum)
 $okCmake = Test-ToolVersion -Name 'CMake' -Found $cmakeVersion -Min $manifest.tools.cmake.minVersion -Required:$false
 $okNinja = Test-ToolVersion -Name 'Ninja' -Found $ninjaVersion -Min $manifest.tools.ninja.minVersion -Required:$false
 
@@ -159,7 +170,7 @@ $osBuildNum = 0
 $osBuildOk = [int]::TryParse([string]$osBuild, [ref]$osBuildNum) -and ($osBuildNum -ge $minBuild)
 $okOs = Add-Check -Name 'Windows OS build' -Found "$osCaption (build $osBuild)" -Min ([string]$minBuild) -Required $true -Ok:$osBuildOk
 
-$requiredOk = $okOs -and $okDotnet -and $okGit -and $okRustc -and $okTarget -and $okVs
+$requiredOk = $okOs -and $okDotnet -and $okGit -and $okSevenZip -and $okRustc -and $okTarget -and $okVs
 
 # --- assemble report ------------------------------------------------------------------------------
 $overall = if ($requiredOk) { 'ok' } else { 'incomplete' }
@@ -170,11 +181,12 @@ $report = [ordered]@{
     vmEnvelope       = $manifest.vmEnvelope
     os               = [ordered]@{ caption = $osCaption; build = $osBuild; minBuild = $manifest.os.minBuild }
     dotnet           = [ordered]@{ version = $dotnetVersion; sdks = ($dotnetSdks -split "`r?`n" | Where-Object { $_ }) }
-    visualStudio     = [ordered]@{ product = $vsProduct; version = $vsVersion; workloadsPresent = $vsHasWorkloads; requiredComponents = @($manifest.tools.visualStudio.components) }
+    visualStudio     = [ordered]@{ product = $vsProduct; version = $vsVersion; minVersion = $manifest.tools.visualStudio.minVersion; workloadsPresent = $vsHasWorkloads; requiredComponents = @($manifest.tools.visualStudio.components) }
     windowsSdk       = [ordered]@{ buildToolsPackage = $winSdkBuildTools; appTargetFramework = $appTfm; appMinPlatform = $appMinPlatform }
     windowsAppSdk    = [ordered]@{ version = $winAppSdk; source = 'Directory.Packages.props' }
     rust             = [ordered]@{ rustc = $rustcVersion; cargo = $cargoVersion; activeToolchain = $rustupToolchain; installedTargets = ($rustTargets -split "`r?`n" | Where-Object { $_ }) }
     git              = [ordered]@{ version = $gitVersion }
+    sevenZip         = [ordered]@{ version = $sevenZipVersion }
     cmake            = [ordered]@{ version = $cmakeVersion; note = 'required only for source native builds' }
     ninja            = [ordered]@{ version = $ninjaVersion; note = 'required only for source native builds' }
     powershell       = [ordered]@{ version = $PSVersionTable.PSVersion.ToString(); edition = $PSVersionTable.PSEdition }
@@ -201,6 +213,7 @@ Write-Host "Windows SDK   : app TFM $appTfm, BuildTools $winSdkBuildTools"
 Write-Host "Windows AppSDK: $winAppSdk"
 Write-Host "Rust          : $rustcVersion  [$rustupToolchain]"
 Write-Host "Git           : $gitVersion"
+Write-Host "7-Zip         : $sevenZipVersion"
 Write-Host "libmpv        : $(if ($libmpvVersion) { $libmpvVersion } else { '(not fetched)' })"
 Write-Host ''
 foreach ($c in $checks) {

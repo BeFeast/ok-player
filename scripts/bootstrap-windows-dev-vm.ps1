@@ -12,7 +12,7 @@
       the Windows 11 SDK (26100) component, and the Windows App SDK C# templates
     * .NET 9 SDK
     * Rust MSVC toolchain (rustup + stable + the x86_64-pc-windows-msvc target)
-    * Git, and (for source native builds only) CMake + Ninja
+    * Git, 7-Zip (for native archive extraction), and (for source native builds only) CMake + Ninja
     * PowerShell 7 (so the pwsh-only repo scripts run natively)
     * libmpv / ffmpeg native binaries via scripts/fetch-natives.ps1
 
@@ -79,8 +79,8 @@ deliberately does not shell out to an unverified installer to add winget itself.
 
 # Idempotent winget install: skip when one of the package ids is already present, otherwise install using
 # the first id that succeeds (exact match). When a primary id is not yet published to the winget repository,
-# AlternativeIds are tried in order. winget itself is convergent, but the pre-check keeps re-runs quiet and
-# offline-fast.
+# AlternativeIds are tried in order. An override means the installer must run even for an existing package
+# (for example, to add missing Visual Studio workloads), so that path uses the installed id with --force.
 function Install-WingetPackage {
     param(
         [Parameter(Mandatory)][string]$Id,
@@ -88,7 +88,7 @@ function Install-WingetPackage {
         [string[]]$OverrideArgs,
         [string[]]$AlternativeIds
     )
-    $ids = @($Id) + $AlternativeIds
+    $ids = @(@($Id) + @($AlternativeIds) | Where-Object { $_ })
     Write-Step "Ensuring $Name ($($ids -join ' / '))"
     $installedId = $null
     foreach ($candidate in $ids) {
@@ -98,21 +98,28 @@ function Install-WingetPackage {
             break
         }
     }
-    if ($installedId) {
+    if ($installedId -and -not $OverrideArgs) {
         Write-Skip "$Name already installed ($installedId)"
         return
     }
-    if ($CheckOnly) { Write-Host "  would install $Name" -ForegroundColor Yellow; return }
+    if ($CheckOnly) {
+        $action = if ($installedId) { 'modify' } else { 'install' }
+        Write-Host "  would $action $Name" -ForegroundColor Yellow
+        return
+    }
 
     $lastExit = $null
-    foreach ($candidate in $ids) {
+    $candidateIds = if ($installedId) { @($installedId) } else { $ids }
+    foreach ($candidate in $candidateIds) {
         $wingetArgs = @('install', '--id', $candidate, '-e', '--accept-source-agreements',
             '--accept-package-agreements', '--disable-interactivity')
         if ($OverrideArgs) { $wingetArgs += $OverrideArgs }
+        if ($installedId) { $wingetArgs += '--force' }
         winget @wingetArgs
         $lastExit = $LASTEXITCODE
         if ($lastExit -eq 0) {
-            Write-Ok "$Name installed ($candidate)"
+            $action = if ($installedId) { 'modified' } else { 'installed' }
+            Write-Ok "$Name $action ($candidate)"
             return
         }
     }
@@ -186,6 +193,7 @@ Install-WingetPackage -Id $manifest.tools.git.wingetId -Name 'Git'
 Install-WingetPackage -Id $manifest.tools.dotnetSdk.wingetId -Name '.NET 9 SDK'
 Install-WingetPackage -Id $manifest.tools.cmake.wingetId -Name 'CMake'
 Install-WingetPackage -Id $manifest.tools.ninja.wingetId -Name 'Ninja'
+Install-WingetPackage -Id $manifest.tools.sevenZip.wingetId -Name '7-Zip'
 Install-RustMsvc
 
 if ($SkipVisualStudio) { Write-Skip 'Visual Studio skipped (-SkipVisualStudio)' } else { Install-VisualStudio }
