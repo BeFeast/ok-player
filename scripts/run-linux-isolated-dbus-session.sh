@@ -9,7 +9,7 @@ shift
   exit 2
 }
 
-for tool in dbus-run-session gdbus rg; do
+for tool in dbus-run-session gdbus tr; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "Missing required tool: $tool" >&2
     exit 127
@@ -62,10 +62,16 @@ for _ in $(seq 1 "${OKP_DBUS_TEARDOWN_ATTEMPTS:-40}"); do
 done
 
 session_pids() {
-  local session_address="$1" environ pid
+  local session_address="$1" environ pid entry matches
   for environ in /proc/[0-9]*/environ; do
-    if rg -z -F -x -q -- "DBUS_SESSION_BUS_ADDRESS=$session_address" "$environ" \
-      2>/dev/null; then
+    matches=false
+    while IFS= read -r entry; do
+      if [[ "$entry" == "DBUS_SESSION_BUS_ADDRESS=$session_address" ]]; then
+        matches=true
+        break
+      fi
+    done < <(tr '\0' '\n' <"$environ" 2>/dev/null || true)
+    if [[ "$matches" == "true" ]]; then
       pid="${environ#/proc/}"
       printf '%s\n' "${pid%/environ}"
     fi
