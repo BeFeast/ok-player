@@ -1,0 +1,48 @@
+{
+  "checked_at_unix": 1784340047,
+  "max_unpublished_main_lag_seconds": 7200,
+  "future_skew_seconds": 300,
+  "source": {
+    "head_sha": "d5d531a58c830a01a7e25615e850593e9ff4493f",
+    "workflows": [
+      {
+        "name": "CI",
+        "head_sha": "d5d531a58c830a01a7e25615e850593e9ff4493f",
+        "event": "push",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://example.invalid/runs/ci"
+      },
+      {
+        "name": "Rust",
+        "head_sha": "d5d531a58c830a01a7e25615e850593e9ff4493f",
+        "event": "push",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://example.invalid/runs/rust"
+      }
+    ],
+    "candidate": {
+      "candidate_sha": "d5d531a58c830a01a7e25615e850593e9ff4493f",
+      "candidate_committed_at_utc": "2026-07-18T00:30:00Z",
+      "comparison": null,
+      "error": null
+    },
+    "error": null
+  },
+  "windows_feed": {
+    "url": "https://befeast.github.io/ok-player/updates/win/releases.win.json",
+    "body": "{\"Assets\":[{\"PackageId\":\"OkPlayer\",\"Version\":\"0.10.14\",\"Type\":\"Full\",\"FileName\":\"https://github.com/BeFeast/ok-player/releases/download/v0.10.14/OkPlayer-0.10.14-full.nupkg\",\"SHA256\":\"B6C45F3FDAD98FF02958A77C30DE0EFE2260AF518C392A01699F1397E9C70E80\",\"Size\":200597245}]}",
+    "error": null
+  },
+  "candidate_feed": {
+    "url": "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/candidate.linux.json",
+    "body": "{\"channel\":\"candidate\",\"version\":\"0.11.0-beta.0.15\",\"build\":15,\"commit_sha\":\"d5d531a58c830a01a7e25615e850593e9ff4493f\",\"timestamp_utc\":\"2026-07-18T01:00:47Z\",\"acceptance\":\"accepted\",\"package\":{\"name\":\"ok-player_0.11.0-beta.0.15_amd64.deb\",\"url\":\"https://github.com/BeFeast/ok-player/releases/download/linux-candidate/ok-player_0.11.0-beta.0.15_amd64.deb\",\"size\":3145688,\"sha256\":\"9f613a543161679e0a170d94a929f43ccf080ab9807a82e96705654856e5c231\"},\"appimage\":{\"package_id\":\"com.befeast.okplayer\",\"name\":\"com.befeast.okplayer-0.11.0-beta.0.15-linux-candidate-full.nupkg\",\"url\":\"https://github.com/BeFeast/ok-player/releases/download/linux-candidate/com.befeast.okplayer-0.11.0-beta.0.15-linux-candidate-full.nupkg\",\"size\":7203922,\"sha256\":\"2967b9865f36975a93e0660513f122ab8c4e86bf20f3c470b398e1a4f4ca62cb\",\"sha1\":\"9875943029A83B83234B3FBC0DE9B7B313F1B37A\"},\"sha256sums_url\":\"https://github.com/BeFeast/ok-player/releases/download/linux-candidate/SHA256SUMS-15.txt\",\"history\":[]}",
+    "error": null
+  },
+  "stable_linux_releases": {
+    "url": "https://api.github.com/repos/BeFeast/ok-player/releases?per_page=100",
+    "body": "[{\"tag_name\":\"linux-v0.1.0-linux-alpha.112\",\"draft\":false,\"published_at\":\"2026-07-15T19:35:55Z\"}]",
+    "error": null
+  }
+}

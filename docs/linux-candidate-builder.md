@@ -22,6 +22,13 @@ within **60–90 minutes**. Multiple merges that land in the same window are
 covers every merge since the last successful build. An unchanged SHA is **never
 rebuilt** merely to satisfy a clock.
 
+Project outcome health allows one bounded 30-minute scheduler/publication grace
+window beyond that SLA. The 120-minute clock starts at the first `main` commit
+not included in the accepted candidate. An accepted candidate equal to `main`
+does not expire and is never rebuilt merely because its feed timestamp is old.
+The repository-owned read-only check and its precise failure contract are
+documented in [`project-outcome-health.md`](project-outcome-health.md).
+
 Schedule the builder roughly every 15 minutes. Each run either:
 
 - **Idle** — `main` has not advanced past the last successfully built SHA. The

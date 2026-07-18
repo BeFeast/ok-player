@@ -118,6 +118,12 @@ rollback, and the mutable nature of the rolling surface.
   `curl -s https://befeast.github.io/ok-player/updates/linux/releases.linux.json | jq .`, and
   `curl -s https://befeast.github.io/ok-player/updates/linux/deb.linux.json | jq .` should each
   list the just-shipped version with resolvable asset URLs.
+- **Project outcome health:** `scripts/check-project-outcome.sh` verifies the
+  current source/main CI result, the Windows static feed, and the accepted
+  rolling Linux candidate's source-relative delivery lag without writing any
+  feed. Permanent `linux-v*` freshness is reported separately and is
+  non-blocking; see
+  [`project-outcome-health.md`](project-outcome-health.md).
 
 ## Transition (complete): the legacy GithubSource bridge
 
