@@ -30,11 +30,10 @@ on:
         description: Base64 completed acceptance manifest for the exact candidate (required when publish is true)
         required: false
         type: string
-      prerelease:
-        description: Mark GitHub Release as pre-release
-        required: true
-        default: true
-        type: boolean
+      release_notes_base64:
+        description: Base64 completed public release notes with exact source SHA and package checksums (required when publish is true)
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -62,7 +61,9 @@ jobs:
             version="${{ inputs.version }}"
             tag="linux-v${version}"
             publish="${{ inputs.publish }}"
-            prerelease="${{ inputs.prerelease }}"
+            # Every pre-1.0 Linux release is deliberately a pre-release so it
+            # cannot replace the Windows line as GitHub's cross-platform Latest.
+            prerelease="true"
           fi
 
           {
@@ -169,6 +170,7 @@ jobs:
         env:
           CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
           ACCEPTANCE_MANIFEST_BASE64: ${{ inputs.acceptance_manifest_base64 }}
+          RELEASE_NOTES_BASE64: ${{ inputs.release_notes_base64 }}
         run: |
           set -euo pipefail
           if [[ -z "${CANDIDATE_RUN_ID}" || ! "${CANDIDATE_RUN_ID}" =~ ^[0-9]+$ ]]; then
@@ -177,6 +179,10 @@ jobs:
           fi
           if [[ -z "${ACCEPTANCE_MANIFEST_BASE64}" ]]; then
             echo "::error::Publishing requires acceptance_manifest_base64 with every installed/live row recorded PASS."
+            exit 1
+          fi
+          if [[ -z "${RELEASE_NOTES_BASE64}" ]]; then
+            echo "::error::Publishing requires release_notes_base64 with completed user-facing notes and exact provenance."
             exit 1
           fi
 
@@ -192,9 +198,11 @@ jobs:
         if: steps.release.outputs.publish == 'true'
         env:
           ACCEPTANCE_MANIFEST_BASE64: ${{ inputs.acceptance_manifest_base64 }}
+          RELEASE_NOTES_BASE64: ${{ inputs.release_notes_base64 }}
         run: |
           set -euo pipefail
           printf '%s' "${ACCEPTANCE_MANIFEST_BASE64}" | base64 --decode > artifacts/linux/acceptance-manifest.json
+          printf '%s' "${RELEASE_NOTES_BASE64}" | base64 --decode > artifacts/linux/release-notes.md
           jq -e \
             --arg version "${{ steps.release.outputs.version }}" \
             --arg commit "${{ github.sha }}" \
@@ -221,6 +229,11 @@ jobs:
             -p okp-core --bin okp-acceptance-evidence -- \
             validate \
             --manifest artifacts/linux/acceptance-manifest.json \
+            --identity artifacts/linux/package-identity.json
+          cargo run --quiet --manifest-path rust/Cargo.toml \
+            -p okp-core --bin okp-release-preparation -- \
+            notes-validate \
+            --notes artifacts/linux/release-notes.md \
             --identity artifacts/linux/package-identity.json
 
       - name: Publish Velopack AppImage feed
@@ -264,6 +277,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${{ steps.release.outputs.tag }}" artifacts/linux/deb/*.deb --clobber
+
+      - name: Publish completed notes and deliberate release state
+        if: steps.release.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "${{ steps.release.outputs.tag }}" \
+            --title "OK Player Linux ${{ steps.release.outputs.version }}" \
+            --notes-file artifacts/linux/release-notes.md \
+            --prerelease \
+            --latest=false
 
   # Refresh the static update feeds on GitHub Pages once a linux-v* release is published
   # (issue #162). This workflow creates the release with GITHUB_TOKEN, which never fires the

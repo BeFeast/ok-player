@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "repository": "BeFeast/ok-player",
+  "entries": [
+    {
+      "tag_name": "linux-v0.1.0-linux-alpha.112",
+      "kind": "migration-anchor",
+      "reason": "Newest public Linux predecessor used by the installed Debian and AppImage migration acceptance contract.",
+      "required_in_archive": true,
+      "removal_gate": "Retain until CandidateUpgradeEvidence validates successfully and the operator explicitly closes the post-beta migration window."
+    },
+    {
+      "tag_name": "linux-v0.11.0-beta.1",
+      "kind": "current-public-release",
+      "reason": "First public Linux beta and the intended surviving product release after historical alpha release-object cleanup.",
+      "required_in_archive": false,
+      "removal_gate": "Retain until a later public Linux release deliberately supersedes it and installed update discovery has been revalidated."
+    }
+  ]
+}

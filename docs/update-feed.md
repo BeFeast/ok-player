@@ -114,10 +114,13 @@ rollback, and the mutable nature of the rolling surface.
   Linux release** is unchanged: push a `linux-v*` tag or dispatch `release-linux.yml`. Either
   release refreshes the feeds automatically.
 - **Verifying:**
-  `curl -s https://befeast.github.io/ok-player/updates/win/releases.win.json | jq .`,
-  `curl -s https://befeast.github.io/ok-player/updates/linux/releases.linux.json | jq .`, and
-  `curl -s https://befeast.github.io/ok-player/updates/linux/deb.linux.json | jq .` should each
-  list the just-shipped version with resolvable asset URLs.
+  `scripts/linux-release-preparation.sh feed-audit` validates all three manifests together,
+  requires their package URLs to resolve to the expected `v*` / `linux-v*` releases, checks every
+  referenced asset is downloadable, hashes the feed bytes, and records whether named installed
+  predecessors select the intended versions. During historical Linux Release cleanup, capture an
+  audit before and after each bounded batch and run `feed-compare`; the comparison fails on any
+  Linux or Windows feed drift. See the cleanup procedure in
+  [`linux-release-acceptance.md`](linux-release-acceptance.md).
 - **Project outcome health:** `scripts/check-project-outcome.sh` verifies the
   current source/main CI result, the Windows static feed, and the accepted
   rolling Linux candidate's source-relative delivery lag without writing any

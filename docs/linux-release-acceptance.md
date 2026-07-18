@@ -185,3 +185,80 @@ Required live rows are:
 - keyboard focus navigation
 
 Headless evidence must leave all of these `not-run`.
+
+## Public beta archive and historical release-object cleanup
+
+Issue #350 cleanup is deliberately split into preparation and operator execution. Repository tools
+may read GitHub and write local evidence JSON, but they never create or delete a Release, git tag,
+asset, workflow run, or update feed. Run all commands from the repository root and keep the output
+bundle with the release acceptance evidence:
+
+```bash
+mkdir -p artifacts/linux-release-cleanup
+./scripts/linux-release-preparation.sh archive-export \
+  --repository BeFeast/ok-player \
+  --output artifacts/linux-release-cleanup/linux-release-archive.json
+./scripts/linux-release-preparation.sh anchor-check \
+  --archive artifacts/linux-release-cleanup/linux-release-archive.json \
+  --tag linux-v0.1.0-linux-alpha.112 \
+  --output artifacts/linux-release-cleanup/migration-anchor-check.json
+./scripts/linux-release-preparation.sh cleanup-plan \
+  --archive artifacts/linux-release-cleanup/linux-release-archive.json \
+  --allowlist docs/linux-release-retain-allowlist.json \
+  --batch-size 20 \
+  --candidate-upgrade-evidence artifacts/linux-release-cleanup/candidate-upgrade-evidence.json \
+  --output artifacts/linux-release-cleanup/cleanup-plan.json
+```
+
+The archive maps every `linux-v*` release object to its immutable release ID, tag source SHA,
+metadata, assets, GitHub SHA-256 digests, and download URLs. It separately records every historical
+`linux-v*` git tag, including tags without a Release object. Archive generation fails on a missing
+tag, mismatched source SHA, duplicate release/asset identity, missing digest, or cross-tag asset URL.
+
+The checked-in allowlist is exact. It retains `linux-v0.1.0-linux-alpha.112` as the installed
+migration anchor and reserves `linux-v0.11.0-beta.1` as the surviving public beta. The anchor is
+retained indefinitely unless both conditions in its `removal_gate` become true: the machine-readable
+candidate-upgrade evidence passes and the operator explicitly closes the migration window. In the
+absence of that explicit close, no date or elapsed time authorizes its removal. Run `anchor-check`
+before cleanup and after every batch; every archived asset must still return a downloadable HTTP
+status.
+
+`cleanup-plan.json` is always `dry_run: true`. It is `execution_ready: true` only when the supplied
+`CandidateUpgradeEvidence` passes the core cleanup gate and the archived release set contains the
+allowlisted public beta. It lists exact GitHub Release object IDs in oldest-first bounded batches
+and repeats the full retain allowlist. It never emits a git-ref deletion and records every preserved
+tag. The operator must review and approve one batch at a time; a release ID not present in that
+reviewed batch is outside the cleanup scope. Never use `gh release delete
+--cleanup-tag`, `git push --delete`, or a tag API during this procedure.
+
+After `0.11.0-beta.1` is published and its static feeds have refreshed, capture a feed audit before
+the first cleanup batch and after each batch:
+
+```bash
+./scripts/linux-release-preparation.sh feed-audit \
+  --repository BeFeast/ok-player \
+  --feed-base https://befeast.github.io/ok-player \
+  --expected-linux 0.11.0-beta.1 \
+  --installed-linux 0.1.0-linux-alpha.112 \
+  --expected-windows 0.10.14 \
+  --installed-windows 0.10.13 \
+  --output artifacts/linux-release-cleanup/feed-before-batch-01.json
+
+# Run the same audit after the operator-approved batch, changing only --output.
+./scripts/linux-release-preparation.sh feed-compare \
+  --before artifacts/linux-release-cleanup/feed-before-batch-01.json \
+  --after artifacts/linux-release-cleanup/feed-after-batch-01.json \
+  --output artifacts/linux-release-cleanup/feed-comparison-batch-01.json
+```
+
+The audit verifies both Linux lanes point to the exact beta Release, the `.deb` names a co-located
+`SHA256SUMS`, the Windows feed still points to the intended `v*` Release, every referenced asset is
+downloadable, and the named installed predecessors select the intended newer versions. The
+comparison fails unless the Linux `.deb`, Linux Velopack, and Windows feed bytes, decisions, URLs,
+and asset availability are unchanged across the batch.
+
+Retain the archive, allowlist, migration-anchor checks, dry-run plan, exact operator-approved batch
+lists, API deletion responses, before/after feed audits, feed comparisons, and a final Releases-page
+count as the cleanup audit. Any retained exception beyond the checked-in allowlist must be added to
+that file in a reviewed repository change before a new plan is generated; never improvise an
+exception while executing a batch.
