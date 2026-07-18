@@ -3984,6 +3984,53 @@ fn apply_endfile_error_marks_current_source_failed() {
 }
 
 #[test]
+fn codec_failure_reported_at_eof_stays_on_the_failed_source() {
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(PathBuf::from("/media/movie.mkv")),
+        media_load_state: network_media::MediaLoadState::Playing,
+        ..PlayerState::default()
+    }));
+
+    assert!(apply_endfile_eof_diagnostic(
+        &state,
+        Some("/media/movie.mkv"),
+        &["[ffmpeg/video] Decoder not found for codec hevc".to_owned()],
+    ));
+
+    let state = state.borrow();
+    assert_eq!(
+        state.media_load_state,
+        network_media::MediaLoadState::Failed
+    );
+    assert_eq!(
+        state
+            .last_load_diagnostic
+            .as_ref()
+            .map(|diagnostic| diagnostic.kind),
+        Some(okp_core::playback_failure::PlaybackFailureKind::MissingCodec)
+    );
+}
+
+#[test]
+fn benign_eof_keeps_the_normal_playlist_path_available() {
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(PathBuf::from("/media/movie.mkv")),
+        media_load_state: network_media::MediaLoadState::Playing,
+        ..PlayerState::default()
+    }));
+
+    assert!(!apply_endfile_eof_diagnostic(
+        &state,
+        Some("/media/movie.mkv"),
+        &["cplayer: finished playback".to_owned()],
+    ));
+    assert_eq!(
+        state.borrow().media_load_state,
+        network_media::MediaLoadState::Playing
+    );
+}
+
+#[test]
 fn apply_endfile_error_marks_current_local_source_failed() {
     // A fresh EndFile::Error for the current local file transitions the surface
     // to Failed and keeps the local source retryable.

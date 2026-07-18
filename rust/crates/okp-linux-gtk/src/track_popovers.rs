@@ -2042,11 +2042,17 @@ pub(crate) fn drain_mpv_events(
             MpvEvent::VideoReconfig { video_dimensions } => {
                 auto_fit_dimensions = auto_fit_dimensions.or(video_dimensions);
             }
-            MpvEvent::EndFile { reason, .. } if reason.is_eof() => {
-                if state.borrow().playlist.repeat() != RepeatMode::One {
-                    save_current_progress(state, true);
+            MpvEvent::EndFile {
+                reason,
+                path,
+                diagnostic_messages,
+            } if reason.is_eof() => {
+                if !apply_endfile_eof_diagnostic(state, path.as_deref(), &diagnostic_messages) {
+                    if state.borrow().playlist.repeat() != RepeatMode::One {
+                        save_current_progress(state, true);
+                    }
+                    advance_playlist_on_eof(state);
                 }
-                advance_playlist_on_eof(state);
             }
             MpvEvent::EndFile {
                 reason: EndFileReason::Error(error),

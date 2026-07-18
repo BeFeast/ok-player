@@ -75,6 +75,26 @@ pub fn diagnose_mpv_failure(
     PlaybackFailureDiagnostic::application(format!("libmpv error {error_code}"))
 }
 
+/// Diagnose an EOF that still carried an active-stream decoder failure. mpv can
+/// report this shape after `FileLoaded` when another stream kept the demuxer
+/// alive, so the absence of `EndFileReason::Error` does not make the decoder
+/// warning harmless. Benign EOF log traffic is ignored.
+pub fn diagnose_mpv_eof(
+    engine_messages: &[String],
+    native_fedora_rpm: bool,
+) -> Option<PlaybackFailureDiagnostic> {
+    engine_messages
+        .iter()
+        .map(|message| message.to_ascii_lowercase())
+        .any(|message| is_codec_failure(&message))
+        .then(|| {
+            let mut diagnostic = diagnose_mpv_failure(0, engine_messages, native_fedora_rpm);
+            diagnostic.detail =
+                "libmpv reached EOF after reporting an unavailable system codec.".to_owned();
+            diagnostic
+        })
+}
+
 fn is_codec_failure(message: &str) -> bool {
     [
         "codec not found",
@@ -180,5 +200,26 @@ mod tests {
         );
 
         assert_eq!(diagnostic.kind, PlaybackFailureKind::MissingCodec);
+    }
+
+    #[test]
+    fn decoder_failure_at_eof_remains_a_codec_diagnostic() {
+        let diagnostic = diagnose_mpv_eof(
+            &messages(&["[ffmpeg/video] Decoder not found for codec hevc"]),
+            true,
+        )
+        .expect("decoder failure must not be discarded just because mpv reported EOF");
+
+        assert_eq!(diagnostic.kind, PlaybackFailureKind::MissingCodec);
+        assert!(diagnostic.message.contains("RPM Fusion"));
+        assert_eq!(
+            diagnostic.detail,
+            "libmpv reached EOF after reporting an unavailable system codec."
+        );
+    }
+
+    #[test]
+    fn benign_eof_logs_do_not_become_failures() {
+        assert!(diagnose_mpv_eof(&messages(&["cplayer: finished playback"]), true).is_none());
     }
 }

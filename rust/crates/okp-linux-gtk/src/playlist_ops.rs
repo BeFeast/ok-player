@@ -42,6 +42,35 @@ pub(crate) fn apply_endfile_error(
     diagnostic_messages: &[String],
 ) {
     eprintln!("libmpv ended the source with error {error}");
+    let diagnostic = okp_core::playback_failure::diagnose_mpv_failure(
+        error,
+        diagnostic_messages,
+        option_env!("OKP_FEDORA_RPM") == Some("1"),
+    );
+    apply_endfile_diagnostic(state, ended_path, diagnostic);
+}
+
+pub(crate) fn apply_endfile_eof_diagnostic(
+    state: &Rc<RefCell<PlayerState>>,
+    ended_path: Option<&str>,
+    diagnostic_messages: &[String],
+) -> bool {
+    let Some(diagnostic) = okp_core::playback_failure::diagnose_mpv_eof(
+        diagnostic_messages,
+        option_env!("OKP_FEDORA_RPM") == Some("1"),
+    ) else {
+        return false;
+    };
+    eprintln!("libmpv reached EOF after reporting a codec failure");
+    apply_endfile_diagnostic(state, ended_path, diagnostic);
+    true
+}
+
+fn apply_endfile_diagnostic(
+    state: &Rc<RefCell<PlayerState>>,
+    ended_path: Option<&str>,
+    diagnostic: okp_core::playback_failure::PlaybackFailureDiagnostic,
+) {
     let current_source = {
         let state = state.borrow();
         state
@@ -56,13 +85,13 @@ pub(crate) fn apply_endfile_error(
             })
     };
     let Some(current_source) = current_source else {
-        eprintln!("ignoring stale EndFile::Error after the source was cleared");
+        eprintln!("ignoring stale EndFile diagnostic after the source was cleared");
         return;
     };
     let stale = ended_path.is_some_and(|ended| !current_source.matches_engine_path(ended));
     if stale {
         eprintln!(
-            "ignoring stale EndFile::Error for a superseded source ({})",
+            "ignoring stale EndFile diagnostic for a superseded source ({})",
             ended_path.unwrap_or_default()
         );
         return;
@@ -70,11 +99,7 @@ pub(crate) fn apply_endfile_error(
     let mut state = state.borrow_mut();
     state.media_load_state = network_media::MediaLoadState::Failed;
     state.retry_load_source = Some(current_source);
-    state.last_load_diagnostic = Some(okp_core::playback_failure::diagnose_mpv_failure(
-        error,
-        diagnostic_messages,
-        option_env!("OKP_FEDORA_RPM") == Some("1"),
-    ));
+    state.last_load_diagnostic = Some(diagnostic);
 }
 
 pub(crate) fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
