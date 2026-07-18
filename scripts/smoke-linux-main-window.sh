@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BINARY="${1:-ok-player}"
 OUT_DIR="${2:-$ROOT/artifacts/manual-ui/linux-main-window-smoke}"
 IDLE_OSC_ASSERT="$ROOT/scripts/assert-linux-idle-osc-absent.sh"
+X11_WINDOW_WAITER="$ROOT/scripts/wait-for-x11-window.sh"
 
 for tool in xvfb-run dbus-run-session xfwm4 xdotool xwininfo import magick ffmpeg ffprobe rg; do
   if ! command -v "$tool" >/dev/null 2>&1; then
@@ -50,10 +51,26 @@ JSON
 
 xfwm4 --sm-client-disable >"$OUT_DIR/xfwm4.log" 2>&1 &
 wm_pid=$!
+app_pid=""
+
+terminate_pid() {
+  local pid="$1"
+  [[ -n "$pid" ]] || return 0
+  kill "$pid" 2>/dev/null || true
+  for _ in $(seq 1 20); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      wait "$pid" 2>/dev/null || true
+      return 0
+    fi
+    sleep 0.05
+  done
+  kill -KILL "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
 
 cleanup() {
-  kill "$app_pid" 2>/dev/null || true
-  kill "$wm_pid" 2>/dev/null || true
+  terminate_pid "$app_pid"
+  terminate_pid "$wm_pid"
 }
 trap cleanup EXIT
 
@@ -199,11 +216,13 @@ fi
 if ! env __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
   LIBGL_ALWAYS_SOFTWARE=1 \
   xvfb-run -a --server-args='-screen 0 1280x900x24 -screen 1 1024x768x24 -nolisten tcp' \
-  dbus-run-session -- bash -s -- "$BINARY" "$OUT_DIR" >"$OUT_DIR/window-fit-session.log" 2>&1 <<'FIT_SMOKE'
+  dbus-run-session -- bash -s -- "$BINARY" "$OUT_DIR" "$X11_WINDOW_WAITER" \
+  >"$OUT_DIR/window-fit-session.log" 2>&1 <<'FIT_SMOKE'
 set -euo pipefail
 
 BINARY="$1"
 OUT_DIR="$2"
+X11_WINDOW_WAITER="$3"
 FIXTURES="$OUT_DIR/fixtures"
 
 export GDK_BACKEND=x11
@@ -231,12 +250,25 @@ DISPLAY="$SECONDARY_DISPLAY" xfwm4 --sm-client-disable >"$OUT_DIR/window-fit-xfw
 wm_secondary_pid=$!
 app_pid=""
 
+terminate_pid() {
+  local pid="$1"
+  [[ -n "$pid" ]] || return 0
+  kill "$pid" 2>/dev/null || true
+  for _ in $(seq 1 20); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      wait "$pid" 2>/dev/null || true
+      return 0
+    fi
+    sleep 0.05
+  done
+  kill -KILL "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+
 cleanup() {
-  if [[ -n "$app_pid" ]]; then
-    kill "$app_pid" 2>/dev/null || true
-  fi
-  kill "$wm_pid" 2>/dev/null || true
-  kill "$wm_secondary_pid" 2>/dev/null || true
+  terminate_pid "$app_pid"
+  terminate_pid "$wm_pid"
+  terminate_pid "$wm_secondary_pid"
 }
 trap cleanup EXIT
 
@@ -256,23 +288,16 @@ start_app() {
 
 wait_for_window() {
   local ids="$1"
-  for _ in $(seq 1 80); do
-    if xdotool search --name "OK Player" >"$ids" 2>/dev/null; then
-      head -n1 "$ids"
-      return 0
-    fi
-    sleep 0.1
-  done
-  echo "Timed out waiting for OK Player window" >&2
-  return 1
+  local diagnostics="${ids%.ids}.readiness.log"
+  "$X11_WINDOW_WAITER" "$app_pid" "$ids" "$diagnostics"
 }
 
 stop_app() {
-  kill "$app_pid" 2>/dev/null || true
-  wait "$app_pid" 2>/dev/null || true
+  local stopped_pid="$app_pid"
+  terminate_pid "$stopped_pid"
   app_pid=""
   for _ in $(seq 1 40); do
-    if ! xdotool search --name "OK Player" >/dev/null 2>&1; then
+    if ! xdotool search --pid "$stopped_pid" --name '^OK Player$' >/dev/null 2>&1; then
       return 0
     fi
     sleep 0.1
