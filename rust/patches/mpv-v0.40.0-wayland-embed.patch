@@ -38,6 +38,23 @@ index 487e7d4..47412be 100644
  
      float panscan;
      float zoom;
+diff --git a/video/out/vo_dmabuf_wayland.c b/video/out/vo_dmabuf_wayland.c
+index 70614c8..144818d 100644
+--- a/video/out/vo_dmabuf_wayland.c
++++ b/video/out/vo_dmabuf_wayland.c
+@@ -510,6 +510,12 @@ static void resize(struct vo *vo)
+     if (width == 0 || height == 0)
+         return;
+ 
++    mp_mutex_lock(&vo->params_mutex);
++    bool params_ready = vo->target_params && vo->params;
++    mp_mutex_unlock(&vo->params_mutex);
++    if (!params_ready)
++        return;
++
+     vo_wayland_set_opaque_region(wl, false);
+     vo->dwidth = width;
+     vo->dheight = height;
 diff --git a/video/out/wayland_common.c b/video/out/wayland_common.c
 index cd51e21..9df2904 100644
 --- a/video/out/wayland_common.c
@@ -452,7 +469,7 @@ index cd51e21..9df2904 100644
  #if HAVE_WAYLAND_PROTOCOLS_1_32
      if (wl->cursor_shape_manager)
          wp_cursor_shape_manager_v1_destroy(wl->cursor_shape_manager);
-@@ -3615,6 +3714,9 @@ void vo_wayland_uninit(struct vo *vo)
+@@ -3615,20 +3714,26 @@ void vo_wayland_uninit(struct vo *vo)
      if (wl->single_pixel_manager)
          wp_single_pixel_buffer_manager_v1_destroy(wl->single_pixel_manager);
  
@@ -462,16 +479,27 @@ index cd51e21..9df2904 100644
      if (wl->surface)
          wl_surface_destroy(wl->surface);
  
-@@ -3630,6 +3732,9 @@ void vo_wayland_uninit(struct vo *vo)
-     if (wl->video_subsurface)
-         wl_subsurface_destroy(wl->video_subsurface);
++    if (wl->osd_subsurface)
++        wl_subsurface_destroy(wl->osd_subsurface);
++
+     if (wl->osd_surface)
+         wl_surface_destroy(wl->osd_surface);
  
+-    if (wl->osd_subsurface)
+-        wl_subsurface_destroy(wl->osd_subsurface);
++    if (wl->video_subsurface)
++        wl_subsurface_destroy(wl->video_subsurface);
+ 
+     if (wl->video_surface)
+         wl_surface_destroy(wl->video_surface);
+ 
+-    if (wl->video_subsurface)
+-        wl_subsurface_destroy(wl->video_subsurface);
 +    if (wl->subcompositor)
 +        wl_subcompositor_destroy(wl->subcompositor);
-+
+ 
      if (wl->wm_base)
          xdg_wm_base_destroy(wl->wm_base);
- 
 @@ -3659,7 +3764,10 @@ void vo_wayland_uninit(struct vo *vo)
      wl_list_for_each_safe(seat, seat_tmp, &wl->seat_list, link)
          remove_seat(seat);

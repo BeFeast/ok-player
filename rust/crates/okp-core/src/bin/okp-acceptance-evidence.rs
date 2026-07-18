@@ -116,13 +116,8 @@ fn presentation(args: &[String]) -> Result<(), String> {
                 .map_err(|error| format!("{log_path}:{}: {error}", index + 1))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let first_present_ns = records
-        .iter()
-        .find_map(|record| match record {
-            PresentationRecord::Present { monotonic_ns, .. } => Some(*monotonic_ns),
-            _ => None,
-        })
-        .ok_or_else(|| "presentation log contains no final-boundary present records".to_owned())?;
+    let first_present_ns = first_final_boundary_ns(&records)
+        .ok_or_else(|| "presentation log contains no presentation records".to_owned())?;
     let warmup_ns = (warmup_seconds * 1_000_000_000.0).round() as u64;
     let thresholds = PresentationThresholds::default();
     let mut summary = summarize_window(
@@ -142,6 +137,14 @@ fn presentation(args: &[String]) -> Result<(), String> {
     } else {
         Err(summary.errors.join("\n"))
     }
+}
+
+fn first_final_boundary_ns(records: &[PresentationRecord]) -> Option<u64> {
+    records.iter().find_map(|record| match record {
+        PresentationRecord::Present { monotonic_ns, .. }
+        | PresentationRecord::CompositorPresented { monotonic_ns, .. } => Some(*monotonic_ns),
+        _ => None,
+    })
 }
 
 fn write_identity(args: &[String]) -> Result<(), String> {
@@ -237,4 +240,26 @@ fn optional_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 
 fn usage() -> String {
     "usage:\n  okp-acceptance-evidence identity --version V --commit SHA --deb PATH --appimage PATH\n  okp-acceptance-evidence template --version V --commit SHA --deb PATH --appimage PATH\n  okp-acceptance-evidence validate --manifest PATH --identity PATH\n  okp-acceptance-evidence candidate-upgrade-validate --manifest PATH\n  okp-acceptance-evidence presentation --log PATH [--warmup-seconds N] [--report-only]\n  okp-acceptance-evidence fedora-artifact --kind flatpak|rpm|copr --file PATH\n  okp-acceptance-evidence fedora-validate --manifest PATH".to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use okp_core::presentation_evidence::PresentationBackend;
+
+    #[test]
+    fn compositor_only_log_has_a_final_boundary_start() {
+        let records = vec![PresentationRecord::CompositorPresented {
+            monotonic_ns: 42,
+            backend: PresentationBackend::NativeWaylandDmabuf,
+            presented_ns: 84,
+            sequence: 1,
+            refresh_ns: 16_666_667,
+            flags: 0,
+            width: 3840,
+            height: 2160,
+        }];
+
+        assert_eq!(first_final_boundary_ns(&records), Some(42));
+    }
 }
