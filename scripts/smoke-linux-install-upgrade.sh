@@ -22,6 +22,7 @@ WORK_DIR="${2:-$(mktemp -d)}"
 
 EXPECTED_FILES=(
   "usr/lib/ok-player/ok-player"
+  "usr/lib/ok-player/libmpv.so.2"
   "usr/bin/ok-player"
   "usr/share/applications/com.befeast.okplayer.desktop"
   "usr/share/icons/hicolor/scalable/apps/com.befeast.okplayer.svg"
@@ -39,6 +40,10 @@ assert_layout() {
   # The launcher must resolve to the private lib binary, not dangle.
   [[ -x "$root/usr/lib/ok-player/ok-player" ]] \
     || fail "installed binary is not executable"
+  "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/verify-linux-bundled-mpv.sh" \
+    "$root/usr/lib/ok-player/ok-player" \
+    "$root/usr/lib/ok-player/libmpv.so.2" \
+    || fail "installed binary does not resolve the packaged patched libmpv"
 }
 
 rm -rf "$WORK_DIR"
@@ -88,8 +93,10 @@ echo "== control metadata =="
 CONTROL="$WORK_DIR/control"
 mkdir -p "$CONTROL"
 dpkg-deb -e "$DEB" "$CONTROL" || fail "dpkg-deb control extraction failed"
-grep -q "^Package: ok-player$" "$CONTROL/control" || fail "control Package field is not ok-player"
-grep -q "^Architecture: amd64$" "$CONTROL/control" || fail "control Architecture is not amd64"
+awk '$0 == "Package: ok-player" { found = 1 } END { exit !found }' "$CONTROL/control" \
+  || fail "control Package field is not ok-player"
+awk '$0 == "Architecture: amd64" { found = 1 } END { exit !found }' "$CONTROL/control" \
+  || fail "control Architecture is not amd64"
 
 echo "== upgrade (re-extract over install) =="
 dpkg-deb -x "$DEB" "$EXTRACT" || fail "dpkg-deb re-extraction failed"

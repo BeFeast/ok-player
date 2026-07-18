@@ -7,12 +7,14 @@ SOURCE="${1:?usage: build-local-mpv.sh <mpv-source-tree> <output-dir>}"
 OUT="${2:?usage: build-local-mpv.sh <mpv-source-tree> <output-dir>}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 EMBED_PATCH="$SCRIPT_DIR/../rust/patches/mpv-v0.40.0-wayland-embed.patch"
+FFMPEG_PATCH="$SCRIPT_DIR/../rust/patches/mpv-v0.40.0-ffmpeg-8.patch"
 
 for tool in meson ninja pkg-config; do
   command -v "$tool" >/dev/null 2>&1 || { echo "Missing required tool: $tool" >&2; exit 127; }
 done
 [[ -f "$SOURCE/meson.build" ]] || { echo "Not an mpv source tree: $SOURCE" >&2; exit 2; }
 [[ -f "$EMBED_PATCH" ]] || { echo "Missing Wayland embed patch" >&2; exit 2; }
+[[ -f "$FFMPEG_PATCH" ]] || { echo "Missing FFmpeg compatibility patch" >&2; exit 2; }
 
 SOURCE="$(realpath "$SOURCE")"
 mkdir -p "$OUT"
@@ -20,15 +22,21 @@ OUT="$(realpath "$OUT")"
 BUILD="$OUT/build"
 PREFIX="$OUT/install"
 
-if git -C "$SOURCE" apply --reverse --check "$EMBED_PATCH" >/dev/null 2>&1; then
-  printf 'Wayland embed patch: already applied\n'
-elif git -C "$SOURCE" apply --check "$EMBED_PATCH"; then
-  git -C "$SOURCE" apply "$EMBED_PATCH"
-  printf 'Wayland embed patch: applied\n'
-else
-  echo "The Wayland embed patch requires the mpv v0.40.0 source tree." >&2
-  exit 2
-fi
+apply_patch_once() {
+  local patch="$1" description="$2"
+  if git -C "$SOURCE" apply --reverse --check "$patch" >/dev/null 2>&1; then
+    printf '%s: already applied\n' "$description"
+  elif git -C "$SOURCE" apply --check "$patch"; then
+    git -C "$SOURCE" apply "$patch"
+    printf '%s: applied\n' "$description"
+  else
+    echo "$description requires the pinned mpv v0.40.0 source tree." >&2
+    exit 2
+  fi
+}
+
+apply_patch_once "$EMBED_PATCH" "Wayland embed patch"
+apply_patch_once "$FFMPEG_PATCH" "FFmpeg 8 compatibility patch"
 
 meson setup "$BUILD" "$SOURCE" --wipe \
   --buildtype=debugoptimized \
@@ -42,10 +50,17 @@ meson setup "$BUILD" "$SOURCE" --wipe \
 meson compile -C "$BUILD"
 meson install -C "$BUILD"
 
-pkg_dir="$(find "$PREFIX" -type d -path '*/pkgconfig' -print -quit)"
-[[ -n "$pkg_dir" ]] || { echo "Installed libmpv pkg-config metadata was not found" >&2; exit 1; }
-mpv_binary="$(find "$PREFIX" -type f -path '*/bin/mpv' -print -quit)"
-[[ -n "$mpv_binary" ]] || { echo "Installed standalone mpv binary was not found" >&2; exit 1; }
+pkg_configs=()
+for candidate in \
+  "$PREFIX"/lib/pkgconfig/mpv.pc \
+  "$PREFIX"/lib/*/pkgconfig/mpv.pc \
+  "$PREFIX"/lib64/pkgconfig/mpv.pc; do
+  [[ -e "$candidate" ]] && pkg_configs+=("$candidate")
+done
+(( ${#pkg_configs[@]} == 1 )) || { echo "Installed libmpv pkg-config metadata was not found" >&2; exit 1; }
+pkg_dir="$(dirname -- "${pkg_configs[0]}")"
+mpv_binary="$PREFIX/bin/mpv"
+[[ -x "$mpv_binary" ]] || { echo "Installed standalone mpv binary was not found" >&2; exit 1; }
 
 printf 'Standalone mpv: %s\n' "$mpv_binary"
 printf 'Build OK Player with: PKG_CONFIG_PATH=%s CC=/usr/bin/cc cargo build -p okp-linux-gtk\n' "$pkg_dir"

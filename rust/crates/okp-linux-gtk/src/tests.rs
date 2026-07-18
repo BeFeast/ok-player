@@ -335,13 +335,38 @@ fn linux_packaging_installs_launcher_identity_asset() {
         assert!(contents.contains("com.befeast.okplayer.svg"));
         assert!(contents.contains("for size in 16 24 32 48 64"));
         assert!(contents.contains("usr/share/icons/hicolor/${size}x${size}/apps"));
+        assert!(contents.contains("okp_use_linux_bundled_mpv package"));
+        assert!(contents.contains("verify-linux-bundled-mpv.sh"));
+        assert!(contents.contains("libmpv.so.2"));
     }
 
     let velopack = fs::read_to_string(root.join("scripts/package-linux-velopack.sh"))
         .expect("Velopack packaging script should be readable");
     assert!(velopack.contains("okp-candidate\" stage-velopack"));
+    assert!(velopack.contains("--appimage-extract"));
     assert!(!velopack.contains("$PACK_ID.AppImage"));
     assert!(!velopack.contains("$PACK_ID-$VERSION-linux-full.nupkg"));
+}
+
+#[test]
+fn linux_packages_pin_and_bundle_the_embedded_wayland_mpv() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let prepare = fs::read_to_string(root.join("scripts/prepare-linux-bundled-mpv.sh"))
+        .expect("bundled mpv preparation script should be readable");
+    let local_build = fs::read_to_string(root.join("scripts/build-local-mpv.sh"))
+        .expect("local mpv build script should be readable");
+    let verify = fs::read_to_string(root.join("scripts/verify-linux-bundled-mpv.sh"))
+        .expect("bundled mpv verification script should be readable");
+    let candidate = fs::read_to_string(root.join("scripts/build-linux-candidate.sh"))
+        .expect("candidate builder should be readable");
+
+    assert!(prepare.contains("UPSTREAM_TAG=\"v0.40.0\""));
+    assert!(prepare.contains("UPSTREAM_COMMIT=\"e48ac7ce08462f5e33af6ef9deeac6fa87eef01e\""));
+    assert!(local_build.contains("mpv-v0.40.0-wayland-embed.patch"));
+    assert!(local_build.contains("mpv-v0.40.0-ffmpeg-8.patch"));
+    assert!(verify.contains("wayland-embed-display"));
+    assert!(verify.contains("Packaged binary resolved libmpv outside its payload"));
+    assert!(candidate.contains("run_gate bundled-mpv okp_use_linux_bundled_mpv"));
 }
 
 #[test]
