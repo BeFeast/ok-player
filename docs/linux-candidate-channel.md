@@ -20,6 +20,12 @@ The candidate channel lets explicitly enrolled Linux QA installs update from fre
 
 The scheduled path records an `idle`, `building`, or `stalled` heartbeat summary. Manual dispatch remains an operator override for republishing the last verified bundle or changing its acceptance status.
 
+The fit gate is deliberately non-publishing when run by itself. After a
+lifecycle repair, validate the exact branch head with
+`scripts/run-linux-window-fit-series.sh`; do not dispatch this workflow to obtain
+fit evidence. Candidate publication remains controlled by the normal scheduler
+or an operator after merge.
+
 ## Monotonic identities
 
 Candidates follow the issue's SemVer ladder:
@@ -103,6 +109,12 @@ reason. It does not create a release, upload or delete an asset, move
 `candidate.linux.json`, prune history, or update `last-promoted.sha`. A later run
 whose requested SHA matches the already-built current bundle may publish that
 same verified generation without rebuilding it.
+
+A headless gate failure remains fail-safe. Workflow-dispatch run `29639207396`
+failed on source `50495469570dd31129581b158678d33fb22a574d` before promotion,
+while the immediately following scheduled run `29639587120` built the same
+source and published accepted candidate `0.11.0-beta.0.21`. The previous
+accepted pointer and assets stayed usable throughout the failed invocation.
 
 ## Retention and rollback
 

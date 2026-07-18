@@ -91,7 +91,10 @@ lock after their direct parent returns.
    - real playback and screenshot capture from the exact Debian payload, with a bundled image and SHA-256
    - headless launch smoke (Xvfb): the idle surface once, followed by the complete
      fit-only small/maximized/fullscreen/4K lifecycle three consecutive times with
-     no retry inside the gate
+     no retry inside the gate. Each invocation uses one Xfwm process for both X
+     screens, private XDG cache/runtime namespaces, a fresh session bus, explicit
+     GTK/MPRIS/AT-SPI name release checks, and post-command probes proving that
+     the bus and every process carrying its address are gone before the next invocation.
    - optional native-hardware smoke (only when `OKP_CANDIDATE_NATIVE_SMOKE` is set)
 5. Emit the artifact bundle and check promotability.
 6. On a fully promotable build, advance `last-built.sha` so the next schedule
@@ -116,9 +119,30 @@ Each build writes a bundle under `$OKP_CANDIDATE_STATE_DIR/out/<build-number>/`:
 The headless output also retains `headless-launch/fit-series/run-{1,2,3}/` and
 `series-evidence.txt`. Every run records the current process ID, selected XID,
 viewable map state and geometry, maximized/fullscreen guards, explicit Fit
-dispatch, and the small/4K results. A failed run aborts the series and the
-candidate without accepting a stale window, increasing the readiness timeout,
-or retrying publication.
+dispatch, small/4K results, private XDG cache/runtime paths, clean
+GTK/MPRIS/AT-SPI registration release, and fresh session-bus startup/teardown.
+The bus supervisor runs as a Linux child subreaper, terminates and waits for
+orphaned command or D-Bus descendants, and then verifies that no process still
+retains the isolated bus address.
+Xfwm is started once and must publish ownership on
+both X roots before the player launches; starting one Xfwm process per screen is
+invalid because each process probes every screen and the two instances race for
+the same roots. The Xvfb process keeps GLX enabled under the explicitly pinned
+Mesa software vendor; disabling GLX can leave GTK/libmpv's startup XID unmapped
+at `1x1`, while allowing the host NVIDIA vendor can crash Xvfb. Xvfb uses
+`-noreset` so removing the final client cannot enter
+the multi-screen reset path, and the isolated Xvfb supervisor explicitly reaps
+the disposable server instead of relying on that host-sensitive shutdown path.
+A failed run aborts the series and the candidate without accepting a stale
+window, increasing the readiness timeout, or retrying publication.
+
+The failure in workflow-dispatch run `29639207396` and success in scheduled run
+`29639587120` came from that Xfwm ownership race on the same source commit. The
+failed ordering left the only player XID unmapped at `1x1`; the D-Bus error was
+printed while the failed session was being dismantled. The next invocation
+reordered the competing managers, mapped the window, and published candidate
+`0.11.0-beta.0.21`. The accepted pointer remained healthy because the failed
+build stopped before promotion.
 
 This bundle is sufficient for candidate-channel promotion by #339 **without
 rebuilding**. AppImage packaging is forced to the `linux-candidate` Velopack

@@ -71,10 +71,21 @@ The runner generates media, captures all fixed states, writes `xvfb-rows.json`, 
 Candidate window-fit readiness is a separate release-engineering gate. Run
 `scripts/run-linux-window-fit-series.sh <binary> <output>` to execute the complete
 fit-only small/maximized/fullscreen/4K smoke three consecutive times. Each run
-uses a portal-free isolated X11 session, requires the previous process and every
-named window to be gone before the next launch, and preserves PID/XID/map-state,
-geometry, guard, explicit-command, and app-log diagnostics. If any run fails,
-the command exits non-zero and the next attempt starts a new series from zero.
+uses a portal-free isolated X11 session with one Xfwm process owning both roots
+and private XDG cache/runtime paths. It requires the previous process, every
+named window, and the GTK/MPRIS/AT-SPI D-Bus names to be gone before the next
+launch, and preserves PID/XID/map-state, geometry, guard, explicit-command,
+app-log, Xfwm ownership, and session-bus diagnostics.
+The wrapper proves the fresh bus was reachable during the command and
+unreachable after teardown. Its Linux child subreaper terminates and waits for
+orphaned command or D-Bus descendants before verifying that no process retains
+the bus address;
+the Xvfb supervisor records readiness, confirms the
+server remained alive through the command, explicitly reaps it, and removes its
+private display state before returning. GLX remains enabled under the pinned
+Mesa software vendor so the GTK/libmpv render surface must map without loading
+the host NVIDIA EGL stack. If any run fails, the command exits
+non-zero and the next attempt starts a new series from zero.
 This Xvfb evidence does not prove live GNOME chooser, drag/drop, clipboard,
 portal, compositor, or focus behavior.
 

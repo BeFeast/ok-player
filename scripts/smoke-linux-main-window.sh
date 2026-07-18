@@ -7,8 +7,11 @@ OUT_DIR="${2:-$ROOT/artifacts/manual-ui/linux-main-window-smoke}"
 IDLE_OSC_ASSERT="$ROOT/scripts/assert-linux-idle-osc-absent.sh"
 X11_WINDOW_WAITER="$ROOT/scripts/wait-for-x11-window.sh"
 X11_APP_CLEAR_WAITER="$ROOT/scripts/wait-for-x11-app-clear.sh"
+DBUS_NAME_CLEAR_WAITER="$ROOT/scripts/wait-for-dbus-names-clear.sh"
+ISOLATED_DBUS_SESSION="$ROOT/scripts/run-linux-isolated-dbus-session.sh"
+ISOLATED_XVFB_SESSION="$ROOT/scripts/run-linux-isolated-xvfb-session.sh"
 
-for tool in xvfb-run dbus-run-session xfwm4 xdotool xwininfo import magick ffmpeg ffprobe rg; do
+for tool in Xvfb xauth flock dbus-run-session gdbus xfwm4 xdotool xwininfo xprop import magick ffmpeg ffprobe rg stat; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "Missing required tool: $tool" >&2
     exit 127
@@ -24,10 +27,15 @@ if [[ "${OKP_MAIN_WINDOW_FIT_ONLY:-0}" == "1" && "${OKP_MAIN_WINDOW_IDLE_ONLY:-0
 fi
 
 if [[ "${OKP_MAIN_WINDOW_FIT_ONLY:-0}" != "1" ]]; then
-  if ! env __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
+  mkdir -p "$OUT_DIR/cache" "$OUT_DIR/runtime"
+  chmod 700 "$OUT_DIR/runtime"
+  if ! env XDG_CACHE_HOME="$OUT_DIR/cache" XDG_RUNTIME_DIR="$OUT_DIR/runtime" \
+    __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
     LIBGL_ALWAYS_SOFTWARE=1 \
-    xvfb-run -a --server-args='-screen 0 1280x900x24 -nolisten tcp' \
-    dbus-run-session -- bash -s -- "$BINARY" "$OUT_DIR" "$IDLE_OSC_ASSERT" >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
+    "$ISOLATED_XVFB_SESSION" "$OUT_DIR/xvfb-evidence.txt" "$OUT_DIR/xvfb.log" \
+    '-screen 0 1280x900x24 -nolisten tcp -noreset' \
+    "$ISOLATED_DBUS_SESSION" "$OUT_DIR/session-evidence.txt" \
+    bash -s -- "$BINARY" "$OUT_DIR" "$IDLE_OSC_ASSERT" >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
 set -euo pipefail
 
 BINARY="$1"
@@ -41,13 +49,18 @@ export GDK_BACKEND=x11
 export GDK_DEBUG=no-portals
 export GIO_USE_PORTALS=0
 export GTK_USE_PORTAL=0
+export GTK_A11Y=none
 export NO_AT_BRIDGE=1
 export XDG_SESSION_TYPE=x11
 export XDG_CURRENT_DESKTOP=XFCE
 export XDG_CONFIG_HOME="$OUT_DIR/config"
 export XDG_STATE_HOME="$OUT_DIR/state"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:?}"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:?}"
 
-mkdir -p "$XDG_CONFIG_HOME/ok-player"
+mkdir -p "$XDG_CONFIG_HOME/ok-player" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" \
+  "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR"
 cat >"$XDG_CONFIG_HOME/ok-player/settings.json" <<'JSON'
 {
   "version": 1,
@@ -219,11 +232,17 @@ fi
 "$ROOT/scripts/generate-linux-acceptance-media.sh" "$OUT_DIR/fixtures" \
   >"$OUT_DIR/fixtures.log" 2>&1
 
-if ! env __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
+mkdir -p "$OUT_DIR/fit-cache" "$OUT_DIR/fit-runtime"
+chmod 700 "$OUT_DIR/fit-runtime"
+if ! env XDG_CACHE_HOME="$OUT_DIR/fit-cache" XDG_RUNTIME_DIR="$OUT_DIR/fit-runtime" \
+  __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
   LIBGL_ALWAYS_SOFTWARE=1 \
-  xvfb-run -a --server-args='-screen 0 1280x900x24 -screen 1 1024x768x24 -nolisten tcp' \
-  dbus-run-session -- bash -s -- "$BINARY" "$OUT_DIR" "$X11_WINDOW_WAITER" \
-  "$X11_APP_CLEAR_WAITER" \
+  "$ISOLATED_XVFB_SESSION" "$OUT_DIR/fit-xvfb-evidence.txt" \
+  "$OUT_DIR/window-fit-xvfb.log" \
+  '-screen 0 1280x900x24 -screen 1 1024x768x24 -nolisten tcp -noreset' \
+  "$ISOLATED_DBUS_SESSION" "$OUT_DIR/fit-session-evidence.txt" \
+  bash -s -- "$BINARY" "$OUT_DIR" "$X11_WINDOW_WAITER" \
+  "$X11_APP_CLEAR_WAITER" "$DBUS_NAME_CLEAR_WAITER" \
   >"$OUT_DIR/window-fit-session.log" 2>&1 <<'FIT_SMOKE'
 set -euo pipefail
 
@@ -231,6 +250,7 @@ BINARY="$1"
 OUT_DIR="$2"
 X11_WINDOW_WAITER="$3"
 X11_APP_CLEAR_WAITER="$4"
+DBUS_NAME_CLEAR_WAITER="$5"
 FIXTURES="$OUT_DIR/fixtures"
 
 export GDK_BACKEND=x11
@@ -240,16 +260,26 @@ export GDK_BACKEND=x11
 export GDK_DEBUG=no-portals
 export GIO_USE_PORTALS=0
 export GTK_USE_PORTAL=0
+export GTK_A11Y=none
 export NO_AT_BRIDGE=1
 export XDG_SESSION_TYPE=x11
 export XDG_CURRENT_DESKTOP=XFCE
 export XDG_CONFIG_HOME="$OUT_DIR/fit-config"
 export XDG_STATE_HOME="$OUT_DIR/fit-state"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:?}"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:?}"
 
 PRIMARY_DISPLAY="$DISPLAY"
 SECONDARY_DISPLAY="${DISPLAY%%.*}.1"
 
-mkdir -p "$XDG_CONFIG_HOME/ok-player"
+mkdir -p "$XDG_CONFIG_HOME/ok-player" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" \
+  "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR"
+runtime_mode="$(stat -c '%a' "$XDG_RUNTIME_DIR")"
+if [[ "$runtime_mode" != "700" ]]; then
+  echo "XDG_RUNTIME_DIR must be private, got mode $runtime_mode" >&2
+  exit 1
+fi
 cat >"$XDG_CONFIG_HOME/ok-player/settings.json" <<'JSON'
 {
   "version": 1,
@@ -257,14 +287,21 @@ cat >"$XDG_CONFIG_HOME/ok-player/settings.json" <<'JSON'
 }
 JSON
 
-DISPLAY="$PRIMARY_DISPLAY" xfwm4 --sm-client-disable >"$OUT_DIR/window-fit-xfwm4-primary.log" 2>&1 &
-wm_pid=$!
-DISPLAY="$SECONDARY_DISPLAY" xfwm4 --sm-client-disable >"$OUT_DIR/window-fit-xfwm4-secondary.log" 2>&1 &
-wm_secondary_pid=$!
+wm_pid=""
 app_pid=""
 app_log=""
 : >"$OUT_DIR/fit-lifecycle.log"
 : >"$OUT_DIR/fit-evidence.txt"
+printf 'xdg_cache_home_isolated=true\nxdg_runtime_dir_isolated=true\n' \
+  >>"$OUT_DIR/fit-evidence.txt"
+printf 'xdg_runtime_mode=%s\naccessibility_disabled=true\n' "$runtime_mode" \
+  >>"$OUT_DIR/fit-evidence.txt"
+DBUS_NAMES=(
+  com.befeast.okplayer
+  org.mpris.MediaPlayer2.okplayer
+  org.a11y.Bus
+  org.a11y.atspi.Registry
+)
 
 terminate_pid() {
   local pid="$1"
@@ -284,11 +321,37 @@ terminate_pid() {
 cleanup() {
   terminate_pid "$app_pid"
   terminate_pid "$wm_pid"
-  terminate_pid "$wm_secondary_pid"
 }
 trap cleanup EXIT
 
-sleep 1
+window_manager_ready() {
+  local display="$1"
+  DISPLAY="$display" xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null \
+    | rg -q 'window id # 0x[1-9a-fA-F][0-9a-fA-F]*'
+}
+
+wait_for_window_manager() {
+  local display="$1" label="$2"
+  for attempt in $(seq 1 40); do
+    if window_manager_ready "$display"; then
+      printf 'window-manager display=%s label=%s attempt=%s ready=true\n' \
+        "$display" "$label" "$attempt" >>"$OUT_DIR/fit-lifecycle.log"
+      return 0
+    fi
+    sleep 0.05
+  done
+  echo "Timed out waiting for Xfwm on $display" >&2
+  return 1
+}
+
+# Xfwm probes and manages every screen on its X server. Starting one process per
+# screen lets both instances race for :N.0 and :N.1, so launch exactly one and
+# wait until that process has published ownership on both roots.
+DISPLAY="$PRIMARY_DISPLAY" xfwm4 --sm-client-disable \
+  >"$OUT_DIR/window-fit-xfwm4-primary.log" 2>&1 &
+wm_pid=$!
+wait_for_window_manager "$PRIMARY_DISPLAY" primary
+wait_for_window_manager "$SECONDARY_DISPLAY" secondary
 
 start_app() {
   local log="$1"
@@ -303,6 +366,12 @@ start_app() {
     return 1
   fi
   cat "$OUT_DIR/pre-start-lifecycle.log" >>"$OUT_DIR/fit-lifecycle.log"
+  if ! "$DBUS_NAME_CLEAR_WAITER" "$OUT_DIR/pre-start-dbus-lifecycle.log" \
+    "${DBUS_NAMES[@]}"; then
+    cat "$OUT_DIR/pre-start-dbus-lifecycle.log" >>"$OUT_DIR/fit-lifecycle.log"
+    return 1
+  fi
+  cat "$OUT_DIR/pre-start-dbus-lifecycle.log" >>"$OUT_DIR/fit-lifecycle.log"
 
   local -a startup_env=()
   case "$startup_mode" in
@@ -353,6 +422,14 @@ stop_app() {
     return 1
   fi
   cat "$diagnostics" >>"$OUT_DIR/fit-lifecycle.log"
+  local dbus_diagnostics="$OUT_DIR/stop-${stopped_pid}-dbus-lifecycle.log"
+  if ! "$DBUS_NAME_CLEAR_WAITER" "$dbus_diagnostics" "${DBUS_NAMES[@]}"; then
+    cat "$dbus_diagnostics" >>"$OUT_DIR/fit-lifecycle.log"
+    echo "Application log: $app_log" >&2
+    cat "$app_log" >&2 || true
+    return 1
+  fi
+  cat "$dbus_diagnostics" >>"$OUT_DIR/fit-lifecycle.log"
   printf 'stop pid=%s clear=true\n' "$stopped_pid" >>"$OUT_DIR/fit-lifecycle.log"
   app_pid=""
   app_log=""
@@ -409,6 +486,7 @@ if [[ "$small_width" != "320" || "$small_height" != "180" ]]; then
 fi
 for expected in \
   "mpv render context initialized before source load" \
+  "headless fit smoke: audio-device observation disabled" \
   "window fit request: video=320x180" \
   "window fit settled: client=320x180"; do
   if ! wait_for_log "$OUT_DIR/fit-small-app.log" "$expected"; then
@@ -555,6 +633,8 @@ then
   cat "$OUT_DIR/window-fit-session.log" >&2
   exit 1
 fi
+cat "$OUT_DIR/fit-xvfb-evidence.txt" >>"$OUT_DIR/fit-evidence.txt"
+cat "$OUT_DIR/fit-session-evidence.txt" >>"$OUT_DIR/fit-evidence.txt"
 
 if rg -q "org\.freedesktop\.portal\.Desktop" "$OUT_DIR/window-fit-session.log"; then
   echo "Window-fit smoke unexpectedly activated a desktop portal in the isolated X11 session" >&2
