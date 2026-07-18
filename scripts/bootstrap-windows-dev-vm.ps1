@@ -8,16 +8,17 @@
   version baselines from scripts/windows-dev-versions.json (the single source of truth for tools that
   live OUTSIDE the repository):
 
-    * Visual Studio 2026 Build Tools (or Community) with the Managed Desktop + Native Desktop workloads,
-      the Windows 11 SDK (26100) component, and the Windows App SDK C# templates
+    * Visual Studio 2026 Build Tools (or Community) with the managed-desktop and Visual C++ build workloads
+      plus the Windows 11 SDK (26100) component
     * .NET 9 SDK
     * Rust MSVC toolchain (rustup + stable + the x86_64-pc-windows-msvc target)
-    * Git, and (for source native builds only) CMake + Ninja
+    * Git, 7-Zip (for native archive extraction), and (for source native builds only) CMake + Ninja
     * PowerShell 7 (so the pwsh-only repo scripts run natively)
+    * Velopack CLI (vpk), version-matched to Directory.Packages.props for development packages
     * libmpv / ffmpeg native binaries via scripts/fetch-natives.ps1
 
   Each step checks for the tool first and only installs what is missing, so the script is safe to run on
-  a fresh VM, on a half-provisioned VM, and on an already-complete VM — every run converges to the same
+  a fresh VM, on a half-provisioned VM, and on an already-complete VM -- every run converges to the same
   state. It never touches any parked physical verification checkout: it provisions the machine it runs on
   and clones/mutates nothing outside this repository.
 
@@ -28,7 +29,7 @@
   readable environment report so the VM's verified state is captured alongside the run.
 .PARAMETER CheckOnly
   Verify the toolchain and emit the environment report WITHOUT installing anything. Exit code is non-zero
-  when a required tool is missing or below its baseline — use this in CI or a snapshot gate.
+  when a required tool is missing or below its baseline -- use this in CI or a snapshot gate.
 .PARAMETER SkipVisualStudio
   Do not install/modify Visual Studio. Useful when the IDE is provisioned by a separate image step.
 .PARAMETER SkipNatives
@@ -60,6 +61,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $manifestPath = Join-Path $PSScriptRoot 'windows-dev-versions.json'
 if (-not (Test-Path $manifestPath)) { throw "Version manifest not found: $manifestPath" }
 $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+. (Join-Path $PSScriptRoot 'windows-dev-vs.ps1')
 
 function Write-Step { param([string]$Message) Write-Host "==> $Message" -ForegroundColor Cyan }
 function Write-Ok { param([string]$Message) Write-Host "  ok  $Message" -ForegroundColor Green }
@@ -77,50 +79,77 @@ deliberately does not shell out to an unverified installer to add winget itself.
     return $wg.Source
 }
 
-# Idempotent winget install: skip when the package id is already present, otherwise install it pinned by
-# id (exact match). winget itself is convergent, but the pre-check keeps re-runs quiet and offline-fast.
+# Idempotent winget install: skip when one of the package ids is already present, otherwise install using
+# the first id that succeeds (exact match). When a primary id is not yet published to the winget repository,
+# AlternativeIds are tried in order. An override means the installer must run even for an existing package
+# (for example, to add missing Visual Studio workloads), so that path uses the installed id with --force.
+# Callers with an independently detected version can also provide a minimum; an installed package below that
+# floor is upgraded instead of being treated as complete.
 function Install-WingetPackage {
     param(
         [Parameter(Mandatory)][string]$Id,
         [string]$Name = $Id,
-        [string[]]$OverrideArgs
+        [string[]]$OverrideArgs,
+        [string[]]$AlternativeIds,
+        [string]$InstalledVersion,
+        [string]$MinimumVersion
     )
-    Write-Step "Ensuring $Name ($Id)"
-    $listed = winget list --id $Id -e --accept-source-agreements 2>$null
-    if ($LASTEXITCODE -eq 0 -and ($listed -match [regex]::Escape($Id))) {
-        Write-Skip "$Name already installed"
+    $ids = @(@($Id) + @($AlternativeIds) | Where-Object { $_ })
+    Write-Step "Ensuring $Name ($($ids -join ' / '))"
+    $installedId = $null
+    foreach ($candidate in $ids) {
+        $listed = winget list --id $candidate -e --accept-source-agreements 2>$null
+        if ($LASTEXITCODE -eq 0 -and ($listed -match [regex]::Escape($candidate))) {
+            $installedId = $candidate
+            break
+        }
+    }
+    $needsUpgrade = $false
+    if ($installedId -and $InstalledVersion -and $MinimumVersion) {
+        $installedMatch = [regex]::Match($InstalledVersion, '\d+(?:\.\d+){1,3}')
+        $minimumMatch = [regex]::Match($MinimumVersion, '\d+(?:\.\d+){1,3}')
+        if ($installedMatch.Success -and $minimumMatch.Success) {
+            $needsUpgrade = ([version]$installedMatch.Value -lt [version]$minimumMatch.Value)
+        }
+    }
+    if ($installedId -and -not $OverrideArgs -and -not $needsUpgrade) {
+        Write-Skip "$Name already installed ($installedId)"
         return
     }
-    if ($CheckOnly) { Write-Host "  would install $Name" -ForegroundColor Yellow; return }
+    if ($CheckOnly) {
+        $action = if ($needsUpgrade) { 'update' } elseif ($installedId) { 'modify' } else { 'install' }
+        Write-Host "  would $action $Name" -ForegroundColor Yellow
+        return
+    }
 
-    $wingetArgs = @('install', '--id', $Id, '-e', '--accept-source-agreements',
-        '--accept-package-agreements', '--disable-interactivity')
-    if ($OverrideArgs) { $wingetArgs += $OverrideArgs }
-    winget @wingetArgs
-    if ($LASTEXITCODE -ne 0) { throw "winget failed to install $Name ($Id); exit code $LASTEXITCODE" }
-    Write-Ok "$Name installed"
-}
-
-function Get-VsWherePath {
-    $p = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-    if (Test-Path $p) { return $p }
-    return $null
-}
-
-function Test-VisualStudioComponents {
-    param([string[]]$Required)
-    $vswhere = Get-VsWherePath
-    if (-not $vswhere) { return $false }
-    # -products * so Build Tools (not only the IDE editions) count; -requires all listed components.
-    $found = & $vswhere -products '*' -latest -prerelease -requires @Required -property installationPath 2>$null
-    return [bool]$found
+    $lastExit = $null
+    $candidateIds = if ($installedId) { @($installedId) } else { $ids }
+    foreach ($candidate in $candidateIds) {
+        $verb = if ($needsUpgrade) { 'upgrade' } else { 'install' }
+        $wingetArgs = @($verb, '--id', $candidate, '-e', '--accept-source-agreements',
+            '--accept-package-agreements', '--disable-interactivity')
+        if ($OverrideArgs) { $wingetArgs += $OverrideArgs }
+        if ($installedId -and -not $needsUpgrade) { $wingetArgs += '--force' }
+        winget @wingetArgs
+        $lastExit = $LASTEXITCODE
+        if ($lastExit -eq 0) {
+            $action = if ($needsUpgrade) { 'updated' } elseif ($installedId) { 'modified' } else { 'installed' }
+            Write-Ok "$Name $action ($candidate)"
+            return
+        }
+    }
+    throw "winget failed to install $Name; last exit code $lastExit"
 }
 
 function Install-VisualStudio {
     $vs = $manifest.tools.visualStudio
     $components = @($vs.components)
-    if (Test-VisualStudioComponents -Required $components) {
-        Write-Skip 'Visual Studio workloads already present (Managed Desktop, Native Desktop, Win11 SDK 26100, WinAppSDK C#)'
+    $vswhere = Get-VisualStudioWherePath
+    $qualifiedInstance = if ($vswhere) {
+        Get-VisualStudioInstance -VsWherePath $vswhere -RequiredComponents $components -MinimumVersion $vs.minVersion
+    } else { $null }
+    if ($qualifiedInstance) {
+        Write-Skip 'Visual Studio workloads already present (Managed Desktop Build Tools, VCTools, Win11 SDK 26100)'
         return
     }
     if ($CheckOnly) { Write-Host '  would install/modify Visual Studio workloads' -ForegroundColor Yellow; return }
@@ -131,7 +160,8 @@ function Install-VisualStudio {
     foreach ($c in $components) { $override += @('--add', $c) }
     $overrideStr = ($override -join ' ')
     Install-WingetPackage -Id $vs.wingetId -Name 'Visual Studio 2026 Build Tools' `
-        -OverrideArgs @('--override', $overrideStr)
+        -OverrideArgs @('--override', $overrideStr) `
+        -AlternativeIds @($vs.alternativeWingetIds)
 }
 
 function Install-RustMsvc {
@@ -154,9 +184,44 @@ function Install-RustMsvc {
     Write-Ok "Rust $($rust.toolchain) ($($rust.target)) ready"
 }
 
+function Install-VelopackCli {
+    $packagesProps = Join-Path $repoRoot 'Directory.Packages.props'
+    $propsText = Get-Content -Raw -LiteralPath $packagesProps
+    $match = [regex]::Match($propsText, 'Include="Velopack"\s+Version="([^"]+)"')
+    if (-not $match.Success) { throw "Velopack package version not found in $packagesProps" }
+    $requiredVersion = $match.Groups[1].Value
+
+    $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
+    if (-not $dotnet) {
+        $dotnetDefault = Join-Path $env:ProgramFiles 'dotnet\dotnet.exe'
+        if (Test-Path $dotnetDefault) { $dotnet = Get-Command $dotnetDefault -ErrorAction SilentlyContinue }
+    }
+    if (-not $dotnet) {
+        if ($CheckOnly) {
+            Write-Host "  would install/update Velopack CLI vpk $requiredVersion" -ForegroundColor Yellow
+            return
+        }
+        throw '.NET SDK is installed but dotnet is not available in this session'
+    }
+
+    $toolList = (& $dotnet.Source tool list --global 2>$null | Out-String)
+    $installed = [regex]::Match($toolList, '(?m)^vpk\s+([^\s]+)')
+    if ($installed.Success -and $installed.Groups[1].Value -eq $requiredVersion) {
+        Write-Skip "Velopack CLI already installed (vpk $requiredVersion)"
+        return
+    }
+    if ($CheckOnly) { Write-Host "  would install/update Velopack CLI vpk $requiredVersion" -ForegroundColor Yellow; return }
+
+    $verb = if ($installed.Success) { 'update' } else { 'install' }
+    Write-Step "Ensuring Velopack CLI (vpk $requiredVersion)"
+    & $dotnet.Source tool $verb --global vpk --version $requiredVersion
+    if ($LASTEXITCODE -ne 0) { throw "dotnet tool $verb failed for vpk $requiredVersion; exit code $LASTEXITCODE" }
+    Write-Ok "Velopack CLI ready (vpk $requiredVersion)"
+}
+
 # ---- Provision -----------------------------------------------------------------------------------
 Write-Host ''
-Write-Host "OK Player — Windows development VM bootstrap" -ForegroundColor White
+Write-Host "OK Player -- Windows development VM bootstrap" -ForegroundColor White
 Write-Host "Baseline VM envelope: $($manifest.vmEnvelope.vcpu) vCPU, $($manifest.vmEnvelope.memoryGiB) GiB RAM, $($manifest.vmEnvelope.diskGiB) GiB SSD (development baseline, not an app requirement)" -ForegroundColor DarkGray
 Write-Host ''
 
@@ -167,26 +232,35 @@ Install-WingetPackage -Id $manifest.tools.git.wingetId -Name 'Git'
 Install-WingetPackage -Id $manifest.tools.dotnetSdk.wingetId -Name '.NET 9 SDK'
 Install-WingetPackage -Id $manifest.tools.cmake.wingetId -Name 'CMake'
 Install-WingetPackage -Id $manifest.tools.ninja.wingetId -Name 'Ninja'
+$sevenZipVersion = $null
+$sevenZip = Get-Command '7z' -ErrorAction SilentlyContinue
+if (-not $sevenZip) {
+    $sevenZipDefault = Join-Path $env:ProgramFiles '7-Zip\7z.exe'
+    if (Test-Path $sevenZipDefault) { $sevenZip = Get-Command $sevenZipDefault -ErrorAction SilentlyContinue }
+}
+if ($sevenZip) {
+    $sevenZipOutput = (& $sevenZip.Source 2>$null | Out-String)
+    if ($sevenZipOutput) { $sevenZipVersion = ($sevenZipOutput -split "`r?`n")[0].Trim() }
+}
+Install-WingetPackage -Id $manifest.tools.sevenZip.wingetId -Name '7-Zip' `
+    -InstalledVersion $sevenZipVersion -MinimumVersion $manifest.tools.sevenZip.minVersion
+Install-VelopackCli
 Install-RustMsvc
 
-if ($SkipVisualStudio) { Write-Skip 'Visual Studio skipped (-SkipVisualStudio)' }
-else { Install-VisualStudio }
+if ($SkipVisualStudio) { Write-Skip 'Visual Studio skipped (-SkipVisualStudio)' } else { Install-VisualStudio }
 
 if ($SkipNatives) {
     Write-Skip 'Native binaries skipped (-SkipNatives)'
-}
-elseif ($CheckOnly) {
+} elseif ($CheckOnly) {
     Write-Host '  would fetch libmpv/ffmpeg via scripts/fetch-natives.ps1' -ForegroundColor Yellow
-}
-else {
+} else {
     Write-Step 'Fetching libmpv/ffmpeg native binaries'
     $fetchScript = Join-Path $PSScriptRoot 'fetch-natives.ps1'
     if ($PSVersionTable.PSEdition -eq 'Core') {
-        # Already running under PowerShell 7 — invoke in-process.
+        # Already running under PowerShell 7 -- invoke in-process.
         & $fetchScript
         if ($LASTEXITCODE) { throw "fetch-natives.ps1 failed; exit code $LASTEXITCODE" }
-    }
-    else {
+    } else {
         # fetch-natives.ps1 uses PowerShell 7 syntax (null-conditional ?.), so it must NOT be parsed by the
         # in-box Windows PowerShell 5.1 the documented first run uses. Re-invoke it through the pwsh this
         # bootstrap just installed. On a first run pwsh may not be on PATH yet (a new shell picks it up);
@@ -198,8 +272,7 @@ else {
         }
         if (-not $pwsh) {
             Write-Skip 'PowerShell 7 (pwsh) not on PATH yet; open a new shell and re-run to fetch libmpv/ffmpeg'
-        }
-        else {
+        } else {
             & $pwsh.Source -NoProfile -File $fetchScript
             if ($LASTEXITCODE) { throw "fetch-natives.ps1 failed; exit code $LASTEXITCODE" }
         }
@@ -220,9 +293,8 @@ $reportExit = $LASTEXITCODE
 
 Write-Host ''
 if ($reportExit -eq 0) {
-    Write-Host 'Bootstrap complete — toolchain meets the OK Player baseline.' -ForegroundColor Green
-}
-else {
+    Write-Host 'Bootstrap complete -- toolchain meets the OK Player baseline.' -ForegroundColor Green
+} else {
     Write-Host 'Bootstrap finished but the toolchain does NOT meet the baseline (see report above).' -ForegroundColor Yellow
     if (-not $CheckOnly) {
         Write-Host 'A reboot or a new shell is often required after a first-time Visual Studio / Rust install; re-run to converge.' -ForegroundColor Yellow

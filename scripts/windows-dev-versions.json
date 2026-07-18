@@ -31,6 +31,11 @@
       "wingetId": "Git.Git",
       "minVersion": "2.40.0"
     },
+    "sevenZip": {
+      "wingetId": "7zip.7zip",
+      "minVersion": "24.0.0",
+      "note": "Required by scripts/fetch-natives.ps1 to extract the libmpv and ffmpeg archives."
+    },
     "cmake": {
       "wingetId": "Kitware.CMake",
       "minVersion": "3.28.0",
@@ -54,15 +59,14 @@
         "Microsoft.VisualStudio.2026.Community",
         "Microsoft.VisualStudio.2022.BuildTools"
       ],
-      "minVersion": "18.0.0",
+      "minVersion": "17.12.0",
       "components": [
-        "Microsoft.VisualStudio.Workload.ManagedDesktop",
-        "Microsoft.VisualStudio.Workload.NativeDesktop",
+        "Microsoft.VisualStudio.Workload.ManagedDesktopBuildTools",
+        "Microsoft.VisualStudio.Workload.VCTools",
         "Microsoft.VisualStudio.Component.Windows11SDK.26100",
-        "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-        "Microsoft.VisualStudio.ComponentGroup.WindowsAppSDK.Cs"
+        "Microsoft.VisualStudio.Component.VC.Tools.x86.x64"
       ],
-      "note": "Build Tools is sufficient for command-line build/test/package. Community is the full IDE alternative. The Windows11SDK.26100 component provides the SDK build the WinUI shell compiles against."
+      "note": "Build Tools is sufficient for command-line build/test/package. Community is the full IDE alternative. The bootstrap falls back to the alternativeWingetIds when the primary winget id is unavailable; minVersion 17.12.0 is the VS 2022 floor for .NET 9 / WinUI 3 workloads. The Windows11SDK.26100 component provides the SDK build the WinUI shell compiles against."
     }
   },
   "natives": {
