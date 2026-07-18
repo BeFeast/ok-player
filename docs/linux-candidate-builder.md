@@ -89,7 +89,9 @@ lock after their direct parent returns.
    - package identity + SHA-256 verification (`SHA256SUMS`, `package-identity.json`)
    - clean install / upgrade / uninstall smoke in a disposable environment
    - real playback and screenshot capture from the exact Debian payload, with a bundled image and SHA-256
-   - headless launch smoke (Xvfb)
+   - headless launch smoke (Xvfb): the idle surface once, followed by the complete
+     fit-only small/maximized/fullscreen/4K lifecycle three consecutive times with
+     no retry inside the gate
    - optional native-hardware smoke (only when `OKP_CANDIDATE_NATIVE_SMOKE` is set)
 5. Emit the artifact bundle and check promotability.
 6. On a fully promotable build, advance `last-built.sha` so the next schedule
@@ -110,6 +112,13 @@ Each build writes a bundle under `$OKP_CANDIDATE_STATE_DIR/out/<build-number>/`:
   SHA-256). Modeled by `okp_core::candidate_build::CandidateBuild`.
 - `artifacts/` — `.deb`, versioned AppImage, Velopack feed/package assets,
   `SHA256SUMS`, `package-identity.json`, and the acceptance template.
+
+The headless output also retains `headless-launch/fit-series/run-{1,2,3}/` and
+`series-evidence.txt`. Every run records the current process ID, selected XID,
+viewable map state and geometry, maximized/fullscreen guards, explicit Fit
+dispatch, and the small/4K results. A failed run aborts the series and the
+candidate without accepting a stale window, increasing the readiness timeout,
+or retrying publication.
 
 This bundle is sufficient for candidate-channel promotion by #339 **without
 rebuilding**. AppImage packaging is forced to the `linux-candidate` Velopack

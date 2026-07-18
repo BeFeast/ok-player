@@ -65,6 +65,16 @@ Generate deterministic media and captures:
 
 The runner generates media, captures all fixed states, writes `xvfb-rows.json`, and exits non-zero when any canonical redline fails. First-run evidence comes from the canonical dark empty-state suite, which also verifies the light variant; the obsolete pre-recovery main-window smoke is not part of the release harness. The required state names are defined by `okp_core::acceptance_evidence::REQUIRED_XVFB_STATES`. References use public logical IDs such as `windows-player-redlines`, `history-handoff`, and `about-handoff`; local source locations must never be written into evidence.
 
+Candidate window-fit readiness is a separate release-engineering gate. Run
+`scripts/run-linux-window-fit-series.sh <binary> <output>` to execute the complete
+fit-only small/maximized/fullscreen/4K smoke three consecutive times. Each run
+uses a portal-free isolated X11 session, requires the previous process and every
+named window to be gone before the next launch, and preserves PID/XID/map-state,
+geometry, guard, explicit-command, and app-log diagnostics. If any run fails,
+the command exits non-zero and the next attempt starts a new series from zero.
+This Xvfb evidence does not prove live GNOME chooser, drag/drop, clipboard,
+portal, compositor, or focus behavior.
+
 Generated fixtures include dark and moving-bright 30-second H.264 media, a 60-second buffered-playback source, chapter metadata, and a `natural-queue` folder containing `Episode 1`, `Episode 2`, and `Episode 10` plus a non-media file. The playback harness serves media from localhost to induce a delayed real load, a throttled partial demuxer cache, and a real HTTP 404/retry path. Xvfb also exercises direct file open, playback/duration, panel actions, screenshot file creation, X11 fullscreen, and the EWMH Always-on-top state. The live GNOME folder-chooser row uses the generated queue and records its natural order; the headless run must not mark that chooser row `PASS`.
 
 The playback harness also launches the binary with `--resume 12` and requires the explicit one-shot

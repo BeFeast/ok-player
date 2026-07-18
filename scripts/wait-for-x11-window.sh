@@ -4,6 +4,7 @@ set -euo pipefail
 EXPECTED_PID="${1:?usage: wait-for-x11-window.sh <pid> <ids-file> <diagnostics-file>}"
 IDS_FILE="${2:?usage: wait-for-x11-window.sh <pid> <ids-file> <diagnostics-file>}"
 DIAGNOSTICS_FILE="${3:?usage: wait-for-x11-window.sh <pid> <ids-file> <diagnostics-file>}"
+APP_LOG="${4:-}"
 ATTEMPTS="${OKP_X11_WINDOW_WAIT_ATTEMPTS:-80}"
 INTERVAL="${OKP_X11_WINDOW_WAIT_INTERVAL:-0.1}"
 
@@ -95,4 +96,13 @@ done
 
 echo "Timed out waiting for a viewable OK Player window for PID $EXPECTED_PID" >&2
 echo "Window readiness diagnostics: $DIAGNOSTICS_FILE" >&2
+cat "$DIAGNOSTICS_FILE" >&2
+if [[ -n "$APP_LOG" ]]; then
+  echo "Application log: $APP_LOG" >&2
+  if [[ -f "$APP_LOG" ]]; then
+    cat "$APP_LOG" >&2
+  else
+    echo "<missing>" >&2
+  fi
+fi
 exit 1
