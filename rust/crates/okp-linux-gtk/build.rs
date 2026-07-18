@@ -1,4 +1,5 @@
 use std::env;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
@@ -9,8 +10,20 @@ fn main() {
                 .probe(library)
                 .unwrap_or_else(|_| panic!("{library} development files are required"));
         }
+        let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo must provide OUT_DIR"));
+        let protocols = PathBuf::from(
+            pkg_config::get_variable("wayland-protocols", "pkgdatadir")
+                .expect("wayland-protocols development files are required"),
+        );
+        let viewporter_xml = protocols.join("stable/viewporter/viewporter.xml");
+        let viewporter_header = out_dir.join("viewporter-client-protocol.h");
+        let viewporter_code = out_dir.join("viewporter-protocol.c");
+        generate_wayland_protocol(&viewporter_xml, &viewporter_header, &viewporter_code);
+
         cc::Build::new()
             .file("src/native_wayland_video.c")
+            .file(&viewporter_code)
+            .include(&out_dir)
             .warnings(true)
             .compile("okp_native_wayland_video");
         // Cargo places pkg-config libraries before this package's static archive.
@@ -18,6 +31,7 @@ fn main() {
         // the archive and system libmpv references correctly in Fedora RPM builds.
         println!("cargo:rustc-link-arg=-Wl,-lwayland-egl,-lwayland-client");
         println!("cargo:rerun-if-changed=src/native_wayland_video.c");
+        println!("cargo:rerun-if-changed={}", viewporter_xml.display());
     }
     println!("cargo:rerun-if-env-changed=OKP_BUILD_VERSION");
     println!("cargo:rerun-if-env-changed=OKP_PACKAGE_KIND");
@@ -57,4 +71,16 @@ fn main() {
         })
         .unwrap_or_else(|| "unknown".to_owned());
     println!("cargo:rustc-env=OKP_BUILD_SHA={sha}");
+}
+
+fn generate_wayland_protocol(xml: &Path, header: &Path, code: &Path) {
+    for (mode, output) in [("client-header", header), ("private-code", code)] {
+        let status = Command::new("wayland-scanner")
+            .arg(mode)
+            .arg(xml)
+            .arg(output)
+            .status()
+            .unwrap_or_else(|error| panic!("running wayland-scanner failed: {error}"));
+        assert!(status.success(), "wayland-scanner {mode} failed");
+    }
 }

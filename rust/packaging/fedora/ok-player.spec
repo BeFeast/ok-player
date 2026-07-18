@@ -23,6 +23,7 @@ BuildRequires:  pkgconfig(mpv) >= 1.109
 BuildRequires:  pkgconfig(x11)
 BuildRequires:  pkgconfig(wayland-client)
 BuildRequires:  pkgconfig(wayland-egl)
+BuildRequires:  wayland-protocols-devel
 BuildRequires:  pkgconfig(egl)
 BuildRequires:  pkgconfig(gl)
 BuildRequires:  desktop-file-utils

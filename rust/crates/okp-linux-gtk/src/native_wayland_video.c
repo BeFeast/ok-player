@@ -8,6 +8,8 @@
 #include <wayland-client.h>
 #include <wayland-egl.h>
 
+#include "viewporter-client-protocol.h"
+
 #ifndef EGL_CONTEXT_MAJOR_VERSION
 #define EGL_CONTEXT_MAJOR_VERSION 0x3098
 #endif
@@ -27,19 +29,23 @@ struct okp_wayland_video_plane {
     struct wl_event_queue *queue;
     struct wl_registry *registry;
     struct wl_subcompositor *subcompositor;
+    struct wp_viewporter *viewporter;
     struct wl_surface *surface;
     struct wl_subsurface *subsurface;
+    struct wp_viewport *viewport;
     struct wl_egl_window *egl_window;
     EGLDisplay egl_display;
     EGLContext egl_context;
     EGLSurface egl_surface;
     int logical_width;
     int logical_height;
-    int scale;
+    int buffer_width;
+    int buffer_height;
 };
 
 struct registry_state {
     struct wl_subcompositor *subcompositor;
+    struct wp_viewporter *viewporter;
 };
 
 static void write_error(char *buffer, size_t length, const char *message) {
@@ -86,6 +92,9 @@ static void registry_global(void *data, struct wl_registry *registry, uint32_t n
     if (strcmp(interface, wl_subcompositor_interface.name) == 0) {
         state->subcompositor = wl_registry_bind(
             registry, name, &wl_subcompositor_interface, version < 1 ? version : 1);
+    } else if (strcmp(interface, wp_viewporter_interface.name) == 0) {
+        state->viewporter = wl_registry_bind(
+            registry, name, &wp_viewporter_interface, version < 1 ? version : 1);
     }
 }
 
@@ -100,38 +109,44 @@ static const struct wl_registry_listener registry_listener = {
     .global_remove = registry_global_remove,
 };
 
-static struct wl_subcompositor *bind_subcompositor(
+static bool bind_wayland_globals(
     struct okp_wayland_video_plane *plane, char *error, size_t error_length) {
     struct registry_state state = {0};
     struct wl_proxy *display_wrapper = wl_proxy_create_wrapper(plane->display);
     if (display_wrapper == NULL) {
         write_error(error, error_length, "wl_proxy_create_wrapper failed");
-        return NULL;
+        return false;
     }
 
     plane->queue = wl_display_create_queue(plane->display);
     if (plane->queue == NULL) {
         wl_proxy_wrapper_destroy(display_wrapper);
         write_error(error, error_length, "wl_display_create_queue failed");
-        return NULL;
+        return false;
     }
     wl_proxy_set_queue(display_wrapper, plane->queue);
     plane->registry = wl_display_get_registry((struct wl_display *)display_wrapper);
     wl_proxy_wrapper_destroy(display_wrapper);
     if (plane->registry == NULL) {
         write_error(error, error_length, "wl_display_get_registry failed");
-        return NULL;
+        return false;
     }
     wl_registry_add_listener(plane->registry, &registry_listener, &state);
     if (wl_display_roundtrip_queue(plane->display, plane->queue) < 0) {
         write_error(error, error_length, "Wayland registry roundtrip failed");
-        return NULL;
+        return false;
     }
     if (state.subcompositor == NULL) {
         write_error(error, error_length, "the Wayland compositor has no wl_subcompositor");
-        return NULL;
+        return false;
     }
-    return state.subcompositor;
+    if (state.viewporter == NULL) {
+        write_error(error, error_length, "the Wayland compositor has no wp_viewporter");
+        return false;
+    }
+    plane->subcompositor = state.subcompositor;
+    plane->viewporter = state.viewporter;
+    return true;
 }
 
 static void set_regions(struct okp_wayland_video_plane *plane) {
@@ -165,6 +180,9 @@ static void destroy_plane(struct okp_wayland_video_plane *plane) {
     if (plane->egl_window != NULL) {
         wl_egl_window_destroy(plane->egl_window);
     }
+    if (plane->viewport != NULL) {
+        wp_viewport_destroy(plane->viewport);
+    }
     if (plane->subsurface != NULL) {
         wl_subsurface_destroy(plane->subsurface);
     }
@@ -173,6 +191,9 @@ static void destroy_plane(struct okp_wayland_video_plane *plane) {
     }
     if (plane->subcompositor != NULL) {
         wl_subcompositor_destroy(plane->subcompositor);
+    }
+    if (plane->viewporter != NULL) {
+        wp_viewporter_destroy(plane->viewporter);
     }
     if (plane->registry != NULL) {
         wl_registry_destroy(plane->registry);
@@ -185,8 +206,8 @@ static void destroy_plane(struct okp_wayland_video_plane *plane) {
 
 struct okp_wayland_video_plane *okp_wayland_video_plane_create(
     void *display_pointer, void *compositor_pointer, void *parent_surface_pointer,
-    void *egl_display_pointer, int width, int height, int scale, char *error,
-    size_t error_length) {
+    void *egl_display_pointer, int logical_width, int logical_height,
+    int buffer_width, int buffer_height, char *error, size_t error_length) {
     if (display_pointer == NULL || compositor_pointer == NULL ||
         parent_surface_pointer == NULL || egl_display_pointer == NULL) {
         write_error(error, error_length, "GDK did not expose the required Wayland/EGL handles");
@@ -203,18 +224,24 @@ struct okp_wayland_video_plane *okp_wayland_video_plane_create(
     plane->egl_display = (EGLDisplay)egl_display_pointer;
     plane->egl_context = EGL_NO_CONTEXT;
     plane->egl_surface = EGL_NO_SURFACE;
-    plane->logical_width = width > 0 ? width : 1;
-    plane->logical_height = height > 0 ? height : 1;
-    plane->scale = scale > 0 ? scale : 1;
+    plane->logical_width = logical_width > 0 ? logical_width : 1;
+    plane->logical_height = logical_height > 0 ? logical_height : 1;
+    plane->buffer_width = buffer_width > 0 ? buffer_width : 1;
+    plane->buffer_height = buffer_height > 0 ? buffer_height : 1;
 
-    plane->subcompositor = bind_subcompositor(plane, error, error_length);
-    if (plane->subcompositor == NULL) {
+    if (!bind_wayland_globals(plane, error, error_length)) {
         destroy_plane(plane);
         return NULL;
     }
     plane->surface = wl_compositor_create_surface(plane->compositor);
     if (plane->surface == NULL) {
         write_error(error, error_length, "wl_compositor_create_surface failed");
+        destroy_plane(plane);
+        return NULL;
+    }
+    plane->viewport = wp_viewporter_get_viewport(plane->viewporter, plane->surface);
+    if (plane->viewport == NULL) {
+        write_error(error, error_length, "wp_viewporter_get_viewport failed");
         destroy_plane(plane);
         return NULL;
     }
@@ -229,7 +256,11 @@ struct okp_wayland_video_plane *okp_wayland_video_plane_create(
     wl_subsurface_place_below(plane->subsurface, parent_surface_pointer);
     // The video plane must commit independently of GTK's GSK/frame-clock path.
     wl_subsurface_set_desync(plane->subsurface);
-    wl_surface_set_buffer_scale(plane->surface, plane->scale);
+    // A viewport lets the subsurface use GTK's exact fractional scale instead
+    // of rounding 150% or 175% up to the integer buffer scale.
+    wl_surface_set_buffer_scale(plane->surface, 1);
+    wp_viewport_set_destination(
+        plane->viewport, plane->logical_width, plane->logical_height);
     set_regions(plane);
 
     EGLint config_attributes[] = {
@@ -261,9 +292,8 @@ struct okp_wayland_video_plane *okp_wayland_video_plane_create(
         return NULL;
     }
 
-    int buffer_width = plane->logical_width * plane->scale;
-    int buffer_height = plane->logical_height * plane->scale;
-    plane->egl_window = wl_egl_window_create(plane->surface, buffer_width, buffer_height);
+    plane->egl_window = wl_egl_window_create(
+        plane->surface, plane->buffer_width, plane->buffer_height);
     if (plane->egl_window == NULL) {
         write_error(error, error_length, "wl_egl_window_create failed");
         destroy_plane(plane);
@@ -299,7 +329,7 @@ struct okp_wayland_video_plane *okp_wayland_video_plane_create(
         return NULL;
     }
 
-    glViewport(0, 0, buffer_width, buffer_height);
+    glViewport(0, 0, plane->buffer_width, plane->buffer_height);
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
     if (!eglSwapBuffers(plane->egl_display, plane->egl_surface)) {
@@ -332,15 +362,17 @@ bool okp_wayland_video_plane_swap(struct okp_wayland_video_plane *plane) {
 }
 
 void okp_wayland_video_plane_resize(struct okp_wayland_video_plane *plane, int width,
-                                    int height, int scale) {
+                                    int height, int buffer_width, int buffer_height) {
     if (plane == NULL) {
         return;
     }
     plane->logical_width = width > 0 ? width : 1;
     plane->logical_height = height > 0 ? height : 1;
-    plane->scale = scale > 0 ? scale : 1;
-    wl_surface_set_buffer_scale(plane->surface, plane->scale);
-    wl_egl_window_resize(plane->egl_window, plane->logical_width * plane->scale,
-                         plane->logical_height * plane->scale, 0, 0);
+    plane->buffer_width = buffer_width > 0 ? buffer_width : 1;
+    plane->buffer_height = buffer_height > 0 ? buffer_height : 1;
+    wp_viewport_set_destination(
+        plane->viewport, plane->logical_width, plane->logical_height);
+    wl_egl_window_resize(
+        plane->egl_window, plane->buffer_width, plane->buffer_height, 0, 0);
     set_regions(plane);
 }
