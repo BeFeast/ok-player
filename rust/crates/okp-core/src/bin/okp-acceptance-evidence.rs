@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use okp_core::acceptance_evidence::{
-    ArtifactKind, EvidenceManifest, PackageArtifact, PackageIdentity,
+    ArtifactKind, CandidateUpgradeEvidence, EvidenceManifest, PackageArtifact, PackageIdentity,
 };
 use okp_core::fedora_acceptance::{
     AcceptanceVerdict, FedoraAcceptanceManifest, FedoraArtifact, FedoraArtifactKind,
@@ -26,10 +26,25 @@ fn run() -> Result<(), String> {
         Some("identity") => write_identity(&args[1..]),
         Some("template") => write_template(&args[1..]),
         Some("validate") => validate(&args[1..]),
+        Some("candidate-upgrade-validate") => candidate_upgrade_validate(&args[1..]),
         Some("presentation") => presentation(&args[1..]),
         Some("fedora-artifact") => fedora_artifact(&args[1..]),
         Some("fedora-validate") => fedora_validate(&args[1..]),
         _ => Err(usage()),
+    }
+}
+
+fn candidate_upgrade_validate(args: &[String]) -> Result<(), String> {
+    let manifest_path = value(args, "--manifest")?;
+    let manifest: CandidateUpgradeEvidence = read_json(manifest_path)?;
+    match manifest.validate_cleanup_ready() {
+        Ok(()) => {
+            println!(
+                "Linux candidate upgrade evidence is complete; migration-anchor cleanup is unblocked."
+            );
+            Ok(())
+        }
+        Err(errors) => Err(errors.join("\n")),
     }
 }
 
@@ -221,5 +236,5 @@ fn optional_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 }
 
 fn usage() -> String {
-    "usage:\n  okp-acceptance-evidence identity --version V --commit SHA --deb PATH --appimage PATH\n  okp-acceptance-evidence template --version V --commit SHA --deb PATH --appimage PATH\n  okp-acceptance-evidence validate --manifest PATH --identity PATH\n  okp-acceptance-evidence presentation --log PATH [--warmup-seconds N] [--report-only]\n  okp-acceptance-evidence fedora-artifact --kind flatpak|rpm|copr --file PATH\n  okp-acceptance-evidence fedora-validate --manifest PATH".to_owned()
+    "usage:\n  okp-acceptance-evidence identity --version V --commit SHA --deb PATH --appimage PATH\n  okp-acceptance-evidence template --version V --commit SHA --deb PATH --appimage PATH\n  okp-acceptance-evidence validate --manifest PATH --identity PATH\n  okp-acceptance-evidence candidate-upgrade-validate --manifest PATH\n  okp-acceptance-evidence presentation --log PATH [--warmup-seconds N] [--report-only]\n  okp-acceptance-evidence fedora-artifact --kind flatpak|rpm|copr --file PATH\n  okp-acceptance-evidence fedora-validate --manifest PATH".to_owned()
 }

@@ -15,7 +15,10 @@ use gtk::gdk;
 use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
-use okp_core::candidate_channel::{self, CandidateAppImage, CandidateFeed, CandidateUpdate};
+use okp_core::candidate_channel::{
+    self, CandidateAppImage, CandidateAppImageCheck, CandidateFeed, CandidateInstallLane,
+    CandidateUpdate, CandidateUpdateRoute,
+};
 use okp_core::clip_export::{self, ClipExportEligibility, ClipExportLimits, ClipExportTooling};
 use okp_core::companion_window::{self as companion_window_core, CompanionWindowKind};
 use okp_core::gapless::{GaplessPlaybackCapability, PlaylistTransitionPath};
@@ -111,6 +114,7 @@ pub(crate) use window::*;
 const SPEED_PRESETS: [f64; 6] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 const APP_BUILD_VERSION: &str = env!("OKP_BUILD_VERSION");
 const APP_BUILD_SHA: &str = env!("OKP_BUILD_SHA");
+const APP_PACKAGE_KIND: &str = env!("OKP_PACKAGE_KIND");
 const LINUX_DESKTOP_ID: &str = "com.befeast.okplayer.desktop";
 const LINUX_ICON_NAME: &str = "com.befeast.okplayer";
 const MPRIS_BUS_NAME: &str = "org.mpris.MediaPlayer2.okplayer";

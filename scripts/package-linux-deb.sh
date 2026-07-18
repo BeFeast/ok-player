@@ -13,7 +13,8 @@ FIXED_ICONS="$ROOT/rust/packaging/linux/icons/hicolor"
 DESKTOP="$ROOT/rust/packaging/linux/com.befeast.okplayer.desktop"
 METAINFO="$ROOT/rust/packaging/linux/com.befeast.okplayer.metainfo.xml"
 
-OKP_BUILD_VERSION="$VERSION" cargo build --manifest-path "$ROOT/rust/Cargo.toml" -p okp-linux-gtk --release
+OKP_BUILD_VERSION="$VERSION" OKP_PACKAGE_KIND=deb \
+  cargo build --manifest-path "$ROOT/rust/Cargo.toml" -p okp-linux-gtk --release
 
 rm -rf "$BUILD_ROOT"
 mkdir -p "$BUILD_ROOT/DEBIAN"

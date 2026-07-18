@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use crate::acceptance_evidence::{ArtifactKind, PackageIdentity};
 use crate::candidate_channel::{
     AcceptanceStatus, CandidateAppImage, CandidateFeed, CandidateHistoryEntry, CandidatePackage,
+    TEMPORARY_MIGRATION_ANCHORS,
 };
 use crate::sha256sums::{Sha256Sums, sha256_hex};
 use crate::update_selection::compare_versions;
@@ -315,7 +316,17 @@ pub fn assemble_candidate_feed(
         history.extend(previous.history.iter().cloned());
     }
     history.retain(|entry| entry.build != record.build_number && entry.version != record.version);
+    let migration_anchors = history
+        .iter()
+        .filter(|entry| TEMPORARY_MIGRATION_ANCHORS.contains(&entry.version.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
     history.truncate(MAX_RETAINED_PREVIOUS);
+    for anchor in migration_anchors {
+        if !history.iter().any(|entry| entry.version == anchor.version) {
+            history.push(anchor);
+        }
+    }
 
     Ok(CandidateFeed {
         channel: crate::candidate_channel::CANDIDATE_CHANNEL.to_owned(),
@@ -1000,6 +1011,9 @@ mod tests {
             history: vec![
                 history("0.11.0-beta.1.40", 40),
                 history("0.11.0-beta.1.39", 39),
+                history("0.11.0-beta.1.38", 38),
+                history("0.11.0-beta.1.37", 37),
+                history("0.11.0-beta.0.10", 10),
             ],
         };
         let verified = VerifiedCandidateBundle {
@@ -1018,8 +1032,14 @@ mod tests {
             Some(&previous),
         )
         .unwrap();
-        assert_eq!(feed.history.len(), 3);
+        assert_eq!(feed.history.len(), MAX_RETAINED_PREVIOUS + 1);
         assert_eq!(feed.history[0].build, 41);
+        assert!(
+            feed.history
+                .iter()
+                .any(|entry| entry.version == "0.11.0-beta.0.10"),
+            "the installed-regression anchor must survive ordinary retention truncation"
+        );
         assert!(feed.has_sufficient_recovery());
 
         let obsolete = "ok-player_0.11.0-beta.1.10_amd64.deb".to_owned();

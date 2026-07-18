@@ -548,20 +548,20 @@ pub(crate) fn check_for_linux_update(channel: UpdateChannel) -> LinuxUpdateCheck
         return check_for_linux_candidate_channel_update();
     }
 
+    if linux_install_lane() == CandidateInstallLane::Debian {
+        return match check_for_linux_deb_update() {
+            Ok(Some(update)) => LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
+                manager: None,
+                target: LinuxUpdateTarget::Deb(update),
+            }),
+            Ok(None) => LinuxUpdateCheckResult::UpToDate,
+            Err(error) => LinuxUpdateCheckResult::Failed(error),
+        };
+    }
+
     let manager = match linux_update_manager(UpdateChannel::Public) {
         Ok(manager) => manager,
-        Err(manager_error) => {
-            return match check_for_linux_deb_update() {
-                Ok(Some(update)) => LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
-                    manager: None,
-                    target: LinuxUpdateTarget::Deb(update),
-                }),
-                Ok(None) => LinuxUpdateCheckResult::UpToDate,
-                Err(deb_error) => {
-                    LinuxUpdateCheckResult::Failed(format!("{manager_error}; {deb_error}"))
-                }
-            };
-        }
+        Err(error) => return LinuxUpdateCheckResult::Failed(error),
     };
 
     if let Some(asset) = manager.get_update_pending_restart() {
@@ -666,53 +666,129 @@ fn linux_candidate_update_manager(candidate: &CandidateUpdate) -> Result<UpdateM
 fn check_for_linux_candidate_channel_update() -> LinuxUpdateCheckResult {
     let candidate = match fetch_linux_candidate_update() {
         Ok(Some(candidate)) => candidate,
-        Ok(None) => return LinuxUpdateCheckResult::UpToDate,
-        Err(error) => return LinuxUpdateCheckResult::Failed(error),
+        Ok(None) => {
+            eprintln!("Candidate update stage=selection result=up-to-date");
+            return LinuxUpdateCheckResult::UpToDate;
+        }
+        Err(error) => {
+            eprintln!("Candidate update stage=selection result=failed error={error}");
+            return LinuxUpdateCheckResult::Failed(error);
+        }
     };
+    eprintln!(
+        "Candidate update stage=selection result=available version={} build={} commit_sha={}",
+        candidate.version, candidate.build, candidate.commit_sha
+    );
     let deb_update = candidate_deb_update(&candidate);
-    let manager = match linux_candidate_update_manager(&candidate) {
-        Ok(manager) => manager,
-        Err(manager_error) => {
-            eprintln!("Candidate AppImage updater unavailable; using .deb lane: {manager_error}");
+    let lane = linux_install_lane();
+    eprintln!("Candidate update stage=install-lane lane={lane:?}");
+    match candidate_channel::route_candidate_update(&candidate, lane, None) {
+        Ok(CandidateUpdateRoute::Debian) => {
+            eprintln!(
+                "Candidate update stage=final result=available lane=deb version={}",
+                candidate.version
+            );
             return LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
                 manager: None,
                 target: LinuxUpdateTarget::Deb(deb_update),
             });
         }
+        Err(candidate_channel::CandidateUpdateRouteError::MissingAppImageCheck) => {}
+        Ok(_) => unreachable!("a route without an AppImage result can only select Debian"),
+        Err(error) => {
+            eprintln!("Candidate update stage=final result=failed error={error}");
+            return LinuxUpdateCheckResult::Failed(error.to_string());
+        }
+    }
+
+    let manager = match linux_candidate_update_manager(&candidate) {
+        Ok(manager) => manager,
+        Err(error) => {
+            let error = format!("candidate AppImage updater failed: {error}");
+            eprintln!("Candidate update stage=velopack result=failed error={error}");
+            return LinuxUpdateCheckResult::Failed(error);
+        }
     };
 
-    if let Some(asset) = manager.get_update_pending_restart()
-        && asset.Version == candidate.version
-        && asset
-            .SHA256
-            .eq_ignore_ascii_case(&candidate.appimage.sha256)
-    {
-        return LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
-            manager: Some(manager),
-            target: LinuxUpdateTarget::Asset(Box::new(asset)),
-        });
+    if let Some(asset) = manager.get_update_pending_restart() {
+        let check = CandidateAppImageCheck::PendingRestart {
+            version: asset.Version.clone(),
+            sha256: asset.SHA256.clone(),
+        };
+        return match candidate_channel::route_candidate_update(&candidate, lane, Some(&check)) {
+            Ok(CandidateUpdateRoute::PendingAppImage) => {
+                eprintln!(
+                    "Candidate update stage=final result=pending-restart lane=appimage version={}",
+                    candidate.version
+                );
+                LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
+                    manager: Some(manager),
+                    target: LinuxUpdateTarget::Asset(Box::new(asset)),
+                })
+            }
+            Ok(_) => unreachable!("AppImage pending restart must route to its pending asset"),
+            Err(error) => {
+                eprintln!("Candidate update stage=final result=failed error={error}");
+                LinuxUpdateCheckResult::Failed(error.to_string())
+            }
+        };
     }
 
     match manager.check_for_updates() {
-        Ok(UpdateCheck::UpdateAvailable(update))
-            if update.TargetFullRelease.Version == candidate.version
-                && update
-                    .TargetFullRelease
-                    .SHA256
-                    .eq_ignore_ascii_case(&candidate.appimage.sha256) =>
-        {
-            LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
-                manager: Some(manager),
-                target: LinuxUpdateTarget::Info(update),
-            })
+        Ok(UpdateCheck::UpdateAvailable(update)) => {
+            let check = CandidateAppImageCheck::UpdateAvailable {
+                version: update.TargetFullRelease.Version.clone(),
+                sha256: update.TargetFullRelease.SHA256.clone(),
+            };
+            match candidate_channel::route_candidate_update(&candidate, lane, Some(&check)) {
+                Ok(CandidateUpdateRoute::AppImage) => {
+                    eprintln!(
+                        "Candidate update stage=final result=available lane=appimage version={}",
+                        candidate.version
+                    );
+                    LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
+                        manager: Some(manager),
+                        target: LinuxUpdateTarget::Info(update),
+                    })
+                }
+                Ok(_) => unreachable!("AppImage update must route to its update information"),
+                Err(error) => {
+                    eprintln!("Candidate update stage=final result=failed error={error}");
+                    LinuxUpdateCheckResult::Failed(error.to_string())
+                }
+            }
         }
-        Ok(UpdateCheck::UpdateAvailable(_)) => LinuxUpdateCheckResult::Failed(
-            "candidate AppImage feed does not match candidate.linux.json".to_owned(),
+        Ok(UpdateCheck::NoUpdateAvailable) => candidate_appimage_empty_result(
+            &candidate,
+            lane,
+            CandidateAppImageCheck::NoUpdateAvailable,
         ),
-        Ok(UpdateCheck::NoUpdateAvailable | UpdateCheck::RemoteIsEmpty) => {
-            LinuxUpdateCheckResult::UpToDate
+        Ok(UpdateCheck::RemoteIsEmpty) => {
+            candidate_appimage_empty_result(&candidate, lane, CandidateAppImageCheck::RemoteIsEmpty)
         }
-        Err(error) => LinuxUpdateCheckResult::Failed(error.to_string()),
+        Err(error) => {
+            eprintln!("Candidate update stage=velopack result=failed error={error}");
+            LinuxUpdateCheckResult::Failed(error.to_string())
+        }
+    }
+}
+
+fn candidate_appimage_empty_result(
+    candidate: &CandidateUpdate,
+    lane: CandidateInstallLane,
+    check: CandidateAppImageCheck,
+) -> LinuxUpdateCheckResult {
+    let result = candidate_channel::route_candidate_update(candidate, lane, Some(&check));
+    let error = result.expect_err("a newer accepted AppImage candidate cannot be empty");
+    eprintln!("Candidate update stage=velopack result=failed error={error}");
+    LinuxUpdateCheckResult::Failed(error.to_string())
+}
+
+pub(crate) fn linux_install_lane() -> CandidateInstallLane {
+    match APP_PACKAGE_KIND {
+        "appimage" => CandidateInstallLane::AppImage,
+        "deb" | "development" => CandidateInstallLane::Debian,
+        _ => unreachable!("build.rs validates OKP_PACKAGE_KIND"),
     }
 }
 
@@ -823,6 +899,10 @@ fn fetch_linux_candidate_update() -> Result<Option<CandidateUpdate>, String> {
         .map_err(|error| format!("candidate update check failed: {error}"))?;
     let feed: CandidateFeed = serde_json::from_str(&body)
         .map_err(|error| format!("candidate update feed was invalid: {error}"))?;
+    eprintln!(
+        "Candidate update stage=feed version={} build={} acceptance={:?} commit_sha={}",
+        feed.version, feed.build, feed.acceptance, feed.commit_sha
+    );
 
     Ok(candidate_channel::select_candidate_update_from_feed(
         feed,
