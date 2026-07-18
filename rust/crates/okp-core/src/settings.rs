@@ -268,6 +268,15 @@ pub struct UpdateSettings {
     /// existing install is silently moved off the public feed.
     #[serde(default)]
     pub channel: UpdateChannel,
+    /// Exact public-channel version the user chose to skip. A later version is
+    /// still offered normally.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped_public_version: Option<String>,
+    /// Exact rolling-candidate version the user chose to skip. This is kept
+    /// separate from the public channel so changing channels cannot leak the
+    /// decision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped_candidate_version: Option<String>,
 }
 
 impl Default for UpdateSettings {
@@ -275,6 +284,24 @@ impl Default for UpdateSettings {
         Self {
             auto_check: default_auto_check(),
             channel: UpdateChannel::default(),
+            skipped_public_version: None,
+            skipped_candidate_version: None,
+        }
+    }
+}
+
+impl UpdateSettings {
+    pub fn skipped_version(&self, channel: UpdateChannel) -> Option<&str> {
+        match channel {
+            UpdateChannel::Public => self.skipped_public_version.as_deref(),
+            UpdateChannel::Candidate => self.skipped_candidate_version.as_deref(),
+        }
+    }
+
+    pub fn set_skipped_version(&mut self, channel: UpdateChannel, version: Option<String>) {
+        match channel {
+            UpdateChannel::Public => self.skipped_public_version = version,
+            UpdateChannel::Candidate => self.skipped_candidate_version = version,
         }
     }
 }
@@ -419,6 +446,8 @@ impl WindowsSettings {
                 auto_check: self.auto_check_updates.unwrap_or_else(default_auto_check),
                 // Windows has no candidate channel; migrated installs stay public.
                 channel: UpdateChannel::Public,
+                skipped_public_version: None,
+                skipped_candidate_version: None,
             },
             advanced: AdvancedSettings::default(),
             screenshots: ScreenshotSettings::default(),
@@ -480,6 +509,25 @@ mod tests {
             serde_json::from_str(r#"{"auto_check":true,"channel":"candidate"}"#)
                 .expect("channel round-trips");
         assert_eq!(enrolled.channel, UpdateChannel::Candidate);
+    }
+
+    #[test]
+    fn skipped_update_versions_round_trip_without_crossing_channels() {
+        let mut settings = UpdateSettings::default();
+        settings.set_skipped_version(UpdateChannel::Public, Some("0.11.0-beta.2".into()));
+        settings.set_skipped_version(UpdateChannel::Candidate, Some("0.11.0-beta.1.42".into()));
+
+        let json = serde_json::to_string(&settings).expect("settings should serialize");
+        let loaded: UpdateSettings =
+            serde_json::from_str(&json).expect("settings should deserialize");
+        assert_eq!(
+            loaded.skipped_version(UpdateChannel::Public),
+            Some("0.11.0-beta.2")
+        );
+        assert_eq!(
+            loaded.skipped_version(UpdateChannel::Candidate),
+            Some("0.11.0-beta.1.42")
+        );
     }
 
     #[test]

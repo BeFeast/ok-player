@@ -13,7 +13,7 @@ case "$PAGE" in
   *) echo "Unsupported Settings page: $PAGE" >&2; exit 2 ;;
 esac
 case "$UPDATE_PREVIEW" in
-  ""|up-to-date|checking|available|error) ;;
+  ""|up-to-date|checking|available|skipped|error|install-error) ;;
   *) echo "Unsupported Settings update preview: $UPDATE_PREVIEW" >&2; exit 2 ;;
 esac
 case "$COLOR_SCHEME" in

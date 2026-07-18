@@ -1639,6 +1639,82 @@ const OKP_STYLESHEET: &str = "
             background: #050608;
         }
 
+        .okp-update-surface {
+            padding: 14px 16px;
+            border-radius: 10px;
+            background: rgba(22, 22, 25, 0.78);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            box-shadow: 0 14px 34px rgba(0, 0, 0, 0.44);
+            color: #ffffff;
+        }
+
+        .okp-update-surface-title {
+            color: rgba(255, 255, 255, 0.96);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 13px;
+            font-weight: 650;
+        }
+
+        .okp-update-surface-status {
+            color: rgba(255, 255, 255, 0.68);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 11.5px;
+        }
+
+        button.okp-update-surface-primary,
+        button.okp-update-surface-secondary {
+            min-height: 32px;
+            padding: 5px 12px;
+            border-radius: 7px;
+            box-shadow: none;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        button.okp-update-surface-primary {
+            background: @okp_teal;
+            border: 1px solid @okp_teal;
+            color: #ffffff;
+        }
+
+        button.okp-update-surface-primary:hover { background: @okp_teal_deep; }
+
+        button.okp-update-surface-secondary {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: rgba(255, 255, 255, 0.90);
+        }
+
+        button.okp-update-surface-secondary:hover {
+            background: rgba(255, 255, 255, 0.14);
+        }
+
+        button.okp-update-surface-primary:focus-visible,
+        button.okp-update-surface-secondary:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.88),
+                        0 0 0 4px alpha(@okp_teal, 0.62);
+        }
+
+        .is-high-contrast .okp-update-surface {
+            background: #000000;
+            border-color: #ffffff;
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-update-surface-title,
+        .is-high-contrast .okp-update-surface-status {
+            color: #ffffff;
+        }
+
+        .is-high-contrast button.okp-update-surface-primary,
+        .is-high-contrast button.okp-update-surface-secondary {
+            background: #000000;
+            border-color: #ffffff;
+            color: #ffffff;
+        }
+
         .okp-timeline,
         .okp-seek {
             min-width: 120px;

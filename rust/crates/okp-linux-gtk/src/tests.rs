@@ -140,6 +140,8 @@ fn player_space_capture_precedes_button_activation_and_preserves_editors() {
         "connect_key_released",
         "gtk::Editable",
         "gtk::TextView",
+        "gtk::Button",
+        "gtk::Switch",
         "is-capturing",
         "toggle_play_pause(&state)",
         "glib::Propagation::Stop",
@@ -679,6 +681,51 @@ fn settings_updates_has_one_dedicated_content_owner() {
     assert!(window.contains("Some(page.id())"));
     assert!(window.contains("SettingsNavIcon::Updates"));
     assert!(window.contains("search_settings(entry.text().as_str())"));
+}
+
+#[test]
+fn updater_surfaces_are_persistent_non_modal_and_share_explicit_actions() {
+    let main = include_str!("main.rs");
+    let window = include_str!("window.rs");
+    let updates = include_str!("updates.rs");
+    let css = include_str!("css.rs");
+
+    assert!(main.contains("struct UpdateAvailableSurface"));
+    assert!(window.contains("overlay.add_overlay(update_surface.widget())"));
+    assert!(main.contains("gtk::Button::with_label(\"Update\")"));
+    assert!(main.contains("gtk::Button::with_label(\"Skip this version\")"));
+    assert!(updates.contains("gtk::Button::with_label(\"Skip this version\")"));
+    assert!(updates.contains("refresh_settings_update_controls"));
+    assert!(main.contains("set_tooltip_text(Some(\"Download, verify, and install this update\"))"));
+    assert!(css.contains("button.okp-update-surface-primary:focus-visible"));
+    assert!(!main.contains("gtk::Dialog::"));
+}
+
+#[test]
+fn updater_failure_retains_the_offer_for_retry() {
+    let mut update = PendingLinuxUpdate::new(
+        UpdateChannel::Public,
+        None,
+        LinuxUpdateTarget::Deb(DebUpdate {
+            version: "0.11.0-beta.2".to_owned(),
+            name: "ok-player_0.11.0-beta.2_amd64.deb".to_owned(),
+            url: "https://example.invalid/update.deb".to_owned(),
+            size: Some(42),
+            sums_url: None,
+            expected_sha256: None,
+        }),
+    );
+
+    update.offer.start_install();
+    update.offer.fail_install("download interrupted");
+
+    assert_eq!(update.action_label(), "Update");
+    assert!(update.offer.can_skip());
+    assert!(update.should_show_player_surface());
+    assert_eq!(
+        update.status_text(),
+        "Update 0.11.0-beta.2 failed: download interrupted. You can retry."
+    );
 }
 
 #[test]
@@ -3574,9 +3621,10 @@ fn staged_deb_matching_manifest_is_finalized() {
 
 #[test]
 fn deb_update_action_requests_install() {
-    let update = PendingLinuxUpdate {
-        manager: None,
-        target: LinuxUpdateTarget::Deb(DebUpdate {
+    let update = PendingLinuxUpdate::new(
+        UpdateChannel::Public,
+        None,
+        LinuxUpdateTarget::Deb(DebUpdate {
             version: "0.1.0-linux-alpha.46".to_owned(),
             name: "ok-player_0.1.0-linux-alpha.46_amd64.deb".to_owned(),
             url: "https://example.invalid/update.deb".to_owned(),
@@ -3584,10 +3632,13 @@ fn deb_update_action_requests_install() {
             sums_url: None,
             expected_sha256: None,
         }),
-    };
+    );
 
-    assert_eq!(update.action_label(), "Install .deb");
-    assert_eq!(update.available_status(), "Available: 0.1.0-linux-alpha.46");
+    assert_eq!(update.action_label(), "Update");
+    assert_eq!(
+        update.status_text(),
+        "Version 0.1.0-linux-alpha.46 is available."
+    );
 }
 
 #[test]
@@ -3608,9 +3659,10 @@ fn linux_update_status_reflects_last_check_result() {
     assert_eq!(managed.action_label(), "Managed by DNF");
     assert!(managed.pending_update().is_none());
 
-    let update = PendingLinuxUpdate {
-        manager: None,
-        target: LinuxUpdateTarget::Deb(DebUpdate {
+    let update = PendingLinuxUpdate::new(
+        UpdateChannel::Public,
+        None,
+        LinuxUpdateTarget::Deb(DebUpdate {
             version: "0.1.0-linux-alpha.46".to_owned(),
             name: "ok-player_0.1.0-linux-alpha.46_amd64.deb".to_owned(),
             url: "https://example.invalid/update.deb".to_owned(),
@@ -3618,14 +3670,14 @@ fn linux_update_status_reflects_last_check_result() {
             sums_url: None,
             expected_sha256: None,
         }),
-    };
+    );
     let available =
         LinuxUpdateStatus::from_check_result(&LinuxUpdateCheckResult::Available(update));
     assert_eq!(
         available.settings_status_text(true),
-        "Available: 0.1.0-linux-alpha.46"
+        "Version 0.1.0-linux-alpha.46 is available."
     );
-    assert_eq!(available.action_label(), "Install .deb");
+    assert_eq!(available.action_label(), "Update");
     assert!(available.pending_update().is_some());
 
     let failed =

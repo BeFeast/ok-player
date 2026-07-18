@@ -34,7 +34,9 @@ use okp_core::settings_navigation::{SETTINGS_RAIL_ORDER, SettingsPage, search_se
 use okp_core::shortcuts::{
     self, ShortcutAction, ShortcutBinding, ShortcutChord, ShortcutModifiers, ShortcutSlot,
 };
-use okp_core::update_selection::{self, DebFeed, DebUpdate, SHA256SUMS_ASSET};
+use okp_core::update_selection::{
+    self, DebFeed, DebUpdate, SHA256SUMS_ASSET, UpdateCheckKind, UpdateOfferPhase, UpdateOfferState,
+};
 use okp_core::video_geometry::{VideoGeometry, VideoGeometryAction};
 use okp_core::{
     AppIdentity, aspect_resize, chapter_math, fullscreen_toggle, launch_args, lrc, m3u,
@@ -855,6 +857,7 @@ struct StatePollContext {
 struct PendingLinuxUpdate {
     manager: Option<UpdateManager>,
     target: LinuxUpdateTarget,
+    offer: UpdateOfferState,
 }
 
 #[derive(Clone)]
@@ -914,7 +917,7 @@ impl LinuxUpdateStatus {
             Self::Checking => "Checking the update feed...".to_owned(),
             Self::UpToDate => "OK Player is up to date".to_owned(),
             Self::ManagedExternally => "Updates are managed by DNF.".to_owned(),
-            Self::Available(update) => update.available_status(),
+            Self::Available(update) => update.status_text(),
             Self::Failed(error) => format!("Update check failed: {error}"),
         }
     }
@@ -1484,6 +1487,162 @@ struct StatusToast {
     hide_source: Rc<RefCell<Option<glib::SourceId>>>,
 }
 
+#[derive(Clone)]
+struct UpdateAvailableSurface {
+    revealer: gtk::Revealer,
+    content: gtk::Box,
+    actions: gtk::Box,
+    title: gtk::Label,
+    status: gtk::Label,
+    update_button: gtk::Button,
+    skip_button: gtk::Button,
+}
+
+impl UpdateAvailableSurface {
+    fn new(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusToast>) -> Self {
+        let title = gtk::Label::new(Some("Update available"));
+        title.add_css_class("okp-update-surface-title");
+        title.set_xalign(0.0);
+
+        let status = gtk::Label::new(None);
+        status.add_css_class("okp-update-surface-status");
+        status.set_xalign(0.0);
+        status.set_wrap(true);
+        status.set_max_width_chars(48);
+
+        let copy = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        copy.set_hexpand(true);
+        copy.append(&title);
+        copy.append(&status);
+
+        let update_button = gtk::Button::with_label("Update");
+        update_button.add_css_class("okp-update-surface-primary");
+        update_button.set_tooltip_text(Some("Download, verify, and install this update"));
+
+        let skip_button = gtk::Button::with_label("Skip this version");
+        skip_button.add_css_class("okp-update-surface-secondary");
+        skip_button.set_tooltip_text(Some("Hide automatic prompts for only this exact version"));
+
+        let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        actions.set_valign(gtk::Align::Center);
+        actions.append(&update_button);
+        actions.append(&skip_button);
+
+        let content = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+        content.add_css_class("okp-update-surface");
+        content.set_halign(gtk::Align::Center);
+        content.set_size_request(500, -1);
+        content.append(&copy);
+        content.append(&actions);
+
+        let revealer = gtk::Revealer::new();
+        revealer.set_halign(gtk::Align::Fill);
+        revealer.set_valign(gtk::Align::Start);
+        revealer.set_margin_top(58);
+        revealer.set_margin_start(16);
+        revealer.set_margin_end(16);
+        revealer.set_transition_duration(if playback_animations_enabled() {
+            180
+        } else {
+            0
+        });
+        revealer.set_transition_type(gtk::RevealerTransitionType::SlideDown);
+        revealer.set_child(Some(&content));
+
+        let install_state = Rc::clone(&state);
+        let install_toast = Rc::clone(&status_toast);
+        let install_status = status.clone();
+        update_button.connect_clicked(move |button| {
+            let update = install_state.borrow().linux_update_status.pending_update();
+            if let Some(update) = update {
+                start_update_download(
+                    button,
+                    &install_status,
+                    update,
+                    Rc::clone(&install_state),
+                    Rc::clone(&install_toast),
+                );
+            }
+        });
+
+        let skip_state = Rc::clone(&state);
+        let skip_toast = Rc::clone(&status_toast);
+        skip_button.connect_clicked(move |_| {
+            if let Err(error) = skip_pending_linux_update(&skip_state, &skip_toast) {
+                eprintln!("Failed to skip update: {error}");
+                skip_toast.show("Could not skip this version");
+            }
+        });
+
+        let surface = Self {
+            revealer,
+            content,
+            actions,
+            title,
+            status,
+            update_button,
+            skip_button,
+        };
+        surface.refresh(&state);
+        let refresh_surface = surface.clone();
+        glib::timeout_add_local(Duration::from_millis(120), move || {
+            if refresh_surface.revealer.root().is_none() {
+                return glib::ControlFlow::Break;
+            }
+            refresh_surface.refresh(&state);
+            glib::ControlFlow::Continue
+        });
+        surface
+    }
+
+    fn widget(&self) -> &gtk::Revealer {
+        &self.revealer
+    }
+
+    fn refresh(&self, state: &Rc<RefCell<PlayerState>>) {
+        let narrow = self.revealer.width() > 0 && self.revealer.width() < 620;
+        self.revealer.set_margin_top(if narrow { 8 } else { 58 });
+        self.content.set_orientation(if narrow {
+            gtk::Orientation::Vertical
+        } else {
+            gtk::Orientation::Horizontal
+        });
+        self.content.set_halign(if narrow {
+            gtk::Align::Fill
+        } else {
+            gtk::Align::Center
+        });
+        self.content
+            .set_size_request(if narrow { -1 } else { 500 }, -1);
+        self.actions.set_halign(if narrow {
+            gtk::Align::End
+        } else {
+            gtk::Align::Start
+        });
+
+        let pending = state.borrow().linux_update_status.pending_update();
+        let Some(update) = pending else {
+            self.revealer.set_reveal_child(false);
+            return;
+        };
+
+        self.title
+            .set_text(&format!("Update {} available", update.offer.version()));
+        self.status.set_text(&update.status_text());
+        self.update_button
+            .set_label(update.offer.primary_action_label().unwrap_or("Update"));
+        self.update_button.set_sensitive(!matches!(
+            update.offer.phase(),
+            UpdateOfferPhase::Installing | UpdateOfferPhase::Installed
+        ));
+        self.update_button
+            .set_visible(update.offer.primary_action_label().is_some());
+        self.skip_button.set_visible(update.offer.can_skip());
+        self.revealer
+            .set_reveal_child(update.should_show_player_surface());
+    }
+}
+
 impl StatusToast {
     fn new() -> Self {
         let thumbnail = gtk::Image::new();
@@ -1879,30 +2038,63 @@ impl AboutSnapshot {
 }
 
 impl PendingLinuxUpdate {
-    fn target_version(&self) -> Option<String> {
-        match &self.target {
-            LinuxUpdateTarget::Info(info) => Some(info.TargetFullRelease.Version.clone()),
-            LinuxUpdateTarget::Asset(asset) => Some(asset.Version.clone()),
-            LinuxUpdateTarget::Deb(update) => Some(update.version.clone()),
+    fn new(
+        channel: UpdateChannel,
+        manager: Option<UpdateManager>,
+        target: LinuxUpdateTarget,
+    ) -> Self {
+        let version = match &target {
+            LinuxUpdateTarget::Info(info) => info.TargetFullRelease.Version.clone(),
+            LinuxUpdateTarget::Asset(asset) => asset.Version.clone(),
+            LinuxUpdateTarget::Deb(update) => update.version.clone(),
+        };
+        let offer =
+            UpdateOfferState::discovered(channel, version, None, UpdateCheckKind::Automatic)
+                .expect("an update target always creates an offer");
+        Self {
+            manager,
+            target,
+            offer,
         }
+    }
+
+    fn target_version(&self) -> Option<String> {
+        Some(self.offer.version().to_owned())
     }
 
     fn action_label(&self) -> &'static str {
-        match &self.target {
-            LinuxUpdateTarget::Info(_) | LinuxUpdateTarget::Asset(_) => "Download and Restart",
-            LinuxUpdateTarget::Deb(_) => "Install .deb",
+        self.offer.primary_action_label().unwrap_or("Update")
+    }
+
+    fn status_text(&self) -> String {
+        match self.offer.phase() {
+            UpdateOfferPhase::Available => {
+                format!("Version {} is available.", self.offer.version())
+            }
+            UpdateOfferPhase::Skipped => format!(
+                "Version {} was skipped. You can still install it manually.",
+                self.offer.version()
+            ),
+            UpdateOfferPhase::Installing => {
+                format!("Downloading and installing {}...", self.offer.version())
+            }
+            UpdateOfferPhase::Failed(error) => format!(
+                "Update {} failed: {error}. You can retry.",
+                self.offer.version()
+            ),
+            UpdateOfferPhase::Installed => {
+                format!("Version {} was installed.", self.offer.version())
+            }
         }
     }
 
-    fn available_status(&self) -> String {
-        match &self.target {
-            LinuxUpdateTarget::Info(_) | LinuxUpdateTarget::Asset(_) => format!(
-                "Available: {}",
-                self.target_version()
-                    .unwrap_or_else(|| "new version".to_owned())
-            ),
-            LinuxUpdateTarget::Deb(update) => format!("Available: {}", update.version),
-        }
+    fn should_show_player_surface(&self) -> bool {
+        matches!(
+            self.offer.phase(),
+            UpdateOfferPhase::Available
+                | UpdateOfferPhase::Installing
+                | UpdateOfferPhase::Failed(_)
+        )
     }
 }
 

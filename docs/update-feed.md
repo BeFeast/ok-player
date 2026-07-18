@@ -44,6 +44,21 @@ Shared invariants across all three feeds:
   (`LastCheckFailed`) distinct from a confirmed "up to date" (`CheckedOk`); Linux keeps
   `LinuxUpdateStatus::Failed` ("Update check failed") distinct from `UpToDate` ("Up to date").
 
+## Linux update decision UX
+
+Discovering a newer Linux package creates persistent application state rather than a transient
+toast. The player shows a non-modal card naming the target version with **Update** and **Skip this
+version** actions, and Settings → Updates projects the same pending offer and actions. The player
+card has no dismissal timer; it remains until the user starts the update or skips that exact
+version. Download/install progress replaces the card status in place, and a failure restores the
+**Update** action with the error while retaining the verified target for retry.
+
+Skip state is stored in the human-readable settings document as separate exact-version values for
+the public and candidate channels. An automatic check does not prompt again for the matching
+version, but a manual check reports that it was skipped and exposes **Install anyway**. Natural
+version comparison still offers any newer public release or rolling candidate. Switching channels
+therefore neither imports nor clears the other channel's decision.
+
 ## Who writes the feeds
 
 `.github/workflows/publish-update-feeds.yml` is the only writer of the Pages site. It runs both

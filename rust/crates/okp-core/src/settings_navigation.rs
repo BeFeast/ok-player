@@ -146,6 +146,18 @@ const SETTINGS_SEARCH_INDEX: &[SettingsSearchResult] = &[
         page: SettingsPage::Updates,
     },
     SettingsSearchResult {
+        label: "Update available",
+        page: SettingsPage::Updates,
+    },
+    SettingsSearchResult {
+        label: "Skip this version",
+        page: SettingsPage::Updates,
+    },
+    SettingsSearchResult {
+        label: "Install anyway",
+        page: SettingsPage::Updates,
+    },
+    SettingsSearchResult {
         label: "Open Releases",
         page: SettingsPage::Updates,
     },
@@ -218,6 +230,9 @@ mod tests {
             "status",
             "automatic checks",
             "check updates",
+            "update available",
+            "skip version",
+            "install anyway",
             "open releases",
         ] {
             assert!(

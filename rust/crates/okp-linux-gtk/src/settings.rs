@@ -124,6 +124,10 @@ impl SettingsStore {
         self.data.updates.channel
     }
 
+    pub fn skipped_update_version(&self, channel: UpdateChannel) -> Option<&str> {
+        self.data.updates.skipped_version(channel)
+    }
+
     pub fn appearance_theme(&self) -> AppearanceTheme {
         AppearanceTheme::from_setting(self.data.appearance.theme.as_deref())
     }
@@ -279,6 +283,13 @@ impl SettingsStore {
     pub fn set_auto_check_updates(&mut self, enabled: bool) {
         if self.data.updates.auto_check != enabled {
             self.data.updates.auto_check = enabled;
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_skipped_update_version(&mut self, channel: UpdateChannel, version: Option<String>) {
+        if self.skipped_update_version(channel) != version.as_deref() {
+            self.data.updates.set_skipped_version(channel, version);
             self.dirty = true;
         }
     }
@@ -663,6 +674,58 @@ mod tests {
         settings.set_auto_check_updates(false);
 
         assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn skipped_update_versions_are_independent_per_channel() {
+        let mut settings = store();
+
+        settings
+            .set_skipped_update_version(UpdateChannel::Public, Some("0.11.0-beta.2".to_owned()));
+        settings.set_skipped_update_version(
+            UpdateChannel::Candidate,
+            Some("0.11.0-beta.1.42".to_owned()),
+        );
+
+        assert_eq!(
+            settings.skipped_update_version(UpdateChannel::Public),
+            Some("0.11.0-beta.2")
+        );
+        assert_eq!(
+            settings.skipped_update_version(UpdateChannel::Candidate),
+            Some("0.11.0-beta.1.42")
+        );
+    }
+
+    #[test]
+    fn skipped_update_versions_survive_save_and_reload() {
+        let root = unique_temp_dir("okp-skipped-update-settings");
+        let path = root.path().join("settings.json");
+        let mut settings = SettingsStore {
+            path: path.clone(),
+            data: Settings::default(),
+            dirty: false,
+        };
+        settings
+            .set_skipped_update_version(UpdateChannel::Public, Some("0.11.0-beta.2".to_owned()));
+        settings.set_skipped_update_version(
+            UpdateChannel::Candidate,
+            Some("0.11.0-beta.1.42".to_owned()),
+        );
+        settings.save().expect("skip settings should save");
+
+        let json = fs::read_to_string(&path).expect("saved settings should be readable");
+        assert!(json.contains("\"skipped_public_version\": \"0.11.0-beta.2\""));
+        assert!(json.contains("\"skipped_candidate_version\": \"0.11.0-beta.1.42\""));
+        let reloaded = Settings::load(&json).expect("saved settings should reload");
+        assert_eq!(
+            reloaded.updates.skipped_version(UpdateChannel::Public),
+            Some("0.11.0-beta.2")
+        );
+        assert_eq!(
+            reloaded.updates.skipped_version(UpdateChannel::Candidate),
+            Some("0.11.0-beta.1.42")
+        );
     }
 
     #[test]

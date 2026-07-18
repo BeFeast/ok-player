@@ -57,6 +57,9 @@ fn focus_owns_space(window: &impl IsA<gtk::Window>) -> bool {
         if widget.has_css_class("is-capturing") {
             return true;
         }
+        if widget.is::<gtk::Button>() || widget.is::<gtk::Switch>() {
+            return true;
+        }
         if let Ok(editable) = widget.clone().downcast::<gtk::Editable>()
             && editable.is_editable()
         {

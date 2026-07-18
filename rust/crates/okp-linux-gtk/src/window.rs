@@ -106,6 +106,9 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
 
     let identity = AppIdentity::linux();
     let state = Rc::new(RefCell::new(PlayerState::default()));
+    if let Some(status) = player_update_preview_status() {
+        state.borrow_mut().linux_update_status = status;
+    }
     // Visual smoke hook for the private welcome state. Private session is transient by
     // design, so this changes only the in-memory session and never writes a setting.
     if env::var_os("OKP_PRIVATE_SESSION_ON_STARTUP").is_some() {
@@ -238,6 +241,8 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     for compact_overlay in compact_mode.overlays() {
         overlay.add_overlay(compact_overlay);
     }
+    let update_surface = UpdateAvailableSurface::new(Rc::clone(&state), Rc::clone(&status_toast));
+    overlay.add_overlay(update_surface.widget());
     overlay.add_overlay(status_toast.widget());
     for resize_handle in resize_handles {
         overlay.add_overlay(&resize_handle);
@@ -513,7 +518,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
             );
         });
     }
-    if auto_check_updates {
+    if auto_check_updates && env::var_os("OKP_UPDATE_SURFACE_PREVIEW").is_none() {
         check_updates_on_startup(Rc::clone(&state), Rc::clone(&status_toast));
     }
     if let Some(notice) = launch_reserved_notice {

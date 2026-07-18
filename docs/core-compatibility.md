@@ -410,6 +410,12 @@ directly unit-tested, and renders it in the GTK shell; cache and network are def
   which interleaves text segments into the comparison. For the single-scheme version strings
   the feed carries (`0.1.0-linux-alpha.N`) the two agree; the update path keeps its shipped
   comparer verbatim.
+- **Update offer decisions are shared Rust behavior.** `UpdateOfferState` owns exact-version skip,
+  manual **Install anyway**, install progress/failure/retry, and successful-install transitions.
+  The GTK shell keeps only native widgets, network/download work, and package installation. Windows
+  has no skip-version UX or matching state model today, so this is a Linux-only portable domain
+  rather than a C# port; the divergence is explicit until the Windows updater adopts the shared
+  schema through its future core/FFI path.
 
 ## Persistence schemas → `okp_core::settings` / `okp_core::history` (shared schema + migration)
 

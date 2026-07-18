@@ -17,6 +17,8 @@ use std::cmp::Ordering;
 
 use serde::Deserialize;
 
+use crate::settings::UpdateChannel;
+
 /// Name of the checksum-manifest asset every Linux release publishes; the
 /// selected update carries its URL so the shell can verify the download.
 pub const SHA256SUMS_ASSET: &str = "SHA256SUMS";
@@ -67,6 +69,98 @@ pub struct DebUpdate {
     /// checksum manifest. Public feeds leave this unset and retain their
     /// existing SHA256SUMS-only contract.
     pub expected_sha256: Option<String>,
+}
+
+/// Whether an available version was discovered automatically or by an
+/// explicit user check. Manual checks reveal an exact skipped version so the
+/// user can install it anyway; automatic checks keep it suppressed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UpdateCheckKind {
+    Automatic,
+    Manual,
+}
+
+/// Portable decision and install state for one concrete update offer. Shells
+/// own downloads and native widgets; this model owns skip suppression and the
+/// transitions that must remain identical across surfaces.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UpdateOfferState {
+    channel: UpdateChannel,
+    version: String,
+    phase: UpdateOfferPhase,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum UpdateOfferPhase {
+    Available,
+    Skipped,
+    Installing,
+    Failed(String),
+    Installed,
+}
+
+impl UpdateOfferState {
+    pub fn discovered(
+        channel: UpdateChannel,
+        version: impl Into<String>,
+        skipped_version: Option<&str>,
+        _check_kind: UpdateCheckKind,
+    ) -> Option<Self> {
+        let version = version.into();
+        let skipped = skipped_version.is_some_and(|skipped| skipped == version);
+        Some(Self {
+            channel,
+            version,
+            phase: if skipped {
+                UpdateOfferPhase::Skipped
+            } else {
+                UpdateOfferPhase::Available
+            },
+        })
+    }
+
+    pub const fn channel(&self) -> UpdateChannel {
+        self.channel
+    }
+
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+
+    pub fn phase(&self) -> &UpdateOfferPhase {
+        &self.phase
+    }
+
+    pub fn skip(&mut self) {
+        self.phase = UpdateOfferPhase::Skipped;
+    }
+
+    pub fn start_install(&mut self) {
+        self.phase = UpdateOfferPhase::Installing;
+    }
+
+    pub fn fail_install(&mut self, message: impl Into<String>) {
+        self.phase = UpdateOfferPhase::Failed(message.into());
+    }
+
+    pub fn finish_install(&mut self) {
+        self.phase = UpdateOfferPhase::Installed;
+    }
+
+    pub fn primary_action_label(&self) -> Option<&'static str> {
+        match self.phase {
+            UpdateOfferPhase::Available | UpdateOfferPhase::Failed(_) => Some("Update"),
+            UpdateOfferPhase::Skipped => Some("Install anyway"),
+            UpdateOfferPhase::Installing | UpdateOfferPhase::Installed => None,
+        }
+    }
+
+    pub fn can_skip(&self) -> bool {
+        matches!(
+            self.phase,
+            UpdateOfferPhase::Available | UpdateOfferPhase::Failed(_)
+        )
+    }
 }
 
 /// Selects the feed's `.deb` when it is strictly newer than `current_version`.
@@ -139,6 +233,66 @@ mod tests {
             },
             sha256sums_url: sha256sums_url.map(str::to_owned),
         }
+    }
+
+    #[test]
+    fn automatic_check_suppresses_only_the_exact_skipped_version() {
+        let skipped = UpdateOfferState::discovered(
+            UpdateChannel::Public,
+            "0.11.0-beta.2",
+            Some("0.11.0-beta.2"),
+            UpdateCheckKind::Automatic,
+        )
+        .expect("the skipped offer remains available to Settings");
+        assert_eq!(skipped.phase(), &UpdateOfferPhase::Skipped);
+        assert_eq!(skipped.primary_action_label(), Some("Install anyway"));
+
+        let newer = UpdateOfferState::discovered(
+            UpdateChannel::Public,
+            "0.11.0-beta.3",
+            Some("0.11.0-beta.2"),
+            UpdateCheckKind::Automatic,
+        )
+        .expect("a newer version must remain available");
+        assert_eq!(newer.phase(), &UpdateOfferPhase::Available);
+    }
+
+    #[test]
+    fn manual_check_reveals_skipped_version_with_install_anyway() {
+        let skipped = UpdateOfferState::discovered(
+            UpdateChannel::Candidate,
+            "0.11.0-beta.1.42",
+            Some("0.11.0-beta.1.42"),
+            UpdateCheckKind::Manual,
+        )
+        .expect("manual checks reveal skipped versions");
+
+        assert_eq!(skipped.phase(), &UpdateOfferPhase::Skipped);
+        assert_eq!(skipped.primary_action_label(), Some("Install anyway"));
+        assert!(!skipped.can_skip());
+    }
+
+    #[test]
+    fn install_failure_keeps_the_offer_retryable() {
+        let mut offer = UpdateOfferState::discovered(
+            UpdateChannel::Public,
+            "0.11.0-beta.2",
+            None,
+            UpdateCheckKind::Automatic,
+        )
+        .expect("new update should be offered");
+
+        offer.start_install();
+        assert_eq!(offer.phase(), &UpdateOfferPhase::Installing);
+        offer.fail_install("network unavailable");
+        assert_eq!(
+            offer.phase(),
+            &UpdateOfferPhase::Failed("network unavailable".to_owned())
+        );
+        assert_eq!(offer.primary_action_label(), Some("Update"));
+        assert!(offer.can_skip());
+        offer.finish_install();
+        assert_eq!(offer.phase(), &UpdateOfferPhase::Installed);
     }
 
     #[test]

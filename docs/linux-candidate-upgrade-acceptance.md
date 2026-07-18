@@ -55,6 +55,26 @@ accounted for, but it must not be recorded as a successful `.10 -> .11` lane. Ca
 first fixed build reached through the declared recovery path, and candidate N+1 is the next accepted
 build applied by that fixed updater. Keep `.10` as the regression anchor until both lanes pass.
 
+## Persistent Update / Skip operator acceptance (issue #394)
+
+Run these rows on the installed fixed candidate in the same live GNOME/Wayland session used for
+the lane matrix. Capture the player and Settings → Updates at the same viewport and target version.
+
+| Row | Required observation |
+| --- | --- |
+| automatic available | the player shows the target version with **Update** and **Skip this version**; it remains actionable for at least 10 seconds and Settings shows the same offer/actions |
+| skip and restart | choose **Skip this version**, restart the installed app, and confirm no automatic player prompt for that exact version |
+| manual skipped check | choose **Check for updates** and confirm the skipped version is named with **Install anyway** |
+| candidate N+1 | accept a newer candidate and confirm it is offered normally despite candidate N being skipped |
+| channel isolation | switch between public and candidate enrollment and confirm each channel retains only its own exact skipped version |
+| install failure | interrupt a download or cancel/deny the Debian privilege prompt; confirm the error is visible and **Update** remains retryable without a new check |
+| successful install | retry through the existing verified path and confirm the target identity after restart/manual relaunch |
+
+The deterministic `scripts/smoke-linux-update-surface.sh` capture may support geometry, persistent
+rendering beyond the old toast timeout, light/dark material, labels, and control states. It cannot
+attest pkexec, in-place AppImage replacement, restart identity, GNOME focus order, or screen-reader
+announcement; those claims remain live-operator evidence.
+
 ## Failure and recovery matrix
 
 Each ID below is mandatory in the evidence manifest:
