@@ -15,7 +15,7 @@ INTERVAL="${OKP_DBUS_NAME_CLEAR_INTERVAL:-0.1}"
 
 for attempt in $(seq 1 "$ATTEMPTS"); do
   list_status=0
-  list_output="$(gdbus call --session \
+  list_output="$(OKP_DBUS_NAME_CLEAR_ATTEMPT="$attempt" gdbus call --session \
     --dest org.freedesktop.DBus \
     --object-path /org/freedesktop/DBus \
     --method org.freedesktop.DBus.ListNames 2>&1)" || list_status=$?

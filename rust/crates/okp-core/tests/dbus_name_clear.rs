@@ -15,6 +15,7 @@ fn waits_for_application_and_mpris_names_to_disappear() {
 
     assert_success(&output);
     let diagnostics = fixture.diagnostics();
+    assert_eq!(diagnostics.matches("attempt=").count(), 2);
     assert!(diagnostics.contains("name=com.befeast.okplayer present=true"));
     assert!(diagnostics.contains("name=org.mpris.MediaPlayer2.okplayer present=true"));
     assert!(diagnostics.contains("clear=true"));
@@ -72,7 +73,6 @@ impl NameFixture {
             .arg("com.befeast.okplayer")
             .arg("org.mpris.MediaPlayer2.okplayer")
             .env("FAKE_SCENARIO", self.scenario)
-            .env("FAKE_STATE_DIR", &self.root)
             .env("OKP_DBUS_NAME_CLEAR_ATTEMPTS", attempts.to_string())
             .env("OKP_DBUS_NAME_CLEAR_INTERVAL", "0")
             .env(
@@ -105,14 +105,9 @@ fn write_executable(path: &Path, contents: &str) {
 const FAKE_GDBUS: &str = r#"#!/usr/bin/env bash
 set -euo pipefail
 
-count_file="$FAKE_STATE_DIR/call-count"
-count="$(cat "$count_file" 2>/dev/null || echo 0)"
-count=$((count + 1))
-printf '%s\n' "$count" >"$count_file"
-
 case "$FAKE_SCENARIO" in
   present-then-clear)
-    if (( count == 1 )); then
+    if (( OKP_DBUS_NAME_CLEAR_ATTEMPT == 1 )); then
       printf "(['org.freedesktop.DBus', 'com.befeast.okplayer', 'org.mpris.MediaPlayer2.okplayer'],)\n"
     else
       printf "(['org.freedesktop.DBus'],)\n"
