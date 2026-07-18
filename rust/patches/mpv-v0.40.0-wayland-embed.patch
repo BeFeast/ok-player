@@ -1,0 +1,567 @@
+diff --git a/options/options.c b/options/options.c
+index f6fc928..50b217a 100644
+--- a/options/options.c
++++ b/options/options.c
+@@ -215,6 +215,11 @@ static const m_option_t mp_vo_opt_list[] = {
+     {"wayland-edge-pixels-touch", OPT_INT(wl_edge_pixels_touch),
+         M_RANGE(0, INT_MAX)},
+     {"wayland-present", OPT_BOOL(wl_present)},
++    {"wayland-embed-display", OPT_INT64(wl_embed_display), M_RANGE(0, INT64_MAX)},
++    {"wayland-embed-parent", OPT_INT64(wl_embed_parent), M_RANGE(0, INT64_MAX)},
++    {"wayland-embed-size", OPT_SIZE_BOX(wl_embed_size), .force_update = true},
++    {"wayland-embed-scale", OPT_INT(wl_embed_scale), M_RANGE(1, INT_MAX), .force_update = true},
++    {"wayland-embed-presentation-log", OPT_BOOL(wl_embed_presentation_log)},
+ #endif
+ #if HAVE_WIN32_DESKTOP
+ // For old MinGW-w64 compatibility
+@@ -277,6 +282,7 @@ const struct m_sub_options vo_sub_opts = {
+         .wl_content_type = -1,
+         .wl_edge_pixels_pointer = 16,
+         .wl_edge_pixels_touch = 32,
++        .wl_embed_scale = 120,
+         .wl_internal_vsync = 1,
+         .wl_present = true,
+         .mmcss_profile = "Playback",
+diff --git a/options/options.h b/options/options.h
+index 487e7d4..47412be 100644
+--- a/options/options.h
++++ b/options/options.h
+@@ -43,6 +43,11 @@ typedef struct mp_vo_opts {
+     int wl_edge_pixels_pointer;
+     int wl_edge_pixels_touch;
+     bool wl_present;
++    int64_t wl_embed_display;
++    int64_t wl_embed_parent;
++    struct m_geometry wl_embed_size;
++    int wl_embed_scale;
++    bool wl_embed_presentation_log;
+ 
+     float panscan;
+     float zoom;
+diff --git a/video/out/vo_dmabuf_wayland.c b/video/out/vo_dmabuf_wayland.c
+index 70614c8..144818d 100644
+--- a/video/out/vo_dmabuf_wayland.c
++++ b/video/out/vo_dmabuf_wayland.c
+@@ -510,6 +510,12 @@ static void resize(struct vo *vo)
+     if (width == 0 || height == 0)
+         return;
+ 
++    mp_mutex_lock(&vo->params_mutex);
++    bool params_ready = vo->target_params && vo->params;
++    mp_mutex_unlock(&vo->params_mutex);
++    if (!params_ready)
++        return;
++
+     vo_wayland_set_opaque_region(wl, false);
+     vo->dwidth = width;
+     vo->dheight = height;
+diff --git a/video/out/wayland_common.c b/video/out/wayland_common.c
+index cd51e21..9df2904 100644
+--- a/video/out/wayland_common.c
++++ b/video/out/wayland_common.c
+@@ -253,6 +253,7 @@ static int spawn_cursor(struct vo_wayland_state *wl);
+ static void add_feedback(struct vo_wayland_feedback_pool *fback_pool,
+                          struct wp_presentation_feedback *fback);
+ static void apply_keepaspect(struct vo_wayland_state *wl, int *width, int *height);
++static bool apply_embed_geometry(struct vo_wayland_state *wl);
+ static void get_compositor_icc_file(struct vo_wayland_state *wl);
+ static void get_shape_device(struct vo_wayland_state *wl, struct vo_wayland_seat *s);
+ static void guess_focus(struct vo_wayland_state *wl);
+@@ -1092,7 +1093,7 @@ static void surface_handle_enter(void *data, struct wl_surface *wl_surface,
+             ++outputs;
+     }
+ 
+-    if (outputs == 1)
++    if (!wl->embedded && outputs == 1)
+         update_output_geometry(wl, old_geometry, old_output_geometry);
+ 
+     MP_VERBOSE(wl, "Surface entered output %s %s (0x%x), scale = %f, refresh rate = %f Hz\n",
+@@ -1123,7 +1124,7 @@ static void surface_handle_leave(void *data, struct wl_surface *wl_surface,
+             wl->current_output = o;
+     }
+ 
+-    if (outputs == 1)
++    if (!wl->embedded && outputs == 1)
+         update_output_geometry(wl, old_geometry, old_output_geometry);
+ 
+     wl->pending_vo_events |= VO_EVENT_WIN_STATE;
+@@ -1136,6 +1137,9 @@ static void surface_handle_preferred_buffer_scale(void *data,
+ {
+     struct vo_wayland_state *wl = data;
+ 
++    if (wl->embedded)
++        return;
++
+     if (wl->fractional_scale_manager ||
+         (wl->scaling == scale * WAYLAND_SCALE_FACTOR &&
+          wl->current_output && wl->current_output->has_surface))
+@@ -1704,6 +1708,17 @@ static void feedback_presented(void *data, struct wp_presentation_feedback *fbac
+ {
+     struct vo_wayland_feedback_pool *fback_pool = data;
+     struct vo_wayland_state *wl = fback_pool->wl;
++    uint64_t sec = (uint64_t)tv_sec_lo + ((uint64_t)tv_sec_hi << 32);
++    uint64_t ust = MP_TIME_S_TO_NS(sec) + (uint64_t)tv_nsec;
++    uint64_t msc = (uint64_t)seq_lo + ((uint64_t)seq_hi << 32);
++
++    if (wl->embedded && wl->opts->wl_embed_presentation_log) {
++        MP_WARN(wl,
++            "okp-wayland-embed-feedback presented presented_ns=%" PRIu64
++            " refresh_ns=%u sequence=%" PRIu64 " flags=%u width=%d height=%d\n",
++            ust, refresh_nsec, msc, flags,
++            mp_rect_w(wl->geometry), mp_rect_h(wl->geometry));
++    }
+ 
+     if (fback)
+         remove_feedback(fback_pool, fback);
+@@ -1719,15 +1734,15 @@ static void feedback_presented(void *data, struct wp_presentation_feedback *fbac
+     //  - seq_lo + seq_hi is the equivalent of oml's msc
+     //  - these values are updated every time the compositor receives feedback.
+ 
+-    int64_t sec = (uint64_t) tv_sec_lo + ((uint64_t) tv_sec_hi << 32);
+-    int64_t ust = MP_TIME_S_TO_NS(sec) + (uint64_t) tv_nsec;
+-    int64_t msc = (uint64_t) seq_lo + ((uint64_t) seq_hi << 32);
+     present_sync_update_values(wl->present, ust, msc);
+ }
+ 
+ static void feedback_discarded(void *data, struct wp_presentation_feedback *fback)
+ {
+     struct vo_wayland_feedback_pool *fback_pool = data;
++    struct vo_wayland_state *wl = fback_pool->wl;
++    if (wl->embedded && wl->opts->wl_embed_presentation_log)
++        MP_WARN(wl, "okp-wayland-embed-feedback discarded\n");
+     if (fback)
+         remove_feedback(fback_pool, fback);
+ }
+@@ -2487,7 +2502,8 @@ static void prepare_resize(struct vo_wayland_state *wl)
+ {
+     int32_t width = mp_rect_w(wl->geometry) / wl->scaling_factor;
+     int32_t height = mp_rect_h(wl->geometry) / wl->scaling_factor;
+-    xdg_surface_set_window_geometry(wl->xdg_surface, 0, 0, width, height);
++    if (!wl->embedded)
++        xdg_surface_set_window_geometry(wl->xdg_surface, 0, 0, width, height);
+     wl->pending_vo_events |= VO_EVENT_RESIZE;
+ }
+ 
+@@ -2947,6 +2963,8 @@ static void update_output_geometry(struct vo_wayland_state *wl, struct mp_rect o
+ 
+ static int update_window_title(struct vo_wayland_state *wl, const char *title)
+ {
++    if (wl->embedded)
++        return VO_TRUE;
+     /* The xdg-shell protocol requires that the title is UTF-8. */
+     void *tmp = talloc_new(NULL);
+     struct bstr b_title = bstr_sanitize_utf8_latin1(tmp, bstr0(title));
+@@ -2955,6 +2973,20 @@ static int update_window_title(struct vo_wayland_state *wl, const char *title)
+     return VO_TRUE;
+ }
+ 
++static int display_dispatch_pending(struct vo_wayland_state *wl)
++{
++    return wl->event_queue ?
++        wl_display_dispatch_queue_pending(wl->display, wl->event_queue) :
++        wl_display_dispatch_pending(wl->display);
++}
++
++static int display_roundtrip(struct vo_wayland_state *wl)
++{
++    return wl->event_queue ?
++        wl_display_roundtrip_queue(wl->display, wl->event_queue) :
++        wl_display_roundtrip(wl->display);
++}
++
+ static void wayland_dispatch_events(struct vo_wayland_state *wl, int nfds, int64_t timeout_ns)
+ {
+     if (wl->display_fd == -1)
+@@ -2965,8 +2997,10 @@ static void wayland_dispatch_events(struct vo_wayland_state *wl, int nfds, int64
+         {.fd = wl->wakeup_pipe[0], .events = POLLIN },
+     };
+ 
+-    while (wl_display_prepare_read(wl->display) != 0)
+-        wl_display_dispatch_pending(wl->display);
++    while ((wl->event_queue ?
++            wl_display_prepare_read_queue(wl->display, wl->event_queue) :
++            wl_display_prepare_read(wl->display)) != 0)
++        display_dispatch_pending(wl);
+     wl_display_flush(wl->display);
+ 
+     mp_poll(fds, nfds, timeout_ns);
+@@ -2986,7 +3020,7 @@ static void wayland_dispatch_events(struct vo_wayland_state *wl, int nfds, int64
+     if (fds[1].revents & POLLIN)
+         mp_flush_wakeup_pipe(wl->wakeup_pipe[0]);
+ 
+-    wl_display_dispatch_pending(wl->display);
++    display_dispatch_pending(wl);
+ }
+ 
+ static void begin_dragging(struct vo_wayland_state *wl)
+@@ -3037,7 +3071,7 @@ int vo_wayland_control(struct vo *vo, int *events, int request, void *arg)
+ {
+     struct vo_wayland_state *wl = vo->wl;
+     struct mp_vo_opts *opts = wl->opts;
+-    wl_display_dispatch_pending(wl->display);
++    display_dispatch_pending(wl);
+ 
+     switch (request) {
+     case VOCTRL_CHECK_EVENTS: {
+@@ -3059,9 +3093,14 @@ int vo_wayland_control(struct vo *vo, int *events, int request, void *arg)
+     case VOCTRL_VO_OPTS_CHANGED: {
+         void *opt;
+         while (m_config_cache_get_next_changed(wl->opts_cache, &opt)) {
+-            if (opt == &opts->appid)
++            if (wl->embedded &&
++                (opt == &opts->wl_embed_size || opt == &opts->wl_embed_scale))
++            {
++                apply_embed_geometry(wl);
++            }
++            if (!wl->embedded && opt == &opts->appid)
+                 update_app_id(wl);
+-            if (opt == &opts->border)
++            if (!wl->embedded && opt == &opts->border)
+             {
+                 // This is stupid but the value of border shouldn't be written
+                 // unless we get a configure event. Change it back to its old
+@@ -3083,19 +3122,19 @@ int vo_wayland_control(struct vo *vo, int *events, int request, void *arg)
+             }
+             if (opt == &opts->wl_content_type)
+                 set_content_type(wl);
+-            if (opt == &opts->cursor_passthrough)
++            if (!wl->embedded && opt == &opts->cursor_passthrough)
+                 set_input_region(wl, opts->cursor_passthrough);
+-            if (opt == &opts->input_ime)
++            if (!wl->embedded && opt == &opts->input_ime)
+                 toggle_ime(wl);
+-            if (opt == &opts->fullscreen)
++            if (!wl->embedded && opt == &opts->fullscreen)
+                 toggle_fullscreen(wl);
+-            if (opt == &opts->window_maximized)
++            if (!wl->embedded && opt == &opts->window_maximized)
+                 toggle_maximized(wl);
+-            if (opt == &opts->window_minimized)
++            if (!wl->embedded && opt == &opts->window_minimized)
+                 do_minimize(wl);
+-            if (opt == &opts->geometry || opt == &opts->autofit ||
++            if (!wl->embedded && (opt == &opts->geometry || opt == &opts->autofit ||
+                 opt == &opts->autofit_smaller || opt == &opts->autofit_larger)
+-            {
++            ) {
+                 wl->state_change = true;
+                 set_geometry(wl, true);
+             }
+@@ -3136,6 +3175,8 @@ int vo_wayland_control(struct vo *vo, int *events, int request, void *arg)
+         return VO_TRUE;
+     }
+     case VOCTRL_SET_UNFS_WINDOW_SIZE: {
++        if (wl->embedded)
++            return VO_TRUE;
+         int *s = arg;
+         wl->window_size.x0 = 0;
+         wl->window_size.y0 = 0;
+@@ -3145,7 +3186,7 @@ int vo_wayland_control(struct vo *vo, int *events, int request, void *arg)
+             wl->state_change = true;
+             if (wl->opts->window_maximized) {
+                 xdg_toplevel_unset_maximized(wl->xdg_toplevel);
+-                wl_display_dispatch_pending(wl->display);
++                display_dispatch_pending(wl);
+                 /* Make sure the compositor let us unmaximize */
+                 if (wl->opts->window_maximized)
+                     return VO_TRUE;
+@@ -3243,14 +3284,10 @@ bool vo_wayland_valid_format(struct vo_wayland_state *wl, uint32_t drm_format, u
+ 
+ bool vo_wayland_init(struct vo *vo)
+ {
+-    if (!getenv("WAYLAND_DISPLAY") && !getenv("WAYLAND_SOCKET"))
+-        goto err;
+-
+     vo->wl = talloc_zero(NULL, struct vo_wayland_state);
+     struct vo_wayland_state *wl = vo->wl;
+ 
+     *wl = (struct vo_wayland_state) {
+-        .display = wl_display_connect(NULL),
+         .vo = vo,
+         .log = mp_log_new(wl, vo->log, "wayland"),
+         .bounded_width = 0,
+@@ -3263,6 +3300,16 @@ bool vo_wayland_init(struct vo *vo)
+         .opts_cache = m_config_cache_alloc(wl, vo->global, &vo_sub_opts),
+     };
+     wl->opts = wl->opts_cache->opts;
++    wl->embedded = wl->opts->wl_embed_display > 0 && wl->opts->wl_embed_parent > 0;
++    wl->embed_parent = (struct wl_surface *)(uintptr_t)wl->opts->wl_embed_parent;
++
++    if (!wl->embedded && !getenv("WAYLAND_DISPLAY") && !getenv("WAYLAND_SOCKET"))
++        goto err;
++
++    wl->display = wl->embedded ?
++        (struct wl_display *)(uintptr_t)wl->opts->wl_embed_display :
++        wl_display_connect(NULL);
++    wl->owns_display = !wl->embedded;
+ 
+     wl_list_init(&wl->output_list);
+     wl_list_init(&wl->seat_list);
+@@ -3274,11 +3321,23 @@ bool vo_wayland_init(struct vo *vo)
+     if (create_input(wl))
+         goto err;
+ 
+-    wl->registry = wl_display_get_registry(wl->display);
++    if (wl->embedded) {
++        wl->event_queue = wl_display_create_queue(wl->display);
++        struct wl_proxy *display_wrapper = wl_proxy_create_wrapper(wl->display);
++        if (!wl->event_queue || !display_wrapper)
++            goto err;
++        wl_proxy_set_queue(display_wrapper, wl->event_queue);
++        wl->registry = wl_display_get_registry((struct wl_display *)display_wrapper);
++        wl_proxy_wrapper_destroy(display_wrapper);
++    } else {
++        wl->registry = wl_display_get_registry(wl->display);
++    }
++    if (!wl->registry)
++        goto err;
+     wl_registry_add_listener(wl->registry, &registry_listener, wl);
+ 
+     /* Do a roundtrip to run the registry */
+-    wl_display_roundtrip(wl->display);
++    display_roundtrip(wl);
+ 
+     if (!wl->surface) {
+         MP_FATAL(wl, "Compositor doesn't support %s (ver. 4)\n",
+@@ -3286,7 +3345,7 @@ bool vo_wayland_init(struct vo *vo)
+         goto err;
+     }
+ 
+-    if (!wl->wm_base) {
++    if (!wl->embedded && !wl->wm_base) {
+         MP_FATAL(wl, "Compositor doesn't support the required %s protocol!\n",
+                  xdg_wm_base_interface.name);
+         goto err;
+@@ -3308,12 +3367,30 @@ bool vo_wayland_init(struct vo *vo)
+     if (create_viewports(wl))
+         goto err;
+ 
+-    if (create_xdg_surface(wl))
++    if (wl->embedded) {
++        if (!wl->subcompositor || !wl->embed_parent) {
++            MP_FATAL(wl, "Embedded Wayland output requires wl_subcompositor and a parent surface.\n");
++            goto err;
++        }
++        wl->embed_subsurface = wl_subcompositor_get_subsurface(
++            wl->subcompositor, wl->surface, wl->embed_parent);
++        if (!wl->embed_subsurface)
++            goto err;
++        wl_subsurface_set_position(wl->embed_subsurface, 0, 0);
++        wl_subsurface_place_below(wl->embed_subsurface, wl->embed_parent);
++        wl_subsurface_set_desync(wl->embed_subsurface);
++        struct wl_region *region = wl_compositor_create_region(wl->compositor);
++        if (!region)
++            goto err;
++        wl_surface_set_input_region(wl->surface, region);
++        wl_region_destroy(region);
++    } else if (create_xdg_surface(wl)) {
+         goto err;
++    }
+ 
+-    if (wl->xdg_activation) {
++    if (!wl->embedded && wl->xdg_activation) {
+         xdg_activate(wl);
+-    } else {
++    } else if (!wl->embedded) {
+         MP_VERBOSE(wl, "Compositor doesn't support the %s protocol!\n",
+             xdg_activation_v1_interface.name);
+     }
+@@ -3323,6 +3400,11 @@ bool vo_wayland_init(struct vo *vo)
+         wl->video_subsurface = wl_subcompositor_get_subsurface(wl->subcompositor, wl->video_surface, wl->surface);
+     }
+ 
++    if (wl->embedded && !apply_embed_geometry(wl)) {
++        MP_FATAL(wl, "Embedded Wayland output requires a positive --wayland-embed-size.\n");
++        goto err;
++    }
++
+ #if HAVE_WAYLAND_PROTOCOLS_1_41
+     if (!wl->color_manager) {
+         MP_VERBOSE(wl, "Compositor doesn't support the %s protocol!\n",
+@@ -3342,10 +3424,10 @@ bool vo_wayland_init(struct vo *vo)
+                    wp_single_pixel_buffer_manager_v1_interface.name);
+     }
+ 
+-    if (wl->fractional_scale_manager) {
++    if (!wl->embedded && wl->fractional_scale_manager) {
+         wl->fractional_scale = wp_fractional_scale_manager_v1_get_fractional_scale(wl->fractional_scale_manager, wl->surface);
+         wp_fractional_scale_v1_add_listener(wl->fractional_scale, &fractional_scale_listener, wl);
+-    } else {
++    } else if (!wl->embedded) {
+         MP_VERBOSE(wl, "Compositor doesn't support the %s protocol!\n",
+                    wp_fractional_scale_manager_v1_interface.name);
+     }
+@@ -3380,14 +3462,14 @@ bool vo_wayland_init(struct vo *vo)
+                    wp_presentation_interface.name);
+     }
+ 
+-    if (wl->xdg_decoration_manager) {
++    if (!wl->embedded && wl->xdg_decoration_manager) {
+         wl->xdg_toplevel_decoration = zxdg_decoration_manager_v1_get_toplevel_decoration(wl->xdg_decoration_manager, wl->xdg_toplevel);
+         zxdg_toplevel_decoration_v1_add_listener(wl->xdg_toplevel_decoration, &decoration_listener, wl);
+         request_decoration_mode(
+             wl, wl->opts->border ?
+                 ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE :
+                 ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
+-    } else {
++    } else if (!wl->embedded) {
+         wl->opts->border = false;
+         m_config_cache_write_opt(wl->opts_cache,
+                                  &wl->opts->border);
+@@ -3413,7 +3495,8 @@ bool vo_wayland_init(struct vo *vo)
+ 
+     wl->display_fd = wl_display_get_fd(wl->display);
+ 
+-    update_app_id(wl);
++    if (!wl->embedded)
++        update_app_id(wl);
+     mp_make_wakeup_pipe(wl->wakeup_pipe);
+ 
+     wl->frame_callback = wl_surface_frame(wl->callback_surface);
+@@ -3422,7 +3505,7 @@ bool vo_wayland_init(struct vo *vo)
+ 
+     /* Do another roundtrip to ensure all of the above is initialized
+      * before mpv does anything else. */
+-    wl_display_roundtrip(wl->display);
++    display_roundtrip(wl);
+ 
+ #if HAVE_WAYLAND_PROTOCOLS_1_41
+     // Only bind color surface to vo_dmabuf_wayland for now to avoid conflicting with graphics drivers
+@@ -3455,12 +3538,31 @@ err:
+     return false;
+ }
+ 
++static bool apply_embed_geometry(struct vo_wayland_state *wl)
++{
++    struct m_geometry *size = &wl->opts->wl_embed_size;
++    if (!size->wh_valid || size->w <= 0 || size->h <= 0)
++        return false;
++    wl->scaling = MPMAX(wl->opts->wl_embed_scale, 1);
++    wl->scaling_factor = wl->scaling / WAYLAND_SCALE_FACTOR;
++    wl->scale_configured = true;
++    wl->geometry = (struct mp_rect){0, 0, size->w, size->h};
++    wl->window_size = wl->geometry;
++    wl->geometry_configured = true;
++    wl->reconfigured = true;
++    prepare_resize(wl);
++    return true;
++}
++
+ bool vo_wayland_reconfig(struct vo *vo)
+ {
+     struct vo_wayland_state *wl = vo->wl;
+ 
+     MP_VERBOSE(wl, "Reconfiguring!\n");
+ 
++    if (wl->embedded)
++        return apply_embed_geometry(wl);
++
+     if (!wl->current_output) {
+         wl->current_output = find_output(wl);
+         if (!wl->current_output)
+@@ -3527,9 +3629,6 @@ void vo_wayland_uninit(struct vo *vo)
+     if (wl->compositor)
+         wl_compositor_destroy(wl->compositor);
+ 
+-    if (wl->subcompositor)
+-        wl_subcompositor_destroy(wl->subcompositor);
+-
+ #if HAVE_WAYLAND_PROTOCOLS_1_32
+     if (wl->cursor_shape_manager)
+         wp_cursor_shape_manager_v1_destroy(wl->cursor_shape_manager);
+@@ -3615,20 +3714,26 @@ void vo_wayland_uninit(struct vo *vo)
+     if (wl->single_pixel_manager)
+         wp_single_pixel_buffer_manager_v1_destroy(wl->single_pixel_manager);
+ 
++    if (wl->embed_subsurface)
++        wl_subsurface_destroy(wl->embed_subsurface);
++
+     if (wl->surface)
+         wl_surface_destroy(wl->surface);
+ 
++    if (wl->osd_subsurface)
++        wl_subsurface_destroy(wl->osd_subsurface);
++
+     if (wl->osd_surface)
+         wl_surface_destroy(wl->osd_surface);
+ 
+-    if (wl->osd_subsurface)
+-        wl_subsurface_destroy(wl->osd_subsurface);
++    if (wl->video_subsurface)
++        wl_subsurface_destroy(wl->video_subsurface);
+ 
+     if (wl->video_surface)
+         wl_surface_destroy(wl->video_surface);
+ 
+-    if (wl->video_subsurface)
+-        wl_subsurface_destroy(wl->video_subsurface);
++    if (wl->subcompositor)
++        wl_subcompositor_destroy(wl->subcompositor);
+ 
+     if (wl->wm_base)
+         xdg_wm_base_destroy(wl->wm_base);
+@@ -3659,7 +3764,10 @@ void vo_wayland_uninit(struct vo *vo)
+     wl_list_for_each_safe(seat, seat_tmp, &wl->seat_list, link)
+         remove_seat(seat);
+ 
+-    if (wl->display)
++    if (wl->event_queue)
++        wl_event_queue_destroy(wl->event_queue);
++
++    if (wl->display && wl->owns_display)
+         wl_display_disconnect(wl->display);
+ 
+     munmap(wl->compositor_format_map, wl->compositor_format_size);
+@@ -3686,7 +3794,7 @@ void vo_wayland_wait_frame(struct vo_wayland_state *wl)
+     if (vblank_time <= 0 && wl->refresh_interval > 0)
+         vblank_time = wl->refresh_interval;
+ 
+-    if (vblank_time <= 0 && wl->current_output->refresh_rate > 0)
++    if (vblank_time <= 0 && wl->current_output && wl->current_output->refresh_rate > 0)
+         vblank_time = 1e9 / wl->current_output->refresh_rate;
+ 
+     // Ideally you should never reach this point.
+@@ -3708,10 +3816,11 @@ void vo_wayland_wait_frame(struct vo_wayland_state *wl)
+     /* If the compositor does not have presentation time, we cannot be sure
+      * that this wait is accurate. Do a hacky block with wl_display_roundtrip. */
+     if (!wl->use_present && !wl_display_get_error(wl->display))
+-        wl_display_roundtrip(wl->display);
++        display_roundtrip(wl);
+ 
+     /* Only use this heuristic if the compositor doesn't support the suspended state. */
+-    if (wl->frame_wait && xdg_toplevel_get_version(wl->xdg_toplevel) < 6) {
++    if (wl->frame_wait && !wl->embedded &&
++        xdg_toplevel_get_version(wl->xdg_toplevel) < 6) {
+         // Only consider consecutive missed callbacks.
+         if (wl->timeout_count > 1) {
+             wl->hidden = true;
+diff --git a/video/out/wayland_common.h b/video/out/wayland_common.h
+index 111f5c5..931608d 100644
+--- a/video/out/wayland_common.h
++++ b/video/out/wayland_common.h
+@@ -44,6 +44,7 @@ struct vo_wayland_state {
+     struct wl_compositor    *compositor;
+     struct wl_subcompositor *subcompositor;
+     struct wl_display       *display;
++    struct wl_event_queue   *event_queue;
+     struct wl_registry      *registry;
+     struct wl_shm           *shm;
+     struct wl_surface       *surface;
+@@ -52,6 +53,8 @@ struct vo_wayland_state {
+     struct wl_surface       *video_surface;
+     struct wl_surface       *callback_surface;
+     struct wl_subsurface    *video_subsurface;
++    struct wl_surface       *embed_parent;
++    struct wl_subsurface    *embed_subsurface;
+ 
+     /* Geometry */
+     struct mp_rect geometry;
+@@ -65,6 +68,8 @@ struct vo_wayland_state {
+ 
+     /* State */
+     bool activated;
++    bool embedded;
++    bool owns_display;
+     bool focused;
+     bool frame_wait;
+     bool geometry_configured;

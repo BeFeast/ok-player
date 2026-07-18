@@ -10,12 +10,11 @@ use okp_core::presentation_evidence::{
     PresentationRecord,
 };
 
-static MONOTONIC_ORIGIN: OnceLock<Instant> = OnceLock::new();
-
 pub(crate) struct PresentationRecorder {
     queue: Arc<PresentationQueue>,
     worker: Mutex<Option<std::thread::JoinHandle<()>>>,
     sequence: AtomicU64,
+    backend: Mutex<PresentationBackend>,
 }
 
 struct PresentationQueue {
@@ -98,6 +97,7 @@ impl PresentationRecorder {
             queue,
             worker: Mutex::new(Some(worker)),
             sequence: AtomicU64::new(0),
+            backend: Mutex::new(backend),
         });
         recorder.write(QueuedPresentationRecord::Evidence {
             record: PresentationRecord::Session {
@@ -116,6 +116,72 @@ impl PresentationRecorder {
             width: size.width,
             height: size.height,
             boundary,
+        });
+    }
+
+    fn record_backend(&self, monotonic_ns: u64, backend: PresentationBackend) {
+        let mut current = self
+            .backend
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *current == backend {
+            return;
+        }
+        *current = backend;
+        drop(current);
+        self.write(QueuedPresentationRecord::Evidence {
+            record: PresentationRecord::BackendSelected {
+                monotonic_ns,
+                backend,
+            },
+            flush: true,
+        });
+    }
+
+    pub(crate) fn record_wayland_feedback(
+        &self,
+        backend: PresentationBackend,
+        feedback: okp_mpv::WaylandPresentationFeedback,
+    ) {
+        let observed_monotonic_ns = match feedback {
+            okp_mpv::WaylandPresentationFeedback::Presented {
+                observed_monotonic_ns,
+                ..
+            }
+            | okp_mpv::WaylandPresentationFeedback::Discarded {
+                observed_monotonic_ns,
+            } => observed_monotonic_ns,
+        };
+        self.record_backend(observed_monotonic_ns, backend);
+        let record = match feedback {
+            okp_mpv::WaylandPresentationFeedback::Presented {
+                observed_monotonic_ns,
+                presented_ns,
+                refresh_ns,
+                sequence,
+                flags,
+                width,
+                height,
+            } => PresentationRecord::CompositorPresented {
+                monotonic_ns: observed_monotonic_ns,
+                backend,
+                presented_ns,
+                sequence,
+                refresh_ns,
+                flags,
+                width,
+                height,
+            },
+            okp_mpv::WaylandPresentationFeedback::Discarded {
+                observed_monotonic_ns,
+            } => PresentationRecord::CompositorDiscarded {
+                monotonic_ns: observed_monotonic_ns,
+                backend,
+            },
+        };
+        self.write(QueuedPresentationRecord::Evidence {
+            record,
+            flush: false,
         });
     }
 
@@ -225,12 +291,17 @@ fn write_presentation_records(mut writer: BufWriter<File>, queue: Arc<Presentati
 }
 
 pub(crate) fn monotonic_ns() -> u64 {
-    MONOTONIC_ORIGIN
-        .get_or_init(Instant::now)
-        .elapsed()
-        .as_nanos()
-        .try_into()
-        .unwrap_or(u64::MAX)
+    let mut timestamp = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut timestamp) } != 0 {
+        return 0;
+    }
+    u64::try_from(timestamp.tv_sec)
+        .unwrap_or_default()
+        .saturating_mul(1_000_000_000)
+        .saturating_add(u64::try_from(timestamp.tv_nsec).unwrap_or_default())
 }
 
 #[cfg(test)]

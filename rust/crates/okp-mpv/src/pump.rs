@@ -27,8 +27,8 @@ use libc::{c_char, c_void};
 use crate::ffi;
 use crate::player::{
     AbLoopState, AudioDevice, Chapter, EndFileReason, MediaInfo, MpvEvent, PlaybackDiagnostics,
-    PlaybackState, RawReader, Track, VideoDimensions, audio_device_selected,
-    audio_devices_from_entries, end_file_reason, media_info_with_source,
+    PlaybackState, RawReader, Track, VideoDimensions, WaylandPresentationFeedback,
+    audio_device_selected, audio_devices_from_entries, end_file_reason, media_info_with_source,
 };
 
 /// Properties the pump observes so mpv wakes it (and refreshes the snapshot)
@@ -138,6 +138,7 @@ struct PumpShared {
     reader: RawReader,
     snapshot: Mutex<Snapshot>,
     events: Mutex<Vec<MpvEvent>>,
+    wayland_presentation_feedback: Mutex<Vec<WaylandPresentationFeedback>>,
     diagnostic_messages: Mutex<VecDeque<String>>,
     media_source: Mutex<Option<PathBuf>>,
     audio_device_current: Mutex<String>,
@@ -172,6 +173,7 @@ impl EventPump {
             reader: RawReader::new(handle),
             snapshot: Mutex::new(Snapshot::default()),
             events: Mutex::new(Vec::new()),
+            wayland_presentation_feedback: Mutex::new(Vec::new()),
             diagnostic_messages: Mutex::new(VecDeque::new()),
             media_source: Mutex::new(None),
             audio_device_current: Mutex::new("auto".to_owned()),
@@ -220,6 +222,10 @@ impl EventPump {
 
     pub(crate) fn playback_diagnostics(&self) -> PlaybackDiagnostics {
         lock(&self.shared.snapshot).playback_diagnostics.clone()
+    }
+
+    pub(crate) fn take_wayland_presentation_feedback(&self) -> Vec<WaylandPresentationFeedback> {
+        std::mem::take(&mut *lock(&self.shared.wayland_presentation_feedback))
     }
 
     pub(crate) fn ab_loop_state(&self) -> AbLoopState {
@@ -384,6 +390,10 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
                 shared.running.store(false, Ordering::Release);
             }
             ffi::MPV_EVENT_LOG_MESSAGE => {
+                if let Some(feedback) = wayland_presentation_feedback(event) {
+                    lock(&shared.wayland_presentation_feedback).push(feedback);
+                    continue;
+                }
                 if let Some(message) = log_message(event) {
                     let mut messages = lock(&shared.diagnostic_messages);
                     if messages.len() == 24 {
@@ -481,6 +491,59 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
     }
 
     (lifecycle, flags)
+}
+
+fn wayland_presentation_feedback(event: &ffi::mpv_event) -> Option<WaylandPresentationFeedback> {
+    let message = unsafe { event.data.cast::<ffi::mpv_event_log_message>().as_ref() }?;
+    let text = c_string(message.text);
+    let payload = text.trim().strip_prefix("okp-wayland-embed-feedback ")?;
+    if payload == "discarded" {
+        return Some(WaylandPresentationFeedback::Discarded {
+            observed_monotonic_ns: monotonic_absolute_ns(),
+        });
+    }
+    let payload = payload.strip_prefix("presented ")?;
+    let mut presented_ns = None;
+    let mut refresh_ns = None;
+    let mut sequence = None;
+    let mut flags = None;
+    let mut width = None;
+    let mut height = None;
+    for field in payload.split_whitespace() {
+        let (name, value) = field.split_once('=')?;
+        match name {
+            "presented_ns" => presented_ns = value.parse().ok(),
+            "refresh_ns" => refresh_ns = value.parse().ok(),
+            "sequence" => sequence = value.parse().ok(),
+            "flags" => flags = value.parse().ok(),
+            "width" => width = value.parse().ok(),
+            "height" => height = value.parse().ok(),
+            _ => return None,
+        }
+    }
+    Some(WaylandPresentationFeedback::Presented {
+        observed_monotonic_ns: monotonic_absolute_ns(),
+        presented_ns: presented_ns?,
+        refresh_ns: refresh_ns?,
+        sequence: sequence?,
+        flags: flags?,
+        width: width?,
+        height: height?,
+    })
+}
+
+fn monotonic_absolute_ns() -> u64 {
+    let mut timestamp = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut timestamp) } != 0 {
+        return 0;
+    }
+    u64::try_from(timestamp.tv_sec)
+        .unwrap_or_default()
+        .saturating_mul(1_000_000_000)
+        .saturating_add(u64::try_from(timestamp.tv_nsec).unwrap_or_default())
 }
 
 fn log_message(event: &ffi::mpv_event) -> Option<String> {
@@ -648,6 +711,61 @@ mod tests {
     use std::sync::mpsc;
 
     use super::*;
+
+    fn log_event(text: &CString) -> (ffi::mpv_event_log_message, ffi::mpv_event) {
+        let message = ffi::mpv_event_log_message {
+            prefix: c"wayland".as_ptr(),
+            level: c"warn".as_ptr(),
+            text: text.as_ptr(),
+            log_level: 2,
+        };
+        let event = ffi::mpv_event {
+            event_id: ffi::MPV_EVENT_LOG_MESSAGE,
+            error: 0,
+            reply_userdata: 0,
+            data: ptr::null_mut(),
+        };
+        (message, event)
+    }
+
+    #[test]
+    fn parses_patched_wayland_compositor_feedback_without_treating_it_as_failure_text() {
+        let text = CString::new(
+            "okp-wayland-embed-feedback presented presented_ns=123456 refresh_ns=16666667 sequence=42 flags=3 width=1920 height=1037\n",
+        )
+        .unwrap();
+        let (mut message, mut event) = log_event(&text);
+        event.data = std::ptr::from_mut(&mut message).cast();
+        let Some(WaylandPresentationFeedback::Presented {
+            observed_monotonic_ns,
+            presented_ns,
+            refresh_ns,
+            sequence,
+            flags,
+            width,
+            height,
+        }) = wayland_presentation_feedback(&event)
+        else {
+            panic!("presented feedback should parse");
+        };
+        assert!(observed_monotonic_ns > 0);
+        assert_eq!(presented_ns, 123456);
+        assert_eq!(refresh_ns, 16_666_667);
+        assert_eq!(sequence, 42);
+        assert_eq!(flags, 3);
+        assert_eq!((width, height), (1920, 1037));
+
+        let discarded = CString::new("okp-wayland-embed-feedback discarded\n").unwrap();
+        let (mut message, mut event) = log_event(&discarded);
+        event.data = std::ptr::from_mut(&mut message).cast();
+        let Some(WaylandPresentationFeedback::Discarded {
+            observed_monotonic_ns,
+        }) = wayland_presentation_feedback(&event)
+        else {
+            panic!("discarded feedback should parse");
+        };
+        assert!(observed_monotonic_ns > 0);
+    }
 
     #[test]
     fn typed_audio_device_payloads_are_copied_from_the_event() {

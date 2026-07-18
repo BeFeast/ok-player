@@ -179,7 +179,18 @@ const AUDIO_DEVICE_RESTORE_MAX_ATTEMPTS: u8 = 50;
 const AB_LOOP_COMBINED_MARK_EPSILON_SECS: f64 = 0.5;
 const OSC_CLEARANCE_DIP: f64 = 88.0;
 const OSC_SUBTITLE_LIFT_PERCENT: f64 = 16.0;
-const PROTECTED_MPV_OPTIONS: &[&str] = &["config", "terminal", "idle", "force-window", "vo"];
+const PROTECTED_MPV_OPTIONS: &[&str] = &[
+    "config",
+    "terminal",
+    "idle",
+    "force-window",
+    "vo",
+    "wayland-embed-display",
+    "wayland-embed-parent",
+    "wayland-embed-size",
+    "wayland-embed-scale",
+    "wayland-embed-presentation-log",
+];
 const LINUX_GAPLESS_CAPABILITY: GaplessPlaybackCapability =
     GaplessPlaybackCapability::for_transition_path(
         PlaylistTransitionPath::ShellManagedAfterEndFile,

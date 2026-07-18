@@ -3,6 +3,7 @@ use std::ffi::{CStr, CString, NulError};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::ptr::{self, NonNull};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -21,6 +22,11 @@ const AUDIO_NORMALIZATION_FILTER: &str = "@okpnorm:dynaudnorm";
 const AUDIO_DEVICE_AUTO: &str = "auto";
 const LEGACY_TRANSPARENT_SUBTITLE_BACKGROUND: &str = "0.0/0.0";
 const DEFERRED_TERMINATE_TIMEOUT: Duration = Duration::from_millis(250);
+const WAYLAND_EMBED_DISPLAY_OPTION: &str = "wayland-embed-display";
+const WAYLAND_EMBED_PARENT_OPTION: &str = "wayland-embed-parent";
+const WAYLAND_EMBED_SIZE_OPTION: &str = "wayland-embed-size";
+const WAYLAND_EMBED_SCALE_OPTION: &str = "wayland-embed-scale";
+const WAYLAND_EMBED_PRESENTATION_LOG_OPTION: &str = "wayland-embed-presentation-log";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RenderTargetSize {
@@ -47,6 +53,63 @@ unsafe impl Sync for RenderUpdateHandle {}
 pub struct NativeWaylandDisplay {
     pointer: NonNull<c_void>,
     _owner: Box<dyn Any>,
+}
+
+/// Native resources used by the optional patched-libmpv Wayland DMA-BUF VO.
+///
+/// The owner is type-erased so a shell can retain both its toolkit display and
+/// parent surface without making `okp-mpv` depend on toolkit-specific types.
+#[derive(Clone)]
+pub struct WaylandDmabufTarget {
+    display: NonNull<c_void>,
+    parent_surface: NonNull<c_void>,
+    _owner: Arc<dyn Any>,
+}
+
+impl WaylandDmabufTarget {
+    /// Wrap a `wl_display*` and `wl_surface*` together with their toolkit owner.
+    ///
+    /// # Safety
+    ///
+    /// Both pointers must belong to `owner` and remain valid while retaining
+    /// `owner`. The surface must be on the supplied display connection.
+    pub unsafe fn new<T: 'static>(
+        display: NonNull<c_void>,
+        parent_surface: NonNull<c_void>,
+        owner: T,
+    ) -> Self {
+        Self {
+            display,
+            parent_surface,
+            _owner: Arc::new(owner),
+        }
+    }
+}
+
+impl fmt::Debug for WaylandDmabufTarget {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WaylandDmabufTarget")
+            .field("display", &self.display)
+            .field("parent_surface", &self.parent_surface)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaylandPresentationFeedback {
+    Presented {
+        observed_monotonic_ns: u64,
+        presented_ns: u64,
+        refresh_ns: u32,
+        sequence: u64,
+        flags: u32,
+        width: i32,
+        height: i32,
+    },
+    Discarded {
+        observed_monotonic_ns: u64,
+    },
 }
 
 impl NativeWaylandDisplay {
@@ -101,6 +164,14 @@ impl RenderTargetSize {
             height: self.height.max(other.height),
         }
     }
+}
+
+fn pointer_option_value(pointer: NonNull<c_void>) -> String {
+    (pointer.as_ptr() as usize).to_string()
+}
+
+fn render_size_option_value(size: RenderTargetSize) -> String {
+    format!("{}x{}", size.width.max(1), size.height.max(1))
 }
 
 impl RenderUpdateHandle {
@@ -960,6 +1031,7 @@ pub struct Mpv {
     // Must be released after `mpv_render_context_free`: libmpv may use the
     // native display until that call returns.
     render_context_native_wayland_display: Option<NativeWaylandDisplay>,
+    wayland_dmabuf_target: Option<WaylandDmabufTarget>,
     pump: Option<EventPump>,
     next_request_id: AtomicU64,
     #[cfg(debug_assertions)]
@@ -976,6 +1048,46 @@ impl Mpv {
     }
 
     pub fn new_with_options(hwdec: &str, options: &[(String, String)]) -> Result<Self, MpvError> {
+        let this = Self::new_uninitialized()?;
+        this.configure_before_initialize(hwdec, "libmpv", options)?;
+        this.initialize()
+    }
+
+    /// Try the OK Player patched-libmpv Wayland DMA-BUF embedding contract.
+    ///
+    /// `Ok(None)` means the linked libmpv does not expose that optional
+    /// contract. The caller should continue with the ordinary render API.
+    pub fn try_new_with_wayland_dmabuf(
+        hwdec: &str,
+        options: &[(String, String)],
+        target: WaylandDmabufTarget,
+        size: RenderTargetSize,
+        scale: i32,
+        presentation_log: bool,
+    ) -> Result<Option<Self>, MpvError> {
+        let mut this = Self::new_uninitialized()?;
+        if !this.set_option_if_supported(
+            WAYLAND_EMBED_DISPLAY_OPTION,
+            &pointer_option_value(target.display),
+        )? {
+            return Ok(None);
+        }
+        this.set_option(
+            WAYLAND_EMBED_PARENT_OPTION,
+            &pointer_option_value(target.parent_surface),
+        )?;
+        this.set_option(WAYLAND_EMBED_SIZE_OPTION, &render_size_option_value(size))?;
+        this.set_option(WAYLAND_EMBED_SCALE_OPTION, &scale.max(1).to_string())?;
+        this.set_option(
+            WAYLAND_EMBED_PRESENTATION_LOG_OPTION,
+            if presentation_log { "yes" } else { "no" },
+        )?;
+        this.configure_before_initialize(hwdec, "dmabuf-wayland,libmpv", options)?;
+        this.wayland_dmabuf_target = Some(target);
+        Ok(Some(this.initialize()?))
+    }
+
+    fn new_uninitialized() -> Result<Self, MpvError> {
         unsafe {
             libc::setlocale(libc::LC_NUMERIC, c"C".as_ptr());
         }
@@ -985,23 +1097,33 @@ impl Mpv {
             handle,
             render_context: None,
             render_context_native_wayland_display: None,
+            wayland_dmabuf_target: None,
             pump: None,
             next_request_id: AtomicU64::new(1),
             #[cfg(debug_assertions)]
             blocking_read_guard: Default::default(),
         };
 
-        this.set_option("terminal", "no")?;
-        this.set_option("config", "no")?;
-        this.set_option("idle", "yes")?;
-        this.set_option("force-window", "no")?;
-        this.set_option("vo", "libmpv")?;
-        this.set_option("hwdec", hwdec)?;
+        Ok(this)
+    }
+
+    fn configure_before_initialize(
+        &self,
+        hwdec: &str,
+        video_output: &str,
+        options: &[(String, String)],
+    ) -> Result<(), MpvError> {
+        self.set_option("terminal", "no")?;
+        self.set_option("config", "no")?;
+        self.set_option("idle", "yes")?;
+        self.set_option("force-window", "no")?;
+        self.set_option("vo", video_output)?;
+        self.set_option("hwdec", hwdec)?;
         // Exact same-stem subtitle discovery is an mpv passthrough boundary:
         // libmpv parses and renders SRT/WebVTT cue payloads, while OK Player
         // only surfaces the resulting track metadata. Keep this explicit so
         // config=no cannot make sidecar support depend on mpv's default value.
-        this.set_option("sub-auto", "exact")?;
+        self.set_option("sub-auto", "exact")?;
         // Preserve authored ASS/SSA styling. `scale` is deliberate: mpv keeps
         // script fonts, colors, inline layout, and signs, but still honors OK
         // Player's explicit sub-scale/sub-pos controls. Older supported libmpv
@@ -1009,16 +1131,38 @@ impl Mpv {
         // best-effort while every other setup error remains fatal. The GTK raw-
         // config parser protects both names so a preset cannot silently cross
         // the native-style boundary.
-        this.set_option("sub-ass-override", "scale")?;
-        this.set_option_if_supported("secondary-sub-ass-override", "scale")?;
-        this.apply_options(options)?;
-        check(unsafe { ffi::mpv_initialize(this.handle.as_ptr()) })?;
+        self.set_option("sub-ass-override", "scale")?;
+        self.set_option_if_supported("secondary-sub-ass-override", "scale")?;
+        self.apply_options(options)?;
+        Ok(())
+    }
+
+    fn initialize(self) -> Result<Self, MpvError> {
+        check(unsafe { ffi::mpv_initialize(self.handle.as_ptr()) })?;
         let warning_level = CString::new("warn").expect("static log level has no nul");
         check(unsafe {
-            ffi::mpv_request_log_messages(this.handle.as_ptr(), warning_level.as_ptr())
+            ffi::mpv_request_log_messages(self.handle.as_ptr(), warning_level.as_ptr())
         })?;
 
-        Ok(this)
+        Ok(self)
+    }
+
+    pub fn uses_wayland_dmabuf(&self) -> bool {
+        self.wayland_dmabuf_target.is_some()
+    }
+
+    pub fn set_wayland_dmabuf_geometry(
+        &self,
+        size: RenderTargetSize,
+        scale: i32,
+    ) -> Result<(), MpvError> {
+        if !self.uses_wayland_dmabuf() {
+            return Ok(());
+        }
+        let size = render_size_option_value(size);
+        let scale = scale.max(1).to_string();
+        self.command_async(&["set", WAYLAND_EMBED_SIZE_OPTION, &size])?;
+        self.command_async(&["set", WAYLAND_EMBED_SCALE_OPTION, &scale])
     }
 
     /// Mark the calling thread as the UI (GLib main-context) thread. In debug
@@ -1087,6 +1231,13 @@ impl Mpv {
         self.pump
             .as_ref()
             .map(EventPump::playback_diagnostics)
+            .unwrap_or_default()
+    }
+
+    pub fn take_wayland_presentation_feedback(&self) -> Vec<WaylandPresentationFeedback> {
+        self.pump
+            .as_ref()
+            .map(EventPump::take_wayland_presentation_feedback)
             .unwrap_or_default()
     }
 
@@ -2058,7 +2209,14 @@ impl Drop for Mpv {
         let deferred_pump = self.pump.take().and_then(EventPump::shutdown);
         self.destroy_render_context();
         if had_pump {
-            terminate_destroy_bounded(self.handle, deferred_pump);
+            let teardown_completed = terminate_destroy_bounded(self.handle, deferred_pump);
+            if !teardown_completed {
+                // The embedded VO may still dereference the caller-owned
+                // display and parent surface in the reaper. Their toolkit
+                // owner is main-thread-bound, so retain it rather than release
+                // those resources before deferred libmpv teardown completes.
+                std::mem::forget(self.wayland_dmabuf_target.take());
+            }
         } else {
             unsafe {
                 ffi::mpv_terminate_destroy(self.handle.as_ptr());
@@ -2070,7 +2228,7 @@ impl Drop for Mpv {
 fn terminate_destroy_bounded(
     handle: NonNull<ffi::mpv_handle>,
     pump: Option<std::thread::JoinHandle<()>>,
-) {
+) -> bool {
     let handle_address = handle.as_ptr() as usize;
     let (finished_tx, finished_rx) = mpsc::channel();
     let reaper = std::thread::Builder::new()
@@ -2088,10 +2246,12 @@ fn terminate_destroy_bounded(
         Ok(reaper) => {
             if finished_rx.recv_timeout(DEFERRED_TERMINATE_TIMEOUT).is_ok() {
                 let _ = reaper.join();
+                true
             } else {
                 eprintln!(
                     "[okp-mpv] libmpv teardown exceeded the shutdown deadline; continuing in the reaper"
                 );
+                false
             }
         }
         Err(error) => {
@@ -2099,6 +2259,7 @@ fn terminate_destroy_bounded(
             // its closure. The raw libmpv handle must intentionally remain
             // alive rather than being destroyed under an in-flight API call.
             eprintln!("[okp-mpv] deferred teardown unavailable; leaking libmpv handle: {error}");
+            false
         }
     }
 }

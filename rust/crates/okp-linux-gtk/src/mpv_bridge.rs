@@ -82,7 +82,6 @@ impl NativeRenderLoop {
     fn start(
         plane: Arc<NativeVideoPlane>,
         update_handle: okp_mpv::RenderUpdateHandle,
-        recorder: Option<Arc<PresentationRecorder>>,
     ) -> Result<Self, String> {
         let notifier = NativeRenderNotifier::new();
         let thread_notifier = Arc::clone(&notifier);
@@ -111,9 +110,6 @@ impl NativeRenderLoop {
                         break;
                     }
                     update_handle.report_swap();
-                    if let Some(recorder) = recorder.as_ref() {
-                        recorder.record_present(size, "egl-swap-buffers");
-                    }
                 }
                 let _ = plane.release_current();
             })
@@ -263,7 +259,15 @@ fn connect_native_mpv(
             );
             return;
         }
-        let Some(mut mpv) = create_configured_mpv(&realize_state) else {
+        let dmabuf_target = wayland_dmabuf_target(area).ok();
+        let render_size =
+            native_render_size(area.width(), area.height(), native_surface_scale(area));
+        let Some(mut mpv) = create_configured_native_mpv(
+            &realize_state,
+            dmabuf_target,
+            render_size,
+            wayland_scale_units(area),
+        ) else {
             return;
         };
         let display = area.display();
@@ -305,7 +309,6 @@ fn connect_native_mpv(
                 return;
             }
         };
-        let recorder = realize_state.borrow().presentation_recorder.clone();
         if !plane.release_current() {
             mpv.destroy_render_context();
             schedule_gtk_mpv_fallback(
@@ -318,8 +321,7 @@ fn connect_native_mpv(
             );
             return;
         }
-        let render_loop = match NativeRenderLoop::start(Arc::clone(&plane), update_handle, recorder)
-        {
+        let render_loop = match NativeRenderLoop::start(Arc::clone(&plane), update_handle) {
             Ok(render_loop) => render_loop,
             Err(error) => {
                 let _ = plane.make_current();
@@ -377,6 +379,18 @@ fn connect_native_mpv(
                         native_surface_scale(&scale_area),
                     );
                 }
+                if let Some(mpv) = state.mpv.as_ref() {
+                    let size = native_render_size(
+                        scale_area.width(),
+                        scale_area.height(),
+                        native_surface_scale(&scale_area),
+                    );
+                    if let Err(error) =
+                        mpv.set_wayland_dmabuf_geometry(size, wayland_scale_units(&scale_area))
+                    {
+                        eprintln!("Failed to update the embedded Wayland video scale: {error}");
+                    }
+                }
                 if let Some(render_loop) = state.native_render_loop.as_ref() {
                     render_loop.request_render();
                 }
@@ -390,14 +404,25 @@ fn connect_native_mpv(
 
     let resize_state = Rc::clone(&state);
     video_area.connect_resize(move |area, width, height| {
-        if let Some(plane) = resize_state.borrow().native_video_plane.as_ref() {
+        let state = resize_state.borrow();
+        if let Some(plane) = state.native_video_plane.as_ref() {
             plane.resize(width, height, native_surface_scale(area));
+        }
+        if let Some(mpv) = state.mpv.as_ref() {
+            let size = native_render_size(width, height, native_surface_scale(area));
+            if let Err(error) = mpv.set_wayland_dmabuf_geometry(size, wayland_scale_units(area)) {
+                eprintln!("Failed to resize the embedded Wayland video surface: {error}");
+            }
         }
     });
 
     let unrealize_state = Rc::clone(&state);
     video_area.connect_unrealize(move |_| {
         let mut state = unrealize_state.borrow_mut();
+        let uses_wayland_dmabuf = state
+            .mpv
+            .as_ref()
+            .is_some_and(okp_mpv::Mpv::uses_wayland_dmabuf);
         if let Some(mpv) = state.mpv.as_mut() {
             let _ = unsafe { mpv.set_render_update_callback(None, std::ptr::null_mut()) };
         }
@@ -409,6 +434,9 @@ fn connect_native_mpv(
         }
         if let Some(mpv) = state.mpv.as_mut() {
             mpv.destroy_render_context();
+        }
+        if uses_wayland_dmabuf {
+            state.mpv.take();
         }
         if let Some(plane) = state.native_video_plane.as_ref() {
             plane.disable();
@@ -547,17 +575,69 @@ fn connect_gtk_mpv(
 }
 
 fn create_configured_mpv(state: &Rc<RefCell<PlayerState>>) -> Option<Mpv> {
-    let (hwdec, raw_mpv_config, subtitle_scale, subtitle_position, subtitle_style) = {
+    let (hwdec, raw_mpv_options) = mpv_creation_options(state);
+    let mpv = create_regular_mpv(&hwdec, &raw_mpv_options)?;
+    Some(finish_configured_mpv(state, mpv))
+}
+
+fn create_configured_native_mpv(
+    state: &Rc<RefCell<PlayerState>>,
+    target: Option<okp_mpv::WaylandDmabufTarget>,
+    size: okp_mpv::RenderTargetSize,
+    scale: i32,
+) -> Option<Mpv> {
+    let (hwdec, raw_mpv_options) = mpv_creation_options(state);
+    let presentation_log = state.borrow().presentation_recorder.is_some();
+    if let Some(target) = target {
+        let attempt = Mpv::try_new_with_wayland_dmabuf(
+            &hwdec,
+            &raw_mpv_options,
+            target.clone(),
+            size,
+            scale,
+            presentation_log,
+        );
+        match attempt {
+            Ok(Some(mpv)) => return Some(finish_configured_mpv(state, mpv)),
+            Ok(None) => {}
+            Err(error) if !raw_mpv_options.is_empty() => {
+                eprintln!(
+                    "Failed to create the Wayland DMA-BUF player with custom mpv.conf options: {error}; retrying without them"
+                );
+                match Mpv::try_new_with_wayland_dmabuf(
+                    &hwdec,
+                    &[],
+                    target,
+                    size,
+                    scale,
+                    presentation_log,
+                ) {
+                    Ok(Some(mpv)) => return Some(finish_configured_mpv(state, mpv)),
+                    Ok(None) => {}
+                    Err(error) => eprintln!(
+                        "Wayland DMA-BUF initialization failed: {error}; using the OpenGL render API"
+                    ),
+                }
+            }
+            Err(error) => eprintln!(
+                "Wayland DMA-BUF initialization failed: {error}; using the OpenGL render API"
+            ),
+        }
+    }
+
+    let mpv = create_regular_mpv(&hwdec, &raw_mpv_options)?;
+    Some(finish_configured_mpv(state, mpv))
+}
+
+fn mpv_creation_options(state: &Rc<RefCell<PlayerState>>) -> (String, Vec<(String, String)>) {
+    let (hwdec, raw_mpv_config) = {
         let state = state.borrow();
         (
             state.settings.hardware_decode_mpv_option().to_owned(),
             state.settings.raw_mpv_config().to_owned(),
-            state.settings.subtitle_scale(),
-            state.settings.subtitle_position(),
-            state.settings.subtitle_style(),
         )
     };
-    let raw_mpv_options = match parse_raw_mpv_config(&raw_mpv_config) {
+    let options = match parse_raw_mpv_config(&raw_mpv_config) {
         Ok(options) => options,
         Err(error) => {
             eprintln!(
@@ -567,14 +647,17 @@ fn create_configured_mpv(state: &Rc<RefCell<PlayerState>>) -> Option<Mpv> {
             Vec::new()
         }
     };
+    (hwdec, options)
+}
 
-    let mpv = match Mpv::new_with_options(&hwdec, &raw_mpv_options) {
+fn create_regular_mpv(hwdec: &str, raw_mpv_options: &[(String, String)]) -> Option<Mpv> {
+    Some(match Mpv::new_with_options(hwdec, raw_mpv_options) {
         Ok(mpv) => mpv,
         Err(error) if !raw_mpv_options.is_empty() => {
             eprintln!(
                 "Failed to create mpv with custom mpv.conf options: {error}; retrying without them"
             );
-            match Mpv::new_with_hwdec(&hwdec) {
+            match Mpv::new_with_hwdec(hwdec) {
                 Ok(mpv) => mpv,
                 Err(error) => {
                     eprintln!("Failed to create mpv: {error}");
@@ -586,6 +669,17 @@ fn create_configured_mpv(state: &Rc<RefCell<PlayerState>>) -> Option<Mpv> {
             eprintln!("Failed to create mpv: {error}");
             return None;
         }
+    })
+}
+
+fn finish_configured_mpv(state: &Rc<RefCell<PlayerState>>, mpv: Mpv) -> Mpv {
+    let (subtitle_scale, subtitle_position, subtitle_style) = {
+        let state = state.borrow();
+        (
+            state.settings.subtitle_scale(),
+            state.settings.subtitle_position(),
+            state.settings.subtitle_style(),
+        )
     };
     mpv.mark_ui_thread();
     let saved_volume = state.borrow().settings.volume();
@@ -618,7 +712,7 @@ fn create_configured_mpv(state: &Rc<RefCell<PlayerState>>) -> Option<Mpv> {
     if let Err(error) = mpv.set_subtitle_style(subtitle_style.options) {
         eprintln!("Failed to restore subtitle style: {error}");
     }
-    Some(mpv)
+    mpv
 }
 
 pub(crate) fn parse_raw_mpv_config(text: &str) -> Result<Vec<(String, String)>, RawMpvConfigError> {
@@ -778,6 +872,7 @@ pub(crate) fn connect_state_poll(
     } = context;
     glib::timeout_add_local(Duration::from_millis(200), move || {
         let auto_fit_dimensions = drain_mpv_events(&state, &status_toast);
+        drain_wayland_presentation_feedback(&state);
         apply_pending_nfo_titles(&state);
         observe_initial_window_fit(&state, auto_fit_dimensions);
         // A normally realized-but-not-yet-mapped surface may already expose
@@ -1005,6 +1100,41 @@ pub(crate) fn connect_state_poll(
 
         glib::ControlFlow::Continue
     });
+}
+
+fn drain_wayland_presentation_feedback(state: &Rc<RefCell<PlayerState>>) {
+    let (recorder, dmabuf_feedback, egl_feedback) = {
+        let state = state.borrow();
+        let dmabuf_feedback = state
+            .mpv
+            .as_ref()
+            .map(Mpv::take_wayland_presentation_feedback)
+            .unwrap_or_default();
+        let egl_feedback = state
+            .native_video_plane
+            .as_ref()
+            .map(|plane| plane.take_presentation_feedback())
+            .unwrap_or_default();
+        (
+            state.presentation_recorder.clone(),
+            dmabuf_feedback,
+            egl_feedback,
+        )
+    };
+    if let Some(recorder) = recorder {
+        for feedback in dmabuf_feedback {
+            recorder.record_wayland_feedback(
+                okp_core::presentation_evidence::PresentationBackend::NativeWaylandDmabuf,
+                feedback,
+            );
+        }
+        for feedback in egl_feedback {
+            recorder.record_wayland_feedback(
+                okp_core::presentation_evidence::PresentationBackend::NativeWaylandEgl,
+                feedback,
+            );
+        }
+    }
 }
 
 pub(crate) fn observe_initial_window_fit(
