@@ -174,7 +174,8 @@ done
 
 This command builds or publishes nothing. Every invocation contains three
 independent Xvfb/D-Bus sessions and must record viewable non-`1x1` geometry for
-all four cases, one Xfwm owner across both roots, released GTK/MPRIS names, a
-ready session bus, `command_status=0`, and `session_bus_teardown=clean`. A
+all four cases, one Xfwm owner across both roots, private XDG cache/runtime
+paths, released GTK/MPRIS/AT-SPI names, a ready session bus, `command_status=0`,
+`session_bus_teardown=clean`, and `session_process_teardown=clean`. A
 failed invocation invalidates the consecutive proof; restart from invocation
 one after fixing the cause.

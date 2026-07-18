@@ -9,7 +9,7 @@ shift
   exit 2
 }
 
-for tool in dbus-run-session gdbus; do
+for tool in dbus-run-session gdbus rg; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "Missing required tool: $tool" >&2
     exit 127
@@ -61,6 +61,35 @@ for _ in $(seq 1 "${OKP_DBUS_TEARDOWN_ATTEMPTS:-40}"); do
   sleep "${OKP_DBUS_TEARDOWN_INTERVAL:-0.05}"
 done
 
+session_pids() {
+  local session_address="$1" environ pid
+  for environ in /proc/[0-9]*/environ; do
+    if rg -z -F -x -q -- "DBUS_SESSION_BUS_ADDRESS=$session_address" "$environ" \
+      2>/dev/null; then
+      pid="${environ#/proc/}"
+      printf '%s\n' "${pid%/environ}"
+    fi
+  done
+}
+
+mapfile -t residual_pids < <(session_pids "$address")
+for pid in "${residual_pids[@]}"; do
+  kill "$pid" 2>/dev/null || true
+done
+for _ in $(seq 1 "${OKP_DBUS_PROCESS_TEARDOWN_ATTEMPTS:-40}"); do
+  mapfile -t residual_pids < <(session_pids "$address")
+  (( ${#residual_pids[@]} == 0 )) && break
+  sleep "${OKP_DBUS_PROCESS_TEARDOWN_INTERVAL:-0.05}"
+done
+for pid in "${residual_pids[@]}"; do
+  kill -KILL "$pid" 2>/dev/null || true
+done
+mapfile -t residual_pids < <(session_pids "$address")
+process_teardown=clean
+if (( ${#residual_pids[@]} > 0 )); then
+  process_teardown=failed
+fi
+
 {
   printf 'session_bus_ready=true\n'
   printf 'command_status=%s\n' "$command_status"
@@ -69,11 +98,18 @@ done
   else
     printf 'session_bus_teardown=failed\n'
   fi
+  printf 'session_process_teardown=%s\n' "$process_teardown"
 } >>"$EVIDENCE_FILE"
 
 if [[ "$bus_reachable" == "true" ]]; then
   printf 'status=fail\n' >>"$EVIDENCE_FILE"
   echo "Isolated session bus remained reachable after its command exited" >&2
+  exit 1
+fi
+
+if [[ "$process_teardown" != "clean" ]]; then
+  printf 'status=fail\n' >>"$EVIDENCE_FILE"
+  echo "Processes from the isolated session remained after teardown: ${residual_pids[*]}" >&2
   exit 1
 fi
 

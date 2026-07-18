@@ -45,6 +45,11 @@ fn main_window_fit_session_has_one_multiscreen_manager_and_two_supervisors() {
     assert!(script.contains("wait_for_window_manager \"$SECONDARY_DISPLAY\" secondary"));
     assert!(script.contains("run-linux-isolated-xvfb-session.sh"));
     assert!(script.contains("run-linux-isolated-dbus-session.sh"));
+    assert!(script.contains("XDG_CACHE_HOME=\"$OUT_DIR/fit-cache\""));
+    assert!(script.contains("XDG_RUNTIME_DIR=\"$OUT_DIR/fit-runtime\""));
+    assert!(script.contains("xdg_runtime_mode=%s\\naccessibility_disabled=true"));
+    assert!(script.contains("org.a11y.Bus"));
+    assert!(script.contains("org.a11y.atspi.Registry"));
 }
 
 fn assert_success(output: &Output) {

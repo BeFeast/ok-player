@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use okp_test_fixtures::unique_temp_dir;
 
@@ -41,7 +41,38 @@ fn command_failure_still_waits_for_session_bus_teardown() {
     let evidence = fs::read_to_string(evidence).expect("failure evidence should exist");
     assert!(evidence.contains("command_status=23"));
     assert!(evidence.contains("session_bus_teardown=clean"));
+    assert!(evidence.contains("session_process_teardown=clean"));
     assert!(evidence.contains("status=fail"));
+}
+
+#[test]
+fn orphaned_session_child_is_reaped_before_the_next_session() {
+    let root = unique_temp_dir("okp-isolated-dbus-orphan");
+    let script = session_script();
+    let evidence = root.path().join("orphan-evidence.txt");
+    let pid_file = root.path().join("orphan-pid.txt");
+    let output = Command::new("bash")
+        .arg(script)
+        .arg(&evidence)
+        .arg("bash")
+        .arg("-c")
+        .arg("sleep 60 </dev/null >/dev/null 2>&1 & printf '%s\\n' \"$!\" >\"$1\"")
+        .arg("bash")
+        .arg(&pid_file)
+        .output()
+        .expect("isolated session wrapper should run");
+
+    assert_success(&output);
+    let pid = fs::read_to_string(pid_file).expect("orphan PID should be recorded");
+    let status = Command::new("kill")
+        .args(["-0", pid.trim()])
+        .stderr(Stdio::null())
+        .status()
+        .expect("process liveness probe should run");
+    assert!(!status.success(), "isolated session child was not reaped");
+    assert_clean_evidence(
+        &fs::read_to_string(evidence).expect("orphan evidence should be captured"),
+    );
 }
 
 fn assert_success(output: &Output) {
@@ -56,6 +87,7 @@ fn assert_clean_evidence(evidence: &str) {
     assert!(evidence.contains("session_bus_ready=true"));
     assert!(evidence.contains("command_status=0"));
     assert!(evidence.contains("session_bus_teardown=clean"));
+    assert!(evidence.contains("session_process_teardown=clean"));
     assert!(evidence.contains("status=pass"));
 }
 

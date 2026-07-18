@@ -11,7 +11,7 @@ DBUS_NAME_CLEAR_WAITER="$ROOT/scripts/wait-for-dbus-names-clear.sh"
 ISOLATED_DBUS_SESSION="$ROOT/scripts/run-linux-isolated-dbus-session.sh"
 ISOLATED_XVFB_SESSION="$ROOT/scripts/run-linux-isolated-xvfb-session.sh"
 
-for tool in Xvfb xauth flock dbus-run-session gdbus xfwm4 xdotool xwininfo xprop import magick ffmpeg ffprobe rg; do
+for tool in Xvfb xauth flock dbus-run-session gdbus xfwm4 xdotool xwininfo xprop import magick ffmpeg ffprobe rg stat; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "Missing required tool: $tool" >&2
     exit 127
@@ -27,7 +27,10 @@ if [[ "${OKP_MAIN_WINDOW_FIT_ONLY:-0}" == "1" && "${OKP_MAIN_WINDOW_IDLE_ONLY:-0
 fi
 
 if [[ "${OKP_MAIN_WINDOW_FIT_ONLY:-0}" != "1" ]]; then
-  if ! env __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
+  mkdir -p "$OUT_DIR/cache" "$OUT_DIR/runtime"
+  chmod 700 "$OUT_DIR/runtime"
+  if ! env XDG_CACHE_HOME="$OUT_DIR/cache" XDG_RUNTIME_DIR="$OUT_DIR/runtime" \
+    __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
     LIBGL_ALWAYS_SOFTWARE=1 \
     "$ISOLATED_XVFB_SESSION" "$OUT_DIR/xvfb-evidence.txt" "$OUT_DIR/xvfb.log" \
     '-screen 0 1280x900x24 -nolisten tcp -noreset -extension GLX' \
@@ -52,8 +55,12 @@ export XDG_SESSION_TYPE=x11
 export XDG_CURRENT_DESKTOP=XFCE
 export XDG_CONFIG_HOME="$OUT_DIR/config"
 export XDG_STATE_HOME="$OUT_DIR/state"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:?}"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:?}"
 
-mkdir -p "$XDG_CONFIG_HOME/ok-player"
+mkdir -p "$XDG_CONFIG_HOME/ok-player" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" \
+  "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR"
 cat >"$XDG_CONFIG_HOME/ok-player/settings.json" <<'JSON'
 {
   "version": 1,
@@ -225,7 +232,10 @@ fi
 "$ROOT/scripts/generate-linux-acceptance-media.sh" "$OUT_DIR/fixtures" \
   >"$OUT_DIR/fixtures.log" 2>&1
 
-if ! env __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
+mkdir -p "$OUT_DIR/fit-cache" "$OUT_DIR/fit-runtime"
+chmod 700 "$OUT_DIR/fit-runtime"
+if ! env XDG_CACHE_HOME="$OUT_DIR/fit-cache" XDG_RUNTIME_DIR="$OUT_DIR/fit-runtime" \
+  __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
   LIBGL_ALWAYS_SOFTWARE=1 \
   "$ISOLATED_XVFB_SESSION" "$OUT_DIR/fit-xvfb-evidence.txt" \
   "$OUT_DIR/window-fit-xvfb.log" \
@@ -256,11 +266,20 @@ export XDG_SESSION_TYPE=x11
 export XDG_CURRENT_DESKTOP=XFCE
 export XDG_CONFIG_HOME="$OUT_DIR/fit-config"
 export XDG_STATE_HOME="$OUT_DIR/fit-state"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:?}"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:?}"
 
 PRIMARY_DISPLAY="$DISPLAY"
 SECONDARY_DISPLAY="${DISPLAY%%.*}.1"
 
-mkdir -p "$XDG_CONFIG_HOME/ok-player"
+mkdir -p "$XDG_CONFIG_HOME/ok-player" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" \
+  "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR"
+runtime_mode="$(stat -c '%a' "$XDG_RUNTIME_DIR")"
+if [[ "$runtime_mode" != "700" ]]; then
+  echo "XDG_RUNTIME_DIR must be private, got mode $runtime_mode" >&2
+  exit 1
+fi
 cat >"$XDG_CONFIG_HOME/ok-player/settings.json" <<'JSON'
 {
   "version": 1,
@@ -273,6 +292,16 @@ app_pid=""
 app_log=""
 : >"$OUT_DIR/fit-lifecycle.log"
 : >"$OUT_DIR/fit-evidence.txt"
+printf 'xdg_cache_home_isolated=true\nxdg_runtime_dir_isolated=true\n' \
+  >>"$OUT_DIR/fit-evidence.txt"
+printf 'xdg_runtime_mode=%s\naccessibility_disabled=true\n' "$runtime_mode" \
+  >>"$OUT_DIR/fit-evidence.txt"
+DBUS_NAMES=(
+  com.befeast.okplayer
+  org.mpris.MediaPlayer2.okplayer
+  org.a11y.Bus
+  org.a11y.atspi.Registry
+)
 
 terminate_pid() {
   local pid="$1"
@@ -338,7 +367,7 @@ start_app() {
   fi
   cat "$OUT_DIR/pre-start-lifecycle.log" >>"$OUT_DIR/fit-lifecycle.log"
   if ! "$DBUS_NAME_CLEAR_WAITER" "$OUT_DIR/pre-start-dbus-lifecycle.log" \
-    com.befeast.okplayer org.mpris.MediaPlayer2.okplayer; then
+    "${DBUS_NAMES[@]}"; then
     cat "$OUT_DIR/pre-start-dbus-lifecycle.log" >>"$OUT_DIR/fit-lifecycle.log"
     return 1
   fi
@@ -394,8 +423,7 @@ stop_app() {
   fi
   cat "$diagnostics" >>"$OUT_DIR/fit-lifecycle.log"
   local dbus_diagnostics="$OUT_DIR/stop-${stopped_pid}-dbus-lifecycle.log"
-  if ! "$DBUS_NAME_CLEAR_WAITER" "$dbus_diagnostics" \
-    com.befeast.okplayer org.mpris.MediaPlayer2.okplayer; then
+  if ! "$DBUS_NAME_CLEAR_WAITER" "$dbus_diagnostics" "${DBUS_NAMES[@]}"; then
     cat "$dbus_diagnostics" >>"$OUT_DIR/fit-lifecycle.log"
     echo "Application log: $app_log" >&2
     cat "$app_log" >&2 || true
