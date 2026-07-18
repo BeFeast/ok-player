@@ -73,6 +73,16 @@ bytes after the build therefore blocks promotion.
 
 Each packaged binary is stamped with its install lane. A `.deb` build routes an accepted newer candidate directly to the manifest-bound Debian package and never asks Velopack whether that package exists. An AppImage build routes only through Velopack; after the candidate pointer has selected a newer version, Velopack's `NoUpdateAvailable` and `RemoteIsEmpty` outcomes are reported as distinct check failures rather than as “up to date.” Development builds use the Debian path for non-destructive local testing.
 
+Every enrolled client fetches the mutable candidate pointer with a unique query value plus
+`Cache-Control: no-cache` and `Pragma: no-cache`. This prevents a previous successful check from
+pinning a later accepted generation at a shared CDN edge. The publisher separately polls the plain,
+canonical pointer URL with the legacy client headers and requires its response bytes to equal the
+newly uploaded manifest before it advances `last-promoted.sha`, prunes assets, or reports success.
+That visibility barrier keeps already-installed predecessors safe even though they cannot gain the
+new cache-busting request behavior retroactively. A timeout leaves the uploaded generation and its
+immutable assets available for an exact-bundle retry, but does not claim that the generation is
+promoted.
+
 For `.deb` installs, the updater first checks that the candidate manifest's SHA matches the build-versioned `SHA256SUMS`, then verifies the downloaded bytes against that manifest. For AppImage installs, the exact manifest-bound Velopack asset is the update source; Velopack verifies its size and digest while downloading. Candidate checks log the fetched version/build/SHA, core selection, stamped install lane, Velopack result when applicable, and final route so installed-package evidence can account for every decision stage without exposing local machine paths.
 
 ## Atomic promotion
@@ -85,6 +95,11 @@ Promotion uploads immutable, versioned assets first:
 4. `SHA256SUMS-<build>.txt`.
 
 `candidate.linux.json` is uploaded last and is the acceptance pointer for both lanes. A failure before that final upload leaves the previous pointer, package URLs, and versioned checksum file usable. A retry is idempotent for the same source/build and may safely change only its acceptance state.
+
+Uploading the pointer is not sufficient to complete promotion. The canonical, query-free download
+URL must expose the exact uploaded bytes to an unchanged installed client. Until that check passes,
+the workflow fails without updating the promoted marker; its next scheduled run reuses the same
+verified versioned assets and replaces/rechecks the pointer.
 
 ## Stale-generation fence
 

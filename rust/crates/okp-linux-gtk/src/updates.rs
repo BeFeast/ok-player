@@ -1135,8 +1135,33 @@ pub(crate) fn linux_candidate_feed_url() -> String {
 /// surface is never offered to the fleet.
 fn fetch_linux_candidate_update() -> Result<Option<CandidateUpdate>, String> {
     let url = linux_candidate_feed_url();
-    let mut response = ureq::get(&url)
+    let cache_bust = candidate_feed_cache_bust();
+    fetch_linux_candidate_update_from_url(&url, &cache_bust, APP_BUILD_VERSION)
+}
+
+pub(crate) fn candidate_feed_cache_bust() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let unix_nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let sequence = REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("{unix_nanos}-{sequence}")
+}
+
+pub(crate) fn fetch_linux_candidate_update_from_url(
+    url: &str,
+    cache_bust: &str,
+    current_version: &str,
+) -> Result<Option<CandidateUpdate>, String> {
+    let mut response = ureq::get(url)
+        .query("okp-cache-bust", cache_bust)
         .header("Accept", "application/json")
+        .header("Cache-Control", "no-cache")
+        .header("Pragma", "no-cache")
         .header("User-Agent", "OK Player Linux")
         .call()
         .map_err(|error| format!("candidate update check failed: {error}"))?;
@@ -1153,7 +1178,7 @@ fn fetch_linux_candidate_update() -> Result<Option<CandidateUpdate>, String> {
 
     Ok(candidate_channel::select_candidate_update_from_feed(
         feed,
-        APP_BUILD_VERSION,
+        current_version,
     ))
 }
 

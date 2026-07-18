@@ -102,6 +102,44 @@ fn successful_retry_reuses_the_exact_verified_bundle() {
 }
 
 #[test]
+fn stale_canonical_pointer_blocks_promotion_until_a_retry_sees_exact_bytes() {
+    let root = unique_temp_dir("okp-candidate-publish-visibility");
+    let fixture = PublishFixture::new(root.path());
+    fixture.write_previous_pointer();
+
+    let hidden = fixture.run_with_visibility(2, 2);
+    assert!(
+        !hidden.status.success(),
+        "publication must fail while the canonical URL stays stale"
+    );
+    assert!(
+        !fixture.state.join("last-promoted.sha").exists(),
+        "a CDN-hidden pointer must not advance the promoted marker"
+    );
+    let uploaded: CandidateFeed = serde_json::from_str(
+        &fs::read_to_string(fixture.assets.join("candidate.linux.json"))
+            .expect("uploaded pointer should remain available for retry"),
+    )
+    .expect("uploaded pointer should be JSON");
+    assert_eq!(uploaded.build, 42);
+    assert_eq!(fixture.visibility_request_count(), 2);
+
+    let visible = fixture.run_with_visibility(2, 2);
+    assert!(
+        visible.status.success(),
+        "an exact-bundle retry should finish once the canonical URL advances: {}",
+        String::from_utf8_lossy(&visible.stderr)
+    );
+    assert_eq!(fixture.visibility_request_count(), 3);
+    assert_eq!(
+        fs::read_to_string(fixture.state.join("last-promoted.sha"))
+            .expect("visible pointer should advance the promoted marker")
+            .trim(),
+        SOURCE_SHA
+    );
+}
+
+#[test]
 fn coalesced_build_is_stale_when_it_no_longer_matches_the_requested_sha() {
     let root = unique_temp_dir("okp-candidate-coalesced-generation");
     let fixture = PublishFixture::new(root.path());
@@ -344,6 +382,7 @@ struct PublishFixture {
     pause_resume: PathBuf,
     current_decision: PathBuf,
     stale_decision: PathBuf,
+    visibility_requests: PathBuf,
 }
 
 impl PublishFixture {
@@ -367,6 +406,7 @@ impl PublishFixture {
         let pause_resume = root.join("run-a-resume");
         let current_decision = root.join("run-b-decision.json");
         let stale_decision = root.join("run-a-decision.json");
+        let visibility_requests = root.join("visibility-requests");
         for directory in [&state, &assets, &fake_bin] {
             fs::create_dir_all(directory).expect("fixture directory should be created");
         }
@@ -402,6 +442,7 @@ impl PublishFixture {
 
         write_executable(&cli, FAKE_CANDIDATE_CLI);
         write_executable(&fake_bin.join("gh"), FAKE_GH);
+        write_executable(&fake_bin.join("curl"), FAKE_CURL);
 
         Self {
             repo_root,
@@ -420,6 +461,7 @@ impl PublishFixture {
             pause_resume,
             current_decision,
             stale_decision,
+            visibility_requests,
         }
     }
 
@@ -440,6 +482,25 @@ impl PublishFixture {
             command.env("FAKE_GH_FAIL_DOWNLOAD", name);
         }
         command.output().expect("publisher fixture should run")
+    }
+
+    fn run_with_visibility(&self, stale_attempts: u64, visibility_attempts: u64) -> Output {
+        self.set_current_sha(SOURCE_SHA);
+        self.write_allocated_build(42);
+        self.publisher_command(
+            &self.bundle,
+            &self.feed,
+            SOURCE_SHA,
+            &self.state.join("last-publish-decision.json"),
+            "visibility-run",
+        )
+        .env("FAKE_CURL_STALE_ATTEMPTS", stale_attempts.to_string())
+        .env(
+            "OKP_CANDIDATE_VISIBILITY_ATTEMPTS",
+            visibility_attempts.to_string(),
+        )
+        .output()
+        .expect("publisher visibility fixture should run")
     }
 
     fn run_generation_with_evidence(
@@ -501,6 +562,9 @@ impl PublishFixture {
             .env("FAKE_GH_CURRENT_SHA_FILE", &self.current_sha_file)
             .env("FAKE_GH_MUTATIONS", &self.mutations)
             .env("FAKE_GH_RUN_ID", run_id)
+            .env("FAKE_CURL_COUNTER", &self.visibility_requests)
+            .env("FAKE_CURL_STALE_FEED", &self.stale_feed)
+            .env("OKP_CANDIDATE_VISIBILITY_INTERVAL_SECONDS", "0")
             .env("REAL_CANDIDATE_CLI", env!("CARGO_BIN_EXE_okp-candidate"))
             .env(
                 "PATH",
@@ -598,6 +662,14 @@ impl PublishFixture {
             .lines()
             .map(str::to_owned)
             .collect()
+    }
+
+    fn visibility_request_count(&self) -> u64 {
+        fs::read_to_string(&self.visibility_requests)
+            .unwrap_or_else(|_| "0".to_owned())
+            .trim()
+            .parse()
+            .expect("visibility request count should be numeric")
     }
 }
 
@@ -864,4 +936,26 @@ case "$action" in
     exit 2
     ;;
 esac
+"#;
+
+const FAKE_CURL: &str = r#"#!/usr/bin/env bash
+set -euo pipefail
+output=""
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --output) output="$2"; shift 2 ;;
+    --connect-timeout|--max-time|--header|--user-agent) shift 2 ;;
+    --fail|--silent|--show-error|--location) shift ;;
+    *) shift ;;
+  esac
+done
+[[ -n "$output" ]] || exit 2
+count="$(cat "$FAKE_CURL_COUNTER" 2>/dev/null || printf '0')"
+count="$((count + 1))"
+printf '%s\n' "$count" >"$FAKE_CURL_COUNTER"
+if ((count <= ${FAKE_CURL_STALE_ATTEMPTS:-0})); then
+  cp "$FAKE_CURL_STALE_FEED" "$output"
+else
+  cp "$FAKE_GH_ASSETS/candidate.linux.json" "$output"
+fi
 "#;

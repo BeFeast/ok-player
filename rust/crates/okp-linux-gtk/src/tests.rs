@@ -3756,6 +3756,90 @@ fn external_installer_handoff_keeps_the_pending_update_retryable() {
 }
 
 #[test]
+fn candidate_22_check_bypasses_stale_shared_caches_and_selects_23() {
+    let listener =
+        std::net::TcpListener::bind("127.0.0.1:0").expect("candidate feed test server should bind");
+    let address = listener
+        .local_addr()
+        .expect("candidate feed test address should resolve");
+    let response_body = format!(
+        r#"{{
+  "channel": "candidate",
+  "version": "0.11.0-beta.0.23",
+  "build": 23,
+  "commit_sha": "{}",
+  "timestamp_utc": "2026-07-18T16:00:00Z",
+  "acceptance": "accepted",
+  "package": {{
+    "name": "ok-player_0.11.0-beta.0.23_amd64.deb",
+    "url": "https://example.invalid/ok-player_0.11.0-beta.0.23_amd64.deb",
+    "size": 42,
+    "sha256": "{}"
+  }},
+  "appimage": {{
+    "package_id": "com.befeast.okplayer",
+    "name": "com.befeast.okplayer-0.11.0-beta.0.23-linux-candidate-full.nupkg",
+    "url": "https://example.invalid/com.befeast.okplayer-0.11.0-beta.0.23-linux-candidate-full.nupkg",
+    "size": 84,
+    "sha256": "{}",
+    "sha1": "{}"
+  }},
+  "sha256sums_url": "https://example.invalid/SHA256SUMS-23.txt",
+  "history": []
+}}"#,
+        "a".repeat(40),
+        "b".repeat(64),
+        "c".repeat(64),
+        "d".repeat(40),
+    );
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener
+            .accept()
+            .expect("candidate feed test request should connect");
+        let mut request = [0_u8; 4096];
+        let request_len = std::io::Read::read(&mut stream, &mut request)
+            .expect("candidate feed test request should be readable");
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        std::io::Write::write_all(&mut stream, response.as_bytes())
+            .expect("candidate feed test response should be writable");
+        String::from_utf8(request[..request_len].to_vec())
+            .expect("candidate feed test request should be UTF-8")
+    });
+
+    let update = fetch_linux_candidate_update_from_url(
+        &format!("http://{address}/candidate.linux.json?fixture=1"),
+        "publish-23",
+        "0.11.0-beta.0.22",
+    )
+    .expect("candidate feed check should succeed")
+    .expect("newer accepted candidate should be selected");
+    assert_eq!(update.build, 23);
+
+    let request = server
+        .join()
+        .expect("candidate feed test server should stop");
+    let request = request.to_ascii_lowercase();
+    assert!(
+        request.starts_with(
+            "get /candidate.linux.json?fixture=1&okp-cache-bust=publish-23 http/1.1\r\n"
+        )
+    );
+    assert!(request.contains("\r\naccept: application/json\r\n"));
+    assert!(request.contains("\r\ncache-control: no-cache\r\n"));
+    assert!(request.contains("\r\npragma: no-cache\r\n"));
+    assert!(request.contains("\r\nuser-agent: ok player linux\r\n"));
+}
+
+#[test]
+fn candidate_feed_cache_bust_changes_for_every_check() {
+    assert_ne!(candidate_feed_cache_bust(), candidate_feed_cache_bust());
+}
+
+#[test]
 fn candidate_deb_feed_sha_mismatch_is_refused_before_download() {
     let name = "ok-player_0.11.0-beta.1.42_amd64.deb";
     let update = DebUpdate {

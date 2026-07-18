@@ -96,6 +96,14 @@ Each ID below is mandatory in the evidence manifest:
 | `public-feed-unchanged` | public feed SHA-256 is identical before and after the candidate run |
 | `no-update-distinct-from-check-failure` | equal version is “up to date”; network/parse/empty-lane failures are not |
 
+For each candidate N -> N+1 publication, capture both the cache-busted pointer fetched by the fixed
+client and an ordinary request to the canonical pointer URL using the unchanged predecessor's
+request shape. Both bodies must have the exact N+1 SHA-256, version, build, acceptance, and source
+SHA before the predecessor is expected to discover the update. A publisher timeout or a stale
+ordinary response is a failed publication attempt, not evidence that the installed predecessor is
+up to date. Retry the exact verified bundle and retain the failed-attempt logs plus the eventual
+matching pointer hashes.
+
 Before the first upgrade, create representative settings and a sentinel playback-history entry.
 Write canonical probe JSON containing the values that must survive (for example update enrollment,
 appearance/subtitle preferences, media identity, resume point, and per-file preferences), then hash
