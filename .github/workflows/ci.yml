@@ -83,6 +83,6 @@ jobs:
           if ($failed) { throw 'PowerShell lint failed (see parse errors / analyzer findings above).' }
           Write-Host "Parsed and analyzed $($scripts.Count) PowerShell script(s); no errors."
 
-      - name: Test Visual Studio probe correlation
+      - name: Test Windows bootstrap regressions
         shell: pwsh
         run: ./scripts/tests/windows-dev-vs-probe.Tests.ps1

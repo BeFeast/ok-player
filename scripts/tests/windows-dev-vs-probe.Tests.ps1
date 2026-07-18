@@ -41,3 +41,38 @@ if (-not $latestInstance -or $latestInstance.installationVersion -ne '17.12.0') 
 }
 
 Write-Host 'Visual Studio probe correlation regression passed.'
+
+$bootstrapPath = Join-Path $scriptsRoot 'bootstrap-windows-dev-vm.ps1'
+$tokens = $null
+$parseErrors = $null
+$bootstrapAst = [System.Management.Automation.Language.Parser]::ParseFile(
+    $bootstrapPath,
+    [ref]$tokens,
+    [ref]$parseErrors
+)
+if ($parseErrors) { throw 'Bootstrap function extraction failed because the script did not parse.' }
+$velopackFunction = $bootstrapAst.Find({
+        param($node)
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq 'Install-VelopackCli'
+    }, $true)
+if (-not $velopackFunction) { throw 'Install-VelopackCli was not found in the bootstrap script.' }
+. ([scriptblock]::Create($velopackFunction.Extent.Text))
+
+$repoRoot = Split-Path -Parent $scriptsRoot
+$CheckOnly = $true
+$originalPath = $env:Path
+$originalProgramFiles = $env:ProgramFiles
+$emptyTools = Join-Path ([System.IO.Path]::GetTempPath()) ("ok-player-empty-tools-{0}" -f [guid]::NewGuid())
+New-Item -ItemType Directory -Path $emptyTools | Out-Null
+try {
+    $env:Path = $emptyTools
+    $env:ProgramFiles = $emptyTools
+    Install-VelopackCli
+} finally {
+    $env:Path = $originalPath
+    $env:ProgramFiles = $originalProgramFiles
+    Remove-Item -LiteralPath $emptyTools -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host 'Velopack check-only missing-dotnet regression passed.'

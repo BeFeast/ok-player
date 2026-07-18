@@ -183,7 +183,13 @@ function Install-VelopackCli {
         $dotnetDefault = Join-Path $env:ProgramFiles 'dotnet\dotnet.exe'
         if (Test-Path $dotnetDefault) { $dotnet = Get-Command $dotnetDefault -ErrorAction SilentlyContinue }
     }
-    if (-not $dotnet) { throw '.NET SDK is installed but dotnet is not available in this session' }
+    if (-not $dotnet) {
+        if ($CheckOnly) {
+            Write-Host "  would install/update Velopack CLI vpk $requiredVersion" -ForegroundColor Yellow
+            return
+        }
+        throw '.NET SDK is installed but dotnet is not available in this session'
+    }
 
     $toolList = (& $dotnet.Source tool list --global 2>$null | Out-String)
     $installed = [regex]::Match($toolList, '(?m)^vpk\s+([^\s]+)')
