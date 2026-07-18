@@ -2185,6 +2185,65 @@ fn more_and_context_menu_share_one_registry_renderer_and_dispatcher() {
 }
 
 #[test]
+fn command_menu_search_is_a_single_shared_compact_entry_with_icon() {
+    let source = include_str!("track_popovers.rs");
+    // The shared component is a plain GtkEntry with a deliberate primary icon so
+    // CSS fully owns the icon/placeholder spacing and alignment.
+    assert!(source.contains("fn player_command_search_entry()"));
+    assert!(source.contains("gtk::Entry::new()"));
+    assert!(source.contains("gtk::EntryIconPosition::Primary"));
+    assert!(source.contains("\"system-search-symbolic\""));
+    assert!(source.contains("set_icon_tooltip_text(gtk::EntryIconPosition::Primary"));
+    assert!(source.contains("gtk::AccessibleRole::SearchBox"));
+    assert!(!source.contains("gtk::SearchEntry::new()"));
+
+    // The search is wired into the shared command surface via connect_changed
+    // so keyboard/focus/activation behavior stays intact.
+    assert!(
+        source
+            .contains("search.connect_changed(move |entry| render_changed(entry.text().as_str()))")
+    );
+
+    // Both entry points (three-dots menu and right-click) use the same renderer.
+    assert!(source.contains("populate_command_popover("));
+    let controls = include_str!("controls.rs");
+    assert!(controls.contains("PlayerCommandSurface::More"));
+    let bridge = include_str!("mpv_bridge.rs");
+    assert!(bridge.contains("PlayerCommandSurface::ContextMenu"));
+
+    // High-contrast state is propagated to the popover alongside dark mode.
+    let window = include_str!("window.rs");
+    assert!(window.contains("pub(crate) fn idle_theme_is_high_contrast()"));
+    assert!(source.contains("idle_theme_is_high_contrast()"));
+    assert!(source.contains("popover.add_css_class(\"is-high-contrast\")"));
+
+    let css = include_str!("css.rs");
+    // Compact height/radius proportional to command rows, deliberate left padding
+    // for the icon, and shared design tokens for every state.
+    assert!(css.contains("entry.okp-command-search {"));
+    assert!(css.contains("min-height: 24px;"));
+    assert!(css.contains("padding: 4px 10px 4px 0;"));
+    assert!(css.contains("border-radius: 6px;"));
+    assert!(css.contains("entry.okp-command-search > image {"));
+    assert!(css.contains("entry.okp-command-search > text > placeholder {"));
+    assert!(css.contains("entry.okp-command-search:hover {"));
+    assert!(css.contains("entry.okp-command-search:disabled {"));
+    assert!(css.contains("popover.okp-command-popover.is-dark entry.okp-command-search:hover {"));
+    assert!(
+        css.contains("popover.okp-command-popover.is-high-contrast entry.okp-command-search {")
+    );
+    assert!(css.contains(
+        "popover.okp-command-popover.is-dark.is-high-contrast entry.okp-command-search,"
+    ));
+
+    // Deterministic visual-smoke seams cover the normal 340 px surface and the
+    // work-area-bounded narrow surface without requiring loaded media.
+    assert!(window.contains("OKP_OPEN_MORE_POPOVER_ON_STARTUP"));
+    assert!(window.contains("OKP_NARROW_COMMAND_PREVIEW"));
+    assert!(bridge.contains("has_media || seek_preview || command_preview"));
+}
+
+#[test]
 fn video_geometry_toasts_report_the_applied_core_state() {
     let mut geometry = VideoGeometry::default();
     geometry.apply(VideoGeometryAction::ZoomIn);

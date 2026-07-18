@@ -216,6 +216,11 @@ pub(crate) fn populate_command_popover(
     } else {
         popover.remove_css_class("is-dark");
     }
+    if idle_theme_is_high_contrast() {
+        popover.add_css_class("is-high-contrast");
+    } else {
+        popover.remove_css_class("is-high-contrast");
+    }
     let commands = resolved_player_commands(surface, parent, &state);
     let content = searchable_player_command_content(
         popover,
@@ -279,6 +284,23 @@ pub(crate) fn resolved_player_commands(
     })
 }
 
+/// Shared command-menu search field. Uses a plain `GtkEntry` with a deliberate
+/// primary icon instead of `GtkSearchEntry`, so the icon inset, placeholder
+/// offset, and focus ring are fully governed by the OK Player CSS tokens.
+fn player_command_search_entry() -> gtk::Entry {
+    let search = gtk::Entry::new();
+    search.add_css_class("okp-command-search");
+    search.set_placeholder_text(Some("Search commands"));
+    gtk::prelude::EntryExt::set_icon_from_icon_name(
+        &search,
+        gtk::EntryIconPosition::Primary,
+        Some("system-search-symbolic"),
+    );
+    search.set_icon_tooltip_text(gtk::EntryIconPosition::Primary, Some("Search"));
+    search.set_accessible_role(gtk::AccessibleRole::SearchBox);
+    search
+}
+
 fn searchable_player_command_content(
     popover: &gtk::Popover,
     parent: &gtk::ApplicationWindow,
@@ -291,10 +313,7 @@ fn searchable_player_command_content(
     let shell = gtk::Box::new(gtk::Orientation::Vertical, 0);
     shell.add_css_class("okp-command-surface");
 
-    let search = gtk::SearchEntry::new();
-    search.add_css_class("okp-command-search");
-    search.set_placeholder_text(Some("Search commands"));
-    search.set_accessible_role(gtk::AccessibleRole::SearchBox);
+    let search = player_command_search_entry();
     shell.append(&search);
 
     let rows_host = gtk::Box::new(gtk::Orientation::Vertical, 2);
@@ -329,7 +348,7 @@ fn searchable_player_command_content(
     };
 
     let render_changed = Rc::clone(&render);
-    search.connect_search_changed(move |entry| render_changed(entry.text().as_str()));
+    search.connect_changed(move |entry| render_changed(entry.text().as_str()));
     render("");
     if let Ok(query) = env::var("OKP_COMMAND_SEARCH_QUERY") {
         search.set_text(&query);
@@ -389,7 +408,7 @@ fn searchable_player_command_content(
 #[allow(clippy::too_many_arguments)]
 fn render_player_command_rows(
     rows_host: &gtk::Box,
-    search: &gtk::SearchEntry,
+    search: &gtk::Entry,
     commands: &[ResolvedPlayerCommand],
     query: &str,
     focus_rows: &Rc<RefCell<Vec<gtk::Button>>>,

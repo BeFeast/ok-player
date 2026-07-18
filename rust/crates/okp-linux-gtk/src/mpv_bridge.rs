@@ -784,12 +784,13 @@ pub(crate) fn connect_state_poll(
         run_presentation_exercise(&state, playback);
         let has_media = has_loaded_media(&state);
         let seek_preview = env::var_os("OKP_OPEN_SEEK_PREVIEW_ON_STARTUP").is_some();
+        let command_preview = env::var_os("OKP_OPEN_MORE_POPOVER_ON_STARTUP").is_some();
         let has_chapters = state
             .borrow()
             .mpv
             .as_ref()
             .is_some_and(|mpv| !mpv.observed_chapters().is_empty());
-        chrome.set_has_media(has_media || seek_preview);
+        chrome.set_has_media(has_media || seek_preview || command_preview);
         let media_title = if has_media {
             let state = state.borrow();
             let base = current_media_title(&state);
