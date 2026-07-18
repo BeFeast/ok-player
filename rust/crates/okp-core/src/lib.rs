@@ -18,6 +18,7 @@ pub mod history_format;
 pub mod image_luma;
 pub mod key_press;
 pub mod launch_args;
+pub mod linux_renderer;
 pub mod lrc;
 pub mod lyrics;
 pub mod m3u;

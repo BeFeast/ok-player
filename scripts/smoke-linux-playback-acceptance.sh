@@ -74,6 +74,7 @@ xfwm4 --sm-client-disable >"$OUT_DIR/xfwm4.log" 2>&1 &
 wm_pid=$!
 app_pid=""
 server_pid=""
+launch_env=()
 
 cleanup() {
   [[ -n "$app_pid" ]] && kill "$app_pid" 2>/dev/null || true
@@ -193,6 +194,7 @@ launch() {
     OKP_SKIP_UPDATE_CHECK=1 \
     OKP_SKIP_OPEN_INSTALLER=1 \
     OKP_SKIP_DEB_SELF_INSTALL=1 \
+    "${launch_env[@]}" \
     timeout 45s "$BINARY" "$source" "$@" >"$OUT_DIR/$name-app.log" 2>&1 &
   app_pid=$!
 
@@ -379,7 +381,8 @@ stop_app
 # A real local file with known duration but no embedded chapter metadata opens on
 # the interval fallback surface. The explicit Detect chapters action remains at
 # the initial scroll position and resolves honestly while no engine is wired.
-launch "$INTERVALS" interval-chapters 4 OKP_DEBUG_INTERACTIONS=1
+launch_env=(OKP_DEBUG_INTERACTIONS=1)
+launch "$INTERVALS" interval-chapters 4
 xdotool key --clearmodifiers space
 panel_visible=0
 for _ in 1 2 3; do
@@ -404,6 +407,7 @@ rg -q '^interaction: chapter-detection=unavailable$' "$OUT_DIR/interval-chapters
 }
 capture intervals-unavailable
 stop_app
+launch_env=()
 
 # Loading is a real URL whose response headers are deliberately delayed.
 launch "$LOADING_URL" buffering-loading 1
@@ -442,6 +446,33 @@ stop_app
 launch "$DARK" dark-video-background 4
 capture_dark_active_chrome dark-video-background
 stop_app
+
+# Simulate the Flatpak sandbox hiding /dev/dri. The production startup probe
+# sees an empty device root, selects libmpv's CPU render API plus Cairo, and
+# must produce visible changing frames instead of an advancing black surface.
+mkdir -p "$OUT_DIR/no-dri-devices"
+launch_env=(
+  FLATPAK_ID=com.befeast.okplayer
+  OKP_TEST_DRI_DEVICE_ROOT="$OUT_DIR/no-dri-devices"
+)
+launch "$BRIGHT" dri-denied-software 4
+capture dri-denied-software
+sleep 1
+capture dri-denied-software-later
+rg -q 'Renderer policy: mode=software-no-dri flatpak=true dri-accessible=false backend=libmpv-software hwdec=no render-api=sw gsk-renderer=cairo' \
+  "$OUT_DIR/dri-denied-software-app.log" || {
+    echo "DRI-denied launch did not select the software renderer policy" >&2
+    cat "$OUT_DIR/dri-denied-software-app.log" >&2
+    exit 1
+  }
+rg -q 'Software renderer: backend=libmpv-software format=(bgr0|0rgb) scene-renderer=cairo' \
+  "$OUT_DIR/dri-denied-software-app.log" || {
+    echo "DRI-denied launch did not initialize libmpv software rendering" >&2
+    cat "$OUT_DIR/dri-denied-software-app.log" >&2
+    exit 1
+  }
+stop_app
+launch_env=()
 
 printf '%s\n' \
   "default=1120x680" \
@@ -537,6 +568,7 @@ assert_distinct "$OUT_DIR/paused.png" "$OUT_DIR/buffering-loading.png" 220x140+4
 assert_distinct "$OUT_DIR/paused.png" "$OUT_DIR/playback-error.png" 420x240+350+210 0.01 "paused-vs-real-load-failure"
 assert_distinct "$OUT_DIR/loaded-paused-osc.png" "$OUT_DIR/bright-video-background.png" 1088x100+16+280 0.005 "bright-paused-vs-bright-playing"
 assert_distinct "$OUT_DIR/playing-idle.png" "$OUT_DIR/dark-video-background.png" 1088x90+16+582 0.02 "dark-playing-idle-vs-dark-active"
+assert_distinct "$OUT_DIR/dri-denied-software.png" "$OUT_DIR/dri-denied-software-later.png" 700x360+120+100 0.0001 "dri-denied-software-frame-motion"
 
 rm -f "$OUT_DIR/timeline-alignment.txt"
 assert_single_rail_alignment "$OUT_DIR/buffered-timeline.png" canonical-1120x680 263 302 470 624
@@ -548,6 +580,7 @@ state_images=(
   loaded-paused-osc paused buffered-timeline buffered-timeline-wide chapter-context osd chapters-loaded
   intervals-loaded intervals-unavailable
   playing-idle buffering-loading playback-error bright-video-background dark-video-background
+  dri-denied-software dri-denied-software-later
 )
 for state in "${state_images[@]}"; do
   sha256sum "$OUT_DIR/$state.png"
@@ -567,9 +600,11 @@ fi
 bright_mean="$(magick "$OUT_DIR/bright-video-background.png" -crop 700x360+120+100 -colorspace gray -format '%[fx:mean]' info:)"
 dark_mean="$(magick "$OUT_DIR/dark-video-background.png" -crop 700x360+120+100 -colorspace gray -format '%[fx:mean]' info:)"
 idle_mean="$(magick "$OUT_DIR/playing-idle.png" -crop 700x360+120+100 -colorspace gray -format '%[fx:mean]' info:)"
+software_mean="$(magick "$OUT_DIR/dri-denied-software.png" -crop 700x360+120+100 -colorspace gray -format '%[fx:mean]' info:)"
 awk -v value="$bright_mean" 'BEGIN { exit !(value > 0.75) }' || { echo "real bright frame missing: mean=$bright_mean" >&2; exit 1; }
 awk -v value="$dark_mean" 'BEGIN { exit !(value > 0.015 && value < 0.12) }' || { echo "real dark frame missing: mean=$dark_mean" >&2; exit 1; }
 awk -v value="$idle_mean" 'BEGIN { exit !(value > 0.015 && value < 0.12) }' || { echo "real playing-idle frame missing: mean=$idle_mean" >&2; exit 1; }
+awk -v value="$software_mean" 'BEGIN { exit !(value > 0.75) }' || { echo "DRI-denied software frame missing: mean=$software_mean" >&2; exit 1; }
 
 duration="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$CHAPTERS")"
 cat >"$OUT_DIR/functional-results.json" <<JSON
@@ -584,6 +619,7 @@ cat >"$OUT_DIR/functional-results.json" <<JSON
   "real_chapter_seek_context": "pass",
   "real_delayed_loading": "pass",
   "real_404_failure_and_retry": "pass",
+  "flatpak_dri_denied_software_fallback": "pass",
   "chapters_panel_action": "pass",
   "metadata_less_interval_fallback": "pass",
   "detect_chapters_unavailable_state": "pass",

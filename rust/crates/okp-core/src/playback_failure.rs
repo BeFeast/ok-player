@@ -31,6 +31,19 @@ impl PlaybackFailureDiagnostic {
             detail: detail.into(),
         }
     }
+
+    /// The no-DRI Flatpak fallback could not initialize or present. This is
+    /// deliberately explicit about both the missing resource and the sandbox
+    /// permission that restores the normal renderer.
+    pub fn flatpak_dri_unavailable(detail: impl Into<String>) -> Self {
+        Self {
+            kind: PlaybackFailureKind::Renderer,
+            title: "Graphics access unavailable".to_owned(),
+            message: "OK Player could not start its software fallback because GPU/DRI access is unavailable. Grant the Flatpak --device=dri permission, then retry."
+                .to_owned(),
+            detail: detail.into(),
+        }
+    }
 }
 
 /// Classify a failed libmpv load from the error event and the warning/error log
@@ -221,5 +234,21 @@ mod tests {
     #[test]
     fn benign_eof_logs_do_not_become_failures() {
         assert!(diagnose_mpv_eof(&messages(&["cplayer: finished playback"]), true).is_none());
+    }
+
+    #[test]
+    fn flatpak_dri_failure_names_the_missing_access_and_permission() {
+        let diagnostic = PlaybackFailureDiagnostic::flatpak_dri_unavailable(
+            "libmpv software render context initialization failed",
+        );
+
+        assert_eq!(diagnostic.kind, PlaybackFailureKind::Renderer);
+        assert_eq!(diagnostic.title, "Graphics access unavailable");
+        assert!(diagnostic.message.contains("GPU/DRI"));
+        assert!(diagnostic.message.contains("--device=dri"));
+        assert_eq!(
+            diagnostic.detail,
+            "libmpv software render context initialization failed"
+        );
     }
 }

@@ -544,12 +544,21 @@ pub(crate) enum VideoHost {
         auto_fallback: bool,
     },
     Gtk(gtk::GLArea),
+    Software(gtk::DrawingArea),
 }
 
 impl VideoHost {
     fn for_display(display: &gdk::Display) -> Self {
         let requested = env::var("OKP_VIDEO_BACKEND").unwrap_or_else(|_| "auto".to_owned());
         let wayland = is_wayland_display(display.type_().name());
+        if configured_linux_renderer_mode().requires_software_surface() {
+            if requested != "auto" && !requested.is_empty() {
+                eprintln!(
+                    "Ignoring OKP_VIDEO_BACKEND={requested}; no-DRI playback requires the libmpv software surface"
+                );
+            }
+            return Self::Software(software_video_area());
+        }
         let (use_native, auto_fallback) = match requested.as_str() {
             "gtk" | "gtk-glarea" => (false, false),
             "native" | "native-wayland-egl" if wayland => (true, false),
@@ -590,6 +599,7 @@ impl VideoHost {
         match self {
             Self::Native { container, .. } => container.upcast_ref(),
             Self::Gtk(area) => area.upcast_ref(),
+            Self::Software(area) => area.upcast_ref(),
         }
     }
 
@@ -597,6 +607,7 @@ impl VideoHost {
         match self {
             Self::Native { area, .. } => gtk::prelude::WidgetExt::realize(area),
             Self::Gtk(area) => gtk::prelude::WidgetExt::realize(area),
+            Self::Software(area) => gtk::prelude::WidgetExt::realize(area),
         }
     }
 
@@ -610,6 +621,9 @@ impl VideoHost {
                 okp_core::presentation_evidence::PresentationBackend::NativeWaylandEgl
             }
             Self::Gtk(_) => okp_core::presentation_evidence::PresentationBackend::GtkGlArea,
+            Self::Software(_) => {
+                okp_core::presentation_evidence::PresentationBackend::LibMpvSoftware
+            }
         }
     }
 }
@@ -620,6 +634,14 @@ pub(crate) fn gtk_video_area() -> gtk::GLArea {
     area.set_vexpand(true);
     area.set_auto_render(false);
     area.set_required_version(3, 2);
+    area.add_css_class("okp-video-plane");
+    area
+}
+
+pub(crate) fn software_video_area() -> gtk::DrawingArea {
+    let area = gtk::DrawingArea::new();
+    area.set_hexpand(true);
+    area.set_vexpand(true);
     area.add_css_class("okp-video-plane");
     area
 }

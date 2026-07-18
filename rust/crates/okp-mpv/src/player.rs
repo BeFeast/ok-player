@@ -369,6 +369,8 @@ pub enum MpvError {
     LibMpv(c_int),
     #[error("libmpv render context is not initialized")]
     MissingRenderContext,
+    #[error("software render surface dimensions, stride, or storage are invalid")]
+    InvalidSoftwareSurface,
 }
 
 pub fn error_description(code: c_int) -> String {
@@ -1368,6 +1370,24 @@ impl Mpv {
         Ok(())
     }
 
+    /// Create libmpv's CPU-only render context. This is the no-device fallback
+    /// used when a Flatpak has no accessible DRI node.
+    pub fn create_software_render_context(&mut self) -> Result<(), MpvError> {
+        if self.render_context.is_some() {
+            return Ok(());
+        }
+
+        let mut params = software_render_context_parameters();
+        let mut context = ptr::null_mut();
+        check(unsafe {
+            ffi::mpv_render_context_create(&mut context, self.handle.as_ptr(), params.as_mut_ptr())
+        })?;
+        self.render_context = NonNull::new(context);
+        self.render_context
+            .map(|_| ())
+            .ok_or(MpvError::MissingRenderContext)
+    }
+
     pub fn render_update_handle(&self) -> Result<RenderUpdateHandle, MpvError> {
         Ok(RenderUpdateHandle {
             context: self.render_context.ok_or(MpvError::MissingRenderContext)?,
@@ -1693,6 +1713,26 @@ impl Mpv {
         Ok(())
     }
 
+    pub fn render_software(
+        &mut self,
+        width: i32,
+        height: i32,
+        stride: usize,
+        pixels: &mut [u8],
+    ) -> Result<(), MpvError> {
+        if width <= 0 || height <= 0 {
+            return Ok(());
+        }
+
+        let context = self.render_context.ok_or(MpvError::MissingRenderContext)?;
+        let _ = unsafe { ffi::mpv_render_context_update(context.as_ptr()) };
+        render_software_frame(context, width, height, stride, pixels)?;
+        unsafe {
+            ffi::mpv_render_context_report_swap(context.as_ptr());
+        }
+        Ok(())
+    }
+
     pub fn destroy_render_context(&mut self) {
         if let Some(context) = self.render_context.take() {
             unsafe {
@@ -1813,6 +1853,82 @@ fn render_context_frame(
         ffi::mpv_render_param {
             param_type: ffi::MPV_RENDER_PARAM_FLIP_Y,
             data: ptr::from_mut(&mut flip_y).cast(),
+        },
+        ffi::mpv_render_param {
+            param_type: ffi::MPV_RENDER_PARAM_INVALID,
+            data: ptr::null_mut(),
+        },
+    ];
+
+    check(unsafe { ffi::mpv_render_context_render(context.as_ptr(), params.as_mut_ptr()) })
+}
+
+fn software_render_context_parameters() -> [ffi::mpv_render_param; 2] {
+    [
+        ffi::mpv_render_param {
+            param_type: ffi::MPV_RENDER_PARAM_API_TYPE,
+            data: c"sw".as_ptr().cast_mut().cast(),
+        },
+        ffi::mpv_render_param {
+            param_type: ffi::MPV_RENDER_PARAM_INVALID,
+            data: ptr::null_mut(),
+        },
+    ]
+}
+
+pub const fn software_render_format() -> &'static str {
+    if cfg!(target_endian = "little") {
+        "bgr0"
+    } else {
+        "0rgb"
+    }
+}
+
+fn render_software_frame(
+    context: NonNull<ffi::mpv_render_context>,
+    width: i32,
+    height: i32,
+    stride: usize,
+    pixels: &mut [u8],
+) -> Result<(), MpvError> {
+    let width = usize::try_from(width).map_err(|_| MpvError::InvalidSoftwareSurface)?;
+    let height = usize::try_from(height).map_err(|_| MpvError::InvalidSoftwareSurface)?;
+    let minimum_stride = width
+        .checked_mul(4)
+        .ok_or(MpvError::InvalidSoftwareSurface)?;
+    let required = stride
+        .checked_mul(height)
+        .ok_or(MpvError::InvalidSoftwareSurface)?;
+    if stride < minimum_stride || !stride.is_multiple_of(4) || pixels.len() < required {
+        return Err(MpvError::InvalidSoftwareSurface);
+    }
+
+    let mut size = [
+        i32::try_from(width).map_err(|_| MpvError::InvalidSoftwareSurface)?,
+        i32::try_from(height).map_err(|_| MpvError::InvalidSoftwareSurface)?,
+    ];
+    let mut stride = stride;
+    let format = if cfg!(target_endian = "little") {
+        c"bgr0"
+    } else {
+        c"0rgb"
+    };
+    let mut params = [
+        ffi::mpv_render_param {
+            param_type: ffi::MPV_RENDER_PARAM_SW_SIZE,
+            data: size.as_mut_ptr().cast(),
+        },
+        ffi::mpv_render_param {
+            param_type: ffi::MPV_RENDER_PARAM_SW_FORMAT,
+            data: format.as_ptr().cast_mut().cast(),
+        },
+        ffi::mpv_render_param {
+            param_type: ffi::MPV_RENDER_PARAM_SW_STRIDE,
+            data: ptr::from_mut(&mut stride).cast(),
+        },
+        ffi::mpv_render_param {
+            param_type: ffi::MPV_RENDER_PARAM_SW_POINTER,
+            data: pixels.as_mut_ptr().cast(),
         },
         ffi::mpv_render_param {
             param_type: ffi::MPV_RENDER_PARAM_INVALID,
@@ -2510,6 +2626,48 @@ mod tests {
         );
         assert_eq!(with_wayland[2].data, display.as_ptr());
         assert!(with_wayland[3].data.is_null());
+    }
+
+    #[test]
+    fn software_render_context_uses_only_the_sw_api_parameter() {
+        let params = software_render_context_parameters();
+        assert_eq!(
+            params
+                .iter()
+                .map(|parameter| parameter.param_type)
+                .collect::<Vec<_>>(),
+            vec![
+                ffi::MPV_RENDER_PARAM_API_TYPE,
+                ffi::MPV_RENDER_PARAM_INVALID,
+            ]
+        );
+        assert_eq!(unsafe { CStr::from_ptr(params[0].data.cast()) }, c"sw");
+        assert!(params[1].data.is_null());
+    }
+
+    #[test]
+    fn software_render_format_matches_cairo_rgb24_native_byte_order() {
+        assert_eq!(
+            software_render_format(),
+            if cfg!(target_endian = "little") {
+                "bgr0"
+            } else {
+                "0rgb"
+            }
+        );
+    }
+
+    #[test]
+    fn software_render_surface_validation_fails_before_calling_libmpv() {
+        let context = NonNull::<ffi::mpv_render_context>::dangling();
+        assert!(matches!(
+            render_software_frame(context, 4, 3, 15, &mut [0; 48]),
+            Err(MpvError::InvalidSoftwareSurface)
+        ));
+        assert!(matches!(
+            render_software_frame(context, 4, 3, 16, &mut [0; 47]),
+            Err(MpvError::InvalidSoftwareSurface)
+        ));
     }
 
     #[test]

@@ -18,6 +18,66 @@ fn write_png_header(path: &Path) {
 }
 
 #[test]
+fn renderer_environment_is_selected_before_gtk_initialization() {
+    let source = include_str!("main.rs");
+    let renderer = source
+        .find("configure_linux_renderer_environment();")
+        .expect("main should configure rendering");
+    let gtk = source
+        .find("VelopackApp::build()")
+        .expect("main should initialize Velopack and GTK");
+
+    assert!(renderer < gtk);
+}
+
+#[test]
+fn flatpak_detection_accepts_the_runtime_id_or_sandbox_marker() {
+    use std::ffi::OsStr;
+
+    assert!(flatpak_install_detected(
+        Some(OsStr::new("com.befeast.okplayer")),
+        false
+    ));
+    assert!(flatpak_install_detected(None, true));
+    assert!(!flatpak_install_detected(None, false));
+    assert!(!flatpak_install_detected(Some(OsStr::new("")), false));
+}
+
+#[test]
+fn dri_probe_requires_an_openable_render_or_card_entry() {
+    let root = unique_temp_dir("okp-dri-probe");
+    assert!(!accessible_dri_device_exists(root.path()));
+
+    fs::write(root.path().join("unrelated"), b"not a DRI node")
+        .expect("unrelated fixture should be written");
+    assert!(!accessible_dri_device_exists(root.path()));
+
+    fs::write(root.path().join("renderD128"), b"test DRI node")
+        .expect("render-node fixture should be written");
+    assert!(accessible_dri_device_exists(root.path()));
+}
+
+#[test]
+fn software_renderer_failure_reuses_the_in_player_error_surface() {
+    let state = Rc::new(RefCell::new(PlayerState::default()));
+
+    fail_software_renderer(&state, "software renderer test failure");
+
+    let state = state.borrow();
+    assert_eq!(
+        state.media_load_state,
+        network_media::MediaLoadState::Failed
+    );
+    let diagnostic = state
+        .last_load_diagnostic
+        .as_ref()
+        .expect("renderer failure should drive the existing error card");
+    assert_eq!(diagnostic.title, "Graphics access unavailable");
+    assert!(diagnostic.message.contains("GPU/DRI"));
+    assert!(diagnostic.message.contains("--device=dri"));
+}
+
+#[test]
 fn about_display_version_keeps_about_layout_compact() {
     assert_eq!(about_display_version("0.1.0-linux-alpha.77"), "0.1.0");
     assert_eq!(about_display_version("1.0.0"), "1.0.0");

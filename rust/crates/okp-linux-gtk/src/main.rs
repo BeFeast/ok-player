@@ -24,6 +24,7 @@ use okp_core::companion_window::{self as companion_window_core, CompanionWindowK
 use okp_core::gapless::{GaplessPlaybackCapability, PlaylistTransitionPath};
 use okp_core::hdr::HdrHandlingState;
 use okp_core::key_press::KeyPressLatch;
+use okp_core::linux_renderer::LinuxRendererMode;
 use okp_core::player_commands::{
     self, PlayerCommandContext, PlayerCommandGroup, PlayerCommandId, PlayerCommandSurface,
     ResolvedPlayerCommand,
@@ -202,6 +203,7 @@ static MPRIS_EMBEDDED_ART_CACHE: OnceLock<
     Mutex<HashMap<MprisEmbeddedArtCacheKey, MprisEmbeddedArtCacheEntry>>,
 > = OnceLock::new();
 static MPRIS_APP_ICON_ART_URL: OnceLock<Option<String>> = OnceLock::new();
+static LINUX_RENDERER_MODE: OnceLock<LinuxRendererMode> = OnceLock::new();
 
 #[derive(Default)]
 struct PlayerState {
@@ -1816,6 +1818,7 @@ const SIDE_PANEL_BOTTOM_INSET: i32 = 80;
 const SIDE_PANEL_TRANSITION_MS: u32 = 250;
 
 fn main() -> glib::ExitCode {
+    configure_linux_renderer_environment();
     VelopackApp::build().set_auto_apply_on_startup(false).run();
 
     let app = gtk::Application::builder()
