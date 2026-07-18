@@ -10,6 +10,6 @@ pub use player::{
     Mpv, MpvError, MpvEvent, NativeWaylandDisplay, PlaybackDiagnostics, PlaybackState,
     RenderTargetSize, RenderUpdateHandle, Track, TrackKind, VideoDimensions, WaylandDmabufTarget,
     WaylandPresentationFeedback, current_render_target_size, error_description,
-    resolve_render_target_size,
+    resolve_render_target_size, software_render_format,
 };
 pub use version::BuildTimeMpv;

@@ -15,6 +15,7 @@ pub enum PresentationBackend {
     NativeWaylandEgl,
     NativeWaylandDmabuf,
     GtkGlArea,
+    LibMpvSoftware,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -538,6 +539,19 @@ fn presents_per_second(records: &[PresentationRecord], start_ns: u64, duration_n
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn software_presentation_backend_has_a_stable_evidence_name() {
+        let record = PresentationRecord::Session {
+            schema_version: PRESENTATION_EVIDENCE_SCHEMA_VERSION,
+            backend: PresentationBackend::LibMpvSoftware,
+        };
+
+        assert_eq!(
+            serde_json::to_string(&record).expect("session evidence should serialize"),
+            r#"{"event":"session","schema_version":2,"backend":"lib-mpv-software"}"#
+        );
+    }
 
     #[test]
     fn exact_fifteen_second_native_window_passes_at_fifty_five_presents_per_second() {

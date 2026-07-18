@@ -6,6 +6,78 @@ use gtk::glib::translate::ToGlibPtr;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+pub(crate) fn configure_linux_renderer_environment() -> LinuxRendererMode {
+    let flatpak = flatpak_install_detected(
+        env::var_os("FLATPAK_ID").as_deref(),
+        Path::new("/.flatpak-info").is_file(),
+    );
+    let dri_root = env::var_os("OKP_TEST_DRI_DEVICE_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/dev/dri"));
+    let dri_accessible = accessible_dri_device_exists(&dri_root);
+    let mode = okp_core::linux_renderer::select_linux_renderer(flatpak, dri_accessible);
+
+    for (name, value) in mode.environment_overrides() {
+        // SAFETY: this is the first statement in `main`, before GTK,
+        // Velopack, or any application worker thread is initialized.
+        unsafe {
+            env::set_var(name, value);
+        }
+    }
+    let _ = LINUX_RENDERER_MODE.set(mode);
+
+    eprintln!(
+        "Renderer policy: mode={} flatpak={} dri-accessible={} backend={} hwdec={} render-api={} gsk-renderer={}",
+        mode.label(),
+        flatpak,
+        dri_accessible,
+        if mode.requires_software_surface() {
+            "libmpv-software"
+        } else {
+            "automatic"
+        },
+        mode.mpv_hwdec_override().unwrap_or("settings"),
+        if mode == LinuxRendererMode::SoftwareNoDri {
+            "sw"
+        } else {
+            "default"
+        },
+        if mode == LinuxRendererMode::SoftwareNoDri {
+            "cairo"
+        } else {
+            "default"
+        }
+    );
+    mode
+}
+
+pub(crate) fn configured_linux_renderer_mode() -> LinuxRendererMode {
+    LINUX_RENDERER_MODE.get().copied().unwrap_or_default()
+}
+
+pub(crate) fn flatpak_install_detected(
+    flatpak_id: Option<&std::ffi::OsStr>,
+    sandbox_marker_exists: bool,
+) -> bool {
+    flatpak_id.is_some_and(|value| !value.is_empty()) || sandbox_marker_exists
+}
+
+pub(crate) fn accessible_dri_device_exists(root: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(root) else {
+        return false;
+    };
+    entries.filter_map(Result::ok).any(|entry| {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        (name.starts_with("renderD") || name.starts_with("card"))
+            && fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(entry.path())
+                .is_ok()
+    })
+}
+
 pub(crate) struct NativeRenderNotifier {
     alive: AtomicBool,
     pending: Mutex<NativeRenderRequest>,
@@ -219,6 +291,7 @@ pub(crate) fn connect_mpv(
             auto_fallback,
         } => connect_native_mpv(area, container, *auto_fallback, state, launch_args),
         VideoHost::Gtk(area) => connect_gtk_mpv(area, state, launch_args),
+        VideoHost::Software(area) => connect_software_mpv(area, state, launch_args),
     }
 }
 
@@ -574,6 +647,138 @@ fn connect_gtk_mpv(
     });
 }
 
+fn connect_software_mpv(
+    video_area: &gtk::DrawingArea,
+    state: Rc<RefCell<PlayerState>>,
+    launch_args: LaunchArgs,
+) {
+    let realize_state = Rc::clone(&state);
+    video_area.connect_realize(move |_| {
+        let Some(mut mpv) = create_configured_mpv(&realize_state) else {
+            fail_software_renderer(
+                &realize_state,
+                "libmpv software player initialization failed",
+            );
+            return;
+        };
+        if let Err(error) = mpv.create_software_render_context() {
+            eprintln!("Failed to create libmpv software render context: {error}");
+            fail_software_renderer(
+                &realize_state,
+                format!("libmpv software render context initialization failed: {error}"),
+            );
+            return;
+        }
+        eprintln!(
+            "Software renderer: backend=libmpv-software format={} scene-renderer=cairo",
+            okp_mpv::software_render_format()
+        );
+        start_event_pump_for_session(&mut mpv);
+        realize_state.borrow_mut().mpv = Some(mpv);
+        schedule_audio_device_restore(&realize_state);
+        try_pending_audio_device_restore(&realize_state);
+        apply_launch_args(&realize_state, &launch_args);
+    });
+
+    let frame = Rc::new(RefCell::new(None::<cairo::ImageSurface>));
+    let draw_frame = Rc::clone(&frame);
+    let draw_state = Rc::clone(&state);
+    let render_failed = Rc::new(Cell::new(false));
+    let draw_render_failed = Rc::clone(&render_failed);
+    video_area.set_draw_func(move |_, context, width, height| {
+        if width <= 0 || height <= 0 || draw_render_failed.get() {
+            return;
+        }
+
+        let mut frame = draw_frame.borrow_mut();
+        let recreate = frame
+            .as_ref()
+            .is_none_or(|surface| surface.width() != width || surface.height() != height);
+        if recreate {
+            match cairo::ImageSurface::create(cairo::Format::Rgb24, width, height) {
+                Ok(surface) => *frame = Some(surface),
+                Err(error) => {
+                    draw_render_failed.set(true);
+                    fail_software_renderer(
+                        &draw_state,
+                        format!("software video surface allocation failed: {error}"),
+                    );
+                    return;
+                }
+            }
+        }
+
+        let surface = frame.as_mut().expect("software surface was created");
+        let stride = surface.stride() as usize;
+        surface.flush();
+        let render_result = match surface.data() {
+            Ok(mut pixels) => draw_state
+                .borrow_mut()
+                .mpv
+                .as_mut()
+                .map(|mpv| mpv.render_software(width, height, stride, pixels.as_mut()))
+                .transpose(),
+            Err(error) => {
+                draw_render_failed.set(true);
+                fail_software_renderer(
+                    &draw_state,
+                    format!("software video pixel access failed: {error}"),
+                );
+                return;
+            }
+        };
+        if let Err(error) = render_result {
+            draw_render_failed.set(true);
+            fail_software_renderer(
+                &draw_state,
+                format!("libmpv software frame render failed: {error}"),
+            );
+            return;
+        }
+        surface.mark_dirty();
+        if context.set_source_surface(surface, 0.0, 0.0).is_ok() {
+            let _ = context.paint();
+        }
+        let state = draw_state.borrow();
+        if let Some(recorder) = state.presentation_recorder.as_ref()
+            && state.mpv.is_some()
+        {
+            recorder.record_present(
+                okp_mpv::RenderTargetSize { width, height },
+                "libmpv-software-cairo",
+            );
+        }
+    });
+
+    let unrealize_state = Rc::clone(&state);
+    video_area.connect_unrealize(move |_| {
+        if let Some(mpv) = unrealize_state.borrow_mut().mpv.as_mut() {
+            mpv.destroy_render_context();
+        }
+    });
+
+    let tick_area = video_area.clone();
+    glib::timeout_add_local(Duration::from_millis(16), move || {
+        tick_area.queue_draw();
+        glib::ControlFlow::Continue
+    });
+}
+
+pub(crate) fn fail_software_renderer(state: &Rc<RefCell<PlayerState>>, detail: impl Into<String>) {
+    let detail = detail.into();
+    eprintln!("Software renderer unavailable: {detail}");
+    if let Some(mpv) = state.borrow().mpv.as_ref()
+        && let Err(error) = mpv.stop()
+    {
+        eprintln!("Failed to stop playback after software renderer failure: {error}");
+    }
+    let mut state = state.borrow_mut();
+    state.media_load_state = network_media::MediaLoadState::Failed;
+    state.last_load_diagnostic = Some(
+        okp_core::playback_failure::PlaybackFailureDiagnostic::flatpak_dri_unavailable(detail),
+    );
+}
+
 fn create_configured_mpv(state: &Rc<RefCell<PlayerState>>) -> Option<Mpv> {
     let (hwdec, raw_mpv_options) = mpv_creation_options(state);
     let mpv = create_regular_mpv(&hwdec, &raw_mpv_options)?;
@@ -647,6 +852,10 @@ fn mpv_creation_options(state: &Rc<RefCell<PlayerState>>) -> (String, Vec<(Strin
             Vec::new()
         }
     };
+    let hwdec = configured_linux_renderer_mode()
+        .mpv_hwdec_override()
+        .map(str::to_owned)
+        .unwrap_or(hwdec);
     (hwdec, options)
 }
 
