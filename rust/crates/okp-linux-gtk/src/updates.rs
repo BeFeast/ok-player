@@ -486,6 +486,12 @@ pub(crate) fn apply_update_check_result(
                 status_toast.show("OK Player is up to date");
             }
         }
+        LinuxUpdateCheckResult::ManagedExternally => {
+            pending.borrow_mut().take();
+            button.set_label("Managed by DNF");
+            button.set_sensitive(false);
+            status.set_text("Updates are managed by DNF.");
+        }
         LinuxUpdateCheckResult::Available(update) => {
             let status_text = update.available_status();
             let action_label = update.action_label();
@@ -532,7 +538,8 @@ pub(crate) fn check_updates_on_startup(
                     LinuxUpdateCheckResult::Failed(error) => {
                         eprintln!("Startup update check failed: {error}");
                     }
-                    LinuxUpdateCheckResult::UpToDate => {}
+                    LinuxUpdateCheckResult::UpToDate
+                    | LinuxUpdateCheckResult::ManagedExternally => {}
                 }
                 glib::ControlFlow::Break
             }
@@ -543,12 +550,17 @@ pub(crate) fn check_updates_on_startup(
 }
 
 pub(crate) fn check_for_linux_update(channel: UpdateChannel) -> LinuxUpdateCheckResult {
+    let install_lane = linux_install_lane();
+    if install_lane == CandidateInstallLane::SystemPackage {
+        return LinuxUpdateCheckResult::ManagedExternally;
+    }
+
     let channel = effective_update_channel(channel);
     if channel == UpdateChannel::Candidate {
         return check_for_linux_candidate_channel_update();
     }
 
-    if linux_install_lane() == CandidateInstallLane::Debian {
+    if install_lane == CandidateInstallLane::Debian {
         return match check_for_linux_deb_update() {
             Ok(Some(update)) => LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
                 manager: None,
@@ -785,11 +797,8 @@ fn candidate_appimage_empty_result(
 }
 
 pub(crate) fn linux_install_lane() -> CandidateInstallLane {
-    match APP_PACKAGE_KIND {
-        "appimage" => CandidateInstallLane::AppImage,
-        "deb" | "development" => CandidateInstallLane::Debian,
-        _ => unreachable!("build.rs validates OKP_PACKAGE_KIND"),
-    }
+    CandidateInstallLane::from_package_kind(APP_PACKAGE_KIND)
+        .expect("build.rs validates OKP_PACKAGE_KIND")
 }
 
 pub(crate) fn linux_update_feed_base_url() -> String {

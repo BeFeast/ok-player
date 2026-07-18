@@ -1,0 +1,61 @@
+name: Fedora RPM
+
+on:
+  pull_request:
+    paths:
+      - '.copr/**'
+      - '.github/workflows/rpm.yml'
+      - 'rust/**'
+      - 'scripts/package-linux-rpm-source.sh'
+      - 'scripts/run-linux-rpm-checks.sh'
+      - 'scripts/smoke-linux-rpm-install-upgrade.sh'
+      - 'THIRD-PARTY-NOTICES.md'
+      - 'LICENSE'
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  rpm:
+    name: Fedora ${{ matrix.fedora }} SRPM/RPM
+    runs-on: ubuntu-latest
+    container: fedora:${{ matrix.fedora }}
+    strategy:
+      fail-fast: false
+      matrix:
+        fedora: ['43', '44']
+    steps:
+      - name: Disable nonessential repositories before checkout
+        run: |
+          dnf install -y dnf-plugins-core
+          dnf config-manager setopt fedora-cisco-openh264.enabled=0
+          dnf install -y git
+
+      - uses: actions/checkout@v4
+
+      - name: Establish Git source identity
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" status --short
+          git -C "$GITHUB_WORKSPACE" log -1 --oneline
+
+      - name: Install Fedora build tooling
+        run: |
+          dnf install -y \
+            cargo rust gcc gcc-c++ make findutils diffutils which \
+            rpm-build rpmdevtools rpmlint zstd gzip tar \
+            pkgconf-pkg-config gtk4-devel mpv-devel libX11-devel \
+            wayland-devel mesa-libEGL-devel mesa-libGL-devel \
+            desktop-file-utils appstream xdg-utils
+
+      - name: Build, lint, install, upgrade, and remove
+        env:
+          FEDORA_VERSION: ${{ matrix.fedora }}
+          CC: /usr/bin/cc
+        run: ./scripts/run-linux-rpm-checks.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ok-player-fedora-${{ matrix.fedora }}
+          path: artifacts/linux/rpm/fedora-${{ matrix.fedora }}/**

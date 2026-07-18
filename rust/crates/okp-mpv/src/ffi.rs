@@ -80,8 +80,17 @@ pub struct mpv_node_list {
     pub keys: *mut *mut c_char,
 }
 
+#[repr(C)]
+pub struct mpv_event_log_message {
+    pub prefix: *const c_char,
+    pub level: *const c_char,
+    pub text: *const c_char,
+    pub log_level: c_int,
+}
+
 pub const MPV_EVENT_NONE: c_int = 0;
 pub const MPV_EVENT_SHUTDOWN: c_int = 1;
+pub const MPV_EVENT_LOG_MESSAGE: c_int = 2;
 pub const MPV_EVENT_COMMAND_REPLY: c_int = 5;
 pub const MPV_EVENT_END_FILE: c_int = 7;
 pub const MPV_EVENT_FILE_LOADED: c_int = 8;
@@ -153,6 +162,7 @@ unsafe extern "C" {
         d: *mut c_void,
     );
     pub fn mpv_wait_event(ctx: *mut mpv_handle, timeout: f64) -> *mut mpv_event;
+    pub fn mpv_request_log_messages(ctx: *mut mpv_handle, min_level: *const c_char) -> c_int;
 
     pub fn mpv_render_context_create(
         res: *mut *mut mpv_render_context,

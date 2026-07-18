@@ -2037,20 +2037,27 @@ pub(crate) fn drain_mpv_events(
                 // A frame is up — the source is playing, not loading anymore.
                 let mut state = state.borrow_mut();
                 state.media_load_state = network_media::MediaLoadState::Playing;
-                state.last_load_error = None;
+                state.last_load_diagnostic = None;
             }
             MpvEvent::VideoReconfig { video_dimensions } => {
                 auto_fit_dimensions = auto_fit_dimensions.or(video_dimensions);
             }
-            MpvEvent::EndFile { reason, .. } if reason.is_eof() => {
-                if state.borrow().playlist.repeat() != RepeatMode::One {
-                    save_current_progress(state, true);
+            MpvEvent::EndFile {
+                reason,
+                path,
+                diagnostic_messages,
+            } if reason.is_eof() => {
+                if !apply_endfile_eof_diagnostic(state, path.as_deref(), &diagnostic_messages) {
+                    if state.borrow().playlist.repeat() != RepeatMode::One {
+                        save_current_progress(state, true);
+                    }
+                    advance_playlist_on_eof(state);
                 }
-                advance_playlist_on_eof(state);
             }
             MpvEvent::EndFile {
                 reason: EndFileReason::Error(error),
                 path,
+                diagnostic_messages,
             } => {
                 // The engine rejected the source (e.g. a 404 stream). Transition the
                 // transport surface to `Failed` and store the short reason for the Copy
@@ -2058,7 +2065,7 @@ pub(crate) fn drain_mpv_events(
                 // too, with URL Retry disabled. The
                 // staleness guard (drop an error whose source was superseded) lives in
                 // `apply_endfile_error` so it is unit-testable without an engine.
-                apply_endfile_error(state, error, path.as_deref());
+                apply_endfile_error(state, error, path.as_deref(), &diagnostic_messages);
             }
             MpvEvent::CommandReply { request_id, error } => {
                 complete_screenshot_capture(state, status_toast, request_id, error);

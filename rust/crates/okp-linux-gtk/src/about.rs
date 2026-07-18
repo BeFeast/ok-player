@@ -475,5 +475,6 @@ pub(crate) fn linux_update_install_status() -> &'static str {
         CandidateInstallLane::AppImage => "Self-update enabled",
         CandidateInstallLane::Debian if deb_self_install_available() => "Deb self-install",
         CandidateInstallLane::Debian => "Deb installer",
+        CandidateInstallLane::SystemPackage => "DNF package manager",
     }
 }

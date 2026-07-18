@@ -13,6 +13,7 @@
 //! Lifecycle and requested async-command events are queued for the shell to
 //! drain in order; property changes only ever mutate the snapshot.
 
+use std::collections::VecDeque;
 use std::ffi::{CStr, CString};
 use std::path::PathBuf;
 use std::ptr::{self, NonNull};
@@ -137,6 +138,7 @@ struct PumpShared {
     reader: RawReader,
     snapshot: Mutex<Snapshot>,
     events: Mutex<Vec<MpvEvent>>,
+    diagnostic_messages: Mutex<VecDeque<String>>,
     media_source: Mutex<Option<PathBuf>>,
     audio_device_current: Mutex<String>,
     wake: Mutex<bool>,
@@ -171,6 +173,7 @@ impl EventPump {
             reader: RawReader::new(handle),
             snapshot: Mutex::new(Snapshot::default()),
             events: Mutex::new(Vec::new()),
+            diagnostic_messages: Mutex::new(VecDeque::new()),
             media_source: Mutex::new(None),
             audio_device_current: Mutex::new("auto".to_owned()),
             // Start "pending" so the pump populates the snapshot immediately.
@@ -268,6 +271,8 @@ impl EventPump {
         let mut snapshot = lock(&self.shared.snapshot);
         snapshot.video_dimensions = None;
         snapshot.media_info = None;
+        drop(snapshot);
+        lock(&self.shared.diagnostic_messages).clear();
     }
 
     /// Drain the lifecycle events queued since the last call, oldest first.
@@ -379,9 +384,23 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
                 lifecycle.push(MpvEvent::Shutdown);
                 shared.running.store(false, Ordering::Release);
             }
+            ffi::MPV_EVENT_LOG_MESSAGE => {
+                if let Some(message) = log_message(event) {
+                    let mut messages = lock(&shared.diagnostic_messages);
+                    if messages.len() == 24 {
+                        messages.pop_front();
+                    }
+                    messages.push_back(message);
+                }
+            }
             ffi::MPV_EVENT_FILE_LOADED => {
                 let video_dimensions = shared.reader.video_dimensions().ok().flatten();
                 lock(&shared.snapshot).video_dimensions = video_dimensions;
+                // A successful load finalizes the previous source; discard any
+                // stale log messages so they cannot be misattributed to a later
+                // failure. Logs from the currently ending source are captured
+                // when `EndFile` drains the buffer.
+                lock(&shared.diagnostic_messages).clear();
                 lifecycle.push(MpvEvent::FileLoaded { video_dimensions });
                 flags.tracks = true;
                 flags.chapters = true;
@@ -409,7 +428,12 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
                 // source was superseded between the engine firing the event and the next
                 // poll is dropped instead of failing the new source.
                 let path = shared.reader.path();
-                lifecycle.push(MpvEvent::EndFile { reason, path });
+                let diagnostic_messages = lock(&shared.diagnostic_messages).drain(..).collect();
+                lifecycle.push(MpvEvent::EndFile {
+                    reason,
+                    path,
+                    diagnostic_messages,
+                });
             }
             ffi::MPV_EVENT_PROPERTY_CHANGE => {
                 if let Some(property) =
@@ -458,6 +482,31 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
     }
 
     (lifecycle, flags)
+}
+
+fn log_message(event: &ffi::mpv_event) -> Option<String> {
+    let message = unsafe { event.data.cast::<ffi::mpv_event_log_message>().as_ref() }?;
+    let prefix = c_string(message.prefix);
+    let text = c_string(message.text);
+    if text.is_empty() {
+        return None;
+    }
+    let combined = if prefix.is_empty() {
+        text
+    } else {
+        format!("{prefix}: {text}")
+    };
+    Some(combined.trim().chars().take(512).collect())
+}
+
+fn c_string(pointer: *const libc::c_char) -> String {
+    if pointer.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(pointer) }
+            .to_string_lossy()
+            .into_owned()
+    }
 }
 
 /// Read the current values off the background thread and publish them. Scalars

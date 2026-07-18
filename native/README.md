@@ -38,3 +38,8 @@ bypasses `GtkGLArea` and GSK composition. The shell supplies GDK's `wl_display*`
 `MPV_RENDER_PARAM_WL_DISPLAY`, retaining the GDK display until the render context is freed for
 direct VAAPI interop. X11 uses the compatibility `GtkGLArea` path; a Wayland A/B run can explicitly
 select it with `OKP_VIDEO_BACKEND=gtk`.
+
+The Fedora RPM makes this boundary enforceable: its spec requires
+`pkgconfig(mpv)`/`mpv-libs`, sets `OKP_REQUIRE_SYSTEM_MPV=1`, and installs no
+libmpv or FFmpeg shared library. Broader codecs may be supplied by repositories
+the user explicitly chooses, but package scriptlets never enable one.

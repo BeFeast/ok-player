@@ -3521,6 +3521,14 @@ fn linux_update_status_reflects_last_check_result() {
     assert_eq!(up_to_date.action_label(), "Check for updates");
     assert!(up_to_date.pending_update().is_none());
 
+    let managed = LinuxUpdateStatus::from_check_result(&LinuxUpdateCheckResult::ManagedExternally);
+    assert_eq!(
+        managed.settings_status_text(true),
+        "Updates are managed by DNF."
+    );
+    assert_eq!(managed.action_label(), "Managed by DNF");
+    assert!(managed.pending_update().is_none());
+
     let update = PendingLinuxUpdate {
         manager: None,
         target: LinuxUpdateTarget::Deb(DebUpdate {
@@ -3594,9 +3602,11 @@ fn candidate_appimage_source_uses_the_manifest_bound_full_package() {
 fn linux_packages_stamp_their_update_install_lane() {
     let deb = include_str!("../../../../scripts/package-linux-deb.sh");
     let appimage = include_str!("../../../../scripts/package-linux-velopack.sh");
+    let rpm = include_str!("../../../packaging/fedora/ok-player.spec");
 
     assert!(deb.contains("OKP_PACKAGE_KIND=deb"));
     assert!(appimage.contains("OKP_PACKAGE_KIND=appimage"));
+    assert_eq!(rpm.matches("OKP_PACKAGE_KIND=rpm").count(), 2);
 }
 
 #[test]
@@ -3794,7 +3804,7 @@ fn load_url_transitions_to_loading_and_records_retry_url() {
             "https://example.com/live.m3u8"
         ))
     );
-    assert!(state.last_load_error.is_none());
+    assert!(state.last_load_diagnostic.is_none());
 }
 
 #[test]
@@ -3818,7 +3828,7 @@ fn load_path_transitions_to_loading_and_records_retry_path() {
         state.retry_load_source.as_ref(),
         Some(&network_media::LoadFailureSource::local(path))
     );
-    assert!(state.last_load_error.is_none());
+    assert!(state.last_load_diagnostic.is_none());
 }
 
 #[test]
@@ -3911,7 +3921,13 @@ fn set_load_failure_transitions_and_records_card_actions() {
             "https://example.com/missing.mp4"
         ))
     );
-    assert_eq!(state.last_load_error.as_deref(), Some("libmpv error 404"));
+    assert_eq!(
+        state
+            .last_load_diagnostic
+            .as_ref()
+            .map(|diagnostic| diagnostic.detail.as_str()),
+        Some("libmpv error 404")
+    );
 }
 
 #[test]
@@ -3931,7 +3947,13 @@ fn set_local_load_failure_records_retry_path() {
         state.retry_load_source.as_ref(),
         Some(&network_media::LoadFailureSource::local(path))
     );
-    assert_eq!(state.last_load_error.as_deref(), Some("libmpv error 7"));
+    assert_eq!(
+        state
+            .last_load_diagnostic
+            .as_ref()
+            .map(|diagnostic| diagnostic.detail.as_str()),
+        Some("libmpv error 7")
+    );
 }
 
 #[test]
@@ -3958,7 +3980,13 @@ fn set_local_load_failure_replaces_stale_url_from_a_previous_load() {
         state.retry_load_source.as_ref(),
         Some(&network_media::LoadFailureSource::local(path))
     );
-    assert_eq!(state.last_load_error.as_deref(), Some("libmpv error 7"));
+    assert_eq!(
+        state
+            .last_load_diagnostic
+            .as_ref()
+            .map(|diagnostic| diagnostic.detail.as_str()),
+        Some("libmpv error 7")
+    );
 }
 
 #[test]
@@ -3971,7 +3999,7 @@ fn apply_endfile_error_marks_current_source_failed() {
         ..PlayerState::default()
     }));
 
-    apply_endfile_error(&state, 412, Some("https://example.com/live.m3u8"));
+    apply_endfile_error(&state, 412, Some("https://example.com/live.m3u8"), &[]);
 
     let state = state.borrow();
     assert_eq!(
@@ -3984,7 +4012,60 @@ fn apply_endfile_error_marks_current_source_failed() {
             "https://example.com/live.m3u8"
         ))
     );
-    assert_eq!(state.last_load_error.as_deref(), Some("libmpv error 412"));
+    assert_eq!(
+        state
+            .last_load_diagnostic
+            .as_ref()
+            .map(|diagnostic| diagnostic.detail.as_str()),
+        Some("libmpv error 412")
+    );
+}
+
+#[test]
+fn codec_failure_reported_at_eof_stays_on_the_failed_source() {
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(PathBuf::from("/media/movie.mkv")),
+        media_load_state: network_media::MediaLoadState::Playing,
+        ..PlayerState::default()
+    }));
+
+    assert!(apply_endfile_eof_diagnostic(
+        &state,
+        Some("/media/movie.mkv"),
+        &["[ffmpeg/video] Decoder not found for codec hevc".to_owned()],
+    ));
+
+    let state = state.borrow();
+    assert_eq!(
+        state.media_load_state,
+        network_media::MediaLoadState::Failed
+    );
+    assert_eq!(
+        state
+            .last_load_diagnostic
+            .as_ref()
+            .map(|diagnostic| diagnostic.kind),
+        Some(okp_core::playback_failure::PlaybackFailureKind::MissingCodec)
+    );
+}
+
+#[test]
+fn benign_eof_keeps_the_normal_playlist_path_available() {
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(PathBuf::from("/media/movie.mkv")),
+        media_load_state: network_media::MediaLoadState::Playing,
+        ..PlayerState::default()
+    }));
+
+    assert!(!apply_endfile_eof_diagnostic(
+        &state,
+        Some("/media/movie.mkv"),
+        &["cplayer: finished playback".to_owned()],
+    ));
+    assert_eq!(
+        state.borrow().media_load_state,
+        network_media::MediaLoadState::Playing
+    );
 }
 
 #[test]
@@ -3998,7 +4079,7 @@ fn apply_endfile_error_marks_current_local_source_failed() {
         ..PlayerState::default()
     }));
 
-    apply_endfile_error(&state, 7, Some("/media/movie.mkv"));
+    apply_endfile_error(&state, 7, Some("/media/movie.mkv"), &[]);
 
     let state = state.borrow();
     assert_eq!(
@@ -4009,7 +4090,13 @@ fn apply_endfile_error_marks_current_local_source_failed() {
         state.retry_load_source.as_ref(),
         Some(&network_media::LoadFailureSource::local(path))
     );
-    assert_eq!(state.last_load_error.as_deref(), Some("libmpv error 7"));
+    assert_eq!(
+        state
+            .last_load_diagnostic
+            .as_ref()
+            .map(|diagnostic| diagnostic.detail.as_str()),
+        Some("libmpv error 7")
+    );
 }
 
 #[test]
@@ -4026,7 +4113,7 @@ fn apply_endfile_error_drops_stale_error_for_a_superseded_source() {
         ..PlayerState::default()
     }));
 
-    apply_endfile_error(&state, 412, Some("https://example.com/a.m3u8"));
+    apply_endfile_error(&state, 412, Some("https://example.com/a.m3u8"), &[]);
 
     let state = state.borrow();
     // The surface stays Loading for B and B's retry URL is untouched, so B's own
@@ -4035,7 +4122,7 @@ fn apply_endfile_error_drops_stale_error_for_a_superseded_source() {
         state.media_load_state,
         network_media::MediaLoadState::Loading
     );
-    assert!(state.last_load_error.is_none());
+    assert!(state.last_load_diagnostic.is_none());
     assert_eq!(
         state.retry_load_source.as_ref(),
         Some(&network_media::LoadFailureSource::url(
@@ -4054,12 +4141,12 @@ fn apply_endfile_error_drops_ended_path_when_no_source_is_current() {
         ..PlayerState::default()
     }));
 
-    apply_endfile_error(&state, 7, Some("/media/movie.mkv"));
+    apply_endfile_error(&state, 7, Some("/media/movie.mkv"), &[]);
 
     let state = state.borrow();
     assert_eq!(state.media_load_state, network_media::MediaLoadState::Idle);
     assert!(state.retry_load_source.is_none());
-    assert!(state.last_load_error.is_none());
+    assert!(state.last_load_diagnostic.is_none());
 }
 
 #[test]
@@ -4072,12 +4159,12 @@ fn apply_endfile_error_drops_missing_ended_path_when_no_source_is_current() {
         ..PlayerState::default()
     }));
 
-    apply_endfile_error(&state, 7, None);
+    apply_endfile_error(&state, 7, None, &[]);
 
     let state = state.borrow();
     assert_eq!(state.media_load_state, network_media::MediaLoadState::Idle);
     assert!(state.retry_load_source.is_none());
-    assert!(state.last_load_error.is_none());
+    assert!(state.last_load_diagnostic.is_none());
 }
 
 #[test]
@@ -4091,7 +4178,7 @@ fn apply_endfile_error_falls_back_to_applying_when_path_is_missing() {
         ..PlayerState::default()
     }));
 
-    apply_endfile_error(&state, 412, None);
+    apply_endfile_error(&state, 412, None, &[]);
 
     let state = state.borrow();
     assert_eq!(
@@ -4104,7 +4191,13 @@ fn apply_endfile_error_falls_back_to_applying_when_path_is_missing() {
             "https://example.com/live.m3u8"
         ))
     );
-    assert_eq!(state.last_load_error.as_deref(), Some("libmpv error 412"));
+    assert_eq!(
+        state
+            .last_load_diagnostic
+            .as_ref()
+            .map(|diagnostic| diagnostic.detail.as_str()),
+        Some("libmpv error 412")
+    );
 }
 
 #[test]
@@ -4121,7 +4214,7 @@ fn clear_loaded_media_resets_load_state_surface() {
     let state = state.borrow();
     assert_eq!(state.media_load_state, network_media::MediaLoadState::Idle);
     assert!(state.retry_load_source.is_none());
-    assert!(state.last_load_error.is_none());
+    assert!(state.last_load_diagnostic.is_none());
 }
 
 #[test]
