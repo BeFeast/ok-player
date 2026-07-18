@@ -8,8 +8,8 @@
   version baselines from scripts/windows-dev-versions.json (the single source of truth for tools that
   live OUTSIDE the repository):
 
-    * Visual Studio 2026 Build Tools (or Community) with the Managed Desktop + Native Desktop workloads,
-      the Windows 11 SDK (26100) component, and the Windows App SDK C# templates
+    * Visual Studio 2026 Build Tools (or Community) with the managed-desktop and Visual C++ build workloads
+      plus the Windows 11 SDK (26100) component
     * .NET 9 SDK
     * Rust MSVC toolchain (rustup + stable + the x86_64-pc-windows-msvc target)
     * Git, 7-Zip (for native archive extraction), and (for source native builds only) CMake + Ninja
@@ -145,7 +145,7 @@ function Install-VisualStudio {
     $vs = $manifest.tools.visualStudio
     $components = @($vs.components)
     if (Test-VisualStudioComponents -Required $components) {
-        Write-Skip 'Visual Studio workloads already present (Managed Desktop, Native Desktop, Win11 SDK 26100, WinAppSDK C#)'
+        Write-Skip 'Visual Studio workloads already present (Managed Desktop Build Tools, VCTools, Win11 SDK 26100)'
         return
     }
     if ($CheckOnly) { Write-Host '  would install/modify Visual Studio workloads' -ForegroundColor Yellow; return }

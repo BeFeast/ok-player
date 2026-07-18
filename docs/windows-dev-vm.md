@@ -42,8 +42,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows-dev-vm.ps1
 
 It installs and verifies, via winget (App Installer, in-box on Windows 11):
 
-- **Visual Studio 2026 Build Tools** (or Community) with the *Managed Desktop* + *Native Desktop* workloads,
-  the *Windows 11 SDK 26100* component, and the *Windows App SDK C#* templates.
+- **Visual Studio 2026 Build Tools** (or Community) with the *Managed Desktop Build Tools* + *Visual C++
+  Build Tools* workloads and the *Windows 11 SDK 26100* component.
 - **.NET 9 SDK**, matching the `net9.0` / `net9.0-windows` target frameworks and the `setup-dotnet` pin in
   CI.
 - **Rust** via `rustup`: the `stable` toolchain and the `x86_64-pc-windows-msvc` target (MSVC, not GNU, so
