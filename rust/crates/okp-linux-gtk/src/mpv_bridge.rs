@@ -128,11 +128,15 @@ impl NativeRenderLoop {
         Arc::as_ptr(&self.notifier) as *mut libc::c_void
     }
 
+    pub(crate) fn request_render(&self) {
+        self.notifier.force_render();
+    }
+
     pub(crate) fn render_for_screenshot(&self) {
         // The native Wayland path is callback-driven, unlike GtkGLArea's 16 ms
         // tick. A paused video may otherwise have no render after mpv accepts
         // screenshot-to-file, starving the capture of the current libmpv frame.
-        self.notifier.force_render();
+        self.request_render();
     }
 
     fn stop_and_join(&mut self) {
@@ -348,6 +352,25 @@ fn connect_native_mpv(
             state.native_render_loop = Some(render_loop);
             state.mpv = Some(mpv);
         }
+        if let Some(surface) = area.native().and_then(|native| native.surface())
+            && surface.find_property("scale").is_some()
+        {
+            let scale_state = Rc::clone(&realize_state);
+            let scale_area = area.clone();
+            surface.connect_notify_local(Some("scale"), move |_, _| {
+                let state = scale_state.borrow();
+                if let Some(plane) = state.native_video_plane.as_ref() {
+                    plane.resize(
+                        scale_area.width(),
+                        scale_area.height(),
+                        native_surface_scale(&scale_area),
+                    );
+                }
+                if let Some(render_loop) = state.native_render_loop.as_ref() {
+                    render_loop.request_render();
+                }
+            });
+        }
         schedule_audio_device_restore(&realize_state);
         try_pending_audio_device_restore(&realize_state);
         apply_launch_args(&realize_state, &launch_args);
@@ -357,7 +380,7 @@ fn connect_native_mpv(
     let resize_state = Rc::clone(&state);
     video_area.connect_resize(move |area, width, height| {
         if let Some(plane) = resize_state.borrow().native_video_plane.as_ref() {
-            plane.resize(width, height, area.scale_factor());
+            plane.resize(width, height, native_surface_scale(area));
         }
     });
 

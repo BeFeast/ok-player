@@ -17,7 +17,8 @@ unsafe extern "C" {
         egl_display: *mut c_void,
         width: i32,
         height: i32,
-        scale: i32,
+        buffer_width: i32,
+        buffer_height: i32,
         error: *mut c_char,
         error_length: usize,
     ) -> *mut NativePlaneOpaque;
@@ -29,7 +30,8 @@ unsafe extern "C" {
         plane: *mut NativePlaneOpaque,
         width: i32,
         height: i32,
-        scale: i32,
+        buffer_width: i32,
+        buffer_height: i32,
     );
 }
 
@@ -40,10 +42,12 @@ pub(crate) struct NativeVideoPlane {
     pointer: NonNull<NativePlaneOpaque>,
     width: AtomicI32,
     height: AtomicI32,
-    scale: AtomicI32,
+    buffer_width: AtomicI32,
+    buffer_height: AtomicI32,
     applied_width: AtomicI32,
     applied_height: AtomicI32,
-    applied_scale: AtomicI32,
+    applied_buffer_width: AtomicI32,
+    applied_buffer_height: AtomicI32,
     alive: AtomicBool,
 }
 
@@ -85,7 +89,7 @@ impl NativeVideoPlane {
         let parent_surface_pointer = unsafe { get_wl_surface(surface.to_glib_none().0) };
         let width = widget.width().max(1);
         let height = widget.height().max(1);
-        let scale = widget.scale_factor().max(1);
+        let render_size = native_render_size(width, height, native_surface_scale(widget));
         let mut error = [0_i8; 256];
         let pointer = NonNull::new(unsafe {
             okp_wayland_video_plane_create(
@@ -95,7 +99,8 @@ impl NativeVideoPlane {
                 egl_display_pointer,
                 width,
                 height,
-                scale,
+                render_size.width,
+                render_size.height,
                 error.as_mut_ptr(),
                 error.len(),
             )
@@ -106,10 +111,12 @@ impl NativeVideoPlane {
             pointer,
             width: AtomicI32::new(width),
             height: AtomicI32::new(height),
-            scale: AtomicI32::new(scale),
+            buffer_width: AtomicI32::new(render_size.width),
+            buffer_height: AtomicI32::new(render_size.height),
             applied_width: AtomicI32::new(width),
             applied_height: AtomicI32::new(height),
-            applied_scale: AtomicI32::new(scale),
+            applied_buffer_width: AtomicI32::new(render_size.width),
+            applied_buffer_height: AtomicI32::new(render_size.height),
             alive: AtomicBool::new(true),
         }))
     }
@@ -128,16 +135,19 @@ impl NativeVideoPlane {
             && unsafe { okp_wayland_video_plane_swap(self.pointer.as_ptr()) }
     }
 
-    pub(crate) fn resize(&self, width: i32, height: i32, scale: i32) {
+    pub(crate) fn resize(&self, width: i32, height: i32, scale: f64) {
         if !self.alive.load(Ordering::Acquire) {
             return;
         }
         let width = width.max(1);
         let height = height.max(1);
-        let scale = scale.max(1);
+        let render_size = native_render_size(width, height, scale);
         self.width.store(width, Ordering::Release);
         self.height.store(height, Ordering::Release);
-        self.scale.store(scale, Ordering::Release);
+        self.buffer_width
+            .store(render_size.width, Ordering::Release);
+        self.buffer_height
+            .store(render_size.height, Ordering::Release);
     }
 
     pub(crate) fn prepare_frame(&self) -> Option<okp_mpv::RenderTargetSize> {
@@ -146,23 +156,70 @@ impl NativeVideoPlane {
         }
         let width = self.width.load(Ordering::Acquire);
         let height = self.height.load(Ordering::Acquire);
-        let scale = self.scale.load(Ordering::Acquire);
+        let buffer_width = self.buffer_width.load(Ordering::Acquire);
+        let buffer_height = self.buffer_height.load(Ordering::Acquire);
         let changed = self.applied_width.swap(width, Ordering::AcqRel) != width
             || self.applied_height.swap(height, Ordering::AcqRel) != height
-            || self.applied_scale.swap(scale, Ordering::AcqRel) != scale;
+            || self
+                .applied_buffer_width
+                .swap(buffer_width, Ordering::AcqRel)
+                != buffer_width
+            || self
+                .applied_buffer_height
+                .swap(buffer_height, Ordering::AcqRel)
+                != buffer_height;
         if changed {
             unsafe {
-                okp_wayland_video_plane_resize(self.pointer.as_ptr(), width, height, scale);
+                okp_wayland_video_plane_resize(
+                    self.pointer.as_ptr(),
+                    width,
+                    height,
+                    buffer_width,
+                    buffer_height,
+                );
             }
         }
         Some(okp_mpv::RenderTargetSize {
-            width: width * scale,
-            height: height * scale,
+            width: buffer_width,
+            height: buffer_height,
         })
     }
 
     pub(crate) fn disable(&self) {
         self.alive.store(false, Ordering::Release);
+    }
+}
+
+pub(crate) fn native_surface_scale(widget: &impl IsA<gtk::Widget>) -> f64 {
+    widget
+        .native()
+        .and_then(|native| native.surface())
+        .map(|surface| {
+            // GTK 4.14+ exposes the compositor's fractional surface scale.
+            // Discover it dynamically to preserve the GTK 4.10 runtime floor.
+            let scale = if surface.find_property("scale").is_some() {
+                surface.property::<f64>("scale")
+            } else {
+                f64::from(surface.scale_factor())
+            };
+            normalized_surface_scale(scale)
+        })
+        .unwrap_or_else(|| normalized_surface_scale(f64::from(widget.scale_factor())))
+}
+
+fn normalized_surface_scale(scale: f64) -> f64 {
+    if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    }
+}
+
+fn native_render_size(width: i32, height: i32, scale: f64) -> okp_mpv::RenderTargetSize {
+    let scale = normalized_surface_scale(scale);
+    okp_mpv::RenderTargetSize {
+        width: (f64::from(width.max(1)) * scale).round() as i32,
+        height: (f64::from(height.max(1)) * scale).round() as i32,
     }
 }
 
@@ -205,21 +262,41 @@ mod tests {
     fn native_render_size_applies_the_wayland_buffer_scale() {
         let plane = NativeVideoPlane {
             pointer: NonNull::dangling(),
-            width: AtomicI32::new(1708),
-            height: AtomicI32::new(961),
-            scale: AtomicI32::new(2),
-            applied_width: AtomicI32::new(1708),
-            applied_height: AtomicI32::new(961),
-            applied_scale: AtomicI32::new(2),
+            width: AtomicI32::new(1280),
+            height: AtomicI32::new(691),
+            buffer_width: AtomicI32::new(1920),
+            buffer_height: AtomicI32::new(1037),
+            applied_width: AtomicI32::new(1280),
+            applied_height: AtomicI32::new(691),
+            applied_buffer_width: AtomicI32::new(1920),
+            applied_buffer_height: AtomicI32::new(1037),
             alive: AtomicBool::new(true),
         };
         assert_eq!(
             plane.prepare_frame(),
             Some(okp_mpv::RenderTargetSize {
-                width: 3416,
-                height: 1922
+                width: 1920,
+                height: 1037
             })
         );
         std::mem::forget(plane);
+    }
+
+    #[test]
+    fn native_render_size_preserves_fractional_surface_scale() {
+        assert_eq!(
+            native_render_size(1280, 691, 1.5),
+            okp_mpv::RenderTargetSize {
+                width: 1920,
+                height: 1037,
+            }
+        );
+        assert_eq!(
+            native_render_size(1280, 691, f64::NAN),
+            okp_mpv::RenderTargetSize {
+                width: 1280,
+                height: 691,
+            }
+        );
     }
 }

@@ -45,7 +45,7 @@ jobs:
             cargo rust gcc gcc-c++ make findutils diffutils which \
             rpm-build rpmdevtools rpmlint zstd gzip tar \
             pkgconf-pkg-config gtk4-devel mpv-devel libX11-devel \
-            wayland-devel mesa-libEGL-devel mesa-libGL-devel \
+            wayland-devel wayland-protocols-devel mesa-libEGL-devel mesa-libGL-devel \
             desktop-file-utils appstream xdg-utils
 
       - name: Build, lint, install, upgrade, and remove
