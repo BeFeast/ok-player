@@ -83,12 +83,16 @@ deliberately does not shell out to an unverified installer to add winget itself.
 # the first id that succeeds (exact match). When a primary id is not yet published to the winget repository,
 # AlternativeIds are tried in order. An override means the installer must run even for an existing package
 # (for example, to add missing Visual Studio workloads), so that path uses the installed id with --force.
+# Callers with an independently detected version can also provide a minimum; an installed package below that
+# floor is upgraded instead of being treated as complete.
 function Install-WingetPackage {
     param(
         [Parameter(Mandatory)][string]$Id,
         [string]$Name = $Id,
         [string[]]$OverrideArgs,
-        [string[]]$AlternativeIds
+        [string[]]$AlternativeIds,
+        [string]$InstalledVersion,
+        [string]$MinimumVersion
     )
     $ids = @(@($Id) + @($AlternativeIds) | Where-Object { $_ })
     Write-Step "Ensuring $Name ($($ids -join ' / '))"
@@ -100,12 +104,20 @@ function Install-WingetPackage {
             break
         }
     }
-    if ($installedId -and -not $OverrideArgs) {
+    $needsUpgrade = $false
+    if ($installedId -and $InstalledVersion -and $MinimumVersion) {
+        $installedMatch = [regex]::Match($InstalledVersion, '\d+(?:\.\d+){1,3}')
+        $minimumMatch = [regex]::Match($MinimumVersion, '\d+(?:\.\d+){1,3}')
+        if ($installedMatch.Success -and $minimumMatch.Success) {
+            $needsUpgrade = ([version]$installedMatch.Value -lt [version]$minimumMatch.Value)
+        }
+    }
+    if ($installedId -and -not $OverrideArgs -and -not $needsUpgrade) {
         Write-Skip "$Name already installed ($installedId)"
         return
     }
     if ($CheckOnly) {
-        $action = if ($installedId) { 'modify' } else { 'install' }
+        $action = if ($needsUpgrade) { 'update' } elseif ($installedId) { 'modify' } else { 'install' }
         Write-Host "  would $action $Name" -ForegroundColor Yellow
         return
     }
@@ -113,14 +125,15 @@ function Install-WingetPackage {
     $lastExit = $null
     $candidateIds = if ($installedId) { @($installedId) } else { $ids }
     foreach ($candidate in $candidateIds) {
-        $wingetArgs = @('install', '--id', $candidate, '-e', '--accept-source-agreements',
+        $verb = if ($needsUpgrade) { 'upgrade' } else { 'install' }
+        $wingetArgs = @($verb, '--id', $candidate, '-e', '--accept-source-agreements',
             '--accept-package-agreements', '--disable-interactivity')
         if ($OverrideArgs) { $wingetArgs += $OverrideArgs }
-        if ($installedId) { $wingetArgs += '--force' }
+        if ($installedId -and -not $needsUpgrade) { $wingetArgs += '--force' }
         winget @wingetArgs
         $lastExit = $LASTEXITCODE
         if ($lastExit -eq 0) {
-            $action = if ($installedId) { 'modified' } else { 'installed' }
+            $action = if ($needsUpgrade) { 'updated' } elseif ($installedId) { 'modified' } else { 'installed' }
             Write-Ok "$Name $action ($candidate)"
             return
         }
@@ -219,7 +232,18 @@ Install-WingetPackage -Id $manifest.tools.git.wingetId -Name 'Git'
 Install-WingetPackage -Id $manifest.tools.dotnetSdk.wingetId -Name '.NET 9 SDK'
 Install-WingetPackage -Id $manifest.tools.cmake.wingetId -Name 'CMake'
 Install-WingetPackage -Id $manifest.tools.ninja.wingetId -Name 'Ninja'
-Install-WingetPackage -Id $manifest.tools.sevenZip.wingetId -Name '7-Zip'
+$sevenZipVersion = $null
+$sevenZip = Get-Command '7z' -ErrorAction SilentlyContinue
+if (-not $sevenZip) {
+    $sevenZipDefault = Join-Path $env:ProgramFiles '7-Zip\7z.exe'
+    if (Test-Path $sevenZipDefault) { $sevenZip = Get-Command $sevenZipDefault -ErrorAction SilentlyContinue }
+}
+if ($sevenZip) {
+    $sevenZipOutput = (& $sevenZip.Source 2>$null | Out-String)
+    if ($sevenZipOutput) { $sevenZipVersion = ($sevenZipOutput -split "`r?`n")[0].Trim() }
+}
+Install-WingetPackage -Id $manifest.tools.sevenZip.wingetId -Name '7-Zip' `
+    -InstalledVersion $sevenZipVersion -MinimumVersion $manifest.tools.sevenZip.minVersion
 Install-VelopackCli
 Install-RustMsvc
 

@@ -58,6 +58,55 @@ $velopackFunction = $bootstrapAst.Find({
     }, $true)
 if (-not $velopackFunction) { throw 'Install-VelopackCli was not found in the bootstrap script.' }
 . ([scriptblock]::Create($velopackFunction.Extent.Text))
+$wingetFunction = $bootstrapAst.Find({
+        param($node)
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq 'Install-WingetPackage'
+    }, $true)
+if (-not $wingetFunction) { throw 'Install-WingetPackage was not found in the bootstrap script.' }
+. ([scriptblock]::Create($wingetFunction.Extent.Text))
+
+function Write-Step { param([string]$Message) }
+function Write-Ok { param([string]$Message) }
+function Write-Skip { param([string]$Message) }
+
+$script:wingetCalls = @()
+function winget {
+    $query = @($args)
+    $script:wingetCalls += ,$query
+    if ($query[0] -eq 'list') {
+        $global:LASTEXITCODE = 0
+        return '7zip.7zip 23.01'
+    }
+    $global:LASTEXITCODE = 0
+}
+
+$CheckOnly = $false
+Install-WingetPackage -Id '7zip.7zip' -Name '7-Zip' -InstalledVersion '7-Zip 23.01' -MinimumVersion '24.0.0'
+$actions = @($script:wingetCalls | Where-Object { $_[0] -ne 'list' })
+if ($actions.Count -ne 1 -or $actions[0][0] -ne 'upgrade' -or $actions[0][2] -ne '7zip.7zip') {
+    throw 'An installed 7-Zip below the manifest floor must trigger one exact winget upgrade.'
+}
+
+$script:wingetCalls = @()
+Install-WingetPackage -Id '7zip.7zip' -Name '7-Zip' -InstalledVersion '7-Zip 24.09' -MinimumVersion '24.0.0'
+$actions = @($script:wingetCalls | Where-Object { $_[0] -ne 'list' })
+if ($actions.Count -ne 0) {
+    throw 'A satisfying 7-Zip version must remain idempotent and perform no winget action.'
+}
+
+$script:wingetCalls = @()
+$CheckOnly = $true
+$checkOnlyOutput = (& {
+        Install-WingetPackage -Id '7zip.7zip' -Name '7-Zip' -InstalledVersion '7-Zip 23.01' -MinimumVersion '24.0.0'
+    } 6>&1 | Out-String)
+$actions = @($script:wingetCalls | Where-Object { $_[0] -ne 'list' })
+if ($actions.Count -ne 0 -or $checkOnlyOutput -notmatch 'would update 7-Zip') {
+    throw 'Check-only must report the below-floor 7-Zip update without invoking winget.'
+}
+
+Remove-Item -Path Function:\winget
+Write-Host '7-Zip version convergence regressions passed.'
 
 $repoRoot = Split-Path -Parent $scriptsRoot
 $CheckOnly = $true
