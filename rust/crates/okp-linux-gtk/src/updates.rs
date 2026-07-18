@@ -168,10 +168,24 @@ pub(crate) fn settings_updates_section(
     };
     section.append(&settings_value_row("Channel", channel_label));
     section.append(&settings_value_row("Feed", feed_label));
-    section.append(&settings_value_row(
-        "Install",
-        linux_update_install_status(),
-    ));
+
+    let (install_row, install_label) = settings_value_row_with_label("Install", "—");
+    section.append(&install_row);
+
+    let (install_sender, install_receiver) = mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        let _ = install_sender.send(linux_update_install_status().to_owned());
+    });
+    glib::timeout_add_local(Duration::from_millis(10), move || {
+        match install_receiver.try_recv() {
+            Ok(status) => {
+                install_label.set_text(&status);
+                glib::ControlFlow::Break
+            }
+            Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+        }
+    });
 
     let row = gtk::Box::new(gtk::Orientation::Vertical, 8);
     row.add_css_class("okp-settings-row");

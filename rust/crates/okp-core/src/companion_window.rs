@@ -16,6 +16,7 @@ pub struct CompanionWindowPolicy {
     pub resizable: bool,
     pub always_on_top: bool,
     pub single_instance: bool,
+    pub retain_on_close: bool,
     pub parent_input_enabled: bool,
     pub minimum_size: WindowSize,
     pub natural_size: WindowSize,
@@ -29,6 +30,7 @@ pub const fn companion_window_policy(kind: CompanionWindowKind) -> CompanionWind
             resizable: true,
             always_on_top: false,
             single_instance: true,
+            retain_on_close: true,
             parent_input_enabled: true,
             minimum_size: WindowSize {
                 width: 760,
@@ -44,6 +46,7 @@ pub const fn companion_window_policy(kind: CompanionWindowKind) -> CompanionWind
             resizable: true,
             always_on_top: false,
             single_instance: true,
+            retain_on_close: false,
             parent_input_enabled: true,
             minimum_size: WindowSize {
                 width: 520,
@@ -100,6 +103,8 @@ mod tests {
             assert!(policy.single_instance);
             assert!(policy.parent_input_enabled);
         }
+        assert!(companion_window_policy(CompanionWindowKind::Settings).retain_on_close);
+        assert!(!companion_window_policy(CompanionWindowKind::MediaInfo).retain_on_close);
     }
 
     #[test]

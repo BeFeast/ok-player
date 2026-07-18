@@ -1,27 +1,104 @@
 use super::*;
 
+pub(crate) const ABOUT_FRAME_TICKS: [(f64, f64, f64, f64); 5] = [
+    (14.0, 43.5, 5.5, 9.0),
+    (22.0, 41.0, 5.5, 14.0),
+    (31.0, 38.0, 5.5, 20.0),
+    (40.5, 34.0, 5.5, 28.0),
+    (51.0, 30.0, 5.5, 36.0),
+];
+pub(crate) const ABOUT_FRAME_TICK_OPACITY: [f64; 5] = [0.10, 0.18, 0.30, 0.44, 0.62];
+
+/// Expensive host/engine metadata that must not be collected on the GTK main
+/// thread before the Settings window is mapped. The about pane captures these
+/// in a background thread and fills them in once they resolve.
+pub(crate) struct AboutDeferredFields {
+    pub libmpv: String,
+    pub ffmpeg: String,
+    pub os: String,
+    pub install: String,
+}
+
+impl AboutDeferredFields {
+    pub fn capture() -> Self {
+        Self {
+            libmpv: pkg_config_version("mpv").unwrap_or_else(|| "system".to_owned()),
+            ffmpeg: ffmpeg_version().unwrap_or_else(|| "system".to_owned()),
+            os: linux_os_label(),
+            install: linux_update_install_status().to_owned(),
+        }
+    }
+
+    fn apply(self, snapshot: &mut AboutSnapshot, labels: &AboutDeferredLabels) {
+        snapshot.libmpv.clone_from(&self.libmpv);
+        snapshot.ffmpeg.clone_from(&self.ffmpeg);
+        snapshot.os.clone_from(&self.os);
+        snapshot.install.clone_from(&self.install);
+
+        if let Some(label) = labels.libmpv.as_ref() {
+            label.set_text(&self.libmpv);
+        }
+        if let Some(label) = labels.ffmpeg.as_ref() {
+            label.set_text(&self.ffmpeg);
+        }
+        if let Some(label) = labels.os.as_ref() {
+            label.set_text(&self.os);
+        }
+        if let Some(label) = labels.install.as_ref() {
+            label.set_text(&self.install);
+        }
+    }
+}
+
+/// Labels that must be updated after the deferred metadata resolves.
+#[derive(Default)]
+pub(crate) struct AboutDeferredLabels {
+    pub libmpv: Option<gtk::Label>,
+    pub ffmpeg: Option<gtk::Label>,
+    pub os: Option<gtk::Label>,
+    pub install: Option<gtk::Label>,
+}
+
 pub(crate) fn settings_about_section(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) -> gtk::Box {
-    let snapshot = AboutSnapshot::capture(&state);
+    let snapshot = Rc::new(RefCell::new(AboutSnapshot::capture_cheap(&state)));
     let pane = gtk::Box::new(gtk::Orientation::Vertical, 0);
     pane.add_css_class("okp-about-pane");
 
-    pane.append(&about_identity_hero(&snapshot));
+    pane.append(&about_identity_hero(&snapshot.borrow()));
 
     let divider = gtk::Separator::new(gtk::Orientation::Horizontal);
     divider.add_css_class("okp-about-identity-divider");
     pane.append(&divider);
 
+    let mut deferred_labels = AboutDeferredLabels::default();
     let sheet = gtk::Box::new(gtk::Orientation::Vertical, 12);
     sheet.add_css_class("okp-about-sheet");
-    sheet.append(&about_app_card(&snapshot));
-    sheet.append(&about_engine_card(&snapshot));
-    sheet.append(&about_host_card(&snapshot));
+    sheet.append(&about_app_card(&snapshot.borrow()));
+    sheet.append(&about_engine_card(&snapshot.borrow(), &mut deferred_labels));
+    sheet.append(&about_host_card(&snapshot.borrow(), &mut deferred_labels));
     pane.append(&sheet);
 
-    pane.append(&about_footer(snapshot, status_toast));
+    pane.append(&about_footer(Rc::clone(&snapshot), status_toast));
+
+    let (sender, receiver) = mpsc::channel::<AboutDeferredFields>();
+    std::thread::spawn(move || {
+        let _ = sender.send(AboutDeferredFields::capture());
+    });
+
+    glib::timeout_add_local(Duration::from_millis(10), move || {
+        match receiver.try_recv() {
+            Ok(fields) => {
+                fields.apply(&mut snapshot.borrow_mut(), &deferred_labels);
+                glib::ControlFlow::Break
+            }
+            Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+        }
+    });
+
     pane
 }
 
@@ -81,15 +158,6 @@ pub(crate) fn about_illustration() -> gtk::Widget {
     area.set_draw_func(draw_about_illustration);
     area.upcast()
 }
-
-pub(crate) const ABOUT_FRAME_TICKS: [(f64, f64, f64, f64); 5] = [
-    (14.0, 43.5, 5.5, 9.0),
-    (22.0, 41.0, 5.5, 14.0),
-    (31.0, 38.0, 5.5, 20.0),
-    (40.5, 34.0, 5.5, 28.0),
-    (51.0, 30.0, 5.5, 36.0),
-];
-pub(crate) const ABOUT_FRAME_TICK_OPACITY: [f64; 5] = [0.10, 0.18, 0.30, 0.44, 0.62];
 
 pub(crate) fn draw_about_illustration(
     area: &gtk::DrawingArea,
@@ -182,20 +250,24 @@ pub(crate) fn about_app_card(snapshot: &AboutSnapshot) -> gtk::Box {
     about_card("APP", &rows)
 }
 
-pub(crate) fn about_engine_card(snapshot: &AboutSnapshot) -> gtk::Box {
+pub(crate) fn about_engine_card(
+    snapshot: &AboutSnapshot,
+    deferred: &mut AboutDeferredLabels,
+) -> gtk::Box {
     let rows = gtk::Box::new(gtk::Orientation::Vertical, 10);
     let hwdec_tag = if snapshot.hwdec == "off" {
         ("OFF", false)
     } else {
         ("ON", true)
     };
-    rows.append(&about_spec_row("libmpv", &snapshot.libmpv, true, None));
-    rows.append(&about_spec_row(
-        "FFmpeg",
-        &snapshot.ffmpeg,
-        true,
-        Some(("SYSTEM", false)),
-    ));
+    let (libmpv_row, libmpv_label) =
+        about_spec_row_with_label("libmpv", &snapshot.libmpv, true, None);
+    deferred.libmpv = Some(libmpv_label);
+    rows.append(&libmpv_row);
+    let (ffmpeg_row, ffmpeg_label) =
+        about_spec_row_with_label("FFmpeg", &snapshot.ffmpeg, true, Some(("SYSTEM", false)));
+    deferred.ffmpeg = Some(ffmpeg_label);
+    rows.append(&ffmpeg_row);
     rows.append(&about_spec_row(
         "Render API",
         &snapshot.render_api,
@@ -212,19 +284,20 @@ pub(crate) fn about_engine_card(snapshot: &AboutSnapshot) -> gtk::Box {
     about_card("ENGINE", &rows)
 }
 
-pub(crate) fn about_host_card(snapshot: &AboutSnapshot) -> gtk::Box {
+pub(crate) fn about_host_card(
+    snapshot: &AboutSnapshot,
+    deferred: &mut AboutDeferredLabels,
+) -> gtk::Box {
     let grid = gtk::Grid::new();
     grid.add_css_class("okp-about-host-grid");
     grid.set_column_homogeneous(true);
     grid.set_column_spacing(26);
     grid.set_row_spacing(10);
-    grid.attach(
-        &about_spec_row("Linux", &snapshot.os, true, None),
-        0,
-        0,
-        1,
-        1,
-    );
+
+    let (os_row, os_label) = about_spec_row_with_label("Linux", &snapshot.os, true, None);
+    deferred.os = Some(os_label);
+    grid.attach(&os_row, 0, 0, 1, 1);
+
     grid.attach(
         &about_spec_row("GTK", &snapshot.gtk, true, None),
         1,
@@ -239,13 +312,10 @@ pub(crate) fn about_host_card(snapshot: &AboutSnapshot) -> gtk::Box {
         1,
         1,
     );
-    grid.attach(
-        &about_spec_row("Install", &snapshot.install, false, None),
-        1,
-        1,
-        1,
-        1,
-    );
+    let (install_row, install_label) =
+        about_spec_row_with_label("Install", &snapshot.install, false, None);
+    deferred.install = Some(install_label);
+    grid.attach(&install_row, 1, 1, 1, 1);
     about_card("HOST", &grid)
 }
 
@@ -297,6 +367,15 @@ pub(crate) fn about_spec_row(
     mono: bool,
     tag: Option<(&str, bool)>,
 ) -> gtk::Box {
+    about_spec_row_with_label(label, value, mono, tag).0
+}
+
+pub(crate) fn about_spec_row_with_label(
+    label: &str,
+    value: &str,
+    mono: bool,
+    tag: Option<(&str, bool)>,
+) -> (gtk::Box, gtk::Label) {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 14);
     row.add_css_class("okp-about-row");
     row.set_hexpand(true);
@@ -333,20 +412,23 @@ pub(crate) fn about_spec_row(
     }
 
     row.append(&value_wrap);
-    row
+    (row, val)
 }
 
-pub(crate) fn about_footer(snapshot: AboutSnapshot, status_toast: Rc<StatusToast>) -> gtk::Box {
+pub(crate) fn about_footer(
+    snapshot: Rc<RefCell<AboutSnapshot>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
     let footer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     footer.add_css_class("okp-about-footer");
 
     let copy = about_action_button("Copy diagnostics", "edit-copy-symbolic");
-    let copy_snapshot = snapshot.clone();
+    let copy_snapshot = snapshot;
     copy.connect_clicked(move |_| {
         if let Some(display) = gdk::Display::default() {
             display
                 .clipboard()
-                .set_text(&about_diagnostics_text(&copy_snapshot));
+                .set_text(&about_diagnostics_text(&copy_snapshot.borrow()));
         }
         status_toast.show("Diagnostics copied");
     });
@@ -404,7 +486,22 @@ pub(crate) fn about_link_button(label: &str) -> gtk::Button {
 
 pub(crate) fn about_diagnostics_text(snapshot: &AboutSnapshot) -> String {
     format!(
-        "OK Player {} ({})\nBuild {} - current\nLicense {}\n\nEngine\n  libmpv           {}\n  FFmpeg           {}\n  Render API       {}\n  Graphics         {}\n  Hardware decode  {}\n\nHost\n  Linux            {}\n  GTK              {}\n  CPU              {}\n  Install          {}",
+        "OK Player {} ({})
+Build {} - current
+License {}
+
+Engine
+  libmpv           {}
+  FFmpeg           {}
+  Render API       {}
+  Graphics         {}
+  Hardware decode  {}
+
+Host
+  Linux            {}
+  GTK              {}
+  CPU              {}
+  Install          {}",
         snapshot.package_version,
         snapshot.channel,
         snapshot.build,

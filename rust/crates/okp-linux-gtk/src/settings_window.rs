@@ -1,18 +1,203 @@
 use super::*;
 
+#[derive(Clone)]
+pub(crate) struct SettingsPageBuilder {
+    parent: glib::WeakRef<gtk::ApplicationWindow>,
+    window: glib::WeakRef<gtk::Window>,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+    max_body_height: i32,
+}
+
+impl SettingsPageBuilder {
+    pub(crate) fn ensure_page(&self, stack: &gtk::Stack, page: SettingsPage) {
+        if stack.child_by_name(page.id()).is_some() {
+            return;
+        }
+        let Some(parent) = self.parent.upgrade() else {
+            return;
+        };
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+
+        let content = match page {
+            SettingsPage::About => {
+                settings_about_section(Rc::clone(&self.state), Rc::clone(&self.status_toast))
+            }
+            SettingsPage::Appearance => {
+                let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+                page.add_css_class("okp-settings-page");
+                page.append(&settings_appearance_section(
+                    &window,
+                    Rc::clone(&self.state),
+                    Rc::clone(&self.status_toast),
+                ));
+                page
+            }
+            SettingsPage::Advanced => {
+                settings_advanced_page(Rc::clone(&self.state), Rc::clone(&self.status_toast))
+            }
+            SettingsPage::Updates => {
+                settings_updates_page(Rc::clone(&self.state), Rc::clone(&self.status_toast))
+            }
+            SettingsPage::Playback => {
+                let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+                page.add_css_class("okp-settings-page");
+                let playback = settings_section("Playback");
+                playback.append(&settings_resume_row(
+                    Rc::clone(&self.state),
+                    Rc::clone(&self.status_toast),
+                ));
+                playback.append(&settings_auto_advance_row(
+                    Rc::clone(&self.state),
+                    Rc::clone(&self.status_toast),
+                ));
+                playback.append(&settings_repeat_row(
+                    Rc::clone(&self.state),
+                    Rc::clone(&self.status_toast),
+                ));
+                playback.append(&settings_shuffle_row(
+                    Rc::clone(&self.state),
+                    Rc::clone(&self.status_toast),
+                ));
+                playback.append(&settings_gapless_row(
+                    Rc::clone(&self.state),
+                    Rc::clone(&self.status_toast),
+                ));
+                playback.append(&settings_volume_row(Rc::clone(&self.state)));
+                page.append(&playback);
+                page
+            }
+            SettingsPage::Subtitles => settings_subtitles_page(
+                &parent,
+                Rc::clone(&self.state),
+                Rc::clone(&self.status_toast),
+            ),
+            SettingsPage::Video => {
+                let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+                page.add_css_class("okp-settings-page");
+                let video = settings_section("Video");
+                video.append(&settings_hwdec_row(
+                    Rc::clone(&self.state),
+                    Rc::clone(&self.status_toast),
+                ));
+                video.append(&settings_hdr_handling_row());
+                video.append(&settings_video_adjustment_row(
+                    VideoAdjustment::Brightness,
+                    Rc::clone(&self.state),
+                    Rc::clone(&self.status_toast),
+                ));
+                video.append(&settings_video_adjustment_row(
+                    VideoAdjustment::Contrast,
+                    Rc::clone(&self.state),
+                    Rc::clone(&self.status_toast),
+                ));
+                video.append(&settings_video_adjustment_row(
+                    VideoAdjustment::Saturation,
+                    Rc::clone(&self.state),
+                    Rc::clone(&self.status_toast),
+                ));
+                video.append(&settings_video_adjustment_row(
+                    VideoAdjustment::Gamma,
+                    Rc::clone(&self.state),
+                    Rc::clone(&self.status_toast),
+                ));
+                page.append(&video);
+                page.append(&settings_screenshot_section(
+                    &window,
+                    Rc::clone(&self.state),
+                    Rc::clone(&self.status_toast),
+                ));
+                page
+            }
+            SettingsPage::Audio => {
+                settings_audio_page(Rc::clone(&self.state), Rc::clone(&self.status_toast))
+            }
+            SettingsPage::Shortcuts => {
+                let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+                page.add_css_class("okp-settings-page");
+                page.append(&settings_shortcuts_section(
+                    Rc::clone(&self.state),
+                    Rc::clone(&self.status_toast),
+                ));
+                page
+            }
+            SettingsPage::Integration => {
+                let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
+                page.add_css_class("okp-settings-page");
+                page.append(&settings_integration_section(Rc::clone(&self.status_toast)));
+
+                let privacy = settings_section("Privacy");
+                privacy.append(&settings_private_session_row(
+                    Rc::clone(&self.state),
+                    Rc::clone(&self.status_toast),
+                ));
+                privacy.append(&settings_clear_history_row(
+                    &parent,
+                    Rc::clone(&self.state),
+                    Rc::clone(&self.status_toast),
+                ));
+                page.append(&privacy);
+
+                let storage = settings_section("Storage");
+                let settings_path = self
+                    .state
+                    .borrow()
+                    .settings
+                    .path()
+                    .to_string_lossy()
+                    .into_owned();
+                storage.append(&settings_value_row("Settings file", &settings_path));
+                page.append(&storage);
+                page
+            }
+        };
+
+        stack.add_named(
+            &settings_scroller(&content, self.max_body_height),
+            Some(page.id()),
+        );
+    }
+}
+
 pub(crate) fn open_settings_window(
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) {
-    if present_existing_companion_window(&state, CompanionWindowKind::Settings) {
-        return;
-    }
-
+    let started = Instant::now();
     let initial_page = env::var("OKP_OPEN_SETTINGS_PAGE_ON_STARTUP")
         .ok()
         .and_then(|page| normalized_settings_page(&page))
         .unwrap_or(SettingsPage::About);
+    let page_id = initial_page.id();
+
+    if let Some(window) = existing_companion_window(&state, CompanionWindowKind::Settings) {
+        let already_mapped = window.is_mapped();
+        if !already_mapped {
+            begin_companion_map_timing(
+                &state,
+                CompanionWindowKind::Settings,
+                page_id,
+                started,
+                true,
+            );
+        }
+        window.present();
+        if already_mapped {
+            eprintln!(
+                "okp-companion-map: kind=settings page={page_id} warm=true ms={}",
+                started.elapsed().as_millis()
+            );
+        }
+        eprintln!(
+            "okp-companion-present: kind=settings page={page_id} warm=true ms={}",
+            started.elapsed().as_millis()
+        );
+        return;
+    }
+
     let max_window_height = settings_window_height_cap(parent);
     let max_body_height = (max_window_height - SETTINGS_TITLEBAR_HEIGHT).max(1);
     let window = build_companion_window(parent, &state, CompanionWindowKind::Settings, "Settings");
@@ -44,161 +229,17 @@ pub(crate) fn open_settings_window(
     stack.set_hexpand(true);
     stack.set_vexpand(true);
 
-    let about_page = settings_scroller(
-        &settings_about_section(Rc::clone(&state), Rc::clone(&status_toast)),
+    let page_builder = Rc::new(SettingsPageBuilder {
+        parent: parent.downgrade(),
+        window: window.downgrade(),
+        state: Rc::clone(&state),
+        status_toast: Rc::clone(&status_toast),
         max_body_height,
-    );
-    stack.add_named(&about_page, Some("about"));
-
-    let appearance_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    appearance_page.add_css_class("okp-settings-page");
-    appearance_page.append(&settings_appearance_section(
-        &window,
-        Rc::clone(&state),
-        Rc::clone(&status_toast),
-    ));
-    stack.add_named(
-        &settings_scroller(&appearance_page, max_body_height),
-        Some("appearance"),
-    );
-
-    let advanced_page = settings_advanced_page(Rc::clone(&state), Rc::clone(&status_toast));
-    stack.add_named(
-        &settings_scroller(&advanced_page, max_body_height),
-        Some("advanced"),
-    );
-
-    let updates_page = settings_updates_page(Rc::clone(&state), Rc::clone(&status_toast));
-    stack.add_named(
-        &settings_scroller(&updates_page, max_body_height),
-        Some("updates"),
-    );
-
-    let playback_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    playback_page.add_css_class("okp-settings-page");
-    let playback = settings_section("Playback");
-    playback.append(&settings_resume_row(
-        Rc::clone(&state),
-        Rc::clone(&status_toast),
-    ));
-    playback.append(&settings_auto_advance_row(
-        Rc::clone(&state),
-        Rc::clone(&status_toast),
-    ));
-    playback.append(&settings_repeat_row(
-        Rc::clone(&state),
-        Rc::clone(&status_toast),
-    ));
-    playback.append(&settings_shuffle_row(
-        Rc::clone(&state),
-        Rc::clone(&status_toast),
-    ));
-    playback.append(&settings_gapless_row(
-        Rc::clone(&state),
-        Rc::clone(&status_toast),
-    ));
-    playback.append(&settings_volume_row(Rc::clone(&state)));
-    playback_page.append(&playback);
-    stack.add_named(
-        &settings_scroller(&playback_page, max_body_height),
-        Some("playback"),
-    );
-
-    let subtitles_page =
-        settings_subtitles_page(parent, Rc::clone(&state), Rc::clone(&status_toast));
-    stack.add_named(
-        &settings_scroller(&subtitles_page, max_body_height),
-        Some("subtitles"),
-    );
-
-    let video_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    video_page.add_css_class("okp-settings-page");
-    let video = settings_section("Video");
-    video.append(&settings_hwdec_row(
-        Rc::clone(&state),
-        Rc::clone(&status_toast),
-    ));
-    video.append(&settings_hdr_handling_row());
-    video.append(&settings_video_adjustment_row(
-        VideoAdjustment::Brightness,
-        Rc::clone(&state),
-        Rc::clone(&status_toast),
-    ));
-    video.append(&settings_video_adjustment_row(
-        VideoAdjustment::Contrast,
-        Rc::clone(&state),
-        Rc::clone(&status_toast),
-    ));
-    video.append(&settings_video_adjustment_row(
-        VideoAdjustment::Saturation,
-        Rc::clone(&state),
-        Rc::clone(&status_toast),
-    ));
-    video.append(&settings_video_adjustment_row(
-        VideoAdjustment::Gamma,
-        Rc::clone(&state),
-        Rc::clone(&status_toast),
-    ));
-    video_page.append(&video);
-    video_page.append(&settings_screenshot_section(
-        &window,
-        Rc::clone(&state),
-        Rc::clone(&status_toast),
-    ));
-    stack.add_named(
-        &settings_scroller(&video_page, max_body_height),
-        Some("video"),
-    );
-
-    let audio_page = settings_audio_page(Rc::clone(&state), Rc::clone(&status_toast));
-    stack.add_named(
-        &settings_scroller(&audio_page, max_body_height),
-        Some("audio"),
-    );
-
-    let shortcuts_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    shortcuts_page.add_css_class("okp-settings-page");
-    shortcuts_page.append(&settings_shortcuts_section(
-        Rc::clone(&state),
-        Rc::clone(&status_toast),
-    ));
-    stack.add_named(
-        &settings_scroller(&shortcuts_page, max_body_height),
-        Some("shortcuts"),
-    );
-
-    let integration_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    integration_page.add_css_class("okp-settings-page");
-    integration_page.append(&settings_integration_section(Rc::clone(&status_toast)));
-
-    let privacy = settings_section("Privacy");
-    privacy.append(&settings_private_session_row(
-        Rc::clone(&state),
-        Rc::clone(&status_toast),
-    ));
-    privacy.append(&settings_clear_history_row(
-        parent,
-        Rc::clone(&state),
-        Rc::clone(&status_toast),
-    ));
-    integration_page.append(&privacy);
-
-    let storage = settings_section("Storage");
-    let settings_path = state
-        .borrow()
-        .settings
-        .path()
-        .to_string_lossy()
-        .into_owned();
-    storage.append(&settings_value_row("Settings file", &settings_path));
-    integration_page.append(&storage);
-    stack.add_named(
-        &settings_scroller(&integration_page, max_body_height),
-        Some("integration"),
-    );
+    });
+    page_builder.ensure_page(&stack, initial_page);
 
     stack.set_visible_child_name(initial_page.id());
-    let (rail, search) = settings_nav_rail(&stack, initial_page);
+    let (rail, search) = settings_nav_rail(&stack, initial_page, Rc::clone(&page_builder));
     connect_settings_search_shortcut(&window, &search);
     body.append(&settings_nav_rail_frame(rail, max_body_height));
 
@@ -219,7 +260,19 @@ pub(crate) fn open_settings_window(
     window_overlay.add_overlay(&settings_window_controls(&window));
     window.set_child(Some(&window_overlay));
     connect_companion_play_pause_space(&window, Rc::clone(&state));
+
+    begin_companion_map_timing(
+        &state,
+        CompanionWindowKind::Settings,
+        page_id,
+        started,
+        false,
+    );
     window.present();
+    eprintln!(
+        "okp-companion-present: kind=settings page={page_id} warm=false ms={}",
+        started.elapsed().as_millis()
+    );
 }
 
 pub(crate) fn apply_settings_window_theme(window: &gtk::Window, theme: AppearanceTheme) {
@@ -337,6 +390,7 @@ pub(crate) fn settings_nav_rail_frame(
 pub(crate) fn settings_nav_rail(
     stack: &gtk::Stack,
     selected_page: SettingsPage,
+    page_builder: Rc<SettingsPageBuilder>,
 ) -> (gtk::Box, gtk::SearchEntry) {
     let rail = gtk::Box::new(gtk::Orientation::Vertical, 2);
     rail.add_css_class("okp-settings-rail");
@@ -394,9 +448,10 @@ pub(crate) fn settings_nav_rail(
     let activate_buttons = Rc::clone(&buttons);
     let activate_result = Rc::clone(&active_result);
     let activate_search = search.clone();
+    let activate_builder = Rc::clone(&page_builder);
     search.connect_activate(move |_| {
         if let Some(page) = activate_result.get() {
-            navigate_settings_page(page, &activate_stack, &activate_buttons);
+            navigate_settings_page(page, &activate_stack, &activate_buttons, &activate_builder);
             activate_search.set_text("");
         }
     });
@@ -405,9 +460,10 @@ pub(crate) fn settings_nav_rail(
     let click_buttons = Rc::clone(&buttons);
     let click_result = Rc::clone(&active_result);
     let click_search = search.clone();
+    let click_builder = Rc::clone(&page_builder);
     search_result.connect_clicked(move |_| {
         if let Some(page) = click_result.get() {
-            navigate_settings_page(page, &click_stack, &click_buttons);
+            navigate_settings_page(page, &click_stack, &click_buttons, &click_builder);
             click_search.set_text("");
         }
     });
@@ -418,7 +474,7 @@ pub(crate) fn settings_nav_rail(
             settings_nav_icon_for_page(page),
             page == selected_page,
         );
-        connect_settings_nav_row(&row, page, stack, &buttons);
+        connect_settings_nav_row(&row, page, stack, &buttons, &page_builder);
         buttons.borrow_mut().push((page, row.clone()));
         rail.append(&row);
     }
@@ -436,7 +492,7 @@ pub(crate) fn settings_nav_rail(
         SettingsNavIcon::About,
         selected_page == SettingsPage::About,
     );
-    connect_settings_nav_row(&about, SettingsPage::About, stack, &buttons);
+    connect_settings_nav_row(&about, SettingsPage::About, stack, &buttons, &page_builder);
     buttons
         .borrow_mut()
         .push((SettingsPage::About, about.clone()));
@@ -796,11 +852,13 @@ pub(crate) fn connect_settings_nav_row(
     page: SettingsPage,
     stack: &gtk::Stack,
     buttons: &Rc<RefCell<Vec<(SettingsPage, gtk::Button)>>>,
+    page_builder: &Rc<SettingsPageBuilder>,
 ) {
     let stack = stack.clone();
     let buttons = Rc::clone(buttons);
+    let page_builder = Rc::clone(page_builder);
     button.connect_clicked(move |_| {
-        navigate_settings_page(page, &stack, &buttons);
+        navigate_settings_page(page, &stack, &buttons, &page_builder);
     });
 }
 
@@ -808,7 +866,9 @@ pub(crate) fn navigate_settings_page(
     page: SettingsPage,
     stack: &gtk::Stack,
     buttons: &Rc<RefCell<Vec<(SettingsPage, gtk::Button)>>>,
+    page_builder: &SettingsPageBuilder,
 ) {
+    page_builder.ensure_page(stack, page);
     stack.set_visible_child_name(page.id());
     for (row_page, row) in buttons.borrow().iter() {
         if *row_page == page {

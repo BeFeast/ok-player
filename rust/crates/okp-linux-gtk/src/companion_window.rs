@@ -8,12 +8,21 @@ const COMPANION_RESIZE_CORNER: i32 = 12;
 pub(crate) struct CompanionWindows {
     settings: CompanionWindowSlot,
     media_info: CompanionWindowSlot,
+    shutting_down: bool,
 }
 
 #[derive(Default)]
 struct CompanionWindowSlot {
-    window: glib::WeakRef<gtk::Window>,
+    window: Option<gtk::Window>,
     restored_size: Option<window_fit::WindowSize>,
+    pending_map_timing: Cell<Option<CompanionMapTiming>>,
+}
+
+#[derive(Clone, Copy)]
+struct CompanionMapTiming {
+    started: Instant,
+    page: &'static str,
+    warm: bool,
 }
 
 impl CompanionWindows {
@@ -43,8 +52,7 @@ pub(crate) fn present_existing_companion_window(
     state: &Rc<RefCell<PlayerState>>,
     kind: CompanionWindowKind,
 ) -> bool {
-    let window = state.borrow().companion_windows.slot(kind).window.upgrade();
-    let Some(window) = window else {
+    let Some(window) = existing_companion_window(state, kind) else {
         return false;
     };
 
@@ -56,6 +64,32 @@ pub(crate) fn present_existing_companion_window(
         );
     }
     true
+}
+
+pub(crate) fn existing_companion_window(
+    state: &Rc<RefCell<PlayerState>>,
+    kind: CompanionWindowKind,
+) -> Option<gtk::Window> {
+    state.borrow().companion_windows.slot(kind).window.clone()
+}
+
+pub(crate) fn begin_companion_map_timing(
+    state: &Rc<RefCell<PlayerState>>,
+    kind: CompanionWindowKind,
+    page: &'static str,
+    started: Instant,
+    warm: bool,
+) {
+    state
+        .borrow()
+        .companion_windows
+        .slot(kind)
+        .pending_map_timing
+        .set(Some(CompanionMapTiming {
+            started,
+            page,
+            warm,
+        }));
 }
 
 pub(crate) fn build_companion_window(
@@ -96,12 +130,26 @@ pub(crate) fn build_companion_window(
         move_resize_player_window_on_x11(window, position, size);
     });
 
-    state
-        .borrow_mut()
-        .companion_windows
-        .slot_mut(kind)
-        .window
-        .set(Some(&window));
+    let map_state = Rc::clone(state);
+    window.connect_map(move |_| {
+        let timing = map_state
+            .borrow()
+            .companion_windows
+            .slot(kind)
+            .pending_map_timing
+            .take();
+        if let Some(timing) = timing {
+            eprintln!(
+                "okp-companion-map: kind={} page={} warm={} ms={}",
+                companion_window_name(kind),
+                timing.page,
+                timing.warm,
+                timing.started.elapsed().as_millis()
+            );
+        }
+    });
+
+    state.borrow_mut().companion_windows.slot_mut(kind).window = Some(window.clone());
 
     let close_state = Rc::clone(state);
     window.connect_close_request(move |window| {
@@ -115,20 +163,25 @@ pub(crate) fn build_companion_window(
                 height
             );
         }
-        if width > 0 && height > 0 {
+        let retain = {
             let mut state = close_state.borrow_mut();
+            let shutting_down = state.companion_windows.shutting_down;
             let slot = state.companion_windows.slot_mut(kind);
-            slot.restored_size = Some(window_fit::WindowSize { width, height });
-            slot.window.set(None);
+            if width > 0 && height > 0 {
+                slot.restored_size = Some(window_fit::WindowSize { width, height });
+            }
+            let retain = policy.retain_on_close && !shutting_down;
+            if !retain {
+                slot.window = None;
+            }
+            retain
+        };
+        if retain {
+            window.set_visible(false);
+            glib::Propagation::Stop
         } else {
-            close_state
-                .borrow_mut()
-                .companion_windows
-                .slot_mut(kind)
-                .window
-                .set(None);
+            glib::Propagation::Proceed
         }
-        glib::Propagation::Proceed
     });
 
     if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
@@ -149,10 +202,11 @@ pub(crate) fn build_companion_window(
 
 pub(crate) fn close_companion_windows(state: &Rc<RefCell<PlayerState>>) {
     let windows = {
-        let state = state.borrow();
+        let mut state = state.borrow_mut();
+        state.companion_windows.shutting_down = true;
         [
-            state.companion_windows.settings.window.upgrade(),
-            state.companion_windows.media_info.window.upgrade(),
+            state.companion_windows.settings.window.take(),
+            state.companion_windows.media_info.window.take(),
         ]
     };
     for window in windows.into_iter().flatten() {
