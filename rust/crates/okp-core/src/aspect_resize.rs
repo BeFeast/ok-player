@@ -348,14 +348,23 @@ pub struct AspectResize {
 }
 
 impl AspectResize {
-    /// Begin a drag from `edge` at the current client size `start`. When `shift`
-    /// is already held the aspect locks immediately to `start`'s proportions.
+    /// Begin a drag from `edge` at the current client size `start` and the
+    /// pointer position `start_pointer` in the stable drag-origin coordinate
+    /// space. When `shift` is already held the aspect locks immediately to
+    /// `start`'s proportions.
+    ///
+    /// Subsequent calls to [`resolve`](Self::resolve) must pass the current
+    /// pointer position in the *same* coordinate space; the core differences it
+    /// from `start_pointer`. This keeps the resize origin on the original drag
+    /// event and prevents compositor configure sizes or rebasing widget
+    /// allocations from feeding back into the geometry.
     pub fn begin(
         edge: ResizeEdge,
         start: WindowSize,
         min: WindowSize,
         max: WindowSize,
         shift: bool,
+        start_pointer: PointerDelta,
     ) -> Self {
         let mut session = Self {
             edge,
@@ -363,14 +372,14 @@ impl AspectResize {
             max,
             locked_aspect: None,
             origin: ResizeFrame {
-                pointer: PointerDelta::ZERO,
+                pointer: start_pointer,
                 geometry: ResizeGeometry {
                     size: sane_size(start),
                     position_delta: WindowPoint { x: 0, y: 0 },
                 },
             },
             last: ResizeFrame {
-                pointer: PointerDelta::ZERO,
+                pointer: start_pointer,
                 geometry: ResizeGeometry {
                     size: sane_size(start),
                     position_delta: WindowPoint { x: 0, y: 0 },
@@ -777,6 +786,7 @@ mod tests {
             NO_MIN,
             OPEN,
             false,
+            PointerDelta::ZERO,
         );
         assert!(!session.is_locked());
         assert_eq!(session.resolve(pointer(-640.0, 279.0)).size, size(640, 999));
@@ -785,8 +795,14 @@ mod tests {
 
     #[test]
     fn session_locked_from_start_holds_aspect() {
-        let mut session =
-            AspectResize::begin(ResizeEdge::Right, size(1280, 720), NO_MIN, OPEN, true);
+        let mut session = AspectResize::begin(
+            ResizeEdge::Right,
+            size(1280, 720),
+            NO_MIN,
+            OPEN,
+            true,
+            PointerDelta::ZERO,
+        );
         assert!(session.is_locked());
         assert_eq!(session.resolve(pointer(320.0, 0.0)).size, size(1600, 900));
     }
@@ -801,6 +817,7 @@ mod tests {
             NO_MIN,
             OPEN,
             false,
+            PointerDelta::ZERO,
         );
         let freeform = session.resolve(pointer(-280.0, -220.0)); // 2:1 now on screen
         assert_eq!(freeform.size, size(1000, 500));
@@ -814,8 +831,14 @@ mod tests {
 
     #[test]
     fn shift_released_mid_drag_returns_to_freeform_and_keeps_size() {
-        let mut session =
-            AspectResize::begin(ResizeEdge::BottomRight, size(1280, 720), NO_MIN, OPEN, true);
+        let mut session = AspectResize::begin(
+            ResizeEdge::BottomRight,
+            size(1280, 720),
+            NO_MIN,
+            OPEN,
+            true,
+            PointerDelta::ZERO,
+        );
         let locked = session.resolve(pointer(320.0, 0.0));
         assert_eq!(locked.size, size(1600, 900));
         session.set_shift(false);
@@ -826,8 +849,14 @@ mod tests {
 
     #[test]
     fn shift_toggled_twice_relocks_to_the_latest_shape() {
-        let mut session =
-            AspectResize::begin(ResizeEdge::BottomRight, size(1280, 720), NO_MIN, OPEN, true);
+        let mut session = AspectResize::begin(
+            ResizeEdge::BottomRight,
+            size(1280, 720),
+            NO_MIN,
+            OPEN,
+            true,
+            PointerDelta::ZERO,
+        );
         session.set_shift(false);
         let reshaped = session.resolve(pointer(-480.0, 80.0)); // freeform to square
         assert_eq!(reshaped.size, size(800, 800));
@@ -852,7 +881,14 @@ mod tests {
             (ResizeEdge::BottomRight, pointer(320.0, 180.0), (0, 0)),
         ];
         for (edge, delta, position) in cases {
-            let mut session = AspectResize::begin(edge, size(1280, 720), NO_MIN, OPEN, true);
+            let mut session = AspectResize::begin(
+                edge,
+                size(1280, 720),
+                NO_MIN,
+                OPEN,
+                true,
+                PointerDelta::ZERO,
+            );
             let resolved = session.resolve(delta);
             assert_eq!(resolved.size, size(1600, 900), "{edge:?}");
             assert_eq!(
@@ -868,8 +904,14 @@ mod tests {
 
     #[test]
     fn inward_corner_motion_uses_signed_delta_without_reversing() {
-        let mut session =
-            AspectResize::begin(ResizeEdge::TopLeft, size(1600, 900), NO_MIN, OPEN, true);
+        let mut session = AspectResize::begin(
+            ResizeEdge::TopLeft,
+            size(1600, 900),
+            NO_MIN,
+            OPEN,
+            true,
+            PointerDelta::ZERO,
+        );
         let resolved = session.resolve(pointer(400.0, 10.0));
         assert_eq!(resolved.size, size(1200, 675));
         assert_eq!(resolved.position_delta, WindowPoint { x: 400, y: 225 });
@@ -877,16 +919,28 @@ mod tests {
 
     #[test]
     fn fractional_pointer_offsets_round_once_in_logical_pixels() {
-        let mut session =
-            AspectResize::begin(ResizeEdge::BottomRight, size(1280, 720), NO_MIN, OPEN, true);
+        let mut session = AspectResize::begin(
+            ResizeEdge::BottomRight,
+            size(1280, 720),
+            NO_MIN,
+            OPEN,
+            true,
+            PointerDelta::ZERO,
+        );
         assert_eq!(session.resolve(pointer(319.5, 179.5)).size, size(1600, 900));
     }
 
     #[test]
     fn post_rounding_result_never_crosses_workarea_ceiling() {
         let max = size(1000, 562);
-        let mut session =
-            AspectResize::begin(ResizeEdge::BottomRight, size(800, 450), NO_MIN, max, true);
+        let mut session = AspectResize::begin(
+            ResizeEdge::BottomRight,
+            size(800, 450),
+            NO_MIN,
+            max,
+            true,
+            PointerDelta::ZERO,
+        );
         let resolved = session.resolve(pointer(10_000.0, 10_000.0)).size;
         assert!(resolved.width <= max.width && resolved.height <= max.height);
     }
@@ -909,5 +963,36 @@ mod tests {
             client_max_for_anchor(ResizeEdge::TopLeft, start, position, work_area),
             size(1200, 650)
         );
+    }
+
+    #[test]
+    fn stable_surface_positions_do_not_snap_back_across_direction_changes() {
+        // Regression for the Wayland snap-back/oscillation reported in issue
+        // #401: East and SouthEast must track net pointer travel in one stable
+        // surface coordinate space instead of treating widget-relative samples
+        // as though every configure still shared the original allocation.
+        for edge in [ResizeEdge::Right, ResizeEdge::BottomRight] {
+            let mut session = AspectResize::begin(
+                edge,
+                size(1600, 900),
+                NO_MIN,
+                OPEN,
+                true,
+                pointer(400.0, 300.0),
+            );
+
+            // These are absolute surface positions around a non-zero drag
+            // origin, not per-update deltas. Alternating direction changes must
+            // follow the pointer without rebasing or snapping to the start.
+            let a = session.resolve(pointer(500.0, 300.0)).size;
+            let b = session.resolve(pointer(450.0, 300.0)).size;
+            let c = session.resolve(pointer(550.0, 300.0)).size;
+            let d = session.resolve(pointer(350.0, 300.0)).size;
+
+            assert_eq!(a, size(1700, 956), "{edge:?} outward");
+            assert_eq!(b, size(1650, 928), "{edge:?} inward");
+            assert_eq!(c, size(1750, 984), "{edge:?} outward again");
+            assert_eq!(d, size(1550, 872), "{edge:?} past origin inward");
+        }
     }
 }

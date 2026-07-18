@@ -2327,10 +2327,15 @@ fn player_shift_resize_owns_pointer_geometry_without_configure_feedback() {
         "update_window.set_default_size(",
         "move_resize_player_window_on_x11(",
         "current_pointer_position_on_x11(",
+        "current_drag_pointer(",
+        "event.position()?",
+        "move |gesture, _offset_x, _offset_y|",
     ] {
         assert!(window.contains(required), "missing resize seam: {required}");
     }
     assert!(!window.contains("size.set_size(resolved.width, resolved.height)"));
+    assert!(!window.contains("x: offset_x"));
+    assert!(!window.contains("y: offset_y"));
     for edge in [
         "gdk::SurfaceEdge::North",
         "gdk::SurfaceEdge::South",

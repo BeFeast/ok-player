@@ -1815,7 +1815,6 @@ pub(crate) struct AspectResizeState {
     shift_held: Rc<Cell<bool>>,
     work_area: Rc<Cell<Option<window_fit::WindowRect>>>,
     start_position_x11: Rc<Cell<Option<window_fit::WindowPoint>>>,
-    start_pointer_x11: Rc<Cell<Option<window_fit::WindowPoint>>>,
     last_requested: Rc<Cell<Option<window_fit::WindowSize>>>,
 }
 
@@ -1826,7 +1825,6 @@ impl AspectResizeState {
             shift_held: Rc::new(Cell::new(false)),
             work_area: Rc::new(Cell::new(None)),
             start_position_x11: Rc::new(Cell::new(None)),
-            start_pointer_x11: Rc::new(Cell::new(None)),
             last_requested: Rc::new(Cell::new(None)),
         }
     }
@@ -1932,7 +1930,6 @@ pub(crate) fn connect_aspect_resize_shift(
 pub(crate) fn clear_aspect_resize_session(state: &AspectResizeState) {
     state.session.borrow_mut().take();
     state.start_position_x11.set(None);
-    state.start_pointer_x11.set(None);
     state.last_requested.set(None);
 }
 
@@ -2049,6 +2046,31 @@ pub(crate) fn build_player_resize_handles(
         .collect()
 }
 
+/// The current pointer position in the stable drag-origin coordinate space.
+/// On X11 this is the root-coordinate pointer position so opposite-edge/corner
+/// anchoring can be computed; on Wayland it is the GDK surface-event position of
+/// the active drag event, which stays in the same toplevel surface and is not
+/// rebased by the resize handle's allocation.
+fn current_drag_pointer(
+    gesture: &gtk::GestureDrag,
+    window: &gtk::ApplicationWindow,
+) -> Option<aspect_resize::PointerDelta> {
+    current_pointer_position_on_x11(window)
+        .map(|p| aspect_resize::PointerDelta {
+            x: f64::from(p.x),
+            y: f64::from(p.y),
+        })
+        .or_else(|| current_event_surface_position(gesture))
+}
+
+fn current_event_surface_position(
+    gesture: &gtk::GestureDrag,
+) -> Option<aspect_resize::PointerDelta> {
+    let event = gesture.current_event()?;
+    let (x, y) = event.position()?;
+    Some(aspect_resize::PointerDelta { x, y })
+}
+
 pub(crate) fn connect_player_window_resize(
     widget: &gtk::Box,
     window: &gtk::ApplicationWindow,
@@ -2085,6 +2107,12 @@ pub(crate) fn connect_player_window_resize(
             start_position,
             current_resize_work_area(&resize_window, &resize_state),
         );
+        let Some(start_pointer) = current_drag_pointer(gesture, &resize_window) else {
+            if debug_resize {
+                eprintln!("resize drag begin edge={edge:?}: no stable pointer origin, aborting");
+            }
+            return;
+        };
         resize_state
             .session
             .replace(Some(aspect_resize::AspectResize::begin(
@@ -2093,47 +2121,37 @@ pub(crate) fn connect_player_window_resize(
                 MIN_RESIZE_CLIENT,
                 max,
                 resize_state.shift_held.get(),
+                start_pointer,
             )));
         resize_state.start_position_x11.set(start_position);
-        resize_state
-            .start_pointer_x11
-            .set(current_pointer_position_on_x11(&resize_window));
         resize_state.last_requested.set(Some(start_size));
         gesture.set_state(gtk::EventSequenceState::Claimed);
         if debug_resize {
             eprintln!(
-                "resize session begin edge={edge:?} locked={} start={}x{} max={}x{} x11_anchor={}",
+                "resize session begin edge={edge:?} locked={} start={}x{} max={}x{} x11_anchor={} pointer=({:.1},{:.1})",
                 resize_state.shift_held.get(),
                 start_size.width,
                 start_size.height,
                 max.width,
                 max.height,
-                start_position.is_some()
+                start_position.is_some(),
+                start_pointer.x,
+                start_pointer.y
             );
         }
     });
 
     let update_window = window.clone();
     let update_state = aspect_resize_state.clone();
-    gesture.connect_drag_update(move |gesture, offset_x, offset_y| {
+    gesture.connect_drag_update(move |gesture, _offset_x, _offset_y| {
         apply_shift(
             &update_state,
             gesture
                 .current_event_state()
                 .contains(gdk::ModifierType::SHIFT_MASK),
         );
-        let pointer = match (
-            update_state.start_pointer_x11.get(),
-            current_pointer_position_on_x11(&update_window),
-        ) {
-            (Some(start), Some(current)) => aspect_resize::PointerDelta {
-                x: f64::from(current.x.saturating_sub(start.x)),
-                y: f64::from(current.y.saturating_sub(start.y)),
-            },
-            _ => aspect_resize::PointerDelta {
-                x: offset_x,
-                y: offset_y,
-            },
+        let Some(pointer) = current_drag_pointer(gesture, &update_window) else {
+            return;
         };
         let Some(resolved) = update_state
             .session
