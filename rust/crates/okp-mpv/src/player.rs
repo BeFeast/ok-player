@@ -1048,8 +1048,13 @@ impl Mpv {
         }
     }
 
-    #[cfg(test)]
-    fn start_event_pump_without_audio_devices(&mut self) {
+    /// Start the event pump without observing desktop audio-device properties.
+    ///
+    /// Headless acceptance sessions have no desktop audio service. Asking
+    /// libmpv to enumerate `audio-device-list` there can enter PipeWire setup
+    /// and teardown while the first window is still being realized. Normal
+    /// player sessions use [`Mpv::start_event_pump`] and keep device discovery.
+    pub fn start_event_pump_without_audio_devices(&mut self) {
         if self.pump.is_none() {
             self.pump = Some(EventPump::start_without_audio_devices(self.handle));
         }

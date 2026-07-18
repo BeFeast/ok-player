@@ -486,6 +486,7 @@ if [[ "$small_width" != "320" || "$small_height" != "180" ]]; then
 fi
 for expected in \
   "mpv render context initialized before source load" \
+  "headless fit smoke: audio-device observation disabled" \
   "window fit request: video=320x180" \
   "window fit settled: client=320x180"; do
   if ! wait_for_log "$OUT_DIR/fit-small-app.log" "$expected"; then

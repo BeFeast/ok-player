@@ -200,6 +200,17 @@ fn wayland_display_resource(_display: &gdk::Display) -> Option<NativeWaylandDisp
     None
 }
 
+fn start_event_pump_for_session(mpv: &mut Mpv) {
+    let headless_fit_session = std::env::var_os("OKP_MAIN_WINDOW_FIT_ONLY")
+        .is_some_and(|value| value == std::ffi::OsStr::new("1"));
+    if headless_fit_session {
+        eprintln!("headless fit smoke: audio-device observation disabled");
+        mpv.start_event_pump_without_audio_devices();
+    } else {
+        mpv.start_event_pump();
+    }
+}
+
 pub(crate) fn connect_mpv(
     video_host: &VideoHost,
     state: Rc<RefCell<PlayerState>>,
@@ -345,7 +356,7 @@ fn connect_native_mpv(
             return;
         }
 
-        mpv.start_event_pump();
+        start_event_pump_for_session(&mut mpv);
         {
             let mut state = realize_state.borrow_mut();
             state.native_video_plane = Some(plane);
@@ -477,7 +488,7 @@ fn connect_gtk_mpv(
         // Start the background event pump: from here on the shell reads playback
         // state from its observed snapshot rather than polling mpv from this
         // (GLib main-context) thread, so the tripwire armed above stays green.
-        mpv.start_event_pump();
+        start_event_pump_for_session(&mut mpv);
 
         realize_state.borrow_mut().mpv = Some(mpv);
         schedule_audio_device_restore(&realize_state);

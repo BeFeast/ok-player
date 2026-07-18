@@ -160,7 +160,6 @@ impl EventPump {
         Self::start_with_audio_devices(handle, true)
     }
 
-    #[cfg(test)]
     pub(crate) fn start_without_audio_devices(handle: NonNull<ffi::mpv_handle>) -> Self {
         Self::start_with_audio_devices(handle, false)
     }
