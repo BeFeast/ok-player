@@ -668,7 +668,15 @@ fn settings_updates_has_one_dedicated_content_owner() {
     assert_eq!(updates_page.matches("settings_updates_section").count(), 1);
 
     let window = include_str!("settings_window.rs");
-    assert!(window.contains("Some(\"updates\")"));
+    let updates_builder = window
+        .split_once("SettingsPage::Updates =>")
+        .expect("lazy Updates page builder")
+        .1
+        .split_once("SettingsPage::Playback =>")
+        .expect("Playback builder follows Updates")
+        .0;
+    assert_eq!(updates_builder.matches("settings_updates_page(").count(), 1);
+    assert!(window.contains("Some(page.id())"));
     assert!(window.contains("SettingsNavIcon::Updates"));
     assert!(window.contains("search_settings(entry.text().as_str())"));
 }
@@ -918,9 +926,21 @@ fn long_lived_surfaces_share_non_modal_single_instance_window_semantics() {
     assert!(!helper.contains(".transient_for("));
     assert!(helper.contains("present_existing_companion_window"));
     assert!(helper.contains("add_companion_window_resize_zones"));
+    assert!(helper.contains("policy.retain_on_close"));
+    assert!(helper.contains("glib::Propagation::Stop"));
+    assert!(helper.contains("shutting_down"));
+    assert!(helper.contains("settings.window.take()"));
+    let slot = helper
+        .split_once("struct CompanionWindowSlot {")
+        .expect("companion window slot")
+        .1
+        .split_once("struct CompanionMapTiming")
+        .expect("map timing follows companion window slot")
+        .0;
+    assert!(slot.contains("window: Option<gtk::Window>"));
     assert!(settings.contains("CompanionWindowKind::Settings"));
     assert!(media_info.contains("CompanionWindowKind::MediaInfo"));
-    assert!(settings.contains("present_existing_companion_window"));
+    assert!(settings.contains("existing_companion_window"));
     assert!(media_info.contains("present_existing_companion_window"));
 }
 
@@ -4273,4 +4293,48 @@ fn settings_and_about_open_path_does_not_block_on_metadata_probes() {
         updates_after_spawn.contains("linux_update_install_status"),
         "updates.rs must probe install status in a background thread"
     );
+}
+
+#[test]
+fn settings_first_map_builds_only_the_requested_page() {
+    let source = include_str!("settings_window.rs");
+    let open_path = source
+        .split_once("pub(crate) fn open_settings_window(")
+        .expect("Settings entry point")
+        .1
+        .split_once("pub(crate) fn apply_settings_window_theme(")
+        .expect("theme helper follows Settings entry point")
+        .0;
+
+    assert_eq!(
+        open_path
+            .matches("ensure_page(&stack, initial_page)")
+            .count(),
+        1
+    );
+    for eager_page_constructor in [
+        "settings_about_section(",
+        "settings_appearance_section(",
+        "settings_advanced_page(",
+        "settings_updates_page(",
+        "settings_subtitles_page(",
+        "settings_audio_page(",
+        "settings_shortcuts_section(",
+        "settings_integration_section(",
+    ] {
+        assert!(
+            !open_path.contains(eager_page_constructor),
+            "the synchronous window entry point must not eagerly call {eager_page_constructor}"
+        );
+    }
+
+    let builder = source
+        .split_once("impl SettingsPageBuilder {")
+        .expect("lazy Settings page builder")
+        .1
+        .split_once("pub(crate) fn open_settings_window(")
+        .expect("entry point follows lazy page builder")
+        .0;
+    assert!(builder.contains("stack.child_by_name(page.id()).is_some()"));
+    assert!(builder.contains("Some(page.id())"));
 }
