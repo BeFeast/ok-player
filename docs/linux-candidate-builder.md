@@ -125,7 +125,10 @@ The bus supervisor also reaps any orphan that retains the isolated bus address.
 Xfwm is started once and must publish ownership on
 both X roots before the player launches; starting one Xfwm process per screen is
 invalid because each process probes every screen and the two instances race for
-the same roots. Xvfb uses `-noreset` so removing the final client cannot enter
+the same roots. The Xvfb process keeps GLX enabled under the explicitly pinned
+Mesa software vendor; disabling GLX can leave GTK/libmpv's startup XID unmapped
+at `1x1`, while allowing the host NVIDIA vendor can crash Xvfb. Xvfb uses
+`-noreset` so removing the final client cannot enter
 the multi-screen reset path, and the isolated Xvfb supervisor explicitly reaps
 the disposable server instead of relying on that host-sensitive shutdown path.
 A failed run aborts the series and the candidate without accepting a stale

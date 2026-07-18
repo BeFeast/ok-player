@@ -33,7 +33,7 @@ if [[ "${OKP_MAIN_WINDOW_FIT_ONLY:-0}" != "1" ]]; then
     __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
     LIBGL_ALWAYS_SOFTWARE=1 \
     "$ISOLATED_XVFB_SESSION" "$OUT_DIR/xvfb-evidence.txt" "$OUT_DIR/xvfb.log" \
-    '-screen 0 1280x900x24 -nolisten tcp -noreset -extension GLX' \
+    '-screen 0 1280x900x24 -nolisten tcp -noreset' \
     "$ISOLATED_DBUS_SESSION" "$OUT_DIR/session-evidence.txt" \
     bash -s -- "$BINARY" "$OUT_DIR" "$IDLE_OSC_ASSERT" >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
 set -euo pipefail
@@ -239,7 +239,7 @@ if ! env XDG_CACHE_HOME="$OUT_DIR/fit-cache" XDG_RUNTIME_DIR="$OUT_DIR/fit-runti
   LIBGL_ALWAYS_SOFTWARE=1 \
   "$ISOLATED_XVFB_SESSION" "$OUT_DIR/fit-xvfb-evidence.txt" \
   "$OUT_DIR/window-fit-xvfb.log" \
-  '-screen 0 1280x900x24 -screen 1 1024x768x24 -nolisten tcp -noreset -extension GLX' \
+  '-screen 0 1280x900x24 -screen 1 1024x768x24 -nolisten tcp -noreset' \
   "$ISOLATED_DBUS_SESSION" "$OUT_DIR/fit-session-evidence.txt" \
   bash -s -- "$BINARY" "$OUT_DIR" "$X11_WINDOW_WAITER" \
   "$X11_APP_CLEAR_WAITER" "$DBUS_NAME_CLEAR_WAITER" \

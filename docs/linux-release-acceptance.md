@@ -80,7 +80,9 @@ The wrapper proves the fresh bus was reachable during the command and
 unreachable after teardown, and reaps any orphan retaining that bus address;
 the Xvfb supervisor records readiness, confirms the
 server remained alive through the command, explicitly reaps it, and removes its
-private display state before returning. If any run fails, the command exits
+private display state before returning. GLX remains enabled under the pinned
+Mesa software vendor so the GTK/libmpv render surface must map without loading
+the host NVIDIA EGL stack. If any run fails, the command exits
 non-zero and the next attempt starts a new series from zero.
 This Xvfb evidence does not prove live GNOME chooser, drag/drop, clipboard,
 portal, compositor, or focus behavior.
