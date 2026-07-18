@@ -21,6 +21,31 @@ for run in 1 2 3; do
     echo "Window-fit consecutive series failed at run $run; restart the series from zero." >&2
     exit 1
   fi
+  for required in \
+    'session_bus_ready=true' \
+    'session_bus_teardown=clean' \
+    'command_status=0' \
+    'status=pass'; do
+    if ! rg -Fx -q "$required" "$run_dir/fit-session-evidence.txt"; then
+      printf 'failed_run=%s\nmissing_session_evidence=%s\nstatus=fail\n' \
+        "$run" "$required" >>"$OUT_DIR/series-evidence.txt"
+      echo "Window-fit run $run did not prove isolated D-Bus teardown: $required" >&2
+      exit 1
+    fi
+  done
+  for required in \
+    'xvfb_ready=true' \
+    'xvfb_alive_before_teardown=true' \
+    'xvfb_teardown=clean' \
+    'command_status=0' \
+    'status=pass'; do
+    if ! rg -Fx -q "$required" "$run_dir/fit-xvfb-evidence.txt"; then
+      printf 'failed_run=%s\nmissing_xvfb_evidence=%s\nstatus=fail\n' \
+        "$run" "$required" >>"$OUT_DIR/series-evidence.txt"
+      echo "Window-fit run $run did not prove isolated Xvfb teardown: $required" >&2
+      exit 1
+    fi
+  done
   {
     printf 'run=%s begin\n' "$run"
     sed "s/^/run=${run} /" "$run_dir/fit-evidence.txt"

@@ -156,3 +156,25 @@ The Rust workspace regression exercises the same A/B ordering with a fake
 rolling release and is part of normal CI. Live acceptance still records the
 real GitHub run IDs, summaries, asset hashes, and updater observation because a
 local fixture cannot attest the hosted release surface.
+
+## Non-publishing window-fit lifecycle gate
+
+Before allowing the scheduler to build a candidate containing a headless
+lifecycle repair, run the fit-only gate three separate times from clean output
+directories on the exact proposed commit:
+
+```bash
+for invocation in 1 2 3; do
+  OKP_WINDOW_FIT_SOURCE_SHA="$(git rev-parse HEAD)" \
+    ./scripts/run-linux-window-fit-series.sh \
+    ./rust/target/release/okp-linux-gtk \
+    "artifacts/window-fit-invocation-${invocation}"
+done
+```
+
+This command builds or publishes nothing. Every invocation contains three
+independent Xvfb/D-Bus sessions and must record viewable non-`1x1` geometry for
+all four cases, one Xfwm owner across both roots, released GTK/MPRIS names, a
+ready session bus, `command_status=0`, and `session_bus_teardown=clean`. A
+failed invocation invalidates the consecutive proof; restart from invocation
+one after fixing the cause.
