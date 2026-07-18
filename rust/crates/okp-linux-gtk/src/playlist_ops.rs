@@ -348,7 +348,7 @@ pub(crate) fn load_new_source_with_global_subtitle_scale(
     global_scale: f64,
     load: impl FnOnce(&Mpv) -> Result<(), okp_mpv::MpvError>,
 ) -> Result<(), okp_mpv::MpvError> {
-    if let Err(error) = mpv.set_subtitle_scale(global_scale) {
+    if let Err(error) = mpv.set_subtitle_scale_if_changed(global_scale) {
         eprintln!("Failed to reset subtitle size for new media: {error}");
     }
     load(mpv)

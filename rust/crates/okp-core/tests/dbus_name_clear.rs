@@ -44,7 +44,7 @@ fn assert_success(output: &Output) {
 
 struct NameFixture {
     root: PathBuf,
-    fake_bin: PathBuf,
+    fake_gdbus: PathBuf,
     scenario: &'static str,
     script: PathBuf,
 }
@@ -54,13 +54,14 @@ impl NameFixture {
         let root = root.to_path_buf();
         let fake_bin = root.join("bin");
         fs::create_dir_all(&fake_bin).expect("fake bin should be created");
-        write_executable(&fake_bin.join("gdbus"), FAKE_GDBUS);
+        let fake_gdbus = fake_bin.join("gdbus");
+        write_executable(&fake_gdbus, FAKE_GDBUS);
         let script = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../..")
             .join("scripts/wait-for-dbus-names-clear.sh");
         Self {
             root,
-            fake_bin,
+            fake_gdbus,
             scenario,
             script,
         }
@@ -75,14 +76,7 @@ impl NameFixture {
             .env("FAKE_SCENARIO", self.scenario)
             .env("OKP_DBUS_NAME_CLEAR_ATTEMPTS", attempts.to_string())
             .env("OKP_DBUS_NAME_CLEAR_INTERVAL", "0")
-            .env(
-                "PATH",
-                format!(
-                    "{}:{}",
-                    self.fake_bin.display(),
-                    std::env::var("PATH").expect("PATH should be set")
-                ),
-            )
+            .env("OKP_DBUS_NAME_CLEAR_GDBUS", &self.fake_gdbus)
             .output()
             .expect("D-Bus name waiter fixture should run")
     }

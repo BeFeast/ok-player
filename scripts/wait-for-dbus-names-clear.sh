@@ -10,12 +10,13 @@ shift
 NAMES=("$@")
 ATTEMPTS="${OKP_DBUS_NAME_CLEAR_ATTEMPTS:-40}"
 INTERVAL="${OKP_DBUS_NAME_CLEAR_INTERVAL:-0.1}"
+GDBUS="${OKP_DBUS_NAME_CLEAR_GDBUS:-gdbus}"
 
 : >"$DIAGNOSTICS_FILE"
 
 for attempt in $(seq 1 "$ATTEMPTS"); do
   list_status=0
-  list_output="$(OKP_DBUS_NAME_CLEAR_ATTEMPT="$attempt" gdbus call --session \
+  list_output="$(OKP_DBUS_NAME_CLEAR_ATTEMPT="$attempt" "$GDBUS" call --session \
     --dest org.freedesktop.DBus \
     --object-path /org/freedesktop/DBus \
     --method org.freedesktop.DBus.ListNames 2>&1)" || list_status=$?
@@ -25,7 +26,7 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
 
   if (( list_status == 0 )); then
     for name in "${NAMES[@]}"; do
-      if rg -F -q -- "$name" <<<"$list_output"; then
+      if [[ "$list_output" == *"$name"* ]]; then
         names_present=true
         printf 'name=%s present=true\n' "$name" >>"$DIAGNOSTICS_FILE"
       else
