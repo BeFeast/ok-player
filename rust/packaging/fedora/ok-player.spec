@@ -30,6 +30,7 @@ BuildRequires:  desktop-file-utils
 BuildRequires:  appstream
 BuildRequires:  zstd
 BuildRequires:  jq
+BuildRequires:  dbus-daemon
 
 Requires:       mpv-libs%{?_isa}
 Requires:       xdg-utils
