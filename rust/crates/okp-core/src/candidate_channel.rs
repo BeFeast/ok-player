@@ -245,12 +245,25 @@ pub struct CandidateUpdate {
 
 /// Installed package lane that must apply a selected Linux candidate. The
 /// package build stamps this identity into the binary so a Debian install never
-/// asks Velopack to decide whether its `.deb` update exists, and an AppImage
-/// install never falls through to a privileged Debian installer.
+/// asks Velopack to decide whether its `.deb` update exists, an AppImage install
+/// never falls through to a privileged Debian installer, and a native system
+/// package never receives an artifact from either application-managed lane.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CandidateInstallLane {
     Debian,
     AppImage,
+    SystemPackage,
+}
+
+impl CandidateInstallLane {
+    pub fn from_package_kind(package_kind: &str) -> Option<Self> {
+        match package_kind {
+            "appimage" => Some(Self::AppImage),
+            "deb" | "development" => Some(Self::Debian),
+            "rpm" => Some(Self::SystemPackage),
+            _ => None,
+        }
+    }
 }
 
 /// Velopack's result after the accepted candidate manifest has already proved
@@ -276,6 +289,7 @@ pub enum CandidateUpdateRoute {
 /// A package-lane result that contradicts the accepted candidate pointer.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CandidateUpdateRouteError {
+    SystemPackageManaged,
     MissingAppImageCheck,
     AppImageIdentityMismatch,
     AppImageReportedNoUpdate,
@@ -285,6 +299,9 @@ pub enum CandidateUpdateRouteError {
 impl std::fmt::Display for CandidateUpdateRouteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::SystemPackageManaged => {
+                write!(f, "updates are managed by the system package manager")
+            }
             Self::MissingAppImageCheck => write!(f, "candidate AppImage lane was not checked"),
             Self::AppImageIdentityMismatch => write!(
                 f,
@@ -313,8 +330,12 @@ pub fn route_candidate_update(
     lane: CandidateInstallLane,
     appimage_check: Option<&CandidateAppImageCheck>,
 ) -> Result<CandidateUpdateRoute, CandidateUpdateRouteError> {
-    if lane == CandidateInstallLane::Debian {
-        return Ok(CandidateUpdateRoute::Debian);
+    match lane {
+        CandidateInstallLane::Debian => return Ok(CandidateUpdateRoute::Debian),
+        CandidateInstallLane::SystemPackage => {
+            return Err(CandidateUpdateRouteError::SystemPackageManaged);
+        }
+        CandidateInstallLane::AppImage => {}
     }
 
     match appimage_check.ok_or(CandidateUpdateRouteError::MissingAppImageCheck)? {
@@ -544,6 +565,32 @@ mod tests {
             route_candidate_update(&candidate, CandidateInstallLane::AppImage, Some(&appimage)),
             Ok(CandidateUpdateRoute::AppImage)
         );
+        assert_eq!(
+            route_candidate_update(&candidate, CandidateInstallLane::SystemPackage, None),
+            Err(CandidateUpdateRouteError::SystemPackageManaged),
+            "a native system package must remain under its package manager"
+        );
+    }
+
+    #[test]
+    fn package_kind_selects_the_matching_install_lane() {
+        assert_eq!(
+            CandidateInstallLane::from_package_kind("deb"),
+            Some(CandidateInstallLane::Debian)
+        );
+        assert_eq!(
+            CandidateInstallLane::from_package_kind("development"),
+            Some(CandidateInstallLane::Debian)
+        );
+        assert_eq!(
+            CandidateInstallLane::from_package_kind("appimage"),
+            Some(CandidateInstallLane::AppImage)
+        );
+        assert_eq!(
+            CandidateInstallLane::from_package_kind("rpm"),
+            Some(CandidateInstallLane::SystemPackage)
+        );
+        assert_eq!(CandidateInstallLane::from_package_kind("unknown"), None);
     }
 
     #[test]

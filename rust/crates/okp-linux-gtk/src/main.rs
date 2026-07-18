@@ -866,6 +866,7 @@ enum LinuxUpdateTarget {
 
 enum LinuxUpdateCheckResult {
     UpToDate,
+    ManagedExternally,
     Available(PendingLinuxUpdate),
     Failed(String),
 }
@@ -876,6 +877,7 @@ enum LinuxUpdateStatus {
     NotChecked,
     Checking,
     UpToDate,
+    ManagedExternally,
     Available(PendingLinuxUpdate),
     Failed(String),
 }
@@ -884,6 +886,7 @@ impl LinuxUpdateStatus {
     fn from_check_result(result: &LinuxUpdateCheckResult) -> Self {
         match result {
             LinuxUpdateCheckResult::UpToDate => Self::UpToDate,
+            LinuxUpdateCheckResult::ManagedExternally => Self::ManagedExternally,
             LinuxUpdateCheckResult::Available(update) => Self::Available(update.clone()),
             LinuxUpdateCheckResult::Failed(error) => Self::Failed(error.clone()),
         }
@@ -900,6 +903,7 @@ impl LinuxUpdateStatus {
         match self {
             Self::Available(update) => update.action_label().to_owned(),
             Self::Checking => "Checking...".to_owned(),
+            Self::ManagedExternally => "Managed by DNF".to_owned(),
             _ => "Check for updates".to_owned(),
         }
     }
@@ -909,6 +913,7 @@ impl LinuxUpdateStatus {
             Self::NotChecked => update_status_intro(auto_check_enabled).to_owned(),
             Self::Checking => "Checking the update feed...".to_owned(),
             Self::UpToDate => "OK Player is up to date".to_owned(),
+            Self::ManagedExternally => "Updates are managed by DNF.".to_owned(),
             Self::Available(update) => update.available_status(),
             Self::Failed(error) => format!("Update check failed: {error}"),
         }

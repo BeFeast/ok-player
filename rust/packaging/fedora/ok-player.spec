@@ -56,6 +56,7 @@ EOF
 export CARGO_HOME="%{_builddir}/cargo-home"
 export OKP_BUILD_VERSION="%{upstream_version}"
 export OKP_BUILD_SHA="$(cat %{SOURCE2})"
+export OKP_PACKAGE_KIND=rpm
 export OKP_FEDORA_RPM=1
 export OKP_REQUIRE_SYSTEM_MPV=1
 CC=/usr/bin/cc cargo build \
@@ -87,6 +88,7 @@ install -Dm0644 THIRD-PARTY-NOTICES.md \
 export CARGO_HOME="%{_builddir}/cargo-home"
 export OKP_BUILD_VERSION="%{upstream_version}"
 export OKP_BUILD_SHA="$(cat %{SOURCE2})"
+export OKP_PACKAGE_KIND=rpm
 export OKP_FEDORA_RPM=1
 export OKP_REQUIRE_SYSTEM_MPV=1
 CC=/usr/bin/cc cargo test \

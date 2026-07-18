@@ -3483,6 +3483,14 @@ fn linux_update_status_reflects_last_check_result() {
     assert_eq!(up_to_date.action_label(), "Check for updates");
     assert!(up_to_date.pending_update().is_none());
 
+    let managed = LinuxUpdateStatus::from_check_result(&LinuxUpdateCheckResult::ManagedExternally);
+    assert_eq!(
+        managed.settings_status_text(true),
+        "Updates are managed by DNF."
+    );
+    assert_eq!(managed.action_label(), "Managed by DNF");
+    assert!(managed.pending_update().is_none());
+
     let update = PendingLinuxUpdate {
         manager: None,
         target: LinuxUpdateTarget::Deb(DebUpdate {
@@ -3556,9 +3564,11 @@ fn candidate_appimage_source_uses_the_manifest_bound_full_package() {
 fn linux_packages_stamp_their_update_install_lane() {
     let deb = include_str!("../../../../scripts/package-linux-deb.sh");
     let appimage = include_str!("../../../../scripts/package-linux-velopack.sh");
+    let rpm = include_str!("../../../packaging/fedora/ok-player.spec");
 
     assert!(deb.contains("OKP_PACKAGE_KIND=deb"));
     assert!(appimage.contains("OKP_PACKAGE_KIND=appimage"));
+    assert_eq!(rpm.matches("OKP_PACKAGE_KIND=rpm").count(), 2);
 }
 
 #[test]
