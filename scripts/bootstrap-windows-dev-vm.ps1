@@ -142,10 +142,22 @@ function Test-VisualStudioComponents {
     return [bool]$found
 }
 
+function Test-VisualStudioVersion {
+    param([string]$Minimum)
+    $vswhere = Get-VsWherePath
+    if (-not $vswhere) { return $false }
+    $found = & $vswhere -products '*' -latest -prerelease -property installationVersion 2>$null
+    if (-not $found) { return $false }
+    try { return ([version]$found -ge [version]$Minimum) }
+    catch { return $false }
+}
+
 function Install-VisualStudio {
     $vs = $manifest.tools.visualStudio
     $components = @($vs.components)
-    if (Test-VisualStudioComponents -Required $components) {
+    $hasComponents = Test-VisualStudioComponents -Required $components
+    $meetsVersion = Test-VisualStudioVersion -Minimum $vs.minVersion
+    if ($hasComponents -and $meetsVersion) {
         Write-Skip 'Visual Studio workloads already present (Managed Desktop Build Tools, VCTools, Win11 SDK 26100)'
         return
     }
