@@ -14,6 +14,7 @@
     * Rust MSVC toolchain (rustup + stable + the x86_64-pc-windows-msvc target)
     * Git, 7-Zip (for native archive extraction), and (for source native builds only) CMake + Ninja
     * PowerShell 7 (so the pwsh-only repo scripts run natively)
+    * Velopack CLI (vpk), version-matched to Directory.Packages.props for development packages
     * libmpv / ffmpeg native binaries via scripts/fetch-natives.ps1
 
   Each step checks for the tool first and only installs what is missing, so the script is safe to run on
@@ -180,6 +181,35 @@ function Install-RustMsvc {
     Write-Ok "Rust $($rust.toolchain) ($($rust.target)) ready"
 }
 
+function Install-VelopackCli {
+    $packagesProps = Join-Path $repoRoot 'Directory.Packages.props'
+    $propsText = Get-Content -Raw -LiteralPath $packagesProps
+    $match = [regex]::Match($propsText, 'Include="Velopack"\s+Version="([^"]+)"')
+    if (-not $match.Success) { throw "Velopack package version not found in $packagesProps" }
+    $requiredVersion = $match.Groups[1].Value
+
+    $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
+    if (-not $dotnet) {
+        $dotnetDefault = Join-Path $env:ProgramFiles 'dotnet\dotnet.exe'
+        if (Test-Path $dotnetDefault) { $dotnet = Get-Command $dotnetDefault -ErrorAction SilentlyContinue }
+    }
+    if (-not $dotnet) { throw '.NET SDK is installed but dotnet is not available in this session' }
+
+    $toolList = (& $dotnet.Source tool list --global 2>$null | Out-String)
+    $installed = [regex]::Match($toolList, '(?m)^vpk\s+([^\s]+)')
+    if ($installed.Success -and $installed.Groups[1].Value -eq $requiredVersion) {
+        Write-Skip "Velopack CLI already installed (vpk $requiredVersion)"
+        return
+    }
+    if ($CheckOnly) { Write-Host "  would install/update Velopack CLI vpk $requiredVersion" -ForegroundColor Yellow; return }
+
+    $verb = if ($installed.Success) { 'update' } else { 'install' }
+    Write-Step "Ensuring Velopack CLI (vpk $requiredVersion)"
+    & $dotnet.Source tool $verb --global vpk --version $requiredVersion
+    if ($LASTEXITCODE -ne 0) { throw "dotnet tool $verb failed for vpk $requiredVersion; exit code $LASTEXITCODE" }
+    Write-Ok "Velopack CLI ready (vpk $requiredVersion)"
+}
+
 # ---- Provision -----------------------------------------------------------------------------------
 Write-Host ''
 Write-Host "OK Player -- Windows development VM bootstrap" -ForegroundColor White
@@ -194,6 +224,7 @@ Install-WingetPackage -Id $manifest.tools.dotnetSdk.wingetId -Name '.NET 9 SDK'
 Install-WingetPackage -Id $manifest.tools.cmake.wingetId -Name 'CMake'
 Install-WingetPackage -Id $manifest.tools.ninja.wingetId -Name 'Ninja'
 Install-WingetPackage -Id $manifest.tools.sevenZip.wingetId -Name '7-Zip'
+Install-VelopackCli
 Install-RustMsvc
 
 if ($SkipVisualStudio) { Write-Skip 'Visual Studio skipped (-SkipVisualStudio)' } else { Install-VisualStudio }

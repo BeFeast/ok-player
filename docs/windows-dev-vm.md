@@ -49,6 +49,7 @@ It installs and verifies, via winget (App Installer, in-box on Windows 11):
 - **Rust** via `rustup`: the `stable` toolchain and the `x86_64-pc-windows-msvc` target (MSVC, not GNU, so
   the future `okp-ffi` C ABI links against the same runtime as the shell).
 - **Git**, **PowerShell 7**, and — for building libmpv/ffmpeg from source only — **CMake** and **Ninja**.
+- **Velopack CLI (`vpk`)**, version-matched to the repository's Velopack package, for local development packages.
 - **7-Zip**, then **libmpv** and **ffmpeg** native binaries via [`scripts/fetch-natives.ps1`](../scripts/fetch-natives.ps1)
   (skip with `-SkipNatives`).
 
