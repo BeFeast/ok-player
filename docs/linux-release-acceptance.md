@@ -93,16 +93,20 @@ Holding **Shift** while dragging any window edge or corner locks the current vid
 ratio; releasing Shift returns to ordinary freeform resize and keeps the size reached so far
 (issue #331). The geometry and the deterministic mid-drag Shift transitions are pure and unit-tested
 in `okp_core::aspect_resize` (all edges/corners, landscape/portrait/square media, minimum-OSC and
-workarea clamps, scale invariance, and Shift press/release mid-drag). The GTK shell keeps the
-compositor-native `begin_resize` path and enforces the lock only through the toplevel `compute-size`
-negotiation, so there is no per-motion `set_default_size` and no configure/resize feedback loop.
+workarea clamps, fractional logical pointer offsets, signed inward motion, and Shift press/release
+mid-drag). GTK owns resize-handle pointer motion and sends one bounded logical size request per
+changed result; compositor configure sizes are observations only and never feed back into the core
+session. X11 also applies the core's opposite-edge position delta. Wayland cannot position a normal
+toplevel, so it uses the closest stable size-only anchor and leaves placement safety to Mutter.
 
 Continuous, non-jittering resize and a stable aspect ratio within a small rounding tolerance are a
-`gnome-wayland-operator` row: they depend on the live Mutter build surfacing the compositor's
-proposed size at `compute-size` time and cannot be proven under Xvfb. The operator confirms, in a
-real GNOME/Wayland session, that a Shift-drag from every edge/corner follows the pointer smoothly,
-holds the aspect, never snaps back or drifts off-screen, and that a normal (no-Shift) drag, initial
-fit, fullscreen, maximize/restore, and window drag remain unaffected.
+`gnome-wayland-operator` row and cannot be proven under Xvfb. The operator confirms, in a real
+GNOME/Wayland session, that a Shift-drag from every edge/corner follows the pointer monotonically,
+holds the aspect within 0.01 throughout the drag, never snaps back or drifts off-screen, and that
+pressing/releasing either Shift key during the drag keeps the reached size. The same run covers
+ordinary free resize, initial fit, fullscreen, maximize/restore, final-size retention, and window
+drag. The X11 focused smoke is useful regression evidence for pointer projection and transitions,
+but it is not evidence for Mutter placement, compositor focus, or fractional-scale behavior.
 
 ## Rarely-used video geometry
 
