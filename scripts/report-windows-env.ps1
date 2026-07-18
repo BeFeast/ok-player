@@ -46,10 +46,10 @@ $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
 
 # --- helpers --------------------------------------------------------------------------------------
 function Get-CmdOutput {
-    param([string]$Exe, [string[]]$Args)
+    param([string]$Exe, [string[]]$Arguments)
     $cmd = Get-Command $Exe -ErrorAction SilentlyContinue
     if (-not $cmd) { return $null }
-    try { return (& $cmd.Source @Args 2>$null | Out-String).Trim() }
+    try { return (& $cmd.Source @Arguments 2>$null | Out-String).Trim() }
     catch { return $null }
 }
 
@@ -113,6 +113,7 @@ if (-not (Get-Command $sevenZipExe -ErrorAction SilentlyContinue)) {
     if (Test-Path $sevenZipDefault) { $sevenZipExe = $sevenZipDefault }
 }
 $sevenZipVersion = Get-CmdOutput $sevenZipExe @()
+if ($sevenZipVersion) { $sevenZipVersion = ($sevenZipVersion -split "`r?`n")[0].Trim() }
 $cmakeVersion = Get-CmdOutput 'cmake' @('--version')
 $ninjaVersion = Get-CmdOutput 'ninja' @('--version')
 $rustcVersion = Get-CmdOutput 'rustc' @('--version')
