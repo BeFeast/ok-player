@@ -6,6 +6,7 @@ BINARY="${1:-ok-player}"
 OUT_DIR="${2:-$ROOT/artifacts/manual-ui/linux-main-window-smoke}"
 IDLE_OSC_ASSERT="$ROOT/scripts/assert-linux-idle-osc-absent.sh"
 X11_WINDOW_WAITER="$ROOT/scripts/wait-for-x11-window.sh"
+X11_APP_CLEAR_WAITER="$ROOT/scripts/wait-for-x11-app-clear.sh"
 
 for tool in xvfb-run dbus-run-session xfwm4 xdotool xwininfo import magick ffmpeg ffprobe rg; do
   if ! command -v "$tool" >/dev/null 2>&1; then
@@ -34,6 +35,11 @@ OUT_DIR="$2"
 IDLE_OSC_ASSERT="$3"
 
 export GDK_BACKEND=x11
+# Xvfb cannot prove portal behavior. Keep its startup deterministic instead of
+# allowing a document/settings portal activation from one process to overlap
+# the next process's initial toplevel map.
+export GDK_DEBUG=no-portals
+export GIO_USE_PORTALS=0
 export GTK_USE_PORTAL=0
 export NO_AT_BRIDGE=1
 export XDG_SESSION_TYPE=x11
@@ -217,15 +223,22 @@ if ! env __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.js
   LIBGL_ALWAYS_SOFTWARE=1 \
   xvfb-run -a --server-args='-screen 0 1280x900x24 -screen 1 1024x768x24 -nolisten tcp' \
   dbus-run-session -- bash -s -- "$BINARY" "$OUT_DIR" "$X11_WINDOW_WAITER" \
+  "$X11_APP_CLEAR_WAITER" \
   >"$OUT_DIR/window-fit-session.log" 2>&1 <<'FIT_SMOKE'
 set -euo pipefail
 
 BINARY="$1"
 OUT_DIR="$2"
 X11_WINDOW_WAITER="$3"
+X11_APP_CLEAR_WAITER="$4"
 FIXTURES="$OUT_DIR/fixtures"
 
 export GDK_BACKEND=x11
+# The fit lifecycle restarts the application inside one D-Bus session. Portals
+# are outside this headless acceptance level and may outlive the process that
+# activated them, so exclude them from this deterministic startup boundary.
+export GDK_DEBUG=no-portals
+export GIO_USE_PORTALS=0
 export GTK_USE_PORTAL=0
 export NO_AT_BRIDGE=1
 export XDG_SESSION_TYPE=x11
@@ -249,6 +262,9 @@ wm_pid=$!
 DISPLAY="$SECONDARY_DISPLAY" xfwm4 --sm-client-disable >"$OUT_DIR/window-fit-xfwm4-secondary.log" 2>&1 &
 wm_secondary_pid=$!
 app_pid=""
+app_log=""
+: >"$OUT_DIR/fit-lifecycle.log"
+: >"$OUT_DIR/fit-evidence.txt"
 
 terminate_pid() {
   local pid="$1"
@@ -276,7 +292,26 @@ sleep 1
 
 start_app() {
   local log="$1"
-  shift
+  local startup_mode="$2"
+  shift 2
+  if [[ -n "$app_pid" ]]; then
+    echo "Refusing to start a new player before the current PID is cleared: $app_pid" >&2
+    return 1
+  fi
+  if ! "$X11_APP_CLEAR_WAITER" none "$OUT_DIR/pre-start-lifecycle.log"; then
+    cat "$OUT_DIR/pre-start-lifecycle.log" >>"$OUT_DIR/fit-lifecycle.log"
+    return 1
+  fi
+  cat "$OUT_DIR/pre-start-lifecycle.log" >>"$OUT_DIR/fit-lifecycle.log"
+
+  local -a startup_env=()
+  case "$startup_mode" in
+    windowed) ;;
+    maximized) startup_env+=(OKP_START_MAXIMIZED=1) ;;
+    fullscreen) startup_env+=(OKP_START_FULLSCREEN=1) ;;
+    *) echo "Unknown startup mode: $startup_mode" >&2; return 2 ;;
+  esac
+  env "${startup_env[@]}" \
   OKP_SKIP_OPEN_INSTALLER=1 \
   OKP_SKIP_DEB_SELF_INSTALL=1 \
   OKP_DEBUG_WINDOW_FIT=1 \
@@ -284,26 +319,43 @@ start_app() {
   OKP_COMMAND_SEARCH_QUERY='Fit window to media' \
   "$BINARY" "$@" >"$OUT_DIR/$log" 2>&1 &
   app_pid=$!
+  app_log="$OUT_DIR/$log"
+  printf 'start pid=%s mode=%s app_log=%s\n' "$app_pid" "$startup_mode" "$log" \
+    >>"$OUT_DIR/fit-lifecycle.log"
 }
 
 wait_for_window() {
   local ids="$1"
   local diagnostics="${ids%.ids}.readiness.log"
-  "$X11_WINDOW_WAITER" "$app_pid" "$ids" "$diagnostics"
+  local selected
+  selected="$("$X11_WINDOW_WAITER" "$app_pid" "$ids" "$diagnostics" "$app_log")" || return $?
+  local candidate_info candidate_width candidate_height candidate_state case_name
+  candidate_info="$(xwininfo -id "$selected")"
+  candidate_width="$(awk '/Width:/ {print $2; exit}' <<<"$candidate_info")"
+  candidate_height="$(awk '/Height:/ {print $2; exit}' <<<"$candidate_info")"
+  candidate_state="$(awk -F': ' '/Map State:/ {print $2; exit}' <<<"$candidate_info")"
+  case_name="$(basename "${ids%.ids}")"
+  printf 'window case=%s pid=%s xid=%s state=%s width=%s height=%s\n' \
+    "$case_name" "$app_pid" "$selected" "$candidate_state" "$candidate_width" \
+    "$candidate_height" | tee -a "$OUT_DIR/fit-lifecycle.log" \
+    >>"$OUT_DIR/fit-evidence.txt"
+  printf '%s\n' "$selected"
 }
 
 stop_app() {
   local stopped_pid="$app_pid"
   terminate_pid "$stopped_pid"
+  local diagnostics="$OUT_DIR/stop-${stopped_pid}-lifecycle.log"
+  if ! "$X11_APP_CLEAR_WAITER" "$stopped_pid" "$diagnostics"; then
+    cat "$diagnostics" >>"$OUT_DIR/fit-lifecycle.log"
+    echo "Application log: $app_log" >&2
+    cat "$app_log" >&2 || true
+    return 1
+  fi
+  cat "$diagnostics" >>"$OUT_DIR/fit-lifecycle.log"
+  printf 'stop pid=%s clear=true\n' "$stopped_pid" >>"$OUT_DIR/fit-lifecycle.log"
   app_pid=""
-  for _ in $(seq 1 40); do
-    if ! xdotool search --pid "$stopped_pid" --name '^OK Player$' >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 0.1
-  done
-  echo "OK Player window did not close" >&2
-  return 1
+  app_log=""
 }
 
 capture_geometry() {
@@ -343,7 +395,7 @@ wait_for_log() {
 }
 
 export DISPLAY="$PRIMARY_DISPLAY"
-start_app "fit-small-app.log" "$FIXTURES/fit-small.mkv"
+start_app "fit-small-app.log" windowed "$FIXTURES/fit-small.mkv"
 small_id="$(wait_for_window "$OUT_DIR/fit-small-window.ids")"
 sleep 4
 xdotool mousemove 1200 850
@@ -393,14 +445,7 @@ if [[ "$manual_width" != "700" || "$manual_height" != "500" ]]; then
 fi
 stop_app
 
-OKP_SKIP_OPEN_INSTALLER=1 \
-OKP_SKIP_DEB_SELF_INSTALL=1 \
-OKP_DEBUG_WINDOW_FIT=1 \
-OKP_DEBUG_INTERACTIONS=1 \
-OKP_COMMAND_SEARCH_QUERY='Fit window to media' \
-OKP_START_MAXIMIZED=1 \
-  "$BINARY" "$FIXTURES/fit-small.mkv" >"$OUT_DIR/fit-maximized-app.log" 2>&1 &
-app_pid=$!
+start_app "fit-maximized-app.log" maximized "$FIXTURES/fit-small.mkv"
 max_id="$(wait_for_window "$OUT_DIR/fit-maximized-window.ids")"
 sleep 4
 capture_geometry "$max_id" "fit-maximized-before-load"
@@ -436,14 +481,7 @@ rg -q 'interaction: player-command=fit-window-to-media' "$OUT_DIR/fit-maximized-
 }
 stop_app
 
-OKP_SKIP_OPEN_INSTALLER=1 \
-OKP_SKIP_DEB_SELF_INSTALL=1 \
-OKP_DEBUG_WINDOW_FIT=1 \
-OKP_DEBUG_INTERACTIONS=1 \
-OKP_COMMAND_SEARCH_QUERY='Fit window to media' \
-OKP_START_FULLSCREEN=1 \
-  "$BINARY" "$FIXTURES/fit-small.mkv" >"$OUT_DIR/fit-fullscreen-app.log" 2>&1 &
-app_pid=$!
+start_app "fit-fullscreen-app.log" fullscreen "$FIXTURES/fit-small.mkv"
 fullscreen_id="$(wait_for_window "$OUT_DIR/fit-fullscreen-window.ids")"
 sleep 4
 capture_geometry "$fullscreen_id" "fit-fullscreen-window"
@@ -469,7 +507,7 @@ fi
 stop_app
 
 export DISPLAY="$SECONDARY_DISPLAY"
-start_app "fit-4k-right-monitor-app.log" "$FIXTURES/fit-4k.mkv"
+start_app "fit-4k-right-monitor-app.log" windowed "$FIXTURES/fit-4k.mkv"
 right_id="$(wait_for_window "$OUT_DIR/fit-4k-right-monitor-window.ids")"
 sleep 4
 capture_geometry "$right_id" "fit-4k-right-monitor-window"
@@ -499,11 +537,30 @@ if (( explicit_4k_width < 958 || explicit_4k_width > 964 || explicit_4k_height <
   exit 1
 fi
 stop_app
+
+cat >>"$OUT_DIR/fit-evidence.txt" <<EOF
+maximized_guard=pass
+maximized_explicit_fit=${explicit_max_width}x${explicit_max_height}
+fullscreen_guard=pass
+fullscreen_explicit_fit=${explicit_fullscreen_width}x${explicit_fullscreen_height}
+small_geometry=${small_width}x${small_height}
+4k_geometry=${fit_width}x${fit_height}
+4k_explicit_fit=${explicit_4k_width}x${explicit_4k_height}
+explicit_fit_dispatch=pass
+status=pass
+EOF
 FIT_SMOKE
 then
   echo "Window-fit smoke failed. Session log: $OUT_DIR/window-fit-session.log" >&2
   cat "$OUT_DIR/window-fit-session.log" >&2
   exit 1
 fi
+
+if rg -q "org\.freedesktop\.portal\.Desktop" "$OUT_DIR/window-fit-session.log"; then
+  echo "Window-fit smoke unexpectedly activated a desktop portal in the isolated X11 session" >&2
+  cat "$OUT_DIR/window-fit-session.log" >&2
+  exit 1
+fi
+printf 'portal_activation=absent\n' >>"$OUT_DIR/fit-evidence.txt"
 
 echo "Main window fit smoke passed. Screenshots: $OUT_DIR/fit-small-window.png, $OUT_DIR/fit-4k-right-monitor-window.png"

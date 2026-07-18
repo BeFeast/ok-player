@@ -66,11 +66,20 @@ fn retries_unmapped_windows_until_they_are_viewable() {
 fn timeout_preserves_every_readiness_diagnostic() {
     let root = unique_temp_dir("okp-x11-window-timeout");
     let fixture = WaitFixture::new(root.path(), "never-ready");
-    let output = fixture.run(2);
+    let app_log = root.path().join("app.log");
+    fs::write(
+        &app_log,
+        "mpv render context initialized before source load\nLaunch request: 1 item(s)\n",
+    )
+    .expect("app log fixture should be written");
+    let output = fixture.run_with_app_log(2, &app_log);
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("Timed out waiting for a viewable OK Player window"));
+    assert!(stderr.contains("Application log:"));
+    assert!(stderr.contains("mpv render context initialized before source load"));
+    assert!(stderr.contains("candidate=17 rejected=map-state state=IsUnMapped"));
     let diagnostics = fixture.diagnostics();
     assert_eq!(diagnostics.matches("attempt=").count(), 2);
     assert!(diagnostics.contains("search_output: <empty>"));
@@ -114,7 +123,21 @@ impl WaitFixture {
     }
 
     fn run(&self, attempts: usize) -> Output {
-        Command::new("bash")
+        self.command(attempts)
+            .output()
+            .expect("window waiter fixture should run")
+    }
+
+    fn run_with_app_log(&self, attempts: usize, app_log: &Path) -> Output {
+        self.command(attempts)
+            .arg(app_log)
+            .output()
+            .expect("window waiter fixture should run")
+    }
+
+    fn command(&self, attempts: usize) -> Command {
+        let mut command = Command::new("bash");
+        command
             .arg(&self.script)
             .arg(EXPECTED_PID)
             .arg(self.root.join("window.ids"))
@@ -130,9 +153,8 @@ impl WaitFixture {
                     self.fake_bin.display(),
                     std::env::var("PATH").expect("PATH should be set")
                 ),
-            )
-            .output()
-            .expect("window waiter fixture should run")
+            );
+        command
     }
 
     fn diagnostics(&self) -> String {

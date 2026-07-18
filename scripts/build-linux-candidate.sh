@@ -214,10 +214,17 @@ deb_screenshot_smoke() {
 }
 run_gate deb-screenshot-smoke deb_screenshot_smoke
 
-# Headless launch smoke: the app must come up under Xvfb.
-run_gate headless-launch-smoke \
-  "$CHECKOUT/scripts/smoke-linux-main-window.sh" \
-  "$CHECKOUT/rust/target/release/okp-linux-gtk" "$OUT_DIR/headless-launch"
+# Headless launch smoke: prove the idle surface once, then require the complete
+# fit-only lifecycle three consecutive times with no retry inside the gate.
+headless_launch_smoke() {
+  OKP_MAIN_WINDOW_IDLE_ONLY=1 \
+    "$CHECKOUT/scripts/smoke-linux-main-window.sh" \
+    "$CHECKOUT/rust/target/release/okp-linux-gtk" "$OUT_DIR/headless-launch/idle"
+  OKP_WINDOW_FIT_SOURCE_SHA="$BUILD_SHA" \
+    "$CHECKOUT/scripts/run-linux-window-fit-series.sh" \
+    "$CHECKOUT/rust/target/release/okp-linux-gtk" "$OUT_DIR/headless-launch/fit-series"
+}
+run_gate headless-launch-smoke headless_launch_smoke
 
 # Optional native-hardware smoke hook whose evidence the operator may require.
 REQUIRE_NATIVE=()
