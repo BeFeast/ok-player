@@ -34,6 +34,20 @@ fn list_failure_is_not_mistaken_for_clean_registration_state() {
     assert!(!diagnostics.contains("clear=true"));
 }
 
+#[test]
+fn longer_bus_names_do_not_count_as_requested_names() {
+    let root = unique_temp_dir("okp-dbus-name-substring");
+    let fixture = NameFixture::new(root.path(), "substring-only");
+    let output = fixture.run(1);
+
+    assert_success(&output);
+    let diagnostics = fixture.diagnostics();
+    assert_eq!(diagnostics.matches("attempt=").count(), 1);
+    assert!(diagnostics.contains("name=com.befeast.okplayer present=false"));
+    assert!(diagnostics.contains("name=org.mpris.MediaPlayer2.okplayer present=false"));
+    assert!(diagnostics.contains("clear=true"));
+}
+
 fn assert_success(output: &Output) {
     assert!(
         output.status.success(),
@@ -110,6 +124,9 @@ case "$FAKE_SCENARIO" in
   list-error)
     echo 'session bus unavailable' >&2
     exit 1
+    ;;
+  substring-only)
+    printf "(['org.freedesktop.DBus', 'com.befeast.okplayer.helper', 'org.mpris.MediaPlayer2.okplayer.helper'],)\n"
     ;;
 esac
 "#;

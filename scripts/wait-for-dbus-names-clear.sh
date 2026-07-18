@@ -26,7 +26,10 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
 
   if (( list_status == 0 )); then
     for name in "${NAMES[@]}"; do
-      if [[ "$list_output" == *"$name"* ]]; then
+      # gdbus renders every ListNames entry as a single-quoted GVariant
+      # string. Include those delimiters so a longer, unrelated bus name
+      # cannot keep the requested name falsely "present".
+      if [[ "$list_output" == *"'$name'"* ]]; then
         names_present=true
         printf 'name=%s present=true\n' "$name" >>"$DIAGNOSTICS_FILE"
       else
