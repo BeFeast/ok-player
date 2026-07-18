@@ -962,7 +962,6 @@ pub struct Mpv {
     render_context_native_wayland_display: Option<NativeWaylandDisplay>,
     pump: Option<EventPump>,
     next_request_id: AtomicU64,
-    subtitle_scale_bits: AtomicU64,
     #[cfg(debug_assertions)]
     blocking_read_guard: crate::guard::BlockingReadGuard,
 }
@@ -988,7 +987,6 @@ impl Mpv {
             render_context_native_wayland_display: None,
             pump: None,
             next_request_id: AtomicU64::new(1),
-            subtitle_scale_bits: AtomicU64::new(f64::NAN.to_bits()),
             #[cfg(debug_assertions)]
             blocking_read_guard: Default::default(),
         };
@@ -1483,24 +1481,7 @@ impl Mpv {
     }
 
     pub fn set_subtitle_scale(&self, scale: f64) -> Result<(), MpvError> {
-        let scale = scale.clamp(0.25, 4.0);
-        self.set_double("sub-scale", scale)?;
-        self.subtitle_scale_bits
-            .store(scale.to_bits(), Ordering::Relaxed);
-        Ok(())
-    }
-
-    /// Apply the managed subtitle scale only when it differs from the last
-    /// successful write. Startup config already restores the global value, so
-    /// the first source load must not repeat the same synchronous property call
-    /// while the event pump is reading from the libmpv handle.
-    pub fn set_subtitle_scale_if_changed(&self, scale: f64) -> Result<bool, MpvError> {
-        let scale = scale.clamp(0.25, 4.0);
-        if self.subtitle_scale_bits.load(Ordering::Relaxed) == scale.to_bits() {
-            return Ok(false);
-        }
-        self.set_subtitle_scale(scale)?;
-        Ok(true)
+        self.set_double("sub-scale", scale.clamp(0.25, 4.0))
     }
 
     pub fn set_subtitle_position(&self, position: f64) -> Result<(), MpvError> {
@@ -2578,31 +2559,6 @@ mod tests {
                 Some("outline-and-shadow")
             );
         }
-    }
-
-    #[test]
-    fn managed_subtitle_scale_skips_only_redundant_engine_writes() {
-        let mpv = test_mpv();
-
-        assert!(
-            mpv.set_subtitle_scale_if_changed(1.4)
-                .expect("first managed scale write should reach libmpv")
-        );
-        assert!(
-            !mpv.set_subtitle_scale_if_changed(1.4)
-                .expect("an identical managed scale should be a no-op")
-        );
-
-        mpv.set_subtitle_scale(1.2)
-            .expect("ordinary live subtitle controls should update the cache");
-        assert!(
-            !mpv.set_subtitle_scale_if_changed(1.2)
-                .expect("the managed reset should see the latest live value")
-        );
-        assert!(
-            mpv.set_subtitle_scale_if_changed(1.0)
-                .expect("a different global scale must still reach libmpv")
-        );
     }
 
     #[test]
