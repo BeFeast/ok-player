@@ -2,8 +2,9 @@ use std::fs;
 use std::path::PathBuf;
 
 use okp_core::project_health::{
-    CandidateComparisonSnapshot, CandidateSourceSnapshot, CommitSnapshot, FetchSnapshot,
-    HealthStatus, ProjectHealthSnapshot, SourceSnapshot, WorkflowSnapshot,
+    CandidateComparisonSnapshot, CandidateSourceSnapshot, CandidateWorkflowSnapshot,
+    CommitSnapshot, FetchSnapshot, HealthStatus, ProjectHealthSnapshot, ScheduleRunSnapshot,
+    SourceSnapshot, WorkflowSnapshot,
 };
 use serde::Deserialize;
 
@@ -25,8 +26,16 @@ struct Case {
     candidate_committed_at_utc: String,
     first_unpublished_sha: Option<String>,
     first_unpublished_at_utc: Option<String>,
+    #[serde(default = "default_workflow_state")]
+    workflow_state: String,
+    #[serde(default = "default_schedule_completed_at")]
+    schedule_completed_at_utc: String,
+    #[serde(default = "default_max_schedule_age")]
+    max_candidate_schedule_age_seconds: u64,
     expected_healthy: bool,
     expected_reason: String,
+    #[serde(default)]
+    expected_reason_code: Option<String>,
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -39,6 +48,18 @@ enum FixtureSourceRelation {
 
 fn default_candidate_committed_at() -> String {
     "2026-07-18T00:30:00Z".to_owned()
+}
+
+fn default_workflow_state() -> String {
+    "active".to_owned()
+}
+
+fn default_schedule_completed_at() -> String {
+    "2026-07-18T01:55:47Z".to_owned()
+}
+
+fn default_max_schedule_age() -> u64 {
+    2_700
 }
 
 #[test]
@@ -81,7 +102,7 @@ fn candidate_delivery_outcomes_are_fixture_driven() {
                 (None, None) => None,
                 _ => panic!("{} has incomplete unpublished commit evidence", case.name),
             };
-        let snapshot = healthy_snapshot(
+        let mut snapshot = healthy_snapshot(
             case.checked_at_unix,
             FetchSnapshot {
                 url: "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/candidate.linux.json".to_owned(),
@@ -95,6 +116,15 @@ fn candidate_delivery_outcomes_are_fixture_driven() {
                 first_unpublished_commit,
             ),
         );
+        snapshot.max_candidate_schedule_age_seconds = case.max_candidate_schedule_age_seconds;
+        snapshot.source.candidate_workflow.state = case.workflow_state;
+        snapshot
+            .source
+            .candidate_workflow
+            .latest_completed_schedule
+            .as_mut()
+            .expect("healthy fixture has a completed schedule run")
+            .completed_at_utc = case.schedule_completed_at_utc;
         let outcome = snapshot.evaluate();
         let candidate = outcome
             .checks
@@ -122,6 +152,14 @@ fn candidate_delivery_outcomes_are_fixture_driven() {
             case.name,
             candidate
         );
+        if let Some(reason_code) = case.expected_reason_code {
+            assert!(
+                candidate.reason_codes.contains(&reason_code),
+                "{}: {:?}",
+                case.name,
+                candidate
+            );
+        }
     }
 }
 
@@ -234,6 +272,7 @@ fn healthy_snapshot(
     ProjectHealthSnapshot {
         checked_at_unix,
         max_unpublished_main_lag_seconds: 7_200,
+        max_candidate_schedule_age_seconds: 2_700,
         future_skew_seconds: 300,
         source: SourceSnapshot {
             head_sha: head_sha.clone(),
@@ -248,6 +287,19 @@ fn healthy_snapshot(
                     url: format!("https://example.invalid/runs/{name}"),
                 })
                 .collect(),
+            candidate_workflow: CandidateWorkflowSnapshot {
+                state: "active".to_owned(),
+                state_error: None,
+                latest_completed_schedule: Some(ScheduleRunSnapshot {
+                    head_sha: head_sha.clone(),
+                    event: "schedule".to_owned(),
+                    status: "completed".to_owned(),
+                    conclusion: "success".to_owned(),
+                    completed_at_utc: "2026-07-18T01:55:47Z".to_owned(),
+                    url: "https://example.invalid/runs/linux-candidate".to_owned(),
+                }),
+                schedule_error: None,
+            },
             candidate,
             error: None,
         },

@@ -57,6 +57,51 @@ fn failed_fetch_bodies_reach_the_core_evaluator() {
 }
 
 #[test]
+fn candidate_workflow_watchdog_reasons_survive_live_collection() {
+    for (scenario, reason_code, reason) in [
+        (
+            "workflow-disabled",
+            "candidate-workflow-inactive",
+            "workflow state is disabled_manually",
+        ),
+        (
+            "schedule-stale",
+            "candidate-schedule-stale",
+            "no completed schedule run within 2700s while main has advanced",
+        ),
+    ] {
+        let output = run_live(scenario);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{scenario}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let outcome: ProjectHealthOutcome =
+            serde_json::from_slice(&output.stdout).expect("collector should emit outcome JSON");
+        let candidate = outcome
+            .checks
+            .iter()
+            .find(|check| check.name == "linux-candidate-delivery")
+            .expect("candidate check");
+        assert!(
+            candidate
+                .reason_codes
+                .iter()
+                .any(|code| code == reason_code)
+        );
+        assert!(
+            candidate.summary.contains(reason)
+                || candidate
+                    .details
+                    .iter()
+                    .any(|detail| detail.contains(reason)),
+            "{scenario}: {candidate:?}"
+        );
+    }
+}
+
+#[test]
 fn snapshot_mode_uses_a_prebuilt_release_evaluator_without_remote_commands() {
     let root = unique_temp_dir("okp-project-health-offline");
     let scripts = root.path().join("scripts");
@@ -281,16 +326,37 @@ if [[ "${1:-}" == run && "${2:-}" == list ]]; then
     if [[ "$1" == --workflow ]]; then workflow="$2"; break; fi
     shift
   done
-  printf '[{"workflowName":"%s","headSha":"d5d531a58c830a01a7e25615e850593e9ff4493f","event":"push","status":"completed","conclusion":"success","url":"https://example.invalid/run"}]\n' "$workflow"
+  main_sha="d5d531a58c830a01a7e25615e850593e9ff4493f"
+  [[ "$OKP_STUB_FAIL" != schedule-stale ]] || main_sha="1111111111111111111111111111111111111111"
+  if [[ "$workflow" == "Linux Candidate" ]]; then
+    completed_at="2026-07-18T01:55:47Z"
+    [[ "$OKP_STUB_FAIL" != schedule-stale ]] || completed_at="2026-07-18T01:00:47Z"
+    printf '[{"headSha":"%s","event":"schedule","status":"completed","conclusion":"success","updatedAt":"%s","url":"https://example.invalid/run/candidate"}]\n' "$main_sha" "$completed_at"
+  else
+    printf '[{"workflowName":"%s","headSha":"%s","event":"push","status":"completed","conclusion":"success","url":"https://example.invalid/run"}]\n' "$workflow" "$main_sha"
+  fi
   exit 0
 fi
 [[ "${1:-}" == api ]] || exit 64
-case "${2:-}" in
+shift
+if [[ "${1:-}" == --cache ]]; then shift 2; fi
+endpoint="${1:-}"
+case "$endpoint" in
+  repos/*/actions/workflows/release-linux-candidate.yml)
+    state="active"
+    [[ "$OKP_STUB_FAIL" != workflow-disabled ]] || state="disabled_manually"
+    printf '{"state":"%s"}\n' "$state"
+    ;;
   repos/*/commits/main)
-    printf '%s\n' '{"sha":"d5d531a58c830a01a7e25615e850593e9ff4493f"}'
+    main_sha="d5d531a58c830a01a7e25615e850593e9ff4493f"
+    [[ "$OKP_STUB_FAIL" != schedule-stale ]] || main_sha="1111111111111111111111111111111111111111"
+    printf '{"sha":"%s"}\n' "$main_sha"
     ;;
   repos/*/commits/d5d531a58c830a01a7e25615e850593e9ff4493f)
     printf '%s\n' '{"commit":{"committer":{"date":"2026-07-18T00:30:00Z"}}}'
+    ;;
+  repos/*/compare/*)
+    printf '%s\n' '{"status":"ahead","merge_base_commit":{"sha":"d5d531a58c830a01a7e25615e850593e9ff4493f"},"commits":[{"sha":"2222222222222222222222222222222222222222","commit":{"committer":{"date":"2026-07-18T01:30:47Z"}}}]}'
     ;;
   repos/*/releases*)
     [[ "$OKP_STUB_FAIL" != stable ]] || exit 1

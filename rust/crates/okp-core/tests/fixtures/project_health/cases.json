@@ -24,6 +24,34 @@
     "expected_reason": "behind current main by 1800s"
   },
   {
+    "name": "disabled candidate workflow",
+    "feed_fixture": "fresh-accepted.json",
+    "checked_at_unix": 1784340047,
+    "fetch_error": null,
+    "main_sha": "d5d531a58c830a01a7e25615e850593e9ff4493f",
+    "source_relation": "equal",
+    "first_unpublished_sha": null,
+    "first_unpublished_at_utc": null,
+    "workflow_state": "disabled_manually",
+    "expected_healthy": false,
+    "expected_reason": "workflow state is disabled_manually, expected active",
+    "expected_reason_code": "candidate-workflow-inactive"
+  },
+  {
+    "name": "candidate schedule stale while main advanced",
+    "feed_fixture": "fresh-accepted.json",
+    "checked_at_unix": 1784340047,
+    "fetch_error": null,
+    "main_sha": "1111111111111111111111111111111111111111",
+    "source_relation": "ancestor",
+    "first_unpublished_sha": "2222222222222222222222222222222222222222",
+    "first_unpublished_at_utc": "2026-07-18T01:30:47Z",
+    "schedule_completed_at_utc": "2026-07-18T01:00:47Z",
+    "expected_healthy": false,
+    "expected_reason": "no completed schedule run within 2700s while main has advanced",
+    "expected_reason_code": "candidate-schedule-stale"
+  },
+  {
     "name": "ancestor candidate behind beyond SLA",
     "feed_fixture": "fresh-accepted.json",
     "checked_at_unix": 1784341848,

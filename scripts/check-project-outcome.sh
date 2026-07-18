@@ -63,6 +63,11 @@ if [[ ! "$max_lag" =~ ^[0-9]+$ ]] || (( max_lag == 0 )); then
   echo "OKP_PROJECT_HEALTH_MAX_UNPUBLISHED_MAIN_LAG_SECONDS must be a positive integer" >&2
   exit 2
 fi
+max_schedule_age="${OKP_PROJECT_HEALTH_MAX_CANDIDATE_SCHEDULE_AGE_SECONDS:-2700}"
+if [[ ! "$max_schedule_age" =~ ^[0-9]+$ ]] || (( max_schedule_age == 0 )); then
+  echo "OKP_PROJECT_HEALTH_MAX_CANDIDATE_SCHEDULE_AGE_SECONDS must be a positive integer" >&2
+  exit 2
+fi
 
 work="$(mktemp -d)" || exit 2
 trap 'rm -rf -- "$work"' EXIT
@@ -96,6 +101,31 @@ for workflow in CI Rust; do
     source_error="${source_error:+$source_error; }GitHub $workflow workflow query failed"
   fi
 done
+
+candidate_workflow_state=""
+candidate_workflow_state_error=""
+if candidate_workflow="$(gh api --cache 5m \
+    "repos/$repository/actions/workflows/release-linux-candidate.yml" 2>/dev/null)"; then
+  candidate_workflow_state="$(jq -r '.state // ""' <<<"$candidate_workflow")"
+  if [[ -z "$candidate_workflow_state" ]]; then
+    candidate_workflow_state_error="GitHub Linux Candidate workflow query omitted state"
+  fi
+else
+  candidate_workflow_state_error="GitHub Linux Candidate workflow state query failed"
+fi
+
+candidate_schedule_run='null'
+candidate_schedule_error=""
+if candidate_schedule_runs="$(gh run list --repo "$repository" --branch main --event schedule \
+    --status completed --workflow "Linux Candidate" --limit 1 \
+    --json headSha,event,status,conclusion,updatedAt,url 2>/dev/null)"; then
+  if ! candidate_schedule_run="$(jq -c '.[0] // null' <<<"$candidate_schedule_runs" 2>/dev/null)"; then
+    candidate_schedule_run='null'
+    candidate_schedule_error="GitHub Linux Candidate completed schedule query returned malformed JSON"
+  fi
+else
+  candidate_schedule_error="GitHub Linux Candidate completed schedule query failed"
+fi
 
 windows_ok=false
 windows_error="Windows static feed request failed"
@@ -156,9 +186,14 @@ fi
 jq -n \
   --argjson checked_at_unix "$(date -u +%s)" \
   --argjson max_unpublished_main_lag_seconds "$max_lag" \
+  --argjson max_candidate_schedule_age_seconds "$max_schedule_age" \
   --arg main_sha "$main_sha" \
   --argjson workflows "$workflows" \
   --arg source_error "$source_error" \
+  --arg candidate_workflow_state "$candidate_workflow_state" \
+  --arg candidate_workflow_state_error "$candidate_workflow_state_error" \
+  --argjson candidate_schedule_run "$candidate_schedule_run" \
+  --arg candidate_schedule_error "$candidate_schedule_error" \
   --arg candidate_sha "$candidate_sha" \
   --arg candidate_committed_at "$candidate_committed_at" \
   --arg compare_status "$compare_status" \
@@ -181,9 +216,27 @@ jq -n \
   {
     checked_at_unix: $checked_at_unix,
     max_unpublished_main_lag_seconds: $max_unpublished_main_lag_seconds,
+    max_candidate_schedule_age_seconds: $max_candidate_schedule_age_seconds,
     source: {
       head_sha: $main_sha,
       workflows: $workflows,
+      candidate_workflow: {
+        state: $candidate_workflow_state,
+        state_error: (if $candidate_workflow_state_error == "" then null else $candidate_workflow_state_error end),
+        latest_completed_schedule: (
+          if $candidate_schedule_run == null then null
+          else {
+            head_sha: ($candidate_schedule_run.headSha // ""),
+            event: ($candidate_schedule_run.event // ""),
+            status: ($candidate_schedule_run.status // ""),
+            conclusion: ($candidate_schedule_run.conclusion // ""),
+            completed_at_utc: ($candidate_schedule_run.updatedAt // ""),
+            url: ($candidate_schedule_run.url // "")
+          }
+          end
+        ),
+        schedule_error: (if $candidate_schedule_error == "" then null else $candidate_schedule_error end)
+      },
       candidate: {
         candidate_sha: $candidate_sha,
         candidate_committed_at_utc: (if $candidate_committed_at == "" then null else $candidate_committed_at end),
