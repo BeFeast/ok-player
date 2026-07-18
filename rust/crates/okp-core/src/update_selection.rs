@@ -188,6 +188,10 @@ impl UpdateOfferState {
         )
     }
 
+    pub fn is_installing(&self) -> bool {
+        matches!(self.phase, UpdateOfferPhase::Installing)
+    }
+
     pub fn start_install(&mut self) -> bool {
         if matches!(
             self.phase,
@@ -214,6 +218,18 @@ impl UpdateOfferState {
     pub fn install_failed(&mut self, error: impl Into<String>) -> bool {
         if matches!(self.phase, UpdateOfferPhase::Installing) {
             self.phase = UpdateOfferPhase::InstallFailed(error.into());
+            true
+        } else {
+            false
+        }
+    }
+
+    /// The shell handed the package to an external installer but cannot attest
+    /// that installation completed. Keep the same offer available so a cancel
+    /// or external failure never discards the user's retry path.
+    pub fn install_deferred(&mut self) -> bool {
+        if matches!(self.phase, UpdateOfferPhase::Installing) {
+            self.phase = UpdateOfferPhase::Available;
             true
         } else {
             false
@@ -465,5 +481,22 @@ mod tests {
         assert_eq!(offer.phase(), &UpdateOfferPhase::Installed);
         assert!(!offer.persistent_surface_visible());
         assert_eq!(offer.primary_action_label(), None);
+    }
+
+    #[test]
+    fn external_installer_handoff_keeps_the_offer_retryable() {
+        let mut offer = UpdateOfferState::discovered(
+            UpdateChannel::Public,
+            "0.11.0-beta.2",
+            &SkippedUpdateVersions::default(),
+        );
+
+        assert!(offer.start_install());
+        assert!(offer.is_installing());
+        assert!(offer.install_deferred());
+        assert_eq!(offer.phase(), &UpdateOfferPhase::Available);
+        assert!(offer.persistent_surface_visible());
+        assert_eq!(offer.primary_action_label(), Some("Update"));
+        assert!(offer.can_skip());
     }
 }

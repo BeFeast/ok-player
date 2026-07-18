@@ -878,7 +878,7 @@ enum LinuxUpdateCheckResult {
 struct LinuxUpdateOffer {
     update: PendingLinuxUpdate,
     state: UpdateOfferState,
-    completion_message: Option<String>,
+    status_message: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -908,7 +908,7 @@ impl LinuxUpdateStatus {
                 Self::Offer(LinuxUpdateOffer {
                     update: update.clone(),
                     state: UpdateOfferState::discovered(channel, version, skipped_versions),
-                    completion_message: None,
+                    status_message: None,
                 })
             }
             LinuxUpdateCheckResult::Failed(error) => Self::Failed(error.clone()),
@@ -1927,7 +1927,10 @@ impl LinuxUpdateOffer {
     fn status_text(&self) -> String {
         let version = self.state.version();
         match self.state.phase() {
-            UpdateOfferPhase::Available => format!("Version {version} is available."),
+            UpdateOfferPhase::Available => self
+                .status_message
+                .clone()
+                .unwrap_or_else(|| format!("Version {version} is available.")),
             UpdateOfferPhase::Skipped => format!(
                 "Version {version} was skipped on the {} channel. You can still install it manually.",
                 update_channel_label(self.state.channel())
@@ -1939,7 +1942,7 @@ impl LinuxUpdateOffer {
                 format!("Update {version} failed: {error}. You can retry.")
             }
             UpdateOfferPhase::Installed => self
-                .completion_message
+                .status_message
                 .clone()
                 .unwrap_or_else(|| format!("Version {version} was installed.")),
         }

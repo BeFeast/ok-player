@@ -3710,6 +3710,52 @@ fn failed_manual_recheck_keeps_the_previous_update_offer() {
 }
 
 #[test]
+fn external_installer_handoff_keeps_the_pending_update_retryable() {
+    let update = PendingLinuxUpdate {
+        manager: None,
+        target: LinuxUpdateTarget::Deb(DebUpdate {
+            version: "0.11.0-beta.2".to_owned(),
+            name: "ok-player_0.11.0-beta.2_amd64.deb".to_owned(),
+            url: "https://example.invalid/update.deb".to_owned(),
+            size: Some(42),
+            sums_url: None,
+            expected_sha256: None,
+        }),
+    };
+    let mut status = LinuxUpdateStatus::from_check_result(
+        &LinuxUpdateCheckResult::Available(update),
+        UpdateChannel::Public,
+        &SkippedUpdateVersions::default(),
+    );
+    let LinuxUpdateStatus::Offer(offer) = &mut status else {
+        panic!("available update should create an offer");
+    };
+    assert!(offer.state.start_install());
+    let state = Rc::new(RefCell::new(PlayerState {
+        linux_update_status: status,
+        ..PlayerState::default()
+    }));
+
+    defer_update_install(
+        &state,
+        "Installer opened. Complete it to update.".to_owned(),
+    );
+
+    let restored = state
+        .borrow()
+        .linux_update_status
+        .pending_offer()
+        .expect("offer should survive external installer handoff");
+    assert_eq!(restored.state.phase(), &UpdateOfferPhase::Available);
+    assert!(restored.state.persistent_surface_visible());
+    assert_eq!(restored.state.primary_action_label(), Some("Update"));
+    assert_eq!(
+        restored.status_text(),
+        "Installer opened. Complete it to update."
+    );
+}
+
+#[test]
 fn candidate_deb_feed_sha_mismatch_is_refused_before_download() {
     let name = "ok-player_0.11.0-beta.1.42_amd64.deb";
     let update = DebUpdate {

@@ -248,6 +248,9 @@ pub(crate) fn refresh_linux_update_views(state: &Rc<RefCell<PlayerState>>) {
     let offer = update_status.pending_offer();
     let status_text = update_status.settings_status_text(auto_check_enabled);
     let checking = matches!(update_status, LinuxUpdateStatus::Checking(_));
+    let installing = offer
+        .as_ref()
+        .is_some_and(|offer| offer.state.is_installing());
 
     state.borrow_mut().linux_update_views.retain(|view| {
         let Some(root) = view.root.upgrade() else {
@@ -285,13 +288,7 @@ pub(crate) fn refresh_linux_update_views(state: &Rc<RefCell<PlayerState>>) {
         primary.set_visible(primary_label.is_some());
         if let Some(label) = primary_label {
             primary.set_label(label);
-            primary.set_sensitive(
-                !checking
-                    && !matches!(
-                        offer.as_ref().map(|offer| offer.state.phase()),
-                        Some(UpdateOfferPhase::Installing)
-                    ),
-            );
+            primary.set_sensitive(!checking && !installing);
             primary.update_property(&[gtk::accessible::Property::Label(
                 if label == "Install anyway" {
                     "Install the skipped update anyway"
@@ -312,7 +309,7 @@ pub(crate) fn refresh_linux_update_views(state: &Rc<RefCell<PlayerState>>) {
             } else {
                 "Check for updates"
             });
-            check.set_sensitive(!managed && !checking);
+            check.set_sensitive(!managed && !checking && !installing);
         }
         true
     });
@@ -530,6 +527,14 @@ pub(crate) fn start_update_check_for_ui(
     status_toast: Rc<StatusToast>,
     show_toast: bool,
 ) {
+    if state
+        .borrow()
+        .linux_update_status
+        .pending_offer()
+        .is_some_and(|offer| offer.state.is_installing())
+    {
+        return;
+    }
     let previous = state.borrow().linux_update_status.pending_offer();
     state.borrow_mut().linux_update_status = LinuxUpdateStatus::Checking(previous);
     refresh_linux_update_views(&state);
@@ -574,7 +579,7 @@ pub(crate) fn start_update_download(
         if !offer.state.start_install() {
             return;
         }
-        offer.completion_message = None;
+        offer.status_message = None;
         offer.update.clone()
     };
     save_current_progress(&state, false);
@@ -598,7 +603,7 @@ pub(crate) fn start_update_download(
                 glib::ControlFlow::Break
             }
             Ok(Ok(LinuxUpdateApplyResult::InstallerOpened(_path))) => {
-                finish_update_install(
+                defer_update_install(
                     &state,
                     "Installer opened. Complete it to update.".to_owned(),
                 );
@@ -631,7 +636,15 @@ pub(crate) fn restore_after_failed_check(state: &Rc<RefCell<PlayerState>>, error
 fn finish_update_install(state: &Rc<RefCell<PlayerState>>, message: String) {
     if let LinuxUpdateStatus::Offer(offer) = &mut state.borrow_mut().linux_update_status {
         offer.state.install_succeeded();
-        offer.completion_message = Some(message);
+        offer.status_message = Some(message);
+    }
+    refresh_linux_update_views(state);
+}
+
+pub(crate) fn defer_update_install(state: &Rc<RefCell<PlayerState>>, message: String) {
+    if let LinuxUpdateStatus::Offer(offer) = &mut state.borrow_mut().linux_update_status {
+        offer.state.install_deferred();
+        offer.status_message = Some(message);
     }
     refresh_linux_update_views(state);
 }
