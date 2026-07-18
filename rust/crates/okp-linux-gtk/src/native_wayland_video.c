@@ -1,14 +1,37 @@
 #include <EGL/egl.h>
 #include <GL/gl.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <wayland-client.h>
 #include <wayland-egl.h>
 
 #include "viewporter-client-protocol.h"
+#include "presentation-time-client-protocol.h"
+
+#define OKP_FEEDBACK_RING_CAPACITY 1024
+
+enum okp_wayland_feedback_kind {
+    OKP_WAYLAND_FEEDBACK_PRESENTED = 1,
+    OKP_WAYLAND_FEEDBACK_DISCARDED = 2,
+};
+
+struct okp_wayland_feedback_record {
+    uint32_t kind;
+    uint64_t observed_monotonic_ns;
+    uint64_t presented_ns;
+    uint64_t sequence;
+    uint32_t refresh_ns;
+    uint32_t flags;
+    int32_t width;
+    int32_t height;
+};
+
+struct pending_feedback;
 
 #ifndef EGL_CONTEXT_MAJOR_VERSION
 #define EGL_CONTEXT_MAJOR_VERSION 0x3098
@@ -30,6 +53,7 @@ struct okp_wayland_video_plane {
     struct wl_registry *registry;
     struct wl_subcompositor *subcompositor;
     struct wp_viewporter *viewporter;
+    struct wp_presentation *presentation;
     struct wl_surface *surface;
     struct wl_subsurface *subsurface;
     struct wp_viewport *viewport;
@@ -41,11 +65,22 @@ struct okp_wayland_video_plane {
     int logical_height;
     int buffer_width;
     int buffer_height;
+    struct pending_feedback *pending_feedback;
+    struct okp_wayland_feedback_record feedback_ring[OKP_FEEDBACK_RING_CAPACITY];
+    atomic_size_t feedback_read;
+    atomic_size_t feedback_write;
 };
 
 struct registry_state {
     struct wl_subcompositor *subcompositor;
     struct wp_viewporter *viewporter;
+    struct wp_presentation *presentation;
+};
+
+struct pending_feedback {
+    struct okp_wayland_video_plane *plane;
+    struct wp_presentation_feedback *feedback;
+    struct pending_feedback *next;
 };
 
 static void write_error(char *buffer, size_t length, const char *message) {
@@ -95,6 +130,9 @@ static void registry_global(void *data, struct wl_registry *registry, uint32_t n
     } else if (strcmp(interface, wp_viewporter_interface.name) == 0) {
         state->viewporter = wl_registry_bind(
             registry, name, &wp_viewporter_interface, version < 1 ? version : 1);
+    } else if (strcmp(interface, wp_presentation_interface.name) == 0) {
+        state->presentation = wl_registry_bind(
+            registry, name, &wp_presentation_interface, version < 1 ? version : 1);
     }
 }
 
@@ -146,7 +184,109 @@ static bool bind_wayland_globals(
     }
     plane->subcompositor = state.subcompositor;
     plane->viewporter = state.viewporter;
+    plane->presentation = state.presentation;
     return true;
+}
+
+static void remove_pending_feedback(struct pending_feedback *pending) {
+    struct pending_feedback **cursor = &pending->plane->pending_feedback;
+    while (*cursor != NULL) {
+        if (*cursor == pending) {
+            *cursor = pending->next;
+            return;
+        }
+        cursor = &(*cursor)->next;
+    }
+}
+
+static void push_feedback(
+    struct okp_wayland_video_plane *plane,
+    struct okp_wayland_feedback_record record) {
+    size_t write = atomic_load_explicit(&plane->feedback_write, memory_order_relaxed);
+    size_t next = (write + 1) % OKP_FEEDBACK_RING_CAPACITY;
+    size_t read = atomic_load_explicit(&plane->feedback_read, memory_order_acquire);
+    if (next == read) {
+        return;
+    }
+    plane->feedback_ring[write] = record;
+    atomic_store_explicit(&plane->feedback_write, next, memory_order_release);
+}
+
+static uint64_t monotonic_ns(void) {
+    struct timespec timestamp = {0};
+    if (clock_gettime(CLOCK_MONOTONIC, &timestamp) != 0) {
+        return 0;
+    }
+    return (uint64_t)timestamp.tv_sec * 1000000000ULL +
+           (uint64_t)timestamp.tv_nsec;
+}
+
+static void feedback_sync_output(
+    void *data, struct wp_presentation_feedback *feedback, struct wl_output *output) {
+    (void)data;
+    (void)feedback;
+    (void)output;
+}
+
+static void feedback_presented(
+    void *data, struct wp_presentation_feedback *feedback, uint32_t tv_sec_hi,
+    uint32_t tv_sec_lo, uint32_t tv_nsec, uint32_t refresh_nsec,
+    uint32_t seq_hi, uint32_t seq_lo, uint32_t flags) {
+    struct pending_feedback *pending = data;
+    struct okp_wayland_video_plane *plane = pending->plane;
+    uint64_t seconds = ((uint64_t)tv_sec_hi << 32) | tv_sec_lo;
+    push_feedback(plane, (struct okp_wayland_feedback_record) {
+        .kind = OKP_WAYLAND_FEEDBACK_PRESENTED,
+        .observed_monotonic_ns = monotonic_ns(),
+        .presented_ns = seconds * 1000000000ULL + tv_nsec,
+        .sequence = ((uint64_t)seq_hi << 32) | seq_lo,
+        .refresh_ns = refresh_nsec,
+        .flags = flags,
+        .width = plane->buffer_width,
+        .height = plane->buffer_height,
+    });
+    remove_pending_feedback(pending);
+    wp_presentation_feedback_destroy(feedback);
+    free(pending);
+}
+
+static void feedback_discarded(
+    void *data, struct wp_presentation_feedback *feedback) {
+    struct pending_feedback *pending = data;
+    push_feedback(pending->plane, (struct okp_wayland_feedback_record) {
+        .kind = OKP_WAYLAND_FEEDBACK_DISCARDED,
+        .observed_monotonic_ns = monotonic_ns(),
+    });
+    remove_pending_feedback(pending);
+    wp_presentation_feedback_destroy(feedback);
+    free(pending);
+}
+
+static const struct wp_presentation_feedback_listener feedback_listener = {
+    .sync_output = feedback_sync_output,
+    .presented = feedback_presented,
+    .discarded = feedback_discarded,
+};
+
+static void request_presentation_feedback(struct okp_wayland_video_plane *plane) {
+    if (plane->presentation == NULL || getenv("OKP_PRESENT_LOG") == NULL) {
+        return;
+    }
+    struct pending_feedback *pending = calloc(1, sizeof(*pending));
+    if (pending == NULL) {
+        return;
+    }
+    pending->plane = plane;
+    pending->feedback = wp_presentation_feedback(plane->presentation, plane->surface);
+    if (pending->feedback == NULL) {
+        free(pending);
+        return;
+    }
+    wl_proxy_set_queue((struct wl_proxy *)pending->feedback, plane->queue);
+    pending->next = plane->pending_feedback;
+    plane->pending_feedback = pending;
+    wp_presentation_feedback_add_listener(
+        pending->feedback, &feedback_listener, pending);
 }
 
 static void set_regions(struct okp_wayland_video_plane *plane) {
@@ -195,6 +335,15 @@ static void destroy_plane(struct okp_wayland_video_plane *plane) {
     if (plane->viewporter != NULL) {
         wp_viewporter_destroy(plane->viewporter);
     }
+    while (plane->pending_feedback != NULL) {
+        struct pending_feedback *pending = plane->pending_feedback;
+        plane->pending_feedback = pending->next;
+        wp_presentation_feedback_destroy(pending->feedback);
+        free(pending);
+    }
+    if (plane->presentation != NULL) {
+        wp_presentation_destroy(plane->presentation);
+    }
     if (plane->registry != NULL) {
         wl_registry_destroy(plane->registry);
     }
@@ -228,6 +377,8 @@ struct okp_wayland_video_plane *okp_wayland_video_plane_create(
     plane->logical_height = logical_height > 0 ? logical_height : 1;
     plane->buffer_width = buffer_width > 0 ? buffer_width : 1;
     plane->buffer_height = buffer_height > 0 ? buffer_height : 1;
+    atomic_init(&plane->feedback_read, 0);
+    atomic_init(&plane->feedback_write, 0);
 
     if (!bind_wayland_globals(plane, error, error_length)) {
         destroy_plane(plane);
@@ -358,7 +509,32 @@ bool okp_wayland_video_plane_release_current(struct okp_wayland_video_plane *pla
 }
 
 bool okp_wayland_video_plane_swap(struct okp_wayland_video_plane *plane) {
-    return plane != NULL && eglSwapBuffers(plane->egl_display, plane->egl_surface);
+    if (plane == NULL) {
+        return false;
+    }
+    request_presentation_feedback(plane);
+    bool swapped = eglSwapBuffers(plane->egl_display, plane->egl_surface);
+    wl_display_dispatch_queue_pending(plane->display, plane->queue);
+    return swapped;
+}
+
+bool okp_wayland_video_plane_take_feedback(
+    struct okp_wayland_video_plane *plane,
+    struct okp_wayland_feedback_record *record) {
+    if (plane == NULL || record == NULL) {
+        return false;
+    }
+    size_t read = atomic_load_explicit(&plane->feedback_read, memory_order_relaxed);
+    size_t write = atomic_load_explicit(&plane->feedback_write, memory_order_acquire);
+    if (read == write) {
+        return false;
+    }
+    *record = plane->feedback_ring[read];
+    atomic_store_explicit(
+        &plane->feedback_read,
+        (read + 1) % OKP_FEEDBACK_RING_CAPACITY,
+        memory_order_release);
+    return true;
 }
 
 void okp_wayland_video_plane_resize(struct okp_wayland_video_plane *plane, int width,

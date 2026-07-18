@@ -5,17 +5,30 @@ set -euo pipefail
 
 SOURCE="${1:?usage: build-local-mpv.sh <mpv-source-tree> <output-dir>}"
 OUT="${2:?usage: build-local-mpv.sh <mpv-source-tree> <output-dir>}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+EMBED_PATCH="$SCRIPT_DIR/../rust/patches/mpv-v0.40.0-wayland-embed.patch"
 
 for tool in meson ninja pkg-config; do
   command -v "$tool" >/dev/null 2>&1 || { echo "Missing required tool: $tool" >&2; exit 127; }
 done
 [[ -f "$SOURCE/meson.build" ]] || { echo "Not an mpv source tree: $SOURCE" >&2; exit 2; }
+[[ -f "$EMBED_PATCH" ]] || { echo "Missing Wayland embed patch" >&2; exit 2; }
 
 SOURCE="$(realpath "$SOURCE")"
 mkdir -p "$OUT"
 OUT="$(realpath "$OUT")"
 BUILD="$OUT/build"
 PREFIX="$OUT/install"
+
+if git -C "$SOURCE" apply --reverse --check "$EMBED_PATCH" >/dev/null 2>&1; then
+  printf 'Wayland embed patch: already applied\n'
+elif git -C "$SOURCE" apply --check "$EMBED_PATCH"; then
+  git -C "$SOURCE" apply "$EMBED_PATCH"
+  printf 'Wayland embed patch: applied\n'
+else
+  echo "The Wayland embed patch requires the mpv v0.40.0 source tree." >&2
+  exit 2
+fi
 
 meson setup "$BUILD" "$SOURCE" --wipe \
   --buildtype=debugoptimized \

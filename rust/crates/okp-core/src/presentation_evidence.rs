@@ -7,12 +7,13 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PRESENTATION_EVIDENCE_SCHEMA_VERSION: u32 = 1;
+pub const PRESENTATION_EVIDENCE_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PresentationBackend {
     NativeWaylandEgl,
+    NativeWaylandDmabuf,
     GtkGlArea,
 }
 
@@ -23,12 +24,30 @@ pub enum PresentationRecord {
         schema_version: u32,
         backend: PresentationBackend,
     },
+    BackendSelected {
+        monotonic_ns: u64,
+        backend: PresentationBackend,
+    },
     Present {
         monotonic_ns: u64,
         sequence: u64,
         width: i32,
         height: i32,
         boundary: String,
+    },
+    CompositorPresented {
+        monotonic_ns: u64,
+        backend: PresentationBackend,
+        presented_ns: u64,
+        sequence: u64,
+        refresh_ns: u32,
+        flags: u32,
+        width: i32,
+        height: i32,
+    },
+    CompositorDiscarded {
+        monotonic_ns: u64,
+        backend: PresentationBackend,
     },
     Playback {
         monotonic_ns: u64,
@@ -126,6 +145,12 @@ pub struct PresentationSummary {
     pub window_end_ns: u64,
     pub presents: usize,
     pub presents_per_second: f64,
+    pub backend: Option<PresentationBackend>,
+    pub compositor_presented: usize,
+    pub compositor_discarded: usize,
+    pub median_interval_ms: Option<f64>,
+    pub p95_interval_ms: Option<f64>,
+    pub p99_interval_ms: Option<f64>,
     pub playback_rate: Option<f64>,
     pub hwdec_current: Option<String>,
     pub decoder_drop_delta: Option<i64>,
@@ -146,14 +171,72 @@ pub fn summarize_window(
 ) -> PresentationSummary {
     let window_ns = (thresholds.window_seconds * 1_000_000_000.0).round() as u64;
     let window_end_ns = window_start_ns.saturating_add(window_ns);
-    let presents = records
+    let mut backend = records.iter().find_map(|record| match record {
+        PresentationRecord::Session { backend, .. } => Some(*backend),
+        _ => None,
+    });
+    for record in records {
+        if let PresentationRecord::BackendSelected {
+            monotonic_ns,
+            backend: selected,
+        } = record
+            && *monotonic_ns <= window_start_ns
+        {
+            backend = Some(*selected);
+        }
+    }
+    let backend_changed = records.iter().any(|record| {
+        matches!(record, PresentationRecord::BackendSelected { monotonic_ns, .. }
+            if *monotonic_ns > window_start_ns && *monotonic_ns < window_end_ns)
+    });
+    let compositor_presented = records
+        .iter()
+        .filter(|record| {
+            matches!(record, PresentationRecord::CompositorPresented { monotonic_ns, .. }
+                if *monotonic_ns >= window_start_ns && *monotonic_ns < window_end_ns)
+        })
+        .count();
+    let compositor_discarded = records
+        .iter()
+        .filter(|record| {
+            matches!(record, PresentationRecord::CompositorDiscarded { monotonic_ns, .. }
+                if *monotonic_ns >= window_start_ns && *monotonic_ns < window_end_ns)
+        })
+        .count();
+    let legacy_presents = records
         .iter()
         .filter(|record| {
             matches!(record, PresentationRecord::Present { monotonic_ns, .. }
                 if *monotonic_ns >= window_start_ns && *monotonic_ns < window_end_ns)
         })
         .count();
+    let presents = if compositor_presented > 0 {
+        compositor_presented
+    } else {
+        legacy_presents
+    };
     let presents_per_second = presents as f64 / thresholds.window_seconds;
+    let compositor_timestamps = records
+        .iter()
+        .filter_map(|record| match record {
+            PresentationRecord::CompositorPresented {
+                monotonic_ns,
+                presented_ns,
+                ..
+            } if *monotonic_ns >= window_start_ns && *monotonic_ns < window_end_ns => {
+                Some(*presented_ns)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let intervals_ms = compositor_timestamps
+        .windows(2)
+        .filter_map(|timestamps| {
+            timestamps[1]
+                .checked_sub(timestamps[0])
+                .map(|interval| interval as f64 / 1_000_000.0)
+        })
+        .collect::<Vec<_>>();
 
     let playback = records
         .iter()
@@ -200,6 +283,9 @@ pub fn summarize_window(
     };
 
     let mut errors = Vec::new();
+    if backend_changed {
+        errors.push("the presentation backend changed inside the accepted window".to_owned());
+    }
     if presents_per_second < thresholds.minimum_presents_per_second {
         errors.push(format!(
             "presentation cadence was {presents_per_second:.2} fps, expected at least {:.2}",
@@ -242,12 +328,28 @@ pub fn summarize_window(
         window_end_ns,
         presents,
         presents_per_second,
+        backend,
+        compositor_presented,
+        compositor_discarded,
+        median_interval_ms: percentile(&intervals_ms, 0.50),
+        p95_interval_ms: percentile(&intervals_ms, 0.95),
+        p99_interval_ms: percentile(&intervals_ms, 0.99),
         playback_rate,
         hwdec_current,
         decoder_drop_delta,
         vo_drop_delta,
         errors,
     }
+}
+
+fn percentile(values: &[f64], percentile: f64) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let rank = (percentile * sorted.len() as f64).ceil() as usize;
+    sorted.get(rank.saturating_sub(1)).copied()
 }
 
 pub fn exercise_errors(
@@ -411,13 +513,25 @@ fn presents_per_second(records: &[PresentationRecord], start_ns: u64, duration_n
         return 0.0;
     }
     let end_ns = start_ns.saturating_add(duration_ns);
-    let presents = records
+    let compositor_presents = records
+        .iter()
+        .filter(|record| {
+            matches!(record, PresentationRecord::CompositorPresented { monotonic_ns, .. }
+                if *monotonic_ns >= start_ns && *monotonic_ns < end_ns)
+        })
+        .count();
+    let legacy_presents = records
         .iter()
         .filter(|record| {
             matches!(record, PresentationRecord::Present { monotonic_ns, .. }
                 if *monotonic_ns >= start_ns && *monotonic_ns < end_ns)
         })
         .count();
+    let presents = if compositor_presents > 0 {
+        compositor_presents
+    } else {
+        legacy_presents
+    };
     presents as f64 / (duration_ns as f64 / 1_000_000_000.0)
 }
 
@@ -462,15 +576,31 @@ mod tests {
     #[test]
     fn callback_counts_cannot_hide_low_final_surface_cadence() {
         let start = 1_000_000_000;
-        let mut records = (0..600)
+        let mut records = (0..900)
             .map(|index| PresentationRecord::Present {
-                monotonic_ns: start + index * 25_000_000,
+                monotonic_ns: start + index * 1_000_000_000 / 60,
                 sequence: index,
                 width: 3840,
                 height: 2160,
                 boundary: "egl-swap-buffers".to_owned(),
             })
             .collect::<Vec<_>>();
+        records.extend(
+            (0..375).map(|index| PresentationRecord::CompositorPresented {
+                monotonic_ns: start + index * 40_000_000,
+                backend: PresentationBackend::NativeWaylandEgl,
+                presented_ns: 5_000_000_000 + index * 40_000_000,
+                sequence: index,
+                refresh_ns: 16_666_667,
+                flags: 0,
+                width: 3840,
+                height: 2160,
+            }),
+        );
+        records.push(PresentationRecord::CompositorDiscarded {
+            monotonic_ns: start + 5_000_000_000,
+            backend: PresentationBackend::NativeWaylandEgl,
+        });
         for (offset, position) in [(0, 0.0), (15_000_000_000, 15.0)] {
             records.push(PresentationRecord::Playback {
                 monotonic_ns: start + offset,
@@ -484,7 +614,12 @@ mod tests {
 
         let summary = summarize_window(&records, start, PresentationThresholds::default());
         assert!(!summary.passed());
-        assert!(summary.errors[0].contains("40.00 fps"));
+        assert!(summary.errors[0].contains("25.00 fps"));
+        assert_eq!(summary.compositor_presented, 375);
+        assert_eq!(summary.compositor_discarded, 1);
+        assert_eq!(summary.median_interval_ms, Some(40.0));
+        assert_eq!(summary.p95_interval_ms, Some(40.0));
+        assert_eq!(summary.p99_interval_ms, Some(40.0));
     }
 
     #[test]
@@ -560,7 +695,10 @@ mod tests {
         }
         records.sort_by_key(|record| match record {
             PresentationRecord::Session { .. } => 0,
-            PresentationRecord::Present { monotonic_ns, .. }
+            PresentationRecord::BackendSelected { monotonic_ns, .. }
+            | PresentationRecord::Present { monotonic_ns, .. }
+            | PresentationRecord::CompositorPresented { monotonic_ns, .. }
+            | PresentationRecord::CompositorDiscarded { monotonic_ns, .. }
             | PresentationRecord::Playback { monotonic_ns, .. }
             | PresentationRecord::Action { monotonic_ns, .. } => *monotonic_ns,
         });

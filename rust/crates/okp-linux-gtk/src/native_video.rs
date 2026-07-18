@@ -9,6 +9,19 @@ struct NativePlaneOpaque {
     _private: [u8; 0],
 }
 
+#[repr(C)]
+#[derive(Default)]
+struct NativeFeedbackRecord {
+    kind: u32,
+    observed_monotonic_ns: u64,
+    presented_ns: u64,
+    sequence: u64,
+    refresh_ns: u32,
+    flags: u32,
+    width: i32,
+    height: i32,
+}
+
 unsafe extern "C" {
     fn okp_wayland_video_plane_create(
         display: *mut c_void,
@@ -26,6 +39,10 @@ unsafe extern "C" {
     fn okp_wayland_video_plane_make_current(plane: *mut NativePlaneOpaque) -> bool;
     fn okp_wayland_video_plane_release_current(plane: *mut NativePlaneOpaque) -> bool;
     fn okp_wayland_video_plane_swap(plane: *mut NativePlaneOpaque) -> bool;
+    fn okp_wayland_video_plane_take_feedback(
+        plane: *mut NativePlaneOpaque,
+        record: *mut NativeFeedbackRecord,
+    ) -> bool;
     fn okp_wayland_video_plane_resize(
         plane: *mut NativePlaneOpaque,
         width: i32,
@@ -135,6 +152,33 @@ impl NativeVideoPlane {
             && unsafe { okp_wayland_video_plane_swap(self.pointer.as_ptr()) }
     }
 
+    pub(crate) fn take_presentation_feedback(&self) -> Vec<okp_mpv::WaylandPresentationFeedback> {
+        let mut feedback = Vec::new();
+        loop {
+            let mut record = NativeFeedbackRecord::default();
+            if !unsafe { okp_wayland_video_plane_take_feedback(self.pointer.as_ptr(), &mut record) }
+            {
+                break;
+            }
+            match record.kind {
+                1 => feedback.push(okp_mpv::WaylandPresentationFeedback::Presented {
+                    observed_monotonic_ns: record.observed_monotonic_ns,
+                    presented_ns: record.presented_ns,
+                    refresh_ns: record.refresh_ns,
+                    sequence: record.sequence,
+                    flags: record.flags,
+                    width: record.width,
+                    height: record.height,
+                }),
+                2 => feedback.push(okp_mpv::WaylandPresentationFeedback::Discarded {
+                    observed_monotonic_ns: record.observed_monotonic_ns,
+                }),
+                _ => {}
+            }
+        }
+        feedback
+    }
+
     pub(crate) fn resize(&self, width: i32, height: i32, scale: f64) {
         if !self.alive.load(Ordering::Acquire) {
             return;
@@ -190,6 +234,36 @@ impl NativeVideoPlane {
     }
 }
 
+pub(crate) fn wayland_dmabuf_target(
+    widget: &impl IsA<gtk::Widget>,
+) -> Result<okp_mpv::WaylandDmabufTarget, String> {
+    use gtk::glib::translate::ToGlibPtr;
+
+    let display = widget.display();
+    if !is_wayland_display(display.type_().name()) {
+        return Err("the active GDK display is not Wayland".to_owned());
+    }
+    let surface = widget
+        .native()
+        .and_then(|native| native.surface())
+        .ok_or_else(|| "the GTK window has no realized GDK surface".to_owned())?;
+    let get_wl_display = resolve_display_symbol(c"gdk_wayland_display_get_wl_display")?;
+    let get_wl_surface = resolve_surface_symbol(c"gdk_wayland_surface_get_wl_surface")?;
+    let display_pointer = NonNull::new(unsafe { get_wl_display(display.to_glib_none().0) })
+        .ok_or_else(|| "GDK returned a null wl_display".to_owned())?;
+    let surface_pointer = NonNull::new(unsafe { get_wl_surface(surface.to_glib_none().0) })
+        .ok_or_else(|| "GDK returned a null wl_surface".to_owned())?;
+    Ok(unsafe {
+        okp_mpv::WaylandDmabufTarget::new(display_pointer, surface_pointer, (display, surface))
+    })
+}
+
+pub(crate) fn wayland_scale_units(widget: &impl IsA<gtk::Widget>) -> i32 {
+    (native_surface_scale(widget) * 120.0)
+        .round()
+        .clamp(1.0, f64::from(i32::MAX)) as i32
+}
+
 pub(crate) fn native_surface_scale(widget: &impl IsA<gtk::Widget>) -> f64 {
     widget
         .native()
@@ -215,7 +289,7 @@ fn normalized_surface_scale(scale: f64) -> f64 {
     }
 }
 
-fn native_render_size(width: i32, height: i32, scale: f64) -> okp_mpv::RenderTargetSize {
+pub(crate) fn native_render_size(width: i32, height: i32, scale: f64) -> okp_mpv::RenderTargetSize {
     let scale = normalized_surface_scale(scale);
     okp_mpv::RenderTargetSize {
         width: (f64::from(width.max(1)) * scale).round() as i32,

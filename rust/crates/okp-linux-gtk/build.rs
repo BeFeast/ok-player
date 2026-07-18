@@ -19,10 +19,15 @@ fn main() {
         let viewporter_header = out_dir.join("viewporter-client-protocol.h");
         let viewporter_code = out_dir.join("viewporter-protocol.c");
         generate_wayland_protocol(&viewporter_xml, &viewporter_header, &viewporter_code);
+        let presentation_xml = protocols.join("stable/presentation-time/presentation-time.xml");
+        let presentation_header = out_dir.join("presentation-time-client-protocol.h");
+        let presentation_code = out_dir.join("presentation-time-protocol.c");
+        generate_wayland_protocol(&presentation_xml, &presentation_header, &presentation_code);
 
         cc::Build::new()
             .file("src/native_wayland_video.c")
             .file(&viewporter_code)
+            .file(&presentation_code)
             .include(&out_dir)
             .warnings(true)
             .compile("okp_native_wayland_video");
@@ -32,6 +37,7 @@ fn main() {
         println!("cargo:rustc-link-arg=-Wl,-lwayland-egl,-lwayland-client");
         println!("cargo:rerun-if-changed=src/native_wayland_video.c");
         println!("cargo:rerun-if-changed={}", viewporter_xml.display());
+        println!("cargo:rerun-if-changed={}", presentation_xml.display());
     }
     println!("cargo:rerun-if-env-changed=OKP_BUILD_VERSION");
     println!("cargo:rerun-if-env-changed=OKP_PACKAGE_KIND");
