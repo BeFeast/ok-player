@@ -19,10 +19,20 @@ PROMOTED="$STATE_DIR/last-promoted.sha"
 BUILD_NUMBER_FILE="$STATE_DIR/build-number"
 DECISION_OUTPUT="${OKP_CANDIDATE_PUBLISH_DECISION:-$STATE_DIR/last-publish-decision.json}"
 CLI="${OKP_CANDIDATE_CLI:-$STATE_DIR/checkout/rust/target/release/okp-candidate}"
+VISIBILITY_ATTEMPTS="${OKP_CANDIDATE_VISIBILITY_ATTEMPTS:-120}"
+VISIBILITY_INTERVAL_SECONDS="${OKP_CANDIDATE_VISIBILITY_INTERVAL_SECONDS:-5}"
 
 [[ -x "$CLI" ]] || { echo "okp-candidate binary not found: $CLI" >&2; exit 1; }
 [[ -f "$BUNDLE/candidate-build.json" ]] || { echo "candidate-build.json missing from $BUNDLE" >&2; exit 1; }
 [[ -s "$BUILD_NUMBER_FILE" ]] || { echo "candidate build-number state is missing" >&2; exit 1; }
+[[ "$VISIBILITY_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || {
+  echo "OKP_CANDIDATE_VISIBILITY_ATTEMPTS must be a positive integer" >&2
+  exit 1
+}
+[[ "$VISIBILITY_INTERVAL_SECONDS" =~ ^[0-9]+$ ]] || {
+  echo "OKP_CANDIDATE_VISIBILITY_INTERVAL_SECONDS must be a non-negative integer" >&2
+  exit 1
+}
 case "$ACCEPTANCE" in
   pending|accepted|rejected) ;;
   *) echo "acceptance must be pending, accepted, or rejected" >&2; exit 1 ;;
@@ -174,6 +184,32 @@ upload_exact_asset() {
   fi
 }
 
+wait_for_pointer_visibility() {
+  local expected="$1" url="$2" observed="$work/visible-candidate.linux.json"
+  local attempt observed_identity
+  for ((attempt = 1; attempt <= VISIBILITY_ATTEMPTS; attempt++)); do
+    if curl --fail --silent --show-error --location \
+      --connect-timeout 10 --max-time 30 \
+      --header "Accept: application/json" \
+      --user-agent "OK Player Linux" \
+      --output "$observed" "$url"; then
+      if cmp -s -- "$expected" "$observed"; then
+        echo "Canonical candidate pointer is visible after attempt ${attempt}."
+        return 0
+      fi
+      observed_identity="$(jq -c '{version, build, commit_sha, acceptance}' "$observed" 2>/dev/null || printf 'invalid-json')"
+      echo "Canonical candidate pointer is stale on attempt ${attempt}: ${observed_identity}" >&2
+    else
+      echo "Canonical candidate pointer could not be fetched on attempt ${attempt}." >&2
+    fi
+    if ((attempt < VISIBILITY_ATTEMPTS)); then
+      sleep "$VISIBILITY_INTERVAL_SECONDS"
+    fi
+  done
+  echo "candidate pointer was uploaded but the canonical URL did not expose its exact bytes" >&2
+  return 1
+}
+
 # Upload immutable/versioned bytes first. candidate.linux.json is the single
 # accepted pointer for both lanes and is deliberately uploaded last.
 upload_exact_asset "$BUNDLE/artifacts/deb/$deb_name" "$deb_name"
@@ -183,6 +219,8 @@ upload_exact_asset "$work/$sums_name" "$sums_name"
 pointer_attempted=true
 gh release upload "$TAG" --repo "$REPO" "$feed" --clobber
 pointer_committed=true
+candidate_url="${OKP_CANDIDATE_PUBLIC_URL:-$base_url/candidate.linux.json}"
+wait_for_pointer_visibility "$feed" "$candidate_url"
 
 # Bound the mutable surface only after the new pointer is usable. The core
 # decides which recognized candidate assets are outside current + history.
