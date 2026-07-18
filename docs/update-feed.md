@@ -44,6 +44,28 @@ Shared invariants across all three feeds:
   (`LastCheckFailed`) distinct from a confirmed "up to date" (`CheckedOk`); Linux keeps
   `LinuxUpdateStatus::Failed` ("Update check failed") distinct from `UpToDate` ("Up to date").
 
+## Linux update decision state
+
+Discovery and installation remain feed/lane-specific, but the user decision is
+portable `okp-core` state:
+
+- a discovered version stays in a persistent, non-modal player surface and the
+  Settings → Updates page until the user chooses **Update** or **Skip this version**;
+- both surfaces project the same pending package and phase; the old transient
+  toast timeout does not clear the offer;
+- **Update** invokes the existing verified AppImage or `.deb` path. Download/
+  install failure retains the exact pending version and restores a retryable
+  Update action with the error text;
+- **Skip this version** writes only that exact version to
+  `updates.skipped_versions.public` or `.candidate` in the human-readable
+  settings JSON. The other channel and every newer version remain eligible;
+- an automatic check suppresses the persistent prompt for the exact skipped
+  version. A manual **Check for updates** reports that it was skipped and exposes
+  **Install anyway**.
+
+The skip is a user preference, not feed metadata. Feed generators and release
+workflows therefore do not encode, upload, or infer skip state.
+
 ## Who writes the feeds
 
 `.github/workflows/publish-update-feeds.yml` is the only writer of the Pages site. It runs both

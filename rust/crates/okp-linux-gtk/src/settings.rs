@@ -4,7 +4,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use okp_core::gapless::{GaplessPlaybackCapability, effective_gapless_enabled};
-use okp_core::settings::{AppearanceTheme, ScreenshotFormat, Settings, UpdateChannel};
+use okp_core::settings::{
+    AppearanceTheme, ScreenshotFormat, Settings, SkippedUpdateVersions, UpdateChannel,
+};
 use okp_core::subtitle_style::{self, SubtitleStyle};
 
 const DEFAULT_VOLUME: f64 = 100.0;
@@ -122,6 +124,14 @@ impl SettingsStore {
     /// install in the rolling candidate channel (issue #339).
     pub fn update_channel(&self) -> UpdateChannel {
         self.data.updates.channel
+    }
+
+    pub fn skipped_update_version(&self, channel: UpdateChannel) -> Option<&str> {
+        self.data.updates.skipped_versions.version(channel)
+    }
+
+    pub fn skipped_update_versions(&self) -> &SkippedUpdateVersions {
+        &self.data.updates.skipped_versions
     }
 
     pub fn appearance_theme(&self) -> AppearanceTheme {
@@ -279,6 +289,13 @@ impl SettingsStore {
     pub fn set_auto_check_updates(&mut self, enabled: bool) {
         if self.data.updates.auto_check != enabled {
             self.data.updates.auto_check = enabled;
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_skipped_update_version(&mut self, channel: UpdateChannel, version: Option<String>) {
+        if self.skipped_update_version(channel) != version.as_deref() {
+            self.data.updates.skipped_versions.set(channel, version);
             self.dirty = true;
         }
     }
@@ -663,6 +680,43 @@ mod tests {
         settings.set_auto_check_updates(false);
 
         assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn skipped_update_versions_save_and_reload_per_channel() {
+        let dir = unique_temp_dir("okp-update-skip-settings");
+        let path = dir.path().join("settings.json");
+        let mut settings = SettingsStore {
+            path: path.clone(),
+            data: Settings::default(),
+            dirty: false,
+        };
+
+        settings
+            .set_skipped_update_version(UpdateChannel::Public, Some("0.11.0-beta.2".to_owned()));
+        settings.set_skipped_update_version(
+            UpdateChannel::Candidate,
+            Some("0.11.0-beta.2.41".to_owned()),
+        );
+        settings.save().expect("skip settings should save");
+
+        let json = fs::read_to_string(&path).expect("settings should be readable");
+        let reloaded = Settings::load(&json).expect("settings should reload");
+        assert_eq!(
+            reloaded
+                .updates
+                .skipped_versions
+                .version(UpdateChannel::Public),
+            Some("0.11.0-beta.2")
+        );
+        assert_eq!(
+            reloaded
+                .updates
+                .skipped_versions
+                .version(UpdateChannel::Candidate),
+            Some("0.11.0-beta.2.41")
+        );
+        dir.close().expect("temp settings dir should be removed");
     }
 
     #[test]

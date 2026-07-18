@@ -29,12 +29,14 @@ use okp_core::player_commands::{
     ResolvedPlayerCommand,
 };
 use okp_core::playlist::{Playlist, PlaylistItem, QueueInsertMode, RepeatMode};
-use okp_core::settings::{AppearanceTheme, UpdateChannel};
+use okp_core::settings::{AppearanceTheme, SkippedUpdateVersions, UpdateChannel};
 use okp_core::settings_navigation::{SETTINGS_RAIL_ORDER, SettingsPage, search_settings};
 use okp_core::shortcuts::{
     self, ShortcutAction, ShortcutBinding, ShortcutChord, ShortcutModifiers, ShortcutSlot,
 };
-use okp_core::update_selection::{self, DebFeed, DebUpdate, SHA256SUMS_ASSET};
+use okp_core::update_selection::{
+    self, DebFeed, DebUpdate, SHA256SUMS_ASSET, UpdateOfferPhase, UpdateOfferState,
+};
 use okp_core::video_geometry::{VideoGeometry, VideoGeometryAction};
 use okp_core::{
     AppIdentity, aspect_resize, chapter_math, fullscreen_toggle, launch_args, lrc, m3u,
@@ -216,6 +218,7 @@ struct PlayerState {
     settings: settings::SettingsStore,
     screenshot_jobs: screenshots::ScreenshotJobs,
     linux_update_status: LinuxUpdateStatus,
+    linux_update_views: Vec<LinuxUpdateView>,
     pending_audio_device_restore: Option<PendingAudioDeviceRestore>,
     render_target_size: Option<okp_mpv::RenderTargetSize>,
     native_video_plane: Option<Arc<NativeVideoPlane>>,
@@ -871,53 +874,85 @@ enum LinuxUpdateCheckResult {
     Failed(String),
 }
 
+#[derive(Clone)]
+struct LinuxUpdateOffer {
+    update: PendingLinuxUpdate,
+    state: UpdateOfferState,
+    status_message: Option<String>,
+}
+
 #[derive(Clone, Default)]
 enum LinuxUpdateStatus {
     #[default]
     NotChecked,
-    Checking,
+    Checking(Option<LinuxUpdateOffer>),
     UpToDate,
     ManagedExternally,
-    Available(PendingLinuxUpdate),
+    Offer(LinuxUpdateOffer),
     Failed(String),
 }
 
 impl LinuxUpdateStatus {
-    fn from_check_result(result: &LinuxUpdateCheckResult) -> Self {
+    fn from_check_result(
+        result: &LinuxUpdateCheckResult,
+        channel: UpdateChannel,
+        skipped_versions: &SkippedUpdateVersions,
+    ) -> Self {
         match result {
             LinuxUpdateCheckResult::UpToDate => Self::UpToDate,
             LinuxUpdateCheckResult::ManagedExternally => Self::ManagedExternally,
-            LinuxUpdateCheckResult::Available(update) => Self::Available(update.clone()),
+            LinuxUpdateCheckResult::Available(update) => {
+                let version = update
+                    .target_version()
+                    .unwrap_or_else(|| "new version".to_owned());
+                Self::Offer(LinuxUpdateOffer {
+                    update: update.clone(),
+                    state: UpdateOfferState::discovered(channel, version, skipped_versions),
+                    status_message: None,
+                })
+            }
             LinuxUpdateCheckResult::Failed(error) => Self::Failed(error.clone()),
         }
     }
 
-    fn pending_update(&self) -> Option<PendingLinuxUpdate> {
+    fn pending_offer(&self) -> Option<LinuxUpdateOffer> {
         match self {
-            Self::Available(update) => Some(update.clone()),
+            Self::Offer(offer) => Some(offer.clone()),
+            Self::Checking(offer) => offer.clone(),
             _ => None,
-        }
-    }
-
-    fn action_label(&self) -> String {
-        match self {
-            Self::Available(update) => update.action_label().to_owned(),
-            Self::Checking => "Checking...".to_owned(),
-            Self::ManagedExternally => "Managed by DNF".to_owned(),
-            _ => "Check for updates".to_owned(),
         }
     }
 
     fn settings_status_text(&self, auto_check_enabled: bool) -> String {
         match self {
             Self::NotChecked => update_status_intro(auto_check_enabled).to_owned(),
-            Self::Checking => "Checking the update feed...".to_owned(),
+            Self::Checking(Some(offer)) => {
+                format!("Checking for a newer version. {}", offer.status_text())
+            }
+            Self::Checking(None) => "Checking the update feed...".to_owned(),
             Self::UpToDate => "OK Player is up to date".to_owned(),
             Self::ManagedExternally => "Updates are managed by DNF.".to_owned(),
-            Self::Available(update) => update.available_status(),
+            Self::Offer(offer) => offer.status_text(),
             Self::Failed(error) => format!("Update check failed: {error}"),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LinuxUpdateViewKind {
+    Persistent,
+    Settings,
+}
+
+#[derive(Clone)]
+struct LinuxUpdateView {
+    kind: LinuxUpdateViewKind,
+    root: glib::WeakRef<gtk::Widget>,
+    title: glib::WeakRef<gtk::Label>,
+    status: glib::WeakRef<gtk::Label>,
+    primary: glib::WeakRef<gtk::Button>,
+    skip: glib::WeakRef<gtk::Button>,
+    check: Option<glib::WeakRef<gtk::Button>>,
 }
 
 enum LinuxUpdateApplyResult {
@@ -1886,23 +1921,50 @@ impl PendingLinuxUpdate {
             LinuxUpdateTarget::Deb(update) => Some(update.version.clone()),
         }
     }
+}
 
-    fn action_label(&self) -> &'static str {
-        match &self.target {
-            LinuxUpdateTarget::Info(_) | LinuxUpdateTarget::Asset(_) => "Download and Restart",
-            LinuxUpdateTarget::Deb(_) => "Install .deb",
+impl LinuxUpdateOffer {
+    fn status_text(&self) -> String {
+        let version = self.state.version();
+        match self.state.phase() {
+            UpdateOfferPhase::Available => self
+                .status_message
+                .clone()
+                .unwrap_or_else(|| format!("Version {version} is available.")),
+            UpdateOfferPhase::Skipped => format!(
+                "Version {version} was skipped on the {} channel. You can still install it manually.",
+                update_channel_label(self.state.channel())
+            ),
+            UpdateOfferPhase::Installing => {
+                format!("Downloading and installing version {version}…")
+            }
+            UpdateOfferPhase::InstallFailed(error) => {
+                format!("Update {version} failed: {error}. You can retry.")
+            }
+            UpdateOfferPhase::Installed => self
+                .status_message
+                .clone()
+                .unwrap_or_else(|| format!("Version {version} was installed.")),
         }
     }
 
-    fn available_status(&self) -> String {
-        match &self.target {
-            LinuxUpdateTarget::Info(_) | LinuxUpdateTarget::Asset(_) => format!(
-                "Available: {}",
-                self.target_version()
-                    .unwrap_or_else(|| "new version".to_owned())
-            ),
-            LinuxUpdateTarget::Deb(update) => format!("Available: {}", update.version),
+    fn title_text(&self) -> String {
+        match self.state.phase() {
+            UpdateOfferPhase::Skipped => "Skipped update".to_owned(),
+            UpdateOfferPhase::Installing => "Updating OK Player".to_owned(),
+            UpdateOfferPhase::InstallFailed(_) => "Update failed".to_owned(),
+            UpdateOfferPhase::Installed => "Update complete".to_owned(),
+            UpdateOfferPhase::Available => {
+                format!("Update available · {}", self.state.version())
+            }
         }
+    }
+}
+
+fn update_channel_label(channel: UpdateChannel) -> &'static str {
+    match channel {
+        UpdateChannel::Public => "public",
+        UpdateChannel::Candidate => "candidate",
     }
 }
 

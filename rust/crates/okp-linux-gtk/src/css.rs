@@ -1639,6 +1639,78 @@ const OKP_STYLESHEET: &str = "
             background: #050608;
         }
 
+        .okp-update-action-surface {
+            padding: 12px 14px;
+            border-radius: 8px;
+            background: #f8fafb;
+            border: 1px solid rgba(0, 0, 0, 0.06);
+        }
+
+        .okp-update-action-title {
+            color: @okp_ink;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .okp-update-action-detail {
+            color: rgba(0, 0, 0, 0.50);
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12px;
+        }
+
+        button.okp-update-primary-button {
+            min-height: 30px;
+            padding: 5px 14px;
+            border-radius: 7px;
+            border: none;
+            background: @okp_teal;
+            color: #ffffff;
+            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-size: 12px;
+            font-weight: 600;
+            box-shadow: none;
+        }
+
+        button.okp-update-primary-button:hover {
+            background: @okp_teal_deep;
+        }
+
+        button.okp-update-primary-button:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 2px alpha(@okp_teal, 0.35);
+        }
+
+        button.okp-update-primary-button:disabled {
+            opacity: 0.64;
+        }
+
+        .okp-persistent-update {
+            padding: 12px 14px;
+            border-radius: 10px;
+            background: rgba(22, 22, 25, 0.88);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            box-shadow: 0 14px 34px rgba(0, 0, 0, 0.42);
+        }
+
+        .okp-persistent-update .okp-update-action-title {
+            color: rgba(255, 255, 255, 0.94);
+        }
+
+        .okp-persistent-update .okp-update-action-detail {
+            color: rgba(255, 255, 255, 0.66);
+        }
+
+        .okp-persistent-update button.okp-settings-button {
+            color: rgba(255, 255, 255, 0.88);
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(255, 255, 255, 0.12);
+        }
+
+        .okp-persistent-update button.okp-settings-button:hover {
+            background: rgba(255, 255, 255, 0.14);
+        }
+
         .okp-timeline,
         .okp-seek {
             min-width: 120px;
@@ -4294,6 +4366,7 @@ const OKP_STYLESHEET: &str = "
         window.okp-settings-window.is-dark .okp-about-row-value,
         window.okp-settings-window.is-dark .okp-about-row-value-mono,
         window.okp-settings-window.is-dark .okp-info-value,
+        window.okp-settings-window.is-dark .okp-update-action-title,
         window.okp-settings-window.is-dark .okp-shortcut-action-title {
             color: rgba(255, 255, 255, 0.94);
         }
@@ -4302,6 +4375,7 @@ const OKP_STYLESHEET: &str = "
         window.okp-settings-window.is-dark .okp-about-row-label,
         window.okp-settings-window.is-dark .okp-info-label,
         window.okp-settings-window.is-dark .okp-update-status,
+        window.okp-settings-window.is-dark .okp-update-action-detail,
         window.okp-settings-window.is-dark .okp-info-track-detail {
             color: rgba(255, 255, 255, 0.56);
         }
@@ -4328,7 +4402,8 @@ const OKP_STYLESHEET: &str = "
         }
 
         window.okp-settings-window.is-dark .okp-about-card,
-        window.okp-settings-window.is-dark .okp-info-section {
+        window.okp-settings-window.is-dark .okp-info-section,
+        window.okp-settings-window.is-dark .okp-update-action-surface {
             background: rgba(255, 255, 255, 0.035);
             border-color: rgba(255, 255, 255, 0.07);
         }
@@ -4441,6 +4516,7 @@ const OKP_STYLESHEET: &str = "
         window.okp-settings-window.is-high-contrast .okp-about-card,
         window.okp-settings-window.is-high-contrast .okp-info-section,
         window.okp-settings-window.is-high-contrast .okp-settings-switch-row,
+        window.okp-settings-window.is-high-contrast .okp-update-action-surface,
         window.okp-settings-window.is-high-contrast .okp-settings-button {
             background: #000000;
             border-color: #ffffff;
@@ -4464,9 +4540,17 @@ const OKP_STYLESHEET: &str = "
         window.okp-settings-window.is-high-contrast .okp-info-label,
         window.okp-settings-window.is-high-contrast .okp-info-value,
         window.okp-settings-window.is-high-contrast .okp-update-status,
+        window.okp-settings-window.is-high-contrast .okp-update-action-title,
+        window.okp-settings-window.is-high-contrast .okp-update-action-detail,
         window.okp-settings-window.is-high-contrast .okp-shortcut-action-title,
         window.okp-settings-window.is-high-contrast .okp-shortcut-action-id {
             color: #ffffff;
+        }
+
+        window.okp-settings-window.is-high-contrast button.okp-update-primary-button {
+            background: #ffffff;
+            color: #000000;
+            border: 1px solid #ffffff;
         }
 
         window.okp-settings-window.is-high-contrast .okp-settings-hint {

@@ -106,6 +106,11 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
 
     let identity = AppIdentity::linux();
     let state = Rc::new(RefCell::new(PlayerState::default()));
+    let update_preview =
+        linux_update_preview_status(state.borrow().settings.skipped_update_versions());
+    if let Some(preview) = update_preview {
+        state.borrow_mut().linux_update_status = preview;
+    }
     // Visual smoke hook for the private welcome state. Private session is transient by
     // design, so this changes only the in-memory session and never writes a setting.
     if env::var_os("OKP_PRIVATE_SESSION_ON_STARTUP").is_some() {
@@ -121,6 +126,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     let initial_map_pending = Rc::new(Cell::new(defer_initial_map));
     let updating_volume = Rc::new(Cell::new(false));
     let status_toast = Rc::new(StatusToast::new());
+    let update_surface = persistent_update_surface(Rc::clone(&state), Rc::clone(&status_toast));
     let chrome = Rc::new(ChromeVisibility::new());
     let (mpris_controller, mpris_commands, mpris_signals) = create_mpris_controller();
     start_mpris_service(mpris_controller.clone(), mpris_signals);
@@ -238,6 +244,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     for compact_overlay in compact_mode.overlays() {
         overlay.add_overlay(compact_overlay);
     }
+    overlay.add_overlay(&update_surface);
     overlay.add_overlay(status_toast.widget());
     for resize_handle in resize_handles {
         overlay.add_overlay(&resize_handle);

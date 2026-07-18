@@ -401,6 +401,13 @@ directly unit-tested, and renders it in the GTK shell; cache and network are def
   the module just compares the feed's single version to the running one. Network fetch, checksum
   download/verification (fail-closed via the `SHA256SUMS_ASSET` URL the selection carries),
   staging, and installation stay in the shell.
+- **Update decisions are now shared state.** `UpdateOfferState` owns the portable
+  available → skipped/installing → failed-or-installed transitions, exact-version
+  prompt suppression, Install-anyway projection, and retry eligibility. GTK
+  retains only the non-portable verified package/update-manager payload and
+  renders the state in native surfaces. Windows has no equivalent Skip-version
+  behavior today, so there is no C# test suite to port; a future Windows consumer
+  can project the same state without moving decision logic into its shell.
 - **Empty vs failed stays honest.** A failed feed fetch surfaces in the shell as an error
   (`LinuxUpdateStatus::Failed`, "couldn't check"); a feed that is not newer than the running build
   returns `None` (`UpToDate`). `select_deb_update_from_feed` never sees a fetch failure, so the two
@@ -471,6 +478,10 @@ untouched by this work; the Windows migration is exercised only by the Rust gold
   separate `%APPDATA%\OkPlayer\mpv.conf` text file, never a field of `settings.json`, so
   `advanced.mpv_conf` is left absent when migrating a Windows settings document (the shell reads
   that file on its own). `advanced.keybindings` is likewise Linux-only.
+- **Skipped update versions are per channel.** Linux writes optional
+  `updates.skipped_versions.public` / `.candidate` exact-version strings. Older
+  Linux documents and migrated Windows documents default both slots to absent;
+  Windows currently ignores them because its updater has no Skip-version UX.
 - **Linux-only vs Windows-only fields coexist.** The picture adjustments
   (`video.brightness`/`contrast`/`saturation`/`gamma`), `playback.auto_advance`, `repeat`, and
   `shuffle` are Linux-only; `playback.gapless` is a shared reserved preference that shells must

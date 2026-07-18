@@ -8,6 +8,11 @@ The candidate channel lets explicitly enrolled Linux QA installs update from fre
 - Candidates use one mutable pre-release tagged `linux-candidate`. It is a rolling publication surface, not a permanent product release.
 - The single candidate pointer is `candidate.linux.json`. Only `updates.channel: "candidate"` or `OKP_LINUX_UPDATE_CHANNEL=candidate` fetches it; missing, unknown, and default settings remain `public`.
 - The candidate AppImage and `.deb` lanes both derive from this pointer. The AppImage updater does not independently consume a mutable Velopack feed, so a partial upload cannot expose an unaccepted AppImage candidate.
+- Update suppression is isolated too. `updates.skipped_versions.candidate`
+  stores only the exact skipped candidate, independently of
+  `updates.skipped_versions.public`. Switching enrollment cannot leak a public
+  skip into candidate discovery or vice versa, and candidate N never suppresses
+  candidate N+1.
 
 ## Native-builder handoff
 
