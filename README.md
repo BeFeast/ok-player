@@ -64,7 +64,7 @@ chmod +x OK-Player-<version>-x86_64.AppImage
 
 The AppImage self-updates in place through the same static HTTPS feed (Velopack).
 
-**Runtime requirements.** A GTK4 desktop with libmpv available; hardware video decode uses VA-API where present. OK Player runs under X11 and Wayland; some behaviors (drag/drop, portals, compositor fullscreen) are validated only on GNOME/Wayland — see [Supported environments](#supported-environments).
+**Runtime requirements.** A GTK4 desktop; Debian and AppImage builds carry the pinned libmpv required by the embedded Wayland DMA-BUF path, while Fedora packages use the distro mpv libraries. Hardware video decode uses VA-API where present. OK Player runs under X11 and Wayland; some behaviors (drag/drop, portals, compositor fullscreen) are validated only on GNOME/Wayland — see [Supported environments](#supported-environments).
 
 **Update.** Both lanes check the static feed and apply updates in place; there is no separate command to run.
 

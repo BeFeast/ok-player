@@ -14,6 +14,10 @@ Host registration, credentials, and machine-specific service configuration live
 outside this repository. Everything here is host-agnostic and reads its paths
 from the environment.
 
+The native builder also needs `git`, `meson`, `ninja`, and `pkg-config` plus the
+development dependencies required by mpv v0.40.0. The build pins the upstream
+commit and fails rather than substituting a distro libmpv.
+
 ## Delivery SLA
 
 When `main` advances, the latest eligible SHA becomes an updater candidate
@@ -85,7 +89,11 @@ lock after their direct parent returns.
    - `cargo fmt --all -- --check`
    - clippy with warnings denied
    - workspace tests
+   - pinned mpv v0.40.0 build with the embedded Wayland DMA-BUF patch; Rust
+     gates and both Ubuntu package lanes use this exact library
    - Debian and AppImage/Velopack packaging
+   - extracted payload verification that `libmpv.so.2` is packaged beside the
+     executable, carries the embed options, and resolves through `$ORIGIN`
    - package identity + SHA-256 verification (`SHA256SUMS`, `package-identity.json`)
    - clean install / upgrade / uninstall smoke in a disposable environment
    - real playback and screenshot capture from the exact Debian payload, with a bundled image and SHA-256

@@ -13,6 +13,9 @@ FIXED_ICONS="$ROOT/rust/packaging/linux/icons/hicolor"
 DESKTOP="$ROOT/rust/packaging/linux/com.befeast.okplayer.desktop"
 METAINFO="$ROOT/rust/packaging/linux/com.befeast.okplayer.metainfo.xml"
 
+source "$ROOT/scripts/linux-bundled-mpv-env.sh"
+okp_use_linux_bundled_mpv package
+
 OKP_BUILD_VERSION="$VERSION" OKP_PACKAGE_KIND=deb \
   cargo build --manifest-path "$ROOT/rust/Cargo.toml" -p okp-linux-gtk --release
 
@@ -25,6 +28,7 @@ mkdir -p "$BUILD_ROOT/usr/share/metainfo"
 mkdir -p "$BUILD_ROOT/usr/share/icons/hicolor/scalable/apps"
 
 install -Dm755 "$TARGET_DIR/release/okp-linux-gtk" "$BUILD_ROOT/usr/lib/ok-player/ok-player"
+install -Dm755 "$OKP_BUNDLED_MPV_LIBRARY" "$BUILD_ROOT/usr/lib/ok-player/libmpv.so.2"
 ln -s ../lib/ok-player/ok-player "$BUILD_ROOT/usr/bin/ok-player"
 install -Dm644 "$DESKTOP" "$BUILD_ROOT/usr/share/applications/com.befeast.okplayer.desktop"
 install -Dm644 "$METAINFO" "$BUILD_ROOT/usr/share/metainfo/com.befeast.okplayer.metainfo.xml"
@@ -34,6 +38,10 @@ for size in 16 24 32 48 64; do
     "$FIXED_ICONS/${size}x${size}/apps/com.befeast.okplayer.svg" \
     "$BUILD_ROOT/usr/share/icons/hicolor/${size}x${size}/apps/com.befeast.okplayer.svg"
 done
+
+"$ROOT/scripts/verify-linux-bundled-mpv.sh" \
+  "$BUILD_ROOT/usr/lib/ok-player/ok-player" \
+  "$BUILD_ROOT/usr/lib/ok-player/libmpv.so.2"
 
 cat > "$BUILD_ROOT/DEBIAN/control" <<CONTROL
 Package: $PACKAGE
@@ -45,7 +53,7 @@ Maintainer: BeFeast <noreply@github.com>
 Depends: libgtk-4-1, libmpv2, libgl1, libegl1, libglx0, libwayland-client0, libwayland-egl1, ffmpeg
 Homepage: https://github.com/BeFeast/ok-player
 Description: Elegant mpv-based media player
- OK Player is a native desktop media player built over libmpv.
+ OK Player is a native desktop media player built over its packaged libmpv.
  This Linux package is an early GTK4/Rust alpha.
 CONTROL
 

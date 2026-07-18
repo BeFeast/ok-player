@@ -24,6 +24,8 @@ else
 fi
 
 export DOTNET_ROOT="${DOTNET_ROOT:-$HOME/.dotnet}"
+source "$ROOT/scripts/linux-bundled-mpv-env.sh"
+okp_use_linux_bundled_mpv package
 
 OKP_BUILD_VERSION="$VERSION" OKP_PACKAGE_KIND=appimage cargo build \
   --manifest-path "$ROOT/rust/Cargo.toml" \
@@ -36,6 +38,7 @@ OKP_BUILD_VERSION="$VERSION" OKP_PACKAGE_KIND=appimage cargo build \
 rm -rf "$PACK_DIR" "$OUTPUT_DIR"
 mkdir -p "$PACK_DIR" "$OUTPUT_DIR"
 install -Dm755 "$TARGET_DIR/release/okp-linux-gtk" "$PACK_DIR/ok-player"
+install -Dm755 "$OKP_BUNDLED_MPV_LIBRARY" "$PACK_DIR/libmpv.so.2"
 install -Dm644 "$ICON" "$PACK_DIR/com.befeast.okplayer.svg"
 install -Dm644 "$ICON" "$PACK_DIR/usr/share/icons/hicolor/scalable/apps/com.befeast.okplayer.svg"
 install -Dm644 "$METAINFO" "$PACK_DIR/usr/share/metainfo/com.befeast.okplayer.metainfo.xml"
@@ -44,6 +47,10 @@ for size in 16 24 32 48 64; do
     "$FIXED_ICONS/${size}x${size}/apps/com.befeast.okplayer.svg" \
     "$PACK_DIR/usr/share/icons/hicolor/${size}x${size}/apps/com.befeast.okplayer.svg"
 done
+
+"$ROOT/scripts/verify-linux-bundled-mpv.sh" \
+  "$PACK_DIR/ok-player" \
+  "$PACK_DIR/libmpv.so.2"
 
 "$VPK" pack \
   --packId "$PACK_ID" \
@@ -63,6 +70,18 @@ done
   --package-id "$PACK_ID" \
   --version "$VERSION" \
   --versioned-appimage "OK-Player-$VERSION-x86_64.AppImage"
+
+APPIMAGE_INSPECT="$(mktemp -d)"
+trap 'rm -rf "$APPIMAGE_INSPECT"' EXIT
+(
+  cd "$APPIMAGE_INSPECT"
+  "$OUTPUT_DIR/OK-Player-$VERSION-x86_64.AppImage" --appimage-extract >/dev/null
+  "$ROOT/scripts/verify-linux-bundled-mpv.sh" \
+    squashfs-root/usr/bin/ok-player \
+    squashfs-root/usr/bin/libmpv.so.2
+)
+rm -rf "$APPIMAGE_INSPECT"
+trap - EXIT
 
 echo "Velopack Linux artifacts written to $OUTPUT_DIR"
 echo "Run write-linux-acceptance-template.sh after both package lanes complete; publishing requires evidence for this exact artifact hash."

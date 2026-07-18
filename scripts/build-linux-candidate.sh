@@ -150,6 +150,9 @@ export CC="${CC:-/usr/bin/cc}"
 export OKP_SKIP_UPDATE_CHECK=1
 export OKP_RUN_VELOPACK_PACK_TEST=1
 
+source "$CHECKOUT/scripts/linux-bundled-mpv-env.sh"
+run_gate bundled-mpv okp_use_linux_bundled_mpv
+
 # --- Bounded gates -----------------------------------------------------------
 run_gate fmt \
   cargo fmt --manifest-path "$CHECKOUT/rust/Cargo.toml" --all -- --check
