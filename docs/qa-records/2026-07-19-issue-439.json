@@ -1,0 +1,789 @@
+{
+  "schema_version": 2,
+  "package": {
+    "version": "0.1.0-linux-alpha.113",
+    "commit_sha": "192f5e417d9bfc7a979e728205e174ef271ef0d9",
+    "artifacts": [
+      {
+        "kind": "debian",
+        "file_name": "ok-player_0.1.0-linux-alpha.113_amd64.deb",
+        "sha256": "ac0d035075589d3d77a51c6902c84e5104c34dd1832a8464e2c8d2d1919a251a"
+      },
+      {
+        "kind": "app-image",
+        "file_name": "OK-Player-0.1.0-linux-alpha.113-x86_64.AppImage",
+        "sha256": "d5e80196aa4a4325c68c21373e7d18c1ed81834e18d3fa557bcd7abafc9e971d"
+      }
+    ]
+  },
+  "build_environment_sha256": "14b0a92e9e7003423596d3387ac13225c6a497c65565410ec331a782e67fbf49",
+  "rows": [
+    {
+      "id": "rust-workspace-gates",
+      "level": "model-unit",
+      "viewport": null,
+      "theme": "not-applicable",
+      "state": "rust-workspace-gates",
+      "reference": "rust-test-suite",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "candidate-rust-gates",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Recorded by the candidate workflow after cargo test --workspace passed.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "natural-folder-queue",
+      "level": "model-unit",
+      "viewport": null,
+      "theme": "not-applicable",
+      "state": "natural-folder-queue",
+      "reference": "rust-test-suite",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "candidate-rust-gates",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Recorded by the candidate workflow after cargo test --workspace passed.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "acceptance-contract",
+      "level": "model-unit",
+      "viewport": null,
+      "theme": "not-applicable",
+      "state": "acceptance-contract",
+      "reference": "rust-test-suite",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "candidate-rust-gates",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Recorded by the candidate workflow after cargo test --workspace passed.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "xvfb-first-run",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "first-run",
+      "reference": "windows-player-redlines",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "canvas-card-edge-contrast",
+          "expected": 0,
+          "actual": 0.000915,
+          "tolerance": 0.04,
+          "unit": "normalized",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
+    },
+    {
+      "id": "xvfb-continue-watching",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "light",
+      "state": "continue-watching",
+      "reference": "history-handoff",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "left-heading-region-visible",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
+    },
+    {
+      "id": "xvfb-history",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "light",
+      "state": "history",
+      "reference": "history-handoff",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
+    },
+    {
+      "id": "xvfb-loaded-paused-osc",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "loaded-paused-osc",
+      "reference": "windows-player-redlines",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run after the exact package failed the earlier canonical narrow-layout gate.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "xvfb-paused",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "paused",
+      "reference": "windows-player-redlines",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run after the exact package failed the earlier canonical narrow-layout gate.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "xvfb-buffering-loading",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "buffering-loading",
+      "reference": "windows-player-redlines",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run after the exact package failed the earlier canonical narrow-layout gate.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "xvfb-playback-error",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "playback-error",
+      "reference": "windows-player-redlines",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run after the exact package failed the earlier canonical narrow-layout gate.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "xvfb-playing-idle",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "playing-idle",
+      "reference": "windows-player-redlines",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run after the exact package failed the earlier canonical narrow-layout gate.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "xvfb-osd",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "osd",
+      "reference": "windows-player-redlines",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run after the exact package failed the earlier canonical narrow-layout gate.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "xvfb-buffered-timeline",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "buffered-timeline",
+      "reference": "windows-player-redlines",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run after the exact package failed the earlier canonical narrow-layout gate.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "xvfb-chapter-context",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "chapter-context",
+      "reference": "windows-player-redlines",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run after the exact package failed the earlier canonical narrow-layout gate.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "xvfb-chapters",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "chapters",
+      "reference": "windows-player-redlines",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run after the exact package failed the earlier canonical narrow-layout gate.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "xvfb-up-next",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "up-next",
+      "reference": "windows-player-redlines",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "panel-left-clear-strip",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "panel-content-visible",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
+    },
+    {
+      "id": "xvfb-settings-about",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 760,
+        "height": 560
+      },
+      "theme": "light",
+      "state": "settings-about",
+      "reference": "about-handoff",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 760,
+          "actual": 760,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 560,
+          "actual": 560,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
+    },
+    {
+      "id": "xvfb-narrow-layout",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 480,
+        "height": 540
+      },
+      "theme": "dark",
+      "state": "narrow-layout",
+      "reference": "compact-modes-handoff",
+      "measurement_result": "fail",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 480,
+          "actual": 480,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 540,
+          "actual": 540,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "gtk-glarea-media-render",
+          "expected": 1,
+          "actual": 0,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "fail"
+        },
+        {
+          "name": "osc-surface-mean",
+          "expected": 0.055,
+          "actual": 0.0194427,
+          "tolerance": 0,
+          "unit": "normalized",
+          "status": "fail"
+        }
+      ],
+      "notes": "Both exact package lanes failed the canonical media-backed narrow smoke with GTK GLArea initialization failure; the same smoke passed with a source-built binary.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "xvfb-bright-video-background",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "bright-video-background",
+      "reference": "windows-player-redlines",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run after the exact package failed the earlier canonical narrow-layout gate.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "xvfb-dark-video-background",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "dark-video-background",
+      "reference": "windows-player-redlines",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run after the exact package failed the earlier canonical narrow-layout gate.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "xvfb-fullscreen",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "theme": "dark",
+      "state": "fullscreen",
+      "reference": "windows-player-redlines",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run after the exact package failed the earlier canonical narrow-layout gate.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "xvfb-always-on-top",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "always-on-top",
+      "reference": "windows-player-redlines",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run after the exact package failed the earlier canonical narrow-layout gate.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "installed-launch",
+      "level": "installed-package",
+      "viewport": null,
+      "theme": "not-applicable",
+      "state": "installed-launch",
+      "reference": "packaging-contract",
+      "measurement_result": "fail",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "debian-idle-window",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "debian-media-backed-render",
+          "expected": 1,
+          "actual": 0,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "fail"
+        },
+        {
+          "name": "appimage-idle-window",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "appimage-media-backed-render",
+          "expected": 1,
+          "actual": 0,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "fail"
+        }
+      ],
+      "notes": "The independent QA execution reproduced GTK GLArea initialization failure from both exact package payloads after their idle windows appeared.",
+      "execution_environment_sha256": "681fd8a24dcd2ea3156dd37215fae997a0e775d804b6dd39b1dc0af15d858da3"
+    },
+    {
+      "id": "installed-package-version",
+      "level": "installed-package",
+      "viewport": null,
+      "theme": "not-applicable",
+      "state": "installed-package-version",
+      "reference": "packaging-contract",
+      "measurement_result": "fail",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "debian-control-version",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "debian-embedded-version",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "debian-embedded-source-short-sha",
+          "expected": 1,
+          "actual": 0,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "fail"
+        },
+        {
+          "name": "appimage-velopack-manifest-version",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "appimage-embedded-version",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "appimage-embedded-source-short-sha",
+          "expected": 1,
+          "actual": 0,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "fail"
+        }
+      ],
+      "notes": "Both package binaries report version 0.1.0-linux-alpha.113 but embed build SHA unknown rather than the package identity source marker 192f5e4.",
+      "execution_environment_sha256": "681fd8a24dcd2ea3156dd37215fae997a0e775d804b6dd39b1dc0af15d858da3"
+    },
+    {
+      "id": "gnome-file-chooser",
+      "level": "gnome-wayland-operator",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "auto",
+      "state": "gnome-file-chooser",
+      "reference": "operator-acceptance",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run because package-bound Xvfb and installed-version gates failed first; the accepted candidate-channel build was restored.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "gnome-folder-chooser",
+      "level": "gnome-wayland-operator",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "auto",
+      "state": "gnome-folder-chooser",
+      "reference": "operator-acceptance",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run because package-bound Xvfb and installed-version gates failed first; the accepted candidate-channel build was restored.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "wayland-drag-drop",
+      "level": "gnome-wayland-operator",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "auto",
+      "state": "wayland-drag-drop",
+      "reference": "operator-acceptance",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run because package-bound Xvfb and installed-version gates failed first; the accepted candidate-channel build was restored.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "wayland-clipboard",
+      "level": "gnome-wayland-operator",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "auto",
+      "state": "wayland-clipboard",
+      "reference": "operator-acceptance",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run because package-bound Xvfb and installed-version gates failed first; the accepted candidate-channel build was restored.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "desktop-portal",
+      "level": "gnome-wayland-operator",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "auto",
+      "state": "desktop-portal",
+      "reference": "operator-acceptance",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run because package-bound Xvfb and installed-version gates failed first; the accepted candidate-channel build was restored.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "wayland-compositor-fullscreen",
+      "level": "gnome-wayland-operator",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "auto",
+      "state": "wayland-compositor-fullscreen",
+      "reference": "operator-acceptance",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run because package-bound Xvfb and installed-version gates failed first; the accepted candidate-channel build was restored.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "wayland-double-click-fullscreen",
+      "level": "gnome-wayland-operator",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "auto",
+      "state": "wayland-double-click-fullscreen",
+      "reference": "operator-acceptance",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run because package-bound Xvfb and installed-version gates failed first; the accepted candidate-channel build was restored.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "wayland-always-on-top-unavailable",
+      "level": "gnome-wayland-operator",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "auto",
+      "state": "wayland-always-on-top-unavailable",
+      "reference": "operator-acceptance",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run because package-bound Xvfb and installed-version gates failed first; the accepted candidate-channel build was restored.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "keyboard-focus-navigation",
+      "level": "gnome-wayland-operator",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "auto",
+      "state": "keyboard-focus-navigation",
+      "reference": "operator-acceptance",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run because package-bound Xvfb and installed-version gates failed first; the accepted candidate-channel build was restored.",
+      "execution_environment_sha256": null
+    }
+  ]
+}

@@ -75,6 +75,10 @@ fn xvfb_viewport(state: &str) -> Viewport {
             width: 480,
             height: 540,
         },
+        "settings-about" => Viewport {
+            width: 760,
+            height: 560,
+        },
         "fullscreen" => Viewport {
             width: 1280,
             height: 900,
@@ -1133,8 +1137,21 @@ mod tests {
     }
 
     #[test]
-    fn template_records_fullscreen_and_wayland_always_on_top_boundaries() {
+    fn template_records_special_viewports_and_wayland_boundaries() {
         let manifest = EvidenceManifest::template(package(), "a".repeat(64));
+        let settings_about = manifest
+            .rows
+            .iter()
+            .find(|row| row.state == "settings-about")
+            .expect("Settings/About row");
+        assert_eq!(
+            settings_about.viewport,
+            Some(Viewport {
+                width: 760,
+                height: 560
+            })
+        );
+
         let fullscreen = manifest
             .rows
             .iter()
