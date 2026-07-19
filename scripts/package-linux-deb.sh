@@ -50,7 +50,7 @@ Section: video
 Priority: optional
 Architecture: $ARCH
 Maintainer: BeFeast <noreply@github.com>
-Depends: libgtk-4-1, libgl1, libegl1, libglx0, libdrm2, libgbm1, libvulkan1, libwayland-client0, libwayland-egl1
+Depends: libgtk-4-1, libgl1, libegl1, libglx0, libdrm2, libgbm1, libvulkan1, libwayland-client0, libwayland-egl1, libxss1, libdecor-0-0
 Recommends: ffmpeg
 Homepage: https://github.com/BeFeast/ok-player
 Description: Elegant mpv-based media player

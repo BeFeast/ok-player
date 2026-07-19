@@ -14,9 +14,16 @@ IMAGE="${OKP_PORTABLE_BUILDER_IMAGE:-ok-player-linux-builder:ubuntu-24.04-v1}"
 HOST_UID="${SUDO_UID:-$(id -u)}"
 HOST_GID="${SUDO_GID:-$(id -g)}"
 
-for tool in docker id; do
+for tool in docker git id; do
   command -v "$tool" >/dev/null 2>&1 || { echo "Missing required tool: $tool" >&2; exit 127; }
 done
+
+SOURCE_SHA="$(git -C "$ROOT" rev-parse --verify 'HEAD^{commit}')"
+[[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+  echo "Portable package source SHA is invalid: $SOURCE_SHA" >&2
+  exit 1
+}
+BUILD_SHA="${SOURCE_SHA:0:7}"
 
 docker build \
   --tag "$IMAGE" \
@@ -32,6 +39,7 @@ docker run --rm \
   -e CARGO_TARGET_DIR=/workspace/rust/target/portable \
   -e OKP_BUNDLED_MPV_ROOT=/workspace/rust/target/portable/okp-bundled-mpv \
   -e OKP_LINUX_CHANNEL="${OKP_LINUX_CHANNEL:-linux}" \
+  -e OKP_BUILD_SHA="$BUILD_SHA" \
   -e LANE="$LANE" \
   -e VERSION="$VERSION" \
   -e HOST_UID="$HOST_UID" \
