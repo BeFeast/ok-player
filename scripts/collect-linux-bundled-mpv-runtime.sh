@@ -23,6 +23,24 @@ done
 rm -rf "$OUTPUT"
 mkdir -p "$OUTPUT"
 
+# okp_use_linux_bundled_mpv exports this directory for later compiler and
+# runtime invocations. A repeated collection must not let host tools resolve
+# against the directory they are rebuilding; patchelf is linked to libstdc++
+# and can otherwise load the bundled copy before rewriting that same file.
+if [[ -v LD_LIBRARY_PATH ]]; then
+  declare -a search_paths=() host_search_paths=()
+  IFS=: read -r -a search_paths <<<"$LD_LIBRARY_PATH"
+  for search_path in "${search_paths[@]}"; do
+    [[ "$search_path" == "$OUTPUT" ]] || host_search_paths+=("$search_path")
+  done
+  if (( ${#host_search_paths[@]} > 0 )); then
+    LD_LIBRARY_PATH="$(IFS=:; printf '%s' "${host_search_paths[*]}")"
+    export LD_LIBRARY_PATH
+  else
+    unset LD_LIBRARY_PATH
+  fi
+fi
+
 declare -a queue=()
 declare -A queued=()
 
@@ -62,6 +80,7 @@ done
 
 for object in "$OUTPUT"/*.so*; do
   readelf -h "$object" >/dev/null 2>&1 || continue
+  printf 'Setting bundled runtime rpath: %s\n' "$object" >&2
   patchelf --set-rpath '$ORIGIN' "$object"
 done
 
