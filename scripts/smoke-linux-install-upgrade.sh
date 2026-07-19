@@ -56,7 +56,7 @@ assert_layout() {
     || fail "installed binary is not executable"
   "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/verify-linux-bundled-mpv.sh" \
     "$root/usr/lib/ok-player/ok-player" \
-    "$root/usr/lib/ok-player/libmpv.so.2" \
+    "$root/usr/lib/ok-player" \
     || fail "installed binary does not resolve the packaged patched libmpv"
 }
 

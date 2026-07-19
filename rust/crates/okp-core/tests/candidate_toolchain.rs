@@ -318,6 +318,132 @@ fn workflow_and_operator_guide_consume_the_canonical_manifest() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+
+    let deb_package = fs::read_to_string(root.join("scripts/package-linux-deb.sh"))
+        .expect("Debian package script");
+    for dependency in [
+        "libcairo-gobject2",
+        "libcairo2",
+        "libdbus-1-3",
+        "libffi8",
+        "libfontconfig1",
+        "libfreetype6",
+        "libfribidi0",
+        "libgdk-pixbuf-2.0-0",
+        "libharfbuzz0b",
+        "libpango-1.0-0",
+        "libpangocairo-1.0-0",
+        "libsystemd0",
+        "libudev1",
+        "libwayland-cursor0",
+        "libx11-6",
+        "libx11-xcb1",
+        "libxcb-dri3-0",
+        "libxcb-shape0",
+        "libxcb-shm0",
+        "libxcb-xfixes0",
+        "libxcb1",
+        "libxext6",
+        "libxfixes3",
+        "libxkbcommon0",
+        "libxpresent1",
+        "libxrandr2",
+        "libxv1",
+    ] {
+        assert!(
+            deb_package.contains(dependency),
+            "Debian package must declare target-owned runtime dependency {dependency}"
+        );
+    }
+
+    let install_smoke = fs::read_to_string(root.join("scripts/smoke-linux-install-upgrade.sh"))
+        .expect("install smoke script");
+    let verifier_call = install_smoke
+        .split("verify-linux-bundled-mpv.sh")
+        .nth(1)
+        .expect("bundled runtime verifier call");
+    assert!(verifier_call.contains("$root/usr/lib/ok-player\""));
+    assert!(!verifier_call.contains("$root/usr/lib/ok-player/libmpv.so.2\""));
+}
+
+#[test]
+fn runtime_collector_names_the_object_before_patchelf_runs() {
+    let fixture = unique_temp_dir("okp-runtime-collector-patchelf-failure");
+    let bin = fixture.path().join("bin");
+    let libmpv = fixture.path().join("libmpv.so.2");
+    let output_dir = fixture.path().join("runtime");
+    fs::create_dir_all(&bin).expect("fake tool directory");
+    fs::copy("/bin/true", &libmpv).expect("fake libmpv");
+    write_executable(&bin.join("ldd"), "#!/bin/sh\nexit 0\n");
+    write_executable(&bin.join("readelf"), "#!/bin/sh\nexit 0\n");
+    write_executable(&bin.join("patchelf"), "#!/bin/sh\nkill -SEGV $$\n");
+
+    let output = Command::new("/bin/bash")
+        .arg(runtime_collector_script())
+        .arg(&libmpv)
+        .arg(&output_dir)
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .output()
+        .expect("runtime collector should run");
+
+    assert_eq!(output.status.code(), Some(139));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "Setting bundled runtime rpath: {}",
+            output_dir.join("libmpv.so.2").display()
+        )),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn runtime_collector_keeps_host_tools_out_of_the_runtime_being_rebuilt() {
+    let fixture = unique_temp_dir("okp-runtime-collector-host-tools");
+    let bin = fixture.path().join("bin");
+    let libmpv = fixture.path().join("libmpv.so.2");
+    let dependency = fixture.path().join("libstdc++.so.6");
+    let output_dir = fixture.path().join("runtime");
+    let patchelf_log = fixture.path().join("patchelf.log");
+    fs::create_dir_all(&bin).expect("fake tool directory");
+    fs::copy("/bin/true", &libmpv).expect("fake libmpv");
+    fs::copy("/bin/true", &dependency).expect("fake libstdc++");
+    write_executable(
+        &bin.join("ldd"),
+        "#!/bin/sh\nprintf 'libstdc++.so.6 => %s (0x0)\\n' \"$OKP_FAKE_DEPENDENCY\"\n",
+    );
+    write_executable(&bin.join("readelf"), "#!/bin/sh\nexit 0\n");
+    write_executable(
+        &bin.join("patchelf"),
+        "#!/bin/sh\ncase :${LD_LIBRARY_PATH-}: in *:$OKP_RUNTIME_OUTPUT:*) kill -SEGV $$;; esac\nprintf '%s|%s\\n' \"${LD_LIBRARY_PATH-unset}\" \"$3\" >> \"$OKP_PATCHELF_LOG\"\n",
+    );
+
+    let output = Command::new("/bin/bash")
+        .arg(runtime_collector_script())
+        .arg(&libmpv)
+        .arg(&output_dir)
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .env(
+            "LD_LIBRARY_PATH",
+            format!("{}:/host/runtime", output_dir.display()),
+        )
+        .env("OKP_FAKE_DEPENDENCY", &dependency)
+        .env("OKP_RUNTIME_OUTPUT", &output_dir)
+        .env("OKP_PATCHELF_LOG", &patchelf_log)
+        .output()
+        .expect("runtime collector should run");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let log = fs::read_to_string(patchelf_log).expect("patchelf invocation log");
+    assert_eq!(log.lines().count(), 2, "{log}");
+    assert!(
+        log.lines().all(|line| line.starts_with("/host/runtime|")),
+        "{log}"
+    );
 }
 
 #[test]
@@ -489,6 +615,10 @@ fn portability_report_script() -> PathBuf {
 
 fn portable_builder_script() -> PathBuf {
     repository_root().join("scripts/build-linux-portable-package.sh")
+}
+
+fn runtime_collector_script() -> PathBuf {
+    repository_root().join("scripts/collect-linux-bundled-mpv-runtime.sh")
 }
 
 fn build_test_deb(root: &Path, depends: &str) -> PathBuf {
