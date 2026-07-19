@@ -4,6 +4,10 @@ set -euo pipefail
 # candidate-required-tools: cargo chmod cp dpkg-deb install ln mkdir rm
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export OKP_CANDIDATE_TOOLCHAIN_GATE_SCRIPTS="$ROOT/scripts/package-linux-deb.sh
+$ROOT/scripts/collect-linux-bundled-mpv-runtime.sh
+$ROOT/scripts/verify-linux-bundled-mpv.sh"
+export OKP_CANDIDATE_TOOLCHAIN_REQUIRE_DOTNET_TOOLS=false
 VERSION="${1:-0.1.0-linux-alpha.1}"
 ARCH="${OKP_DEB_ARCH:-amd64}"
 PACKAGE="ok-player"
@@ -52,7 +56,7 @@ Section: video
 Priority: optional
 Architecture: $ARCH
 Maintainer: BeFeast <noreply@github.com>
-Depends: libc6, libgcc-s1, libglib2.0-0 | libglib2.0-0t64, libgraphene-1.0-0, libgtk-4-1, libgl1, libegl1, libglx0, libglvnd0, libdrm2, libgbm1, libvulkan1, libwayland-client0, libwayland-egl1, libxss1, libdecor-0-0
+Depends: libc6, libgcc-s1, libffi8, libdbus-1-3, libsystemd0, libudev1, libglib2.0-0 | libglib2.0-0t64, libgraphene-1.0-0, libgtk-4-1, libcairo2, libcairo-gobject2, libfontconfig1, libfreetype6, libfribidi0, libgdk-pixbuf-2.0-0, libharfbuzz0b, libpango-1.0-0, libpangocairo-1.0-0, libgl1, libegl1, libglx0, libglvnd0, libdrm2, libgbm1, libvulkan1, libwayland-client0, libwayland-cursor0, libwayland-egl1, libx11-6, libx11-xcb1, libxcursor1, libxext6, libxfixes3, libxi6, libxkbcommon0, libxpresent1, libxrandr2, libxss1, libxv1, libxcb1, libxcb-dri3-0, libxcb-shape0, libxcb-shm0, libxcb-xfixes0, libdecor-0-0
 Recommends: ffmpeg
 Homepage: https://github.com/BeFeast/ok-player
 Description: Elegant mpv-based media player

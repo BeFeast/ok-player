@@ -51,6 +51,7 @@ fi
 
 "$CONTAINER_RUNTIME" build \
   --tag "$IMAGE" \
+  --target "$LANE" \
   --file "$ROOT/scripts/linux-portable-builder.Dockerfile" \
   "$ROOT/scripts"
 

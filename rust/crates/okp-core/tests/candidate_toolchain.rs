@@ -144,6 +144,116 @@ fn undeclared_build_tool_fails_the_manifest_contract_check() {
 }
 
 #[test]
+fn portable_package_list_excludes_dotnet_tools() {
+    let fixture = unique_temp_dir("okp-portable-package-list");
+    let manifest = fixture.path().join("toolchain.manifest");
+    fs::write(
+        &manifest,
+        concat!(
+            "command|cargo|cargo|cargo\n",
+            "command-or-dotnet-tool|vpk|vpk|dotnet-sdk-9.0\n",
+            "pkg-config|libass|libass|libass-dev\n",
+        ),
+    )
+    .expect("fake manifest");
+
+    let host = Command::new("/bin/bash")
+        .arg(toolchain_script())
+        .arg("--print-ubuntu-packages")
+        .env("OKP_CANDIDATE_TOOLCHAIN_MANIFEST", &manifest)
+        .output()
+        .expect("host package list should run");
+    assert!(host.status.success());
+    assert!(String::from_utf8_lossy(&host.stdout).contains("dotnet-sdk-9.0"));
+
+    let portable = Command::new("/bin/bash")
+        .arg(toolchain_script())
+        .arg("--print-portable-ubuntu-packages")
+        .env("OKP_CANDIDATE_TOOLCHAIN_MANIFEST", &manifest)
+        .output()
+        .expect("portable package list should run");
+    assert!(portable.status.success());
+    let packages = String::from_utf8_lossy(&portable.stdout);
+    assert!(packages.contains("cargo"));
+    assert!(packages.contains("libass-dev"));
+    assert!(!packages.contains("dotnet-sdk-9.0"));
+}
+
+#[test]
+fn package_entry_points_scope_their_preflight_gate_scripts() {
+    let root = repository_root();
+    for (script, required, excluded) in [
+        (
+            "scripts/package-linux-deb.sh",
+            "$ROOT/scripts/package-linux-deb.sh",
+            "$ROOT/scripts/package-linux-velopack.sh",
+        ),
+        (
+            "scripts/package-linux-velopack.sh",
+            "$ROOT/scripts/package-linux-velopack.sh",
+            "$ROOT/scripts/package-linux-deb.sh",
+        ),
+    ] {
+        let entry_point = fs::read_to_string(root.join(script)).expect("package entry point");
+        assert!(entry_point.contains("export OKP_CANDIDATE_TOOLCHAIN_GATE_SCRIPTS="));
+        assert!(entry_point.contains(required));
+        assert!(entry_point.contains("$ROOT/scripts/collect-linux-bundled-mpv-runtime.sh"));
+        assert!(entry_point.contains("$ROOT/scripts/verify-linux-bundled-mpv.sh"));
+        assert!(!entry_point.contains(excluded));
+        assert!(!entry_point.contains("$ROOT/scripts/verify-linux-package-portability.sh"));
+    }
+}
+
+#[test]
+fn debian_preflight_skips_dotnet_tools_but_other_lanes_require_them() {
+    let fixture = unique_temp_dir("okp-debian-preflight-dotnet-boundary");
+    let bin = fixture.path().join("bin");
+    fs::create_dir_all(&bin).expect("fake bin directory");
+    write_executable(&bin.join("cargo"), "#!/bin/sh\nexit 0\n");
+    let manifest = fixture.path().join("toolchain.manifest");
+    fs::write(
+        &manifest,
+        "command|cargo|cargo|cargo\ncommand-or-dotnet-tool|vpk|vpk|dotnet-sdk-9.0\n",
+    )
+    .expect("fake manifest");
+    let build_script = fixture.path().join("build-local-mpv.sh");
+    fs::write(&build_script, "okp_candidate_tool cargo --version\n").expect("fake build script");
+    let gate_script = fixture.path().join("package-linux-deb.sh");
+    fs::write(
+        &gate_script,
+        "#!/bin/sh\n# candidate-required-tools: cargo\n",
+    )
+    .expect("fake gate script");
+
+    let run_preflight = |require_dotnet_tools: &str| {
+        Command::new("/bin/bash")
+            .arg(toolchain_script())
+            .env("PATH", &bin)
+            .env("HOME", fixture.path())
+            .env("OKP_CANDIDATE_TOOLCHAIN_MANIFEST", &manifest)
+            .env("OKP_CANDIDATE_TOOLCHAIN_BUILD_SCRIPT", &build_script)
+            .env("OKP_CANDIDATE_TOOLCHAIN_GATE_SCRIPTS", &gate_script)
+            .env(
+                "OKP_CANDIDATE_TOOLCHAIN_REQUIRE_DOTNET_TOOLS",
+                require_dotnet_tools,
+            )
+            .output()
+            .expect("preflight should run")
+    };
+
+    let debian = run_preflight("false");
+    assert!(
+        debian.status.success(),
+        "{}",
+        String::from_utf8_lossy(&debian.stderr)
+    );
+
+    let appimage = run_preflight("true");
+    assert_eq!(appimage.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&appimage.stderr).contains("vpk [dotnet-sdk-9.0]"));
+}
+
+#[test]
 fn workflow_and_operator_guide_consume_the_canonical_manifest() {
     let root = repository_root();
     let workflow = fs::read_to_string(root.join(".github/workflows/release-linux-candidate.yml"))
@@ -174,7 +284,9 @@ fn workflow_and_operator_guide_consume_the_canonical_manifest() {
         .expect("candidate builder guide");
     assert!(docs.contains("scripts/linux-candidate-toolchain.manifest"));
     assert!(docs.contains("--print-ubuntu-packages"));
+    assert!(docs.contains("--print-portable-ubuntu-packages"));
     assert!(docs.contains("dotnet tool install --global vpk --version 1.2.0"));
+    assert!(docs.contains("scheduled native-builder preflight"));
 
     let output = Command::new("/bin/bash")
         .arg(toolchain_script())
@@ -245,7 +357,8 @@ fn portable_builder_falls_back_to_usable_podman() {
     let log = fs::read_to_string(log).expect("runtime invocation log");
     assert!(log.contains("docker info"));
     assert!(log.contains("podman info"));
-    assert!(log.contains("podman build"));
+    assert!(log.contains("podman build --tag"));
+    assert!(log.contains("--target deb"));
     assert!(log.contains("podman run"));
     assert!(!log.contains("docker build"));
 }
@@ -350,6 +463,11 @@ fn native_portability_gate_rejects_undeclared_host_dependencies() {
     assert!(
         String::from_utf8_lossy(&output.stderr)
             .contains("portability dependency is not declared by the Debian package")
+    );
+    assert!(
+        fs::read_to_string(portability_script())
+            .expect("portability script")
+            .contains("dependency_failures=1")
     );
 }
 

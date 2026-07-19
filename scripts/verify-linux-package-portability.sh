@@ -73,7 +73,7 @@ package_owner() {
 
 check_elf_tree() {
   local root="$1" private_lib="$2" label="$3"
-  local object output soname resolved canonical owner checked=0
+  local object output soname resolved canonical owner checked=0 dependency_failures=0
   local private_canonical
   private_canonical="$(readlink -f -- "$private_lib")"
 
@@ -107,11 +107,12 @@ check_elf_tree() {
       owner="$(package_owner "$canonical")"
       if [[ -z "$owner" ]]; then
         echo "portability dependency has no package owner: $label/${object#$root/}: $soname => $resolved" >&2
-        return 1
+        dependency_failures=1
+        continue
       fi
       if [[ -z "${DECLARED_PACKAGES[$owner]+present}" ]]; then
         echo "portability dependency is not declared by the Debian package: $label/${object#$root/}: $soname => $resolved ($owner)" >&2
-        return 1
+        dependency_failures=1
       fi
     done < <(
       awk '
@@ -125,6 +126,7 @@ check_elf_tree() {
     echo "portability check found no dynamic ELF objects under $label" >&2
     return 1
   }
+  (( dependency_failures == 0 )) || return 1
   echo "portability dependency equivalence: $checked dynamic ELF objects under $label PASS"
 }
 

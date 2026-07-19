@@ -5,6 +5,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/scripts/ok-player-scratch.sh"
+export OKP_CANDIDATE_TOOLCHAIN_GATE_SCRIPTS="$ROOT/scripts/package-linux-velopack.sh
+$ROOT/scripts/collect-linux-bundled-mpv-runtime.sh
+$ROOT/scripts/verify-linux-bundled-mpv.sh"
+export OKP_CANDIDATE_TOOLCHAIN_REQUIRE_DOTNET_TOOLS=true
 VERSION="${1:-0.1.0-linux-alpha.1}"
 PACK_ID="com.befeast.okplayer"
 TITLE="OK Player"

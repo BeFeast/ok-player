@@ -120,7 +120,9 @@ okp_candidate_toolchain_preflight() {
       fi
       [[ "$name" != pkg-config ]] || resolved_pkg_config="$(command -v "$probe" 2>/dev/null || true)"
     elif [[ "$kind" == command-or-dotnet-tool ]]; then
-      if ! command -v "$probe" >/dev/null 2>&1 && [[ ! -x "$HOME/.dotnet/tools/$probe" ]]; then
+      if [[ "${OKP_CANDIDATE_TOOLCHAIN_REQUIRE_DOTNET_TOOLS:-true}" == true ]] \
+          && ! command -v "$probe" >/dev/null 2>&1 \
+          && [[ ! -x "$HOME/.dotnet/tools/$probe" ]]; then
         missing+=("$name [$package]")
       fi
     elif [[ -n "$resolved_pkg_config" ]] && ! "$resolved_pkg_config" --exists "$probe"; then
@@ -137,10 +139,14 @@ okp_candidate_toolchain_preflight() {
 }
 
 okp_candidate_ubuntu_packages() {
+  local include_dotnet_tools="${1:-true}"
   local rows kind name probe package
   local -A seen=()
   rows="$(okp_candidate_manifest_rows)" || return
   while IFS='|' read -r kind name probe package; do
+    if [[ "$include_dotnet_tools" != true && "$kind" == command-or-dotnet-tool ]]; then
+      continue
+    fi
     if [[ -z "${seen[$package]+present}" ]]; then
       seen[$package]=1
       printf '%s\n' "$package"
@@ -155,6 +161,9 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
       ;;
     --print-ubuntu-packages)
       okp_candidate_ubuntu_packages
+      ;;
+    --print-portable-ubuntu-packages)
+      okp_candidate_ubuntu_packages false
       ;;
     --check-build-script)
       [[ $# -eq 2 ]] || {
@@ -171,7 +180,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
       okp_candidate_verify_gate_script_requirements "$2"
       ;;
     *)
-      echo "usage: $0 [--print-ubuntu-packages | --check-build-script PATH | --check-gate-script PATH]" >&2
+      echo "usage: $0 [--print-ubuntu-packages | --print-portable-ubuntu-packages | --check-build-script PATH | --check-gate-script PATH]" >&2
       exit 2
       ;;
   esac
