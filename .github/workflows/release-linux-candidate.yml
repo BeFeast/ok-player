@@ -40,6 +40,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Preflight bundled-mpv toolchain
+        env:
+          CC: /usr/bin/cc
+        run: ./scripts/linux-candidate-toolchain.sh
+
       - name: Build lock coordinator
         env:
           CC: /usr/bin/cc

@@ -60,6 +60,10 @@ pub struct CandidateWorkflowSnapshot {
     pub latest_completed_schedule: Option<ScheduleRunSnapshot>,
     #[serde(default)]
     pub schedule_error: Option<String>,
+    #[serde(default)]
+    pub consecutive_failed_runs: u64,
+    #[serde(default)]
+    pub last_failed_gate: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -304,6 +308,7 @@ fn evaluate_candidate(
     let mut reason_codes = Vec::new();
     let mut summary = format!("Linux candidate feed is healthy at {}", fetch.url);
     validate_candidate_workflow_state(source, &mut details, &mut reason_codes);
+    validate_candidate_failure_streak(source, &mut details, &mut reason_codes);
     details.extend(fetch_failure(fetch, "Linux candidate feed"));
     if !details.is_empty() {
         return check_with_reason_codes(
@@ -431,6 +436,23 @@ fn evaluate_candidate(
         summary,
         reason_codes,
     )
+}
+
+fn validate_candidate_failure_streak(
+    source: &SourceSnapshot,
+    details: &mut Vec<String>,
+    reason_codes: &mut Vec<String>,
+) {
+    let workflow = &source.candidate_workflow;
+    if workflow.consecutive_failed_runs < 2 {
+        return;
+    }
+    let gate = nonempty(workflow.last_failed_gate.as_deref()).unwrap_or("unavailable");
+    details.push(format!(
+        "candidate builds failing: gate {gate} ({} consecutive)",
+        workflow.consecutive_failed_runs
+    ));
+    reason_codes.push("candidate-builds-failing".to_owned());
 }
 
 fn validate_candidate_workflow_state(

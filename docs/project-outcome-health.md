@@ -73,6 +73,13 @@ workflow-state API response is cached for five minutes. Schedule freshness is
 not blocking while the accepted candidate already equals `main`, because no
 new delivery is pending.
 
+The collector reads up to 100 completed scheduled candidate runs and counts the
+failure streak from newest to oldest. At two or more consecutive failures it
+reads the newest failed log for the builder's `failed at gate <name>` marker and
+emits `candidate builds failing: gate <name> (<N> consecutive)` with reason code
+`candidate-builds-failing`. This explicit builder failure is ordered before the
+generic unpublished-main lag detail.
+
 An unreachable, malformed, pending/rejected, partial, identity-incomplete,
 source-divergent, or over-SLA candidate fails with a specific reason. The
 checker only reads the rolling pointer; it never triggers a duplicate candidate

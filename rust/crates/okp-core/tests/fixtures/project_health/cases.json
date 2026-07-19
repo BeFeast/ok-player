@@ -64,6 +64,21 @@
     "expected_reason": "unpublished main lag 9001s exceeds 7200s"
   },
   {
+    "name": "consecutive candidate gate failures override stale lag",
+    "feed_fixture": "fresh-accepted.json",
+    "checked_at_unix": 1784341848,
+    "fetch_error": null,
+    "main_sha": "1111111111111111111111111111111111111111",
+    "source_relation": "ancestor",
+    "first_unpublished_sha": "2222222222222222222222222222222222222222",
+    "first_unpublished_at_utc": "2026-07-18T00:00:47Z",
+    "consecutive_failed_runs": 6,
+    "last_failed_gate": "bundled-mpv",
+    "expected_healthy": false,
+    "expected_reason": "candidate builds failing: gate bundled-mpv (6 consecutive)",
+    "expected_reason_code": "candidate-builds-failing"
+  },
+  {
     "name": "fresh non-ancestor candidate",
     "feed_fixture": "fresh-accepted.json",
     "checked_at_unix": 1784340047,

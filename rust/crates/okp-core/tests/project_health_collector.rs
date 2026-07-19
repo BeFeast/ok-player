@@ -69,6 +69,11 @@ fn candidate_workflow_watchdog_reasons_survive_live_collection() {
             "candidate-schedule-stale",
             "no completed schedule run within 2700s while main has advanced",
         ),
+        (
+            "candidate-failures",
+            "candidate-builds-failing",
+            "candidate builds failing: gate bundled-mpv (6 consecutive)",
+        ),
     ] {
         let output = run_live(scenario);
         assert_eq!(
@@ -331,10 +336,27 @@ if [[ "${1:-}" == run && "${2:-}" == list ]]; then
   if [[ "$workflow" == "Linux Candidate" ]]; then
     completed_at="2026-07-18T01:55:47Z"
     [[ "$OKP_STUB_FAIL" != schedule-stale ]] || completed_at="2026-07-18T01:00:47Z"
-    printf '[{"headSha":"%s","event":"schedule","status":"completed","conclusion":"success","updatedAt":"%s","url":"https://example.invalid/run/candidate"}]\n' "$main_sha" "$completed_at"
+    if [[ "$OKP_STUB_FAIL" == candidate-failures ]]; then
+      printf '%s\n' '[
+        {"databaseId":106,"headSha":"d5d531a58c830a01a7e25615e850593e9ff4493f","event":"schedule","status":"completed","conclusion":"failure","updatedAt":"2026-07-18T01:55:47Z","url":"https://example.invalid/run/106"},
+        {"databaseId":105,"conclusion":"failure"},
+        {"databaseId":104,"conclusion":"failure"},
+        {"databaseId":103,"conclusion":"failure"},
+        {"databaseId":102,"conclusion":"failure"},
+        {"databaseId":101,"conclusion":"failure"},
+        {"databaseId":100,"conclusion":"success"}
+      ]'
+    else
+      printf '[{"databaseId":100,"headSha":"%s","event":"schedule","status":"completed","conclusion":"success","updatedAt":"%s","url":"https://example.invalid/run/candidate"}]\n' "$main_sha" "$completed_at"
+    fi
   else
     printf '[{"workflowName":"%s","headSha":"%s","event":"push","status":"completed","conclusion":"success","url":"https://example.invalid/run"}]\n' "$workflow" "$main_sha"
   fi
+  exit 0
+fi
+if [[ "${1:-}" == run && "${2:-}" == view ]]; then
+  [[ "$OKP_STUB_FAIL" == candidate-failures ]] || exit 64
+  printf '%s\n' 'candidate build 0.11.0-beta.0.106 failed at gate bundled-mpv'
   exit 0
 fi
 [[ "${1:-}" == api ]] || exit 64
