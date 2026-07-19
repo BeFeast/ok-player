@@ -6,6 +6,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="${1:?package version is required}"
 COMMIT_SHA="${2:?full commit SHA is required}"
 OUT_DIR="${3:-$ROOT/artifacts/linux}"
+BUILD_EXECUTION_SEED="${OKP_BUILD_EXECUTION_ID:-build:${GITHUB_RUN_ID:-local}:$VERSION:$COMMIT_SHA}"
+BUILD_ENVIRONMENT_SHA256="$(printf '%s' "$BUILD_EXECUTION_SEED" | sha256sum | awk '{print $1}')"
 
 deb="$OUT_DIR/deb/ok-player_${VERSION}_amd64.deb"
 appimage="$OUT_DIR/velopack/OK-Player-${VERSION}-x86_64.AppImage"
@@ -24,7 +26,9 @@ CC=/usr/bin/cc cargo run --quiet \
   --manifest-path "$ROOT/rust/Cargo.toml" \
   -p okp-core --bin okp-acceptance-evidence -- \
   template --version "$VERSION" --commit "$COMMIT_SHA" \
-  --deb "$deb" --appimage "$appimage" >"$OUT_DIR/acceptance-template.json"
+  --deb "$deb" --appimage "$appimage" \
+  --build-environment-sha256 "$BUILD_ENVIRONMENT_SHA256" \
+  >"$OUT_DIR/acceptance-template.json"
 
 echo "Package identity: $OUT_DIR/package-identity.json"
 echo "Acceptance template: $OUT_DIR/acceptance-template.json"

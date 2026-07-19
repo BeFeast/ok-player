@@ -28,7 +28,7 @@ mkdir -p "$BUILD_ROOT/usr/share/metainfo"
 mkdir -p "$BUILD_ROOT/usr/share/icons/hicolor/scalable/apps"
 
 install -Dm755 "$TARGET_DIR/release/okp-linux-gtk" "$BUILD_ROOT/usr/lib/ok-player/ok-player"
-install -Dm755 "$OKP_BUNDLED_MPV_LIBRARY" "$BUILD_ROOT/usr/lib/ok-player/libmpv.so.2"
+cp -a "$OKP_BUNDLED_MPV_RUNTIME_DIR/." "$BUILD_ROOT/usr/lib/ok-player/"
 ln -s ../lib/ok-player/ok-player "$BUILD_ROOT/usr/bin/ok-player"
 install -Dm644 "$DESKTOP" "$BUILD_ROOT/usr/share/applications/com.befeast.okplayer.desktop"
 install -Dm644 "$METAINFO" "$BUILD_ROOT/usr/share/metainfo/com.befeast.okplayer.metainfo.xml"
@@ -41,7 +41,7 @@ done
 
 "$ROOT/scripts/verify-linux-bundled-mpv.sh" \
   "$BUILD_ROOT/usr/lib/ok-player/ok-player" \
-  "$BUILD_ROOT/usr/lib/ok-player/libmpv.so.2"
+  "$BUILD_ROOT/usr/lib/ok-player"
 
 cat > "$BUILD_ROOT/DEBIAN/control" <<CONTROL
 Package: $PACKAGE
@@ -50,7 +50,8 @@ Section: video
 Priority: optional
 Architecture: $ARCH
 Maintainer: BeFeast <noreply@github.com>
-Depends: libgtk-4-1, libmpv2, libgl1, libegl1, libglx0, libwayland-client0, libwayland-egl1, ffmpeg
+Depends: libgtk-4-1, libgl1, libegl1, libglx0, libdrm2, libgbm1, libvulkan1, libwayland-client0, libwayland-egl1
+Recommends: ffmpeg
 Homepage: https://github.com/BeFeast/ok-player
 Description: Elegant mpv-based media player
  OK Player is a native desktop media player built over its packaged libmpv.

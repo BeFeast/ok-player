@@ -22,12 +22,14 @@ WORK="$WORK_ROOT/${UPSTREAM_TAG}-${UPSTREAM_COMMIT:0:12}-$patch_key"
 SOURCE="$WORK/source"
 OUTPUT="$WORK/output"
 PREFIX="$OUTPUT/install"
+RUNTIME="$PREFIX/lib/ok-player"
 
 installed_libraries=()
 for library in \
   "$PREFIX"/lib/libmpv.so.2 \
   "$PREFIX"/lib/*/libmpv.so.2 \
   "$PREFIX"/lib64/libmpv.so.2; do
+  [[ "$(dirname -- "$library")" == "$RUNTIME" ]] && continue
   [[ -e "$library" ]] && installed_libraries+=("$library")
 done
 installed_pkg_configs=()
@@ -53,6 +55,7 @@ if (( ${#installed_libraries[@]} != 1 || ${#installed_pkg_configs[@]} != 1 )); t
     "$PREFIX"/lib/libmpv.so.2 \
     "$PREFIX"/lib/*/libmpv.so.2 \
     "$PREFIX"/lib64/libmpv.so.2; do
+    [[ "$(dirname -- "$library")" == "$RUNTIME" ]] && continue
     [[ -e "$library" ]] && installed_libraries+=("$library")
   done
   installed_pkg_configs=()
@@ -72,5 +75,8 @@ fi
   echo "Expected exactly one bundled mpv.pc under $PREFIX" >&2
   exit 1
 }
+
+"$ROOT/scripts/collect-linux-bundled-mpv-runtime.sh" \
+  "${installed_libraries[0]}" "$RUNTIME" >&2
 
 printf '%s\n' "$PREFIX"

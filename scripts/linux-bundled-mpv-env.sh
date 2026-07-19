@@ -6,7 +6,7 @@ okp_use_linux_bundled_mpv() {
   root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
   prefix="$("$root/scripts/prepare-linux-bundled-mpv.sh")" || return
 
-  local pkg_configs=() libraries=() candidate
+  local pkg_configs=() libraries=() runtime_libraries=() candidate runtime_library
   for candidate in \
     "$prefix"/lib/pkgconfig/mpv.pc \
     "$prefix"/lib/*/pkgconfig/mpv.pc \
@@ -17,8 +17,11 @@ okp_use_linux_bundled_mpv() {
     "$prefix"/lib/libmpv.so.2 \
     "$prefix"/lib/*/libmpv.so.2 \
     "$prefix"/lib64/libmpv.so.2; do
+    [[ "$(dirname -- "$candidate")" == "$prefix/lib/ok-player" ]] && continue
     [[ -e "$candidate" ]] && libraries+=("$candidate")
   done
+  runtime_library="$prefix/lib/ok-player/libmpv.so.2"
+  [[ -e "$runtime_library" ]] && runtime_libraries+=("$runtime_library")
 
   (( ${#pkg_configs[@]} == 1 )) || {
     echo "Expected exactly one bundled mpv.pc under $prefix" >&2
@@ -28,13 +31,19 @@ okp_use_linux_bundled_mpv() {
     echo "Expected exactly one bundled libmpv.so.2 under $prefix" >&2
     return 1
   }
+  (( ${#runtime_libraries[@]} == 1 )) || {
+    echo "Expected exactly one self-contained libmpv runtime under $prefix" >&2
+    return 1
+  }
 
   export OKP_BUNDLED_MPV_PREFIX="$prefix"
   OKP_BUNDLED_MPV_LIB_DIR="$(dirname -- "${libraries[0]}")"
-  OKP_BUNDLED_MPV_LIBRARY="$(readlink -f -- "${libraries[0]}")"
+  OKP_BUNDLED_MPV_RUNTIME_DIR="$(dirname -- "${runtime_libraries[0]}")"
+  OKP_BUNDLED_MPV_LIBRARY="$(readlink -f -- "${runtime_libraries[0]}")"
   PKG_CONFIG_PATH="$(dirname -- "${pkg_configs[0]}")${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
-  export OKP_BUNDLED_MPV_LIB_DIR OKP_BUNDLED_MPV_LIBRARY PKG_CONFIG_PATH
-  export LD_LIBRARY_PATH="$OKP_BUNDLED_MPV_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  export OKP_BUNDLED_MPV_LIB_DIR OKP_BUNDLED_MPV_RUNTIME_DIR \
+    OKP_BUNDLED_MPV_LIBRARY PKG_CONFIG_PATH
+  export LD_LIBRARY_PATH="$OKP_BUNDLED_MPV_RUNTIME_DIR:$OKP_BUNDLED_MPV_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
   if [[ "${1:-}" == "package" ]]; then
     export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=-Wl,-rpath,\$ORIGIN"

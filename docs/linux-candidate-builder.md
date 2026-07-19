@@ -30,6 +30,11 @@ failure line before the build lock is acquired. New external commands in
 that every such reference exists in the manifest. The build pins the upstream
 commit and fails rather than substituting a distro libmpv.
 
+Shipping package lanes additionally require Docker. They build inside the
+digest-pinned Ubuntu 24.04 image defined by
+`scripts/linux-portable-builder.Dockerfile`; the native host is only the
+orchestrator and cannot raise the packaged glibc baseline.
+
 ## Delivery SLA
 
 When `main` advances, the latest eligible SHA becomes an updater candidate
@@ -103,9 +108,16 @@ lock after their direct parent returns.
    - workspace tests
    - pinned mpv v0.40.0 build with the embedded Wayland DMA-BUF patch; Rust
      gates and both Ubuntu package lanes use this exact library
-   - Debian and AppImage/Velopack packaging
+   - Debian and AppImage/Velopack packaging inside the pinned Ubuntu 24.04
+     builder image, so a newer candidate host cannot raise the shipped glibc
+     baseline or embed newer host GLib/FFmpeg ABI requirements
    - extracted payload verification that `libmpv.so.2` is packaged beside the
-     executable, carries the embed options, and resolves through `$ORIGIN`
+     executable with its complete media-runtime closure, carries the embed
+     options, and resolves every bundled object through `$ORIGIN`
+   - cross-distro portability in a clean Debian testing container: `ldd` over
+     every bundled ELF plus plain installed launches for the exact Debian and
+     AppImage artifacts. The hash-bound `portability-report.json` is required
+     for promotion and later public publication
    - package identity + SHA-256 verification (`SHA256SUMS`, `package-identity.json`)
    - clean install / upgrade / uninstall smoke in a disposable environment
    - real playback and screenshot capture from the exact Debian payload, with a bundled image and SHA-256
@@ -134,7 +146,13 @@ Each build writes a bundle under `$OKP_CANDIDATE_STATE_DIR/out/<build-number>/`:
   timestamps, every gate result, and the package identity (file names +
   SHA-256). Modeled by `okp_core::candidate_build::CandidateBuild`.
 - `artifacts/` — `.deb`, versioned AppImage, Velopack feed/package assets,
-  `SHA256SUMS`, `package-identity.json`, and the acceptance template.
+  `SHA256SUMS`, `package-identity.json`, `portability-report.json`, and the
+  acceptance template.
+
+The portability container is a packaging gate, not operator acceptance. The
+`installed-launch` and `installed-package-version` rows must still be executed
+from a separate QA execution that did not build the artifacts; the acceptance
+schema rejects matching build/execution fingerprints.
 
 The headless output also retains `headless-launch/fit-series/run-{1,2,3}/` and
 `series-evidence.txt`. Every run records the current process ID, selected XID,

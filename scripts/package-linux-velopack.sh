@@ -38,7 +38,7 @@ OKP_BUILD_VERSION="$VERSION" OKP_PACKAGE_KIND=appimage cargo build \
 rm -rf "$PACK_DIR" "$OUTPUT_DIR"
 mkdir -p "$PACK_DIR" "$OUTPUT_DIR"
 install -Dm755 "$TARGET_DIR/release/okp-linux-gtk" "$PACK_DIR/ok-player"
-install -Dm755 "$OKP_BUNDLED_MPV_LIBRARY" "$PACK_DIR/libmpv.so.2"
+cp -a "$OKP_BUNDLED_MPV_RUNTIME_DIR/." "$PACK_DIR/"
 install -Dm644 "$ICON" "$PACK_DIR/com.befeast.okplayer.svg"
 install -Dm644 "$ICON" "$PACK_DIR/usr/share/icons/hicolor/scalable/apps/com.befeast.okplayer.svg"
 install -Dm644 "$METAINFO" "$PACK_DIR/usr/share/metainfo/com.befeast.okplayer.metainfo.xml"
@@ -50,7 +50,7 @@ done
 
 "$ROOT/scripts/verify-linux-bundled-mpv.sh" \
   "$PACK_DIR/ok-player" \
-  "$PACK_DIR/libmpv.so.2"
+  "$PACK_DIR"
 
 "$VPK" pack \
   --packId "$PACK_ID" \
@@ -78,7 +78,7 @@ trap 'rm -rf "$APPIMAGE_INSPECT"' EXIT
   "$OUTPUT_DIR/OK-Player-$VERSION-x86_64.AppImage" --appimage-extract >/dev/null
   "$ROOT/scripts/verify-linux-bundled-mpv.sh" \
     squashfs-root/usr/bin/ok-player \
-    squashfs-root/usr/bin/libmpv.so.2
+    squashfs-root/usr/bin
 )
 rm -rf "$APPIMAGE_INSPECT"
 trap - EXIT

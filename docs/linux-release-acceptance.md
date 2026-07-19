@@ -25,6 +25,27 @@ Linux release evidence is package-specific and has four levels:
 3. `installed-package`: launch and version checks against the candidate `.deb` or AppImage.
 4. `gnome-wayland-operator`: live GNOME/Wayland acceptance. Only this level may mark chooser, drag/drop, clipboard, portal, compositor, or focus rows `PASS`.
 
+Packaging also emits `portability-report.json`. It binds both artifact hashes
+to a clean Debian testing container run that performs `ldd` on every bundled
+ELF and a plain launch of each payload. Publication rejects a missing report or
+one whose hashes differ from the downloaded candidate. This gate proves that
+the packaged media runtime is not borrowing build-host FFmpeg sonames; it does
+not replace installed or live operator acceptance.
+
+The acceptance template records a privacy-preserving SHA-256 for the artifact
+build execution. Every PASS `installed-package` row must add
+`execution_environment_sha256` for the independent QA execution. The validator
+rejects a missing, malformed, or matching fingerprint, so `installed-launch`
+cannot be credited on the execution that built the package. Derive the QA value
+from a sanitized run identifier and environment description, for example:
+
+```bash
+printf '%s' 'qa-run:<run-id>:ubuntu-26.04:gnome-wayland' | sha256sum
+```
+
+Do not use a hostname, machine path, account name, or machine identifier in the
+seed or in public evidence.
+
 Every issue-owned QA or acceptance outcome must also add a reviewable Markdown
 record under [`docs/qa-records/`](qa-records/README.md). Generated manifests,
 screenshots, packages, and full logs remain external artifacts, but the record
@@ -187,6 +208,10 @@ Fill the template without changing its package identity. A publish run accepts t
 workflow run ID plus the base64-encoded completed manifest, validates every required row, and
 publishes the exact artifacts from that candidate run. Rebuilding after operator acceptance is
 intentionally not allowed because it would change the package hash.
+
+Linux Release run `29679405498` predates the portability report and produced
+the broken alpha.113 payloads. It is permanently ineligible for publication;
+alpha.113 must be rebuilt from the fix and accepted as new artifact bytes.
 
 Merge deterministic rows before recording installed/live results:
 
