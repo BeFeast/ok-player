@@ -10,7 +10,7 @@ case "$LANE" in
 esac
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE="${OKP_PORTABLE_BUILDER_IMAGE:-ok-player-linux-builder:ubuntu-24.04-v1}"
+IMAGE="${OKP_PORTABLE_BUILDER_IMAGE:-ok-player-linux-builder:ubuntu-26.04-v1}"
 MODE="${OKP_PORTABLE_PACKAGE_MODE:-container}"
 
 for tool in git id; do

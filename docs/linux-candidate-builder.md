@@ -48,6 +48,12 @@ requirement. The scheduled native-builder preflight keeps the full default gate
 list and default tool probes, validating both package paths plus portability
 before acquiring the build lock.
 
+The hosted stable release uses the digest-pinned Ubuntu 26.04 image in
+`scripts/linux-portable-builder.Dockerfile`. That baseline deliberately matches
+the supported native candidate builder's FFmpeg/libplacebo generation. A
+portable release must not silently fall back to an older media closure merely
+because its orchestrating GitHub runner is Ubuntu 24.04.
+
 The preflight aggregates every missing command and pkg-config module into one
 failure line before the build lock is acquired. New external commands in
 `build-local-mpv.sh` must use `okp_candidate_tool`. Native package and
@@ -150,8 +156,8 @@ lock after their direct parent returns.
      Debian `Depends` field, and both extracted executables must carry the
      embedded source marker. If Docker or Podman is available, the same gate also
      runs clean Debian testing `ldd`, rejects bundled target desktop libraries,
-     and executes the canonical real-media narrow-width render smoke for both
-     artifacts. The hash-bound
+     and executes the canonical real-media narrow-width and bright-video
+     fullscreen render smokes for both artifacts. The hash-bound
      `portability-report.json` records which mode ran and is required for
      promotion and later public publication
    - package identity + SHA-256 verification (`SHA256SUMS`, `package-identity.json`)
@@ -206,9 +212,10 @@ The native equivalence report is sufficient for candidate promotion. Public
 release preparation on the hosted runner always reruns the exact candidate
 artifacts in a clean Debian testing container and rejects publication unless
 that strict report passes. Its real-media Xvfb render proves that the packaged
-GTK GLArea and OSC initialize against the target desktop stack, and its
-source-marker check catches package identity loss in linked worktrees. Neither
-mode is operator acceptance. The `installed-launch` and
+GTK GLArea and OSC initialize at narrow width and keep a bright decoded frame
+visible through the fullscreen transition against the target desktop stack.
+Its source-marker check catches package identity loss in linked worktrees.
+Neither mode is operator acceptance. The `installed-launch` and
 `installed-package-version` rows must still be executed from a separate QA
 execution that did not build the artifacts; the acceptance schema rejects
 matching build/execution fingerprints.

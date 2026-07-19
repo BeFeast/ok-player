@@ -145,6 +145,12 @@ on a QA execution that did not build its artifacts. Use the package-bound
 acceptance template's build/execution fingerprints; a matching fingerprint is
 invalid even when the distro version happens to match the builder.
 
+When a stable package is rebuilt from a source SHA already accepted on the
+candidate channel, compare both bundled runtime manifests and require the same
+supported Ubuntu 26.04 media ABI generation. Intentional file-level differences
+must be documented, and both exact package sets must independently pass the
+narrow-width and bright-video fullscreen gates before live upgrade acceptance.
+
 The issue-owned acceptance pull request must add
 [`docs/qa-records/YYYY-MM-DD-issue-NNN.md`](qa-records/README.md). Record both
 lane results, the exact source/candidate SHAs, every package/feed/manifest

@@ -53,7 +53,7 @@ jq -e \
      (.verification_mode == "foreign-container"
       and .target_image == $target_image
       and (.target_image_id | test("^sha256:[0-9a-f]{64}$"))
-      and .checks == ["all-bundled-elf-dependency-equivalence", "all-bundled-elf-ldd", "appimage-package-build-marker", "appimage-media-render", "debian-package-build-marker", "debian-media-render"])
+      and .checks == ["all-bundled-elf-dependency-equivalence", "all-bundled-elf-ldd", "appimage-package-build-marker", "appimage-media-narrow-width", "appimage-media-fullscreen", "debian-package-build-marker", "debian-media-narrow-width", "debian-media-fullscreen"])
    )
    and .artifacts.debian == {file_name:$deb_name, sha256:$deb_sha256}
    and .artifacts.appimage == {file_name:$appimage_name, sha256:$appimage_sha256}' \

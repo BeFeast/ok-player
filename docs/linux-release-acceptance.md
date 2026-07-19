@@ -33,12 +33,14 @@ Debian `Depends` field, and both extracted executables must contain the expected
 build marker. A candidate builder with Docker or Podman additionally records
 the clean Debian testing `ldd`, target
 desktop library rejection, source-marker checks, and canonical real-media
-narrow-width render smoke. Public release preparation never relies on runtime
-availability from the candidate host: the hosted runner reruns the exact
-downloaded candidate in strict container mode before publication. Publication
-rejects a missing report or one whose identity differs from the downloaded
-candidate. These gates prove that the packaged media runtime is not borrowing
-undeclared build-host libraries; they do not replace installed or live operator
+narrow-width and bright-video fullscreen render smokes. Public release
+preparation never relies on runtime availability from the candidate host: the
+hosted runner reruns the exact downloaded candidate in strict container mode
+before publication. Publication rejects a missing report, the historical
+narrow-width-only checklist, or a report whose identity differs from the
+downloaded candidate. These gates prove that the packaged media runtime is not
+borrowing undeclared build-host libraries and that decoded video remains
+visible through X11 fullscreen; they do not replace installed or live operator
 acceptance.
 
 The acceptance template records a privacy-preserving SHA-256 for the artifact
@@ -218,9 +220,13 @@ workflow run ID plus the base64-encoded completed manifest, validates every requ
 publishes the exact artifacts from that candidate run. Rebuilding after operator acceptance is
 intentionally not allowed because it would change the package hash.
 
-Linux Release run `29679405498` predates the portability report and produced
-the broken alpha.113 payloads. It is permanently ineligible for publication;
-alpha.113 must be rebuilt from the fix and accepted as new artifact bytes.
+Linux Release build-only run
+[`29705232940`](https://github.com/BeFeast/ok-player/actions/runs/29705232940)
+reported portability `pass` but its exact alpha.113 Debian and AppImage payloads
+failed media open on GNOME/Wayland and rendered a black fullscreen frame under
+Xvfb. Its narrow-width-only portability checklist is no longer accepted, so the
+run is permanently ineligible for publication. Alpha.113 must be rebuilt from
+the fix and accepted as new artifact bytes.
 
 Merge deterministic rows before recording installed/live results:
 

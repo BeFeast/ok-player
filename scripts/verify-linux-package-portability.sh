@@ -2,7 +2,7 @@
 # Verify package runtime closure without requiring a container on native builders.
 set -euo pipefail
 
-# candidate-required-tools: awk basename chmod cp dirname dpkg-deb dpkg-query ldd mkdir mktemp objdump readlink rm sed sha256sum strings
+# candidate-required-tools: awk basename chmod cp dirname dpkg-deb dpkg-query ffmpeg ldd mkdir mktemp objdump readlink rm sed sha256sum strings
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/scripts/ok-player-scratch.sh"
@@ -192,7 +192,7 @@ apt-get install -y --no-install-recommends \
   binutils ca-certificates dbus-x11 file libegl1 libgbm1 libgl1 libglx0 \
   libdecor-0-0 libgtk-4-1 libva2 libvulkan1 libwayland-client0 \
   libwayland-egl1 libxss1 \
-  imagemagick procps squashfs-tools x11-utils xauth xdotool xfwm4 xvfb >/dev/null
+  ffmpeg imagemagick procps squashfs-tools x11-utils xauth xdotool xfwm4 xvfb >/dev/null
 
 scratch="$(mktemp -d -t ok-player-portability.XXXXXX)"
 trap 'rm -rf -- "$scratch"' EXIT
@@ -236,30 +236,38 @@ check_build_marker() {
   echo "portability build marker: $label PASS"
 }
 
-media_render_smoke() {
+media_render_smokes() {
   local binary="$1" label="$2"
   "/workspace/scripts/smoke-linux-narrow-width.sh" \
     "$binary" "$scratch/${label}-narrow-width"
-  echo "portability media render: $label PASS"
+  echo "portability media render: $label narrow-width PASS"
+  "/workspace/scripts/smoke-linux-fullscreen-chrome.sh" \
+    "$binary" "$scratch/${label}-fullscreen" "$scratch/bright.mkv" bright
+  echo "portability media render: $label fullscreen PASS"
 }
+
+ffmpeg -hide_banner -loglevel error -y \
+  -f lavfi -i 'color=c=white:s=640x360:r=2:d=30' \
+  -c:v libx264 -preset ultrafast -tune stillimage -pix_fmt yuv420p -g 4 -an \
+  "$scratch/bright.mkv"
 
 APP_ROOT="$appimage_root/squashfs-root"
 check_elf_tree "$APP_ROOT"
 check_build_marker "$APP_ROOT/usr/bin/ok-player" appimage
-media_render_smoke "$APP_ROOT/usr/bin/ok-player" appimage
+media_render_smokes "$APP_ROOT/usr/bin/ok-player" appimage
 
 depends="$(dpkg-deb -f "/artifacts/deb/$DEB_NAME" Depends)"
 apt-get satisfy -y --no-install-recommends "$depends" >/dev/null
 dpkg -i "/artifacts/deb/$DEB_NAME" >/dev/null
 check_elf_tree /usr/lib/ok-player
 check_build_marker /usr/bin/ok-player debian
-media_render_smoke /usr/bin/ok-player debian
+media_render_smokes /usr/bin/ok-player debian
 CONTAINER
 
   verification_mode=foreign-container
   target_image_json="\"$TARGET_IMAGE\""
   target_image_id_json="\"$IMAGE_ID\""
-  checks_json='["all-bundled-elf-dependency-equivalence", "all-bundled-elf-ldd", "appimage-package-build-marker", "appimage-media-render", "debian-package-build-marker", "debian-media-render"]'
+  checks_json='["all-bundled-elf-dependency-equivalence", "all-bundled-elf-ldd", "appimage-package-build-marker", "appimage-media-narrow-width", "appimage-media-fullscreen", "debian-package-build-marker", "debian-media-narrow-width", "debian-media-fullscreen"]'
 fi
 
 mkdir -p "$(dirname -- "$REPORT")"

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use okp_test_fixtures::unique_temp_dir;
+use sha2::{Digest, Sha256};
 
 const TEST_SOURCE_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 
@@ -272,6 +273,11 @@ fn workflow_and_operator_guide_consume_the_canonical_manifest() {
 
     let release_workflow = fs::read_to_string(root.join(".github/workflows/release-linux.yml"))
         .expect("release workflow");
+    assert!(release_workflow.contains("OKP_PORTABLE_PACKAGE_MODE: container"));
+    assert!(
+        release_workflow
+            .contains("OKP_PORTABLE_BUILDER_IMAGE: ok-player-linux-builder:ubuntu-26.04-v1")
+    );
     assert!(release_workflow.contains("OKP_PORTABILITY_CONTAINER_MODE: required"));
     assert!(release_workflow.contains("OKP_PORTABILITY_REQUIRED_MODE=foreign-container"));
 
@@ -597,6 +603,84 @@ fn native_portability_gate_rejects_undeclared_host_dependencies() {
     );
 }
 
+#[test]
+fn foreign_portability_report_requires_fullscreen_media_checks() {
+    let fixture = unique_temp_dir("okp-foreign-portability-fullscreen");
+    let deb = fixture.path().join("ok-player-test_1.0.0_amd64.deb");
+    let appimage = fixture.path().join("OK-Player-test-x86_64.AppImage");
+    let report = fixture.path().join("portability-report.json");
+    fs::write(&deb, b"debian package bytes").expect("fake Debian package");
+    fs::write(&appimage, b"AppImage bytes").expect("fake AppImage");
+
+    let write_report = |checks: Vec<&str>| {
+        let contents = serde_json::json!({
+            "schema_version": 2,
+            "verification_mode": "foreign-container",
+            "target_image": "debian:testing-slim",
+            "target_image_id": format!("sha256:{}", "0".repeat(64)),
+            "source_sha": TEST_SOURCE_SHA,
+            "build_marker": "0123456",
+            "status": "pass",
+            "checks": checks,
+            "artifacts": {
+                "debian": {
+                    "file_name": deb.file_name().expect("Debian file name").to_string_lossy(),
+                    "sha256": sha256_hex(&deb),
+                },
+                "appimage": {
+                    "file_name": appimage.file_name().expect("AppImage file name").to_string_lossy(),
+                    "sha256": sha256_hex(&appimage),
+                },
+            },
+        });
+        fs::write(
+            &report,
+            serde_json::to_vec_pretty(&contents).expect("portability report JSON"),
+        )
+        .expect("portability report");
+    };
+
+    write_report(vec![
+        "all-bundled-elf-dependency-equivalence",
+        "all-bundled-elf-ldd",
+        "appimage-package-build-marker",
+        "appimage-media-render",
+        "debian-package-build-marker",
+        "debian-media-render",
+    ]);
+    let rejected = Command::new("/bin/bash")
+        .arg(portability_report_script())
+        .args([&report, &deb, &appimage])
+        .arg(TEST_SOURCE_SHA)
+        .env("OKP_PORTABILITY_REQUIRED_MODE", "foreign-container")
+        .output()
+        .expect("historical portability report should be checked");
+    assert_eq!(rejected.status.code(), Some(1));
+
+    write_report(vec![
+        "all-bundled-elf-dependency-equivalence",
+        "all-bundled-elf-ldd",
+        "appimage-package-build-marker",
+        "appimage-media-narrow-width",
+        "appimage-media-fullscreen",
+        "debian-package-build-marker",
+        "debian-media-narrow-width",
+        "debian-media-fullscreen",
+    ]);
+    let accepted = Command::new("/bin/bash")
+        .arg(portability_report_script())
+        .args([&report, &deb, &appimage])
+        .arg(TEST_SOURCE_SHA)
+        .env("OKP_PORTABILITY_REQUIRED_MODE", "foreign-container")
+        .output()
+        .expect("fullscreen-bound portability report should be checked");
+    assert!(
+        accepted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&accepted.stderr)
+    );
+}
+
 fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
 }
@@ -658,4 +742,12 @@ fn write_executable(path: &Path, contents: &str) {
         .permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(path, permissions).expect("fake executable permissions");
+}
+
+fn sha256_hex(path: &Path) -> String {
+    let bytes = fs::read(path).expect("fixture bytes");
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }

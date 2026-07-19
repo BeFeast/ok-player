@@ -13,9 +13,11 @@ target-provided and are checked by the cross-distro packaging gate. Fedora
 remains on its explicit system-mpv packaging contract.
 
 Shipping Debian and AppImage artifacts are built inside the repository's
-pinned Ubuntu 24.04 builder image. This keeps both the application and every
-bundled library on an older glibc baseline even when the native candidate host
-runs a newer Ubuntu release.
+digest-pinned Ubuntu 26.04 builder image. This matches the supported native
+candidate builder's FFmpeg/libplacebo generation so same-source stable and
+candidate packages do not receive materially different media runtimes. The
+target desktop still supplies glibc, GTK, Wayland/X11, and graphics-driver ABI
+libraries according to the package dependency and portability contracts.
 
 The embed patch is kept at
 `rust/patches/mpv-v0.40.0-wayland-embed.patch`. The small
