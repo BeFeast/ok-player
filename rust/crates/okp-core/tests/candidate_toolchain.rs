@@ -215,6 +215,12 @@ fn portable_builder_falls_back_to_usable_podman() {
     let log = fixture.path().join("runtime.log");
     fs::create_dir_all(&bin).expect("fake runtime directory");
     write_executable(
+        &bin.join("git"),
+        &format!(
+            "#!/bin/sh\nset -eu\n[ \"${{3:-}}\" = rev-parse ]\n[ \"${{4:-}}\" = --verify ]\n[ \"${{5:-}}\" = 'HEAD^{{commit}}' ]\nprintf '%s\\n' '{TEST_SOURCE_SHA}'\n"
+        ),
+    );
+    write_executable(
         &bin.join("docker"),
         "#!/bin/sh\nset -eu\nprintf 'docker %s\\n' \"$*\" >> \"$OKP_RUNTIME_LOG\"\n[ \"${1:-}\" != info ]\n",
     );
