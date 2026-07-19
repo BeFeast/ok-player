@@ -169,6 +169,7 @@ fn workflow_and_operator_guide_consume_the_canonical_manifest() {
         .expect("candidate builder guide");
     assert!(docs.contains("scripts/linux-candidate-toolchain.manifest"));
     assert!(docs.contains("--print-ubuntu-packages"));
+    assert!(docs.contains("dotnet tool install --global vpk --version 1.2.0"));
 
     let output = Command::new("/bin/bash")
         .arg(toolchain_script())
@@ -216,7 +217,7 @@ fn native_portability_gate_accepts_only_declared_host_dependencies() {
         .arg(&appimage)
         .arg(&report)
         .arg(TEST_SOURCE_SHA)
-        .env("PATH", "/usr/bin:/bin")
+        .env("PATH", portability_test_path(fixture.path()))
         .env("OKP_PORTABILITY_CONTAINER_MODE", "skip")
         .output()
         .expect("native portability check should run");
@@ -231,6 +232,15 @@ fn native_portability_gate_accepts_only_declared_host_dependencies() {
     assert!(report.contains(r#""verification_mode": "native-equivalence""#));
     assert!(report.contains(&format!(r#""source_sha": "{TEST_SOURCE_SHA}""#)));
     assert!(report.contains(r#""build_marker": "0123456""#));
+    assert_eq!(
+        fs::metadata(&appimage)
+            .expect("AppImage metadata")
+            .permissions()
+            .mode()
+            & 0o111,
+        0,
+        "verification must not mutate a downloaded artifact's mode"
+    );
 }
 
 #[test]
@@ -245,7 +255,7 @@ fn native_portability_gate_rejects_undeclared_host_dependencies() {
         .arg(&appimage)
         .arg(fixture.path().join("portability-report.json"))
         .arg(TEST_SOURCE_SHA)
-        .env("PATH", "/usr/bin:/bin")
+        .env("PATH", portability_test_path(fixture.path()))
         .env("OKP_PORTABILITY_CONTAINER_MODE", "skip")
         .output()
         .expect("native portability check should run");
@@ -270,44 +280,33 @@ fn portability_script() -> PathBuf {
 }
 
 fn build_test_deb(root: &Path, depends: &str) -> PathBuf {
-    let package_root = root.join("package");
-    fs::create_dir_all(package_root.join("DEBIAN")).expect("control directory");
-    fs::create_dir_all(package_root.join("usr/lib/ok-player")).expect("private lib directory");
-    fs::copy(
-        "/bin/true",
-        package_root.join("usr/lib/ok-player/ok-player"),
-    )
-    .expect("test ELF");
-    fs::write(
-        package_root.join("DEBIAN/control"),
-        format!(
-            "Package: ok-player-portability-test\nVersion: 1.0.0\nArchitecture: amd64\nDepends: {depends}\nMaintainer: Test <test@example.invalid>\nDescription: Portability fixture\n"
-        ),
-    )
-    .expect("test control");
-    let deb = root.join("ok-player-test_1.0.0_amd64.deb");
-    let output = Command::new("dpkg-deb")
-        .arg("--root-owner-group")
-        .arg("--build")
-        .arg(&package_root)
-        .arg(&deb)
-        .output()
-        .expect("dpkg-deb should run");
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+    let bin = root.join("bin");
+    fs::create_dir_all(&bin).expect("fake tool directory");
+    write_executable(
+        &bin.join("dpkg-deb"),
+        "#!/bin/sh\nset -eu\ncase \"$1\" in\n  -f) cat \"$2\" ;;\n  -x) mkdir -p \"$3/usr/lib/ok-player\"; cp /bin/true \"$3/usr/lib/ok-player/ok-player\" ;;\n  *) exit 2 ;;\nesac\n",
     );
+    write_executable(
+        &bin.join("dpkg-query"),
+        "#!/bin/sh\nset -eu\n[ \"$1\" = -S ]\nprintf 'libc6: %s\\n' \"$2\"\n",
+    );
+    let deb = root.join("ok-player-test_1.0.0_amd64.deb");
+    fs::write(&deb, depends).expect("fake Debian metadata");
     deb
 }
 
 fn build_test_appimage(root: &Path) -> PathBuf {
     let appimage = root.join("OK-Player-test-x86_64.AppImage");
-    write_executable(
+    fs::write(
         &appimage,
         "#!/bin/sh\nset -eu\nmkdir -p squashfs-root/usr/bin\ncp /bin/true squashfs-root/usr/bin/ok-player\n",
-    );
+    )
+    .expect("fake downloaded AppImage");
     appimage
+}
+
+fn portability_test_path(root: &Path) -> String {
+    format!("{}:/usr/bin:/bin", root.join("bin").display())
 }
 
 fn write_executable(path: &Path, contents: &str) {

@@ -2,7 +2,9 @@
 # Format: kind|name|probe|ubuntu-package
 #
 # `command` probes resolve through PATH, except `cc`, which honors CC.
-# `command-or-dotnet-tool` also accepts an executable in ~/.dotnet/tools.
+# `command-or-dotnet-tool` also accepts an executable in ~/.dotnet/tools. Its
+# Ubuntu package provides the SDK; pinned global-tool provisioning is documented
+# separately in docs/linux-candidate-builder.md.
 # `pkg-config` probes use `pkg-config --exists` and name the development package
 # that provides the module on the supported Ubuntu builder.
 command|awk|awk|gawk

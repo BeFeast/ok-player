@@ -24,6 +24,13 @@ deduplicated Ubuntu package names for host provisioning:
 scripts/linux-candidate-toolchain.sh --print-ubuntu-packages
 ```
 
+Install those Ubuntu packages, then provision the pinned Velopack CLI separately;
+the `dotnet-sdk-9.0` package provides the SDK but does not install global tools:
+
+```bash
+dotnet tool install --global vpk --version 1.2.0
+```
+
 The preflight aggregates every missing command and pkg-config module into one
 failure line before the build lock is acquired. New external commands in
 `build-local-mpv.sh` must use `okp_candidate_tool`. Native package and
