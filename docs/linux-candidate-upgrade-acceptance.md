@@ -140,6 +140,13 @@ identity, changed user state, changed public feed, invalid or lane-inconsistent 
 hashes, or any non-PASS row. A successful result is the cleanup authorization; screenshots, chat
 messages, or a verbal operator claim are not.
 
+The issue-owned acceptance pull request must add
+[`docs/qa-records/YYYY-MM-DD-issue-NNN.md`](qa-records/README.md). Record both
+lane results, the exact source/candidate SHAs, every package/feed/manifest
+SHA-256, the sanitized live GNOME/Wayland environment, and links to the complete
+external logs. The machine-readable manifest remains an artifact; an empty
+traceability commit is invalid.
+
 ## Queued-generation publication race
 
 Release acceptance must also preserve evidence for the candidate workflow race:

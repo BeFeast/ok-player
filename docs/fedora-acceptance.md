@@ -120,6 +120,12 @@ pass/fail evidence — enough to reconstruct the run without the guest. It embed
 no private hostnames, addresses, or credentials, and the same manifest can be
 attached to a future public beta acceptance record.
 
+For an issue-owned QA or acceptance pull request, summarize the manifest in
+[`docs/qa-records/YYYY-MM-DD-issue-NNN.md`](qa-records/README.md). The checked-in
+record carries the exact source SHA, package and manifest checksums, sanitized
+environment, result matrix, and durable links to the full external bundle. Do
+not use an empty commit or check the generated bundle into git.
+
 The schema and every decision rule are unit-tested in
 `rust/crates/okp-core/src/fedora_acceptance.rs`; those tests are the executable
 spec for this contract.

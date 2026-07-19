@@ -89,6 +89,7 @@ The `.deb` targets current Debian/Ubuntu; the AppImage targets any glibc desktop
 
 - 📋 **[Product Requirements](docs/OK-Player-PRD.md)** — the full spec: pillars, information architecture, every screen and state, roadmap, open questions. (Authored as the Windows product spec; the Linux shell tracks the same behavior natively.)
 - 📦 **[Linux release acceptance](docs/linux-release-acceptance.md)** — how Linux release evidence is graded and what each level may claim.
+- ✅ **[QA acceptance records](docs/qa-records/README.md)** — the required reviewable record for QA-only and acceptance-only pull requests.
 - 🔄 **[Update feeds](docs/update-feed.md)** — how installed Windows and Linux builds discover updates.
 - 📝 **[Release notes template — `0.11.0-beta.1`](docs/release-notes/0.11.0-beta.1.md)** — the presentation template for the first Linux public beta.
 - 🖥️ **[Windows development VM](docs/windows-dev-vm.md)** — reproducible VM bootstrap, environment report, and the VM-valid vs. real-hardware acceptance gates.

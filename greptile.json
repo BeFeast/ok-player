@@ -1,0 +1,43 @@
+{
+  "ignorePatterns": [
+    "artifacts/**",
+    "**/target/**",
+    "**/[Bb]in/**",
+    "**/[Oo]bj/**",
+    "**/[Oo]ut/**",
+    "**/[Bb]uild/**",
+    "**/[Pp]ublish/**",
+    "**/TestResults/**",
+    "**/*.log",
+    "**/*.binlog",
+    "**/*.pdb",
+    "**/*.dll",
+    "**/*.exe",
+    "**/*.nupkg",
+    "**/*.snupkg",
+    "**/*.appx",
+    "**/*.appxbundle",
+    "**/*.msix",
+    "**/*.msixbundle",
+    "**/*.AppImage",
+    "**/*.deb",
+    "**/*.rpm",
+    "**/*.zip",
+    "**/*.tar",
+    "**/*.tar.gz",
+    "**/*.tgz",
+    "**/*.7z",
+    "**/*.zst",
+    "**/*.png",
+    "**/*.jpg",
+    "**/*.jpeg",
+    "**/*.gif",
+    "**/*.webp"
+  ],
+  "customContext": {
+    "files": [
+      "AGENTS.md",
+      "docs/qa-records/README.md"
+    ]
+  }
+}

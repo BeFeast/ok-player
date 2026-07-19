@@ -6,6 +6,22 @@ on:
   pull_request:
 
 jobs:
+  reviewable-pr-diff:
+    name: PR has reviewable file changes
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Reject empty pull requests
+        run: >-
+          ./scripts/check-pr-reviewable-diff.sh
+          "${{ github.event.pull_request.base.sha }}"
+          "${{ github.event.pull_request.head.sha }}"
+
   unit-tests:
     name: Unit tests (engine-agnostic Core, headless)
     runs-on: ubuntu-latest

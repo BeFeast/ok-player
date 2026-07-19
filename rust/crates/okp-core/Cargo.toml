@@ -16,3 +16,4 @@ zip.workspace = true
 
 [dev-dependencies]
 okp-test-fixtures = { path = "../okp-test-fixtures" }
+tempfile.workspace = true
