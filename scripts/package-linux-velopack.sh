@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# candidate-required-tools: cargo cp install mkdir mktemp rm vpk
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="${1:-0.1.0-linux-alpha.1}"
 PACK_ID="com.befeast.okplayer"

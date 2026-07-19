@@ -24,16 +24,29 @@ deduplicated Ubuntu package names for host provisioning:
 scripts/linux-candidate-toolchain.sh --print-ubuntu-packages
 ```
 
+Install those Ubuntu packages, then provision the pinned Velopack CLI separately;
+the `dotnet-sdk-9.0` package provides the SDK but does not install global tools:
+
+```bash
+dotnet tool install --global vpk --version 1.2.0
+```
+
 The preflight aggregates every missing command and pkg-config module into one
 failure line before the build lock is acquired. New external commands in
-`build-local-mpv.sh` must use `okp_candidate_tool`; the same preflight verifies
-that every such reference exists in the manifest. The build pins the upstream
-commit and fails rather than substituting a distro libmpv.
+`build-local-mpv.sh` must use `okp_candidate_tool`. Native package and
+portability scripts declare their commands with `candidate-required-tools`;
+the same preflight verifies that every declared command exists in the manifest.
+The build pins the upstream commit and fails rather than substituting a distro
+libmpv.
 
-Shipping package lanes additionally require Docker. They build inside the
-digest-pinned Ubuntu 24.04 image defined by
-`scripts/linux-portable-builder.Dockerfile`; the native host is only the
-orchestrator and cannot raise the packaged glibc baseline.
+The native candidate builder does not require Docker or Podman. Candidate
+packages are built on the supported Ubuntu builder and receive an equivalence
+gate that inspects every dynamic ELF in the Debian and AppImage private library
+directories. Resolutions must stay inside the bundle or belong to a package
+named by the Debian `Depends` field, and both extracted executables must carry
+the expected source marker. Docker and Podman remain optional on this host; when
+either is present, the strict foreign-distro render check runs as an additional
+gate.
 
 ## Delivery SLA
 
@@ -108,18 +121,20 @@ lock after their direct parent returns.
    - workspace tests
    - pinned mpv v0.40.0 build with the embedded Wayland DMA-BUF patch; Rust
      gates and both Ubuntu package lanes use this exact library
-   - Debian and AppImage/Velopack packaging inside the pinned Ubuntu 24.04
-     builder image, so a newer candidate host cannot raise the shipped glibc
-     baseline or embed newer host GLib/FFmpeg ABI requirements
+   - native Debian and AppImage/Velopack packaging on the supported Ubuntu
+     candidate builder, with no container-runtime requirement
    - extracted payload verification that `libmpv.so.2` is packaged beside the
      executable with its complete media-runtime closure, carries the embed
      options, and resolves every bundled object through `$ORIGIN`
-   - cross-distro portability in a clean Debian testing container: `ldd` over
-     every bundled ELF, rejection of bundled target desktop libraries, exact
-     embedded source-marker checks, and the canonical real-media narrow-width
-     render smoke for both Debian and AppImage artifacts. The hash-bound
-     `portability-report.json` is required for promotion and later public
-     publication
+   - runtime-independent dependency equivalence over every bundled dynamic ELF:
+     each resolution must be bundle-local or owned by a package named in the
+     Debian `Depends` field, and both extracted executables must carry the
+     embedded source marker. If Docker or Podman is available, the same gate also
+     runs clean Debian testing `ldd`, rejects bundled target desktop libraries,
+     and executes the canonical real-media narrow-width render smoke for both
+     artifacts. The hash-bound
+     `portability-report.json` records which mode ran and is required for
+     promotion and later public publication
    - package identity + SHA-256 verification (`SHA256SUMS`, `package-identity.json`)
    - clean install / upgrade / uninstall smoke in a disposable environment
    - real playback and screenshot capture from the exact Debian payload, with a bundled image and SHA-256
@@ -151,10 +166,13 @@ Each build writes a bundle under `$OKP_CANDIDATE_STATE_DIR/out/<build-number>/`:
   `SHA256SUMS`, `package-identity.json`, `portability-report.json`, and the
   acceptance template.
 
-The portability container is a packaging gate, not operator acceptance. Its
-real-media Xvfb render proves that the packaged GTK GLArea and OSC initialize
-against the target desktop stack, and its source-marker check catches package
-identity loss in linked worktrees. The `installed-launch` and
+The native equivalence report is sufficient for candidate promotion. Public
+release preparation on the hosted runner always reruns the exact candidate
+artifacts in a clean Debian testing container and rejects publication unless
+that strict report passes. Its real-media Xvfb render proves that the packaged
+GTK GLArea and OSC initialize against the target desktop stack, and its
+source-marker check catches package identity loss in linked worktrees. Neither
+mode is operator acceptance. The `installed-launch` and
 `installed-package-version` rows must still be executed from a separate QA
 execution that did not build the artifacts; the acceptance schema rejects
 matching build/execution fingerprints.

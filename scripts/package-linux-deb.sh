@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# candidate-required-tools: cargo chmod cp dpkg-deb install ln mkdir rm
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="${1:-0.1.0-linux-alpha.1}"
 ARCH="${OKP_DEB_ARCH:-amd64}"
@@ -50,7 +52,7 @@ Section: video
 Priority: optional
 Architecture: $ARCH
 Maintainer: BeFeast <noreply@github.com>
-Depends: libgtk-4-1, libgl1, libegl1, libglx0, libdrm2, libgbm1, libvulkan1, libwayland-client0, libwayland-egl1, libxss1, libdecor-0-0
+Depends: libc6, libgcc-s1, libglib2.0-0 | libglib2.0-0t64, libgraphene-1.0-0, libgtk-4-1, libgl1, libegl1, libglx0, libglvnd0, libdrm2, libgbm1, libvulkan1, libwayland-client0, libwayland-egl1, libxss1, libdecor-0-0
 Recommends: ffmpeg
 Homepage: https://github.com/BeFeast/ok-player
 Description: Elegant mpv-based media player

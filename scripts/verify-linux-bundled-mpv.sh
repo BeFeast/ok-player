@@ -2,6 +2,8 @@
 # Refuse a Linux package payload with an incomplete or host-resolved mpv runtime.
 set -euo pipefail
 
+# candidate-required-tools: awk ldd readelf readlink sha256sum strings
+
 BINARY="${1:?usage: verify-linux-bundled-mpv.sh <binary> <runtime-dir>}"
 RUNTIME_DIR="${2:?usage: verify-linux-bundled-mpv.sh <binary> <runtime-dir>}"
 LIBRARY="$RUNTIME_DIR/libmpv.so.2"
@@ -10,7 +12,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 source "$SCRIPT_DIR/linux-bundled-mpv-runtime-policy.sh"
 
-for tool in ldd readelf strings; do
+for tool in awk ldd readelf readlink sha256sum strings; do
   command -v "$tool" >/dev/null 2>&1 || { echo "Missing required tool: $tool" >&2; exit 127; }
 done
 [[ -x "$BINARY" ]] || { echo "Packaged binary is not executable: $BINARY" >&2; exit 1; }

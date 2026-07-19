@@ -2,6 +2,8 @@
 # Copy libmpv's non-platform runtime closure into one origin-relative directory.
 set -euo pipefail
 
+# candidate-required-tools: awk basename cmp cp ldd mkdir patchelf readelf rm sha256sum sort
+
 LIBMPV="${1:?usage: collect-linux-bundled-mpv-runtime.sh <libmpv.so.2> <output-dir>}"
 OUTPUT="${2:?usage: collect-linux-bundled-mpv-runtime.sh <libmpv.so.2> <output-dir>}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"

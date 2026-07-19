@@ -163,16 +163,17 @@ run_gate workspace-tests \
 
 # Packaging lanes produce the installable artifacts under $CHECKOUT/artifacts/linux.
 run_gate deb-package \
+  env OKP_PORTABLE_PACKAGE_MODE=native \
   "$CHECKOUT/scripts/build-linux-portable-package.sh" deb "$VERSION"
 run_gate appimage-package \
-  env OKP_LINUX_CHANNEL=linux-candidate \
+  env OKP_LINUX_CHANNEL=linux-candidate OKP_PORTABLE_PACKAGE_MODE=native \
   "$CHECKOUT/scripts/build-linux-portable-package.sh" appimage "$VERSION"
 
 DEB="$CHECKOUT/artifacts/linux/deb/ok-player_${VERSION}_amd64.deb"
 APPIMAGE="$CHECKOUT/artifacts/linux/velopack/OK-Player-${VERSION}-x86_64.AppImage"
 
-# Cross-distro closure and installed-launch gate. The container consumes the
-# completed artifacts and cannot reuse any library from the native builder.
+# The native equivalence gate rejects undeclared host-library resolution. When
+# a container runtime is present it also runs the foreign-distro launch gate.
 run_gate portability-package-smoke \
   "$CHECKOUT/scripts/verify-linux-package-portability.sh" \
   "$DEB" "$APPIMAGE" "$CHECKOUT/artifacts/linux/portability-report.json" "$BUILD_SHA"

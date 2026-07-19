@@ -11,10 +11,9 @@ esac
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE="${OKP_PORTABLE_BUILDER_IMAGE:-ok-player-linux-builder:ubuntu-24.04-v1}"
-HOST_UID="${SUDO_UID:-$(id -u)}"
-HOST_GID="${SUDO_GID:-$(id -g)}"
+MODE="${OKP_PORTABLE_PACKAGE_MODE:-container}"
 
-for tool in docker git id; do
+for tool in git id; do
   command -v "$tool" >/dev/null 2>&1 || { echo "Missing required tool: $tool" >&2; exit 127; }
 done
 
@@ -25,12 +24,37 @@ SOURCE_SHA="$(git -C "$ROOT" rev-parse --verify 'HEAD^{commit}')"
 }
 BUILD_SHA="${SOURCE_SHA:0:7}"
 
-docker build \
+case "$MODE" in
+  native)
+    if [[ "$LANE" == deb ]]; then
+      exec env OKP_BUILD_SHA="$BUILD_SHA" \
+        "$ROOT/scripts/package-linux-deb.sh" "$VERSION"
+    fi
+    exec env OKP_BUILD_SHA="$BUILD_SHA" \
+      OKP_LINUX_CHANNEL="${OKP_LINUX_CHANNEL:-linux}" \
+      "$ROOT/scripts/package-linux-velopack.sh" "$VERSION"
+    ;;
+  container) ;;
+  *) echo "Unknown Linux package build mode: $MODE" >&2; exit 2 ;;
+esac
+
+HOST_UID="${SUDO_UID:-$(id -u)}"
+HOST_GID="${SUDO_GID:-$(id -g)}"
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  CONTAINER_RUNTIME=docker
+elif command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
+  CONTAINER_RUNTIME=podman
+else
+  echo "Missing usable container runtime: docker or podman" >&2
+  exit 127
+fi
+
+"$CONTAINER_RUNTIME" build \
   --tag "$IMAGE" \
   --file "$ROOT/scripts/linux-portable-builder.Dockerfile" \
   "$ROOT/scripts"
 
-docker run --rm \
+"$CONTAINER_RUNTIME" run --rm \
   --mount "type=bind,src=$ROOT,dst=/workspace" \
   --mount "type=volume,src=ok-player-cargo-registry,dst=/root/.cargo/registry" \
   --mount "type=volume,src=ok-player-cargo-git,dst=/root/.cargo/git" \

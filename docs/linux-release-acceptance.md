@@ -25,14 +25,21 @@ Linux release evidence is package-specific and has four levels:
 3. `installed-package`: launch and version checks against the candidate `.deb` or AppImage.
 4. `gnome-wayland-operator`: live GNOME/Wayland acceptance. Only this level may mark chooser, drag/drop, clipboard, portal, compositor, or focus rows `PASS`.
 
-Packaging also emits `portability-report.json`. It binds the source SHA, its
-embedded short build marker, and both artifact hashes to a clean Debian testing
-container run that performs `ldd` on every bundled ELF, rejects bundled target
-desktop libraries, and runs the canonical
-real-media narrow-width render smoke against each payload. Publication rejects
-a missing report or one whose identity differs from the downloaded candidate.
-This gate proves that the packaged media runtime is not borrowing build-host
-FFmpeg sonames; it does not replace installed or live operator acceptance.
+Packaging also emits `portability-report.json`. It always binds the source SHA,
+its embedded short build marker, and both artifact hashes to a native
+dependency-equivalence pass: every dynamic ELF in the package-private library
+directories must resolve either inside the bundle or to a package named by the
+Debian `Depends` field, and both extracted executables must contain the expected
+build marker. A candidate builder with Docker or Podman additionally records
+the clean Debian testing `ldd`, target
+desktop library rejection, source-marker checks, and canonical real-media
+narrow-width render smoke. Public release preparation never relies on runtime
+availability from the candidate host: the hosted runner reruns the exact
+downloaded candidate in strict container mode before publication. Publication
+rejects a missing report or one whose identity differs from the downloaded
+candidate. These gates prove that the packaged media runtime is not borrowing
+undeclared build-host libraries; they do not replace installed or live operator
+acceptance.
 
 The acceptance template records a privacy-preserving SHA-256 for the artifact
 build execution. Every PASS `installed-package` row must add

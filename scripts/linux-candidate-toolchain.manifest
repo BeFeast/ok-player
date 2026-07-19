@@ -2,23 +2,45 @@
 # Format: kind|name|probe|ubuntu-package
 #
 # `command` probes resolve through PATH, except `cc`, which honors CC.
+# `command-or-dotnet-tool` also accepts an executable in ~/.dotnet/tools. Its
+# Ubuntu package provides the SDK; pinned global-tool provisioning is documented
+# separately in docs/linux-candidate-builder.md.
 # `pkg-config` probes use `pkg-config --exists` and name the development package
 # that provides the module on the supported Ubuntu builder.
+command|awk|awk|gawk
+command|basename|basename|coreutils
+command|cargo|cargo|cargo
 command|cc|cc|build-essential
+command|chmod|chmod|coreutils
+command|cmp|cmp|diffutils
+command|cp|cp|coreutils
 command|cut|cut|coreutils
 command|dirname|dirname|coreutils
+command|dpkg-deb|dpkg-deb|dpkg
+command|dpkg-query|dpkg-query|dpkg
 command|ffmpeg|ffmpeg|ffmpeg
 command|git|git|git
+command|install|install|coreutils
+command|ldd|ldd|libc-bin
+command|ln|ln|coreutils
 command|meson|meson|meson
 command|mkdir|mkdir|coreutils
+command|mktemp|mktemp|coreutils
 command|ninja|ninja|ninja-build
+command|objdump|objdump|binutils
 command|patchelf|patchelf|patchelf
 command|pkg-config|pkg-config|pkg-config
 command|python3|python3|python3
+command|readelf|readelf|binutils
 command|readlink|readlink|coreutils
 command|realpath|realpath|coreutils
+command|rm|rm|coreutils
+command|sed|sed|sed
 command|sha256sum|sha256sum|coreutils
+command|sort|sort|coreutils
+command|strings|strings|binutils
 command|wayland-scanner|wayland-scanner|libwayland-bin
+command-or-dotnet-tool|vpk|vpk|dotnet-sdk-9.0
 pkg-config|alsa|alsa|libasound2-dev
 pkg-config|dvdnav|dvdnav|libdvdnav-dev
 pkg-config|egl|egl|libegl-dev
