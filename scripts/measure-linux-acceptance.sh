@@ -38,6 +38,8 @@ case "$STATE" in
     reference=compact-modes-handoff
     ;;
   settings-about)
+    viewport_width=760
+    viewport_height=560
     theme=light
     reference=about-handoff
     expected_width=760
