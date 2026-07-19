@@ -30,8 +30,12 @@ When distributing, add `THIRD-PARTY-NOTICES.md` (mpv/GPL + ANGLE notices) at the
 
 ## Linux native presentation
 
-The Linux client links the system GTK, Wayland/EGL, and libmpv packages rather than bundling
-native binaries. On Wayland, video renders into a desynchronized `wl_subsurface` with its own EGL
+The Debian and AppImage lanes link system GTK and platform graphics libraries,
+but package the pinned patched libmpv and its non-platform media-runtime closure
+beside the executable. Candidate builds verify that every dynamic object stays
+inside that private directory or resolves to a package declared by the Debian
+metadata; hosted release preparation adds a mandatory clean foreign-distro
+container check. On Wayland, video renders into a desynchronized `wl_subsurface` with its own EGL
 window and swap boundary. The subsurface sits below the transparent GTK shell, so titlebar, OSC,
 panels, popovers, subtitles rendered by libmpv, and input remain unchanged while video presentation
 bypasses `GtkGLArea` and GSK composition. The shell supplies GDK's `wl_display*` to libmpv as
