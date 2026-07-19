@@ -50,6 +50,7 @@ pub const REQUIRED_CANDIDATE_GATES: &[&str] = &[
     "workspace-tests",
     "deb-package",
     "appimage-package",
+    "portability-package-smoke",
     "package-identity",
     "install-upgrade-uninstall-smoke",
     "deb-screenshot-smoke",

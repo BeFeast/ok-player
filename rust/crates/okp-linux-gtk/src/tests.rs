@@ -337,7 +337,7 @@ fn linux_packaging_installs_launcher_identity_asset() {
         assert!(contents.contains("usr/share/icons/hicolor/${size}x${size}/apps"));
         assert!(contents.contains("okp_use_linux_bundled_mpv package"));
         assert!(contents.contains("verify-linux-bundled-mpv.sh"));
-        assert!(contents.contains("libmpv.so.2"));
+        assert!(contents.contains("OKP_BUNDLED_MPV_RUNTIME_DIR"));
     }
 
     let velopack = fs::read_to_string(root.join("scripts/package-linux-velopack.sh"))
@@ -357,6 +357,16 @@ fn linux_packages_pin_and_bundle_the_embedded_wayland_mpv() {
         .expect("local mpv build script should be readable");
     let verify = fs::read_to_string(root.join("scripts/verify-linux-bundled-mpv.sh"))
         .expect("bundled mpv verification script should be readable");
+    let collect = fs::read_to_string(root.join("scripts/collect-linux-bundled-mpv-runtime.sh"))
+        .expect("bundled mpv runtime collector should be readable");
+    let portability = fs::read_to_string(root.join("scripts/verify-linux-package-portability.sh"))
+        .expect("cross-distro portability gate should be readable");
+    let deb = fs::read_to_string(root.join("scripts/package-linux-deb.sh"))
+        .expect("Debian packaging script should be readable");
+    let portable_builder = fs::read_to_string(root.join("scripts/build-linux-portable-package.sh"))
+        .expect("portable package builder should be readable");
+    let portable_image = fs::read_to_string(root.join("scripts/linux-portable-builder.Dockerfile"))
+        .expect("portable package builder image should be readable");
     let candidate = fs::read_to_string(root.join("scripts/build-linux-candidate.sh"))
         .expect("candidate builder should be readable");
 
@@ -364,9 +374,21 @@ fn linux_packages_pin_and_bundle_the_embedded_wayland_mpv() {
     assert!(prepare.contains("UPSTREAM_COMMIT=\"e48ac7ce08462f5e33af6ef9deeac6fa87eef01e\""));
     assert!(local_build.contains("mpv-v0.40.0-wayland-embed.patch"));
     assert!(local_build.contains("mpv-v0.40.0-ffmpeg-8.patch"));
+    assert!(collect.contains("patchelf --set-rpath '$ORIGIN'"));
+    assert!(collect.contains("bundled-runtime.sha256"));
     assert!(verify.contains("wayland-embed-display"));
     assert!(verify.contains("Packaged binary resolved libmpv outside its payload"));
+    assert!(verify.contains("libavcodec.so"));
+    assert!(portability.contains("debian:testing-slim"));
+    assert!(portability.contains("portability ldd:"));
+    assert!(portability.contains("portability launch:"));
+    assert!(!deb.contains("libmpv2"));
+    assert!(deb.contains("Recommends: ffmpeg"));
+    assert!(portable_builder.contains("linux-portable-builder.Dockerfile"));
+    assert!(portable_builder.contains("ubuntu-24.04-v1"));
+    assert!(portable_image.contains("FROM ubuntu@sha256:"));
     assert!(candidate.contains("run_gate bundled-mpv okp_use_linux_bundled_mpv"));
+    assert!(candidate.contains("run_gate portability-package-smoke"));
 }
 
 #[test]

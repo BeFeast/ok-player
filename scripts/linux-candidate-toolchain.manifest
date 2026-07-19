@@ -12,6 +12,7 @@ command|git|git|git
 command|meson|meson|meson
 command|mkdir|mkdir|coreutils
 command|ninja|ninja|ninja-build
+command|patchelf|patchelf|patchelf
 command|pkg-config|pkg-config|pkg-config
 command|python3|python3|python3
 command|readlink|readlink|coreutils

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::update_selection::compare_versions;
 
-pub const EVIDENCE_SCHEMA_VERSION: u32 = 1;
+pub const EVIDENCE_SCHEMA_VERSION: u32 = 2;
 pub const CANDIDATE_UPGRADE_EVIDENCE_SCHEMA_VERSION: u32 = 1;
 
 pub const REQUIRED_CANDIDATE_UPGRADE_CHECKS: &[&str] = &[
@@ -345,18 +345,24 @@ pub struct EvidenceRow {
     pub measurements: Vec<Measurement>,
     #[serde(default)]
     pub notes: String,
+    /// Privacy-preserving SHA-256 for the execution context that produced this
+    /// row. Installed-package PASS rows must identify a context distinct from
+    /// the artifact build execution.
+    #[serde(default)]
+    pub execution_environment_sha256: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct EvidenceManifest {
     pub schema_version: u32,
     pub package: PackageIdentity,
+    pub build_environment_sha256: String,
     pub rows: Vec<EvidenceRow>,
 }
 
 impl EvidenceManifest {
     /// Build a deliberately incomplete operator template for an exact package.
-    pub fn template(package: PackageIdentity) -> Self {
+    pub fn template(package: PackageIdentity, build_environment_sha256: String) -> Self {
         let mut rows = Vec::new();
         rows.extend(REQUIRED_MODEL_CHECKS.iter().map(|state| EvidenceRow {
             id: (*state).to_owned(),
@@ -369,6 +375,7 @@ impl EvidenceManifest {
             operator_status: EvidenceStatus::NotRun,
             measurements: Vec::new(),
             notes: String::new(),
+            execution_environment_sha256: None,
         }));
         rows.extend(REQUIRED_XVFB_STATES.iter().map(|state| EvidenceRow {
             id: format!("xvfb-{state}"),
@@ -381,6 +388,7 @@ impl EvidenceManifest {
             operator_status: EvidenceStatus::NotRun,
             measurements: Vec::new(),
             notes: String::new(),
+            execution_environment_sha256: None,
         }));
         rows.extend(REQUIRED_INSTALLED_CHECKS.iter().map(|state| EvidenceRow {
             id: (*state).to_owned(),
@@ -393,6 +401,7 @@ impl EvidenceManifest {
             operator_status: EvidenceStatus::NotRun,
             measurements: Vec::new(),
             notes: String::new(),
+            execution_environment_sha256: None,
         }));
         rows.extend(REQUIRED_LIVE_CHECKS.iter().map(|state| EvidenceRow {
             id: (*state).to_owned(),
@@ -408,11 +417,13 @@ impl EvidenceManifest {
             operator_status: EvidenceStatus::NotRun,
             measurements: Vec::new(),
             notes: String::new(),
+            execution_environment_sha256: None,
         }));
 
         Self {
             schema_version: EVIDENCE_SCHEMA_VERSION,
             package,
+            build_environment_sha256,
             rows,
         }
     }
@@ -427,6 +438,11 @@ impl EvidenceManifest {
             ));
         }
         validate_package_identity(&self.package, &mut errors);
+        validate_sha256(
+            "build_environment_sha256",
+            &self.build_environment_sha256,
+            &mut errors,
+        );
 
         let mut ids = BTreeSet::new();
         for row in &self.rows {
@@ -485,6 +501,29 @@ impl EvidenceManifest {
             }
             if row.level == EvidenceLevel::XvfbRender && row.viewport.is_none() {
                 errors.push(format!("{}: Xvfb evidence requires a viewport", row.id));
+            }
+            if row.level == EvidenceLevel::InstalledPackage
+                && row.measurement_result == EvidenceStatus::Pass
+            {
+                match row.execution_environment_sha256.as_deref() {
+                    Some(fingerprint) => {
+                        validate_sha256(
+                            &format!("{} execution_environment_sha256", row.id),
+                            fingerprint,
+                            &mut errors,
+                        );
+                        if fingerprint.eq_ignore_ascii_case(&self.build_environment_sha256) {
+                            errors.push(format!(
+                                "{}: installed-package evidence ran in the artifact build execution context",
+                                row.id
+                            ));
+                        }
+                    }
+                    None => errors.push(format!(
+                        "{}: installed-package PASS requires an execution environment fingerprint",
+                        row.id
+                    )),
+                }
             }
         }
 
@@ -868,7 +907,7 @@ mod tests {
     }
 
     fn passing_manifest() -> EvidenceManifest {
-        let mut manifest = EvidenceManifest::template(package());
+        let mut manifest = EvidenceManifest::template(package(), "a".repeat(64));
         for row in &mut manifest.rows {
             row.reference = "canonical-redline".to_owned();
             match row.level {
@@ -877,6 +916,9 @@ mod tests {
                 }
                 _ => {
                     row.measurement_result = EvidenceStatus::Pass;
+                    if row.level == EvidenceLevel::InstalledPackage {
+                        row.execution_environment_sha256 = Some("b".repeat(64));
+                    }
                     row.measurements.push(Measurement {
                         name: "acceptance".to_owned(),
                         expected: 1.0,
@@ -959,6 +1001,26 @@ mod tests {
     fn complete_exact_manifest_is_release_ready() {
         let manifest = passing_manifest();
         assert_eq!(manifest.validate_release_ready(&package()), Ok(()));
+    }
+
+    #[test]
+    fn installed_acceptance_must_run_outside_the_build_execution() {
+        let mut manifest = passing_manifest();
+        let build_environment_sha256 = manifest.build_environment_sha256.clone();
+        for row in &mut manifest.rows {
+            if row.level == EvidenceLevel::InstalledPackage {
+                row.execution_environment_sha256 = Some(build_environment_sha256.clone());
+            }
+        }
+
+        let errors = manifest.validate_release_ready(&package()).unwrap_err();
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|error| error.contains("artifact build execution context"))
+                .count(),
+            REQUIRED_INSTALLED_CHECKS.len()
+        );
     }
 
     #[test]
@@ -1072,7 +1134,7 @@ mod tests {
 
     #[test]
     fn template_records_fullscreen_and_wayland_always_on_top_boundaries() {
-        let manifest = EvidenceManifest::template(package());
+        let manifest = EvidenceManifest::template(package(), "a".repeat(64));
         let fullscreen = manifest
             .rows
             .iter()

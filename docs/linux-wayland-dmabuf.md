@@ -3,10 +3,19 @@
 OK Player prefers mpv's `dmabuf-wayland` video output when it is linked to the
 patched mpv v0.40.0 build produced by `scripts/build-local-mpv.sh`. Debian and
 AppImage packages prepare that exact pinned upstream commit, apply the embed
-patch, and install `libmpv.so.2` beside the application binary. An
-origin-relative runtime path prevents an installed package from silently
-selecting the distro library instead. Fedora remains on its explicit system-mpv
-packaging contract.
+patch, and install `libmpv.so.2` plus its complete non-platform dependency
+closure beside the application binary. That closure includes the exact FFmpeg,
+libplacebo, libass, libbluray, and Rubber Band sonames resolved by the pinned
+build. Every bundled ELF carries an origin-relative runtime path, so neither
+the executable nor a transitive media library can silently select a different
+host copy. The dynamic loader, glibc, and graphics-driver ABI libraries remain
+target-provided and are checked by the cross-distro packaging gate. Fedora
+remains on its explicit system-mpv packaging contract.
+
+Shipping Debian and AppImage artifacts are built inside the repository's
+pinned Ubuntu 24.04 builder image. This keeps both the application and every
+bundled library on an older glibc baseline even when the native candidate host
+runs a newer Ubuntu release.
 
 The embed patch is kept at
 `rust/patches/mpv-v0.40.0-wayland-embed.patch`. The small
@@ -36,8 +45,9 @@ the existing libmpv OpenGL render API in the same player instance. Development
 and Fedora system libmpv builds reject the first embed option before
 initialization, so OK Player selects the same OpenGL path. Shipped Debian and
 AppImage payloads must pass `scripts/verify-linux-bundled-mpv.sh`; packaging
-fails if the executable resolves any libmpv outside its own payload or if the
-patched embed option is absent.
+fails if the executable resolves any libmpv outside its own payload, a bundled
+object has an unresolved dependency or non-origin runtime path, the closure
+manifest does not match its files, or the patched embed option is absent.
 
 ## Acceptance evidence
 

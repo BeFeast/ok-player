@@ -140,6 +140,11 @@ identity, changed user state, changed public feed, invalid or lane-inconsistent 
 hashes, or any non-PASS row. A successful result is the cleanup authorization; screenshots, chat
 messages, or a verbal operator claim are not.
 
+Installed launch/version evidence for every fixed candidate must be collected
+on a QA execution that did not build its artifacts. Use the package-bound
+acceptance template's build/execution fingerprints; a matching fingerprint is
+invalid even when the distro version happens to match the builder.
+
 The issue-owned acceptance pull request must add
 [`docs/qa-records/YYYY-MM-DD-issue-NNN.md`](qa-records/README.md). Record both
 lane results, the exact source/candidate SHAs, every package/feed/manifest

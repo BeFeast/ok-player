@@ -163,13 +163,19 @@ run_gate workspace-tests \
 
 # Packaging lanes produce the installable artifacts under $CHECKOUT/artifacts/linux.
 run_gate deb-package \
-  "$CHECKOUT/scripts/package-linux-deb.sh" "$VERSION"
+  "$CHECKOUT/scripts/build-linux-portable-package.sh" deb "$VERSION"
 run_gate appimage-package \
   env OKP_LINUX_CHANNEL=linux-candidate \
-  "$CHECKOUT/scripts/package-linux-velopack.sh" "$VERSION"
+  "$CHECKOUT/scripts/build-linux-portable-package.sh" appimage "$VERSION"
 
 DEB="$CHECKOUT/artifacts/linux/deb/ok-player_${VERSION}_amd64.deb"
 APPIMAGE="$CHECKOUT/artifacts/linux/velopack/OK-Player-${VERSION}-x86_64.AppImage"
+
+# Cross-distro closure and installed-launch gate. The container consumes the
+# completed artifacts and cannot reuse any library from the native builder.
+run_gate portability-package-smoke \
+  "$CHECKOUT/scripts/verify-linux-package-portability.sh" \
+  "$DEB" "$APPIMAGE" "$CHECKOUT/artifacts/linux/portability-report.json"
 
 # Package identity + SHA-256 verification: a checksum manifest over the
 # user-facing installables plus package-identity.json bound to these exact bytes.

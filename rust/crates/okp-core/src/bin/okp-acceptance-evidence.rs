@@ -155,7 +155,11 @@ fn write_identity(args: &[String]) -> Result<(), String> {
 
 fn write_template(args: &[String]) -> Result<(), String> {
     let parsed = PackageArgs::parse(args)?;
-    print_json(&EvidenceManifest::template(parsed.identity()?))
+    let build_environment_sha256 = value(args, "--build-environment-sha256")?.to_owned();
+    print_json(&EvidenceManifest::template(
+        parsed.identity()?,
+        build_environment_sha256,
+    ))
 }
 
 fn validate(args: &[String]) -> Result<(), String> {
@@ -239,7 +243,7 @@ fn optional_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 }
 
 fn usage() -> String {
-    "usage:\n  okp-acceptance-evidence identity --version V --commit SHA --deb PATH --appimage PATH\n  okp-acceptance-evidence template --version V --commit SHA --deb PATH --appimage PATH\n  okp-acceptance-evidence validate --manifest PATH --identity PATH\n  okp-acceptance-evidence candidate-upgrade-validate --manifest PATH\n  okp-acceptance-evidence presentation --log PATH [--warmup-seconds N] [--report-only]\n  okp-acceptance-evidence fedora-artifact --kind flatpak|rpm|copr --file PATH\n  okp-acceptance-evidence fedora-validate --manifest PATH".to_owned()
+    "usage:\n  okp-acceptance-evidence identity --version V --commit SHA --deb PATH --appimage PATH\n  okp-acceptance-evidence template --version V --commit SHA --deb PATH --appimage PATH --build-environment-sha256 SHA256\n  okp-acceptance-evidence validate --manifest PATH --identity PATH\n  okp-acceptance-evidence candidate-upgrade-validate --manifest PATH\n  okp-acceptance-evidence presentation --log PATH [--warmup-seconds N] [--report-only]\n  okp-acceptance-evidence fedora-artifact --kind flatpak|rpm|copr --file PATH\n  okp-acceptance-evidence fedora-validate --manifest PATH".to_owned()
 }
 
 #[cfg(test)]
