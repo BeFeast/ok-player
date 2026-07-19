@@ -363,6 +363,8 @@ fn linux_packages_pin_and_bundle_the_embedded_wayland_mpv() {
         .expect("cross-distro portability gate should be readable");
     let deb = fs::read_to_string(root.join("scripts/package-linux-deb.sh"))
         .expect("Debian packaging script should be readable");
+    let velopack_package = fs::read_to_string(root.join("scripts/package-linux-velopack.sh"))
+        .expect("Velopack packaging script should be readable");
     let portable_builder = fs::read_to_string(root.join("scripts/build-linux-portable-package.sh"))
         .expect("portable package builder should be readable");
     let portable_image = fs::read_to_string(root.join("scripts/linux-portable-builder.Dockerfile"))
@@ -390,12 +392,65 @@ fn linux_packages_pin_and_bundle_the_embedded_wayland_mpv() {
     assert!(!deb.contains("libmpv2"));
     assert!(deb.contains("Recommends: ffmpeg"));
     assert!(deb.contains("libxss1"));
+    assert!(deb.contains("libx11-6"));
+    assert!(deb.contains("libxcursor1"));
+    assert!(deb.contains("libxext6"));
+    assert!(deb.contains("libxfixes3"));
+    assert!(deb.contains("libxi6"));
+    assert!(deb.contains("libxrandr2"));
+    assert!(deb.contains("libwayland-cursor0"));
+    assert!(deb.contains("libxkbcommon0"));
     assert!(deb.contains("libdecor-0-0"));
+    for dependency in [
+        "libcairo-gobject2",
+        "libcairo2",
+        "libdbus-1-3",
+        "libffi8",
+        "libfontconfig1",
+        "libfreetype6",
+        "libfribidi0",
+        "libgdk-pixbuf-2.0-0",
+        "libharfbuzz0b",
+        "libpango-1.0-0",
+        "libpangocairo-1.0-0",
+        "libsystemd0",
+        "libudev1",
+        "libx11-xcb1",
+        "libxcb-dri3-0",
+        "libxcb-shape0",
+        "libxcb-shm0",
+        "libxcb-xfixes0",
+        "libxcb1",
+        "libxpresent1",
+        "libxv1",
+    ] {
+        assert!(
+            deb.contains(dependency),
+            "missing Debian dependency: {dependency}"
+        );
+    }
+    assert!(deb.contains("OKP_CANDIDATE_TOOLCHAIN_GATE_SCRIPTS="));
+    assert!(velopack_package.contains("OKP_CANDIDATE_TOOLCHAIN_GATE_SCRIPTS="));
+    assert!(deb.contains("OKP_CANDIDATE_TOOLCHAIN_REQUIRE_DOTNET_TOOLS=false"));
+    assert!(velopack_package.contains("OKP_CANDIDATE_TOOLCHAIN_REQUIRE_DOTNET_TOOLS=true"));
     assert!(portable_builder.contains("linux-portable-builder.Dockerfile"));
     assert!(portable_builder.contains("ubuntu-24.04-v1"));
     assert!(portable_builder.contains("git -C \"$ROOT\" rev-parse --verify 'HEAD^{commit}'"));
     assert!(portable_builder.contains("-e OKP_BUILD_SHA=\"$BUILD_SHA\""));
+    assert!(portable_builder.contains("--target \"$LANE\""));
     assert!(portable_image.contains("FROM ubuntu@sha256:"));
+    let media_image = portable_image
+        .split("FROM media AS deb")
+        .next()
+        .expect("portable media stage");
+    assert!(media_image.contains("--print-portable-ubuntu-packages"));
+    assert!(!media_image.contains("dotnet-install.sh"));
+    let appimage = portable_image
+        .split("FROM media AS appimage")
+        .nth(1)
+        .expect("portable AppImage stage");
+    assert!(appimage.contains("dotnet-install.sh"));
+    assert!(appimage.contains("vpk --version 1.2.0"));
     assert!(candidate.contains("run_gate bundled-mpv okp_use_linux_bundled_mpv"));
     assert!(candidate.contains("run_gate portability-package-smoke"));
 }

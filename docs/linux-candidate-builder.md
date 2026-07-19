@@ -31,6 +31,23 @@ the `dotnet-sdk-9.0` package provides the SDK but does not install global tools:
 dotnet tool install --global vpk --version 1.2.0
 ```
 
+The manifest's `command-or-dotnet-tool|vpk|vpk|dotnet-sdk-9.0` row is the
+native-host provisioning source for that SDK package. Portable release images
+must not feed that row to the base Ubuntu package install: Ubuntu's default
+sources do not contain the Microsoft SDK, and Debian packaging does not need
+Velopack. `--print-portable-ubuntu-packages` therefore emits only the shared
+media build dependencies. The portable Dockerfile uses that view for its
+`media`/`deb` targets and installs .NET 9 with Microsoft's install script plus
+the pinned `vpk` tool only in the `appimage` target. Package preflight follows
+the same lane boundary: each package entry point explicitly selects its package
+and shared media-runtime gates. Debian therefore does not require `vpk`, while
+AppImage validates and probes the Velopack gate. The Debian entry point also
+sets `OKP_CANDIDATE_TOOLCHAIN_REQUIRE_DOTNET_TOOLS=false`, so the shared
+manifest preflight does not turn the unused `vpk` row back into a .NET
+requirement. The scheduled native-builder preflight keeps the full default gate
+list and default tool probes, validating both package paths plus portability
+before acquiring the build lock.
+
 The preflight aggregates every missing command and pkg-config module into one
 failure line before the build lock is acquired. New external commands in
 `build-local-mpv.sh` must use `okp_candidate_tool`. Native package and
