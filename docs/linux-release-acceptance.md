@@ -25,6 +25,12 @@ Linux release evidence is package-specific and has four levels:
 3. `installed-package`: launch and version checks against the candidate `.deb` or AppImage.
 4. `gnome-wayland-operator`: live GNOME/Wayland acceptance. Only this level may mark chooser, drag/drop, clipboard, portal, compositor, or focus rows `PASS`.
 
+Every issue-owned QA or acceptance outcome must also add a reviewable Markdown
+record under [`docs/qa-records/`](qa-records/README.md). Generated manifests,
+screenshots, packages, and full logs remain external artifacts, but the record
+must bind them to the exact source and package identities by SHA-256 and link to
+the complete logs. An empty traceability commit is not an acceptance record.
+
 ## Screenshot acceptance
 
 Every candidate bundle includes `acceptance/deb-screenshot.png` plus
