@@ -2,6 +2,9 @@
 # Run one command on a fresh Xvfb display and reap the disposable server exactly.
 set -euo pipefail
 
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/ok-player-scratch.sh"
+
 EVIDENCE_FILE="${1:?usage: run-linux-isolated-xvfb-session.sh <evidence-file> <xvfb-log> <server-args> <command> [args...]}"
 XVFB_LOG="${2:?usage: run-linux-isolated-xvfb-session.sh <evidence-file> <xvfb-log> <server-args> <command> [args...]}"
 SERVER_ARGS_TEXT="${3:?usage: run-linux-isolated-xvfb-session.sh <evidence-file> <xvfb-log> <server-args> <command> [args...]}"
@@ -21,7 +24,7 @@ done
 mkdir -p "$(dirname "$EVIDENCE_FILE")" "$(dirname "$XVFB_LOG")"
 : >"$EVIDENCE_FILE"
 : >"$XVFB_LOG"
-runtime_dir="$(mktemp -d -t okp-xvfb.XXXXXX)"
+runtime_dir="$(okp_make_scratch_dir xvfb)"
 auth_file="$runtime_dir/Xauthority"
 touch "$auth_file"
 xvfb_pid=""

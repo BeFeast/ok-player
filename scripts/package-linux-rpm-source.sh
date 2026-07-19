@@ -3,6 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/ok-player-scratch.sh"
 SPEC="$ROOT/rust/packaging/fedora/ok-player.spec"
 OUT_DIR="${1:-$ROOT/artifacts/linux/rpm/source}"
 
@@ -41,7 +42,7 @@ UPSTREAM_VERSION="${OKP_RPM_UPSTREAM_VERSION:-0.11.0-beta.1}"
 SOURCE_EPOCH="${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct HEAD)}"
 SOURCE_COMMIT="$(git rev-parse HEAD)"
 PREFIX="ok-player-$UPSTREAM_VERSION"
-TMP_DIR="$(mktemp -d)"
+TMP_DIR="$(okp_make_scratch_dir rpm-source "$OUT_DIR")"
 RPM_TOPDIR="/tmp/ok-player-rpmbuild"
 RPM_LOCK="/tmp/ok-player-rpmbuild.lock"
 cleanup() {

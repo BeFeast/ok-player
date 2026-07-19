@@ -16,7 +16,21 @@
 set -euo pipefail
 
 DEB="${1:?usage: smoke-linux-install-upgrade.sh <candidate.deb> [work-dir]}"
-WORK_DIR="${2:-$(mktemp -d)}"
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/ok-player-scratch.sh"
+REMOVE_WORK_DIR=false
+if [[ -n "${2:-}" ]]; then
+  WORK_DIR="$2"
+else
+  WORK_DIR="$(okp_make_scratch_dir install-smoke)"
+  REMOVE_WORK_DIR=true
+fi
+cleanup() {
+  if [[ "$REMOVE_WORK_DIR" == "true" ]]; then
+    rm -rf -- "$WORK_DIR"
+  fi
+}
+trap cleanup EXIT
 
 [[ -f "$DEB" ]] || { echo "Candidate .deb not found: $DEB" >&2; exit 1; }
 

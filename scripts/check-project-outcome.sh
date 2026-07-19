@@ -69,7 +69,15 @@ if [[ ! "$max_schedule_age" =~ ^[0-9]+$ ]] || (( max_schedule_age == 0 )); then
   exit 2
 fi
 
-work="$(mktemp -d)" || exit 2
+scratch_prefix="ok-player-outcome-health"
+if [[ -n "${OKP_SCRATCH_SESSION:-}" ]]; then
+  [[ "$OKP_SCRATCH_SESSION" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || {
+    echo "OKP_SCRATCH_SESSION must contain only letters, digits, dot, underscore, or hyphen" >&2
+    exit 2
+  }
+  scratch_prefix="ok-player-${OKP_SCRATCH_SESSION}-outcome-health"
+fi
+work="$(mktemp -d -t "${scratch_prefix}.XXXXXX")" || exit 2
 trap 'rm -rf -- "$work"' EXIT
 : >"$work/windows-feed.json" || exit 2
 : >"$work/candidate-feed.json" || exit 2

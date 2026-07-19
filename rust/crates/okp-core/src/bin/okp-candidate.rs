@@ -13,6 +13,8 @@
 //!   okp-candidate publish-decision --requested-sha SHA --build-sha SHA \
 //!       --current-sha SHA --build-number N --allocated-build N \
 //!       [--published-feed PATH]
+//!   okp-candidate prune-out --out-root DIR --last-bundle-path PATH \
+//!       [--keep N]
 //!   okp-candidate classify --phase idle|building --age-seconds N \
 //!       [--stall-after N]
 //!   okp-candidate stage-velopack --output-dir DIR --channel CHANNEL \
@@ -28,9 +30,10 @@ use std::process::Command;
 
 use okp_core::acceptance_evidence::{ArtifactKind, PackageArtifact, PackageIdentity};
 use okp_core::candidate_build::{
-    BuildDecision, BuildPhase, CandidateBuild, DEFAULT_STALL_AFTER_SECONDS, GateResult, GateStatus,
-    assemble_candidate_feed, candidate_prune_plan, candidate_version, classify_activity,
-    verify_candidate_bundle,
+    BuildDecision, BuildPhase, CandidateBuild, CandidateOutGeneration,
+    DEFAULT_RETAINED_CANDIDATE_BUNDLES, DEFAULT_STALL_AFTER_SECONDS, GateResult, GateStatus,
+    assemble_candidate_feed, candidate_out_prune_plan, candidate_prune_plan, candidate_version,
+    classify_activity, verify_candidate_bundle,
 };
 use okp_core::candidate_channel::{AcceptanceStatus, CandidateFeed, decide_candidate_publish};
 use okp_core::candidate_lock::{
@@ -57,6 +60,7 @@ fn run() -> Result<(), String> {
         Some("feed") => feed(&args[1..]),
         Some("publish-decision") => publish_decision(&args[1..]),
         Some("prune-plan") => prune_plan(&args[1..]),
+        Some("prune-out") => prune_out(&args[1..]),
         Some("version") => version(&args[1..]),
         Some("classify") => classify(&args[1..]),
         Some("stage-velopack") => stage_velopack(&args[1..]),
@@ -215,6 +219,98 @@ fn prune_plan(args: &[String]) -> Result<(), String> {
         println!("{asset}");
     }
     Ok(())
+}
+
+fn prune_out(args: &[String]) -> Result<(), String> {
+    let out_root = Path::new(value(args, "--out-root")?);
+    let last_bundle_path = Path::new(value(args, "--last-bundle-path")?);
+    let retain_complete = match optional_value(args, "--keep") {
+        Some(value) => value
+            .parse::<usize>()
+            .map_err(|error| format!("invalid --keep: {error}"))?,
+        None => DEFAULT_RETAINED_CANDIDATE_BUNDLES,
+    };
+    if retain_complete == 0 {
+        return Err("--keep must be greater than zero".to_owned());
+    }
+    if !out_root.exists() {
+        return Ok(());
+    }
+    if !out_root.is_dir() {
+        return Err(format!("{} is not a directory", out_root.display()));
+    }
+
+    let canonical_root =
+        fs::canonicalize(out_root).map_err(|error| format!("{}: {error}", out_root.display()))?;
+    let pinned_build = pinned_candidate_generation(&canonical_root, last_bundle_path)?;
+    let mut generations = Vec::new();
+    for entry in fs::read_dir(&canonical_root)
+        .map_err(|error| format!("{}: {error}", canonical_root.display()))?
+    {
+        let entry = entry.map_err(|error| format!("{}: {error}", canonical_root.display()))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("{}: {error}", entry.path().display()))?;
+        if !file_type.is_dir() {
+            continue;
+        }
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Ok(build_number) = name.parse::<u64>() else {
+            continue;
+        };
+        if build_number.to_string() != name {
+            continue;
+        }
+        generations.push(CandidateOutGeneration {
+            build_number,
+            complete: entry.path().join("candidate-build.json").is_file()
+                && entry.path().join("artifacts").is_dir(),
+        });
+    }
+
+    for build in candidate_out_prune_plan(&generations, pinned_build, retain_complete) {
+        let path = canonical_root.join(build.to_string());
+        fs::remove_dir_all(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+        println!("pruned candidate generation {build}");
+    }
+    Ok(())
+}
+
+fn pinned_candidate_generation(
+    canonical_root: &Path,
+    last_bundle_path: &Path,
+) -> Result<Option<u64>, String> {
+    let pointer = match fs::read_to_string(last_bundle_path) {
+        Ok(pointer) => pointer,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("{}: {error}", last_bundle_path.display())),
+    };
+    let pointer = pointer.trim();
+    if pointer.is_empty() || !Path::new(pointer).exists() {
+        return Ok(None);
+    }
+    let canonical_pointer =
+        fs::canonicalize(pointer).map_err(|error| format!("{pointer}: {error}"))?;
+    if canonical_pointer.parent() != Some(canonical_root) {
+        return Err(format!(
+            "{} points outside candidate out root {}",
+            last_bundle_path.display(),
+            canonical_root.display()
+        ));
+    }
+    let name = canonical_pointer
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("{pointer} has no UTF-8 generation name"))?;
+    let build = name
+        .parse::<u64>()
+        .map_err(|error| format!("invalid pinned candidate generation {name:?}: {error}"))?;
+    if build.to_string() != name {
+        return Err(format!("invalid pinned candidate generation {name:?}"));
+    }
+    Ok(Some(build))
 }
 
 fn version(args: &[String]) -> Result<(), String> {
@@ -388,5 +484,5 @@ fn optional_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 }
 
 fn usage() -> String {
-    "usage:\n  okp-candidate decide --head SHA [--last SHA]\n  okp-candidate record --source-sha SHA --build-number N --version V --started-at TS --finished-at TS [--require-native-hardware] --deb PATH --appimage PATH --gate name:status[:detail] ...\n  okp-candidate promotable --record PATH\n  okp-candidate verify-bundle --bundle DIR\n  okp-candidate feed --bundle DIR --base-url URL --acceptance pending|accepted|rejected [--previous PATH] --output PATH\n  okp-candidate publish-decision --requested-sha SHA --build-sha SHA --current-sha SHA --build-number N --allocated-build N [--published-feed PATH]\n  okp-candidate prune-plan --feed PATH --assets PATH\n  okp-candidate version --base VERSION --build N\n  okp-candidate classify --phase idle|building --age-seconds N [--stall-after N]\n  okp-candidate stage-velopack --output-dir DIR --channel CHANNEL --package-id ID --version VERSION --versioned-appimage FILE\n  okp-candidate lock-run --lock PATH --owner PATH --phase build|publish|promote|build-and-publish [--source-sha SHA] [--coalesce] -- COMMAND [ARG ...]\n  okp-candidate project-health --snapshot PATH".to_owned()
+    "usage:\n  okp-candidate decide --head SHA [--last SHA]\n  okp-candidate record --source-sha SHA --build-number N --version V --started-at TS --finished-at TS [--require-native-hardware] --deb PATH --appimage PATH --gate name:status[:detail] ...\n  okp-candidate promotable --record PATH\n  okp-candidate verify-bundle --bundle DIR\n  okp-candidate feed --bundle DIR --base-url URL --acceptance pending|accepted|rejected [--previous PATH] --output PATH\n  okp-candidate publish-decision --requested-sha SHA --build-sha SHA --current-sha SHA --build-number N --allocated-build N [--published-feed PATH]\n  okp-candidate prune-plan --feed PATH --assets PATH\n  okp-candidate prune-out --out-root DIR --last-bundle-path PATH [--keep N]\n  okp-candidate version --base VERSION --build N\n  okp-candidate classify --phase idle|building --age-seconds N [--stall-after N]\n  okp-candidate stage-velopack --output-dir DIR --channel CHANNEL --package-id ID --version VERSION --versioned-appimage FILE\n  okp-candidate lock-run --lock PATH --owner PATH --phase build|publish|promote|build-and-publish [--source-sha SHA] [--coalesce] -- COMMAND [ARG ...]\n  okp-candidate project-health --snapshot PATH".to_owned()
 }

@@ -21,6 +21,7 @@
 #   OKP_CANDIDATE_VERSION_BASE  candidate version base (default: 0.11.0-beta.0)
 #   OKP_CANDIDATE_NATIVE_SMOKE  optional command; when set its evidence is required
 #   OKP_CANDIDATE_STALL_SECONDS watchdog stall threshold recorded for reference
+#   OKP_CANDIDATE_OUT_RETAIN    complete local bundles retained (default: 3)
 set -euo pipefail
 
 STATE_DIR="${OKP_CANDIDATE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/ok-player-candidate}"
@@ -38,6 +39,8 @@ LOCK_OWNER="$STATE_DIR/build.lock.owner.json"
 LAST_BUILT="$STATE_DIR/last-built.sha"
 BUILD_NUMBER_FILE="$STATE_DIR/build-number"
 HEARTBEAT="$STATE_DIR/heartbeat.jsonl"
+LAST_BUNDLE="$STATE_DIR/last-bundle.path"
+OUT_RETAIN="${OKP_CANDIDATE_OUT_RETAIN:-3}"
 
 mkdir -p "$STATE_DIR"
 
@@ -55,13 +58,31 @@ if [[ "${OKP_CANDIDATE_LOCK_HELD:-}" != "1" ]]; then
     LOCK_CLI="$SCRIPT_ROOT/rust/target/debug/okp-candidate"
   fi
   [[ -x "$LOCK_CLI" ]] || { echo "candidate lock coordinator not found: $LOCK_CLI" >&2; exit 1; }
-  exec "$LOCK_CLI" lock-run \
+  exec env OKP_CANDIDATE_RETENTION_CLI="$LOCK_CLI" "$LOCK_CLI" lock-run \
     --lock "$LOCK" \
     --owner "$LOCK_OWNER" \
     --phase build \
     --coalesce \
     -- "$0" "$@"
 fi
+
+RETENTION_CLI="${OKP_CANDIDATE_RETENTION_CLI:-$SCRIPT_ROOT/rust/target/debug/okp-candidate}"
+prune_candidate_out() {
+  local status="$?"
+  trap - EXIT
+  if [[ ! -x "$RETENTION_CLI" ]]; then
+    echo "candidate retention coordinator not found: $RETENTION_CLI" >&2
+    (( status != 0 )) || status=1
+  elif ! "$RETENTION_CLI" prune-out \
+    --out-root "$OUT_ROOT" \
+    --last-bundle-path "$LAST_BUNDLE" \
+    --keep "$OUT_RETAIN"; then
+    echo "candidate out retention failed" >&2
+    (( status != 0 )) || status=1
+  fi
+  exit "$status"
+}
+trap prune_candidate_out EXIT
 
 # Publish the stall threshold the external watchdog should use with
 # `okp-candidate classify --stall-after`. Kept beside the heartbeats so the
@@ -281,7 +302,7 @@ fi
 # Record this SHA as successfully built so the next schedule skips it. This is
 # the builder's own idempotency marker, NOT feed promotion.
 echo "$BUILD_SHA" >"$LAST_BUILT"
-echo "$OUT_DIR" >"$STATE_DIR/last-bundle.path"
+echo "$OUT_DIR" >"$LAST_BUNDLE"
 
 heartbeat idle "candidate ${VERSION} (source ${BUILD_SHA}) built; bundle at ${OUT_DIR}" "$BUILD_SHA"
 echo "Candidate bundle: $OUT_DIR"

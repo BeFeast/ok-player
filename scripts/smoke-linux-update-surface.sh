@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/ok-player-scratch.sh"
 BINARY="${1:-$ROOT/rust/target/debug/okp-linux-gtk}"
 OUT_DIR="${2:-$ROOT/artifacts/manual-ui/linux-update-surface-smoke}"
 
@@ -13,7 +14,7 @@ for tool in xvfb-run dbus-run-session xfwm4 xdotool xwininfo import magick rg; d
 done
 
 mkdir -p "$OUT_DIR"
-STATE_DIR="$(mktemp -d)"
+STATE_DIR="$(okp_make_scratch_dir update-surface)"
 trap 'rm -rf -- "$STATE_DIR"' EXIT
 
 env __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
