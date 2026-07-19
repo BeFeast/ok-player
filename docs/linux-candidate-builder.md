@@ -88,6 +88,8 @@ Configuration (all optional; no host-specific value is baked in):
 | `OKP_CANDIDATE_VERSION_BASE` | `0.11.0-beta.0` | Candidate version base; the build number is appended |
 | `OKP_CANDIDATE_NATIVE_SMOKE` | unset | Optional native-hardware smoke command; when set its evidence is **required** |
 | `OKP_CANDIDATE_STALL_SECONDS` | `900` | Watchdog stall threshold, published to `stall-after-seconds` |
+| `OKP_CANDIDATE_OUT_RETAIN` | `3` | Complete local bundle generations retained after every builder exit |
+| `OKP_SCRATCH_SESSION` | unset | Unique worker/run key used to attribute reclaimable temporary roots |
 
 Until the first public beta is deliberately published, a clean invocation uses
 the default base and records `0.11.0-beta.0.<build-number>` in
@@ -149,6 +151,23 @@ lock after their direct parent returns.
 6. On a fully promotable build, advance `last-built.sha` so the next schedule
    skips this SHA. **A gate failure exits non-zero and leaves `last-built.sha`,
    `last-promoted.sha`, and every feed untouched.**
+7. On every exit, including a failed gate or an unchanged-SHA run, prune
+   `out/` to the newest three complete bundles. The generation named by
+   `last-bundle.path` is pinned in addition to that window while publication or
+   an explicit retry can still reference it. Incomplete numeric generations are
+   removed. `OKP_CANDIDATE_OUT_RETAIN` may raise or lower the complete-bundle
+   window, but must remain a positive integer.
+
+Packaging and smoke helpers create attributable scratch names. Worker and CI
+orchestrators must set a unique `OKP_SCRATCH_SESSION` and call
+`scripts/reclaim-ok-player-scratch.sh` from their success/failure teardown. The
+reclaimer validates the session key, checks ownership, and removes only that
+session's `ok-player-*` or `okp-*` roots; it cannot sweep another concurrent
+worker. Large AppImage inspection, portability, and RPM intermediates are kept
+under their disk-backed output directories instead of the system temporary
+filesystem. The scheduled candidate workflow supplies the key and runs the
+reclaimer in an `always()` teardown step. Other worker harnesses must provide
+the same two-part contract. The repository does not require a larger tmpfs.
 
 The builder never tags, never creates a GitHub Release, and never moves an
 updater feed. `release-linux.yml` is triggered only by a deliberate `linux-v*`

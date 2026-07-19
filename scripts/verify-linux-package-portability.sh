@@ -5,6 +5,7 @@ set -euo pipefail
 # candidate-required-tools: awk basename chmod cp dirname dpkg-deb dpkg-query ldd mkdir mktemp objdump readlink rm sed sha256sum strings
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/ok-player-scratch.sh"
 DEB="${1:?usage: verify-linux-package-portability.sh <deb> <appimage> <report.json> <source-sha>}"
 APPIMAGE="${2:?usage: verify-linux-package-portability.sh <deb> <appimage> <report.json> <source-sha>}"
 REPORT="${3:-$ROOT/artifacts/linux/portability-report.json}"
@@ -34,7 +35,8 @@ ARTIFACT_DIR="$(dirname -- "$DEB")"
 APPIMAGE_DIR="$(dirname -- "$APPIMAGE")"
 DEB_NAME="$(basename -- "$DEB")"
 APPIMAGE_NAME="$(basename -- "$APPIMAGE")"
-WORK="$(mktemp -d)"
+REPORT_DIR="$(dirname -- "$REPORT")"
+WORK="$(okp_make_scratch_dir portability "$REPORT_DIR")"
 trap 'rm -rf "$WORK"' EXIT
 APPIMAGE_EXEC="$WORK/ok-player.AppImage"
 cp "$APPIMAGE" "$APPIMAGE_EXEC"
@@ -190,12 +192,16 @@ apt-get install -y --no-install-recommends \
   libwayland-egl1 libxss1 \
   imagemagick procps squashfs-tools x11-utils xauth xdotool xfwm4 xvfb >/dev/null
 
-cp "/artifacts/appimage/$APPIMAGE_NAME" /tmp/ok-player.AppImage
-chmod 755 /tmp/ok-player.AppImage
-mkdir -p /tmp/appimage
+scratch="$(mktemp -d -t ok-player-portability.XXXXXX)"
+trap 'rm -rf -- "$scratch"' EXIT
+appimage_exec="$scratch/ok-player.AppImage"
+appimage_root="$scratch/appimage"
+cp "/artifacts/appimage/$APPIMAGE_NAME" "$appimage_exec"
+chmod 755 "$appimage_exec"
+mkdir -p "$appimage_root"
 (
-  cd /tmp/appimage
-  /tmp/ok-player.AppImage --appimage-extract >/dev/null
+  cd "$appimage_root"
+  "$appimage_exec" --appimage-extract >/dev/null
 )
 
 check_elf_tree() {
@@ -231,11 +237,11 @@ check_build_marker() {
 media_render_smoke() {
   local binary="$1" label="$2"
   "/workspace/scripts/smoke-linux-narrow-width.sh" \
-    "$binary" "/tmp/${label}-narrow-width"
+    "$binary" "$scratch/${label}-narrow-width"
   echo "portability media render: $label PASS"
 }
 
-APP_ROOT=/tmp/appimage/squashfs-root
+APP_ROOT="$appimage_root/squashfs-root"
 check_elf_tree "$APP_ROOT"
 check_build_marker "$APP_ROOT/usr/bin/ok-player" appimage
 media_render_smoke "$APP_ROOT/usr/bin/ok-player" appimage

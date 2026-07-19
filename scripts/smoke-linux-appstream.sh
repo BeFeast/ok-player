@@ -19,6 +19,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/ok-player-scratch.sh"
 PKG="$ROOT/rust/packaging/linux"
 METAINFO="$PKG/com.befeast.okplayer.metainfo.xml"
 DESKTOP="$PKG/com.befeast.okplayer.desktop"
@@ -51,7 +52,7 @@ appstreamcli validate --pedantic --no-color "$METAINFO"
 
 # Assemble the exact file tree the packages install, so the validator and the
 # metadata composer see what a user would actually get.
-STAGE="$(mktemp -d)"
+STAGE="$(okp_make_scratch_dir appstream)"
 trap 'rm -rf "$STAGE"' EXIT
 install -Dm644 "$METAINFO" "$STAGE/usr/share/metainfo/com.befeast.okplayer.metainfo.xml"
 install -Dm644 "$DESKTOP" "$STAGE/usr/share/applications/$DESKTOP_ID"

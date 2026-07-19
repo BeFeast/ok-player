@@ -67,6 +67,49 @@ pub const DEFAULT_STALL_AFTER_SECONDS: u64 = 900;
 /// Maximum previous accepted candidates retained on the rolling surface.
 pub const MAX_RETAINED_PREVIOUS: usize = 5;
 
+/// Number of complete native candidate bundles retained on the builder host.
+pub const DEFAULT_RETAINED_CANDIDATE_BUNDLES: usize = 3;
+
+/// One numeric generation discovered under the native builder's `out/` root.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CandidateOutGeneration {
+    pub build_number: u64,
+    pub complete: bool,
+}
+
+/// Select numeric candidate generations that may be removed from local state.
+///
+/// The newest `retain_complete` generations carrying a complete bundle marker
+/// survive. A generation referenced by `last-bundle.path` is kept in addition
+/// to that window, including while a publisher still consumes it. Incomplete
+/// generations are removed unless explicitly pinned.
+pub fn candidate_out_prune_plan(
+    generations: &[CandidateOutGeneration],
+    pinned_build: Option<u64>,
+    retain_complete: usize,
+) -> Vec<u64> {
+    let mut complete = generations
+        .iter()
+        .filter(|generation| generation.complete)
+        .map(|generation| generation.build_number)
+        .collect::<Vec<_>>();
+    complete.sort_unstable_by(|left, right| right.cmp(left));
+    complete.dedup();
+
+    let retained = complete
+        .into_iter()
+        .take(retain_complete)
+        .collect::<std::collections::HashSet<_>>();
+    let mut prune = generations
+        .iter()
+        .map(|generation| generation.build_number)
+        .filter(|build| Some(*build) != pinned_build && !retained.contains(build))
+        .collect::<Vec<_>>();
+    prune.sort_unstable();
+    prune.dedup();
+    prune
+}
+
 /// Build the issue #339 SemVer identity for the current public-beta phase.
 pub fn candidate_version(version_base: &str, build_number: u64) -> Result<String, String> {
     let base = version_base.trim().trim_end_matches('.');
@@ -853,6 +896,41 @@ mod tests {
             "0.11.0-beta.1.3"
         );
         assert!(candidate_version("0.11.0-beta.1", 0).is_err());
+    }
+
+    #[test]
+    fn local_out_retention_keeps_latest_complete_bundles_and_pinned_generation() {
+        let generations = [
+            CandidateOutGeneration {
+                build_number: 1,
+                complete: true,
+            },
+            CandidateOutGeneration {
+                build_number: 2,
+                complete: true,
+            },
+            CandidateOutGeneration {
+                build_number: 3,
+                complete: true,
+            },
+            CandidateOutGeneration {
+                build_number: 4,
+                complete: true,
+            },
+            CandidateOutGeneration {
+                build_number: 5,
+                complete: true,
+            },
+            CandidateOutGeneration {
+                build_number: 6,
+                complete: false,
+            },
+        ];
+
+        assert_eq!(
+            candidate_out_prune_plan(&generations, Some(1), DEFAULT_RETAINED_CANDIDATE_BUNDLES,),
+            vec![2, 6]
+        );
     }
 
     #[test]

@@ -4,6 +4,7 @@ set -euo pipefail
 # candidate-required-tools: cargo cp install mkdir mktemp rm vpk
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/ok-player-scratch.sh"
 VERSION="${1:-0.1.0-linux-alpha.1}"
 PACK_ID="com.befeast.okplayer"
 TITLE="OK Player"
@@ -73,7 +74,7 @@ done
   --version "$VERSION" \
   --versioned-appimage "OK-Player-$VERSION-x86_64.AppImage"
 
-APPIMAGE_INSPECT="$(mktemp -d)"
+APPIMAGE_INSPECT="$(okp_make_scratch_dir appimage-inspect "$OUTPUT_DIR")"
 trap 'rm -rf "$APPIMAGE_INSPECT"' EXIT
 (
   cd "$APPIMAGE_INSPECT"

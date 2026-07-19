@@ -10,6 +10,7 @@ REPO="${2:?usage: publish-linux-candidate.sh <bundle-dir> <owner/repo> [acceptan
 ACCEPTANCE="${3:-accepted}"
 STATE_DIR="${OKP_CANDIDATE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/ok-player-candidate}"
 SCRIPT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$SCRIPT_ROOT/scripts/ok-player-scratch.sh"
 TAG="${OKP_CANDIDATE_TAG:-linux-candidate}"
 BRANCH="${OKP_CANDIDATE_BRANCH:-main}"
 REQUESTED_SHA="${OKP_CANDIDATE_REQUESTED_SHA:?OKP_CANDIDATE_REQUESTED_SHA is required}"
@@ -59,7 +60,7 @@ fi
 
 "$CLI" verify-bundle --bundle "$BUNDLE"
 
-work="$(mktemp -d)"
+work="$(okp_make_scratch_dir candidate-publish)"
 previous_dir="$work/previous"
 existing_dir="$work/existing"
 mkdir -p "$previous_dir" "$existing_dir"

@@ -2,6 +2,9 @@
 # Install, upgrade, remove, and config-preservation smoke for a Fedora RPM.
 set -euo pipefail
 
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/ok-player-scratch.sh"
+
 CURRENT_RPM="${1:?usage: smoke-linux-rpm-install-upgrade.sh <current.rpm> [previous.rpm]}"
 PREVIOUS_RPM="${2:-$CURRENT_RPM}"
 
@@ -19,7 +22,7 @@ if rpm -q ok-player >/dev/null 2>&1; then
   "${DNF[@]}" remove -y ok-player
 fi
 
-CONFIG_DIR="$(mktemp -d)"
+CONFIG_DIR="$(okp_make_scratch_dir rpm-install)"
 trap 'rm -rf "$CONFIG_DIR"' EXIT
 export XDG_CONFIG_HOME="$CONFIG_DIR"
 mkdir -p "$CONFIG_DIR/ok-player"

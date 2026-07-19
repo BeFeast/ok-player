@@ -3,6 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/ok-player-scratch.sh"
 FEDORA_VERSION="${FEDORA_VERSION:-unknown}"
 OUT_DIR="${1:-$ROOT/artifacts/linux/rpm/fedora-$FEDORA_VERSION}"
 
@@ -15,7 +16,7 @@ SOURCE_DIR="$OUT_DIR/source"
 SRPM="$(find "$SOURCE_DIR" -maxdepth 1 -name '*.src.rpm' -print -quit)"
 [[ -n "$SRPM" ]] || { echo "SRPM was not produced" >&2; exit 2; }
 
-REPRO_SOURCE_DIR="$(mktemp -d)"
+REPRO_SOURCE_DIR="$(okp_make_scratch_dir rpm-repro "$OUT_DIR")"
 trap 'rm -rf "$REPRO_SOURCE_DIR"' EXIT
 "$ROOT/scripts/package-linux-rpm-source.sh" "$REPRO_SOURCE_DIR"
 for artifact in "$SOURCE_DIR"/*; do
