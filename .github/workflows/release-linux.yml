@@ -103,10 +103,16 @@ jobs:
 
       - name: Build Velopack AppImage lane
         if: steps.release.outputs.publish != 'true'
+        env:
+          OKP_PORTABLE_PACKAGE_MODE: container
+          OKP_PORTABLE_BUILDER_IMAGE: ok-player-linux-builder:ubuntu-26.04-v1
         run: ./scripts/build-linux-portable-package.sh appimage "${{ steps.release.outputs.version }}"
 
       - name: Build Debian package lane
         if: steps.release.outputs.publish != 'true'
+        env:
+          OKP_PORTABLE_PACKAGE_MODE: container
+          OKP_PORTABLE_BUILDER_IMAGE: ok-player-linux-builder:ubuntu-26.04-v1
         run: ./scripts/build-linux-portable-package.sh deb "${{ steps.release.outputs.version }}"
 
       - name: Cross-distro package portability

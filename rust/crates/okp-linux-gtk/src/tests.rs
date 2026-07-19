@@ -386,7 +386,10 @@ fn linux_packages_pin_and_bundle_the_embedded_wayland_mpv() {
     assert!(portability.contains("debian:testing-slim"));
     assert!(portability.contains("portability ldd:"));
     assert!(portability.contains("smoke-linux-narrow-width.sh"));
+    assert!(portability.contains("smoke-linux-fullscreen-chrome.sh"));
     assert!(portability.contains("portability media render:"));
+    assert!(portability.contains("appimage-media-fullscreen"));
+    assert!(portability.contains("debian-media-fullscreen"));
     assert!(portability.contains("portability build marker:"));
     assert!(portability.contains("EXPECTED_BUILD_MARKER"));
     assert!(!deb.contains("libmpv2"));
@@ -434,11 +437,13 @@ fn linux_packages_pin_and_bundle_the_embedded_wayland_mpv() {
     assert!(deb.contains("OKP_CANDIDATE_TOOLCHAIN_REQUIRE_DOTNET_TOOLS=false"));
     assert!(velopack_package.contains("OKP_CANDIDATE_TOOLCHAIN_REQUIRE_DOTNET_TOOLS=true"));
     assert!(portable_builder.contains("linux-portable-builder.Dockerfile"));
-    assert!(portable_builder.contains("ubuntu-24.04-v1"));
+    assert!(portable_builder.contains("ubuntu-26.04-v1"));
     assert!(portable_builder.contains("git -C \"$ROOT\" rev-parse --verify 'HEAD^{commit}'"));
     assert!(portable_builder.contains("-e OKP_BUILD_SHA=\"$BUILD_SHA\""));
     assert!(portable_builder.contains("--target \"$LANE\""));
-    assert!(portable_image.contains("FROM ubuntu@sha256:"));
+    assert!(portable_image.contains(
+        "FROM ubuntu@sha256:3131b4cc82a783df6c9df078f86e01819a13594b865c2cad47bd1bca2b7063bb"
+    ));
     let media_image = portable_image
         .split("FROM media AS deb")
         .next()
