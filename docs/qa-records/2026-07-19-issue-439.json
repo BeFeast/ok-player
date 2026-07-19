@@ -2,21 +2,21 @@
   "schema_version": 2,
   "package": {
     "version": "0.1.0-linux-alpha.113",
-    "commit_sha": "192f5e417d9bfc7a979e728205e174ef271ef0d9",
+    "commit_sha": "661e3e8447399691ad748d681efec07ba7030edb",
     "artifacts": [
       {
         "kind": "debian",
         "file_name": "ok-player_0.1.0-linux-alpha.113_amd64.deb",
-        "sha256": "ac0d035075589d3d77a51c6902c84e5104c34dd1832a8464e2c8d2d1919a251a"
+        "sha256": "71f795c52c0d322abee926e220e102773e49ba55f35228654ef108b4f66f6a8e"
       },
       {
         "kind": "app-image",
         "file_name": "OK-Player-0.1.0-linux-alpha.113-x86_64.AppImage",
-        "sha256": "d5e80196aa4a4325c68c21373e7d18c1ed81834e18d3fa557bcd7abafc9e971d"
+        "sha256": "73616b8f59f04bfab1128073d55c117ab7451e9497baf81cddf359d68de9e08b"
       }
     ]
   },
-  "build_environment_sha256": "14b0a92e9e7003423596d3387ac13225c6a497c65565410ec331a782e67fbf49",
+  "build_environment_sha256": "a16351e144f1bb983890f189fb6a726cd22199f00af46234c1cb6ff2be600a2a",
   "rows": [
     {
       "id": "rust-workspace-gates",
@@ -206,11 +206,51 @@
       "theme": "dark",
       "state": "loaded-paused-osc",
       "reference": "windows-player-redlines",
-      "measurement_result": "not-run",
+      "measurement_result": "pass",
       "operator_status": "not-run",
-      "measurements": [],
-      "notes": "Not run after the exact package failed the earlier canonical narrow-layout gate.",
-      "execution_environment_sha256": null
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "osc-visible-in-canonical-bottom-band",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "generated-media-open-file",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "generated-media-duration-observed",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
     },
     {
       "id": "xvfb-paused",
@@ -222,11 +262,43 @@
       "theme": "dark",
       "state": "paused",
       "reference": "windows-player-redlines",
-      "measurement_result": "not-run",
+      "measurement_result": "pass",
       "operator_status": "not-run",
-      "measurements": [],
-      "notes": "Not run after the exact package failed the earlier canonical narrow-layout gate.",
-      "execution_environment_sha256": null
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "osc-visible-in-canonical-bottom-band",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "paused-cue-visible",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
     },
     {
       "id": "xvfb-buffering-loading",
@@ -238,11 +310,51 @@
       "theme": "dark",
       "state": "buffering-loading",
       "reference": "windows-player-redlines",
-      "measurement_result": "not-run",
+      "measurement_result": "pass",
       "operator_status": "not-run",
-      "measurements": [],
-      "notes": "Not run after the exact package failed the earlier canonical narrow-layout gate.",
-      "execution_environment_sha256": null
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "loading-ring-visible",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "loading-timeline-shimmer-visible",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "real-delayed-http-load",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
     },
     {
       "id": "xvfb-playback-error",
@@ -254,11 +366,43 @@
       "theme": "dark",
       "state": "playback-error",
       "reference": "windows-player-redlines",
-      "measurement_result": "not-run",
+      "measurement_result": "pass",
       "operator_status": "not-run",
-      "measurements": [],
-      "notes": "Not run after the exact package failed the earlier canonical narrow-layout gate.",
-      "execution_environment_sha256": null
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "in-canvas-error-card-visible",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "real-http-404-and-retry",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
     },
     {
       "id": "xvfb-playing-idle",
@@ -270,11 +414,35 @@
       "theme": "dark",
       "state": "playing-idle",
       "reference": "windows-player-redlines",
-      "measurement_result": "not-run",
+      "measurement_result": "pass",
       "operator_status": "not-run",
-      "measurements": [],
-      "notes": "Not run after the exact package failed the earlier canonical narrow-layout gate.",
-      "execution_environment_sha256": null
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "idle-bottom-band-clear",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
     },
     {
       "id": "xvfb-osd",
@@ -286,11 +454,35 @@
       "theme": "dark",
       "state": "osd",
       "reference": "windows-player-redlines",
-      "measurement_result": "not-run",
+      "measurement_result": "pass",
       "operator_status": "not-run",
-      "measurements": [],
-      "notes": "Not run after the exact package failed the earlier canonical narrow-layout gate.",
-      "execution_environment_sha256": null
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "top-osd-visible",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
     },
     {
       "id": "xvfb-buffered-timeline",
@@ -302,11 +494,75 @@
       "theme": "dark",
       "state": "buffered-timeline",
       "reference": "windows-player-redlines",
-      "measurement_result": "not-run",
+      "measurement_result": "pass",
       "operator_status": "not-run",
-      "measurements": [],
-      "notes": "Not run after the exact package failed the earlier canonical narrow-layout gate.",
-      "execution_environment_sha256": null
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "osc-visible-in-canonical-bottom-band",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "buffered-band-visible",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "real-throttled-http-buffer",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "distinct-from-paused-baseline",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "canonical-single-rail-center-spread",
+          "expected": 0,
+          "actual": 0,
+          "tolerance": 0.1,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "wide-single-rail-center-spread",
+          "expected": 0,
+          "actual": 0,
+          "tolerance": 0.1,
+          "unit": "px",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
     },
     {
       "id": "xvfb-chapter-context",
@@ -318,11 +574,59 @@
       "theme": "dark",
       "state": "chapter-context",
       "reference": "windows-player-redlines",
-      "measurement_result": "not-run",
+      "measurement_result": "pass",
       "operator_status": "not-run",
-      "measurements": [],
-      "notes": "Not run after the exact package failed the earlier canonical narrow-layout gate.",
-      "execution_environment_sha256": null
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "osc-visible-in-canonical-bottom-band",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "chapter-context-title-visible",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "real-chapter-seek",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "distinct-from-paused-baseline",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
     },
     {
       "id": "xvfb-chapters",
@@ -334,11 +638,51 @@
       "theme": "dark",
       "state": "chapters",
       "reference": "windows-player-redlines",
-      "measurement_result": "not-run",
+      "measurement_result": "pass",
       "operator_status": "not-run",
-      "measurements": [],
-      "notes": "Not run after the exact package failed the earlier canonical narrow-layout gate.",
-      "execution_environment_sha256": null
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "panel-left-clear-strip",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "panel-content-visible",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "generated-media-panel-action",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
     },
     {
       "id": "xvfb-up-next",
@@ -430,7 +774,7 @@
       "theme": "dark",
       "state": "narrow-layout",
       "reference": "compact-modes-handoff",
-      "measurement_result": "fail",
+      "measurement_result": "pass",
       "operator_status": "not-run",
       "measurements": [
         {
@@ -448,26 +792,9 @@
           "tolerance": 0,
           "unit": "px",
           "status": "pass"
-        },
-        {
-          "name": "gtk-glarea-media-render",
-          "expected": 1,
-          "actual": 0,
-          "tolerance": 0,
-          "unit": "boolean",
-          "status": "fail"
-        },
-        {
-          "name": "osc-surface-mean",
-          "expected": 0.055,
-          "actual": 0.0194427,
-          "tolerance": 0,
-          "unit": "normalized",
-          "status": "fail"
         }
       ],
-      "notes": "Both exact package lanes failed the canonical media-backed narrow smoke with GTK GLArea initialization failure; the same smoke passed with a source-built binary.",
-      "execution_environment_sha256": null
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
     },
     {
       "id": "xvfb-bright-video-background",
@@ -479,11 +806,43 @@
       "theme": "dark",
       "state": "bright-video-background",
       "reference": "windows-player-redlines",
-      "measurement_result": "not-run",
+      "measurement_result": "pass",
       "operator_status": "not-run",
-      "measurements": [],
-      "notes": "Not run after the exact package failed the earlier canonical narrow-layout gate.",
-      "execution_environment_sha256": null
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "osc-visible-in-canonical-bottom-band",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "bright-frame-visible",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
     },
     {
       "id": "xvfb-dark-video-background",
@@ -495,11 +854,51 @@
       "theme": "dark",
       "state": "dark-video-background",
       "reference": "windows-player-redlines",
-      "measurement_result": "not-run",
+      "measurement_result": "pass",
       "operator_status": "not-run",
-      "measurements": [],
-      "notes": "Not run after the exact package failed the earlier canonical narrow-layout gate.",
-      "execution_environment_sha256": null
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "osc-visible-in-canonical-bottom-band",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "dark-frame-visible",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "generated-media-screenshot-file",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
     },
     {
       "id": "xvfb-fullscreen",
@@ -511,11 +910,51 @@
       "theme": "dark",
       "state": "fullscreen",
       "reference": "windows-player-redlines",
-      "measurement_result": "not-run",
+      "measurement_result": "fail",
       "operator_status": "not-run",
-      "measurements": [],
-      "notes": "Not run after the exact package failed the earlier canonical narrow-layout gate.",
-      "execution_environment_sha256": null
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1280,
+          "actual": 1280,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 900,
+          "actual": 900,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "fullscreen-chrome-cleared",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "fullscreen-video-visible",
+          "expected": 1,
+          "actual": 0,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "fail"
+        },
+        {
+          "name": "x11-fullscreen-transition",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
     },
     {
       "id": "xvfb-always-on-top",
@@ -527,11 +966,43 @@
       "theme": "dark",
       "state": "always-on-top",
       "reference": "windows-player-redlines",
-      "measurement_result": "not-run",
+      "measurement_result": "pass",
       "operator_status": "not-run",
-      "measurements": [],
-      "notes": "Not run after the exact package failed the earlier canonical narrow-layout gate.",
-      "execution_environment_sha256": null
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "selected-pin-visible",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "x11-ewmh-above-state",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
     },
     {
       "id": "installed-launch",
@@ -544,7 +1015,7 @@
       "operator_status": "not-run",
       "measurements": [
         {
-          "name": "debian-idle-window",
+          "name": "debian-exact-sha256",
           "expected": 1,
           "actual": 1,
           "tolerance": 0,
@@ -552,7 +1023,7 @@
           "status": "pass"
         },
         {
-          "name": "debian-media-backed-render",
+          "name": "debian-live-media-survives-20s",
           "expected": 1,
           "actual": 0,
           "tolerance": 0,
@@ -560,7 +1031,15 @@
           "status": "fail"
         },
         {
-          "name": "appimage-idle-window",
+          "name": "debian-native-wayland-dmabuf-selected",
+          "expected": 1,
+          "actual": 0,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "fail"
+        },
+        {
+          "name": "appimage-exact-sha256",
           "expected": 1,
           "actual": 1,
           "tolerance": 0,
@@ -568,16 +1047,40 @@
           "status": "pass"
         },
         {
-          "name": "appimage-media-backed-render",
+          "name": "appimage-live-media-survives-20s",
           "expected": 1,
           "actual": 0,
           "tolerance": 0,
           "unit": "boolean",
           "status": "fail"
+        },
+        {
+          "name": "appimage-native-wayland-dmabuf-selected",
+          "expected": 1,
+          "actual": 0,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "fail"
+        },
+        {
+          "name": "same-source-candidate-control-survives-20s",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "same-source-candidate-control-selects-dmabuf",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
         }
       ],
-      "notes": "The independent QA execution reproduced GTK GLArea initialization failure from both exact package payloads after their idle windows appeared.",
-      "execution_environment_sha256": "681fd8a24dcd2ea3156dd37215fae997a0e775d804b6dd39b1dc0af15d858da3"
+      "notes": "Both exact stable payloads lost the live Wayland connection after about six seconds, before selecting native-wayland-dmabuf or reporting VA-API. The accepted same-source candidate control stayed alive for the full 20-second probe, selected native-wayland-dmabuf, reported VA-API, and emitted compositor presentation records.",
+      "execution_environment_sha256": "ec2d1e2edaa8d54ca9b8170a9a3e2fba55e8860de7a9ac029f784671a7b3e1e8"
     },
     {
       "id": "installed-package-version",
@@ -586,7 +1089,7 @@
       "theme": "not-applicable",
       "state": "installed-package-version",
       "reference": "packaging-contract",
-      "measurement_result": "fail",
+      "measurement_result": "pass",
       "operator_status": "not-run",
       "measurements": [
         {
@@ -608,13 +1111,21 @@
         {
           "name": "debian-embedded-source-short-sha",
           "expected": 1,
-          "actual": 0,
+          "actual": 1,
           "tolerance": 0,
           "unit": "boolean",
-          "status": "fail"
+          "status": "pass"
         },
         {
-          "name": "appimage-velopack-manifest-version",
+          "name": "debian-sibling-libmpv-runpath",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "debian-wayland-embed-option",
           "expected": 1,
           "actual": 1,
           "tolerance": 0,
@@ -632,14 +1143,14 @@
         {
           "name": "appimage-embedded-source-short-sha",
           "expected": 1,
-          "actual": 0,
+          "actual": 1,
           "tolerance": 0,
           "unit": "boolean",
-          "status": "fail"
+          "status": "pass"
         }
       ],
-      "notes": "Both package binaries report version 0.1.0-linux-alpha.113 but embed build SHA unknown rather than the package identity source marker 192f5e4.",
-      "execution_environment_sha256": "681fd8a24dcd2ea3156dd37215fae997a0e775d804b6dd39b1dc0af15d858da3"
+      "notes": "Both exact payloads carry version 0.1.0-linux-alpha.113 and source marker 661e3e8. The Debian executable resolves its sibling libmpv through $ORIGIN, and the bundled library exposes wayland-embed-display.",
+      "execution_environment_sha256": "ec2d1e2edaa8d54ca9b8170a9a3e2fba55e8860de7a9ac029f784671a7b3e1e8"
     },
     {
       "id": "gnome-file-chooser",
@@ -654,7 +1165,7 @@
       "measurement_result": "not-run",
       "operator_status": "not-run",
       "measurements": [],
-      "notes": "Not run because package-bound Xvfb and installed-version gates failed first; the accepted candidate-channel build was restored.",
+      "notes": "Not run after both exact stable payloads failed the package-bound live media launch; the accepted candidate-channel build and prior user state were restored.",
       "execution_environment_sha256": null
     },
     {
@@ -670,7 +1181,7 @@
       "measurement_result": "not-run",
       "operator_status": "not-run",
       "measurements": [],
-      "notes": "Not run because package-bound Xvfb and installed-version gates failed first; the accepted candidate-channel build was restored.",
+      "notes": "Not run after both exact stable payloads failed the package-bound live media launch; the accepted candidate-channel build and prior user state were restored.",
       "execution_environment_sha256": null
     },
     {
@@ -686,7 +1197,7 @@
       "measurement_result": "not-run",
       "operator_status": "not-run",
       "measurements": [],
-      "notes": "Not run because package-bound Xvfb and installed-version gates failed first; the accepted candidate-channel build was restored.",
+      "notes": "Not run after both exact stable payloads failed the package-bound live media launch; the accepted candidate-channel build and prior user state were restored.",
       "execution_environment_sha256": null
     },
     {
@@ -702,7 +1213,7 @@
       "measurement_result": "not-run",
       "operator_status": "not-run",
       "measurements": [],
-      "notes": "Not run because package-bound Xvfb and installed-version gates failed first; the accepted candidate-channel build was restored.",
+      "notes": "Not run after both exact stable payloads failed the package-bound live media launch; the accepted candidate-channel build and prior user state were restored.",
       "execution_environment_sha256": null
     },
     {
@@ -718,7 +1229,7 @@
       "measurement_result": "not-run",
       "operator_status": "not-run",
       "measurements": [],
-      "notes": "Not run because package-bound Xvfb and installed-version gates failed first; the accepted candidate-channel build was restored.",
+      "notes": "Not run after both exact stable payloads failed the package-bound live media launch; the accepted candidate-channel build and prior user state were restored.",
       "execution_environment_sha256": null
     },
     {
@@ -734,7 +1245,7 @@
       "measurement_result": "not-run",
       "operator_status": "not-run",
       "measurements": [],
-      "notes": "Not run because package-bound Xvfb and installed-version gates failed first; the accepted candidate-channel build was restored.",
+      "notes": "Not run after both exact stable payloads failed the package-bound live media launch; the accepted candidate-channel build and prior user state were restored.",
       "execution_environment_sha256": null
     },
     {
@@ -750,7 +1261,7 @@
       "measurement_result": "not-run",
       "operator_status": "not-run",
       "measurements": [],
-      "notes": "Not run because package-bound Xvfb and installed-version gates failed first; the accepted candidate-channel build was restored.",
+      "notes": "Not run after both exact stable payloads failed the package-bound live media launch; the accepted candidate-channel build and prior user state were restored.",
       "execution_environment_sha256": null
     },
     {
@@ -766,7 +1277,7 @@
       "measurement_result": "not-run",
       "operator_status": "not-run",
       "measurements": [],
-      "notes": "Not run because package-bound Xvfb and installed-version gates failed first; the accepted candidate-channel build was restored.",
+      "notes": "Not run after both exact stable payloads failed the package-bound live media launch; the accepted candidate-channel build and prior user state were restored.",
       "execution_environment_sha256": null
     },
     {
@@ -782,7 +1293,7 @@
       "measurement_result": "not-run",
       "operator_status": "not-run",
       "measurements": [],
-      "notes": "Not run because package-bound Xvfb and installed-version gates failed first; the accepted candidate-channel build was restored.",
+      "notes": "Not run after both exact stable payloads failed the package-bound live media launch; the accepted candidate-channel build and prior user state were restored.",
       "execution_environment_sha256": null
     }
   ]
