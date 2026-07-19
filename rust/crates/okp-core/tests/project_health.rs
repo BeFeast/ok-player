@@ -32,6 +32,10 @@ struct Case {
     schedule_completed_at_utc: String,
     #[serde(default = "default_max_schedule_age")]
     max_candidate_schedule_age_seconds: u64,
+    #[serde(default)]
+    consecutive_failed_runs: u64,
+    #[serde(default)]
+    last_failed_gate: Option<String>,
     expected_healthy: bool,
     expected_reason: String,
     #[serde(default)]
@@ -118,6 +122,8 @@ fn candidate_delivery_outcomes_are_fixture_driven() {
         );
         snapshot.max_candidate_schedule_age_seconds = case.max_candidate_schedule_age_seconds;
         snapshot.source.candidate_workflow.state = case.workflow_state;
+        snapshot.source.candidate_workflow.consecutive_failed_runs = case.consecutive_failed_runs;
+        snapshot.source.candidate_workflow.last_failed_gate = case.last_failed_gate;
         snapshot
             .source
             .candidate_workflow
@@ -299,6 +305,8 @@ fn healthy_snapshot(
                     url: "https://example.invalid/runs/linux-candidate".to_owned(),
                 }),
                 schedule_error: None,
+                consecutive_failed_runs: 0,
+                last_failed_gate: None,
             },
             candidate,
             error: None,

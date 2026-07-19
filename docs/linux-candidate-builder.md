@@ -14,8 +14,20 @@ Host registration, credentials, and machine-specific service configuration live
 outside this repository. Everything here is host-agnostic and reads its paths
 from the environment.
 
-The native builder also needs `git`, `meson`, `ninja`, and `pkg-config` plus the
-development dependencies required by mpv v0.40.0. The build pins the upstream
+The canonical native tool and mpv v0.40.0 development dependency contract is
+[`scripts/linux-candidate-toolchain.manifest`](../scripts/linux-candidate-toolchain.manifest).
+The scheduled workflow and bundled-mpv build consume that manifest directly;
+this guide deliberately does not duplicate the package list. To print the
+deduplicated Ubuntu package names for host provisioning:
+
+```bash
+scripts/linux-candidate-toolchain.sh --print-ubuntu-packages
+```
+
+The preflight aggregates every missing command and pkg-config module into one
+failure line before the build lock is acquired. New external commands in
+`build-local-mpv.sh` must use `okp_candidate_tool`; the same preflight verifies
+that every such reference exists in the manifest. The build pins the upstream
 commit and fails rather than substituting a distro libmpv.
 
 ## Delivery SLA
@@ -220,6 +232,12 @@ okp-candidate classify --phase <idle|building> --age-seconds <N> [--stall-after 
 
 This lets an operator distinguish an active build, a stalled build, and an idle
 unchanged `main` without reading the full log.
+
+The project outcome collector also examines completed scheduled runs. Two or
+more consecutive failures produce the distinct blocking reason
+`candidate builds failing: gate <name> (<N> consecutive)`, with the gate parsed
+from the newest failed run. This reason precedes stale delivery lag so a broken
+builder is not reported merely as an old candidate.
 
 ## Native-hardware evidence
 

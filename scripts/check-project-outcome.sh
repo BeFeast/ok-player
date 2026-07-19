@@ -116,12 +116,37 @@ fi
 
 candidate_schedule_run='null'
 candidate_schedule_error=""
+candidate_consecutive_failed_runs=0
+candidate_last_failed_gate=""
 if candidate_schedule_runs="$(gh run list --repo "$repository" --branch main --event schedule \
-    --status completed --workflow "Linux Candidate" --limit 1 \
-    --json headSha,event,status,conclusion,updatedAt,url 2>/dev/null)"; then
-  if ! candidate_schedule_run="$(jq -c '.[0] // null' <<<"$candidate_schedule_runs" 2>/dev/null)"; then
+    --status completed --workflow "Linux Candidate" --limit 100 \
+    --json databaseId,headSha,event,status,conclusion,updatedAt,url 2>/dev/null)"; then
+  if ! candidate_schedule_run="$(jq -c 'if type == "array" then .[0] // null else error("not an array") end' \
+      <<<"$candidate_schedule_runs" 2>/dev/null)" \
+      || ! candidate_consecutive_failed_runs="$(jq -r '
+        if type != "array" then error("not an array")
+        else reduce .[] as $run (
+          {count: 0, stopped: false};
+          if .stopped then .
+          elif ($run.conclusion // "") == "failure" then .count += 1
+          else .stopped = true
+          end
+        ) | .count
+        end
+      ' <<<"$candidate_schedule_runs" 2>/dev/null)"; then
     candidate_schedule_run='null'
+    candidate_consecutive_failed_runs=0
     candidate_schedule_error="GitHub Linux Candidate completed schedule query returned malformed JSON"
+  elif (( candidate_consecutive_failed_runs >= 2 )); then
+    latest_failed_run_id="$(jq -r '.[0].databaseId // ""' <<<"$candidate_schedule_runs")"
+    if [[ "$latest_failed_run_id" =~ ^[0-9]+$ ]] \
+        && failed_log="$(gh run view "$latest_failed_run_id" --repo "$repository" --log-failed 2>/dev/null)"; then
+      while IFS= read -r line; do
+        if [[ "$line" =~ failed[[:space:]]+at[[:space:]]+gate[[:space:]]+([[:alnum:]_.-]+) ]]; then
+          candidate_last_failed_gate="${BASH_REMATCH[1]}"
+        fi
+      done <<<"$failed_log"
+    fi
   fi
 else
   candidate_schedule_error="GitHub Linux Candidate completed schedule query failed"
@@ -194,6 +219,8 @@ jq -n \
   --arg candidate_workflow_state_error "$candidate_workflow_state_error" \
   --argjson candidate_schedule_run "$candidate_schedule_run" \
   --arg candidate_schedule_error "$candidate_schedule_error" \
+  --argjson candidate_consecutive_failed_runs "$candidate_consecutive_failed_runs" \
+  --arg candidate_last_failed_gate "$candidate_last_failed_gate" \
   --arg candidate_sha "$candidate_sha" \
   --arg candidate_committed_at "$candidate_committed_at" \
   --arg compare_status "$compare_status" \
@@ -235,7 +262,9 @@ jq -n \
           }
           end
         ),
-        schedule_error: (if $candidate_schedule_error == "" then null else $candidate_schedule_error end)
+        schedule_error: (if $candidate_schedule_error == "" then null else $candidate_schedule_error end),
+        consecutive_failed_runs: $candidate_consecutive_failed_runs,
+        last_failed_gate: (if $candidate_last_failed_gate == "" then null else $candidate_last_failed_gate end)
       },
       candidate: {
         candidate_sha: $candidate_sha,
