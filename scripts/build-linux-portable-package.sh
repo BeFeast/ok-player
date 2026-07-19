@@ -40,12 +40,12 @@ esac
 
 HOST_UID="${SUDO_UID:-$(id -u)}"
 HOST_GID="${SUDO_GID:-$(id -g)}"
-if command -v docker >/dev/null 2>&1; then
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   CONTAINER_RUNTIME=docker
-elif command -v podman >/dev/null 2>&1; then
+elif command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
   CONTAINER_RUNTIME=podman
 else
-  echo "Missing required container runtime: docker or podman" >&2
+  echo "Missing usable container runtime: docker or podman" >&2
   exit 127
 fi
 

@@ -165,6 +165,11 @@ fn workflow_and_operator_guide_consume_the_canonical_manifest() {
     assert!(release_workflow.contains("OKP_PORTABILITY_CONTAINER_MODE: required"));
     assert!(release_workflow.contains("OKP_PORTABILITY_REQUIRED_MODE=foreign-container"));
 
+    let rpm_workflow =
+        fs::read_to_string(root.join(".github/workflows/rpm.yml")).expect("Fedora RPM workflow");
+    assert!(rpm_workflow.contains("CARGO_HTTP_MULTIPLEXING: 'false'"));
+    assert!(rpm_workflow.contains("CARGO_NET_RETRY: '10'"));
+
     let docs = fs::read_to_string(root.join("docs/linux-candidate-builder.md"))
         .expect("candidate builder guide");
     assert!(docs.contains("scripts/linux-candidate-toolchain.manifest"));
@@ -202,6 +207,42 @@ fn workflow_and_operator_guide_consume_the_canonical_manifest() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+}
+
+#[test]
+fn portable_builder_falls_back_to_usable_podman() {
+    let fixture = unique_temp_dir("okp-portable-builder-runtime-fallback");
+    let bin = fixture.path().join("bin");
+    let log = fixture.path().join("runtime.log");
+    fs::create_dir_all(&bin).expect("fake runtime directory");
+    write_executable(
+        &bin.join("docker"),
+        "#!/bin/sh\nset -eu\nprintf 'docker %s\\n' \"$*\" >> \"$OKP_RUNTIME_LOG\"\n[ \"${1:-}\" != info ]\n",
+    );
+    write_executable(
+        &bin.join("podman"),
+        "#!/bin/sh\nset -eu\nprintf 'podman %s\\n' \"$*\" >> \"$OKP_RUNTIME_LOG\"\nexit 0\n",
+    );
+
+    let output = Command::new("/bin/bash")
+        .arg(portable_builder_script())
+        .args(["deb", "1.0.0"])
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .env("OKP_RUNTIME_LOG", &log)
+        .output()
+        .expect("portable package builder should run");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let log = fs::read_to_string(log).expect("runtime invocation log");
+    assert!(log.contains("docker info"));
+    assert!(log.contains("podman info"));
+    assert!(log.contains("podman build"));
+    assert!(log.contains("podman run"));
+    assert!(!log.contains("docker build"));
 }
 
 #[test]
@@ -277,6 +318,10 @@ fn toolchain_script() -> PathBuf {
 
 fn portability_script() -> PathBuf {
     repository_root().join("scripts/verify-linux-package-portability.sh")
+}
+
+fn portable_builder_script() -> PathBuf {
+    repository_root().join("scripts/build-linux-portable-package.sh")
 }
 
 fn build_test_deb(root: &Path, depends: &str) -> PathBuf {

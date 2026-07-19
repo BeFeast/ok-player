@@ -20,6 +20,9 @@ jobs:
     name: Fedora ${{ matrix.fedora }} SRPM/RPM
     runs-on: ubuntu-latest
     container: fedora:${{ matrix.fedora }}
+    env:
+      CARGO_HTTP_MULTIPLEXING: 'false'
+      CARGO_NET_RETRY: '10'
     strategy:
       fail-fast: false
       matrix:
