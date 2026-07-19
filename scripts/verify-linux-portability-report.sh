@@ -48,7 +48,7 @@ jq -e \
      (.verification_mode == "native-equivalence"
       and .target_image == null
       and .target_image_id == null
-      and .checks == ["all-bundled-elf-dependency-equivalence"])
+      and .checks == ["all-bundled-elf-dependency-equivalence", "appimage-package-build-marker", "debian-package-build-marker"])
      or
      (.verification_mode == "foreign-container"
       and .target_image == $target_image

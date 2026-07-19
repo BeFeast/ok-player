@@ -43,9 +43,10 @@ The native candidate builder does not require Docker or Podman. Candidate
 packages are built on the supported Ubuntu builder and receive an equivalence
 gate that inspects every dynamic ELF in the Debian and AppImage private library
 directories. Resolutions must stay inside the bundle or belong to a package
-named by the Debian `Depends` field. Docker and Podman remain optional on this
-host; when either is present, the foreign-distro launch check runs as an
-additional gate.
+named by the Debian `Depends` field, and both extracted executables must carry
+the expected source marker. Docker and Podman remain optional on this host; when
+either is present, the strict foreign-distro render check runs as an additional
+gate.
 
 ## Delivery SLA
 
@@ -127,10 +128,11 @@ lock after their direct parent returns.
      options, and resolves every bundled object through `$ORIGIN`
    - runtime-independent dependency equivalence over every bundled dynamic ELF:
      each resolution must be bundle-local or owned by a package named in the
-     Debian `Depends` field. If Docker or Podman is available, the same gate also
+     Debian `Depends` field, and both extracted executables must carry the
+     embedded source marker. If Docker or Podman is available, the same gate also
      runs clean Debian testing `ldd`, rejects bundled target desktop libraries,
-     verifies the embedded source marker, and executes the canonical real-media
-     narrow-width render smoke for both artifacts. The hash-bound
+     and executes the canonical real-media narrow-width render smoke for both
+     artifacts. The hash-bound
      `portability-report.json` records which mode ran and is required for
      promotion and later public publication
    - package identity + SHA-256 verification (`SHA256SUMS`, `package-identity.json`)

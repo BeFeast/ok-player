@@ -187,7 +187,6 @@ fn workflow_and_operator_guide_consume_the_canonical_manifest() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     for script in [
         "scripts/package-linux-deb.sh",
         "scripts/package-linux-velopack.sh",
@@ -268,11 +267,27 @@ fn native_portability_gate_accepts_only_declared_host_dependencies() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let report = fs::read_to_string(report).expect("portability report");
-    assert!(report.contains(r#""schema_version": 2"#));
-    assert!(report.contains(r#""verification_mode": "native-equivalence""#));
-    assert!(report.contains(&format!(r#""source_sha": "{TEST_SOURCE_SHA}""#)));
-    assert!(report.contains(r#""build_marker": "0123456""#));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("portability build marker: appimage PASS"));
+    assert!(stdout.contains("portability build marker: debian PASS"));
+    let report_contents = fs::read_to_string(&report).expect("portability report");
+    assert!(report_contents.contains(r#""schema_version": 2"#));
+    assert!(report_contents.contains(r#""verification_mode": "native-equivalence""#));
+    assert!(report_contents.contains(&format!(r#""source_sha": "{TEST_SOURCE_SHA}""#)));
+    assert!(report_contents.contains(r#""build_marker": "0123456""#));
+    let output = Command::new("/bin/bash")
+        .arg(portability_report_script())
+        .arg(&report)
+        .arg(&deb)
+        .arg(&appimage)
+        .arg(TEST_SOURCE_SHA)
+        .output()
+        .expect("portability report verification should run");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert_eq!(
         fs::metadata(&appimage)
             .expect("AppImage metadata")
@@ -281,6 +296,30 @@ fn native_portability_gate_accepts_only_declared_host_dependencies() {
             & 0o111,
         0,
         "verification must not mutate a downloaded artifact's mode"
+    );
+}
+
+#[test]
+fn native_portability_gate_rejects_mismatched_build_marker() {
+    let fixture = unique_temp_dir("okp-native-portability-marker-fail");
+    let deb = build_test_deb(fixture.path(), "libc6");
+    let appimage = build_test_appimage(fixture.path());
+
+    let output = Command::new("/bin/bash")
+        .arg(portability_script())
+        .arg(&deb)
+        .arg(&appimage)
+        .arg(fixture.path().join("portability-report.json"))
+        .arg("fedcba9876543210fedcba9876543210fedcba98")
+        .env("PATH", portability_test_path(fixture.path()))
+        .env("OKP_PORTABILITY_CONTAINER_MODE", "skip")
+        .output()
+        .expect("native portability check should run");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("packaged build marker mismatch: appimage expected fedcba9")
     );
 }
 
@@ -320,6 +359,10 @@ fn portability_script() -> PathBuf {
     repository_root().join("scripts/verify-linux-package-portability.sh")
 }
 
+fn portability_report_script() -> PathBuf {
+    repository_root().join("scripts/verify-linux-portability-report.sh")
+}
+
 fn portable_builder_script() -> PathBuf {
     repository_root().join("scripts/build-linux-portable-package.sh")
 }
@@ -329,7 +372,7 @@ fn build_test_deb(root: &Path, depends: &str) -> PathBuf {
     fs::create_dir_all(&bin).expect("fake tool directory");
     write_executable(
         &bin.join("dpkg-deb"),
-        "#!/bin/sh\nset -eu\ncase \"$1\" in\n  -f) cat \"$2\" ;;\n  -x) mkdir -p \"$3/usr/lib/ok-player\"; cp /bin/true \"$3/usr/lib/ok-player/ok-player\" ;;\n  *) exit 2 ;;\nesac\n",
+        "#!/bin/sh\nset -eu\ncase \"$1\" in\n  -f) cat \"$2\" ;;\n  -x) mkdir -p \"$3/usr/lib/ok-player\"; cp /bin/true \"$3/usr/lib/ok-player/ok-player\"; printf '0123456\\n' >> \"$3/usr/lib/ok-player/ok-player\" ;;\n  *) exit 2 ;;\nesac\n",
     );
     write_executable(
         &bin.join("dpkg-query"),
@@ -344,7 +387,7 @@ fn build_test_appimage(root: &Path) -> PathBuf {
     let appimage = root.join("OK-Player-test-x86_64.AppImage");
     fs::write(
         &appimage,
-        "#!/bin/sh\nset -eu\nmkdir -p squashfs-root/usr/bin\ncp /bin/true squashfs-root/usr/bin/ok-player\n",
+        "#!/bin/sh\nset -eu\nmkdir -p squashfs-root/usr/bin\ncp /bin/true squashfs-root/usr/bin/ok-player\nprintf '0123456\\n' >> squashfs-root/usr/bin/ok-player\n",
     )
     .expect("fake downloaded AppImage");
     appimage

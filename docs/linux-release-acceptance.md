@@ -29,8 +29,9 @@ Packaging also emits `portability-report.json`. It always binds the source SHA,
 its embedded short build marker, and both artifact hashes to a native
 dependency-equivalence pass: every dynamic ELF in the package-private library
 directories must resolve either inside the bundle or to a package named by the
-Debian `Depends` field. A candidate builder with
-Docker or Podman additionally records the clean Debian testing `ldd`, target
+Debian `Depends` field, and both extracted executables must contain the expected
+build marker. A candidate builder with Docker or Podman additionally records
+the clean Debian testing `ldd`, target
 desktop library rejection, source-marker checks, and canonical real-media
 narrow-width render smoke. Public release preparation never relies on runtime
 availability from the candidate host: the hosted runner reruns the exact

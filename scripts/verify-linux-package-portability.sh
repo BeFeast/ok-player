@@ -2,7 +2,7 @@
 # Verify package runtime closure without requiring a container on native builders.
 set -euo pipefail
 
-# candidate-required-tools: awk basename chmod cp dirname dpkg-deb dpkg-query ldd mkdir mktemp objdump readlink rm sed sha256sum
+# candidate-required-tools: awk basename chmod cp dirname dpkg-deb dpkg-query ldd mkdir mktemp objdump readlink rm sed sha256sum strings
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 DEB="${1:?usage: verify-linux-package-portability.sh <deb> <appimage> <report.json> <source-sha>}"
@@ -12,7 +12,7 @@ EXPECTED_SOURCE_SHA="${4:?usage: verify-linux-package-portability.sh <deb> <appi
 TARGET_IMAGE="${OKP_PORTABILITY_IMAGE:-debian:testing-slim}"
 CONTAINER_MODE="${OKP_PORTABILITY_CONTAINER_MODE:-auto}"
 
-for tool in awk basename chmod cp dirname dpkg-deb dpkg-query ldd mkdir mktemp objdump readlink rm sed sha256sum; do
+for tool in awk basename chmod cp dirname dpkg-deb dpkg-query ldd mkdir mktemp objdump readlink rm sed sha256sum strings; do
   command -v "$tool" >/dev/null 2>&1 || { echo "Missing required tool: $tool" >&2; exit 127; }
 done
 [[ -f "$DEB" ]] || { echo "Debian package is missing: $DEB" >&2; exit 1; }
@@ -126,6 +126,16 @@ check_elf_tree() {
   echo "portability dependency equivalence: $checked dynamic ELF objects under $label PASS"
 }
 
+check_build_marker() {
+  local binary="$1" label="$2"
+  strings "$binary" | awk -v marker="$EXPECTED_BUILD_MARKER" \
+    'index($0, marker) { found = 1 } END { exit !found }' || {
+      echo "packaged build marker mismatch: $label expected $EXPECTED_BUILD_MARKER" >&2
+      return 1
+    }
+  echo "portability build marker: $label PASS"
+}
+
 DEB_ROOT="$WORK/deb"
 APP_ROOT="$WORK/appimage/squashfs-root"
 mkdir -p "$DEB_ROOT" "$WORK/appimage"
@@ -137,6 +147,8 @@ dpkg-deb -x "$DEB" "$DEB_ROOT"
 
 check_elf_tree "$DEB_ROOT/usr/lib/ok-player" "$DEB_ROOT/usr/lib/ok-player" debian
 check_elf_tree "$APP_ROOT/usr/bin" "$APP_ROOT/usr/bin" appimage
+check_build_marker "$APP_ROOT/usr/bin/ok-player" appimage
+check_build_marker "$DEB_ROOT/usr/lib/ok-player/ok-player" debian
 
 CONTAINER_RUNTIME=""
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
@@ -153,7 +165,7 @@ fi
 verification_mode=native-equivalence
 target_image_json=null
 target_image_id_json=null
-checks_json='["all-bundled-elf-dependency-equivalence"]'
+checks_json='["all-bundled-elf-dependency-equivalence", "appimage-package-build-marker", "debian-package-build-marker"]'
 
 if [[ "$CONTAINER_MODE" != skip && -n "$CONTAINER_RUNTIME" ]]; then
   "$CONTAINER_RUNTIME" pull "$TARGET_IMAGE" >/dev/null
