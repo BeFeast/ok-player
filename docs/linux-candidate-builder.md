@@ -115,9 +115,11 @@ lock after their direct parent returns.
      executable with its complete media-runtime closure, carries the embed
      options, and resolves every bundled object through `$ORIGIN`
    - cross-distro portability in a clean Debian testing container: `ldd` over
-     every bundled ELF plus plain installed launches for the exact Debian and
-     AppImage artifacts. The hash-bound `portability-report.json` is required
-     for promotion and later public publication
+     every bundled ELF, rejection of bundled target desktop libraries, exact
+     embedded source-marker checks, and the canonical real-media narrow-width
+     render smoke for both Debian and AppImage artifacts. The hash-bound
+     `portability-report.json` is required for promotion and later public
+     publication
    - package identity + SHA-256 verification (`SHA256SUMS`, `package-identity.json`)
    - clean install / upgrade / uninstall smoke in a disposable environment
    - real playback and screenshot capture from the exact Debian payload, with a bundled image and SHA-256
@@ -149,10 +151,13 @@ Each build writes a bundle under `$OKP_CANDIDATE_STATE_DIR/out/<build-number>/`:
   `SHA256SUMS`, `package-identity.json`, `portability-report.json`, and the
   acceptance template.
 
-The portability container is a packaging gate, not operator acceptance. The
-`installed-launch` and `installed-package-version` rows must still be executed
-from a separate QA execution that did not build the artifacts; the acceptance
-schema rejects matching build/execution fingerprints.
+The portability container is a packaging gate, not operator acceptance. Its
+real-media Xvfb render proves that the packaged GTK GLArea and OSC initialize
+against the target desktop stack, and its source-marker check catches package
+identity loss in linked worktrees. The `installed-launch` and
+`installed-package-version` rows must still be executed from a separate QA
+execution that did not build the artifacts; the acceptance schema rejects
+matching build/execution fingerprints.
 
 The headless output also retains `headless-launch/fit-series/run-{1,2,3}/` and
 `series-evidence.txt`. Every run records the current process ID, selected XID,

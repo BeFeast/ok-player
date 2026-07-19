@@ -376,19 +376,75 @@ fn linux_packages_pin_and_bundle_the_embedded_wayland_mpv() {
     assert!(local_build.contains("mpv-v0.40.0-ffmpeg-8.patch"));
     assert!(collect.contains("patchelf --set-rpath '$ORIGIN'"));
     assert!(collect.contains("bundled-runtime.sha256"));
+    assert!(collect.contains("okp_is_linux_platform_runtime"));
     assert!(verify.contains("wayland-embed-display"));
     assert!(verify.contains("Packaged binary resolved libmpv outside its payload"));
     assert!(verify.contains("libavcodec.so"));
+    assert!(verify.contains("okp_verify_linux_bundled_runtime_manifest"));
     assert!(portability.contains("debian:testing-slim"));
     assert!(portability.contains("portability ldd:"));
-    assert!(portability.contains("portability launch:"));
+    assert!(portability.contains("smoke-linux-narrow-width.sh"));
+    assert!(portability.contains("portability media render:"));
+    assert!(portability.contains("portability build marker:"));
+    assert!(portability.contains("EXPECTED_BUILD_MARKER"));
     assert!(!deb.contains("libmpv2"));
     assert!(deb.contains("Recommends: ffmpeg"));
+    assert!(deb.contains("libxss1"));
+    assert!(deb.contains("libdecor-0-0"));
     assert!(portable_builder.contains("linux-portable-builder.Dockerfile"));
     assert!(portable_builder.contains("ubuntu-24.04-v1"));
+    assert!(portable_builder.contains("git -C \"$ROOT\" rev-parse --verify 'HEAD^{commit}'"));
+    assert!(portable_builder.contains("-e OKP_BUILD_SHA=\"$BUILD_SHA\""));
     assert!(portable_image.contains("FROM ubuntu@sha256:"));
     assert!(candidate.contains("run_gate bundled-mpv okp_use_linux_bundled_mpv"));
     assert!(candidate.contains("run_gate portability-package-smoke"));
+}
+
+#[test]
+fn bundled_runtime_manifest_rejects_target_desktop_libraries() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let policy = root.join("scripts/linux-bundled-mpv-runtime-policy.sh");
+    let temp = unique_temp_dir("okp-bundled-runtime-policy");
+    let manifest = temp.path().join("bundled-runtime.sha256");
+    let digest = "0".repeat(64);
+
+    fs::write(&manifest, format!("{digest}  libmpv.so.2\n"))
+        .expect("media-only runtime manifest should be written");
+    let accepted = std::process::Command::new("bash")
+        .arg(&policy)
+        .arg(&manifest)
+        .output()
+        .expect("runtime policy should run");
+    assert!(
+        accepted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&accepted.stderr)
+    );
+
+    for platform_library in [
+        "libX11.so.6",
+        "libwayland-client.so.0",
+        "libcairo.so.2",
+        "libpango-1.0.so.0",
+        "libfontconfig.so.1",
+        "libmount.so.1",
+    ] {
+        fs::write(&manifest, format!("{digest}  {platform_library}\n"))
+            .expect("platform runtime manifest should be written");
+        let rejected = std::process::Command::new("bash")
+            .arg(&policy)
+            .arg(&manifest)
+            .output()
+            .expect("runtime policy should run");
+        assert!(
+            !rejected.status.success(),
+            "{platform_library} must be rejected"
+        );
+        assert!(
+            String::from_utf8_lossy(&rejected.stderr).contains(platform_library),
+            "rejection should name {platform_library}"
+        );
+    }
 }
 
 #[test]

@@ -175,7 +175,7 @@ APPIMAGE="$CHECKOUT/artifacts/linux/velopack/OK-Player-${VERSION}-x86_64.AppImag
 # completed artifacts and cannot reuse any library from the native builder.
 run_gate portability-package-smoke \
   "$CHECKOUT/scripts/verify-linux-package-portability.sh" \
-  "$DEB" "$APPIMAGE" "$CHECKOUT/artifacts/linux/portability-report.json"
+  "$DEB" "$APPIMAGE" "$CHECKOUT/artifacts/linux/portability-report.json" "$BUILD_SHA"
 
 # Package identity + SHA-256 verification: a checksum manifest over the
 # user-facing installables plus package-identity.json bound to these exact bytes.

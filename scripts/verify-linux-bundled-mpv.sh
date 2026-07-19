@@ -6,6 +6,9 @@ BINARY="${1:?usage: verify-linux-bundled-mpv.sh <binary> <runtime-dir>}"
 RUNTIME_DIR="${2:?usage: verify-linux-bundled-mpv.sh <binary> <runtime-dir>}"
 LIBRARY="$RUNTIME_DIR/libmpv.so.2"
 MANIFEST="$RUNTIME_DIR/bundled-runtime.sha256"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+source "$SCRIPT_DIR/linux-bundled-mpv-runtime-policy.sh"
 
 for tool in ldd readelf strings; do
   command -v "$tool" >/dev/null 2>&1 || { echo "Missing required tool: $tool" >&2; exit 127; }
@@ -18,6 +21,7 @@ done
   echo "Bundled runtime files do not match their manifest" >&2
   exit 1
 }
+okp_verify_linux_bundled_runtime_manifest "$MANIFEST"
 
 readelf -d "$BINARY" | awk '/\((RUNPATH|RPATH)\)/ && /\[\$ORIGIN\]/ { found = 1 } END { exit !found }' || {
   echo "Packaged binary does not carry an origin-relative libmpv lookup" >&2

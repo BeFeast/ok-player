@@ -115,7 +115,8 @@ jobs:
           ./scripts/verify-linux-package-portability.sh \
             "artifacts/linux/deb/ok-player_${{ steps.release.outputs.version }}_amd64.deb" \
             "artifacts/linux/velopack/OK-Player-${{ steps.release.outputs.version }}-x86_64.AppImage" \
-            artifacts/linux/portability-report.json
+            artifacts/linux/portability-report.json \
+            "${{ github.sha }}"
 
       # Acceptance for issue #342: install the exact built .deb, confirm the
       # AppStream MetaInfo lands and validates, is discoverable by name and
@@ -237,7 +238,8 @@ jobs:
           ./scripts/verify-linux-portability-report.sh \
             artifacts/linux/portability-report.json \
             "artifacts/linux/deb/ok-player_${{ steps.release.outputs.version }}_amd64.deb" \
-            "artifacts/linux/velopack/OK-Player-${{ steps.release.outputs.version }}-x86_64.AppImage"
+            "artifacts/linux/velopack/OK-Player-${{ steps.release.outputs.version }}-x86_64.AppImage" \
+            "$(jq -r '.commit_sha' artifacts/linux/package-identity.json)"
           cargo run --quiet --manifest-path rust/Cargo.toml \
             -p okp-core --bin okp-acceptance-evidence -- \
             validate \
