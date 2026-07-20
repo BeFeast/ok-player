@@ -65,7 +65,7 @@ jq -e \
       and ([.targets[].image] == $target_images)
       and ((.targets | length) == ($target_images | length))
       and all(.targets[]; .image_id | test("^sha256:[0-9a-f]{64}$"))
-      and .checks == ["no-bundled-glibc-runtime", "all-bundled-elf-dependency-equivalence", "all-bundled-elf-ldd", "appimage-package-build-marker", "appimage-media-narrow-width", "appimage-media-fullscreen", "debian-package-build-marker", "debian-media-narrow-width", "debian-media-fullscreen"])
+      and .checks == ["no-bundled-glibc-runtime", "all-bundled-elf-dependency-equivalence", "all-bundled-elf-ldd", "appimage-package-build-marker", "appimage-media-narrow-width", "appimage-media-fullscreen", "appimage-media-compact-transition", "debian-package-build-marker", "debian-media-narrow-width", "debian-media-fullscreen", "debian-media-compact-transition"])
    )
    and .artifacts.debian == {file_name:$deb_name, sha256:$deb_sha256}
    and .artifacts.appimage == {file_name:$appimage_name, sha256:$appimage_sha256}' \

@@ -43,6 +43,14 @@ const OKP_STYLESHEET: &str = "
             background: @okp_bg;
         }
 
+        /* The native Wayland video is a subsurface below GTK's parent surface.
+           Compact chrome must keep that parent transparent or it paints an
+           opaque black plane over paused and playing video. */
+        window.okp-player-window.okp-native-video.is-compact-mode,
+        window.okp-player-window.okp-native-video.is-compact-mode .okp-root.okp-native-video {
+            background: transparent;
+        }
+
         window.okp-player-window.is-compact-mode {
             box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
         }
@@ -4620,6 +4628,20 @@ pub(crate) fn install_css() {
 mod tests {
     use super::OKP_STYLESHEET;
     use std::collections::HashSet;
+
+    #[test]
+    fn native_video_compact_mode_keeps_the_parent_surface_transparent() {
+        let rule_start = OKP_STYLESHEET
+            .find("window.okp-player-window.okp-native-video.is-compact-mode,")
+            .expect("native Mini-player transparency selector");
+        let rule = &OKP_STYLESHEET[rule_start..];
+        let rule_end = rule.find('}').expect("native Mini-player rule terminator");
+        let rule = &rule[..rule_end];
+        assert!(rule.contains(
+            "window.okp-player-window.okp-native-video.is-compact-mode .okp-root.okp-native-video"
+        ));
+        assert!(rule.contains("background: transparent;"));
+    }
 
     /// Token names declared via `@define-color okp_<name> <value>;`.
     fn defined_tokens() -> HashSet<String> {

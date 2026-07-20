@@ -90,7 +90,11 @@ Issue-specific 4K60 presentation evidence is also operator-only. Run
 `scripts/run-linux-acceptance-harness.sh --wayland-presentation <binary> <fixture> <output>` inside
 the target GNOME Wayland session. It rejects X11/Xvfb, verifies the fixture is exactly 3840×2160
 HEVC Main10 `yuv420p10le` at 60/1 or 60000/1001, and records both the native Wayland/EGL plane and
-the retained `GtkGLArea` A/B path. On a fractionally scaled display, the native evidence must also
+the retained `GtkGLArea` A/B path. It also starts the native backend in canonical 480×270
+Mini-player geometry and requires compositor-presented frames to dominate discarded feedback at the
+acceptance cadence, binding the compact transparency regression to the live child surface. On a
+fractionally scaled display,
+the native evidence must also
 show a render target derived from the compositor's exact surface scale rather than GTK's integer
 scale-factor ceiling; compare that final buffer geometry with standalone mpv in the same window
 state. Native acceptance requires at least 55 completed EGL swaps per second over a continuous

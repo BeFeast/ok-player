@@ -62,6 +62,14 @@ evidence schema retains presented and discarded counts, physical geometry,
 and the steady-window median, p95, and p99 presentation intervals. Local
 render callbacks and `eglSwapBuffers` submissions are not acceptance presents.
 
+`scripts/run-linux-wayland-presentation.sh` also launches the native backend in
+Mini-player geometry. That row requires the compact command to settle at the
+canonical 480×270 size and the child video surface to keep receiving
+compositor presentation feedback at the acceptance cadence, with presented
+frames dominating discarded feedback. This catches an opaque GTK parent
+surface covering the retained native subsurface; the generated logs and
+summaries remain external operator evidence.
+
 The patch and its affected mpv translation units are build-checked against the
 v0.40.0 tag. Final cadence, VA-API state, drop deltas, seeking, speed changes,
 and compositor geometry still require live GNOME/Wayland hardware acceptance.
