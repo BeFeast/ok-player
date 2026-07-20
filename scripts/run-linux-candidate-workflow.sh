@@ -15,6 +15,8 @@ ACCEPTANCE="${OKP_CANDIDATE_ACCEPTANCE:-accepted}"
 FORCE_REPUBLISH="${OKP_CANDIDATE_FORCE_REPUBLISH:-false}"
 DECISION_OUTPUT="$STATE_DIR/last-publish-decision.json"
 DECISION_REACHED=false
+export OKP_PORTABILITY_EVIDENCE_DIR="${OKP_PORTABILITY_EVIDENCE_DIR:-$ROOT/artifacts/linux/portability-smoke-evidence}"
+mkdir -p "$OKP_PORTABILITY_EVIDENCE_DIR"
 
 "$ROOT/scripts/build-linux-candidate.sh"
 

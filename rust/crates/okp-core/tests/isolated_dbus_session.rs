@@ -19,6 +19,11 @@ fn independent_sessions_teardown_before_the_next_session_starts() {
     let first_id = fixture.bus_id("first");
     let second_id = fixture.bus_id("second");
     assert_ne!(first_id, second_id, "each invocation needs a fresh bus");
+    assert_ne!(
+        fixture.runtime_dir("first"),
+        fixture.runtime_dir("second"),
+        "each invocation needs a unique XDG runtime directory"
+    );
     assert_clean_evidence(&fixture.evidence("first"));
     assert_clean_evidence(&fixture.evidence("second"));
 }
@@ -98,6 +103,7 @@ fn assert_success(output: &Output) {
 }
 
 fn assert_clean_evidence(evidence: &str) {
+    assert!(evidence.contains("xdg_runtime_dir_private=true"));
     assert!(evidence.contains("session_bus_ready=true"));
     assert!(evidence.contains("command_status=0"));
     assert!(evidence.contains("session_bus_teardown=clean"));
@@ -133,10 +139,12 @@ impl SessionFixture {
             .arg(
                 "gdbus call --session --dest org.freedesktop.DBus \
                  --object-path /org/freedesktop/DBus \
-                 --method org.freedesktop.DBus.GetId >\"$1\"",
+                 --method org.freedesktop.DBus.GetId >\"$1\"; \
+                 printf '%s\\n' \"$XDG_RUNTIME_DIR\" >\"$2\"",
             )
             .arg("bash")
             .arg(self.root.join(format!("{name}-bus-id.txt")))
+            .arg(self.root.join(format!("{name}-runtime-dir.txt")))
             .output()
             .expect("isolated session wrapper should run")
     }
@@ -149,5 +157,10 @@ impl SessionFixture {
     fn evidence(&self, name: &str) -> String {
         fs::read_to_string(self.root.join(format!("{name}-evidence.txt")))
             .expect("session evidence should be captured")
+    }
+
+    fn runtime_dir(&self, name: &str) -> String {
+        fs::read_to_string(self.root.join(format!("{name}-runtime-dir.txt")))
+            .expect("runtime directory should be captured")
     }
 }

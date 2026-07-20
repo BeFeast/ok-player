@@ -78,6 +78,65 @@ okp_verify_no_linux_glibc_runtime_files() {
   (( failures == 0 ))
 }
 
+# Run one UI smoke in a disposable output directory. Exit 75 is reserved for
+# D-Bus/X/Xfwm session infrastructure, so only that status receives one retry;
+# product assertions and every other command failure return immediately.
+okp_run_linux_smoke_with_infra_retry() {
+  local label="${1:?okp_run_linux_smoke_with_infra_retry requires a label}"
+  local output_dir="${2:?okp_run_linux_smoke_with_infra_retry requires an output directory}"
+  local evidence_root="${3:?okp_run_linux_smoke_with_infra_retry requires an evidence root}"
+  shift 3
+  (( $# > 0 )) || {
+    echo "okp_run_linux_smoke_with_infra_retry requires a command" >&2
+    return 2
+  }
+
+  local infra_exit_code="${OKP_SESSION_INFRA_EXIT_CODE:-75}"
+  local attempt attempt_dir evidence_dir status
+  if [[ ! "$infra_exit_code" =~ ^[1-9][0-9]{0,2}$ ]] || (( infra_exit_code > 255 )); then
+    echo "OKP_SESSION_INFRA_EXIT_CODE must be an integer from 1 through 255" >&2
+    return 2
+  fi
+
+  for attempt in 1 2; do
+    attempt_dir="${output_dir}-attempt-${attempt}"
+    rm -rf -- "$attempt_dir"
+    mkdir -p -- "$attempt_dir"
+
+    set +e
+    OKP_SMOKE_OUTPUT_DIR="$attempt_dir" OKP_SMOKE_ATTEMPT="$attempt" "$@"
+    status=$?
+    set -e
+
+    if (( status == 0 )); then
+      rm -rf -- "$output_dir"
+      mv -- "$attempt_dir" "$output_dir"
+      return 0
+    fi
+
+    evidence_dir="$evidence_root/$label/attempt-$attempt"
+    rm -rf -- "$evidence_dir"
+    mkdir -p -- "$evidence_dir"
+    cp -a -- "$attempt_dir"/. "$evidence_dir"/
+    printf 'label=%s\nattempt=%s\nexit_status=%s\n' "$label" "$attempt" "$status" \
+      >"$evidence_dir/retry-evidence.txt"
+
+    if (( status != infra_exit_code )); then
+      printf 'failure_kind=command\nretried=false\n' >>"$evidence_dir/retry-evidence.txt"
+      return "$status"
+    fi
+
+    printf 'failure_kind=session-infra\n' >>"$evidence_dir/retry-evidence.txt"
+    if (( attempt == 1 )); then
+      printf 'retried=true\n' >>"$evidence_dir/retry-evidence.txt"
+      echo "Retrying $label once after isolated session infrastructure failed" >&2
+      continue
+    fi
+    printf 'retried=false\n' >>"$evidence_dir/retry-evidence.txt"
+    return "$status"
+  done
+}
+
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   set -euo pipefail
   okp_verify_linux_bundled_runtime_manifest \

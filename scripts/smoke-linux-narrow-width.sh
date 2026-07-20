@@ -21,7 +21,7 @@ BINARY="${1:-ok-player}"
 OUT_DIR="${2:-$ROOT/artifacts/manual-ui/linux-narrow-width-smoke}"
 FIXTURE="$ROOT/tests/OkPlayer.IntegrationTests/fixtures/subtest.mkv"
 
-for tool in xvfb-run dbus-run-session xfwm4 xdotool xwininfo import magick; do
+for tool in Xvfb dbus-run-session gdbus python3 xauth xprop flock mcookie xfwm4 xdotool xwininfo import magick; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "Missing required tool: $tool" >&2
     exit 127
@@ -36,8 +36,12 @@ fi
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
-if ! xvfb-run -a --server-args='-screen 0 1280x900x24 -nolisten tcp -extension GLX' \
-  dbus-run-session -- bash -s -- "$BINARY" "$OUT_DIR" "$FIXTURE" >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
+set +e
+"$ROOT/scripts/run-linux-isolated-xvfb-session.sh" \
+  "$OUT_DIR/xvfb-session.txt" "$OUT_DIR/xvfb.log" \
+  '-screen 0 1280x900x24 -nolisten tcp -extension GLX' \
+  "$ROOT/scripts/run-linux-isolated-dbus-session.sh" "$OUT_DIR/dbus-session.txt" \
+  bash -s -- "$BINARY" "$OUT_DIR" "$FIXTURE" >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
 set -euo pipefail
 
 BINARY="$1"
@@ -63,7 +67,29 @@ cleanup() {
 }
 trap cleanup EXIT
 
-sleep 1
+window_manager_ready() {
+  local state
+  state="$(xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null || true)"
+  [[ "$state" =~ window\ id\ \#\ 0x[1-9a-fA-F][0-9a-fA-F]* ]]
+}
+
+wm_ready=false
+for attempt in $(seq 1 100); do
+  if window_manager_ready; then
+    printf 'attempt=%s\nready=true\n' "$attempt" >"$OUT_DIR/xfwm4-ready.txt"
+    wm_ready=true
+    break
+  fi
+  if ! kill -0 "$wm_pid" 2>/dev/null; then
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$wm_ready" != true ]]; then
+  printf 'ready=false\n' >"$OUT_DIR/xfwm4-ready.txt"
+  echo "Timed out waiting for Xfwm readiness" >&2
+  exit "${OKP_SESSION_INFRA_EXIT_CODE:-75}"
+fi
 
 # Load the fixture clip via the command line so the welcome surface hides and
 # the video plane is a clean dark background, and open the Up Next panel so the
@@ -235,10 +261,12 @@ echo "narrow floor: ${width}x${height}"
 echo "osc-mean=${osc_mean} osc-left=${left_max} osc-panel=${panel_osc_max} panel=${panel_max}"
 echo "overflow-glyph=${overflow_max} overflow-seam=${seam_max}"
 SMOKE
-then
+session_status=$?
+set -e
+if (( session_status != 0 )); then
   echo "Narrow-width smoke failed. Session log: $OUT_DIR/session.log" >&2
   cat "$OUT_DIR/session.log" >&2
-  exit 1
+  exit "$session_status"
 fi
 
 echo "Narrow-width smoke passed. Screenshot: $OUT_DIR/narrow.png"

@@ -57,6 +57,28 @@ fn main_window_fit_session_has_one_multiscreen_manager_and_two_supervisors() {
     assert!(script.contains("org.a11y.atspi.Registry"));
 }
 
+#[test]
+fn portability_media_smokes_use_isolated_sessions_and_wait_for_xfwm() {
+    for script in [
+        include_str!("../../../../scripts/smoke-linux-narrow-width.sh"),
+        include_str!("../../../../scripts/smoke-linux-fullscreen-chrome.sh"),
+        include_str!("../../../../scripts/smoke-linux-compact-mode.sh"),
+    ] {
+        assert!(script.contains("run-linux-isolated-dbus-session.sh"));
+        assert!(script.contains("run-linux-isolated-xvfb-session.sh"));
+        assert!(
+            script.find("run-linux-isolated-xvfb-session.sh")
+                < script.find("run-linux-isolated-dbus-session.sh"),
+            "Xvfb must establish DISPLAY before D-Bus activation inherits the environment"
+        );
+        assert!(script.contains("_NET_SUPPORTING_WM_CHECK"));
+        assert!(script.contains("xfwm4-ready.txt"));
+        assert!(script.contains("OKP_SESSION_INFRA_EXIT_CODE:-75"));
+        assert!(!script.contains("xvfb-run "));
+        assert!(!script.contains("dbus-run-session -- bash"));
+    }
+}
+
 fn assert_success(output: &Output) {
     assert!(
         output.status.success(),

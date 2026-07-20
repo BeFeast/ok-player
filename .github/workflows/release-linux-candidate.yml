@@ -134,6 +134,14 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit 0
 
+      - name: Upload portability smoke failure evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ok-player-candidate-portability-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/linux/portability-smoke-evidence/**
+          if-no-files-found: ignore
+
       - name: Reclaim candidate scratch
         if: always()
         env:
