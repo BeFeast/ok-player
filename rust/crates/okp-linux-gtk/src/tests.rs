@@ -392,8 +392,10 @@ fn linux_packages_pin_and_bundle_the_embedded_wayland_mpv() {
     assert!(portability.contains("debian-media-fullscreen"));
     assert!(portability.contains("portability build marker:"));
     assert!(portability.contains("EXPECTED_BUILD_MARKER"));
+    assert!(portability.contains("'libasound2 | libasound2t64'"));
     assert!(!deb.contains("libmpv2"));
     assert!(deb.contains("Recommends: ffmpeg"));
+    assert!(deb.contains("libasound2 | libasound2t64"));
     assert!(deb.contains("libxss1"));
     assert!(deb.contains("libx11-6"));
     assert!(deb.contains("libxcursor1"));
@@ -488,6 +490,8 @@ fn bundled_runtime_manifest_rejects_target_desktop_libraries() {
         "libpango-1.0.so.0",
         "libfontconfig.so.1",
         "libmount.so.1",
+        "libasound.so.2",
+        "libasound_module_pcm_pulse.so",
     ] {
         fs::write(&manifest, format!("{digest}  {platform_library}\n"))
             .expect("platform runtime manifest should be written");

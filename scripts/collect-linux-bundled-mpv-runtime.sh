@@ -16,9 +16,10 @@ done
 [[ -f "$LIBMPV" ]] || { echo "Bundled libmpv is missing: $LIBMPV" >&2; exit 1; }
 
 # The target desktop owns libc, graphics, GTK, X11/Wayland, Cairo/Pango, font,
-# and session libraries. Bundling builder copies can make GTK or EGL load an
-# internally inconsistent desktop stack. Only libmpv and its media closure are
-# copied; the package dependencies and portability gate supply the platform.
+# audio, and session libraries. Bundling builder copies can make GTK, EGL, or
+# ALSA load an internally inconsistent platform stack. Only libmpv and its
+# media closure are copied; package dependencies and the portability gate
+# supply the platform.
 
 rm -rf "$OUTPUT"
 mkdir -p "$OUTPUT"

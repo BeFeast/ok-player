@@ -14,7 +14,7 @@ okp_is_linux_platform_runtime() {
       libharfbuzz.so.* | libgraphite2.so.* | libfribidi.so.* | \
       libmount.so.* | libblkid.so.* | libselinux.so.* | libpcre2-*.so.* | \
       libffi.so.* | libdbus-1.so.* | libsystemd.so.* | libudev.so.* | \
-      libxkbcommon*.so.* | libdecor-*.so.* | libepoxy.so.* | \
+      libasound*.so* | libxkbcommon*.so.* | libdecor-*.so.* | libepoxy.so.* | \
       libgtk-*.so.* | libgdk*.so.* | libadwaita-*.so.*)
       return 0
       ;;
