@@ -3766,7 +3766,7 @@ const OKP_STYLESHEET: &str = "
             background: #f8fafb;
         }
 
-        button.okp-about-toggle {
+        button.okp-settings-switch {
             min-width: 39px;
             min-height: 22px;
             padding: 3px;
@@ -3776,49 +3776,20 @@ const OKP_STYLESHEET: &str = "
             box-shadow: none;
         }
 
-        button.okp-about-toggle.is-active {
+        button.okp-settings-switch.is-active {
             background: @okp_teal;
         }
 
-        .okp-about-toggle-knob {
+        button.okp-settings-switch:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 2px alpha(@okp_teal, 0.35);
+        }
+
+        .okp-settings-switch-knob {
             min-width: 16px;
             min-height: 16px;
             border-radius: 999px;
             background: #ffffff;
-        }
-
-        /* The single stock GtkSwitch (hardware decode) is retinted so it lights
-           up in OK teal instead of the host theme's accent, matching the brand
-           toggle above. Only the track/knob colours are overridden; GTK keeps
-           its own switch geometry and the state-set handler is untouched. */
-        switch.okp-settings-switch {
-            border: none;
-            background: #ccd5dc;
-            box-shadow: none;
-        }
-
-        switch.okp-settings-switch:checked {
-            background: @okp_teal;
-        }
-
-        switch.okp-settings-switch > slider {
-            background: #ffffff;
-            border: none;
-            box-shadow: none;
-            outline: none;
-        }
-
-        /* Strip the native focus ring only for pointer/programmatic focus;
-           keyboard focus keeps a visible marker via the :focus-visible rule
-           below, so tabbing to the switch never leaves it unmarked. */
-        switch.okp-settings-switch:focus:not(:focus-visible),
-        switch.okp-settings-switch:focus:not(:focus-visible) > slider {
-            outline: none;
-        }
-
-        switch.okp-settings-switch:focus-visible {
-            outline: none;
-            box-shadow: 0 0 0 2px alpha(@okp_teal, 0.35);
         }
 
         .okp-about-link-button {
@@ -4504,14 +4475,16 @@ const OKP_STYLESHEET: &str = "
         }
 
         window.okp-settings-window.is-dark scale.okp-settings-scale highlight,
-        window.okp-settings-window.is-dark switch.okp-settings-switch:checked,
-        window.okp-settings-window.is-dark button.okp-about-toggle.is-active {
+        window.okp-settings-window.is-dark button.okp-settings-switch.is-active {
             background: @okp_accent;
         }
 
-        window.okp-settings-window.is-dark switch.okp-settings-switch,
-        window.okp-settings-window.is-dark button.okp-about-toggle {
+        window.okp-settings-window.is-dark button.okp-settings-switch {
             background: rgba(255, 255, 255, 0.20);
+        }
+
+        window.okp-settings-window.is-dark button.okp-settings-switch:focus-visible {
+            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.45);
         }
 
         window.okp-settings-window.is-dark .okp-settings-segmented {

@@ -377,13 +377,13 @@ pub(crate) fn settings_updates_section(
     auto_state_label.set_valign(gtk::Align::Center);
     auto_row.append(&auto_state_label);
 
-    let auto_switch = about_toggle_button(auto_check_enabled);
+    let auto_switch = settings_switch_button(auto_check_enabled, "Automatic checks");
     let auto_state = Rc::clone(&state);
     let auto_toast = Rc::clone(&status_toast);
     let auto_state_text = auto_state_label.clone();
     auto_switch.connect_clicked(move |button| {
         let enabled = !button.has_css_class("is-active");
-        set_about_toggle_active(button, enabled);
+        set_settings_switch_active(button, enabled);
         {
             let mut state = auto_state.borrow_mut();
             state.settings.set_auto_check_updates(enabled);
