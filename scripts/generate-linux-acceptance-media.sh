@@ -35,7 +35,7 @@ generate_video "0x08090b" "$OUT_DIR/dark-no-chapters-long.mkv" 90
 generate_window_fit_video() {
   local size="$1" color="$2" title="$3" output="$4"
   ffmpeg -hide_banner -loglevel error -y \
-    -f lavfi -i "color=c=${color}:s=${size}:r=2:d=12" \
+    -f lavfi -i "color=c=${color}:s=${size}:r=2:d=24" \
     -map 0:v:0 \
     -c:v libx264 -preset ultrafast -tune stillimage -crf 35 \
     -pix_fmt yuv420p -g 4 -an \
@@ -46,7 +46,11 @@ generate_window_fit_video() {
 generate_window_fit_video \
   "320x180" "0x17313a" "OK Player small window-fit fixture" "$OUT_DIR/fit-small.mkv"
 generate_window_fit_video \
+  "1920x1080" "0x183345" "OK Player 1080p window-fit fixture" "$OUT_DIR/fit-1080p.mkv"
+generate_window_fit_video \
   "3840x2160" "0x241b35" "OK Player 4K window-fit fixture" "$OUT_DIR/fit-4k.mkv"
+generate_window_fit_video \
+  "1080x1920" "0x30231d" "OK Player vertical window-fit fixture" "$OUT_DIR/fit-vertical.mkv"
 
 ffmpeg -hide_banner -loglevel error -y \
   -f lavfi -i "color=c=0xf2f4f5:s=1280x720:r=24:d=30" \
@@ -101,7 +105,9 @@ bright_duration="$(ffprobe -v error -show_entries format=duration -of default=nw
 buffered_duration="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$OUT_DIR/buffered.mkv")"
 interval_duration="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$OUT_DIR/dark-no-chapters-long.mkv")"
 fit_small_duration="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$OUT_DIR/fit-small.mkv")"
+fit_1080p_duration="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$OUT_DIR/fit-1080p.mkv")"
 fit_4k_duration="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$OUT_DIR/fit-4k.mkv")"
+fit_vertical_duration="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$OUT_DIR/fit-vertical.mkv")"
 
 cat >"$OUT_DIR/fixtures.json" <<JSON
 {
@@ -113,7 +119,9 @@ cat >"$OUT_DIR/fixtures.json" <<JSON
     {"id": "bright", "path": "bright.mkv", "duration_seconds": $bright_duration, "chapters": 0},
     {"id": "buffered", "path": "buffered.mkv", "duration_seconds": $buffered_duration, "chapters": 0},
     {"id": "fit-small", "path": "fit-small.mkv", "duration_seconds": $fit_small_duration, "chapters": 0},
-    {"id": "fit-4k", "path": "fit-4k.mkv", "duration_seconds": $fit_4k_duration, "chapters": 0}
+    {"id": "fit-1080p", "path": "fit-1080p.mkv", "duration_seconds": $fit_1080p_duration, "chapters": 0},
+    {"id": "fit-4k", "path": "fit-4k.mkv", "duration_seconds": $fit_4k_duration, "chapters": 0},
+    {"id": "fit-vertical", "path": "fit-vertical.mkv", "duration_seconds": $fit_vertical_duration, "chapters": 0}
   ],
   "natural_queue": {
     "directory": "natural-queue",

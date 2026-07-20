@@ -171,6 +171,16 @@ pub struct InitialFitRequest {
     pub video: WindowSize,
 }
 
+/// Whether the shell has enough compositor context to consume an initial fit.
+///
+/// A mapped window has authoritative bounds already. A deferred first map must
+/// wait until the realized toplevel has reported compositor bounds; consuming
+/// dimensions against monitor geometry earlier forces the shell to retarget the
+/// visible window after mapping.
+pub const fn initial_fit_can_configure(window_mapped: bool, has_compositor_bounds: bool) -> bool {
+    window_mapped || has_compositor_bounds
+}
+
 /// Portable lifecycle for the one-time fit attached to each media generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct InitialFitState {
@@ -268,27 +278,6 @@ pub fn fit_physical_video_to_work_area(
         size,
         position: centered_position(size, work_area),
     })
-}
-
-/// Refit only when the compositor-selected work area requires a smaller
-/// client than the one already requested.
-///
-/// Initial placement is compositor-owned on Wayland. A compositor may move a
-/// newly resized toplevel to another monitor; in that case retaining a target
-/// calculated from the previous monitor can crop the window. This correction
-/// is deliberately monotonic: it may shrink once to remain visible, but never
-/// grows and therefore cannot fight a user resize or bounce between monitors.
-pub fn smaller_fit_for_work_area(
-    video_width: i32,
-    video_height: i32,
-    monitor_scale: f64,
-    work_area: WindowRect,
-    requested: WindowPlacement,
-) -> Option<WindowPlacement> {
-    let current =
-        fit_physical_video_to_work_area(video_width, video_height, monitor_scale, work_area)?;
-    (current.size.width < requested.size.width || current.size.height < requested.size.height)
-        .then_some(current)
 }
 
 /// The largest whole-window size available after the standard edge and chrome
@@ -644,6 +633,14 @@ mod tests {
     }
 
     #[test]
+    fn deferred_initial_fit_waits_for_compositor_bounds() {
+        assert!(!initial_fit_can_configure(false, false));
+        assert!(initial_fit_can_configure(false, true));
+        assert!(initial_fit_can_configure(true, false));
+        assert!(initial_fit_can_configure(true, true));
+    }
+
+    #[test]
     fn fractional_monitor_scale_keeps_the_physical_natural_size_ceiling() {
         let placement = fit_physical_video_to_work_area(
             300,
@@ -723,82 +720,6 @@ mod tests {
                 },
                 position: WindowPoint { x: 1951, y: -7 },
             })
-        );
-    }
-
-    #[test]
-    fn compositor_move_to_smaller_monitor_retargets_without_stale_size() {
-        let large = fit_physical_video_to_work_area(
-            3840,
-            2160,
-            2.0,
-            WindowRect {
-                x: 0,
-                y: 14,
-                width: 1920,
-                height: 1051,
-            },
-        )
-        .expect("large-monitor fit");
-        assert_eq!(
-            large.size,
-            WindowSize {
-                width: 1680,
-                height: 945
-            }
-        );
-
-        let corrected = smaller_fit_for_work_area(
-            3840,
-            2160,
-            2.0,
-            WindowRect {
-                x: 1920,
-                y: 432,
-                width: 1152,
-                height: 648,
-            },
-            large,
-        )
-        .expect("smaller monitor must replace the stale target");
-        assert_eq!(
-            corrected.size,
-            WindowSize {
-                width: 1008,
-                height: 567
-            }
-        );
-        assert_eq!(corrected.position, WindowPoint { x: 1992, y: 472 });
-    }
-
-    #[test]
-    fn compositor_move_to_larger_monitor_never_grows_the_initial_target() {
-        let small = fit_physical_video_to_work_area(
-            3840,
-            2160,
-            2.0,
-            WindowRect {
-                x: 1920,
-                y: 432,
-                width: 1152,
-                height: 648,
-            },
-        )
-        .expect("small-monitor fit");
-        assert_eq!(
-            smaller_fit_for_work_area(
-                3840,
-                2160,
-                2.0,
-                WindowRect {
-                    x: 0,
-                    y: 14,
-                    width: 1920,
-                    height: 1051,
-                },
-                small,
-            ),
-            None
         );
     }
 

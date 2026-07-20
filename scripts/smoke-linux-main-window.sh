@@ -471,6 +471,32 @@ wait_for_log() {
   return 1
 }
 
+assert_single_initial_configure() {
+  local file="$1" label="$2"
+  local count
+  count="$(rg -c 'window fit configure: kind=initial' "$file" || true)"
+  if [[ "$count" != "1" ]]; then
+    echo "$label issued $count initial-fit configure requests instead of one" >&2
+    cat "$file" >&2
+    exit 1
+  fi
+  if rg -q 'window fit (mapped launch|confirmed|restored after compositor|settled)' "$file"; then
+    echo "$label entered the legacy visible settle sequence" >&2
+    cat "$file" >&2
+    exit 1
+  fi
+  if rg -q 'window fit reveal fallback' "$file"; then
+    echo "$label became visible before reaching its final geometry" >&2
+    cat "$file" >&2
+    exit 1
+  fi
+  if ! rg -q 'window fit visible: client=.* target=' "$file"; then
+    echo "$label did not record a final-geometry visibility boundary" >&2
+    cat "$file" >&2
+    exit 1
+  fi
+}
+
 export DISPLAY="$PRIMARY_DISPLAY"
 start_app "fit-small-app.log" windowed "$FIXTURES/fit-small.mkv"
 small_id="$(wait_for_window "$OUT_DIR/fit-small-window.ids")"
@@ -488,16 +514,17 @@ for expected in \
   "mpv render context initialized before source load" \
   "headless fit smoke: audio-device observation disabled" \
   "window fit request: video=320x180" \
-  "window fit settled: client=320x180"; do
+  "window fit configure: kind=initial target=320x180"; do
   if ! wait_for_log "$OUT_DIR/fit-small-app.log" "$expected"; then
     echo "Initial-fit sequence did not log: $expected" >&2
     cat "$OUT_DIR/fit-small-app.log" >&2
     exit 1
   fi
 done
+assert_single_initial_configure "$OUT_DIR/fit-small-app.log" "Small video"
 
 # Playback and the original render context remain live through initial sizing
-# and ordinary seek input. The 12-second fixture accepts +10 then -10 without
+# and ordinary seek input. The 24-second fixture accepts +10 then -10 without
 # ending the source, which catches the prior active-source teardown failure.
 xdotool key --clearmodifiers Right Left
 sleep 1
@@ -521,6 +548,32 @@ if [[ "$manual_width" != "700" || "$manual_height" != "500" ]]; then
   echo "Window fought manual resize after load: ${manual_width}x${manual_height}" >&2
   exit 1
 fi
+stop_app
+
+start_app "fit-1080p-app.log" windowed "$FIXTURES/fit-1080p.mkv"
+fit_1080p_id="$(wait_for_window "$OUT_DIR/fit-1080p-window.ids")"
+sleep 4
+capture_geometry "$fit_1080p_id" "fit-1080p-window"
+fit_1080p_width="$(geometry_value "$OUT_DIR/fit-1080p-window.xwininfo" Width)"
+fit_1080p_height="$(geometry_value "$OUT_DIR/fit-1080p-window.xwininfo" Height)"
+if (( fit_1080p_width < 1200 || fit_1080p_width > 1204 || fit_1080p_height < 674 || fit_1080p_height > 679 )); then
+  echo "1080p video did not fit the primary workarea: ${fit_1080p_width}x${fit_1080p_height}" >&2
+  exit 1
+fi
+assert_single_initial_configure "$OUT_DIR/fit-1080p-app.log" "1080p video"
+stop_app
+
+start_app "fit-vertical-app.log" windowed "$FIXTURES/fit-vertical.mkv"
+vertical_id="$(wait_for_window "$OUT_DIR/fit-vertical-window.ids")"
+sleep 4
+capture_geometry "$vertical_id" "fit-vertical-window"
+vertical_width="$(geometry_value "$OUT_DIR/fit-vertical-window.xwininfo" Width)"
+vertical_height="$(geometry_value "$OUT_DIR/fit-vertical-window.xwininfo" Height)"
+if (( vertical_width < 450 || vertical_width > 454 || vertical_height < 802 || vertical_height > 806 )); then
+  echo "Vertical video did not fit the primary workarea: ${vertical_width}x${vertical_height}" >&2
+  exit 1
+fi
+assert_single_initial_configure "$OUT_DIR/fit-vertical-app.log" "Vertical video"
 stop_app
 
 start_app "fit-maximized-app.log" maximized "$FIXTURES/fit-small.mkv"
@@ -588,6 +641,8 @@ export DISPLAY="$SECONDARY_DISPLAY"
 start_app "fit-4k-right-monitor-app.log" windowed "$FIXTURES/fit-4k.mkv"
 right_id="$(wait_for_window "$OUT_DIR/fit-4k-right-monitor-window.ids")"
 sleep 4
+xdotool mousemove --window "$right_id" 480 270
+sleep 0.5
 capture_geometry "$right_id" "fit-4k-right-monitor-window"
 fit_width="$(geometry_value "$OUT_DIR/fit-4k-right-monitor-window.xwininfo" Width)"
 fit_height="$(geometry_value "$OUT_DIR/fit-4k-right-monitor-window.xwininfo" Height)"
@@ -604,6 +659,7 @@ if ! rg -q "workarea=1024x768" "$OUT_DIR/fit-4k-right-monitor-app.log"; then
   echo "4K load did not use the monitor containing the player window" >&2
   exit 1
 fi
+assert_single_initial_configure "$OUT_DIR/fit-4k-right-monitor-app.log" "4K video"
 xdotool windowsize "$right_id" 700 500
 sleep 1
 activate_fit_window_command "$right_id"
@@ -622,7 +678,10 @@ maximized_explicit_fit=${explicit_max_width}x${explicit_max_height}
 fullscreen_guard=pass
 fullscreen_explicit_fit=${explicit_fullscreen_width}x${explicit_fullscreen_height}
 small_geometry=${small_width}x${small_height}
+1080p_geometry=${fit_1080p_width}x${fit_1080p_height}
+vertical_geometry=${vertical_width}x${vertical_height}
 4k_geometry=${fit_width}x${fit_height}
+initial_fit_configures_per_geometry=1
 4k_explicit_fit=${explicit_4k_width}x${explicit_4k_height}
 explicit_fit_dispatch=pass
 status=pass

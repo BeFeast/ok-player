@@ -212,13 +212,13 @@ behaves identically on both sides.
   `Option` for invalid inputs; the C# module uses tuples and nullable tuples. The shared 94% work
   area budget, aspect preservation, no-upscale rule, correction thresholds, and tie-to-even
   rounding are unchanged.
-- **Linux initial-fit lifecycle has no C# counterpart.** `InitialFitState` and
-  `smaller_fit_for_work_area` extract the portable one-shot/monotonic-retarget decisions from the
-  GTK shell. WinUI can address a concrete monitor and window position through `AppWindow`; a
-  Wayland compositor owns normal toplevel placement, so Linux may shrink one pending initial fit
-  when compositor placement selects a smaller work area. It never grows or repeats after the
-  source generation consumes the request. These helpers add platform-neutral policy around the
-  ported arithmetic without changing any C# test case.
+- **Linux initial-fit lifecycle has no C# counterpart.** `InitialFitState` owns the
+  one-shot request per media generation, and `initial_fit_can_configure` keeps a deferred first map
+  pending until the realized toplevel has compositor-reported bounds. WinUI can address a concrete
+  monitor and window position through `AppWindow`; GTK must bootstrap the Wayland surface before
+  libmpv can publish dimensions. Waiting for both inputs lets the shell compute one final placement
+  instead of visibly retargeting after map. These helpers add platform-neutral lifecycle policy
+  around the ported arithmetic without changing any C# test case.
 
 ## ChapterMath → `okp_core::chapter_math`
 

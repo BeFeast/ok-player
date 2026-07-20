@@ -1084,20 +1084,22 @@ pub(crate) fn connect_state_poll(
         drain_wayland_presentation_feedback(&state);
         apply_pending_nfo_titles(&state);
         observe_initial_window_fit(&state, auto_fit_dimensions);
-        // A normally realized-but-not-yet-mapped surface may already expose
-        // its compositor-selected bounds. Use that opportunity without forcing
-        // realization; otherwise keep the core request pending until mapping.
-        if (window.is_mapped() || current_player_work_area(&window, &window_bounds).is_some())
-            && let Some(request) = take_initial_window_fit(&state)
+        // A deferred first map must use compositor-reported bounds, not the
+        // realized surface's provisional monitor geometry. Otherwise the
+        // visible window has to be resized again after mapping.
+        if window_fit::initial_fit_can_configure(
+            window.is_mapped(),
+            window_bounds.borrow().is_some(),
+        ) && let Some(request) = take_initial_window_fit(&state)
         {
             let deferred_launch_fit = initial_map_pending.get();
             fit_player_window_to_video(
                 &window,
-                &state,
                 &window_bounds,
-                request.source_generation,
                 request.video,
-                deferred_launch_fit,
+                PlayerWindowFitRequest::Initial {
+                    deferred_map: deferred_launch_fit,
+                },
             );
             if initial_map_pending.replace(false) {
                 window.present();
