@@ -1,3 +1,5 @@
+using System.Reflection;
+
 namespace OkPlayer.Core;
 
 /// <summary>
@@ -12,6 +14,9 @@ namespace OkPlayer.Core;
 /// </summary>
 public static class UpdateFeed
 {
+    public const string ChannelMetadataName = "OkPlayerUpdateChannel";
+    public const string BaseUrlMetadataName = "OkPlayerUpdateBaseUrl";
+
     /// <summary>Base URL of the Windows update channel. Velopack appends
     /// "releases.{channel}.json" to this, so it must end with a slash.</summary>
     public const string WinBaseUrl = "https://befeast.github.io/ok-player/updates/win/";
@@ -20,4 +25,32 @@ public static class UpdateFeed
     /// publish side and ExplicitChannel on the client, so a platform-default change in a future
     /// Velopack can never silently fork the two.</summary>
     public const string WinChannel = "win";
+
+    /// <summary>Resolve an installed build's lane from assembly metadata. Stable builds carry no
+    /// override and retain the public <c>win</c> channel. Automated candidate packages stamp both
+    /// values at publish time, keeping their update chain isolated without changing stable defaults.</summary>
+    public static UpdateFeedConfiguration Resolve(Assembly assembly)
+    {
+        ArgumentNullException.ThrowIfNull(assembly);
+        var metadata = assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
+            .GroupBy(attribute => attribute.Key, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Last().Value, StringComparer.Ordinal);
+        string channel = metadata.GetValueOrDefault(ChannelMetadataName) ?? WinChannel;
+        string baseUrl = metadata.GetValueOrDefault(BaseUrlMetadataName) ?? WinBaseUrl;
+        return Validate(channel, baseUrl);
+    }
+
+    internal static UpdateFeedConfiguration Validate(string channel, string baseUrl)
+    {
+        if (string.IsNullOrWhiteSpace(channel)
+            || channel.Any(character => !(char.IsAsciiLetterOrDigit(character) || character is '-' or '_')))
+            throw new InvalidOperationException($"Invalid update channel {channel}.");
+        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out Uri? uri)
+            || uri.Scheme != Uri.UriSchemeHttps
+            || !baseUrl.EndsWith("/", StringComparison.Ordinal))
+            throw new InvalidOperationException("Update feed base URL must be an absolute HTTPS URL ending in '/'.");
+        return new UpdateFeedConfiguration(baseUrl, channel);
+    }
 }
+
+public sealed record UpdateFeedConfiguration(string BaseUrl, string Channel);

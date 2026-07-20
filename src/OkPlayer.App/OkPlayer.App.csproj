@@ -41,6 +41,19 @@
     <NoWarn>$(NoWarn);MVVMTK0045</NoWarn>
   </PropertyGroup>
 
+  <!-- Candidate packages stamp a private rolling update lane into the app assembly. Stable builds omit
+       OkPlayerWindowsCandidate entirely and therefore retain UpdateFeed's existing win/Pages defaults. -->
+  <ItemGroup Condition="'$(OkPlayerWindowsCandidate)' == 'true'">
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>OkPlayerUpdateChannel</_Parameter1>
+      <_Parameter2>win-candidate</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>OkPlayerUpdateBaseUrl</_Parameter1>
+      <_Parameter2>https://github.com/BeFeast/ok-player/releases/download/windows-candidate/</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" />
