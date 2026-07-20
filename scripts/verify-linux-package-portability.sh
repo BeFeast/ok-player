@@ -113,8 +113,17 @@ check_elf_tree() {
       printf '%s\n' "$output" >&2
       return 1
     }
-    if awk '/not found/ { missing = 1 } END { exit !missing }' <<<"$output"; then
-      echo "portability ldd found an unresolved dependency: $label/${object#$root/}" >&2
+    # Platform-provided sonames (per the runtime bundling policy) resolve on the
+    # TARGET via declared package dependencies; the build host may legitimately
+    # lack them (e.g. Debian's libjpeg.so.62 on an Ubuntu runner). The container
+    # phase re-checks the full tree after `apt-get satisfy`-ing the real Depends.
+    local unresolved_fatal=""
+    while IFS= read -r soname; do
+      okp_is_linux_platform_runtime "$soname" && continue
+      unresolved_fatal+="$soname "
+    done < <(awk '/not found/ { print $1 }' <<<"$output")
+    if [[ -n "$unresolved_fatal" ]]; then
+      echo "portability ldd found an unresolved dependency: $label/${object#$root/} ($unresolved_fatal)" >&2
       printf '%s\n' "$output" >&2
       return 1
     fi
