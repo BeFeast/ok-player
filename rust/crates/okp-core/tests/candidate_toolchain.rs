@@ -585,6 +585,12 @@ fn strict_portability_gate_records_both_foreign_distro_targets() {
     assert!(log.contains("pull debian:testing-slim"), "{log}");
     assert!(log.contains("pull ubuntu:26.04"), "{log}");
     assert_eq!(log.lines().filter(|line| line.contains(" run ")).count(), 2);
+    assert!(log.contains("dst=/evidence"), "{log}");
+
+    let portability_script = fs::read_to_string(portability_script()).unwrap();
+    assert!(portability_script.contains("for sequence in 1 2 3"));
+    assert!(portability_script.contains("sequence-${sequence}-appimage-narrow-width"));
+    assert!(portability_script.contains("sequence-${sequence}-debian-narrow-width"));
 
     let contents: serde_json::Value = serde_json::from_slice(
         &fs::read(&report).expect("strict portability report should be readable"),
@@ -761,6 +767,25 @@ fn foreign_portability_report_requires_fullscreen_and_compact_media_checks() {
         "{}",
         String::from_utf8_lossy(&accepted.stderr)
     );
+}
+
+#[test]
+fn portability_failure_evidence_is_bound_to_both_workflow_artifacts() {
+    let verifier = include_str!("../../../../scripts/verify-linux-package-portability.sh");
+    assert!(verifier.contains("dst=/evidence"));
+    assert!(verifier.contains("PORTABILITY_EVIDENCE_DIR=\"/evidence/$target_slug\""));
+
+    let release = include_str!("../../../../.github/workflows/release-linux.yml");
+    assert!(release.contains("Upload portability smoke failure evidence"));
+    assert!(release.contains("artifacts/linux/portability-smoke-evidence/**"));
+    assert!(release.contains("if-no-files-found: ignore"));
+
+    let candidate = include_str!("../../../../.github/workflows/release-linux-candidate.yml");
+    assert!(candidate.contains("Upload portability smoke failure evidence"));
+    assert!(candidate.contains("artifacts/linux/portability-smoke-evidence/**"));
+
+    let candidate_runner = include_str!("../../../../scripts/run-linux-candidate-workflow.sh");
+    assert!(candidate_runner.contains("OKP_PORTABILITY_EVIDENCE_DIR"));
 }
 
 fn repository_root() -> PathBuf {

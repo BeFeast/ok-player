@@ -5,6 +5,13 @@ set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/scripts/ok-player-scratch.sh"
 
+SESSION_INFRA_EXIT_CODE="${OKP_SESSION_INFRA_EXIT_CODE:-75}"
+if [[ ! "$SESSION_INFRA_EXIT_CODE" =~ ^[1-9][0-9]{0,2}$ ]] \
+  || (( SESSION_INFRA_EXIT_CODE > 255 )); then
+    echo "OKP_SESSION_INFRA_EXIT_CODE must be an integer from 1 through 255" >&2
+    exit 2
+fi
+
 EVIDENCE_FILE="${1:?usage: run-linux-isolated-xvfb-session.sh <evidence-file> <xvfb-log> <server-args> <command> [args...]}"
 XVFB_LOG="${2:?usage: run-linux-isolated-xvfb-session.sh <evidence-file> <xvfb-log> <server-args> <command> [args...]}"
 SERVER_ARGS_TEXT="${3:?usage: run-linux-isolated-xvfb-session.sh <evidence-file> <xvfb-log> <server-args> <command> [args...]}"
@@ -82,9 +89,9 @@ flock -u 9
 exec 9>&-
 
 if [[ -z "$xvfb_pid" || -z "$server_num" ]]; then
-  printf 'xvfb_ready=false\nstatus=fail\n' >>"$EVIDENCE_FILE"
+  printf 'xvfb_ready=false\nfailure_kind=session-infra\nstatus=fail\n' >>"$EVIDENCE_FILE"
   echo "Could not start an isolated Xvfb server" >&2
-  exit 1
+  exit "$SESSION_INFRA_EXIT_CODE"
 fi
 
 set +e
@@ -109,12 +116,17 @@ rm -f "/tmp/.X${server_num}-lock" "/tmp/.X11-unix/X${server_num}"
 } >>"$EVIDENCE_FILE"
 
 if [[ "$xvfb_alive_before_teardown" != "true" ]]; then
-  printf 'status=fail\n' >>"$EVIDENCE_FILE"
+  printf 'failure_kind=session-infra\nstatus=fail\n' >>"$EVIDENCE_FILE"
   echo "Xvfb exited before explicit session teardown" >&2
-  exit 1
+  exit "$SESSION_INFRA_EXIT_CODE"
 fi
 
 if (( command_status != 0 )); then
+  if (( command_status == SESSION_INFRA_EXIT_CODE )); then
+    printf 'failure_kind=session-infra\n' >>"$EVIDENCE_FILE"
+  else
+    printf 'failure_kind=command\n' >>"$EVIDENCE_FILE"
+  fi
   printf 'status=fail\n' >>"$EVIDENCE_FILE"
   exit "$command_status"
 fi

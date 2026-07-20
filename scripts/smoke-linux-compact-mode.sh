@@ -8,7 +8,7 @@ BINARY="${1:-ok-player}"
 OUT_DIR="${2:-$ROOT/artifacts/manual-ui/linux-compact-mode-smoke}"
 FIXTURE="$ROOT/tests/OkPlayer.IntegrationTests/fixtures/subtest.mkv"
 
-for tool in xvfb-run dbus-run-session xfwm4 xdotool xwininfo xprop import magick rg awk; do
+for tool in Xvfb dbus-run-session gdbus python3 xauth flock mcookie xfwm4 xdotool xwininfo xprop import magick rg awk; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "Missing required tool: $tool" >&2
     exit 127
@@ -17,15 +17,14 @@ done
 [[ -f "$FIXTURE" ]] || { echo "Missing media fixture: $FIXTURE" >&2; exit 127; }
 mkdir -p "$OUT_DIR"
 
-xvfb_args=(-a)
-if [[ -n "${OKP_XVFB_SERVER_NUM:-}" ]]; then
-  xvfb_args=(-n "$OKP_XVFB_SERVER_NUM")
-fi
-
-if ! env __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
+set +e
+env __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
   LIBGL_ALWAYS_SOFTWARE=1 \
-  xvfb-run "${xvfb_args[@]}" --server-args='-screen 0 1280x900x24 -nolisten tcp' \
-  dbus-run-session -- bash -s -- "$BINARY" "$FIXTURE" "$OUT_DIR" \
+  "$ROOT/scripts/run-linux-isolated-xvfb-session.sh" \
+  "$OUT_DIR/xvfb-session.txt" "$OUT_DIR/xvfb.log" \
+  '-screen 0 1280x900x24 -nolisten tcp' \
+  "$ROOT/scripts/run-linux-isolated-dbus-session.sh" "$OUT_DIR/dbus-session.txt" \
+  bash -s -- "$BINARY" "$FIXTURE" "$OUT_DIR" \
     >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
 set -euo pipefail
 
@@ -57,7 +56,30 @@ cleanup() {
   kill "$wm_pid" 2>/dev/null || true
 }
 trap cleanup EXIT
-sleep 1
+
+window_manager_ready() {
+  local state
+  state="$(xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null || true)"
+  [[ "$state" =~ window\ id\ \#\ 0x[1-9a-fA-F][0-9a-fA-F]* ]]
+}
+
+wm_ready=false
+for attempt in $(seq 1 100); do
+  if window_manager_ready; then
+    printf 'attempt=%s\nready=true\n' "$attempt" >"$OUT_DIR/xfwm4-ready.txt"
+    wm_ready=true
+    break
+  fi
+  if ! kill -0 "$wm_pid" 2>/dev/null; then
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$wm_ready" != true ]]; then
+  printf 'ready=false\n' >"$OUT_DIR/xfwm4-ready.txt"
+  echo "Timed out waiting for Xfwm readiness" >&2
+  exit "${OKP_SESSION_INFRA_EXIT_CODE:-75}"
+fi
 
 timeout 45s "$BINARY" "$FIXTURE" >"$OUT_DIR/app.log" 2>&1 &
 app_pid=$!
@@ -219,10 +241,12 @@ printf '%s\n' \
   'restore=pass' \
   'restored_geometry=1120x680' >"$OUT_DIR/results.txt"
 SMOKE
-then
+session_status=$?
+set -e
+if (( session_status != 0 )); then
   echo "Compact-mode smoke failed. Session log: $OUT_DIR/session.log" >&2
   cat "$OUT_DIR/session.log" >&2
-  exit 1
+  exit "$session_status"
 fi
 
 echo "Compact-mode smoke passed. Results: $OUT_DIR/results.txt"

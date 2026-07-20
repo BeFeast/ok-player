@@ -55,6 +55,9 @@ APPIMAGE_DIR="$(dirname -- "$APPIMAGE")"
 DEB_NAME="$(basename -- "$DEB")"
 APPIMAGE_NAME="$(basename -- "$APPIMAGE")"
 REPORT_DIR="$(dirname -- "$REPORT")"
+PORTABILITY_EVIDENCE_DIR="${OKP_PORTABILITY_EVIDENCE_DIR:-$REPORT_DIR/portability-smoke-evidence}"
+mkdir -p -- "$PORTABILITY_EVIDENCE_DIR"
+PORTABILITY_EVIDENCE_DIR="$(cd -- "$PORTABILITY_EVIDENCE_DIR" && pwd -P)"
 WORK="$(okp_make_scratch_dir portability "$REPORT_DIR")"
 trap 'rm -rf "$WORK"' EXIT
 APPIMAGE_EXEC="$WORK/ok-player.AppImage"
@@ -213,6 +216,7 @@ if [[ "$CONTAINER_MODE" != skip && -n "$CONTAINER_RUNTIME" ]]; then
     --mount "type=bind,src=$ROOT,dst=/workspace,readonly" \
     --mount "type=bind,src=$ARTIFACT_DIR,dst=/artifacts/deb,readonly" \
     --mount "type=bind,src=$APPIMAGE_DIR,dst=/artifacts/appimage,readonly" \
+    --mount "type=bind,src=$PORTABILITY_EVIDENCE_DIR,dst=/evidence" \
     -e DEB_NAME="$DEB_NAME" \
     -e APPIMAGE_NAME="$APPIMAGE_NAME" \
     -e EXPECTED_BUILD_MARKER="$EXPECTED_BUILD_MARKER" \
@@ -223,6 +227,10 @@ export DEBIAN_FRONTEND=noninteractive
 source /workspace/scripts/linux-bundled-mpv-runtime-policy.sh
 
 echo "portability target: $PORTABILITY_TARGET_IMAGE"
+target_slug="${PORTABILITY_TARGET_IMAGE//\//-}"
+target_slug="${target_slug//:/-}"
+PORTABILITY_EVIDENCE_DIR="/evidence/$target_slug"
+mkdir -p "$PORTABILITY_EVIDENCE_DIR"
 
 apt-get update -qq
 apt-get install -y --no-install-recommends \
@@ -280,17 +288,26 @@ check_no_bundled_glibc() {
   echo "portability bundled glibc exclusion: $label PASS"
 }
 
-media_render_smokes() {
-  local binary="$1" label="$2"
-  "/workspace/scripts/smoke-linux-narrow-width.sh" \
-    "$binary" "$scratch/${label}-narrow-width"
-  echo "portability media render: $label narrow-width PASS"
+run_narrow_width_smoke() {
+  local binary="$1"
+  "/workspace/scripts/smoke-linux-narrow-width.sh" "$binary" "$OKP_SMOKE_OUTPUT_DIR"
+}
+
+run_fullscreen_smoke() {
+  local binary="$1"
   "/workspace/scripts/smoke-linux-fullscreen-chrome.sh" \
-    "$binary" "$scratch/${label}-fullscreen" "$scratch/bright.mkv" bright
-  echo "portability media render: $label fullscreen PASS"
-  "/workspace/scripts/smoke-linux-compact-mode.sh" \
-    "$binary" "$scratch/${label}-compact"
-  echo "portability media render: $label compact transition PASS"
+    "$binary" "$OKP_SMOKE_OUTPUT_DIR" "$scratch/bright.mkv" bright
+}
+
+run_compact_smoke() {
+  local binary="$1"
+  "/workspace/scripts/smoke-linux-compact-mode.sh" "$binary" "$OKP_SMOKE_OUTPUT_DIR"
+}
+
+run_portability_smoke() {
+  local smoke="$1" label="$2" binary="$3"
+  okp_run_linux_smoke_with_infra_retry \
+    "$label" "$scratch/$label" "$PORTABILITY_EVIDENCE_DIR" "$smoke" "$binary"
 }
 
 ffmpeg -hide_banner -loglevel error -y \
@@ -302,7 +319,6 @@ APP_ROOT="$appimage_root/squashfs-root"
 check_no_bundled_glibc "$APP_ROOT/usr/bin" appimage
 check_elf_tree "$APP_ROOT"
 check_build_marker "$APP_ROOT/usr/bin/ok-player" appimage
-media_render_smokes "$APP_ROOT/usr/bin/ok-player" appimage
 
 depends="$(dpkg-deb -f "/artifacts/deb/$DEB_NAME" Depends)"
 apt-get satisfy -y --no-install-recommends "$depends" >/dev/null
@@ -310,7 +326,26 @@ dpkg -i "/artifacts/deb/$DEB_NAME" >/dev/null
 check_no_bundled_glibc /usr/lib/ok-player debian
 check_elf_tree /usr/lib/ok-player
 check_build_marker /usr/bin/ok-player debian
-media_render_smokes /usr/bin/ok-player debian
+
+# Run the two package lanes back-to-back three times. Each script owns a fresh
+# D-Bus address, private XDG runtime directory, Xvfb server, and ready Xfwm.
+for sequence in 1 2 3; do
+  run_portability_smoke run_narrow_width_smoke \
+    "sequence-${sequence}-appimage-narrow-width" "$APP_ROOT/usr/bin/ok-player"
+  echo "portability media render: appimage narrow-width sequence $sequence PASS"
+  run_portability_smoke run_narrow_width_smoke \
+    "sequence-${sequence}-debian-narrow-width" /usr/bin/ok-player
+  echo "portability media render: debian narrow-width sequence $sequence PASS"
+done
+
+run_portability_smoke run_fullscreen_smoke appimage-fullscreen "$APP_ROOT/usr/bin/ok-player"
+echo "portability media render: appimage fullscreen PASS"
+run_portability_smoke run_compact_smoke appimage-compact "$APP_ROOT/usr/bin/ok-player"
+echo "portability media render: appimage compact transition PASS"
+run_portability_smoke run_fullscreen_smoke debian-fullscreen /usr/bin/ok-player
+echo "portability media render: debian fullscreen PASS"
+run_portability_smoke run_compact_smoke debian-compact /usr/bin/ok-player
+echo "portability media render: debian compact transition PASS"
 CONTAINER
 
     targets_json+="${separator}{\"image\":\"$target_image\",\"image_id\":\"$image_id\"}"
