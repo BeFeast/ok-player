@@ -379,11 +379,14 @@ fn linux_packages_pin_and_bundle_the_embedded_wayland_mpv() {
     assert!(collect.contains("patchelf --set-rpath '$ORIGIN'"));
     assert!(collect.contains("bundled-runtime.sha256"));
     assert!(collect.contains("okp_is_linux_platform_runtime"));
+    assert!(collect.contains("Refusing to queue target glibc component"));
     assert!(verify.contains("wayland-embed-display"));
     assert!(verify.contains("Packaged binary resolved libmpv outside its payload"));
     assert!(verify.contains("libavcodec.so"));
     assert!(verify.contains("okp_verify_linux_bundled_runtime_manifest"));
     assert!(portability.contains("debian:testing-slim"));
+    assert!(portability.contains("ubuntu:26.04"));
+    assert!(portability.contains("no-bundled-glibc-runtime"));
     assert!(portability.contains("portability ldd:"));
     assert!(portability.contains("smoke-linux-narrow-width.sh"));
     assert!(portability.contains("smoke-linux-fullscreen-chrome.sh"));
@@ -439,18 +442,18 @@ fn linux_packages_pin_and_bundle_the_embedded_wayland_mpv() {
     assert!(deb.contains("OKP_CANDIDATE_TOOLCHAIN_REQUIRE_DOTNET_TOOLS=false"));
     assert!(velopack_package.contains("OKP_CANDIDATE_TOOLCHAIN_REQUIRE_DOTNET_TOOLS=true"));
     assert!(portable_builder.contains("linux-portable-builder.Dockerfile"));
-    assert!(portable_builder.contains("ubuntu-26.04-v1"));
+    assert!(portable_builder.contains("debian-13-v1"));
     assert!(portable_builder.contains("git -C \"$ROOT\" rev-parse --verify 'HEAD^{commit}'"));
     assert!(portable_builder.contains("-e OKP_BUILD_SHA=\"$BUILD_SHA\""));
     assert!(portable_builder.contains("--target \"$LANE\""));
     assert!(portable_image.contains(
-        "FROM ubuntu@sha256:3131b4cc82a783df6c9df078f86e01819a13594b865c2cad47bd1bca2b7063bb"
+        "FROM debian@sha256:9bb8a3626890e084ab54e888fdd7c4b6d2f119071cd4c5dc5fecb4d73062aa5f"
     ));
     let media_image = portable_image
         .split("FROM media AS deb")
         .next()
         .expect("portable media stage");
-    assert!(media_image.contains("--print-portable-ubuntu-packages"));
+    assert!(media_image.contains("--print-portable-debian-packages"));
     assert!(!media_image.contains("dotnet-install.sh"));
     let appimage = portable_image
         .split("FROM media AS appimage")
@@ -492,6 +495,15 @@ fn bundled_runtime_manifest_rejects_target_desktop_libraries() {
         "libmount.so.1",
         "libasound.so.2",
         "libasound_module_pcm_pulse.so",
+        "libBrokenLocale.so.1",
+        "libSegFault.so",
+        "libc_malloc_debug.so.0",
+        "libcidn.so.1",
+        "libmemusage.so",
+        "libmvec.so.1",
+        "libnss_files.so.2",
+        "libpcprofile.so",
+        "libthread_db.so.1",
     ] {
         fs::write(&manifest, format!("{digest}  {platform_library}\n"))
             .expect("platform runtime manifest should be written");
@@ -509,6 +521,21 @@ fn bundled_runtime_manifest_rejects_target_desktop_libraries() {
             "rejection should name {platform_library}"
         );
     }
+
+    let stray_glibc = temp.path().join("libmvec.so.1");
+    fs::write(&stray_glibc, b"not an ELF object").expect("stray glibc fixture");
+    let rejected = std::process::Command::new("bash")
+        .args([
+            "-c",
+            "source \"$1\"; okp_verify_no_linux_glibc_runtime_files \"$2\"",
+            "bash",
+        ])
+        .arg(&policy)
+        .arg(temp.path())
+        .output()
+        .expect("runtime file policy should run");
+    assert!(!rejected.status.success());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("libmvec.so.1"));
 }
 
 #[test]

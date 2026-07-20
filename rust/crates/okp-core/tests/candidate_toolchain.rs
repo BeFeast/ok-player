@@ -169,7 +169,7 @@ fn portable_package_list_excludes_dotnet_tools() {
 
     let portable = Command::new("/bin/bash")
         .arg(toolchain_script())
-        .arg("--print-portable-ubuntu-packages")
+        .arg("--print-portable-debian-packages")
         .env("OKP_CANDIDATE_TOOLCHAIN_MANIFEST", &manifest)
         .output()
         .expect("portable package list should run");
@@ -276,7 +276,7 @@ fn workflow_and_operator_guide_consume_the_canonical_manifest() {
     assert!(release_workflow.contains("OKP_PORTABLE_PACKAGE_MODE: container"));
     assert!(
         release_workflow
-            .contains("OKP_PORTABLE_BUILDER_IMAGE: ok-player-linux-builder:ubuntu-26.04-v1")
+            .contains("OKP_PORTABLE_BUILDER_IMAGE: ok-player-linux-builder:debian-13-v1")
     );
     assert!(release_workflow.contains("OKP_PORTABILITY_CONTAINER_MODE: required"));
     assert!(release_workflow.contains("OKP_PORTABILITY_REQUIRED_MODE=foreign-container"));
@@ -290,7 +290,9 @@ fn workflow_and_operator_guide_consume_the_canonical_manifest() {
         .expect("candidate builder guide");
     assert!(docs.contains("scripts/linux-candidate-toolchain.manifest"));
     assert!(docs.contains("--print-ubuntu-packages"));
-    assert!(docs.contains("--print-portable-ubuntu-packages"));
+    assert!(docs.contains("--print-portable-debian-packages"));
+    assert!(docs.contains("oldest supported"));
+    assert!(docs.contains("Debian testing and Ubuntu 26.04"));
     assert!(docs.contains("dotnet tool install --global vpk --version 1.2.0"));
     assert!(docs.contains("scheduled native-builder preflight"));
 
@@ -522,7 +524,7 @@ fn native_portability_gate_accepts_only_declared_host_dependencies() {
     assert!(stdout.contains("portability build marker: appimage PASS"));
     assert!(stdout.contains("portability build marker: debian PASS"));
     let report_contents = fs::read_to_string(&report).expect("portability report");
-    assert!(report_contents.contains(r#""schema_version": 2"#));
+    assert!(report_contents.contains(r#""schema_version": 3"#));
     assert!(report_contents.contains(r#""verification_mode": "native-equivalence""#));
     assert!(report_contents.contains(&format!(r#""source_sha": "{TEST_SOURCE_SHA}""#)));
     assert!(report_contents.contains(r#""build_marker": "0123456""#));
@@ -547,6 +549,72 @@ fn native_portability_gate_accepts_only_declared_host_dependencies() {
             & 0o111,
         0,
         "verification must not mutate a downloaded artifact's mode"
+    );
+}
+
+#[test]
+fn strict_portability_gate_records_both_foreign_distro_targets() {
+    let fixture = unique_temp_dir("okp-foreign-portability-targets");
+    let deb = build_test_deb(fixture.path(), "libc6");
+    let appimage = build_test_appimage(fixture.path());
+    let report = fixture.path().join("portability-report.json");
+    let runtime_log = fixture.path().join("runtime.log");
+    write_executable(
+        &fixture.path().join("bin/docker"),
+        "#!/bin/sh\nset -eu\nprintf 'docker %s\\n' \"$*\" >> \"$OKP_RUNTIME_LOG\"\ncase \"${1:-}\" in\n  info|pull|run) exit 0 ;;\n  image) printf 'sha256:%064d\\n' 0 ;;\n  *) exit 2 ;;\nesac\n",
+    );
+
+    let output = Command::new("/bin/bash")
+        .arg(portability_script())
+        .arg(&deb)
+        .arg(&appimage)
+        .arg(&report)
+        .arg(TEST_SOURCE_SHA)
+        .env("PATH", portability_test_path(fixture.path()))
+        .env("OKP_PORTABILITY_CONTAINER_MODE", "required")
+        .env("OKP_RUNTIME_LOG", &runtime_log)
+        .output()
+        .expect("strict portability check should run");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let log = fs::read_to_string(runtime_log).expect("container runtime log");
+    assert!(log.contains("pull debian:testing-slim"), "{log}");
+    assert!(log.contains("pull ubuntu:26.04"), "{log}");
+    assert_eq!(log.lines().filter(|line| line.contains(" run ")).count(), 2);
+
+    let contents: serde_json::Value = serde_json::from_slice(
+        &fs::read(&report).expect("strict portability report should be readable"),
+    )
+    .expect("strict portability report should be JSON");
+    assert_eq!(
+        contents["targets"],
+        serde_json::json!([
+            {
+                "image": "debian:testing-slim",
+                "image_id": format!("sha256:{}", "0".repeat(64)),
+            },
+            {
+                "image": "ubuntu:26.04",
+                "image_id": format!("sha256:{}", "0".repeat(64)),
+            },
+        ])
+    );
+
+    let verified = Command::new("/bin/bash")
+        .arg(portability_report_script())
+        .args([&report, &deb, &appimage])
+        .arg(TEST_SOURCE_SHA)
+        .env("OKP_PORTABILITY_REQUIRED_MODE", "foreign-container")
+        .output()
+        .expect("strict portability report should verify");
+    assert!(
+        verified.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verified.stderr)
     );
 }
 
@@ -614,10 +682,18 @@ fn foreign_portability_report_requires_fullscreen_media_checks() {
 
     let write_report = |checks: Vec<&str>| {
         let contents = serde_json::json!({
-            "schema_version": 2,
+            "schema_version": 3,
             "verification_mode": "foreign-container",
-            "target_image": "debian:testing-slim",
-            "target_image_id": format!("sha256:{}", "0".repeat(64)),
+            "targets": [
+                {
+                    "image": "debian:testing-slim",
+                    "image_id": format!("sha256:{}", "0".repeat(64)),
+                },
+                {
+                    "image": "ubuntu:26.04",
+                    "image_id": format!("sha256:{}", "1".repeat(64)),
+                },
+            ],
             "source_sha": TEST_SOURCE_SHA,
             "build_marker": "0123456",
             "status": "pass",
@@ -641,6 +717,7 @@ fn foreign_portability_report_requires_fullscreen_media_checks() {
     };
 
     write_report(vec![
+        "no-bundled-glibc-runtime",
         "all-bundled-elf-dependency-equivalence",
         "all-bundled-elf-ldd",
         "appimage-package-build-marker",
@@ -658,6 +735,7 @@ fn foreign_portability_report_requires_fullscreen_media_checks() {
     assert_eq!(rejected.status.code(), Some(1));
 
     write_report(vec![
+        "no-bundled-glibc-runtime",
         "all-bundled-elf-dependency-equivalence",
         "all-bundled-elf-ldd",
         "appimage-package-build-marker",

@@ -1,11 +1,25 @@
 #!/usr/bin/env bash
 # Shared policy for libraries that must come from the target desktop stack.
 
-okp_is_linux_platform_runtime() {
+okp_is_linux_glibc_runtime() {
   case "$1" in
-    ld-linux*.so.* | libc.so.* | libdl.so.* | libm.so.* | libpthread.so.* | \
-      libresolv.so.* | librt.so.* | libutil.so.* | libanl.so.* | libnsl.so.* | \
-      libcrypt.so.* | libgcc_s.so.* | libGL.so.* | libEGL.so.* | libGLX.so.* | \
+    ld*.so.* | libc.so.* | libc_malloc_debug.so.* | libBrokenLocale.so.* | \
+      libSegFault.so | libanl.so.* | libcidn.so.* | libdl.so.* | libm.so.* | \
+      libmemusage.so | libmvec.so.* | \
+      libnsl.so.* | libnss_*.so.* | libpcprofile.so | libpthread.so.* | \
+      libresolv.so.* | librt.so.* | libthread_db.so.* | libutil.so.*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+okp_is_linux_platform_runtime() {
+  okp_is_linux_glibc_runtime "$1" && return 0
+  case "$1" in
+    libcrypt.so.* | libgcc_s.so.* | libGL.so.* | libEGL.so.* | libGLX.so.* | \
       libGLdispatch.so.* | libOpenGL.so.* | libdrm.so.* | libgbm.so.* | \
       libvulkan.so.* | libglib-2.0.so.* | libgobject-2.0.so.* | \
       libgio-2.0.so.* | libgmodule-2.0.so.* | libgthread-2.0.so.* | \
@@ -43,6 +57,25 @@ okp_verify_linux_bundled_runtime_manifest() {
       return 1
     fi
   done <"$manifest"
+}
+
+okp_verify_no_linux_glibc_runtime_files() {
+  local root="$1" object soname failures=0
+  [[ -d "$root" ]] || {
+    echo "Bundled runtime directory is missing: $root" >&2
+    return 1
+  }
+
+  shopt -s nullglob globstar
+  for object in "$root"/**; do
+    [[ -f "$object" || -L "$object" ]] || continue
+    soname="${object##*/}"
+    if okp_is_linux_glibc_runtime "$soname"; then
+      echo "Bundled runtime contains target glibc component: $soname" >&2
+      failures=1
+    fi
+  done
+  (( failures == 0 ))
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
