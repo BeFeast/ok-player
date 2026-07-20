@@ -8,19 +8,22 @@ closure beside the application binary. That closure includes the exact FFmpeg,
 libplacebo, libass, libbluray, and Rubber Band sonames resolved by the pinned
 build. Every bundled ELF carries an origin-relative runtime path, so neither
 the executable nor a transitive media library can silently select a different
-host copy. The dynamic loader, glibc, ALSA, and graphics-driver ABI libraries
-remain target-provided and are checked by the cross-distro packaging gate. The
-Debian package declares `libasound2 | libasound2t64`; AppImage hosts must supply
-the corresponding distro ALSA runtime instead of loading a bundled builder
-copy. Fedora remains on its explicit system-mpv packaging contract.
+host copy. The dynamic loader, glibc, ALSA, image-codec, and graphics-driver ABI
+libraries remain target-provided and are checked by the cross-distro packaging
+gate. The Debian package declares `libasound2 | libasound2t64` and
+`libjpeg62-turbo | libjpeg8`. AppImage hosts supply the corresponding distro
+ALSA and JPEG-family runtimes through their GTK4 platform stack instead of
+loading bundled builder copies. mpv's JPEG screenshot encoder uses that target
+runtime; it does not require a private pinned JPEG ABI. Fedora remains on its
+explicit system-mpv packaging contract.
 
 Shipping Debian and AppImage artifacts are built inside the repository's
 digest-pinned Debian 13 builder image, which is the oldest supported runtime.
 This bounds the bundled media closure to the support-floor glibc ABI. The
 target desktop still supplies the complete glibc family, ALSA, GTK,
-Wayland/X11, and graphics-driver ABI libraries according to the package
-dependency and portability contracts. Package verification runs independently
-on Debian testing and Ubuntu 26.04.
+JPEG/TIFF/WebP/PNG image-codec families, Wayland/X11, and graphics-driver ABI
+libraries according to the package dependency and portability contracts.
+Package verification runs independently on Debian testing and Ubuntu 26.04.
 
 The embed patch is kept at
 `rust/patches/mpv-v0.40.0-wayland-embed.patch`. The small
