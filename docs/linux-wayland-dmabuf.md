@@ -43,6 +43,12 @@ proxies to a dedicated event queue on the caller's display connection. It does
 not own or destroy the display or parent surface. GTK retains both resources
 until mpv has shut down.
 
+The GTK parent and root surfaces are transparent only while a media source is
+active. EOF without a follow-up item and Close Media both clear the active
+source before the welcome surface is projected, returning the GTK toplevel to
+an opaque background. This keeps a detached or last-frame child surface from
+becoming visible while mpv and the compositor retire the video plane.
+
 OK Player requests `vo=dmabuf-wayland,libmpv`. If the compositor, driver, or
 decoded format cannot initialize the direct DMA-BUF VO, mpv falls through to
 the existing libmpv OpenGL render API in the same player instance. Development
@@ -64,3 +70,6 @@ render callbacks and `eglSwapBuffers` submissions are not acceptance presents.
 The patch and its affected mpv translation units are build-checked against the
 v0.40.0 tag. Final cadence, VA-API state, drop deltas, seeking, speed changes,
 and compositor geometry still require live GNOME/Wayland hardware acceptance.
+The package-bound idle-return smoke covers the EOF and Close Media state
+transitions, captured alpha, and welcome identity under Xvfb. It does not prove
+Wayland subsurface retirement; that remains a live GNOME/Wayland operator row.

@@ -1071,6 +1071,7 @@ pub(crate) fn connect_state_poll(
         chrome,
         compact_mode,
         window_chrome,
+        root_surface,
         subtitle_position_snapshot,
         empty_surface,
         lyrics_surface,
@@ -1121,6 +1122,7 @@ pub(crate) fn connect_state_poll(
         }
         run_presentation_exercise(&state, playback);
         let has_media = has_loaded_media(&state);
+        sync_native_video_background(&window, &root_surface, has_media);
         let seek_preview = env::var_os("OKP_OPEN_SEEK_PREVIEW_ON_STARTUP").is_some();
         let command_preview = env::var_os("OKP_OPEN_MORE_POPOVER_ON_STARTUP").is_some();
         let has_chapters = state
@@ -1309,6 +1311,23 @@ pub(crate) fn connect_state_poll(
 
         glib::ControlFlow::Continue
     });
+}
+
+fn sync_native_video_background(
+    window: &gtk::ApplicationWindow,
+    root_surface: &gtk::Overlay,
+    has_media: bool,
+) {
+    for widget in [
+        window.upcast_ref::<gtk::Widget>(),
+        root_surface.upcast_ref(),
+    ] {
+        if has_media {
+            widget.add_css_class("has-active-video-plane");
+        } else {
+            widget.remove_css_class("has-active-video-plane");
+        }
+    }
 }
 
 fn drain_wayland_presentation_feedback(state: &Rc<RefCell<PlayerState>>) {

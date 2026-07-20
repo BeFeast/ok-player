@@ -858,6 +858,7 @@ struct StatePollContext {
     chrome: Rc<ChromeVisibility>,
     compact_mode: CompactMode,
     window_chrome: PlayerWindowChrome,
+    root_surface: gtk::Overlay,
     subtitle_position_snapshot: Rc<Cell<Option<i64>>>,
     empty_surface: EmptySurface,
     lyrics_surface: LyricsSurface,

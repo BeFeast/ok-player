@@ -397,6 +397,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
             chrome: Rc::clone(&chrome),
             compact_mode,
             window_chrome,
+            root_surface: overlay.clone(),
             subtitle_position_snapshot: Rc::new(Cell::new(None)),
             empty_surface: empty_surface.clone(),
             lyrics_surface,
