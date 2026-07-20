@@ -776,11 +776,9 @@ fn current_player_scale(window: &gtk::ApplicationWindow) -> f64 {
 
 pub(crate) fn fit_player_window_to_video(
     window: &gtk::ApplicationWindow,
-    state: &Rc<RefCell<PlayerState>>,
     reported_bounds: &Rc<RefCell<Option<PlayerWindowBounds>>>,
-    source_generation: u64,
     video: window_fit::WindowSize,
-    deferred_launch_fit: bool,
+    request: PlayerWindowFitRequest,
 ) {
     let debug = env::var_os("OKP_DEBUG_WINDOW_FIT").is_some();
     // Existing pixel-redline smokes intentionally hold the canonical 1120x680
@@ -832,50 +830,113 @@ pub(crate) fn fit_player_window_to_video(
             placement.position.y,
         );
     }
-    let was_mapped = window.is_mapped();
-    window.set_default_size(placement.size.width, placement.size.height);
-    move_resize_player_window_on_x11(window, placement.position, placement.size);
-    // A launch with media is deliberately fitted before its first Wayland map.
-    // Sampling the surface monitor immediately after that map observes GNOME's
-    // transient placement negotiation (on the dual-monitor QA host it reports
-    // the laptop twice before settling on the primary display) and can shrink a
-    // correctly requested primary-monitor size. Keep the pre-map request,
-    // complete that same transaction on the first map, and also guard against
-    // Mutter's `auto-maximize` policy: a near-workarea 4K fit can be maximized
-    // shortly after mapping even though the app never requested that state.
-    // Explicit fullscreen/maximized launches never take this path.
-    if !was_mapped {
+    let deferred_map = matches!(
+        request,
+        PlayerWindowFitRequest::Initial { deferred_map: true }
+    );
+    if deferred_map {
+        // The toplevel was realized early so libmpv could publish dimensions.
+        // GtkWindow::present can still map that realized surface at the cached
+        // 1120x680 builder size. Keep the compositor bootstrap fully hidden,
+        // issue the final configure once from the map edge, and reveal only
+        // after GTK reports the target client size.
+        window.set_opacity(0.0);
+        let target = placement;
+        let pending_configure = Rc::new(Cell::new(true));
+        window.connect_map(move |mapped_window| {
+            if !pending_configure.replace(false) {
+                return;
+            }
+            mapped_window.set_default_size(target.size.width, target.size.height);
+            move_resize_player_window_on_x11(mapped_window, target.position, target.size);
+            if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
+                eprintln!(
+                    "window fit configure: kind=initial target={}x{}+{},{} mapped=true",
+                    target.size.width, target.size.height, target.position.x, target.position.y,
+                );
+            }
+
+            let revealed = Rc::new(Cell::new(false));
+            let tick_revealed = Rc::clone(&revealed);
+            mapped_window.add_tick_callback(move |window, _| {
+                if tick_revealed.get() {
+                    glib::ControlFlow::Break
+                } else if window.width() == target.size.width
+                    && window.height() == target.size.height
+                {
+                    tick_revealed.set(true);
+                    window.set_opacity(1.0);
+                    if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
+                        eprintln!(
+                            "window fit visible: client={}x{} target={}x{}",
+                            window.width(),
+                            window.height(),
+                            target.size.width,
+                            target.size.height,
+                        );
+                    }
+                    glib::ControlFlow::Break
+                } else {
+                    glib::ControlFlow::Continue
+                }
+            });
+            let reveal_window = mapped_window.clone();
+            glib::timeout_add_local_once(Duration::from_secs(2), move || {
+                if !revealed.replace(true) {
+                    if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
+                        eprintln!(
+                            "window fit reveal fallback: client={}x{} target={}x{}",
+                            reveal_window.width(),
+                            reveal_window.height(),
+                            target.size.width,
+                            target.size.height,
+                        );
+                    }
+                    reveal_window.set_opacity(1.0);
+                }
+            });
+        });
+        window.set_default_size(placement.size.width, placement.size.height);
+        move_resize_player_window_on_x11(window, placement.position, placement.size);
         if debug {
-            eprintln!("window fit launch: keeping initial compositor request mapped={was_mapped}");
-        }
-        if deferred_launch_fit {
-            settle_deferred_launch_fit_on_map(
-                window,
-                state,
-                reported_bounds,
-                source_generation,
-                video,
-                work_area,
-                placement,
-            );
-            restore_deferred_launch_fit_after_compositor(
-                window,
-                state,
-                source_generation,
-                placement,
+            eprintln!(
+                "window fit staged: kind=initial target={}x{}+{},{} mapped=false",
+                placement.size.width,
+                placement.size.height,
+                placement.position.x,
+                placement.position.y,
             );
         }
         return;
     }
-    schedule_player_window_fit_settle(
-        window,
-        state,
-        reported_bounds,
-        source_generation,
-        video,
-        work_area,
-        placement,
-    );
+    window.set_default_size(placement.size.width, placement.size.height);
+    move_resize_player_window_on_x11(window, placement.position, placement.size);
+    if debug {
+        eprintln!(
+            "window fit configure: kind={} target={}x{}+{},{} mapped={}",
+            request.label(),
+            placement.size.width,
+            placement.size.height,
+            placement.position.x,
+            placement.position.y,
+            window.is_mapped(),
+        );
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlayerWindowFitRequest {
+    Initial { deferred_map: bool },
+    Explicit,
+}
+
+impl PlayerWindowFitRequest {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Initial { .. } => "initial",
+            Self::Explicit => "explicit",
+        }
+    }
 }
 
 pub(crate) fn fit_player_window_to_current_media(
@@ -911,11 +972,9 @@ pub(crate) fn fit_player_window_to_current_media(
         window_fit::ExplicitWindowFitAction::FitWindowed => {
             fit_player_window_to_video(
                 window,
-                state,
                 reported_bounds,
-                source_generation,
                 video,
-                false,
+                PlayerWindowFitRequest::Explicit,
             );
             status_toast.show("Window fitted to media");
         }
@@ -970,243 +1029,12 @@ fn schedule_explicit_player_window_fit(
 
         fit_player_window_to_video(
             &window,
-            &state,
             &reported_bounds,
-            source_generation,
             video,
-            false,
+            PlayerWindowFitRequest::Explicit,
         );
         glib::ControlFlow::Break
     });
-}
-
-fn settle_deferred_launch_fit_on_map(
-    window: &gtk::ApplicationWindow,
-    state: &Rc<RefCell<PlayerState>>,
-    reported_bounds: &Rc<RefCell<Option<PlayerWindowBounds>>>,
-    source_generation: u64,
-    video: window_fit::WindowSize,
-    requested_work_area: window_fit::WindowRect,
-    requested: window_fit::WindowPlacement,
-) {
-    let mapped_state = Rc::clone(state);
-    let mapped_bounds = Rc::clone(reported_bounds);
-    let pending = Rc::new(Cell::new(true));
-    window.connect_map(move |mapped_window| {
-        if !pending.replace(false)
-            || !window_fit_generation_is_current(mapped_window, &mapped_state, source_generation)
-        {
-            return;
-        }
-
-        // `GtkWindow::present` may restore the builder's default geometry when
-        // a realized launch is mapped after the video dimensions arrive. This
-        // is still the original load-time fit transaction: re-issue it once on
-        // the mapped toplevel, then use the normal monitor-aware settle path.
-        mapped_window.set_default_size(requested.size.width, requested.size.height);
-        move_resize_player_window_on_x11(mapped_window, requested.position, requested.size);
-        if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
-            eprintln!(
-                "window fit mapped launch: target={}x{}+{},{}",
-                requested.size.width,
-                requested.size.height,
-                requested.position.x,
-                requested.position.y,
-            );
-        }
-        schedule_player_window_fit_settle(
-            mapped_window,
-            &mapped_state,
-            &mapped_bounds,
-            source_generation,
-            video,
-            requested_work_area,
-            requested,
-        );
-    });
-}
-
-fn restore_deferred_launch_fit_after_compositor(
-    window: &gtk::ApplicationWindow,
-    state: &Rc<RefCell<PlayerState>>,
-    source_generation: u64,
-    target: window_fit::WindowPlacement,
-) {
-    let window = window.clone();
-    let state = Rc::clone(state);
-    glib::timeout_add_local_once(Duration::from_millis(1_200), move || {
-        if state.borrow().source_generation != source_generation || window.is_fullscreen() {
-            return;
-        }
-        if !window.is_maximized() {
-            return;
-        }
-
-        window.unmaximize();
-        window.set_default_size(target.size.width, target.size.height);
-        if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
-            eprintln!(
-                "window fit restored after compositor auto-maximize: target={}x{}+{},{}",
-                target.size.width, target.size.height, target.position.x, target.position.y,
-            );
-        }
-    });
-}
-
-fn schedule_player_window_fit_settle(
-    window: &gtk::ApplicationWindow,
-    state: &Rc<RefCell<PlayerState>>,
-    reported_bounds: &Rc<RefCell<Option<PlayerWindowBounds>>>,
-    source_generation: u64,
-    video: window_fit::WindowSize,
-    requested_work_area: window_fit::WindowRect,
-    requested: window_fit::WindowPlacement,
-) {
-    let settled_window = window.clone();
-    let settled_state = Rc::clone(state);
-    let settled_bounds = Rc::clone(reported_bounds);
-    glib::timeout_add_local_once(Duration::from_millis(300), move || {
-        if !window_fit_generation_is_current(&settled_window, &settled_state, source_generation) {
-            return;
-        }
-        let Some(first_work_area) = current_player_work_area(&settled_window, &settled_bounds)
-        else {
-            return;
-        };
-        glib::timeout_add_local_once(Duration::from_millis(300), move || {
-            if !window_fit_generation_is_current(&settled_window, &settled_state, source_generation)
-            {
-                return;
-            }
-            let Some(confirmed_work_area) =
-                current_player_work_area(&settled_window, &settled_bounds)
-            else {
-                return;
-            };
-            let confirmed_scale = current_player_scale(&settled_window);
-            let Some(confirmed) = window_fit::fit_physical_video_to_work_area(
-                video.width,
-                video.height,
-                confirmed_scale,
-                confirmed_work_area,
-            ) else {
-                return;
-            };
-            let changed = confirmed.size != requested.size;
-            if changed {
-                settled_window.set_default_size(confirmed.size.width, confirmed.size.height);
-                move_resize_player_window_on_x11(
-                    &settled_window,
-                    confirmed.position,
-                    confirmed.size,
-                );
-            }
-            if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
-                eprintln!(
-                    "window fit confirmed: requested-workarea={}x{}+{},{} first-workarea={}x{}+{},{} confirmed-workarea={}x{}+{},{} target={}x{} changed={}",
-                    requested_work_area.width,
-                    requested_work_area.height,
-                    requested_work_area.x,
-                    requested_work_area.y,
-                    first_work_area.width,
-                    first_work_area.height,
-                    first_work_area.x,
-                    first_work_area.y,
-                    confirmed_work_area.width,
-                    confirmed_work_area.height,
-                    confirmed_work_area.x,
-                    confirmed_work_area.y,
-                    confirmed.size.width,
-                    confirmed.size.height,
-                    changed,
-                );
-            }
-            finish_player_window_fit_after(
-                settled_window,
-                settled_state,
-                settled_bounds,
-                source_generation,
-                video,
-                confirmed,
-                if changed {
-                    Duration::from_millis(300)
-                } else {
-                    Duration::ZERO
-                },
-            );
-        });
-    });
-}
-
-fn finish_player_window_fit_after(
-    window: gtk::ApplicationWindow,
-    state: Rc<RefCell<PlayerState>>,
-    reported_bounds: Rc<RefCell<Option<PlayerWindowBounds>>>,
-    source_generation: u64,
-    video: window_fit::WindowSize,
-    target: window_fit::WindowPlacement,
-    delay: Duration,
-) {
-    glib::timeout_add_local_once(delay, move || {
-        if !window_fit_generation_is_current(&window, &state, source_generation) {
-            return;
-        }
-        let actual_width = window.width();
-        let actual_height = window.height();
-        let mut position_delay = Duration::ZERO;
-        if actual_width <= target.size.width
-            && actual_height <= target.size.height
-            && let Some(corrected) = window_fit::fill_client(
-                video.width,
-                video.height,
-                actual_width,
-                actual_height,
-                target.size.width,
-                target.size.height,
-            )
-        {
-            window.set_default_size(corrected.width, corrected.height);
-            position_delay = Duration::from_millis(150);
-        }
-        glib::timeout_add_local_once(position_delay, move || {
-            if !window_fit_generation_is_current(&window, &state, source_generation) {
-                return;
-            }
-            let Some(work_area) = current_player_work_area(&window, &reported_bounds) else {
-                return;
-            };
-            let final_size = window_fit::WindowSize {
-                width: window.width(),
-                height: window.height(),
-            };
-            let position = window_fit::centered_position(final_size, work_area);
-            let moved = move_resize_player_window_on_x11(&window, position, final_size);
-            if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
-                eprintln!(
-                    "window fit settled: client={}x{} workarea={}x{}+{},{} target=+{},{} backend={}",
-                    final_size.width,
-                    final_size.height,
-                    work_area.width,
-                    work_area.height,
-                    work_area.x,
-                    work_area.y,
-                    position.x,
-                    position.y,
-                    if moved { "x11" } else { "compositor" }
-                );
-            }
-        });
-    });
-}
-
-fn window_fit_generation_is_current(
-    window: &gtk::ApplicationWindow,
-    state: &RefCell<PlayerState>,
-    source_generation: u64,
-) -> bool {
-    state.borrow().source_generation == source_generation
-        && !window.is_fullscreen()
-        && !window.is_maximized()
 }
 
 pub(crate) fn open_runtime_launch_args(runtime: &AppRuntime, launch_args: &LaunchArgs) {
