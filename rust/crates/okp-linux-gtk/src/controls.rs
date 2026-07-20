@@ -1358,6 +1358,7 @@ pub(crate) fn build_controls(
     // canonical registry rather than this width-dependent list.
     let overflow_collapsed: Rc<RefCell<Vec<OscControlId>>> = Rc::new(RefCell::new(Vec::new()));
     let more_reach = PlayerCommandReach {
+        play: play_button.clone(),
         screenshot: screenshot_button.clone(),
         fullscreen: fullscreen_button.clone(),
         chapters: chapters_button.clone(),

@@ -197,6 +197,7 @@ pub(crate) fn populate_speed_popover(popover: &gtk::Popover, state: Rc<RefCell<P
 /// command surfaces invoke the exact same handlers as their direct controls.
 #[derive(Clone)]
 pub(crate) struct PlayerCommandReach {
+    pub(crate) play: gtk::Button,
     pub(crate) screenshot: gtk::Button,
     pub(crate) fullscreen: gtk::Button,
     pub(crate) chapters: gtk::Button,
@@ -319,12 +320,14 @@ fn searchable_player_command_content(
     let rows_host = gtk::Box::new(gtk::Orientation::Vertical, 2);
     rows_host.add_css_class("okp-command-results");
     let focus_rows = Rc::new(RefCell::new(Vec::<gtk::Button>::new()));
+    let menu_page = Rc::new(Cell::new(None::<PlayerCommandMenuPage>));
 
     let render = {
         let rows_host = rows_host.clone();
         let search = search.clone();
         let commands = Rc::new(commands);
         let focus_rows = Rc::clone(&focus_rows);
+        let menu_page = Rc::clone(&menu_page);
         let popover = popover.clone();
         let parent = parent.clone();
         let state = Rc::clone(&state);
@@ -337,6 +340,7 @@ fn searchable_player_command_content(
                 &commands,
                 query,
                 &focus_rows,
+                &menu_page,
                 &popover,
                 &parent,
                 Rc::clone(&state),
@@ -368,15 +372,20 @@ fn searchable_player_command_content(
     let key_rows = Rc::clone(&focus_rows);
     let key_popover = popover.clone();
     let key_search = search.clone();
+    let key_menu_page = Rc::clone(&menu_page);
     let keys = gtk::EventControllerKey::new();
     keys.set_propagation_phase(gtk::PropagationPhase::Capture);
     keys.connect_key_pressed(move |_, key, _, _| match key {
         gdk::Key::Escape => {
-            if key_search.text().is_empty() {
-                key_popover.popdown();
-            } else {
+            if !key_search.text().is_empty() {
                 key_search.set_text("");
                 key_search.grab_focus();
+            } else if key_menu_page.get().is_some() {
+                key_menu_page.set(None);
+                key_search.emit_by_name::<()>("changed", &[]);
+                key_search.grab_focus();
+            } else {
+                key_popover.popdown();
             }
             glib::Propagation::Stop
         }
@@ -412,6 +421,7 @@ fn render_player_command_rows(
     commands: &[ResolvedPlayerCommand],
     query: &str,
     focus_rows: &Rc<RefCell<Vec<gtk::Button>>>,
+    menu_page: &Rc<Cell<Option<PlayerCommandMenuPage>>>,
     popover: &gtk::Popover,
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
@@ -424,53 +434,118 @@ fn render_player_command_rows(
     }
     focus_rows.borrow_mut().clear();
 
-    let filtered = player_commands::filter_player_commands(commands, query);
-    if filtered.is_empty() {
-        let empty = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        empty.add_css_class("okp-command-no-results");
-        let title = gtk::Label::new(Some("No commands found"));
-        title.add_css_class("okp-command-no-results-title");
-        let hint = gtk::Label::new(Some("Try a command name or related term."));
-        hint.add_css_class("okp-command-no-results-hint");
-        empty.append(&title);
-        empty.append(&hint);
-        rows_host.append(&empty);
-        return;
-    }
-
-    let mut current_group = None;
-    for command in filtered {
-        if current_group != Some(command.group) {
-            current_group = Some(command.group);
-            rows_host.append(&player_command_group_title(command.group));
-        }
-
-        let button = player_command_button(&command);
-        if command.id == PlayerCommandId::ExportClip {
-            button.set_tooltip_text(Some(&clip_export_placeholder_reason(
-                current_clip_export_eligibility(&state),
-            )));
-        }
-        let activate_popover = popover.clone();
-        let activate_parent = parent.clone();
-        let activate_state = Rc::clone(&state);
-        let activate_toast = Rc::clone(&status_toast);
-        let activate_reach = reach.clone();
-        let id = command.id;
-        button.connect_clicked(move |_| {
-            player_commands::dispatch_player_command(surface, id, |id| {
-                dispatch_player_command_action(
-                    id,
-                    &activate_popover,
-                    &activate_parent,
-                    &activate_state,
-                    &activate_toast,
-                    &activate_reach,
-                );
+    if query.trim().is_empty() {
+        if let Some(page) = menu_page.get() {
+            let back = player_command_back_button(page);
+            let back_page = Rc::clone(menu_page);
+            let back_search = search.clone();
+            back.connect_clicked(move |_| {
+                back_page.set(None);
+                back_search.emit_by_name::<()>("changed", &[]);
+                back_search.grab_focus();
             });
-        });
-        rows_host.append(&button);
-        focus_rows.borrow_mut().push(button);
+            rows_host.append(&back);
+            focus_rows.borrow_mut().push(back);
+
+            for id in page.commands() {
+                let command = resolved_player_command(commands, *id);
+                append_player_command_button(
+                    rows_host,
+                    focus_rows,
+                    command,
+                    popover,
+                    parent,
+                    Rc::clone(&state),
+                    Rc::clone(&status_toast),
+                    reach,
+                    surface,
+                );
+            }
+            if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+                eprintln!(
+                    "interaction: player-command-page surface={surface:?} page={page:?} commands={}",
+                    page.commands().len()
+                );
+            }
+        } else {
+            for entry in player_commands::PLAYER_COMMAND_MENU_TOP_LEVEL {
+                match entry {
+                    PlayerCommandMenuEntry::Command(id) => {
+                        let mut command = resolved_player_command(commands, *id).clone();
+                        command.label = player_commands::player_command_menu_top_level_label(*id)
+                            .expect("top-level command must have a curated label")
+                            .to_owned();
+                        append_player_command_button(
+                            rows_host,
+                            focus_rows,
+                            &command,
+                            popover,
+                            parent,
+                            Rc::clone(&state),
+                            Rc::clone(&status_toast),
+                            reach,
+                            surface,
+                        );
+                    }
+                    PlayerCommandMenuEntry::Submenu(page) => {
+                        let button = player_command_submenu_button(*page);
+                        let next_page = Rc::clone(menu_page);
+                        let next_search = search.clone();
+                        let page = *page;
+                        button.connect_clicked(move |_| {
+                            next_page.set(Some(page));
+                            next_search.emit_by_name::<()>("changed", &[]);
+                            next_search.grab_focus();
+                        });
+                        rows_host.append(&button);
+                        focus_rows.borrow_mut().push(button);
+                    }
+                    PlayerCommandMenuEntry::Separator => {
+                        let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
+                        separator.add_css_class("okp-command-separator");
+                        rows_host.append(&separator);
+                    }
+                }
+            }
+            if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+                eprintln!(
+                    "interaction: player-command-home surface={surface:?} core-actions=8 submenus=4 close-media-top-level=true"
+                );
+            }
+        }
+    } else {
+        let filtered = player_commands::filter_player_commands(commands, query);
+        if filtered.is_empty() {
+            let empty = gtk::Box::new(gtk::Orientation::Vertical, 4);
+            empty.add_css_class("okp-command-no-results");
+            let title = gtk::Label::new(Some("No commands found"));
+            title.add_css_class("okp-command-no-results-title");
+            let hint = gtk::Label::new(Some("Try a command name or related term."));
+            hint.add_css_class("okp-command-no-results-hint");
+            empty.append(&title);
+            empty.append(&hint);
+            rows_host.append(&empty);
+            return;
+        }
+
+        let mut current_group = None;
+        for command in filtered {
+            if current_group != Some(command.group) {
+                current_group = Some(command.group);
+                rows_host.append(&player_command_group_title(command.group));
+            }
+            append_player_command_button(
+                rows_host,
+                focus_rows,
+                &command,
+                popover,
+                parent,
+                Rc::clone(&state),
+                Rc::clone(&status_toast),
+                reach,
+                surface,
+            );
+        }
     }
 
     let row_snapshot = focus_rows.borrow().clone();
@@ -502,6 +577,97 @@ fn render_player_command_rows(
         });
         button.add_controller(keys);
     }
+}
+
+fn resolved_player_command(
+    commands: &[ResolvedPlayerCommand],
+    id: PlayerCommandId,
+) -> &ResolvedPlayerCommand {
+    commands
+        .iter()
+        .find(|command| command.id == id)
+        .expect("curated menu command must exist in the registry")
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_player_command_button(
+    rows_host: &gtk::Box,
+    focus_rows: &Rc<RefCell<Vec<gtk::Button>>>,
+    command: &ResolvedPlayerCommand,
+    popover: &gtk::Popover,
+    parent: &gtk::ApplicationWindow,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+    reach: &PlayerCommandReach,
+    surface: PlayerCommandSurface,
+) {
+    let button = player_command_button(command);
+    if command.id == PlayerCommandId::ExportClip {
+        button.set_tooltip_text(Some(&clip_export_placeholder_reason(
+            current_clip_export_eligibility(&state),
+        )));
+    }
+    let activate_popover = popover.clone();
+    let activate_parent = parent.clone();
+    let activate_reach = reach.clone();
+    let id = command.id;
+    button.connect_clicked(move |_| {
+        player_commands::dispatch_player_command(surface, id, |id| {
+            dispatch_player_command_action(
+                id,
+                &activate_popover,
+                &activate_parent,
+                &state,
+                &status_toast,
+                &activate_reach,
+            );
+        });
+    });
+    rows_host.append(&button);
+    focus_rows.borrow_mut().push(button);
+}
+
+fn player_command_submenu_button(page: PlayerCommandMenuPage) -> gtk::Button {
+    let button = gtk::Button::new();
+    button.add_css_class("okp-command-row");
+    button.add_css_class("okp-command-submenu-row");
+
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let spacer = selection_check_icon();
+    spacer.set_opacity(0.0);
+    row.append(&spacer);
+    let label = gtk::Label::new(Some(page.label()));
+    label.add_css_class("okp-command-row-label");
+    label.set_xalign(0.0);
+    label.set_hexpand(true);
+    row.append(&label);
+    let arrow = gtk::Image::from_icon_name("go-next-symbolic");
+    arrow.add_css_class("okp-command-submenu-arrow");
+    row.append(&arrow);
+
+    button.set_child(Some(&row));
+    button.update_property(&[gtk::accessible::Property::Label(page.label())]);
+    button
+}
+
+fn player_command_back_button(page: PlayerCommandMenuPage) -> gtk::Button {
+    let button = gtk::Button::new();
+    button.add_css_class("okp-command-row");
+    button.add_css_class("okp-command-back-row");
+
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    row.append(&gtk::Image::from_icon_name("go-previous-symbolic"));
+    let label = gtk::Label::new(Some(page.label()));
+    label.add_css_class("okp-command-row-label");
+    label.set_xalign(0.0);
+    label.set_hexpand(true);
+    row.append(&label);
+    button.set_child(Some(&row));
+    button.update_property(&[gtk::accessible::Property::Label(&format!(
+        "Back from {}",
+        page.label()
+    ))]);
+    button
 }
 
 fn player_command_group_title(group: PlayerCommandGroup) -> gtk::Label {
@@ -569,11 +735,7 @@ fn set_player_command_popover_child(
             height: 520,
         });
 
-    let height = if surface == PlayerCommandSurface::ContextMenu {
-        size.height.min(400)
-    } else {
-        size.height
-    };
+    let height = size.height;
     content.set_width_request(size.width);
     let scroll = gtk::ScrolledWindow::new();
     scroll.add_css_class("okp-command-scroll");
@@ -590,6 +752,26 @@ fn set_player_command_popover_child(
     shell.remove(&rows);
     scroll.set_child(Some(&rows));
     shell.append(&scroll);
+
+    scroll.connect_map(move |mapped_scroll| {
+        let fit_scroll = mapped_scroll.clone();
+        glib::timeout_add_local_once(Duration::from_millis(50), move || {
+            let adjustment = fit_scroll.vadjustment();
+            let scrolling = adjustment.upper() > adjustment.page_size() + 0.5;
+            if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+                eprintln!(
+                    "interaction: player-command-menu-fit surface={surface:?} viewport-height={:.0} content-height={:.0} scrolling={scrolling} close-media-top-level=true",
+                    adjustment.page_size(),
+                    adjustment.upper(),
+                );
+            }
+            if env::var_os("OKP_ASSERT_COMMAND_MENU_FIT").is_some() && scrolling {
+                eprintln!(
+                    "interaction: player-command-menu-fit-assertion=fail surface={surface:?}"
+                );
+            }
+        });
+    });
     popover.set_child(Some(&shell));
 }
 
@@ -614,6 +796,10 @@ pub(crate) fn dispatch_player_command_action(
     }
 
     match id {
+        Id::PlayPause => {
+            popover.popdown();
+            reach.play.emit_clicked();
+        }
         Id::GoToTime => {
             popover.popdown();
             open_go_to_time_dialog(parent, Rc::clone(state), Rc::clone(status_toast));

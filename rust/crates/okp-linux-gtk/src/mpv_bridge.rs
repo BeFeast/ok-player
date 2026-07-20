@@ -1674,10 +1674,10 @@ pub(crate) fn show_player_context_menu(
     let (x, y) = point;
     let popover = gtk::Popover::new();
     prepare_track_popover(&popover, PlayerPopoverKind::AdvancedCommands);
-    popover.set_position(if y < f64::from(parent.height()) / 2.0 {
-        gtk::PositionType::Bottom
+    popover.set_position(if x < f64::from(parent.width()) / 2.0 {
+        gtk::PositionType::Right
     } else {
-        gtk::PositionType::Top
+        gtk::PositionType::Left
     });
     connect_popover_chrome_pin(&popover, chrome);
     popover.set_parent(player_root);
