@@ -235,8 +235,8 @@ mkdir -p "$PORTABILITY_EVIDENCE_DIR"
 apt-get update -qq
 apt-get install -y --no-install-recommends \
   binutils ca-certificates dbus-x11 file libegl1 libgbm1 libgl1 libglx0 \
-  libdecor-0-0 libgtk-4-1 libva2 libvulkan1 libwayland-client0 \
-  libwayland-egl1 libxss1 \
+  libdecor-0-0 libglib2.0-bin libgtk-4-1 libva2 libvulkan1 libwayland-client0 \
+  libwayland-egl1 libxss1 python3 \
   ffmpeg imagemagick procps ripgrep squashfs-tools x11-utils xauth xdotool xfwm4 xvfb >/dev/null
 apt-get satisfy -y --no-install-recommends 'libasound2 | libasound2t64' >/dev/null
 
