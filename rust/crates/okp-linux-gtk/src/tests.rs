@@ -429,7 +429,7 @@ fn linux_packages_pin_and_bundle_the_embedded_wayland_mpv() {
     assert!(collect.contains("patchelf --set-rpath '$ORIGIN'"));
     assert!(collect.contains("bundled-runtime.sha256"));
     assert!(collect.contains("okp_is_linux_platform_runtime"));
-    assert!(collect.contains("Refusing to queue target glibc component"));
+    assert!(collect.contains("Refusing to queue target platform library"));
     assert!(verify.contains("wayland-embed-display"));
     assert!(verify.contains("Packaged binary resolved libmpv outside its payload"));
     assert!(verify.contains("libavcodec.so"));
@@ -446,9 +446,11 @@ fn linux_packages_pin_and_bundle_the_embedded_wayland_mpv() {
     assert!(portability.contains("portability build marker:"));
     assert!(portability.contains("EXPECTED_BUILD_MARKER"));
     assert!(portability.contains("'libasound2 | libasound2t64'"));
+    assert!(portability.contains("'libjpeg62-turbo | libjpeg8'"));
     assert!(!deb.contains("libmpv2"));
     assert!(deb.contains("Recommends: ffmpeg"));
     assert!(deb.contains("libasound2 | libasound2t64"));
+    assert!(deb.contains("libjpeg62-turbo | libjpeg8"));
     assert!(deb.contains("libxss1"));
     assert!(deb.contains("libx11-6"));
     assert!(deb.contains("libxcursor1"));
@@ -545,6 +547,16 @@ fn bundled_runtime_manifest_rejects_target_desktop_libraries() {
         "libmount.so.1",
         "libasound.so.2",
         "libasound_module_pcm_pulse.so",
+        "libjpeg.so.62",
+        "libjpeg.so.8",
+        "libturbojpeg.so.0",
+        "libtiff.so.6",
+        "libtiffxx.so.6",
+        "libwebp.so.7",
+        "libwebpdemux.so.2",
+        "libwebpmux.so.3",
+        "libpng16.so.16",
+        "libpng.so.3",
         "libBrokenLocale.so.1",
         "libSegFault.so",
         "libc_malloc_debug.so.0",

@@ -16,10 +16,10 @@ done
 [[ -f "$LIBMPV" ]] || { echo "Bundled libmpv is missing: $LIBMPV" >&2; exit 1; }
 
 # The target desktop owns libc, graphics, GTK, X11/Wayland, Cairo/Pango, font,
-# audio, and session libraries. Bundling builder copies can make GTK, EGL, or
-# ALSA load an internally inconsistent platform stack. Only libmpv and its
-# media closure are copied; package dependencies and the portability gate
-# supply the platform.
+# audio, image-codec, and session libraries. Bundling builder copies can make
+# GTK, EGL, ALSA, or gdk-pixbuf load an internally inconsistent platform stack.
+# Only libmpv and its media closure are copied; package dependencies and the
+# portability gate supply the platform.
 
 rm -rf "$OUTPUT"
 mkdir -p "$OUTPUT"
@@ -47,8 +47,8 @@ declare -A queued=()
 
 enqueue() {
   local soname="$1" source="$2" target
-  if okp_is_linux_glibc_runtime "$soname"; then
-    echo "Refusing to queue target glibc component in bundled runtime: $soname" >&2
+  if okp_is_linux_platform_runtime "$soname"; then
+    echo "Refusing to queue target platform library in bundled runtime: $soname" >&2
     exit 1
   fi
   target="$OUTPUT/$soname"

@@ -239,6 +239,7 @@ apt-get install -y --no-install-recommends \
   libwayland-egl1 libxss1 python3 \
   ffmpeg imagemagick procps ripgrep squashfs-tools x11-utils xauth xdotool xfwm4 xvfb >/dev/null
 apt-get satisfy -y --no-install-recommends 'libasound2 | libasound2t64' >/dev/null
+apt-get satisfy -y --no-install-recommends 'libjpeg62-turbo | libjpeg8' >/dev/null
 
 scratch="$(mktemp -d -t ok-player-portability.XXXXXX)"
 trap 'rm -rf -- "$scratch"' EXIT
