@@ -301,6 +301,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         Rc::clone(&status_toast),
         Rc::clone(&chrome),
         PlayerCommandReach {
+            play: controls.play_button.clone(),
             screenshot: controls.screenshot_button.clone(),
             fullscreen: controls.fullscreen_button.clone(),
             chapters: controls.chapters_button.clone(),

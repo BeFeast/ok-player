@@ -26,8 +26,8 @@ use okp_core::hdr::HdrHandlingState;
 use okp_core::key_press::KeyPressLatch;
 use okp_core::linux_renderer::LinuxRendererMode;
 use okp_core::player_commands::{
-    self, PlayerCommandContext, PlayerCommandGroup, PlayerCommandId, PlayerCommandSurface,
-    ResolvedPlayerCommand,
+    self, PlayerCommandContext, PlayerCommandGroup, PlayerCommandId, PlayerCommandMenuEntry,
+    PlayerCommandMenuPage, PlayerCommandSurface, ResolvedPlayerCommand,
 };
 use okp_core::playlist::{Playlist, PlaylistItem, QueueInsertMode, RepeatMode};
 use okp_core::settings::{AppearanceTheme, HistoryRetention, SkippedUpdateVersions, UpdateChannel};

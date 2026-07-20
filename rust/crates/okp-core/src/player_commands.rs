@@ -74,6 +74,7 @@ impl PlayerCommandGroup {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PlayerCommandId {
+    PlayPause,
     GoToTime,
     CopyCurrentTime,
     AddBookmark,
@@ -125,6 +126,7 @@ pub enum PlayerCommandId {
 impl PlayerCommandId {
     pub const fn id(self) -> &'static str {
         match self {
+            Self::PlayPause => "play-pause",
             Self::GoToTime => "go-to-time",
             Self::CopyCurrentTime => "copy-current-time",
             Self::AddBookmark => "add-bookmark",
@@ -174,6 +176,133 @@ impl PlayerCommandId {
         }
     }
 }
+
+/// The four curated second-level pages shared by the overflow and context
+/// menus. The full searchable registry remains available independently of
+/// this hierarchy, so rare commands stay reachable without taxing the default
+/// menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlayerCommandMenuPage {
+    Video,
+    Playback,
+    Window,
+    ToolsAdvanced,
+}
+
+impl PlayerCommandMenuPage {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Video => "Video",
+            Self::Playback => "Playback",
+            Self::Window => "Window",
+            Self::ToolsAdvanced => "Tools / Advanced",
+        }
+    }
+
+    pub const fn commands(self) -> &'static [PlayerCommandId] {
+        match self {
+            Self::Video => VIDEO_MENU_COMMANDS,
+            Self::Playback => PLAYBACK_MENU_COMMANDS,
+            Self::Window => WINDOW_MENU_COMMANDS,
+            Self::ToolsAdvanced => TOOLS_ADVANCED_MENU_COMMANDS,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlayerCommandMenuEntry {
+    Command(PlayerCommandId),
+    Submenu(PlayerCommandMenuPage),
+    Separator,
+}
+
+/// The complete first level, in visual order. Close Media and Settings remain
+/// bottom-anchored after the four long-tail pages while every core playback
+/// action stays visible without scrolling at the default window size.
+pub const PLAYER_COMMAND_MENU_TOP_LEVEL: &[PlayerCommandMenuEntry] = &[
+    PlayerCommandMenuEntry::Command(PlayerCommandId::PlayPause),
+    PlayerCommandMenuEntry::Command(PlayerCommandId::Subtitles),
+    PlayerCommandMenuEntry::Command(PlayerCommandId::AudioTrack),
+    PlayerCommandMenuEntry::Command(PlayerCommandId::ChaptersUpNext),
+    PlayerCommandMenuEntry::Command(PlayerCommandId::SaveFrame),
+    PlayerCommandMenuEntry::Command(PlayerCommandId::Fullscreen),
+    PlayerCommandMenuEntry::Separator,
+    PlayerCommandMenuEntry::Submenu(PlayerCommandMenuPage::Video),
+    PlayerCommandMenuEntry::Submenu(PlayerCommandMenuPage::Playback),
+    PlayerCommandMenuEntry::Submenu(PlayerCommandMenuPage::Window),
+    PlayerCommandMenuEntry::Submenu(PlayerCommandMenuPage::ToolsAdvanced),
+    PlayerCommandMenuEntry::Separator,
+    PlayerCommandMenuEntry::Command(PlayerCommandId::CloseMedia),
+    PlayerCommandMenuEntry::Command(PlayerCommandId::OpenSettings),
+];
+
+/// Stable first-level labels. Search results and second-level pages retain the
+/// richer resolved labels (for example, Enter/Exit fullscreen), while the
+/// default surface uses the concise product vocabulary from the PRD.
+pub const fn player_command_menu_top_level_label(id: PlayerCommandId) -> Option<&'static str> {
+    match id {
+        PlayerCommandId::PlayPause => Some("Play / Pause"),
+        PlayerCommandId::Subtitles => Some("Subtitles"),
+        PlayerCommandId::AudioTrack => Some("Audio"),
+        PlayerCommandId::ChaptersUpNext => Some("Chapters"),
+        PlayerCommandId::SaveFrame => Some("Screenshot"),
+        PlayerCommandId::Fullscreen => Some("Fullscreen"),
+        PlayerCommandId::CloseMedia => Some("Close Media"),
+        PlayerCommandId::OpenSettings => Some("Settings..."),
+        _ => None,
+    }
+}
+
+const VIDEO_MENU_COMMANDS: &[PlayerCommandId] = &[
+    PlayerCommandId::AspectAuto,
+    PlayerCommandId::AspectWide,
+    PlayerCommandId::AspectStandard,
+    PlayerCommandId::AspectCinema,
+    PlayerCommandId::ZoomIn,
+    PlayerCommandId::ZoomOut,
+    PlayerCommandId::PanLeft,
+    PlayerCommandId::PanRight,
+    PlayerCommandId::PanUp,
+    PlayerCommandId::PanDown,
+    PlayerCommandId::CenterImage,
+    PlayerCommandId::RotateClockwise,
+    PlayerCommandId::FillScreen,
+    PlayerCommandId::Deinterlace,
+    PlayerCommandId::ResetVideo,
+];
+
+const PLAYBACK_MENU_COMMANDS: &[PlayerCommandId] = &[
+    PlayerCommandId::GoToTime,
+    PlayerCommandId::CopyCurrentTime,
+    PlayerCommandId::AddBookmark,
+    PlayerCommandId::AbLoop,
+    PlayerCommandId::RepeatMode,
+    PlayerCommandId::Shuffle,
+    PlayerCommandId::AutoAdvance,
+    PlayerCommandId::PlaybackSpeed,
+];
+
+const WINDOW_MENU_COMMANDS: &[PlayerCommandId] = &[
+    PlayerCommandId::FitWindowToMedia,
+    PlayerCommandId::MiniPlayer,
+];
+
+const TOOLS_ADVANCED_MENU_COMMANDS: &[PlayerCommandId] = &[
+    PlayerCommandId::OpenFile,
+    PlayerCommandId::OpenUrl,
+    PlayerCommandId::OpenFolder,
+    PlayerCommandId::OpenPlaylist,
+    PlayerCommandId::AddToQueue,
+    PlayerCommandId::PlayNext,
+    PlayerCommandId::SavePlaylist,
+    PlayerCommandId::MediaInfo,
+    PlayerCommandId::OpenFileLocation,
+    PlayerCommandId::SaveFrameWithSubtitles,
+    PlayerCommandId::CopyFrame,
+    PlayerCommandId::ExportClip,
+    PlayerCommandId::PrivateSession,
+    PlayerCommandId::ClearHistory,
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PlayerCommandSpec {
@@ -233,6 +362,13 @@ pub struct ResolvedPlayerCommand {
 const BOTH: PlayerCommandSurfacePolicy = PlayerCommandSurfacePolicy::Both;
 
 const COMMANDS: &[PlayerCommandSpec] = &[
+    command(
+        PlayerCommandId::PlayPause,
+        PlayerCommandGroup::PlaybackNavigation,
+        "Play / Pause",
+        &["play", "pause", "resume", "transport"],
+        Some(ShortcutAction::PlayPause),
+    ),
     command(
         PlayerCommandId::GoToTime,
         PlayerCommandGroup::PlaybackNavigation,
@@ -515,7 +651,7 @@ const COMMANDS: &[PlayerCommandSpec] = &[
     command(
         PlayerCommandId::SaveFrame,
         PlayerCommandGroup::Tools,
-        "Save frame",
+        "Screenshot",
         &["screenshot", "capture", "image"],
         Some(ShortcutAction::SaveScreenshot),
     ),
@@ -735,6 +871,80 @@ pub const fn geometry_action(id: PlayerCommandId) -> Option<VideoGeometryAction>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn curated_menu_has_exact_core_actions_and_four_second_level_pages() {
+        assert_eq!(
+            PLAYER_COMMAND_MENU_TOP_LEVEL,
+            &[
+                PlayerCommandMenuEntry::Command(PlayerCommandId::PlayPause),
+                PlayerCommandMenuEntry::Command(PlayerCommandId::Subtitles),
+                PlayerCommandMenuEntry::Command(PlayerCommandId::AudioTrack),
+                PlayerCommandMenuEntry::Command(PlayerCommandId::ChaptersUpNext),
+                PlayerCommandMenuEntry::Command(PlayerCommandId::SaveFrame),
+                PlayerCommandMenuEntry::Command(PlayerCommandId::Fullscreen),
+                PlayerCommandMenuEntry::Separator,
+                PlayerCommandMenuEntry::Submenu(PlayerCommandMenuPage::Video),
+                PlayerCommandMenuEntry::Submenu(PlayerCommandMenuPage::Playback),
+                PlayerCommandMenuEntry::Submenu(PlayerCommandMenuPage::Window),
+                PlayerCommandMenuEntry::Submenu(PlayerCommandMenuPage::ToolsAdvanced),
+                PlayerCommandMenuEntry::Separator,
+                PlayerCommandMenuEntry::Command(PlayerCommandId::CloseMedia),
+                PlayerCommandMenuEntry::Command(PlayerCommandId::OpenSettings),
+            ]
+        );
+        assert_eq!(
+            [
+                PlayerCommandId::PlayPause,
+                PlayerCommandId::Subtitles,
+                PlayerCommandId::AudioTrack,
+                PlayerCommandId::ChaptersUpNext,
+                PlayerCommandId::SaveFrame,
+                PlayerCommandId::Fullscreen,
+                PlayerCommandId::CloseMedia,
+                PlayerCommandId::OpenSettings,
+            ]
+            .map(|id| player_command_menu_top_level_label(id).unwrap()),
+            [
+                "Play / Pause",
+                "Subtitles",
+                "Audio",
+                "Chapters",
+                "Screenshot",
+                "Fullscreen",
+                "Close Media",
+                "Settings...",
+            ]
+        );
+    }
+
+    #[test]
+    fn curated_hierarchy_accounts_for_every_registry_command_once() {
+        let mut menu_commands = PLAYER_COMMAND_MENU_TOP_LEVEL
+            .iter()
+            .filter_map(|entry| match entry {
+                PlayerCommandMenuEntry::Command(id) => Some(*id),
+                PlayerCommandMenuEntry::Submenu(_) | PlayerCommandMenuEntry::Separator => None,
+            })
+            .collect::<Vec<_>>();
+        for page in [
+            PlayerCommandMenuPage::Video,
+            PlayerCommandMenuPage::Playback,
+            PlayerCommandMenuPage::Window,
+            PlayerCommandMenuPage::ToolsAdvanced,
+        ] {
+            menu_commands.extend_from_slice(page.commands());
+        }
+
+        let unique = menu_commands.iter().copied().collect::<HashSet<_>>();
+        let registry = player_command_registry()
+            .iter()
+            .map(|command| command.id)
+            .collect::<HashSet<_>>();
+        assert_eq!(menu_commands.len(), unique.len());
+        assert_eq!(unique, registry);
+    }
 
     #[test]
     fn more_and_context_resolve_to_exact_registry_parity() {

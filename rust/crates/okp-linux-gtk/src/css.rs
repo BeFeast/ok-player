@@ -2489,9 +2489,15 @@ const OKP_STYLESHEET: &str = "
             letter-spacing: 0.04em;
         }
 
+        separator.okp-command-separator {
+            min-height: 1px;
+            margin: 4px 8px;
+            background: rgba(23, 25, 28, 0.12);
+        }
+
         button.okp-command-row {
-            min-height: 34px;
-            padding: 5px 8px;
+            min-height: 26px;
+            padding: 3px 8px;
             border-radius: 6px;
             border: 1px solid transparent;
             background: transparent;
@@ -2524,6 +2530,15 @@ const OKP_STYLESHEET: &str = "
         button.okp-command-row:focus-visible {
             outline: none;
             box-shadow: inset 0 0 0 1px alpha(@okp_teal, 0.72);
+        }
+
+        button.okp-command-back-row {
+            margin-bottom: 4px;
+            font-weight: 700;
+        }
+
+        .okp-command-submenu-arrow {
+            color: rgba(23, 25, 28, 0.46);
         }
 
         .okp-command-row-label {
@@ -2681,6 +2696,14 @@ const OKP_STYLESHEET: &str = "
 
         popover.okp-command-popover.is-dark button.okp-command-row:disabled {
             color: rgba(255, 255, 255, 0.30);
+        }
+
+        popover.okp-command-popover.is-dark separator.okp-command-separator {
+            background: rgba(255, 255, 255, 0.12);
+        }
+
+        popover.okp-command-popover.is-dark .okp-command-submenu-arrow {
+            color: rgba(255, 255, 255, 0.48);
         }
 
         popover.okp-command-popover.is-dark .okp-command-no-results-title {

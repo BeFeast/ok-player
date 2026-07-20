@@ -800,6 +800,7 @@ fn overflow_menu_surfaces_every_collapsed_control_action() {
     let registry = player_commands::player_command_registry();
 
     for id in [
+        PlayerCommandId::PlayPause,
         PlayerCommandId::PlaybackSpeed,
         PlayerCommandId::Subtitles,
         PlayerCommandId::AudioTrack,
@@ -816,6 +817,7 @@ fn overflow_menu_surfaces_every_collapsed_control_action() {
     assert!(popovers.contains("reach.chapters.emit_clicked();"));
     assert!(popovers.contains("reach.screenshot.emit_clicked();"));
     assert!(popovers.contains("reach.fullscreen.emit_clicked();"));
+    assert!(popovers.contains("reach.play.emit_clicked();"));
 }
 
 #[test]
@@ -2478,6 +2480,18 @@ fn more_and_context_menu_share_one_registry_renderer_and_dispatcher() {
 
     let window = include_str!("window.rs");
     assert!(window.contains("connect_player_context_menu("));
+}
+
+#[test]
+fn shared_command_renderer_uses_the_curated_two_level_core_model() {
+    let source = include_str!("track_popovers.rs");
+    assert!(source.contains("player_commands::PLAYER_COMMAND_MENU_TOP_LEVEL"));
+    assert!(source.contains("PlayerCommandMenuEntry::Command(id)"));
+    assert!(source.contains("PlayerCommandMenuEntry::Submenu(page)"));
+    assert!(source.contains("PlayerCommandMenuEntry::Separator"));
+    assert!(source.contains("page.commands()"));
+    assert!(source.contains("close-media-top-level=true"));
+    assert!(source.contains("OKP_ASSERT_COMMAND_MENU_FIT"));
 }
 
 #[test]

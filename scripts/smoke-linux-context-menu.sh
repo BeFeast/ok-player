@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# X11/Xvfb smoke for the player-wide context-menu routing. It verifies that
-# non-interactive player surfaces open one canonical menu while controls and
+# X11/Xvfb smoke for the player-wide context-menu routing and curated menu fit.
+# It verifies that non-interactive player surfaces open one canonical menu,
+# the first level fits at 1280x720 with Close Media visible, and controls and
 # existing popovers retain their own secondary-click handling.
 set -euo pipefail
 
@@ -27,7 +28,7 @@ fi
 
 if ! env __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
   LIBGL_ALWAYS_SOFTWARE=1 \
-  xvfb-run "${xvfb_args[@]}" --server-args='-screen 0 1280x900x24 -nolisten tcp' \
+  xvfb-run "${xvfb_args[@]}" --server-args='-screen 0 1280x720x24 -nolisten tcp' \
   dbus-run-session -- bash -s -- "$BINARY" "$FIXTURE" "$OUT_DIR" \
     >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
 set -euo pipefail
@@ -45,6 +46,7 @@ export XDG_STATE_HOME="$OUT_DIR/state"
 export XDG_CONFIG_HOME="$OUT_DIR/config"
 export LIBGL_ALWAYS_SOFTWARE=1
 export OKP_DEBUG_INTERACTIONS=1
+export OKP_ASSERT_COMMAND_MENU_FIT=1
 export OKP_PLAYBACK_FRAME_PREVIEW=bright
 export OKP_FIXED_VIEWPORT_SMOKE=1
 export OKP_DISABLE_MPRIS=1
@@ -133,13 +135,31 @@ capture_context_focus() {
 
 timeout 50s "$BINARY" "$FIXTURE" >"$OUT_DIR/app.log" 2>&1 &
 app_pid=$!
-sleep 7
-window_id="$(xdotool search --onlyvisible --name 'OK Player' | head -n1)"
+window_id=""
+for _ in $(seq 1 60); do
+  window_id="$(xdotool search --onlyvisible --name 'OK Player' 2>/dev/null | head -n1 || true)"
+  [[ -n "$window_id" ]] && break
+  sleep 0.5
+done
 [[ -n "$window_id" ]] || { cat "$OUT_DIR/app.log" >&2; exit 1; }
 xdotool windowactivate "$window_id" >/dev/null 2>&1 || true
+sleep 4
+
+# The shared first level must render all eight core actions and four submenus,
+# keep Close Media top-level, and fit its allocated viewport without scrolling.
+open_context "$window_id" 560 330 context-menu-fit-1280x720.png
+grep -q 'player-command-home surface=ContextMenu core-actions=8 submenus=4 close-media-top-level=true' "$OUT_DIR/app.log" || {
+  echo "context menu did not render the curated first level" >&2
+  exit 1
+}
+grep -q 'player-command-menu-fit surface=ContextMenu .*scrolling=false close-media-top-level=true' "$OUT_DIR/app.log" || {
+  echo "context menu did not fit without scrolling at 1280x720" >&2
+  exit 1
+}
 
 drag_result=pass
-if [[ "${OKP_CONTEXT_SMOKE_SKIP_DRAG:-0}" != 1 ]]; then
+root_height="$(xwininfo -root | awk '/Height:/ {print $2; exit}')"
+if [[ "${OKP_CONTEXT_SMOKE_SKIP_DRAG:-0}" != 1 && "$root_height" -gt 720 ]]; then
   # The new secondary-click controller must not interfere with the existing
   # primary-button title drag. Move the window through the real WM drag path,
   # then restore the fixed origin used by the coordinate probes below.
@@ -188,7 +208,7 @@ if [[ "${OKP_CONTEXT_SMOKE_SKIP_DRAG:-0}" != 1 ]]; then
   xdotool windowmove "$window_id" 0 0
   sleep 1
 else
-  drag_result=skipped
+  drag_result=skipped-constrained-workarea
 fi
 
 # Video/canvas, title/background, and an empty OSC gap all route to the same
@@ -206,7 +226,7 @@ sleep 1
 xwininfo -id "$window_id" >"$OUT_DIR/fullscreen.xwininfo"
 fullscreen_width="$(awk '/Width:/ {print $2; exit}' "$OUT_DIR/fullscreen.xwininfo")"
 fullscreen_height="$(awk '/Height:/ {print $2; exit}' "$OUT_DIR/fullscreen.xwininfo")"
-[[ "$fullscreen_width" == 1280 && "$fullscreen_height" == 900 ]] || {
+[[ "$fullscreen_width" == 1280 && "$fullscreen_height" == 720 ]] || {
   echo "double-click did not enter fullscreen: ${fullscreen_width}x${fullscreen_height}" >&2
   exit 1
 }
@@ -220,7 +240,7 @@ sleep 1
 
 # Moving the player against the lower-right workarea edge forces GTK to flip
 # and clamp the click-anchored popover rather than placing it off-screen.
-xdotool windowmove "$window_id" 160 220
+xdotool windowmove "$window_id" 160 40
 sleep 1
 open_context "$window_id" 1090 520 workarea-edge-context.png
 xdotool windowmove "$window_id" 0 0
@@ -249,6 +269,14 @@ grep -q 'interaction: player-context-menu-suppressed' "$OUT_DIR/app.log" || {
 xdotool mousemove --window "$window_id" 1070 638 click 1
 sleep 1
 import -window root "$OUT_DIR/more-popover.png"
+grep -q 'player-command-home surface=More core-actions=8 submenus=4 close-media-top-level=true' "$OUT_DIR/app.log" || {
+  echo "overflow menu did not render the curated first level" >&2
+  exit 1
+}
+grep -q 'player-command-menu-fit surface=More .*scrolling=false close-media-top-level=true' "$OUT_DIR/app.log" || {
+  echo "overflow menu did not fit without scrolling at 1280x720" >&2
+  exit 1
+}
 before_popover="$(context_count)"
 xdotool mousemove --window "$window_id" 1010 540 click 3
 sleep 1
@@ -293,15 +321,20 @@ app_pid=""
 mv "$OUT_DIR/app.log" "$OUT_DIR/playback-app.log"
 timeout 30s "$BINARY" >"$OUT_DIR/app.log" 2>&1 &
 app_pid=$!
-sleep 6
-empty_window_id="$(xdotool search --onlyvisible --name 'OK Player' | head -n1)"
+empty_window_id=""
+for _ in $(seq 1 60); do
+  empty_window_id="$(xdotool search --onlyvisible --name 'OK Player' 2>/dev/null | head -n1 || true)"
+  [[ -n "$empty_window_id" ]] && break
+  sleep 0.5
+done
 [[ -n "$empty_window_id" ]] || { cat "$OUT_DIR/app.log" >&2; exit 1; }
 xdotool windowactivate "$empty_window_id" >/dev/null 2>&1 || true
+sleep 3
 open_context "$empty_window_id" 100 300 empty-canvas-context.png
 
 playback_opens="$(grep -c 'interaction: player-context-menu-open' "$OUT_DIR/playback-app.log" || true)"
 empty_opens="$(context_count)"
-[[ "$playback_opens" -eq 9 && "$empty_opens" -eq 1 ]] || {
+[[ "$playback_opens" -eq 10 && "$empty_opens" -eq 1 ]] || {
   echo "unexpected context-menu counts: playback=$playback_opens empty=$empty_opens" >&2
   exit 1
 }
@@ -311,6 +344,8 @@ printf '%s\n' \
   'title_background=pass' \
   'chrome_gap=pass' \
   'workarea_edge_anchor=pass' \
+  'context_menu_fit_1280x720=pass' \
+  'close_media_top_level=pass' \
   'control_isolation=pass' \
   'popover_isolation=pass' \
   'keyboard_traversal=pass' \
