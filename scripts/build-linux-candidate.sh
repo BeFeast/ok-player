@@ -245,6 +245,19 @@ deb_screenshot_smoke() {
 }
 run_gate deb-screenshot-smoke deb_screenshot_smoke
 
+# Run EOF and Close Media against the exact Debian payload. The Xvfb capture
+# proves the package-bound state transition, opaque pixels, and welcome identity;
+# native Wayland subsurface retirement remains an operator-only acceptance row.
+deb_idle_return_smoke() {
+  local smoke_root="$OUT_DIR/deb-idle-return-root"
+  local smoke_output="$OUT_DIR/deb-idle-return-smoke"
+  mkdir -p "$smoke_root"
+  dpkg-deb -x "$DEB" "$smoke_root"
+  "$CHECKOUT/scripts/smoke-linux-idle-return.sh" \
+    "$smoke_root/usr/lib/ok-player/ok-player" "$smoke_output"
+}
+run_gate deb-idle-return-smoke deb_idle_return_smoke
+
 # Headless launch smoke: prove the idle surface once, then require the complete
 # fit-only lifecycle three consecutive times with no retry inside the gate.
 headless_launch_smoke() {

@@ -4669,6 +4669,39 @@ fn benign_eof_keeps_the_normal_playlist_path_available() {
 }
 
 #[test]
+fn eof_without_an_auto_advance_target_returns_to_idle() {
+    let path = PathBuf::from("/media/movie.mkv");
+    let item = PlaylistItem::Local(path.clone());
+    let mut playlist = Playlist::from_items(vec![item.clone()], Some(&item), false);
+    playlist.set_auto_advance(false);
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(path),
+        playlist,
+        media_load_state: network_media::MediaLoadState::Playing,
+        ..PlayerState::default()
+    }));
+
+    assert!(!advance_playlist_on_eof(&state));
+
+    let state = state.borrow();
+    assert!(state.current_file.is_none());
+    assert!(state.playlist.items().is_empty());
+    assert_eq!(state.media_load_state, network_media::MediaLoadState::Idle);
+}
+
+#[test]
+fn native_video_background_is_transparent_only_while_media_is_active() {
+    let css = include_str!("css.rs");
+    let bridge = include_str!("mpv_bridge.rs");
+
+    assert!(css.contains(".okp-root.okp-native-video.has-active-video-plane"));
+    assert!(css.contains("window.okp-player-window.okp-native-video.has-active-video-plane"));
+    assert!(!css.contains("window.okp-player-window.okp-native-video,\n"));
+    assert!(bridge.contains("sync_native_video_background(&window, &root_surface, has_media)"));
+    assert!(bridge.contains("remove_css_class(\"has-active-video-plane\")"));
+}
+
+#[test]
 fn apply_endfile_error_marks_current_local_source_failed() {
     // A fresh EndFile::Error for the current local file transitions the surface
     // to Failed and keeps the local source retryable.

@@ -647,6 +647,10 @@ pub(crate) fn advance_playlist_on_eof(state: &Rc<RefCell<PlayerState>>) -> bool 
     }
 
     let Some(index) = target else {
+        // okp-core has resolved this EOF to no follow-up item (auto-advance is
+        // disabled, or the queue ended without Repeat=All). Retire the ended
+        // source so the shell projects the canonical idle/welcome surface.
+        clear_loaded_media_state(state);
         return false;
     };
     let Some(next_item) = playlist.get(index).cloned() else {
