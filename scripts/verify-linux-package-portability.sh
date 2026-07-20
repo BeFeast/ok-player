@@ -229,7 +229,7 @@ apt-get install -y --no-install-recommends \
   binutils ca-certificates dbus-x11 file libegl1 libgbm1 libgl1 libglx0 \
   libdecor-0-0 libgtk-4-1 libva2 libvulkan1 libwayland-client0 \
   libwayland-egl1 libxss1 \
-  ffmpeg imagemagick procps squashfs-tools x11-utils xauth xdotool xfwm4 xvfb >/dev/null
+  ffmpeg imagemagick procps ripgrep squashfs-tools x11-utils xauth xdotool xfwm4 xvfb >/dev/null
 apt-get satisfy -y --no-install-recommends 'libasound2 | libasound2t64' >/dev/null
 
 scratch="$(mktemp -d -t ok-player-portability.XXXXXX)"
@@ -288,6 +288,9 @@ media_render_smokes() {
   "/workspace/scripts/smoke-linux-fullscreen-chrome.sh" \
     "$binary" "$scratch/${label}-fullscreen" "$scratch/bright.mkv" bright
   echo "portability media render: $label fullscreen PASS"
+  "/workspace/scripts/smoke-linux-compact-mode.sh" \
+    "$binary" "$scratch/${label}-compact"
+  echo "portability media render: $label compact transition PASS"
 }
 
 ffmpeg -hide_banner -loglevel error -y \
@@ -315,7 +318,7 @@ CONTAINER
   done
   targets_json+=']'
   verification_mode=foreign-container
-  checks_json='["no-bundled-glibc-runtime", "all-bundled-elf-dependency-equivalence", "all-bundled-elf-ldd", "appimage-package-build-marker", "appimage-media-narrow-width", "appimage-media-fullscreen", "debian-package-build-marker", "debian-media-narrow-width", "debian-media-fullscreen"]'
+  checks_json='["no-bundled-glibc-runtime", "all-bundled-elf-dependency-equivalence", "all-bundled-elf-ldd", "appimage-package-build-marker", "appimage-media-narrow-width", "appimage-media-fullscreen", "appimage-media-compact-transition", "debian-package-build-marker", "debian-media-narrow-width", "debian-media-fullscreen", "debian-media-compact-transition"]'
 fi
 
 mkdir -p "$(dirname -- "$REPORT")"

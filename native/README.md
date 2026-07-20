@@ -41,7 +41,9 @@ panels, popovers, subtitles rendered by libmpv, and input remain unchanged while
 bypasses `GtkGLArea` and GSK composition. The shell supplies GDK's `wl_display*` to libmpv as
 `MPV_RENDER_PARAM_WL_DISPLAY`, retaining the GDK display until the render context is freed for
 direct VAAPI interop. X11 uses the compatibility `GtkGLArea` path; a Wayland A/B run can explicitly
-select it with `OKP_VIDEO_BACKEND=gtk`.
+select it with `OKP_VIDEO_BACKEND=gtk`. Standard and Mini-player chrome must both keep the GTK
+parent transparent; the live Wayland presentation harness includes a native Mini-player row so an
+opaque compact parent cannot silently cover a still-presenting child surface.
 
 The Fedora RPM makes this boundary enforceable: its spec requires
 `pkgconfig(mpv)`/`mpv-libs`, sets `OKP_REQUIRE_SYSTEM_MPV=1`, and installs no

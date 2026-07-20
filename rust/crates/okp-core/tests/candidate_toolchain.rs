@@ -672,8 +672,8 @@ fn native_portability_gate_rejects_undeclared_host_dependencies() {
 }
 
 #[test]
-fn foreign_portability_report_requires_fullscreen_media_checks() {
-    let fixture = unique_temp_dir("okp-foreign-portability-fullscreen");
+fn foreign_portability_report_requires_fullscreen_and_compact_media_checks() {
+    let fixture = unique_temp_dir("okp-foreign-portability-media");
     let deb = fixture.path().join("ok-player-test_1.0.0_amd64.deb");
     let appimage = fixture.path().join("OK-Player-test-x86_64.AppImage");
     let report = fixture.path().join("portability-report.json");
@@ -721,9 +721,11 @@ fn foreign_portability_report_requires_fullscreen_media_checks() {
         "all-bundled-elf-dependency-equivalence",
         "all-bundled-elf-ldd",
         "appimage-package-build-marker",
-        "appimage-media-render",
+        "appimage-media-narrow-width",
+        "appimage-media-fullscreen",
         "debian-package-build-marker",
-        "debian-media-render",
+        "debian-media-narrow-width",
+        "debian-media-fullscreen",
     ]);
     let rejected = Command::new("/bin/bash")
         .arg(portability_report_script())
@@ -731,7 +733,7 @@ fn foreign_portability_report_requires_fullscreen_media_checks() {
         .arg(TEST_SOURCE_SHA)
         .env("OKP_PORTABILITY_REQUIRED_MODE", "foreign-container")
         .output()
-        .expect("historical portability report should be checked");
+        .expect("pre-compact portability report should be checked");
     assert_eq!(rejected.status.code(), Some(1));
 
     write_report(vec![
@@ -741,9 +743,11 @@ fn foreign_portability_report_requires_fullscreen_media_checks() {
         "appimage-package-build-marker",
         "appimage-media-narrow-width",
         "appimage-media-fullscreen",
+        "appimage-media-compact-transition",
         "debian-package-build-marker",
         "debian-media-narrow-width",
         "debian-media-fullscreen",
+        "debian-media-compact-transition",
     ]);
     let accepted = Command::new("/bin/bash")
         .arg(portability_report_script())
@@ -751,7 +755,7 @@ fn foreign_portability_report_requires_fullscreen_media_checks() {
         .arg(TEST_SOURCE_SHA)
         .env("OKP_PORTABILITY_REQUIRED_MODE", "foreign-container")
         .output()
-        .expect("fullscreen-bound portability report should be checked");
+        .expect("media-bound portability report should be checked");
     assert!(
         accepted.status.success(),
         "{}",
