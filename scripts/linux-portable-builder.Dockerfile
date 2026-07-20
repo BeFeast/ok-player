@@ -1,5 +1,6 @@
-# Ubuntu 26.04 matches the supported native candidate builder's media ABI generation.
-FROM ubuntu@sha256:3131b4cc82a783df6c9df078f86e01819a13594b865c2cad47bd1bca2b7063bb AS media
+# Debian 13 is the oldest supported Linux runtime and therefore defines the
+# maximum glibc floor for every object copied into a portable package.
+FROM debian@sha256:9bb8a3626890e084ab54e888fdd7c4b6d2f119071cd4c5dc5fecb4d73062aa5f AS media
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PATH=/root/.cargo/bin:${PATH}
@@ -9,7 +10,7 @@ COPY linux-candidate-toolchain.sh /tmp/linux-candidate-toolchain.sh
 
 RUN apt-get update -qq \
     && packages="$(OKP_CANDIDATE_TOOLCHAIN_MANIFEST=/tmp/linux-candidate-toolchain.manifest \
-      bash /tmp/linux-candidate-toolchain.sh --print-portable-ubuntu-packages | tr '\n' ' ')" \
+      bash /tmp/linux-candidate-toolchain.sh --print-portable-debian-packages | tr '\n' ' ')" \
     && apt-get install -y -qq --no-install-recommends \
       $packages \
       appstream appstream-compose ca-certificates curl dpkg-dev \

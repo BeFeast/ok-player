@@ -138,7 +138,7 @@ okp_candidate_toolchain_preflight() {
   fi
 }
 
-okp_candidate_ubuntu_packages() {
+okp_candidate_portable_packages() {
   local include_dotnet_tools="${1:-true}"
   local rows kind name probe package
   local -A seen=()
@@ -160,10 +160,10 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
       okp_candidate_toolchain_preflight
       ;;
     --print-ubuntu-packages)
-      okp_candidate_ubuntu_packages
+      okp_candidate_portable_packages
       ;;
-    --print-portable-ubuntu-packages)
-      okp_candidate_ubuntu_packages false
+    --print-portable-debian-packages)
+      okp_candidate_portable_packages false
       ;;
     --check-build-script)
       [[ $# -eq 2 ]] || {
@@ -180,7 +180,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
       okp_candidate_verify_gate_script_requirements "$2"
       ;;
     *)
-      echo "usage: $0 [--print-ubuntu-packages | --print-portable-ubuntu-packages | --check-build-script PATH | --check-gate-script PATH]" >&2
+      echo "usage: $0 [--print-ubuntu-packages | --print-portable-debian-packages | --check-build-script PATH | --check-gate-script PATH]" >&2
       exit 2
       ;;
   esac

@@ -33,9 +33,9 @@ dotnet tool install --global vpk --version 1.2.0
 
 The manifest's `command-or-dotnet-tool|vpk|vpk|dotnet-sdk-9.0` row is the
 native-host provisioning source for that SDK package. Portable release images
-must not feed that row to the base Ubuntu package install: Ubuntu's default
+must not feed that row to the base distro package install: Debian's default
 sources do not contain the Microsoft SDK, and Debian packaging does not need
-Velopack. `--print-portable-ubuntu-packages` therefore emits only the shared
+Velopack. `--print-portable-debian-packages` therefore emits only the shared
 media build dependencies. The portable Dockerfile uses that view for its
 `media`/`deb` targets and installs .NET 9 with Microsoft's install script plus
 the pinned `vpk` tool only in the `appimage` target. Package preflight follows
@@ -48,11 +48,12 @@ requirement. The scheduled native-builder preflight keeps the full default gate
 list and default tool probes, validating both package paths plus portability
 before acquiring the build lock.
 
-The hosted stable release uses the digest-pinned Ubuntu 26.04 image in
-`scripts/linux-portable-builder.Dockerfile`. That baseline deliberately matches
-the supported native candidate builder's FFmpeg/libplacebo generation. A
-portable release must not silently fall back to an older media closure merely
-because its orchestrating GitHub runner is Ubuntu 24.04.
+The hosted stable release uses the digest-pinned Debian 13 image in
+`scripts/linux-portable-builder.Dockerfile`. Debian 13 is the oldest supported
+runtime, so every compiled or copied ELF object has a glibc requirement no
+newer than the support floor. Cross-distro verification then runs the exact
+packages in both Debian testing and Ubuntu 26.04 containers so the builder and
+verification environments remain independent.
 
 The preflight aggregates every missing command and pkg-config module into one
 failure line before the build lock is acquired. New external commands in
@@ -155,9 +156,9 @@ lock after their direct parent returns.
      each resolution must be bundle-local or owned by a package named in the
      Debian `Depends` field, and both extracted executables must carry the
      embedded source marker. If Docker or Podman is available, the same gate also
-     runs clean Debian testing `ldd`, rejects bundled target desktop libraries,
-     and executes the canonical real-media narrow-width and bright-video
-     fullscreen render smokes for both artifacts. The hash-bound
+     runs clean Debian testing and Ubuntu 26.04 `ldd`, rejects bundled glibc and
+     target desktop libraries, and executes the canonical real-media narrow-width
+     and bright-video fullscreen render smokes for both artifacts. The hash-bound
      `portability-report.json` records which mode ran and is required for
      promotion and later public publication
    - package identity + SHA-256 verification (`SHA256SUMS`, `package-identity.json`)

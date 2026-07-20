@@ -47,6 +47,10 @@ declare -A queued=()
 
 enqueue() {
   local soname="$1" source="$2" target
+  if okp_is_linux_glibc_runtime "$soname"; then
+    echo "Refusing to queue target glibc component in bundled runtime: $soname" >&2
+    exit 1
+  fi
   target="$OUTPUT/$soname"
   [[ -f "$source" ]] || { echo "Resolved runtime object is missing: $source" >&2; exit 1; }
   if [[ -e "$target" ]]; then
@@ -91,5 +95,6 @@ done
 ) >"$OUTPUT/bundled-runtime.sha256"
 
 okp_verify_linux_bundled_runtime_manifest "$OUTPUT/bundled-runtime.sha256"
+okp_verify_no_linux_glibc_runtime_files "$OUTPUT"
 
 printf '%s\n' "$OUTPUT"

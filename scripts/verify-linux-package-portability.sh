@@ -6,12 +6,31 @@ set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/scripts/ok-player-scratch.sh"
+source "$ROOT/scripts/linux-bundled-mpv-runtime-policy.sh"
 DEB="${1:?usage: verify-linux-package-portability.sh <deb> <appimage> <report.json> <source-sha>}"
 APPIMAGE="${2:?usage: verify-linux-package-portability.sh <deb> <appimage> <report.json> <source-sha>}"
 REPORT="${3:-$ROOT/artifacts/linux/portability-report.json}"
 EXPECTED_SOURCE_SHA="${4:?usage: verify-linux-package-portability.sh <deb> <appimage> <report.json> <source-sha>}"
-TARGET_IMAGE="${OKP_PORTABILITY_IMAGE:-debian:testing-slim}"
 CONTAINER_MODE="${OKP_PORTABILITY_CONTAINER_MODE:-auto}"
+
+if [[ -n "${OKP_PORTABILITY_IMAGES:-}" ]]; then
+  TARGET_IMAGES_TEXT="$OKP_PORTABILITY_IMAGES"
+elif [[ -n "${OKP_PORTABILITY_IMAGE:-}" ]]; then
+  TARGET_IMAGES_TEXT="$OKP_PORTABILITY_IMAGE"
+else
+  TARGET_IMAGES_TEXT="debian:testing-slim ubuntu:26.04"
+fi
+read -r -a TARGET_IMAGES <<<"$TARGET_IMAGES_TEXT"
+(( ${#TARGET_IMAGES[@]} > 0 )) || {
+  echo "Portability verification requires at least one target image" >&2
+  exit 2
+}
+for target_image in "${TARGET_IMAGES[@]}"; do
+  [[ "$target_image" =~ ^[[:alnum:]./@:_-]+$ ]] || {
+    echo "Invalid portability target image: $target_image" >&2
+    exit 2
+  }
+done
 
 for tool in awk basename chmod cp dirname dpkg-deb dpkg-query ldd mkdir mktemp objdump readlink rm sed sha256sum strings; do
   command -v "$tool" >/dev/null 2>&1 || { echo "Missing required tool: $tool" >&2; exit 127; }
@@ -140,6 +159,12 @@ check_build_marker() {
   echo "portability build marker: $label PASS"
 }
 
+check_no_bundled_glibc() {
+  local root="$1" label="$2"
+  okp_verify_no_linux_glibc_runtime_files "$root"
+  echo "portability bundled glibc exclusion: $label PASS"
+}
+
 DEB_ROOT="$WORK/deb"
 APP_ROOT="$WORK/appimage/squashfs-root"
 mkdir -p "$DEB_ROOT" "$WORK/appimage"
@@ -149,6 +174,8 @@ dpkg-deb -x "$DEB" "$DEB_ROOT"
   "$APPIMAGE_EXEC" --appimage-extract >/dev/null
 )
 
+check_no_bundled_glibc "$DEB_ROOT/usr/lib/ok-player" debian
+check_no_bundled_glibc "$APP_ROOT/usr/bin" appimage
 check_elf_tree "$DEB_ROOT/usr/lib/ok-player" "$DEB_ROOT/usr/lib/ok-player" debian
 check_elf_tree "$APP_ROOT/usr/bin" "$APP_ROOT/usr/bin" appimage
 check_build_marker "$APP_ROOT/usr/bin/ok-player" appimage
@@ -167,25 +194,35 @@ if [[ "$CONTAINER_MODE" == required && -z "$CONTAINER_RUNTIME" ]]; then
 fi
 
 verification_mode=native-equivalence
-target_image_json=null
-target_image_id_json=null
-checks_json='["all-bundled-elf-dependency-equivalence", "appimage-package-build-marker", "debian-package-build-marker"]'
+targets_json='[]'
+checks_json='["no-bundled-glibc-runtime", "all-bundled-elf-dependency-equivalence", "appimage-package-build-marker", "debian-package-build-marker"]'
 
 if [[ "$CONTAINER_MODE" != skip && -n "$CONTAINER_RUNTIME" ]]; then
-  "$CONTAINER_RUNTIME" pull "$TARGET_IMAGE" >/dev/null
-  IMAGE_ID="$("$CONTAINER_RUNTIME" image inspect --format '{{.Id}}' "$TARGET_IMAGE")"
-  [[ "$IMAGE_ID" == sha256:* ]] || IMAGE_ID="sha256:$IMAGE_ID"
+  targets_json='['
+  separator=''
+  for target_image in "${TARGET_IMAGES[@]}"; do
+    "$CONTAINER_RUNTIME" pull "$target_image" >/dev/null
+    image_id="$("$CONTAINER_RUNTIME" image inspect --format '{{.Id}}' "$target_image")"
+    [[ "$image_id" == sha256:* ]] || image_id="sha256:$image_id"
+    [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+      echo "Portability target image has an invalid immutable ID: $target_image => $image_id" >&2
+      exit 1
+    }
 
-  "$CONTAINER_RUNTIME" run --rm -i \
+    "$CONTAINER_RUNTIME" run --rm -i \
     --mount "type=bind,src=$ROOT,dst=/workspace,readonly" \
     --mount "type=bind,src=$ARTIFACT_DIR,dst=/artifacts/deb,readonly" \
     --mount "type=bind,src=$APPIMAGE_DIR,dst=/artifacts/appimage,readonly" \
     -e DEB_NAME="$DEB_NAME" \
     -e APPIMAGE_NAME="$APPIMAGE_NAME" \
     -e EXPECTED_BUILD_MARKER="$EXPECTED_BUILD_MARKER" \
-    "$TARGET_IMAGE" bash -s <<'CONTAINER'
+    -e PORTABILITY_TARGET_IMAGE="$target_image" \
+    "$target_image" bash -s <<'CONTAINER'
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
+source /workspace/scripts/linux-bundled-mpv-runtime-policy.sh
+
+echo "portability target: $PORTABILITY_TARGET_IMAGE"
 
 apt-get update -qq
 apt-get install -y --no-install-recommends \
@@ -237,6 +274,12 @@ check_build_marker() {
   echo "portability build marker: $label PASS"
 }
 
+check_no_bundled_glibc() {
+  local root="$1" label="$2"
+  okp_verify_no_linux_glibc_runtime_files "$root"
+  echo "portability bundled glibc exclusion: $label PASS"
+}
+
 media_render_smokes() {
   local binary="$1" label="$2"
   "/workspace/scripts/smoke-linux-narrow-width.sh" \
@@ -253,6 +296,7 @@ ffmpeg -hide_banner -loglevel error -y \
   "$scratch/bright.mkv"
 
 APP_ROOT="$appimage_root/squashfs-root"
+check_no_bundled_glibc "$APP_ROOT/usr/bin" appimage
 check_elf_tree "$APP_ROOT"
 check_build_marker "$APP_ROOT/usr/bin/ok-player" appimage
 media_render_smokes "$APP_ROOT/usr/bin/ok-player" appimage
@@ -260,15 +304,18 @@ media_render_smokes "$APP_ROOT/usr/bin/ok-player" appimage
 depends="$(dpkg-deb -f "/artifacts/deb/$DEB_NAME" Depends)"
 apt-get satisfy -y --no-install-recommends "$depends" >/dev/null
 dpkg -i "/artifacts/deb/$DEB_NAME" >/dev/null
+check_no_bundled_glibc /usr/lib/ok-player debian
 check_elf_tree /usr/lib/ok-player
 check_build_marker /usr/bin/ok-player debian
 media_render_smokes /usr/bin/ok-player debian
 CONTAINER
 
+    targets_json+="${separator}{\"image\":\"$target_image\",\"image_id\":\"$image_id\"}"
+    separator=,
+  done
+  targets_json+=']'
   verification_mode=foreign-container
-  target_image_json="\"$TARGET_IMAGE\""
-  target_image_id_json="\"$IMAGE_ID\""
-  checks_json='["all-bundled-elf-dependency-equivalence", "all-bundled-elf-ldd", "appimage-package-build-marker", "appimage-media-narrow-width", "appimage-media-fullscreen", "debian-package-build-marker", "debian-media-narrow-width", "debian-media-fullscreen"]'
+  checks_json='["no-bundled-glibc-runtime", "all-bundled-elf-dependency-equivalence", "all-bundled-elf-ldd", "appimage-package-build-marker", "appimage-media-narrow-width", "appimage-media-fullscreen", "debian-package-build-marker", "debian-media-narrow-width", "debian-media-fullscreen"]'
 fi
 
 mkdir -p "$(dirname -- "$REPORT")"
@@ -276,10 +323,9 @@ deb_sha256="$(sha256sum -- "$DEB" | awk '{print $1}')"
 appimage_sha256="$(sha256sum -- "$APPIMAGE" | awk '{print $1}')"
 cat >"$REPORT" <<JSON
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "verification_mode": "$verification_mode",
-  "target_image": $target_image_json,
-  "target_image_id": $target_image_id_json,
+  "targets": $targets_json,
   "source_sha": "$EXPECTED_SOURCE_SHA",
   "build_marker": "$EXPECTED_BUILD_MARKER",
   "status": "pass",

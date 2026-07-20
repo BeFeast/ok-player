@@ -15,11 +15,12 @@ the corresponding distro ALSA runtime instead of loading a bundled builder
 copy. Fedora remains on its explicit system-mpv packaging contract.
 
 Shipping Debian and AppImage artifacts are built inside the repository's
-digest-pinned Ubuntu 26.04 builder image. This matches the supported native
-candidate builder's FFmpeg/libplacebo generation so same-source stable and
-candidate packages do not receive materially different media runtimes. The
-target desktop still supplies glibc, ALSA, GTK, Wayland/X11, and graphics-driver
-ABI libraries according to the package dependency and portability contracts.
+digest-pinned Debian 13 builder image, which is the oldest supported runtime.
+This bounds the bundled media closure to the support-floor glibc ABI. The
+target desktop still supplies the complete glibc family, ALSA, GTK,
+Wayland/X11, and graphics-driver ABI libraries according to the package
+dependency and portability contracts. Package verification runs independently
+on Debian testing and Ubuntu 26.04.
 
 The embed patch is kept at
 `rust/patches/mpv-v0.40.0-wayland-embed.patch`. The small
