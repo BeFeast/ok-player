@@ -113,6 +113,56 @@ fn available_gapless_setting_reflects_the_persisted_preference() {
 }
 
 #[test]
+fn video_hardware_decode_uses_the_shared_settings_switch_geometry() {
+    assert_eq!(SETTINGS_SWITCH_WIDTH, 39);
+    assert_eq!(SETTINGS_SWITCH_HEIGHT, 22);
+    assert_eq!(SETTINGS_SWITCH_KNOB_SIZE, 16);
+    assert_eq!(SETTINGS_SWITCH_WIDTH + 3 * 2, 45);
+    assert_eq!(SETTINGS_SWITCH_HEIGHT + 3 * 2, 28);
+
+    let css = include_str!("css.rs");
+    for rule in [
+        "button.okp-settings-switch {",
+        "min-width: 39px;",
+        "min-height: 22px;",
+        "padding: 3px;",
+        ".okp-settings-switch-knob {",
+        "min-width: 16px;",
+        "min-height: 16px;",
+    ] {
+        assert!(css.contains(rule), "missing Settings switch rule: {rule}");
+    }
+
+    let video_settings = include_str!("settings_pages.rs");
+    let hwdec_row = video_settings
+        .split("pub(crate) fn settings_hwdec_row")
+        .nth(1)
+        .and_then(|source| {
+            source
+                .split("pub(crate) fn settings_hdr_handling_row")
+                .next()
+        })
+        .expect("hardware decode row source should remain available");
+    assert!(hwdec_row.contains("settings_switch_button(enabled, \"Hardware decode\")"));
+    assert!(hwdec_row.contains("set_settings_switch_active(button, enabled)"));
+    assert!(!hwdec_row.contains("gtk::Switch"));
+
+    let playback_row = video_settings
+        .split("pub(crate) fn settings_playback_switch_row")
+        .nth(1)
+        .and_then(|source| source.split("pub(crate) fn settings_repeat_row").next())
+        .expect("playback switch row source should remain available");
+    assert!(playback_row.contains("settings_switch_button(active, title)"));
+
+    let updates = include_str!("updates.rs");
+    assert!(updates.contains("settings_switch_button(auto_check_enabled, \"Automatic checks\")"));
+
+    let switch = include_str!("settings_switch.rs");
+    assert!(switch.contains("AccessibleRole::Switch"));
+    assert!(switch.contains("accessible::State::Checked"));
+}
+
+#[test]
 fn floating_volume_control_keeps_a_fixed_osc_footprint() {
     assert_eq!(VOLUME_RESTING_SIZE, 34);
     assert_eq!(VOLUME_WICK_WIDTH, 18);

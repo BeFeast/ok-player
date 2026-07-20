@@ -319,37 +319,6 @@ pub(crate) fn about_host_card(
     about_card("HOST", &grid)
 }
 
-pub(crate) fn about_toggle_button(active: bool) -> gtk::Button {
-    let button = gtk::Button::new();
-    button.add_css_class("okp-about-toggle");
-    button.set_has_frame(false);
-    button.set_size_request(39, 22);
-    button.set_halign(gtk::Align::End);
-    button.set_valign(gtk::Align::Center);
-
-    let knob = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    knob.add_css_class("okp-about-toggle-knob");
-    knob.set_valign(gtk::Align::Center);
-    button.set_child(Some(&knob));
-    set_about_toggle_active(&button, active);
-    button
-}
-
-pub(crate) fn set_about_toggle_active(button: &gtk::Button, active: bool) {
-    if active {
-        button.add_css_class("is-active");
-    } else {
-        button.remove_css_class("is-active");
-    }
-    if let Some(knob) = button.first_child() {
-        knob.set_halign(if active {
-            gtk::Align::End
-        } else {
-            gtk::Align::Start
-        });
-    }
-}
-
 pub(crate) fn about_card<T: IsA<gtk::Widget>>(title: &str, content: &T) -> gtk::Box {
     let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
     card.add_css_class("okp-about-card");

@@ -7,6 +7,7 @@ OUT_DIR="${2:-$ROOT/artifacts/manual-ui/linux-settings-smoke}"
 PAGE="${3:-about}"
 COLOR_SCHEME="${4:-light}"
 UPDATE_PREVIEW="${5:-}"
+SCALE_PERCENT="${6:-100}"
 
 case "$PAGE" in
   about|appearance|playback|subtitles|video|audio|shortcuts|integration|updates|advanced) ;;
@@ -19,6 +20,13 @@ esac
 case "$COLOR_SCHEME" in
   light|dark|high-contrast) ;;
   *) echo "Unsupported Settings color scheme: $COLOR_SCHEME" >&2; exit 2 ;;
+esac
+case "$SCALE_PERCENT" in
+  100) DPI_SCALE=1 ;;
+  125) DPI_SCALE=1.25 ;;
+  150) DPI_SCALE=1.5 ;;
+  200) DPI_SCALE=2 ;;
+  *) echo "Unsupported Settings scale: $SCALE_PERCENT" >&2; exit 2 ;;
 esac
 
 for tool in xvfb-run dbus-run-session xfwm4 xdotool xwininfo import magick; do
@@ -34,7 +42,7 @@ mkdir -p "$OUT_DIR"
 if ! env __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
   LIBGL_ALWAYS_SOFTWARE=1 \
   xvfb-run -a --server-args='-screen 0 1280x900x24 -nolisten tcp' \
-  dbus-run-session -- bash -s -- "$BINARY" "$OUT_DIR" "$PAGE" "$COLOR_SCHEME" "$UPDATE_PREVIEW" >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
+  dbus-run-session -- bash -s -- "$BINARY" "$OUT_DIR" "$PAGE" "$COLOR_SCHEME" "$UPDATE_PREVIEW" "$DPI_SCALE" >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
 set -euo pipefail
 
 BINARY="$1"
@@ -42,6 +50,7 @@ OUT_DIR="$2"
 PAGE="$3"
 COLOR_SCHEME="$4"
 UPDATE_PREVIEW="$5"
+DPI_SCALE="$6"
 
 export GDK_BACKEND=x11
 export GTK_USE_PORTAL=0
@@ -49,6 +58,7 @@ export NO_AT_BRIDGE=1
 export XDG_SESSION_TYPE=x11
 export XDG_CURRENT_DESKTOP=XFCE
 export LIBGL_ALWAYS_SOFTWARE=1
+export GDK_DPI_SCALE="$DPI_SCALE"
 export XDG_CONFIG_HOME="$OUT_DIR/xdg-config"
 export XDG_STATE_HOME="$OUT_DIR/xdg-state"
 export XDG_CACHE_HOME="$OUT_DIR/xdg-cache"
@@ -108,7 +118,7 @@ if [[ -z "$settings_id" ]]; then
 fi
 printf '%s\n' "$settings_id" >"$OUT_DIR/settings.ids"
 xdotool windowactivate --sync "$settings_id"
-sleep 0.25
+sleep 1
 
 capture_window() {
   local window_id="$1" output="$2" info x y width height root_capture
@@ -185,6 +195,39 @@ fi
 if [[ "$PAGE" == "video" ]]; then
   if ! grep -q 'video capability: hdr=engine-managed controls=unavailable' "$OUT_DIR/app.log"; then
     echo "Video Settings did not report the reserved engine-managed HDR state" >&2
+    exit 1
+  fi
+
+  # Hardware decode must use the same compact Settings switch contract as
+  # Playback and Updates. The shared 39x22 content request plus its 3px inset
+  # renders a 45x28 horizontal track; measure the actual accent-painted bounds
+  # so a stock GtkSwitch or fractional-scale vertical allocation cannot return.
+  if [[ "$COLOR_SCHEME" == "dark" ]]; then
+    switch_accent='#28b3aa'
+  else
+    switch_accent='#10938a'
+  fi
+  switch_geometry="$(
+    magick "$OUT_DIR/settings.png" \
+      -crop 64x64+636+120 \
+      -fuzz 6% \
+      -fill white +opaque "$switch_accent" \
+      -fill black -opaque "$switch_accent" \
+      -trim \
+      -format '%wx%h' info:
+  )"
+  if [[ "$switch_geometry" != "45x28" ]]; then
+    echo "Hardware decode switch violates the shared Settings geometry: ${switch_geometry}" >&2
+    exit 1
+  fi
+
+  # Exercise the off state as well: the shared button must remain interactive,
+  # and persist the same hwdec setting that the former GtkSwitch owned.
+  xdotool mousemove --window "$settings_id" 665 151 click 1
+  sleep 0.25
+  settings_json="$XDG_CONFIG_HOME/ok-player/settings.json"
+  if ! grep -q '"hwdec": "no"' "$settings_json"; then
+    echo "Hardware decode off state was not persisted" >&2
     exit 1
   fi
 fi
@@ -353,4 +396,4 @@ then
   exit 1
 fi
 
-echo "Settings smoke passed (${PAGE}, ${COLOR_SCHEME}, update=${UPDATE_PREVIEW:-live}). Screenshot: $OUT_DIR/settings.png"
+echo "Settings smoke passed (${PAGE}, ${COLOR_SCHEME}, scale=${SCALE_PERCENT}%, update=${UPDATE_PREVIEW:-live}). Screenshot: $OUT_DIR/settings.png"

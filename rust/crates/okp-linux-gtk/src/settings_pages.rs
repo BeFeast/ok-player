@@ -698,13 +698,13 @@ where
     state_label.set_valign(gtk::Align::Center);
     row.append(&state_label);
 
-    let toggle = about_toggle_button(active);
+    let toggle = settings_switch_button(active, title);
     let toggle_state = Rc::clone(&state);
     let toggle_toast = Rc::clone(&status_toast);
     let toggle_state_label = state_label.clone();
     toggle.connect_clicked(move |button| {
         let enabled = !button.has_css_class("is-active");
-        set_about_toggle_active(button, enabled);
+        set_settings_switch_active(button, enabled);
         {
             let mut state = toggle_state.borrow_mut();
             apply(&mut state, enabled);
@@ -1139,13 +1139,13 @@ pub(crate) fn settings_audio_normalization_row(
     state_label.set_valign(gtk::Align::Center);
     row.append(&state_label);
 
-    let toggle = about_toggle_button(active);
+    let toggle = settings_switch_button(active, "Loudness normalization");
     let toggle_state = Rc::clone(&state);
     let toggle_toast = Rc::clone(&status_toast);
     let toggle_state_label = state_label.clone();
     toggle.connect_clicked(move |button| {
         let enabled = !button.has_css_class("is-active");
-        set_about_toggle_active(button, enabled);
+        set_settings_switch_active(button, enabled);
 
         let (save_result, live_result) = {
             let mut state = toggle_state.borrow_mut();
@@ -1209,13 +1209,13 @@ pub(crate) fn settings_surround_downmix_row(
     state_label.set_valign(gtk::Align::Center);
     row.append(&state_label);
 
-    let toggle = about_toggle_button(active);
+    let toggle = settings_switch_button(active, "Downmix surround to stereo");
     let toggle_state = Rc::clone(&state);
     let toggle_toast = Rc::clone(&status_toast);
     let toggle_state_label = state_label.clone();
     toggle.connect_clicked(move |button| {
         let enabled = !button.has_css_class("is-active");
-        set_about_toggle_active(button, enabled);
+        set_settings_switch_active(button, enabled);
 
         let (save_result, live_result) = {
             let mut state = toggle_state.borrow_mut();
@@ -1398,6 +1398,8 @@ pub(crate) fn settings_hwdec_row(
     ));
     detail.add_css_class("okp-update-status");
     detail.set_xalign(0.0);
+    detail.set_width_chars(1);
+    detail.set_max_width_chars(50);
     detail.set_wrap(true);
     text.append(&detail);
     row.append(&text);
@@ -1405,15 +1407,16 @@ pub(crate) fn settings_hwdec_row(
     let enabled = state.borrow().settings.hardware_decode_enabled();
     let state_label = gtk::Label::new(Some(if enabled { "Auto-safe" } else { "Off" }));
     state_label.add_css_class("okp-settings-state-pill");
+    state_label.set_valign(gtk::Align::Center);
     row.append(&state_label);
 
-    let toggle = gtk::Switch::new();
-    toggle.add_css_class("okp-settings-switch");
-    toggle.set_active(enabled);
+    let toggle = settings_switch_button(enabled, "Hardware decode");
     let switch_state = Rc::clone(&state);
     let switch_toast = Rc::clone(&status_toast);
     let switch_label = state_label.clone();
-    toggle.connect_state_set(move |_, enabled| {
+    toggle.connect_clicked(move |button| {
+        let enabled = !button.has_css_class("is-active");
+        set_settings_switch_active(button, enabled);
         let (hwdec_option, save_ok) = {
             let mut state = switch_state.borrow_mut();
             state.settings.set_hardware_decode_enabled(enabled);
@@ -1445,8 +1448,6 @@ pub(crate) fn settings_hwdec_row(
                 "Hardware decode off"
             }),
         }
-
-        glib::Propagation::Proceed
     });
     row.append(&toggle);
 
