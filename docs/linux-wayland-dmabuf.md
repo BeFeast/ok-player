@@ -10,9 +10,10 @@ build. Every bundled ELF carries an origin-relative runtime path, so neither
 the executable nor a transitive media library can silently select a different
 host copy. The dynamic loader, glibc, ALSA, image-codec, and graphics-driver ABI
 libraries remain target-provided and are checked by the cross-distro packaging
-gate. The Debian package declares `libasound2 | libasound2t64` and
-`libjpeg62-turbo | libjpeg8`. AppImage hosts supply the corresponding distro
-ALSA and JPEG-family runtimes through their GTK4 platform stack instead of
+gate. The Debian package declares `libasound2 | libasound2t64`,
+`libjpeg-turbo8 | libjpeg62-turbo | libjpeg8`, `libwebp7`, `libwebpmux3`, and
+`libpng16-16 | libpng16-16t64`. AppImage hosts supply the corresponding distro
+ALSA and image-codec runtimes through their platform package set instead of
 loading bundled builder copies. mpv's JPEG screenshot encoder uses that target
 runtime; it does not require a private pinned JPEG ABI. Fedora remains on its
 explicit system-mpv packaging contract.

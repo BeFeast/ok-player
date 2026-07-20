@@ -329,7 +329,10 @@ fn workflow_and_operator_guide_consume_the_canonical_manifest() {
 
     let deb_package = fs::read_to_string(root.join("scripts/package-linux-deb.sh"))
         .expect("Debian package script");
-    assert!(deb_package.contains("libjpeg62-turbo | libjpeg8"));
+    assert!(deb_package.contains("libjpeg-turbo8 | libjpeg62-turbo | libjpeg8"));
+    assert!(deb_package.contains("libwebp7"));
+    assert!(deb_package.contains("libwebpmux3"));
+    assert!(deb_package.contains("libpng16-16 | libpng16-16t64"));
     for dependency in [
         "libcairo-gobject2",
         "libcairo2",

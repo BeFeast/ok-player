@@ -247,8 +247,8 @@ apt-get install -y --no-install-recommends \
   libdecor-0-0 libglib2.0-bin libgtk-4-1 libva2 libvulkan1 libwayland-client0 \
   libwayland-egl1 libxss1 python3 \
   ffmpeg imagemagick procps ripgrep squashfs-tools x11-utils xauth xdotool xfwm4 xvfb >/dev/null
-apt-get satisfy -y --no-install-recommends 'libasound2 | libasound2t64' >/dev/null
-apt-get satisfy -y --no-install-recommends 'libjpeg62-turbo | libjpeg8' >/dev/null
+depends="$(dpkg-deb -f "/artifacts/deb/$DEB_NAME" Depends)"
+apt-get satisfy -y --no-install-recommends "$depends" >/dev/null
 
 scratch="$(mktemp -d -t ok-player-portability.XXXXXX)"
 trap 'rm -rf -- "$scratch"' EXIT
@@ -330,8 +330,6 @@ check_no_bundled_glibc "$APP_ROOT/usr/bin" appimage
 check_elf_tree "$APP_ROOT"
 check_build_marker "$APP_ROOT/usr/bin/ok-player" appimage
 
-depends="$(dpkg-deb -f "/artifacts/deb/$DEB_NAME" Depends)"
-apt-get satisfy -y --no-install-recommends "$depends" >/dev/null
 dpkg -i "/artifacts/deb/$DEB_NAME" >/dev/null
 check_no_bundled_glibc /usr/lib/ok-player debian
 check_elf_tree /usr/lib/ok-player

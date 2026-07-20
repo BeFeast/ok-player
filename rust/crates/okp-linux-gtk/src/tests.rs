@@ -445,12 +445,22 @@ fn linux_packages_pin_and_bundle_the_embedded_wayland_mpv() {
     assert!(portability.contains("debian-media-fullscreen"));
     assert!(portability.contains("portability build marker:"));
     assert!(portability.contains("EXPECTED_BUILD_MARKER"));
-    assert!(portability.contains("'libasound2 | libasound2t64'"));
-    assert!(portability.contains("'libjpeg62-turbo | libjpeg8'"));
+    assert!(portability.contains("dpkg-deb -f \"/artifacts/deb/$DEB_NAME\" Depends"));
+    assert!(portability.contains("apt-get satisfy -y --no-install-recommends \"$depends\""));
+    let dependency_install = portability
+        .find("apt-get satisfy -y --no-install-recommends \"$depends\"")
+        .expect("package dependencies should be installed in the target container");
+    let appimage_container_check = portability
+        .find("check_elf_tree \"$APP_ROOT\"\n")
+        .expect("AppImage ELF tree should be checked in the target container");
+    assert!(dependency_install < appimage_container_check);
     assert!(!deb.contains("libmpv2"));
     assert!(deb.contains("Recommends: ffmpeg"));
     assert!(deb.contains("libasound2 | libasound2t64"));
-    assert!(deb.contains("libjpeg62-turbo | libjpeg8"));
+    assert!(deb.contains("libjpeg-turbo8 | libjpeg62-turbo | libjpeg8"));
+    assert!(deb.contains("libwebp7"));
+    assert!(deb.contains("libwebpmux3"));
+    assert!(deb.contains("libpng16-16 | libpng16-16t64"));
     assert!(deb.contains("libxss1"));
     assert!(deb.contains("libx11-6"));
     assert!(deb.contains("libxcursor1"));
