@@ -8,16 +8,18 @@ closure beside the application binary. That closure includes the exact FFmpeg,
 libplacebo, libass, libbluray, and Rubber Band sonames resolved by the pinned
 build. Every bundled ELF carries an origin-relative runtime path, so neither
 the executable nor a transitive media library can silently select a different
-host copy. The dynamic loader, glibc, and graphics-driver ABI libraries remain
-target-provided and are checked by the cross-distro packaging gate. Fedora
-remains on its explicit system-mpv packaging contract.
+host copy. The dynamic loader, glibc, ALSA, and graphics-driver ABI libraries
+remain target-provided and are checked by the cross-distro packaging gate. The
+Debian package declares `libasound2 | libasound2t64`; AppImage hosts must supply
+the corresponding distro ALSA runtime instead of loading a bundled builder
+copy. Fedora remains on its explicit system-mpv packaging contract.
 
 Shipping Debian and AppImage artifacts are built inside the repository's
 digest-pinned Ubuntu 26.04 builder image. This matches the supported native
 candidate builder's FFmpeg/libplacebo generation so same-source stable and
 candidate packages do not receive materially different media runtimes. The
-target desktop still supplies glibc, GTK, Wayland/X11, and graphics-driver ABI
-libraries according to the package dependency and portability contracts.
+target desktop still supplies glibc, ALSA, GTK, Wayland/X11, and graphics-driver
+ABI libraries according to the package dependency and portability contracts.
 
 The embed patch is kept at
 `rust/patches/mpv-v0.40.0-wayland-embed.patch`. The small

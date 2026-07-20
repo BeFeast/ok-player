@@ -193,6 +193,7 @@ apt-get install -y --no-install-recommends \
   libdecor-0-0 libgtk-4-1 libva2 libvulkan1 libwayland-client0 \
   libwayland-egl1 libxss1 \
   ffmpeg imagemagick procps squashfs-tools x11-utils xauth xdotool xfwm4 xvfb >/dev/null
+apt-get satisfy -y --no-install-recommends 'libasound2 | libasound2t64' >/dev/null
 
 scratch="$(mktemp -d -t ok-player-portability.XXXXXX)"
 trap 'rm -rf -- "$scratch"' EXIT
