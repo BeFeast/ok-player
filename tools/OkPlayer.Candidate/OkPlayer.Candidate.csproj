@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <RootNamespace>OkPlayer.Candidate</RootNamespace>
+    <AssemblyName>okp-windows-candidate</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\OkPlayer.Core\OkPlayer.Core.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,220 @@
+name: Windows Candidate
+
+# Hosted Windows builder for the rolling QA lane (issue #483). The workflow
+# coalesces main by source SHA, consumes a workflow-local monotonic run number,
+# and moves releases.win-candidate.json only after every bounded gate passes.
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-candidate
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    name: Build, verify, and promote rolling candidate
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      CANDIDATE_TAG: windows-candidate
+      CANDIDATE_RELEASES: artifacts/windows-candidate
+      CANDIDATE_PLAN: artifacts/windows-candidate-plan
+      PRIOR_DIR: artifacts/windows-candidate-prior
+      SOURCE_SHA: ${{ github.sha }}
+      BUILD_NUMBER: ${{ github.run_number }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Verify clean checkout at claimed SHA
+        shell: pwsh
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:SOURCE_SHA) { throw "Checkout SHA $actual does not match claimed SHA $env:SOURCE_SHA." }
+          if (git status --porcelain) { throw 'Candidate checkout is not clean.' }
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Build candidate contract CLI
+        run: dotnet build tools/OkPlayer.Candidate/OkPlayer.Candidate.csproj -c Release
+
+      - name: Read rolling publication and coalesce unchanged main
+        id: decision
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:PRIOR_DIR | Out-Null
+          $manifest = Join-Path $env:PRIOR_DIR 'candidate.windows.json'
+          $feed = Join-Path $env:PRIOR_DIR 'releases.win-candidate.json'
+          $releaseExists = $false
+          $hasPrior = $false
+          gh release view $env:CANDIDATE_TAG --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            $releaseExists = $true
+            $assetNames = gh release view $env:CANDIDATE_TAG --repo $env:GITHUB_REPOSITORY `
+              --json assets --jq '[.assets[].name]' | ConvertFrom-Json
+            $hasManifest = $assetNames -contains 'candidate.windows.json'
+            $hasFeed = $assetNames -contains 'releases.win-candidate.json'
+            if ($hasManifest -ne $hasFeed) { throw 'Rolling release has a torn manifest/feed pointer pair.' }
+            if ($hasManifest) {
+              $hasPrior = $true
+              gh release download $env:CANDIDATE_TAG --repo $env:GITHUB_REPOSITORY --pattern 'candidate.windows.json' --dir $env:PRIOR_DIR --clobber
+              if ($LASTEXITCODE -ne 0) { throw 'Could not download candidate.windows.json.' }
+              gh release download $env:CANDIDATE_TAG --repo $env:GITHUB_REPOSITORY --pattern 'releases.win-candidate.json' --dir $env:PRIOR_DIR --clobber
+              if ($LASTEXITCODE -ne 0) { throw 'Could not download releases.win-candidate.json.' }
+            }
+          }
+          $args = @('run', '--project', 'tools/OkPlayer.Candidate', '-c', 'Release', '--no-build', '--',
+            'decide', '--source-sha', $env:SOURCE_SHA)
+          if ($hasPrior) { $args += @('--manifest', $manifest, '--feed', $feed) }
+          $decision = dotnet @args | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate build decision failed.' }
+          "should_build=$($decision.should_build.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "reason=$($decision.reason)" >> $env:GITHUB_OUTPUT
+          "release_exists=$($releaseExists.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "has_prior=$($hasPrior.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+
+      - name: Install Velopack CLI
+        if: steps.decision.outputs.should_build == 'true'
+        run: dotnet tool install -g vpk --version 1.2.0
+
+      - name: Fetch real libmpv integration fixture
+        if: steps.decision.outputs.should_build == 'true'
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/fetch-natives.ps1
+
+      - name: Build C# solution
+        if: steps.decision.outputs.should_build == 'true'
+        run: dotnet build OkPlayer.sln -c Release
+
+      - name: Run core unit tests
+        if: steps.decision.outputs.should_build == 'true'
+        run: dotnet test tests/OkPlayer.Tests/OkPlayer.Tests.csproj -c Release --no-build --logger "console;verbosity=normal"
+
+      - name: Run real-libmpv integration tests
+        if: steps.decision.outputs.should_build == 'true'
+        run: dotnet test tests/OkPlayer.IntegrationTests/OkPlayer.IntegrationTests.csproj -c Debug --logger "console;verbosity=normal"
+
+      - name: Compute monotonic candidate version
+        if: steps.decision.outputs.should_build == 'true'
+        id: version
+        shell: pwsh
+        run: |
+          $version = dotnet run --project tools/OkPlayer.Candidate -c Release --no-build -- version --build $env:BUILD_NUMBER
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate version resolution failed.' }
+          "value=$($version.Trim())" >> $env:GITHUB_OUTPUT
+
+      - name: Pack isolated win-candidate channel
+        if: steps.decision.outputs.should_build == 'true'
+        shell: pwsh
+        run: ./installer/build-windows-candidate.ps1 -Version '${{ steps.version.outputs.value }}'
+
+      - name: Validate package identities and assemble rollback feed
+        if: steps.decision.outputs.should_build == 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:CANDIDATE_PLAN | Out-Null
+          $args = @('run', '--project', 'tools/OkPlayer.Candidate', '-c', 'Release', '--no-build', '--',
+            'assemble',
+            '--source-sha', $env:SOURCE_SHA,
+            '--build', $env:BUILD_NUMBER,
+            '--builder', 'github-actions/windows-latest',
+            '--timestamp-utc', [DateTimeOffset]::UtcNow.ToString('O'),
+            '--releases', $env:CANDIDATE_RELEASES,
+            '--output-feed', (Join-Path $env:CANDIDATE_PLAN 'releases.win-candidate.json'),
+            '--output-manifest', (Join-Path $env:CANDIDATE_PLAN 'candidate.windows.json'))
+          if ('${{ steps.decision.outputs.has_prior }}' -eq 'true') {
+            $args += @(
+              '--previous-manifest', (Join-Path $env:PRIOR_DIR 'candidate.windows.json'),
+              '--previous-feed', (Join-Path $env:PRIOR_DIR 'releases.win-candidate.json'))
+          }
+          dotnet @args
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate artifact validation failed.' }
+
+      - name: Revalidate main and promote feed last
+        if: steps.decision.outputs.should_build == 'true'
+        shell: pwsh
+        run: |
+          $currentMain = gh api "repos/$env:GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha'
+          if ($LASTEXITCODE -ne 0) { throw 'Could not resolve current main SHA.' }
+          dotnet run --project tools/OkPlayer.Candidate -c Release --no-build -- verify-head `
+            --source-sha $env:SOURCE_SHA --current-main-sha $currentMain.Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate became stale before promotion.' }
+
+          gh release view $env:CANDIDATE_TAG --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:CANDIDATE_TAG --repo $env:GITHUB_REPOSITORY --prerelease `
+              --title 'OK Player Windows candidate (rolling)' `
+              --notes 'Mutable rolling Windows QA candidate. Assets are replaced in place; this is not a permanent product release.'
+            if ($LASTEXITCODE -ne 0) { throw 'Could not create rolling Windows candidate release.' }
+          }
+
+          $newManifest = Join-Path $env:CANDIDATE_PLAN 'candidate.windows.json'
+          $newFeed = Join-Path $env:CANDIDATE_PLAN 'releases.win-candidate.json'
+          $priorManifest = Join-Path $env:PRIOR_DIR 'candidate.windows.json'
+          $priorFeed = Join-Path $env:PRIOR_DIR 'releases.win-candidate.json'
+          try {
+            Get-ChildItem $env:CANDIDATE_RELEASES -File |
+              Where-Object Name -ne 'releases.win-candidate.json' |
+              ForEach-Object {
+                gh release upload $env:CANDIDATE_TAG --repo $env:GITHUB_REPOSITORY $_.FullName --clobber
+                if ($LASTEXITCODE -ne 0) { throw "Failed to upload $($_.Name)." }
+              }
+            gh release upload $env:CANDIDATE_TAG --repo $env:GITHUB_REPOSITORY $newManifest --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to upload candidate identity manifest.' }
+            gh release upload $env:CANDIDATE_TAG --repo $env:GITHUB_REPOSITORY $newFeed --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to move candidate feed pointer.' }
+          }
+          catch {
+            if (Test-Path $priorFeed) {
+              gh release upload $env:CANDIDATE_TAG --repo $env:GITHUB_REPOSITORY $priorFeed --clobber *> $null
+              gh release upload $env:CANDIDATE_TAG --repo $env:GITHUB_REPOSITORY $priorManifest --clobber *> $null
+            } else {
+              gh release delete-asset $env:CANDIDATE_TAG 'releases.win-candidate.json' --repo $env:GITHUB_REPOSITORY --yes *> $null
+              gh release delete-asset $env:CANDIDATE_TAG 'candidate.windows.json' --repo $env:GITHUB_REPOSITORY --yes *> $null
+            }
+            throw
+          }
+
+      - name: Prune superseded recognized candidate assets
+        if: steps.decision.outputs.should_build == 'true'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $assets = Join-Path $env:CANDIDATE_PLAN 'release-assets.json'
+          gh release view $env:CANDIDATE_TAG --repo $env:GITHUB_REPOSITORY --json assets --jq '[.assets[].name]' | Set-Content $assets
+          $prune = dotnet run --project tools/OkPlayer.Candidate -c Release --no-build -- prune `
+            --manifest (Join-Path $env:CANDIDATE_PLAN 'candidate.windows.json') --assets $assets
+          foreach ($asset in $prune) {
+            gh release delete-asset $env:CANDIDATE_TAG $asset --repo $env:GITHUB_REPOSITORY --yes
+          }
+
+      - name: Candidate summary
+        if: always()
+        shell: pwsh
+        run: |
+          @"
+          ### Windows candidate
+
+          - source SHA: ``$env:SOURCE_SHA``
+          - coalescing decision: ``${{ steps.decision.outputs.reason || 'not reached' }}``
+          - build requested: ``${{ steps.decision.outputs.should_build || 'not reached' }}``
+          - monotonic build: ``$env:BUILD_NUMBER``
+          - version: ``${{ steps.version.outputs.value || 'not built' }}``
+          - rolling surface: ``windows-candidate``
+          - stable ``win`` channel: untouched
+          - GPU/HDR/4K acceptance: not claimed by this hosted run
+          "@ >> $env:GITHUB_STEP_SUMMARY

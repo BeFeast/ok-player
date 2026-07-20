@@ -127,6 +127,16 @@ It is isolated from the three feeds above by construction:
 See [linux-candidate-channel.md](linux-candidate-channel.md) for channel isolation, retention,
 rollback, and the mutable nature of the rolling surface.
 
+Windows QA delivery uses a separate rolling surface as well. The hosted
+[`release-windows-candidate.yml`](../.github/workflows/release-windows-candidate.yml)
+workflow publishes a mutable `windows-candidate` prerelease carrying
+`releases.win-candidate.json` and an SHA-256 identity manifest. Candidate builds
+are stamped to consume that release directly; stable builds continue to consume
+the Pages-hosted `releases.win.json`. See
+[`windows-candidate-channel.md`](windows-candidate-channel.md) for coalescing,
+monotonic versioning, rollback retention, and the hosted-runner acceptance
+boundary.
+
 ## Operator notes
 
 - **One-time Pages setup:** the workflow's `configure-pages` step has `enablement: true` and

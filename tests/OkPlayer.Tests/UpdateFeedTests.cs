@@ -22,6 +22,26 @@ namespace OkPlayer.Tests;
 ///     doubles as the compile pin for that API shape.</summary>
 public class UpdateFeedTests
 {
+    [Fact]
+    public void Validate_AcceptsCandidateLaneWithoutChangingStableDefaults()
+    {
+        UpdateFeedConfiguration candidate = UpdateFeed.Validate(
+            WindowsCandidateRelease.Channel,
+            "https://github.com/BeFeast/ok-player/releases/download/windows-candidate/");
+
+        Assert.Equal("win", UpdateFeed.WinChannel);
+        Assert.Equal("https://befeast.github.io/ok-player/updates/win/", UpdateFeed.WinBaseUrl);
+        Assert.Equal("win-candidate", candidate.Channel);
+        Assert.EndsWith("/windows-candidate/", candidate.BaseUrl);
+    }
+
+    [Theory]
+    [InlineData("win/candidate", "https://example.com/")]
+    [InlineData("win-candidate", "http://example.com/")]
+    [InlineData("win-candidate", "https://example.com")]
+    public void Validate_RejectsMalformedLaneMetadata(string channel, string baseUrl)
+        => Assert.Throws<InvalidOperationException>(() => UpdateFeed.Validate(channel, baseUrl));
+
     [Fact] // Velopack resolves the index by appending to the base, so a missing slash would 404 the fleet.
     public void WinBaseUrl_IsHttpsAndSlashTerminated()
     {
