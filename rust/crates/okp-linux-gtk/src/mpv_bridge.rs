@@ -1475,15 +1475,27 @@ pub(crate) fn connect_video_clicks(
     video_area: &gtk::Widget,
     window: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
+    suppress_video_click: Rc<Cell<bool>>,
 ) {
     let click = gtk::GestureClick::new();
     click.set_button(gdk::BUTTON_PRIMARY);
+    let reset_suppression = Rc::clone(&suppress_video_click);
+    click.connect_pressed(move |_, _, _, _| reset_suppression.set(false));
 
     let click_window = window.clone();
     let click_state = Rc::clone(&state);
     let pending_single_click = Rc::new(RefCell::new(None::<glib::SourceId>));
     let pending_click = Rc::clone(&pending_single_click);
     click.connect_released(move |_, press_count, _, _| {
+        if suppress_video_click.replace(false) {
+            if let Some(source_id) = pending_click.borrow_mut().take() {
+                source_id.remove();
+            }
+            if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+                eprintln!("interaction: video-click-suppressed-by-window-drag");
+            }
+            return;
+        }
         match video_click::release_intent(press_count) {
             video_click::Intent::Ignore => {}
             video_click::Intent::SchedulePlayPause => {
@@ -1593,7 +1605,8 @@ pub(crate) fn connect_player_context_menu(
 pub(crate) fn connect_player_window_move(
     player_root: &gtk::Overlay,
     window: &gtk::ApplicationWindow,
-) {
+) -> Rc<Cell<bool>> {
+    let suppress_video_click = Rc::new(Cell::new(false));
     let drag = gtk::GestureDrag::new();
     drag.set_button(gdk::BUTTON_PRIMARY);
     drag.set_propagation_phase(gtk::PropagationPhase::Bubble);
@@ -1602,6 +1615,7 @@ pub(crate) fn connect_player_window_move(
     let move_window = window.clone();
     let already_moving = Rc::new(Cell::new(false));
     let update_moving = Rc::clone(&already_moving);
+    let update_suppression = Rc::clone(&suppress_video_click);
     drag.connect_drag_update(move |gesture, offset_x, offset_y| {
         // Compact mode owns its own drag-to-move (and snap) gesture; leave it be
         // so a single drag never begins two moves.
@@ -1627,29 +1641,39 @@ pub(crate) fn connect_player_window_move(
         match video_click::window_drag_action(context, offset_x, offset_y) {
             video_click::WindowDragAction::Hold => {}
             video_click::WindowDragAction::BeginMove => {
+                // Snapshot every transient gesture value before either backend
+                // changes sequence ownership during the compositor handoff.
                 let Some(device) = gesture.current_event_device() else {
                     return;
                 };
+                let Some((surface_x, surface_y)) = gesture.bounding_box_center() else {
+                    return;
+                };
+                let button = gesture.current_button() as i32;
+                let timestamp = gesture.current_event_time();
                 let Some(surface) = move_window.surface() else {
                     return;
                 };
                 let Ok(toplevel) = surface.downcast::<gdk::Toplevel>() else {
                     return;
                 };
-                let Some((x, y)) = gesture.bounding_box_center() else {
-                    return;
-                };
                 update_moving.set(true);
-                // Claim the sequence so the pending play/pause click is cancelled
-                // rather than committed when the compositor hands the drag back.
-                gesture.set_state(gtk::EventSequenceState::Claimed);
-                toplevel.begin_move(
-                    &device,
-                    gesture.current_button() as i32,
-                    x,
-                    y,
-                    gesture.current_event_time(),
-                );
+                update_suppression.set(true);
+                let display = gtk::prelude::WidgetExt::display(&move_window);
+                let wayland = is_wayland_display(display.type_().name());
+                if !wayland {
+                    // X11 must release GTK's gesture ownership before the WM
+                    // accepts its EWMH move request.
+                    gesture.set_state(gtk::EventSequenceState::Claimed);
+                }
+                toplevel.begin_move(&device, button, surface_x, surface_y, timestamp);
+                if wayland {
+                    // Wayland is the inverse: GDK must consume the live
+                    // implicit grab before GTK cancels sibling gestures. The
+                    // one-shot suppressor prevents click leakage if Mutter has
+                    // already cancelled this sequence during the handoff.
+                    gesture.set_state(gtk::EventSequenceState::Claimed);
+                }
                 if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
                     eprintln!("interaction: player-window-move");
                 }
@@ -1658,8 +1682,11 @@ pub(crate) fn connect_player_window_move(
     });
     let end_moving = Rc::clone(&already_moving);
     drag.connect_drag_end(move |_, _, _| end_moving.set(false));
+    let cancel_moving = Rc::clone(&already_moving);
+    drag.connect_cancel(move |_, _| cancel_moving.set(false));
 
     player_root.add_controller(drag);
+    suppress_video_click
 }
 
 pub(crate) fn player_context_menu_target_is_interactive(
