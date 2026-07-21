@@ -473,10 +473,15 @@ fn linux_packages_pin_and_bundle_the_embedded_wayland_mpv() {
     assert!(collect.contains("patchelf --set-rpath '$ORIGIN'"));
     assert!(collect.contains("bundled-runtime.sha256"));
     assert!(collect.contains("okp_is_linux_platform_runtime"));
+    assert!(collect.contains("okp_is_linux_namespaced_media_source"));
+    assert!(collect.contains("patchelf --replace-needed"));
+    assert!(collect.contains("patchelf --set-soname"));
     assert!(collect.contains("Refusing to queue target platform library"));
     assert!(verify.contains("wayland-embed-display"));
     assert!(verify.contains("Packaged binary resolved libmpv outside its payload"));
     assert!(verify.contains("libavcodec.so"));
+    assert!(verify.contains("libokp-libjpeg.so"));
+    assert!(verify.contains("unnamespaced media runtime"));
     assert!(verify.contains("okp_verify_linux_bundled_runtime_manifest"));
     assert!(portability.contains("debian:testing-slim"));
     assert!(portability.contains("ubuntu:26.04"));
@@ -501,7 +506,7 @@ fn linux_packages_pin_and_bundle_the_embedded_wayland_mpv() {
     assert!(!deb.contains("libmpv2"));
     assert!(deb.contains("Recommends: ffmpeg"));
     assert!(deb.contains("libasound2 | libasound2t64"));
-    assert!(deb.contains("libjpeg-turbo8 | libjpeg62-turbo | libjpeg8"));
+    assert!(!deb.contains("libjpeg-turbo8 | libjpeg62-turbo | libjpeg8"));
     assert!(deb.contains("libwebp7"));
     assert!(deb.contains("libwebpmux3"));
     assert!(deb.contains("libpng16-16 | libpng16-16t64"));
@@ -592,8 +597,11 @@ fn bundled_runtime_manifest_rejects_target_desktop_libraries() {
     let manifest = temp.path().join("bundled-runtime.sha256");
     let digest = "0".repeat(64);
 
-    fs::write(&manifest, format!("{digest}  libmpv.so.2\n"))
-        .expect("media-only runtime manifest should be written");
+    fs::write(
+        &manifest,
+        format!("{digest}  libmpv.so.2\n{digest}  libokp-libjpeg.so.62\n"),
+    )
+    .expect("media-only runtime manifest should be written");
     let accepted = std::process::Command::new("bash")
         .arg(&policy)
         .arg(&manifest)

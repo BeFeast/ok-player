@@ -16,10 +16,10 @@ done
 [[ -f "$LIBMPV" ]] || { echo "Bundled libmpv is missing: $LIBMPV" >&2; exit 1; }
 
 # The target desktop owns libc, graphics, GTK, X11/Wayland, Cairo/Pango, font,
-# audio, image-codec, and session libraries. Bundling builder copies can make
-# GTK, EGL, ALSA, or gdk-pixbuf load an internally inconsistent platform stack.
-# Only libmpv and its media closure are copied; package dependencies and the
-# portability gate supply the platform.
+# audio, image-codec, and session libraries. JPEG is the exception because mpv
+# links it directly and Debian/Ubuntu expose incompatible SONAMEs. The collector
+# carries that exact builder ABI under a private OK Player SONAME so it cannot
+# shadow the JPEG ABI used by target TIFF/GDK modules.
 
 rm -rf "$OUTPUT"
 mkdir -p "$OUTPUT"
@@ -44,6 +44,7 @@ fi
 
 declare -a queue=()
 declare -A queued=()
+declare -A namespaced_sources=()
 
 enqueue() {
   local soname="$1" source="$2" target
@@ -73,6 +74,13 @@ for ((index = 0; index < ${#queue[@]}; index++)); do
   object="${queue[$index]}"
   while IFS='|' read -r soname source; do
     [[ -n "$soname" && -n "$source" ]] || continue
+    if okp_is_linux_namespaced_media_source "$soname"; then
+      private_soname="$(okp_linux_namespaced_media_soname "$soname")"
+      enqueue "$private_soname" "$source"
+      namespaced_sources["$private_soname"]="$soname"
+      patchelf --replace-needed "$soname" "$private_soname" "$object"
+      continue
+    fi
     okp_is_linux_platform_runtime "$soname" && continue
     enqueue "$soname" "$source"
   done < <(
@@ -81,6 +89,11 @@ for ((index = 0; index < ${#queue[@]}; index++)); do
       $1 ~ /^\// { name = $1; sub(/^.*\//, "", name); print name "|" $1 }
     '
   )
+done
+
+for private_soname in "${!namespaced_sources[@]}"; do
+  printf 'Setting bundled runtime private SONAME: %s\n' "$private_soname" >&2
+  patchelf --set-soname "$private_soname" "$OUTPUT/$private_soname"
 done
 
 for object in "$OUTPUT"/*.so*; do

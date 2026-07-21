@@ -47,6 +47,12 @@ resolved="$(env -u LD_LIBRARY_PATH ldd "$BINARY" | sed -n 's/^[[:space:]]*libmpv
 
 for object in "$BINARY" "$RUNTIME_DIR"/*.so*; do
   readelf -h "$object" >/dev/null 2>&1 || continue
+  while IFS= read -r needed; do
+    if okp_is_linux_namespaced_media_source "$needed"; then
+      echo "Bundled object still requests an unnamespaced media runtime: $object: $needed" >&2
+      exit 1
+    fi
+  done < <(readelf -d "$object" 2>/dev/null | awk '/\(NEEDED\)/ { gsub(/^.*\[/, "", $0); gsub(/\].*$/, "", $0); print }')
   readelf -d "$object" | awk '/\((RUNPATH|RPATH)\)/ && /\[\$ORIGIN\]/ { found = 1 } END { exit !found }' || {
     echo "Bundled object does not carry an origin-relative runtime path: $object" >&2
     exit 1
@@ -61,7 +67,7 @@ done
 for required in \
   libavcodec.so libavdevice.so libavformat.so libavfilter.so libavutil.so \
   libswscale.so libswresample.so libplacebo.so libass.so libbluray.so \
-  librubberband.so; do
+  librubberband.so libokp-libjpeg.so; do
   compgen -G "$RUNTIME_DIR/$required*" >/dev/null || {
     echo "Bundled mpv runtime is missing required dependency family: $required" >&2
     exit 1
