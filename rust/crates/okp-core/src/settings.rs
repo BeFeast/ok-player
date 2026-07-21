@@ -146,7 +146,7 @@ pub struct AudioSettings {
 }
 
 /// Video preferences. `hwdec` holds the mpv option string (`no` / `auto-safe`); the
-/// four adjustments are the Linux-only picture controls.
+/// four adjustments are the shared global picture controls used by both desktop shells.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct VideoSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]

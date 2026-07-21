@@ -76,8 +76,17 @@ public class MpvThreadGuardTests
         using var ctx = new MpvContext();
         ctx.Initialize();
 
-        // The Video submenu writes exactly these properties — assert the names are real and accept our
+        // The Video surfaces write exactly these properties — assert the names are real and accept our
         // values against libmpv (a typo'd property name would otherwise fail silently in the async path).
+        ctx.Command("set", "brightness", "20");
+        ctx.Command("set", "contrast", "-15");
+        ctx.Command("set", "saturation", "30");
+        ctx.Command("set", "gamma", "-10");
+        Assert.Equal(20.0, ctx.GetPropertyDouble("brightness"));
+        Assert.Equal(-15.0, ctx.GetPropertyDouble("contrast"));
+        Assert.Equal(30.0, ctx.GetPropertyDouble("saturation"));
+        Assert.Equal(-10.0, ctx.GetPropertyDouble("gamma"));
+
         ctx.Command("set", "video-rotate", "90");
         Assert.Equal(90, ctx.GetPropertyLong("video-rotate"));
 
@@ -91,8 +100,16 @@ public class MpvThreadGuardTests
         ctx.Command("set", "video-rotate", "0");
         ctx.Command("set", "panscan", "0.0");
         ctx.Command("set", "video-aspect-override", "no");
+        ctx.Command("set", "brightness", "0");
+        ctx.Command("set", "contrast", "0");
+        ctx.Command("set", "saturation", "0");
+        ctx.Command("set", "gamma", "0");
         Assert.Equal(0, ctx.GetPropertyLong("video-rotate"));
         Assert.Equal(0.0, ctx.GetPropertyDouble("panscan"));
+        Assert.Equal(0.0, ctx.GetPropertyDouble("brightness"));
+        Assert.Equal(0.0, ctx.GetPropertyDouble("contrast"));
+        Assert.Equal(0.0, ctx.GetPropertyDouble("saturation"));
+        Assert.Equal(0.0, ctx.GetPropertyDouble("gamma"));
     }
 
     [Fact]

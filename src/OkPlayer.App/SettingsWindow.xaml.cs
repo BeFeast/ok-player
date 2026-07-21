@@ -12,6 +12,7 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.Win32;
 using OkPlayer.App.Services;
 using OkPlayer.App.ViewModels;
+using OkPlayer.Core;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.UI;
 
@@ -627,11 +628,19 @@ public sealed partial class SettingsWindow : Window
 
     // ── Video / Audio panels ───────────────────────────────────────────
 
+    private bool _videoReady; // suppress ValueChanged while reflecting persisted slider values
+
     private void LoadVideo()
     {
+        _videoReady = false;
         bool hw = App.Settings.Current.HardwareDecoding;
         StyleSegment(Hwdec1, hw);
         StyleSegment(Hwdec0, !hw);
+        LoadVideoAdjustment(VideoAdjustmentKind.Brightness, BrightnessSlider, BrightnessValue);
+        LoadVideoAdjustment(VideoAdjustmentKind.Contrast, ContrastSlider, ContrastValue);
+        LoadVideoAdjustment(VideoAdjustmentKind.Saturation, SaturationSlider, SaturationValue);
+        LoadVideoAdjustment(VideoAdjustmentKind.Gamma, GammaSlider, GammaValue);
+        _videoReady = true;
     }
 
     private void OnHwdec(object sender, RoutedEventArgs e)
@@ -643,6 +652,52 @@ public sealed partial class SettingsWindow : Window
             LoadVideo();
         }
     }
+
+    private static string FormatVideoAdjustment(double value)
+        => value > 0 ? $"+{value:0}" : $"{value:0}";
+
+    private static void LoadVideoAdjustment(VideoAdjustmentKind kind, Slider slider, TextBlock valueLabel)
+    {
+        double value = App.Settings.Current.VideoAdjustment(kind);
+        slider.Value = value;
+        valueLabel.Text = FormatVideoAdjustment(value);
+    }
+
+    private void ChangeVideoAdjustment(VideoAdjustmentKind kind, double rawValue, TextBlock valueLabel)
+    {
+        if (!_videoReady)
+            return;
+        double value = Math.Round(VideoAdjustments.Normalize(rawValue));
+        valueLabel.Text = FormatVideoAdjustment(value);
+        App.Settings.Current.SetVideoAdjustment(kind, value);
+        App.Settings.Save(); // raises Changed so every open player applies the new mpv value live
+    }
+
+    private void ResetVideoAdjustment(VideoAdjustmentKind kind, Slider slider, TextBlock valueLabel)
+    {
+        if (Math.Abs(slider.Value - VideoAdjustments.Neutral) < 0.005)
+            ChangeVideoAdjustment(kind, VideoAdjustments.Neutral, valueLabel);
+        else
+            slider.Value = VideoAdjustments.Neutral; // ValueChanged owns persistence/live apply
+    }
+
+    private void OnBrightnessChanged(object sender, RangeBaseValueChangedEventArgs e)
+        => ChangeVideoAdjustment(VideoAdjustmentKind.Brightness, e.NewValue, BrightnessValue);
+    private void OnContrastChanged(object sender, RangeBaseValueChangedEventArgs e)
+        => ChangeVideoAdjustment(VideoAdjustmentKind.Contrast, e.NewValue, ContrastValue);
+    private void OnSaturationChanged(object sender, RangeBaseValueChangedEventArgs e)
+        => ChangeVideoAdjustment(VideoAdjustmentKind.Saturation, e.NewValue, SaturationValue);
+    private void OnGammaChanged(object sender, RangeBaseValueChangedEventArgs e)
+        => ChangeVideoAdjustment(VideoAdjustmentKind.Gamma, e.NewValue, GammaValue);
+
+    private void OnBrightnessReset(object sender, RoutedEventArgs e)
+        => ResetVideoAdjustment(VideoAdjustmentKind.Brightness, BrightnessSlider, BrightnessValue);
+    private void OnContrastReset(object sender, RoutedEventArgs e)
+        => ResetVideoAdjustment(VideoAdjustmentKind.Contrast, ContrastSlider, ContrastValue);
+    private void OnSaturationReset(object sender, RoutedEventArgs e)
+        => ResetVideoAdjustment(VideoAdjustmentKind.Saturation, SaturationSlider, SaturationValue);
+    private void OnGammaReset(object sender, RoutedEventArgs e)
+        => ResetVideoAdjustment(VideoAdjustmentKind.Gamma, GammaSlider, GammaValue);
 
     private bool _audioReady; // suppress the Toggled that fires while we set the initial toggle state
 

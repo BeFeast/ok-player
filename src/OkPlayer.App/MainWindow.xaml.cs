@@ -71,12 +71,14 @@ public sealed partial class MainWindow : Window
             App.Settings.Changed -= ApplyAppTheme; // don't keep this closed window rooted
             App.Settings.Changed -= Player.ApplySubtitleDefaults;
             App.Settings.Changed -= Player.ApplyAudioDefaults;
+            App.Settings.Changed -= Player.ApplyVideoDefaults;
             _settingsWindow?.Close();              // don't leave Settings as a headless window
         };
         ApplyAppTheme();
         App.Settings.Changed += ApplyAppTheme;                 // theme chosen in Settings applies to the player too
         App.Settings.Changed += Player.ApplySubtitleDefaults;  // subtitle size/position changes apply live
         App.Settings.Changed += Player.ApplyAudioDefaults;     // loudness normalization toggles apply live
+        App.Settings.Changed += Player.ApplyVideoDefaults;     // picture adjustment sliders apply live
         if (!string.IsNullOrEmpty(initialFile))
             Player.QueueInitialFile(initialFile, resumeSeconds, subTrack, audioTrack); // command-line / library launch
     }
