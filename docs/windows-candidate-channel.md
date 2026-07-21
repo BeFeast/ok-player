@@ -6,6 +6,13 @@ minutes on `windows-latest` and can also be started manually. A run reads the
 identity manifest on the mutable `windows-candidate` prerelease and skips when
 its exact 40-character source SHA already matches `main`.
 
+Before SDK setup, a scheduled run refreshes `origin/main` and compares it with
+the checked-out SHA. If a newer head already exists, the run emits
+`OKP_CANDIDATE_SKIPPED_SUPERSEDED` with a `superseded by <sha>, skipping`
+notice, skips every build and publication step, and completes successfully.
+Manual dispatch deliberately bypasses this early check and retains the existing
+coalescing decision below.
+
 ## Identity and ordering
 
 - Velopack package id: `com.befeast.okplayer`
@@ -30,7 +37,8 @@ and `releases.win.json` flow are unchanged.
 
 The hosted job performs these gates before any feed movement:
 
-1. verify a clean checkout whose `HEAD` equals the workflow's claimed SHA;
+1. verify a clean checkout whose `HEAD` equals the workflow's claimed SHA and,
+   for scheduled runs, skip it if current `origin/main` has superseded it;
 2. build the C# solution;
 3. run the engine-agnostic unit suite;
 4. fetch libmpv and run the Debug real-libmpv integration suite;

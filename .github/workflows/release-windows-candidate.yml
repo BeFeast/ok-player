@@ -36,22 +36,40 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
 
-      - name: Verify clean checkout at claimed SHA
+      - name: Verify checkout and skip superseded scheduled SHA
+        id: supersession
         shell: pwsh
         run: |
           $actual = (git rev-parse HEAD).Trim()
           if ($actual -ne $env:SOURCE_SHA) { throw "Checkout SHA $actual does not match claimed SHA $env:SOURCE_SHA." }
           if (git status --porcelain) { throw 'Candidate checkout is not clean.' }
+          if ('${{ github.event_name }}' -eq 'schedule') {
+            git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+            if ($LASTEXITCODE -ne 0) { throw 'Could not refresh current main SHA.' }
+            $currentMain = (git rev-parse refs/remotes/origin/main).Trim()
+            if ($LASTEXITCODE -ne 0) { throw 'Could not resolve current main SHA.' }
+            "current_main_sha=$currentMain" >> $env:GITHUB_OUTPUT
+            if ($actual -ne $currentMain) {
+              'should_run=false' >> $env:GITHUB_OUTPUT
+              Write-Output "::notice title=Candidate skipped::superseded by $currentMain, skipping"
+              Write-Output "OKP_CANDIDATE_SKIPPED_SUPERSEDED requested=$actual current=$currentMain"
+            } else {
+              'should_run=true' >> $env:GITHUB_OUTPUT
+            }
+          }
 
       - uses: actions/setup-dotnet@v4
+        if: steps.supersession.outputs.should_run != 'false'
         with:
           dotnet-version: '9.0.x'
 
       - name: Build candidate contract CLI
+        if: steps.supersession.outputs.should_run != 'false'
         run: dotnet build tools/OkPlayer.Candidate/OkPlayer.Candidate.csproj -c Release
 
       - name: Read rolling publication and coalesce unchanged main
         id: decision
+        if: steps.supersession.outputs.should_run != 'false'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path $env:PRIOR_DIR | Out-Null
@@ -210,6 +228,7 @@ jobs:
           ### Windows candidate
 
           - source SHA: ``$env:SOURCE_SHA``
+          - supersession: ``${{ steps.supersession.outputs.should_run == 'false' && format('superseded by {0}, skipping', steps.supersession.outputs.current_main_sha) || 'not superseded' }}``
           - coalescing decision: ``${{ steps.decision.outputs.reason || 'not reached' }}``
           - build requested: ``${{ steps.decision.outputs.should_build || 'not reached' }}``
           - monotonic build: ``$env:BUILD_NUMBER``

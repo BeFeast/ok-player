@@ -105,7 +105,9 @@ fn candidate_workflow_wires_exit_retention_and_session_reclaim() {
             "OKP_SCRATCH_SESSION: candidate-${{ github.run_id }}-${{ github.run_attempt }}"
         )
     );
-    assert!(workflow.contains("if: always()\n        env:\n          OKP_SCRATCH_SESSION:"));
+    assert!(workflow.contains(
+        "if: always() && steps.supersession.outputs.should_run != 'false'\n        env:\n          OKP_SCRATCH_SESSION:"
+    ));
     assert!(workflow.contains("run: ./scripts/reclaim-ok-player-scratch.sh"));
 }
 
