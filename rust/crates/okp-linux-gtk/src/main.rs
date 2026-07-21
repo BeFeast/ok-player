@@ -42,8 +42,8 @@ use okp_core::video_geometry::{VideoGeometry, VideoGeometryAction};
 use okp_core::{
     AppIdentity, aspect_resize, chapter_math, fullscreen_toggle, launch_args, lrc, m3u,
     media_formats, natural_compare, network_media, ok_player_uri, online_subtitles,
-    progress_report, seek_readout, sha256sums, subtitle_delay, subtitle_import, subtitle_search,
-    time_code, timeline_buffer, video_click, volume, window_fit, youtube_open,
+    progress_report, scribe_subtitles, seek_readout, sha256sums, subtitle_delay, subtitle_import,
+    subtitle_search, time_code, timeline_buffer, video_click, volume, window_fit, youtube_open,
 };
 use okp_mpv::{
     AbLoopState, AudioDevice, Chapter, EndFileReason, InfoRow, InfoSection, InfoTrack, MediaInfo,
@@ -229,6 +229,7 @@ struct PlayerState {
     chapters_snapshot: Vec<Chapter>,
     private_session: bool,
     progress_reporter: progress_report::ProgressReporter,
+    scribe_subtitles: scribe_subtitles::ScribeSubtitleState,
     history: history::HistoryStore,
     settings: settings::SettingsStore,
     screenshot_jobs: screenshots::ScreenshotJobs,

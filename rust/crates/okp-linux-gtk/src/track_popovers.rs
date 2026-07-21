@@ -138,7 +138,7 @@ pub(crate) fn populate_subtitle_popover(
         content.append(&empty_track_label(search_source.message()));
     }
 
-    content.append(&scribe_subtitle_button());
+    append_scribe_subtitle_rows(&content, popover, parent, &state, &status_toast);
     let online_state = online_subtitles::OnlineSubtitleSearchContext::reserved(
         state.borrow().private_session,
         media_available,
@@ -1082,23 +1082,119 @@ pub(crate) fn track_section_title(title: &str) -> gtk::Label {
 /// An "eyebrow" header for a group inside a popover (e.g. Secondary, Output
 /// Device, Screenshot) — dimmer and smaller than the popover title so the
 /// primary heading stays dominant and the sections read as a clear hierarchy.
-pub(crate) fn scribe_subtitle_button() -> gtk::Button {
+pub(crate) fn append_scribe_subtitle_rows(
+    content: &gtk::Box,
+    popover: &gtk::Popover,
+    parent: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &Rc<StatusToast>,
+) {
+    let presentation = scribe_subtitle_presentation(&state.borrow());
+    let generate_button = scribe_subtitle_button(&presentation);
+    let generate_popover = popover.clone();
+    let generate_parent = parent.clone();
+    let generate_state = Rc::clone(state);
+    let generate_toast = Rc::clone(status_toast);
+    generate_button.connect_clicked(move |_| {
+        match begin_scribe_subtitle_generation(&generate_state) {
+            Ok(()) => generate_toast.show("Subtitle generation queued"),
+            Err(error) => generate_toast.show(error.message()),
+        }
+        populate_subtitle_popover(
+            &generate_popover,
+            &generate_parent,
+            Rc::clone(&generate_state),
+            Rc::clone(&generate_toast),
+        );
+    });
+    content.append(&generate_button);
+
+    if presentation.can_cancel {
+        let cancel_button = subtitle_action_button("Cancel generation", SubtitleActionIcon::Cancel);
+        cancel_button.set_tooltip_text(Some("Cancel the active Scribe subtitle job"));
+        let cancel_popover = popover.clone();
+        let cancel_parent = parent.clone();
+        let cancel_state = Rc::clone(state);
+        let cancel_toast = Rc::clone(status_toast);
+        cancel_button.connect_clicked(move |_| {
+            if cancel_scribe_subtitle_generation(&cancel_state) {
+                cancel_toast.show("Subtitle generation canceled");
+            }
+            populate_subtitle_popover(
+                &cancel_popover,
+                &cancel_parent,
+                Rc::clone(&cancel_state),
+                Rc::clone(&cancel_toast),
+            );
+        });
+        content.append(&cancel_button);
+    }
+}
+
+pub(crate) fn scribe_subtitle_context(
+    state: &PlayerState,
+) -> scribe_subtitles::ScribeSubtitleContext {
+    scribe_subtitles::ScribeSubtitleContext {
+        private_session: state.private_session,
+        request: state
+            .current_file
+            .clone()
+            .and_then(scribe_subtitles::ScribeSubtitleRequest::for_media_path),
+    }
+}
+
+pub(crate) fn scribe_subtitle_presentation(
+    state: &PlayerState,
+) -> scribe_subtitles::ScribeSubtitlePresentation {
+    state
+        .scribe_subtitles
+        .presentation(&scribe_subtitle_context(state))
+}
+
+pub(crate) fn begin_scribe_subtitle_generation(
+    state: &Rc<RefCell<PlayerState>>,
+) -> Result<(), scribe_subtitles::ScribeSubtitleBeginError> {
+    let context = scribe_subtitle_context(&state.borrow());
+    state
+        .borrow_mut()
+        .scribe_subtitles
+        .begin(context)
+        .map(|_| ())
+}
+
+pub(crate) fn cancel_scribe_subtitle_generation(state: &Rc<RefCell<PlayerState>>) -> bool {
+    state.borrow_mut().scribe_subtitles.cancel()
+}
+
+pub(crate) fn scribe_subtitle_button(
+    presentation: &scribe_subtitles::ScribeSubtitlePresentation,
+) -> gtk::Button {
     let button = gtk::Button::new();
     button.add_css_class("okp-track-row");
     button.add_css_class("okp-scribe-row");
-    button.set_sensitive(false);
-    button.set_tooltip_text(Some("Scribe subtitle generation is coming later"));
+    button.set_sensitive(presentation.can_generate);
+    button.set_tooltip_text(Some(&presentation.message));
+    button.update_property(&[gtk::accessible::Property::Description(
+        &presentation.message,
+    )]);
 
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    row.append(&scribe_icon());
+    if presentation.show_progress {
+        let spinner = gtk::Spinner::new();
+        spinner.add_css_class("okp-scribe-spinner");
+        spinner.start();
+        row.append(&spinner);
+    } else {
+        row.append(&scribe_icon());
+    }
 
-    let label = gtk::Label::new(Some("Generate subtitles…"));
+    let label = gtk::Label::new(Some(&presentation.label));
     label.add_css_class("okp-track-row-label");
     label.set_xalign(0.0);
     label.set_hexpand(true);
     label.set_ellipsize(pango::EllipsizeMode::End);
     row.append(&label);
-    row.append(&subtitle_action_badge("SCRIBE"));
+    row.append(&subtitle_action_badge(&presentation.badge));
     button.set_child(Some(&row));
     button
 }
@@ -1134,6 +1230,7 @@ pub(crate) fn online_subtitle_button(
 pub(crate) enum SubtitleActionIcon {
     Add,
     Search,
+    Cancel,
 }
 
 pub(crate) fn subtitle_action_button(text: &str, kind: SubtitleActionIcon) -> gtk::Button {
@@ -1191,6 +1288,12 @@ pub(crate) fn subtitle_action_icon(kind: SubtitleActionIcon, muted: bool) -> gtk
                 );
                 cr.move_to(width * 0.64, height * 0.64);
                 cr.line_to(width * 0.84, height * 0.84);
+            }
+            SubtitleActionIcon::Cancel => {
+                cr.move_to(width * 0.27, height * 0.27);
+                cr.line_to(width * 0.73, height * 0.73);
+                cr.move_to(width * 0.73, height * 0.27);
+                cr.line_to(width * 0.27, height * 0.73);
             }
         }
         let _ = cr.stroke();

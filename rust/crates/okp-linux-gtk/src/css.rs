@@ -2822,6 +2822,12 @@ const OKP_STYLESHEET: &str = "
             color: rgba(10, 101, 95, 0.54);
         }
 
+        .okp-scribe-spinner {
+            min-width: 16px;
+            min-height: 16px;
+            color: rgba(10, 101, 95, 0.72);
+        }
+
         .okp-subtitle-action-icon {
             min-width: 16px;
             min-height: 16px;
