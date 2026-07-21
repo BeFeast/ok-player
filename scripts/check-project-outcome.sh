@@ -70,9 +70,14 @@ if [[ ! "$source_ci_grace" =~ ^[0-9]+$ ]] || (( source_ci_grace == 0 )); then
   echo "OKP_PROJECT_HEALTH_SOURCE_CI_GRACE_SECONDS must be a positive integer" >&2
   exit 2
 fi
-max_schedule_age="${OKP_PROJECT_HEALTH_MAX_CANDIDATE_SCHEDULE_AGE_SECONDS:-2700}"
+max_schedule_age="${OKP_PROJECT_HEALTH_MAX_CANDIDATE_SCHEDULE_AGE_SECONDS:-7200}"
 if [[ ! "$max_schedule_age" =~ ^[0-9]+$ ]] || (( max_schedule_age == 0 )); then
   echo "OKP_PROJECT_HEALTH_MAX_CANDIDATE_SCHEDULE_AGE_SECONDS must be a positive integer" >&2
+  exit 2
+fi
+max_active_run_age="${OKP_PROJECT_HEALTH_MAX_CANDIDATE_RUN_AGE_SECONDS:-5400}"
+if [[ ! "$max_active_run_age" =~ ^[0-9]+$ ]] || (( max_active_run_age == 0 )); then
+  echo "OKP_PROJECT_HEALTH_MAX_CANDIDATE_RUN_AGE_SECONDS must be a positive integer" >&2
   exit 2
 fi
 
@@ -130,6 +135,28 @@ if candidate_workflow="$(gh api --cache 5m \
   fi
 else
   candidate_workflow_state_error="GitHub Linux Candidate workflow state query failed"
+fi
+
+candidate_active_run='null'
+candidate_active_run_error=""
+if candidate_runs="$(gh run list --repo "$repository" --branch main \
+    --workflow "Linux Candidate" --limit 100 \
+    --json headSha,event,status,createdAt,url 2>/dev/null)"; then
+  if ! candidate_active_run="$(jq -c --arg main_sha "$main_sha" '
+      if type != "array" then error("not an array")
+      else [
+        .[]
+        | select((.headSha // "") == $main_sha)
+        | select((.event // "") == "schedule" or (.event // "") == "workflow_dispatch")
+        | select((.status // "") != "completed")
+      ][0] // null
+      end
+    ' <<<"$candidate_runs" 2>/dev/null)"; then
+    candidate_active_run='null'
+    candidate_active_run_error="GitHub Linux Candidate active run query returned malformed JSON"
+  fi
+else
+  candidate_active_run_error="GitHub Linux Candidate active run query failed"
 fi
 
 candidate_schedule_run='null'
@@ -339,6 +366,7 @@ jq -n \
   --argjson source_ci_grace_seconds "$source_ci_grace" \
   --argjson max_unpublished_main_lag_seconds "$max_lag" \
   --argjson max_candidate_schedule_age_seconds "$max_schedule_age" \
+  --argjson max_candidate_run_age_seconds "$max_active_run_age" \
   --arg main_sha "$main_sha" \
   --arg main_committed_at "$main_committed_at" \
   --argjson workflows "$workflows" \
@@ -347,6 +375,8 @@ jq -n \
   --arg candidate_workflow_state_error "$candidate_workflow_state_error" \
   --argjson candidate_schedule_run "$candidate_schedule_run" \
   --arg candidate_schedule_error "$candidate_schedule_error" \
+  --argjson candidate_active_run "$candidate_active_run" \
+  --arg candidate_active_run_error "$candidate_active_run_error" \
   --argjson candidate_consecutive_failed_runs "$candidate_consecutive_failed_runs" \
   --arg candidate_last_failed_gate "$candidate_last_failed_gate" \
   --arg candidate_sha "$candidate_sha" \
@@ -394,6 +424,7 @@ jq -n \
     source_ci_grace_seconds: $source_ci_grace_seconds,
     max_unpublished_main_lag_seconds: $max_unpublished_main_lag_seconds,
     max_candidate_schedule_age_seconds: $max_candidate_schedule_age_seconds,
+    max_candidate_run_age_seconds: $max_candidate_run_age_seconds,
     source: {
       head_sha: $main_sha,
       head_committed_at_utc: (if $main_committed_at == "" then null else $main_committed_at end),
@@ -414,6 +445,18 @@ jq -n \
           end
         ),
         schedule_error: (if $candidate_schedule_error == "" then null else $candidate_schedule_error end),
+        latest_active_run: (
+          if $candidate_active_run == null then null
+          else {
+            head_sha: ($candidate_active_run.headSha // ""),
+            event: ($candidate_active_run.event // ""),
+            status: ($candidate_active_run.status // ""),
+            created_at_utc: ($candidate_active_run.createdAt // ""),
+            url: ($candidate_active_run.url // "")
+          }
+          end
+        ),
+        active_run_error: (if $candidate_active_run_error == "" then null else $candidate_active_run_error end),
         consecutive_failed_runs: $candidate_consecutive_failed_runs,
         last_failed_gate: (if $candidate_last_failed_gate == "" then null else $candidate_last_failed_gate end)
       },
