@@ -373,14 +373,48 @@ fn live_mode_uses_a_prebuilt_repo_evaluator_without_cargo_and_stays_bounded() {
     );
 }
 
+#[test]
+fn repeated_live_ticks_reclaim_their_snapshot_directories() {
+    let scratch = unique_temp_dir("okp-project-health-scratch");
+
+    for (tick, (scenario, expected_code)) in [("none", 0), ("candidate-failures", 1), ("none", 0)]
+        .into_iter()
+        .enumerate()
+    {
+        let output = run_live_with_tmpdir(scenario, Some(scratch.path()));
+        assert_eq!(
+            output.status.code(),
+            Some(expected_code),
+            "tick {} returned the wrong status: {}",
+            tick + 1,
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let leftovers = fs::read_dir(scratch.path())
+            .expect("scratch directory should be readable")
+            .map(|entry| entry.expect("scratch entry should be readable").file_name())
+            .collect::<Vec<_>>();
+        assert!(
+            leftovers.is_empty(),
+            "tick {} abandoned scratch entries: {leftovers:?}",
+            tick + 1
+        );
+    }
+}
+
 fn run_live(failure: &str) -> Output {
+    run_live_with_tmpdir(failure, None)
+}
+
+fn run_live_with_tmpdir(failure: &str, tmpdir: Option<&Path>) -> Output {
     let root = unique_temp_dir(&format!("okp-project-health-{failure}"));
     let fake_bin = root.path().join("bin");
     fs::create_dir_all(&fake_bin).expect("fake bin should be created");
     write_executable(&fake_bin.join("gh"), FAKE_GH);
     write_executable(&fake_bin.join("curl"), FAKE_CURL);
     write_executable(&fake_bin.join("date"), FAKE_DATE);
-    Command::new("bash")
+    let mut command = Command::new("bash");
+    command
         .arg(checker_path())
         .env("OKP_PROJECT_HEALTH_BIN", evaluator_path())
         .env("OKP_STUB_FAIL", failure)
@@ -399,9 +433,11 @@ fn run_live(failure: &str) -> Output {
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/fixtures/project_health/windows-candidate-feed.json"),
         )
-        .env("PATH", path_with(&fake_bin))
-        .output()
-        .expect("collector fixture should run")
+        .env("PATH", path_with(&fake_bin));
+    if let Some(tmpdir) = tmpdir {
+        command.env("TMPDIR", tmpdir);
+    }
+    command.output().expect("collector fixture should run")
 }
 
 fn checker_path() -> PathBuf {
