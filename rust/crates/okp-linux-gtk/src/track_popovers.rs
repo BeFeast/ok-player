@@ -97,10 +97,28 @@ pub(crate) fn populate_subtitle_popover(
     }
 
     content.append(&divider());
+    let media_available = has_loaded_media(&state);
+    let add_button = subtitle_action_button("Add subtitle file…", SubtitleActionIcon::Add);
+    add_button.set_sensitive(media_available);
+    add_button.set_tooltip_text(Some(if media_available {
+        "Add a local external subtitle file"
+    } else {
+        "Open media before adding a subtitle file"
+    }));
+    let add_parent = parent.clone();
+    let add_state = Rc::clone(&state);
+    let add_popover = popover.clone();
+    add_button.connect_clicked(move |_| {
+        add_popover.popdown();
+        open_subtitle_dialog(&add_parent, Rc::clone(&add_state));
+    });
+    content.append(&add_button);
+
     let current_file = state.borrow().current_file.clone();
     let search_source =
         selected_subtitle_search_source(&tracks, secondary_subtitle_id, current_file.as_deref());
-    let search_button = track_button("Search subtitles...", false);
+    let search_button =
+        subtitle_action_button("Search current subtitle…", SubtitleActionIcon::Search);
     search_button.set_sensitive(matches!(search_source, SubtitleSearchSource::Available(_)));
     search_button.set_tooltip_text(Some(search_source.message()));
     let search_parent = parent.clone();
@@ -121,6 +139,13 @@ pub(crate) fn populate_subtitle_popover(
     }
 
     content.append(&scribe_subtitle_button());
+    let online_state = online_subtitles::OnlineSubtitleSearchContext::reserved(
+        state.borrow().private_session,
+        media_available,
+    )
+    .state();
+    content.append(&online_subtitle_button(online_state));
+    content.append(&divider());
     content.append(&compact_subtitle_delay_row(
         read_subtitle_adjustments(&state).0,
         &state,
@@ -1067,7 +1092,59 @@ pub(crate) fn scribe_subtitle_button() -> gtk::Button {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     row.append(&scribe_icon());
 
-    let label = gtk::Label::new(Some("Generate subtitles (Scribe)"));
+    let label = gtk::Label::new(Some("Generate subtitles…"));
+    label.add_css_class("okp-track-row-label");
+    label.set_xalign(0.0);
+    label.set_hexpand(true);
+    label.set_ellipsize(pango::EllipsizeMode::End);
+    row.append(&label);
+    row.append(&subtitle_action_badge("SCRIBE"));
+    button.set_child(Some(&row));
+    button
+}
+
+pub(crate) fn online_subtitle_button(
+    state: online_subtitles::OnlineSubtitleSearchState,
+) -> gtk::Button {
+    let button = gtk::Button::new();
+    button.add_css_class("okp-track-row");
+    button.add_css_class("okp-online-subtitle-row");
+    // The reservation has no provider implementation and deliberately has no
+    // click handler. Even a future preview state cannot make this build issue a
+    // lookup until provider code is added behind the core policy gate.
+    button.set_sensitive(false);
+    button.set_tooltip_text(Some(state.message()));
+    button.update_property(&[gtk::accessible::Property::Description(state.message())]);
+
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    row.append(&subtitle_action_icon(SubtitleActionIcon::Search, true));
+
+    let label = gtk::Label::new(Some("Find subtitles online…"));
+    label.add_css_class("okp-track-row-label");
+    label.set_xalign(0.0);
+    label.set_hexpand(true);
+    label.set_ellipsize(pango::EllipsizeMode::End);
+    row.append(&label);
+    row.append(&subtitle_action_badge(state.badge()));
+    button.set_child(Some(&row));
+    button
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum SubtitleActionIcon {
+    Add,
+    Search,
+}
+
+pub(crate) fn subtitle_action_button(text: &str, kind: SubtitleActionIcon) -> gtk::Button {
+    let button = gtk::Button::new();
+    button.add_css_class("okp-track-row");
+    button.add_css_class("okp-subtitle-action-row");
+
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    row.append(&subtitle_action_icon(kind, false));
+
+    let label = gtk::Label::new(Some(text));
     label.add_css_class("okp-track-row-label");
     label.set_xalign(0.0);
     label.set_hexpand(true);
@@ -1075,6 +1152,50 @@ pub(crate) fn scribe_subtitle_button() -> gtk::Button {
     row.append(&label);
     button.set_child(Some(&row));
     button
+}
+
+pub(crate) fn subtitle_action_badge(text: &str) -> gtk::Label {
+    let badge = gtk::Label::new(Some(text));
+    badge.add_css_class("okp-subtitle-action-badge");
+    badge.set_valign(gtk::Align::Center);
+    badge
+}
+
+pub(crate) fn subtitle_action_icon(kind: SubtitleActionIcon, muted: bool) -> gtk::DrawingArea {
+    let icon = gtk::DrawingArea::new();
+    icon.add_css_class("okp-subtitle-action-icon");
+    icon.set_content_width(16);
+    icon.set_content_height(16);
+    icon.set_draw_func(move |_, cr, width, height| {
+        let width = f64::from(width);
+        let height = f64::from(height);
+        let alpha = if muted { 0.34 } else { 0.78 };
+        cr.set_source_rgba(0.10, 0.12, 0.14, alpha);
+        cr.set_line_width(1.45);
+        cr.set_line_cap(cairo::LineCap::Round);
+        cr.set_line_join(cairo::LineJoin::Round);
+        match kind {
+            SubtitleActionIcon::Add => {
+                cr.move_to(width * 0.24, height * 0.5);
+                cr.line_to(width * 0.76, height * 0.5);
+                cr.move_to(width * 0.5, height * 0.24);
+                cr.line_to(width * 0.5, height * 0.76);
+            }
+            SubtitleActionIcon::Search => {
+                cr.arc(
+                    width * 0.44,
+                    height * 0.44,
+                    width * 0.27,
+                    0.0,
+                    std::f64::consts::TAU,
+                );
+                cr.move_to(width * 0.64, height * 0.64);
+                cr.line_to(width * 0.84, height * 0.84);
+            }
+        }
+        let _ = cr.stroke();
+    });
+    icon
 }
 
 pub(crate) fn compact_subtitle_delay_row(

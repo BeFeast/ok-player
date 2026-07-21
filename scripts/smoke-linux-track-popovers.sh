@@ -250,6 +250,10 @@ capture() {
 
 capture_set="${OKP_COMMAND_CAPTURE_SET:-all}"
 
+if [[ "${OKP_COMMAND_SURFACES_ONLY:-0}" != 1 && "$capture_set" == subtitles ]]; then
+  capture subtitle-srt-selected-dark dark subtitles 822 262 subtitle-srt-selected
+fi
+
 if [[ "${OKP_COMMAND_SURFACES_ONLY:-0}" != 1 && "$capture_set" == all ]]; then
   capture subtitle-srt-selected-dark dark subtitles 822 262 subtitle-srt-selected
   for substrate in bright dark; do

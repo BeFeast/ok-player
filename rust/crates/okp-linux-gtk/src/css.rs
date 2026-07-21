@@ -2822,6 +2822,30 @@ const OKP_STYLESHEET: &str = "
             color: rgba(10, 101, 95, 0.54);
         }
 
+        .okp-subtitle-action-icon {
+            min-width: 16px;
+            min-height: 16px;
+        }
+
+        .okp-subtitle-action-badge {
+            min-height: 16px;
+            padding: 0 5px;
+            border-radius: 4px;
+            background: rgba(0, 0, 0, 0.065);
+            color: rgba(23, 25, 28, 0.52);
+            font-size: 8.5px;
+            font-weight: 720;
+        }
+
+        button.okp-scribe-row .okp-subtitle-action-badge {
+            background: alpha(@okp_teal, 0.12);
+            color: rgba(10, 101, 95, 0.64);
+        }
+
+        button.okp-online-subtitle-row:disabled {
+            color: rgba(23, 25, 28, 0.38);
+        }
+
         .okp-track-empty {
             min-height: 32px;
             margin: 0;

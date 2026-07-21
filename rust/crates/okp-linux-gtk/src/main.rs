@@ -41,9 +41,9 @@ use okp_core::update_selection::{
 use okp_core::video_geometry::{VideoGeometry, VideoGeometryAction};
 use okp_core::{
     AppIdentity, aspect_resize, chapter_math, fullscreen_toggle, launch_args, lrc, m3u,
-    media_formats, natural_compare, network_media, ok_player_uri, progress_report, seek_readout,
-    sha256sums, subtitle_delay, subtitle_search, time_code, timeline_buffer, video_click, volume,
-    window_fit, youtube_open,
+    media_formats, natural_compare, network_media, ok_player_uri, online_subtitles,
+    progress_report, seek_readout, sha256sums, subtitle_delay, subtitle_import, subtitle_search,
+    time_code, timeline_buffer, video_click, volume, window_fit, youtube_open,
 };
 use okp_mpv::{
     AbLoopState, AudioDevice, Chapter, EndFileReason, InfoRow, InfoSection, InfoTrack, MediaInfo,
