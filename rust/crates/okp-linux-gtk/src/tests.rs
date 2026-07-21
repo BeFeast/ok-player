@@ -528,6 +528,19 @@ fn linux_packages_pin_and_bundle_the_embedded_wayland_mpv() {
 }
 
 #[test]
+fn embedded_wayland_mpv_keeps_the_retained_egl_plane_visible_during_resize() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let patch = fs::read_to_string(root.join("rust/patches/mpv-v0.40.0-wayland-embed.patch"))
+        .expect("Wayland embed patch should be readable");
+
+    assert!(patch.contains("vo_wayland_set_opaque_region(wl, wl->embedded);"));
+    assert!(patch.contains("uint32_t alpha = vo->wl->embedded ? 0 : UINT32_MAX;"));
+    assert!(patch.contains("uint32_t format = vo->wl->embedded ?"));
+    assert!(patch.contains("WL_SHM_FORMAT_ARGB8888 : WL_SHM_FORMAT_XRGB8888;"));
+    assert!(patch.contains("wl_subsurface_place_below(wl->embed_subsurface, wl->embed_parent);"));
+}
+
+#[test]
 fn bundled_runtime_manifest_rejects_target_desktop_libraries() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let policy = root.join("scripts/linux-bundled-mpv-runtime-policy.sh");
