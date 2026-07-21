@@ -95,6 +95,7 @@ trap 'rm -rf -- "$work"' EXIT
 source_error=""
 main_sha=""
 main_committed_at=""
+main_observed_at=""
 if main_commit="$(gh api "repos/$repository/commits/main" 2>/dev/null)" \
     && main_sha="$(jq -er '.sha | select(test("^[0-9a-fA-F]{40}$"))' <<<"$main_commit" 2>/dev/null)"; then
   main_committed_at="$(jq -r '.commit.committer.date // ""' <<<"$main_commit")"
@@ -102,23 +103,57 @@ else
   source_error="GitHub main commit query failed"
 fi
 
+if [[ -n "$main_sha" ]] \
+    && push_events="$(gh api "repos/$repository/events?per_page=100" 2>/dev/null)"; then
+  main_observed_at="$(jq -r --arg main_sha "$main_sha" '
+    if type != "array" then error("not an array")
+    else [
+      .[]
+      | select(
+          .type == "PushEvent"
+          and .payload.ref == "refs/heads/main"
+          and .payload.head == $main_sha
+        )
+      | .created_at
+      | select(type == "string" and length > 0)
+    ][0] // ""
+    end
+  ' <<<"$push_events" 2>/dev/null)" || main_observed_at=""
+fi
+
 workflows='[]'
 for workflow in CI Rust; do
-  if run="$(gh run list --repo "$repository" --branch main --event push --workflow "$workflow" --limit 1 \
-      --json workflowName,headSha,event,status,conclusion,url 2>/dev/null | jq '.[0] // empty')" \
-      && [[ -n "$run" ]]; then
-    workflows="$(jq --argjson run "$run" '. + [{
-      name: $run.workflowName,
-      head_sha: $run.headSha,
-      event: $run.event,
-      status: $run.status,
-      conclusion: ($run.conclusion // ""),
-      url: $run.url
-    }]' <<<"$workflows")"
+  if run_list="$(gh run list --repo "$repository" --branch main --event push --workflow "$workflow" --limit 1 \
+      --json workflowName,headSha,event,status,conclusion,createdAt,url 2>/dev/null)"; then
+    if run="$(jq -c 'if type == "array" then .[0] // null else error("not an array") end' \
+        <<<"$run_list" 2>/dev/null)"; then
+      if [[ "$run" != "null" ]]; then
+        workflows="$(jq --argjson run "$run" '. + [{
+          name: $run.workflowName,
+          head_sha: $run.headSha,
+          event: $run.event,
+          status: $run.status,
+          conclusion: ($run.conclusion // ""),
+          created_at_utc: ($run.createdAt // ""),
+          url: $run.url
+        }]' <<<"$workflows")"
+      fi
+    else
+      source_error="${source_error:+$source_error; }GitHub $workflow workflow query returned malformed JSON"
+    fi
   else
     source_error="${source_error:+$source_error; }GitHub $workflow workflow query failed"
   fi
 done
+
+if [[ -z "$main_observed_at" && -n "$main_sha" ]]; then
+  main_observed_at="$(jq -r --arg main_sha "$main_sha" '[
+    .[]
+    | select(.head_sha == $main_sha)
+    | .created_at_utc
+    | select(type == "string" and length > 0)
+  ] | min // ""' <<<"$workflows" 2>/dev/null)" || main_observed_at=""
+fi
 
 candidate_workflow_state=""
 candidate_workflow_state_error=""
@@ -341,6 +376,7 @@ jq -n \
   --argjson max_candidate_schedule_age_seconds "$max_schedule_age" \
   --arg main_sha "$main_sha" \
   --arg main_committed_at "$main_committed_at" \
+  --arg main_observed_at "$main_observed_at" \
   --argjson workflows "$workflows" \
   --arg source_error "$source_error" \
   --arg candidate_workflow_state "$candidate_workflow_state" \
@@ -397,6 +433,7 @@ jq -n \
     source: {
       head_sha: $main_sha,
       head_committed_at_utc: (if $main_committed_at == "" then null else $main_committed_at end),
+      head_observed_at_utc: (if $main_observed_at == "" then null else $main_observed_at end),
       workflows: $workflows,
       candidate_workflow: {
         state: $candidate_workflow_state,

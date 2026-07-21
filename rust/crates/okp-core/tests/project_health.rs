@@ -340,7 +340,8 @@ fn source_main_ci_settling_is_bounded_and_completed_failures_are_immediate() {
             None,
         ),
     );
-    snapshot.source.head_committed_at_utc = Some("2026-07-18T01:59:47Z".to_owned());
+    snapshot.source.head_committed_at_utc = Some("2026-07-17T00:00:00Z".to_owned());
+    snapshot.source.head_observed_at_utc = Some("2026-07-18T01:59:47Z".to_owned());
     snapshot.source.workflows[0].status = "in_progress".to_owned();
     snapshot.source.workflows[0].conclusion.clear();
     snapshot.source.workflows[1].head_sha = "1111111111111111111111111111111111111111".to_owned();
@@ -522,6 +523,7 @@ fn healthy_snapshot(
         source: SourceSnapshot {
             head_sha: head_sha.clone(),
             head_committed_at_utc: Some("2026-07-18T00:30:00Z".to_owned()),
+            head_observed_at_utc: Some("2026-07-18T00:30:02Z".to_owned()),
             workflows: ["CI", "Rust"]
                 .into_iter()
                 .map(|name| WorkflowSnapshot {
@@ -530,6 +532,7 @@ fn healthy_snapshot(
                     event: "push".to_owned(),
                     status: "completed".to_owned(),
                     conclusion: "success".to_owned(),
+                    created_at_utc: "2026-07-18T00:30:02Z".to_owned(),
                     url: format!("https://example.invalid/runs/{name}"),
                 })
                 .collect(),

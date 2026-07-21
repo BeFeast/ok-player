@@ -44,6 +44,8 @@ pub struct WorkflowSnapshot {
     pub status: String,
     pub conclusion: String,
     #[serde(default)]
+    pub created_at_utc: String,
+    #[serde(default)]
     pub url: String,
 }
 
@@ -106,6 +108,8 @@ pub struct SourceSnapshot {
     pub head_sha: String,
     #[serde(default)]
     pub head_committed_at_utc: Option<String>,
+    #[serde(default)]
+    pub head_observed_at_utc: Option<String>,
     #[serde(default)]
     pub workflows: Vec<WorkflowSnapshot>,
     #[serde(default)]
@@ -301,11 +305,12 @@ fn evaluate_source(
         );
     }
 
-    let committed_at = source
-        .head_committed_at_utc
-        .as_deref()
-        .and_then(parse_utc_timestamp);
-    match committed_at {
+    let (settling_anchor, anchor_name) = match source.head_observed_at_utc.as_deref() {
+        Some(value) => (Some(value), "observation"),
+        None => (source.head_committed_at_utc.as_deref(), "commit"),
+    };
+    let settling_started_at = settling_anchor.and_then(parse_utc_timestamp);
+    match settling_started_at {
         Some(timestamp) if timestamp <= now.saturating_add(future_skew_seconds) => {
             let age = now.saturating_sub(timestamp);
             if age <= grace_seconds {
@@ -322,16 +327,16 @@ fn evaluate_source(
                 };
             }
             pending.push(format!(
-                "source/main CI is still pending {age}s after the commit, exceeding {grace_seconds}s grace"
+                "source/main CI is still pending {age}s after the {anchor_name}, exceeding {grace_seconds}s grace"
             ));
         }
         Some(timestamp) => pending.push(format!(
-            "source/main commit timestamp is {} seconds in the future",
+            "source/main {anchor_name} timestamp is {} seconds in the future",
             timestamp - now
         )),
-        None => pending.push(
-            "source/main commit timestamp is unavailable or not valid UTC RFC 3339".to_owned(),
-        ),
+        None => pending.push(format!(
+            "source/main {anchor_name} timestamp is unavailable or not valid UTC RFC 3339"
+        )),
     }
     check(
         "source-main-ci",
