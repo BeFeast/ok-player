@@ -2967,6 +2967,72 @@ fn online_subtitle_reservation_is_visible_and_has_no_dispatch_path() {
 }
 
 #[test]
+fn scribe_subtitle_reservation_is_shared_by_quick_context_and_settings_paths() {
+    let state = PlayerState::default();
+    let presentation = scribe_subtitle_presentation(&state);
+
+    assert_eq!(presentation.label, "Generate subtitles…");
+    assert_eq!(presentation.badge, "SOON");
+    assert!(!presentation.can_generate);
+    assert!(!presentation.can_cancel);
+    assert!(presentation.message.contains("No network request"));
+
+    let popover = include_str!("track_popovers.rs");
+    assert!(popover.contains("append_scribe_subtitle_rows("));
+    assert!(popover.contains("Id::Subtitles =>"));
+    assert!(popover.contains("populate_subtitle_popover(popover, parent"));
+
+    let settings = include_str!("settings_pages.rs");
+    assert!(settings.contains("scribe_subtitle_presentation(&state.borrow())"));
+    assert!(settings.contains("Cancel generation"));
+}
+
+#[test]
+fn scribe_subtitle_placeholder_can_queue_progress_and_cancel_without_transport() {
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(PathBuf::from("/media/Movie.mkv")),
+        scribe_subtitles: scribe_subtitles::ScribeSubtitleState::new(
+            scribe_subtitles::ScribeSubtitleConfig::supported("https://scribe.example.invalid"),
+        ),
+        ..PlayerState::default()
+    }));
+
+    assert!(scribe_subtitle_presentation(&state.borrow()).can_generate);
+    assert_eq!(begin_scribe_subtitle_generation(&state), Ok(()));
+    assert_eq!(
+        begin_scribe_subtitle_generation(&state),
+        Err(scribe_subtitles::ScribeSubtitleBeginError::AlreadyActive)
+    );
+
+    let queued = scribe_subtitle_presentation(&state.borrow());
+    assert_eq!(queued.badge, "QUEUED");
+    assert!(queued.show_progress);
+    assert!(queued.can_cancel);
+    assert!(!queued.can_generate);
+
+    assert!(
+        state
+            .borrow_mut()
+            .scribe_subtitles
+            .mark_in_progress(Some(37))
+    );
+    let progress = scribe_subtitle_presentation(&state.borrow());
+    assert_eq!(progress.badge, "37%");
+    assert!(progress.message.contains("37% complete"));
+
+    assert!(cancel_scribe_subtitle_generation(&state));
+    let canceled = scribe_subtitle_presentation(&state.borrow());
+    assert_eq!(canceled.badge, "CANCELED");
+    assert!(!canceled.show_progress);
+    assert!(!canceled.can_cancel);
+    assert!(canceled.can_generate);
+    assert_eq!(
+        state.borrow().scribe_subtitles.network_endpoint(false),
+        None
+    );
+}
+
+#[test]
 fn subtitle_preset_surfaces_explain_native_supported_and_fallback_states() {
     use okp_core::subtitle_tracks::{SubtitlePresetApplicability, SubtitlePresetFormat};
 

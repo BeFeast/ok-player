@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 pub enum ExternalSubtitleOrigin {
     LocalFile,
     OnlineSearch { provider: String, result_id: String },
+    Scribe,
 }
 
 /// A local file ready for the existing external-subtitle load pipeline.
@@ -35,6 +36,13 @@ impl ExternalSubtitleImport {
                 provider: provider.into(),
                 result_id: result_id.into(),
             },
+        }
+    }
+
+    pub(crate) fn scribe(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            origin: ExternalSubtitleOrigin::Scribe,
         }
     }
 

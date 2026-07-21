@@ -57,6 +57,38 @@ pub(crate) fn settings_subtitles_page(
     let add_state = Rc::clone(&state);
     add_button.connect_clicked(move |_| open_subtitle_dialog(&add_parent, Rc::clone(&add_state)));
     actions.append(&add_button);
+
+    let presentation = scribe_subtitle_presentation(&state.borrow());
+    let generate_button = gtk::Button::with_label(&presentation.label);
+    generate_button.add_css_class("okp-settings-button");
+    generate_button.set_sensitive(presentation.can_generate);
+    generate_button.set_tooltip_text(Some(&presentation.message));
+    let cancel_button = gtk::Button::with_label("Cancel generation");
+    cancel_button.add_css_class("okp-settings-button");
+    cancel_button.set_visible(presentation.can_cancel);
+
+    let generate_state = Rc::clone(&state);
+    let generate_toast = Rc::clone(&status_toast);
+    let generate_cancel = cancel_button.clone();
+    generate_button.connect_clicked(move |button| {
+        match begin_scribe_subtitle_generation(&generate_state) {
+            Ok(()) => generate_toast.show("Subtitle generation queued"),
+            Err(error) => generate_toast.show(error.message()),
+        }
+        refresh_settings_scribe_controls(&generate_state, button, &generate_cancel);
+    });
+    actions.append(&generate_button);
+
+    let cancel_state = Rc::clone(&state);
+    let cancel_toast = Rc::clone(&status_toast);
+    let cancel_generate = generate_button.clone();
+    cancel_button.connect_clicked(move |button| {
+        if cancel_scribe_subtitle_generation(&cancel_state) {
+            cancel_toast.show("Subtitle generation canceled");
+        }
+        refresh_settings_scribe_controls(&cancel_state, &cancel_generate, button);
+    });
+    actions.append(&cancel_button);
     summary.append(&actions);
     page.append(&summary);
 
@@ -86,6 +118,18 @@ pub(crate) fn settings_subtitles_page(
     }
 
     page
+}
+
+fn refresh_settings_scribe_controls(
+    state: &Rc<RefCell<PlayerState>>,
+    generate_button: &gtk::Button,
+    cancel_button: &gtk::Button,
+) {
+    let presentation = scribe_subtitle_presentation(&state.borrow());
+    generate_button.set_label(&presentation.label);
+    generate_button.set_sensitive(presentation.can_generate);
+    generate_button.set_tooltip_text(Some(&presentation.message));
+    cancel_button.set_visible(presentation.can_cancel);
 }
 
 pub(crate) fn settings_subtitle_presentation_section(
