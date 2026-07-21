@@ -416,13 +416,29 @@
                                    Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,8,0,0" />
                     </StackPanel>
 
-                    <!-- Shortcuts (real) — keyboard reference -->
+                    <!-- Shortcuts — interactive editor over the shared shortcut model/schema. -->
                     <StackPanel x:Name="ShortcutsPanel" Visibility="Collapsed">
                         <TextBlock Text="Shortcuts" Style="{StaticResource OkSettingsTitleTextStyle}" />
-                        <StackPanel x:Name="ShortcutsHost" Margin="0,16,0,0" />
-                        <TextBlock Text="Custom rebinding is on the way. Today these keys are fixed; some also adjust with Settings &#x2192; Playback (skip step)."
-                                   TextWrapping="Wrap" MaxWidth="460" HorizontalAlignment="Left" FontSize="11.5"
-                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,18,0,0" />
+                        <Border Margin="0,16,0,0" MaxWidth="560" HorizontalAlignment="Left"
+                                Background="{ThemeResource OkSurfaceCardBrush}" BorderBrush="{ThemeResource OkCardStrokeBrush}"
+                                BorderThickness="1" CornerRadius="8" Padding="16,14">
+                            <StackPanel>
+                                <TextBlock Text="KEYBOARD SHORTCUTS" Style="{StaticResource OkEyebrowTextStyle}" />
+                                <TextBox x:Name="ShortcutSearch" PlaceholderText="Search actions or keys"
+                                         TextChanged="OnShortcutSearchChanged" Margin="0,14,0,8" MinHeight="36"
+                                         IsSpellCheckEnabled="False" />
+                                <StackPanel x:Name="ShortcutsHost" />
+                                <Grid Margin="0,14,0,0" ColumnDefinitions="*,Auto">
+                                    <TextBlock x:Name="ShortcutStatus" Text="Ready" VerticalAlignment="Center"
+                                               FontSize="11.5" TextWrapping="Wrap"
+                                               Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                                    <Button x:Name="ResetAllShortcutsButton" Grid.Column="1" Content="Reset all"
+                                            Click="OnResetAllShortcuts" CornerRadius="7" Padding="11,6"
+                                            Background="Transparent" BorderThickness="1"
+                                            BorderBrush="{ThemeResource OkStrokeBrush}" />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
 
                     <!-- Advanced (real) — the power-user escape hatch (PRD: raw mpv config) -->

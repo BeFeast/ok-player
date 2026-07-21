@@ -44,6 +44,9 @@ public sealed class AppSettings
     // Updates (About panel) — Velopack auto-update. On by default for the beta program.
     public bool AutoCheckUpdates { get; set; } = true;   // check GitHub for a newer release on launch
 
+    /// <summary>The shared <c>advanced.keybindings</c> config text; blank means all defaults.</summary>
+    public string Keybindings { get; set; } = "";
+
     public int SchemaVersion { get; set; } = SettingsService.SchemaVersion;
 
     public double VideoAdjustment(VideoAdjustmentKind kind) => kind switch
@@ -203,6 +206,7 @@ public sealed class SettingsService
         JsonObject subtitles = Section(root, "subtitles");
         JsonObject appearance = Section(root, "appearance");
         JsonObject updates = Section(root, "updates");
+        JsonObject advanced = Section(root, "advanced");
         JsonObject privacy = Section(root, "privacy");
 
         settings.DefaultVolume = (int)Math.Round(
@@ -236,6 +240,7 @@ public sealed class SettingsService
         settings.Theme = ReadString(appearance, "theme") ?? settings.Theme;
         settings.AccentSource = ReadString(appearance, "accent_source") ?? settings.AccentSource;
         settings.AutoCheckUpdates = ReadBool(updates, "auto_check") ?? settings.AutoCheckUpdates;
+        settings.Keybindings = ReadString(advanced, "keybindings") ?? "";
         settings.HistoryRetentionDays =
             ReadInt(privacy, "history_retention_days") ?? settings.HistoryRetentionDays;
         return settings;
@@ -251,7 +256,7 @@ public sealed class SettingsService
         JsonObject appearance = EnsureSection(root, "appearance");
         JsonObject updates = EnsureSection(root, "updates");
         JsonObject privacy = EnsureSection(root, "privacy");
-        EnsureSection(root, "advanced");
+        JsonObject advanced = EnsureSection(root, "advanced");
 
         playback["volume"] = Math.Clamp(settings.DefaultVolume, 0, 130);
         playback["resume"] = settings.ResumePlayback;
@@ -278,6 +283,10 @@ public sealed class SettingsService
         appearance["accent_source"] = settings.AccentSource;
         updates["auto_check"] = settings.AutoCheckUpdates;
         updates["channel"] = ReadString(updates, "channel") == "candidate" ? "candidate" : "public";
+        SetOptional(
+            advanced,
+            "keybindings",
+            string.IsNullOrWhiteSpace(settings.Keybindings) ? null : settings.Keybindings.Trim());
         privacy["history_retention_days"] = settings.HistoryRetentionDays;
         settings.SchemaVersion = SchemaVersion;
     }

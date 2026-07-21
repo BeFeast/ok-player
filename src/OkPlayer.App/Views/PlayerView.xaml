@@ -156,14 +156,8 @@
     </UserControl.Resources>
 
     <Grid x:Name="RootGrid" Background="Transparent" AllowDrop="True"
-          KeyboardAcceleratorPlacementMode="Hidden"
           PointerMoved="OnRootPointerMoved" PointerPressed="OnRootPointerPressed"
           DragOver="OnDragOver" DragLeave="OnDragLeave" Drop="OnDrop">
-
-        <Grid.KeyboardAccelerators>
-            <KeyboardAccelerator Modifiers="Control" Key="O" Invoked="OnOpenAccelerator" />
-            <KeyboardAccelerator Modifiers="Control" Key="V" Invoked="OnPasteAccelerator" />
-        </Grid.KeyboardAccelerators>
 
         <!-- right-click context menu (design band 11 — light material) -->
         <Grid.ContextFlyout>

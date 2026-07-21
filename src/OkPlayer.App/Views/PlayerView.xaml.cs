@@ -8,6 +8,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
+using OkPlayer.Core;
 using OkPlayer.App.Services;
 using OkPlayer.App.ViewModels;
 using OkPlayer.Core;
@@ -35,6 +36,7 @@ public sealed partial class PlayerView : UserControl
     private readonly ThumbnailService _thumbs = new();
     private readonly ThumbnailService _posterThumbs = new(); // decode-only engine for continue-watching posters
     private readonly HistoryService _history = App.History; // shared instance; Settings' "Clear history" reflects here
+    private IReadOnlyList<ShortcutBinding> _shortcutBindings = ShortcutModel.DefaultBindings();
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _saveTimer;
     private string? _currentPath;
     private OkPlayer.Core.Playlist? _playlist; // the opened file's folder, in natural order (null for streams)
@@ -129,7 +131,7 @@ public sealed partial class PlayerView : UserControl
     public event EventHandler? ToggleFullscreenRequested;
     /// <summary>Esc: leave fullscreen if in it.</summary>
     public event EventHandler? ExitFullscreenRequested;
-    /// <summary>Ctrl+O / Welcome card: ask the host to show a file picker.</summary>
+    /// <summary>Open-file shortcut / Welcome card: ask the host to show a file picker.</summary>
     public event EventHandler? OpenFileRequested;
     /// <summary>Ask the host for local media to append or insert immediately after the current item.</summary>
     public event Action<OkPlayer.Core.QueueInsertMode>? QueueFilesRequested;
@@ -183,6 +185,7 @@ public sealed partial class PlayerView : UserControl
         Seek.ScrubStateChanged += scrubbing => Vm.IsScrubbing = scrubbing;
         Seek.HoverChanged += OnSeekHover;
         Seek.HoverEnded += OnSeekHoverEnded;
+        ReloadShortcutBindings();
         App.Settings.Changed += OnSettingsChanged; // re-evaluate pause auto-hide when its toggle changes mid-pause
         App.Updates.Changed += OnUpdateStateChanged; // surface a ready update once, as an unobtrusive toast
         OnUpdateStateChanged(); // also catch an update already staged before we subscribed (a prior-session download)
@@ -549,7 +552,9 @@ public sealed partial class PlayerView : UserControl
     private void OnWelcomeOpenClick(object sender, RoutedEventArgs e)
         => OpenFileRequested?.Invoke(this, EventArgs.Empty);
 
-    private async void OnOpenUrlClick(object sender, RoutedEventArgs e)
+    private void OnOpenUrlClick(object sender, RoutedEventArgs e) => _ = OpenUrlAsync();
+
+    private async Task OpenUrlAsync()
     {
         var input = new TextBox { PlaceholderText = "https://…  or  smb://host/share/file.mkv" };
         var dialog = new ContentDialog
@@ -882,8 +887,23 @@ public sealed partial class PlayerView : UserControl
     // when the setting is on, or leaves them up when it's off. Fires on the shared UI thread (both windows).
     private void OnSettingsChanged()
     {
+        ReloadShortcutBindings();
         if (Vm.IsPaused)
             RevealChrome();
+    }
+
+    private void ReloadShortcutBindings()
+    {
+        try
+        {
+            _shortcutBindings = ShortcutModel.ResolvedBindingsFromText(
+                App.Settings.Current.Keybindings,
+                WindowsShortcutKeys.Instance);
+        }
+        catch (ShortcutConfigException)
+        {
+            _shortcutBindings = ShortcutModel.DefaultBindings();
+        }
     }
 
     private bool _updateBannerShown; // session guard: surface a ready update once, not on every Changed tick
@@ -957,41 +977,26 @@ public sealed partial class PlayerView : UserControl
             return; // Subtitle flyout owns track-list scrolling and delay-field editing while open
         if (IsEditableInputFocused())
             return; // NumberBox/TextBox flyouts own typing, arrows, Enter, Esc, etc.
-        bool handled = true;
-        switch (e.Key)
+        string? keyName = WindowsShortcutKeys.CanonicalName(e.Key);
+        ShortcutModifiers modifiers = WindowsShortcutKeys.CurrentModifiers();
+        ShortcutAction? action = keyName is null
+            ? null
+            : ShortcutModel.ActionForKey(_shortcutBindings, keyName, modifiers);
+        bool handled = action is not null && DispatchShortcut(action.Value);
+
+        // Clipboard-open remains a shell affordance rather than a bindable player action. A user binding wins
+        // when it claims Ctrl+V; otherwise the legacy paste behavior stays available without a competing WinUI
+        // KeyboardAccelerator intercepting configurable chords.
+        if (!handled && keyName == "v" && modifiers == new ShortcutModifiers(Ctrl: true))
         {
-            case VirtualKey.Space:
-            case (VirtualKey)0x4B: Vm.TogglePlay(); break;        // K
-            case VirtualKey.Left:  Vm.SeekRelative(-App.Settings.Current.SkipStep); break;
-            case VirtualKey.Right: Vm.SeekRelative(App.Settings.Current.SkipStep); break;
-            case (VirtualKey)0x4A: Vm.SeekRelative(-10); break;   // J
-            case (VirtualKey)0x4C: Vm.SeekRelative(10); break;    // L
-            case VirtualKey.Up:    Vm.NudgeVolume(5); break;
-            case VirtualKey.Down:  Vm.NudgeVolume(-5); break;
-            case (VirtualKey)0xBE: Vm.FrameStep(true); break;     // .
-            case (VirtualKey)0xBC: Vm.FrameStep(false); break;    // ,
-            case (VirtualKey)0x4D: Vm.ToggleMute(); break;        // M
-            case (VirtualKey)0x46: ToggleFullscreenRequested?.Invoke(this, EventArgs.Empty); break; // F
-            case (VirtualKey)0x53: DoScreenshot(); break;         // S
-            case (VirtualKey)0x49: OpenMediaInfo(); break;        // I
-            case (VirtualKey)0x43: TogglePanel(); break;          // C
-            case (VirtualKey)0x58: CloseFile(); break;            // X — close the current file, back to Welcome
-            case (VirtualKey)0x48: if (!Vm.HasMedia) OpenHistory(); else handled = false; break; // H — open History (idle)
-            case (VirtualKey)0x5A: // Z — subtitle delay sync (mpv-style): Z earlier, Shift+Z later; +Ctrl = coarse (±1s)
-            {
-                int step = IsKeyDown(VirtualKey.Control) ? 1000 : 100;
-                Vm.NudgeSubDelay(IsKeyDown(VirtualKey.Shift) ? step : -step);
-                break;
-            }
-            case VirtualKey.PageDown: PlayNext(); break;          // next file in the folder playlist
-            case VirtualKey.PageUp:   PlayPrevious(); break;      // previous file
-            case VirtualKey.Escape:
-                if (_mediaInfoWindow is not null) CloseMediaInfo();
-                else if (LyricsOverlay.Visibility == Visibility.Visible) CloseLyrics(); // dismiss the lyrics sheet first
-                else if (_panelOpen) TogglePanel();
-                else ExitFullscreenRequested?.Invoke(this, EventArgs.Empty);
-                break;
-            default: handled = false; break;
+            _ = OpenClipboardMediaAsync();
+            handled = true;
+        }
+        // History has no shared shortcut action. Keep the idle-only H affordance as an unclaimed shell fallback.
+        else if (!handled && keyName == "h" && modifiers == default && !Vm.HasMedia)
+        {
+            OpenHistory();
+            handled = true;
         }
         if (handled)
         {
@@ -1000,8 +1005,52 @@ public sealed partial class PlayerView : UserControl
         }
     }
 
-    // True while a modifier key is physically held — used to qualify a key chord (Shift flips a direction,
-    // Ctrl selects the coarse step) without separate keybindings.
+    private bool DispatchShortcut(ShortcutAction action)
+    {
+        switch (action)
+        {
+            case ShortcutAction.PlayPause: Vm.TogglePlay(); break;
+            case ShortcutAction.SeekBack: Vm.SeekRelative(-App.Settings.Current.SkipStep); break;
+            case ShortcutAction.SeekForward: Vm.SeekRelative(App.Settings.Current.SkipStep); break;
+            case ShortcutAction.FrameForward: Vm.FrameStep(true); break;
+            case ShortcutAction.FrameBack: Vm.FrameStep(false); break;
+            case ShortcutAction.PreviousItem: PlayPrevious(); break;
+            case ShortcutAction.NextItem: PlayNext(); break;
+            case ShortcutAction.VolumeDown: Vm.NudgeVolume(-5); break;
+            case ShortcutAction.VolumeUp: Vm.NudgeVolume(5); break;
+            case ShortcutAction.Mute: Vm.ToggleMute(); break;
+            case ShortcutAction.OpenFile: OpenFileRequested?.Invoke(this, EventArgs.Empty); break;
+            case ShortcutAction.AddSubtitle: RequestAddSubtitle(); break;
+            case ShortcutAction.OpenUrl: _ = OpenUrlAsync(); break;
+            case ShortcutAction.CloseMedia: CloseFile(); break;
+            case ShortcutAction.SaveScreenshot: DoScreenshot(); break;
+            case ShortcutAction.CopyFrame: DoCopyFrame(); break;
+            case ShortcutAction.MediaInfo: OpenMediaInfo(); break;
+            case ShortcutAction.GoToTime: _ = OpenGoToTimeAsync(); break;
+            case ShortcutAction.AbLoop: Vm.ToggleAbLoop(); break;
+            case ShortcutAction.SubtitleDelayForward: Vm.NudgeSubDelay(50); break;
+            case ShortcutAction.SubtitleDelayBack: Vm.NudgeSubDelay(-50); break;
+            case ShortcutAction.SubtitleSizeDown: Vm.NudgeSubScale(-0.1); break;
+            case ShortcutAction.SubtitleSizeUp: Vm.NudgeSubScale(0.1); break;
+            case ShortcutAction.SubtitlePreviousCue: Vm.SeekSubtitleCue(next: false); break;
+            case ShortcutAction.SubtitleNextCue: Vm.SeekSubtitleCue(next: true); break;
+            case ShortcutAction.Fullscreen: ToggleFullscreenRequested?.Invoke(this, EventArgs.Empty); break;
+            case ShortcutAction.EscapeFullscreen: DismissOrExitFullscreen(); break;
+            case ShortcutAction.OpenSettings: SettingsRequested?.Invoke(this, EventArgs.Empty); break;
+            default: return false;
+        }
+        return true;
+    }
+
+    private void DismissOrExitFullscreen()
+    {
+        if (_mediaInfoWindow is not null) CloseMediaInfo();
+        else if (LyricsOverlay.Visibility == Visibility.Visible) CloseLyrics();
+        else if (_panelOpen) TogglePanel();
+        else ExitFullscreenRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    // True while a modifier key is physically held — used by controls whose interaction is not a shortcut.
     private static bool IsKeyDown(VirtualKey key) =>
         Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(key)
             .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
@@ -1157,7 +1206,9 @@ public sealed partial class PlayerView : UserControl
 
     /// <summary>Seek to an exact typed timecode (pillar 4: precise navigation). Accepts "90", "1:30",
     /// "1:23:45"; clamps to the file's duration and rejects invalid input.</summary>
-    private async void OnGoToTimeClick(object sender, RoutedEventArgs e)
+    private void OnGoToTimeClick(object sender, RoutedEventArgs e) => _ = OpenGoToTimeAsync();
+
+    private async Task OpenGoToTimeAsync()
     {
         if (!Vm.HasMedia || !double.IsFinite(Vm.Duration) || Vm.Duration <= 0)
             return;
@@ -2019,6 +2070,11 @@ public sealed partial class PlayerView : UserControl
     private void OnAddSubtitleFile(object sender, RoutedEventArgs e)
     {
         SubtitleFlyout.Hide();
+        RequestAddSubtitle();
+    }
+
+    private void RequestAddSubtitle()
+    {
         if (!Vm.HasMedia)
         {
             ShowToast("Open a video first");
@@ -3144,14 +3200,6 @@ public sealed partial class PlayerView : UserControl
         }
     }
 
-    private void OnOpenAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
-    {
-        if (_historyOpen || _subtitleFlyoutOpen || IsEditableInputFocused())
-            return;
-        OpenFileRequested?.Invoke(this, EventArgs.Empty);
-        args.Handled = true;
-    }
-
     private void OnDragOver(object sender, DragEventArgs e)
     {
         var data = e.DataView;
@@ -3304,14 +3352,12 @@ public sealed partial class PlayerView : UserControl
 
     /// <summary>Ctrl+V: open a URL or local file path from the clipboard ("paste a URL"/path). A no-op with a
     /// gentle toast when the clipboard holds neither, so a stray paste doesn't disrupt playback.</summary>
-    private async void OnPasteAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    private async Task OpenClipboardMediaAsync()
     {
-        // Don't hijack Ctrl+V from a focused text field — the History search box, or any TextBox — let it paste
-        // there. Only the bare player surface turns a pasted URL/path into an open. Return BEFORE marking the
-        // accelerator handled, or the focused field never receives the paste.
+        // Don't hijack Ctrl+V from a focused text field. Only the bare player surface turns pasted text into an
+        // open request; OnRootKeyDown leaves editable/flyout/history focus alone before calling this helper.
         if (_historyOpen || _subtitleFlyoutOpen || IsEditableInputFocused())
             return;
-        args.Handled = true;
         try
         {
             var data = Windows.ApplicationModel.DataTransfer.Clipboard.GetContent();

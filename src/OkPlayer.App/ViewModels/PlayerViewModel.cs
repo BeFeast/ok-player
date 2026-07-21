@@ -906,6 +906,8 @@ public partial class PlayerViewModel : ObservableObject
             ToastRequested?.Invoke($"Subtitle size {System.Math.Clamp(SubScale + delta, 0.2, 4.0) * 100:0}%");
     }
 
+    public void SeekSubtitleCue(bool next) => CmdOk("sub-seek", next ? "1" : "-1");
+
     public void ToggleTimeLabel() => ShowRemaining = !ShowRemaining;
 
     /// <summary>Minimum percentage points to raise subtitles by while the OSC chrome is up, so the controls

@@ -1,9 +1,10 @@
 //! Keyboard shortcut model for the player shell: the action table with default chords, the
 //! `action=shortcut` config-text parsing and serialisation, conflict detection, and chord
 //! display labels. Extracted from the GTK shell (`okp-linux-gtk`), which keeps only the capture
-//! UI and dispatch wiring; the shell's twelve shortcut tests moved here and are the executable
-//! spec (there is no C# counterpart module — see `docs/core-compatibility.md`). Pure (no I/O,
-//! no UI, no GDK).
+//! UI and dispatch wiring; the shell's shortcut tests moved here and are the executable spec.
+//! The Windows projection in `src/OkPlayer.Core/Shortcuts.cs` mirrors this contract and test set
+//! without moving native-key capture into either core (see `docs/core-compatibility.md`). Pure
+//! (no I/O, no UI, no GDK).
 //!
 //! A chord is one non-modifier key plus any of Ctrl/Alt/Shift. Keys are identified by their
 //! canonical, case-folded keysym name (`space`, `comma`, `Page_Up`, `c`, …). Config text is one

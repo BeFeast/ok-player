@@ -434,7 +434,8 @@ canonical form, the Linux alpha dialect, and the Windows dialect, and return `No
 anything else so the shell falls back to defaults — exactly how both shells already treat a
 corrupt file. The Windows shell adopts the canonical **settings** schema directly as of #500:
 `SettingsService` reads either shape, writes the same sectioned v2 document as Linux, and preserves
-sections/fields it does not understand.
+sections/fields it does not understand. Issue #498 adds the Windows shortcut projection at
+`advanced.keybindings`, using the same line-oriented text consumed by Linux.
 Windows history remains on the PascalCase dialect until that consumer adopts the canonical
 history document. The Rust golden tests remain the schema executable spec; C# persistence tests
 cover the Windows reader/writer and legacy-settings upgrade.
@@ -473,6 +474,7 @@ cover the Windows reader/writer and legacy-settings upgrade.
 | `Theme` / `AccentSource` | `appearance.theme` / `.accent_source` |
 | `AutoCheckUpdates` | `updates.auto_check` |
 | `HistoryRetentionDays` | `privacy.history_retention_days` |
+| `Keybindings` (canonical-only Windows projection) | `advanced.keybindings` |
 
 - **Hardware decoding is stored as the mpv string, not a bool.** The Linux dialect already
   persists `video.hwdec` as the mpv option (`auto-safe` / `no`); the canonical form keeps that
@@ -483,7 +485,7 @@ cover the Windows reader/writer and legacy-settings upgrade.
 - **`mpv.conf` is not migrated from Windows settings.** On Windows the raw mpv config is a
   separate `%APPDATA%\OkPlayer\mpv.conf` text file, never a field of `settings.json`, so
   `advanced.mpv_conf` is left absent when migrating a Windows settings document (the shell reads
-  that file on its own). `advanced.keybindings` is likewise Linux-only.
+  that file on its own). Shortcut overrides use the shared `advanced.keybindings` field on both shells.
 - **Skipped update versions are per channel.** Linux writes optional
   `updates.skipped_versions.public` / `.candidate` exact-version strings. Older
   Linux documents and migrated Windows documents default both slots to absent;
