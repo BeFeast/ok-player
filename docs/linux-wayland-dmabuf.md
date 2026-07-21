@@ -48,6 +48,14 @@ proxies to a dedicated event queue on the caller's display connection. It does
 not own or destroy the display or parent surface. GTK retains both resources
 until mpv has shut down.
 
+The embedded mpv surface is a transparent container, not a black substrate.
+Its DMA-BUF video and OSD children remain above that container, while OK
+Player's retained EGL plane stays below it as the same-instance fallback.
+During a Standard-to-Mini resize, a compositor may briefly remap the DMA-BUF
+child; transparency lets the advancing EGL frame remain visible instead of
+exposing an opaque black container. Standalone mpv keeps its existing opaque
+black window substrate.
+
 The GTK parent and root surfaces are transparent only while a media source is
 active. EOF without a follow-up item and Close Media both clear the active
 source before the welcome surface is projected, returning the GTK toplevel to
