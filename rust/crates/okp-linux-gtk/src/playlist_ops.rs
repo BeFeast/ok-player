@@ -1157,6 +1157,14 @@ pub(crate) fn media_paths_in_directory(directory: &Path) -> Vec<PathBuf> {
 }
 
 pub(crate) fn load_subtitle_path(state: &Rc<RefCell<PlayerState>>, path: PathBuf) -> bool {
+    load_subtitle_import(state, subtitle_import::ExternalSubtitleImport::local(path))
+}
+
+pub(crate) fn load_subtitle_import(
+    state: &Rc<RefCell<PlayerState>>,
+    import: subtitle_import::ExternalSubtitleImport,
+) -> bool {
+    let path = import.into_path();
     if !is_subtitle_path(&path) || !has_loaded_media(state) {
         return false;
     }

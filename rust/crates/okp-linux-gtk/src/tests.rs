@@ -2861,6 +2861,26 @@ fn subtitle_presentation_surfaces_stay_curated_and_width_safe() {
 }
 
 #[test]
+fn online_subtitle_reservation_is_visible_and_has_no_dispatch_path() {
+    let popover = include_str!("track_popovers.rs");
+    assert!(popover.contains("OnlineSubtitleSearchContext::reserved("));
+    assert!(popover.contains("Find subtitles online…"));
+
+    let button_start = popover
+        .find("pub(crate) fn online_subtitle_button(")
+        .expect("online subtitle button should remain in the shared subtitle popover");
+    let button_end = popover[button_start..]
+        .find("#[derive(Clone, Copy)]")
+        .map(|offset| button_start + offset)
+        .expect("online subtitle button should end before the action-icon declaration");
+    let button = &popover[button_start..button_end];
+
+    assert!(button.contains("button.set_sensitive(false)"));
+    assert!(button.contains("state.message()"));
+    assert!(!button.contains("connect_clicked"));
+}
+
+#[test]
 fn subtitle_preset_surfaces_explain_native_supported_and_fallback_states() {
     use okp_core::subtitle_tracks::{SubtitlePresetApplicability, SubtitlePresetFormat};
 
