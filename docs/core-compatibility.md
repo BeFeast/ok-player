@@ -153,6 +153,11 @@ behaves identically on both sides.
   still parse as switches. Unknown `-`-prefixed tokens are ignored on both sides. The ported
   unknown-switch test asserts the dash forms; a stray `/foo` becomes positional in Rust,
   where the caller's URL/exists-on-disk validation filters it.
+- **Cold-start delivery.** `StartupLaunchDelivery<T>` has no C# parser counterpart. It is the
+  portable two-edge gate used by the Linux shell so a parsed launch is delivered exactly once only
+  after both the primary window map and media-engine readiness, regardless of which arrives first.
+  Windows achieves the same user-facing ordering through its `MainWindow` activation and queued
+  initial-file lifecycle rather than this Rust helper.
 
 ## ImageLuma → `okp_core::image_luma`
 
@@ -214,13 +219,14 @@ behaves identically on both sides.
   `Option` for invalid inputs; the C# module uses tuples and nullable tuples. The shared 94% work
   area budget, aspect preservation, no-upscale rule, correction thresholds, and tie-to-even
   rounding are unchanged.
-- **Linux initial-fit lifecycle has no C# counterpart.** `InitialFitState` owns the
-  one-shot request per media generation, and `initial_fit_can_configure` keeps a deferred first map
-  pending until the realized toplevel has compositor-reported bounds. WinUI can address a concrete
-  monitor and window position through `AppWindow`; GTK must bootstrap the Wayland surface before
-  libmpv can publish dimensions. Waiting for both inputs lets the shell compute one final placement
-  instead of visibly retargeting after map. These helpers add platform-neutral lifecycle policy
-  around the ported arithmetic without changing any C# test case.
+- **Linux initial-fit lifecycle has no C# counterpart.** `InitialFitState` owns the one-shot
+  request per media generation. GTK consumes it only after the main window is mapped, when the
+  compositor context is authoritative; the final fit arithmetic and one-request-per-source rule
+  remain shared-core policy. Cold file-association delivery is separately gated by
+  `launch_args::StartupLaunchDelivery`, which releases the payload only after both the window map
+  and media-engine readiness edges. This intentionally permits a visible load-time resize instead
+  of starting playback behind an unmapped or transparent Wayland toplevel. These helpers add
+  platform-neutral lifecycle policy around the ported arithmetic without changing any C# test case.
 
 ## ChapterMath → `okp_core::chapter_math`
 

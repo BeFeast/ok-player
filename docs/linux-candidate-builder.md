@@ -234,8 +234,8 @@ The headless output also retains `headless-launch/fit-series/run-{1,2,3}/` and
 `series-evidence.txt`. Every run records the current process ID, selected XID,
 viewable map state and geometry, maximized/fullscreen guards, explicit Fit
 dispatch, small/1080p/vertical/4K results, exactly one final initial-fit
-configure and a matching visibility boundary per geometry, private XDG
-cache/runtime paths, clean
+configure per geometry, a map-before-launch delivery boundary, secondary-launch
+single-instance presentation, clean main-window close, private XDG cache/runtime paths, clean
 GTK/MPRIS/AT-SPI registration release, and fresh session-bus startup/teardown.
 The bus supervisor runs as a Linux child subreaper, terminates and waits for
 orphaned command or D-Bus descendants, and then verifies that no process still

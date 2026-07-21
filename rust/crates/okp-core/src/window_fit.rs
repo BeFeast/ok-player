@@ -171,16 +171,6 @@ pub struct InitialFitRequest {
     pub video: WindowSize,
 }
 
-/// Whether the shell has enough compositor context to consume an initial fit.
-///
-/// A mapped window has authoritative bounds already. A deferred first map must
-/// wait until the realized toplevel has reported compositor bounds; consuming
-/// dimensions against monitor geometry earlier forces the shell to retarget the
-/// visible window after mapping.
-pub const fn initial_fit_can_configure(window_mapped: bool, has_compositor_bounds: bool) -> bool {
-    window_mapped || has_compositor_bounds
-}
-
 /// Portable lifecycle for the one-time fit attached to each media generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct InitialFitState {
@@ -630,14 +620,6 @@ mod tests {
         assert!(state.observe_dimensions(8, 1920, 1080));
         assert_eq!(state.take(7), None);
         assert_eq!(state.take(8).map(|request| request.video.width), Some(1920));
-    }
-
-    #[test]
-    fn deferred_initial_fit_waits_for_compositor_bounds() {
-        assert!(!initial_fit_can_configure(false, false));
-        assert!(initial_fit_can_configure(false, true));
-        assert!(initial_fit_can_configure(true, false));
-        assert!(initial_fit_can_configure(true, true));
     }
 
     #[test]

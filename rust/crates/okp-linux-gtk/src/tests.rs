@@ -31,6 +31,50 @@ fn renderer_environment_is_selected_before_gtk_initialization() {
 }
 
 #[test]
+fn file_association_launches_present_before_media_delivery() {
+    let window = include_str!("window.rs");
+    let build = window
+        .split("pub(crate) fn build_window")
+        .nth(1)
+        .and_then(|source| source.split("pub(crate) enum VideoHost").next())
+        .expect("build_window source");
+    let map_hook = build
+        .find("window.connect_map")
+        .expect("startup map hook should be installed");
+    let player_hook = build
+        .find("connect_mpv(&video_host")
+        .expect("player readiness hook should be installed");
+    let present = build
+        .find("window.present();")
+        .expect("startup should present the GTK window");
+    assert!(map_hook < present);
+    assert!(player_hook < present);
+    assert!(build.contains("StartupLaunchDelivery::new"));
+    assert!(!build.contains("defer_initial_map"));
+    assert!(!window.contains("set_opacity(0.0)"));
+
+    let secondary = window
+        .split("pub(crate) fn open_runtime_launch_args")
+        .nth(1)
+        .expect("secondary launch handler");
+    let present = secondary.find("runtime.window.present();").unwrap();
+    let load = secondary.find("apply_launch_args").unwrap();
+    assert!(
+        present < load,
+        "secondary launches must present before loading"
+    );
+
+    let bridge = include_str!("mpv_bridge.rs");
+    assert!(bridge.contains("mark_startup_window_mapped"));
+    assert!(bridge.contains("mark_startup_player_ready"));
+    assert!(bridge.contains("delivering after map and player readiness"));
+
+    let keyboard = include_str!("keyboard.rs");
+    assert!(keyboard.contains("mpv.stop()"));
+    assert!(keyboard.contains("close_app.quit()"));
+}
+
+#[test]
 fn flatpak_detection_accepts_the_runtime_id_or_sandbox_marker() {
     use std::ffi::OsStr;
 

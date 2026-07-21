@@ -135,10 +135,6 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     let auto_check_updates = state.borrow().settings.auto_check_updates()
         && env::var_os("OKP_SKIP_UPDATE_CHECK").is_none();
     let updating_seek = Rc::new(Cell::new(false));
-    let defer_initial_map = launch_args.has_media_payload()
-        && env::var_os("OKP_START_FULLSCREEN").is_none()
-        && env::var_os("OKP_START_MAXIMIZED").is_none();
-    let initial_map_pending = Rc::new(Cell::new(defer_initial_map));
     let updating_volume = Rc::new(Cell::new(false));
     let status_toast = Rc::new(StatusToast::new());
     let update_surface = persistent_update_surface(Rc::clone(&state), Rc::clone(&status_toast));
@@ -269,11 +265,17 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     connect_chrome_activity(&overlay, Rc::clone(&chrome));
 
     let launch_reserved_notice = launch_args.reserved_notice().map(str::to_owned);
+    let startup_launch = Rc::new(RefCell::new(launch_args::StartupLaunchDelivery::new(
+        launch_args,
+    )));
+    let mapped_launch = Rc::clone(&startup_launch);
+    let mapped_state = Rc::clone(&state);
+    window.connect_map(move |_| mark_startup_window_mapped(&mapped_launch, &mapped_state));
     state.borrow_mut().presentation_recorder = PresentationRecorder::from_env(video_host.backend());
     if env::var_os("OKP_PRESENT_EXERCISE").is_some() {
         state.borrow_mut().presentation_exercise = Some(Default::default());
     }
-    connect_mpv(&video_host, Rc::clone(&state), launch_args);
+    connect_mpv(&video_host, Rc::clone(&state), startup_launch);
     // Keep the fullscreen intent aligned with the compositor's authoritative
     // state so toggles driven outside the double-click path (Escape, a
     // window-manager shortcut) leave the next double-click pointing the right
@@ -322,7 +324,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         Rc::clone(&status_toast),
         mpris_commands,
     );
-    connect_progress_persistence(&window, Rc::clone(&state));
+    connect_progress_persistence(app, &window, Rc::clone(&state));
     // Visual smoke hook: render the Chapters/Up Next side panel with representative
     // fixture rows so its layout can be screenshot-tested without loaded media.
     // `OKP_OPEN_SIDE_PANEL_ON_STARTUP=up-next` previews the queue; `=bookmarks`
@@ -394,7 +396,6 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         controls,
         StatePollContext {
             updating_seek: Rc::clone(&updating_seek),
-            initial_map_pending: Rc::clone(&initial_map_pending),
             chrome: Rc::clone(&chrome),
             compact_mode,
             window_chrome,
@@ -416,36 +417,12 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     } else if env::var_os("OKP_START_MAXIMIZED").is_some() {
         window.maximize();
     }
-    if defer_initial_map {
-        gtk::prelude::WidgetExt::realize(&window);
-        // Realizing a toplevel does not guarantee that its child DrawingArea is
-        // realized before the first map. The native mpv bridge is connected to
-        // the video host's realize signal, so realize it explicitly while the
-        // root Wayland surface already exists. That starts the normal libmpv
-        // load/event path early enough to obtain video dimensions for the
-        // initial fit without first showing a default-sized window.
-        video_host.realize_video_surface();
-        let fallback_window = window.clone();
-        let fallback_pending = Rc::clone(&initial_map_pending);
-        // The real 4K HEVC acceptance file publishes its first usable video
-        // dimensions at about 2.2 seconds on the target host. Mapping at 1.5s
-        // raced that event and defeated the pre-map fit. Local media normally
-        // maps as soon as dimensions arrive; five seconds is only the bounded
-        // escape hatch for failed, slow network, or metadata-less loads.
-        glib::timeout_add_local_once(Duration::from_secs(5), move || {
-            if fallback_pending.get() {
-                if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
-                    eprintln!("window fit fallback: presenting without dimensions");
-                }
-                fallback_window.present();
-            }
-        });
-    } else {
-        window.present();
-    }
+    // File-association and CLI launches use the normal GTK application lifecycle: map the
+    // primary window first, then release the payload once the media engine is ready. This keeps
+    // playback from starting behind an unmapped or transparent toplevel on GNOME/Wayland.
+    window.present();
     if let Some(more_button) = more_popover_preview {
         // Test-only mapped-anchor poll, symmetric with the volume preview below.
-        // Media launches may defer the initial map while dimensions settle, and
         // GtkMenuButton::popup is a no-op until its anchor is mapped.
         let preview_attempts = Rc::new(Cell::new(0_u8));
         glib::timeout_add_local(Duration::from_millis(100), move || {
@@ -469,11 +446,9 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         });
     }
     if let Some((volume, mode)) = volume_preview {
-        // Media launches can deliberately defer the first map until video
-        // dimensions are available. Calling GtkPopover::popup before its
-        // anchor is mapped is a no-op, which made the deterministic volume
-        // captures compare two closed states. Wait for the real anchor with a
-        // bounded test-only poll instead of relying on launch timing.
+        // Calling GtkPopover::popup before its anchor is mapped is a no-op, which made the
+        // deterministic volume captures compare two closed states. Wait for the real anchor with
+        // a bounded test-only poll instead of relying on launch timing.
         let preview_anchor = volume.widget().clone();
         let preview_attempts = Rc::new(Cell::new(0_u8));
         glib::timeout_add_local(Duration::from_millis(100), move || {
@@ -617,14 +592,6 @@ impl VideoHost {
             Self::Native { container, .. } => container.upcast_ref(),
             Self::Gtk(area) => area.upcast_ref(),
             Self::Software(area) => area.upcast_ref(),
-        }
-    }
-
-    pub(crate) fn realize_video_surface(&self) {
-        match self {
-            Self::Native { area, .. } => gtk::prelude::WidgetExt::realize(area),
-            Self::Gtk(area) => gtk::prelude::WidgetExt::realize(area),
-            Self::Software(area) => gtk::prelude::WidgetExt::realize(area),
         }
     }
 
@@ -830,85 +797,6 @@ pub(crate) fn fit_player_window_to_video(
             placement.position.y,
         );
     }
-    let deferred_map = matches!(
-        request,
-        PlayerWindowFitRequest::Initial { deferred_map: true }
-    );
-    if deferred_map {
-        // The toplevel was realized early so libmpv could publish dimensions.
-        // GtkWindow::present can still map that realized surface at the cached
-        // 1120x680 builder size. Keep the compositor bootstrap fully hidden,
-        // issue the final configure once from the map edge, and reveal only
-        // after GTK reports the target client size.
-        window.set_opacity(0.0);
-        let target = placement;
-        let pending_configure = Rc::new(Cell::new(true));
-        window.connect_map(move |mapped_window| {
-            if !pending_configure.replace(false) {
-                return;
-            }
-            mapped_window.set_default_size(target.size.width, target.size.height);
-            move_resize_player_window_on_x11(mapped_window, target.position, target.size);
-            if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
-                eprintln!(
-                    "window fit configure: kind=initial target={}x{}+{},{} mapped=true",
-                    target.size.width, target.size.height, target.position.x, target.position.y,
-                );
-            }
-
-            let revealed = Rc::new(Cell::new(false));
-            let tick_revealed = Rc::clone(&revealed);
-            mapped_window.add_tick_callback(move |window, _| {
-                if tick_revealed.get() {
-                    glib::ControlFlow::Break
-                } else if window.width() == target.size.width
-                    && window.height() == target.size.height
-                {
-                    tick_revealed.set(true);
-                    window.set_opacity(1.0);
-                    if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
-                        eprintln!(
-                            "window fit visible: client={}x{} target={}x{}",
-                            window.width(),
-                            window.height(),
-                            target.size.width,
-                            target.size.height,
-                        );
-                    }
-                    glib::ControlFlow::Break
-                } else {
-                    glib::ControlFlow::Continue
-                }
-            });
-            let reveal_window = mapped_window.clone();
-            glib::timeout_add_local_once(Duration::from_secs(2), move || {
-                if !revealed.replace(true) {
-                    if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
-                        eprintln!(
-                            "window fit reveal fallback: client={}x{} target={}x{}",
-                            reveal_window.width(),
-                            reveal_window.height(),
-                            target.size.width,
-                            target.size.height,
-                        );
-                    }
-                    reveal_window.set_opacity(1.0);
-                }
-            });
-        });
-        window.set_default_size(placement.size.width, placement.size.height);
-        move_resize_player_window_on_x11(window, placement.position, placement.size);
-        if debug {
-            eprintln!(
-                "window fit staged: kind=initial target={}x{}+{},{} mapped=false",
-                placement.size.width,
-                placement.size.height,
-                placement.position.x,
-                placement.position.y,
-            );
-        }
-        return;
-    }
     window.set_default_size(placement.size.width, placement.size.height);
     move_resize_player_window_on_x11(window, placement.position, placement.size);
     if debug {
@@ -926,14 +814,14 @@ pub(crate) fn fit_player_window_to_video(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PlayerWindowFitRequest {
-    Initial { deferred_map: bool },
+    Initial,
     Explicit,
 }
 
 impl PlayerWindowFitRequest {
     const fn label(self) -> &'static str {
         match self {
-            Self::Initial { .. } => "initial",
+            Self::Initial => "initial",
             Self::Explicit => "explicit",
         }
     }

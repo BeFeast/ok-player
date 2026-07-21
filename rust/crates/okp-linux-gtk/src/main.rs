@@ -355,6 +355,8 @@ struct AppRuntime {
     status_toast: Rc<StatusToast>,
 }
 
+type StartupLaunchGate = Rc<RefCell<launch_args::StartupLaunchDelivery<LaunchArgs>>>;
+
 #[derive(Clone)]
 struct MprisController {
     snapshot: Arc<Mutex<MprisSnapshot>>,
@@ -856,7 +858,6 @@ struct PlayerWindowBounds {
 
 struct StatePollContext {
     updating_seek: Rc<Cell<bool>>,
-    initial_map_pending: Rc<Cell<bool>>,
     chrome: Rc<ChromeVisibility>,
     compact_mode: CompactMode,
     window_chrome: PlayerWindowChrome,
