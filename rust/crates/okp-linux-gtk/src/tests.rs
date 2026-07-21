@@ -2750,20 +2750,62 @@ fn player_window_move_drags_the_whole_non_interactive_surface() {
     assert!(bridge.contains("drag.set_button(gdk::BUTTON_PRIMARY)"));
     assert!(bridge.contains("video_click::window_drag_action("));
     assert!(bridge.contains("video_click::WindowDragAction::BeginMove"));
-    // Reuse the right-click interactive classifier so OSC/sliders/buttons/panels
-    // keep their input, and fail safe to a click when the pick is missing.
+    // Snapshot transient motion metadata before changing GTK gesture ownership.
+    assert!(bridge.contains("let Some(device) = gesture.current_event_device()"));
+    assert!(bridge.contains("let Some((surface_x, surface_y)) = gesture.bounding_box_center()"));
+    assert!(bridge.contains("let button = gesture.current_button() as i32"));
+    assert!(bridge.contains("let timestamp = gesture.current_event_time()"));
+    // Reuse the right-click interactive classifier at press time so OSC/sliders/
+    // buttons/panels keep their input, and fail safe when the pick is missing.
     assert!(bridge.contains("player_context_menu_target_is_interactive("));
     assert!(bridge.contains(".unwrap_or(true)"));
     // Fullscreen/maximized guards and compact-mode handoff.
     assert!(bridge.contains("move_window.is_fullscreen()"));
     assert!(bridge.contains("move_window.is_maximized()"));
     assert!(bridge.contains("window_compact_mode_active(&move_window)"));
-    // Wayland-native move: claim the sequence, then hand off to the compositor.
-    assert!(bridge.contains("gesture.set_state(gtk::EventSequenceState::Claimed)"));
+    // Wayland-native move: GDK must consume the live implicit grab before GTK
+    // claims/cancels sibling gestures. X11 keeps the established inverse order
+    // required by its WM handoff. A shared one-shot suppressor prevents the drag
+    // release from becoming play/pause if the compositor cancels first.
     assert!(bridge.contains("toplevel.begin_move("));
+    assert!(
+        bridge.contains("click.connect_pressed(move |_, _, _, _| reset_suppression.set(false))")
+    );
+    assert!(bridge.contains("video-click-suppressed-by-window-drag"));
+    // Both normal completion and cancellation release the per-drag state without
+    // unwrap/expect paths that could abort inside a GTK callback.
+    assert!(bridge.contains("drag.connect_drag_end"));
+    assert!(bridge.contains("drag.connect_cancel"));
+
+    let move_wiring = bridge
+        .split("pub(crate) fn connect_player_window_move(")
+        .nth(1)
+        .and_then(|tail| {
+            tail.split("pub(crate) fn player_context_menu_target_is_interactive(")
+                .next()
+        })
+        .expect("player window move function");
+    assert!(!move_wiring.contains(".unwrap()"));
+    assert!(!move_wiring.contains(".expect("));
+    assert!(move_wiring.contains("let wayland = is_wayland_display("));
+    assert!(move_wiring.contains("if !wayland"));
+    assert!(move_wiring.contains("if wayland"));
+    let begin_move = move_wiring
+        .find("toplevel.begin_move(")
+        .expect("native move handoff");
+    let wayland_branch = move_wiring
+        .rfind("if wayland")
+        .expect("Wayland claim branch");
+    assert!(
+        begin_move < wayland_branch,
+        "Wayland must consume the grab before GTK claims it"
+    );
 
     let window = include_str!("window.rs");
-    assert!(window.contains("connect_player_window_move(&overlay, &window)"));
+    assert!(
+        window.contains("let suppress_video_click = connect_player_window_move(&overlay, &window)")
+    );
+    assert!(window.contains("suppress_video_click,"));
 }
 
 #[test]
