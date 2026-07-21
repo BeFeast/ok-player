@@ -68,6 +68,16 @@ known-good Full package. Post-publication pruning removes only recognized
 operator-owned release assets are never deleted. Pruning is maintenance after
 the pointer is live and does not invalidate a successful promotion.
 
+## Project outcome health
+
+[`check-project-outcome.sh`](../scripts/check-project-outcome.sh) reports the
+rolling lane as `windows-candidate-delivery`. The Rust evaluator verifies the
+manifest/feed identity, exact source relation to `main`, and the shared
+120-minute unpublished-main lag bound. An unchanged promoted SHA stays healthy;
+two or more consecutive scheduled failures instead report the newest failed
+workflow step and count. Before the lane has any completed schedule history or
+published pointers, the row is a bootstrap warning rather than a failure.
+
 ## Acceptance boundary
 
 The hosted Windows runner accepts compilation, unit behavior, real-libmpv

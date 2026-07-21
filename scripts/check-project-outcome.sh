@@ -58,6 +58,8 @@ done
 repository="${OKP_PROJECT_HEALTH_REPOSITORY:-BeFeast/ok-player}"
 candidate_url="${OKP_PROJECT_HEALTH_CANDIDATE_URL:-https://github.com/$repository/releases/download/linux-candidate/candidate.linux.json}"
 windows_url="${OKP_PROJECT_HEALTH_WINDOWS_URL:-https://befeast.github.io/ok-player/updates/win/releases.win.json}"
+windows_candidate_manifest_url="${OKP_PROJECT_HEALTH_WINDOWS_CANDIDATE_MANIFEST_URL:-https://github.com/$repository/releases/download/windows-candidate/candidate.windows.json}"
+windows_candidate_feed_url="${OKP_PROJECT_HEALTH_WINDOWS_CANDIDATE_FEED_URL:-https://github.com/$repository/releases/download/windows-candidate/releases.win-candidate.json}"
 max_lag="${OKP_PROJECT_HEALTH_MAX_UNPUBLISHED_MAIN_LAG_SECONDS:-7200}"
 if [[ ! "$max_lag" =~ ^[0-9]+$ ]] || (( max_lag == 0 )); then
   echo "OKP_PROJECT_HEALTH_MAX_UNPUBLISHED_MAIN_LAG_SECONDS must be a positive integer" >&2
@@ -80,6 +82,8 @@ fi
 work="$(mktemp -d -t "${scratch_prefix}.XXXXXX")" || exit 2
 trap 'rm -rf -- "$work"' EXIT
 : >"$work/windows-feed.json" || exit 2
+: >"$work/windows-candidate-manifest.json" || exit 2
+: >"$work/windows-candidate-feed.json" || exit 2
 : >"$work/candidate-feed.json" || exit 2
 : >"$work/linux-releases.json" || exit 2
 
@@ -160,18 +164,93 @@ else
   candidate_schedule_error="GitHub Linux Candidate completed schedule query failed"
 fi
 
+windows_candidate_workflow_state=""
+windows_candidate_workflow_state_error=""
+if windows_candidate_workflow="$(gh api --cache 5m \
+    "repos/$repository/actions/workflows/release-windows-candidate.yml" 2>/dev/null)"; then
+  windows_candidate_workflow_state="$(jq -r '.state // ""' <<<"$windows_candidate_workflow")"
+  if [[ -z "$windows_candidate_workflow_state" ]]; then
+    windows_candidate_workflow_state_error="GitHub Windows Candidate workflow query omitted state"
+  fi
+else
+  windows_candidate_workflow_state_error="GitHub Windows Candidate workflow state query failed"
+fi
+
+windows_candidate_schedule_run='null'
+windows_candidate_schedule_error=""
+windows_candidate_consecutive_failed_runs=0
+windows_candidate_last_failed_gate=""
+if windows_candidate_schedule_runs="$(gh run list --repo "$repository" --branch main --event schedule \
+    --status completed --workflow "Windows Candidate" --limit 100 \
+    --json databaseId,headSha,event,status,conclusion,updatedAt,url 2>/dev/null)"; then
+  if ! windows_candidate_schedule_run="$(jq -c 'if type == "array" then .[0] // null else error("not an array") end' \
+      <<<"$windows_candidate_schedule_runs" 2>/dev/null)" \
+      || ! windows_candidate_consecutive_failed_runs="$(jq -r '
+        if type != "array" then error("not an array")
+        else reduce .[] as $run (
+          {count: 0, stopped: false};
+          if .stopped then .
+          elif ($run.conclusion // "") == "failure" then .count += 1
+          else .stopped = true
+          end
+        ) | .count
+        end
+      ' <<<"$windows_candidate_schedule_runs" 2>/dev/null)"; then
+    windows_candidate_schedule_run='null'
+    windows_candidate_consecutive_failed_runs=0
+    windows_candidate_schedule_error="GitHub Windows Candidate completed schedule query returned malformed JSON"
+  elif (( windows_candidate_consecutive_failed_runs >= 2 )); then
+    latest_windows_failed_run_id="$(jq -r '.[0].databaseId // ""' <<<"$windows_candidate_schedule_runs")"
+    if [[ "$latest_windows_failed_run_id" =~ ^[0-9]+$ ]] \
+        && windows_failed_jobs="$(gh run view "$latest_windows_failed_run_id" --repo "$repository" --json jobs 2>/dev/null)"; then
+      windows_candidate_last_failed_gate="$(jq -r '
+        [.jobs[]?.steps[]? | select((.conclusion // "") == "failure") | .name][0] // ""
+      ' <<<"$windows_failed_jobs" 2>/dev/null || true)"
+    fi
+  fi
+else
+  windows_candidate_schedule_error="GitHub Windows Candidate completed schedule query failed"
+fi
+
 windows_ok=false
 windows_error="Windows static feed request failed"
-if curl --fail --silent --show-error --location --retry 2 --connect-timeout 10 --max-time 30 \
-    "$windows_url" >"$work/windows-feed.json" 2>"$work/windows-curl.err"; then
+curl --fail --silent --show-error --location --retry 2 --connect-timeout 10 --max-time 30 \
+  "$windows_url" >"$work/windows-feed.json" 2>"$work/windows-curl.err" &
+windows_curl_pid=$!
+curl --fail --silent --show-error --location --retry 2 --connect-timeout 10 --max-time 30 \
+  "$windows_candidate_manifest_url" >"$work/windows-candidate-manifest.json" \
+  2>"$work/windows-candidate-manifest-curl.err" &
+windows_candidate_manifest_curl_pid=$!
+curl --fail --silent --show-error --location --retry 2 --connect-timeout 10 --max-time 30 \
+  "$windows_candidate_feed_url" >"$work/windows-candidate-feed.json" \
+  2>"$work/windows-candidate-feed-curl.err" &
+windows_candidate_feed_curl_pid=$!
+curl --fail --silent --show-error --location --retry 2 --connect-timeout 10 --max-time 30 \
+  "$candidate_url" >"$work/candidate-feed.json" 2>"$work/candidate-curl.err" &
+candidate_curl_pid=$!
+
+if wait "$windows_curl_pid"; then
   windows_ok=true
   windows_error=""
 fi
 
+windows_candidate_manifest_ok=false
+windows_candidate_manifest_error="Windows candidate identity manifest request failed"
+if wait "$windows_candidate_manifest_curl_pid"; then
+  windows_candidate_manifest_ok=true
+  windows_candidate_manifest_error=""
+fi
+
+windows_candidate_feed_ok=false
+windows_candidate_feed_error="Windows candidate feed request failed"
+if wait "$windows_candidate_feed_curl_pid"; then
+  windows_candidate_feed_ok=true
+  windows_candidate_feed_error=""
+fi
+
 candidate_ok=false
 candidate_error="Linux candidate feed request failed"
-if curl --fail --silent --show-error --location --retry 2 --connect-timeout 10 --max-time 30 \
-    "$candidate_url" >"$work/candidate-feed.json" 2>"$work/candidate-curl.err"; then
+if wait "$candidate_curl_pid"; then
   candidate_ok=true
   candidate_error=""
 fi
@@ -209,6 +288,39 @@ if [[ -n "$candidate_sha" && -n "$main_sha" ]]; then
   fi
 fi
 
+windows_candidate_sha=""
+windows_candidate_committed_at=""
+windows_candidate_compare_status=""
+windows_candidate_merge_base_sha=""
+windows_candidate_first_unpublished_sha=""
+windows_candidate_first_unpublished_at=""
+windows_candidate_source_error=""
+if $windows_candidate_manifest_ok; then
+  windows_candidate_sha="$(jq -er '.source_sha | select(type == "string" and test("^[0-9a-fA-F]{40}$")) | ascii_downcase' \
+    "$work/windows-candidate-manifest.json" 2>/dev/null || true)"
+fi
+if [[ -n "$windows_candidate_sha" && -n "$main_sha" ]]; then
+  if windows_candidate_commit="$(gh api "repos/$repository/commits/$windows_candidate_sha" 2>/dev/null)"; then
+    windows_candidate_committed_at="$(jq -r '.commit.committer.date // ""' <<<"$windows_candidate_commit")"
+  else
+    windows_candidate_source_error="GitHub Windows candidate source commit query failed"
+  fi
+
+  if [[ "$windows_candidate_sha" != "$main_sha" ]]; then
+    if windows_candidate_comparison="$(gh api "repos/$repository/compare/$windows_candidate_sha...$main_sha?per_page=1" 2>/dev/null)"; then
+      windows_candidate_compare_status="$(jq -r '.status // ""' <<<"$windows_candidate_comparison")"
+      windows_candidate_merge_base_sha="$(jq -r '.merge_base_commit.sha // ""' <<<"$windows_candidate_comparison")"
+      windows_candidate_first_unpublished_sha="$(jq -r '.commits[0].sha // ""' <<<"$windows_candidate_comparison")"
+      windows_candidate_first_unpublished_at="$(jq -r '.commits[0].commit.committer.date // ""' <<<"$windows_candidate_comparison")"
+      if [[ -z "$windows_candidate_compare_status" || -z "$windows_candidate_merge_base_sha" ]]; then
+        windows_candidate_source_error="${windows_candidate_source_error:+$windows_candidate_source_error; }GitHub Windows candidate comparison omitted source graph evidence"
+      fi
+    else
+      windows_candidate_source_error="${windows_candidate_source_error:+$windows_candidate_source_error; }GitHub Windows candidate-to-main comparison failed"
+    fi
+  fi
+fi
+
 stable_ok=false
 stable_error="GitHub permanent Linux release query failed"
 if gh api "repos/$repository/releases?per_page=100" >"$work/linux-releases.json" 2>/dev/null; then
@@ -236,10 +348,31 @@ jq -n \
   --arg first_unpublished_sha "$first_unpublished_sha" \
   --arg first_unpublished_at "$first_unpublished_at" \
   --arg candidate_source_error "$candidate_source_error" \
+  --arg windows_candidate_workflow_state "$windows_candidate_workflow_state" \
+  --arg windows_candidate_workflow_state_error "$windows_candidate_workflow_state_error" \
+  --argjson windows_candidate_schedule_run "$windows_candidate_schedule_run" \
+  --arg windows_candidate_schedule_error "$windows_candidate_schedule_error" \
+  --argjson windows_candidate_consecutive_failed_runs "$windows_candidate_consecutive_failed_runs" \
+  --arg windows_candidate_last_failed_gate "$windows_candidate_last_failed_gate" \
+  --arg windows_candidate_sha "$windows_candidate_sha" \
+  --arg windows_candidate_committed_at "$windows_candidate_committed_at" \
+  --arg windows_candidate_compare_status "$windows_candidate_compare_status" \
+  --arg windows_candidate_merge_base_sha "$windows_candidate_merge_base_sha" \
+  --arg windows_candidate_first_unpublished_sha "$windows_candidate_first_unpublished_sha" \
+  --arg windows_candidate_first_unpublished_at "$windows_candidate_first_unpublished_at" \
+  --arg windows_candidate_source_error "$windows_candidate_source_error" \
   --arg windows_url "$windows_url" \
   --arg windows_ok "$windows_ok" \
   --rawfile windows_body "$work/windows-feed.json" \
   --arg windows_error "$windows_error" \
+  --arg windows_candidate_manifest_url "$windows_candidate_manifest_url" \
+  --arg windows_candidate_manifest_ok "$windows_candidate_manifest_ok" \
+  --rawfile windows_candidate_manifest_body "$work/windows-candidate-manifest.json" \
+  --arg windows_candidate_manifest_error "$windows_candidate_manifest_error" \
+  --arg windows_candidate_feed_url "$windows_candidate_feed_url" \
+  --arg windows_candidate_feed_ok "$windows_candidate_feed_ok" \
+  --rawfile windows_candidate_feed_body "$work/windows-candidate-feed.json" \
+  --arg windows_candidate_feed_error "$windows_candidate_feed_error" \
   --arg candidate_url "$candidate_url" \
   --arg candidate_ok "$candidate_ok" \
   --rawfile candidate_body "$work/candidate-feed.json" \
@@ -292,12 +425,59 @@ jq -n \
         ),
         error: (if $candidate_source_error == "" then null else $candidate_source_error end)
       },
+      windows_candidate_workflow: {
+        state: $windows_candidate_workflow_state,
+        state_error: (if $windows_candidate_workflow_state_error == "" then null else $windows_candidate_workflow_state_error end),
+        latest_completed_schedule: (
+          if $windows_candidate_schedule_run == null then null
+          else {
+            head_sha: ($windows_candidate_schedule_run.headSha // ""),
+            event: ($windows_candidate_schedule_run.event // ""),
+            status: ($windows_candidate_schedule_run.status // ""),
+            conclusion: ($windows_candidate_schedule_run.conclusion // ""),
+            completed_at_utc: ($windows_candidate_schedule_run.updatedAt // ""),
+            url: ($windows_candidate_schedule_run.url // "")
+          }
+          end
+        ),
+        schedule_error: (if $windows_candidate_schedule_error == "" then null else $windows_candidate_schedule_error end),
+        consecutive_failed_runs: $windows_candidate_consecutive_failed_runs,
+        last_failed_gate: (if $windows_candidate_last_failed_gate == "" then null else $windows_candidate_last_failed_gate end)
+      },
+      windows_candidate: {
+        candidate_sha: $windows_candidate_sha,
+        candidate_committed_at_utc: (if $windows_candidate_committed_at == "" then null else $windows_candidate_committed_at end),
+        comparison: (
+          if $windows_candidate_compare_status == "" or $windows_candidate_merge_base_sha == "" then null
+          else {
+            status: $windows_candidate_compare_status,
+            merge_base_sha: $windows_candidate_merge_base_sha,
+            first_unpublished_commit: (
+              if $windows_candidate_first_unpublished_sha == "" or $windows_candidate_first_unpublished_at == "" then null
+              else {sha: $windows_candidate_first_unpublished_sha, committed_at_utc: $windows_candidate_first_unpublished_at}
+              end
+            )
+          }
+          end
+        ),
+        error: (if $windows_candidate_source_error == "" then null else $windows_candidate_source_error end)
+      },
       error: (if $source_error == "" then null else $source_error end)
     },
     windows_feed: {
       url: $windows_url,
       body: (if $windows_ok == "true" then $windows_body else null end),
       error: (if $windows_error == "" then null else $windows_error end)
+    },
+    windows_candidate_manifest: {
+      url: $windows_candidate_manifest_url,
+      body: (if $windows_candidate_manifest_ok == "true" then $windows_candidate_manifest_body else null end),
+      error: (if $windows_candidate_manifest_error == "" then null else $windows_candidate_manifest_error end)
+    },
+    windows_candidate_feed: {
+      url: $windows_candidate_feed_url,
+      body: (if $windows_candidate_feed_ok == "true" then $windows_candidate_feed_body else null end),
+      error: (if $windows_candidate_feed_error == "" then null else $windows_candidate_feed_error end)
     },
     candidate_feed: {
       url: $candidate_url,

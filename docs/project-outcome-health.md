@@ -23,14 +23,20 @@ orchestration settings.
 
 ## Blocking development contract
 
-The overall result is healthy only when all three blocking surfaces pass:
+The overall result is healthy only when all four blocking surfaces pass:
 
 1. The latest `main` SHA is exact, and the `CI` and `Rust` push workflows for
    that same SHA both completed successfully.
 2. The Windows static feed is reachable JSON with at least one Full package;
    every asset has a version/package identity, a non-zero size, an absolute
    HTTPS URL, and a SHA-256 identity.
-3. The rolling Linux `candidate.linux.json` is reachable and valid. It must
+3. The rolling Windows `candidate.windows.json` identity manifest and
+   `releases.win-candidate.json` feed are reachable and agree byte-for-byte on
+   the feed SHA-256 and size. The manifest must carry the `win-candidate`
+   channel, monotonic version/build, exact source SHA, UTC promotion timestamp,
+   builder identity, and one current manifest-bound Full package for
+   `com.befeast.okplayer`.
+4. The rolling Linux `candidate.linux.json` is reachable and valid. It must
    declare `channel=candidate` and `acceptance=accepted`; carry a non-zero build
    encoded by its monotonic candidate version; carry an exact 40-character
    source SHA; name the exact Debian and Velopack Full package URLs, sizes, and
@@ -85,6 +91,30 @@ source-divergent, or over-SLA candidate fails with a specific reason. The
 checker only reads the rolling pointer; it never triggers a duplicate candidate
 publication.
 
+## Windows candidate delivery
+
+The `windows-candidate-delivery` row uses the same 120-minute unpublished-main
+lag bound as Linux. When the promoted Windows source equals `main`, an unchanged
+repository is healthy indefinitely. When `main` advances, the clock starts at
+the first unpublished commit after the promoted source; the row remains passing
+inside the delivery window and fails once that lag exceeds the bound. A source
+that is not an ancestor of current `main` is invalid even when its timestamp is
+recent.
+
+The collector reads up to 100 completed scheduled `Windows Candidate` runs. Two
+or more consecutive failures are reported before generic lag evidence as
+`Windows candidate builder failing at gate <name> (<N> consecutive)`. The gate
+is the failed workflow step from the newest failed run, and the reason code is
+`windows-candidate-builds-failing`. While the new lane has no completed schedule
+history and has not published either pointer, the row is a blocking `warning`
+rather than a failure; warnings do not make the overall outcome unhealthy.
+
+The live collector starts the stable Windows feed, Windows candidate manifest,
+Windows candidate feed, and Linux candidate feed requests concurrently. Each
+request retains the existing connection/retry/30-second bound, so adding the
+Windows evidence does not serialize another network timeout into the fleet
+pulse. Snapshot mode remains fully offline and decision-complete in `okp-core`.
+
 ## Stable-release diagnostic
 
 The newest permanent `linux-v*` release is still reported. Once it is older
@@ -120,8 +150,10 @@ healthcheck.
 `okp-core` fixtures cover old accepted/equal, ancestor within SLA, ancestor
 beyond SLA, inactive workflow state, stale completed schedules while `main` has
 advanced, fresh non-ancestor, unaccepted, malformed, missing-package-identity,
-and unreachable candidate outcomes. The public release warning is separately
-pinned as non-blocking.
+and unreachable Linux candidate outcomes. Windows fixtures separately pin
+source-current and within-SLA passes, over-SLA and consecutive-gate failures,
+the no-history bootstrap warning, manifest/feed identity, and bounded live
+collection. The public release warning is separately pinned as non-blocking.
 
 ## Safe operational cutover after merge
 

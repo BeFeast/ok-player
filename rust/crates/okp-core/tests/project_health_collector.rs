@@ -9,7 +9,13 @@ use okp_test_fixtures::unique_temp_dir;
 
 #[test]
 fn failed_fetch_bodies_reach_the_core_evaluator() {
-    for failure in ["windows", "candidate", "stable"] {
+    for failure in [
+        "windows",
+        "windows-candidate-manifest",
+        "windows-candidate-feed",
+        "candidate",
+        "stable",
+    ] {
         let output = run_live(failure);
         assert_ne!(
             output.status.code(),
@@ -32,6 +38,18 @@ fn failed_fetch_bodies_reach_the_core_evaluator() {
                 true,
                 false,
                 "Linux candidate feed is unreachable",
+            ),
+            "windows-candidate-manifest" => (
+                "windows-candidate-delivery",
+                true,
+                false,
+                "Windows candidate identity manifest is unreachable",
+            ),
+            "windows-candidate-feed" => (
+                "windows-candidate-delivery",
+                true,
+                false,
+                "Windows candidate feed is unreachable",
             ),
             "stable" => (
                 "linux-stable-release-cadence",
@@ -104,6 +122,35 @@ fn candidate_workflow_watchdog_reasons_survive_live_collection() {
             "{scenario}: {candidate:?}"
         );
     }
+}
+
+#[test]
+fn windows_candidate_gate_failure_survives_live_collection() {
+    let output = run_live("windows-candidate-failures");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let outcome: ProjectHealthOutcome =
+        serde_json::from_slice(&output.stdout).expect("collector should emit outcome JSON");
+    let candidate = outcome
+        .checks
+        .iter()
+        .find(|check| check.name == "windows-candidate-delivery")
+        .expect("Windows candidate check");
+    assert!(
+        candidate
+            .reason_codes
+            .iter()
+            .any(|code| code == "windows-candidate-builds-failing")
+    );
+    assert!(
+        candidate.summary.contains(
+            "Windows candidate builder failing at gate Run core unit tests (3 consecutive)"
+        )
+    );
 }
 
 #[test]
@@ -213,6 +260,16 @@ fn live_mode_uses_a_prebuilt_repo_evaluator_without_cargo_and_stays_bounded() {
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/fixtures/project_health/fresh-accepted.json"),
         )
+        .env(
+            "OKP_STUB_WINDOWS_CANDIDATE_MANIFEST",
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/project_health/windows-candidate-manifest.json"),
+        )
+        .env(
+            "OKP_STUB_WINDOWS_CANDIDATE_FEED",
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/project_health/windows-candidate-feed.json"),
+        )
         .env("PATH", path_with(&fake_bin))
         .output()
         .expect("bounded live collector should run");
@@ -247,6 +304,16 @@ fn run_live(failure: &str) -> Output {
             "OKP_STUB_CANDIDATE_FEED",
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/fixtures/project_health/fresh-accepted.json"),
+        )
+        .env(
+            "OKP_STUB_WINDOWS_CANDIDATE_MANIFEST",
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/project_health/windows-candidate-manifest.json"),
+        )
+        .env(
+            "OKP_STUB_WINDOWS_CANDIDATE_FEED",
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/project_health/windows-candidate-feed.json"),
         )
         .env("PATH", path_with(&fake_bin))
         .output()
@@ -315,6 +382,12 @@ url="${!#}"
 if [[ "$url" == *releases.win.json ]]; then
   [[ "$OKP_STUB_FAIL" != windows ]] || exit 22
   printf '%s\n' '{"Assets":[{"PackageId":"OkPlayer","Version":"0.10.14","Type":"Full","FileName":"https://example.invalid/OkPlayer-full.nupkg","SHA256":"B6C45F3FDAD98FF02958A77C30DE0EFE2260AF518C392A01699F1397E9C70E80","Size":200597245}]}'
+elif [[ "$url" == *candidate.windows.json ]]; then
+  [[ "$OKP_STUB_FAIL" != windows-candidate-manifest ]] || exit 22
+  cat "$OKP_STUB_WINDOWS_CANDIDATE_MANIFEST"
+elif [[ "$url" == *releases.win-candidate.json ]]; then
+  [[ "$OKP_STUB_FAIL" != windows-candidate-feed ]] || exit 22
+  cat "$OKP_STUB_WINDOWS_CANDIDATE_FEED"
 elif [[ "$url" == *candidate.linux.json ]]; then
   [[ "$OKP_STUB_FAIL" != candidate ]] || exit 22
   cat "$OKP_STUB_CANDIDATE_FEED"
@@ -349,15 +422,32 @@ if [[ "${1:-}" == run && "${2:-}" == list ]]; then
     else
       printf '[{"databaseId":100,"headSha":"%s","event":"schedule","status":"completed","conclusion":"success","updatedAt":"%s","url":"https://example.invalid/run/candidate"}]\n' "$main_sha" "$completed_at"
     fi
+  elif [[ "$workflow" == "Windows Candidate" ]]; then
+    if [[ "$OKP_STUB_FAIL" == windows-candidate-failures ]]; then
+      printf '%s\n' '[
+        {"databaseId":203,"headSha":"d5d531a58c830a01a7e25615e850593e9ff4493f","event":"schedule","status":"completed","conclusion":"failure","updatedAt":"2026-07-18T01:55:47Z","url":"https://example.invalid/run/203"},
+        {"databaseId":202,"conclusion":"failure"},
+        {"databaseId":201,"conclusion":"failure"},
+        {"databaseId":200,"conclusion":"success"}
+      ]'
+    else
+      printf '[{"databaseId":200,"headSha":"%s","event":"schedule","status":"completed","conclusion":"success","updatedAt":"2026-07-18T01:55:47Z","url":"https://example.invalid/run/windows-candidate"}]\n' "$main_sha"
+    fi
   else
     printf '[{"workflowName":"%s","headSha":"%s","event":"push","status":"completed","conclusion":"success","url":"https://example.invalid/run"}]\n' "$workflow" "$main_sha"
   fi
   exit 0
 fi
 if [[ "${1:-}" == run && "${2:-}" == view ]]; then
-  [[ "$OKP_STUB_FAIL" == candidate-failures ]] || exit 64
-  printf '%s\n' 'candidate build 0.11.0-beta.0.106 failed at gate bundled-mpv'
-  exit 0
+  if [[ "$OKP_STUB_FAIL" == candidate-failures ]]; then
+    printf '%s\n' 'candidate build 0.11.0-beta.0.106 failed at gate bundled-mpv'
+    exit 0
+  fi
+  if [[ "$OKP_STUB_FAIL" == windows-candidate-failures ]]; then
+    printf '%s\n' '{"jobs":[{"name":"Build, verify, and promote rolling candidate","steps":[{"name":"Build C# solution","conclusion":"success"},{"name":"Run core unit tests","conclusion":"failure"}]}]}'
+    exit 0
+  fi
+  exit 64
 fi
 [[ "${1:-}" == api ]] || exit 64
 shift
@@ -369,10 +459,13 @@ case "$endpoint" in
     [[ "$OKP_STUB_FAIL" != workflow-disabled ]] || state="disabled_manually"
     printf '{"state":"%s"}\n' "$state"
     ;;
+  repos/*/actions/workflows/release-windows-candidate.yml)
+    printf '%s\n' '{"state":"active"}'
+    ;;
   repos/*/commits/main)
     main_sha="d5d531a58c830a01a7e25615e850593e9ff4493f"
     [[ "$OKP_STUB_FAIL" != schedule-stale ]] || main_sha="1111111111111111111111111111111111111111"
-    printf '{"sha":"%s"}\n' "$main_sha"
+    printf '{"sha":"%s","commit":{"committer":{"date":"2026-07-18T00:30:00Z"}}}\n' "$main_sha"
     ;;
   repos/*/commits/d5d531a58c830a01a7e25615e850593e9ff4493f)
     printf '%s\n' '{"commit":{"committer":{"date":"2026-07-18T00:30:00Z"}}}'
