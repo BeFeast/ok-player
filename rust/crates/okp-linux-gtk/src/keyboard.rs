@@ -303,6 +303,7 @@ fn log_keyboard_interaction(action: &str) {
 }
 
 pub(crate) fn connect_progress_persistence(
+    app: &gtk::Application,
     window: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
 ) {
@@ -313,9 +314,17 @@ pub(crate) fn connect_progress_persistence(
     });
 
     let close_state = Rc::clone(&state);
+    let close_app = app.clone();
     window.connect_close_request(move |_| {
         close_companion_windows(&close_state);
         save_current_progress(&close_state, false);
+        if let Some(mpv) = close_state.borrow().mpv.as_ref()
+            && let Err(error) = mpv.stop()
+        {
+            eprintln!("Failed to stop playback while closing the player: {error}");
+        }
+        let close_app = close_app.clone();
+        glib::idle_add_local_once(move || close_app.quit());
         glib::Propagation::Proceed
     });
 }

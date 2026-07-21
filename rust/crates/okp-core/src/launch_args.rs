@@ -88,6 +88,48 @@ pub struct LaunchArgs {
     pub audio: Option<TrackSelection>,
 }
 
+/// One cold-start launch payload waiting for both presentation and engine readiness.
+///
+/// Native shells can construct their window and media engine in either order. A file-association
+/// launch must not reach the engine while the primary window is still unmapped, and it must not be
+/// lost when the window maps before engine initialization finishes. This gate releases the payload
+/// exactly once after both lifecycle edges have occurred, regardless of their order.
+#[derive(Debug)]
+pub struct StartupLaunchDelivery<T> {
+    payload: Option<T>,
+    window_mapped: bool,
+    player_ready: bool,
+}
+
+impl<T> StartupLaunchDelivery<T> {
+    #[must_use]
+    pub const fn new(payload: T) -> Self {
+        Self {
+            payload: Some(payload),
+            window_mapped: false,
+            player_ready: false,
+        }
+    }
+
+    /// Record that the primary window is mapped and eligible to receive a launch.
+    pub fn mark_window_mapped(&mut self) -> Option<T> {
+        self.window_mapped = true;
+        self.take_ready()
+    }
+
+    /// Record that the media engine can accept the launch payload.
+    pub fn mark_player_ready(&mut self) -> Option<T> {
+        self.player_ready = true;
+        self.take_ready()
+    }
+
+    fn take_ready(&mut self) -> Option<T> {
+        (self.window_mapped && self.player_ready)
+            .then(|| self.payload.take())
+            .flatten()
+    }
+}
+
 /// Parse the command-line arguments **excluding** the executable (i.e. what
 /// `std::env::args().skip(1)` yields).
 pub fn parse<S: AsRef<str>>(args: &[S]) -> LaunchArgs {
@@ -192,6 +234,19 @@ mod tests {
         let parsed = parse::<&str>(&[]);
         assert!(parsed.files.is_empty());
         assert_eq!(parsed.resume_seconds, None);
+    }
+
+    #[test]
+    fn startup_launch_waits_for_window_and_player_in_either_order() {
+        let mut window_first = StartupLaunchDelivery::new("window-first");
+        assert_eq!(window_first.mark_window_mapped(), None);
+        assert_eq!(window_first.mark_player_ready(), Some("window-first"));
+        assert_eq!(window_first.mark_player_ready(), None);
+
+        let mut player_first = StartupLaunchDelivery::new("player-first");
+        assert_eq!(player_first.mark_player_ready(), None);
+        assert_eq!(player_first.mark_window_mapped(), Some("player-first"));
+        assert_eq!(player_first.mark_window_mapped(), None);
     }
 
     #[test]

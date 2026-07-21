@@ -435,6 +435,36 @@ stop_app() {
   app_log=""
 }
 
+close_app() {
+  local window_id="$1"
+  local closed_pid="$app_pid"
+  xdotool windowactivate --sync "$window_id"
+  xdotool key --clearmodifiers alt+F4
+
+  local diagnostics="$OUT_DIR/close-${closed_pid}-lifecycle.log"
+  if ! "$X11_APP_CLEAR_WAITER" "$closed_pid" "$diagnostics"; then
+    cat "$diagnostics" >>"$OUT_DIR/fit-lifecycle.log"
+    echo "Application did not exit after its visible main window closed" >&2
+    echo "Application log: $app_log" >&2
+    cat "$app_log" >&2 || true
+    return 1
+  fi
+  cat "$diagnostics" >>"$OUT_DIR/fit-lifecycle.log"
+
+  local dbus_diagnostics="$OUT_DIR/close-${closed_pid}-dbus-lifecycle.log"
+  if ! "$DBUS_NAME_CLEAR_WAITER" "$dbus_diagnostics" "${DBUS_NAMES[@]}"; then
+    cat "$dbus_diagnostics" >>"$OUT_DIR/fit-lifecycle.log"
+    echo "Application D-Bus names remained after its visible main window closed" >&2
+    cat "$app_log" >&2 || true
+    return 1
+  fi
+  cat "$dbus_diagnostics" >>"$OUT_DIR/fit-lifecycle.log"
+  wait "$closed_pid" 2>/dev/null || true
+  printf 'close pid=%s clear=true\n' "$closed_pid" >>"$OUT_DIR/fit-lifecycle.log"
+  app_pid=""
+  app_log=""
+}
+
 capture_geometry() {
   local window_id="$1" stem="$2"
   xwininfo -id "$window_id" >"$OUT_DIR/$stem.xwininfo"
@@ -485,13 +515,21 @@ assert_single_initial_configure() {
     cat "$file" >&2
     exit 1
   fi
-  if rg -q 'window fit reveal fallback' "$file"; then
-    echo "$label became visible before reaching its final geometry" >&2
+  if rg -q 'window fit (staged|reveal fallback|fallback: presenting)' "$file"; then
+    echo "$label entered a hidden or fallback-map startup path" >&2
     cat "$file" >&2
     exit 1
   fi
-  if ! rg -q 'window fit visible: client=.* target=' "$file"; then
-    echo "$label did not record a final-geometry visibility boundary" >&2
+
+  local map_line delivery_line launch_line
+  map_line="$(rg -n -m1 '^startup launch lifecycle: window mapped$' "$file" \
+    | cut -d: -f1 || true)"
+  delivery_line="$(rg -n -m1 '^startup launch lifecycle: delivering after map and player readiness$' "$file" \
+    | cut -d: -f1 || true)"
+  launch_line="$(rg -n -m1 '^Launch request:' "$file" | cut -d: -f1 || true)"
+  if [[ -z "$map_line" || -z "$delivery_line" || -z "$launch_line" \
+    || "$map_line" -ge "$delivery_line" || "$delivery_line" -ge "$launch_line" ]]; then
+    echo "$label did not map before delivering its startup media payload" >&2
     cat "$file" >&2
     exit 1
   fi
@@ -548,7 +586,67 @@ if [[ "$manual_width" != "700" || "$manual_height" != "500" ]]; then
   echo "Window fought manual resize after load: ${manual_width}x${manual_height}" >&2
   exit 1
 fi
-stop_app
+
+# A second CLI/Open-With launch must route to this primary instance, restore/present the same
+# window, and switch media without creating a second hidden player process.
+xdotool windowminimize "$small_id"
+sleep 1
+if xdotool search --onlyvisible --pid "$app_pid" --name "OK Player" >/dev/null 2>&1; then
+  echo "Could not minimize the primary window before the secondary-launch check" >&2
+  exit 1
+fi
+if ! timeout 10s "$BINARY" "$FIXTURES/fit-vertical.mkv" \
+  >"$OUT_DIR/fit-secondary-launch.log" 2>&1; then
+  echo "Secondary launch did not hand off to the primary instance" >&2
+  cat "$OUT_DIR/fit-secondary-launch.log" >&2 || true
+  exit 1
+fi
+secondary_presented=0
+for _ in $(seq 1 60); do
+  secondary_state="$(xwininfo -id "$small_id" 2>/dev/null \
+    | awk -F': ' '/Map State:/ {print $2; exit}')"
+  secondary_metadata="$(gdbus call --session \
+    --dest org.mpris.MediaPlayer2.okplayer \
+    --object-path /org/mpris/MediaPlayer2 \
+    --method org.freedesktop.DBus.Properties.Get \
+    org.mpris.MediaPlayer2.Player Metadata 2>/dev/null || true)"
+  if [[ "$secondary_state" == "IsViewable" \
+    && "$secondary_metadata" == *"fit-vertical.mkv"* ]]; then
+    secondary_presented=1
+    break
+  fi
+  sleep 0.1
+done
+if [[ "$secondary_presented" != "1" ]]; then
+  echo "Secondary launch did not present the existing window with the new media" >&2
+  cat "$OUT_DIR/fit-small-app.log" >&2
+  exit 1
+fi
+primary_window_count=0
+while IFS= read -r candidate; do
+  [[ -n "$candidate" ]] || continue
+  candidate_state="$(xwininfo -id "$candidate" 2>/dev/null \
+    | awk -F': ' '/Map State:/ {print $2; exit}')"
+  candidate_type="$(xprop -id "$candidate" _NET_WM_WINDOW_TYPE 2>/dev/null || true)"
+  if [[ "$candidate_state" == "IsViewable" \
+    && "$candidate_type" == *"_NET_WM_WINDOW_TYPE_NORMAL"* ]]; then
+    primary_window_count=$((primary_window_count + 1))
+  fi
+done < <(xdotool search --pid "$app_pid" --name "OK Player" 2>/dev/null \
+  | sort -u || true)
+if [[ "$primary_window_count" != "1" ]]; then
+  echo "Secondary launch left $primary_window_count primary player windows instead of one" >&2
+  exit 1
+fi
+launch_count="$(rg -c '^Launch request:' "$OUT_DIR/fit-small-app.log" || true)"
+if [[ "$launch_count" != "2" ]]; then
+  echo "Primary instance received $launch_count launch payloads instead of two" >&2
+  cat "$OUT_DIR/fit-small-app.log" >&2
+  exit 1
+fi
+printf 'secondary_launch=pass\nsecondary_presented=pass\nsingle_instance=pass\n' \
+  >>"$OUT_DIR/fit-evidence.txt"
+close_app "$small_id"
 
 start_app "fit-1080p-app.log" windowed "$FIXTURES/fit-1080p.mkv"
 fit_1080p_id="$(wait_for_window "$OUT_DIR/fit-1080p-window.ids")"

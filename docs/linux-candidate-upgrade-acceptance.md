@@ -201,8 +201,8 @@ done
 This command builds or publishes nothing. Every invocation contains three
 independent Xvfb/D-Bus sessions and must record viewable non-`1x1` geometry for
 small, 1080p, vertical, and 4K media, exactly one final initial-fit configure
-and a matching visibility boundary per geometry, maximized/fullscreen guards,
-one Xfwm owner across both roots,
+per geometry, a map-before-launch delivery boundary, secondary-launch
+single-instance presentation, clean main-window close, maximized/fullscreen guards, one Xfwm owner across both roots,
 private XDG cache/runtime paths, released GTK/MPRIS/AT-SPI names, a ready
 session bus, `command_status=0`, `session_bus_teardown=clean`, and
 `session_process_teardown=clean`. A
