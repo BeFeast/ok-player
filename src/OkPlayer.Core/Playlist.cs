@@ -11,6 +11,13 @@ public enum RepeatMode
     All, // wrap around (last → first, first → last)
 }
 
+/// <summary>Where newly queued media lands relative to the current item.</summary>
+public enum QueueInsertMode
+{
+    Append,
+    PlayNext,
+}
+
 /// <summary>
 /// A per-window playlist: the folder's files in natural order, a cursor, and the play modes (repeat,
 /// shuffle). Navigation reads the neighbour in the active <em>play order</em> (shuffled or natural), wrapping
@@ -67,6 +74,115 @@ public sealed class Playlist
     /// <summary>Advance the cursor to the next item and return it (null at the end). Equivalent to opening PeekNext.</summary>
     public string? Next() { var n = PeekNext; if (n is not null) SetCurrent(n); return n; }
     public string? Prev() { var p = PeekPrev; if (p is not null) SetCurrent(p); return p; }
+
+    /// <summary>Add media to the queue, either at the end or immediately after the current item. Existing
+    /// entries selected for Play Next move to that slot; Append skips entries that are already queued.</summary>
+    public int? QueueInsert(string current, IEnumerable<string> additions, QueueInsertMode mode)
+    {
+        var selected = new List<string>();
+        foreach (string addition in additions)
+        {
+            if (string.IsNullOrWhiteSpace(addition) || SamePath(addition, current) ||
+                selected.Exists(path => SamePath(path, addition)))
+                continue;
+            selected.Add(addition);
+        }
+        if (selected.Count == 0)
+            return null;
+
+        if (IndexOf(current) < 0)
+            _items.Insert(0, current);
+
+        if (mode == QueueInsertMode.Append)
+        {
+            selected.RemoveAll(addition => _items.Exists(path => SamePath(path, addition)));
+            if (selected.Count == 0)
+                return null;
+            _items.AddRange(selected);
+        }
+        else
+        {
+            _items.RemoveAll(path => selected.Exists(addition => SamePath(path, addition)));
+            int currentIndex = IndexOf(current);
+            _items.InsertRange(Math.Max(0, currentIndex) + 1, selected);
+        }
+
+        CurrentIndex = IndexOf(current);
+        RebuildOrder();
+        return selected.Count;
+    }
+
+    /// <summary>Move the item at <paramref name="from"/> so it sits at <paramref name="to"/> after removal,
+    /// keeping the cursor on the same item.</summary>
+    public bool Reorder(int from, int to)
+    {
+        if (from < 0 || from >= _items.Count || from == to)
+            return false;
+
+        string item = _items[from];
+        _items.RemoveAt(from);
+        int target = Math.Clamp(to, 0, _items.Count);
+        _items.Insert(target, item);
+        if (CurrentIndex == from)
+            CurrentIndex = target;
+        else
+        {
+            if (CurrentIndex > from) CurrentIndex--;
+            if (CurrentIndex >= target) CurrentIndex++;
+        }
+        RebuildOrder();
+        return true;
+    }
+
+    /// <summary>Move an existing queued item directly after the current one.</summary>
+    public bool PlayNext(int index)
+    {
+        if (CurrentIndex < 0 || index < 0 || index >= _items.Count ||
+            index == CurrentIndex || index == CurrentIndex + 1)
+            return false;
+        int target = index < CurrentIndex ? CurrentIndex : CurrentIndex + 1;
+        return Reorder(index, target);
+    }
+
+    /// <summary>Remove a queued item. The playing item and the last remaining item are protected.</summary>
+    public bool Remove(int index)
+    {
+        if (_items.Count <= 1 || index < 0 || index >= _items.Count || index == CurrentIndex)
+            return false;
+        _items.RemoveAt(index);
+        if (CurrentIndex > index)
+            CurrentIndex--;
+        RebuildOrder();
+        return true;
+    }
+
+    /// <summary>Remove every queued item except the playing item.</summary>
+    public bool ClearQueue()
+    {
+        if (_items.Count <= 1 || CurrentIndex < 0 || CurrentIndex >= _items.Count)
+            return false;
+        string current = _items[CurrentIndex];
+        _items.Clear();
+        _items.Add(current);
+        CurrentIndex = 0;
+        RebuildOrder();
+        return true;
+    }
+
+    /// <summary>Map a drop before/after a visible row to the destination index expected by <see cref="Reorder"/>.</summary>
+    public static int? DropTargetIndex(int sourceIndex, int rowIndex, bool dropAfter)
+    {
+        if (sourceIndex < 0 || rowIndex < 0 || sourceIndex == rowIndex)
+            return null;
+        int target = (dropAfter, sourceIndex < rowIndex) switch
+        {
+            (false, true) => rowIndex - 1,
+            (false, false) => rowIndex,
+            (true, true) => rowIndex,
+            (true, false) => rowIndex + 1,
+        };
+        return target == sourceIndex ? null : target;
+    }
 
     /// <summary>Re-point the cursor at <paramref name="path"/> if present (case-insensitive). A sequential
     /// step keeps the order; jumping elsewhere while shuffled re-shuffles the remaining order (new current
@@ -126,6 +242,8 @@ public sealed class Playlist
         }
     }
 
-    private int IndexOf(string path) =>
-        _items.FindIndex(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
+    private int IndexOf(string path) => _items.FindIndex(p => SamePath(p, path));
+
+    private static bool SamePath(string left, string right) =>
+        string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
 }

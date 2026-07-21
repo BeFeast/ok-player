@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
@@ -42,6 +43,7 @@ public sealed partial class MainWindow : Window
             if (args.DidPresenterChange || args.DidSizeChange) UpdateMaxRestoreGlyph();
         };
         Player.OpenFileRequested += async (_, _) => await OpenFileAsync();
+        Player.QueueFilesRequested += async mode => await QueueFilesAsync(mode);
         Player.AddSubtitleRequested += async (_, _) => await AddSubtitleAsync();
         Player.FitToVideoRequested += (_, size) => FitToVideo(size.Width, size.Height);
         Player.AlwaysOnTopRequested += (_, on) => SetAlwaysOnTop(on);
@@ -499,6 +501,25 @@ public sealed partial class MainWindow : Window
         catch (Exception)
         {
             // Picker failure is non-fatal; swallow so the async-void caller can't crash the app.
+        }
+    }
+
+    private async Task QueueFilesAsync(QueueInsertMode mode)
+    {
+        var picker = new FileOpenPicker { SuggestedStartLocation = PickerLocationId.VideosLibrary };
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+        foreach (var ext in MediaFormats.Extensions)
+            picker.FileTypeFilter.Add(ext);
+
+        try
+        {
+            var files = await picker.PickMultipleFilesAsync();
+            if (files.Count > 0)
+                Player.QueueMedia(files.Select(file => file.Path).ToArray(), mode);
+        }
+        catch (Exception)
+        {
+            // Picker failure is non-fatal; the active queue remains untouched.
         }
     }
 

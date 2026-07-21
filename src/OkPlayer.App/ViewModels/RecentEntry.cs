@@ -27,6 +27,7 @@ public sealed class BookmarkEntry
 /// <summary>One file in the Up-Next panel's "from this folder" list (projected from the folder playlist).</summary>
 public sealed class PlaylistRow
 {
+    public int Index { get; set; }
     public string Path { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
     public bool IsCurrent { get; set; }   // the now-playing file (highlighted)
@@ -41,6 +42,10 @@ public sealed class PlaylistRow
     public Microsoft.UI.Xaml.Visibility CheckVisibility => Vis(IsWatched && !IsCurrent);
     public Microsoft.UI.Xaml.Visibility CircleVisibility => Vis(!IsWatched && !IsCurrent);
     public double RowOpacity => IsWatched && !IsCurrent ? 0.55 : 1.0;
+    public bool CanMoveUp => Index > 0;
+    public bool CanMoveDown { get; set; }
+    public bool CanPlayNext { get; set; }
+    public bool CanRemove { get; set; }
 
     private static Microsoft.UI.Xaml.Visibility Vis(bool v) =>
         v ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;

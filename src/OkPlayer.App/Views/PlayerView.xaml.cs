@@ -24,6 +24,7 @@ namespace OkPlayer.App.Views;
 /// </summary>
 public sealed partial class PlayerView : UserControl
 {
+    private const string QueueDragIndexKey = "OkPlayer.QueueDragIndex";
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _idleTimer;
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _toastTimer;
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _loadWatchdog; // backstop: never let the spinner hang forever
@@ -130,6 +131,8 @@ public sealed partial class PlayerView : UserControl
     public event EventHandler? ExitFullscreenRequested;
     /// <summary>Ctrl+O / Welcome card: ask the host to show a file picker.</summary>
     public event EventHandler? OpenFileRequested;
+    /// <summary>Ask the host for local media to append or insert immediately after the current item.</summary>
+    public event Action<OkPlayer.Core.QueueInsertMode>? QueueFilesRequested;
     /// <summary>True when media is loaded (chrome is over video); false on the light welcome shell. Host adapts caption buttons.</summary>
     public event EventHandler<bool>? MediaPresenceChanged;
     /// <summary>Resize the window to the video's native pixel size (clamped to the screen). Host owns the AppWindow.</summary>
@@ -2636,7 +2639,8 @@ public sealed partial class PlayerView : UserControl
     // ---- folder-as-playlist (PRD 10.3): opening a file makes its folder the active playlist ----
 
     /// <summary>Keep the playlist pointed at the opened file. Navigating to a file already in the list just
-    /// moves the cursor; opening a file elsewhere rebuilds the list from its folder. Streams get no list.</summary>
+    /// moves the cursor; opening a file elsewhere rebuilds the list from its folder. A lone stream keeps a
+    /// one-item session queue so Add files / Play next can grow it without shell-only state.</summary>
     /// <summary>The folder playlist projected into bound rows for the Up-Next panel (newest cursor state).</summary>
     public System.Collections.ObjectModel.ObservableCollection<ViewModels.PlaylistRow> UpNext { get; } = new();
 
@@ -2662,7 +2666,11 @@ public sealed partial class PlayerView : UserControl
             return;
         if (isUrl)
         {
-            _playlist = null; // a lone URL with no playlist context — single stream
+            _playlist = new OkPlayer.Core.Playlist(new[] { key }, key, sort: false)
+            {
+                Repeat = _repeat,
+                Shuffle = _shuffle,
+            };
             return;
         }
         // A fresh folder is needed. Enumerating it can block on a slow/dead network mount (NFS/SMB), and doing
@@ -2712,11 +2720,15 @@ public sealed partial class PlayerView : UserControl
             string p = _playlist!.Items[i];
             UpNext.Add(new ViewModels.PlaylistRow
             {
+                Index = i,
                 Path = p,
                 Title = System.IO.Path.GetFileNameWithoutExtension(p),
                 IsCurrent = i == cur,
                 IsNext = string.Equals(p, nextPath, StringComparison.OrdinalIgnoreCase),
                 IsWatched = _history.Get(p) is { Finished: true } or { Position: > 60 }, // watched to end, or seen a minute in
+                CanMoveDown = i + 1 < count,
+                CanPlayNext = cur >= 0 && i != cur && i != cur + 1,
+                CanRemove = count > 1 && i != cur,
             });
         }
         bool hasFolder = count > 1;
@@ -2724,8 +2736,32 @@ public sealed partial class PlayerView : UserControl
         UpNextFolderHeader.Visibility = hasFolder ? Visibility.Visible : Visibility.Collapsed;
         UpNextList.Visibility = hasFolder ? Visibility.Visible : Visibility.Collapsed;
         UpNextEmpty.Visibility = hasFolder ? Visibility.Collapsed : Visibility.Visible;
+        QueueFilesButton.IsEnabled = _currentPath is not null;
+        ClearQueueItem.IsEnabled = count > 1 && cur >= 0;
         RefreshModeButtons();
         MediaControlPlaylistChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Apply files selected by the host picker to the session queue through the core playlist model.</summary>
+    public void QueueMedia(IReadOnlyList<string> paths, OkPlayer.Core.QueueInsertMode mode)
+    {
+        if (_currentPath is not string current || paths.Count == 0)
+            return;
+        _playlist ??= new OkPlayer.Core.Playlist(new[] { current }, current, sort: false)
+        {
+            Repeat = _repeat,
+            Shuffle = _shuffle,
+        };
+        int? count = _playlist.QueueInsert(current, paths, mode);
+        if (count is null)
+        {
+            ShowToast("Already in queue");
+            return;
+        }
+        RebuildUpNext();
+        ShowToast(mode == OkPlayer.Core.QueueInsertMode.PlayNext
+            ? $"Will play next: {count} item{(count == 1 ? "" : "s")}"
+            : $"Queued: {count} item{(count == 1 ? "" : "s")}");
     }
 
     /// <summary>Reflect the active play-modes on the footer toggle buttons (glyph + accent vs. dimmed).</summary>
@@ -2890,10 +2926,155 @@ public sealed partial class PlayerView : UserControl
 
     private void OnUpNextRowClick(object sender, RoutedEventArgs e)
     {
-        if (sender is FrameworkElement { Tag: string path } && !string.Equals(path, _currentPath, StringComparison.OrdinalIgnoreCase))
+        if (TryQueueIndex(sender, out int index) && _playlist?.Items.ElementAtOrDefault(index) is string path &&
+            !string.Equals(path, _currentPath, StringComparison.OrdinalIgnoreCase))
         {
             OpenMedia(path);
             Vm.Play();
+        }
+    }
+
+    private void OnUpNextDragStarting(UIElement sender, DragStartingEventArgs e)
+    {
+        if (!TryQueueIndex(sender, out int index))
+        {
+            e.Cancel = true;
+            return;
+        }
+        e.Data.Properties[QueueDragIndexKey] = index;
+        e.Data.RequestedOperation = DataPackageOperation.Move;
+    }
+
+    private void OnUpNextRowDragOver(object sender, DragEventArgs e)
+    {
+        if (sender is not Grid row || !TryQueueDragIndex(e, out int source) || !TryQueueIndex(row, out int target))
+            return;
+        bool dropAfter = e.GetPosition(row).Y >= row.ActualHeight / 2;
+        if (OkPlayer.Core.Playlist.DropTargetIndex(source, target, dropAfter) is null)
+            return;
+        e.AcceptedOperation = DataPackageOperation.Move;
+        e.DragUIOverride.IsCaptionVisible = false;
+        e.DragUIOverride.IsGlyphVisible = false;
+        SetQueueDropLine(row, dropAfter);
+    }
+
+    private void OnUpNextRowDragLeave(object sender, DragEventArgs e)
+    {
+        if (sender is Grid row)
+            SetQueueDropLine(row, null);
+    }
+
+    private void OnUpNextRowDrop(object sender, DragEventArgs e)
+    {
+        if (sender is not Grid row || !TryQueueDragIndex(e, out int source) || !TryQueueIndex(row, out int target))
+            return;
+        bool dropAfter = e.GetPosition(row).Y >= row.ActualHeight / 2;
+        SetQueueDropLine(row, null);
+        if (OkPlayer.Core.Playlist.DropTargetIndex(source, target, dropAfter) is int destination &&
+            _playlist?.Reorder(source, destination) == true)
+        {
+            RebuildUpNext();
+            e.AcceptedOperation = DataPackageOperation.Move;
+        }
+    }
+
+    private void OnUpNextRowKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (!TryQueueIndex(sender, out int index))
+            return;
+        if (e.Key == VirtualKey.Delete)
+        {
+            RemoveQueueItem(index);
+            e.Handled = true;
+        }
+        else if (IsKeyDown(VirtualKey.Menu) && e.Key == VirtualKey.Up)
+        {
+            MoveQueueItem(index, index - 1);
+            e.Handled = true;
+        }
+        else if (IsKeyDown(VirtualKey.Menu) && e.Key == VirtualKey.Down)
+        {
+            MoveQueueItem(index, index + 1);
+            e.Handled = true;
+        }
+    }
+
+    private void OnQueueMoveUpClick(object sender, RoutedEventArgs e)
+    {
+        if (TryQueueIndex(sender, out int index)) MoveQueueItem(index, index - 1);
+    }
+
+    private void OnQueueMoveDownClick(object sender, RoutedEventArgs e)
+    {
+        if (TryQueueIndex(sender, out int index)) MoveQueueItem(index, index + 1);
+    }
+
+    private void OnQueuePlayNextClick(object sender, RoutedEventArgs e)
+    {
+        if (TryQueueIndex(sender, out int index) && _playlist?.PlayNext(index) == true)
+        {
+            RebuildUpNext();
+            ShowToast("Will play next");
+        }
+    }
+
+    private void OnQueueRemoveClick(object sender, RoutedEventArgs e)
+    {
+        if (TryQueueIndex(sender, out int index)) RemoveQueueItem(index);
+    }
+
+    private void OnAddQueueFilesClick(object sender, RoutedEventArgs e) =>
+        QueueFilesRequested?.Invoke(OkPlayer.Core.QueueInsertMode.Append);
+
+    private void OnPlayNextFilesClick(object sender, RoutedEventArgs e) =>
+        QueueFilesRequested?.Invoke(OkPlayer.Core.QueueInsertMode.PlayNext);
+
+    private void OnClearQueueClick(object sender, RoutedEventArgs e)
+    {
+        if (_playlist?.ClearQueue() == true)
+        {
+            RebuildUpNext();
+            ShowToast("Queue cleared");
+        }
+    }
+
+    private void MoveQueueItem(int from, int to)
+    {
+        if (_playlist is { } playlist && to >= 0 && to < playlist.Count && playlist.Reorder(from, to))
+            RebuildUpNext();
+    }
+
+    private void RemoveQueueItem(int index)
+    {
+        if (_playlist?.Remove(index) == true)
+        {
+            RebuildUpNext();
+            ShowToast("Removed from queue");
+        }
+    }
+
+    private static bool TryQueueIndex(object sender, out int index)
+    {
+        index = -1;
+        return sender is FrameworkElement { Tag: int value } && (index = value) >= 0;
+    }
+
+    private static bool TryQueueDragIndex(DragEventArgs e, out int index)
+    {
+        index = -1;
+        return e.DataView.Properties.TryGetValue(QueueDragIndexKey, out object? value) &&
+            value is int source && (index = source) >= 0;
+    }
+
+    private static void SetQueueDropLine(Grid row, bool? dropAfter)
+    {
+        foreach (Border line in row.Children.OfType<Border>())
+        {
+            if (line.Tag is not string tag || (tag != "DropBefore" && tag != "DropAfter"))
+                continue;
+            line.Visibility = dropAfter is bool after &&
+                ((after && tag == "DropAfter") || (!after && tag == "DropBefore"))
+                ? Visibility.Visible : Visibility.Collapsed;
         }
     }
 

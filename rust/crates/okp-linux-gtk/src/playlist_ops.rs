@@ -668,8 +668,16 @@ pub(crate) fn move_playlist_item(state: &Rc<RefCell<PlayerState>>, from: usize, 
     state.borrow_mut().playlist.reorder(from, to)
 }
 
+pub(crate) fn play_playlist_item_next(state: &Rc<RefCell<PlayerState>>, index: usize) -> bool {
+    state.borrow_mut().playlist.play_next(index)
+}
+
 pub(crate) fn remove_playlist_item(state: &Rc<RefCell<PlayerState>>, index: usize) -> bool {
     state.borrow_mut().playlist.remove(index)
+}
+
+pub(crate) fn clear_playlist_queue(state: &Rc<RefCell<PlayerState>>) -> bool {
+    state.borrow_mut().playlist.clear_queue()
 }
 
 pub(crate) fn restart_current_file(state: &Rc<RefCell<PlayerState>>) -> bool {

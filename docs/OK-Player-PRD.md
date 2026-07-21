@@ -164,7 +164,7 @@ Single consolidated source of truth. IDs cross-reference the detailed requiremen
 | Hardware decoding auto (§11) | Playback | MVP |
 | Geometry (aspect/zoom/pan/rotate/deinterlace) in "rarely used" menu (§11) | Playback | MVP |
 | HDR tone-map / passthrough (§11) | Playback | Later |
-| Folder-as-playlist + queue + drag-reorder + `.m3u` (§10.3) | Playlist | MVP |
+| Folder-as-playlist + queue + drag-reorder + Play Next/remove/clear + `.m3u` (§10.3) | Playlist | MVP — Windows + Linux |
 | Auto-advance / repeat / shuffle (§10.3) | Playlist | MVP |
 | Gapless playback (§10.3) | Playlist | MVP-if-easy |
 | Resume + per-file memory (position/track/offset/vol/speed/geometry) (§12) | State | MVP |

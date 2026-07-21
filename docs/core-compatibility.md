@@ -49,11 +49,13 @@ behaves identically on both sides.
 
 ## Playlist → `okp_core::playlist`
 
-- **Item model.** C# `Playlist` holds path strings; the Rust port holds `PlaylistItem` (a local
-  path or a stream URL) — the item model of the Linux shell's queue engine, which the port
-  absorbs (queue insert modes, reorder, removal, wrap-always transport stepping, and the
-  auto-advance toggle; none of these exist in the C# module, whose lists are immutable).
-  The auto-advance flag defaults to on — the fixed C# behavior — and Repeat=One bypasses it.
+- **Item model.** C# `Playlist` holds path/URL strings; the Rust port holds `PlaylistItem` (a
+  typed local path or stream URL). Queue insertion modes, reorder/drop mapping, Play Next,
+  removal, and clear-queue now have the same core-owned behavior on both sides: the current
+  item is protected, clearing retains it, and every edit rebuilds shuffle order without moving
+  the cursor off the playing item. Rust additionally owns wrap-always transport stepping and
+  the auto-advance toggle; the Windows shell retains its existing session-level auto-advance toggle.
+  The Rust flag defaults to on, and Repeat=One bypasses it.
   Construction sorts by the full path/URL string with the ported natural comparer, exactly the
   C# sort; Rust's sort is stable where `List<T>.Sort` is not (same refinement noted for Lrc).
 - **`CurrentIndex` sentinel.** C# returns `-1` for "no current item"; `current_index()` returns
