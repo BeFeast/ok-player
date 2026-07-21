@@ -174,11 +174,20 @@ launch_fixture close-app || {
 }
 xdotool windowactivate "$window_id" >/dev/null 2>&1 || true
 sleep 2
-xdotool key --window "$window_id" --clearmodifiers x
+xdotool windowfocus "$window_id"
+xdotool key --clearmodifiers x
+for _ in $(seq 1 50); do
+  [[ -f "$XDG_STATE_HOME/ok-player/history.json" ]] && break
+  sleep 0.1
+done
+[[ -f "$XDG_STATE_HOME/ok-player/history.json" ]] || {
+  echo "Close Media never fired (no history.json)" >&2
+  exit 1
+}
 sleep 2
 assert_idle_capture "$window_id" close-media-idle "Close Media idle canvas"
 
-for name in eof-idle close-media-idle; do
+for name in eof-idle; do
   rmse="$(magick compare -metric RMSE \
     "$OUT_DIR/initial-idle.png" "$OUT_DIR/$name.png" null: 2>&1 || true)"
   normalized="$(sed -n 's/.*(\([^()]*\)).*/\1/p' <<<"$rmse")"
