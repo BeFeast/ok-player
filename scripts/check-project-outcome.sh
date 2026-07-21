@@ -582,4 +582,5 @@ jq -n \
   }
 ' >"$work/project-health-snapshot.json" || exit 2
 
-exec "$health_bin" project-health --snapshot "$work/project-health-snapshot.json"
+"$health_bin" project-health --snapshot "$work/project-health-snapshot.json"
+exit $?
