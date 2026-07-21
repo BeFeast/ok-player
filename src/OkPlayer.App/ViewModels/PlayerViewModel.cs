@@ -681,6 +681,10 @@ public partial class PlayerViewModel : ObservableObject
     /// file paused at its end and that pause would otherwise carry into the newly loaded file.</summary>
     public void Play() => Cmd("set", "pause", "no");
 
+    /// <summary>Pause playback explicitly. OS media sessions expose separate Play and Pause commands rather
+    /// than a toggle, so both project through the same non-blocking player command surface.</summary>
+    public void Pause() => Cmd("set", "pause", "yes");
+
     /// <summary>Stop playback and unload the current file: clears mpv's playlist, returns the engine to idle,
     /// and resets to the empty state (no title/tracks/chapters) so the view falls back to the Welcome card.
     /// The caller persists the resume position (SaveProgress) before calling this.</summary>
