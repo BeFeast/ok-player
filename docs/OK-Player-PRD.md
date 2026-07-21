@@ -177,7 +177,7 @@ Single consolidated source of truth. IDs cross-reference the detailed requiremen
 | Settings (8 panels) + context menu + OSD toasts (§14) | UX | MVP |
 | Keybinding remap editor (§15.2, §18.2) | Power | MVP / early |
 | Custom `mpv.conf` escape hatch (§18.1) | Power | MVP-ish |
-| SMTC / media keys (§17.1) | Win Integration | Nice-to-have if easy/robust |
+| OS media controls — Windows SMTC / Linux MPRIS (§17.1) | Integration | Nice-to-have — shipped on both platforms |
 | Taskbar thumbnail toolbar + jump list (§17.2) | Win Integration | Nice-to-have if easy/robust |
 | Discord Rich Presence (§17.3) | Win Integration | Nice-to-have if easy |
 | Global hotkeys: play-pause / stop / mute only (§17.4) | Win Integration | Nice-to-have if easy |
@@ -740,6 +740,8 @@ This is the heart of the product — Pillar 1 is "most elegant design." Mandate:
 
 ### 17.1 SMTC `[nice-to-have if easy/robust]`
 Integrate with **System Media Transport Controls** so hardware/keyboard media keys and the Windows now-playing flyout work. Populate title + artwork where available (cover in music mode; frame/thumbnail otherwise). WinUI 3 / Windows App SDK exposes this cleanly via `SystemMediaTransportControls` — one of the more robust integrations and a strong candidate to ship.
+
+**Implementation status:** shipped. Windows projects the observed libmpv playback snapshot into SMTC and routes play, pause, stop, next, previous, seek, and supported rate requests back through the existing player command surface. The flyout uses the same display title/tag sources as the in-app now-playing surfaces, sidecar or embedded cover art for audio, and a decoded frame for video, with the app icon as the fallback. Linux provides the corresponding MPRIS session. Neither platform currently exposes a user-facing OS-media-controls toggle, so both integrations are enabled by default while media is loaded.
 
 ### 17.2 Taskbar thumbnail toolbar + jump list `[nice-to-have if easy/robust]`
 - **Thumbnail toolbar:** play/pause, prev, next on the taskbar thumbnail.

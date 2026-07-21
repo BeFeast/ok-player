@@ -11,6 +11,7 @@ namespace OkPlayer.App;
 public sealed partial class MainWindow : Window
 {
     private bool _fullscreen;
+    private Services.SystemMediaControlsService? _systemMediaControls;
 
     public MainWindow(string? initialFile = null, double? resumeSeconds = null, int? subTrack = null, int? audioTrack = null)
     {
@@ -56,9 +57,17 @@ public sealed partial class MainWindow : Window
             surface.AddHandler(UIElement.PointerCaptureLostEvent, new PointerEventHandler(OnBackdropPointerCaptureLost), true);
         }
         HookAspectResize(); // hold Shift while dragging an edge to keep the video's aspect
+        Activated += (_, _) =>
+        {
+            // Desktop WinUI has no CoreWindow, so bind SMTC to this HWND through the Windows interop helper.
+            _systemMediaControls ??= Services.SystemMediaControlsService.TryCreate(
+                WinRT.Interop.WindowNative.GetWindowHandle(this), Player);
+        };
         Closed += (_, _) =>
         {
             Player.SaveProgress();                 // persist resume position on app close
+            _systemMediaControls?.Dispose();
+            _systemMediaControls = null;
             App.Settings.Changed -= ApplyAppTheme; // don't keep this closed window rooted
             App.Settings.Changed -= Player.ApplySubtitleDefaults;
             App.Settings.Changed -= Player.ApplyAudioDefaults;

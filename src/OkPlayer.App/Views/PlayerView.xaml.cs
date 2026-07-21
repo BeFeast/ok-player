@@ -10,6 +10,7 @@ using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using OkPlayer.App.Services;
 using OkPlayer.App.ViewModels;
+using OkPlayer.Core;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
 using Windows.System;
@@ -107,6 +108,19 @@ public sealed partial class PlayerView : UserControl
         ? (double)Vm.VideoWidth / Vm.VideoHeight
         : 0;
 
+    /// <summary>The current local path or stream URL, used by the window's OS media-session projection.</summary>
+    internal string? CurrentMediaPath => _currentPath;
+
+    /// <summary>Current folder/playlist navigation capabilities for OS media controls.</summary>
+    internal bool CanPlayNext => _playlist?.PeekNext is not null;
+    internal bool CanPlayPrevious => _playlist?.PeekPrev is not null;
+
+    /// <summary>Raised when async playlist construction or navigation changes next/previous availability.</summary>
+    internal event EventHandler? MediaControlPlaylistChanged;
+
+    /// <summary>Raised when mpv tag metadata changes without necessarily changing the display title.</summary>
+    internal event EventHandler? MediaControlMetadataChanged;
+
     /// <summary>x:Bind helper: bool -> Visibility (for icon state toggles in XAML).</summary>
     public static Visibility VisIf(bool value) => value ? Visibility.Visible : Visibility.Collapsed;
 
@@ -194,7 +208,11 @@ public sealed partial class PlayerView : UserControl
         _history.Changed += OnHistoryChanged;
         Vm.EndReached += OnEndReached; // auto-advance the folder playlist when a file plays out
         Vm.LoadFailed += OnLoadFailed; // tear down the loading spinner if an open fails (e.g. a dead URL)
-        Vm.MetadataChanged += () => ReloadOpenLyricsIf(metadataChanged: true); // late tags may now resolve lyrics
+        Vm.MetadataChanged += () =>
+        {
+            ReloadOpenLyricsIf(metadataChanged: true); // late tags may now resolve lyrics
+            MediaControlMetadataChanged?.Invoke(this, EventArgs.Empty);
+        };
         SetPanelTab(false);            // initial visual; RefreshPanelTabs picks the real default per file on open
         Vm.Chapters.CollectionChanged += (_, _) =>
         {
@@ -1318,6 +1336,61 @@ public sealed partial class PlayerView : UserControl
         _loadWatchdog.Stop();    // …and disarm the watchdog so a superseded open can't later fire a false toast
         _playlist = null;        // drop the folder-as-playlist…
         UpNext.Clear();          // …and its projected rows
+        MediaControlPlaylistChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Dispatch an OS transport command through the same player/playlist methods as in-app input.</summary>
+    internal void ExecuteMediaControlCommand(MediaControlCommand command)
+    {
+        switch (command)
+        {
+            case MediaControlCommand.Play: Vm.Play(); break;
+            case MediaControlCommand.Pause: Vm.Pause(); break;
+            case MediaControlCommand.Stop: CloseFile(); break;
+            case MediaControlCommand.Next: PlayNext(); break;
+            case MediaControlCommand.Previous: PlayPrevious(); break;
+        }
+    }
+
+    /// <summary>Read current tags off the pump thread and resolve them against the player's display title.</summary>
+    internal async Task<MediaControlMetadata> ReadMediaControlMetadataAsync(
+        string path,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        string displayTitle = Vm.MediaTitle;
+        string? fileStem = null;
+        if (!path.Contains("://", StringComparison.Ordinal))
+        {
+            try { fileStem = System.IO.Path.GetFileNameWithoutExtension(path); }
+            catch { }
+        }
+        TrackMetadata tags = await Vm.ReadMetadataAsync(cancellationToken).ConfigureAwait(false);
+        return MediaControls.ResolveMetadata(displayTitle, tags.Artist, tags.Title, tags.Album, fileStem);
+    }
+
+    /// <summary>Resolve sidecar/embedded audio art or an early video frame without disturbing playback.</summary>
+    internal async Task<string?> ResolveMediaControlArtworkAsync(
+        string path,
+        System.Threading.CancellationToken cancellationToken)
+    {
+        if (path.Contains("://", StringComparison.Ordinal))
+            return null;
+        if (MediaFormats.IsAudio(path))
+            return await CoverArtService.GetAsync(path, cancellationToken).ConfigureAwait(false);
+
+        Task<bool>? ready = _thumbReady;
+        if (ready is not null)
+        {
+            bool opened = await ready.WaitAsync(cancellationToken).ConfigureAwait(false);
+            if (!opened)
+                return null;
+        }
+        if (!_thumbs.IsReady)
+            return null;
+
+        double target = MediaControls.ArtworkPosition(Vm.Duration);
+        string? cached = _thumbs.PeekNearestCached(target, 60);
+        return cached ?? await _thumbs.GetThumbnailAsync(target).ConfigureAwait(false);
     }
 
     private void TryResume()
@@ -2652,6 +2725,7 @@ public sealed partial class PlayerView : UserControl
         UpNextList.Visibility = hasFolder ? Visibility.Visible : Visibility.Collapsed;
         UpNextEmpty.Visibility = hasFolder ? Visibility.Collapsed : Visibility.Visible;
         RefreshModeButtons();
+        MediaControlPlaylistChanged?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>Reflect the active play-modes on the footer toggle buttons (glyph + accent vs. dimmed).</summary>
