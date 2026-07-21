@@ -147,4 +147,80 @@ public class PlaylistTests
         while (p.Next() is string n) seen.Add(n); // Repeat.Off — walk to the end of the cycle
         Assert.Equal(folder.Length, seen.Count); // the jump re-shuffled, so nothing is stranded this cycle
     }
+
+    [Fact]
+    public void QueueAppend_AddsOnlyNewItemsAtEnd()
+    {
+        var p = new Playlist(new[] { @"C:\v\current.mkv", @"C:\v\queued.mkv" }, @"C:\v\current.mkv", sort: false);
+
+        int? added = p.QueueInsert(@"C:\v\current.mkv", new[]
+        {
+            @"C:\v\current.mkv", @"C:\V\QUEUED.MKV", @"C:\v\new.mp4", @"C:\v\new.mp4",
+        }, QueueInsertMode.Append);
+
+        Assert.Equal(1, added);
+        Assert.Equal(new[] { @"C:\v\current.mkv", @"C:\v\queued.mkv", @"C:\v\new.mp4" }, p.Items);
+        Assert.Equal(0, p.CurrentIndex);
+    }
+
+    [Fact]
+    public void QueuePlayNext_MovesExistingItemsAndPreservesSelectionOrder()
+    {
+        var p = new Playlist(new[]
+        {
+            @"C:\v\previous.mkv", @"C:\v\current.mkv", @"C:\v\later.mkv", @"C:\v\final.mkv",
+        }, @"C:\v\current.mkv", sort: false);
+
+        int? added = p.QueueInsert(@"C:\v\current.mkv",
+            new[] { @"C:\v\later.mkv", @"C:\v\new.mp4" }, QueueInsertMode.PlayNext);
+
+        Assert.Equal(2, added);
+        Assert.Equal(new[]
+        {
+            @"C:\v\previous.mkv", @"C:\v\current.mkv", @"C:\v\later.mkv", @"C:\v\new.mp4", @"C:\v\final.mkv",
+        }, p.Items);
+        Assert.Equal(1, p.CurrentIndex);
+    }
+
+    [Fact]
+    public void QueueInsert_GrowsSingleUrlQueueAroundCurrent()
+    {
+        const string stream = "https://example.test/live.m3u8";
+        var p = new Playlist(new[] { stream }, stream, sort: false);
+
+        Assert.Equal(1, p.QueueInsert(stream, new[] { @"C:\v\next.mkv" }, QueueInsertMode.PlayNext));
+        Assert.Equal(new[] { stream, @"C:\v\next.mkv" }, p.Items);
+        Assert.Equal(stream, p.Current);
+    }
+
+    [Fact]
+    public void Reorder_PlayNext_RemoveAndClearKeepCursorOnPlayingItem()
+    {
+        var p = new Playlist(new[] { "a", "b", "c", "d" }, "b", sort: false);
+
+        Assert.True(p.Reorder(3, 0));
+        Assert.Equal(new[] { "d", "a", "b", "c" }, p.Items);
+        Assert.Equal("b", p.Current);
+        Assert.True(p.PlayNext(0));
+        Assert.Equal(new[] { "a", "b", "d", "c" }, p.Items);
+        Assert.False(p.Remove(p.CurrentIndex));
+        Assert.True(p.Remove(0));
+        Assert.Equal("b", p.Current);
+        Assert.True(p.ClearQueue());
+        Assert.Equal(new[] { "b" }, p.Items);
+        Assert.Equal(0, p.CurrentIndex);
+        Assert.False(p.ClearQueue());
+    }
+
+    [Theory]
+    [InlineData(0, 2, false, 1)]
+    [InlineData(0, 2, true, 2)]
+    [InlineData(3, 1, false, 1)]
+    [InlineData(3, 1, true, 2)]
+    [InlineData(2, 2, false, null)]
+    [InlineData(1, 2, false, null)]
+    public void DropTargetIndex_MapsInsertionLineToReorderDestination(int source, int row, bool after, int? expected)
+    {
+        Assert.Equal(expected, Playlist.DropTargetIndex(source, row, after));
+    }
 }

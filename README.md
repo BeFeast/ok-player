@@ -97,7 +97,7 @@ The `.deb` targets current Debian/Ubuntu; the AppImage targets any glibc desktop
 
 ## Roadmap (summary)
 
-- **Shipped** — immersive native window, auto-hiding OSC with seek hover-thumbnails, chapter panel + timeline markers + bookmarks, dual screenshots, frame/timecode navigation, A–B loop, subtitles (embedded + external, presets, sync, per-file memory), folder-as-playlist + queue, resume + per-file memory, compact music mode, Settings, companion-library launch-with-resume + progress report-back, and native OS media controls (Windows SMTC / Linux MPRIS). Linux adds native Wayland/EGL 4K60 presentation and image-based (PGS/VobSub) subtitle labeling.
+- **Shipped** — immersive native window, auto-hiding OSC with seek hover-thumbnails, chapter panel + timeline markers + bookmarks, dual screenshots, frame/timecode navigation, A–B loop, subtitles (embedded + external, presets, sync, per-file memory), editable Up Next queue (add/play-next/reorder/remove/clear) + `.m3u`, resume + per-file memory, compact music mode, Settings, companion-library launch-with-resume + progress report-back, and native OS media controls (Windows SMTC / Linux MPRIS). Linux adds native Wayland/EGL 4K60 presentation and image-based (PGS/VobSub) subtitle labeling.
 - **In progress** — Linux/Windows parity across the remaining player surfaces (tracked per issue).
 - **Day-2** — in-app YouTube (yt-dlp), online subtitle search, **Scribe auto-subtitles**, clip/GIF export.
 - **Later** — deeper ASS/PGS/WebVTT, dual subtitles, advanced sync, HDR, cross-device sync.

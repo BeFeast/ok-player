@@ -507,6 +507,23 @@ impl Playlist {
         true
     }
 
+    /// Move an existing queued item directly after the current one.
+    pub fn play_next(&mut self, index: usize) -> bool {
+        let Some(current) = self.current_index else {
+            return false;
+        };
+        if index >= self.items.len() || index == current || index == current + 1 {
+            return false;
+        }
+
+        let target = if index < current {
+            current
+        } else {
+            current + 1
+        };
+        self.reorder(index, target)
+    }
+
     /// Remove the item at `index`. Refuses to remove the playing item or the last one left.
     pub fn remove(&mut self, index: usize) -> bool {
         if self.items.len() <= 1 || index >= self.items.len() {
@@ -526,6 +543,41 @@ impl Playlist {
         });
         self.rebuild_order();
         true
+    }
+
+    /// Remove every queued item except the playing item.
+    pub fn clear_queue(&mut self) -> bool {
+        if self.items.len() <= 1 {
+            return false;
+        }
+        let Some(current) = self.current().cloned() else {
+            return false;
+        };
+
+        self.items.clear();
+        self.items.push(current);
+        self.current_index = Some(0);
+        self.rebuild_order();
+        true
+    }
+
+    /// Map a drop before/after a visible row to the destination index expected by [`Self::reorder`].
+    pub fn drop_target_index(
+        source_index: usize,
+        row_index: usize,
+        drop_after: bool,
+    ) -> Option<usize> {
+        if source_index == row_index {
+            return None;
+        }
+
+        let target = match (drop_after, source_index < row_index) {
+            (false, true) => row_index.saturating_sub(1),
+            (false, false) => row_index,
+            (true, true) => row_index,
+            (true, false) => row_index + 1,
+        };
+        (target != source_index).then_some(target)
     }
 
     fn neighbour(&self, step: isize) -> Option<usize> {
@@ -995,6 +1047,34 @@ mod tests {
     }
 
     #[test]
+    fn play_next_moves_an_existing_item_after_current() {
+        let mut playlist = Playlist::from_items(
+            vec![
+                local("/media/a.mkv"),
+                local("/media/b.mkv"),
+                local("/media/c.mkv"),
+                local("/media/d.mkv"),
+            ],
+            Some(&local("/media/b.mkv")),
+            false,
+        );
+
+        assert!(playlist.play_next(3));
+        assert_eq!(
+            playlist.items(),
+            [
+                local("/media/a.mkv"),
+                local("/media/b.mkv"),
+                local("/media/d.mkv"),
+                local("/media/c.mkv"),
+            ]
+        );
+        assert_eq!(playlist.current(), Some(&local("/media/b.mkv")));
+        assert!(!playlist.play_next(1));
+        assert!(!playlist.play_next(2));
+    }
+
+    #[test]
     fn remove_keeps_at_least_one_item() {
         let mut playlist = Playlist::from_items(
             vec![
@@ -1024,6 +1104,26 @@ mod tests {
         assert!(playlist.remove(0)); // removing before the cursor shifts it
         assert_eq!(playlist.current_index(), Some(0));
         assert_eq!(playlist.current(), Some(&local(r"C:\v\ep2.mkv")));
+    }
+
+    #[test]
+    fn clear_queue_keeps_only_the_playing_item() {
+        let mut playlist = folder_playlist(r"C:\v\ep2.mkv");
+
+        assert!(playlist.clear_queue());
+        assert_eq!(playlist.items(), [local(r"C:\v\ep2.mkv")]);
+        assert_eq!(playlist.current_index(), Some(0));
+        assert!(!playlist.clear_queue());
+    }
+
+    #[test]
+    fn drop_target_index_maps_insertion_lines_to_reorder_slots() {
+        assert_eq!(Playlist::drop_target_index(0, 2, false), Some(1));
+        assert_eq!(Playlist::drop_target_index(0, 2, true), Some(2));
+        assert_eq!(Playlist::drop_target_index(3, 1, false), Some(1));
+        assert_eq!(Playlist::drop_target_index(3, 1, true), Some(2));
+        assert_eq!(Playlist::drop_target_index(2, 2, false), None);
+        assert_eq!(Playlist::drop_target_index(1, 2, false), None);
     }
 
     #[test]

@@ -3840,18 +3840,18 @@ fn load_selected_local_paths_opens_folder_as_playlist() {
 
 #[test]
 fn playlist_drop_target_index_maps_before_after_slots() {
-    assert_eq!(playlist_drop_target_index(0, 2, false), Some(1));
-    assert_eq!(playlist_drop_target_index(0, 2, true), Some(2));
-    assert_eq!(playlist_drop_target_index(3, 1, false), Some(1));
-    assert_eq!(playlist_drop_target_index(3, 1, true), Some(2));
+    assert_eq!(Playlist::drop_target_index(0, 2, false), Some(1));
+    assert_eq!(Playlist::drop_target_index(0, 2, true), Some(2));
+    assert_eq!(Playlist::drop_target_index(3, 1, false), Some(1));
+    assert_eq!(Playlist::drop_target_index(3, 1, true), Some(2));
 }
 
 #[test]
 fn playlist_drop_target_index_rejects_self_or_existing_slot() {
-    assert_eq!(playlist_drop_target_index(2, 2, false), None);
-    assert_eq!(playlist_drop_target_index(2, 2, true), None);
-    assert_eq!(playlist_drop_target_index(1, 2, false), None);
-    assert_eq!(playlist_drop_target_index(2, 1, true), None);
+    assert_eq!(Playlist::drop_target_index(2, 2, false), None);
+    assert_eq!(Playlist::drop_target_index(2, 2, true), None);
+    assert_eq!(Playlist::drop_target_index(1, 2, false), None);
+    assert_eq!(Playlist::drop_target_index(2, 1, true), None);
 }
 
 #[test]

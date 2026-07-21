@@ -1090,14 +1090,7 @@ pub(crate) fn playlist_actions_menu(
     );
     let play_next_state = Rc::clone(&state);
     play_next.connect_clicked(move |_| {
-        if let Some(current) = current_index {
-            let target = if index < current {
-                current
-            } else {
-                current + 1
-            };
-            move_playlist_item(&play_next_state, index, target);
-        }
+        play_playlist_item_next(&play_next_state, index);
     });
     content.append(&play_next);
 
@@ -1118,6 +1111,14 @@ pub(crate) fn playlist_actions_menu(
         remove_playlist_item(&remove_state, index);
     });
     content.append(&remove);
+
+    let clear_queue =
+        playlist_menu_action("edit-clear-all-symbolic", "Clear queue", playlist_len > 1);
+    let clear_queue_state = Rc::clone(&state);
+    clear_queue.connect_clicked(move |_| {
+        clear_playlist_queue(&clear_queue_state);
+    });
+    content.append(&clear_queue);
 
     let popover = gtk::Popover::new();
     popover.set_has_arrow(false);
@@ -1210,32 +1211,13 @@ pub(crate) fn connect_playlist_row_drag_reorder(
         };
         let drop_after = y >= f64::from(drop_row.allocated_height()) / 2.0;
         let Some(target_index) =
-            playlist_drop_target_index(source_index as usize, index, drop_after)
+            Playlist::drop_target_index(source_index as usize, index, drop_after)
         else {
             return false;
         };
         move_playlist_item(&state, source_index as usize, target_index)
     });
     row.add_controller(drop);
-}
-
-pub(crate) fn playlist_drop_target_index(
-    source_index: usize,
-    row_index: usize,
-    drop_after: bool,
-) -> Option<usize> {
-    if source_index == row_index {
-        return None;
-    }
-
-    let target = match (drop_after, source_index < row_index) {
-        (false, true) => row_index.saturating_sub(1),
-        (false, false) => row_index,
-        (true, true) => row_index,
-        (true, false) => row_index + 1,
-    };
-
-    (target != source_index).then_some(target)
 }
 
 /// Representative Chapters/Up Next content used by the visual smoke hook

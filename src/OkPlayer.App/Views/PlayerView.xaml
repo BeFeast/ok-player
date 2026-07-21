@@ -910,33 +910,58 @@
                 <!-- FROM THIS FOLDER · N -->
                 <TextBlock x:Name="UpNextFolderHeader" Grid.Row="1" Text="FROM THIS FOLDER" FontSize="11" FontWeight="SemiBold"
                            CharacterSpacing="60" Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="2,2,0,5" />
-                <!-- the folder, in playlist order -->
+                <!-- the session queue, in playlist order -->
                 <ScrollViewer x:Name="UpNextList" Grid.Row="2" VerticalScrollBarVisibility="Auto">
                     <ItemsControl ItemsSource="{x:Bind UpNext}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:PlaylistRow">
-                                <Button Click="OnUpNextRowClick" Tag="{x:Bind Path}" Margin="0,0,0,1" Padding="0"
-                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
-                                        Background="Transparent" BorderThickness="0" Opacity="{x:Bind RowOpacity}">
-                                    <Grid>
-                                        <Border Background="{ThemeResource OkAccentTintBrush}" CornerRadius="6" Visibility="{x:Bind CurrentVisibility}" />
-                                        <Grid Padding="7,7" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
-                                            <Grid Grid.Column="0" Width="16" VerticalAlignment="Center">
+                                <Grid Tag="{x:Bind Index}" Margin="0,0,0,1" AllowDrop="True" Opacity="{x:Bind RowOpacity}"
+                                      DragOver="OnUpNextRowDragOver" DragLeave="OnUpNextRowDragLeave" Drop="OnUpNextRowDrop">
+                                    <Border Background="{ThemeResource OkAccentTintBrush}" CornerRadius="6" Visibility="{x:Bind CurrentVisibility}" />
+                                    <Border Tag="DropBefore" Height="2" Background="{ThemeResource OkAccentTextBrush}"
+                                            VerticalAlignment="Top" Margin="4,-1" Visibility="Collapsed" />
+                                    <Border Tag="DropAfter" Height="2" Background="{ThemeResource OkAccentTextBrush}"
+                                            VerticalAlignment="Bottom" Margin="4,-1" Visibility="Collapsed" />
+                                    <Grid Padding="4,5" ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="6">
+                                        <!-- Canonical six-dot reorder handle; dragging is intentionally scoped to this glyph. -->
+                                        <TextBlock Grid.Column="0" Text="&#x283F;" FontFamily="Segoe UI Symbol" FontSize="15"
+                                                   Foreground="{ThemeResource OkTextSecondaryBrush}" VerticalAlignment="Center"
+                                                   Padding="3,5" CanDrag="True" Tag="{x:Bind Index}" DragStarting="OnUpNextDragStarting"
+                                                   ToolTipService.ToolTip="Drag to reorder" AutomationProperties.Name="Drag to reorder" />
+                                        <Grid Grid.Column="1" Width="16" VerticalAlignment="Center">
                                                 <Ellipse Width="9" Height="9" Stroke="{ThemeResource OkTextSecondaryBrush}"
                                                          StrokeThickness="1.3" Visibility="{x:Bind CircleVisibility}" />
                                                 <FontIcon Glyph="&#xE73E;" FontSize="13" Foreground="{ThemeResource OkAccentSecondaryTextBrush}" Visibility="{x:Bind CheckVisibility}" />
                                                 <FontIcon Glyph="&#xE768;" FontSize="13" Foreground="{ThemeResource OkAccentTextBrush}" Visibility="{x:Bind PlayingVisibility}" />
-                                            </Grid>
-                                            <TextBlock Grid.Column="1" Text="{x:Bind Title}" VerticalAlignment="Center"
-                                                       TextTrimming="CharacterEllipsis" Style="{StaticResource OkBodyTextStyle}"
-                                                       ToolTipService.ToolTip="{x:Bind Title}" />
-                                            <Border Grid.Column="2" Visibility="{x:Bind NextVisibility}" Background="{ThemeResource OkAccentSelectionFillBrush}"
-                                                    CornerRadius="4" Padding="6,2" VerticalAlignment="Center">
-                                                <TextBlock Text="NEXT" FontSize="9" FontWeight="SemiBold" Foreground="{ThemeResource OkAccentSecondaryTextBrush}" />
-                                            </Border>
                                         </Grid>
+                                        <Button Grid.Column="2" Click="OnUpNextRowClick" KeyDown="OnUpNextRowKeyDown" Tag="{x:Bind Index}"
+                                                Margin="0" Padding="2,2" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                                                Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="{x:Bind Path}"
+                                                AutomationProperties.HelpText="Delete removes; Alt+Up or Alt+Down reorders">
+                                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                                                <TextBlock Text="{x:Bind Title}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                                           Style="{StaticResource OkBodyTextStyle}" />
+                                                <Border Grid.Column="1" Visibility="{x:Bind NextVisibility}" Background="{ThemeResource OkAccentSelectionFillBrush}"
+                                                        CornerRadius="4" Padding="6,2" VerticalAlignment="Center">
+                                                    <TextBlock Text="NEXT" FontSize="9" FontWeight="SemiBold" Foreground="{ThemeResource OkAccentSecondaryTextBrush}" />
+                                                </Border>
+                                            </Grid>
+                                        </Button>
+                                        <Button Grid.Column="3" Width="28" Height="28" Padding="0" Background="Transparent" BorderThickness="0"
+                                                ToolTipService.ToolTip="Queue actions" AutomationProperties.Name="Queue actions">
+                                            <Button.Flyout>
+                                                <MenuFlyout MenuFlyoutPresenterStyle="{StaticResource OkMenuFlyoutPresenterStyle}">
+                                                    <MenuFlyoutItem Text="Move up" Tag="{x:Bind Index}" IsEnabled="{x:Bind CanMoveUp}" Click="OnQueueMoveUpClick" />
+                                                    <MenuFlyoutItem Text="Play next" Tag="{x:Bind Index}" IsEnabled="{x:Bind CanPlayNext}" Click="OnQueuePlayNextClick" />
+                                                    <MenuFlyoutItem Text="Move down" Tag="{x:Bind Index}" IsEnabled="{x:Bind CanMoveDown}" Click="OnQueueMoveDownClick" />
+                                                    <MenuFlyoutSeparator />
+                                                    <MenuFlyoutItem Text="Remove from queue" Tag="{x:Bind Index}" IsEnabled="{x:Bind CanRemove}" Click="OnQueueRemoveClick" />
+                                                </MenuFlyout>
+                                            </Button.Flyout>
+                                            <FontIcon Glyph="&#xE712;" FontSize="13" />
+                                        </Button>
                                     </Grid>
-                                </Button>
+                                </Grid>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
@@ -949,12 +974,15 @@
                                Foreground="{ThemeResource OkTextBodyBrush}" />
                     <TextBlock Text="No other media in this folder." FontSize="11.5" HorizontalAlignment="Center"
                                TextAlignment="Center" Foreground="{ThemeResource OkTextSecondaryBrush}" />
+                    <Button Content="Add files&#x2026;" Click="OnAddQueueFilesClick" HorizontalAlignment="Center" Margin="0,4,0,0"
+                            CornerRadius="6" Padding="12,6" Background="{ThemeResource OkAccentSelectionFillBrush}"
+                            Foreground="{ThemeResource OkAccentTextBrush}" BorderThickness="0" />
                 </StackPanel>
 
                 <!-- footer: play-mode toggles (active = teal accent; SetPanelTab/RefreshModeButtons set colours) -->
                 <Border Grid.Row="3" BorderThickness="0,1,0,0" BorderBrush="{ThemeResource OkStrokeBrush}"
                         Padding="2,8,0,0" Margin="0,8,0,0">
-                    <Grid ColumnDefinitions="*,Auto" VerticalAlignment="Center">
+                    <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="4" VerticalAlignment="Center">
                         <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="2">
                             <Button x:Name="RepeatButton" Click="OnRepeatClick" Width="32" Height="32" Padding="0" CornerRadius="7"
                                     Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="Repeat (off / all / one)">
@@ -969,7 +997,19 @@
                                 <FontIcon x:Name="AutoAdvanceIcon" Glyph="&#xE72C;" FontSize="15" Foreground="{ThemeResource OkTextSecondaryBrush}" />
                             </Button>
                         </StackPanel>
-                        <Button Grid.Column="1" Click="OnSavePlaylistClick" CornerRadius="6" Padding="10,5" VerticalAlignment="Center"
+                        <Button x:Name="QueueFilesButton" Grid.Column="1" Width="30" Height="30" Padding="0" CornerRadius="6"
+                                Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="Queue files and queue actions">
+                            <Button.Flyout>
+                                <MenuFlyout MenuFlyoutPresenterStyle="{StaticResource OkMenuFlyoutPresenterStyle}">
+                                    <MenuFlyoutItem Text="Add to queue&#x2026;" Click="OnAddQueueFilesClick" />
+                                    <MenuFlyoutItem Text="Play next&#x2026;" Click="OnPlayNextFilesClick" />
+                                    <MenuFlyoutSeparator />
+                                    <MenuFlyoutItem x:Name="ClearQueueItem" Text="Clear queue" Click="OnClearQueueClick" />
+                                </MenuFlyout>
+                            </Button.Flyout>
+                            <FontIcon Glyph="&#xE710;" FontSize="14" />
+                        </Button>
+                        <Button Grid.Column="2" Click="OnSavePlaylistClick" CornerRadius="6" Padding="10,5" VerticalAlignment="Center"
                                 Background="{ThemeResource OkSubtleFillStrongBrush}" BorderThickness="0"
                                 ToolTipService.ToolTip="Save this playlist as an .m3u file">
                             <TextBlock Text="Save .m3u" FontSize="11" FontWeight="SemiBold" Foreground="{ThemeResource OkTextSecondaryBrush}" />
