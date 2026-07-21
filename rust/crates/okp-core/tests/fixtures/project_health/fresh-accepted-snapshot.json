@@ -8,6 +8,7 @@
   "source": {
     "head_sha": "d5d531a58c830a01a7e25615e850593e9ff4493f",
     "head_committed_at_utc": "2026-07-18T00:30:00Z",
+    "head_observed_at_utc": "2026-07-18T00:30:02Z",
     "workflows": [
       {
         "name": "CI",
@@ -15,6 +16,7 @@
         "event": "push",
         "status": "completed",
         "conclusion": "success",
+        "created_at_utc": "2026-07-18T00:30:02Z",
         "url": "https://example.invalid/runs/ci"
       },
       {
@@ -23,6 +25,7 @@
         "event": "push",
         "status": "completed",
         "conclusion": "success",
+        "created_at_utc": "2026-07-18T00:30:02Z",
         "url": "https://example.invalid/runs/rust"
       }
     ],

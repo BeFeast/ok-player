@@ -190,6 +190,18 @@ fn source_main_ci_settling_survives_collection_and_remains_fail_safe() {
             "source/main CI is settling",
         ),
         (
+            "source-ci-empty",
+            Some(0),
+            HealthStatus::Warning,
+            "source/main CI is settling",
+        ),
+        (
+            "source-ci-event-missing",
+            Some(0),
+            HealthStatus::Warning,
+            "source/main CI is settling",
+        ),
+        (
             "source-ci-overdue",
             Some(1),
             HealthStatus::Fail,
@@ -518,24 +530,34 @@ if [[ "${1:-}" == run && "${2:-}" == list ]]; then
       printf '[{"databaseId":200,"headSha":"%s","event":"schedule","status":"completed","conclusion":"success","updatedAt":"2026-07-18T01:55:47Z","url":"https://example.invalid/run/windows-candidate"}]\n' "$main_sha"
     fi
   else
+    if [[ "$OKP_STUB_FAIL" == source-ci-empty ]]; then
+      printf '%s\n' '[]'
+      exit 0
+    fi
     workflow_sha="$main_sha"
     status="completed"
     conclusion="success"
+    created_at="2026-07-18T00:30:02Z"
     if [[ "$OKP_STUB_FAIL" == source-ci-settling ]]; then
       if [[ "$workflow" == CI ]]; then
         status="in_progress"
         conclusion=""
+        created_at="2026-07-18T01:59:47Z"
       else
         workflow_sha="1111111111111111111111111111111111111111"
       fi
+    elif [[ "$OKP_STUB_FAIL" == source-ci-event-missing ]]; then
+      status="in_progress"
+      conclusion=""
+      created_at="2026-07-18T01:59:47Z"
     elif [[ "$OKP_STUB_FAIL" == source-ci-overdue ]]; then
       status="in_progress"
       conclusion=""
     elif [[ "$OKP_STUB_FAIL" == source-ci-failed && "$workflow" == CI ]]; then
       conclusion="failure"
     fi
-    printf '[{"workflowName":"%s","headSha":"%s","event":"push","status":"%s","conclusion":"%s","url":"https://example.invalid/run"}]\n' \
-      "$workflow" "$workflow_sha" "$status" "$conclusion"
+    printf '[{"workflowName":"%s","headSha":"%s","event":"push","status":"%s","conclusion":"%s","createdAt":"%s","url":"https://example.invalid/run"}]\n' \
+      "$workflow" "$workflow_sha" "$status" "$conclusion" "$created_at"
   fi
   exit 0
 fi
@@ -569,10 +591,23 @@ case "$endpoint" in
       main_sha="1111111111111111111111111111111111111111"
     fi
     main_committed_at="2026-07-18T00:30:00Z"
-    if [[ "$OKP_STUB_FAIL" == source-ci-settling || "$OKP_STUB_FAIL" == source-ci-failed ]]; then
-      main_committed_at="2026-07-18T01:59:47Z"
-    fi
     printf '{"sha":"%s","commit":{"committer":{"date":"%s"}}}\n' "$main_sha" "$main_committed_at"
+    ;;
+  repos/*/events\?per_page=100)
+    if [[ "$OKP_STUB_FAIL" == source-ci-event-missing ]]; then
+      printf '%s\n' '[]'
+    else
+      main_sha="d5d531a58c830a01a7e25615e850593e9ff4493f"
+      [[ "$OKP_STUB_FAIL" != schedule-stale ]] || main_sha="1111111111111111111111111111111111111111"
+      observed_at="2026-07-18T00:30:02Z"
+      if [[ "$OKP_STUB_FAIL" == source-ci-settling \
+          || "$OKP_STUB_FAIL" == source-ci-empty \
+          || "$OKP_STUB_FAIL" == source-ci-failed ]]; then
+        observed_at="2026-07-18T01:59:47Z"
+      fi
+      printf '[{"type":"PushEvent","created_at":"%s","payload":{"ref":"refs/heads/main","head":"%s"}}]\n' \
+        "$observed_at" "$main_sha"
+    fi
     ;;
   repos/*/commits/d5d531a58c830a01a7e25615e850593e9ff4493f)
     printf '%s\n' '{"commit":{"committer":{"date":"2026-07-18T00:30:00Z"}}}'

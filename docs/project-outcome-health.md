@@ -80,10 +80,14 @@ is the project contract.
 
 Operators may temporarily select another positive main-CI settling window with
 `OKP_PROJECT_HEALTH_SOURCE_CI_GRACE_SECONDS`. The collector binds the window to
-the exact main commit timestamp, so an old or indefinitely queued workflow
-cannot remain healthy. Missing or mismatched CI/Rust results only warn inside
-the window; malformed source evidence and completed workflow failures remain
-immediate failures.
+the server-observed `main` update time from the matching GitHub `PushEvent`,
+falling back to the creation time of a matching CI or Rust run when the event
+feed has not settled yet. This prevents an older commit pushed later from
+starting the grace clock before it reached `main`; legacy snapshots without
+server-observed timing still fall back to the commit timestamp. A successful
+workflow query with no runs is pending evidence, not a query failure. Missing or
+mismatched CI/Rust results only warn inside the bounded window; malformed source
+evidence and completed workflow failures remain immediate failures.
 
 Operators may separately set a positive schedule window with
 `OKP_PROJECT_HEALTH_MAX_CANDIDATE_SCHEDULE_AGE_SECONDS`. Workflow state and the
