@@ -334,6 +334,62 @@
                         <TextBlock Text="Decode video on the GPU where it's safely supported (recommended). Turn off to force software decoding. Restart OK Player to apply."
                                    TextWrapping="Wrap" MaxWidth="520" HorizontalAlignment="Left" FontSize="11.5"
                                    Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,8,0,0" />
+
+                        <TextBlock Text="PICTURE" FontSize="12" FontWeight="SemiBold" CharacterSpacing="60"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,28,0,8" />
+                        <TextBlock Text="Global picture adjustments for every video. Zero is the neutral mpv value; changes apply immediately and persist across restarts."
+                                   TextWrapping="Wrap" MaxWidth="520" HorizontalAlignment="Left" FontSize="11.5"
+                                   Foreground="{ThemeResource OkTextSecondaryBrush}" Margin="0,0,0,12" />
+                        <StackPanel Spacing="10" MaxWidth="520" HorizontalAlignment="Stretch">
+                            <Grid ColumnDefinitions="86,*,38,66" ColumnSpacing="10">
+                                <TextBlock Text="Brightness" FontSize="12.5" VerticalAlignment="Center" />
+                                <Slider x:Name="BrightnessSlider" Grid.Column="1" Minimum="-100" Maximum="100"
+                                        StepFrequency="1" SmallChange="1" LargeChange="10"
+                                        AutomationProperties.Name="Brightness"
+                                        ValueChanged="OnBrightnessChanged" />
+                                <TextBlock x:Name="BrightnessValue" Grid.Column="2" FontFamily="{StaticResource OkMonoFontFamily}"
+                                           FontSize="11.5" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                                <Button Grid.Column="3" Content="Reset" Click="OnBrightnessReset" HorizontalAlignment="Stretch"
+                                        AutomationProperties.Name="Reset brightness"
+                                        CornerRadius="6" Padding="8,4" FontSize="12" />
+                            </Grid>
+                            <Grid ColumnDefinitions="86,*,38,66" ColumnSpacing="10">
+                                <TextBlock Text="Contrast" FontSize="12.5" VerticalAlignment="Center" />
+                                <Slider x:Name="ContrastSlider" Grid.Column="1" Minimum="-100" Maximum="100"
+                                        StepFrequency="1" SmallChange="1" LargeChange="10"
+                                        AutomationProperties.Name="Contrast"
+                                        ValueChanged="OnContrastChanged" />
+                                <TextBlock x:Name="ContrastValue" Grid.Column="2" FontFamily="{StaticResource OkMonoFontFamily}"
+                                           FontSize="11.5" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                                <Button Grid.Column="3" Content="Reset" Click="OnContrastReset" HorizontalAlignment="Stretch"
+                                        AutomationProperties.Name="Reset contrast"
+                                        CornerRadius="6" Padding="8,4" FontSize="12" />
+                            </Grid>
+                            <Grid ColumnDefinitions="86,*,38,66" ColumnSpacing="10">
+                                <TextBlock Text="Saturation" FontSize="12.5" VerticalAlignment="Center" />
+                                <Slider x:Name="SaturationSlider" Grid.Column="1" Minimum="-100" Maximum="100"
+                                        StepFrequency="1" SmallChange="1" LargeChange="10"
+                                        AutomationProperties.Name="Saturation"
+                                        ValueChanged="OnSaturationChanged" />
+                                <TextBlock x:Name="SaturationValue" Grid.Column="2" FontFamily="{StaticResource OkMonoFontFamily}"
+                                           FontSize="11.5" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                                <Button Grid.Column="3" Content="Reset" Click="OnSaturationReset" HorizontalAlignment="Stretch"
+                                        AutomationProperties.Name="Reset saturation"
+                                        CornerRadius="6" Padding="8,4" FontSize="12" />
+                            </Grid>
+                            <Grid ColumnDefinitions="86,*,38,66" ColumnSpacing="10">
+                                <TextBlock Text="Gamma" FontSize="12.5" VerticalAlignment="Center" />
+                                <Slider x:Name="GammaSlider" Grid.Column="1" Minimum="-100" Maximum="100"
+                                        StepFrequency="1" SmallChange="1" LargeChange="10"
+                                        AutomationProperties.Name="Gamma"
+                                        ValueChanged="OnGammaChanged" />
+                                <TextBlock x:Name="GammaValue" Grid.Column="2" FontFamily="{StaticResource OkMonoFontFamily}"
+                                           FontSize="11.5" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                                <Button Grid.Column="3" Content="Reset" Click="OnGammaReset" HorizontalAlignment="Stretch"
+                                        AutomationProperties.Name="Reset gamma"
+                                        CornerRadius="6" Padding="8,4" FontSize="12" />
+                            </Grid>
+                        </StackPanel>
                     </StackPanel>
 
                     <!-- Audio (real) -->

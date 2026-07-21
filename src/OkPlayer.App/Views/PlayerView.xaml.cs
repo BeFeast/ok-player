@@ -10,6 +10,7 @@ using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using OkPlayer.App.Services;
 using OkPlayer.App.ViewModels;
+using OkPlayer.Core;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
 using Windows.System;
@@ -608,6 +609,7 @@ public sealed partial class PlayerView : UserControl
         {
             Vm.Attach(engine, DispatcherQueue);
             Vm.SetVolume(App.Settings.Current.DefaultVolume); // start at the configured default volume (Settings -> Audio)
+            ApplyVideoDefaults(); // restore the shared global picture adjustments on every new engine
             string device = App.Settings.Current.AudioDevice;
             if (!string.IsNullOrEmpty(device))
                 Vm.RestoreAudioDevice(device); // restore the remembered device only if it still exists
@@ -2427,6 +2429,22 @@ public sealed partial class PlayerView : UserControl
             }
         }
         catch { /* an af command never blocks startup/open */ }
+    }
+
+    /// <summary>Apply the shared global picture adjustments to libmpv. Property writes are asynchronous,
+    /// so dragging a Settings slider never blocks the render/UI thread.</summary>
+    public void ApplyVideoDefaults()
+    {
+        try
+        {
+            if (Video.Engine is not { } engine)
+                return;
+            foreach (VideoAdjustmentKind kind in Enum.GetValues<VideoAdjustmentKind>())
+                engine.SetProperty(
+                    VideoAdjustments.MpvProperty(kind),
+                    App.Settings.Current.VideoAdjustment(kind));
+        }
+        catch { /* picture properties are best-effort and must never block playback */ }
     }
 
     /// <summary>Open a file given on the command line ("Open with"). If the engine isn't up yet, hold it

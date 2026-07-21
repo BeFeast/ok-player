@@ -430,10 +430,12 @@ file IO stay in each shell** (the "shell seam": `$XDG_CONFIG_HOME`/`$XDG_STATE_H
 `version: 2` (bumped from the Linux alpha `1`). `Settings::load` / `History::load` accept the
 canonical form, the Linux alpha dialect, and the Windows dialect, and return `None` for
 anything else so the shell falls back to defaults — exactly how both shells already treat a
-corrupt file. The Windows shell still writes its own PascalCase files today; it adopts the
-canonical schema when the C ABI consumer lands (the "%APPDATA% later" note in the issue), and
-migrating now, while user state is ~2 testers, keeps that switch cheap. The Windows C# tree is
-untouched by this work; the Windows migration is exercised only by the Rust golden tests.
+corrupt file. The Windows shell adopts the canonical **settings** schema directly as of #500:
+`SettingsService` reads either shape, writes the same sectioned v2 document as Linux, and preserves
+sections/fields it does not understand.
+Windows history remains on the PascalCase dialect until that consumer adopts the canonical
+history document. The Rust golden tests remain the schema executable spec; C# persistence tests
+cover the Windows reader/writer and legacy-settings upgrade.
 
 ### Why a version bump, and what "migration" means per dialect
 
@@ -449,7 +451,8 @@ untouched by this work; the Windows migration is exercised only by the Rust gold
   `Dictionary<string, FileRecord>` with no wrapper).** Detected by shape — settings by the
   `SchemaVersion` key (the lowercase `version` marks the native dialect), history by the
   absence of the `{ version, files }` wrapper — then remapped field by field into the canonical
-  document.
+  document. The Windows settings service now performs that remap on load and rewrites canonical
+  v2 on its next save; the legacy history reader/writer is unchanged.
 
 ### Settings field map (Windows → canonical)
 
@@ -463,6 +466,7 @@ untouched by this work; the Windows migration is exercised only by the Rust gold
 | `AudioNormalization` | `audio.normalization` |
 | `AudioDevice` (`""` = default) | `audio.device` (absent = default) |
 | `HardwareDecoding` (bool) | `video.hwdec` (`auto-safe` / `no`) |
+| `Brightness` / `Contrast` / `Saturation` / `Gamma` | `video.brightness` / `.contrast` / `.saturation` / `.gamma` |
 | `SubtitleScale` / `SubtitlePosition` / `SubtitleStyle` | `subtitles.scale` / `.position` / `.style` |
 | `Theme` / `AccentSource` | `appearance.theme` / `.accent_source` |
 | `AutoCheckUpdates` | `updates.auto_check` |
@@ -482,14 +486,23 @@ untouched by this work; the Windows migration is exercised only by the Rust gold
   `updates.skipped_versions.public` / `.candidate` exact-version strings. Older
   Linux documents and migrated Windows documents default both slots to absent;
   Windows currently ignores them because its updater has no Skip-version UX.
-- **Linux-only vs Windows-only fields coexist.** The picture adjustments
-  (`video.brightness`/`contrast`/`saturation`/`gamma`), `playback.auto_advance`, `repeat`, and
-  `shuffle` are Linux-only; `playback.gapless` is a shared reserved preference that shells must
-  capability-gate before applying. `subtitles` and `appearance` still carry fields one shell may
-  not expose, while `privacy.history_retention_days` is now read and written by both desktop
-  tracks. Each shell reads the subset it understands and carries the rest through untouched on
-  save, so the shared schema grows without either side dropping the other's state. Empty optional
-  sections remain omitted from a default Linux document.
+- **Linux-only vs Windows-only fields coexist.** Picture adjustments
+  (`video.brightness`/`contrast`/`saturation`/`gamma`) are now read, written, and applied by both
+  desktop tracks. `playback.auto_advance`, `repeat`, and `shuffle` remain Linux-only;
+  `playback.gapless` is a shared reserved preference that shells must capability-gate before
+  applying. `subtitles` and `appearance` still carry fields one shell may not expose, while
+  `privacy.history_retention_days` is read and written by both desktop tracks. Each shell reads
+  the subset it understands and carries the rest through untouched on save, so the shared schema
+  grows without either side dropping the other's state. Empty optional sections remain omitted
+  from a default Linux document.
+
+### Video adjustment parity ledger
+
+The `Video adjustment sliders` row is now **shared** rather than `Windows partial`. Both shells
+expose brightness, contrast, saturation, and gamma as global `-100..100` libmpv properties, use
+`0` as neutral, omit neutral values from the canonical `video` object, provide per-control reset,
+apply changes live, and restore the persisted values when a new engine starts. Per-file video
+geometry remains a separate history preference and is not conflated with these global controls.
 
 ### History field map (Windows → canonical)
 
