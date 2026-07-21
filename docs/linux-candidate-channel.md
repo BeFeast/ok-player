@@ -16,7 +16,7 @@ The candidate channel lets explicitly enrolled Linux QA installs update from fre
 
 ## Native-builder handoff
 
-`release-linux-candidate.yml` runs every 15 minutes on a generic self-hosted Linux x86_64 runner. One close-on-exec coordination lock covers `scripts/build-linux-candidate.sh`, the verified-bundle handoff, and `scripts/publish-linux-candidate.sh`. The builder coalesces all changes at the latest `origin/main`, skips an unchanged SHA, and emits the #340 native bundle; publication consumes that exact bundle and never rebuilds on `ubuntu-latest`.
+`release-linux-candidate.yml` runs every 15 minutes on a generic self-hosted Linux x86_64 runner. Immediately after checkout, a scheduled run refreshes `origin/main`; if its requested SHA is already behind, it emits `OKP_CANDIDATE_SKIPPED_SUPERSEDED` and exits successfully before toolchain preflight or lock acquisition. One close-on-exec coordination lock covers `scripts/build-linux-candidate.sh`, the verified-bundle handoff, and `scripts/publish-linux-candidate.sh`. The builder coalesces all changes at the latest `origin/main`, skips an unchanged SHA, and emits the #340 native bundle; publication consumes that exact bundle and never rebuilds on `ubuntu-latest`.
 
 The public Linux Release workflow still builds fresh stable-version package
 bytes, but its digest-pinned Ubuntu 26.04 media builder matches this native
@@ -24,7 +24,7 @@ builder's supported dependency generation. Both paths call the same Debian and
 Velopack package entry points, and both are rejected unless the exact packages
 pass narrow-width plus bright-video fullscreen media smokes.
 
-The scheduled path records an `idle`, `building`, or `stalled` heartbeat summary. Manual dispatch remains an operator override for republishing the last verified bundle or changing its acceptance status.
+Runs that reach the builder record an `idle`, `building`, or `stalled` heartbeat summary. A superseded run stops before heartbeat state exists and records the newer head in the workflow notice and summary instead. Manual dispatch remains an operator override for republishing the last verified bundle or changing its acceptance status and deliberately bypasses the early supersession check.
 
 The fit gate is deliberately non-publishing when run by itself. After a
 lifecycle repair, validate the exact branch head with

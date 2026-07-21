@@ -40,12 +40,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Skip superseded scheduled SHA
+        id: supersession
+        if: github.event_name == 'schedule'
+        shell: bash
+        env:
+          REQUESTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          current_main_sha="$(git rev-parse refs/remotes/origin/main)"
+          echo "current_main_sha=$current_main_sha" >> "$GITHUB_OUTPUT"
+          if [[ "$REQUESTED_SHA" != "$current_main_sha" ]]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Candidate skipped::superseded by ${current_main_sha}, skipping"
+            echo "OKP_CANDIDATE_SKIPPED_SUPERSEDED requested=${REQUESTED_SHA} current=${current_main_sha}"
+          else
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Preflight bundled-mpv toolchain
+        if: steps.supersession.outputs.should_run != 'false'
         env:
           CC: /usr/bin/cc
         run: ./scripts/linux-candidate-toolchain.sh
 
       - name: Build lock coordinator
+        if: steps.supersession.outputs.should_run != 'false'
         env:
           CC: /usr/bin/cc
         run: >-
@@ -54,6 +75,7 @@ jobs:
 
       - name: Build and publish exact native bundle
         id: candidate
+        if: steps.supersession.outputs.should_run != 'false'
         shell: bash
         env:
           CC: /usr/bin/cc
@@ -103,6 +125,13 @@ jobs:
           publication_requested="${{ steps.candidate.outputs.should_publish }}"
           [[ -n "$publication_requested" ]] || publication_requested="not reached"
 
+          superseded="${{ steps.supersession.outputs.should_run }}"
+          current_main_sha="${{ steps.supersession.outputs.current_main_sha }}"
+          if [[ "$superseded" == "false" ]]; then
+            phase="skipped-superseded"
+            detail="superseded by ${current_main_sha}, skipping"
+          fi
+
           activity="unavailable"
           stall_after="$(cat "$state_dir/stall-after-seconds" 2>/dev/null)"
           cli="$state_dir/checkout/rust/target/release/okp-candidate"
@@ -120,7 +149,7 @@ jobs:
             echo "- publish result: \`${{ steps.candidate.outputs.publish_result || 'not reached' }}\`"
             echo "- requested SHA: \`${{ steps.candidate.outputs.requested_sha || github.sha }}\`"
             echo "- built SHA: \`${built_sha}\`"
-            echo "- current candidate head: \`${{ steps.candidate.outputs.current_sha || 'not revalidated' }}\`"
+            echo "- current candidate head: \`${{ steps.candidate.outputs.current_sha || steps.supersession.outputs.current_main_sha || 'not revalidated' }}\`"
             echo "- bundle generation: \`${{ steps.candidate.outputs.build_number || 'not reached' }}\`"
             echo "- newest allocated generation: \`${{ steps.candidate.outputs.allocated_build || 'not reached' }}\`"
             echo "- published generation before run: \`${{ steps.candidate.outputs.published_build || 'not read' }}\`"
@@ -136,14 +165,14 @@ jobs:
 
       - name: Upload portability smoke failure evidence
         uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && steps.supersession.outputs.should_run != 'false'
         with:
           name: ok-player-candidate-portability-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/linux/portability-smoke-evidence/**
           if-no-files-found: ignore
 
       - name: Reclaim candidate scratch
-        if: always()
+        if: always() && steps.supersession.outputs.should_run != 'false'
         env:
           OKP_SCRATCH_SESSION: candidate-${{ github.run_id }}-${{ github.run_attempt }}
         run: ./scripts/reclaim-ok-player-scratch.sh

@@ -89,6 +89,12 @@ documented in [`project-outcome-health.md`](project-outcome-health.md).
 
 Schedule the builder roughly every 15 minutes. Each run either:
 
+- **Superseded** — the SHA captured when the scheduled run was created no
+  longer matches the freshly fetched `origin/main` head. The workflow emits
+  `OKP_CANDIDATE_SKIPPED_SUPERSEDED` with a `superseded by <sha>, skipping`
+  notice and exits successfully before toolchain preflight or lock acquisition.
+  The next scheduled tick targets the newer head. Manual dispatches deliberately
+  bypass this check so explicit bundle republishing keeps its existing behavior.
 - **Idle** — `main` has not advanced past the last successfully built SHA. The
   builder emits an `idle` heartbeat and exits 0. This is the expected steady
   state and is not a fault.
@@ -138,10 +144,13 @@ lock after their direct parent returns.
 
 ## What a build does
 
-1. Mirror-fetch `origin/main` and resolve HEAD.
-2. Skip if HEAD equals the last successfully built SHA (`last-built.sha`).
-3. Clean clone of exactly HEAD; record the source SHA.
-4. Run bounded gates, aborting on the first failure:
+1. For scheduled workflow runs, refresh `origin/main` immediately after the
+   Actions checkout and skip successfully if the checked-out SHA is already
+   superseded. This happens before preflight and before the build lock exists.
+2. Mirror-fetch `origin/main` and resolve HEAD.
+3. Skip if HEAD equals the last successfully built SHA (`last-built.sha`).
+4. Clean clone of exactly HEAD; record the source SHA.
+5. Run bounded gates, aborting on the first failure:
    - `cargo fmt --all -- --check`
    - clippy with warnings denied
    - workspace tests
@@ -171,11 +180,11 @@ lock after their direct parent returns.
      GTK/MPRIS/AT-SPI name release checks, and post-command probes proving that
      the bus and every process carrying its address are gone before the next invocation.
    - optional native-hardware smoke (only when `OKP_CANDIDATE_NATIVE_SMOKE` is set)
-5. Emit the artifact bundle and check promotability.
-6. On a fully promotable build, advance `last-built.sha` so the next schedule
+6. Emit the artifact bundle and check promotability.
+7. On a fully promotable build, advance `last-built.sha` so the next schedule
    skips this SHA. **A gate failure exits non-zero and leaves `last-built.sha`,
    `last-promoted.sha`, and every feed untouched.**
-7. On every exit, including a failed gate or an unchanged-SHA run, prune
+8. On every builder exit, including a failed gate or an unchanged-SHA run, prune
    `out/` to the newest three complete bundles. The generation named by
    `last-bundle.path` is pinned in addition to that window while publication or
    an explicit retry can still reference it. Incomplete numeric generations are
