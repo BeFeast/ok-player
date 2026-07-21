@@ -56,7 +56,7 @@ Section: video
 Priority: optional
 Architecture: $ARCH
 Maintainer: BeFeast <noreply@github.com>
-Depends: libc6, libgcc-s1, libffi8, libdbus-1-3, libsystemd0, libudev1, libasound2 | libasound2t64, libjpeg-turbo8 | libjpeg62-turbo | libjpeg8, libwebp7, libwebpmux3, libpng16-16 | libpng16-16t64, libglib2.0-0 | libglib2.0-0t64, libgraphene-1.0-0, libgtk-4-1, libcairo2, libcairo-gobject2, libfontconfig1, libfreetype6, libfribidi0, libgdk-pixbuf-2.0-0, libharfbuzz0b, libpango-1.0-0, libpangocairo-1.0-0, libgl1, libegl1, libglx0, libglvnd0, libdrm2, libgbm1, libvulkan1, libwayland-client0, libwayland-cursor0, libwayland-egl1, libx11-6, libx11-xcb1, libxcursor1, libxext6, libxfixes3, libxi6, libxkbcommon0, libxpresent1, libxrandr2, libxss1, libxv1, libxcb1, libxcb-dri3-0, libxcb-shape0, libxcb-shm0, libxcb-xfixes0, libdecor-0-0
+Depends: libc6, libgcc-s1, libffi8, libdbus-1-3, libsystemd0, libudev1, libasound2 | libasound2t64, libwebp7, libwebpmux3, libpng16-16 | libpng16-16t64, libglib2.0-0 | libglib2.0-0t64, libgraphene-1.0-0, libgtk-4-1, libcairo2, libcairo-gobject2, libfontconfig1, libfreetype6, libfribidi0, libgdk-pixbuf-2.0-0, libharfbuzz0b, libpango-1.0-0, libpangocairo-1.0-0, libgl1, libegl1, libglx0, libglvnd0, libdrm2, libgbm1, libvulkan1, libwayland-client0, libwayland-cursor0, libwayland-egl1, libx11-6, libx11-xcb1, libxcursor1, libxext6, libxfixes3, libxi6, libxkbcommon0, libxpresent1, libxrandr2, libxss1, libxv1, libxcb1, libxcb-dri3-0, libxcb-shape0, libxcb-shm0, libxcb-xfixes0, libdecor-0-0
 Recommends: ffmpeg
 Homepage: https://github.com/BeFeast/ok-player
 Description: Elegant mpv-based media player
