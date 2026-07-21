@@ -65,6 +65,11 @@ if [[ ! "$max_lag" =~ ^[0-9]+$ ]] || (( max_lag == 0 )); then
   echo "OKP_PROJECT_HEALTH_MAX_UNPUBLISHED_MAIN_LAG_SECONDS must be a positive integer" >&2
   exit 2
 fi
+source_ci_grace="${OKP_PROJECT_HEALTH_SOURCE_CI_GRACE_SECONDS:-900}"
+if [[ ! "$source_ci_grace" =~ ^[0-9]+$ ]] || (( source_ci_grace == 0 )); then
+  echo "OKP_PROJECT_HEALTH_SOURCE_CI_GRACE_SECONDS must be a positive integer" >&2
+  exit 2
+fi
 max_schedule_age="${OKP_PROJECT_HEALTH_MAX_CANDIDATE_SCHEDULE_AGE_SECONDS:-2700}"
 if [[ ! "$max_schedule_age" =~ ^[0-9]+$ ]] || (( max_schedule_age == 0 )); then
   echo "OKP_PROJECT_HEALTH_MAX_CANDIDATE_SCHEDULE_AGE_SECONDS must be a positive integer" >&2
@@ -89,9 +94,10 @@ trap 'rm -rf -- "$work"' EXIT
 
 source_error=""
 main_sha=""
+main_committed_at=""
 if main_commit="$(gh api "repos/$repository/commits/main" 2>/dev/null)" \
     && main_sha="$(jq -er '.sha | select(test("^[0-9a-fA-F]{40}$"))' <<<"$main_commit" 2>/dev/null)"; then
-  :
+  main_committed_at="$(jq -r '.commit.committer.date // ""' <<<"$main_commit")"
 else
   source_error="GitHub main commit query failed"
 fi
@@ -330,9 +336,11 @@ fi
 
 jq -n \
   --argjson checked_at_unix "$(date -u +%s)" \
+  --argjson source_ci_grace_seconds "$source_ci_grace" \
   --argjson max_unpublished_main_lag_seconds "$max_lag" \
   --argjson max_candidate_schedule_age_seconds "$max_schedule_age" \
   --arg main_sha "$main_sha" \
+  --arg main_committed_at "$main_committed_at" \
   --argjson workflows "$workflows" \
   --arg source_error "$source_error" \
   --arg candidate_workflow_state "$candidate_workflow_state" \
@@ -383,10 +391,12 @@ jq -n \
   --arg stable_error "$stable_error" '
   {
     checked_at_unix: $checked_at_unix,
+    source_ci_grace_seconds: $source_ci_grace_seconds,
     max_unpublished_main_lag_seconds: $max_unpublished_main_lag_seconds,
     max_candidate_schedule_age_seconds: $max_candidate_schedule_age_seconds,
     source: {
       head_sha: $main_sha,
+      head_committed_at_utc: (if $main_committed_at == "" then null else $main_committed_at end),
       workflows: $workflows,
       candidate_workflow: {
         state: $candidate_workflow_state,

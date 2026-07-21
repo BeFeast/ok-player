@@ -26,7 +26,11 @@ orchestration settings.
 The overall result is healthy only when all four blocking surfaces pass:
 
 1. The latest `main` SHA is exact, and the `CI` and `Rust` push workflows for
-   that same SHA both completed successfully.
+   that same SHA both completed successfully. A newly pushed SHA gets a bounded
+   15-minute settling window while matching runs are queued/in progress or have
+   not appeared in the run index yet. That state is a blocking `warning`, which
+   keeps the overall outcome healthy; a completed failure fails immediately,
+   and unfinished evidence fails after the window expires.
 2. The Windows static feed is reachable JSON with at least one Full package;
    every asset has a version/package identity, a non-zero size, an absolute
    HTTPS URL, and a SHA-256 identity.
@@ -71,6 +75,13 @@ graph evidence makes snapshot evaluation deterministic. Operators may
 temporarily select another positive lag bound with
 `OKP_PROJECT_HEALTH_MAX_UNPUBLISHED_MAIN_LAG_SECONDS`, but the versioned default
 is the project contract.
+
+Operators may temporarily select another positive main-CI settling window with
+`OKP_PROJECT_HEALTH_SOURCE_CI_GRACE_SECONDS`. The collector binds the window to
+the exact main commit timestamp, so an old or indefinitely queued workflow
+cannot remain healthy. Missing or mismatched CI/Rust results only warn inside
+the window; malformed source evidence and completed workflow failures remain
+immediate failures.
 
 Operators may separately set a positive schedule window with
 `OKP_PROJECT_HEALTH_MAX_CANDIDATE_SCHEDULE_AGE_SECONDS`. Workflow state and the
@@ -147,7 +158,8 @@ live healthcheck inside its bounded runtime. If no local evaluator is
 executable, the command exits `2` with instructions to build it outside the
 healthcheck.
 
-`okp-core` fixtures cover old accepted/equal, ancestor within SLA, ancestor
+`okp-core` fixtures cover bounded main-CI settling, overdue pending CI, immediate
+completed CI failures, old accepted/equal, ancestor within SLA, ancestor
 beyond SLA, inactive workflow state, stale completed schedules while `main` has
 advanced, fresh non-ancestor, unaccepted, malformed, missing-package-identity,
 and unreachable Linux candidate outcomes. Windows fixtures separately pin

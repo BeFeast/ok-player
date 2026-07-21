@@ -319,6 +319,95 @@ fn windows_candidate_check(
 }
 
 #[test]
+fn source_main_ci_settling_is_bounded_and_completed_failures_are_immediate() {
+    let fixture_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project_health");
+    let candidate_feed = FetchSnapshot {
+        url: "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/candidate.linux.json".to_owned(),
+        body: Some(
+            fs::read_to_string(fixture_dir.join("fresh-accepted.json"))
+                .expect("read candidate fixture"),
+        ),
+        error: None,
+    };
+    let mut snapshot = healthy_snapshot(
+        1_784_340_047,
+        candidate_feed,
+        CANDIDATE_SHA.to_owned(),
+        candidate_source(
+            FixtureSourceRelation::Equal,
+            default_candidate_committed_at(),
+            None,
+        ),
+    );
+    snapshot.source.head_committed_at_utc = Some("2026-07-18T01:59:47Z".to_owned());
+    snapshot.source.workflows[0].status = "in_progress".to_owned();
+    snapshot.source.workflows[0].conclusion.clear();
+    snapshot.source.workflows[1].head_sha = "1111111111111111111111111111111111111111".to_owned();
+
+    let settling = snapshot.evaluate();
+    let settling_check = source_check(&settling);
+    assert!(settling.healthy);
+    assert_eq!(settling_check.status, HealthStatus::Warning);
+    assert!(
+        settling_check
+            .reason_codes
+            .contains(&"source-main-ci-settling".to_owned())
+    );
+    assert!(settling_check.summary.contains("60s into 900s grace"));
+
+    let mut overdue = snapshot.clone();
+    overdue.checked_at_unix += overdue.source_ci_grace_seconds;
+    let overdue_outcome = overdue.evaluate();
+    let overdue_check = source_check(&overdue_outcome);
+    assert!(!overdue_outcome.healthy);
+    assert_eq!(overdue_check.status, HealthStatus::Fail);
+    assert!(
+        overdue_check
+            .details
+            .iter()
+            .any(|detail| detail.contains("exceeding 900s grace"))
+    );
+
+    let mut failed = snapshot;
+    failed.source.workflows[0].status = "completed".to_owned();
+    failed.source.workflows[0].conclusion = "failure".to_owned();
+    let failed_outcome = failed.evaluate();
+    let failed_check = source_check(&failed_outcome);
+    assert!(!failed_outcome.healthy);
+    assert_eq!(failed_check.status, HealthStatus::Fail);
+    assert!(
+        failed_check
+            .details
+            .iter()
+            .any(|detail| detail.contains("CI is completed/failure"))
+    );
+
+    let mut malformed = failed;
+    malformed.source.workflows[0].status = "in_progress".to_owned();
+    let malformed_outcome = malformed.evaluate();
+    let malformed_check = source_check(&malformed_outcome);
+    assert!(!malformed_outcome.healthy);
+    assert_eq!(malformed_check.status, HealthStatus::Fail);
+    assert!(
+        malformed_check
+            .details
+            .iter()
+            .any(|detail| detail.contains("unexpected status in_progress/failure"))
+    );
+}
+
+fn source_check(
+    outcome: &okp_core::project_health::ProjectHealthOutcome,
+) -> &okp_core::project_health::HealthCheck {
+    outcome
+        .checks
+        .iter()
+        .find(|check| check.name == "source-main-ci")
+        .expect("source/main check")
+}
+
+#[test]
 fn old_permanent_linux_release_is_diagnostic_only() {
     let fixture_dir =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project_health");
@@ -426,11 +515,13 @@ fn healthy_snapshot(
 ) -> ProjectHealthSnapshot {
     ProjectHealthSnapshot {
         checked_at_unix,
+        source_ci_grace_seconds: 900,
         max_unpublished_main_lag_seconds: 7_200,
         max_candidate_schedule_age_seconds: 2_700,
         future_skew_seconds: 300,
         source: SourceSnapshot {
             head_sha: head_sha.clone(),
+            head_committed_at_utc: Some("2026-07-18T00:30:00Z".to_owned()),
             workflows: ["CI", "Rust"]
                 .into_iter()
                 .map(|name| WorkflowSnapshot {

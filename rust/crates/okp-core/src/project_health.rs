@@ -18,6 +18,7 @@ use crate::velopack_artifacts::LINUX_VELOPACK_PACKAGE_ID;
 
 pub const DEFAULT_MAX_UNPUBLISHED_MAIN_LAG_SECONDS: u64 = 120 * 60;
 pub const DEFAULT_MAX_CANDIDATE_SCHEDULE_AGE_SECONDS: u64 = 45 * 60;
+pub const DEFAULT_SOURCE_CI_GRACE_SECONDS: u64 = 15 * 60;
 pub const DEFAULT_FUTURE_SKEW_SECONDS: u64 = 5 * 60;
 pub const STABLE_RELEASE_FRESH_SECONDS: u64 = 48 * 60 * 60;
 const WINDOWS_CANDIDATE_SCHEMA_VERSION: u64 = 1;
@@ -104,6 +105,8 @@ pub struct SourceSnapshot {
     #[serde(default)]
     pub head_sha: String,
     #[serde(default)]
+    pub head_committed_at_utc: Option<String>,
+    #[serde(default)]
     pub workflows: Vec<WorkflowSnapshot>,
     #[serde(default)]
     pub candidate_workflow: CandidateWorkflowSnapshot,
@@ -120,6 +123,8 @@ pub struct SourceSnapshot {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ProjectHealthSnapshot {
     pub checked_at_unix: u64,
+    #[serde(default = "default_source_ci_grace")]
+    pub source_ci_grace_seconds: u64,
     #[serde(default = "default_max_unpublished_main_lag")]
     pub max_unpublished_main_lag_seconds: u64,
     #[serde(default = "default_max_candidate_schedule_age")]
@@ -138,6 +143,10 @@ pub struct ProjectHealthSnapshot {
 
 fn default_max_unpublished_main_lag() -> u64 {
     DEFAULT_MAX_UNPUBLISHED_MAIN_LAG_SECONDS
+}
+
+fn default_source_ci_grace() -> u64 {
+    DEFAULT_SOURCE_CI_GRACE_SECONDS
 }
 
 fn default_max_candidate_schedule_age() -> u64 {
@@ -173,6 +182,7 @@ pub struct HealthCheck {
 pub struct ProjectHealthOutcome {
     pub healthy: bool,
     pub checked_at_unix: u64,
+    pub source_ci_grace_seconds: u64,
     pub max_unpublished_main_lag_seconds: u64,
     pub max_candidate_schedule_age_seconds: u64,
     pub checks: Vec<HealthCheck>,
@@ -181,7 +191,12 @@ pub struct ProjectHealthOutcome {
 impl ProjectHealthSnapshot {
     pub fn evaluate(&self) -> ProjectHealthOutcome {
         let checks = vec![
-            evaluate_source(&self.source),
+            evaluate_source(
+                &self.source,
+                self.checked_at_unix,
+                self.source_ci_grace_seconds,
+                self.future_skew_seconds,
+            ),
             evaluate_windows_feed(&self.windows_feed),
             evaluate_windows_candidate(
                 &self.windows_candidate_manifest,
@@ -207,6 +222,7 @@ impl ProjectHealthSnapshot {
         ProjectHealthOutcome {
             healthy,
             checked_at_unix: self.checked_at_unix,
+            source_ci_grace_seconds: self.source_ci_grace_seconds,
             max_unpublished_main_lag_seconds: self.max_unpublished_main_lag_seconds,
             max_candidate_schedule_age_seconds: self.max_candidate_schedule_age_seconds,
             checks,
@@ -214,43 +230,113 @@ impl ProjectHealthSnapshot {
     }
 }
 
-fn evaluate_source(source: &SourceSnapshot) -> HealthCheck {
-    let mut details = Vec::new();
+fn evaluate_source(
+    source: &SourceSnapshot,
+    now: u64,
+    grace_seconds: u64,
+    future_skew_seconds: u64,
+) -> HealthCheck {
+    let mut failures = Vec::new();
+    let mut pending = Vec::new();
     if let Some(error) = nonempty(source.error.as_deref()) {
-        details.push(format!("source/main query failed: {error}"));
+        failures.push(format!("source/main query failed: {error}"));
     }
     if !is_hex(&source.head_sha, 40) {
-        details.push("source/main did not resolve to an exact 40-character SHA".to_owned());
+        failures.push("source/main did not resolve to an exact 40-character SHA".to_owned());
     }
     for required in ["CI", "Rust"] {
         match source.workflows.iter().find(|run| run.name == required) {
-            None => details.push(format!("source/main has no {required} workflow result")),
+            None => pending.push(format!("source/main has no {required} workflow result yet")),
             Some(run) => {
                 if run.head_sha != source.head_sha {
-                    details.push(format!(
-                        "source/main {required} result is for {}, expected {}",
+                    pending.push(format!(
+                        "source/main {required} result is still for {}, expected {}",
                         run.head_sha, source.head_sha
                     ));
+                    continue;
                 }
                 if run.event != "push" {
-                    details.push(format!(
+                    failures.push(format!(
                         "source/main {required} result has event {}, expected push",
                         run.event
                     ));
                 }
-                if run.status != "completed" || run.conclusion != "success" {
-                    details.push(format!(
-                        "source/main {required} is {}/{}",
+                match run.status.as_str() {
+                    "completed" if run.conclusion == "success" => {}
+                    "completed" => failures.push(format!(
+                        "source/main {required} is completed/{}",
+                        run.conclusion
+                    )),
+                    "queued" | "in_progress" | "pending" | "requested" | "waiting"
+                        if run.conclusion.is_empty() =>
+                    {
+                        pending.push(format!(
+                            "source/main {required} is {}/{}",
+                            run.status, run.conclusion
+                        ));
+                    }
+                    _ => failures.push(format!(
+                        "source/main {required} has unexpected status {}/{}",
                         run.status, run.conclusion
-                    ));
+                    )),
                 }
             }
         }
     }
+    if !failures.is_empty() {
+        failures.extend(pending);
+        return check(
+            "source-main-ci",
+            true,
+            failures,
+            format!("CI and Rust succeeded for source/main {}", source.head_sha),
+        );
+    }
+    if pending.is_empty() {
+        return check(
+            "source-main-ci",
+            true,
+            Vec::new(),
+            format!("CI and Rust succeeded for source/main {}", source.head_sha),
+        );
+    }
+
+    let committed_at = source
+        .head_committed_at_utc
+        .as_deref()
+        .and_then(parse_utc_timestamp);
+    match committed_at {
+        Some(timestamp) if timestamp <= now.saturating_add(future_skew_seconds) => {
+            let age = now.saturating_sub(timestamp);
+            if age <= grace_seconds {
+                return HealthCheck {
+                    name: "source-main-ci".to_owned(),
+                    blocking: true,
+                    status: HealthStatus::Warning,
+                    summary: format!(
+                        "source/main CI is settling for {} ({age}s into {grace_seconds}s grace)",
+                        source.head_sha
+                    ),
+                    details: pending,
+                    reason_codes: vec!["source-main-ci-settling".to_owned()],
+                };
+            }
+            pending.push(format!(
+                "source/main CI is still pending {age}s after the commit, exceeding {grace_seconds}s grace"
+            ));
+        }
+        Some(timestamp) => pending.push(format!(
+            "source/main commit timestamp is {} seconds in the future",
+            timestamp - now
+        )),
+        None => pending.push(
+            "source/main commit timestamp is unavailable or not valid UTC RFC 3339".to_owned(),
+        ),
+    }
     check(
         "source-main-ci",
         true,
-        details,
+        pending,
         format!("CI and Rust succeeded for source/main {}", source.head_sha),
     )
 }
