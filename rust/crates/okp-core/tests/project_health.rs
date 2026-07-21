@@ -2,9 +2,9 @@ use std::fs;
 use std::path::PathBuf;
 
 use okp_core::project_health::{
-    CandidateComparisonSnapshot, CandidateSourceSnapshot, CandidateWorkflowSnapshot,
-    CommitSnapshot, FetchSnapshot, HealthStatus, ProjectHealthSnapshot, ScheduleRunSnapshot,
-    SourceSnapshot, WorkflowSnapshot,
+    ActiveCandidateRunSnapshot, CandidateComparisonSnapshot, CandidateSourceSnapshot,
+    CandidateWorkflowSnapshot, CommitSnapshot, FetchSnapshot, HealthStatus, ProjectHealthSnapshot,
+    ScheduleRunSnapshot, SourceSnapshot, WorkflowSnapshot,
 };
 use serde::Deserialize;
 
@@ -63,7 +63,7 @@ fn default_schedule_completed_at() -> String {
 }
 
 fn default_max_schedule_age() -> u64 {
-    2_700
+    7_200
 }
 
 #[test]
@@ -167,6 +167,150 @@ fn candidate_delivery_outcomes_are_fixture_driven() {
             );
         }
     }
+}
+
+#[test]
+fn exact_main_candidate_run_bounds_stale_schedule_settling() {
+    let fixture_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project_health");
+    let candidate_feed = FetchSnapshot {
+        url: "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/candidate.linux.json".to_owned(),
+        body: Some(
+            fs::read_to_string(fixture_dir.join("fresh-accepted.json"))
+                .expect("read Linux candidate fixture"),
+        ),
+        error: None,
+    };
+    let main_sha = "1111111111111111111111111111111111111111";
+    let mut snapshot = healthy_snapshot(
+        1_784_340_047,
+        candidate_feed,
+        main_sha.to_owned(),
+        candidate_source(
+            FixtureSourceRelation::Ancestor,
+            default_candidate_committed_at(),
+            Some(CommitSnapshot {
+                sha: "2222222222222222222222222222222222222222".to_owned(),
+                committed_at_utc: "2026-07-18T01:30:47Z".to_owned(),
+            }),
+        ),
+    );
+    snapshot
+        .source
+        .candidate_workflow
+        .latest_completed_schedule
+        .as_mut()
+        .expect("healthy fixture has schedule evidence")
+        .completed_at_utc = "2026-07-17T23:00:47Z".to_owned();
+    snapshot.source.candidate_workflow.latest_active_run = Some(ActiveCandidateRunSnapshot {
+        head_sha: main_sha.to_owned(),
+        event: "workflow_dispatch".to_owned(),
+        status: "in_progress".to_owned(),
+        created_at_utc: "2026-07-18T02:00:40Z".to_owned(),
+        url: "https://example.invalid/run/active-candidate".to_owned(),
+    });
+
+    let outcome = snapshot.evaluate();
+    let candidate = candidate_check(&outcome);
+    assert!(outcome.healthy);
+    assert_eq!(candidate.status, HealthStatus::Warning);
+    assert!(candidate.summary.contains("workflow_dispatch run"));
+    assert!(candidate.summary.contains("in_progress"));
+    assert!(candidate.summary.contains("7s into 5400s limit"));
+    assert!(
+        candidate
+            .reason_codes
+            .contains(&"candidate-delivery-in-progress".to_owned())
+    );
+
+    let mut wrong_sha = snapshot.clone();
+    wrong_sha
+        .source
+        .candidate_workflow
+        .latest_active_run
+        .as_mut()
+        .expect("active run")
+        .head_sha = "3333333333333333333333333333333333333333".to_owned();
+    let wrong_sha_outcome = wrong_sha.evaluate();
+    let wrong_sha_candidate = candidate_check(&wrong_sha_outcome);
+    assert!(!wrong_sha_outcome.healthy);
+    assert_eq!(wrong_sha_candidate.status, HealthStatus::Fail);
+    assert!(
+        wrong_sha_candidate
+            .reason_codes
+            .contains(&"candidate-schedule-stale".to_owned())
+    );
+
+    let mut stale_run = snapshot.clone();
+    stale_run
+        .source
+        .candidate_workflow
+        .latest_active_run
+        .as_mut()
+        .expect("active run")
+        .created_at_utc = "2026-07-18T00:30:46Z".to_owned();
+    let stale_run_outcome = stale_run.evaluate();
+    let stale_run_candidate = candidate_check(&stale_run_outcome);
+    assert!(!stale_run_outcome.healthy);
+    assert_eq!(stale_run_candidate.status, HealthStatus::Fail);
+    assert!(
+        stale_run_candidate
+            .reason_codes
+            .contains(&"candidate-active-run-stale".to_owned())
+    );
+    assert!(
+        stale_run_candidate
+            .details
+            .iter()
+            .any(|detail| detail.contains("5401s old, exceeding 5400s limit"))
+    );
+
+    let mut unavailable_schedule = snapshot.clone();
+    unavailable_schedule
+        .source
+        .candidate_workflow
+        .schedule_error = Some("completed run query failed".to_owned());
+    let unavailable_outcome = unavailable_schedule.evaluate();
+    let unavailable_candidate = candidate_check(&unavailable_outcome);
+    assert!(!unavailable_outcome.healthy);
+    assert_eq!(unavailable_candidate.status, HealthStatus::Fail);
+    assert!(
+        unavailable_candidate
+            .reason_codes
+            .contains(&"candidate-schedule-unavailable".to_owned())
+    );
+    assert!(
+        !unavailable_candidate
+            .reason_codes
+            .contains(&"candidate-delivery-in-progress".to_owned())
+    );
+
+    let mut failing_builds = snapshot;
+    failing_builds
+        .source
+        .candidate_workflow
+        .consecutive_failed_runs = 2;
+    failing_builds.source.candidate_workflow.last_failed_gate =
+        Some("headless-launch-smoke".to_owned());
+    let failing_outcome = failing_builds.evaluate();
+    let failing_candidate = candidate_check(&failing_outcome);
+    assert!(!failing_outcome.healthy);
+    assert_eq!(failing_candidate.status, HealthStatus::Fail);
+    assert!(
+        failing_candidate
+            .reason_codes
+            .contains(&"candidate-builds-failing".to_owned())
+    );
+}
+
+fn candidate_check(
+    outcome: &okp_core::project_health::ProjectHealthOutcome,
+) -> &okp_core::project_health::HealthCheck {
+    outcome
+        .checks
+        .iter()
+        .find(|check| check.name == "linux-candidate-delivery")
+        .expect("candidate check")
 }
 
 #[test]
@@ -517,7 +661,8 @@ fn healthy_snapshot(
         checked_at_unix,
         source_ci_grace_seconds: 900,
         max_unpublished_main_lag_seconds: 7_200,
-        max_candidate_schedule_age_seconds: 2_700,
+        max_candidate_schedule_age_seconds: 7_200,
+        max_candidate_run_age_seconds: 5_400,
         future_skew_seconds: 300,
         source: SourceSnapshot {
             head_sha: head_sha.clone(),
@@ -545,6 +690,8 @@ fn healthy_snapshot(
                     url: "https://example.invalid/runs/linux-candidate".to_owned(),
                 }),
                 schedule_error: None,
+                latest_active_run: None,
+                active_run_error: None,
                 consecutive_failed_runs: 0,
                 last_failed_gate: None,
             },
@@ -561,6 +708,8 @@ fn healthy_snapshot(
                     url: "https://example.invalid/runs/windows-candidate".to_owned(),
                 }),
                 schedule_error: None,
+                latest_active_run: None,
+                active_run_error: None,
                 consecutive_failed_runs: 0,
                 last_failed_gate: None,
             },

@@ -17,7 +17,8 @@ use crate::update_selection::compare_versions;
 use crate::velopack_artifacts::LINUX_VELOPACK_PACKAGE_ID;
 
 pub const DEFAULT_MAX_UNPUBLISHED_MAIN_LAG_SECONDS: u64 = 120 * 60;
-pub const DEFAULT_MAX_CANDIDATE_SCHEDULE_AGE_SECONDS: u64 = 45 * 60;
+pub const DEFAULT_MAX_CANDIDATE_SCHEDULE_AGE_SECONDS: u64 = 120 * 60;
+pub const DEFAULT_MAX_CANDIDATE_RUN_AGE_SECONDS: u64 = 90 * 60;
 pub const DEFAULT_SOURCE_CI_GRACE_SECONDS: u64 = 15 * 60;
 pub const DEFAULT_FUTURE_SKEW_SECONDS: u64 = 5 * 60;
 pub const STABLE_RELEASE_FRESH_SECONDS: u64 = 48 * 60 * 60;
@@ -58,6 +59,16 @@ pub struct ScheduleRunSnapshot {
     pub url: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ActiveCandidateRunSnapshot {
+    pub head_sha: String,
+    pub event: String,
+    pub status: String,
+    pub created_at_utc: String,
+    #[serde(default)]
+    pub url: String,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CandidateWorkflowSnapshot {
     #[serde(default)]
@@ -68,6 +79,10 @@ pub struct CandidateWorkflowSnapshot {
     pub latest_completed_schedule: Option<ScheduleRunSnapshot>,
     #[serde(default)]
     pub schedule_error: Option<String>,
+    #[serde(default)]
+    pub latest_active_run: Option<ActiveCandidateRunSnapshot>,
+    #[serde(default)]
+    pub active_run_error: Option<String>,
     #[serde(default)]
     pub consecutive_failed_runs: u64,
     #[serde(default)]
@@ -129,6 +144,8 @@ pub struct ProjectHealthSnapshot {
     pub max_unpublished_main_lag_seconds: u64,
     #[serde(default = "default_max_candidate_schedule_age")]
     pub max_candidate_schedule_age_seconds: u64,
+    #[serde(default = "default_max_candidate_run_age")]
+    pub max_candidate_run_age_seconds: u64,
     #[serde(default = "default_future_skew")]
     pub future_skew_seconds: u64,
     pub source: SourceSnapshot,
@@ -151,6 +168,10 @@ fn default_source_ci_grace() -> u64 {
 
 fn default_max_candidate_schedule_age() -> u64 {
     DEFAULT_MAX_CANDIDATE_SCHEDULE_AGE_SECONDS
+}
+
+fn default_max_candidate_run_age() -> u64 {
+    DEFAULT_MAX_CANDIDATE_RUN_AGE_SECONDS
 }
 
 fn default_future_skew() -> u64 {
@@ -185,6 +206,7 @@ pub struct ProjectHealthOutcome {
     pub source_ci_grace_seconds: u64,
     pub max_unpublished_main_lag_seconds: u64,
     pub max_candidate_schedule_age_seconds: u64,
+    pub max_candidate_run_age_seconds: u64,
     pub checks: Vec<HealthCheck>,
 }
 
@@ -212,6 +234,7 @@ impl ProjectHealthSnapshot {
                 self.checked_at_unix,
                 self.max_unpublished_main_lag_seconds,
                 self.max_candidate_schedule_age_seconds,
+                self.max_candidate_run_age_seconds,
                 self.future_skew_seconds,
             ),
             evaluate_stable_release(&self.stable_linux_releases, self.checked_at_unix),
@@ -225,6 +248,7 @@ impl ProjectHealthSnapshot {
             source_ci_grace_seconds: self.source_ci_grace_seconds,
             max_unpublished_main_lag_seconds: self.max_unpublished_main_lag_seconds,
             max_candidate_schedule_age_seconds: self.max_candidate_schedule_age_seconds,
+            max_candidate_run_age_seconds: self.max_candidate_run_age_seconds,
             checks,
         }
     }
@@ -845,6 +869,7 @@ fn evaluate_candidate(
     now: u64,
     max_lag: u64,
     max_schedule_age: u64,
+    max_active_run_age: u64,
     future_skew: u64,
 ) -> HealthCheck {
     let mut details = Vec::new();
@@ -929,14 +954,20 @@ fn evaluate_candidate(
     if max_schedule_age == 0 {
         details.push("Linux candidate schedule freshness limit must be positive".to_owned());
     }
+    if max_active_run_age == 0 {
+        details.push("Linux candidate active-run age limit must be positive".to_owned());
+    }
 
     let source_relation = classify_candidate_source(&source.candidate, &source.head_sha);
-    validate_candidate_schedule(
+    let active_run_summary = validate_candidate_schedule(
         source,
         source_relation,
-        now,
-        max_schedule_age,
-        future_skew,
+        CandidateScheduleTiming {
+            now,
+            max_schedule_age,
+            max_active_run_age,
+            future_skew,
+        },
         &mut details,
         &mut reason_codes,
     );
@@ -972,13 +1003,20 @@ fn evaluate_candidate(
         ));
     }
 
-    check_with_reason_codes(
+    let mut check = check_with_reason_codes(
         "linux-candidate-delivery",
         true,
         details,
         summary,
         reason_codes,
-    )
+    );
+    if check.status == HealthStatus::Pass
+        && let Some(active_run_summary) = active_run_summary
+    {
+        check.status = HealthStatus::Warning;
+        check.summary = active_run_summary;
+    }
+    check
 }
 
 fn validate_candidate_failure_streak(
@@ -1023,32 +1061,50 @@ fn validate_candidate_workflow_state(
     }
 }
 
+#[derive(Clone, Copy)]
+struct CandidateScheduleTiming {
+    now: u64,
+    max_schedule_age: u64,
+    max_active_run_age: u64,
+    future_skew: u64,
+}
+
 fn validate_candidate_schedule(
     source: &SourceSnapshot,
     source_relation: CandidateSourceRelation,
-    now: u64,
-    max_schedule_age: u64,
-    future_skew: u64,
+    timing: CandidateScheduleTiming,
     details: &mut Vec<String>,
     reason_codes: &mut Vec<String>,
-) {
+) -> Option<String> {
     let workflow = &source.candidate_workflow;
     if workflow.state != "active" || source_relation != CandidateSourceRelation::Ancestor {
-        return;
+        return None;
     }
     if let Some(error) = nonempty(workflow.schedule_error.as_deref()) {
         details.push(format!(
             "Linux Candidate completed schedule query failed while main has advanced: {error}"
         ));
         reason_codes.push("candidate-schedule-unavailable".to_owned());
-        return;
+        return None;
     }
+    let active_run_summary =
+        validate_active_candidate_run(workflow, &source.head_sha, timing, details, reason_codes);
     let Some(run) = workflow.latest_completed_schedule.as_ref() else {
+        if let Some(summary) = active_run_summary {
+            return Some(summary);
+        }
+        if let Some(error) = nonempty(workflow.active_run_error.as_deref()) {
+            details.push(format!(
+                "Linux Candidate active run query failed while no fresh completed schedule exists: {error}"
+            ));
+            reason_codes.push("candidate-active-run-unavailable".to_owned());
+        }
         details.push(format!(
-            "Linux Candidate workflow has no completed schedule run within {max_schedule_age}s while main has advanced"
+            "Linux Candidate workflow has no completed schedule run within {}s while main has advanced",
+            timing.max_schedule_age
         ));
         reason_codes.push("candidate-schedule-stale".to_owned());
-        return;
+        return None;
     };
     if run.event != "schedule" || run.status != "completed" {
         details.push(format!(
@@ -1056,30 +1112,102 @@ fn validate_candidate_schedule(
             run.event, run.status
         ));
         reason_codes.push("candidate-schedule-unavailable".to_owned());
-        return;
+        return None;
     }
     let previous_detail_count = details.len();
     let Some(completed_at) = validate_timestamp(
         "Linux Candidate completed schedule timestamp",
         &run.completed_at_utc,
-        now,
-        future_skew,
+        timing.now,
+        timing.future_skew,
         details,
     ) else {
         reason_codes.push("candidate-schedule-unavailable".to_owned());
-        return;
+        return None;
     };
     if details.len() != previous_detail_count {
         reason_codes.push("candidate-schedule-unavailable".to_owned());
-        return;
+        return None;
     }
-    let age = now.saturating_sub(completed_at);
-    if age > max_schedule_age {
+    let age = timing.now.saturating_sub(completed_at);
+    if age > timing.max_schedule_age {
+        if let Some(summary) = active_run_summary {
+            return Some(summary);
+        }
+        if let Some(error) = nonempty(workflow.active_run_error.as_deref()) {
+            details.push(format!(
+                "Linux Candidate active run query failed while the completed schedule is stale: {error}"
+            ));
+            reason_codes.push("candidate-active-run-unavailable".to_owned());
+        }
         details.push(format!(
-            "Linux Candidate workflow has no completed schedule run within {max_schedule_age}s while main has advanced; latest completed schedule run is {age}s old"
+            "Linux Candidate workflow has no completed schedule run within {}s while main has advanced; latest completed schedule run is {age}s old",
+            timing.max_schedule_age
         ));
         reason_codes.push("candidate-schedule-stale".to_owned());
     }
+    active_run_summary
+}
+
+fn validate_active_candidate_run(
+    workflow: &CandidateWorkflowSnapshot,
+    main_sha: &str,
+    timing: CandidateScheduleTiming,
+    details: &mut Vec<String>,
+    reason_codes: &mut Vec<String>,
+) -> Option<String> {
+    let run = workflow.latest_active_run.as_ref()?;
+    if !same_sha(&run.head_sha, main_sha) {
+        return None;
+    }
+    if !matches!(run.event.as_str(), "schedule" | "workflow_dispatch") {
+        details.push(format!(
+            "Linux Candidate active run has event {}, expected schedule or workflow_dispatch",
+            run.event
+        ));
+        reason_codes.push("candidate-active-run-unavailable".to_owned());
+        return None;
+    }
+    if !matches!(
+        run.status.as_str(),
+        "in_progress" | "queued" | "pending" | "requested" | "waiting"
+    ) {
+        details.push(format!(
+            "Linux Candidate active run has status {}, expected an active workflow status",
+            run.status
+        ));
+        reason_codes.push("candidate-active-run-unavailable".to_owned());
+        return None;
+    }
+    let previous_detail_count = details.len();
+    let Some(created_at) = validate_timestamp(
+        "Linux Candidate active run timestamp",
+        &run.created_at_utc,
+        timing.now,
+        timing.future_skew,
+        details,
+    ) else {
+        reason_codes.push("candidate-active-run-unavailable".to_owned());
+        return None;
+    };
+    if details.len() != previous_detail_count {
+        reason_codes.push("candidate-active-run-unavailable".to_owned());
+        return None;
+    }
+    let age = timing.now.saturating_sub(created_at);
+    if age > timing.max_active_run_age {
+        details.push(format!(
+            "Linux Candidate active run for current main is {age}s old, exceeding {}s limit",
+            timing.max_active_run_age
+        ));
+        reason_codes.push("candidate-active-run-stale".to_owned());
+        return None;
+    }
+    reason_codes.push("candidate-delivery-in-progress".to_owned());
+    Some(format!(
+        "Linux Candidate {} run for current main is {} ({age}s into {}s limit)",
+        run.event, run.status, timing.max_active_run_age
+    ))
 }
 
 fn validate_candidate_source(

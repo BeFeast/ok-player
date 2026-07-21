@@ -51,9 +51,11 @@ The Linux Candidate workflow itself must report GitHub state `active`. Any
 other state is blocking and emits the machine-readable reason code
 `candidate-workflow-inactive` while naming the observed state in the detail.
 When the accepted candidate is behind `main`, the newest completed `schedule`
-run must also be fresh. The default freshness window is **45 minutes**, three
-times the 15-minute cron interval. No completed schedule run inside that window
-emits `candidate-schedule-stale`, independently of candidate publication lag.
+run must also be fresh. The default freshness window is **120 minutes**: the
+coalesced 60–90 minute native-builder cadence plus one bounded 30-minute
+scheduler/publication grace window. No completed schedule run inside that
+window emits `candidate-schedule-stale`, independently of candidate publication
+lag.
 
 Candidate and commit timestamps are strict UTC (`YYYY-MM-DDTHH:MM:SSZ`) and may
 not be more than five minutes in the future. The candidate timestamp must not
@@ -86,9 +88,17 @@ immediate failures.
 Operators may separately set a positive schedule window with
 `OKP_PROJECT_HEALTH_MAX_CANDIDATE_SCHEDULE_AGE_SECONDS`. Workflow state and the
 latest completed schedule run are collected with bounded list/API queries; the
-workflow-state API response is cached for five minutes. Schedule freshness is
-not blocking while the accepted candidate already equals `main`, because no
-new delivery is pending.
+workflow-state API response is cached for five minutes. When delivery is
+pending, a queued or in-progress scheduled/manual candidate run for the exact
+current `main` SHA is a blocking warning instead of a stale-schedule failure.
+That warning is bounded by the workflow's 90-minute timeout, configurable with
+the positive `OKP_PROJECT_HEALTH_MAX_CANDIDATE_RUN_AGE_SECONDS` override. A run
+for another SHA, malformed active-run evidence, or an exact-main run older than
+the bound does not suppress a failure. Active-run evidence also never hides a
+failed completed-run query, an explicit candidate gate-failure streak, an
+invalid feed, or over-SLA publication lag. Schedule freshness is not blocking
+while the accepted candidate already equals `main`, because no new delivery is
+pending.
 
 The collector reads up to 100 completed scheduled candidate runs and counts the
 failure streak from newest to oldest. At two or more consecutive failures it
@@ -158,14 +168,16 @@ live healthcheck inside its bounded runtime. If no local evaluator is
 executable, the command exits `2` with instructions to build it outside the
 healthcheck.
 
-`okp-core` fixtures cover bounded main-CI settling, overdue pending CI, immediate
-completed CI failures, old accepted/equal, ancestor within SLA, ancestor
-beyond SLA, inactive workflow state, stale completed schedules while `main` has
-advanced, fresh non-ancestor, unaccepted, malformed, missing-package-identity,
-and unreachable Linux candidate outcomes. Windows fixtures separately pin
-source-current and within-SLA passes, over-SLA and consecutive-gate failures,
-the no-history bootstrap warning, manifest/feed identity, and bounded live
-collection. The public release warning is separately pinned as non-blocking.
+`okp-core` fixtures cover bounded main-CI settling, overdue pending CI,
+immediate completed CI failures, old accepted/equal, ancestor within SLA,
+ancestor beyond SLA, inactive workflow state, stale completed schedules while
+`main` has advanced, bounded exact-main candidate runs, stale or mismatched
+active runs, fresh non-ancestor, unaccepted, malformed,
+missing-package-identity, and unreachable Linux candidate outcomes. Windows
+fixtures separately pin source-current and within-SLA passes, over-SLA and
+consecutive-gate failures, the no-history bootstrap warning, manifest/feed
+identity, and bounded live collection. The public release warning is
+separately pinned as non-blocking.
 
 ## Safe operational cutover after merge
 

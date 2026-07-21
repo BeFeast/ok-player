@@ -2,7 +2,8 @@
   "checked_at_unix": 1784340047,
   "source_ci_grace_seconds": 900,
   "max_unpublished_main_lag_seconds": 7200,
-  "max_candidate_schedule_age_seconds": 2700,
+  "max_candidate_schedule_age_seconds": 7200,
+  "max_candidate_run_age_seconds": 5400,
   "future_skew_seconds": 300,
   "source": {
     "head_sha": "d5d531a58c830a01a7e25615e850593e9ff4493f",
@@ -36,7 +37,9 @@
         "completed_at_utc": "2026-07-18T01:55:47Z",
         "url": "https://example.invalid/runs/linux-candidate"
       },
-      "schedule_error": null
+      "schedule_error": null,
+      "latest_active_run": null,
+      "active_run_error": null
     },
     "candidate": {
       "candidate_sha": "d5d531a58c830a01a7e25615e850593e9ff4493f",
@@ -56,6 +59,8 @@
         "url": "https://example.invalid/runs/windows-candidate"
       },
       "schedule_error": null,
+      "latest_active_run": null,
+      "active_run_error": null,
       "consecutive_failed_runs": 0,
       "last_failed_gate": null
     },

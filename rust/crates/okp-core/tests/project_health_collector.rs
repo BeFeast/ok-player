@@ -85,7 +85,7 @@ fn candidate_workflow_watchdog_reasons_survive_live_collection() {
         (
             "schedule-stale",
             "candidate-schedule-stale",
-            "no completed schedule run within 2700s while main has advanced",
+            "no completed schedule run within 7200s while main has advanced",
         ),
         (
             "candidate-failures",
@@ -122,6 +122,33 @@ fn candidate_workflow_watchdog_reasons_survive_live_collection() {
             "{scenario}: {candidate:?}"
         );
     }
+}
+
+#[test]
+fn active_current_main_candidate_run_survives_live_collection() {
+    let output = run_live("candidate-active");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let outcome: ProjectHealthOutcome =
+        serde_json::from_slice(&output.stdout).expect("collector should emit outcome JSON");
+    let candidate = outcome
+        .checks
+        .iter()
+        .find(|check| check.name == "linux-candidate-delivery")
+        .expect("candidate check");
+    assert_eq!(candidate.status, HealthStatus::Warning);
+    assert!(
+        candidate
+            .reason_codes
+            .iter()
+            .any(|code| code == "candidate-delivery-in-progress")
+    );
+    assert!(candidate.summary.contains("workflow_dispatch run"));
+    assert!(candidate.summary.contains("in_progress"));
+    assert!(candidate.summary.contains("7s into 5400s limit"));
 }
 
 #[test]
@@ -444,16 +471,23 @@ fi
 const FAKE_GH: &str = r#"#!/usr/bin/env bash
 set -euo pipefail
 if [[ "${1:-}" == run && "${2:-}" == list ]]; then
+  arguments=" $* "
+  completed_only=false
+  [[ "$arguments" != *" --status completed "* ]] || completed_only=true
   workflow=""
   while (( $# > 0 )); do
     if [[ "$1" == --workflow ]]; then workflow="$2"; break; fi
     shift
   done
   main_sha="d5d531a58c830a01a7e25615e850593e9ff4493f"
-  [[ "$OKP_STUB_FAIL" != schedule-stale ]] || main_sha="1111111111111111111111111111111111111111"
-  if [[ "$workflow" == "Linux Candidate" ]]; then
-    completed_at="2026-07-18T01:55:47Z"
-    [[ "$OKP_STUB_FAIL" != schedule-stale ]] || completed_at="2026-07-18T01:00:47Z"
+  if [[ "$OKP_STUB_FAIL" == schedule-stale || "$OKP_STUB_FAIL" == candidate-active ]]; then
+    main_sha="1111111111111111111111111111111111111111"
+  fi
+    if [[ "$workflow" == "Linux Candidate" ]]; then
+      completed_at="2026-07-18T01:55:47Z"
+      if [[ "$OKP_STUB_FAIL" == schedule-stale || "$OKP_STUB_FAIL" == candidate-active ]]; then
+        completed_at="2026-07-17T23:00:47Z"
+      fi
     if [[ "$OKP_STUB_FAIL" == candidate-failures ]]; then
       printf '%s\n' '[
         {"databaseId":106,"headSha":"d5d531a58c830a01a7e25615e850593e9ff4493f","event":"schedule","status":"completed","conclusion":"failure","updatedAt":"2026-07-18T01:55:47Z","url":"https://example.invalid/run/106"},
@@ -463,6 +497,11 @@ if [[ "${1:-}" == run && "${2:-}" == list ]]; then
         {"databaseId":102,"conclusion":"failure"},
         {"databaseId":101,"conclusion":"failure"},
         {"databaseId":100,"conclusion":"success"}
+      ]'
+    elif [[ "$OKP_STUB_FAIL" == candidate-active && "$completed_only" == false ]]; then
+      printf '%s\n' '[
+        {"headSha":"1111111111111111111111111111111111111111","event":"workflow_dispatch","status":"in_progress","createdAt":"2026-07-18T02:00:40Z","url":"https://example.invalid/run/active-candidate"},
+        {"headSha":"1111111111111111111111111111111111111111","event":"schedule","status":"completed","createdAt":"2026-07-18T01:00:47Z","url":"https://example.invalid/run/candidate"}
       ]'
     else
       printf '[{"databaseId":100,"headSha":"%s","event":"schedule","status":"completed","conclusion":"success","updatedAt":"%s","url":"https://example.invalid/run/candidate"}]\n' "$main_sha" "$completed_at"
@@ -526,7 +565,9 @@ case "$endpoint" in
     ;;
   repos/*/commits/main)
     main_sha="d5d531a58c830a01a7e25615e850593e9ff4493f"
-    [[ "$OKP_STUB_FAIL" != schedule-stale ]] || main_sha="1111111111111111111111111111111111111111"
+    if [[ "$OKP_STUB_FAIL" == schedule-stale || "$OKP_STUB_FAIL" == candidate-active ]]; then
+      main_sha="1111111111111111111111111111111111111111"
+    fi
     main_committed_at="2026-07-18T00:30:00Z"
     if [[ "$OKP_STUB_FAIL" == source-ci-settling || "$OKP_STUB_FAIL" == source-ci-failed ]]; then
       main_committed_at="2026-07-18T01:59:47Z"
