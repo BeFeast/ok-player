@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "channel": "win-candidate",
+  "source_sha": "d5d531a58c830a01a7e25615e850593e9ff4493f",
+  "build_number": 15,
+  "version": "0.11.0-beta.0.15",
+  "builder": "github-actions/windows-latest",
+  "timestamp_utc": "2026-07-18T01:00:47.0000000+00:00",
+  "feed": {
+    "name": "releases.win-candidate.json",
+    "sha256": "e2f564f682a12f4a3bc5c9b727d56738d99e1ba77c25eadf003653fc9368092a",
+    "size": 312,
+    "version": "0.11.0-beta.0.15",
+    "current": true
+  },
+  "artifacts": [
+    {
+      "name": "com.befeast.okplayer-0.11.0-beta.0.15-win-candidate-full.nupkg",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "size": 200000000,
+      "version": "0.11.0-beta.0.15",
+      "current": true
+    }
+  ]
+}

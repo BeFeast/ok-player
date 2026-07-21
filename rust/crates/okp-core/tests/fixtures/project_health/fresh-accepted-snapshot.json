@@ -42,11 +42,42 @@
       "comparison": null,
       "error": null
     },
+    "windows_candidate_workflow": {
+      "state": "active",
+      "state_error": null,
+      "latest_completed_schedule": {
+        "head_sha": "d5d531a58c830a01a7e25615e850593e9ff4493f",
+        "event": "schedule",
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at_utc": "2026-07-18T01:55:47Z",
+        "url": "https://example.invalid/runs/windows-candidate"
+      },
+      "schedule_error": null,
+      "consecutive_failed_runs": 0,
+      "last_failed_gate": null
+    },
+    "windows_candidate": {
+      "candidate_sha": "d5d531a58c830a01a7e25615e850593e9ff4493f",
+      "candidate_committed_at_utc": "2026-07-18T00:30:00Z",
+      "comparison": null,
+      "error": null
+    },
     "error": null
   },
   "windows_feed": {
     "url": "https://befeast.github.io/ok-player/updates/win/releases.win.json",
     "body": "{\"Assets\":[{\"PackageId\":\"OkPlayer\",\"Version\":\"0.10.14\",\"Type\":\"Full\",\"FileName\":\"https://github.com/BeFeast/ok-player/releases/download/v0.10.14/OkPlayer-0.10.14-full.nupkg\",\"SHA256\":\"B6C45F3FDAD98FF02958A77C30DE0EFE2260AF518C392A01699F1397E9C70E80\",\"Size\":200597245}]}",
+    "error": null
+  },
+  "windows_candidate_manifest": {
+    "url": "https://github.com/BeFeast/ok-player/releases/download/windows-candidate/candidate.windows.json",
+    "body": "{\"schema_version\":1,\"channel\":\"win-candidate\",\"source_sha\":\"d5d531a58c830a01a7e25615e850593e9ff4493f\",\"build_number\":15,\"version\":\"0.11.0-beta.0.15\",\"builder\":\"github-actions/windows-latest\",\"timestamp_utc\":\"2026-07-18T01:00:47.0000000+00:00\",\"feed\":{\"name\":\"releases.win-candidate.json\",\"sha256\":\"e2f564f682a12f4a3bc5c9b727d56738d99e1ba77c25eadf003653fc9368092a\",\"size\":312,\"version\":\"0.11.0-beta.0.15\",\"current\":true},\"artifacts\":[{\"name\":\"com.befeast.okplayer-0.11.0-beta.0.15-win-candidate-full.nupkg\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"size\":200000000,\"version\":\"0.11.0-beta.0.15\",\"current\":true}]}",
+    "error": null
+  },
+  "windows_candidate_feed": {
+    "url": "https://github.com/BeFeast/ok-player/releases/download/windows-candidate/releases.win-candidate.json",
+    "body": "{\"Assets\":[{\"PackageId\":\"com.befeast.okplayer\",\"Version\":\"0.11.0-beta.0.15\",\"Type\":\"Full\",\"FileName\":\"com.befeast.okplayer-0.11.0-beta.0.15-win-candidate-full.nupkg\",\"SHA1\":\"1111111111111111111111111111111111111111\",\"SHA256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"Size\":200000000}]}\n",
     "error": null
   },
   "candidate_feed": {

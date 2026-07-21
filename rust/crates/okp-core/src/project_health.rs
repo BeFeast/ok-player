@@ -6,9 +6,11 @@
 //! accepted rolling candidates are the development-delivery cadence signal.
 
 use std::cmp::Ordering;
+use std::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::candidate_channel::{AcceptanceStatus, CandidateFeed};
 use crate::update_selection::compare_versions;
@@ -18,8 +20,13 @@ pub const DEFAULT_MAX_UNPUBLISHED_MAIN_LAG_SECONDS: u64 = 120 * 60;
 pub const DEFAULT_MAX_CANDIDATE_SCHEDULE_AGE_SECONDS: u64 = 45 * 60;
 pub const DEFAULT_FUTURE_SKEW_SECONDS: u64 = 5 * 60;
 pub const STABLE_RELEASE_FRESH_SECONDS: u64 = 48 * 60 * 60;
+const WINDOWS_CANDIDATE_SCHEMA_VERSION: u64 = 1;
+const WINDOWS_CANDIDATE_CHANNEL: &str = "win-candidate";
+const WINDOWS_CANDIDATE_PACKAGE_ID: &str = "com.befeast.okplayer";
+const WINDOWS_CANDIDATE_VERSION_BASE: &str = "0.11.0-beta.0";
+const WINDOWS_CANDIDATE_FEED_NAME: &str = "releases.win-candidate.json";
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FetchSnapshot {
     pub url: String,
     #[serde(default)]
@@ -103,6 +110,10 @@ pub struct SourceSnapshot {
     #[serde(default)]
     pub candidate: CandidateSourceSnapshot,
     #[serde(default)]
+    pub windows_candidate_workflow: CandidateWorkflowSnapshot,
+    #[serde(default)]
+    pub windows_candidate: CandidateSourceSnapshot,
+    #[serde(default)]
     pub error: Option<String>,
 }
 
@@ -117,6 +128,10 @@ pub struct ProjectHealthSnapshot {
     pub future_skew_seconds: u64,
     pub source: SourceSnapshot,
     pub windows_feed: FetchSnapshot,
+    #[serde(default)]
+    pub windows_candidate_manifest: FetchSnapshot,
+    #[serde(default)]
+    pub windows_candidate_feed: FetchSnapshot,
     pub candidate_feed: FetchSnapshot,
     pub stable_linux_releases: FetchSnapshot,
 }
@@ -168,6 +183,14 @@ impl ProjectHealthSnapshot {
         let checks = vec![
             evaluate_source(&self.source),
             evaluate_windows_feed(&self.windows_feed),
+            evaluate_windows_candidate(
+                &self.windows_candidate_manifest,
+                &self.windows_candidate_feed,
+                &self.source,
+                self.checked_at_unix,
+                self.max_unpublished_main_lag_seconds,
+                self.future_skew_seconds,
+            ),
             evaluate_candidate(
                 &self.candidate_feed,
                 &self.source,
@@ -294,6 +317,440 @@ fn evaluate_windows_feed(fetch: &FetchSnapshot) -> HealthCheck {
         }
     }
     check("windows-static-feed", true, details, summary)
+}
+
+#[derive(Deserialize)]
+struct WindowsCandidateManifest {
+    schema_version: u64,
+    channel: String,
+    source_sha: String,
+    build_number: u64,
+    version: String,
+    builder: String,
+    timestamp_utc: String,
+    feed: WindowsCandidateArtifact,
+    artifacts: Vec<WindowsCandidateArtifact>,
+}
+
+#[derive(Deserialize)]
+struct WindowsCandidateArtifact {
+    name: String,
+    sha256: String,
+    size: u64,
+    version: Option<String>,
+    current: bool,
+}
+
+#[derive(Deserialize)]
+struct WindowsCandidateFeed {
+    #[serde(rename = "Assets")]
+    assets: Vec<WindowsCandidateFeedAsset>,
+}
+
+#[derive(Deserialize)]
+struct WindowsCandidateFeedAsset {
+    #[serde(rename = "PackageId")]
+    package_id: String,
+    #[serde(rename = "Version")]
+    version: String,
+    #[serde(rename = "Type")]
+    kind: String,
+    #[serde(rename = "FileName")]
+    file_name: String,
+    #[serde(rename = "SHA256")]
+    sha256: String,
+    #[serde(rename = "Size")]
+    size: u64,
+}
+
+fn evaluate_windows_candidate(
+    manifest_fetch: &FetchSnapshot,
+    feed_fetch: &FetchSnapshot,
+    source: &SourceSnapshot,
+    now: u64,
+    max_lag: u64,
+    future_skew: u64,
+) -> HealthCheck {
+    let workflow = &source.windows_candidate_workflow;
+    if workflow.state == "active"
+        && workflow.state_error.is_none()
+        && workflow.latest_completed_schedule.is_none()
+        && workflow.schedule_error.is_none()
+        && manifest_fetch.body.is_none()
+        && feed_fetch.body.is_none()
+    {
+        return HealthCheck {
+            name: "windows-candidate-delivery".to_owned(),
+            blocking: true,
+            status: HealthStatus::Warning,
+            summary:
+                "Windows candidate lane is bootstrapping and has no completed schedule history"
+                    .to_owned(),
+            details: Vec::new(),
+            reason_codes: vec!["windows-candidate-bootstrap".to_owned()],
+        };
+    }
+
+    let mut details = Vec::new();
+    let mut reason_codes = Vec::new();
+    validate_windows_candidate_failure_streak(workflow, &mut details, &mut reason_codes);
+    validate_windows_candidate_workflow_state(workflow, &mut details, &mut reason_codes);
+    details.extend(fetch_failure(
+        manifest_fetch,
+        "Windows candidate identity manifest",
+    ));
+    details.extend(fetch_failure(feed_fetch, "Windows candidate feed"));
+    let mut summary = format!("Windows candidate feed is healthy at {}", feed_fetch.url);
+    if !details.is_empty() {
+        return check_with_reason_codes(
+            "windows-candidate-delivery",
+            true,
+            details,
+            summary,
+            reason_codes,
+        );
+    }
+
+    let manifest = match serde_json::from_str::<WindowsCandidateManifest>(
+        manifest_fetch.body.as_deref().unwrap_or_default(),
+    ) {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            details.push(format!(
+                "Windows candidate identity manifest is malformed: {error}"
+            ));
+            return check_with_reason_codes(
+                "windows-candidate-delivery",
+                true,
+                details,
+                summary,
+                reason_codes,
+            );
+        }
+    };
+    let feed = match serde_json::from_str::<WindowsCandidateFeed>(
+        feed_fetch.body.as_deref().unwrap_or_default(),
+    ) {
+        Ok(feed) => feed,
+        Err(error) => {
+            details.push(format!("Windows candidate feed is malformed: {error}"));
+            return check_with_reason_codes(
+                "windows-candidate-delivery",
+                true,
+                details,
+                summary,
+                reason_codes,
+            );
+        }
+    };
+
+    validate_windows_candidate_identity(&manifest, &feed, manifest_fetch, feed_fetch, &mut details);
+    if max_lag == 0 {
+        details.push("Windows candidate unpublished-main lag limit must be positive".to_owned());
+    }
+    let candidate_timestamp = validate_windows_candidate_timestamp(
+        "Windows candidate timestamp",
+        &manifest.timestamp_utc,
+        now,
+        future_skew,
+        &mut details,
+    );
+    let source_timestamp = validate_windows_candidate_source(
+        &manifest,
+        source,
+        now,
+        max_lag,
+        future_skew,
+        &mut details,
+        &mut summary,
+    );
+    if let (Some(candidate_timestamp), Some(source_timestamp)) =
+        (candidate_timestamp, source_timestamp)
+        && candidate_timestamp < source_timestamp
+    {
+        details.push(format!(
+            "Windows candidate timestamp {} predates source commit timestamp {}",
+            manifest.timestamp_utc,
+            source
+                .windows_candidate
+                .candidate_committed_at_utc
+                .as_deref()
+                .unwrap_or_default()
+        ));
+    }
+
+    check_with_reason_codes(
+        "windows-candidate-delivery",
+        true,
+        details,
+        summary,
+        reason_codes,
+    )
+}
+
+fn validate_windows_candidate_failure_streak(
+    workflow: &CandidateWorkflowSnapshot,
+    details: &mut Vec<String>,
+    reason_codes: &mut Vec<String>,
+) {
+    if workflow.consecutive_failed_runs < 2 {
+        return;
+    }
+    let gate = nonempty(workflow.last_failed_gate.as_deref()).unwrap_or("unavailable");
+    details.push(format!(
+        "Windows candidate builder failing at gate {gate} ({} consecutive)",
+        workflow.consecutive_failed_runs
+    ));
+    reason_codes.push("windows-candidate-builds-failing".to_owned());
+}
+
+fn validate_windows_candidate_workflow_state(
+    workflow: &CandidateWorkflowSnapshot,
+    details: &mut Vec<String>,
+    reason_codes: &mut Vec<String>,
+) {
+    if let Some(error) = nonempty(workflow.state_error.as_deref()) {
+        details.push(format!(
+            "Windows Candidate workflow state query failed: {error}"
+        ));
+        reason_codes.push("windows-candidate-workflow-state-unavailable".to_owned());
+        return;
+    }
+    if workflow.state.trim().is_empty() {
+        details.push("Windows Candidate workflow state is unavailable".to_owned());
+        reason_codes.push("windows-candidate-workflow-state-unavailable".to_owned());
+    } else if workflow.state != "active" {
+        details.push(format!(
+            "Windows Candidate workflow state is {}, expected active",
+            workflow.state
+        ));
+        reason_codes.push("windows-candidate-workflow-inactive".to_owned());
+    }
+}
+
+fn validate_windows_candidate_identity(
+    manifest: &WindowsCandidateManifest,
+    feed: &WindowsCandidateFeed,
+    manifest_fetch: &FetchSnapshot,
+    feed_fetch: &FetchSnapshot,
+    details: &mut Vec<String>,
+) {
+    if manifest.schema_version != WINDOWS_CANDIDATE_SCHEMA_VERSION {
+        details.push(format!(
+            "Windows candidate schema is {}, expected {}",
+            manifest.schema_version, WINDOWS_CANDIDATE_SCHEMA_VERSION
+        ));
+    }
+    if manifest.channel != WINDOWS_CANDIDATE_CHANNEL {
+        details.push(format!(
+            "Windows candidate channel is {}, expected {WINDOWS_CANDIDATE_CHANNEL}",
+            manifest.channel
+        ));
+    }
+    if !is_hex(&manifest.source_sha, 40) {
+        details.push("Windows candidate source SHA is invalid".to_owned());
+    }
+    let expected_version = format!("{WINDOWS_CANDIDATE_VERSION_BASE}.{}", manifest.build_number);
+    if manifest.build_number == 0 || manifest.version != expected_version {
+        details.push(format!(
+            "Windows candidate version {} does not encode monotonic build {}",
+            manifest.version, manifest.build_number
+        ));
+    }
+    if manifest.builder.trim().is_empty() {
+        details.push("Windows candidate builder identity is empty".to_owned());
+    }
+    if !manifest_fetch.url.ends_with("candidate.windows.json") || !is_https_url(&manifest_fetch.url)
+    {
+        details.push(
+            "Windows candidate manifest URL must be absolute HTTPS and end in candidate.windows.json"
+                .to_owned(),
+        );
+    }
+    if !feed_fetch.url.ends_with(WINDOWS_CANDIDATE_FEED_NAME) || !is_https_url(&feed_fetch.url) {
+        details.push(format!(
+            "Windows candidate feed URL must be absolute HTTPS and end in {WINDOWS_CANDIDATE_FEED_NAME}"
+        ));
+    }
+
+    let feed_body = feed_fetch.body.as_deref().unwrap_or_default();
+    let feed_sha = sha256_hex(feed_body.as_bytes());
+    if manifest.feed.name != WINDOWS_CANDIDATE_FEED_NAME
+        || manifest.feed.version.as_deref() != Some(manifest.version.as_str())
+        || !manifest.feed.current
+        || manifest.feed.size != feed_body.len() as u64
+        || !manifest.feed.sha256.eq_ignore_ascii_case(&feed_sha)
+    {
+        details.push("Windows candidate feed does not match its identity manifest".to_owned());
+    }
+
+    let expected_full_name = format!(
+        "{WINDOWS_CANDIDATE_PACKAGE_ID}-{}-{WINDOWS_CANDIDATE_CHANNEL}-full.nupkg",
+        manifest.version
+    );
+    let current_full: Vec<_> = feed
+        .assets
+        .iter()
+        .filter(|asset| {
+            asset.package_id == WINDOWS_CANDIDATE_PACKAGE_ID
+                && asset.version == manifest.version
+                && asset.kind.eq_ignore_ascii_case("Full")
+        })
+        .collect();
+    if current_full.len() != 1 {
+        details.push(
+            "Windows candidate feed must contain exactly one current manifest-bound Full package"
+                .to_owned(),
+        );
+        return;
+    }
+    let full = current_full[0];
+    if full.file_name != expected_full_name || !is_hex(&full.sha256, 64) || full.size == 0 {
+        details.push("Windows candidate Full package identity is invalid".to_owned());
+    }
+    let artifact_matches = manifest.artifacts.iter().filter(|artifact| {
+        artifact.name == full.file_name
+            && artifact.version.as_deref() == Some(full.version.as_str())
+            && artifact.current
+            && artifact.size == full.size
+            && artifact.sha256.eq_ignore_ascii_case(&full.sha256)
+    });
+    if artifact_matches.count() != 1 {
+        details.push(
+            "Windows candidate Full package does not match its manifest artifact identity"
+                .to_owned(),
+        );
+    }
+}
+
+fn validate_windows_candidate_source(
+    manifest: &WindowsCandidateManifest,
+    source: &SourceSnapshot,
+    now: u64,
+    max_lag: u64,
+    future_skew: u64,
+    details: &mut Vec<String>,
+    summary: &mut String,
+) -> Option<u64> {
+    let evidence = &source.windows_candidate;
+    if let Some(error) = nonempty(evidence.error.as_deref()) {
+        details.push(format!("Windows candidate source query failed: {error}"));
+    }
+    if !same_sha(&evidence.candidate_sha, &manifest.source_sha) {
+        details.push(format!(
+            "Windows candidate source evidence is for {}, expected {}",
+            evidence.candidate_sha, manifest.source_sha
+        ));
+    }
+    let candidate_committed_at = match evidence.candidate_committed_at_utc.as_deref() {
+        Some(value) => validate_timestamp(
+            "Windows candidate source commit timestamp",
+            value,
+            now,
+            future_skew,
+            details,
+        ),
+        None => {
+            details.push("Windows candidate source commit timestamp is unavailable".to_owned());
+            None
+        }
+    };
+
+    match classify_candidate_source(evidence, &source.head_sha) {
+        CandidateSourceRelation::Equal => {
+            let age = parse_windows_candidate_timestamp(&manifest.timestamp_utc)
+                .map(|timestamp| now.saturating_sub(timestamp))
+                .unwrap_or_default();
+            *summary = format!(
+                "Windows candidate {} build {} exactly matches current main; feed timestamp age {age}s is non-blocking",
+                manifest.version, manifest.build_number
+            );
+        }
+        CandidateSourceRelation::Ancestor => match evidence
+            .comparison
+            .as_ref()
+            .and_then(|comparison| comparison.first_unpublished_commit.as_ref())
+        {
+            None => details.push(
+                "Windows candidate is behind main but the first unpublished commit is unavailable"
+                    .to_owned(),
+            ),
+            Some(commit) => {
+                if !is_hex(&commit.sha, 40) || same_sha(&commit.sha, &manifest.source_sha) {
+                    details.push(
+                        "Windows first unpublished main commit has an invalid identity".to_owned(),
+                    );
+                }
+                if let Some(unpublished_at) = validate_timestamp(
+                    "Windows first unpublished main commit timestamp",
+                    &commit.committed_at_utc,
+                    now,
+                    future_skew,
+                    details,
+                ) {
+                    if candidate_committed_at.is_some_and(|source_at| unpublished_at < source_at) {
+                        details.push(
+                            "Windows first unpublished main commit predates the candidate source"
+                                .to_owned(),
+                        );
+                    }
+                    let lag = now.saturating_sub(unpublished_at);
+                    if lag > max_lag {
+                        details.push(format!(
+                            "Windows candidate is stale: unpublished main lag {lag}s exceeds {max_lag}s"
+                        ));
+                    }
+                    *summary = format!(
+                        "Windows candidate {} build {} is behind current main by {lag}s from first unpublished commit {}",
+                        manifest.version, manifest.build_number, commit.sha
+                    );
+                }
+            }
+        },
+        CandidateSourceRelation::NotAncestor => details.push(format!(
+            "Windows candidate source {} is not an ancestor of current main {}",
+            manifest.source_sha, source.head_sha
+        )),
+        CandidateSourceRelation::Unknown => {
+            details.push("Windows candidate source relation to current main is unknown".to_owned())
+        }
+    }
+
+    candidate_committed_at
+}
+
+fn validate_windows_candidate_timestamp(
+    label: &str,
+    value: &str,
+    now: u64,
+    future_skew: u64,
+    details: &mut Vec<String>,
+) -> Option<u64> {
+    match parse_windows_candidate_timestamp(value) {
+        None => {
+            details.push(format!("{label} is not valid UTC RFC 3339: {value}"));
+            None
+        }
+        Some(timestamp) if timestamp > now.saturating_add(future_skew) => {
+            details.push(format!(
+                "{label} is {} seconds in the future",
+                timestamp - now
+            ));
+            Some(timestamp)
+        }
+        Some(timestamp) => Some(timestamp),
+    }
+}
+
+fn parse_windows_candidate_timestamp(value: &str) -> Option<u64> {
+    let utc = value
+        .strip_suffix('Z')
+        .or_else(|| value.strip_suffix("+00:00"))?;
+    if utc.len() < 19 || utc.as_bytes().get(19).is_some_and(|byte| *byte != b'.') {
+        return None;
+    }
+    let normalized = format!("{}Z", &utc[..19]);
+    parse_utc_timestamp(&normalized)
 }
 
 fn evaluate_candidate(
@@ -948,6 +1405,15 @@ fn nonempty(value: Option<&str>) -> Option<&str> {
 
 fn is_hex(value: &str, length: usize) -> bool {
     value.len() == length && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .fold(String::with_capacity(64), |mut output, byte| {
+            write!(&mut output, "{byte:02x}").expect("writing to a String cannot fail");
+            output
+        })
 }
 
 fn same_sha(left: &str, right: &str) -> bool {

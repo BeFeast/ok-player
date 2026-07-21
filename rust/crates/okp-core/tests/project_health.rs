@@ -170,6 +170,155 @@ fn candidate_delivery_outcomes_are_fixture_driven() {
 }
 
 #[test]
+fn windows_candidate_delivery_reports_current_lag_bootstrap_and_gate_failures() {
+    let fixture_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project_health");
+    let candidate_feed = FetchSnapshot {
+        url: "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/candidate.linux.json".to_owned(),
+        body: Some(
+            fs::read_to_string(fixture_dir.join("fresh-accepted.json"))
+                .expect("read Linux candidate fixture"),
+        ),
+        error: None,
+    };
+
+    let current = healthy_snapshot(
+        1_784_340_047,
+        candidate_feed.clone(),
+        CANDIDATE_SHA.to_owned(),
+        candidate_source(
+            FixtureSourceRelation::Equal,
+            default_candidate_committed_at(),
+            None,
+        ),
+    );
+    let current_outcome = current.evaluate();
+    let current_check = windows_candidate_check(&current_outcome);
+    assert!(current_outcome.healthy);
+    assert_eq!(current_check.status, HealthStatus::Pass);
+    assert!(
+        current_check
+            .summary
+            .contains("exactly matches current main")
+    );
+
+    let mut within_sla = healthy_snapshot(
+        1_784_340_047,
+        candidate_feed.clone(),
+        "1111111111111111111111111111111111111111".to_owned(),
+        candidate_source(
+            FixtureSourceRelation::Ancestor,
+            default_candidate_committed_at(),
+            Some(CommitSnapshot {
+                sha: "2222222222222222222222222222222222222222".to_owned(),
+                committed_at_utc: "2026-07-18T01:30:47Z".to_owned(),
+            }),
+        ),
+    );
+    within_sla.source.windows_candidate = candidate_source(
+        FixtureSourceRelation::Ancestor,
+        default_candidate_committed_at(),
+        Some(CommitSnapshot {
+            sha: "2222222222222222222222222222222222222222".to_owned(),
+            committed_at_utc: "2026-07-18T01:30:47Z".to_owned(),
+        }),
+    );
+    let within_sla_outcome = within_sla.evaluate();
+    let within_sla_check = windows_candidate_check(&within_sla_outcome);
+    assert_eq!(within_sla_check.status, HealthStatus::Pass);
+    assert!(
+        within_sla_check
+            .summary
+            .contains("behind current main by 1800s")
+    );
+
+    let mut beyond_sla = within_sla.clone();
+    beyond_sla.checked_at_unix = 1_784_341_848;
+    beyond_sla
+        .source
+        .windows_candidate
+        .candidate_committed_at_utc = Some("2026-07-17T23:30:00Z".to_owned());
+    beyond_sla
+        .source
+        .windows_candidate
+        .comparison
+        .as_mut()
+        .and_then(|comparison| comparison.first_unpublished_commit.as_mut())
+        .expect("Windows candidate ancestor evidence")
+        .committed_at_utc = "2026-07-18T00:00:47Z".to_owned();
+    let beyond_sla_outcome = beyond_sla.evaluate();
+    let beyond_sla_check = windows_candidate_check(&beyond_sla_outcome);
+    assert_eq!(beyond_sla_check.status, HealthStatus::Fail);
+    assert!(
+        beyond_sla_check
+            .summary
+            .contains("unpublished main lag 9001s exceeds 7200s")
+    );
+
+    let mut failing = current.clone();
+    failing
+        .source
+        .windows_candidate_workflow
+        .consecutive_failed_runs = 3;
+    failing.source.windows_candidate_workflow.last_failed_gate =
+        Some("Run core unit tests".to_owned());
+    let failing_outcome = failing.evaluate();
+    let failing_check = windows_candidate_check(&failing_outcome);
+    assert_eq!(failing_check.status, HealthStatus::Fail);
+    assert_eq!(
+        failing_check.summary,
+        "Windows candidate builder failing at gate Run core unit tests (3 consecutive)"
+    );
+    assert!(
+        failing_check
+            .reason_codes
+            .contains(&"windows-candidate-builds-failing".to_owned())
+    );
+
+    let mut tampered = current.clone();
+    tampered
+        .windows_candidate_feed
+        .body
+        .as_mut()
+        .expect("Windows candidate feed fixture")
+        .push(' ');
+    let tampered_outcome = tampered.evaluate();
+    let tampered_check = windows_candidate_check(&tampered_outcome);
+    assert_eq!(tampered_check.status, HealthStatus::Fail);
+    assert!(
+        tampered_check
+            .summary
+            .contains("does not match its identity manifest")
+    );
+
+    let mut bootstrap = current;
+    bootstrap
+        .source
+        .windows_candidate_workflow
+        .latest_completed_schedule = None;
+    bootstrap.windows_candidate_manifest.body = None;
+    bootstrap.windows_candidate_manifest.error = Some("not published".to_owned());
+    bootstrap.windows_candidate_feed.body = None;
+    bootstrap.windows_candidate_feed.error = Some("not published".to_owned());
+    let bootstrap_outcome = bootstrap.evaluate();
+    let bootstrap_check = windows_candidate_check(&bootstrap_outcome);
+    assert!(bootstrap_outcome.healthy);
+    assert!(bootstrap_check.blocking);
+    assert_eq!(bootstrap_check.status, HealthStatus::Warning);
+    assert!(bootstrap_check.summary.contains("bootstrapping"));
+}
+
+fn windows_candidate_check(
+    outcome: &okp_core::project_health::ProjectHealthOutcome,
+) -> &okp_core::project_health::HealthCheck {
+    outcome
+        .checks
+        .iter()
+        .find(|check| check.name == "windows-candidate-delivery")
+        .expect("Windows candidate check")
+}
+
+#[test]
 fn old_permanent_linux_release_is_diagnostic_only() {
     let fixture_dir =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project_health");
@@ -308,7 +457,23 @@ fn healthy_snapshot(
                 consecutive_failed_runs: 0,
                 last_failed_gate: None,
             },
-            candidate,
+            candidate: candidate.clone(),
+            windows_candidate_workflow: CandidateWorkflowSnapshot {
+                state: "active".to_owned(),
+                state_error: None,
+                latest_completed_schedule: Some(ScheduleRunSnapshot {
+                    head_sha: head_sha.clone(),
+                    event: "schedule".to_owned(),
+                    status: "completed".to_owned(),
+                    conclusion: "success".to_owned(),
+                    completed_at_utc: "2026-07-18T01:55:47Z".to_owned(),
+                    url: "https://example.invalid/runs/windows-candidate".to_owned(),
+                }),
+                schedule_error: None,
+                consecutive_failed_runs: 0,
+                last_failed_gate: None,
+            },
+            windows_candidate: candidate,
             error: None,
         },
         windows_feed: FetchSnapshot {
@@ -316,6 +481,28 @@ fn healthy_snapshot(
             body: Some(
                 r#"{"Assets":[{"PackageId":"OkPlayer","Version":"0.10.14","Type":"Full","FileName":"https://github.com/BeFeast/ok-player/releases/download/v0.10.14/OkPlayer-0.10.14-full.nupkg","SHA256":"B6C45F3FDAD98FF02958A77C30DE0EFE2260AF518C392A01699F1397E9C70E80","Size":200597245}]}"#
                     .to_owned(),
+            ),
+            error: None,
+        },
+        windows_candidate_manifest: FetchSnapshot {
+            url: "https://github.com/BeFeast/ok-player/releases/download/windows-candidate/candidate.windows.json".to_owned(),
+            body: Some(
+                fs::read_to_string(
+                    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("tests/fixtures/project_health/windows-candidate-manifest.json"),
+                )
+                .expect("read Windows candidate manifest fixture"),
+            ),
+            error: None,
+        },
+        windows_candidate_feed: FetchSnapshot {
+            url: "https://github.com/BeFeast/ok-player/releases/download/windows-candidate/releases.win-candidate.json".to_owned(),
+            body: Some(
+                fs::read_to_string(
+                    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("tests/fixtures/project_health/windows-candidate-feed.json"),
+                )
+                .expect("read Windows candidate feed fixture"),
             ),
             error: None,
         },
