@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
@@ -8,12 +9,15 @@ using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.Win32;
+using OkPlayer.Core;
 using OkPlayer.App.Services;
 using OkPlayer.App.ViewModels;
 using OkPlayer.Core;
 using Windows.ApplicationModel.DataTransfer;
+using Windows.System;
 using Windows.UI;
 
 namespace OkPlayer.App;
@@ -400,8 +404,8 @@ public sealed partial class SettingsWindow : Window
         _ => ElementTheme.Default,
     };
 
-    // The segment pills and the Shortcuts key chips bake theme-dependent colors when they are built (the
-    // chips only once). ActualThemeChanged fires whenever the effective theme flips — by setting change or
+    // The segment pills and shortcut editor rows bake theme-dependent colors when they are built.
+    // ActualThemeChanged fires whenever the effective theme flips — by setting change or
     // a system light/dark switch while on Auto — and the new theme is already in effect, so rebuild the
     // chips and re-style the visible panel here so their contrast tracks the theme.
     private void OnActualThemeChanged(FrameworkElement sender, object args)
@@ -412,6 +416,8 @@ public sealed partial class SettingsWindow : Window
         // discard unsaved mpv.conf edits). The key chips bake the theme when built, so drop them and let
         // them rebuild (now if visible, else on next show); the selected segment pill is re-styled in place.
         _shortcutsBuilt = false;
+        _capturingShortcutRow = null;
+        _shortcutRows.Clear();
         ShortcutsHost.Children.Clear();
         if (AppearancePanel.Visibility == Visibility.Visible)
             RefreshAppearance(); // the theme/accent pills are themed too — and this panel hosts the switch
@@ -499,82 +505,371 @@ public sealed partial class SettingsWindow : Window
             LoadShortcuts();
     }
 
-    // ── Shortcuts panel (keyboard reference) ───────────────────────────
+    // ── Shortcuts panel (interactive shared-model editor) ──────────────
 
+    private sealed class ShortcutEditorRow
+    {
+        public required OkPlayer.Core.ShortcutAction Action { get; init; }
+        public required OkPlayer.Core.ShortcutChord DefaultChord { get; init; }
+        public required OkPlayer.Core.ShortcutChord Primary { get; set; }
+        public OkPlayer.Core.ShortcutChord? Secondary { get; set; }
+        public required Border Container { get; init; }
+        public required Button PrimaryButton { get; init; }
+        public required TextBlock PrimaryLabel { get; init; }
+        public required Button SecondaryButton { get; init; }
+        public required TextBlock SecondaryLabel { get; init; }
+        public required TextBlock Badge { get; init; }
+        public required Button ResetButton { get; init; }
+    }
+
+    private readonly List<ShortcutEditorRow> _shortcutRows = new();
     private bool _shortcutsBuilt;
+    private ShortcutEditorRow? _capturingShortcutRow;
+    private OkPlayer.Core.ShortcutSlot _capturingShortcutSlot;
 
     private void LoadShortcuts()
     {
         if (_shortcutsBuilt)
             return;
-        (string Cat, string Action, string[] Keys)[] map =
+
+        IReadOnlyList<OkPlayer.Core.ShortcutBinding> bindings;
+        try
         {
-            ("PLAYBACK", "Play / pause", new[] { "Space", "K" }),
-            ("PLAYBACK", "Seek backward / forward", new[] { "←", "→" }),
-            ("PLAYBACK", "Jump 10 seconds back / forward", new[] { "J", "L" }),
-            ("PLAYBACK", "Frame step back / forward", new[] { ",", "." }),
-            ("AUDIO", "Volume up / down", new[] { "↑", "↓" }),
-            ("AUDIO", "Mute", new[] { "M" }),
-            ("VIEW", "Fullscreen", new[] { "F" }),
-            ("VIEW", "Chapters panel", new[] { "C" }),
-            ("VIEW", "Media info", new[] { "I" }),
-            ("VIEW", "Close panel / exit fullscreen", new[] { "Esc" }),
-            ("CAPTURE", "Screenshot", new[] { "S" }),
-        };
-        string? lastCat = null;
-        foreach (var (cat, action, keys) in map)
+            bindings = OkPlayer.Core.ShortcutModel.ResolvedBindingsFromText(
+                App.Settings.Current.Keybindings,
+                WindowsShortcutKeys.Instance);
+            SetShortcutStatus("Ready");
+        }
+        catch (OkPlayer.Core.ShortcutConfigException error)
         {
-            if (cat != lastCat)
-            {
-                ShortcutsHost.Children.Add(new TextBlock
-                {
-                    Text = cat,
-                    FontSize = 12,
-                    FontWeight = FontWeights.SemiBold,
-                    CharacterSpacing = 60,
-                    Foreground = Res("OkTextSecondaryBrush", new SolidColorBrush(Color.FromArgb(0x99, 0, 0, 0))),
-                    Margin = new Thickness(0, lastCat is null ? 0 : 18, 0, 8),
-                });
-                lastCat = cat;
-            }
-            ShortcutsHost.Children.Add(BuildShortcutRow(action, keys));
+            bindings = OkPlayer.Core.ShortcutModel.DefaultBindings();
+            SetShortcutStatus($"Saved shortcuts were invalid; defaults shown ({error.Message})", error: true);
+        }
+
+        foreach (OkPlayer.Core.ShortcutAction action in OkPlayer.Core.ShortcutModel.Actions)
+        {
+            var chords = OkPlayer.Core.ShortcutModel.ChordsForAction(bindings, action);
+            ShortcutEditorRow row = BuildShortcutEditorRow(action, chords[0], chords.Count > 1 ? chords[1] : null);
+            _shortcutRows.Add(row);
+            ShortcutsHost.Children.Add(row.Container);
         }
         _shortcutsBuilt = true;
+        RefreshAllShortcutRows();
+        FilterShortcutRows();
     }
 
-    private FrameworkElement BuildShortcutRow(string action, string[] keys)
+    private ShortcutEditorRow BuildShortcutEditorRow(
+        OkPlayer.Core.ShortcutAction action,
+        OkPlayer.Core.ShortcutChord primary,
+        OkPlayer.Core.ShortcutChord? secondary)
     {
-        var grid = new Grid { Margin = new Thickness(0, 0, 0, 3), MaxWidth = 440, HorizontalAlignment = HorizontalAlignment.Left };
+        var container = new Border
+        {
+            BorderBrush = Res("OkCardStrokeBrush", new SolidColorBrush(Color.FromArgb(0x12, 0, 0, 0))),
+            BorderThickness = new Thickness(0, 0, 0, 1),
+            Padding = new Thickness(0, 8, 0, 8),
+        };
+        var grid = new Grid { ColumnSpacing = 8 };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        grid.Children.Add(new TextBlock { Text = action, FontSize = 12.5, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 6, 24, 6) });
-        var chips = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5, VerticalAlignment = VerticalAlignment.Center };
-        Grid.SetColumn(chips, 1);
-        foreach (string k in keys)
-            chips.Children.Add(KeyChip(k));
-        grid.Children.Add(chips);
-        return grid;
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var text = new StackPanel { Spacing = 1, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+        text.Children.Add(new TextBlock
+        {
+            Text = action.Label(),
+            FontSize = 12.5,
+            Foreground = Res("OkTextPrimaryBrush", new SolidColorBrush(Colors.Black)),
+        });
+        text.Children.Add(new TextBlock
+        {
+            Text = action.Id(),
+            FontSize = 10.5,
+            FontFamily = new FontFamily("Cascadia Code, Consolas"),
+            Foreground = Res("OkTextFaintBrush", new SolidColorBrush(Color.FromArgb(0x66, 0, 0, 0))),
+        });
+        grid.Children.Add(text);
+
+        var badge = new TextBlock
+        {
+            Text = "CUSTOM",
+            FontSize = 9.5,
+            FontWeight = FontWeights.SemiBold,
+            CharacterSpacing = 45,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = Res("OkAccentTextBrush", new SolidColorBrush(Color.FromArgb(0xFF, 0x0A, 0x65, 0x5F))),
+            Visibility = Visibility.Collapsed,
+        };
+        Grid.SetColumn(badge, 1);
+        grid.Children.Add(badge);
+
+        var primaryLabel = ShortcutButtonLabel(primary.Label);
+        var primaryButton = ShortcutButton(primaryLabel, 104);
+        Grid.SetColumn(primaryButton, 2);
+        grid.Children.Add(primaryButton);
+
+        var secondaryLabel = ShortcutButtonLabel(secondary?.Label ?? "Add");
+        var secondaryButton = ShortcutButton(secondaryLabel, 88);
+        Grid.SetColumn(secondaryButton, 3);
+        grid.Children.Add(secondaryButton);
+
+        var reset = new Button
+        {
+            Content = "Reset",
+            Background = new SolidColorBrush(Colors.Transparent),
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(7, 5, 7, 5),
+            FontSize = 11.5,
+            Foreground = Res("OkAccentTextBrush", new SolidColorBrush(Color.FromArgb(0xFF, 0x0A, 0x65, 0x5F))),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(reset, 4);
+        grid.Children.Add(reset);
+        container.Child = grid;
+
+        var row = new ShortcutEditorRow
+        {
+            Action = action,
+            DefaultChord = OkPlayer.Core.ShortcutModel.DefaultChord(action),
+            Primary = primary,
+            Secondary = secondary,
+            Container = container,
+            PrimaryButton = primaryButton,
+            PrimaryLabel = primaryLabel,
+            SecondaryButton = secondaryButton,
+            SecondaryLabel = secondaryLabel,
+            Badge = badge,
+            ResetButton = reset,
+        };
+
+        primaryButton.Click += (_, _) => BeginShortcutCapture(row, OkPlayer.Core.ShortcutSlot.Primary);
+        secondaryButton.Click += (_, _) => BeginShortcutCapture(row, OkPlayer.Core.ShortcutSlot.Secondary);
+        primaryButton.KeyDown += (_, e) => OnShortcutCaptureKeyDown(row, OkPlayer.Core.ShortcutSlot.Primary, e);
+        secondaryButton.KeyDown += (_, e) => OnShortcutCaptureKeyDown(row, OkPlayer.Core.ShortcutSlot.Secondary, e);
+        reset.Click += (_, _) => ResetShortcutRow(row);
+        return row;
     }
 
-    private FrameworkElement KeyChip(string key) => new Border
+    private TextBlock ShortcutButtonLabel(string text) => new()
     {
-        // a faint dark fill on light, a faint light fill on dark — 5% black vanishes on dark Mica
-        Background = new SolidColorBrush((Content as FrameworkElement)?.ActualTheme == ElementTheme.Dark
-            ? Color.FromArgb(0x18, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x0D, 0, 0, 0)),
-        BorderBrush = Res("OkStrokeBrush", new SolidColorBrush(Color.FromArgb(0x14, 0, 0, 0))),
-        BorderThickness = new Thickness(1),
-        CornerRadius = new CornerRadius(5),
-        Padding = new Thickness(8, 3, 8, 3),
-        MinWidth = 28,
-        Child = new TextBlock
-        {
-            Text = key,
-            FontSize = 11.5,
-            FontFamily = new FontFamily("Consolas"),
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Foreground = Res("OkTextBodyBrush", new SolidColorBrush(Color.FromArgb(0xDE, 0, 0, 0))),
-        },
+        Text = text,
+        FontFamily = new FontFamily("Cascadia Code, Consolas"),
+        FontSize = 11.5,
+        FontWeight = FontWeights.SemiBold,
+        HorizontalAlignment = HorizontalAlignment.Center,
+        Foreground = Res("OkTextPrimaryBrush", new SolidColorBrush(Colors.Black)),
     };
+
+    private Button ShortcutButton(TextBlock label, double minWidth) => new()
+    {
+        Content = label,
+        MinWidth = minWidth,
+        Height = 36,
+        Padding = new Thickness(10, 4, 10, 4),
+        CornerRadius = new CornerRadius(7),
+        UseSystemFocusVisuals = true,
+    };
+
+    private void BeginShortcutCapture(ShortcutEditorRow row, OkPlayer.Core.ShortcutSlot slot)
+    {
+        ClearShortcutConflicts();
+        _capturingShortcutRow = row;
+        _capturingShortcutSlot = slot;
+        RefreshAllShortcutRows();
+        Button button = slot == OkPlayer.Core.ShortcutSlot.Primary ? row.PrimaryButton : row.SecondaryButton;
+        TextBlock label = slot == OkPlayer.Core.ShortcutSlot.Primary ? row.PrimaryLabel : row.SecondaryLabel;
+        label.Text = "Press keys";
+        button.BorderBrush = Res("OkAccentBrush", new SolidColorBrush(Color.FromArgb(0xFF, 0x10, 0x93, 0x8A)));
+        button.BorderThickness = new Thickness(2);
+        SetShortcutStatus($"Recording {row.Action.Label()}");
+        button.Focus(FocusState.Keyboard);
+    }
+
+    private void OnShortcutCaptureKeyDown(
+        ShortcutEditorRow row,
+        OkPlayer.Core.ShortcutSlot slot,
+        KeyRoutedEventArgs e)
+    {
+        if (_capturingShortcutRow != row || _capturingShortcutSlot != slot)
+            return;
+        e.Handled = true;
+
+        if (WindowsShortcutKeys.IsSystemMediaKey(e.Key))
+        {
+            SetShortcutStatus("Media keys are managed by system media controls.", error: true);
+            return;
+        }
+
+        string? keyName = WindowsShortcutKeys.CanonicalName(e.Key);
+        if (!OkPlayer.Core.ShortcutModel.TryChordFromCapturedKey(
+                keyName,
+                WindowsShortcutKeys.CurrentModifiers(),
+                out OkPlayer.Core.ShortcutChord? chord,
+                out string? message))
+        {
+            SetShortcutStatus(message ?? "This key cannot be assigned.", error: true);
+            return;
+        }
+
+        OkPlayer.Core.ShortcutAction? conflict = OkPlayer.Core.ShortcutModel.SlotConflict(
+            ShortcutActionRows(), row.Action, slot, chord!);
+        if (conflict is not null)
+        {
+            MarkShortcutConflict(row.Action, conflict.Value);
+            SetShortcutStatus($"{conflict.Value.Label()} already uses {chord!.Label}.", error: true);
+            return;
+        }
+
+        if (slot == OkPlayer.Core.ShortcutSlot.Primary)
+            row.Primary = chord!;
+        else
+            row.Secondary = chord!;
+        _capturingShortcutRow = null;
+        ClearShortcutConflicts();
+        RefreshAllShortcutRows();
+        SaveShortcutRows("Shortcut saved");
+    }
+
+    private IEnumerable<OkPlayer.Core.ActionChords> ShortcutActionRows()
+        => _shortcutRows.Select(row => new OkPlayer.Core.ActionChords(row.Action, row.Primary, row.Secondary));
+
+    private void RefreshAllShortcutRows()
+    {
+        foreach (ShortcutEditorRow row in _shortcutRows)
+            RefreshShortcutRow(row);
+        ResetAllShortcutsButton.IsEnabled = _shortcutRows.Any(IsCustomShortcutRow);
+    }
+
+    private void RefreshShortcutRow(ShortcutEditorRow row)
+    {
+        bool isCustom = IsCustomShortcutRow(row);
+        row.PrimaryLabel.Text = row.Primary.Label;
+        row.SecondaryLabel.Text = row.Secondary?.Label ?? "Add";
+        row.Badge.Visibility = isCustom ? Visibility.Visible : Visibility.Collapsed;
+        row.ResetButton.IsEnabled = isCustom;
+
+        Brush fill = Res("OkSubtleFillBrush", new SolidColorBrush(Color.FromArgb(0x0D, 0, 0, 0)));
+        Brush stroke = Res("OkStrokeBrush", new SolidColorBrush(Color.FromArgb(0x14, 0, 0, 0)));
+        Brush accent = Res("OkAccentBrush", new SolidColorBrush(Color.FromArgb(0xFF, 0x10, 0x93, 0x8A)));
+        row.PrimaryButton.Background = fill;
+        row.PrimaryButton.BorderBrush = stroke;
+        row.PrimaryButton.BorderThickness = new Thickness(1);
+        row.SecondaryButton.Background = new SolidColorBrush(Colors.Transparent);
+        row.SecondaryButton.BorderBrush = accent;
+        row.SecondaryButton.BorderThickness = new Thickness(1);
+        row.SecondaryLabel.Foreground = row.Secondary is null
+            ? Res("OkAccentTextBrush", accent)
+            : Res("OkTextPrimaryBrush", new SolidColorBrush(Colors.Black));
+    }
+
+    private static bool IsCustomShortcutRow(ShortcutEditorRow row)
+        => row.Primary != row.DefaultChord || row.Secondary is not null;
+
+    private void ResetShortcutRow(ShortcutEditorRow row)
+    {
+        _capturingShortcutRow = null;
+        ClearShortcutConflicts();
+        row.Primary = row.DefaultChord;
+        row.Secondary = null;
+        RefreshAllShortcutRows();
+        SaveShortcutRows("Shortcut reset");
+    }
+
+    private void OnResetAllShortcuts(object sender, RoutedEventArgs e)
+    {
+        _capturingShortcutRow = null;
+        ClearShortcutConflicts();
+        foreach (ShortcutEditorRow row in _shortcutRows)
+        {
+            row.Primary = row.DefaultChord;
+            row.Secondary = null;
+        }
+        RefreshAllShortcutRows();
+        SaveShortcutRows("All shortcuts reset");
+    }
+
+    private void SaveShortcutRows(string successMessage)
+    {
+        var bindings = OkPlayer.Core.ShortcutModel.BindingsFromActionChords(ShortcutActionRows());
+        try
+        {
+            OkPlayer.Core.ShortcutModel.ValidateConflicts(bindings);
+        }
+        catch (OkPlayer.Core.ShortcutConfigException error)
+        {
+            SetShortcutStatus(error.Message, error: true);
+            return;
+        }
+        App.Settings.Current.Keybindings = OkPlayer.Core.ShortcutModel.ConfigTextFromBindings(bindings);
+        App.Settings.Save();
+        SetShortcutStatus(successMessage);
+    }
+
+    private void ClearShortcutConflicts()
+    {
+        Brush divider = Res("OkCardStrokeBrush", new SolidColorBrush(Color.FromArgb(0x12, 0, 0, 0)));
+        foreach (ShortcutEditorRow row in _shortcutRows)
+        {
+            row.Container.Background = new SolidColorBrush(Colors.Transparent);
+            row.Container.BorderBrush = divider;
+            row.Container.BorderThickness = new Thickness(0, 0, 0, 1);
+            row.Container.CornerRadius = new CornerRadius(0);
+            RefreshShortcutRow(row);
+        }
+    }
+
+    private void MarkShortcutConflict(OkPlayer.Core.ShortcutAction left, OkPlayer.Core.ShortcutAction right)
+    {
+        ClearShortcutConflicts();
+        Brush error = Res("OkErrorBrush", new SolidColorBrush(Color.FromArgb(0xFF, 0xB4, 0x23, 0x18)));
+        Brush tint = new SolidColorBrush((Content as FrameworkElement)?.ActualTheme == ElementTheme.Dark
+            ? Color.FromArgb(0x18, 0xFF, 0x6B, 0x5E)
+            : Color.FromArgb(0x0F, 0xB4, 0x23, 0x18));
+        foreach (ShortcutEditorRow row in _shortcutRows.Where(row => row.Action == left || row.Action == right))
+        {
+            row.Container.Background = tint;
+            row.Container.BorderBrush = error;
+            row.Container.BorderThickness = new Thickness(1);
+            row.Container.CornerRadius = new CornerRadius(7);
+            row.PrimaryButton.BorderBrush = error;
+            row.SecondaryButton.BorderBrush = error;
+        }
+        if (_capturingShortcutRow is { } capturing)
+        {
+            TextBlock label = _capturingShortcutSlot == ShortcutSlot.Primary
+                ? capturing.PrimaryLabel
+                : capturing.SecondaryLabel;
+            label.Text = "Press keys";
+        }
+    }
+
+    private void SetShortcutStatus(string text, bool error = false)
+    {
+        ShortcutStatus.Text = text;
+        ShortcutStatus.Foreground = error
+            ? Res("OkErrorBrush", new SolidColorBrush(Color.FromArgb(0xFF, 0xB4, 0x23, 0x18)))
+            : Res("OkTextSecondaryBrush", new SolidColorBrush(Color.FromArgb(0x99, 0, 0, 0)));
+    }
+
+    private void OnShortcutSearchChanged(object sender, TextChangedEventArgs e) => FilterShortcutRows();
+
+    private void FilterShortcutRows()
+    {
+        if (!_shortcutsBuilt)
+            return;
+        string query = ShortcutSearch.Text.Trim();
+        foreach (ShortcutEditorRow row in _shortcutRows)
+        {
+            bool visible = query.Length == 0
+                || row.Action.Label().Contains(query, StringComparison.OrdinalIgnoreCase)
+                || row.Action.Id().Contains(query, StringComparison.OrdinalIgnoreCase)
+                || row.Primary.Label.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || (row.Secondary?.Label.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false);
+            row.Container.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        }
+    }
 
     // ── Subtitles panel ────────────────────────────────────────────────
 

@@ -1,7 +1,8 @@
 //! Cross-platform persistence schema for application settings (EPIC #134, B9).
 //!
-//! This is the shared "truth" both shells converge on: the Linux GTK shell and the
-//! future WinUI consumer (over the C ABI) read and write the same canonical document.
+//! This is the shared "truth" both shells consume: the Linux GTK store and the WinUI
+//! settings service read and write the same canonical document (a later C-ABI projection
+//! may replace the managed schema mirror without changing the bytes).
 //! Only the *schema* and the *migration* live here — path resolution and file IO stay
 //! behind a shell seam (XDG on Linux, `%APPDATA%` on Windows), so this module never
 //! touches the filesystem.

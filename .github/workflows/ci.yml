@@ -54,6 +54,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # authenticates the api.github.com release lookup (5000/hr vs the 60/hr unauthenticated limit that 403s on shared runner IPs)
         run: ./scripts/fetch-natives.ps1
 
+      # WinUI cannot compile on the Linux unit-test runner. Build the full solution here so every PR checks the
+      # shell wiring as well as the engine integration suite (shortcut capture/editor code is in OkPlayer.App).
+      - name: Build Windows app
+        run: dotnet build OkPlayer.sln -c Release
+
       # Debug so the (DEBUG-only) render-thread guard is compiled in and its assertions run.
       - name: Test
         run: dotnet test tests/OkPlayer.IntegrationTests/OkPlayer.IntegrationTests.csproj -c Debug --logger "console;verbosity=normal"

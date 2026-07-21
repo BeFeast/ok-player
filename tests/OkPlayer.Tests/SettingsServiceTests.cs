@@ -32,6 +32,7 @@ public class SettingsServiceTests : IDisposable
         Assert.False(s.AudioNormalization);   // off by default
         Assert.Equal("", s.AudioDevice);      // empty = mpv's default output
         Assert.Equal(0, s.HistoryRetentionDays); // keep forever by default
+        Assert.Equal("", s.Keybindings);
     }
 
     [Fact]
@@ -44,6 +45,7 @@ public class SettingsServiceTests : IDisposable
         a.Current.AudioNormalization = true;
         a.Current.AudioDevice = "wasapi/{headphones}";
         a.Current.HistoryRetentionDays = 30;
+        a.Current.Keybindings = "play-pause=P\nplay-pause=Space";
         a.Current.Brightness = 18;
         a.Current.Contrast = -12;
         a.Current.Saturation = 24;
@@ -57,6 +59,7 @@ public class SettingsServiceTests : IDisposable
         Assert.True(reloaded.AudioNormalization);
         Assert.Equal("wasapi/{headphones}", reloaded.AudioDevice);
         Assert.Equal(30, reloaded.HistoryRetentionDays);
+        Assert.Equal("play-pause=P\nplay-pause=Space", reloaded.Keybindings);
         Assert.Equal(18.0, reloaded.Brightness);
         Assert.Equal(-12.0, reloaded.Contrast);
         Assert.Equal(24.0, reloaded.Saturation);
@@ -152,6 +155,7 @@ public class SettingsServiceTests : IDisposable
         var service = New();
         Assert.Equal(12.0, service.Current.Brightness);
         Assert.Equal(-8.0, service.Current.Contrast);
+        Assert.Equal("space cycle pause", service.Current.Keybindings);
         service.Current.Gamma = 9;
         service.Save();
 
@@ -183,6 +187,7 @@ public class SettingsServiceTests : IDisposable
         Assert.Equal("Dark", service.Current.Theme);
         Assert.Equal(75, service.Current.DefaultVolume);
         Assert.False(service.Current.HardwareDecoding);
+        service.Current.Keybindings = "play-pause=P";
         service.Current.Brightness = 14;
         service.Save();
 
@@ -195,5 +200,6 @@ public class SettingsServiceTests : IDisposable
         Assert.Equal("public", root.GetProperty("updates").GetProperty("channel").GetString());
         Assert.Equal("no", root.GetProperty("video").GetProperty("hwdec").GetString());
         Assert.Equal(14.0, root.GetProperty("video").GetProperty("brightness").GetDouble());
+        Assert.Equal("play-pause=P", root.GetProperty("advanced").GetProperty("keybindings").GetString());
     }
 }
