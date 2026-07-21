@@ -300,7 +300,8 @@ check_no_bundled_glibc() {
 
 run_narrow_width_smoke() {
   local binary="$1"
-  "/workspace/scripts/smoke-linux-narrow-width.sh" "$binary" "$OKP_SMOKE_OUTPUT_DIR"
+  "/workspace/scripts/smoke-linux-narrow-width.sh" \
+    "$binary" "$OKP_SMOKE_OUTPUT_DIR" "$scratch/dark.mkv"
 }
 
 run_fullscreen_smoke() {
@@ -321,6 +322,10 @@ run_portability_smoke() {
 }
 
 ffmpeg -hide_banner -loglevel error -y \
+  -f lavfi -i 'color=c=0x101010:s=640x360:r=2:d=30' \
+  -c:v libx264 -preset ultrafast -tune stillimage -pix_fmt yuv420p -g 4 -an \
+  "$scratch/dark.mkv"
+ffmpeg -hide_banner -loglevel error -y \
   -f lavfi -i 'color=c=white:s=640x360:r=2:d=30' \
   -c:v libx264 -preset ultrafast -tune stillimage -pix_fmt yuv420p -g 4 -an \
   "$scratch/bright.mkv"
@@ -335,8 +340,10 @@ check_no_bundled_glibc /usr/lib/ok-player debian
 check_elf_tree /usr/lib/ok-player
 check_build_marker /usr/bin/ok-player debian
 
-# Run the two package lanes back-to-back three times. Each script owns a fresh
-# D-Bus address, private XDG runtime directory, Xvfb server, and ready Xfwm.
+# Run the two package lanes back-to-back three times. The shared smoke policy
+# gives every attempt fresh XDG config/state/cache/data directories; each script
+# also owns a fresh D-Bus address, private XDG runtime directory, Xvfb server,
+# and ready Xfwm.
 for sequence in 1 2 3; do
   run_portability_smoke run_narrow_width_smoke \
     "sequence-${sequence}-appimage-narrow-width" "$APP_ROOT/usr/bin/ok-player"

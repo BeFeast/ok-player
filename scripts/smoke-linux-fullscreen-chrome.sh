@@ -41,9 +41,11 @@ rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
 set +e
-"$ROOT/scripts/run-linux-isolated-xvfb-session.sh" \
+env __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
+  LIBGL_ALWAYS_SOFTWARE=1 \
+  "$ROOT/scripts/run-linux-isolated-xvfb-session.sh" \
   "$OUT_DIR/xvfb-session.txt" "$OUT_DIR/xvfb.log" \
-  '-screen 0 1280x900x24 -nolisten tcp -extension GLX' \
+  '-screen 0 1280x900x24 -nolisten tcp' \
   "$ROOT/scripts/run-linux-isolated-dbus-session.sh" "$OUT_DIR/dbus-session.txt" \
   bash -s -- "$BINARY" "$OUT_DIR" "$FIXTURE" "$SUBSTRATE" >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
 set -euo pipefail

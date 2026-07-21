@@ -80,9 +80,11 @@ okp_verify_no_linux_glibc_runtime_files() {
   (( failures == 0 ))
 }
 
-# Run one UI smoke in a disposable output directory. Exit 75 is reserved for
-# D-Bus/X/Xfwm session infrastructure, so only that status receives one retry;
-# product assertions and every other command failure return immediately.
+# Run one UI smoke in a disposable output directory and a fresh XDG persistence
+# namespace. Back-to-back package checks must not inherit settings, history, or
+# cached state from an earlier lane. Exit 75 is reserved for D-Bus/X/Xfwm
+# session infrastructure, so only that status receives one retry; product
+# assertions and every other command failure return immediately.
 okp_run_linux_smoke_with_infra_retry() {
   local label="${1:?okp_run_linux_smoke_with_infra_retry requires a label}"
   local output_dir="${2:?okp_run_linux_smoke_with_infra_retry requires an output directory}"
@@ -94,7 +96,7 @@ okp_run_linux_smoke_with_infra_retry() {
   }
 
   local infra_exit_code="${OKP_SESSION_INFRA_EXIT_CODE:-75}"
-  local attempt attempt_dir evidence_dir status
+  local attempt attempt_dir evidence_dir status xdg_dir
   if [[ ! "$infra_exit_code" =~ ^[1-9][0-9]{0,2}$ ]] || (( infra_exit_code > 255 )); then
     echo "OKP_SESSION_INFRA_EXIT_CODE must be an integer from 1 through 255" >&2
     return 2
@@ -104,11 +106,21 @@ okp_run_linux_smoke_with_infra_retry() {
     attempt_dir="${output_dir}-attempt-${attempt}"
     rm -rf -- "$attempt_dir"
     mkdir -p -- "$attempt_dir"
+    xdg_dir="$attempt_dir/.xdg"
+    mkdir -p -- \
+      "$xdg_dir/config" "$xdg_dir/state" "$xdg_dir/cache" "$xdg_dir/data"
 
     set +e
-    OKP_SMOKE_OUTPUT_DIR="$attempt_dir" OKP_SMOKE_ATTEMPT="$attempt" "$@"
+    XDG_CONFIG_HOME="$xdg_dir/config" \
+      XDG_STATE_HOME="$xdg_dir/state" \
+      XDG_CACHE_HOME="$xdg_dir/cache" \
+      XDG_DATA_HOME="$xdg_dir/data" \
+      OKP_SMOKE_OUTPUT_DIR="$attempt_dir" \
+      OKP_SMOKE_ATTEMPT="$attempt" \
+      "$@"
     status=$?
     set -e
+    rm -rf -- "$xdg_dir"
 
     if (( status == 0 )); then
       rm -rf -- "$output_dir"
