@@ -1,10 +1,12 @@
 {
   "checked_at_unix": 1784340047,
+  "source_ci_grace_seconds": 900,
   "max_unpublished_main_lag_seconds": 7200,
   "max_candidate_schedule_age_seconds": 2700,
   "future_skew_seconds": 300,
   "source": {
     "head_sha": "d5d531a58c830a01a7e25615e850593e9ff4493f",
+    "head_committed_at_utc": "2026-07-18T00:30:00Z",
     "workflows": [
       {
         "name": "CI",

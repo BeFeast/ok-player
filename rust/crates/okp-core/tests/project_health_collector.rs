@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
-use okp_core::project_health::ProjectHealthOutcome;
+use okp_core::project_health::{HealthStatus, ProjectHealthOutcome};
 use okp_test_fixtures::unique_temp_dir;
 
 #[test]
@@ -151,6 +151,51 @@ fn windows_candidate_gate_failure_survives_live_collection() {
             "Windows candidate builder failing at gate Run core unit tests (3 consecutive)"
         )
     );
+}
+
+#[test]
+fn source_main_ci_settling_survives_collection_and_remains_fail_safe() {
+    for (scenario, expected_code, expected_status, reason) in [
+        (
+            "source-ci-settling",
+            Some(0),
+            HealthStatus::Warning,
+            "source/main CI is settling",
+        ),
+        (
+            "source-ci-overdue",
+            Some(1),
+            HealthStatus::Fail,
+            "exceeding 900s grace",
+        ),
+        (
+            "source-ci-failed",
+            Some(1),
+            HealthStatus::Fail,
+            "CI is completed/failure",
+        ),
+    ] {
+        let output = run_live(scenario);
+        assert_eq!(
+            output.status.code(),
+            expected_code,
+            "{scenario}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let outcome: ProjectHealthOutcome =
+            serde_json::from_slice(&output.stdout).expect("collector should emit outcome JSON");
+        let source = outcome
+            .checks
+            .iter()
+            .find(|check| check.name == "source-main-ci")
+            .expect("source/main check");
+        assert_eq!(source.status, expected_status, "{scenario}");
+        assert!(
+            source.summary.contains(reason)
+                || source.details.iter().any(|detail| detail.contains(reason)),
+            "{scenario}: {source:?}"
+        );
+    }
 }
 
 #[test]
@@ -434,7 +479,24 @@ if [[ "${1:-}" == run && "${2:-}" == list ]]; then
       printf '[{"databaseId":200,"headSha":"%s","event":"schedule","status":"completed","conclusion":"success","updatedAt":"2026-07-18T01:55:47Z","url":"https://example.invalid/run/windows-candidate"}]\n' "$main_sha"
     fi
   else
-    printf '[{"workflowName":"%s","headSha":"%s","event":"push","status":"completed","conclusion":"success","url":"https://example.invalid/run"}]\n' "$workflow" "$main_sha"
+    workflow_sha="$main_sha"
+    status="completed"
+    conclusion="success"
+    if [[ "$OKP_STUB_FAIL" == source-ci-settling ]]; then
+      if [[ "$workflow" == CI ]]; then
+        status="in_progress"
+        conclusion=""
+      else
+        workflow_sha="1111111111111111111111111111111111111111"
+      fi
+    elif [[ "$OKP_STUB_FAIL" == source-ci-overdue ]]; then
+      status="in_progress"
+      conclusion=""
+    elif [[ "$OKP_STUB_FAIL" == source-ci-failed && "$workflow" == CI ]]; then
+      conclusion="failure"
+    fi
+    printf '[{"workflowName":"%s","headSha":"%s","event":"push","status":"%s","conclusion":"%s","url":"https://example.invalid/run"}]\n' \
+      "$workflow" "$workflow_sha" "$status" "$conclusion"
   fi
   exit 0
 fi
@@ -465,7 +527,11 @@ case "$endpoint" in
   repos/*/commits/main)
     main_sha="d5d531a58c830a01a7e25615e850593e9ff4493f"
     [[ "$OKP_STUB_FAIL" != schedule-stale ]] || main_sha="1111111111111111111111111111111111111111"
-    printf '{"sha":"%s","commit":{"committer":{"date":"2026-07-18T00:30:00Z"}}}\n' "$main_sha"
+    main_committed_at="2026-07-18T00:30:00Z"
+    if [[ "$OKP_STUB_FAIL" == source-ci-settling || "$OKP_STUB_FAIL" == source-ci-failed ]]; then
+      main_committed_at="2026-07-18T01:59:47Z"
+    fi
+    printf '{"sha":"%s","commit":{"committer":{"date":"%s"}}}\n' "$main_sha" "$main_committed_at"
     ;;
   repos/*/commits/d5d531a58c830a01a7e25615e850593e9ff4493f)
     printf '%s\n' '{"commit":{"committer":{"date":"2026-07-18T00:30:00Z"}}}'
