@@ -115,6 +115,8 @@ assert app["sources"][1] == {
     "path": app_patch_path.name,
 }
 assert app_patch_path.is_file()
+assert "diff --git a/THIRD-PARTY-NOTICES.md b/THIRD-PARTY-NOTICES.md" in app_patch
+assert "source-built rendering library in the Flatpak beta" in app_patch
 index_lines = [
     line for line in app_patch_path.read_text().splitlines() if line.startswith("index ")
 ]
@@ -171,6 +173,7 @@ git -C "$ROOT" cat-file -e "${app_commit}^{tree}"
 expected_patch="$(mktemp)"
 trap 'rm -f "$expected_patch"' EXIT
 git -C "$ROOT" diff --full-index --binary --no-ext-diff "$app_commit" -- \
+  THIRD-PARTY-NOTICES.md \
   rust/crates/okp-core/src/lib.rs \
   rust/crates/okp-core/src/linux_renderer.rs \
   rust/crates/okp-core/src/playback_failure.rs \

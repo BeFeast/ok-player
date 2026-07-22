@@ -18,8 +18,8 @@ permanent `main` commit and receives the checked-in Flatpak integration patch,
 so the manifest can move directly to the external Flathub repository without a
 branch or local-directory source. The manifest smoke check regenerates that
 patch from the pinned commit and compares it byte-for-byte with the checked-in
-copy, preventing the packaged source from drifting from the reviewed Rust
-files. Cargo dependencies are expanded from
+copy, preventing the packaged source and installed third-party notices from
+drifting from the reviewed runtime files. Cargo dependencies are expanded from
 `rust/Cargo.lock` into `rust/packaging/flatpak/cargo-sources.json`; every crate
 has a checksum and Cargo runs with `--offline --locked`. The build script first
 downloads declared sources and then rebuilds with `--disable-download`, so an
