@@ -13,6 +13,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Night GUI QA driver policy tests
+        run: ./scripts/tests/ok-player-night-gui-qa.Tests.sh
+
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
