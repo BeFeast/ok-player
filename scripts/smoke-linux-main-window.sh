@@ -442,8 +442,12 @@ close_app() {
   # Prefer ICCCM WM_DELETE_WINDOW over a synthetic Alt+F4. After minimize +
   # secondary present, Alt+F4 can miss the undecorated player under Xfwm/Xvfb
   # while the window stays IsViewable and the candidate gate fails.
-  if ! xdotool windowclose "$window_id" 2>/dev/null; then
-    xdotool key --window "$window_id" --clearmodifiers alt+F4
+  # windowclose returns once the async WM request is queued — still fall back
+  # to Alt+F4 if the shell remains mapped (minimize + secondary present).
+  xdotool windowclose "$window_id" 2>/dev/null || true
+  sleep 0.2
+  if xdotool getwindowgeometry "$window_id" >/dev/null 2>&1; then
+    xdotool key --window "$window_id" --clearmodifiers alt+F4 || true
   fi
 
   local diagnostics="$OUT_DIR/close-${closed_pid}-lifecycle.log"
