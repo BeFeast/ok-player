@@ -107,6 +107,97 @@ fn player_window_drag_smoke_covers_survival_cancel_and_recovery() {
 }
 
 #[test]
+fn linux_regression_suite_combines_drag_and_fit_without_an_operator_seat() {
+    let script = include_str!("../../../../scripts/run-linux-regression-smokes.sh");
+    assert!(script.contains("smoke-linux-window-drag.sh"));
+    assert!(script.contains("run-linux-window-fit-series.sh"));
+    assert!(script.contains("operator_seat_required=false"));
+    assert!(script.contains("live_dual_head_hardware_proven=false"));
+    assert!(script.contains("OKP_LINUX_REGRESSION_SOURCE_SHA"));
+    assert!(script.contains("OKP_LINUX_REGRESSION_RUNNER_LABEL"));
+    assert!(script.contains("completed_consecutive_runs=3"));
+    assert!(!script.to_ascii_lowercase().contains("sindri"));
+
+    let docs = include_str!("../../../../docs/linux-regression-smokes.md");
+    assert!(docs.contains("OKP_LINUX_NIGHT_GUI_HOSTS"));
+    assert!(docs.contains("OKP_LINUX_REGRESSION_RUNNER_LABEL"));
+    assert!(docs.contains("cargo test --workspace"));
+}
+
+#[test]
+fn linux_regression_suite_runs_both_gates_and_binds_their_evidence() {
+    let root = unique_temp_dir("okp-linux-regression-suite");
+    let drag = root.path().join("drag.sh");
+    let fit = root.path().join("fit.sh");
+    let output = root.path().join("evidence");
+    let invocations = root.path().join("invocations.txt");
+    write_executable(&drag, FAKE_DRAG_SMOKE);
+    write_executable(&fit, FAKE_FIT_SMOKE);
+
+    let result = Command::new("bash")
+        .arg(linux_regression_suite())
+        .arg("/bin/true")
+        .arg(&output)
+        .env("OKP_LINUX_WINDOW_DRAG_SMOKE", &drag)
+        .env("OKP_LINUX_WINDOW_FIT_SERIES", &fit)
+        .env(
+            "OKP_LINUX_REGRESSION_SOURCE_SHA",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .env("OKP_LINUX_REGRESSION_RUNNER_LABEL", "ci-headless-1")
+        .env("OKP_TEST_INVOCATIONS", &invocations)
+        .output()
+        .expect("Linux regression suite should run");
+
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(fs::read_to_string(invocations).unwrap(), "drag\nfit\n");
+    let evidence = fs::read_to_string(output.join("suite-evidence.txt")).unwrap();
+    assert!(evidence.contains("source_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+    assert!(evidence.contains("runner_label=ci-headless-1"));
+    assert!(evidence.contains("gate=window-drag status=pass evidence_sha256="));
+    assert!(evidence.contains("gate=window-fit status=pass evidence_sha256="));
+    assert!(evidence.contains("suite_status=pass"));
+}
+
+#[test]
+fn linux_regression_suite_does_not_run_fit_after_drag_failure() {
+    let root = unique_temp_dir("okp-linux-regression-suite-failure");
+    let drag = root.path().join("drag.sh");
+    let fit = root.path().join("fit.sh");
+    let output = root.path().join("evidence");
+    let invocations = root.path().join("invocations.txt");
+    write_executable(
+        &drag,
+        "#!/usr/bin/env bash\nprintf 'drag\\n' >>\"$OKP_TEST_INVOCATIONS\"\nexit 23\n",
+    );
+    write_executable(&fit, FAKE_FIT_SMOKE);
+
+    let result = Command::new("bash")
+        .arg(linux_regression_suite())
+        .arg("/bin/true")
+        .arg(&output)
+        .env("OKP_LINUX_WINDOW_DRAG_SMOKE", &drag)
+        .env("OKP_LINUX_WINDOW_FIT_SERIES", &fit)
+        .env(
+            "OKP_LINUX_REGRESSION_SOURCE_SHA",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        )
+        .env("OKP_TEST_INVOCATIONS", &invocations)
+        .output()
+        .expect("failing Linux regression suite should run");
+
+    assert_eq!(result.status.code(), Some(23));
+    assert_eq!(fs::read_to_string(invocations).unwrap(), "drag\n");
+    let evidence = fs::read_to_string(output.join("suite-evidence.txt")).unwrap();
+    assert!(evidence.contains("gate=window-drag status=fail exit_status=23"));
+    assert!(evidence.contains("suite_status=fail"));
+}
+
+#[test]
 fn narrow_width_portability_capture_uses_a_long_lived_dark_fixture() {
     let narrow = include_str!("../../../../scripts/smoke-linux-narrow-width.sh");
     assert!(narrow.contains("FIXTURE=\"${3:-}\""));
@@ -148,6 +239,12 @@ fn assert_clean_evidence(evidence: &str) {
     assert!(evidence.contains("xvfb_alive_before_teardown=true"));
     assert!(evidence.contains("xvfb_teardown=clean"));
     assert!(evidence.contains("status=pass"));
+}
+
+fn linux_regression_suite() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .join("scripts/run-linux-regression-smokes.sh")
 }
 
 struct XvfbFixture {
@@ -224,4 +321,26 @@ printf '%s\n' "$BASHPID" >>"$FAKE_XVFB_PIDS"
 while :; do
   sleep 1
 done
+"#;
+
+const FAKE_DRAG_SMOKE: &str = r#"#!/usr/bin/env bash
+set -euo pipefail
+printf 'drag\n' >>"$OKP_TEST_INVOCATIONS"
+mkdir -p "$2"
+printf '%s\n' \
+  'video_surface_handoff_survival=pass' \
+  'compositor_cancel_survival=pass' \
+  'post_cancel_drag=pass' \
+  'idle_canvas_handoff_survival=pass' \
+  'fatal_diagnostics=absent' >"$2/results.txt"
+"#;
+
+const FAKE_FIT_SMOKE: &str = r#"#!/usr/bin/env bash
+set -euo pipefail
+printf 'fit\n' >>"$OKP_TEST_INVOCATIONS"
+mkdir -p "$2"
+printf '%s\n' \
+  "source_sha=$OKP_WINDOW_FIT_SOURCE_SHA" \
+  'completed_consecutive_runs=3' \
+  'status=pass' >"$2/series-evidence.txt"
 "#;
