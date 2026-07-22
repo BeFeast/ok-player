@@ -68,10 +68,27 @@ fn file_association_launches_present_before_media_delivery() {
     assert!(bridge.contains("mark_startup_window_mapped"));
     assert!(bridge.contains("mark_startup_player_ready"));
     assert!(bridge.contains("delivering after map and player readiness"));
+}
 
+#[test]
+fn player_close_returns_to_gtk_before_mpv_teardown() {
     let keyboard = include_str!("keyboard.rs");
-    assert!(keyboard.contains("mpv.stop()"));
-    assert!(keyboard.contains("close_app.quit()"));
+    let close_handler = keyboard
+        .split("window.connect_close_request")
+        .nth(1)
+        .and_then(|source| source.split("glib::Propagation::Proceed").next())
+        .expect("main-window close handler");
+
+    assert!(close_handler.contains("close_companion_windows"));
+    assert!(close_handler.contains("save_current_progress"));
+    assert!(close_handler.contains("close_app.quit()"));
+    assert!(close_handler.contains("glib::idle_add_local_once"));
+    for forbidden in [".mpv", "with_mpv(", "mpv.stop("] {
+        assert!(
+            !close_handler.contains(forbidden),
+            "close_request must not enter libmpv before GTK can destroy the window: {forbidden}"
+        );
+    }
 }
 
 #[test]
