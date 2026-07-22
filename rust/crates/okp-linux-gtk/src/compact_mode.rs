@@ -495,6 +495,7 @@ pub(crate) fn connect_compact_video_interactions(
     let drag = gtk::GestureDrag::new();
     drag.set_button(gdk::BUTTON_PRIMARY);
     let drag_window = window.clone();
+    let drag_video = video.clone();
     let drag_started = Rc::new(Cell::new(false));
     let update_started = Rc::clone(&drag_started);
     drag.connect_drag_update(move |gesture, offset_x, offset_y| {
@@ -504,27 +505,11 @@ pub(crate) fn connect_compact_video_interactions(
         {
             return;
         }
-        let Some(device) = gesture.current_event_device() else {
-            return;
-        };
-        let Some(surface) = drag_window.surface() else {
-            return;
-        };
-        let Ok(toplevel) = surface.downcast::<gdk::Toplevel>() else {
-            return;
-        };
-        let Some((x, y)) = gesture.bounding_box_center() else {
-            return;
-        };
         update_started.set(true);
-        gesture.set_state(gtk::EventSequenceState::Claimed);
-        toplevel.begin_move(
-            &device,
-            gesture.current_button() as i32,
-            x,
-            y,
-            gesture.current_event_time(),
-        );
+        if !begin_native_window_move_from_drag(gesture, &drag_video, &drag_window) {
+            update_started.set(false);
+            return;
+        }
         if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
             eprintln!("interaction: compact-mode-drag");
         }
