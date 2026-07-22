@@ -496,6 +496,28 @@ geometry_value() {
   awk -v label="$label" '$1 == label ":" { print $2; exit }' "$file"
 }
 
+absolute_window_geometry() {
+  local file="$1"
+  awk -F': +' '
+    /Absolute upper-left X:/ { x=$2 }
+    /Absolute upper-left Y:/ { y=$2 }
+    /^  Width:/ { w=$2 }
+    /^  Height:/ { h=$2 }
+    END { printf "x=%s,y=%s,w=%s,h=%s", x, y, w, h }
+  ' "$file"
+}
+
+assert_monitor_fit_log() {
+  local file="$1" label="$2"
+  if ! rg -q \
+    'window fit request: .* monitor=[^[:space:]]+ monitor_geometry=[0-9]+x[0-9]+\+[-0-9]+,[-0-9]+ workarea=[0-9]+x[0-9]+\+[-0-9]+,[-0-9]+ window=[0-9]+x[0-9]+\+[-0-9]+,[-0-9]+' \
+    "$file"; then
+    echo "$label did not record monitor-bound x/y/w/h fit geometry" >&2
+    cat "$file" >&2
+    exit 1
+  fi
+}
+
 wait_for_log() {
   local file="$1" pattern="$2"
   for _ in $(seq 1 50); do
@@ -569,6 +591,7 @@ for expected in \
   fi
 done
 assert_single_initial_configure "$OUT_DIR/fit-small-app.log" "Small video"
+assert_monitor_fit_log "$OUT_DIR/fit-small-app.log" "Small video"
 
 # Playback and the original render context remain live through initial sizing
 # and ordinary seek input. The 24-second fixture accepts +10 then -10 without
@@ -631,6 +654,28 @@ if [[ "$secondary_presented" != "1" ]]; then
   cat "$OUT_DIR/fit-small-app.log" >&2
   exit 1
 fi
+sleep 1
+xwininfo -id "$small_id" >"$OUT_DIR/fit-secondary-present-window.xwininfo"
+secondary_x="$(awk -F': +' '/Absolute upper-left X:/ {print $2; exit}' \
+  "$OUT_DIR/fit-secondary-present-window.xwininfo")"
+secondary_y="$(awk -F': +' '/Absolute upper-left Y:/ {print $2; exit}' \
+  "$OUT_DIR/fit-secondary-present-window.xwininfo")"
+secondary_width="$(geometry_value "$OUT_DIR/fit-secondary-present-window.xwininfo" Width)"
+secondary_height="$(geometry_value "$OUT_DIR/fit-secondary-present-window.xwininfo" Height)"
+if (( secondary_x < 0 || secondary_y < 0 \
+  || secondary_x + secondary_width > 1280 \
+  || secondary_y + secondary_height > 900 )); then
+  echo "Secondary present escaped the active monitor: ${secondary_width}x${secondary_height}+${secondary_x},${secondary_y}" >&2
+  exit 1
+fi
+secondary_monitor_fit_count="$(rg -c \
+  '^window fit request: .* monitor=[^[:space:]]+ .* workarea=1280x900' \
+  "$OUT_DIR/fit-small-app.log" || true)"
+if (( secondary_monitor_fit_count < 2 )); then
+  echo "Secondary present did not fit against the active monitor workarea" >&2
+  cat "$OUT_DIR/fit-small-app.log" >&2
+  exit 1
+fi
 primary_window_count=0
 while IFS= read -r candidate; do
   [[ -n "$candidate" ]] || continue
@@ -654,6 +699,10 @@ if [[ "$launch_count" != "2" ]]; then
   exit 1
 fi
 printf 'secondary_launch=pass\nsecondary_presented=pass\nsingle_instance=pass\n' \
+  >>"$OUT_DIR/fit-evidence.txt"
+printf 'secondary_window=%s\nsecondary_monitor_fit_count=%s\nsecondary_monitor_fit=pass\n' \
+  "$(absolute_window_geometry "$OUT_DIR/fit-secondary-present-window.xwininfo")" \
+  "$secondary_monitor_fit_count" \
   >>"$OUT_DIR/fit-evidence.txt"
 close_app "$small_id"
 
@@ -767,6 +816,7 @@ if ! rg -q "workarea=1024x768" "$OUT_DIR/fit-4k-right-monitor-app.log"; then
   exit 1
 fi
 assert_single_initial_configure "$OUT_DIR/fit-4k-right-monitor-app.log" "4K video"
+assert_monitor_fit_log "$OUT_DIR/fit-4k-right-monitor-app.log" "4K video"
 xdotool windowsize "$right_id" 700 500
 sleep 1
 activate_fit_window_command "$right_id"
@@ -779,15 +829,26 @@ if (( explicit_4k_width < 958 || explicit_4k_width > 964 || explicit_4k_height <
 fi
 stop_app
 
+small_window_geometry="$(absolute_window_geometry "$OUT_DIR/fit-small-window.xwininfo")"
+fit_1080p_window_geometry="$(absolute_window_geometry "$OUT_DIR/fit-1080p-window.xwininfo")"
+fit_4k_window_geometry="$(absolute_window_geometry "$OUT_DIR/fit-4k-right-monitor-window.xwininfo")"
+small_monitor_fit="$(rg -m1 '^window fit request:' "$OUT_DIR/fit-small-app.log")"
+fit_4k_monitor_fit="$(rg -m1 '^window fit request:' "$OUT_DIR/fit-4k-right-monitor-app.log")"
+
 cat >>"$OUT_DIR/fit-evidence.txt" <<EOF
 maximized_guard=pass
 maximized_explicit_fit=${explicit_max_width}x${explicit_max_height}
 fullscreen_guard=pass
 fullscreen_explicit_fit=${explicit_fullscreen_width}x${explicit_fullscreen_height}
 small_geometry=${small_width}x${small_height}
+small_window=${small_window_geometry}
+small_monitor_fit=${small_monitor_fit}
 1080p_geometry=${fit_1080p_width}x${fit_1080p_height}
+1080p_window=${fit_1080p_window_geometry}
 vertical_geometry=${vertical_width}x${vertical_height}
 4k_geometry=${fit_width}x${fit_height}
+4k_window=${fit_4k_window_geometry}
+4k_monitor_fit=${fit_4k_monitor_fit}
 initial_fit_configures_per_geometry=1
 4k_explicit_fit=${explicit_4k_width}x${explicit_4k_height}
 explicit_fit_dispatch=pass
