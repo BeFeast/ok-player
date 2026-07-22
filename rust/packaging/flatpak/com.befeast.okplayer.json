@@ -69,7 +69,7 @@
                 {
                     "type": "git",
                     "url": "https://github.com/BeFeast/ok-player.git",
-                    "commit": "06892d6269ead521bb4e36bf81e80fc280d47042"
+                    "commit": "cc70fc65618455df9776973405568dcbd33e5f5f"
                 },
                 {
                     "type": "patch",

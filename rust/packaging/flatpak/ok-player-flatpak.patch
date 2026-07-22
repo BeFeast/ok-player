@@ -718,7 +718,7 @@ index bd7e24d8f2a795304566db3768171d793bdc45d6..2b523d933a475195864c35c9f4b06126
 +    }
  }
 diff --git a/rust/crates/okp-linux-gtk/src/tests.rs b/rust/crates/okp-linux-gtk/src/tests.rs
-index f1565b17e058ae81fdf2f9e9763c5d6c355b7c64..e4921e11267717ac1bce292de977fb759375630e 100644
+index b1b73335ca84acb2a6040974afaf3d2e0c36d4f3..0fbbe85eaafd84c8c5925eb28caec5655a9ab625 100644
 --- a/rust/crates/okp-linux-gtk/src/tests.rs
 +++ b/rust/crates/okp-linux-gtk/src/tests.rs
 @@ -30,6 +30,26 @@ fn renderer_environment_is_selected_before_gtk_initialization() {
@@ -858,7 +858,7 @@ index f1565b17e058ae81fdf2f9e9763c5d6c355b7c64..e4921e11267717ac1bce292de977fb75
  fn benign_eof_keeps_the_normal_playlist_path_available() {
      let state = Rc::new(RefCell::new(PlayerState {
 diff --git a/rust/crates/okp-linux-gtk/src/track_popovers.rs b/rust/crates/okp-linux-gtk/src/track_popovers.rs
-index 9c4757422fbde52db9eb54939ad1bd89f801b729..9fd5e624a075c3c612f5c5120cf965f0b8b4bfa5 100644
+index 1b4626754d292a6a3ccbb901c4df6262df5a433b..39c885cef757e5ca6b1915b781324698cb6b26a2 100644
 --- a/rust/crates/okp-linux-gtk/src/track_popovers.rs
 +++ b/rust/crates/okp-linux-gtk/src/track_popovers.rs
 @@ -2457,6 +2457,12 @@ pub(crate) fn drain_mpv_events(
@@ -888,9 +888,9 @@ index 9c4757422fbde52db9eb54939ad1bd89f801b729..9fd5e624a075c3c612f5c5120cf965f0
 +                    state.media_load_state = network_media::MediaLoadState::Playing;
 +                    state.last_load_diagnostic = None;
 +                }
-             }
-             MpvEvent::VideoReconfig { video_dimensions } => {
-                 auto_fit_dimensions = auto_fit_dimensions.or(video_dimensions);
+                 if env::var_os("OKP_DEBUG_IDLE_RETURN_SMOKE").is_some() {
+                     eprintln!("idle-return-smoke: file-loaded");
+                 }
 diff --git a/rust/crates/okp-linux-gtk/src/updates.rs b/rust/crates/okp-linux-gtk/src/updates.rs
 index 12f1afb18d2b443f774f0ee7380a805a4e015165..24995d928a71a0119ff3a4cf314320dbd05258f4 100644
 --- a/rust/crates/okp-linux-gtk/src/updates.rs
