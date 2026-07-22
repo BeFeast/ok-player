@@ -1246,11 +1246,19 @@ pub(crate) fn connect_state_poll(
         if has_media {
             empty_surface.clear_preview_substrate();
         }
+        let failed = state.borrow().media_load_state == network_media::MediaLoadState::Failed;
+        let idle_surface_hidden = has_media || failed || lyrics_surface.is_preview_frozen();
+        // Welcome/History owns its poster controller only while it owns the window. Continuing
+        // to refresh it behind loading or playback can leave ffmpeg work (and its pipes) alive
+        // through a local open and the following EOF transition.
+        if idle_surface_hidden {
+            thumbnails::suspend_poster_generation();
+        } else {
+            empty_surface.refresh(&window, &state, Rc::clone(&status_toast));
+        }
         // Hide the welcome surface behind an active lyrics preview so the fixture reads cleanly;
         // in production the loaded audio already hides it (`is_preview_frozen` stays false).
-        empty_surface.refresh(&window, &state, Rc::clone(&status_toast));
-        let failed = state.borrow().media_load_state == network_media::MediaLoadState::Failed;
-        empty_surface.set_has_media(has_media || failed || lyrics_surface.is_preview_frozen());
+        empty_surface.set_has_media(idle_surface_hidden);
         lyrics_surface.update(&state);
         drain_thumbnail_events(&controls, &state);
         update_up_next_panel(&controls, &state, &chrome);

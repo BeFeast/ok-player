@@ -3,12 +3,14 @@ use std::collections::{HashSet, VecDeque};
 use std::env;
 use std::fs;
 use std::hash::{Hash, Hasher};
+use std::io::{self, Read};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, mpsc::Sender};
 use std::thread;
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, UNIX_EPOCH};
 
 use okp_core::image_luma;
 use okp_core::poster_frame::{
@@ -368,14 +370,82 @@ struct PosterJob {
     sentinel: PathBuf,
 }
 
-/// A cheap, cloneable shutdown signal handed to the worker's processor so a long sampling run
-/// can bail promptly when the shelf is dropped.
+#[derive(Default)]
+struct PosterController {
+    generation: AtomicU64,
+    shutdown: AtomicBool,
+    active_child: Mutex<Option<u32>>,
+}
+
+/// A cheap, cloneable lifecycle token handed to the worker's processor so a long sampling run
+/// can bail promptly when playback supersedes the idle surface or the shelf shuts down.
 #[derive(Clone)]
-struct PosterCancel(Arc<AtomicBool>);
+struct PosterCancel {
+    controller: Arc<PosterController>,
+    generation: u64,
+}
 
 impl PosterCancel {
     fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Relaxed)
+        self.controller.shutdown.load(Ordering::Acquire)
+            || self.controller.generation.load(Ordering::Acquire) != self.generation
+    }
+
+    fn register_child(&self, pid: u32) {
+        *self
+            .controller
+            .active_child
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(pid);
+    }
+
+    fn try_wait_child(&self, child: &mut Child) -> io::Result<Option<ExitStatus>> {
+        let pid = child.id();
+        let mut active = self
+            .controller
+            .active_child
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if *active == Some(pid) {
+                    *active = None;
+                }
+                Ok(Some(status))
+            }
+            Ok(None) => Ok(None),
+            Err(error) => {
+                if *active == Some(pid) {
+                    *active = None;
+                }
+                Err(error)
+            }
+        }
+    }
+}
+
+impl PosterController {
+    fn token(self: &Arc<Self>) -> PosterCancel {
+        PosterCancel {
+            controller: Arc::clone(self),
+            generation: self.generation.load(Ordering::Acquire),
+        }
+    }
+
+    fn cancel_active(&self) {
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        let active = self
+            .active_child
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(pid) = *active {
+            // The worker still owns and reaps this one registered child; the signal only
+            // interrupts its blocking decoder promptly. Holding the registration lock through
+            // kill prevents a reaped PID from being reused between lookup and signal delivery.
+            unsafe {
+                libc::kill(pid as libc::pid_t, libc::SIGKILL);
+            }
+        }
     }
 }
 
@@ -389,6 +459,8 @@ struct PosterQueue {
     /// loop). It is in-memory only, so a genuinely transient failure still retries next launch,
     /// while a durable black-film verdict is remembered by the on-disk sentinel across launches.
     done: HashSet<String>,
+    in_flight: Option<String>,
+    suspended: bool,
     shutdown: bool,
 }
 
@@ -403,7 +475,7 @@ struct PosterShared {
 pub(crate) struct PosterShelf {
     dir: PathBuf,
     shared: Arc<PosterShared>,
-    cancel: Arc<AtomicBool>,
+    controller: Arc<PosterController>,
 }
 
 impl PosterShelf {
@@ -422,12 +494,12 @@ impl PosterShelf {
             state: Mutex::new(PosterQueue::default()),
             wake: Condvar::new(),
         });
-        let cancel = Arc::new(AtomicBool::new(false));
+        let controller = Arc::new(PosterController::default());
         let worker_shared = Arc::clone(&shared);
-        let worker_cancel = PosterCancel(Arc::clone(&cancel));
+        let worker_controller = Arc::clone(&controller);
         thread::spawn(move || {
             loop {
-                let job = {
+                let (job, worker_cancel) = {
                     let mut state = worker_shared
                         .state
                         .lock()
@@ -441,27 +513,67 @@ impl PosterShelf {
                     if state.shutdown {
                         return;
                     }
-                    state
+                    let job = state
                         .pending
                         .pop_front()
-                        .expect("pending job checked above")
+                        .expect("pending job checked above");
+                    state.in_flight = Some(poster_key_of(&job));
+                    let cancel = worker_controller.token();
+                    (job, cancel)
                 };
 
                 process(&job, &worker_cancel);
+                let cancelled = worker_cancel.is_cancelled();
 
                 let mut state = worker_shared
                     .state
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
                 state.active.remove(&poster_key_of(&job));
-                state.done.insert(poster_key_of(&job));
+                state.in_flight = None;
+                if !cancelled {
+                    state.done.insert(poster_key_of(&job));
+                }
             }
         });
 
         Self {
             dir,
             shared,
-            cancel,
+            controller,
+        }
+    }
+
+    /// Retire all Welcome/History work while another player surface owns the window. Returning
+    /// to idle resumes the queue, and unfinished rows are eligible for projection again.
+    fn suspend(&self) {
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.suspended || state.shutdown {
+            return;
+        }
+        state.suspended = true;
+        state.pending.clear();
+        let in_flight = state.in_flight.clone();
+        state
+            .active
+            .retain(|key| in_flight.as_ref().is_some_and(|active| active == key));
+        // Invalidate the worker token before releasing the queue lock so a fast idle resume
+        // cannot admit a new job into the generation being retired.
+        self.controller.cancel_active();
+    }
+
+    fn resume(&self) {
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !state.shutdown {
+            state.suspended = false;
         }
     }
 
@@ -534,7 +646,11 @@ impl PosterShelf {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if state.shutdown || state.active.contains(&key) || state.done.contains(&key) {
+        if state.shutdown
+            || state.suspended
+            || state.active.contains(&key)
+            || state.done.contains(&key)
+        {
             return;
         }
         state.active.insert(key);
@@ -545,7 +661,8 @@ impl PosterShelf {
 
 impl Drop for PosterShelf {
     fn drop(&mut self) {
-        self.cancel.store(true, Ordering::Relaxed);
+        self.controller.shutdown.store(true, Ordering::Release);
+        self.controller.cancel_active();
         let mut state = self
             .shared
             .state
@@ -560,15 +677,25 @@ impl Drop for PosterShelf {
 /// The process-wide shelf. Lazily started on first idle projection, so the worker thread and
 /// its cache directory come from the environment in effect at first use (the smokes set
 /// `XDG_CACHE_HOME` before launch).
+static POSTER_SHELF: OnceLock<PosterShelf> = OnceLock::new();
+
 fn poster_shelf() -> &'static PosterShelf {
-    static SHELF: OnceLock<PosterShelf> = OnceLock::new();
-    SHELF.get_or_init(|| PosterShelf::production(poster_cache_dir()))
+    POSTER_SHELF.get_or_init(|| PosterShelf::production(poster_cache_dir()))
 }
 
 /// Fill the rows' posters from the cache and enqueue any missing generations. The single entry
 /// point both idle surfaces call so they share one cached result and one crop/selection policy.
 pub(crate) fn project_posters(items: &mut [HistoryItem], private_session: bool) {
-    poster_shelf().project(items, private_session);
+    let shelf = poster_shelf();
+    shelf.resume();
+    shelf.project(items, private_session);
+}
+
+/// Stop idle-only poster work as soon as loading/playback/error content replaces Welcome.
+pub(crate) fn suspend_poster_generation() {
+    if let Some(shelf) = POSTER_SHELF.get() {
+        shelf.suspend();
+    }
 }
 
 fn poster_cache_dir() -> PathBuf {
@@ -619,7 +746,7 @@ fn process_poster(job: &PosterJob, cancel: &PosterCancel) {
         if cancel.is_cancelled() {
             return; // shutting down — do not cache a verdict from a half-finished sampling run
         }
-        if let Some(luma) = decode_frame_luma(&job.media_path, offset) {
+        if let Some(luma) = decode_frame_luma(&job.media_path, offset, cancel) {
             scorer.observe(offset, luma);
             if scorer.is_satisfied() {
                 break;
@@ -629,8 +756,7 @@ fn process_poster(job: &PosterJob, cancel: &PosterCancel) {
 
     match scorer.verdict() {
         PosterVerdict::Usable { offset, .. } => {
-            // Reuse the atomic (tmp + rename) JPEG writer the hover/chapter path already uses.
-            let _ = generate_thumbnail(&job.media_path, offset, &job.poster);
+            let _ = generate_poster_thumbnail(&job.media_path, offset, &job.poster, cancel);
         }
         PosterVerdict::Unusable => write_poster_sentinel(&job.sentinel),
         PosterVerdict::NoFrame => { /* transient — leave the cache clean and retry next launch */
@@ -641,13 +767,14 @@ fn process_poster(job: &PosterJob, cancel: &PosterCancel) {
 /// Mean luma (0–255) of a single frame at `seconds`, decoded to a small raw BGRA buffer by
 /// ffmpeg and scored by the shared [`image_luma`] policy. Input-side `-ss` gives a fast
 /// keyframe seek, which is plenty accurate for a poster. Returns `None` when nothing decodes.
-fn decode_frame_luma(media_path: &Path, seconds: f64) -> Option<f64> {
+fn decode_frame_luma(media_path: &Path, seconds: f64, cancel: &PosterCancel) -> Option<f64> {
     if !seconds.is_finite() || seconds < 0.0 {
         return None;
     }
     let timestamp = format!("{:.3}", seconds.max(0.0));
     let filter = format!("scale={POSTER_SCORE_WIDTH}:{POSTER_SCORE_HEIGHT}");
-    let output = Command::new("ffmpeg")
+    let mut command = Command::new("ffmpeg");
+    command
         .arg("-hide_banner")
         .arg("-loglevel")
         .arg("error")
@@ -663,16 +790,131 @@ fn decode_frame_luma(media_path: &Path, seconds: f64) -> Option<f64> {
         .arg("rawvideo")
         .arg("-pix_fmt")
         .arg("bgra")
-        .arg("-")
-        .output()
-        .ok()?;
-    if !output.status.success() || output.stdout.is_empty() {
+        .arg("-");
+    let output = run_poster_command_with_output(&mut command, cancel)?;
+    if output.is_empty() {
         return None;
     }
-    Some(image_luma::mean_bgra(
-        &output.stdout,
-        image_luma::DEFAULT_STRIDE,
-    ))
+    Some(image_luma::mean_bgra(&output, image_luma::DEFAULT_STRIDE))
+}
+
+fn generate_poster_thumbnail(
+    media_path: &Path,
+    seconds: f64,
+    output: &Path,
+    cancel: &PosterCancel,
+) -> bool {
+    if !seconds.is_finite() || seconds < 0.0 || cancel.is_cancelled() {
+        return false;
+    }
+
+    let tmp = output.with_extension("tmp.jpg");
+    let timestamp = format!("{:.3}", seconds.max(0.0));
+    let filter = format!(
+        "scale={THUMB_WIDTH}:{THUMB_HEIGHT}:force_original_aspect_ratio=increase,crop={THUMB_WIDTH}:{THUMB_HEIGHT}"
+    );
+    let mut command = Command::new("ffmpeg");
+    command
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-y")
+        .arg("-ss")
+        .arg(&timestamp)
+        .arg("-i")
+        .arg(media_path)
+        .arg("-frames:v")
+        .arg("1")
+        .arg("-vf")
+        .arg(filter)
+        .arg("-q:v")
+        .arg("4")
+        .arg(&tmp);
+
+    match run_poster_command(&mut command, cancel) {
+        Some(status) if status.success() && !cancel.is_cancelled() => {
+            fs::rename(&tmp, output).is_ok()
+        }
+        Some(status) => {
+            if !cancel.is_cancelled() {
+                eprintln!("ffmpeg poster generation failed with status {status}");
+            }
+            let _ = fs::remove_file(&tmp);
+            false
+        }
+        None => {
+            let _ = fs::remove_file(&tmp);
+            false
+        }
+    }
+}
+
+fn run_poster_command_with_output(command: &mut Command, cancel: &PosterCancel) -> Option<Vec<u8>> {
+    let mut child = spawn_poster_command(command, Stdio::piped(), cancel).ok()?;
+    let mut stdout = child.stdout.take()?;
+    let reader = thread::spawn(move || {
+        let mut output = Vec::new();
+        stdout.read_to_end(&mut output).map(|_| output)
+    });
+    let status = wait_for_poster_command(&mut child, cancel);
+    let output = reader.join().ok()?.ok()?;
+    status.filter(ExitStatus::success).map(|_| output)
+}
+
+fn run_poster_command(command: &mut Command, cancel: &PosterCancel) -> Option<ExitStatus> {
+    let mut child = spawn_poster_command(command, Stdio::null(), cancel).ok()?;
+    wait_for_poster_command(&mut child, cancel)
+}
+
+fn spawn_poster_command(
+    command: &mut Command,
+    stdout: Stdio,
+    cancel: &PosterCancel,
+) -> io::Result<Child> {
+    command
+        .stdin(Stdio::null())
+        .stdout(stdout)
+        .stderr(Stdio::null());
+    // The decoder must never outlive the GTK process or inherit its log/IPC descriptors. The
+    // post-prctl parent check closes the small fork/exec race where the parent exits first.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if libc::getppid() == 1 {
+                libc::raise(libc::SIGKILL);
+            }
+            Ok(())
+        });
+    }
+    let mut child = command.spawn()?;
+    let pid = child.id();
+    cancel.register_child(pid);
+    if cancel.is_cancelled() {
+        let _ = child.kill();
+    }
+    Ok(child)
+}
+
+fn wait_for_poster_command(child: &mut Child, cancel: &PosterCancel) -> Option<ExitStatus> {
+    loop {
+        if cancel.is_cancelled() {
+            let _ = child.kill();
+        }
+        match cancel.try_wait_child(child) {
+            Ok(Some(status)) => {
+                return (!cancel.is_cancelled()).then_some(status);
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(10)),
+            Err(error) => {
+                if !cancel.is_cancelled() {
+                    eprintln!("Failed to wait for poster decoder: {error}");
+                }
+                return None;
+            }
+        }
+    }
 }
 
 fn write_poster_sentinel(sentinel: &Path) {
@@ -997,6 +1239,60 @@ mod tests {
         shelf.project(&mut items, false);
         assert_eq!(items[0].poster_path, None);
         assert_eq!(processed.recv_timeout(Duration::from_secs(1)), Ok(media));
+    }
+
+    #[test]
+    fn playback_suspend_cancels_active_work_and_resumes_from_a_clean_queue() {
+        let dir = unique_dir("suspend");
+        let first = dir.join("first.mkv");
+        let second = dir.join("second.mkv");
+        touch(&first, b"fake video bytes");
+        touch(&second, b"other video bytes");
+
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let (done_tx, done_rx) = mpsc::channel();
+        let shelf = PosterShelf::with_processor(dir.clone(), move |job, cancel| {
+            started_tx.send(job.media_path.clone()).unwrap();
+            release_rx.recv().unwrap();
+            done_tx
+                .send((job.media_path.clone(), cancel.is_cancelled()))
+                .unwrap();
+        });
+
+        let mut items = vec![video_item(&first.to_string_lossy(), 600.0)];
+        shelf.project(&mut items, false);
+        assert_eq!(
+            started_rx.recv_timeout(Duration::from_secs(1)),
+            Ok(first.clone())
+        );
+
+        let mut items = vec![video_item(&second.to_string_lossy(), 600.0)];
+        shelf.project(&mut items, false);
+        shelf.suspend();
+        release_tx.send(()).unwrap();
+
+        assert_eq!(
+            done_rx.recv_timeout(Duration::from_secs(1)),
+            Ok((first, true))
+        );
+        assert!(
+            started_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            "queued idle work must not start behind playback"
+        );
+
+        shelf.resume();
+        let mut items = vec![video_item(&second.to_string_lossy(), 600.0)];
+        shelf.project(&mut items, false);
+        assert_eq!(
+            started_rx.recv_timeout(Duration::from_secs(1)),
+            Ok(second.clone())
+        );
+        release_tx.send(()).unwrap();
+        assert_eq!(
+            done_rx.recv_timeout(Duration::from_secs(1)),
+            Ok((second, false))
+        );
     }
 
     #[test]

@@ -5007,8 +5007,20 @@ fn idle_return_smoke_waits_for_natural_eof_before_welcome_capture() {
     assert!(smoke.contains("identity > 0.012"));
     assert!(smoke.contains("magenta < 0.35"));
     assert!(smoke.contains("idle-return-smoke: close-idle"));
+    assert!(smoke.contains("residual_welcome_decoder_retired"));
+    assert!(smoke.contains("residual_welcome_hidden=pass"));
+    assert!(smoke.contains("residual_shutdown_decoder_retired"));
     assert!(smoke.contains("export GSK_RENDERER=cairo"));
     assert!(smoke.contains("-crop 1120x638+0+42"));
+
+    let bridge = include_str!("mpv_bridge.rs");
+    let idle_projection = bridge
+        .split("let idle_surface_hidden")
+        .nth(1)
+        .and_then(|source| source.split("lyrics_surface.update").next())
+        .expect("idle surface lifecycle projection");
+    assert!(idle_projection.contains("thumbnails::suspend_poster_generation()"));
+    assert!(idle_projection.contains("} else {\n            empty_surface.refresh"));
 
     let lifecycle = include_str!("track_popovers.rs");
     assert!(lifecycle.contains("idle-return-smoke: file-loaded"));

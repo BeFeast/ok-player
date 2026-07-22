@@ -13,7 +13,7 @@ if [[ "$BINARY" == */* ]]; then
 fi
 OUT_DIR="$(realpath -m "$OUT_DIR")"
 
-for tool in xvfb-run dbus-run-session xfwm4 xdotool xwininfo import magick ffmpeg realpath rg; do
+for tool in xvfb-run dbus-run-session gdbus xfwm4 xdotool xwininfo import magick ffmpeg python3 realpath rg; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "Missing required tool: $tool" >&2
     exit 127
@@ -28,6 +28,11 @@ ffmpeg -hide_banner -loglevel error -y \
   -map 0:v:0 -c:v libx264 -preset ultrafast -tune stillimage \
   -pix_fmt yuv420p -g 24 -an "$OUT_DIR/idle-return.mkv"
 
+ffmpeg -hide_banner -loglevel error -y \
+  -f lavfi -i 'color=c=0xff00ff:s=1120x680:r=24:d=30' \
+  -map 0:v:0 -c:v libx264 -preset ultrafast -tune stillimage \
+  -pix_fmt yuv420p -g 24 -an "$OUT_DIR/residual-open.mkv"
+
 if ! env __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
   LIBGL_ALWAYS_SOFTWARE=1 \
   xvfb-run -a --server-args='-screen 0 1280x900x24 -nolisten tcp' \
@@ -39,6 +44,8 @@ BINARY="$1"
 OUT_DIR="$2"
 IDLE_OSC_ASSERT="$3"
 FIXTURE="$OUT_DIR/idle-return.mkv"
+RESIDUAL_FIXTURE="$OUT_DIR/residual-open.mkv"
+POSTER_SOURCE="$OUT_DIR/welcome-poster.mkv"
 
 export GDK_BACKEND=x11
 export GDK_DEBUG=no-portals
@@ -67,6 +74,33 @@ cat >"$XDG_CONFIG_HOME/ok-player/settings.json" <<'JSON'
   "updates": { "auto_check": false }
 }
 JSON
+cp "$FIXTURE" "$POSTER_SOURCE"
+
+# The first fake ffmpeg call supplies a valid luma sample; the second blocks in the JPEG pass.
+# Before the fix that child survived behind playback. Its inherited descriptors could keep a
+# launch/gate pipe open after OK Player had already returned or exited.
+fake_bin="$OUT_DIR/fake-bin"
+mkdir -p "$fake_bin"
+cat >"$fake_bin/ffmpeg" <<'PY'
+#!/usr/bin/env python3
+import os
+import signal
+import sys
+
+if sys.argv[-1] == "-":
+    sys.stdout.buffer.write(bytes((200, 200, 200, 255)) * (128 * 72))
+    sys.stdout.buffer.flush()
+    raise SystemExit(0)
+
+pid_file = os.environ["OKP_POSTER_SMOKE_PID_FILE"]
+with open(pid_file, "w", encoding="ascii") as stream:
+    stream.write(str(os.getpid()))
+    stream.flush()
+    os.fsync(stream.fileno())
+while True:
+    signal.pause()
+PY
+chmod +x "$fake_bin/ffmpeg"
 
 xfwm4 --sm-client-disable >"$OUT_DIR/xfwm4.log" 2>&1 &
 wm_pid=$!
@@ -191,7 +225,151 @@ stop_app() {
   kill "$app_pid" 2>/dev/null || true
   wait "$app_pid" 2>/dev/null || true
   app_pid=""
-  sleep 0.5
+  for _ in $(seq 1 120); do
+    if ! gdbus introspect --session \
+      --dest com.befeast.okplayer \
+      --object-path /com/befeast/okplayer >/dev/null 2>&1
+    then
+      return
+    fi
+    sleep 0.1
+  done
+  echo "OK Player application bus remained owned after shutdown" >&2
+  exit 1
+}
+
+wait_for_pid_file_alive() {
+  local pid_file="$1" label="$2" pid=""
+  for _ in $(seq 1 120); do
+    if [[ -s "$pid_file" ]]; then
+      pid="$(cat "$pid_file")"
+      if kill -0 "$pid" 2>/dev/null; then
+        printf '%s\n' "$pid"
+        return
+      fi
+    fi
+    sleep 0.1
+  done
+  echo "$label did not start a poster decoder" >&2
+  exit 1
+}
+
+wait_for_pid_gone() {
+  local pid="$1" label="$2"
+  for _ in $(seq 1 120); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      printf '%s=pass\n' "$label" >>"$OUT_DIR/results.txt"
+      return
+    fi
+    sleep 0.1
+  done
+  echo "$label left poster decoder PID $pid alive" >&2
+  exit 1
+}
+
+wait_for_mpris_bus() {
+  for _ in $(seq 1 120); do
+    if gdbus introspect --session \
+      --dest org.mpris.MediaPlayer2.okplayer \
+      --object-path /org/mpris/MediaPlayer2 >/dev/null 2>&1
+    then
+      return
+    fi
+    sleep 0.1
+  done
+  echo "Primary MPRIS bus did not become ready" >&2
+  exit 1
+}
+
+launch_residual() {
+  local config="$OUT_DIR/residual-config"
+  local state="$OUT_DIR/residual-state"
+  local cache="$OUT_DIR/residual-cache"
+  local pid_file="$OUT_DIR/residual-poster.pid"
+  mkdir -p "$config/ok-player" "$state/ok-player" "$cache"
+  cp "$XDG_CONFIG_HOME/ok-player/settings.json" "$config/ok-player/settings.json"
+  cat >"$state/ok-player/history.json" <<JSON
+{
+  "version": 2,
+  "files": {
+    "$POSTER_SOURCE": {
+      "position": 2,
+      "duration": 4,
+      "finished": false,
+      "updated_at_unix": $(date +%s),
+      "title": "Poster worker sentinel"
+    }
+  }
+}
+JSON
+  rm -f "$pid_file"
+  env -u OKP_DISABLE_MPRIS \
+    PATH="$fake_bin:$PATH" \
+    OKP_POSTER_SMOKE_PID_FILE="$pid_file" \
+    OKP_DEBUG_IDLE_RETURN_SMOKE=1 \
+    XDG_CONFIG_HOME="$config" \
+    XDG_STATE_HOME="$state" \
+    XDG_CACHE_HOME="$cache" \
+    timeout 60s "$BINARY" >"$OUT_DIR/residual-app.log" 2>&1 &
+  app_pid=$!
+  window_id="$(wait_for_window)"
+}
+
+run_residual_open_regression() {
+  local pid_file="$OUT_DIR/residual-poster.pid"
+  local initial_pid resumed_pid playback_rmse normalized
+
+  launch_residual
+  xdotool windowactivate "$window_id" >/dev/null 2>&1 || true
+  initial_pid="$(wait_for_pid_file_alive "$pid_file" "Welcome")"
+  assert_idle_capture "$window_id" residual-welcome "Residual initial Welcome"
+  wait_for_mpris_bus
+  local media_uri
+  media_uri="$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve().as_uri())' \
+    "$RESIDUAL_FIXTURE")"
+  gdbus call --session \
+    --dest org.mpris.MediaPlayer2.okplayer \
+    --object-path /org/mpris/MediaPlayer2 \
+    --method org.mpris.MediaPlayer2.Player.OpenUri \
+    "$media_uri" >"$OUT_DIR/residual-open-call.log"
+
+  wait_for_log_marker 'idle-return-smoke: file-loaded' residual-app residual_file_loaded
+  wait_for_pid_gone "$initial_pid" residual_welcome_decoder_retired
+  local playback_ready=0
+  for _ in $(seq 1 120); do
+    import -window "$window_id" "$OUT_DIR/residual-playback.png"
+    magick "$OUT_DIR/residual-welcome.png" -crop 1120x638+0+42 +repage \
+      "$OUT_DIR/residual-welcome-content.png"
+    magick "$OUT_DIR/residual-playback.png" -crop 1120x638+0+42 +repage \
+      "$OUT_DIR/residual-playback-content.png"
+    playback_rmse="$(magick compare -metric RMSE \
+      "$OUT_DIR/residual-welcome-content.png" \
+      "$OUT_DIR/residual-playback-content.png" null: 2>&1 || true)"
+    normalized="$(sed -n 's/.*(\([^()]*\)).*/\1/p' <<<"$playback_rmse")"
+    if [[ -n "$normalized" ]] \
+      && awk -v value="$normalized" 'BEGIN { exit !(value > 0.05) }'
+    then
+      playback_ready=1
+      break
+    fi
+    sleep 0.1
+  done
+  [[ "$playback_ready" == "1" ]] || {
+    echo "Local open retained the Welcome surface over media: RMSE=$playback_rmse" >&2
+    exit 1
+  }
+  printf 'residual_playback_welcome_rmse=%s\nresidual_welcome_hidden=pass\n' \
+    "$normalized" >>"$OUT_DIR/results.txt"
+
+  rm -f "$pid_file"
+  xdotool windowfocus "$window_id"
+  xdotool key --clearmodifiers x
+  wait_for_log_marker 'idle-return-smoke: close-idle' residual-app residual_close_idle
+  resumed_pid="$(wait_for_pid_file_alive "$pid_file" "Returned Welcome")"
+  printf 'residual_welcome_decoder_resumed=pass\n' >>"$OUT_DIR/results.txt"
+
+  stop_app
+  wait_for_pid_gone "$resumed_pid" residual_shutdown_decoder_retired
 }
 
 window_id=""
@@ -223,6 +401,7 @@ xdotool windowfocus "$window_id"
 xdotool key --clearmodifiers x
 wait_for_log_marker 'idle-return-smoke: close-idle' close-app close_media_transition
 assert_idle_capture "$window_id" close-media-idle "Close Media idle canvas"
+stop_app
 
 for name in eof-idle; do
   magick "$OUT_DIR/initial-idle.png" -crop 1120x638+0+42 +repage \
@@ -238,6 +417,8 @@ for name in eof-idle; do
   }
   printf '%s_reference_rmse=%s\n' "$name" "$normalized" >>"$OUT_DIR/results.txt"
 done
+
+run_residual_open_regression
 
 printf '%s\n' \
   'evidence_level=package-payload-xvfb-render' \
