@@ -1,0 +1,70 @@
+name: Flatpak
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/flatpak.yml'
+      - 'docs/linux-flatpak.md'
+      - 'rust/Cargo.lock'
+      - 'rust/Cargo.toml'
+      - 'rust/crates/**'
+      - 'rust/packaging/**'
+      - 'scripts/build-flatpak-beta.sh'
+      - 'scripts/smoke-linux-flatpak.sh'
+      - 'scripts/smoke-linux-software-renderer.sh'
+  workflow_dispatch:
+
+jobs:
+  flatpak:
+    name: Offline Flatpak beta build
+    runs-on: ubuntu-latest
+    env:
+      OKP_ACCEPTANCE_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+      OKP_FLATPAK_ARTIFACT_MANIFEST: artifacts/linux/flatpak/flatpak-beta-artifact.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Install Flatpak tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder appstream desktop-file-utils xvfb ffmpeg imagemagick ripgrep xdotool x11-utils xdg-user-dirs
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y flathub \
+            org.gnome.Platform//50 \
+            org.gnome.Sdk//50 \
+            org.freedesktop.Sdk.Extension.rust-stable//25.08
+
+      - name: Validate manifest and metadata
+        run: ./scripts/smoke-linux-flatpak.sh
+
+      - name: Build offline beta repository
+        run: ./scripts/build-flatpak-beta.sh
+
+      - name: Packaged no-DRI software renderer smoke
+        run: |
+          mkdir -p "$HOME/Pictures"
+          xdg-user-dirs-update --set PICTURES "$HOME/Pictures"
+          test "$(xdg-user-dir PICTURES)" = "$HOME/Pictures"
+          flatpak install --user -y --bundle artifacts/linux/flatpak/OK-Player-0.11.0-beta.1.flatpak
+          ./scripts/smoke-linux-software-renderer.sh -- \
+            flatpak run --user --nodevice=dri --nosocket=wayland --socket=x11 \
+            --env=GDK_BACKEND=x11 \
+            --env=OKP_SKIP_UPDATE_CHECK=1 --env=OKP_DISABLE_MPRIS=1 \
+            com.befeast.okplayer
+          flatpak uninstall --user -y com.befeast.okplayer
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ok-player-flatpak-beta
+          if-no-files-found: error
+          retention-days: 90
+          path: |
+            artifacts/linux/flatpak/repo-baseline/**
+            artifacts/linux/flatpak/repo/**
+            artifacts/linux/flatpak/flatpak-beta-artifact.json
+            artifacts/linux/flatpak/OK-Player-0.11.0-beta.0.flatpak
+            artifacts/linux/flatpak/OK-Player-0.11.0-beta.1.flatpak
+            artifacts/manual-ui/linux-software-renderer-smoke/**

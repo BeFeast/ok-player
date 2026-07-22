@@ -12,6 +12,7 @@ x86/
 [Pp]ublish/
 *.binlog
 rust/target/
+/.flatpak-builder/
 
 # --- Visual Studio / Rider ---
 .vs/

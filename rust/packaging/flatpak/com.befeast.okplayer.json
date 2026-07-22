@@ -1,0 +1,167 @@
+{
+    "app-id": "com.befeast.okplayer",
+    "runtime": "org.gnome.Platform",
+    "runtime-version": "50",
+    "sdk": "org.gnome.Sdk",
+    "sdk-extensions": [
+        "org.freedesktop.Sdk.Extension.rust-stable"
+    ],
+    "command": "ok-player",
+    "add-extensions": {
+        "org.freedesktop.Platform.codecs-extra": {
+            "version": "25.08-extra",
+            "directory": "lib/codecs-extra",
+            "add-ld-path": "."
+        },
+        "org.freedesktop.Platform.VAAPI.Intel": {
+            "version": "25.08",
+            "directory": "lib/intel-vaapi-driver",
+            "add-ld-path": ".",
+            "download-if": "have-intel-gpu",
+            "enable-if": "have-intel-gpu"
+        }
+    },
+    "finish-args": [
+        "--share=ipc",
+        "--share=network",
+        "--socket=fallback-x11",
+        "--socket=wayland",
+        "--socket=pulseaudio",
+        "--device=dri",
+        "--filesystem=xdg-pictures:rw",
+        "--filesystem=xdg-run/pipewire-0:ro",
+        "--own-name=org.mpris.MediaPlayer2.okplayer"
+    ],
+    "build-options": {
+        "append-path": "/usr/lib/sdk/rust-stable/bin"
+    },
+    "cleanup": [
+        "/include",
+        "/lib/pkgconfig",
+        "/share/man",
+        "*.a",
+        "*.la"
+    ],
+    "modules": [
+        {
+            "name": "ok-player",
+            "buildsystem": "simple",
+            "build-options": {
+                "env": {
+                    "CARGO_HOME": "/run/build/ok-player/cargo",
+                    "CARGO_NET_OFFLINE": "true",
+                    "OKP_BUILD_VERSION": "0.11.0-beta.1",
+                    "OKP_BUILD_SHA": "flatpak-beta"
+                }
+            },
+            "build-commands": [
+                "cargo --offline build --locked --release --manifest-path rust/Cargo.toml -p okp-linux-gtk",
+                "install -Dm755 rust/target/release/okp-linux-gtk /app/bin/ok-player",
+                "install -Dm644 rust/packaging/linux/com.befeast.okplayer.desktop /app/share/applications/com.befeast.okplayer.desktop",
+                "install -Dm644 rust/packaging/linux/com.befeast.okplayer.metainfo.xml /app/share/metainfo/com.befeast.okplayer.metainfo.xml",
+                "install -Dm644 rust/packaging/linux/com.befeast.okplayer.svg /app/share/icons/hicolor/scalable/apps/com.befeast.okplayer.svg",
+                "for size in 16 24 32 48 64; do install -Dm644 rust/packaging/linux/icons/hicolor/${size}x${size}/apps/com.befeast.okplayer.svg /app/share/icons/hicolor/${size}x${size}/apps/com.befeast.okplayer.svg; done",
+                "install -Dm644 LICENSE /app/share/licenses/com.befeast.okplayer/LICENSE",
+                "install -Dm644 THIRD-PARTY-NOTICES.md /app/share/licenses/com.befeast.okplayer/THIRD-PARTY-NOTICES.md",
+                "mkdir -p /app/lib/codecs-extra /app/lib/intel-vaapi-driver"
+            ],
+            "sources": [
+                {
+                    "type": "git",
+                    "url": "https://github.com/BeFeast/ok-player.git",
+                    "commit": "d87aafab752dd5a879a403dd0fbf21e48dd1399d"
+                },
+                {
+                    "type": "patch",
+                    "path": "ok-player-flatpak.patch"
+                },
+                "cargo-sources.json"
+            ],
+            "modules": [
+                {
+                    "name": "libmpv",
+                    "buildsystem": "meson",
+                    "config-opts": [
+                        "--libdir=lib",
+                        "-Dbuild-date=false",
+                        "-Dcplayer=false",
+                        "-Dlibmpv=true",
+                        "-Dmanpage-build=disabled",
+                        "-Dalsa=disabled",
+                        "-Dvaapi=enabled",
+                        "-Dvaapi-wayland=enabled"
+                    ],
+                    "post-install": [
+                        "install -Dm644 ../Copyright /app/share/licenses/com.befeast.okplayer/mpv-Copyright",
+                        "install -Dm644 ../LICENSE.GPL /app/share/licenses/com.befeast.okplayer/mpv-LICENSE.GPL",
+                        "install -Dm644 ../LICENSE.LGPL /app/share/licenses/com.befeast.okplayer/mpv-LICENSE.LGPL"
+                    ],
+                    "sources": [
+                        {
+                            "type": "archive",
+                            "url": "https://github.com/mpv-player/mpv/archive/v0.41.0.tar.gz",
+                            "sha256": "ee21092a5ee427353392360929dc64645c54479aefdb5babc5cfbb5fad626209",
+                            "x-checker-data": {
+                                "type": "anitya",
+                                "project-id": 5348,
+                                "stable-only": true,
+                                "url-template": "https://github.com/mpv-player/mpv/archive/v$version.tar.gz",
+                                "is-important": true
+                            }
+                        }
+                    ],
+                    "modules": [
+                        {
+                            "name": "libplacebo",
+                            "buildsystem": "meson",
+                            "config-opts": [
+                                "--libdir=lib",
+                                "-Ddemos=false",
+                                "-Dtests=false"
+                            ],
+                            "post-install": [
+                                "install -Dm644 ../LICENSE /app/share/licenses/com.befeast.okplayer/libplacebo-LICENSE"
+                            ],
+                            "sources": [
+                                {
+                                    "type": "git",
+                                    "url": "https://github.com/haasn/libplacebo.git",
+                                    "tag": "v7.360.1",
+                                    "commit": "cee9b076f2c63104ccfd497fa79c39a867293ec4",
+                                    "x-checker-data": {
+                                        "type": "git",
+                                        "tag-pattern": "^v([\\d.]+)$"
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            "name": "libass",
+                            "buildsystem": "meson",
+                            "config-opts": [
+                                "--libdir=lib",
+                                "-Ddefault_library=shared"
+                            ],
+                            "post-install": [
+                                "install -Dm644 ../COPYING /app/share/licenses/com.befeast.okplayer/libass-COPYING"
+                            ],
+                            "sources": [
+                                {
+                                    "type": "archive",
+                                    "url": "https://github.com/libass/libass/releases/download/0.17.5/libass-0.17.5.tar.xz",
+                                    "sha256": "2dca25c0e0c837ddf00b52011b3f82cac1e4ddd3ad018227806b0c2288864acc",
+                                    "x-checker-data": {
+                                        "type": "anitya",
+                                        "project-id": 1560,
+                                        "stable-only": true,
+                                        "url-template": "https://github.com/libass/libass/releases/download/$version/libass-$version.tar.xz"
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}

@@ -131,7 +131,11 @@ pub fn prepare_saved_capture(
     verify_directory_writable(&directory)?;
 
     let timestamp_millis = unix_millis();
-    let temp_path = unique_temp_path(&directory, "saved-frame", format.extension())?;
+    // Keep libmpv on sandbox-private storage. The worker publishes the validated
+    // image into the externally mounted destination after the command completes.
+    let staging_directory = screenshot_staging_dir();
+    fs::create_dir_all(&staging_directory)?;
+    let temp_path = unique_temp_path(&staging_directory, "saved-frame", format.extension())?;
     Ok(SavedCaptureTarget {
         temp_path,
         include_subtitles,
@@ -149,6 +153,18 @@ pub fn publish_saved_capture(target: SavedCaptureTarget) -> io::Result<PathBuf> 
         return Err(error);
     }
 
+    let destination_stage = match copy_to_destination_stage(
+        &target.temp_path,
+        &target.directory,
+        target.format.extension(),
+    ) {
+        Ok(path) => path,
+        Err(error) => {
+            remove_temporary_capture(&target.temp_path);
+            return Err(error);
+        }
+    };
+
     for suffix in 0..MAX_COLLISION_ATTEMPTS {
         let filename = candidate_filename(
             target.media_path.as_deref(),
@@ -158,16 +174,21 @@ pub fn publish_saved_capture(target: SavedCaptureTarget) -> io::Result<PathBuf> 
             suffix,
         );
         let destination = target.directory.join(filename);
-        match rename_noreplace(&target.temp_path, &destination) {
-            Ok(()) => return Ok(destination),
+        match rename_noreplace(&destination_stage, &destination) {
+            Ok(()) => {
+                remove_temporary_capture(&target.temp_path);
+                return Ok(destination);
+            }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(error) => {
+                remove_temporary_capture(&destination_stage);
                 remove_temporary_capture(&target.temp_path);
                 return Err(error);
             }
         }
     }
 
+    remove_temporary_capture(&destination_stage);
     remove_temporary_capture(&target.temp_path);
     Err(io::Error::new(
         io::ErrorKind::AlreadyExists,
@@ -189,7 +210,7 @@ pub fn cancel_saved_capture_if_stale(
 }
 
 pub fn prepare_clipboard_capture() -> io::Result<PathBuf> {
-    let directory = env::temp_dir().join("ok-player");
+    let directory = screenshot_staging_dir();
     fs::create_dir_all(&directory)?;
     unique_temp_path(&directory, "clipboard-frame", "png")
 }
@@ -231,6 +252,54 @@ fn verify_directory_writable(directory: &Path) -> io::Result<()> {
         .create_new(true)
         .open(&probe)?;
     fs::remove_file(probe)
+}
+
+fn screenshot_staging_dir() -> PathBuf {
+    env::temp_dir().join("ok-player").join("screenshots")
+}
+
+fn copy_to_destination_stage(
+    source: &Path,
+    directory: &Path,
+    extension: &str,
+) -> io::Result<PathBuf> {
+    for _ in 0..MAX_COLLISION_ATTEMPTS {
+        let stage = unique_temp_path(directory, "publish", extension)?;
+        let mut destination = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&stage)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        };
+
+        let result = (|| {
+            let mut source = fs::File::open(source)?;
+            if io::copy(&mut source, &mut destination)? == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "screenshot staging copy was empty",
+                ));
+            }
+            Ok(())
+        })();
+        drop(destination);
+
+        match result {
+            Ok(()) => return Ok(stage),
+            Err(error) => {
+                remove_temporary_capture(&stage);
+                return Err(error);
+            }
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not allocate a destination-local screenshot staging file",
+    ))
 }
 
 fn validate_capture_output(path: &Path) -> io::Result<()> {
@@ -336,33 +405,38 @@ mod tests {
 
     #[test]
     fn publish_saved_capture_never_overwrites_a_collision() {
-        let directory = unique_temp_dir("okp-screenshot-collision");
+        let root = unique_temp_dir("okp-screenshot-collision");
+        let directory = root.path().join("destination");
+        let engine_directory = root.path().join("engine-output");
+        fs::create_dir_all(&directory).expect("destination directory");
+        fs::create_dir_all(&engine_directory).expect("engine output directory");
         let first_name = candidate_filename(None, None, 1234, "png", 0);
-        fs::write(directory.path().join(first_name), b"existing").expect("existing screenshot");
-        let temp_path = directory.path().join(".capture.png");
+        fs::write(directory.join(first_name), b"existing").expect("existing screenshot");
+        let temp_path = engine_directory.join(".capture.png");
         fs::write(&temp_path, b"new frame").expect("temporary screenshot");
 
         let published = publish_saved_capture(SavedCaptureTarget {
-            temp_path,
+            temp_path: temp_path.clone(),
             include_subtitles: false,
             request_context: SavedCaptureContext {
                 source_generation: 1,
                 seek_generation: 0,
                 position: None,
             },
-            directory: directory.path().to_owned(),
+            directory: directory.clone(),
             media_path: None,
             timestamp_millis: 1234,
             format: ScreenshotFormat::Png,
         })
         .expect("publish screenshot");
 
-        assert_eq!(published, directory.path().join("ok-player-1234-1.png"));
+        assert_eq!(published, directory.join("ok-player-1234-1.png"));
         assert_eq!(
-            fs::read(directory.path().join("ok-player-1234.png")).unwrap(),
+            fs::read(directory.join("ok-player-1234.png")).unwrap(),
             b"existing"
         );
         assert_eq!(fs::read(published).unwrap(), b"new frame");
+        assert!(!temp_path.exists());
     }
 
     #[test]
@@ -385,7 +459,36 @@ mod tests {
 
         assert!(directory.is_dir());
         assert!(!target.temp_path.exists());
+        assert_eq!(
+            target.temp_path.parent(),
+            Some(screenshot_staging_dir().as_path())
+        );
         assert!(fs::read_dir(directory).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn saved_capture_staging_preserves_clean_and_subtitled_modes() {
+        let root = unique_temp_dir("okp-screenshot-modes");
+        for include_subtitles in [false, true] {
+            let target = prepare_saved_capture(
+                root.path().join("Pictures/OK Player"),
+                None,
+                SavedCaptureContext {
+                    source_generation: 1,
+                    seek_generation: 0,
+                    position: Some(3.0),
+                },
+                ScreenshotFormat::Png,
+                include_subtitles,
+            )
+            .expect("capture target");
+
+            assert_eq!(target.include_subtitles, include_subtitles);
+            assert_eq!(
+                target.temp_path.parent(),
+                Some(screenshot_staging_dir().as_path())
+            );
+        }
     }
 
     #[test]
@@ -525,6 +628,17 @@ XDG_PICTURES_DIR="$HOME/Pictures"
         assert_eq!(
             parse_xdg_pictures_dir(home, user_dirs),
             Some(PathBuf::from("/home/tester/Pictures"))
+        );
+    }
+
+    #[test]
+    fn parse_xdg_pictures_dir_reads_flatpak_generated_absolute_path() {
+        let home = Path::new("/home/tester");
+        let user_dirs = r#"XDG_PICTURES_DIR="/srv/user-media/Images""#;
+
+        assert_eq!(
+            parse_xdg_pictures_dir(home, user_dirs),
+            Some(PathBuf::from("/srv/user-media/Images"))
         );
     }
 }

@@ -2457,6 +2457,12 @@ pub(crate) fn drain_mpv_events(
     let mut auto_fit_dimensions = None;
     for event in events {
         match event {
+            MpvEvent::DecoderFailed {
+                path,
+                diagnostic_messages,
+            } => {
+                apply_runtime_decoder_failure(state, path.as_deref(), &diagnostic_messages);
+            }
             MpvEvent::FileLoaded { video_dimensions } => {
                 auto_fit_dimensions = auto_fit_dimensions.or(video_dimensions);
                 try_pending_audio_device_restore(state);
@@ -2464,9 +2470,14 @@ pub(crate) fn drain_mpv_events(
                 // Companion launch hints win over remembered track preferences for this open only.
                 try_pending_launch_tracks(state);
                 // A frame is up — the source is playing, not loading anymore.
+                // A decoder warning can precede FileLoaded when audio remains
+                // viable; keep that source failed instead of reviving partial
+                // playback behind a video track with no presented frames.
                 let mut state = state.borrow_mut();
-                state.media_load_state = network_media::MediaLoadState::Playing;
-                state.last_load_diagnostic = None;
+                if state.media_load_state != network_media::MediaLoadState::Failed {
+                    state.media_load_state = network_media::MediaLoadState::Playing;
+                    state.last_load_diagnostic = None;
+                }
                 if env::var_os("OKP_DEBUG_IDLE_RETURN_SMOKE").is_some() {
                     eprintln!("idle-return-smoke: file-loaded");
                 }

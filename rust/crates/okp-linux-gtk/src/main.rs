@@ -885,9 +885,15 @@ enum LinuxUpdateTarget {
     Deb(DebUpdate),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LinuxExternalUpdateManager {
+    Flatpak,
+    Dnf,
+}
+
 enum LinuxUpdateCheckResult {
     UpToDate,
-    ManagedExternally,
+    ManagedExternally(LinuxExternalUpdateManager),
     Available(PendingLinuxUpdate),
     Failed(String),
 }
@@ -905,7 +911,7 @@ enum LinuxUpdateStatus {
     NotChecked,
     Checking(Option<LinuxUpdateOffer>),
     UpToDate,
-    ManagedExternally,
+    ManagedExternally(LinuxExternalUpdateManager),
     Offer(LinuxUpdateOffer),
     Failed(String),
 }
@@ -918,7 +924,7 @@ impl LinuxUpdateStatus {
     ) -> Self {
         match result {
             LinuxUpdateCheckResult::UpToDate => Self::UpToDate,
-            LinuxUpdateCheckResult::ManagedExternally => Self::ManagedExternally,
+            LinuxUpdateCheckResult::ManagedExternally(manager) => Self::ManagedExternally(*manager),
             LinuxUpdateCheckResult::Available(update) => {
                 let version = update
                     .target_version()
@@ -949,7 +955,12 @@ impl LinuxUpdateStatus {
             }
             Self::Checking(None) => "Checking the update feed...".to_owned(),
             Self::UpToDate => "OK Player is up to date".to_owned(),
-            Self::ManagedExternally => "Updates are managed by DNF.".to_owned(),
+            Self::ManagedExternally(LinuxExternalUpdateManager::Flatpak) => {
+                "Updates are managed by Flatpak".to_owned()
+            }
+            Self::ManagedExternally(LinuxExternalUpdateManager::Dnf) => {
+                "Updates are managed by DNF.".to_owned()
+            }
             Self::Offer(offer) => offer.status_text(),
             Self::Failed(error) => format!("Update check failed: {error}"),
         }

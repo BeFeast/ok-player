@@ -252,6 +252,12 @@ Required live rows are:
 
 Headless evidence must leave all of these `not-run`.
 
+For Flatpak, record the package identity and extension state with every live
+row: GNOME or KDE Wayland, runtime branch, codecs-extra present or masked, and
+renderer diagnostics showing hardware decode or the explicit fallback. The
+same exported beta repository must pass fresh install, repository update, and
+uninstall; rebuilding between those steps is not equivalent evidence.
+
 ## Public beta archive and historical release-object cleanup
 
 Issue #350 cleanup is deliberately split into preparation and operator execution. Repository tools
