@@ -359,10 +359,10 @@ index f2e761d488cec76f7a72d54edd56e01d50276de6..2b1cdf602af2953bde198fe0fc738385
              Self::Failed(error) => format!("Update check failed: {error}"),
          }
 diff --git a/rust/crates/okp-linux-gtk/src/mpv_bridge.rs b/rust/crates/okp-linux-gtk/src/mpv_bridge.rs
-index 502576b97de7507a3b62e81998416816c532f286..8c2b8f1183add1c9a4b9adc73115253f6ade764f 100644
+index 26574f678bba0f198dd0e718143b11a6fae67b48..2d4f1e12972c2991fc22fd1ca6aa11c9c19fbc42 100644
 --- a/rust/crates/okp-linux-gtk/src/mpv_bridge.rs
 +++ b/rust/crates/okp-linux-gtk/src/mpv_bridge.rs
-@@ -385,7 +385,7 @@ fn connect_native_mpv(
+@@ -410,7 +410,7 @@ fn connect_native_mpv(
              );
              return;
          }
@@ -371,7 +371,7 @@ index 502576b97de7507a3b62e81998416816c532f286..8c2b8f1183add1c9a4b9adc73115253f
              schedule_gtk_mpv_fallback(
                  &fallback_container,
                  &realize_fallback_started,
-@@ -606,7 +606,7 @@ fn connect_gtk_mpv(
+@@ -642,7 +642,7 @@ fn connect_gtk_mpv(
                  "GDK Wayland native display is unavailable; continuing without zero-copy display interop"
              );
          }
@@ -718,7 +718,7 @@ index bd7e24d8f2a795304566db3768171d793bdc45d6..2b523d933a475195864c35c9f4b06126
 +    }
  }
 diff --git a/rust/crates/okp-linux-gtk/src/tests.rs b/rust/crates/okp-linux-gtk/src/tests.rs
-index b1b73335ca84acb2a6040974afaf3d2e0c36d4f3..0fbbe85eaafd84c8c5925eb28caec5655a9ab625 100644
+index 6315feb98e0705d6c26fb42bff020bda758ca76b..6555be94387803952f75966b5f370f033a1a2d23 100644
 --- a/rust/crates/okp-linux-gtk/src/tests.rs
 +++ b/rust/crates/okp-linux-gtk/src/tests.rs
 @@ -30,6 +30,26 @@ fn renderer_environment_is_selected_before_gtk_initialization() {
@@ -748,7 +748,7 @@ index b1b73335ca84acb2a6040974afaf3d2e0c36d4f3..0fbbe85eaafd84c8c5925eb28caec565
  #[test]
  fn file_association_launches_present_before_media_delivery() {
      let window = include_str!("window.rs");
-@@ -4179,7 +4199,7 @@ fn linux_update_status_reflects_last_check_result() {
+@@ -4198,7 +4218,7 @@ fn linux_update_status_reflects_last_check_result() {
      assert!(up_to_date.pending_offer().is_none());
 
      let managed = LinuxUpdateStatus::from_check_result(
@@ -757,7 +757,7 @@ index b1b73335ca84acb2a6040974afaf3d2e0c36d4f3..0fbbe85eaafd84c8c5925eb28caec565
          UpdateChannel::Public,
          &skipped,
      );
-@@ -4189,6 +4209,17 @@ fn linux_update_status_reflects_last_check_result() {
+@@ -4208,6 +4228,17 @@ fn linux_update_status_reflects_last_check_result() {
      );
      assert!(managed.pending_offer().is_none());
 
@@ -775,7 +775,7 @@ index b1b73335ca84acb2a6040974afaf3d2e0c36d4f3..0fbbe85eaafd84c8c5925eb28caec565
      let update = PendingLinuxUpdate {
          manager: None,
          target: LinuxUpdateTarget::Deb(DebUpdate {
-@@ -4881,6 +4912,81 @@ fn codec_failure_reported_at_eof_stays_on_the_failed_source() {
+@@ -4900,6 +4931,81 @@ fn codec_failure_reported_at_eof_stays_on_the_failed_source() {
      );
  }
 
