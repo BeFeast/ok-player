@@ -582,5 +582,28 @@ jq -n \
   }
 ' >"$work/project-health-snapshot.json" || exit 2
 
-"$health_bin" project-health --snapshot "$work/project-health-snapshot.json"
-exit $?
+evaluator_pid=""
+termination_status=""
+forward_evaluator_signal() {
+  local signal="$1"
+  local status="$2"
+  termination_status="$status"
+  if [[ -z "$evaluator_pid" ]]; then
+    exit "$status"
+  fi
+  kill -s "$signal" "$evaluator_pid" 2>/dev/null || true
+}
+trap 'forward_evaluator_signal TERM 143' TERM
+
+"$health_bin" project-health --snapshot "$work/project-health-snapshot.json" &
+evaluator_pid=$!
+while true; do
+  wait "$evaluator_pid"
+  evaluator_status=$?
+  if [[ -z "$termination_status" ]]; then
+    exit "$evaluator_status"
+  fi
+  if ! kill -0 "$evaluator_pid" 2>/dev/null; then
+    exit "$termination_status"
+  fi
+done

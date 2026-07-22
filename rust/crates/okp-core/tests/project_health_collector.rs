@@ -1,7 +1,8 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Child, Command, Output, Stdio};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use okp_core::project_health::{HealthStatus, ProjectHealthOutcome};
@@ -402,6 +403,93 @@ fn repeated_live_ticks_reclaim_their_snapshot_directories() {
     }
 }
 
+#[test]
+fn terminating_live_collector_stops_the_evaluator_and_reclaims_scratch() {
+    let root = unique_temp_dir("okp-project-health-termination");
+    let fake_bin = root.path().join("bin");
+    let scratch = root.path().join("scratch");
+    fs::create_dir_all(&fake_bin).expect("fake bin should be created");
+    fs::create_dir_all(&scratch).expect("scratch directory should be created");
+    write_executable(&fake_bin.join("gh"), FAKE_GH);
+    write_executable(&fake_bin.join("curl"), FAKE_CURL);
+    write_executable(&fake_bin.join("date"), FAKE_DATE);
+
+    let evaluator = root.path().join("signal-aware-evaluator");
+    let evaluator_pid = root.path().join("evaluator.pid");
+    let evaluator_ready = root.path().join("evaluator.ready");
+    let evaluator_signal = root.path().join("evaluator.signal");
+    write_executable(&evaluator, SIGNAL_AWARE_EVALUATOR);
+
+    let mut child = Command::new("bash");
+    child
+        .arg(checker_path())
+        .env("OKP_PROJECT_HEALTH_BIN", &evaluator)
+        .env("OKP_TEST_EVALUATOR_PID", &evaluator_pid)
+        .env("OKP_TEST_EVALUATOR_READY", &evaluator_ready)
+        .env("OKP_TEST_EVALUATOR_SIGNAL", &evaluator_signal)
+        .env("OKP_STUB_FAIL", "none")
+        .env(
+            "OKP_STUB_CANDIDATE_FEED",
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/project_health/fresh-accepted.json"),
+        )
+        .env(
+            "OKP_STUB_WINDOWS_CANDIDATE_MANIFEST",
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/project_health/windows-candidate-manifest.json"),
+        )
+        .env(
+            "OKP_STUB_WINDOWS_CANDIDATE_FEED",
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/project_health/windows-candidate-feed.json"),
+        )
+        .env("TMPDIR", &scratch)
+        .env("PATH", path_with(&fake_bin))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = child.spawn().expect("live collector should start");
+
+    wait_for_fixture_file(&evaluator_ready, &mut child, Duration::from_secs(10));
+    let evaluator_pid_value = fs::read_to_string(&evaluator_pid)
+        .expect("evaluator PID should be recorded")
+        .trim()
+        .to_owned();
+    let signal_status = Command::new("kill")
+        .arg("-TERM")
+        .arg(child.id().to_string())
+        .status()
+        .expect("collector should receive SIGTERM");
+    assert!(signal_status.success(), "failed to signal collector");
+
+    let checker_status = wait_for_child_exit(&mut child, Duration::from_secs(10));
+    let evaluator_was_signaled = evaluator_signal.exists();
+    let evaluator_is_alive = process_is_alive(&evaluator_pid_value);
+    if evaluator_is_alive {
+        let _ = Command::new("kill")
+            .arg("-KILL")
+            .arg(&evaluator_pid_value)
+            .status();
+    }
+
+    assert_eq!(checker_status.code(), Some(143));
+    assert!(
+        evaluator_was_signaled,
+        "collector termination was not forwarded to evaluator {evaluator_pid_value}"
+    );
+    assert!(
+        !evaluator_is_alive,
+        "evaluator {evaluator_pid_value} survived collector termination"
+    );
+    let leftovers = fs::read_dir(&scratch)
+        .expect("scratch directory should be readable")
+        .map(|entry| entry.expect("scratch entry should be readable").file_name())
+        .collect::<Vec<_>>();
+    assert!(
+        leftovers.is_empty(),
+        "terminated collector abandoned scratch entries: {leftovers:?}"
+    );
+}
+
 fn run_live(failure: &str) -> Output {
     run_live_with_tmpdir(failure, None)
 }
@@ -474,6 +562,51 @@ fn path_with(directory: &Path) -> String {
     )
 }
 
+fn wait_for_fixture_file(path: &Path, child: &mut Child, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while !path.exists() {
+        if let Some(status) = child
+            .try_wait()
+            .expect("collector status should be readable")
+        {
+            panic!("collector exited before evaluator became ready: {status}");
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("timed out waiting for evaluator readiness");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> std::process::ExitStatus {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .expect("collector status should be readable")
+        {
+            return status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            return child.wait().expect("timed-out collector should be reaped");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn process_is_alive(pid: &str) -> bool {
+    Command::new("kill")
+        .arg("-0")
+        .arg(pid)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
 fn write_executable(path: &Path, contents: &str) {
     fs::write(path, contents).expect("fake executable should be written");
     let mut permissions = fs::metadata(path)
@@ -490,6 +623,25 @@ exit 99
 
 const PREBUILT_EVALUATOR_WRAPPER: &str = r#"#!/usr/bin/env bash
 exec "$OKP_REAL_HEALTH_BIN" "$@"
+"#;
+
+const SIGNAL_AWARE_EVALUATOR: &str = r#"#!/usr/bin/env bash
+set -uo pipefail
+blocker_pid=""
+terminate() {
+  printf 'TERM\n' >"$OKP_TEST_EVALUATOR_SIGNAL"
+  if [[ -n "$blocker_pid" ]]; then
+    kill "$blocker_pid" 2>/dev/null || true
+    wait "$blocker_pid" 2>/dev/null || true
+  fi
+  exit 143
+}
+trap terminate TERM
+tail -f /dev/null &
+blocker_pid=$!
+printf '%s\n' "$$" >"$OKP_TEST_EVALUATOR_PID"
+: >"$OKP_TEST_EVALUATOR_READY"
+wait "$blocker_pid"
 "#;
 
 const FAKE_DATE: &str = r#"#!/usr/bin/env bash

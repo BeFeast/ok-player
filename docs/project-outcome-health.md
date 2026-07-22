@@ -140,7 +140,10 @@ request retains the existing connection/retry/30-second bound, so adding the
 Windows evidence does not serialize another network timeout into the fleet
 pulse. Snapshot mode remains fully offline and decision-complete in `okp-core`.
 The live collector also removes its temporary snapshot directory before it
-returns, including when the evaluator reports an unhealthy outcome.
+returns, including when the evaluator reports an unhealthy outcome. When a
+supervisor terminates the collector with `SIGTERM`, the collector forwards that
+signal to the evaluator, waits for it to stop, and then reclaims the snapshot
+directory.
 
 ## Stable-release diagnostic
 
