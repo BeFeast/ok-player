@@ -664,8 +664,9 @@ pub(crate) fn track_player_window_bounds(
                         width,
                         height,
                     });
+                let resize_work_area = monitor.as_ref().map(|_| work_area);
                 compute_bounds.replace(Some(PlayerWindowBounds { monitor, work_area }));
-                compute_resize.work_area.set(Some(work_area));
+                compute_resize.work_area.set(resize_work_area);
             }
         });
     });
@@ -676,7 +677,54 @@ pub(crate) fn current_player_work_area(
     window: &gtk::ApplicationWindow,
     reported_bounds: &RefCell<Option<PlayerWindowBounds>>,
 ) -> Option<window_fit::WindowRect> {
-    let current_monitor = window.surface().and_then(|surface| {
+    current_player_fit_area(window, reported_bounds)
+        .map(|(_, work_area)| work_area)
+        .or_else(|| current_player_monitor(window).map(|(_, geometry)| geometry))
+}
+
+fn current_player_fit_area(
+    window: &gtk::ApplicationWindow,
+    reported_bounds: &RefCell<Option<PlayerWindowBounds>>,
+) -> Option<(gdk::Monitor, window_fit::WindowRect)> {
+    let current_monitor = current_player_monitor(window);
+
+    let reported = reported_bounds.borrow();
+    match (reported.as_ref(), current_monitor) {
+        (Some(bounds), Some((monitor, monitor_size)))
+            if bounds.monitor.as_ref() == Some(&monitor) =>
+        {
+            Some((
+                monitor.clone(),
+                bounded_monitor_work_area(
+                    monitor.geometry(),
+                    bounds.work_area.width.min(monitor_size.width),
+                    bounds.work_area.height.min(monitor_size.height),
+                ),
+            ))
+        }
+        // Wayland can publish configure bounds before the surface receives its
+        // output-enter event. Those bounds may describe the combined desktop.
+        // Once the current monitor is known, bind and clamp the dimensions to
+        // that one output instead of accepting the union as a fit workarea.
+        (Some(bounds), Some((monitor, monitor_size))) if bounds.monitor.is_none() => Some((
+            monitor.clone(),
+            bounded_monitor_work_area(
+                monitor.geometry(),
+                bounds.work_area.width.min(monitor_size.width),
+                bounds.work_area.height.min(monitor_size.height),
+            ),
+        )),
+        // A monitor change invalidates the previous output's usable bounds.
+        // Wait for GTK's next compute-size report rather than fitting against
+        // stale geometry from the other head.
+        _ => None,
+    }
+}
+
+fn current_player_monitor(
+    window: &gtk::ApplicationWindow,
+) -> Option<(gdk::Monitor, window_fit::WindowRect)> {
+    window.surface().and_then(|surface| {
         let monitor = surface.display().monitor_at_surface(&surface)?;
         let geometry = monitor.geometry();
         (geometry.width() > 0 && geometry.height() > 0).then_some((
@@ -688,23 +736,14 @@ pub(crate) fn current_player_work_area(
                 height: geometry.height(),
             },
         ))
-    });
+    })
+}
 
-    let reported = reported_bounds.borrow();
-    match (reported.as_ref(), current_monitor) {
-        (Some(bounds), Some((monitor, monitor_size)))
-            if bounds.monitor.as_ref() == Some(&monitor) =>
-        {
-            Some(bounded_monitor_work_area(
-                monitor.geometry(),
-                bounds.work_area.width.min(monitor_size.width),
-                bounds.work_area.height.min(monitor_size.height),
-            ))
-        }
-        (_, Some((_, monitor_size))) => Some(monitor_size),
-        (Some(bounds), None) => Some(bounds.work_area),
-        (None, None) => None,
-    }
+pub(crate) fn player_window_fit_area_available(
+    window: &gtk::ApplicationWindow,
+    reported_bounds: &RefCell<Option<PlayerWindowBounds>>,
+) -> bool {
+    current_player_fit_area(window, reported_bounds).is_some()
 }
 
 fn bounded_monitor_work_area(
@@ -770,9 +809,9 @@ pub(crate) fn fit_player_window_to_video(
         return;
     }
 
-    let Some(work_area) = current_player_work_area(window, reported_bounds) else {
+    let Some((monitor, work_area)) = current_player_fit_area(window, reported_bounds) else {
         if debug {
-            eprintln!("window fit skipped: workarea unavailable");
+            eprintln!("window fit deferred: monitor workarea unavailable");
         }
         return;
     };
@@ -788,10 +827,15 @@ pub(crate) fn fit_player_window_to_video(
 
     if debug {
         eprintln!(
-            "window fit request: video={}x{} scale={:.2} workarea={}x{}+{},{} target={}x{}+{},{}",
+            "window fit request: video={}x{} scale={:.2} monitor={} monitor_geometry={}x{}+{},{} workarea={}x{}+{},{} window={}x{}+{},{}",
             video.width,
             video.height,
             monitor_scale,
+            monitor_log_token(&monitor),
+            monitor.geometry().width(),
+            monitor.geometry().height(),
+            monitor.geometry().x(),
+            monitor.geometry().y(),
             work_area.width,
             work_area.height,
             work_area.x,
@@ -814,6 +858,34 @@ pub(crate) fn fit_player_window_to_video(
             placement.position.y,
             window.is_mapped(),
         );
+    }
+}
+
+pub(crate) fn monitor_log_token(monitor: &gdk::Monitor) -> String {
+    let value = monitor
+        .connector()
+        .or_else(|| monitor.description())
+        .or_else(|| monitor.model())
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".to_owned());
+    sanitize_monitor_log_token(&value)
+}
+
+pub(crate) fn sanitize_monitor_log_token(value: &str) -> String {
+    let token = value
+        .chars()
+        .map(|character| {
+            if character.is_whitespace() || character.is_control() {
+                '-'
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    if token.is_empty() {
+        "unknown".to_owned()
+    } else {
+        token
     }
 }
 

@@ -1147,10 +1147,15 @@ pub(crate) fn connect_state_poll(
         drain_wayland_presentation_feedback(&state);
         apply_pending_nfo_titles(&state);
         observe_initial_window_fit(&state, auto_fit_dimensions);
-        // Startup payload delivery is gated on the map edge, so initial fitting now always uses
-        // an already-visible toplevel with compositor context. Consume each source's one-shot fit
-        // only after GTK has mapped the window or published equivalent bounds.
+        // Startup payload delivery is gated on the map edge, so initial fitting uses an
+        // already-visible toplevel with compositor context. Wayland may publish desktop-wide
+        // configure bounds before its output-enter event; retain the one-shot request until the
+        // bounds can be tied to one monitor instead of consuming a spanning fit. Fullscreen and
+        // maximized loads still consume their deliberate no-resize skip immediately.
         if window.is_mapped()
+            && (window.is_fullscreen()
+                || window.is_maximized()
+                || player_window_fit_area_available(&window, &window_bounds))
             && let Some(request) = take_initial_window_fit(&state)
         {
             fit_player_window_to_video(

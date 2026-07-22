@@ -71,6 +71,41 @@ fn file_association_launches_present_before_media_delivery() {
 }
 
 #[test]
+fn initial_fit_waits_for_a_monitor_bound_workarea() {
+    let bridge = include_str!("mpv_bridge.rs");
+    let poll = bridge
+        .split("pub(crate) fn connect_state_poll")
+        .nth(1)
+        .and_then(|source| source.split("drain_screenshot_jobs").next())
+        .expect("initial fit state-poll source");
+    let availability = poll
+        .find("player_window_fit_area_available")
+        .expect("monitor workarea gate");
+    let consumption = poll
+        .find("take_initial_window_fit")
+        .expect("one-shot fit consumption");
+    assert!(availability < consumption);
+    assert!(poll.contains("window.is_fullscreen()"));
+    assert!(poll.contains("window.is_maximized()"));
+
+    let window = include_str!("window.rs");
+    assert!(window.contains("bounds.monitor.is_none()"));
+    assert!(!window.contains("(Some(bounds), None)"));
+    assert!(window.contains("monitor workarea unavailable"));
+    assert!(!window.contains("window fit skipped: workarea unavailable"));
+}
+
+#[test]
+fn monitor_log_tokens_are_single_line_and_nonempty() {
+    assert_eq!(sanitize_monitor_log_token("HDMI-A-1"), "HDMI-A-1");
+    assert_eq!(
+        sanitize_monitor_log_token("Built in\nDisplay"),
+        "Built-in-Display"
+    );
+    assert_eq!(sanitize_monitor_log_token(""), "unknown");
+}
+
+#[test]
 fn player_close_returns_to_gtk_before_mpv_teardown() {
     let keyboard = include_str!("keyboard.rs");
     let close_handler = keyboard
