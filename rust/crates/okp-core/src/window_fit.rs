@@ -54,6 +54,54 @@ pub struct WindowPlacement {
     pub position: WindowPoint,
 }
 
+/// Resolve a monitor-local fit area from optional size-only compositor bounds.
+///
+/// `GdkToplevelSize` deliberately exposes only the largest usable width and
+/// height, not which monitor edge owns a panel or dock. When those dimensions
+/// are smaller than the monitor, use the intersection of every possible
+/// placement of that rectangle inside the monitor. The result is conservative,
+/// but it cannot overlap a reserved top, bottom, left, or right edge merely
+/// because the shell guessed the missing origin. If no bounds were published,
+/// the monitor geometry is the only available fallback.
+pub fn monitor_fit_work_area(
+    monitor_geometry: WindowRect,
+    reported_bounds: Option<WindowSize>,
+) -> Option<WindowRect> {
+    if monitor_geometry.width <= 0 || monitor_geometry.height <= 0 {
+        return None;
+    }
+
+    let Some(bounds) = reported_bounds.filter(|bounds| bounds.width > 0 && bounds.height > 0)
+    else {
+        return Some(monitor_geometry);
+    };
+    let (x, width) =
+        conservative_bounds_axis(monitor_geometry.x, monitor_geometry.width, bounds.width);
+    let (y, height) =
+        conservative_bounds_axis(monitor_geometry.y, monitor_geometry.height, bounds.height);
+    Some(WindowRect {
+        x,
+        y,
+        width,
+        height,
+    })
+}
+
+fn conservative_bounds_axis(origin: i32, monitor_length: i32, bounds_length: i32) -> (i32, i32) {
+    let bounds_length = bounds_length.clamp(1, monitor_length);
+    let total_reserved = monitor_length - bounds_length;
+    let guaranteed_length = bounds_length - total_reserved;
+
+    // A reported bound smaller than half the monitor has no non-empty interval
+    // common to every possible origin. Treat that implausible value as
+    // unusable instead of collapsing the player to a sliver.
+    if guaranteed_length <= 0 {
+        return (origin, monitor_length);
+    }
+
+    (origin.saturating_add(total_reserved), guaranteed_length)
+}
+
 /// Predictable contract for the explicit "Fit window to media" command.
 ///
 /// Automatic source-load fitting never exits a user-selected window state.
@@ -559,6 +607,136 @@ mod tests {
                 height: 180
             })
         );
+    }
+
+    #[test]
+    fn missing_toplevel_bounds_fall_back_to_the_current_monitor() {
+        let monitor = WindowRect {
+            x: 1920,
+            y: -120,
+            width: 2560,
+            height: 1440,
+        };
+        assert_eq!(monitor_fit_work_area(monitor, None), Some(monitor));
+    }
+
+    #[test]
+    fn size_only_bounds_cannot_overlap_an_unknown_reserved_edge() {
+        let monitor = WindowRect {
+            x: 1920,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
+        let resolved = monitor_fit_work_area(
+            monitor,
+            Some(WindowSize {
+                width: 1880,
+                height: 1040,
+            }),
+        )
+        .expect("valid monitor-local workarea");
+
+        assert_eq!(
+            resolved,
+            WindowRect {
+                x: 1960,
+                y: 40,
+                width: 1840,
+                height: 1000,
+            }
+        );
+        for possible_work_area in [
+            WindowRect {
+                x: 1960,
+                y: 40,
+                width: 1880,
+                height: 1040,
+            },
+            WindowRect {
+                x: 1920,
+                y: 0,
+                width: 1880,
+                height: 1040,
+            },
+            WindowRect {
+                x: 1940,
+                y: 20,
+                width: 1880,
+                height: 1040,
+            },
+        ] {
+            assert!(rect_contains(possible_work_area, resolved));
+        }
+    }
+
+    #[test]
+    fn desktop_union_bounds_are_clamped_to_one_monitor() {
+        let monitor = WindowRect {
+            x: -1280,
+            y: 24,
+            width: 1280,
+            height: 1024,
+        };
+        assert_eq!(
+            monitor_fit_work_area(
+                monitor,
+                Some(WindowSize {
+                    width: 3200,
+                    height: 1040,
+                })
+            ),
+            Some(monitor)
+        );
+    }
+
+    #[test]
+    fn invalid_or_implausibly_small_bounds_keep_a_usable_monitor_fallback() {
+        let monitor = WindowRect {
+            x: 0,
+            y: 0,
+            width: 1280,
+            height: 900,
+        };
+        assert_eq!(
+            monitor_fit_work_area(
+                monitor,
+                Some(WindowSize {
+                    width: 0,
+                    height: 800,
+                })
+            ),
+            Some(monitor)
+        );
+        assert_eq!(
+            monitor_fit_work_area(
+                monitor,
+                Some(WindowSize {
+                    width: 500,
+                    height: 400,
+                })
+            ),
+            Some(monitor)
+        );
+        assert_eq!(
+            monitor_fit_work_area(
+                WindowRect {
+                    width: 0,
+                    ..monitor
+                },
+                None
+            ),
+            None
+        );
+    }
+
+    fn rect_contains(outer: WindowRect, inner: WindowRect) -> bool {
+        i64::from(inner.x) >= i64::from(outer.x)
+            && i64::from(inner.y) >= i64::from(outer.y)
+            && i64::from(inner.x) + i64::from(inner.width)
+                <= i64::from(outer.x) + i64::from(outer.width)
+            && i64::from(inner.y) + i64::from(inner.height)
+                <= i64::from(outer.y) + i64::from(outer.height)
     }
 
     #[test]

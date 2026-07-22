@@ -518,6 +518,41 @@ assert_monitor_fit_log() {
   fi
 }
 
+fit_log_rect() {
+  local file="$1" field="$2"
+  rg -m1 '^window fit request:' "$file" \
+    | sed -E \
+      "s/.* ${field}=([0-9]+)x([0-9]+)\+(-?[0-9]+),(-?[0-9]+).*/\1 \2 \3 \4/"
+}
+
+assert_logged_fit_containment() {
+  local file="$1" label="$2"
+  local monitor_width monitor_height monitor_x monitor_y
+  local work_width work_height work_x work_y
+  local window_width window_height window_x window_y
+  read -r monitor_width monitor_height monitor_x monitor_y \
+    < <(fit_log_rect "$file" monitor_geometry)
+  read -r work_width work_height work_x work_y \
+    < <(fit_log_rect "$file" workarea)
+  read -r window_width window_height window_x window_y \
+    < <(fit_log_rect "$file" window)
+
+  if (( work_x < monitor_x || work_y < monitor_y \
+    || work_x + work_width > monitor_x + monitor_width \
+    || work_y + work_height > monitor_y + monitor_height )); then
+    echo "$label logged a workarea outside its monitor" >&2
+    rg -m1 '^window fit request:' "$file" >&2 || true
+    exit 1
+  fi
+  if (( window_x < work_x || window_y < work_y \
+    || window_x + window_width > work_x + work_width \
+    || window_y + window_height > work_y + work_height )); then
+    echo "$label logged a fitted window outside its workarea" >&2
+    rg -m1 '^window fit request:' "$file" >&2 || true
+    exit 1
+  fi
+}
+
 wait_for_log() {
   local file="$1" pattern="$2"
   for _ in $(seq 1 50); do
@@ -592,6 +627,7 @@ for expected in \
 done
 assert_single_initial_configure "$OUT_DIR/fit-small-app.log" "Small video"
 assert_monitor_fit_log "$OUT_DIR/fit-small-app.log" "Small video"
+assert_logged_fit_containment "$OUT_DIR/fit-small-app.log" "Small video"
 
 # Playback and the original render context remain live through initial sizing
 # and ordinary seek input. The 24-second fixture accepts +10 then -10 without
@@ -817,6 +853,7 @@ if ! rg -q "workarea=1024x768" "$OUT_DIR/fit-4k-right-monitor-app.log"; then
 fi
 assert_single_initial_configure "$OUT_DIR/fit-4k-right-monitor-app.log" "4K video"
 assert_monitor_fit_log "$OUT_DIR/fit-4k-right-monitor-app.log" "4K video"
+assert_logged_fit_containment "$OUT_DIR/fit-4k-right-monitor-app.log" "4K video"
 xdotool windowsize "$right_id" 700 500
 sleep 1
 activate_fit_window_command "$right_id"
@@ -850,6 +887,7 @@ vertical_geometry=${vertical_width}x${vertical_height}
 4k_window=${fit_4k_window_geometry}
 4k_monitor_fit=${fit_4k_monitor_fit}
 initial_fit_configures_per_geometry=1
+logged_monitor_workarea_containment=pass
 4k_explicit_fit=${explicit_4k_width}x${explicit_4k_height}
 explicit_fit_dispatch=pass
 status=pass

@@ -71,7 +71,7 @@ fn file_association_launches_present_before_media_delivery() {
 }
 
 #[test]
-fn initial_fit_waits_for_a_monitor_bound_workarea() {
+fn initial_fit_waits_for_the_current_monitor_but_not_optional_bounds() {
     let bridge = include_str!("mpv_bridge.rs");
     let poll = bridge
         .split("pub(crate) fn connect_state_poll")
@@ -89,8 +89,13 @@ fn initial_fit_waits_for_a_monitor_bound_workarea() {
     assert!(poll.contains("window.is_maximized()"));
 
     let window = include_str!("window.rs");
+    assert!(window.contains("let (monitor, monitor_geometry) = current_player_monitor(window)?"));
     assert!(window.contains("bounds.monitor.is_none()"));
-    assert!(!window.contains("(Some(bounds), None)"));
+    assert!(window.contains("monitor_fit_work_area(monitor_geometry, reported_size)"));
+    assert!(window.contains("must not\n    // stall a one-shot fit"));
+    assert!(window.contains("monitor-fallback-missing"));
+    assert!(window.contains("monitor-fallback-stale"));
+    assert!(!window.contains("bounded_monitor_work_area"));
     assert!(window.contains("monitor workarea unavailable"));
     assert!(!window.contains("window fit skipped: workarea unavailable"));
 }

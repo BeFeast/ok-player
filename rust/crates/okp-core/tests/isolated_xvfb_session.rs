@@ -55,6 +55,8 @@ fn main_window_fit_session_has_one_multiscreen_manager_and_two_supervisors() {
     assert!(script.contains("xdg_runtime_mode=%s\\naccessibility_disabled=true"));
     assert!(script.contains("org.a11y.Bus"));
     assert!(script.contains("org.a11y.atspi.Registry"));
+    assert!(script.contains("assert_logged_fit_containment"));
+    assert!(script.contains("logged_monitor_workarea_containment=pass"));
 }
 
 #[test]
