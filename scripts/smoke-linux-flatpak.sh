@@ -123,10 +123,10 @@ assert all(
     re.fullmatch(r"index [0-9a-f]{40}\.\.[0-9a-f]{40}(?: [0-7]{6})?", line)
     for line in index_lines
 ), "Flatpak patch must use full Git object IDs"
-assert "new file mode 100644\nindex 0000000000000000000000000000000000000000" in app_patch_path.read_text()
-assert "+++ b/rust/crates/okp-core/src/linux_renderer.rs" in app_patch_path.read_text()
 assert "MPV_RENDER_PARAM_ADVANCED_CONTROL" in app_patch
 assert "DecoderFailed" in app_patch
+assert "let path = shared.reader.path();" in app_patch
+assert "apply_endfile_diagnostic(state, failed_path, diagnostic)" in app_patch
 assert "diagnose_mpv_runtime" in app_patch
 assert "mpv.stop()" in app_patch
 assert "org.freedesktop.Platform.codecs-extra" in app_patch
@@ -172,6 +172,7 @@ expected_patch="$(mktemp)"
 trap 'rm -f "$expected_patch"' EXIT
 git -C "$ROOT" diff --full-index --binary --no-ext-diff "$app_commit" -- \
   rust/crates/okp-core/src/lib.rs \
+  rust/crates/okp-core/src/linux_renderer.rs \
   rust/crates/okp-core/src/playback_failure.rs \
   rust/crates/okp-core/src/presentation_evidence.rs \
   rust/crates/okp-mpv/src/ffi.rs \
@@ -188,13 +189,6 @@ git -C "$ROOT" diff --full-index --binary --no-ext-diff "$app_commit" -- \
   rust/crates/okp-linux-gtk/src/track_popovers.rs \
   rust/crates/okp-linux-gtk/src/updates.rs \
   rust/crates/okp-linux-gtk/src/window.rs >"$expected_patch"
-new_file_status=0
-git -C "$ROOT" diff --no-index --full-index --binary \
-  /dev/null rust/crates/okp-core/src/linux_renderer.rs >>"$expected_patch" || new_file_status=$?
-[[ "$new_file_status" -eq 1 ]] || {
-  echo "Failed to generate the Flatpak patch for linux_renderer.rs" >&2
-  exit "$new_file_status"
-}
 sed -i 's/^ $//' "$expected_patch"
 cmp "$expected_patch" "$APP_PATCH"
 bash -n "$BUILD_SCRIPT"

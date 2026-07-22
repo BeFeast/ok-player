@@ -1,17 +1,5 @@
-diff --git a/rust/crates/okp-core/src/lib.rs b/rust/crates/okp-core/src/lib.rs
-index 92138c0ad13817f7cd1c4514db3793fd8b724ec4..2bc7ff60959813158b9f191d48fe924d67a8e09a 100644
---- a/rust/crates/okp-core/src/lib.rs
-+++ b/rust/crates/okp-core/src/lib.rs
-@@ -18,6 +18,7 @@ pub mod history_format;
- pub mod image_luma;
- pub mod key_press;
- pub mod launch_args;
-+pub mod linux_renderer;
- pub mod lrc;
- pub mod lyrics;
- pub mod m3u;
 diff --git a/rust/crates/okp-core/src/playback_failure.rs b/rust/crates/okp-core/src/playback_failure.rs
-index efd0740bc9eff58d8e82fc4b86966ec04169deb8..ae1ad17ee20ea66909fa49b8550911a3a18e4afa 100644
+index e3b103b60807f77f32bb4eb3b59a1770c1af3cfe..ef355a238b66c1849f556f8a6206f6eac97121f5 100644
 --- a/rust/crates/okp-core/src/playback_failure.rs
 +++ b/rust/crates/okp-core/src/playback_failure.rs
 @@ -12,6 +12,13 @@ pub enum PlaybackFailureKind {
@@ -28,7 +16,7 @@ index efd0740bc9eff58d8e82fc4b86966ec04169deb8..ae1ad17ee20ea66909fa49b8550911a3
  #[derive(Clone, Debug, Eq, PartialEq)]
  pub struct PlaybackFailureDiagnostic {
      pub kind: PlaybackFailureKind,
-@@ -38,7 +45,7 @@ impl PlaybackFailureDiagnostic {
+@@ -51,7 +58,7 @@ impl PlaybackFailureDiagnostic {
  pub fn diagnose_mpv_failure(
      error_code: i32,
      engine_messages: &[String],
@@ -37,7 +25,7 @@ index efd0740bc9eff58d8e82fc4b86966ec04169deb8..ae1ad17ee20ea66909fa49b8550911a3
  ) -> PlaybackFailureDiagnostic {
      let normalized = engine_messages
          .iter()
-@@ -46,17 +53,7 @@ pub fn diagnose_mpv_failure(
+@@ -59,17 +66,7 @@ pub fn diagnose_mpv_failure(
          .collect::<Vec<_>>();
 
      if normalized.iter().any(|message| is_codec_failure(message)) {
@@ -56,7 +44,7 @@ index efd0740bc9eff58d8e82fc4b86966ec04169deb8..ae1ad17ee20ea66909fa49b8550911a3
      }
 
      if normalized
-@@ -81,20 +78,81 @@ pub fn diagnose_mpv_failure(
+@@ -94,20 +91,81 @@ pub fn diagnose_mpv_failure(
  /// warning harmless. Benign EOF log traffic is ignored.
  pub fn diagnose_mpv_eof(
      engine_messages: &[String],
@@ -142,7 +130,7 @@ index efd0740bc9eff58d8e82fc4b86966ec04169deb8..ae1ad17ee20ea66909fa49b8550911a3
  fn is_codec_failure(message: &str) -> bool {
      [
          "codec not found",
-@@ -143,7 +201,7 @@ mod tests {
+@@ -156,7 +214,7 @@ mod tests {
          let diagnostic = diagnose_mpv_failure(
              -13,
              &messages(&["[ffmpeg/video] Decoder not found for codec hevc"]),
@@ -151,7 +139,7 @@ index efd0740bc9eff58d8e82fc4b86966ec04169deb8..ae1ad17ee20ea66909fa49b8550911a3
          );
 
          assert_eq!(diagnostic.kind, PlaybackFailureKind::MissingCodec);
-@@ -159,7 +217,7 @@ mod tests {
+@@ -172,7 +230,7 @@ mod tests {
          let diagnostic = diagnose_mpv_failure(
              -13,
              &messages(&["Failed to initialize a decoder for stream 0"]),
@@ -160,7 +148,7 @@ index efd0740bc9eff58d8e82fc4b86966ec04169deb8..ae1ad17ee20ea66909fa49b8550911a3
          );
 
          assert_eq!(diagnostic.kind, PlaybackFailureKind::MissingCodec);
-@@ -171,7 +229,7 @@ mod tests {
+@@ -184,7 +242,7 @@ mod tests {
          let diagnostic = diagnose_mpv_failure(
              -12,
              &messages(&["vo/gpu: Failed initializing any suitable GPU context"]),
@@ -169,7 +157,7 @@ index efd0740bc9eff58d8e82fc4b86966ec04169deb8..ae1ad17ee20ea66909fa49b8550911a3
          );
 
          assert_eq!(diagnostic.kind, PlaybackFailureKind::Renderer);
-@@ -181,7 +239,11 @@ mod tests {
+@@ -194,7 +252,11 @@ mod tests {
 
      #[test]
      fn unknown_failure_stays_a_generic_application_error() {
@@ -182,7 +170,7 @@ index efd0740bc9eff58d8e82fc4b86966ec04169deb8..ae1ad17ee20ea66909fa49b8550911a3
 
          assert_eq!(diagnostic.kind, PlaybackFailureKind::Application);
          assert_eq!(diagnostic.title, "Playback failed");
-@@ -196,7 +258,7 @@ mod tests {
+@@ -209,7 +271,7 @@ mod tests {
                  "vo/gpu: Failed to create rendering context",
                  "ad: Could not open codec",
              ]),
@@ -191,7 +179,7 @@ index efd0740bc9eff58d8e82fc4b86966ec04169deb8..ae1ad17ee20ea66909fa49b8550911a3
          );
 
          assert_eq!(diagnostic.kind, PlaybackFailureKind::MissingCodec);
-@@ -206,7 +268,7 @@ mod tests {
+@@ -219,7 +281,7 @@ mod tests {
      fn decoder_failure_at_eof_remains_a_codec_diagnostic() {
          let diagnostic = diagnose_mpv_eof(
              &messages(&["[ffmpeg/video] Decoder not found for codec hevc"]),
@@ -200,7 +188,7 @@ index efd0740bc9eff58d8e82fc4b86966ec04169deb8..ae1ad17ee20ea66909fa49b8550911a3
          )
          .expect("decoder failure must not be discarded just because mpv reported EOF");
 
-@@ -220,6 +282,39 @@ mod tests {
+@@ -233,7 +295,40 @@ mod tests {
 
      #[test]
      fn benign_eof_logs_do_not_become_failures() {
@@ -240,43 +228,13 @@ index efd0740bc9eff58d8e82fc4b86966ec04169deb8..ae1ad17ee20ea66909fa49b8550911a3
 +            .is_none()
 +        );
      }
- }
-diff --git a/rust/crates/okp-core/src/presentation_evidence.rs b/rust/crates/okp-core/src/presentation_evidence.rs
-index 59e43b7bf3dad7f63e5d2d89a96220a9fc867fdc..6ddc58c3efa031dfc456ea0ec161cb3afc3bb877 100644
---- a/rust/crates/okp-core/src/presentation_evidence.rs
-+++ b/rust/crates/okp-core/src/presentation_evidence.rs
-@@ -14,6 +14,7 @@ pub const PRESENTATION_EVIDENCE_SCHEMA_VERSION: u32 = 1;
- pub enum PresentationBackend {
-     NativeWaylandEgl,
-     GtkGlArea,
-+    LibMpvSoftware,
- }
 
- #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-@@ -425,6 +426,18 @@ fn presents_per_second(records: &[PresentationRecord], start_ns: u64, duration_n
- mod tests {
-     use super::*;
-
-+    #[test]
-+    fn software_presentation_backend_has_a_stable_evidence_name() {
-+        let record = PresentationRecord::Session {
-+            schema_version: PRESENTATION_EVIDENCE_SCHEMA_VERSION,
-+            backend: PresentationBackend::LibMpvSoftware,
-+        };
-+        assert_eq!(
-+            serde_json::to_string(&record).expect("session evidence should serialize"),
-+            r#"{"event":"session","schema_version":1,"backend":"lib-mpv-software"}"#
-+        );
-+    }
-+
      #[test]
-     fn exact_fifteen_second_native_window_passes_at_fifty_five_presents_per_second() {
-         let start = 10_000_000_000;
 diff --git a/rust/crates/okp-linux-gtk/src/about.rs b/rust/crates/okp-linux-gtk/src/about.rs
-index e569826cdf1ead3c99547e264ac9dcbb36fec6ff..82013d381710e20dfdf5080f016e8d8da3ad3091 100644
+index b6088a05c13372beb512a3eef1342273ffa5526c..9180401930d166e18843687b573f4ee7bf4b1989 100644
 --- a/rust/crates/okp-linux-gtk/src/about.rs
 +++ b/rust/crates/okp-linux-gtk/src/about.rs
-@@ -568,10 +568,14 @@ pub(crate) fn linux_os_label() -> String {
+@@ -537,10 +537,14 @@ pub(crate) fn linux_os_label() -> String {
  }
 
  pub(crate) fn linux_update_install_status() -> &'static str {
@@ -297,30 +255,14 @@ index e569826cdf1ead3c99547e264ac9dcbb36fec6ff..82013d381710e20dfdf5080f016e8d8d
      }
  }
 diff --git a/rust/crates/okp-linux-gtk/src/main.rs b/rust/crates/okp-linux-gtk/src/main.rs
-index 0e856c3410906bbdf62c005c3231810edc30253a..8e1b9fcf9e2d5e49e424fef5090b132b655900df 100644
+index f2e761d488cec76f7a72d54edd56e01d50276de6..2b1cdf602af2953bde198fe0fc738385884fdcb6 100644
 --- a/rust/crates/okp-linux-gtk/src/main.rs
 +++ b/rust/crates/okp-linux-gtk/src/main.rs
-@@ -24,6 +24,7 @@ use okp_core::companion_window::{self as companion_window_core, CompanionWindowK
- use okp_core::gapless::{GaplessPlaybackCapability, PlaylistTransitionPath};
- use okp_core::hdr::HdrHandlingState;
- use okp_core::key_press::KeyPressLatch;
-+use okp_core::linux_renderer::LinuxRendererMode;
- use okp_core::player_commands::{
-     self, PlayerCommandContext, PlayerCommandGroup, PlayerCommandId, PlayerCommandSurface,
-     ResolvedPlayerCommand,
-@@ -189,6 +190,7 @@ static MPRIS_EMBEDDED_ART_CACHE: OnceLock<
-     Mutex<HashMap<MprisEmbeddedArtCacheKey, MprisEmbeddedArtCacheEntry>>,
- > = OnceLock::new();
- static MPRIS_APP_ICON_ART_URL: OnceLock<Option<String>> = OnceLock::new();
-+static LINUX_RENDERER_MODE: OnceLock<LinuxRendererMode> = OnceLock::new();
-
- #[derive(Default)]
- struct PlayerState {
-@@ -864,9 +866,15 @@ enum LinuxUpdateTarget {
+@@ -885,9 +885,15 @@ enum LinuxUpdateTarget {
      Deb(DebUpdate),
  }
 
-+#[derive(Clone, Copy)]
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 +enum LinuxExternalUpdateManager {
 +    Flatpak,
 +    Dnf,
@@ -333,39 +275,27 @@ index 0e856c3410906bbdf62c005c3231810edc30253a..8e1b9fcf9e2d5e49e424fef5090b132b
      Available(PendingLinuxUpdate),
      Failed(String),
  }
-@@ -877,7 +885,7 @@ enum LinuxUpdateStatus {
+@@ -905,7 +911,7 @@ enum LinuxUpdateStatus {
      NotChecked,
-     Checking,
+     Checking(Option<LinuxUpdateOffer>),
      UpToDate,
 -    ManagedExternally,
 +    ManagedExternally(LinuxExternalUpdateManager),
-     Available(PendingLinuxUpdate),
+     Offer(LinuxUpdateOffer),
      Failed(String),
  }
-@@ -886,7 +894,7 @@ impl LinuxUpdateStatus {
-     fn from_check_result(result: &LinuxUpdateCheckResult) -> Self {
+@@ -918,7 +924,7 @@ impl LinuxUpdateStatus {
+     ) -> Self {
          match result {
              LinuxUpdateCheckResult::UpToDate => Self::UpToDate,
 -            LinuxUpdateCheckResult::ManagedExternally => Self::ManagedExternally,
 +            LinuxUpdateCheckResult::ManagedExternally(manager) => Self::ManagedExternally(*manager),
-             LinuxUpdateCheckResult::Available(update) => Self::Available(update.clone()),
-             LinuxUpdateCheckResult::Failed(error) => Self::Failed(error.clone()),
-         }
-@@ -903,7 +911,10 @@ impl LinuxUpdateStatus {
-         match self {
-             Self::Available(update) => update.action_label().to_owned(),
-             Self::Checking => "Checking...".to_owned(),
--            Self::ManagedExternally => "Managed by DNF".to_owned(),
-+            Self::ManagedExternally(LinuxExternalUpdateManager::Flatpak) => {
-+                "Check for updates".to_owned()
-+            }
-+            Self::ManagedExternally(LinuxExternalUpdateManager::Dnf) => "Managed by DNF".to_owned(),
-             _ => "Check for updates".to_owned(),
-         }
-     }
-@@ -913,7 +924,12 @@ impl LinuxUpdateStatus {
-             Self::NotChecked => update_status_intro(auto_check_enabled).to_owned(),
-             Self::Checking => "Checking the update feed...".to_owned(),
+             LinuxUpdateCheckResult::Available(update) => {
+                 let version = update
+                     .target_version()
+@@ -949,7 +955,12 @@ impl LinuxUpdateStatus {
+             }
+             Self::Checking(None) => "Checking the update feed...".to_owned(),
              Self::UpToDate => "OK Player is up to date".to_owned(),
 -            Self::ManagedExternally => "Updates are managed by DNF.".to_owned(),
 +            Self::ManagedExternally(LinuxExternalUpdateManager::Flatpak) => {
@@ -374,289 +304,33 @@ index 0e856c3410906bbdf62c005c3231810edc30253a..8e1b9fcf9e2d5e49e424fef5090b132b
 +            Self::ManagedExternally(LinuxExternalUpdateManager::Dnf) => {
 +                "Updates are managed by DNF.".to_owned()
 +            }
-             Self::Available(update) => update.available_status(),
+             Self::Offer(offer) => offer.status_text(),
              Self::Failed(error) => format!("Update check failed: {error}"),
          }
-@@ -1770,6 +1786,7 @@ const SIDE_PANEL_BOTTOM_INSET: i32 = 80;
- const SIDE_PANEL_TRANSITION_MS: u32 = 250;
-
- fn main() -> glib::ExitCode {
-+    configure_linux_renderer_environment();
-     VelopackApp::build().set_auto_apply_on_startup(false).run();
-
-     let app = gtk::Application::builder()
 diff --git a/rust/crates/okp-linux-gtk/src/mpv_bridge.rs b/rust/crates/okp-linux-gtk/src/mpv_bridge.rs
-index 9912543d297d2a40daaf7e5a5a65e5c2d7520934..b64bfdf7e718ca74eff71cb90b3a63827e59ba4e 100644
+index 502576b97de7507a3b62e81998416816c532f286..8c2b8f1183add1c9a4b9adc73115253f6ade764f 100644
 --- a/rust/crates/okp-linux-gtk/src/mpv_bridge.rs
 +++ b/rust/crates/okp-linux-gtk/src/mpv_bridge.rs
-@@ -6,6 +6,68 @@ use gtk::glib::translate::ToGlibPtr;
- use std::ptr::NonNull;
- use std::sync::atomic::{AtomicBool, Ordering};
-
-+pub(crate) fn configure_linux_renderer_environment() -> LinuxRendererMode {
-+    let flatpak = flatpak_install_detected(
-+        env::var_os("FLATPAK_ID").as_deref(),
-+        Path::new("/.flatpak-info").is_file(),
-+    );
-+    let dri_accessible = accessible_dri_device_exists(Path::new("/dev/dri"));
-+    let mode = okp_core::linux_renderer::select_linux_renderer(flatpak, dri_accessible);
-+
-+    for (name, value) in mode.environment_overrides() {
-+        // SAFETY: this runs as the first statement in `main`, before GTK,
-+        // Velopack, or any application worker thread is initialized.
-+        unsafe {
-+            env::set_var(name, value);
-+        }
-+    }
-+    let _ = LINUX_RENDERER_MODE.set(mode);
-+
-+    eprintln!(
-+        "Renderer policy: mode={} flatpak={} dri-accessible={} backend={} hwdec={} render-api={} gsk-renderer={}",
-+        mode.label(),
-+        flatpak,
-+        dri_accessible,
-+        if mode.requires_software_surface() {
-+            "libmpv-software"
-+        } else {
-+            "automatic"
-+        },
-+        mode.mpv_hwdec_override().unwrap_or("settings"),
-+        if mode == LinuxRendererMode::SoftwareNoDri {
-+            "sw"
-+        } else {
-+            "default"
-+        },
-+        if mode == LinuxRendererMode::SoftwareNoDri {
-+            "cairo"
-+        } else {
-+            "default"
-+        }
-+    );
-+    mode
-+}
-+
-+pub(crate) fn configured_linux_renderer_mode() -> LinuxRendererMode {
-+    LINUX_RENDERER_MODE.get().copied().unwrap_or_default()
-+}
-+
-+pub(crate) fn accessible_dri_device_exists(root: &Path) -> bool {
-+    let Ok(entries) = fs::read_dir(root) else {
-+        return false;
-+    };
-+    entries.filter_map(Result::ok).any(|entry| {
-+        let name = entry.file_name();
-+        let name = name.to_string_lossy();
-+        (name.starts_with("renderD") || name.starts_with("card"))
-+            && fs::OpenOptions::new()
-+                .read(true)
-+                .write(true)
-+                .open(entry.path())
-+                .is_ok()
-+    })
-+}
-+
- pub(crate) struct NativeRenderNotifier {
-     alive: AtomicBool,
-     pending: Mutex<NativeRenderRequest>,
-@@ -208,6 +270,7 @@ pub(crate) fn connect_mpv(
-             auto_fallback,
-         } => connect_native_mpv(area, container, *auto_fallback, state, launch_args),
-         VideoHost::Gtk(area) => connect_gtk_mpv(area, state, launch_args),
-+        VideoHost::Software(area) => connect_software_mpv(area, state, launch_args),
-     }
- }
-
-@@ -264,7 +327,11 @@ fn connect_native_mpv(
+@@ -385,7 +385,7 @@ fn connect_native_mpv(
              );
              return;
          }
 -        if let Err(error) = mpv.create_render_context(native_wayland_display) {
-+        // Native rendering owns a dedicated callback-driven render thread, so
-+        // it can satisfy libmpv's advanced-control contract. This lets GPU-
-+        // backed screenshots execute on that thread instead of falling back to
-+        // a hardware-frame software download that fails on real Wayland/VAAPI.
 +        if let Err(error) = mpv.create_render_context(native_wayland_display, true) {
              schedule_gtk_mpv_fallback(
                  &fallback_container,
                  &realize_fallback_started,
-@@ -431,7 +498,6 @@ fn connect_gtk_mpv(
-             eprintln!("GTK GLArea error: {error}");
-             return;
-         }
--
-         let Some(mut mpv) = create_configured_mpv(&realize_state) else {
-             return;
-         };
-@@ -443,7 +509,9 @@ fn connect_gtk_mpv(
+@@ -606,7 +606,7 @@ fn connect_gtk_mpv(
                  "GDK Wayland native display is unavailable; continuing without zero-copy display interop"
              );
          }
 -        if let Err(error) = mpv.create_render_context(native_wayland_display) {
-+        // GtkGLArea is timer-driven and does not install the mandatory update
-+        // callback for advanced control, so keep the default render contract.
 +        if let Err(error) = mpv.create_render_context(native_wayland_display, false) {
              eprintln!("Failed to create mpv render context: {error}");
              return;
          }
-@@ -512,8 +580,112 @@ fn connect_gtk_mpv(
-     });
- }
-
-+fn connect_software_mpv(
-+    video_area: &gtk::DrawingArea,
-+    state: Rc<RefCell<PlayerState>>,
-+    launch_args: LaunchArgs,
-+) {
-+    let realize_state = Rc::clone(&state);
-+    video_area.connect_realize(move |_| {
-+        let Some(mut mpv) = create_configured_mpv(&realize_state) else {
-+            return;
-+        };
-+        if let Err(error) = mpv.create_software_render_context() {
-+            eprintln!("Failed to create libmpv software render context: {error}");
-+            return;
-+        }
-+        eprintln!(
-+            "Software renderer: backend=libmpv-software format={} scene-renderer=cairo",
-+            okp_mpv::software_render_format()
-+        );
-+        mpv.start_event_pump();
-+        realize_state.borrow_mut().mpv = Some(mpv);
-+        schedule_audio_device_restore(&realize_state);
-+        try_pending_audio_device_restore(&realize_state);
-+        apply_launch_args(&realize_state, &launch_args);
-+    });
-+
-+    let frame = Rc::new(RefCell::new(None::<cairo::ImageSurface>));
-+    let draw_frame = Rc::clone(&frame);
-+    let draw_state = Rc::clone(&state);
-+    let render_error_logged = Rc::new(Cell::new(false));
-+    let draw_error_logged = Rc::clone(&render_error_logged);
-+    video_area.set_draw_func(move |_, context, width, height| {
-+        if width <= 0 || height <= 0 {
-+            return;
-+        }
-+
-+        let mut frame = draw_frame.borrow_mut();
-+        let recreate = frame
-+            .as_ref()
-+            .is_none_or(|surface| surface.width() != width || surface.height() != height);
-+        if recreate {
-+            match cairo::ImageSurface::create(cairo::Format::Rgb24, width, height) {
-+                Ok(surface) => *frame = Some(surface),
-+                Err(error) => {
-+                    if !draw_error_logged.replace(true) {
-+                        eprintln!("Failed to allocate the software video surface: {error}");
-+                    }
-+                    return;
-+                }
-+            }
-+        }
-+
-+        let surface = frame.as_mut().expect("software surface was created");
-+        let stride = surface.stride() as usize;
-+        surface.flush();
-+        let render_result = match surface.data() {
-+            Ok(mut pixels) => draw_state
-+                .borrow_mut()
-+                .mpv
-+                .as_mut()
-+                .map(|mpv| mpv.render_software(width, height, stride, pixels.as_mut()))
-+                .transpose(),
-+            Err(error) => {
-+                if !draw_error_logged.replace(true) {
-+                    eprintln!("Failed to borrow the software video pixels: {error}");
-+                }
-+                return;
-+            }
-+        };
-+        if let Err(error) = render_result {
-+            if !draw_error_logged.replace(true) {
-+                eprintln!("libmpv software render failed: {error}");
-+            }
-+            return;
-+        }
-+        draw_error_logged.set(false);
-+        surface.mark_dirty();
-+        if context.set_source_surface(surface, 0.0, 0.0).is_ok() {
-+            let _ = context.paint();
-+        }
-+        let state = draw_state.borrow();
-+        if let Some(recorder) = state.presentation_recorder.as_ref()
-+            && state.mpv.is_some()
-+        {
-+            recorder.record_present(
-+                okp_mpv::RenderTargetSize { width, height },
-+                "libmpv-software-cairo",
-+            );
-+        }
-+    });
-+
-+    let unrealize_state = Rc::clone(&state);
-+    video_area.connect_unrealize(move |_| {
-+        if let Some(mpv) = unrealize_state.borrow_mut().mpv.as_mut() {
-+            mpv.destroy_render_context();
-+        }
-+    });
-+
-+    let tick_area = video_area.clone();
-+    glib::timeout_add_local(Duration::from_millis(16), move || {
-+        tick_area.queue_draw();
-+        glib::ControlFlow::Continue
-+    });
-+}
-+
- fn create_configured_mpv(state: &Rc<RefCell<PlayerState>>) -> Option<Mpv> {
--    let (hwdec, raw_mpv_config, subtitle_scale, subtitle_position, subtitle_style) = {
-+    let (configured_hwdec, raw_mpv_config, subtitle_scale, subtitle_position, subtitle_style) = {
-         let state = state.borrow();
-         (
-             state.settings.hardware_decode_mpv_option().to_owned(),
-@@ -523,7 +695,11 @@ fn create_configured_mpv(state: &Rc<RefCell<PlayerState>>) -> Option<Mpv> {
-             state.settings.subtitle_style(),
-         )
-     };
--    let raw_mpv_options = match parse_raw_mpv_config(&raw_mpv_config) {
-+    let hwdec = configured_linux_renderer_mode()
-+        .mpv_hwdec_override()
-+        .map(str::to_owned)
-+        .unwrap_or(configured_hwdec);
-+    let mut raw_mpv_options = match parse_raw_mpv_config(&raw_mpv_config) {
-         Ok(options) => options,
-         Err(error) => {
-             eprintln!(
-@@ -533,6 +709,20 @@ fn create_configured_mpv(state: &Rc<RefCell<PlayerState>>) -> Option<Mpv> {
-             Vec::new()
-         }
-     };
-+    let renderer_mode = configured_linux_renderer_mode();
-+    let renderer_options = renderer_mode
-+        .mpv_option_overrides()
-+        .iter()
-+        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
-+        .collect::<Vec<_>>();
-+    if !renderer_options.is_empty() {
-+        raw_mpv_options.retain(|(name, _)| {
-+            !renderer_options
-+                .iter()
-+                .any(|(managed, _)| name.eq_ignore_ascii_case(managed))
-+        });
-+        raw_mpv_options.extend(renderer_options.iter().cloned());
-+    }
-
-     let mpv = match Mpv::new_with_options(&hwdec, &raw_mpv_options) {
-         Ok(mpv) => mpv,
-@@ -540,7 +730,7 @@ fn create_configured_mpv(state: &Rc<RefCell<PlayerState>>) -> Option<Mpv> {
-             eprintln!(
-                 "Failed to create mpv with custom mpv.conf options: {error}; retrying without them"
-             );
--            match Mpv::new_with_hwdec(&hwdec) {
-+            match Mpv::new_with_options(&hwdec, &renderer_options) {
-                 Ok(mpv) => mpv,
-                 Err(error) => {
-                     eprintln!("Failed to create mpv: {error}");
 diff --git a/rust/crates/okp-linux-gtk/src/playlist_ops.rs b/rust/crates/okp-linux-gtk/src/playlist_ops.rs
-index b0987ca2e428cf932c7ea9c9d2ac07a8ae102f66..ee45fd874d98ead8458792061beb57c1a3d16876 100644
+index 30fd315030ab14778addcd0f06b552f82968d18c..31f95be136e57e3a79300f7751d82820edf8deb3 100644
 --- a/rust/crates/okp-linux-gtk/src/playlist_ops.rs
 +++ b/rust/crates/okp-linux-gtk/src/playlist_ops.rs
 @@ -2,6 +2,28 @@ use std::time::{SystemTime, UNIX_EPOCH};
@@ -706,12 +380,13 @@ index b0987ca2e428cf932c7ea9c9d2ac07a8ae102f66..ee45fd874d98ead8458792061beb57c1
      ) else {
          return false;
      };
-@@ -66,11 +88,34 @@ pub(crate) fn apply_endfile_eof_diagnostic(
+@@ -66,11 +88,35 @@ pub(crate) fn apply_endfile_eof_diagnostic(
      true
  }
 
 +pub(crate) fn apply_runtime_decoder_failure(
 +    state: &Rc<RefCell<PlayerState>>,
++    failed_path: Option<&str>,
 +    diagnostic_messages: &[String],
 +) -> bool {
 +    let Some(diagnostic) = okp_core::playback_failure::diagnose_mpv_runtime(
@@ -722,7 +397,7 @@ index b0987ca2e428cf932c7ea9c9d2ac07a8ae102f66..ee45fd874d98ead8458792061beb57c1
 +    };
 +
 +    eprintln!("libmpv reported an unavailable decoder; stopping partial playback");
-+    if !apply_endfile_diagnostic(state, None, diagnostic) {
++    if !apply_endfile_diagnostic(state, failed_path, diagnostic) {
 +        return false;
 +    }
 +    if let Some(mpv) = state.borrow().mpv.as_ref()
@@ -742,7 +417,7 @@ index b0987ca2e428cf932c7ea9c9d2ac07a8ae102f66..ee45fd874d98ead8458792061beb57c1
      let current_source = {
          let state = state.borrow();
          state
-@@ -86,7 +131,7 @@ fn apply_endfile_diagnostic(
+@@ -86,7 +132,7 @@ fn apply_endfile_diagnostic(
      };
      let Some(current_source) = current_source else {
          eprintln!("ignoring stale EndFile diagnostic after the source was cleared");
@@ -751,7 +426,7 @@ index b0987ca2e428cf932c7ea9c9d2ac07a8ae102f66..ee45fd874d98ead8458792061beb57c1
      };
      let stale = ended_path.is_some_and(|ended| !current_source.matches_engine_path(ended));
      if stale {
-@@ -94,12 +139,13 @@ fn apply_endfile_diagnostic(
+@@ -94,12 +140,13 @@ fn apply_endfile_diagnostic(
              "ignoring stale EndFile diagnostic for a superseded source ({})",
              ended_path.unwrap_or_default()
          );
@@ -992,44 +667,11 @@ index bd7e24d8f2a795304566db3768171d793bdc45d6..2b523d933a475195864c35c9f4b06126
 +    }
  }
 diff --git a/rust/crates/okp-linux-gtk/src/tests.rs b/rust/crates/okp-linux-gtk/src/tests.rs
-index 82f6983e79694d431fbb1bbcbf3375a36b32fbbb..a44eb996fdfc9363330e2f2fc371b29a2479e4ef 100644
+index f1565b17e058ae81fdf2f9e9763c5d6c355b7c64..e4921e11267717ac1bce292de977fb759375630e 100644
 --- a/rust/crates/okp-linux-gtk/src/tests.rs
 +++ b/rust/crates/okp-linux-gtk/src/tests.rs
-@@ -17,6 +17,32 @@ fn write_png_header(path: &Path) {
-     fs::write(path, b"\x89PNG\r\n\x1a\nokp!").expect("test png header should be written");
- }
-
-+#[test]
-+fn renderer_environment_is_selected_before_gtk_initialization() {
-+    let source = include_str!("main.rs");
-+    let renderer = source
-+        .find("configure_linux_renderer_environment();")
-+        .expect("main should configure rendering");
-+    let gtk = source
-+        .find("VelopackApp::build()")
-+        .expect("main should initialize Velopack/GTK");
-+    assert!(renderer < gtk);
-+}
-+
-+#[test]
-+fn dri_probe_requires_an_openable_render_or_card_entry() {
-+    let root = unique_temp_dir("okp-dri-probe");
-+    assert!(!accessible_dri_device_exists(root.path()));
-+
-+    fs::write(root.path().join("unrelated"), b"not a DRI node")
-+        .expect("unrelated fixture should be written");
-+    assert!(!accessible_dri_device_exists(root.path()));
-+
-+    fs::write(root.path().join("renderD128"), b"test DRI node")
-+        .expect("render-node fixture should be written");
-+    assert!(accessible_dri_device_exists(root.path()));
-+}
-+
- #[test]
- fn about_display_version_keeps_about_layout_compact() {
-     assert_eq!(about_display_version("0.1.0-linux-alpha.77"), "0.1.0");
-@@ -585,6 +611,25 @@ fn screenshot_surfaces_share_the_same_capture_implementation() {
-     assert!(playback.contains("render_loop.render_for_screenshot();"));
+@@ -30,6 +30,26 @@ fn renderer_environment_is_selected_before_gtk_initialization() {
+     assert!(renderer < gtk);
  }
 
 +#[test]
@@ -1041,64 +683,48 @@ index 82f6983e79694d431fbb1bbcbf3375a36b32fbbb..a44eb996fdfc9363330e2f2fc371b29a
 +}
 +
 +#[test]
-+fn decoder_failure_event_stops_partial_playback_and_uses_the_error_surface() {
++fn decoder_failure_event_is_bound_to_the_failed_source() {
 +    let events = include_str!("track_popovers.rs");
 +    let failures = include_str!("playlist_ops.rs");
 +
 +    assert!(events.contains("MpvEvent::DecoderFailed"));
-+    assert!(events.contains("apply_runtime_decoder_failure(state, &diagnostic_messages);"));
++    assert!(events.contains("path.as_deref(), &diagnostic_messages"));
 +    assert!(failures.contains("diagnose_mpv_runtime("));
++    assert!(failures.contains("apply_endfile_diagnostic(state, failed_path, diagnostic)"));
 +    assert!(failures.contains("mpv.stop()"));
 +}
 +
  #[test]
- fn settings_shell_matches_windows_reference_geometry() {
-     assert_eq!(SETTINGS_REFERENCE_WIDTH, 760);
-@@ -3590,6 +3635,32 @@ fn deb_update_action_requests_install() {
-     assert_eq!(update.available_status(), "Available: 0.1.0-linux-alpha.46");
- }
+ fn file_association_launches_present_before_media_delivery() {
+     let window = include_str!("window.rs");
+@@ -4179,7 +4199,7 @@ fn linux_update_status_reflects_last_check_result() {
+     assert!(up_to_date.pending_offer().is_none());
 
-+#[test]
-+fn flatpak_install_detection_uses_id_or_sandbox_marker() {
-+    use std::ffi::OsStr;
-+
-+    assert!(flatpak_install_detected(
-+        Some(OsStr::new("com.befeast.okplayer")),
-+        false
-+    ));
-+    assert!(flatpak_install_detected(None, true));
-+    assert!(!flatpak_install_detected(None, false));
-+    assert!(!flatpak_install_detected(Some(OsStr::new("")), false));
-+}
-+
-+#[test]
-+fn externally_managed_updates_are_inert_and_honest() {
-+    let managed = LinuxUpdateStatus::from_check_result(&LinuxUpdateCheckResult::ManagedExternally(
-+        LinuxExternalUpdateManager::Flatpak,
-+    ));
+     let managed = LinuxUpdateStatus::from_check_result(
+-        &LinuxUpdateCheckResult::ManagedExternally,
++        &LinuxUpdateCheckResult::ManagedExternally(LinuxExternalUpdateManager::Dnf),
+         UpdateChannel::Public,
+         &skipped,
+     );
+@@ -4189,6 +4209,17 @@ fn linux_update_status_reflects_last_check_result() {
+     );
+     assert!(managed.pending_offer().is_none());
+
++    let flatpak = LinuxUpdateStatus::from_check_result(
++        &LinuxUpdateCheckResult::ManagedExternally(LinuxExternalUpdateManager::Flatpak),
++        UpdateChannel::Public,
++        &skipped,
++    );
 +    assert_eq!(
-+        managed.settings_status_text(true),
++        flatpak.settings_status_text(true),
 +        "Updates are managed by Flatpak"
 +    );
-+    assert_eq!(managed.action_label(), "Check for updates");
-+    assert!(managed.pending_update().is_none());
-+}
++    assert!(flatpak.pending_offer().is_none());
 +
- #[test]
- fn linux_update_status_reflects_last_check_result() {
-     let up_to_date = LinuxUpdateStatus::from_check_result(&LinuxUpdateCheckResult::UpToDate);
-@@ -3600,7 +3671,9 @@ fn linux_update_status_reflects_last_check_result() {
-     assert_eq!(up_to_date.action_label(), "Check for updates");
-     assert!(up_to_date.pending_update().is_none());
-
--    let managed = LinuxUpdateStatus::from_check_result(&LinuxUpdateCheckResult::ManagedExternally);
-+    let managed = LinuxUpdateStatus::from_check_result(&LinuxUpdateCheckResult::ManagedExternally(
-+        LinuxExternalUpdateManager::Dnf,
-+    ));
-     assert_eq!(
-         managed.settings_status_text(true),
-         "Updates are managed by DNF."
-@@ -4128,6 +4201,65 @@ fn codec_failure_reported_at_eof_stays_on_the_failed_source() {
+     let update = PendingLinuxUpdate {
+         manager: None,
+         target: LinuxUpdateTarget::Deb(DebUpdate {
+@@ -4881,6 +4912,81 @@ fn codec_failure_reported_at_eof_stays_on_the_failed_source() {
      );
  }
 
@@ -1108,12 +734,13 @@ index 82f6983e79694d431fbb1bbcbf3375a36b32fbbb..a44eb996fdfc9363330e2f2fc371b29a
 +    let state = Rc::new(RefCell::new(PlayerState {
 +        current_file: Some(path.clone()),
 +        media_load_state: network_media::MediaLoadState::Playing,
-+        retry_load_source: Some(network_media::LoadFailureSource::local(path)),
++        retry_load_source: Some(network_media::LoadFailureSource::local(path.clone())),
 +        ..PlayerState::default()
 +    }));
 +
 +    assert!(apply_runtime_decoder_failure(
 +        &state,
++        path.to_str(),
 +        &["vd: Failed to initialize a decoder for codec h264".to_owned()],
 +    ));
 +
@@ -1132,6 +759,32 @@ index 82f6983e79694d431fbb1bbcbf3375a36b32fbbb..a44eb996fdfc9363330e2f2fc371b29a
 +}
 +
 +#[test]
++fn runtime_decoder_failure_drops_a_superseded_source() {
++    let state = Rc::new(RefCell::new(PlayerState {
++        current_file: Some(PathBuf::from("/media/source-b.mkv")),
++        media_load_state: network_media::MediaLoadState::Playing,
++        ..PlayerState::default()
++    }));
++
++    assert!(!apply_runtime_decoder_failure(
++        &state,
++        Some("/media/source-a.mkv"),
++        &["vd: Failed to initialize a decoder for codec h264".to_owned()],
++    ));
++
++    let state = state.borrow();
++    assert_eq!(
++        state.media_load_state,
++        network_media::MediaLoadState::Playing
++    );
++    assert!(state.last_load_diagnostic.is_none());
++    assert_eq!(
++        state.current_file.as_deref(),
++        Some(Path::new("/media/source-b.mkv"))
++    );
++}
++
++#[test]
 +fn runtime_warning_without_decoder_failure_keeps_playback_active() {
 +    let state = Rc::new(RefCell::new(PlayerState {
 +        current_file: Some(PathBuf::from("/media/movie.mkv")),
@@ -1141,6 +794,7 @@ index 82f6983e79694d431fbb1bbcbf3375a36b32fbbb..a44eb996fdfc9363330e2f2fc371b29a
 +
 +    assert!(!apply_runtime_decoder_failure(
 +        &state,
++        Some("/media/movie.mkv"),
 +        &["ao/pipewire: underrun recovered".to_owned()],
 +    ));
 +    assert_eq!(
@@ -1149,38 +803,27 @@ index 82f6983e79694d431fbb1bbcbf3375a36b32fbbb..a44eb996fdfc9363330e2f2fc371b29a
 +    );
 +}
 +
-+#[test]
-+fn flatpak_codec_environment_uses_extension_guidance() {
-+    assert_eq!(
-+        select_codec_environment(false, true),
-+        okp_core::playback_failure::CodecEnvironment::Flatpak
-+    );
-+    assert_eq!(
-+        select_codec_environment(true, true),
-+        okp_core::playback_failure::CodecEnvironment::FedoraRpm
-+    );
-+}
-+
  #[test]
  fn benign_eof_keeps_the_normal_playlist_path_available() {
      let state = Rc::new(RefCell::new(PlayerState {
 diff --git a/rust/crates/okp-linux-gtk/src/track_popovers.rs b/rust/crates/okp-linux-gtk/src/track_popovers.rs
-index f7ef99de1c5c155f0bd5c44095657d8a732b8632..8a7991885bcfbcaf7467ab95c508c10f4f4767ff 100644
+index 9c4757422fbde52db9eb54939ad1bd89f801b729..9fd5e624a075c3c612f5c5120cf965f0b8b4bfa5 100644
 --- a/rust/crates/okp-linux-gtk/src/track_popovers.rs
 +++ b/rust/crates/okp-linux-gtk/src/track_popovers.rs
-@@ -2047,6 +2047,11 @@ pub(crate) fn drain_mpv_events(
+@@ -2457,6 +2457,12 @@ pub(crate) fn drain_mpv_events(
      let mut auto_fit_dimensions = None;
      for event in events {
          match event {
 +            MpvEvent::DecoderFailed {
++                path,
 +                diagnostic_messages,
 +            } => {
-+                apply_runtime_decoder_failure(state, &diagnostic_messages);
++                apply_runtime_decoder_failure(state, path.as_deref(), &diagnostic_messages);
 +            }
              MpvEvent::FileLoaded { video_dimensions } => {
                  auto_fit_dimensions = auto_fit_dimensions.or(video_dimensions);
                  try_pending_audio_device_restore(state);
-@@ -2054,9 +2059,14 @@ pub(crate) fn drain_mpv_events(
+@@ -2464,9 +2470,14 @@ pub(crate) fn drain_mpv_events(
                  // Companion launch hints win over remembered track preferences for this open only.
                  try_pending_launch_tracks(state);
                  // A frame is up — the source is playing, not loading anymore.
@@ -1198,75 +841,75 @@ index f7ef99de1c5c155f0bd5c44095657d8a732b8632..8a7991885bcfbcaf7467ab95c508c10f
              MpvEvent::VideoReconfig { video_dimensions } => {
                  auto_fit_dimensions = auto_fit_dimensions.or(video_dimensions);
 diff --git a/rust/crates/okp-linux-gtk/src/updates.rs b/rust/crates/okp-linux-gtk/src/updates.rs
-index 712bab1ce64b5cea557fe4efa106f830c573e474..b0c7a8c050ac13585baf7bef4e50da3329fa5f5a 100644
+index 12f1afb18d2b443f774f0ee7380a805a4e015165..24995d928a71a0119ff3a4cf314320dbd05258f4 100644
 --- a/rust/crates/okp-linux-gtk/src/updates.rs
 +++ b/rust/crates/okp-linux-gtk/src/updates.rs
-@@ -159,6 +159,7 @@ pub(crate) fn settings_updates_section(
+@@ -303,11 +303,15 @@ pub(crate) fn refresh_linux_update_views(state: &Rc<RefCell<PlayerState>>) {
+         skip.set_sensitive(can_skip && !checking);
+
+         if let Some(check) = view.check.as_ref().and_then(glib::WeakRef::upgrade) {
+-            let managed = matches!(update_status, LinuxUpdateStatus::ManagedExternally);
+-            check.set_label(if managed {
+-                "Managed by DNF"
+-            } else {
+-                "Check for updates"
++            let manager = match update_status {
++                LinuxUpdateStatus::ManagedExternally(manager) => Some(manager),
++                _ => None,
++            };
++            let managed = manager.is_some();
++            check.set_label(match manager {
++                Some(LinuxExternalUpdateManager::Flatpak) => "Managed by Flatpak",
++                Some(LinuxExternalUpdateManager::Dnf) => "Managed by DNF",
++                None => "Check for updates",
+             });
+             check.set_sensitive(!managed && !checking && !installing);
+         }
+@@ -319,6 +323,11 @@ pub(crate) fn settings_updates_section(
      state: Rc<RefCell<PlayerState>>,
      status_toast: Rc<StatusToast>,
  ) -> gtk::Box {
 +    let flatpak_managed = flatpak_update_managed();
++    if flatpak_managed {
++        state.borrow_mut().linux_update_status =
++            LinuxUpdateStatus::ManagedExternally(LinuxExternalUpdateManager::Flatpak);
++    }
      let section = settings_section("Updates");
      section.append(&settings_value_row("Current version", APP_BUILD_VERSION));
      let channel = effective_update_channel(state.borrow().settings.update_channel());
-@@ -190,11 +191,19 @@ pub(crate) fn settings_updates_section(
+@@ -350,7 +359,7 @@ pub(crate) fn settings_updates_section(
      let row = gtk::Box::new(gtk::Orientation::Vertical, 8);
      row.add_css_class("okp-settings-row");
 
 -    let auto_check_enabled = state.borrow().settings.auto_check_updates();
--    let preview_status = settings_update_preview_status();
--    let initial_update_status = preview_status
--        .clone()
--        .unwrap_or_else(|| state.borrow().linux_update_status.clone());
 +    let auto_check_enabled = state.borrow().settings.auto_check_updates() && !flatpak_managed;
-+    let preview_status = if flatpak_managed {
-+        None
-+    } else {
-+        settings_update_preview_status()
-+    };
-+    let initial_update_status = if flatpak_managed {
-+        LinuxUpdateStatus::ManagedExternally(LinuxExternalUpdateManager::Flatpak)
-+    } else {
-+        preview_status
-+            .clone()
-+            .unwrap_or_else(|| state.borrow().linux_update_status.clone())
-+    };
-     let status = gtk::Label::new(Some(
-         &initial_update_status.settings_status_text(auto_check_enabled),
-     ));
-@@ -213,9 +222,11 @@ pub(crate) fn settings_updates_section(
+     let initial_update_status = state.borrow().linux_update_status.clone();
+
+     let auto_row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+@@ -361,9 +370,11 @@ pub(crate) fn settings_updates_section(
      auto_label.add_css_class("okp-info-label");
      auto_label.set_xalign(0.0);
      auto_text.append(&auto_label);
 -    let auto_detail = gtk::Label::new(Some(
--        "Check the linux pre-release feed on startup and show a toast when an update is ready.",
+-        "Check the selected Linux feed on startup and keep available updates actionable until you choose.",
 -    ));
 +    let auto_detail = gtk::Label::new(Some(if flatpak_managed {
 +        "Flatpak installs are updated by their configured repository."
 +    } else {
-+        "Check the linux pre-release feed on startup and show a toast when an update is ready."
++        "Check the selected Linux feed on startup and keep available updates actionable until you choose."
 +    }));
      auto_detail.add_css_class("okp-update-status");
      auto_detail.set_xalign(0.0);
      auto_detail.set_width_chars(1);
-@@ -230,6 +241,7 @@ pub(crate) fn settings_updates_section(
+@@ -378,6 +389,7 @@ pub(crate) fn settings_updates_section(
      auto_row.append(&auto_state_label);
 
-     let auto_switch = about_toggle_button(auto_check_enabled);
+     let auto_switch = settings_switch_button(auto_check_enabled, "Automatic checks");
 +    auto_switch.set_sensitive(!flatpak_managed);
      let auto_state = Rc::clone(&state);
      let auto_toast = Rc::clone(&status_toast);
-     let auto_status = status.clone();
-@@ -265,7 +277,7 @@ pub(crate) fn settings_updates_section(
-     check_button.add_css_class("okp-settings-button");
-     check_button.set_sensitive(!matches!(
-         initial_update_status,
--        LinuxUpdateStatus::Checking
-+        LinuxUpdateStatus::Checking | LinuxUpdateStatus::ManagedExternally(_)
-     ));
-     let check_status = status.clone();
-     let check_pending = Rc::clone(&pending_update);
-@@ -364,6 +376,20 @@ pub(crate) fn update_status_intro(auto_check_enabled: bool) -> &'static str {
+     let auto_state_text = auto_state_label.clone();
+@@ -522,6 +534,13 @@ pub(crate) fn update_status_intro(auto_check_enabled: bool) -> &'static str {
      }
  }
 
@@ -1277,60 +920,25 @@ index 712bab1ce64b5cea557fe4efa106f830c573e474..b0c7a8c050ac13585baf7bef4e50da33
 +    )
 +}
 +
-+pub(crate) fn flatpak_install_detected(
-+    flatpak_id: Option<&std::ffi::OsStr>,
-+    flatpak_info_exists: bool,
-+) -> bool {
-+    flatpak_id.is_some_and(|value| !value.is_empty()) || flatpak_info_exists
-+}
-+
  pub(crate) fn start_update_check_for_ui(
-     button: &gtk::Button,
-     status: &gtk::Label,
-@@ -492,6 +518,13 @@ pub(crate) fn apply_update_check_result(
-     state.borrow_mut().linux_update_status = LinuxUpdateStatus::from_check_result(&result);
-     button.set_sensitive(true);
-     match result {
-+        LinuxUpdateCheckResult::ManagedExternally(manager) => {
-+            pending.borrow_mut().take();
-+            button.set_sensitive(false);
-+            let managed_status = LinuxUpdateStatus::ManagedExternally(manager);
-+            button.set_label(&managed_status.action_label());
-+            status.set_text(&managed_status.settings_status_text(false));
-+        }
-         LinuxUpdateCheckResult::UpToDate => {
-             pending.borrow_mut().take();
-             button.set_label("Check for updates");
-@@ -500,12 +533,6 @@ pub(crate) fn apply_update_check_result(
+     state: Rc<RefCell<PlayerState>>,
+     status_toast: Rc<StatusToast>,
+@@ -728,7 +747,7 @@ pub(crate) fn apply_update_check_result(
                  status_toast.show("OK Player is up to date");
              }
          }
--        LinuxUpdateCheckResult::ManagedExternally => {
--            pending.borrow_mut().take();
--            button.set_label("Managed by DNF");
--            button.set_sensitive(false);
--            status.set_text("Updates are managed by DNF.");
--        }
-         LinuxUpdateCheckResult::Available(update) => {
-             let status_text = update.available_status();
-             let action_label = update.action_label();
-@@ -553,7 +580,7 @@ pub(crate) fn check_updates_on_startup(
-                         eprintln!("Startup update check failed: {error}");
-                     }
-                     LinuxUpdateCheckResult::UpToDate
--                    | LinuxUpdateCheckResult::ManagedExternally => {}
-+                    | LinuxUpdateCheckResult::ManagedExternally(_) => {}
-                 }
-                 glib::ControlFlow::Break
-             }
-@@ -564,9 +591,13 @@ pub(crate) fn check_updates_on_startup(
- }
-
- pub(crate) fn check_for_linux_update(channel: UpdateChannel) -> LinuxUpdateCheckResult {
+-        LinuxUpdateCheckResult::ManagedExternally => {}
++        LinuxUpdateCheckResult::ManagedExternally(_) => {}
+         LinuxUpdateCheckResult::Available(_) => {
+             if show_toast {
+                 match status {
+@@ -788,9 +807,12 @@ pub(crate) fn check_for_linux_update(channel: UpdateChannel) -> LinuxUpdateCheck
+     if let Some(preview) = linux_update_preview_check_result() {
+         return preview;
+     }
 +    if flatpak_update_managed() {
 +        return LinuxUpdateCheckResult::ManagedExternally(LinuxExternalUpdateManager::Flatpak);
 +    }
-+
      let install_lane = linux_install_lane();
      if install_lane == CandidateInstallLane::SystemPackage {
 -        return LinuxUpdateCheckResult::ManagedExternally;
@@ -1339,134 +947,55 @@ index 712bab1ce64b5cea557fe4efa106f830c573e474..b0c7a8c050ac13585baf7bef4e50da33
 
      let channel = effective_update_channel(channel);
 diff --git a/rust/crates/okp-linux-gtk/src/window.rs b/rust/crates/okp-linux-gtk/src/window.rs
-index 050e8dde8bf60f790e998bbfe5f040d51a9d7b37..fd3527760a513a888358b6697434635e76b556ef 100644
+index ae5958e9e8f615a382c0a92c0c809ed7c2e24310..564ebaca08e0d39670717b6c027df4ac9998bae5 100644
 --- a/rust/crates/okp-linux-gtk/src/window.rs
 +++ b/rust/crates/okp-linux-gtk/src/window.rs
-@@ -113,7 +113,8 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
+@@ -133,6 +133,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
      }
      apply_playback_settings_defaults(&state);
      let auto_check_updates = state.borrow().settings.auto_check_updates()
--        && env::var_os("OKP_SKIP_UPDATE_CHECK").is_none();
-+        && env::var_os("OKP_SKIP_UPDATE_CHECK").is_none()
-+        && !flatpak_update_managed();
++        && !flatpak_update_managed()
+         && env::var_os("OKP_SKIP_UPDATE_CHECK").is_none();
      let updating_seek = Rc::new(Cell::new(false));
-     let defer_initial_map = launch_args.has_media_payload()
-         && env::var_os("OKP_START_FULLSCREEN").is_none()
-@@ -537,12 +538,21 @@ pub(crate) enum VideoHost {
-         auto_fallback: bool,
-     },
-     Gtk(gtk::GLArea),
-+    Software(gtk::DrawingArea),
- }
-
- impl VideoHost {
-     fn for_display(display: &gdk::Display) -> Self {
-         let requested = env::var("OKP_VIDEO_BACKEND").unwrap_or_else(|_| "auto".to_owned());
-         let wayland = is_wayland_display(display.type_().name());
-+        if configured_linux_renderer_mode().requires_software_surface() {
-+            if requested != "auto" && !requested.is_empty() {
-+                eprintln!(
-+                    "Ignoring OKP_VIDEO_BACKEND={requested}; no-DRI playback requires the libmpv software surface"
-+                );
-+            }
-+            return Self::Software(software_video_area());
-+        }
-         let (use_native, auto_fallback) = match requested.as_str() {
-             "gtk" | "gtk-glarea" => (false, false),
-             "native" | "native-wayland-egl" if wayland => (true, false),
-@@ -583,6 +593,7 @@ impl VideoHost {
-         match self {
-             Self::Native { container, .. } => container.upcast_ref(),
-             Self::Gtk(area) => area.upcast_ref(),
-+            Self::Software(area) => area.upcast_ref(),
-         }
-     }
-
-@@ -590,6 +601,7 @@ impl VideoHost {
-         match self {
-             Self::Native { area, .. } => gtk::prelude::WidgetExt::realize(area),
-             Self::Gtk(area) => gtk::prelude::WidgetExt::realize(area),
-+            Self::Software(area) => gtk::prelude::WidgetExt::realize(area),
-         }
-     }
-
-@@ -603,6 +615,9 @@ impl VideoHost {
-                 okp_core::presentation_evidence::PresentationBackend::NativeWaylandEgl
-             }
-             Self::Gtk(_) => okp_core::presentation_evidence::PresentationBackend::GtkGlArea,
-+            Self::Software(_) => {
-+                okp_core::presentation_evidence::PresentationBackend::LibMpvSoftware
-+            }
-         }
-     }
- }
-@@ -617,6 +632,15 @@ pub(crate) fn gtk_video_area() -> gtk::GLArea {
-     area
- }
-
-+pub(crate) fn software_video_area() -> gtk::DrawingArea {
-+    let area = gtk::DrawingArea::new();
-+    area.set_hexpand(true);
-+    area.set_vexpand(true);
-+    area.add_css_class("okp-video-plane");
-+    area.add_css_class("okp-software-video");
-+    area
-+}
-+
- pub(crate) fn track_player_window_bounds(
-     window: &gtk::ApplicationWindow,
-     aspect_resize_state: &AspectResizeState,
+     let updating_volume = Rc::new(Cell::new(false));
 diff --git a/rust/crates/okp-mpv/src/ffi.rs b/rust/crates/okp-mpv/src/ffi.rs
-index 5ed07f47369660436b9ccf95a65187fa6837bfea..83515bd7d6e7912095b9cbc7b3673b690608b315 100644
+index a0cbbae221939ee676dbccc572f224df60077d3b..83515bd7d6e7912095b9cbc7b3673b690608b315 100644
 --- a/rust/crates/okp-mpv/src/ffi.rs
 +++ b/rust/crates/okp-mpv/src/ffi.rs
-@@ -110,6 +110,11 @@ pub const MPV_RENDER_PARAM_OPENGL_INIT_PARAMS: c_int = 2;
+@@ -110,6 +110,7 @@ pub const MPV_RENDER_PARAM_OPENGL_INIT_PARAMS: c_int = 2;
  pub const MPV_RENDER_PARAM_OPENGL_FBO: c_int = 3;
  pub const MPV_RENDER_PARAM_FLIP_Y: c_int = 4;
  pub const MPV_RENDER_PARAM_WL_DISPLAY: c_int = 9;
 +pub const MPV_RENDER_PARAM_ADVANCED_CONTROL: c_int = 10;
-+pub const MPV_RENDER_PARAM_SW_SIZE: c_int = 17;
-+pub const MPV_RENDER_PARAM_SW_FORMAT: c_int = 18;
-+pub const MPV_RENDER_PARAM_SW_STRIDE: c_int = 19;
-+pub const MPV_RENDER_PARAM_SW_POINTER: c_int = 20;
- pub const MPV_RENDER_UPDATE_FRAME: u64 = 1 << 0;
- pub const MPV_FORMAT_FLAG: c_int = 3;
- pub const MPV_FORMAT_INT64: c_int = 4;
-diff --git a/rust/crates/okp-mpv/src/lib.rs b/rust/crates/okp-mpv/src/lib.rs
-index b88acfb247142092a54af8c604f32cc74d1bf689..fc8c3f05345509e0d02cde5aaf130b85e7304892 100644
---- a/rust/crates/okp-mpv/src/lib.rs
-+++ b/rust/crates/okp-mpv/src/lib.rs
-@@ -10,5 +10,6 @@ pub use player::{
-     Mpv, MpvError, MpvEvent, NativeWaylandDisplay, PlaybackDiagnostics, PlaybackState,
-     RenderTargetSize, RenderUpdateHandle, Track, TrackKind, VideoDimensions,
-     current_render_target_size, error_description, resolve_render_target_size,
-+    software_render_format,
- };
- pub use version::BuildTimeMpv;
+ pub const MPV_RENDER_PARAM_SW_SIZE: c_int = 17;
+ pub const MPV_RENDER_PARAM_SW_FORMAT: c_int = 18;
+ pub const MPV_RENDER_PARAM_SW_STRIDE: c_int = 19;
 diff --git a/rust/crates/okp-mpv/src/player.rs b/rust/crates/okp-mpv/src/player.rs
-index 998ee749d461d8abc13f50b1967cc85a27db93f7..1aa5ef2635ff456977a03b984d1511fe10745345 100644
+index 97ed410e85640dd0006bcc21d5af64a9e2be0e00..31a8799cfffb888ccbb0a7916b16327c0c38d612 100644
 --- a/rust/crates/okp-mpv/src/player.rs
 +++ b/rust/crates/okp-mpv/src/player.rs
-@@ -254,6 +254,9 @@ pub enum TrackKind {
- /// because `path` is a `String`.
+@@ -319,12 +319,16 @@ pub enum TrackKind {
+ /// Lifecycle events the engine fires, drained oldest-first via
+ /// [`Mpv::take_lifecycle_events`](crate::Mpv::take_lifecycle_events). Load and
+ /// reconfiguration events carry display dimensions read by the background pump,
+-/// while `EndFile` carries the path mpv reported for the entry that ended. The
+-/// shell can therefore react without a blocking UI-thread property read and can
+-/// drop a stale error whose source has already been superseded. Not `Copy`
+-/// because `path` is a `String`.
++/// while failure events carry the path mpv reported for their source. The shell
++/// can therefore react without a blocking UI-thread property read and can drop
++/// a stale error whose source has already been superseded. Not `Copy` because
++/// `path` is a `String`.
  #[derive(Debug, Clone, PartialEq, Eq)]
  pub enum MpvEvent {
 +    DecoderFailed {
++        path: Option<String>,
 +        diagnostic_messages: Vec<String>,
 +    },
      EndFile {
          reason: EndFileReason,
          path: Option<String>,
-@@ -298,6 +301,8 @@ pub enum MpvError {
-     LibMpv(c_int),
-     #[error("libmpv render context is not initialized")]
-     MissingRenderContext,
-+    #[error("software render surface dimensions, stride, or storage are invalid")]
-+    InvalidSoftwareSurface,
- }
-
- pub fn error_description(code: c_int) -> String {
-@@ -930,6 +935,7 @@ fn render_context_parameters(
+@@ -1003,6 +1007,7 @@ fn render_context_parameters(
      api: &CStr,
      init_params: &mut ffi::mpv_opengl_init_params,
      native_wayland_display: Option<NonNull<c_void>>,
@@ -1474,7 +1003,7 @@ index 998ee749d461d8abc13f50b1967cc85a27db93f7..1aa5ef2635ff456977a03b984d1511fe
  ) -> Vec<ffi::mpv_render_param> {
      let mut params = vec![
          ffi::mpv_render_param {
-@@ -947,6 +953,12 @@ fn render_context_parameters(
+@@ -1020,6 +1025,12 @@ fn render_context_parameters(
              data: display.as_ptr(),
          });
      }
@@ -1487,7 +1016,7 @@ index 998ee749d461d8abc13f50b1967cc85a27db93f7..1aa5ef2635ff456977a03b984d1511fe
      params.push(ffi::mpv_render_param {
          param_type: ffi::MPV_RENDER_PARAM_INVALID,
          data: ptr::null_mut(),
-@@ -1177,6 +1189,7 @@ impl Mpv {
+@@ -1335,6 +1346,7 @@ impl Mpv {
      pub fn create_render_context(
          &mut self,
          native_wayland_display: Option<NativeWaylandDisplay>,
@@ -1495,7 +1024,7 @@ index 998ee749d461d8abc13f50b1967cc85a27db93f7..1aa5ef2635ff456977a03b984d1511fe
      ) -> Result<(), MpvError> {
          if self.render_context.is_some() {
              return Ok(());
-@@ -1192,12 +1205,14 @@ impl Mpv {
+@@ -1350,12 +1362,14 @@ impl Mpv {
              get_proc_address: Some(get_proc_address),
              get_proc_address_ctx: ptr::null_mut(),
          };
@@ -1510,140 +1039,7 @@ index 998ee749d461d8abc13f50b1967cc85a27db93f7..1aa5ef2635ff456977a03b984d1511fe
          );
 
          let mut context = ptr::null_mut();
-@@ -1212,6 +1227,22 @@ impl Mpv {
-         Ok(())
-     }
-
-+    /// Create libmpv's CPU-only render context. This is the no-device fallback
-+    /// used when a Flatpak has no accessible DRI node.
-+    pub fn create_software_render_context(&mut self) -> Result<(), MpvError> {
-+        if self.render_context.is_some() {
-+            return Ok(());
-+        }
-+
-+        let mut params = software_render_context_parameters();
-+        let mut context = ptr::null_mut();
-+        check(unsafe {
-+            ffi::mpv_render_context_create(&mut context, self.handle.as_ptr(), params.as_mut_ptr())
-+        })?;
-+        self.render_context = NonNull::new(context);
-+        Ok(())
-+    }
-+
-     pub fn render_update_handle(&self) -> Result<RenderUpdateHandle, MpvError> {
-         Ok(RenderUpdateHandle {
-             context: self.render_context.ok_or(MpvError::MissingRenderContext)?,
-@@ -1537,6 +1568,26 @@ impl Mpv {
-         Ok(())
-     }
-
-+    pub fn render_software(
-+        &mut self,
-+        width: i32,
-+        height: i32,
-+        stride: usize,
-+        pixels: &mut [u8],
-+    ) -> Result<(), MpvError> {
-+        if width <= 0 || height <= 0 {
-+            return Ok(());
-+        }
-+
-+        let context = self.render_context.ok_or(MpvError::MissingRenderContext)?;
-+        let _ = unsafe { ffi::mpv_render_context_update(context.as_ptr()) };
-+        render_software_frame(context, width, height, stride, pixels)?;
-+        unsafe {
-+            ffi::mpv_render_context_report_swap(context.as_ptr());
-+        }
-+        Ok(())
-+    }
-+
-     pub fn destroy_render_context(&mut self) {
-         if let Some(context) = self.render_context.take() {
-             unsafe {
-@@ -1667,6 +1718,82 @@ fn render_context_frame(
-     check(unsafe { ffi::mpv_render_context_render(context.as_ptr(), params.as_mut_ptr()) })
- }
-
-+fn software_render_context_parameters() -> [ffi::mpv_render_param; 2] {
-+    [
-+        ffi::mpv_render_param {
-+            param_type: ffi::MPV_RENDER_PARAM_API_TYPE,
-+            data: c"sw".as_ptr().cast_mut().cast(),
-+        },
-+        ffi::mpv_render_param {
-+            param_type: ffi::MPV_RENDER_PARAM_INVALID,
-+            data: ptr::null_mut(),
-+        },
-+    ]
-+}
-+
-+pub const fn software_render_format() -> &'static str {
-+    if cfg!(target_endian = "little") {
-+        "bgr0"
-+    } else {
-+        "0rgb"
-+    }
-+}
-+
-+fn render_software_frame(
-+    context: NonNull<ffi::mpv_render_context>,
-+    width: i32,
-+    height: i32,
-+    stride: usize,
-+    pixels: &mut [u8],
-+) -> Result<(), MpvError> {
-+    let width = usize::try_from(width).map_err(|_| MpvError::InvalidSoftwareSurface)?;
-+    let height = usize::try_from(height).map_err(|_| MpvError::InvalidSoftwareSurface)?;
-+    let minimum_stride = width
-+        .checked_mul(4)
-+        .ok_or(MpvError::InvalidSoftwareSurface)?;
-+    let required = stride
-+        .checked_mul(height)
-+        .ok_or(MpvError::InvalidSoftwareSurface)?;
-+    if stride < minimum_stride || !stride.is_multiple_of(4) || pixels.len() < required {
-+        return Err(MpvError::InvalidSoftwareSurface);
-+    }
-+
-+    let mut size = [
-+        i32::try_from(width).map_err(|_| MpvError::InvalidSoftwareSurface)?,
-+        i32::try_from(height).map_err(|_| MpvError::InvalidSoftwareSurface)?,
-+    ];
-+    let mut stride = stride;
-+    let format = if cfg!(target_endian = "little") {
-+        c"bgr0"
-+    } else {
-+        c"0rgb"
-+    };
-+    let mut params = [
-+        ffi::mpv_render_param {
-+            param_type: ffi::MPV_RENDER_PARAM_SW_SIZE,
-+            data: size.as_mut_ptr().cast(),
-+        },
-+        ffi::mpv_render_param {
-+            param_type: ffi::MPV_RENDER_PARAM_SW_FORMAT,
-+            data: format.as_ptr().cast_mut().cast(),
-+        },
-+        ffi::mpv_render_param {
-+            param_type: ffi::MPV_RENDER_PARAM_SW_STRIDE,
-+            data: ptr::from_mut(&mut stride).cast(),
-+        },
-+        ffi::mpv_render_param {
-+            param_type: ffi::MPV_RENDER_PARAM_SW_POINTER,
-+            data: pixels.as_mut_ptr().cast(),
-+        },
-+        ffi::mpv_render_param {
-+            param_type: ffi::MPV_RENDER_PARAM_INVALID,
-+            data: ptr::null_mut(),
-+        },
-+    ];
-+
-+    check(unsafe { ffi::mpv_render_context_render(context.as_ptr(), params.as_mut_ptr()) })
-+}
-+
- /// Build the NUL-terminated argv libmpv expects. The `CString` vector must be
- /// kept alive by the caller for as long as the pointer vector is used.
- fn command_args(args: &[&str]) -> Result<(Vec<CString>, Vec<*const c_char>), MpvError> {
-@@ -2315,7 +2442,7 @@ mod tests {
+@@ -2597,7 +2611,7 @@ mod tests {
              get_proc_address: None,
              get_proc_address_ctx: ptr::null_mut(),
          };
@@ -1652,7 +1048,7 @@ index 998ee749d461d8abc13f50b1967cc85a27db93f7..1aa5ef2635ff456977a03b984d1511fe
          assert_eq!(
              without_wayland
                  .iter()
-@@ -2329,7 +2456,8 @@ mod tests {
+@@ -2611,7 +2625,8 @@ mod tests {
          );
 
          let display = NonNull::<c_void>::dangling();
@@ -1662,7 +1058,7 @@ index 998ee749d461d8abc13f50b1967cc85a27db93f7..1aa5ef2635ff456977a03b984d1511fe
          assert_eq!(
              with_wayland
                  .iter()
-@@ -2346,6 +2474,84 @@ mod tests {
+@@ -2628,6 +2643,42 @@ mod tests {
          assert!(with_wayland[3].data.is_null());
      }
 
@@ -1702,56 +1098,14 @@ index 998ee749d461d8abc13f50b1967cc85a27db93f7..1aa5ef2635ff456977a03b984d1511fe
 +        assert!(params[4].data.is_null());
 +    }
 +
-+    #[test]
-+    fn software_render_context_uses_only_the_sw_api_parameter() {
-+        let params = software_render_context_parameters();
-+        assert_eq!(
-+            params
-+                .iter()
-+                .map(|parameter| parameter.param_type)
-+                .collect::<Vec<_>>(),
-+            vec![
-+                ffi::MPV_RENDER_PARAM_API_TYPE,
-+                ffi::MPV_RENDER_PARAM_INVALID,
-+            ]
-+        );
-+        assert_eq!(unsafe { CStr::from_ptr(params[0].data.cast()) }, c"sw");
-+        assert!(params[1].data.is_null());
-+    }
-+
-+    #[test]
-+    fn software_render_format_matches_cairo_rgb24_native_byte_order() {
-+        assert_eq!(
-+            software_render_format(),
-+            if cfg!(target_endian = "little") {
-+                "bgr0"
-+            } else {
-+                "0rgb"
-+            }
-+        );
-+    }
-+
-+    #[test]
-+    fn software_render_surface_validation_fails_before_calling_libmpv() {
-+        let context = NonNull::<ffi::mpv_render_context>::dangling();
-+        assert!(matches!(
-+            render_software_frame(context, 4, 3, 15, &mut [0; 48]),
-+            Err(MpvError::InvalidSoftwareSurface)
-+        ));
-+        assert!(matches!(
-+            render_software_frame(context, 4, 3, 16, &mut [0; 47]),
-+            Err(MpvError::InvalidSoftwareSurface)
-+        ));
-+    }
-+
      #[test]
-     fn native_wayland_display_retains_its_owner_until_drop() {
-         struct Owner(Rc<Cell<bool>>);
+     fn software_render_context_uses_only_the_sw_api_parameter() {
+         let params = software_render_context_parameters();
 diff --git a/rust/crates/okp-mpv/src/pump.rs b/rust/crates/okp-mpv/src/pump.rs
-index 55b4db1618cc3c6388aeeb6a6ed222289c7025fb..e509b0da92488955d45bc2e52d5ab5bd03e13fe6 100644
+index a99113556f1b76934f4b84333f49aa1fc8649dd8..259ad516e4b93734a60fe6e8eb3e4de6eef42df4 100644
 --- a/rust/crates/okp-mpv/src/pump.rs
 +++ b/rust/crates/okp-mpv/src/pump.rs
-@@ -144,6 +144,7 @@ struct PumpShared {
+@@ -145,6 +145,7 @@ struct PumpShared {
      wake: Mutex<bool>,
      condvar: Condvar,
      running: AtomicBool,
@@ -1759,7 +1113,7 @@ index 55b4db1618cc3c6388aeeb6a6ed222289c7025fb..e509b0da92488955d45bc2e52d5ab5bd
  }
 
  pub(crate) struct EventPump {
-@@ -180,6 +181,7 @@ impl EventPump {
+@@ -181,6 +182,7 @@ impl EventPump {
              wake: Mutex::new(true),
              condvar: Condvar::new(),
              running: AtomicBool::new(true),
@@ -1767,7 +1121,7 @@ index 55b4db1618cc3c6388aeeb6a6ed222289c7025fb..e509b0da92488955d45bc2e52d5ab5bd
          });
 
          for (name, format) in OBSERVED_PROPERTIES {
-@@ -273,6 +275,9 @@ impl EventPump {
+@@ -278,6 +280,9 @@ impl EventPump {
          snapshot.media_info = None;
          drop(snapshot);
          lock(&self.shared.diagnostic_messages).clear();
@@ -1777,9 +1131,9 @@ index 55b4db1618cc3c6388aeeb6a6ed222289c7025fb..e509b0da92488955d45bc2e52d5ab5bd
      }
 
      /// Drain the lifecycle events queued since the last call, oldest first.
-@@ -386,11 +391,23 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
-             }
-             ffi::MPV_EVENT_LOG_MESSAGE => {
+@@ -395,11 +400,28 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
+                     continue;
+                 }
                  if let Some(message) = log_message(event) {
 -                    let mut messages = lock(&shared.diagnostic_messages);
 -                    if messages.len() == 24 {
@@ -1794,7 +1148,12 @@ index 55b4db1618cc3c6388aeeb6a6ed222289c7025fb..e509b0da92488955d45bc2e52d5ab5bd
 +                    if okp_core::playback_failure::is_mpv_codec_failure(&message)
 +                        && !shared.codec_failure_reported.swap(true, Ordering::AcqRel)
 +                    {
++                        // Bind the warning to the engine source while still on
++                        // the pump thread. The GTK drain may run after the user
++                        // has already opened another source.
++                        let path = shared.reader.path();
 +                        lifecycle.push(MpvEvent::DecoderFailed {
++                            path,
 +                            diagnostic_messages: lock(&shared.diagnostic_messages)
 +                                .iter()
 +                                .cloned()
@@ -1805,90 +1164,3 @@ index 55b4db1618cc3c6388aeeb6a6ed222289c7025fb..e509b0da92488955d45bc2e52d5ab5bd
                  }
              }
              ffi::MPV_EVENT_FILE_LOADED => {
-diff --git a/rust/crates/okp-core/src/linux_renderer.rs b/rust/crates/okp-core/src/linux_renderer.rs
-new file mode 100644
-index 0000000000000000000000000000000000000000..1b22489092aa3f28dec83a7ac9146b65a805673a
---- /dev/null
-+++ b/rust/crates/okp-core/src/linux_renderer.rs
-@@ -0,0 +1,81 @@
-+//! Pure renderer policy for Linux package environments.
-+//!
-+//! The GTK shell observes package/device facts and applies the returned
-+//! environment, but the decision itself stays portable and unit-testable.
-+
-+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-+pub enum LinuxRendererMode {
-+    #[default]
-+    Automatic,
-+    SoftwareNoDri,
-+}
-+
-+impl LinuxRendererMode {
-+    pub const fn label(self) -> &'static str {
-+        match self {
-+            Self::Automatic => "automatic",
-+            Self::SoftwareNoDri => "software-no-dri",
-+        }
-+    }
-+
-+    pub const fn requires_software_surface(self) -> bool {
-+        matches!(self, Self::SoftwareNoDri)
-+    }
-+
-+    pub const fn mpv_hwdec_override(self) -> Option<&'static str> {
-+        match self {
-+            Self::Automatic => None,
-+            Self::SoftwareNoDri => Some("no"),
-+        }
-+    }
-+
-+    pub const fn mpv_option_overrides(self) -> &'static [(&'static str, &'static str)] {
-+        match self {
-+            Self::Automatic => &[],
-+            Self::SoftwareNoDri => &[("hwdec", "no")],
-+        }
-+    }
-+
-+    pub const fn environment_overrides(self) -> &'static [(&'static str, &'static str)] {
-+        match self {
-+            Self::Automatic => &[],
-+            Self::SoftwareNoDri => &[("GSK_RENDERER", "cairo")],
-+        }
-+    }
-+}
-+
-+pub const fn select_linux_renderer(flatpak: bool, dri_accessible: bool) -> LinuxRendererMode {
-+    if flatpak && !dri_accessible {
-+        LinuxRendererMode::SoftwareNoDri
-+    } else {
-+        LinuxRendererMode::Automatic
-+    }
-+}
-+
-+#[cfg(test)]
-+mod tests {
-+    use super::*;
-+
-+    #[test]
-+    fn flatpak_without_dri_selects_cpu_software_surface() {
-+        let mode = select_linux_renderer(true, false);
-+        assert_eq!(mode, LinuxRendererMode::SoftwareNoDri);
-+        assert!(mode.requires_software_surface());
-+        assert_eq!(mode.mpv_hwdec_override(), Some("no"));
-+        assert_eq!(mode.mpv_option_overrides(), &[("hwdec", "no")]);
-+        assert_eq!(mode.label(), "software-no-dri");
-+        assert_eq!(mode.environment_overrides(), &[("GSK_RENDERER", "cairo")]);
-+    }
-+
-+    #[test]
-+    fn normal_dri_and_non_flatpak_installs_remain_automatic() {
-+        for (flatpak, dri_accessible) in [(true, true), (false, true), (false, false)] {
-+            let mode = select_linux_renderer(flatpak, dri_accessible);
-+            assert_eq!(mode, LinuxRendererMode::Automatic);
-+            assert!(!mode.requires_software_surface());
-+            assert_eq!(mode.mpv_hwdec_override(), None);
-+            assert!(mode.mpv_option_overrides().is_empty());
-+            assert!(mode.environment_overrides().is_empty());
-+        }
-+    }
-+}
