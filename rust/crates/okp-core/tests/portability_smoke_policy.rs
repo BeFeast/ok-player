@@ -32,6 +32,19 @@ fn session_infrastructure_failure_retries_once_and_preserves_first_attempt() {
             .join("narrow-width/attempt-1/session.log")
             .is_file()
     );
+    assert_eq!(
+        fs::read_to_string(
+            fixture
+                .evidence
+                .join("narrow-width/attempt-1/xdg/state/ok-player/history.json")
+        )
+        .expect("failed-attempt XDG state should be persisted"),
+        "attempt=1\n"
+    );
+    assert!(
+        !fixture.output.join("xdg").exists(),
+        "successful output should not retain disposable XDG state"
+    );
 }
 
 #[test]
@@ -51,6 +64,15 @@ fn product_assertion_failure_is_not_retried() {
     assert!(evidence.contains("exit_status=19"));
     assert!(evidence.contains("failure_kind=command"));
     assert!(evidence.contains("retried=false"));
+    assert_eq!(
+        fs::read_to_string(
+            fixture
+                .evidence
+                .join("narrow-width/attempt-1/xdg/config/ok-player/settings.json")
+        )
+        .expect("assertion-failure XDG config should be persisted"),
+        "{\"theme\":\"dark\"}\n"
+    );
     assert!(!fixture.evidence.join("narrow-width/attempt-2").exists());
 }
 
@@ -82,8 +104,8 @@ fn consecutive_smokes_do_not_share_xdg_persistence() {
     assert_success(&output);
     let first = fs::read_to_string(root.path().join("first/session.log")).unwrap();
     let second = fs::read_to_string(root.path().join("second/session.log")).unwrap();
-    assert!(first.contains("first-attempt-1/.xdg/state"), "{first}");
-    assert!(second.contains("second-attempt-1/.xdg/state"), "{second}");
+    assert!(first.contains("first-attempt-1/xdg/state"), "{first}");
+    assert!(second.contains("second-attempt-1/xdg/state"), "{second}");
     assert_ne!(first, second);
     assert!(!shared_xdg.join("state/ok-player/history.json").exists());
 }
@@ -156,6 +178,8 @@ count="$(cat "$OKP_TEST_COUNTER" 2>/dev/null || printf '0')"
 count=$((count + 1))
 printf '%s\n' "$count" >"$OKP_TEST_COUNTER"
 printf 'attempt=%s\n' "$count" >"$OKP_SMOKE_OUTPUT_DIR/session.log"
+mkdir -p "$XDG_STATE_HOME/ok-player"
+printf 'attempt=%s\n' "$count" >"$XDG_STATE_HOME/ok-player/history.json"
 if (( count == 1 )); then
   exit 75
 fi
@@ -168,6 +192,8 @@ count="$(cat "$OKP_TEST_COUNTER" 2>/dev/null || printf '0')"
 count=$((count + 1))
 printf '%s\n' "$count" >"$OKP_TEST_COUNTER"
 printf 'assertion failed\n' >"$OKP_SMOKE_OUTPUT_DIR/session.log"
+mkdir -p "$XDG_CONFIG_HOME/ok-player"
+printf '{\"theme\":\"dark\"}\n' >"$XDG_CONFIG_HOME/ok-player/settings.json"
 exit 19
 "#;
 
