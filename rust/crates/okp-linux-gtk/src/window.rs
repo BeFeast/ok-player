@@ -1564,6 +1564,46 @@ pub(crate) fn connect_player_window_drag(
     widget.add_controller(gesture);
 }
 
+/// Hand a thresholded pointer drag to the window manager using GTK's own
+/// `GtkWindowHandle` ordering. Every transient value is captured before the
+/// sequence is claimed; after the native move request, the controller is reset
+/// immediately so compositor cancellation cannot re-enter a live drag gesture.
+pub(crate) fn begin_native_window_move_from_drag(
+    gesture: &gtk::GestureDrag,
+    drag_widget: &impl IsA<gtk::Widget>,
+    window: &gtk::ApplicationWindow,
+) -> bool {
+    let Some(device) = gesture.current_event_device() else {
+        return false;
+    };
+    let Some((start_x, start_y)) = gesture.start_point() else {
+        return false;
+    };
+    let button = gesture.current_button() as i32;
+    let timestamp = gesture.current_event_time();
+    let Some(surface) = window.surface() else {
+        return false;
+    };
+    let Ok(toplevel) = surface.downcast::<gdk::Toplevel>() else {
+        return false;
+    };
+
+    let start = gtk::graphene::Point::new(start_x as f32, start_y as f32);
+    let native_point = drag_widget.compute_point(window, &start).unwrap_or(start);
+    let (native_x, native_y) = window.surface_transform();
+
+    gesture.set_state(gtk::EventSequenceState::Claimed);
+    toplevel.begin_move(
+        &device,
+        button,
+        f64::from(native_point.x()) + native_x,
+        f64::from(native_point.y()) + native_y,
+        timestamp,
+    );
+    gesture.reset();
+    true
+}
+
 /// Smallest client the interactive resize will settle on, keeping the OSC
 /// transport usable on either orientation. The core clamp grows the derived axis
 /// as needed to keep both dimensions above this floor while holding the aspect.

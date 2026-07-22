@@ -86,6 +86,25 @@ fn portability_media_smokes_use_isolated_sessions_and_wait_for_xfwm() {
 }
 
 #[test]
+fn player_window_drag_smoke_covers_survival_cancel_and_recovery() {
+    let script = include_str!("../../../../scripts/smoke-linux-window-drag.sh");
+    assert!(script.contains("run-linux-isolated-xvfb-session.sh"));
+    assert!(script.contains("run-linux-isolated-dbus-session.sh"));
+    assert!(
+        script
+            .contains("__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json")
+    );
+    assert!(script.contains("_NET_SUPPORTING_WM_CHECK"));
+    assert!(script.contains("video-surface-drag"));
+    assert!(script.contains("compositor-cancel"));
+    assert!(script.contains("post-cancel-drag"));
+    assert!(script.contains("idle-canvas-drag"));
+    assert!(script.contains("kill -0 \"$app_pid\""));
+    assert!(script.contains("expected repeated playback-surface move handoffs"));
+    assert!(script.contains("panicked at|fatal runtime error|Aborted|core dumped"));
+}
+
+#[test]
 fn narrow_width_portability_capture_uses_a_long_lived_dark_fixture() {
     let narrow = include_str!("../../../../scripts/smoke-linux-narrow-width.sh");
     assert!(narrow.contains("FIXTURE=\"${3:-}\""));

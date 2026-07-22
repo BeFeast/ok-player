@@ -1677,38 +1677,12 @@ pub(crate) fn connect_player_window_move(
         match video_click::window_drag_action(context, offset_x, offset_y) {
             video_click::WindowDragAction::Hold => {}
             video_click::WindowDragAction::BeginMove => {
-                // Snapshot every transient gesture value before either backend
-                // changes sequence ownership during the compositor handoff.
-                let Some(device) = gesture.current_event_device() else {
-                    return;
-                };
-                let Some((surface_x, surface_y)) = gesture.bounding_box_center() else {
-                    return;
-                };
-                let button = gesture.current_button() as i32;
-                let timestamp = gesture.current_event_time();
-                let Some(surface) = move_window.surface() else {
-                    return;
-                };
-                let Ok(toplevel) = surface.downcast::<gdk::Toplevel>() else {
-                    return;
-                };
                 update_moving.set(true);
                 update_suppression.set(true);
-                let display = gtk::prelude::WidgetExt::display(&move_window);
-                let wayland = is_wayland_display(display.type_().name());
-                if !wayland {
-                    // X11 must release GTK's gesture ownership before the WM
-                    // accepts its EWMH move request.
-                    gesture.set_state(gtk::EventSequenceState::Claimed);
-                }
-                toplevel.begin_move(&device, button, surface_x, surface_y, timestamp);
-                if wayland {
-                    // Wayland is the inverse: GDK must consume the live
-                    // implicit grab before GTK cancels sibling gestures. The
-                    // one-shot suppressor prevents click leakage if Mutter has
-                    // already cancelled this sequence during the handoff.
-                    gesture.set_state(gtk::EventSequenceState::Claimed);
+                if !begin_native_window_move_from_drag(gesture, &move_root, &move_window) {
+                    update_moving.set(false);
+                    update_suppression.set(false);
+                    return;
                 }
                 if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
                     eprintln!("interaction: player-window-move");
