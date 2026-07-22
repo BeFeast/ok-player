@@ -236,6 +236,129 @@ fn final_fleet_refresh_stops_when_another_worker_wins_the_race() {
     assert!(!log.contains("maestro spawn"), "{log}");
 }
 
+#[test]
+fn merged_claims_close_open_issues_and_stop_exact_ghost_sessions() {
+    let root = unique_temp_dir("okp-worker-floor-merged-ghosts");
+    let harness = Harness::new(root.path());
+    fs::write(
+        &harness.fleet,
+        br#"{
+  "projects": [{
+    "name": "ok-player",
+    "live_workers": 0,
+    "paused": false,
+    "outcome": {"health_state": "healthy"},
+    "issue_claims": [
+      {"issue_number": 439, "kind": "terminal_reconciliation", "session": "ok-player-439", "pr_number": 501, "status": "done"},
+      {"issue_number": 340, "kind": "operator_gate", "session": "ok-player-340", "pr_number": 502, "status": "pr_open"},
+      {"issue_number": 198, "kind": "terminal_reconciliation", "session": "ok-player-198", "pr_number": 503, "status": "done"},
+      {"issue_number": 339, "kind": "open_pr_maintenance", "session": "ok-player-339", "pr_number": 504, "status": "retry_exhausted"},
+      {"issue_number": 777, "kind": "open_pr_maintenance", "session": "ok-player-777", "pr_number": 505, "status": "pr_open"}
+    ]
+  }]
+}
+"#,
+    )
+    .expect("fleet fixture");
+    fs::write(
+        &harness.second_fleet,
+        br#"{
+  "projects": [{
+    "name": "ok-player",
+    "live_workers": 0,
+    "paused": false,
+    "outcome": {"health_state": "healthy"},
+    "issue_claims": [
+      {"issue_number": 777, "kind": "open_pr_maintenance", "session": "ok-player-777", "pr_number": 505, "status": "pr_open"}
+    ]
+  }]
+}
+"#,
+    )
+    .expect("post-cleanup fleet fixture");
+    fs::write(&harness.issues, b"[]\n").expect("empty ready queue");
+    fs::write(
+        &harness.prs,
+        br#"{
+  "501": {"state": "MERGED", "mergedAt": "2026-07-22T20:01:00Z"},
+  "502": {"state": "MERGED", "mergedAt": "2026-07-22T20:02:00Z"},
+  "503": {"state": "MERGED", "mergedAt": "2026-07-22T20:03:00Z"},
+  "504": {"state": "MERGED", "mergedAt": "2026-07-22T20:04:00Z"},
+  "505": {"state": "OPEN", "mergedAt": null}
+}
+"#,
+    )
+    .expect("PR fixture");
+    fs::write(
+        &harness.issue_states,
+        br#"{
+  "439": {"state": "OPEN"},
+  "340": {"state": "OPEN"},
+  "198": {"state": "CLOSED"},
+  "339": {"state": "OPEN"}
+}
+"#,
+    )
+    .expect("issue state fixture");
+
+    let output = harness.run(
+        "999",
+        r#"{"state":"CLOSED","labels":[]}"#,
+        r#"{"state":"CLOSED","labels":[]}"#,
+        r#"{"state":"OPEN","labels":[{"name":"ok-player-ready"}]}"#,
+    );
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("issue #198 is already closed after PR #503 merged"));
+    for (issue, pr) in [(339, 504), (340, 502), (439, 501)] {
+        assert!(
+            stdout.contains(&format!("closed issue #{issue} after PR #{pr} merged")),
+            "{stdout}"
+        );
+    }
+    assert!(stdout.contains("merged ghost session ok-player-198 for issue #198 is already absent"));
+    for issue in [339, 340, 439] {
+        assert!(
+            stdout.contains(&format!(
+                "stopped merged ghost session ok-player-{issue} for issue #{issue}"
+            )),
+            "{stdout}"
+        );
+    }
+
+    let log = fs::read_to_string(&harness.log).expect("command log");
+    for pr in 501..=505 {
+        assert!(log.contains(&format!("pr view {pr}")), "{log}");
+    }
+    for issue in [339, 340, 439] {
+        assert!(log.contains(&format!("issue close {issue}")), "{log}");
+    }
+    assert!(!log.contains("issue close 198"), "{log}");
+    assert!(!log.contains("issue close 777"), "{log}");
+    for issue in [198, 339, 340, 439] {
+        assert!(
+            log.contains(&format!(
+                "maestro stop --config {} --session ok-player-{issue}",
+                harness.config.display()
+            )),
+            "{log}"
+        );
+    }
+    assert!(!log.contains("--session ok-player-777"), "{log}");
+    let last_stop = log
+        .rfind("maestro stop")
+        .expect("at least one ghost session stop");
+    let queue_read = log.find("issue list").expect("ready queue read");
+    assert!(last_stop < queue_read, "{log}");
+    assert!(!log.contains("maestro spawn"), "{log}");
+}
+
 struct Harness {
     root: PathBuf,
     source: PathBuf,
@@ -245,6 +368,8 @@ struct Harness {
     fleet: PathBuf,
     second_fleet: PathBuf,
     issues: PathBuf,
+    prs: PathBuf,
+    issue_states: PathBuf,
     log: PathBuf,
     fake_bin: PathBuf,
 }
@@ -258,10 +383,14 @@ impl Harness {
         let fleet = root.join("fleet.json");
         let second_fleet = root.join("fleet-second.json");
         let issues = root.join("issues.json");
+        let prs = root.join("prs.json");
+        let issue_states = root.join("issue-states.json");
         let log = root.join("commands.log");
         let fake_bin = root.join("bin");
         fs::create_dir_all(&fake_bin).expect("fake bin");
         fs::write(&config, b"project: fixture\n").expect("Maestro config fixture");
+        fs::write(&prs, b"{}\n").expect("empty PR fixture");
+        fs::write(&issue_states, b"{}\n").expect("empty issue state fixture");
         init_source_repository(&source);
         write_executable(&fake_bin.join("curl"), FAKE_CURL);
         write_executable(&fake_bin.join("gh"), FAKE_GH);
@@ -275,6 +404,8 @@ impl Harness {
             fleet,
             second_fleet,
             issues,
+            prs,
+            issue_states,
             log,
             fake_bin,
         }
@@ -300,6 +431,8 @@ impl Harness {
             .env("FAKE_FLEET_JSON", &self.fleet)
             .env("FAKE_FLEET_COUNT", self.root.join("fleet-count"))
             .env("FAKE_ISSUES_JSON", &self.issues)
+            .env("FAKE_PRS_JSON", &self.prs)
+            .env("FAKE_ISSUE_STATES_JSON", &self.issue_states)
             .env("FAKE_SELECTED_ISSUE", selected_issue)
             .env("FAKE_HOLD_545", hold_545)
             .env("FAKE_HOLD_546", hold_546)
@@ -393,6 +526,34 @@ elif [[ "$args" == *" issue list "* ]]; then
   cp -- "$FAKE_ISSUES_JSON" /dev/stdout
 elif [[ "$args" == *" issue view ${FAKE_SELECTED_ISSUE} "* ]]; then
   printf '%s\n' "$FAKE_SELECTED_PAYLOAD"
+elif [[ "$args" == *" pr view "* ]]; then
+  next_is_number=false
+  number=""
+  for argument in "$@"; do
+    if [[ "$next_is_number" == "true" ]]; then
+      number="$argument"
+      break
+    fi
+    if [[ "$argument" == "view" ]]; then
+      next_is_number=true
+    fi
+  done
+  jq -ce --arg number "$number" '.[$number] // error("missing PR fixture")' "$FAKE_PRS_JSON"
+elif [[ "$args" == *" issue view "* ]]; then
+  next_is_number=false
+  number=""
+  for argument in "$@"; do
+    if [[ "$next_is_number" == "true" ]]; then
+      number="$argument"
+      break
+    fi
+    if [[ "$argument" == "view" ]]; then
+      next_is_number=true
+    fi
+  done
+  jq -ce --arg number "$number" '.[$number] // error("missing issue fixture")' "$FAKE_ISSUE_STATES_JSON"
+elif [[ "$args" == *" issue close "* ]]; then
+  exit 0
 else
   echo "unexpected gh invocation: $*" >&2
   exit 90
@@ -435,4 +596,8 @@ set -euo pipefail
 printf 'maestro' >>"$FAKE_COMMAND_LOG"
 printf ' %s' "$@" >>"$FAKE_COMMAND_LOG"
 printf '\n' >>"$FAKE_COMMAND_LOG"
+if [[ " $* " == *" stop "* && " $* " == *" --session ok-player-198 "* ]]; then
+  echo "session ok-player-198 not found" >&2
+  exit 1
+fi
 "#;
