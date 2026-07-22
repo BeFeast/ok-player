@@ -157,6 +157,23 @@ for host in slava mimir baldr; do
     fail "missing required artifact path for $host"
 done
 
+configured_log="$TEST_ROOT/configured-ssh.log"
+FAKE_FLEET_ROOT="$fake_root" FAKE_SSH_LOG="$configured_log" \
+  OKP_QA_SSH_COMMAND="$fake_ssh" OKP_QA_HOSTS='mimir baldr' OKP_QA_UTC_HOUR=1 \
+  OKP_QA_RUN_DATE=20260722 OKP_QA_SUITE_ID=suite-configured "$CONTROLLER" >/dev/null
+mapfile -t configured_hosts < <(
+  awk '/ok-player-night-gui-host.sh/ { next } / bash -s -- run / { print $1 }' "$configured_log"
+)
+if [[ "${configured_hosts[*]}" != 'mimir baldr' ]]; then
+  fail "unexpected configured host order: ${configured_hosts[*]}"
+fi
+if OKP_QA_HOSTS='mimir sindri' OKP_QA_UTC_HOUR=1 "$CONTROLLER" >/dev/null 2>&1; then
+  fail 'controller accepted sindri in the automatic environment host list'
+fi
+if OKP_QA_HOSTS='mimir mimir' OKP_QA_UTC_HOUR=1 "$CONTROLLER" >/dev/null 2>&1; then
+  fail 'controller accepted a duplicate automatic host alias'
+fi
+
 if OKP_QA_UTC_HOUR=1 "$CONTROLLER" --host sindri >/dev/null 2>&1; then
   fail 'controller accepted sindri without explicit operator authorization'
 fi

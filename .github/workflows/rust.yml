@@ -16,6 +16,9 @@ jobs:
       - name: Night GUI QA driver policy tests
         run: ./scripts/tests/ok-player-night-gui-qa.Tests.sh
 
+      - name: Linux window regression smoke runner policy tests
+        run: ./scripts/tests/linux-window-regression-smokes.Tests.sh
+
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
