@@ -315,14 +315,35 @@ pub(crate) fn connect_progress_persistence(
 
     let close_state = Rc::clone(&state);
     let close_app = app.clone();
-    window.connect_close_request(move |_| {
+    window.connect_close_request(move |window| {
         close_companion_windows(&close_state);
         save_current_progress(&close_state, false);
-        // Let GTK destroy the toplevel before runtime teardown touches libmpv. Even an async
-        // mpv command enters the client API synchronously, so issuing one from close_request can
-        // hold this callback open and leave the visible window mapped indefinitely.
+        // Unmap before any destroy-path libmpv work. After minimize + secondary
+        // present (#518), a still-mapped shell can survive Alt+F4 while unrealize
+        // joins render teardown — the candidate waiter then sees IsViewable forever.
+        // Pull engine + native render loop out before hide/unrealize so GTK
+        // cannot block this handler inside destroy_render_context / join.
+        // Candidate headless-launch-smoke then saw an unmapped shell + live process.
+        let (engine, render_loop) = {
+            let mut state = close_state.borrow_mut();
+            (state.mpv.take(), state.native_render_loop.take())
+        };
+        window.set_visible(false);
         let close_app = close_app.clone();
-        glib::idle_add_local_once(move || close_app.quit());
+        glib::idle_add_local_once(move || {
+            // Quit before any libmpv Drop. Mpv::drop can block in
+            // terminate_destroy; doing that on the GTK thread starves
+            // Application::quit and leaves a headless zombie process.
+            // Mpv is !Send, so we cannot move Drop onto a worker thread —
+            // forget across process exit instead (Application::quit is armed).
+            close_app.quit();
+            // Leak across process exit: Mpv is !Send and Drop can hang the
+            // GTK loop in terminate_destroy; native join has the same risk.
+            std::mem::forget(render_loop);
+            if let Some(engine) = engine {
+                std::mem::forget(engine);
+            }
+        });
         glib::Propagation::Proceed
     });
 }

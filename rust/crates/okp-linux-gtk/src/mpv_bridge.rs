@@ -207,13 +207,38 @@ impl NativeRenderLoop {
         self.request_render();
     }
 
-    fn stop_and_join(&mut self) {
+    /// Stops the notifier and waits briefly for the render thread.
+    ///
+    /// Returns `true` when the thread has fully joined and it is safe to free
+    /// the EGL plane / mpv render context. On timeout, the `JoinHandle` is
+    /// forgotten (not dropped/detached) so the thread keeps its `Arc`s; the
+    /// caller must skip render teardown and avoid `Drop`-destroying `Mpv`
+    /// until process exit (`Application::quit` is imminent on the close path).
+    fn stop_and_join(&mut self) -> bool {
         self.notifier.disable();
-        if let Some(join) = self.join.take()
-            && join.join().is_err()
-        {
+        let Some(join) = self.join.take() else {
+            return true;
+        };
+        // Never block window destroy/unrealize on a stuck render thread — that left the
+        // candidate headless close waiter staring at an IsViewable shell forever.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
+        while !join.is_finished() {
+            if std::time::Instant::now() >= deadline {
+                eprintln!(
+                    "Native Wayland/EGL render thread exceeded the close join deadline; \
+                     leaking render resources until process exit"
+                );
+                // Do not drop the JoinHandle: that would detach a worker that still
+                // owns RenderUpdateHandle / plane while unrealize frees them (UAF).
+                std::mem::forget(join);
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        if join.join().is_err() {
             eprintln!("Native Wayland/EGL render thread panicked");
         }
+        true
     }
 }
 
@@ -528,8 +553,19 @@ fn connect_native_mpv(
         if let Some(mpv) = state.mpv.as_mut() {
             let _ = unsafe { mpv.set_render_update_callback(None, std::ptr::null_mut()) };
         }
-        if let Some(mut render_loop) = state.native_render_loop.take() {
-            render_loop.stop_and_join();
+        let render_joined = if let Some(mut render_loop) = state.native_render_loop.take() {
+            render_loop.stop_and_join()
+        } else {
+            true
+        };
+        if !render_joined {
+            // Render thread may still call into the mpv render context / EGL
+            // plane. Skip teardown and leak until process exit (close → quit).
+            if let Some(mpv) = state.mpv.take() {
+                std::mem::forget(mpv);
+            }
+            state.native_video_plane = None;
+            return;
         }
         if let Some(plane) = state.native_video_plane.as_ref() {
             let _ = plane.make_current();
