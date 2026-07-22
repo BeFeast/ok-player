@@ -1,5 +1,54 @@
 use super::*;
 
+const APP_SHUTDOWN_DEADLINE: Duration = Duration::from_secs(2);
+
+struct AppShutdownWatchdog {
+    cancel: Option<mpsc::Sender<()>>,
+    join: Option<std::thread::JoinHandle<()>>,
+}
+
+impl AppShutdownWatchdog {
+    fn arm() -> Self {
+        let (cancel, cancellation) = mpsc::channel();
+        let join = std::thread::Builder::new()
+            .name("okp-app-shutdown-watchdog".to_owned())
+            .spawn(move || {
+                if cancellation.recv_timeout(APP_SHUTDOWN_DEADLINE).is_err() {
+                    eprintln!(
+                        "Application shutdown exceeded the {:?} deadline; exiting now",
+                        APP_SHUTDOWN_DEADLINE
+                    );
+                    exit_without_destructors(0);
+                }
+            })
+            .unwrap_or_else(|error| {
+                eprintln!("Failed to arm the application shutdown watchdog: {error}");
+                exit_without_destructors(1);
+            });
+        Self {
+            cancel: Some(cancel),
+            join: Some(join),
+        }
+    }
+}
+
+impl Drop for AppShutdownWatchdog {
+    fn drop(&mut self) {
+        if let Some(cancel) = self.cancel.take() {
+            let _ = cancel.send(());
+        }
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
+fn exit_without_destructors(status: libc::c_int) -> ! {
+    // SAFETY: `_exit` is the final shutdown fallback. It does not return or
+    // access Rust-owned state after terminating the current process.
+    unsafe { libc::_exit(status) }
+}
+
 pub(crate) fn shortcut_modifiers_from_event(modifiers: gdk::ModifierType) -> ShortcutModifiers {
     ShortcutModifiers {
         ctrl: modifiers.contains(gdk::ModifierType::CONTROL_MASK),
@@ -315,7 +364,14 @@ pub(crate) fn connect_progress_persistence(
 
     let close_state = Rc::clone(&state);
     let close_app = app.clone();
+    let close_started = Rc::new(Cell::new(false));
     window.connect_close_request(move |window| {
+        if close_started.replace(true) {
+            return glib::Propagation::Stop;
+        }
+        if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
+            eprintln!("window close lifecycle: close-request");
+        }
         close_companion_windows(&close_state);
         save_current_progress(&close_state, false);
         // Unmap before any destroy-path libmpv work. After minimize + secondary
@@ -328,21 +384,41 @@ pub(crate) fn connect_progress_persistence(
             let mut state = close_state.borrow_mut();
             (state.mpv.take(), state.native_render_loop.take())
         };
+        if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
+            eprintln!("window close lifecycle: engine detached");
+        }
         window.set_visible(false);
+        if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
+            eprintln!("window close lifecycle: window hidden");
+        }
         let close_app = close_app.clone();
         glib::idle_add_local_once(move || {
+            let shutdown_watchdog = AppShutdownWatchdog::arm();
+            if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
+                eprintln!("window close lifecycle: idle quit");
+            }
             // Quit before any libmpv Drop. Mpv::drop can block in
             // terminate_destroy; doing that on the GTK thread starves
-            // Application::quit and leaves a headless zombie process.
-            // Mpv is !Send, so we cannot move Drop onto a worker thread —
-            // forget across process exit instead (Application::quit is armed).
+            // Application::quit and leaves a headless residual process. The
+            // watchdog makes the process boundary finite even if native or
+            // libmpv teardown stops responding.
             close_app.quit();
-            // Leak across process exit: Mpv is !Send and Drop can hang the
-            // GTK loop in terminate_destroy; native join has the same risk.
-            std::mem::forget(render_loop);
-            if let Some(engine) = engine {
-                std::mem::forget(engine);
+            if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
+                eprintln!("window close lifecycle: quit requested");
             }
+            if let Some(mut render_loop) = render_loop
+                && !render_loop.stop_and_join()
+            {
+                eprintln!(
+                    "Native render shutdown missed its deadline; exiting without unsafe teardown"
+                );
+                exit_without_destructors(0);
+            }
+            drop(engine);
+            if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
+                eprintln!("window close lifecycle: engine teardown complete");
+            }
+            drop(shutdown_watchdog);
         });
         glib::Propagation::Proceed
     });

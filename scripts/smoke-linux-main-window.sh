@@ -25,6 +25,11 @@ if [[ "${OKP_MAIN_WINDOW_FIT_ONLY:-0}" == "1" && "${OKP_MAIN_WINDOW_IDLE_ONLY:-0
   echo "OKP_MAIN_WINDOW_FIT_ONLY and OKP_MAIN_WINDOW_IDLE_ONLY are mutually exclusive" >&2
   exit 2
 fi
+if [[ "${OKP_MAIN_WINDOW_SHUTDOWN_ONLY:-0}" == "1" \
+  && "${OKP_MAIN_WINDOW_FIT_ONLY:-0}" != "1" ]]; then
+  echo "OKP_MAIN_WINDOW_SHUTDOWN_ONLY requires OKP_MAIN_WINDOW_FIT_ONLY=1" >&2
+  exit 2
+fi
 
 if [[ "${OKP_MAIN_WINDOW_FIT_ONLY:-0}" != "1" ]]; then
   mkdir -p "$OUT_DIR/cache" "$OUT_DIR/runtime"
@@ -435,43 +440,74 @@ stop_app() {
   app_log=""
 }
 
-close_app() {
-  local window_id="$1"
+finish_app_shutdown() {
+  local route="$1"
   local closed_pid="$app_pid"
-  xdotool windowactivate --sync "$window_id" || true
-  # Prefer ICCCM WM_DELETE_WINDOW over a synthetic Alt+F4. After minimize +
-  # secondary present, Alt+F4 can miss the undecorated player under Xfwm/Xvfb
-  # while the window stays IsViewable and the candidate gate fails.
-  # windowclose returns once the async WM request is queued — still fall back
-  # to Alt+F4 if the shell remains mapped (minimize + secondary present).
-  xdotool windowclose "$window_id" 2>/dev/null || true
-  sleep 0.2
-  if xdotool getwindowgeometry "$window_id" >/dev/null 2>&1; then
-    xdotool key --window "$window_id" --clearmodifiers alt+F4 || true
-  fi
-
-  local diagnostics="$OUT_DIR/close-${closed_pid}-lifecycle.log"
+  local diagnostics="$OUT_DIR/${route}-${closed_pid}-lifecycle.log"
   if ! "$X11_APP_CLEAR_WAITER" "$closed_pid" "$diagnostics"; then
     cat "$diagnostics" >>"$OUT_DIR/fit-lifecycle.log"
-    echo "Application did not exit after its visible main window closed" >&2
+    echo "Application did not exit after shutdown route: $route" >&2
     echo "Application log: $app_log" >&2
     cat "$app_log" >&2 || true
     return 1
   fi
   cat "$diagnostics" >>"$OUT_DIR/fit-lifecycle.log"
 
-  local dbus_diagnostics="$OUT_DIR/close-${closed_pid}-dbus-lifecycle.log"
+  for expected_close_stage in \
+    'window close lifecycle: close-request' \
+    'window close lifecycle: quit requested' \
+    'window close lifecycle: engine teardown complete'; do
+    if ! rg -Fx -q "$expected_close_stage" "$app_log"; then
+      echo "Application exited without clean GTK shutdown stage: $expected_close_stage" >&2
+      cat "$app_log" >&2 || true
+      return 1
+    fi
+  done
+
+  local dbus_diagnostics="$OUT_DIR/${route}-${closed_pid}-dbus-lifecycle.log"
   if ! "$DBUS_NAME_CLEAR_WAITER" "$dbus_diagnostics" "${DBUS_NAMES[@]}"; then
     cat "$dbus_diagnostics" >>"$OUT_DIR/fit-lifecycle.log"
-    echo "Application D-Bus names remained after its visible main window closed" >&2
+    echo "Application D-Bus names remained after shutdown route: $route" >&2
     cat "$app_log" >&2 || true
     return 1
   fi
   cat "$dbus_diagnostics" >>"$OUT_DIR/fit-lifecycle.log"
-  wait "$closed_pid" 2>/dev/null || true
-  printf 'close pid=%s clear=true\n' "$closed_pid" >>"$OUT_DIR/fit-lifecycle.log"
+  local exit_status=0
+  wait "$closed_pid" 2>/dev/null || exit_status=$?
+  if (( exit_status != 0 )); then
+    echo "Application exited with status $exit_status after shutdown route: $route" >&2
+    return 1
+  fi
+  printf '%s pid=%s clear=true clean_teardown=true\n' "$route" "$closed_pid" \
+    >>"$OUT_DIR/fit-lifecycle.log"
+  printf '%s=pass\n' "$route" >>"$OUT_DIR/fit-evidence.txt"
   app_pid=""
   app_log=""
+}
+
+close_app() {
+  local window_id="$1"
+  # `windowclose` destroys the X11 window directly and can bypass GTK's
+  # close-request callback. Ask the window manager for the normal last-window
+  # close path, retrying only while the same player XID remains present.
+  for _ in 1 2; do
+    xdotool windowactivate --sync "$window_id" || true
+    xdotool key --clearmodifiers alt+F4 || true
+    sleep 0.2
+    if ! xdotool getwindowgeometry "$window_id" >/dev/null 2>&1; then
+      break
+    fi
+  done
+  finish_app_shutdown "last_window_close"
+}
+
+quit_app() {
+  gdbus call --session \
+    --dest org.mpris.MediaPlayer2.okplayer \
+    --object-path /org/mpris/MediaPlayer2 \
+    --method org.mpris.MediaPlayer2.Quit \
+    >"$OUT_DIR/mpris-quit-call.log"
+  finish_app_shutdown "mpris_quit"
 }
 
 capture_geometry() {
@@ -742,6 +778,18 @@ printf 'secondary_window=%s\nsecondary_monitor_fit_count=%s\nsecondary_monitor_f
   >>"$OUT_DIR/fit-evidence.txt"
 close_app "$small_id"
 
+start_app "fit-mpris-quit-app.log" windowed "$FIXTURES/fit-small.mkv"
+wait_for_window "$OUT_DIR/fit-mpris-quit-window.ids" >/dev/null
+sleep 1
+quit_app
+
+if [[ "${OKP_MAIN_WINDOW_SHUTDOWN_ONLY:-0}" == "1" ]]; then
+  printf 'session_process_teardown=clean\nsession_bus_teardown=clean\nstatus=pass\n' \
+    >>"$OUT_DIR/fit-evidence.txt"
+  echo "Main-window shutdown smoke passed. Evidence: $OUT_DIR/fit-evidence.txt"
+  exit 0
+fi
+
 start_app "fit-1080p-app.log" windowed "$FIXTURES/fit-1080p.mkv"
 fit_1080p_id="$(wait_for_window "$OUT_DIR/fit-1080p-window.ids")"
 sleep 4
@@ -908,4 +956,8 @@ if rg -q "org\.freedesktop\.portal\.Desktop" "$OUT_DIR/window-fit-session.log"; 
 fi
 printf 'portal_activation=absent\n' >>"$OUT_DIR/fit-evidence.txt"
 
-echo "Main window fit smoke passed. Screenshots: $OUT_DIR/fit-small-window.png, $OUT_DIR/fit-4k-right-monitor-window.png"
+if [[ "${OKP_MAIN_WINDOW_SHUTDOWN_ONLY:-0}" == "1" ]]; then
+  echo "Main window shutdown smoke passed. Evidence: $OUT_DIR/fit-evidence.txt"
+else
+  echo "Main window fit smoke passed. Screenshots: $OUT_DIR/fit-small-window.png, $OUT_DIR/fit-4k-right-monitor-window.png"
+fi

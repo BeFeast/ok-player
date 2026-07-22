@@ -210,11 +210,10 @@ impl NativeRenderLoop {
     /// Stops the notifier and waits briefly for the render thread.
     ///
     /// Returns `true` when the thread has fully joined and it is safe to free
-    /// the EGL plane / mpv render context. On timeout, the `JoinHandle` is
-    /// forgotten (not dropped/detached) so the thread keeps its `Arc`s; the
-    /// caller must skip render teardown and avoid `Drop`-destroying `Mpv`
-    /// until process exit (`Application::quit` is imminent on the close path).
-    fn stop_and_join(&mut self) -> bool {
+    /// the EGL plane / mpv render context. On timeout, ownership of the worker
+    /// stays in this value so a shutdown caller can keep the render resources
+    /// alive or cross the process boundary without detaching a live renderer.
+    pub(crate) fn stop_and_join(&mut self) -> bool {
         self.notifier.disable();
         let Some(join) = self.join.take() else {
             return true;
@@ -226,11 +225,9 @@ impl NativeRenderLoop {
             if std::time::Instant::now() >= deadline {
                 eprintln!(
                     "Native Wayland/EGL render thread exceeded the close join deadline; \
-                     leaking render resources until process exit"
+                     retaining render resources until process exit"
                 );
-                // Do not drop the JoinHandle: that would detach a worker that still
-                // owns RenderUpdateHandle / plane while unrealize frees them (UAF).
-                std::mem::forget(join);
+                self.join = Some(join);
                 return false;
             }
             std::thread::sleep(std::time::Duration::from_millis(5));

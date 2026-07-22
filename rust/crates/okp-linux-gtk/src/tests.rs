@@ -124,6 +124,8 @@ fn player_close_returns_to_gtk_before_mpv_teardown() {
     assert!(close_handler.contains("set_visible(false)"));
     assert!(close_handler.contains("close_app.quit()"));
     assert!(close_handler.contains("glib::idle_add_local_once"));
+    assert!(close_handler.contains("AppShutdownWatchdog::arm()"));
+    assert!(!close_handler.contains("mem::forget"));
 
     let (before_idle, idle_body) = close_handler
         .split_once("glib::idle_add_local_once")
@@ -145,8 +147,20 @@ fn player_close_returns_to_gtk_before_mpv_teardown() {
     );
     assert!(
         idle_body.find("close_app.quit()").expect("quit")
-            < idle_body.find("mem::forget").expect("forget engine"),
-        "idle close path must quit GTK before leaking the engine across process exit"
+            < idle_body.find("drop(engine)").expect("drop engine"),
+        "idle close path must quit GTK before normal engine teardown"
+    );
+    assert!(
+        idle_body
+            .find("AppShutdownWatchdog::arm()")
+            .expect("watchdog")
+            < idle_body.find("drop(engine)").expect("drop engine"),
+        "engine teardown must be covered by the process-exit watchdog"
+    );
+    assert!(
+        idle_body.contains("render_loop.stop_and_join()")
+            && idle_body.contains("exit_without_destructors(0)"),
+        "stalled native rendering must cross the process boundary before engine teardown"
     );
 }
 
