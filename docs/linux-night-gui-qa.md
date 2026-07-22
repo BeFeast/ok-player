@@ -1,0 +1,110 @@
+# Linux night GUI QA driver
+
+The repository owns the public, reviewable contract for the lease-gated Linux
+night GUI suite. Site-local timers, SSH configuration, credentials, desktop
+automation, and artifact publication remain outside the repository.
+
+Run the controller during its scheduled UTC `00:05` through `05:05` window:
+
+```bash
+scripts/ok-player-night-gui-qa.sh
+```
+
+The automatic order is `slava`, then `mimir`, then `baldr` when its graphical
+seat is available and its lease is free. The controller visits every eligible
+host in that order. `sindri` is never in the automatic list. A one-host
+operator-authorized run requires all three explicit choices:
+
+```bash
+OKP_QA_ALLOW_SINDRI=1 OKP_QA_OPERATOR_GO=1 \
+  scripts/ok-player-night-gui-qa.sh --host sindri --force-window
+```
+
+Do not set those variables without a direct operator go. A timer must never set
+them. `--force-window` is for an attended daytime run; it does not weaken the
+lease or operator-seat guard.
+
+## Exclusive lease
+
+`scripts/ok-player-qa-lease.sh` manages `~/qa/LEASE`. It uses `flock` plus an
+atomic replacement, records the logical host role, suite ID, owner PID, and UTC
+acquisition/expiry times, and defaults to a 45-minute TTL. A valid lease owned
+by another suite returns exit `2`. An expired or malformed lease may be
+replaced while holding the lock. Release requires the exact suite ID.
+
+The controller bounds each host runner to 30 seconds less than its lease TTL
+and terminates the runner's process group if it overruns. This prevents input
+automation from continuing after the exclusive lease becomes reclaimable.
+
+The controller performs only a read-only graphical-seat probe before acquiring
+the lease. Candidate installation, application launch, input injection,
+screenshots, and every Wave A/B/C action occur in the host runner after the
+lease succeeds. The runner repeats the seat check after acquisition so a seat
+that became occupied cannot receive automation. It also stops before any GUI
+action when accepted-candidate preparation is missing or fails. On exit or
+interruption the controller releases only its own suite lease; site hooks must
+likewise kill only processes whose identities they recorded for that suite.
+
+## Host hook contract
+
+The controller streams the versioned lease and host scripts over SSH; it does
+not install repository files or assume a checkout on a QA laptop. Each host
+provides executable hooks under
+`~/.local/lib/ok-player-night-gui-qa/hooks/` (or `OKP_QA_HOOK_DIR`):
+
+| Hook | Arguments | Responsibility |
+| --- | --- | --- |
+| `probe-seat` | host role | Require active, unlocked graphical `seat0` with no operator conflict. |
+| `prepare-candidate` | artifact directory, host role, suite ID | Select and install the accepted rolling candidate, and write the required `candidate.env` identity. |
+| `probe-dual-head` | artifact directory, host role, suite ID | Exit `0` only when two active heads are available; exit `1` for a proved single-head state; exit `75` when unknown. |
+| `run-action` | action, artifact directory, host role, suite ID | Perform one named live-desktop action and retain complete sanitized evidence. |
+
+Hooks return `0` for `PASS`, `75` for `NOT RUN`, and another non-zero status for
+`FAIL`. A missing hook is `NOT RUN`; the host run exits `4` rather than claiming
+acceptance. Inapplicable Wave B rows on a proved single-head host and Wave C
+rows on other roles are recorded as `SKIP`, not as missing evidence. Site hooks
+must not print credentials, private addresses, account
+names, machine paths, or physical hostnames into evidence intended for public
+review.
+
+`prepare-candidate` cannot pass on exit status alone. It must write
+`candidate.env` with `acceptance=accepted`, a 40-character lowercase
+`source_sha`, `version`, package filename, 64-character lowercase
+`package_sha256`, and 64-character lowercase `manifest_sha256`. The runner
+validates those fields before it permits the first GUI action.
+
+The actions are:
+
+- Wave A on every eligible host: candidate install, cold launch,
+  single-monitor fit, play/pause/seek, ten non-OSC surface drags with process
+  survival and observed window movement, menus/settings/chapters, secondary
+  launch, and clean close.
+- Wave B only after a passing dual-head probe: open from each head, prove the
+  fitted window does not span heads, and drag near a workarea edge.
+- Wave C only on the weak-host role (`slava`): 4K stress, rapid open/close, and
+  a seek/screenshot storm.
+
+The live action hook may compose versioned helpers such as
+`run-linux-window-fit-series.sh` and `smoke-linux-window-drag.sh` for supporting
+diagnostics, but their Xvfb/X11 results cannot replace the live GNOME/Wayland
+fit, pointer, compositor, focus, or dual-head rows.
+
+## Artifacts and timer ownership
+
+Every run stays below:
+
+```text
+~/qa/okp-night-YYYYMMDD/<host>/runs/<suite-id>/
+```
+
+`results.tsv` contains one Wave/action result, `metadata.env` contains sanitized
+logical run identity, and `SHA256SUMS` binds every top-level evidence file. The
+host directory also records the latest suite ID. Large logs, screenshots, and
+packages stay out of git; an issue-owned acceptance decision must publish them
+to durable storage and add the required `docs/qa-records/` Markdown record.
+
+Maestro already owns `ok-player-night-gui-qa.timer` at UTC `00:05`, `01:05`,
+`02:05`, `03:05`, `04:05`, and `05:05` (approximately Israel `03:05` through
+`08:05` during daylight time). This repository does not install, rewrite, or
+enable that timer. Deployment should point the existing service at this
+controller and provide only the site-local hooks and SSH policy.
