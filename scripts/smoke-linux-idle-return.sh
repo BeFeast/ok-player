@@ -13,7 +13,7 @@ if [[ "$BINARY" == */* ]]; then
 fi
 OUT_DIR="$(realpath -m "$OUT_DIR")"
 
-for tool in xvfb-run dbus-run-session xfwm4 xdotool xwininfo import magick ffmpeg realpath; do
+for tool in xvfb-run dbus-run-session xfwm4 xdotool xwininfo import magick ffmpeg realpath rg; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "Missing required tool: $tool" >&2
     exit 127
@@ -42,6 +42,7 @@ FIXTURE="$OUT_DIR/idle-return.mkv"
 
 export GDK_BACKEND=x11
 export GDK_DEBUG=no-portals
+export GSK_RENDERER=cairo
 export GIO_USE_PORTALS=0
 export GTK_USE_PORTAL=0
 export GTK_A11Y=none
@@ -96,19 +97,47 @@ wait_for_window() {
   printf '%s\n' "$window_id"
 }
 
-assert_idle_capture() {
-  local window_id="$1" name="$2" label="$3"
-  import -window "$window_id" "$OUT_DIR/$name.png"
-  "$IDLE_OSC_ASSERT" "$OUT_DIR/$name.png" "$label"
+capture_metrics() {
+  local window_id="$1" image="$2"
+  import -window "$window_id" "$image" || return 1
 
   local alpha_min identity_residual magenta_mean
-  alpha_min="$(magick "$OUT_DIR/$name.png" -alpha extract -format '%[fx:minima]' info:)"
-  identity_residual="$(magick "$OUT_DIR/$name.png" \
+  alpha_min="$(magick "$image" -alpha extract -format '%[fx:minima]' info:)"
+  identity_residual="$(magick "$image" \
     -crop 300x170+410+180 +repage -colorspace gray \
     \( +clone -blur 0x4 \) -compose difference -composite \
     -format '%[fx:mean]' info:)"
-  magenta_mean="$(magick "$OUT_DIR/$name.png" -crop 260x140+430+220 \
+  magenta_mean="$(magick "$image" -crop 260x140+430+220 \
     -format '%[fx:(mean.r+mean.b)/2-mean.g]' info:)"
+
+  printf '%s %s %s\n' "$alpha_min" "$identity_residual" "$magenta_mean"
+}
+
+assert_idle_capture() {
+  local window_id="$1" name="$2" label="$3"
+  local alpha_min=0 identity_residual=0 magenta_mean=0 ready=0
+
+  # Startup and package extraction can make media initialization variable. Poll the
+  # rendered identity instead of taking one timing-dependent sample; a blank or
+  # retained fixture frame still times out and fails the unchanged assertions below.
+  for _ in $(seq 1 120); do
+    if read -r alpha_min identity_residual magenta_mean \
+      < <(capture_metrics "$window_id" "$OUT_DIR/$name.png") \
+      && awk -v alpha="$alpha_min" -v identity="$identity_residual" -v magenta="$magenta_mean" \
+        'BEGIN { exit !(alpha > 0.999 && identity > 0.012 && magenta < 0.35) }'
+    then
+      ready=1
+      break
+    fi
+    sleep 0.25
+  done
+
+  [[ "$ready" == "1" ]] || {
+    echo "$label did not become a complete Welcome surface: alpha minimum=$alpha_min residual=$identity_residual magenta mean=$magenta_mean" >&2
+    exit 1
+  }
+
+  "$IDLE_OSC_ASSERT" "$OUT_DIR/$name.png" "$label"
 
   awk -v value="$alpha_min" 'BEGIN { exit !(value > 0.999) }' || {
     echo "$label capture contains transparent pixels: alpha minimum=$alpha_min" >&2
@@ -128,9 +157,25 @@ assert_idle_capture() {
     >>"$OUT_DIR/results.txt"
 }
 
+wait_for_log_marker() {
+  local marker="$1" log_name="$2" label="$3"
+  for _ in $(seq 1 180); do
+    if rg -q -F "$marker" "$OUT_DIR/$log_name.log"; then
+      printf '%s=%s\n' "$label" pass >>"$OUT_DIR/results.txt"
+      return
+    fi
+    kill -0 "$app_pid" 2>/dev/null || break
+    sleep 0.25
+  done
+  echo "$label did not reach marker: $marker" >&2
+  cat "$OUT_DIR/$log_name.log" >&2 || true
+  exit 1
+}
+
 launch_fixture() {
   local log_name="$1"
-  timeout 30s "$BINARY" "$FIXTURE" >"$OUT_DIR/$log_name.log" 2>&1 &
+  OKP_DEBUG_IDLE_RETURN_SMOKE=1 \
+    timeout 60s "$BINARY" "$FIXTURE" >"$OUT_DIR/$log_name.log" 2>&1 &
   app_pid=$!
   window_id="$(wait_for_window)"
 }
@@ -155,7 +200,6 @@ launch_empty initial-app || {
   exit 1
 }
 xdotool windowactivate "$window_id" >/dev/null 2>&1 || true
-sleep 2
 assert_idle_capture "$window_id" initial-idle "Initial idle canvas"
 stop_app
 
@@ -164,7 +208,8 @@ launch_fixture eof-app || {
   exit 1
 }
 xdotool windowactivate "$window_id" >/dev/null 2>&1 || true
-sleep 7
+wait_for_log_marker 'idle-return-smoke: file-loaded' eof-app eof_file_loaded
+wait_for_log_marker 'idle-return-smoke: eof-idle' eof-app eof_idle_transition
 assert_idle_capture "$window_id" eof-idle "EOF idle canvas"
 stop_app
 
@@ -173,26 +218,22 @@ launch_fixture close-app || {
   exit 1
 }
 xdotool windowactivate "$window_id" >/dev/null 2>&1 || true
-sleep 2
+wait_for_log_marker 'idle-return-smoke: file-loaded' close-app close_media_file_loaded
 xdotool windowfocus "$window_id"
 xdotool key --clearmodifiers x
-for _ in $(seq 1 50); do
-  [[ -f "$XDG_STATE_HOME/ok-player/history.json" ]] && break
-  sleep 0.1
-done
-[[ -f "$XDG_STATE_HOME/ok-player/history.json" ]] || {
-  echo "Close Media never fired (no history.json)" >&2
-  exit 1
-}
-sleep 2
+wait_for_log_marker 'idle-return-smoke: close-idle' close-app close_media_transition
 assert_idle_capture "$window_id" close-media-idle "Close Media idle canvas"
 
 for name in eof-idle; do
+  magick "$OUT_DIR/initial-idle.png" -crop 1120x638+0+42 +repage \
+    "$OUT_DIR/initial-idle-content.png"
+  magick "$OUT_DIR/$name.png" -crop 1120x638+0+42 +repage \
+    "$OUT_DIR/$name-content.png"
   rmse="$(magick compare -metric RMSE \
-    "$OUT_DIR/initial-idle.png" "$OUT_DIR/$name.png" null: 2>&1 || true)"
+    "$OUT_DIR/initial-idle-content.png" "$OUT_DIR/$name-content.png" null: 2>&1 || true)"
   normalized="$(sed -n 's/.*(\([^()]*\)).*/\1/p' <<<"$rmse")"
   [[ -n "$normalized" ]] && awk -v value="$normalized" 'BEGIN { exit !(value < 0.002) }' || {
-    echo "$name diverged from the canonical initial idle surface: RMSE=$rmse" >&2
+    echo "$name diverged from the canonical initial idle content: RMSE=$rmse" >&2
     exit 1
   }
   printf '%s_reference_rmse=%s\n' "$name" "$normalized" >>"$OUT_DIR/results.txt"

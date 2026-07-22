@@ -2467,6 +2467,9 @@ pub(crate) fn drain_mpv_events(
                 let mut state = state.borrow_mut();
                 state.media_load_state = network_media::MediaLoadState::Playing;
                 state.last_load_diagnostic = None;
+                if env::var_os("OKP_DEBUG_IDLE_RETURN_SMOKE").is_some() {
+                    eprintln!("idle-return-smoke: file-loaded");
+                }
             }
             MpvEvent::VideoReconfig { video_dimensions } => {
                 auto_fit_dimensions = auto_fit_dimensions.or(video_dimensions);
@@ -2480,7 +2483,13 @@ pub(crate) fn drain_mpv_events(
                     if state.borrow().playlist.repeat() != RepeatMode::One {
                         save_current_progress(state, true);
                     }
-                    advance_playlist_on_eof(state);
+                    let advanced = advance_playlist_on_eof(state);
+                    if env::var_os("OKP_DEBUG_IDLE_RETURN_SMOKE").is_some()
+                        && !advanced
+                        && !has_loaded_media(state)
+                    {
+                        eprintln!("idle-return-smoke: eof-idle");
+                    }
                 }
             }
             MpvEvent::EndFile {

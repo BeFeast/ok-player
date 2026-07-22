@@ -4922,6 +4922,41 @@ fn eof_without_an_auto_advance_target_returns_to_idle() {
 }
 
 #[test]
+fn idle_return_smoke_waits_for_natural_eof_before_welcome_capture() {
+    let smoke = include_str!("../../../../scripts/smoke-linux-idle-return.sh");
+    let eof_flow = smoke
+        .split("launch_fixture eof-app")
+        .nth(1)
+        .and_then(|source| source.split("stop_app").next())
+        .expect("EOF smoke flow");
+
+    let loaded_probe = eof_flow
+        .find("idle-return-smoke: file-loaded")
+        .expect("file-loaded lifecycle probe");
+    let eof_probe = eof_flow
+        .find("idle-return-smoke: eof-idle")
+        .expect("natural-EOF idle probe");
+    let welcome_probe = eof_flow
+        .find("assert_idle_capture")
+        .expect("Welcome identity probe");
+    assert!(loaded_probe < eof_probe);
+    assert!(eof_probe < welcome_probe);
+    assert!(!eof_flow.contains("sleep 7"));
+
+    assert!(smoke.contains("identity > 0.012"));
+    assert!(smoke.contains("magenta < 0.35"));
+    assert!(smoke.contains("idle-return-smoke: close-idle"));
+    assert!(smoke.contains("export GSK_RENDERER=cairo"));
+    assert!(smoke.contains("-crop 1120x638+0+42"));
+
+    let lifecycle = include_str!("track_popovers.rs");
+    assert!(lifecycle.contains("idle-return-smoke: file-loaded"));
+    assert!(lifecycle.contains("idle-return-smoke: eof-idle"));
+    let playback = include_str!("playback.rs");
+    assert!(playback.contains("idle-return-smoke: close-idle"));
+}
+
+#[test]
 fn native_video_background_is_transparent_only_while_media_is_active() {
     let css = include_str!("css.rs");
     let bridge = include_str!("mpv_bridge.rs");

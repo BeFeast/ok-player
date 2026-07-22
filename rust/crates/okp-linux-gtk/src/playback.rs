@@ -1006,6 +1006,9 @@ pub(crate) fn close_current_media(
     match result {
         Some(Ok(())) | None => {
             clear_loaded_media_state(state);
+            if env::var_os("OKP_DEBUG_IDLE_RETURN_SMOKE").is_some() {
+                eprintln!("idle-return-smoke: close-idle");
+            }
             status_toast.show("Media closed");
             true
         }
