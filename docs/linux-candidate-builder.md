@@ -178,7 +178,13 @@ lock after their direct parent returns.
      `portability-report.json` records which mode ran and is required for
      promotion and later public publication
    - package identity + SHA-256 verification (`SHA256SUMS`, `package-identity.json`)
-   - clean install / upgrade / uninstall smoke in a disposable environment
+   - clean install / upgrade / purge through real `dpkg` in an unprivileged
+     mapped-root user namespace with a private filesystem root and package
+     database. Maintainer scripts are chrooted into that root, and both install
+     layouts are re-verified against the packaged libmpv runtime. Direct local
+     invocations of `smoke-linux-install-upgrade.sh` retain an extraction-only
+     fallback unless `OKP_SMOKE_REAL_DPKG=1` is selected; the scheduled native
+     candidate builder always selects the real dpkg mode
    - real playback and screenshot capture from the exact Debian payload, with a bundled image and SHA-256
    - headless launch smoke (Xvfb): the idle surface once, followed by the complete
      fit-only small/maximized/fullscreen/4K lifecycle three consecutive times with

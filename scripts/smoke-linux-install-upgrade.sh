@@ -1,19 +1,24 @@
 #!/usr/bin/env bash
 # Clean install / upgrade / uninstall smoke for a Linux candidate .deb (issue #340).
 #
-# Runs in a disposable directory and never needs the host package database.
+# Runs in a disposable directory and never mutates the host package database.
 #
 # The default is a `dpkg-deb -x` extraction smoke that is host-independent: it
 # proves the package layout, control metadata, an upgrade re-extraction, and a
 # clean uninstall on any machine with dpkg-deb. Set OKP_SMOKE_REAL_DPKG=1 on a
-# real Ubuntu builder to escalate to a full dpkg install / upgrade / remove
-# cycle against a private `--root` (needs the standard sbin tools on PATH). Both
-# modes assert the installed binary, desktop entry, and icons land at the paths
-# the updater and desktop integration expect, and that removal leaves nothing
-# behind.
+# real Ubuntu builder to escalate to a dpkg install / upgrade / purge cycle in
+# an unprivileged user namespace against a private `--root`. The private package
+# database begins empty and dependency configuration is forced because the
+# preceding package/portability gates validate the Depends contract and runtime
+# closure; this gate owns dpkg lifecycle semantics and chrooted maintainer
+# scripts. Both modes assert the installed binary, desktop entry, and icons land
+# at the paths the updater and desktop integration expect, and that removal
+# leaves nothing behind.
 #
 # Usage: smoke-linux-install-upgrade.sh <candidate.deb> [work-dir]
 set -euo pipefail
+
+# candidate-required-tools: awk cat chmod cp dirname dpkg dpkg-deb dpkg-query ldd mkdir mktemp rm unshare
 
 DEB="${1:?usage: smoke-linux-install-upgrade.sh <candidate.deb> [work-dir]}"
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -39,6 +44,12 @@ EXPECTED_FILES=(
   "usr/lib/ok-player/libmpv.so.2"
   "usr/bin/ok-player"
   "usr/share/applications/com.befeast.okplayer.desktop"
+  "usr/share/metainfo/com.befeast.okplayer.metainfo.xml"
+  "usr/share/icons/hicolor/16x16/apps/com.befeast.okplayer.svg"
+  "usr/share/icons/hicolor/24x24/apps/com.befeast.okplayer.svg"
+  "usr/share/icons/hicolor/32x32/apps/com.befeast.okplayer.svg"
+  "usr/share/icons/hicolor/48x48/apps/com.befeast.okplayer.svg"
+  "usr/share/icons/hicolor/64x64/apps/com.befeast.okplayer.svg"
   "usr/share/icons/hicolor/scalable/apps/com.befeast.okplayer.svg"
 )
 
@@ -65,31 +76,72 @@ mkdir -p "$WORK_DIR"
 
 if [[ "${OKP_SMOKE_REAL_DPKG:-0}" == "1" ]]; then
   command -v dpkg >/dev/null 2>&1 || fail "OKP_SMOKE_REAL_DPKG=1 but dpkg is not available"
+  command -v dpkg-query >/dev/null 2>&1 || fail "OKP_SMOKE_REAL_DPKG=1 but dpkg-query is not available"
+  command -v unshare >/dev/null 2>&1 || fail "OKP_SMOKE_REAL_DPKG=1 but unshare is not available"
   export PATH="/usr/local/sbin:/usr/sbin:/sbin:$PATH"
-  ROOT="$WORK_DIR/root"
-  ADMINDIR="$WORK_DIR/dpkg-admin"
-  mkdir -p "$ROOT" "$ADMINDIR/updates" "$ADMINDIR/info"
+  INSTALL_ROOT="$WORK_DIR/root"
+  ADMINDIR="$INSTALL_ROOT/var/lib/dpkg"
+  DPKG_LOG="$WORK_DIR/dpkg.log"
+  mkdir -p \
+    "$INSTALL_ROOT/bin" \
+    "$INSTALL_ROOT/dev" \
+    "$ADMINDIR/updates" \
+    "$ADMINDIR/info"
   : >"$ADMINDIR/status"
 
-  dpkg_root() { dpkg --root="$ROOT" --admindir="$ADMINDIR" --force-not-root "$@"; }
+  # dpkg chroots maintainer scripts into INSTALL_ROOT. Seed only the shell and
+  # its dynamic loader/runtime; desktop cache helpers remain absent, so package
+  # scripts cannot mutate the host desktop while exercising their control flow.
+  cp -L /bin/sh "$INSTALL_ROOT/bin/sh"
+  : >"$INSTALL_ROOT/dev/null"
+  chmod 666 "$INSTALL_ROOT/dev/null"
+  while IFS= read -r library; do
+    destination="$INSTALL_ROOT$library"
+    mkdir -p "$(dirname -- "$destination")"
+    cp -L "$library" "$destination"
+  done < <(
+    ldd /bin/sh \
+      | awk '/=> \// { print $3 } /^[[:space:]]*\// { print $1 }'
+  )
+
+  DPKG="$(command -v dpkg)"
+  DPKG_QUERY="$(command -v dpkg-query)"
+  dpkg_root() {
+    unshare --user --map-root-user --mount --fork "$DPKG" \
+      --root="$INSTALL_ROOT" \
+      --admindir="$ADMINDIR" \
+      --log="$DPKG_LOG" \
+      --force-depends \
+      "$@"
+  }
+  assert_installed_status() {
+    local status
+    status="$($DPKG_QUERY --admindir="$ADMINDIR" -W -f='${db:Status-Status}' ok-player 2>/dev/null || true)"
+    [[ "$status" == "installed" ]] || fail "dpkg status is not installed: ${status:-missing}"
+  }
 
   echo "== install =="
   dpkg_root --install "$DEB" >"$WORK_DIR/install.log" 2>&1 \
     || { cat "$WORK_DIR/install.log" >&2; fail "dpkg install failed"; }
-  assert_layout "$ROOT"
+  assert_installed_status
+  assert_layout "$INSTALL_ROOT"
 
   echo "== upgrade (reinstall same candidate) =="
   dpkg_root --install "$DEB" >"$WORK_DIR/upgrade.log" 2>&1 \
     || { cat "$WORK_DIR/upgrade.log" >&2; fail "dpkg upgrade failed"; }
-  assert_layout "$ROOT"
+  assert_installed_status
+  assert_layout "$INSTALL_ROOT"
 
-  echo "== uninstall =="
-  dpkg_root --remove ok-player >"$WORK_DIR/remove.log" 2>&1 \
-    || { cat "$WORK_DIR/remove.log" >&2; fail "dpkg remove failed"; }
-  # Removal must clear the application payload; a leftover binary means an
-  # upgrade could strand a stale executable.
-  [[ ! -e "$ROOT/usr/lib/ok-player/ok-player" ]] \
-    || fail "binary survived uninstall"
+  echo "== uninstall (purge) =="
+  dpkg_root --purge ok-player >"$WORK_DIR/remove.log" 2>&1 \
+    || { cat "$WORK_DIR/remove.log" >&2; fail "dpkg purge failed"; }
+  for relative in "${EXPECTED_FILES[@]}"; do
+    [[ ! -e "$INSTALL_ROOT/$relative" && ! -L "$INSTALL_ROOT/$relative" ]] \
+      || fail "$relative survived uninstall"
+  done
+  if "$DPKG_QUERY" --admindir="$ADMINDIR" -W ok-player >/dev/null 2>&1; then
+    fail "ok-player survived purge in the private package database"
+  fi
   echo "dpkg install/upgrade/uninstall smoke passed"
   exit 0
 fi

@@ -211,6 +211,7 @@ run_gate package-identity package_identity_gate
 
 # Clean install / upgrade / uninstall in a disposable environment.
 run_gate install-upgrade-uninstall-smoke \
+  env OKP_SMOKE_REAL_DPKG=1 \
   "$CHECKOUT/scripts/smoke-linux-install-upgrade.sh" "$DEB" "$OUT_DIR/install-smoke"
 
 # Exercise the screenshot shortcut from the exact Debian payload, not merely
