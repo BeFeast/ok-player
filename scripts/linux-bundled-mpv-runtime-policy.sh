@@ -127,7 +127,9 @@ okp_run_linux_smoke_with_infra_retry() {
     attempt_dir="${output_dir}-attempt-${attempt}"
     rm -rf -- "$attempt_dir"
     mkdir -p -- "$attempt_dir"
-    xdg_dir="$attempt_dir/.xdg"
+    # Keep the directory visible so the workflow artifact glob retains it when
+    # a failed attempt is copied into the evidence tree.
+    xdg_dir="$attempt_dir/xdg"
     mkdir -p -- \
       "$xdg_dir/config" "$xdg_dir/state" "$xdg_dir/cache" "$xdg_dir/data"
 
@@ -141,9 +143,9 @@ okp_run_linux_smoke_with_infra_retry() {
       "$@"
     status=$?
     set -e
-    rm -rf -- "$xdg_dir"
 
     if (( status == 0 )); then
+      rm -rf -- "$xdg_dir"
       rm -rf -- "$output_dir"
       mv -- "$attempt_dir" "$output_dir"
       return 0
@@ -153,6 +155,7 @@ okp_run_linux_smoke_with_infra_retry() {
     rm -rf -- "$evidence_dir"
     mkdir -p -- "$evidence_dir"
     cp -a -- "$attempt_dir"/. "$evidence_dir"/
+    rm -rf -- "$xdg_dir"
     printf 'label=%s\nattempt=%s\nexit_status=%s\n' "$label" "$attempt" "$status" \
       >"$evidence_dir/retry-evidence.txt"
 
