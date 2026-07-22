@@ -95,8 +95,18 @@ fn player_close_returns_to_gtk_before_mpv_teardown() {
         );
     }
     assert!(
-        idle_body.contains("mpv.take()") || idle_body.contains(".mpv.take()"),
-        "idle close path must drop the engine after the shell is gone"
+        before_idle.contains("mpv.take()"),
+        "close_request must take the engine before hide/unrealize"
+    );
+    assert!(
+        before_idle.find("mpv.take()").expect("take")
+            < before_idle.find("set_visible(false)").expect("hide"),
+        "engine must leave PlayerState before set_visible triggers unrealize"
+    );
+    assert!(
+        idle_body.find("close_app.quit()").expect("quit")
+            < idle_body.find("mem::forget").expect("forget engine"),
+        "idle close path must quit GTK before leaking the engine across process exit"
     );
 }
 
