@@ -6,19 +6,21 @@
 # The default is a `dpkg-deb -x` extraction smoke that is host-independent: it
 # proves the package layout, control metadata, an upgrade re-extraction, and a
 # clean uninstall on any machine with dpkg-deb. Set OKP_SMOKE_REAL_DPKG=1 on a
-# real Ubuntu builder to escalate to a dpkg install / upgrade / purge cycle in
-# an unprivileged user namespace against a private `--root`. The private package
-# database begins empty and dependency configuration is forced because the
-# preceding package/portability gates validate the Depends contract and runtime
-# closure; this gate owns dpkg lifecycle semantics and chrooted maintainer
-# scripts. Both modes assert the installed binary, desktop entry, and icons land
-# at the paths the updater and desktop integration expect, and that removal
-# leaves nothing behind.
+# real Ubuntu builder to escalate to a dpkg install / upgrade / purge cycle
+# against a private `--root`. A mapped-root user namespace keeps maintainer
+# scripts chrooted when the host permits it. Restricted service units fall back
+# to dpkg's non-root, script-chrootless mode; DPKG_ROOT keeps the package's
+# maintainer scripts pointed at the private root. The private package database
+# begins empty and dependency configuration is forced because the preceding
+# package/portability gates validate the Depends contract and runtime closure;
+# this gate owns dpkg lifecycle semantics. Both modes assert the installed
+# binary, desktop entry, and icons land at the paths the updater and desktop
+# integration expect, and that removal leaves nothing behind.
 #
 # Usage: smoke-linux-install-upgrade.sh <candidate.deb> [work-dir]
 set -euo pipefail
 
-# candidate-required-tools: awk cat chmod cp dirname dpkg dpkg-deb dpkg-query ldd mkdir mktemp rm unshare
+# candidate-required-tools: awk cat chmod cp dirname dpkg dpkg-deb dpkg-query ldd mkdir mktemp rm
 
 DEB="${1:?usage: smoke-linux-install-upgrade.sh <candidate.deb> [work-dir]}"
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -77,7 +79,6 @@ mkdir -p "$WORK_DIR"
 if [[ "${OKP_SMOKE_REAL_DPKG:-0}" == "1" ]]; then
   command -v dpkg >/dev/null 2>&1 || fail "OKP_SMOKE_REAL_DPKG=1 but dpkg is not available"
   command -v dpkg-query >/dev/null 2>&1 || fail "OKP_SMOKE_REAL_DPKG=1 but dpkg-query is not available"
-  command -v unshare >/dev/null 2>&1 || fail "OKP_SMOKE_REAL_DPKG=1 but unshare is not available"
   export PATH="/usr/local/sbin:/usr/sbin:/sbin:$PATH"
   INSTALL_ROOT="$WORK_DIR/root"
   ADMINDIR="$INSTALL_ROOT/var/lib/dpkg"
@@ -106,13 +107,30 @@ if [[ "${OKP_SMOKE_REAL_DPKG:-0}" == "1" ]]; then
 
   DPKG="$(command -v dpkg)"
   DPKG_QUERY="$(command -v dpkg-query)"
+  DPKG_MODE=chrootless
+  if [[ "${OKP_SMOKE_FORCE_CHROOTLESS_DPKG:-0}" != "1" ]] \
+    && command -v unshare >/dev/null 2>&1 \
+    && unshare --user --map-root-user --mount --fork true >/dev/null 2>&1; then
+    DPKG_MODE=mapped-root
+  else
+    echo "mapped-root user namespace unavailable; using private-root dpkg fallback"
+  fi
   dpkg_root() {
-    unshare --user --map-root-user --mount --fork "$DPKG" \
-      --root="$INSTALL_ROOT" \
-      --admindir="$ADMINDIR" \
-      --log="$DPKG_LOG" \
-      --force-depends \
-      "$@"
+    local dpkg_args=(
+      --root="$INSTALL_ROOT"
+      --admindir="$ADMINDIR"
+      --log="$DPKG_LOG"
+      --force-depends
+    )
+    if [[ "$DPKG_MODE" == "mapped-root" ]]; then
+      unshare --user --map-root-user --mount --fork \
+        "$DPKG" "${dpkg_args[@]}" "$@"
+    else
+      "$DPKG" "${dpkg_args[@]}" \
+        --force-not-root \
+        --force-script-chrootless \
+        "$@"
+    fi
   }
   assert_installed_status() {
     local status
