@@ -313,6 +313,7 @@ fn workflow_and_operator_guide_consume_the_canonical_manifest() {
         "scripts/collect-linux-bundled-mpv-runtime.sh",
         "scripts/verify-linux-bundled-mpv.sh",
         "scripts/verify-linux-package-portability.sh",
+        "scripts/smoke-linux-install-upgrade.sh",
     ] {
         let output = Command::new("/bin/bash")
             .arg(toolchain_script())
@@ -376,6 +377,14 @@ fn workflow_and_operator_guide_consume_the_canonical_manifest() {
         .expect("bundled runtime verifier call");
     assert!(verifier_call.contains("$root/usr/lib/ok-player\""));
     assert!(!verifier_call.contains("$root/usr/lib/ok-player/libmpv.so.2\""));
+    assert!(install_smoke.contains("ADMINDIR=\"$INSTALL_ROOT/var/lib/dpkg\""));
+    assert!(install_smoke.contains("unshare --user --map-root-user --mount --fork"));
+    assert!(install_smoke.contains("--force-depends"));
+    assert!(install_smoke.contains("--purge ok-player"));
+
+    let candidate_builder = fs::read_to_string(root.join("scripts/build-linux-candidate.sh"))
+        .expect("candidate builder");
+    assert!(candidate_builder.contains("env OKP_SMOKE_REAL_DPKG=1"));
 }
 
 #[test]
