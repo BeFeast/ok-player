@@ -5,24 +5,23 @@ patched mpv v0.40.0 build produced by `scripts/build-local-mpv.sh`. Debian and
 AppImage packages prepare that exact pinned upstream commit, apply the embed
 patch, and install `libmpv.so.2` plus its complete non-platform dependency
 closure beside the application binary. That closure includes the exact FFmpeg,
-libplacebo, libass, libbluray, and Rubber Band sonames resolved by the pinned
-build. Every bundled ELF carries an origin-relative runtime path, so neither
-the executable nor a transitive media library can silently select a different
-host copy. The dynamic loader, glibc, ALSA, image-codec, and graphics-driver ABI
-libraries remain target-provided and are checked by the cross-distro packaging
-gate. The Debian package declares `libasound2 | libasound2t64`,
-`libjpeg-turbo8 | libjpeg62-turbo | libjpeg8`, `libwebp7`, `libwebpmux3`, and
-`libpng16-16 | libpng16-16t64`. AppImage hosts supply the corresponding distro
-ALSA and image-codec runtimes through their platform package set instead of
-loading bundled builder copies. mpv's JPEG screenshot encoder uses that target
-runtime; it does not require a private pinned JPEG ABI. Fedora remains on its
-explicit system-mpv packaging contract.
+libplacebo, libass, libbluray, Rubber Band, and JPEG sonames resolved by the
+pinned build. JPEG is rewritten to a private `libokp-libjpeg.so.*` SONAME so
+mpv's screenshot encoder keeps the builder ABI without shadowing the target
+JPEG used by TIFF/GDK modules. Every bundled ELF carries an origin-relative
+runtime path, so neither the executable nor a transitive media library can
+silently select a different host copy. The dynamic loader, glibc, ALSA, the
+remaining image-codec libraries, and graphics-driver ABI libraries stay
+target-provided and are checked by the cross-distro packaging gate. The Debian
+package declares `libasound2 | libasound2t64`, `libwebp7`, `libwebpmux3`, and
+`libpng16-16 | libpng16-16t64`. Fedora remains on its explicit system-mpv
+packaging contract.
 
 Shipping Debian and AppImage artifacts are built inside the repository's
 digest-pinned Debian 13 builder image, which is the oldest supported runtime.
 This bounds the bundled media closure to the support-floor glibc ABI. The
 target desktop still supplies the complete glibc family, ALSA, GTK,
-JPEG/TIFF/WebP/PNG image-codec families, Wayland/X11, and graphics-driver ABI
+TIFF/WebP/PNG image-codec families, Wayland/X11, and graphics-driver ABI
 libraries according to the package dependency and portability contracts.
 Package verification runs independently on Debian testing and Ubuntu 26.04.
 

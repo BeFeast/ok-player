@@ -21,7 +21,7 @@ OUT_DIR="${2:-$ROOT/artifacts/manual-ui/linux-fullscreen-chrome-smoke}"
 FIXTURE="${3:-$ROOT/tests/OkPlayer.IntegrationTests/fixtures/subtest.mkv}"
 SUBSTRATE="${4:-dark}"
 
-for tool in Xvfb dbus-run-session gdbus python3 xauth xprop flock mcookie xfwm4 xdotool xwininfo import magick; do
+for tool in Xvfb dbus-run-session gdbus python3 xauth xprop flock mcookie rg xfwm4 xdotool xwininfo import magick; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "Missing required tool: $tool" >&2
     exit 127
@@ -41,9 +41,11 @@ rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
 set +e
-"$ROOT/scripts/run-linux-isolated-xvfb-session.sh" \
+env __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
+  LIBGL_ALWAYS_SOFTWARE=1 \
+  "$ROOT/scripts/run-linux-isolated-xvfb-session.sh" \
   "$OUT_DIR/xvfb-session.txt" "$OUT_DIR/xvfb.log" \
-  '-screen 0 1280x900x24 -nolisten tcp -extension GLX' \
+  '-screen 0 1280x900x24 -nolisten tcp' \
   "$ROOT/scripts/run-linux-isolated-dbus-session.sh" "$OUT_DIR/dbus-session.txt" \
   bash -s -- "$BINARY" "$OUT_DIR" "$FIXTURE" "$SUBSTRATE" >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
 set -euo pipefail
@@ -62,6 +64,9 @@ export NO_AT_BRIDGE=1
 export XDG_SESSION_TYPE=x11
 export XDG_CURRENT_DESKTOP=XFCE
 export LIBGL_ALWAYS_SOFTWARE=1
+export FLATPAK_ID=com.befeast.okplayer
+export OKP_TEST_DRI_DEVICE_ROOT="$OUT_DIR/no-dri-devices"
+mkdir -p "$OKP_TEST_DRI_DEVICE_ROOT"
 
 xfwm4 --sm-client-disable >"$OUT_DIR/xfwm4.log" 2>&1 &
 wm_pid=$!
@@ -109,6 +114,19 @@ app_pid=$!
 # time-pos / pause and enable auto-hide.
 sleep 6
 
+rg -q 'Renderer policy: mode=software-no-dri flatpak=true dri-accessible=false backend=libmpv-software hwdec=no render-api=sw gsk-renderer=cairo' \
+  "$OUT_DIR/app.log" || {
+    echo "fullscreen smoke did not select the package-bound software renderer" >&2
+    cat "$OUT_DIR/app.log" >&2 || true
+    exit 1
+  }
+rg -q 'Software renderer: backend=libmpv-software format=(bgr0|0rgb) scene-renderer=cairo' \
+  "$OUT_DIR/app.log" || {
+    echo "fullscreen smoke did not initialize libmpv software rendering" >&2
+    cat "$OUT_DIR/app.log" >&2 || true
+    exit 1
+  }
+
 xdotool search --name "OK Player" >"$OUT_DIR/window.ids"
 window_id="$(head -n1 "$OUT_DIR/window.ids")"
 if [[ -z "$window_id" ]]; then
@@ -145,7 +163,7 @@ fi
 # notify handler, so the top band should be pure letterbox/video and the bottom
 # band should be clear too.
 sleep 4
-import -window root "$OUT_DIR/fullscreen-playing.png"
+import -window "$window_id" "$OUT_DIR/fullscreen-playing.png"
 
 # Top band: the custom titlebar (`okp-window-chrome`) carries bright caption
 # glyphs when visible. In fullscreen it is set invisible, so a dark maximum
@@ -184,7 +202,7 @@ fi
 # pins the chrome persistently — so the OSC must return and stay.
 xdotool key --clearmodifiers space
 sleep 2
-import -window root "$OUT_DIR/fullscreen-paused.png"
+import -window "$window_id" "$OUT_DIR/fullscreen-paused.png"
 
 # The OSC carries bright white icon glyphs over its translucent bar, so a bright
 # maximum in the bottom band means the chrome returned when playback paused.

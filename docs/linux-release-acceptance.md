@@ -33,7 +33,9 @@ Debian `Depends` field, and both extracted executables must contain the expected
 build marker. A candidate builder with Docker or Podman additionally records
 clean Debian testing and Ubuntu 26.04 `ldd` passes, glibc and target-desktop
 library rejection, source-marker checks, and canonical real-media narrow-width
-and bright-video fullscreen render smokes. Public release
+and bright-video fullscreen render smokes. Narrow-width runs the default GLArea;
+fullscreen uses the production no-DRI software renderer because Xvfb cannot
+reliably capture direct GL pixels. Public release
 preparation never relies on runtime availability from the candidate host: the
 hosted runner reruns the exact downloaded candidate in strict container mode
 before publication. Publication rejects a missing report, the historical

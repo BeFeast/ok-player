@@ -54,6 +54,40 @@ fn product_assertion_failure_is_not_retried() {
     assert!(!fixture.evidence.join("narrow-width/attempt-2").exists());
 }
 
+#[test]
+fn consecutive_smokes_do_not_share_xdg_persistence() {
+    let root = unique_temp_dir("okp-portability-xdg-isolation");
+    let runner = root.path().join("runner.sh");
+    let shared_xdg = root.path().join("shared-xdg");
+    write_executable(&runner, PERSISTENCE_PROBE);
+
+    let output = Command::new("bash")
+        .arg("-c")
+        .arg(
+            "set -euo pipefail; source \"$1\"; shift; \
+             okp_run_linux_smoke_with_infra_retry first \"$1/first\" \"$1/evidence\" \"$2\"; \
+             okp_run_linux_smoke_with_infra_retry second \"$1/second\" \"$1/evidence\" \"$2\"",
+        )
+        .arg("bash")
+        .arg(policy_script())
+        .arg(root.path())
+        .arg(&runner)
+        .env("XDG_CONFIG_HOME", shared_xdg.join("config"))
+        .env("XDG_STATE_HOME", shared_xdg.join("state"))
+        .env("XDG_CACHE_HOME", shared_xdg.join("cache"))
+        .env("XDG_DATA_HOME", shared_xdg.join("data"))
+        .output()
+        .expect("consecutive policy helpers should run");
+
+    assert_success(&output);
+    let first = fs::read_to_string(root.path().join("first/session.log")).unwrap();
+    let second = fs::read_to_string(root.path().join("second/session.log")).unwrap();
+    assert!(first.contains("first-attempt-1/.xdg/state"), "{first}");
+    assert!(second.contains("second-attempt-1/.xdg/state"), "{second}");
+    assert_ne!(first, second);
+    assert!(!shared_xdg.join("state/ok-player/history.json").exists());
+}
+
 fn assert_success(output: &Output) {
     assert!(
         output.status.success(),
@@ -135,4 +169,18 @@ count=$((count + 1))
 printf '%s\n' "$count" >"$OKP_TEST_COUNTER"
 printf 'assertion failed\n' >"$OKP_SMOKE_OUTPUT_DIR/session.log"
 exit 19
+"#;
+
+const PERSISTENCE_PROBE: &str = r#"#!/usr/bin/env bash
+set -euo pipefail
+history="$XDG_STATE_HOME/ok-player/history.json"
+if [[ -e "$history" ]]; then
+  printf 'shared history leaked into smoke: %s\n' "$history" >&2
+  exit 31
+fi
+mkdir -p "$(dirname "$history")"
+printf '{"position": 24}\n' >"$history"
+printf 'config=%s\nstate=%s\ncache=%s\ndata=%s\n' \
+  "$XDG_CONFIG_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" \
+  >"$OKP_SMOKE_OUTPUT_DIR/session.log"
 "#;

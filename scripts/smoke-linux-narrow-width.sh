@@ -10,36 +10,46 @@
 # boundaries rather than any exact decorative pixel.
 #
 # Needs real media plus a window resize, which is why it is tracked separately
-# from the preview-fixture smokes. The tiny synthetic clip in
-# tests/OkPlayer.IntegrationTests/fixtures is a dark 1280x720 H.264 stream, so a
-# near-black maximum in an OSC control band means a control was clipped or
-# covered by the panel; a bright maximum means the white icon glyph drew.
+# from the preview-fixture smokes. The smoke uses a 30-second dark H.264 stream
+# so the delayed capture cannot outlive the video track and accidentally measure
+# the idle surface. A near-black maximum in an OSC control band means a control
+# was clipped or covered by the panel; a bright maximum means the white icon
+# glyph drew.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BINARY="${1:-ok-player}"
 OUT_DIR="${2:-$ROOT/artifacts/manual-ui/linux-narrow-width-smoke}"
-FIXTURE="$ROOT/tests/OkPlayer.IntegrationTests/fixtures/subtest.mkv"
+FIXTURE="${3:-}"
 
-for tool in Xvfb dbus-run-session gdbus python3 xauth xprop flock mcookie xfwm4 xdotool xwininfo import magick; do
+for tool in Xvfb dbus-run-session ffmpeg gdbus python3 xauth xprop flock mcookie xfwm4 xdotool xwininfo import magick; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "Missing required tool: $tool" >&2
     exit 127
   fi
 done
 
+rm -rf "$OUT_DIR"
+mkdir -p "$OUT_DIR"
+
+if [[ -z "$FIXTURE" ]]; then
+  FIXTURE="$OUT_DIR/dark.mkv"
+  ffmpeg -hide_banner -loglevel error -y \
+    -f lavfi -i 'color=c=0x101010:s=640x360:r=2:d=30' \
+    -c:v libx264 -preset ultrafast -tune stillimage -pix_fmt yuv420p -g 4 -an \
+    "$FIXTURE"
+fi
 if [[ ! -f "$FIXTURE" ]]; then
   echo "Missing media fixture: $FIXTURE" >&2
   exit 127
 fi
 
-rm -rf "$OUT_DIR"
-mkdir -p "$OUT_DIR"
-
 set +e
-"$ROOT/scripts/run-linux-isolated-xvfb-session.sh" \
+env __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
+  LIBGL_ALWAYS_SOFTWARE=1 \
+  "$ROOT/scripts/run-linux-isolated-xvfb-session.sh" \
   "$OUT_DIR/xvfb-session.txt" "$OUT_DIR/xvfb.log" \
-  '-screen 0 1280x900x24 -nolisten tcp -extension GLX' \
+  '-screen 0 1280x900x24 -nolisten tcp' \
   "$ROOT/scripts/run-linux-isolated-dbus-session.sh" "$OUT_DIR/dbus-session.txt" \
   bash -s -- "$BINARY" "$OUT_DIR" "$FIXTURE" >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
 set -euo pipefail

@@ -55,6 +55,13 @@ newer than the support floor. Cross-distro verification then runs the exact
 packages in both Debian testing and Ubuntu 26.04 containers so the builder and
 verification environments remain independent.
 
+Stable and candidate packaging share the runtime collector and policy. mpv's
+direct JPEG dependency is copied under a private `libokp-libjpeg.so.*` SONAME
+and every bundled consumer is rewritten to that name. The Debian builder can
+therefore carry `libjpeg.so.62` onto Ubuntu without shadowing Ubuntu's
+`libjpeg.so.8`, while the native Ubuntu candidate applies the same rule to its
+own JPEG ABI instead of maintaining a lane-specific exclusion list.
+
 The preflight aggregates every missing command and pkg-config module into one
 failure line before the build lock is acquired. New external commands in
 `build-local-mpv.sh` must use `okp_candidate_tool`. Native package and
@@ -222,8 +229,11 @@ The native equivalence report is sufficient for candidate promotion. Public
 release preparation on the hosted runner always reruns the exact candidate
 artifacts in a clean Debian testing container and rejects publication unless
 that strict report passes. Its real-media Xvfb render proves that the packaged
-GTK GLArea and OSC initialize at narrow width and keep a bright decoded frame
-visible through the fullscreen transition against the target desktop stack.
+default GLArea and OSC initialize at narrow width, then uses the production
+no-DRI software renderer to keep a bright decoded frame visible through the
+fullscreen transition against the target desktop stack. This separates default
+surface initialization from deterministic pixel evidence: Xvfb cannot reliably
+capture direct GL pixels and does not prove a live compositor or hardware path.
 Its source-marker check catches package identity loss in linked worktrees.
 Neither mode is operator acceptance. The `installed-launch` and
 `installed-package-version` rows must still be executed from a separate QA

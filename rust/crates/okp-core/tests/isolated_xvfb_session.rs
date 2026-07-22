@@ -74,9 +74,43 @@ fn portability_media_smokes_use_isolated_sessions_and_wait_for_xfwm() {
         assert!(script.contains("_NET_SUPPORTING_WM_CHECK"));
         assert!(script.contains("xfwm4-ready.txt"));
         assert!(script.contains("OKP_SESSION_INFRA_EXIT_CODE:-75"));
+        assert!(
+            script.contains(
+                "__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json"
+            )
+        );
+        assert!(!script.contains("-extension GLX"));
         assert!(!script.contains("xvfb-run "));
         assert!(!script.contains("dbus-run-session -- bash"));
     }
+}
+
+#[test]
+fn narrow_width_portability_capture_uses_a_long_lived_dark_fixture() {
+    let narrow = include_str!("../../../../scripts/smoke-linux-narrow-width.sh");
+    assert!(narrow.contains("FIXTURE=\"${3:-}\""));
+    assert!(narrow.contains("color=c=0x101010:s=640x360:r=2:d=30"));
+    let delayed_capture = narrow.find("sleep 6").expect("delayed capture wait");
+    let screenshot = narrow.find("import -window").expect("window screenshot");
+    assert!(delayed_capture < screenshot);
+
+    let portability = include_str!("../../../../scripts/verify-linux-package-portability.sh");
+    assert!(portability.contains("\"$scratch/dark.mkv\""));
+    assert!(portability.contains("color=c=0x101010:s=640x360:r=2:d=30"));
+}
+
+#[test]
+fn fullscreen_portability_capture_reads_the_application_toplevel() {
+    let fullscreen = include_str!("../../../../scripts/smoke-linux-fullscreen-chrome.sh");
+    assert_eq!(
+        fullscreen.matches("import -window \"$window_id\"").count(),
+        2
+    );
+    assert!(!fullscreen.contains("import -window root"));
+    assert!(fullscreen.contains("FLATPAK_ID=com.befeast.okplayer"));
+    assert!(fullscreen.contains("OKP_TEST_DRI_DEVICE_ROOT=\"$OUT_DIR/no-dri-devices\""));
+    assert!(fullscreen.contains("mode=software-no-dri"));
+    assert!(fullscreen.contains("backend=libmpv-software"));
 }
 
 fn assert_success(output: &Output) {

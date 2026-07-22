@@ -329,7 +329,7 @@ fn workflow_and_operator_guide_consume_the_canonical_manifest() {
 
     let deb_package = fs::read_to_string(root.join("scripts/package-linux-deb.sh"))
         .expect("Debian package script");
-    assert!(deb_package.contains("libjpeg-turbo8 | libjpeg62-turbo | libjpeg8"));
+    assert!(!deb_package.contains("libjpeg-turbo8 | libjpeg62-turbo | libjpeg8"));
     assert!(deb_package.contains("libwebp7"));
     assert!(deb_package.contains("libwebpmux3"));
     assert!(deb_package.contains("libpng16-16 | libpng16-16t64"));
@@ -456,6 +456,52 @@ fn runtime_collector_keeps_host_tools_out_of_the_runtime_being_rebuilt() {
         log.lines().all(|line| line.starts_with("/host/runtime|")),
         "{log}"
     );
+}
+
+#[test]
+fn runtime_collector_namespaces_the_builder_jpeg_abi() {
+    let fixture = unique_temp_dir("okp-runtime-collector-jpeg-namespace");
+    let bin = fixture.path().join("bin");
+    let libmpv = fixture.path().join("libmpv.so.2");
+    let libjpeg = fixture.path().join("libjpeg.so.62");
+    let output_dir = fixture.path().join("runtime");
+    let patchelf_log = fixture.path().join("patchelf.log");
+    fs::create_dir_all(&bin).expect("fake tool directory");
+    fs::copy("/bin/true", &libmpv).expect("fake libmpv");
+    fs::copy("/bin/true", &libjpeg).expect("fake libjpeg");
+    write_executable(
+        &bin.join("ldd"),
+        "#!/bin/sh\ncase \"$1\" in *libmpv.so.2) printf 'libjpeg.so.62 => %s (0x0)\\n' \"$OKP_FAKE_JPEG\";; esac\n",
+    );
+    write_executable(&bin.join("readelf"), "#!/bin/sh\nexit 0\n");
+    write_executable(
+        &bin.join("patchelf"),
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$OKP_PATCHELF_LOG\"\n",
+    );
+
+    let output = Command::new("/bin/bash")
+        .arg(runtime_collector_script())
+        .arg(&libmpv)
+        .arg(&output_dir)
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .env("OKP_FAKE_JPEG", &libjpeg)
+        .env("OKP_PATCHELF_LOG", &patchelf_log)
+        .output()
+        .expect("runtime collector should run");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output_dir.join("libokp-libjpeg.so.62").is_file());
+    assert!(!output_dir.join("libjpeg.so.62").exists());
+    let log = fs::read_to_string(patchelf_log).expect("patchelf invocation log");
+    assert!(
+        log.contains("--replace-needed libjpeg.so.62 libokp-libjpeg.so.62"),
+        "{log}"
+    );
+    assert!(log.contains("--set-soname libokp-libjpeg.so.62"), "{log}");
 }
 
 #[test]
