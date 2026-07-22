@@ -438,8 +438,13 @@ stop_app() {
 close_app() {
   local window_id="$1"
   local closed_pid="$app_pid"
-  xdotool windowactivate --sync "$window_id"
-  xdotool key --clearmodifiers alt+F4
+  xdotool windowactivate --sync "$window_id" || true
+  # Prefer ICCCM WM_DELETE_WINDOW over a synthetic Alt+F4. After minimize +
+  # secondary present, Alt+F4 can miss the undecorated player under Xfwm/Xvfb
+  # while the window stays IsViewable and the candidate gate fails.
+  if ! xdotool windowclose "$window_id" 2>/dev/null; then
+    xdotool key --window "$window_id" --clearmodifiers alt+F4
+  fi
 
   local diagnostics="$OUT_DIR/close-${closed_pid}-lifecycle.log"
   if ! "$X11_APP_CLEAR_WAITER" "$closed_pid" "$diagnostics"; then

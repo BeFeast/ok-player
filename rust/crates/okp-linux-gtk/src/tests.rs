@@ -81,14 +81,23 @@ fn player_close_returns_to_gtk_before_mpv_teardown() {
 
     assert!(close_handler.contains("close_companion_windows"));
     assert!(close_handler.contains("save_current_progress"));
+    assert!(close_handler.contains("set_visible(false)"));
     assert!(close_handler.contains("close_app.quit()"));
     assert!(close_handler.contains("glib::idle_add_local_once"));
-    for forbidden in [".mpv", "with_mpv(", "mpv.stop("] {
+
+    let (before_idle, idle_body) = close_handler
+        .split_once("glib::idle_add_local_once")
+        .expect("close_request must defer engine teardown to an idle callback");
+    for forbidden in ["mpv.stop(", "with_mpv("] {
         assert!(
-            !close_handler.contains(forbidden),
-            "close_request must not enter libmpv before GTK can destroy the window: {forbidden}"
+            !before_idle.contains(forbidden),
+            "close_request must not enter libmpv before the shell unmaps: {forbidden}"
         );
     }
+    assert!(
+        idle_body.contains("mpv.take()") || idle_body.contains(".mpv.take()"),
+        "idle close path must drop the engine after the shell is gone"
+    );
 }
 
 #[test]

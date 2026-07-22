@@ -209,9 +209,22 @@ impl NativeRenderLoop {
 
     fn stop_and_join(&mut self) {
         self.notifier.disable();
-        if let Some(join) = self.join.take()
-            && join.join().is_err()
-        {
+        let Some(join) = self.join.take() else {
+            return;
+        };
+        // Never block window destroy/unrealize on a stuck render thread — that left the
+        // candidate headless close waiter staring at an IsViewable shell forever.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
+        while !join.is_finished() {
+            if std::time::Instant::now() >= deadline {
+                eprintln!(
+                    "Native Wayland/EGL render thread exceeded the close join deadline; detaching"
+                );
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        if join.join().is_err() {
             eprintln!("Native Wayland/EGL render thread panicked");
         }
     }
