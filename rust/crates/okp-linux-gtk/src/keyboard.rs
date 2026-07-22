@@ -318,11 +318,9 @@ pub(crate) fn connect_progress_persistence(
     window.connect_close_request(move |_| {
         close_companion_windows(&close_state);
         save_current_progress(&close_state, false);
-        if let Some(mpv) = close_state.borrow().mpv.as_ref()
-            && let Err(error) = mpv.stop()
-        {
-            eprintln!("Failed to stop playback while closing the player: {error}");
-        }
+        // Let GTK destroy the toplevel before runtime teardown touches libmpv. Even an async
+        // mpv command enters the client API synchronously, so issuing one from close_request can
+        // hold this callback open and leave the visible window mapped indefinitely.
         let close_app = close_app.clone();
         glib::idle_add_local_once(move || close_app.quit());
         glib::Propagation::Proceed
