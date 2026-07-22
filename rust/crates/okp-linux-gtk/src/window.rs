@@ -655,17 +655,14 @@ pub(crate) fn track_player_window_bounds(
             let (width, height) = size.bounds();
             if width > 0 && height > 0 {
                 let monitor = toplevel.display().monitor_at_surface(toplevel);
-                let work_area = monitor
-                    .as_ref()
-                    .map(|monitor| bounded_monitor_work_area(monitor.geometry(), width, height))
-                    .unwrap_or(window_fit::WindowRect {
-                        x: 0,
-                        y: 0,
-                        width,
-                        height,
-                    });
-                let resize_work_area = monitor.as_ref().map(|_| work_area);
-                compute_bounds.replace(Some(PlayerWindowBounds { monitor, work_area }));
+                let bounds_size = window_fit::WindowSize { width, height };
+                let resize_work_area = monitor.as_ref().and_then(|monitor| {
+                    window_fit::monitor_fit_work_area(monitor_geometry(monitor), Some(bounds_size))
+                });
+                compute_bounds.replace(Some(PlayerWindowBounds {
+                    monitor,
+                    size: bounds_size,
+                }));
                 compute_resize.work_area.set(resize_work_area);
             }
         });
@@ -678,46 +675,51 @@ pub(crate) fn current_player_work_area(
     reported_bounds: &RefCell<Option<PlayerWindowBounds>>,
 ) -> Option<window_fit::WindowRect> {
     current_player_fit_area(window, reported_bounds)
-        .map(|(_, work_area)| work_area)
+        .map(|(_, work_area, _)| work_area)
         .or_else(|| current_player_monitor(window).map(|(_, geometry)| geometry))
 }
 
 fn current_player_fit_area(
     window: &gtk::ApplicationWindow,
     reported_bounds: &RefCell<Option<PlayerWindowBounds>>,
-) -> Option<(gdk::Monitor, window_fit::WindowRect)> {
-    let current_monitor = current_player_monitor(window);
-
+) -> Option<(gdk::Monitor, window_fit::WindowRect, PlayerFitBoundsSource)> {
+    let (monitor, monitor_geometry) = current_player_monitor(window)?;
     let reported = reported_bounds.borrow();
-    match (reported.as_ref(), current_monitor) {
-        (Some(bounds), Some((monitor, monitor_size)))
-            if bounds.monitor.as_ref() == Some(&monitor) =>
-        {
-            Some((
-                monitor.clone(),
-                bounded_monitor_work_area(
-                    monitor.geometry(),
-                    bounds.work_area.width.min(monitor_size.width),
-                    bounds.work_area.height.min(monitor_size.height),
-                ),
-            ))
+    let (reported_size, source) = match reported.as_ref() {
+        Some(bounds) if bounds.monitor.as_ref() == Some(&monitor) => {
+            (Some(bounds.size), PlayerFitBoundsSource::CurrentMonitor)
         }
-        // Wayland can publish configure bounds before the surface receives its
-        // output-enter event. Those bounds may describe the combined desktop.
-        // Once the current monitor is known, bind and clamp the dimensions to
-        // that one output instead of accepting the union as a fit workarea.
-        (Some(bounds), Some((monitor, monitor_size))) if bounds.monitor.is_none() => Some((
-            monitor.clone(),
-            bounded_monitor_work_area(
-                monitor.geometry(),
-                bounds.work_area.width.min(monitor_size.width),
-                bounds.work_area.height.min(monitor_size.height),
-            ),
-        )),
-        // A monitor change invalidates the previous output's usable bounds.
-        // Wait for GTK's next compute-size report rather than fitting against
-        // stale geometry from the other head.
-        _ => None,
+        Some(bounds) if bounds.monitor.is_none() => {
+            (Some(bounds.size), PlayerFitBoundsSource::Unbound)
+        }
+        Some(_) => (None, PlayerFitBoundsSource::StaleMonitorFallback),
+        None => (None, PlayerFitBoundsSource::MissingFallback),
+    };
+
+    // A missing report or one associated with a previous monitor must not
+    // stall a one-shot fit. The shared resolver falls back to this monitor's
+    // geometry. Size-only reports use a conservative rectangle that is inside
+    // every possible panel/dock origin and can never become a desktop union.
+    let work_area = window_fit::monitor_fit_work_area(monitor_geometry, reported_size)?;
+    Some((monitor, work_area, source))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlayerFitBoundsSource {
+    CurrentMonitor,
+    Unbound,
+    MissingFallback,
+    StaleMonitorFallback,
+}
+
+impl PlayerFitBoundsSource {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::CurrentMonitor => "current-monitor",
+            Self::Unbound => "unbound",
+            Self::MissingFallback => "monitor-fallback-missing",
+            Self::StaleMonitorFallback => "monitor-fallback-stale",
+        }
     }
 }
 
@@ -726,17 +728,19 @@ fn current_player_monitor(
 ) -> Option<(gdk::Monitor, window_fit::WindowRect)> {
     window.surface().and_then(|surface| {
         let monitor = surface.display().monitor_at_surface(&surface)?;
-        let geometry = monitor.geometry();
-        (geometry.width() > 0 && geometry.height() > 0).then_some((
-            monitor,
-            window_fit::WindowRect {
-                x: geometry.x(),
-                y: geometry.y(),
-                width: geometry.width(),
-                height: geometry.height(),
-            },
-        ))
+        let geometry = monitor_geometry(&monitor);
+        (geometry.width > 0 && geometry.height > 0).then_some((monitor, geometry))
     })
+}
+
+fn monitor_geometry(monitor: &gdk::Monitor) -> window_fit::WindowRect {
+    let geometry = monitor.geometry();
+    window_fit::WindowRect {
+        x: geometry.x(),
+        y: geometry.y(),
+        width: geometry.width(),
+        height: geometry.height(),
+    }
 }
 
 pub(crate) fn player_window_fit_area_available(
@@ -744,24 +748,6 @@ pub(crate) fn player_window_fit_area_available(
     reported_bounds: &RefCell<Option<PlayerWindowBounds>>,
 ) -> bool {
     current_player_fit_area(window, reported_bounds).is_some()
-}
-
-fn bounded_monitor_work_area(
-    geometry: gdk::Rectangle,
-    bounds_width: i32,
-    bounds_height: i32,
-) -> window_fit::WindowRect {
-    let width = bounds_width.min(geometry.width()).max(1);
-    let height = bounds_height.min(geometry.height()).max(1);
-    window_fit::WindowRect {
-        // GDK's toplevel bounds expose only a size. Centering a smaller bound
-        // within monitor geometry is the least-assumptive logical origin; on
-        // Wayland Mutter remains authoritative for final placement.
-        x: geometry.x() + (geometry.width() - width).max(0) / 2,
-        y: geometry.y() + (geometry.height() - height).max(0) / 2,
-        width,
-        height,
-    }
 }
 
 fn current_player_scale(window: &gtk::ApplicationWindow) -> f64 {
@@ -809,7 +795,9 @@ pub(crate) fn fit_player_window_to_video(
         return;
     }
 
-    let Some((monitor, work_area)) = current_player_fit_area(window, reported_bounds) else {
+    let Some((monitor, work_area, bounds_source)) =
+        current_player_fit_area(window, reported_bounds)
+    else {
         if debug {
             eprintln!("window fit deferred: monitor workarea unavailable");
         }
@@ -827,7 +815,7 @@ pub(crate) fn fit_player_window_to_video(
 
     if debug {
         eprintln!(
-            "window fit request: video={}x{} scale={:.2} monitor={} monitor_geometry={}x{}+{},{} workarea={}x{}+{},{} window={}x{}+{},{}",
+            "window fit request: video={}x{} scale={:.2} monitor={} monitor_geometry={}x{}+{},{} workarea={}x{}+{},{} window={}x{}+{},{} bounds_source={}",
             video.width,
             video.height,
             monitor_scale,
@@ -844,6 +832,7 @@ pub(crate) fn fit_player_window_to_video(
             placement.size.height,
             placement.position.x,
             placement.position.y,
+            bounds_source.label(),
         );
     }
     window.set_default_size(placement.size.width, placement.size.height);
