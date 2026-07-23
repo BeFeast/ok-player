@@ -8,18 +8,22 @@ HOST_SCRIPT="$ROOT/scripts/ok-player-night-gui-host.sh"
 
 usage() {
   cat >&2 <<'EOF'
-usage: ok-player-night-gui-qa.sh [--host HOST] [--force-window]
+usage: ok-player-night-gui-qa.sh [--host <role>] [--force-window]
 
-Default automatic order is slava, mimir, then baldr. Set OKP_QA_HOSTS to a
-whitespace-separated list of sanitized logical host aliases to override that
-order. Sindri is never accepted in the automatic list. An explicit --host
-sindri run also requires OKP_QA_ALLOW_SINDRI=1 and OKP_QA_OPERATOR_GO=1.
+Set the whitespace-separated automatic order with OKP_QA_HOSTS (default:
+slava mimir baldr). Roles are normalized to lowercase. Sindri is never accepted
+in that automatic list. An explicit --host sindri run also requires
+OKP_QA_ALLOW_SINDRI=1 and OKP_QA_OPERATOR_GO=1.
 EOF
 }
 
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
   exit 64
+}
+
+ascii_lower() {
+  LC_ALL=C tr '[:upper:]' '[:lower:]' <<<"$1"
 }
 
 explicit_host=""
@@ -45,12 +49,11 @@ while (( $# > 0 )); do
   esac
 done
 
-if [[ -n "$explicit_host" ]] &&
-  [[ ! "$explicit_host" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$ ]]; then
-  fail "invalid host alias: $explicit_host"
-fi
+explicit_host="$(ascii_lower "$explicit_host")"
+[[ -z "$explicit_host" || "$explicit_host" =~ ^[a-z0-9][a-z0-9._:-]{0,127}$ ]] ||
+  fail "invalid host role: $explicit_host"
 
-if [[ "${explicit_host,,}" == "sindri" ]] &&
+if [[ "$explicit_host" == "sindri" ]] &&
   [[ "${OKP_QA_ALLOW_SINDRI:-0}" != "1" || "${OKP_QA_OPERATOR_GO:-0}" != "1" ]]; then
   fail "sindri requires explicit operator authorization"
 fi
@@ -75,23 +78,23 @@ host_timeout_seconds=$((lease_ttl * 60 - 30))
 
 if [[ -n "$explicit_host" ]]; then
   hosts=("$explicit_host")
-elif [[ -v OKP_QA_HOSTS ]]; then
-  read -r -a hosts <<<"$OKP_QA_HOSTS"
-  (( ${#hosts[@]} > 0 )) || fail "OKP_QA_HOSTS must contain at least one host alias"
 else
-  hosts=(slava mimir baldr)
+  host_list="${OKP_QA_HOSTS:-slava mimir baldr}"
+  IFS=$' \t\n' read -r -d '' -a configured_hosts < <(printf '%s\0' "$host_list")
+  (( ${#configured_hosts[@]} > 0 )) || fail "OKP_QA_HOSTS must contain at least one host role"
+  hosts=()
+  declare -A seen_hosts=()
+  for host in "${configured_hosts[@]}"; do
+    host="$(ascii_lower "$host")"
+    [[ "$host" =~ ^[a-z0-9][a-z0-9._:-]{0,127}$ ]] ||
+      fail "OKP_QA_HOSTS contains an invalid host role: $host"
+    [[ "$host" != sindri ]] || fail "sindri cannot appear in OKP_QA_HOSTS"
+    [[ -z "${seen_hosts[$host]:-}" ]] ||
+      fail "OKP_QA_HOSTS contains a duplicate host role: $host"
+    seen_hosts["$host"]=1
+    hosts+=("$host")
+  done
 fi
-
-declare -A seen_hosts=()
-for host in "${hosts[@]}"; do
-  host_key="${host,,}"
-  [[ "$host" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$ ]] ||
-    fail "invalid host alias in automatic list: $host"
-  [[ "$host_key" != sindri || -n "$explicit_host" ]] ||
-    fail "sindri is not allowed in OKP_QA_HOSTS"
-  [[ ! -v "seen_hosts[$host_key]" ]] || fail "duplicate host alias: $host"
-  seen_hosts["$host_key"]=1
-done
 
 if [[ -n "${OKP_QA_SSH_COMMAND:-}" ]]; then
   ssh_command=("$OKP_QA_SSH_COMMAND")
@@ -138,8 +141,8 @@ incomplete_hosts=0
 
 for host in "${hosts[@]}"; do
   printf '%s\n' "-- probe host=$host"
-  if ! remote_script "$host" "$HOST_SCRIPT" probe "$host"; then
-    printf '%s\n' "SKIP host=$host reason=seat-unavailable"
+  if ! remote_script "$host" "$HOST_SCRIPT" probe-host "$host"; then
+    printf '%s\n' "SKIP host=$host reason=host-unreachable"
     continue
   fi
 

@@ -28,16 +28,52 @@ EOF
 cat >"$drag_smoke" <<'EOF'
 #!/usr/bin/env bash
 mkdir -p "$2"
-printf 'video_surface_handoff_survival=pass\n' >"$2/results.txt"
-printf 'status=pass\n' >"$2/xvfb-evidence.txt"
-printf 'status=pass\n' >"$2/dbus-evidence.txt"
+printf '%s\n' \
+  'video_surface_handoff_survival=pass' \
+  'compositor_cancel_survival=pass' \
+  'post_cancel_drag=pass' \
+  'idle_canvas_handoff_survival=pass' \
+  'fatal_diagnostics=absent' >"$2/results.txt"
+printf '%s\n' \
+  'xvfb_ready=true' \
+  'xvfb_alive_before_teardown=true' \
+  'xvfb_teardown=clean' \
+  'command_status=0' \
+  'status=pass' >"$2/xvfb-evidence.txt"
+printf '%s\n' \
+  'session_bus_ready=true' \
+  'session_bus_teardown=clean' \
+  'session_process_teardown=clean' \
+  'command_status=0' \
+  'status=pass' >"$2/dbus-evidence.txt"
 EOF
 cat >"$fit_series" <<'EOF'
 #!/usr/bin/env bash
 mkdir -p "$2"
-printf 'source_sha=%s\nstatus=pass\n' "$OKP_WINDOW_FIT_SOURCE_SHA" >"$2/series-evidence.txt"
+printf 'source_sha=%s\nrequired_consecutive_runs=3\ncompleted_consecutive_runs=3\nstatus=pass\n' \
+  "$OKP_WINDOW_FIT_SOURCE_SHA" >"$2/series-evidence.txt"
+for run in 1 2 3; do
+  mkdir -p "$2/run-$run"
+  printf 'logged_monitor_workarea_containment=pass\nstatus=pass\n' \
+    >"$2/run-$run/fit-evidence.txt"
+  printf '%s\n' \
+    'session_bus_ready=true' \
+    'session_bus_teardown=clean' \
+    'session_process_teardown=clean' \
+    'command_status=0' \
+    'status=pass' >"$2/run-$run/fit-session-evidence.txt"
+  printf '%s\n' \
+    'xvfb_ready=true' \
+    'xvfb_alive_before_teardown=true' \
+    'xvfb_teardown=clean' \
+    'command_status=0' \
+    'status=pass' >"$2/run-$run/fit-xvfb-evidence.txt"
+done
 EOF
 chmod +x "$binary" "$drag_smoke" "$fit_series"
+complete_fit_series="$TEST_ROOT/complete-fit-series"
+cp "$fit_series" "$complete_fit_series"
+chmod +x "$complete_fit_series"
 
 existing_output="$TEST_ROOT/existing"
 mkdir -p "$existing_output"
@@ -57,10 +93,10 @@ if env -u OKP_WINDOW_REGRESSION_SOURCE_SHA \
   OKP_WINDOW_DRAG_SMOKE="$drag_smoke" OKP_WINDOW_FIT_SERIES="$fit_series" \
   "$exported_root/scripts/run-linux-window-regression-smokes.sh" \
   "$binary" "$TEST_ROOT/exported-output" >/dev/null 2>"$missing_sha_error"; then
-  fail 'runner passed without an exact source SHA or Git metadata'
+  fail 'runner passed without an exact tested-candidate source SHA'
 fi
 assert_contains "$missing_sha_error" \
-  'Set OKP_WINDOW_REGRESSION_SOURCE_SHA when Git metadata is unavailable'
+  'OKP_WINDOW_REGRESSION_SOURCE_SHA must identify the tested candidate'
 
 pass_output="$TEST_ROOT/pass"
 OKP_WINDOW_DRAG_SMOKE="$drag_smoke" \
@@ -73,6 +109,101 @@ assert_contains "$pass_output/summary.env" 'status=pass'
 assert_contains "$pass_output/window-fit/series-evidence.txt" \
   'source_sha=1111111111111111111111111111111111111111'
 [[ -s "$pass_output/SHA256SUMS" ]] || fail 'runner did not bind its evidence files'
+assert_contains "$pass_output/SHA256SUMS" 'window-fit/run-3/fit-xvfb-evidence.txt'
+
+partial_session_fit="$TEST_ROOT/partial-session-fit"
+sed "/'session_bus_teardown=clean'/d" "$complete_fit_series" >"$partial_session_fit"
+chmod +x "$partial_session_fit"
+partial_session_output="$TEST_ROOT/partial-session"
+if OKP_WINDOW_DRAG_SMOKE="$drag_smoke" OKP_WINDOW_FIT_SERIES="$partial_session_fit" \
+  OKP_WINDOW_REGRESSION_SOURCE_SHA=1111111111111111111111111111111111111111 \
+  "$RUNNER" "$binary" "$partial_session_output" >/dev/null 2>&1; then
+  fail 'runner passed when fit session evidence omitted clean D-Bus teardown'
+fi
+assert_contains "$partial_session_output/results.tsv" \
+  $'single_monitor_window_fit\tFAIL\tmissing exact evidence=session_bus_teardown=clean; file=window-fit/run-1/fit-session-evidence.txt'
+
+cat >"$drag_smoke" <<'EOF'
+#!/usr/bin/env bash
+mkdir -p "$2"
+printf 'video_surface_handoff_survival=pass\n' >"$2/results.txt"
+printf '%s\n' \
+  'xvfb_ready=true' \
+  'xvfb_alive_before_teardown=true' \
+  'xvfb_teardown=clean' \
+  'command_status=0' \
+  'status=pass' >"$2/xvfb-evidence.txt"
+printf '%s\n' \
+  'session_bus_ready=true' \
+  'session_bus_teardown=clean' \
+  'session_process_teardown=clean' \
+  'command_status=0' \
+  'status=pass' >"$2/dbus-evidence.txt"
+EOF
+chmod +x "$drag_smoke"
+incomplete_drag_output="$TEST_ROOT/incomplete-drag"
+if OKP_WINDOW_DRAG_SMOKE="$drag_smoke" OKP_WINDOW_FIT_SERIES="$fit_series" \
+  OKP_WINDOW_REGRESSION_SOURCE_SHA=1111111111111111111111111111111111111111 \
+  "$RUNNER" "$binary" "$incomplete_drag_output" >/dev/null 2>&1; then
+  fail 'runner passed when zero-exit drag evidence omitted required assertions'
+fi
+assert_contains "$incomplete_drag_output/results.tsv" \
+  $'non_osc_window_drag\tFAIL\tmissing exact evidence=compositor_cancel_survival=pass'
+
+cat >"$drag_smoke" <<'EOF'
+#!/usr/bin/env bash
+mkdir -p "$2"
+printf '%s\n' \
+  'video_surface_handoff_survival=pass' \
+  'compositor_cancel_survival=pass' \
+  'post_cancel_drag=pass' \
+  'idle_canvas_handoff_survival=pass' \
+  'fatal_diagnostics=absent' >"$2/results.txt"
+printf '%s\n' \
+  'xvfb_ready=true' \
+  'xvfb_alive_before_teardown=true' \
+  'xvfb_teardown=clean' \
+  'command_status=0' \
+  'status=pass' >"$2/xvfb-evidence.txt"
+printf '%s\n' \
+  'session_bus_ready=true' \
+  'session_bus_teardown=clean' \
+  'session_process_teardown=clean' \
+  'command_status=0' \
+  'status=pass' >"$2/dbus-evidence.txt"
+EOF
+cat >"$fit_series" <<'EOF'
+#!/usr/bin/env bash
+mkdir -p "$2"
+printf 'source_sha=%s\nrequired_consecutive_runs=3\nstatus=pass\n' \
+  "$OKP_WINDOW_FIT_SOURCE_SHA" >"$2/series-evidence.txt"
+for run in 1 2 3; do
+  mkdir -p "$2/run-$run"
+  printf 'logged_monitor_workarea_containment=pass\nstatus=pass\n' \
+    >"$2/run-$run/fit-evidence.txt"
+  printf '%s\n' \
+    'session_bus_ready=true' \
+    'session_bus_teardown=clean' \
+    'session_process_teardown=clean' \
+    'command_status=0' \
+    'status=pass' >"$2/run-$run/fit-session-evidence.txt"
+  printf '%s\n' \
+    'xvfb_ready=true' \
+    'xvfb_alive_before_teardown=true' \
+    'xvfb_teardown=clean' \
+    'command_status=0' \
+    'status=pass' >"$2/run-$run/fit-xvfb-evidence.txt"
+done
+EOF
+chmod +x "$drag_smoke" "$fit_series"
+incomplete_fit_output="$TEST_ROOT/incomplete-fit"
+if OKP_WINDOW_DRAG_SMOKE="$drag_smoke" OKP_WINDOW_FIT_SERIES="$fit_series" \
+  OKP_WINDOW_REGRESSION_SOURCE_SHA=1111111111111111111111111111111111111111 \
+  "$RUNNER" "$binary" "$incomplete_fit_output" >/dev/null 2>&1; then
+  fail 'runner passed when zero-exit fit evidence omitted the completion marker'
+fi
+assert_contains "$incomplete_fit_output/results.tsv" \
+  $'single_monitor_window_fit\tFAIL\tmissing exact evidence=completed_consecutive_runs=3'
 
 cat >"$fit_series" <<'EOF'
 #!/usr/bin/env bash
@@ -101,14 +232,33 @@ fit_marker="$TEST_ROOT/fit-ran"
 cat >"$fit_series" <<EOF
 #!/usr/bin/env bash
 mkdir -p "\$2"
-printf 'source_sha=%s\nstatus=pass\n' "\$OKP_WINDOW_FIT_SOURCE_SHA" \
+printf 'source_sha=%s\nrequired_consecutive_runs=3\ncompleted_consecutive_runs=3\nstatus=pass\n' \
+  "\$OKP_WINDOW_FIT_SOURCE_SHA" \
   >"\$2/series-evidence.txt"
+for run in 1 2 3; do
+  mkdir -p "\$2/run-\$run"
+  printf 'logged_monitor_workarea_containment=pass\nstatus=pass\n' \
+    >"\$2/run-\$run/fit-evidence.txt"
+  printf '%s\n' \
+    'session_bus_ready=true' \
+    'session_bus_teardown=clean' \
+    'session_process_teardown=clean' \
+    'command_status=0' \
+    'status=pass' >"\$2/run-\$run/fit-session-evidence.txt"
+  printf '%s\n' \
+    'xvfb_ready=true' \
+    'xvfb_alive_before_teardown=true' \
+    'xvfb_teardown=clean' \
+    'command_status=0' \
+    'status=pass' >"\$2/run-\$run/fit-xvfb-evidence.txt"
+done
 printf 'ran\n' >"$fit_marker"
 EOF
 chmod +x "$drag_smoke" "$fit_series"
 
 fail_output="$TEST_ROOT/fail"
 if OKP_WINDOW_DRAG_SMOKE="$drag_smoke" OKP_WINDOW_FIT_SERIES="$fit_series" \
+  OKP_WINDOW_REGRESSION_SOURCE_SHA=1111111111111111111111111111111111111111 \
   "$RUNNER" "$binary" "$fail_output" >/dev/null 2>&1; then
   fail 'runner passed when the drag regression smoke failed'
 fi
@@ -125,6 +275,7 @@ EOF
 chmod +x "$drag_smoke"
 missing_output="$TEST_ROOT/missing-evidence"
 if OKP_WINDOW_DRAG_SMOKE="$drag_smoke" OKP_WINDOW_FIT_SERIES="$fit_series" \
+  OKP_WINDOW_REGRESSION_SOURCE_SHA=1111111111111111111111111111111111111111 \
   "$RUNNER" "$binary" "$missing_output" >/dev/null 2>&1; then
   fail 'runner passed when a successful smoke omitted its evidence file'
 fi
