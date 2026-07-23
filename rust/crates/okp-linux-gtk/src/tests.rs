@@ -2930,21 +2930,26 @@ fn player_window_move_drags_the_whole_non_interactive_surface() {
         .nth(1)
         .and_then(|tail| tail.split("/// Smallest client").next())
         .expect("native drag handoff helper");
-    assert!(handoff.contains("let Some((start_x, start_y)) = gesture.start_point()"));
-    assert!(handoff.contains("drag_widget.compute_point(window, &start)"));
-    assert!(handoff.contains("window.surface_transform()"));
-    assert!(!handoff.contains("bounding_box_center()"));
+    assert!(handoff.contains("let Some((surface_x, surface_y)) = gesture.bounding_box_center()"));
+    assert!(!handoff.contains("gesture.start_point()"));
+    assert!(!handoff.contains("compute_point("));
+    assert!(!handoff.contains("surface_transform()"));
     let claim = handoff
         .find("gesture.set_state(gtk::EventSequenceState::Claimed)")
         .expect("gesture claim");
     let begin_move = handoff
         .find("toplevel.begin_move(")
         .expect("native move handoff");
-    let reset = handoff.find("gesture.reset()").expect("gesture reset");
     assert!(
-        claim < begin_move && begin_move < reset,
-        "match GtkWindowHandle: claim, begin native move, then reset"
+        claim < begin_move,
+        "claim the click sequence before handing the live drag to the compositor"
     );
+    assert!(
+        !handoff.contains("gesture.reset()"),
+        "the compositor must be able to finish or cancel the active drag sequence"
+    );
+    assert!(bridge.contains("interaction: player-window-move-end"));
+    assert!(bridge.contains("interaction: player-window-move-cancel"));
 
     assert!(
         window.contains("let suppress_video_click = connect_player_window_move(&overlay, &window)")
@@ -5637,9 +5642,7 @@ fn fullscreen_toggle_wiring_decides_from_intent_not_the_lagging_platform_state()
     // threshold, so a stationary double-click there never starts a move.
     let compact = include_str!("compact_mode.rs");
     assert!(compact.contains("video_click::drag_exceeds_move_threshold(offset_x, offset_y, 6.0)"));
-    assert!(
-        compact.contains("begin_native_window_move_from_drag(gesture, &drag_video, &drag_window)")
-    );
+    assert!(compact.contains("begin_native_window_move_from_drag(gesture, &drag_window)"));
     assert!(!compact.contains("gesture.bounding_box_center()"));
 }
 
