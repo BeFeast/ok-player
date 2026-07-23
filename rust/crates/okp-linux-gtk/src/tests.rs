@@ -2930,7 +2930,7 @@ fn player_window_move_drags_the_whole_non_interactive_surface() {
         .nth(1)
         .and_then(|tail| tail.split("/// Smallest client").next())
         .expect("native drag handoff helper");
-    assert!(handoff.contains("let Some((widget_x, widget_y)) = gesture.bounding_box_center()"));
+    assert!(handoff.contains("let Some((widget_x, widget_y)) = gesture.start_point()"));
     assert!(handoff.contains("let Some(drag_widget) = gesture.widget()"));
     assert!(handoff.contains("drag_widget.compute_point(window, &widget_point)"));
     assert!(handoff.contains("window.surface_transform()"));
@@ -2940,20 +2940,13 @@ fn player_window_move_drags_the_whole_non_interactive_surface() {
     let begin_move = handoff
         .find("toplevel.begin_move(")
         .expect("native move handoff");
-    let deferred_reset = handoff
-        .find("glib::idle_add_local_once")
-        .expect("deferred gesture reset");
-    let reset = handoff
-        .find("reset_gesture.reset()")
-        .expect("gesture reset");
     assert!(
         claim < begin_move,
         "claim the click sequence before handing the live drag to the compositor"
     );
-    assert!(
-        begin_move < deferred_reset && deferred_reset < reset,
-        "reset only after the native handoff has returned to the GTK main loop"
-    );
+    assert!(!handoff.contains("bounding_box_center()"));
+    assert!(!handoff.contains("gesture.reset()"));
+    assert!(!handoff.contains("glib::idle_add_local_once"));
     assert!(bridge.contains("drag.connect_drag_begin"));
     assert!(bridge.contains("begin_moving.replace(false)"));
     assert!(bridge.contains("let drag_sequence = Rc::new(Cell::new(0_u64))"));

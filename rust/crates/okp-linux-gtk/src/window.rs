@@ -1625,11 +1625,13 @@ pub(crate) fn connect_player_window_drag(
     widget.add_controller(gesture);
 }
 
-/// Hand a thresholded pointer drag to the window manager while the originating
-/// event sequence is still live. Claiming before `begin_move` prevents sibling
-/// click gestures from committing the release. Resetting from an idle callback
-/// keeps reset-driven cancellation out of the active `drag-update` stack while
-/// still recovering when a compositor consumes the release edge.
+/// Hand a thresholded pointer drag to the window manager using GTK's own
+/// press-coordinate contract. `GdkToplevel::begin_move` requires the surface
+/// coordinate of the press that began the drag, not the pointer's later
+/// threshold-crossing position. Keep the controller live after the handoff:
+/// resetting it, synchronously or from an idle callback, cancels the sequence
+/// while Mutter owns the interactive move. End/cancel edges clear normal state,
+/// and each fresh drag begin recovers if a compositor consumed those edges.
 pub(crate) fn begin_native_window_move_from_drag(
     gesture: &gtk::GestureDrag,
     window: &gtk::ApplicationWindow,
@@ -1637,7 +1639,7 @@ pub(crate) fn begin_native_window_move_from_drag(
     let Some(device) = gesture.current_event_device() else {
         return false;
     };
-    let Some((widget_x, widget_y)) = gesture.bounding_box_center() else {
+    let Some((widget_x, widget_y)) = gesture.start_point() else {
         return false;
     };
     let Some(drag_widget) = gesture.widget() else {
@@ -1666,8 +1668,6 @@ pub(crate) fn begin_native_window_move_from_drag(
         f64::from(window_point.y()) + surface_y,
         timestamp,
     );
-    let reset_gesture = gesture.clone();
-    glib::idle_add_local_once(move || reset_gesture.reset());
     true
 }
 
