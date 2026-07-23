@@ -79,7 +79,9 @@ manifest/feed identity, exact source relation to `main`, and the shared
 120-minute unpublished-main lag bound. An unchanged promoted SHA stays healthy;
 two or more consecutive automatic push or scheduled failures instead report
 the newest failed workflow step and count. Manual runs are excluded from that
-failure streak. Before the lane has any completed automatic history or
+failure streak by collecting push and scheduled histories in separate bounded
+queries, so manual activity cannot displace automatic evidence. Before the lane
+has any completed automatic history or
 published pointers, the row is a bootstrap warning rather than a failure.
 
 ## Acceptance boundary
