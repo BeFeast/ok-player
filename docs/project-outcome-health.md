@@ -132,16 +132,18 @@ runs re-read `origin/main` before SDK setup and skip superseded SHAs, so a burst
 of pushes coalesces without spending a hosted Windows build on stale source.
 Manual dispatch continues to bypass this early supersession check.
 
-The collector reads completed push and scheduled `Windows Candidate` runs in
-separate bounded queries, merges the newest 100 automatic runs, and excludes
-manual dispatches before counting the failure streak. Separate event queries
-prevent operator activity from displacing automatic delivery history. Two or
-more consecutive failures are reported before generic lag evidence as
-`Windows candidate builder failing at gate <name> (<N> consecutive)`. The gate
-is the failed workflow step from the newest failed run, and the reason code is
+The collector requests up to 100 completed `push` runs and 100 completed
+`schedule` runs for `Windows Candidate` with server-side event filters. It
+merges those histories by run creation time and identity, keeps the newest 100
+automatic runs, and defensively excludes unexpected event types before counting
+their combined failure streak. Manual dispatches therefore cannot consume the
+bounded query, mask, or extend the automatic streak. Two or more consecutive
+failures are reported before generic lag evidence as `Windows candidate builder
+failing at gate <name> (<N> consecutive)`. The gate is the failed workflow step
+from the newest failed run, and the reason code is
 `windows-candidate-builds-failing`. The snapshot retains the legacy
 `latest_completed_schedule` and `schedule_error` field names for compatibility,
-but those fields now carry the newest completed automatic run and combined
+but those fields carry the newest completed automatic run and combined
 automatic-query error. While the new lane has no completed automatic history
 and has not published either pointer, the row is a blocking `warning` rather
 than a failure; warnings do not make the overall outcome unhealthy.
