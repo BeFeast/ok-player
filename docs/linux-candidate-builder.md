@@ -308,7 +308,10 @@ it holds one `build-and-publish` critical section while the builder runs,
 resolves `last-bundle.path`, and publishes that exact verified bundle. There is
 no unlocked step boundary between build and publish. An unchanged `main`
 remains an expected idle run; manual dispatch reuses the last verified bundle
-without rebuilding it. The `always()` summary reads the raw heartbeat first and
+without rebuilding it. The job has a 45-minute fail-safe timeout, more than
+twice the normal clean build-and-smoke duration, so a disconnected self-hosted
+runner cannot hold the candidate concurrency group for the previous 90-minute
+window. The `always()` summary reads the raw heartbeat first and
 treats the handoff outputs as optional, so an early gate failure remains the
 named failure instead of causing a second summary-step error.
 
