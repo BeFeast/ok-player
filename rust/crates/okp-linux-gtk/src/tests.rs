@@ -4514,6 +4514,7 @@ fn linux_packages_stamp_their_update_install_lane() {
     assert!(deb.contains("OKP_PACKAGE_KIND=deb"));
     assert!(appimage.contains("OKP_PACKAGE_KIND=appimage"));
     assert_eq!(rpm.matches("OKP_PACKAGE_KIND=rpm").count(), 2);
+    assert!(rpm.contains("BuildRequires:  procps-ng"));
 }
 
 #[test]
