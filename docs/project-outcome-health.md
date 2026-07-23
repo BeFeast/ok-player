@@ -132,13 +132,16 @@ runs re-read `origin/main` before SDK setup and skip superseded SHAs, so a burst
 of pushes coalesces without spending a hosted Windows build on stale source.
 Manual dispatch continues to bypass this early supersession check.
 
-The collector reads up to 100 completed scheduled `Windows Candidate` runs. Two
-or more consecutive failures are reported before generic lag evidence as
+The collector reads up to 100 completed `Windows Candidate` runs and evaluates
+the combined push and scheduled automatic history, excluding explicit manual
+dispatches. Two or more consecutive automatic failures are reported before
+generic lag evidence as
 `Windows candidate builder failing at gate <name> (<N> consecutive)`. The gate
 is the failed workflow step from the newest failed run, and the reason code is
 `windows-candidate-builds-failing`. While the new lane has no completed schedule
-history and has not published either pointer, the row is a blocking `warning`
-rather than a failure; warnings do not make the overall outcome unhealthy.
+or push history and has not published either pointer, the row is a blocking
+`warning` rather than a failure; warnings do not make the overall outcome
+unhealthy.
 
 The live collector starts the stable Windows feed, Windows candidate manifest,
 Windows candidate feed, and Linux candidate feed requests concurrently. Each

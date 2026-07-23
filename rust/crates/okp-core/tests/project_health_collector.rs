@@ -153,8 +153,8 @@ fn active_current_main_candidate_run_survives_live_collection() {
 }
 
 #[test]
-fn windows_candidate_gate_failure_survives_live_collection() {
-    let output = run_live("windows-candidate-failures");
+fn windows_candidate_push_gate_failure_survives_live_collection() {
+    let output = run_live("windows-candidate-push-failures");
     assert_eq!(
         output.status.code(),
         Some(1),
@@ -707,12 +707,14 @@ if [[ "${1:-}" == run && "${2:-}" == list ]]; then
       printf '[{"databaseId":100,"headSha":"%s","event":"schedule","status":"completed","conclusion":"success","updatedAt":"%s","url":"https://example.invalid/run/candidate"}]\n' "$main_sha" "$completed_at"
     fi
   elif [[ "$workflow" == "Windows Candidate" ]]; then
-    if [[ "$OKP_STUB_FAIL" == windows-candidate-failures ]]; then
+    if [[ "$OKP_STUB_FAIL" == windows-candidate-push-failures \
+        && "$arguments" != *" --event schedule "* ]]; then
       printf '%s\n' '[
-        {"databaseId":203,"headSha":"d5d531a58c830a01a7e25615e850593e9ff4493f","event":"schedule","status":"completed","conclusion":"failure","updatedAt":"2026-07-18T01:55:47Z","url":"https://example.invalid/run/203"},
-        {"databaseId":202,"conclusion":"failure"},
-        {"databaseId":201,"conclusion":"failure"},
-        {"databaseId":200,"conclusion":"success"}
+        {"databaseId":203,"headSha":"d5d531a58c830a01a7e25615e850593e9ff4493f","event":"push","status":"completed","conclusion":"failure","updatedAt":"2026-07-18T01:55:47Z","url":"https://example.invalid/run/203"},
+        {"databaseId":202,"event":"push","conclusion":"failure"},
+        {"databaseId":201,"event":"push","conclusion":"failure"},
+        {"databaseId":200,"event":"schedule","conclusion":"success"},
+        {"databaseId":199,"event":"workflow_dispatch","conclusion":"failure"}
       ]'
     else
       printf '[{"databaseId":200,"headSha":"%s","event":"schedule","status":"completed","conclusion":"success","updatedAt":"2026-07-18T01:55:47Z","url":"https://example.invalid/run/windows-candidate"}]\n' "$main_sha"
@@ -754,7 +756,7 @@ if [[ "${1:-}" == run && "${2:-}" == view ]]; then
     printf '%s\n' 'candidate build 0.11.0-beta.0.106 failed at gate bundled-mpv'
     exit 0
   fi
-  if [[ "$OKP_STUB_FAIL" == windows-candidate-failures ]]; then
+  if [[ "$OKP_STUB_FAIL" == windows-candidate-push-failures && "${3:-}" == 203 ]]; then
     printf '%s\n' '{"jobs":[{"name":"Build, verify, and promote rolling candidate","steps":[{"name":"Build C# solution","conclusion":"success"},{"name":"Run core unit tests","conclusion":"failure"}]}]}'
     exit 0
   fi
