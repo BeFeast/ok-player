@@ -75,6 +75,27 @@ jobs:
         if: steps.supersession.outputs.should_run != 'false'
         shell: pwsh
         run: |
+          function Receive-ReleaseAsset {
+            param(
+              [Parameter(Mandatory)] [string] $Name,
+              [Parameter(Mandatory)] [string] $Destination
+            )
+
+            $maximumAttempts = 3
+            for ($attempt = 1; $attempt -le $maximumAttempts; $attempt++) {
+              gh release download $env:CANDIDATE_TAG --repo $env:GITHUB_REPOSITORY `
+                --pattern $Name --dir $Destination --clobber
+              if ($LASTEXITCODE -eq 0) { return }
+              if ($attempt -eq $maximumAttempts) {
+                throw "Could not download $Name after $maximumAttempts attempts."
+              }
+
+              $delaySeconds = 5 * $attempt
+              Write-Warning "Download attempt $attempt for $Name failed; retrying in $delaySeconds seconds."
+              Start-Sleep -Seconds $delaySeconds
+            }
+          }
+
           New-Item -ItemType Directory -Force -Path $env:PRIOR_DIR | Out-Null
           $manifest = Join-Path $env:PRIOR_DIR 'candidate.windows.json'
           $feed = Join-Path $env:PRIOR_DIR 'releases.win-candidate.json'
@@ -90,10 +111,8 @@ jobs:
             if ($hasManifest -ne $hasFeed) { throw 'Rolling release has a torn manifest/feed pointer pair.' }
             if ($hasManifest) {
               $hasPrior = $true
-              gh release download $env:CANDIDATE_TAG --repo $env:GITHUB_REPOSITORY --pattern 'candidate.windows.json' --dir $env:PRIOR_DIR --clobber
-              if ($LASTEXITCODE -ne 0) { throw 'Could not download candidate.windows.json.' }
-              gh release download $env:CANDIDATE_TAG --repo $env:GITHUB_REPOSITORY --pattern 'releases.win-candidate.json' --dir $env:PRIOR_DIR --clobber
-              if ($LASTEXITCODE -ne 0) { throw 'Could not download releases.win-candidate.json.' }
+              Receive-ReleaseAsset -Name 'candidate.windows.json' -Destination $env:PRIOR_DIR
+              Receive-ReleaseAsset -Name 'releases.win-candidate.json' -Destination $env:PRIOR_DIR
             }
           }
           $args = @('run', '--project', 'tools/OkPlayer.Candidate', '-c', 'Release', '--no-build', '--',
@@ -166,13 +185,23 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Candidate artifact validation failed.' }
 
       - name: Revalidate main and promote feed last
+        id: promotion
         if: steps.decision.outputs.should_build == 'true'
         shell: pwsh
         run: |
           $currentMain = gh api "repos/$env:GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha'
           if ($LASTEXITCODE -ne 0) { throw 'Could not resolve current main SHA.' }
+          $currentMain = $currentMain.Trim()
+          if ($env:SOURCE_SHA -ne $currentMain) {
+            'should_promote=false' >> $env:GITHUB_OUTPUT
+            "current_main_sha=$currentMain" >> $env:GITHUB_OUTPUT
+            Write-Output "::notice title=Candidate skipped::superseded by $currentMain before promotion, skipping"
+            Write-Output "OKP_CANDIDATE_SKIPPED_SUPERSEDED_BEFORE_PROMOTION requested=$env:SOURCE_SHA current=$currentMain"
+            exit 0
+          }
+
           dotnet run --project tools/OkPlayer.Candidate -c Release --no-build -- verify-head `
-            --source-sha $env:SOURCE_SHA --current-main-sha $currentMain.Trim()
+            --source-sha $env:SOURCE_SHA --current-main-sha $currentMain
           if ($LASTEXITCODE -ne 0) { throw 'Candidate became stale before promotion.' }
 
           gh release view $env:CANDIDATE_TAG --repo $env:GITHUB_REPOSITORY *> $null
@@ -198,6 +227,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Failed to upload candidate identity manifest.' }
             gh release upload $env:CANDIDATE_TAG --repo $env:GITHUB_REPOSITORY $newFeed --clobber
             if ($LASTEXITCODE -ne 0) { throw 'Failed to move candidate feed pointer.' }
+            'should_promote=true' >> $env:GITHUB_OUTPUT
           }
           catch {
             if (Test-Path $priorFeed) {
@@ -211,7 +241,7 @@ jobs:
           }
 
       - name: Prune superseded recognized candidate assets
-        if: steps.decision.outputs.should_build == 'true'
+        if: steps.decision.outputs.should_build == 'true' && steps.promotion.outputs.should_promote == 'true'
         continue-on-error: true
         shell: pwsh
         run: |
@@ -234,6 +264,7 @@ jobs:
           - supersession: ``${{ steps.supersession.outputs.should_run == 'false' && format('superseded by {0}, skipping', steps.supersession.outputs.current_main_sha) || 'not superseded' }}``
           - coalescing decision: ``${{ steps.decision.outputs.reason || 'not reached' }}``
           - build requested: ``${{ steps.decision.outputs.should_build || 'not reached' }}``
+          - promotion: ``${{ steps.promotion.outputs.should_promote == 'false' && format('superseded by {0}, skipping', steps.promotion.outputs.current_main_sha) || steps.promotion.outputs.should_promote || 'not reached' }}``
           - monotonic build: ``$env:BUILD_NUMBER``
           - version: ``${{ steps.version.outputs.value || 'not built' }}``
           - rolling surface: ``windows-candidate``

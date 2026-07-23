@@ -109,6 +109,49 @@ fn windows_manual_dispatch_bypasses_supersession_and_reaches_the_decision() {
     }
 }
 
+#[test]
+fn windows_prior_pointer_downloads_retry_transient_transport_failures() {
+    let workflow = workflow("release-windows-candidate.yml");
+    let decision = step_block(
+        &workflow,
+        "Read rolling publication and coalesce unchanged main",
+    );
+
+    assert!(decision.contains("function Receive-ReleaseAsset"));
+    assert!(decision.contains("$maximumAttempts = 3"));
+    assert!(decision.contains("for ($attempt = 1; $attempt -le $maximumAttempts; $attempt++)"));
+    assert!(decision.contains("Start-Sleep -Seconds $delaySeconds"));
+    assert!(decision.contains("Could not download $Name after $maximumAttempts attempts."));
+    assert!(decision.contains(
+        "Receive-ReleaseAsset -Name 'candidate.windows.json' -Destination $env:PRIOR_DIR"
+    ));
+    assert!(decision.contains(
+        "Receive-ReleaseAsset -Name 'releases.win-candidate.json' -Destination $env:PRIOR_DIR"
+    ));
+}
+
+#[test]
+fn windows_late_supersession_is_successful_and_cannot_prune_or_publish() {
+    let workflow = workflow("release-windows-candidate.yml");
+    let promotion = step_block(&workflow, "Revalidate main and promote feed last");
+    let stale_check = position(promotion, "if ($env:SOURCE_SHA -ne $currentMain)");
+    let release_lookup = position(
+        promotion,
+        "gh release view $env:CANDIDATE_TAG --repo $env:GITHUB_REPOSITORY",
+    );
+
+    assert!(promotion.contains("id: promotion"));
+    assert!(stale_check < release_lookup);
+    assert!(promotion.contains("'should_promote=false' >> $env:GITHUB_OUTPUT"));
+    assert!(promotion.contains("OKP_CANDIDATE_SKIPPED_SUPERSEDED_BEFORE_PROMOTION"));
+    assert!(promotion.contains("exit 0"));
+    assert!(promotion.contains("'should_promote=true' >> $env:GITHUB_OUTPUT"));
+    assert!(
+        step_block(&workflow, "Prune superseded recognized candidate assets")
+            .contains("steps.promotion.outputs.should_promote == 'true'")
+    );
+}
+
 fn workflow(name: &str) -> String {
     fs::read_to_string(repository_root().join(".github/workflows").join(name))
         .unwrap_or_else(|error| panic!("read {name}: {error}"))
