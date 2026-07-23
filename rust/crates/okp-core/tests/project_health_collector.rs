@@ -153,6 +153,62 @@ fn active_current_main_candidate_run_survives_live_collection() {
 }
 
 #[test]
+fn successful_candidate_runs_remain_nondelivery_until_the_feed_advances() {
+    let output = run_live("candidate-nondelivery");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let outcome: ProjectHealthOutcome =
+        serde_json::from_slice(&output.stdout).expect("collector should emit outcome JSON");
+    let candidate = outcome
+        .checks
+        .iter()
+        .find(|check| check.name == "linux-candidate-delivery")
+        .expect("candidate check");
+    assert_eq!(candidate.status, HealthStatus::Fail);
+    assert!(
+        candidate
+            .reason_codes
+            .iter()
+            .any(|code| code == "candidate-delivery-not-published")
+    );
+    assert!(candidate.details.iter().any(|detail| {
+        detail.contains("completed 2 successful runs within 7200s")
+            && detail.contains("workflow success is non-delivery")
+    }));
+
+    let active_output = run_live("candidate-active-nondelivery");
+    assert!(
+        active_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&active_output.stderr)
+    );
+    let active_outcome: ProjectHealthOutcome = serde_json::from_slice(&active_output.stdout)
+        .expect("collector should emit active outcome JSON");
+    let active_candidate = active_outcome
+        .checks
+        .iter()
+        .find(|check| check.name == "linux-candidate-delivery")
+        .expect("active candidate check");
+    assert_eq!(active_candidate.status, HealthStatus::Warning);
+    assert!(
+        active_candidate
+            .reason_codes
+            .iter()
+            .any(|code| code == "candidate-delivery-in-progress")
+    );
+    assert!(
+        !active_candidate
+            .reason_codes
+            .iter()
+            .any(|code| code == "candidate-delivery-not-published")
+    );
+}
+
+#[test]
 fn windows_candidate_automatic_failure_history_is_filtered_and_merged_newest_first() {
     let (output, gh_log) = run_live_with_gh_log("windows-candidate-failures");
     assert_eq!(
@@ -720,7 +776,10 @@ if [[ "${1:-}" == run && "${2:-}" == list ]]; then
     shift
   done
   main_sha="d5d531a58c830a01a7e25615e850593e9ff4493f"
-  if [[ "$OKP_STUB_FAIL" == schedule-stale || "$OKP_STUB_FAIL" == candidate-active ]]; then
+  if [[ "$OKP_STUB_FAIL" == schedule-stale \
+      || "$OKP_STUB_FAIL" == candidate-active \
+      || "$OKP_STUB_FAIL" == candidate-nondelivery \
+      || "$OKP_STUB_FAIL" == candidate-active-nondelivery ]]; then
     main_sha="1111111111111111111111111111111111111111"
   fi
     if [[ "$workflow" == "Linux Candidate" ]]; then
@@ -737,6 +796,17 @@ if [[ "${1:-}" == run && "${2:-}" == list ]]; then
         {"databaseId":102,"conclusion":"failure"},
         {"databaseId":101,"conclusion":"failure"},
         {"databaseId":100,"conclusion":"success"}
+      ]'
+    elif [[ "$OKP_STUB_FAIL" == candidate-active-nondelivery && "$completed_only" == false ]]; then
+      printf '%s\n' '[
+        {"headSha":"1111111111111111111111111111111111111111","event":"workflow_dispatch","status":"in_progress","conclusion":"","createdAt":"2026-07-18T02:00:40Z","updatedAt":"2026-07-18T02:00:40Z","url":"https://example.invalid/run/active-candidate"},
+        {"headSha":"1111111111111111111111111111111111111111","event":"workflow_dispatch","status":"completed","conclusion":"success","createdAt":"2026-07-18T01:45:47Z","updatedAt":"2026-07-18T01:55:47Z","url":"https://example.invalid/run/green-2"},
+        {"headSha":"a30b603a523f3df35822f04c0e5b9696ced56f7a","event":"workflow_dispatch","status":"completed","conclusion":"success","createdAt":"2026-07-18T01:30:47Z","updatedAt":"2026-07-18T01:40:47Z","url":"https://example.invalid/run/stale-generation"}
+      ]'
+    elif [[ "$OKP_STUB_FAIL" == candidate-nondelivery && "$completed_only" == false ]]; then
+      printf '%s\n' '[
+        {"headSha":"1111111111111111111111111111111111111111","event":"workflow_dispatch","status":"completed","conclusion":"success","createdAt":"2026-07-18T01:45:47Z","updatedAt":"2026-07-18T01:55:47Z","url":"https://example.invalid/run/green-2"},
+        {"headSha":"a30b603a523f3df35822f04c0e5b9696ced56f7a","event":"workflow_dispatch","status":"completed","conclusion":"success","createdAt":"2026-07-18T01:30:47Z","updatedAt":"2026-07-18T01:40:47Z","url":"https://example.invalid/run/stale-generation"}
       ]'
     elif [[ "$OKP_STUB_FAIL" == candidate-active && "$completed_only" == false ]]; then
       printf '%s\n' '[
@@ -831,7 +901,10 @@ case "$endpoint" in
     ;;
   repos/*/commits/main)
     main_sha="d5d531a58c830a01a7e25615e850593e9ff4493f"
-    if [[ "$OKP_STUB_FAIL" == schedule-stale || "$OKP_STUB_FAIL" == candidate-active ]]; then
+    if [[ "$OKP_STUB_FAIL" == schedule-stale \
+        || "$OKP_STUB_FAIL" == candidate-active \
+        || "$OKP_STUB_FAIL" == candidate-nondelivery \
+        || "$OKP_STUB_FAIL" == candidate-active-nondelivery ]]; then
       main_sha="1111111111111111111111111111111111111111"
     fi
     main_committed_at="2026-07-18T00:30:00Z"

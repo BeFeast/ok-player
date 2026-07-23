@@ -303,6 +303,130 @@ fn exact_main_candidate_run_bounds_stale_schedule_settling() {
     );
 }
 
+#[test]
+fn successful_runs_do_not_count_as_delivery_while_the_feed_is_behind() {
+    let fixture_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project_health");
+    let candidate_feed = FetchSnapshot {
+        url: "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/candidate.linux.json".to_owned(),
+        body: Some(
+            fs::read_to_string(fixture_dir.join("fresh-accepted.json"))
+                .expect("read Linux candidate fixture"),
+        ),
+        error: None,
+    };
+    let main_sha = "1111111111111111111111111111111111111111";
+    let mut snapshot = healthy_snapshot(
+        1_784_340_047,
+        candidate_feed,
+        main_sha.to_owned(),
+        candidate_source(
+            FixtureSourceRelation::Ancestor,
+            default_candidate_committed_at(),
+            Some(CommitSnapshot {
+                sha: "2222222222222222222222222222222222222222".to_owned(),
+                committed_at_utc: "2026-07-18T01:30:47Z".to_owned(),
+            }),
+        ),
+    );
+    snapshot.source.candidate_workflow.successful_delivery_runs = vec![
+        successful_candidate_run("2026-07-18T01:55:47Z", "newer"),
+        successful_candidate_run("2026-07-18T01:40:47Z", "older"),
+    ];
+
+    let repeated_outcome = snapshot.evaluate();
+    let repeated = candidate_check(&repeated_outcome);
+    assert!(!repeated_outcome.healthy);
+    assert_eq!(repeated.status, HealthStatus::Fail);
+    assert!(
+        repeated
+            .reason_codes
+            .contains(&"candidate-delivery-not-published".to_owned())
+    );
+    assert!(repeated.details.iter().any(|detail| {
+        detail.contains("completed 2 successful runs within 7200s")
+            && detail.contains("workflow success is non-delivery")
+    }));
+
+    let mut one_attempt = snapshot.clone();
+    one_attempt
+        .source
+        .candidate_workflow
+        .successful_delivery_runs
+        .pop();
+    let one_attempt_outcome = one_attempt.evaluate();
+    let one_attempt_check = candidate_check(&one_attempt_outcome);
+    assert!(one_attempt_outcome.healthy);
+    assert_eq!(one_attempt_check.status, HealthStatus::Warning);
+    assert!(
+        one_attempt_check
+            .summary
+            .contains("recovery dispatch is required")
+    );
+
+    let mut active = snapshot.clone();
+    active.source.candidate_workflow.latest_active_run = Some(ActiveCandidateRunSnapshot {
+        head_sha: main_sha.to_owned(),
+        event: "workflow_dispatch".to_owned(),
+        status: "in_progress".to_owned(),
+        created_at_utc: "2026-07-18T02:00:40Z".to_owned(),
+        url: "https://example.invalid/run/active-candidate".to_owned(),
+    });
+    let active_outcome = active.evaluate();
+    let active_check = candidate_check(&active_outcome);
+    assert!(active_outcome.healthy);
+    assert_eq!(active_check.status, HealthStatus::Warning);
+    assert!(
+        active_check
+            .reason_codes
+            .contains(&"candidate-delivery-in-progress".to_owned())
+    );
+    assert!(
+        !active_check
+            .reason_codes
+            .contains(&"candidate-delivery-not-published".to_owned())
+    );
+
+    let mut overdue_active = active;
+    overdue_active.checked_at_unix = 1_784_341_848;
+    overdue_active
+        .source
+        .candidate
+        .comparison
+        .as_mut()
+        .and_then(|comparison| comparison.first_unpublished_commit.as_mut())
+        .expect("first unpublished commit")
+        .committed_at_utc = "2026-07-18T00:00:47Z".to_owned();
+    overdue_active
+        .source
+        .candidate_workflow
+        .latest_active_run
+        .as_mut()
+        .expect("active run")
+        .created_at_utc = "2026-07-18T02:30:40Z".to_owned();
+    let overdue_outcome = overdue_active.evaluate();
+    let overdue_check = candidate_check(&overdue_outcome);
+    assert!(!overdue_outcome.healthy);
+    assert_eq!(overdue_check.status, HealthStatus::Fail);
+    assert!(
+        overdue_check
+            .details
+            .iter()
+            .any(|detail| detail.contains("unpublished main lag 9001s exceeds 7200s"))
+    );
+}
+
+fn successful_candidate_run(completed_at_utc: &str, name: &str) -> ScheduleRunSnapshot {
+    ScheduleRunSnapshot {
+        head_sha: "1111111111111111111111111111111111111111".to_owned(),
+        event: "workflow_dispatch".to_owned(),
+        status: "completed".to_owned(),
+        conclusion: "success".to_owned(),
+        completed_at_utc: completed_at_utc.to_owned(),
+        url: format!("https://example.invalid/run/{name}"),
+    }
+}
+
 fn candidate_check(
     outcome: &okp_core::project_health::ProjectHealthOutcome,
 ) -> &okp_core::project_health::HealthCheck {
@@ -695,6 +819,8 @@ fn healthy_snapshot(
                 schedule_error: None,
                 latest_active_run: None,
                 active_run_error: None,
+                successful_delivery_runs: Vec::new(),
+                delivery_runs_error: None,
                 consecutive_failed_runs: 0,
                 last_failed_gate: None,
             },
@@ -713,6 +839,8 @@ fn healthy_snapshot(
                 schedule_error: None,
                 latest_active_run: None,
                 active_run_error: None,
+                successful_delivery_runs: Vec::new(),
+                delivery_runs_error: None,
                 consecutive_failed_runs: 0,
                 last_failed_gate: None,
             },

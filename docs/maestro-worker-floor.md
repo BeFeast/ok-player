@@ -41,6 +41,17 @@ already absent from Maestro is also a successful no-op. The spawn command
 remains the final claim authority if another scheduler wins the small race
 after the last snapshot.
 
+Linux Candidate recovery uses the repository outcome's feed-authoritative
+signal. `candidate-delivery-not-published` after one green run means the
+operator-owned recovery actuator should re-dispatch the candidate workflow; the
+same reason after two green runs in two hours is unhealthy and should trigger
+urgent notification and keep project intake paused until
+`candidate.linux.json.commit_sha` equals `main`. A current-tip in-progress run
+does not page before the lag threshold. This repository watchdog already
+refuses to spawn when outcome health is not `healthy`; host notification,
+dispatch credentials, and the project pause actuator remain private service
+wiring rather than repository configuration.
+
 The ready-queue fallback covers the narrower race where Maestro has already
 removed the completed claim before the watchdog observes it. Before spawning
 the oldest unclaimed issue, the watchdog checks same-repository pull-request

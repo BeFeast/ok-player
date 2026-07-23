@@ -22,6 +22,7 @@ pub const DEFAULT_MAX_CANDIDATE_RUN_AGE_SECONDS: u64 = 90 * 60;
 pub const DEFAULT_SOURCE_CI_GRACE_SECONDS: u64 = 15 * 60;
 pub const DEFAULT_FUTURE_SKEW_SECONDS: u64 = 5 * 60;
 pub const STABLE_RELEASE_FRESH_SECONDS: u64 = 48 * 60 * 60;
+const CANDIDATE_NONDELIVERY_WINDOW_SECONDS: u64 = 2 * 60 * 60;
 const WINDOWS_CANDIDATE_SCHEMA_VERSION: u64 = 1;
 const WINDOWS_CANDIDATE_CHANNEL: &str = "win-candidate";
 const WINDOWS_CANDIDATE_PACKAGE_ID: &str = "com.befeast.okplayer";
@@ -85,6 +86,10 @@ pub struct CandidateWorkflowSnapshot {
     pub latest_active_run: Option<ActiveCandidateRunSnapshot>,
     #[serde(default)]
     pub active_run_error: Option<String>,
+    #[serde(default)]
+    pub successful_delivery_runs: Vec<ScheduleRunSnapshot>,
+    #[serde(default)]
+    pub delivery_runs_error: Option<String>,
     #[serde(default)]
     pub consecutive_failed_runs: u64,
     #[serde(default)]
@@ -976,6 +981,16 @@ fn evaluate_candidate(
         &mut details,
         &mut reason_codes,
     );
+    let nondelivery_summary = validate_successful_candidate_nondelivery(
+        source,
+        source_relation,
+        active_run_summary.is_some(),
+        now,
+        CANDIDATE_NONDELIVERY_WINDOW_SECONDS,
+        future_skew,
+        &mut details,
+        &mut reason_codes,
+    );
 
     let candidate_timestamp = validate_timestamp(
         "Linux candidate timestamp",
@@ -1020,8 +1035,101 @@ fn evaluate_candidate(
     {
         check.status = HealthStatus::Warning;
         check.summary = active_run_summary;
+    } else if check.status == HealthStatus::Pass
+        && let Some(nondelivery_summary) = nondelivery_summary
+    {
+        check.status = HealthStatus::Warning;
+        check.summary = nondelivery_summary;
     }
     check
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_successful_candidate_nondelivery(
+    source: &SourceSnapshot,
+    source_relation: CandidateSourceRelation,
+    active_tip_run: bool,
+    now: u64,
+    attempt_window: u64,
+    future_skew: u64,
+    details: &mut Vec<String>,
+    reason_codes: &mut Vec<String>,
+) -> Option<String> {
+    if source_relation != CandidateSourceRelation::Ancestor || active_tip_run {
+        return None;
+    }
+
+    let workflow = &source.candidate_workflow;
+    if let Some(error) = nonempty(workflow.delivery_runs_error.as_deref()) {
+        details.push(format!(
+            "Linux Candidate successful delivery run query failed while main has advanced: {error}"
+        ));
+        reason_codes.push("candidate-delivery-runs-unavailable".to_owned());
+        return None;
+    }
+
+    let first_unpublished_at = source
+        .candidate
+        .comparison
+        .as_ref()
+        .and_then(|comparison| comparison.first_unpublished_commit.as_ref())
+        .and_then(|commit| parse_utc_timestamp(&commit.committed_at_utc))?;
+    let window_start = now.saturating_sub(attempt_window);
+    let mut successful_attempts = 0_u64;
+    let mut newest_url = None;
+    for run in &workflow.successful_delivery_runs {
+        if !matches!(run.event.as_str(), "schedule" | "workflow_dispatch")
+            || run.status != "completed"
+            || run.conclusion != "success"
+        {
+            details.push(format!(
+                "Linux Candidate delivery attempt evidence is {}/{}/{}, expected schedule or workflow_dispatch/completed/success",
+                run.event, run.status, run.conclusion
+            ));
+            reason_codes.push("candidate-delivery-runs-unavailable".to_owned());
+            return None;
+        }
+        let previous_detail_count = details.len();
+        let Some(completed_at) = validate_timestamp(
+            "Linux Candidate successful delivery run timestamp",
+            &run.completed_at_utc,
+            now,
+            future_skew,
+            details,
+        ) else {
+            reason_codes.push("candidate-delivery-runs-unavailable".to_owned());
+            return None;
+        };
+        if details.len() != previous_detail_count {
+            reason_codes.push("candidate-delivery-runs-unavailable".to_owned());
+            return None;
+        }
+        if completed_at >= window_start && completed_at >= first_unpublished_at {
+            successful_attempts += 1;
+            if newest_url.is_none() && !run.url.trim().is_empty() {
+                newest_url = Some(run.url.as_str());
+            }
+        }
+    }
+
+    if successful_attempts == 0 {
+        return None;
+    }
+
+    reason_codes.push("candidate-delivery-not-published".to_owned());
+    let run_reference = newest_url.map_or_else(String::new, |url| format!("; newest run {url}"));
+    if successful_attempts == 1 {
+        return Some(format!(
+            "Linux Candidate completed one successful run after main advanced, but the accepted feed still points to {} instead of current main {}; workflow success is non-delivery and recovery dispatch is required{run_reference}",
+            source.candidate.candidate_sha, source.head_sha
+        ));
+    }
+
+    details.push(format!(
+        "Linux Candidate completed {successful_attempts} successful runs within {attempt_window}s after main advanced, but the accepted feed still points to {} instead of current main {}; workflow success is non-delivery{run_reference}",
+        source.candidate.candidate_sha, source.head_sha
+    ));
+    None
 }
 
 fn validate_candidate_failure_streak(
