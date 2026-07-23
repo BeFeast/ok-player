@@ -1069,6 +1069,72 @@ fn screenshot_surfaces_share_the_same_capture_implementation() {
 }
 
 #[test]
+fn fullscreen_screenshot_completion_cannot_resize_the_toplevel_or_leave_native_geometry_stale() {
+    let window = include_str!("window.rs");
+    let toast_add = window
+        .find("overlay.add_overlay(status_toast.widget());")
+        .expect("status toast overlay");
+    let toast_measure = window
+        .find("overlay.set_measure_overlay(status_toast.widget(), false);")
+        .expect("status toast measurement isolation");
+    assert!(toast_add < toast_measure);
+
+    let playback = include_str!("playback.rs");
+    let completion = playback
+        .split("ScreenshotJobResult::SavedPublished(Ok(path))")
+        .nth(1)
+        .and_then(|source| {
+            source
+                .split("ScreenshotJobResult::SavedPrepared(Err(error))")
+                .next()
+        })
+        .expect("saved screenshot completion branch");
+    assert!(completion.contains("status_toast.show_screenshot"));
+    for forbidden in [
+        "set_size_request",
+        "set_default_size",
+        "fullscreen()",
+        "unfullscreen()",
+    ] {
+        assert!(
+            !completion.contains(forbidden),
+            "screenshot completion must not mutate window geometry: {forbidden}"
+        );
+    }
+
+    let bridge = include_str!("mpv_bridge.rs");
+    let native_resize = bridge
+        .split("video_area.connect_resize")
+        .nth(1)
+        .and_then(|source| source.split("video_area.connect_unrealize").next())
+        .expect("native resize handler");
+    assert!(native_resize.contains("fullscreen_toggle.transition_pending()"));
+    assert!(native_resize.contains("resize-held-for-fullscreen-ack"));
+    assert!(native_resize.contains("sync_native_video_geometry(area, &resize_state, true)"));
+
+    let fullscreen_ack = bridge
+        .split(r#"connect_notify_local(Some("fullscreened")"#)
+        .nth(1)
+        .and_then(|source| source.split("match video_host").next())
+        .expect("fullscreen acknowledgement handler");
+    let observe = fullscreen_ack
+        .find(".observe(is_fullscreen)")
+        .expect("compositor state observation");
+    let reconcile = fullscreen_ack
+        .find("sync_native_video_geometry")
+        .expect("native surface reconciliation");
+    assert!(observe < reconcile);
+    assert!(fullscreen_ack.contains("fullscreen-ack-leave"));
+    assert!(bridge.contains("native_surface_applied="));
+    assert!(bridge.contains("native_subsurface_applied="));
+
+    let native_wayland = include_str!("native_wayland_video.c");
+    assert!(native_wayland.contains("native video geometry applied:"));
+    assert!(native_wayland.contains("surface=%dx%d+0,0"));
+    assert!(native_wayland.contains("subsurface=%dx%d+0,0"));
+}
+
+#[test]
 fn settings_shell_matches_windows_reference_geometry() {
     assert_eq!(SETTINGS_REFERENCE_WIDTH, 760);
     assert_eq!(SETTINGS_REFERENCE_HEIGHT, 560);
@@ -5925,9 +5991,9 @@ fn fullscreen_toggle_wiring_decides_from_intent_not_the_lagging_platform_state()
 
     // The `fullscreened` notify reconciles the intent so Escape / window-manager
     // toggles keep the next double-click honest.
-    let window = include_str!("window.rs");
-    assert!(window.contains(r#"connect_notify_local(Some("fullscreened")"#));
-    assert!(window.contains(".observe(window.is_fullscreen())"));
+    let bridge = include_str!("mpv_bridge.rs");
+    assert!(bridge.contains(r#"connect_notify_local(Some("fullscreened")"#));
+    assert!(bridge.contains(".observe(is_fullscreen)"));
 
     // The compact drag still promotes to a window move only past the shared
     // threshold, so a stationary double-click there never starts a move.
