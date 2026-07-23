@@ -485,21 +485,38 @@ finish_app_shutdown() {
   app_log=""
 }
 
+canonical_xid() {
+  local xid="$1"
+  if [[ "$xid" =~ ^0[xX][0-9a-fA-F]+$ || "$xid" =~ ^[0-9]+$ ]]; then
+    printf '%u\n' "$((xid))"
+    return 0
+  fi
+  return 1
+}
+
 close_app() {
   local window_id="$1"
-  local active_window close_attempt
+  local active_window active_xid close_attempt target_xid
+  target_xid="$(canonical_xid "$window_id")" || {
+    echo "Player window has an invalid XID: $window_id" >&2
+    return 1
+  }
   # `windowclose` destroys the X11 window directly and can bypass GTK's
   # close-request callback. Make the known player XID both active and focused,
   # verify that Xfwm accepted the focus handoff, and only then send its normal
-  # Alt+F4 binding. Retry only while the same player XID remains present.
+  # Alt+F4 binding. X11 tools may print the same XID in decimal or hexadecimal,
+  # so compare their canonical numeric forms. Retry only while the same player
+  # XID remains present.
   for close_attempt in 1 2; do
     xdotool windowactivate --sync "$window_id" || true
     xdotool windowfocus --sync "$window_id" || true
     active_window="$(xdotool getactivewindow 2>/dev/null || true)"
-    printf 'close-dispatch attempt=%s target=%s active=%s\n' \
-      "$close_attempt" "$window_id" "${active_window:-unavailable}" \
+    active_xid="$(canonical_xid "$active_window" 2>/dev/null || true)"
+    printf 'close-dispatch attempt=%s target=%s target_xid=%s active=%s active_xid=%s\n' \
+      "$close_attempt" "$window_id" "$target_xid" \
+      "${active_window:-unavailable}" "${active_xid:-unavailable}" \
       >>"$OUT_DIR/fit-lifecycle.log"
-    if [[ "$active_window" == "$window_id" ]]; then
+    if [[ -n "$active_xid" && "$active_xid" == "$target_xid" ]]; then
       xdotool key --clearmodifiers alt+F4 || true
     fi
     sleep 0.2
