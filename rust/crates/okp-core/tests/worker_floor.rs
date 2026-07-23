@@ -21,7 +21,12 @@ fn healthy_floor_cleans_holds_skips_claims_and_spawns_the_oldest_eligible_issue(
     "live_workers": 0,
     "paused": false,
     "outcome": {"health_state": "healthy"},
-    "issue_claims": [247, {"issue_number": 248}]
+    "issue_claims": [
+      247,
+      {"issue_number": 248},
+      {"issue_number": 251, "kind": 42, "status": [], "session": "", "pr_number": "unknown"},
+      {"issue": 252, "kind": "terminal_reconciliation", "session": "ok-player-legacy", "pr_number": 900, "status": "done"}
+    ]
   }]
 }
 "#,
@@ -35,6 +40,8 @@ fn healthy_floor_cleans_holds_skips_claims_and_spawns_the_oldest_eligible_issue(
   {"number": 246, "createdAt": "2026-07-22T00:01:00Z", "labels": [{"name": "ok-player-ready"}, {"name": "blocked"}]},
   {"number": 247, "createdAt": "2026-07-22T00:02:00Z", "labels": [{"name": "ok-player-ready"}]},
   {"number": 248, "createdAt": "2026-07-22T00:03:00Z", "labels": [{"name": "ok-player-ready"}]},
+  {"number": 251, "createdAt": "2026-07-22T00:04:00Z", "labels": [{"name": "ok-player-ready"}]},
+  {"number": 252, "createdAt": "2026-07-22T00:04:30Z", "labels": [{"name": "ok-player-ready"}]},
   {"number": 250, "createdAt": "2026-07-22T00:06:00Z", "labels": [{"name": "ok-player-ready"}]}
 ]
 "#,
@@ -59,6 +66,8 @@ fn healthy_floor_cleans_holds_skips_claims_and_spawns_the_oldest_eligible_issue(
     assert!(stdout.contains("issue #545 is on active QA hold"));
     assert!(stdout.contains("issue #247 already has a Maestro claim"));
     assert!(stdout.contains("issue #248 already has a Maestro claim"));
+    assert!(stdout.contains("issue #251 already has a Maestro claim"));
+    assert!(stdout.contains("issue #252 already has a Maestro claim"));
     assert!(stdout.contains("quarantined agent-junk root .claude"));
     assert!(stdout.contains("spawned issue #249"));
 
@@ -69,6 +78,7 @@ fn healthy_floor_cleans_holds_skips_claims_and_spawns_the_oldest_eligible_issue(
     assert!(hold_edit < queue_read && queue_read < spawn, "{log}");
     assert!(log.contains("--issue 249"), "{log}");
     assert!(!log.contains("issue edit 546"), "{log}");
+    assert!(!log.contains("pr view 900"), "{log}");
     assert!(!log.contains("greptile"), "{log}");
     assert!(!log.contains("max_parallel"), "{log}");
 
@@ -280,11 +290,11 @@ fn merged_claims_close_open_issues_and_stop_exact_ghost_sessions() {
     fs::write(
         &harness.prs,
         br#"{
-  "501": {"state": "MERGED", "mergedAt": "2026-07-22T20:01:00Z"},
-  "502": {"state": "MERGED", "mergedAt": "2026-07-22T20:02:00Z"},
-  "503": {"state": "MERGED", "mergedAt": "2026-07-22T20:03:00Z"},
-  "504": {"state": "MERGED", "mergedAt": "2026-07-22T20:04:00Z"},
-  "505": {"state": "OPEN", "mergedAt": null}
+  "501": {"state": "MERGED", "mergedAt": "2026-07-22T20:01:00Z", "body": "Refs #439", "closingIssuesReferences": []},
+  "502": {"state": "MERGED", "mergedAt": "2026-07-22T20:02:00Z", "body": "Refs #340", "closingIssuesReferences": []},
+  "503": {"state": "MERGED", "mergedAt": "2026-07-22T20:03:00Z", "body": "Refs #198", "closingIssuesReferences": []},
+  "504": {"state": "MERGED", "mergedAt": "2026-07-22T20:04:00Z", "body": "Refs #339", "closingIssuesReferences": []},
+  "505": {"state": "OPEN", "mergedAt": null, "body": "Refs #777", "closingIssuesReferences": []}
 }
 "#,
     )
@@ -356,6 +366,93 @@ fn merged_claims_close_open_issues_and_stop_exact_ghost_sessions() {
         .expect("at least one ghost session stop");
     let queue_read = log.find("issue list").expect("ready queue read");
     assert!(last_stop < queue_read, "{log}");
+    assert!(!log.contains("maestro spawn"), "{log}");
+}
+
+#[test]
+fn mismatched_pr_link_fails_before_issue_or_session_mutation() {
+    let root = unique_temp_dir("okp-worker-floor-mismatched-pr-link");
+    let harness = Harness::new(root.path());
+    fs::write(
+        &harness.fleet,
+        br#"{
+  "projects": [{
+    "name": "ok-player",
+    "live_workers": 0,
+    "paused": false,
+    "outcome": {"health_state": "healthy"},
+    "issue_claims": [
+      {"issue_number": 900, "kind": "terminal_reconciliation", "session": "ok-player-900", "pr_number": 42, "status": "done"}
+    ]
+  }]
+}
+"#,
+    )
+    .expect("fleet fixture");
+    fs::write(
+        &harness.prs,
+        br#"{"42":{"state":"MERGED","mergedAt":"2026-07-22T20:00:00Z","body":"Refs #123","closingIssuesReferences":[]}}
+"#,
+    )
+    .expect("PR fixture");
+    fs::write(&harness.issues, b"[]\n").expect("unused issue fixture");
+
+    let output = harness.run(
+        "999",
+        r#"{"state":"CLOSED","labels":[]}"#,
+        r#"{"state":"CLOSED","labels":[]}"#,
+        r#"{"state":"CLOSED","labels":[]}"#,
+    );
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("PR #42 does not link claimed issue #900")
+    );
+    let log = fs::read_to_string(&harness.log).expect("command log");
+    assert!(log.contains("pr view 42"), "{log}");
+    assert!(!log.contains("issue view 900"), "{log}");
+    assert!(!log.contains("issue close 900"), "{log}");
+    assert!(!log.contains("--session ok-player-900"), "{log}");
+    assert!(!log.contains("maestro spawn"), "{log}");
+}
+
+#[test]
+fn conflicting_session_claims_fail_before_github_mutation() {
+    let root = unique_temp_dir("okp-worker-floor-conflicting-session");
+    let harness = Harness::new(root.path());
+    fs::write(
+        &harness.fleet,
+        br#"{
+  "projects": [{
+    "name": "ok-player",
+    "live_workers": 0,
+    "paused": false,
+    "outcome": {"health_state": "healthy"},
+    "issue_claims": [
+      {"issue_number": 601, "session": "ok-player-801", "pr_number": 701},
+      {"issue_number": 602, "session": "ok-player-801", "pr_number": 702}
+    ]
+  }]
+}
+"#,
+    )
+    .expect("fleet fixture");
+    fs::write(&harness.issues, b"[]\n").expect("unused issue fixture");
+
+    let output = harness.run(
+        "999",
+        r#"{"state":"CLOSED","labels":[]}"#,
+        r#"{"state":"CLOSED","labels":[]}"#,
+        r#"{"state":"CLOSED","labels":[]}"#,
+    );
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("conflicting claims for one Maestro session")
+    );
+    let log = fs::read_to_string(&harness.log).expect("command log");
+    assert!(!log.contains("pr view"), "{log}");
+    assert!(!log.contains("issue close"), "{log}");
+    assert!(!log.contains("maestro stop"), "{log}");
     assert!(!log.contains("maestro spawn"), "{log}");
 }
 
