@@ -65,6 +65,7 @@ mod companion_window;
 mod controls;
 mod css;
 mod dialogs;
+mod file_reveal;
 mod history;
 mod history_view;
 mod integration;
@@ -96,6 +97,7 @@ pub(crate) use companion_window::*;
 pub(crate) use controls::*;
 pub(crate) use css::*;
 pub(crate) use dialogs::*;
+pub(crate) use file_reveal::*;
 pub(crate) use history_view::*;
 pub(crate) use integration::*;
 pub(crate) use keyboard::*;
@@ -1535,6 +1537,10 @@ struct StatusToast {
     revealer: gtk::Revealer,
     thumbnail: gtk::Image,
     label: gtk::Label,
+    path_button: gtk::Button,
+    path_label: gtk::Label,
+    reveal_path: Rc<RefCell<Option<PathBuf>>>,
+    reveal_jobs: Rc<FileRevealJobs>,
     hide_source: Rc<RefCell<Option<glib::SourceId>>>,
 }
 
@@ -1549,18 +1555,39 @@ impl StatusToast {
         thumbnail.set_visible(false);
 
         let label = gtk::Label::new(None);
-        label.set_ellipsize(pango::EllipsizeMode::Middle);
-        label.set_max_width_chars(72);
+        label.set_xalign(0.0);
+
+        let path_label = gtk::Label::new(None);
+        path_label.set_ellipsize(pango::EllipsizeMode::Middle);
+        path_label.set_max_width_chars(52);
+        path_label.set_width_chars(1);
+        path_label.set_xalign(0.0);
+        path_label.set_hexpand(true);
+
+        let path_button = gtk::Button::new();
+        path_button.add_css_class("okp-status-toast-path");
+        path_button.set_has_frame(false);
+        path_button.set_hexpand(true);
+        path_button.set_halign(gtk::Align::Fill);
+        path_button.set_visible(false);
+        path_button.set_child(Some(&path_label));
+
+        let message = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        message.set_hexpand(true);
+        message.append(&label);
+        message.append(&path_button);
 
         let content = gtk::Box::new(gtk::Orientation::Horizontal, 10);
         content.add_css_class("okp-status-toast");
         content.append(&thumbnail);
-        content.append(&label);
+        content.append(&message);
 
         let revealer = gtk::Revealer::new();
         revealer.set_halign(gtk::Align::Center);
         revealer.set_valign(gtk::Align::Start);
         revealer.set_margin_top(64);
+        revealer.set_margin_start(12);
+        revealer.set_margin_end(12);
         revealer.set_transition_duration(if playback_animations_enabled() {
             150
         } else {
@@ -1571,10 +1598,26 @@ impl StatusToast {
         revealer.set_can_target(false);
         revealer.set_child(Some(&content));
 
+        let reveal_path = Rc::new(RefCell::new(None::<PathBuf>));
+        let reveal_jobs = Rc::new(FileRevealJobs::default());
+        let clicked_path = Rc::clone(&reveal_path);
+        let clicked_jobs = Rc::clone(&reveal_jobs);
+        path_button.connect_clicked(move |button| {
+            let Some(path) = clicked_path.borrow().clone() else {
+                return;
+            };
+            button.set_sensitive(false);
+            clicked_jobs.request(path, FileRevealPurpose::Screenshot);
+        });
+
         Self {
             revealer,
             thumbnail,
             label,
+            path_button,
+            path_label,
+            reveal_path,
+            reveal_jobs,
             hide_source: Rc::new(RefCell::new(None)),
         }
     }
@@ -1586,10 +1629,31 @@ impl StatusToast {
     fn show(&self, message: &str) {
         self.thumbnail.set_visible(false);
         self.thumbnail.set_paintable(None::<&gdk::Paintable>);
-        self.reveal(message);
+        self.show_message(message);
     }
 
     fn show_screenshot(&self, message: &str, path: &Path) {
+        self.set_screenshot_thumbnail(path);
+        self.show_message(message);
+    }
+
+    fn show_saved_screenshot(&self, path: &Path) {
+        self.set_screenshot_thumbnail(path);
+        let display_path = path.to_string_lossy();
+        self.label.set_text("Saved to");
+        self.path_label.set_text(&display_path);
+        self.path_button.set_tooltip_text(Some(&display_path));
+        self.path_button
+            .update_property(&[gtk::accessible::Property::Label(&format!(
+                "Reveal screenshot in file manager: {display_path}"
+            ))]);
+        self.path_button.set_sensitive(true);
+        self.path_button.set_visible(true);
+        self.reveal_path.borrow_mut().replace(path.to_owned());
+        self.reveal(true);
+    }
+
+    fn set_screenshot_thumbnail(&self, path: &Path) {
         if let Ok(texture) = gdk::Texture::from_filename(path) {
             self.thumbnail.set_paintable(Some(&texture));
             self.thumbnail.set_visible(true);
@@ -1597,11 +1661,18 @@ impl StatusToast {
             self.thumbnail.set_visible(false);
             self.thumbnail.set_paintable(None::<&gdk::Paintable>);
         }
-        self.reveal(message);
     }
 
-    fn reveal(&self, message: &str) {
+    fn show_message(&self, message: &str) {
+        self.reveal_path.borrow_mut().take();
+        self.path_button.set_visible(false);
+        self.path_button.set_sensitive(true);
         self.label.set_text(message);
+        self.reveal(false);
+    }
+
+    fn reveal(&self, interactive: bool) {
+        self.revealer.set_can_target(interactive);
         self.revealer.set_reveal_child(true);
 
         if let Some(source_id) = self.hide_source.borrow_mut().take() {
@@ -1609,13 +1680,45 @@ impl StatusToast {
         }
 
         let revealer = self.revealer.clone();
+        let path_button = self.path_button.clone();
+        let reveal_path = Rc::clone(&self.reveal_path);
         let hide_source = Rc::clone(&self.hide_source);
-        let source_id = glib::timeout_add_local(Duration::from_millis(1700), move || {
+        let duration = if interactive { 5000 } else { 1700 };
+        let source_id = glib::timeout_add_local(Duration::from_millis(duration), move || {
             revealer.set_reveal_child(false);
+            revealer.set_can_target(false);
+            path_button.set_visible(false);
+            reveal_path.borrow_mut().take();
             hide_source.borrow_mut().take();
             glib::ControlFlow::Break
         });
         self.hide_source.borrow_mut().replace(source_id);
+    }
+
+    fn request_file_reveal(&self, path: PathBuf) {
+        self.path_button.set_sensitive(false);
+        self.reveal_jobs
+            .request(path, FileRevealPurpose::MediaLocation);
+    }
+
+    fn drain_file_reveal_jobs(&self) {
+        for job in self.reveal_jobs.drain() {
+            self.path_button.set_sensitive(true);
+            match job.result {
+                Ok(FileRevealOutcome::ExactFile | FileRevealOutcome::ContainingFolder) => {
+                    self.show("Opened file location");
+                }
+                Err(FileRevealError::MissingFile) => {
+                    self.show(match job.purpose {
+                        FileRevealPurpose::Screenshot => "Screenshot no longer exists",
+                        FileRevealPurpose::MediaLocation => "File no longer exists",
+                    });
+                }
+                Err(FileRevealError::MissingParent | FileRevealError::LaunchFailed) => {
+                    self.show("Couldn't open file location");
+                }
+            }
+        }
     }
 }
 

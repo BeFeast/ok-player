@@ -103,7 +103,9 @@ pub(crate) fn is_canonical_player_space(key: gdk::Key, modifiers: gdk::ModifierT
 fn focus_owns_space(window: &impl IsA<gtk::Window>) -> bool {
     let mut current = gtk::prelude::GtkWindowExt::focus(window);
     while let Some(widget) = current {
-        if widget.has_css_class("is-capturing") {
+        if widget.has_css_class("is-capturing")
+            || (widget.has_css_class("okp-status-toast-path") && widget.is_mapped())
+        {
             return true;
         }
         if let Ok(editable) = widget.clone().downcast::<gtk::Editable>()
