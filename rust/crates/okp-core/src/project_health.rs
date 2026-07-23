@@ -499,7 +499,7 @@ fn evaluate_windows_candidate(
             blocking: true,
             status: HealthStatus::Warning,
             summary:
-                "Windows candidate lane is bootstrapping and has no completed schedule history"
+                "Windows candidate lane is bootstrapping and has no completed automatic run history"
                     .to_owned(),
             details: Vec::new(),
             reason_codes: vec!["windows-candidate-bootstrap".to_owned()],

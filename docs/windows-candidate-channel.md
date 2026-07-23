@@ -7,12 +7,14 @@ push to `main`, retains a 15-minute scheduled fallback, runs on
 manifest on the mutable `windows-candidate` prerelease and skips when its exact
 40-character source SHA already matches `main`.
 
-Before SDK setup, each push or scheduled run refreshes `origin/main` and
-compares it with the checked-out SHA. If a newer head already exists, the run
-emits `OKP_CANDIDATE_SKIPPED_SUPERSEDED` with a
-`superseded by <sha>, skipping` notice, skips every build and publication step,
-and completes successfully. Manual dispatch deliberately bypasses this early
-check and retains the existing coalescing decision below.
+All starts share one concurrency group, and in-progress build or publication
+work is never canceled. GitHub retains the newest pending start in that group;
+before SDK setup, an automatic run refreshes `origin/main` and compares it with
+the checked-out SHA. If a newer head already exists, the run emits
+`OKP_CANDIDATE_SKIPPED_SUPERSEDED` with a `superseded by <sha>, skipping`
+notice, skips every build and publication step, and completes successfully.
+Manual dispatch deliberately bypasses this early check and retains the existing
+coalescing decision below.
 
 ## Identity and ordering
 
@@ -39,7 +41,7 @@ and `releases.win.json` flow are unchanged.
 The hosted job performs these gates before any feed movement:
 
 1. verify a clean checkout whose `HEAD` equals the workflow's claimed SHA and,
-   for scheduled runs, skip it if current `origin/main` has superseded it;
+   for automatic runs, skip it if current `origin/main` has superseded it;
 2. build the C# solution;
 3. run the engine-agnostic unit suite;
 4. fetch libmpv and run the Debug real-libmpv integration suite;
@@ -75,8 +77,9 @@ the pointer is live and does not invalidate a successful promotion.
 rolling lane as `windows-candidate-delivery`. The Rust evaluator verifies the
 manifest/feed identity, exact source relation to `main`, and the shared
 120-minute unpublished-main lag bound. An unchanged promoted SHA stays healthy;
-two or more consecutive scheduled failures instead report the newest failed
-workflow step and count. Before the lane has any completed schedule history or
+two or more consecutive automatic push or scheduled failures instead report
+the newest failed workflow step and count. Manual runs are excluded from that
+failure streak. Before the lane has any completed automatic history or
 published pointers, the row is a bootstrap warning rather than a failure.
 
 ## Acceptance boundary

@@ -51,21 +51,24 @@ fn linux_manual_dispatch_republish_contract_is_unchanged() {
 }
 
 #[test]
-fn windows_push_delivery_skips_a_superseded_sha_before_build_setup() {
+fn windows_automatic_delivery_starts_on_main_and_coalesces_before_build_setup() {
     let workflow = workflow("release-windows-candidate.yml");
     let checkout = position(&workflow, "- uses: actions/checkout@v4");
-    let supersession = position(
-        &workflow,
-        "- name: Verify checkout and skip superseded automatic SHA",
-    );
+    let supersession_name = "Verify checkout and skip superseded automatic SHA";
+    let supersession = position(&workflow, &format!("- name: {supersession_name}"));
     let setup = position(&workflow, "- uses: actions/setup-dotnet@v4");
+    let supersession_block = step_block(&workflow, supersession_name);
 
     assert!(checkout < supersession);
     assert!(supersession < setup);
     assert!(workflow.contains("push:\n    branches: [main]"));
     assert!(workflow.contains("schedule:\n    - cron: '*/15 * * * *'"));
     assert!(workflow.contains("workflow_dispatch:"));
-    assert!(workflow.contains("if ('${{ github.event_name }}' -ne 'workflow_dispatch')"));
+    assert!(workflow.contains("cancel-in-progress: false"));
+    assert!(
+        supersession_block.contains("if ('${{ github.event_name }}' -in @('push', 'schedule'))")
+    );
+    assert!(!supersession_block.contains("workflow_dispatch"));
     assert!(
         workflow.contains("git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'")
     );
@@ -85,6 +88,24 @@ fn windows_push_delivery_skips_a_superseded_sha_before_build_setup() {
                 .contains("steps.supersession.outputs.should_run != 'false'"),
             "{step} must be skipped after a supersession decision"
         );
+    }
+}
+
+#[test]
+fn windows_manual_dispatch_bypasses_supersession_and_reaches_the_decision() {
+    let workflow = workflow("release-windows-candidate.yml");
+
+    assert!(workflow.contains("workflow_dispatch:"));
+    for block in [
+        action_block(&workflow, "actions/setup-dotnet@v4"),
+        step_block(&workflow, "Build candidate contract CLI"),
+        step_block(
+            &workflow,
+            "Read rolling publication and coalesce unchanged main",
+        ),
+    ] {
+        assert!(block.contains("steps.supersession.outputs.should_run != 'false'"));
+        assert!(!block.contains("steps.supersession.outputs.should_run == 'true'"));
     }
 }
 
