@@ -504,7 +504,7 @@ finish_app_shutdown() {
 
 close_app() {
   local window_id="$1"
-  local close_attempt
+  local close_attempt close_error
   # `windowclose` destroys the X11 window directly, while keyboard and pointer
   # routes depend on focus or hit testing. Ask Xfwm to close the exact toplevel;
   # it delivers WM_DELETE_WINDOW and GTK executes the normal close-request
@@ -513,7 +513,20 @@ close_app() {
     printf 'close-dispatch attempt=%s target=%s route=ewmh-close-window\n' \
       "$close_attempt" "$window_id" \
       >>"$OUT_DIR/fit-lifecycle.log"
-    "$X11_CLOSE_REQUEST" "$window_id"
+    close_error="$OUT_DIR/close-dispatch-${close_attempt}.log"
+    if ! "$X11_CLOSE_REQUEST" "$window_id" 2>"$close_error"; then
+      # _NET_CLOSE_WINDOW is asynchronous. A previous request can complete
+      # between the loop's geometry probe and this helper resolving the XID.
+      # Treat that race as success only when the exact target is already gone.
+      if ! xdotool getwindowgeometry "$window_id" >/dev/null 2>&1; then
+        printf 'close-dispatch attempt=%s target=%s result=already-gone\n' \
+          "$close_attempt" "$window_id" >>"$OUT_DIR/fit-lifecycle.log"
+        break
+      fi
+      echo "Could not send the X11 close request for window $window_id" >&2
+      cat "$close_error" >&2 || true
+      return 1
+    fi
     sleep 0.2
     if ! xdotool getwindowgeometry "$window_id" >/dev/null 2>&1; then
       break
