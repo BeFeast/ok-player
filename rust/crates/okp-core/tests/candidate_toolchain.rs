@@ -270,6 +270,8 @@ fn workflow_and_operator_guide_consume_the_canonical_manifest() {
         "preflight must run before lock acquisition"
     );
     assert!(workflow.contains("./scripts/linux-candidate-toolchain.sh"));
+    assert!(workflow.contains("timeout-minutes: 45"));
+    assert!(!workflow.contains("timeout-minutes: 90"));
 
     let release_workflow = fs::read_to_string(root.join(".github/workflows/release-linux.yml"))
         .expect("release workflow");
