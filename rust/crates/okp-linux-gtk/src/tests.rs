@@ -5005,9 +5005,9 @@ fn idle_return_smoke_waits_for_natural_eof_before_welcome_capture() {
         .map(|(body, _)| body)
         .expect("idle-return shutdown helper");
     let eof_flow = smoke
-        .split("launch_fixture eof-app")
-        .nth(1)
-        .and_then(|source| source.split("stop_app").next())
+        .split_once("eof_log=eof-app")
+        .and_then(|(_, tail)| tail.split_once("\nclose_log=close-app"))
+        .map(|(body, _)| body)
         .expect("EOF smoke flow");
 
     let loaded_probe = eof_flow
@@ -5022,6 +5022,13 @@ fn idle_return_smoke_waits_for_natural_eof_before_welcome_capture() {
     assert!(loaded_probe < eof_probe);
     assert!(eof_probe < welcome_probe);
     assert!(!eof_flow.contains("sleep 7"));
+    assert!(eof_flow.contains("eof-app-retry"));
+    assert!(eof_flow.contains("eof_launch_retry=pass"));
+    assert!(eof_flow.contains("eof_file_loaded 60"));
+    assert_eq!(eof_flow.matches("eof-app-retry").count(), 1);
+    assert_eq!(eof_flow.matches("eof_launch_retry=pass").count(), 1);
+    assert_eq!(eof_flow.matches("idle-return-smoke: eof-idle").count(), 1);
+    assert_eq!(eof_flow.matches("assert_idle_capture").count(), 1);
 
     assert!(smoke.contains("identity > 0.012"));
     assert!(smoke.contains("magenta < 0.35"));
@@ -5029,11 +5036,14 @@ fn idle_return_smoke_waits_for_natural_eof_before_welcome_capture() {
     assert!(smoke.contains("residual_welcome_decoder_retired"));
     assert!(smoke.contains("residual_welcome_hidden=pass"));
     assert!(smoke.contains("residual_shutdown_decoder_retired"));
+    assert!(smoke.contains("OKP_DEBUG_WINDOW_FIT=1"));
     assert!(smoke.contains("CONTINUE_WATCHING_IDENTITY_CROP='300x170+210+60'"));
     assert!(smoke.contains("Residual initial Continue Watching"));
     assert!(smoke.contains("export GSK_RENDERER=cairo"));
     assert!(smoke.contains("-crop 1120x638+0+42"));
     assert!(smoke.contains("X11_APP_CLEAR_WAITER=\"$ROOT/scripts/wait-for-x11-app-clear.sh\""));
+    assert!(!smoke.contains("timeout 60s \"$BINARY\""));
+    assert!(!smoke.contains("timeout 30s \"$BINARY\""));
     assert!(stop.contains("local stopped_pid=\"$app_pid\""));
     assert!(stop.contains("\"$X11_APP_CLEAR_WAITER\" \"$stopped_pid\" \"$diagnostics\""));
     assert!(stop.contains("org.freedesktop.DBus.NameHasOwner"));
@@ -5065,6 +5075,17 @@ fn idle_return_smoke_waits_for_natural_eof_before_welcome_capture() {
     );
     assert_eq!(close_flow.matches("assert_idle_capture").count(), 1);
 
+    let residual_flow = smoke
+        .split_once("run_residual_open_regression() {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nwindow_id="))
+        .map(|(body, _)| body)
+        .expect("idle-return residual-open flow");
+    let player_ready = residual_flow
+        .find("startup launch lifecycle: player ready")
+        .expect("player readiness probe");
+    let open_uri = residual_flow.find("OpenUri").expect("MPRIS open request");
+    assert!(player_ready < open_uri);
+
     let bridge = include_str!("mpv_bridge.rs");
     let idle_projection = bridge
         .split("let idle_surface_hidden")
@@ -5082,7 +5103,7 @@ fn idle_return_smoke_waits_for_natural_eof_before_welcome_capture() {
 }
 
 #[test]
-fn idle_return_smoke_retries_only_the_close_fixture_startup_boundary() {
+fn idle_return_smoke_retries_the_close_fixture_startup_boundary() {
     let smoke = include_str!("../../../../scripts/smoke-linux-idle-return.sh");
     let wait_for_marker = smoke
         .split_once("probe_log_marker() {")
@@ -5150,6 +5171,76 @@ printf 'launch_count=%s\nstop_count=%s\n' "$launch_count" "$stop_count"
     assert!(results.contains("close_media_file_loaded=pass"));
     assert!(results.contains("close_media_launch_retry=pass"));
     assert!(results.contains("close_media_transition=pass"));
+}
+
+#[test]
+fn idle_return_smoke_retries_the_eof_fixture_startup_boundary() {
+    let smoke = include_str!("../../../../scripts/smoke-linux-idle-return.sh");
+    let wait_for_marker = smoke
+        .split_once("probe_log_marker() {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nlaunch_fixture()"))
+        .map(|(body, _)| format!("probe_log_marker() {{{body}\n}}"))
+        .expect("log marker helper");
+    let eof_flow = smoke
+        .split_once("eof_log=eof-app")
+        .and_then(|(_, tail)| tail.split_once("\nclose_log=close-app"))
+        .map(|(body, _)| body)
+        .expect("EOF smoke flow");
+    let root = unique_temp_dir("okp-idle-return-eof-retry");
+    let probe = format!(
+        r#"set -euo pipefail
+{wait_for_marker}
+OUT_DIR={out}
+mkdir -p "$OUT_DIR"
+app_pid=4242
+window_id=17
+launch_count=0
+stop_count=0
+launch_fixture() {{
+  launch_count=$((launch_count + 1))
+  : >"$OUT_DIR/$1.log"
+  if (( launch_count == 2 )); then
+    printf '%s\n' 'idle-return-smoke: file-loaded' 'idle-return-smoke: eof-idle' \
+      >"$OUT_DIR/$1.log"
+  fi
+}}
+stop_app() {{ stop_count=$((stop_count + 1)); }}
+xdotool() {{ return 0; }}
+kill() {{ return 0; }}
+sleep() {{ return 0; }}
+rg() {{
+  [[ "$1" == "-q" && "$2" == "-F" ]] || return 2
+  local marker="$3" line
+  while IFS= read -r line; do
+    [[ "$line" == *"$marker"* ]] && return 0
+  done <"$4"
+  return 1
+}}
+assert_idle_capture() {{ return 0; }}
+eof_log=eof-app
+{eof_flow}
+printf 'launch_count=%s\nstop_count=%s\n' "$launch_count" "$stop_count"
+"#,
+        out = root.path().display()
+    );
+    let output = std::process::Command::new("bash")
+        .args(["-c", &probe])
+        .output()
+        .expect("EOF startup retry probe should run");
+    assert!(
+        output.status.success(),
+        "retry probe should pass: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "launch_count=2\nstop_count=2\n"
+    );
+    let results = fs::read_to_string(root.path().join("results.txt"))
+        .expect("retry evidence should be written");
+    assert!(results.contains("eof_file_loaded=pass"));
+    assert!(results.contains("eof_launch_retry=pass"));
+    assert!(results.contains("eof_idle_transition=pass"));
 }
 
 #[test]
