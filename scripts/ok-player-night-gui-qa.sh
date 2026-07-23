@@ -50,7 +50,7 @@ if [[ -n "$explicit_host" ]] &&
   fail "invalid host alias: $explicit_host"
 fi
 
-if [[ "$explicit_host" == "sindri" ]] &&
+if [[ "${explicit_host,,}" == "sindri" ]] &&
   [[ "${OKP_QA_ALLOW_SINDRI:-0}" != "1" || "${OKP_QA_OPERATOR_GO:-0}" != "1" ]]; then
   fail "sindri requires explicit operator authorization"
 fi
@@ -84,12 +84,13 @@ fi
 
 declare -A seen_hosts=()
 for host in "${hosts[@]}"; do
+  host_key="${host,,}"
   [[ "$host" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$ ]] ||
     fail "invalid host alias in automatic list: $host"
-  [[ "$host" != sindri || -n "$explicit_host" ]] ||
+  [[ "$host_key" != sindri || -n "$explicit_host" ]] ||
     fail "sindri is not allowed in OKP_QA_HOSTS"
-  [[ ! -v "seen_hosts[$host]" ]] || fail "duplicate host alias: $host"
-  seen_hosts["$host"]=1
+  [[ ! -v "seen_hosts[$host_key]" ]] || fail "duplicate host alias: $host"
+  seen_hosts["$host_key"]=1
 done
 
 if [[ -n "${OKP_QA_SSH_COMMAND:-}" ]]; then
