@@ -1680,10 +1680,15 @@ impl StatusToast {
         }
 
         let revealer = self.revealer.clone();
+        let path_button = self.path_button.clone();
+        let reveal_path = Rc::clone(&self.reveal_path);
         let hide_source = Rc::clone(&self.hide_source);
-        let source_id = glib::timeout_add_local(Duration::from_millis(1700), move || {
+        let duration = if interactive { 5000 } else { 1700 };
+        let source_id = glib::timeout_add_local(Duration::from_millis(duration), move || {
             revealer.set_reveal_child(false);
             revealer.set_can_target(false);
+            path_button.set_visible(false);
+            reveal_path.borrow_mut().take();
             hide_source.borrow_mut().take();
             glib::ControlFlow::Break
         });

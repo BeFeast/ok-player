@@ -1082,6 +1082,9 @@ fn saved_screenshot_toast_is_linked_accessible_and_non_measuring() {
     assert!(main.contains("Reveal screenshot in file manager: {display_path}"));
     assert!(main.contains("path_button.connect_clicked"));
     assert!(main.contains("self.revealer.set_can_target(interactive);"));
+    assert!(main.contains("let duration = if interactive { 5000 } else { 1700 };"));
+    assert!(main.contains("path_button.set_visible(false);"));
+    assert!(main.contains("reveal_path.borrow_mut().take();"));
     assert!(main.contains("revealer.set_margin_start(12);"));
     assert!(main.contains("revealer.set_margin_end(12);"));
     assert!(playback.contains("status_toast.show_saved_screenshot(&path);"));

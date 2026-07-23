@@ -447,7 +447,9 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     }
     if let Some(path) = env::var_os("OKP_SAVED_SCREENSHOT_TOAST_PREVIEW") {
         let preview_toast = Rc::clone(&status_toast);
-        glib::timeout_add_local_once(Duration::from_millis(500), move || {
+        // A cold software-rendered X11 window can map before its first frame is painted.
+        // Delay this test-only state until the canvas is stable so visual evidence includes it.
+        glib::timeout_add_local_once(Duration::from_millis(1500), move || {
             preview_toast.show_saved_screenshot(&PathBuf::from(path));
         });
     } else if env::var_os("OKP_OSD_PREVIEW_ON_STARTUP").is_some() {
