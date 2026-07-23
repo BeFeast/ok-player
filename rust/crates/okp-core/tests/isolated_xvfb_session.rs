@@ -115,6 +115,9 @@ fn window_regression_runner_dispatches_drag_and_fit_with_bound_evidence() {
     assert!(script.contains("single_monitor_window_fit"));
     assert!(script.contains("window-drag/results.txt"));
     assert!(script.contains("window-fit/series-evidence.txt"));
+    assert!(script.contains("OKP_WINDOW_REGRESSION_SOURCE_SHA must be"));
+    assert!(script.contains("source_sha=$SOURCE_SHA"));
+    assert!(script.contains("Output directory already exists"));
     assert!(script.contains("sha256sum"));
     assert!(script.contains("if (( failed != 0 ))"));
 }

@@ -36,6 +36,9 @@ HOME="$lease_home" "$LEASE" release suite-b >/dev/null
 if HOME="$lease_home" "$LEASE" acquire sindri suite-s 45 103 >/dev/null 2>&1; then
   fail 'sindri was leased without explicit operator authorization'
 fi
+if HOME="$lease_home" "$LEASE" acquire Sindri suite-s 45 103 >/dev/null 2>&1; then
+  fail 'a case variant of sindri was leased without explicit operator authorization'
+fi
 if HOME="$lease_home" OKP_QA_ALLOW_SINDRI=1 "$LEASE" acquire sindri suite-s 45 103 >/dev/null 2>&1; then
   fail 'one sindri override was sufficient'
 fi
@@ -170,12 +173,21 @@ fi
 if OKP_QA_HOSTS='mimir sindri' OKP_QA_UTC_HOUR=1 "$CONTROLLER" >/dev/null 2>&1; then
   fail 'controller accepted sindri in the automatic environment host list'
 fi
+if OKP_QA_HOSTS='mimir SINDRI' OKP_QA_UTC_HOUR=1 "$CONTROLLER" >/dev/null 2>&1; then
+  fail 'controller accepted a case variant of sindri in the automatic host list'
+fi
 if OKP_QA_HOSTS='mimir mimir' OKP_QA_UTC_HOUR=1 "$CONTROLLER" >/dev/null 2>&1; then
   fail 'controller accepted a duplicate automatic host alias'
+fi
+if OKP_QA_HOSTS='mimir MIMIR' OKP_QA_UTC_HOUR=1 "$CONTROLLER" >/dev/null 2>&1; then
+  fail 'controller accepted a case-insensitive duplicate automatic host alias'
 fi
 
 if OKP_QA_UTC_HOUR=1 "$CONTROLLER" --host sindri >/dev/null 2>&1; then
   fail 'controller accepted sindri without explicit operator authorization'
+fi
+if OKP_QA_UTC_HOUR=1 "$CONTROLLER" --host Sindri >/dev/null 2>&1; then
+  fail 'controller accepted a case variant of sindri without operator authorization'
 fi
 
 printf 'Night GUI QA driver tests passed.\n'

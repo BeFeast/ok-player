@@ -7,20 +7,42 @@ BINARY="${1:?usage: run-linux-window-regression-smokes.sh <binary> <output-direc
 OUT_DIR="${2:?usage: run-linux-window-regression-smokes.sh <binary> <output-directory>}"
 DRAG_SMOKE="${OKP_WINDOW_DRAG_SMOKE:-$ROOT/scripts/smoke-linux-window-drag.sh}"
 FIT_SERIES="${OKP_WINDOW_FIT_SERIES:-$ROOT/scripts/run-linux-window-fit-series.sh}"
-SOURCE_SHA="${OKP_WINDOW_REGRESSION_SOURCE_SHA:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)}"
+SOURCE_SHA="${OKP_WINDOW_REGRESSION_SOURCE_SHA:-}"
+
+if [[ -z "$SOURCE_SHA" ]]; then
+  if ! SOURCE_SHA="$(git -C "$ROOT" rev-parse --verify "HEAD^{commit}" 2>/dev/null)"; then
+    echo "Set OKP_WINDOW_REGRESSION_SOURCE_SHA when Git metadata is unavailable" >&2
+    exit 2
+  fi
+fi
+[[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+  echo "OKP_WINDOW_REGRESSION_SOURCE_SHA must be a lowercase 40-character commit SHA" >&2
+  exit 2
+}
 
 [[ -x "$BINARY" ]] || { echo "Missing executable: $BINARY" >&2; exit 127; }
 [[ -x "$DRAG_SMOKE" ]] || { echo "Missing executable: $DRAG_SMOKE" >&2; exit 127; }
 [[ -x "$FIT_SERIES" ]] || { echo "Missing executable: $FIT_SERIES" >&2; exit 127; }
 
+[[ ! -e "$OUT_DIR" && ! -L "$OUT_DIR" ]] || {
+  echo "Output directory already exists: $OUT_DIR" >&2
+  exit 2
+}
 mkdir -p "$OUT_DIR"
-rm -rf "$OUT_DIR/window-drag" "$OUT_DIR/window-fit"
 : >"$OUT_DIR/results.tsv"
 
 failed=0
+evidence_has_exact_line() {
+  local file="$1" expected="$2" line
+  while IFS= read -r line; do
+    [[ "$line" == "$expected" ]] && return 0
+  done <"$file"
+  return 1
+}
+
 run_smoke() {
-  local name="$1" evidence="$2"
-  shift 2
+  local name="$1" evidence="$2" expected_line="$3"
+  shift 3
   local rc
 
   set +e
@@ -28,7 +50,14 @@ run_smoke() {
   rc=$?
   set -e
   if (( rc == 0 )) && [[ -s "$OUT_DIR/$evidence" ]]; then
-    printf '%s\tPASS\t%s\n' "$name" "$evidence" >>"$OUT_DIR/results.tsv"
+    if [[ -z "$expected_line" ]] ||
+      evidence_has_exact_line "$OUT_DIR/$evidence" "$expected_line"; then
+      printf '%s\tPASS\t%s\n' "$name" "$evidence" >>"$OUT_DIR/results.tsv"
+    else
+      printf '%s\tFAIL\tmissing exact evidence=%s\n' "$name" "$expected_line" \
+        >>"$OUT_DIR/results.tsv"
+      failed=1
+    fi
   else
     if (( rc == 0 )); then
       printf '%s\tFAIL\tmissing evidence=%s\n' "$name" "$evidence" \
@@ -44,10 +73,12 @@ run_smoke() {
 run_smoke \
   non_osc_window_drag \
   window-drag/results.txt \
+  '' \
   "$DRAG_SMOKE" "$BINARY" "$OUT_DIR/window-drag"
 run_smoke \
   single_monitor_window_fit \
   window-fit/series-evidence.txt \
+  "source_sha=$SOURCE_SHA" \
   env OKP_WINDOW_FIT_SOURCE_SHA="$SOURCE_SHA" \
   "$FIT_SERIES" "$BINARY" "$OUT_DIR/window-fit"
 

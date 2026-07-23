@@ -20,10 +20,11 @@ OKP_QA_HOSTS='mimir baldr' scripts/ok-player-night-gui-qa.sh
 ```
 
 The controller visits every eligible host in the configured order and rejects
-empty, invalid, duplicate, or `sindri` entries. Do not put physical hostnames or
-private addresses in this variable because the logical alias is copied into
-the evidence metadata. `sindri` is never in the automatic list. A one-host
-operator-authorized run requires all three explicit choices:
+empty, invalid, duplicate, or `sindri` entries. Alias identity and the protected
+role check are case-insensitive, matching SSH alias behavior. Do not put physical
+hostnames or private addresses in this variable because the logical alias is
+copied into the evidence metadata. `sindri` is never in the automatic list. A
+one-host operator-authorized run requires all three explicit choices:
 
 ```bash
 OKP_QA_ALLOW_SINDRI=1 OKP_QA_OPERATOR_GO=1 \
@@ -110,11 +111,15 @@ scripts/run-linux-window-regression-smokes.sh \
 
 The helper always attempts both regressions, writes `results.tsv` and
 `summary.env`, and binds the key drag, fit, Xvfb, and D-Bus evidence files in
-`SHA256SUMS`. A site `run-action` hook should use this command as supporting
-evidence while implementing `single_monitor_fit` and `non_osc_drag_10`; the
-two live action rows still require actual desktop observations. CI runs the
-aggregate helper's dispatch/failure/evidence policy test, while the Rust suite
-also pins the required drag and fit assertions in the underlying scripts.
+`SHA256SUMS`. The output directory must not already exist. The helper reads the
+source revision from Git when available; an exported tree must provide an exact
+lowercase 40-character commit through `OKP_WINDOW_REGRESSION_SOURCE_SHA`. It
+also rejects fit evidence that names a different revision. A site `run-action`
+hook should use this command as supporting evidence while implementing
+`single_monitor_fit` and `non_osc_drag_10`; the two live action rows still
+require actual desktop observations. CI runs the aggregate helper's
+dispatch/failure/evidence policy test, while the Rust suite also pins the
+required drag and fit assertions in the underlying scripts.
 
 ## Artifacts and timer ownership
 
