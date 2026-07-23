@@ -21,7 +21,8 @@ OKP_QA_HOSTS='mimir baldr' scripts/ok-player-night-gui-qa.sh
 
 The controller visits every eligible host in the configured order and rejects
 empty, invalid, duplicate, or `sindri` entries. Alias identity and the protected
-role check are case-insensitive, matching SSH alias behavior. Do not put physical
+role check use locale-independent ASCII case folding, matching SSH alias
+behavior even when the timer inherits a non-English locale. Do not put physical
 hostnames or private addresses in this variable because the logical alias is
 copied into the evidence metadata. `sindri` is never in the automatic list. A
 one-host operator-authorized run requires all three explicit choices:

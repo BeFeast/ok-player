@@ -22,6 +22,12 @@ fail() {
   exit 64
 }
 
+ascii_lower() {
+  local value="$1"
+  local LC_ALL=C
+  printf '%s' "${value,,}"
+}
+
 explicit_host=""
 force_window=0
 while (( $# > 0 )); do
@@ -50,7 +56,8 @@ if [[ -n "$explicit_host" ]] &&
   fail "invalid host alias: $explicit_host"
 fi
 
-if [[ "${explicit_host,,}" == "sindri" ]] &&
+explicit_host_key="$(ascii_lower "$explicit_host")"
+if [[ "$explicit_host_key" == "sindri" ]] &&
   [[ "${OKP_QA_ALLOW_SINDRI:-0}" != "1" || "${OKP_QA_OPERATOR_GO:-0}" != "1" ]]; then
   fail "sindri requires explicit operator authorization"
 fi
@@ -84,7 +91,7 @@ fi
 
 declare -A seen_hosts=()
 for host in "${hosts[@]}"; do
-  host_key="${host,,}"
+  host_key="$(ascii_lower "$host")"
   [[ "$host" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$ ]] ||
     fail "invalid host alias in automatic list: $host"
   [[ "$host_key" != sindri || -n "$explicit_host" ]] ||
