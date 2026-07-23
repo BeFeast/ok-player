@@ -111,6 +111,25 @@ emits `candidate builds failing: gate <name> (<N> consecutive)` with reason code
 `candidate-builds-failing`. This explicit builder failure is ordered before the
 generic unpublished-main lag detail.
 
+Workflow conclusion is never delivery authority. Delivery exists only when the
+accepted `candidate.linux.json` `commit_sha` equals current `main`. The collector
+also retains successful scheduled and manual Linux Candidate runs. While the
+feed is behind, one completed green run after the first unpublished commit is a
+blocking `warning` with reason code `candidate-delivery-not-published`: recovery
+must dispatch again even though the workflow concluded successfully. Two or
+more green runs completed in the preceding two hours while the feed remains
+behind are a blocking failure with the same reason code, suitable for urgent
+notification and pausing new worker intake. This explicitly covers a successful
+`stale_generation` no-op: it is safe publication fencing, but it delivered
+nothing.
+
+An exact-current-`main` queued or in-progress run suppresses that early
+non-delivery failure while it remains inside the 90-minute active-run bound and
+the unpublished-main lag remains inside its configured threshold. It does not
+suppress an over-threshold lag, malformed evidence, a failed run query, or a
+builder failure streak. A successful workflow can clear the non-delivery signal
+only by advancing the accepted feed to current `main`.
+
 An unreachable, malformed, pending/rejected, partial, identity-incomplete,
 source-divergent, or over-SLA candidate fails with a specific reason. The
 checker only reads the rolling pointer; it never triggers a duplicate candidate
@@ -194,8 +213,9 @@ healthcheck.
 `okp-core` fixtures cover bounded main-CI settling, overdue pending CI,
 immediate completed CI failures, old accepted/equal, ancestor within SLA,
 ancestor beyond SLA, inactive workflow state, stale completed schedules while
-`main` has advanced, bounded exact-main candidate runs, stale or mismatched
-active runs, fresh non-ancestor, unaccepted, malformed,
+`main` has advanced, one and repeated green non-delivery attempts, bounded
+exact-main candidate runs that suppress early paging but not over-SLA lag,
+stale or mismatched active runs, fresh non-ancestor, unaccepted, malformed,
 missing-package-identity, and unreachable Linux candidate outcomes. Windows
 fixtures separately pin source-current and within-SLA passes, over-SLA and
 consecutive-gate failures, the no-history bootstrap warning, manifest/feed

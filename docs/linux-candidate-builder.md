@@ -357,6 +357,15 @@ more consecutive failures produce the distinct blocking reason
 from the newest failed run. This reason precedes stale delivery lag so a broken
 builder is not reported merely as an old candidate.
 
+Completed `success` is not proof of delivery. The accepted rolling feed must
+name current `main`. If a successful run leaves that pointer behind, project
+health emits `candidate-delivery-not-published`; the first such run requires a
+recovery dispatch, and two green runs within two hours while the pointer remains
+behind make the outcome fail for urgent escalation. An exact-tip active run
+keeps that early escalation at warning severity only while publication lag is
+inside the normal threshold. The worker-floor watchdog admits no new work while
+the resulting project outcome is unhealthy.
+
 ## Native-hardware evidence
 
 `OKP_CANDIDATE_NATIVE_SMOKE` registers an optional native-hardware smoke whose

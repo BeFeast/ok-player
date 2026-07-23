@@ -25,6 +25,7 @@ SOURCE_SHA="$(jq -r '.source_sha' "$BUNDLE/candidate-build.json")"
 PROMOTED_SHA="$(cat "$STATE_DIR/last-promoted.sha" 2>/dev/null || true)"
 SHOULD_PUBLISH=false
 PUBLISH_RESULT=skipped
+DELIVERY_RESULT=already_delivered
 if [[ "$SOURCE_SHA" != "$PROMOTED_SHA" || "$FORCE_REPUBLISH" == "true" ]]; then
   SHOULD_PUBLISH=true
   OKP_CANDIDATE_PUBLISH_DECISION="$DECISION_OUTPUT" \
@@ -32,8 +33,14 @@ if [[ "$SOURCE_SHA" != "$PROMOTED_SHA" || "$FORCE_REPUBLISH" == "true" ]]; then
     "$BUNDLE" "$REPO" "$ACCEPTANCE"
   DECISION_REACHED=true
   case "$(jq -r '.outcome' "$DECISION_OUTPUT")" in
-    eligible) PUBLISH_RESULT=published ;;
-    stale_generation) PUBLISH_RESULT=stale_generation ;;
+    eligible)
+      PUBLISH_RESULT=published
+      DELIVERY_RESULT=delivered
+      ;;
+    stale_generation)
+      PUBLISH_RESULT=stale_generation
+      DELIVERY_RESULT=non_delivery
+      ;;
     *) echo "candidate publisher returned invalid decision evidence" >&2; exit 1 ;;
   esac
 fi
@@ -45,6 +52,7 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     echo "acceptance=$ACCEPTANCE"
     echo "should_publish=$SHOULD_PUBLISH"
     echo "publish_result=$PUBLISH_RESULT"
+    echo "delivery_result=$DELIVERY_RESULT"
     if [[ "$DECISION_REACHED" == "true" && -s "$DECISION_OUTPUT" ]]; then
       echo "requested_sha=$(jq -r '.requested_sha' "$DECISION_OUTPUT")"
       echo "build_sha=$(jq -r '.build_sha' "$DECISION_OUTPUT")"

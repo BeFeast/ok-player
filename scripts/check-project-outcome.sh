@@ -174,9 +174,11 @@ fi
 
 candidate_active_run='null'
 candidate_active_run_error=""
+candidate_successful_delivery_runs='[]'
+candidate_delivery_runs_error=""
 if candidate_runs="$(gh run list --repo "$repository" --branch main \
     --workflow "Linux Candidate" --limit 100 \
-    --json headSha,event,status,createdAt,url 2>/dev/null)"; then
+    --json headSha,event,status,conclusion,createdAt,updatedAt,url 2>/dev/null)"; then
   if ! candidate_active_run="$(jq -c --arg main_sha "$main_sha" '
       if type != "array" then error("not an array")
       else [
@@ -190,8 +192,21 @@ if candidate_runs="$(gh run list --repo "$repository" --branch main \
     candidate_active_run='null'
     candidate_active_run_error="GitHub Linux Candidate active run query returned malformed JSON"
   fi
+  if ! candidate_successful_delivery_runs="$(jq -c '
+      if type != "array" then error("not an array")
+      else [
+        .[]
+        | select((.event // "") == "schedule" or (.event // "") == "workflow_dispatch")
+        | select((.status // "") == "completed" and (.conclusion // "") == "success")
+      ]
+      end
+    ' <<<"$candidate_runs" 2>/dev/null)"; then
+    candidate_successful_delivery_runs='[]'
+    candidate_delivery_runs_error="GitHub Linux Candidate delivery run query returned malformed JSON"
+  fi
 else
   candidate_active_run_error="GitHub Linux Candidate active run query failed"
+  candidate_delivery_runs_error="GitHub Linux Candidate delivery run query failed"
 fi
 
 candidate_schedule_run='null'
@@ -435,6 +450,8 @@ jq -n \
   --arg candidate_schedule_error "$candidate_schedule_error" \
   --argjson candidate_active_run "$candidate_active_run" \
   --arg candidate_active_run_error "$candidate_active_run_error" \
+  --argjson candidate_successful_delivery_runs "$candidate_successful_delivery_runs" \
+  --arg candidate_delivery_runs_error "$candidate_delivery_runs_error" \
   --argjson candidate_consecutive_failed_runs "$candidate_consecutive_failed_runs" \
   --arg candidate_last_failed_gate "$candidate_last_failed_gate" \
   --arg candidate_sha "$candidate_sha" \
@@ -516,6 +533,18 @@ jq -n \
           end
         ),
         active_run_error: (if $candidate_active_run_error == "" then null else $candidate_active_run_error end),
+        successful_delivery_runs: [
+          $candidate_successful_delivery_runs[]
+          | {
+              head_sha: (.headSha // ""),
+              event: (.event // ""),
+              status: (.status // ""),
+              conclusion: (.conclusion // ""),
+              completed_at_utc: (.updatedAt // ""),
+              url: (.url // "")
+            }
+        ],
+        delivery_runs_error: (if $candidate_delivery_runs_error == "" then null else $candidate_delivery_runs_error end),
         consecutive_failed_runs: $candidate_consecutive_failed_runs,
         last_failed_gate: (if $candidate_last_failed_gate == "" then null else $candidate_last_failed_gate end)
       },

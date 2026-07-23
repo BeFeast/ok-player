@@ -51,6 +51,23 @@ fn linux_manual_dispatch_republish_contract_is_unchanged() {
 }
 
 #[test]
+fn linux_stale_generation_is_reported_as_successful_nondelivery() {
+    let workflow = workflow("release-linux-candidate.yml");
+    let runner =
+        fs::read_to_string(repository_root().join("scripts/run-linux-candidate-workflow.sh"))
+            .expect("read Linux candidate workflow runner");
+
+    assert!(runner.contains("DELIVERY_RESULT=non_delivery"));
+    assert!(runner.contains("echo \"delivery_result=$DELIVERY_RESULT\""));
+    assert!(
+        workflow.contains("delivery_result=\"${{ steps.candidate.outputs.delivery_result }}\"")
+    );
+    assert!(workflow.contains("delivery classification: \\`${delivery_result}\\`"));
+    assert!(workflow.contains("stable public feed: untouched"));
+    assert!(!workflow.contains("- public feed: untouched"));
+}
+
+#[test]
 fn windows_automatic_delivery_starts_on_main_and_coalesces_before_build_setup() {
     let workflow = workflow("release-windows-candidate.yml");
     let checkout = position(&workflow, "- uses: actions/checkout@v4");

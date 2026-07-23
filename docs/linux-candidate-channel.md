@@ -131,6 +131,11 @@ reason. It does not create a release, upload or delete an asset, move
 whose requested SHA matches the already-built current bundle may publish that
 same verified generation without rebuilding it.
 
+The workflow handoff summary labels this result `delivery classification:
+non_delivery`. Its separate `stable public feed: untouched` line describes the
+permanent public update lane and must never be interpreted as evidence that the
+rolling candidate pointer advanced.
+
 A headless gate failure remains fail-safe. Workflow-dispatch run `29639207396`
 failed on source `50495469570dd31129581b158678d33fb22a574d` before promotion,
 while the immediately following scheduled run `29639587120` built the same
@@ -157,6 +162,13 @@ age remains a non-blocking release-cadence diagnostic; it cannot override a
 healthy rolling QA delivery signal. See
 [`project-outcome-health.md`](project-outcome-health.md) for the precise bound
 and safe post-merge cutover.
+
+The accepted pointer, not a workflow conclusion, is the delivery authority.
+One green run that leaves the pointer behind requests recovery; two green runs
+within two hours while it is still behind fail health. A current-tip active run
+suppresses that early failure only until the unpublished-main lag threshold.
+Thus a successful `stale_generation` remains a correct no-op for publication
+safety and a non-delivery for hands-off recovery.
 
 The operator procedure and cleanup evidence contract for those installed updates are in
 [`linux-candidate-upgrade-acceptance.md`](linux-candidate-upgrade-acceptance.md).
