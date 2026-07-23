@@ -28,10 +28,16 @@ and object claims such as `{"issue_number": 123}` are both supported for queue
 exclusion. Automatic reconciliation requires the object claim to provide
 `issue_number`, `pr_number`, and `session`; it never derives an issue or session
 identity from a runtime suffix. The PR query is the merge authority. An already
-closed issue is a successful no-op, while the exact claimed Maestro session is
-still stopped and removed; a session already absent from Maestro is also a
-successful no-op. The spawn command remains the final claim authority if
-another scheduler wins the small race after the last snapshot.
+merged PR must also link the claimed issue in the configured repository through
+GitHub closing metadata or an exact `Refs #NNN`, `Fixes #NNN`, `Closes #NNN`,
+or `Resolves #NNN` body line.
+Conflicting issue/PR identities for one session fail closed. Malformed optional
+claim metadata stays valid queue-exclusion evidence but is omitted from
+automatic reconciliation. An already closed issue is a successful no-op, while
+the exact claimed Maestro session is still stopped and removed; a session
+already absent from Maestro is also a successful no-op. The spawn command
+remains the final claim authority if another scheduler wins the small race
+after the last snapshot.
 
 ## Required environment
 

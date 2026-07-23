@@ -149,12 +149,7 @@ refresh_project_snapshot() {
         type == "number" and . > 0 and . == floor;
       def valid_claim:
         (type == "number" and positive_integer)
-        or (type == "object"
-          and ((.issue_number // .issue) | positive_integer)
-          and ((.session == null) or (.session | type == "string" and length > 0))
-          and ((.pr_number == null) or (.pr_number | positive_integer))
-          and ((.kind == null) or (.kind | type == "string"))
-          and ((.status == null) or (.status | type == "string")));
+        or (type == "object" and ((.issue_number // .issue) | positive_integer));
 
       if type != "object" or (.projects | type) != "array" then
         error("fleet response must contain a projects array")
@@ -197,22 +192,75 @@ reconciled_merged_claims=0
 reconcile_merged_issue_claims() {
   local issue_number pr_number session issue_state stop_output
 
+  if ! jq -e '
+      def positive_integer:
+        type == "number" and . > 0 and . == floor;
+      def reconciliation_candidate:
+        type == "object"
+        and (.issue_number | positive_integer)
+        and (.pr_number | positive_integer)
+        and (.session | type == "string" and length > 0)
+        and ((.kind == null) or (.kind | type == "string"))
+        and ((.status == null) or (.status | type == "string"));
+
+      [(.issue_claims // [])[] | select(reconciliation_candidate)]
+      | group_by(.session)
+      | all(.[]; ([.[] | [.issue_number, .pr_number]] | unique | length) == 1)
+    ' "$project_file" >/dev/null; then
+    fail "project snapshot contains conflicting claims for one Maestro session"
+  fi
+
   while IFS=$'\t' read -r issue_number pr_number session; do
     [[ -n "$issue_number" && -n "$pr_number" && -n "$session" ]] || continue
 
-    if ! gh --repo "$repository" pr view "$pr_number" --json state,mergedAt >"$pr_file"; then
+    if ! gh --repo "$repository" pr view "$pr_number" \
+        --json state,mergedAt,body,closingIssuesReferences >"$pr_file"; then
       fail "could not inspect PR #$pr_number for issue #$issue_number"
     fi
     if ! jq -e '
+        def positive_integer:
+          type == "number" and . > 0 and . == floor;
         type == "object"
         and (.state | type == "string")
         and ((.mergedAt == null) or (.mergedAt | type == "string"))
+        and (.body | type == "string")
+        and (.closingIssuesReferences | type == "array")
+        and all(.closingIssuesReferences[];
+          type == "object"
+          and (.number | positive_integer)
+          and (.repository | type == "object")
+          and (.repository.name | type == "string" and length > 0)
+          and (.repository.owner | type == "object")
+          and (.repository.owner.login | type == "string" and length > 0))
       ' "$pr_file" >/dev/null; then
       fail "PR #$pr_number returned malformed merge evidence"
     fi
     if ! jq -e '.state == "MERGED" and (.mergedAt | type == "string" and length > 0)' \
         "$pr_file" >/dev/null; then
       continue
+    fi
+    if ! jq -e --arg repository "$repository" --argjson issue "$issue_number" '
+        def normalized_lines:
+          .body
+          | split("\n")
+          | map(gsub("^\\s+|\\s+$"; "") | ascii_downcase);
+        def normalized_repository:
+          split("/")
+          | if length >= 2 then .[-2:] | join("/") else . end
+          | ascii_downcase;
+        ($issue | tostring) as $number
+        | ($repository | normalized_repository) as $target_repository
+        | any(.closingIssuesReferences[];
+            .number == $issue
+            and (((.repository.owner.login + "/" + .repository.name) | ascii_downcase)
+              == $target_repository))
+          or (normalized_lines | any(.[];
+            . == ("refs #" + $number)
+            or . == ("fixes #" + $number)
+            or . == ("closes #" + $number)
+            or . == ("resolves #" + $number)))
+      ' "$pr_file" >/dev/null; then
+      fail "PR #$pr_number does not link claimed issue #$issue_number"
     fi
 
     if ! gh --repo "$repository" issue view "$issue_number" --json state >"$issue_file"; then
@@ -246,8 +294,10 @@ reconcile_merged_issue_claims() {
           type == "object"
           and (.issue_number | type == "number" and . > 0 and . == floor)
           and (.pr_number | type == "number" and . > 0 and . == floor)
-          and (.session | type == "string" and length > 0)))
-      | unique_by(.session)
+          and (.session | type == "string" and length > 0)
+          and ((.kind == null) or (.kind | type == "string"))
+          and ((.status == null) or (.status | type == "string"))))
+      | unique_by([.issue_number, .pr_number, .session])
       | sort_by(.issue_number, .pr_number, .session)
       | .[]
       | [.issue_number, .pr_number, .session]
