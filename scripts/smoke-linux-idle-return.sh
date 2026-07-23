@@ -14,7 +14,7 @@ if [[ "$BINARY" == */* ]]; then
 fi
 OUT_DIR="$(realpath -m "$OUT_DIR")"
 
-for tool in xvfb-run dbus-run-session gdbus xfwm4 xdotool xwininfo import magick ffmpeg python3 realpath rg; do
+for tool in xvfb-run dbus-run-session gdbus xfwm4 xdotool xwininfo import magick ffmpeg python3 pgrep ps realpath rg setsid; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "Missing required tool: $tool" >&2
     exit 127
@@ -119,9 +119,16 @@ chmod +x "$fake_bin/ffmpeg"
 xfwm4 --sm-client-disable >"$OUT_DIR/xfwm4.log" 2>&1 &
 wm_pid=$!
 app_pid=""
+app_pgid=""
 
 cleanup() {
-  [[ -n "$app_pid" ]] && kill "$app_pid" 2>/dev/null || true
+  if [[ -n "$app_pgid" ]]; then
+    kill -TERM -- "-$app_pgid" 2>/dev/null || true
+    kill -KILL -- "-$app_pgid" 2>/dev/null || true
+  elif [[ -n "$app_pid" ]]; then
+    kill -KILL "$app_pid" 2>/dev/null || true
+  fi
+  [[ -n "$app_pid" ]] && wait "$app_pid" 2>/dev/null || true
   kill "$wm_pid" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -228,51 +235,124 @@ probe_log_marker() {
 wait_for_log_marker() {
   local marker="$1" log_name="$2" label="$3"
   local attempts="${4:-180}"
+  local probe_status=0
   if probe_log_marker "$marker" "$log_name" "$label" "$attempts"; then
     return
+  else
+    probe_status=$?
   fi
-  echo "$label did not reach marker: $marker" >&2
+  if (( probe_status == 2 )); then
+    echo "$label process exited before marker: $marker" >&2
+  else
+    echo "$label did not reach marker: $marker" >&2
+  fi
   cat "$OUT_DIR/$log_name.log" >&2 || true
-  return 1
+  return "$probe_status"
 }
 
 launch_fixture() {
   local log_name="$1"
-  OKP_DEBUG_IDLE_RETURN_SMOKE=1 \
+  setsid env OKP_DEBUG_IDLE_RETURN_SMOKE=1 \
     "$BINARY" "$FIXTURE" >"$OUT_DIR/$log_name.log" 2>&1 &
   app_pid=$!
+  app_pgid="$app_pid"
   window_id="$(wait_for_window)"
 }
 
 launch_empty() {
   local log_name="$1"
-  "$BINARY" >"$OUT_DIR/$log_name.log" 2>&1 &
+  setsid "$BINARY" >"$OUT_DIR/$log_name.log" 2>&1 &
   app_pid=$!
+  app_pgid="$app_pid"
   window_id="$(wait_for_window)"
+}
+
+process_group_has_live_members() {
+  local pgid="$1" pids="" status=0 pid="" process_state=""
+  pids="$(pgrep -g "$pgid")" || status=$?
+  case "$status" in
+    0) ;;
+    1) return 1 ;;
+    *) return 2 ;;
+  esac
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] || continue
+    process_state="$(ps -o stat= -p "$pid" 2>/dev/null)" || return 2
+    if [[ "$process_state" != Z* ]]; then
+      return 0
+    fi
+  done <<<"$pids"
+  return 1
+}
+
+wait_for_process_group_gone() {
+  local pgid="$1" status=0
+  for _ in $(seq 1 50); do
+    status=0
+    pgrep -g "$pgid" >/dev/null 2>&1 || status=$?
+    case "$status" in
+      0) sleep 0.1 ;;
+      1) return ;;
+      *) return 2 ;;
+    esac
+  done
+  return 1
 }
 
 stop_app() {
   local stopped_pid="$app_pid"
+  local stopped_pgid="$app_pgid"
   local diagnostics="$OUT_DIR/stop-${stopped_pid}-x11-lifecycle.log"
   local timeout_marker="$OUT_DIR/stop-${stopped_pid}-shutdown-timeout"
-  local watchdog_pid=""
+  local timer_pid="" completed_pid="" group_status=0
+  local timed_out=false group_cleanup_failed=false
   local bus_state="unknown"
   rm -f -- "$timeout_marker"
   kill "$stopped_pid" 2>/dev/null || true
-  (
-    sleep "$STOP_TIMEOUT_SECONDS"
-    if kill -0 "$stopped_pid" 2>/dev/null; then
+  sleep "$STOP_TIMEOUT_SECONDS" &
+  timer_pid=$!
+  if wait -n -p completed_pid "$stopped_pid" "$timer_pid" 2>/dev/null; then
+    :
+  else
+    # TERM normally makes the player exit non-zero. The completed PID, rather
+    # than the child's status, identifies which side of the race finished.
+    :
+  fi
+  if [[ "$completed_pid" == "$timer_pid" ]]; then
+    group_status=0
+    process_group_has_live_members "$stopped_pgid" || group_status=$?
+    if (( group_status != 1 )); then
+      timed_out=true
       : >"$timeout_marker"
+      # Every candidate launch owns an isolated process group. Kill the whole
+      # group so a TERM-resistant poster decoder cannot outlive a timed-out GTK
+      # parent and retain the candidate gate's captured descriptors.
+      kill -KILL -- "-$stopped_pgid" 2>/dev/null || true
       kill -KILL "$stopped_pid" 2>/dev/null || true
     fi
-  ) &
-  watchdog_pid=$!
-  wait "$stopped_pid" 2>/dev/null || true
-  kill "$watchdog_pid" 2>/dev/null || true
-  wait "$watchdog_pid" 2>/dev/null || true
+    wait "$stopped_pid" 2>/dev/null || true
+  else
+    # The timer is the actual `sleep` process, so cancelling and reaping this
+    # PID cannot leave an orphan retaining the smoke's captured descriptors.
+    kill "$timer_pid" 2>/dev/null || true
+    wait "$timer_pid" 2>/dev/null || true
+  fi
+  if ! wait_for_process_group_gone "$stopped_pgid"; then
+    kill -KILL -- "-$stopped_pgid" 2>/dev/null || true
+    if ! wait_for_process_group_gone "$stopped_pgid"; then
+      group_cleanup_failed=true
+    fi
+  fi
   app_pid=""
-  if [[ -e "$timeout_marker" ]]; then
+  if [[ "$group_cleanup_failed" == false ]]; then
+    app_pgid=""
+  fi
+  if [[ "$timed_out" == true ]]; then
     echo "OK Player PID $stopped_pid did not exit within ${STOP_TIMEOUT_SECONDS}s after TERM" >&2
+    exit 1
+  fi
+  if [[ "$group_cleanup_failed" == true ]]; then
+    echo "OK Player process group $stopped_pgid remained after shutdown" >&2
     exit 1
   fi
   # The next launch uses the same GApplication ID and X11 title. Prove that
@@ -366,7 +446,7 @@ launch_residual() {
 }
 JSON
   rm -f "$pid_file"
-  env -u OKP_DISABLE_MPRIS \
+  setsid env -u OKP_DISABLE_MPRIS \
     PATH="$fake_bin:$PATH" \
     OKP_POSTER_SMOKE_PID_FILE="$pid_file" \
     OKP_DEBUG_IDLE_RETURN_SMOKE=1 \
@@ -376,6 +456,7 @@ JSON
     XDG_CACHE_HOME="$cache" \
     "$BINARY" >"$OUT_DIR/residual-app.log" 2>&1 &
   app_pid=$!
+  app_pgid="$app_pid"
   window_id="$(wait_for_window)"
 }
 
