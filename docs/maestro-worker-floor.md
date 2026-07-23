@@ -10,19 +10,28 @@ On each invocation the watchdog:
 1. takes a non-blocking project lock;
 2. inspects the configured QA-hold issues and removes `ok-player-ready` from
    every hold that is still open;
-3. requires exactly one matching fleet project with `paused=false`,
+3. inspects object-form Maestro issue claims that name an exact session and PR,
+   confirms merge state with GitHub, closes the linked issue when needed, and
+   stops the claimed session;
+4. refreshes the fleet snapshot after any merged-session cleanup, then requires
+   exactly one matching project with `paused=false`,
    `outcome.health_state=healthy`, and `live_workers=0`;
-4. orders open `ok-player-ready` issues by `createdAt` and issue number, then
+5. orders open `ok-player-ready` issues by `createdAt` and issue number, then
    skips `blocked`, active QA-hold, and already claimed issues;
-5. rechecks the selected issue and the fleet snapshot;
-6. quarantines allowlisted agent-junk roots from the canonical `main` checkout
+6. rechecks the selected issue and the fleet snapshot;
+7. quarantines allowlisted agent-junk roots from the canonical `main` checkout
    and refuses to continue if any other dirty state remains; and
-7. calls `maestro spawn` once for the oldest remaining issue.
+8. calls `maestro spawn` once for the oldest remaining issue.
 
 Missing, duplicate, or malformed evidence fails closed. Numeric Maestro claims
-and object claims such as `{"issue_number": 123}` are both supported. The
-spawn command remains the final claim authority if another scheduler wins the
-small race after the last snapshot.
+and object claims such as `{"issue_number": 123}` are both supported for queue
+exclusion. Automatic reconciliation requires the object claim to provide
+`issue_number`, `pr_number`, and `session`; it never derives an issue or session
+identity from a runtime suffix. The PR query is the merge authority. An already
+closed issue is a successful no-op, while the exact claimed Maestro session is
+still stopped and removed; a session already absent from Maestro is also a
+successful no-op. The spawn command remains the final claim authority if
+another scheduler wins the small race after the last snapshot.
 
 ## Required environment
 
@@ -62,9 +71,10 @@ Operators can override these with the corresponding
 `OKP_WORKER_FLOOR_ISSUE_LIMIT` variables. Issue and root lists accept spaces or
 commas. `OKP_WORKER_FLOOR_MAESTRO_BIN` may select a pinned Maestro executable.
 
-QA-hold cleanup deliberately runs before the health, pause, and worker-count
-gates. A project pause stops worker selection and spawning, but it does not
-leave a live-acceptance issue advertised as ready for implementation.
+QA-hold and merged-session cleanup deliberately run before the health, pause,
+and worker-count gates. A project pause stops worker selection and spawning,
+but it does not leave a live-acceptance issue advertised as ready for
+implementation or preserve a stale claim after its PR has merged.
 
 ## Dirty-checkout quarantine
 
@@ -112,6 +122,7 @@ exits `1`; invalid prerequisites, malformed evidence, or unsafe checkout state
 exit `2` so the service remains visibly failed.
 
 The watchdog does not change Greptile or merge policy, project concurrency, or
-`max_parallel`. Its only GitHub mutation is removal of the ready label from an
-active QA hold, followed by the separately authorized Maestro spawn when every
-gate passes.
+`max_parallel`. Its GitHub mutations are limited to removing the ready label
+from an active QA hold and closing an issue whose claimed PR is authoritatively
+merged. Its Maestro mutations are stopping that exact claimed session and the
+separately authorized spawn when every gate passes.
