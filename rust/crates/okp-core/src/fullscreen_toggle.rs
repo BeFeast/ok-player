@@ -28,6 +28,7 @@ pub enum FullscreenAction {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct FullscreenToggle {
     intended: bool,
+    acknowledged: bool,
 }
 
 impl FullscreenToggle {
@@ -35,6 +36,7 @@ impl FullscreenToggle {
     pub fn new(is_fullscreen: bool) -> Self {
         Self {
             intended: is_fullscreen,
+            acknowledged: is_fullscreen,
         }
     }
 
@@ -42,12 +44,22 @@ impl FullscreenToggle {
     /// never consults a possibly-stale platform read, so two toggles issued
     /// faster than a compositor round-trip still alternate Enter/Leave.
     pub fn toggle(&mut self) -> FullscreenAction {
-        self.intended = !self.intended;
+        self.request(!self.intended);
         if self.intended {
             FullscreenAction::Enter
         } else {
             FullscreenAction::Leave
         }
+    }
+
+    /// Record an explicit platform request without treating it as settled.
+    ///
+    /// Shell paths that enter or leave fullscreen without calling [`Self::toggle`]
+    /// use this before invoking the platform window operation. Native child
+    /// surfaces can then hold transition-time allocations until the compositor
+    /// acknowledges the requested state.
+    pub fn request(&mut self, is_fullscreen: bool) {
+        self.intended = is_fullscreen;
     }
 
     /// Reconcile with the compositor's authoritative fullscreen state. Called
@@ -56,11 +68,17 @@ impl FullscreenToggle {
     /// shortcut) leaves the next toggle pointing the right way.
     pub fn observe(&mut self, is_fullscreen: bool) {
         self.intended = is_fullscreen;
+        self.acknowledged = is_fullscreen;
     }
 
     /// The fullscreen state the user most recently asked for.
     pub fn intended(&self) -> bool {
         self.intended
+    }
+
+    /// Whether the compositor has acknowledged the latest requested state.
+    pub fn transition_pending(&self) -> bool {
+        self.intended != self.acknowledged
     }
 }
 
@@ -93,8 +111,10 @@ mod tests {
         // identical Enter requests that would drop the second toggle.
         let mut toggle = FullscreenToggle::new(false);
         assert_eq!(toggle.toggle(), FullscreenAction::Enter);
+        assert!(toggle.transition_pending());
         assert_eq!(toggle.toggle(), FullscreenAction::Leave);
         assert!(!toggle.intended());
+        assert!(!toggle.transition_pending());
     }
 
     #[test]
@@ -125,9 +145,26 @@ mod tests {
         // re-enter rather than issue a redundant leave.
         let mut toggle = FullscreenToggle::new(false);
         assert_eq!(toggle.toggle(), FullscreenAction::Enter);
+        assert!(toggle.transition_pending());
         toggle.observe(false);
         assert!(!toggle.intended());
+        assert!(!toggle.transition_pending());
         assert_eq!(toggle.toggle(), FullscreenAction::Enter);
+    }
+
+    #[test]
+    fn explicit_leave_stays_pending_until_the_compositor_acknowledges_it() {
+        let mut toggle = FullscreenToggle::new(true);
+
+        // Screenshot completion and its transient toast do not touch this
+        // policy. The only geometry boundary is the explicit fullscreen exit
+        // followed by the compositor acknowledgement.
+        toggle.request(false);
+        assert!(!toggle.intended());
+        assert!(toggle.transition_pending());
+
+        toggle.observe(false);
+        assert!(!toggle.transition_pending());
     }
 
     #[test]

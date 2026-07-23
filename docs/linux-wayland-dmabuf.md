@@ -79,6 +79,23 @@ evidence schema retains presented and discarded counts, physical geometry,
 and the steady-window median, p95, and p99 presentation intervals. Local
 render callbacks and `eglSwapBuffers` submissions are not acceptance presents.
 
+Set `OKP_DEBUG_WINDOW_FIT=1` for fullscreen geometry acceptance. Each
+fullscreen request and compositor `fullscreened` acknowledgement logs the GTK
+toplevel bounds together with the requested and applied native surface,
+subsurface, and buffer bounds. The render thread separately logs the exact
+Wayland surface/subsurface resize after it is applied. Transition-time GTK
+allocations are intentionally held; the acknowledgement line is the boundary
+that requests the new native geometry and forces a frame. Logs contain only
+state labels and numeric geometry.
+
+For the screenshot/fullscreen regression, live GNOME/Wayland acceptance runs
+at least 20 fullscreen → save screenshot → exit cycles split between Escape
+and double-click. Run the packaged native path and the supported
+`OKP_VIDEO_BACKEND=gtk` fallback. After every native cycle, the acknowledged
+GTK/video-host bounds and the following applied surface/subsurface bounds must
+agree and remain within one monitor workarea; the fallback run must restore one
+coherent GTK/libmpv window with no native child plane.
+
 `scripts/run-linux-wayland-presentation.sh` also launches the native backend in
 Mini-player geometry. That row requires the compact command to settle at the
 canonical 480×270 size and the child video surface to keep receiving

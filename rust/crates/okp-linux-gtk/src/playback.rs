@@ -747,7 +747,8 @@ pub(crate) fn toggle_fullscreen(window: &gtk::ApplicationWindow, state: &Rc<RefC
         // Compact mode is never itself fullscreen, so leaving it always resolves
         // to entering fullscreen. Record the intent now and defer the request
         // until the restored chrome has laid out.
-        state.borrow_mut().fullscreen_toggle.observe(true);
+        state.borrow_mut().fullscreen_toggle.request(true);
+        log_fullscreen_video_geometry(window, state, "fullscreen-request-enter-compact");
         let window = window.clone();
         glib::idle_add_local_once(move || window.fullscreen());
         return;
@@ -755,7 +756,16 @@ pub(crate) fn toggle_fullscreen(window: &gtk::ApplicationWindow, state: &Rc<RefC
     // Decide from the eagerly-flipped intent, not the compositor's lagging
     // `is_fullscreen`, so a rapid second toggle still alternates instead of
     // repeating the previous request. See [`fullscreen_toggle`].
-    match state.borrow_mut().fullscreen_toggle.toggle() {
+    let action = state.borrow_mut().fullscreen_toggle.toggle();
+    log_fullscreen_video_geometry(
+        window,
+        state,
+        match action {
+            fullscreen_toggle::FullscreenAction::Enter => "fullscreen-request-enter",
+            fullscreen_toggle::FullscreenAction::Leave => "fullscreen-request-leave",
+        },
+    );
+    match action {
         fullscreen_toggle::FullscreenAction::Enter => window.fullscreen(),
         fullscreen_toggle::FullscreenAction::Leave => window.unfullscreen(),
     }

@@ -303,9 +303,35 @@ fn start_event_pump_for_session(mpv: &mut Mpv) {
 
 pub(crate) fn connect_mpv(
     video_host: &VideoHost,
+    window: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
     startup_launch: StartupLaunchGate,
 ) {
+    let fullscreen_area = match video_host {
+        VideoHost::Native { area, .. } => Some(area.clone()),
+        VideoHost::Gtk(_) | VideoHost::Software(_) => None,
+    };
+    let fullscreen_state = Rc::clone(&state);
+    window.connect_notify_local(Some("fullscreened"), move |window, _| {
+        let is_fullscreen = window.is_fullscreen();
+        fullscreen_state
+            .borrow_mut()
+            .fullscreen_toggle
+            .observe(is_fullscreen);
+        if let Some(area) = fullscreen_area.as_ref() {
+            sync_native_video_geometry(area, &fullscreen_state, true);
+        }
+        log_fullscreen_video_geometry(
+            window,
+            &fullscreen_state,
+            if is_fullscreen {
+                "fullscreen-ack-enter"
+            } else {
+                "fullscreen-ack-leave"
+            },
+        );
+    });
+
     match video_host {
         VideoHost::Native {
             area,
@@ -495,29 +521,15 @@ fn connect_native_mpv(
             let scale_state = Rc::clone(&realize_state);
             let scale_area = area.clone();
             surface.connect_notify_local(Some("scale"), move |_, _| {
-                let state = scale_state.borrow();
-                if let Some(plane) = state.native_video_plane.as_ref() {
-                    plane.resize(
-                        scale_area.width(),
-                        scale_area.height(),
-                        native_surface_scale(&scale_area),
+                if scale_state.borrow().fullscreen_toggle.transition_pending() {
+                    log_fullscreen_video_geometry_from_area(
+                        &scale_area,
+                        &scale_state,
+                        "scale-held-for-fullscreen-ack",
                     );
+                    return;
                 }
-                if let Some(mpv) = state.mpv.as_ref() {
-                    let size = native_render_size(
-                        scale_area.width(),
-                        scale_area.height(),
-                        native_surface_scale(&scale_area),
-                    );
-                    if let Err(error) =
-                        mpv.set_wayland_dmabuf_geometry(size, wayland_scale_units(&scale_area))
-                    {
-                        eprintln!("Failed to update the embedded Wayland video scale: {error}");
-                    }
-                }
-                if let Some(render_loop) = state.native_render_loop.as_ref() {
-                    render_loop.request_render();
-                }
+                sync_native_video_geometry(&scale_area, &scale_state, true);
             });
         }
         schedule_audio_device_restore(&realize_state);
@@ -528,16 +540,16 @@ fn connect_native_mpv(
 
     let resize_state = Rc::clone(&state);
     video_area.connect_resize(move |area, width, height| {
-        let state = resize_state.borrow();
-        if let Some(plane) = state.native_video_plane.as_ref() {
-            plane.resize(width, height, native_surface_scale(area));
+        if resize_state.borrow().fullscreen_toggle.transition_pending() {
+            log_fullscreen_video_geometry_from_area(
+                area,
+                &resize_state,
+                "resize-held-for-fullscreen-ack",
+            );
+            return;
         }
-        if let Some(mpv) = state.mpv.as_ref() {
-            let size = native_render_size(width, height, native_surface_scale(area));
-            if let Err(error) = mpv.set_wayland_dmabuf_geometry(size, wayland_scale_units(area)) {
-                eprintln!("Failed to resize the embedded Wayland video surface: {error}");
-            }
-        }
+        debug_assert_eq!((width, height), (area.width(), area.height()));
+        sync_native_video_geometry(area, &resize_state, true);
     });
 
     let unrealize_state = Rc::clone(&state);
@@ -578,6 +590,86 @@ fn connect_native_mpv(
         }
         state.native_video_plane = None;
     });
+}
+
+fn sync_native_video_geometry(
+    area: &gtk::DrawingArea,
+    state: &Rc<RefCell<PlayerState>>,
+    force_render: bool,
+) {
+    let width = area.width().max(1);
+    let height = area.height().max(1);
+    let scale = native_surface_scale(area);
+    let render_size = native_render_size(width, height, scale);
+    let state = state.borrow();
+    let Some(plane) = state.native_video_plane.as_ref() else {
+        return;
+    };
+    plane.resize(width, height, scale);
+    if let Some(mpv) = state.mpv.as_ref()
+        && let Err(error) = mpv.set_wayland_dmabuf_geometry(render_size, wayland_scale_units(area))
+    {
+        eprintln!("Failed to resize the embedded Wayland video surface: {error}");
+    }
+    if force_render && let Some(render_loop) = state.native_render_loop.as_ref() {
+        render_loop.request_render();
+    }
+}
+
+pub(crate) fn log_fullscreen_video_geometry(
+    window: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
+    boundary: &str,
+) {
+    if env::var_os("OKP_DEBUG_WINDOW_FIT").is_none() {
+        return;
+    }
+    let state = state.borrow();
+    let Some(geometry) = state
+        .native_video_plane
+        .as_ref()
+        .map(|plane| plane.geometry_snapshot())
+    else {
+        eprintln!(
+            "fullscreen geometry: boundary={boundary} fullscreen={} toplevel={}x{} native=unavailable",
+            window.is_fullscreen(),
+            window.width().max(1),
+            window.height().max(1),
+        );
+        return;
+    };
+    eprintln!(
+        "fullscreen geometry: boundary={boundary} fullscreen={} toplevel={}x{} native_surface_requested={}x{}+0,0 native_subsurface_requested={}x{}+0,0 native_buffer_requested={}x{} native_surface_applied={}x{}+0,0 native_subsurface_applied={}x{}+0,0 native_buffer_applied={}x{}",
+        window.is_fullscreen(),
+        window.width().max(1),
+        window.height().max(1),
+        geometry.requested_width,
+        geometry.requested_height,
+        geometry.requested_width,
+        geometry.requested_height,
+        geometry.requested_buffer_width,
+        geometry.requested_buffer_height,
+        geometry.applied_width,
+        geometry.applied_height,
+        geometry.applied_width,
+        geometry.applied_height,
+        geometry.applied_buffer_width,
+        geometry.applied_buffer_height,
+    );
+}
+
+fn log_fullscreen_video_geometry_from_area(
+    area: &gtk::DrawingArea,
+    state: &Rc<RefCell<PlayerState>>,
+    boundary: &str,
+) {
+    let Some(window) = area
+        .root()
+        .and_then(|root| root.downcast::<gtk::ApplicationWindow>().ok())
+    else {
+        return;
+    };
+    log_fullscreen_video_geometry(&window, state, boundary);
 }
 
 fn schedule_gtk_mpv_fallback(

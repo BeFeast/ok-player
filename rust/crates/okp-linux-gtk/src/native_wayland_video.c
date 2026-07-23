@@ -551,4 +551,12 @@ void okp_wayland_video_plane_resize(struct okp_wayland_video_plane *plane, int w
     wl_egl_window_resize(
         plane->egl_window, plane->buffer_width, plane->buffer_height, 0, 0);
     set_regions(plane);
+    if (getenv("OKP_DEBUG_WINDOW_FIT") != NULL) {
+        fprintf(stderr,
+                "native video geometry applied: surface=%dx%d+0,0 "
+                "subsurface=%dx%d+0,0 buffer=%dx%d\n",
+                plane->logical_width, plane->logical_height,
+                plane->logical_width, plane->logical_height,
+                plane->buffer_width, plane->buffer_height);
+    }
 }

@@ -334,6 +334,12 @@ impl CompactMode {
         };
         self.normal_state.borrow_mut().replace(normal_state);
         if self.window.is_fullscreen() {
+            self.state.borrow_mut().fullscreen_toggle.request(false);
+            log_fullscreen_video_geometry(
+                &self.window,
+                &self.state,
+                "fullscreen-request-leave-compact",
+            );
             self.window.unfullscreen();
         }
         if self.window.is_maximized() {
