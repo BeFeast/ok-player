@@ -65,6 +65,8 @@ fn main_window_fit_session_has_one_multiscreen_manager_and_two_supervisors() {
         .expect("main-window close helper");
     assert!(close.contains("route=ewmh-close-window"));
     assert!(close.contains("\"$X11_CLOSE_REQUEST\" \"$window_id\""));
+    assert!(close.contains("result=already-gone"));
+    assert!(close.contains("if ! xdotool getwindowgeometry \"$window_id\""));
     assert!(!close.contains("xdotool key"));
     assert!(!close.contains("xdotool click"));
     assert!(!close.contains("xdotool windowclose"));
@@ -78,6 +80,71 @@ fn main_window_fit_session_has_one_multiscreen_manager_and_two_supervisors() {
     assert!(close_request.contains("RootWindowOfScreen(attributes.screen)"));
     assert!(close_request.contains("SubstructureRedirectMask | SubstructureNotifyMask"));
     assert!(close_request.contains("XSendEvent"));
+}
+
+#[test]
+fn main_window_close_accepts_only_an_already_gone_retry_failure() {
+    let script = include_str!("../../../../scripts/smoke-linux-main-window.sh");
+    let close = script
+        .split_once("close_app() {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nquit_app()"))
+        .map(|(body, _)| format!("close_app() {{{body}\n}}"))
+        .expect("main-window close helper");
+    let root = unique_temp_dir("okp-close-dispatch-race");
+    let probe = format!(
+        r#"set -euo pipefail
+{close}
+OUT_DIR={out}
+app_pid=123
+X11_CLOSE_REQUEST=send_close
+send_close() {{ return 1; }}
+xdotool() {{
+  [[ "$1" == "getwindowgeometry" ]] || return 2
+  return 1
+}}
+finish_app_shutdown() {{ printf 'finish=%s\n' "$1"; }}
+close_app 4194310
+"#,
+        out = root.path().display()
+    );
+    let output = Command::new("bash")
+        .args(["-c", &probe])
+        .output()
+        .expect("close race probe should run");
+    assert_success(&output);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "finish=last_window_close\n"
+    );
+
+    let rejection_probe = format!(
+        r#"set -euo pipefail
+{close}
+OUT_DIR={out}
+app_pid=123
+X11_CLOSE_REQUEST=send_close
+send_close() {{ return 1; }}
+xdotool() {{
+  [[ "$1" == "getwindowgeometry" ]] || return 2
+  return 0
+}}
+finish_app_shutdown() {{ return 0; }}
+if close_app 4194310; then
+  exit 1
+fi
+printf 'live-window-failure=rejected\n'
+"#,
+        out = root.path().display()
+    );
+    let rejection = Command::new("bash")
+        .args(["-c", &rejection_probe])
+        .output()
+        .expect("live-window rejection probe should run");
+    assert_success(&rejection);
+    assert_eq!(
+        String::from_utf8_lossy(&rejection.stdout),
+        "live-window-failure=rejected\n"
+    );
 }
 
 #[test]
