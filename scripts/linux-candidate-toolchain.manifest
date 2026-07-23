@@ -41,7 +41,6 @@ command|sed|sed|sed
 command|sha256sum|sha256sum|coreutils
 command|sort|sort|coreutils
 command|strings|strings|binutils
-command|unshare|unshare|util-linux
 command|wayland-scanner|wayland-scanner|libwayland-bin
 command-or-dotnet-tool|vpk|vpk|dotnet-sdk-9.0
 pkg-config|alsa|alsa|libasound2-dev

@@ -379,8 +379,15 @@ fn workflow_and_operator_guide_consume_the_canonical_manifest() {
     assert!(!verifier_call.contains("$root/usr/lib/ok-player/libmpv.so.2\""));
     assert!(install_smoke.contains("ADMINDIR=\"$INSTALL_ROOT/var/lib/dpkg\""));
     assert!(install_smoke.contains("unshare --user --map-root-user --mount --fork"));
+    assert!(install_smoke.contains("OKP_SMOKE_FORCE_CHROOTLESS_DPKG"));
+    assert!(install_smoke.contains("--force-not-root"));
+    assert!(install_smoke.contains("--force-script-chrootless"));
     assert!(install_smoke.contains("--force-depends"));
     assert!(install_smoke.contains("--purge ok-player"));
+
+    assert!(deb_package.matches("root=\"${DPKG_ROOT:-}\"").count() >= 2);
+    assert!(deb_package.contains("\"$root/usr/share/applications\""));
+    assert!(deb_package.contains("\"$root/usr/share/icons/hicolor\""));
 
     let candidate_builder = fs::read_to_string(root.join("scripts/build-linux-candidate.sh"))
         .expect("candidate builder");
