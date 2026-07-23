@@ -191,11 +191,12 @@ fn repeated_green_candidate_nondelivery_survives_live_collection() {
         .find(|line| {
             line.contains("run list")
                 && line.contains("--workflow Linux Candidate")
-                && !line.contains("--status completed")
+                && line.contains("--status success")
         })
-        .expect("bounded Linux Candidate history query");
+        .expect("bounded successful Linux Candidate history query");
     assert!(history_query.contains("--limit 100"), "{history_query}");
     assert!(history_query.contains("conclusion"), "{history_query}");
+    assert!(history_query.contains("createdAt"), "{history_query}");
     assert!(history_query.contains("updatedAt"), "{history_query}");
 }
 
@@ -759,6 +760,8 @@ if [[ "${1:-}" == run && "${2:-}" == list ]]; then
   arguments=" $* "
   completed_only=false
   [[ "$arguments" != *" --status completed "* ]] || completed_only=true
+  success_only=false
+  [[ "$arguments" != *" --status success "* ]] || success_only=true
   workflow=""
   event=""
   while (( $# > 0 )); do
@@ -777,7 +780,9 @@ if [[ "${1:-}" == run && "${2:-}" == list ]]; then
       if [[ "$OKP_STUB_FAIL" == schedule-stale || "$OKP_STUB_FAIL" == candidate-active ]]; then
         completed_at="2026-07-17T23:00:47Z"
       fi
-    if [[ "$OKP_STUB_FAIL" == candidate-failures ]]; then
+    if [[ "$OKP_STUB_FAIL" == candidate-failures && "$success_only" == true ]]; then
+      printf '%s\n' '[]'
+    elif [[ "$OKP_STUB_FAIL" == candidate-failures ]]; then
       printf '%s\n' '[
         {"databaseId":106,"headSha":"d5d531a58c830a01a7e25615e850593e9ff4493f","event":"schedule","status":"completed","conclusion":"failure","updatedAt":"2026-07-18T01:55:47Z","url":"https://example.invalid/run/106"},
         {"databaseId":105,"conclusion":"failure"},
@@ -787,18 +792,29 @@ if [[ "${1:-}" == run && "${2:-}" == list ]]; then
         {"databaseId":101,"conclusion":"failure"},
         {"databaseId":100,"conclusion":"success"}
       ]'
+    elif [[ "$OKP_STUB_FAIL" == candidate-active && "$success_only" == true ]]; then
+      printf '%s\n' '[
+        {"headSha":"9999999999999999999999999999999999999999","event":"workflow_dispatch","status":"completed","conclusion":"success","createdAt":"2026-07-17T23:00:47Z","updatedAt":"2026-07-18T00:00:47Z","url":"https://example.invalid/run/prior-green"}
+      ]'
     elif [[ "$OKP_STUB_FAIL" == candidate-active && "$completed_only" == false ]]; then
       printf '%s\n' '[
         {"headSha":"1111111111111111111111111111111111111111","event":"workflow_dispatch","status":"in_progress","createdAt":"2026-07-18T02:00:40Z","url":"https://example.invalid/run/active-candidate"},
         {"headSha":"1111111111111111111111111111111111111111","event":"schedule","status":"completed","createdAt":"2026-07-18T01:00:47Z","url":"https://example.invalid/run/candidate"}
       ]'
-    elif [[ "$OKP_STUB_FAIL" == candidate-green-nondelivery && "$completed_only" == false ]]; then
+    elif [[ "$OKP_STUB_FAIL" == candidate-green-nondelivery && "$success_only" == true ]]; then
       printf '%s\n' '[
         {"databaseId":402,"headSha":"4444444444444444444444444444444444444444","event":"schedule","status":"completed","conclusion":"success","createdAt":"2026-07-18T01:35:47Z","updatedAt":"2026-07-18T01:55:47Z","url":"https://example.invalid/run/second-green"},
-        {"databaseId":401,"headSha":"3333333333333333333333333333333333333333","event":"workflow_dispatch","status":"completed","conclusion":"success","createdAt":"2026-07-18T01:30:47Z","updatedAt":"2026-07-18T01:50:47Z","url":"https://example.invalid/run/first-green"}
+        {"databaseId":401,"headSha":"3333333333333333333333333333333333333333","event":"workflow_dispatch","status":"completed","conclusion":"success","createdAt":"2026-07-18T01:31:47Z","updatedAt":"2026-07-18T01:50:47Z","url":"https://example.invalid/run/first-green"}
       ]'
+    elif [[ "$OKP_STUB_FAIL" == candidate-green-nondelivery && "$completed_only" == false ]]; then
+      printf '['
+      for id in $(seq 1 100); do
+        (( id == 1 )) || printf ','
+        printf '{"databaseId":%s,"headSha":"9999999999999999999999999999999999999999","event":"workflow_dispatch","status":"in_progress","conclusion":"","createdAt":"2026-07-18T02:00:%02dZ","updatedAt":"2026-07-18T02:00:%02dZ"}' "$((500 + id))" "$((id % 60))" "$((id % 60))"
+      done
+      printf ']\n'
     else
-      printf '[{"databaseId":100,"headSha":"%s","event":"schedule","status":"completed","conclusion":"success","updatedAt":"%s","url":"https://example.invalid/run/candidate"}]\n' "$main_sha" "$completed_at"
+      printf '[{"databaseId":100,"headSha":"%s","event":"schedule","status":"completed","conclusion":"success","createdAt":"%s","updatedAt":"%s","url":"https://example.invalid/run/candidate"}]\n' "$main_sha" "$completed_at" "$completed_at"
     fi
   elif [[ "$workflow" == "Windows Candidate" ]]; then
     if [[ "$OKP_STUB_FAIL" == windows-candidate-failures ]]; then

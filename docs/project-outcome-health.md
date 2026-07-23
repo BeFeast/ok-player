@@ -106,13 +106,21 @@ candidate already equals `main`, because no new delivery is pending.
 
 Workflow conclusion is not delivery evidence. Delivery is complete only when
 the fetched `candidate.linux.json.commit_sha` equals the fetched `main` SHA.
-The collector retains the bounded 100-run Linux Candidate history. While the
-feed is behind, a scheduled/manual run counts as green non-delivery when it:
+The collector retains a server-filtered, bounded 100-run history of successful
+Linux Candidate runs, separate from the active-run query. Active and unrelated
+workflow states therefore cannot displace completed delivery attempts from the
+history window. While the feed is behind, a scheduled/manual run counts as
+green non-delivery when it:
 
-- completed with `conclusion=success` after both the current feed timestamp and
-  the first unpublished-main commit;
+- started after both the current feed timestamp and the first unpublished-main
+  commit;
+- completed with `conclusion=success` after it started;
 - completed within the last two hours; and
-- did not produce the current feed SHA.
+- still left the accepted feed behind current `main`.
+
+Using the run's creation time instead of its trigger SHA avoids blaming a
+coalesced publication for a newer tip that appeared while the run was already
+in progress. The feed SHA remains the sole delivery authority.
 
 The first such run fails the row with
 `candidate-success-without-delivery`. This is the recovery-dispatch signal: a
@@ -218,8 +226,9 @@ healthcheck.
 immediate completed CI failures, old accepted/equal, ancestor within SLA,
 ancestor beyond SLA, inactive workflow state, stale completed schedules while
 `main` has advanced, bounded exact-main candidate runs, one and repeated green
-non-deliveries against an unchanged feed, stale or mismatched active runs,
-fresh non-ancestor, unaccepted, malformed,
+non-deliveries against an unchanged feed, coalesced runs started before a newer
+tip, successful history saturated by active runs, stale or mismatched active
+runs, fresh non-ancestor, unaccepted, malformed,
 missing-package-identity, and unreachable Linux candidate outcomes. Windows
 fixtures separately pin source-current and within-SLA passes, over-SLA and
 consecutive-gate failures, the no-history bootstrap warning, manifest/feed

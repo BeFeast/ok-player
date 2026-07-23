@@ -57,6 +57,8 @@ pub struct ScheduleRunSnapshot {
     pub event: String,
     pub status: String,
     pub conclusion: String,
+    #[serde(default)]
+    pub created_at_utc: String,
     pub completed_at_utc: String,
     #[serde(default)]
     pub url: String,
@@ -1395,10 +1397,17 @@ fn validate_candidate_green_nondelivery(
         if run.status != "completed"
             || run.conclusion != "success"
             || !matches!(run.event.as_str(), "schedule" | "workflow_dispatch")
-            || same_sha(&run.head_sha, &feed.commit_sha)
         {
             continue;
         }
+        let Some(created_at) = parse_utc_timestamp(&run.created_at_utc) else {
+            details.push(format!(
+                "Linux Candidate successful run has invalid creation timestamp {}",
+                run.created_at_utc
+            ));
+            reason_codes.push("candidate-run-history-unavailable".to_owned());
+            continue;
+        };
         let Some(completed_at) = parse_utc_timestamp(&run.completed_at_utc) else {
             details.push(format!(
                 "Linux Candidate successful run has invalid completion timestamp {}",
@@ -1407,7 +1416,8 @@ fn validate_candidate_green_nondelivery(
             reason_codes.push("candidate-run-history-unavailable".to_owned());
             continue;
         };
-        if completed_at <= delivery_pending_since
+        if created_at < delivery_pending_since
+            || created_at > completed_at
             || completed_at > now
             || now.saturating_sub(completed_at) > CANDIDATE_GREEN_NONDELIVERY_WINDOW_SECONDS
         {
