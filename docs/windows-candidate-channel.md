@@ -1,17 +1,18 @@
 # Windows candidate channel
 
 Issue #483 adds a rolling Windows QA lane without changing the stable Windows
-release path. `.github/workflows/release-windows-candidate.yml` polls every 15
-minutes on `windows-latest` and can also be started manually. A run reads the
-identity manifest on the mutable `windows-candidate` prerelease and skips when
-its exact 40-character source SHA already matches `main`.
+release path. `.github/workflows/release-windows-candidate.yml` starts on each
+push to `main`, polls every 15 minutes as a fallback, and can also be started
+manually. A run reads the identity manifest on the mutable `windows-candidate`
+prerelease and skips when its exact 40-character source SHA already matches
+`main`.
 
-Before SDK setup, a scheduled run refreshes `origin/main` and compares it with
-the checked-out SHA. If a newer head already exists, the run emits
-`OKP_CANDIDATE_SKIPPED_SUPERSEDED` with a `superseded by <sha>, skipping`
-notice, skips every build and publication step, and completes successfully.
-Manual dispatch deliberately bypasses this early check and retains the existing
-coalescing decision below.
+Before SDK setup, an automatic push or scheduled run refreshes `origin/main`
+and compares it with the checked-out SHA. If a newer head already exists, the
+run emits `OKP_CANDIDATE_SKIPPED_SUPERSEDED` with a `superseded by <sha>,
+skipping` notice, skips every build and publication step, and completes
+successfully. Manual dispatch deliberately bypasses this early check and
+retains the existing coalescing decision below.
 
 ## Identity and ordering
 
