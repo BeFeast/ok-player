@@ -324,6 +324,16 @@ successful `stale_generation` no-op with machine-readable evidence in
 three SHAs, the bundle/newest-allocated/published generation numbers, and the
 specific stale reasons.
 
+That successful no-op is only a safe publication-fence result; it is not a
+delivery success. Project outcome health compares the fetched rolling pointer
+to current `main`. If a completed green run leaves `candidate.linux.json`
+behind, recovery remains armed even when the Actions conclusion is `success`.
+One green non-delivery requests recovery, and two within two hours add the
+urgent repeated-non-delivery signal. A bounded exact-main run that is still in
+progress remains settling evidence until its run-age or unpublished-main lag
+limit is exceeded. See
+[`project-outcome-health.md`](project-outcome-health.md).
+
 This preserves coalescing without letting an old queued workflow publish. If
 run A was requested on SHA A but starts after `main` advances to SHA B, the
 builder may produce the exact SHA B bundle. Run A still stops at the publish

@@ -174,9 +174,11 @@ fi
 
 candidate_active_run='null'
 candidate_active_run_error=""
+candidate_completed_runs='[]'
+candidate_run_history_error=""
 if candidate_runs="$(gh run list --repo "$repository" --branch main \
     --workflow "Linux Candidate" --limit 100 \
-    --json headSha,event,status,createdAt,url 2>/dev/null)"; then
+    --json databaseId,headSha,event,status,conclusion,createdAt,updatedAt,url 2>/dev/null)"; then
   if ! candidate_active_run="$(jq -c --arg main_sha "$main_sha" '
       if type != "array" then error("not an array")
       else [
@@ -186,12 +188,24 @@ if candidate_runs="$(gh run list --repo "$repository" --branch main \
         | select((.status // "") != "completed")
       ][0] // null
       end
-    ' <<<"$candidate_runs" 2>/dev/null)"; then
+    ' <<<"$candidate_runs" 2>/dev/null)" \
+      || ! candidate_completed_runs="$(jq -c '
+        if type != "array" then error("not an array")
+        else [
+          .[]
+          | select((.event // "") == "schedule" or (.event // "") == "workflow_dispatch")
+          | select((.status // "") == "completed")
+        ]
+        end
+      ' <<<"$candidate_runs" 2>/dev/null)"; then
     candidate_active_run='null'
+    candidate_completed_runs='[]'
     candidate_active_run_error="GitHub Linux Candidate active run query returned malformed JSON"
+    candidate_run_history_error="GitHub Linux Candidate completed run history query returned malformed JSON"
   fi
 else
   candidate_active_run_error="GitHub Linux Candidate active run query failed"
+  candidate_run_history_error="GitHub Linux Candidate completed run history query failed"
 fi
 
 candidate_schedule_run='null'
@@ -435,6 +449,8 @@ jq -n \
   --arg candidate_schedule_error "$candidate_schedule_error" \
   --argjson candidate_active_run "$candidate_active_run" \
   --arg candidate_active_run_error "$candidate_active_run_error" \
+  --argjson candidate_completed_runs "$candidate_completed_runs" \
+  --arg candidate_run_history_error "$candidate_run_history_error" \
   --argjson candidate_consecutive_failed_runs "$candidate_consecutive_failed_runs" \
   --arg candidate_last_failed_gate "$candidate_last_failed_gate" \
   --arg candidate_sha "$candidate_sha" \
@@ -516,6 +532,18 @@ jq -n \
           end
         ),
         active_run_error: (if $candidate_active_run_error == "" then null else $candidate_active_run_error end),
+        completed_runs: [
+          $candidate_completed_runs[]
+          | {
+              head_sha: (.headSha // ""),
+              event: (.event // ""),
+              status: (.status // ""),
+              conclusion: (.conclusion // ""),
+              completed_at_utc: (.updatedAt // ""),
+              url: (.url // "")
+            }
+        ],
+        run_history_error: (if $candidate_run_history_error == "" then null else $candidate_run_history_error end),
         consecutive_failed_runs: $candidate_consecutive_failed_runs,
         last_failed_gate: (if $candidate_last_failed_gate == "" then null else $candidate_last_failed_gate end)
       },

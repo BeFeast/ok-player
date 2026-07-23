@@ -303,6 +303,114 @@ fn exact_main_candidate_run_bounds_stale_schedule_settling() {
     );
 }
 
+#[test]
+fn successful_candidate_runs_do_not_cover_an_unchanged_feed() {
+    let fixture_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project_health");
+    let main_sha = "1111111111111111111111111111111111111111";
+    let mut snapshot = healthy_snapshot(
+        1_784_340_047,
+        FetchSnapshot {
+            url: "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/candidate.linux.json".to_owned(),
+            body: Some(
+                fs::read_to_string(fixture_dir.join("fresh-accepted.json"))
+                    .expect("read Linux candidate fixture"),
+            ),
+            error: None,
+        },
+        main_sha.to_owned(),
+        candidate_source(
+            FixtureSourceRelation::Ancestor,
+            default_candidate_committed_at(),
+            Some(CommitSnapshot {
+                sha: "2222222222222222222222222222222222222222".to_owned(),
+                committed_at_utc: "2026-07-18T01:30:47Z".to_owned(),
+            }),
+        ),
+    );
+    snapshot.source.candidate_workflow.latest_active_run = Some(ActiveCandidateRunSnapshot {
+        head_sha: main_sha.to_owned(),
+        event: "workflow_dispatch".to_owned(),
+        status: "in_progress".to_owned(),
+        created_at_utc: "2026-07-18T02:00:40Z".to_owned(),
+        url: "https://example.invalid/run/active-candidate".to_owned(),
+    });
+    snapshot.source.candidate_workflow.completed_runs = vec![ScheduleRunSnapshot {
+        head_sha: "3333333333333333333333333333333333333333".to_owned(),
+        event: "workflow_dispatch".to_owned(),
+        status: "completed".to_owned(),
+        conclusion: "success".to_owned(),
+        completed_at_utc: "2026-07-18T01:50:47Z".to_owned(),
+        url: "https://example.invalid/run/first-green".to_owned(),
+    }];
+
+    let first_outcome = snapshot.evaluate();
+    let first = candidate_check(&first_outcome);
+    assert!(!first_outcome.healthy);
+    assert_eq!(first.status, HealthStatus::Fail);
+    assert!(
+        first
+            .reason_codes
+            .contains(&"candidate-success-without-delivery".to_owned())
+    );
+    assert!(
+        !first
+            .reason_codes
+            .contains(&"candidate-repeated-success-without-delivery".to_owned())
+    );
+    assert!(first.summary.contains("completed successfully"));
+    assert!(first.summary.contains(CANDIDATE_SHA));
+    assert!(first.summary.contains(main_sha));
+
+    snapshot
+        .source
+        .candidate_workflow
+        .completed_runs
+        .push(ScheduleRunSnapshot {
+            head_sha: "4444444444444444444444444444444444444444".to_owned(),
+            event: "schedule".to_owned(),
+            status: "completed".to_owned(),
+            conclusion: "success".to_owned(),
+            completed_at_utc: "2026-07-18T01:55:47Z".to_owned(),
+            url: "https://example.invalid/run/second-green".to_owned(),
+        });
+    let repeated_outcome = snapshot.evaluate();
+    let repeated = candidate_check(&repeated_outcome);
+    assert!(
+        repeated
+            .reason_codes
+            .contains(&"candidate-repeated-success-without-delivery".to_owned())
+    );
+    assert!(
+        repeated
+            .details
+            .iter()
+            .any(|detail| detail.contains("2 successful Linux Candidate runs within 7200s"))
+    );
+
+    let mut already_accounted_for = snapshot.clone();
+    let mut feed: serde_json::Value = serde_json::from_str(
+        already_accounted_for
+            .candidate_feed
+            .body
+            .as_deref()
+            .expect("candidate feed body"),
+    )
+    .expect("candidate feed JSON");
+    feed["timestamp_utc"] = serde_json::Value::String("2026-07-18T01:58:47Z".to_owned());
+    already_accounted_for.candidate_feed.body =
+        Some(serde_json::to_string(&feed).expect("candidate feed serialization"));
+    let accounted_outcome = already_accounted_for.evaluate();
+    let accounted = candidate_check(&accounted_outcome);
+    assert!(accounted_outcome.healthy);
+    assert_eq!(accounted.status, HealthStatus::Warning);
+    assert!(
+        !accounted
+            .reason_codes
+            .contains(&"candidate-success-without-delivery".to_owned())
+    );
+}
+
 fn candidate_check(
     outcome: &okp_core::project_health::ProjectHealthOutcome,
 ) -> &okp_core::project_health::HealthCheck {
@@ -695,6 +803,8 @@ fn healthy_snapshot(
                 schedule_error: None,
                 latest_active_run: None,
                 active_run_error: None,
+                completed_runs: Vec::new(),
+                run_history_error: None,
                 consecutive_failed_runs: 0,
                 last_failed_gate: None,
             },
@@ -713,6 +823,8 @@ fn healthy_snapshot(
                 schedule_error: None,
                 latest_active_run: None,
                 active_run_error: None,
+                completed_runs: Vec::new(),
+                run_history_error: None,
                 consecutive_failed_runs: 0,
                 last_failed_gate: None,
             },

@@ -131,6 +131,14 @@ reason. It does not create a release, upload or delete an asset, move
 whose requested SHA matches the already-built current bundle may publish that
 same verified generation without rebuilding it.
 
+The successful `stale_generation` conclusion describes only the local
+publication fence. It never covers development delivery. The versioned outcome
+checker requires the public rolling pointer's `commit_sha` to equal current
+`main`; a green run that completes after delivery became pending while the
+pointer stays behind emits a recovery signal, with a separate urgent signal
+after two such runs within two hours. A fresh exact-main run still in progress
+is non-paging settling evidence until the configured lag bound is exceeded.
+
 A headless gate failure remains fail-safe. Workflow-dispatch run `29639207396`
 failed on source `50495469570dd31129581b158678d33fb22a574d` before promotion,
 while the immediately following scheduled run `29639587120` built the same

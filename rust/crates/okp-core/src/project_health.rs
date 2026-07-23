@@ -21,6 +21,7 @@ pub const DEFAULT_MAX_CANDIDATE_SCHEDULE_AGE_SECONDS: u64 = 120 * 60;
 pub const DEFAULT_MAX_CANDIDATE_RUN_AGE_SECONDS: u64 = 90 * 60;
 pub const DEFAULT_SOURCE_CI_GRACE_SECONDS: u64 = 15 * 60;
 pub const DEFAULT_FUTURE_SKEW_SECONDS: u64 = 5 * 60;
+pub const CANDIDATE_GREEN_NONDELIVERY_WINDOW_SECONDS: u64 = 2 * 60 * 60;
 pub const STABLE_RELEASE_FRESH_SECONDS: u64 = 48 * 60 * 60;
 const WINDOWS_CANDIDATE_SCHEMA_VERSION: u64 = 1;
 const WINDOWS_CANDIDATE_CHANNEL: &str = "win-candidate";
@@ -85,6 +86,10 @@ pub struct CandidateWorkflowSnapshot {
     pub latest_active_run: Option<ActiveCandidateRunSnapshot>,
     #[serde(default)]
     pub active_run_error: Option<String>,
+    #[serde(default)]
+    pub completed_runs: Vec<ScheduleRunSnapshot>,
+    #[serde(default)]
+    pub run_history_error: Option<String>,
     #[serde(default)]
     pub consecutive_failed_runs: u64,
     #[serde(default)]
@@ -993,6 +998,15 @@ fn evaluate_candidate(
         &mut details,
         &mut summary,
     );
+    validate_candidate_green_nondelivery(
+        &feed,
+        source,
+        source_relation,
+        now,
+        candidate_timestamp,
+        &mut details,
+        &mut reason_codes,
+    );
     if let (Some(candidate_timestamp), Some(source_timestamp)) =
         (candidate_timestamp, source_timestamp)
         && candidate_timestamp < source_timestamp
@@ -1338,6 +1352,91 @@ fn validate_candidate_source(
     }
 
     candidate_committed_at
+}
+
+fn validate_candidate_green_nondelivery(
+    feed: &CandidateFeed,
+    source: &SourceSnapshot,
+    source_relation: CandidateSourceRelation,
+    now: u64,
+    feed_timestamp: Option<u64>,
+    details: &mut Vec<String>,
+    reason_codes: &mut Vec<String>,
+) {
+    if source_relation != CandidateSourceRelation::Ancestor {
+        return;
+    }
+
+    let workflow = &source.candidate_workflow;
+    if let Some(error) = nonempty(workflow.run_history_error.as_deref()) {
+        details.push(format!(
+            "Linux Candidate completed run history is unavailable while delivery is pending: {error}"
+        ));
+        reason_codes.push("candidate-run-history-unavailable".to_owned());
+        return;
+    }
+
+    let Some(feed_timestamp) = feed_timestamp else {
+        return;
+    };
+    let Some(first_unpublished_at) = source
+        .candidate
+        .comparison
+        .as_ref()
+        .and_then(|comparison| comparison.first_unpublished_commit.as_ref())
+        .and_then(|commit| parse_utc_timestamp(&commit.committed_at_utc))
+    else {
+        return;
+    };
+    let delivery_pending_since = feed_timestamp.max(first_unpublished_at);
+
+    let mut successful_nondeliveries = Vec::new();
+    for run in &workflow.completed_runs {
+        if run.status != "completed"
+            || run.conclusion != "success"
+            || !matches!(run.event.as_str(), "schedule" | "workflow_dispatch")
+            || same_sha(&run.head_sha, &feed.commit_sha)
+        {
+            continue;
+        }
+        let Some(completed_at) = parse_utc_timestamp(&run.completed_at_utc) else {
+            details.push(format!(
+                "Linux Candidate successful run has invalid completion timestamp {}",
+                run.completed_at_utc
+            ));
+            reason_codes.push("candidate-run-history-unavailable".to_owned());
+            continue;
+        };
+        if completed_at <= delivery_pending_since
+            || completed_at > now
+            || now.saturating_sub(completed_at) > CANDIDATE_GREEN_NONDELIVERY_WINDOW_SECONDS
+        {
+            continue;
+        }
+        successful_nondeliveries.push(run);
+    }
+
+    let Some(latest) = successful_nondeliveries
+        .iter()
+        .max_by_key(|run| parse_utc_timestamp(&run.completed_at_utc).unwrap_or_default())
+    else {
+        return;
+    };
+
+    details.push(format!(
+        "Linux Candidate completed successfully for source {} at {}, but candidate feed {} still does not match current main {}",
+        latest.head_sha, latest.completed_at_utc, feed.commit_sha, source.head_sha
+    ));
+    reason_codes.push("candidate-success-without-delivery".to_owned());
+
+    if successful_nondeliveries.len() >= 2 {
+        details.push(format!(
+            "{} successful Linux Candidate runs within {}s left the candidate feed behind current main",
+            successful_nondeliveries.len(),
+            CANDIDATE_GREEN_NONDELIVERY_WINDOW_SECONDS
+        ));
+        reason_codes.push("candidate-repeated-success-without-delivery".to_owned());
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
