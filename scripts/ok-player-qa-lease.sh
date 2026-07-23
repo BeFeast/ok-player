@@ -23,6 +23,12 @@ fail() {
   exit 64
 }
 
+ascii_lower() {
+  local value="$1"
+  local LC_ALL=C
+  printf '%s' "${value,,}"
+}
+
 require_token() {
   local label="$1" value="$2"
   [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$ ]] ||
@@ -92,7 +98,8 @@ case "$command_name" in
     [[ "$owner_pid" =~ ^[0-9]+$ ]] || fail "owner-pid must be an integer"
     (( ttl_minutes >= 1 && ttl_minutes <= 180 )) || fail "ttl-minutes must be between 1 and 180"
 
-    if [[ "${role,,}" == "sindri" ]] &&
+    role_key="$(ascii_lower "$role")"
+    if [[ "$role_key" == "sindri" ]] &&
       [[ "${OKP_QA_ALLOW_SINDRI:-0}" != "1" || "${OKP_QA_OPERATOR_GO:-0}" != "1" ]]; then
       printf 'REFUSE: sindri is operator-first and requires explicit operator authorization\n' >&2
       exit 3
