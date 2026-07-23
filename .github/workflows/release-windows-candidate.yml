@@ -1,10 +1,13 @@
 name: Windows Candidate
 
 # Hosted Windows builder for the rolling QA lane (issue #483). The workflow
-# coalesces main by source SHA, consumes a workflow-local monotonic run number,
-# and moves releases.win-candidate.json only after every bounded gate passes.
+# starts on main pushes with a scheduled fallback, coalesces superseded source
+# SHAs, consumes a workflow-local monotonic run number, and moves
+# releases.win-candidate.json only after every bounded gate passes.
 
 on:
+  push:
+    branches: [main]
   schedule:
     - cron: '*/15 * * * *'
   workflow_dispatch:
@@ -36,14 +39,14 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
 
-      - name: Verify checkout and skip superseded scheduled SHA
+      - name: Verify checkout and skip superseded automatic SHA
         id: supersession
         shell: pwsh
         run: |
           $actual = (git rev-parse HEAD).Trim()
           if ($actual -ne $env:SOURCE_SHA) { throw "Checkout SHA $actual does not match claimed SHA $env:SOURCE_SHA." }
           if (git status --porcelain) { throw 'Candidate checkout is not clean.' }
-          if ('${{ github.event_name }}' -eq 'schedule') {
+          if ('${{ github.event_name }}' -ne 'workflow_dispatch') {
             git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
             if ($LASTEXITCODE -ne 0) { throw 'Could not refresh current main SHA.' }
             $currentMain = (git rev-parse refs/remotes/origin/main).Trim()

@@ -51,18 +51,21 @@ fn linux_manual_dispatch_republish_contract_is_unchanged() {
 }
 
 #[test]
-fn windows_schedule_skips_a_superseded_sha_before_build_setup() {
+fn windows_push_delivery_skips_a_superseded_sha_before_build_setup() {
     let workflow = workflow("release-windows-candidate.yml");
     let checkout = position(&workflow, "- uses: actions/checkout@v4");
     let supersession = position(
         &workflow,
-        "- name: Verify checkout and skip superseded scheduled SHA",
+        "- name: Verify checkout and skip superseded automatic SHA",
     );
     let setup = position(&workflow, "- uses: actions/setup-dotnet@v4");
 
     assert!(checkout < supersession);
     assert!(supersession < setup);
-    assert!(workflow.contains("if ('${{ github.event_name }}' -eq 'schedule')"));
+    assert!(workflow.contains("push:\n    branches: [main]"));
+    assert!(workflow.contains("schedule:\n    - cron: '*/15 * * * *'"));
+    assert!(workflow.contains("workflow_dispatch:"));
+    assert!(workflow.contains("if ('${{ github.event_name }}' -ne 'workflow_dispatch')"));
     assert!(
         workflow.contains("git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'")
     );

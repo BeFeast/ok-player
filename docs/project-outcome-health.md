@@ -126,6 +126,12 @@ inside the delivery window and fails once that lag exceeds the bound. A source
 that is not an ancestor of current `main` is invalid even when its timestamp is
 recent.
 
+The Windows candidate workflow starts on every push to `main`; its 15-minute
+schedule remains a fallback rather than the primary delivery trigger. Automatic
+runs re-read `origin/main` before SDK setup and skip superseded SHAs, so a burst
+of pushes coalesces without spending a hosted Windows build on stale source.
+Manual dispatch continues to bypass this early supersession check.
+
 The collector reads up to 100 completed scheduled `Windows Candidate` runs. Two
 or more consecutive failures are reported before generic lag evidence as
 `Windows candidate builder failing at gate <name> (<N> consecutive)`. The gate
