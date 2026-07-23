@@ -114,12 +114,14 @@ The helper always attempts both regressions, writes `results.tsv` and
 `SHA256SUMS`. The output directory must not already exist. The helper reads the
 source revision from Git when available; an exported tree must provide an exact
 lowercase 40-character commit through `OKP_WINDOW_REGRESSION_SOURCE_SHA`. It
-also rejects fit evidence that names a different revision. A site `run-action`
-hook should use this command as supporting evidence while implementing
-`single_monitor_fit` and `non_osc_drag_10`; the two live action rows still
-require actual desktop observations. CI runs the aggregate helper's
-dispatch/failure/evidence policy test, while the Rust suite also pins the
-required drag and fit assertions in the underlying scripts.
+also rejects fit evidence that names a different revision, incomplete drag
+assertions, an incomplete three-run fit series, and missing or unsuccessful
+Xvfb/D-Bus evidence. A site `run-action` hook should use this command as
+supporting evidence while implementing `single_monitor_fit` and
+`non_osc_drag_10`; the two live action rows still require actual desktop
+observations. CI runs the aggregate helper's dispatch/failure/evidence policy
+test, while the Rust suite also pins the required drag and fit assertions in
+the underlying scripts.
 
 ## Artifacts and timer ownership
 
