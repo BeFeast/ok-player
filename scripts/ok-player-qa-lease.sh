@@ -29,6 +29,10 @@ require_token() {
     fail "$label must use only letters, digits, dot, underscore, colon, or dash"
 }
 
+ascii_lower() {
+  LC_ALL=C tr '[:upper:]' '[:lower:]' <<<"$1"
+}
+
 now_epoch() {
   if [[ -n "${OKP_QA_NOW_EPOCH:-}" ]]; then
     [[ "$OKP_QA_NOW_EPOCH" =~ ^[0-9]+$ ]] || fail "OKP_QA_NOW_EPOCH must be an epoch integer"
@@ -92,7 +96,7 @@ case "$command_name" in
     [[ "$owner_pid" =~ ^[0-9]+$ ]] || fail "owner-pid must be an integer"
     (( ttl_minutes >= 1 && ttl_minutes <= 180 )) || fail "ttl-minutes must be between 1 and 180"
 
-    if [[ "${role,,}" == "sindri" ]] &&
+    if [[ "$(ascii_lower "$role")" == "sindri" ]] &&
       [[ "${OKP_QA_ALLOW_SINDRI:-0}" != "1" || "${OKP_QA_OPERATOR_GO:-0}" != "1" ]]; then
       printf 'REFUSE: sindri is operator-first and requires explicit operator authorization\n' >&2
       exit 3
