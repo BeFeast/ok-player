@@ -5024,6 +5024,8 @@ fn idle_return_smoke_waits_for_natural_eof_before_welcome_capture() {
     assert!(smoke.contains("residual_welcome_decoder_retired"));
     assert!(smoke.contains("residual_welcome_hidden=pass"));
     assert!(smoke.contains("residual_shutdown_decoder_retired"));
+    assert!(smoke.contains("CONTINUE_WATCHING_IDENTITY_CROP='300x170+210+60'"));
+    assert!(smoke.contains("Residual initial Continue Watching"));
     assert!(smoke.contains("export GSK_RENDERER=cairo"));
     assert!(smoke.contains("-crop 1120x638+0+42"));
 
