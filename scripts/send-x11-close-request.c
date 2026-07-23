@@ -3,6 +3,21 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
+enum {
+    EXIT_OPERATIONAL_ERROR = 1,
+    EXIT_USAGE_ERROR = 2,
+    EXIT_WINDOW_GONE = 3,
+};
+
+static int x11_error_code = Success;
+
+static int record_x11_error(Display *display, XErrorEvent *event) {
+    (void)display;
+    x11_error_code = event->error_code;
+    return 0;
+}
 
 static int parse_window(const char *value, Window *window) {
     char *end = NULL;
@@ -15,29 +30,57 @@ static int parse_window(const char *value, Window *window) {
     return 1;
 }
 
+static int read_window_attributes(Display *display, Window window,
+                                  XWindowAttributes *attributes) {
+    x11_error_code = Success;
+    Status resolved = XGetWindowAttributes(display, window, attributes);
+    XSync(display, False);
+    if (x11_error_code == BadWindow) {
+        return EXIT_WINDOW_GONE;
+    }
+    if (x11_error_code != Success || !resolved) {
+        fprintf(stderr, "could not resolve X11 window attributes\n");
+        return EXIT_OPERATIONAL_ERROR;
+    }
+    return 0;
+}
+
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        fprintf(stderr, "usage: send-x11-close-request <window-id>\n");
-        return 2;
+    int probe_only = 0;
+    const char *window_value = NULL;
+    if (argc == 2) {
+        window_value = argv[1];
+    } else if (argc == 3 && strcmp(argv[1], "--probe") == 0) {
+        probe_only = 1;
+        window_value = argv[2];
+    } else {
+        fprintf(stderr,
+                "usage: send-x11-close-request [--probe] <window-id>\n");
+        return EXIT_USAGE_ERROR;
     }
 
     Window window = None;
-    if (!parse_window(argv[1], &window)) {
-        fprintf(stderr, "invalid X11 window ID: %s\n", argv[1]);
-        return 2;
+    if (!parse_window(window_value, &window)) {
+        fprintf(stderr, "invalid X11 window ID: %s\n", window_value);
+        return EXIT_USAGE_ERROR;
     }
 
     Display *display = XOpenDisplay(NULL);
     if (display == NULL) {
         fprintf(stderr, "could not open the X11 display\n");
-        return 1;
+        return EXIT_OPERATIONAL_ERROR;
     }
+    XSetErrorHandler(record_x11_error);
 
     XWindowAttributes attributes;
-    if (!XGetWindowAttributes(display, window, &attributes)) {
-        fprintf(stderr, "could not resolve X11 window attributes\n");
+    int resolve_status = read_window_attributes(display, window, &attributes);
+    if (resolve_status != 0) {
         XCloseDisplay(display);
-        return 1;
+        return resolve_status;
+    }
+    if (probe_only) {
+        XCloseDisplay(display);
+        return 0;
     }
 
     XEvent event = {0};
@@ -54,11 +97,12 @@ int main(int argc, char **argv) {
     Status sent = XSendEvent(display, root, False,
                              SubstructureRedirectMask | SubstructureNotifyMask,
                              &event);
-    XFlush(display);
+    XSync(display, False);
+    int send_error = x11_error_code;
     XCloseDisplay(display);
-    if (!sent) {
+    if (send_error != Success || !sent) {
         fprintf(stderr, "could not send the X11 close request\n");
-        return 1;
+        return EXIT_OPERATIONAL_ERROR;
     }
     return 0;
 }
