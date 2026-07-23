@@ -2996,20 +2996,37 @@ fn player_window_move_drags_the_whole_non_interactive_surface() {
         .nth(1)
         .and_then(|tail| tail.split("/// Smallest client").next())
         .expect("native drag handoff helper");
-    assert!(handoff.contains("let Some((widget_x, widget_y)) = gesture.start_point()"));
-    assert!(handoff.contains("let Some(drag_widget) = gesture.widget()"));
-    assert!(handoff.contains("drag_widget.compute_point(window, &widget_point)"));
-    assert!(handoff.contains("window.surface_transform()"));
-    let claim = handoff
+    assert!(handoff.contains("let wayland = is_wayland_display(display.type_().name())"));
+    let wayland_handoff = handoff
+        .split("if wayland {")
+        .nth(1)
+        .and_then(|tail| tail.split("return true;").next())
+        .expect("Wayland native move branch");
+    assert!(wayland_handoff.contains("toplevel.begin_move(&device, button, 0.0, 0.0, timestamp)"));
+    assert!(!wayland_handoff.contains("gesture.set_state("));
+    assert!(!wayland_handoff.contains("gesture.reset()"));
+    assert!(!wayland_handoff.contains("glib::idle_add_local_once"));
+    let x11_handoff = handoff
+        .split("return true;")
+        .nth(1)
+        .expect("X11 native move branch");
+    assert!(x11_handoff.contains("let Some((widget_x, widget_y)) = gesture.start_point()"));
+    assert!(x11_handoff.contains("let Some(drag_widget) = gesture.widget()"));
+    assert!(x11_handoff.contains("drag_widget.compute_point(window, &widget_point)"));
+    assert!(x11_handoff.contains("window.surface_transform()"));
+    let claim = x11_handoff
         .find("gesture.set_state(gtk::EventSequenceState::Claimed)")
         .expect("gesture claim");
-    let begin_move = handoff
+    let begin_move = x11_handoff
         .find("toplevel.begin_move(")
         .expect("native move handoff");
     assert!(
         claim < begin_move,
         "claim the click sequence before handing the live drag to the compositor"
     );
+    // The press-coordinate contract survives the backend split: neither branch
+    // may fall back to the threshold-crossing position, and neither may reset the
+    // controller — that cancels the sequence while the compositor owns the move.
     assert!(!handoff.contains("bounding_box_center()"));
     assert!(!handoff.contains("gesture.reset()"));
     assert!(!handoff.contains("glib::idle_add_local_once"));
