@@ -16,8 +16,10 @@ On each invocation the watchdog:
 4. refreshes the fleet snapshot after any merged-session cleanup, then requires
    exactly one matching project with `paused=false`,
    `outcome.health_state=healthy`, and `live_workers=0`;
-5. orders open `ok-player-ready` issues by `createdAt` and issue number, then
-   skips `blocked`, active QA-hold, and already claimed issues;
+5. orders open `ok-player-ready` issues by `createdAt` and issue number, skips
+   `blocked`, active QA-hold, and already claimed issues, then closes an
+   unclaimed issue instead of respawning it when its same-repository timeline
+   still proves a linked PR merged after the most recent reopen;
 6. rechecks the selected issue and the fleet snapshot;
 7. quarantines allowlisted agent-junk roots from the canonical `main` checkout
    and refuses to continue if any other dirty state remains; and
@@ -38,6 +40,14 @@ the exact claimed Maestro session is still stopped and removed; a session
 already absent from Maestro is also a successful no-op. The spawn command
 remains the final claim authority if another scheduler wins the small race
 after the last snapshot.
+
+The ready-queue fallback covers the narrower race where Maestro has already
+removed the completed claim before the watchdog observes it. Before spawning
+the oldest unclaimed issue, the watchdog checks same-repository pull-request
+cross-references from the issue timeline, considers the newest merge first, and
+reuses the same exact link rules. Comment-only and cross-repository references
+are not merge authority. A merge older than the issue's latest reopen is also
+ignored so deliberately reopened work is not auto-closed from stale history.
 
 ## Required environment
 
@@ -129,6 +139,7 @@ exit `2` so the service remains visibly failed.
 
 The watchdog does not change Greptile or merge policy, project concurrency, or
 `max_parallel`. Its GitHub mutations are limited to removing the ready label
-from an active QA hold and closing an issue whose claimed PR is authoritatively
-merged. Its Maestro mutations are stopping that exact claimed session and the
-separately authorized spawn when every gate passes.
+from an active QA hold and closing an issue whose claimed PR or unclaimed
+same-repository timeline is authoritatively merged and linked. Its Maestro
+mutations are stopping that exact claimed session and the separately authorized
+spawn when every gate passes.

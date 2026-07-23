@@ -90,8 +90,10 @@ project_file="$(mktemp "$state_dir/project.XXXXXX")"
 issues_file="$(mktemp "$state_dir/issues.XXXXXX")"
 issue_file="$(mktemp "$state_dir/issue.XXXXXX")"
 pr_file="$(mktemp "$state_dir/pr.XXXXXX")"
+timeline_file="$(mktemp "$state_dir/timeline.XXXXXX")"
 cleanup() {
-  rm -f -- "$fleet_file" "$project_file" "$issues_file" "$issue_file" "$pr_file"
+  rm -f -- \
+    "$fleet_file" "$project_file" "$issues_file" "$issue_file" "$pr_file" "$timeline_file"
 }
 trap cleanup EXIT
 
@@ -188,9 +190,90 @@ refresh_project_snapshot() {
 }
 
 reconciled_merged_claims=0
+pr_is_merged=false
+pr_links_issue=false
+
+inspect_pr_merge_evidence() {
+  local issue_number="$1" pr_number="$2"
+
+  if ! gh --repo "$repository" pr view "$pr_number" \
+      --json state,mergedAt,body,closingIssuesReferences >"$pr_file"; then
+    fail "could not inspect PR #$pr_number for issue #$issue_number"
+  fi
+  if ! jq -e '
+      def positive_integer:
+        type == "number" and . > 0 and . == floor;
+      type == "object"
+      and (.state | type == "string")
+      and ((.mergedAt == null) or (.mergedAt | type == "string"))
+      and (.body | type == "string")
+      and (.closingIssuesReferences | type == "array")
+      and all(.closingIssuesReferences[];
+        type == "object"
+        and (.number | positive_integer)
+        and (.repository | type == "object")
+        and (.repository.name | type == "string" and length > 0)
+        and (.repository.owner | type == "object")
+        and (.repository.owner.login | type == "string" and length > 0))
+    ' "$pr_file" >/dev/null; then
+    fail "PR #$pr_number returned malformed merge evidence"
+  fi
+
+  pr_is_merged=false
+  pr_links_issue=false
+  if ! jq -e '.state == "MERGED" and (.mergedAt | type == "string" and length > 0)' \
+      "$pr_file" >/dev/null; then
+    return 0
+  fi
+  pr_is_merged=true
+  if jq -e --arg repository "$repository" --argjson issue "$issue_number" '
+      def normalized_lines:
+        .body
+        | split("\n")
+        | map(gsub("^\\s+|\\s+$"; "") | ascii_downcase);
+      def normalized_repository:
+        split("/")
+        | if length >= 2 then .[-2:] | join("/") else . end
+        | ascii_downcase;
+      ($issue | tostring) as $number
+      | ($repository | normalized_repository) as $target_repository
+      | any(.closingIssuesReferences[];
+          .number == $issue
+          and (((.repository.owner.login + "/" + .repository.name) | ascii_downcase)
+            == $target_repository))
+        or (normalized_lines | any(.[];
+          . == ("refs #" + $number)
+          or . == ("fixes #" + $number)
+          or . == ("closes #" + $number)
+          or . == ("resolves #" + $number)))
+    ' "$pr_file" >/dev/null; then
+    pr_links_issue=true
+  fi
+}
+
+close_issue_after_merge() {
+  local issue_number="$1" pr_number="$2" issue_state
+
+  if ! gh --repo "$repository" issue view "$issue_number" --json state >"$issue_file"; then
+    fail "could not inspect merged issue #$issue_number"
+  fi
+  if ! jq -e 'type == "object" and (.state | type == "string")' \
+      "$issue_file" >/dev/null; then
+    fail "issue #$issue_number returned malformed state"
+  fi
+  issue_state="$(jq -r '.state' "$issue_file")"
+  if [[ "$issue_state" == "OPEN" ]]; then
+    if ! gh --repo "$repository" issue close "$issue_number" --reason completed >/dev/null; then
+      fail "could not close issue #$issue_number after PR #$pr_number merged"
+    fi
+    note "closed issue #$issue_number after PR #$pr_number merged"
+  else
+    note "issue #$issue_number is already closed after PR #$pr_number merged"
+  fi
+}
 
 reconcile_merged_issue_claims() {
-  local issue_number pr_number session issue_state stop_output
+  local issue_number pr_number session stop_output
 
   if ! jq -e '
       def positive_integer:
@@ -213,72 +296,14 @@ reconcile_merged_issue_claims() {
   while IFS=$'\t' read -r issue_number pr_number session; do
     [[ -n "$issue_number" && -n "$pr_number" && -n "$session" ]] || continue
 
-    if ! gh --repo "$repository" pr view "$pr_number" \
-        --json state,mergedAt,body,closingIssuesReferences >"$pr_file"; then
-      fail "could not inspect PR #$pr_number for issue #$issue_number"
-    fi
-    if ! jq -e '
-        def positive_integer:
-          type == "number" and . > 0 and . == floor;
-        type == "object"
-        and (.state | type == "string")
-        and ((.mergedAt == null) or (.mergedAt | type == "string"))
-        and (.body | type == "string")
-        and (.closingIssuesReferences | type == "array")
-        and all(.closingIssuesReferences[];
-          type == "object"
-          and (.number | positive_integer)
-          and (.repository | type == "object")
-          and (.repository.name | type == "string" and length > 0)
-          and (.repository.owner | type == "object")
-          and (.repository.owner.login | type == "string" and length > 0))
-      ' "$pr_file" >/dev/null; then
-      fail "PR #$pr_number returned malformed merge evidence"
-    fi
-    if ! jq -e '.state == "MERGED" and (.mergedAt | type == "string" and length > 0)' \
-        "$pr_file" >/dev/null; then
+    inspect_pr_merge_evidence "$issue_number" "$pr_number"
+    if [[ "$pr_is_merged" != "true" ]]; then
       continue
     fi
-    if ! jq -e --arg repository "$repository" --argjson issue "$issue_number" '
-        def normalized_lines:
-          .body
-          | split("\n")
-          | map(gsub("^\\s+|\\s+$"; "") | ascii_downcase);
-        def normalized_repository:
-          split("/")
-          | if length >= 2 then .[-2:] | join("/") else . end
-          | ascii_downcase;
-        ($issue | tostring) as $number
-        | ($repository | normalized_repository) as $target_repository
-        | any(.closingIssuesReferences[];
-            .number == $issue
-            and (((.repository.owner.login + "/" + .repository.name) | ascii_downcase)
-              == $target_repository))
-          or (normalized_lines | any(.[];
-            . == ("refs #" + $number)
-            or . == ("fixes #" + $number)
-            or . == ("closes #" + $number)
-            or . == ("resolves #" + $number)))
-      ' "$pr_file" >/dev/null; then
+    if [[ "$pr_links_issue" != "true" ]]; then
       fail "PR #$pr_number does not link claimed issue #$issue_number"
     fi
-
-    if ! gh --repo "$repository" issue view "$issue_number" --json state >"$issue_file"; then
-      fail "could not inspect merged issue #$issue_number"
-    fi
-    if ! jq -e 'type == "object" and (.state | type == "string")' \
-        "$issue_file" >/dev/null; then
-      fail "issue #$issue_number returned malformed state"
-    fi
-    issue_state="$(jq -r '.state' "$issue_file")"
-    if [[ "$issue_state" == "OPEN" ]]; then
-      if ! gh --repo "$repository" issue close "$issue_number" --reason completed >/dev/null; then
-        fail "could not close issue #$issue_number after PR #$pr_number merged"
-      fi
-      note "closed issue #$issue_number after PR #$pr_number merged"
-    else
-      note "issue #$issue_number is already closed after PR #$pr_number merged"
-    fi
+    close_issue_after_merge "$issue_number" "$pr_number"
 
     if stop_output="$("$maestro_bin" stop --config "$maestro_config" --session "$session" 2>&1)"; then
       note "stopped merged ghost session $session for issue #$issue_number"
@@ -303,6 +328,72 @@ reconcile_merged_issue_claims() {
       | [.issue_number, .pr_number, .session]
       | @tsv
     ' "$project_file")
+}
+
+reconcile_unclaimed_merged_issue() {
+  local issue_number="$1" pr_number
+  local -a candidate_prs=()
+
+  if ! GH_REPO="$repository" gh api --paginate \
+      -H "Accept: application/vnd.github+json" \
+      "repos/{owner}/{repo}/issues/$issue_number/timeline" \
+      | jq -s 'add' >"$timeline_file"; then
+    fail "could not inspect timeline for unclaimed issue #$issue_number"
+  fi
+  if ! jq -e '
+      def positive_integer:
+        type == "number" and . > 0 and . == floor;
+      type == "array"
+      and all(.[] | select(.event == "reopened");
+        (.created_at | type == "string" and length > 0))
+      and all(.[] | select(
+          .event == "cross-referenced"
+          and (.source.issue.pull_request? != null));
+        (.created_at | type == "string" and length > 0)
+        and (.source.issue | type == "object")
+        and (.source.issue.number | positive_integer)
+        and (.source.issue.repository_url | type == "string" and length > 0)
+        and (.source.issue.pull_request | type == "object")
+        and ((.source.issue.pull_request.merged_at == null)
+          or (.source.issue.pull_request.merged_at | type == "string")))
+    ' "$timeline_file" >/dev/null; then
+    fail "issue #$issue_number returned malformed timeline evidence"
+  fi
+
+  mapfile -t candidate_prs < <(jq -r --arg repository "$repository" '
+      def normalized_repository:
+        split("/")
+        | if length >= 2 then .[-2:] | join("/") else . end
+        | ascii_downcase;
+      ([.[] | select(.event == "reopened") | .created_at] | max // "") as $last_reopened
+      | ($repository | normalized_repository) as $target_repository
+      | [.[] | select(
+          .event == "cross-referenced"
+          and (.source.issue.pull_request? != null)
+          and ((.source.issue.repository_url | normalized_repository) == $target_repository)
+          and (.source.issue.pull_request.merged_at | type == "string" and length > 0)
+          and ($last_reopened == ""
+            or .source.issue.pull_request.merged_at > $last_reopened))
+        | {
+            number: .source.issue.number,
+            merged_at: .source.issue.pull_request.merged_at
+          }]
+      | unique_by(.number)
+      | sort_by(.merged_at)
+      | reverse
+      | .[].number
+    ' "$timeline_file")
+
+  for pr_number in "${candidate_prs[@]}"; do
+    inspect_pr_merge_evidence "$issue_number" "$pr_number"
+    if [[ "$pr_is_merged" != "true" || "$pr_links_issue" != "true" ]]; then
+      continue
+    fi
+    close_issue_after_merge "$issue_number" "$pr_number"
+    note "reconciled unclaimed issue #$issue_number from merged PR #$pr_number"
+    return 0
+  done
+  return 1
 }
 
 gate_allows_spawn() {
@@ -364,6 +455,9 @@ for issue_number in "${candidates[@]}"; do
   fi
   if [[ -n "${claimed_issues[$issue_number]+claimed}" ]]; then
     note "issue #$issue_number already has a Maestro claim"
+    continue
+  fi
+  if reconcile_unclaimed_merged_issue "$issue_number"; then
     continue
   fi
   selected_issue="$issue_number"
