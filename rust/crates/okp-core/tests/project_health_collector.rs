@@ -186,17 +186,38 @@ fn repeated_green_candidate_nondelivery_survives_live_collection() {
             .iter()
             .any(|detail| detail.contains("2 successful Linux Candidate runs within 7200s"))
     );
-    let history_query = gh_log
+    let history_queries = gh_log
         .lines()
-        .find(|line| {
+        .filter(|line| {
             line.contains("run list")
                 && line.contains("--workflow Linux Candidate")
-                && !line.contains("--status completed")
+                && line.contains("--status completed")
         })
-        .expect("bounded Linux Candidate history query");
-    assert!(history_query.contains("--limit 100"), "{history_query}");
-    assert!(history_query.contains("conclusion"), "{history_query}");
-    assert!(history_query.contains("updatedAt"), "{history_query}");
+        .collect::<Vec<_>>();
+    assert!(
+        history_queries
+            .iter()
+            .any(|line| line.contains("--event schedule")),
+        "{history_queries:?}"
+    );
+    assert!(
+        history_queries
+            .iter()
+            .any(|line| line.contains("--event workflow_dispatch")),
+        "{history_queries:?}"
+    );
+    assert!(
+        history_queries
+            .iter()
+            .all(|line| line.contains("--limit 100"))
+    );
+    assert!(
+        history_queries
+            .iter()
+            .all(|line| line.contains("updatedAt"))
+    );
+    assert!(gh_log.contains("run view 401 --repo BeFeast/ok-player --log"));
+    assert!(gh_log.contains("run view 402 --repo BeFeast/ok-player --log"));
 }
 
 #[test]
@@ -756,14 +777,13 @@ if [[ -n "${OKP_STUB_GH_LOG:-}" ]]; then
   printf '%s\n' "$*" >>"$OKP_STUB_GH_LOG"
 fi
 if [[ "${1:-}" == run && "${2:-}" == list ]]; then
-  arguments=" $* "
-  completed_only=false
-  [[ "$arguments" != *" --status completed "* ]] || completed_only=true
   workflow=""
   event=""
+  run_status=""
   while (( $# > 0 )); do
     if [[ "$1" == --workflow ]]; then workflow="$2"; fi
     if [[ "$1" == --event ]]; then event="$2"; fi
+    if [[ "$1" == --status ]]; then run_status="$2"; fi
     shift
   done
   main_sha="d5d531a58c830a01a7e25615e850593e9ff4493f"
@@ -777,7 +797,15 @@ if [[ "${1:-}" == run && "${2:-}" == list ]]; then
       if [[ "$OKP_STUB_FAIL" == schedule-stale || "$OKP_STUB_FAIL" == candidate-active ]]; then
         completed_at="2026-07-17T23:00:47Z"
       fi
-    if [[ "$OKP_STUB_FAIL" == candidate-failures ]]; then
+    if [[ "$run_status" == in_progress || "$run_status" == queued ]]; then
+      if [[ "$OKP_STUB_FAIL" == candidate-active && "$run_status" == in_progress ]]; then
+        printf '%s\n' '[
+          {"databaseId":500,"headSha":"1111111111111111111111111111111111111111","event":"workflow_dispatch","status":"in_progress","createdAt":"2026-07-18T02:00:40Z","url":"https://example.invalid/run/active-candidate"}
+        ]'
+      else
+        printf '%s\n' '[]'
+      fi
+    elif [[ "$OKP_STUB_FAIL" == candidate-failures && "$event" == schedule ]]; then
       printf '%s\n' '[
         {"databaseId":106,"headSha":"d5d531a58c830a01a7e25615e850593e9ff4493f","event":"schedule","status":"completed","conclusion":"failure","updatedAt":"2026-07-18T01:55:47Z","url":"https://example.invalid/run/106"},
         {"databaseId":105,"conclusion":"failure"},
@@ -787,16 +815,12 @@ if [[ "${1:-}" == run && "${2:-}" == list ]]; then
         {"databaseId":101,"conclusion":"failure"},
         {"databaseId":100,"conclusion":"success"}
       ]'
-    elif [[ "$OKP_STUB_FAIL" == candidate-active && "$completed_only" == false ]]; then
-      printf '%s\n' '[
-        {"headSha":"1111111111111111111111111111111111111111","event":"workflow_dispatch","status":"in_progress","createdAt":"2026-07-18T02:00:40Z","url":"https://example.invalid/run/active-candidate"},
-        {"headSha":"1111111111111111111111111111111111111111","event":"schedule","status":"completed","createdAt":"2026-07-18T01:00:47Z","url":"https://example.invalid/run/candidate"}
-      ]'
-    elif [[ "$OKP_STUB_FAIL" == candidate-green-nondelivery && "$completed_only" == false ]]; then
-      printf '%s\n' '[
-        {"databaseId":402,"headSha":"4444444444444444444444444444444444444444","event":"schedule","status":"completed","conclusion":"success","createdAt":"2026-07-18T01:35:47Z","updatedAt":"2026-07-18T01:55:47Z","url":"https://example.invalid/run/second-green"},
-        {"databaseId":401,"headSha":"3333333333333333333333333333333333333333","event":"workflow_dispatch","status":"completed","conclusion":"success","createdAt":"2026-07-18T01:30:47Z","updatedAt":"2026-07-18T01:50:47Z","url":"https://example.invalid/run/first-green"}
-      ]'
+    elif [[ "$OKP_STUB_FAIL" == candidate-green-nondelivery && "$event" == schedule ]]; then
+      printf '%s\n' '[{"databaseId":402,"headSha":"4444444444444444444444444444444444444444","event":"schedule","status":"completed","conclusion":"success","createdAt":"2026-07-18T01:35:47Z","updatedAt":"2026-07-18T01:55:47Z","url":"https://example.invalid/run/second-green"}]'
+    elif [[ "$OKP_STUB_FAIL" == candidate-green-nondelivery && "$event" == workflow_dispatch ]]; then
+      printf '%s\n' '[{"databaseId":401,"headSha":"3333333333333333333333333333333333333333","event":"workflow_dispatch","status":"completed","conclusion":"success","createdAt":"2026-07-18T01:30:47Z","updatedAt":"2026-07-18T01:50:47Z","url":"https://example.invalid/run/first-green"}]'
+    elif [[ "$event" == workflow_dispatch ]]; then
+      printf '%s\n' '[]'
     else
       printf '[{"databaseId":100,"headSha":"%s","event":"schedule","status":"completed","conclusion":"success","updatedAt":"%s","url":"https://example.invalid/run/candidate"}]\n' "$main_sha" "$completed_at"
     fi
@@ -860,6 +884,17 @@ if [[ "${1:-}" == run && "${2:-}" == list ]]; then
   exit 0
 fi
 if [[ "${1:-}" == run && "${2:-}" == view ]]; then
+  run_id="${3:-}"
+  if [[ "$OKP_STUB_FAIL" == candidate-green-nondelivery ]]; then
+    if [[ "$run_id" == 401 ]]; then
+      printf '%s\n' 'OKP_CANDIDATE_OUTCOME_JSON={"publish_result":"stale_generation","build_sha":"3333333333333333333333333333333333333333"}'
+      exit 0
+    fi
+    if [[ "$run_id" == 402 ]]; then
+      printf '%s\n' 'OKP_CANDIDATE_OUTCOME_JSON={"publish_result":"skipped","build_sha":"4444444444444444444444444444444444444444"}'
+      exit 0
+    fi
+  fi
   if [[ "$OKP_STUB_FAIL" == candidate-failures ]]; then
     printf '%s\n' 'candidate build 0.11.0-beta.0.106 failed at gate bundled-mpv'
     exit 0

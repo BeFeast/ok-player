@@ -59,6 +59,10 @@ pub struct ScheduleRunSnapshot {
     pub conclusion: String,
     pub completed_at_utc: String,
     #[serde(default)]
+    pub publish_result: String,
+    #[serde(default)]
+    pub build_sha: String,
+    #[serde(default)]
     pub url: String,
 }
 
@@ -1395,7 +1399,6 @@ fn validate_candidate_green_nondelivery(
         if run.status != "completed"
             || run.conclusion != "success"
             || !matches!(run.event.as_str(), "schedule" | "workflow_dispatch")
-            || same_sha(&run.head_sha, &feed.commit_sha)
         {
             continue;
         }
@@ -1412,6 +1415,20 @@ fn validate_candidate_green_nondelivery(
             || now.saturating_sub(completed_at) > CANDIDATE_GREEN_NONDELIVERY_WINDOW_SECONDS
         {
             continue;
+        }
+
+        match run.publish_result.as_str() {
+            "published" if same_sha(&run.build_sha, &feed.commit_sha) => continue,
+            "stale_generation" | "skipped" => {}
+            "" if same_sha(&run.head_sha, &feed.commit_sha) => continue,
+            _ => {
+                details.push(format!(
+                    "Linux Candidate successful run {} lacks trustworthy publication outcome evidence",
+                    run.url
+                ));
+                reason_codes.push("candidate-run-history-unavailable".to_owned());
+                continue;
+            }
         }
         successful_nondeliveries.push(run);
     }

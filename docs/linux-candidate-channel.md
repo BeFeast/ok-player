@@ -138,6 +138,10 @@ checker requires the public rolling pointer's `commit_sha` to equal current
 pointer stays behind emits a recovery signal, with a separate urgent signal
 after two such runs within two hours. A fresh exact-main run still in progress
 is non-paging settling evidence until the configured lag bound is exceeded.
+Recent completed runs are attributed with their compact
+`OKP_CANDIDATE_OUTCOME_JSON` transaction record, so a coalesced run that was
+requested for one SHA but actually published the feed SHA is not misclassified
+as non-delivery.
 
 A headless gate failure remains fail-safe. Workflow-dispatch run `29639207396`
 failed on source `50495469570dd31129581b158678d33fb22a574d` before promotion,

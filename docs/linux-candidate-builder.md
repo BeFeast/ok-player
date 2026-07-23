@@ -328,6 +328,11 @@ That successful no-op is only a safe publication-fence result; it is not a
 delivery success. Project outcome health compares the fetched rolling pointer
 to current `main`. If a completed green run leaves `candidate.linux.json`
 behind, recovery remains armed even when the Actions conclusion is `success`.
+Every completed build/publish transaction writes one compact
+`OKP_CANDIDATE_OUTCOME_JSON` log record with its publish result and built SHA;
+the outcome collector binds recent green runs to that evidence rather than
+assuming the workflow trigger SHA was the artifact that the coalesced builder
+published.
 One green non-delivery requests recovery, and two within two hours add the
 urgent repeated-non-delivery signal. A bounded exact-main run that is still in
 progress remains settling evidence until its run-age or unpublished-main lag

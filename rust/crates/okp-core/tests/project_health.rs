@@ -336,11 +336,13 @@ fn successful_candidate_runs_do_not_cover_an_unchanged_feed() {
         url: "https://example.invalid/run/active-candidate".to_owned(),
     });
     snapshot.source.candidate_workflow.completed_runs = vec![ScheduleRunSnapshot {
-        head_sha: "3333333333333333333333333333333333333333".to_owned(),
+        head_sha: CANDIDATE_SHA.to_owned(),
         event: "workflow_dispatch".to_owned(),
         status: "completed".to_owned(),
         conclusion: "success".to_owned(),
         completed_at_utc: "2026-07-18T01:50:47Z".to_owned(),
+        publish_result: "stale_generation".to_owned(),
+        build_sha: CANDIDATE_SHA.to_owned(),
         url: "https://example.invalid/run/first-green".to_owned(),
     }];
 
@@ -372,6 +374,8 @@ fn successful_candidate_runs_do_not_cover_an_unchanged_feed() {
             status: "completed".to_owned(),
             conclusion: "success".to_owned(),
             completed_at_utc: "2026-07-18T01:55:47Z".to_owned(),
+            publish_result: "skipped".to_owned(),
+            build_sha: "4444444444444444444444444444444444444444".to_owned(),
             url: "https://example.invalid/run/second-green".to_owned(),
         });
     let repeated_outcome = snapshot.evaluate();
@@ -408,6 +412,42 @@ fn successful_candidate_runs_do_not_cover_an_unchanged_feed() {
         !accounted
             .reason_codes
             .contains(&"candidate-success-without-delivery".to_owned())
+    );
+
+    let mut coalesced_delivery = snapshot;
+    coalesced_delivery.source.candidate_workflow.completed_runs = vec![ScheduleRunSnapshot {
+        head_sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+        event: "workflow_dispatch".to_owned(),
+        status: "completed".to_owned(),
+        conclusion: "success".to_owned(),
+        completed_at_utc: "2026-07-18T01:55:47Z".to_owned(),
+        publish_result: "published".to_owned(),
+        build_sha: CANDIDATE_SHA.to_owned(),
+        url: "https://example.invalid/run/coalesced-delivery".to_owned(),
+    }];
+    let coalesced_outcome = coalesced_delivery.evaluate();
+    let coalesced = candidate_check(&coalesced_outcome);
+    assert!(coalesced_outcome.healthy);
+    assert_eq!(coalesced.status, HealthStatus::Warning);
+    assert!(
+        !coalesced
+            .reason_codes
+            .contains(&"candidate-success-without-delivery".to_owned())
+    );
+
+    coalesced_delivery.source.candidate_workflow.completed_runs[0]
+        .publish_result
+        .clear();
+    coalesced_delivery.source.candidate_workflow.completed_runs[0]
+        .build_sha
+        .clear();
+    let missing_outcome = coalesced_delivery.evaluate();
+    let missing = candidate_check(&missing_outcome);
+    assert!(!missing_outcome.healthy);
+    assert!(
+        missing
+            .reason_codes
+            .contains(&"candidate-run-history-unavailable".to_owned())
     );
 }
 
@@ -798,6 +838,8 @@ fn healthy_snapshot(
                     status: "completed".to_owned(),
                     conclusion: "success".to_owned(),
                     completed_at_utc: "2026-07-18T01:55:47Z".to_owned(),
+                    publish_result: String::new(),
+                    build_sha: String::new(),
                     url: "https://example.invalid/runs/linux-candidate".to_owned(),
                 }),
                 schedule_error: None,
@@ -818,6 +860,8 @@ fn healthy_snapshot(
                     status: "completed".to_owned(),
                     conclusion: "success".to_owned(),
                     completed_at_utc: "2026-07-18T01:55:47Z".to_owned(),
+                    publish_result: String::new(),
+                    build_sha: String::new(),
                     url: "https://example.invalid/runs/windows-candidate".to_owned(),
                 }),
                 schedule_error: None,

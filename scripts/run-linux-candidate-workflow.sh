@@ -38,6 +38,24 @@ if [[ "$SOURCE_SHA" != "$PROMOTED_SHA" || "$FORCE_REPUBLISH" == "true" ]]; then
   esac
 fi
 
+if [[ "$DECISION_REACHED" == "true" && -s "$DECISION_OUTPUT" ]]; then
+  WORKFLOW_OUTCOME="$(jq -c --arg publish_result "$PUBLISH_RESULT" \
+    '. + {publish_result: $publish_result}' "$DECISION_OUTPUT")"
+else
+  WORKFLOW_OUTCOME="$(jq -cn \
+    --arg publish_result "$PUBLISH_RESULT" \
+    --arg requested_sha "${OKP_CANDIDATE_REQUESTED_SHA:-}" \
+    --arg build_sha "$SOURCE_SHA" \
+    --arg promoted_sha "$PROMOTED_SHA" \
+    '{
+      publish_result: $publish_result,
+      requested_sha: $requested_sha,
+      build_sha: $build_sha,
+      promoted_sha: $promoted_sha
+    }')"
+fi
+printf 'OKP_CANDIDATE_OUTCOME_JSON=%s\n' "$WORKFLOW_OUTCOME"
+
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   {
     echo "bundle=$BUNDLE"
