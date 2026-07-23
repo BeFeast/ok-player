@@ -244,15 +244,32 @@ else
   windows_candidate_workflow_state_error="GitHub Windows Candidate workflow state query failed"
 fi
 
-windows_candidate_schedule_run='null'
-windows_candidate_schedule_error=""
+windows_candidate_automatic_run='null'
+windows_candidate_automatic_error=""
 windows_candidate_consecutive_failed_runs=0
 windows_candidate_last_failed_gate=""
+windows_candidate_push_runs_ok=false
+windows_candidate_schedule_runs_ok=false
+if windows_candidate_push_runs="$(gh run list --repo "$repository" --branch main --event push \
+    --status completed --workflow "Windows Candidate" --limit 100 \
+    --json databaseId,headSha,event,status,conclusion,updatedAt,url 2>/dev/null)"; then
+  windows_candidate_push_runs_ok=true
+fi
 if windows_candidate_schedule_runs="$(gh run list --repo "$repository" --branch main --event schedule \
     --status completed --workflow "Windows Candidate" --limit 100 \
     --json databaseId,headSha,event,status,conclusion,updatedAt,url 2>/dev/null)"; then
-  if ! windows_candidate_schedule_run="$(jq -c 'if type == "array" then .[0] // null else error("not an array") end' \
-      <<<"$windows_candidate_schedule_runs" 2>/dev/null)" \
+  windows_candidate_schedule_runs_ok=true
+fi
+if $windows_candidate_push_runs_ok && $windows_candidate_schedule_runs_ok; then
+  if ! windows_candidate_automatic_runs="$(jq -cn \
+      --argjson push "$windows_candidate_push_runs" \
+      --argjson schedule "$windows_candidate_schedule_runs" '
+        if ($push | type) != "array" or ($schedule | type) != "array" then error("not arrays")
+        else [$push[], $schedule[]] | sort_by(.updatedAt // "") | reverse | .[:100]
+        end
+      ' 2>/dev/null)" \
+      || ! windows_candidate_automatic_run="$(jq -c '.[0] // null' \
+      <<<"$windows_candidate_automatic_runs" 2>/dev/null)" \
       || ! windows_candidate_consecutive_failed_runs="$(jq -r '
         if type != "array" then error("not an array")
         else reduce .[] as $run (
@@ -263,12 +280,12 @@ if windows_candidate_schedule_runs="$(gh run list --repo "$repository" --branch 
           end
         ) | .count
         end
-      ' <<<"$windows_candidate_schedule_runs" 2>/dev/null)"; then
-    windows_candidate_schedule_run='null'
+      ' <<<"$windows_candidate_automatic_runs" 2>/dev/null)"; then
+    windows_candidate_automatic_run='null'
     windows_candidate_consecutive_failed_runs=0
-    windows_candidate_schedule_error="GitHub Windows Candidate completed schedule query returned malformed JSON"
+    windows_candidate_automatic_error="GitHub Windows Candidate completed automatic run queries returned malformed JSON"
   elif (( windows_candidate_consecutive_failed_runs >= 2 )); then
-    latest_windows_failed_run_id="$(jq -r '.[0].databaseId // ""' <<<"$windows_candidate_schedule_runs")"
+    latest_windows_failed_run_id="$(jq -r '.[0].databaseId // ""' <<<"$windows_candidate_automatic_runs")"
     if [[ "$latest_windows_failed_run_id" =~ ^[0-9]+$ ]] \
         && windows_failed_jobs="$(gh run view "$latest_windows_failed_run_id" --repo "$repository" --json jobs 2>/dev/null)"; then
       windows_candidate_last_failed_gate="$(jq -r '
@@ -277,7 +294,7 @@ if windows_candidate_schedule_runs="$(gh run list --repo "$repository" --branch 
     fi
   fi
 else
-  windows_candidate_schedule_error="GitHub Windows Candidate completed schedule query failed"
+  windows_candidate_automatic_error="GitHub Windows Candidate completed automatic run query failed"
 fi
 
 windows_ok=false
@@ -424,8 +441,8 @@ jq -n \
   --arg candidate_source_error "$candidate_source_error" \
   --arg windows_candidate_workflow_state "$windows_candidate_workflow_state" \
   --arg windows_candidate_workflow_state_error "$windows_candidate_workflow_state_error" \
-  --argjson windows_candidate_schedule_run "$windows_candidate_schedule_run" \
-  --arg windows_candidate_schedule_error "$windows_candidate_schedule_error" \
+  --argjson windows_candidate_automatic_run "$windows_candidate_automatic_run" \
+  --arg windows_candidate_automatic_error "$windows_candidate_automatic_error" \
   --argjson windows_candidate_consecutive_failed_runs "$windows_candidate_consecutive_failed_runs" \
   --arg windows_candidate_last_failed_gate "$windows_candidate_last_failed_gate" \
   --arg windows_candidate_sha "$windows_candidate_sha" \
@@ -519,18 +536,18 @@ jq -n \
         state: $windows_candidate_workflow_state,
         state_error: (if $windows_candidate_workflow_state_error == "" then null else $windows_candidate_workflow_state_error end),
         latest_completed_schedule: (
-          if $windows_candidate_schedule_run == null then null
+          if $windows_candidate_automatic_run == null then null
           else {
-            head_sha: ($windows_candidate_schedule_run.headSha // ""),
-            event: ($windows_candidate_schedule_run.event // ""),
-            status: ($windows_candidate_schedule_run.status // ""),
-            conclusion: ($windows_candidate_schedule_run.conclusion // ""),
-            completed_at_utc: ($windows_candidate_schedule_run.updatedAt // ""),
-            url: ($windows_candidate_schedule_run.url // "")
+            head_sha: ($windows_candidate_automatic_run.headSha // ""),
+            event: ($windows_candidate_automatic_run.event // ""),
+            status: ($windows_candidate_automatic_run.status // ""),
+            conclusion: ($windows_candidate_automatic_run.conclusion // ""),
+            completed_at_utc: ($windows_candidate_automatic_run.updatedAt // ""),
+            url: ($windows_candidate_automatic_run.url // "")
           }
           end
         ),
-        schedule_error: (if $windows_candidate_schedule_error == "" then null else $windows_candidate_schedule_error end),
+        schedule_error: (if $windows_candidate_automatic_error == "" then null else $windows_candidate_automatic_error end),
         consecutive_failed_runs: $windows_candidate_consecutive_failed_runs,
         last_failed_gate: (if $windows_candidate_last_failed_gate == "" then null else $windows_candidate_last_failed_gate end)
       },
