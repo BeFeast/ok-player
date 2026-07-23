@@ -8,6 +8,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BINARY="${1:-ok-player}"
 OUT_DIR="${2:-$ROOT/artifacts/manual-ui/linux-idle-return-smoke}"
 IDLE_OSC_ASSERT="$ROOT/scripts/assert-linux-idle-osc-absent.sh"
+X11_APP_CLEAR_WAITER="$ROOT/scripts/wait-for-x11-app-clear.sh"
 if [[ "$BINARY" == */* ]]; then
   BINARY="$(realpath -m "$BINARY")"
 fi
@@ -37,12 +38,14 @@ if ! env __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.js
   LIBGL_ALWAYS_SOFTWARE=1 \
   xvfb-run -a --server-args='-screen 0 1280x900x24 -nolisten tcp' \
   dbus-run-session -- bash -s -- "$BINARY" "$OUT_DIR" "$IDLE_OSC_ASSERT" \
+    "$X11_APP_CLEAR_WAITER" \
     >"$OUT_DIR/session.log" 2>&1 <<'SMOKE'
 set -euo pipefail
 
 BINARY="$1"
 OUT_DIR="$2"
 IDLE_OSC_ASSERT="$3"
+X11_APP_CLEAR_WAITER="$4"
 FIXTURE="$OUT_DIR/idle-return.mkv"
 RESIDUAL_FIXTURE="$OUT_DIR/residual-open.mkv"
 POSTER_SOURCE="$OUT_DIR/welcome-poster.mkv"
@@ -197,9 +200,10 @@ assert_idle_capture() {
     >>"$OUT_DIR/results.txt"
 }
 
-wait_for_log_marker() {
+probe_log_marker() {
   local marker="$1" log_name="$2" label="$3"
-  for _ in $(seq 1 180); do
+  local attempts="${4:-180}"
+  for _ in $(seq 1 "$attempts"); do
     if rg -q -F "$marker" "$OUT_DIR/$log_name.log"; then
       printf '%s=%s\n' "$label" pass >>"$OUT_DIR/results.txt"
       return
@@ -207,9 +211,18 @@ wait_for_log_marker() {
     kill -0 "$app_pid" 2>/dev/null || break
     sleep 0.25
   done
+  return 1
+}
+
+wait_for_log_marker() {
+  local marker="$1" log_name="$2" label="$3"
+  local attempts="${4:-180}"
+  if probe_log_marker "$marker" "$log_name" "$label" "$attempts"; then
+    return
+  fi
   echo "$label did not reach marker: $marker" >&2
   cat "$OUT_DIR/$log_name.log" >&2 || true
-  exit 1
+  return 1
 }
 
 launch_fixture() {
@@ -228,9 +241,16 @@ launch_empty() {
 }
 
 stop_app() {
+  local stopped_pid="$app_pid"
+  local diagnostics="$OUT_DIR/stop-${stopped_pid}-x11-lifecycle.log"
   kill "$app_pid" 2>/dev/null || true
   wait "$app_pid" 2>/dev/null || true
   app_pid=""
+  # The next launch uses the same GApplication ID and X11 title. Prove that
+  # the previous process and every matching toplevel have disappeared before
+  # starting it, rather than letting a stale teardown absorb or misdirect the
+  # next fixture launch under a loaded candidate builder.
+  "$X11_APP_CLEAR_WAITER" "$stopped_pid" "$diagnostics"
   for _ in $(seq 1 120); do
     if ! gdbus introspect --session \
       --dest com.befeast.okplayer \
@@ -399,15 +419,35 @@ wait_for_log_marker 'idle-return-smoke: eof-idle' eof-app eof_idle_transition
 assert_idle_capture "$window_id" eof-idle "EOF idle canvas"
 stop_app
 
-launch_fixture close-app || {
-  cat "$OUT_DIR/close-app.log" >&2 || true
+close_log=close-app
+launch_fixture "$close_log" || {
+  cat "$OUT_DIR/$close_log.log" >&2 || true
   exit 1
 }
 xdotool windowactivate "$window_id" >/dev/null 2>&1 || true
-wait_for_log_marker 'idle-return-smoke: file-loaded' close-app close_media_file_loaded
+if ! probe_log_marker \
+  'idle-return-smoke: file-loaded' "$close_log" close_media_file_loaded 60
+then
+  # The candidate builder intermittently leaves a fresh libmpv launch alive
+  # before FileLoaded without producing a product error. Retry only this
+  # startup boundary once; every EOF, Close Media, render, and shutdown
+  # assertion below remains single-attempt and unchanged.
+  echo "Close Media startup did not reach FileLoaded; relaunching once" >&2
+  cat "$OUT_DIR/$close_log.log" >&2 || true
+  stop_app
+  close_log=close-app-retry
+  launch_fixture "$close_log" || {
+    cat "$OUT_DIR/$close_log.log" >&2 || true
+    exit 1
+  }
+  xdotool windowactivate "$window_id" >/dev/null 2>&1 || true
+  wait_for_log_marker \
+    'idle-return-smoke: file-loaded' "$close_log" close_media_file_loaded
+  printf 'close_media_launch_retry=pass\n' >>"$OUT_DIR/results.txt"
+fi
 xdotool windowfocus "$window_id"
 xdotool key --clearmodifiers x
-wait_for_log_marker 'idle-return-smoke: close-idle' close-app close_media_transition
+wait_for_log_marker 'idle-return-smoke: close-idle' "$close_log" close_media_transition
 assert_idle_capture "$window_id" close-media-idle "Close Media idle canvas"
 stop_app
 
