@@ -63,14 +63,21 @@ fn main_window_fit_session_has_one_multiscreen_manager_and_two_supervisors() {
         .and_then(|(_, tail)| tail.split_once("\n}\n\nquit_app()"))
         .map(|(body, _)| body)
         .expect("main-window close helper");
-    assert!(close.contains("xdotool windowactivate --sync \"$window_id\""));
-    assert!(close.contains("xdotool windowfocus --sync \"$window_id\""));
-    assert!(close.contains("active_window=\"$(xdotool getactivewindow"));
-    assert!(close.contains("close-dispatch attempt=%s target=%s active=%s"));
-    assert!(close.contains("[[ \"$active_window\" == \"$window_id\" ]]"));
-    assert!(close.contains("xdotool key --clearmodifiers alt+F4"));
-    assert!(!close.contains("xdotool key --window"));
+    assert!(close.contains("route=ewmh-close-window"));
+    assert!(close.contains("\"$X11_CLOSE_REQUEST\" \"$window_id\""));
+    assert!(!close.contains("xdotool key"));
+    assert!(!close.contains("xdotool click"));
     assert!(!close.contains("xdotool windowclose"));
+
+    assert!(script.contains("scripts/send-x11-close-request.c"));
+    assert!(script.contains("pkg-config --cflags --libs x11"));
+    assert!(script.contains("\"$CC_BIN\" -Wall -Wextra -Werror \"$X11_CLOSE_REQUEST_SOURCE\""));
+
+    let close_request = include_str!("../../../../scripts/send-x11-close-request.c");
+    assert!(close_request.contains("_NET_CLOSE_WINDOW"));
+    assert!(close_request.contains("RootWindowOfScreen(attributes.screen)"));
+    assert!(close_request.contains("SubstructureRedirectMask | SubstructureNotifyMask"));
+    assert!(close_request.contains("XSendEvent"));
 }
 
 #[test]

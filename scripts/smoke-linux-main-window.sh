@@ -10,6 +10,7 @@ X11_APP_CLEAR_WAITER="$ROOT/scripts/wait-for-x11-app-clear.sh"
 DBUS_NAME_CLEAR_WAITER="$ROOT/scripts/wait-for-dbus-names-clear.sh"
 ISOLATED_DBUS_SESSION="$ROOT/scripts/run-linux-isolated-dbus-session.sh"
 ISOLATED_XVFB_SESSION="$ROOT/scripts/run-linux-isolated-xvfb-session.sh"
+X11_CLOSE_REQUEST_SOURCE="$ROOT/scripts/send-x11-close-request.c"
 
 for tool in Xvfb xauth flock dbus-run-session gdbus xfwm4 xdotool xwininfo xprop import magick ffmpeg ffprobe rg stat; do
   if ! command -v "$tool" >/dev/null 2>&1; then
@@ -234,6 +235,21 @@ if [[ "${OKP_MAIN_WINDOW_IDLE_ONLY:-0}" == "1" ]]; then
   exit 0
 fi
 
+CC_BIN="${CC:-/usr/bin/cc}"
+if ! command -v "$CC_BIN" >/dev/null 2>&1; then
+  echo "Missing required C compiler: $CC_BIN" >&2
+  exit 127
+fi
+if ! command -v pkg-config >/dev/null 2>&1 || ! pkg-config --exists x11; then
+  echo "Missing required X11 development package" >&2
+  exit 127
+fi
+read -r -a x11_compile_flags <<<"$(pkg-config --cflags --libs x11)"
+X11_CLOSE_REQUEST="$OUT_DIR/send-x11-close-request"
+"$CC_BIN" -Wall -Wextra -Werror "$X11_CLOSE_REQUEST_SOURCE" \
+  -o "$X11_CLOSE_REQUEST" \
+  "${x11_compile_flags[@]}"
+
 "$ROOT/scripts/generate-linux-acceptance-media.sh" "$OUT_DIR/fixtures" \
   >"$OUT_DIR/fixtures.log" 2>&1
 
@@ -247,7 +263,7 @@ if ! env XDG_CACHE_HOME="$OUT_DIR/fit-cache" XDG_RUNTIME_DIR="$OUT_DIR/fit-runti
   '-screen 0 1280x900x24 -screen 1 1024x768x24 -nolisten tcp -noreset' \
   "$ISOLATED_DBUS_SESSION" "$OUT_DIR/fit-session-evidence.txt" \
   bash -s -- "$BINARY" "$OUT_DIR" "$X11_WINDOW_WAITER" \
-  "$X11_APP_CLEAR_WAITER" "$DBUS_NAME_CLEAR_WAITER" \
+  "$X11_APP_CLEAR_WAITER" "$DBUS_NAME_CLEAR_WAITER" "$X11_CLOSE_REQUEST" \
   >"$OUT_DIR/window-fit-session.log" 2>&1 <<'FIT_SMOKE'
 set -euo pipefail
 
@@ -256,6 +272,7 @@ OUT_DIR="$2"
 X11_WINDOW_WAITER="$3"
 X11_APP_CLEAR_WAITER="$4"
 DBUS_NAME_CLEAR_WAITER="$5"
+X11_CLOSE_REQUEST="$6"
 FIXTURES="$OUT_DIR/fixtures"
 
 export GDK_BACKEND=x11
@@ -487,21 +504,16 @@ finish_app_shutdown() {
 
 close_app() {
   local window_id="$1"
-  local active_window close_attempt
-  # `windowclose` destroys the X11 window directly and can bypass GTK's
-  # close-request callback. Make the known player XID both active and focused,
-  # verify that Xfwm accepted the focus handoff, and only then send its normal
-  # Alt+F4 binding. Retry only while the same player XID remains present.
+  local close_attempt
+  # `windowclose` destroys the X11 window directly, while keyboard and pointer
+  # routes depend on focus or hit testing. Ask Xfwm to close the exact toplevel;
+  # it delivers WM_DELETE_WINDOW and GTK executes the normal close-request
+  # teardown path. Retry only while the same XID remains present.
   for close_attempt in 1 2; do
-    xdotool windowactivate --sync "$window_id" || true
-    xdotool windowfocus --sync "$window_id" || true
-    active_window="$(xdotool getactivewindow 2>/dev/null || true)"
-    printf 'close-dispatch attempt=%s target=%s active=%s\n' \
-      "$close_attempt" "$window_id" "${active_window:-unavailable}" \
+    printf 'close-dispatch attempt=%s target=%s route=ewmh-close-window\n' \
+      "$close_attempt" "$window_id" \
       >>"$OUT_DIR/fit-lifecycle.log"
-    if [[ "$active_window" == "$window_id" ]]; then
-      xdotool key --clearmodifiers alt+F4 || true
-    fi
+    "$X11_CLOSE_REQUEST" "$window_id"
     sleep 0.2
     if ! xdotool getwindowgeometry "$window_id" >/dev/null 2>&1; then
       break
