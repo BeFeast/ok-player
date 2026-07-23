@@ -5060,6 +5060,8 @@ fn idle_return_smoke_waits_for_natural_eof_before_welcome_capture() {
     assert!(stop.contains("kill \"$timer_pid\""));
     assert!(smoke.contains("setsid env OKP_DEBUG_IDLE_RETURN_SMOKE=1"));
     assert!(smoke.contains("setsid env -u OKP_DISABLE_MPRIS"));
+    assert!(smoke.contains("kill -TERM -- \"-$app_pgid\""));
+    assert!(smoke.contains("kill -KILL -- \"-$app_pgid\""));
     assert!(
         stop.find("wait \"$stopped_pid\"")
             < stop.find("\"$X11_APP_CLEAR_WAITER\" \"$stopped_pid\" \"$diagnostics\"")
