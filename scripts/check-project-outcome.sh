@@ -80,6 +80,7 @@ if [[ ! "$max_active_run_age" =~ ^[0-9]+$ ]] || (( max_active_run_age == 0 )); t
   echo "OKP_PROJECT_HEALTH_MAX_CANDIDATE_RUN_AGE_SECONDS must be a positive integer" >&2
   exit 2
 fi
+checked_at_unix="$(date -u +%s)"
 
 scratch_prefix="ok-player-outcome-health"
 if [[ -n "${OKP_SCRATCH_SESSION:-}" ]]; then
@@ -174,47 +175,51 @@ fi
 
 candidate_active_run='null'
 candidate_active_run_error=""
+candidate_active_runs='[]'
 candidate_completed_runs='[]'
 candidate_run_history_error=""
-if candidate_runs="$(gh run list --repo "$repository" --branch main \
-    --workflow "Linux Candidate" --limit 100 \
-    --json databaseId,headSha,event,status,conclusion,createdAt,updatedAt,url 2>/dev/null)"; then
-  if ! candidate_active_run="$(jq -c --arg main_sha "$main_sha" '
-      if type != "array" then error("not an array")
-      else [
-        .[]
-        | select((.headSha // "") == $main_sha)
-        | select((.event // "") == "schedule" or (.event // "") == "workflow_dispatch")
-        | select((.status // "") != "completed")
-      ][0] // null
-      end
-    ' <<<"$candidate_runs" 2>/dev/null)" \
-      || ! candidate_completed_runs="$(jq -c '
-        if type != "array" then error("not an array")
-        else [
-          .[]
-          | select((.event // "") == "schedule" or (.event // "") == "workflow_dispatch")
-          | select((.status // "") == "completed")
-        ]
-        end
-      ' <<<"$candidate_runs" 2>/dev/null)"; then
-    candidate_active_run='null'
-    candidate_completed_runs='[]'
-    candidate_active_run_error="GitHub Linux Candidate active run query returned malformed JSON"
-    candidate_run_history_error="GitHub Linux Candidate completed run history query returned malformed JSON"
+for candidate_active_status in in_progress queued; do
+  if candidate_runs="$(gh run list --repo "$repository" --branch main \
+      --workflow "Linux Candidate" --status "$candidate_active_status" --limit 100 \
+      --json databaseId,headSha,event,status,conclusion,createdAt,updatedAt,url 2>/dev/null)"; then
+    if merged_active_runs="$(jq -cn \
+        --argjson existing "$candidate_active_runs" \
+        --argjson incoming "$candidate_runs" '
+          if ($existing | type) != "array" or ($incoming | type) != "array" then error("not arrays")
+          else [$existing[], $incoming[]] | unique_by(.databaseId)
+          end
+        ' 2>/dev/null)"; then
+      candidate_active_runs="$merged_active_runs"
+    else
+      candidate_active_run_error="GitHub Linux Candidate active run query returned malformed JSON"
+    fi
+  else
+    candidate_active_run_error="GitHub Linux Candidate active run query failed"
   fi
-else
-  candidate_active_run_error="GitHub Linux Candidate active run query failed"
-  candidate_run_history_error="GitHub Linux Candidate completed run history query failed"
+done
+if [[ -z "$candidate_active_run_error" ]]; then
+  candidate_active_run="$(jq -c --arg main_sha "$main_sha" '
+    [
+      .[]
+      | select((.headSha // "") == $main_sha)
+      | select((.event // "") == "schedule" or (.event // "") == "workflow_dispatch")
+    ]
+    | sort_by((.createdAt // ""), (.databaseId // 0))
+    | reverse
+    | .[0] // null
+  ' <<<"$candidate_active_runs")"
 fi
 
 candidate_schedule_run='null'
 candidate_schedule_error=""
 candidate_consecutive_failed_runs=0
 candidate_last_failed_gate=""
+candidate_schedule_runs='[]'
+candidate_schedule_runs_ok=false
 if candidate_schedule_runs="$(gh run list --repo "$repository" --branch main --event schedule \
     --status completed --workflow "Linux Candidate" --limit 100 \
-    --json databaseId,headSha,event,status,conclusion,updatedAt,url 2>/dev/null)"; then
+    --json databaseId,headSha,event,status,conclusion,createdAt,updatedAt,url 2>/dev/null)"; then
+  candidate_schedule_runs_ok=true
   if ! candidate_schedule_run="$(jq -c 'if type == "array" then .[0] // null else error("not an array") end' \
       <<<"$candidate_schedule_runs" 2>/dev/null)" \
       || ! candidate_consecutive_failed_runs="$(jq -r '
@@ -244,6 +249,33 @@ if candidate_schedule_runs="$(gh run list --repo "$repository" --branch main --e
   fi
 else
   candidate_schedule_error="GitHub Linux Candidate completed schedule query failed"
+fi
+
+candidate_dispatch_runs='[]'
+candidate_dispatch_runs_ok=false
+if candidate_dispatch_runs="$(gh run list --repo "$repository" --branch main --event workflow_dispatch \
+    --status completed --workflow "Linux Candidate" --limit 100 \
+    --json databaseId,headSha,event,status,conclusion,createdAt,updatedAt,url 2>/dev/null)"; then
+  candidate_dispatch_runs_ok=true
+fi
+if $candidate_schedule_runs_ok && $candidate_dispatch_runs_ok; then
+  if ! candidate_completed_runs="$(jq -cn \
+      --argjson schedule "$candidate_schedule_runs" \
+      --argjson dispatch "$candidate_dispatch_runs" '
+        if ($schedule | type) != "array" or ($dispatch | type) != "array" then error("not arrays")
+        else
+          [$schedule[], $dispatch[]]
+          | unique_by(.databaseId)
+          | sort_by((.updatedAt // .createdAt // ""), (.databaseId // 0))
+          | reverse
+          | .[:100]
+        end
+      ' 2>/dev/null)"; then
+    candidate_completed_runs='[]'
+    candidate_run_history_error="GitHub Linux Candidate completed run history query returned malformed JSON"
+  fi
+else
+  candidate_run_history_error="GitHub Linux Candidate completed run history query failed"
 fi
 
 windows_candidate_workflow_state=""
@@ -392,6 +424,59 @@ if [[ -n "$candidate_sha" && -n "$main_sha" ]]; then
   fi
 fi
 
+if [[ -n "$candidate_sha" && "$candidate_sha" != "$main_sha" \
+    && -z "$candidate_run_history_error" ]]; then
+  candidate_evidence_cutoff="$((checked_at_unix - 7200))"
+  while IFS=$'\t' read -r candidate_run_id candidate_run_head; do
+    [[ "$candidate_run_id" =~ ^[0-9]+$ ]] || continue
+    candidate_outcome_json=""
+    if candidate_run_log="$(gh run view "$candidate_run_id" --repo "$repository" --log 2>/dev/null)"; then
+      while IFS= read -r candidate_log_line; do
+        if [[ "$candidate_log_line" == *"OKP_CANDIDATE_OUTCOME_JSON="* ]]; then
+          candidate_outcome_json="${candidate_log_line#*OKP_CANDIDATE_OUTCOME_JSON=}"
+        elif [[ "$candidate_log_line" == *"Candidate publication is a stale_generation no-op: "* ]]; then
+          candidate_outcome_json="${candidate_log_line#*Candidate publication is a stale_generation no-op: }"
+        fi
+      done <<<"$candidate_run_log"
+    fi
+
+    candidate_publish_result=""
+    candidate_build_sha=""
+    if candidate_outcome="$(jq -c '
+        if type != "object" then error("not an object")
+        elif (.publish_result // "") == "published"
+          or (.publish_result // "") == "stale_generation"
+          or (.publish_result // "") == "skipped" then .
+        elif (.outcome // "") == "stale_generation" then . + {publish_result: "stale_generation"}
+        else error("unrecognized publication result")
+        end
+      ' <<<"$candidate_outcome_json" 2>/dev/null)"; then
+      candidate_publish_result="$(jq -r '.publish_result' <<<"$candidate_outcome")"
+      candidate_build_sha="$(jq -r '.build_sha // ""' <<<"$candidate_outcome")"
+    elif [[ "$candidate_run_head" == "$candidate_sha" ]]; then
+      candidate_publish_result="published"
+      candidate_build_sha="$candidate_run_head"
+    fi
+
+    candidate_completed_runs="$(jq -c \
+      --argjson run_id "$candidate_run_id" \
+      --arg publish_result "$candidate_publish_result" \
+      --arg build_sha "$candidate_build_sha" '
+        map(
+          if (.databaseId // 0) == $run_id then
+            . + {publishResult: $publish_result, buildSha: $build_sha}
+          else . end
+        )
+      ' <<<"$candidate_completed_runs")"
+  done < <(jq -r --argjson cutoff "$candidate_evidence_cutoff" '
+    .[]
+    | select((.status // "") == "completed" and (.conclusion // "") == "success")
+    | select(((.updatedAt // "") | fromdateiso8601? // 0) > $cutoff)
+    | [(.databaseId // ""), (.headSha // "")]
+    | @tsv
+  ' <<<"$candidate_completed_runs")
+fi
+
 windows_candidate_sha=""
 windows_candidate_committed_at=""
 windows_candidate_compare_status=""
@@ -433,7 +518,7 @@ if gh api "repos/$repository/releases?per_page=100" >"$work/linux-releases.json"
 fi
 
 jq -n \
-  --argjson checked_at_unix "$(date -u +%s)" \
+  --argjson checked_at_unix "$checked_at_unix" \
   --argjson source_ci_grace_seconds "$source_ci_grace" \
   --argjson max_unpublished_main_lag_seconds "$max_lag" \
   --argjson max_candidate_schedule_age_seconds "$max_schedule_age" \
@@ -540,6 +625,8 @@ jq -n \
               status: (.status // ""),
               conclusion: (.conclusion // ""),
               completed_at_utc: (.updatedAt // ""),
+              publish_result: (.publishResult // ""),
+              build_sha: (.buildSha // ""),
               url: (.url // "")
             }
         ],

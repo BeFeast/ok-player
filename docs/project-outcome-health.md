@@ -106,13 +106,23 @@ candidate already equals `main`, because no new delivery is pending.
 
 Workflow conclusion is not delivery evidence. Delivery is complete only when
 the fetched `candidate.linux.json.commit_sha` equals the fetched `main` SHA.
-The collector retains the bounded 100-run Linux Candidate history. While the
-feed is behind, a scheduled/manual run counts as green non-delivery when it:
+The collector queries completed scheduled and manual runs separately before
+merging the newest 100, so queued runs or another event cannot displace the
+delivery history. For successful runs inside the two-hour decision window, it
+also reads the complete Actions log and carries the transaction's
+`OKP_CANDIDATE_OUTCOME_JSON` publication result and built SHA into the core
+snapshot. The pre-marker compatibility fallback only treats a run whose GitHub
+head already equals the feed SHA as delivery; missing or contradictory outcome
+evidence otherwise fails closed as `candidate-run-history-unavailable`.
+
+While the feed is behind, a scheduled/manual run counts as green non-delivery
+when it:
 
 - completed with `conclusion=success` after both the current feed timestamp and
   the first unpublished-main commit;
 - completed within the last two hours; and
-- did not produce the current feed SHA.
+- reports `stale_generation` or `skipped` rather than a successful publication
+  of the current feed SHA.
 
 The first such run fails the row with
 `candidate-success-without-delivery`. This is the recovery-dispatch signal: a

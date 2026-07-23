@@ -854,6 +854,7 @@ fn portability_failure_evidence_is_bound_to_both_workflow_artifacts() {
 
     let candidate_runner = include_str!("../../../../scripts/run-linux-candidate-workflow.sh");
     assert!(candidate_runner.contains("OKP_PORTABILITY_EVIDENCE_DIR"));
+    assert!(candidate_runner.contains("OKP_CANDIDATE_OUTCOME_JSON="));
 }
 
 fn repository_root() -> PathBuf {
