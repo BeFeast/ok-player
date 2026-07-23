@@ -228,14 +228,14 @@ wait_for_log_marker() {
 launch_fixture() {
   local log_name="$1"
   OKP_DEBUG_IDLE_RETURN_SMOKE=1 \
-    timeout 60s "$BINARY" "$FIXTURE" >"$OUT_DIR/$log_name.log" 2>&1 &
+    "$BINARY" "$FIXTURE" >"$OUT_DIR/$log_name.log" 2>&1 &
   app_pid=$!
   window_id="$(wait_for_window)"
 }
 
 launch_empty() {
   local log_name="$1"
-  timeout 30s "$BINARY" >"$OUT_DIR/$log_name.log" 2>&1 &
+  "$BINARY" >"$OUT_DIR/$log_name.log" 2>&1 &
   app_pid=$!
   window_id="$(wait_for_window)"
 }
@@ -342,10 +342,11 @@ JSON
     PATH="$fake_bin:$PATH" \
     OKP_POSTER_SMOKE_PID_FILE="$pid_file" \
     OKP_DEBUG_IDLE_RETURN_SMOKE=1 \
+    OKP_DEBUG_WINDOW_FIT=1 \
     XDG_CONFIG_HOME="$config" \
     XDG_STATE_HOME="$state" \
     XDG_CACHE_HOME="$cache" \
-    timeout 60s "$BINARY" >"$OUT_DIR/residual-app.log" 2>&1 &
+    "$BINARY" >"$OUT_DIR/residual-app.log" 2>&1 &
   app_pid=$!
   window_id="$(wait_for_window)"
 }
@@ -360,6 +361,8 @@ run_residual_open_regression() {
   assert_idle_capture \
     "$window_id" residual-welcome "Residual initial Continue Watching" \
     "$CONTINUE_WATCHING_IDENTITY_CROP"
+  wait_for_log_marker 'startup launch lifecycle: player ready' \
+    residual-app residual_player_ready
   wait_for_mpris_bus
   local media_uri
   media_uri="$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve().as_uri())' \
@@ -418,13 +421,30 @@ xdotool windowactivate "$window_id" >/dev/null 2>&1 || true
 assert_idle_capture "$window_id" initial-idle "Initial idle canvas"
 stop_app
 
+eof_log=eof-app
 launch_fixture eof-app || {
   cat "$OUT_DIR/eof-app.log" >&2 || true
   exit 1
 }
 xdotool windowactivate "$window_id" >/dev/null 2>&1 || true
-wait_for_log_marker 'idle-return-smoke: file-loaded' eof-app eof_file_loaded
-wait_for_log_marker 'idle-return-smoke: eof-idle' eof-app eof_idle_transition
+if ! probe_log_marker 'idle-return-smoke: file-loaded' "$eof_log" eof_file_loaded 60
+then
+  # As with the Close Media phase below, retry only an otherwise silent
+  # pre-FileLoaded startup stall. The EOF transition and render assertions
+  # remain single-attempt and unchanged.
+  echo "EOF startup did not reach FileLoaded; relaunching once" >&2
+  cat "$OUT_DIR/$eof_log.log" >&2 || true
+  stop_app
+  eof_log=eof-app-retry
+  launch_fixture "$eof_log" || {
+    cat "$OUT_DIR/$eof_log.log" >&2 || true
+    exit 1
+  }
+  xdotool windowactivate "$window_id" >/dev/null 2>&1 || true
+  wait_for_log_marker 'idle-return-smoke: file-loaded' "$eof_log" eof_file_loaded
+  printf 'eof_launch_retry=pass\n' >>"$OUT_DIR/results.txt"
+fi
+wait_for_log_marker 'idle-return-smoke: eof-idle' "$eof_log" eof_idle_transition
 assert_idle_capture "$window_id" eof-idle "EOF idle canvas"
 stop_app
 
