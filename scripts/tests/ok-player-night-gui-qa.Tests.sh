@@ -86,6 +86,7 @@ make_hooks "$slava_home" 0
 HOME="$slava_home" "$HOST_RUNNER" run slava slava 20260722 suite-host >/dev/null
 slava_results="$slava_home/qa/okp-night-20260722/slava/runs/suite-host/results.tsv"
 assert_contains "$slava_results" $'A\tnon_osc_drag_10\tPASS'
+assert_contains "$slava_results" $'A\theadless_window_regressions\tPASS'
 assert_contains "$slava_results" $'A\tcandidate_identity\tPASS'
 assert_contains "$slava_results" $'B\topen_each_head\tSKIP'
 assert_contains "$slava_results" $'C\t4k_weak_host_stress\tPASS'
@@ -116,6 +117,9 @@ fi
 assert_contains \
   "$unprepared_home/qa/okp-night-20260722/slava/runs/suite-unprepared/results.tsv" \
   $'A\tcold_launch\tNOT RUN\taccepted candidate was not prepared'
+assert_contains \
+  "$unprepared_home/qa/okp-night-20260722/slava/runs/suite-unprepared/results.tsv" \
+  $'A\theadless_window_regressions\tNOT RUN\taccepted candidate was not prepared'
 
 fake_root="$TEST_ROOT/fleet"
 fake_ssh="$TEST_ROOT/fake-ssh"
@@ -156,6 +160,25 @@ for host in slava mimir baldr; do
   [[ -s "$fake_root/$host/qa/okp-night-20260722/$host/runs/suite-controller/results.tsv" ]] ||
     fail "missing required artifact path for $host"
 done
+
+for host in qa-a qa-b; do
+  make_hooks "$fake_root/$host" 0
+done
+: >"$fake_log"
+FAKE_FLEET_ROOT="$fake_root" FAKE_SSH_LOG="$fake_log" \
+  OKP_QA_SSH_COMMAND="$fake_ssh" OKP_QA_HOSTS='qa-a qa-b' \
+  OKP_QA_UTC_HOUR=1 OKP_QA_RUN_DATE=20260722 OKP_QA_SUITE_ID=suite-env-hosts \
+  "$CONTROLLER" >/dev/null
+mapfile -t env_run_hosts < <(awk '/ok-player-night-gui-host.sh/ { next } / bash -s -- run / { print $1 }' "$fake_log")
+if [[ "${env_run_hosts[*]}" != 'qa-a qa-b' ]]; then
+  fail "OKP_QA_HOSTS did not set the automatic host order: ${env_run_hosts[*]}"
+fi
+if OKP_QA_HOSTS='qa-a sindri' OKP_QA_UTC_HOUR=1 "$CONTROLLER" >/dev/null 2>&1; then
+  fail 'controller accepted sindri in OKP_QA_HOSTS'
+fi
+if OKP_QA_HOSTS='qa-a qa-a' OKP_QA_UTC_HOUR=1 "$CONTROLLER" >/dev/null 2>&1; then
+  fail 'controller accepted a duplicate automatic host role'
+fi
 
 if OKP_QA_UTC_HOUR=1 "$CONTROLLER" --host sindri >/dev/null 2>&1; then
   fail 'controller accepted sindri without explicit operator authorization'

@@ -13,8 +13,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Night GUI QA driver policy tests
-        run: ./scripts/tests/ok-player-night-gui-qa.Tests.sh
+      - name: Linux GUI QA harness policy tests
+        run: |
+          ./scripts/tests/ok-player-night-gui-qa.Tests.sh
+          ./scripts/tests/linux-window-regression-smokes.Tests.sh
 
       - name: Install Linux dependencies
         run: |

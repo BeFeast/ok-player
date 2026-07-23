@@ -189,6 +189,7 @@ if [[ "$last_hook_status" != PASS ]]; then
   for action in \
     candidate_install \
     candidate_identity \
+    headless_window_regressions \
     cold_launch \
     single_monitor_fit \
     play_pause_seek \
@@ -224,6 +225,7 @@ else
 fi
 if [[ "$last_hook_status" != PASS ]]; then
   for action in \
+    headless_window_regressions \
     cold_launch \
     single_monitor_fit \
     play_pause_seek \
@@ -247,6 +249,7 @@ if [[ "$last_hook_status" != PASS ]]; then
 fi
 
 for action in \
+  headless_window_regressions \
   cold_launch \
   single_monitor_fit \
   play_pause_seek \
