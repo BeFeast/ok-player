@@ -58,6 +58,25 @@ fn main_window_fit_session_has_one_multiscreen_manager_and_two_supervisors() {
     assert!(script.contains("assert_logged_fit_containment"));
     assert!(script.contains("logged_monitor_workarea_containment=pass"));
 
+    let canonical = script
+        .split_once("canonical_xid() {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nclose_app()"))
+        .map(|(body, _)| format!("canonical_xid() {{{body}\n}}"))
+        .expect("XID canonicalization helper");
+    let canonical_probe = Command::new("bash")
+        .arg("-c")
+        .arg(format!(
+            "{canonical}\nprintf '%s\\n' \"$(canonical_xid 4194310)\" \"$(canonical_xid 0x400006)\"\n! canonical_xid invalid"
+        ))
+        .output()
+        .expect("XID canonicalization probe should run");
+    assert_success(&canonical_probe);
+    assert_eq!(
+        String::from_utf8_lossy(&canonical_probe.stdout),
+        "4194310\n4194310\n",
+        "decimal and hexadecimal spellings of one XID must compare equally"
+    );
+
     let close = script
         .split_once("close_app() {")
         .and_then(|(_, tail)| tail.split_once("\n}\n\nquit_app()"))
@@ -66,8 +85,11 @@ fn main_window_fit_session_has_one_multiscreen_manager_and_two_supervisors() {
     assert!(close.contains("xdotool windowactivate --sync \"$window_id\""));
     assert!(close.contains("xdotool windowfocus --sync \"$window_id\""));
     assert!(close.contains("active_window=\"$(xdotool getactivewindow"));
-    assert!(close.contains("close-dispatch attempt=%s target=%s active=%s"));
-    assert!(close.contains("[[ \"$active_window\" == \"$window_id\" ]]"));
+    assert!(close.contains("target_xid=\"$(canonical_xid \"$window_id\")\""));
+    assert!(close.contains("active_xid=\"$(canonical_xid \"$active_window\""));
+    assert!(close.contains("target_xid=%s active=%s active_xid=%s"));
+    assert!(close.contains("[[ -n \"$active_xid\" && \"$active_xid\" == \"$target_xid\" ]]"));
+    assert!(!close.contains("[[ \"$active_window\" == \"$window_id\" ]]"));
     assert!(close.contains("xdotool key --clearmodifiers alt+F4"));
     assert!(!close.contains("xdotool key --window"));
     assert!(!close.contains("xdotool windowclose"));
