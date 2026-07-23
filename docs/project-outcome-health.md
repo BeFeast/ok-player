@@ -132,18 +132,19 @@ runs re-read `origin/main` before SDK setup and skip superseded SHAs, so a burst
 of pushes coalesces without spending a hosted Windows build on stale source.
 Manual dispatch continues to bypass this early supersession check.
 
-The collector reads up to 100 completed `Windows Candidate` runs, filters them
-to automatic `push` and `schedule` events, and counts that combined failure
-streak from newest to oldest. Manual dispatches cannot mask or extend the
-automatic streak. Two or more consecutive failures are reported before generic
-lag evidence as `Windows candidate builder failing at gate <name> (<N>
-consecutive)`. The gate is the failed workflow step from the newest failed run,
-and the reason code is `windows-candidate-builds-failing`. While the new lane
-has no completed automatic history and has not published either pointer, the
-row is a blocking `warning` rather than a failure; warnings do not make the
-overall outcome unhealthy. The snapshot field remains named
-`latest_completed_schedule` for compatibility, but for the Windows lane it
-contains the latest completed automatic run and its explicit event.
+The collector reads completed push and scheduled `Windows Candidate` runs in
+separate bounded queries, merges the newest 100 automatic runs, and excludes
+manual dispatches before counting the failure streak. Separate event queries
+prevent operator activity from displacing automatic delivery history. Two or
+more consecutive failures are reported before generic lag evidence as
+`Windows candidate builder failing at gate <name> (<N> consecutive)`. The gate
+is the failed workflow step from the newest failed run, and the reason code is
+`windows-candidate-builds-failing`. The snapshot retains the legacy
+`latest_completed_schedule` and `schedule_error` field names for compatibility,
+but those fields now carry the newest completed automatic run and combined
+automatic-query error. While the new lane has no completed automatic history
+and has not published either pointer, the row is a blocking `warning` rather
+than a failure; warnings do not make the overall outcome unhealthy.
 
 The live collector starts the stable Windows feed, Windows candidate manifest,
 Windows candidate feed, and Linux candidate feed requests concurrently. Each

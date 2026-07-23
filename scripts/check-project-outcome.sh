@@ -248,28 +248,42 @@ windows_candidate_automatic_run='null'
 windows_candidate_automatic_error=""
 windows_candidate_consecutive_failed_runs=0
 windows_candidate_last_failed_gate=""
-if windows_candidate_runs="$(gh run list --repo "$repository" --branch main \
+windows_candidate_push_runs_ok=false
+windows_candidate_schedule_runs_ok=false
+if windows_candidate_push_runs="$(gh run list --repo "$repository" --branch main --event push \
     --status completed --workflow "Windows Candidate" --limit 100 \
     --json databaseId,headSha,event,status,conclusion,updatedAt,url 2>/dev/null)"; then
-  if ! windows_candidate_automatic_runs="$(jq -c '
-      if type != "array" then error("not an array")
-      else [.[] | select((.event // "") == "push" or (.event // "") == "schedule")]
-      end
-    ' <<<"$windows_candidate_runs" 2>/dev/null)" \
+  windows_candidate_push_runs_ok=true
+fi
+if windows_candidate_schedule_runs="$(gh run list --repo "$repository" --branch main --event schedule \
+    --status completed --workflow "Windows Candidate" --limit 100 \
+    --json databaseId,headSha,event,status,conclusion,updatedAt,url 2>/dev/null)"; then
+  windows_candidate_schedule_runs_ok=true
+fi
+if $windows_candidate_push_runs_ok && $windows_candidate_schedule_runs_ok; then
+  if ! windows_candidate_automatic_runs="$(jq -cn \
+      --argjson push "$windows_candidate_push_runs" \
+      --argjson schedule "$windows_candidate_schedule_runs" '
+        if ($push | type) != "array" or ($schedule | type) != "array" then error("not arrays")
+        else [$push[], $schedule[]] | sort_by(.updatedAt // "") | reverse | .[:100]
+        end
+      ' 2>/dev/null)" \
       || ! windows_candidate_automatic_run="$(jq -c '.[0] // null' \
       <<<"$windows_candidate_automatic_runs" 2>/dev/null)" \
       || ! windows_candidate_consecutive_failed_runs="$(jq -r '
-        reduce .[] as $run (
+        if type != "array" then error("not an array")
+        else reduce .[] as $run (
           {count: 0, stopped: false};
           if .stopped then .
           elif ($run.conclusion // "") == "failure" then .count += 1
           else .stopped = true
           end
         ) | .count
+        end
       ' <<<"$windows_candidate_automatic_runs" 2>/dev/null)"; then
     windows_candidate_automatic_run='null'
     windows_candidate_consecutive_failed_runs=0
-    windows_candidate_automatic_error="GitHub Windows Candidate completed automatic run query returned malformed JSON"
+    windows_candidate_automatic_error="GitHub Windows Candidate completed automatic run queries returned malformed JSON"
   elif (( windows_candidate_consecutive_failed_runs >= 2 )); then
     latest_windows_failed_run_id="$(jq -r '.[0].databaseId // ""' <<<"$windows_candidate_automatic_runs")"
     if [[ "$latest_windows_failed_run_id" =~ ^[0-9]+$ ]] \
