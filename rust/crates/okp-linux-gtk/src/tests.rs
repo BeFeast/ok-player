@@ -5051,8 +5051,13 @@ fn idle_return_smoke_waits_for_natural_eof_before_welcome_capture() {
     assert!(stop.contains("'(true,)'"));
     assert!(stop.contains("bus_state=\"unreachable\""));
     assert!(!stop.contains("gdbus introspect"));
+    assert!(stop.contains("shutdown-timeout"));
+    assert!(stop.contains("kill -KILL \"$stopped_pid\""));
+    assert!(stop.contains("wait -n -p completed_pid \"$stopped_pid\" \"$timer_pid\""));
+    assert!(stop.contains("ps -o stat= -p \"$stopped_pid\""));
+    assert!(stop.contains("kill \"$timer_pid\""));
     assert!(
-        stop.find("wait \"$app_pid\"")
+        stop.find("wait \"$stopped_pid\"")
             < stop.find("\"$X11_APP_CLEAR_WAITER\" \"$stopped_pid\" \"$diagnostics\"")
     );
 
@@ -5241,6 +5246,239 @@ printf 'launch_count=%s\nstop_count=%s\n' "$launch_count" "$stop_count"
     assert!(results.contains("eof_file_loaded=pass"));
     assert!(results.contains("eof_launch_retry=pass"));
     assert!(results.contains("eof_idle_transition=pass"));
+}
+
+#[test]
+fn idle_return_smoke_rejects_an_early_exit_instead_of_retrying() {
+    let smoke = include_str!("../../../../scripts/smoke-linux-idle-return.sh");
+    let wait_for_marker = smoke
+        .split_once("probe_log_marker() {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nlaunch_fixture()"))
+        .map(|(body, _)| format!("probe_log_marker() {{{body}\n}}"))
+        .expect("log marker helper");
+    let eof_flow = smoke
+        .split_once("eof_log=eof-app")
+        .and_then(|(_, tail)| tail.split_once("\nclose_log=close-app"))
+        .map(|(body, _)| body)
+        .expect("EOF smoke flow");
+    let close_flow = smoke
+        .split_once("close_log=close-app")
+        .and_then(|(_, tail)| tail.split_once("\nstop_app\n\nfor name in eof-idle"))
+        .map(|(body, _)| body)
+        .expect("Close Media smoke flow");
+
+    for (name, setup, flow, diagnostic, retry_token) in [
+        (
+            "eof",
+            "eof_log=eof-app",
+            eof_flow,
+            "EOF startup process exited before FileLoaded; refusing retry",
+            "eof_launch_retry=pass",
+        ),
+        (
+            "close",
+            "close_log=close-app",
+            close_flow,
+            "Close Media startup process exited before FileLoaded; refusing retry",
+            "close_media_launch_retry=pass",
+        ),
+    ] {
+        let root = unique_temp_dir(&format!("okp-idle-return-{name}-early-exit"));
+        let probe = format!(
+            r#"set -euo pipefail
+{wait_for_marker}
+OUT_DIR={out}
+mkdir -p "$OUT_DIR"
+app_pid=4242
+window_id=17
+launch_count=0
+stop_count=0
+trap 'printf "launch_count=%s\nstop_count=%s\n" "$launch_count" "$stop_count" >"$OUT_DIR/counts.txt"' EXIT
+launch_fixture() {{
+  launch_count=$((launch_count + 1))
+  : >"$OUT_DIR/$1.log"
+}}
+stop_app() {{ stop_count=$((stop_count + 1)); }}
+xdotool() {{ return 0; }}
+kill() {{ return 1; }}
+sleep() {{ return 0; }}
+rg() {{ return 1; }}
+assert_idle_capture() {{ return 0; }}
+{setup}
+{flow}
+"#,
+            out = root.path().display()
+        );
+        let output = std::process::Command::new("bash")
+            .args(["-c", &probe])
+            .output()
+            .expect("early-exit startup probe should run");
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{name} early exit must fail closed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(diagnostic),
+            "{name} diagnostic should distinguish exit from stall"
+        );
+        assert_eq!(
+            fs::read_to_string(root.path().join("counts.txt"))
+                .expect("early-exit counters should be recorded"),
+            "launch_count=1\nstop_count=1\n"
+        );
+        let results = fs::read_to_string(root.path().join("results.txt")).unwrap_or_default();
+        assert!(!results.contains(retry_token));
+    }
+}
+
+#[test]
+fn idle_return_smoke_bounds_shutdown_of_a_term_resistant_process() {
+    let smoke = include_str!("../../../../scripts/smoke-linux-idle-return.sh");
+    let stop = smoke
+        .split_once("stop_app() {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nwait_for_pid_file_alive"))
+        .map(|(body, _)| format!("stop_app() {{{body}\n}}"))
+        .expect("idle-return shutdown helper");
+    let root = unique_temp_dir("okp-idle-return-bounded-shutdown");
+    let probe = format!(
+        r#"set -euo pipefail
+{stop}
+OUT_DIR={out}
+mkdir -p "$OUT_DIR"
+STOP_TIMEOUT_SECONDS=1
+X11_APP_CLEAR_WAITER=/bin/true
+bash -c 'trap "" TERM; while :; do sleep 1; done' &
+app_pid=$!
+sleep 0.2
+stop_app
+"#,
+        out = root.path().display()
+    );
+    let started = std::time::Instant::now();
+    let output = std::process::Command::new("timeout")
+        .args(["--kill-after=1s", "5s", "bash", "-c", &probe])
+        .output()
+        .expect("bounded shutdown probe should run");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stop_app should report its own bounded failure: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("did not exit within 1s after TERM"));
+    assert!(
+        fs::read_dir(root.path())
+            .expect("shutdown evidence directory")
+            .filter_map(Result::ok)
+            .any(|entry| entry
+                .file_name()
+                .to_string_lossy()
+                .ends_with("-shutdown-timeout")),
+        "watchdog timeout marker should be retained as failure evidence"
+    );
+}
+
+#[test]
+fn idle_return_smoke_does_not_report_a_waitable_zombie_as_timed_out() {
+    let smoke = include_str!("../../../../scripts/smoke-linux-idle-return.sh");
+    let stop = smoke
+        .split_once("stop_app() {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nwait_for_pid_file_alive"))
+        .map(|(body, _)| format!("stop_app() {{{body}\n}}"))
+        .expect("idle-return shutdown helper");
+    let root = unique_temp_dir("okp-idle-return-zombie-shutdown");
+    let probe = format!(
+        r#"set -euo pipefail
+{stop}
+OUT_DIR={out}
+mkdir -p "$OUT_DIR"
+STOP_TIMEOUT_SECONDS=1
+X11_APP_CLEAR_WAITER=/bin/true
+app_pid=4242
+kill() {{
+  printf '%s\n' "$*" >>"$OUT_DIR/kill-calls.txt"
+  return 0
+}}
+sleep() {{ return 0; }}
+wait() {{
+  if [[ "${{1:-}}" == -n ]]; then
+    printf -v "$3" '%s' "$timer_pid"
+  fi
+  return 0
+}}
+ps() {{ printf 'Z\n'; }}
+gdbus() {{ printf '(false,)\n'; }}
+stop_app
+"#,
+        out = root.path().display()
+    );
+    let output = std::process::Command::new("bash")
+        .args(["-c", &probe])
+        .output()
+        .expect("zombie shutdown probe should run");
+    assert!(
+        output.status.success(),
+        "a waitable zombie is a completed child: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!root.path().join("stop-4242-shutdown-timeout").exists());
+    assert!(
+        !fs::read_to_string(root.path().join("kill-calls.txt"))
+            .expect("kill calls should be recorded")
+            .lines()
+            .any(|line| line.starts_with("-KILL ")),
+        "a waitable zombie must not be force-killed"
+    );
+}
+
+#[test]
+fn idle_return_smoke_cancels_the_shutdown_timer_after_normal_exit() {
+    let smoke = include_str!("../../../../scripts/smoke-linux-idle-return.sh");
+    let stop = smoke
+        .split_once("stop_app() {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nwait_for_pid_file_alive"))
+        .map(|(body, _)| format!("stop_app() {{{body}\n}}"))
+        .expect("idle-return shutdown helper");
+    let root = unique_temp_dir("okp-idle-return-timer-cleanup");
+    let probe = format!(
+        r#"set -euo pipefail
+{stop}
+OUT_DIR={out}
+mkdir -p "$OUT_DIR"
+STOP_TIMEOUT_SECONDS=3
+X11_APP_CLEAR_WAITER=/bin/true
+gdbus() {{ printf '(false,)\n'; }}
+bash -c 'trap "exit 0" TERM; while :; do sleep 1; done' &
+app_pid=$!
+sleep 0.2
+stop_app
+"#,
+        out = root.path().display()
+    );
+    let started = std::time::Instant::now();
+    let output = std::process::Command::new("timeout")
+        .args(["--kill-after=1s", "2s", "bash", "-c", &probe])
+        .output()
+        .expect("normal shutdown probe should run");
+    assert!(
+        output.status.success(),
+        "normal shutdown should cancel its timer: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    assert!(
+        fs::read_dir(root.path())
+            .expect("shutdown evidence directory")
+            .filter_map(Result::ok)
+            .all(|entry| !entry
+                .file_name()
+                .to_string_lossy()
+                .ends_with("-shutdown-timeout")),
+        "normal shutdown must not retain a timeout marker"
+    );
 }
 
 #[test]
