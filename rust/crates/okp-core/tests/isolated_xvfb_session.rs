@@ -57,6 +57,20 @@ fn main_window_fit_session_has_one_multiscreen_manager_and_two_supervisors() {
     assert!(script.contains("org.a11y.atspi.Registry"));
     assert!(script.contains("assert_logged_fit_containment"));
     assert!(script.contains("logged_monitor_workarea_containment=pass"));
+
+    let close = script
+        .split_once("close_app() {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nquit_app()"))
+        .map(|(body, _)| body)
+        .expect("main-window close helper");
+    assert!(close.contains("xdotool windowactivate --sync \"$window_id\""));
+    assert!(close.contains("xdotool windowfocus --sync \"$window_id\""));
+    assert!(close.contains("active_window=\"$(xdotool getactivewindow"));
+    assert!(close.contains("close-dispatch attempt=%s target=%s active=%s"));
+    assert!(close.contains("[[ \"$active_window\" == \"$window_id\" ]]"));
+    assert!(close.contains("xdotool key --clearmodifiers alt+F4"));
+    assert!(!close.contains("xdotool key --window"));
+    assert!(!close.contains("xdotool windowclose"));
 }
 
 #[test]

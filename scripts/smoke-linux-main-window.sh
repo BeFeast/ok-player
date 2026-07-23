@@ -487,12 +487,21 @@ finish_app_shutdown() {
 
 close_app() {
   local window_id="$1"
+  local active_window close_attempt
   # `windowclose` destroys the X11 window directly and can bypass GTK's
-  # close-request callback. Ask the window manager for the normal last-window
-  # close path, retrying only while the same player XID remains present.
-  for _ in 1 2; do
+  # close-request callback. Make the known player XID both active and focused,
+  # verify that Xfwm accepted the focus handoff, and only then send its normal
+  # Alt+F4 binding. Retry only while the same player XID remains present.
+  for close_attempt in 1 2; do
     xdotool windowactivate --sync "$window_id" || true
-    xdotool key --clearmodifiers alt+F4 || true
+    xdotool windowfocus --sync "$window_id" || true
+    active_window="$(xdotool getactivewindow 2>/dev/null || true)"
+    printf 'close-dispatch attempt=%s target=%s active=%s\n' \
+      "$close_attempt" "$window_id" "${active_window:-unavailable}" \
+      >>"$OUT_DIR/fit-lifecycle.log"
+    if [[ "$active_window" == "$window_id" ]]; then
+      xdotool key --clearmodifiers alt+F4 || true
+    fi
     sleep 0.2
     if ! xdotool getwindowgeometry "$window_id" >/dev/null 2>&1; then
       break
