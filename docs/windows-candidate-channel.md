@@ -49,7 +49,8 @@ The hosted job performs these gates before any feed movement:
    channel;
 6. validate the generated feed, package id, version, file sizes, and SHA-256
    digests in `OkPlayer.Core`;
-7. re-read `main` immediately before publication and reject a stale build.
+7. re-read `main` immediately before publication and successfully coalesce a
+   stale build without moving or pruning release assets.
 
 `candidate.windows.json` records the exact git SHA, monotonic build number,
 version, sanitized builder identity (`github-actions/windows-latest`), UTC
@@ -64,6 +65,17 @@ Current package bytes are uploaded first, followed by the identity manifest.
 If pointer replacement fails, the workflow restores the prior feed and identity
 manifest. Therefore a build, test, package, validation, stale-head, or upload
 failure cannot intentionally advance the candidate feed.
+
+Before deciding whether a build is needed, the workflow downloads the prior
+identity manifest and feed with three bounded attempts and short backoff. A
+transient release-asset transport reset can therefore recover without turning
+valid rolling pointers into a failed delivery run; exhausting the bound still
+stops before build or publication mutation.
+
+If `main` advances while a candidate is building, the final head check records
+the newer SHA and completes the superseded run successfully before any upload.
+Post-publication pruning is gated on an actual feed promotion, so a late
+supersession cannot mutate the rolling release or count as a builder failure.
 
 The final feed contains the new Full package plus the immediately previous
 known-good Full package. Post-publication pruning removes only recognized
