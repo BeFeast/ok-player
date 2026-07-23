@@ -36,6 +36,9 @@ HOME="$lease_home" "$LEASE" release suite-b >/dev/null
 if HOME="$lease_home" "$LEASE" acquire sindri suite-s 45 103 >/dev/null 2>&1; then
   fail 'sindri was leased without explicit operator authorization'
 fi
+if HOME="$lease_home" "$LEASE" acquire SINDRI suite-s 45 103 >/dev/null 2>&1; then
+  fail 'a case-variant sindri role was leased without explicit operator authorization'
+fi
 if HOME="$lease_home" OKP_QA_ALLOW_SINDRI=1 "$LEASE" acquire sindri suite-s 45 103 >/dev/null 2>&1; then
   fail 'one sindri override was sufficient'
 fi
@@ -159,7 +162,7 @@ done
 
 configured_log="$TEST_ROOT/configured-ssh.log"
 FAKE_FLEET_ROOT="$fake_root" FAKE_SSH_LOG="$configured_log" \
-  OKP_QA_SSH_COMMAND="$fake_ssh" OKP_QA_HOSTS='mimir baldr' OKP_QA_UTC_HOUR=1 \
+  OKP_QA_SSH_COMMAND="$fake_ssh" OKP_QA_HOSTS=$'mimir\nbaldr' OKP_QA_UTC_HOUR=1 \
   OKP_QA_RUN_DATE=20260722 OKP_QA_SUITE_ID=suite-configured "$CONTROLLER" >/dev/null
 mapfile -t configured_hosts < <(
   awk '/ok-player-night-gui-host.sh/ { next } / bash -s -- run / { print $1 }' "$configured_log"
@@ -170,12 +173,18 @@ fi
 if OKP_QA_HOSTS='mimir sindri' OKP_QA_UTC_HOUR=1 "$CONTROLLER" >/dev/null 2>&1; then
   fail 'controller accepted sindri in the automatic environment host list'
 fi
-if OKP_QA_HOSTS='mimir mimir' OKP_QA_UTC_HOUR=1 "$CONTROLLER" >/dev/null 2>&1; then
-  fail 'controller accepted a duplicate automatic host alias'
+if OKP_QA_HOSTS='mimir SINDRI' OKP_QA_UTC_HOUR=1 "$CONTROLLER" >/dev/null 2>&1; then
+  fail 'controller accepted a case-variant sindri in the automatic environment host list'
+fi
+if OKP_QA_HOSTS='mimir MIMIR' OKP_QA_UTC_HOUR=1 "$CONTROLLER" >/dev/null 2>&1; then
+  fail 'controller accepted a case-variant duplicate automatic host alias'
 fi
 
 if OKP_QA_UTC_HOUR=1 "$CONTROLLER" --host sindri >/dev/null 2>&1; then
   fail 'controller accepted sindri without explicit operator authorization'
+fi
+if OKP_QA_UTC_HOUR=1 "$CONTROLLER" --host Sindri >/dev/null 2>&1; then
+  fail 'controller accepted a case-variant sindri without explicit operator authorization'
 fi
 
 printf 'Night GUI QA driver tests passed.\n'

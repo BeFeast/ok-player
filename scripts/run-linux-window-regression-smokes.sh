@@ -7,11 +7,15 @@ BINARY="${1:?usage: run-linux-window-regression-smokes.sh <binary> <output-direc
 OUT_DIR="${2:?usage: run-linux-window-regression-smokes.sh <binary> <output-directory>}"
 DRAG_SMOKE="${OKP_WINDOW_DRAG_SMOKE:-$ROOT/scripts/smoke-linux-window-drag.sh}"
 FIT_SERIES="${OKP_WINDOW_FIT_SERIES:-$ROOT/scripts/run-linux-window-fit-series.sh}"
-SOURCE_SHA="${OKP_WINDOW_REGRESSION_SOURCE_SHA:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)}"
+SOURCE_SHA="${OKP_WINDOW_REGRESSION_SOURCE_SHA:-}"
 
 [[ -x "$BINARY" ]] || { echo "Missing executable: $BINARY" >&2; exit 127; }
 [[ -x "$DRAG_SMOKE" ]] || { echo "Missing executable: $DRAG_SMOKE" >&2; exit 127; }
 [[ -x "$FIT_SERIES" ]] || { echo "Missing executable: $FIT_SERIES" >&2; exit 127; }
+[[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+  echo "OKP_WINDOW_REGRESSION_SOURCE_SHA must identify the tested binary with a 40-character lowercase commit SHA" >&2
+  exit 64
+}
 
 mkdir -p "$OUT_DIR"
 rm -rf "$OUT_DIR/window-drag" "$OUT_DIR/window-fit"
@@ -66,13 +70,19 @@ run_smoke \
 
 (
   cd "$OUT_DIR"
-  for evidence_file in \
+  shopt -s nullglob
+  evidence_files=(
     results.tsv \
     summary.env \
     window-drag/results.txt \
     window-drag/xvfb-evidence.txt \
     window-drag/dbus-evidence.txt \
-    window-fit/series-evidence.txt; do
+    window-fit/series-evidence.txt \
+    window-fit/run-*/fit-evidence.txt \
+    window-fit/run-*/fit-session-evidence.txt \
+    window-fit/run-*/fit-xvfb-evidence.txt
+  )
+  for evidence_file in "${evidence_files[@]}"; do
     [[ -f "$evidence_file" ]] || continue
     sha256sum "$evidence_file"
   done

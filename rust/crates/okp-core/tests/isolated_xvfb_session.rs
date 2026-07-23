@@ -115,6 +115,9 @@ fn window_regression_runner_dispatches_drag_and_fit_with_bound_evidence() {
     assert!(script.contains("single_monitor_window_fit"));
     assert!(script.contains("window-drag/results.txt"));
     assert!(script.contains("window-fit/series-evidence.txt"));
+    assert!(script.contains("OKP_WINDOW_REGRESSION_SOURCE_SHA must identify the tested binary"));
+    assert!(script.contains("window-fit/run-*/fit-session-evidence.txt"));
+    assert!(script.contains("window-fit/run-*/fit-xvfb-evidence.txt"));
     assert!(script.contains("sha256sum"));
     assert!(script.contains("if (( failed != 0 ))"));
 }
