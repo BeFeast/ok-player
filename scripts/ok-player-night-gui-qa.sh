@@ -29,12 +29,14 @@ ascii_lower() {
 }
 
 explicit_host=""
+explicit_host_set=0
 force_window=0
 while (( $# > 0 )); do
   case "$1" in
     --host)
       [[ $# -ge 2 ]] || fail "--host requires a value"
       explicit_host="$2"
+      explicit_host_set=1
       shift 2
       ;;
     --force-window)
@@ -51,13 +53,13 @@ while (( $# > 0 )); do
   esac
 done
 
-if [[ -n "$explicit_host" ]] &&
+if (( explicit_host_set == 1 )) &&
   [[ ! "$explicit_host" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$ ]]; then
   fail "invalid host alias: $explicit_host"
 fi
+explicit_host="$(ascii_lower "$explicit_host")"
 
-explicit_host_key="$(ascii_lower "$explicit_host")"
-if [[ "$explicit_host_key" == "sindri" ]] &&
+if [[ "$explicit_host" == "sindri" ]] &&
   [[ "${OKP_QA_ALLOW_SINDRI:-0}" != "1" || "${OKP_QA_OPERATOR_GO:-0}" != "1" ]]; then
   fail "sindri requires explicit operator authorization"
 fi
@@ -80,24 +82,27 @@ lease_ttl="${OKP_QA_LEASE_TTL_MINUTES:-45}"
 (( lease_ttl >= 1 && lease_ttl <= 180 )) || fail "lease TTL must be between 1 and 180 minutes"
 host_timeout_seconds=$((lease_ttl * 60 - 30))
 
-if [[ -n "$explicit_host" ]]; then
+if (( explicit_host_set == 1 )); then
   hosts=("$explicit_host")
 elif [[ -v OKP_QA_HOSTS ]]; then
-  read -r -a hosts <<<"$OKP_QA_HOSTS"
+  hosts=()
+  IFS=$' \t\n' read -r -d '' -a hosts < <(printf '%s\0' "$OKP_QA_HOSTS") || true
   (( ${#hosts[@]} > 0 )) || fail "OKP_QA_HOSTS must contain at least one host alias"
 else
   hosts=(slava mimir baldr)
 fi
 
 declare -A seen_hosts=()
-for host in "${hosts[@]}"; do
-  host_key="$(ascii_lower "$host")"
+for index in "${!hosts[@]}"; do
+  host="${hosts[$index]}"
   [[ "$host" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$ ]] ||
     fail "invalid host alias in automatic list: $host"
-  [[ "$host_key" != sindri || -n "$explicit_host" ]] ||
+  host_key="$(ascii_lower "$host")"
+  [[ "$host_key" != sindri || explicit_host_set -eq 1 ]] ||
     fail "sindri is not allowed in OKP_QA_HOSTS"
   [[ ! -v "seen_hosts[$host_key]" ]] || fail "duplicate host alias: $host"
   seen_hosts["$host_key"]=1
+  hosts[index]="$host_key"
 done
 
 if [[ -n "${OKP_QA_SSH_COMMAND:-}" ]]; then
@@ -145,8 +150,8 @@ incomplete_hosts=0
 
 for host in "${hosts[@]}"; do
   printf '%s\n' "-- probe host=$host"
-  if ! remote_script "$host" "$HOST_SCRIPT" probe "$host"; then
-    printf '%s\n' "SKIP host=$host reason=seat-unavailable"
+  if ! remote_script "$host" "$HOST_SCRIPT" probe-host "$host"; then
+    printf '%s\n' "SKIP host=$host reason=host-unavailable"
     continue
   fi
 

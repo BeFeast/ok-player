@@ -128,6 +128,33 @@ fn window_regression_runner_dispatches_drag_and_fit_with_bound_evidence() {
 }
 
 #[test]
+fn night_gui_runs_headless_window_regressions_before_the_live_seat_gate() {
+    let host = include_str!("../../../../scripts/ok-player-night-gui-host.sh");
+    let candidate = host
+        .find("run_hook A candidate_install")
+        .expect("candidate preparation should be present");
+    let headless = host
+        .find("run_action A headless_window_regressions")
+        .expect("headless window regressions should be present");
+    let seat = host
+        .find("\nrun_seat_check\n")
+        .expect("the live graphical seat gate should be present");
+    assert!(candidate < headless && headless < seat);
+    assert!(host.contains("probe-host"));
+
+    let controller = include_str!("../../../../scripts/ok-player-night-gui-qa.sh");
+    assert!(controller.contains("probe-host"));
+    assert!(controller.contains("local LC_ALL=C"));
+    assert!(controller.contains("${value,,}"));
+    assert!(controller.contains("[[ -v OKP_QA_HOSTS ]]"));
+    assert!(controller.contains("OKP_QA_HOSTS must contain at least one host alias"));
+
+    let lease = include_str!("../../../../scripts/ok-player-qa-lease.sh");
+    assert!(lease.contains("local LC_ALL=C"));
+    assert!(lease.contains("${value,,}"));
+}
+
+#[test]
 fn narrow_width_portability_capture_uses_a_long_lived_dark_fixture() {
     let narrow = include_str!("../../../../scripts/smoke-linux-narrow-width.sh");
     assert!(narrow.contains("FIXTURE=\"${3:-}\""));
