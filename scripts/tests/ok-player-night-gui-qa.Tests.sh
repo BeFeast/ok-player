@@ -86,6 +86,7 @@ make_hooks "$slava_home" 0
 HOME="$slava_home" "$HOST_RUNNER" run slava slava 20260722 suite-host >/dev/null
 slava_results="$slava_home/qa/okp-night-20260722/slava/runs/suite-host/results.tsv"
 assert_contains "$slava_results" $'A\tnon_osc_drag_10\tPASS'
+assert_contains "$slava_results" $'A\theadless_window_regressions\tPASS'
 assert_contains "$slava_results" $'A\tcandidate_identity\tPASS'
 assert_contains "$slava_results" $'B\topen_each_head\tSKIP'
 assert_contains "$slava_results" $'C\t4k_weak_host_stress\tPASS'
@@ -97,6 +98,25 @@ HOME="$baldr_home" "$HOST_RUNNER" run baldr baldr 20260722 suite-dual >/dev/null
 baldr_results="$baldr_home/qa/okp-night-20260722/baldr/runs/suite-dual/results.tsv"
 assert_contains "$baldr_results" $'B\topen_each_head\tPASS'
 assert_contains "$baldr_results" $'C\t4k_weak_host_stress\tSKIP'
+
+headless_home="$TEST_ROOT/headless-home"
+make_hooks "$headless_home" 0
+cat >"$headless_home/.local/lib/ok-player-night-gui-qa/hooks/probe-seat" <<'EOF'
+#!/usr/bin/env bash
+exit 75
+EOF
+chmod +x "$headless_home/.local/lib/ok-player-night-gui-qa/hooks/probe-seat"
+set +e
+HOME="$headless_home" "$HOST_RUNNER" run slava slava 20260722 suite-headless >/dev/null
+headless_status=$?
+set -e
+[[ "$headless_status" == 4 ]] || fail "headless-only run returned $headless_status instead of 4"
+headless_results="$headless_home/qa/okp-night-20260722/slava/runs/suite-headless/results.tsv"
+assert_contains "$headless_results" $'A\theadless_window_regressions\tPASS'
+assert_contains "$headless_results" $'A\tseat_ready\tNOT RUN'
+assert_contains \
+  "$headless_results" \
+  $'A\tcold_launch\tNOT RUN\tpost-lease seat gate did not pass'
 
 unprepared_home="$TEST_ROOT/unprepared-home"
 mkdir -p "$unprepared_home/.local/lib/ok-player-night-gui-qa/hooks"
@@ -116,6 +136,9 @@ fi
 assert_contains \
   "$unprepared_home/qa/okp-night-20260722/slava/runs/suite-unprepared/results.tsv" \
   $'A\tcold_launch\tNOT RUN\taccepted candidate was not prepared'
+assert_contains \
+  "$unprepared_home/qa/okp-night-20260722/slava/runs/suite-unprepared/results.tsv" \
+  $'A\theadless_window_regressions\tNOT RUN\taccepted candidate was not prepared'
 
 fake_root="$TEST_ROOT/fleet"
 fake_ssh="$TEST_ROOT/fake-ssh"
@@ -157,25 +180,30 @@ for host in slava mimir baldr; do
     fail "missing required artifact path for $host"
 done
 
-configured_log="$TEST_ROOT/configured-ssh.log"
-FAKE_FLEET_ROOT="$fake_root" FAKE_SSH_LOG="$configured_log" \
-  OKP_QA_SSH_COMMAND="$fake_ssh" OKP_QA_HOSTS='mimir baldr' OKP_QA_UTC_HOUR=1 \
-  OKP_QA_RUN_DATE=20260722 OKP_QA_SUITE_ID=suite-configured "$CONTROLLER" >/dev/null
-mapfile -t configured_hosts < <(
-  awk '/ok-player-night-gui-host.sh/ { next } / bash -s -- run / { print $1 }' "$configured_log"
-)
-if [[ "${configured_hosts[*]}" != 'mimir baldr' ]]; then
-  fail "unexpected configured host order: ${configured_hosts[*]}"
+for host in qa-a qa-b; do
+  make_hooks "$fake_root/$host" 0
+done
+: >"$fake_log"
+FAKE_FLEET_ROOT="$fake_root" FAKE_SSH_LOG="$fake_log" \
+  OKP_QA_SSH_COMMAND="$fake_ssh" OKP_QA_HOSTS=$'QA-A\nqa-b' \
+  OKP_QA_UTC_HOUR=1 OKP_QA_RUN_DATE=20260722 OKP_QA_SUITE_ID=suite-env-hosts \
+  "$CONTROLLER" >/dev/null
+mapfile -t env_run_hosts < <(awk '/ok-player-night-gui-host.sh/ { next } / bash -s -- run / { print $1 }' "$fake_log")
+if [[ "${env_run_hosts[*]}" != 'qa-a qa-b' ]]; then
+  fail "OKP_QA_HOSTS did not parse and normalize the complete host order: ${env_run_hosts[*]}"
 fi
-if OKP_QA_HOSTS='mimir sindri' OKP_QA_UTC_HOUR=1 "$CONTROLLER" >/dev/null 2>&1; then
-  fail 'controller accepted sindri in the automatic environment host list'
+if OKP_QA_HOSTS='qa-a Sindri' OKP_QA_UTC_HOUR=1 "$CONTROLLER" >/dev/null 2>&1; then
+  fail 'controller accepted a case-variant sindri in OKP_QA_HOSTS'
 fi
-if OKP_QA_HOSTS='mimir mimir' OKP_QA_UTC_HOUR=1 "$CONTROLLER" >/dev/null 2>&1; then
-  fail 'controller accepted a duplicate automatic host alias'
+if OKP_QA_HOSTS='qa-a QA-A' OKP_QA_UTC_HOUR=1 "$CONTROLLER" >/dev/null 2>&1; then
+  fail 'controller accepted a case-variant duplicate automatic host role'
 fi
 
 if OKP_QA_UTC_HOUR=1 "$CONTROLLER" --host sindri >/dev/null 2>&1; then
   fail 'controller accepted sindri without explicit operator authorization'
+fi
+if OKP_QA_UTC_HOUR=1 "$CONTROLLER" --host SINDRI >/dev/null 2>&1; then
+  fail 'controller accepted a case-variant sindri without explicit operator authorization'
 fi
 
 printf 'Night GUI QA driver tests passed.\n'

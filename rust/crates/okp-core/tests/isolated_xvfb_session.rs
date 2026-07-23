@@ -112,9 +112,15 @@ fn window_regression_runner_dispatches_drag_and_fit_with_bound_evidence() {
     assert!(script.contains("smoke-linux-window-drag.sh"));
     assert!(script.contains("run-linux-window-fit-series.sh"));
     assert!(script.contains("non_osc_window_drag"));
-    assert!(script.contains("single_monitor_window_fit"));
+    assert!(script.contains("single_monitor_initial_fit"));
+    assert!(script.contains("OKP_WINDOW_REGRESSION_SOURCE_SHA must identify the tested candidate"));
+    assert!(script.contains("Output directory must not already exist"));
+    assert!(script.contains("operator_seat_required=false"));
     assert!(script.contains("window-drag/results.txt"));
     assert!(script.contains("window-fit/series-evidence.txt"));
+    assert!(script.contains("fit-session-evidence.txt"));
+    assert!(script.contains("fit-xvfb-evidence.txt"));
+    assert!(script.contains("shopt -s globstar nullglob"));
     assert!(script.contains("sha256sum"));
     assert!(script.contains("if (( failed != 0 ))"));
 }
