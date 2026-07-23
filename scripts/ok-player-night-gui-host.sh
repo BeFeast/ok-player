@@ -5,6 +5,7 @@ set -euo pipefail
 usage() {
   cat >&2 <<'EOF'
 usage:
+  ok-player-night-gui-host.sh probe-host <host-role>
   ok-player-night-gui-host.sh probe <host-role>
   ok-player-night-gui-host.sh run <host-role> <host-alias> <YYYYMMDD> <suite-id>
 
@@ -52,6 +53,13 @@ probe_seat() {
     default_seat_probe
   fi
 }
+
+if [[ "${1:-}" == "probe-host" ]]; then
+  [[ $# -eq 2 ]] || { usage; exit 64; }
+  require_token host-role "$2"
+  printf 'host_role=%s status=reachable\n' "$2"
+  exit 0
+fi
 
 if [[ "${1:-}" == "probe" ]]; then
   [[ $# -eq 2 ]] || { usage; exit 64; }
@@ -182,35 +190,6 @@ finish_artifacts() {
   printf '%s\n' "$suite_id" >"$host_root/latest-suite-id.txt"
 }
 
-# The controller probes before acquiring the lease. Repeat the probe after the
-# lease so a seat that became occupied cannot receive launch or input events.
-run_seat_check
-if [[ "$last_hook_status" != PASS ]]; then
-  for action in \
-    candidate_install \
-    candidate_identity \
-    cold_launch \
-    single_monitor_fit \
-    play_pause_seek \
-    non_osc_drag_10 \
-    menus_settings_chapters \
-    secondary_launch \
-    clean_close; do
-    record_result A "$action" 'NOT RUN' 'post-lease seat gate did not pass'
-  done
-  for action in dual_head_available open_each_head no_spanning edge_drag; do
-    record_result B "$action" 'NOT RUN' 'post-lease seat gate did not pass'
-  done
-  for action in 4k_weak_host_stress rapid_open_close seek_screenshot_storm; do
-    record_result C "$action" 'NOT RUN' 'post-lease seat gate did not pass'
-  done
-  finish_artifacts
-  if (( failed != 0 )); then
-    exit 1
-  fi
-  exit 4
-fi
-
 run_hook A candidate_install "$HOOK_DIR/prepare-candidate" "$artifact_dir" "$role" "$suite_id"
 if [[ "$last_hook_status" == PASS ]]; then
   if validate_candidate_identity; then
@@ -224,6 +203,7 @@ else
 fi
 if [[ "$last_hook_status" != PASS ]]; then
   for action in \
+    headless_window_regressions \
     cold_launch \
     single_monitor_fit \
     play_pause_seek \
@@ -238,6 +218,35 @@ if [[ "$last_hook_status" != PASS ]]; then
   done
   for action in 4k_weak_host_stress rapid_open_close seek_screenshot_storm; do
     record_result C "$action" 'NOT RUN' 'accepted candidate was not prepared'
+  done
+  finish_artifacts
+  if (( failed != 0 )); then
+    exit 1
+  fi
+  exit 4
+fi
+
+run_action A headless_window_regressions
+
+# Candidate preparation and the Xvfb regression are seat-independent. Gate all
+# real desktop launch and input actions after the lease has been acquired.
+run_seat_check
+if [[ "$last_hook_status" != PASS ]]; then
+  for action in \
+    cold_launch \
+    single_monitor_fit \
+    play_pause_seek \
+    non_osc_drag_10 \
+    menus_settings_chapters \
+    secondary_launch \
+    clean_close; do
+    record_result A "$action" 'NOT RUN' 'post-lease seat gate did not pass'
+  done
+  for action in dual_head_available open_each_head no_spanning edge_drag; do
+    record_result B "$action" 'NOT RUN' 'post-lease seat gate did not pass'
+  done
+  for action in 4k_weak_host_stress rapid_open_close seek_screenshot_storm; do
+    record_result C "$action" 'NOT RUN' 'post-lease seat gate did not pass'
   done
   finish_artifacts
   if (( failed != 0 )); then
