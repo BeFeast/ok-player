@@ -30,10 +30,15 @@ cat >"$drag_smoke" <<'EOF'
 mkdir -p "$2"
 printf '%s\n' \
   'video_surface_handoff_survival=pass' \
+  'video_surface_drag_handoff=observed' \
   'compositor_cancel_survival=pass' \
+  'compositor_cancel_drag_handoff=observed' \
   'post_cancel_drag=pass' \
-  'gtk_drag_lifecycle_completion=pass' \
+  'post_cancel_drag_handoff=observed' \
+  'fresh_drag_begin_boundaries=observed' \
+  'gtk_completion_edge=observed' \
   'idle_canvas_handoff_survival=pass' \
+  'idle_canvas_drag_handoff=observed' \
   'fatal_diagnostics=absent' >"$2/results.txt"
 printf 'status=pass\n' >"$2/xvfb-evidence.txt"
 printf 'status=pass\n' >"$2/dbus-evidence.txt"
@@ -104,17 +109,49 @@ if OKP_WINDOW_DRAG_SMOKE="$drag_smoke" OKP_WINDOW_FIT_SERIES="$fit_series" \
   fail 'runner passed when zero-exit drag evidence omitted required assertions'
 fi
 assert_contains "$incomplete_drag_output/results.tsv" \
-  $'non_osc_window_drag\tFAIL\tmissing exact evidence=compositor_cancel_survival=pass'
+  $'non_osc_window_drag\tFAIL\tmissing exact evidence=video_surface_drag_handoff=observed'
 
 cat >"$drag_smoke" <<'EOF'
 #!/usr/bin/env bash
 mkdir -p "$2"
 printf '%s\n' \
   'video_surface_handoff_survival=pass' \
+  'video_surface_drag_handoff=observed' \
   'compositor_cancel_survival=pass' \
   'post_cancel_drag=pass' \
-  'gtk_drag_lifecycle_completion=pass' \
+  'post_cancel_drag_handoff=observed' \
+  'fresh_drag_begin_boundaries=observed' \
+  'gtk_completion_edge=observed' \
   'idle_canvas_handoff_survival=pass' \
+  'idle_canvas_drag_handoff=observed' \
+  'fatal_diagnostics=absent' >"$2/results.txt"
+printf 'status=pass\n' >"$2/xvfb-evidence.txt"
+printf 'status=pass\n' >"$2/dbus-evidence.txt"
+EOF
+chmod +x "$drag_smoke"
+missing_phase_output="$TEST_ROOT/missing-drag-handoff-phase"
+if OKP_WINDOW_DRAG_SMOKE="$drag_smoke" OKP_WINDOW_FIT_SERIES="$fit_series" \
+  OKP_WINDOW_REGRESSION_SOURCE_SHA=1111111111111111111111111111111111111111 \
+  "$RUNNER" "$binary" "$missing_phase_output" >/dev/null 2>&1; then
+  fail 'runner passed when drag evidence omitted a phase-specific native handoff'
+fi
+assert_contains "$missing_phase_output/results.tsv" \
+  $'non_osc_window_drag\tFAIL\tmissing exact evidence=compositor_cancel_drag_handoff=observed'
+
+cat >"$drag_smoke" <<'EOF'
+#!/usr/bin/env bash
+mkdir -p "$2"
+printf '%s\n' \
+  'video_surface_handoff_survival=pass' \
+  'video_surface_drag_handoff=observed' \
+  'compositor_cancel_survival=pass' \
+  'compositor_cancel_drag_handoff=observed' \
+  'post_cancel_drag=pass' \
+  'post_cancel_drag_handoff=observed' \
+  'fresh_drag_begin_boundaries=observed' \
+  'gtk_completion_edge=observed' \
+  'idle_canvas_handoff_survival=pass' \
+  'idle_canvas_drag_handoff=observed' \
   'fatal_diagnostics=absent' >"$2/results.txt"
 printf 'status=pass\n' >"$2/xvfb-evidence.txt"
 printf 'status=pass\n' >"$2/dbus-evidence.txt"

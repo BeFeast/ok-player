@@ -95,10 +95,15 @@ run_smoke \
   non_osc_window_drag \
   window-drag/results.txt \
   window-drag/results.txt video_surface_handoff_survival=pass \
+  window-drag/results.txt video_surface_drag_handoff=observed \
   window-drag/results.txt compositor_cancel_survival=pass \
+  window-drag/results.txt compositor_cancel_drag_handoff=observed \
   window-drag/results.txt post_cancel_drag=pass \
-  window-drag/results.txt gtk_drag_lifecycle_completion=pass \
+  window-drag/results.txt post_cancel_drag_handoff=observed \
+  window-drag/results.txt fresh_drag_begin_boundaries=observed \
+  window-drag/results.txt gtk_completion_edge=observed \
   window-drag/results.txt idle_canvas_handoff_survival=pass \
+  window-drag/results.txt idle_canvas_drag_handoff=observed \
   window-drag/results.txt fatal_diagnostics=absent \
   window-drag/xvfb-evidence.txt status=pass \
   window-drag/dbus-evidence.txt status=pass \

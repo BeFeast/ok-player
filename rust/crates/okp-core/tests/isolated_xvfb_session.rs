@@ -234,8 +234,16 @@ fn player_window_drag_smoke_covers_survival_cancel_and_recovery() {
     assert!(script.contains("compositor-cancel"));
     assert!(script.contains("post-cancel-drag"));
     assert!(script.contains("idle-canvas-drag"));
+    assert!(script.contains("wait_for_new_drag_handoff"));
+    assert!(script.contains("drag_handoff_count"));
+    assert!(script.contains("video_surface_drag_handoff=observed"));
+    assert!(script.contains("compositor_cancel_drag_handoff=observed"));
+    assert!(script.contains("post_cancel_drag_handoff=observed"));
+    assert!(script.contains("fresh_drag_begin_boundaries=observed"));
+    assert!(script.contains("gtk_completion_edge=observed"));
+    assert!(script.contains("idle_canvas_drag_handoff=observed"));
     assert!(script.contains("kill -0 \"$app_pid\""));
-    assert!(script.contains("expected repeated playback-surface move handoffs"));
+    assert!(script.contains("expected all three playback-surface move handoffs"));
     assert!(script.contains("panicked at|fatal runtime error|Aborted|core dumped"));
 }
 

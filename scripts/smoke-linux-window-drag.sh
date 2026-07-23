@@ -77,8 +77,33 @@ if [[ "${1:-}" == "--inner" ]]; then
     }
   }
 
-  drag_and_assert_survival() {
-    local id="$1" x="$2" y="$3" label="$4"
+  drag_completion_count() {
+    awk '/interaction: player-window-move-(end|cancel)/ { count++ } END { print count + 0 }' "$1"
+  }
+
+  drag_handoff_count() {
+    awk '/interaction: player-window-move$/ { count++ } END { print count + 0 }' "$1"
+  }
+
+  drag_begin_count() {
+    awk '/interaction: player-window-move-begin / { count++ } END { print count + 0 }' "$1"
+  }
+
+  wait_for_new_drag_handoff() {
+    local log="$1" previous_handoffs="$2"
+    for _ in $(seq 1 40); do
+      if [[ "$(drag_handoff_count "$log")" -gt "$previous_handoffs" ]]; then
+        return 0
+      fi
+      sleep 0.05
+    done
+    return 1
+  }
+
+  drag_and_assert_handoff() {
+    local id="$1" x="$2" y="$3" label="$4" log="$5"
+    local previous_handoffs
+    previous_handoffs="$(drag_handoff_count "$log")"
     xdotool mousemove --window "$id" "$x" "$y" mousedown 1
     sleep 0.2
     xdotool mousemove_relative --sync 20 15
@@ -90,6 +115,10 @@ if [[ "${1:-}" == "--inner" ]]; then
     xdotool mouseup 1
     sleep 0.8
     assert_alive "$label"
+    wait_for_new_drag_handoff "$log" "$previous_handoffs" || {
+      echo "$label did not produce a native handoff" >&2
+      exit 1
+    }
   }
 
   timeout 70s "$BINARY" "$FIXTURE" >"$OUT_DIR/playback-app.log" 2>&1 &
@@ -104,11 +133,13 @@ if [[ "${1:-}" == "--inner" ]]; then
   center_x=$((window_width / 2))
   center_y=$((window_height / 2))
 
-  drag_and_assert_survival "$window_id" "$center_x" "$center_y" video-surface-drag
+  drag_and_assert_handoff \
+    "$window_id" "$center_x" "$center_y" video-surface-drag "$OUT_DIR/playback-app.log"
   xdotool windowmove "$window_id" 80 80
   sleep 0.5
 
   # Cross the threshold, then cancel the compositor-owned move with Escape.
+  cancel_previous_handoffs="$(drag_handoff_count "$OUT_DIR/playback-app.log")"
   xdotool mousemove --window "$window_id" "$center_x" "$center_y" mousedown 1
   sleep 0.2
   xdotool mousemove_relative --sync 70 45
@@ -117,9 +148,14 @@ if [[ "${1:-}" == "--inner" ]]; then
   xdotool mouseup 1
   sleep 0.8
   assert_alive compositor-cancel
+  wait_for_new_drag_handoff "$OUT_DIR/playback-app.log" "$cancel_previous_handoffs" || {
+    echo "Escape-cancelled drag did not produce a native handoff" >&2
+    exit 1
+  }
 
   # A fresh drag must still work after cancellation.
-  drag_and_assert_survival "$window_id" "$center_x" "$center_y" post-cancel-drag
+  drag_and_assert_handoff \
+    "$window_id" "$center_x" "$center_y" post-cancel-drag "$OUT_DIR/playback-app.log"
   xdotool windowmove "$window_id" 80 80
   sleep 0.5
 
@@ -127,16 +163,20 @@ if [[ "${1:-}" == "--inner" ]]; then
   wait "$app_pid" 2>/dev/null || true
   app_pid=""
   playback_moves="$(awk '/interaction: player-window-move$/ { count++ } END { print count + 0 }' "$OUT_DIR/playback-app.log")"
-  [[ "$playback_moves" -ge 2 ]] || {
-    echo "expected repeated playback-surface move handoffs, observed $playback_moves" >&2
+  [[ "$playback_moves" -ge 3 ]] || {
+    echo "expected all three playback-surface move handoffs, observed $playback_moves" >&2
     exit 1
   }
-  playback_finishes="$(awk '/interaction: player-window-move-(end|cancel)/ { count++ } END { print count + 0 }' "$OUT_DIR/playback-app.log")"
-  [[ "$playback_finishes" -ge 2 ]] || {
-    echo "expected GTK to finish or cancel repeated playback drags, observed $playback_finishes" >&2
+  playback_begins="$(drag_begin_count "$OUT_DIR/playback-app.log")"
+  [[ "$playback_begins" -ge 3 ]] || {
+    echo "expected three fresh GTK drag begin boundaries, observed $playback_begins" >&2
     exit 1
   }
-
+  playback_completions="$(drag_completion_count "$OUT_DIR/playback-app.log")"
+  [[ "$playback_completions" -ge 1 ]] || {
+    echo "expected at least one GTK end/cancel edge, observed $playback_completions" >&2
+    exit 1
+  }
   timeout 40s "$BINARY" >"$OUT_DIR/idle-app.log" 2>&1 &
   app_pid=$!
   idle_window_id="$(wait_for_window)" || {
@@ -146,7 +186,8 @@ if [[ "${1:-}" == "--inner" ]]; then
   xdotool windowactivate "$idle_window_id" >/dev/null 2>&1 || true
   sleep 2
   # The idle process has its own log; retry once because Xvfb pointer delivery is
-  # synthetic, then require at least one native handoff after exit.
+  # synthetic, then require a native handoff after exit.
+  idle_previous_handoffs="$(drag_handoff_count "$OUT_DIR/idle-app.log")"
   xdotool mousemove --window "$idle_window_id" 100 300 mousedown 1
   sleep 0.2
   xdotool mousemove_relative --sync 90 65
@@ -154,13 +195,19 @@ if [[ "${1:-}" == "--inner" ]]; then
   xdotool mouseup 1
   sleep 0.8
   assert_alive idle-canvas-drag
-  xdotool mousemove --window "$idle_window_id" 100 300 mousedown 1
-  sleep 0.2
-  xdotool mousemove_relative --sync 90 65
-  sleep 0.2
-  xdotool mouseup 1
-  sleep 0.8
-  assert_alive idle-canvas-retry
+  if ! wait_for_new_drag_handoff "$OUT_DIR/idle-app.log" "$idle_previous_handoffs"; then
+    xdotool mousemove --window "$idle_window_id" 100 300 mousedown 1
+    sleep 0.2
+    xdotool mousemove_relative --sync 90 65
+    sleep 0.2
+    xdotool mouseup 1
+    sleep 0.8
+    assert_alive idle-canvas-retry
+    wait_for_new_drag_handoff "$OUT_DIR/idle-app.log" "$idle_previous_handoffs" || {
+      echo "idle-canvas drag did not produce a native handoff" >&2
+      exit 1
+    }
+  fi
   kill "$app_pid" 2>/dev/null || true
   wait "$app_pid" 2>/dev/null || true
   app_pid=""
@@ -169,12 +216,11 @@ if [[ "${1:-}" == "--inner" ]]; then
     echo "expected an idle-canvas move handoff, observed $idle_moves" >&2
     exit 1
   }
-  idle_finishes="$(awk '/interaction: player-window-move-(end|cancel)/ { count++ } END { print count + 0 }' "$OUT_DIR/idle-app.log")"
-  [[ "$idle_finishes" -ge 1 ]] || {
-    echo "expected GTK to finish or cancel the idle-canvas drag, observed $idle_finishes" >&2
+  idle_completions="$(drag_completion_count "$OUT_DIR/idle-app.log")"
+  [[ "$idle_completions" -ge 1 ]] || {
+    echo "expected GTK to finish or cancel the idle-canvas drag, observed $idle_completions" >&2
     exit 1
   }
-
   if awk '/panicked at|fatal runtime error|Aborted|core dumped/ { print FILENAME ":" FNR ":" $0; found = 1 } END { exit !found }' \
       "$OUT_DIR/playback-app.log" "$OUT_DIR/idle-app.log"; then
     echo "window-drag smoke observed a fatal process diagnostic" >&2
@@ -183,10 +229,15 @@ if [[ "${1:-}" == "--inner" ]]; then
 
   printf '%s\n' \
     'video_surface_handoff_survival=pass' \
+    'video_surface_drag_handoff=observed' \
     'compositor_cancel_survival=pass' \
+    'compositor_cancel_drag_handoff=observed' \
     'post_cancel_drag=pass' \
-    'gtk_drag_lifecycle_completion=pass' \
+    'post_cancel_drag_handoff=observed' \
+    'fresh_drag_begin_boundaries=observed' \
+    'gtk_completion_edge=observed' \
     'idle_canvas_handoff_survival=pass' \
+    'idle_canvas_drag_handoff=observed' \
     'fatal_diagnostics=absent' >"$OUT_DIR/results.txt"
   exit 0
 fi
