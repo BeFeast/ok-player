@@ -504,7 +504,7 @@ finish_app_shutdown() {
 
 close_app() {
   local window_id="$1"
-  local close_attempt close_error
+  local close_attempt close_error close_status probe_status
   # `windowclose` destroys the X11 window directly, while keyboard and pointer
   # routes depend on focus or hit testing. Ask Xfwm to close the exact toplevel;
   # it delivers WM_DELETE_WINDOW and GTK executes the normal close-request
@@ -514,11 +514,13 @@ close_app() {
       "$close_attempt" "$window_id" \
       >>"$OUT_DIR/fit-lifecycle.log"
     close_error="$OUT_DIR/close-dispatch-${close_attempt}.log"
-    if ! "$X11_CLOSE_REQUEST" "$window_id" 2>"$close_error"; then
+    close_status=0
+    "$X11_CLOSE_REQUEST" "$window_id" 2>"$close_error" || close_status=$?
+    if (( close_status != 0 )); then
       # _NET_CLOSE_WINDOW is asynchronous. A previous request can complete
-      # between the loop's geometry probe and this helper resolving the XID.
-      # Treat that race as success only when the exact target is already gone.
-      if ! xdotool getwindowgeometry "$window_id" >/dev/null 2>&1; then
+      # between the loop's Xlib probe and this helper resolving the XID. The
+      # helper reserves status 3 for a confirmed BadWindow on the exact target.
+      if (( close_status == 3 )); then
         printf 'close-dispatch attempt=%s target=%s result=already-gone\n' \
           "$close_attempt" "$window_id" >>"$OUT_DIR/fit-lifecycle.log"
         break
@@ -528,8 +530,16 @@ close_app() {
       return 1
     fi
     sleep 0.2
-    if ! xdotool getwindowgeometry "$window_id" >/dev/null 2>&1; then
+    probe_status=0
+    "$X11_CLOSE_REQUEST" --probe "$window_id" \
+      2>"$OUT_DIR/close-probe-${close_attempt}.log" || probe_status=$?
+    if (( probe_status == 3 )); then
       break
+    fi
+    if (( probe_status != 0 )); then
+      echo "Could not probe X11 window $window_id after close request" >&2
+      cat "$OUT_DIR/close-probe-${close_attempt}.log" >&2 || true
+      return 1
     fi
   done
   finish_app_shutdown "last_window_close"
