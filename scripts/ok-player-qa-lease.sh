@@ -88,11 +88,12 @@ case "$command_name" in
     owner_pid="${5:-$PPID}"
     require_token host-role "$role"
     require_token suite-id "$suite_id"
+    role_key="${role,,}"
     [[ "$ttl_minutes" =~ ^[0-9]+$ ]] || fail "ttl-minutes must be an integer"
     [[ "$owner_pid" =~ ^[0-9]+$ ]] || fail "owner-pid must be an integer"
     (( ttl_minutes >= 1 && ttl_minutes <= 180 )) || fail "ttl-minutes must be between 1 and 180"
 
-    if [[ "$role" == "sindri" ]] &&
+    if [[ "$role_key" == "sindri" ]] &&
       [[ "${OKP_QA_ALLOW_SINDRI:-0}" != "1" || "${OKP_QA_OPERATOR_GO:-0}" != "1" ]]; then
       printf 'REFUSE: sindri is operator-first and requires explicit operator authorization\n' >&2
       exit 3

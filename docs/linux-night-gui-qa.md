@@ -20,10 +20,12 @@ OKP_QA_HOSTS='mimir baldr' scripts/ok-player-night-gui-qa.sh
 ```
 
 The controller visits every eligible host in the configured order and rejects
-empty, invalid, duplicate, or `sindri` entries. Do not put physical hostnames or
-private addresses in this variable because the logical alias is copied into
-the evidence metadata. `sindri` is never in the automatic list. A one-host
-operator-authorized run requires all three explicit choices:
+empty, invalid, duplicate, or `sindri` entries. Protected-host and duplicate
+comparisons are case-insensitive because OpenSSH host aliases are
+case-insensitive. Do not put physical hostnames or private addresses in this
+variable because the logical alias is copied into the evidence metadata.
+`sindri` is never in the automatic list. A one-host operator-authorized run
+requires all three explicit choices:
 
 ```bash
 OKP_QA_ALLOW_SINDRI=1 OKP_QA_OPERATOR_GO=1 \
@@ -103,18 +105,24 @@ For one reproducible headless invocation, build or select the exact candidate
 binary and run both regressions through the aggregate helper:
 
 ```bash
-scripts/run-linux-window-regression-smokes.sh \
+OKP_WINDOW_REGRESSION_SOURCE_SHA="$candidate_source_sha" \
+  scripts/run-linux-window-regression-smokes.sh \
   rust/target/debug/okp-linux-gtk \
   artifacts/manual-ui/linux-window-regressions
 ```
 
+Set `candidate_source_sha` from trusted candidate metadata; the runner requires
+the exact 40-character lowercase commit SHA for the supplied binary and never
+infers identity from the harness checkout.
+
 The helper always attempts both regressions, writes `results.tsv` and
-`summary.env`, and binds the key drag, fit, Xvfb, and D-Bus evidence files in
-`SHA256SUMS`. A site `run-action` hook should use this command as supporting
-evidence while implementing `single_monitor_fit` and `non_osc_drag_10`; the
-two live action rows still require actual desktop observations. CI runs the
-aggregate helper's dispatch/failure/evidence policy test, while the Rust suite
-also pins the required drag and fit assertions in the underlying scripts.
+`summary.env`, and binds the drag evidence plus every per-run fit, Xvfb, and
+D-Bus evidence file in `SHA256SUMS`. A site `run-action` hook should use this
+command as supporting evidence while implementing `single_monitor_fit` and
+`non_osc_drag_10`; the two live action rows still require actual desktop
+observations. CI runs the aggregate helper's dispatch/failure/evidence policy
+test, while the Rust suite also pins the required drag and fit assertions in
+the underlying scripts.
 
 ## Artifacts and timer ownership
 
