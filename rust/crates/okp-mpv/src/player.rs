@@ -319,12 +319,16 @@ pub enum TrackKind {
 /// Lifecycle events the engine fires, drained oldest-first via
 /// [`Mpv::take_lifecycle_events`](crate::Mpv::take_lifecycle_events). Load and
 /// reconfiguration events carry display dimensions read by the background pump,
-/// while `EndFile` carries the path mpv reported for the entry that ended. The
-/// shell can therefore react without a blocking UI-thread property read and can
-/// drop a stale error whose source has already been superseded. Not `Copy`
-/// because `path` is a `String`.
+/// while failure events carry the path mpv reported for their source. The shell
+/// can therefore react without a blocking UI-thread property read and can drop
+/// a stale error whose source has already been superseded. Not `Copy` because
+/// `path` is a `String`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MpvEvent {
+    DecoderFailed {
+        path: Option<String>,
+        diagnostic_messages: Vec<String>,
+    },
     EndFile {
         reason: EndFileReason,
         path: Option<String>,
@@ -1003,6 +1007,7 @@ fn render_context_parameters(
     api: &CStr,
     init_params: &mut ffi::mpv_opengl_init_params,
     native_wayland_display: Option<NonNull<c_void>>,
+    advanced_control: Option<&mut c_int>,
 ) -> Vec<ffi::mpv_render_param> {
     let mut params = vec![
         ffi::mpv_render_param {
@@ -1018,6 +1023,12 @@ fn render_context_parameters(
         params.push(ffi::mpv_render_param {
             param_type: ffi::MPV_RENDER_PARAM_WL_DISPLAY,
             data: display.as_ptr(),
+        });
+    }
+    if let Some(advanced_control) = advanced_control {
+        params.push(ffi::mpv_render_param {
+            param_type: ffi::MPV_RENDER_PARAM_ADVANCED_CONTROL,
+            data: ptr::from_mut(advanced_control).cast(),
         });
     }
     params.push(ffi::mpv_render_param {
@@ -1335,6 +1346,7 @@ impl Mpv {
     pub fn create_render_context(
         &mut self,
         native_wayland_display: Option<NativeWaylandDisplay>,
+        advanced_control: bool,
     ) -> Result<(), MpvError> {
         if self.render_context.is_some() {
             return Ok(());
@@ -1350,12 +1362,14 @@ impl Mpv {
             get_proc_address: Some(get_proc_address),
             get_proc_address_ctx: ptr::null_mut(),
         };
+        let mut advanced_control_value = c_int::from(advanced_control);
         let mut params = render_context_parameters(
             &api,
             &mut init_params,
             native_wayland_display
                 .as_ref()
                 .map(NativeWaylandDisplay::pointer),
+            advanced_control.then_some(&mut advanced_control_value),
         );
 
         let mut context = ptr::null_mut();
@@ -2597,7 +2611,7 @@ mod tests {
             get_proc_address: None,
             get_proc_address_ctx: ptr::null_mut(),
         };
-        let without_wayland = render_context_parameters(c"opengl", &mut init_params, None);
+        let without_wayland = render_context_parameters(c"opengl", &mut init_params, None, None);
         assert_eq!(
             without_wayland
                 .iter()
@@ -2611,7 +2625,8 @@ mod tests {
         );
 
         let display = NonNull::<c_void>::dangling();
-        let with_wayland = render_context_parameters(c"opengl", &mut init_params, Some(display));
+        let with_wayland =
+            render_context_parameters(c"opengl", &mut init_params, Some(display), None);
         assert_eq!(
             with_wayland
                 .iter()
@@ -2626,6 +2641,42 @@ mod tests {
         );
         assert_eq!(with_wayland[2].data, display.as_ptr());
         assert!(with_wayland[3].data.is_null());
+    }
+
+    #[test]
+    fn native_render_context_enables_gpu_screenshot_control() {
+        let mut init_params = ffi::mpv_opengl_init_params {
+            get_proc_address: None,
+            get_proc_address_ctx: ptr::null_mut(),
+        };
+        let display = NonNull::<c_void>::dangling();
+        let mut advanced_control = 1;
+        let params = render_context_parameters(
+            c"opengl",
+            &mut init_params,
+            Some(display),
+            Some(&mut advanced_control),
+        );
+
+        assert_eq!(
+            params
+                .iter()
+                .map(|parameter| parameter.param_type)
+                .collect::<Vec<_>>(),
+            vec![
+                ffi::MPV_RENDER_PARAM_API_TYPE,
+                ffi::MPV_RENDER_PARAM_OPENGL_INIT_PARAMS,
+                ffi::MPV_RENDER_PARAM_WL_DISPLAY,
+                ffi::MPV_RENDER_PARAM_ADVANCED_CONTROL,
+                ffi::MPV_RENDER_PARAM_INVALID,
+            ]
+        );
+        assert_eq!(
+            unsafe { *params[3].data.cast::<c_int>() },
+            1,
+            "advanced control routes GPU screenshots through the render thread"
+        );
+        assert!(params[4].data.is_null());
     }
 
     #[test]

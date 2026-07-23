@@ -12,6 +12,13 @@ pub enum PlaybackFailureKind {
     Application,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CodecEnvironment {
+    System,
+    FedoraRpm,
+    Flatpak,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlaybackFailureDiagnostic {
     pub kind: PlaybackFailureKind,
@@ -51,7 +58,7 @@ impl PlaybackFailureDiagnostic {
 pub fn diagnose_mpv_failure(
     error_code: i32,
     engine_messages: &[String],
-    native_fedora_rpm: bool,
+    environment: CodecEnvironment,
 ) -> PlaybackFailureDiagnostic {
     let normalized = engine_messages
         .iter()
@@ -59,17 +66,7 @@ pub fn diagnose_mpv_failure(
         .collect::<Vec<_>>();
 
     if normalized.iter().any(|message| is_codec_failure(message)) {
-        let message = if native_fedora_rpm {
-            "The system codec needed by this file is unavailable. OK Player uses Fedora's system mpv/FFmpeg libraries. Optionally follow RPM Fusion's official setup instructions to add broader codec support; OK Player will not enable third-party repositories for you."
-        } else {
-            "The system mpv/FFmpeg installation does not provide the codec needed by this file. Install codec support through your operating system, then retry."
-        };
-        return PlaybackFailureDiagnostic {
-            kind: PlaybackFailureKind::MissingCodec,
-            title: "Codec unavailable".to_owned(),
-            message: message.to_owned(),
-            detail: format!("Required system codec is unavailable (libmpv error {error_code})."),
-        };
+        return missing_codec_diagnostic(environment, Some(error_code));
     }
 
     if normalized
@@ -94,18 +91,79 @@ pub fn diagnose_mpv_failure(
 /// warning harmless. Benign EOF log traffic is ignored.
 pub fn diagnose_mpv_eof(
     engine_messages: &[String],
-    native_fedora_rpm: bool,
+    environment: CodecEnvironment,
 ) -> Option<PlaybackFailureDiagnostic> {
     engine_messages
         .iter()
         .map(|message| message.to_ascii_lowercase())
         .any(|message| is_codec_failure(&message))
         .then(|| {
-            let mut diagnostic = diagnose_mpv_failure(0, engine_messages, native_fedora_rpm);
-            diagnostic.detail =
-                "libmpv reached EOF after reporting an unavailable system codec.".to_owned();
+            let mut diagnostic = missing_codec_diagnostic(environment, None);
+            diagnostic.detail = match environment {
+                CodecEnvironment::Flatpak => {
+                    "libmpv reached EOF after reporting an unavailable Flatpak codec extension."
+                        .to_owned()
+                }
+                _ => "libmpv reached EOF after reporting an unavailable system codec.".to_owned(),
+            };
             diagnostic
         })
+}
+
+/// Diagnose a decoder warning as soon as libmpv emits it. This path is used
+/// when another stream (usually audio) would otherwise keep the clock moving
+/// until EOF behind a video track that never produced a frame.
+pub fn diagnose_mpv_runtime(
+    engine_messages: &[String],
+    environment: CodecEnvironment,
+) -> Option<PlaybackFailureDiagnostic> {
+    engine_messages
+        .iter()
+        .map(|message| message.to_ascii_lowercase())
+        .any(|message| is_codec_failure(&message))
+        .then(|| missing_codec_diagnostic(environment, None))
+}
+
+/// Lightweight semantic filter used by engine wrappers before they enqueue a
+/// runtime decoder-failure event. The user-facing diagnosis remains in this
+/// module so shells never parse libmpv log text.
+pub fn is_mpv_codec_failure(message: &str) -> bool {
+    is_codec_failure(&message.to_ascii_lowercase())
+}
+
+fn missing_codec_diagnostic(
+    environment: CodecEnvironment,
+    error_code: Option<i32>,
+) -> PlaybackFailureDiagnostic {
+    let message = match environment {
+        CodecEnvironment::FedoraRpm => {
+            "The system codec needed by this file is unavailable. OK Player uses Fedora's system mpv/FFmpeg libraries. Optionally follow RPM Fusion's official setup instructions to add broader codec support; OK Player will not enable third-party repositories for you."
+        }
+        CodecEnvironment::Flatpak => {
+            "This Flatpak runtime does not include the codec needed by this file. Install the matching org.freedesktop.Platform.codecs-extra extension, then retry."
+        }
+        CodecEnvironment::System => {
+            "The system mpv/FFmpeg installation does not provide the codec needed by this file. Install codec support through your operating system, then retry."
+        }
+    };
+    let detail = match (environment, error_code) {
+        (CodecEnvironment::Flatpak, Some(error_code)) => {
+            format!("Required Flatpak codec extension is unavailable (libmpv error {error_code}).")
+        }
+        (CodecEnvironment::Flatpak, None) => {
+            "Required Flatpak codec extension is unavailable.".to_owned()
+        }
+        (_, Some(error_code)) => {
+            format!("Required system codec is unavailable (libmpv error {error_code}).")
+        }
+        (_, None) => "Required system codec is unavailable.".to_owned(),
+    };
+    PlaybackFailureDiagnostic {
+        kind: PlaybackFailureKind::MissingCodec,
+        title: "Codec unavailable".to_owned(),
+        message: message.to_owned(),
+        detail,
+    }
 }
 
 fn is_codec_failure(message: &str) -> bool {
@@ -156,7 +214,7 @@ mod tests {
         let diagnostic = diagnose_mpv_failure(
             -13,
             &messages(&["[ffmpeg/video] Decoder not found for codec hevc"]),
-            true,
+            CodecEnvironment::FedoraRpm,
         );
 
         assert_eq!(diagnostic.kind, PlaybackFailureKind::MissingCodec);
@@ -172,7 +230,7 @@ mod tests {
         let diagnostic = diagnose_mpv_failure(
             -13,
             &messages(&["Failed to initialize a decoder for stream 0"]),
-            false,
+            CodecEnvironment::System,
         );
 
         assert_eq!(diagnostic.kind, PlaybackFailureKind::MissingCodec);
@@ -184,7 +242,7 @@ mod tests {
         let diagnostic = diagnose_mpv_failure(
             -12,
             &messages(&["vo/gpu: Failed initializing any suitable GPU context"]),
-            true,
+            CodecEnvironment::FedoraRpm,
         );
 
         assert_eq!(diagnostic.kind, PlaybackFailureKind::Renderer);
@@ -194,7 +252,11 @@ mod tests {
 
     #[test]
     fn unknown_failure_stays_a_generic_application_error() {
-        let diagnostic = diagnose_mpv_failure(-13, &messages(&["stream: HTTP error 404"]), true);
+        let diagnostic = diagnose_mpv_failure(
+            -13,
+            &messages(&["stream: HTTP error 404"]),
+            CodecEnvironment::FedoraRpm,
+        );
 
         assert_eq!(diagnostic.kind, PlaybackFailureKind::Application);
         assert_eq!(diagnostic.title, "Playback failed");
@@ -209,7 +271,7 @@ mod tests {
                 "vo/gpu: Failed to create rendering context",
                 "ad: Could not open codec",
             ]),
-            true,
+            CodecEnvironment::FedoraRpm,
         );
 
         assert_eq!(diagnostic.kind, PlaybackFailureKind::MissingCodec);
@@ -219,7 +281,7 @@ mod tests {
     fn decoder_failure_at_eof_remains_a_codec_diagnostic() {
         let diagnostic = diagnose_mpv_eof(
             &messages(&["[ffmpeg/video] Decoder not found for codec hevc"]),
-            true,
+            CodecEnvironment::FedoraRpm,
         )
         .expect("decoder failure must not be discarded just because mpv reported EOF");
 
@@ -233,7 +295,40 @@ mod tests {
 
     #[test]
     fn benign_eof_logs_do_not_become_failures() {
-        assert!(diagnose_mpv_eof(&messages(&["cplayer: finished playback"]), true).is_none());
+        assert!(
+            diagnose_mpv_eof(
+                &messages(&["cplayer: finished playback"]),
+                CodecEnvironment::FedoraRpm,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn flatpak_runtime_decoder_failure_names_the_codec_extension() {
+        let diagnostic = diagnose_mpv_runtime(
+            &messages(&["vd: Failed to initialize a decoder for codec h264"]),
+            CodecEnvironment::Flatpak,
+        )
+        .expect("decoder warning should fail immediately");
+
+        assert_eq!(diagnostic.kind, PlaybackFailureKind::MissingCodec);
+        assert!(diagnostic.message.contains("codecs-extra"));
+        assert_eq!(
+            diagnostic.detail,
+            "Required Flatpak codec extension is unavailable."
+        );
+    }
+
+    #[test]
+    fn benign_runtime_warning_does_not_stop_playback() {
+        assert!(
+            diagnose_mpv_runtime(
+                &messages(&["ao/pipewire: underrun recovered"]),
+                CodecEnvironment::Flatpak,
+            )
+            .is_none()
+        );
     }
 
     #[test]

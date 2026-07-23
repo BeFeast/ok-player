@@ -31,6 +31,26 @@ fn renderer_environment_is_selected_before_gtk_initialization() {
 }
 
 #[test]
+fn native_wayland_screenshots_use_libmpv_advanced_control() {
+    let bridge = include_str!("mpv_bridge.rs");
+
+    assert!(bridge.contains("mpv.create_render_context(native_wayland_display, true)"));
+    assert!(bridge.contains("mpv.create_render_context(native_wayland_display, false)"));
+}
+
+#[test]
+fn decoder_failure_event_is_bound_to_the_failed_source() {
+    let events = include_str!("track_popovers.rs");
+    let failures = include_str!("playlist_ops.rs");
+
+    assert!(events.contains("MpvEvent::DecoderFailed"));
+    assert!(events.contains("path.as_deref(), &diagnostic_messages"));
+    assert!(failures.contains("diagnose_mpv_runtime("));
+    assert!(failures.contains("apply_endfile_diagnostic(state, failed_path, diagnostic)"));
+    assert!(failures.contains("mpv.stop()"));
+}
+
+#[test]
 fn file_association_launches_present_before_media_delivery() {
     let window = include_str!("window.rs");
     let build = window
@@ -4266,7 +4286,7 @@ fn linux_update_status_reflects_last_check_result() {
     assert!(up_to_date.pending_offer().is_none());
 
     let managed = LinuxUpdateStatus::from_check_result(
-        &LinuxUpdateCheckResult::ManagedExternally,
+        &LinuxUpdateCheckResult::ManagedExternally(LinuxExternalUpdateManager::Dnf),
         UpdateChannel::Public,
         &skipped,
     );
@@ -4275,6 +4295,17 @@ fn linux_update_status_reflects_last_check_result() {
         "Updates are managed by DNF."
     );
     assert!(managed.pending_offer().is_none());
+
+    let flatpak = LinuxUpdateStatus::from_check_result(
+        &LinuxUpdateCheckResult::ManagedExternally(LinuxExternalUpdateManager::Flatpak),
+        UpdateChannel::Public,
+        &skipped,
+    );
+    assert_eq!(
+        flatpak.settings_status_text(true),
+        "Updates are managed by Flatpak"
+    );
+    assert!(flatpak.pending_offer().is_none());
 
     let update = PendingLinuxUpdate {
         manager: None,
@@ -4966,6 +4997,81 @@ fn codec_failure_reported_at_eof_stays_on_the_failed_source() {
             .as_ref()
             .map(|diagnostic| diagnostic.kind),
         Some(okp_core::playback_failure::PlaybackFailureKind::MissingCodec)
+    );
+}
+
+#[test]
+fn runtime_decoder_failure_stops_partial_playback_state_immediately() {
+    let path = PathBuf::from("/media/h264-aac.mp4");
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(path.clone()),
+        media_load_state: network_media::MediaLoadState::Playing,
+        retry_load_source: Some(network_media::LoadFailureSource::local(path.clone())),
+        ..PlayerState::default()
+    }));
+
+    assert!(apply_runtime_decoder_failure(
+        &state,
+        path.to_str(),
+        &["vd: Failed to initialize a decoder for codec h264".to_owned()],
+    ));
+
+    let state = state.borrow();
+    assert_eq!(
+        state.media_load_state,
+        network_media::MediaLoadState::Failed
+    );
+    assert_eq!(
+        state
+            .last_load_diagnostic
+            .as_ref()
+            .map(|diagnostic| diagnostic.kind),
+        Some(okp_core::playback_failure::PlaybackFailureKind::MissingCodec)
+    );
+}
+
+#[test]
+fn runtime_decoder_failure_drops_a_superseded_source() {
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(PathBuf::from("/media/source-b.mkv")),
+        media_load_state: network_media::MediaLoadState::Playing,
+        ..PlayerState::default()
+    }));
+
+    assert!(!apply_runtime_decoder_failure(
+        &state,
+        Some("/media/source-a.mkv"),
+        &["vd: Failed to initialize a decoder for codec h264".to_owned()],
+    ));
+
+    let state = state.borrow();
+    assert_eq!(
+        state.media_load_state,
+        network_media::MediaLoadState::Playing
+    );
+    assert!(state.last_load_diagnostic.is_none());
+    assert_eq!(
+        state.current_file.as_deref(),
+        Some(Path::new("/media/source-b.mkv"))
+    );
+}
+
+#[test]
+fn runtime_warning_without_decoder_failure_keeps_playback_active() {
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(PathBuf::from("/media/movie.mkv")),
+        media_load_state: network_media::MediaLoadState::Playing,
+        ..PlayerState::default()
+    }));
+
+    assert!(!apply_runtime_decoder_failure(
+        &state,
+        Some("/media/movie.mkv"),
+        &["ao/pipewire: underrun recovered".to_owned()],
+    ));
+    assert_eq!(
+        state.borrow().media_load_state,
+        network_media::MediaLoadState::Playing
     );
 }
 

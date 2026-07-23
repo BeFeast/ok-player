@@ -407,7 +407,7 @@ fn connect_native_mpv(
             );
             return;
         }
-        if let Err(error) = mpv.create_render_context(native_wayland_display) {
+        if let Err(error) = mpv.create_render_context(native_wayland_display, true) {
             schedule_gtk_mpv_fallback(
                 &fallback_container,
                 &realize_fallback_started,
@@ -639,7 +639,7 @@ fn connect_gtk_mpv(
                 "GDK Wayland native display is unavailable; continuing without zero-copy display interop"
             );
         }
-        if let Err(error) = mpv.create_render_context(native_wayland_display) {
+        if let Err(error) = mpv.create_render_context(native_wayland_display, false) {
             eprintln!("Failed to create mpv render context: {error}");
             return;
         }

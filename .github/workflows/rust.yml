@@ -12,6 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Night GUI QA driver policy tests
         run: ./scripts/tests/ok-player-night-gui-qa.Tests.sh
@@ -22,7 +24,7 @@ jobs:
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev libmpv-dev libgl1-mesa-dev libegl1-mesa-dev libglx-dev mpv ffmpeg cmake ninja-build appstream appstream-compose squashfs-tools unzip
+          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev libmpv-dev libgl1-mesa-dev libegl1-mesa-dev libglx-dev mpv ffmpeg cmake ninja-build appstream appstream-compose squashfs-tools unzip flatpak-builder desktop-file-utils
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -53,6 +55,9 @@ jobs:
 
       - name: AppStream MetaInfo validation smoke
         run: ./scripts/smoke-linux-appstream.sh
+
+      - name: Flatpak manifest validation smoke
+        run: ./scripts/smoke-linux-flatpak.sh
 
       - name: Native file dialog result smoke
         run: ./scripts/smoke-linux-file-dialog.sh

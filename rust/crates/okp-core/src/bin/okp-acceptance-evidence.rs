@@ -3,7 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use okp_core::acceptance_evidence::{
-    ArtifactKind, CandidateUpgradeEvidence, EvidenceManifest, PackageArtifact, PackageIdentity,
+    ArtifactKind, CandidateUpgradeEvidence, EvidenceManifest, FLATPAK_BETA_ARTIFACT_SCHEMA_VERSION,
+    FlatpakAcceptanceDesktop, FlatpakBetaArtifact, FlatpakBundleArtifact, FlatpakLifecycleEvidence,
+    FlatpakRevisionIdentity, FlatpakSoftwareRendererEvidence, PackageArtifact, PackageIdentity,
 };
 use okp_core::fedora_acceptance::{
     AcceptanceVerdict, FedoraAcceptanceManifest, FedoraArtifact, FedoraArtifactKind,
@@ -27,11 +29,92 @@ fn run() -> Result<(), String> {
         Some("template") => write_template(&args[1..]),
         Some("validate") => validate(&args[1..]),
         Some("candidate-upgrade-validate") => candidate_upgrade_validate(&args[1..]),
+        Some("flatpak-beta-artifact") => flatpak_beta_artifact(&args[1..]),
+        Some("flatpak-beta-validate") => flatpak_beta_validate(&args[1..]),
+        Some("flatpak-lifecycle-template") => flatpak_lifecycle_template(&args[1..]),
+        Some("flatpak-lifecycle-validate") => flatpak_lifecycle_validate(&args[1..]),
+        Some("flatpak-software-renderer-validate") => {
+            flatpak_software_renderer_validate(&args[1..])
+        }
         Some("presentation") => presentation(&args[1..]),
         Some("fedora-artifact") => fedora_artifact(&args[1..]),
         Some("fedora-validate") => fedora_validate(&args[1..]),
         _ => Err(usage()),
     }
+}
+
+fn flatpak_beta_artifact(args: &[String]) -> Result<(), String> {
+    let baseline_bundle = PathBuf::from(value(args, "--baseline-bundle")?);
+    let update_bundle = PathBuf::from(value(args, "--update-bundle")?);
+    let artifact = FlatpakBetaArtifact {
+        schema_version: FLATPAK_BETA_ARTIFACT_SCHEMA_VERSION,
+        source_commit: value(args, "--source-commit")?.to_owned(),
+        app_id: value(args, "--app-id")?.to_owned(),
+        arch: value(args, "--arch")?.to_owned(),
+        branch: value(args, "--branch")?.to_owned(),
+        baseline_repository: value(args, "--baseline-repository")?.to_owned(),
+        update_repository: value(args, "--update-repository")?.to_owned(),
+        baseline: FlatpakRevisionIdentity {
+            version: value(args, "--baseline-version")?.to_owned(),
+            ostree_commit: value(args, "--baseline-commit")?.to_owned(),
+            bundle: flatpak_bundle_artifact(&baseline_bundle)?,
+        },
+        update: FlatpakRevisionIdentity {
+            version: value(args, "--update-version")?.to_owned(),
+            ostree_commit: value(args, "--update-commit")?.to_owned(),
+            bundle: flatpak_bundle_artifact(&update_bundle)?,
+        },
+        update_parent_commit: value(args, "--update-parent")?.to_owned(),
+    };
+    artifact.validate().map_err(|errors| errors.join("\n"))?;
+    print_json(&artifact)
+}
+
+fn flatpak_beta_validate(args: &[String]) -> Result<(), String> {
+    let manifest_path = value(args, "--manifest")?;
+    let artifact: FlatpakBetaArtifact = read_json(manifest_path)?;
+    artifact.validate().map_err(|errors| errors.join("\n"))?;
+    println!("Flatpak beta artifact contains a valid direct two-version history.");
+    Ok(())
+}
+
+fn flatpak_lifecycle_template(args: &[String]) -> Result<(), String> {
+    let manifest_path = value(args, "--artifact-manifest")?;
+    let artifact: FlatpakBetaArtifact = read_json(manifest_path)?;
+    artifact.validate().map_err(|errors| errors.join("\n"))?;
+    let desktop = match value(args, "--desktop")? {
+        "gnome" => FlatpakAcceptanceDesktop::Gnome,
+        "kde" => FlatpakAcceptanceDesktop::Kde,
+        other => return Err(format!("unknown --desktop {other}; expected gnome|kde")),
+    };
+    print_json(&FlatpakLifecycleEvidence::template(
+        value(args, "--pull-request-head")?.to_owned(),
+        value(args, "--downloaded-artifact-sha256")?.to_owned(),
+        desktop,
+        artifact,
+    ))
+}
+
+fn flatpak_lifecycle_validate(args: &[String]) -> Result<(), String> {
+    let manifest_path = value(args, "--manifest")?;
+    let evidence: FlatpakLifecycleEvidence = read_json(manifest_path)?;
+    evidence
+        .validate_ready()
+        .map_err(|errors| errors.join("\n"))?;
+    println!(
+        "Flatpak Wayland install, update, rollback, restore, uninstall, and remote cleanup evidence is complete."
+    );
+    Ok(())
+}
+
+fn flatpak_software_renderer_validate(args: &[String]) -> Result<(), String> {
+    let evidence: FlatpakSoftwareRendererEvidence = read_json(value(args, "--manifest")?)?;
+    let artifact: FlatpakBetaArtifact = read_json(value(args, "--artifact-manifest")?)?;
+    evidence
+        .validate_source_binding(&artifact, value(args, "--source-commit")?)
+        .map_err(|errors| errors.join("\n"))?;
+    println!("Flatpak software renderer evidence matches the artifact and pull request head.");
+    Ok(())
 }
 
 fn candidate_upgrade_validate(args: &[String]) -> Result<(), String> {
@@ -229,6 +312,18 @@ fn artifact(kind: ArtifactKind, path: &Path) -> Result<PackageArtifact, String> 
     })
 }
 
+fn flatpak_bundle_artifact(path: &Path) -> Result<FlatpakBundleArtifact, String> {
+    let payload = fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("{} has no UTF-8 file name", path.display()))?;
+    Ok(FlatpakBundleArtifact {
+        file_name: file_name.to_owned(),
+        sha256: sha256_hex(&payload),
+    })
+}
+
 fn value<'a>(args: &'a [String], name: &str) -> Result<&'a str, String> {
     args.windows(2)
         .find(|pair| pair[0] == name)
@@ -243,7 +338,7 @@ fn optional_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 }
 
 fn usage() -> String {
-    "usage:\n  okp-acceptance-evidence identity --version V --commit SHA --deb PATH --appimage PATH\n  okp-acceptance-evidence template --version V --commit SHA --deb PATH --appimage PATH --build-environment-sha256 SHA256\n  okp-acceptance-evidence validate --manifest PATH --identity PATH\n  okp-acceptance-evidence candidate-upgrade-validate --manifest PATH\n  okp-acceptance-evidence presentation --log PATH [--warmup-seconds N] [--report-only]\n  okp-acceptance-evidence fedora-artifact --kind flatpak|rpm|copr --file PATH\n  okp-acceptance-evidence fedora-validate --manifest PATH".to_owned()
+    "usage:\n  okp-acceptance-evidence identity --version V --commit SHA --deb PATH --appimage PATH\n  okp-acceptance-evidence template --version V --commit SHA --deb PATH --appimage PATH --build-environment-sha256 SHA256\n  okp-acceptance-evidence validate --manifest PATH --identity PATH\n  okp-acceptance-evidence candidate-upgrade-validate --manifest PATH\n  okp-acceptance-evidence flatpak-beta-artifact --source-commit SHA --app-id ID --arch ARCH --branch BRANCH --baseline-repository NAME --update-repository NAME --baseline-version V --baseline-commit OSTREE --baseline-bundle PATH --update-version V --update-commit OSTREE --update-parent OSTREE --update-bundle PATH\n  okp-acceptance-evidence flatpak-beta-validate --manifest PATH\n  okp-acceptance-evidence flatpak-lifecycle-template --artifact-manifest PATH --pull-request-head SHA --downloaded-artifact-sha256 SHA256 --desktop gnome|kde\n  okp-acceptance-evidence flatpak-lifecycle-validate --manifest PATH\n  okp-acceptance-evidence flatpak-software-renderer-validate --manifest PATH --artifact-manifest PATH --source-commit SHA\n  okp-acceptance-evidence presentation --log PATH [--warmup-seconds N] [--report-only]\n  okp-acceptance-evidence fedora-artifact --kind flatpak|rpm|copr --file PATH\n  okp-acceptance-evidence fedora-validate --manifest PATH".to_owned()
 }
 
 #[cfg(test)]

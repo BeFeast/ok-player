@@ -13,6 +13,20 @@ use crate::update_selection::compare_versions;
 
 pub const EVIDENCE_SCHEMA_VERSION: u32 = 2;
 pub const CANDIDATE_UPGRADE_EVIDENCE_SCHEMA_VERSION: u32 = 1;
+pub const FLATPAK_BETA_ARTIFACT_SCHEMA_VERSION: u32 = 1;
+pub const FLATPAK_LIFECYCLE_EVIDENCE_SCHEMA_VERSION: u32 = 2;
+
+pub const REQUIRED_FLATPAK_LIFECYCLE_STEPS: &[&str] = &[
+    "install-baseline",
+    "launch-baseline",
+    "update-current",
+    "launch-current",
+    "rollback-baseline",
+    "launch-rollback",
+    "restore-current",
+    "uninstall",
+    "remote-cleanup",
+];
 
 pub const REQUIRED_CANDIDATE_UPGRADE_CHECKS: &[&str] = &[
     "interrupted-download-rejected",
@@ -117,6 +131,354 @@ pub struct PackageIdentity {
     pub version: String,
     pub commit_sha: String,
     pub artifacts: Vec<PackageArtifact>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FlatpakBundleArtifact {
+    pub file_name: String,
+    pub sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FlatpakRevisionIdentity {
+    pub version: String,
+    pub ostree_commit: String,
+    pub bundle: FlatpakBundleArtifact,
+}
+
+/// Portable identity manifest emitted beside the two-version Flatpak beta
+/// repositories. It intentionally carries only public names and digests: no
+/// host path, hostname, repository URL, or credential field exists.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FlatpakBetaArtifact {
+    pub schema_version: u32,
+    pub source_commit: String,
+    pub app_id: String,
+    pub arch: String,
+    pub branch: String,
+    pub baseline_repository: String,
+    pub update_repository: String,
+    pub baseline: FlatpakRevisionIdentity,
+    pub update: FlatpakRevisionIdentity,
+    pub update_parent_commit: String,
+}
+
+impl FlatpakBetaArtifact {
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        if self.schema_version != FLATPAK_BETA_ARTIFACT_SCHEMA_VERSION {
+            errors.push(format!(
+                "unsupported Flatpak beta artifact schema {}, expected {}",
+                self.schema_version, FLATPAK_BETA_ARTIFACT_SCHEMA_VERSION
+            ));
+        }
+        validate_git_commit(
+            "Flatpak beta artifact source_commit",
+            &self.source_commit,
+            &mut errors,
+        );
+        for (name, value) in [
+            ("app_id", self.app_id.as_str()),
+            ("arch", self.arch.as_str()),
+            ("branch", self.branch.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                errors.push(format!("Flatpak beta artifact {name} is empty"));
+            }
+        }
+        for (name, value) in [
+            ("baseline_repository", self.baseline_repository.as_str()),
+            ("update_repository", self.update_repository.as_str()),
+        ] {
+            validate_portable_artifact_name(name, value, &mut errors);
+        }
+        validate_flatpak_revision("baseline", &self.baseline, &mut errors);
+        validate_flatpak_revision("update", &self.update, &mut errors);
+        validate_ostree_commit(
+            "update_parent_commit",
+            &self.update_parent_commit,
+            &mut errors,
+        );
+        if compare_versions(&self.update.version, &self.baseline.version)
+            != std::cmp::Ordering::Greater
+        {
+            errors.push("Flatpak update version is not newer than the baseline version".to_owned());
+        }
+        if self.update.ostree_commit == self.baseline.ostree_commit {
+            errors.push("Flatpak baseline and update commits are identical".to_owned());
+        }
+        if self.update_parent_commit != self.baseline.ostree_commit {
+            errors.push("Flatpak update parent is not the baseline commit".to_owned());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+/// Source identity embedded in the packaged mapped-window renderer evidence.
+/// Other renderer metrics remain collector-owned, while this shared contract
+/// prevents an uploaded result from being detached from its artifact and PR.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct FlatpakSoftwareRendererEvidence {
+    pub source_commit: String,
+}
+
+impl FlatpakSoftwareRendererEvidence {
+    pub fn validate_source_binding(
+        &self,
+        artifact: &FlatpakBetaArtifact,
+        expected_source_commit: &str,
+    ) -> Result<(), Vec<String>> {
+        let mut errors = artifact.validate().err().unwrap_or_default();
+        validate_git_commit(
+            "Flatpak software renderer source_commit",
+            &self.source_commit,
+            &mut errors,
+        );
+        validate_git_commit(
+            "expected Flatpak acceptance source commit",
+            expected_source_commit,
+            &mut errors,
+        );
+        if self.source_commit != artifact.source_commit {
+            errors.push(
+                "Flatpak software renderer source_commit does not match the artifact source_commit"
+                    .to_owned(),
+            );
+        }
+        if self.source_commit != expected_source_commit {
+            errors.push(
+                "Flatpak software renderer source_commit does not match the current pull request head"
+                    .to_owned(),
+            );
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FlatpakAcceptanceDesktop {
+    Gnome,
+    Kde,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FlatpakAcceptanceSession {
+    Wayland,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FlatpakLifecycleStep {
+    pub id: String,
+    pub deployed_commit: Option<String>,
+    pub status: EvidenceStatus,
+}
+
+/// Exact-head real-machine evidence for the Flatpak repository lifecycle.
+/// The fixed enum fields and absence of free-form machine identity fields keep
+/// the public record from accidentally capturing private lab topology.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FlatpakLifecycleEvidence {
+    pub schema_version: u32,
+    pub pull_request_head: String,
+    pub downloaded_artifact_sha256: String,
+    pub desktop: FlatpakAcceptanceDesktop,
+    pub session: FlatpakAcceptanceSession,
+    pub artifact: FlatpakBetaArtifact,
+    pub steps: Vec<FlatpakLifecycleStep>,
+}
+
+impl FlatpakLifecycleEvidence {
+    pub fn template(
+        pull_request_head: String,
+        downloaded_artifact_sha256: String,
+        desktop: FlatpakAcceptanceDesktop,
+        artifact: FlatpakBetaArtifact,
+    ) -> Self {
+        let steps = REQUIRED_FLATPAK_LIFECYCLE_STEPS
+            .iter()
+            .map(|id| FlatpakLifecycleStep {
+                id: (*id).to_owned(),
+                deployed_commit: expected_flatpak_step_commit(id, &artifact).map(str::to_owned),
+                status: EvidenceStatus::NotRun,
+            })
+            .collect();
+        Self {
+            schema_version: FLATPAK_LIFECYCLE_EVIDENCE_SCHEMA_VERSION,
+            pull_request_head,
+            downloaded_artifact_sha256,
+            desktop,
+            session: FlatpakAcceptanceSession::Wayland,
+            artifact,
+            steps,
+        }
+    }
+
+    pub fn validate_ready(&self) -> Result<(), Vec<String>> {
+        let mut errors = self.artifact.validate().err().unwrap_or_default();
+        if self.schema_version != FLATPAK_LIFECYCLE_EVIDENCE_SCHEMA_VERSION {
+            errors.push(format!(
+                "unsupported Flatpak lifecycle evidence schema {}, expected {}",
+                self.schema_version, FLATPAK_LIFECYCLE_EVIDENCE_SCHEMA_VERSION
+            ));
+        }
+        validate_git_commit(
+            "Flatpak lifecycle pull_request_head",
+            &self.pull_request_head,
+            &mut errors,
+        );
+        validate_sha256(
+            "Flatpak lifecycle downloaded_artifact_sha256",
+            &self.downloaded_artifact_sha256,
+            &mut errors,
+        );
+        if self.pull_request_head != self.artifact.source_commit {
+            errors.push(
+                "Flatpak lifecycle pull_request_head does not match the artifact source_commit"
+                    .to_owned(),
+            );
+        }
+
+        let step_order = self
+            .steps
+            .iter()
+            .map(|step| step.id.as_str())
+            .collect::<Vec<_>>();
+        if step_order != REQUIRED_FLATPAK_LIFECYCLE_STEPS {
+            errors.push(format!(
+                "Flatpak lifecycle steps must appear in this order: {}",
+                REQUIRED_FLATPAK_LIFECYCLE_STEPS.join(", ")
+            ));
+        }
+
+        let mut step_ids = BTreeSet::new();
+        for step in &self.steps {
+            if !step_ids.insert(step.id.as_str()) {
+                errors.push(format!("duplicate Flatpak lifecycle step: {}", step.id));
+            }
+            if let Some(deployed_commit) = &step.deployed_commit {
+                validate_ostree_commit(
+                    &format!("Flatpak lifecycle step {} deployed_commit", step.id),
+                    deployed_commit,
+                    &mut errors,
+                );
+            }
+        }
+        for id in REQUIRED_FLATPAK_LIFECYCLE_STEPS {
+            let matching = self
+                .steps
+                .iter()
+                .filter(|step| step.id == *id)
+                .collect::<Vec<_>>();
+            if matching.len() != 1 {
+                errors.push(format!(
+                    "Flatpak lifecycle step {id} must appear exactly once"
+                ));
+                continue;
+            }
+            let step = matching[0];
+            if step.status != EvidenceStatus::Pass {
+                errors.push(format!("Flatpak lifecycle step {id} is not PASS"));
+            }
+            let expected = expected_flatpak_step_commit(id, &self.artifact);
+            match (step.deployed_commit.as_deref(), expected) {
+                (Some(deployed), Some(expected)) if deployed != expected => {
+                    errors.push(format!(
+                        "Flatpak lifecycle step {id} deployed {deployed}, expected {expected}"
+                    ));
+                }
+                (None, Some(expected)) => errors.push(format!(
+                    "Flatpak lifecycle step {id} has no deployed commit, expected {expected}"
+                )),
+                (Some(deployed), None) => errors.push(format!(
+                    "Flatpak lifecycle cleanup step {id} must not record a deployed commit, found {deployed}"
+                )),
+                _ => {}
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+fn expected_flatpak_step_commit<'a>(
+    id: &str,
+    artifact: &'a FlatpakBetaArtifact,
+) -> Option<&'a str> {
+    match id {
+        "install-baseline" | "launch-baseline" | "rollback-baseline" | "launch-rollback" => {
+            Some(&artifact.baseline.ostree_commit)
+        }
+        "update-current" | "launch-current" | "restore-current" => {
+            Some(&artifact.update.ostree_commit)
+        }
+        "uninstall" | "remote-cleanup" => None,
+        _ => None,
+    }
+}
+
+fn validate_flatpak_revision(
+    name: &str,
+    revision: &FlatpakRevisionIdentity,
+    errors: &mut Vec<String>,
+) {
+    if revision.version.trim().is_empty() {
+        errors.push(format!("Flatpak {name} version is empty"));
+    }
+    validate_ostree_commit(
+        &format!("Flatpak {name} ostree_commit"),
+        &revision.ostree_commit,
+        errors,
+    );
+    validate_portable_artifact_name(
+        &format!("Flatpak {name} bundle file_name"),
+        &revision.bundle.file_name,
+        errors,
+    );
+    validate_sha256(
+        &format!("Flatpak {name} bundle sha256"),
+        &revision.bundle.sha256,
+        errors,
+    );
+}
+
+fn validate_portable_artifact_name(name: &str, value: &str, errors: &mut Vec<String>) {
+    if value.is_empty()
+        || matches!(value, "." | "..")
+        || value.contains(['/', '\\'])
+        || value.chars().any(char::is_control)
+    {
+        errors.push(format!("{name} must be one portable relative file name"));
+    }
+}
+
+fn validate_git_commit(name: &str, value: &str, errors: &mut Vec<String>) {
+    if value.len() != 40 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        errors.push(format!("{name} must be a full 40-character hex SHA"));
+    }
+}
+
+fn validate_ostree_commit(name: &str, value: &str, errors: &mut Vec<String>) {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        errors.push(format!(
+            "{name} must be a full 64-character hex OSTree commit"
+        ));
+    }
 }
 
 /// Exact identity observed at one point in an installed candidate upgrade
@@ -1001,6 +1363,35 @@ mod tests {
         }
     }
 
+    fn flatpak_artifact() -> FlatpakBetaArtifact {
+        FlatpakBetaArtifact {
+            schema_version: FLATPAK_BETA_ARTIFACT_SCHEMA_VERSION,
+            source_commit: "1".repeat(40),
+            app_id: "com.befeast.okplayer".to_owned(),
+            arch: "x86_64".to_owned(),
+            branch: "beta".to_owned(),
+            baseline_repository: "repo-baseline".to_owned(),
+            update_repository: "repo".to_owned(),
+            baseline: FlatpakRevisionIdentity {
+                version: "0.11.0-beta.0".to_owned(),
+                ostree_commit: "a".repeat(64),
+                bundle: FlatpakBundleArtifact {
+                    file_name: "OK-Player-0.11.0-beta.0.flatpak".to_owned(),
+                    sha256: "b".repeat(64),
+                },
+            },
+            update: FlatpakRevisionIdentity {
+                version: "0.11.0-beta.1".to_owned(),
+                ostree_commit: "c".repeat(64),
+                bundle: FlatpakBundleArtifact {
+                    file_name: "OK-Player-0.11.0-beta.1.flatpak".to_owned(),
+                    sha256: "d".repeat(64),
+                },
+            },
+            update_parent_commit: "a".repeat(64),
+        }
+    }
+
     #[test]
     fn complete_exact_manifest_is_release_ready() {
         let manifest = passing_manifest();
@@ -1033,6 +1424,238 @@ mod tests {
             passing_candidate_upgrade_evidence().validate_cleanup_ready(),
             Ok(())
         );
+    }
+
+    #[test]
+    fn flatpak_beta_artifact_requires_a_direct_two_version_history() {
+        assert_eq!(flatpak_artifact().validate(), Ok(()));
+
+        let mut artifact = flatpak_artifact();
+        artifact.update.version = artifact.baseline.version.clone();
+        artifact.update_parent_commit = "e".repeat(64);
+        artifact.baseline_repository = "/tmp/private-repo".to_owned();
+
+        let errors = artifact.validate().unwrap_err();
+        assert!(errors.iter().any(|error| error.contains("not newer")));
+        assert!(errors.iter().any(|error| error.contains("parent")));
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("portable relative file name"))
+        );
+    }
+
+    #[test]
+    fn flatpak_lifecycle_template_stays_blocked_until_every_real_step_passes() {
+        let mut evidence = FlatpakLifecycleEvidence::template(
+            "1".repeat(40),
+            "2".repeat(64),
+            FlatpakAcceptanceDesktop::Gnome,
+            flatpak_artifact(),
+        );
+        let errors = evidence.validate_ready().unwrap_err();
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|error| error.contains("is not PASS"))
+                .count(),
+            REQUIRED_FLATPAK_LIFECYCLE_STEPS.len()
+        );
+
+        for step in &mut evidence.steps {
+            step.status = EvidenceStatus::Pass;
+        }
+        assert_eq!(evidence.validate_ready(), Ok(()));
+    }
+
+    #[test]
+    fn flatpak_lifecycle_rejects_a_false_rollback_commit() {
+        let mut evidence = FlatpakLifecycleEvidence::template(
+            "1".repeat(40),
+            "2".repeat(64),
+            FlatpakAcceptanceDesktop::Gnome,
+            flatpak_artifact(),
+        );
+        for step in &mut evidence.steps {
+            step.status = EvidenceStatus::Pass;
+        }
+        evidence
+            .steps
+            .iter_mut()
+            .find(|step| step.id == "launch-rollback")
+            .expect("rollback launch step")
+            .deployed_commit = Some(evidence.artifact.update.ostree_commit.clone());
+
+        let errors = evidence.validate_ready().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("launch-rollback deployed"))
+        );
+    }
+
+    #[test]
+    fn flatpak_lifecycle_rejects_missing_cleanup_steps() {
+        let mut evidence = FlatpakLifecycleEvidence::template(
+            "1".repeat(40),
+            "2".repeat(64),
+            FlatpakAcceptanceDesktop::Gnome,
+            flatpak_artifact(),
+        );
+        for step in &mut evidence.steps {
+            step.status = EvidenceStatus::Pass;
+        }
+        evidence
+            .steps
+            .retain(|step| !matches!(step.id.as_str(), "uninstall" | "remote-cleanup"));
+
+        let errors = evidence.validate_ready().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("step uninstall must appear exactly once"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("step remote-cleanup must appear exactly once"))
+        );
+    }
+
+    #[test]
+    fn flatpak_lifecycle_requires_restore_before_cleanup() {
+        let mut evidence = FlatpakLifecycleEvidence::template(
+            "1".repeat(40),
+            "2".repeat(64),
+            FlatpakAcceptanceDesktop::Gnome,
+            flatpak_artifact(),
+        );
+        for step in &mut evidence.steps {
+            step.status = EvidenceStatus::Pass;
+        }
+        evidence.steps.swap(6, 7);
+
+        let errors = evidence.validate_ready().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("steps must appear in this order"))
+        );
+    }
+
+    #[test]
+    fn flatpak_lifecycle_rejects_false_restore_and_cleanup_commits() {
+        let mut evidence = FlatpakLifecycleEvidence::template(
+            "1".repeat(40),
+            "2".repeat(64),
+            FlatpakAcceptanceDesktop::Gnome,
+            flatpak_artifact(),
+        );
+        for step in &mut evidence.steps {
+            step.status = EvidenceStatus::Pass;
+        }
+        evidence
+            .steps
+            .iter_mut()
+            .find(|step| step.id == "restore-current")
+            .expect("restore step")
+            .deployed_commit = Some(evidence.artifact.baseline.ostree_commit.clone());
+        evidence
+            .steps
+            .iter_mut()
+            .find(|step| step.id == "uninstall")
+            .expect("uninstall step")
+            .deployed_commit = Some(evidence.artifact.update.ostree_commit.clone());
+
+        let errors = evidence.validate_ready().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("restore-current deployed"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("cleanup step uninstall must not record"))
+        );
+    }
+
+    #[test]
+    fn flatpak_lifecycle_must_match_the_artifact_source_commit() {
+        let mut evidence = FlatpakLifecycleEvidence::template(
+            "1".repeat(40),
+            "2".repeat(64),
+            FlatpakAcceptanceDesktop::Gnome,
+            flatpak_artifact(),
+        );
+        for step in &mut evidence.steps {
+            step.status = EvidenceStatus::Pass;
+        }
+        evidence.pull_request_head = "3".repeat(40);
+
+        let errors = evidence.validate_ready().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("does not match the artifact source_commit"))
+        );
+    }
+
+    #[test]
+    fn flatpak_software_renderer_evidence_binds_artifact_to_current_head() {
+        let artifact = flatpak_artifact();
+        let evidence = FlatpakSoftwareRendererEvidence {
+            source_commit: artifact.source_commit.clone(),
+        };
+
+        assert_eq!(
+            evidence.validate_source_binding(&artifact, &artifact.source_commit),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn flatpak_software_renderer_evidence_rejects_detached_or_short_sources() {
+        let artifact = flatpak_artifact();
+        let evidence = FlatpakSoftwareRendererEvidence {
+            source_commit: "short".to_owned(),
+        };
+
+        let errors = evidence
+            .validate_source_binding(&artifact, &"2".repeat(40))
+            .unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("must be a full 40-character hex SHA"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("does not match the artifact source_commit"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("does not match the current pull request head"))
+        );
+    }
+
+    #[test]
+    fn flatpak_lifecycle_template_represents_kde_wayland() {
+        let evidence = FlatpakLifecycleEvidence::template(
+            "1".repeat(40),
+            "2".repeat(64),
+            FlatpakAcceptanceDesktop::Kde,
+            flatpak_artifact(),
+        );
+
+        let json = serde_json::to_string(&evidence).expect("serialize KDE lifecycle evidence");
+        assert!(json.contains(r#""desktop":"kde""#));
+        let decoded: FlatpakLifecycleEvidence =
+            serde_json::from_str(&json).expect("deserialize KDE lifecycle evidence");
+        assert_eq!(decoded.desktop, FlatpakAcceptanceDesktop::Kde);
+        assert_eq!(decoded.session, FlatpakAcceptanceSession::Wayland);
     }
 
     #[test]

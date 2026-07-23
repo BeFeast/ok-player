@@ -1,0 +1,1217 @@
+diff --git a/THIRD-PARTY-NOTICES.md b/THIRD-PARTY-NOTICES.md
+index 926c8afaa51def7e6834c3207c084d22938112b6..10a056021ac38cfd2e72efad3e48c7e52d35e366 100644
+--- a/THIRD-PARTY-NOTICES.md
++++ b/THIRD-PARTY-NOTICES.md
+@@ -9,7 +9,8 @@ mirrors mpv.net and IINA.
+ ## libmpv (mpv)
+
+ - **Project:** mpv — <https://mpv.io> · <https://github.com/mpv-player/mpv>
+-- **Component bundled:** `libmpv-2.dll` (the mpv client library).
++- **Components bundled:** `libmpv-2.dll` in Windows packages and a source-built
++  `libmpv.so` in the Flatpak beta package.
+ - **License:** GPL-2.0-or-later when built with GPL components (as bundled here); core mpv is
+   otherwise LGPL-2.1-or-later. Full text: <https://github.com/mpv-player/mpv/blob/master/LICENSE.GPL>
+ - **Copyright:** © the mpv developers and the MPlayer/mplayer2 projects it descends from.
+@@ -19,8 +20,11 @@ dynamically links Fedora's `mpv-libs` package and therefore uses the codec set
+ provided by the repositories the user has explicitly enabled. The Windows
+ distribution details below describe the bundled Windows runtime only.
+
+-mpv in turn incorporates, among others, FFmpeg, libass, and zlib. The dominant licenses of the
+-bundled build are listed below; the authoritative, per-file licensing is in each upstream project.
++mpv in turn incorporates or links, among others, FFmpeg, libass, libplacebo,
++and zlib. The dominant licenses of the bundled build are listed below; the
++authoritative, per-file licensing is in each upstream project. Flatpak installs
++the upstream mpv copyright and GPL/LGPL license texts in the application license
++directory.
+
+ ## FFmpeg
+
+@@ -33,11 +37,22 @@ bundled build are listed below; the authoritative, per-file licensing is in each
+   Full text: <https://www.ffmpeg.org/legal.html>
+ - **Copyright:** © the FFmpeg developers.
+
++The Flatpak beta links libmpv against the GNOME/Freedesktop runtime FFmpeg
++libraries. The optional `org.freedesktop.Platform.codecs-extra` extension can
++replace those runtime libraries with the expanded codec build; the extension is
++distributed and licensed independently by Freedesktop/Flathub.
++
+ ## libass
+
+ - **Project:** libass — <https://github.com/libass/libass>
+ - **License:** ISC. **Copyright:** © the libass developers.
+
++## libplacebo
++
++- **Project:** libplacebo — <https://github.com/haasn/libplacebo>
++- **Component bundled:** the source-built rendering library in the Flatpak beta.
++- **License:** LGPL-2.1-or-later. **Copyright:** © libplacebo contributors.
++
+ ## zlib
+
+ - **Project:** zlib — <https://zlib.net>
+diff --git a/rust/crates/okp-core/src/playback_failure.rs b/rust/crates/okp-core/src/playback_failure.rs
+index e3b103b60807f77f32bb4eb3b59a1770c1af3cfe..ef355a238b66c1849f556f8a6206f6eac97121f5 100644
+--- a/rust/crates/okp-core/src/playback_failure.rs
++++ b/rust/crates/okp-core/src/playback_failure.rs
+@@ -12,6 +12,13 @@ pub enum PlaybackFailureKind {
+     Application,
+ }
+
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++pub enum CodecEnvironment {
++    System,
++    FedoraRpm,
++    Flatpak,
++}
++
+ #[derive(Clone, Debug, Eq, PartialEq)]
+ pub struct PlaybackFailureDiagnostic {
+     pub kind: PlaybackFailureKind,
+@@ -51,7 +58,7 @@ impl PlaybackFailureDiagnostic {
+ pub fn diagnose_mpv_failure(
+     error_code: i32,
+     engine_messages: &[String],
+-    native_fedora_rpm: bool,
++    environment: CodecEnvironment,
+ ) -> PlaybackFailureDiagnostic {
+     let normalized = engine_messages
+         .iter()
+@@ -59,17 +66,7 @@ pub fn diagnose_mpv_failure(
+         .collect::<Vec<_>>();
+
+     if normalized.iter().any(|message| is_codec_failure(message)) {
+-        let message = if native_fedora_rpm {
+-            "The system codec needed by this file is unavailable. OK Player uses Fedora's system mpv/FFmpeg libraries. Optionally follow RPM Fusion's official setup instructions to add broader codec support; OK Player will not enable third-party repositories for you."
+-        } else {
+-            "The system mpv/FFmpeg installation does not provide the codec needed by this file. Install codec support through your operating system, then retry."
+-        };
+-        return PlaybackFailureDiagnostic {
+-            kind: PlaybackFailureKind::MissingCodec,
+-            title: "Codec unavailable".to_owned(),
+-            message: message.to_owned(),
+-            detail: format!("Required system codec is unavailable (libmpv error {error_code})."),
+-        };
++        return missing_codec_diagnostic(environment, Some(error_code));
+     }
+
+     if normalized
+@@ -94,20 +91,81 @@ pub fn diagnose_mpv_failure(
+ /// warning harmless. Benign EOF log traffic is ignored.
+ pub fn diagnose_mpv_eof(
+     engine_messages: &[String],
+-    native_fedora_rpm: bool,
++    environment: CodecEnvironment,
+ ) -> Option<PlaybackFailureDiagnostic> {
+     engine_messages
+         .iter()
+         .map(|message| message.to_ascii_lowercase())
+         .any(|message| is_codec_failure(&message))
+         .then(|| {
+-            let mut diagnostic = diagnose_mpv_failure(0, engine_messages, native_fedora_rpm);
+-            diagnostic.detail =
+-                "libmpv reached EOF after reporting an unavailable system codec.".to_owned();
++            let mut diagnostic = missing_codec_diagnostic(environment, None);
++            diagnostic.detail = match environment {
++                CodecEnvironment::Flatpak => {
++                    "libmpv reached EOF after reporting an unavailable Flatpak codec extension."
++                        .to_owned()
++                }
++                _ => "libmpv reached EOF after reporting an unavailable system codec.".to_owned(),
++            };
+             diagnostic
+         })
+ }
+
++/// Diagnose a decoder warning as soon as libmpv emits it. This path is used
++/// when another stream (usually audio) would otherwise keep the clock moving
++/// until EOF behind a video track that never produced a frame.
++pub fn diagnose_mpv_runtime(
++    engine_messages: &[String],
++    environment: CodecEnvironment,
++) -> Option<PlaybackFailureDiagnostic> {
++    engine_messages
++        .iter()
++        .map(|message| message.to_ascii_lowercase())
++        .any(|message| is_codec_failure(&message))
++        .then(|| missing_codec_diagnostic(environment, None))
++}
++
++/// Lightweight semantic filter used by engine wrappers before they enqueue a
++/// runtime decoder-failure event. The user-facing diagnosis remains in this
++/// module so shells never parse libmpv log text.
++pub fn is_mpv_codec_failure(message: &str) -> bool {
++    is_codec_failure(&message.to_ascii_lowercase())
++}
++
++fn missing_codec_diagnostic(
++    environment: CodecEnvironment,
++    error_code: Option<i32>,
++) -> PlaybackFailureDiagnostic {
++    let message = match environment {
++        CodecEnvironment::FedoraRpm => {
++            "The system codec needed by this file is unavailable. OK Player uses Fedora's system mpv/FFmpeg libraries. Optionally follow RPM Fusion's official setup instructions to add broader codec support; OK Player will not enable third-party repositories for you."
++        }
++        CodecEnvironment::Flatpak => {
++            "This Flatpak runtime does not include the codec needed by this file. Install the matching org.freedesktop.Platform.codecs-extra extension, then retry."
++        }
++        CodecEnvironment::System => {
++            "The system mpv/FFmpeg installation does not provide the codec needed by this file. Install codec support through your operating system, then retry."
++        }
++    };
++    let detail = match (environment, error_code) {
++        (CodecEnvironment::Flatpak, Some(error_code)) => {
++            format!("Required Flatpak codec extension is unavailable (libmpv error {error_code}).")
++        }
++        (CodecEnvironment::Flatpak, None) => {
++            "Required Flatpak codec extension is unavailable.".to_owned()
++        }
++        (_, Some(error_code)) => {
++            format!("Required system codec is unavailable (libmpv error {error_code}).")
++        }
++        (_, None) => "Required system codec is unavailable.".to_owned(),
++    };
++    PlaybackFailureDiagnostic {
++        kind: PlaybackFailureKind::MissingCodec,
++        title: "Codec unavailable".to_owned(),
++        message: message.to_owned(),
++        detail,
++    }
++}
++
+ fn is_codec_failure(message: &str) -> bool {
+     [
+         "codec not found",
+@@ -156,7 +214,7 @@ mod tests {
+         let diagnostic = diagnose_mpv_failure(
+             -13,
+             &messages(&["[ffmpeg/video] Decoder not found for codec hevc"]),
+-            true,
++            CodecEnvironment::FedoraRpm,
+         );
+
+         assert_eq!(diagnostic.kind, PlaybackFailureKind::MissingCodec);
+@@ -172,7 +230,7 @@ mod tests {
+         let diagnostic = diagnose_mpv_failure(
+             -13,
+             &messages(&["Failed to initialize a decoder for stream 0"]),
+-            false,
++            CodecEnvironment::System,
+         );
+
+         assert_eq!(diagnostic.kind, PlaybackFailureKind::MissingCodec);
+@@ -184,7 +242,7 @@ mod tests {
+         let diagnostic = diagnose_mpv_failure(
+             -12,
+             &messages(&["vo/gpu: Failed initializing any suitable GPU context"]),
+-            true,
++            CodecEnvironment::FedoraRpm,
+         );
+
+         assert_eq!(diagnostic.kind, PlaybackFailureKind::Renderer);
+@@ -194,7 +252,11 @@ mod tests {
+
+     #[test]
+     fn unknown_failure_stays_a_generic_application_error() {
+-        let diagnostic = diagnose_mpv_failure(-13, &messages(&["stream: HTTP error 404"]), true);
++        let diagnostic = diagnose_mpv_failure(
++            -13,
++            &messages(&["stream: HTTP error 404"]),
++            CodecEnvironment::FedoraRpm,
++        );
+
+         assert_eq!(diagnostic.kind, PlaybackFailureKind::Application);
+         assert_eq!(diagnostic.title, "Playback failed");
+@@ -209,7 +271,7 @@ mod tests {
+                 "vo/gpu: Failed to create rendering context",
+                 "ad: Could not open codec",
+             ]),
+-            true,
++            CodecEnvironment::FedoraRpm,
+         );
+
+         assert_eq!(diagnostic.kind, PlaybackFailureKind::MissingCodec);
+@@ -219,7 +281,7 @@ mod tests {
+     fn decoder_failure_at_eof_remains_a_codec_diagnostic() {
+         let diagnostic = diagnose_mpv_eof(
+             &messages(&["[ffmpeg/video] Decoder not found for codec hevc"]),
+-            true,
++            CodecEnvironment::FedoraRpm,
+         )
+         .expect("decoder failure must not be discarded just because mpv reported EOF");
+
+@@ -233,7 +295,40 @@ mod tests {
+
+     #[test]
+     fn benign_eof_logs_do_not_become_failures() {
+-        assert!(diagnose_mpv_eof(&messages(&["cplayer: finished playback"]), true).is_none());
++        assert!(
++            diagnose_mpv_eof(
++                &messages(&["cplayer: finished playback"]),
++                CodecEnvironment::FedoraRpm,
++            )
++            .is_none()
++        );
++    }
++
++    #[test]
++    fn flatpak_runtime_decoder_failure_names_the_codec_extension() {
++        let diagnostic = diagnose_mpv_runtime(
++            &messages(&["vd: Failed to initialize a decoder for codec h264"]),
++            CodecEnvironment::Flatpak,
++        )
++        .expect("decoder warning should fail immediately");
++
++        assert_eq!(diagnostic.kind, PlaybackFailureKind::MissingCodec);
++        assert!(diagnostic.message.contains("codecs-extra"));
++        assert_eq!(
++            diagnostic.detail,
++            "Required Flatpak codec extension is unavailable."
++        );
++    }
++
++    #[test]
++    fn benign_runtime_warning_does_not_stop_playback() {
++        assert!(
++            diagnose_mpv_runtime(
++                &messages(&["ao/pipewire: underrun recovered"]),
++                CodecEnvironment::Flatpak,
++            )
++            .is_none()
++        );
+     }
+
+     #[test]
+diff --git a/rust/crates/okp-linux-gtk/src/about.rs b/rust/crates/okp-linux-gtk/src/about.rs
+index b6088a05c13372beb512a3eef1342273ffa5526c..9180401930d166e18843687b573f4ee7bf4b1989 100644
+--- a/rust/crates/okp-linux-gtk/src/about.rs
++++ b/rust/crates/okp-linux-gtk/src/about.rs
+@@ -537,10 +537,14 @@ pub(crate) fn linux_os_label() -> String {
+ }
+
+ pub(crate) fn linux_update_install_status() -> &'static str {
+-    match linux_install_lane() {
+-        CandidateInstallLane::AppImage => "Self-update enabled",
+-        CandidateInstallLane::Debian if deb_self_install_available() => "Deb self-install",
+-        CandidateInstallLane::Debian => "Deb installer",
+-        CandidateInstallLane::SystemPackage => "DNF package manager",
++    if flatpak_update_managed() {
++        "Flatpak managed"
++    } else {
++        match linux_install_lane() {
++            CandidateInstallLane::AppImage => "Self-update enabled",
++            CandidateInstallLane::Debian if deb_self_install_available() => "Deb self-install",
++            CandidateInstallLane::Debian => "Deb installer",
++            CandidateInstallLane::SystemPackage => "DNF package manager",
++        }
+     }
+ }
+diff --git a/rust/crates/okp-linux-gtk/src/main.rs b/rust/crates/okp-linux-gtk/src/main.rs
+index f2e761d488cec76f7a72d54edd56e01d50276de6..2b1cdf602af2953bde198fe0fc738385884fdcb6 100644
+--- a/rust/crates/okp-linux-gtk/src/main.rs
++++ b/rust/crates/okp-linux-gtk/src/main.rs
+@@ -885,9 +885,15 @@ enum LinuxUpdateTarget {
+     Deb(DebUpdate),
+ }
+
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++enum LinuxExternalUpdateManager {
++    Flatpak,
++    Dnf,
++}
++
+ enum LinuxUpdateCheckResult {
+     UpToDate,
+-    ManagedExternally,
++    ManagedExternally(LinuxExternalUpdateManager),
+     Available(PendingLinuxUpdate),
+     Failed(String),
+ }
+@@ -905,7 +911,7 @@ enum LinuxUpdateStatus {
+     NotChecked,
+     Checking(Option<LinuxUpdateOffer>),
+     UpToDate,
+-    ManagedExternally,
++    ManagedExternally(LinuxExternalUpdateManager),
+     Offer(LinuxUpdateOffer),
+     Failed(String),
+ }
+@@ -918,7 +924,7 @@ impl LinuxUpdateStatus {
+     ) -> Self {
+         match result {
+             LinuxUpdateCheckResult::UpToDate => Self::UpToDate,
+-            LinuxUpdateCheckResult::ManagedExternally => Self::ManagedExternally,
++            LinuxUpdateCheckResult::ManagedExternally(manager) => Self::ManagedExternally(*manager),
+             LinuxUpdateCheckResult::Available(update) => {
+                 let version = update
+                     .target_version()
+@@ -949,7 +955,12 @@ impl LinuxUpdateStatus {
+             }
+             Self::Checking(None) => "Checking the update feed...".to_owned(),
+             Self::UpToDate => "OK Player is up to date".to_owned(),
+-            Self::ManagedExternally => "Updates are managed by DNF.".to_owned(),
++            Self::ManagedExternally(LinuxExternalUpdateManager::Flatpak) => {
++                "Updates are managed by Flatpak".to_owned()
++            }
++            Self::ManagedExternally(LinuxExternalUpdateManager::Dnf) => {
++                "Updates are managed by DNF.".to_owned()
++            }
+             Self::Offer(offer) => offer.status_text(),
+             Self::Failed(error) => format!("Update check failed: {error}"),
+         }
+diff --git a/rust/crates/okp-linux-gtk/src/mpv_bridge.rs b/rust/crates/okp-linux-gtk/src/mpv_bridge.rs
+index 26574f678bba0f198dd0e718143b11a6fae67b48..2d4f1e12972c2991fc22fd1ca6aa11c9c19fbc42 100644
+--- a/rust/crates/okp-linux-gtk/src/mpv_bridge.rs
++++ b/rust/crates/okp-linux-gtk/src/mpv_bridge.rs
+@@ -410,7 +410,7 @@ fn connect_native_mpv(
+             );
+             return;
+         }
+-        if let Err(error) = mpv.create_render_context(native_wayland_display) {
++        if let Err(error) = mpv.create_render_context(native_wayland_display, true) {
+             schedule_gtk_mpv_fallback(
+                 &fallback_container,
+                 &realize_fallback_started,
+@@ -642,7 +642,7 @@ fn connect_gtk_mpv(
+                 "GDK Wayland native display is unavailable; continuing without zero-copy display interop"
+             );
+         }
+-        if let Err(error) = mpv.create_render_context(native_wayland_display) {
++        if let Err(error) = mpv.create_render_context(native_wayland_display, false) {
+             eprintln!("Failed to create mpv render context: {error}");
+             return;
+         }
+diff --git a/rust/crates/okp-linux-gtk/src/playlist_ops.rs b/rust/crates/okp-linux-gtk/src/playlist_ops.rs
+index 30fd315030ab14778addcd0f06b552f82968d18c..31f95be136e57e3a79300f7751d82820edf8deb3 100644
+--- a/rust/crates/okp-linux-gtk/src/playlist_ops.rs
++++ b/rust/crates/okp-linux-gtk/src/playlist_ops.rs
+@@ -2,6 +2,28 @@ use std::time::{SystemTime, UNIX_EPOCH};
+
+ use super::*;
+
++pub(crate) const fn select_codec_environment(
++    native_fedora_rpm: bool,
++    flatpak: bool,
++) -> okp_core::playback_failure::CodecEnvironment {
++    use okp_core::playback_failure::CodecEnvironment;
++
++    if native_fedora_rpm {
++        CodecEnvironment::FedoraRpm
++    } else if flatpak {
++        CodecEnvironment::Flatpak
++    } else {
++        CodecEnvironment::System
++    }
++}
++
++fn configured_codec_environment() -> okp_core::playback_failure::CodecEnvironment {
++    select_codec_environment(
++        option_env!("OKP_FEDORA_RPM") == Some("1"),
++        env::var_os("FLATPAK_ID").is_some() || Path::new("/.flatpak-info").is_file(),
++    )
++}
++
+ /// Record a network-source load failure: transition the transport-surface model to
+ /// `Failed`, remember the URL for Retry, and store the short copyable reason. The
+ /// the in-canvas failure card can offer Retry and Copy details.
+@@ -45,7 +67,7 @@ pub(crate) fn apply_endfile_error(
+     let diagnostic = okp_core::playback_failure::diagnose_mpv_failure(
+         error,
+         diagnostic_messages,
+-        option_env!("OKP_FEDORA_RPM") == Some("1"),
++        configured_codec_environment(),
+     );
+     apply_endfile_diagnostic(state, ended_path, diagnostic);
+ }
+@@ -57,7 +79,7 @@ pub(crate) fn apply_endfile_eof_diagnostic(
+ ) -> bool {
+     let Some(diagnostic) = okp_core::playback_failure::diagnose_mpv_eof(
+         diagnostic_messages,
+-        option_env!("OKP_FEDORA_RPM") == Some("1"),
++        configured_codec_environment(),
+     ) else {
+         return false;
+     };
+@@ -66,11 +88,35 @@ pub(crate) fn apply_endfile_eof_diagnostic(
+     true
+ }
+
++pub(crate) fn apply_runtime_decoder_failure(
++    state: &Rc<RefCell<PlayerState>>,
++    failed_path: Option<&str>,
++    diagnostic_messages: &[String],
++) -> bool {
++    let Some(diagnostic) = okp_core::playback_failure::diagnose_mpv_runtime(
++        diagnostic_messages,
++        configured_codec_environment(),
++    ) else {
++        return false;
++    };
++
++    eprintln!("libmpv reported an unavailable decoder; stopping partial playback");
++    if !apply_endfile_diagnostic(state, failed_path, diagnostic) {
++        return false;
++    }
++    if let Some(mpv) = state.borrow().mpv.as_ref()
++        && let Err(error) = mpv.stop()
++    {
++        eprintln!("Failed to stop partial playback after decoder failure: {error}");
++    }
++    true
++}
++
+ fn apply_endfile_diagnostic(
+     state: &Rc<RefCell<PlayerState>>,
+     ended_path: Option<&str>,
+     diagnostic: okp_core::playback_failure::PlaybackFailureDiagnostic,
+-) {
++) -> bool {
+     let current_source = {
+         let state = state.borrow();
+         state
+@@ -86,7 +132,7 @@ fn apply_endfile_diagnostic(
+     };
+     let Some(current_source) = current_source else {
+         eprintln!("ignoring stale EndFile diagnostic after the source was cleared");
+-        return;
++        return false;
+     };
+     let stale = ended_path.is_some_and(|ended| !current_source.matches_engine_path(ended));
+     if stale {
+@@ -94,12 +140,13 @@ fn apply_endfile_diagnostic(
+             "ignoring stale EndFile diagnostic for a superseded source ({})",
+             ended_path.unwrap_or_default()
+         );
+-        return;
++        return false;
+     }
+     let mut state = state.borrow_mut();
+     state.media_load_state = network_media::MediaLoadState::Failed;
+     state.retry_load_source = Some(current_source);
+     state.last_load_diagnostic = Some(diagnostic);
++    true
+ }
+
+ pub(crate) fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
+diff --git a/rust/crates/okp-linux-gtk/src/screenshots.rs b/rust/crates/okp-linux-gtk/src/screenshots.rs
+index bd7e24d8f2a795304566db3768171d793bdc45d6..2b523d933a475195864c35c9f4b0612667cb0453 100644
+--- a/rust/crates/okp-linux-gtk/src/screenshots.rs
++++ b/rust/crates/okp-linux-gtk/src/screenshots.rs
+@@ -131,7 +131,11 @@ pub fn prepare_saved_capture(
+     verify_directory_writable(&directory)?;
+
+     let timestamp_millis = unix_millis();
+-    let temp_path = unique_temp_path(&directory, "saved-frame", format.extension())?;
++    // Keep libmpv on sandbox-private storage. The worker publishes the validated
++    // image into the externally mounted destination after the command completes.
++    let staging_directory = screenshot_staging_dir();
++    fs::create_dir_all(&staging_directory)?;
++    let temp_path = unique_temp_path(&staging_directory, "saved-frame", format.extension())?;
+     Ok(SavedCaptureTarget {
+         temp_path,
+         include_subtitles,
+@@ -149,6 +153,18 @@ pub fn publish_saved_capture(target: SavedCaptureTarget) -> io::Result<PathBuf>
+         return Err(error);
+     }
+
++    let destination_stage = match copy_to_destination_stage(
++        &target.temp_path,
++        &target.directory,
++        target.format.extension(),
++    ) {
++        Ok(path) => path,
++        Err(error) => {
++            remove_temporary_capture(&target.temp_path);
++            return Err(error);
++        }
++    };
++
+     for suffix in 0..MAX_COLLISION_ATTEMPTS {
+         let filename = candidate_filename(
+             target.media_path.as_deref(),
+@@ -158,16 +174,21 @@ pub fn publish_saved_capture(target: SavedCaptureTarget) -> io::Result<PathBuf>
+             suffix,
+         );
+         let destination = target.directory.join(filename);
+-        match rename_noreplace(&target.temp_path, &destination) {
+-            Ok(()) => return Ok(destination),
++        match rename_noreplace(&destination_stage, &destination) {
++            Ok(()) => {
++                remove_temporary_capture(&target.temp_path);
++                return Ok(destination);
++            }
+             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+             Err(error) => {
++                remove_temporary_capture(&destination_stage);
+                 remove_temporary_capture(&target.temp_path);
+                 return Err(error);
+             }
+         }
+     }
+
++    remove_temporary_capture(&destination_stage);
+     remove_temporary_capture(&target.temp_path);
+     Err(io::Error::new(
+         io::ErrorKind::AlreadyExists,
+@@ -189,7 +210,7 @@ pub fn cancel_saved_capture_if_stale(
+ }
+
+ pub fn prepare_clipboard_capture() -> io::Result<PathBuf> {
+-    let directory = env::temp_dir().join("ok-player");
++    let directory = screenshot_staging_dir();
+     fs::create_dir_all(&directory)?;
+     unique_temp_path(&directory, "clipboard-frame", "png")
+ }
+@@ -233,6 +254,54 @@ fn verify_directory_writable(directory: &Path) -> io::Result<()> {
+     fs::remove_file(probe)
+ }
+
++fn screenshot_staging_dir() -> PathBuf {
++    env::temp_dir().join("ok-player").join("screenshots")
++}
++
++fn copy_to_destination_stage(
++    source: &Path,
++    directory: &Path,
++    extension: &str,
++) -> io::Result<PathBuf> {
++    for _ in 0..MAX_COLLISION_ATTEMPTS {
++        let stage = unique_temp_path(directory, "publish", extension)?;
++        let mut destination = match fs::OpenOptions::new()
++            .write(true)
++            .create_new(true)
++            .open(&stage)
++        {
++            Ok(file) => file,
++            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
++            Err(error) => return Err(error),
++        };
++
++        let result = (|| {
++            let mut source = fs::File::open(source)?;
++            if io::copy(&mut source, &mut destination)? == 0 {
++                return Err(io::Error::new(
++                    io::ErrorKind::UnexpectedEof,
++                    "screenshot staging copy was empty",
++                ));
++            }
++            Ok(())
++        })();
++        drop(destination);
++
++        match result {
++            Ok(()) => return Ok(stage),
++            Err(error) => {
++                remove_temporary_capture(&stage);
++                return Err(error);
++            }
++        }
++    }
++
++    Err(io::Error::new(
++        io::ErrorKind::AlreadyExists,
++        "could not allocate a destination-local screenshot staging file",
++    ))
++}
++
+ fn validate_capture_output(path: &Path) -> io::Result<()> {
+     let metadata = fs::metadata(path)?;
+     if !metadata.is_file() {
+@@ -336,33 +405,38 @@ mod tests {
+
+     #[test]
+     fn publish_saved_capture_never_overwrites_a_collision() {
+-        let directory = unique_temp_dir("okp-screenshot-collision");
++        let root = unique_temp_dir("okp-screenshot-collision");
++        let directory = root.path().join("destination");
++        let engine_directory = root.path().join("engine-output");
++        fs::create_dir_all(&directory).expect("destination directory");
++        fs::create_dir_all(&engine_directory).expect("engine output directory");
+         let first_name = candidate_filename(None, None, 1234, "png", 0);
+-        fs::write(directory.path().join(first_name), b"existing").expect("existing screenshot");
+-        let temp_path = directory.path().join(".capture.png");
++        fs::write(directory.join(first_name), b"existing").expect("existing screenshot");
++        let temp_path = engine_directory.join(".capture.png");
+         fs::write(&temp_path, b"new frame").expect("temporary screenshot");
+
+         let published = publish_saved_capture(SavedCaptureTarget {
+-            temp_path,
++            temp_path: temp_path.clone(),
+             include_subtitles: false,
+             request_context: SavedCaptureContext {
+                 source_generation: 1,
+                 seek_generation: 0,
+                 position: None,
+             },
+-            directory: directory.path().to_owned(),
++            directory: directory.clone(),
+             media_path: None,
+             timestamp_millis: 1234,
+             format: ScreenshotFormat::Png,
+         })
+         .expect("publish screenshot");
+
+-        assert_eq!(published, directory.path().join("ok-player-1234-1.png"));
++        assert_eq!(published, directory.join("ok-player-1234-1.png"));
+         assert_eq!(
+-            fs::read(directory.path().join("ok-player-1234.png")).unwrap(),
++            fs::read(directory.join("ok-player-1234.png")).unwrap(),
+             b"existing"
+         );
+         assert_eq!(fs::read(published).unwrap(), b"new frame");
++        assert!(!temp_path.exists());
+     }
+
+     #[test]
+@@ -385,9 +459,38 @@ mod tests {
+
+         assert!(directory.is_dir());
+         assert!(!target.temp_path.exists());
++        assert_eq!(
++            target.temp_path.parent(),
++            Some(screenshot_staging_dir().as_path())
++        );
+         assert!(fs::read_dir(directory).unwrap().next().is_none());
+     }
+
++    #[test]
++    fn saved_capture_staging_preserves_clean_and_subtitled_modes() {
++        let root = unique_temp_dir("okp-screenshot-modes");
++        for include_subtitles in [false, true] {
++            let target = prepare_saved_capture(
++                root.path().join("Pictures/OK Player"),
++                None,
++                SavedCaptureContext {
++                    source_generation: 1,
++                    seek_generation: 0,
++                    position: Some(3.0),
++                },
++                ScreenshotFormat::Png,
++                include_subtitles,
++            )
++            .expect("capture target");
++
++            assert_eq!(target.include_subtitles, include_subtitles);
++            assert_eq!(
++                target.temp_path.parent(),
++                Some(screenshot_staging_dir().as_path())
++            );
++        }
++    }
++
+     #[test]
+     fn prepare_saved_capture_rejects_a_file_as_the_destination() {
+         let root = unique_temp_dir("okp-screenshot-invalid-destination");
+@@ -527,4 +630,15 @@ XDG_PICTURES_DIR="$HOME/Pictures"
+             Some(PathBuf::from("/home/tester/Pictures"))
+         );
+     }
++
++    #[test]
++    fn parse_xdg_pictures_dir_reads_flatpak_generated_absolute_path() {
++        let home = Path::new("/home/tester");
++        let user_dirs = r#"XDG_PICTURES_DIR="/srv/user-media/Images""#;
++
++        assert_eq!(
++            parse_xdg_pictures_dir(home, user_dirs),
++            Some(PathBuf::from("/srv/user-media/Images"))
++        );
++    }
+ }
+diff --git a/rust/crates/okp-linux-gtk/src/tests.rs b/rust/crates/okp-linux-gtk/src/tests.rs
+index 6315feb98e0705d6c26fb42bff020bda758ca76b..6555be94387803952f75966b5f370f033a1a2d23 100644
+--- a/rust/crates/okp-linux-gtk/src/tests.rs
++++ b/rust/crates/okp-linux-gtk/src/tests.rs
+@@ -30,6 +30,26 @@ fn renderer_environment_is_selected_before_gtk_initialization() {
+     assert!(renderer < gtk);
+ }
+
++#[test]
++fn native_wayland_screenshots_use_libmpv_advanced_control() {
++    let bridge = include_str!("mpv_bridge.rs");
++
++    assert!(bridge.contains("mpv.create_render_context(native_wayland_display, true)"));
++    assert!(bridge.contains("mpv.create_render_context(native_wayland_display, false)"));
++}
++
++#[test]
++fn decoder_failure_event_is_bound_to_the_failed_source() {
++    let events = include_str!("track_popovers.rs");
++    let failures = include_str!("playlist_ops.rs");
++
++    assert!(events.contains("MpvEvent::DecoderFailed"));
++    assert!(events.contains("path.as_deref(), &diagnostic_messages"));
++    assert!(failures.contains("diagnose_mpv_runtime("));
++    assert!(failures.contains("apply_endfile_diagnostic(state, failed_path, diagnostic)"));
++    assert!(failures.contains("mpv.stop()"));
++}
++
+ #[test]
+ fn file_association_launches_present_before_media_delivery() {
+     let window = include_str!("window.rs");
+@@ -4198,7 +4218,7 @@ fn linux_update_status_reflects_last_check_result() {
+     assert!(up_to_date.pending_offer().is_none());
+
+     let managed = LinuxUpdateStatus::from_check_result(
+-        &LinuxUpdateCheckResult::ManagedExternally,
++        &LinuxUpdateCheckResult::ManagedExternally(LinuxExternalUpdateManager::Dnf),
+         UpdateChannel::Public,
+         &skipped,
+     );
+@@ -4208,6 +4228,17 @@ fn linux_update_status_reflects_last_check_result() {
+     );
+     assert!(managed.pending_offer().is_none());
+
++    let flatpak = LinuxUpdateStatus::from_check_result(
++        &LinuxUpdateCheckResult::ManagedExternally(LinuxExternalUpdateManager::Flatpak),
++        UpdateChannel::Public,
++        &skipped,
++    );
++    assert_eq!(
++        flatpak.settings_status_text(true),
++        "Updates are managed by Flatpak"
++    );
++    assert!(flatpak.pending_offer().is_none());
++
+     let update = PendingLinuxUpdate {
+         manager: None,
+         target: LinuxUpdateTarget::Deb(DebUpdate {
+@@ -4900,6 +4931,81 @@ fn codec_failure_reported_at_eof_stays_on_the_failed_source() {
+     );
+ }
+
++#[test]
++fn runtime_decoder_failure_stops_partial_playback_state_immediately() {
++    let path = PathBuf::from("/media/h264-aac.mp4");
++    let state = Rc::new(RefCell::new(PlayerState {
++        current_file: Some(path.clone()),
++        media_load_state: network_media::MediaLoadState::Playing,
++        retry_load_source: Some(network_media::LoadFailureSource::local(path.clone())),
++        ..PlayerState::default()
++    }));
++
++    assert!(apply_runtime_decoder_failure(
++        &state,
++        path.to_str(),
++        &["vd: Failed to initialize a decoder for codec h264".to_owned()],
++    ));
++
++    let state = state.borrow();
++    assert_eq!(
++        state.media_load_state,
++        network_media::MediaLoadState::Failed
++    );
++    assert_eq!(
++        state
++            .last_load_diagnostic
++            .as_ref()
++            .map(|diagnostic| diagnostic.kind),
++        Some(okp_core::playback_failure::PlaybackFailureKind::MissingCodec)
++    );
++}
++
++#[test]
++fn runtime_decoder_failure_drops_a_superseded_source() {
++    let state = Rc::new(RefCell::new(PlayerState {
++        current_file: Some(PathBuf::from("/media/source-b.mkv")),
++        media_load_state: network_media::MediaLoadState::Playing,
++        ..PlayerState::default()
++    }));
++
++    assert!(!apply_runtime_decoder_failure(
++        &state,
++        Some("/media/source-a.mkv"),
++        &["vd: Failed to initialize a decoder for codec h264".to_owned()],
++    ));
++
++    let state = state.borrow();
++    assert_eq!(
++        state.media_load_state,
++        network_media::MediaLoadState::Playing
++    );
++    assert!(state.last_load_diagnostic.is_none());
++    assert_eq!(
++        state.current_file.as_deref(),
++        Some(Path::new("/media/source-b.mkv"))
++    );
++}
++
++#[test]
++fn runtime_warning_without_decoder_failure_keeps_playback_active() {
++    let state = Rc::new(RefCell::new(PlayerState {
++        current_file: Some(PathBuf::from("/media/movie.mkv")),
++        media_load_state: network_media::MediaLoadState::Playing,
++        ..PlayerState::default()
++    }));
++
++    assert!(!apply_runtime_decoder_failure(
++        &state,
++        Some("/media/movie.mkv"),
++        &["ao/pipewire: underrun recovered".to_owned()],
++    ));
++    assert_eq!(
++        state.borrow().media_load_state,
++        network_media::MediaLoadState::Playing
++    );
++}
++
+ #[test]
+ fn benign_eof_keeps_the_normal_playlist_path_available() {
+     let state = Rc::new(RefCell::new(PlayerState {
+diff --git a/rust/crates/okp-linux-gtk/src/track_popovers.rs b/rust/crates/okp-linux-gtk/src/track_popovers.rs
+index 1b4626754d292a6a3ccbb901c4df6262df5a433b..39c885cef757e5ca6b1915b781324698cb6b26a2 100644
+--- a/rust/crates/okp-linux-gtk/src/track_popovers.rs
++++ b/rust/crates/okp-linux-gtk/src/track_popovers.rs
+@@ -2457,6 +2457,12 @@ pub(crate) fn drain_mpv_events(
+     let mut auto_fit_dimensions = None;
+     for event in events {
+         match event {
++            MpvEvent::DecoderFailed {
++                path,
++                diagnostic_messages,
++            } => {
++                apply_runtime_decoder_failure(state, path.as_deref(), &diagnostic_messages);
++            }
+             MpvEvent::FileLoaded { video_dimensions } => {
+                 auto_fit_dimensions = auto_fit_dimensions.or(video_dimensions);
+                 try_pending_audio_device_restore(state);
+@@ -2464,9 +2470,14 @@ pub(crate) fn drain_mpv_events(
+                 // Companion launch hints win over remembered track preferences for this open only.
+                 try_pending_launch_tracks(state);
+                 // A frame is up — the source is playing, not loading anymore.
++                // A decoder warning can precede FileLoaded when audio remains
++                // viable; keep that source failed instead of reviving partial
++                // playback behind a video track with no presented frames.
+                 let mut state = state.borrow_mut();
+-                state.media_load_state = network_media::MediaLoadState::Playing;
+-                state.last_load_diagnostic = None;
++                if state.media_load_state != network_media::MediaLoadState::Failed {
++                    state.media_load_state = network_media::MediaLoadState::Playing;
++                    state.last_load_diagnostic = None;
++                }
+                 if env::var_os("OKP_DEBUG_IDLE_RETURN_SMOKE").is_some() {
+                     eprintln!("idle-return-smoke: file-loaded");
+                 }
+diff --git a/rust/crates/okp-linux-gtk/src/updates.rs b/rust/crates/okp-linux-gtk/src/updates.rs
+index 12f1afb18d2b443f774f0ee7380a805a4e015165..24995d928a71a0119ff3a4cf314320dbd05258f4 100644
+--- a/rust/crates/okp-linux-gtk/src/updates.rs
++++ b/rust/crates/okp-linux-gtk/src/updates.rs
+@@ -303,11 +303,15 @@ pub(crate) fn refresh_linux_update_views(state: &Rc<RefCell<PlayerState>>) {
+         skip.set_sensitive(can_skip && !checking);
+
+         if let Some(check) = view.check.as_ref().and_then(glib::WeakRef::upgrade) {
+-            let managed = matches!(update_status, LinuxUpdateStatus::ManagedExternally);
+-            check.set_label(if managed {
+-                "Managed by DNF"
+-            } else {
+-                "Check for updates"
++            let manager = match update_status {
++                LinuxUpdateStatus::ManagedExternally(manager) => Some(manager),
++                _ => None,
++            };
++            let managed = manager.is_some();
++            check.set_label(match manager {
++                Some(LinuxExternalUpdateManager::Flatpak) => "Managed by Flatpak",
++                Some(LinuxExternalUpdateManager::Dnf) => "Managed by DNF",
++                None => "Check for updates",
+             });
+             check.set_sensitive(!managed && !checking && !installing);
+         }
+@@ -319,6 +323,11 @@ pub(crate) fn settings_updates_section(
+     state: Rc<RefCell<PlayerState>>,
+     status_toast: Rc<StatusToast>,
+ ) -> gtk::Box {
++    let flatpak_managed = flatpak_update_managed();
++    if flatpak_managed {
++        state.borrow_mut().linux_update_status =
++            LinuxUpdateStatus::ManagedExternally(LinuxExternalUpdateManager::Flatpak);
++    }
+     let section = settings_section("Updates");
+     section.append(&settings_value_row("Current version", APP_BUILD_VERSION));
+     let channel = effective_update_channel(state.borrow().settings.update_channel());
+@@ -350,7 +359,7 @@ pub(crate) fn settings_updates_section(
+     let row = gtk::Box::new(gtk::Orientation::Vertical, 8);
+     row.add_css_class("okp-settings-row");
+
+-    let auto_check_enabled = state.borrow().settings.auto_check_updates();
++    let auto_check_enabled = state.borrow().settings.auto_check_updates() && !flatpak_managed;
+     let initial_update_status = state.borrow().linux_update_status.clone();
+
+     let auto_row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+@@ -361,9 +370,11 @@ pub(crate) fn settings_updates_section(
+     auto_label.add_css_class("okp-info-label");
+     auto_label.set_xalign(0.0);
+     auto_text.append(&auto_label);
+-    let auto_detail = gtk::Label::new(Some(
+-        "Check the selected Linux feed on startup and keep available updates actionable until you choose.",
+-    ));
++    let auto_detail = gtk::Label::new(Some(if flatpak_managed {
++        "Flatpak installs are updated by their configured repository."
++    } else {
++        "Check the selected Linux feed on startup and keep available updates actionable until you choose."
++    }));
+     auto_detail.add_css_class("okp-update-status");
+     auto_detail.set_xalign(0.0);
+     auto_detail.set_width_chars(1);
+@@ -378,6 +389,7 @@ pub(crate) fn settings_updates_section(
+     auto_row.append(&auto_state_label);
+
+     let auto_switch = settings_switch_button(auto_check_enabled, "Automatic checks");
++    auto_switch.set_sensitive(!flatpak_managed);
+     let auto_state = Rc::clone(&state);
+     let auto_toast = Rc::clone(&status_toast);
+     let auto_state_text = auto_state_label.clone();
+@@ -522,6 +534,13 @@ pub(crate) fn update_status_intro(auto_check_enabled: bool) -> &'static str {
+     }
+ }
+
++pub(crate) fn flatpak_update_managed() -> bool {
++    flatpak_install_detected(
++        env::var_os("FLATPAK_ID").as_deref(),
++        Path::new("/.flatpak-info").is_file(),
++    )
++}
++
+ pub(crate) fn start_update_check_for_ui(
+     state: Rc<RefCell<PlayerState>>,
+     status_toast: Rc<StatusToast>,
+@@ -728,7 +747,7 @@ pub(crate) fn apply_update_check_result(
+                 status_toast.show("OK Player is up to date");
+             }
+         }
+-        LinuxUpdateCheckResult::ManagedExternally => {}
++        LinuxUpdateCheckResult::ManagedExternally(_) => {}
+         LinuxUpdateCheckResult::Available(_) => {
+             if show_toast {
+                 match status {
+@@ -788,9 +807,12 @@ pub(crate) fn check_for_linux_update(channel: UpdateChannel) -> LinuxUpdateCheck
+     if let Some(preview) = linux_update_preview_check_result() {
+         return preview;
+     }
++    if flatpak_update_managed() {
++        return LinuxUpdateCheckResult::ManagedExternally(LinuxExternalUpdateManager::Flatpak);
++    }
+     let install_lane = linux_install_lane();
+     if install_lane == CandidateInstallLane::SystemPackage {
+-        return LinuxUpdateCheckResult::ManagedExternally;
++        return LinuxUpdateCheckResult::ManagedExternally(LinuxExternalUpdateManager::Dnf);
+     }
+
+     let channel = effective_update_channel(channel);
+diff --git a/rust/crates/okp-linux-gtk/src/window.rs b/rust/crates/okp-linux-gtk/src/window.rs
+index ae5958e9e8f615a382c0a92c0c809ed7c2e24310..564ebaca08e0d39670717b6c027df4ac9998bae5 100644
+--- a/rust/crates/okp-linux-gtk/src/window.rs
++++ b/rust/crates/okp-linux-gtk/src/window.rs
+@@ -133,6 +133,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
+     }
+     apply_playback_settings_defaults(&state);
+     let auto_check_updates = state.borrow().settings.auto_check_updates()
++        && !flatpak_update_managed()
+         && env::var_os("OKP_SKIP_UPDATE_CHECK").is_none();
+     let updating_seek = Rc::new(Cell::new(false));
+     let updating_volume = Rc::new(Cell::new(false));
+diff --git a/rust/crates/okp-mpv/src/ffi.rs b/rust/crates/okp-mpv/src/ffi.rs
+index a0cbbae221939ee676dbccc572f224df60077d3b..83515bd7d6e7912095b9cbc7b3673b690608b315 100644
+--- a/rust/crates/okp-mpv/src/ffi.rs
++++ b/rust/crates/okp-mpv/src/ffi.rs
+@@ -110,6 +110,7 @@ pub const MPV_RENDER_PARAM_OPENGL_INIT_PARAMS: c_int = 2;
+ pub const MPV_RENDER_PARAM_OPENGL_FBO: c_int = 3;
+ pub const MPV_RENDER_PARAM_FLIP_Y: c_int = 4;
+ pub const MPV_RENDER_PARAM_WL_DISPLAY: c_int = 9;
++pub const MPV_RENDER_PARAM_ADVANCED_CONTROL: c_int = 10;
+ pub const MPV_RENDER_PARAM_SW_SIZE: c_int = 17;
+ pub const MPV_RENDER_PARAM_SW_FORMAT: c_int = 18;
+ pub const MPV_RENDER_PARAM_SW_STRIDE: c_int = 19;
+diff --git a/rust/crates/okp-mpv/src/player.rs b/rust/crates/okp-mpv/src/player.rs
+index 97ed410e85640dd0006bcc21d5af64a9e2be0e00..31a8799cfffb888ccbb0a7916b16327c0c38d612 100644
+--- a/rust/crates/okp-mpv/src/player.rs
++++ b/rust/crates/okp-mpv/src/player.rs
+@@ -319,12 +319,16 @@ pub enum TrackKind {
+ /// Lifecycle events the engine fires, drained oldest-first via
+ /// [`Mpv::take_lifecycle_events`](crate::Mpv::take_lifecycle_events). Load and
+ /// reconfiguration events carry display dimensions read by the background pump,
+-/// while `EndFile` carries the path mpv reported for the entry that ended. The
+-/// shell can therefore react without a blocking UI-thread property read and can
+-/// drop a stale error whose source has already been superseded. Not `Copy`
+-/// because `path` is a `String`.
++/// while failure events carry the path mpv reported for their source. The shell
++/// can therefore react without a blocking UI-thread property read and can drop
++/// a stale error whose source has already been superseded. Not `Copy` because
++/// `path` is a `String`.
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub enum MpvEvent {
++    DecoderFailed {
++        path: Option<String>,
++        diagnostic_messages: Vec<String>,
++    },
+     EndFile {
+         reason: EndFileReason,
+         path: Option<String>,
+@@ -1003,6 +1007,7 @@ fn render_context_parameters(
+     api: &CStr,
+     init_params: &mut ffi::mpv_opengl_init_params,
+     native_wayland_display: Option<NonNull<c_void>>,
++    advanced_control: Option<&mut c_int>,
+ ) -> Vec<ffi::mpv_render_param> {
+     let mut params = vec![
+         ffi::mpv_render_param {
+@@ -1020,6 +1025,12 @@ fn render_context_parameters(
+             data: display.as_ptr(),
+         });
+     }
++    if let Some(advanced_control) = advanced_control {
++        params.push(ffi::mpv_render_param {
++            param_type: ffi::MPV_RENDER_PARAM_ADVANCED_CONTROL,
++            data: ptr::from_mut(advanced_control).cast(),
++        });
++    }
+     params.push(ffi::mpv_render_param {
+         param_type: ffi::MPV_RENDER_PARAM_INVALID,
+         data: ptr::null_mut(),
+@@ -1335,6 +1346,7 @@ impl Mpv {
+     pub fn create_render_context(
+         &mut self,
+         native_wayland_display: Option<NativeWaylandDisplay>,
++        advanced_control: bool,
+     ) -> Result<(), MpvError> {
+         if self.render_context.is_some() {
+             return Ok(());
+@@ -1350,12 +1362,14 @@ impl Mpv {
+             get_proc_address: Some(get_proc_address),
+             get_proc_address_ctx: ptr::null_mut(),
+         };
++        let mut advanced_control_value = c_int::from(advanced_control);
+         let mut params = render_context_parameters(
+             &api,
+             &mut init_params,
+             native_wayland_display
+                 .as_ref()
+                 .map(NativeWaylandDisplay::pointer),
++            advanced_control.then_some(&mut advanced_control_value),
+         );
+
+         let mut context = ptr::null_mut();
+@@ -2597,7 +2611,7 @@ mod tests {
+             get_proc_address: None,
+             get_proc_address_ctx: ptr::null_mut(),
+         };
+-        let without_wayland = render_context_parameters(c"opengl", &mut init_params, None);
++        let without_wayland = render_context_parameters(c"opengl", &mut init_params, None, None);
+         assert_eq!(
+             without_wayland
+                 .iter()
+@@ -2611,7 +2625,8 @@ mod tests {
+         );
+
+         let display = NonNull::<c_void>::dangling();
+-        let with_wayland = render_context_parameters(c"opengl", &mut init_params, Some(display));
++        let with_wayland =
++            render_context_parameters(c"opengl", &mut init_params, Some(display), None);
+         assert_eq!(
+             with_wayland
+                 .iter()
+@@ -2628,6 +2643,42 @@ mod tests {
+         assert!(with_wayland[3].data.is_null());
+     }
+
++    #[test]
++    fn native_render_context_enables_gpu_screenshot_control() {
++        let mut init_params = ffi::mpv_opengl_init_params {
++            get_proc_address: None,
++            get_proc_address_ctx: ptr::null_mut(),
++        };
++        let display = NonNull::<c_void>::dangling();
++        let mut advanced_control = 1;
++        let params = render_context_parameters(
++            c"opengl",
++            &mut init_params,
++            Some(display),
++            Some(&mut advanced_control),
++        );
++
++        assert_eq!(
++            params
++                .iter()
++                .map(|parameter| parameter.param_type)
++                .collect::<Vec<_>>(),
++            vec![
++                ffi::MPV_RENDER_PARAM_API_TYPE,
++                ffi::MPV_RENDER_PARAM_OPENGL_INIT_PARAMS,
++                ffi::MPV_RENDER_PARAM_WL_DISPLAY,
++                ffi::MPV_RENDER_PARAM_ADVANCED_CONTROL,
++                ffi::MPV_RENDER_PARAM_INVALID,
++            ]
++        );
++        assert_eq!(
++            unsafe { *params[3].data.cast::<c_int>() },
++            1,
++            "advanced control routes GPU screenshots through the render thread"
++        );
++        assert!(params[4].data.is_null());
++    }
++
+     #[test]
+     fn software_render_context_uses_only_the_sw_api_parameter() {
+         let params = software_render_context_parameters();
+diff --git a/rust/crates/okp-mpv/src/pump.rs b/rust/crates/okp-mpv/src/pump.rs
+index a99113556f1b76934f4b84333f49aa1fc8649dd8..259ad516e4b93734a60fe6e8eb3e4de6eef42df4 100644
+--- a/rust/crates/okp-mpv/src/pump.rs
++++ b/rust/crates/okp-mpv/src/pump.rs
+@@ -145,6 +145,7 @@ struct PumpShared {
+     wake: Mutex<bool>,
+     condvar: Condvar,
+     running: AtomicBool,
++    codec_failure_reported: AtomicBool,
+ }
+
+ pub(crate) struct EventPump {
+@@ -181,6 +182,7 @@ impl EventPump {
+             wake: Mutex::new(true),
+             condvar: Condvar::new(),
+             running: AtomicBool::new(true),
++            codec_failure_reported: AtomicBool::new(false),
+         });
+
+         for (name, format) in OBSERVED_PROPERTIES {
+@@ -278,6 +280,9 @@ impl EventPump {
+         snapshot.media_info = None;
+         drop(snapshot);
+         lock(&self.shared.diagnostic_messages).clear();
++        self.shared
++            .codec_failure_reported
++            .store(false, Ordering::Release);
+     }
+
+     /// Drain the lifecycle events queued since the last call, oldest first.
+@@ -395,11 +400,28 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
+                     continue;
+                 }
+                 if let Some(message) = log_message(event) {
+-                    let mut messages = lock(&shared.diagnostic_messages);
+-                    if messages.len() == 24 {
+-                        messages.pop_front();
++                    {
++                        let mut messages = lock(&shared.diagnostic_messages);
++                        if messages.len() == 24 {
++                            messages.pop_front();
++                        }
++                        messages.push_back(message.clone());
++                    }
++                    if okp_core::playback_failure::is_mpv_codec_failure(&message)
++                        && !shared.codec_failure_reported.swap(true, Ordering::AcqRel)
++                    {
++                        // Bind the warning to the engine source while still on
++                        // the pump thread. The GTK drain may run after the user
++                        // has already opened another source.
++                        let path = shared.reader.path();
++                        lifecycle.push(MpvEvent::DecoderFailed {
++                            path,
++                            diagnostic_messages: lock(&shared.diagnostic_messages)
++                                .iter()
++                                .cloned()
++                                .collect(),
++                        });
+                     }
+-                    messages.push_back(message);
+                 }
+             }
+             ffi::MPV_EVENT_FILE_LOADED => {
