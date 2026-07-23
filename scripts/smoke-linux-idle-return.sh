@@ -54,6 +54,12 @@ POSTER_SOURCE="$OUT_DIR/welcome-poster.mkv"
 # measuring each state over the surface it actually owns.
 WELCOME_IDENTITY_CROP='300x170+410+180'
 CONTINUE_WATCHING_IDENTITY_CROP='300x170+210+60'
+STOP_TIMEOUT_SECONDS="${OKP_IDLE_RETURN_STOP_TIMEOUT_SECONDS:-10}"
+
+if [[ ! "$STOP_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "OKP_IDLE_RETURN_STOP_TIMEOUT_SECONDS must be a positive integer" >&2
+  exit 2
+fi
 
 export GDK_BACKEND=x11
 export GDK_DEBUG=no-portals
@@ -208,9 +214,14 @@ probe_log_marker() {
       printf '%s=%s\n' "$label" pass >>"$OUT_DIR/results.txt"
       return
     fi
-    kill -0 "$app_pid" 2>/dev/null || break
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+      return 2
+    fi
     sleep 0.25
   done
+  if ! kill -0 "$app_pid" 2>/dev/null; then
+    return 2
+  fi
   return 1
 }
 
@@ -243,10 +254,27 @@ launch_empty() {
 stop_app() {
   local stopped_pid="$app_pid"
   local diagnostics="$OUT_DIR/stop-${stopped_pid}-x11-lifecycle.log"
+  local timeout_marker="$OUT_DIR/stop-${stopped_pid}-shutdown-timeout"
+  local watchdog_pid=""
   local bus_state="unknown"
-  kill "$app_pid" 2>/dev/null || true
-  wait "$app_pid" 2>/dev/null || true
+  rm -f -- "$timeout_marker"
+  kill "$stopped_pid" 2>/dev/null || true
+  (
+    sleep "$STOP_TIMEOUT_SECONDS"
+    if kill -0 "$stopped_pid" 2>/dev/null; then
+      : >"$timeout_marker"
+      kill -KILL "$stopped_pid" 2>/dev/null || true
+    fi
+  ) &
+  watchdog_pid=$!
+  wait "$stopped_pid" 2>/dev/null || true
+  kill "$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || true
   app_pid=""
+  if [[ -e "$timeout_marker" ]]; then
+    echo "OK Player PID $stopped_pid did not exit within ${STOP_TIMEOUT_SECONDS}s after TERM" >&2
+    exit 1
+  fi
   # The next launch uses the same GApplication ID and X11 title. Prove that
   # the previous process and every matching toplevel have disappeared before
   # starting it, rather than letting a stale teardown absorb or misdirect the
@@ -427,8 +455,16 @@ launch_fixture eof-app || {
   exit 1
 }
 xdotool windowactivate "$window_id" >/dev/null 2>&1 || true
-if ! probe_log_marker 'idle-return-smoke: file-loaded' "$eof_log" eof_file_loaded 60
-then
+if probe_log_marker 'idle-return-smoke: file-loaded' "$eof_log" eof_file_loaded 60; then
+  :
+else
+  probe_status=$?
+  if (( probe_status == 2 )); then
+    echo "EOF startup process exited before FileLoaded; refusing retry" >&2
+    cat "$OUT_DIR/$eof_log.log" >&2 || true
+    stop_app
+    exit 1
+  fi
   # As with the Close Media phase below, retry only an otherwise silent
   # pre-FileLoaded startup stall. The EOF transition and render assertions
   # remain single-attempt and unchanged.
@@ -454,9 +490,18 @@ launch_fixture "$close_log" || {
   exit 1
 }
 xdotool windowactivate "$window_id" >/dev/null 2>&1 || true
-if ! probe_log_marker \
+if probe_log_marker \
   'idle-return-smoke: file-loaded' "$close_log" close_media_file_loaded 60
 then
+  :
+else
+  probe_status=$?
+  if (( probe_status == 2 )); then
+    echo "Close Media startup process exited before FileLoaded; refusing retry" >&2
+    cat "$OUT_DIR/$close_log.log" >&2 || true
+    stop_app
+    exit 1
+  fi
   # The candidate builder intermittently leaves a fresh libmpv launch alive
   # before FileLoaded without producing a product error. Retry only this
   # startup boundary once; every EOF, Close Media, render, and shutdown
