@@ -515,7 +515,7 @@ x11_window_state() {
 
 close_app() {
   local window_id="$1"
-  local close_attempt close_error window_state
+  local close_attempt close_error close_status probe_status
   # `windowclose` destroys the X11 window directly, while keyboard and pointer
   # routes depend on focus or hit testing. Ask Xfwm to close the exact toplevel;
   # it delivers WM_DELETE_WINDOW and GTK executes the normal close-request
@@ -525,36 +525,33 @@ close_app() {
       "$close_attempt" "$window_id" \
       >>"$OUT_DIR/fit-lifecycle.log"
     close_error="$OUT_DIR/close-dispatch-${close_attempt}.log"
-    if ! "$X11_CLOSE_REQUEST" "$window_id" 2>"$close_error"; then
+    close_status=0
+    "$X11_CLOSE_REQUEST" "$window_id" 2>"$close_error" || close_status=$?
+    if (( close_status != 0 )); then
       # _NET_CLOSE_WINDOW is asynchronous. A previous request can complete
-      # between the loop's geometry probe and this helper resolving the XID.
-      # Treat that race as success only when the exact target is already gone.
-      window_state="$(x11_window_state "$window_id")"
-      case "$window_state" in
-        gone)
-          printf 'close-dispatch attempt=%s target=%s result=already-gone\n' \
-            "$close_attempt" "$window_id" >>"$OUT_DIR/fit-lifecycle.log"
-          break
-          ;;
-        unqueryable)
-          echo "Could not verify X11 window state after close request failure" >&2
-          cat "$close_error" >&2 || true
-          return 1
-          ;;
-      esac
+      # between the loop's Xlib probe and this helper resolving the XID. The
+      # helper reserves status 3 for a confirmed BadWindow on the exact target.
+      if (( close_status == 3 )); then
+        printf 'close-dispatch attempt=%s target=%s result=already-gone\n' \
+          "$close_attempt" "$window_id" >>"$OUT_DIR/fit-lifecycle.log"
+        break
+      fi
       echo "Could not send the X11 close request for window $window_id" >&2
       cat "$close_error" >&2 || true
       return 1
     fi
     sleep 0.2
-    window_state="$(x11_window_state "$window_id")"
-    case "$window_state" in
-      gone) break ;;
-      unqueryable)
-        echo "Could not verify X11 window state after close request" >&2
-        return 1
-        ;;
-    esac
+    probe_status=0
+    "$X11_CLOSE_REQUEST" --probe "$window_id" \
+      2>"$OUT_DIR/close-probe-${close_attempt}.log" || probe_status=$?
+    if (( probe_status == 3 )); then
+      break
+    fi
+    if (( probe_status != 0 )); then
+      echo "Could not probe X11 window $window_id after close request" >&2
+      cat "$OUT_DIR/close-probe-${close_attempt}.log" >&2 || true
+      return 1
+    fi
   done
   finish_app_shutdown "last_window_close"
 }
