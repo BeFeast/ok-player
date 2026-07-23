@@ -1665,7 +1665,12 @@ pub(crate) fn connect_player_window_move(
         // Some compositors consume the release while owning the native move.
         // A new GTK sequence is therefore also a recovery boundary for stale
         // shell state, independent of whether end/cancel was delivered.
-        begin_moving.set(false);
+        let recovered_stale_move = begin_moving.replace(false);
+        if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+            eprintln!(
+                "interaction: player-window-move-begin recovered-stale={recovered_stale_move}"
+            );
+        }
     });
     let update_moving = Rc::clone(&already_moving);
     let update_suppression = Rc::clone(&suppress_video_click);

@@ -2955,7 +2955,8 @@ fn player_window_move_drags_the_whole_non_interactive_surface() {
         "reset only after the native handoff has returned to the GTK main loop"
     );
     assert!(bridge.contains("drag.connect_drag_begin"));
-    assert!(bridge.contains("begin_moving.set(false)"));
+    assert!(bridge.contains("begin_moving.replace(false)"));
+    assert!(bridge.contains("interaction: player-window-move-begin recovered-stale="));
     assert!(bridge.contains("interaction: player-window-move-end"));
     assert!(bridge.contains("interaction: player-window-move-cancel"));
 
