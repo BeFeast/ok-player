@@ -5508,15 +5508,7 @@ wait() {{
   return 0
 }}
 pgrep() {{
-  local count=0
-  [[ -s "$OUT_DIR/pgrep-count" ]] && count="$(cat "$OUT_DIR/pgrep-count")"
-  count=$((count + 1))
-  printf '%s\n' "$count" >"$OUT_DIR/pgrep-count"
-  if (( count == 1 )); then
-    printf '4242\n'
-    return 0
-  fi
-  return 1
+  printf '4242\n'
 }}
 ps() {{ printf 'Z\n'; }}
 gdbus() {{ printf '(false,)\n'; }}
@@ -5640,13 +5632,16 @@ stop_app
         .expect("descendant PID should be recorded")
         .trim()
         .to_owned();
-    let descendant_gone = (0..50).any(|_| {
-        let status = std::process::Command::new("kill")
-            .args(["-0", &child_pid])
-            .stderr(std::process::Stdio::null())
-            .status()
-            .expect("descendant liveness probe should run");
-        if status.success() {
+    let descendant_not_live = (0..50).any(|_| {
+        let output = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &child_pid])
+            .output()
+            .expect("descendant state probe should run");
+        if output.status.success()
+            && !String::from_utf8_lossy(&output.stdout)
+                .trim_start()
+                .starts_with('Z')
+        {
             std::thread::sleep(std::time::Duration::from_millis(20));
             false
         } else {
@@ -5654,8 +5649,8 @@ stop_app
         }
     });
     assert!(
-        descendant_gone,
-        "a TERM-resistant descendant must not survive the timed-out player"
+        descendant_not_live,
+        "a TERM-resistant descendant must not remain live after the timed-out player"
     );
 }
 

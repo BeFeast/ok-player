@@ -289,7 +289,7 @@ wait_for_process_group_gone() {
   local pgid="$1" status=0
   for _ in $(seq 1 50); do
     status=0
-    pgrep -g "$pgid" >/dev/null 2>&1 || status=$?
+    process_group_has_live_members "$pgid" || status=$?
     case "$status" in
       0) sleep 0.1 ;;
       1) return ;;
