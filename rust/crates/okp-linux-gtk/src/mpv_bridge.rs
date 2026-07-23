@@ -1689,7 +1689,7 @@ pub(crate) fn connect_player_window_move(
             video_click::WindowDragAction::BeginMove => {
                 update_moving.set(true);
                 update_suppression.set(true);
-                if !begin_native_window_move_from_drag(gesture, &move_root, &move_window) {
+                if !begin_native_window_move_from_drag(gesture, &move_window) {
                     update_moving.set(false);
                     update_suppression.set(false);
                     return;
@@ -1701,9 +1701,19 @@ pub(crate) fn connect_player_window_move(
         }
     });
     let end_moving = Rc::clone(&already_moving);
-    drag.connect_drag_end(move |_, _, _| end_moving.set(false));
+    drag.connect_drag_end(move |_, _, _| {
+        end_moving.set(false);
+        if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+            eprintln!("interaction: player-window-move-end");
+        }
+    });
     let cancel_moving = Rc::clone(&already_moving);
-    drag.connect_cancel(move |_, _| cancel_moving.set(false));
+    drag.connect_cancel(move |_, _| {
+        cancel_moving.set(false);
+        if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+            eprintln!("interaction: player-window-move-cancel");
+        }
+    });
 
     player_root.add_controller(drag);
     suppress_video_click

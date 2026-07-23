@@ -495,7 +495,6 @@ pub(crate) fn connect_compact_video_interactions(
     let drag = gtk::GestureDrag::new();
     drag.set_button(gdk::BUTTON_PRIMARY);
     let drag_window = window.clone();
-    let drag_video = video.clone();
     let drag_started = Rc::new(Cell::new(false));
     let update_started = Rc::clone(&drag_started);
     drag.connect_drag_update(move |gesture, offset_x, offset_y| {
@@ -506,7 +505,7 @@ pub(crate) fn connect_compact_video_interactions(
             return;
         }
         update_started.set(true);
-        if !begin_native_window_move_from_drag(gesture, &drag_video, &drag_window) {
+        if !begin_native_window_move_from_drag(gesture, &drag_window) {
             update_started.set(false);
             return;
         }

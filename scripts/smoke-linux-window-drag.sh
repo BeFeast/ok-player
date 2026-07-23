@@ -126,9 +126,14 @@ if [[ "${1:-}" == "--inner" ]]; then
   kill "$app_pid" 2>/dev/null || true
   wait "$app_pid" 2>/dev/null || true
   app_pid=""
-  playback_moves="$(awk '/interaction: player-window-move/ { count++ } END { print count + 0 }' "$OUT_DIR/playback-app.log")"
+  playback_moves="$(awk '/interaction: player-window-move$/ { count++ } END { print count + 0 }' "$OUT_DIR/playback-app.log")"
   [[ "$playback_moves" -ge 2 ]] || {
     echo "expected repeated playback-surface move handoffs, observed $playback_moves" >&2
+    exit 1
+  }
+  playback_finishes="$(awk '/interaction: player-window-move-(end|cancel)/ { count++ } END { print count + 0 }' "$OUT_DIR/playback-app.log")"
+  [[ "$playback_finishes" -ge 2 ]] || {
+    echo "expected GTK to finish or cancel repeated playback drags, observed $playback_finishes" >&2
     exit 1
   }
 
@@ -159,9 +164,14 @@ if [[ "${1:-}" == "--inner" ]]; then
   kill "$app_pid" 2>/dev/null || true
   wait "$app_pid" 2>/dev/null || true
   app_pid=""
-  idle_moves="$(awk '/interaction: player-window-move/ { count++ } END { print count + 0 }' "$OUT_DIR/idle-app.log")"
+  idle_moves="$(awk '/interaction: player-window-move$/ { count++ } END { print count + 0 }' "$OUT_DIR/idle-app.log")"
   [[ "$idle_moves" -ge 1 ]] || {
     echo "expected an idle-canvas move handoff, observed $idle_moves" >&2
+    exit 1
+  }
+  idle_finishes="$(awk '/interaction: player-window-move-(end|cancel)/ { count++ } END { print count + 0 }' "$OUT_DIR/idle-app.log")"
+  [[ "$idle_finishes" -ge 1 ]] || {
+    echo "expected GTK to finish or cancel the idle-canvas drag, observed $idle_finishes" >&2
     exit 1
   }
 
@@ -175,6 +185,7 @@ if [[ "${1:-}" == "--inner" ]]; then
     'video_surface_handoff_survival=pass' \
     'compositor_cancel_survival=pass' \
     'post_cancel_drag=pass' \
+    'gtk_drag_lifecycle_completion=pass' \
     'idle_canvas_handoff_survival=pass' \
     'fatal_diagnostics=absent' >"$OUT_DIR/results.txt"
   exit 0
