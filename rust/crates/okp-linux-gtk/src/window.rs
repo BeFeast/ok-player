@@ -1625,22 +1625,17 @@ pub(crate) fn connect_player_window_drag(
     widget.add_controller(gesture);
 }
 
-/// Hand a thresholded pointer drag to the window manager while the originating
-/// event sequence is still live. Claiming before `begin_move` prevents sibling
-/// click gestures from committing the release. Resetting from an idle callback
-/// keeps reset-driven cancellation out of the active `drag-update` stack while
-/// still recovering when a compositor consumes the release edge.
+/// Hand a thresholded pointer drag to the window manager while preserving the
+/// backend's required gesture ownership. Wayland consumes the current implicit
+/// grab serial inside `begin_move`, so GTK must not claim or reset that sequence
+/// before or after the handoff. X11 keeps the GtkWindowHandle-style claim and
+/// deferred reset, while the shared click suppressor prevents release leakage on
+/// either backend.
 pub(crate) fn begin_native_window_move_from_drag(
     gesture: &gtk::GestureDrag,
     window: &gtk::ApplicationWindow,
 ) -> bool {
     let Some(device) = gesture.current_event_device() else {
-        return false;
-    };
-    let Some((widget_x, widget_y)) = gesture.bounding_box_center() else {
-        return false;
-    };
-    let Some(drag_widget) = gesture.widget() else {
         return false;
     };
     let button = gesture.current_button() as i32;
@@ -1652,6 +1647,24 @@ pub(crate) fn begin_native_window_move_from_drag(
         return false;
     };
 
+    let display = gtk::prelude::WidgetExt::display(window);
+    let wayland = is_wayland_display(display.type_().name());
+    if wayland {
+        // GDK's Wayland implementation ignores the coordinates and uses the
+        // seat's last implicit-grab serial to issue xdg_toplevel.move. Changing
+        // the GTK sequence state around this call can invalidate or terminate
+        // that compositor-owned grab, matching the live player unmap during a
+        // non-OSC drag.
+        toplevel.begin_move(&device, button, 0.0, 0.0, timestamp);
+        return true;
+    }
+
+    let Some((widget_x, widget_y)) = gesture.bounding_box_center() else {
+        return false;
+    };
+    let Some(drag_widget) = gesture.widget() else {
+        return false;
+    };
     let widget_point = gtk::graphene::Point::new(widget_x as f32, widget_y as f32);
     let Some(window_point) = drag_widget.compute_point(window, &widget_point) else {
         return false;
