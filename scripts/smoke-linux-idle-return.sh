@@ -46,6 +46,11 @@ IDLE_OSC_ASSERT="$3"
 FIXTURE="$OUT_DIR/idle-return.mkv"
 RESIDUAL_FIXTURE="$OUT_DIR/residual-open.mkv"
 POSTER_SOURCE="$OUT_DIR/welcome-poster.mkv"
+# Empty Welcome and populated Continue Watching place their identifying detail
+# in different parts of the fixed candidate viewport; keep one threshold while
+# measuring each state over the surface it actually owns.
+WELCOME_IDENTITY_CROP='300x170+410+180'
+CONTINUE_WATCHING_IDENTITY_CROP='300x170+210+60'
 
 export GDK_BACKEND=x11
 export GDK_DEBUG=no-portals
@@ -132,13 +137,13 @@ wait_for_window() {
 }
 
 capture_metrics() {
-  local window_id="$1" image="$2"
+  local window_id="$1" image="$2" identity_crop="$3"
   import -window "$window_id" "$image" || return 1
 
   local alpha_min identity_residual magenta_mean
   alpha_min="$(magick "$image" -alpha extract -format '%[fx:minima]' info:)"
   identity_residual="$(magick "$image" \
-    -crop 300x170+410+180 +repage -colorspace gray \
+    -crop "$identity_crop" +repage -colorspace gray \
     \( +clone -blur 0x4 \) -compose difference -composite \
     -format '%[fx:mean]' info:)"
   magenta_mean="$(magick "$image" -crop 260x140+430+220 \
@@ -149,6 +154,7 @@ capture_metrics() {
 
 assert_idle_capture() {
   local window_id="$1" name="$2" label="$3"
+  local identity_crop="${4:-$WELCOME_IDENTITY_CROP}"
   local alpha_min=0 identity_residual=0 magenta_mean=0 ready=0
 
   # Startup and package extraction can make media initialization variable. Poll the
@@ -156,7 +162,7 @@ assert_idle_capture() {
   # retained fixture frame still times out and fails the unchanged assertions below.
   for _ in $(seq 1 120); do
     if read -r alpha_min identity_residual magenta_mean \
-      < <(capture_metrics "$window_id" "$OUT_DIR/$name.png") \
+      < <(capture_metrics "$window_id" "$OUT_DIR/$name.png" "$identity_crop") \
       && awk -v alpha="$alpha_min" -v identity="$identity_residual" -v magenta="$magenta_mean" \
         'BEGIN { exit !(alpha > 0.999 && identity > 0.012 && magenta < 0.35) }'
     then
@@ -322,7 +328,9 @@ run_residual_open_regression() {
   launch_residual
   xdotool windowactivate "$window_id" >/dev/null 2>&1 || true
   initial_pid="$(wait_for_pid_file_alive "$pid_file" "Welcome")"
-  assert_idle_capture "$window_id" residual-welcome "Residual initial Welcome"
+  assert_idle_capture \
+    "$window_id" residual-welcome "Residual initial Continue Watching" \
+    "$CONTINUE_WATCHING_IDENTITY_CROP"
   wait_for_mpris_bus
   local media_uri
   media_uri="$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve().as_uri())' \
