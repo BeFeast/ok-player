@@ -340,6 +340,7 @@ fn successful_candidate_runs_do_not_cover_an_unchanged_feed() {
         event: "workflow_dispatch".to_owned(),
         status: "completed".to_owned(),
         conclusion: "success".to_owned(),
+        created_at_utc: "2026-07-18T01:31:47Z".to_owned(),
         completed_at_utc: "2026-07-18T01:50:47Z".to_owned(),
         url: "https://example.invalid/run/first-green".to_owned(),
     }];
@@ -371,6 +372,7 @@ fn successful_candidate_runs_do_not_cover_an_unchanged_feed() {
             event: "schedule".to_owned(),
             status: "completed".to_owned(),
             conclusion: "success".to_owned(),
+            created_at_utc: "2026-07-18T01:35:47Z".to_owned(),
             completed_at_utc: "2026-07-18T01:55:47Z".to_owned(),
             url: "https://example.invalid/run/second-green".to_owned(),
         });
@@ -406,6 +408,29 @@ fn successful_candidate_runs_do_not_cover_an_unchanged_feed() {
     assert_eq!(accounted.status, HealthStatus::Warning);
     assert!(
         !accounted
+            .reason_codes
+            .contains(&"candidate-success-without-delivery".to_owned())
+    );
+
+    let mut coalesced_before_tip = snapshot;
+    coalesced_before_tip
+        .source
+        .candidate_workflow
+        .completed_runs = vec![ScheduleRunSnapshot {
+        head_sha: "3333333333333333333333333333333333333333".to_owned(),
+        event: "workflow_dispatch".to_owned(),
+        status: "completed".to_owned(),
+        conclusion: "success".to_owned(),
+        created_at_utc: "2026-07-18T01:20:47Z".to_owned(),
+        completed_at_utc: "2026-07-18T01:50:47Z".to_owned(),
+        url: "https://example.invalid/run/coalesced-before-tip".to_owned(),
+    }];
+    let coalesced_outcome = coalesced_before_tip.evaluate();
+    let coalesced = candidate_check(&coalesced_outcome);
+    assert!(coalesced_outcome.healthy);
+    assert_eq!(coalesced.status, HealthStatus::Warning);
+    assert!(
+        !coalesced
             .reason_codes
             .contains(&"candidate-success-without-delivery".to_owned())
     );
@@ -797,6 +822,7 @@ fn healthy_snapshot(
                     event: "schedule".to_owned(),
                     status: "completed".to_owned(),
                     conclusion: "success".to_owned(),
+                    created_at_utc: "2026-07-18T01:45:47Z".to_owned(),
                     completed_at_utc: "2026-07-18T01:55:47Z".to_owned(),
                     url: "https://example.invalid/runs/linux-candidate".to_owned(),
                 }),
@@ -817,6 +843,7 @@ fn healthy_snapshot(
                     event: "schedule".to_owned(),
                     status: "completed".to_owned(),
                     conclusion: "success".to_owned(),
+                    created_at_utc: "2026-07-18T01:45:47Z".to_owned(),
                     completed_at_utc: "2026-07-18T01:55:47Z".to_owned(),
                     url: "https://example.invalid/runs/windows-candidate".to_owned(),
                 }),

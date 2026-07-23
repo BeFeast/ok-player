@@ -188,24 +188,31 @@ if candidate_runs="$(gh run list --repo "$repository" --branch main \
         | select((.status // "") != "completed")
       ][0] // null
       end
-    ' <<<"$candidate_runs" 2>/dev/null)" \
-      || ! candidate_completed_runs="$(jq -c '
+    ' <<<"$candidate_runs" 2>/dev/null)"; then
+    candidate_active_run='null'
+    candidate_active_run_error="GitHub Linux Candidate active run query returned malformed JSON"
+  fi
+else
+  candidate_active_run_error="GitHub Linux Candidate active run query failed"
+fi
+
+if candidate_successful_runs="$(gh run list --repo "$repository" --branch main \
+    --workflow "Linux Candidate" --status success --limit 100 \
+    --json databaseId,headSha,event,status,conclusion,createdAt,updatedAt,url 2>/dev/null)"; then
+  if ! candidate_completed_runs="$(jq -c '
         if type != "array" then error("not an array")
         else [
           .[]
           | select((.event // "") == "schedule" or (.event // "") == "workflow_dispatch")
-          | select((.status // "") == "completed")
+          | select((.status // "") == "completed" and (.conclusion // "") == "success")
         ]
         end
-      ' <<<"$candidate_runs" 2>/dev/null)"; then
-    candidate_active_run='null'
+      ' <<<"$candidate_successful_runs" 2>/dev/null)"; then
     candidate_completed_runs='[]'
-    candidate_active_run_error="GitHub Linux Candidate active run query returned malformed JSON"
-    candidate_run_history_error="GitHub Linux Candidate completed run history query returned malformed JSON"
+    candidate_run_history_error="GitHub Linux Candidate successful run history query returned malformed JSON"
   fi
 else
-  candidate_active_run_error="GitHub Linux Candidate active run query failed"
-  candidate_run_history_error="GitHub Linux Candidate completed run history query failed"
+  candidate_run_history_error="GitHub Linux Candidate successful run history query failed"
 fi
 
 candidate_schedule_run='null'
@@ -514,6 +521,7 @@ jq -n \
             event: ($candidate_schedule_run.event // ""),
             status: ($candidate_schedule_run.status // ""),
             conclusion: ($candidate_schedule_run.conclusion // ""),
+            created_at_utc: ($candidate_schedule_run.createdAt // $candidate_schedule_run.updatedAt // ""),
             completed_at_utc: ($candidate_schedule_run.updatedAt // ""),
             url: ($candidate_schedule_run.url // "")
           }
@@ -539,6 +547,7 @@ jq -n \
               event: (.event // ""),
               status: (.status // ""),
               conclusion: (.conclusion // ""),
+              created_at_utc: (.createdAt // ""),
               completed_at_utc: (.updatedAt // ""),
               url: (.url // "")
             }
@@ -575,6 +584,7 @@ jq -n \
             event: ($windows_candidate_automatic_run.event // ""),
             status: ($windows_candidate_automatic_run.status // ""),
             conclusion: ($windows_candidate_automatic_run.conclusion // ""),
+            created_at_utc: ($windows_candidate_automatic_run.createdAt // $windows_candidate_automatic_run.updatedAt // ""),
             completed_at_utc: ($windows_candidate_automatic_run.updatedAt // ""),
             url: ($windows_candidate_automatic_run.url // "")
           }
