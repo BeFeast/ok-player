@@ -153,7 +153,7 @@ fn active_current_main_candidate_run_survives_live_collection() {
 }
 
 #[test]
-fn windows_candidate_push_failure_streak_survives_live_collection() {
+fn windows_candidate_failure_streak_survives_manual_run_displacement() {
     let output = run_live("windows-candidate-failures");
     assert_eq!(
         output.status.code(),
@@ -176,7 +176,7 @@ fn windows_candidate_push_failure_streak_survives_live_collection() {
     );
     assert!(
         candidate.summary.contains(
-            "Windows candidate builder failing at gate Run core unit tests (3 consecutive)"
+            "Windows candidate builder failing at gate Run core unit tests (2 consecutive)"
         )
     );
 }
@@ -710,17 +710,26 @@ if [[ "${1:-}" == run && "${2:-}" == list ]]; then
     fi
   elif [[ "$workflow" == "Windows Candidate" ]]; then
     if [[ "$OKP_STUB_FAIL" == windows-candidate-failures ]]; then
-      if [[ "$event_filter" == schedule ]]; then
-        printf '%s\n' '[{"databaseId":200,"event":"schedule","conclusion":"success"}]'
-      else
+      if [[ "$event_filter" == push ]]; then
         printf '%s\n' '[
           {"databaseId":203,"headSha":"d5d531a58c830a01a7e25615e850593e9ff4493f","event":"push","status":"completed","conclusion":"failure","updatedAt":"2026-07-18T01:55:47Z","url":"https://example.invalid/run/203"},
-          {"databaseId":999,"event":"workflow_dispatch","conclusion":"success"},
-          {"databaseId":202,"event":"schedule","conclusion":"failure"},
-          {"databaseId":201,"event":"push","conclusion":"failure"},
-          {"databaseId":200,"event":"schedule","conclusion":"success"}
+          {"databaseId":201,"headSha":"d5d531a58c830a01a7e25615e850593e9ff4493f","event":"push","status":"completed","conclusion":"failure","updatedAt":"2026-07-18T01:40:47Z","url":"https://example.invalid/run/201"}
         ]'
+      elif [[ "$event_filter" == schedule ]]; then
+        printf '%s\n' '[
+          {"databaseId":202,"headSha":"d5d531a58c830a01a7e25615e850593e9ff4493f","event":"schedule","status":"completed","conclusion":"failure","updatedAt":"2026-07-18T01:50:47Z","url":"https://example.invalid/run/202"},
+          {"databaseId":200,"headSha":"d5d531a58c830a01a7e25615e850593e9ff4493f","event":"schedule","status":"completed","conclusion":"success","updatedAt":"2026-07-18T01:45:47Z","url":"https://example.invalid/run/200"}
+        ]'
+      else
+        printf '['
+        for ((run_id = 1000; run_id < 1100; run_id++)); do
+          (( run_id == 1000 )) || printf ','
+          printf '{"databaseId":%d,"event":"workflow_dispatch","conclusion":"success"}' "$run_id"
+        done
+        printf ']\n'
       fi
+    elif [[ "$event_filter" == push ]]; then
+      printf '%s\n' '[]'
     else
       printf '[{"databaseId":200,"headSha":"%s","event":"schedule","status":"completed","conclusion":"success","updatedAt":"2026-07-18T01:55:47Z","url":"https://example.invalid/run/windows-candidate"}]\n' "$main_sha"
     fi

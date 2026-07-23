@@ -132,11 +132,12 @@ runs re-read `origin/main` before SDK setup and skip superseded SHAs, so a burst
 of pushes coalesces without spending a hosted Windows build on stale source.
 Manual dispatch continues to bypass this early supersession check.
 
-The collector reads up to 100 completed `Windows Candidate` runs, filters them
-to automatic `push` and `schedule` events, and counts that combined failure
-streak from newest to oldest. Manual dispatches cannot mask or extend the
-automatic streak. Two or more consecutive failures are reported before generic
-lag evidence as `Windows candidate builder failing at gate <name> (<N>
+The collector requests up to 100 completed `push` runs and 100 completed
+`schedule` runs for `Windows Candidate`, merges them newest-first, retains the
+newest 100 automatic runs, and counts that combined failure streak. Manual
+dispatches cannot consume the bounded automatic history, mask a failure, or
+extend the streak. Two or more consecutive failures are reported before
+generic lag evidence as `Windows candidate builder failing at gate <name> (<N>
 consecutive)`. The gate is the failed workflow step from the newest failed run,
 and the reason code is `windows-candidate-builds-failing`. While the new lane
 has no completed automatic history and has not published either pointer, the

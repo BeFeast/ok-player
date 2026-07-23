@@ -248,14 +248,24 @@ windows_candidate_automatic_run='null'
 windows_candidate_automatic_error=""
 windows_candidate_consecutive_failed_runs=0
 windows_candidate_last_failed_gate=""
-if windows_candidate_runs="$(gh run list --repo "$repository" --branch main \
+if windows_candidate_push_runs="$(gh run list --repo "$repository" --branch main --event push \
     --status completed --workflow "Windows Candidate" --limit 100 \
-    --json databaseId,headSha,event,status,conclusion,updatedAt,url 2>/dev/null)"; then
-  if ! windows_candidate_automatic_runs="$(jq -c '
-      if type != "array" then error("not an array")
-      else [.[] | select((.event // "") == "push" or (.event // "") == "schedule")]
+    --json databaseId,headSha,event,status,conclusion,updatedAt,url 2>/dev/null)" \
+    && windows_candidate_schedule_runs="$(gh run list --repo "$repository" --branch main --event schedule \
+      --status completed --workflow "Windows Candidate" --limit 100 \
+      --json databaseId,headSha,event,status,conclusion,updatedAt,url 2>/dev/null)"; then
+  if ! windows_candidate_automatic_runs="$(jq -cn \
+      --argjson push "$windows_candidate_push_runs" \
+      --argjson schedule "$windows_candidate_schedule_runs" '
+      if ($push | type) != "array" or ($schedule | type) != "array" then error("not arrays")
+      else
+        [($push + $schedule)[]
+          | select((.event // "") == "push" or (.event // "") == "schedule")]
+        | sort_by([(.updatedAt // ""), (.databaseId // 0)])
+        | reverse
+        | .[:100]
       end
-    ' <<<"$windows_candidate_runs" 2>/dev/null)" \
+    ' 2>/dev/null)" \
       || ! windows_candidate_automatic_run="$(jq -c '.[0] // null' \
       <<<"$windows_candidate_automatic_runs" 2>/dev/null)" \
       || ! windows_candidate_consecutive_failed_runs="$(jq -r '
@@ -280,7 +290,7 @@ if windows_candidate_runs="$(gh run list --repo "$repository" --branch main \
     fi
   fi
 else
-  windows_candidate_automatic_error="GitHub Windows Candidate completed automatic run query failed"
+  windows_candidate_automatic_error="GitHub Windows Candidate completed push or schedule run query failed"
 fi
 
 windows_ok=false

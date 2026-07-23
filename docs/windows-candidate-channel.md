@@ -78,9 +78,11 @@ rolling lane as `windows-candidate-delivery`. The Rust evaluator verifies the
 manifest/feed identity, exact source relation to `main`, and the shared
 120-minute unpublished-main lag bound. An unchanged promoted SHA stays healthy;
 two or more consecutive automatic push or scheduled failures instead report
-the newest failed workflow step and count. Manual runs are excluded from that
-failure streak. Before the lane has any completed automatic history or
-published pointers, the row is a bootstrap warning rather than a failure.
+the newest failed workflow step and count. Push and schedule history are
+requested separately and merged newest-first, so manual runs cannot displace,
+mask, or extend that failure streak. Before the lane has any completed
+automatic history or published pointers, the row is a bootstrap warning rather
+than a failure.
 
 ## Acceptance boundary
 
