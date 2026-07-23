@@ -496,6 +496,8 @@ pub(crate) fn connect_compact_video_interactions(
     drag.set_button(gdk::BUTTON_PRIMARY);
     let drag_window = window.clone();
     let drag_started = Rc::new(Cell::new(false));
+    let begin_started = Rc::clone(&drag_started);
+    drag.connect_drag_begin(move |_, _, _| begin_started.set(false));
     let update_started = Rc::clone(&drag_started);
     drag.connect_drag_update(move |gesture, offset_x, offset_y| {
         if update_started.get()
@@ -514,7 +516,9 @@ pub(crate) fn connect_compact_video_interactions(
         }
         schedule_compact_snap(drag_window.clone(), Rc::clone(&update_started));
     });
+    let cancel_started = Rc::clone(&drag_started);
     drag.connect_drag_end(move |_, _, _| drag_started.set(false));
+    drag.connect_cancel(move |_, _| cancel_started.set(false));
     video.add_controller(drag);
 
     let scroll = gtk::EventControllerScroll::new(

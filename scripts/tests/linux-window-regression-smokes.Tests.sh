@@ -32,6 +32,7 @@ printf '%s\n' \
   'video_surface_handoff_survival=pass' \
   'compositor_cancel_survival=pass' \
   'post_cancel_drag=pass' \
+  'gtk_drag_lifecycle_completion=pass' \
   'idle_canvas_handoff_survival=pass' \
   'fatal_diagnostics=absent' >"$2/results.txt"
 printf 'status=pass\n' >"$2/xvfb-evidence.txt"
@@ -112,6 +113,7 @@ printf '%s\n' \
   'video_surface_handoff_survival=pass' \
   'compositor_cancel_survival=pass' \
   'post_cancel_drag=pass' \
+  'gtk_drag_lifecycle_completion=pass' \
   'idle_canvas_handoff_survival=pass' \
   'fatal_diagnostics=absent' >"$2/results.txt"
 printf 'status=pass\n' >"$2/xvfb-evidence.txt"

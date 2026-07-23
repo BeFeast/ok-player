@@ -1627,8 +1627,9 @@ pub(crate) fn connect_player_window_drag(
 
 /// Hand a thresholded pointer drag to the window manager while the originating
 /// event sequence is still live. Claiming before `begin_move` prevents sibling
-/// click gestures from committing the release; the controller must remain
-/// active so GTK can deliver the compositor's end/cancel edge normally.
+/// click gestures from committing the release. Resetting from an idle callback
+/// keeps reset-driven cancellation out of the active `drag-update` stack while
+/// still recovering when a compositor consumes the release edge.
 pub(crate) fn begin_native_window_move_from_drag(
     gesture: &gtk::GestureDrag,
     window: &gtk::ApplicationWindow,
@@ -1636,7 +1637,10 @@ pub(crate) fn begin_native_window_move_from_drag(
     let Some(device) = gesture.current_event_device() else {
         return false;
     };
-    let Some((surface_x, surface_y)) = gesture.bounding_box_center() else {
+    let Some((widget_x, widget_y)) = gesture.bounding_box_center() else {
+        return false;
+    };
+    let Some(drag_widget) = gesture.widget() else {
         return false;
     };
     let button = gesture.current_button() as i32;
@@ -1648,8 +1652,22 @@ pub(crate) fn begin_native_window_move_from_drag(
         return false;
     };
 
+    let widget_point = gtk::graphene::Point::new(widget_x as f32, widget_y as f32);
+    let Some(window_point) = drag_widget.compute_point(window, &widget_point) else {
+        return false;
+    };
+    let (surface_x, surface_y) = window.surface_transform();
+
     gesture.set_state(gtk::EventSequenceState::Claimed);
-    toplevel.begin_move(&device, button, surface_x, surface_y, timestamp);
+    toplevel.begin_move(
+        &device,
+        button,
+        f64::from(window_point.x()) + surface_x,
+        f64::from(window_point.y()) + surface_y,
+        timestamp,
+    );
+    let reset_gesture = gesture.clone();
+    glib::idle_add_local_once(move || reset_gesture.reset());
     true
 }
 
