@@ -10,9 +10,19 @@ Run the controller during its scheduled UTC `00:05` through `05:05` window:
 scripts/ok-player-night-gui-qa.sh
 ```
 
-The automatic order is `slava`, then `mimir`, then `baldr` when its graphical
-seat is available and its lease is free. The controller visits every eligible
-host in that order. `sindri` is never in the automatic list. A one-host
+The default automatic order is `slava`, then `mimir`, then `baldr` when its
+graphical seat is available and its lease is free. Set `OKP_QA_HOSTS` to a
+whitespace-separated list of sanitized logical aliases when a deployment uses
+a different eligible set or order:
+
+```bash
+OKP_QA_HOSTS='mimir baldr' scripts/ok-player-night-gui-qa.sh
+```
+
+The controller visits every eligible host in the configured order and rejects
+empty, invalid, duplicate, or `sindri` entries. Do not put physical hostnames or
+private addresses in this variable because the logical alias is copied into
+the evidence metadata. `sindri` is never in the automatic list. A one-host
 operator-authorized run requires all three explicit choices:
 
 ```bash
@@ -88,6 +98,23 @@ The live action hook may compose versioned helpers such as
 `run-linux-window-fit-series.sh` and `smoke-linux-window-drag.sh` for supporting
 diagnostics, but their Xvfb/X11 results cannot replace the live GNOME/Wayland
 fit, pointer, compositor, focus, or dual-head rows.
+
+For one reproducible headless invocation, build or select the exact candidate
+binary and run both regressions through the aggregate helper:
+
+```bash
+scripts/run-linux-window-regression-smokes.sh \
+  rust/target/debug/okp-linux-gtk \
+  artifacts/manual-ui/linux-window-regressions
+```
+
+The helper always attempts both regressions, writes `results.tsv` and
+`summary.env`, and binds the key drag, fit, Xvfb, and D-Bus evidence files in
+`SHA256SUMS`. A site `run-action` hook should use this command as supporting
+evidence while implementing `single_monitor_fit` and `non_osc_drag_10`; the
+two live action rows still require actual desktop observations. CI runs the
+aggregate helper's dispatch/failure/evidence policy test, while the Rust suite
+also pins the required drag and fit assertions in the underlying scripts.
 
 ## Artifacts and timer ownership
 

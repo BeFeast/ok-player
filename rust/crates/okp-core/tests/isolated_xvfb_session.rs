@@ -107,6 +107,19 @@ fn player_window_drag_smoke_covers_survival_cancel_and_recovery() {
 }
 
 #[test]
+fn window_regression_runner_dispatches_drag_and_fit_with_bound_evidence() {
+    let script = include_str!("../../../../scripts/run-linux-window-regression-smokes.sh");
+    assert!(script.contains("smoke-linux-window-drag.sh"));
+    assert!(script.contains("run-linux-window-fit-series.sh"));
+    assert!(script.contains("non_osc_window_drag"));
+    assert!(script.contains("single_monitor_window_fit"));
+    assert!(script.contains("window-drag/results.txt"));
+    assert!(script.contains("window-fit/series-evidence.txt"));
+    assert!(script.contains("sha256sum"));
+    assert!(script.contains("if (( failed != 0 ))"));
+}
+
+#[test]
 fn narrow_width_portability_capture_uses_a_long_lived_dark_fixture() {
     let narrow = include_str!("../../../../scripts/smoke-linux-narrow-width.sh");
     assert!(narrow.contains("FIXTURE=\"${3:-}\""));
