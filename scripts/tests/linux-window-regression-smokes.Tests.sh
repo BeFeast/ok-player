@@ -18,6 +18,22 @@ assert_contains() {
   [[ "$contents" == *"$expected"* ]] || fail "$file does not contain: $expected"
 }
 
+assert_not_contains() {
+  local file="$1" unexpected="$2"
+  local contents
+  contents="$(<"$file")"
+  [[ "$contents" != *"$unexpected"* ]] || fail "$file unexpectedly contains: $unexpected"
+}
+
+drag_smoke_source="$ROOT/scripts/smoke-linux-window-drag.sh"
+assert_contains "$drag_smoke_source" 'begin_drag_sequence()'
+assert_contains "$drag_smoke_source" 'wait_for_drag_sequence_handoff()'
+assert_contains "$drag_smoke_source" '$0 == "interaction: player-window-move sequence=" expected'
+[[ "$(grep -Fc 'idle_sequence="$(begin_drag_sequence' "$drag_smoke_source")" -ge 2 ]] || \
+  fail 'idle retry does not start and bind a fresh GTK drag sequence'
+assert_not_contains "$drag_smoke_source" 'idle_previous_handoffs='
+assert_not_contains "$drag_smoke_source" 'idle_completions='
+
 binary="$TEST_ROOT/okp-linux-gtk"
 drag_smoke="$TEST_ROOT/drag-smoke"
 fit_series="$TEST_ROOT/fit-series"

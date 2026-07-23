@@ -2956,9 +2956,14 @@ fn player_window_move_drags_the_whole_non_interactive_surface() {
     );
     assert!(bridge.contains("drag.connect_drag_begin"));
     assert!(bridge.contains("begin_moving.replace(false)"));
-    assert!(bridge.contains("interaction: player-window-move-begin recovered-stale="));
-    assert!(bridge.contains("interaction: player-window-move-end"));
-    assert!(bridge.contains("interaction: player-window-move-cancel"));
+    assert!(bridge.contains("let drag_sequence = Rc::new(Cell::new(0_u64))"));
+    assert!(
+        bridge
+            .contains("interaction: player-window-move-begin sequence={sequence} recovered-stale=")
+    );
+    assert!(bridge.contains("interaction: player-window-move sequence={}"));
+    assert!(bridge.contains("interaction: player-window-move-end sequence={}"));
+    assert!(bridge.contains("interaction: player-window-move-cancel sequence={}"));
 
     assert!(
         window.contains("let suppress_video_click = connect_player_window_move(&overlay, &window)")

@@ -1660,20 +1660,25 @@ pub(crate) fn connect_player_window_move(
     let move_root = player_root.clone();
     let move_window = window.clone();
     let already_moving = Rc::new(Cell::new(false));
+    let drag_sequence = Rc::new(Cell::new(0_u64));
     let begin_moving = Rc::clone(&already_moving);
+    let begin_sequence = Rc::clone(&drag_sequence);
     drag.connect_drag_begin(move |_, _, _| {
         // Some compositors consume the release while owning the native move.
         // A new GTK sequence is therefore also a recovery boundary for stale
         // shell state, independent of whether end/cancel was delivered.
         let recovered_stale_move = begin_moving.replace(false);
+        let sequence = begin_sequence.get().saturating_add(1);
+        begin_sequence.set(sequence);
         if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
             eprintln!(
-                "interaction: player-window-move-begin recovered-stale={recovered_stale_move}"
+                "interaction: player-window-move-begin sequence={sequence} recovered-stale={recovered_stale_move}"
             );
         }
     });
     let update_moving = Rc::clone(&already_moving);
     let update_suppression = Rc::clone(&suppress_video_click);
+    let update_sequence = Rc::clone(&drag_sequence);
     drag.connect_drag_update(move |gesture, offset_x, offset_y| {
         // Compact mode owns its own drag-to-move (and snap) gesture; leave it be
         // so a single drag never begins two moves.
@@ -1707,23 +1712,34 @@ pub(crate) fn connect_player_window_move(
                     return;
                 }
                 if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
-                    eprintln!("interaction: player-window-move");
+                    eprintln!(
+                        "interaction: player-window-move sequence={}",
+                        update_sequence.get()
+                    );
                 }
             }
         }
     });
     let end_moving = Rc::clone(&already_moving);
+    let end_sequence = Rc::clone(&drag_sequence);
     drag.connect_drag_end(move |_, _, _| {
         end_moving.set(false);
         if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
-            eprintln!("interaction: player-window-move-end");
+            eprintln!(
+                "interaction: player-window-move-end sequence={}",
+                end_sequence.get()
+            );
         }
     });
     let cancel_moving = Rc::clone(&already_moving);
+    let cancel_sequence = Rc::clone(&drag_sequence);
     drag.connect_cancel(move |_, _| {
         cancel_moving.set(false);
         if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
-            eprintln!("interaction: player-window-move-cancel");
+            eprintln!(
+                "interaction: player-window-move-cancel sequence={}",
+                cancel_sequence.get()
+            );
         }
     });
 
