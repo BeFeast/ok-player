@@ -4999,6 +4999,11 @@ fn eof_without_an_auto_advance_target_returns_to_idle() {
 #[test]
 fn idle_return_smoke_waits_for_natural_eof_before_welcome_capture() {
     let smoke = include_str!("../../../../scripts/smoke-linux-idle-return.sh");
+    let stop = smoke
+        .split_once("stop_app() {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nwait_for_pid_file_alive"))
+        .map(|(body, _)| body)
+        .expect("idle-return shutdown helper");
     let eof_flow = smoke
         .split("launch_fixture eof-app")
         .nth(1)
@@ -5028,6 +5033,37 @@ fn idle_return_smoke_waits_for_natural_eof_before_welcome_capture() {
     assert!(smoke.contains("Residual initial Continue Watching"));
     assert!(smoke.contains("export GSK_RENDERER=cairo"));
     assert!(smoke.contains("-crop 1120x638+0+42"));
+    assert!(smoke.contains("X11_APP_CLEAR_WAITER=\"$ROOT/scripts/wait-for-x11-app-clear.sh\""));
+    assert!(stop.contains("local stopped_pid=\"$app_pid\""));
+    assert!(stop.contains("\"$X11_APP_CLEAR_WAITER\" \"$stopped_pid\" \"$diagnostics\""));
+    assert!(stop.contains("org.freedesktop.DBus.NameHasOwner"));
+    assert!(stop.contains("'(false,)'"));
+    assert!(stop.contains("'(true,)'"));
+    assert!(stop.contains("bus_state=\"unreachable\""));
+    assert!(!stop.contains("gdbus introspect"));
+    assert!(
+        stop.find("wait \"$app_pid\"")
+            < stop.find("\"$X11_APP_CLEAR_WAITER\" \"$stopped_pid\" \"$diagnostics\"")
+    );
+
+    let close_flow = smoke
+        .split_once("close_log=close-app")
+        .and_then(|(_, tail)| tail.split_once("\nstop_app\n\nfor name in eof-idle"))
+        .map(|(body, _)| body)
+        .expect("Close Media smoke flow");
+    assert!(close_flow.contains("close-app-retry"));
+    assert!(close_flow.contains("close_media_launch_retry=pass"));
+    assert!(close_flow.contains("close_media_file_loaded 60"));
+    assert_eq!(close_flow.matches("close-app-retry").count(), 1);
+    assert_eq!(
+        close_flow.matches("close_media_launch_retry=pass").count(),
+        1
+    );
+    assert_eq!(
+        close_flow.matches("idle-return-smoke: close-idle").count(),
+        1
+    );
+    assert_eq!(close_flow.matches("assert_idle_capture").count(), 1);
 
     let bridge = include_str!("mpv_bridge.rs");
     let idle_projection = bridge
@@ -5043,6 +5079,77 @@ fn idle_return_smoke_waits_for_natural_eof_before_welcome_capture() {
     assert!(lifecycle.contains("idle-return-smoke: eof-idle"));
     let playback = include_str!("playback.rs");
     assert!(playback.contains("idle-return-smoke: close-idle"));
+}
+
+#[test]
+fn idle_return_smoke_retries_only_the_close_fixture_startup_boundary() {
+    let smoke = include_str!("../../../../scripts/smoke-linux-idle-return.sh");
+    let wait_for_marker = smoke
+        .split_once("probe_log_marker() {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nlaunch_fixture()"))
+        .map(|(body, _)| format!("probe_log_marker() {{{body}\n}}"))
+        .expect("log marker helper");
+    let close_flow = smoke
+        .split_once("close_log=close-app")
+        .and_then(|(_, tail)| tail.split_once("\nstop_app\n\nfor name in eof-idle"))
+        .map(|(body, _)| body)
+        .expect("Close Media smoke flow");
+    let root = unique_temp_dir("okp-idle-return-close-retry");
+    let probe = format!(
+        r#"set -euo pipefail
+{wait_for_marker}
+OUT_DIR={out}
+mkdir -p "$OUT_DIR"
+app_pid=4242
+window_id=17
+launch_count=0
+stop_count=0
+launch_fixture() {{
+  launch_count=$((launch_count + 1))
+  : >"$OUT_DIR/$1.log"
+  if (( launch_count == 2 )); then
+    printf '%s\n' 'idle-return-smoke: file-loaded' 'idle-return-smoke: close-idle' \
+      >"$OUT_DIR/$1.log"
+  fi
+}}
+stop_app() {{ stop_count=$((stop_count + 1)); }}
+xdotool() {{ return 0; }}
+kill() {{ return 0; }}
+sleep() {{ return 0; }}
+rg() {{
+  [[ "$1" == "-q" && "$2" == "-F" ]] || return 2
+  local marker="$3" line
+  while IFS= read -r line; do
+    [[ "$line" == *"$marker"* ]] && return 0
+  done <"$4"
+  return 1
+}}
+assert_idle_capture() {{ return 0; }}
+close_log=close-app
+{close_flow}
+stop_app
+printf 'launch_count=%s\nstop_count=%s\n' "$launch_count" "$stop_count"
+"#,
+        out = root.path().display()
+    );
+    let output = std::process::Command::new("bash")
+        .args(["-c", &probe])
+        .output()
+        .expect("close startup retry probe should run");
+    assert!(
+        output.status.success(),
+        "retry probe should pass: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "launch_count=2\nstop_count=2\n"
+    );
+    let results = fs::read_to_string(root.path().join("results.txt"))
+        .expect("retry evidence should be written");
+    assert!(results.contains("close_media_file_loaded=pass"));
+    assert!(results.contains("close_media_launch_retry=pass"));
+    assert!(results.contains("close_media_transition=pass"));
 }
 
 #[test]

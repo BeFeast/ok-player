@@ -66,7 +66,8 @@ fn main_window_fit_session_has_one_multiscreen_manager_and_two_supervisors() {
     assert!(close.contains("route=ewmh-close-window"));
     assert!(close.contains("\"$X11_CLOSE_REQUEST\" \"$window_id\""));
     assert!(close.contains("result=already-gone"));
-    assert!(close.contains("if ! xdotool getwindowgeometry \"$window_id\""));
+    assert!(close.contains("x11_window_state \"$window_id\""));
+    assert!(close.contains("unqueryable)"));
     assert!(!close.contains("xdotool key"));
     assert!(!close.contains("xdotool click"));
     assert!(!close.contains("xdotool windowclose"));
@@ -85,6 +86,11 @@ fn main_window_fit_session_has_one_multiscreen_manager_and_two_supervisors() {
 #[test]
 fn main_window_close_accepts_only_an_already_gone_retry_failure() {
     let script = include_str!("../../../../scripts/smoke-linux-main-window.sh");
+    let window_state = script
+        .split_once("x11_window_state() {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nclose_app()"))
+        .map(|(body, _)| format!("x11_window_state() {{{body}\n}}"))
+        .expect("X11 window-state helper");
     let close = script
         .split_once("close_app() {")
         .and_then(|(_, tail)| tail.split_once("\n}\n\nquit_app()"))
@@ -93,18 +99,27 @@ fn main_window_close_accepts_only_an_already_gone_retry_failure() {
     let root = unique_temp_dir("okp-close-dispatch-race");
     let probe = format!(
         r#"set -euo pipefail
+{window_state}
 {close}
 OUT_DIR={out}
 app_pid=123
 X11_CLOSE_REQUEST=send_close
-send_close() {{ return 1; }}
-xdotool() {{
-  [[ "$1" == "getwindowgeometry" ]] || return 2
-  return 1
+dispatches=0
+send_close() {{
+  dispatches=$((dispatches + 1))
+  (( dispatches == 1 ))
+}}
+xwininfo() {{
+  if [[ "$1" == "-root" ]]; then
+    return 0
+  fi
+  (( dispatches < 2 ))
 }}
 finish_app_shutdown() {{ printf 'finish=%s\n' "$1"; }}
 close_app 4194310
+printf 'dispatches=%s\n' "$dispatches"
 "#,
+        window_state = window_state,
         out = root.path().display()
     );
     let output = Command::new("bash")
@@ -114,18 +129,19 @@ close_app 4194310
     assert_success(&output);
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "finish=last_window_close\n"
+        "finish=last_window_close\ndispatches=2\n"
     );
 
     let rejection_probe = format!(
         r#"set -euo pipefail
+{window_state}
 {close}
 OUT_DIR={out}
 app_pid=123
 X11_CLOSE_REQUEST=send_close
 send_close() {{ return 1; }}
-xdotool() {{
-  [[ "$1" == "getwindowgeometry" ]] || return 2
+xwininfo() {{
+  [[ "$1" == "-id" ]] || return 2
   return 0
 }}
 finish_app_shutdown() {{ return 0; }}
@@ -134,6 +150,7 @@ if close_app 4194310; then
 fi
 printf 'live-window-failure=rejected\n'
 "#,
+        window_state = window_state,
         out = root.path().display()
     );
     let rejection = Command::new("bash")
@@ -144,6 +161,34 @@ printf 'live-window-failure=rejected\n'
     assert_eq!(
         String::from_utf8_lossy(&rejection.stdout),
         "live-window-failure=rejected\n"
+    );
+
+    let display_failure_probe = format!(
+        r#"set -euo pipefail
+{window_state}
+{close}
+OUT_DIR={out}
+app_pid=123
+X11_CLOSE_REQUEST=send_close
+send_close() {{ return 1; }}
+xwininfo() {{ return 1; }}
+finish_app_shutdown() {{ return 0; }}
+if close_app 4194310; then
+  exit 1
+fi
+printf 'display-failure=rejected\n'
+"#,
+        window_state = window_state,
+        out = root.path().display()
+    );
+    let display_failure = Command::new("bash")
+        .args(["-c", &display_failure_probe])
+        .output()
+        .expect("display failure probe should run");
+    assert_success(&display_failure);
+    assert_eq!(
+        String::from_utf8_lossy(&display_failure.stdout),
+        "display-failure=rejected\n"
     );
 }
 
