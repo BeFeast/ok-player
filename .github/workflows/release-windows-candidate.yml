@@ -46,7 +46,7 @@ jobs:
           $actual = (git rev-parse HEAD).Trim()
           if ($actual -ne $env:SOURCE_SHA) { throw "Checkout SHA $actual does not match claimed SHA $env:SOURCE_SHA." }
           if (git status --porcelain) { throw 'Candidate checkout is not clean.' }
-          if ('${{ github.event_name }}' -ne 'workflow_dispatch') {
+          if ('${{ github.event_name }}' -in @('push', 'schedule')) {
             git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
             if ($LASTEXITCODE -ne 0) { throw 'Could not refresh current main SHA.' }
             $currentMain = (git rev-parse refs/remotes/origin/main).Trim()
