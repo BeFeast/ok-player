@@ -10,10 +10,12 @@ Run the controller during its scheduled UTC `00:05` through `05:05` window:
 scripts/ok-player-night-gui-qa.sh
 ```
 
-The automatic order is `slava`, then `mimir`, then `baldr` when its graphical
-seat is available and its lease is free. The controller visits every eligible
-host in that order. `sindri` is never in the automatic list. A one-host
-operator-authorized run requires all three explicit choices:
+The automatic order comes from the whitespace-separated `OKP_QA_HOSTS`
+environment variable and defaults to `slava mimir baldr`. The controller
+visits every eligible host in that order when its graphical seat is available
+and its lease is free. Duplicate or malformed roles are rejected. `sindri` is
+never accepted in the automatic list. A one-host operator-authorized run
+requires all three explicit choices:
 
 ```bash
 OKP_QA_ALLOW_SINDRI=1 OKP_QA_OPERATOR_GO=1 \
@@ -75,19 +77,36 @@ validates those fields before it permits the first GUI action.
 
 The actions are:
 
-- Wave A on every eligible host: candidate install, cold launch,
-  single-monitor fit, play/pause/seek, ten non-OSC surface drags with process
-  survival and observed window movement, menus/settings/chapters, secondary
-  launch, and clean close.
+- Wave A on every eligible host: candidate install, the headless window
+  regression harness, cold launch, single-monitor fit, play/pause/seek, ten
+  non-OSC surface drags with process survival and observed window movement,
+  menus/settings/chapters, secondary launch, and clean close.
 - Wave B only after a passing dual-head probe: open from each head, prove the
   fitted window does not span heads, and drag near a workarea edge.
 - Wave C only on the weak-host role (`slava`): 4K stress, rapid open/close, and
   a seek/screenshot storm.
 
-The live action hook may compose versioned helpers such as
-`run-linux-window-fit-series.sh` and `smoke-linux-window-drag.sh` for supporting
-diagnostics, but their Xvfb/X11 results cannot replace the live GNOME/Wayland
-fit, pointer, compositor, focus, or dual-head rows.
+For the `headless_window_regressions` action, the night suite's `run-action`
+hook invokes `run-linux-window-regression-smokes.sh` and retains its output
+inside the suite artifact directory. That headless entry point takes the
+candidate binary and an output directory, runs the non-OSC drag regression
+once, runs the complete single-monitor fit smoke three consecutive times, and
+writes combined metadata, a result matrix, and
+SHA-256 checksums:
+
+```bash
+OKP_WINDOW_REGRESSION_SOURCE_SHA=<candidate-source-sha> \
+  scripts/run-linux-window-regression-smokes.sh \
+  <candidate-binary> <artifact-directory>/window-regressions
+```
+
+It requires no operator seat and is suitable for a CI or unattended night hook
+with Xvfb, Xfwm, GTK, libmpv, and the existing smoke dependencies installed.
+The hook must publish the complete output directory as durable evidence. Its
+Xvfb/X11 results prove scripted drag handoff survival, fatal-diagnostic absence,
+and logged monitor-workarea containment. They cannot replace the live
+GNOME/Wayland pointer, compositor, focus, portal, or dual-head rows; live
+dual-head acceptance remains operator work.
 
 ## Artifacts and timer ownership
 

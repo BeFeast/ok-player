@@ -8,11 +8,12 @@ HOST_SCRIPT="$ROOT/scripts/ok-player-night-gui-host.sh"
 
 usage() {
   cat >&2 <<'EOF'
-usage: ok-player-night-gui-qa.sh [--host slava|mimir|baldr|sindri] [--force-window]
+usage: ok-player-night-gui-qa.sh [--host <role>] [--force-window]
 
-Default automatic order is slava, mimir, then baldr. Sindri is never part of
-the automatic list. An explicit --host sindri run also requires
-OKP_QA_ALLOW_SINDRI=1 and OKP_QA_OPERATOR_GO=1.
+Set the whitespace-separated automatic order with OKP_QA_HOSTS (default:
+slava mimir baldr). Sindri is never accepted in that automatic list. An
+explicit --host sindri run also requires OKP_QA_ALLOW_SINDRI=1 and
+OKP_QA_OPERATOR_GO=1.
 EOF
 }
 
@@ -44,10 +45,8 @@ while (( $# > 0 )); do
   esac
 done
 
-case "$explicit_host" in
-  ''|slava|mimir|baldr|sindri) ;;
-  *) fail "unsupported host role: $explicit_host" ;;
-esac
+[[ -z "$explicit_host" || "$explicit_host" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$ ]] ||
+  fail "invalid host role: $explicit_host"
 
 if [[ "$explicit_host" == "sindri" ]] &&
   [[ "${OKP_QA_ALLOW_SINDRI:-0}" != "1" || "${OKP_QA_OPERATOR_GO:-0}" != "1" ]]; then
@@ -75,7 +74,16 @@ host_timeout_seconds=$((lease_ttl * 60 - 30))
 if [[ -n "$explicit_host" ]]; then
   hosts=("$explicit_host")
 else
-  hosts=(slava mimir baldr)
+  read -r -a hosts <<<"${OKP_QA_HOSTS:-slava mimir baldr}"
+  (( ${#hosts[@]} > 0 )) || fail "OKP_QA_HOSTS must contain at least one host role"
+  declare -A seen_hosts=()
+  for host in "${hosts[@]}"; do
+    [[ "$host" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$ ]] ||
+      fail "OKP_QA_HOSTS contains an invalid host role: $host"
+    [[ "$host" != sindri ]] || fail "sindri cannot appear in OKP_QA_HOSTS"
+    [[ -z "${seen_hosts[$host]:-}" ]] || fail "OKP_QA_HOSTS contains a duplicate host role: $host"
+    seen_hosts[$host]=1
+  done
 fi
 
 if [[ -n "${OKP_QA_SSH_COMMAND:-}" ]]; then
