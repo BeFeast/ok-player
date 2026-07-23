@@ -489,12 +489,45 @@ close_app() {
   local window_id="$1"
   # `windowclose` destroys the X11 window directly and can bypass GTK's
   # close-request callback. Ask the window manager for the normal last-window
-  # close path, retrying only while the same player XID remains present.
-  for _ in 1 2; do
-    xdotool windowactivate --sync "$window_id" || true
-    xdotool key --clearmodifiers alt+F4 || true
-    sleep 0.2
-    if ! xdotool getwindowgeometry "$window_id" >/dev/null 2>&1; then
+  # close path. A secondary-launch present can update _NET_ACTIVE_WINDOW before
+  # X input focus follows it, so prove both states before sending Alt+F4.
+  local active_window focused_window close_requested
+  for attempt in 1 2 3; do
+    if ! kill -0 "$app_pid" 2>/dev/null \
+      || ! xdotool getwindowgeometry "$window_id" >/dev/null 2>&1; then
+      break
+    fi
+    if ! xdotool windowactivate --sync "$window_id" \
+      || ! xdotool windowfocus --sync "$window_id"; then
+      printf 'close-input attempt=%s xid=%s focus-request=false\n' \
+        "$attempt" "$window_id" >>"$OUT_DIR/fit-lifecycle.log"
+      sleep 0.1
+      continue
+    fi
+    active_window="$(xdotool getactivewindow 2>/dev/null || true)"
+    focused_window="$(xdotool getwindowfocus 2>/dev/null || true)"
+    printf 'close-input attempt=%s xid=%s active=%s focused=%s\n' \
+      "$attempt" "$window_id" "${active_window:-none}" \
+      "${focused_window:-none}" >>"$OUT_DIR/fit-lifecycle.log"
+    if [[ "$active_window" != "$window_id" || "$focused_window" != "$window_id" ]]; then
+      sleep 0.1
+      continue
+    fi
+    xdotool key --clearmodifiers alt+F4
+    close_requested=false
+    for _ in $(seq 1 10); do
+      if rg -Fx -q 'window close lifecycle: close-request' "$app_log"; then
+        close_requested=true
+        break
+      fi
+      if ! kill -0 "$app_pid" 2>/dev/null \
+        || ! xdotool getwindowgeometry "$window_id" >/dev/null 2>&1; then
+        break
+      fi
+      sleep 0.1
+    done
+    if [[ "$close_requested" == "true" ]] \
+      || ! xdotool getwindowgeometry "$window_id" >/dev/null 2>&1; then
       break
     fi
   done
