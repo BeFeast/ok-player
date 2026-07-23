@@ -257,6 +257,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     }
     overlay.add_overlay(&update_surface);
     overlay.add_overlay(status_toast.widget());
+    overlay.set_measure_overlay(status_toast.widget(), false);
     for resize_handle in resize_handles {
         overlay.add_overlay(&resize_handle);
     }
@@ -444,7 +445,12 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
             }
         });
     }
-    if env::var_os("OKP_OSD_PREVIEW_ON_STARTUP").is_some() {
+    if let Some(path) = env::var_os("OKP_SAVED_SCREENSHOT_TOAST_PREVIEW") {
+        let preview_toast = Rc::clone(&status_toast);
+        glib::timeout_add_local_once(Duration::from_millis(500), move || {
+            preview_toast.show_saved_screenshot(&PathBuf::from(path));
+        });
+    } else if env::var_os("OKP_OSD_PREVIEW_ON_STARTUP").is_some() {
         let preview_toast = Rc::clone(&status_toast);
         glib::timeout_add_local_once(Duration::from_millis(500), move || {
             preview_toast.show("Volume 72%");

@@ -20,6 +20,7 @@ zbus.workspace = true
 
 [dev-dependencies]
 okp-test-fixtures = { path = "../okp-test-fixtures" }
+tempfile.workspace = true
 
 [build-dependencies]
 cc.workspace = true
