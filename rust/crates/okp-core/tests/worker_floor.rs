@@ -378,6 +378,176 @@ fn merged_claims_close_open_issues_and_stop_exact_ghost_sessions() {
 }
 
 #[test]
+fn vanished_merged_claim_is_closed_before_the_issue_can_respawn() {
+    let root = unique_temp_dir("okp-worker-floor-vanished-merged-claim");
+    let harness = Harness::new(root.path());
+    fs::write(
+        &harness.fleet,
+        br#"{"projects":[{"name":"ok-player","live_workers":0,"paused":false,"outcome":{"health_state":"healthy"},"issue_claims":[]}]}
+"#,
+    )
+    .expect("fleet fixture");
+    fs::write(
+        &harness.issues,
+        br#"[
+  {"number":567,"createdAt":"2026-07-23T00:00:00Z","labels":[{"name":"ok-player-ready"}]},
+  {"number":568,"createdAt":"2026-07-23T00:01:00Z","labels":[{"name":"ok-player-ready"}]}
+]
+"#,
+    )
+    .expect("issue fixture");
+    fs::write(
+        &harness.timelines,
+        br#"{
+  "567": [
+    {
+      "event": "cross-referenced",
+      "created_at": "2026-07-23T00:00:01Z",
+      "source": {"issue": {
+        "number": 577,
+        "repository_url": "https://api.github.com/repos/BeFeast/ok-player",
+        "pull_request": {"merged_at": "2026-07-23T00:20:42Z"}
+      }}
+    },
+    {
+      "event": "cross-referenced",
+      "created_at": "2026-07-23T00:26:01Z",
+      "source": {"issue": {
+        "number": 582,
+        "repository_url": "https://api.github.com/repos/BeFeast/ok-player",
+        "pull_request": {"merged_at": "2026-07-23T01:00:52Z"}
+      }}
+    }
+  ],
+  "568": []
+}
+"#,
+    )
+    .expect("timeline fixture");
+    fs::write(
+        &harness.prs,
+        br#"{
+  "577":{"state":"MERGED","mergedAt":"2026-07-23T00:20:42Z","body":"Refs #567","closingIssuesReferences":[]},
+  "582":{"state":"MERGED","mergedAt":"2026-07-23T01:00:52Z","body":"Refs #567","closingIssuesReferences":[]}
+}
+"#,
+    )
+    .expect("PR fixture");
+    fs::write(
+        &harness.issue_states,
+        br#"{"567":{"state":"OPEN"}}
+"#,
+    )
+    .expect("issue state fixture");
+
+    let output = harness.run(
+        "568",
+        r#"{"state":"CLOSED","labels":[]}"#,
+        r#"{"state":"CLOSED","labels":[]}"#,
+        r#"{"state":"OPEN","labels":[{"name":"ok-player-ready"}]}"#,
+    );
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("closed issue #567 after PR #582 merged"));
+    assert!(stdout.contains("reconciled unclaimed issue #567 from merged PR #582"));
+    assert!(stdout.contains("spawned issue #568"));
+
+    let log = fs::read_to_string(&harness.log).expect("command log");
+    let close = log.find("issue close 567").expect("merged issue close");
+    let spawn = log.find("maestro spawn").expect("next issue spawn");
+    assert!(close < spawn, "{log}");
+    assert!(log.contains("pr view 582"), "{log}");
+    assert!(!log.contains("pr view 577"), "{log}");
+    assert!(log.contains("--issue 568"), "{log}");
+    assert!(!log.contains("--issue 567"), "{log}");
+}
+
+#[test]
+fn unclaimed_reconciliation_ignores_old_reopens_and_untrusted_cross_references() {
+    let root = unique_temp_dir("okp-worker-floor-untrusted-cross-reference");
+    let harness = Harness::new(root.path());
+    fs::write(
+        &harness.fleet,
+        br#"{"projects":[{"name":"ok-player","live_workers":0,"paused":false,"outcome":{"health_state":"healthy"},"issue_claims":[]}]}
+"#,
+    )
+    .expect("fleet fixture");
+    fs::write(
+        &harness.issues,
+        br#"[{"number":567,"createdAt":"2026-07-23T00:00:00Z","labels":[{"name":"ok-player-ready"}]}]
+"#,
+    )
+    .expect("issue fixture");
+    fs::write(
+        &harness.timelines,
+        br#"{
+  "567": [
+    {
+      "event": "cross-referenced",
+      "created_at": "2026-07-23T00:26:01Z",
+      "source": {"issue": {
+        "number": 582,
+        "repository_url": "https://api.github.com/repos/BeFeast/ok-player",
+        "pull_request": {"merged_at": "2026-07-23T01:00:52Z"}
+      }}
+    },
+    {"event": "reopened", "created_at": "2026-07-23T01:05:00Z"},
+    {
+      "event": "cross-referenced",
+      "created_at": "2026-07-23T01:06:00Z",
+      "source": {"issue": {
+        "number": 900,
+        "repository_url": "https://api.github.com/repos/Elsewhere/other-project",
+        "pull_request": {"merged_at": "2026-07-23T01:06:30Z"}
+      }}
+    },
+    {
+      "event": "cross-referenced",
+      "created_at": "2026-07-23T01:07:00Z",
+      "source": {"issue": {
+        "number": 583,
+        "repository_url": "https://api.github.com/repos/BeFeast/ok-player",
+        "pull_request": {"merged_at": "2026-07-23T01:08:00Z"}
+      }}
+    }
+  ]
+}
+"#,
+    )
+    .expect("timeline fixture");
+    fs::write(
+        &harness.prs,
+        br#"{"583":{"state":"MERGED","mergedAt":"2026-07-23T01:08:00Z","body":"Discussion only","closingIssuesReferences":[]}}
+"#,
+    )
+    .expect("PR fixture");
+
+    let output = harness.run(
+        "567",
+        r#"{"state":"CLOSED","labels":[]}"#,
+        r#"{"state":"CLOSED","labels":[]}"#,
+        r#"{"state":"OPEN","labels":[{"name":"ok-player-ready"}]}"#,
+    );
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("spawned issue #567"));
+    let log = fs::read_to_string(&harness.log).expect("command log");
+    assert!(log.contains("pr view 583"), "{log}");
+    assert!(!log.contains("pr view 582"), "{log}");
+    assert!(!log.contains("pr view 900"), "{log}");
+    assert!(!log.contains("issue close 567"), "{log}");
+}
+
+#[test]
 fn mismatched_pr_link_fails_before_issue_or_session_mutation() {
     let root = unique_temp_dir("okp-worker-floor-mismatched-pr-link");
     let harness = Harness::new(root.path());
@@ -521,6 +691,7 @@ struct Harness {
     issues: PathBuf,
     prs: PathBuf,
     issue_states: PathBuf,
+    timelines: PathBuf,
     log: PathBuf,
     fake_bin: PathBuf,
 }
@@ -536,12 +707,14 @@ impl Harness {
         let issues = root.join("issues.json");
         let prs = root.join("prs.json");
         let issue_states = root.join("issue-states.json");
+        let timelines = root.join("timelines.json");
         let log = root.join("commands.log");
         let fake_bin = root.join("bin");
         fs::create_dir_all(&fake_bin).expect("fake bin");
         fs::write(&config, b"project: fixture\n").expect("Maestro config fixture");
         fs::write(&prs, b"{}\n").expect("empty PR fixture");
         fs::write(&issue_states, b"{}\n").expect("empty issue state fixture");
+        fs::write(&timelines, b"{}\n").expect("empty timeline fixture");
         init_source_repository(&source);
         write_executable(&fake_bin.join("curl"), FAKE_CURL);
         write_executable(&fake_bin.join("gh"), FAKE_GH);
@@ -557,6 +730,7 @@ impl Harness {
             issues,
             prs,
             issue_states,
+            timelines,
             log,
             fake_bin,
         }
@@ -584,6 +758,7 @@ impl Harness {
             .env("FAKE_ISSUES_JSON", &self.issues)
             .env("FAKE_PRS_JSON", &self.prs)
             .env("FAKE_ISSUE_STATES_JSON", &self.issue_states)
+            .env("FAKE_TIMELINES_JSON", &self.timelines)
             .env("FAKE_SELECTED_ISSUE", selected_issue)
             .env("FAKE_HOLD_545", hold_545)
             .env("FAKE_HOLD_546", hold_546)
@@ -675,6 +850,11 @@ elif [[ "$args" == *" issue edit 545 "* || "$args" == *" issue edit 546 "* ]]; t
   exit 0
 elif [[ "$args" == *" issue list "* ]]; then
   cp -- "$FAKE_ISSUES_JSON" /dev/stdout
+elif [[ "$args" == *" api "* && "$args" == *"/timeline"* ]]; then
+  endpoint="${!#}"
+  number="${endpoint%/timeline}"
+  number="${number##*/}"
+  jq -ce --arg number "$number" '.[$number] // []' "$FAKE_TIMELINES_JSON"
 elif [[ "$args" == *" issue view ${FAKE_SELECTED_ISSUE} "* ]]; then
   printf '%s\n' "$FAKE_SELECTED_PAYLOAD"
 elif [[ "$args" == *" pr view "* ]]; then
