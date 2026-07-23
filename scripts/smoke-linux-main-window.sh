@@ -502,9 +502,20 @@ finish_app_shutdown() {
   app_log=""
 }
 
+x11_window_state() {
+  local window_id="$1"
+  if xwininfo -id "$window_id" >/dev/null 2>&1; then
+    printf 'present\n'
+  elif xwininfo -root >/dev/null 2>&1; then
+    printf 'gone\n'
+  else
+    printf 'unqueryable\n'
+  fi
+}
+
 close_app() {
   local window_id="$1"
-  local close_attempt close_error
+  local close_attempt close_error window_state
   # `windowclose` destroys the X11 window directly, while keyboard and pointer
   # routes depend on focus or hit testing. Ask Xfwm to close the exact toplevel;
   # it delivers WM_DELETE_WINDOW and GTK executes the normal close-request
@@ -518,19 +529,32 @@ close_app() {
       # _NET_CLOSE_WINDOW is asynchronous. A previous request can complete
       # between the loop's geometry probe and this helper resolving the XID.
       # Treat that race as success only when the exact target is already gone.
-      if ! xdotool getwindowgeometry "$window_id" >/dev/null 2>&1; then
-        printf 'close-dispatch attempt=%s target=%s result=already-gone\n' \
-          "$close_attempt" "$window_id" >>"$OUT_DIR/fit-lifecycle.log"
-        break
-      fi
+      window_state="$(x11_window_state "$window_id")"
+      case "$window_state" in
+        gone)
+          printf 'close-dispatch attempt=%s target=%s result=already-gone\n' \
+            "$close_attempt" "$window_id" >>"$OUT_DIR/fit-lifecycle.log"
+          break
+          ;;
+        unqueryable)
+          echo "Could not verify X11 window state after close request failure" >&2
+          cat "$close_error" >&2 || true
+          return 1
+          ;;
+      esac
       echo "Could not send the X11 close request for window $window_id" >&2
       cat "$close_error" >&2 || true
       return 1
     fi
     sleep 0.2
-    if ! xdotool getwindowgeometry "$window_id" >/dev/null 2>&1; then
-      break
-    fi
+    window_state="$(x11_window_state "$window_id")"
+    case "$window_state" in
+      gone) break ;;
+      unqueryable)
+        echo "Could not verify X11 window state after close request" >&2
+        return 1
+        ;;
+    esac
   done
   finish_app_shutdown "last_window_close"
 }

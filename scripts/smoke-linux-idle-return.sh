@@ -243,6 +243,7 @@ launch_empty() {
 stop_app() {
   local stopped_pid="$app_pid"
   local diagnostics="$OUT_DIR/stop-${stopped_pid}-x11-lifecycle.log"
+  local bus_state="unknown"
   kill "$app_pid" 2>/dev/null || true
   wait "$app_pid" 2>/dev/null || true
   app_pid=""
@@ -252,15 +253,23 @@ stop_app() {
   # next fixture launch under a loaded candidate builder.
   "$X11_APP_CLEAR_WAITER" "$stopped_pid" "$diagnostics"
   for _ in $(seq 1 120); do
-    if ! gdbus introspect --session \
-      --dest com.befeast.okplayer \
-      --object-path /com/befeast/okplayer >/dev/null 2>&1
-    then
-      return
-    fi
+    bus_state="$(gdbus call --session \
+      --dest org.freedesktop.DBus \
+      --object-path /org/freedesktop/DBus \
+      --method org.freedesktop.DBus.NameHasOwner \
+      com.befeast.okplayer 2>/dev/null || true)"
+    case "$bus_state" in
+      '(false,)') return ;;
+      '(true,)') ;;
+      *) bus_state="unreachable" ;;
+    esac
     sleep 0.1
   done
-  echo "OK Player application bus remained owned after shutdown" >&2
+  if [[ "$bus_state" == "unreachable" ]]; then
+    echo "Session bus was unreachable while waiting for OK Player shutdown" >&2
+  else
+    echo "OK Player application bus remained owned after shutdown" >&2
+  fi
   exit 1
 }
 

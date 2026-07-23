@@ -5036,6 +5036,11 @@ fn idle_return_smoke_waits_for_natural_eof_before_welcome_capture() {
     assert!(smoke.contains("X11_APP_CLEAR_WAITER=\"$ROOT/scripts/wait-for-x11-app-clear.sh\""));
     assert!(stop.contains("local stopped_pid=\"$app_pid\""));
     assert!(stop.contains("\"$X11_APP_CLEAR_WAITER\" \"$stopped_pid\" \"$diagnostics\""));
+    assert!(stop.contains("org.freedesktop.DBus.NameHasOwner"));
+    assert!(stop.contains("'(false,)'"));
+    assert!(stop.contains("'(true,)'"));
+    assert!(stop.contains("bus_state=\"unreachable\""));
+    assert!(!stop.contains("gdbus introspect"));
     assert!(
         stop.find("wait \"$app_pid\"")
             < stop.find("\"$X11_APP_CLEAR_WAITER\" \"$stopped_pid\" \"$diagnostics\"")
@@ -5111,6 +5116,14 @@ stop_app() {{ stop_count=$((stop_count + 1)); }}
 xdotool() {{ return 0; }}
 kill() {{ return 0; }}
 sleep() {{ return 0; }}
+rg() {{
+  [[ "$1" == "-q" && "$2" == "-F" ]] || return 2
+  local marker="$3" line
+  while IFS= read -r line; do
+    [[ "$line" == *"$marker"* ]] && return 0
+  done <"$4"
+  return 1
+}}
 assert_idle_capture() {{ return 0; }}
 close_log=close-app
 {close_flow}
