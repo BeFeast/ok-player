@@ -97,6 +97,7 @@ run_smoke \
   window-drag/results.txt video_surface_handoff_survival=pass \
   window-drag/results.txt compositor_cancel_survival=pass \
   window-drag/results.txt post_cancel_drag=pass \
+  window-drag/results.txt gtk_drag_lifecycle_completion=pass \
   window-drag/results.txt idle_canvas_handoff_survival=pass \
   window-drag/results.txt fatal_diagnostics=absent \
   window-drag/xvfb-evidence.txt status=pass \

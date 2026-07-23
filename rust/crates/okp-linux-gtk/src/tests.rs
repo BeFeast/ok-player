@@ -2930,24 +2930,32 @@ fn player_window_move_drags_the_whole_non_interactive_surface() {
         .nth(1)
         .and_then(|tail| tail.split("/// Smallest client").next())
         .expect("native drag handoff helper");
-    assert!(handoff.contains("let Some((surface_x, surface_y)) = gesture.bounding_box_center()"));
-    assert!(!handoff.contains("gesture.start_point()"));
-    assert!(!handoff.contains("compute_point("));
-    assert!(!handoff.contains("surface_transform()"));
+    assert!(handoff.contains("let Some((widget_x, widget_y)) = gesture.bounding_box_center()"));
+    assert!(handoff.contains("let Some(drag_widget) = gesture.widget()"));
+    assert!(handoff.contains("drag_widget.compute_point(window, &widget_point)"));
+    assert!(handoff.contains("window.surface_transform()"));
     let claim = handoff
         .find("gesture.set_state(gtk::EventSequenceState::Claimed)")
         .expect("gesture claim");
     let begin_move = handoff
         .find("toplevel.begin_move(")
         .expect("native move handoff");
+    let deferred_reset = handoff
+        .find("glib::idle_add_local_once")
+        .expect("deferred gesture reset");
+    let reset = handoff
+        .find("reset_gesture.reset()")
+        .expect("gesture reset");
     assert!(
         claim < begin_move,
         "claim the click sequence before handing the live drag to the compositor"
     );
     assert!(
-        !handoff.contains("gesture.reset()"),
-        "the compositor must be able to finish or cancel the active drag sequence"
+        begin_move < deferred_reset && deferred_reset < reset,
+        "reset only after the native handoff has returned to the GTK main loop"
     );
+    assert!(bridge.contains("drag.connect_drag_begin"));
+    assert!(bridge.contains("begin_moving.set(false)"));
     assert!(bridge.contains("interaction: player-window-move-end"));
     assert!(bridge.contains("interaction: player-window-move-cancel"));
 
@@ -5921,6 +5929,8 @@ fn fullscreen_toggle_wiring_decides_from_intent_not_the_lagging_platform_state()
     assert!(compact.contains("video_click::drag_exceeds_move_threshold(offset_x, offset_y, 6.0)"));
     assert!(compact.contains("begin_native_window_move_from_drag(gesture, &drag_window)"));
     assert!(!compact.contains("gesture.bounding_box_center()"));
+    assert!(compact.contains("drag.connect_drag_begin"));
+    assert!(compact.contains("drag.connect_cancel"));
 }
 
 #[test]

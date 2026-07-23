@@ -1660,6 +1660,13 @@ pub(crate) fn connect_player_window_move(
     let move_root = player_root.clone();
     let move_window = window.clone();
     let already_moving = Rc::new(Cell::new(false));
+    let begin_moving = Rc::clone(&already_moving);
+    drag.connect_drag_begin(move |_, _, _| {
+        // Some compositors consume the release while owning the native move.
+        // A new GTK sequence is therefore also a recovery boundary for stale
+        // shell state, independent of whether end/cancel was delivered.
+        begin_moving.set(false);
+    });
     let update_moving = Rc::clone(&already_moving);
     let update_suppression = Rc::clone(&suppress_video_click);
     drag.connect_drag_update(move |gesture, offset_x, offset_y| {
