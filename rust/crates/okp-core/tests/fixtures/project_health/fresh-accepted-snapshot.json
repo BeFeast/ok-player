@@ -42,7 +42,9 @@
       },
       "schedule_error": null,
       "latest_active_run": null,
-      "active_run_error": null
+      "active_run_error": null,
+      "completed_runs": [],
+      "run_history_error": null
     },
     "candidate": {
       "candidate_sha": "d5d531a58c830a01a7e25615e850593e9ff4493f",
@@ -64,6 +66,8 @@
       "schedule_error": null,
       "latest_active_run": null,
       "active_run_error": null,
+      "completed_runs": [],
+      "run_history_error": null,
       "consecutive_failed_runs": 0,
       "last_failed_gate": null
     },

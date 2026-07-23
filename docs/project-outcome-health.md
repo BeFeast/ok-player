@@ -100,9 +100,32 @@ the positive `OKP_PROJECT_HEALTH_MAX_CANDIDATE_RUN_AGE_SECONDS` override. A run
 for another SHA, malformed active-run evidence, or an exact-main run older than
 the bound does not suppress a failure. Active-run evidence also never hides a
 failed completed-run query, an explicit candidate gate-failure streak, an
-invalid feed, or over-SLA publication lag. Schedule freshness is not blocking
-while the accepted candidate already equals `main`, because no new delivery is
-pending.
+invalid feed, a completed green run that left the feed behind, or over-SLA
+publication lag. Schedule freshness is not blocking while the accepted
+candidate already equals `main`, because no new delivery is pending.
+
+Workflow conclusion is not delivery evidence. Delivery is complete only when
+the fetched `candidate.linux.json.commit_sha` equals the fetched `main` SHA.
+The collector retains the bounded 100-run Linux Candidate history. While the
+feed is behind, a scheduled/manual run counts as green non-delivery when it:
+
+- completed with `conclusion=success` after both the current feed timestamp and
+  the first unpublished-main commit;
+- completed within the last two hours; and
+- did not produce the current feed SHA.
+
+The first such run fails the row with
+`candidate-success-without-delivery`. This is the recovery-dispatch signal: a
+workflow summary such as `publish result: stale_generation` / `public feed:
+untouched` must not make recovery exit early. Two or more such green runs in
+the two-hour window also emit
+`candidate-repeated-success-without-delivery`. The external outcome watchdog
+maps that repeated reason to an urgent operator notification, another bounded
+dispatch, and an intake pause for the publish window. It does not page for
+`candidate-delivery-in-progress` alone while both the active-run and
+unpublished-main lag bounds remain satisfied; exceeding the lag bound remains
+independently blocking and page-worthy. The checker stays read-only: the host
+actuator owns notification, dispatch, and pause mutations.
 
 The collector reads up to 100 completed scheduled candidate runs and counts the
 failure streak from newest to oldest. At two or more consecutive failures it
@@ -194,8 +217,9 @@ healthcheck.
 `okp-core` fixtures cover bounded main-CI settling, overdue pending CI,
 immediate completed CI failures, old accepted/equal, ancestor within SLA,
 ancestor beyond SLA, inactive workflow state, stale completed schedules while
-`main` has advanced, bounded exact-main candidate runs, stale or mismatched
-active runs, fresh non-ancestor, unaccepted, malformed,
+`main` has advanced, bounded exact-main candidate runs, one and repeated green
+non-deliveries against an unchanged feed, stale or mismatched active runs,
+fresh non-ancestor, unaccepted, malformed,
 missing-package-identity, and unreachable Linux candidate outcomes. Windows
 fixtures separately pin source-current and within-SLA passes, over-SLA and
 consecutive-gate failures, the no-history bootstrap warning, manifest/feed
