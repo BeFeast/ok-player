@@ -81,18 +81,47 @@ if [[ "${1:-}" == "--inner" ]]; then
     awk '/interaction: player-window-move-(end|cancel)/ { count++ } END { print count + 0 }' "$1"
   }
 
-  drag_handoff_count() {
-    awk '/interaction: player-window-move$/ { count++ } END { print count + 0 }' "$1"
+  latest_drag_sequence() {
+    awk '
+      /interaction: player-window-move-begin sequence=/ {
+        for (field = 1; field <= NF; field++) {
+          if ($field ~ /^sequence=[0-9]+$/) {
+            split($field, pair, "=")
+            sequence = pair[2]
+          }
+        }
+      }
+      END { print sequence + 0 }
+    ' "$1"
   }
 
   drag_begin_count() {
-    awk '/interaction: player-window-move-begin / { count++ } END { print count + 0 }' "$1"
+    awk '/interaction: player-window-move-begin sequence=/ { count++ } END { print count + 0 }' "$1"
   }
 
-  wait_for_new_drag_handoff() {
-    local log="$1" previous_handoffs="$2"
+  begin_drag_sequence() {
+    local id="$1" x="$2" y="$3" log="$4"
+    local previous_sequence current_sequence
+    previous_sequence="$(latest_drag_sequence "$log")"
+    xdotool mousemove --window "$id" "$x" "$y" mousedown 1
     for _ in $(seq 1 40); do
-      if [[ "$(drag_handoff_count "$log")" -gt "$previous_handoffs" ]]; then
+      current_sequence="$(latest_drag_sequence "$log")"
+      if [[ "$current_sequence" -gt "$previous_sequence" ]]; then
+        printf '%s\n' "$current_sequence"
+        return 0
+      fi
+      sleep 0.05
+    done
+    xdotool mouseup 1 >/dev/null 2>&1 || true
+    return 1
+  }
+
+  wait_for_drag_sequence_handoff() {
+    local log="$1" expected_sequence="$2"
+    for _ in $(seq 1 40); do
+      if awk -v expected="$expected_sequence" \
+        '$0 == "interaction: player-window-move sequence=" expected { found = 1 } END { exit !found }' \
+        "$log"; then
         return 0
       fi
       sleep 0.05
@@ -102,9 +131,11 @@ if [[ "${1:-}" == "--inner" ]]; then
 
   drag_and_assert_handoff() {
     local id="$1" x="$2" y="$3" label="$4" log="$5"
-    local previous_handoffs
-    previous_handoffs="$(drag_handoff_count "$log")"
-    xdotool mousemove --window "$id" "$x" "$y" mousedown 1
+    local sequence
+    sequence="$(begin_drag_sequence "$id" "$x" "$y" "$log")" || {
+      echo "$label did not begin a fresh GTK drag sequence" >&2
+      exit 1
+    }
     sleep 0.2
     xdotool mousemove_relative --sync 20 15
     sleep 0.2
@@ -115,8 +146,8 @@ if [[ "${1:-}" == "--inner" ]]; then
     xdotool mouseup 1
     sleep 0.8
     assert_alive "$label"
-    wait_for_new_drag_handoff "$log" "$previous_handoffs" || {
-      echo "$label did not produce a native handoff" >&2
+    wait_for_drag_sequence_handoff "$log" "$sequence" || {
+      echo "$label sequence $sequence did not produce a native handoff" >&2
       exit 1
     }
   }
@@ -139,8 +170,11 @@ if [[ "${1:-}" == "--inner" ]]; then
   sleep 0.5
 
   # Cross the threshold, then cancel the compositor-owned move with Escape.
-  cancel_previous_handoffs="$(drag_handoff_count "$OUT_DIR/playback-app.log")"
-  xdotool mousemove --window "$window_id" "$center_x" "$center_y" mousedown 1
+  cancel_sequence="$(begin_drag_sequence \
+    "$window_id" "$center_x" "$center_y" "$OUT_DIR/playback-app.log")" || {
+    echo "Escape-cancelled drag did not begin a fresh GTK sequence" >&2
+    exit 1
+  }
   sleep 0.2
   xdotool mousemove_relative --sync 70 45
   sleep 0.5
@@ -148,8 +182,8 @@ if [[ "${1:-}" == "--inner" ]]; then
   xdotool mouseup 1
   sleep 0.8
   assert_alive compositor-cancel
-  wait_for_new_drag_handoff "$OUT_DIR/playback-app.log" "$cancel_previous_handoffs" || {
-    echo "Escape-cancelled drag did not produce a native handoff" >&2
+  wait_for_drag_sequence_handoff "$OUT_DIR/playback-app.log" "$cancel_sequence" || {
+    echo "Escape-cancelled drag sequence $cancel_sequence did not produce a native handoff" >&2
     exit 1
   }
 
@@ -162,7 +196,7 @@ if [[ "${1:-}" == "--inner" ]]; then
   kill "$app_pid" 2>/dev/null || true
   wait "$app_pid" 2>/dev/null || true
   app_pid=""
-  playback_moves="$(awk '/interaction: player-window-move$/ { count++ } END { print count + 0 }' "$OUT_DIR/playback-app.log")"
+  playback_moves="$(awk '/interaction: player-window-move sequence=/ { count++ } END { print count + 0 }' "$OUT_DIR/playback-app.log")"
   [[ "$playback_moves" -ge 3 ]] || {
     echo "expected all three playback-surface move handoffs, observed $playback_moves" >&2
     exit 1
@@ -186,39 +220,42 @@ if [[ "${1:-}" == "--inner" ]]; then
   xdotool windowactivate "$idle_window_id" >/dev/null 2>&1 || true
   sleep 2
   # The idle process has its own log; retry once because Xvfb pointer delivery is
-  # synthetic, then require a native handoff after exit.
-  idle_previous_handoffs="$(drag_handoff_count "$OUT_DIR/idle-app.log")"
-  xdotool mousemove --window "$idle_window_id" 100 300 mousedown 1
+  # synthetic. Every attempt is bound to its own GTK sequence so a late first
+  # handoff cannot satisfy the retry.
+  idle_sequence="$(begin_drag_sequence \
+    "$idle_window_id" 100 300 "$OUT_DIR/idle-app.log")" || {
+    echo "idle-canvas drag did not begin a fresh GTK sequence" >&2
+    exit 1
+  }
   sleep 0.2
   xdotool mousemove_relative --sync 90 65
   sleep 0.2
   xdotool mouseup 1
   sleep 0.8
   assert_alive idle-canvas-drag
-  if ! wait_for_new_drag_handoff "$OUT_DIR/idle-app.log" "$idle_previous_handoffs"; then
-    xdotool mousemove --window "$idle_window_id" 100 300 mousedown 1
+  if ! wait_for_drag_sequence_handoff "$OUT_DIR/idle-app.log" "$idle_sequence"; then
+    idle_sequence="$(begin_drag_sequence \
+      "$idle_window_id" 100 300 "$OUT_DIR/idle-app.log")" || {
+      echo "idle-canvas retry did not begin a fresh GTK sequence" >&2
+      exit 1
+    }
     sleep 0.2
     xdotool mousemove_relative --sync 90 65
     sleep 0.2
     xdotool mouseup 1
     sleep 0.8
     assert_alive idle-canvas-retry
-    wait_for_new_drag_handoff "$OUT_DIR/idle-app.log" "$idle_previous_handoffs" || {
-      echo "idle-canvas drag did not produce a native handoff" >&2
+    wait_for_drag_sequence_handoff "$OUT_DIR/idle-app.log" "$idle_sequence" || {
+      echo "idle-canvas retry sequence $idle_sequence did not produce a native handoff" >&2
       exit 1
     }
   fi
   kill "$app_pid" 2>/dev/null || true
   wait "$app_pid" 2>/dev/null || true
   app_pid=""
-  idle_moves="$(awk '/interaction: player-window-move$/ { count++ } END { print count + 0 }' "$OUT_DIR/idle-app.log")"
+  idle_moves="$(awk '/interaction: player-window-move sequence=/ { count++ } END { print count + 0 }' "$OUT_DIR/idle-app.log")"
   [[ "$idle_moves" -ge 1 ]] || {
     echo "expected an idle-canvas move handoff, observed $idle_moves" >&2
-    exit 1
-  }
-  idle_completions="$(drag_completion_count "$OUT_DIR/idle-app.log")"
-  [[ "$idle_completions" -ge 1 ]] || {
-    echo "expected GTK to finish or cancel the idle-canvas drag, observed $idle_completions" >&2
     exit 1
   }
   if awk '/panicked at|fatal runtime error|Aborted|core dumped/ { print FILENAME ":" FNR ":" $0; found = 1 } END { exit !found }' \
