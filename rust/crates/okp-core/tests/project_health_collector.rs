@@ -153,8 +153,8 @@ fn active_current_main_candidate_run_survives_live_collection() {
 }
 
 #[test]
-fn windows_candidate_automatic_failure_streak_survives_manual_run_saturation() {
-    let output = run_live("windows-candidate-failures");
+fn windows_candidate_automatic_failure_history_is_filtered_and_merged_newest_first() {
+    let (output, gh_log) = run_live_with_gh_log("windows-candidate-failures");
     assert_eq!(
         output.status.code(),
         Some(1),
@@ -178,6 +178,29 @@ fn windows_candidate_automatic_failure_streak_survives_manual_run_saturation() {
         candidate.summary.contains(
             "Windows candidate builder failing at gate Run core unit tests (3 consecutive)"
         )
+    );
+    let windows_queries = gh_log
+        .lines()
+        .filter(|line| line.contains("run list") && line.contains("--workflow Windows Candidate"))
+        .collect::<Vec<_>>();
+    assert_eq!(windows_queries.len(), 2, "{gh_log}");
+    assert!(
+        windows_queries
+            .iter()
+            .any(|line| line.contains("--event push")),
+        "{gh_log}"
+    );
+    assert!(
+        windows_queries
+            .iter()
+            .any(|line| line.contains("--event schedule")),
+        "{gh_log}"
+    );
+    assert!(
+        windows_queries
+            .iter()
+            .all(|line| line.contains("--limit 100") && line.contains("--event ")),
+        "{gh_log}"
     );
 }
 
@@ -494,9 +517,18 @@ fn run_live(failure: &str) -> Output {
     run_live_with_tmpdir(failure, None)
 }
 
+fn run_live_with_gh_log(failure: &str) -> (Output, String) {
+    run_live_fixture(failure, None)
+}
+
 fn run_live_with_tmpdir(failure: &str, tmpdir: Option<&Path>) -> Output {
+    run_live_fixture(failure, tmpdir).0
+}
+
+fn run_live_fixture(failure: &str, tmpdir: Option<&Path>) -> (Output, String) {
     let root = unique_temp_dir(&format!("okp-project-health-{failure}"));
     let fake_bin = root.path().join("bin");
+    let gh_log = root.path().join("gh.log");
     fs::create_dir_all(&fake_bin).expect("fake bin should be created");
     write_executable(&fake_bin.join("gh"), FAKE_GH);
     write_executable(&fake_bin.join("curl"), FAKE_CURL);
@@ -506,6 +538,7 @@ fn run_live_with_tmpdir(failure: &str, tmpdir: Option<&Path>) -> Output {
         .arg(checker_path())
         .env("OKP_PROJECT_HEALTH_BIN", evaluator_path())
         .env("OKP_STUB_FAIL", failure)
+        .env("OKP_STUB_GH_LOG", &gh_log)
         .env(
             "OKP_STUB_CANDIDATE_FEED",
             Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -525,7 +558,9 @@ fn run_live_with_tmpdir(failure: &str, tmpdir: Option<&Path>) -> Output {
     if let Some(tmpdir) = tmpdir {
         command.env("TMPDIR", tmpdir);
     }
-    command.output().expect("collector fixture should run")
+    let output = command.output().expect("collector fixture should run");
+    let gh_log = fs::read_to_string(gh_log).expect("gh fixture log should be readable");
+    (output, gh_log)
 }
 
 fn checker_path() -> PathBuf {
@@ -670,6 +705,9 @@ fi
 
 const FAKE_GH: &str = r#"#!/usr/bin/env bash
 set -euo pipefail
+if [[ -n "${OKP_STUB_GH_LOG:-}" ]]; then
+  printf '%s\n' "$*" >>"$OKP_STUB_GH_LOG"
+fi
 if [[ "${1:-}" == run && "${2:-}" == list ]]; then
   arguments=" $* "
   completed_only=false
@@ -712,13 +750,13 @@ if [[ "${1:-}" == run && "${2:-}" == list ]]; then
     if [[ "$OKP_STUB_FAIL" == windows-candidate-failures ]]; then
       if [[ "$event" == push ]]; then
         printf '%s\n' '[
-          {"databaseId":203,"headSha":"d5d531a58c830a01a7e25615e850593e9ff4493f","event":"push","status":"completed","conclusion":"failure","updatedAt":"2026-07-18T01:55:47Z","url":"https://example.invalid/run/203"},
-          {"databaseId":202,"event":"push","conclusion":"failure","updatedAt":"2026-07-18T01:54:47Z"},
-          {"databaseId":201,"event":"push","conclusion":"failure","updatedAt":"2026-07-18T01:53:47Z"}
+          {"databaseId":203,"headSha":"d5d531a58c830a01a7e25615e850593e9ff4493f","event":"push","status":"completed","conclusion":"failure","createdAt":"2026-07-18T01:55:47Z","updatedAt":"2026-07-18T01:56:47Z","url":"https://example.invalid/run/203"},
+          {"databaseId":200,"event":"push","conclusion":"success","createdAt":"2026-07-18T01:40:47Z","updatedAt":"2026-07-18T01:59:47Z"}
         ]'
       elif [[ "$event" == schedule ]]; then
         printf '%s\n' '[
-          {"databaseId":200,"headSha":"d5d531a58c830a01a7e25615e850593e9ff4493f","event":"schedule","status":"completed","conclusion":"success","updatedAt":"2026-07-18T01:52:47Z","url":"https://example.invalid/run/200"}
+          {"databaseId":202,"event":"schedule","conclusion":"failure","createdAt":"2026-07-18T01:50:47Z","updatedAt":"2026-07-18T01:57:47Z"},
+          {"databaseId":201,"event":"schedule","conclusion":"failure","createdAt":"2026-07-18T01:45:47Z","updatedAt":"2026-07-18T01:58:47Z"}
         ]'
       else
         printf '['
@@ -729,7 +767,11 @@ if [[ "${1:-}" == run && "${2:-}" == list ]]; then
         printf ']\n'
       fi
     else
-      printf '[{"databaseId":200,"headSha":"%s","event":"schedule","status":"completed","conclusion":"success","updatedAt":"2026-07-18T01:55:47Z","url":"https://example.invalid/run/windows-candidate"}]\n' "$main_sha"
+      if [[ "$event" == push ]]; then
+        printf '%s\n' '[]'
+      else
+        printf '[{"databaseId":200,"headSha":"%s","event":"schedule","status":"completed","conclusion":"success","createdAt":"2026-07-18T01:55:47Z","updatedAt":"2026-07-18T01:55:47Z","url":"https://example.invalid/run/windows-candidate"}]\n' "$main_sha"
+      fi
     fi
   else
     if [[ "$OKP_STUB_FAIL" == source-ci-empty ]]; then

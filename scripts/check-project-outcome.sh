@@ -252,12 +252,12 @@ windows_candidate_push_runs_ok=false
 windows_candidate_schedule_runs_ok=false
 if windows_candidate_push_runs="$(gh run list --repo "$repository" --branch main --event push \
     --status completed --workflow "Windows Candidate" --limit 100 \
-    --json databaseId,headSha,event,status,conclusion,updatedAt,url 2>/dev/null)"; then
+    --json databaseId,headSha,event,status,conclusion,createdAt,updatedAt,url 2>/dev/null)"; then
   windows_candidate_push_runs_ok=true
 fi
 if windows_candidate_schedule_runs="$(gh run list --repo "$repository" --branch main --event schedule \
     --status completed --workflow "Windows Candidate" --limit 100 \
-    --json databaseId,headSha,event,status,conclusion,updatedAt,url 2>/dev/null)"; then
+    --json databaseId,headSha,event,status,conclusion,createdAt,updatedAt,url 2>/dev/null)"; then
   windows_candidate_schedule_runs_ok=true
 fi
 if $windows_candidate_push_runs_ok && $windows_candidate_schedule_runs_ok; then
@@ -265,7 +265,12 @@ if $windows_candidate_push_runs_ok && $windows_candidate_schedule_runs_ok; then
       --argjson push "$windows_candidate_push_runs" \
       --argjson schedule "$windows_candidate_schedule_runs" '
         if ($push | type) != "array" or ($schedule | type) != "array" then error("not arrays")
-        else [$push[], $schedule[]] | sort_by(.updatedAt // "") | reverse | .[:100]
+        else
+          [$push[], $schedule[]]
+          | [.[] | select((.event // "") == "push" or (.event // "") == "schedule")]
+          | sort_by((.createdAt // .updatedAt // ""), (.databaseId // 0))
+          | reverse
+          | .[:100]
         end
       ' 2>/dev/null)" \
       || ! windows_candidate_automatic_run="$(jq -c '.[0] // null' \
@@ -294,7 +299,7 @@ if $windows_candidate_push_runs_ok && $windows_candidate_schedule_runs_ok; then
     fi
   fi
 else
-  windows_candidate_automatic_error="GitHub Windows Candidate completed automatic run query failed"
+  windows_candidate_automatic_error="GitHub Windows Candidate completed push or schedule run query failed"
 fi
 
 windows_ok=false
