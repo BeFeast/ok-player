@@ -285,13 +285,14 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         video_host.widget(),
         &window,
         Rc::clone(&state),
-        suppress_video_click,
+        Rc::clone(&suppress_video_click),
     );
     connect_compact_video_interactions(
         video_host.widget(),
         &window,
         Rc::clone(&state),
         Rc::clone(&status_toast),
+        suppress_video_click,
     );
     connect_player_context_menu(
         &overlay,
@@ -1632,17 +1633,18 @@ pub(crate) fn connect_player_window_drag(
 /// resetting it, synchronously or from an idle callback, cancels the sequence
 /// while Mutter owns the interactive move. End/cancel edges clear normal state,
 /// and each fresh drag begin recovers if a compositor consumed those edges.
+///
+/// Wayland needs one concession on top of that contract: GDK ignores the
+/// coordinates there and consumes the seat's current implicit-grab serial inside
+/// `begin_move`, so GTK must not claim the sequence around the handoff either —
+/// doing so invalidates the compositor-owned grab and unmaps the player
+/// mid-drag. X11 keeps the GtkWindowHandle-style claim; the shared click
+/// suppressor prevents release leakage on either backend.
 pub(crate) fn begin_native_window_move_from_drag(
     gesture: &gtk::GestureDrag,
     window: &gtk::ApplicationWindow,
 ) -> bool {
     let Some(device) = gesture.current_event_device() else {
-        return false;
-    };
-    let Some((widget_x, widget_y)) = gesture.start_point() else {
-        return false;
-    };
-    let Some(drag_widget) = gesture.widget() else {
         return false;
     };
     let button = gesture.current_button() as i32;
@@ -1654,6 +1656,24 @@ pub(crate) fn begin_native_window_move_from_drag(
         return false;
     };
 
+    let display = gtk::prelude::WidgetExt::display(window);
+    let wayland = is_wayland_display(display.type_().name());
+    if wayland {
+        // GDK's Wayland implementation ignores the coordinates and uses the
+        // seat's last implicit-grab serial to issue xdg_toplevel.move. Changing
+        // the GTK sequence state around this call can invalidate or terminate
+        // that compositor-owned grab, matching the live player unmap during a
+        // non-OSC drag.
+        toplevel.begin_move(&device, button, 0.0, 0.0, timestamp);
+        return true;
+    }
+
+    let Some((widget_x, widget_y)) = gesture.start_point() else {
+        return false;
+    };
+    let Some(drag_widget) = gesture.widget() else {
+        return false;
+    };
     let widget_point = gtk::graphene::Point::new(widget_x as f32, widget_y as f32);
     let Some(window_point) = drag_widget.compute_point(window, &widget_point) else {
         return false;

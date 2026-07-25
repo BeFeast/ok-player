@@ -3025,20 +3025,37 @@ fn player_window_move_drags_the_whole_non_interactive_surface() {
         .nth(1)
         .and_then(|tail| tail.split("/// Smallest client").next())
         .expect("native drag handoff helper");
-    assert!(handoff.contains("let Some((widget_x, widget_y)) = gesture.start_point()"));
-    assert!(handoff.contains("let Some(drag_widget) = gesture.widget()"));
-    assert!(handoff.contains("drag_widget.compute_point(window, &widget_point)"));
-    assert!(handoff.contains("window.surface_transform()"));
-    let claim = handoff
+    assert!(handoff.contains("let wayland = is_wayland_display(display.type_().name())"));
+    let wayland_handoff = handoff
+        .split("if wayland {")
+        .nth(1)
+        .and_then(|tail| tail.split("return true;").next())
+        .expect("Wayland native move branch");
+    assert!(wayland_handoff.contains("toplevel.begin_move(&device, button, 0.0, 0.0, timestamp)"));
+    assert!(!wayland_handoff.contains("gesture.set_state("));
+    assert!(!wayland_handoff.contains("gesture.reset()"));
+    assert!(!wayland_handoff.contains("glib::idle_add_local_once"));
+    let x11_handoff = handoff
+        .split("return true;")
+        .nth(1)
+        .expect("X11 native move branch");
+    assert!(x11_handoff.contains("let Some((widget_x, widget_y)) = gesture.start_point()"));
+    assert!(x11_handoff.contains("let Some(drag_widget) = gesture.widget()"));
+    assert!(x11_handoff.contains("drag_widget.compute_point(window, &widget_point)"));
+    assert!(x11_handoff.contains("window.surface_transform()"));
+    let claim = x11_handoff
         .find("gesture.set_state(gtk::EventSequenceState::Claimed)")
         .expect("gesture claim");
-    let begin_move = handoff
+    let begin_move = x11_handoff
         .find("toplevel.begin_move(")
         .expect("native move handoff");
     assert!(
         claim < begin_move,
         "claim the click sequence before handing the live drag to the compositor"
     );
+    // The press-coordinate contract survives the backend split: neither branch
+    // may fall back to the threshold-crossing position, and neither may reset the
+    // controller — that cancels the sequence while the compositor owns the move.
     assert!(!handoff.contains("bounding_box_center()"));
     assert!(!handoff.contains("gesture.reset()"));
     assert!(!handoff.contains("glib::idle_add_local_once"));
@@ -6025,6 +6042,41 @@ fn fullscreen_toggle_wiring_decides_from_intent_not_the_lagging_platform_state()
     assert!(!compact.contains("gesture.bounding_box_center()"));
     assert!(compact.contains("drag.connect_drag_begin"));
     assert!(compact.contains("drag.connect_cancel"));
+
+    // Compact mode owns its own drag-to-move, and the normal path returns early
+    // while compact is active, so it must arm the shared click suppressor
+    // itself. On Wayland nothing else stops the release: the handoff
+    // deliberately does not claim the gesture, so an unsuppressed release
+    // reaches the video click handler and toggles play/pause after a move.
+    let compact_drag = compact
+        .split("drag.connect_drag_update(")
+        .nth(1)
+        .and_then(|tail| tail.split("drag.connect_drag_end").next())
+        .expect("compact drag update handler");
+    let arm = compact_drag
+        .find("update_suppression.set(true)")
+        .expect("compact drag arms the shared click suppressor");
+    let handoff = compact_drag
+        .find("begin_native_window_move_from_drag(")
+        .expect("compact native move handoff");
+    assert!(
+        arm < handoff,
+        "arm the suppressor before the handoff so a compositor-owned move cannot race the release"
+    );
+    assert!(
+        compact_drag.contains("update_suppression.set(false)"),
+        "a refused handoff must release the suppressor, or the next real click is swallowed"
+    );
+    let window_src = include_str!("window.rs");
+    let compact_wiring = window_src
+        .split("connect_compact_video_interactions(")
+        .nth(1)
+        .and_then(|tail| tail.split(");").next())
+        .expect("compact interaction wiring");
+    assert!(
+        compact_wiring.contains("suppress_video_click"),
+        "compact mode must receive the same suppressor the normal click path clears"
+    );
 }
 
 #[test]
