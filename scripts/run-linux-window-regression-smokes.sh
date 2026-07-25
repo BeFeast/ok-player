@@ -8,15 +8,8 @@ OUT_DIR="${2:?usage: run-linux-window-regression-smokes.sh <binary> <output-dire
 DRAG_SMOKE="${OKP_WINDOW_DRAG_SMOKE:-$ROOT/scripts/smoke-linux-window-drag.sh}"
 FIT_SERIES="${OKP_WINDOW_FIT_SERIES:-$ROOT/scripts/run-linux-window-fit-series.sh}"
 SOURCE_SHA="${OKP_WINDOW_REGRESSION_SOURCE_SHA:-}"
-
-if [[ -z "$SOURCE_SHA" ]]; then
-  if ! SOURCE_SHA="$(git -C "$ROOT" rev-parse --verify "HEAD^{commit}" 2>/dev/null)"; then
-    echo "Set OKP_WINDOW_REGRESSION_SOURCE_SHA when Git metadata is unavailable" >&2
-    exit 2
-  fi
-fi
 [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || {
-  echo "OKP_WINDOW_REGRESSION_SOURCE_SHA must be a lowercase 40-character commit SHA" >&2
+  echo "OKP_WINDOW_REGRESSION_SOURCE_SHA must identify the tested candidate with a lowercase 40-character commit SHA" >&2
   exit 2
 }
 
@@ -105,7 +98,15 @@ run_smoke \
   window-drag/results.txt idle_canvas_handoff_survival=pass \
   window-drag/results.txt idle_canvas_drag_handoff=observed \
   window-drag/results.txt fatal_diagnostics=absent \
+  window-drag/xvfb-evidence.txt xvfb_ready=true \
+  window-drag/xvfb-evidence.txt xvfb_alive_before_teardown=true \
+  window-drag/xvfb-evidence.txt xvfb_teardown=clean \
+  window-drag/xvfb-evidence.txt command_status=0 \
   window-drag/xvfb-evidence.txt status=pass \
+  window-drag/dbus-evidence.txt session_bus_ready=true \
+  window-drag/dbus-evidence.txt session_bus_teardown=clean \
+  window-drag/dbus-evidence.txt session_process_teardown=clean \
+  window-drag/dbus-evidence.txt command_status=0 \
   window-drag/dbus-evidence.txt status=pass \
   -- \
   "$DRAG_SMOKE" "$BINARY" "$OUT_DIR/window-drag"
@@ -117,13 +118,37 @@ run_smoke \
   window-fit/series-evidence.txt completed_consecutive_runs=3 \
   window-fit/series-evidence.txt status=pass \
   window-fit/run-1/fit-evidence.txt logged_monitor_workarea_containment=pass \
+  window-fit/run-1/fit-session-evidence.txt session_bus_ready=true \
+  window-fit/run-1/fit-session-evidence.txt session_bus_teardown=clean \
+  window-fit/run-1/fit-session-evidence.txt session_process_teardown=clean \
+  window-fit/run-1/fit-session-evidence.txt command_status=0 \
   window-fit/run-1/fit-session-evidence.txt status=pass \
+  window-fit/run-1/fit-xvfb-evidence.txt xvfb_ready=true \
+  window-fit/run-1/fit-xvfb-evidence.txt xvfb_alive_before_teardown=true \
+  window-fit/run-1/fit-xvfb-evidence.txt xvfb_teardown=clean \
+  window-fit/run-1/fit-xvfb-evidence.txt command_status=0 \
   window-fit/run-1/fit-xvfb-evidence.txt status=pass \
   window-fit/run-2/fit-evidence.txt logged_monitor_workarea_containment=pass \
+  window-fit/run-2/fit-session-evidence.txt session_bus_ready=true \
+  window-fit/run-2/fit-session-evidence.txt session_bus_teardown=clean \
+  window-fit/run-2/fit-session-evidence.txt session_process_teardown=clean \
+  window-fit/run-2/fit-session-evidence.txt command_status=0 \
   window-fit/run-2/fit-session-evidence.txt status=pass \
+  window-fit/run-2/fit-xvfb-evidence.txt xvfb_ready=true \
+  window-fit/run-2/fit-xvfb-evidence.txt xvfb_alive_before_teardown=true \
+  window-fit/run-2/fit-xvfb-evidence.txt xvfb_teardown=clean \
+  window-fit/run-2/fit-xvfb-evidence.txt command_status=0 \
   window-fit/run-2/fit-xvfb-evidence.txt status=pass \
   window-fit/run-3/fit-evidence.txt logged_monitor_workarea_containment=pass \
+  window-fit/run-3/fit-session-evidence.txt session_bus_ready=true \
+  window-fit/run-3/fit-session-evidence.txt session_bus_teardown=clean \
+  window-fit/run-3/fit-session-evidence.txt session_process_teardown=clean \
+  window-fit/run-3/fit-session-evidence.txt command_status=0 \
   window-fit/run-3/fit-session-evidence.txt status=pass \
+  window-fit/run-3/fit-xvfb-evidence.txt xvfb_ready=true \
+  window-fit/run-3/fit-xvfb-evidence.txt xvfb_alive_before_teardown=true \
+  window-fit/run-3/fit-xvfb-evidence.txt xvfb_teardown=clean \
+  window-fit/run-3/fit-xvfb-evidence.txt command_status=0 \
   window-fit/run-3/fit-xvfb-evidence.txt status=pass \
   -- \
   env OKP_WINDOW_FIT_SOURCE_SHA="$SOURCE_SHA" \

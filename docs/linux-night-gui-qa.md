@@ -113,19 +113,24 @@ OKP_WINDOW_REGRESSION_SOURCE_SHA=<candidate-source-sha> \
 
 The helper always attempts both regressions, writes `results.tsv` and
 `summary.env`, and binds the key drag, fit, Xvfb, and D-Bus evidence files in
-`SHA256SUMS`. The output directory must not already exist. The helper reads the
-source revision from Git when available; an exported tree must provide an exact
-lowercase 40-character commit through `OKP_WINDOW_REGRESSION_SOURCE_SHA`. It
-also rejects fit evidence that names a different revision, incomplete drag
+`SHA256SUMS`. The output directory must not already exist. Every invocation must
+provide an exact lowercase 40-character commit through
+`OKP_WINDOW_REGRESSION_SOURCE_SHA`; night hooks set it from accepted candidate
+metadata so it identifies the tested binary rather than the hook checkout. The
+helper rejects fit evidence that names a different revision, incomplete drag
 assertions, an incomplete three-run fit series, and missing or unsuccessful
-Xvfb/D-Bus evidence. The headless action requires no operator seat and is
-suitable for CI or an unattended night host with the existing smoke
-dependencies installed. Its Xvfb/X11 results cannot replace the live
-GNOME/Wayland pointer, compositor, focus, portal, or dual-head rows; the live
+Xvfb/D-Bus evidence.
+
+The headless action requires no operator seat and is suitable for CI or an
+unattended night host with Xvfb, Xfwm, GTK, libmpv, and the existing smoke
+dependencies installed. Its Xvfb/X11 results prove scripted drag-handoff
+survival, fatal-diagnostic absence, isolated session teardown, and logged
+monitor-workarea containment. They cannot replace the live GNOME/Wayland
+pointer, compositor, focus, portal, or dual-head rows; the live
 `single_monitor_fit` and `non_osc_drag_10` actions still require actual desktop
-observations. CI runs the aggregate helper's dispatch/failure/evidence policy
-test, while the Rust suite also pins the required drag and fit assertions in
-the underlying scripts.
+observations, and live dual-head acceptance remains operator work. CI runs the
+aggregate helper's dispatch/failure/evidence policy test, while the Rust suite
+also pins the required drag and fit assertions in the underlying scripts.
 
 ## Artifacts and timer ownership
 
