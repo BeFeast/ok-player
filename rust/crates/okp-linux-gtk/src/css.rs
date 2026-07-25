@@ -1647,6 +1647,34 @@ const OKP_STYLESHEET: &str = "
             background: #050608;
         }
 
+        button.okp-status-toast-path {
+            min-width: 0;
+            min-height: 0;
+            padding: 1px 2px;
+            border: none;
+            border-radius: 4px;
+            background: transparent;
+            box-shadow: none;
+            color: @okp_accent_bright;
+            text-decoration-line: underline;
+            text-decoration-color: alpha(@okp_accent_bright, 0.72);
+        }
+
+        button.okp-status-toast-path:hover {
+            background: rgba(255, 255, 255, 0.08);
+            color: #ffffff;
+        }
+
+        button.okp-status-toast-path:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.62);
+        }
+
+        button.okp-status-toast-path:disabled {
+            color: rgba(255, 255, 255, 0.58);
+            text-decoration-color: rgba(255, 255, 255, 0.34);
+        }
+
         .okp-update-action-surface {
             padding: 12px 14px;
             border-radius: 8px;

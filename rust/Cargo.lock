@@ -1268,6 +1268,7 @@ dependencies = [
  "relm4",
  "serde",
  "serde_json",
+ "tempfile",
  "ureq",
  "velopack",
  "zbus",
