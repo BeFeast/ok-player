@@ -285,13 +285,14 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         video_host.widget(),
         &window,
         Rc::clone(&state),
-        suppress_video_click,
+        Rc::clone(&suppress_video_click),
     );
     connect_compact_video_interactions(
         video_host.widget(),
         &window,
         Rc::clone(&state),
         Rc::clone(&status_toast),
+        suppress_video_click,
     );
     connect_player_context_menu(
         &overlay,

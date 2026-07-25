@@ -6013,6 +6013,41 @@ fn fullscreen_toggle_wiring_decides_from_intent_not_the_lagging_platform_state()
     assert!(!compact.contains("gesture.bounding_box_center()"));
     assert!(compact.contains("drag.connect_drag_begin"));
     assert!(compact.contains("drag.connect_cancel"));
+
+    // Compact mode owns its own drag-to-move, and the normal path returns early
+    // while compact is active, so it must arm the shared click suppressor
+    // itself. On Wayland nothing else stops the release: the handoff
+    // deliberately does not claim the gesture, so an unsuppressed release
+    // reaches the video click handler and toggles play/pause after a move.
+    let compact_drag = compact
+        .split("drag.connect_drag_update(")
+        .nth(1)
+        .and_then(|tail| tail.split("drag.connect_drag_end").next())
+        .expect("compact drag update handler");
+    let arm = compact_drag
+        .find("update_suppression.set(true)")
+        .expect("compact drag arms the shared click suppressor");
+    let handoff = compact_drag
+        .find("begin_native_window_move_from_drag(")
+        .expect("compact native move handoff");
+    assert!(
+        arm < handoff,
+        "arm the suppressor before the handoff so a compositor-owned move cannot race the release"
+    );
+    assert!(
+        compact_drag.contains("update_suppression.set(false)"),
+        "a refused handoff must release the suppressor, or the next real click is swallowed"
+    );
+    let window_src = include_str!("window.rs");
+    let compact_wiring = window_src
+        .split("connect_compact_video_interactions(")
+        .nth(1)
+        .and_then(|tail| tail.split(");").next())
+        .expect("compact interaction wiring");
+    assert!(
+        compact_wiring.contains("suppress_video_click"),
+        "compact mode must receive the same suppressor the normal click path clears"
+    );
 }
 
 #[test]
