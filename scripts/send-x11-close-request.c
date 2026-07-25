@@ -30,12 +30,24 @@ static int parse_window(const char *value, Window *window) {
     return 1;
 }
 
+/* XGetWindowAttributes is two round trips: GetWindowAttributes, then GetGeometry
+ * for the same drawable. A window destroyed between them fails the first with
+ * BadWindow and the second with BadDrawable, because by then the XID no longer
+ * names a drawable either. Both errors can only refer to the exact XID we asked
+ * about — it is the only resource in either request — so both are proof the
+ * target is gone rather than an operational failure. Accepting only BadWindow
+ * made the narrower race report status 1, and close_app then rejected a close
+ * that had in fact succeeded. */
+static int window_gone_error(int code) {
+    return code == BadWindow || code == BadDrawable;
+}
+
 static int read_window_attributes(Display *display, Window window,
                                   XWindowAttributes *attributes) {
     x11_error_code = Success;
     Status resolved = XGetWindowAttributes(display, window, attributes);
     XSync(display, False);
-    if (x11_error_code == BadWindow) {
+    if (window_gone_error(x11_error_code)) {
         return EXIT_WINDOW_GONE;
     }
     if (x11_error_code != Success || !resolved) {

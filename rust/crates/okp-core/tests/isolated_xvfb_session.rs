@@ -84,7 +84,10 @@ fn main_window_fit_session_has_one_multiscreen_manager_and_two_supervisors() {
     assert!(close_request.contains("SubstructureRedirectMask | SubstructureNotifyMask"));
     assert!(close_request.contains("XSendEvent"));
     assert!(close_request.contains("XSetErrorHandler(record_x11_error)"));
-    assert!(close_request.contains("x11_error_code == BadWindow"));
+    // Both halves of XGetWindowAttributes must count as "gone": the second round
+    // trip fails with BadDrawable, not BadWindow, when the window dies mid-call.
+    assert!(close_request.contains("code == BadWindow || code == BadDrawable"));
+    assert!(close_request.contains("window_gone_error(x11_error_code)"));
     assert!(close_request.contains("strcmp(argv[1], \"--probe\")"));
 }
 
