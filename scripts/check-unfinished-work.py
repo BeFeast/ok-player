@@ -73,6 +73,13 @@ SELF_PATHS = {
 }
 
 
+def summarise(items: list[str], limit: int = 5) -> str:
+    shown = "; ".join(items[:limit])
+    if len(items) > limit:
+        shown += f"; and {len(items) - limit} more"
+    return shown
+
+
 def strip_fenced_blocks(text: str) -> str:
     out, inside = [], False
     for line in text.splitlines():
@@ -83,35 +90,90 @@ def strip_fenced_blocks(text: str) -> str:
     return "\n".join(out)
 
 
-def unresolved_acceptance_items(body: str) -> tuple[list[str], list[str]]:
-    """Items in an Operator acceptance block that are not resolved.
-
-    Returns (unchecked, unresolvable). An unchecked item is a `- [ ]` box. An
-    unresolvable item is a plain bullet: it states an acceptance condition with
-    no way to record that it was performed, which is the shape every real
-    acceptance hold in this repository's history has taken. Both block.
-    """
-    unchecked, unresolvable, inside = [], [], False
+def acceptance_blocks(body: str) -> list[list[str]]:
+    """The body lines of every Operator acceptance block, HTML comments removed."""
+    blocks, current = [], None
     for line in HTML_COMMENT.sub("", body).splitlines():
         if ACCEPTANCE_HEADING.match(line):
-            inside = True
+            if current is not None:
+                blocks.append(current)
+            current = []
             continue
-        if inside and HEADING.match(line):
-            inside = False
-        if not inside:
+        if current is None:
             continue
-        item = LIST_ITEM.match(line)
-        if not item:
+        if HEADING.match(line):
+            blocks.append(current)
+            current = None
             continue
-        text = item.group(1).strip()
-        if CHECKED_BOX.match(text):
-            continue
-        box = UNCHECKED_BOX.match(text)
-        if box:
-            unchecked.append(box.group(1).strip() or "(unnamed item)")
-        else:
-            unresolvable.append(text or "(unnamed item)")
-    return unchecked, unresolvable
+        current.append(line)
+    if current is not None:
+        blocks.append(current)
+    return blocks
+
+
+def acceptance_problems(body: str) -> list[tuple[str, str]]:
+    """(title, detail) for every Operator acceptance block that is not resolved.
+
+    An acceptance block is resolved only when it consists of ticked checkboxes.
+    Anything else - an unticked box, a plain bullet, or a paragraph such as "Do
+    not merge until a packaged build passes dual-display QA" - states a hold
+    that nothing can record as performed. Every real acceptance hold in this
+    repository's history took one of those two unrecordable shapes.
+    """
+    problems = []
+    for block in acceptance_blocks(body):
+        unchecked, unresolvable, checked = [], [], 0
+        prose = []
+        for line in block:
+            item = LIST_ITEM.match(line)
+            if not item:
+                if line.strip():
+                    prose.append(line.strip())
+                continue
+            text = item.group(1).strip()
+            if CHECKED_BOX.match(text):
+                checked += 1
+            elif UNCHECKED_BOX.match(text):
+                unchecked.append(UNCHECKED_BOX.match(text).group(1).strip() or "(unnamed item)")
+            else:
+                unresolvable.append(text or "(unnamed item)")
+        if unchecked:
+            problems.append(
+                (
+                    "Operator acceptance is not complete",
+                    "The body has an Operator acceptance block with unchecked items: "
+                    + summarise(unchecked)
+                    + ". Perform each item and tick its box, or delete the block if "
+                    "the change genuinely needs no operator acceptance. Ticking a box "
+                    "you did not perform is the failure mode this check exists to "
+                    "stop.",
+                )
+            )
+        if unresolvable:
+            problems.append(
+                (
+                    "Operator acceptance block has items that cannot be resolved",
+                    "These Operator acceptance items are plain bullets, so nothing "
+                    "can record that they were performed: "
+                    + summarise(unresolvable)
+                    + ". Write every acceptance item as a checkbox and tick it once "
+                    "it is actually done. A prose hold is how an acceptance block "
+                    "ends up merged unperformed.",
+                )
+            )
+        if not unchecked and not unresolvable and not checked:
+            problems.append(
+                (
+                    "Operator acceptance block states a hold in prose",
+                    "This Operator acceptance block has no checkbox at all, so there "
+                    "is nothing to record that it was performed: "
+                    + (summarise(prose) if prose else "(the block is empty)")
+                    + ". State each condition as a checkbox and tick it once it is "
+                    "done, or delete the block if this change needs no operator "
+                    "acceptance.",
+                )
+            )
+    return problems
 
 
 def code_files(root: Path) -> list[Path]:
@@ -145,13 +207,6 @@ def unfinished_code_markers(root: Path) -> list[tuple[str, int, str]]:
             if RUST_STUBS.search(code) or BARE_MARKER.search(code):
                 hits.append((rel, number, line.strip()[:160]))
     return hits
-
-
-def summarise(items: list[str], limit: int = 5) -> str:
-    shown = "; ".join(items[:limit])
-    if len(items) > limit:
-        shown += f"; and {len(items) - limit} more"
-    return shown
 
 
 def annotate(title: str, message: str, file: str | None = None,
@@ -209,28 +264,9 @@ def main() -> int:
                 "to get a green check.",
             )
 
-        unchecked, unresolvable = unresolved_acceptance_items(prose)
-        if unchecked:
+        for title, detail in acceptance_problems(prose):
             failures += 1
-            annotate(
-                "Operator acceptance is not complete",
-                "The body has an Operator acceptance block with unchecked items: "
-                + summarise(unchecked)
-                + ". Perform each item and tick its box, or delete the block if the "
-                "change genuinely needs no operator acceptance. Ticking a box you did "
-                "not perform is the failure mode this check exists to stop.",
-            )
-        if unresolvable:
-            failures += 1
-            annotate(
-                "Operator acceptance block has items that cannot be resolved",
-                "These Operator acceptance items are plain bullets, so nothing can "
-                "record that they were performed: "
-                + summarise(unresolvable)
-                + ". Write every acceptance item as a checkbox and tick it once it is "
-                "actually done. A prose hold is how an acceptance block ends up merged "
-                "unperformed.",
-            )
+            annotate(title, detail)
 
         if not HTML_COMMENT.sub("", body).strip():
             failures += 1

@@ -164,6 +164,21 @@ fn an_acceptance_block_ends_at_the_next_heading_bold_label_or_html_block() {
 }
 
 #[test]
+fn an_acceptance_hold_written_as_a_paragraph_blocks_the_merge() {
+    let fixture = Declaration::new("okp-gate-acceptance-paragraph");
+    let body = "## Summary\n\nReveals saved screenshots.\n\n\
+        ## Operator acceptance required\n\n\
+        Keep this out of main until an operator verifies the reveal on GNOME.\n";
+
+    let output = fixture.check("Reveal saved Linux screenshots", body);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = stderr_of(&output);
+    assert!(stderr.contains("states a hold in prose"));
+    assert!(stderr.contains("verifies the reveal on GNOME"));
+}
+
+#[test]
 fn a_completed_operator_acceptance_block_is_not_blocked() {
     let fixture = Declaration::new("okp-gate-acceptance-done");
     let body = "## What this changes\n\nAdds dual-display handling.\n\n\
@@ -349,6 +364,26 @@ fn main_matches_the_expected_implementation() {
 }
 "#;
 
+/// A test whose only check is a helper call, with no assertion macro at all.
+const HELPER_STATEMENT_TEST: &str = r#"
+#[test]
+fn renderer_environment_is_selected_before_gtk_initialization() {
+    let source = include_str!("main.rs");
+
+    check_source_contains(source, "configure_linux_renderer_environment();");
+}
+"#;
+
+/// Inspection wrapped in an assertion macro through an assertion helper.
+const ASSERT_HELPER_TEST: &str = r#"
+#[test]
+fn renderer_environment_is_selected_before_gtk_initialization() {
+    let source = include_str!("main.rs");
+
+    assert!(assert_source_contains(source, "configure_linux_renderer_environment();"));
+}
+"#;
+
 struct Workspace {
     root: TempDir,
 }
@@ -446,6 +481,36 @@ fn a_test_that_loads_fixture_data_and_asserts_on_parsed_output_is_never_flagged(
         Some(0),
         "{}",
         String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn a_test_whose_only_check_is_a_helper_call_is_flagged() {
+    let workspace = Workspace::new("okp-gate-helper-statement");
+    workspace.write_tests(HELPER_STATEMENT_TEST);
+    workspace.write_allowlist("# empty\n");
+
+    let output = workspace.check();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("renderer_environment_is_selected_before_gtk_initialization")
+    );
+}
+
+#[test]
+fn an_assertion_helper_does_not_launder_a_source_grep() {
+    let workspace = Workspace::new("okp-gate-assert-helper");
+    workspace.write_tests(ASSERT_HELPER_TEST);
+    workspace.write_allowlist("# empty\n");
+
+    let output = workspace.check();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("renderer_environment_is_selected_before_gtk_initialization")
     );
 }
 

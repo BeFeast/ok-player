@@ -236,7 +236,14 @@ def passed_into_a_call(head: str, tail: str) -> bool:
     if not before.endswith("("):
         return False
     callee = before[:-1].rstrip(" \t\r\n")
-    return bool(re.search(r"[A-Za-z0-9_]$", callee))
+    name = re.search(r"[A-Za-z0-9_]+$", callee)
+    if not name:
+        return False
+    # `assert_source_contains(source, ..)` is an assertion helper, not production
+    # code the text is being fed to. Helpers that grep under another name are not
+    # detected: telling a grep helper from a parser needs flow analysis, and this
+    # check is a floor against accident, not against a determined author.
+    return "assert" not in name.group(0).lower()
 
 
 def inspects_source_text(arg_mask: str, direct: set[str], derived: set[str]) -> bool:
