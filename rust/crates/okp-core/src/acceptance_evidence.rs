@@ -270,12 +270,17 @@ impl FlatpakSoftwareRendererEvidence {
 pub enum FlatpakAcceptanceDesktop {
     Gnome,
     Kde,
+    /// No desktop session at all: the automated CI lifecycle lane.
+    Headless,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum FlatpakAcceptanceSession {
     Wayland,
+    /// Throwaway X server under CI, which proves delivery transitions but not
+    /// compositor, portal, clipboard, or PipeWire behaviour.
+    HeadlessCi,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -314,18 +319,27 @@ impl FlatpakLifecycleEvidence {
                 status: EvidenceStatus::NotRun,
             })
             .collect();
+        let session = match desktop {
+            FlatpakAcceptanceDesktop::Headless => FlatpakAcceptanceSession::HeadlessCi,
+            FlatpakAcceptanceDesktop::Gnome | FlatpakAcceptanceDesktop::Kde => {
+                FlatpakAcceptanceSession::Wayland
+            }
+        };
         Self {
             schema_version: FLATPAK_LIFECYCLE_EVIDENCE_SCHEMA_VERSION,
             pull_request_head,
             downloaded_artifact_sha256,
             desktop,
-            session: FlatpakAcceptanceSession::Wayland,
+            session,
             artifact,
             steps,
         }
     }
 
-    pub fn validate_ready(&self) -> Result<(), Vec<String>> {
+    /// Mechanical delivery contract: the required transitions ran in order and
+    /// each one landed on the exact revision the artifact identity requires.
+    /// This is what an automated lane can prove.
+    pub fn validate_transitions(&self) -> Result<(), Vec<String>> {
         let mut errors = self.artifact.validate().err().unwrap_or_default();
         if self.schema_version != FLATPAK_LIFECYCLE_EVIDENCE_SCHEMA_VERSION {
             errors.push(format!(
@@ -408,6 +422,27 @@ impl FlatpakLifecycleEvidence {
             }
         }
 
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    /// Operator sign-off: the transitions plus the claim that they were
+    /// observed in a real desktop session. A headless record deliberately
+    /// cannot satisfy this, so an automated lane can never be mistaken for
+    /// live-desktop acceptance.
+    pub fn validate_ready(&self) -> Result<(), Vec<String>> {
+        let mut errors = self.validate_transitions().err().unwrap_or_default();
+        if self.desktop == FlatpakAcceptanceDesktop::Headless
+            || self.session == FlatpakAcceptanceSession::HeadlessCi
+        {
+            errors.push(
+                "headless Flatpak lifecycle evidence cannot sign off live-desktop acceptance"
+                    .to_owned(),
+            );
+        }
         if errors.is_empty() {
             Ok(())
         } else {
@@ -1466,6 +1501,43 @@ mod tests {
             step.status = EvidenceStatus::Pass;
         }
         assert_eq!(evidence.validate_ready(), Ok(()));
+    }
+
+    #[test]
+    fn headless_ci_lifecycle_proves_transitions_but_never_signs_off_acceptance() {
+        let mut evidence = FlatpakLifecycleEvidence::template(
+            "1".repeat(40),
+            "2".repeat(64),
+            FlatpakAcceptanceDesktop::Headless,
+            flatpak_artifact(),
+        );
+        assert_eq!(evidence.session, FlatpakAcceptanceSession::HeadlessCi);
+        for step in &mut evidence.steps {
+            step.status = EvidenceStatus::Pass;
+        }
+
+        assert_eq!(evidence.validate_transitions(), Ok(()));
+        let errors = evidence.validate_ready().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("cannot sign off live-desktop acceptance"))
+        );
+
+        // An automated lane still has to prove the deployment actually moved.
+        let baseline_commit = evidence.artifact.baseline.ostree_commit.clone();
+        evidence
+            .steps
+            .iter_mut()
+            .find(|step| step.id == "update-current")
+            .expect("update step")
+            .deployed_commit = Some(baseline_commit);
+        let errors = evidence.validate_transitions().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("update-current deployed"))
+        );
     }
 
     #[test]

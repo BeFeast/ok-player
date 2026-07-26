@@ -45,6 +45,7 @@ distributed and licensed independently by Freedesktop/Flathub.
 ## libass
 
 - **Project:** libass — <https://github.com/libass/libass>
+- **Component bundled:** the source-built subtitle renderer in the Flatpak beta.
 - **License:** ISC. **Copyright:** © the libass developers.
 
 ## libplacebo

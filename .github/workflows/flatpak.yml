@@ -1,23 +1,52 @@
 name: Flatpak
 
+# The Flatpak application source is a frozen git pin plus a checked-in
+# integration patch, so unrelated changes under rust/crates cannot change what
+# this lane builds. Keeping the path filter narrow is therefore correct, and the
+# nightly schedule keeps the lane honest about the current default branch.
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/flatpak.yml'
+      - 'docs/linux-flatpak.md'
+      - 'rust/Cargo.lock'
+      - 'rust/packaging/flatpak/**'
+      - 'rust/packaging/linux/**'
+      - 'scripts/build-flatpak-beta.sh'
+      - 'scripts/flatpak-repin.sh'
+      - 'scripts/smoke-linux-flatpak-lifecycle.sh'
+      - 'scripts/smoke-linux-flatpak.sh'
+      - 'scripts/smoke-linux-software-renderer.sh'
   pull_request:
     paths:
       - '.github/workflows/flatpak.yml'
       - 'docs/linux-flatpak.md'
       - 'rust/Cargo.lock'
-      - 'rust/Cargo.toml'
-      - 'rust/crates/**'
-      - 'rust/packaging/**'
+      - 'rust/packaging/flatpak/**'
+      - 'rust/packaging/linux/**'
       - 'scripts/build-flatpak-beta.sh'
+      - 'scripts/flatpak-repin.sh'
+      - 'scripts/smoke-linux-flatpak-lifecycle.sh'
       - 'scripts/smoke-linux-flatpak.sh'
       - 'scripts/smoke-linux-software-renderer.sh'
+  schedule:
+    - cron: '17 3 * * *'
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flatpak-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   flatpak:
     name: Offline Flatpak beta build
     runs-on: ubuntu-latest
+    timeout-minutes: 150
     env:
       OKP_ACCEPTANCE_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
       OKP_FLATPAK_ARTIFACT_MANIFEST: artifacts/linux/flatpak/flatpak-beta-artifact.json
@@ -43,11 +72,36 @@ jobs:
       - name: Build offline beta repository
         run: ./scripts/build-flatpak-beta.sh
 
-      - name: Packaged no-DRI software renderer smoke
+      - name: Prepare XDG Pictures grant
+        if: ${{ !cancelled() }}
         run: |
           mkdir -p "$HOME/Pictures"
           xdg-user-dirs-update --set PICTURES "$HOME/Pictures"
           test "$(xdg-user-dir PICTURES)" = "$HOME/Pictures"
+
+      # Every step below runs even when an earlier one failed. A single red gate
+      # must never hide whether the offline build, the delivery lifecycle, and
+      # the renderer smoke actually work.
+      - name: Repository lifecycle (install, update, rollback, restore, uninstall)
+        if: ${{ !cancelled() }}
+        run: ./scripts/smoke-linux-flatpak-lifecycle.sh
+
+      - name: Repository lifecycle negative control
+        if: ${{ !cancelled() }}
+        env:
+          OKP_FLATPAK_LIFECYCLE_NEGATIVE_CONTROL: update-current
+          OKP_FLATPAK_LIFECYCLE_EVIDENCE: artifacts/linux/flatpak/flatpak-lifecycle-negative-control.json
+          OKP_FLATPAK_LIFECYCLE_LOG_DIR: artifacts/linux/flatpak/lifecycle-negative-control-logs
+        run: |
+          if ./scripts/smoke-linux-flatpak-lifecycle.sh; then
+            echo "The lifecycle lane passed with a deliberately skipped update; it proves nothing." >&2
+            exit 1
+          fi
+          echo "Negative control detected the skipped update transition."
+
+      - name: Packaged no-DRI software renderer smoke
+        if: ${{ !cancelled() }}
+        run: |
           flatpak install --user -y --bundle artifacts/linux/flatpak/OK-Player-0.11.0-beta.1.flatpak
           ./scripts/smoke-linux-software-renderer.sh -- \
             flatpak run --user --nodevice=dri --nosocket=wayland --socket=x11 \
@@ -57,6 +111,7 @@ jobs:
           flatpak uninstall --user -y com.befeast.okplayer
 
       - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
         with:
           name: ok-player-flatpak-beta
           if-no-files-found: error
@@ -65,6 +120,49 @@ jobs:
             artifacts/linux/flatpak/repo-baseline/**
             artifacts/linux/flatpak/repo/**
             artifacts/linux/flatpak/flatpak-beta-artifact.json
+            artifacts/linux/flatpak/flatpak-lifecycle-ci.json
+            artifacts/linux/flatpak/lifecycle-logs/**
             artifacts/linux/flatpak/OK-Player-0.11.0-beta.0.flatpak
             artifacts/linux/flatpak/OK-Player-0.11.0-beta.1.flatpak
             artifacts/manual-ui/linux-software-renderer-smoke/**
+
+  repin:
+    name: Flatpak source re-pin drift
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      REPIN_BRANCH: chore/flatpak-repin
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Re-pin the application source and regenerate the integration patch
+        run: ./scripts/flatpak-repin.sh origin/main
+
+      # The pin is frozen on purpose, so drift is expected and is never fixed by
+      # pushing to main. It is proposed as a pull request and reviewed like any
+      # other packaging change.
+      - name: Propose the refreshed pin
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet; then
+            echo "The Flatpak pin already matches the default branch."
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -am 'Flatpak: re-pin the application source to the default branch'
+          git push --force origin "HEAD:refs/heads/$REPIN_BRANCH"
+          if [ -n "$(gh pr list --head "$REPIN_BRANCH" --state open --json number --jq '.[].number')" ]; then
+            echo "Updated the existing re-pin pull request."
+            exit 0
+          fi
+          gh pr create --base main --head "$REPIN_BRANCH" \
+            --title 'Flatpak: re-pin the application source to the default branch' \
+            --body 'Automated re-pin of the Flatpak application source and integration patch. Close and reopen this pull request to run the Flatpak lane against it.'

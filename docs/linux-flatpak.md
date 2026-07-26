@@ -16,14 +16,49 @@ extension branches aligned.
 redistributable upstream sources. The application source is pinned to a
 permanent `main` commit and receives the checked-in Flatpak integration patch,
 so the manifest can move directly to the external Flathub repository without a
-branch or local-directory source. The manifest smoke check regenerates that
-patch from the pinned commit and compares it byte-for-byte with the checked-in
-copy, preventing the packaged source and installed third-party notices from
-drifting from the reviewed runtime files. Cargo dependencies are expanded from
+branch or local-directory source. Cargo dependencies are expanded from
 `rust/Cargo.lock` into `rust/packaging/flatpak/cargo-sources.json`; every crate
 has a checksum and Cargo runs with `--offline --locked`. The build script first
 downloads declared sources and then rebuilds with `--disable-download`, so an
 undeclared fetch fails.
+
+## Why the pin is validated, not compared
+
+The pinned commit and the patch are one frozen pair, and the pair is what
+flatpak-builder actually builds. `scripts/smoke-linux-flatpak.sh` therefore
+validates the pair on its own terms: the pinned tree is materialised, the patch
+must apply to it cleanly, and the applied result must still contain the Flatpak
+integration it packages - the software no-DRI renderer selection, the
+`codecs-extra` diagnostic, libmpv advanced control, the Flatpak-managed update
+state, and the Flatpak third-party notices.
+
+The check deliberately does not regenerate the patch from the working tree and
+compare it byte-for-byte. That comparison passes only while nothing has touched
+a patched file since the pin was taken, so every later change to
+`okp-linux-gtk`, `okp-mpv`, or `okp-core` would fail an unrelated packaging
+check with a byte offset. Freshness is a scheduled maintenance task, not a
+merge gate: `scripts/flatpak-repin.sh` moves the pin to the current default
+branch and regenerates the patch, and the nightly `repin` job in
+`.github/workflows/flatpak.yml` runs it and proposes the result as a pull
+request. It never pushes to `main`. Because a pull request opened with the
+workflow token does not start CI on its own, close and reopen that pull request
+to run the Flatpak lane against it.
+
+Once the integration is merged upstream, the regenerated patch is empty. The
+re-pin script then deletes the patch file and removes the `patch` source from
+the manifest, and the smoke check requires those two to stay consistent.
+
+## Where the lane runs
+
+The Flatpak workflow runs on pull requests that touch the packaging manifest,
+its scripts, the workflow, or `rust/Cargo.lock`; on every push to `main` that
+touches the same files; nightly; and on manual dispatch. Changes elsewhere in
+`rust/crates` deliberately do not trigger it, because the pinned source, not
+the working tree, is what the lane builds - the nightly run and the re-pin pull
+request are what carry current default-branch work into the package. Every step
+after the offline build runs even if an earlier step failed, so one red gate can
+never hide whether the build, the delivery lifecycle, and the renderer smoke
+work.
 
 The package installs the project GPL license, third-party notices, and the
 upstream mpv/libplacebo/libass license texts under the Flatpak license prefix.
@@ -113,15 +148,43 @@ The build output contains two repository views and two bundles:
   parent relationship, the exact source commit stamped into the update build,
   and both bundle SHA-256 values without recording a host path, hostname, URL,
   or credential.
+- `flatpak-lifecycle-ci.json` and `lifecycle-logs/` record the automated
+  lifecycle lane described below.
 - `artifacts/manual-ui/linux-software-renderer-smoke` contains the packaged
   no-DRI mapped-window evidence: full-window and cropped screenshots, sanitized
   renderer/session logs, presentation samples, `xwininfo` map-state output, and
   `results.json` with `IsViewable`, non-trivial geometry, zero DRI descriptors,
   renderer identity, pixel measurements, and screenshot SHA-256 values.
 
-Exercise the repository lifecycle from the extracted CI artifact. Resolve the
-local repository directories to `file://` URLs at runtime; do not paste those
-machine-specific URLs into public evidence:
+## Automated lifecycle lane
+
+`scripts/smoke-linux-flatpak-lifecycle.sh` runs the full delivery lifecycle in
+CI against the freshly exported repositories: it installs the baseline from a
+baseline-only remote, points the same remote at the two-commit repository,
+updates, rolls back to the parent commit, restores the child commit, uninstalls,
+and deletes the remote. Every step reads the deployed OSTree commit back from
+Flatpak and compares it with the identity recorded in
+`flatpak-beta-artifact.json`, so an update that reports success without moving
+the deployment, or a rollback that does not return to the parent commit, fails
+the lane. The three launch steps start the deployed revision under a throwaway X
+server and require a mapped, viewable OK Player top-level window, so a revision
+that installs but cannot run also fails.
+
+The lane writes `flatpak-lifecycle-ci.json` using the same schema as operator
+acceptance, with `desktop: headless` and `session: headless-ci`, and validates
+it with `flatpak-lifecycle-validate --transitions-only`. A headless record can
+never satisfy `validate_ready`, so an automated result cannot be mistaken for
+live-desktop sign-off.
+
+CI also runs the lane once with
+`OKP_FLATPAK_LIFECYCLE_NEGATIVE_CONTROL=update-current`, which skips exactly one
+transition command. That run must fail; if it passes, the lane is not asserting
+anything and the job fails instead. Any required step id can be named there to
+re-check a specific transition.
+
+Exercise the repository lifecycle by hand from the extracted CI artifact.
+Resolve the local repository directories to `file://` URLs at runtime; do not
+paste those machine-specific URLs into public evidence:
 
 ```sh
 baseline_repo_url="$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().as_uri())' repo-baseline)"
@@ -190,8 +253,10 @@ flatpak mask --user --remove org.freedesktop.Platform.codecs-extra
 ## Acceptance boundary
 
 CI proves manifest validity, source pinning, two offline builds, a direct
-baseline-to-update OSTree history, repository export, bundle creation, and
-portable artifact identity. The packaged no-DRI smoke removes DRI from the app,
+baseline-to-update OSTree history, repository export, bundle creation,
+portable artifact identity, and the complete install, update, rollback,
+restore, uninstall, and remote-cleanup transition chain with a mapped window
+after each deployment change. The packaged no-DRI smoke removes DRI from the app,
 requires the libmpv CPU software backend and Cairo scene renderer, opens a
 moving red fixture through the production command-line media path, and requires
 a mapped GTK player top-level owned by the application process with zero open

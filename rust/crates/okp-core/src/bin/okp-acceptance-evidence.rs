@@ -85,7 +85,12 @@ fn flatpak_lifecycle_template(args: &[String]) -> Result<(), String> {
     let desktop = match value(args, "--desktop")? {
         "gnome" => FlatpakAcceptanceDesktop::Gnome,
         "kde" => FlatpakAcceptanceDesktop::Kde,
-        other => return Err(format!("unknown --desktop {other}; expected gnome|kde")),
+        "headless" => FlatpakAcceptanceDesktop::Headless,
+        other => {
+            return Err(format!(
+                "unknown --desktop {other}; expected gnome|kde|headless"
+            ));
+        }
     };
     print_json(&FlatpakLifecycleEvidence::template(
         value(args, "--pull-request-head")?.to_owned(),
@@ -98,6 +103,15 @@ fn flatpak_lifecycle_template(args: &[String]) -> Result<(), String> {
 fn flatpak_lifecycle_validate(args: &[String]) -> Result<(), String> {
     let manifest_path = value(args, "--manifest")?;
     let evidence: FlatpakLifecycleEvidence = read_json(manifest_path)?;
+    if args.iter().any(|arg| arg == "--transitions-only") {
+        evidence
+            .validate_transitions()
+            .map_err(|errors| errors.join("\n"))?;
+        println!(
+            "Flatpak install, update, rollback, restore, uninstall, and remote cleanup transitions are complete."
+        );
+        return Ok(());
+    }
     evidence
         .validate_ready()
         .map_err(|errors| errors.join("\n"))?;
@@ -338,7 +352,7 @@ fn optional_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 }
 
 fn usage() -> String {
-    "usage:\n  okp-acceptance-evidence identity --version V --commit SHA --deb PATH --appimage PATH\n  okp-acceptance-evidence template --version V --commit SHA --deb PATH --appimage PATH --build-environment-sha256 SHA256\n  okp-acceptance-evidence validate --manifest PATH --identity PATH\n  okp-acceptance-evidence candidate-upgrade-validate --manifest PATH\n  okp-acceptance-evidence flatpak-beta-artifact --source-commit SHA --app-id ID --arch ARCH --branch BRANCH --baseline-repository NAME --update-repository NAME --baseline-version V --baseline-commit OSTREE --baseline-bundle PATH --update-version V --update-commit OSTREE --update-parent OSTREE --update-bundle PATH\n  okp-acceptance-evidence flatpak-beta-validate --manifest PATH\n  okp-acceptance-evidence flatpak-lifecycle-template --artifact-manifest PATH --pull-request-head SHA --downloaded-artifact-sha256 SHA256 --desktop gnome|kde\n  okp-acceptance-evidence flatpak-lifecycle-validate --manifest PATH\n  okp-acceptance-evidence flatpak-software-renderer-validate --manifest PATH --artifact-manifest PATH --source-commit SHA\n  okp-acceptance-evidence presentation --log PATH [--warmup-seconds N] [--report-only]\n  okp-acceptance-evidence fedora-artifact --kind flatpak|rpm|copr --file PATH\n  okp-acceptance-evidence fedora-validate --manifest PATH".to_owned()
+    "usage:\n  okp-acceptance-evidence identity --version V --commit SHA --deb PATH --appimage PATH\n  okp-acceptance-evidence template --version V --commit SHA --deb PATH --appimage PATH --build-environment-sha256 SHA256\n  okp-acceptance-evidence validate --manifest PATH --identity PATH\n  okp-acceptance-evidence candidate-upgrade-validate --manifest PATH\n  okp-acceptance-evidence flatpak-beta-artifact --source-commit SHA --app-id ID --arch ARCH --branch BRANCH --baseline-repository NAME --update-repository NAME --baseline-version V --baseline-commit OSTREE --baseline-bundle PATH --update-version V --update-commit OSTREE --update-parent OSTREE --update-bundle PATH\n  okp-acceptance-evidence flatpak-beta-validate --manifest PATH\n  okp-acceptance-evidence flatpak-lifecycle-template --artifact-manifest PATH --pull-request-head SHA --downloaded-artifact-sha256 SHA256 --desktop gnome|kde|headless\n  okp-acceptance-evidence flatpak-lifecycle-validate --manifest PATH [--transitions-only]\n  okp-acceptance-evidence flatpak-software-renderer-validate --manifest PATH --artifact-manifest PATH --source-commit SHA\n  okp-acceptance-evidence presentation --log PATH [--warmup-seconds N] [--report-only]\n  okp-acceptance-evidence fedora-artifact --kind flatpak|rpm|copr --file PATH\n  okp-acceptance-evidence fedora-validate --manifest PATH".to_owned()
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
 diff --git a/THIRD-PARTY-NOTICES.md b/THIRD-PARTY-NOTICES.md
-index 926c8afaa51def7e6834c3207c084d22938112b6..10a056021ac38cfd2e72efad3e48c7e52d35e366 100644
+index 926c8afaa51def7e6834c3207c084d22938112b6..e26f41ae00729e29877ba24256656f9bfaefe96a 100644
 --- a/THIRD-PARTY-NOTICES.md
 +++ b/THIRD-PARTY-NOTICES.md
 @@ -9,7 +9,8 @@ mirrors mpv.net and IINA.
@@ -26,7 +26,7 @@ index 926c8afaa51def7e6834c3207c084d22938112b6..10a056021ac38cfd2e72efad3e48c7e5
 
  ## FFmpeg
 
-@@ -33,11 +37,22 @@ bundled build are listed below; the authoritative, per-file licensing is in each
+@@ -33,11 +37,23 @@ bundled build are listed below; the authoritative, per-file licensing is in each
    Full text: <https://www.ffmpeg.org/legal.html>
  - **Copyright:** © the FFmpeg developers.
 
@@ -38,6 +38,7 @@ index 926c8afaa51def7e6834c3207c084d22938112b6..10a056021ac38cfd2e72efad3e48c7e5
  ## libass
 
  - **Project:** libass — <https://github.com/libass/libass>
++- **Component bundled:** the source-built subtitle renderer in the Flatpak beta.
  - **License:** ISC. **Copyright:** © the libass developers.
 
 +## libplacebo
@@ -306,10 +307,10 @@ index b6088a05c13372beb512a3eef1342273ffa5526c..9180401930d166e18843687b573f4ee7
      }
  }
 diff --git a/rust/crates/okp-linux-gtk/src/main.rs b/rust/crates/okp-linux-gtk/src/main.rs
-index f2e761d488cec76f7a72d54edd56e01d50276de6..2b1cdf602af2953bde198fe0fc738385884fdcb6 100644
+index ebf52b907127f17ad03e3f187637a60f641c49f8..7cedfbe18a7ba87143d8b6c0ebda90feb6320dba 100644
 --- a/rust/crates/okp-linux-gtk/src/main.rs
 +++ b/rust/crates/okp-linux-gtk/src/main.rs
-@@ -885,9 +885,15 @@ enum LinuxUpdateTarget {
+@@ -887,9 +887,15 @@ enum LinuxUpdateTarget {
      Deb(DebUpdate),
  }
 
@@ -326,7 +327,7 @@ index f2e761d488cec76f7a72d54edd56e01d50276de6..2b1cdf602af2953bde198fe0fc738385
      Available(PendingLinuxUpdate),
      Failed(String),
  }
-@@ -905,7 +911,7 @@ enum LinuxUpdateStatus {
+@@ -907,7 +913,7 @@ enum LinuxUpdateStatus {
      NotChecked,
      Checking(Option<LinuxUpdateOffer>),
      UpToDate,
@@ -335,7 +336,7 @@ index f2e761d488cec76f7a72d54edd56e01d50276de6..2b1cdf602af2953bde198fe0fc738385
      Offer(LinuxUpdateOffer),
      Failed(String),
  }
-@@ -918,7 +924,7 @@ impl LinuxUpdateStatus {
+@@ -920,7 +926,7 @@ impl LinuxUpdateStatus {
      ) -> Self {
          match result {
              LinuxUpdateCheckResult::UpToDate => Self::UpToDate,
@@ -344,7 +345,7 @@ index f2e761d488cec76f7a72d54edd56e01d50276de6..2b1cdf602af2953bde198fe0fc738385
              LinuxUpdateCheckResult::Available(update) => {
                  let version = update
                      .target_version()
-@@ -949,7 +955,12 @@ impl LinuxUpdateStatus {
+@@ -951,7 +957,12 @@ impl LinuxUpdateStatus {
              }
              Self::Checking(None) => "Checking the update feed...".to_owned(),
              Self::UpToDate => "OK Player is up to date".to_owned(),
@@ -359,10 +360,10 @@ index f2e761d488cec76f7a72d54edd56e01d50276de6..2b1cdf602af2953bde198fe0fc738385
              Self::Failed(error) => format!("Update check failed: {error}"),
          }
 diff --git a/rust/crates/okp-linux-gtk/src/mpv_bridge.rs b/rust/crates/okp-linux-gtk/src/mpv_bridge.rs
-index 26574f678bba0f198dd0e718143b11a6fae67b48..2d4f1e12972c2991fc22fd1ca6aa11c9c19fbc42 100644
+index bb34a12bf3160b0f778f55d580aee14b69c13468..9e318bf37dbf4a6f12a8fbec0c7b2c14f7f618dd 100644
 --- a/rust/crates/okp-linux-gtk/src/mpv_bridge.rs
 +++ b/rust/crates/okp-linux-gtk/src/mpv_bridge.rs
-@@ -410,7 +410,7 @@ fn connect_native_mpv(
+@@ -433,7 +433,7 @@ fn connect_native_mpv(
              );
              return;
          }
@@ -371,7 +372,7 @@ index 26574f678bba0f198dd0e718143b11a6fae67b48..2d4f1e12972c2991fc22fd1ca6aa11c9
              schedule_gtk_mpv_fallback(
                  &fallback_container,
                  &realize_fallback_started,
-@@ -642,7 +642,7 @@ fn connect_gtk_mpv(
+@@ -731,7 +731,7 @@ fn connect_gtk_mpv(
                  "GDK Wayland native display is unavailable; continuing without zero-copy display interop"
              );
          }
@@ -718,7 +719,7 @@ index bd7e24d8f2a795304566db3768171d793bdc45d6..2b523d933a475195864c35c9f4b06126
 +    }
  }
 diff --git a/rust/crates/okp-linux-gtk/src/tests.rs b/rust/crates/okp-linux-gtk/src/tests.rs
-index 6315feb98e0705d6c26fb42bff020bda758ca76b..6555be94387803952f75966b5f370f033a1a2d23 100644
+index 0058476584e6cf1d453ab7405979c358a9d1b1d7..826051c257361566daf4cad2b5c20532a3815363 100644
 --- a/rust/crates/okp-linux-gtk/src/tests.rs
 +++ b/rust/crates/okp-linux-gtk/src/tests.rs
 @@ -30,6 +30,26 @@ fn renderer_environment_is_selected_before_gtk_initialization() {
@@ -748,7 +749,7 @@ index 6315feb98e0705d6c26fb42bff020bda758ca76b..6555be94387803952f75966b5f370f03
  #[test]
  fn file_association_launches_present_before_media_delivery() {
      let window = include_str!("window.rs");
-@@ -4198,7 +4218,7 @@ fn linux_update_status_reflects_last_check_result() {
+@@ -4378,7 +4398,7 @@ fn linux_update_status_reflects_last_check_result() {
      assert!(up_to_date.pending_offer().is_none());
 
      let managed = LinuxUpdateStatus::from_check_result(
@@ -757,7 +758,7 @@ index 6315feb98e0705d6c26fb42bff020bda758ca76b..6555be94387803952f75966b5f370f03
          UpdateChannel::Public,
          &skipped,
      );
-@@ -4208,6 +4228,17 @@ fn linux_update_status_reflects_last_check_result() {
+@@ -4388,6 +4408,17 @@ fn linux_update_status_reflects_last_check_result() {
      );
      assert!(managed.pending_offer().is_none());
 
@@ -775,7 +776,7 @@ index 6315feb98e0705d6c26fb42bff020bda758ca76b..6555be94387803952f75966b5f370f03
      let update = PendingLinuxUpdate {
          manager: None,
          target: LinuxUpdateTarget::Deb(DebUpdate {
-@@ -4900,6 +4931,81 @@ fn codec_failure_reported_at_eof_stays_on_the_failed_source() {
+@@ -5081,6 +5112,81 @@ fn codec_failure_reported_at_eof_stays_on_the_failed_source() {
      );
  }
 
@@ -998,7 +999,7 @@ index 12f1afb18d2b443f774f0ee7380a805a4e015165..24995d928a71a0119ff3a4cf314320db
 
      let channel = effective_update_channel(channel);
 diff --git a/rust/crates/okp-linux-gtk/src/window.rs b/rust/crates/okp-linux-gtk/src/window.rs
-index ae5958e9e8f615a382c0a92c0c809ed7c2e24310..564ebaca08e0d39670717b6c027df4ac9998bae5 100644
+index fb9b97edf039feab7b9aa64fd8ac5a6847d50bcb..7e5d546fc5d503334d41a5f68ac77e0ec961253a 100644
 --- a/rust/crates/okp-linux-gtk/src/window.rs
 +++ b/rust/crates/okp-linux-gtk/src/window.rs
 @@ -133,6 +133,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
