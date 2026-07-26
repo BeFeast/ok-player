@@ -223,25 +223,40 @@ def assertions(body: str, body_mask: str) -> list[tuple[str, str]]:
     return args
 
 
+def passed_into_a_call(head: str, tail: str) -> bool:
+    """Is this occurrence handed to a function whole, as `parse(sample)`?
+
+    Text passed into production code and then asserted on is behaviour, whatever
+    loaded the text. Everything else - slicing it, comparing it, measuring it -
+    is an assertion about the text itself.
+    """
+    if tail.lstrip(" \t\r\n")[:1] not in {",", ")"}:
+        return False
+    before = head.rstrip(" \t\r\n").rstrip("&*").rstrip(" \t\r\n")
+    if not before.endswith("("):
+        return False
+    callee = before[:-1].rstrip(" \t\r\n")
+    return bool(re.search(r"[A-Za-z0-9_]$", callee))
+
+
 def inspects_source_text(arg_mask: str, direct: set[str], derived: set[str]) -> bool:
     """Does this assertion look *at* source text rather than run code on it?
 
-    `source.contains("x")` and `renderer < gtk` (both cut out of the text) look
-    at it. `parse(sample).len()` hands the text to production code and asserts
-    on what came back, which is a behavioural assertion however the fixture was
-    loaded.
+    `source.contains("x")`, `assert_eq!(source, expected)` and `renderer < gtk`
+    (indices cut out of the text) all look at it. `parse(sample).len()` hands the
+    text to production code and asserts on what came back.
     """
     if set(IDENT.findall(arg_mask)) & derived:
         return True
     for name in direct | {"include_str"}:
         for match in re.finditer(rf"\b{re.escape(name)}\b", arg_mask):
-            tail = arg_mask[match.end() :]
+            head, tail = arg_mask[: match.start()], arg_mask[match.end() :]
             if name == "include_str":
                 call = re.match(r"!\s*\([^()]*\)", tail)
                 if not call:
                     continue
                 tail = tail[call.end() :]
-            if tail.lstrip(" \t\r\n")[:1] in {".", "["}:
+            if not passed_into_a_call(head, tail):
                 return True
     return False
 

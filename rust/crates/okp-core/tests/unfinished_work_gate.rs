@@ -338,6 +338,17 @@ fn parses_a_three_cue_subtitle_file() {
 }
 "#;
 
+/// A whole-text comparison. The binding is not sliced and no method is called
+/// on it, but the assertion is still about the text and nothing else.
+const WHOLE_TEXT_COMPARISON_TEST: &str = r#"
+#[test]
+fn main_matches_the_expected_implementation() {
+    let source = include_str!("main.rs");
+
+    assert_eq!(source, "fn main() { configure(); }");
+}
+"#;
+
 struct Workspace {
     root: TempDir,
 }
@@ -435,6 +446,21 @@ fn a_test_that_loads_fixture_data_and_asserts_on_parsed_output_is_never_flagged(
         Some(0),
         "{}",
         String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn comparing_the_whole_source_text_is_still_a_source_grep() {
+    let workspace = Workspace::new("okp-gate-whole-text");
+    workspace.write_tests(WHOLE_TEXT_COMPARISON_TEST);
+    workspace.write_allowlist("# empty\n");
+
+    let output = workspace.check();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("main_matches_the_expected_implementation")
     );
 }
 
