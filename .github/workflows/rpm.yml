@@ -9,6 +9,14 @@ on:
       - 'scripts/package-linux-rpm-source.sh'
       - 'scripts/run-linux-rpm-checks.sh'
       - 'scripts/smoke-linux-rpm-install-upgrade.sh'
+      # The installed-binary launch gate runs these, so a change to any of them
+      # must be exercised by this lane before it merges.
+      - 'scripts/smoke-linux-main-window.sh'
+      - 'scripts/assert-linux-idle-osc-absent.sh'
+      - 'scripts/run-linux-isolated-dbus-session.sh'
+      - 'scripts/run-linux-isolated-xvfb-session.sh'
+      - 'scripts/run-linux-child-subreaper.py'
+      - 'scripts/ok-player-scratch.sh'
       - 'THIRD-PARTY-NOTICES.md'
       - 'LICENSE'
   push:
@@ -51,7 +59,21 @@ jobs:
             wayland-devel wayland-protocols-devel mesa-libEGL-devel mesa-libGL-devel \
             desktop-file-utils appstream xdg-utils
 
-      - name: Build, lint, install, upgrade, and remove
+      # Everything the installed-binary launch gate needs: a disposable X server
+      # with software GL, a window manager, screen capture, and a session bus.
+      # run-linux-rpm-checks.sh hard-fails when any of these is missing, so this
+      # step is a prerequisite rather than an optional enhancement.
+      - name: Install headless launch tooling
+        run: |
+          dnf install -y \
+            xorg-x11-server-Xvfb xorg-x11-xauth util-linux \
+            xwininfo xprop xdotool xfwm4 \
+            ImageMagick ripgrep ffmpeg-free python3 \
+            dbus-daemon glib2 \
+            mesa-dri-drivers mesa-libEGL mesa-libGL mesa-libGLES libepoxy \
+            dejavu-sans-fonts dejavu-serif-fonts google-noto-sans-fonts
+
+      - name: Build, lint, install, launch, upgrade, and remove
         env:
           FEDORA_VERSION: ${{ matrix.fedora }}
           CC: /usr/bin/cc
