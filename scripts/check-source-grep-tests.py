@@ -182,15 +182,18 @@ def statement_spans(body: str, body_mask: str) -> list[tuple[int, int]]:
     return spans
 
 
-def source_bindings(body: str, body_mask: str, seeds: set[str]) -> set[str]:
-    """Names in the body that hold source text (directly or by derivation).
+def source_bindings(
+    body: str, body_mask: str, seeds: set[str]
+) -> tuple[set[str], set[str]]:
+    """(direct, derived) names in the body that hold source text.
 
-    A binding is derived only when the right-hand side *starts* with a known
-    source-text name, i.e. it slices that text (`window.find(..)`,
-    `playback.split(..)`). `let output = Command::new(script)` merely passes the
-    text along and is not itself source text, so it stays behavioural.
+    Direct names are bound straight from `include_str!`. Derived names are cut
+    out of a direct one (`window.find(..)`, `playback.split(..)`) and therefore
+    describe the text rather than anything the code did with it.
+    `let output = Command::new(script)` merely passes the text along, so it is
+    neither: it stays behavioural.
     """
-    names = set(seeds)
+    direct, derived = set(seeds), set()
     for start, end in statement_spans(body, body_mask):
         stmt_mask = body_mask[start:end]
         let = LET_BINDING.search(stmt_mask)
@@ -200,12 +203,12 @@ def source_bindings(body: str, body_mask: str, seeds: set[str]) -> set[str]:
         # merely mentions a name cannot be mistaken for code that uses it.
         rhs = stmt_mask[let.end() :]
         if "include_str" in set(IDENT.findall(rhs)):
-            names.add(let.group(1))
+            direct.add(let.group(1))
             continue
         head = IDENT.match(rhs.lstrip().lstrip("&*").lstrip())
-        if head and head.group(0) in names:
-            names.add(let.group(1))
-    return names
+        if head and head.group(0) in direct | derived:
+            derived.add(let.group(1))
+    return direct, derived
 
 
 def assertions(body: str, body_mask: str) -> list[tuple[str, str]]:
@@ -220,16 +223,38 @@ def assertions(body: str, body_mask: str) -> list[tuple[str, str]]:
     return args
 
 
+def inspects_source_text(arg_mask: str, direct: set[str], derived: set[str]) -> bool:
+    """Does this assertion look *at* source text rather than run code on it?
+
+    `source.contains("x")` and `renderer < gtk` (both cut out of the text) look
+    at it. `parse(sample).len()` hands the text to production code and asserts
+    on what came back, which is a behavioural assertion however the fixture was
+    loaded.
+    """
+    if set(IDENT.findall(arg_mask)) & derived:
+        return True
+    for name in direct | {"include_str"}:
+        for match in re.finditer(rf"\b{re.escape(name)}\b", arg_mask):
+            tail = arg_mask[match.end() :]
+            if name == "include_str":
+                call = re.match(r"!\s*\([^()]*\)", tail)
+                if not call:
+                    continue
+                tail = tail[call.end() :]
+            if tail.lstrip(" \t\r\n")[:1] in {".", "["}:
+                return True
+    return False
+
+
 def classify(test: TestFn, seeds: set[str]) -> tuple[bool, int, int]:
     """(is_source_text_only, source_grep_assertions, behavioural_assertions)."""
-    names = source_bindings(test.body, test.body_mask, seeds)
+    direct, derived = source_bindings(test.body, test.body_mask, seeds)
     uses_source = "include_str" in test.body_mask or bool(
         seeds & set(IDENT.findall(test.body_mask))
     )
     grep_count = behavioural_count = 0
     for _, arg_mask in assertions(test.body, test.body_mask):
-        idents = set(IDENT.findall(arg_mask))
-        if "include_str" in idents or idents & names:
+        if inspects_source_text(arg_mask, direct, derived):
             grep_count += 1
         else:
             behavioural_count += 1

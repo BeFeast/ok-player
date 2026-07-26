@@ -36,7 +36,7 @@ TITLE_UNFINISHED = re.compile(
     r"""^\s*(?:
           \[\s*(?:wip|draft|do\s*not\s*merge|dnm)\s*\]
         | wip\b
-        | (?:draft|do\s*not\s*merge|dnm)\s*[:\-–—]
+        | (?:draft|do\s*not\s*merge|dnm)\s*(?:[:\-–—]|$)
     )""",
     re.IGNORECASE | re.VERBOSE,
 )
@@ -61,7 +61,9 @@ HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 RUST_STUBS = re.compile(r"\b(?:todo|unimplemented)!\s*[\(\[\{]")
 STRING_LITERAL = re.compile(r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'")
 BARE_MARKER = re.compile(r"\b(TODO|FIXME)\b(?!\s*\(\s*#\d+\s*\))")
-CODE_SUFFIXES = {".rs", ".cs", ".sh", ".ps1", ".psm1", ".py", ".c", ".h", ".cpp"}
+CODE_SUFFIXES = {
+    ".rs", ".cs", ".sh", ".ps1", ".psm1", ".py", ".c", ".h", ".cpp", ".xaml",
+}
 SKIP_DIRS = {".git", "target", "bin", "obj", "node_modules"}
 # The gate's own sources and its tests must spell the markers out to detect them.
 SELF_PATHS = {

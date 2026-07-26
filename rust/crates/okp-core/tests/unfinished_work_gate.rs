@@ -87,6 +87,10 @@ fn a_wip_title_prefix_blocks_the_merge() {
         "wip reveal saved Linux screenshots",
         "Draft: reveal saved Linux screenshots",
         "DO NOT MERGE - reveal saved Linux screenshots",
+        // Standalone declarations, with nothing after them to delimit.
+        "Draft",
+        "Do not merge",
+        "DNM",
     ] {
         let output = fixture.check(title, FINISHED_BODY);
         assert_eq!(output.status.code(), Some(1), "title should block: {title}");
@@ -239,6 +243,26 @@ fn unfinished_code_markers_block_the_merge_unless_they_name_an_issue() {
 }
 
 #[test]
+fn an_unfinished_marker_in_shipped_xaml_blocks_the_merge() {
+    let fixture = Declaration::new("okp-gate-xaml-marker");
+    let markup = fixture.root.path().join("Themes/Typography.xaml");
+    fs::create_dir_all(markup.parent().expect("parent")).expect("fixture tree");
+
+    fs::write(&markup, "<!-- Timecode 12 (tabular fidelity TODO) -->\n").expect("write");
+    let blocked = fixture.check("Add the timecode style", FINISHED_BODY);
+    assert_eq!(blocked.status.code(), Some(1), "{}", stderr_of(&blocked));
+    assert!(stderr_of(&blocked).contains("Unfinished-code marker"));
+
+    fs::write(
+        &markup,
+        "<!-- Timecode 12 (tabular fidelity TODO(#638)) -->\n",
+    )
+    .expect("write");
+    let tracked = fixture.check("Add the timecode style", FINISHED_BODY);
+    assert_eq!(tracked.status.code(), Some(0), "{}", stderr_of(&tracked));
+}
+
+#[test]
 fn a_marker_word_inside_a_string_literal_is_not_unfinished_code() {
     let fixture = Declaration::new("okp-gate-marker-literal");
     let source = fixture.root.path().join("crate/src/lib.rs");
@@ -299,6 +323,18 @@ fn parses_a_three_cue_subtitle_file() {
 
     assert_eq!(cues.len(), 3);
     assert_eq!(cues[0].start_ms, 1_000);
+}
+"#;
+
+/// A behavioural test whose only assertion hands the fixture text straight to
+/// production code. The source binding is mentioned, but it is parsed, not
+/// inspected, so this is behaviour and must not be flagged.
+const INLINE_FIXTURE_TEST: &str = r#"
+#[test]
+fn parses_a_three_cue_subtitle_file() {
+    let sample = include_str!("../fixtures/three-cues.srt");
+
+    assert_eq!(parse_srt(sample).expect("sample should parse").len(), 3);
 }
 "#;
 
@@ -390,6 +426,22 @@ fn a_behavioural_test_is_never_flagged() {
 fn a_test_that_loads_fixture_data_and_asserts_on_parsed_output_is_never_flagged() {
     let workspace = Workspace::new("okp-gate-fixture-data");
     workspace.write_tests(FIXTURE_TEST);
+    workspace.write_allowlist("# empty\n");
+
+    let output = workspace.check();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn a_fixture_parsed_inside_the_assertion_itself_is_never_flagged() {
+    let workspace = Workspace::new("okp-gate-inline-fixture");
+    workspace.write_tests(INLINE_FIXTURE_TEST);
     workspace.write_allowlist("# empty\n");
 
     let output = workspace.check();
