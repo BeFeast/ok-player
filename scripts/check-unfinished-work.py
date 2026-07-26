@@ -59,6 +59,7 @@ HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 
 # Unfinished-code markers. A marker that references a tracking issue is fine.
 RUST_STUBS = re.compile(r"\b(?:todo|unimplemented)!\s*[\(\[\{]")
+STRING_LITERAL = re.compile(r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'")
 BARE_MARKER = re.compile(r"\b(TODO|FIXME)\b(?!\s*\(\s*#\d+\s*\))")
 CODE_SUFFIXES = {".rs", ".cs", ".sh", ".ps1", ".psm1", ".py", ".c", ".h", ".cpp"}
 SKIP_DIRS = {".git", "target", "bin", "obj", "node_modules"}
@@ -134,7 +135,12 @@ def unfinished_code_markers(root: Path) -> list[tuple[str, int, str]]:
         except (UnicodeDecodeError, OSError):
             continue
         for number, line in enumerate(text.splitlines(), start=1):
-            if RUST_STUBS.search(line) or BARE_MARKER.search(line):
+            # Blank out string literals first: `const LABEL: &str = "TODO"` is
+            # data, not unfinished work. A marker inside a multi-line raw string
+            # still reports; that has not happened, and a false positive there is
+            # cheap to resolve by naming a tracking issue.
+            code = STRING_LITERAL.sub('""', line)
+            if RUST_STUBS.search(code) or BARE_MARKER.search(code):
                 hits.append((rel, number, line.strip()[:160]))
     return hits
 

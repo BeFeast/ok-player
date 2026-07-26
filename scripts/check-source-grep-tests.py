@@ -369,16 +369,23 @@ def main() -> int:
             )
         else:
             base_entries = read_allowlist(base_text)
-            added = sorted(set(allowed) - set(base_entries))
-            if len(allowed) > len(base_entries):
+            base_names = {entry.rpartition("::")[2] for entry in base_entries}
+            for entry in sorted(set(allowed) - set(base_entries)):
+                name = entry.rpartition("::")[2]
+                # Re-keying an entry that already existed - the test moved to
+                # another file - is not growth, as long as the total did not
+                # rise. Anything else is a new offender being grandfathered.
+                if name in base_names and len(allowed) <= len(base_entries):
+                    continue
                 failures += 1
                 annotate(
                     "error",
                     "Source-grep allowlist grew",
                     (
-                        f"{ALLOWLIST_PATH} went from {len(base_entries)} to "
-                        f"{len(allowed)} entries. It may only shrink. Added: "
-                        + ", ".join(added)
+                        f"{ALLOWLIST_PATH} adds `{entry}`. The allowlist may only "
+                        "shrink: it grandfathers tests that already existed, it does "
+                        "not accept new ones. Write a behavioural test instead - "
+                        "drive the code and assert on what it produced."
                     ),
                     file=ALLOWLIST_PATH,
                 )

@@ -238,6 +238,22 @@ fn unfinished_code_markers_block_the_merge_unless_they_name_an_issue() {
     assert_eq!(tracked.status.code(), Some(0), "{}", stderr_of(&tracked));
 }
 
+#[test]
+fn a_marker_word_inside_a_string_literal_is_not_unfinished_code() {
+    let fixture = Declaration::new("okp-gate-marker-literal");
+    let source = fixture.root.path().join("crate/src/lib.rs");
+    fs::create_dir_all(source.parent().expect("parent")).expect("fixture tree");
+    fs::write(
+        &source,
+        "pub const LABEL: &str = \"TODO\";\npub fn parse(marker: &str) -> bool {\n    marker == \"FIXME\"\n}\n",
+    )
+    .expect("write");
+
+    let output = fixture.check("Parse marker labels", FINISHED_BODY);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+}
+
 // ---------------------------------------------------------------------------
 // Source-text-only test detection: scripts/check-source-grep-tests.py
 // ---------------------------------------------------------------------------
@@ -398,6 +414,137 @@ fn an_allowlist_entry_that_no_longer_matches_must_be_deleted() {
 
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stdout).contains("may only shrink"));
+}
+
+/// A second source-text-only test, so a fixture can hold two offenders at once.
+const SECOND_SOURCE_GREP_TEST: &str = r#"
+#[test]
+fn file_association_launches_present_before_media_delivery() {
+    let desktop = include_str!("../resources/ok-player.desktop");
+
+    assert!(desktop.contains("MimeType=video/mp4"));
+}
+"#;
+
+#[test]
+fn swapping_a_fixed_test_for_a_new_offender_is_rejected_even_though_the_count_holds() {
+    let workspace = GitWorkspace::new("okp-gate-allowlist-swap");
+    // Base: one offender, grandfathered.
+    workspace.write_tests(SOURCE_GREP_TEST);
+    workspace.write_allowlist(
+        "rust/crates/demo/src/tests.rs::renderer_environment_is_selected_before_gtk_initialization\n",
+    );
+    let base = workspace.commit("base");
+
+    // Head: that test was fixed, and a brand new source grep was grandfathered
+    // in its place. The entry count is unchanged.
+    workspace.write_tests(&format!("{BEHAVIOURAL_TEST}{SECOND_SOURCE_GREP_TEST}"));
+    workspace.write_allowlist(
+        "rust/crates/demo/src/tests.rs::file_association_launches_present_before_media_delivery\n",
+    );
+
+    let output = workspace.check(&base);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(stdout.contains("may only shrink"));
+    assert!(stdout.contains("file_association_launches_present_before_media_delivery"));
+}
+
+#[test]
+fn moving_a_grandfathered_test_to_another_file_is_accepted() {
+    let workspace = GitWorkspace::new("okp-gate-allowlist-move");
+    workspace.write_tests(SOURCE_GREP_TEST);
+    workspace.write_allowlist(
+        "rust/crates/demo/src/tests.rs::renderer_environment_is_selected_before_gtk_initialization\n",
+    );
+    let base = workspace.commit("base");
+
+    workspace.write_tests("");
+    workspace.write_moved_tests(SOURCE_GREP_TEST);
+    workspace.write_allowlist(
+        "rust/crates/demo/src/startup_tests.rs::renderer_environment_is_selected_before_gtk_initialization\n",
+    );
+
+    let output = workspace.check(&base);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// A workspace with git history, so the allowlist can be compared with its base.
+struct GitWorkspace {
+    inner: Workspace,
+}
+
+impl GitWorkspace {
+    fn new(name: &str) -> Self {
+        let inner = Workspace::new(name);
+        let root = inner.root.path();
+        run_git(root, &["init", "--quiet"]);
+        run_git(root, &["config", "user.name", "OK Player Tests"]);
+        run_git(root, &["config", "user.email", "tests@example.invalid"]);
+        Self { inner }
+    }
+
+    fn write_tests(&self, contents: &str) {
+        self.inner.write_tests(contents);
+    }
+
+    fn write_moved_tests(&self, contents: &str) {
+        fs::write(
+            self.inner
+                .root
+                .path()
+                .join("rust/crates/demo/src/startup_tests.rs"),
+            contents,
+        )
+        .expect("moved fixture test file should be written");
+    }
+
+    fn write_allowlist(&self, contents: &str) {
+        self.inner.write_allowlist(contents);
+    }
+
+    fn commit(&self, message: &str) -> String {
+        let root = self.inner.root.path();
+        run_git(root, &["add", "."]);
+        run_git(root, &["commit", "--quiet", "-m", message]);
+        String::from_utf8(run_git(root, &["rev-parse", "HEAD"]).stdout)
+            .expect("git SHA should be UTF-8")
+            .trim()
+            .to_owned()
+    }
+
+    fn check(&self, base: &str) -> Output {
+        Command::new("python3")
+            .arg(repo_root().join("scripts/check-source-grep-tests.py"))
+            .arg("--root")
+            .arg(self.inner.root.path())
+            .arg("--base-ref")
+            .arg(base)
+            .output()
+            .expect("source grep check should run")
+    }
+}
+
+fn run_git(root: &Path, args: &[&str]) -> Output {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(root)
+        .output()
+        .expect("git fixture command should run");
+    assert!(
+        output.status.success(),
+        "git {:?} failed: {}",
+        args,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
 }
 
 #[test]

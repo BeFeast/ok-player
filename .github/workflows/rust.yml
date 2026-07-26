@@ -3,7 +3,12 @@ name: Rust
 on:
   push:
     branches: [ main ]
+  # `edited` is here because this job carries the unfinished-work gate and is on
+  # the required-checks list. Without it, a pull request could pass the required
+  # check and then have a WIP marker or an acceptance hold added to its title or
+  # body, leaving the enforced check green and stale.
   pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
   workflow_dispatch:
 
 permissions:
