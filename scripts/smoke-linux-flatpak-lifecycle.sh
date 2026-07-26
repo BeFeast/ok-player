@@ -115,7 +115,7 @@ steps = [
 Path(sys.argv[3]).write_text(
     json.dumps(
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "pull_request_head": artifact["source_commit"],
             "downloaded_artifact_sha256": sys.argv[4],
             "desktop": "headless",

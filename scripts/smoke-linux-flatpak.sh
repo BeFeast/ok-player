@@ -264,6 +264,17 @@ if missing:
     )
 PY
 
+schema_version="$(sed -n 's/^pub const FLATPAK_LIFECYCLE_EVIDENCE_SCHEMA_VERSION: u32 = \([0-9]\+\);$/\1/p' \
+  "$ROOT/rust/crates/okp-core/src/acceptance_evidence.rs")"
+[[ -n "$schema_version" ]] || {
+  echo "Could not read the Flatpak lifecycle evidence schema version" >&2
+  exit 1
+}
+grep -q "\"schema_version\": $schema_version," "$LIFECYCLE_SCRIPT" || {
+  echo "The lifecycle lane emits a schema version other than $schema_version" >&2
+  exit 1
+}
+
 bash -n "$BUILD_SCRIPT"
 bash -n "$LIFECYCLE_SCRIPT"
 bash -n "$REPIN_SCRIPT"
