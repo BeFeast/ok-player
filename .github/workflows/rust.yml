@@ -6,12 +6,47 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   rust:
     name: Rust workspace (Linux)
     runs-on: ubuntu-latest
     steps:
+      # Full history: the source-text-only test check compares the allowlist
+      # against its state on the base commit to prove the allowlist only shrank.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The unfinished-work gate runs here, first, because this job is on the
+      # branch protection required-checks list: a gate that is not required is a
+      # suggestion. The Merge gate workflow runs the same two scripts for fast,
+      # edit-aware feedback. Both must stay cheap and stay ahead of the apt step.
+      - name: Read pull request declaration
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: ./scripts/read-pr-declaration.sh "$PR_NUMBER" "$RUNNER_TEMP"
+
+      - name: No unfinished work declared
+        if: github.event_name == 'pull_request'
+        run: >-
+          python3 scripts/check-unfinished-work.py --root .
+          --title-file "$RUNNER_TEMP/pr-title.txt"
+          --body-file "$RUNNER_TEMP/pr-body.txt"
+
+      - name: No unfinished-code markers in the tree
+        if: github.event_name != 'pull_request'
+        run: python3 scripts/check-unfinished-work.py --root .
+
+      - name: Tests assert behaviour, not source text
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha }}
+        run: python3 scripts/check-source-grep-tests.py --root .
 
       - name: Night GUI QA driver policy tests
         run: ./scripts/tests/ok-player-night-gui-qa.Tests.sh

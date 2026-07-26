@@ -1,0 +1,69 @@
+name: Bug report
+description: A defect in OK Player, with a reproduction and an acceptance bar.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        An issue without a reproduction cannot be closed by evidence, only by
+        opinion. Both fields below are required for that reason.
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: One sentence describing the wrong behaviour.
+      placeholder: Saving a screenshot in fullscreen shrinks the window.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: >-
+        Numbered steps from a clean start, the media or state involved, and
+        exactly what happens versus what should happen. If it only reproduces
+        under a specific desktop, session type, or display layout, say so.
+      value: |
+        1.
+        2.
+        3.
+
+        Expected:
+        Actual:
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: >-
+        What must be true for this to be closed. State the regression test that
+        must fail without the fix, and any operator acceptance that must happen
+        before the fix may merge.
+      value: |
+        - [ ] Regression test that fails without the fix:
+        - [ ] Operator acceptance required before merge: yes / no - if yes, what
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: >-
+        Platform and version (Windows 11 / the Linux distribution and desktop),
+        OK Player version, session type where it matters. No machine names, no
+        paths from private infrastructure.
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Logs, screenshots, or recordings. Link large artifacts; do not paste them.
+    validations:
+      required: false
