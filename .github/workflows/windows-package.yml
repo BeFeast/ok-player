@@ -47,7 +47,7 @@ jobs:
       # A CI-only version keeps this lane from ever colliding with a real tag.
       - name: Build the Velopack installer
         shell: pwsh
-        run: ./installer/build-velopack.ps1 -Version "0.0.0-ci.${{ github.run_number }}"
+        run: ./installer/build-velopack.ps1 -Version "0.0.1-ci.${{ github.run_number }}"
 
       - name: Assert the shipping installer artifacts exist
         shell: pwsh
