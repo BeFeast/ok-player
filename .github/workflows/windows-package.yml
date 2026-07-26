@@ -1,0 +1,128 @@
+name: Windows Installer
+
+# The shipping Windows artifact is the Velopack Setup.exe produced by
+# installer/build-velopack.ps1. Until this workflow existed, nothing in CI ran
+# that script: the release lane was a manual local operation, and
+# release-windows-candidate.yml only packs the separate `win-candidate` channel
+# after a merge. This lane builds the real `win` installer, installs it, and
+# starts the installed application, so a change that breaks packaging or startup
+# is visible before merge instead of on a tester's machine.
+#
+# Path-gated on purpose: a full self-contained WinUI publish plus a Velopack pack
+# is expensive, so it runs for changes that can plausibly break the installer
+# rather than for every pull request.
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/windows-package.yml'
+      - 'installer/**'
+      - 'src/OkPlayer.App/**'
+      - 'src/OkPlayer.Core/**'
+      - 'OkPlayer.sln'
+      - 'scripts/fetch-natives.ps1'
+  workflow_dispatch:
+
+jobs:
+  windows-installer:
+    name: Build, install, and launch the Velopack installer
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Fetch libmpv
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/fetch-natives.ps1
+
+      - name: Install Velopack CLI
+        run: dotnet tool install -g vpk --version 1.2.0
+
+      # A CI-only version keeps this lane from ever colliding with a real tag.
+      - name: Build the Velopack installer
+        shell: pwsh
+        run: ./installer/build-velopack.ps1 -Version "0.0.0-ci.${{ github.run_number }}"
+
+      - name: Assert the shipping installer artifacts exist
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $releases = Join-Path $PWD 'artifacts\releases'
+          foreach ($name in @('OkPlayer-win-Setup.exe', 'releases.win.json')) {
+            $path = Join-Path $releases $name
+            if (-not (Test-Path $path)) { throw "Velopack pack did not produce $name" }
+            Write-Host "$name : $((Get-Item $path).Length) bytes"
+          }
+
+      - name: Install the packaged application
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Join-Path $PWD 'artifacts\releases\OkPlayer-win-Setup.exe'
+          $proc = Start-Process -FilePath $setup -ArgumentList '--silent' -PassThru -Wait
+          if ($proc.ExitCode -ne 0) { throw "Setup.exe exited with $($proc.ExitCode)" }
+          $installed = Join-Path $env:LOCALAPPDATA 'OkPlayer\current\OkPlayer.exe'
+          if (-not (Test-Path $installed)) {
+            Get-ChildItem (Join-Path $env:LOCALAPPDATA 'OkPlayer') -Recurse -Depth 2 -ErrorAction SilentlyContinue |
+              ForEach-Object { Write-Host $_.FullName }
+            throw "Installed executable not found at $installed"
+          }
+          Write-Host "Installed: $installed"
+
+      # The point of this lane: start the executable the installer actually put
+      # on the machine and require a real top-level window, then require it to
+      # shut down on request. No leg here may pass by being skipped - every
+      # branch either asserts or throws.
+      - name: Launch the installed application
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installed = Join-Path $env:LOCALAPPDATA 'OkPlayer\current\OkPlayer.exe'
+          $stdout = Join-Path $env:RUNNER_TEMP 'okplayer-stdout.log'
+          $stderr = Join-Path $env:RUNNER_TEMP 'okplayer-stderr.log'
+          $proc = Start-Process -FilePath $installed -PassThru `
+            -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          $deadline = (Get-Date).AddSeconds(90)
+          $handle = [IntPtr]::Zero
+          while ((Get-Date) -lt $deadline) {
+            if ($proc.HasExited) {
+              if (Test-Path $stdout) { Get-Content $stdout | Write-Host }
+              if (Test-Path $stderr) { Get-Content $stderr | Write-Host }
+              throw "The installed application exited with $($proc.ExitCode) before showing a window"
+            }
+            $proc.Refresh()
+            if ($proc.MainWindowHandle -ne [IntPtr]::Zero) {
+              $handle = $proc.MainWindowHandle
+              break
+            }
+            Start-Sleep -Milliseconds 500
+          }
+          if ($handle -eq [IntPtr]::Zero) {
+            if (Test-Path $stdout) { Get-Content $stdout | Write-Host }
+            if (Test-Path $stderr) { Get-Content $stderr | Write-Host }
+            $proc.Kill()
+            throw 'The installed application never created a top-level window'
+          }
+          Write-Host "Main window handle: $handle - title: $($proc.MainWindowTitle)"
+          if (-not $proc.CloseMainWindow()) { throw 'The installed application refused a close request' }
+          if (-not $proc.WaitForExit(30000)) {
+            $proc.Kill()
+            throw 'The installed application did not exit within 30s of a close request'
+          }
+          Write-Host "Exit code after close: $($proc.ExitCode)"
+          if ($proc.ExitCode -ne 0) { throw "The installed application exited with $($proc.ExitCode)" }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ok-player-windows-installer-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/releases/**
+            ${{ runner.temp }}/okplayer-*.log
+          if-no-files-found: warn
