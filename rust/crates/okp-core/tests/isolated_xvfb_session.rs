@@ -66,8 +66,10 @@ fn main_window_fit_session_has_one_multiscreen_manager_and_two_supervisors() {
     assert!(close.contains("route=ewmh-close-window"));
     assert!(close.contains("\"$X11_CLOSE_REQUEST\" \"$window_id\""));
     assert!(close.contains("result=already-gone"));
-    assert!(close.contains("x11_window_state \"$window_id\""));
-    assert!(close.contains("unqueryable)"));
+    assert!(close.contains("\"$X11_CLOSE_REQUEST\" --probe \"$window_id\""));
+    assert!(close.contains("close_status == 3"));
+    assert!(close.contains("probe_status == 3"));
+    assert!(!close.contains("xdotool getwindowgeometry"));
     assert!(!close.contains("xdotool key"));
     assert!(!close.contains("xdotool click"));
     assert!(!close.contains("xdotool windowclose"));
@@ -81,6 +83,12 @@ fn main_window_fit_session_has_one_multiscreen_manager_and_two_supervisors() {
     assert!(close_request.contains("RootWindowOfScreen(attributes.screen)"));
     assert!(close_request.contains("SubstructureRedirectMask | SubstructureNotifyMask"));
     assert!(close_request.contains("XSendEvent"));
+    assert!(close_request.contains("XSetErrorHandler(record_x11_error)"));
+    // Both halves of XGetWindowAttributes must count as "gone": the second round
+    // trip fails with BadDrawable, not BadWindow, when the window dies mid-call.
+    assert!(close_request.contains("code == BadWindow || code == BadDrawable"));
+    assert!(close_request.contains("window_gone_error(x11_error_code)"));
+    assert!(close_request.contains("strcmp(argv[1], \"--probe\")"));
 }
 
 #[test]
@@ -105,19 +113,22 @@ OUT_DIR={out}
 app_pid=123
 X11_CLOSE_REQUEST=send_close
 dispatches=0
+probes=0
 send_close() {{
-  dispatches=$((dispatches + 1))
-  (( dispatches == 1 ))
-}}
-xwininfo() {{
-  if [[ "$1" == "-root" ]]; then
+  if [[ "$1" == "--probe" ]]; then
+    probes=$((probes + 1))
     return 0
   fi
-  (( dispatches < 2 ))
+  dispatches=$((dispatches + 1))
+  if (( dispatches == 1 )); then
+    return 0
+  fi
+  return 3
 }}
-finish_app_shutdown() {{ printf 'finish=%s\n' "$1"; }}
+finish_app_shutdown() {{
+  printf 'dispatches=%s probes=%s finish=%s\n' "$dispatches" "$probes" "$1"
+}}
 close_app 4194310
-printf 'dispatches=%s\n' "$dispatches"
 "#,
         window_state = window_state,
         out = root.path().display()
@@ -129,10 +140,10 @@ printf 'dispatches=%s\n' "$dispatches"
     assert_success(&output);
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "finish=last_window_close\ndispatches=2\n"
+        "dispatches=2 probes=1 finish=last_window_close\n"
     );
 
-    let rejection_probe = format!(
+    let dispatch_failure_probe = format!(
         r#"set -euo pipefail
 {window_state}
 {close}
@@ -140,27 +151,52 @@ OUT_DIR={out}
 app_pid=123
 X11_CLOSE_REQUEST=send_close
 send_close() {{ return 1; }}
-xwininfo() {{
-  [[ "$1" == "-id" ]] || return 2
+finish_app_shutdown() {{ return 0; }}
+if close_app 4194310; then
+  exit 1
+fi
+printf 'dispatch-operational-failure=rejected\n'
+"#,
+        out = root.path().display()
+    );
+    let rejection = Command::new("bash")
+        .args(["-c", &dispatch_failure_probe])
+        .output()
+        .expect("dispatch failure rejection probe should run");
+    assert_success(&rejection);
+    assert_eq!(
+        String::from_utf8_lossy(&rejection.stdout),
+        "dispatch-operational-failure=rejected\n"
+    );
+
+    let probe_failure_probe = format!(
+        r#"set -euo pipefail
+{close}
+OUT_DIR={out}
+app_pid=123
+X11_CLOSE_REQUEST=send_close
+send_close() {{
+  if [[ "$1" == "--probe" ]]; then
+    return 1
+  fi
   return 0
 }}
 finish_app_shutdown() {{ return 0; }}
 if close_app 4194310; then
   exit 1
 fi
-printf 'live-window-failure=rejected\n'
+printf 'probe-operational-failure=rejected\n'
 "#,
-        window_state = window_state,
         out = root.path().display()
     );
-    let rejection = Command::new("bash")
-        .args(["-c", &rejection_probe])
+    let probe_rejection = Command::new("bash")
+        .args(["-c", &probe_failure_probe])
         .output()
-        .expect("live-window rejection probe should run");
-    assert_success(&rejection);
+        .expect("probe failure rejection probe should run");
+    assert_success(&probe_rejection);
     assert_eq!(
-        String::from_utf8_lossy(&rejection.stdout),
-        "live-window-failure=rejected\n"
+        String::from_utf8_lossy(&probe_rejection.stdout),
+        "probe-operational-failure=rejected\n"
     );
 
     let display_failure_probe = format!(
