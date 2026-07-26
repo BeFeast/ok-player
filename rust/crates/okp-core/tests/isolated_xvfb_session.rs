@@ -55,6 +55,177 @@ fn main_window_fit_session_has_one_multiscreen_manager_and_two_supervisors() {
     assert!(script.contains("xdg_runtime_mode=%s\\naccessibility_disabled=true"));
     assert!(script.contains("org.a11y.Bus"));
     assert!(script.contains("org.a11y.atspi.Registry"));
+    assert!(script.contains("assert_logged_fit_containment"));
+    assert!(script.contains("logged_monitor_workarea_containment=pass"));
+
+    let close = script
+        .split_once("close_app() {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nquit_app()"))
+        .map(|(body, _)| body)
+        .expect("main-window close helper");
+    assert!(close.contains("route=ewmh-close-window"));
+    assert!(close.contains("\"$X11_CLOSE_REQUEST\" \"$window_id\""));
+    assert!(close.contains("result=already-gone"));
+    assert!(close.contains("\"$X11_CLOSE_REQUEST\" --probe \"$window_id\""));
+    assert!(close.contains("close_status == 3"));
+    assert!(close.contains("probe_status == 3"));
+    assert!(!close.contains("xdotool getwindowgeometry"));
+    assert!(!close.contains("xdotool key"));
+    assert!(!close.contains("xdotool click"));
+    assert!(!close.contains("xdotool windowclose"));
+
+    assert!(script.contains("scripts/send-x11-close-request.c"));
+    assert!(script.contains("pkg-config --cflags --libs x11"));
+    assert!(script.contains("\"$CC_BIN\" -Wall -Wextra -Werror \"$X11_CLOSE_REQUEST_SOURCE\""));
+
+    let close_request = include_str!("../../../../scripts/send-x11-close-request.c");
+    assert!(close_request.contains("_NET_CLOSE_WINDOW"));
+    assert!(close_request.contains("RootWindowOfScreen(attributes.screen)"));
+    assert!(close_request.contains("SubstructureRedirectMask | SubstructureNotifyMask"));
+    assert!(close_request.contains("XSendEvent"));
+    assert!(close_request.contains("XSetErrorHandler(record_x11_error)"));
+    // Both halves of XGetWindowAttributes must count as "gone": the second round
+    // trip fails with BadDrawable, not BadWindow, when the window dies mid-call.
+    assert!(close_request.contains("code == BadWindow || code == BadDrawable"));
+    assert!(close_request.contains("window_gone_error(x11_error_code)"));
+    assert!(close_request.contains("strcmp(argv[1], \"--probe\")"));
+}
+
+#[test]
+fn main_window_close_accepts_only_an_already_gone_retry_failure() {
+    let script = include_str!("../../../../scripts/smoke-linux-main-window.sh");
+    let window_state = script
+        .split_once("x11_window_state() {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nclose_app()"))
+        .map(|(body, _)| format!("x11_window_state() {{{body}\n}}"))
+        .expect("X11 window-state helper");
+    let close = script
+        .split_once("close_app() {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nquit_app()"))
+        .map(|(body, _)| format!("close_app() {{{body}\n}}"))
+        .expect("main-window close helper");
+    let root = unique_temp_dir("okp-close-dispatch-race");
+    let probe = format!(
+        r#"set -euo pipefail
+{window_state}
+{close}
+OUT_DIR={out}
+app_pid=123
+X11_CLOSE_REQUEST=send_close
+dispatches=0
+probes=0
+send_close() {{
+  if [[ "$1" == "--probe" ]]; then
+    probes=$((probes + 1))
+    return 0
+  fi
+  dispatches=$((dispatches + 1))
+  if (( dispatches == 1 )); then
+    return 0
+  fi
+  return 3
+}}
+finish_app_shutdown() {{
+  printf 'dispatches=%s probes=%s finish=%s\n' "$dispatches" "$probes" "$1"
+}}
+close_app 4194310
+"#,
+        window_state = window_state,
+        out = root.path().display()
+    );
+    let output = Command::new("bash")
+        .args(["-c", &probe])
+        .output()
+        .expect("close race probe should run");
+    assert_success(&output);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "dispatches=2 probes=1 finish=last_window_close\n"
+    );
+
+    let dispatch_failure_probe = format!(
+        r#"set -euo pipefail
+{window_state}
+{close}
+OUT_DIR={out}
+app_pid=123
+X11_CLOSE_REQUEST=send_close
+send_close() {{ return 1; }}
+finish_app_shutdown() {{ return 0; }}
+if close_app 4194310; then
+  exit 1
+fi
+printf 'dispatch-operational-failure=rejected\n'
+"#,
+        out = root.path().display()
+    );
+    let rejection = Command::new("bash")
+        .args(["-c", &dispatch_failure_probe])
+        .output()
+        .expect("dispatch failure rejection probe should run");
+    assert_success(&rejection);
+    assert_eq!(
+        String::from_utf8_lossy(&rejection.stdout),
+        "dispatch-operational-failure=rejected\n"
+    );
+
+    let probe_failure_probe = format!(
+        r#"set -euo pipefail
+{close}
+OUT_DIR={out}
+app_pid=123
+X11_CLOSE_REQUEST=send_close
+send_close() {{
+  if [[ "$1" == "--probe" ]]; then
+    return 1
+  fi
+  return 0
+}}
+finish_app_shutdown() {{ return 0; }}
+if close_app 4194310; then
+  exit 1
+fi
+printf 'probe-operational-failure=rejected\n'
+"#,
+        out = root.path().display()
+    );
+    let probe_rejection = Command::new("bash")
+        .args(["-c", &probe_failure_probe])
+        .output()
+        .expect("probe failure rejection probe should run");
+    assert_success(&probe_rejection);
+    assert_eq!(
+        String::from_utf8_lossy(&probe_rejection.stdout),
+        "probe-operational-failure=rejected\n"
+    );
+
+    let display_failure_probe = format!(
+        r#"set -euo pipefail
+{window_state}
+{close}
+OUT_DIR={out}
+app_pid=123
+X11_CLOSE_REQUEST=send_close
+send_close() {{ return 1; }}
+xwininfo() {{ return 1; }}
+finish_app_shutdown() {{ return 0; }}
+if close_app 4194310; then
+  exit 1
+fi
+printf 'display-failure=rejected\n'
+"#,
+        window_state = window_state,
+        out = root.path().display()
+    );
+    let display_failure = Command::new("bash")
+        .args(["-c", &display_failure_probe])
+        .output()
+        .expect("display failure probe should run");
+    assert_success(&display_failure);
+    assert_eq!(
+        String::from_utf8_lossy(&display_failure.stdout),
+        "display-failure=rejected\n"
+    );
 }
 
 #[test]
@@ -83,6 +254,92 @@ fn portability_media_smokes_use_isolated_sessions_and_wait_for_xfwm() {
         assert!(!script.contains("xvfb-run "));
         assert!(!script.contains("dbus-run-session -- bash"));
     }
+}
+
+#[test]
+fn player_window_drag_smoke_covers_survival_cancel_and_recovery() {
+    let script = include_str!("../../../../scripts/smoke-linux-window-drag.sh");
+    assert!(script.contains("run-linux-isolated-xvfb-session.sh"));
+    assert!(script.contains("run-linux-isolated-dbus-session.sh"));
+    assert!(
+        script
+            .contains("__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json")
+    );
+    assert!(script.contains("_NET_SUPPORTING_WM_CHECK"));
+    assert!(script.contains("video-surface-drag"));
+    assert!(script.contains("compositor-cancel"));
+    assert!(script.contains("post-cancel-drag"));
+    assert!(script.contains("idle-canvas-drag"));
+    assert!(script.contains("begin_drag_sequence"));
+    assert!(script.contains("wait_for_drag_sequence_handoff"));
+    assert!(script.contains("$0 == \"interaction: player-window-move sequence=\" expected"));
+    assert!(
+        script
+            .matches("idle_sequence=\"$(begin_drag_sequence")
+            .count()
+            >= 2
+    );
+    assert!(!script.contains("idle_previous_handoffs"));
+    assert!(!script.contains("idle_completions="));
+    assert!(script.contains("video_surface_drag_handoff=observed"));
+    assert!(script.contains("compositor_cancel_drag_handoff=observed"));
+    assert!(script.contains("post_cancel_drag_handoff=observed"));
+    assert!(script.contains("fresh_drag_begin_boundaries=observed"));
+    assert!(script.contains("gtk_completion_edge=observed"));
+    assert!(script.contains("idle_canvas_drag_handoff=observed"));
+    assert!(script.contains("kill -0 \"$app_pid\""));
+    assert!(script.contains("expected all three playback-surface move handoffs"));
+    assert!(script.contains("panicked at|fatal runtime error|Aborted|core dumped"));
+}
+
+#[test]
+fn window_regression_runner_dispatches_drag_and_fit_with_bound_evidence() {
+    let script = include_str!("../../../../scripts/run-linux-window-regression-smokes.sh");
+    assert!(script.contains("smoke-linux-window-drag.sh"));
+    assert!(script.contains("run-linux-window-fit-series.sh"));
+    assert!(script.contains("non_osc_window_drag"));
+    assert!(script.contains("single_monitor_window_fit"));
+    assert!(script.contains("window-drag/results.txt"));
+    assert!(script.contains("window-fit/series-evidence.txt"));
+    assert!(script.contains("compositor_cancel_survival=pass"));
+    assert!(script.contains("fatal_diagnostics=absent"));
+    assert!(script.contains("completed_consecutive_runs=3"));
+    assert!(script.contains("logged_monitor_workarea_containment=pass"));
+    assert!(script.contains("session_bus_teardown=clean"));
+    assert!(script.contains("xvfb_teardown=clean"));
+    assert!(script.contains("window-fit/run-{1,2,3}/fit-xvfb-evidence.txt"));
+    assert!(script.contains("OKP_WINDOW_REGRESSION_SOURCE_SHA must identify the tested candidate"));
+    assert!(script.contains("source_sha=$SOURCE_SHA"));
+    assert!(script.contains("Output directory already exists"));
+    assert!(script.contains("sha256sum"));
+    assert!(script.contains("if (( failed != 0 ))"));
+}
+
+#[test]
+fn night_gui_runs_headless_window_regressions_before_the_live_seat_gate() {
+    let host = include_str!("../../../../scripts/ok-player-night-gui-host.sh");
+    let candidate = host
+        .find("run_hook A candidate_install")
+        .expect("candidate preparation should be present");
+    let headless = host
+        .find("run_action A headless_window_regressions")
+        .expect("headless window regressions should be present");
+    let seat = host
+        .find("\nrun_seat_check\n")
+        .expect("the live graphical seat gate should be present");
+    assert!(candidate < headless && headless < seat);
+    assert!(host.contains("probe-host"));
+
+    let controller = include_str!("../../../../scripts/ok-player-night-gui-qa.sh");
+    assert!(controller.contains("probe-host"));
+    assert!(controller.contains("local LC_ALL=C"));
+    assert!(controller.contains("${value,,}"));
+    assert!(controller.contains("[[ -v OKP_QA_HOSTS ]]"));
+    assert!(controller.contains("OKP_QA_HOSTS must contain at least one host alias"));
+
+    let lease = include_str!("../../../../scripts/ok-player-qa-lease.sh");
+    assert!(lease.contains("local LC_ALL=C"));
+    assert!(lease.contains("${value,,}"));
 }
 
 #[test]

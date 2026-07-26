@@ -248,6 +248,7 @@ pub(crate) fn copy_frame_to_clipboard(
 }
 
 pub(crate) fn drain_screenshot_jobs(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
+    status_toast.drain_file_reveal_jobs();
     let results = state.borrow().screenshot_jobs.drain();
     for result in results {
         match result {
@@ -267,7 +268,7 @@ pub(crate) fn drain_screenshot_jobs(state: &Rc<RefCell<PlayerState>>, status_toa
             }
             screenshots::ScreenshotJobResult::SavedPublished(Ok(path)) => {
                 eprintln!("Screenshot saved to {}", path.display());
-                status_toast.show_screenshot(&format!("Saved to {}", path.display()), &path);
+                status_toast.show_saved_screenshot(&path);
             }
             screenshots::ScreenshotJobResult::SavedPrepared(Err(error))
             | screenshots::ScreenshotJobResult::SavedPublished(Err(error)) => {
@@ -448,42 +449,7 @@ pub(crate) fn open_current_file_location(
         return;
     };
 
-    if show_file_in_file_manager(&path) {
-        status_toast.show("Opened file location");
-    } else {
-        status_toast.show("Could not open the folder");
-    }
-}
-
-pub(crate) fn show_file_in_file_manager(path: &Path) -> bool {
-    if try_file_manager_show_items(path) {
-        return true;
-    }
-
-    let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    else {
-        return false;
-    };
-
-    Command::new("xdg-open").arg(parent).spawn().is_ok()
-}
-
-pub(crate) fn try_file_manager_show_items(path: &Path) -> bool {
-    let uri = gtk::gio::File::for_path(path).uri().to_string();
-    Command::new("dbus-send")
-        .args([
-            "--session",
-            "--dest=org.freedesktop.FileManager1",
-            "--type=method_call",
-            "/org/freedesktop/FileManager1",
-            "org.freedesktop.FileManager1.ShowItems",
-        ])
-        .arg(format!("array:string:{uri}"))
-        .arg("string:")
-        .spawn()
-        .is_ok()
+    status_toast.request_file_reveal(path);
 }
 
 pub(crate) fn seek_to_chapter(state: &Rc<RefCell<PlayerState>>, time: f64) {
@@ -747,7 +713,8 @@ pub(crate) fn toggle_fullscreen(window: &gtk::ApplicationWindow, state: &Rc<RefC
         // Compact mode is never itself fullscreen, so leaving it always resolves
         // to entering fullscreen. Record the intent now and defer the request
         // until the restored chrome has laid out.
-        state.borrow_mut().fullscreen_toggle.observe(true);
+        state.borrow_mut().fullscreen_toggle.request(true);
+        log_fullscreen_video_geometry(window, state, "fullscreen-request-enter-compact");
         let window = window.clone();
         glib::idle_add_local_once(move || window.fullscreen());
         return;
@@ -755,7 +722,16 @@ pub(crate) fn toggle_fullscreen(window: &gtk::ApplicationWindow, state: &Rc<RefC
     // Decide from the eagerly-flipped intent, not the compositor's lagging
     // `is_fullscreen`, so a rapid second toggle still alternates instead of
     // repeating the previous request. See [`fullscreen_toggle`].
-    match state.borrow_mut().fullscreen_toggle.toggle() {
+    let action = state.borrow_mut().fullscreen_toggle.toggle();
+    log_fullscreen_video_geometry(
+        window,
+        state,
+        match action {
+            fullscreen_toggle::FullscreenAction::Enter => "fullscreen-request-enter",
+            fullscreen_toggle::FullscreenAction::Leave => "fullscreen-request-leave",
+        },
+    );
+    match action {
         fullscreen_toggle::FullscreenAction::Enter => window.fullscreen(),
         fullscreen_toggle::FullscreenAction::Leave => window.unfullscreen(),
     }

@@ -25,6 +25,12 @@ Linux release evidence is package-specific and has four levels:
 3. `installed-package`: launch and version checks against the candidate `.deb` or AppImage.
 4. `gnome-wayland-operator`: live GNOME/Wayland acceptance. Only this level may mark chooser, drag/drop, clipboard, portal, compositor, or focus rows `PASS`.
 
+The recurring lease-gated live-desktop waves, host ordering, artifact layout,
+and site-hook boundary are documented in
+[`linux-night-gui-qa.md`](linux-night-gui-qa.md). That driver may collect
+`gnome-wayland-operator` evidence, but a missing hook or unavailable physical
+state remains `NOT RUN`; it never promotes Xvfb evidence to a live-desktop pass.
+
 Packaging also emits `portability-report.json`. It always binds the source SHA,
 its embedded short build marker, and both artifact hashes to a native
 dependency-equivalence pass: every dynamic ELF in the package-private library

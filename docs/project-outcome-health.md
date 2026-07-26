@@ -100,9 +100,40 @@ the positive `OKP_PROJECT_HEALTH_MAX_CANDIDATE_RUN_AGE_SECONDS` override. A run
 for another SHA, malformed active-run evidence, or an exact-main run older than
 the bound does not suppress a failure. Active-run evidence also never hides a
 failed completed-run query, an explicit candidate gate-failure streak, an
-invalid feed, or over-SLA publication lag. Schedule freshness is not blocking
-while the accepted candidate already equals `main`, because no new delivery is
-pending.
+invalid feed, a completed green run that left the feed behind, or over-SLA
+publication lag. Schedule freshness is not blocking while the accepted
+candidate already equals `main`, because no new delivery is pending.
+
+Workflow conclusion is not delivery evidence. Delivery is complete only when
+the fetched `candidate.linux.json.commit_sha` equals the fetched `main` SHA.
+The collector retains a server-filtered, bounded 100-run history of successful
+Linux Candidate runs, separate from the active-run query. Active and unrelated
+workflow states therefore cannot displace completed delivery attempts from the
+history window. While the feed is behind, a scheduled/manual run counts as
+green non-delivery when it:
+
+- started after both the current feed timestamp and the first unpublished-main
+  commit;
+- completed with `conclusion=success` after it started;
+- completed within the last two hours; and
+- still left the accepted feed behind current `main`.
+
+Using the run's creation time instead of its trigger SHA avoids blaming a
+coalesced publication for a newer tip that appeared while the run was already
+in progress. The feed SHA remains the sole delivery authority.
+
+The first such run fails the row with
+`candidate-success-without-delivery`. This is the recovery-dispatch signal: a
+workflow summary such as `publish result: stale_generation` / `public feed:
+untouched` must not make recovery exit early. Two or more such green runs in
+the two-hour window also emit
+`candidate-repeated-success-without-delivery`. The external outcome watchdog
+maps that repeated reason to an urgent operator notification, another bounded
+dispatch, and an intake pause for the publish window. It does not page for
+`candidate-delivery-in-progress` alone while both the active-run and
+unpublished-main lag bounds remain satisfied; exceeding the lag bound remains
+independently blocking and page-worthy. The checker stays read-only: the host
+actuator owns notification, dispatch, and pause mutations.
 
 The collector reads up to 100 completed scheduled candidate runs and counts the
 failure streak from newest to oldest. At two or more consecutive failures it
@@ -126,13 +157,27 @@ inside the delivery window and fails once that lag exceeds the bound. A source
 that is not an ancestor of current `main` is invalid even when its timestamp is
 recent.
 
-The collector reads up to 100 completed scheduled `Windows Candidate` runs. Two
-or more consecutive failures are reported before generic lag evidence as
-`Windows candidate builder failing at gate <name> (<N> consecutive)`. The gate
-is the failed workflow step from the newest failed run, and the reason code is
-`windows-candidate-builds-failing`. While the new lane has no completed schedule
-history and has not published either pointer, the row is a blocking `warning`
-rather than a failure; warnings do not make the overall outcome unhealthy.
+The Windows candidate workflow starts on every push to `main`; its 15-minute
+schedule remains a fallback rather than the primary delivery trigger. Automatic
+runs re-read `origin/main` before SDK setup and skip superseded SHAs, so a burst
+of pushes coalesces without spending a hosted Windows build on stale source.
+Manual dispatch continues to bypass this early supersession check.
+
+The collector requests up to 100 completed `push` runs and 100 completed
+`schedule` runs for `Windows Candidate` with server-side event filters. It
+merges those histories by run creation time and identity, keeps the newest 100
+automatic runs, and defensively excludes unexpected event types before counting
+their combined failure streak. Manual dispatches therefore cannot consume the
+bounded query, mask, or extend the automatic streak. Two or more consecutive
+failures are reported before generic lag evidence as `Windows candidate builder
+failing at gate <name> (<N> consecutive)`. The gate is the failed workflow step
+from the newest failed run, and the reason code is
+`windows-candidate-builds-failing`. The snapshot retains the legacy
+`latest_completed_schedule` and `schedule_error` field names for compatibility,
+but those fields carry the newest completed automatic run and combined
+automatic-query error. While the new lane has no completed automatic history
+and has not published either pointer, the row is a blocking `warning` rather
+than a failure; warnings do not make the overall outcome unhealthy.
 
 The live collector starts the stable Windows feed, Windows candidate manifest,
 Windows candidate feed, and Linux candidate feed requests concurrently. Each
@@ -140,7 +185,10 @@ request retains the existing connection/retry/30-second bound, so adding the
 Windows evidence does not serialize another network timeout into the fleet
 pulse. Snapshot mode remains fully offline and decision-complete in `okp-core`.
 The live collector also removes its temporary snapshot directory before it
-returns, including when the evaluator reports an unhealthy outcome.
+returns, including when the evaluator reports an unhealthy outcome. When a
+supervisor terminates the collector with `SIGTERM`, the collector forwards that
+signal to the evaluator, waits for it to stop, and then reclaims the snapshot
+directory.
 
 ## Stable-release diagnostic
 
@@ -177,8 +225,10 @@ healthcheck.
 `okp-core` fixtures cover bounded main-CI settling, overdue pending CI,
 immediate completed CI failures, old accepted/equal, ancestor within SLA,
 ancestor beyond SLA, inactive workflow state, stale completed schedules while
-`main` has advanced, bounded exact-main candidate runs, stale or mismatched
-active runs, fresh non-ancestor, unaccepted, malformed,
+`main` has advanced, bounded exact-main candidate runs, one and repeated green
+non-deliveries against an unchanged feed, coalesced runs started before a newer
+tip, successful history saturated by active runs, stale or mismatched active
+runs, fresh non-ancestor, unaccepted, malformed,
 missing-package-identity, and unreachable Linux candidate outcomes. Windows
 fixtures separately pin source-current and within-SLA passes, over-SLA and
 consecutive-gate failures, the no-history bootstrap warning, manifest/feed

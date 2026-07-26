@@ -178,7 +178,16 @@ lock after their direct parent returns.
      `portability-report.json` records which mode ran and is required for
      promotion and later public publication
    - package identity + SHA-256 verification (`SHA256SUMS`, `package-identity.json`)
-   - clean install / upgrade / uninstall smoke in a disposable environment
+   - clean install / upgrade / purge through real `dpkg` with a private
+     filesystem root and package database. The smoke prefers an unprivileged
+     mapped-root user namespace so maintainer scripts are chrooted. When the
+     builder service cannot create that namespace, it uses dpkg's non-root,
+     script-chrootless mode; the package scripts honor `DPKG_ROOT`, so desktop
+     and icon caches still target only the disposable root. Both install
+     layouts are re-verified against the packaged libmpv runtime. Direct local
+     invocations of `smoke-linux-install-upgrade.sh` retain an extraction-only
+     fallback unless `OKP_SMOKE_REAL_DPKG=1` is selected; the scheduled native
+     candidate builder always selects a real dpkg lifecycle mode
    - real playback and screenshot capture from the exact Debian payload, with a bundled image and SHA-256
    - headless launch smoke (Xvfb): the idle surface once, followed by the complete
      fit-only small/maximized/fullscreen/4K lifecycle three consecutive times with
@@ -299,7 +308,10 @@ it holds one `build-and-publish` critical section while the builder runs,
 resolves `last-bundle.path`, and publishes that exact verified bundle. There is
 no unlocked step boundary between build and publish. An unchanged `main`
 remains an expected idle run; manual dispatch reuses the last verified bundle
-without rebuilding it. The `always()` summary reads the raw heartbeat first and
+without rebuilding it. The job has a 45-minute fail-safe timeout, more than
+twice the normal clean build-and-smoke duration, so a disconnected self-hosted
+runner cannot hold the candidate concurrency group for the previous 90-minute
+window. The `always()` summary reads the raw heartbeat first and
 treats the handoff outputs as optional, so an early gate failure remains the
 named failure instead of causing a second summary-step error.
 
@@ -311,6 +323,16 @@ successful `stale_generation` no-op with machine-readable evidence in
 `last-publish-decision.json` and the Actions summary. The evidence includes all
 three SHAs, the bundle/newest-allocated/published generation numbers, and the
 specific stale reasons.
+
+That successful no-op is only a safe publication-fence result; it is not a
+delivery success. Project outcome health compares the fetched rolling pointer
+to current `main`. If a completed green run leaves `candidate.linux.json`
+behind, recovery remains armed even when the Actions conclusion is `success`.
+One green non-delivery requests recovery, and two within two hours add the
+urgent repeated-non-delivery signal. A bounded exact-main run that is still in
+progress remains settling evidence until its run-age or unpublished-main lag
+limit is exceeded. See
+[`project-outcome-health.md`](project-outcome-health.md).
 
 This preserves coalescing without letting an old queued workflow publish. If
 run A was requested on SHA A but starts after `main` advances to SHA B, the

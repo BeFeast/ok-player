@@ -68,6 +68,18 @@ pub(crate) struct NativeVideoPlane {
     alive: AtomicBool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NativeVideoGeometrySnapshot {
+    pub(crate) requested_width: i32,
+    pub(crate) requested_height: i32,
+    pub(crate) requested_buffer_width: i32,
+    pub(crate) requested_buffer_height: i32,
+    pub(crate) applied_width: i32,
+    pub(crate) applied_height: i32,
+    pub(crate) applied_buffer_width: i32,
+    pub(crate) applied_buffer_height: i32,
+}
+
 // SAFETY: after creation releases the EGL context from GTK's thread, all native
 // resize/render/swap calls run on the dedicated render thread. Teardown joins
 // that thread before GTK makes the context current again and destroys it.
@@ -192,6 +204,19 @@ impl NativeVideoPlane {
             .store(render_size.width, Ordering::Release);
         self.buffer_height
             .store(render_size.height, Ordering::Release);
+    }
+
+    pub(crate) fn geometry_snapshot(&self) -> NativeVideoGeometrySnapshot {
+        NativeVideoGeometrySnapshot {
+            requested_width: self.width.load(Ordering::Acquire),
+            requested_height: self.height.load(Ordering::Acquire),
+            requested_buffer_width: self.buffer_width.load(Ordering::Acquire),
+            requested_buffer_height: self.buffer_height.load(Ordering::Acquire),
+            applied_width: self.applied_width.load(Ordering::Acquire),
+            applied_height: self.applied_height.load(Ordering::Acquire),
+            applied_buffer_width: self.applied_buffer_width.load(Ordering::Acquire),
+            applied_buffer_height: self.applied_buffer_height.load(Ordering::Acquire),
+        }
     }
 
     pub(crate) fn prepare_frame(&self) -> Option<okp_mpv::RenderTargetSize> {

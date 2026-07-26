@@ -10,6 +10,7 @@ X11_APP_CLEAR_WAITER="$ROOT/scripts/wait-for-x11-app-clear.sh"
 DBUS_NAME_CLEAR_WAITER="$ROOT/scripts/wait-for-dbus-names-clear.sh"
 ISOLATED_DBUS_SESSION="$ROOT/scripts/run-linux-isolated-dbus-session.sh"
 ISOLATED_XVFB_SESSION="$ROOT/scripts/run-linux-isolated-xvfb-session.sh"
+X11_CLOSE_REQUEST_SOURCE="$ROOT/scripts/send-x11-close-request.c"
 
 for tool in Xvfb xauth flock dbus-run-session gdbus xfwm4 xdotool xwininfo xprop import magick ffmpeg ffprobe rg stat; do
   if ! command -v "$tool" >/dev/null 2>&1; then
@@ -23,6 +24,11 @@ mkdir -p "$OUT_DIR"
 
 if [[ "${OKP_MAIN_WINDOW_FIT_ONLY:-0}" == "1" && "${OKP_MAIN_WINDOW_IDLE_ONLY:-0}" == "1" ]]; then
   echo "OKP_MAIN_WINDOW_FIT_ONLY and OKP_MAIN_WINDOW_IDLE_ONLY are mutually exclusive" >&2
+  exit 2
+fi
+if [[ "${OKP_MAIN_WINDOW_SHUTDOWN_ONLY:-0}" == "1" \
+  && "${OKP_MAIN_WINDOW_FIT_ONLY:-0}" != "1" ]]; then
+  echo "OKP_MAIN_WINDOW_SHUTDOWN_ONLY requires OKP_MAIN_WINDOW_FIT_ONLY=1" >&2
   exit 2
 fi
 
@@ -229,6 +235,21 @@ if [[ "${OKP_MAIN_WINDOW_IDLE_ONLY:-0}" == "1" ]]; then
   exit 0
 fi
 
+CC_BIN="${CC:-/usr/bin/cc}"
+if ! command -v "$CC_BIN" >/dev/null 2>&1; then
+  echo "Missing required C compiler: $CC_BIN" >&2
+  exit 127
+fi
+if ! command -v pkg-config >/dev/null 2>&1 || ! pkg-config --exists x11; then
+  echo "Missing required X11 development package" >&2
+  exit 127
+fi
+read -r -a x11_compile_flags <<<"$(pkg-config --cflags --libs x11)"
+X11_CLOSE_REQUEST="$OUT_DIR/send-x11-close-request"
+"$CC_BIN" -Wall -Wextra -Werror "$X11_CLOSE_REQUEST_SOURCE" \
+  -o "$X11_CLOSE_REQUEST" \
+  "${x11_compile_flags[@]}"
+
 "$ROOT/scripts/generate-linux-acceptance-media.sh" "$OUT_DIR/fixtures" \
   >"$OUT_DIR/fixtures.log" 2>&1
 
@@ -242,7 +263,7 @@ if ! env XDG_CACHE_HOME="$OUT_DIR/fit-cache" XDG_RUNTIME_DIR="$OUT_DIR/fit-runti
   '-screen 0 1280x900x24 -screen 1 1024x768x24 -nolisten tcp -noreset' \
   "$ISOLATED_DBUS_SESSION" "$OUT_DIR/fit-session-evidence.txt" \
   bash -s -- "$BINARY" "$OUT_DIR" "$X11_WINDOW_WAITER" \
-  "$X11_APP_CLEAR_WAITER" "$DBUS_NAME_CLEAR_WAITER" \
+  "$X11_APP_CLEAR_WAITER" "$DBUS_NAME_CLEAR_WAITER" "$X11_CLOSE_REQUEST" \
   >"$OUT_DIR/window-fit-session.log" 2>&1 <<'FIT_SMOKE'
 set -euo pipefail
 
@@ -251,6 +272,7 @@ OUT_DIR="$2"
 X11_WINDOW_WAITER="$3"
 X11_APP_CLEAR_WAITER="$4"
 DBUS_NAME_CLEAR_WAITER="$5"
+X11_CLOSE_REQUEST="$6"
 FIXTURES="$OUT_DIR/fixtures"
 
 export GDK_BACKEND=x11
@@ -435,43 +457,112 @@ stop_app() {
   app_log=""
 }
 
-close_app() {
-  local window_id="$1"
+finish_app_shutdown() {
+  local route="$1"
   local closed_pid="$app_pid"
-  xdotool windowactivate --sync "$window_id" || true
-  # Prefer ICCCM WM_DELETE_WINDOW over a synthetic Alt+F4. After minimize +
-  # secondary present, Alt+F4 can miss the undecorated player under Xfwm/Xvfb
-  # while the window stays IsViewable and the candidate gate fails.
-  # windowclose returns once the async WM request is queued — still fall back
-  # to Alt+F4 if the shell remains mapped (minimize + secondary present).
-  xdotool windowclose "$window_id" 2>/dev/null || true
-  sleep 0.2
-  if xdotool getwindowgeometry "$window_id" >/dev/null 2>&1; then
-    xdotool key --window "$window_id" --clearmodifiers alt+F4 || true
-  fi
-
-  local diagnostics="$OUT_DIR/close-${closed_pid}-lifecycle.log"
+  local diagnostics="$OUT_DIR/${route}-${closed_pid}-lifecycle.log"
   if ! "$X11_APP_CLEAR_WAITER" "$closed_pid" "$diagnostics"; then
     cat "$diagnostics" >>"$OUT_DIR/fit-lifecycle.log"
-    echo "Application did not exit after its visible main window closed" >&2
+    echo "Application did not exit after shutdown route: $route" >&2
     echo "Application log: $app_log" >&2
     cat "$app_log" >&2 || true
     return 1
   fi
   cat "$diagnostics" >>"$OUT_DIR/fit-lifecycle.log"
 
-  local dbus_diagnostics="$OUT_DIR/close-${closed_pid}-dbus-lifecycle.log"
+  for expected_close_stage in \
+    'window close lifecycle: close-request' \
+    'window close lifecycle: quit requested' \
+    'window close lifecycle: engine teardown complete'; do
+    if ! rg -Fx -q "$expected_close_stage" "$app_log"; then
+      echo "Application exited without clean GTK shutdown stage: $expected_close_stage" >&2
+      cat "$app_log" >&2 || true
+      return 1
+    fi
+  done
+
+  local dbus_diagnostics="$OUT_DIR/${route}-${closed_pid}-dbus-lifecycle.log"
   if ! "$DBUS_NAME_CLEAR_WAITER" "$dbus_diagnostics" "${DBUS_NAMES[@]}"; then
     cat "$dbus_diagnostics" >>"$OUT_DIR/fit-lifecycle.log"
-    echo "Application D-Bus names remained after its visible main window closed" >&2
+    echo "Application D-Bus names remained after shutdown route: $route" >&2
     cat "$app_log" >&2 || true
     return 1
   fi
   cat "$dbus_diagnostics" >>"$OUT_DIR/fit-lifecycle.log"
-  wait "$closed_pid" 2>/dev/null || true
-  printf 'close pid=%s clear=true\n' "$closed_pid" >>"$OUT_DIR/fit-lifecycle.log"
+  local exit_status=0
+  wait "$closed_pid" 2>/dev/null || exit_status=$?
+  if (( exit_status != 0 )); then
+    echo "Application exited with status $exit_status after shutdown route: $route" >&2
+    return 1
+  fi
+  printf '%s pid=%s clear=true clean_teardown=true\n' "$route" "$closed_pid" \
+    >>"$OUT_DIR/fit-lifecycle.log"
+  printf '%s=pass\n' "$route" >>"$OUT_DIR/fit-evidence.txt"
   app_pid=""
   app_log=""
+}
+
+x11_window_state() {
+  local window_id="$1"
+  if xwininfo -id "$window_id" >/dev/null 2>&1; then
+    printf 'present\n'
+  elif xwininfo -root >/dev/null 2>&1; then
+    printf 'gone\n'
+  else
+    printf 'unqueryable\n'
+  fi
+}
+
+close_app() {
+  local window_id="$1"
+  local close_attempt close_error close_status probe_status
+  # `windowclose` destroys the X11 window directly, while keyboard and pointer
+  # routes depend on focus or hit testing. Ask Xfwm to close the exact toplevel;
+  # it delivers WM_DELETE_WINDOW and GTK executes the normal close-request
+  # teardown path. Retry only while the same XID remains present.
+  for close_attempt in 1 2; do
+    printf 'close-dispatch attempt=%s target=%s route=ewmh-close-window\n' \
+      "$close_attempt" "$window_id" \
+      >>"$OUT_DIR/fit-lifecycle.log"
+    close_error="$OUT_DIR/close-dispatch-${close_attempt}.log"
+    close_status=0
+    "$X11_CLOSE_REQUEST" "$window_id" 2>"$close_error" || close_status=$?
+    if (( close_status != 0 )); then
+      # _NET_CLOSE_WINDOW is asynchronous. A previous request can complete
+      # between the loop's Xlib probe and this helper resolving the XID. The
+      # helper reserves status 3 for a confirmed BadWindow on the exact target.
+      if (( close_status == 3 )); then
+        printf 'close-dispatch attempt=%s target=%s result=already-gone\n' \
+          "$close_attempt" "$window_id" >>"$OUT_DIR/fit-lifecycle.log"
+        break
+      fi
+      echo "Could not send the X11 close request for window $window_id" >&2
+      cat "$close_error" >&2 || true
+      return 1
+    fi
+    sleep 0.2
+    probe_status=0
+    "$X11_CLOSE_REQUEST" --probe "$window_id" \
+      2>"$OUT_DIR/close-probe-${close_attempt}.log" || probe_status=$?
+    if (( probe_status == 3 )); then
+      break
+    fi
+    if (( probe_status != 0 )); then
+      echo "Could not probe X11 window $window_id after close request" >&2
+      cat "$OUT_DIR/close-probe-${close_attempt}.log" >&2 || true
+      return 1
+    fi
+  done
+  finish_app_shutdown "last_window_close"
+}
+
+quit_app() {
+  gdbus call --session \
+    --dest org.mpris.MediaPlayer2.okplayer \
+    --object-path /org/mpris/MediaPlayer2 \
+    --method org.mpris.MediaPlayer2.Quit \
+    >"$OUT_DIR/mpris-quit-call.log"
+  finish_app_shutdown "mpris_quit"
 }
 
 capture_geometry() {
@@ -494,6 +585,63 @@ activate_fit_window_command() {
 geometry_value() {
   local file="$1" label="$2"
   awk -v label="$label" '$1 == label ":" { print $2; exit }' "$file"
+}
+
+absolute_window_geometry() {
+  local file="$1"
+  awk -F': +' '
+    /Absolute upper-left X:/ { x=$2 }
+    /Absolute upper-left Y:/ { y=$2 }
+    /^  Width:/ { w=$2 }
+    /^  Height:/ { h=$2 }
+    END { printf "x=%s,y=%s,w=%s,h=%s", x, y, w, h }
+  ' "$file"
+}
+
+assert_monitor_fit_log() {
+  local file="$1" label="$2"
+  if ! rg -q \
+    'window fit request: .* monitor=[^[:space:]]+ monitor_geometry=[0-9]+x[0-9]+\+[-0-9]+,[-0-9]+ workarea=[0-9]+x[0-9]+\+[-0-9]+,[-0-9]+ window=[0-9]+x[0-9]+\+[-0-9]+,[-0-9]+' \
+    "$file"; then
+    echo "$label did not record monitor-bound x/y/w/h fit geometry" >&2
+    cat "$file" >&2
+    exit 1
+  fi
+}
+
+fit_log_rect() {
+  local file="$1" field="$2"
+  rg -m1 '^window fit request:' "$file" \
+    | sed -E \
+      "s/.* ${field}=([0-9]+)x([0-9]+)\+(-?[0-9]+),(-?[0-9]+).*/\1 \2 \3 \4/"
+}
+
+assert_logged_fit_containment() {
+  local file="$1" label="$2"
+  local monitor_width monitor_height monitor_x monitor_y
+  local work_width work_height work_x work_y
+  local window_width window_height window_x window_y
+  read -r monitor_width monitor_height monitor_x monitor_y \
+    < <(fit_log_rect "$file" monitor_geometry)
+  read -r work_width work_height work_x work_y \
+    < <(fit_log_rect "$file" workarea)
+  read -r window_width window_height window_x window_y \
+    < <(fit_log_rect "$file" window)
+
+  if (( work_x < monitor_x || work_y < monitor_y \
+    || work_x + work_width > monitor_x + monitor_width \
+    || work_y + work_height > monitor_y + monitor_height )); then
+    echo "$label logged a workarea outside its monitor" >&2
+    rg -m1 '^window fit request:' "$file" >&2 || true
+    exit 1
+  fi
+  if (( window_x < work_x || window_y < work_y \
+    || window_x + window_width > work_x + work_width \
+    || window_y + window_height > work_y + work_height )); then
+    echo "$label logged a fitted window outside its workarea" >&2
+    rg -m1 '^window fit request:' "$file" >&2 || true
+    exit 1
+  fi
 }
 
 wait_for_log() {
@@ -569,6 +717,8 @@ for expected in \
   fi
 done
 assert_single_initial_configure "$OUT_DIR/fit-small-app.log" "Small video"
+assert_monitor_fit_log "$OUT_DIR/fit-small-app.log" "Small video"
+assert_logged_fit_containment "$OUT_DIR/fit-small-app.log" "Small video"
 
 # Playback and the original render context remain live through initial sizing
 # and ordinary seek input. The 24-second fixture accepts +10 then -10 without
@@ -631,6 +781,28 @@ if [[ "$secondary_presented" != "1" ]]; then
   cat "$OUT_DIR/fit-small-app.log" >&2
   exit 1
 fi
+sleep 1
+xwininfo -id "$small_id" >"$OUT_DIR/fit-secondary-present-window.xwininfo"
+secondary_x="$(awk -F': +' '/Absolute upper-left X:/ {print $2; exit}' \
+  "$OUT_DIR/fit-secondary-present-window.xwininfo")"
+secondary_y="$(awk -F': +' '/Absolute upper-left Y:/ {print $2; exit}' \
+  "$OUT_DIR/fit-secondary-present-window.xwininfo")"
+secondary_width="$(geometry_value "$OUT_DIR/fit-secondary-present-window.xwininfo" Width)"
+secondary_height="$(geometry_value "$OUT_DIR/fit-secondary-present-window.xwininfo" Height)"
+if (( secondary_x < 0 || secondary_y < 0 \
+  || secondary_x + secondary_width > 1280 \
+  || secondary_y + secondary_height > 900 )); then
+  echo "Secondary present escaped the active monitor: ${secondary_width}x${secondary_height}+${secondary_x},${secondary_y}" >&2
+  exit 1
+fi
+secondary_monitor_fit_count="$(rg -c \
+  '^window fit request: .* monitor=[^[:space:]]+ .* workarea=1280x900' \
+  "$OUT_DIR/fit-small-app.log" || true)"
+if (( secondary_monitor_fit_count < 2 )); then
+  echo "Secondary present did not fit against the active monitor workarea" >&2
+  cat "$OUT_DIR/fit-small-app.log" >&2
+  exit 1
+fi
 primary_window_count=0
 while IFS= read -r candidate; do
   [[ -n "$candidate" ]] || continue
@@ -655,7 +827,23 @@ if [[ "$launch_count" != "2" ]]; then
 fi
 printf 'secondary_launch=pass\nsecondary_presented=pass\nsingle_instance=pass\n' \
   >>"$OUT_DIR/fit-evidence.txt"
+printf 'secondary_window=%s\nsecondary_monitor_fit_count=%s\nsecondary_monitor_fit=pass\n' \
+  "$(absolute_window_geometry "$OUT_DIR/fit-secondary-present-window.xwininfo")" \
+  "$secondary_monitor_fit_count" \
+  >>"$OUT_DIR/fit-evidence.txt"
 close_app "$small_id"
+
+start_app "fit-mpris-quit-app.log" windowed "$FIXTURES/fit-small.mkv"
+wait_for_window "$OUT_DIR/fit-mpris-quit-window.ids" >/dev/null
+sleep 1
+quit_app
+
+if [[ "${OKP_MAIN_WINDOW_SHUTDOWN_ONLY:-0}" == "1" ]]; then
+  printf 'session_process_teardown=clean\nsession_bus_teardown=clean\nstatus=pass\n' \
+    >>"$OUT_DIR/fit-evidence.txt"
+  echo "Main-window shutdown smoke passed. Evidence: $OUT_DIR/fit-evidence.txt"
+  exit 0
+fi
 
 start_app "fit-1080p-app.log" windowed "$FIXTURES/fit-1080p.mkv"
 fit_1080p_id="$(wait_for_window "$OUT_DIR/fit-1080p-window.ids")"
@@ -767,6 +955,8 @@ if ! rg -q "workarea=1024x768" "$OUT_DIR/fit-4k-right-monitor-app.log"; then
   exit 1
 fi
 assert_single_initial_configure "$OUT_DIR/fit-4k-right-monitor-app.log" "4K video"
+assert_monitor_fit_log "$OUT_DIR/fit-4k-right-monitor-app.log" "4K video"
+assert_logged_fit_containment "$OUT_DIR/fit-4k-right-monitor-app.log" "4K video"
 xdotool windowsize "$right_id" 700 500
 sleep 1
 activate_fit_window_command "$right_id"
@@ -779,16 +969,28 @@ if (( explicit_4k_width < 958 || explicit_4k_width > 964 || explicit_4k_height <
 fi
 stop_app
 
+small_window_geometry="$(absolute_window_geometry "$OUT_DIR/fit-small-window.xwininfo")"
+fit_1080p_window_geometry="$(absolute_window_geometry "$OUT_DIR/fit-1080p-window.xwininfo")"
+fit_4k_window_geometry="$(absolute_window_geometry "$OUT_DIR/fit-4k-right-monitor-window.xwininfo")"
+small_monitor_fit="$(rg -m1 '^window fit request:' "$OUT_DIR/fit-small-app.log")"
+fit_4k_monitor_fit="$(rg -m1 '^window fit request:' "$OUT_DIR/fit-4k-right-monitor-app.log")"
+
 cat >>"$OUT_DIR/fit-evidence.txt" <<EOF
 maximized_guard=pass
 maximized_explicit_fit=${explicit_max_width}x${explicit_max_height}
 fullscreen_guard=pass
 fullscreen_explicit_fit=${explicit_fullscreen_width}x${explicit_fullscreen_height}
 small_geometry=${small_width}x${small_height}
+small_window=${small_window_geometry}
+small_monitor_fit=${small_monitor_fit}
 1080p_geometry=${fit_1080p_width}x${fit_1080p_height}
+1080p_window=${fit_1080p_window_geometry}
 vertical_geometry=${vertical_width}x${vertical_height}
 4k_geometry=${fit_width}x${fit_height}
+4k_window=${fit_4k_window_geometry}
+4k_monitor_fit=${fit_4k_monitor_fit}
 initial_fit_configures_per_geometry=1
+logged_monitor_workarea_containment=pass
 4k_explicit_fit=${explicit_4k_width}x${explicit_4k_height}
 explicit_fit_dispatch=pass
 status=pass
@@ -809,4 +1011,8 @@ if rg -q "org\.freedesktop\.portal\.Desktop" "$OUT_DIR/window-fit-session.log"; 
 fi
 printf 'portal_activation=absent\n' >>"$OUT_DIR/fit-evidence.txt"
 
-echo "Main window fit smoke passed. Screenshots: $OUT_DIR/fit-small-window.png, $OUT_DIR/fit-4k-right-monitor-window.png"
+if [[ "${OKP_MAIN_WINDOW_SHUTDOWN_ONLY:-0}" == "1" ]]; then
+  echo "Main window shutdown smoke passed. Evidence: $OUT_DIR/fit-evidence.txt"
+else
+  echo "Main window fit smoke passed. Screenshots: $OUT_DIR/fit-small-window.png, $OUT_DIR/fit-4k-right-monitor-window.png"
+fi

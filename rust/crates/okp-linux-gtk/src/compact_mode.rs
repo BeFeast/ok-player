@@ -334,6 +334,12 @@ impl CompactMode {
         };
         self.normal_state.borrow_mut().replace(normal_state);
         if self.window.is_fullscreen() {
+            self.state.borrow_mut().fullscreen_toggle.request(false);
+            log_fullscreen_video_geometry(
+                &self.window,
+                &self.state,
+                "fullscreen-request-leave-compact",
+            );
             self.window.unfullscreen();
         }
         if self.window.is_maximized() {
@@ -491,12 +497,16 @@ pub(crate) fn connect_compact_video_interactions(
     window: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
+    suppress_video_click: Rc<Cell<bool>>,
 ) {
     let drag = gtk::GestureDrag::new();
     drag.set_button(gdk::BUTTON_PRIMARY);
     let drag_window = window.clone();
     let drag_started = Rc::new(Cell::new(false));
+    let begin_started = Rc::clone(&drag_started);
+    drag.connect_drag_begin(move |_, _, _| begin_started.set(false));
     let update_started = Rc::clone(&drag_started);
+    let update_suppression = Rc::clone(&suppress_video_click);
     drag.connect_drag_update(move |gesture, offset_x, offset_y| {
         if update_started.get()
             || !window_compact_mode_active(&drag_window)
@@ -504,33 +514,28 @@ pub(crate) fn connect_compact_video_interactions(
         {
             return;
         }
-        let Some(device) = gesture.current_event_device() else {
-            return;
-        };
-        let Some(surface) = drag_window.surface() else {
-            return;
-        };
-        let Ok(toplevel) = surface.downcast::<gdk::Toplevel>() else {
-            return;
-        };
-        let Some((x, y)) = gesture.bounding_box_center() else {
-            return;
-        };
         update_started.set(true);
-        gesture.set_state(gtk::EventSequenceState::Claimed);
-        toplevel.begin_move(
-            &device,
-            gesture.current_button() as i32,
-            x,
-            y,
-            gesture.current_event_time(),
-        );
+        // Compact mode owns its own drag-to-move, so the shared suppressor set
+        // by the normal path in `connect_player_window_move` never runs here —
+        // that handler returns early while compact mode is active. The X11
+        // branch used to cancel the click sequence via the gesture claim, but
+        // Wayland must not claim it (the compositor owns the implicit grab), so
+        // without this the release after a compact window move arrives as an
+        // ordinary click and toggles play/pause.
+        update_suppression.set(true);
+        if !begin_native_window_move_from_drag(gesture, &drag_window) {
+            update_started.set(false);
+            update_suppression.set(false);
+            return;
+        }
         if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
             eprintln!("interaction: compact-mode-drag");
         }
         schedule_compact_snap(drag_window.clone(), Rc::clone(&update_started));
     });
+    let cancel_started = Rc::clone(&drag_started);
     drag.connect_drag_end(move |_, _, _| drag_started.set(false));
+    drag.connect_cancel(move |_, _| cancel_started.set(false));
     video.add_controller(drag);
 
     let scroll = gtk::EventControllerScroll::new(

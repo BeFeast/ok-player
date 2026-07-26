@@ -10,12 +10,14 @@
 command|awk|awk|gawk
 command|basename|basename|coreutils
 command|cargo|cargo|cargo
+command|cat|cat|coreutils
 command|cc|cc|build-essential
 command|chmod|chmod|coreutils
 command|cmp|cmp|diffutils
 command|cp|cp|coreutils
 command|cut|cut|coreutils
 command|dirname|dirname|coreutils
+command|dpkg|dpkg|dpkg
 command|dpkg-deb|dpkg-deb|dpkg
 command|dpkg-query|dpkg-query|dpkg
 command|ffmpeg|ffmpeg|ffmpeg

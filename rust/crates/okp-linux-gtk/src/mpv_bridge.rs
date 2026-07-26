@@ -210,11 +210,10 @@ impl NativeRenderLoop {
     /// Stops the notifier and waits briefly for the render thread.
     ///
     /// Returns `true` when the thread has fully joined and it is safe to free
-    /// the EGL plane / mpv render context. On timeout, the `JoinHandle` is
-    /// forgotten (not dropped/detached) so the thread keeps its `Arc`s; the
-    /// caller must skip render teardown and avoid `Drop`-destroying `Mpv`
-    /// until process exit (`Application::quit` is imminent on the close path).
-    fn stop_and_join(&mut self) -> bool {
+    /// the EGL plane / mpv render context. On timeout, ownership of the worker
+    /// stays in this value so a shutdown caller can keep the render resources
+    /// alive or cross the process boundary without detaching a live renderer.
+    pub(crate) fn stop_and_join(&mut self) -> bool {
         self.notifier.disable();
         let Some(join) = self.join.take() else {
             return true;
@@ -226,11 +225,9 @@ impl NativeRenderLoop {
             if std::time::Instant::now() >= deadline {
                 eprintln!(
                     "Native Wayland/EGL render thread exceeded the close join deadline; \
-                     leaking render resources until process exit"
+                     retaining render resources until process exit"
                 );
-                // Do not drop the JoinHandle: that would detach a worker that still
-                // owns RenderUpdateHandle / plane while unrealize frees them (UAF).
-                std::mem::forget(join);
+                self.join = Some(join);
                 return false;
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
@@ -306,9 +303,35 @@ fn start_event_pump_for_session(mpv: &mut Mpv) {
 
 pub(crate) fn connect_mpv(
     video_host: &VideoHost,
+    window: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
     startup_launch: StartupLaunchGate,
 ) {
+    let fullscreen_area = match video_host {
+        VideoHost::Native { area, .. } => Some(area.clone()),
+        VideoHost::Gtk(_) | VideoHost::Software(_) => None,
+    };
+    let fullscreen_state = Rc::clone(&state);
+    window.connect_notify_local(Some("fullscreened"), move |window, _| {
+        let is_fullscreen = window.is_fullscreen();
+        fullscreen_state
+            .borrow_mut()
+            .fullscreen_toggle
+            .observe(is_fullscreen);
+        if let Some(area) = fullscreen_area.as_ref() {
+            sync_native_video_geometry(area, &fullscreen_state, true);
+        }
+        log_fullscreen_video_geometry(
+            window,
+            &fullscreen_state,
+            if is_fullscreen {
+                "fullscreen-ack-enter"
+            } else {
+                "fullscreen-ack-leave"
+            },
+        );
+    });
+
     match video_host {
         VideoHost::Native {
             area,
@@ -498,29 +521,15 @@ fn connect_native_mpv(
             let scale_state = Rc::clone(&realize_state);
             let scale_area = area.clone();
             surface.connect_notify_local(Some("scale"), move |_, _| {
-                let state = scale_state.borrow();
-                if let Some(plane) = state.native_video_plane.as_ref() {
-                    plane.resize(
-                        scale_area.width(),
-                        scale_area.height(),
-                        native_surface_scale(&scale_area),
+                if scale_state.borrow().fullscreen_toggle.transition_pending() {
+                    log_fullscreen_video_geometry_from_area(
+                        &scale_area,
+                        &scale_state,
+                        "scale-held-for-fullscreen-ack",
                     );
+                    return;
                 }
-                if let Some(mpv) = state.mpv.as_ref() {
-                    let size = native_render_size(
-                        scale_area.width(),
-                        scale_area.height(),
-                        native_surface_scale(&scale_area),
-                    );
-                    if let Err(error) =
-                        mpv.set_wayland_dmabuf_geometry(size, wayland_scale_units(&scale_area))
-                    {
-                        eprintln!("Failed to update the embedded Wayland video scale: {error}");
-                    }
-                }
-                if let Some(render_loop) = state.native_render_loop.as_ref() {
-                    render_loop.request_render();
-                }
+                sync_native_video_geometry(&scale_area, &scale_state, true);
             });
         }
         schedule_audio_device_restore(&realize_state);
@@ -531,16 +540,16 @@ fn connect_native_mpv(
 
     let resize_state = Rc::clone(&state);
     video_area.connect_resize(move |area, width, height| {
-        let state = resize_state.borrow();
-        if let Some(plane) = state.native_video_plane.as_ref() {
-            plane.resize(width, height, native_surface_scale(area));
+        if resize_state.borrow().fullscreen_toggle.transition_pending() {
+            log_fullscreen_video_geometry_from_area(
+                area,
+                &resize_state,
+                "resize-held-for-fullscreen-ack",
+            );
+            return;
         }
-        if let Some(mpv) = state.mpv.as_ref() {
-            let size = native_render_size(width, height, native_surface_scale(area));
-            if let Err(error) = mpv.set_wayland_dmabuf_geometry(size, wayland_scale_units(area)) {
-                eprintln!("Failed to resize the embedded Wayland video surface: {error}");
-            }
-        }
+        debug_assert_eq!((width, height), (area.width(), area.height()));
+        sync_native_video_geometry(area, &resize_state, true);
     });
 
     let unrealize_state = Rc::clone(&state);
@@ -581,6 +590,86 @@ fn connect_native_mpv(
         }
         state.native_video_plane = None;
     });
+}
+
+fn sync_native_video_geometry(
+    area: &gtk::DrawingArea,
+    state: &Rc<RefCell<PlayerState>>,
+    force_render: bool,
+) {
+    let width = area.width().max(1);
+    let height = area.height().max(1);
+    let scale = native_surface_scale(area);
+    let render_size = native_render_size(width, height, scale);
+    let state = state.borrow();
+    let Some(plane) = state.native_video_plane.as_ref() else {
+        return;
+    };
+    plane.resize(width, height, scale);
+    if let Some(mpv) = state.mpv.as_ref()
+        && let Err(error) = mpv.set_wayland_dmabuf_geometry(render_size, wayland_scale_units(area))
+    {
+        eprintln!("Failed to resize the embedded Wayland video surface: {error}");
+    }
+    if force_render && let Some(render_loop) = state.native_render_loop.as_ref() {
+        render_loop.request_render();
+    }
+}
+
+pub(crate) fn log_fullscreen_video_geometry(
+    window: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
+    boundary: &str,
+) {
+    if env::var_os("OKP_DEBUG_WINDOW_FIT").is_none() {
+        return;
+    }
+    let state = state.borrow();
+    let Some(geometry) = state
+        .native_video_plane
+        .as_ref()
+        .map(|plane| plane.geometry_snapshot())
+    else {
+        eprintln!(
+            "fullscreen geometry: boundary={boundary} fullscreen={} toplevel={}x{} native=unavailable",
+            window.is_fullscreen(),
+            window.width().max(1),
+            window.height().max(1),
+        );
+        return;
+    };
+    eprintln!(
+        "fullscreen geometry: boundary={boundary} fullscreen={} toplevel={}x{} native_surface_requested={}x{}+0,0 native_subsurface_requested={}x{}+0,0 native_buffer_requested={}x{} native_surface_applied={}x{}+0,0 native_subsurface_applied={}x{}+0,0 native_buffer_applied={}x{}",
+        window.is_fullscreen(),
+        window.width().max(1),
+        window.height().max(1),
+        geometry.requested_width,
+        geometry.requested_height,
+        geometry.requested_width,
+        geometry.requested_height,
+        geometry.requested_buffer_width,
+        geometry.requested_buffer_height,
+        geometry.applied_width,
+        geometry.applied_height,
+        geometry.applied_width,
+        geometry.applied_height,
+        geometry.applied_buffer_width,
+        geometry.applied_buffer_height,
+    );
+}
+
+fn log_fullscreen_video_geometry_from_area(
+    area: &gtk::DrawingArea,
+    state: &Rc<RefCell<PlayerState>>,
+    boundary: &str,
+) {
+    let Some(window) = area
+        .root()
+        .and_then(|root| root.downcast::<gtk::ApplicationWindow>().ok())
+    else {
+        return;
+    };
+    log_fullscreen_video_geometry(&window, state, boundary);
 }
 
 fn schedule_gtk_mpv_fallback(
@@ -1147,10 +1236,15 @@ pub(crate) fn connect_state_poll(
         drain_wayland_presentation_feedback(&state);
         apply_pending_nfo_titles(&state);
         observe_initial_window_fit(&state, auto_fit_dimensions);
-        // Startup payload delivery is gated on the map edge, so initial fitting now always uses
-        // an already-visible toplevel with compositor context. Consume each source's one-shot fit
-        // only after GTK has mapped the window or published equivalent bounds.
+        // Startup payload delivery is gated on the map edge, so initial fitting uses an
+        // already-visible toplevel with compositor context. Wayland may publish desktop-wide
+        // configure bounds before its output-enter event; retain the one-shot request until the
+        // bounds can be tied to one monitor instead of consuming a spanning fit. Fullscreen and
+        // maximized loads still consume their deliberate no-resize skip immediately.
         if window.is_mapped()
+            && (window.is_fullscreen()
+                || window.is_maximized()
+                || player_window_fit_area_available(&window, &window_bounds))
             && let Some(request) = take_initial_window_fit(&state)
         {
             fit_player_window_to_video(
@@ -1241,11 +1335,19 @@ pub(crate) fn connect_state_poll(
         if has_media {
             empty_surface.clear_preview_substrate();
         }
+        let failed = state.borrow().media_load_state == network_media::MediaLoadState::Failed;
+        let idle_surface_hidden = has_media || failed || lyrics_surface.is_preview_frozen();
+        // Welcome/History owns its poster controller only while it owns the window. Continuing
+        // to refresh it behind loading or playback can leave ffmpeg work (and its pipes) alive
+        // through a local open and the following EOF transition.
+        if idle_surface_hidden {
+            thumbnails::suspend_poster_generation();
+        } else {
+            empty_surface.refresh(&window, &state, Rc::clone(&status_toast));
+        }
         // Hide the welcome surface behind an active lyrics preview so the fixture reads cleanly;
         // in production the loaded audio already hides it (`is_preview_frozen` stays false).
-        empty_surface.refresh(&window, &state, Rc::clone(&status_toast));
-        let failed = state.borrow().media_load_state == network_media::MediaLoadState::Failed;
-        empty_surface.set_has_media(has_media || failed || lyrics_surface.is_preview_frozen());
+        empty_surface.set_has_media(idle_surface_hidden);
         lyrics_surface.update(&state);
         drain_thumbnail_events(&controls, &state);
         update_up_next_panel(&controls, &state, &chrome);
@@ -1650,8 +1752,25 @@ pub(crate) fn connect_player_window_move(
     let move_root = player_root.clone();
     let move_window = window.clone();
     let already_moving = Rc::new(Cell::new(false));
+    let drag_sequence = Rc::new(Cell::new(0_u64));
+    let begin_moving = Rc::clone(&already_moving);
+    let begin_sequence = Rc::clone(&drag_sequence);
+    drag.connect_drag_begin(move |_, _, _| {
+        // Some compositors consume the release while owning the native move.
+        // A new GTK sequence is therefore also a recovery boundary for stale
+        // shell state, independent of whether end/cancel was delivered.
+        let recovered_stale_move = begin_moving.replace(false);
+        let sequence = begin_sequence.get().saturating_add(1);
+        begin_sequence.set(sequence);
+        if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+            eprintln!(
+                "interaction: player-window-move-begin sequence={sequence} recovered-stale={recovered_stale_move}"
+            );
+        }
+    });
     let update_moving = Rc::clone(&already_moving);
     let update_suppression = Rc::clone(&suppress_video_click);
+    let update_sequence = Rc::clone(&drag_sequence);
     drag.connect_drag_update(move |gesture, offset_x, offset_y| {
         // Compact mode owns its own drag-to-move (and snap) gesture; leave it be
         // so a single drag never begins two moves.
@@ -1677,49 +1796,44 @@ pub(crate) fn connect_player_window_move(
         match video_click::window_drag_action(context, offset_x, offset_y) {
             video_click::WindowDragAction::Hold => {}
             video_click::WindowDragAction::BeginMove => {
-                // Snapshot every transient gesture value before either backend
-                // changes sequence ownership during the compositor handoff.
-                let Some(device) = gesture.current_event_device() else {
-                    return;
-                };
-                let Some((surface_x, surface_y)) = gesture.bounding_box_center() else {
-                    return;
-                };
-                let button = gesture.current_button() as i32;
-                let timestamp = gesture.current_event_time();
-                let Some(surface) = move_window.surface() else {
-                    return;
-                };
-                let Ok(toplevel) = surface.downcast::<gdk::Toplevel>() else {
-                    return;
-                };
                 update_moving.set(true);
                 update_suppression.set(true);
-                let display = gtk::prelude::WidgetExt::display(&move_window);
-                let wayland = is_wayland_display(display.type_().name());
-                if !wayland {
-                    // X11 must release GTK's gesture ownership before the WM
-                    // accepts its EWMH move request.
-                    gesture.set_state(gtk::EventSequenceState::Claimed);
-                }
-                toplevel.begin_move(&device, button, surface_x, surface_y, timestamp);
-                if wayland {
-                    // Wayland is the inverse: GDK must consume the live
-                    // implicit grab before GTK cancels sibling gestures. The
-                    // one-shot suppressor prevents click leakage if Mutter has
-                    // already cancelled this sequence during the handoff.
-                    gesture.set_state(gtk::EventSequenceState::Claimed);
+                if !begin_native_window_move_from_drag(gesture, &move_window) {
+                    update_moving.set(false);
+                    update_suppression.set(false);
+                    return;
                 }
                 if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
-                    eprintln!("interaction: player-window-move");
+                    eprintln!(
+                        "interaction: player-window-move sequence={}",
+                        update_sequence.get()
+                    );
                 }
             }
         }
     });
     let end_moving = Rc::clone(&already_moving);
-    drag.connect_drag_end(move |_, _, _| end_moving.set(false));
+    let end_sequence = Rc::clone(&drag_sequence);
+    drag.connect_drag_end(move |_, _, _| {
+        end_moving.set(false);
+        if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+            eprintln!(
+                "interaction: player-window-move-end sequence={}",
+                end_sequence.get()
+            );
+        }
+    });
     let cancel_moving = Rc::clone(&already_moving);
-    drag.connect_cancel(move |_, _| cancel_moving.set(false));
+    let cancel_sequence = Rc::clone(&drag_sequence);
+    drag.connect_cancel(move |_, _| {
+        cancel_moving.set(false);
+        if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+            eprintln!(
+                "interaction: player-window-move-cancel sequence={}",
+                cancel_sequence.get()
+            );
+        }
+    });
 
     player_root.add_controller(drag);
     suppress_video_click

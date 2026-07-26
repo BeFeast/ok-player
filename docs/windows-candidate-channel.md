@@ -1,12 +1,15 @@
 # Windows candidate channel
 
 Issue #483 adds a rolling Windows QA lane without changing the stable Windows
-release path. `.github/workflows/release-windows-candidate.yml` polls every 15
-minutes on `windows-latest` and can also be started manually. A run reads the
-identity manifest on the mutable `windows-candidate` prerelease and skips when
-its exact 40-character source SHA already matches `main`.
+release path. `.github/workflows/release-windows-candidate.yml` starts on every
+push to `main`, retains a 15-minute scheduled fallback, runs on
+`windows-latest`, and can also be started manually. A run reads the identity
+manifest on the mutable `windows-candidate` prerelease and skips when its exact
+40-character source SHA already matches `main`.
 
-Before SDK setup, a scheduled run refreshes `origin/main` and compares it with
+All starts share one concurrency group, and in-progress build or publication
+work is never canceled. GitHub retains the newest pending start in that group;
+before SDK setup, an automatic run refreshes `origin/main` and compares it with
 the checked-out SHA. If a newer head already exists, the run emits
 `OKP_CANDIDATE_SKIPPED_SUPERSEDED` with a `superseded by <sha>, skipping`
 notice, skips every build and publication step, and completes successfully.
@@ -38,7 +41,7 @@ and `releases.win.json` flow are unchanged.
 The hosted job performs these gates before any feed movement:
 
 1. verify a clean checkout whose `HEAD` equals the workflow's claimed SHA and,
-   for scheduled runs, skip it if current `origin/main` has superseded it;
+   for automatic runs, skip it if current `origin/main` has superseded it;
 2. build the C# solution;
 3. run the engine-agnostic unit suite;
 4. fetch libmpv and run the Debug real-libmpv integration suite;
@@ -46,7 +49,8 @@ The hosted job performs these gates before any feed movement:
    channel;
 6. validate the generated feed, package id, version, file sizes, and SHA-256
    digests in `OkPlayer.Core`;
-7. re-read `main` immediately before publication and reject a stale build.
+7. re-read `main` immediately before publication and successfully coalesce a
+   stale build without moving or pruning release assets.
 
 `candidate.windows.json` records the exact git SHA, monotonic build number,
 version, sanitized builder identity (`github-actions/windows-latest`), UTC
@@ -62,6 +66,17 @@ If pointer replacement fails, the workflow restores the prior feed and identity
 manifest. Therefore a build, test, package, validation, stale-head, or upload
 failure cannot intentionally advance the candidate feed.
 
+Before deciding whether a build is needed, the workflow downloads the prior
+identity manifest and feed with three bounded attempts and short backoff. A
+transient release-asset transport reset can therefore recover without turning
+valid rolling pointers into a failed delivery run; exhausting the bound still
+stops before build or publication mutation.
+
+If `main` advances while a candidate is building, the final head check records
+the newer SHA and completes the superseded run successfully before any upload.
+Post-publication pruning is gated on an actual feed promotion, so a late
+supersession cannot mutate the rolling release or count as a builder failure.
+
 The final feed contains the new Full package plus the immediately previous
 known-good Full package. Post-publication pruning removes only recognized
 `win-candidate` assets outside that current-plus-previous set; unknown or
@@ -74,8 +89,11 @@ the pointer is live and does not invalidate a successful promotion.
 rolling lane as `windows-candidate-delivery`. The Rust evaluator verifies the
 manifest/feed identity, exact source relation to `main`, and the shared
 120-minute unpublished-main lag bound. An unchanged promoted SHA stays healthy;
-two or more consecutive scheduled failures instead report the newest failed
-workflow step and count. Before the lane has any completed schedule history or
+two or more consecutive automatic push or scheduled failures instead report
+the newest failed workflow step and count. Manual runs are excluded from that
+failure streak by collecting push and scheduled histories in separate bounded
+queries, so manual activity cannot displace automatic evidence. Before the lane
+has any completed automatic history or
 published pointers, the row is a bootstrap warning rather than a failure.
 
 ## Acceptance boundary

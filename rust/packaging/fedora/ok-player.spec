@@ -32,6 +32,7 @@ BuildRequires:  zstd
 BuildRequires:  jq
 BuildRequires:  dbus-daemon
 BuildRequires:  python3
+BuildRequires:  procps-ng
 
 Requires:       mpv-libs%{?_isa}
 Requires:       xdg-utils

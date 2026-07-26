@@ -11,7 +11,8 @@ OKP_CANDIDATE_TOOLCHAIN_GATE_SCRIPTS="${OKP_CANDIDATE_TOOLCHAIN_GATE_SCRIPTS-$OK
 $OKP_CANDIDATE_TOOLCHAIN_ROOT/scripts/package-linux-velopack.sh
 $OKP_CANDIDATE_TOOLCHAIN_ROOT/scripts/collect-linux-bundled-mpv-runtime.sh
 $OKP_CANDIDATE_TOOLCHAIN_ROOT/scripts/verify-linux-bundled-mpv.sh
-$OKP_CANDIDATE_TOOLCHAIN_ROOT/scripts/verify-linux-package-portability.sh}"
+$OKP_CANDIDATE_TOOLCHAIN_ROOT/scripts/verify-linux-package-portability.sh
+$OKP_CANDIDATE_TOOLCHAIN_ROOT/scripts/smoke-linux-install-upgrade.sh}"
 
 okp_candidate_manifest_rows() {
   local kind name probe package extra

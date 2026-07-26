@@ -258,6 +258,10 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     }
     overlay.add_overlay(&update_surface);
     overlay.add_overlay(status_toast.widget());
+    // Transient OSD content must never participate in the toplevel's minimum
+    // or natural size. In particular, a long screenshot path revealed while
+    // fullscreen cannot widen the restored window on the next configure.
+    overlay.set_measure_overlay(status_toast.widget(), false);
     for resize_handle in resize_handles {
         overlay.add_overlay(&resize_handle);
     }
@@ -276,32 +280,20 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     if env::var_os("OKP_PRESENT_EXERCISE").is_some() {
         state.borrow_mut().presentation_exercise = Some(Default::default());
     }
-    connect_mpv(&video_host, Rc::clone(&state), startup_launch);
-    // Keep the fullscreen intent aligned with the compositor's authoritative
-    // state so toggles driven outside the double-click path (Escape, a
-    // window-manager shortcut) leave the next double-click pointing the right
-    // way. See [`fullscreen_toggle`].
-    {
-        let notify_state = Rc::clone(&state);
-        window.connect_notify_local(Some("fullscreened"), move |window, _| {
-            notify_state
-                .borrow_mut()
-                .fullscreen_toggle
-                .observe(window.is_fullscreen());
-        });
-    }
+    connect_mpv(&video_host, &window, Rc::clone(&state), startup_launch);
     let suppress_video_click = connect_player_window_move(&overlay, &window);
     connect_video_clicks(
         video_host.widget(),
         &window,
         Rc::clone(&state),
-        suppress_video_click,
+        Rc::clone(&suppress_video_click),
     );
     connect_compact_video_interactions(
         video_host.widget(),
         &window,
         Rc::clone(&state),
         Rc::clone(&status_toast),
+        suppress_video_click,
     );
     connect_player_context_menu(
         &overlay,
@@ -419,6 +411,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     // Deterministic smoke hook for the load-time resize guard. The production
     // path reaches the same state through the caption button/window manager.
     if env::var_os("OKP_START_FULLSCREEN").is_some() {
+        state.borrow_mut().fullscreen_toggle.request(true);
         window.fullscreen();
     } else if env::var_os("OKP_START_MAXIMIZED").is_some() {
         window.maximize();
@@ -445,7 +438,14 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
             }
         });
     }
-    if env::var_os("OKP_OSD_PREVIEW_ON_STARTUP").is_some() {
+    if let Some(path) = env::var_os("OKP_SAVED_SCREENSHOT_TOAST_PREVIEW") {
+        let preview_toast = Rc::clone(&status_toast);
+        // A cold software-rendered X11 window can map before its first frame is painted.
+        // Delay this test-only state until the canvas is stable so visual evidence includes it.
+        glib::timeout_add_local_once(Duration::from_millis(1500), move || {
+            preview_toast.show_saved_screenshot(&PathBuf::from(path));
+        });
+    } else if env::var_os("OKP_OSD_PREVIEW_ON_STARTUP").is_some() {
         let preview_toast = Rc::clone(&status_toast);
         glib::timeout_add_local_once(Duration::from_millis(500), move || {
             preview_toast.show("Volume 72%");
@@ -656,17 +656,15 @@ pub(crate) fn track_player_window_bounds(
             let (width, height) = size.bounds();
             if width > 0 && height > 0 {
                 let monitor = toplevel.display().monitor_at_surface(toplevel);
-                let work_area = monitor
-                    .as_ref()
-                    .map(|monitor| bounded_monitor_work_area(monitor.geometry(), width, height))
-                    .unwrap_or(window_fit::WindowRect {
-                        x: 0,
-                        y: 0,
-                        width,
-                        height,
-                    });
-                compute_bounds.replace(Some(PlayerWindowBounds { monitor, work_area }));
-                compute_resize.work_area.set(Some(work_area));
+                let bounds_size = window_fit::WindowSize { width, height };
+                let resize_work_area = monitor.as_ref().and_then(|monitor| {
+                    window_fit::monitor_fit_work_area(monitor_geometry(monitor), Some(bounds_size))
+                });
+                compute_bounds.replace(Some(PlayerWindowBounds {
+                    monitor,
+                    size: bounds_size,
+                }));
+                compute_resize.work_area.set(resize_work_area);
             }
         });
     });
@@ -677,53 +675,80 @@ pub(crate) fn current_player_work_area(
     window: &gtk::ApplicationWindow,
     reported_bounds: &RefCell<Option<PlayerWindowBounds>>,
 ) -> Option<window_fit::WindowRect> {
-    let current_monitor = window.surface().and_then(|surface| {
-        let monitor = surface.display().monitor_at_surface(&surface)?;
-        let geometry = monitor.geometry();
-        (geometry.width() > 0 && geometry.height() > 0).then_some((
-            monitor,
-            window_fit::WindowRect {
-                x: geometry.x(),
-                y: geometry.y(),
-                width: geometry.width(),
-                height: geometry.height(),
-            },
-        ))
-    });
+    current_player_fit_area(window, reported_bounds)
+        .map(|(_, work_area, _)| work_area)
+        .or_else(|| current_player_monitor(window).map(|(_, geometry)| geometry))
+}
 
+fn current_player_fit_area(
+    window: &gtk::ApplicationWindow,
+    reported_bounds: &RefCell<Option<PlayerWindowBounds>>,
+) -> Option<(gdk::Monitor, window_fit::WindowRect, PlayerFitBoundsSource)> {
+    let (monitor, monitor_geometry) = current_player_monitor(window)?;
     let reported = reported_bounds.borrow();
-    match (reported.as_ref(), current_monitor) {
-        (Some(bounds), Some((monitor, monitor_size)))
-            if bounds.monitor.as_ref() == Some(&monitor) =>
-        {
-            Some(bounded_monitor_work_area(
-                monitor.geometry(),
-                bounds.work_area.width.min(monitor_size.width),
-                bounds.work_area.height.min(monitor_size.height),
-            ))
+    let (reported_size, source) = match reported.as_ref() {
+        Some(bounds) if bounds.monitor.as_ref() == Some(&monitor) => {
+            (Some(bounds.size), PlayerFitBoundsSource::CurrentMonitor)
         }
-        (_, Some((_, monitor_size))) => Some(monitor_size),
-        (Some(bounds), None) => Some(bounds.work_area),
-        (None, None) => None,
+        Some(bounds) if bounds.monitor.is_none() => {
+            (Some(bounds.size), PlayerFitBoundsSource::Unbound)
+        }
+        Some(_) => (None, PlayerFitBoundsSource::StaleMonitorFallback),
+        None => (None, PlayerFitBoundsSource::MissingFallback),
+    };
+
+    // A missing report or one associated with a previous monitor must not
+    // stall a one-shot fit. The shared resolver falls back to this monitor's
+    // geometry. Size-only reports use a conservative rectangle that is inside
+    // every possible panel/dock origin and can never become a desktop union.
+    let work_area = window_fit::monitor_fit_work_area(monitor_geometry, reported_size)?;
+    Some((monitor, work_area, source))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlayerFitBoundsSource {
+    CurrentMonitor,
+    Unbound,
+    MissingFallback,
+    StaleMonitorFallback,
+}
+
+impl PlayerFitBoundsSource {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::CurrentMonitor => "current-monitor",
+            Self::Unbound => "unbound",
+            Self::MissingFallback => "monitor-fallback-missing",
+            Self::StaleMonitorFallback => "monitor-fallback-stale",
+        }
     }
 }
 
-fn bounded_monitor_work_area(
-    geometry: gdk::Rectangle,
-    bounds_width: i32,
-    bounds_height: i32,
-) -> window_fit::WindowRect {
-    let width = bounds_width.min(geometry.width()).max(1);
-    let height = bounds_height.min(geometry.height()).max(1);
+fn current_player_monitor(
+    window: &gtk::ApplicationWindow,
+) -> Option<(gdk::Monitor, window_fit::WindowRect)> {
+    window.surface().and_then(|surface| {
+        let monitor = surface.display().monitor_at_surface(&surface)?;
+        let geometry = monitor_geometry(&monitor);
+        (geometry.width > 0 && geometry.height > 0).then_some((monitor, geometry))
+    })
+}
+
+fn monitor_geometry(monitor: &gdk::Monitor) -> window_fit::WindowRect {
+    let geometry = monitor.geometry();
     window_fit::WindowRect {
-        // GDK's toplevel bounds expose only a size. Centering a smaller bound
-        // within monitor geometry is the least-assumptive logical origin; on
-        // Wayland Mutter remains authoritative for final placement.
-        x: geometry.x() + (geometry.width() - width).max(0) / 2,
-        y: geometry.y() + (geometry.height() - height).max(0) / 2,
-        width,
-        height,
+        x: geometry.x(),
+        y: geometry.y(),
+        width: geometry.width(),
+        height: geometry.height(),
     }
+}
+
+pub(crate) fn player_window_fit_area_available(
+    window: &gtk::ApplicationWindow,
+    reported_bounds: &RefCell<Option<PlayerWindowBounds>>,
+) -> bool {
+    current_player_fit_area(window, reported_bounds).is_some()
 }
 
 fn current_player_scale(window: &gtk::ApplicationWindow) -> f64 {
@@ -771,9 +796,11 @@ pub(crate) fn fit_player_window_to_video(
         return;
     }
 
-    let Some(work_area) = current_player_work_area(window, reported_bounds) else {
+    let Some((monitor, work_area, bounds_source)) =
+        current_player_fit_area(window, reported_bounds)
+    else {
         if debug {
-            eprintln!("window fit skipped: workarea unavailable");
+            eprintln!("window fit deferred: monitor workarea unavailable");
         }
         return;
     };
@@ -789,10 +816,15 @@ pub(crate) fn fit_player_window_to_video(
 
     if debug {
         eprintln!(
-            "window fit request: video={}x{} scale={:.2} workarea={}x{}+{},{} target={}x{}+{},{}",
+            "window fit request: video={}x{} scale={:.2} monitor={} monitor_geometry={}x{}+{},{} workarea={}x{}+{},{} window={}x{}+{},{} bounds_source={}",
             video.width,
             video.height,
             monitor_scale,
+            monitor_log_token(&monitor),
+            monitor.geometry().width(),
+            monitor.geometry().height(),
+            monitor.geometry().x(),
+            monitor.geometry().y(),
             work_area.width,
             work_area.height,
             work_area.x,
@@ -801,6 +833,7 @@ pub(crate) fn fit_player_window_to_video(
             placement.size.height,
             placement.position.x,
             placement.position.y,
+            bounds_source.label(),
         );
     }
     window.set_default_size(placement.size.width, placement.size.height);
@@ -815,6 +848,34 @@ pub(crate) fn fit_player_window_to_video(
             placement.position.y,
             window.is_mapped(),
         );
+    }
+}
+
+pub(crate) fn monitor_log_token(monitor: &gdk::Monitor) -> String {
+    let value = monitor
+        .connector()
+        .or_else(|| monitor.description())
+        .or_else(|| monitor.model())
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".to_owned());
+    sanitize_monitor_log_token(&value)
+}
+
+pub(crate) fn sanitize_monitor_log_token(value: &str) -> String {
+    let token = value
+        .chars()
+        .map(|character| {
+            if character.is_whitespace() || character.is_control() {
+                '-'
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    if token.is_empty() {
+        "unknown".to_owned()
+    } else {
+        token
     }
 }
 
@@ -873,7 +934,8 @@ pub(crate) fn fit_player_window_to_current_media(
             status_toast.show("Window fitted to media");
         }
         window_fit::ExplicitWindowFitAction::RestoreWindowedAndFit => {
-            state.borrow_mut().fullscreen_toggle.observe(false);
+            state.borrow_mut().fullscreen_toggle.request(false);
+            log_fullscreen_video_geometry(window, state, "fullscreen-request-leave-fit");
             window.unfullscreen();
             window.unmaximize();
             restore_compact_mode(window);
@@ -1563,6 +1625,71 @@ pub(crate) fn connect_player_window_drag(
         );
     });
     widget.add_controller(gesture);
+}
+
+/// Hand a thresholded pointer drag to the window manager using GTK's own
+/// press-coordinate contract. `GdkToplevel::begin_move` requires the surface
+/// coordinate of the press that began the drag, not the pointer's later
+/// threshold-crossing position. Keep the controller live after the handoff:
+/// resetting it, synchronously or from an idle callback, cancels the sequence
+/// while Mutter owns the interactive move. End/cancel edges clear normal state,
+/// and each fresh drag begin recovers if a compositor consumed those edges.
+///
+/// Wayland needs one concession on top of that contract: GDK ignores the
+/// coordinates there and consumes the seat's current implicit-grab serial inside
+/// `begin_move`, so GTK must not claim the sequence around the handoff either —
+/// doing so invalidates the compositor-owned grab and unmaps the player
+/// mid-drag. X11 keeps the GtkWindowHandle-style claim; the shared click
+/// suppressor prevents release leakage on either backend.
+pub(crate) fn begin_native_window_move_from_drag(
+    gesture: &gtk::GestureDrag,
+    window: &gtk::ApplicationWindow,
+) -> bool {
+    let Some(device) = gesture.current_event_device() else {
+        return false;
+    };
+    let button = gesture.current_button() as i32;
+    let timestamp = gesture.current_event_time();
+    let Some(surface) = window.surface() else {
+        return false;
+    };
+    let Ok(toplevel) = surface.downcast::<gdk::Toplevel>() else {
+        return false;
+    };
+
+    let display = gtk::prelude::WidgetExt::display(window);
+    let wayland = is_wayland_display(display.type_().name());
+    if wayland {
+        // GDK's Wayland implementation ignores the coordinates and uses the
+        // seat's last implicit-grab serial to issue xdg_toplevel.move. Changing
+        // the GTK sequence state around this call can invalidate or terminate
+        // that compositor-owned grab, matching the live player unmap during a
+        // non-OSC drag.
+        toplevel.begin_move(&device, button, 0.0, 0.0, timestamp);
+        return true;
+    }
+
+    let Some((widget_x, widget_y)) = gesture.start_point() else {
+        return false;
+    };
+    let Some(drag_widget) = gesture.widget() else {
+        return false;
+    };
+    let widget_point = gtk::graphene::Point::new(widget_x as f32, widget_y as f32);
+    let Some(window_point) = drag_widget.compute_point(window, &widget_point) else {
+        return false;
+    };
+    let (surface_x, surface_y) = window.surface_transform();
+
+    gesture.set_state(gtk::EventSequenceState::Claimed);
+    toplevel.begin_move(
+        &device,
+        button,
+        f64::from(window_point.x()) + surface_x,
+        f64::from(window_point.y()) + surface_y,
+        timestamp,
+    );
+    true
 }
 
 /// Smallest client the interactive resize will settle on, keeping the OSC

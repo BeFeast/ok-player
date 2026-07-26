@@ -1,0 +1,1122 @@
+{
+  "schema_version": 2,
+  "package": {
+    "version": "0.1.0-linux-alpha.113",
+    "commit_sha": "807afdde0f8b2989657874eb3164e1cabad73c55",
+    "artifacts": [
+      {
+        "kind": "debian",
+        "file_name": "ok-player_0.1.0-linux-alpha.113_amd64.deb",
+        "sha256": "ea332fd77f1f1ea02d162906cb27da721b979901df2bad084cbf4009589baa8c"
+      },
+      {
+        "kind": "app-image",
+        "file_name": "OK-Player-0.1.0-linux-alpha.113-x86_64.AppImage",
+        "sha256": "573bc45ff385ff3a70ca85381b1d5238100f72b0a291089aca4635f6cbfa8cfb"
+      }
+    ]
+  },
+  "build_environment_sha256": "25d8bfce6e43d6bfdac0045447bfc2651e8457aec9819e30ba5a9f19eb568093",
+  "rows": [
+    {
+      "id": "rust-workspace-gates",
+      "level": "model-unit",
+      "viewport": null,
+      "theme": "not-applicable",
+      "state": "rust-workspace-gates",
+      "reference": "rust-test-suite",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "candidate-rust-gates",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Recorded by the candidate workflow after cargo test --workspace passed.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "natural-folder-queue",
+      "level": "model-unit",
+      "viewport": null,
+      "theme": "not-applicable",
+      "state": "natural-folder-queue",
+      "reference": "rust-test-suite",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "candidate-rust-gates",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Recorded by the candidate workflow after cargo test --workspace passed.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "acceptance-contract",
+      "level": "model-unit",
+      "viewport": null,
+      "theme": "not-applicable",
+      "state": "acceptance-contract",
+      "reference": "rust-test-suite",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "candidate-rust-gates",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Recorded by the candidate workflow after cargo test --workspace passed.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "xvfb-first-run",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "first-run",
+      "reference": "windows-player-redlines",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "canvas-card-edge-contrast",
+          "expected": 0,
+          "actual": 0.000915,
+          "tolerance": 0.04,
+          "unit": "normalized",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
+    },
+    {
+      "id": "xvfb-continue-watching",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "light",
+      "state": "continue-watching",
+      "reference": "history-handoff",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "left-heading-region-visible",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
+    },
+    {
+      "id": "xvfb-history",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "light",
+      "state": "history",
+      "reference": "history-handoff",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
+    },
+    {
+      "id": "xvfb-loaded-paused-osc",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "loaded-paused-osc",
+      "reference": "windows-player-redlines",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "osc-visible-in-canonical-bottom-band",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "generated-media-open-file",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "generated-media-duration-observed",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
+    },
+    {
+      "id": "xvfb-paused",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "paused",
+      "reference": "windows-player-redlines",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "osc-visible-in-canonical-bottom-band",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "paused-cue-visible",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
+    },
+    {
+      "id": "xvfb-buffering-loading",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "buffering-loading",
+      "reference": "windows-player-redlines",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "loading-ring-visible",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "loading-timeline-shimmer-visible",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "real-delayed-http-load",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
+    },
+    {
+      "id": "xvfb-playback-error",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "playback-error",
+      "reference": "windows-player-redlines",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "in-canvas-error-card-visible",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "real-http-404-and-retry",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
+    },
+    {
+      "id": "xvfb-playing-idle",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "playing-idle",
+      "reference": "windows-player-redlines",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "idle-bottom-band-clear",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
+    },
+    {
+      "id": "xvfb-osd",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "osd",
+      "reference": "windows-player-redlines",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "top-osd-visible",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
+    },
+    {
+      "id": "xvfb-buffered-timeline",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "buffered-timeline",
+      "reference": "windows-player-redlines",
+      "measurement_result": "fail",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "osc-visible-in-canonical-bottom-band",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "buffered-band-visible",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "real-throttled-http-buffer",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "canonical-single-rail-center-spread",
+          "expected": 0,
+          "actual": 5,
+          "tolerance": 0.1,
+          "unit": "px",
+          "status": "fail"
+        }
+      ],
+      "notes": "Exact-package deterministic render failed the canonical single-rail alignment: played and buffered centers were 627.5px while the trough center was 632.5px."
+    },
+    {
+      "id": "xvfb-chapter-context",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "chapter-context",
+      "reference": "windows-player-redlines",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "osc-visible-in-canonical-bottom-band",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "chapter-context-title-visible",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "real-chapter-seek",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
+    },
+    {
+      "id": "xvfb-chapters",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "chapters",
+      "reference": "windows-player-redlines",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "panel-left-clear-strip",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "panel-content-visible",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "generated-media-panel-action",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
+    },
+    {
+      "id": "xvfb-up-next",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "up-next",
+      "reference": "windows-player-redlines",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "panel-left-clear-strip",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "panel-content-visible",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
+    },
+    {
+      "id": "xvfb-settings-about",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 760,
+        "height": 560
+      },
+      "theme": "light",
+      "state": "settings-about",
+      "reference": "about-handoff",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 760,
+          "actual": 760,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 560,
+          "actual": 560,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
+    },
+    {
+      "id": "xvfb-narrow-layout",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 480,
+        "height": 540
+      },
+      "theme": "dark",
+      "state": "narrow-layout",
+      "reference": "compact-modes-handoff",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 480,
+          "actual": 480,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 540,
+          "actual": 540,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
+    },
+    {
+      "id": "xvfb-bright-video-background",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "bright-video-background",
+      "reference": "windows-player-redlines",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "osc-visible-in-canonical-bottom-band",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "bright-frame-visible",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
+    },
+    {
+      "id": "xvfb-dark-video-background",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "dark-video-background",
+      "reference": "windows-player-redlines",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1120,
+          "actual": 1120,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 680,
+          "actual": 680,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "osc-visible-in-canonical-bottom-band",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "dark-frame-visible",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "generated-media-screenshot-file",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
+    },
+    {
+      "id": "xvfb-fullscreen",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "theme": "dark",
+      "state": "fullscreen",
+      "reference": "windows-player-redlines",
+      "measurement_result": "pass",
+      "operator_status": "not-run",
+      "measurements": [
+        {
+          "name": "window-width",
+          "expected": 1280,
+          "actual": 1280,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "window-height",
+          "expected": 900,
+          "actual": 900,
+          "tolerance": 0,
+          "unit": "px",
+          "status": "pass"
+        },
+        {
+          "name": "fullscreen-chrome-cleared",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "fullscreen-video-visible",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        },
+        {
+          "name": "x11-fullscreen-transition",
+          "expected": 1,
+          "actual": 1,
+          "tolerance": 0,
+          "unit": "boolean",
+          "status": "pass"
+        }
+      ],
+      "notes": "Deterministic Xvfb render only; no live desktop behavior is attested."
+    },
+    {
+      "id": "xvfb-always-on-top",
+      "level": "xvfb-render",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "dark",
+      "state": "always-on-top",
+      "reference": "windows-player-redlines",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run: the exact-package playback interaction smoke stopped first because stationary double-click did not enter fullscreen; the window remained 1120x680.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "installed-launch",
+      "level": "installed-package",
+      "viewport": null,
+      "theme": "not-applicable",
+      "state": "installed-launch",
+      "reference": "packaging-contract",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run after the exact-package deterministic acceptance failed; no installed-package PASS is claimed.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "installed-package-version",
+      "level": "installed-package",
+      "viewport": null,
+      "theme": "not-applicable",
+      "state": "installed-package-version",
+      "reference": "packaging-contract",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run after the exact-package deterministic acceptance failed; no installed-package PASS is claimed.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "gnome-file-chooser",
+      "level": "gnome-wayland-operator",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "auto",
+      "state": "gnome-file-chooser",
+      "reference": "operator-acceptance",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run because required exact-package Xvfb acceptance failed before live operator acceptance.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "gnome-folder-chooser",
+      "level": "gnome-wayland-operator",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "auto",
+      "state": "gnome-folder-chooser",
+      "reference": "operator-acceptance",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run because required exact-package Xvfb acceptance failed before live operator acceptance.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "wayland-drag-drop",
+      "level": "gnome-wayland-operator",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "auto",
+      "state": "wayland-drag-drop",
+      "reference": "operator-acceptance",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run because required exact-package Xvfb acceptance failed before live operator acceptance.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "wayland-clipboard",
+      "level": "gnome-wayland-operator",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "auto",
+      "state": "wayland-clipboard",
+      "reference": "operator-acceptance",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run because required exact-package Xvfb acceptance failed before live operator acceptance.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "desktop-portal",
+      "level": "gnome-wayland-operator",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "auto",
+      "state": "desktop-portal",
+      "reference": "operator-acceptance",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run because required exact-package Xvfb acceptance failed before live operator acceptance.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "wayland-compositor-fullscreen",
+      "level": "gnome-wayland-operator",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "auto",
+      "state": "wayland-compositor-fullscreen",
+      "reference": "operator-acceptance",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run because required exact-package Xvfb acceptance failed before live operator acceptance.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "wayland-double-click-fullscreen",
+      "level": "gnome-wayland-operator",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "auto",
+      "state": "wayland-double-click-fullscreen",
+      "reference": "operator-acceptance",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run because required exact-package Xvfb acceptance failed before live operator acceptance.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "wayland-always-on-top-unavailable",
+      "level": "gnome-wayland-operator",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "auto",
+      "state": "wayland-always-on-top-unavailable",
+      "reference": "operator-acceptance",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run because required exact-package Xvfb acceptance failed before live operator acceptance.",
+      "execution_environment_sha256": null
+    },
+    {
+      "id": "keyboard-focus-navigation",
+      "level": "gnome-wayland-operator",
+      "viewport": {
+        "width": 1120,
+        "height": 680
+      },
+      "theme": "auto",
+      "state": "keyboard-focus-navigation",
+      "reference": "operator-acceptance",
+      "measurement_result": "not-run",
+      "operator_status": "not-run",
+      "measurements": [],
+      "notes": "Not run because required exact-package Xvfb acceptance failed before live operator acceptance.",
+      "execution_environment_sha256": null
+    }
+  ]
+}

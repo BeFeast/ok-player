@@ -1,7 +1,8 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Child, Command, Output, Stdio};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use okp_core::project_health::{HealthStatus, ProjectHealthOutcome};
@@ -152,8 +153,56 @@ fn active_current_main_candidate_run_survives_live_collection() {
 }
 
 #[test]
-fn windows_candidate_gate_failure_survives_live_collection() {
-    let output = run_live("windows-candidate-failures");
+fn repeated_green_candidate_nondelivery_survives_live_collection() {
+    let (output, gh_log) = run_live_with_gh_log("candidate-green-nondelivery");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let outcome: ProjectHealthOutcome =
+        serde_json::from_slice(&output.stdout).expect("collector should emit outcome JSON");
+    let candidate = outcome
+        .checks
+        .iter()
+        .find(|check| check.name == "linux-candidate-delivery")
+        .expect("candidate check");
+    assert!(
+        candidate
+            .reason_codes
+            .iter()
+            .any(|code| code == "candidate-success-without-delivery")
+    );
+    assert!(
+        candidate
+            .reason_codes
+            .iter()
+            .any(|code| code == "candidate-repeated-success-without-delivery")
+    );
+    assert!(
+        candidate
+            .details
+            .iter()
+            .any(|detail| detail.contains("2 successful Linux Candidate runs within 7200s"))
+    );
+    let history_query = gh_log
+        .lines()
+        .find(|line| {
+            line.contains("run list")
+                && line.contains("--workflow Linux Candidate")
+                && line.contains("--status success")
+        })
+        .expect("bounded successful Linux Candidate history query");
+    assert!(history_query.contains("--limit 100"), "{history_query}");
+    assert!(history_query.contains("conclusion"), "{history_query}");
+    assert!(history_query.contains("createdAt"), "{history_query}");
+    assert!(history_query.contains("updatedAt"), "{history_query}");
+}
+
+#[test]
+fn windows_candidate_automatic_failure_history_is_filtered_and_merged_newest_first() {
+    let (output, gh_log) = run_live_with_gh_log("windows-candidate-failures");
     assert_eq!(
         output.status.code(),
         Some(1),
@@ -177,6 +226,29 @@ fn windows_candidate_gate_failure_survives_live_collection() {
         candidate.summary.contains(
             "Windows candidate builder failing at gate Run core unit tests (3 consecutive)"
         )
+    );
+    let windows_queries = gh_log
+        .lines()
+        .filter(|line| line.contains("run list") && line.contains("--workflow Windows Candidate"))
+        .collect::<Vec<_>>();
+    assert_eq!(windows_queries.len(), 2, "{gh_log}");
+    assert!(
+        windows_queries
+            .iter()
+            .any(|line| line.contains("--event push")),
+        "{gh_log}"
+    );
+    assert!(
+        windows_queries
+            .iter()
+            .any(|line| line.contains("--event schedule")),
+        "{gh_log}"
+    );
+    assert!(
+        windows_queries
+            .iter()
+            .all(|line| line.contains("--limit 100") && line.contains("--event ")),
+        "{gh_log}"
     );
 }
 
@@ -402,13 +474,109 @@ fn repeated_live_ticks_reclaim_their_snapshot_directories() {
     }
 }
 
+#[test]
+fn terminating_live_collector_stops_the_evaluator_and_reclaims_scratch() {
+    let root = unique_temp_dir("okp-project-health-termination");
+    let fake_bin = root.path().join("bin");
+    let scratch = root.path().join("scratch");
+    fs::create_dir_all(&fake_bin).expect("fake bin should be created");
+    fs::create_dir_all(&scratch).expect("scratch directory should be created");
+    write_executable(&fake_bin.join("gh"), FAKE_GH);
+    write_executable(&fake_bin.join("curl"), FAKE_CURL);
+    write_executable(&fake_bin.join("date"), FAKE_DATE);
+
+    let evaluator = root.path().join("signal-aware-evaluator");
+    let evaluator_pid = root.path().join("evaluator.pid");
+    let evaluator_ready = root.path().join("evaluator.ready");
+    let evaluator_signal = root.path().join("evaluator.signal");
+    write_executable(&evaluator, SIGNAL_AWARE_EVALUATOR);
+
+    let mut child = Command::new("bash");
+    child
+        .arg(checker_path())
+        .env("OKP_PROJECT_HEALTH_BIN", &evaluator)
+        .env("OKP_TEST_EVALUATOR_PID", &evaluator_pid)
+        .env("OKP_TEST_EVALUATOR_READY", &evaluator_ready)
+        .env("OKP_TEST_EVALUATOR_SIGNAL", &evaluator_signal)
+        .env("OKP_STUB_FAIL", "none")
+        .env(
+            "OKP_STUB_CANDIDATE_FEED",
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/project_health/fresh-accepted.json"),
+        )
+        .env(
+            "OKP_STUB_WINDOWS_CANDIDATE_MANIFEST",
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/project_health/windows-candidate-manifest.json"),
+        )
+        .env(
+            "OKP_STUB_WINDOWS_CANDIDATE_FEED",
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/project_health/windows-candidate-feed.json"),
+        )
+        .env("TMPDIR", &scratch)
+        .env("PATH", path_with(&fake_bin))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = child.spawn().expect("live collector should start");
+
+    wait_for_fixture_file(&evaluator_ready, &mut child, Duration::from_secs(10));
+    let evaluator_pid_value = fs::read_to_string(&evaluator_pid)
+        .expect("evaluator PID should be recorded")
+        .trim()
+        .to_owned();
+    let signal_status = Command::new("kill")
+        .arg("-TERM")
+        .arg(child.id().to_string())
+        .status()
+        .expect("collector should receive SIGTERM");
+    assert!(signal_status.success(), "failed to signal collector");
+
+    let checker_status = wait_for_child_exit(&mut child, Duration::from_secs(10));
+    let evaluator_was_signaled = evaluator_signal.exists();
+    let evaluator_is_alive = process_is_alive(&evaluator_pid_value);
+    if evaluator_is_alive {
+        let _ = Command::new("kill")
+            .arg("-KILL")
+            .arg(&evaluator_pid_value)
+            .status();
+    }
+
+    assert_eq!(checker_status.code(), Some(143));
+    assert!(
+        evaluator_was_signaled,
+        "collector termination was not forwarded to evaluator {evaluator_pid_value}"
+    );
+    assert!(
+        !evaluator_is_alive,
+        "evaluator {evaluator_pid_value} survived collector termination"
+    );
+    let leftovers = fs::read_dir(&scratch)
+        .expect("scratch directory should be readable")
+        .map(|entry| entry.expect("scratch entry should be readable").file_name())
+        .collect::<Vec<_>>();
+    assert!(
+        leftovers.is_empty(),
+        "terminated collector abandoned scratch entries: {leftovers:?}"
+    );
+}
+
 fn run_live(failure: &str) -> Output {
     run_live_with_tmpdir(failure, None)
 }
 
+fn run_live_with_gh_log(failure: &str) -> (Output, String) {
+    run_live_fixture(failure, None)
+}
+
 fn run_live_with_tmpdir(failure: &str, tmpdir: Option<&Path>) -> Output {
+    run_live_fixture(failure, tmpdir).0
+}
+
+fn run_live_fixture(failure: &str, tmpdir: Option<&Path>) -> (Output, String) {
     let root = unique_temp_dir(&format!("okp-project-health-{failure}"));
     let fake_bin = root.path().join("bin");
+    let gh_log = root.path().join("gh.log");
     fs::create_dir_all(&fake_bin).expect("fake bin should be created");
     write_executable(&fake_bin.join("gh"), FAKE_GH);
     write_executable(&fake_bin.join("curl"), FAKE_CURL);
@@ -418,6 +586,7 @@ fn run_live_with_tmpdir(failure: &str, tmpdir: Option<&Path>) -> Output {
         .arg(checker_path())
         .env("OKP_PROJECT_HEALTH_BIN", evaluator_path())
         .env("OKP_STUB_FAIL", failure)
+        .env("OKP_STUB_GH_LOG", &gh_log)
         .env(
             "OKP_STUB_CANDIDATE_FEED",
             Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -437,7 +606,9 @@ fn run_live_with_tmpdir(failure: &str, tmpdir: Option<&Path>) -> Output {
     if let Some(tmpdir) = tmpdir {
         command.env("TMPDIR", tmpdir);
     }
-    command.output().expect("collector fixture should run")
+    let output = command.output().expect("collector fixture should run");
+    let gh_log = fs::read_to_string(gh_log).expect("gh fixture log should be readable");
+    (output, gh_log)
 }
 
 fn checker_path() -> PathBuf {
@@ -474,6 +645,51 @@ fn path_with(directory: &Path) -> String {
     )
 }
 
+fn wait_for_fixture_file(path: &Path, child: &mut Child, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while !path.exists() {
+        if let Some(status) = child
+            .try_wait()
+            .expect("collector status should be readable")
+        {
+            panic!("collector exited before evaluator became ready: {status}");
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("timed out waiting for evaluator readiness");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> std::process::ExitStatus {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .expect("collector status should be readable")
+        {
+            return status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            return child.wait().expect("timed-out collector should be reaped");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn process_is_alive(pid: &str) -> bool {
+    Command::new("kill")
+        .arg("-0")
+        .arg(pid)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
 fn write_executable(path: &Path, contents: &str) {
     fs::write(path, contents).expect("fake executable should be written");
     let mut permissions = fs::metadata(path)
@@ -490,6 +706,25 @@ exit 99
 
 const PREBUILT_EVALUATOR_WRAPPER: &str = r#"#!/usr/bin/env bash
 exec "$OKP_REAL_HEALTH_BIN" "$@"
+"#;
+
+const SIGNAL_AWARE_EVALUATOR: &str = r#"#!/usr/bin/env bash
+set -uo pipefail
+blocker_pid=""
+terminate() {
+  printf 'TERM\n' >"$OKP_TEST_EVALUATOR_SIGNAL"
+  if [[ -n "$blocker_pid" ]]; then
+    kill "$blocker_pid" 2>/dev/null || true
+    wait "$blocker_pid" 2>/dev/null || true
+  fi
+  exit 143
+}
+trap terminate TERM
+tail -f /dev/null &
+blocker_pid=$!
+printf '%s\n' "$$" >"$OKP_TEST_EVALUATOR_PID"
+: >"$OKP_TEST_EVALUATOR_READY"
+wait "$blocker_pid"
 "#;
 
 const FAKE_DATE: &str = r#"#!/usr/bin/env bash
@@ -518,17 +753,26 @@ fi
 
 const FAKE_GH: &str = r#"#!/usr/bin/env bash
 set -euo pipefail
+if [[ -n "${OKP_STUB_GH_LOG:-}" ]]; then
+  printf '%s\n' "$*" >>"$OKP_STUB_GH_LOG"
+fi
 if [[ "${1:-}" == run && "${2:-}" == list ]]; then
   arguments=" $* "
   completed_only=false
   [[ "$arguments" != *" --status completed "* ]] || completed_only=true
+  success_only=false
+  [[ "$arguments" != *" --status success "* ]] || success_only=true
   workflow=""
+  event=""
   while (( $# > 0 )); do
-    if [[ "$1" == --workflow ]]; then workflow="$2"; break; fi
+    if [[ "$1" == --workflow ]]; then workflow="$2"; fi
+    if [[ "$1" == --event ]]; then event="$2"; fi
     shift
   done
   main_sha="d5d531a58c830a01a7e25615e850593e9ff4493f"
-  if [[ "$OKP_STUB_FAIL" == schedule-stale || "$OKP_STUB_FAIL" == candidate-active ]]; then
+  if [[ "$OKP_STUB_FAIL" == schedule-stale \
+      || "$OKP_STUB_FAIL" == candidate-active \
+      || "$OKP_STUB_FAIL" == candidate-green-nondelivery ]]; then
     main_sha="1111111111111111111111111111111111111111"
   fi
     if [[ "$workflow" == "Linux Candidate" ]]; then
@@ -536,7 +780,9 @@ if [[ "${1:-}" == run && "${2:-}" == list ]]; then
       if [[ "$OKP_STUB_FAIL" == schedule-stale || "$OKP_STUB_FAIL" == candidate-active ]]; then
         completed_at="2026-07-17T23:00:47Z"
       fi
-    if [[ "$OKP_STUB_FAIL" == candidate-failures ]]; then
+    if [[ "$OKP_STUB_FAIL" == candidate-failures && "$success_only" == true ]]; then
+      printf '%s\n' '[]'
+    elif [[ "$OKP_STUB_FAIL" == candidate-failures ]]; then
       printf '%s\n' '[
         {"databaseId":106,"headSha":"d5d531a58c830a01a7e25615e850593e9ff4493f","event":"schedule","status":"completed","conclusion":"failure","updatedAt":"2026-07-18T01:55:47Z","url":"https://example.invalid/run/106"},
         {"databaseId":105,"conclusion":"failure"},
@@ -546,24 +792,56 @@ if [[ "${1:-}" == run && "${2:-}" == list ]]; then
         {"databaseId":101,"conclusion":"failure"},
         {"databaseId":100,"conclusion":"success"}
       ]'
+    elif [[ "$OKP_STUB_FAIL" == candidate-active && "$success_only" == true ]]; then
+      printf '%s\n' '[
+        {"headSha":"9999999999999999999999999999999999999999","event":"workflow_dispatch","status":"completed","conclusion":"success","createdAt":"2026-07-17T23:00:47Z","updatedAt":"2026-07-18T00:00:47Z","url":"https://example.invalid/run/prior-green"}
+      ]'
     elif [[ "$OKP_STUB_FAIL" == candidate-active && "$completed_only" == false ]]; then
       printf '%s\n' '[
         {"headSha":"1111111111111111111111111111111111111111","event":"workflow_dispatch","status":"in_progress","createdAt":"2026-07-18T02:00:40Z","url":"https://example.invalid/run/active-candidate"},
         {"headSha":"1111111111111111111111111111111111111111","event":"schedule","status":"completed","createdAt":"2026-07-18T01:00:47Z","url":"https://example.invalid/run/candidate"}
       ]'
+    elif [[ "$OKP_STUB_FAIL" == candidate-green-nondelivery && "$success_only" == true ]]; then
+      printf '%s\n' '[
+        {"databaseId":402,"headSha":"4444444444444444444444444444444444444444","event":"schedule","status":"completed","conclusion":"success","createdAt":"2026-07-18T01:35:47Z","updatedAt":"2026-07-18T01:55:47Z","url":"https://example.invalid/run/second-green"},
+        {"databaseId":401,"headSha":"3333333333333333333333333333333333333333","event":"workflow_dispatch","status":"completed","conclusion":"success","createdAt":"2026-07-18T01:31:47Z","updatedAt":"2026-07-18T01:50:47Z","url":"https://example.invalid/run/first-green"}
+      ]'
+    elif [[ "$OKP_STUB_FAIL" == candidate-green-nondelivery && "$completed_only" == false ]]; then
+      printf '['
+      for id in $(seq 1 100); do
+        (( id == 1 )) || printf ','
+        printf '{"databaseId":%s,"headSha":"9999999999999999999999999999999999999999","event":"workflow_dispatch","status":"in_progress","conclusion":"","createdAt":"2026-07-18T02:00:%02dZ","updatedAt":"2026-07-18T02:00:%02dZ"}' "$((500 + id))" "$((id % 60))" "$((id % 60))"
+      done
+      printf ']\n'
     else
-      printf '[{"databaseId":100,"headSha":"%s","event":"schedule","status":"completed","conclusion":"success","updatedAt":"%s","url":"https://example.invalid/run/candidate"}]\n' "$main_sha" "$completed_at"
+      printf '[{"databaseId":100,"headSha":"%s","event":"schedule","status":"completed","conclusion":"success","createdAt":"%s","updatedAt":"%s","url":"https://example.invalid/run/candidate"}]\n' "$main_sha" "$completed_at" "$completed_at"
     fi
   elif [[ "$workflow" == "Windows Candidate" ]]; then
     if [[ "$OKP_STUB_FAIL" == windows-candidate-failures ]]; then
-      printf '%s\n' '[
-        {"databaseId":203,"headSha":"d5d531a58c830a01a7e25615e850593e9ff4493f","event":"schedule","status":"completed","conclusion":"failure","updatedAt":"2026-07-18T01:55:47Z","url":"https://example.invalid/run/203"},
-        {"databaseId":202,"conclusion":"failure"},
-        {"databaseId":201,"conclusion":"failure"},
-        {"databaseId":200,"conclusion":"success"}
-      ]'
+      if [[ "$event" == push ]]; then
+        printf '%s\n' '[
+          {"databaseId":203,"headSha":"d5d531a58c830a01a7e25615e850593e9ff4493f","event":"push","status":"completed","conclusion":"failure","createdAt":"2026-07-18T01:55:47Z","updatedAt":"2026-07-18T01:56:47Z","url":"https://example.invalid/run/203"},
+          {"databaseId":200,"event":"push","conclusion":"success","createdAt":"2026-07-18T01:40:47Z","updatedAt":"2026-07-18T01:59:47Z"}
+        ]'
+      elif [[ "$event" == schedule ]]; then
+        printf '%s\n' '[
+          {"databaseId":202,"event":"schedule","conclusion":"failure","createdAt":"2026-07-18T01:50:47Z","updatedAt":"2026-07-18T01:57:47Z"},
+          {"databaseId":201,"event":"schedule","conclusion":"failure","createdAt":"2026-07-18T01:45:47Z","updatedAt":"2026-07-18T01:58:47Z"}
+        ]'
+      else
+        printf '['
+        for id in $(seq 1 100); do
+          (( id == 1 )) || printf ','
+          printf '{"databaseId":%s,"event":"workflow_dispatch","status":"completed","conclusion":"success","updatedAt":"2026-07-18T01:59:%02dZ"}' "$((300 + id))" "$((id % 60))"
+        done
+        printf ']\n'
+      fi
     else
-      printf '[{"databaseId":200,"headSha":"%s","event":"schedule","status":"completed","conclusion":"success","updatedAt":"2026-07-18T01:55:47Z","url":"https://example.invalid/run/windows-candidate"}]\n' "$main_sha"
+      if [[ "$event" == push ]]; then
+        printf '%s\n' '[]'
+      else
+        printf '[{"databaseId":200,"headSha":"%s","event":"schedule","status":"completed","conclusion":"success","createdAt":"2026-07-18T01:55:47Z","updatedAt":"2026-07-18T01:55:47Z","url":"https://example.invalid/run/windows-candidate"}]\n' "$main_sha"
+      fi
     fi
   else
     if [[ "$OKP_STUB_FAIL" == source-ci-empty ]]; then
@@ -623,7 +901,9 @@ case "$endpoint" in
     ;;
   repos/*/commits/main)
     main_sha="d5d531a58c830a01a7e25615e850593e9ff4493f"
-    if [[ "$OKP_STUB_FAIL" == schedule-stale || "$OKP_STUB_FAIL" == candidate-active ]]; then
+    if [[ "$OKP_STUB_FAIL" == schedule-stale \
+        || "$OKP_STUB_FAIL" == candidate-active \
+        || "$OKP_STUB_FAIL" == candidate-green-nondelivery ]]; then
       main_sha="1111111111111111111111111111111111111111"
     fi
     main_committed_at="2026-07-18T00:30:00Z"
@@ -634,7 +914,11 @@ case "$endpoint" in
       printf '%s\n' '[]'
     else
       main_sha="d5d531a58c830a01a7e25615e850593e9ff4493f"
-      [[ "$OKP_STUB_FAIL" != schedule-stale ]] || main_sha="1111111111111111111111111111111111111111"
+      if [[ "$OKP_STUB_FAIL" == schedule-stale \
+          || "$OKP_STUB_FAIL" == candidate-active \
+          || "$OKP_STUB_FAIL" == candidate-green-nondelivery ]]; then
+        main_sha="1111111111111111111111111111111111111111"
+      fi
       observed_at="2026-07-18T00:30:02Z"
       if [[ "$OKP_STUB_FAIL" == source-ci-settling \
           || "$OKP_STUB_FAIL" == source-ci-empty \

@@ -91,6 +91,46 @@ fn file_association_launches_present_before_media_delivery() {
 }
 
 #[test]
+fn initial_fit_waits_for_the_current_monitor_but_not_optional_bounds() {
+    let bridge = include_str!("mpv_bridge.rs");
+    let poll = bridge
+        .split("pub(crate) fn connect_state_poll")
+        .nth(1)
+        .and_then(|source| source.split("drain_screenshot_jobs").next())
+        .expect("initial fit state-poll source");
+    let availability = poll
+        .find("player_window_fit_area_available")
+        .expect("monitor workarea gate");
+    let consumption = poll
+        .find("take_initial_window_fit")
+        .expect("one-shot fit consumption");
+    assert!(availability < consumption);
+    assert!(poll.contains("window.is_fullscreen()"));
+    assert!(poll.contains("window.is_maximized()"));
+
+    let window = include_str!("window.rs");
+    assert!(window.contains("let (monitor, monitor_geometry) = current_player_monitor(window)?"));
+    assert!(window.contains("bounds.monitor.is_none()"));
+    assert!(window.contains("monitor_fit_work_area(monitor_geometry, reported_size)"));
+    assert!(window.contains("must not\n    // stall a one-shot fit"));
+    assert!(window.contains("monitor-fallback-missing"));
+    assert!(window.contains("monitor-fallback-stale"));
+    assert!(!window.contains("bounded_monitor_work_area"));
+    assert!(window.contains("monitor workarea unavailable"));
+    assert!(!window.contains("window fit skipped: workarea unavailable"));
+}
+
+#[test]
+fn monitor_log_tokens_are_single_line_and_nonempty() {
+    assert_eq!(sanitize_monitor_log_token("HDMI-A-1"), "HDMI-A-1");
+    assert_eq!(
+        sanitize_monitor_log_token("Built in\nDisplay"),
+        "Built-in-Display"
+    );
+    assert_eq!(sanitize_monitor_log_token(""), "unknown");
+}
+
+#[test]
 fn player_close_returns_to_gtk_before_mpv_teardown() {
     let keyboard = include_str!("keyboard.rs");
     let close_handler = keyboard
@@ -104,6 +144,8 @@ fn player_close_returns_to_gtk_before_mpv_teardown() {
     assert!(close_handler.contains("set_visible(false)"));
     assert!(close_handler.contains("close_app.quit()"));
     assert!(close_handler.contains("glib::idle_add_local_once"));
+    assert!(close_handler.contains("AppShutdownWatchdog::arm()"));
+    assert!(!close_handler.contains("mem::forget"));
 
     let (before_idle, idle_body) = close_handler
         .split_once("glib::idle_add_local_once")
@@ -125,8 +167,20 @@ fn player_close_returns_to_gtk_before_mpv_teardown() {
     );
     assert!(
         idle_body.find("close_app.quit()").expect("quit")
-            < idle_body.find("mem::forget").expect("forget engine"),
-        "idle close path must quit GTK before leaking the engine across process exit"
+            < idle_body.find("drop(engine)").expect("drop engine"),
+        "idle close path must quit GTK before normal engine teardown"
+    );
+    assert!(
+        idle_body
+            .find("AppShutdownWatchdog::arm()")
+            .expect("watchdog")
+            < idle_body.find("drop(engine)").expect("drop engine"),
+        "engine teardown must be covered by the process-exit watchdog"
+    );
+    assert!(
+        idle_body.contains("render_loop.stop_and_join()")
+            && idle_body.contains("exit_without_destructors(0)"),
+        "stalled native rendering must cross the process boundary before engine teardown"
     );
 }
 
@@ -1032,6 +1086,101 @@ fn screenshot_surfaces_share_the_same_capture_implementation() {
     assert!(popovers.contains("copy_frame_to_clipboard(state, status_toast);"));
     assert!(playback.contains("mpv.screenshot_to_file_async(path, include_subtitles)"));
     assert!(playback.contains("render_loop.render_for_screenshot();"));
+}
+
+#[test]
+fn fullscreen_screenshot_completion_cannot_resize_the_toplevel_or_leave_native_geometry_stale() {
+    let window = include_str!("window.rs");
+    let toast_add = window
+        .find("overlay.add_overlay(status_toast.widget());")
+        .expect("status toast overlay");
+    let toast_measure = window
+        .find("overlay.set_measure_overlay(status_toast.widget(), false);")
+        .expect("status toast measurement isolation");
+    assert!(toast_add < toast_measure);
+
+    let playback = include_str!("playback.rs");
+    let completion = playback
+        .split("ScreenshotJobResult::SavedPublished(Ok(path))")
+        .nth(1)
+        .and_then(|source| {
+            source
+                .split("ScreenshotJobResult::SavedPrepared(Err(error))")
+                .next()
+        })
+        .expect("saved screenshot completion branch");
+    assert!(completion.contains("status_toast.show_saved_screenshot"));
+    for forbidden in [
+        "set_size_request",
+        "set_default_size",
+        "fullscreen()",
+        "unfullscreen()",
+    ] {
+        assert!(
+            !completion.contains(forbidden),
+            "screenshot completion must not mutate window geometry: {forbidden}"
+        );
+    }
+
+    let bridge = include_str!("mpv_bridge.rs");
+    let native_resize = bridge
+        .split("video_area.connect_resize")
+        .nth(1)
+        .and_then(|source| source.split("video_area.connect_unrealize").next())
+        .expect("native resize handler");
+    assert!(native_resize.contains("fullscreen_toggle.transition_pending()"));
+    assert!(native_resize.contains("resize-held-for-fullscreen-ack"));
+    assert!(native_resize.contains("sync_native_video_geometry(area, &resize_state, true)"));
+
+    let fullscreen_ack = bridge
+        .split(r#"connect_notify_local(Some("fullscreened")"#)
+        .nth(1)
+        .and_then(|source| source.split("match video_host").next())
+        .expect("fullscreen acknowledgement handler");
+    let observe = fullscreen_ack
+        .find(".observe(is_fullscreen)")
+        .expect("compositor state observation");
+    let reconcile = fullscreen_ack
+        .find("sync_native_video_geometry")
+        .expect("native surface reconciliation");
+    assert!(observe < reconcile);
+    assert!(fullscreen_ack.contains("fullscreen-ack-leave"));
+    assert!(bridge.contains("native_surface_applied="));
+    assert!(bridge.contains("native_subsurface_applied="));
+
+    let native_wayland = include_str!("native_wayland_video.c");
+    assert!(native_wayland.contains("native video geometry applied:"));
+    assert!(native_wayland.contains("surface=%dx%d+0,0"));
+    assert!(native_wayland.contains("subsurface=%dx%d+0,0"));
+}
+
+#[test]
+fn saved_screenshot_toast_is_linked_accessible_and_non_measuring() {
+    let main = include_str!("main.rs");
+    let playback = include_str!("playback.rs");
+    let keyboard = include_str!("keyboard.rs");
+    let window = include_str!("window.rs");
+    let css = include_str!("css.rs");
+
+    assert!(main.contains("let path_button = gtk::Button::new();"));
+    assert!(main.contains("path_label.set_ellipsize(pango::EllipsizeMode::Middle);"));
+    assert!(main.contains("path_button.set_tooltip_text(Some(&display_path));"));
+    assert!(main.contains("Reveal screenshot in file manager: {display_path}"));
+    assert!(main.contains("path_button.connect_clicked"));
+    assert!(main.contains("self.revealer.set_can_target(interactive);"));
+    assert!(main.contains("let duration = if interactive { 5000 } else { 1700 };"));
+    assert!(main.contains("path_button.set_visible(false);"));
+    assert!(main.contains("reveal_path.borrow_mut().take();"));
+    assert!(main.contains("revealer.set_margin_start(12);"));
+    assert!(main.contains("revealer.set_margin_end(12);"));
+    assert!(playback.contains("status_toast.show_saved_screenshot(&path);"));
+    assert!(playback.contains("status_toast.show_screenshot(\"Frame copied\", &path);"));
+    assert!(
+        keyboard.contains("widget.has_css_class(\"okp-status-toast-path\") && widget.is_mapped()")
+    );
+    assert!(window.contains("overlay.set_measure_overlay(status_toast.widget(), false);"));
+    assert!(window.contains("OKP_SAVED_SCREENSHOT_TOAST_PREVIEW"));
+    assert!(css.contains("button.okp-status-toast-path:focus-visible"));
 }
 
 #[test]
@@ -2858,11 +3007,7 @@ fn player_window_move_drags_the_whole_non_interactive_surface() {
     assert!(bridge.contains("drag.set_button(gdk::BUTTON_PRIMARY)"));
     assert!(bridge.contains("video_click::window_drag_action("));
     assert!(bridge.contains("video_click::WindowDragAction::BeginMove"));
-    // Snapshot transient motion metadata before changing GTK gesture ownership.
-    assert!(bridge.contains("let Some(device) = gesture.current_event_device()"));
-    assert!(bridge.contains("let Some((surface_x, surface_y)) = gesture.bounding_box_center()"));
-    assert!(bridge.contains("let button = gesture.current_button() as i32"));
-    assert!(bridge.contains("let timestamp = gesture.current_event_time()"));
+    assert!(bridge.contains("begin_native_window_move_from_drag("));
     // Reuse the right-click interactive classifier at press time so OSC/sliders/
     // buttons/panels keep their input, and fail safe when the pick is missing.
     assert!(bridge.contains("player_context_menu_target_is_interactive("));
@@ -2871,11 +3016,8 @@ fn player_window_move_drags_the_whole_non_interactive_surface() {
     assert!(bridge.contains("move_window.is_fullscreen()"));
     assert!(bridge.contains("move_window.is_maximized()"));
     assert!(bridge.contains("window_compact_mode_active(&move_window)"));
-    // Wayland-native move: GDK must consume the live implicit grab before GTK
-    // claims/cancels sibling gestures. X11 keeps the established inverse order
-    // required by its WM handoff. A shared one-shot suppressor prevents the drag
-    // release from becoming play/pause if the compositor cancels first.
-    assert!(bridge.contains("toplevel.begin_move("));
+    // A shared one-shot suppressor prevents the drag release from becoming
+    // play/pause if the compositor cancels first.
     assert!(
         bridge.contains("click.connect_pressed(move |_, _, _, _| reset_suppression.set(false))")
     );
@@ -2895,21 +3037,59 @@ fn player_window_move_drags_the_whole_non_interactive_surface() {
         .expect("player window move function");
     assert!(!move_wiring.contains(".unwrap()"));
     assert!(!move_wiring.contains(".expect("));
-    assert!(move_wiring.contains("let wayland = is_wayland_display("));
-    assert!(move_wiring.contains("if !wayland"));
-    assert!(move_wiring.contains("if wayland"));
-    let begin_move = move_wiring
-        .find("toplevel.begin_move(")
-        .expect("native move handoff");
-    let wayland_branch = move_wiring
-        .rfind("if wayland")
-        .expect("Wayland claim branch");
-    assert!(
-        begin_move < wayland_branch,
-        "Wayland must consume the grab before GTK claims it"
-    );
+    assert!(move_wiring.contains("begin_native_window_move_from_drag("));
 
     let window = include_str!("window.rs");
+    let handoff = window
+        .split("pub(crate) fn begin_native_window_move_from_drag(")
+        .nth(1)
+        .and_then(|tail| tail.split("/// Smallest client").next())
+        .expect("native drag handoff helper");
+    assert!(handoff.contains("let wayland = is_wayland_display(display.type_().name())"));
+    let wayland_handoff = handoff
+        .split("if wayland {")
+        .nth(1)
+        .and_then(|tail| tail.split("return true;").next())
+        .expect("Wayland native move branch");
+    assert!(wayland_handoff.contains("toplevel.begin_move(&device, button, 0.0, 0.0, timestamp)"));
+    assert!(!wayland_handoff.contains("gesture.set_state("));
+    assert!(!wayland_handoff.contains("gesture.reset()"));
+    assert!(!wayland_handoff.contains("glib::idle_add_local_once"));
+    let x11_handoff = handoff
+        .split("return true;")
+        .nth(1)
+        .expect("X11 native move branch");
+    assert!(x11_handoff.contains("let Some((widget_x, widget_y)) = gesture.start_point()"));
+    assert!(x11_handoff.contains("let Some(drag_widget) = gesture.widget()"));
+    assert!(x11_handoff.contains("drag_widget.compute_point(window, &widget_point)"));
+    assert!(x11_handoff.contains("window.surface_transform()"));
+    let claim = x11_handoff
+        .find("gesture.set_state(gtk::EventSequenceState::Claimed)")
+        .expect("gesture claim");
+    let begin_move = x11_handoff
+        .find("toplevel.begin_move(")
+        .expect("native move handoff");
+    assert!(
+        claim < begin_move,
+        "claim the click sequence before handing the live drag to the compositor"
+    );
+    // The press-coordinate contract survives the backend split: neither branch
+    // may fall back to the threshold-crossing position, and neither may reset the
+    // controller — that cancels the sequence while the compositor owns the move.
+    assert!(!handoff.contains("bounding_box_center()"));
+    assert!(!handoff.contains("gesture.reset()"));
+    assert!(!handoff.contains("glib::idle_add_local_once"));
+    assert!(bridge.contains("drag.connect_drag_begin"));
+    assert!(bridge.contains("begin_moving.replace(false)"));
+    assert!(bridge.contains("let drag_sequence = Rc::new(Cell::new(0_u64))"));
+    assert!(
+        bridge
+            .contains("interaction: player-window-move-begin sequence={sequence} recovered-stale=")
+    );
+    assert!(bridge.contains("interaction: player-window-move sequence={}"));
+    assert!(bridge.contains("interaction: player-window-move-end sequence={}"));
+    assert!(bridge.contains("interaction: player-window-move-cancel sequence={}"));
+
     assert!(
         window.contains("let suppress_video_click = connect_player_window_move(&overlay, &window)")
     );
@@ -4489,6 +4669,7 @@ fn linux_packages_stamp_their_update_install_lane() {
     assert!(deb.contains("OKP_PACKAGE_KIND=deb"));
     assert!(appimage.contains("OKP_PACKAGE_KIND=appimage"));
     assert_eq!(rpm.matches("OKP_PACKAGE_KIND=rpm").count(), 2);
+    assert!(rpm.contains("BuildRequires:  procps-ng"));
 }
 
 #[test]
@@ -5049,10 +5230,15 @@ fn eof_without_an_auto_advance_target_returns_to_idle() {
 #[test]
 fn idle_return_smoke_waits_for_natural_eof_before_welcome_capture() {
     let smoke = include_str!("../../../../scripts/smoke-linux-idle-return.sh");
+    let stop = smoke
+        .split_once("stop_app() {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nwait_for_pid_file_alive"))
+        .map(|(body, _)| body)
+        .expect("idle-return shutdown helper");
     let eof_flow = smoke
-        .split("launch_fixture eof-app")
-        .nth(1)
-        .and_then(|source| source.split("stop_app").next())
+        .split_once("eof_log=eof-app")
+        .and_then(|(_, tail)| tail.split_once("\nclose_log=close-app"))
+        .map(|(body, _)| body)
         .expect("EOF smoke flow");
 
     let loaded_probe = eof_flow
@@ -5067,18 +5253,636 @@ fn idle_return_smoke_waits_for_natural_eof_before_welcome_capture() {
     assert!(loaded_probe < eof_probe);
     assert!(eof_probe < welcome_probe);
     assert!(!eof_flow.contains("sleep 7"));
+    assert!(eof_flow.contains("eof-app-retry"));
+    assert!(eof_flow.contains("eof_launch_retry=pass"));
+    assert!(eof_flow.contains("eof_file_loaded 60"));
+    assert_eq!(eof_flow.matches("eof-app-retry").count(), 1);
+    assert_eq!(eof_flow.matches("eof_launch_retry=pass").count(), 1);
+    assert_eq!(eof_flow.matches("idle-return-smoke: eof-idle").count(), 1);
+    assert_eq!(eof_flow.matches("assert_idle_capture").count(), 1);
 
     assert!(smoke.contains("identity > 0.012"));
     assert!(smoke.contains("magenta < 0.35"));
     assert!(smoke.contains("idle-return-smoke: close-idle"));
+    assert!(smoke.contains("residual_welcome_decoder_retired"));
+    assert!(smoke.contains("residual_welcome_hidden=pass"));
+    assert!(smoke.contains("residual_shutdown_decoder_retired"));
+    assert!(smoke.contains("OKP_DEBUG_WINDOW_FIT=1"));
+    assert!(smoke.contains("CONTINUE_WATCHING_IDENTITY_CROP='300x170+210+60'"));
+    assert!(smoke.contains("Residual initial Continue Watching"));
     assert!(smoke.contains("export GSK_RENDERER=cairo"));
     assert!(smoke.contains("-crop 1120x638+0+42"));
+    assert!(smoke.contains("X11_APP_CLEAR_WAITER=\"$ROOT/scripts/wait-for-x11-app-clear.sh\""));
+    assert!(!smoke.contains("timeout 60s \"$BINARY\""));
+    assert!(!smoke.contains("timeout 30s \"$BINARY\""));
+    assert!(stop.contains("local stopped_pid=\"$app_pid\""));
+    assert!(stop.contains("\"$X11_APP_CLEAR_WAITER\" \"$stopped_pid\" \"$diagnostics\""));
+    assert!(stop.contains("org.freedesktop.DBus.NameHasOwner"));
+    assert!(stop.contains("'(false,)'"));
+    assert!(stop.contains("'(true,)'"));
+    assert!(stop.contains("bus_state=\"unreachable\""));
+    assert!(!stop.contains("gdbus introspect"));
+    assert!(stop.contains("shutdown-timeout"));
+    assert!(stop.contains("kill -KILL \"$stopped_pid\""));
+    assert!(stop.contains("local stopped_pgid=\"$app_pgid\""));
+    assert!(stop.contains("wait -n -p completed_pid \"$stopped_pid\" \"$timer_pid\""));
+    assert!(stop.contains("process_group_has_live_members \"$stopped_pgid\""));
+    assert!(stop.contains("kill -KILL -- \"-$stopped_pgid\""));
+    assert!(stop.contains("kill \"$timer_pid\""));
+    assert!(smoke.contains("setsid env OKP_DEBUG_IDLE_RETURN_SMOKE=1"));
+    assert!(smoke.contains("setsid env -u OKP_DISABLE_MPRIS"));
+    assert!(smoke.contains("kill -TERM -- \"-$app_pgid\""));
+    assert!(smoke.contains("kill -KILL -- \"-$app_pgid\""));
+    assert!(
+        stop.find("wait \"$stopped_pid\"")
+            < stop.find("\"$X11_APP_CLEAR_WAITER\" \"$stopped_pid\" \"$diagnostics\"")
+    );
+
+    let close_flow = smoke
+        .split_once("close_log=close-app")
+        .and_then(|(_, tail)| tail.split_once("\nstop_app\n\nfor name in eof-idle"))
+        .map(|(body, _)| body)
+        .expect("Close Media smoke flow");
+    assert!(close_flow.contains("close-app-retry"));
+    assert!(close_flow.contains("close_media_launch_retry=pass"));
+    assert!(close_flow.contains("close_media_file_loaded 60"));
+    assert_eq!(close_flow.matches("close-app-retry").count(), 1);
+    assert_eq!(
+        close_flow.matches("close_media_launch_retry=pass").count(),
+        1
+    );
+    assert_eq!(
+        close_flow.matches("idle-return-smoke: close-idle").count(),
+        1
+    );
+    assert_eq!(close_flow.matches("assert_idle_capture").count(), 1);
+
+    let residual_flow = smoke
+        .split_once("run_residual_open_regression() {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nwindow_id="))
+        .map(|(body, _)| body)
+        .expect("idle-return residual-open flow");
+    let player_ready = residual_flow
+        .find("startup launch lifecycle: player ready")
+        .expect("player readiness probe");
+    let open_uri = residual_flow.find("OpenUri").expect("MPRIS open request");
+    assert!(player_ready < open_uri);
+
+    let bridge = include_str!("mpv_bridge.rs");
+    let idle_projection = bridge
+        .split("let idle_surface_hidden")
+        .nth(1)
+        .and_then(|source| source.split("lyrics_surface.update").next())
+        .expect("idle surface lifecycle projection");
+    assert!(idle_projection.contains("thumbnails::suspend_poster_generation()"));
+    assert!(idle_projection.contains("} else {\n            empty_surface.refresh"));
 
     let lifecycle = include_str!("track_popovers.rs");
     assert!(lifecycle.contains("idle-return-smoke: file-loaded"));
     assert!(lifecycle.contains("idle-return-smoke: eof-idle"));
     let playback = include_str!("playback.rs");
     assert!(playback.contains("idle-return-smoke: close-idle"));
+}
+
+#[test]
+fn idle_return_smoke_retries_the_close_fixture_startup_boundary() {
+    let smoke = include_str!("../../../../scripts/smoke-linux-idle-return.sh");
+    let wait_for_marker = smoke
+        .split_once("probe_log_marker() {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nlaunch_fixture()"))
+        .map(|(body, _)| format!("probe_log_marker() {{{body}\n}}"))
+        .expect("log marker helper");
+    let close_flow = smoke
+        .split_once("close_log=close-app")
+        .and_then(|(_, tail)| tail.split_once("\nstop_app\n\nfor name in eof-idle"))
+        .map(|(body, _)| body)
+        .expect("Close Media smoke flow");
+    let root = unique_temp_dir("okp-idle-return-close-retry");
+    let probe = format!(
+        r#"set -euo pipefail
+{wait_for_marker}
+OUT_DIR={out}
+mkdir -p "$OUT_DIR"
+app_pid=4242
+window_id=17
+launch_count=0
+stop_count=0
+launch_fixture() {{
+  launch_count=$((launch_count + 1))
+  : >"$OUT_DIR/$1.log"
+  if (( launch_count == 2 )); then
+    printf '%s\n' 'idle-return-smoke: file-loaded' 'idle-return-smoke: close-idle' \
+      >"$OUT_DIR/$1.log"
+  fi
+}}
+stop_app() {{ stop_count=$((stop_count + 1)); }}
+xdotool() {{ return 0; }}
+kill() {{ return 0; }}
+sleep() {{ return 0; }}
+rg() {{
+  [[ "$1" == "-q" && "$2" == "-F" ]] || return 2
+  local marker="$3" line
+  while IFS= read -r line; do
+    [[ "$line" == *"$marker"* ]] && return 0
+  done <"$4"
+  return 1
+}}
+assert_idle_capture() {{ return 0; }}
+close_log=close-app
+{close_flow}
+stop_app
+printf 'launch_count=%s\nstop_count=%s\n' "$launch_count" "$stop_count"
+"#,
+        out = root.path().display()
+    );
+    let output = std::process::Command::new("bash")
+        .args(["-c", &probe])
+        .output()
+        .expect("close startup retry probe should run");
+    assert!(
+        output.status.success(),
+        "retry probe should pass: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "launch_count=2\nstop_count=2\n"
+    );
+    let results = fs::read_to_string(root.path().join("results.txt"))
+        .expect("retry evidence should be written");
+    assert!(results.contains("close_media_file_loaded=pass"));
+    assert!(results.contains("close_media_launch_retry=pass"));
+    assert!(results.contains("close_media_transition=pass"));
+}
+
+#[test]
+fn idle_return_smoke_retries_the_eof_fixture_startup_boundary() {
+    let smoke = include_str!("../../../../scripts/smoke-linux-idle-return.sh");
+    let wait_for_marker = smoke
+        .split_once("probe_log_marker() {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nlaunch_fixture()"))
+        .map(|(body, _)| format!("probe_log_marker() {{{body}\n}}"))
+        .expect("log marker helper");
+    let eof_flow = smoke
+        .split_once("eof_log=eof-app")
+        .and_then(|(_, tail)| tail.split_once("\nclose_log=close-app"))
+        .map(|(body, _)| body)
+        .expect("EOF smoke flow");
+    let root = unique_temp_dir("okp-idle-return-eof-retry");
+    let probe = format!(
+        r#"set -euo pipefail
+{wait_for_marker}
+OUT_DIR={out}
+mkdir -p "$OUT_DIR"
+app_pid=4242
+window_id=17
+launch_count=0
+stop_count=0
+launch_fixture() {{
+  launch_count=$((launch_count + 1))
+  : >"$OUT_DIR/$1.log"
+  if (( launch_count == 2 )); then
+    printf '%s\n' 'idle-return-smoke: file-loaded' 'idle-return-smoke: eof-idle' \
+      >"$OUT_DIR/$1.log"
+  fi
+}}
+stop_app() {{ stop_count=$((stop_count + 1)); }}
+xdotool() {{ return 0; }}
+kill() {{ return 0; }}
+sleep() {{ return 0; }}
+rg() {{
+  [[ "$1" == "-q" && "$2" == "-F" ]] || return 2
+  local marker="$3" line
+  while IFS= read -r line; do
+    [[ "$line" == *"$marker"* ]] && return 0
+  done <"$4"
+  return 1
+}}
+assert_idle_capture() {{ return 0; }}
+eof_log=eof-app
+{eof_flow}
+printf 'launch_count=%s\nstop_count=%s\n' "$launch_count" "$stop_count"
+"#,
+        out = root.path().display()
+    );
+    let output = std::process::Command::new("bash")
+        .args(["-c", &probe])
+        .output()
+        .expect("EOF startup retry probe should run");
+    assert!(
+        output.status.success(),
+        "retry probe should pass: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "launch_count=2\nstop_count=2\n"
+    );
+    let results = fs::read_to_string(root.path().join("results.txt"))
+        .expect("retry evidence should be written");
+    assert!(results.contains("eof_file_loaded=pass"));
+    assert!(results.contains("eof_launch_retry=pass"));
+    assert!(results.contains("eof_idle_transition=pass"));
+}
+
+#[test]
+fn idle_return_smoke_rejects_an_early_exit_instead_of_retrying() {
+    let smoke = include_str!("../../../../scripts/smoke-linux-idle-return.sh");
+    let wait_for_marker = smoke
+        .split_once("probe_log_marker() {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nlaunch_fixture()"))
+        .map(|(body, _)| format!("probe_log_marker() {{{body}\n}}"))
+        .expect("log marker helper");
+    let eof_flow = smoke
+        .split_once("eof_log=eof-app")
+        .and_then(|(_, tail)| tail.split_once("\nclose_log=close-app"))
+        .map(|(body, _)| body)
+        .expect("EOF smoke flow");
+    let close_flow = smoke
+        .split_once("close_log=close-app")
+        .and_then(|(_, tail)| tail.split_once("\nstop_app\n\nfor name in eof-idle"))
+        .map(|(body, _)| body)
+        .expect("Close Media smoke flow");
+
+    for (name, setup, flow, diagnostic, retry_token) in [
+        (
+            "eof",
+            "eof_log=eof-app",
+            eof_flow,
+            "EOF startup process exited before FileLoaded; refusing retry",
+            "eof_launch_retry=pass",
+        ),
+        (
+            "close",
+            "close_log=close-app",
+            close_flow,
+            "Close Media startup process exited before FileLoaded; refusing retry",
+            "close_media_launch_retry=pass",
+        ),
+    ] {
+        let root = unique_temp_dir(&format!("okp-idle-return-{name}-early-exit"));
+        let probe = format!(
+            r#"set -euo pipefail
+{wait_for_marker}
+OUT_DIR={out}
+mkdir -p "$OUT_DIR"
+app_pid=4242
+window_id=17
+launch_count=0
+stop_count=0
+trap 'printf "launch_count=%s\nstop_count=%s\n" "$launch_count" "$stop_count" >"$OUT_DIR/counts.txt"' EXIT
+launch_fixture() {{
+  launch_count=$((launch_count + 1))
+  : >"$OUT_DIR/$1.log"
+}}
+stop_app() {{ stop_count=$((stop_count + 1)); }}
+xdotool() {{ return 0; }}
+kill() {{ return 1; }}
+sleep() {{ return 0; }}
+rg() {{ return 1; }}
+assert_idle_capture() {{ return 0; }}
+{setup}
+{flow}
+"#,
+            out = root.path().display()
+        );
+        let output = std::process::Command::new("bash")
+            .args(["-c", &probe])
+            .output()
+            .expect("early-exit startup probe should run");
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{name} early exit must fail closed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(diagnostic),
+            "{name} diagnostic should distinguish exit from stall"
+        );
+        assert_eq!(
+            fs::read_to_string(root.path().join("counts.txt"))
+                .expect("early-exit counters should be recorded"),
+            "launch_count=1\nstop_count=1\n"
+        );
+        let results = fs::read_to_string(root.path().join("results.txt")).unwrap_or_default();
+        assert!(!results.contains(retry_token));
+    }
+}
+
+#[test]
+fn idle_return_smoke_preserves_early_exit_classification_after_retry() {
+    let smoke = include_str!("../../../../scripts/smoke-linux-idle-return.sh");
+    let wait_for_marker = smoke
+        .split_once("probe_log_marker() {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nlaunch_fixture()"))
+        .map(|(body, _)| format!("probe_log_marker() {{{body}\n}}"))
+        .expect("log marker helpers");
+    let eof_flow = smoke
+        .split_once("eof_log=eof-app")
+        .and_then(|(_, tail)| tail.split_once("\nclose_log=close-app"))
+        .map(|(body, _)| body)
+        .expect("EOF smoke flow");
+    let close_flow = smoke
+        .split_once("close_log=close-app")
+        .and_then(|(_, tail)| tail.split_once("\nstop_app\n\nfor name in eof-idle"))
+        .map(|(body, _)| body)
+        .expect("Close Media smoke flow");
+
+    for (name, setup, flow, label, retry_token) in [
+        (
+            "eof",
+            "eof_log=eof-app",
+            eof_flow,
+            "eof_file_loaded process exited before marker: idle-return-smoke: file-loaded",
+            "eof_launch_retry=pass",
+        ),
+        (
+            "close",
+            "close_log=close-app",
+            close_flow,
+            "close_media_file_loaded process exited before marker: idle-return-smoke: file-loaded",
+            "close_media_launch_retry=pass",
+        ),
+    ] {
+        let root = unique_temp_dir(&format!("okp-idle-return-{name}-retry-exit"));
+        let probe = format!(
+            r#"set -euo pipefail
+{wait_for_marker}
+OUT_DIR={out}
+mkdir -p "$OUT_DIR"
+app_pid=4242
+window_id=17
+launch_count=0
+stop_count=0
+trap 'printf "launch_count=%s\nstop_count=%s\n" "$launch_count" "$stop_count" >"$OUT_DIR/counts.txt"' EXIT
+launch_fixture() {{
+  launch_count=$((launch_count + 1))
+  : >"$OUT_DIR/$1.log"
+}}
+stop_app() {{ stop_count=$((stop_count + 1)); }}
+xdotool() {{ return 0; }}
+kill() {{
+  if [[ "${{1:-}}" == -0 && "$launch_count" -ge 2 ]]; then
+    return 1
+  fi
+  return 0
+}}
+sleep() {{ return 0; }}
+rg() {{ return 1; }}
+assert_idle_capture() {{ return 0; }}
+{setup}
+{flow}
+"#,
+            out = root.path().display()
+        );
+        let output = std::process::Command::new("bash")
+            .args(["-c", &probe])
+            .output()
+            .expect("retry early-exit probe should run");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{name} retry exit should preserve the probe classification: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(label),
+            "{name} retry exit should have a distinct diagnostic"
+        );
+        assert_eq!(
+            fs::read_to_string(root.path().join("counts.txt"))
+                .expect("retry-exit counters should be recorded"),
+            "launch_count=2\nstop_count=1\n"
+        );
+        let results = fs::read_to_string(root.path().join("results.txt")).unwrap_or_default();
+        assert!(!results.contains(retry_token));
+    }
+}
+
+#[test]
+fn idle_return_smoke_bounds_shutdown_of_a_term_resistant_process() {
+    let smoke = include_str!("../../../../scripts/smoke-linux-idle-return.sh");
+    let stop = smoke
+        .split_once("process_group_has_live_members() {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nwait_for_pid_file_alive"))
+        .map(|(body, _)| format!("process_group_has_live_members() {{{body}\n}}"))
+        .expect("idle-return shutdown helpers");
+    let root = unique_temp_dir("okp-idle-return-bounded-shutdown");
+    let probe = format!(
+        r#"set -euo pipefail
+{stop}
+OUT_DIR={out}
+mkdir -p "$OUT_DIR"
+STOP_TIMEOUT_SECONDS=1
+X11_APP_CLEAR_WAITER=/bin/true
+setsid bash -c 'trap "" TERM; while :; do sleep 1; done' &
+app_pid=$!
+app_pgid=$app_pid
+sleep 0.2
+stop_app
+"#,
+        out = root.path().display()
+    );
+    let started = std::time::Instant::now();
+    let output = std::process::Command::new("timeout")
+        .args(["--kill-after=1s", "5s", "bash", "-c", &probe])
+        .output()
+        .expect("bounded shutdown probe should run");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stop_app should report its own bounded failure: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("did not exit within 1s after TERM"));
+    assert!(
+        fs::read_dir(root.path())
+            .expect("shutdown evidence directory")
+            .filter_map(Result::ok)
+            .any(|entry| entry
+                .file_name()
+                .to_string_lossy()
+                .ends_with("-shutdown-timeout")),
+        "watchdog timeout marker should be retained as failure evidence"
+    );
+}
+
+#[test]
+fn idle_return_smoke_does_not_report_a_waitable_zombie_as_timed_out() {
+    let smoke = include_str!("../../../../scripts/smoke-linux-idle-return.sh");
+    let stop = smoke
+        .split_once("process_group_has_live_members() {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nwait_for_pid_file_alive"))
+        .map(|(body, _)| format!("process_group_has_live_members() {{{body}\n}}"))
+        .expect("idle-return shutdown helpers");
+    let root = unique_temp_dir("okp-idle-return-zombie-shutdown");
+    let probe = format!(
+        r#"set -euo pipefail
+{stop}
+OUT_DIR={out}
+mkdir -p "$OUT_DIR"
+STOP_TIMEOUT_SECONDS=1
+X11_APP_CLEAR_WAITER=/bin/true
+app_pid=4242
+app_pgid=4242
+kill() {{
+  printf '%s\n' "$*" >>"$OUT_DIR/kill-calls.txt"
+  return 0
+}}
+sleep() {{ return 0; }}
+wait() {{
+  if [[ "${{1:-}}" == -n ]]; then
+    printf -v "$3" '%s' "$timer_pid"
+  fi
+  return 0
+}}
+pgrep() {{
+  printf '4242\n'
+}}
+ps() {{ printf 'Z\n'; }}
+gdbus() {{ printf '(false,)\n'; }}
+stop_app
+"#,
+        out = root.path().display()
+    );
+    let output = std::process::Command::new("bash")
+        .args(["-c", &probe])
+        .output()
+        .expect("zombie shutdown probe should run");
+    assert!(
+        output.status.success(),
+        "a waitable zombie is a completed child: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!root.path().join("stop-4242-shutdown-timeout").exists());
+    assert!(
+        !fs::read_to_string(root.path().join("kill-calls.txt"))
+            .expect("kill calls should be recorded")
+            .lines()
+            .any(|line| line.starts_with("-KILL ")),
+        "a waitable zombie must not be force-killed"
+    );
+}
+
+#[test]
+fn idle_return_smoke_cancels_the_shutdown_timer_after_normal_exit() {
+    let smoke = include_str!("../../../../scripts/smoke-linux-idle-return.sh");
+    let stop = smoke
+        .split_once("process_group_has_live_members() {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nwait_for_pid_file_alive"))
+        .map(|(body, _)| format!("process_group_has_live_members() {{{body}\n}}"))
+        .expect("idle-return shutdown helpers");
+    let root = unique_temp_dir("okp-idle-return-timer-cleanup");
+    let probe = format!(
+        r#"set -euo pipefail
+{stop}
+OUT_DIR={out}
+mkdir -p "$OUT_DIR"
+STOP_TIMEOUT_SECONDS=3
+X11_APP_CLEAR_WAITER=/bin/true
+gdbus() {{ printf '(false,)\n'; }}
+setsid bash -c 'trap "exit 0" TERM; while :; do sleep 1; done' &
+app_pid=$!
+app_pgid=$app_pid
+sleep 0.2
+stop_app
+"#,
+        out = root.path().display()
+    );
+    let started = std::time::Instant::now();
+    let output = std::process::Command::new("timeout")
+        .args(["--kill-after=1s", "2s", "bash", "-c", &probe])
+        .output()
+        .expect("normal shutdown probe should run");
+    assert!(
+        output.status.success(),
+        "normal shutdown should cancel its timer: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    assert!(
+        fs::read_dir(root.path())
+            .expect("shutdown evidence directory")
+            .filter_map(Result::ok)
+            .all(|entry| !entry
+                .file_name()
+                .to_string_lossy()
+                .ends_with("-shutdown-timeout")),
+        "normal shutdown must not retain a timeout marker"
+    );
+}
+
+#[test]
+fn idle_return_smoke_kills_descendants_of_a_timed_out_player() {
+    let smoke = include_str!("../../../../scripts/smoke-linux-idle-return.sh");
+    let stop = smoke
+        .split_once("process_group_has_live_members() {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nwait_for_pid_file_alive"))
+        .map(|(body, _)| format!("process_group_has_live_members() {{{body}\n}}"))
+        .expect("idle-return shutdown helpers");
+    let root = unique_temp_dir("okp-idle-return-descendant-cleanup");
+    let child_pid_file = root.path().join("child.pid");
+    let probe = format!(
+        r#"set -euo pipefail
+{stop}
+OUT_DIR={out}
+mkdir -p "$OUT_DIR"
+STOP_TIMEOUT_SECONDS=1
+X11_APP_CLEAR_WAITER=/bin/true
+setsid bash -c '
+  trap "" TERM
+  bash -c '\''trap "" TERM; printf "%s\\n" "$BASHPID" >"$1"; while :; do sleep 1; done'\'' _ "$1" &
+  wait
+' _ {child_pid_file} &
+app_pid=$!
+app_pgid=$app_pid
+for _ in $(seq 1 50); do
+  [[ -s {child_pid_file} ]] && break
+  sleep 0.02
+done
+[[ -s {child_pid_file} ]]
+stop_app
+"#,
+        out = root.path().display(),
+        child_pid_file = child_pid_file.display()
+    );
+    let output = std::process::Command::new("timeout")
+        .args(["--kill-after=1s", "7s", "bash", "-c", &probe])
+        .output()
+        .expect("descendant cleanup probe should run");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "the process-group timeout should fail closed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("did not exit within 1s after TERM"));
+    let child_pid = fs::read_to_string(&child_pid_file)
+        .expect("descendant PID should be recorded")
+        .trim()
+        .to_owned();
+    let descendant_not_live = (0..50).any(|_| {
+        let output = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &child_pid])
+            .output()
+            .expect("descendant state probe should run");
+        if output.status.success()
+            && !String::from_utf8_lossy(&output.stdout)
+                .trim_start()
+                .starts_with('Z')
+        {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            false
+        } else {
+            true
+        }
+    });
+    assert!(
+        descendant_not_live,
+        "a TERM-resistant descendant must not remain live after the timed-out player"
+    );
 }
 
 #[test]
@@ -5332,14 +6136,53 @@ fn fullscreen_toggle_wiring_decides_from_intent_not_the_lagging_platform_state()
 
     // The `fullscreened` notify reconciles the intent so Escape / window-manager
     // toggles keep the next double-click honest.
-    let window = include_str!("window.rs");
-    assert!(window.contains(r#"connect_notify_local(Some("fullscreened")"#));
-    assert!(window.contains(".observe(window.is_fullscreen())"));
+    let bridge = include_str!("mpv_bridge.rs");
+    assert!(bridge.contains(r#"connect_notify_local(Some("fullscreened")"#));
+    assert!(bridge.contains(".observe(is_fullscreen)"));
 
     // The compact drag still promotes to a window move only past the shared
     // threshold, so a stationary double-click there never starts a move.
     let compact = include_str!("compact_mode.rs");
     assert!(compact.contains("video_click::drag_exceeds_move_threshold(offset_x, offset_y, 6.0)"));
+    assert!(compact.contains("begin_native_window_move_from_drag(gesture, &drag_window)"));
+    assert!(!compact.contains("gesture.bounding_box_center()"));
+    assert!(compact.contains("drag.connect_drag_begin"));
+    assert!(compact.contains("drag.connect_cancel"));
+
+    // Compact mode owns its own drag-to-move, and the normal path returns early
+    // while compact is active, so it must arm the shared click suppressor
+    // itself. On Wayland nothing else stops the release: the handoff
+    // deliberately does not claim the gesture, so an unsuppressed release
+    // reaches the video click handler and toggles play/pause after a move.
+    let compact_drag = compact
+        .split("drag.connect_drag_update(")
+        .nth(1)
+        .and_then(|tail| tail.split("drag.connect_drag_end").next())
+        .expect("compact drag update handler");
+    let arm = compact_drag
+        .find("update_suppression.set(true)")
+        .expect("compact drag arms the shared click suppressor");
+    let handoff = compact_drag
+        .find("begin_native_window_move_from_drag(")
+        .expect("compact native move handoff");
+    assert!(
+        arm < handoff,
+        "arm the suppressor before the handoff so a compositor-owned move cannot race the release"
+    );
+    assert!(
+        compact_drag.contains("update_suppression.set(false)"),
+        "a refused handoff must release the suppressor, or the next real click is swallowed"
+    );
+    let window_src = include_str!("window.rs");
+    let compact_wiring = window_src
+        .split("connect_compact_video_interactions(")
+        .nth(1)
+        .and_then(|tail| tail.split(");").next())
+        .expect("compact interaction wiring");
+    assert!(
+        compact_wiring.contains("suppress_video_click"),
+        "compact mode must receive the same suppressor the normal click path clears"
+    );
 }
 
 #[test]
