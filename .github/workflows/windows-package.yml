@@ -148,17 +148,20 @@ jobs:
             throw 'The installed application never created a top-level window'
           }
           Write-Host "Main window handle: $handle - title: $($proc.MainWindowTitle)"
-          # A window handle appears before WinUI has finished starting up, so
-          # closing on the handle alone tests shutdown-during-startup rather
-          # than shutdown of a running app - and this lane has an intermittent
-          # 0xC000027B on exit. WaitForInputIdle is a readiness condition, not a
-          # settle delay: it returns when the process has drained its startup
-          # work and is waiting for input. Deliberately not a sleep, which would
-          # only stop CI from noticing. If it times out, that is a real failure -
-          # an app that never becomes input-ready in 60s is broken. Note what this
-          # costs: closing during startup is no longer exercised here, so if the
-          # 0xC000027B stops appearing that failure mode moves entirely to #642
-          # rather than being fixed.
+          # A window handle can appear before WinUI has finished starting up,
+          # so closing on the handle alone risks testing shutdown-during-startup
+          # rather than shutdown of a running app - and this lane has an
+          # intermittent 0xC000027B on exit. WaitForInputIdle is a readiness
+          # condition, not a settle delay: it returns when the process has
+          # drained its startup work and is waiting for input, and a timeout is
+          # a real failure rather than something to sleep through.
+          #
+          # Measured, run 30237873377: it returned ~4ms after the window handle
+          # appeared and the 0xC000027B still followed. So the app is already
+          # input-idle when its window shows, the crash is NOT a startup race,
+          # and this step neither shortens what the clean-exit check covers nor
+          # makes the lane green. What it does is assert a real property and rule
+          # out the leading hypothesis in #642.
           if (-not $proc.WaitForInputIdle(60000)) {
             if (Test-Path $stdout) { Get-Content $stdout | Write-Host }
             if (Test-Path $stderr) { Get-Content $stderr | Write-Host }
