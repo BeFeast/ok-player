@@ -76,6 +76,9 @@ jobs:
       - name: Candidate GTK binary resolution stays correct
         run: ./scripts/tests/candidate-gtk-binary.Tests.sh
 
+      - name: Candidate packaging-mode boundary stays container+required
+        run: ./scripts/tests/candidate-packaging-mode.Tests.sh
+
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
