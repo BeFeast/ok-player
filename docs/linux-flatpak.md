@@ -117,7 +117,8 @@ succeeding. Only with that skip shim in place does the context report on every
 pull request, and only then is promoting it to required safe.
 
 Cost is not the objection. The lane's `timeout-minutes: 150` is a ceiling, not a
-duration; the observed end-to-end job time is under ten minutes. Until the shim
+duration; observed end-to-end job times are around ten minutes (9m45s and 10m24s
+on two runs of the same job). Until the shim
 exists, the pin drift bound plus the nightly run are what keep the pin honest on
 pull requests that do not run the lane.
 
