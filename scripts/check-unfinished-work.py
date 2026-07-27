@@ -81,11 +81,12 @@ SECTION_BREAK = re.compile(r"^\s*(#{1,6})\s")
 LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+(.*)$")
 UNCHECKED_BOX = re.compile(r"^\[\s\]\s*(.*)$")
 CHECKED_BOX = re.compile(r"^\[[xX]\]\s*(.*)$")
-FENCE = re.compile(r"^\s*(?:```|~~~)")
+FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
 HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 
 # Unfinished-code markers. A marker that references a tracking issue is fine.
-RUST_STUBS = re.compile(r"\b(?:todo|unimplemented)!\s*[\(\[\{]")
+# Rust tokenises `todo !()` the same as `todo!()`, so the bang may sit apart.
+RUST_STUBS = re.compile(r"\b(?:todo|unimplemented)\s*!\s*[\(\[\{]")
 # A character literal holds exactly one character or one escape. Allowing more
 # let `fn choose<'a /* TODO */, 'b>` read as one literal from `'a` to `'b`,
 # blanking a real marker sitting between two Rust lifetimes.
@@ -98,7 +99,7 @@ BARE_MARKER = re.compile(r"\b(TODO|FIXME)\b(?!\s*\(\s*#\d+\s*\))")
 # fires on documentation gets muted.
 CODE_SUFFIXES = {
     ".rs", ".cs", ".sh", ".ps1", ".psm1", ".py", ".c", ".h", ".cpp", ".xaml",
-    ".yml", ".yaml", ".toml", ".json",
+    ".yml", ".yaml", ".toml", ".json", ".manifest",
 }
 SKIP_DIRS = {".git", "target", "node_modules"}
 # `bin` and `obj` are .NET build output, but only where a project file puts
@@ -131,11 +132,25 @@ def strip_fenced_blocks(text: str) -> str:
     fence count is not a hypothetical.
     """
     lines = text.splitlines()
-    fences = [i for i, line in enumerate(lines) if FENCE.match(line)]
-    paired = set()
-    for opener, closer in zip(fences[0::2], fences[1::2]):
-        paired.add(opener)
-        paired.add(closer)
+    # A fence closes only with the same character and at least as many of them.
+    # Pairing by position alone let a ``` opener pair with a later ~~~ line, so
+    # a marker written between two mismatched fences was stripped away.
+    fences = []
+    for index, line in enumerate(lines):
+        match = FENCE.match(line)
+        if match:
+            marker = match.group(1)
+            fences.append((index, marker[0], len(marker)))
+    paired: set[int] = set()
+    open_at: tuple[int, str, int] | None = None
+    for index, char, width in fences:
+        if open_at is None:
+            open_at = (index, char, width)
+            continue
+        if char == open_at[1] and width >= open_at[2]:
+            paired.add(open_at[0])
+            paired.add(index)
+            open_at = None
     out, inside = [], False
     for i, line in enumerate(lines):
         if i in paired:

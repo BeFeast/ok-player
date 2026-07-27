@@ -441,6 +441,62 @@ fn quoting_the_gate_inside_a_fenced_block_does_not_block() {
 }
 
 #[test]
+fn a_backtick_fence_does_not_close_on_a_tilde_fence() {
+    let fixture = Declaration::new("okp-gate-mismatched-fence");
+    // Pairing fences by position alone let a ``` opener close on a later ~~~
+    // line, and everything between them - a WIP marker included - was stripped
+    // before any rule saw it. A fence closes only on its own delimiter.
+    let body = "## What this changes\n\nRestores the surface.\n\n\
+        ```\n<!-- maestro:wip -->\n~~~\n\nMore prose.\n";
+
+    let output = fixture.check("Reveal saved Linux screenshots", body);
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    assert!(stderr_of(&output).contains("WIP marker"));
+}
+
+#[test]
+fn a_matching_tilde_fence_still_quotes_the_gate() {
+    let fixture = Declaration::new("okp-gate-tilde-fence");
+    let body = "## What this changes\n\nDocuments the gate.\n\n\
+        ~~~\n<!-- maestro:wip -->\n## Operator acceptance\n- [ ] example\n~~~\n";
+
+    let output = fixture.check("Document the merge gate", body);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+}
+
+#[test]
+fn a_panicking_stub_written_with_a_detached_bang_blocks_the_merge() {
+    let fixture = Declaration::new("okp-gate-detached-bang");
+    // Rust tokenises `todo !()` exactly like `todo!()`, so the stub compiles.
+    let source = fixture.root.path().join("crate/src/lib.rs");
+    fs::create_dir_all(source.parent().expect("parent")).expect("fixture tree");
+    fs::write(&source, "pub fn seek() -> u32 {\n    todo !()\n}\n").expect("write");
+
+    let output = fixture.check("Add seeking", FINISHED_BODY);
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    assert!(stderr_of(&output).contains("Unfinished-code marker"));
+}
+
+#[test]
+fn an_unfinished_marker_in_a_shipped_manifest_blocks_the_merge() {
+    let fixture = Declaration::new("okp-gate-manifest-marker");
+    let manifest = fixture.root.path().join("app.manifest");
+    fs::write(
+        &manifest,
+        "<assembly>\n  <!-- TODO: declare DPI awareness -->\n</assembly>\n",
+    )
+    .expect("write");
+
+    let output = fixture.check("Ship the manifest", FINISHED_BODY);
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    assert!(stderr_of(&output).contains("Unfinished-code marker"));
+}
+
+#[test]
 fn an_empty_body_blocks_the_merge() {
     let fixture = Declaration::new("okp-gate-empty-body");
 
@@ -749,6 +805,20 @@ fn renderer_environment_is_selected_before_gtk_initialization() {
 
     assert!(source.contains("configure_linux_renderer_environment();"));
     assert!(source.contains("VelopackApp::build()"));
+}
+"#;
+
+/// A fixture parsed through receiver syntax. `sample.parse()` reads like a
+/// method on the text, but it runs a production `FromStr`, so what comes back
+/// is a production value and asserting on it is behaviour.
+const RECEIVER_PARSE_TEST: &str = r#"
+#[test]
+fn parses_the_sample_configuration() {
+    let sample = include_str!("../fixtures/config.toml");
+
+    let config: AppConfig = sample.parse().expect("sample should parse");
+
+    assert_eq!(config.mode, Mode::Compact);
 }
 "#;
 
@@ -1133,6 +1203,23 @@ fn an_unrelated_fallible_setup_call_does_not_launder_a_source_grep() {
     assert!(
         String::from_utf8_lossy(&output.stdout)
             .contains("renderer_environment_is_selected_before_gtk_initialization")
+    );
+}
+
+#[test]
+fn a_fixture_parsed_through_receiver_syntax_is_never_flagged() {
+    let workspace = Workspace::new("okp-gate-receiver-parse");
+    workspace.write_tests(RECEIVER_PARSE_TEST);
+    workspace.write_allowlist("# empty\n");
+
+    let output = workspace.check();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "`sample.parse()` runs production code; only text manipulation keeps the \
+         result inside the source text:\n{}",
+        String::from_utf8_lossy(&output.stdout)
     );
 }
 

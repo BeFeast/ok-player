@@ -244,8 +244,19 @@ def source_bindings(
         if "include_str" in set(IDENT.findall(rhs)):
             direct.update(names)
             return
-        head = IDENT.match(rhs.lstrip().lstrip("&*").lstrip())
+        stripped = rhs.lstrip().lstrip("&*").lstrip()
+        head = IDENT.match(stripped)
         if head and head.group(0) in direct | derived:
+            # Cutting text out of the source (`source.split(..)`, `&source[a..]`)
+            # keeps describing the text. Handing it to production code through
+            # receiver syntax - `sample.parse().unwrap()` - does not: the result
+            # is what the code made of the text, so asserting on it is
+            # behaviour, not inspection.
+            tail = stripped[head.end() :].lstrip()
+            method = re.match(r"\.\s*([A-Za-z_][A-Za-z0-9_]*)\s*[(:<]", tail)
+            if method and method.group(1) not in TEXT_METHODS:
+                production.update(names - direct - derived)
+                return
             derived.update(names)
             return
         if ANY_CALL.search(rhs):
