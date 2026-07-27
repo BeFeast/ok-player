@@ -79,8 +79,9 @@ playing video, release-on-second-monitor variants included):
 - sway headless, source build, EGL video path (grab always refused — wrong path);
 - bare mutter, source build, EGL path, granted moves, single monitor;
 - bare mutter, source build, EGL path, dual monitor + operator scales;
-- gnome-shell headless (Debian 13 / GNOME 48), source build, EGL path, dual
-  monitor + operator scales.
+- gnome-shell headless: WITHDRAWN - later delivery-verified runs show the
+  headless shell never routes RemoteDesktop pointer injection to the app, so
+  the rounds this bullet once claimed were never received (see the QA record).
 
 CORRECTION (2026-07-27 evening): #662 was fixed the same day and the packaged
 `native-wayland-dmabuf` configuration WAS exercised — 20 fresh-session granted
