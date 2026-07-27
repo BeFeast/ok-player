@@ -95,6 +95,13 @@ IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # Any call: `parse(x)`, `x.len()`, `Type::new()`. Used to tell an assertion that
 # runs code from one that only compares constants.
 ANY_CALL = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:::\s*[A-Za-z_][A-Za-z0-9_]*\s*)*\(")
+# `include_str!` as a macro invocation, not as a substring of a longer name. An
+# identifier such as `include_stream` contains the word and loads nothing;
+# matching the substring set `uses_source` on a test that never touches source
+# text, and the test was then reported as source-text-only with zero greps.
+# Where the name is looked up in a *set* of identifiers the substring problem
+# does not arise, so those sites are left alone.
+INCLUDE_STR_MACRO = re.compile(r"\binclude_str\s*!")
 # Searching a string is not running the code under test, whatever the string is.
 # Without this, a grep against a constant that the detector does not track as
 # source text would count as evidence and clear the real greps beside it.
@@ -424,7 +431,7 @@ def is_behavioural_evidence(
 def classify(test: TestFn, seeds: set[str]) -> tuple[bool, int, int, bool]:
     """(is_source_text_only, grep_assertions, behavioural_assertions, uses_source)."""
     direct, derived, production = source_bindings(test.body, test.body_mask, seeds)
-    uses_source = "include_str" in test.body_mask or bool(
+    uses_source = bool(INCLUDE_STR_MACRO.search(test.body_mask)) or bool(
         seeds & set(IDENT.findall(test.body_mask))
     )
     grep_count = evidence_count = 0
@@ -472,7 +479,7 @@ def file_seeds(src: str, mask: str) -> tuple[set[str], set[str]]:
     helpers: set[str] = set()
     for m in CONST_BINDING.finditer(mask):
         rhs = mask[m.start(2) : m.end(2)]
-        if "include_str" in rhs:
+        if INCLUDE_STR_MACRO.search(rhs):
             constants.add(m.group(1))
     for m in FN_SIGNATURE.finditer(mask):
         # Only a function that hands back the text itself is source text. A
@@ -484,7 +491,7 @@ def file_seeds(src: str, mask: str) -> tuple[set[str], set[str]]:
         if brace == -1:
             continue
         end = match_delimiter(mask, brace, "{", "}")
-        if end == -1 or "include_str" not in mask[brace:end]:
+        if end == -1 or not INCLUDE_STR_MACRO.search(mask[brace:end]):
             continue
         helpers.add(m.group(1))
     return constants, helpers

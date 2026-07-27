@@ -910,6 +910,69 @@ fn a_marker_word_inside_a_string_literal_is_not_unfinished_code() {
 }
 
 #[test]
+fn code_that_documents_avoiding_a_stub_is_not_a_stub() {
+    let fixture = Declaration::new("okp-gate-stub-in-prose");
+    // Prose that names a stub invokes nothing, and this repository's own
+    // scripts discuss `todo!()` in comments, so the shape is not hypothetical.
+    // Comment bodies are blanked for the stub scan and only for that scan.
+    for (name, contents) in [
+        (
+            "lib.rs",
+            "pub fn seek() -> Result<u32, ()> {\n    // Return an error rather than using todo!().\n    Err(())\n}\n",
+        ),
+        ("run.sh", "# we never use todo!() in shell\necho ok\n"),
+        ("app.xaml", "<Root>\n  <!-- no todo!() here -->\n</Root>\n"),
+    ] {
+        let path = fixture.root.path().join("crate").join(name);
+        fs::create_dir_all(path.parent().expect("parent")).expect("fixture tree");
+        fs::write(&path, contents).expect("write");
+
+        let output = fixture.check("Return an error instead", FINISHED_BODY);
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "prose naming a stub invokes nothing: {name}\n{}",
+            stderr_of(&output)
+        );
+        fs::remove_file(&path).expect("remove");
+    }
+}
+
+#[test]
+fn blanking_comments_for_the_stub_scan_does_not_hide_a_marker_or_a_real_stub() {
+    let fixture = Declaration::new("okp-gate-stub-mask-counter");
+    // The counter-direction. The bare TODO/FIXME scan must not read the blanked
+    // text - a marker in a comment is the shape it exists to catch - and a stub
+    // sitting beside a comment is still a stub.
+    for (name, contents) in [
+        (
+            "marker.rs",
+            "// TODO: replace this, we avoided todo!() here\npub fn seek() -> u32 {\n    3\n}\n",
+        ),
+        (
+            "stub.rs",
+            "pub fn seek() -> u32 {\n    /* note */ todo!()\n}\n",
+        ),
+    ] {
+        let path = fixture.root.path().join("crate").join(name);
+        fs::create_dir_all(path.parent().expect("parent")).expect("fixture tree");
+        fs::write(&path, contents).expect("write");
+
+        let output = fixture.check("Speed up the seek", FINISHED_BODY);
+
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "the comment mask must not hide this: {name}\n{}",
+            stderr_of(&output)
+        );
+        assert!(stderr_of(&output).contains("Unfinished-code marker"));
+        fs::remove_file(&path).expect("remove");
+    }
+}
+
+#[test]
 fn a_panicking_stub_with_a_comment_between_its_tokens_blocks_the_merge() {
     let fixture = Declaration::new("okp-gate-commented-stub");
     // rustc treats a comment between the identifier and the bang as whitespace,
@@ -1088,6 +1151,17 @@ fn an_apostrophe_in_prose_does_not_open_a_string_that_hides_a_marker() {
 /// A test lifted verbatim from `okp-linux-gtk`: every assertion only checks that
 /// the crate's own source text contains a string, so it passes against a broken
 /// implementation.
+/// A behavioural test whose local binding merely *contains* the name of the
+/// macro. It loads no source text: `include_stream` invokes nothing.
+const INCLUDE_STREAM_TEST: &str = r#"
+#[test]
+fn stream_run_advances_the_cursor() {
+    let mut include_stream = Stream { cursor: 0 };
+    include_stream.run();
+    assert_eq!(include_stream.cursor, 1);
+}
+"#;
+
 const SOURCE_GREP_TEST: &str = r#"
 #[test]
 fn renderer_environment_is_selected_before_gtk_initialization() {
@@ -1906,6 +1980,27 @@ fn a_fixture_parsed_through_receiver_syntax_is_never_flagged() {
          result inside the source text:\n{}",
         String::from_utf8_lossy(&output.stdout)
     );
+}
+
+#[test]
+fn an_identifier_that_merely_contains_the_macro_name_is_not_source_text() {
+    let workspace = Workspace::new("okp-gate-include-stream");
+    // `include_stream` contains the macro's name and invokes nothing.
+    // Matching the substring set `uses_source` on a test that never loads
+    // source text, and the test was reported as source-text-only with zero
+    // grep assertions.
+    workspace.write_tests(INCLUDE_STREAM_TEST);
+    workspace.write_allowlist("# empty\n");
+
+    let output = workspace.check();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("source-text-only tests found: 0"));
 }
 
 #[test]

@@ -51,6 +51,11 @@ What this does NOT catch, on purpose or for want of a cheap rule:
     the reason the rules above exist rather than a substitute for honesty.
   * a marker inside a multi-line raw string in shipped source. Literals are
     masked one line at a time, so `r#"... TODO ..."#` spanning lines reports.
+  * a panicking stub written inside a comment. Comment bodies are blanked for
+    the stub scan, because prose that documents *avoiding* a stub invokes
+    nothing. A commented-out `todo!()` is therefore not reported - it is also
+    not compiled. The bare TODO / FIXME scan does not use that text: a marker
+    in a comment is the shape it exists to catch.
   * an identifier spelled TODO or FIXME - `const TODO: bool = false;` reports.
     Only string literals are masked; the marker scan cannot tell a name from a
     comment, and every rule that could (extract comments, then scan only those)
@@ -224,6 +229,20 @@ SINGLE_QUOTE_STRING_SUFFIXES = {
     ".py", ".ps1", ".psm1", ".yml", ".yaml", ".toml",
 }
 BARE_MARKER = re.compile(r"\b(TODO|FIXME)\b(?!\s*\(\s*#\d+\s*\))")
+# Comment bodies, blanked for the *stub* scan only. Code that documents avoiding
+# a stub - `// Return an error rather than using todo!().` - invokes nothing, and
+# this repository's own scripts and AGENTS.md discuss `todo!()` in prose, so the
+# shape is not hypothetical here. The bare TODO/FIXME scan deliberately does NOT
+# use this text: a marker in a comment is exactly what that scan exists to
+# catch, and blanking comments for it would delete the rule.
+LINE_AND_BLOCK_COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.DOTALL)
+HASH_COMMENT = re.compile(r"#[^\n]*")
+XML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+SLASH_COMMENT_SUFFIXES = {".rs", ".cs", ".c", ".h", ".cpp"}
+XML_COMMENT_SUFFIXES = {
+    ".xml", ".xaml", ".csproj", ".props", ".targets", ".manifest", ".sln",
+    ".html",
+}
 # Shipped source and shipped configuration. Workflow and manifest files are
 # here because a half-finished CI job is unfinished work like any other - the
 # two workflows this gate itself adds are scanned by it. Markdown is out of
@@ -257,6 +276,26 @@ SELF_PATHS = {
     "scripts/check-source-grep-tests.py",
     "rust/crates/okp-core/tests/unfinished_work_gate.rs",
 }
+
+
+def comment_syntax(path: Path) -> re.Pattern[str] | None:
+    """The comment form of this file's language, or None if it has none here."""
+    if path.suffix in SLASH_COMMENT_SUFFIXES:
+        return LINE_AND_BLOCK_COMMENT
+    if path.suffix in XML_COMMENT_SUFFIXES:
+        return XML_COMMENT
+    if path.suffix in SINGLE_QUOTE_STRING_SUFFIXES or path.name in CODE_FILENAMES:
+        return HASH_COMMENT
+    if path.suffix in {".desktop", ".service"}:
+        return HASH_COMMENT
+    return None
+
+
+def blank_comments(text: str, pattern: re.Pattern[str]) -> str:
+    """Blank comment bodies, preserving newlines so line numbers still hold."""
+    return pattern.sub(
+        lambda m: "".join("\n" if ch == "\n" else " " for ch in m.group(0)), text
+    )
 
 
 def summarise(items: list[str], limit: int = 5) -> str:
@@ -550,6 +589,11 @@ def unfinished_code_markers(root: Path) -> list[tuple[str, int, str]]:
         # panicking stub. Search the joined text and report the line the
         # identifier is on.
         joined = "\n".join(masked)
+        # Comments are blanked here and only here. String literals were masked
+        # first, so a `//` inside a string cannot open a comment.
+        comments = comment_syntax(path)
+        if comments:
+            joined = blank_comments(joined, comments)
         for match in RUST_STUBS.finditer(joined):
             number = joined.count("\n", 0, match.start()) + 1
             hits.setdefault((rel, number), lines[number - 1].strip()[:160])
