@@ -38,8 +38,6 @@ case "$MODE" in
   *) echo "Unknown Linux package build mode: $MODE" >&2; exit 2 ;;
 esac
 
-HOST_UID="${SUDO_UID:-$(id -u)}"
-HOST_GID="${SUDO_GID:-$(id -g)}"
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   CONTAINER_RUNTIME=docker
 elif command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
@@ -67,21 +65,14 @@ fi
   -e OKP_BUILD_SHA="$BUILD_SHA" \
   -e LANE="$LANE" \
   -e VERSION="$VERSION" \
-  -e HOST_UID="$HOST_UID" \
-  -e HOST_GID="$HOST_GID" \
-  -e CONTAINER_RUNTIME="$CONTAINER_RUNTIME" \
   "$IMAGE" bash -ceu '
     if [[ "$LANE" == deb ]]; then
       ./scripts/package-linux-deb.sh "$VERSION"
     else
       ./scripts/package-linux-velopack.sh "$VERSION"
     fi
-    # Rootless podman maps in-container root to the invoking host user, so the
-    # outputs are already owned correctly - and a chown to $HOST_UID would remap
-    # them onto a subuid the host user cannot write (the mktemp Permission
-    # denied that killed the first container candidate). Only rootful docker
-    # leaves root-owned files that need the chown.
-    if [[ "$CONTAINER_RUNTIME" == docker ]]; then
-      chown -R "$HOST_UID:$HOST_GID" artifacts/linux rust/target/portable
-    fi
+    # Hand the outputs back to the host user. The decision is observed from
+    # the bind mount owner, which is correct for rootful and rootless docker
+    # AND podman alike - see the script header.
+    ./scripts/container-fixup-ownership.sh /workspace artifacts/linux rust/target/portable
   '
