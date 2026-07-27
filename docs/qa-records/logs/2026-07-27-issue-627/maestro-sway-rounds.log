@@ -1,0 +1,8 @@
+Jul 27 12:39:16 maestro dbus-run-session[1400859]: interaction: player-window-move-begin sequence=1 recovered-stale=false
+Jul 27 12:39:16 maestro dbus-run-session[1400859]: interaction: player-window-move sequence=1
+Jul 27 12:39:16 maestro dbus-run-session[1400859]: interaction: player-window-move-cancel sequence=1
+Jul 27 12:39:16 maestro dbus-run-session[1400859]: interaction: player-window-move-end sequence=1
+Jul 27 12:39:50 maestro dbus-run-session[1400859]: interaction: player-window-move-begin sequence=2 recovered-stale=false
+Jul 27 12:39:51 maestro dbus-run-session[1400859]: interaction: player-window-move sequence=2
+Jul 27 12:39:51 maestro dbus-run-session[1400859]: interaction: player-window-move-cancel sequence=2
+Jul 27 12:39:51 maestro dbus-run-session[1400859]: interaction: player-window-move-end sequence=2

@@ -1,0 +1,40 @@
+Jul 27 15:48:21 slava okp-linux-gtk[224715]: interaction: player-window-move-cancel sequence=28
+Jul 27 15:48:21 slava okp-linux-gtk[224715]: interaction: player-window-move-end sequence=28
+Jul 27 15:48:21 slava okp-linux-gtk[224715]: interaction: player-window-move-begin sequence=29 recovered-stale=false
+Jul 27 15:48:22 slava okp-linux-gtk[224715]: interaction: player-window-move-cancel sequence=29
+Jul 27 15:48:22 slava okp-linux-gtk[224715]: interaction: player-window-move-end sequence=29
+Jul 27 15:48:23 slava okp-linux-gtk[224715]: interaction: player-window-move-begin sequence=30 recovered-stale=false
+Jul 27 15:48:24 slava okp-linux-gtk[224715]: interaction: player-window-move-end sequence=30
+Jul 27 15:48:25 slava okp-linux-gtk[224715]: interaction: player-window-move-begin sequence=31 recovered-stale=false
+Jul 27 15:48:25 slava okp-linux-gtk[224715]: interaction: player-window-move-cancel sequence=31
+Jul 27 15:48:25 slava okp-linux-gtk[224715]: interaction: player-window-move-end sequence=31
+Jul 27 15:48:26 slava okp-linux-gtk[224715]: interaction: player-window-move-begin sequence=32 recovered-stale=false
+Jul 27 15:48:27 slava okp-linux-gtk[224715]: interaction: player-window-move-cancel sequence=32
+Jul 27 15:48:27 slava okp-linux-gtk[224715]: interaction: player-window-move-end sequence=32
+Jul 27 15:48:28 slava okp-linux-gtk[224715]: interaction: player-window-move-begin sequence=33 recovered-stale=false
+Jul 27 15:48:29 slava okp-linux-gtk[224715]: interaction: player-window-move-cancel sequence=33
+Jul 27 15:48:29 slava okp-linux-gtk[224715]: interaction: player-window-move-end sequence=33
+Jul 27 15:48:29 slava okp-linux-gtk[224715]: interaction: player-window-move-begin sequence=34 recovered-stale=false
+Jul 27 15:48:30 slava okp-linux-gtk[224715]: interaction: player-window-move-cancel sequence=34
+Jul 27 15:48:30 slava okp-linux-gtk[224715]: interaction: player-window-move-end sequence=34
+Jul 27 15:48:31 slava okp-linux-gtk[224715]: interaction: player-window-move-begin sequence=35 recovered-stale=false
+Jul 27 15:48:32 slava okp-linux-gtk[224715]: interaction: player-window-move-end sequence=35
+Jul 27 15:48:32 slava okp-linux-gtk[224715]: interaction: player-window-move-begin sequence=36 recovered-stale=false
+Jul 27 15:48:33 slava okp-linux-gtk[224715]: interaction: player-window-move-cancel sequence=36
+Jul 27 15:48:33 slava okp-linux-gtk[224715]: interaction: player-window-move-end sequence=36
+Jul 27 15:48:34 slava okp-linux-gtk[224715]: interaction: player-window-move-begin sequence=37 recovered-stale=false
+Jul 27 15:48:35 slava okp-linux-gtk[224715]: interaction: player-window-move-cancel sequence=37
+Jul 27 15:48:35 slava okp-linux-gtk[224715]: interaction: player-window-move-end sequence=37
+Jul 27 15:48:36 slava okp-linux-gtk[224715]: interaction: player-window-move-begin sequence=38 recovered-stale=false
+Jul 27 15:48:36 slava okp-linux-gtk[224715]: interaction: player-window-move-cancel sequence=38
+Jul 27 15:48:36 slava okp-linux-gtk[224715]: interaction: player-window-move-end sequence=38
+Jul 27 15:48:37 slava okp-linux-gtk[224715]: interaction: player-window-move-begin sequence=39 recovered-stale=false
+Jul 27 15:48:38 slava okp-linux-gtk[224715]: interaction: player-window-move-cancel sequence=39
+Jul 27 15:48:38 slava okp-linux-gtk[224715]: interaction: player-window-move-end sequence=39
+Jul 27 15:48:39 slava okp-linux-gtk[224715]: interaction: player-window-move-begin sequence=40 recovered-stale=false
+Jul 27 15:48:40 slava okp-linux-gtk[224715]: interaction: player-window-move-end sequence=40
+Jul 27 15:48:40 slava okp-linux-gtk[224715]: interaction: player-window-move-begin sequence=41 recovered-stale=false
+Jul 27 15:48:41 slava okp-linux-gtk[224715]: interaction: player-window-move-cancel sequence=41
+Jul 27 15:48:41 slava okp-linux-gtk[224715]: interaction: player-window-move-end sequence=41
+Jul 27 15:50:45 slava okp-linux-gtk[226074]: Renderer policy: mode=automatic flatpak=false dri-accessible=true backend=automatic hwdec=settings render-api=default gsk-renderer=default
+Jul 27 15:54:45 slava okp-linux-gtk[227299]: Renderer policy: mode=automatic flatpak=false dri-accessible=true backend=automatic hwdec=settings render-api=default gsk-renderer=default
