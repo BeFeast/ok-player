@@ -454,15 +454,18 @@ def file_seeds(src: str, mask: str) -> set[str]:
     return seeds
 
 
-def scan(root: Path) -> tuple[list[tuple[str, TestFn, int, int]], set[str]]:
-    """(offenders, keys of every test that still contains a source grep).
+def scan(root: Path) -> tuple[list[tuple[str, TestFn, int, int]], set[str], dict[str, int]]:
+    """(offenders, keys still greping source text, how many tests each key hits).
 
     The second set is what the allowlist ledger is keyed on. An entry may be
     deleted only once its test has stopped greping source text altogether -
     acquiring one behavioural assertion is not progress, it is laundering.
+
+    The third is there because `path::function` is not a unique identity.
     """
     findings: list[tuple[str, TestFn, int, int]] = []
     still_greping: set[str] = set()
+    key_counts: dict[str, int] = {}
     rust_root = root / "rust"
     for path in sorted(rust_root.rglob("*.rs")):
         if "target" in path.parts:
@@ -474,12 +477,14 @@ def scan(root: Path) -> tuple[list[tuple[str, TestFn, int, int]], set[str]]:
         seeds = file_seeds(src, mask)
         rel = path.relative_to(root).as_posix()
         for test in find_tests(src, mask):
+            key = f"{rel}::{test.name}"
+            key_counts[key] = key_counts.get(key, 0) + 1
             only, grep, behav = classify(test, seeds)
             if only:
                 findings.append((rel, test, grep, behav))
             if grep:
-                still_greping.add(f"{rel}::{test.name}")
-    return findings, still_greping
+                still_greping.add(key)
+    return findings, still_greping, key_counts
 
 
 def read_allowlist(text: str) -> list[str]:
@@ -565,7 +570,7 @@ def main() -> int:
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
-    findings, still_greping = scan(root)
+    findings, still_greping, key_counts = scan(root)
 
     if args.list:
         for rel, test, _, _ in findings:
@@ -606,6 +611,25 @@ def main() -> int:
     # its entry stale, and the check then demanded the line be deleted - so the
     # prescribed fix for laundering was to record the laundering as progress.
     live_keys = {f"{rel}::{t.name}" for rel, t, _, _ in findings} | still_greping
+
+    # `path::function` is not unique: two modules in one file may declare the
+    # same test name, and one grandfathered entry would then cover both. That
+    # is a silent way to add an offender with no ledger edit at all.
+    for key, count in sorted(key_counts.items()):
+        if count > 1 and key in allowed_set:
+            failures += 1
+            annotate(
+                "error",
+                "Ambiguous source-grep allowlist entry",
+                (
+                    f"`{key}` matches {count} tests - the same function name in "
+                    "more than one module of that file - so one allowlist line "
+                    "would grandfather all of them. Rename the tests so each has "
+                    "a distinct name before touching the ledger."
+                ),
+                file=ALLOWLIST_PATH,
+            )
+
     stale = [entry for entry in allowed if entry not in live_keys]
     for entry in stale:
         failures += 1
@@ -660,22 +684,14 @@ def main() -> int:
         )
     else:
         base_entries = read_allowlist(base_text or "")
-        dropped = set(base_entries) - set(allowed)
+        # No exceptions. There used to be one for a test that moved to another
+        # file, keyed on the bare function name, and every version of it was
+        # forgeable: a new offender only had to take the name of an entry that
+        # was leaving. A move is indistinguishable from a replacement by name
+        # alone, so the rule is now literal - no key may be added, ever. Moving
+        # a grandfathered test means fixing it first, which is the direction the
+        # ledger exists to push.
         for entry in sorted(set(allowed) - set(base_entries)):
-            name = entry.rpartition("::")[2]
-            # Re-keying an entry that already existed - the test moved to
-            # another file - is not growth, as long as the total did not rise.
-            # Matching on the bare test name was not enough: a new offender
-            # could take the name of an entry that is still in the list under
-            # its original key and ride in on it. A move means the old key was
-            # deleted here *and* nothing at that key greps source text any more.
-            vacated = [e for e in dropped if e.rpartition("::")[2] == name]
-            if (
-                vacated
-                and all(old not in live_keys for old in vacated)
-                and len(allowed) <= len(base_entries)
-            ):
-                continue
             failures += 1
             annotate(
                 "error",
@@ -683,8 +699,9 @@ def main() -> int:
                 (
                     f"{ALLOWLIST_PATH} adds `{entry}`. The allowlist may only "
                     "shrink: it grandfathers tests that already existed, it does "
-                    "not accept new ones. Write a behavioural test instead - "
-                    "drive the code and assert on what it produced."
+                    "not accept new ones - not even under the name of an entry "
+                    "that is leaving. If this test moved, rewrite it to assert on "
+                    "behaviour and delete its old line instead of re-keying it."
                 ),
                 file=ALLOWLIST_PATH,
             )

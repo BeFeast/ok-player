@@ -100,6 +100,7 @@ BARE_MARKER = re.compile(r"\b(TODO|FIXME)\b(?!\s*\(\s*#\d+\s*\))")
 CODE_SUFFIXES = {
     ".rs", ".cs", ".sh", ".ps1", ".psm1", ".py", ".c", ".h", ".cpp", ".xaml",
     ".yml", ".yaml", ".toml", ".json", ".manifest",
+    ".xml", ".props", ".targets", ".csproj",
 }
 SKIP_DIRS = {".git", "target", "node_modules"}
 # `bin` and `obj` are .NET build output, but only where a project file puts
@@ -163,19 +164,31 @@ def strip_fenced_blocks(text: str) -> str:
 def acceptance_blocks(body: str) -> list[list[str]]:
     """The body lines of every acceptance block, HTML comments removed.
 
-    A block ends at the first terminator of any strength: a heading, a rule, a
-    bold label, an HTML tag. These tight bounds exist because the prose and
-    plain-bullet rules read whatever is inside, and a review bot's appended
-    bullet summary must not be mistaken for acceptance items.
+    A block ends at the first terminator of any strength - a heading, a rule, a
+    bold label, an HTML tag - with one exception: a markdown heading *nested*
+    below the one that opened the block groups the acceptance items rather than
+    ending them, so a hold written under `### Windows` is still read.
+
+    The bounds are otherwise tight because the prose and plain-bullet rules read
+    whatever is inside, and a review bot's appended bullet summary - which
+    arrives under an HTML tag or a bold label, not under a nested heading - must
+    not be mistaken for acceptance items.
     """
-    blocks, current = [], None
+    blocks: list[list[str]] = []
+    current: list[str] | None = None
+    level = 0
     for line in HTML_COMMENT.sub("", body).splitlines():
         if ACCEPTANCE_HEADING.match(line):
             if current is not None:
                 blocks.append(current)
+            opener = SECTION_BREAK.match(line)
             current = []
+            level = len(opener.group(1)) if opener else 0
             continue
         if current is None:
+            continue
+        nested = SECTION_BREAK.match(line)
+        if nested and level and len(nested.group(1)) > level:
             continue
         if HEADING.match(line):
             blocks.append(current)

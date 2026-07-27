@@ -16,6 +16,9 @@
 #     function or state machine and check the value or event it produces. Prove
 #     it by reverting the production change and watching the test fail.
 #   * Never add an entry to make a new test pass. Write a behavioural test.
+#   * No key may be ADDED, for any reason - not even to re-key an entry whose
+#     test moved to another file. A move and a replacement are indistinguishable
+#     from a test name, so moving a grandfathered test means fixing it first.
 #
 # WHAT THE DETECTOR DOES NOT SEE. Being absent from this file is not a
 # certificate that a test asserts on behaviour. Known gaps:

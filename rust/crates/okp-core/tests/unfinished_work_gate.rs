@@ -497,6 +497,42 @@ fn an_unfinished_marker_in_a_shipped_manifest_blocks_the_merge() {
 }
 
 #[test]
+fn a_prose_hold_under_a_nested_heading_blocks_the_merge() {
+    let fixture = Declaration::new("okp-gate-nested-prose");
+    // The unticked-box scan already looked past a nested heading; the prose and
+    // plain-bullet rules did not, so the shape that every real hold in this
+    // repository took was still hidden one level down.
+    let body = "## Operator acceptance\n\n\
+        ### Linux\n\n\
+        - [x] Verified on GNOME\n\n\
+        ### Windows\n\n\
+        Verify the packaged build on Windows 11 before merge.\n";
+
+    let output = fixture.check("Reveal saved Linux screenshots", body);
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    let stderr = stderr_of(&output);
+    assert!(stderr.contains("states a hold in prose"));
+    assert!(stderr.contains("packaged build on Windows 11"));
+}
+
+#[test]
+fn an_unfinished_marker_in_shipped_xml_configuration_blocks_the_merge() {
+    let fixture = Declaration::new("okp-gate-xml-config");
+    let props = fixture.root.path().join("Directory.Build.props");
+    fs::write(
+        &props,
+        "<Project>\n  <!-- TODO: pin the analyzer version -->\n</Project>\n",
+    )
+    .expect("write");
+
+    let output = fixture.check("Share the build properties", FINISHED_BODY);
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    assert!(stderr_of(&output).contains("Unfinished-code marker"));
+}
+
+#[test]
 fn an_empty_body_blocks_the_merge() {
     let fixture = Declaration::new("okp-gate-empty-body");
 
@@ -1411,8 +1447,12 @@ fn a_new_offender_cannot_ride_in_on_the_name_of_an_entry_that_did_not_move() {
 }
 
 #[test]
-fn moving_a_grandfathered_test_to_another_file_is_accepted() {
+fn re_keying_a_grandfathered_test_to_another_file_is_rejected() {
     let workspace = GitWorkspace::new("okp-gate-allowlist-move");
+    // A move and a replacement look identical when the only evidence is a test
+    // name, so the move exception was forgeable in every form it took. The rule
+    // is now literal: no key may be added. Moving a grandfathered test means
+    // fixing it first, which is the direction the ledger exists to push.
     workspace.write_tests(SOURCE_GREP_TEST);
     workspace.write_allowlist(
         "rust/crates/demo/src/tests.rs::renderer_environment_is_selected_before_gtk_initialization\n",
@@ -1426,12 +1466,33 @@ fn moving_a_grandfathered_test_to_another_file_is_accepted() {
     );
 
     let output = workspace.check(&base);
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
 
-    assert_eq!(
-        output.status.code(),
-        Some(0),
-        "{}",
-        String::from_utf8_lossy(&output.stdout)
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(stdout.contains("may only shrink"), "{stdout}");
+    assert!(stdout.contains("startup_tests.rs"), "{stdout}");
+}
+
+#[test]
+fn one_allowlist_line_cannot_grandfather_two_tests_of_the_same_name() {
+    let workspace = Workspace::new("okp-gate-ambiguous-key");
+    // `path::function` is not a unique identity: two modules in one file may
+    // declare the same test name, and a single ledger line would then cover a
+    // brand new offender with no ledger edit at all.
+    workspace.write_tests(&format!(
+        "mod first {{{SOURCE_GREP_TEST}}}\nmod second {{{SOURCE_GREP_TEST}}}\n"
+    ));
+    workspace.write_allowlist(
+        "rust/crates/demo/src/tests.rs::renderer_environment_is_selected_before_gtk_initialization\n",
+    );
+
+    let output = workspace.check();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(
+        stdout.contains("Ambiguous source-grep allowlist entry"),
+        "{stdout}"
     );
 }
 
