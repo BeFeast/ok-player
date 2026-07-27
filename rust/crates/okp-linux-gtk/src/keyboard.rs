@@ -327,7 +327,7 @@ pub(crate) fn connect_keyboard(
                 glib::Propagation::Stop
             }
             Some(ShortcutAction::EscapeFullscreen) if shortcut_window.is_fullscreen() => {
-                state.borrow_mut().fullscreen_toggle.request(false);
+                request_fullscreen(&shortcut_window, &state, false);
                 log_fullscreen_video_geometry(
                     &shortcut_window,
                     &state,

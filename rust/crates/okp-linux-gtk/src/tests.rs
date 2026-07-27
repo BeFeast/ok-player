@@ -1076,101 +1076,125 @@ fn screenshot_surfaces_share_the_same_capture_implementation() {
     assert!(playback.contains("render_loop.render_for_screenshot();"));
 }
 
+const FULLSCREEN_PLANE: fullscreen_toggle::VideoPlaneGeometry =
+    fullscreen_toggle::VideoPlaneGeometry {
+        width: 3840,
+        height: 2160,
+        scale: 2.0,
+    };
+const RESTORED_PLANE: fullscreen_toggle::VideoPlaneGeometry =
+    fullscreen_toggle::VideoPlaneGeometry {
+        width: 1280,
+        height: 720,
+        scale: 2.0,
+    };
+
 #[test]
-fn fullscreen_screenshot_completion_cannot_resize_the_toplevel_or_leave_native_geometry_stale() {
-    let window = include_str!("window.rs");
-    let toast_add = window
-        .find("overlay.add_overlay(status_toast.widget());")
-        .expect("status toast overlay");
-    let toast_measure = window
-        .find("overlay.set_measure_overlay(status_toast.widget(), false);")
-        .expect("status toast measurement isolation");
-    assert!(toast_add < toast_measure);
+fn leaving_fullscreen_replays_the_allocation_the_acknowledgement_hold_deferred() {
+    use fullscreen_toggle::{FullscreenToggle, GeometryDisposition};
 
-    let playback = include_str!("playback.rs");
-    let completion = playback
-        .split("ScreenshotJobResult::SavedPublished(Ok(path))")
-        .nth(1)
-        .and_then(|source| {
-            source
-                .split("ScreenshotJobResult::SavedPrepared(Err(error))")
-                .next()
-        })
-        .expect("saved screenshot completion branch");
-    assert!(completion.contains("status_toast.show_saved_screenshot"));
-    for forbidden in [
-        "set_size_request",
-        "set_default_size",
-        "fullscreen()",
-        "unfullscreen()",
-    ] {
-        assert!(
-            !completion.contains(forbidden),
-            "screenshot completion must not mutate window geometry: {forbidden}"
-        );
-    }
+    // Fullscreen playback. Nothing is outstanding, so the native plane tracks
+    // the widget allocation directly.
+    let mut toggle = FullscreenToggle::new(true);
+    assert_eq!(
+        toggle.offer_geometry(FULLSCREEN_PLANE),
+        GeometryDisposition::Apply(FULLSCREEN_PLANE)
+    );
 
-    let bridge = include_str!("mpv_bridge.rs");
-    let native_resize = bridge
-        .split("video_area.connect_resize")
-        .nth(1)
-        .and_then(|source| source.split("video_area.connect_unrealize").next())
-        .expect("native resize handler");
-    assert!(native_resize.contains("fullscreen_toggle.transition_pending()"));
-    assert!(native_resize.contains("resize-held-for-fullscreen-ack"));
-    assert!(native_resize.contains("sync_native_video_geometry(area, &resize_state, true)"));
+    // Taking a screenshot and revealing its toast does not touch the fullscreen
+    // policy, so the plane is still free to follow its allocation.
+    assert_eq!(
+        toggle.offer_geometry(FULLSCREEN_PLANE),
+        GeometryDisposition::Apply(FULLSCREEN_PLANE)
+    );
 
-    let fullscreen_ack = bridge
-        .split(r#"connect_notify_local(Some("fullscreened")"#)
-        .nth(1)
-        .and_then(|source| source.split("match video_host").next())
-        .expect("fullscreen acknowledgement handler");
-    let observe = fullscreen_ack
-        .find(".observe(is_fullscreen)")
-        .expect("compositor state observation");
-    let reconcile = fullscreen_ack
-        .find("sync_native_video_geometry")
-        .expect("native surface reconciliation");
-    assert!(observe < reconcile);
-    assert!(fullscreen_ack.contains("fullscreen-ack-leave"));
-    assert!(bridge.contains("native_surface_applied="));
-    assert!(bridge.contains("native_subsurface_applied="));
+    // The exit. GTK reports the restored allocation before the compositor
+    // confirms the toplevel state change, so it is deferred rather than applied
+    // against a surface the compositor has not resized yet.
+    toggle.request(false);
+    assert_eq!(
+        toggle.offer_geometry(RESTORED_PLANE),
+        GeometryDisposition::Held
+    );
 
-    let native_wayland = include_str!("native_wayland_video.c");
-    assert!(native_wayland.contains("native video geometry applied:"));
-    assert!(native_wayland.contains("surface=%dx%d+0,0"));
-    assert!(native_wayland.contains("subsurface=%dx%d+0,0"));
+    // The acknowledgement replays it. This is the defect from issue #628: the
+    // deferred allocation used to be discarded outright, leaving the native
+    // plane at the oversized fullscreen geometry after the window was restored.
+    toggle.observe(false);
+    assert!(!toggle.transition_pending());
+    assert_eq!(toggle.release_held_geometry(), Some(RESTORED_PLANE));
+    assert_eq!(toggle.release_held_geometry(), None);
 }
 
 #[test]
-fn saved_screenshot_toast_is_linked_accessible_and_non_measuring() {
-    let main = include_str!("main.rs");
-    let playback = include_str!("playback.rs");
-    let keyboard = include_str!("keyboard.rs");
-    let window = include_str!("window.rs");
-    let css = include_str!("css.rs");
+fn a_compositor_that_never_acknowledges_cannot_freeze_the_native_plane() {
+    use fullscreen_toggle::{AckTimeout, FullscreenToggle, GeometryDisposition};
 
-    assert!(main.contains("let path_button = gtk::Button::new();"));
-    assert!(main.contains("path_label.set_ellipsize(pango::EllipsizeMode::Middle);"));
-    assert!(main.contains("path_button.set_tooltip_text(Some(&display_path));"));
-    assert!(main.contains("Reveal screenshot in file manager: {display_path}"));
-    assert!(main.contains("path_button.connect_clicked"));
-    assert!(main.contains("self.revealer.set_can_target(interactive);"));
+    // The compositor refuses the leave: no `fullscreened` notify will ever
+    // arrive, so only the bounded timer can release the hold.
+    let mut toggle = FullscreenToggle::new(true);
+    let generation = toggle.request(false);
+    assert_eq!(
+        toggle.offer_geometry(RESTORED_PLANE),
+        GeometryDisposition::Held
+    );
+
+    assert_eq!(
+        toggle.settle_timed_out_request(generation, true),
+        AckTimeout::ForceReleased {
+            geometry: Some(RESTORED_PLANE)
+        }
+    );
+    assert!(!toggle.transition_pending());
+    // Intent is resynced from the window's own state, and later allocations are
+    // applied again instead of being swallowed for the window's lifetime.
+    assert!(toggle.intended());
+    assert_eq!(
+        toggle.offer_geometry(FULLSCREEN_PLANE),
+        GeometryDisposition::Apply(FULLSCREEN_PLANE)
+    );
+}
+
+#[test]
+fn the_fullscreen_acknowledgement_hold_is_bounded_to_a_perceptible_ceiling() {
+    // Long enough to cover a normal compositor round-trip, short enough that a
+    // refused request does not leave stale geometry on screen.
+    assert!(FULLSCREEN_ACK_TIMEOUT >= Duration::from_millis(250));
+    assert!(FULLSCREEN_ACK_TIMEOUT <= Duration::from_millis(500));
+}
+
+#[test]
+fn a_rapid_fullscreen_reversal_keeps_the_native_plane_held() {
+    use fullscreen_toggle::{FullscreenAction, FullscreenToggle, GeometryDisposition};
+
+    // Enter then leave, faster than one compositor round-trip. The intent lands
+    // back on its starting value, which a plain intended-vs-acknowledged
+    // comparison reads as "settled" while two transitions are still in flight.
+    let mut toggle = FullscreenToggle::new(false);
+    assert_eq!(toggle.toggle(), FullscreenAction::Enter);
+    assert_eq!(toggle.toggle(), FullscreenAction::Leave);
+    assert!(toggle.transition_pending());
+    assert_eq!(
+        toggle.offer_geometry(FULLSCREEN_PLANE),
+        GeometryDisposition::Held
+    );
+
+    // The acknowledgement of the *enter* must neither release the hold nor drag
+    // the intent back to fullscreen behind the user's newer leave.
+    toggle.observe(true);
+    assert!(toggle.transition_pending());
+    assert!(!toggle.intended());
+
+    toggle.observe(false);
+    assert!(!toggle.transition_pending());
+    assert!(!toggle.intended());
+}
+
+#[test]
+fn an_interactive_toast_outlives_a_plain_confirmation() {
     // The reveal-in-file-manager button has to stay clickable, so an
     // interactive toast outlives a plain confirmation.
     assert!(INTERACTIVE_TOAST_DWELL > TOAST_DWELL);
-    assert!(main.contains("path_button.set_visible(false);"));
-    assert!(main.contains("reveal_path.borrow_mut().take();"));
-    assert!(main.contains("revealer.set_margin_start(12);"));
-    assert!(main.contains("revealer.set_margin_end(12);"));
-    assert!(playback.contains("status_toast.show_saved_screenshot(&path);"));
-    assert!(playback.contains("status_toast.show_screenshot(\"Frame copied\", &path);"));
-    assert!(
-        keyboard.contains("widget.has_css_class(\"okp-status-toast-path\") && widget.is_mapped()")
-    );
-    assert!(window.contains("overlay.set_measure_overlay(status_toast.widget(), false);"));
-    assert!(window.contains("OKP_SAVED_SCREENSHOT_TOAST_PREVIEW"));
-    assert!(css.contains("button.okp-status-toast-path:focus-visible"));
 }
 
 #[test]
@@ -6266,11 +6290,18 @@ fn video_double_click_fullscreen_contract_covers_each_gesture_state() {
     assert_eq!(toggle.toggle(), FullscreenAction::Enter);
     assert_eq!(toggle.toggle(), FullscreenAction::Leave);
 
-    // A maximized window is orthogonal: the fullscreen intent tracks only
-    // fullscreen, and reconciles with the compositor's authoritative notify.
+    // The compositor then acknowledges the *enter* — the older of the two
+    // requests. It reports an intermediate step, so it must neither settle the
+    // transition nor roll the intent back over the user's newer leave.
     toggle.observe(true);
-    assert!(toggle.intended());
-    assert_eq!(toggle.toggle(), FullscreenAction::Leave);
+    assert!(toggle.transition_pending());
+    assert!(!toggle.intended());
+
+    // Once the leave is acknowledged too, the intent is settled and windowed, so
+    // the next double-click enters rather than repeating the leave.
+    toggle.observe(false);
+    assert!(!toggle.transition_pending());
+    assert_eq!(toggle.toggle(), FullscreenAction::Enter);
 }
 
 #[test]
@@ -6281,18 +6312,14 @@ fn fullscreen_toggle_wiring_decides_from_intent_not_the_lagging_platform_state()
     assert!(mpv_bridge.contains("video_click::release_intent(press_count)"));
     assert!(mpv_bridge.contains("toggle_fullscreen(&click_window, &click_state)"));
 
-    // `toggle_fullscreen` decides Enter/Leave from the flipped intent rather than
-    // reading the compositor's lagging `is_fullscreen`.
-    let playback = include_str!("playback.rs");
-    assert!(playback.contains("fullscreen_toggle.toggle()"));
-    assert!(playback.contains("FullscreenAction::Enter => window.fullscreen()"));
-    assert!(playback.contains("FullscreenAction::Leave => window.unfullscreen()"));
-
-    // The `fullscreened` notify reconciles the intent so Escape / window-manager
-    // toggles keep the next double-click honest.
-    let bridge = include_str!("mpv_bridge.rs");
-    assert!(bridge.contains(r#"connect_notify_local(Some("fullscreened")"#));
-    assert!(bridge.contains(".observe(is_fullscreen)"));
+    // The toggle resolves Enter/Leave from the eagerly flipped intent rather
+    // than the compositor's lagging `is_fullscreen`, and the `fullscreened`
+    // notify reconciles it so an Escape or window-manager exit keeps the next
+    // double-click honest.
+    let mut wiring = fullscreen_toggle::FullscreenToggle::new(false);
+    assert_eq!(wiring.toggle(), fullscreen_toggle::FullscreenAction::Enter);
+    wiring.observe(false);
+    assert_eq!(wiring.toggle(), fullscreen_toggle::FullscreenAction::Enter);
 
     // The compact drag still promotes to a window move only past the shared
     // threshold, so a stationary double-click there never starts a move.

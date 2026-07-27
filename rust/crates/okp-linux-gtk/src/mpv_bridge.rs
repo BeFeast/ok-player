@@ -314,12 +314,23 @@ pub(crate) fn connect_mpv(
     let fullscreen_state = Rc::clone(&state);
     window.connect_notify_local(Some("fullscreened"), move |window, _| {
         let is_fullscreen = window.is_fullscreen();
-        fullscreen_state
-            .borrow_mut()
-            .fullscreen_toggle
-            .observe(is_fullscreen);
-        if let Some(area) = fullscreen_area.as_ref() {
-            sync_native_video_geometry(area, &fullscreen_state, true);
+        // A single notify answers a single request. While a newer one is still in
+        // flight the hold stays up: this allocation describes an intermediate
+        // step, not the geometry the compositor will settle on.
+        let released = {
+            let mut state = fullscreen_state.borrow_mut();
+            state.fullscreen_toggle.observe(is_fullscreen);
+            (!state.fullscreen_toggle.transition_pending())
+                .then(|| state.fullscreen_toggle.release_held_geometry())
+        };
+        match (released, fullscreen_area.as_ref()) {
+            // Replay the last allocation the hold deferred, so a resize that
+            // landed mid-transition is applied rather than dropped.
+            (Some(Some(geometry)), _) => {
+                apply_native_video_geometry(&fullscreen_state, geometry, true);
+            }
+            (Some(None), Some(area)) => sync_native_video_geometry(area, &fullscreen_state, true),
+            _ => {}
         }
         log_fullscreen_video_geometry(
             window,
@@ -521,15 +532,18 @@ fn connect_native_mpv(
             let scale_state = Rc::clone(&realize_state);
             let scale_area = area.clone();
             surface.connect_notify_local(Some("scale"), move |_, _| {
-                if scale_state.borrow().fullscreen_toggle.transition_pending() {
-                    log_fullscreen_video_geometry_from_area(
-                        &scale_area,
-                        &scale_state,
-                        "scale-held-for-fullscreen-ack",
-                    );
-                    return;
+                match offer_native_video_geometry(&scale_area, &scale_state) {
+                    fullscreen_toggle::GeometryDisposition::Held => {
+                        log_fullscreen_video_geometry_from_area(
+                            &scale_area,
+                            &scale_state,
+                            "scale-held-for-fullscreen-ack",
+                        );
+                    }
+                    fullscreen_toggle::GeometryDisposition::Apply(geometry) => {
+                        apply_native_video_geometry(&scale_state, geometry, true);
+                    }
                 }
-                sync_native_video_geometry(&scale_area, &scale_state, true);
             });
         }
         schedule_audio_device_restore(&realize_state);
@@ -540,16 +554,19 @@ fn connect_native_mpv(
 
     let resize_state = Rc::clone(&state);
     video_area.connect_resize(move |area, width, height| {
-        if resize_state.borrow().fullscreen_toggle.transition_pending() {
-            log_fullscreen_video_geometry_from_area(
-                area,
-                &resize_state,
-                "resize-held-for-fullscreen-ack",
-            );
-            return;
-        }
         debug_assert_eq!((width, height), (area.width(), area.height()));
-        sync_native_video_geometry(area, &resize_state, true);
+        match offer_native_video_geometry(area, &resize_state) {
+            fullscreen_toggle::GeometryDisposition::Held => {
+                log_fullscreen_video_geometry_from_area(
+                    area,
+                    &resize_state,
+                    "resize-held-for-fullscreen-ack",
+                );
+            }
+            fullscreen_toggle::GeometryDisposition::Apply(geometry) => {
+                apply_native_video_geometry(&resize_state, geometry, true);
+            }
+        }
     });
 
     let unrealize_state = Rc::clone(&state);
@@ -592,14 +609,104 @@ fn connect_native_mpv(
     });
 }
 
+/// Bounded wait for the compositor to acknowledge a fullscreen request.
+///
+/// A compositor is free to ignore or refuse the request, in which case no
+/// `fullscreened` notify ever arrives. Without this ceiling the acknowledgement
+/// hold — and with it the native video plane's geometry — would last for the
+/// lifetime of the window.
+pub(crate) const FULLSCREEN_ACK_TIMEOUT: Duration = Duration::from_millis(350);
+
+/// Record an explicit fullscreen request and arm its acknowledgement timeout.
+pub(crate) fn request_fullscreen(
+    window: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
+    is_fullscreen: bool,
+) {
+    let generation = state.borrow_mut().fullscreen_toggle.request(is_fullscreen);
+    arm_fullscreen_ack_timeout(window, state, generation);
+}
+
+/// Flip the fullscreen intent, arm the acknowledgement timeout, and report the
+/// window operation the caller must perform.
+pub(crate) fn toggle_fullscreen_intent(
+    window: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
+) -> fullscreen_toggle::FullscreenAction {
+    let (action, generation) = {
+        let mut state = state.borrow_mut();
+        let action = state.fullscreen_toggle.toggle();
+        (action, state.fullscreen_toggle.generation())
+    };
+    arm_fullscreen_ack_timeout(window, state, generation);
+    action
+}
+
+fn arm_fullscreen_ack_timeout(
+    window: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
+    generation: u64,
+) {
+    let window = window.clone();
+    let state = Rc::clone(state);
+    glib::timeout_add_local_once(FULLSCREEN_ACK_TIMEOUT, move || {
+        let is_fullscreen = window.is_fullscreen();
+        let outcome = state
+            .borrow_mut()
+            .fullscreen_toggle
+            .settle_timed_out_request(generation, is_fullscreen);
+        let fullscreen_toggle::AckTimeout::ForceReleased { geometry } = outcome else {
+            return;
+        };
+        log_fullscreen_video_geometry(&window, &state, "fullscreen-ack-timeout");
+        if let Some(geometry) = geometry {
+            apply_native_video_geometry(&state, geometry, true);
+        }
+    });
+}
+
+fn area_video_plane_geometry(area: &gtk::DrawingArea) -> fullscreen_toggle::VideoPlaneGeometry {
+    fullscreen_toggle::VideoPlaneGeometry {
+        width: area.width().max(1),
+        height: area.height().max(1),
+        scale: native_surface_scale(area),
+    }
+}
+
+/// Hand the widget's current allocation to the fullscreen policy, which either
+/// clears it for immediate application or stashes it for replay once an
+/// outstanding fullscreen transition settles.
+fn offer_native_video_geometry(
+    area: &gtk::DrawingArea,
+    state: &Rc<RefCell<PlayerState>>,
+) -> fullscreen_toggle::GeometryDisposition {
+    let geometry = area_video_plane_geometry(area);
+    state
+        .borrow_mut()
+        .fullscreen_toggle
+        .offer_geometry(geometry)
+}
+
 fn sync_native_video_geometry(
     area: &gtk::DrawingArea,
     state: &Rc<RefCell<PlayerState>>,
     force_render: bool,
 ) {
-    let width = area.width().max(1);
-    let height = area.height().max(1);
-    let scale = native_surface_scale(area);
+    apply_native_video_geometry(state, area_video_plane_geometry(area), force_render);
+}
+
+fn apply_native_video_geometry(
+    state: &Rc<RefCell<PlayerState>>,
+    geometry: fullscreen_toggle::VideoPlaneGeometry,
+    force_render: bool,
+) {
+    let fullscreen_toggle::VideoPlaneGeometry {
+        width,
+        height,
+        scale,
+    } = geometry;
+    let width = width.max(1);
+    let height = height.max(1);
     let render_size = native_render_size(width, height, scale);
     let state = state.borrow();
     let Some(plane) = state.native_video_plane.as_ref() else {
@@ -607,7 +714,8 @@ fn sync_native_video_geometry(
     };
     plane.resize(width, height, scale);
     if let Some(mpv) = state.mpv.as_ref()
-        && let Err(error) = mpv.set_wayland_dmabuf_geometry(render_size, wayland_scale_units(area))
+        && let Err(error) =
+            mpv.set_wayland_dmabuf_geometry(render_size, wayland_scale_units_for(scale))
     {
         eprintln!("Failed to resize the embedded Wayland video surface: {error}");
     }
