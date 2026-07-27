@@ -1,0 +1,130 @@
+# Source-text-only tests, grandfathered.
+#
+# Every entry below is a test whose assertions only check that a source file
+# contains a string. Such a test passes against a broken implementation, so it
+# is not regression coverage - it is a spelling check on the code.
+#
+# THIS FILE MAY ONLY SHRINK.
+#   * scripts/check-source-grep-tests.py rejects a pull request that adds an
+#     entry, and rejects an entry whose test no longer asserts on source text at
+#     all (fix the test, then delete its line).
+#   * An entry may NOT be deleted just because its test acquired a behavioural
+#     assertion. The line goes when the last source grep goes, not before -
+#     otherwise "add one assertion, delete one line" drains the ledger without
+#     fixing anything.
+#   * To remove an entry, rewrite the test so it asserts on behaviour: drive the
+#     function or state machine and check the value or event it produces. Prove
+#     it by reverting the production change and watching the test fail.
+#   * Never add an entry to make a new test pass. Write a behavioural test.
+#   * No key may be ADDED, for any reason - not even to re-key an entry whose
+#     test moved to another file. A move and a replacement are indistinguishable
+#     from a test name, so moving a grandfathered test means fixing it first.
+#
+# WHAT THE DETECTOR DOES NOT SEE. Being absent from this file is not a
+# certificate that a test asserts on behaviour. Known gaps, worst first:
+#   * ONE ASSERTION THAT CALLS ANYTHING clears a whole test. "Behavioural
+#     evidence" is an assertion that mentions a binding produced by a call, or
+#     hands source text to production code, or contains a call whose head
+#     identifier is not a string method (see TEXT_METHODS). Nothing checks that
+#     the call has anything to do with the subject, so
+#     `assert_eq!(Some(1).unwrap(), 1);` added beside three `source.contains`
+#     greps takes the test from rejected to accepted. Measured, on this tree.
+#     Narrowing it to "the call must involve the fixture or a binding" was
+#     tried and rejected: it misclassifies two existing behavioural tests that
+#     call production functions with literal arguments
+#     (`subtitle_style_label`, `format_scale`, `player_command_registry`).
+#   * a grep hidden inside a helper with a neutral name, e.g.
+#     `assert!(has_expected_implementation(source))`. Telling a grep helper from
+#     a parser needs flow analysis. A helper whose name contains "assert" is
+#     treated as an assertion helper and does not launder the grep; any other
+#     name does. The ledger is keyed on the `include_str!` binding rather than
+#     on a surviving visible grep, so using this route no longer also drains an
+#     entry out of this file - but it still clears the test.
+#   * source text read without `include_str!`, e.g. `fs::read_to_string(
+#     "src/foo.rs")`. None exist today.
+#   * a helper in ANOTHER module that returns source text. A helper in the same
+#     file whose return type is a string is resolved; a cross-module one is not.
+#   * a test that asserts on behaviour but on the wrong thing. This check reads
+#     shapes, never meaning: it cannot tell a real regression test from one that
+#     drives the code and asserts something trivially true.
+#   * C#. The pattern exists only in the Rust workspace.
+#
+# Two of those gaps are one token wide. This check is a floor against writing a
+# grep-only test by habit, not a defence against an author who wants one merged.
+#
+# Format: <path relative to the repository root>::<test function name>
+rust/crates/okp-core/tests/candidate_toolchain.rs::portability_failure_evidence_is_bound_to_both_workflow_artifacts
+rust/crates/okp-core/tests/isolated_xvfb_session.rs::main_window_fit_session_has_one_multiscreen_manager_and_two_supervisors
+rust/crates/okp-core/tests/isolated_xvfb_session.rs::player_window_drag_smoke_covers_survival_cancel_and_recovery
+rust/crates/okp-core/tests/isolated_xvfb_session.rs::window_regression_runner_dispatches_drag_and_fit_with_bound_evidence
+rust/crates/okp-core/tests/isolated_xvfb_session.rs::night_gui_runs_headless_window_regressions_before_the_live_seat_gate
+rust/crates/okp-core/tests/isolated_xvfb_session.rs::narrow_width_portability_capture_uses_a_long_lived_dark_fixture
+rust/crates/okp-core/tests/isolated_xvfb_session.rs::fullscreen_portability_capture_reads_the_application_toplevel
+rust/crates/okp-linux-gtk/src/tests.rs::renderer_environment_is_selected_before_gtk_initialization
+rust/crates/okp-linux-gtk/src/tests.rs::file_association_launches_present_before_media_delivery
+rust/crates/okp-linux-gtk/src/tests.rs::initial_fit_waits_for_the_current_monitor_but_not_optional_bounds
+rust/crates/okp-linux-gtk/src/tests.rs::floating_volume_css_pins_capsule_geometry_motion_and_state_colors
+rust/crates/okp-linux-gtk/src/tests.rs::player_space_capture_precedes_button_activation_and_preserves_editors
+rust/crates/okp-linux-gtk/src/tests.rs::volume_and_audio_track_actions_use_distinct_icon_identities
+rust/crates/okp-linux-gtk/src/tests.rs::settings_stays_in_the_width_safe_bottom_more_menu
+rust/crates/okp-linux-gtk/src/tests.rs::adaptive_osc_bar_collapses_into_overflow_without_overlap
+rust/crates/okp-linux-gtk/src/tests.rs::media_presence_is_the_single_owner_of_standard_osc_mapping
+rust/crates/okp-linux-gtk/src/tests.rs::screenshot_surfaces_share_the_same_capture_implementation
+rust/crates/okp-linux-gtk/src/tests.rs::fullscreen_screenshot_completion_cannot_resize_the_toplevel_or_leave_native_geometry_stale
+rust/crates/okp-linux-gtk/src/tests.rs::saved_screenshot_toast_is_linked_accessible_and_non_measuring
+rust/crates/okp-linux-gtk/src/tests.rs::settings_updates_has_one_dedicated_content_owner
+rust/crates/okp-linux-gtk/src/tests.rs::update_decision_surfaces_are_shared_persistent_and_accessible
+rust/crates/okp-linux-gtk/src/tests.rs::hdr_settings_reservation_has_no_toggle_or_action
+rust/crates/okp-linux-gtk/src/tests.rs::media_info_window_classes_have_scoped_css
+rust/crates/okp-linux-gtk/src/tests.rs::long_lived_surfaces_share_non_modal_single_instance_window_semantics
+rust/crates/okp-linux-gtk/src/tests.rs::command_confirmations_and_file_pickers_remain_modal
+rust/crates/okp-linux-gtk/src/tests.rs::more_and_context_menu_share_one_registry_renderer_and_dispatcher
+rust/crates/okp-linux-gtk/src/tests.rs::shared_command_renderer_uses_the_curated_two_level_core_model
+rust/crates/okp-linux-gtk/src/tests.rs::command_menu_search_is_a_single_shared_compact_entry_with_icon
+rust/crates/okp-linux-gtk/src/tests.rs::compact_mode_keeps_the_render_surface_and_restores_standard_chrome
+rust/crates/okp-linux-gtk/src/tests.rs::player_context_menu_preserves_control_and_popover_interactions
+rust/crates/okp-linux-gtk/src/tests.rs::player_window_move_drags_the_whole_non_interactive_surface
+rust/crates/okp-linux-gtk/src/tests.rs::player_shift_resize_owns_pointer_geometry_without_configure_feedback
+rust/crates/okp-linux-gtk/src/tests.rs::online_subtitle_reservation_is_visible_and_has_no_dispatch_path
+rust/crates/okp-linux-gtk/src/tests.rs::linux_packages_stamp_their_update_install_lane
+rust/crates/okp-linux-gtk/src/tests.rs::candidate_workflow_holds_one_close_on_exec_build_publish_section
+rust/crates/okp-linux-gtk/src/tests.rs::candidate_publish_retry_reuses_exact_assets_and_keeps_pointer_last
+rust/crates/okp-linux-gtk/src/tests.rs::idle_return_smoke_waits_for_natural_eof_before_welcome_capture
+rust/crates/okp-linux-gtk/src/tests.rs::native_video_background_is_transparent_only_while_media_is_active
+rust/crates/okp-linux-gtk/src/tests.rs::fullscreen_toggle_wiring_decides_from_intent_not_the_lagging_platform_state
+rust/crates/okp-linux-gtk/src/tests.rs::settings_and_about_open_path_does_not_block_on_metadata_probes
+rust/crates/okp-linux-gtk/src/tests.rs::settings_first_map_builds_only_the_requested_page
+#
+# Found by the sharpened classifier, not newly written. Each of these three
+# already existed on main and was hidden from the first version of the detector:
+#   * player_close_returns_to_gtk_before_mpv_teardown bound its text through a
+#     tuple pattern (`let (before_idle, idle_body) = ...`), which the binding
+#     tracker did not read;
+#   * the other two were cleared by a constant-to-constant assertion
+#     (`assert_eq!(SETTINGS_SWITCH_WIDTH, 39)`), which used to count as
+#     behaviour.
+#   * portability_media_smokes_use_isolated_sessions_and_wait_for_xfwm walked
+#     its texts straight out of a `for … in [include_str!(..), …]` array, which
+#     bound nothing the tracker could see;
+#   * playback_chrome_keeps_the_canonical_redlines was cleared by a `.contains`
+#     search on a constant stylesheet - searching a string is not running code.
+rust/crates/okp-linux-gtk/src/tests.rs::player_close_returns_to_gtk_before_mpv_teardown
+rust/crates/okp-linux-gtk/src/tests.rs::video_hardware_decode_uses_the_shared_settings_switch_geometry
+rust/crates/okp-linux-gtk/src/tests.rs::media_info_identity_is_app_owned_cairo_geometry
+rust/crates/okp-core/tests/isolated_xvfb_session.rs::portability_media_smokes_use_isolated_sessions_and_wait_for_xfwm
+rust/crates/okp-linux-gtk/src/css.rs::playback_chrome_keeps_the_canonical_redlines
+# Found when this branch was updated from main after #637 and #388 merged. All
+# three tests already existed on main, and each pins a property of a packaging
+# or build artifact that no Rust unit test in this workspace can drive, so
+# there is no cheap behavioural form to rewrite them into:
+#   * native_wayland_screenshots_use_libmpv_advanced_control would need a live
+#     Wayland display and a real libmpv render context to observe;
+#   * fedora_launch_closure_keeps_its_dlopen_requires_and_weak_dependency_exclusions
+#     asserts on the Fedora spec, the RPM workflow and the install gate script;
+#     its behavioural form is the installed-RPM launch job those files describe;
+#   * windows_installed_tree_assertion_keeps_a_size_floor_under_every_required_file
+#     asserts on a PowerShell script and the Windows packaging workflow, neither
+#     of which runs on Linux.
+rust/crates/okp-linux-gtk/src/tests.rs::native_wayland_screenshots_use_libmpv_advanced_control
+rust/crates/okp-linux-gtk/src/tests.rs::fedora_launch_closure_keeps_its_dlopen_requires_and_weak_dependency_exclusions
+rust/crates/okp-linux-gtk/src/tests.rs::windows_installed_tree_assertion_keeps_a_size_floor_under_every_required_file

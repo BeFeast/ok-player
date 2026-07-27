@@ -3,15 +3,66 @@ name: Rust
 on:
   push:
     branches: [ main ]
+  # `edited` is here because this job carries the unfinished-work gate and is on
+  # the required-checks list. Without it, a pull request could pass the required
+  # check and then have a WIP marker or an acceptance hold added to its title or
+  # body, leaving the enforced check green and stale.
   pull_request:
-  workflow_dispatch:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+  # No workflow_dispatch. A manual run produces a check run named
+  # "Rust workspace (Linux)" - the name branch protection requires - on a head
+  # that has an open pull request, but with no pull request context, so both
+  # declaration steps would skip and the required check would go green without
+  # the gate ever evaluating. Re-running a failed run replays its original
+  # event, so nothing is lost: the declaration is re-read live from the API.
+
+permissions:
+  contents: read
+  pull-requests: read
 
 jobs:
   rust:
     name: Rust workspace (Linux)
     runs-on: ubuntu-latest
     steps:
+      # Full history: the source-text-only test check compares the allowlist
+      # against its state on the base commit to prove the allowlist only shrank.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The unfinished-work gate runs here, first, because this job is on the
+      # branch protection required-checks list: a gate that is not required is a
+      # suggestion. The Merge gate workflow runs the same two scripts for fast,
+      # edit-aware feedback. Both must stay cheap and stay ahead of the apt step.
+      - name: Read pull request declaration
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: ./scripts/read-pr-declaration.sh "$PR_NUMBER" "$RUNNER_TEMP"
+
+      - name: No unfinished work declared
+        if: github.event_name == 'pull_request'
+        run: >-
+          python3 scripts/check-unfinished-work.py --root .
+          --title-file "$RUNNER_TEMP/pr-title.txt"
+          --body-file "$RUNNER_TEMP/pr-body.txt"
+
+      - name: No unfinished-code markers in the tree
+        if: github.event_name != 'pull_request'
+        run: python3 scripts/check-unfinished-work.py --root .
+
+      # --require-base-ref on pull requests: the allowlist growth guard is the
+      # only rule that catches a new offender added together with its allowlist
+      # entry, so an empty BASE_REF must fail the job rather than quietly skip
+      # the comparison.
+      - name: Tests assert behaviour, not source text
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: >-
+          python3 scripts/check-source-grep-tests.py --root .
+          ${{ github.event_name == 'pull_request' && '--require-base-ref' || '' }}
 
       - name: Night GUI QA driver policy tests
         run: ./scripts/tests/ok-player-night-gui-qa.Tests.sh

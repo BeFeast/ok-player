@@ -94,7 +94,7 @@
         <Setter Property="Foreground" Value="{ThemeResource OkTextTertiaryBrush}" />
     </Style>
 
-    <!-- Timecode 12 / Medium (tabular fidelity TODO) -->
+    <!-- Timecode 12 / Medium (tabular fidelity TODO(#638)) -->
     <Style x:Key="OkTimecodeTextStyle" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{StaticResource OkTextFontFamily}" />
         <Setter Property="FontSize" Value="12" />
