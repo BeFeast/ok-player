@@ -125,6 +125,78 @@ fn portal_request_path(unique_name: &str, token: &str) -> String {
     format!("/org/freedesktop/portal/desktop/request/{sender}/{token}")
 }
 
+/// The complete `OpenDirectory` exchange with the desktop portal on `connection`.
+///
+/// Subscribes to the request's `Response` signal before the method call so an immediate answer
+/// cannot be missed, then treats anything but response code `0` on the derived handle as an error.
+/// Takes the connection instead of building one so tests can drive the exchange against a mock
+/// portal on a private bus; the caller owns the session connect and the deadline.
+async fn portal_open_directory(connection: &zbus::Connection, file: &File) -> Result<(), String> {
+    let unique_name = connection
+        .unique_name()
+        .ok_or_else(|| "the session bus assigned no unique name".to_owned())?
+        .to_string();
+    let token = format!(
+        "okplayer_{}_{}",
+        std::process::id(),
+        PORTAL_REQUEST_SERIAL.fetch_add(1, Ordering::Relaxed)
+    );
+
+    let request_path = portal_request_path(&unique_name, &token);
+    let request = zbus::Proxy::new(
+        connection,
+        "org.freedesktop.portal.Desktop",
+        request_path.clone(),
+        "org.freedesktop.portal.Request",
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    let mut responses = request
+        .receive_signal("Response")
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let open_uri = zbus::Proxy::new(
+        connection,
+        "org.freedesktop.portal.Desktop",
+        "/org/freedesktop/portal/desktop",
+        "org.freedesktop.portal.OpenURI",
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    let mut options = HashMap::new();
+    options.insert("handle_token", zbus::zvariant::Value::from(token.as_str()));
+    let handle: zbus::zvariant::OwnedObjectPath = open_uri
+        .call(
+            "OpenDirectory",
+            &("", zbus::zvariant::Fd::from(file.as_fd()), options),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    if handle.as_str() != request_path {
+        // A portal that ignored `handle_token` will answer somewhere we are not
+        // listening. Give up now instead of stalling until the timeout.
+        return Err(format!(
+            "the portal answers on {handle} instead of the requested handle"
+        ));
+    }
+
+    let response = responses
+        .next()
+        .await
+        .ok_or_else(|| "the portal closed the reveal request".to_owned())?;
+
+    let (code, _details): (u32, HashMap<String, zbus::zvariant::OwnedValue>) = response
+        .body()
+        .deserialize()
+        .map_err(|error| error.to_string())?;
+    if code == 0 {
+        Ok(())
+    } else {
+        Err(format!("the portal refused the reveal request: {code}"))
+    }
+}
+
 impl FileRevealLauncher for DesktopFileRevealLauncher {
     fn reveal_exact(&self, path: &Path) -> Result<(), String> {
         let uri = file_uri(path);
@@ -151,75 +223,13 @@ impl FileRevealLauncher for DesktopFileRevealLauncher {
         // `xdg-desktop-portal` usually is. `OpenDirectory` takes the file itself and opens the
         // directory that contains it, highlighting the file where the backend supports it.
         let file = open_for_portal(path).map_err(|error| error.to_string())?;
-        zbus::block_on(with_deadline(PORTAL_TIMEOUT, async move {
+        zbus::block_on(with_deadline(PORTAL_TIMEOUT, async {
             let connection = zbus::connection::Builder::session()
                 .map_err(|error| error.to_string())?
                 .build()
                 .await
                 .map_err(|error| error.to_string())?;
-            let unique_name = connection
-                .unique_name()
-                .ok_or_else(|| "the session bus assigned no unique name".to_owned())?
-                .to_string();
-            let token = format!(
-                "okplayer_{}_{}",
-                std::process::id(),
-                PORTAL_REQUEST_SERIAL.fetch_add(1, Ordering::Relaxed)
-            );
-
-            let request_path = portal_request_path(&unique_name, &token);
-            let request = zbus::Proxy::new(
-                &connection,
-                "org.freedesktop.portal.Desktop",
-                request_path.clone(),
-                "org.freedesktop.portal.Request",
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-            let mut responses = request
-                .receive_signal("Response")
-                .await
-                .map_err(|error| error.to_string())?;
-
-            let open_uri = zbus::Proxy::new(
-                &connection,
-                "org.freedesktop.portal.Desktop",
-                "/org/freedesktop/portal/desktop",
-                "org.freedesktop.portal.OpenURI",
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-            let mut options = HashMap::new();
-            options.insert("handle_token", zbus::zvariant::Value::from(token.as_str()));
-            let handle: zbus::zvariant::OwnedObjectPath = open_uri
-                .call(
-                    "OpenDirectory",
-                    &("", zbus::zvariant::Fd::from(file.as_fd()), options),
-                )
-                .await
-                .map_err(|error| error.to_string())?;
-            if handle.as_str() != request_path {
-                // A portal that ignored `handle_token` will answer somewhere we are not
-                // listening. Give up now instead of stalling until the timeout.
-                return Err(format!(
-                    "the portal answers on {handle} instead of the requested handle"
-                ));
-            }
-
-            let response = responses
-                .next()
-                .await
-                .ok_or_else(|| "the portal closed the reveal request".to_owned())?;
-
-            let (code, _details): (u32, HashMap<String, zbus::zvariant::OwnedValue>) = response
-                .body()
-                .deserialize()
-                .map_err(|error| error.to_string())?;
-            if code == 0 {
-                Ok(())
-            } else {
-                Err(format!("the portal refused the reveal request: {code}"))
-            }
+            portal_open_directory(&connection, &file).await
         }))
     }
 
@@ -333,8 +343,10 @@ mod tests {
     use std::cell::RefCell;
     use std::ffi::OsString;
     use std::fs;
+    use std::io::BufRead;
+    use std::os::fd::AsRawFd;
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     #[derive(Debug)]
     struct FakeLauncher {
@@ -537,6 +549,204 @@ mod tests {
         assert_eq!(
             portal_request_path(":1.271", "okplayer_4213_0"),
             "/org/freedesktop/portal/desktop/request/1_271/okplayer_4213_0"
+        );
+    }
+
+    /// A private session bus for the portal exchange tests, reaped when the test ends.
+    struct PrivateBus {
+        daemon: std::process::Child,
+        address: String,
+    }
+
+    impl PrivateBus {
+        fn start() -> Self {
+            let mut daemon = std::process::Command::new("dbus-daemon")
+                .args(["--session", "--print-address=1", "--nofork"])
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .expect("the portal exchange tests need dbus-daemon");
+            let stdout = daemon.stdout.take().expect("dbus-daemon address pipe");
+            let mut address = String::new();
+            std::io::BufReader::new(stdout)
+                .read_line(&mut address)
+                .expect("dbus-daemon must print its address");
+            Self {
+                daemon,
+                address: address.trim().to_owned(),
+            }
+        }
+
+        fn connect(&self) -> zbus::Connection {
+            zbus::block_on(async {
+                zbus::connection::Builder::address(self.address.as_str())?
+                    .build()
+                    .await
+            })
+            .expect("private bus connection")
+        }
+    }
+
+    impl Drop for PrivateBus {
+        fn drop(&mut self) {
+            let _ = self.daemon.kill();
+            let _ = self.daemon.wait();
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum MockPortalAnswer {
+        /// Answer on the request path derived from the caller and its `handle_token`.
+        Respond(u32),
+        /// Return a handle the caller never subscribed to and stay silent, like a
+        /// portal that ignores `handle_token`.
+        AnswerElsewhere,
+    }
+
+    #[derive(Debug)]
+    struct SeenOpenDirectory {
+        parent_window: String,
+        fd_is_open: bool,
+        handle_token: Option<String>,
+    }
+
+    struct MockPortal {
+        answer: MockPortalAnswer,
+        calls: Arc<Mutex<Vec<SeenOpenDirectory>>>,
+    }
+
+    #[zbus::interface(name = "org.freedesktop.portal.OpenURI")]
+    impl MockPortal {
+        async fn open_directory(
+            &self,
+            #[zbus(header)] header: zbus::message::Header<'_>,
+            #[zbus(connection)] connection: &zbus::Connection,
+            parent_window: String,
+            fd: zbus::zvariant::Fd<'_>,
+            options: HashMap<String, zbus::zvariant::OwnedValue>,
+        ) -> zbus::fdo::Result<zbus::zvariant::OwnedObjectPath> {
+            let sender = header
+                .sender()
+                .expect("portal method calls carry a sender")
+                .to_string();
+            let handle_token = options
+                .get("handle_token")
+                .and_then(|value| value.downcast_ref::<zbus::zvariant::Str<'_>>().ok())
+                .map(|token| token.to_string());
+            let fd_is_open = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFD) } != -1;
+            self.calls
+                .lock()
+                .expect("mock portal call log")
+                .push(SeenOpenDirectory {
+                    parent_window,
+                    fd_is_open,
+                    handle_token: handle_token.clone(),
+                });
+
+            let request_path = match self.answer {
+                MockPortalAnswer::AnswerElsewhere => {
+                    "/org/freedesktop/portal/desktop/request/elsewhere/nothing".to_owned()
+                }
+                MockPortalAnswer::Respond(code) => {
+                    let path = portal_request_path(
+                        &sender,
+                        handle_token.as_deref().unwrap_or("missing-token"),
+                    );
+                    connection
+                        .emit_signal(
+                            Some(sender.as_str()),
+                            path.as_str(),
+                            "org.freedesktop.portal.Request",
+                            "Response",
+                            &(code, HashMap::<String, zbus::zvariant::Value<'_>>::new()),
+                        )
+                        .await
+                        .expect("the mock portal answers on the derived request path");
+                    path
+                }
+            };
+
+            Ok(zbus::zvariant::OwnedObjectPath::try_from(request_path)
+                .expect("request object path"))
+        }
+    }
+
+    fn serve_mock_portal(
+        bus: &PrivateBus,
+        answer: MockPortalAnswer,
+    ) -> (zbus::Connection, Arc<Mutex<Vec<SeenOpenDirectory>>>) {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let portal = MockPortal {
+            answer,
+            calls: Arc::clone(&calls),
+        };
+        let connection = zbus::block_on(async {
+            zbus::connection::Builder::address(bus.address.as_str())?
+                .name("org.freedesktop.portal.Desktop")?
+                .serve_at("/org/freedesktop/portal/desktop", portal)?
+                .build()
+                .await
+        })
+        .expect("mock portal connection");
+        (connection, calls)
+    }
+
+    /// Runs the production exchange against the mock portal, bounded so a broken
+    /// exchange fails the test instead of hanging it.
+    fn exchange_with_mock(bus: &PrivateBus, path: &Path) -> Result<(), String> {
+        let file = open_for_portal(path).expect("portal test file");
+        let client = bus.connect();
+        zbus::block_on(with_deadline(Duration::from_secs(10), async {
+            portal_open_directory(&client, &file).await
+        }))
+    }
+
+    #[test]
+    fn a_compliant_portal_completes_the_open_directory_exchange() {
+        let bus = PrivateBus::start();
+        let (_portal, calls) = serve_mock_portal(&bus, MockPortalAnswer::Respond(0));
+        let (_directory, path) = existing_file("frame.png");
+
+        assert_eq!(exchange_with_mock(&bus, &path), Ok(()));
+
+        let calls = calls.lock().expect("mock portal call log");
+        assert_eq!(calls.len(), 1, "OpenDirectory must be called exactly once");
+        assert_eq!(calls[0].parent_window, "");
+        assert!(
+            calls[0].fd_is_open,
+            "the portal must receive an open fd for the file"
+        );
+        assert!(
+            calls[0]
+                .handle_token
+                .as_deref()
+                .is_some_and(|token| token.starts_with("okplayer_")),
+            "unexpected handle token: {:?}",
+            calls[0].handle_token
+        );
+    }
+
+    #[test]
+    fn a_portal_that_refuses_the_request_reports_an_error() {
+        let bus = PrivateBus::start();
+        let (_portal, _calls) = serve_mock_portal(&bus, MockPortalAnswer::Respond(2));
+        let (_directory, path) = existing_file("frame.png");
+
+        let error =
+            exchange_with_mock(&bus, &path).expect_err("a portal refusal must not read as success");
+        assert!(error.contains("refused"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn a_portal_answering_on_a_foreign_handle_fails_without_a_response() {
+        let bus = PrivateBus::start();
+        let (_portal, _calls) = serve_mock_portal(&bus, MockPortalAnswer::AnswerElsewhere);
+        let (_directory, path) = existing_file("frame.png");
+
+        let error = exchange_with_mock(&bus, &path)
+            .expect_err("an ignored handle_token must not read as success");
+        assert!(
+            error.contains("instead of the requested handle"),
+            "unexpected error: {error}"
         );
     }
 
