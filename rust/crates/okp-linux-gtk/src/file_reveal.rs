@@ -1,5 +1,6 @@
 use std::cell::Cell;
 use std::collections::HashMap;
+use std::future::Future;
 use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -10,13 +11,14 @@ use std::time::Duration;
 use futures_lite::StreamExt;
 use gtk::prelude::FileExt;
 
-/// How long the desktop portal may take to report the outcome of a reveal.
+/// How long the whole desktop-portal exchange may take.
 ///
-/// `OpenDirectory` answers asynchronously through the request's `Response` signal. Waiting is what
-/// makes the portal route honest: without it a rejection would be reported as success and the
-/// containing-folder fallback would never run. The wait is bounded so a portal that never answers
-/// still degrades to that fallback rather than leaving the click dead.
-const PORTAL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+/// `OpenDirectory` answers asynchronously through the request's `Response` signal. Waiting for that
+/// is what makes the portal route honest: without it a rejection would be reported as success and
+/// the containing-folder fallback would never run. Connecting, the method call, and the response
+/// can each stall on a degraded portal, so the deadline covers all of them — otherwise the click
+/// would strand with no feedback and no fallback.
+const PORTAL_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Serial for the portal `handle_token`, which must be unique per request.
 static PORTAL_REQUEST_SERIAL: AtomicU64 = AtomicU64::new(0);
@@ -87,6 +89,18 @@ pub(crate) fn file_uri(path: &Path) -> String {
     gtk::gio::File::for_path(path).uri().to_string()
 }
 
+/// Runs `work`, giving up with an error once `deadline` elapses.
+async fn with_deadline<T>(
+    deadline: Duration,
+    work: impl Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    futures_lite::future::or(work, async move {
+        async_io::Timer::after(deadline).await;
+        Err("the portal did not answer the reveal request".to_owned())
+    })
+    .await
+}
+
 /// Object path the portal will answer on, derived from our unique name and `token`.
 ///
 /// Deriving it lets the response be subscribed to before the method call, so an immediate answer
@@ -122,7 +136,7 @@ impl FileRevealLauncher for DesktopFileRevealLauncher {
         // `xdg-desktop-portal` usually is. `OpenDirectory` takes the file itself and opens the
         // directory that contains it, highlighting the file where the backend supports it.
         let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
-        zbus::block_on(async move {
+        zbus::block_on(with_deadline(PORTAL_TIMEOUT, async move {
             let connection = zbus::connection::Builder::session()
                 .map_err(|error| error.to_string())?
                 .build()
@@ -177,19 +191,10 @@ impl FileRevealLauncher for DesktopFileRevealLauncher {
                 ));
             }
 
-            let response = futures_lite::future::or(
-                async {
-                    responses
-                        .next()
-                        .await
-                        .ok_or_else(|| "the portal closed the reveal request".to_owned())
-                },
-                async {
-                    async_io::Timer::after(PORTAL_RESPONSE_TIMEOUT).await;
-                    Err("the portal did not answer the reveal request".to_owned())
-                },
-            )
-            .await?;
+            let response = responses
+                .next()
+                .await
+                .ok_or_else(|| "the portal closed the reveal request".to_owned())?;
 
             let (code, _details): (u32, HashMap<String, zbus::zvariant::OwnedValue>) = response
                 .body()
@@ -200,7 +205,7 @@ impl FileRevealLauncher for DesktopFileRevealLauncher {
             } else {
                 Err(format!("the portal refused the reveal request: {code}"))
             }
-        })
+        }))
     }
 
     fn open_folder(&self, path: &Path) -> Result<(), String> {
@@ -470,6 +475,23 @@ mod tests {
             launcher.folder_paths.borrow().as_slice(),
             [path.parent().expect("test parent").to_owned()]
         );
+    }
+
+    #[test]
+    fn a_silent_portal_cannot_hang_the_reveal() {
+        let (finished, outcome) = mpsc::channel();
+        thread::spawn(move || {
+            let result = zbus::block_on(with_deadline(
+                Duration::from_millis(50),
+                std::future::pending::<Result<(), String>>(),
+            ));
+            let _ = finished.send(result);
+        });
+
+        let result = outcome
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a portal that never answers must not hold the reveal open");
+        assert!(result.is_err(), "unexpected success: {result:?}");
     }
 
     #[test]

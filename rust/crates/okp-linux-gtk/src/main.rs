@@ -1659,11 +1659,7 @@ impl StatusToast {
     fn show_notice(&self, message: &str) {
         self.thumbnail.set_visible(false);
         self.thumbnail.set_paintable(None::<&gdk::Paintable>);
-        self.reveal_path.borrow_mut().take();
-        self.path_button.set_visible(false);
-        self.path_button.set_sensitive(true);
-        self.label.set_text(message);
-        self.reveal_for(false, NOTICE_TOAST_DWELL);
+        self.show_message_for(message, NOTICE_TOAST_DWELL);
     }
 
     fn show_screenshot(&self, message: &str, path: &Path) {
@@ -1701,12 +1697,20 @@ impl StatusToast {
     }
 
     fn show_message(&self, message: &str) {
+        self.show_message_for(message, TOAST_DWELL);
+    }
+
+    /// The single place plain toast text replaces whatever the toast was showing.
+    ///
+    /// Every replacement orphans the reveals the previous toast owned, so the invalidation lives
+    /// here rather than at each caller.
+    fn show_message_for(&self, message: &str, dwell: Duration) {
         self.reveal_jobs.invalidate();
         self.reveal_path.borrow_mut().take();
         self.path_button.set_visible(false);
         self.path_button.set_sensitive(true);
         self.label.set_text(&bounded_toast_message(message));
-        self.reveal(false);
+        self.reveal_for(false, dwell);
     }
 
     fn reveal(&self, interactive: bool) {
