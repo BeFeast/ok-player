@@ -14,9 +14,13 @@ name: Windows Installer
 # change only an operator can make. The regression tests for the assertion this
 # lane runs live in scripts/tests/windows-installed-tree.Tests.ps1.
 #
-# Path-gated on purpose: a full self-contained WinUI publish plus a Velopack pack
-# is expensive, so it runs for changes that can plausibly break the installer
-# rather than for every pull request.
+# Path-gated on purpose, on pull requests AND on pushes to main: a full
+# self-contained WinUI publish plus a Velopack pack is expensive, and the lane
+# has a known intermittent shutdown failure (#642). An advisory lane that goes
+# red on unrelated pushes trains everyone to ignore it, so it only runs for
+# changes that can plausibly break the installer. The two path lists below are
+# duplicated rather than shared because GitHub Actions does not support YAML
+# anchors; keep them identical.
 
 on:
   pull_request:
@@ -34,6 +38,16 @@ on:
       - 'scripts/assert-windows-installed-tree.ps1'
   push:
     branches: [ main ]
+    paths:
+      - '.github/workflows/windows-package.yml'
+      - 'installer/**'
+      - 'src/OkPlayer.App/**'
+      - 'src/OkPlayer.Core/**'
+      - 'OkPlayer.sln'
+      - 'Directory.Build.props'
+      - 'Directory.Packages.props'
+      - 'scripts/fetch-natives.ps1'
+      - 'scripts/assert-windows-installed-tree.ps1'
   workflow_dispatch:
 
 jobs:
@@ -134,6 +148,24 @@ jobs:
             throw 'The installed application never created a top-level window'
           }
           Write-Host "Main window handle: $handle - title: $($proc.MainWindowTitle)"
+          # A window handle appears before WinUI has finished starting up, so
+          # closing on the handle alone tests shutdown-during-startup rather
+          # than shutdown of a running app - and this lane has an intermittent
+          # 0xC000027B on exit. WaitForInputIdle is a readiness condition, not a
+          # settle delay: it returns when the process has drained its startup
+          # work and is waiting for input. Deliberately not a sleep, which would
+          # only stop CI from noticing. If it times out, that is a real failure -
+          # an app that never becomes input-ready in 60s is broken. Note what this
+          # costs: closing during startup is no longer exercised here, so if the
+          # 0xC000027B stops appearing that failure mode moves entirely to #642
+          # rather than being fixed.
+          if (-not $proc.WaitForInputIdle(60000)) {
+            if (Test-Path $stdout) { Get-Content $stdout | Write-Host }
+            if (Test-Path $stderr) { Get-Content $stderr | Write-Host }
+            $proc.Kill()
+            throw 'The installed application showed a window but never became ready for input'
+          }
+          Write-Host 'The installed application is idle and ready for input'
           # An error dialog, a crash reporter, or a fallback shell also produces
           # a top-level window. Require the player's own window identity.
           if ($proc.MainWindowTitle -ne $expectedTitle) {
@@ -151,7 +183,10 @@ jobs:
           if ($proc.ExitCode -ne 0) {
             # This is the one failure path that used to throw without showing
             # anything the app had said, which made an intermittent shutdown
-            # crash undiagnosable from the run log alone.
+            # crash undiagnosable from the run log alone. A -1073741189
+            # (0xC000027B, STATUS_STOWED_EXCEPTION) here is the known open
+            # shutdown defect tracked in #642; this step deliberately still
+            # fails on it rather than tolerating it.
             if (Test-Path $stdout) { Get-Content $stdout | Write-Host }
             if (Test-Path $stderr) { Get-Content $stderr | Write-Host }
             throw "The installed application exited with $($proc.ExitCode)"
