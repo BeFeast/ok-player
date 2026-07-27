@@ -325,6 +325,70 @@ fn an_unfinished_marker_in_a_shipped_workflow_blocks_the_merge() {
 }
 
 #[test]
+fn a_nested_heading_does_not_end_an_acceptance_section() {
+    let fixture = Declaration::new("okp-gate-acceptance-nested");
+    // Grouping acceptance checks under sub-headings is the natural way to write
+    // a per-platform hold. A section ends at a heading of its own level or
+    // above, not at the first heading of any level.
+    let body = "## Operator acceptance\n\n\
+        ### Linux\n\n\
+        - [x] Verified on GNOME\n\n\
+        ### Windows\n\n\
+        - [ ] Packaged build verified on Windows 11\n\n\
+        ## Notes\n\n\
+        - [ ] unrelated follow-up, outside the section\n";
+
+    let output = fixture.check("Reveal saved Linux screenshots", body);
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    let stderr = stderr_of(&output);
+    assert!(stderr.contains("Packaged build verified on Windows 11"));
+    assert!(
+        !stderr.contains("unrelated follow-up"),
+        "the section must still end at a heading of its own level:\n{stderr}"
+    );
+}
+
+#[test]
+fn a_marker_between_two_lifetimes_is_not_hidden_by_the_literal_mask() {
+    let fixture = Declaration::new("okp-gate-lifetime-mask");
+    // The character-literal mask used to run from the quote in `'a` to the
+    // quote in `'b`, blanking whatever sat between them - including a marker.
+    let source = fixture.root.path().join("crate/src/lib.rs");
+    fs::create_dir_all(source.parent().expect("parent")).expect("fixture tree");
+    fs::write(
+        &source,
+        "pub fn choose<'a /* TODO */, 'b>(first: &'a str, second: &'b str) -> &'a str {\n    first\n}\n",
+    )
+    .expect("write");
+
+    let output = fixture.check("Add the chooser", FINISHED_BODY);
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    assert!(stderr_of(&output).contains("Unfinished-code marker"));
+}
+
+#[test]
+fn a_character_literal_holding_a_quote_does_not_derail_the_string_mask() {
+    let fixture = Declaration::new("okp-gate-char-literal");
+    // Narrowing the character-literal rule must not cost the masking it was
+    // there for. A `'"'` on the same line as a string literal steals that
+    // string's opening quote when characters are not masked, which leaves the
+    // literal's own text exposed and reports a marker that is only data.
+    let source = fixture.root.path().join("crate/src/lib.rs");
+    fs::create_dir_all(source.parent().expect("parent")).expect("fixture tree");
+    fs::write(
+        &source,
+        "pub fn labels() {\n    let separator = '\"'; let label = \"TODO\";\n    let _ = (separator, label);\n}\n",
+    )
+    .expect("write");
+
+    let output = fixture.check("Name the marker", FINISHED_BODY);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+}
+
+#[test]
 fn a_sentence_that_merely_mentions_operator_acceptance_opens_no_block() {
     let fixture = Declaration::new("okp-gate-acceptance-sentence");
     let body = "## Summary\n\nDocumentation only.\n\n\
@@ -671,6 +735,20 @@ fn portability_smokes_wait_for_the_window_manager() {
     ] {
         assert!(script.contains("run-isolated-dbus-session.sh"));
     }
+}
+"#;
+
+/// A wall of source greps with one unrelated fallible setup call beside them.
+/// `current_dir().unwrap()` panics on failure, so it reads as an assertion, but
+/// it says nothing about the subject under test.
+const UNRELATED_UNWRAP_TEST: &str = r#"
+#[test]
+fn renderer_environment_is_selected_before_gtk_initialization() {
+    let working_directory = std::env::current_dir().unwrap();
+    let source = include_str!("main.rs");
+
+    assert!(source.contains("configure_linux_renderer_environment();"));
+    assert!(source.contains("VelopackApp::build()"));
 }
 "#;
 
@@ -1039,6 +1117,26 @@ fn a_grep_bound_from_an_array_literal_keeps_its_ledger_entry() {
 }
 
 #[test]
+fn an_unrelated_fallible_setup_call_does_not_launder_a_source_grep() {
+    let workspace = Workspace::new("okp-gate-unrelated-unwrap");
+    workspace.write_tests(UNRELATED_UNWRAP_TEST);
+    workspace.write_allowlist("# empty\n");
+
+    let output = workspace.check();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "setup that never touches the fixture is not evidence:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("renderer_environment_is_selected_before_gtk_initialization")
+    );
+}
+
+#[test]
 fn a_behavioural_test_is_never_flagged() {
     let workspace = Workspace::new("okp-gate-behavioural");
     workspace.write_tests(BEHAVIOURAL_TEST);
@@ -1193,6 +1291,39 @@ fn swapping_a_fixed_test_for_a_new_offender_is_rejected_even_though_the_count_ho
 }
 
 #[test]
+fn a_new_offender_cannot_ride_in_on_the_name_of_an_entry_that_did_not_move() {
+    let workspace = GitWorkspace::new("okp-gate-allowlist-impersonate");
+    // The move exception used to match on the bare test name, so a brand new
+    // offender in another file could take the name of an entry that is still in
+    // the list under its original key, and be waved through as a file move.
+    workspace.write_tests(SOURCE_GREP_TEST);
+    workspace.write_moved_tests(SECOND_SOURCE_GREP_TEST);
+    workspace.write_allowlist(
+        "rust/crates/demo/src/tests.rs::renderer_environment_is_selected_before_gtk_initialization\n\
+         rust/crates/demo/src/startup_tests.rs::file_association_launches_present_before_media_delivery\n",
+    );
+    let base = workspace.commit("base");
+
+    // The first test never moved and keeps its entry. A new offender in a third
+    // file takes its name; one unrelated entry is dropped to hold the count.
+    workspace.write_third_file(&SOURCE_GREP_TEST.replace(
+        "let source = include_str!(\"main.rs\");",
+        "let source = include_str!(\"window.rs\");",
+    ));
+    workspace.write_allowlist(
+        "rust/crates/demo/src/tests.rs::renderer_environment_is_selected_before_gtk_initialization\n\
+         rust/crates/demo/src/window_tests.rs::renderer_environment_is_selected_before_gtk_initialization\n",
+    );
+
+    let output = workspace.check(&base);
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(stdout.contains("may only shrink"), "{stdout}");
+    assert!(stdout.contains("window_tests.rs"), "{stdout}");
+}
+
+#[test]
 fn moving_a_grandfathered_test_to_another_file_is_accepted() {
     let workspace = GitWorkspace::new("okp-gate-allowlist-move");
     workspace.write_tests(SOURCE_GREP_TEST);
@@ -1245,6 +1376,17 @@ impl GitWorkspace {
             contents,
         )
         .expect("moved fixture test file should be written");
+    }
+
+    fn write_third_file(&self, contents: &str) {
+        fs::write(
+            self.inner
+                .root
+                .path()
+                .join("rust/crates/demo/src/window_tests.rs"),
+            contents,
+        )
+        .expect("third fixture test file should be written");
     }
 
     fn write_allowlist(&self, contents: &str) {

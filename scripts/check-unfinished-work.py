@@ -74,8 +74,10 @@ HEADING = re.compile(
     r"|<[A-Za-z/][^>]*>)"
 )
 # A markdown heading is the only terminator strong enough to end an acceptance
-# *section*. A bold label, a rule or an HTML tag is a sub-label inside it.
-SECTION_BREAK = re.compile(r"^\s*#{1,6}\s")
+# *section*, and only one at the same level or above: `### Windows` nested under
+# `## Operator acceptance` groups the checks, it does not end them. A bold
+# label, a rule or an HTML tag is a sub-label inside the section.
+SECTION_BREAK = re.compile(r"^\s*(#{1,6})\s")
 LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+(.*)$")
 UNCHECKED_BOX = re.compile(r"^\[\s\]\s*(.*)$")
 CHECKED_BOX = re.compile(r"^\[[xX]\]\s*(.*)$")
@@ -84,7 +86,10 @@ HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 
 # Unfinished-code markers. A marker that references a tracking issue is fine.
 RUST_STUBS = re.compile(r"\b(?:todo|unimplemented)!\s*[\(\[\{]")
-STRING_LITERAL = re.compile(r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'")
+# A character literal holds exactly one character or one escape. Allowing more
+# let `fn choose<'a /* TODO */, 'b>` read as one literal from `'a` to `'b`,
+# blanking a real marker sitting between two Rust lifetimes.
+STRING_LITERAL = re.compile(r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\\n])'")
 BARE_MARKER = re.compile(r"\b(TODO|FIXME)\b(?!\s*\(\s*#\d+\s*\))")
 # Shipped source and shipped configuration. Workflow and manifest files are
 # here because a half-finished CI job is unfinished work like any other - the
@@ -181,21 +186,30 @@ def acceptance_sections(body: str) -> list[list[str]]:
 
     An unticked checkbox is unambiguous wherever it sits, so it is scanned over
     the whole section. A section opened by a markdown heading runs to the next
-    markdown heading; a section opened by a weaker label (a bold line, a bare
-    label ending in a colon) still ends at any terminator, so a bold label
+    heading at the same level or above - a nested `### Windows` groups checks
+    rather than ending them. A section opened by a weaker label (a bold line, a
+    bare label ending in a colon) still ends at any terminator, so a bold label
     cannot swallow an unrelated follow-up list below it.
     """
     lines = HTML_COMMENT.sub("", body).splitlines()
-    sections, current, strong = [], None, False
+    sections: list[list[str]] = []
+    current: list[str] | None = None
+    level = 0
     for line in lines:
         if ACCEPTANCE_HEADING.match(line):
             if current is not None:
                 sections.append(current)
-            current, strong = [], bool(SECTION_BREAK.match(line))
+            opener = SECTION_BREAK.match(line)
+            current = []
+            level = len(opener.group(1)) if opener else 0
             continue
         if current is None:
             continue
-        ends = SECTION_BREAK.match(line) if strong else HEADING.match(line)
+        if level:
+            heading = SECTION_BREAK.match(line)
+            ends = heading is not None and len(heading.group(1)) <= level
+        else:
+            ends = HEADING.match(line) is not None
         if ends:
             sections.append(current)
             current = None

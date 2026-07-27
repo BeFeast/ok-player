@@ -280,27 +280,33 @@ def source_bindings(
     return direct, derived, production - direct - derived
 
 
-def assertions(body: str, body_mask: str) -> list[tuple[str, str]]:
-    """(original, masked) text of every assertion in the body.
+def assertions(body: str, body_mask: str) -> list[tuple[str, str, bool]]:
+    """(original, masked, is_macro) text of every assertion in the body.
 
     An assertion is an assert-family macro - classified by its arguments - or a
     fallible call that panics on failure, classified by the whole statement it
     sits in, since that is what names the value being unwrapped.
+
+    The two are distinguished because a fallible call is a much weaker signal: a
+    macro is written to check something, while `.unwrap()` also appears in
+    routine setup that asserts nothing about the subject under test.
     """
-    args = []
+    args: list[tuple[str, str, bool]] = []
     for m in ASSERT_MACRO.finditer(body_mask):
         open_at = body_mask.index("(", m.start())
         end = match_delimiter(body_mask, open_at, "(", ")")
         if end == -1:
             continue
-        args.append((body[open_at + 1 : end - 1], body_mask[open_at + 1 : end - 1]))
+        args.append(
+            (body[open_at + 1 : end - 1], body_mask[open_at + 1 : end - 1], True)
+        )
     for start, end in statement_spans(body, body_mask):
         statement_mask = body_mask[start:end]
         if not FALLIBLE_CALL.search(statement_mask):
             continue
         if ASSERT_MACRO.search(statement_mask):
             continue  # already counted through its arguments
-        args.append((body[start:end], statement_mask))
+        args.append((body[start:end], statement_mask, False))
     return args
 
 
@@ -388,11 +394,20 @@ def classify(test: TestFn, seeds: set[str]) -> tuple[bool, int, int]:
         seeds & set(IDENT.findall(test.body_mask))
     )
     grep_count = evidence_count = 0
-    for _, arg_mask in assertions(test.body, test.body_mask):
+    for _, arg_mask, is_macro in assertions(test.body, test.body_mask):
         if inspects_source_text(arg_mask, direct, derived):
             grep_count += 1
-        elif is_behavioural_evidence(arg_mask, direct, derived, production):
-            evidence_count += 1
+            continue
+        if not is_behavioural_evidence(arg_mask, direct, derived, production):
+            continue
+        if not is_macro and not (
+            set(IDENT.findall(arg_mask)) & (direct | derived | {"include_str"})
+        ):
+            # A bare `.unwrap()` that never touches the fixture is setup, not an
+            # assertion: `std::env::current_dir().unwrap()` beside a wall of
+            # source greps says nothing about the subject under test.
+            continue
+        evidence_count += 1
     return (uses_source and evidence_count == 0, grep_count, evidence_count)
 
 
@@ -634,13 +649,21 @@ def main() -> int:
         )
     else:
         base_entries = read_allowlist(base_text or "")
-        base_names = {entry.rpartition("::")[2] for entry in base_entries}
+        dropped = set(base_entries) - set(allowed)
         for entry in sorted(set(allowed) - set(base_entries)):
             name = entry.rpartition("::")[2]
             # Re-keying an entry that already existed - the test moved to
-            # another file - is not growth, as long as the total did not
-            # rise. Anything else is a new offender being grandfathered.
-            if name in base_names and len(allowed) <= len(base_entries):
+            # another file - is not growth, as long as the total did not rise.
+            # Matching on the bare test name was not enough: a new offender
+            # could take the name of an entry that is still in the list under
+            # its original key and ride in on it. A move means the old key was
+            # deleted here *and* nothing at that key greps source text any more.
+            vacated = [e for e in dropped if e.rpartition("::")[2] == name]
+            if (
+                vacated
+                and all(old not in live_keys for old in vacated)
+                and len(allowed) <= len(base_entries)
+            ):
                 continue
             failures += 1
             annotate(
