@@ -88,28 +88,53 @@ pub(crate) fn apply_endfile_eof_diagnostic(
     true
 }
 
-pub(crate) fn apply_runtime_decoder_failure(
+/// Diagnose a decoder message libmpv logged while the source was open.
+///
+/// Deliberately non-fatal. libmpv logs a decoder problem without saying which
+/// stream it belongs to, so the message can describe a stream the user is not
+/// watching while the selected streams decode fine. A player that stops
+/// playable media is a worse defect than a missing diagnostic, so this path
+/// only produces a notice to surface: it neither fails the source nor stops
+/// playback. `apply_endfile_eof_diagnostic` remains the fatal path, because it
+/// runs after libmpv has confirmed the file did not play.
+///
+/// Returns `None` when the message is benign, when no source is current, or
+/// when the message named a source that has already been superseded - the same
+/// staleness rule `EndFile` diagnostics use, so a late warning cannot be
+/// reported against media the user opened afterwards.
+pub(crate) fn runtime_decoder_notice(
     state: &Rc<RefCell<PlayerState>>,
-    failed_path: Option<&str>,
+    warned_path: Option<&str>,
     diagnostic_messages: &[String],
-) -> bool {
-    let Some(diagnostic) = okp_core::playback_failure::diagnose_mpv_runtime(
+) -> Option<okp_core::playback_failure::PlaybackFailureDiagnostic> {
+    let diagnostic = okp_core::playback_failure::diagnose_mpv_runtime(
         diagnostic_messages,
         configured_codec_environment(),
-    ) else {
-        return false;
-    };
+    )?;
+    let current_source = current_load_failure_source(state)?;
+    if warned_path.is_some_and(|warned| !current_source.matches_engine_path(warned)) {
+        return None;
+    }
+    eprintln!("libmpv logged a decoder problem; playback continues");
+    Some(diagnostic)
+}
 
-    eprintln!("libmpv reported an unavailable decoder; stopping partial playback");
-    if !apply_endfile_diagnostic(state, failed_path, diagnostic) {
-        return false;
-    }
-    if let Some(mpv) = state.borrow().mpv.as_ref()
-        && let Err(error) = mpv.stop()
-    {
-        eprintln!("Failed to stop partial playback after decoder failure: {error}");
-    }
-    true
+/// The source the transport surface would arm Retry for right now, or `None`
+/// when nothing is loaded.
+fn current_load_failure_source(
+    state: &Rc<RefCell<PlayerState>>,
+) -> Option<network_media::LoadFailureSource> {
+    let state = state.borrow();
+    state
+        .current_url
+        .as_ref()
+        .map(|url| network_media::LoadFailureSource::url(url.clone()))
+        .or_else(|| {
+            state
+                .current_file
+                .as_ref()
+                .map(|path| network_media::LoadFailureSource::local(path.clone()))
+        })
 }
 
 fn apply_endfile_diagnostic(
@@ -117,20 +142,7 @@ fn apply_endfile_diagnostic(
     ended_path: Option<&str>,
     diagnostic: okp_core::playback_failure::PlaybackFailureDiagnostic,
 ) -> bool {
-    let current_source = {
-        let state = state.borrow();
-        state
-            .current_url
-            .as_ref()
-            .map(|url| network_media::LoadFailureSource::url(url.clone()))
-            .or_else(|| {
-                state
-                    .current_file
-                    .as_ref()
-                    .map(|path| network_media::LoadFailureSource::local(path.clone()))
-            })
-    };
-    let Some(current_source) = current_source else {
+    let Some(current_source) = current_load_failure_source(state) else {
         eprintln!("ignoring stale EndFile diagnostic after the source was cleared");
         return false;
     };

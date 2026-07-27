@@ -319,13 +319,16 @@ pub enum TrackKind {
 /// Lifecycle events the engine fires, drained oldest-first via
 /// [`Mpv::take_lifecycle_events`](crate::Mpv::take_lifecycle_events). Load and
 /// reconfiguration events carry display dimensions read by the background pump,
-/// while failure events carry the path mpv reported for their source. The shell
-/// can therefore react without a blocking UI-thread property read and can drop
-/// a stale error whose source has already been superseded. Not `Copy` because
-/// `path` is a `String`.
+/// while failure and warning events carry the path mpv reported for their
+/// source. The shell can therefore react without a blocking UI-thread property
+/// read and can drop a stale event whose source has already been superseded.
+/// Not `Copy` because `path` is a `String`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MpvEvent {
-    DecoderFailed {
+    /// libmpv logged a decoder problem while the source was open. This is
+    /// diagnostic only: the engine has not said the source failed, and the
+    /// shell must not stop playback on it. `EndFile` is the failure event.
+    DecoderWarning {
         path: Option<String>,
         diagnostic_messages: Vec<String>,
     },

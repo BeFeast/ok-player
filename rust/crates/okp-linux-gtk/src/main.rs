@@ -1544,6 +1544,12 @@ impl ChromeVisibility {
     }
 }
 
+/// How long a toast stays up. A confirmation only has to be noticed; a notice
+/// and an interactive toast have to be read or acted on.
+const TOAST_DWELL: Duration = Duration::from_millis(1700);
+const NOTICE_TOAST_DWELL: Duration = Duration::from_millis(5000);
+const INTERACTIVE_TOAST_DWELL: Duration = Duration::from_millis(5000);
+
 struct StatusToast {
     revealer: gtk::Revealer,
     thumbnail: gtk::Image,
@@ -1643,6 +1649,19 @@ impl StatusToast {
         self.show_message(message);
     }
 
+    /// A diagnostic the user did not ask for and has to read, rather than a
+    /// confirmation of something they just did. It gets the dwell of an
+    /// interactive toast without becoming a click target.
+    fn show_notice(&self, message: &str) {
+        self.thumbnail.set_visible(false);
+        self.thumbnail.set_paintable(None::<&gdk::Paintable>);
+        self.reveal_path.borrow_mut().take();
+        self.path_button.set_visible(false);
+        self.path_button.set_sensitive(true);
+        self.label.set_text(message);
+        self.reveal_for(false, NOTICE_TOAST_DWELL);
+    }
+
     fn show_screenshot(&self, message: &str, path: &Path) {
         self.set_screenshot_thumbnail(path);
         self.show_message(message);
@@ -1683,6 +1702,17 @@ impl StatusToast {
     }
 
     fn reveal(&self, interactive: bool) {
+        self.reveal_for(
+            interactive,
+            if interactive {
+                INTERACTIVE_TOAST_DWELL
+            } else {
+                TOAST_DWELL
+            },
+        );
+    }
+
+    fn reveal_for(&self, interactive: bool, dwell: Duration) {
         self.revealer.set_can_target(interactive);
         self.revealer.set_reveal_child(true);
 
@@ -1694,8 +1724,7 @@ impl StatusToast {
         let path_button = self.path_button.clone();
         let reveal_path = Rc::clone(&self.reveal_path);
         let hide_source = Rc::clone(&self.hide_source);
-        let duration = if interactive { 5000 } else { 1700 };
-        let source_id = glib::timeout_add_local(Duration::from_millis(duration), move || {
+        let source_id = glib::timeout_add_local(dwell, move || {
             revealer.set_reveal_child(false);
             revealer.set_can_target(false);
             path_button.set_visible(false);

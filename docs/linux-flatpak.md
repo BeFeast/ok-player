@@ -152,11 +152,18 @@ which is compatible with OK Player's GPL-3.0-or-later license.
 The manifest mounts `org.freedesktop.Platform.codecs-extra//25.08-extra` ahead
 of the base runtime libraries. With the extension installed, libmpv sees the
 expanded codec set. If a user or distributor masks/removes the extension, OK
-Player continues with the codecs in the base runtime; unavailable patented
-formats fail immediately through the normal playback error surface rather than
-silently advancing an audio clock behind a video track with no presented
-frames. The diagnostic names the matching `codecs-extra` extension and playback
-is stopped until the user installs codec support or opens another source.
+Player continues with the codecs in the base runtime and an unavailable format
+is reported by name.
+
+Where that report appears depends on what libmpv has actually established. A
+decoder message logged while the source is open is surfaced as a notice naming
+the matching `codecs-extra` extension, and playback continues: the log line does
+not say which stream it belongs to, so it can describe a stream the user is not
+watching while the selected streams decode fine, and stopping playable media is
+the worse defect. Once libmpv ends the file - with an error, or at EOF still
+carrying the decoder message - the same text is evidence rather than a guess,
+and the source is failed through the normal playback error surface with Retry
+and Copy details.
 
 Hardware decoding receives only `--device=dri`. Mesa drivers come from the
 runtime/host GL extension, and the optional Freedesktop Intel VAAPI extension is

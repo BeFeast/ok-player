@@ -55,11 +55,11 @@ REQUIRED: dict[str, list[str]] = {
     ],
     "rust/crates/okp-mpv/src/player.rs": [
         "MPV_RENDER_PARAM_ADVANCED_CONTROL",
-        "DecoderFailed {",
+        "DecoderWarning {",
     ],
     "rust/crates/okp-mpv/src/pump.rs": [
-        "codec_failure_reported",
-        "MpvEvent::DecoderFailed {",
+        "decoder_warning_reported",
+        "MpvEvent::DecoderWarning {",
     ],
     "rust/crates/okp-linux-gtk/src/about.rs": [
         "if flatpak_update_managed() {",
@@ -75,7 +75,7 @@ REQUIRED: dict[str, list[str]] = {
     ],
     "rust/crates/okp-linux-gtk/src/playlist_ops.rs": [
         "CodecEnvironment::Flatpak",
-        "pub(crate) fn apply_runtime_decoder_failure(",
+        "pub(crate) fn runtime_decoder_notice(",
         "diagnose_mpv_runtime(",
     ],
     "rust/crates/okp-linux-gtk/src/screenshots.rs": [
@@ -84,11 +84,11 @@ REQUIRED: dict[str, list[str]] = {
     ],
     "rust/crates/okp-linux-gtk/src/tests.rs": [
         "fn native_wayland_screenshots_use_libmpv_advanced_control() {",
-        "fn runtime_decoder_failure_stops_partial_playback_state_immediately() {",
+        "fn runtime_decoder_message_does_not_fail_the_playing_source() {",
         '"Updates are managed by Flatpak"',
     ],
     "rust/crates/okp-linux-gtk/src/track_popovers.rs": [
-        "MpvEvent::DecoderFailed {",
+        "MpvEvent::DecoderWarning {",
     ],
     "rust/crates/okp-linux-gtk/src/updates.rs": [
         "Managed by Flatpak",

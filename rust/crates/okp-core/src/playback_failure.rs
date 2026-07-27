@@ -110,9 +110,13 @@ pub fn diagnose_mpv_eof(
         })
 }
 
-/// Diagnose a decoder warning as soon as libmpv emits it. This path is used
-/// when another stream (usually audio) would otherwise keep the clock moving
-/// until EOF behind a video track that never produced a frame.
+/// Diagnose a decoder warning as soon as libmpv emits it, so the user learns
+/// what the engine complained about while it is still happening.
+///
+/// This is a runtime notice, not a verdict. A log line does not say which
+/// stream it belongs to, so a caller must not stop playback on the strength of
+/// it; `diagnose_mpv_eof` is the path that runs once libmpv has confirmed the
+/// file did not play.
 pub fn diagnose_mpv_runtime(
     engine_messages: &[String],
     environment: CodecEnvironment,
@@ -125,7 +129,7 @@ pub fn diagnose_mpv_runtime(
 }
 
 /// Lightweight semantic filter used by engine wrappers before they enqueue a
-/// runtime decoder-failure event. The user-facing diagnosis remains in this
+/// runtime decoder-warning event. The user-facing diagnosis remains in this
 /// module so shells never parse libmpv log text.
 pub fn is_mpv_codec_failure(message: &str) -> bool {
     is_runtime_codec_failure(&message.to_ascii_lowercase())
@@ -133,15 +137,16 @@ pub fn is_mpv_codec_failure(message: &str) -> bool {
 
 /// libmpv probes hardware decoders before falling back to software, and a
 /// failed probe is logged with the same wording as a genuinely missing codec.
-/// Treating one of those as fatal would stop media that plays perfectly on the
+/// Reporting one of those would accuse a file that plays perfectly on the
 /// software decoder, so the runtime (pre-EOF) path ignores any message that
 /// names a hardware decoder. `diagnose_mpv_eof` deliberately does not apply
 /// this filter: by then libmpv has confirmed the file did not play.
 ///
-/// This narrows one known false-positive class. It does not make the runtime
-/// path exact: a software decoder failure on a stream that is not the selected
-/// one is still treated as fatal, because a log line alone does not say which
-/// stream it belongs to.
+/// The filter narrows one known false-positive class; it does not make the
+/// runtime classification exact. A software decoder failure on a stream that is
+/// not the selected one still matches, because a log line alone does not say
+/// which stream it belongs to. That residue is why the runtime path only
+/// produces a diagnostic and never stops playback.
 fn is_runtime_codec_failure(message: &str) -> bool {
     is_codec_failure(message) && !names_a_hardware_decoder(message)
 }
@@ -344,7 +349,7 @@ mod tests {
             &messages(&["vd: Failed to initialize a decoder for codec h264"]),
             CodecEnvironment::Flatpak,
         )
-        .expect("decoder warning should fail immediately");
+        .expect("decoder warning should be diagnosed immediately");
 
         assert_eq!(diagnostic.kind, PlaybackFailureKind::MissingCodec);
         assert!(diagnostic.message.contains("codecs-extra"));
@@ -355,9 +360,9 @@ mod tests {
     }
 
     #[test]
-    fn hardware_decoder_probe_does_not_stop_runtime_playback() {
+    fn hardware_decoder_probe_is_not_diagnosed_during_playback() {
         // libmpv logs this and then falls back to software decoding, so the
-        // file plays. Stopping here would kill playable media.
+        // file plays. Reporting it would accuse media that is fine.
         for message in [
             "vd: Could not open codec. (hwdec=vaapi-copy)",
             "vd: Failed to initialize a decoder for codec h264 using hwdec nvdec",
@@ -384,14 +389,14 @@ mod tests {
     }
 
     #[test]
-    fn software_decoder_failure_still_stops_runtime_playback() {
+    fn software_decoder_failure_is_still_diagnosed_during_playback() {
         assert!(is_mpv_codec_failure(
             "vd: Failed to initialize a decoder for codec h264"
         ));
     }
 
     #[test]
-    fn benign_runtime_warning_does_not_stop_playback() {
+    fn benign_runtime_message_is_not_diagnosed() {
         assert!(
             diagnose_mpv_runtime(
                 &messages(&["ao/pipewire: underrun recovered"]),

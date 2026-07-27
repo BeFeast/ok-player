@@ -145,7 +145,7 @@ struct PumpShared {
     wake: Mutex<bool>,
     condvar: Condvar,
     running: AtomicBool,
-    codec_failure_reported: AtomicBool,
+    decoder_warning_reported: AtomicBool,
 }
 
 pub(crate) struct EventPump {
@@ -182,7 +182,7 @@ impl EventPump {
             wake: Mutex::new(true),
             condvar: Condvar::new(),
             running: AtomicBool::new(true),
-            codec_failure_reported: AtomicBool::new(false),
+            decoder_warning_reported: AtomicBool::new(false),
         });
 
         for (name, format) in OBSERVED_PROPERTIES {
@@ -281,7 +281,7 @@ impl EventPump {
         drop(snapshot);
         lock(&self.shared.diagnostic_messages).clear();
         self.shared
-            .codec_failure_reported
+            .decoder_warning_reported
             .store(false, Ordering::Release);
     }
 
@@ -408,13 +408,15 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
                         messages.push_back(message.clone());
                     }
                     if okp_core::playback_failure::is_mpv_codec_failure(&message)
-                        && !shared.codec_failure_reported.swap(true, Ordering::AcqRel)
+                        && !shared.decoder_warning_reported.swap(true, Ordering::AcqRel)
                     {
-                        // Bind the warning to the engine source while still on
-                        // the pump thread. The GTK drain may run after the user
-                        // has already opened another source.
+                        // Diagnostic only - the engine has not reported a
+                        // failed source here, so the shell must not stop
+                        // playback on it. Bind the warning to the engine source
+                        // while still on the pump thread: the GTK drain may run
+                        // after the user has already opened another source.
                         let path = shared.reader.path();
-                        lifecycle.push(MpvEvent::DecoderFailed {
+                        lifecycle.push(MpvEvent::DecoderWarning {
                             path,
                             diagnostic_messages: lock(&shared.diagnostic_messages)
                                 .iter()
