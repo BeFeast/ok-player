@@ -27,6 +27,11 @@ const WAYLAND_EMBED_PARENT_OPTION: &str = "wayland-embed-parent";
 const WAYLAND_EMBED_SIZE_OPTION: &str = "wayland-embed-size";
 const WAYLAND_EMBED_SCALE_OPTION: &str = "wayland-embed-scale";
 const WAYLAND_EMBED_PRESENTATION_LOG_OPTION: &str = "wayland-embed-presentation-log";
+/// mpv drags its own toplevel when the user presses on the video surface.
+/// In embedded mode the video is a subsurface inside the host window and mpv
+/// owns no toplevel at all, so that request dereferences a NULL xdg_toplevel
+/// and kills the process (#627). The host window owns dragging; mpv must not.
+const WINDOW_DRAGGING_OPTION: &str = "window-dragging";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RenderTargetSize {
@@ -1054,6 +1059,37 @@ pub struct Mpv {
     blocking_read_guard: crate::guard::BlockingReadGuard,
 }
 
+/// Options that define embedded playback, applied before `mpv_initialize`.
+///
+/// The display pointer is negotiated separately because its acceptance is what
+/// tells us whether this libmpv understands embedding at all.
+///
+/// `window-dragging` is off for a structural reason, not a preference: mpv
+/// starts a toplevel move itself when the user presses on the video surface,
+/// but an embedded video plane is a subsurface of the host window and mpv owns
+/// no toplevel, so the request dereferences a NULL `xdg_toplevel` and kills the
+/// process (#627). Window dragging belongs to the host shell.
+pub(crate) fn embedded_pre_init_options(
+    target: &WaylandDmabufTarget,
+    size: RenderTargetSize,
+    scale: i32,
+    presentation_log: bool,
+) -> Vec<(&'static str, String)> {
+    vec![
+        (
+            WAYLAND_EMBED_PARENT_OPTION,
+            pointer_option_value(target.parent_surface),
+        ),
+        (WAYLAND_EMBED_SIZE_OPTION, render_size_option_value(size)),
+        (WAYLAND_EMBED_SCALE_OPTION, scale.max(1).to_string()),
+        (
+            WAYLAND_EMBED_PRESENTATION_LOG_OPTION,
+            if presentation_log { "yes" } else { "no" }.to_owned(),
+        ),
+        (WINDOW_DRAGGING_OPTION, "no".to_owned()),
+    ]
+}
+
 impl Mpv {
     pub fn new() -> Result<Self, MpvError> {
         Self::new_with_options("no", &[])
@@ -1088,16 +1124,9 @@ impl Mpv {
         )? {
             return Ok(None);
         }
-        this.set_option(
-            WAYLAND_EMBED_PARENT_OPTION,
-            &pointer_option_value(target.parent_surface),
-        )?;
-        this.set_option(WAYLAND_EMBED_SIZE_OPTION, &render_size_option_value(size))?;
-        this.set_option(WAYLAND_EMBED_SCALE_OPTION, &scale.max(1).to_string())?;
-        this.set_option(
-            WAYLAND_EMBED_PRESENTATION_LOG_OPTION,
-            if presentation_log { "yes" } else { "no" },
-        )?;
+        for (name, value) in embedded_pre_init_options(&target, size, scale, presentation_log) {
+            this.set_option(name, &value)?;
+        }
         this.configure_before_initialize(hwdec, "dmabuf-wayland,libmpv", options)?;
         this.wayland_dmabuf_target = Some(target);
         Ok(Some(this.initialize()?))
@@ -3549,5 +3578,58 @@ mod tests {
             "BT.2020 non-constant luminance"
         );
         assert_eq!(friendly_color_levels("limited"), "Limited / TV");
+    }
+
+    #[test]
+    fn embedded_playback_hands_window_dragging_to_the_host_shell() {
+        // mpv would otherwise start a toplevel move on a press over the video
+        // surface; embedded playback has no toplevel, so that call crashes the
+        // process (#627). The option must therefore be part of the embedded
+        // contract, not a caller's optional extra.
+        // SAFETY: the pointers are never dereferenced here - the policy under
+        // test only formats them into option values.
+        let target = unsafe {
+            WaylandDmabufTarget::new(
+                NonNull::new(0x1000 as *mut c_void).expect("non-null test display"),
+                NonNull::new(0x2000 as *mut c_void).expect("non-null test surface"),
+                (),
+            )
+        };
+        let options = embedded_pre_init_options(
+            &target,
+            RenderTargetSize {
+                width: 1920,
+                height: 1080,
+            },
+            2,
+            false,
+        );
+
+        assert!(
+            options
+                .iter()
+                .any(|(name, value)| *name == "window-dragging" && value == "no"),
+            "embedded playback must disable mpv's own window dragging, got {options:?}"
+        );
+        // The rest of the embedded contract must survive alongside it.
+        for required in [
+            "wayland-embed-parent",
+            "wayland-embed-size",
+            "wayland-embed-scale",
+            "wayland-embed-presentation-log",
+        ] {
+            assert!(
+                options.iter().any(|(name, _)| *name == required),
+                "embedded option {required} disappeared: {options:?}"
+            );
+        }
+        assert_eq!(
+            options
+                .iter()
+                .find(|(name, _)| *name == "wayland-embed-scale")
+                .map(|(_, value)| value.as_str()),
+            Some("2"),
+            "scale must be forwarded unchanged"
+        );
     }
 }
