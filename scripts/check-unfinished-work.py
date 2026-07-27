@@ -36,6 +36,12 @@ What this does NOT catch, on purpose or for want of a cheap rule:
     a shape nobody reaches by accident. Measured: exit 0.
   * an acceptance heading phrased outside `ACCEPTANCE_PHRASE`, e.g. "Manual
     verification required". The phrase list is a floor, not a parser.
+  * a body that says nothing. Only a body that is *empty* after HTML comments
+    are removed is rejected, so the pull request template with every placeholder
+    comment left untouched passes: its section headings are visible text.
+    Requiring prose under each heading was rejected deliberately - a mandatory
+    "I verified this" field trains people to fill it in, which is the failure
+    this whole check exists to stop.
   * a ticked box that nobody performed. No mechanical check can see this; it is
     the reason the rules above exist rather than a substitute for honesty.
   * a marker inside a multi-line raw string in shipped source. Literals are
@@ -108,13 +114,18 @@ ACCEPTANCE_HEADING = re.compile(
     )\s*$""",
     re.IGNORECASE | re.VERBOSE,
 )
-# What ends a *weakly* opened block: a markdown heading, a rule, or a
-# bold/underlined label line used as a heading (pull request bodies in this
-# repository do all three). A block opened by one of those weak labels cannot
-# claim more of the body than the next label of the same kind.
-HEADING = re.compile(
-    r"^\s*(?:#{1,6}\s|---\s*$|\*\*[^*]+\*\*\s*:?\s*$|__[^_]+__\s*:?\s*$"
-    r"|<[A-Za-z/][^>]*>)"
+# What ends a *weakly* opened block - one opened by a bold label or a bare label
+# ending in a colon, which cannot claim more of the body than the next label of
+# the same kind: a markdown heading, or another bold/underlined label line.
+#
+# Deliberately NOT a rule or an HTML tag. `**Operator acceptance**`, a ticked
+# box, `---`, an unticked box exited 0 while they were terminators, which is the
+# same laundering the heading-opened bounds close - a rule and a `<details>` are
+# markup dropped between two items, not a new section. The cost is the same too:
+# a weakly opened block runs to the next label or heading, so a list under a
+# rule below it is read as part of the block.
+WEAK_BREAK = re.compile(
+    r"^\s*(?:#{1,6}\s|\*\*[^*]+\*\*\s*:?\s*$|__[^_]+__\s*:?\s*$)"
 )
 # A markdown heading is the only terminator strong enough to end an acceptance
 # *section*, and only one at the same level or above: `### Windows` nested under
@@ -297,7 +308,7 @@ def acceptance_sections(body: str) -> list[list[str]]:
             heading = SECTION_BREAK.match(line)
             ends = heading is not None and len(heading.group(1)) <= level
         else:
-            ends = HEADING.match(line) is not None
+            ends = WEAK_BREAK.match(line) is not None
         if ends:
             sections.append(current)
             current = None

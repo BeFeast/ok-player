@@ -234,23 +234,29 @@ fn a_sub_terminator_cannot_hide_a_prose_or_plain_bullet_hold() {
 #[test]
 fn a_nested_acceptance_label_does_not_downgrade_the_section_bounds() {
     let fixture = Declaration::new("okp-gate-acceptance-nested-label");
-    // A weakly opened acceptance block ends at any terminator, which is right
-    // when the label opened the block - and was a laundering route when the
-    // label sat *inside* a heading-opened section, because it reset the bounds
-    // to the weak ones and the `---` below it then hid the hold again.
-    let body = "## Operator acceptance\n\n\
-        - [x] smoke run\n\n\
-        **Acceptance criteria:**\n\n\
-        - [x] unit suite green\n\n\
-        ---\n\n\
-        - [ ] dual-display QA on a packaged build\n";
+    // A weakly opened acceptance block ends at the next label of the same kind,
+    // which is right when the label opened the block - and was a laundering
+    // route when the label sat *inside* a heading-opened section, because it
+    // reset the bounds to the weak ones and the next `**Notes**` label then hid
+    // the hold. A label inside a section inherits the section's level, so only
+    // a heading of that level or above ends it.
+    for separator in ["**Notes**", "---", "<details>"] {
+        let body = format!(
+            "## Operator acceptance\n\n- [x] smoke run\n\n**Acceptance criteria:**\n\n- [x] unit suite green\n\n{separator}\n\n- [ ] dual-display QA on a packaged build\n"
+        );
 
-    let output = fixture.check("Reveal saved Linux screenshots", body);
+        let output = fixture.check("Reveal saved Linux screenshots", &body);
 
-    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
-    let stderr = stderr_of(&output);
-    assert!(stderr.contains("Operator acceptance is not complete"));
-    assert!(stderr.contains("dual-display QA on a packaged build"));
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "a nested label must not downgrade the bounds: {separator}\n{}",
+            stderr_of(&output)
+        );
+        let stderr = stderr_of(&output);
+        assert!(stderr.contains("Operator acceptance is not complete"));
+        assert!(stderr.contains("dual-display QA on a packaged build"));
+    }
 }
 
 #[test]
@@ -338,6 +344,30 @@ fn a_weakly_opened_acceptance_block_does_not_swallow_a_later_list() {
     let output = fixture.check("Reveal saved Linux screenshots", body);
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+}
+
+#[test]
+fn a_rule_or_an_html_tag_cannot_hide_a_hold_in_a_weakly_opened_block() {
+    let fixture = Declaration::new("okp-gate-weak-sub-terminator");
+    // A block opened by a bold label ends at the next label of the same kind -
+    // that is what stops it swallowing an unrelated follow-up list. A rule and
+    // an HTML tag are not labels, they are markup dropped between two items, so
+    // ending there was the same laundering the heading-opened bounds close.
+    for separator in ["---", "<details>", "***"] {
+        let body = format!(
+            "**Operator acceptance**\n\n- [x] Verified on GNOME\n\n{separator}\n\n- [ ] dual-display QA on a packaged build\n"
+        );
+
+        let output = fixture.check("Reveal saved Linux screenshots", &body);
+
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{separator} must not end a weakly opened block:\n{}",
+            stderr_of(&output)
+        );
+        assert!(stderr_of(&output).contains("dual-display QA on a packaged build"));
+    }
 }
 
 #[test]

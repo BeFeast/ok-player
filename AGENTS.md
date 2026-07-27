@@ -39,16 +39,20 @@ is doing the merging.
   prose, plain bullets, `---`, bold labels, HTML tags - whether or not other
   boxes in the section are already ticked. Put context above the block.
   A section opened by a markdown heading runs to the next heading of its own
-  level or above, so anything appended below a trailing acceptance section
-  (a review bot's summary, for instance) is read as part of it and will block
-  the merge until it is moved above the block or given a heading of its own.
+  level or above; one opened by a bold or bare label runs to the next label or
+  heading. Neither ends at a rule or an HTML tag. So anything appended below a
+  trailing acceptance section (a review bot's summary, for instance) is read as
+  part of it and will block the merge until it is moved above the block or given
+  a heading of its own.
   An acceptance heading may be `## ATX`, a bold label, a bare label ending in a
   colon, or a setext heading (the phrase underlined with `---` or `===`).
   What CI cannot see: a hold written *outside* an acceptance heading, an
   acceptance heading phrased outside the recognised set, a hold wrapped in a
   balanced code fence or an HTML comment (both are blanked before any rule runs,
   so that a body may quote these rules), and a box that was ticked without the
-  work being done. It over-blocks in one known shape: a results section such as
+  work being done. Nor does it read the body for meaning: only a body that is
+  empty once HTML comments are removed is rejected, so the template with every
+  placeholder comment left untouched passes. It over-blocks in one known shape: a results section such as
   `## Acceptance test results` is read as a hold, because the phrase match is
   deliberately loose. Rename the heading or move the prose above the block.
 - **An operator acceptance block is honoured by the operator, not by a worker.**
