@@ -23,6 +23,7 @@ use okp_core::clip_export::{self, ClipExportEligibility, ClipExportLimits, ClipE
 use okp_core::companion_window::{self as companion_window_core, CompanionWindowKind};
 use okp_core::gapless::{GaplessPlaybackCapability, PlaylistTransitionPath};
 use okp_core::hdr::HdrHandlingState;
+use okp_core::hwdec_policy::{self, HwdecGuard, HwdecPlan, PlaybackSample};
 use okp_core::key_press::KeyPressLatch;
 use okp_core::linux_renderer::LinuxRendererMode;
 use okp_core::player_commands::{
@@ -214,6 +215,10 @@ static LINUX_RENDERER_MODE: OnceLock<LinuxRendererMode> = OnceLock::new();
 #[derive(Default)]
 struct PlayerState {
     mpv: Option<Mpv>,
+    /// Watches the running engine for the hardware-decode stall of issue #675.
+    /// `None` until an engine has been configured; rebuilt with every engine so
+    /// it always carries that engine's `hwdec` provenance.
+    hwdec_guard: Option<HwdecGuard>,
     current_file: Option<PathBuf>,
     current_url: Option<String>,
     current_nfo_title: okp_core::nfo_metadata::NfoTitleState,

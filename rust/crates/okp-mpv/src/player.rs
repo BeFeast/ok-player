@@ -1469,8 +1469,15 @@ impl Mpv {
         check(unsafe { ffi::mpv_command(self.handle.as_ptr(), args.as_ptr()) })
     }
 
+    /// Change the hardware decoder of a running engine.
+    ///
+    /// This goes through the property interface, not `mpv_set_option_string`:
+    /// libmpv only honours option writes before `mpv_initialize`, so an option
+    /// write here would be silently ignored and the engine would keep decoding
+    /// the way it already was. The Settings toggle and the copy-back demotion
+    /// in the shell both depend on this taking effect mid-session (issue #675).
     pub fn set_hwdec(&self, value: &str) -> Result<(), MpvError> {
-        self.set_option("hwdec", value)
+        self.set_string_property("hwdec", value)
     }
 
     pub fn apply_options(&self, options: &[(String, String)]) -> Result<(), MpvError> {
@@ -1800,6 +1807,23 @@ impl Mpv {
     fn command_async_with_userdata(&self, args: &[&str], request_id: u64) -> Result<(), MpvError> {
         let (_c_args, ptrs) = command_args(args)?;
         check(unsafe { ffi::mpv_command_async(self.handle.as_ptr(), request_id, ptrs.as_ptr()) })
+    }
+
+    fn set_string_property(&self, name: &str, value: &str) -> Result<(), MpvError> {
+        let name = CString::new(name)?;
+        let value = CString::new(value)?;
+        // MPV_FORMAT_STRING passes `char**`; libmpv copies the string, so the
+        // CString only has to outlive this call.
+        let mut value_ptr = value.as_ptr();
+
+        check(unsafe {
+            ffi::mpv_set_property(
+                self.handle.as_ptr(),
+                name.as_ptr(),
+                ffi::MPV_FORMAT_STRING,
+                &mut value_ptr as *mut _ as *mut c_void,
+            )
+        })
     }
 
     fn set_double(&self, name: &str, mut value: f64) -> Result<(), MpvError> {

@@ -1113,15 +1113,36 @@ fn create_configured_native_mpv(
     Some(finish_configured_mpv(state, mpv))
 }
 
+/// The `hwdec` value and raw mpv.conf options for a new engine, and the point
+/// where this engine's hardware-decode guard is armed.
+///
+/// The automatic value names zero-copy decoders explicitly and ends at `no`, so
+/// mpv can never resolve it to a copy-back backend; on the legacy-`radeon`
+/// stack of issue #675 `auto-safe` resolved to `vaapi-copy` and playback ran at
+/// 0.02x realtime. Renderer policy and the raw mpv.conf escape hatch still
+/// overrule it, in that order.
 fn mpv_creation_options(state: &Rc<RefCell<PlayerState>>) -> (String, Vec<(String, String)>) {
-    let (hwdec, raw_mpv_config) = {
+    let (plan, options) = {
         let state = state.borrow();
-        (
-            state.settings.hardware_decode_mpv_option().to_owned(),
-            state.settings.raw_mpv_config().to_owned(),
-        )
+        let options = configured_raw_mpv_options(&state.settings);
+        let plan = configured_hwdec_plan(&state.settings, &options);
+        (plan, options)
     };
-    let options = match parse_raw_mpv_config(&raw_mpv_config) {
+    eprintln!(
+        "Hardware decoding policy: hwdec={} source={:?}",
+        plan.value, plan.source
+    );
+    state.borrow_mut().hwdec_guard = Some(HwdecGuard::new(plan.source));
+    (plan.value, options)
+}
+
+/// The escape-hatch options this install hands the engine. A malformed line
+/// drops the whole file, exactly as the engine's own loader does, so the plan
+/// and the engine always see the same set.
+pub(crate) fn configured_raw_mpv_options(
+    settings: &settings::SettingsStore,
+) -> Vec<(String, String)> {
+    match parse_raw_mpv_config(settings.raw_mpv_config()) {
         Ok(options) => options,
         Err(error) => {
             eprintln!(
@@ -1130,12 +1151,76 @@ fn mpv_creation_options(state: &Rc<RefCell<PlayerState>>) -> (String, Vec<(Strin
             );
             Vec::new()
         }
+    }
+}
+
+/// The `hwdec` value this install asks mpv for, with renderer policy and the
+/// escape hatch folded in.
+pub(crate) fn configured_hwdec_plan(
+    settings: &settings::SettingsStore,
+    raw_mpv_options: &[(String, String)],
+) -> HwdecPlan {
+    settings.hwdec_plan(
+        configured_linux_renderer_mode().mpv_hwdec_override(),
+        raw_mpv_options,
+    )
+}
+
+/// Give hardware decoding back when the running engine shows the issue #675
+/// stall signature, and say so in the application log.
+///
+/// Runs on the ordinary poll tick, so it costs one already-collected
+/// diagnostics snapshot per tick and no extra engine round-trip.
+pub(crate) fn enforce_hwdec_policy(
+    state: &Rc<RefCell<PlayerState>>,
+    playback: Option<PlaybackState>,
+) {
+    let Some((playback, media_time)) =
+        playback.and_then(|playback| playback.time_pos.map(|time_pos| (playback, time_pos)))
+    else {
+        // No media clock yet (idle, or still loading): the previous span says
+        // nothing about what is playing now.
+        if let Some(guard) = state.borrow_mut().hwdec_guard.as_mut() {
+            guard.reset_measurement();
+        }
+        return;
     };
-    let hwdec = configured_linux_renderer_mode()
-        .mpv_hwdec_override()
-        .map(str::to_owned)
-        .unwrap_or(hwdec);
-    (hwdec, options)
+
+    let demotion = {
+        let mut state = state.borrow_mut();
+        let Some(diagnostics) = state
+            .mpv
+            .as_ref()
+            .map(|mpv| mpv.observed_playback_diagnostics())
+        else {
+            return;
+        };
+        let sample = PlaybackSample {
+            monotonic_ns: monotonic_ns(),
+            media_time,
+            paused: playback.paused,
+            speed: playback.speed.unwrap_or(1.0),
+            decoder_drops: diagnostics.decoder_drops,
+            vo_drops: diagnostics.vo_drops,
+        };
+        let Some(guard) = state.hwdec_guard.as_mut() else {
+            return;
+        };
+        guard.observe(sample, diagnostics.hwdec_current.as_deref())
+    };
+
+    let Some(demotion) = demotion else {
+        return;
+    };
+    eprintln!("{}", demotion.log_message());
+    let applied = state
+        .borrow()
+        .mpv
+        .as_ref()
+        .map(|mpv| mpv.set_hwdec(hwdec_policy::HWDEC_OFF));
+    if let Some(Err(error)) = applied {
+        eprintln!("Failed to demote hardware decoding: {error}");
+    }
 }
 
 fn create_regular_mpv(hwdec: &str, raw_mpv_options: &[(String, String)]) -> Option<Mpv> {
@@ -1397,6 +1482,7 @@ pub(crate) fn connect_state_poll(
                 recorder.record_playback(playback, mpv.observed_playback_diagnostics());
             }
         }
+        enforce_hwdec_policy(&state, playback);
         run_presentation_exercise(&state, playback);
         let has_media = has_loaded_media(&state);
         sync_native_video_background(&window, &root_surface, has_media);

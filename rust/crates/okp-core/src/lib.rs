@@ -15,6 +15,7 @@ pub mod gapless;
 pub mod hdr;
 pub mod history;
 pub mod history_format;
+pub mod hwdec_policy;
 pub mod image_luma;
 pub mod key_press;
 pub mod launch_args;
