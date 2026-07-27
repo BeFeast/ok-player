@@ -110,9 +110,14 @@ jobs:
       # be a runtime dependency of the application - if a package added to this
       # list starts providing a library the RPM is supposed to pull in, the gate
       # fails with an explicit contamination error instead of passing silently.
+      # install_weak_deps=False is load-bearing, not tidiness: on Fedora 44
+      # ffmpeg-free recommends libcamera, which requires libGLESv2.so.2 and so
+      # drags libglvnd-gles into the launch root. The contamination guard caught
+      # exactly that and failed the job. Weak dependencies are what a harness
+      # does not need and what quietly re-blinds this gate.
       - name: Install the headless launch harness
         run: |
-          dnf install -y \
+          dnf install -y --setopt=install_weak_deps=False \
             xorg-x11-server-Xvfb xorg-x11-xauth util-linux \
             xwininfo xprop xdotool xfwm4 \
             ImageMagick ripgrep ffmpeg-free python3 \
