@@ -4747,6 +4747,16 @@ fn windows_installed_tree_assertion_keeps_a_size_floor_under_every_required_file
         2,
         "both the pull_request and push path filters must cover all of src/**"
     );
+    // installer/build-velopack.ps1 copies both of these into the publish tree
+    // with an unconditional Copy-Item, so renaming or deleting either breaks the
+    // pack - and only this lane would notice.
+    for input in ["- 'LICENSE'", "- 'THIRD-PARTY-NOTICES.md'"] {
+        assert_eq!(
+            workflow.matches(input).count(),
+            2,
+            "both path filters must include {input}, which the pack copies unconditionally"
+        );
+    }
 }
 
 #[test]

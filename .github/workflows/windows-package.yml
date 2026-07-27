@@ -40,6 +40,10 @@ on:
       - 'Directory.Packages.props'
       - 'scripts/fetch-natives.ps1'
       - 'scripts/assert-windows-installed-tree.ps1'
+      # build-velopack.ps1 copies both of these into the publish tree
+      # unconditionally, so renaming or deleting either breaks the pack.
+      - 'LICENSE'
+      - 'THIRD-PARTY-NOTICES.md'
   push:
     branches: [ main ]
     paths:
@@ -51,6 +55,8 @@ on:
       - 'Directory.Packages.props'
       - 'scripts/fetch-natives.ps1'
       - 'scripts/assert-windows-installed-tree.ps1'
+      - 'LICENSE'
+      - 'THIRD-PARTY-NOTICES.md'
   workflow_dispatch:
 
 jobs:
