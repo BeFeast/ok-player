@@ -6,11 +6,11 @@ Two cheap, mechanical rules that a merge robot cannot talk itself out of:
 1. Declaration checks (skipped when no pull request context is supplied):
    * a title that starts with WIP / Draft / Do not merge;
    * the maestro WIP marker HTML comment in the body;
-   * unchecked boxes anywhere in an acceptance section - "Operator acceptance"
-     and its near neighbours, "Acceptance criteria", "Live acceptance hold",
-     "Before merge";
-   * an acceptance block holding plain bullets, prose, or nothing at all, none
-     of which anyone can record as performed;
+   * an acceptance section - "Operator acceptance" and its near neighbours,
+     "Acceptance criteria", "Live acceptance hold", "Before merge" - that holds
+     anything other than checkboxes and nested headings. An unticked box, a
+     plain bullet, a sentence, a rule, a label, an HTML tag, or nothing at all:
+     none of those can be recorded as performed;
    * an empty body, which cannot state what "done" means.
 
 2. Tree checks: unfinished-code markers in shipped source and shipped
@@ -23,6 +23,26 @@ request may quote these rules without tripping them; an unbalanced fence is
 treated as text, because stripping it would silently disable every rule below
 it. HTML comments are ignored when looking for boxes, so a template can carry a
 commented-out acceptance block.
+
+What this does NOT catch, on purpose or for want of a cheap rule:
+  * a hold written outside an acceptance heading. A sentence in "Notes for
+    review" saying the change needs manual verification is invisible here.
+  * an acceptance heading phrased outside `ACCEPTANCE_PHRASE`, e.g. "Manual
+    verification required". The phrase list is a floor, not a parser.
+  * a ticked box that nobody performed. No mechanical check can see this; it is
+    the reason the rules above exist rather than a substitute for honesty.
+  * a marker inside a multi-line raw string in shipped source. Literals are
+    masked one line at a time, so `r#"... TODO ..."#` spanning lines reports.
+  * unfinished work in Markdown. `.md` is out of scope: prose discusses markers
+    legitimately, and a check that fires on documentation gets muted.
+
+A known cost of the acceptance rules: because a heading-opened acceptance
+section runs to the next heading of its own level or above, anything appended
+below a trailing acceptance section - a review bot's bulleted summary, for
+instance - is read as part of that section and blocks the merge. Separate it
+with a heading, or keep the acceptance block from being the last section. This
+direction is deliberate: a false alarm is visible and self-correcting, a missed
+prose hold is neither.
 
 Usage:
   check-unfinished-work.py [--root DIR] [--title-file F] [--body-file F]
@@ -67,8 +87,10 @@ ACCEPTANCE_HEADING = re.compile(
     )\s*$""",
     re.IGNORECASE | re.VERBOSE,
 )
-# What ends a block: a markdown heading, a rule, or a bold/underlined label line
-# used as a heading (pull request bodies in this repository do all three).
+# What ends a *weakly* opened block: a markdown heading, a rule, or a
+# bold/underlined label line used as a heading (pull request bodies in this
+# repository do all three). A block opened by one of those weak labels cannot
+# claim more of the body than the next label of the same kind.
 HEADING = re.compile(
     r"^\s*(?:#{1,6}\s|---\s*$|\*\*[^*]+\*\*\s*:?\s*$|__[^_]+__\s*:?\s*$"
     r"|<[A-Za-z/][^>]*>)"
@@ -76,12 +98,18 @@ HEADING = re.compile(
 # A markdown heading is the only terminator strong enough to end an acceptance
 # *section*, and only one at the same level or above: `### Windows` nested under
 # `## Operator acceptance` groups the checks, it does not end them. A bold
-# label, a rule or an HTML tag is a sub-label inside the section.
+# label, a rule or an HTML tag is markup *inside* the section - the whole point
+# of the section bounds is that dropping one of those above a hold must not
+# hide it.
 SECTION_BREAK = re.compile(r"^\s*(#{1,6})\s")
 LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+(.*)$")
 UNCHECKED_BOX = re.compile(r"^\[\s\]\s*(.*)$")
 CHECKED_BOX = re.compile(r"^\[[xX]\]\s*(.*)$")
-FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
+# CommonMark allows a fenced block to be indented by at most three spaces; four
+# make it an indented code block, and its ``` is literal text. Accepting any
+# indentation let an indented pair of fences strip a WIP marker sitting between
+# them. The strict bound only ever strips less, so it cannot hide a rule.
+FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 
 # Unfinished-code markers. A marker that references a tracking issue is fine.
@@ -161,63 +189,32 @@ def strip_fenced_blocks(text: str) -> str:
     return "\n".join(out)
 
 
-def acceptance_blocks(body: str) -> list[list[str]]:
-    """The body lines of every acceptance block, HTML comments removed.
-
-    A block ends at the first terminator of any strength - a heading, a rule, a
-    bold label, an HTML tag - with one exception: a markdown heading *nested*
-    below the one that opened the block groups the acceptance items rather than
-    ending them, so a hold written under `### Windows` is still read.
-
-    The bounds are otherwise tight because the prose and plain-bullet rules read
-    whatever is inside, and a review bot's appended bullet summary - which
-    arrives under an HTML tag or a bold label, not under a nested heading - must
-    not be mistaken for acceptance items.
-    """
-    blocks: list[list[str]] = []
-    current: list[str] | None = None
-    level = 0
-    for line in HTML_COMMENT.sub("", body).splitlines():
-        if ACCEPTANCE_HEADING.match(line):
-            if current is not None:
-                blocks.append(current)
-            opener = SECTION_BREAK.match(line)
-            current = []
-            level = len(opener.group(1)) if opener else 0
-            continue
-        if current is None:
-            continue
-        nested = SECTION_BREAK.match(line)
-        if nested and level and len(nested.group(1)) > level:
-            continue
-        if HEADING.match(line):
-            blocks.append(current)
-            current = None
-            continue
-        current.append(line)
-    if current is not None:
-        blocks.append(current)
-    return blocks
-
-
 def acceptance_sections(body: str) -> list[list[str]]:
     """Every acceptance section, bounded only by a terminator of equal strength.
 
-    The tight bounds above were a laundering route: one ticked box followed by
-    any terminator - `<div>`, `**Still pending**`, `---` - hid every unticked
-    box after it, and exit 0 was the answer to
+    Tight bounds - ending a block at the first terminator of any strength - were
+    a laundering route: one ticked box followed by `<details>`, `**Windows**` or
+    `---` hid everything after it, and exit 0 was the answer to
 
         ## Operator acceptance
         - [x] smoke run
         **Still pending**
         - [ ] dual-display QA
 
-    An unticked checkbox is unambiguous wherever it sits, so it is scanned over
-    the whole section. A section opened by a markdown heading runs to the next
-    heading at the same level or above - a nested `### Windows` groups checks
-    rather than ending them. A section opened by a weaker label (a bold line, a
-    bare label ending in a colon) still ends at any terminator, so a bold label
-    cannot swallow an unrelated follow-up list below it.
+    and to the same body with a prose hold in place of the unticked box. That
+    second shape is the one every real acceptance hold in this repository took,
+    so *all* the acceptance rules read these bounds; there is deliberately no
+    second, narrower notion of a "block".
+
+    A section opened by a markdown heading runs to the next heading at the same
+    level or above - a nested `### Windows` groups checks rather than ending
+    them. A section opened by a weaker label (a bold line, a bare label ending
+    in a colon) still ends at any terminator, so a bold label cannot swallow an
+    unrelated follow-up list below it - unless it opened *inside* a
+    heading-opened section, in which case it inherits that section's level.
+    Without that inheritance, writing `**Acceptance criteria:**` under
+    `## Operator acceptance` downgraded the bounds back to the weak ones and
+    reopened the laundering route this function exists to close.
     """
     lines = HTML_COMMENT.sub("", body).splitlines()
     sections: list[list[str]] = []
@@ -225,11 +222,15 @@ def acceptance_sections(body: str) -> list[list[str]]:
     level = 0
     for line in lines:
         if ACCEPTANCE_HEADING.match(line):
+            opener = SECTION_BREAK.match(line)
+            if opener:
+                level = len(opener.group(1))
+            elif current is None:
+                level = 0
+            # else: a weak label inside a section keeps the enclosing level.
             if current is not None:
                 sections.append(current)
-            opener = SECTION_BREAK.match(line)
             current = []
-            level = len(opener.group(1)) if opener else 0
             continue
         if current is None:
             continue
@@ -241,6 +242,7 @@ def acceptance_sections(body: str) -> list[list[str]]:
         if ends:
             sections.append(current)
             current = None
+            level = 0
             continue
         current.append(line)
     if current is not None:
@@ -251,25 +253,41 @@ def acceptance_sections(body: str) -> list[list[str]]:
 def acceptance_problems(body: str) -> list[tuple[str, str]]:
     """(title, detail) for every Operator acceptance block that is not resolved.
 
-    An acceptance block is resolved only when it consists of ticked checkboxes.
-    Anything else - an unticked box, a plain bullet, or a paragraph such as "Do
-    not merge until a packaged build passes dual-display QA" - states a hold
-    that nothing can record as performed. Every real acceptance hold in this
-    repository's history took one of those two unrecordable shapes.
+    An acceptance block is resolved only when it consists of ticked checkboxes,
+    optionally grouped under nested headings. Anything else - an unticked box, a
+    plain bullet, a paragraph such as "Do not merge until a packaged build
+    passes dual-display QA", or markup dropped in to break the block up - states
+    or hides a hold that nothing can record as performed. Every real acceptance
+    hold in this repository's history took one of the first three shapes.
+
+    Every rule below reads `acceptance_sections`. They used to disagree: only
+    the unticked-box rule saw the whole section, so a `<details>`, a `**bold**`
+    label or a `---` above a *prose* hold hid it - and prose is the shape the
+    historical holds took.
     """
     problems = []
 
-    # Unticked boxes are scanned over the whole section, so that a terminator
-    # dropped between two items cannot hide the ones below it.
     for section in acceptance_sections(body):
-        unchecked = []
+        unchecked, unresolvable, checked = [], [], 0
+        prose = []
         for line in section:
             item = LIST_ITEM.match(line)
             if not item:
+                # A nested heading groups the items below it; it is structure,
+                # not a hold. Everything else that is not a checkbox - a
+                # sentence, a rule, a label, an HTML tag - is reported, because
+                # the contract for this block is "checkboxes and nothing else"
+                # and because letting markup through is what hid the holds.
+                if line.strip() and not SECTION_BREAK.match(line):
+                    prose.append(line.strip())
                 continue
-            box = UNCHECKED_BOX.match(item.group(1).strip())
-            if box:
-                unchecked.append(box.group(1).strip() or "(unnamed item)")
+            text = item.group(1).strip()
+            if CHECKED_BOX.match(text):
+                checked += 1
+            elif UNCHECKED_BOX.match(text):
+                unchecked.append(UNCHECKED_BOX.match(text).group(1).strip() or "(unnamed item)")
+            else:
+                unresolvable.append(text or "(unnamed item)")
         if unchecked:
             problems.append(
                 (
@@ -282,23 +300,6 @@ def acceptance_problems(body: str) -> list[tuple[str, str]]:
                     "stop.",
                 )
             )
-
-    for block in acceptance_blocks(body):
-        unchecked, unresolvable, checked = [], [], 0
-        prose = []
-        for line in block:
-            item = LIST_ITEM.match(line)
-            if not item:
-                if line.strip():
-                    prose.append(line.strip())
-                continue
-            text = item.group(1).strip()
-            if CHECKED_BOX.match(text):
-                checked += 1
-            elif UNCHECKED_BOX.match(text):
-                unchecked.append(UNCHECKED_BOX.match(text).group(1).strip() or "(unnamed item)")
-            else:
-                unresolvable.append(text or "(unnamed item)")
         if unresolvable:
             problems.append(
                 (
@@ -315,13 +316,16 @@ def acceptance_problems(body: str) -> list[tuple[str, str]]:
             problems.append(
                 (
                     "Operator acceptance block states a hold in prose",
-                    "An Operator acceptance block may contain checkboxes and nothing "
-                    "else, because a sentence cannot record that it was performed. "
-                    "This prose states or qualifies a hold: "
+                    "An Operator acceptance block may contain checkboxes, and nested "
+                    "headings to group them, and nothing else: a sentence cannot "
+                    "record that it was performed, and a rule, a label or an HTML "
+                    "tag dropped into the block is how a hold below it gets hidden. "
+                    "This line is neither a checkbox nor a nested heading: "
                     + summarise(prose)
                     + ". Move each condition into its own checkbox and tick it once "
-                    "it is done. A ticked box elsewhere in the block does not cover "
-                    "it.",
+                    "it is done, and put context and review summaries above the "
+                    "block or under a heading of their own. A ticked box elsewhere "
+                    "in the block does not cover it.",
                 )
             )
         elif not unchecked and not unresolvable and not checked:
@@ -367,22 +371,32 @@ def code_files(root: Path) -> list[Path]:
 
 
 def unfinished_code_markers(root: Path) -> list[tuple[str, int, str]]:
-    hits = []
+    hits: dict[tuple[str, int], str] = {}
     for path in code_files(root):
         rel = path.relative_to(root).as_posix()
         try:
             text = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue
-        for number, line in enumerate(text.splitlines(), start=1):
-            # Blank out string literals first: `const LABEL: &str = "TODO"` is
-            # data, not unfinished work. A marker inside a multi-line raw string
-            # still reports; that has not happened, and a false positive there is
-            # cheap to resolve by naming a tracking issue.
-            code = STRING_LITERAL.sub('""', line)
-            if RUST_STUBS.search(code) or BARE_MARKER.search(code):
-                hits.append((rel, number, line.strip()[:160]))
-    return hits
+        lines = text.splitlines()
+        # Blank out string literals first: `const LABEL: &str = "TODO"` is data,
+        # not unfinished work. Masking runs one line at a time, so a marker
+        # inside a multi-line raw string still reports; that has not happened,
+        # and a false positive there is cheap to resolve by naming a tracking
+        # issue.
+        masked = [STRING_LITERAL.sub('""', line) for line in lines]
+        for number, code in enumerate(masked, start=1):
+            if BARE_MARKER.search(code):
+                hits[(rel, number)] = lines[number - 1].strip()[:160]
+        # `todo` and its `!()` may sit on different lines - rustc tokenises
+        # `todo\n!()` exactly like `todo!()`, so a per-line scan missed a real
+        # panicking stub. Search the joined text and report the line the
+        # identifier is on.
+        joined = "\n".join(masked)
+        for match in RUST_STUBS.finditer(joined):
+            number = joined.count("\n", 0, match.start()) + 1
+            hits.setdefault((rel, number), lines[number - 1].strip()[:160])
+    return [(rel, number, line) for (rel, number), line in sorted(hits.items())]
 
 
 def annotate(title: str, message: str, file: str | None = None,

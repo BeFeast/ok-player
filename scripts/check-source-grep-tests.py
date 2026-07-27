@@ -23,9 +23,21 @@ That last rule used to read "zero non-grep assertions", which a single
 `assert_eq!(2 + 2, 4);` was enough to satisfy. A comparison between constants is
 not evidence about an implementation.
 
+It is still satisfied by one assertion that *calls* anything outside
+TEXT_METHODS, whether or not the call has anything to do with the subject:
+`assert_eq!(Some(1).unwrap(), 1);` clears a test made entirely of source greps.
+That is the largest hole in this check and it is deliberate. Requiring the call
+to involve the fixture or a binding was measured against the real workspace and
+misclassifies two existing behavioural tests, which assert on production
+functions called with literal arguments and bind nothing:
+`assert_eq!(subtitle_style_label("Contrast"), "High contrast")` and
+`assert_eq!(player_command_registry().iter().filter(..).count(), 1)`. Trading
+those for a hole an author closes with one token is the wrong trade for a check
+whose purpose is to catch accidents.
+
 Existing offenders are grandfathered by an explicit allowlist that may only
-shrink. See the allowlist header for the rules and for what this does not
-detect.
+shrink. See the allowlist header for the rules and for the full list of what
+this does not detect.
 
 Usage:
   check-source-grep-tests.py [--root DIR] [--base-ref REF] [--require-base-ref]
@@ -398,8 +410,8 @@ def is_behavioural_evidence(
     )
 
 
-def classify(test: TestFn, seeds: set[str]) -> tuple[bool, int, int]:
-    """(is_source_text_only, source_grep_assertions, behavioural_assertions)."""
+def classify(test: TestFn, seeds: set[str]) -> tuple[bool, int, int, bool]:
+    """(is_source_text_only, grep_assertions, behavioural_assertions, uses_source)."""
     direct, derived, production = source_bindings(test.body, test.body_mask, seeds)
     uses_source = "include_str" in test.body_mask or bool(
         seeds & set(IDENT.findall(test.body_mask))
@@ -419,7 +431,12 @@ def classify(test: TestFn, seeds: set[str]) -> tuple[bool, int, int]:
             # source greps says nothing about the subject under test.
             continue
         evidence_count += 1
-    return (uses_source and evidence_count == 0, grep_count, evidence_count)
+    return (
+        uses_source and evidence_count == 0,
+        grep_count,
+        evidence_count,
+        uses_source,
+    )
 
 
 def file_seeds(src: str, mask: str) -> set[str]:
@@ -455,16 +472,26 @@ def file_seeds(src: str, mask: str) -> set[str]:
 
 
 def scan(root: Path) -> tuple[list[tuple[str, TestFn, int, int]], set[str], dict[str, int]]:
-    """(offenders, keys still greping source text, how many tests each key hits).
+    """(offenders, keys still bound to source text, how many tests each key hits).
 
     The second set is what the allowlist ledger is keyed on. An entry may be
-    deleted only once its test has stopped greping source text altogether -
+    deleted only once its test has stopped *reading* source text altogether -
     acquiring one behavioural assertion is not progress, it is laundering.
+
+    Keying this on "a visible grep survives" was itself drainable: moving
+    `source.contains(..)` into a same-file helper whose name does not contain
+    "assert" makes the grep invisible to this check (a disclosed gap), the entry
+    goes stale, and the check then demands the ledger line be deleted. Keying it
+    on "the test still binds source text at all" removes that route: the helper
+    call does not remove the `include_str!`. The cost is the opposite direction
+    - a test genuinely rewritten to assert on behaviour while still loading a
+    source file keeps its ledger line until someone deletes it by hand, which
+    the check never rejects.
 
     The third is there because `path::function` is not a unique identity.
     """
     findings: list[tuple[str, TestFn, int, int]] = []
-    still_greping: set[str] = set()
+    still_binding: set[str] = set()
     key_counts: dict[str, int] = {}
     rust_root = root / "rust"
     for path in sorted(rust_root.rglob("*.rs")):
@@ -479,12 +506,12 @@ def scan(root: Path) -> tuple[list[tuple[str, TestFn, int, int]], set[str], dict
         for test in find_tests(src, mask):
             key = f"{rel}::{test.name}"
             key_counts[key] = key_counts.get(key, 0) + 1
-            only, grep, behav = classify(test, seeds)
+            only, grep, behav, uses_source = classify(test, seeds)
             if only:
                 findings.append((rel, test, grep, behav))
-            if grep:
-                still_greping.add(key)
-    return findings, still_greping, key_counts
+            if uses_source:
+                still_binding.add(key)
+    return findings, still_binding, key_counts
 
 
 def read_allowlist(text: str) -> list[str]:
@@ -570,7 +597,7 @@ def main() -> int:
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
-    findings, still_greping, key_counts = scan(root)
+    findings, still_binding, key_counts = scan(root)
 
     if args.list:
         for rel, test, _, _ in findings:
@@ -605,12 +632,14 @@ def main() -> int:
             line=test.line,
         )
 
-    # An entry is stale only once its test has stopped greping source text
+    # An entry is stale only once its test has stopped reading source text
     # altogether. Keying staleness on "is it still an offender" made the ledger
     # drainable: adding one unrelated assertion to a grandfathered test turned
     # its entry stale, and the check then demanded the line be deleted - so the
     # prescribed fix for laundering was to record the laundering as progress.
-    live_keys = {f"{rel}::{t.name}" for rel, t, _, _ in findings} | still_greping
+    # Keying it on a surviving *visible* grep was drainable the same way through
+    # the disclosed neutral-helper gap, so it is keyed on the binding instead.
+    live_keys = {f"{rel}::{t.name}" for rel, t, _, _ in findings} | still_binding
 
     # `path::function` is not unique: two modules in one file may declare the
     # same test name, and one grandfathered entry would then cover both. That
@@ -637,7 +666,7 @@ def main() -> int:
             "error",
             "Stale source-grep allowlist entry",
             (
-                f"`{entry}` is allowlisted but no longer asserts on source text at "
+                f"`{entry}` is allowlisted but no longer reads source text at "
                 "all (it was fixed, renamed, or deleted). Delete the line from "
                 f"{ALLOWLIST_PATH}; the allowlist may only shrink."
             ),

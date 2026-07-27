@@ -12,11 +12,18 @@ is doing the merging.
   green when the change does nothing.
 - **Tests assert behaviour, not source text.** A test that loads a source file
   with `include_str!` and asserts that it `contains` a snippet passes against a
-  completely broken implementation. CI rejects new ones, and it does not accept
-  an unrelated assertion beside the greps as a fix. The allowlist of the ones
-  that already exist, `.github/source-grep-test-allowlist.txt`, may only shrink,
-  and a line goes only when its test has stopped asserting on source text
+  completely broken implementation. CI rejects new ones. The allowlist of the
+  ones that already exist, `.github/source-grep-test-allowlist.txt`, may only
+  shrink, and a line goes only when its test has stopped reading source text
   altogether - not when it merely acquired one behavioural assertion.
+  Read the header of that file before you rely on the check: it lists what the
+  detector does not see. In particular, **one assertion containing any call
+  clears a whole test** - `assert_eq!(Some(1).unwrap(), 1);` beside three
+  `source.contains` greps turns a rejection into a pass, measured. That gap is
+  deliberate (closing it misclassifies real behavioural tests) and it is why
+  this rule is a floor, not a verdict: a green check is not evidence that your
+  test asserts anything, and adding a junk assertion to get past it is
+  laundering, not a fix.
 - **Nothing in the pull request declares it unfinished.** A `WIP` or `Draft`
   title prefix, the maestro WIP marker comment in the body, or an unresolved
   item under an acceptance heading (`Operator acceptance`, `Acceptance
@@ -27,9 +34,17 @@ is doing the merging.
   check green, and never delete an acceptance block that still applies.
 - **An acceptance block contains checkboxes and nothing else.** A plain bullet
   or a sentence cannot record that anyone performed it, which is exactly how the
-  historical acceptance holds reached `main` unperformed. CI rejects any prose
-  or plain bullet inside an `Operator acceptance` block, including prose sitting
-  next to boxes that are already ticked. Put context above the block.
+  historical acceptance holds reached `main` unperformed. Inside an acceptance
+  section CI rejects every line that is not a checkbox or a nested heading -
+  prose, plain bullets, `---`, bold labels, HTML tags - whether or not other
+  boxes in the section are already ticked. Put context above the block.
+  A section opened by a markdown heading runs to the next heading of its own
+  level or above, so anything appended below a trailing acceptance section
+  (a review bot's summary, for instance) is read as part of it and will block
+  the merge until it is moved above the block or given a heading of its own.
+  What CI cannot see: a hold written *outside* an acceptance heading, an
+  acceptance heading phrased outside the recognised set, and a box that was
+  ticked without the work being done.
 - **An operator acceptance block is honoured by the operator, not by a worker.**
   If an issue or a pull request says a packaged build must be verified by hand
   before merge, that verification happens before merge.

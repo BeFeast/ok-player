@@ -146,19 +146,125 @@ fn a_prose_operator_acceptance_hold_blocks_the_merge() {
 }
 
 #[test]
-fn an_acceptance_block_ends_at_the_next_heading_bold_label_or_html_block() {
+fn a_heading_separates_an_appended_review_summary_from_the_acceptance_section() {
     let fixture = Declaration::new("okp-gate-acceptance-bounds");
-    // Review bots append their own bulleted summaries to the body. Those bullets
-    // are not acceptance items and must not be reported as unresolved ones.
+    // Review bots append their own bulleted summaries to the body. A summary
+    // under a heading of the acceptance section's own level is outside it and
+    // must not be reported as unresolved acceptance items. A heading is the only
+    // separator that does this: see the test below for what it costs.
     let body = "## Operator acceptance\n\n\
         - [x] Packaged build verified on GNOME\n\n\
-        <h3>Review summary</h3>\n\n\
+        ## Review summary\n\n\
         - Holds native resize until the toplevel acknowledges\n\
         - Adds fullscreen geometry diagnostics\n\n\
         **What the bot did**\n\n\
         - Ran the focused regression harness\n";
 
     let output = fixture.check("Fix Linux fullscreen screenshot surface restore", body);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+}
+
+#[test]
+fn content_appended_below_a_trailing_acceptance_section_blocks_the_merge() {
+    let fixture = Declaration::new("okp-gate-acceptance-append-cost");
+    // The disclosed cost of reading the whole section: markup weaker than a
+    // heading does not get anything out of the section, so a bulleted summary
+    // appended under an HTML tag or a bold label is reported. This is the
+    // deliberate direction - a visible false alarm an author fixes by moving the
+    // text, against a silently hidden prose hold - and AGENTS.md, the pull
+    // request template and the script docstring all say so.
+    let body = "## Operator acceptance\n\n\
+        - [x] Packaged build verified on GNOME\n\n\
+        <h3>Review summary</h3>\n\n\
+        - Holds native resize until the toplevel acknowledges\n";
+
+    let output = fixture.check("Fix Linux fullscreen screenshot surface restore", body);
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    assert!(stderr_of(&output).contains("Holds native resize"));
+}
+
+#[test]
+fn a_sub_terminator_cannot_hide_a_prose_or_plain_bullet_hold() {
+    let fixture = Declaration::new("okp-gate-acceptance-sub-terminator");
+    // The half of the laundering route that stayed open after the unticked-box
+    // scan was widened to the whole section: the prose and plain-bullet rules
+    // still ran on tight bounds that ended at a bold label, a rule or an HTML
+    // tag. Prose is the shape every real acceptance hold in this repository has
+    // taken, so this is the shape that mattered most. All six combinations below
+    // exited 0 before the bounds were unified.
+    let holds = [
+        (
+            "Do not merge until a packaged build passes GNOME/Wayland dual-display QA.",
+            "states a hold in prose",
+        ),
+        (
+            "- Verify dual-display QA on a packaged build",
+            "cannot be resolved",
+        ),
+    ];
+    for separator in ["<details>", "**Windows**", "---"] {
+        for (hold, expected) in holds {
+            let body = format!(
+                "## Operator acceptance\n\n- [x] Verified on Linux\n\n{separator}\n\n{hold}\n"
+            );
+
+            let output = fixture.check("Reveal saved Linux screenshots", &body);
+
+            assert_eq!(
+                output.status.code(),
+                Some(1),
+                "{separator} must not hide the hold below it: {hold}\n{}",
+                stderr_of(&output)
+            );
+            let stderr = stderr_of(&output);
+            assert!(
+                stderr.contains(expected),
+                "expected {expected:?} for {separator} + {hold:?}:\n{stderr}"
+            );
+            assert!(
+                stderr.contains("dual-display QA"),
+                "the hold itself must be named:\n{stderr}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_nested_acceptance_label_does_not_downgrade_the_section_bounds() {
+    let fixture = Declaration::new("okp-gate-acceptance-nested-label");
+    // A weakly opened acceptance block ends at any terminator, which is right
+    // when the label opened the block - and was a laundering route when the
+    // label sat *inside* a heading-opened section, because it reset the bounds
+    // to the weak ones and the `---` below it then hid the hold again.
+    let body = "## Operator acceptance\n\n\
+        - [x] smoke run\n\n\
+        **Acceptance criteria:**\n\n\
+        - [x] unit suite green\n\n\
+        ---\n\n\
+        - [ ] dual-display QA on a packaged build\n";
+
+    let output = fixture.check("Reveal saved Linux screenshots", body);
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    let stderr = stderr_of(&output);
+    assert!(stderr.contains("Operator acceptance is not complete"));
+    assert!(stderr.contains("dual-display QA on a packaged build"));
+}
+
+#[test]
+fn a_nested_heading_inside_an_acceptance_section_is_not_reported_as_a_hold() {
+    let fixture = Declaration::new("okp-gate-acceptance-nested-ok");
+    // Reading the whole section must not turn the sub-headings that group the
+    // checks into holds of their own.
+    let body = "## Operator acceptance\n\n\
+        ### Linux\n\n\
+        - [x] Verified on GNOME\n\n\
+        ### Windows\n\n\
+        - [x] Verified on Windows 11\n";
+
+    let output = fixture.check("Reveal saved Linux screenshots", body);
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
 }
@@ -591,6 +697,89 @@ fn an_unfinished_marker_in_shipped_xaml_blocks_the_merge() {
 }
 
 #[test]
+fn a_panicking_stub_split_across_two_lines_blocks_the_merge() {
+    let fixture = Declaration::new("okp-gate-split-stub");
+    let source = fixture.root.path().join("crate/src/lib.rs");
+    fs::create_dir_all(source.parent().expect("parent")).expect("fixture tree");
+    // rustc tokenises `todo\n!()` exactly like `todo!()`, so this compiles and
+    // panics like any other stub. The marker scan used to run one line at a
+    // time, which meant a stub written this way shipped.
+    fs::write(&source, "pub fn seek() -> u32 {\n    todo\n    !()\n}\n").expect("write");
+
+    let output = fixture.check("Add seeking", FINISHED_BODY);
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    assert!(stderr_of(&output).contains("Unfinished-code marker"));
+}
+
+#[test]
+fn build_output_is_skipped_only_where_a_project_file_puts_it() {
+    let fixture = Declaration::new("okp-gate-dotnet-output");
+    let dotnet = fixture.root.path().join("App/bin/Debug/Generated.cs");
+    let source = fixture.root.path().join("tools/bin/helper.py");
+    fs::create_dir_all(dotnet.parent().expect("parent")).expect("fixture tree");
+    fs::create_dir_all(source.parent().expect("parent")).expect("fixture tree");
+    fs::write(fixture.root.path().join("App/App.csproj"), "<Project />\n").expect("write");
+    fs::write(&dotnet, "// TODO: regenerate\n").expect("write");
+
+    // `App/bin` sits beside `App.csproj`, so it is .NET build output and its
+    // markers are not this repository's unfinished work.
+    let generated_only = fixture.check("Add the timecode style", FINISHED_BODY);
+    assert_eq!(
+        generated_only.status.code(),
+        Some(0),
+        "{}",
+        stderr_of(&generated_only)
+    );
+
+    // `tools/bin` is a checked-in source directory that merely has that name.
+    // Skipping every directory called `bin` would blind the scan to it.
+    fs::write(&source, "# TODO: finish the packaging helper\n").expect("write");
+    let checked_in = fixture.check("Add the timecode style", FINISHED_BODY);
+    assert_eq!(
+        checked_in.status.code(),
+        Some(1),
+        "{}",
+        stderr_of(&checked_in)
+    );
+    assert!(
+        String::from_utf8_lossy(&checked_in.stdout).contains("file=tools/bin/helper.py"),
+        "the annotation must point at the checked-in directory:\n{}",
+        String::from_utf8_lossy(&checked_in.stdout)
+    );
+}
+
+#[test]
+fn a_wider_closing_fence_still_closes_the_block_it_opened() {
+    let fixture = Declaration::new("okp-gate-wider-fence");
+    // CommonMark closes a fence with at least as many characters of the same
+    // kind, so this block is balanced and quoting the marker inside it is not a
+    // declaration. Pairing on an exact width match would leave the opener
+    // unpaired and report the quoted marker as a real one.
+    let body = "## What this changes\n\nDocuments the marker.\n\n\
+        ```\n<!-- maestro:wip -->\n````\n";
+
+    let output = fixture.check("Document the WIP marker", body);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+}
+
+#[test]
+fn an_indented_code_block_does_not_strip_the_rules_between_its_lines() {
+    let fixture = Declaration::new("okp-gate-indented-fence");
+    // Four spaces make an indented code block, not a fence: those backticks are
+    // literal text and close nothing. Treating them as a fence pair blanked
+    // everything between them, which switched the WIP marker rule off.
+    let body = "## What this changes\n\nRestores the surface.\n\n\
+        \u{20}   ```\n<!-- maestro:wip -->\n\u{20}   ```\n";
+
+    let output = fixture.check("Restore the surface", body);
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    assert!(stderr_of(&output).contains("WIP marker"));
+}
+
+#[test]
 fn a_marker_word_inside_a_string_literal_is_not_unfinished_code() {
     let fixture = Declaration::new("okp-gate-marker-literal");
     let source = fixture.root.path().join("crate/src/lib.rs");
@@ -777,6 +966,58 @@ fn playback_chrome_keeps_the_canonical_redlines() {
     assert!(osc_bar.contains("pub(crate) const PAD_HORIZONTAL: i32 = 14;"));
 }
 "#;
+
+/// Source text reached through a module-level constant. The test body never
+/// writes `include_str!`, so a detector that only reads test bodies sees a test
+/// about a string of unknown origin.
+const CONST_SEEDED_SOURCE_GREP_TEST: &str = r##"
+const MAIN_SOURCE: &str = include_str!("main.rs");
+
+#[test]
+fn renderer_environment_is_selected_before_gtk_initialization() {
+    assert!(MAIN_SOURCE.contains("configure_linux_renderer_environment();"));
+    assert!(MAIN_SOURCE.contains("VelopackApp::build()"));
+}
+"##;
+
+/// A behavioural test holding a raw string with a quote in it, followed by a
+/// source-text-only test. Masking literals without understanding `r#"..."#`
+/// mispairs on that inner quote and blanks everything from it to the end of the
+/// file, braces included - so neither function is recognised as a test at all
+/// and the offender below walks through unseen.
+const RAW_STRING_THEN_OFFENDER_TEST: &str = r##"
+#[test]
+fn parses_a_three_cue_subtitle_file() {
+    let sample = include_str!("../fixtures/three-cues.srt");
+    let label = r#"say "hi"#;
+
+    assert_eq!(parse_srt(sample).expect("sample should parse").len(), 3);
+    assert_eq!(label.len(), 7);
+}
+
+#[test]
+fn renderer_environment_is_selected_before_gtk_initialization() {
+    let source = include_str!("main.rs");
+
+    assert!(source.contains("configure_linux_renderer_environment();"));
+}
+"##;
+
+/// The grep moved into a same-file helper whose name says nothing. The detector
+/// cannot see the grep (a disclosed gap), which used to make the ledger entry
+/// look fixed and get its line deleted - laundering recorded as progress.
+const NEUTRAL_HELPER_GREP_TEST: &str = r##"
+fn implements_expected_startup(source: &str) -> bool {
+    source.contains("configure_linux_renderer_environment();")
+}
+
+#[test]
+fn renderer_environment_is_selected_before_gtk_initialization() {
+    let source = include_str!("main.rs");
+
+    assert!(implements_expected_startup(source));
+}
+"##;
 
 /// The same shape, but the non-grep assertion actually calls production code.
 /// This is the false positive the text-search rule must not create.
@@ -1152,6 +1393,78 @@ fn searching_a_constant_string_does_not_count_as_running_the_code() {
     assert!(
         String::from_utf8_lossy(&output.stdout)
             .contains("playback_chrome_keeps_the_canonical_redlines")
+    );
+}
+
+#[test]
+fn source_text_reached_through_a_module_constant_is_still_source_text() {
+    let workspace = Workspace::new("okp-gate-const-seed");
+    workspace.write_tests(CONST_SEEDED_SOURCE_GREP_TEST);
+    workspace.write_allowlist("# empty\n");
+
+    let output = workspace.check();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a `const … = include_str!(..)` is the macro behind one indirection:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("renderer_environment_is_selected_before_gtk_initialization")
+    );
+}
+
+#[test]
+fn a_raw_string_holding_a_quote_does_not_hide_the_tests_after_it() {
+    let workspace = Workspace::new("okp-gate-raw-string-mask");
+    workspace.write_tests(RAW_STRING_THEN_OFFENDER_TEST);
+    workspace.write_allowlist("# empty\n");
+
+    let output = workspace.check();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a mispaired quote inside a raw string blanks the rest of the file, and \
+         every test after it stops being scanned:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("renderer_environment_is_selected_before_gtk_initialization"),
+        "the offender after the raw string must still be found:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("parses_a_three_cue_subtitle_file"),
+        "the behavioural test holding the raw string must not be flagged:\n{stdout}"
+    );
+}
+
+#[test]
+fn hiding_a_grep_in_a_neutral_helper_does_not_drain_its_ledger_entry() {
+    let workspace = Workspace::new("okp-gate-neutral-helper-ledger");
+    // The detector cannot see through a helper with a neutral name - that gap is
+    // disclosed in the allowlist header. What it must not do is *reward* the
+    // route: keying staleness on a surviving visible grep meant wrapping the
+    // grep turned the ledger entry stale, and the check then demanded the line
+    // be deleted. Staleness is keyed on the `include_str!` binding instead.
+    workspace.write_tests(NEUTRAL_HELPER_GREP_TEST);
+    workspace.write_allowlist(
+        "rust/crates/demo/src/tests.rs::renderer_environment_is_selected_before_gtk_initialization\n",
+    );
+
+    let output = workspace.check();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "hiding the grep must not be rejected *and* must not be rewarded:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("Stale source-grep allowlist entry"),
+        "the entry must survive while the test still reads source text:\n{stdout}"
     );
 }
 

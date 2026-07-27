@@ -21,15 +21,36 @@
 #     from a test name, so moving a grandfathered test means fixing it first.
 #
 # WHAT THE DETECTOR DOES NOT SEE. Being absent from this file is not a
-# certificate that a test asserts on behaviour. Known gaps:
+# certificate that a test asserts on behaviour. Known gaps, worst first:
+#   * ONE ASSERTION THAT CALLS ANYTHING clears a whole test. "Behavioural
+#     evidence" is an assertion that mentions a binding produced by a call, or
+#     hands source text to production code, or contains a call whose head
+#     identifier is not a string method (see TEXT_METHODS). Nothing checks that
+#     the call has anything to do with the subject, so
+#     `assert_eq!(Some(1).unwrap(), 1);` added beside three `source.contains`
+#     greps takes the test from rejected to accepted. Measured, on this tree.
+#     Narrowing it to "the call must involve the fixture or a binding" was
+#     tried and rejected: it misclassifies two existing behavioural tests that
+#     call production functions with literal arguments
+#     (`subtitle_style_label`, `format_scale`, `player_command_registry`).
+#   * a grep hidden inside a helper with a neutral name, e.g.
+#     `assert!(has_expected_implementation(source))`. Telling a grep helper from
+#     a parser needs flow analysis. A helper whose name contains "assert" is
+#     treated as an assertion helper and does not launder the grep; any other
+#     name does. The ledger is keyed on the `include_str!` binding rather than
+#     on a surviving visible grep, so using this route no longer also drains an
+#     entry out of this file - but it still clears the test.
 #   * source text read without `include_str!`, e.g. `fs::read_to_string(
 #     "src/foo.rs")`. None exist today.
 #   * a helper in ANOTHER module that returns source text. A helper in the same
 #     file whose return type is a string is resolved; a cross-module one is not.
-#   * a grep hidden inside a helper with a neutral name, e.g.
-#     `assert!(has_expected_implementation(source))`. Telling a grep helper from
-#     a parser needs flow analysis.
+#   * a test that asserts on behaviour but on the wrong thing. This check reads
+#     shapes, never meaning: it cannot tell a real regression test from one that
+#     drives the code and asserts something trivially true.
 #   * C#. The pattern exists only in the Rust workspace.
+#
+# Two of those gaps are one token wide. This check is a floor against writing a
+# grep-only test by habit, not a defence against an author who wants one merged.
 #
 # Format: <path relative to the repository root>::<test function name>
 rust/crates/okp-core/tests/candidate_toolchain.rs::portability_failure_evidence_is_bound_to_both_workflow_artifacts

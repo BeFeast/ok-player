@@ -29,9 +29,15 @@ blocks the merge until every box is ticked.
 - [ ] Packaged build installed and launched on the target desktop
 - [ ] Behaviour verified by hand, evidence linked
 
-That block may contain checkboxes and nothing else: a plain bullet or a sentence
-states a condition that nothing can ever record as performed, and CI rejects it
-even when other boxes in the block are ticked. Put context above the block.
+That block may contain checkboxes, and nested headings to group them, and
+nothing else: a plain bullet or a sentence states a condition that nothing can
+ever record as performed, and CI rejects it even when other boxes in the block
+are ticked. So does a rule, a bold label or an HTML tag, because dropping one of
+those above a hold is how the hold gets hidden. Put context above the block.
+
+The section runs to the next heading of its own level or above, so anything
+added below it - including a review summary appended later - is read as part of
+it. Give such text a heading of its own.
 
 Never tick a box you did not perform. Never delete an acceptance block to get a
 green check. The same applies to the maestro WIP marker comment: it blocks the
