@@ -439,8 +439,15 @@ def classify(test: TestFn, seeds: set[str]) -> tuple[bool, int, int, bool]:
     )
 
 
-def file_seeds(src: str, mask: str) -> set[str]:
-    """Names that stand for source text: consts/statics and helper functions.
+def file_seeds(src: str, mask: str) -> tuple[set[str], set[str]]:
+    """(constant names, helper function names) that stand for source text.
+
+    They are returned separately because they are used differently. A constant
+    is referred to by name, so it seeds every test that mentions it. A helper
+    seeds a test only when that test *calls* it: seeding by mention meant a test
+    with a local binding of the same name - `let fixture = make_value();` beside
+    a file-level `fn fixture() -> &str { include_str!(..) }` - had its own value
+    classified as source text and was rejected.
 
     A helper such as
 
@@ -450,11 +457,12 @@ def file_seeds(src: str, mask: str) -> set[str]:
     bindings the macro would. Only functions declared in the same file are
     resolved: a helper in another module is not followed.
     """
-    seeds = set()
+    constants: set[str] = set()
+    helpers: set[str] = set()
     for m in CONST_BINDING.finditer(mask):
         rhs = mask[m.start(2) : m.end(2)]
         if "include_str" in rhs:
-            seeds.add(m.group(1))
+            constants.add(m.group(1))
     for m in FN_SIGNATURE.finditer(mask):
         # Only a function that hands back the text itself is source text. A
         # helper that parses a fixture and returns a value is production code,
@@ -467,8 +475,20 @@ def file_seeds(src: str, mask: str) -> set[str]:
         end = match_delimiter(mask, brace, "{", "}")
         if end == -1 or "include_str" not in mask[brace:end]:
             continue
-        seeds.add(m.group(1))
-    return seeds
+        helpers.add(m.group(1))
+    return constants, helpers
+
+
+def seeds_for(test: TestFn, constants: set[str], helpers: set[str]) -> set[str]:
+    """The seed names this test actually reaches: constants it mentions, helpers
+    it calls."""
+    mentioned = set(IDENT.findall(test.body_mask))
+    called = {
+        name
+        for name in helpers
+        if re.search(rf"\b{re.escape(name)}\s*\(", test.body_mask)
+    }
+    return (constants & mentioned) | called
 
 
 def scan(root: Path) -> tuple[list[tuple[str, TestFn, int, int]], set[str], dict[str, int]]:
@@ -501,12 +521,14 @@ def scan(root: Path) -> tuple[list[tuple[str, TestFn, int, int]], set[str], dict
         if "#[test" not in src and "#[tokio::test" not in src:
             continue
         mask = mask_literals(src)
-        seeds = file_seeds(src, mask)
+        constants, helpers = file_seeds(src, mask)
         rel = path.relative_to(root).as_posix()
         for test in find_tests(src, mask):
             key = f"{rel}::{test.name}"
             key_counts[key] = key_counts.get(key, 0) + 1
-            only, grep, behav, uses_source = classify(test, seeds)
+            only, grep, behav, uses_source = classify(
+                test, seeds_for(test, constants, helpers)
+            )
             if only:
                 findings.append((rel, test, grep, behav))
             if uses_source:

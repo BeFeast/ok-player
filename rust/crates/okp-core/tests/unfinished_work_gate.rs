@@ -780,6 +780,90 @@ fn an_indented_code_block_does_not_strip_the_rules_between_its_lines() {
 }
 
 #[test]
+fn a_setext_acceptance_heading_opens_a_section() {
+    let fixture = Declaration::new("okp-gate-setext");
+    // `Operator acceptance` underlined with `---` or `===` is a valid markdown
+    // heading, and the phrase alone matches no ATX or label form, so the section
+    // it opened was invisible and the hold under it merged.
+    for underline in ["---", "==="] {
+        let body = format!(
+            "## Summary\n\nReveals saved screenshots.\n\nOperator acceptance\n{underline}\n\n- [ ] dual-display QA on a packaged build\n"
+        );
+
+        let output = fixture.check("Reveal saved Linux screenshots", &body);
+
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "a setext heading must open a section: {underline}\n{}",
+            stderr_of(&output)
+        );
+        assert!(stderr_of(&output).contains("dual-display QA on a packaged build"));
+    }
+}
+
+#[test]
+fn a_setext_underline_does_not_end_an_acceptance_section() {
+    let fixture = Declaration::new("okp-gate-setext-terminator");
+    // A setext underline opens but never closes. `**Windows**` followed by `---`
+    // is also a valid setext heading, so treating one as a terminator would hand
+    // back the laundering route the section bounds exist to close.
+    let body = "## Operator acceptance\n\n- [x] smoke run\n\n**Windows**\n---\n\n- [ ] dual-display QA on a packaged build\n";
+
+    let output = fixture.check("Reveal saved Linux screenshots", body);
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    assert!(stderr_of(&output).contains("dual-display QA on a packaged build"));
+}
+
+#[test]
+fn a_fence_carrying_an_info_string_does_not_close_a_block() {
+    let fixture = Declaration::new("okp-gate-fence-info");
+    // Only an opening fence may carry an info string. Accepting ```python as a
+    // closer paired it with the opener above and stripped everything between
+    // them - the WIP marker included - while the real closer opened a new block.
+    let body =
+        "## What this changes\n\nRestores the surface.\n\n```\n<!-- maestro:wip -->\n```python\n";
+
+    let output = fixture.check("Restore the surface", body);
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    assert!(stderr_of(&output).contains("WIP marker"));
+}
+
+#[test]
+fn an_unfinished_marker_in_shipped_packaging_configuration_blocks_the_merge() {
+    let fixture = Declaration::new("okp-gate-packaging-marker");
+    // An RPM spec, a desktop entry and a Dockerfile all reach users through an
+    // artifact, so a marker in one is unfinished work like any other.
+    for (name, contents) in [
+        (
+            "ok-player.spec",
+            "Name: ok-player\n# TODO: bump the release\n",
+        ),
+        ("app.desktop", "[Desktop Entry]\n# TODO: add MimeType\n"),
+        (
+            "build.Dockerfile",
+            "FROM base\n# TODO: pin the base image\n",
+        ),
+    ] {
+        let path = fixture.root.path().join("packaging").join(name);
+        fs::create_dir_all(path.parent().expect("parent")).expect("fixture tree");
+        fs::write(&path, contents).expect("write");
+
+        let output = fixture.check("Package the Linux build", FINISHED_BODY);
+
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "shipped packaging config must be scanned: {name}\n{}",
+            stderr_of(&output)
+        );
+        fs::remove_file(&path).expect("remove");
+    }
+}
+
+#[test]
 fn a_marker_word_inside_a_string_literal_is_not_unfinished_code() {
     let fixture = Declaration::new("okp-gate-marker-literal");
     let source = fixture.root.path().join("crate/src/lib.rs");
@@ -1016,6 +1100,29 @@ fn renderer_environment_is_selected_before_gtk_initialization() {
     let source = include_str!("main.rs");
 
     assert!(implements_expected_startup(source));
+}
+"##;
+
+/// A file with a source-returning helper and two tests: one calls the helper,
+/// the other binds its own value under the same name. Seeding helper names into
+/// every test in the file misclassifies the second one.
+const SHADOWED_HELPER_NAME_TEST: &str = r##"
+fn fixture() -> &'static str {
+    include_str!("main.rs")
+}
+
+#[test]
+fn helper_source_is_still_source_text() {
+    let source = fixture();
+
+    assert!(source.contains("configure_linux_renderer_environment();"));
+}
+
+#[test]
+fn a_local_binding_that_shadows_the_helper_name_is_behaviour() {
+    let fixture = build_startup_recorder();
+
+    assert_eq!(fixture.steps(), ["renderer-environment", "gtk-init"]);
 }
 "##;
 
@@ -1465,6 +1572,33 @@ fn hiding_a_grep_in_a_neutral_helper_does_not_drain_its_ledger_entry() {
     assert!(
         !stdout.contains("Stale source-grep allowlist entry"),
         "the entry must survive while the test still reads source text:\n{stdout}"
+    );
+}
+
+#[test]
+fn a_local_binding_that_shadows_a_source_helper_is_not_source_text() {
+    let workspace = Workspace::new("okp-gate-helper-shadow");
+    // Helper names used to seed every test in the file, whether or not the test
+    // called the helper. A test that binds its own value under the same name had
+    // that value classified as source text and was rejected.
+    workspace.write_tests(SHADOWED_HELPER_NAME_TEST);
+    workspace.write_allowlist("# empty\n");
+
+    let output = workspace.check();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "the test that actually calls the helper is still an offender:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("helper_source_is_still_source_text"),
+        "calling the helper is still reading source text:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("a_local_binding_that_shadows_the_helper_name"),
+        "a local binding of the same name is not the helper:\n{stdout}"
     );
 }
 

@@ -25,7 +25,7 @@ body:
         Numbered steps from a clean start, the media or state involved, and
         exactly what happens versus what should happen. If it only reproduces
         under a specific desktop, session type, or display layout, say so.
-      value: |
+      placeholder: |
         1.
         2.
         3.
@@ -43,7 +43,7 @@ body:
         What must be true for this to be closed. State the regression test that
         must fail without the fix, and any operator acceptance that must happen
         before the fix may merge.
-      value: |
+      placeholder: |
         - [ ] Regression test that fails without the fix:
         - [ ] Operator acceptance required before merge: yes / no - if yes, what
     validations:

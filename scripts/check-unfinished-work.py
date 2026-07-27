@@ -42,6 +42,20 @@ What this does NOT catch, on purpose or for want of a cheap rule:
     masked one line at a time, so `r#"... TODO ..."#` spanning lines reports.
   * unfinished work in Markdown. `.md` is out of scope: prose discusses markers
     legitimately, and a check that fires on documentation gets muted.
+  * a setext heading used as a *terminator*. A setext underline opens an
+    acceptance section but never ends one, because `**Windows**` followed by
+    `---` is also a valid setext heading and honouring it as a terminator would
+    hand back the laundering route the section bounds exist to close. The cost
+    is over-blocking: a genuine setext heading below an acceptance section does
+    not get its content out of the section, a `##` heading does.
+
+Known FALSE POSITIVE, not fixed: the acceptance-heading phrase accepts up to 60
+characters of suffix, so a results section such as `## Acceptance test results`
+opens a section and its prose is rejected as an unrecordable hold. Constraining
+the suffix to the recognised qualifiers would drop real holds titled, say,
+`## Operator acceptance for the packaged build`, and this check is deliberately
+tuned to over-block rather than miss. Rename the heading (`## Acceptance
+testing: results`, `## QA results`) or move the prose above the block.
 
 A known cost of the acceptance rules: because a heading-opened acceptance
 section runs to the next heading of its own level or above, anything appended
@@ -116,8 +130,23 @@ CHECKED_BOX = re.compile(r"^\[[xX]\]\s*(.*)$")
 # make it an indented code block, and its ``` is literal text. Accepting any
 # indentation let an indented pair of fences strip a WIP marker sitting between
 # them. The strict bound only ever strips less, so it cannot hide a rule.
-FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+# The trailing group is the info string. Only an *opening* fence may carry one;
+# a line such as ```python is content, not a closer. Accepting it as a closer
+# paired an opener with the wrong line and stripped a marker sitting between
+# them.
+FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+# `Operator acceptance` on one line and `---` (or `===`) on the next is a valid
+# setext heading, and the phrase alone matches no ATX or label form, so the
+# section it opened was invisible. A setext underline only ever *opens* here: it
+# never ends an acceptance section, because `**Windows**` followed by `---` is
+# also a setext heading and letting one terminate would reopen exactly the
+# laundering route this file spent a round closing.
+SETEXT_UNDERLINE = re.compile(r"^ {0,3}(=+|-+)\s*$")
+ACCEPTANCE_LABEL_ONLY = re.compile(
+    rf"^\s*{ACCEPTANCE_PHRASE}[^.!?:]{{0,40}}\s*$",
+    re.IGNORECASE | re.VERBOSE,
+)
 
 # Unfinished-code markers. A marker that references a tracking issue is fine.
 # Rust tokenises `todo !()` the same as `todo!()`, so the bang may sit apart.
@@ -135,7 +164,11 @@ BARE_MARKER = re.compile(r"\b(TODO|FIXME)\b(?!\s*\(\s*#\d+\s*\))")
 CODE_SUFFIXES = {
     ".rs", ".cs", ".sh", ".ps1", ".psm1", ".py", ".c", ".h", ".cpp", ".xaml",
     ".yml", ".yaml", ".toml", ".json", ".manifest",
-    ".xml", ".props", ".targets", ".csproj",
+    ".xml", ".props", ".targets", ".csproj", ".sln",
+    # Shipped packaging and build configuration. A half-finished RPM spec, a
+    # desktop entry with a missing MimeType, or an unpinned base image is
+    # unfinished work that reaches users through an artifact.
+    ".spec", ".desktop", ".dockerfile", ".Dockerfile", ".service",
 }
 SKIP_DIRS = {".git", "target", "node_modules"}
 # `bin` and `obj` are .NET build output, but only where a project file puts
@@ -176,14 +209,17 @@ def strip_fenced_blocks(text: str) -> str:
         match = FENCE.match(line)
         if match:
             marker = match.group(1)
-            fences.append((index, marker[0], len(marker)))
+            fences.append((index, marker[0], len(marker), match.group(2).strip()))
     paired: set[int] = set()
     open_at: tuple[int, str, int] | None = None
-    for index, char, width in fences:
+    for index, char, width, info in fences:
         if open_at is None:
             open_at = (index, char, width)
             continue
-        if char == open_at[1] and width >= open_at[2]:
+        # A closing fence carries no info string. ```python inside a block is
+        # content; treating it as the closer let the real closer open a second
+        # block and a marker between them was stripped.
+        if char == open_at[1] and width >= open_at[2] and not info:
             paired.add(open_at[0])
             paired.add(index)
             open_at = None
@@ -227,10 +263,26 @@ def acceptance_sections(body: str) -> list[list[str]]:
     sections: list[list[str]] = []
     current: list[str] | None = None
     level = 0
-    for line in lines:
-        if ACCEPTANCE_HEADING.match(line):
+    skip_next = False
+    for index, line in enumerate(lines):
+        if skip_next:
+            skip_next = False
+            continue
+        setext = None
+        if not ACCEPTANCE_HEADING.match(line) and ACCEPTANCE_LABEL_ONLY.match(line):
+            underline = (
+                SETEXT_UNDERLINE.match(lines[index + 1])
+                if index + 1 < len(lines)
+                else None
+            )
+            if underline:
+                setext = 1 if underline.group(1).startswith("=") else 2
+        if setext or ACCEPTANCE_HEADING.match(line):
             opener = SECTION_BREAK.match(line)
-            if opener:
+            if setext:
+                level = setext
+                skip_next = True
+            elif opener:
                 level = len(opener.group(1))
             elif current is None:
                 level = 0

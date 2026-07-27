@@ -32,7 +32,7 @@ body:
         Observable conditions that must hold when this is done, and the test
         that proves each one. If an operator must accept the result before it
         merges, say so here.
-      value: |
+      placeholder: |
         - [ ]
         - [ ] Proven by test:
         - [ ] Operator acceptance required before merge: yes / no - if yes, what
