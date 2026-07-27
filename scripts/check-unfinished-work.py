@@ -15,7 +15,8 @@ Two cheap, mechanical rules that a merge robot cannot talk itself out of:
 
 2. Tree checks: unfinished-code markers in shipped source and shipped
    configuration - `todo!()`, `unimplemented!()`, and bare TODO / FIXME
-   comments. A marker that names a tracking issue (`TODO(#123)`) is accepted:
+   comments. "Shipped" is a suffix set plus a small set of extensionless
+   filenames, because a packaging `Makefile` has no suffix to match on. A marker that names a tracking issue (`TODO(#123)`) is accepted:
    the work is tracked, not lost. String literals are masked first, so a
    helper that *searches* for the marker text - `grep -n 'TODO' file`,
    `x = 'FIXME'` - is data rather than a declaration. Single quotes are masked
@@ -227,7 +228,14 @@ CODE_SUFFIXES = {
     # desktop entry with a missing MimeType, or an unpinned base image is
     # unfinished work that reaches users through an artifact.
     ".spec", ".desktop", ".dockerfile", ".Dockerfile", ".service",
+    # The published feed page. It ships to Pages, so a marker in it is visible
+    # to users like any other artifact.
+    ".html",
 }
+# Shipped files with no suffix at all: `Path.suffix` is empty for these, so a
+# suffix set alone can never reach them. `.copr/Makefile` drives COPR
+# packaging. Their recipe lines are shell, so they mask single quotes too.
+CODE_FILENAMES = {"Makefile", "makefile", "GNUmakefile"}
 SKIP_DIRS = {".git", "target", "node_modules"}
 # `bin` and `obj` are .NET build output, but only where a project file puts
 # them. Skipping every directory with those names would blind the scan to a
@@ -338,13 +346,28 @@ def acceptance_sections(body: str) -> list[list[str]]:
         if setext or ACCEPTANCE_HEADING.match(line):
             opener = SECTION_BREAK.match(line)
             if setext:
-                level = setext
+                new_level = setext
                 skip_next = True
             elif opener:
-                level = len(opener.group(1))
-            elif current is None:
-                level = 0
-            # else: a weak label inside a section keeps the enclosing level.
+                new_level = len(opener.group(1))
+            else:
+                new_level = None
+            if new_level is None:
+                if current is None:
+                    level = 0
+                # else: a weak label inside a section keeps the enclosing level.
+            elif level == 0:
+                level = new_level
+            else:
+                # A *nested* acceptance heading groups the checks below it; it
+                # does not re-bound the section it sits in. Taking its own level
+                # let the next sibling heading end the outer section, so
+                # `## Operator acceptance` / `- [x] smoke` /
+                # `### Acceptance criteria` / `- [x] units` / `### Windows` /
+                # `- [ ] dual-display QA` exited 0 - the unticked box was
+                # outside every section. Keep the outer bound, for the same
+                # reason a nested weak label already inherits it.
+                level = min(level, new_level)
             if current is not None:
                 sections.append(current)
             current = []
@@ -474,7 +497,9 @@ def is_dotnet_output(root: Path, rel: Path) -> bool:
 def code_files(root: Path) -> list[Path]:
     files = []
     for path in root.rglob("*"):
-        if not path.is_file() or path.suffix not in CODE_SUFFIXES:
+        if not path.is_file() or not (
+            path.suffix in CODE_SUFFIXES or path.name in CODE_FILENAMES
+        ):
             continue
         rel = path.relative_to(root)
         if SKIP_DIRS & set(rel.parts):
@@ -504,6 +529,7 @@ def unfinished_code_markers(root: Path) -> list[tuple[str, int, str]]:
         literals = (
             STRING_OR_SINGLE_QUOTED
             if path.suffix in SINGLE_QUOTE_STRING_SUFFIXES
+            or path.name in CODE_FILENAMES
             else STRING_LITERAL
         )
         masked = [literals.sub('""', line) for line in lines]

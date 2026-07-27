@@ -910,6 +910,74 @@ fn a_marker_word_inside_a_string_literal_is_not_unfinished_code() {
 }
 
 #[test]
+fn a_nested_acceptance_heading_does_not_shrink_the_section_bounds() {
+    let fixture = Declaration::new("okp-gate-nested-acceptance-heading");
+    // `### Acceptance criteria` matches the acceptance phrase, so it opened a
+    // section of its own at level 3 - and the next sibling `### Windows` then
+    // ended it, putting the unticked box outside every section. A nested
+    // acceptance heading groups the checks below it; it must not re-bound the
+    // section it sits in.
+    let body = "## Operator acceptance\n\
+        - [x] smoke run\n\n\
+        ### Acceptance criteria\n\
+        - [x] unit tests\n\n\
+        ### Windows\n\
+        - [ ] dual-display QA on a packaged build\n";
+
+    let output = fixture.check("Fix the seek readout", body);
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    assert!(stderr_of(&output).contains("dual-display QA"));
+}
+
+#[test]
+fn an_unfinished_marker_in_a_shipped_file_without_a_suffix_blocks_the_merge() {
+    let fixture = Declaration::new("okp-gate-suffixless");
+    // A packaging Makefile and the published feed page both reach users
+    // through an artifact. `Path.suffix` is empty for the first and `.html`
+    // for the second, so a suffix set alone reached neither.
+    for (name, contents) in [
+        (
+            "Makefile",
+            "srpm:\n\t# TODO: pass the outdir through\n\t./package.sh\n",
+        ),
+        (
+            "index.html",
+            "<html>\n  <body>\n    <!-- TODO: write the release notes -->\n  </body>\n</html>\n",
+        ),
+    ] {
+        let path = fixture.root.path().join("packaging").join(name);
+        fs::create_dir_all(path.parent().expect("parent")).expect("fixture tree");
+        fs::write(&path, contents).expect("write");
+
+        let output = fixture.check("Publish the feed", FINISHED_BODY);
+
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "shipped file must be scanned: {name}\n{}",
+            stderr_of(&output)
+        );
+        fs::remove_file(&path).expect("remove");
+    }
+}
+
+#[test]
+fn a_makefile_recipe_searching_for_the_marker_text_is_not_unfinished_code() {
+    let fixture = Declaration::new("okp-gate-makefile-quotes");
+    // A Makefile recipe line is shell, so it masks single-quoted strings like
+    // any other shell. Bringing suffixless files into the scan must not bring
+    // the false positive #646 case 1 removed back with them.
+    let path = fixture.root.path().join("packaging/Makefile");
+    fs::create_dir_all(path.parent().expect("parent")).expect("fixture tree");
+    fs::write(&path, "audit:\n\tgrep -rn 'TODO' src\n").expect("write");
+
+    let output = fixture.check("Audit the tree", FINISHED_BODY);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+}
+
+#[test]
 fn a_marker_inside_a_single_quoted_string_is_not_unfinished_code() {
     let fixture = Declaration::new("okp-gate-single-quoted");
     // A helper that *searches* for the marker text carries it as data, and the
