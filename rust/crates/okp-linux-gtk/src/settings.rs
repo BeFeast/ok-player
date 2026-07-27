@@ -893,6 +893,24 @@ mod tests {
     }
 
     #[test]
+    fn an_unusable_mpv_conf_hwdec_still_leaves_a_safe_fallback() {
+        let settings = store();
+        let raw = [("hwdec".to_owned(), "not-a-real-decoder".to_owned())];
+
+        // What the engine is asked for first, and what it is asked for if the
+        // escape hatch has to be dropped because it is what broke creation.
+        let primary = settings.hwdec_plan(None, &raw);
+        let fallback = settings.hwdec_plan(None, &[]);
+
+        assert_eq!(primary.value, "not-a-real-decoder");
+        assert_ne!(
+            fallback.value, primary.value,
+            "the fallback must not carry the value that failed"
+        );
+        assert!(hwdec_policy::automatic_hwdec_is_copy_free(&fallback.value));
+    }
+
+    #[test]
     fn an_mpv_conf_hwdec_option_overrules_the_toggle_and_the_renderer() {
         let settings = store();
         let raw = [("hwdec".to_owned(), "vaapi-copy".to_owned())];
