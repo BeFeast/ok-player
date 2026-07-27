@@ -80,3 +80,36 @@ foreach ($forbidden in @('build-velopack.ps1', 'vpk pack', 'dotnet publish')) {
 $launchIdx = $releaseLane.IndexOf('Launch the installed application')
 if ($launchIdx -lt 0 -or $launchIdx -gt $publishIdx) { throw 'Publish step must come after the launch gate' }
 Write-Host 'ok: publish is opt-in, after the gates, with no rebuild after gating'
+
+# Execute the Build step's actual run script against a stub build-velopack.ps1
+# and verify the version and the publish-only DownloadPrior switch bind by
+# name - the first live dispatch failed exactly here (array splatting bound
+# the literal '-Version' as the version value).
+$buildStep = Get-Step -Yaml $releaseLane -Name 'Build the Velopack installer'
+$runIdx = $buildStep.IndexOf('run: |')
+if ($runIdx -lt 0) { throw 'Build step has no multiline run script' }
+$runScript = (($buildStep.Substring($runIdx + 6) -split "`n" | ForEach-Object { $_.Trim() }) | Where-Object { $_ }) -join "`n"
+
+$sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("okp-release-lane-test-" + [guid]::NewGuid())
+New-Item -ItemType Directory -Force -Path (Join-Path $sandbox 'installer') | Out-Null
+@'
+param([string]$Version, [switch]$Publish, [switch]$DownloadPrior)
+"$Version|$($DownloadPrior.IsPresent)" | Set-Content -Path (Join-Path $PSScriptRoot '..' 'bound.txt')
+'@ | Set-Content -Path (Join-Path $sandbox 'installer' 'build-velopack.ps1')
+
+function Invoke-BuildStep([string]$Publish) {
+  $script = $runScript.Replace('${{ inputs.version }}', '9.9.9-test.1').Replace('${{ inputs.publish }}', $Publish)
+  Push-Location $sandbox
+  try { Invoke-Expression $script } finally { Pop-Location }
+  return (Get-Content (Join-Path $sandbox 'bound.txt')).Trim()
+}
+
+try {
+  $bound = Invoke-BuildStep 'true'
+  if ($bound -ne '9.9.9-test.1|True') { throw "publishing run bound '$bound', want '9.9.9-test.1|True'" }
+  $bound = Invoke-BuildStep 'false'
+  if ($bound -ne '9.9.9-test.1|False') { throw "gate-only run bound '$bound', want '9.9.9-test.1|False'" }
+} finally {
+  Remove-Item -Recurse -Force $sandbox -ErrorAction SilentlyContinue
+}
+Write-Host 'ok: build step binds Version by name and DownloadPrior only on publishing runs'

@@ -73,8 +73,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $buildArgs = @('-Version', '${{ inputs.version }}')
-          if ('${{ inputs.publish }}' -eq 'true') { $buildArgs += '-DownloadPrior' }
+          $buildArgs = @{ Version = '${{ inputs.version }}' }
+          if ('${{ inputs.publish }}' -eq 'true') { $buildArgs.DownloadPrior = $true }
           ./installer/build-velopack.ps1 @buildArgs
 
       - name: Assert the shipping installer artifacts exist
