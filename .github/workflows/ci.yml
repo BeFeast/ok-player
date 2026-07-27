@@ -111,3 +111,7 @@ jobs:
       - name: Test the Windows installed-tree assertion
         shell: pwsh
         run: ./scripts/tests/windows-installed-tree.Tests.ps1
+
+      - name: Test the Windows release lane invariants
+        shell: pwsh
+        run: ./scripts/tests/windows-release-lane.Tests.ps1

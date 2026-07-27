@@ -56,9 +56,18 @@ jobs:
       - name: Install Velopack CLI
         run: dotnet tool install -g vpk --version 1.2.0
 
+      # On a publishing run the prior win releases are downloaded first (via
+      # -DownloadPrior) so vpk pack computes a binary delta against the real
+      # feed; without it every release would force existing users onto the
+      # full self-contained download.
       - name: Build the Velopack installer
         shell: pwsh
-        run: ./installer/build-velopack.ps1 -Version "${{ inputs.version }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $buildArgs = @('-Version', '${{ inputs.version }}')
+          if ('${{ inputs.publish }}' -eq 'true') { $buildArgs += '-DownloadPrior' }
+          ./installer/build-velopack.ps1 @buildArgs
 
       - name: Assert the shipping installer artifacts exist
         shell: pwsh
