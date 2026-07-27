@@ -269,12 +269,17 @@ run_gate deb-idle-return-smoke deb_idle_return_smoke
 # Headless launch smoke: prove the idle surface once, then require the complete
 # fit-only lifecycle three consecutive times with no retry inside the gate.
 headless_launch_smoke() {
+  # Container packaging builds into rust/target/portable, so the host-path
+  # release binary does not exist on a clean checkout; the resolver prefers
+  # the portable (shipped-floor) build and fails loudly when nothing is built.
+  local gtk_binary
+  gtk_binary="$("$CHECKOUT/scripts/candidate-gtk-binary.sh" "$CHECKOUT")"
   OKP_MAIN_WINDOW_IDLE_ONLY=1 \
     "$CHECKOUT/scripts/smoke-linux-main-window.sh" \
-    "$CHECKOUT/rust/target/release/okp-linux-gtk" "$OUT_DIR/headless-launch/idle"
+    "$gtk_binary" "$OUT_DIR/headless-launch/idle"
   OKP_WINDOW_FIT_SOURCE_SHA="$BUILD_SHA" \
     "$CHECKOUT/scripts/run-linux-window-fit-series.sh" \
-    "$CHECKOUT/rust/target/release/okp-linux-gtk" "$OUT_DIR/headless-launch/fit-series"
+    "$gtk_binary" "$OUT_DIR/headless-launch/fit-series"
 }
 run_gate headless-launch-smoke headless_launch_smoke
 
