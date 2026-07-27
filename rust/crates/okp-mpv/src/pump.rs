@@ -51,6 +51,10 @@ const OBSERVED_PROPERTIES: &[(&str, libc::c_int)] = &[
     ("hwdec-current", ffi::MPV_FORMAT_NONE),
     ("decoder-frame-drop-count", ffi::MPV_FORMAT_NONE),
     ("frame-drop-count", ffi::MPV_FORMAT_NONE),
+    // Buffering state, so a network cache stall is never mistaken for a stalled
+    // decoder by the hardware-decoding guard.
+    ("core-idle", ffi::MPV_FORMAT_NONE),
+    ("paused-for-cache", ffi::MPV_FORMAT_NONE),
     // Subtitle state surfaced in the subtitle popover / saved preferences.
     ("sub-delay", ffi::MPV_FORMAT_NONE),
     ("sub-scale", ffi::MPV_FORMAT_NONE),

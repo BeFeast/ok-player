@@ -179,6 +179,11 @@ pub struct PlaybackSample {
     /// `time-pos`, the media clock, in seconds.
     pub media_time: f64,
     pub paused: bool,
+    /// The engine reports it is not actively playing — mpv's `core-idle` or
+    /// `paused-for-cache`. A network cache refill freezes the media clock
+    /// without dropping a frame, which would otherwise look exactly like a
+    /// stalled decoder, so such a span is never scored.
+    pub awaiting_data: bool,
     /// Playback speed, so a deliberate slow-motion session is not mistaken for
     /// a stall.
     pub speed: f64,
@@ -233,6 +238,10 @@ impl HwdecDemotion {
 struct Anchor {
     monotonic_ns: u64,
     media_time: f64,
+    /// The speed the span was opened at. A span may only be scored against one
+    /// speed, so a change re-anchors instead of measuring a 0.25x stretch
+    /// against a 1x expectation.
+    speed: f64,
     decoder_drops: i64,
     vo_drops: i64,
 }
@@ -273,6 +282,17 @@ impl HwdecGuard {
         self.anchor = None;
     }
 
+    /// Take back a demotion the shell could not apply.
+    ///
+    /// [`Self::observe`] reports at most one demotion and then goes quiet, so a
+    /// failed `hwdec` write would otherwise leave the bad backend running for
+    /// the rest of the session with nothing left to catch it. Calling this
+    /// re-arms the guard, and the next sustained stall reports again.
+    pub fn demotion_failed(&mut self) {
+        self.demoted = false;
+        self.anchor = None;
+    }
+
     /// Feed one poll-tick observation. Returns `Some` exactly once, on the tick
     /// that decides hardware decoding must be given back; the caller then sets
     /// mpv's `hwdec` to [`HWDEC_OFF`] and logs
@@ -307,7 +327,8 @@ impl HwdecGuard {
             });
         }
 
-        if sample.paused || !sample.speed.is_finite() || sample.speed <= 0.0 {
+        if sample.paused || sample.awaiting_data || !sample.speed.is_finite() || sample.speed <= 0.0
+        {
             self.anchor = None;
             return None;
         }
@@ -320,7 +341,14 @@ impl HwdecGuard {
         // Any dropped frame means the machine is genuinely overloaded rather
         // than stalled on a read-back, and dropping frames is already mpv
         // degrading gracefully. Re-anchor instead of demoting.
-        if sample.decoder_drops > anchor.decoder_drops || sample.vo_drops > anchor.vo_drops {
+        //
+        // A speed change invalidates the span for a different reason: the media
+        // clock advanced under one expectation and would be scored under
+        // another.
+        if sample.decoder_drops > anchor.decoder_drops
+            || sample.vo_drops > anchor.vo_drops
+            || sample.speed != anchor.speed
+        {
             self.anchor = Some(Anchor::from(sample));
             return None;
         }
@@ -365,6 +393,7 @@ impl From<PlaybackSample> for Anchor {
         Self {
             monotonic_ns: sample.monotonic_ns,
             media_time: sample.media_time,
+            speed: sample.speed,
             decoder_drops: sample.decoder_drops,
             vo_drops: sample.vo_drops,
         }
@@ -382,6 +411,7 @@ mod tests {
             monotonic_ns: second * SECOND_NS,
             media_time,
             paused: false,
+            awaiting_data: false,
             speed: 1.0,
             decoder_drops: 0,
             vo_drops: 0,
@@ -659,6 +689,78 @@ mod tests {
             assert_eq!(guard.observe(sample, Some("vaapi")), None);
         }
         assert!(!guard.has_demoted());
+    }
+
+    #[test]
+    fn returning_from_slow_motion_to_normal_speed_does_not_demote() {
+        let mut guard = HwdecGuard::new(HwdecSource::Automatic);
+
+        // Open a span during healthy 0.1x playback: the media clock advances at
+        // a tenth of wall time, correctly, because that is what was asked for.
+        for second in 0..3 {
+            let mut sample = sample(second, second as f64 * 0.1);
+            sample.speed = 0.1;
+            assert_eq!(guard.observe(sample, Some("vaapi")), None);
+        }
+
+        // Back to 1x, and one healthy second of it closes the three-second
+        // window. Scoring that whole window against 1x would read 0.4x and
+        // demote a decoder that never missed a frame.
+        assert_eq!(
+            guard.observe(sample(3, 1.2), Some("vaapi")),
+            None,
+            "a speed change must invalidate the span, not demote"
+        );
+        assert!(!guard.has_demoted());
+
+        // Steady 1x playback afterwards stays healthy too.
+        for second in 4..12 {
+            let media_time = 1.2 + (second - 3) as f64;
+            assert_eq!(
+                guard.observe(sample(second, media_time), Some("vaapi")),
+                None
+            );
+        }
+        assert!(!guard.has_demoted());
+    }
+
+    #[test]
+    fn a_network_cache_stall_is_not_a_decoder_stall() {
+        let mut guard = HwdecGuard::new(HwdecSource::Automatic);
+
+        // Buffering freezes the media clock with `pause` false and no drops:
+        // the demotion signature exactly, but the decoder is fine.
+        for second in 0..30 {
+            let mut sample = sample(second, 10.0);
+            sample.awaiting_data = true;
+            assert_eq!(guard.observe(sample, Some("vaapi")), None);
+        }
+        assert!(!guard.has_demoted());
+
+        // Once the cache refills, healthy playback still must not demote.
+        for second in 30..40 {
+            let media_time = 10.0 + (second - 30) as f64;
+            assert_eq!(
+                guard.observe(sample(second, media_time), Some("vaapi")),
+                None
+            );
+        }
+        assert!(!guard.has_demoted());
+    }
+
+    #[test]
+    fn a_demotion_the_shell_could_not_apply_is_reported_again() {
+        let mut guard = HwdecGuard::new(HwdecSource::Automatic);
+
+        assert!(guard.observe(sample(0, 10.0), Some("vaapi-copy")).is_some());
+        assert!(guard.has_demoted());
+
+        // The shell's `hwdec` write failed, so the bad backend is still live.
+        guard.demotion_failed();
+        assert!(!guard.has_demoted());
+
+        assert!(guard.observe(sample(1, 10.0), Some("vaapi-copy")).is_some());
+        assert!(guard.has_demoted());
     }
 
     #[test]

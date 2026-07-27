@@ -1199,6 +1199,7 @@ pub(crate) fn enforce_hwdec_policy(
             monotonic_ns: monotonic_ns(),
             media_time,
             paused: playback.paused,
+            awaiting_data: diagnostics.core_idle || diagnostics.paused_for_cache,
             speed: playback.speed.unwrap_or(1.0),
             decoder_drops: diagnostics.decoder_drops,
             vo_drops: diagnostics.vo_drops,
@@ -1218,8 +1219,21 @@ pub(crate) fn enforce_hwdec_policy(
         .mpv
         .as_ref()
         .map(|mpv| mpv.set_hwdec(hwdec_policy::HWDEC_OFF));
-    if let Some(Err(error)) = applied {
-        eprintln!("Failed to demote hardware decoding: {error}");
+    match applied {
+        Some(Ok(())) => {}
+        // The engine kept the bad backend, so the guard must stay armed rather
+        // than treat this session as already corrected.
+        Some(Err(error)) => {
+            eprintln!("Failed to demote hardware decoding: {error}; will retry");
+            if let Some(guard) = state.borrow_mut().hwdec_guard.as_mut() {
+                guard.demotion_failed();
+            }
+        }
+        None => {
+            if let Some(guard) = state.borrow_mut().hwdec_guard.as_mut() {
+                guard.demotion_failed();
+            }
+        }
     }
 }
 

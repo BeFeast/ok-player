@@ -212,6 +212,13 @@ pub struct PlaybackDiagnostics {
     pub hwdec_current: Option<String>,
     pub decoder_drops: i64,
     pub vo_drops: i64,
+    /// mpv's `core-idle`: the core is not actively playing, which includes
+    /// waiting on the network cache. The media clock is not expected to advance
+    /// while this is set, so it is not evidence about the decoder.
+    pub core_idle: bool,
+    /// mpv's `paused-for-cache`: playback is held while the demuxer cache
+    /// refills. Distinct from the user-facing `pause` property.
+    pub paused_for_cache: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -452,6 +459,8 @@ impl RawReader {
                 .unwrap_or(0)
                 .max(0),
             vo_drops: self.get_i64("frame-drop-count")?.unwrap_or(0).max(0),
+            core_idle: self.get_flag("core-idle")?.unwrap_or(false),
+            paused_for_cache: self.get_flag("paused-for-cache")?.unwrap_or(false),
         })
     }
 
