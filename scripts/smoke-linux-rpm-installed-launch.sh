@@ -15,7 +15,14 @@
 # when it is executed. Everything the tests need to redirect - the installed
 # binary path and the launch harness - is a positional argument of run_gate,
 # which only a caller that `source`s this file can supply. Adding an `env:` key
-# to a workflow cannot weaken, shorten, or short-circuit this script.
+# to a workflow cannot weaken, shorten, or short-circuit this file.
+#
+# The scope of that claim is this file. smoke-linux-main-window.sh below it does
+# read OKP_MAIN_WINDOW_* mode switches; this gate pins the mode it wants on the
+# invocation, and the two switches that could select a different suite are
+# mutually exclusive with it, so the harness exits non-zero rather than running
+# something weaker. That is a loud failure, not a guarantee that the environment
+# is irrelevant to everything downstream.
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
