@@ -77,3 +77,7 @@ secrets.json
 
 # --- Local dev orchestration scratch (never committed) ---
 .maestro/
+
+# Python bytecode cache from the repository scripts
+__pycache__/
+*.pyc
