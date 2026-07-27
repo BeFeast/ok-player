@@ -217,6 +217,13 @@ pub struct PlaybackDiagnostics {
     pub hwdec_current: Option<String>,
     pub decoder_drops: i64,
     pub vo_drops: i64,
+    /// mpv's `core-idle`: the core is not actively playing, which includes
+    /// waiting on the network cache. The media clock is not expected to advance
+    /// while this is set, so it is not evidence about the decoder.
+    pub core_idle: bool,
+    /// mpv's `paused-for-cache`: playback is held while the demuxer cache
+    /// refills. Distinct from the user-facing `pause` property.
+    pub paused_for_cache: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -457,6 +464,8 @@ impl RawReader {
                 .unwrap_or(0)
                 .max(0),
             vo_drops: self.get_i64("frame-drop-count")?.unwrap_or(0).max(0),
+            core_idle: self.get_flag("core-idle")?.unwrap_or(false),
+            paused_for_cache: self.get_flag("paused-for-cache")?.unwrap_or(false),
         })
     }
 
@@ -1498,8 +1507,15 @@ impl Mpv {
         check(unsafe { ffi::mpv_command(self.handle.as_ptr(), args.as_ptr()) })
     }
 
+    /// Change the hardware decoder of a running engine.
+    ///
+    /// This goes through the property interface, not `mpv_set_option_string`:
+    /// libmpv only honours option writes before `mpv_initialize`, so an option
+    /// write here would be silently ignored and the engine would keep decoding
+    /// the way it already was. The Settings toggle and the copy-back demotion
+    /// in the shell both depend on this taking effect mid-session (issue #675).
     pub fn set_hwdec(&self, value: &str) -> Result<(), MpvError> {
-        self.set_option("hwdec", value)
+        self.set_string_property("hwdec", value)
     }
 
     pub fn apply_options(&self, options: &[(String, String)]) -> Result<(), MpvError> {
@@ -1829,6 +1845,23 @@ impl Mpv {
     fn command_async_with_userdata(&self, args: &[&str], request_id: u64) -> Result<(), MpvError> {
         let (_c_args, ptrs) = command_args(args)?;
         check(unsafe { ffi::mpv_command_async(self.handle.as_ptr(), request_id, ptrs.as_ptr()) })
+    }
+
+    fn set_string_property(&self, name: &str, value: &str) -> Result<(), MpvError> {
+        let name = CString::new(name)?;
+        let value = CString::new(value)?;
+        // MPV_FORMAT_STRING passes `char**`; libmpv copies the string, so the
+        // CString only has to outlive this call.
+        let mut value_ptr = value.as_ptr();
+
+        check(unsafe {
+            ffi::mpv_set_property(
+                self.handle.as_ptr(),
+                name.as_ptr(),
+                ffi::MPV_FORMAT_STRING,
+                &mut value_ptr as *mut _ as *mut c_void,
+            )
+        })
     }
 
     fn set_double(&self, name: &str, mut value: f64) -> Result<(), MpvError> {

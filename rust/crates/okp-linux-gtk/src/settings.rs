@@ -4,6 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use okp_core::gapless::{GaplessPlaybackCapability, effective_gapless_enabled};
+use okp_core::hwdec_policy::{self, HwdecPlan};
 use okp_core::settings::{
     AppearanceTheme, HistoryRetention, ScreenshotFormat, Settings, SkippedUpdateVersions,
     UpdateChannel,
@@ -143,13 +144,27 @@ impl SettingsStore {
         normalized_hwdec(self.data.video.hwdec.as_deref()) == HWDEC_AUTO_SAFE
     }
 
-    pub fn hardware_decode_mpv_option(&self) -> &'static str {
-        normalized_hwdec(self.data.video.hwdec.as_deref())
+    /// The mpv `hwdec` value for this install, and where it came from.
+    ///
+    /// `renderer_forced_hwdec` is the value renderer policy insists on, if any.
+    /// `raw_mpv_options` are the escape-hatch options the shell is about to
+    /// hand the engine; the override is read from those rather than from the
+    /// config text so it cannot disagree with what mpv actually receives.
+    pub fn hwdec_plan(
+        &self,
+        renderer_forced_hwdec: Option<&str>,
+        raw_mpv_options: &[(String, String)],
+    ) -> HwdecPlan {
+        hwdec_policy::plan_hwdec(
+            self.hardware_decode_enabled(),
+            renderer_forced_hwdec,
+            hwdec_policy::hwdec_from_options(raw_mpv_options),
+        )
     }
 
     pub fn hardware_decode_label(&self) -> &'static str {
         if self.hardware_decode_enabled() {
-            "auto-safe"
+            "on"
         } else {
             "off"
         }
@@ -822,8 +837,7 @@ mod tests {
         let settings = store();
 
         assert!(settings.hardware_decode_enabled());
-        assert_eq!(settings.hardware_decode_mpv_option(), "auto-safe");
-        assert_eq!(settings.hardware_decode_label(), "auto-safe");
+        assert_eq!(settings.hardware_decode_label(), "on");
     }
 
     #[test]
@@ -833,7 +847,6 @@ mod tests {
         settings.set_hardware_decode_enabled(false);
 
         assert!(!settings.hardware_decode_enabled());
-        assert_eq!(settings.hardware_decode_mpv_option(), "no");
         assert_eq!(settings.hardware_decode_label(), "off");
         assert!(settings.dirty);
 
@@ -844,7 +857,6 @@ mod tests {
 
         settings.set_hardware_decode_enabled(true);
         assert!(settings.hardware_decode_enabled());
-        assert_eq!(settings.hardware_decode_mpv_option(), "auto-safe");
         assert!(settings.dirty);
     }
 
@@ -854,7 +866,59 @@ mod tests {
         settings.data.video.hwdec = Some("yes-please".to_owned());
 
         assert!(!settings.hardware_decode_enabled());
-        assert_eq!(settings.hardware_decode_mpv_option(), "no");
+        assert_eq!(settings.hwdec_plan(None, &[]).value, "no");
+    }
+
+    #[test]
+    fn a_default_install_asks_mpv_for_a_copy_free_decoder() {
+        let plan = store().hwdec_plan(None, &[]);
+
+        assert_eq!(plan.source, hwdec_policy::HwdecSource::Automatic);
+        assert!(
+            hwdec_policy::automatic_hwdec_is_copy_free(&plan.value),
+            "default install would let mpv pick copy-back: {}",
+            plan.value
+        );
+    }
+
+    #[test]
+    fn hardware_decode_off_asks_mpv_for_software_decoding() {
+        let mut settings = store();
+        settings.set_hardware_decode_enabled(false);
+
+        let plan = settings.hwdec_plan(None, &[]);
+
+        assert_eq!(plan.value, "no");
+        assert!(!plan.source.allows_runtime_demotion());
+    }
+
+    #[test]
+    fn an_unusable_mpv_conf_hwdec_still_leaves_a_safe_fallback() {
+        let settings = store();
+        let raw = [("hwdec".to_owned(), "not-a-real-decoder".to_owned())];
+
+        // What the engine is asked for first, and what it is asked for if the
+        // escape hatch has to be dropped because it is what broke creation.
+        let primary = settings.hwdec_plan(None, &raw);
+        let fallback = settings.hwdec_plan(None, &[]);
+
+        assert_eq!(primary.value, "not-a-real-decoder");
+        assert_ne!(
+            fallback.value, primary.value,
+            "the fallback must not carry the value that failed"
+        );
+        assert!(hwdec_policy::automatic_hwdec_is_copy_free(&fallback.value));
+    }
+
+    #[test]
+    fn an_mpv_conf_hwdec_option_overrules_the_toggle_and_the_renderer() {
+        let settings = store();
+        let raw = [("hwdec".to_owned(), "vaapi-copy".to_owned())];
+
+        let plan = settings.hwdec_plan(Some("no"), &raw);
+
+        assert_eq!(plan.value, "vaapi-copy");
+        assert!(!plan.source.allows_runtime_demotion());
     }
 
     #[test]

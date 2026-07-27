@@ -1438,7 +1438,7 @@ pub(crate) fn settings_hwdec_row(
     text.append(&label);
 
     let detail = gtk::Label::new(Some(
-        "Use mpv auto-safe decoding when the driver stack supports it.",
+        "Decode on the GPU when the driver stack supports it without copying frames back.",
     ));
     detail.add_css_class("okp-update-status");
     detail.set_xalign(0.0);
@@ -1449,7 +1449,7 @@ pub(crate) fn settings_hwdec_row(
     row.append(&text);
 
     let enabled = state.borrow().settings.hardware_decode_enabled();
-    let state_label = gtk::Label::new(Some(if enabled { "Auto-safe" } else { "Off" }));
+    let state_label = gtk::Label::new(Some(if enabled { "On" } else { "Off" }));
     state_label.add_css_class("okp-settings-state-pill");
     state_label.set_valign(gtk::Align::Center);
     row.append(&state_label);
@@ -1461,7 +1461,7 @@ pub(crate) fn settings_hwdec_row(
     toggle.connect_clicked(move |button| {
         let enabled = !button.has_css_class("is-active");
         set_settings_switch_active(button, enabled);
-        let (hwdec_option, save_ok) = {
+        let (plan, save_ok) = {
             let mut state = switch_state.borrow_mut();
             state.settings.set_hardware_decode_enabled(enabled);
             let save_ok = if let Err(error) = state.settings.save() {
@@ -1470,14 +1470,23 @@ pub(crate) fn settings_hwdec_row(
             } else {
                 true
             };
-            (state.settings.hardware_decode_mpv_option(), save_ok)
+            let raw_mpv_options = configured_raw_mpv_options(&state.settings);
+            let plan = configured_hwdec_plan(&state.settings, &raw_mpv_options);
+            (plan, save_ok)
         };
 
-        switch_label.set_text(if enabled { "Auto-safe" } else { "Off" });
+        switch_label.set_text(if enabled { "On" } else { "Off" });
 
+        // Re-arm the guard: turning hardware decoding back on must be able to
+        // catch a stall again, and turning it off must not leave a guard that
+        // could fight the user's choice (issue #675).
         let live_result = {
-            let state = switch_state.borrow();
-            state.mpv.as_ref().map(|mpv| mpv.set_hwdec(hwdec_option))
+            let mut state = switch_state.borrow_mut();
+            state.hwdec_guard = Some(HwdecGuard::new(plan.source));
+            state
+                .mpv
+                .as_ref()
+                .map(|mpv| mpv.set_hwdec(plan.value.as_str()))
         };
 
         match live_result {
@@ -1487,7 +1496,7 @@ pub(crate) fn settings_hwdec_row(
             }
             _ if !save_ok => switch_toast.show("Could not save hardware decode setting"),
             _ => switch_toast.show(if enabled {
-                "Hardware decode auto-safe"
+                "Hardware decode on"
             } else {
                 "Hardware decode off"
             }),

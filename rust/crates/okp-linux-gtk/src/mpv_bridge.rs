@@ -1059,8 +1059,9 @@ pub(crate) fn fail_software_renderer(state: &Rc<RefCell<PlayerState>>, detail: i
 }
 
 fn create_configured_mpv(state: &Rc<RefCell<PlayerState>>) -> Option<Mpv> {
-    let (hwdec, raw_mpv_options) = mpv_creation_options(state);
-    let mpv = create_regular_mpv(&hwdec, &raw_mpv_options)?;
+    let plan = mpv_creation_plan(state);
+    let (mpv, source) = create_regular_mpv(&plan)?;
+    arm_hwdec_guard(state, source);
     Some(finish_configured_mpv(state, mpv))
 }
 
@@ -1070,33 +1071,41 @@ fn create_configured_native_mpv(
     size: okp_mpv::RenderTargetSize,
     scale: i32,
 ) -> Option<Mpv> {
-    let (hwdec, raw_mpv_options) = mpv_creation_options(state);
+    let plan = mpv_creation_plan(state);
     let presentation_log = state.borrow().presentation_recorder.is_some();
     if let Some(target) = target {
         let attempt = Mpv::try_new_with_wayland_dmabuf(
-            &hwdec,
-            &raw_mpv_options,
+            &plan.primary.value,
+            &plan.raw_options,
             target.clone(),
             size,
             scale,
             presentation_log,
         );
         match attempt {
-            Ok(Some(mpv)) => return Some(finish_configured_mpv(state, mpv)),
+            Ok(Some(mpv)) => {
+                arm_hwdec_guard(state, plan.primary.source);
+                return Some(finish_configured_mpv(state, mpv));
+            }
             Ok(None) => {}
-            Err(error) if !raw_mpv_options.is_empty() => {
+            Err(error) if !plan.raw_options.is_empty() => {
                 eprintln!(
                     "Failed to create the Wayland DMA-BUF player with custom mpv.conf options: {error}; retrying without them"
                 );
+                // Drop the escape hatch's `hwdec` with the rest of its options:
+                // an unusable value there must not take the player down with it.
                 match Mpv::try_new_with_wayland_dmabuf(
-                    &hwdec,
+                    &plan.fallback.value,
                     &[],
                     target,
                     size,
                     scale,
                     presentation_log,
                 ) {
-                    Ok(Some(mpv)) => return Some(finish_configured_mpv(state, mpv)),
+                    Ok(Some(mpv)) => {
+                        arm_hwdec_guard(state, plan.fallback.source);
+                        return Some(finish_configured_mpv(state, mpv));
+                    }
                     Ok(None) => {}
                     Err(error) => eprintln!(
                         "Wayland DMA-BUF initialization failed: {error}; using the OpenGL render API"
@@ -1109,19 +1118,60 @@ fn create_configured_native_mpv(
         }
     }
 
-    let mpv = create_regular_mpv(&hwdec, &raw_mpv_options)?;
+    let (mpv, source) = create_regular_mpv(&plan)?;
+    arm_hwdec_guard(state, source);
     Some(finish_configured_mpv(state, mpv))
 }
 
-fn mpv_creation_options(state: &Rc<RefCell<PlayerState>>) -> (String, Vec<(String, String)>) {
-    let (hwdec, raw_mpv_config) = {
+/// Arm this engine's hardware-decode guard with the provenance of the `hwdec`
+/// value the engine was actually created with — which is not always the one
+/// first asked for, when a fallback had to be taken.
+fn arm_hwdec_guard(state: &Rc<RefCell<PlayerState>>, source: hwdec_policy::HwdecSource) {
+    state.borrow_mut().hwdec_guard = Some(HwdecGuard::new(source));
+}
+
+/// Everything a new engine needs to choose its decoder.
+struct MpvCreationPlan {
+    /// What to ask mpv for first.
+    primary: HwdecPlan,
+    /// What to ask for if the escape-hatch options have to be dropped. Computed
+    /// without the raw override, so an unusable `hwdec` in the user's mpv.conf
+    /// cannot take the retry down with it as well.
+    fallback: HwdecPlan,
+    raw_options: Vec<(String, String)>,
+}
+
+/// The `hwdec` values and raw mpv.conf options for a new engine.
+///
+/// The automatic value names zero-copy decoders explicitly and ends at `no`, so
+/// mpv can never resolve it to a copy-back backend; on the legacy-`radeon`
+/// stack of issue #675 `auto-safe` resolved to `vaapi-copy` and playback ran at
+/// 0.02x realtime. Renderer policy and the raw mpv.conf escape hatch still
+/// overrule it, in that order.
+fn mpv_creation_plan(state: &Rc<RefCell<PlayerState>>) -> MpvCreationPlan {
+    let plan = {
         let state = state.borrow();
-        (
-            state.settings.hardware_decode_mpv_option().to_owned(),
-            state.settings.raw_mpv_config().to_owned(),
-        )
+        let raw_options = configured_raw_mpv_options(&state.settings);
+        MpvCreationPlan {
+            primary: configured_hwdec_plan(&state.settings, &raw_options),
+            fallback: configured_hwdec_plan(&state.settings, &[]),
+            raw_options,
+        }
     };
-    let options = match parse_raw_mpv_config(&raw_mpv_config) {
+    eprintln!(
+        "Hardware decoding policy: hwdec={} source={:?}",
+        plan.primary.value, plan.primary.source
+    );
+    plan
+}
+
+/// The escape-hatch options this install hands the engine. A malformed line
+/// drops the whole file, exactly as the engine's own loader does, so the plan
+/// and the engine always see the same set.
+pub(crate) fn configured_raw_mpv_options(
+    settings: &settings::SettingsStore,
+) -> Vec<(String, String)> {
+    match parse_raw_mpv_config(settings.raw_mpv_config()) {
         Ok(options) => options,
         Err(error) => {
             eprintln!(
@@ -1130,34 +1180,126 @@ fn mpv_creation_options(state: &Rc<RefCell<PlayerState>>) -> (String, Vec<(Strin
             );
             Vec::new()
         }
-    };
-    let hwdec = configured_linux_renderer_mode()
-        .mpv_hwdec_override()
-        .map(str::to_owned)
-        .unwrap_or(hwdec);
-    (hwdec, options)
+    }
 }
 
-fn create_regular_mpv(hwdec: &str, raw_mpv_options: &[(String, String)]) -> Option<Mpv> {
-    Some(match Mpv::new_with_options(hwdec, raw_mpv_options) {
-        Ok(mpv) => mpv,
-        Err(error) if !raw_mpv_options.is_empty() => {
+/// The `hwdec` value this install asks mpv for, with renderer policy and the
+/// escape hatch folded in.
+pub(crate) fn configured_hwdec_plan(
+    settings: &settings::SettingsStore,
+    raw_mpv_options: &[(String, String)],
+) -> HwdecPlan {
+    settings.hwdec_plan(
+        configured_linux_renderer_mode().mpv_hwdec_override(),
+        raw_mpv_options,
+    )
+}
+
+/// Give hardware decoding back when the running engine shows the issue #675
+/// stall signature, and say so in the application log.
+///
+/// Runs on the ordinary poll tick, so it costs one already-collected
+/// diagnostics snapshot per tick and no extra engine round-trip.
+pub(crate) fn enforce_hwdec_policy(
+    state: &Rc<RefCell<PlayerState>>,
+    playback: Option<PlaybackState>,
+) {
+    let Some((playback, media_time)) =
+        playback.and_then(|playback| playback.time_pos.map(|time_pos| (playback, time_pos)))
+    else {
+        // No media clock yet (idle, or still loading): the previous span says
+        // nothing about what is playing now.
+        if let Some(guard) = state.borrow_mut().hwdec_guard.as_mut() {
+            guard.reset_measurement();
+        }
+        return;
+    };
+
+    let demotion = {
+        let mut state = state.borrow_mut();
+        let Some(diagnostics) = state
+            .mpv
+            .as_ref()
+            .map(|mpv| mpv.observed_playback_diagnostics())
+        else {
+            return;
+        };
+        let sample = PlaybackSample {
+            monotonic_ns: monotonic_ns(),
+            media_time,
+            paused: playback.paused,
+            awaiting_data: diagnostics.core_idle || diagnostics.paused_for_cache,
+            speed: playback.speed.unwrap_or(1.0),
+            decoder_drops: diagnostics.decoder_drops,
+            vo_drops: diagnostics.vo_drops,
+        };
+        let Some(guard) = state.hwdec_guard.as_mut() else {
+            return;
+        };
+        guard.observe(sample, diagnostics.hwdec_current.as_deref())
+    };
+
+    let Some(demotion) = demotion else {
+        return;
+    };
+    eprintln!("{}", demotion.log_message());
+    let applied = state
+        .borrow()
+        .mpv
+        .as_ref()
+        .map(|mpv| mpv.set_hwdec(hwdec_policy::HWDEC_OFF));
+    match applied {
+        Some(Ok(())) => {}
+        // The engine kept the bad backend, so the guard must stay armed rather
+        // than treat this session as already corrected.
+        Some(Err(error)) => {
+            eprintln!("Failed to demote hardware decoding: {error}; will retry");
+            if let Some(guard) = state.borrow_mut().hwdec_guard.as_mut() {
+                guard.demotion_failed();
+            }
+        }
+        None => {
+            if let Some(guard) = state.borrow_mut().hwdec_guard.as_mut() {
+                guard.demotion_failed();
+            }
+        }
+    }
+}
+
+/// Create the engine, giving back the provenance of the `hwdec` value it ended
+/// up with.
+///
+/// The retry deliberately falls back to `plan.fallback`, not to the value that
+/// just failed: the escape hatch may be what made creation fail, and dropping
+/// its options while keeping its `hwdec` would fail again and leave the user
+/// with no player at all.
+fn create_regular_mpv(plan: &MpvCreationPlan) -> Option<(Mpv, hwdec_policy::HwdecSource)> {
+    match Mpv::new_with_options(&plan.primary.value, &plan.raw_options) {
+        Ok(mpv) => return Some((mpv, plan.primary.source)),
+        Err(error) if !plan.raw_options.is_empty() => {
             eprintln!(
                 "Failed to create mpv with custom mpv.conf options: {error}; retrying without them"
             );
-            match Mpv::new_with_hwdec(hwdec) {
-                Ok(mpv) => mpv,
-                Err(error) => {
-                    eprintln!("Failed to create mpv: {error}");
-                    return None;
-                }
+            match Mpv::new_with_hwdec(&plan.fallback.value) {
+                Ok(mpv) => return Some((mpv, plan.fallback.source)),
+                Err(error) => eprintln!("Failed to create mpv: {error}"),
             }
         }
+        Err(error) => eprintln!("Failed to create mpv: {error}"),
+    }
+
+    // Last resort: a player that decodes on the CPU beats no player at all.
+    if plan.fallback.value == hwdec_policy::HWDEC_OFF {
+        return None;
+    }
+    eprintln!("Retrying mpv with hwdec={}", hwdec_policy::HWDEC_OFF);
+    match Mpv::new_with_hwdec(hwdec_policy::HWDEC_OFF) {
+        Ok(mpv) => Some((mpv, hwdec_policy::HwdecSource::RendererForced)),
         Err(error) => {
             eprintln!("Failed to create mpv: {error}");
-            return None;
+            None
         }
-    })
+    }
 }
 
 fn finish_configured_mpv(state: &Rc<RefCell<PlayerState>>, mpv: Mpv) -> Mpv {
@@ -1397,6 +1539,7 @@ pub(crate) fn connect_state_poll(
                 recorder.record_playback(playback, mpv.observed_playback_diagnostics());
             }
         }
+        enforce_hwdec_policy(&state, playback);
         run_presentation_exercise(&state, playback);
         let has_media = has_loaded_media(&state);
         sync_native_video_background(&window, &root_surface, has_media);
