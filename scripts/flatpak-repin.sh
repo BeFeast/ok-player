@@ -15,6 +15,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MANIFEST="$ROOT/rust/packaging/flatpak/com.befeast.okplayer.json"
 PATCH="$ROOT/rust/packaging/flatpak/ok-player-flatpak.patch"
 PATCHED_PATHS="$ROOT/rust/packaging/flatpak/patched-paths.txt"
+CARGO_SOURCES="$ROOT/rust/packaging/flatpak/cargo-sources.json"
 TARGET="${1:-origin/main}"
 
 for tool in git python3 sed; do
@@ -38,6 +39,19 @@ if [[ "${OKP_FLATPAK_ALLOW_UNPUBLISHED_PIN:-0}" != "1" ]]; then
     echo "Refusing to pin $pin: it is not published on origin/main" >&2
     exit 2
   fi
+fi
+
+# The offline vendor set is generated from one lockfile and this script cannot
+# regenerate it - that needs the crate registry. Moving the pin across a lockfile
+# change would propose a manifest whose offline build fails on the crates the
+# vendor set is missing, so refuse and say what to do instead.
+lock_check="$(mktemp)"
+trap 'rm -f "$lock_check"' EXIT
+git -C "$ROOT" show "$pin:rust/Cargo.lock" >"$lock_check"
+if ! python3 "$ROOT/scripts/flatpak_cargo_sources.py" "$lock_check" "$CARGO_SOURCES" >/dev/null; then
+  echo "Refusing to pin $pin: rust/Cargo.lock at that commit does not match the offline Cargo sources." >&2
+  echo "Regenerate rust/packaging/flatpak/cargo-sources.json for that lockfile, commit it, then re-run this script." >&2
+  exit 2
 fi
 
 mapfile -t paths < <(sed -e 's/#.*//' -e 's/[[:space:]]*$//' "$PATCHED_PATHS" | grep -v '^$')

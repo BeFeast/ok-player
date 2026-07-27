@@ -254,8 +254,32 @@ fn verify_directory_writable(directory: &Path) -> io::Result<()> {
     fs::remove_file(probe)
 }
 
+/// Where screenshots are staged before being published to the user's
+/// destination.
+///
+/// A fixed path under a shared `/tmp` is owned by whichever account creates it
+/// first, so on a multi-user machine every later user fails to stage - and
+/// staging is what the sandboxed screenshot path depends on. `XDG_RUNTIME_DIR`
+/// is per-user and 0700 wherever it is set (systemd hosts and the Flatpak
+/// sandbox both set it); the shared-`/tmp` fallback is scoped by effective uid
+/// so it cannot collide between accounts either.
 fn screenshot_staging_dir() -> PathBuf {
-    env::temp_dir().join("ok-player").join("screenshots")
+    if let Some(runtime_dir) = env::var_os("XDG_RUNTIME_DIR")
+        && !runtime_dir.is_empty()
+    {
+        return PathBuf::from(runtime_dir)
+            .join("ok-player")
+            .join("screenshots");
+    }
+    env::temp_dir()
+        .join(format!("ok-player-{}", current_user_id()))
+        .join("screenshots")
+}
+
+fn current_user_id() -> u32 {
+    // SAFETY: geteuid is always safe; it reads process credentials and cannot
+    // fail.
+    unsafe { libc::geteuid() }
 }
 
 fn copy_to_destination_stage(
@@ -640,5 +664,24 @@ XDG_PICTURES_DIR="$HOME/Pictures"
             parse_xdg_pictures_dir(home, user_dirs),
             Some(PathBuf::from("/srv/user-media/Images"))
         );
+    }
+
+    #[test]
+    fn screenshot_staging_is_scoped_to_the_user() {
+        // A fixed directory under a shared /tmp belongs to whichever account
+        // creates it first; every later account then fails to stage a capture.
+        let staged = screenshot_staging_dir();
+        assert_ne!(
+            staged,
+            env::temp_dir().join("ok-player").join("screenshots")
+        );
+
+        match env::var_os("XDG_RUNTIME_DIR").filter(|value| !value.is_empty()) {
+            Some(runtime_dir) => assert!(staged.starts_with(PathBuf::from(runtime_dir))),
+            None => assert!(
+                staged
+                    .starts_with(env::temp_dir().join(format!("ok-player-{}", current_user_id())))
+            ),
+        }
     }
 }

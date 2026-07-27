@@ -39,6 +39,7 @@ BUILD_SCRIPT="$ROOT/scripts/build-flatpak-beta.sh"
 LIFECYCLE_SCRIPT="$ROOT/scripts/smoke-linux-flatpak-lifecycle.sh"
 LIFECYCLE_CONTROL_TEST="$ROOT/scripts/tests/flatpak-lifecycle-control.sh"
 MARKER_CHECKER="$ROOT/scripts/flatpak_integration_markers.py"
+CARGO_SOURCES_CHECKER="$ROOT/scripts/flatpak_cargo_sources.py"
 MARKER_TEST="$ROOT/scripts/tests/flatpak-integration-markers.sh"
 REPIN_SCRIPT="$ROOT/scripts/flatpak-repin.sh"
 SOFTWARE_RENDER_SCRIPT="$ROOT/scripts/smoke-linux-software-renderer.sh"
@@ -121,6 +122,7 @@ assert re.search(r"apt-get install -y [^\n]*\bripgrep\b", workflow)
 # The lane's own gates must be in both path filters, or a change to a gate would
 # not run the gate it changed.
 for gate_source in (
+    "scripts/flatpak_cargo_sources.py",
     "scripts/flatpak_integration_markers.py",
     "scripts/tests/flatpak-integration-markers.sh",
     "scripts/tests/flatpak-lifecycle-control.sh",
@@ -395,6 +397,11 @@ if [[ -f "$APP_PATCH" ]]; then
 else
   python3 "$MARKER_CHECKER" "$PINNED_TREE"
 fi
+
+# The vendor set is generated from one lockfile; the pin can move across a
+# lockfile change without it. Catch that here rather than inside the offline
+# build.
+python3 "$CARGO_SOURCES_CHECKER" "$PINNED_TREE/rust/Cargo.lock" "$CARGO_SOURCES"
 
 schema_version="$(sed -n 's/^pub const FLATPAK_LIFECYCLE_EVIDENCE_SCHEMA_VERSION: u32 = \([0-9]\+\);$/\1/p' \
   "$ROOT/rust/crates/okp-core/src/acceptance_evidence.rs")"

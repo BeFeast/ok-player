@@ -105,6 +105,13 @@ PY
 
 BASELINE_REPO_URL="$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().as_uri())' "$OUT_DIR/repo-baseline")"
 UPDATE_REPO_URL="$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().as_uri())' "$OUT_DIR/repo")"
+# What this records, exactly: the digest of the update bundle this lane built,
+# which is the same value the artifact manifest already carries. In the operator
+# record `downloaded_artifact_sha256` is the digest of the artifact the operator
+# downloaded, and it binds the record to that download; a CI job cannot do that,
+# because the artifact it would hash is produced by the upload step that runs
+# after this one. So in the headless CI record this field is provenance of the
+# bundle under test, not independent evidence.
 ARTIFACT_SHA256="$(sha256sum "$OUT_DIR/$UPDATE_BUNDLE" | cut -d' ' -f1)"
 
 LOG_DIR="${OKP_FLATPAK_LIFECYCLE_LOG_DIR:-$OUT_DIR/lifecycle-logs}"

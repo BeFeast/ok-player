@@ -258,6 +258,14 @@ it with `flatpak-lifecycle-validate --transitions-only`. A headless record can
 never satisfy `validate_ready`, so an automated result cannot be mistaken for
 live-desktop sign-off.
 
+One field in that record means something narrower than its name. In an operator
+record `downloaded_artifact_sha256` is the digest of the artifact the operator
+downloaded, and it binds the record to that download. The CI lane cannot do
+that: the artifact it would hash is produced by the upload step that runs after
+it. The headless record therefore carries the digest of the update `.flatpak`
+bundle under test, which duplicates `artifact.update.bundle.sha256` and is
+provenance rather than independent evidence.
+
 CI also runs the lane once with
 `OKP_FLATPAK_LIFECYCLE_NEGATIVE_CONTROL=update-current`, which skips exactly one
 transition command. That run must fail; if it passes, the lane is not asserting

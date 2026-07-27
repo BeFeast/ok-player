@@ -51,7 +51,7 @@ index 926c8afaa51def7e6834c3207c084d22938112b6..e26f41ae00729e29877ba24256656f9b
 
  - **Project:** zlib — <https://zlib.net>
 diff --git a/rust/crates/okp-core/src/playback_failure.rs b/rust/crates/okp-core/src/playback_failure.rs
-index e3b103b60807f77f32bb4eb3b59a1770c1af3cfe..ef355a238b66c1849f556f8a6206f6eac97121f5 100644
+index e3b103b60807f77f32bb4eb3b59a1770c1af3cfe..f8c9b170d914d2a21de73b3c3d8c9d211f2bee16 100644
 --- a/rust/crates/okp-core/src/playback_failure.rs
 +++ b/rust/crates/okp-core/src/playback_failure.rs
 @@ -12,6 +12,13 @@ pub enum PlaybackFailureKind {
@@ -96,7 +96,7 @@ index e3b103b60807f77f32bb4eb3b59a1770c1af3cfe..ef355a238b66c1849f556f8a6206f6ea
      }
 
      if normalized
-@@ -94,20 +91,81 @@ pub fn diagnose_mpv_failure(
+@@ -94,20 +91,115 @@ pub fn diagnose_mpv_failure(
  /// warning harmless. Benign EOF log traffic is ignored.
  pub fn diagnose_mpv_eof(
      engine_messages: &[String],
@@ -133,7 +133,7 @@ index e3b103b60807f77f32bb4eb3b59a1770c1af3cfe..ef355a238b66c1849f556f8a6206f6ea
 +    engine_messages
 +        .iter()
 +        .map(|message| message.to_ascii_lowercase())
-+        .any(|message| is_codec_failure(&message))
++        .any(|message| is_runtime_codec_failure(&message))
 +        .then(|| missing_codec_diagnostic(environment, None))
 +}
 +
@@ -141,7 +141,41 @@ index e3b103b60807f77f32bb4eb3b59a1770c1af3cfe..ef355a238b66c1849f556f8a6206f6ea
 +/// runtime decoder-failure event. The user-facing diagnosis remains in this
 +/// module so shells never parse libmpv log text.
 +pub fn is_mpv_codec_failure(message: &str) -> bool {
-+    is_codec_failure(&message.to_ascii_lowercase())
++    is_runtime_codec_failure(&message.to_ascii_lowercase())
++}
++
++/// libmpv probes hardware decoders before falling back to software, and a
++/// failed probe is logged with the same wording as a genuinely missing codec.
++/// Treating one of those as fatal would stop media that plays perfectly on the
++/// software decoder, so the runtime (pre-EOF) path ignores any message that
++/// names a hardware decoder. `diagnose_mpv_eof` deliberately does not apply
++/// this filter: by then libmpv has confirmed the file did not play.
++///
++/// This narrows one known false-positive class. It does not make the runtime
++/// path exact: a software decoder failure on a stream that is not the selected
++/// one is still treated as fatal, because a log line alone does not say which
++/// stream it belongs to.
++fn is_runtime_codec_failure(message: &str) -> bool {
++    is_codec_failure(message) && !names_a_hardware_decoder(message)
++}
++
++fn names_a_hardware_decoder(message: &str) -> bool {
++    [
++        "hwdec",
++        "vaapi",
++        "vdpau",
++        "nvdec",
++        "cuda",
++        "d3d11",
++        "dxva",
++        "videotoolbox",
++        "v4l2m2m",
++        "rkmpp",
++        "mediacodec",
++        "drm_prime",
++    ]
++    .iter()
++    .any(|needle| message.contains(needle))
 +}
 +
 +fn missing_codec_diagnostic(
@@ -182,7 +216,7 @@ index e3b103b60807f77f32bb4eb3b59a1770c1af3cfe..ef355a238b66c1849f556f8a6206f6ea
  fn is_codec_failure(message: &str) -> bool {
      [
          "codec not found",
-@@ -156,7 +214,7 @@ mod tests {
+@@ -156,7 +248,7 @@ mod tests {
          let diagnostic = diagnose_mpv_failure(
              -13,
              &messages(&["[ffmpeg/video] Decoder not found for codec hevc"]),
@@ -191,7 +225,7 @@ index e3b103b60807f77f32bb4eb3b59a1770c1af3cfe..ef355a238b66c1849f556f8a6206f6ea
          );
 
          assert_eq!(diagnostic.kind, PlaybackFailureKind::MissingCodec);
-@@ -172,7 +230,7 @@ mod tests {
+@@ -172,7 +264,7 @@ mod tests {
          let diagnostic = diagnose_mpv_failure(
              -13,
              &messages(&["Failed to initialize a decoder for stream 0"]),
@@ -200,7 +234,7 @@ index e3b103b60807f77f32bb4eb3b59a1770c1af3cfe..ef355a238b66c1849f556f8a6206f6ea
          );
 
          assert_eq!(diagnostic.kind, PlaybackFailureKind::MissingCodec);
-@@ -184,7 +242,7 @@ mod tests {
+@@ -184,7 +276,7 @@ mod tests {
          let diagnostic = diagnose_mpv_failure(
              -12,
              &messages(&["vo/gpu: Failed initializing any suitable GPU context"]),
@@ -209,7 +243,7 @@ index e3b103b60807f77f32bb4eb3b59a1770c1af3cfe..ef355a238b66c1849f556f8a6206f6ea
          );
 
          assert_eq!(diagnostic.kind, PlaybackFailureKind::Renderer);
-@@ -194,7 +252,11 @@ mod tests {
+@@ -194,7 +286,11 @@ mod tests {
 
      #[test]
      fn unknown_failure_stays_a_generic_application_error() {
@@ -222,7 +256,7 @@ index e3b103b60807f77f32bb4eb3b59a1770c1af3cfe..ef355a238b66c1849f556f8a6206f6ea
 
          assert_eq!(diagnostic.kind, PlaybackFailureKind::Application);
          assert_eq!(diagnostic.title, "Playback failed");
-@@ -209,7 +271,7 @@ mod tests {
+@@ -209,7 +305,7 @@ mod tests {
                  "vo/gpu: Failed to create rendering context",
                  "ad: Could not open codec",
              ]),
@@ -231,7 +265,7 @@ index e3b103b60807f77f32bb4eb3b59a1770c1af3cfe..ef355a238b66c1849f556f8a6206f6ea
          );
 
          assert_eq!(diagnostic.kind, PlaybackFailureKind::MissingCodec);
-@@ -219,7 +281,7 @@ mod tests {
+@@ -219,7 +315,7 @@ mod tests {
      fn decoder_failure_at_eof_remains_a_codec_diagnostic() {
          let diagnostic = diagnose_mpv_eof(
              &messages(&["[ffmpeg/video] Decoder not found for codec hevc"]),
@@ -240,7 +274,7 @@ index e3b103b60807f77f32bb4eb3b59a1770c1af3cfe..ef355a238b66c1849f556f8a6206f6ea
          )
          .expect("decoder failure must not be discarded just because mpv reported EOF");
 
-@@ -233,7 +295,40 @@ mod tests {
+@@ -233,7 +329,76 @@ mod tests {
 
      #[test]
      fn benign_eof_logs_do_not_become_failures() {
@@ -268,6 +302,42 @@ index e3b103b60807f77f32bb4eb3b59a1770c1af3cfe..ef355a238b66c1849f556f8a6206f6ea
 +            diagnostic.detail,
 +            "Required Flatpak codec extension is unavailable."
 +        );
++    }
++
++    #[test]
++    fn hardware_decoder_probe_does_not_stop_runtime_playback() {
++        // libmpv logs this and then falls back to software decoding, so the
++        // file plays. Stopping here would kill playable media.
++        for message in [
++            "vd: Could not open codec. (hwdec=vaapi-copy)",
++            "vd: Failed to initialize a decoder for codec h264 using hwdec nvdec",
++        ] {
++            assert!(
++                diagnose_mpv_runtime(&messages(&[message]), CodecEnvironment::Flatpak).is_none(),
++                "{message}"
++            );
++            assert!(!is_mpv_codec_failure(message), "{message}");
++        }
++    }
++
++    #[test]
++    fn hardware_decoder_probe_is_still_diagnosed_at_end_of_file() {
++        // At EOF libmpv has confirmed the file did not play, so the same text
++        // is evidence rather than a guess.
++        assert!(
++            diagnose_mpv_eof(
++                &messages(&["vd: Could not open codec. (hwdec=vaapi-copy)"]),
++                CodecEnvironment::Flatpak,
++            )
++            .is_some()
++        );
++    }
++
++    #[test]
++    fn software_decoder_failure_still_stops_runtime_playback() {
++        assert!(is_mpv_codec_failure(
++            "vd: Failed to initialize a decoder for codec h264"
++        ));
 +    }
 +
 +    #[test]
@@ -494,7 +564,7 @@ index 30fd315030ab14778addcd0f06b552f82968d18c..31f95be136e57e3a79300f7751d82820
 
  pub(crate) fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
 diff --git a/rust/crates/okp-linux-gtk/src/screenshots.rs b/rust/crates/okp-linux-gtk/src/screenshots.rs
-index bd7e24d8f2a795304566db3768171d793bdc45d6..2b523d933a475195864c35c9f4b0612667cb0453 100644
+index bd7e24d8f2a795304566db3768171d793bdc45d6..253ba0b957464c32c625fcbed75bfc99a1d26109 100644
 --- a/rust/crates/okp-linux-gtk/src/screenshots.rs
 +++ b/rust/crates/okp-linux-gtk/src/screenshots.rs
 @@ -131,7 +131,11 @@ pub fn prepare_saved_capture(
@@ -562,12 +632,36 @@ index bd7e24d8f2a795304566db3768171d793bdc45d6..2b523d933a475195864c35c9f4b06126
      fs::create_dir_all(&directory)?;
      unique_temp_path(&directory, "clipboard-frame", "png")
  }
-@@ -233,6 +254,54 @@ fn verify_directory_writable(directory: &Path) -> io::Result<()> {
+@@ -233,6 +254,78 @@ fn verify_directory_writable(directory: &Path) -> io::Result<()> {
      fs::remove_file(probe)
  }
 
++/// Where screenshots are staged before being published to the user's
++/// destination.
++///
++/// A fixed path under a shared `/tmp` is owned by whichever account creates it
++/// first, so on a multi-user machine every later user fails to stage - and
++/// staging is what the sandboxed screenshot path depends on. `XDG_RUNTIME_DIR`
++/// is per-user and 0700 wherever it is set (systemd hosts and the Flatpak
++/// sandbox both set it); the shared-`/tmp` fallback is scoped by effective uid
++/// so it cannot collide between accounts either.
 +fn screenshot_staging_dir() -> PathBuf {
-+    env::temp_dir().join("ok-player").join("screenshots")
++    if let Some(runtime_dir) = env::var_os("XDG_RUNTIME_DIR")
++        && !runtime_dir.is_empty()
++    {
++        return PathBuf::from(runtime_dir)
++            .join("ok-player")
++            .join("screenshots");
++    }
++    env::temp_dir()
++        .join(format!("ok-player-{}", current_user_id()))
++        .join("screenshots")
++}
++
++fn current_user_id() -> u32 {
++    // SAFETY: geteuid is always safe; it reads process credentials and cannot
++    // fail.
++    unsafe { libc::geteuid() }
 +}
 +
 +fn copy_to_destination_stage(
@@ -617,7 +711,7 @@ index bd7e24d8f2a795304566db3768171d793bdc45d6..2b523d933a475195864c35c9f4b06126
  fn validate_capture_output(path: &Path) -> io::Result<()> {
      let metadata = fs::metadata(path)?;
      if !metadata.is_file() {
-@@ -336,33 +405,38 @@ mod tests {
+@@ -336,33 +429,38 @@ mod tests {
 
      #[test]
      fn publish_saved_capture_never_overwrites_a_collision() {
@@ -663,7 +757,7 @@ index bd7e24d8f2a795304566db3768171d793bdc45d6..2b523d933a475195864c35c9f4b06126
      }
 
      #[test]
-@@ -385,9 +459,38 @@ mod tests {
+@@ -385,9 +483,38 @@ mod tests {
 
          assert!(directory.is_dir());
          assert!(!target.temp_path.exists());
@@ -702,7 +796,7 @@ index bd7e24d8f2a795304566db3768171d793bdc45d6..2b523d933a475195864c35c9f4b06126
      #[test]
      fn prepare_saved_capture_rejects_a_file_as_the_destination() {
          let root = unique_temp_dir("okp-screenshot-invalid-destination");
-@@ -527,4 +630,15 @@ XDG_PICTURES_DIR="$HOME/Pictures"
+@@ -527,4 +654,34 @@ XDG_PICTURES_DIR="$HOME/Pictures"
              Some(PathBuf::from("/home/tester/Pictures"))
          );
      }
@@ -716,6 +810,25 @@ index bd7e24d8f2a795304566db3768171d793bdc45d6..2b523d933a475195864c35c9f4b06126
 +            parse_xdg_pictures_dir(home, user_dirs),
 +            Some(PathBuf::from("/srv/user-media/Images"))
 +        );
++    }
++
++    #[test]
++    fn screenshot_staging_is_scoped_to_the_user() {
++        // A fixed directory under a shared /tmp belongs to whichever account
++        // creates it first; every later account then fails to stage a capture.
++        let staged = screenshot_staging_dir();
++        assert_ne!(
++            staged,
++            env::temp_dir().join("ok-player").join("screenshots")
++        );
++
++        match env::var_os("XDG_RUNTIME_DIR").filter(|value| !value.is_empty()) {
++            Some(runtime_dir) => assert!(staged.starts_with(PathBuf::from(runtime_dir))),
++            None => assert!(
++                staged
++                    .starts_with(env::temp_dir().join(format!("ok-player-{}", current_user_id())))
++            ),
++        }
 +    }
  }
 diff --git a/rust/crates/okp-linux-gtk/src/tests.rs b/rust/crates/okp-linux-gtk/src/tests.rs
