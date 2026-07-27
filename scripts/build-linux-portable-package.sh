@@ -69,11 +69,19 @@ fi
   -e VERSION="$VERSION" \
   -e HOST_UID="$HOST_UID" \
   -e HOST_GID="$HOST_GID" \
+  -e CONTAINER_RUNTIME="$CONTAINER_RUNTIME" \
   "$IMAGE" bash -ceu '
     if [[ "$LANE" == deb ]]; then
       ./scripts/package-linux-deb.sh "$VERSION"
     else
       ./scripts/package-linux-velopack.sh "$VERSION"
     fi
-    chown -R "$HOST_UID:$HOST_GID" artifacts/linux rust/target/portable
+    # Rootless podman maps in-container root to the invoking host user, so the
+    # outputs are already owned correctly - and a chown to $HOST_UID would remap
+    # them onto a subuid the host user cannot write (the mktemp Permission
+    # denied that killed the first container candidate). Only rootful docker
+    # leaves root-owned files that need the chown.
+    if [[ "$CONTAINER_RUNTIME" == docker ]]; then
+      chown -R "$HOST_UID:$HOST_GID" artifacts/linux rust/target/portable
+    fi
   '
