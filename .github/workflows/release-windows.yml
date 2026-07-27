@@ -308,8 +308,42 @@ jobs:
             --token $env:GH_TOKEN
           if ($LASTEXITCODE -ne 0) { throw "vpk upload github failed ($LASTEXITCODE)" }
           # A release published by the workflow token does not fire the release
-          # event, so refresh the static Pages feed explicitly (issue #131).
+          # event, so refresh the static Pages feed explicitly (issue #131) -
+          # and wait for it: the feed is what installed apps actually poll, so
+          # a release is not delivered until the refresh run succeeds and the
+          # public feed serves this version.
+          $dispatchedAfter = (Get-Date).ToUniversalTime().AddSeconds(-5).ToString('o')
           gh workflow run publish-update-feeds.yml
+          if ($LASTEXITCODE -ne 0) { throw 'Could not dispatch the Update Feeds workflow' }
+          $feedRun = $null
+          $findDeadline = (Get-Date).AddMinutes(3)
+          while ((Get-Date) -lt $findDeadline -and -not $feedRun) {
+            Start-Sleep -Seconds 10
+            $feedRun = gh run list --workflow publish-update-feeds.yml `
+              --json databaseId,createdAt,status --jq "[.[] | select(.createdAt >= \"$dispatchedAfter\")][0].databaseId"
+          }
+          if (-not $feedRun) { throw 'The dispatched Update Feeds run never appeared' }
+          $waitDeadline = (Get-Date).AddMinutes(15)
+          while ((Get-Date) -lt $waitDeadline) {
+            $state = gh run view $feedRun --json status,conclusion --jq '"\(.status) \(.conclusion)"'
+            if ($state -like 'completed*') { break }
+            Start-Sleep -Seconds 20
+          }
+          if ($state -ne 'completed success') { throw "Update Feeds run $feedRun finished as '$state' - the public feed was not refreshed" }
+          # Pages/CDN propagation: require the live feed to actually serve this
+          # version before calling the release delivered.
+          $feedUrl = 'https://befeast.github.io/ok-player/updates/win/releases.win.json'
+          $served = $false
+          $cdnDeadline = (Get-Date).AddMinutes(10)
+          while ((Get-Date) -lt $cdnDeadline) {
+            try {
+              $feed = Invoke-RestMethod -Uri "$feedUrl`?nocache=$(Get-Random)" -TimeoutSec 30
+              if (($feed.Assets | Where-Object { $_.Version -eq '${{ inputs.version }}' })) { $served = $true; break }
+            } catch { }
+            Start-Sleep -Seconds 30
+          }
+          if (-not $served) { throw "The public feed never served version ${{ inputs.version }} within the deadline" }
+          Write-Host "Release delivered: feed serves ${{ inputs.version }}"
 
       # Runs on the failure path as well - that is the point. The app's own log
       # is written per line and flushed, so it survives both a crash and a hard
