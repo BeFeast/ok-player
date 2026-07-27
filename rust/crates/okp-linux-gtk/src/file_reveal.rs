@@ -1,7 +1,10 @@
 use std::cell::Cell;
 use std::collections::HashMap;
+use std::fs::{File, OpenOptions};
 use std::future::Future;
+use std::io;
 use std::os::fd::AsFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
@@ -89,6 +92,18 @@ pub(crate) fn file_uri(path: &Path) -> String {
     gtk::gio::File::for_path(path).uri().to_string()
 }
 
+/// Opens `path` for the portal without ever blocking on a peer.
+///
+/// The reveal target is whatever the user pointed the player at. A FIFO or a device node opened
+/// the ordinary way waits for the other end, and that wait happens before the portal deadline
+/// starts, so it would strand the click with no feedback and no folder fallback.
+pub(crate) fn open_for_portal(path: &Path) -> io::Result<File> {
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+}
+
 /// Runs `work`, giving up with an error once `deadline` elapses.
 async fn with_deadline<T>(
     deadline: Duration,
@@ -135,7 +150,7 @@ impl FileRevealLauncher for DesktopFileRevealLauncher {
         // `org.freedesktop.FileManager1` is not activatable on every desktop, while
         // `xdg-desktop-portal` usually is. `OpenDirectory` takes the file itself and opens the
         // directory that contains it, highlighting the file where the backend supports it.
-        let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+        let file = open_for_portal(path).map_err(|error| error.to_string())?;
         zbus::block_on(with_deadline(PORTAL_TIMEOUT, async move {
             let connection = zbus::connection::Builder::session()
                 .map_err(|error| error.to_string())?
@@ -318,7 +333,7 @@ mod tests {
     use std::cell::RefCell;
     use std::ffi::OsString;
     use std::fs;
-    use std::os::unix::ffi::OsStringExt;
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
     use std::sync::Mutex;
 
     #[derive(Debug)]
@@ -475,6 +490,29 @@ mod tests {
             launcher.folder_paths.borrow().as_slice(),
             [path.parent().expect("test parent").to_owned()]
         );
+    }
+
+    #[test]
+    fn opening_a_fifo_for_the_portal_does_not_wait_for_a_writer() {
+        let directory = tempfile::tempdir().expect("temporary reveal directory");
+        let path = directory.path().join("stream.mkv");
+        let name = std::ffi::CString::new(path.as_os_str().as_bytes()).expect("fifo path");
+        assert_eq!(
+            unsafe { libc::mkfifo(name.as_ptr(), 0o600) },
+            0,
+            "could not create the test fifo"
+        );
+
+        let (finished, outcome) = mpsc::channel();
+        let probe = path.clone();
+        thread::spawn(move || {
+            let _ = finished.send(open_for_portal(&probe).is_ok());
+        });
+
+        let opened = outcome
+            .recv_timeout(Duration::from_secs(5))
+            .expect("opening a fifo with no writer must not block the reveal");
+        assert!(opened, "the fifo should still open for the portal");
     }
 
     #[test]
