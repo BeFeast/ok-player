@@ -284,7 +284,11 @@ pub(crate) fn wayland_dmabuf_target(
 }
 
 pub(crate) fn wayland_scale_units(widget: &impl IsA<gtk::Widget>) -> i32 {
-    (native_surface_scale(widget) * 120.0)
+    wayland_scale_units_for(native_surface_scale(widget))
+}
+
+pub(crate) fn wayland_scale_units_for(scale: f64) -> i32 {
+    (normalized_surface_scale(scale) * 120.0)
         .round()
         .clamp(1.0, f64::from(i32::MAX)) as i32
 }

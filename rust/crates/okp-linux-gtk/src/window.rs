@@ -257,10 +257,6 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     }
     overlay.add_overlay(&update_surface);
     overlay.add_overlay(status_toast.widget());
-    // Transient OSD content must never participate in the toplevel's minimum
-    // or natural size. In particular, a long screenshot path revealed while
-    // fullscreen cannot widen the restored window on the next configure.
-    overlay.set_measure_overlay(status_toast.widget(), false);
     for resize_handle in resize_handles {
         overlay.add_overlay(&resize_handle);
     }
@@ -410,7 +406,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     // Deterministic smoke hook for the load-time resize guard. The production
     // path reaches the same state through the caption button/window manager.
     if env::var_os("OKP_START_FULLSCREEN").is_some() {
-        state.borrow_mut().fullscreen_toggle.request(true);
+        request_fullscreen(&window, &state, true);
         window.fullscreen();
     } else if env::var_os("OKP_START_MAXIMIZED").is_some() {
         window.maximize();
@@ -933,7 +929,7 @@ pub(crate) fn fit_player_window_to_current_media(
             status_toast.show("Window fitted to media");
         }
         window_fit::ExplicitWindowFitAction::RestoreWindowedAndFit => {
-            state.borrow_mut().fullscreen_toggle.request(false);
+            request_fullscreen(window, state, false);
             log_fullscreen_video_geometry(window, state, "fullscreen-request-leave-fit");
             window.unfullscreen();
             window.unmaximize();
