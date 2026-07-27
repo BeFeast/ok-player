@@ -120,7 +120,7 @@ pub fn diagnose_mpv_runtime(
     engine_messages
         .iter()
         .map(|message| message.to_ascii_lowercase())
-        .any(|message| is_codec_failure(&message))
+        .any(|message| is_runtime_codec_failure(&message))
         .then(|| missing_codec_diagnostic(environment, None))
 }
 
@@ -128,7 +128,41 @@ pub fn diagnose_mpv_runtime(
 /// runtime decoder-failure event. The user-facing diagnosis remains in this
 /// module so shells never parse libmpv log text.
 pub fn is_mpv_codec_failure(message: &str) -> bool {
-    is_codec_failure(&message.to_ascii_lowercase())
+    is_runtime_codec_failure(&message.to_ascii_lowercase())
+}
+
+/// libmpv probes hardware decoders before falling back to software, and a
+/// failed probe is logged with the same wording as a genuinely missing codec.
+/// Treating one of those as fatal would stop media that plays perfectly on the
+/// software decoder, so the runtime (pre-EOF) path ignores any message that
+/// names a hardware decoder. `diagnose_mpv_eof` deliberately does not apply
+/// this filter: by then libmpv has confirmed the file did not play.
+///
+/// This narrows one known false-positive class. It does not make the runtime
+/// path exact: a software decoder failure on a stream that is not the selected
+/// one is still treated as fatal, because a log line alone does not say which
+/// stream it belongs to.
+fn is_runtime_codec_failure(message: &str) -> bool {
+    is_codec_failure(message) && !names_a_hardware_decoder(message)
+}
+
+fn names_a_hardware_decoder(message: &str) -> bool {
+    [
+        "hwdec",
+        "vaapi",
+        "vdpau",
+        "nvdec",
+        "cuda",
+        "d3d11",
+        "dxva",
+        "videotoolbox",
+        "v4l2m2m",
+        "rkmpp",
+        "mediacodec",
+        "drm_prime",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle))
 }
 
 fn missing_codec_diagnostic(
@@ -318,6 +352,42 @@ mod tests {
             diagnostic.detail,
             "Required Flatpak codec extension is unavailable."
         );
+    }
+
+    #[test]
+    fn hardware_decoder_probe_does_not_stop_runtime_playback() {
+        // libmpv logs this and then falls back to software decoding, so the
+        // file plays. Stopping here would kill playable media.
+        for message in [
+            "vd: Could not open codec. (hwdec=vaapi-copy)",
+            "vd: Failed to initialize a decoder for codec h264 using hwdec nvdec",
+        ] {
+            assert!(
+                diagnose_mpv_runtime(&messages(&[message]), CodecEnvironment::Flatpak).is_none(),
+                "{message}"
+            );
+            assert!(!is_mpv_codec_failure(message), "{message}");
+        }
+    }
+
+    #[test]
+    fn hardware_decoder_probe_is_still_diagnosed_at_end_of_file() {
+        // At EOF libmpv has confirmed the file did not play, so the same text
+        // is evidence rather than a guess.
+        assert!(
+            diagnose_mpv_eof(
+                &messages(&["vd: Could not open codec. (hwdec=vaapi-copy)"]),
+                CodecEnvironment::Flatpak,
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn software_decoder_failure_still_stops_runtime_playback() {
+        assert!(is_mpv_codec_failure(
+            "vd: Failed to initialize a decoder for codec h264"
+        ));
     }
 
     #[test]

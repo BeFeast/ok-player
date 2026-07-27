@@ -13,18 +13,23 @@
 #
 #   1. an unmodified run reports success,
 #   2. a control on a transition step fails with status 3 and names that step,
-#   3. a control on a launch step also fails with status 3,
-#   4. a failure at a step other than the controlled one keeps status 1,
-#   5. a misspelled control id is rejected instead of quietly passing,
-#   6. a missing artifact manifest keeps its own status rather than 3, and
-#   7. the emitted evidence records the caller's source commit rather than
+#   3. a control on a launch step also fails with status 3, and fails *through*
+#      the probe's mapped-window search rather than instead of it,
+#   4. an unmapped window fails the launch step,
+#   5. a failure at a step other than the controlled one keeps status 1,
+#   6. a misspelled control id is rejected instead of quietly passing,
+#   7. a missing artifact manifest keeps its own status rather than 3, and
+#   8. the emitted evidence records the caller's source commit rather than
 #      echoing the artifact's own, which is what makes the pull_request_head
 #      assertion in okp-core falsifiable at all.
 #
-# The stand-ins fake Flatpak's deployment bookkeeping and the X launch probe.
-# They intentionally prove nothing about real Flatpak behaviour - that is the
-# job of the packaged lane in CI. What they prove is that the control wiring is
-# not vacuous, which no amount of running the real lane can show.
+# The stand-ins fake Flatpak's deployment bookkeeping, the X server, and the
+# window tools; the probe body itself is the real one and runs unmodified, with
+# window visibility tied to whether the stand-in application process is alive.
+# They intentionally prove nothing about real Flatpak behaviour, real X, or real
+# window mapping - that is the job of the packaged lane in CI. What they prove is
+# that the control wiring is not vacuous, which no amount of running the real
+# lane can show.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -111,18 +116,79 @@ case "$command" in
   remotes)
     cat "$remotes_file"
     ;;
+  run)
+    # Stand in for the packaged application: stay alive so the window stand-in
+    # has something to report, and let the probe's own cleanup end it.
+    printf '%s\n' "$$" >"$OKP_STUB_STATE/app-pid"
+    sleep "${OKP_STUB_APP_LIFETIME:-30}"
+    ;;
   kill) ;;
   *) ;;
 esac
 STUB
 
+# xvfb-run and dbus-run-session drop their own options and run what they were
+# asked to run, so the probe body executes for real against the stand-ins below.
+# Draining stdin instead - the previous shape of this stub - would have reported
+# a mapped window without the probe ever looking for one.
 cat >"$STUB_BIN/xvfb-run" <<'STUB'
 #!/usr/bin/env bash
-# The launch probe reads its body from stdin; drain it and report a mapped
-# window. Real window mapping is proven by the packaged lane, not here.
 set -euo pipefail
-cat >/dev/null
-exit 0
+while (( $# )); do
+  case "$1" in
+    -a|--auto-servernum) shift ;;
+    --server-args=*|--server-num=*) shift ;;
+    *) break ;;
+  esac
+done
+exec "$@"
+STUB
+
+cat >"$STUB_BIN/dbus-run-session" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+while (( $# )); do
+  if [[ "$1" == "--" ]]; then
+    shift
+    break
+  fi
+  shift
+done
+exec "$@"
+STUB
+
+cat >"$STUB_BIN/xdotool" <<'STUB'
+#!/usr/bin/env bash
+# A window exists exactly while the stand-in application process is alive. That
+# is what makes a suppressed launch observable to the probe's window search.
+set -euo pipefail
+case "${1:-}" in
+  search)
+    pid_file="$OKP_STUB_STATE/app-pid"
+    [[ -f "$pid_file" ]] || exit 1
+    kill -0 "$(cat "$pid_file")" 2>/dev/null || exit 1
+    echo 4242
+    ;;
+  *) ;;
+esac
+STUB
+
+cat >"$STUB_BIN/xwininfo" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+map_state=IsViewable
+if [[ "${OKP_STUB_WINDOW_UNMAPPED:-}" == "1" ]]; then
+  map_state=IsUnviewable
+fi
+cat <<INFO
+xwininfo: Window id: 0x1092 "OK Player"
+
+  Absolute upper-left X:  0
+  Absolute upper-left Y:  0
+  Width: 1280
+  Height: 900
+  Map State: $map_state
+INFO
 STUB
 
 cat >"$STUB_BIN/ffmpeg" <<'STUB'
@@ -138,10 +204,6 @@ cat >"$STUB_BIN/cargo" <<'STUB'
 # about the control wiring around it.
 exit 0
 STUB
-
-for name in dbus-run-session xdotool xwininfo; do
-  printf '#!/usr/bin/env bash\nexit 0\n' >"$STUB_BIN/$name"
-done
 
 chmod +x "$STUB_BIN"/*
 
@@ -190,8 +252,9 @@ mkdir -p "$OUT_DIR/repo-baseline" "$OUT_DIR/repo"
 : >"$OUT_DIR/$UPDATE_BUNDLE"
 
 run_lane() {
-  local control="$1" log="$2" head="${3:-$SOURCE_COMMIT}" refuse="${4:-}" status=0
-  rm -f "$STATE/deployed" "$STATE/remotes"
+  local control="$1" log="$2" head="${3:-$SOURCE_COMMIT}" refuse="${4:-}"
+  local unmapped="${5:-}" status=0
+  rm -f "$STATE/deployed" "$STATE/remotes" "$STATE/app-pid"
   # Every OKP_FLATPAK_* input is set explicitly. The workflow exports some of
   # them job-wide for the real lane, and inheriting those here would point this
   # test at the real artifact directory instead of its own fixture.
@@ -203,6 +266,8 @@ run_lane() {
     OKP_STUB_BASELINE_COMMIT="$BASELINE_COMMIT" \
     OKP_STUB_UPDATE_COMMIT="$UPDATE_COMMIT" \
     OKP_STUB_REFUSE_COMMIT="$refuse" \
+    OKP_STUB_WINDOW_UNMAPPED="$unmapped" \
+    OKP_STUB_APP_LIFETIME=30 \
     OKP_ACCEPTANCE_SOURCE_COMMIT="$head" \
     OKP_FLATPAK_OUT_DIR="$OUT_DIR" \
     OKP_FLATPAK_ARTIFACT_MANIFEST="$OUT_DIR/flatpak-beta-artifact.json" \
@@ -241,9 +306,17 @@ status="$(run_lane "update-current" "$WORK/update.log")"
 expect "a controlled update fails with the dedicated status" 3 "$status" "$WORK/update.log" \
   "Flatpak lifecycle step update-current failed: deployed"
 
+# The control suppresses the launch; the probe's window search has to be what
+# notices. Requiring the probe's own message keeps this from passing if the
+# control ever short-circuits to fail_step again.
 status="$(run_lane "launch-current" "$WORK/launch.log")"
 expect "a controlled launch fails with the dedicated status" 3 "$status" "$WORK/launch.log" \
-  "Flatpak lifecycle step launch-current failed"
+  "Flatpak lifecycle step launch-current failed: the deployed revision did not map a window"
+
+# The other half of the probe: a window that exists but is not viewable.
+status="$(run_lane "" "$WORK/unmapped.log" "$SOURCE_COMMIT" "" "1")"
+expect "an unmapped window fails the launch step" 1 "$status" "$WORK/unmapped.log" \
+  "Flatpak lifecycle step launch-baseline failed: the deployed revision did not map a window"
 
 # The discriminating half of the contract. Status 3 must mean "the controlled
 # step's own assertion fired" and nothing else, so a different step failing

@@ -11,8 +11,11 @@
 # a command that reports success without changing the deployment fails the lane.
 #
 # Set OKP_FLATPAK_LIFECYCLE_NEGATIVE_CONTROL=<step-id> to skip one transition on
-# purpose. The lane must then fail on that step, and it exits with the dedicated
-# status 3 only when that step's own assertion is what failed. Any other failure
+# purpose. The control always suppresses the work of that step and leaves the
+# step's own assertion to notice - a launch control suppresses the launch and
+# the mapped-window probe is what fails, rather than the control reporting the
+# failure itself. The lane exits with the dedicated status 3 only when that
+# step's own assertion is what failed. Any other failure
 # - a missing tool, a missing artifact manifest, an unrelated broken transition -
 # keeps its ordinary non-zero status, so a caller can tell "the control worked"
 # apart from "something else went wrong before the control was reached". An
@@ -215,18 +218,23 @@ assert_absent() {
 # Launch the deployed revision under a throwaway X server and require a mapped
 # top-level window owned by the packaged application.
 launch_probe() {
-  local id="$1" expected="$2"
+  local id="$1" expected="$2" launch=1
   local log="$LOG_DIR/$id.log"
+  # The control suppresses the launch and then runs the probe unchanged, so the
+  # mapped-window assertion is what fails. Short-circuiting to fail_step here
+  # would make the launch control pass even with that assertion deleted.
   if skip_transition "$id"; then
-    fail_step "$id" "$(deployed_commit)" "the negative control skipped this launch"
+    echo "Negative control: skipping the $id launch; the window assertion must be what fails"
+    launch=0
   fi
   if ! xvfb-run -a --server-args='-screen 0 1280x900x24 -nolisten tcp +extension GLX +render -noreset' \
-    dbus-run-session -- bash -s -- "$FIXTURE" "$LAUNCH_TIMEOUT_SECONDS" "$APP_ID" \
+    dbus-run-session -- bash -s -- "$FIXTURE" "$LAUNCH_TIMEOUT_SECONDS" "$APP_ID" "$launch" \
     >"$log" 2>&1 <<'PROBE'
 set -euo pipefail
 FIXTURE="$1"
 LAUNCH_TIMEOUT_SECONDS="$2"
 APP_ID="$3"
+LAUNCH="$4"
 
 export GDK_BACKEND=x11
 export NO_AT_BRIDGE=1
@@ -241,21 +249,28 @@ cleanup_app() {
 }
 trap cleanup_app EXIT
 
-timeout "$LAUNCH_TIMEOUT_SECONDS" flatpak run --user \
-  --nodevice=dri --nosocket=wayland --socket=x11 \
-  --env=GDK_BACKEND=x11 \
-  --env=OKP_SKIP_UPDATE_CHECK=1 --env=OKP_DISABLE_MPRIS=1 \
-  "$APP_ID" "$FIXTURE" &
-app_pid=$!
+attempts=200
+if [[ "$LAUNCH" == "1" ]]; then
+  timeout "$LAUNCH_TIMEOUT_SECONDS" flatpak run --user \
+    --nodevice=dri --nosocket=wayland --socket=x11 \
+    --env=GDK_BACKEND=x11 \
+    --env=OKP_SKIP_UPDATE_CHECK=1 --env=OKP_DISABLE_MPRIS=1 \
+    "$APP_ID" "$FIXTURE" &
+  app_pid=$!
+else
+  # Nothing was started, so there is nothing to wait for: poll briefly and let
+  # the assertions below report the absent window.
+  attempts=6
+fi
 
 window_id=""
-for _ in $(seq 1 200); do
+for _ in $(seq 1 "$attempts"); do
   mapfile -t windows < <(xdotool search --onlyvisible --name '^OK Player$' 2>/dev/null || true)
   if [[ "${#windows[@]}" -eq 1 ]]; then
     window_id="${windows[0]}"
     break
   fi
-  if ! kill -0 "$app_pid" 2>/dev/null; then
+  if [[ -n "$app_pid" ]] && ! kill -0 "$app_pid" 2>/dev/null; then
     echo "The packaged application exited before mapping a window" >&2
     exit 1
   fi

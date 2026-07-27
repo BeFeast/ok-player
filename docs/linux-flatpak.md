@@ -134,6 +134,13 @@ status-3 contract: a controlled step must produce 3, and a failure at any other
 step while a control is set must stay at 1. Without the second side, routing
 every failure to 3 would satisfy the workflow's check.
 
+A launch control suppresses the launch and leaves the probe's mapped-window
+search to notice, rather than reporting the failure itself, so the self-test
+fails if that assertion is deleted. The stand-ins run the real probe body with
+window visibility tied to whether the stand-in application process is alive;
+they still prove nothing about real X, real Flatpak, or real window mapping,
+which is the packaged lane's job.
+
 The package installs the project GPL license, third-party notices, and the
 upstream mpv/libplacebo/libass license texts under the Flatpak license prefix.
 The manifest builds GPL-enabled libmpv against the runtime FFmpeg libraries,
