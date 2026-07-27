@@ -4641,6 +4641,124 @@ fn linux_packages_stamp_their_update_install_lane() {
     assert!(rpm.contains("BuildRequires:  procps-ng"));
 }
 
+/// The Fedora package aborts at startup without an explicit `Requires` for a
+/// soname nothing links against, and the job that proves this end to end is
+/// advisory. These are the two lines whose silent removal re-opens that defect,
+/// pinned in a required check.
+#[test]
+fn fedora_launch_closure_keeps_its_dlopen_requires_and_weak_dependency_exclusions() {
+    let spec = include_str!("../../../packaging/fedora/ok-player.spec");
+    // GTK4 reaches OpenGL ES through libepoxy's dlopen, so the binary carries no
+    // DT_NEEDED entry and rpm's automatic dependency extraction cannot find it.
+    // Only this line pulls a provider in with the package.
+    assert!(
+        spec.contains("Requires:       libGLESv2.so.2()(64bit)"),
+        "the Fedora spec must declare the dlopen'ed GLES soname; without it the \
+         installed package aborts with \"Couldn't open libGLESv2.so.2\""
+    );
+
+    // The launch root must carry nothing the package is supposed to bring with
+    // it. On Fedora 44 ffmpeg-free *recommends* libcamera, which requires
+    // libGLESv2.so.2, so weak dependencies drag libglvnd-gles into the harness
+    // root and blind the gate.
+    let rpm_workflow = include_str!("../../../../.github/workflows/rpm.yml");
+    let harness = rpm_workflow
+        .find("xorg-x11-server-Xvfb")
+        .expect("the installed-RPM launch job must install a headless harness");
+    let harness_install = &rpm_workflow[harness.saturating_sub(200)..harness];
+    assert!(
+        harness_install.contains("--setopt=install_weak_deps=False"),
+        "the headless launch harness must be installed without weak dependencies"
+    );
+
+    // The same flag on the package install itself, for the mirror-image reason:
+    // with weak dependencies enabled a `Recommends` would satisfy the gate's
+    // post-install soname assertion, and it would pass a package whose hard
+    // `Requires` are still incomplete.
+    let gate = include_str!("../../../../scripts/smoke-linux-rpm-installed-launch.sh");
+    assert!(
+        gate.contains("dnf install -y --setopt=install_weak_deps=False \"$rpm_path\""),
+        "the launch gate must install the package without weak dependencies"
+    );
+
+    // The gate takes the installed-binary path and the launch harness as
+    // parameters of run_gate so its tests can drive the post-install half, and
+    // pins them to the real ones whenever it is executed. Nothing in the
+    // executed path reads the environment, so no `env:` key in a workflow can
+    // shorten it.
+    assert!(
+        gate.contains("if [[ \"${BASH_SOURCE[0]}\" == \"${0}\" ]]; then"),
+        "the launch gate must run main() whenever it is executed as a program"
+    );
+    assert!(
+        gate.contains("    /usr/bin/ok-player \"$ROOT/scripts/smoke-linux-main-window.sh\""),
+        "main() must pin the real installed binary and the real launch harness"
+    );
+    assert!(
+        !gate.contains("OKP_RPM_LAUNCH_GATE_SELFTEST"),
+        "the launch gate must not carry an environment switch that skips the install"
+    );
+}
+
+/// The Windows installed-tree assertion runs in an advisory lane and its own
+/// tests run in another advisory lane, so the two properties that make it more
+/// than a Test-Path loop are pinned here, in a required check.
+#[test]
+fn windows_installed_tree_assertion_keeps_a_size_floor_under_every_required_file() {
+    let assertion = include_str!("../../../../scripts/assert-windows-installed-tree.ps1");
+
+    // Existence is not enough: the ffmpeg fetch is best-effort, and an
+    // interrupted download leaves a present-but-empty file that Test-Path
+    // accepts. Each required entry carries a floor, and the floors are compared.
+    for entry in ["OkPlayer.exe", "libmpv-2.dll", "ffmpeg.exe"] {
+        assert!(
+            assertion.contains(entry),
+            "the installed-tree assertion must still require {entry}"
+        );
+    }
+    assert!(
+        assertion.contains("MinBytes = 64KB"),
+        "the application binary must carry a size floor"
+    );
+    assert_eq!(
+        assertion.matches("MinBytes = 1MB").count(),
+        2,
+        "both bundled natives - the playback engine and ffmpeg - must carry a \
+         size floor; a zero-byte libmpv-2.dll otherwise passes"
+    );
+    assert!(
+        assertion.contains("if ($size -lt $entry.MinBytes) {"),
+        "the installed-tree assertion must compare each file against its floor"
+    );
+
+    // A floor cannot separate a complete binary from a partial one above it. The
+    // launch step covers libmpv-2.dll - the app does not start without a working
+    // engine - but nothing exercises ffmpeg, so the lane runs it explicitly.
+    let workflow = include_str!("../../../../.github/workflows/windows-package.yml");
+    assert!(
+        workflow.contains("ffmpeg -hide_banner -version")
+            || workflow.contains("$ffmpeg -hide_banner -version"),
+        "the Windows lane must run the bundled ffmpeg, not just measure it"
+    );
+    // And it must cover every project the installer contains, not only the two
+    // the app references directly.
+    assert_eq!(
+        workflow.matches("- 'src/**'").count(),
+        2,
+        "both the pull_request and push path filters must cover all of src/**"
+    );
+    // installer/build-velopack.ps1 copies both of these into the publish tree
+    // with an unconditional Copy-Item, so renaming or deleting either breaks the
+    // pack - and only this lane would notice.
+    for input in ["- 'LICENSE'", "- 'THIRD-PARTY-NOTICES.md'"] {
+        assert_eq!(
+            workflow.matches(input).count(),
+            2,
+            "both path filters must include {input}, which the pack copies unconditionally"
+        );
+    }
+}
+
 #[test]
 fn candidate_builder_defaults_below_beta_one_until_the_base_is_overridden() {
     use okp_core::candidate_build::candidate_version;

@@ -19,6 +19,9 @@ jobs:
       - name: Linux window regression smoke runner policy tests
         run: ./scripts/tests/linux-window-regression-smokes.Tests.sh
 
+      - name: Installed-RPM launch gate policy tests
+        run: ./scripts/tests/rpm-installed-launch-gate.Tests.sh
+
       - name: Install Linux dependencies
         run: |
           sudo apt-get update

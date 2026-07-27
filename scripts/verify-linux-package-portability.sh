@@ -205,6 +205,22 @@ if [[ "$CONTAINER_MODE" == required && -z "$CONTAINER_RUNTIME" ]]; then
   exit 127
 fi
 
+# In `auto` mode without a container runtime this script still exits 0, but the
+# legs that install the .deb and start the packaged binary do not run. That
+# degradation used to be visible only as a `verification_mode` field nobody
+# reads, so say it out loud: a PASS from here is packaging metadata plus an ELF
+# closure check, not evidence that the package launches.
+#
+# Plain stderr on purpose, not a ::warning annotation: both GitHub Actions call
+# sites (release-linux.yml) set OKP_PORTABILITY_CONTAINER_MODE=required, which
+# has already exited 127 above when no runtime exists, so an annotation here
+# could never render. The reachable caller is build-linux-candidate.sh on a
+# builder outside Actions, where an annotation would just be noise.
+if [[ "$CONTAINER_MODE" != skip && -z "$CONTAINER_RUNTIME" ]]; then
+  echo "portability: NO CONTAINER RUNTIME - the .deb was not installed and no packaged binary was started (verification_mode=native-equivalence)." >&2
+  echo "portability: set OKP_PORTABILITY_CONTAINER_MODE=required to turn this degradation into a hard failure." >&2
+fi
+
 verification_mode=native-equivalence
 targets_json='[]'
 checks_json='["no-bundled-glibc-runtime", "all-bundled-elf-dependency-equivalence", "appimage-package-build-marker", "debian-package-build-marker"]'
