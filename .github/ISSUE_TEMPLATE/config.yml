@@ -1,0 +1,5 @@
+# Blank issues carry no reproduction and no acceptance criteria, which is how an
+# issue ends up closed by a pull request that changed nothing observable. Use one
+# of the forms. Flip this back to true if a form ever gets in the way more than
+# it helps.
+blank_issues_enabled: false
