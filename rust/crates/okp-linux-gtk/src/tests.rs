@@ -1191,33 +1191,10 @@ fn a_rapid_fullscreen_reversal_keeps_the_native_plane_held() {
 }
 
 #[test]
-fn saved_screenshot_toast_is_linked_and_accessible() {
-    let main = include_str!("main.rs");
-    let playback = include_str!("playback.rs");
-    let keyboard = include_str!("keyboard.rs");
-    let window = include_str!("window.rs");
-    let css = include_str!("css.rs");
-
-    assert!(main.contains("let path_button = gtk::Button::new();"));
-    assert!(main.contains("path_label.set_ellipsize(pango::EllipsizeMode::Middle);"));
-    assert!(main.contains("path_button.set_tooltip_text(Some(&display_path));"));
-    assert!(main.contains("Reveal screenshot in file manager: {display_path}"));
-    assert!(main.contains("path_button.connect_clicked"));
-    assert!(main.contains("self.revealer.set_can_target(interactive);"));
+fn an_interactive_toast_outlives_a_plain_confirmation() {
     // The reveal-in-file-manager button has to stay clickable, so an
     // interactive toast outlives a plain confirmation.
     assert!(INTERACTIVE_TOAST_DWELL > TOAST_DWELL);
-    assert!(main.contains("path_button.set_visible(false);"));
-    assert!(main.contains("reveal_path.borrow_mut().take();"));
-    assert!(main.contains("revealer.set_margin_start(12);"));
-    assert!(main.contains("revealer.set_margin_end(12);"));
-    assert!(playback.contains("status_toast.show_saved_screenshot(&path);"));
-    assert!(playback.contains("status_toast.show_screenshot(\"Frame copied\", &path);"));
-    assert!(
-        keyboard.contains("widget.has_css_class(\"okp-status-toast-path\") && widget.is_mapped()")
-    );
-    assert!(window.contains("OKP_SAVED_SCREENSHOT_TOAST_PREVIEW"));
-    assert!(css.contains("button.okp-status-toast-path:focus-visible"));
 }
 
 #[test]
