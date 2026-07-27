@@ -1,0 +1,8 @@
+Jul 27 15:50:45 slava systemd[862]: Started okp-app.service - [systemd-run] /tmp/okp-drag-repro/okp-linux-gtk /tmp/okp-drag-repro/long.mkv.
+Jul 27 15:52:32 slava systemd[862]: Started okp-app.service - [systemd-run] /usr/bin/ok-player /tmp/okp-drag-repro/long.mkv.
+Jul 27 15:52:32 slava ok-player[226634]: /usr/bin/ok-player: /lib/x86_64-linux-gnu/libm.so.6: version `GLIBC_2.43' not found (required by /usr/lib/ok-player/liblcms2.so.2)
+Jul 27 15:52:32 slava ok-player[226634]: /usr/bin/ok-player: /lib/x86_64-linux-gnu/libm.so.6: version `GLIBC_2.43' not found (required by /usr/lib/ok-player/libjxl.so.0.11)
+Jul 27 15:52:32 slava ok-player[226634]: /usr/bin/ok-player: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.43' not found (required by /usr/lib/ok-player/libgnutls.so.30)
+Jul 27 15:52:32 slava ok-player[226634]: /usr/bin/ok-player: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.42' not found (required by /usr/lib/ok-player/libssh.so.4)
+Jul 27 15:52:32 slava systemd[862]: okp-app.service: Main process exited, code=exited, status=1/FAILURE
+Jul 27 15:54:45 slava systemd[862]: Started okp-app.service - [systemd-run] /tmp/okp-drag-repro/okp-linux-gtk /tmp/okp-drag-repro/long.mkv.
