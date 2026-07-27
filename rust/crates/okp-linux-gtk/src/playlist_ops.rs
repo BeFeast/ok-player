@@ -2,6 +2,28 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::*;
 
+pub(crate) const fn select_codec_environment(
+    native_fedora_rpm: bool,
+    flatpak: bool,
+) -> okp_core::playback_failure::CodecEnvironment {
+    use okp_core::playback_failure::CodecEnvironment;
+
+    if native_fedora_rpm {
+        CodecEnvironment::FedoraRpm
+    } else if flatpak {
+        CodecEnvironment::Flatpak
+    } else {
+        CodecEnvironment::System
+    }
+}
+
+fn configured_codec_environment() -> okp_core::playback_failure::CodecEnvironment {
+    select_codec_environment(
+        option_env!("OKP_FEDORA_RPM") == Some("1"),
+        env::var_os("FLATPAK_ID").is_some() || Path::new("/.flatpak-info").is_file(),
+    )
+}
+
 /// Record a network-source load failure: transition the transport-surface model to
 /// `Failed`, remember the URL for Retry, and store the short copyable reason. The
 /// the in-canvas failure card can offer Retry and Copy details.
@@ -45,7 +67,7 @@ pub(crate) fn apply_endfile_error(
     let diagnostic = okp_core::playback_failure::diagnose_mpv_failure(
         error,
         diagnostic_messages,
-        option_env!("OKP_FEDORA_RPM") == Some("1"),
+        configured_codec_environment(),
     );
     apply_endfile_diagnostic(state, ended_path, diagnostic);
 }
@@ -57,7 +79,7 @@ pub(crate) fn apply_endfile_eof_diagnostic(
 ) -> bool {
     let Some(diagnostic) = okp_core::playback_failure::diagnose_mpv_eof(
         diagnostic_messages,
-        option_env!("OKP_FEDORA_RPM") == Some("1"),
+        configured_codec_environment(),
     ) else {
         return false;
     };
@@ -66,27 +88,63 @@ pub(crate) fn apply_endfile_eof_diagnostic(
     true
 }
 
+/// Diagnose a decoder message libmpv logged while the source was open.
+///
+/// Deliberately non-fatal. libmpv logs a decoder problem without saying which
+/// stream it belongs to, so the message can describe a stream the user is not
+/// watching while the selected streams decode fine. A player that stops
+/// playable media is a worse defect than a missing diagnostic, so this path
+/// only produces a notice to surface: it neither fails the source nor stops
+/// playback. `apply_endfile_eof_diagnostic` remains the fatal path, because it
+/// runs after libmpv has confirmed the file did not play.
+///
+/// Returns `None` when the message is benign, when no source is current, or
+/// when the message named a source that has already been superseded - the same
+/// staleness rule `EndFile` diagnostics use, so a late warning cannot be
+/// reported against media the user opened afterwards.
+pub(crate) fn runtime_decoder_notice(
+    state: &Rc<RefCell<PlayerState>>,
+    warned_path: Option<&str>,
+    diagnostic_messages: &[String],
+) -> Option<okp_core::playback_failure::PlaybackFailureDiagnostic> {
+    let diagnostic = okp_core::playback_failure::diagnose_mpv_runtime(
+        diagnostic_messages,
+        configured_codec_environment(),
+    )?;
+    let current_source = current_load_failure_source(state)?;
+    if warned_path.is_some_and(|warned| !current_source.matches_engine_path(warned)) {
+        return None;
+    }
+    eprintln!("libmpv logged a decoder problem; playback continues");
+    Some(diagnostic)
+}
+
+/// The source the transport surface would arm Retry for right now, or `None`
+/// when nothing is loaded.
+fn current_load_failure_source(
+    state: &Rc<RefCell<PlayerState>>,
+) -> Option<network_media::LoadFailureSource> {
+    let state = state.borrow();
+    state
+        .current_url
+        .as_ref()
+        .map(|url| network_media::LoadFailureSource::url(url.clone()))
+        .or_else(|| {
+            state
+                .current_file
+                .as_ref()
+                .map(|path| network_media::LoadFailureSource::local(path.clone()))
+        })
+}
+
 fn apply_endfile_diagnostic(
     state: &Rc<RefCell<PlayerState>>,
     ended_path: Option<&str>,
     diagnostic: okp_core::playback_failure::PlaybackFailureDiagnostic,
-) {
-    let current_source = {
-        let state = state.borrow();
-        state
-            .current_url
-            .as_ref()
-            .map(|url| network_media::LoadFailureSource::url(url.clone()))
-            .or_else(|| {
-                state
-                    .current_file
-                    .as_ref()
-                    .map(|path| network_media::LoadFailureSource::local(path.clone()))
-            })
-    };
-    let Some(current_source) = current_source else {
+) -> bool {
+    let Some(current_source) = current_load_failure_source(state) else {
         eprintln!("ignoring stale EndFile diagnostic after the source was cleared");
-        return;
+        return false;
     };
     let stale = ended_path.is_some_and(|ended| !current_source.matches_engine_path(ended));
     if stale {
@@ -94,12 +152,13 @@ fn apply_endfile_diagnostic(
             "ignoring stale EndFile diagnostic for a superseded source ({})",
             ended_path.unwrap_or_default()
         );
-        return;
+        return false;
     }
     let mut state = state.borrow_mut();
     state.media_load_state = network_media::MediaLoadState::Failed;
     state.retry_load_source = Some(current_source);
     state.last_load_diagnostic = Some(diagnostic);
+    true
 }
 
 pub(crate) fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {

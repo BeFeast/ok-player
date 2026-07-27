@@ -145,6 +145,7 @@ struct PumpShared {
     wake: Mutex<bool>,
     condvar: Condvar,
     running: AtomicBool,
+    decoder_warning_reported: AtomicBool,
 }
 
 pub(crate) struct EventPump {
@@ -181,6 +182,7 @@ impl EventPump {
             wake: Mutex::new(true),
             condvar: Condvar::new(),
             running: AtomicBool::new(true),
+            decoder_warning_reported: AtomicBool::new(false),
         });
 
         for (name, format) in OBSERVED_PROPERTIES {
@@ -278,6 +280,9 @@ impl EventPump {
         snapshot.media_info = None;
         drop(snapshot);
         lock(&self.shared.diagnostic_messages).clear();
+        self.shared
+            .decoder_warning_reported
+            .store(false, Ordering::Release);
     }
 
     /// Drain the lifecycle events queued since the last call, oldest first.
@@ -395,11 +400,30 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
                     continue;
                 }
                 if let Some(message) = log_message(event) {
-                    let mut messages = lock(&shared.diagnostic_messages);
-                    if messages.len() == 24 {
-                        messages.pop_front();
+                    {
+                        let mut messages = lock(&shared.diagnostic_messages);
+                        if messages.len() == 24 {
+                            messages.pop_front();
+                        }
+                        messages.push_back(message.clone());
                     }
-                    messages.push_back(message);
+                    if okp_core::playback_failure::is_mpv_codec_failure(&message)
+                        && !shared.decoder_warning_reported.swap(true, Ordering::AcqRel)
+                    {
+                        // Diagnostic only - the engine has not reported a
+                        // failed source here, so the shell must not stop
+                        // playback on it. Bind the warning to the engine source
+                        // while still on the pump thread: the GTK drain may run
+                        // after the user has already opened another source.
+                        let path = shared.reader.path();
+                        lifecycle.push(MpvEvent::DecoderWarning {
+                            path,
+                            diagnostic_messages: lock(&shared.diagnostic_messages)
+                                .iter()
+                                .cloned()
+                                .collect(),
+                        });
+                    }
                 }
             }
             ffi::MPV_EVENT_FILE_LOADED => {

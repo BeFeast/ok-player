@@ -1,0 +1,220 @@
+name: Flatpak
+
+# The Flatpak application source is a frozen git pin plus a checked-in
+# integration patch, so unrelated changes under rust/crates cannot change what
+# this lane builds. Keeping the path filter narrow is therefore correct, and the
+# nightly schedule keeps the lane honest about the current default branch.
+#
+# The filter is also why this job must not be made a required status check as it
+# stands: a required context that never reports on a pull request outside the
+# filter blocks that pull request forever. See docs/linux-flatpak.md.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/flatpak.yml'
+      - 'docs/linux-flatpak.md'
+      - 'rust/Cargo.lock'
+      - 'rust/packaging/flatpak/**'
+      - 'rust/packaging/linux/**'
+      - 'scripts/build-flatpak-beta.sh'
+      - 'scripts/flatpak-repin.sh'
+      - 'scripts/flatpak_cargo_sources.py'
+      - 'scripts/flatpak_integration_markers.py'
+      - 'scripts/smoke-linux-flatpak-lifecycle.sh'
+      - 'scripts/smoke-linux-flatpak.sh'
+      - 'scripts/smoke-linux-software-renderer.sh'
+      - 'scripts/tests/flatpak-integration-markers.sh'
+      - 'scripts/tests/flatpak-lifecycle-control.sh'
+  pull_request:
+    paths:
+      - '.github/workflows/flatpak.yml'
+      - 'docs/linux-flatpak.md'
+      - 'rust/Cargo.lock'
+      - 'rust/packaging/flatpak/**'
+      - 'rust/packaging/linux/**'
+      - 'scripts/build-flatpak-beta.sh'
+      - 'scripts/flatpak-repin.sh'
+      - 'scripts/flatpak_cargo_sources.py'
+      - 'scripts/flatpak_integration_markers.py'
+      - 'scripts/smoke-linux-flatpak-lifecycle.sh'
+      - 'scripts/smoke-linux-flatpak.sh'
+      - 'scripts/smoke-linux-software-renderer.sh'
+      - 'scripts/tests/flatpak-integration-markers.sh'
+      - 'scripts/tests/flatpak-lifecycle-control.sh'
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flatpak-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  flatpak:
+    name: Offline Flatpak beta build
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      OKP_ACCEPTANCE_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+      OKP_FLATPAK_ARTIFACT_MANIFEST: artifacts/linux/flatpak/flatpak-beta-artifact.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Install Flatpak tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder appstream desktop-file-utils xvfb ffmpeg imagemagick ripgrep xdotool x11-utils xdg-user-dirs
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y flathub \
+            org.gnome.Platform//50 \
+            org.gnome.Sdk//50 \
+            org.freedesktop.Sdk.Extension.rust-stable//25.08
+
+      - name: Validate manifest and metadata
+        run: ./scripts/smoke-linux-flatpak.sh
+
+      # Proves the integration-marker check can tell code from a commented-out
+      # copy of it. Without this the marker check above is a substring search
+      # that a hand-edited patch could satisfy while removing the integration.
+      - name: Flatpak integration marker self-test
+        if: ${{ !cancelled() }}
+        run: ./scripts/tests/flatpak-integration-markers.sh
+
+      # Proves the negative control below can actually fire, without needing a
+      # built repository. If this fails, the control that guards the real lane
+      # is not trustworthy and nothing after it means much.
+      - name: Lifecycle negative control self-test
+        if: ${{ !cancelled() }}
+        run: ./scripts/tests/flatpak-lifecycle-control.sh
+
+      - name: Build offline beta repository
+        run: ./scripts/build-flatpak-beta.sh
+
+      - name: Prepare XDG Pictures grant
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p "$HOME/Pictures"
+          xdg-user-dirs-update --set PICTURES "$HOME/Pictures"
+          test "$(xdg-user-dir PICTURES)" = "$HOME/Pictures"
+
+      # Every step below runs even when an earlier one failed. A single red gate
+      # must never hide whether the offline build, the delivery lifecycle, and
+      # the renderer smoke actually work. scripts/smoke-linux-flatpak.sh asserts
+      # this guard per step, not by counting occurrences.
+      - name: Repository lifecycle (install, update, rollback, restore, uninstall)
+        if: ${{ !cancelled() }}
+        run: ./scripts/smoke-linux-flatpak-lifecycle.sh
+
+      # A non-zero status alone would be satisfied by a missing tool, a missing
+      # artifact manifest from a failed build, or a renamed control id. Require
+      # the dedicated status the lane reserves for "the controlled step's own
+      # assertion fired", and require the assertion's own message with it.
+      - name: Repository lifecycle negative control
+        if: ${{ !cancelled() }}
+        env:
+          OKP_FLATPAK_LIFECYCLE_NEGATIVE_CONTROL: update-current
+          OKP_FLATPAK_LIFECYCLE_EVIDENCE: artifacts/linux/flatpak/flatpak-lifecycle-negative-control.json
+          OKP_FLATPAK_LIFECYCLE_LOG_DIR: artifacts/linux/flatpak/lifecycle-negative-control-logs
+        run: |
+          set +e
+          ./scripts/smoke-linux-flatpak-lifecycle.sh 2>&1 | tee negative-control.log
+          status="${PIPESTATUS[0]}"
+          set -e
+          if [ "$status" -ne 3 ]; then
+            echo "The negative control exited $status. Only 3 means the skipped update-current transition was itself detected; anything else means the lane never got that far." >&2
+            exit 1
+          fi
+          if ! grep -qF "Flatpak lifecycle step update-current failed: deployed" negative-control.log; then
+            echo "The negative control exited 3 without reporting the update-current deployment assertion." >&2
+            exit 1
+          fi
+          echo "Negative control failed at update-current with its deployed-commit assertion, as required."
+
+      - name: Packaged no-DRI software renderer smoke
+        if: ${{ !cancelled() }}
+        run: |
+          flatpak install --user -y --bundle artifacts/linux/flatpak/OK-Player-0.11.0-beta.1.flatpak
+          ./scripts/smoke-linux-software-renderer.sh -- \
+            flatpak run --user --nodevice=dri --nosocket=wayland --socket=x11 \
+            --env=GDK_BACKEND=x11 \
+            --env=OKP_SKIP_UPDATE_CHECK=1 --env=OKP_DISABLE_MPRIS=1 \
+            com.befeast.okplayer
+          flatpak uninstall --user -y com.befeast.okplayer
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: ok-player-flatpak-beta
+          if-no-files-found: error
+          retention-days: 90
+          path: |
+            artifacts/linux/flatpak/repo-baseline/**
+            artifacts/linux/flatpak/repo/**
+            artifacts/linux/flatpak/flatpak-beta-artifact.json
+            artifacts/linux/flatpak/flatpak-lifecycle-ci.json
+            artifacts/linux/flatpak/lifecycle-logs/**
+            artifacts/linux/flatpak/OK-Player-0.11.0-beta.0.flatpak
+            artifacts/linux/flatpak/OK-Player-0.11.0-beta.1.flatpak
+            artifacts/manual-ui/linux-software-renderer-smoke/**
+
+  repin:
+    name: Flatpak source re-pin drift
+    # Only from the default branch. A dispatch aimed at the re-pin branch must
+    # run the build lane against the proposed pin, not open another re-pin.
+    if: >-
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+      && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    env:
+      REPIN_BRANCH: chore/flatpak-repin
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Re-pin the application source and regenerate the integration patch
+        run: ./scripts/flatpak-repin.sh origin/main
+
+      # The pin is frozen on purpose, so drift is expected and is never fixed by
+      # pushing to main. It is proposed as a pull request and reviewed like any
+      # other packaging change. A pull request opened with the workflow token
+      # does not start checks by itself, so the lane is dispatched explicitly
+      # against the branch that carries the proposed pin.
+      - name: Propose the refreshed pin
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet; then
+            echo "The Flatpak pin already matches the default branch."
+            exit 0
+          fi
+          # -a would miss a patch file that the re-pin recreated after an
+          # earlier collapse: the manifest would then reference a source that is
+          # not in the commit.
+          git add -A
+          git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -m 'Flatpak: re-pin the application source to the default branch'
+          git push --force origin "HEAD:refs/heads/$REPIN_BRANCH"
+          if [ -z "$(gh pr list --head "$REPIN_BRANCH" --state open --json number --jq '.[].number')" ]; then
+            gh pr create --base main --head "$REPIN_BRANCH" \
+              --title 'Flatpak: re-pin the application source to the default branch' \
+              --body 'Automated re-pin of the Flatpak application source and integration patch. The Flatpak lane is dispatched against this branch by the re-pin job; see the workflow runs for `chore/flatpak-repin`.'
+          else
+            echo "Updated the existing re-pin pull request."
+          fi
+          gh workflow run flatpak.yml --ref "$REPIN_BRANCH"
+          echo "Dispatched the Flatpak lane against $REPIN_BRANCH."

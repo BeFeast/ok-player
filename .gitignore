@@ -12,6 +12,7 @@ x86/
 [Pp]ublish/
 *.binlog
 rust/target/
+/.flatpak-builder/
 
 # --- Visual Studio / Rider ---
 .vs/
@@ -74,6 +75,10 @@ secrets.json
 # --- OK Player native deps (libmpv etc.; fetched via scripts, not committed) ---
 /native/*
 !/native/README.md
+
+# --- Python bytecode from repo tooling scripts ---
+__pycache__/
+*.pyc
 
 # --- Local dev orchestration scratch (never committed) ---
 .maestro/
