@@ -6,16 +6,23 @@ Two cheap, mechanical rules that a merge robot cannot talk itself out of:
 1. Declaration checks (skipped when no pull request context is supplied):
    * a title that starts with WIP / Draft / Do not merge;
    * the maestro WIP marker HTML comment in the body;
-   * unchecked boxes inside an "Operator acceptance" block in the body;
+   * unchecked boxes anywhere in an acceptance section - "Operator acceptance"
+     and its near neighbours, "Acceptance criteria", "Live acceptance hold",
+     "Before merge";
+   * an acceptance block holding plain bullets, prose, or nothing at all, none
+     of which anyone can record as performed;
    * an empty body, which cannot state what "done" means.
 
-2. Tree checks: unfinished-code markers in shipped source - `todo!()`,
-   `unimplemented!()`, and bare TODO / FIXME comments. A marker that names a
-   tracking issue (`TODO(#123)`) is accepted: the work is tracked, not lost.
+2. Tree checks: unfinished-code markers in shipped source and shipped
+   configuration - `todo!()`, `unimplemented!()`, and bare TODO / FIXME
+   comments. A marker that names a tracking issue (`TODO(#123)`) is accepted:
+   the work is tracked, not lost.
 
-Fenced code blocks are ignored when scanning the body, so a pull request may
-quote these rules without tripping them. HTML comments are ignored when looking
-for unchecked boxes, so a template can carry a commented-out acceptance block.
+*Balanced* fenced code blocks are ignored when scanning the body, so a pull
+request may quote these rules without tripping them; an unbalanced fence is
+treated as text, because stripping it would silently disable every rule below
+it. HTML comments are ignored when looking for boxes, so a template can carry a
+commented-out acceptance block.
 
 Usage:
   check-unfinished-work.py [--root DIR] [--title-file F] [--body-file F]
