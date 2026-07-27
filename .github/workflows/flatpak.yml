@@ -201,9 +201,13 @@ jobs:
             echo "The Flatpak pin already matches the default branch."
             exit 0
           fi
+          # -a would miss a patch file that the re-pin recreated after an
+          # earlier collapse: the manifest would then reference a source that is
+          # not in the commit.
+          git add -A
           git -c user.name='github-actions[bot]' \
             -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
-            commit -am 'Flatpak: re-pin the application source to the default branch'
+            commit -m 'Flatpak: re-pin the application source to the default branch'
           git push --force origin "HEAD:refs/heads/$REPIN_BRANCH"
           if [ -z "$(gh pr list --head "$REPIN_BRANCH" --state open --json number --jq '.[].number')" ]; then
             gh pr create --base main --head "$REPIN_BRANCH" \

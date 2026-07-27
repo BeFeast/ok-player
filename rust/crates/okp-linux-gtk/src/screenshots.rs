@@ -3,6 +3,7 @@ use std::ffi::CString;
 use std::fs;
 use std::io::{self, Read};
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
@@ -133,8 +134,7 @@ pub fn prepare_saved_capture(
     let timestamp_millis = unix_millis();
     // Keep libmpv on sandbox-private storage. The worker publishes the validated
     // image into the externally mounted destination after the command completes.
-    let staging_directory = screenshot_staging_dir();
-    fs::create_dir_all(&staging_directory)?;
+    let staging_directory = prepare_screenshot_staging_dir()?;
     let temp_path = unique_temp_path(&staging_directory, "saved-frame", format.extension())?;
     Ok(SavedCaptureTarget {
         temp_path,
@@ -210,8 +210,7 @@ pub fn cancel_saved_capture_if_stale(
 }
 
 pub fn prepare_clipboard_capture() -> io::Result<PathBuf> {
-    let directory = screenshot_staging_dir();
-    fs::create_dir_all(&directory)?;
+    let directory = prepare_screenshot_staging_dir()?;
     unique_temp_path(&directory, "clipboard-frame", "png")
 }
 
@@ -274,6 +273,59 @@ fn screenshot_staging_dir() -> PathBuf {
     env::temp_dir()
         .join(format!("ok-player-{}", current_user_id()))
         .join("screenshots")
+}
+
+/// Create the staging directory and refuse anything another account could have
+/// planted there.
+///
+/// The fallback root lives in a shared `/tmp` and its name is predictable, so a
+/// local attacker can pre-create it - as a directory they own, or as a symlink
+/// into somewhere else - before the player first runs. `create_dir_all` would
+/// happily adopt that tree, which is both a denial of staging and, under a
+/// typical 022 umask, a way to read captures in flight. So: create each level
+/// with mode 0700, and require the final directory to be a real directory owned
+/// by this user with no group or other access. Staging fails loudly rather than
+/// silently using someone else's directory.
+fn prepare_screenshot_staging_dir() -> io::Result<PathBuf> {
+    let directory = screenshot_staging_dir();
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true).mode(0o700);
+    builder.create(&directory)?;
+
+    validate_staging_dir(&directory)?;
+    Ok(directory)
+}
+
+fn validate_staging_dir(directory: &Path) -> io::Result<()> {
+    // symlink_metadata, not metadata: a symlink planted at this path must be
+    // rejected rather than followed.
+    let metadata = fs::symlink_metadata(directory)?;
+    if !metadata.file_type().is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotADirectory,
+            "screenshot staging path is not a directory",
+        ));
+    }
+    if metadata.uid() != current_user_id() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "screenshot staging directory is owned by another user",
+        ));
+    }
+    if metadata.permissions().mode() & 0o077 != 0 {
+        // Ours, but too open - typically a directory created by an older
+        // version under the default umask. Tighten it rather than refuse, or
+        // upgrading would break screenshots for everyone who has one.
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
+        let tightened = fs::symlink_metadata(directory)?;
+        if tightened.permissions().mode() & 0o077 != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "screenshot staging directory stayed accessible to other users",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn current_user_id() -> u32 {
@@ -664,6 +716,49 @@ XDG_PICTURES_DIR="$HOME/Pictures"
             parse_xdg_pictures_dir(home, user_dirs),
             Some(PathBuf::from("/srv/user-media/Images"))
         );
+    }
+
+    #[test]
+    fn staging_tightens_a_directory_open_to_other_users() {
+        let root = unique_temp_dir("okp-screenshot-staging-mode");
+        let directory = root.path().join("staging");
+        fs::create_dir_all(&directory).expect("staging directory");
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o755))
+            .expect("relax permissions");
+
+        // Ours but too open: tightened in place, because refusing would break
+        // screenshots for anyone upgrading with a 0755 directory already there.
+        validate_staging_dir(&directory).expect("a directory we own is tightened");
+        let mode = fs::symlink_metadata(&directory)
+            .expect("staging metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
+
+    #[test]
+    fn staging_refuses_a_symlink_planted_at_the_path() {
+        let root = unique_temp_dir("okp-screenshot-staging-symlink");
+        let target = root.path().join("elsewhere");
+        fs::create_dir_all(&target).expect("target directory");
+        let link = root.path().join("staging");
+        std::os::unix::fs::symlink(&target, &link).expect("symlink");
+
+        let error = validate_staging_dir(&link).expect_err("symlinked staging");
+        assert_eq!(error.kind(), io::ErrorKind::NotADirectory);
+    }
+
+    #[test]
+    fn staging_accepts_a_private_directory_this_user_owns() {
+        let root = unique_temp_dir("okp-screenshot-staging-ok");
+        let directory = root.path().join("staging");
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&directory)
+            .expect("staging directory");
+
+        validate_staging_dir(&directory).expect("private staging directory is accepted");
     }
 
     #[test]
