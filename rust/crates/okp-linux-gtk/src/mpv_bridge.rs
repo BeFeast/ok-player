@@ -655,12 +655,31 @@ fn arm_fullscreen_ack_timeout(
             .borrow_mut()
             .fullscreen_toggle
             .settle_timed_out_request(generation, is_fullscreen);
-        let fullscreen_toggle::AckTimeout::ForceReleased { geometry } = outcome else {
-            return;
-        };
-        log_fullscreen_video_geometry(&window, &state, "fullscreen-ack-timeout");
-        if let Some(geometry) = geometry {
-            apply_native_video_geometry(&state, geometry, true);
+        match outcome {
+            fullscreen_toggle::AckTimeout::RetryRequest { is_fullscreen } => {
+                log_fullscreen_video_geometry(&window, &state, "fullscreen-ack-retry");
+                // A window manager can lose a state change issued while it is
+                // still reconfiguring the same toplevel (the compact-restore
+                // resize races the fullscreen request), and GTK never re-sends
+                // a request it believes is already recorded. Re-drive the GTK
+                // state and, on X11, re-send the EWMH state message itself,
+                // then re-arm the same bounded deadline for this request.
+                if is_fullscreen {
+                    window.fullscreen();
+                } else {
+                    window.unfullscreen();
+                }
+                let _ = reassert_window_fullscreen_on_x11(&window, is_fullscreen);
+                arm_fullscreen_ack_timeout(&window, &state, generation);
+            }
+            fullscreen_toggle::AckTimeout::ForceReleased { geometry } => {
+                log_fullscreen_video_geometry(&window, &state, "fullscreen-ack-timeout");
+                if let Some(geometry) = geometry {
+                    apply_native_video_geometry(&state, geometry, true);
+                }
+            }
+            fullscreen_toggle::AckTimeout::AlreadySettled
+            | fullscreen_toggle::AckTimeout::Superseded => {}
         }
     });
 }

@@ -27,6 +27,17 @@
 //! and force-releases the hold through
 //! [`FullscreenToggle::settle_timed_out_request`], which is what keeps the
 //! native plane from freezing at a stale size for the lifetime of the window.
+//!
+//! A missed acknowledgement is not always a refusal. A window manager busy
+//! reconfiguring the same toplevel (the compact-mode restore resizes the window
+//! in the same breath as the fullscreen request) can lose the state change
+//! altogether, and without a nudge the window then stays windowed forever even
+//! though the user asked for fullscreen. The first timeout whose platform state
+//! still disagrees with the intent therefore answers
+//! [`AckTimeout::RetryRequest`] exactly once: the shell re-issues the platform
+//! request and re-arms the same bounded timer. A second miss settles windowed
+//! as before, so a compositor that truly refuses fullscreen still resolves
+//! within two timer periods instead of holding geometry indefinitely.
 
 /// The window operation a toggle resolves to, derived from the intended state
 /// rather than the compositor's lagging report.
@@ -66,6 +77,11 @@ pub enum AckTimeout {
     /// A newer request was issued after the one this timer belongs to; that
     /// request's own timer owns the hold from here.
     Superseded,
+    /// The deadline passed with the platform still reporting the opposite of
+    /// the intended state, and this request has not been retried yet. The shell
+    /// must re-issue the platform request for `is_fullscreen` and re-arm the
+    /// acknowledgement timer for the same generation; the hold stays up.
+    RetryRequest { is_fullscreen: bool },
     /// Nothing acknowledged the request within the deadline, so the hold was
     /// force-released and the intent realigned with the platform's own state.
     /// Replay `geometry` if the shell stashed any while the hold was up.
@@ -89,6 +105,9 @@ pub struct FullscreenToggle {
     issued: u64,
     /// How many of those requests the compositor has answered.
     acknowledged: u64,
+    /// Whether the most recent request has already burned its single
+    /// timed-out-acknowledgement retry.
+    retry_used: bool,
     held_geometry: Option<VideoPlaneGeometry>,
 }
 
@@ -99,6 +118,7 @@ impl FullscreenToggle {
             intended: is_fullscreen,
             issued: 0,
             acknowledged: 0,
+            retry_used: false,
             held_geometry: None,
         }
     }
@@ -125,6 +145,7 @@ impl FullscreenToggle {
     pub fn request(&mut self, is_fullscreen: bool) -> u64 {
         self.intended = is_fullscreen;
         self.issued = self.issued.saturating_add(1);
+        self.retry_used = false;
         self.issued
     }
 
@@ -150,19 +171,29 @@ impl FullscreenToggle {
         }
     }
 
-    /// Force-release the acknowledgement hold for `generation` after the
-    /// shell's bounded timer expired without a `fullscreened` notify, realigning
-    /// the intent with the platform's own `is_fullscreen`.
+    /// Resolve the acknowledgement hold for `generation` after the shell's
+    /// bounded timer expired without a `fullscreened` notify.
     ///
-    /// A compositor is free to ignore or refuse a fullscreen request; without
-    /// this ceiling the hold — and with it the native plane's geometry — would
-    /// last for the lifetime of the window.
+    /// The first expiry whose platform `is_fullscreen` still contradicts the
+    /// intent answers [`AckTimeout::RetryRequest`]: a window manager can lose a
+    /// state change issued mid-reconfigure (the compact-restore resize races
+    /// the fullscreen request), and one re-issued request recovers the user's
+    /// ask. Every later expiry force-releases the hold and realigns the intent
+    /// with the platform's own state — a compositor is free to ignore or refuse
+    /// a fullscreen request, and without this ceiling the hold — and with it
+    /// the native plane's geometry — would last for the lifetime of the window.
     pub fn settle_timed_out_request(&mut self, generation: u64, is_fullscreen: bool) -> AckTimeout {
         if self.issued != generation {
             return AckTimeout::Superseded;
         }
         if !self.transition_pending() {
             return AckTimeout::AlreadySettled;
+        }
+        if self.intended != is_fullscreen && !self.retry_used {
+            self.retry_used = true;
+            return AckTimeout::RetryRequest {
+                is_fullscreen: self.intended,
+            };
         }
         self.acknowledged = self.issued;
         self.intended = is_fullscreen;
@@ -386,14 +417,22 @@ mod tests {
     }
 
     #[test]
-    fn an_unacknowledged_request_force_releases_on_timeout_and_returns_the_stash() {
+    fn an_unacknowledged_request_force_releases_on_the_second_timeout_and_returns_the_stash() {
         // A compositor that refuses or ignores the request never emits the
-        // `fullscreened` notify. Without the bounded timer the hold — and the
-        // native plane's geometry — would never be released.
+        // `fullscreened` notify. The first timeout re-issues the request once;
+        // the second releases the hold — without the bounded ceiling the hold
+        // and the native plane's geometry would never be released.
         let mut toggle = FullscreenToggle::new(true);
         let generation = toggle.request(false);
         assert_eq!(toggle.offer_geometry(WINDOWED), GeometryDisposition::Held);
 
+        assert_eq!(
+            toggle.settle_timed_out_request(generation, true),
+            AckTimeout::RetryRequest {
+                is_fullscreen: false
+            }
+        );
+        assert!(toggle.transition_pending());
         assert_eq!(
             toggle.settle_timed_out_request(generation, true),
             AckTimeout::ForceReleased {
@@ -413,12 +452,127 @@ mod tests {
         let generation = toggle.request(true);
         assert_eq!(
             toggle.settle_timed_out_request(generation, false),
+            AckTimeout::RetryRequest {
+                is_fullscreen: true
+            }
+        );
+        assert_eq!(
+            toggle.settle_timed_out_request(generation, false),
             AckTimeout::ForceReleased { geometry: None }
         );
         assert!(!toggle.transition_pending());
         assert_eq!(
             toggle.offer_geometry(WINDOWED),
             GeometryDisposition::Apply(WINDOWED)
+        );
+    }
+
+    #[test]
+    fn a_slow_compositor_that_grants_after_the_retry_ends_fullscreen() {
+        // The compact-restore defect: the window manager was still busy
+        // applying the restore resize when the fullscreen request arrived, so
+        // the acknowledgement missed the first deadline. The retry re-issues
+        // the request and the eventual grant must land fullscreen — the intent
+        // is not abandoned to the stale windowed state.
+        let mut toggle = FullscreenToggle::new(false);
+        let generation = toggle.request(true);
+
+        assert_eq!(
+            toggle.settle_timed_out_request(generation, false),
+            AckTimeout::RetryRequest {
+                is_fullscreen: true
+            }
+        );
+        assert!(toggle.transition_pending());
+        assert!(toggle.intended());
+        assert_eq!(toggle.generation(), generation);
+
+        // The re-issued request is granted.
+        toggle.observe(true);
+        assert!(!toggle.transition_pending());
+        assert!(toggle.intended());
+
+        // The re-armed timer fires after the grant and must change nothing.
+        assert_eq!(
+            toggle.settle_timed_out_request(generation, true),
+            AckTimeout::AlreadySettled
+        );
+        assert!(toggle.intended());
+        assert_eq!(toggle.toggle(), FullscreenAction::Leave);
+    }
+
+    #[test]
+    fn a_true_refusal_settles_windowed_after_exactly_one_retry() {
+        // A compositor that never grants fullscreen: the retry is bounded to
+        // one re-issued request, so the window settles windowed after two timer
+        // periods instead of re-requesting forever (the infinite-hold class of
+        // defect from issue #628 must not come back).
+        let mut toggle = FullscreenToggle::new(false);
+        let generation = toggle.request(true);
+        assert_eq!(toggle.offer_geometry(WINDOWED), GeometryDisposition::Held);
+
+        assert_eq!(
+            toggle.settle_timed_out_request(generation, false),
+            AckTimeout::RetryRequest {
+                is_fullscreen: true
+            }
+        );
+        // The retry keeps the hold and the stash intact while the re-issued
+        // request is in flight.
+        assert!(toggle.transition_pending());
+        assert_eq!(toggle.offer_geometry(WINDOWED), GeometryDisposition::Held);
+
+        assert_eq!(
+            toggle.settle_timed_out_request(generation, false),
+            AckTimeout::ForceReleased {
+                geometry: Some(WINDOWED)
+            }
+        );
+        assert!(!toggle.transition_pending());
+        assert!(!toggle.intended());
+    }
+
+    #[test]
+    fn a_timeout_that_matches_the_intent_settles_without_a_retry() {
+        // The platform already reports the intended state; only the notify was
+        // missed. Re-issuing the request could not change anything, so the
+        // hold is released on the first deadline.
+        let mut toggle = FullscreenToggle::new(false);
+        let generation = toggle.request(true);
+        assert_eq!(
+            toggle.settle_timed_out_request(generation, true),
+            AckTimeout::ForceReleased { geometry: None }
+        );
+        assert!(!toggle.transition_pending());
+        assert!(toggle.intended());
+    }
+
+    #[test]
+    fn a_new_request_restores_the_retry_budget() {
+        let mut toggle = FullscreenToggle::new(false);
+        let first = toggle.request(true);
+        assert_eq!(
+            toggle.settle_timed_out_request(first, false),
+            AckTimeout::RetryRequest {
+                is_fullscreen: true
+            }
+        );
+
+        // A reversal supersedes the retried request and gets its own budget.
+        let second = toggle.request(false);
+        assert_eq!(
+            toggle.settle_timed_out_request(first, false),
+            AckTimeout::Superseded
+        );
+        assert_eq!(
+            toggle.settle_timed_out_request(second, true),
+            AckTimeout::RetryRequest {
+                is_fullscreen: false
+            }
+        );
+        assert_eq!(
+            toggle.settle_timed_out_request(second, true),
+            AckTimeout::ForceReleased { geometry: None }
         );
     }
 

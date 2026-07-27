@@ -1561,6 +1561,73 @@ pub(crate) fn set_window_always_on_top(
     }
 }
 
+/// Re-assert a fullscreen state change with an EWMH `_NET_WM_STATE` client
+/// message where X11 permits one.
+///
+/// `GtkWindow::fullscreen` records the state on the GDK toplevel and sends the
+/// request once; a window manager that loses that message while reconfiguring
+/// the same toplevel (the compact-restore resize races the fullscreen request)
+/// never sees it again, because GTK believes the state is already requested.
+/// This explicit message is the recovery path the acknowledgement-timeout
+/// retry drives. Returns `false` where no X11 channel exists — on Wayland the
+/// compositor owns the state and GTK's own request is the only channel.
+pub(crate) fn reassert_window_fullscreen_on_x11(
+    window: &gtk::ApplicationWindow,
+    fullscreen: bool,
+) -> bool {
+    use gtk::glib::translate::ToGlibPtr;
+
+    let Some(display) = gdk::Display::default() else {
+        return false;
+    };
+    if display.type_().name() != "GdkX11Display" {
+        return false;
+    }
+    let Some(surface) = window.surface() else {
+        return false;
+    };
+
+    let state_name = c"_NET_WM_STATE";
+    let fullscreen_name = c"_NET_WM_STATE_FULLSCREEN";
+    unsafe {
+        let xdisplay = gdk_x11_display_get_xdisplay(display.to_glib_none().0);
+        if xdisplay.is_null() {
+            return false;
+        }
+        let xid = gdk_x11_surface_get_xid(surface.to_glib_none().0);
+        let message_type = XInternAtom(xdisplay, state_name.as_ptr(), 0);
+        let fullscreen_atom = XInternAtom(xdisplay, fullscreen_name.as_ptr(), 0);
+        if xid == 0 || message_type == 0 || fullscreen_atom == 0 {
+            return false;
+        }
+
+        let client_message = XClientMessageEvent {
+            type_: 33,
+            serial: 0,
+            send_event: 1,
+            display: xdisplay,
+            window: xid,
+            message_type,
+            format: 32,
+            data: XClientMessageData {
+                longs: [
+                    if fullscreen { 1 } else { 0 },
+                    fullscreen_atom as libc::c_long,
+                    0,
+                    1,
+                    0,
+                ],
+            },
+        };
+        let mut event = XEvent { client_message };
+        let root = XDefaultRootWindow(xdisplay);
+        let mask = (1 << 20) | (1 << 19);
+        let sent = XSendEvent(xdisplay, root, 0, mask, &mut event);
+        XFlush(xdisplay);
+        sent != 0
+    }
+}
+
 pub(crate) fn player_window_control(kind: WindowControlKind, tooltip: &str) -> gtk::Button {
     let button = gtk::Button::new();
     button.add_css_class("okp-player-window-control");

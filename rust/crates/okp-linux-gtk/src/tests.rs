@@ -1131,7 +1131,8 @@ fn a_compositor_that_never_acknowledges_cannot_freeze_the_native_plane() {
     use fullscreen_toggle::{AckTimeout, FullscreenToggle, GeometryDisposition};
 
     // The compositor refuses the leave: no `fullscreened` notify will ever
-    // arrive, so only the bounded timer can release the hold.
+    // arrive, so only the bounded timer can release the hold. The first
+    // deadline re-issues the request once; the second releases the hold.
     let mut toggle = FullscreenToggle::new(true);
     let generation = toggle.request(false);
     assert_eq!(
@@ -1139,6 +1140,13 @@ fn a_compositor_that_never_acknowledges_cannot_freeze_the_native_plane() {
         GeometryDisposition::Held
     );
 
+    assert_eq!(
+        toggle.settle_timed_out_request(generation, true),
+        AckTimeout::RetryRequest {
+            is_fullscreen: false
+        }
+    );
+    assert!(toggle.transition_pending());
     assert_eq!(
         toggle.settle_timed_out_request(generation, true),
         AckTimeout::ForceReleased {
@@ -1161,6 +1169,10 @@ fn the_fullscreen_acknowledgement_hold_is_bounded_to_a_perceptible_ceiling() {
     // refused request does not leave stale geometry on screen.
     assert!(FULLSCREEN_ACK_TIMEOUT >= Duration::from_millis(250));
     assert!(FULLSCREEN_ACK_TIMEOUT <= Duration::from_millis(500));
+    // A timed-out request is re-issued at most once, so even a compositor that
+    // refuses fullscreen outright settles windowed within two timer periods —
+    // still a perceptible bound, never an indefinite hold.
+    assert!(2 * FULLSCREEN_ACK_TIMEOUT <= Duration::from_millis(1000));
 }
 
 #[test]
