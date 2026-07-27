@@ -37,6 +37,12 @@ okp_linux_namespaced_media_soname() {
   printf 'libokp-%s\n' "$soname"
 }
 
+# Audio client stacks are host integration, same class as glibc and mesa:
+# libpipewire dlopens the host SPA plugin tree and speaks the host daemon
+# protocol, libpulse/libjack talk to host daemons. A bundled copy from a
+# different distro era mixes client and plugin ABIs - the first container
+# candidate shipped Debian libpipewire onto Ubuntu hosts and produced
+# garbled audio plus an audio-clock-stalled video path (#670).
 okp_is_linux_platform_runtime() {
   okp_is_linux_glibc_runtime "$1" && return 0
   case "$1" in
@@ -49,6 +55,8 @@ okp_is_linux_platform_runtime() {
       libharfbuzz.so.* | libgraphite2.so.* | libfribidi.so.* | \
       libmount.so.* | libblkid.so.* | libselinux.so.* | libpcre2-*.so.* | \
       libffi.so.* | libdbus-1.so.* | libsystemd.so.* | libudev.so.* | \
+      libpipewire-*.so.* | libpulse.so.* | libpulsecommon-*.so | \
+      libjack.so.* | \
       libasound*.so* | libjpeg*.so* | libturbojpeg*.so* | libtiff*.so* | \
       libwebp*.so* | libpng*.so* | libxkbcommon*.so.* | libdecor-*.so.* | \
       libepoxy.so.* | \

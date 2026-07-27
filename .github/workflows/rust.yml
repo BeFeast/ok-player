@@ -82,6 +82,9 @@ jobs:
       - name: Container ownership handoff stays runtime-agnostic
         run: ./scripts/tests/container-fixup-ownership.Tests.sh
 
+      - name: Bundled-runtime platform policy keeps host integration out
+        run: ./scripts/tests/bundled-runtime-policy.Tests.sh
+
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
