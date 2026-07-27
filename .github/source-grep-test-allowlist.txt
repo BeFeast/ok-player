@@ -6,12 +6,27 @@
 #
 # THIS FILE MAY ONLY SHRINK.
 #   * scripts/check-source-grep-tests.py rejects a pull request that adds an
-#     entry, and rejects an entry that no longer matches a source-text-only
-#     test (fix the test, then delete its line).
+#     entry, and rejects an entry whose test no longer asserts on source text at
+#     all (fix the test, then delete its line).
+#   * An entry may NOT be deleted just because its test acquired a behavioural
+#     assertion. The line goes when the last source grep goes, not before -
+#     otherwise "add one assertion, delete one line" drains the ledger without
+#     fixing anything.
 #   * To remove an entry, rewrite the test so it asserts on behaviour: drive the
 #     function or state machine and check the value or event it produces. Prove
 #     it by reverting the production change and watching the test fail.
 #   * Never add an entry to make a new test pass. Write a behavioural test.
+#
+# WHAT THE DETECTOR DOES NOT SEE. Being absent from this file is not a
+# certificate that a test asserts on behaviour. Known gaps:
+#   * source text read without `include_str!`, e.g. `fs::read_to_string(
+#     "src/foo.rs")`. None exist today.
+#   * a helper in ANOTHER module that returns source text. A helper in the same
+#     file whose return type is a string is resolved; a cross-module one is not.
+#   * a grep hidden inside a helper with a neutral name, e.g.
+#     `assert!(has_expected_implementation(source))`. Telling a grep helper from
+#     a parser needs flow analysis.
+#   * C#. The pattern exists only in the Rust workspace.
 #
 # Format: <path relative to the repository root>::<test function name>
 rust/crates/okp-core/tests/candidate_toolchain.rs::portability_failure_evidence_is_bound_to_both_workflow_artifacts
@@ -55,3 +70,15 @@ rust/crates/okp-linux-gtk/src/tests.rs::native_video_background_is_transparent_o
 rust/crates/okp-linux-gtk/src/tests.rs::fullscreen_toggle_wiring_decides_from_intent_not_the_lagging_platform_state
 rust/crates/okp-linux-gtk/src/tests.rs::settings_and_about_open_path_does_not_block_on_metadata_probes
 rust/crates/okp-linux-gtk/src/tests.rs::settings_first_map_builds_only_the_requested_page
+#
+# Found by the sharpened classifier, not newly written. Each of these three
+# already existed on main and was hidden from the first version of the detector:
+#   * player_close_returns_to_gtk_before_mpv_teardown bound its text through a
+#     tuple pattern (`let (before_idle, idle_body) = ...`), which the binding
+#     tracker did not read;
+#   * the other two were cleared by a constant-to-constant assertion
+#     (`assert_eq!(SETTINGS_SWITCH_WIDTH, 39)`), which used to count as
+#     behaviour.
+rust/crates/okp-linux-gtk/src/tests.rs::player_close_returns_to_gtk_before_mpv_teardown
+rust/crates/okp-linux-gtk/src/tests.rs::video_hardware_decode_uses_the_shared_settings_switch_geometry
+rust/crates/okp-linux-gtk/src/tests.rs::media_info_identity_is_app_owned_cairo_geometry

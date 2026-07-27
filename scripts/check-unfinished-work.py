@@ -41,13 +41,22 @@ TITLE_UNFINISHED = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 WIP_MARKER = re.compile(r"<!--\s*maestro:wip\b[^>]*-->", re.IGNORECASE)
+# The phrases that open an acceptance hold. "Operator acceptance" is the shape
+# the template asks for, but a hold does not stop being a hold because it was
+# titled differently: #621 used "Live acceptance hold". One leading word is
+# allowed before "acceptance" and one qualifier after it.
+ACCEPTANCE_PHRASE = (
+    r"(?:(?:[A-Za-z]+\s+)?(?:acceptance|sign[\s\-]?off)"
+    r"(?:\s+(?:hold|holds|criteria|checklist|gate|required|needed|pending))?"
+    r"|before\s+merge)"
+)
 # A real heading or label line, not a sentence that happens to start with the
 # phrase: "Operator acceptance is not required for this change." is prose.
 ACCEPTANCE_HEADING = re.compile(
-    r"""^\s*(?:
-          \#{1,6}\s*operator\s+(?:acceptance|sign[\s\-]?off).*
-        | (?:\*\*|__)\s*operator\s+(?:acceptance|sign[\s\-]?off)[^*_]*(?:\*\*|__)\s*:?
-        | operator\s+(?:acceptance|sign[\s\-]?off)[^.!?:]{0,40}:
+    rf"""^\s*(?:
+          \#{{1,6}}\s*{ACCEPTANCE_PHRASE}[^.!?]{{0,60}}
+        | (?:\*\*|__)\s*{ACCEPTANCE_PHRASE}[^*_.!?]{{0,60}}(?:\*\*|__)\s*:?
+        | {ACCEPTANCE_PHRASE}[^.!?:]{{0,40}}:
     )\s*$""",
     re.IGNORECASE | re.VERBOSE,
 )
@@ -57,6 +66,9 @@ HEADING = re.compile(
     r"^\s*(?:#{1,6}\s|---\s*$|\*\*[^*]+\*\*\s*:?\s*$|__[^_]+__\s*:?\s*$"
     r"|<[A-Za-z/][^>]*>)"
 )
+# A markdown heading is the only terminator strong enough to end an acceptance
+# *section*. A bold label, a rule or an HTML tag is a sub-label inside it.
+SECTION_BREAK = re.compile(r"^\s*#{1,6}\s")
 LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+(.*)$")
 UNCHECKED_BOX = re.compile(r"^\[\s\]\s*(.*)$")
 CHECKED_BOX = re.compile(r"^\[[xX]\]\s*(.*)$")
@@ -67,10 +79,21 @@ HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 RUST_STUBS = re.compile(r"\b(?:todo|unimplemented)!\s*[\(\[\{]")
 STRING_LITERAL = re.compile(r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'")
 BARE_MARKER = re.compile(r"\b(TODO|FIXME)\b(?!\s*\(\s*#\d+\s*\))")
+# Shipped source and shipped configuration. Workflow and manifest files are
+# here because a half-finished CI job is unfinished work like any other - the
+# two workflows this gate itself adds are scanned by it. Markdown is out of
+# scope on purpose: prose discusses markers legitimately, and a check that
+# fires on documentation gets muted.
 CODE_SUFFIXES = {
     ".rs", ".cs", ".sh", ".ps1", ".psm1", ".py", ".c", ".h", ".cpp", ".xaml",
+    ".yml", ".yaml", ".toml", ".json",
 }
-SKIP_DIRS = {".git", "target", "bin", "obj", "node_modules"}
+SKIP_DIRS = {".git", "target", "node_modules"}
+# `bin` and `obj` are .NET build output, but only where a project file puts
+# them. Skipping every directory with those names would blind the scan to a
+# checked-in source directory that happens to be called `bin`.
+DOTNET_OUTPUT_DIRS = {"bin", "obj"}
+PROJECT_FILE_SUFFIXES = {".csproj", ".vbproj", ".fsproj", ".vcxproj"}
 # The gate's own sources and its tests must spell the markers out to detect them.
 SELF_PATHS = {
     "scripts/check-unfinished-work.py",
@@ -87,9 +110,23 @@ def summarise(items: list[str], limit: int = 5) -> str:
 
 
 def strip_fenced_blocks(text: str) -> str:
+    """Blank out fenced code blocks so a body may quote these rules.
+
+    Only a fence with a closing partner is stripped. Toggling on every fence
+    meant a single unbalanced ``` blanked the whole rest of the body and
+    silently disabled every rule below it - the WIP marker scan included. A
+    body's markdown is edited by review bots in this repository, so an odd
+    fence count is not a hypothetical.
+    """
+    lines = text.splitlines()
+    fences = [i for i, line in enumerate(lines) if FENCE.match(line)]
+    paired = set()
+    for opener, closer in zip(fences[0::2], fences[1::2]):
+        paired.add(opener)
+        paired.add(closer)
     out, inside = [], False
-    for line in text.splitlines():
-        if FENCE.match(line):
+    for i, line in enumerate(lines):
+        if i in paired:
             inside = not inside
             continue
         out.append("" if inside else line)
@@ -97,7 +134,13 @@ def strip_fenced_blocks(text: str) -> str:
 
 
 def acceptance_blocks(body: str) -> list[list[str]]:
-    """The body lines of every Operator acceptance block, HTML comments removed."""
+    """The body lines of every acceptance block, HTML comments removed.
+
+    A block ends at the first terminator of any strength: a heading, a rule, a
+    bold label, an HTML tag. These tight bounds exist because the prose and
+    plain-bullet rules read whatever is inside, and a review bot's appended
+    bullet summary must not be mistaken for acceptance items.
+    """
     blocks, current = [], None
     for line in HTML_COMMENT.sub("", body).splitlines():
         if ACCEPTANCE_HEADING.match(line):
@@ -117,6 +160,45 @@ def acceptance_blocks(body: str) -> list[list[str]]:
     return blocks
 
 
+def acceptance_sections(body: str) -> list[list[str]]:
+    """Every acceptance section, bounded only by a terminator of equal strength.
+
+    The tight bounds above were a laundering route: one ticked box followed by
+    any terminator - `<div>`, `**Still pending**`, `---` - hid every unticked
+    box after it, and exit 0 was the answer to
+
+        ## Operator acceptance
+        - [x] smoke run
+        **Still pending**
+        - [ ] dual-display QA
+
+    An unticked checkbox is unambiguous wherever it sits, so it is scanned over
+    the whole section. A section opened by a markdown heading runs to the next
+    markdown heading; a section opened by a weaker label (a bold line, a bare
+    label ending in a colon) still ends at any terminator, so a bold label
+    cannot swallow an unrelated follow-up list below it.
+    """
+    lines = HTML_COMMENT.sub("", body).splitlines()
+    sections, current, strong = [], None, False
+    for line in lines:
+        if ACCEPTANCE_HEADING.match(line):
+            if current is not None:
+                sections.append(current)
+            current, strong = [], bool(SECTION_BREAK.match(line))
+            continue
+        if current is None:
+            continue
+        ends = SECTION_BREAK.match(line) if strong else HEADING.match(line)
+        if ends:
+            sections.append(current)
+            current = None
+            continue
+        current.append(line)
+    if current is not None:
+        sections.append(current)
+    return sections
+
+
 def acceptance_problems(body: str) -> list[tuple[str, str]]:
     """(title, detail) for every Operator acceptance block that is not resolved.
 
@@ -127,6 +209,31 @@ def acceptance_problems(body: str) -> list[tuple[str, str]]:
     repository's history took one of those two unrecordable shapes.
     """
     problems = []
+
+    # Unticked boxes are scanned over the whole section, so that a terminator
+    # dropped between two items cannot hide the ones below it.
+    for section in acceptance_sections(body):
+        unchecked = []
+        for line in section:
+            item = LIST_ITEM.match(line)
+            if not item:
+                continue
+            box = UNCHECKED_BOX.match(item.group(1).strip())
+            if box:
+                unchecked.append(box.group(1).strip() or "(unnamed item)")
+        if unchecked:
+            problems.append(
+                (
+                    "Operator acceptance is not complete",
+                    "The body has an Operator acceptance block with unchecked items: "
+                    + summarise(unchecked)
+                    + ". Perform each item and tick its box, or delete the block if "
+                    "the change genuinely needs no operator acceptance. Ticking a box "
+                    "you did not perform is the failure mode this check exists to "
+                    "stop.",
+                )
+            )
+
     for block in acceptance_blocks(body):
         unchecked, unresolvable, checked = [], [], 0
         prose = []
@@ -143,18 +250,6 @@ def acceptance_problems(body: str) -> list[tuple[str, str]]:
                 unchecked.append(UNCHECKED_BOX.match(text).group(1).strip() or "(unnamed item)")
             else:
                 unresolvable.append(text or "(unnamed item)")
-        if unchecked:
-            problems.append(
-                (
-                    "Operator acceptance is not complete",
-                    "The body has an Operator acceptance block with unchecked items: "
-                    + summarise(unchecked)
-                    + ". Perform each item and tick its box, or delete the block if "
-                    "the change genuinely needs no operator acceptance. Ticking a box "
-                    "you did not perform is the failure mode this check exists to "
-                    "stop.",
-                )
-            )
         if unresolvable:
             problems.append(
                 (
@@ -192,6 +287,20 @@ def acceptance_problems(body: str) -> list[tuple[str, str]]:
     return problems
 
 
+def is_dotnet_output(root: Path, rel: Path) -> bool:
+    """Is any component of rel a .NET output directory beside a project file?"""
+    current = root
+    for part in rel.parts[:-1]:
+        if part in DOTNET_OUTPUT_DIRS and any(
+            sibling.suffix in PROJECT_FILE_SUFFIXES
+            for sibling in current.iterdir()
+            if sibling.is_file()
+        ):
+            return True
+        current = current / part
+    return False
+
+
 def code_files(root: Path) -> list[Path]:
     files = []
     for path in root.rglob("*"):
@@ -201,6 +310,8 @@ def code_files(root: Path) -> list[Path]:
         if SKIP_DIRS & set(rel.parts):
             continue
         if rel.as_posix() in SELF_PATHS:
+            continue
+        if is_dotnet_output(root, rel):
             continue
         files.append(path)
     return sorted(files)
@@ -280,9 +391,9 @@ def main() -> int:
                 "to get a green check.",
             )
 
-        for title, detail in acceptance_problems(prose):
+        for problem, detail in acceptance_problems(prose):
             failures += 1
-            annotate(title, detail)
+            annotate(problem, detail)
 
         if not HTML_COMMENT.sub("", body).strip():
             failures += 1

@@ -9,7 +9,12 @@ on:
   # body, leaving the enforced check green and stale.
   pull_request:
     types: [opened, synchronize, reopened, edited, ready_for_review]
-  workflow_dispatch:
+  # No workflow_dispatch. A manual run produces a check run named
+  # "Rust workspace (Linux)" - the name branch protection requires - on a head
+  # that has an open pull request, but with no pull request context, so both
+  # declaration steps would skip and the required check would go green without
+  # the gate ever evaluating. Re-running a failed run replays its original
+  # event, so nothing is lost: the declaration is re-read live from the API.
 
 permissions:
   contents: read
@@ -48,10 +53,16 @@ jobs:
         if: github.event_name != 'pull_request'
         run: python3 scripts/check-unfinished-work.py --root .
 
+      # --require-base-ref on pull requests: the allowlist growth guard is the
+      # only rule that catches a new offender added together with its allowlist
+      # entry, so an empty BASE_REF must fail the job rather than quietly skip
+      # the comparison.
       - name: Tests assert behaviour, not source text
         env:
           BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: python3 scripts/check-source-grep-tests.py --root .
+        run: >-
+          python3 scripts/check-source-grep-tests.py --root .
+          ${{ github.event_name == 'pull_request' && '--require-base-ref' || '' }}
 
       - name: Night GUI QA driver policy tests
         run: ./scripts/tests/ok-player-night-gui-qa.Tests.sh

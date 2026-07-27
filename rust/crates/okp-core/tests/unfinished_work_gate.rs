@@ -194,6 +194,137 @@ fn prose_beside_a_ticked_box_still_blocks_the_merge() {
 }
 
 #[test]
+fn a_block_terminator_cannot_hide_the_unticked_boxes_below_it() {
+    let fixture = Declaration::new("okp-gate-acceptance-terminator");
+    // One ticked box followed by any block terminator used to end the block, so
+    // everything after it - including the real hold - was never examined. The
+    // bold-label shape is the one a human would write without meaning to cheat.
+    for terminator in ["**Still pending**", "<div>", "---", "__Outstanding__"] {
+        let body = format!(
+            "## Operator acceptance\n\n- [x] smoke run\n\n{terminator}\n\n\
+             - [ ] dual-display QA on a packaged build\n"
+        );
+
+        let output = fixture.check("Reveal saved Linux screenshots", &body);
+
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "terminator must not hide the hold: {terminator}"
+        );
+        let stderr = stderr_of(&output);
+        assert!(stderr.contains("Operator acceptance is not complete"));
+        assert!(stderr.contains("dual-display QA on a packaged build"));
+    }
+}
+
+#[test]
+fn a_weakly_opened_acceptance_block_does_not_swallow_a_later_list() {
+    let fixture = Declaration::new("okp-gate-acceptance-weak-open");
+    // The section scan must not reach past a terminator at least as strong as
+    // the label that opened the block, or every follow-up list in the body
+    // becomes an acceptance item.
+    let body = "**Operator acceptance**\n\n\
+        - [x] Verified on GNOME\n\n\
+        **Follow-ups**\n\n\
+        - [ ] a later idea, not a hold\n";
+
+    let output = fixture.check("Reveal saved Linux screenshots", body);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+}
+
+#[test]
+fn an_unbalanced_code_fence_does_not_disable_the_body_rules() {
+    let fixture = Declaration::new("okp-gate-odd-fence");
+    // An unterminated fence used to blank every line after it, which switched
+    // off the marker and acceptance rules for the rest of the body. Third
+    // parties edit pull request bodies here, so an odd fence count is reachable
+    // without the author doing anything.
+    let body = "## What this changes\n\nRestores the surface.\n\n\
+        ```\nan unterminated example\n\n\
+        <!-- maestro:wip -->\n\n\
+        ## Operator acceptance\n\n\
+        - [ ] dual-display QA on a packaged build\n";
+
+    let output = fixture.check("Reveal saved Linux screenshots", body);
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    let stderr = stderr_of(&output);
+    assert!(stderr.contains("WIP marker"));
+    assert!(stderr.contains("dual-display QA on a packaged build"));
+}
+
+#[test]
+fn an_acceptance_block_with_nothing_in_it_blocks_the_merge() {
+    let fixture = Declaration::new("okp-gate-acceptance-empty-block");
+    // The backstop behind every other acceptance rule: whatever shape a block
+    // takes, if the gate can find no items in it, the block states a condition
+    // that nothing can record as performed.
+    let body = "## Summary\n\nReveals saved screenshots.\n\n\
+        ## Operator acceptance\n\n\
+        ## Notes\n\nNothing else.\n";
+
+    let output = fixture.check("Reveal saved Linux screenshots", body);
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    assert!(stderr_of(&output).contains("Operator acceptance block is empty"));
+}
+
+#[test]
+fn an_acceptance_hold_under_another_heading_still_blocks_the_merge() {
+    let fixture = Declaration::new("okp-gate-acceptance-headings");
+    // "Operator acceptance" is what the template asks for. A hold does not stop
+    // being a hold because it was titled differently - #621 wrote "Live
+    // acceptance hold" - so the heading match covers the near neighbours.
+    for heading in [
+        "## Live acceptance hold",
+        "## Acceptance criteria",
+        "## Before merge",
+        "## Operator sign-off",
+    ] {
+        let body = format!(
+            "## Summary\n\nReveals saved screenshots.\n\n{heading}\n\n- [ ] dual-display QA\n"
+        );
+
+        let output = fixture.check("Reveal saved Linux screenshots", &body);
+
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "heading should open an acceptance block: {heading}"
+        );
+        assert!(stderr_of(&output).contains("dual-display QA"));
+    }
+}
+
+#[test]
+fn an_unfinished_marker_in_a_shipped_workflow_blocks_the_merge() {
+    let fixture = Declaration::new("okp-gate-workflow-marker");
+    // The tree scan used to cover code suffixes only, so a half-finished CI job
+    // - including the workflows this gate itself ships - was invisible to it.
+    let workflow = fixture.root.path().join(".github/workflows/release.yml");
+    fs::create_dir_all(workflow.parent().expect("parent")).expect("fixture tree");
+
+    fs::write(
+        &workflow,
+        "jobs:\n  release:\n    # TODO: sign the artifacts\n",
+    )
+    .expect("write");
+    let blocked = fixture.check("Add the release workflow", FINISHED_BODY);
+    assert_eq!(blocked.status.code(), Some(1), "{}", stderr_of(&blocked));
+    assert!(stderr_of(&blocked).contains("Unfinished-code marker"));
+
+    fs::write(
+        &workflow,
+        "jobs:\n  release:\n    # TODO(#1234): sign the artifacts\n",
+    )
+    .expect("write");
+    let tracked = fixture.check("Add the release workflow", FINISHED_BODY);
+    assert_eq!(tracked.status.code(), Some(0), "{}", stderr_of(&tracked));
+}
+
+#[test]
 fn a_sentence_that_merely_mentions_operator_acceptance_opens_no_block() {
     let fixture = Declaration::new("okp-gate-acceptance-sentence");
     let body = "## Summary\n\nDocumentation only.\n\n\
@@ -390,6 +521,78 @@ fn main_matches_the_expected_implementation() {
 }
 "#;
 
+/// The laundered shape: the source greps are untouched and one assertion about
+/// nothing at all is added beside them. This is the cheapest possible way to
+/// make a detector that counts "non-grep assertions" look satisfied.
+const LAUNDERED_SOURCE_GREP_TEST: &str = r#"
+#[test]
+fn renderer_environment_is_selected_before_gtk_initialization() {
+    let source = include_str!("main.rs");
+    assert_eq!(2 + 2, 4);
+    let renderer = source
+        .find("configure_linux_renderer_environment();")
+        .expect("main should configure rendering");
+    let gtk = source
+        .find("VelopackApp::build()")
+        .expect("main should initialize Velopack and GTK");
+
+    assert!(renderer < gtk);
+}
+"#;
+
+/// `include_str!` behind a same-file helper. The test body never names the
+/// macro, so a detector that only reads the test body sees no source text.
+const HELPER_FUNCTION_SOURCE_TEST: &str = r#"
+fn main_source() -> &'static str {
+    include_str!("main.rs")
+}
+
+#[test]
+fn renderer_environment_is_selected_before_gtk_initialization() {
+    let source = main_source();
+
+    assert!(source.contains("configure_linux_renderer_environment();"));
+}
+"#;
+
+/// A helper that parses a fixture and returns a value is production code, not
+/// source text: a test that uses it must stay unflagged.
+const HELPER_PARSER_TEST: &str = r#"
+fn sample_cues() -> Vec<Cue> {
+    parse_srt(include_str!("../fixtures/three-cues.srt")).expect("sample should parse")
+}
+
+#[test]
+fn parses_a_three_cue_subtitle_file() {
+    let cues = sample_cues();
+
+    assert_eq!(cues.len(), 3);
+}
+"#;
+
+/// Source text bound through a tuple pattern, then asserted on. `let (a, b) =`
+/// was not read as a binding at all, so both halves counted as behaviour.
+const TUPLE_BINDING_SOURCE_TEST: &str = r#"
+#[test]
+fn close_request_defers_engine_teardown() {
+    let (source, _unused) = (include_str!("keyboard.rs"), 1);
+
+    assert!(source.contains("glib::idle_add_local_once"));
+}
+"#;
+
+/// Source texts collected into a vector and greped through a `for` loop.
+const LOOP_BINDING_SOURCE_TEST: &str = r#"
+#[test]
+fn every_shell_module_configures_the_renderer() {
+    let modules = vec![include_str!("main.rs"), include_str!("window.rs")];
+
+    for source in modules {
+        assert!(source.contains("configure_linux_renderer_environment();"));
+    }
+}
+"#;
+
 /// A test whose only check is a helper call, with no assertion macro at all.
 const HELPER_STATEMENT_TEST: &str = r#"
 #[test]
@@ -453,10 +656,15 @@ impl Workspace {
     }
 
     fn check(&self) -> Output {
+        self.check_with(&[])
+    }
+
+    fn check_with(&self, extra: &[&str]) -> Output {
         Command::new("python3")
             .arg(repo_root().join("scripts/check-source-grep-tests.py"))
             .arg("--root")
             .arg(self.root.path())
+            .args(extra)
             .output()
             .expect("source grep check should run")
     }
@@ -491,6 +699,154 @@ fn the_same_test_passes_once_it_is_grandfathered() {
         Some(0),
         "{}",
         String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn one_unrelated_assertion_does_not_launder_a_source_grep() {
+    let workspace = Workspace::new("okp-gate-laundered");
+    workspace.write_tests(LAUNDERED_SOURCE_GREP_TEST);
+    workspace.write_allowlist("# empty\n");
+
+    let output = workspace.check();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "assert_eq!(2 + 2, 4) proves nothing about an implementation and must not \
+         clear a test made of source greps:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("renderer_environment_is_selected_before_gtk_initialization")
+    );
+}
+
+#[test]
+fn laundering_an_allowlisted_test_does_not_turn_its_ledger_entry_stale() {
+    let workspace = Workspace::new("okp-gate-ledger-drain");
+    // Keying staleness on "is it still an offender" made the ledger drainable:
+    // add one junk assertion to a grandfathered test and the check demanded its
+    // line be deleted, so the prescribed fix for laundering was to record the
+    // laundering as progress. An entry goes when the last grep goes.
+    workspace.write_tests(LAUNDERED_SOURCE_GREP_TEST);
+    workspace.write_allowlist(
+        "rust/crates/demo/src/tests.rs::renderer_environment_is_selected_before_gtk_initialization\n",
+    );
+
+    let output = workspace.check();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    assert!(
+        !stdout.contains("Stale source-grep allowlist entry"),
+        "the ledger must not ask for the line to be deleted:\n{stdout}"
+    );
+}
+
+#[test]
+fn a_partly_fixed_allowlisted_test_keeps_its_ledger_entry() {
+    let workspace = Workspace::new("okp-gate-partial-fix");
+    // Genuine partial progress, not laundering: a real behavioural assertion
+    // was added and the greps are still there. The entry still may not go.
+    let partly_fixed = format!(
+        "{}\n",
+        SOURCE_GREP_TEST.replace(
+            "    assert!(renderer < gtk);",
+            "    let recorder = StartupRecorder::default();\n    \
+             run_startup(&recorder);\n    \
+             assert_eq!(recorder.steps().len(), 2);\n    \
+             assert!(renderer < gtk);",
+        )
+    );
+    workspace.write_tests(&partly_fixed);
+    workspace.write_allowlist(
+        "rust/crates/demo/src/tests.rs::renderer_environment_is_selected_before_gtk_initialization\n",
+    );
+
+    let output = workspace.check();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    assert!(
+        !stdout.contains("Stale source-grep allowlist entry"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn include_str_reached_through_a_helper_function_is_still_source_text() {
+    let workspace = Workspace::new("okp-gate-helper-fn");
+    workspace.write_tests(HELPER_FUNCTION_SOURCE_TEST);
+    workspace.write_allowlist("# empty\n");
+
+    let output = workspace.check();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "one level of indirection must not hide a source grep:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("renderer_environment_is_selected_before_gtk_initialization")
+    );
+}
+
+#[test]
+fn a_helper_that_parses_a_fixture_is_production_code_not_source_text() {
+    let workspace = Workspace::new("okp-gate-helper-parser");
+    workspace.write_tests(HELPER_PARSER_TEST);
+    workspace.write_allowlist("# empty\n");
+
+    let output = workspace.check();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "resolving helpers must not flag every test that loads a fixture:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn source_text_bound_through_a_tuple_pattern_is_still_source_text() {
+    let workspace = Workspace::new("okp-gate-tuple-binding");
+    workspace.write_tests(TUPLE_BINDING_SOURCE_TEST);
+    workspace.write_allowlist("# empty\n");
+
+    let output = workspace.check();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("close_request_defers_engine_teardown")
+    );
+}
+
+#[test]
+fn source_text_iterated_in_a_for_loop_is_still_source_text() {
+    let workspace = Workspace::new("okp-gate-loop-binding");
+    workspace.write_tests(LOOP_BINDING_SOURCE_TEST);
+    workspace.write_allowlist("# empty\n");
+
+    let output = workspace.check();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("every_shell_module_configures_the_renderer")
     );
 }
 
@@ -718,15 +1074,107 @@ impl GitWorkspace {
     }
 
     fn check(&self, base: &str) -> Output {
+        self.check_with(base, &[])
+    }
+
+    fn check_with(&self, base: &str, extra: &[&str]) -> Output {
         Command::new("python3")
             .arg(repo_root().join("scripts/check-source-grep-tests.py"))
             .arg("--root")
             .arg(self.inner.root.path())
             .arg("--base-ref")
             .arg(base)
+            .args(extra)
             .output()
             .expect("source grep check should run")
     }
+
+    fn delete_allowlist(&self) {
+        fs::remove_file(
+            self.inner
+                .root
+                .path()
+                .join(".github/source-grep-test-allowlist.txt"),
+        )
+        .expect("fixture allowlist should be removable");
+    }
+}
+
+#[test]
+fn a_base_revision_that_does_not_resolve_fails_the_growth_check() {
+    let workspace = GitWorkspace::new("okp-gate-base-unreachable");
+    workspace.write_tests(SOURCE_GREP_TEST);
+    workspace.write_allowlist(
+        "rust/crates/demo/src/tests.rs::renderer_environment_is_selected_before_gtk_initialization\n",
+    );
+    workspace.commit("base");
+
+    // A shallow checkout, a stale cache, a deleted branch: the base simply is
+    // not there. This used to print "::warning" and exit 0, which it did in
+    // this pull request's own CI, so the one rule that catches a new offender
+    // arriving with its own allowlist entry never ran.
+    let output = workspace.check("0123456789abcdef0123456789abcdef01234567");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "an unreadable base must fail, not warn:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        stdout.contains("Allowlist growth check could not run"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("::warning"), "{stdout}");
+}
+
+#[test]
+fn a_missing_base_revision_fails_when_the_growth_check_is_required() {
+    let workspace = GitWorkspace::new("okp-gate-base-missing");
+    workspace.write_tests(SOURCE_GREP_TEST);
+    workspace.write_allowlist(
+        "rust/crates/demo/src/tests.rs::renderer_environment_is_selected_before_gtk_initialization\n",
+    );
+    workspace.commit("base");
+
+    // An empty BASE_REF on a pull request run used to skip the growth check
+    // silently and without a warning of any kind.
+    let output = workspace.check_with("", &["--require-base-ref"]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("No base revision for the allowlist growth check")
+    );
+}
+
+#[test]
+fn a_base_that_predates_the_allowlist_is_reported_as_its_introduction() {
+    let workspace = GitWorkspace::new("okp-gate-base-absent");
+    // The one case that is neither growth nor a broken checkout: the ledger did
+    // not exist yet. It must be distinguished from an unreadable base, and it
+    // must say so out loud rather than passing in silence.
+    workspace.write_tests(SOURCE_GREP_TEST);
+    workspace.write_allowlist("# empty\n");
+    workspace.delete_allowlist();
+    let base = workspace.commit("before the ledger existed");
+
+    workspace.write_allowlist(
+        "rust/crates/demo/src/tests.rs::renderer_environment_is_selected_before_gtk_initialization\n",
+    );
+
+    let output = workspace.check_with(&base, &["--require-base-ref"]);
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    assert!(stdout.contains("Allowlist introduced"), "{stdout}");
+    assert!(!stdout.contains("could not run"), "{stdout}");
 }
 
 fn run_git(root: &Path, args: &[&str]) -> Output {

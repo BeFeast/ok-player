@@ -10,7 +10,9 @@ on:
     types: [opened, edited, reopened, synchronize, ready_for_review, converted_to_draft]
   push:
     branches: [ main ]
-  workflow_dispatch:
+  # No workflow_dispatch: these two job names are meant to go on the branch
+  # protection required list, and a manual run would publish them green with no
+  # pull request context to check against.
 
 permissions:
   contents: read
@@ -58,4 +60,6 @@ jobs:
       - name: Check for source-text-only tests
         env:
           BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: python3 scripts/check-source-grep-tests.py --root .
+        run: >-
+          python3 scripts/check-source-grep-tests.py --root .
+          ${{ github.event_name == 'pull_request' && '--require-base-ref' || '' }}

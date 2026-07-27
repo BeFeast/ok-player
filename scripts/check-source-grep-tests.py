@@ -8,18 +8,28 @@ regression coverage in a diff and are worthless as a merge gate.
 
 This check classifies every `#[test]` function in the Rust workspace:
 
-  * source-text bindings are `let x = include_str!(...)` and anything derived
-    from them (`x.split(..)`, `x.find(..)`, ...);
-  * an assertion is *source-grep* when its arguments only mention those
-    bindings, and *behavioural* otherwise;
-  * a test with at least one source-text binding and zero behavioural
-    assertions is a source-text-only test.
+  * source-text bindings are `let x = include_str!(...)`, a same-file helper
+    that returns source text, and anything derived from them (`x.split(..)`,
+    `x.find(..)`, a tuple element, a `for` loop variable, ...);
+  * an assertion is *source-grep* when it looks at those bindings rather than
+    handing them to production code;
+  * an assertion is *behavioural evidence* only when it involves something the
+    code produced - a binding that came out of a call, source text passed into
+    production code, or a call made inside the assertion itself;
+  * a test that uses source text and produces no behavioural evidence is a
+    source-text-only test.
+
+That last rule used to read "zero non-grep assertions", which a single
+`assert_eq!(2 + 2, 4);` was enough to satisfy. A comparison between constants is
+not evidence about an implementation.
 
 Existing offenders are grandfathered by an explicit allowlist that may only
-shrink. See the allowlist header for the rules.
+shrink. See the allowlist header for the rules and for what this does not
+detect.
 
 Usage:
-  check-source-grep-tests.py [--root DIR] [--base-ref REF] [--list]
+  check-source-grep-tests.py [--root DIR] [--base-ref REF] [--require-base-ref]
+                             [--list]
 """
 
 from __future__ import annotations
@@ -38,14 +48,29 @@ ALLOWLIST_PATH = ".github/source-grep-test-allowlist.txt"
 TEST_ATTR = re.compile(r"#\[(?:[A-Za-z_][A-Za-z0-9_]*::)*test(?:\s*\(|\])")
 FN_DECL = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
 LET_BINDING = re.compile(r"\blet\s+(?:mut\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=;]*)?=")
+# `let (source, _) = (include_str!(..), 1);` binds through a tuple pattern.
+LET_TUPLE = re.compile(r"\blet\s+(?:mut\s+)?\(([^)]*)\)\s*(?::[^=;]*)?=")
+# `for source in files` / `for source in files.iter()` rebinds a collection of
+# source texts one element at a time.
+FOR_BINDING = re.compile(
+    r"\bfor\s+(?:mut\s+)?([A-Za-z_][A-Za-z0-9_]*)\s+in\s+&?\s*([A-Za-z_][A-Za-z0-9_]*)"
+)
 CONST_BINDING = re.compile(
     r"\b(?:const|static)\s+([A-Za-z_][A-Za-z0-9_]*)\s*:[^=;]*=\s*([^;]*);"
+)
+# A helper that hands back source text: `fn main_rs() -> &'static str {
+# include_str!("main.rs") }`. Calling it is the same as writing the macro.
+FN_SIGNATURE = re.compile(
+    r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:<[^>]*>)?\s*\([^()]*\)\s*->\s*([^{;]+)"
 )
 ASSERT_MACRO = re.compile(r"\bassert(?:_eq|_ne|_matches)?!\s*\(")
 # `parse(sample).expect(..)` asserts too: it fails the test when production code
 # cannot handle the input. So does `source.find(..).expect(..)`, about the text.
 FALLIBLE_CALL = re.compile(r"\.(?:expect\s*\(|unwrap\s*\(\s*\))")
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# Any call: `parse(x)`, `x.len()`, `Type::new()`. Used to tell an assertion that
+# runs code from one that only compares constants.
+ANY_CALL = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\s*(?:::\s*[A-Za-z_][A-Za-z0-9_]*\s*)*\(")
 
 
 def mask_literals(src: str) -> str:
@@ -187,31 +212,58 @@ def statement_spans(body: str, body_mask: str) -> list[tuple[int, int]]:
 
 def source_bindings(
     body: str, body_mask: str, seeds: set[str]
-) -> tuple[set[str], set[str]]:
-    """(direct, derived) names in the body that hold source text.
+) -> tuple[set[str], set[str], set[str]]:
+    """(direct, derived, production) names bound in the body.
 
-    Direct names are bound straight from `include_str!`. Derived names are cut
-    out of a direct one (`window.find(..)`, `playback.split(..)`) and therefore
-    describe the text rather than anything the code did with it.
-    `let output = Command::new(script)` merely passes the text along, so it is
-    neither: it stays behavioural.
+    Direct names are bound straight from `include_str!` (or from a helper that
+    returns source text - see `file_seeds`). Derived names are cut out of a
+    direct one (`window.find(..)`, `playback.split(..)`) and therefore describe
+    the text rather than anything the code did with it.
+
+    Production names are everything else that was bound from a call:
+    `let output = Command::new(script)`, `let cues = parse_srt(sample)`. They
+    hold what the code under test produced, so an assertion that mentions one is
+    evidence that something was actually executed.
+
+    Resolution runs to a fixpoint because a `for` loop can bind from a
+    collection declared after it in source order inside a nested block.
     """
-    direct, derived = set(seeds), set()
-    for start, end in statement_spans(body, body_mask):
-        stmt_mask = body_mask[start:end]
-        let = LET_BINDING.search(stmt_mask)
-        if not let:
-            continue
-        # Read the right-hand side from the mask so that a string literal that
-        # merely mentions a name cannot be mistaken for code that uses it.
-        rhs = stmt_mask[let.end() :]
+    direct, derived, production = set(seeds), set(), set()
+
+    def classify_rhs(names: set[str], rhs: str) -> None:
         if "include_str" in set(IDENT.findall(rhs)):
-            direct.add(let.group(1))
-            continue
+            direct.update(names)
+            return
         head = IDENT.match(rhs.lstrip().lstrip("&*").lstrip())
         if head and head.group(0) in direct | derived:
-            derived.add(let.group(1))
-    return direct, derived
+            derived.update(names)
+            return
+        if ANY_CALL.search(rhs):
+            production.update(names - direct - derived)
+
+    for _ in range(4):
+        before = (len(direct), len(derived), len(production))
+        for start, end in statement_spans(body, body_mask):
+            stmt_mask = body_mask[start:end]
+            tuple_let = LET_TUPLE.search(stmt_mask)
+            if tuple_let:
+                # Read the right-hand side from the mask so that a string
+                # literal that merely mentions a name cannot be mistaken for
+                # code that uses it.
+                classify_rhs(
+                    set(IDENT.findall(tuple_let.group(1))),
+                    stmt_mask[tuple_let.end() :],
+                )
+                continue
+            let = LET_BINDING.search(stmt_mask)
+            if let:
+                classify_rhs({let.group(1)}, stmt_mask[let.end() :])
+        for loop in FOR_BINDING.finditer(body_mask):
+            if loop.group(2) in direct | derived:
+                derived.add(loop.group(1))
+        if (len(direct), len(derived), len(production)) == before:
+            break
+    return direct, derived, production - direct - derived
 
 
 def assertions(body: str, body_mask: str) -> list[tuple[str, str]]:
@@ -283,33 +335,90 @@ def inspects_source_text(arg_mask: str, direct: set[str], derived: set[str]) -> 
     return False
 
 
+def is_behavioural_evidence(
+    arg_mask: str, direct: set[str], derived: set[str], production: set[str]
+) -> bool:
+    """Does this non-grep assertion show that code was actually executed?
+
+    Counting every non-grep assertion as behaviour let a single unrelated
+    assertion - `assert_eq!(2 + 2, 4);` - clear a test made entirely of source
+    greps. An assertion is evidence only when it involves something the code
+    produced:
+
+      * it mentions a binding that came out of a call (`cues`, `output`); or
+      * it hands source text into production code (`parse_srt(sample).len()`);
+        or
+      * it calls something itself (`assert_eq!(parse("x"), Ok(1))`).
+
+    A comparison between constants mentions no binding and calls nothing, so it
+    proves nothing about the implementation and does not launder a source grep.
+    """
+    names = set(IDENT.findall(arg_mask))
+    if names & production:
+        return True
+    if names & (direct | derived) or "include_str" in names:
+        # The caller already established this is not an inspection, so the text
+        # is being handed to production code.
+        return True
+    return bool(ANY_CALL.search(arg_mask))
+
+
 def classify(test: TestFn, seeds: set[str]) -> tuple[bool, int, int]:
     """(is_source_text_only, source_grep_assertions, behavioural_assertions)."""
-    direct, derived = source_bindings(test.body, test.body_mask, seeds)
+    direct, derived, production = source_bindings(test.body, test.body_mask, seeds)
     uses_source = "include_str" in test.body_mask or bool(
         seeds & set(IDENT.findall(test.body_mask))
     )
-    grep_count = behavioural_count = 0
+    grep_count = evidence_count = 0
     for _, arg_mask in assertions(test.body, test.body_mask):
         if inspects_source_text(arg_mask, direct, derived):
             grep_count += 1
-        else:
-            behavioural_count += 1
-    return (uses_source and behavioural_count == 0, grep_count, behavioural_count)
+        elif is_behavioural_evidence(arg_mask, direct, derived, production):
+            evidence_count += 1
+    return (uses_source and evidence_count == 0, grep_count, evidence_count)
 
 
 def file_seeds(src: str, mask: str) -> set[str]:
-    """Module-level consts/statics whose initialiser is source text."""
+    """Names that stand for source text: consts/statics and helper functions.
+
+    A helper such as
+
+        fn window_source() -> &'static str { include_str!("window.rs") }
+
+    is `include_str!` behind one indirection, so calling it must seed the same
+    bindings the macro would. Only functions declared in the same file are
+    resolved: a helper in another module is not followed.
+    """
     seeds = set()
     for m in CONST_BINDING.finditer(mask):
         rhs = mask[m.start(2) : m.end(2)]
         if "include_str" in rhs:
             seeds.add(m.group(1))
+    for m in FN_SIGNATURE.finditer(mask):
+        # Only a function that hands back the text itself is source text. A
+        # helper that parses a fixture and returns a value is production code,
+        # and treating it as source text would flag every test that uses it.
+        if "str" not in m.group(2) and "String" not in m.group(2):
+            continue
+        brace = mask.find("{", m.end())
+        if brace == -1:
+            continue
+        end = match_delimiter(mask, brace, "{", "}")
+        if end == -1 or "include_str" not in mask[brace:end]:
+            continue
+        seeds.add(m.group(1))
     return seeds
 
 
-def scan(root: Path) -> list[tuple[str, TestFn, int, int]]:
-    findings = []
+def scan(root: Path) -> tuple[list[tuple[str, TestFn, int, int]], set[str]]:
+    """(offenders, keys of every test that still contains a source grep).
+
+    The second set is what the allowlist ledger is keyed on. An entry may be
+    deleted only once its test has stopped greping source text altogether -
+    acquiring one behavioural assertion is not progress, it is laundering.
+    """
+    findings: list[tuple[str, TestFn, int, int]] = []
+    still_greping: set[str] = set()
     rust_root = root / "rust"
     for path in sorted(rust_root.rglob("*.rs")):
         if "target" in path.parts:
@@ -324,7 +433,9 @@ def scan(root: Path) -> list[tuple[str, TestFn, int, int]]:
             only, grep, behav = classify(test, seeds)
             if only:
                 findings.append((rel, test, grep, behav))
-    return findings
+            if grep:
+                still_greping.add(f"{rel}::{test.name}")
+    return findings, still_greping
 
 
 def read_allowlist(text: str) -> list[str]:
@@ -336,6 +447,9 @@ def read_allowlist(text: str) -> list[str]:
     return entries
 
 
+NULL_SHA = "0" * 40
+
+
 def git_show(root: Path, ref: str, path: str) -> str | None:
     proc = subprocess.run(
         ["git", "-C", str(root), "show", f"{ref}:{path}"],
@@ -343,6 +457,38 @@ def git_show(root: Path, ref: str, path: str) -> str | None:
         text=True,
     )
     return proc.stdout if proc.returncode == 0 else None
+
+
+def base_allowlist_state(root: Path, ref: str) -> tuple[str, str | None]:
+    """("present"|"absent"|"unreachable", text).
+
+    The growth guard is the only rule that catches a new offender added
+    together with its allowlist entry, so it must fail closed. `git show` alone
+    cannot say why it failed - a missing file and an unfetched ref look the
+    same, and this check degraded to a warning on exactly that ambiguity. Ask
+    the two questions separately: does the ref resolve, and does the path exist
+    in it.
+    """
+    if not ref or ref == NULL_SHA:
+        return "unreachable", None
+    resolves = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+        capture_output=True,
+        text=True,
+    )
+    if resolves.returncode != 0:
+        return "unreachable", None
+    exists = subprocess.run(
+        ["git", "-C", str(root), "cat-file", "-e", f"{ref}:{ALLOWLIST_PATH}"],
+        capture_output=True,
+        text=True,
+    )
+    if exists.returncode != 0:
+        return "absent", None
+    text = git_show(root, ref, ALLOWLIST_PATH)
+    if text is None:
+        return "unreachable", None
+    return "present", text
 
 
 def annotate(level: str, title: str, message: str, file: str | None = None,
@@ -365,12 +511,17 @@ def main() -> int:
         help="Base revision; when given, the allowlist is required not to grow.",
     )
     parser.add_argument(
+        "--require-base-ref",
+        action="store_true",
+        help="Fail when no base revision is available (set on pull request runs).",
+    )
+    parser.add_argument(
         "--list", action="store_true", help="Print findings as allowlist entries."
     )
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
-    findings = scan(root)
+    findings, still_greping = scan(root)
 
     if args.list:
         for rel, test, _, _ in findings:
@@ -405,52 +556,86 @@ def main() -> int:
             line=test.line,
         )
 
-    found_keys = {f"{rel}::{t.name}" for rel, t, _, _ in findings}
-    stale = [entry for entry in allowed if entry not in found_keys]
+    # An entry is stale only once its test has stopped greping source text
+    # altogether. Keying staleness on "is it still an offender" made the ledger
+    # drainable: adding one unrelated assertion to a grandfathered test turned
+    # its entry stale, and the check then demanded the line be deleted - so the
+    # prescribed fix for laundering was to record the laundering as progress.
+    live_keys = {f"{rel}::{t.name}" for rel, t, _, _ in findings} | still_greping
+    stale = [entry for entry in allowed if entry not in live_keys]
     for entry in stale:
         failures += 1
         annotate(
             "error",
             "Stale source-grep allowlist entry",
             (
-                f"`{entry}` is allowlisted but is no longer a source-text-only test "
-                "(it was fixed, renamed, or deleted). Delete the line from "
+                f"`{entry}` is allowlisted but no longer asserts on source text at "
+                "all (it was fixed, renamed, or deleted). Delete the line from "
                 f"{ALLOWLIST_PATH}; the allowlist may only shrink."
             ),
             file=ALLOWLIST_PATH,
         )
 
-    if args.base_ref:
-        base_text = git_show(root, args.base_ref, ALLOWLIST_PATH)
-        if base_text is None:
+    state, base_text = base_allowlist_state(root, args.base_ref)
+    if not args.base_ref:
+        if args.require_base_ref:
+            failures += 1
             annotate(
-                "warning",
-                "Allowlist growth check skipped",
-                f"Could not read {ALLOWLIST_PATH} at {args.base_ref}. Check out the "
-                "full history so the allowlist can be compared with its base state.",
+                "error",
+                "No base revision for the allowlist growth check",
+                "This run was told to compare the allowlist with its base state but "
+                "no base revision was supplied (BASE_REF is empty). The growth guard "
+                "is the only rule that catches a new offender added together with "
+                "its allowlist entry, so it must not be skipped on a pull request.",
+                file=ALLOWLIST_PATH,
             )
-        else:
-            base_entries = read_allowlist(base_text)
-            base_names = {entry.rpartition("::")[2] for entry in base_entries}
-            for entry in sorted(set(allowed) - set(base_entries)):
-                name = entry.rpartition("::")[2]
-                # Re-keying an entry that already existed - the test moved to
-                # another file - is not growth, as long as the total did not
-                # rise. Anything else is a new offender being grandfathered.
-                if name in base_names and len(allowed) <= len(base_entries):
-                    continue
-                failures += 1
-                annotate(
-                    "error",
-                    "Source-grep allowlist grew",
-                    (
-                        f"{ALLOWLIST_PATH} adds `{entry}`. The allowlist may only "
-                        "shrink: it grandfathers tests that already existed, it does "
-                        "not accept new ones. Write a behavioural test instead - "
-                        "drive the code and assert on what it produced."
-                    ),
-                    file=ALLOWLIST_PATH,
-                )
+    elif state == "unreachable":
+        failures += 1
+        annotate(
+            "error",
+            "Allowlist growth check could not run",
+            f"Could not read {ALLOWLIST_PATH} at {args.base_ref}: the revision does "
+            "not resolve in this checkout. Check out the full history "
+            "(fetch-depth: 0) so the allowlist can be compared with its base state. "
+            "This check fails rather than warns, because a growth guard that "
+            "degrades to a warning grandfathers whatever it could not see.",
+            file=ALLOWLIST_PATH,
+        )
+    elif state == "absent":
+        # The base commit predates the ledger, so there is nothing to compare
+        # against and every entry looks new. This is reachable only until the
+        # ledger reaches the base branch: removing it from a branch that has it
+        # fails above, because every grandfathered test becomes unlisted.
+        annotate(
+            "notice",
+            "Allowlist introduced",
+            f"{ALLOWLIST_PATH} does not exist at {args.base_ref}, so this change "
+            "introduces the ledger and there is no base state to compare with. "
+            "Every entry is still required to match a test that greps source text.",
+            file=ALLOWLIST_PATH,
+        )
+    else:
+        base_entries = read_allowlist(base_text or "")
+        base_names = {entry.rpartition("::")[2] for entry in base_entries}
+        for entry in sorted(set(allowed) - set(base_entries)):
+            name = entry.rpartition("::")[2]
+            # Re-keying an entry that already existed - the test moved to
+            # another file - is not growth, as long as the total did not
+            # rise. Anything else is a new offender being grandfathered.
+            if name in base_names and len(allowed) <= len(base_entries):
+                continue
+            failures += 1
+            annotate(
+                "error",
+                "Source-grep allowlist grew",
+                (
+                    f"{ALLOWLIST_PATH} adds `{entry}`. The allowlist may only "
+                    "shrink: it grandfathers tests that already existed, it does "
+                    "not accept new ones. Write a behavioural test instead - "
+                    "drive the code and assert on what it produced."
+                ),
+                file=ALLOWLIST_PATH,
+            )
 
     print(
         f"source-text-only tests found: {len(findings)}; "

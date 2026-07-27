@@ -12,12 +12,17 @@ is doing the merging.
   green when the change does nothing.
 - **Tests assert behaviour, not source text.** A test that loads a source file
   with `include_str!` and asserts that it `contains` a snippet passes against a
-  completely broken implementation. CI rejects new ones. The allowlist of the
-  ones that already exist, `.github/source-grep-test-allowlist.txt`, may only
-  shrink.
+  completely broken implementation. CI rejects new ones, and it does not accept
+  an unrelated assertion beside the greps as a fix. The allowlist of the ones
+  that already exist, `.github/source-grep-test-allowlist.txt`, may only shrink,
+  and a line goes only when its test has stopped asserting on source text
+  altogether - not when it merely acquired one behavioural assertion.
 - **Nothing in the pull request declares it unfinished.** A `WIP` or `Draft`
   title prefix, the maestro WIP marker comment in the body, or an unresolved
-  item in an `Operator acceptance` block blocks the merge until it is resolved.
+  item under an acceptance heading (`Operator acceptance`, `Acceptance
+  criteria`, `Live acceptance hold`, `Before merge`) blocks the merge until it
+  is resolved. An unticked box counts wherever it sits in the section: putting a
+  bold label or a rule above it does not close the block.
   Resolving means doing the work: never remove a marker or tick a box to turn a
   check green, and never delete an acceptance block that still applies.
 - **An acceptance block contains checkboxes and nothing else.** A plain bullet
@@ -29,9 +34,10 @@ is doing the merging.
   If an issue or a pull request says a packaged build must be verified by hand
   before merge, that verification happens before merge.
 - **No unfinished-code markers reach `main`.** `todo!()`, `unimplemented!()`,
-  and bare `TODO` / `FIXME` comments fail CI. A marker that names a tracking
-  issue - `TODO(#1234)` - is accepted, because the work is then tracked rather
-  than lost.
+  and bare `TODO` / `FIXME` comments fail CI, in shipped source and in shipped
+  configuration (workflows, manifests). A marker that names a tracking issue -
+  `TODO(#1234)` - is accepted, because the work is then tracked rather than
+  lost.
 - **The body states what the change does, how it was verified, and what it
   deliberately does not do.**
 
