@@ -39,8 +39,12 @@ is doing the merging.
   prose, plain bullets, `---`, bold labels, HTML tags - whether or not other
   boxes in the section are already ticked. Put context above the block.
   A section opened by a markdown heading runs to the next heading of its own
-  level or above; one opened by a bold or bare label runs to the next label or
-  heading. Neither ends at a rule or an HTML tag. So anything appended below a
+  level or above; one opened by a bold or bare label runs to the next **bold**
+  label or heading. Neither ends at a rule, an HTML tag, or a bare label ending
+  in a colon - a bare label is indistinguishable from a short prose hold that
+  ends in one, and treating it as a terminator hides the bullets under it.
+  Prefer a `##` heading to open the block: it is the only opener whose bounds
+  are unambiguous. So anything appended below a
   trailing acceptance section (a review bot's summary, for instance) is read as
   part of it and will block the merge until it is moved above the block or given
   a heading of its own.

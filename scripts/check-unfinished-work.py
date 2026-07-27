@@ -124,6 +124,16 @@ ACCEPTANCE_HEADING = re.compile(
 # markup dropped between two items, not a new section. The cost is the same too:
 # a weakly opened block runs to the next label or heading, so a list under a
 # rule below it is read as part of the block.
+#
+# Deliberately NOT a bare label ending in a colon either, even though that form
+# *opens* a block. Measured: adding `[^*_#\n.!?]{1,60}:\s*$` here fixes the
+# false positive it is meant to fix - `Operator acceptance:` / `- [x] Verified`
+# / `Review notes:` / prose stops being reported - and in the same move takes
+# `Operator acceptance:` / `- [x] Verified` / `Still to do before merge:` /
+# plain bullets from exit 1 to exit 0. That second body is the historical hold
+# shape with a shorter sentence, so the trade is a real escape for a cosmetic
+# rejection. Open an acceptance block with a `##` heading and the question does
+# not arise: the section ends at the next heading and prose below it is outside.
 WEAK_BREAK = re.compile(
     r"^\s*(?:#{1,6}\s|\*\*[^*]+\*\*\s*:?\s*$|__[^_]+__\s*:?\s*$)"
 )
