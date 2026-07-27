@@ -43,8 +43,10 @@ is doing the merging.
   (a review bot's summary, for instance) is read as part of it and will block
   the merge until it is moved above the block or given a heading of its own.
   What CI cannot see: a hold written *outside* an acceptance heading, an
-  acceptance heading phrased outside the recognised set, and a box that was
-  ticked without the work being done.
+  acceptance heading phrased outside the recognised set, a hold wrapped in a
+  balanced code fence or an HTML comment (both are blanked before any rule runs,
+  so that a body may quote these rules), and a box that was ticked without the
+  work being done.
 - **An operator acceptance block is honoured by the operator, not by a worker.**
   If an issue or a pull request says a packaged build must be verified by hand
   before merge, that verification happens before merge.

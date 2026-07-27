@@ -27,6 +27,13 @@ commented-out acceptance block.
 What this does NOT catch, on purpose or for want of a cheap rule:
   * a hold written outside an acceptance heading. A sentence in "Notes for
     review" saying the change needs manual verification is invisible here.
+  * a hold inside a *balanced* fenced code block, or inside an HTML comment,
+    anywhere - including inside an acceptance section. Both are blanked before
+    any rule runs, so that a body may quote these rules and the template may
+    ship a commented-out acceptance block. A fenced hold still renders and a
+    human still reads it, so this one is an escape and not only a convenience;
+    it is left open because closing it means unpicking the fence machinery for
+    a shape nobody reaches by accident. Measured: exit 0.
   * an acceptance heading phrased outside `ACCEPTANCE_PHRASE`, e.g. "Manual
     verification required". The phrase list is a floor, not a parser.
   * a ticked box that nobody performed. No mechanical check can see this; it is
