@@ -564,7 +564,7 @@ index 30fd315030ab14778addcd0f06b552f82968d18c..31f95be136e57e3a79300f7751d82820
 
  pub(crate) fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
 diff --git a/rust/crates/okp-linux-gtk/src/screenshots.rs b/rust/crates/okp-linux-gtk/src/screenshots.rs
-index bd7e24d8f2a795304566db3768171d793bdc45d6..4810ef919c7098b33277e69fe6300b315817a89d 100644
+index bd7e24d8f2a795304566db3768171d793bdc45d6..8e6a7e85cc41d757322eb15c64cf1384e29c0734 100644
 --- a/rust/crates/okp-linux-gtk/src/screenshots.rs
 +++ b/rust/crates/okp-linux-gtk/src/screenshots.rs
 @@ -3,6 +3,7 @@ use std::ffi::CString;
@@ -640,7 +640,7 @@ index bd7e24d8f2a795304566db3768171d793bdc45d6..4810ef919c7098b33277e69fe6300b31
      unique_temp_path(&directory, "clipboard-frame", "png")
  }
 
-@@ -233,6 +253,131 @@ fn verify_directory_writable(directory: &Path) -> io::Result<()> {
+@@ -233,6 +253,163 @@ fn verify_directory_writable(directory: &Path) -> io::Result<()> {
      fs::remove_file(probe)
  }
 
@@ -654,16 +654,25 @@ index bd7e24d8f2a795304566db3768171d793bdc45d6..4810ef919c7098b33277e69fe6300b31
 +/// sandbox both set it); the shared-`/tmp` fallback is scoped by effective uid
 +/// so it cannot collide between accounts either.
 +fn screenshot_staging_dir() -> PathBuf {
++    let (root, relative) = screenshot_staging_layout();
++    root.join(relative)
++}
++
++/// The staging path split into the root this process does not own and the part
++/// it creates - and must therefore validate, level by level.
++fn screenshot_staging_layout() -> (PathBuf, PathBuf) {
 +    if let Some(runtime_dir) = env::var_os("XDG_RUNTIME_DIR")
 +        && !runtime_dir.is_empty()
 +    {
-+        return PathBuf::from(runtime_dir)
-+            .join("ok-player")
-+            .join("screenshots");
++        return (
++            PathBuf::from(runtime_dir),
++            PathBuf::from("ok-player").join("screenshots"),
++        );
 +    }
-+    env::temp_dir()
-+        .join(format!("ok-player-{}", current_user_id()))
-+        .join("screenshots")
++    (
++        env::temp_dir(),
++        PathBuf::from(format!("ok-player-{}", current_user_id())).join("screenshots"),
++    )
 +}
 +
 +/// Create the staging directory and refuse anything another account could have
@@ -678,13 +687,36 @@ index bd7e24d8f2a795304566db3768171d793bdc45d6..4810ef919c7098b33277e69fe6300b31
 +/// by this user with no group or other access. Staging fails loudly rather than
 +/// silently using someone else's directory.
 +fn prepare_screenshot_staging_dir() -> io::Result<PathBuf> {
-+    let directory = screenshot_staging_dir();
-+    let mut builder = fs::DirBuilder::new();
-+    builder.recursive(true).mode(0o700);
-+    builder.create(&directory)?;
++    let (root, _) = screenshot_staging_layout();
++    prepare_staging_dir(&root, &screenshot_staging_dir())
++}
 +
-+    validate_staging_dir(&directory)?;
-+    Ok(directory)
++/// Create and validate every level below `root`, one at a time.
++///
++/// Recursive creation would adopt an attacker-owned parent and then only the
++/// leaf would be checked - which leaves the attacker able to swap the leaf out
++/// from under the validated path. Each component is created 0700 and validated
++/// before the next one is touched. `root` itself is not created here: it is
++/// either `XDG_RUNTIME_DIR` or the system temporary directory, neither of which
++/// this process owns.
++fn prepare_staging_dir(root: &Path, directory: &Path) -> io::Result<PathBuf> {
++    let relative = directory.strip_prefix(root).map_err(|_| {
++        io::Error::new(
++            io::ErrorKind::InvalidInput,
++            "screenshot staging directory is not under its root",
++        )
++    })?;
++    let mut path = root.to_path_buf();
++    for component in relative.components() {
++        path.push(component);
++        match fs::DirBuilder::new().mode(0o700).create(&path) {
++            Ok(()) => {}
++            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
++            Err(error) => return Err(error),
++        }
++        validate_staging_dir(&path)?;
++    }
++    Ok(path)
 +}
 +
 +fn validate_staging_dir(directory: &Path) -> io::Result<()> {
@@ -772,7 +804,7 @@ index bd7e24d8f2a795304566db3768171d793bdc45d6..4810ef919c7098b33277e69fe6300b31
  fn validate_capture_output(path: &Path) -> io::Result<()> {
      let metadata = fs::metadata(path)?;
      if !metadata.is_file() {
-@@ -336,33 +481,38 @@ mod tests {
+@@ -336,33 +513,38 @@ mod tests {
 
      #[test]
      fn publish_saved_capture_never_overwrites_a_collision() {
@@ -818,7 +850,7 @@ index bd7e24d8f2a795304566db3768171d793bdc45d6..4810ef919c7098b33277e69fe6300b31
      }
 
      #[test]
-@@ -385,9 +535,38 @@ mod tests {
+@@ -385,9 +567,38 @@ mod tests {
 
          assert!(directory.is_dir());
          assert!(!target.temp_path.exists());
@@ -857,7 +889,7 @@ index bd7e24d8f2a795304566db3768171d793bdc45d6..4810ef919c7098b33277e69fe6300b31
      #[test]
      fn prepare_saved_capture_rejects_a_file_as_the_destination() {
          let root = unique_temp_dir("okp-screenshot-invalid-destination");
-@@ -527,4 +706,77 @@ XDG_PICTURES_DIR="$HOME/Pictures"
+@@ -527,4 +738,112 @@ XDG_PICTURES_DIR="$HOME/Pictures"
              Some(PathBuf::from("/home/tester/Pictures"))
          );
      }
@@ -901,6 +933,41 @@ index bd7e24d8f2a795304566db3768171d793bdc45d6..4810ef919c7098b33277e69fe6300b31
 +
 +        let error = validate_staging_dir(&link).expect_err("symlinked staging");
 +        assert_eq!(error.kind(), io::ErrorKind::NotADirectory);
++    }
++
++    #[test]
++    fn staging_refuses_an_attacker_owned_parent_shaped_as_a_symlink() {
++        // Only the leaf used to be checked, so a planted parent was adopted and
++        // the validated leaf could then be swapped out beneath it.
++        let root = unique_temp_dir("okp-screenshot-staging-parent");
++        let elsewhere = root.path().join("elsewhere");
++        fs::create_dir_all(&elsewhere).expect("target directory");
++        std::os::unix::fs::symlink(&elsewhere, root.path().join("ok-player-1"))
++            .expect("symlink parent");
++
++        let error = prepare_staging_dir(root.path(), &root.path().join("ok-player-1/screenshots"))
++            .expect_err("symlinked parent");
++        assert_eq!(error.kind(), io::ErrorKind::NotADirectory);
++    }
++
++    #[test]
++    fn staging_tightens_every_level_it_creates() {
++        let root = unique_temp_dir("okp-screenshot-staging-levels");
++        let parent = root.path().join("ok-player-1");
++        fs::create_dir_all(&parent).expect("parent directory");
++        fs::set_permissions(&parent, fs::Permissions::from_mode(0o777)).expect("open parent");
++
++        let staged = prepare_staging_dir(root.path(), &root.path().join("ok-player-1/screenshots"))
++            .expect("staging prepared");
++
++        assert_eq!(staged, parent.join("screenshots"));
++        for level in [parent.as_path(), staged.as_path()] {
++            let mode = fs::symlink_metadata(level)
++                .expect("level metadata")
++                .permissions()
++                .mode();
++            assert_eq!(mode & 0o777, 0o700, "{}", level.display());
++        }
 +    }
 +
 +    #[test]
