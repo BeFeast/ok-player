@@ -97,11 +97,14 @@ jobs:
       matrix:
         fedora: ['43', '44']
     steps:
+      # install_weak_deps=False on every install into this root, not only on
+      # the harness step below: anything dnf pulls in here for its own
+      # convenience is still a library the package did not have to declare.
       - name: Disable nonessential repositories before checkout
         run: |
-          dnf install -y dnf-plugins-core
+          dnf install -y --setopt=install_weak_deps=False dnf-plugins-core
           dnf config-manager setopt fedora-cisco-openh264.enabled=0
-          dnf install -y git
+          dnf install -y --setopt=install_weak_deps=False git
 
       - uses: actions/checkout@v4
 
@@ -114,7 +117,10 @@ jobs:
       # ffmpeg-free recommends libcamera, which requires libGLESv2.so.2 and so
       # drags libglvnd-gles into the launch root. The contamination guard caught
       # exactly that and failed the job. Weak dependencies are what a harness
-      # does not need and what quietly re-blinds this gate.
+      # does not need and what quietly re-blinds this gate. The gate installs
+      # the package itself with the same flag, for the mirror-image reason: a
+      # `Recommends` must not be able to satisfy the post-install assertion.
+      # rust/crates/okp-linux-gtk/src/tests.rs pins both, in a required check.
       - name: Install the headless launch harness
         run: |
           dnf install -y --setopt=install_weak_deps=False \
