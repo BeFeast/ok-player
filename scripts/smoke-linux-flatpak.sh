@@ -9,12 +9,26 @@
 # to a patched file into an unrelated packaging failure; keeping the pin fresh
 # is the job of scripts/flatpak-repin.sh and its scheduled pull request.
 #
-# "Still contains the integration" is enforced per patched file: every path the
-# patch touches must declare at least one marker of the behaviour it carries,
-# and every declared marker must be present in the pinned-and-patched tree. A
+# "Still contains the integration" is enforced per patched file by
+# scripts/flatpak_integration_markers.py: every path the patch touches must
+# declare at least one marker of the behaviour it carries, and every declared
+# marker must appear on a non-comment line of the pinned-and-patched tree. A
 # deleted hunk therefore fails here rather than shipping a package that silently
-# lost a feature.
+# lost a feature, and a commented-out copy of the integration does not satisfy a
+# marker. What a marker cannot prove is that the code it names is reachable or
+# correct: it is a substring on a code line, nothing more. The offline build,
+# the lifecycle lane, and the renderer smoke are what carry that weight.
+#
+# The same rule applies to the literal assertions this script makes about the
+# workflow and the software-renderer script: they are matched against those
+# files with whole-line comments removed, so a comment cannot stand in for the
+# code being asserted. They remain substring assertions - they prove the text is
+# present as code, not that it runs.
 set -euo pipefail
+
+# The gates below import and run repo-local Python; none of them should leave
+# bytecode caches in a checkout.
+export PYTHONDONTWRITEBYTECODE=1
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MANIFEST="$ROOT/rust/packaging/flatpak/com.befeast.okplayer.json"
@@ -24,6 +38,8 @@ PATCHED_PATHS="$ROOT/rust/packaging/flatpak/patched-paths.txt"
 BUILD_SCRIPT="$ROOT/scripts/build-flatpak-beta.sh"
 LIFECYCLE_SCRIPT="$ROOT/scripts/smoke-linux-flatpak-lifecycle.sh"
 LIFECYCLE_CONTROL_TEST="$ROOT/scripts/tests/flatpak-lifecycle-control.sh"
+MARKER_CHECKER="$ROOT/scripts/flatpak_integration_markers.py"
+MARKER_TEST="$ROOT/scripts/tests/flatpak-integration-markers.sh"
 REPIN_SCRIPT="$ROOT/scripts/flatpak-repin.sh"
 SOFTWARE_RENDER_SCRIPT="$ROOT/scripts/smoke-linux-software-renderer.sh"
 WORKFLOW="$ROOT/.github/workflows/flatpak.yml"
@@ -42,7 +58,7 @@ for tool in bash git python3 sed tar flatpak-builder desktop-file-validate appst
   }
 done
 
-python3 - "$MANIFEST" "$CARGO_SOURCES" "$APP_PATCH" "$WORKFLOW" "$GITIGNORE" "$SOFTWARE_RENDER_SCRIPT" "$PATCHED_PATHS" <<'PY'
+python3 - "$MANIFEST" "$CARGO_SOURCES" "$APP_PATCH" "$WORKFLOW" "$GITIGNORE" "$SOFTWARE_RENDER_SCRIPT" "$PATCHED_PATHS" "$ROOT" <<'PY'
 import json
 import re
 import sys
@@ -55,11 +71,23 @@ workflow_path = Path(sys.argv[4])
 gitignore_path = Path(sys.argv[5])
 software_render_script_path = Path(sys.argv[6])
 patched_paths_path = Path(sys.argv[7])
+root = Path(sys.argv[8])
+
+sys.path.insert(0, str(root / "scripts"))
+from flatpak_integration_markers import code_text  # noqa: E402
+
 manifest = json.loads(manifest_path.read_text())
 cargo_sources = json.loads(cargo_sources_path.read_text())
-workflow = workflow_path.read_text()
 gitignore = gitignore_path.read_text().splitlines()
-software_render_script = software_render_script_path.read_text()
+
+# Comments are not the thing being asserted. Matching against the comment-free
+# text stops a description of a behaviour from standing in for the behaviour.
+workflow_source = workflow_path.read_text()
+workflow = code_text(workflow_path.name, workflow_source)
+software_render_source = software_render_script_path.read_text()
+software_render_script = code_text(
+    software_render_script_path.name, software_render_source
+)
 
 assert "ref: ${{ github.event.pull_request.head.sha || github.sha }}" in workflow
 assert "OKP_ACCEPTANCE_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}" in workflow
@@ -73,6 +101,7 @@ assert "flatpak run --user --nodevice=dri" in workflow
 assert 'xdg-user-dirs-update --set PICTURES "$HOME/Pictures"' in workflow
 assert "./scripts/smoke-linux-flatpak-lifecycle.sh" in workflow
 assert "./scripts/tests/flatpak-lifecycle-control.sh" in workflow
+assert "./scripts/tests/flatpak-integration-markers.sh" in workflow
 assert "OKP_FLATPAK_LIFECYCLE_NEGATIVE_CONTROL: update-current" in workflow
 # The negative control must assert the reason it failed, not merely that it
 # failed: a preflight abort, a missing artifact manifest, or a renamed control
@@ -88,9 +117,101 @@ assert "actions: write" in workflow
 assert "artifacts/linux/flatpak/flatpak-lifecycle-ci.json" in workflow
 assert "artifacts/manual-ui/linux-software-renderer-smoke/**" in workflow
 assert re.search(r"apt-get install -y [^\n]*\bripgrep\b", workflow)
+
+# The lane's own gates must be in both path filters, or a change to a gate would
+# not run the gate it changed.
+for gate_source in (
+    "scripts/flatpak_integration_markers.py",
+    "scripts/tests/flatpak-integration-markers.sh",
+    "scripts/tests/flatpak-lifecycle-control.sh",
+    "scripts/smoke-linux-flatpak.sh",
+):
+    assert workflow.count(f"- '{gate_source}'") == 2, gate_source
+
+
+def workflow_steps(text, job):
+    """Return the steps of one job as (name, chunk) pairs, in file order.
+
+    A hand parse rather than a YAML load, so this check needs nothing outside
+    the standard library. It is fail-closed: when the shape it expects is not
+    there it raises, instead of returning an empty step list that would make
+    every per-step assertion below vacuously true.
+    """
+    lines = text.splitlines()
+    if "jobs:" not in lines:
+        raise SystemExit(f"{job}: the workflow has no top-level jobs: block")
+    body = lines[lines.index("jobs:") + 1 :]
+    in_job = False
+    in_steps = False
+    raw_steps = []
+    for line in body:
+        if re.fullmatch(r"  [A-Za-z0-9_.-]+:", line):
+            if in_job:
+                break
+            in_job = line.strip().rstrip(":") == job
+            continue
+        if not in_job:
+            continue
+        if line == "    steps:":
+            in_steps = True
+            continue
+        if not in_steps:
+            continue
+        if line.startswith("      - "):
+            raw_steps.append([line])
+        elif raw_steps and (line.startswith("        ") or not line.strip()):
+            raw_steps[-1].append(line)
+        elif not line.strip():
+            continue
+        else:
+            # Anything else means the file no longer has the shape this parser
+            # assumes. Stopping quietly here would drop the remaining steps out
+            # of the guard check below.
+            raise SystemExit(f"{job}: unexpected line in the steps block: {line!r}")
+    if not raw_steps:
+        raise SystemExit(f"{job}: no steps parsed from the workflow")
+    parsed = []
+    for raw in raw_steps:
+        chunk = "\n".join(raw)
+        # Anchored so that a "name:" nested under "with:" cannot be mistaken
+        # for the step's own name.
+        match = re.search(r"^(?:      - |        )name: (.*)$", chunk, re.MULTILINE)
+        parsed.append((match.group(1).strip() if match else None, chunk))
+    return parsed
+
+
+steps = workflow_steps(workflow, "flatpak")
+
+GUARD = "if: ${{ !cancelled() }}"
+BUILD_STEP = "Build offline beta repository"
+# Steps that must carry the guard, named individually so that renaming one is a
+# failure rather than a silent removal from the requirement.
+GUARDED_STEPS = {
+    "Flatpak integration marker self-test",
+    "Lifecycle negative control self-test",
+    "Prepare XDG Pictures grant",
+    "Repository lifecycle (install, update, rollback, restore, uninstall)",
+    "Repository lifecycle negative control",
+    "Packaged no-DRI software renderer smoke",
+}
+names = [name for name, _ in steps]
+assert BUILD_STEP in names, names
+absent = sorted(GUARDED_STEPS - set(names))
+assert not absent, f"steps that must carry '{GUARD}' are absent from the job: {absent}"
+
 # A failing gate must not silently skip the offline build, the delivery
-# lifecycle, or the renderer smoke the way a plain step sequence would.
-assert workflow.count("if: ${{ !cancelled() }}") >= 5
+# lifecycle, or the renderer smoke the way a plain step sequence would. This is
+# asserted per step: a count would let one step lose its guard behind another
+# gaining one. Everything after the build is covered positionally as well, so a
+# newly added trailing step cannot arrive unguarded.
+build_at = names.index(BUILD_STEP)
+unguarded = [
+    name or chunk.splitlines()[0].strip()
+    for index, (name, chunk) in enumerate(steps)
+    if (name in GUARDED_STEPS or index > build_at) and GUARD not in chunk
+]
+assert not unguarded, f"steps missing '{GUARD}': {unguarded}"
+
 assert "mapped_gtk_player_window=pass" in software_render_script
 assert '[[ "$window_map_state" == "IsViewable" ]]' in software_render_script
 assert "non_trivial_geometry=pass" in software_render_script
@@ -114,7 +235,9 @@ assert "later_screenshot_sha256=" in software_render_script
 assert 'sys.argv[2]: "<repo>"' in software_render_script
 assert 'sys.argv[3]: "<home>"' in software_render_script
 assert "probe_backend=not-run" in software_render_script
-assert "OKP_SOFTWARE_RENDER_PROBE" not in software_render_script
+# An absence assertion is checked against the whole file on purpose: a mention
+# in a comment is still a mention worth failing on.
+assert "OKP_SOFTWARE_RENDER_PROBE" not in software_render_source
 assert "Renderer policy: mode=software-no-dri" in software_render_script
 assert "flatpak-software-renderer-validate" in software_render_script
 assert '--source-commit "$SOURCE_COMMIT"' in software_render_script
@@ -268,119 +391,10 @@ trap 'rm -rf "$PINNED_TREE"' EXIT
 git -C "$ROOT" archive --format=tar "$app_commit" | tar -x -C "$PINNED_TREE"
 if [[ -f "$APP_PATCH" ]]; then
   (cd "$PINNED_TREE" && git apply --binary "$APP_PATCH")
+  python3 "$MARKER_CHECKER" "$PINNED_TREE" "$APP_PATCH"
+else
+  python3 "$MARKER_CHECKER" "$PINNED_TREE"
 fi
-
-python3 - "$PINNED_TREE" "$APP_PATCH" <<'PY'
-import re
-import sys
-from pathlib import Path
-
-tree = Path(sys.argv[1])
-app_patch_path = Path(sys.argv[2])
-
-# Markers of the packaged behaviour the Flatpak lane promises, one entry per
-# repository path the integration patch carries. They are checked against the
-# pinned-and-patched tree, which is exactly what gets built, so a marker keeps
-# passing once the behaviour lands upstream and the corresponding hunk
-# disappears - and starts failing the moment a hunk is dropped without the pin
-# having caught up.
-required = {
-    "THIRD-PARTY-NOTICES.md": [
-        "source-built rendering library in the Flatpak beta",
-        "libplacebo",
-    ],
-    "rust/crates/okp-core/src/linux_renderer.rs": [
-        "software-no-dri",
-        "pub const fn select_linux_renderer(flatpak: bool, dri_accessible: bool)",
-    ],
-    "rust/crates/okp-core/src/playback_failure.rs": [
-        "org.freedesktop.Platform.codecs-extra",
-        "CodecEnvironment::Flatpak",
-        "pub fn diagnose_mpv_runtime(",
-    ],
-    "rust/crates/okp-mpv/src/ffi.rs": [
-        "pub const MPV_RENDER_PARAM_ADVANCED_CONTROL",
-    ],
-    "rust/crates/okp-mpv/src/player.rs": [
-        "MPV_RENDER_PARAM_ADVANCED_CONTROL",
-        "DecoderFailed {",
-    ],
-    "rust/crates/okp-mpv/src/pump.rs": [
-        "codec_failure_reported",
-        "MpvEvent::DecoderFailed {",
-    ],
-    "rust/crates/okp-linux-gtk/src/about.rs": [
-        "if flatpak_update_managed() {",
-        '"Flatpak managed"',
-    ],
-    "rust/crates/okp-linux-gtk/src/main.rs": [
-        "enum LinuxExternalUpdateManager {",
-        '"Updates are managed by Flatpak"',
-    ],
-    "rust/crates/okp-linux-gtk/src/mpv_bridge.rs": [
-        "mpv.create_render_context(native_wayland_display, true)",
-        "mpv.create_render_context(native_wayland_display, false)",
-    ],
-    "rust/crates/okp-linux-gtk/src/playlist_ops.rs": [
-        "CodecEnvironment::Flatpak",
-        "pub(crate) fn apply_runtime_decoder_failure(",
-        "diagnose_mpv_runtime(",
-    ],
-    "rust/crates/okp-linux-gtk/src/screenshots.rs": [
-        "fn screenshot_staging_dir() -> PathBuf {",
-        "fn copy_to_destination_stage(",
-    ],
-    "rust/crates/okp-linux-gtk/src/tests.rs": [
-        "fn native_wayland_screenshots_use_libmpv_advanced_control() {",
-        "fn runtime_decoder_failure_stops_partial_playback_state_immediately() {",
-        '"Updates are managed by Flatpak"',
-    ],
-    "rust/crates/okp-linux-gtk/src/track_popovers.rs": [
-        "MpvEvent::DecoderFailed {",
-    ],
-    "rust/crates/okp-linux-gtk/src/updates.rs": [
-        "Managed by Flatpak",
-        "pub(crate) fn flatpak_update_managed() -> bool {",
-    ],
-    "rust/crates/okp-linux-gtk/src/window.rs": [
-        "&& !flatpak_update_managed()",
-    ],
-}
-
-# Every hunk must be covered. Without this, a newly patched file could be added
-# with no marker and its hunk could then be deleted with the gate green.
-if app_patch_path.is_file():
-    touched = {
-        match.group(1)
-        for match in re.finditer(
-            r"^diff --git a/(\S+) b/\S+$",
-            app_patch_path.read_text(),
-            re.MULTILINE,
-        )
-    }
-    unmarked = sorted(touched - set(required))
-    if unmarked:
-        raise SystemExit(
-            "The Flatpak integration patch touches files with no integration marker:\n"
-            + "\n".join(unmarked)
-        )
-
-missing = []
-for relative, markers in required.items():
-    path = tree / relative
-    if not path.is_file():
-        missing.append(f"{relative}: missing from the pinned and patched tree")
-        continue
-    text = path.read_text()
-    for marker in markers:
-        if marker not in text:
-            missing.append(f"{relative}: missing {marker!r}")
-if missing:
-    raise SystemExit(
-        "The pinned Flatpak source does not carry the integration it packages:\n"
-        + "\n".join(missing)
-    )
-PY
 
 schema_version="$(sed -n 's/^pub const FLATPAK_LIFECYCLE_EVIDENCE_SCHEMA_VERSION: u32 = \([0-9]\+\);$/\1/p' \
   "$ROOT/rust/crates/okp-core/src/acceptance_evidence.rs")"
@@ -396,6 +410,7 @@ grep -q "\"schema_version\": $schema_version," "$LIFECYCLE_SCRIPT" || {
 bash -n "$BUILD_SCRIPT"
 bash -n "$LIFECYCLE_SCRIPT"
 bash -n "$LIFECYCLE_CONTROL_TEST"
+bash -n "$MARKER_TEST"
 bash -n "$REPIN_SCRIPT"
 bash -n "$SOFTWARE_RENDER_SCRIPT"
 

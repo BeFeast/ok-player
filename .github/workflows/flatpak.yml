@@ -4,6 +4,10 @@ name: Flatpak
 # integration patch, so unrelated changes under rust/crates cannot change what
 # this lane builds. Keeping the path filter narrow is therefore correct, and the
 # nightly schedule keeps the lane honest about the current default branch.
+#
+# The filter is also why this job must not be made a required status check as it
+# stands: a required context that never reports on a pull request outside the
+# filter blocks that pull request forever. See docs/linux-flatpak.md.
 on:
   push:
     branches:
@@ -16,9 +20,11 @@ on:
       - 'rust/packaging/linux/**'
       - 'scripts/build-flatpak-beta.sh'
       - 'scripts/flatpak-repin.sh'
+      - 'scripts/flatpak_integration_markers.py'
       - 'scripts/smoke-linux-flatpak-lifecycle.sh'
       - 'scripts/smoke-linux-flatpak.sh'
       - 'scripts/smoke-linux-software-renderer.sh'
+      - 'scripts/tests/flatpak-integration-markers.sh'
       - 'scripts/tests/flatpak-lifecycle-control.sh'
   pull_request:
     paths:
@@ -29,9 +35,11 @@ on:
       - 'rust/packaging/linux/**'
       - 'scripts/build-flatpak-beta.sh'
       - 'scripts/flatpak-repin.sh'
+      - 'scripts/flatpak_integration_markers.py'
       - 'scripts/smoke-linux-flatpak-lifecycle.sh'
       - 'scripts/smoke-linux-flatpak.sh'
       - 'scripts/smoke-linux-software-renderer.sh'
+      - 'scripts/tests/flatpak-integration-markers.sh'
       - 'scripts/tests/flatpak-lifecycle-control.sh'
   schedule:
     - cron: '17 3 * * *'
@@ -71,6 +79,13 @@ jobs:
       - name: Validate manifest and metadata
         run: ./scripts/smoke-linux-flatpak.sh
 
+      # Proves the integration-marker check can tell code from a commented-out
+      # copy of it. Without this the marker check above is a substring search
+      # that a hand-edited patch could satisfy while removing the integration.
+      - name: Flatpak integration marker self-test
+        if: ${{ !cancelled() }}
+        run: ./scripts/tests/flatpak-integration-markers.sh
+
       # Proves the negative control below can actually fire, without needing a
       # built repository. If this fails, the control that guards the real lane
       # is not trustworthy and nothing after it means much.
@@ -90,7 +105,8 @@ jobs:
 
       # Every step below runs even when an earlier one failed. A single red gate
       # must never hide whether the offline build, the delivery lifecycle, and
-      # the renderer smoke actually work.
+      # the renderer smoke actually work. scripts/smoke-linux-flatpak.sh asserts
+      # this guard per step, not by counting occurrences.
       - name: Repository lifecycle (install, update, rollback, restore, uninstall)
         if: ${{ !cancelled() }}
         run: ./scripts/smoke-linux-flatpak-lifecycle.sh

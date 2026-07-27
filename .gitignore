@@ -76,5 +76,9 @@ secrets.json
 /native/*
 !/native/README.md
 
+# --- Python bytecode from repo tooling scripts ---
+__pycache__/
+*.pyc
+
 # --- Local dev orchestration scratch (never committed) ---
 .maestro/

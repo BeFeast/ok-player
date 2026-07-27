@@ -32,13 +32,32 @@ integration it packages - the software no-DRI renderer selection, the
 `codecs-extra` diagnostic, libmpv advanced control, the Flatpak-managed update
 state, and the Flatpak third-party notices.
 
-"Still contains the integration" is enforced per file, not in aggregate. Every
-repository path the patch touches must declare at least one marker of the
-behaviour it carries, and every declared marker must be present in the
-pinned-and-patched tree. Deleting a hunk therefore fails the gate instead of
-shipping a package that quietly lost a feature, and adding a newly patched file
-without a marker fails too, so the coverage cannot silently fall behind the
-patch.
+"Still contains the integration" is enforced per file, not in aggregate, by
+`scripts/flatpak_integration_markers.py`. Every repository path the patch
+touches must declare at least one marker of the behaviour it carries, and every
+declared marker must appear in the pinned-and-patched tree **on a line that is
+not a comment**. Deleting a hunk therefore fails the gate instead of shipping a
+package that quietly lost a feature; commenting the integration out fails it
+too; and adding a newly patched file without a marker fails as well, so the
+coverage cannot silently fall behind the patch. A file type with no comment
+syntax declared is an error rather than a silent pass.
+
+The limit of that guarantee is worth stating, because a green marker check is
+what a future reader will trust. A marker is a substring on a non-comment line.
+It does not prove the code it names is reachable, compiled, or correct - a
+string literal or dead-but-uncommented code would satisfy it. The "and it
+builds" half of the contract is the offline Flatpak build, and the "and it
+behaves" half is the lifecycle and renderer lanes.
+`scripts/tests/flatpak-integration-markers.sh` is the self-test for the checker
+itself: it drives it against synthetic trees and requires line-commented,
+block-commented, and HTML-commented markers to be rejected while a Markdown
+heading is not mistaken for a comment.
+
+The same comment rule applies to the literal assertions the smoke makes about
+`.github/workflows/flatpak.yml` and `scripts/smoke-linux-software-renderer.sh`:
+both files are matched with whole-line comments removed, so a comment cannot
+stand in for the code being asserted. Those assertions are still substring
+matches - they prove text is present as code, not that it runs.
 
 The check deliberately does not regenerate the patch from the working tree and
 compare it byte-for-byte. That comparison passes only while nothing has touched
@@ -75,7 +94,32 @@ the working tree, is what the lane builds - the nightly run and the re-pin pull
 request are what carry current default-branch work into the package. Every step
 after the offline build runs even if an earlier step failed, so one red gate can
 never hide whether the build, the delivery lifecycle, and the renderer smoke
-work.
+work. That guard is asserted per step by `scripts/smoke-linux-flatpak.sh`,
+which parses the job's steps and requires it on each named step and on every
+step after the offline build; an occurrence count would let one step lose its
+guard behind another gaining one.
+
+### Why this lane is not a required status check
+
+The three required contexts on `main` (`Unit tests (engine-agnostic Core,
+headless)`, `Rust workspace (Linux)`, `Integration tests (real libmpv +
+render-thread guard)`) have no path filter, so they report on every pull
+request. This workflow's `pull_request` trigger is path-filtered. A required
+context that never runs is never reported, and GitHub holds the pull request at
+"Expected - Waiting for status to be reported" indefinitely. Adding `Offline
+Flatpak beta build` to the required contexts as the workflow stands would
+therefore block every pull request that does not touch the packaging paths.
+
+Making it required needs a companion job first: a second job with the same
+`name:` (so it reports the same check context), triggered on `pull_request` with
+`paths-ignore:` mirroring this workflow's `paths:`, doing nothing and
+succeeding. Only with that skip shim in place does the context report on every
+pull request, and only then is promoting it to required safe.
+
+Cost is not the objection. The lane's `timeout-minutes: 150` is a ceiling, not a
+duration; the observed end-to-end job time is under ten minutes. Until the shim
+exists, the pin drift bound plus the nightly run are what keep the pin honest on
+pull requests that do not run the lane.
 
 The lifecycle lane's negative control is checked by status, not by mere
 failure. `scripts/smoke-linux-flatpak-lifecycle.sh` exits 3 only when the
@@ -85,7 +129,10 @@ lifecycle assertion exits 1. The workflow requires exactly 3 plus the
 assertion's own message, so a control cannot report success because the lane
 died before reaching it. `scripts/tests/flatpak-lifecycle-control.sh` drives
 that wiring against scripted stand-ins for Flatpak and the launch probe and is
-run by the workflow before the offline build.
+run by the workflow before the offline build. It checks both sides of the
+status-3 contract: a controlled step must produce 3, and a failure at any other
+step while a control is set must stay at 1. Without the second side, routing
+every failure to 3 would satisfy the workflow's check.
 
 The package installs the project GPL license, third-party notices, and the
 upstream mpv/libplacebo/libass license texts under the Flatpak license prefix.

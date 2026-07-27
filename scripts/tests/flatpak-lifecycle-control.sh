@@ -3,15 +3,21 @@
 #
 # The negative control only means something if a caller can distinguish "the
 # controlled transition's own assertion fired" from "the script died before it
-# got there". This test drives scripts/smoke-linux-flatpak-lifecycle.sh against
-# a scripted stand-in for flatpak and checks the four outcomes that matter:
+# got there". That is a two-sided property, and both sides are checked here:
+# status 3 must appear when the controlled step fails, and must NOT appear when
+# some other step fails while a control is set. Without the second half, routing
+# every failure to status 3 would satisfy the workflow's check.
+#
+# This test drives scripts/smoke-linux-flatpak-lifecycle.sh against a scripted
+# stand-in for flatpak and checks the outcomes that matter:
 #
 #   1. an unmodified run reports success,
 #   2. a control on a transition step fails with status 3 and names that step,
 #   3. a control on a launch step also fails with status 3,
-#   4. a misspelled control id is rejected instead of quietly passing,
-#   5. a missing artifact manifest keeps its own status rather than 3, and
-#   6. the emitted evidence records the caller's source commit rather than
+#   4. a failure at a step other than the controlled one keeps status 1,
+#   5. a misspelled control id is rejected instead of quietly passing,
+#   6. a missing artifact manifest keeps its own status rather than 3, and
+#   7. the emitted evidence records the caller's source commit rather than
 #      echoing the artifact's own, which is what makes the pull_request_head
 #      assertion in okp-core falsifiable at all.
 #
@@ -83,6 +89,12 @@ case "$command" in
         --commit=*) target="${argument#--commit=}" ;;
       esac
     done
+    # Report success without moving the deployment. That is the failure mode the
+    # lane's deployed-commit assertions exist to catch, and it is how this test
+    # forces a failure at a step other than the controlled one.
+    if [[ -n "${OKP_STUB_REFUSE_COMMIT:-}" && "$target" == "$OKP_STUB_REFUSE_COMMIT" ]]; then
+      exit 0
+    fi
     printf '%s\n' "$target" >"$deployed_file"
     ;;
   uninstall)
@@ -178,7 +190,7 @@ mkdir -p "$OUT_DIR/repo-baseline" "$OUT_DIR/repo"
 : >"$OUT_DIR/$UPDATE_BUNDLE"
 
 run_lane() {
-  local control="$1" log="$2" head="${3:-$SOURCE_COMMIT}" status=0
+  local control="$1" log="$2" head="${3:-$SOURCE_COMMIT}" refuse="${4:-}" status=0
   rm -f "$STATE/deployed" "$STATE/remotes"
   # Every OKP_FLATPAK_* input is set explicitly. The workflow exports some of
   # them job-wide for the real lane, and inheriting those here would point this
@@ -190,6 +202,7 @@ run_lane() {
     OKP_STUB_STATE="$STATE" \
     OKP_STUB_BASELINE_COMMIT="$BASELINE_COMMIT" \
     OKP_STUB_UPDATE_COMMIT="$UPDATE_COMMIT" \
+    OKP_STUB_REFUSE_COMMIT="$refuse" \
     OKP_ACCEPTANCE_SOURCE_COMMIT="$head" \
     OKP_FLATPAK_OUT_DIR="$OUT_DIR" \
     OKP_FLATPAK_ARTIFACT_MANIFEST="$OUT_DIR/flatpak-beta-artifact.json" \
@@ -231,6 +244,15 @@ expect "a controlled update fails with the dedicated status" 3 "$status" "$WORK/
 status="$(run_lane "launch-current" "$WORK/launch.log")"
 expect "a controlled launch fails with the dedicated status" 3 "$status" "$WORK/launch.log" \
   "Flatpak lifecycle step launch-current failed"
+
+# The discriminating half of the contract. Status 3 must mean "the controlled
+# step's own assertion fired" and nothing else, so a different step failing
+# while a control is set must keep the ordinary status 1. Without this check,
+# routing every failure to status 3 passes every other check in this file and
+# the workflow's status-3 requirement stops carrying any information.
+status="$(run_lane "uninstall" "$WORK/other-step.log" "$SOURCE_COMMIT" "$BASELINE_COMMIT")"
+expect "a failure at a step other than the controlled one is not status 3" 1 "$status" \
+  "$WORK/other-step.log" "Flatpak lifecycle step rollback-baseline failed: deployed"
 
 status="$(run_lane "update-currrent" "$WORK/typo.log")"
 expect "a misspelled control id is rejected" 2 "$status" "$WORK/typo.log" \
