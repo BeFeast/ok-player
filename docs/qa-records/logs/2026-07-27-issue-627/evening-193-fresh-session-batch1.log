@@ -1,0 +1,17 @@
+# Driver output tail (full stream was not retained). The driver (drag-session.sh)
+# is fail-fast: any round whose move-begin was not observed in the journal exits
+# immediately with HARNESS FAULT, and an app death exits with APP DIED - so the
+# terminal line "survived all 20 fresh-session drags" is itself proof that every
+# round was delivered and survived.
+round 10 ok (delivered)
+round 11 ok (delivered)
+round 12 ok (delivered)
+round 13 ok (delivered)
+round 14 ok (delivered)
+round 15 ok (delivered)
+round 16 ok (delivered)
+round 17 ok (delivered)
+round 18 ok (delivered)
+round 19 ok (delivered)
+round 20 ok (delivered)
+survived all 20 fresh-session drags

@@ -79,16 +79,23 @@ playing video, release-on-second-monitor variants included):
 - sway headless, source build, EGL video path (grab always refused — wrong path);
 - bare mutter, source build, EGL path, granted moves, single monitor;
 - bare mutter, source build, EGL path, dual monitor + operator scales;
-- gnome-shell headless (Debian 13 / GNOME 48), source build, EGL path, dual
-  monitor + operator scales.
+- gnome-shell headless: WITHDRAWN - later delivery-verified runs show the
+  headless shell never routes RemoteDesktop pointer injection to the app, so
+  the rounds this bullet once claimed were never received (see the QA record).
 
-The one configuration this rig could NOT yet run is the packaged build's
-`native-wayland-dmabuf` plane (bundled patched libmpv): the candidate `.deb`
-does not start on Debian 13 at all (#662, bundled runtime requires
-GLIBC_2.43), and on the Ubuntu QA host the GNOME 49 headless shell did not
-deliver RemoteDesktop input to the app (open point). That makes the dmabuf
-subsurface path the prime suspect for #627: it is exactly what the crashing
-host runs and exactly what every surviving configuration lacks.
+CORRECTION (2026-07-27 evening): #662 was fixed the same day and the packaged
+`native-wayland-dmabuf` configuration WAS exercised — 40 fresh-session granted
+drags on the installed candidate `.193` (delivery verified per round via the
+journal) survive under bare mutter with the operator scale layout and playing
+video — however backend evidence (OKP_PRESENT_LOG) later showed those sessions ran on native-wayland-egl (headless hwdec stays off, so the dmabuf plane never activates silently); the campaigns eliminate the granted-move-over-EGL path only and the dmabuf plane remains the prime suspect. The remaining
+untestable configuration is the full gnome-shell grab path: headless
+gnome-shell (GNOME 48 and 49 alike) does not route RemoteDesktop pointer
+injection to the app at all, while bare mutter routes it without ceremony —
+working hypothesis: the shell only injects into sessions with an attached
+ScreenCast stream, the way gnome-remote-desktop always pairs them.
 
-Order of work: fix #662 → rerun this harness with the packaged `.deb` on the
-Debian QA host → expect the SEGV with a core → fix from the backtrace.
+Order of work: make headless gnome-shell deliver injected pointer input
+(ScreenCast-attached RemoteDesktop session or equivalent) → rerun the
+fresh-session campaign under the real shell → expect the SEGV with a core →
+fix from the backtrace. See docs/qa-records/2026-07-27-issue-627.md for the
+authoritative result matrix.
