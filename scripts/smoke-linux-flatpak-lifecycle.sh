@@ -11,8 +11,17 @@
 # a command that reports success without changing the deployment fails the lane.
 #
 # Set OKP_FLATPAK_LIFECYCLE_NEGATIVE_CONTROL=<step-id> to skip one transition on
-# purpose. The lane must then fail on that step; that is how the lane proves it
-# is not vacuous.
+# purpose. The lane must then fail on that step, and it exits with the dedicated
+# status 3 only when that step's own assertion is what failed. Any other failure
+# - a missing tool, a missing artifact manifest, an unrelated broken transition -
+# keeps its ordinary non-zero status, so a caller can tell "the control worked"
+# apart from "something else went wrong before the control was reached". An
+# unknown step id is rejected outright rather than silently disabling the
+# control.
+#
+# Exit statuses: 0 success, 1 a lifecycle assertion failed, 2 bad invocation or
+# missing inputs, 3 the negative control's own step failed as designed,
+# 127 a required tool is missing.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -20,12 +29,42 @@ OUT_DIR="${OKP_FLATPAK_OUT_DIR:-$ROOT/artifacts/linux/flatpak}"
 ARTIFACT_MANIFEST="${OKP_FLATPAK_ARTIFACT_MANIFEST:-$OUT_DIR/flatpak-beta-artifact.json}"
 EVIDENCE="${OKP_FLATPAK_LIFECYCLE_EVIDENCE:-$OUT_DIR/flatpak-lifecycle-ci.json}"
 NEGATIVE_CONTROL="${OKP_FLATPAK_LIFECYCLE_NEGATIVE_CONTROL:-}"
+NEGATIVE_CONTROL_EXIT=3
 LAUNCH_TIMEOUT_SECONDS="${OKP_FLATPAK_LAUNCH_TIMEOUT_SECONDS:-180}"
 APP_ID="com.befeast.okplayer"
 BRANCH="beta"
 REMOTE="ok-player-beta-ci"
 
-for tool in cargo cut dbus-run-session ffmpeg flatpak python3 sha256sum timeout xdotool xvfb-run xwininfo; do
+# Transitions this lane knows how to skip. install-baseline is deliberately
+# absent: nothing downstream could run without it, so naming it would not be a
+# control.
+CONTROLLABLE_STEPS=(
+  launch-baseline
+  update-current
+  launch-current
+  rollback-baseline
+  launch-rollback
+  restore-current
+  uninstall
+  remote-cleanup
+)
+
+if [[ -n "$NEGATIVE_CONTROL" ]]; then
+  control_is_known=0
+  for step in "${CONTROLLABLE_STEPS[@]}"; do
+    if [[ "$step" == "$NEGATIVE_CONTROL" ]]; then
+      control_is_known=1
+    fi
+  done
+  if (( control_is_known == 0 )); then
+    echo "Unknown OKP_FLATPAK_LIFECYCLE_NEGATIVE_CONTROL '$NEGATIVE_CONTROL'." >&2
+    echo "A renamed or misspelled step id would skip nothing and pass, so it is rejected here." >&2
+    echo "Known controllable steps: ${CONTROLLABLE_STEPS[*]}" >&2
+    exit 2
+  fi
+fi
+
+for tool in cargo cut dbus-run-session ffmpeg flatpak git python3 sha256sum timeout xdotool xvfb-run xwininfo; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "Missing required tool: $tool" >&2
     exit 127
@@ -34,6 +73,15 @@ done
 
 [[ -f "$ARTIFACT_MANIFEST" ]] || {
   echo "Missing Flatpak artifact manifest: run scripts/build-flatpak-beta.sh first" >&2
+  exit 2
+}
+
+# The evidence must bind to the commit the workflow checked out, not to a value
+# copied out of the artifact it is meant to police. Reading it back from the
+# artifact would make the pull_request_head assertion unfalsifiable.
+SOURCE_COMMIT="${OKP_ACCEPTANCE_SOURCE_COMMIT:-$(git -C "$ROOT" rev-parse HEAD)}"
+[[ -n "$SOURCE_COMMIT" ]] || {
+  echo "Could not determine the acceptance source commit" >&2
   exit 2
 }
 
@@ -101,7 +149,7 @@ record_step() {
 }
 
 write_evidence() {
-  python3 - "$ARTIFACT_MANIFEST" "$STEP_LOG" "$EVIDENCE" "$ARTIFACT_SHA256" <<'PY'
+  python3 - "$ARTIFACT_MANIFEST" "$STEP_LOG" "$EVIDENCE" "$ARTIFACT_SHA256" "$SOURCE_COMMIT" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -116,7 +164,7 @@ Path(sys.argv[3]).write_text(
     json.dumps(
         {
             "schema_version": 2,
-            "pull_request_head": artifact["source_commit"],
+            "pull_request_head": sys.argv[5],
             "downloaded_artifact_sha256": sys.argv[4],
             "desktop": "headless",
             "session": "headless-ci",
@@ -131,11 +179,17 @@ PY
 }
 
 fail_step() {
-  local id="$1" commit="$2" message="$3"
+  local id="$1" commit="$2" message="$3" status=1
   record_step "$id" "$commit" "fail"
   write_evidence
   echo "Flatpak lifecycle step $id failed: $message" >&2
-  exit 1
+  # Only the controlled step's own assertion earns the dedicated status. A
+  # caller that requires exactly this status therefore cannot be satisfied by a
+  # preflight abort, a missing artifact, or an unrelated broken transition.
+  if [[ -n "$NEGATIVE_CONTROL" && "$id" == "$NEGATIVE_CONTROL" ]]; then
+    status="$NEGATIVE_CONTROL_EXIT"
+  fi
+  exit "$status"
 }
 
 # Assert the deployment identity a transition claims to have produced.

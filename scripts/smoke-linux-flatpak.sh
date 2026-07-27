@@ -8,6 +8,12 @@
 # current working tree. A working-tree comparison would turn every later change
 # to a patched file into an unrelated packaging failure; keeping the pin fresh
 # is the job of scripts/flatpak-repin.sh and its scheduled pull request.
+#
+# "Still contains the integration" is enforced per patched file: every path the
+# patch touches must declare at least one marker of the behaviour it carries,
+# and every declared marker must be present in the pinned-and-patched tree. A
+# deleted hunk therefore fails here rather than shipping a package that silently
+# lost a feature.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -17,10 +23,17 @@ APP_PATCH="$ROOT/rust/packaging/flatpak/ok-player-flatpak.patch"
 PATCHED_PATHS="$ROOT/rust/packaging/flatpak/patched-paths.txt"
 BUILD_SCRIPT="$ROOT/scripts/build-flatpak-beta.sh"
 LIFECYCLE_SCRIPT="$ROOT/scripts/smoke-linux-flatpak-lifecycle.sh"
+LIFECYCLE_CONTROL_TEST="$ROOT/scripts/tests/flatpak-lifecycle-control.sh"
 REPIN_SCRIPT="$ROOT/scripts/flatpak-repin.sh"
 SOFTWARE_RENDER_SCRIPT="$ROOT/scripts/smoke-linux-software-renderer.sh"
 WORKFLOW="$ROOT/.github/workflows/flatpak.yml"
 GITIGNORE="$ROOT/.gitignore"
+
+# How far the frozen pin may fall behind the default branch before it stops
+# being a pin and becomes rot. The nightly re-pin pull request normally keeps
+# the drift at one day; these bounds are the backstop for when it does not.
+MAX_PIN_DRIFT_COMMITS="${OKP_FLATPAK_MAX_PIN_DRIFT_COMMITS:-50}"
+MAX_PIN_DRIFT_DAYS="${OKP_FLATPAK_MAX_PIN_DRIFT_DAYS:-14}"
 
 for tool in bash git python3 sed tar flatpak-builder desktop-file-validate appstreamcli; do
   command -v "$tool" >/dev/null 2>&1 || {
@@ -59,10 +72,19 @@ assert "Packaged no-DRI software renderer smoke" in workflow
 assert "flatpak run --user --nodevice=dri" in workflow
 assert 'xdg-user-dirs-update --set PICTURES "$HOME/Pictures"' in workflow
 assert "./scripts/smoke-linux-flatpak-lifecycle.sh" in workflow
+assert "./scripts/tests/flatpak-lifecycle-control.sh" in workflow
 assert "OKP_FLATPAK_LIFECYCLE_NEGATIVE_CONTROL: update-current" in workflow
+# The negative control must assert the reason it failed, not merely that it
+# failed: a preflight abort, a missing artifact manifest, or a renamed control
+# id all produce a non-zero status without exercising anything.
+assert '"$status" -ne 3' in workflow
+assert "Flatpak lifecycle step update-current failed: deployed" in workflow
 assert "./scripts/flatpak-repin.sh origin/main" in workflow
 assert "gh pr create --base main" in workflow
 assert "git push --force origin \"HEAD:refs/heads/$REPIN_BRANCH\"" in workflow
+# A re-pin pull request that never starts CI is a proposal nobody can review.
+assert "gh workflow run flatpak.yml --ref \"$REPIN_BRANCH\"" in workflow
+assert "actions: write" in workflow
 assert "artifacts/linux/flatpak/flatpak-lifecycle-ci.json" in workflow
 assert "artifacts/manual-ui/linux-software-renderer-smoke/**" in workflow
 assert re.search(r"apt-get install -y [^\n]*\bripgrep\b", workflow)
@@ -142,12 +164,23 @@ patched_paths = [
 patched_paths = [line for line in patched_paths if line]
 assert patched_paths, "the Flatpak patch must declare the paths it carries"
 
-patch_source = {"type": "patch", "path": app_patch_path.name}
-patch_sources = [source for source in app["sources"] if source == patch_source]
+# Match patch sources structurally. Comparing whole dicts would let an extra
+# key (say "use-git") hide a declared patch whose file does not exist.
+patch_sources = [
+    source
+    for source in app["sources"]
+    if isinstance(source, dict) and source.get("type") == "patch"
+]
+for source in patch_sources:
+    referenced = manifest_path.parent / source["path"]
+    assert referenced.is_file(), f"manifest declares a missing patch file: {source['path']}"
 if app_patch_path.is_file():
     # The pin is an upstream commit that predates the Flatpak integration, so
     # the patch carries the difference.
-    assert app["sources"][1] == patch_source
+    assert len(patch_sources) == 1, "exactly one integration patch source is expected"
+    assert app["sources"][1] is patch_sources[0], "the patch must apply right after the git source"
+    assert set(patch_sources[0]) == {"type", "path"}, patch_sources[0]
+    assert patch_sources[0]["path"] == app_patch_path.name
     app_patch = app_patch_path.read_text()
     touched = {
         match.group(1)
@@ -209,6 +242,23 @@ if git -C "$ROOT" rev-parse --verify --quiet origin/main >/dev/null; then
     echo "Flatpak application pin $app_commit is not published on origin/main" >&2
     exit 1
   }
+
+  # A frozen pin is only defensible while it is close to the branch it freezes.
+  # Past that it stops describing what the project ships and the "patch" becomes
+  # an unreviewable catch-up diff.
+  drift_commits="$(git -C "$ROOT" rev-list --count "$app_commit..origin/main")"
+  pin_timestamp="$(git -C "$ROOT" show -s --format=%ct "$app_commit")"
+  main_timestamp="$(git -C "$ROOT" show -s --format=%ct origin/main)"
+  drift_days=$(( (main_timestamp - pin_timestamp) / 86400 ))
+  if (( drift_days < 0 )); then
+    drift_days=0
+  fi
+  if (( drift_commits > MAX_PIN_DRIFT_COMMITS || drift_days > MAX_PIN_DRIFT_DAYS )); then
+    echo "Flatpak application pin $app_commit is stale: $drift_commits commits and $drift_days days behind origin/main (limits: $MAX_PIN_DRIFT_COMMITS commits, $MAX_PIN_DRIFT_DAYS days)." >&2
+    echo "Run scripts/flatpak-repin.sh origin/main and commit the refreshed pin and patch." >&2
+    exit 1
+  fi
+  echo "Flatpak application pin drift: $drift_commits commits, $drift_days days behind origin/main"
 fi
 
 # Materialize the exact tree flatpak-builder will build and prove the frozen
@@ -220,13 +270,20 @@ if [[ -f "$APP_PATCH" ]]; then
   (cd "$PINNED_TREE" && git apply --binary "$APP_PATCH")
 fi
 
-python3 - "$PINNED_TREE" <<'PY'
+python3 - "$PINNED_TREE" "$APP_PATCH" <<'PY'
+import re
 import sys
 from pathlib import Path
 
 tree = Path(sys.argv[1])
-# Markers of the packaged behaviour the Flatpak lane promises. They are checked
-# against the pinned-and-patched tree, which is exactly what gets built.
+app_patch_path = Path(sys.argv[2])
+
+# Markers of the packaged behaviour the Flatpak lane promises, one entry per
+# repository path the integration patch carries. They are checked against the
+# pinned-and-patched tree, which is exactly what gets built, so a marker keeps
+# passing once the behaviour lands upstream and the corresponding hunk
+# disappears - and starts failing the moment a hunk is dropped without the pin
+# having caught up.
 required = {
     "THIRD-PARTY-NOTICES.md": [
         "source-built rendering library in the Flatpak beta",
@@ -239,14 +296,75 @@ required = {
     "rust/crates/okp-core/src/playback_failure.rs": [
         "org.freedesktop.Platform.codecs-extra",
         "CodecEnvironment::Flatpak",
+        "pub fn diagnose_mpv_runtime(",
+    ],
+    "rust/crates/okp-mpv/src/ffi.rs": [
+        "pub const MPV_RENDER_PARAM_ADVANCED_CONTROL",
     ],
     "rust/crates/okp-mpv/src/player.rs": [
         "MPV_RENDER_PARAM_ADVANCED_CONTROL",
+        "DecoderFailed {",
+    ],
+    "rust/crates/okp-mpv/src/pump.rs": [
+        "codec_failure_reported",
+        "MpvEvent::DecoderFailed {",
+    ],
+    "rust/crates/okp-linux-gtk/src/about.rs": [
+        "if flatpak_update_managed() {",
+        '"Flatpak managed"',
+    ],
+    "rust/crates/okp-linux-gtk/src/main.rs": [
+        "enum LinuxExternalUpdateManager {",
+        '"Updates are managed by Flatpak"',
+    ],
+    "rust/crates/okp-linux-gtk/src/mpv_bridge.rs": [
+        "mpv.create_render_context(native_wayland_display, true)",
+        "mpv.create_render_context(native_wayland_display, false)",
+    ],
+    "rust/crates/okp-linux-gtk/src/playlist_ops.rs": [
+        "CodecEnvironment::Flatpak",
+        "pub(crate) fn apply_runtime_decoder_failure(",
+        "diagnose_mpv_runtime(",
+    ],
+    "rust/crates/okp-linux-gtk/src/screenshots.rs": [
+        "fn screenshot_staging_dir() -> PathBuf {",
+        "fn copy_to_destination_stage(",
+    ],
+    "rust/crates/okp-linux-gtk/src/tests.rs": [
+        "fn native_wayland_screenshots_use_libmpv_advanced_control() {",
+        "fn runtime_decoder_failure_stops_partial_playback_state_immediately() {",
+        '"Updates are managed by Flatpak"',
+    ],
+    "rust/crates/okp-linux-gtk/src/track_popovers.rs": [
+        "MpvEvent::DecoderFailed {",
     ],
     "rust/crates/okp-linux-gtk/src/updates.rs": [
         "Managed by Flatpak",
+        "pub(crate) fn flatpak_update_managed() -> bool {",
+    ],
+    "rust/crates/okp-linux-gtk/src/window.rs": [
+        "&& !flatpak_update_managed()",
     ],
 }
+
+# Every hunk must be covered. Without this, a newly patched file could be added
+# with no marker and its hunk could then be deleted with the gate green.
+if app_patch_path.is_file():
+    touched = {
+        match.group(1)
+        for match in re.finditer(
+            r"^diff --git a/(\S+) b/\S+$",
+            app_patch_path.read_text(),
+            re.MULTILINE,
+        )
+    }
+    unmarked = sorted(touched - set(required))
+    if unmarked:
+        raise SystemExit(
+            "The Flatpak integration patch touches files with no integration marker:\n"
+            + "\n".join(unmarked)
+        )
+
 missing = []
 for relative, markers in required.items():
     path = tree / relative
@@ -277,6 +395,7 @@ grep -q "\"schema_version\": $schema_version," "$LIFECYCLE_SCRIPT" || {
 
 bash -n "$BUILD_SCRIPT"
 bash -n "$LIFECYCLE_SCRIPT"
+bash -n "$LIFECYCLE_CONTROL_TEST"
 bash -n "$REPIN_SCRIPT"
 bash -n "$SOFTWARE_RENDER_SCRIPT"
 

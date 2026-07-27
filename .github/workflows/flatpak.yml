@@ -19,6 +19,7 @@ on:
       - 'scripts/smoke-linux-flatpak-lifecycle.sh'
       - 'scripts/smoke-linux-flatpak.sh'
       - 'scripts/smoke-linux-software-renderer.sh'
+      - 'scripts/tests/flatpak-lifecycle-control.sh'
   pull_request:
     paths:
       - '.github/workflows/flatpak.yml'
@@ -31,6 +32,7 @@ on:
       - 'scripts/smoke-linux-flatpak-lifecycle.sh'
       - 'scripts/smoke-linux-flatpak.sh'
       - 'scripts/smoke-linux-software-renderer.sh'
+      - 'scripts/tests/flatpak-lifecycle-control.sh'
   schedule:
     - cron: '17 3 * * *'
   workflow_dispatch:
@@ -69,6 +71,13 @@ jobs:
       - name: Validate manifest and metadata
         run: ./scripts/smoke-linux-flatpak.sh
 
+      # Proves the negative control below can actually fire, without needing a
+      # built repository. If this fails, the control that guards the real lane
+      # is not trustworthy and nothing after it means much.
+      - name: Lifecycle negative control self-test
+        if: ${{ !cancelled() }}
+        run: ./scripts/tests/flatpak-lifecycle-control.sh
+
       - name: Build offline beta repository
         run: ./scripts/build-flatpak-beta.sh
 
@@ -86,6 +95,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: ./scripts/smoke-linux-flatpak-lifecycle.sh
 
+      # A non-zero status alone would be satisfied by a missing tool, a missing
+      # artifact manifest from a failed build, or a renamed control id. Require
+      # the dedicated status the lane reserves for "the controlled step's own
+      # assertion fired", and require the assertion's own message with it.
       - name: Repository lifecycle negative control
         if: ${{ !cancelled() }}
         env:
@@ -93,11 +106,19 @@ jobs:
           OKP_FLATPAK_LIFECYCLE_EVIDENCE: artifacts/linux/flatpak/flatpak-lifecycle-negative-control.json
           OKP_FLATPAK_LIFECYCLE_LOG_DIR: artifacts/linux/flatpak/lifecycle-negative-control-logs
         run: |
-          if ./scripts/smoke-linux-flatpak-lifecycle.sh; then
-            echo "The lifecycle lane passed with a deliberately skipped update; it proves nothing." >&2
+          set +e
+          ./scripts/smoke-linux-flatpak-lifecycle.sh 2>&1 | tee negative-control.log
+          status="${PIPESTATUS[0]}"
+          set -e
+          if [ "$status" -ne 3 ]; then
+            echo "The negative control exited $status. Only 3 means the skipped update-current transition was itself detected; anything else means the lane never got that far." >&2
             exit 1
           fi
-          echo "Negative control detected the skipped update transition."
+          if ! grep -qF "Flatpak lifecycle step update-current failed: deployed" negative-control.log; then
+            echo "The negative control exited 3 without reporting the update-current deployment assertion." >&2
+            exit 1
+          fi
+          echo "Negative control failed at update-current with its deployed-commit assertion, as required."
 
       - name: Packaged no-DRI software renderer smoke
         if: ${{ !cancelled() }}
@@ -128,11 +149,16 @@ jobs:
 
   repin:
     name: Flatpak source re-pin drift
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # Only from the default branch. A dispatch aimed at the re-pin branch must
+    # run the build lane against the proposed pin, not open another re-pin.
+    if: >-
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+      && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
+      actions: write
     env:
       REPIN_BRANCH: chore/flatpak-repin
     steps:
@@ -146,7 +172,9 @@ jobs:
 
       # The pin is frozen on purpose, so drift is expected and is never fixed by
       # pushing to main. It is proposed as a pull request and reviewed like any
-      # other packaging change.
+      # other packaging change. A pull request opened with the workflow token
+      # does not start checks by itself, so the lane is dispatched explicitly
+      # against the branch that carries the proposed pin.
       - name: Propose the refreshed pin
         env:
           GH_TOKEN: ${{ github.token }}
@@ -159,10 +187,12 @@ jobs:
             -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
             commit -am 'Flatpak: re-pin the application source to the default branch'
           git push --force origin "HEAD:refs/heads/$REPIN_BRANCH"
-          if [ -n "$(gh pr list --head "$REPIN_BRANCH" --state open --json number --jq '.[].number')" ]; then
+          if [ -z "$(gh pr list --head "$REPIN_BRANCH" --state open --json number --jq '.[].number')" ]; then
+            gh pr create --base main --head "$REPIN_BRANCH" \
+              --title 'Flatpak: re-pin the application source to the default branch' \
+              --body 'Automated re-pin of the Flatpak application source and integration patch. The Flatpak lane is dispatched against this branch by the re-pin job; see the workflow runs for `chore/flatpak-repin`.'
+          else
             echo "Updated the existing re-pin pull request."
-            exit 0
           fi
-          gh pr create --base main --head "$REPIN_BRANCH" \
-            --title 'Flatpak: re-pin the application source to the default branch' \
-            --body 'Automated re-pin of the Flatpak application source and integration patch. Close and reopen this pull request to run the Flatpak lane against it.'
+          gh workflow run flatpak.yml --ref "$REPIN_BRANCH"
+          echo "Dispatched the Flatpak lane against $REPIN_BRANCH."

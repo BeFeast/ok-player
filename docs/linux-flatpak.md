@@ -32,6 +32,14 @@ integration it packages - the software no-DRI renderer selection, the
 `codecs-extra` diagnostic, libmpv advanced control, the Flatpak-managed update
 state, and the Flatpak third-party notices.
 
+"Still contains the integration" is enforced per file, not in aggregate. Every
+repository path the patch touches must declare at least one marker of the
+behaviour it carries, and every declared marker must be present in the
+pinned-and-patched tree. Deleting a hunk therefore fails the gate instead of
+shipping a package that quietly lost a feature, and adding a newly patched file
+without a marker fails too, so the coverage cannot silently fall behind the
+patch.
+
 The check deliberately does not regenerate the patch from the working tree and
 compare it byte-for-byte. That comparison passes only while nothing has touched
 a patched file since the pin was taken, so every later change to
@@ -40,9 +48,18 @@ check with a byte offset. Freshness is a scheduled maintenance task, not a
 merge gate: `scripts/flatpak-repin.sh` moves the pin to the current default
 branch and regenerates the patch, and the nightly `repin` job in
 `.github/workflows/flatpak.yml` runs it and proposes the result as a pull
-request. It never pushes to `main`. Because a pull request opened with the
-workflow token does not start CI on its own, close and reopen that pull request
-to run the Flatpak lane against it.
+request. It never pushes to `main`. A pull request opened with the workflow
+token does not start checks by itself, so the job also dispatches the Flatpak
+lane explicitly against `chore/flatpak-repin`; the run appears under that branch
+rather than on the pull request, and no manual close/reopen is needed.
+
+Maintenance is not the same as no bound. The smoke check fails when the pin is
+more than 50 commits or 14 days behind `origin/main` (override with
+`OKP_FLATPAK_MAX_PIN_DRIFT_COMMITS` and `OKP_FLATPAK_MAX_PIN_DRIFT_DAYS`). Days
+are measured between the pin and the tip of `origin/main`, so a quiet default
+branch never ages the pin. Past those bounds the "integration patch" stops being
+a reviewable delta and becomes an unreviewable catch-up diff, and the fix is to
+run the re-pin script and commit the result rather than to widen the bound.
 
 Once the integration is merged upstream, the regenerated patch is empty. The
 re-pin script then deletes the patch file and removes the `patch` source from
@@ -59,6 +76,16 @@ request are what carry current default-branch work into the package. Every step
 after the offline build runs even if an earlier step failed, so one red gate can
 never hide whether the build, the delivery lifecycle, and the renderer smoke
 work.
+
+The lifecycle lane's negative control is checked by status, not by mere
+failure. `scripts/smoke-linux-flatpak-lifecycle.sh` exits 3 only when the
+controlled step's own assertion is what failed; a missing tool exits 127, a
+missing artifact manifest or an unknown control id exits 2, and any other
+lifecycle assertion exits 1. The workflow requires exactly 3 plus the
+assertion's own message, so a control cannot report success because the lane
+died before reaching it. `scripts/tests/flatpak-lifecycle-control.sh` drives
+that wiring against scripted stand-ins for Flatpak and the launch probe and is
+run by the workflow before the offline build.
 
 The package installs the project GPL license, third-party notices, and the
 upstream mpv/libplacebo/libass license texts under the Flatpak license prefix.

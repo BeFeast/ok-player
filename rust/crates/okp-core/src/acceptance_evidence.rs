@@ -1427,6 +1427,21 @@ mod tests {
         }
     }
 
+    fn passing_flatpak_lifecycle_evidence(
+        desktop: FlatpakAcceptanceDesktop,
+    ) -> FlatpakLifecycleEvidence {
+        let mut evidence = FlatpakLifecycleEvidence::template(
+            "1".repeat(40),
+            "2".repeat(64),
+            desktop,
+            flatpak_artifact(),
+        );
+        for step in &mut evidence.steps {
+            step.status = EvidenceStatus::Pass;
+        }
+        evidence
+    }
+
     #[test]
     fn complete_exact_manifest_is_release_ready() {
         let manifest = passing_manifest();
@@ -1710,6 +1725,89 @@ mod tests {
             errors
                 .iter()
                 .any(|error| error.contains("does not match the current pull request head"))
+        );
+    }
+
+    #[test]
+    fn flatpak_beta_artifact_rejects_an_unsupported_schema_version() {
+        let mut artifact = flatpak_artifact();
+        artifact.schema_version = FLATPAK_BETA_ARTIFACT_SCHEMA_VERSION + 1;
+
+        let errors = artifact.validate().unwrap_err();
+        assert_eq!(
+            errors,
+            vec![format!(
+                "unsupported Flatpak beta artifact schema {}, expected {}",
+                FLATPAK_BETA_ARTIFACT_SCHEMA_VERSION + 1,
+                FLATPAK_BETA_ARTIFACT_SCHEMA_VERSION
+            )]
+        );
+    }
+
+    #[test]
+    fn flatpak_beta_artifact_rejects_a_baseline_and_update_on_one_commit() {
+        // A repository whose two versions resolve to the same OSTree commit
+        // cannot demonstrate an update, so the lifecycle lane would assert
+        // nothing while reporting nine green transitions.
+        let mut artifact = flatpak_artifact();
+        artifact.update.ostree_commit = artifact.baseline.ostree_commit.clone();
+
+        let errors = artifact.validate().unwrap_err();
+        assert_eq!(
+            errors,
+            vec!["Flatpak baseline and update commits are identical".to_owned()]
+        );
+    }
+
+    #[test]
+    fn flatpak_lifecycle_evidence_rejects_an_unsupported_schema_version() {
+        // The exact defect f8d2c0cf fixed: a lane emitting an older schema than
+        // the validator expects must be rejected by the validator itself, not
+        // only by a text match on the script that emits it.
+        let mut evidence = passing_flatpak_lifecycle_evidence(FlatpakAcceptanceDesktop::Gnome);
+        assert_eq!(evidence.validate_transitions(), Ok(()));
+
+        evidence.schema_version = FLATPAK_LIFECYCLE_EVIDENCE_SCHEMA_VERSION - 1;
+        let errors = evidence.validate_transitions().unwrap_err();
+        assert_eq!(
+            errors,
+            vec![format!(
+                "unsupported Flatpak lifecycle evidence schema {}, expected {}",
+                FLATPAK_LIFECYCLE_EVIDENCE_SCHEMA_VERSION - 1,
+                FLATPAK_LIFECYCLE_EVIDENCE_SCHEMA_VERSION
+            )]
+        );
+    }
+
+    #[test]
+    fn flatpak_lifecycle_headless_desktop_alone_blocks_live_sign_off() {
+        // Desktop and session are independent claims. Each half of the bar has
+        // to reject on its own, or a record can pass by contradicting itself.
+        let mut evidence = passing_flatpak_lifecycle_evidence(FlatpakAcceptanceDesktop::Headless);
+        evidence.session = FlatpakAcceptanceSession::Wayland;
+
+        assert_eq!(evidence.validate_transitions(), Ok(()));
+        assert_eq!(
+            evidence.validate_ready().unwrap_err(),
+            vec![
+                "headless Flatpak lifecycle evidence cannot sign off live-desktop acceptance"
+                    .to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn flatpak_lifecycle_headless_ci_session_alone_blocks_live_sign_off() {
+        let mut evidence = passing_flatpak_lifecycle_evidence(FlatpakAcceptanceDesktop::Gnome);
+        evidence.session = FlatpakAcceptanceSession::HeadlessCi;
+
+        assert_eq!(evidence.validate_transitions(), Ok(()));
+        assert_eq!(
+            evidence.validate_ready().unwrap_err(),
+            vec![
+                "headless Flatpak lifecycle evidence cannot sign off live-desktop acceptance"
+                    .to_owned()
+            ]
         );
     }
 
