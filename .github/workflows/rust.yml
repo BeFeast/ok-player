@@ -79,6 +79,9 @@ jobs:
       - name: Candidate packaging-mode boundary stays container+required
         run: ./scripts/tests/candidate-packaging-mode.Tests.sh
 
+      - name: Container ownership handoff stays runtime-agnostic
+        run: ./scripts/tests/container-fixup-ownership.Tests.sh
+
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
