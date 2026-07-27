@@ -2,17 +2,30 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+use futures_lite::StreamExt;
 use gtk::prelude::FileExt;
+
+/// How long the desktop portal may take to report the outcome of a reveal.
+///
+/// `OpenDirectory` answers asynchronously through the request's `Response` signal. Waiting is what
+/// makes the portal route honest: without it a rejection would be reported as success and the
+/// containing-folder fallback would never run. The wait is bounded so a portal that never answers
+/// still degrades to that fallback rather than leaving the click dead.
+const PORTAL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Serial for the portal `handle_token`, which must be unique per request.
+static PORTAL_REQUEST_SERIAL: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FileRevealOutcome {
     /// `org.freedesktop.FileManager1.ShowItems` selected the file itself.
     ExactFile,
-    /// The desktop portal opened the containing directory for the file.
+    /// The desktop portal opened the directory containing the file.
     PortalDirectory,
     /// The default handler opened the containing directory.
     ContainingFolder,
@@ -31,14 +44,14 @@ pub(crate) enum FileRevealPurpose {
     MediaLocation,
 }
 
-/// Identifies the toast generation a reveal request was started for.
+/// Identifies one reveal request.
 ///
-/// A reveal runs off the main context, so its result can arrive after a newer toast has already
-/// replaced the one the user acted on. Results carry the generation they were started under and
-/// are discarded when that generation is no longer displayed.
+/// A reveal runs off the main context, so its result can arrive after the user has started a newer
+/// reveal or after a newer toast has replaced the one they acted on. Results carry the request they
+/// belong to and are discarded unless that request is still the one being awaited.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FileRevealTicket {
-    generation: u64,
+    id: u64,
     purpose: FileRevealPurpose,
 }
 
@@ -74,28 +87,30 @@ pub(crate) fn file_uri(path: &Path) -> String {
     gtk::gio::File::for_path(path).uri().to_string()
 }
 
-fn session_proxy(
-    destination: &'static str,
-    object_path: &'static str,
-    interface: &'static str,
-) -> Result<zbus::blocking::Proxy<'static>, String> {
-    let connection = zbus::blocking::connection::Builder::session()
-        .map_err(|error| error.to_string())?
-        .method_timeout(Duration::from_secs(2))
-        .build()
-        .map_err(|error| error.to_string())?;
-    zbus::blocking::Proxy::new(&connection, destination, object_path, interface)
-        .map_err(|error| error.to_string())
+/// Object path the portal will answer on, derived from our unique name and `token`.
+///
+/// Deriving it lets the response be subscribed to before the method call, so an immediate answer
+/// cannot be missed.
+fn portal_request_path(unique_name: &str, token: &str) -> String {
+    let sender = unique_name.trim_start_matches(':').replace('.', "_");
+    format!("/org/freedesktop/portal/desktop/request/{sender}/{token}")
 }
 
 impl FileRevealLauncher for DesktopFileRevealLauncher {
     fn reveal_exact(&self, path: &Path) -> Result<(), String> {
         let uri = file_uri(path);
-        let proxy = session_proxy(
+        let connection = zbus::blocking::connection::Builder::session()
+            .map_err(|error| error.to_string())?
+            .method_timeout(Duration::from_secs(2))
+            .build()
+            .map_err(|error| error.to_string())?;
+        let proxy = zbus::blocking::Proxy::new(
+            &connection,
             "org.freedesktop.FileManager1",
             "/org/freedesktop/FileManager1",
             "org.freedesktop.FileManager1",
-        )?;
+        )
+        .map_err(|error| error.to_string())?;
         let _: () = proxy
             .call("ShowItems", &(vec![uri], ""))
             .map_err(|error| error.to_string())?;
@@ -107,19 +122,85 @@ impl FileRevealLauncher for DesktopFileRevealLauncher {
         // `xdg-desktop-portal` usually is. `OpenDirectory` takes the file itself and opens the
         // directory that contains it, highlighting the file where the backend supports it.
         let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
-        let proxy = session_proxy(
-            "org.freedesktop.portal.Desktop",
-            "/org/freedesktop/portal/desktop",
-            "org.freedesktop.portal.OpenURI",
-        )?;
-        let options: HashMap<&str, zbus::zvariant::Value<'_>> = HashMap::new();
-        let _: zbus::zvariant::OwnedObjectPath = proxy
-            .call(
-                "OpenDirectory",
-                &("", zbus::zvariant::Fd::from(file.as_fd()), options),
+        zbus::block_on(async move {
+            let connection = zbus::connection::Builder::session()
+                .map_err(|error| error.to_string())?
+                .build()
+                .await
+                .map_err(|error| error.to_string())?;
+            let unique_name = connection
+                .unique_name()
+                .ok_or_else(|| "the session bus assigned no unique name".to_owned())?
+                .to_string();
+            let token = format!(
+                "okplayer_{}_{}",
+                std::process::id(),
+                PORTAL_REQUEST_SERIAL.fetch_add(1, Ordering::Relaxed)
+            );
+
+            let request_path = portal_request_path(&unique_name, &token);
+            let request = zbus::Proxy::new(
+                &connection,
+                "org.freedesktop.portal.Desktop",
+                request_path.clone(),
+                "org.freedesktop.portal.Request",
             )
+            .await
             .map_err(|error| error.to_string())?;
-        Ok(())
+            let mut responses = request
+                .receive_signal("Response")
+                .await
+                .map_err(|error| error.to_string())?;
+
+            let open_uri = zbus::Proxy::new(
+                &connection,
+                "org.freedesktop.portal.Desktop",
+                "/org/freedesktop/portal/desktop",
+                "org.freedesktop.portal.OpenURI",
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            let mut options = HashMap::new();
+            options.insert("handle_token", zbus::zvariant::Value::from(token.as_str()));
+            let handle: zbus::zvariant::OwnedObjectPath = open_uri
+                .call(
+                    "OpenDirectory",
+                    &("", zbus::zvariant::Fd::from(file.as_fd()), options),
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+            if handle.as_str() != request_path {
+                // A portal that ignored `handle_token` will answer somewhere we are not
+                // listening. Give up now instead of stalling until the timeout.
+                return Err(format!(
+                    "the portal answers on {handle} instead of the requested handle"
+                ));
+            }
+
+            let response = futures_lite::future::or(
+                async {
+                    responses
+                        .next()
+                        .await
+                        .ok_or_else(|| "the portal closed the reveal request".to_owned())
+                },
+                async {
+                    async_io::Timer::after(PORTAL_RESPONSE_TIMEOUT).await;
+                    Err("the portal did not answer the reveal request".to_owned())
+                },
+            )
+            .await?;
+
+            let (code, _details): (u32, HashMap<String, zbus::zvariant::OwnedValue>) = response
+                .body()
+                .deserialize()
+                .map_err(|error| error.to_string())?;
+            if code == 0 {
+                Ok(())
+            } else {
+                Err(format!("the portal refused the reveal request: {code}"))
+            }
+        })
     }
 
     fn open_folder(&self, path: &Path) -> Result<(), String> {
@@ -160,7 +241,8 @@ pub(crate) fn reveal_file_with(
 pub(crate) struct FileRevealJobs {
     sender: mpsc::Sender<FileRevealJobResult>,
     receiver: mpsc::Receiver<FileRevealJobResult>,
-    generation: Cell<u64>,
+    next_id: Cell<u64>,
+    awaited: Cell<Option<u64>>,
 }
 
 impl Default for FileRevealJobs {
@@ -169,7 +251,8 @@ impl Default for FileRevealJobs {
         Self {
             sender,
             receiver,
-            generation: Cell::new(0),
+            next_id: Cell::new(0),
+            awaited: Cell::new(None),
         }
     }
 }
@@ -181,8 +264,10 @@ impl FileRevealJobs {
 
     /// Starts a reveal on a worker thread and returns its join handle.
     ///
-    /// The handle lets tests order a slow reveal against a newer toast deterministically; the
-    /// player itself drops it and collects results through [`FileRevealJobs::drain`].
+    /// Starting a reveal also makes it the only one whose result will be delivered: whichever
+    /// action the user took last owns the feedback, and anything still in flight from before is
+    /// dropped. The handle lets tests order a slow reveal against a newer one deterministically;
+    /// the player drops it and collects results through [`FileRevealJobs::drain`].
     pub(crate) fn request_with<L>(
         &self,
         path: PathBuf,
@@ -192,10 +277,10 @@ impl FileRevealJobs {
     where
         L: FileRevealLauncher + Send + 'static,
     {
-        let ticket = FileRevealTicket {
-            generation: self.generation.get(),
-            purpose,
-        };
+        let id = self.next_id.get();
+        self.next_id.set(id.wrapping_add(1));
+        self.awaited.set(Some(id));
+        let ticket = FileRevealTicket { id, purpose };
         let sender = self.sender.clone();
         thread::spawn(move || {
             let result = reveal_file_with(&path, &launcher);
@@ -203,20 +288,22 @@ impl FileRevealJobs {
         })
     }
 
-    /// Marks every in-flight reveal as belonging to a superseded toast.
-    ///
-    /// Called whenever a new toast replaces the visible one, so a late completion can no longer
-    /// hide a newer saved-screenshot action.
+    /// Drops every in-flight reveal, because the toast that would show its feedback is gone.
     pub(crate) fn invalidate(&self) {
-        self.generation.set(self.generation.get().wrapping_add(1));
+        self.awaited.set(None);
     }
 
     pub(crate) fn drain(&self) -> Vec<FileRevealJobResult> {
-        let current = self.generation.get();
-        self.receiver
+        let awaited = self.awaited.get();
+        let delivered: Vec<FileRevealJobResult> = self
+            .receiver
             .try_iter()
-            .filter(|job| job.ticket.generation == current)
-            .collect()
+            .filter(|job| Some(job.ticket.id) == awaited)
+            .collect();
+        if !delivered.is_empty() {
+            self.awaited.set(None);
+        }
+        delivered
     }
 }
 
@@ -312,6 +399,16 @@ mod tests {
         (directory, path)
     }
 
+    fn gated() -> (mpsc::Sender<()>, GatedLauncher) {
+        let (release, gate) = mpsc::channel();
+        (
+            release,
+            GatedLauncher {
+                gate: Mutex::new(gate),
+            },
+        )
+    }
+
     #[test]
     fn exact_reveal_stops_before_the_portal_and_folder_fallbacks() {
         let (_directory, path) = existing_file("frame.png");
@@ -349,11 +446,11 @@ mod tests {
     }
 
     #[test]
-    fn losing_both_reveal_routes_opens_the_containing_folder() {
+    fn a_refused_portal_request_still_opens_the_containing_folder() {
         let (_directory, path) = existing_file("frame.png");
         let launcher = FakeLauncher {
             exact_result: Err("not activatable".to_owned()),
-            portal_result: Err("no portal".to_owned()),
+            portal_result: Err("the portal refused the reveal request: 2".to_owned()),
             ..FakeLauncher::default()
         };
 
@@ -372,6 +469,14 @@ mod tests {
         assert_eq!(
             launcher.folder_paths.borrow().as_slice(),
             [path.parent().expect("test parent").to_owned()]
+        );
+    }
+
+    #[test]
+    fn the_portal_answers_on_a_request_path_derived_from_our_unique_name() {
+        assert_eq!(
+            portal_request_path(":1.271", "okplayer_4213_0"),
+            "/org/freedesktop/portal/desktop/request/1_271/okplayer_4213_0"
         );
     }
 
@@ -484,30 +589,16 @@ mod tests {
     #[test]
     fn a_stale_reveal_completion_cannot_replace_a_newer_toast() {
         let jobs = FileRevealJobs::default();
-        let (_first_directory, first) = existing_file("frame-a.png");
-        let (_second_directory, second) = existing_file("frame-b.png");
-        let (release, gate) = mpsc::channel();
+        let (_directory, path) = existing_file("frame-a.png");
+        let (release, launcher) = gated();
 
-        // The user reveals screenshot A; the launcher has not returned yet.
-        let pending = jobs.request_with(
-            first,
-            FileRevealPurpose::Screenshot,
-            GatedLauncher {
-                gate: Mutex::new(gate),
-            },
-        );
+        // The user reveals a screenshot; the launcher has not returned yet.
+        let pending = jobs.request_with(path, FileRevealPurpose::Screenshot, launcher);
 
-        // Screenshot B is saved and takes over the toast, then the user reveals it too.
+        // A newer screenshot is saved and takes over the toast.
         jobs.invalidate();
-        jobs.request_with(second, FileRevealPurpose::MediaLocation, ImmediateLauncher)
-            .join()
-            .expect("newer reveal worker");
 
-        let current = jobs.drain();
-        assert_eq!(current.len(), 1);
-        assert_eq!(current[0].purpose(), FileRevealPurpose::MediaLocation);
-
-        // A's reveal finishes only now, after B owns the toast.
+        // The reveal finishes only now, after the toast it belonged to is gone.
         release.send(()).expect("release the pending reveal");
         pending.join().expect("stale reveal worker");
 
@@ -515,5 +606,32 @@ mod tests {
             jobs.drain().is_empty(),
             "a reveal started for a replaced toast must not produce feedback"
         );
+    }
+
+    #[test]
+    fn a_newer_reveal_request_owns_the_feedback() {
+        let jobs = FileRevealJobs::default();
+        let (_first_directory, first) = existing_file("frame-a.png");
+        let (_second_directory, second) = existing_file("frame-b.png");
+        let (release, launcher) = gated();
+
+        // The saved-path button starts a reveal that has not returned yet.
+        let pending = jobs.request_with(first, FileRevealPurpose::Screenshot, launcher);
+
+        // The user then invokes the media-location command, without any toast change in between.
+        jobs.request_with(second, FileRevealPurpose::MediaLocation, ImmediateLauncher)
+            .join()
+            .expect("newer reveal worker");
+
+        release.send(()).expect("release the pending reveal");
+        pending.join().expect("stale reveal worker");
+
+        let delivered = jobs.drain();
+        assert_eq!(
+            delivered.len(),
+            1,
+            "only the reveal the user started last may report back"
+        );
+        assert_eq!(delivered[0].purpose(), FileRevealPurpose::MediaLocation);
     }
 }

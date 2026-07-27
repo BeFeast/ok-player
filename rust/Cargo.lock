@@ -1258,7 +1258,9 @@ dependencies = [
 name = "okp-linux-gtk"
 version = "0.1.0"
 dependencies = [
+ "async-io",
  "cc",
+ "futures-lite",
  "gtk4",
  "libc",
  "okp-core",
