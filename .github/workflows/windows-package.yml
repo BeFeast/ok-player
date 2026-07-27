@@ -146,6 +146,40 @@ jobs:
           }
           Write-Host $output.Split([Environment]::NewLine)[0]
 
+      # The redirected stdout/stderr below are structurally always empty: this is
+      # a WinUI GUI app (WindowsPackageType=None, WindowsAppSDKSelfContained in
+      # Release) and it writes to neither stream. So the streams cannot name the
+      # exception behind the intermittent 0xC000027B on exit (#642), and every
+      # failing run so far has dumped two empty files.
+      #
+      # There are exactly two things that can name it. The app's own per-launch
+      # log (src/OkPlayer.App/Services/Log.cs) already records lifecycle
+      # breadcrumbs, mpv's warnings, and every unhandled exception from all three
+      # managed surfaces - collected after the launch step below. And a WER crash
+      # dump, which is the only source that survives a fault the managed handlers
+      # never see, such as a stowed exception raised by the XAML framework itself.
+      # LocalDumps has to be armed before the process starts, hence this step's
+      # position. Runner-local registry state; nothing here gates the lane.
+      - name: Arm crash-dump collection for the installed app
+        # Diagnostics must never decide this lane's verdict. Writing under HKLM
+        # needs the runner's administrator context; if a future runner image
+        # withdraws it, the launch gate below still has to run and report - a red
+        # job with no launch result would hide the defect instead of exposing it.
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dumps = Join-Path $env:RUNNER_TEMP 'okplayer-dumps'
+          New-Item -ItemType Directory -Force -Path $dumps | Out-Null
+          $key = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\OkPlayer.exe'
+          New-Item -Path $key -Force | Out-Null
+          # DumpType 2 = full dump: a mini dump drops the heap, and the stowed
+          # exception record lives in heap memory reached from the error context.
+          New-ItemProperty -Path $key -Name 'DumpFolder' -Value $dumps -PropertyType ExpandString -Force | Out-Null
+          New-ItemProperty -Path $key -Name 'DumpType' -Value 2 -PropertyType DWord -Force | Out-Null
+          New-ItemProperty -Path $key -Name 'DumpCount' -Value 5 -PropertyType DWord -Force | Out-Null
+          Write-Host "WER local dumps for OkPlayer.exe -> $dumps"
+
       # The point of this lane: start the executable the installer actually put
       # on the machine and require a real top-level window that is the player's
       # own window, then require it to shut down on request. No leg here may pass
@@ -218,15 +252,49 @@ jobs:
           }
           Write-Host "Exit code after close: $($proc.ExitCode)"
           if ($proc.ExitCode -ne 0) {
-            # This is the one failure path that used to throw without showing
-            # anything the app had said, which made an intermittent shutdown
-            # crash undiagnosable from the run log alone. A -1073741189
-            # (0xC000027B, STATUS_STOWED_EXCEPTION) here is the known open
-            # shutdown defect tracked in #642; this step deliberately still
-            # fails on it rather than tolerating it.
+            # A -1073741189 (0xC000027B, STATUS_STOWED_EXCEPTION) here is the
+            # known open shutdown defect tracked in #642; this step deliberately
+            # still fails on it rather than tolerating it. The two streams below
+            # are printed for completeness only - a WinUI app writes to neither,
+            # and what actually names the exception is the diagnostics step that
+            # follows, which runs on this failure path too.
             if (Test-Path $stdout) { Get-Content $stdout | Write-Host }
             if (Test-Path $stderr) { Get-Content $stderr | Write-Host }
             throw "The installed application exited with $($proc.ExitCode)"
+          }
+
+      # Runs on the failure path as well - that is the point. The app's own log
+      # is written per line and flushed, so it survives both a crash and a hard
+      # hang, and it is printed into the run log rather than only uploaded: an
+      # intermittent defect is diagnosed by comparing a failing run against a
+      # passing one, and neither is worth a manual artifact download. On a clean
+      # run this is the baseline; on a 0xC000027B run the final STEP breadcrumb
+      # separates a managed exception (logged with its stack) from a fault inside
+      # XAML shutdown from one after "Application.Start returned", and any dump
+      # listed here carries the stowed-exception record for the last case.
+      - name: Collect the installed app's own diagnostics
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $collected = Join-Path $env:RUNNER_TEMP 'okplayer-applogs'
+          New-Item -ItemType Directory -Force -Path $collected | Out-Null
+          $logDir = Join-Path $env:LOCALAPPDATA 'OkPlayer\logs'
+          $logs = @(Get-ChildItem -Path (Join-Path $logDir 'okplayer-*.log') -ErrorAction SilentlyContinue)
+          if ($logs.Count -eq 0) {
+            Write-Host "No application log under $logDir - the app never reached Log.Init."
+          } else {
+            foreach ($log in $logs) {
+              Copy-Item -Path $log.FullName -Destination $collected -Force
+              Write-Host "---- $($log.Name) ($($log.Length) bytes) ----"
+              Get-Content -Path $log.FullName | Write-Host
+            }
+          }
+          $dumps = @(Get-ChildItem -Path (Join-Path $env:RUNNER_TEMP 'okplayer-dumps\*.dmp') -ErrorAction SilentlyContinue)
+          if ($dumps.Count -eq 0) {
+            Write-Host 'No WER crash dump was written (the process did not fault, or WER declined).'
+          } else {
+            foreach ($dump in $dumps) { Write-Host "crash dump: $($dump.Name) ($($dump.Length) bytes)" }
           }
 
       - uses: actions/upload-artifact@v4
@@ -236,4 +304,6 @@ jobs:
           path: |
             artifacts/releases/**
             ${{ runner.temp }}/okplayer-*.log
+            ${{ runner.temp }}/okplayer-applogs/**
+            ${{ runner.temp }}/okplayer-dumps/**
           if-no-files-found: warn
