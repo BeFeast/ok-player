@@ -113,3 +113,19 @@ try {
   Remove-Item -Recurse -Force $sandbox -ErrorAction SilentlyContinue
 }
 Write-Host 'ok: build step binds Version by name and DownloadPrior only on publishing runs'
+
+# Execute the publish step's feed-run discovery filter construction against
+# real jq: inline quote-escaping once garbled this argument silently and the
+# first publishing run failed AFTER a successful upload (run 30272655758).
+$publishBody = Get-Step -Yaml $releaseLane -Name 'Publish the versioned release (tag v<version>, channel win)'
+$filterLine = [regex]::Match($publishBody, '\$feedRunFilter = (.+)')
+if (-not $filterLine.Success) { throw 'Publish step no longer builds $feedRunFilter' }
+$dispatchedAfter = '2026-07-27T14:00:00.0000000Z'
+$feedRunFilter = Invoke-Expression $filterLine.Groups[1].Value
+$fixture = '[{"databaseId":11,"createdAt":"2026-07-27T13:59:59Z"},{"databaseId":22,"createdAt":"2026-07-27T14:01:00Z"}]'
+$selected = ($fixture | jq $feedRunFilter) 2>&1
+if ($LASTEXITCODE -ne 0) { throw "jq rejected the constructed discovery filter: $selected" }
+if ("$selected" -ne '22') { throw "discovery filter selected '$selected' from the fixture, want the post-dispatch run 22" }
+$none = ('[{"databaseId":11,"createdAt":"2026-07-27T13:59:59Z"}]' | jq $feedRunFilter)
+if ("$none" -ne 'null') { throw "discovery filter matched a pre-dispatch run: $none" }
+Write-Host 'ok: feed-run discovery filter parses and selects only runs created after the dispatch'
