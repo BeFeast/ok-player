@@ -48,6 +48,21 @@ case "$CONTAINER_MODE" in
   *) echo "Unknown portability container mode: $CONTAINER_MODE" >&2; exit 2 ;;
 esac
 
+# Resolve the container runtime up front: in `required` mode an unusable
+# runtime must fail before any artifact analysis, not after minutes of
+# closure work whose verdict cannot count anyway (#662 escaped through
+# exactly this degradation running to a green end).
+CONTAINER_RUNTIME=""
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  CONTAINER_RUNTIME=docker
+elif command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
+  CONTAINER_RUNTIME=podman
+fi
+if [[ "$CONTAINER_MODE" == required && -z "$CONTAINER_RUNTIME" ]]; then
+  echo "Strict portability verification requires a usable docker or podman runtime" >&2
+  exit 127
+fi
+
 DEB="$(readlink -f -- "$DEB")"
 APPIMAGE="$(readlink -f -- "$APPIMAGE")"
 ARTIFACT_DIR="$(dirname -- "$DEB")"
@@ -192,18 +207,6 @@ check_elf_tree "$DEB_ROOT/usr/lib/ok-player" "$DEB_ROOT/usr/lib/ok-player" debia
 check_elf_tree "$APP_ROOT/usr/bin" "$APP_ROOT/usr/bin" appimage
 check_build_marker "$APP_ROOT/usr/bin/ok-player" appimage
 check_build_marker "$DEB_ROOT/usr/lib/ok-player/ok-player" debian
-
-CONTAINER_RUNTIME=""
-if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-  CONTAINER_RUNTIME=docker
-elif command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
-  CONTAINER_RUNTIME=podman
-fi
-
-if [[ "$CONTAINER_MODE" == required && -z "$CONTAINER_RUNTIME" ]]; then
-  echo "Strict portability verification requires a usable docker or podman runtime" >&2
-  exit 127
-fi
 
 # In `auto` mode without a container runtime this script still exits 0, but the
 # legs that install the .deb and start the packaged binary do not run. That

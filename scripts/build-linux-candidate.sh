@@ -183,11 +183,15 @@ run_gate workspace-tests \
   cargo test --manifest-path "$CHECKOUT/rust/Cargo.toml" --workspace
 
 # Packaging lanes produce the installable artifacts under $CHECKOUT/artifacts/linux.
+# They run in the pinned Debian-13 builder container (same as the release lane):
+# the bundled dependency closure must honour the oldest-supported glibc floor,
+# and a native build on this runner leaks the host glibc into the bundle
+# (#662 - candidate .deb dead on Debian 13 with `GLIBC_2.43' not found).
 run_gate deb-package \
-  env OKP_PORTABLE_PACKAGE_MODE=native \
+  env OKP_PORTABLE_PACKAGE_MODE=container \
   "$CHECKOUT/scripts/build-linux-portable-package.sh" deb "$VERSION"
 run_gate appimage-package \
-  env OKP_LINUX_CHANNEL=linux-candidate OKP_PORTABLE_PACKAGE_MODE=native \
+  env OKP_LINUX_CHANNEL=linux-candidate OKP_PORTABLE_PACKAGE_MODE=container \
   "$CHECKOUT/scripts/build-linux-portable-package.sh" appimage "$VERSION"
 
 DEB="$CHECKOUT/artifacts/linux/deb/ok-player_${VERSION}_amd64.deb"
@@ -195,7 +199,10 @@ APPIMAGE="$CHECKOUT/artifacts/linux/velopack/OK-Player-${VERSION}-x86_64.AppImag
 
 # The native equivalence gate rejects undeclared host-library resolution. When
 # a container runtime is present it also runs the foreign-distro launch gate.
+# required: a missing container runtime must fail the lane, not degrade it to
+# native-equivalence - that degradation is how #662 reached the public feed.
 run_gate portability-package-smoke \
+  env OKP_PORTABILITY_CONTAINER_MODE=required \
   "$CHECKOUT/scripts/verify-linux-package-portability.sh" \
   "$DEB" "$APPIMAGE" "$CHECKOUT/artifacts/linux/portability-report.json" "$BUILD_SHA"
 
@@ -262,12 +269,17 @@ run_gate deb-idle-return-smoke deb_idle_return_smoke
 # Headless launch smoke: prove the idle surface once, then require the complete
 # fit-only lifecycle three consecutive times with no retry inside the gate.
 headless_launch_smoke() {
+  # Container packaging builds into rust/target/portable, so the host-path
+  # release binary does not exist on a clean checkout; the resolver prefers
+  # the portable (shipped-floor) build and fails loudly when nothing is built.
+  local gtk_binary
+  gtk_binary="$("$CHECKOUT/scripts/candidate-gtk-binary.sh" "$CHECKOUT")"
   OKP_MAIN_WINDOW_IDLE_ONLY=1 \
     "$CHECKOUT/scripts/smoke-linux-main-window.sh" \
-    "$CHECKOUT/rust/target/release/okp-linux-gtk" "$OUT_DIR/headless-launch/idle"
+    "$gtk_binary" "$OUT_DIR/headless-launch/idle"
   OKP_WINDOW_FIT_SOURCE_SHA="$BUILD_SHA" \
     "$CHECKOUT/scripts/run-linux-window-fit-series.sh" \
-    "$CHECKOUT/rust/target/release/okp-linux-gtk" "$OUT_DIR/headless-launch/fit-series"
+    "$gtk_binary" "$OUT_DIR/headless-launch/fit-series"
 }
 run_gate headless-launch-smoke headless_launch_smoke
 
