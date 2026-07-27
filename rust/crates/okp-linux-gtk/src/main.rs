@@ -197,6 +197,10 @@ const PROTECTED_MPV_OPTIONS: &[&str] = &[
     "wayland-embed-size",
     "wayland-embed-scale",
     "wayland-embed-presentation-log",
+    // Re-enabling this would let mpv start a toplevel move it cannot own while
+    // the video plane is embedded, dereferencing a NULL xdg_toplevel and killing
+    // the process (#627). The host shell owns window dragging.
+    "window-dragging",
 ];
 const LINUX_GAPLESS_CAPABILITY: GaplessPlaybackCapability =
     GaplessPlaybackCapability::for_transition_path(
