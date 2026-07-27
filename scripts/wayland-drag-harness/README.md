@@ -84,7 +84,7 @@ playing video, release-on-second-monitor variants included):
   the rounds this bullet once claimed were never received (see the QA record).
 
 CORRECTION (2026-07-27 evening): #662 was fixed the same day and the packaged
-`native-wayland-dmabuf` configuration WAS exercised — 20 fresh-session granted
+`native-wayland-dmabuf` configuration WAS exercised — 40 fresh-session granted
 drags on the installed candidate `.193` (delivery verified per round via the
 journal) survive under bare mutter with the operator scale layout and playing
 video. The dmabuf plane is eliminated as sufficient cause. The remaining
