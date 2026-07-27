@@ -441,6 +441,13 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         glib::timeout_add_local_once(Duration::from_millis(1500), move || {
             preview_toast.show_saved_screenshot(&PathBuf::from(path));
         });
+    } else if let Some(message) = env::var_os("OKP_STATUS_TOAST_MESSAGE_PREVIEW") {
+        let preview_toast = Rc::clone(&status_toast);
+        // Same delay rationale as the saved-screenshot preview above: this renders an ordinary
+        // toast message so a long one can be reviewed for width bounding without playback.
+        glib::timeout_add_local_once(Duration::from_millis(1500), move || {
+            preview_toast.show(&message.to_string_lossy());
+        });
     } else if env::var_os("OKP_OSD_PREVIEW_ON_STARTUP").is_some() {
         let preview_toast = Rc::clone(&status_toast);
         glib::timeout_add_local_once(Duration::from_millis(500), move || {

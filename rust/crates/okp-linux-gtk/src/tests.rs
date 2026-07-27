@@ -6460,3 +6460,123 @@ fn settings_first_map_builds_only_the_requested_page() {
     assert!(builder.contains("stack.child_by_name(page.id()).is_some()"));
     assert!(builder.contains("Some(page.id())"));
 }
+
+// --- Toast behaviour that needs a real display -------------------------------------------------
+//
+// GTK cannot initialize without a display server, so these are `#[ignore]`d in the plain
+// workspace run and driven by `scripts/smoke-linux-toast-behaviour.sh` under Xvfb. GTK may only
+// ever be initialized from one thread per process, while the test harness gives every test its
+// own thread, so all GTK work is funnelled onto one dedicated thread.
+
+static GTK_TEST_THREAD: OnceLock<mpsc::Sender<Box<dyn FnOnce() + Send>>> = OnceLock::new();
+
+fn on_gtk_thread<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
+    let jobs = GTK_TEST_THREAD.get_or_init(|| {
+        let (sender, receiver) = mpsc::channel::<Box<dyn FnOnce() + Send>>();
+        thread::spawn(move || {
+            gtk::init().expect("GTK failed to initialize on the test display");
+            for job in receiver {
+                job();
+            }
+        });
+        sender
+    });
+    let (done, result) = mpsc::channel();
+    jobs.send(Box::new(move || {
+        let _ = done.send(std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)));
+    }))
+    .expect("the GTK test thread accepts work");
+    match result.recv().expect(
+        "the GTK test thread died; these tests need a display server \
+         (run scripts/smoke-linux-toast-behaviour.sh)",
+    ) {
+        Ok(value) => value,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+#[test]
+#[ignore = "needs a display server; run via scripts/smoke-linux-toast-behaviour.sh"]
+fn a_long_saved_path_cannot_widen_the_toast_labels() {
+    on_gtk_thread(|| {
+        let toast = StatusToast::new();
+        let long_component = "long-scene-name-".repeat(24);
+        let path = PathBuf::from("/screens").join(format!("{long_component}.png"));
+
+        toast.show_saved_screenshot(&path);
+
+        let (_, bounded_width, _, _) = toast.path_label.measure(gtk::Orientation::Horizontal, -1);
+        let unbounded = gtk::Label::new(Some(&toast_display_path(&path)));
+        let (_, full_width, _, _) = unbounded.measure(gtk::Orientation::Horizontal, -1);
+        assert!(
+            bounded_width < full_width / 2,
+            "the path label must ellipsize instead of growing with the path: \
+             bounded {bounded_width}px, unbounded {full_width}px"
+        );
+
+        // The message label carries a Pango bound matching the Rust text cap, so a message that
+        // somehow bypassed `bounded_toast_message` still could not stretch the toast over the
+        // video.
+        assert_eq!(toast.label.ellipsize(), pango::EllipsizeMode::Middle);
+        assert_eq!(
+            toast.label.max_width_chars(),
+            i32::try_from(TOAST_MESSAGE_MAX_CHARS).expect("toast budget fits an i32")
+        );
+    });
+}
+
+/// A reveal launcher that succeeds only once the test releases it, so a toast change can be
+/// ordered between the start of a reveal and its completion.
+struct GatedRevealLauncher {
+    gate: Mutex<mpsc::Receiver<()>>,
+}
+
+impl FileRevealLauncher for GatedRevealLauncher {
+    fn reveal_exact(&self, _path: &Path) -> Result<(), String> {
+        let _ = self.gate.lock().expect("reveal gate").recv();
+        Ok(())
+    }
+
+    fn reveal_via_portal(&self, _path: &Path) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn open_folder(&self, _path: &Path) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[test]
+#[ignore = "needs a display server; run via scripts/smoke-linux-toast-behaviour.sh"]
+fn a_notice_shown_while_a_reveal_is_pending_keeps_its_text() {
+    on_gtk_thread(|| {
+        let toast = StatusToast::new();
+        let root = unique_temp_dir("okp-toast-notice");
+        let path = root.path().join("frame.png");
+        fs::write(&path, b"frame").expect("test screenshot");
+
+        // The user asks for a reveal; the launcher has not returned yet.
+        let (release, gate) = mpsc::channel();
+        let pending = toast.reveal_jobs.request_with(
+            path,
+            FileRevealPurpose::Screenshot,
+            GatedRevealLauncher {
+                gate: Mutex::new(gate),
+            },
+        );
+
+        // A diagnostic the user has to read takes over the toast.
+        toast.show_notice("Hardware decoding is unavailable");
+
+        // The reveal finishes only now; its feedback belongs to a toast that is gone.
+        release.send(()).expect("release the pending reveal");
+        pending.join().expect("pending reveal worker");
+        toast.drain_file_reveal_jobs();
+
+        assert_eq!(
+            toast.label.text(),
+            "Hardware decoding is unavailable",
+            "a reveal completion must not replace a notice the user is reading"
+        );
+    });
+}

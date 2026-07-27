@@ -76,7 +76,8 @@ jobs:
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev libmpv-dev libgl1-mesa-dev libegl1-mesa-dev libglx-dev mpv ffmpeg cmake ninja-build appstream appstream-compose squashfs-tools unzip
+          # dbus backs the mock-portal file-reveal tests; xvfb backs the display-backed toast smokes.
+          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev libmpv-dev libgl1-mesa-dev libegl1-mesa-dev libglx-dev mpv ffmpeg cmake ninja-build appstream appstream-compose squashfs-tools unzip dbus xvfb
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -110,3 +111,6 @@ jobs:
 
       - name: Native file dialog result smoke
         run: ./scripts/smoke-linux-file-dialog.sh
+
+      - name: Toast behaviour under a virtual display
+        run: ./scripts/smoke-linux-toast-behaviour.sh

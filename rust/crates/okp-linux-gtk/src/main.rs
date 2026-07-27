@@ -87,6 +87,7 @@ mod settings_pages;
 mod settings_switch;
 mod settings_window;
 mod thumbnails;
+mod toast_text;
 mod track_popovers;
 mod updates;
 mod window;
@@ -114,6 +115,7 @@ pub(crate) use presentation::*;
 pub(crate) use settings_pages::*;
 pub(crate) use settings_switch::*;
 pub(crate) use settings_window::*;
+pub(crate) use toast_text::*;
 pub(crate) use track_popovers::*;
 pub(crate) use updates::*;
 pub(crate) use window::*;
@@ -1572,6 +1574,8 @@ impl StatusToast {
         thumbnail.set_visible(false);
 
         let label = gtk::Label::new(None);
+        label.set_ellipsize(pango::EllipsizeMode::Middle);
+        label.set_max_width_chars(TOAST_MESSAGE_MAX_CHARS as i32);
         label.set_xalign(0.0);
 
         let path_label = gtk::Label::new(None);
@@ -1655,11 +1659,7 @@ impl StatusToast {
     fn show_notice(&self, message: &str) {
         self.thumbnail.set_visible(false);
         self.thumbnail.set_paintable(None::<&gdk::Paintable>);
-        self.reveal_path.borrow_mut().take();
-        self.path_button.set_visible(false);
-        self.path_button.set_sensitive(true);
-        self.label.set_text(message);
-        self.reveal_for(false, NOTICE_TOAST_DWELL);
+        self.show_message_for(message, NOTICE_TOAST_DWELL);
     }
 
     fn show_screenshot(&self, message: &str, path: &Path) {
@@ -1669,7 +1669,10 @@ impl StatusToast {
 
     fn show_saved_screenshot(&self, path: &Path) {
         self.set_screenshot_thumbnail(path);
-        let display_path = path.to_string_lossy();
+        // A newer toast owns the surface from here: reveals started for the previous one must
+        // no longer be able to replace it once they finish.
+        self.reveal_jobs.invalidate();
+        let display_path = toast_display_path(path);
         self.label.set_text("Saved to");
         self.path_label.set_text(&display_path);
         self.path_button.set_tooltip_text(Some(&display_path));
@@ -1694,11 +1697,20 @@ impl StatusToast {
     }
 
     fn show_message(&self, message: &str) {
+        self.show_message_for(message, TOAST_DWELL);
+    }
+
+    /// The single place plain toast text replaces whatever the toast was showing.
+    ///
+    /// Every replacement orphans the reveals the previous toast owned, so the invalidation lives
+    /// here rather than at each caller.
+    fn show_message_for(&self, message: &str, dwell: Duration) {
+        self.reveal_jobs.invalidate();
         self.reveal_path.borrow_mut().take();
         self.path_button.set_visible(false);
         self.path_button.set_sensitive(true);
-        self.label.set_text(message);
-        self.reveal(false);
+        self.label.set_text(&bounded_toast_message(message));
+        self.reveal_for(false, dwell);
     }
 
     fn reveal(&self, interactive: bool) {
@@ -1745,11 +1757,15 @@ impl StatusToast {
         for job in self.reveal_jobs.drain() {
             self.path_button.set_sensitive(true);
             match job.result {
-                Ok(FileRevealOutcome::ExactFile | FileRevealOutcome::ContainingFolder) => {
+                Ok(
+                    FileRevealOutcome::ExactFile
+                    | FileRevealOutcome::PortalDirectory
+                    | FileRevealOutcome::ContainingFolder,
+                ) => {
                     self.show("Opened file location");
                 }
                 Err(FileRevealError::MissingFile) => {
-                    self.show(match job.purpose {
+                    self.show(match job.purpose() {
                         FileRevealPurpose::Screenshot => "Screenshot no longer exists",
                         FileRevealPurpose::MediaLocation => "File no longer exists",
                     });
