@@ -180,6 +180,9 @@ mkdir -p "$OUT_DIR/repo-baseline" "$OUT_DIR/repo"
 run_lane() {
   local control="$1" log="$2" head="${3:-$SOURCE_COMMIT}" status=0
   rm -f "$STATE/deployed" "$STATE/remotes"
+  # Every OKP_FLATPAK_* input is set explicitly. The workflow exports some of
+  # them job-wide for the real lane, and inheriting those here would point this
+  # test at the real artifact directory instead of its own fixture.
   env \
     PATH="$STUB_BIN:$PATH" \
     HOME="$WORK" \
@@ -189,8 +192,10 @@ run_lane() {
     OKP_STUB_UPDATE_COMMIT="$UPDATE_COMMIT" \
     OKP_ACCEPTANCE_SOURCE_COMMIT="$head" \
     OKP_FLATPAK_OUT_DIR="$OUT_DIR" \
+    OKP_FLATPAK_ARTIFACT_MANIFEST="$OUT_DIR/flatpak-beta-artifact.json" \
     OKP_FLATPAK_LIFECYCLE_EVIDENCE="$OUT_DIR/evidence.json" \
     OKP_FLATPAK_LIFECYCLE_LOG_DIR="$OUT_DIR/logs" \
+    OKP_FLATPAK_LAUNCH_TIMEOUT_SECONDS=30 \
     OKP_FLATPAK_LIFECYCLE_NEGATIVE_CONTROL="$control" \
     "$LANE" >"$log" 2>&1 || status=$?
   printf '%s\n' "$status"
