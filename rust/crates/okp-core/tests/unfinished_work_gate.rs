@@ -593,6 +593,87 @@ fn every_shell_module_configures_the_renderer() {
 }
 "#;
 
+/// Source texts written straight into the loop's array literal, never bound to
+/// a name at all. This is the shape the real workspace uses.
+const INLINE_LOOP_SOURCE_TEST: &str = r#"
+#[test]
+fn portability_smokes_wait_for_the_window_manager() {
+    for script in [
+        include_str!("../../../scripts/smoke-narrow-width.sh"),
+        include_str!("../../../scripts/smoke-compact-mode.sh"),
+    ] {
+        assert!(script.contains("run-isolated-dbus-session.sh"));
+        assert!(script.contains("wait-for-window.sh"));
+    }
+}
+"#;
+
+/// A source grep beside a text search on a constant the detector does not track
+/// as source text. Searching a string is not running the code under test, so it
+/// must not clear the `include_str!` greps sitting next to it.
+const CONST_TEXT_SEARCH_TEST: &str = r#"
+#[test]
+fn playback_chrome_keeps_the_canonical_redlines() {
+    assert!(OKP_STYLESHEET.contains("min-height: 42px;"));
+    assert!(!OKP_STYLESHEET.contains("okp-control-separator"));
+
+    let osc_bar = include_str!("osc_bar.rs");
+    assert!(osc_bar.contains("pub(crate) const PAD_HORIZONTAL: i32 = 14;"));
+}
+"#;
+
+/// The same shape, but the non-grep assertion actually calls production code.
+/// This is the false positive the text-search rule must not create.
+const PRODUCTION_CALL_BESIDE_A_GREP_TEST: &str = r#"
+#[test]
+fn media_info_command_uses_the_companion_window_entry_point() {
+    let source = include_str!("track_popovers.rs");
+
+    assert_eq!(subtitle_style_label("Contrast"), "High contrast");
+    assert!(source.contains("dispatch_player_command_action("));
+}
+"#;
+
+/// The same three binding shapes, each beside a genuine behavioural assertion.
+/// None of these is an offender, so whether the binding tracker sees the source
+/// text shows up only in the ledger: a grep it cannot see is a grep that stopped
+/// existing, and the allowlist entry is then reported as stale.
+const TUPLE_BINDING_WITH_BEHAVIOUR: &str = r#"
+#[test]
+fn close_request_defers_engine_teardown() {
+    let (source, _unused) = (include_str!("keyboard.rs"), 1);
+
+    assert_eq!(close_reason_for("quit"), Reason::Quit);
+    assert!(source.contains("glib::idle_add_local_once"));
+}
+"#;
+
+const LOOP_BINDING_WITH_BEHAVIOUR: &str = r#"
+#[test]
+fn every_shell_module_configures_the_renderer() {
+    let modules = vec![include_str!("main.rs"), include_str!("window.rs")];
+
+    assert_eq!(renderer_for("gl"), Renderer::Gl);
+    for source in modules {
+        assert!(source.contains("configure_linux_renderer_environment();"));
+    }
+}
+"#;
+
+const INLINE_LOOP_WITH_BEHAVIOUR: &str = r#"
+#[test]
+fn portability_smokes_wait_for_the_window_manager() {
+    assert_eq!(session_kind("xvfb"), SessionKind::Isolated);
+
+    for script in [
+        include_str!("../../../scripts/smoke-narrow-width.sh"),
+        include_str!("../../../scripts/smoke-compact-mode.sh"),
+    ] {
+        assert!(script.contains("run-isolated-dbus-session.sh"));
+    }
+}
+"#;
+
 /// A test whose only check is a helper call, with no assertion macro at all.
 const HELPER_STATEMENT_TEST: &str = r#"
 #[test]
@@ -847,6 +928,113 @@ fn source_text_iterated_in_a_for_loop_is_still_source_text() {
     assert!(
         String::from_utf8_lossy(&output.stdout)
             .contains("every_shell_module_configures_the_renderer")
+    );
+}
+
+#[test]
+fn source_text_iterated_straight_from_an_array_literal_is_still_source_text() {
+    let workspace = Workspace::new("okp-gate-inline-loop");
+    workspace.write_tests(INLINE_LOOP_SOURCE_TEST);
+    workspace.write_allowlist("# empty\n");
+
+    let output = workspace.check();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("portability_smokes_wait_for_the_window_manager")
+    );
+}
+
+#[test]
+fn searching_a_constant_string_does_not_count_as_running_the_code() {
+    let workspace = Workspace::new("okp-gate-const-search");
+    workspace.write_tests(CONST_TEXT_SEARCH_TEST);
+    workspace.write_allowlist("# empty\n");
+
+    let output = workspace.check();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a grep against a constant is still a grep, whoever owns the string:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("playback_chrome_keeps_the_canonical_redlines")
+    );
+}
+
+#[test]
+fn a_real_production_call_beside_a_grep_still_counts_as_behaviour() {
+    let workspace = Workspace::new("okp-gate-call-beside-grep");
+    workspace.write_tests(PRODUCTION_CALL_BESIDE_A_GREP_TEST);
+    workspace.write_allowlist("# empty\n");
+
+    let output = workspace.check();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "narrowing what counts as a call must not flag a test that drives the \
+         code and asserts on the result:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// Assert that the ledger still recognises `name` as greping source text - the
+/// only observable difference the binding tracker makes once a test also has a
+/// behavioural assertion, and the difference between keeping a ledger entry and
+/// being told to delete it.
+fn assert_ledger_entry_survives(fixture: &str, workspace_name: &str, test_name: &str) {
+    let workspace = Workspace::new(workspace_name);
+    workspace.write_tests(fixture);
+    workspace.write_allowlist(&format!("rust/crates/demo/src/tests.rs::{test_name}\n"));
+
+    let output = workspace.check();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a grep the tracker cannot see is a grep it thinks was fixed:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("Stale source-grep allowlist entry"),
+        "the ledger entry must survive while the grep is still there:\n{stdout}"
+    );
+}
+
+#[test]
+fn a_grep_on_a_tuple_bound_name_keeps_its_ledger_entry() {
+    assert_ledger_entry_survives(
+        TUPLE_BINDING_WITH_BEHAVIOUR,
+        "okp-gate-tuple-ledger",
+        "close_request_defers_engine_teardown",
+    );
+}
+
+#[test]
+fn a_grep_on_a_loop_bound_name_keeps_its_ledger_entry() {
+    assert_ledger_entry_survives(
+        LOOP_BINDING_WITH_BEHAVIOUR,
+        "okp-gate-loop-ledger",
+        "every_shell_module_configures_the_renderer",
+    );
+}
+
+#[test]
+fn a_grep_bound_from_an_array_literal_keeps_its_ledger_entry() {
+    assert_ledger_entry_survives(
+        INLINE_LOOP_WITH_BEHAVIOUR,
+        "okp-gate-inline-loop-ledger",
+        "portability_smokes_wait_for_the_window_manager",
     );
 }
 

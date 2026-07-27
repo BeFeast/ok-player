@@ -50,10 +50,11 @@ FN_DECL = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
 LET_BINDING = re.compile(r"\blet\s+(?:mut\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=;]*)?=")
 # `let (source, _) = (include_str!(..), 1);` binds through a tuple pattern.
 LET_TUPLE = re.compile(r"\blet\s+(?:mut\s+)?\(([^)]*)\)\s*(?::[^=;]*)?=")
-# `for source in files` / `for source in files.iter()` rebinds a collection of
-# source texts one element at a time.
+# `for source in files`, `for source in files.iter()`, `for source in
+# [include_str!(..), include_str!(..)]` - a collection of source texts walked
+# one element at a time. The iterable runs to the opening brace of the body.
 FOR_BINDING = re.compile(
-    r"\bfor\s+(?:mut\s+)?([A-Za-z_][A-Za-z0-9_]*)\s+in\s+&?\s*([A-Za-z_][A-Za-z0-9_]*)"
+    r"\bfor\s+(?:mut\s+)?([A-Za-z_][A-Za-z0-9_]*)\s+in\s+([^{]*)\{"
 )
 CONST_BINDING = re.compile(
     r"\b(?:const|static)\s+([A-Za-z_][A-Za-z0-9_]*)\s*:[^=;]*=\s*([^;]*);"
@@ -70,7 +71,16 @@ FALLIBLE_CALL = re.compile(r"\.(?:expect\s*\(|unwrap\s*\(\s*\))")
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # Any call: `parse(x)`, `x.len()`, `Type::new()`. Used to tell an assertion that
 # runs code from one that only compares constants.
-ANY_CALL = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\s*(?:::\s*[A-Za-z_][A-Za-z0-9_]*\s*)*\(")
+ANY_CALL = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:::\s*[A-Za-z_][A-Za-z0-9_]*\s*)*\(")
+# Searching a string is not running the code under test, whatever the string is.
+# Without this, a grep against a constant that the detector does not track as
+# source text would count as evidence and clear the real greps beside it.
+TEXT_METHODS = {
+    "contains", "find", "rfind", "matches", "match_indices", "starts_with",
+    "ends_with", "split", "splitn", "rsplit", "split_once", "rsplit_once",
+    "lines", "chars", "bytes", "len", "count", "nth", "next", "trim",
+    "to_string", "to_owned", "as_str", "is_empty", "iter", "collect",
+}
 
 
 def mask_literals(src: str) -> str:
@@ -259,7 +269,11 @@ def source_bindings(
             if let:
                 classify_rhs({let.group(1)}, stmt_mask[let.end() :])
         for loop in FOR_BINDING.finditer(body_mask):
-            if loop.group(2) in direct | derived:
+            iterable = loop.group(2)
+            names = set(IDENT.findall(iterable))
+            if "include_str" in names:
+                direct.add(loop.group(1))
+            elif names & (direct | derived):
                 derived.add(loop.group(1))
         if (len(direct), len(derived), len(production)) == before:
             break
@@ -348,7 +362,9 @@ def is_behavioural_evidence(
       * it mentions a binding that came out of a call (`cues`, `output`); or
       * it hands source text into production code (`parse_srt(sample).len()`);
         or
-      * it calls something itself (`assert_eq!(parse("x"), Ok(1))`).
+      * it calls something itself, where searching a string does not count
+        (`assert_eq!(parse("x"), Ok(1))` does, `SOME_CONST.contains("x")` does
+        not).
 
     A comparison between constants mentions no binding and calls nothing, so it
     proves nothing about the implementation and does not launder a source grep.
@@ -360,7 +376,9 @@ def is_behavioural_evidence(
         # The caller already established this is not an inspection, so the text
         # is being handed to production code.
         return True
-    return bool(ANY_CALL.search(arg_mask))
+    return any(
+        call.group(1) not in TEXT_METHODS for call in ANY_CALL.finditer(arg_mask)
+    )
 
 
 def classify(test: TestFn, seeds: set[str]) -> tuple[bool, int, int]:
