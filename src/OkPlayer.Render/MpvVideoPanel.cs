@@ -40,6 +40,16 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
     /// <summary>Raised once the engine + render context are ready.</summary>
     public event EventHandler? EngineReady;
 
+    /// <summary>Raised when the <c>Loaded</c>-time engine init fails (e.g. no OpenGL / WGL_NV_DX_interop
+    /// on this machine, #653). A XAML event handler has no caller to catch a throw — an unhandled
+    /// exception there kills the process with 0xC000027B — so the failure is surfaced as an event
+    /// for the host to report instead of crashing.</summary>
+    public event EventHandler<Exception>? EngineInitFailed;
+
+    /// <summary>The exception from the most recent failed engine init; null once init succeeds.
+    /// Lets hosts distinguish "engine unavailable on this machine" from an ordinary open failure.</summary>
+    public Exception? EngineInitFailure { get; private set; }
+
     /// <summary>Optional diagnostic sink for the render-init breadcrumbs — the host (App) points it at the file
     /// logger so a hang inside GL/D3D/libmpv init (which throws nothing) is still pinned to its last step.
     /// Static so it can be set before any panel is constructed; null = no-op.</summary>
@@ -56,7 +66,11 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
         HorizontalContentAlignment = HorizontalAlignment.Stretch;
         VerticalContentAlignment = VerticalAlignment.Stretch;
         IsTabStop = false;
-        Loaded += (_, _) => EnsureInitialized();
+        Loaded += (_, _) =>
+        {
+            try { EnsureInitialized(); }
+            catch (Exception ex) { EngineInitFailed?.Invoke(this, ex); } // already logged + rolled back
+        };
         Unloaded += (_, _) => Dispose();
         SizeChanged += OnSizeChanged;
     }
@@ -121,6 +135,7 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
             }
 
             HookRendering();
+            EngineInitFailure = null;
             Diag("render init: done (engine ready)");
             EngineReady?.Invoke(this, EventArgs.Empty);
         }
@@ -129,6 +144,7 @@ public sealed class MpvVideoPanel : ContentControl, IDisposable
             // A subcomponent ctor failed (no WGL_NV_DX_interop, missing libmpv-2.dll, …). Roll back so
             // a later retry re-initializes instead of returning early into a null engine.
             Diag("render init FAILED: " + ex);
+            EngineInitFailure = ex;
             _initialized = false;
             TeardownEngine();
             throw;

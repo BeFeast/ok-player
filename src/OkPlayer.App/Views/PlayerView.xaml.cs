@@ -173,6 +173,7 @@ public sealed partial class PlayerView : UserControl
         _saveTimer.Start();
 
         Video.EngineReady += OnEngineReady;
+        Video.EngineInitFailed += (_, ex) => DispatcherQueue.TryEnqueue(() => OnEngineInitFailed(ex));
         Video.ScreenshotSaved += (_, _) => DispatcherQueue.TryEnqueue(() => ShowToast("Screenshot saved"));
         Video.ScreenshotForClipboard += (_, ok) => DispatcherQueue.TryEnqueue(() => OnClipboardFrameReady(ok));
         Video.SubtitleAdded += (_, ok) => DispatcherQueue.TryEnqueue(() => OnSubtitleAdded(ok));
@@ -626,6 +627,31 @@ public sealed partial class PlayerView : UserControl
         _historyOpen = false;
         ApplyMediaPresence();   // back to the welcome shelf (and refresh it for any removals)
         Focus(FocusState.Programmatic);
+    }
+
+    /// <summary>The engine could not initialise at Loaded time — this machine has no usable OpenGL /
+    /// WGL_NV_DX_interop (#653). Keep the welcome shell alive and say why playback won't work.</summary>
+    private void OnEngineInitFailed(Exception ex)
+    {
+        // The lane assertion in windows-package.yml keys on this exact literal: a green run must show
+        // the failure handled, not merely a zero exit code.
+        Log.Step("engine init failure handled: video output unavailable — " + ex.Message);
+        // GlInteropDevice wraps both GL capability failures (no OpenGL driver, no WGL_NV_DX_interop)
+        // in NotSupportedException; anything else (missing libmpv-2.dll, render-context failure, …)
+        // must not be misdiagnosed as a graphics-driver problem.
+        EngineNotice.Message = (ex is NotSupportedException
+            ? "This machine's graphics driver has no usable OpenGL support, so the playback engine " +
+              "cannot start and media will not play."
+            : "The playback engine could not start, so media will not play. " +
+              "(" + FirstLine(ex.Message) + ")")
+            + " Details are in the log folder: %LOCALAPPDATA%\\OkPlayer\\logs";
+        EngineNotice.IsOpen = true;
+    }
+
+    private static string FirstLine(string s)
+    {
+        int i = s.IndexOfAny(new[] { '\r', '\n' });
+        return i < 0 ? s : s[..i];
     }
 
     private void OnEngineReady(object? sender, EventArgs e)
@@ -2694,7 +2720,17 @@ public sealed partial class PlayerView : UserControl
         {
             _loading = false;     // synchronous open failure — drop the spinner with the idle surface
             _loadWatchdog.Stop();
-            ShowToast("Couldn't open this file");
+            // An engine-init failure means the machine can't play anything (no OpenGL, #653) — name
+            // that cause instead of blaming the file.
+            if (Video.EngineInitFailure is { } fail)
+            {
+                ShowToast("Playback is unavailable on this machine — see the notice");
+                OnEngineInitFailed(fail);
+            }
+            else
+            {
+                ShowToast("Couldn't open this file");
+            }
             ApplyMediaPresence(); // restore the idle surface (e.g. the welcome shelf after a failed History resume)
         }
     }

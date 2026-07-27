@@ -29,8 +29,16 @@ internal sealed unsafe class GlInteropDevice : IDisposable
     public IntPtr DxDeviceContext { get; }
     public IntPtr GlDevice { get; }
 
+    // First GL/interop capability failure (no OpenGL driver, no WGL_NV_DX_interop). GL support cannot
+    // appear mid-process, so later construction attempts rethrow this immediately instead of building
+    // and tearing down another D3D11 device/factory per attempt (#653).
+    private static Exception? s_glUnavailable;
+
     public GlInteropDevice()
     {
+        if (s_glUnavailable is { } unavailable)
+            throw new NotSupportedException(unavailable.Message, unavailable);
+
         IDXGIFactory2* factory = null;
         ID3D11Device* device = null;
         ID3D11DeviceContext* deviceContext = null;
@@ -56,13 +64,31 @@ internal sealed unsafe class GlInteropDevice : IDisposable
             DxDevice = (IntPtr)device;
             DxDeviceContext = (IntPtr)deviceContext;
 
-            EnsureSharedGlContext();
+            try
+            {
+                EnsureSharedGlContext();
+            }
+            catch (Exception ex)
+            {
+                // GLFW couldn't create a WGL context: no usable OpenGL on this machine. Wrap in the
+                // same exception type as the interop-missing case below so hosts can classify a GL
+                // capability failure without referencing OpenTK types.
+                var wrapped = new NotSupportedException(
+                    "This machine's graphics driver has no usable OpenGL support (WGL context creation failed). " +
+                    "An ANGLE/EGL fallback backend is required on such machines.", ex);
+                s_glUnavailable = wrapped;
+                throw wrapped;
+            }
 
             GlDevice = Wgl.DXOpenDeviceNV((IntPtr)device);
             if (GlDevice == IntPtr.Zero)
-                throw new NotSupportedException(
+            {
+                var ex = new NotSupportedException(
                     "WGL_NV_DX_interop is unavailable on this GPU/driver (wglDXOpenDeviceNV returned null). " +
                     "An ANGLE/EGL fallback backend is required on such machines.");
+                s_glUnavailable = ex;
+                throw ex;
+            }
         }
         catch
         {

@@ -489,6 +489,13 @@
                     </Button>
                 </Grid>
             </Grid>
+
+            <!-- Engine-unavailable notice (#653): the machine has no usable OpenGL / WGL_NV_DX_interop, so
+                 video output cannot initialise. The welcome shell stays fully usable; this states why
+                 playback won't work instead of the app crashing or going silently video-less. -->
+            <InfoBar x:Name="EngineNotice" IsOpen="False" Severity="Warning" IsClosable="True"
+                     VerticalAlignment="Top" HorizontalAlignment="Stretch" Margin="16,52,16,0"
+                     Title="Video output is unavailable on this machine" />
         </Grid>
 
         <!-- ===== History surface: third idle-canvas state (over Mica), opened from the welcome footer / H ===== -->
