@@ -87,7 +87,7 @@ CORRECTION (2026-07-27 evening): #662 was fixed the same day and the packaged
 `native-wayland-dmabuf` configuration WAS exercised — 40 fresh-session granted
 drags on the installed candidate `.193` (delivery verified per round via the
 journal) survive under bare mutter with the operator scale layout and playing
-video. The dmabuf plane is eliminated as sufficient cause. The remaining
+video — however backend evidence (OKP_PRESENT_LOG) later showed those sessions ran on native-wayland-egl (headless hwdec stays off, so the dmabuf plane never activates silently); the campaigns eliminate the granted-move-over-EGL path only and the dmabuf plane remains the prime suspect. The remaining
 untestable configuration is the full gnome-shell grab path: headless
 gnome-shell (GNOME 48 and 49 alike) does not route RemoteDesktop pointer
 injection to the app at all, while bare mutter routes it without ceremony —
