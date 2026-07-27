@@ -70,8 +70,14 @@ internal sealed unsafe class GlInteropDevice : IDisposable
             }
             catch (Exception ex)
             {
-                s_glUnavailable = ex; // GLFW couldn't create a WGL context: no usable OpenGL on this machine
-                throw;
+                // GLFW couldn't create a WGL context: no usable OpenGL on this machine. Wrap in the
+                // same exception type as the interop-missing case below so hosts can classify a GL
+                // capability failure without referencing OpenTK types.
+                var wrapped = new NotSupportedException(
+                    "This machine's graphics driver has no usable OpenGL support (WGL context creation failed). " +
+                    "An ANGLE/EGL fallback backend is required on such machines.", ex);
+                s_glUnavailable = wrapped;
+                throw wrapped;
             }
 
             GlDevice = Wgl.DXOpenDeviceNV((IntPtr)device);

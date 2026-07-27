@@ -636,11 +636,22 @@ public sealed partial class PlayerView : UserControl
         // The lane assertion in windows-package.yml keys on this exact literal: a green run must show
         // the failure handled, not merely a zero exit code.
         Log.Step("engine init failure handled: video output unavailable — " + ex.Message);
-        EngineNotice.Message =
-            "This machine's graphics driver has no usable OpenGL support, so the playback engine " +
-            "cannot start and media will not play. Details are in the log folder: " +
-            "%LOCALAPPDATA%\\OkPlayer\\logs";
+        // GlInteropDevice wraps both GL capability failures (no OpenGL driver, no WGL_NV_DX_interop)
+        // in NotSupportedException; anything else (missing libmpv-2.dll, render-context failure, …)
+        // must not be misdiagnosed as a graphics-driver problem.
+        EngineNotice.Message = (ex is NotSupportedException
+            ? "This machine's graphics driver has no usable OpenGL support, so the playback engine " +
+              "cannot start and media will not play."
+            : "The playback engine could not start, so media will not play. " +
+              "(" + FirstLine(ex.Message) + ")")
+            + " Details are in the log folder: %LOCALAPPDATA%\\OkPlayer\\logs";
         EngineNotice.IsOpen = true;
+    }
+
+    private static string FirstLine(string s)
+    {
+        int i = s.IndexOfAny(new[] { '\r', '\n' });
+        return i < 0 ? s : s[..i];
     }
 
     private void OnEngineReady(object? sender, EventArgs e)
