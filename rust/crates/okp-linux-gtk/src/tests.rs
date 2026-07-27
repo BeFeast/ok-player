@@ -4730,6 +4730,23 @@ fn windows_installed_tree_assertion_keeps_a_size_floor_under_every_required_file
         assertion.contains("if ($size -lt $entry.MinBytes) {"),
         "the installed-tree assertion must compare each file against its floor"
     );
+
+    // A floor cannot separate a complete binary from a partial one above it. The
+    // launch step covers libmpv-2.dll - the app does not start without a working
+    // engine - but nothing exercises ffmpeg, so the lane runs it explicitly.
+    let workflow = include_str!("../../../../.github/workflows/windows-package.yml");
+    assert!(
+        workflow.contains("ffmpeg -hide_banner -version")
+            || workflow.contains("$ffmpeg -hide_banner -version"),
+        "the Windows lane must run the bundled ffmpeg, not just measure it"
+    );
+    // And it must cover every project the installer contains, not only the two
+    // the app references directly.
+    assert_eq!(
+        workflow.matches("- 'src/**'").count(),
+        2,
+        "both the pull_request and push path filters must cover all of src/**"
+    );
 }
 
 #[test]

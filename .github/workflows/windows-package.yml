@@ -27,8 +27,12 @@ on:
     paths:
       - '.github/workflows/windows-package.yml'
       - 'installer/**'
-      - 'src/OkPlayer.App/**'
-      - 'src/OkPlayer.Core/**'
+      # All of src/**, not just App and Core: OkPlayer.App references
+      # OkPlayer.DesignSystem and OkPlayer.Render, and Render references
+      # OkPlayer.Mpv, so every project under src/ ends up inside the installer.
+      # A DesignSystem resource change that compiles but breaks the packaged
+      # main window would otherwise skip this lane entirely.
+      - 'src/**'
       - 'OkPlayer.sln'
       # Central build and package version pinning (WindowsAppSDK, Velopack):
       # a change here changes what the installer contains.
@@ -41,8 +45,7 @@ on:
     paths:
       - '.github/workflows/windows-package.yml'
       - 'installer/**'
-      - 'src/OkPlayer.App/**'
-      - 'src/OkPlayer.Core/**'
+      - 'src/**'
       - 'OkPlayer.sln'
       - 'Directory.Build.props'
       - 'Directory.Packages.props'
@@ -111,6 +114,31 @@ jobs:
         run: |
           ./scripts/assert-windows-installed-tree.ps1 `
             -InstallRoot (Join-Path $env:LOCALAPPDATA 'OkPlayer\current')
+
+      # A size floor separates "present" from "empty or obviously truncated"; it
+      # cannot separate a complete ffmpeg from a partial one that is still over
+      # 1 MB. fetch-natives.ps1 does not check 7-Zip's exit code and keeps
+      # whatever it extracted, and nothing else in this lane ever runs ffmpeg -
+      # the app only reaches it for subtitle auto-sync, which the idle-window
+      # launch below does not exercise. So run it and require it to identify
+      # itself. libmpv-2.dll needs no equivalent step: the launch below fails
+      # without a working engine.
+      - name: Assert the bundled ffmpeg runs
+        shell: pwsh
+        run: |
+          $ffmpeg = Join-Path $env:LOCALAPPDATA 'OkPlayer\current\ffmpeg.exe'
+          $ErrorActionPreference = 'Continue'
+          $output = (& $ffmpeg -hide_banner -version 2>&1 |
+            ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
+          $code = $LASTEXITCODE
+          $ErrorActionPreference = 'Stop'
+          if ($code -ne 0) {
+            throw "ffmpeg.exe -version exited with ${code}: $output"
+          }
+          if ($output -notmatch 'ffmpeg version') {
+            throw "ffmpeg.exe ran but did not identify itself: $output"
+          }
+          Write-Host $output.Split([Environment]::NewLine)[0]
 
       # The point of this lane: start the executable the installer actually put
       # on the machine and require a real top-level window that is the player's
