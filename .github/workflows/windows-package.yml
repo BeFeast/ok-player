@@ -4,9 +4,15 @@ name: Windows Installer
 # installer/build-velopack.ps1. Until this workflow existed, nothing in CI ran
 # that script: the release lane was a manual local operation, and
 # release-windows-candidate.yml only packs the separate `win-candidate` channel
-# after a merge. This lane builds the real `win` installer, installs it, and
-# starts the installed application, so a change that breaks packaging or startup
-# is visible before merge instead of on a tester's machine.
+# after a merge. This lane builds the real `win` installer, installs it, asserts
+# the installed tree is complete, and starts the installed application.
+#
+# This workflow is NOT in main's required status checks (those are "Unit tests
+# (engine-agnostic Core, headless)", "Rust workspace (Linux)" and "Integration
+# tests (real libmpv + render-thread guard)"). It reports on pull requests but
+# cannot block a merge on its own; making it blocking is a branch-protection
+# change only an operator can make. The regression tests for the assertion this
+# lane runs live in scripts/tests/windows-installed-tree.Tests.ps1.
 #
 # Path-gated on purpose: a full self-contained WinUI publish plus a Velopack pack
 # is expensive, so it runs for changes that can plausibly break the installer
@@ -20,7 +26,14 @@ on:
       - 'src/OkPlayer.App/**'
       - 'src/OkPlayer.Core/**'
       - 'OkPlayer.sln'
+      # Central build and package version pinning (WindowsAppSDK, Velopack):
+      # a change here changes what the installer contains.
+      - 'Directory.Build.props'
+      - 'Directory.Packages.props'
       - 'scripts/fetch-natives.ps1'
+      - 'scripts/assert-windows-installed-tree.ps1'
+  push:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -75,14 +88,25 @@ jobs:
           }
           Write-Host "Installed: $installed"
 
+      # A window on screen does not prove the app shipped complete: libmpv-2.dll
+      # and ffmpeg.exe are both bundled through Condition="Exists(...)" Content
+      # items, and the ffmpeg fetch is best-effort, so an installer with no
+      # engine and no ffmpeg installs and starts just fine.
+      - name: Assert the installed tree is complete
+        shell: pwsh
+        run: |
+          ./scripts/assert-windows-installed-tree.ps1 `
+            -InstallRoot (Join-Path $env:LOCALAPPDATA 'OkPlayer\current')
+
       # The point of this lane: start the executable the installer actually put
-      # on the machine and require a real top-level window, then require it to
-      # shut down on request. No leg here may pass by being skipped - every
-      # branch either asserts or throws.
+      # on the machine and require a real top-level window that is the player's
+      # own window, then require it to shut down on request. No leg here may pass
+      # by being skipped - every branch either asserts or throws.
       - name: Launch the installed application
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $expectedTitle = 'OK Player'
           $installed = Join-Path $env:LOCALAPPDATA 'OkPlayer\current\OkPlayer.exe'
           $stdout = Join-Path $env:RUNNER_TEMP 'okplayer-stdout.log'
           $stderr = Join-Path $env:RUNNER_TEMP 'okplayer-stderr.log'
@@ -110,6 +134,14 @@ jobs:
             throw 'The installed application never created a top-level window'
           }
           Write-Host "Main window handle: $handle - title: $($proc.MainWindowTitle)"
+          # An error dialog, a crash reporter, or a fallback shell also produces
+          # a top-level window. Require the player's own window identity.
+          if ($proc.MainWindowTitle -ne $expectedTitle) {
+            if (Test-Path $stdout) { Get-Content $stdout | Write-Host }
+            if (Test-Path $stderr) { Get-Content $stderr | Write-Host }
+            $proc.Kill()
+            throw "Expected the main window title '$expectedTitle', got '$($proc.MainWindowTitle)'"
+          }
           if (-not $proc.CloseMainWindow()) { throw 'The installed application refused a close request' }
           if (-not $proc.WaitForExit(30000)) {
             $proc.Kill()
