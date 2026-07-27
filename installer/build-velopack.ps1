@@ -29,7 +29,12 @@
 #>
 param(
   [string]$Version,
-  [switch]$Publish
+  [switch]$Publish,
+  # Download the prior win releases before packing (so vpk computes a binary
+  # delta) without uploading afterwards. The release lane packs and gates
+  # first and only uploads the gated bytes in a separate step, so it needs the
+  # delta baseline at pack time while never using -Publish.
+  [switch]$DownloadPrior
 )
 
 $ErrorActionPreference = 'Stop'
@@ -73,7 +78,7 @@ New-Item -ItemType Directory -Force -Path $releases | Out-Null
 # When publishing, pull the prior releases first so vpk can compute a binary delta against them. The first
 # release has no predecessor, so this is best-effort: on failure we fall back to a full-only release (always
 # applies for clients; just no delta optimization), rather than deltaing against stale local files.
-if ($Publish) {
+if ($Publish -or $DownloadPrior) {
   Write-Host "Fetching prior releases for delta computation"
   & $vpk download github --repoUrl $repoUrl --channel win --pre --outputDir $releases 2>&1 | Write-Host
   if ($LASTEXITCODE -ne 0) { Write-Host "  (no prior releases to delta against — first build / full-only)" }

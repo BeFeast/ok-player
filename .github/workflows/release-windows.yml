@@ -1,0 +1,391 @@
+name: Windows Release
+
+# Versioned Windows release: Velopack channel `win`, GitHub (pre-)release on tag
+# v<version>, consumed by installed apps through the static Pages feed (#131).
+# Operator-dispatched ONLY - nothing here runs on merges, and workers never tag
+# or release. The build and every gate mirror the Windows Installer lane: the
+# packaged Setup.exe is installed, the installed tree asserted complete, the
+# bundled ffmpeg exercised, and the installed app launched with the
+# engine-init-outcome and no-FATAL assertions (#653), so a build that cannot
+# survive launch cannot be published. Publish uploads the exact gated artifacts;
+# it never rebuilds.
+#
+# v0.10.x releases were manual local packs (installer/build-velopack.ps1
+# -Publish) from the operator's Windows machine; that surface stays valid, but
+# this lane is the reproducible path that does not depend on a local checkout.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Windows package version, for example 0.11.0-beta.1'
+        required: true
+        type: string
+      publish:
+        description: 'Publish to GitHub Releases after all gates pass'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: windows-release
+  cancel-in-progress: false
+
+jobs:
+  windows-release:
+    name: Build, gate, and publish the versioned win channel
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      # A workflow_dispatch caller picks the ref. Gate-only dry runs may come
+      # from any ref, but publication writes the stable win channel and must
+      # only ever ship reviewed code: publish requires main.
+      - name: Refuse to publish from a non-main ref
+        if: inputs.publish == true && github.ref != 'refs/heads/main'
+        shell: pwsh
+        run: throw "Publishing is only allowed from refs/heads/main (got '${{ github.ref }}'). Dispatch with publish:false to gate a branch build."
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Fetch libmpv
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/fetch-natives.ps1
+
+      - name: Install Velopack CLI
+        run: dotnet tool install -g vpk --version 1.2.0
+
+      # On a publishing run the prior win releases are downloaded first (via
+      # -DownloadPrior) so vpk pack computes a binary delta against the real
+      # feed; without it every release would force existing users onto the
+      # full self-contained download.
+      - name: Build the Velopack installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $buildArgs = @('-Version', '${{ inputs.version }}')
+          if ('${{ inputs.publish }}' -eq 'true') { $buildArgs += '-DownloadPrior' }
+          ./installer/build-velopack.ps1 @buildArgs
+
+      - name: Assert the shipping installer artifacts exist
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $releases = Join-Path $PWD 'artifacts\releases'
+          foreach ($name in @('OkPlayer-win-Setup.exe', 'releases.win.json')) {
+            $path = Join-Path $releases $name
+            if (-not (Test-Path $path)) { throw "Velopack pack did not produce $name" }
+            Write-Host "$name : $((Get-Item $path).Length) bytes"
+          }
+
+      - name: Install the packaged application
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Join-Path $PWD 'artifacts\releases\OkPlayer-win-Setup.exe'
+          $proc = Start-Process -FilePath $setup -ArgumentList '--silent' -PassThru -Wait
+          if ($proc.ExitCode -ne 0) { throw "Setup.exe exited with $($proc.ExitCode)" }
+          $installed = Join-Path $env:LOCALAPPDATA 'OkPlayer\current\OkPlayer.exe'
+          if (-not (Test-Path $installed)) {
+            Get-ChildItem (Join-Path $env:LOCALAPPDATA 'OkPlayer') -Recurse -Depth 2 -ErrorAction SilentlyContinue |
+              ForEach-Object { Write-Host $_.FullName }
+            throw "Installed executable not found at $installed"
+          }
+          Write-Host "Installed: $installed"
+
+      # A window on screen does not prove the app shipped complete: libmpv-2.dll
+      # and ffmpeg.exe are both bundled through Condition="Exists(...)" Content
+      # items, and the ffmpeg fetch is best-effort, so an installer with no
+      # engine and no ffmpeg installs and starts just fine.
+      - name: Assert the installed tree is complete
+        shell: pwsh
+        run: |
+          ./scripts/assert-windows-installed-tree.ps1 `
+            -InstallRoot (Join-Path $env:LOCALAPPDATA 'OkPlayer\current')
+
+      # A size floor separates "present" from "empty or obviously truncated"; it
+      # cannot separate a complete ffmpeg from a partial one that is still over
+      # 1 MB. fetch-natives.ps1 does not check 7-Zip's exit code and keeps
+      # whatever it extracted, and nothing else in this lane ever runs ffmpeg -
+      # the app only reaches it for subtitle auto-sync, which the idle-window
+      # launch below does not exercise. So run it and require it to identify
+      # itself. libmpv-2.dll needs no equivalent step: the launch below fails
+      # without a working engine.
+      - name: Assert the bundled ffmpeg runs
+        shell: pwsh
+        run: |
+          $ffmpeg = Join-Path $env:LOCALAPPDATA 'OkPlayer\current\ffmpeg.exe'
+          $ErrorActionPreference = 'Continue'
+          $output = (& $ffmpeg -hide_banner -version 2>&1 |
+            ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
+          $code = $LASTEXITCODE
+          $ErrorActionPreference = 'Stop'
+          if ($code -ne 0) {
+            throw "ffmpeg.exe -version exited with ${code}: $output"
+          }
+          if ($output -notmatch 'ffmpeg version') {
+            throw "ffmpeg.exe ran but did not identify itself: $output"
+          }
+          Write-Host $output.Split([Environment]::NewLine)[0]
+
+      # The redirected stdout/stderr below are structurally always empty: this is
+      # a WinUI GUI app (WindowsPackageType=None, WindowsAppSDKSelfContained in
+      # Release) and it writes to neither stream. So the streams cannot name the
+      # exception behind the intermittent 0xC000027B on exit (#642), and every
+      # failing run so far has dumped two empty files.
+      #
+      # There are exactly two things that can name it. The app's own per-launch
+      # log (src/OkPlayer.App/Services/Log.cs) already records lifecycle
+      # breadcrumbs, mpv's warnings, and every unhandled exception from all three
+      # managed surfaces - collected after the launch step below. And a WER crash
+      # dump, which is the only source that survives a fault the managed handlers
+      # never see, such as a stowed exception raised by the XAML framework itself.
+      # LocalDumps has to be armed before the process starts, hence this step's
+      # position. Runner-local registry state; nothing here gates the lane.
+      - name: Arm crash-dump collection for the installed app
+        # Diagnostics must never decide this lane's verdict. Writing under HKLM
+        # needs the runner's administrator context; if a future runner image
+        # withdraws it, the launch gate below still has to run and report - a red
+        # job with no launch result would hide the defect instead of exposing it.
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dumps = Join-Path $env:RUNNER_TEMP 'okplayer-dumps'
+          New-Item -ItemType Directory -Force -Path $dumps | Out-Null
+          $key = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\OkPlayer.exe'
+          New-Item -Path $key -Force | Out-Null
+          # DumpType 2 = full dump: a mini dump drops the heap, and the stowed
+          # exception record lives in heap memory reached from the error context.
+          New-ItemProperty -Path $key -Name 'DumpFolder' -Value $dumps -PropertyType ExpandString -Force | Out-Null
+          New-ItemProperty -Path $key -Name 'DumpType' -Value 2 -PropertyType DWord -Force | Out-Null
+          New-ItemProperty -Path $key -Name 'DumpCount' -Value 5 -PropertyType DWord -Force | Out-Null
+          Write-Host "WER local dumps for OkPlayer.exe -> $dumps"
+
+      # The point of this lane: start the executable the installer actually put
+      # on the machine and require a real top-level window that is the player's
+      # own window, then require it to shut down on request. No leg here may pass
+      # by being skipped - every branch either asserts or throws.
+      - name: Launch the installed application
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $expectedTitle = 'OK Player'
+          $installed = Join-Path $env:LOCALAPPDATA 'OkPlayer\current\OkPlayer.exe'
+          $stdout = Join-Path $env:RUNNER_TEMP 'okplayer-stdout.log'
+          $stderr = Join-Path $env:RUNNER_TEMP 'okplayer-stderr.log'
+          $proc = Start-Process -FilePath $installed -PassThru `
+            -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          $deadline = (Get-Date).AddSeconds(90)
+          $handle = [IntPtr]::Zero
+          while ((Get-Date) -lt $deadline) {
+            if ($proc.HasExited) {
+              if (Test-Path $stdout) { Get-Content $stdout | Write-Host }
+              if (Test-Path $stderr) { Get-Content $stderr | Write-Host }
+              throw "The installed application exited with $($proc.ExitCode) before showing a window"
+            }
+            $proc.Refresh()
+            if ($proc.MainWindowHandle -ne [IntPtr]::Zero) {
+              $handle = $proc.MainWindowHandle
+              break
+            }
+            Start-Sleep -Milliseconds 500
+          }
+          if ($handle -eq [IntPtr]::Zero) {
+            if (Test-Path $stdout) { Get-Content $stdout | Write-Host }
+            if (Test-Path $stderr) { Get-Content $stderr | Write-Host }
+            $proc.Kill()
+            throw 'The installed application never created a top-level window'
+          }
+          Write-Host "Main window handle: $handle - title: $($proc.MainWindowTitle)"
+          # A window handle can appear before WinUI has finished starting up,
+          # so closing on the handle alone risks testing shutdown-during-startup
+          # rather than shutdown of a running app - and this lane has an
+          # intermittent 0xC000027B on exit. WaitForInputIdle is a readiness
+          # condition, not a settle delay: it returns when the process has
+          # drained its startup work and is waiting for input, and a timeout is
+          # a real failure rather than something to sleep through.
+          #
+          # Measured, run 30237873377: it returned ~4ms after the window handle
+          # appeared and the 0xC000027B still followed. So the app is already
+          # input-idle when its window shows, the crash is NOT a startup race,
+          # and this step neither shortens what the clean-exit check covers nor
+          # makes the lane green. What it does is assert a real property and rule
+          # out the leading hypothesis in #642.
+          if (-not $proc.WaitForInputIdle(60000)) {
+            if (Test-Path $stdout) { Get-Content $stdout | Write-Host }
+            if (Test-Path $stderr) { Get-Content $stderr | Write-Host }
+            $proc.Kill()
+            throw 'The installed application showed a window but never became ready for input'
+          }
+          Write-Host 'The installed application is idle and ready for input'
+          # An error dialog, a crash reporter, or a fallback shell also produces
+          # a top-level window. Require the player's own window identity.
+          if ($proc.MainWindowTitle -ne $expectedTitle) {
+            if (Test-Path $stdout) { Get-Content $stdout | Write-Host }
+            if (Test-Path $stderr) { Get-Content $stderr | Write-Host }
+            $proc.Kill()
+            throw "Expected the main window title '$expectedTitle', got '$($proc.MainWindowTitle)'"
+          }
+          # Do not close until the engine-init outcome is on record. The video panel initialises from
+          # XAML Loaded, which lands *after* input-idle; closing before it lands turns this lane into a
+          # coin flip between "tested nothing" and "tested init" (the 4-red/5-green nondeterminism of
+          # #642/#653). A hosted runner has no OpenGL, so the pass here is the *handled* failure line;
+          # on a GL-capable machine it is the engine-ready line. Absence of both within the deadline is
+          # a failure in its own right - a silent regression must not look identical to success.
+          $logDir = Join-Path $env:LOCALAPPDATA 'OkPlayer\logs'
+          $initPattern = 'render init: done \(engine ready\)|engine init failure handled'
+          $initDeadline = (Get-Date).AddSeconds(60)
+          $initLine = $null
+          while ((Get-Date) -lt $initDeadline -and -not $initLine) {
+            if ($proc.HasExited) {
+              throw "The installed application exited with $($proc.ExitCode) before logging an engine-init outcome"
+            }
+            $newest = Get-ChildItem -Path (Join-Path $logDir 'okplayer-*.log') -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if ($newest) {
+              $initLine = Select-String -Path $newest.FullName -Pattern $initPattern | Select-Object -First 1
+            }
+            if (-not $initLine) { Start-Sleep -Milliseconds 500 }
+          }
+          if (-not $initLine) {
+            $proc.Kill()
+            throw 'Neither "render init: done" nor "engine init failure handled" appeared in the app log within 60s'
+          }
+          Write-Host "Engine init outcome: $($initLine.Line)"
+          if (-not $proc.CloseMainWindow()) { throw 'The installed application refused a close request' }
+          if (-not $proc.WaitForExit(30000)) {
+            $proc.Kill()
+            throw 'The installed application did not exit within 30s of a close request'
+          }
+          Write-Host "Exit code after close: $($proc.ExitCode)"
+          if ($proc.ExitCode -ne 0) {
+            # A -1073741189 (0xC000027B, STATUS_STOWED_EXCEPTION) here is the
+            # known open shutdown defect tracked in #642; this step deliberately
+            # still fails on it rather than tolerating it. The two streams below
+            # are printed for completeness only - a WinUI app writes to neither,
+            # and what actually names the exception is the diagnostics step that
+            # follows, which runs on this failure path too.
+            if (Test-Path $stdout) { Get-Content $stdout | Write-Host }
+            if (Test-Path $stderr) { Get-Content $stderr | Write-Host }
+            throw "The installed application exited with $($proc.ExitCode)"
+          }
+          # A zero exit with a FATAL entry in this launch's log is still a failure: it means a managed
+          # exception was recorded on the way out and merely didn't take the process down this time.
+          # Scan only this launch's file - an unrelated older log must not fail the lane.
+          $fatal = Select-String -Path $newest.FullName -Pattern '\[FATAL' | Select-Object -First 1
+          if ($fatal) { throw "The app log recorded a FATAL entry: $($fatal.Line)" }
+
+      # Publish only the exact artifact set the gates above just verified. The
+      # upload mirrors installer/build-velopack.ps1 -Publish, but runs here as a
+      # separate step so a rebuild can never slip between gate and publish.
+      - name: Publish the versioned release (tag v<version>, channel win)
+        if: inputs.publish == true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vpk = Join-Path $env:USERPROFILE '.dotnet\tools\vpk.exe'
+          & $vpk upload github `
+            --repoUrl 'https://github.com/${{ github.repository }}' `
+            --outputDir (Join-Path $PWD 'artifacts\releases') `
+            --channel win `
+            --publish `
+            --pre `
+            --tag "v${{ inputs.version }}" `
+            --releaseName "OK Player ${{ inputs.version }}" `
+            --token $env:GH_TOKEN
+          if ($LASTEXITCODE -ne 0) { throw "vpk upload github failed ($LASTEXITCODE)" }
+          # A release published by the workflow token does not fire the release
+          # event, so refresh the static Pages feed explicitly (issue #131) -
+          # and wait for it: the feed is what installed apps actually poll, so
+          # a release is not delivered until the refresh run succeeds and the
+          # public feed serves this version.
+          $dispatchedAfter = (Get-Date).ToUniversalTime().AddSeconds(-5).ToString('o')
+          gh workflow run publish-update-feeds.yml
+          if ($LASTEXITCODE -ne 0) { throw 'Could not dispatch the Update Feeds workflow' }
+          $feedRun = $null
+          $findDeadline = (Get-Date).AddMinutes(3)
+          while ((Get-Date) -lt $findDeadline -and -not $feedRun) {
+            Start-Sleep -Seconds 10
+            $feedRun = gh run list --workflow publish-update-feeds.yml `
+              --json databaseId,createdAt,status --jq "[.[] | select(.createdAt >= \"$dispatchedAfter\")][0].databaseId"
+          }
+          if (-not $feedRun) { throw 'The dispatched Update Feeds run never appeared' }
+          $waitDeadline = (Get-Date).AddMinutes(15)
+          while ((Get-Date) -lt $waitDeadline) {
+            $state = gh run view $feedRun --json status,conclusion --jq '"\(.status) \(.conclusion)"'
+            if ($state -like 'completed*') { break }
+            Start-Sleep -Seconds 20
+          }
+          if ($state -ne 'completed success') { throw "Update Feeds run $feedRun finished as '$state' - the public feed was not refreshed" }
+          # Pages/CDN propagation: require the live feed to actually serve this
+          # version before calling the release delivered.
+          $feedUrl = 'https://befeast.github.io/ok-player/updates/win/releases.win.json'
+          $served = $false
+          $cdnDeadline = (Get-Date).AddMinutes(10)
+          while ((Get-Date) -lt $cdnDeadline) {
+            try {
+              $feed = Invoke-RestMethod -Uri "$feedUrl`?nocache=$(Get-Random)" -TimeoutSec 30
+              if (($feed.Assets | Where-Object { $_.Version -eq '${{ inputs.version }}' })) { $served = $true; break }
+            } catch { }
+            Start-Sleep -Seconds 30
+          }
+          if (-not $served) { throw "The public feed never served version ${{ inputs.version }} within the deadline" }
+          Write-Host "Release delivered: feed serves ${{ inputs.version }}"
+
+      # Runs on the failure path as well - that is the point. The app's own log
+      # is written per line and flushed, so it survives both a crash and a hard
+      # hang, and it is printed into the run log rather than only uploaded: an
+      # intermittent defect is diagnosed by comparing a failing run against a
+      # passing one, and neither is worth a manual artifact download. On a clean
+      # run this is the baseline; on a 0xC000027B run the final STEP breadcrumb
+      # separates a managed exception (logged with its stack) from a fault inside
+      # XAML shutdown from one after "Application.Start returned", and any dump
+      # listed here carries the stowed-exception record for the last case.
+      - name: Collect the installed app's own diagnostics
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $collected = Join-Path $env:RUNNER_TEMP 'okplayer-applogs'
+          New-Item -ItemType Directory -Force -Path $collected | Out-Null
+          $logDir = Join-Path $env:LOCALAPPDATA 'OkPlayer\logs'
+          $logs = @(Get-ChildItem -Path (Join-Path $logDir 'okplayer-*.log') -ErrorAction SilentlyContinue)
+          if ($logs.Count -eq 0) {
+            Write-Host "No application log under $logDir - the app never reached Log.Init."
+          } else {
+            foreach ($log in $logs) {
+              Copy-Item -Path $log.FullName -Destination $collected -Force
+              Write-Host "---- $($log.Name) ($($log.Length) bytes) ----"
+              Get-Content -Path $log.FullName | Write-Host
+            }
+          }
+          $dumps = @(Get-ChildItem -Path (Join-Path $env:RUNNER_TEMP 'okplayer-dumps\*.dmp') -ErrorAction SilentlyContinue)
+          if ($dumps.Count -eq 0) {
+            Write-Host 'No WER crash dump was written (the process did not fault, or WER declined).'
+          } else {
+            foreach ($dump in $dumps) { Write-Host "crash dump: $($dump.Name) ($($dump.Length) bytes)" }
+          }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ok-player-windows-installer-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/releases/**
+            ${{ runner.temp }}/okplayer-*.log
+            ${{ runner.temp }}/okplayer-applogs/**
+            ${{ runner.temp }}/okplayer-dumps/**
+          if-no-files-found: warn
