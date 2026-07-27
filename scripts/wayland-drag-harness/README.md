@@ -67,6 +67,10 @@ the render path.
 
 ## What this rig has already established (2026-07-27, #627)
 
+> The reviewable QA record for this campaign (provenance, environments, result
+> matrix, holds) is docs/qa-records/2026-07-27-issue-627.md; this section is the
+> narrative summary.
+
 The packaged candidate `0.11.0-beta.0.187` SIGSEGVs on the operator's live
 GNOME Wayland session during a granted non-OSC drag. In this rig the crash did
 **not** reproduce in any of these configurations (40-60 granted drags each,

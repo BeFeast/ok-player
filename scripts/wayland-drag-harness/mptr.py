@@ -68,7 +68,10 @@ for line in sys.stdin:
             break
         print("ok " + line.strip(), flush=True)
     except Exception as e:
+        # A rejected notification means the round is not being delivered as
+        # scripted; continuing would let the driver report a false "survived".
         print("ERR " + line.strip() + " -> " + str(e), flush=True)
+        sys.exit(1)
 
 try:
     scall("Stop")

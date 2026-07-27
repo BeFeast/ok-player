@@ -2,8 +2,15 @@
 # Cross-monitor drags on the scaled dual-monitor mutter layout (#627 repro).
 # Primary: logical 1920x1080 (scale 2). Second: logical ~1104x621 at (1920,432).
 set -uo pipefail
-cd /tmp/okp-drag-repro
+cd "${OKP_REPRO_ROOT:-/tmp/okp-drag-repro}"
 ROUNDS="${1:-20}"
+RUNTIME_DIR="/run/user/$(id -u)"
+
+app_active() { env XDG_RUNTIME_DIR="$RUNTIME_DIR" systemctl --user is-active okp-app >/dev/null 2>&1; }
+begin_count() {
+  env XDG_RUNTIME_DIR="$RUNTIME_DIR" journalctl --user -u okp-app --no-pager 2>/dev/null \
+    | grep -c "player-window-move-begin" || true
+}
 
 gen_round() {
   local r=$1
@@ -34,11 +41,25 @@ gen_round() {
 }
 
 for r in $(seq 1 "$ROUNDS"); do
-  gen_round "$r" | timeout 60 python3 mptr.py >/dev/null 2>&1
-  if ! env XDG_RUNTIME_DIR=/run/user/1000 systemctl --user is-active okp-app >/dev/null 2>&1; then
+  before=$(begin_count)
+  if ! gen_round "$r" | timeout 60 python3 mptr.py >/dev/null; then
+    # The app dying mid-round can tear the injector down too - that is the
+    # repro, not a harness fault. Anything else is a harness fault.
+    if ! app_active; then echo "APP DIED at round $r (injector torn down with it)"; exit 0; fi
+    echo "HARNESS FAULT: pointer injector failed at round $r" >&2
+    exit 2
+  fi
+  if ! app_active; then
     echo "APP DIED at round $r"
     exit 0
   fi
-  echo "round $r ok"
+  after=$(begin_count)
+  if [ "$after" -le "$before" ]; then
+    # A surviving app that never saw the drag proves nothing. This is exactly
+    # how a mis-set-up compositor turns into a false "survived all rounds".
+    echo "HARNESS FAULT: round $r delivered no player-window-move-begin (input not reaching the app)" >&2
+    exit 2
+  fi
+  echo "round $r ok (move-begin count $before -> $after)"
 done
-echo "survived all $ROUNDS rounds"
+echo "survived all $ROUNDS rounds (every round verified delivered)"

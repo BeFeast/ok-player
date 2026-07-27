@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Hammer the app with varied non-OSC drags until it dies or rounds run out.
 set -uo pipefail
-cd /tmp/okp-drag-repro
-export XDG_RUNTIME_DIR=/tmp/okp-drag-repro/xdg WAYLAND_DISPLAY=wayland-1
+cd "${OKP_REPRO_ROOT:-/tmp/okp-drag-repro}"
+export XDG_RUNTIME_DIR="${OKP_REPRO_ROOT:-/tmp/okp-drag-repro}/xdg" WAYLAND_DISPLAY="${OKP_WAYLAND_DISPLAY:-wayland-1}"
 ROUNDS="${1:-30}"
+RUNTIME_DIR="/run/user/$(id -u)"
+app_active() { env XDG_RUNTIME_DIR="$RUNTIME_DIR" systemctl --user is-active okp-app >/dev/null 2>&1; }
+begin_count() { env XDG_RUNTIME_DIR="$RUNTIME_DIR" journalctl --user -u okp-app --no-pager 2>/dev/null | grep -c "player-window-move-begin" || true; }
 
 gen_round() {
   local r=$1 sx sy steps dx dy pace
@@ -29,11 +32,21 @@ gen_round() {
 }
 
 for r in $(seq 1 "$ROUNDS"); do
-  gen_round "$r" | env XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR WAYLAND_DISPLAY=$WAYLAND_DISPLAY timeout 40 python3 vptr.py >/dev/null 2>&1
-  if ! env XDG_RUNTIME_DIR=/run/user/1000 systemctl --user is-active okp-app >/dev/null 2>&1; then
+  before=$(begin_count)
+  if ! gen_round "$r" | env XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR WAYLAND_DISPLAY=$WAYLAND_DISPLAY timeout 40 python3 vptr.py >/dev/null; then
+    if ! app_active; then echo "APP DIED at round $r (injector torn down with it)"; exit 0; fi
+    echo "HARNESS FAULT: pointer injector failed at round $r" >&2
+    exit 2
+  fi
+  if ! app_active; then
     echo "APP DIED at round $r"
     exit 0
   fi
-  echo "round $r ok"
+  after=$(begin_count)
+  if [ "$after" -le "$before" ]; then
+    echo "HARNESS FAULT: round $r delivered no player-window-move-begin (input not reaching the app)" >&2
+    exit 2
+  fi
+  echo "round $r ok (move-begin count $before -> $after)"
 done
-echo "survived all $ROUNDS rounds"
+echo "survived all $ROUNDS rounds (every round verified delivered)"
