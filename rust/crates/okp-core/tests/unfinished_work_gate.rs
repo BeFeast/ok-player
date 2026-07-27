@@ -912,21 +912,27 @@ fn a_marker_word_inside_a_string_literal_is_not_unfinished_code() {
 #[test]
 fn a_panicking_stub_with_a_comment_between_its_tokens_blocks_the_merge() {
     let fixture = Declaration::new("okp-gate-commented-stub");
-    // rustc treats a block comment between the identifier and the bang as
-    // whitespace, so this compiles and panics like any other stub. The scan
-    // already tolerated a newline there; a comment is the same gap.
+    // rustc treats a comment between the identifier and the bang as whitespace,
+    // so both of these compile and panic like any other stub. The scan already
+    // tolerated a newline there; a comment is the same gap.
     let source = fixture.root.path().join("crate/src/lib.rs");
     fs::create_dir_all(source.parent().expect("parent")).expect("fixture tree");
-    fs::write(
-        &source,
+    for body in [
         "pub fn seek() -> u32 {\n    todo /* pending */ !()\n}\n",
-    )
-    .expect("write");
+        "pub fn seek() -> u32 {\n    todo // pending\n    !()\n}\n",
+    ] {
+        fs::write(&source, body).expect("write");
 
-    let output = fixture.check("Add the seek stub", FINISHED_BODY);
+        let output = fixture.check("Add the seek stub", FINISHED_BODY);
 
-    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
-    assert!(stderr_of(&output).contains("Unfinished-code marker"));
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "a comment between the tokens does not stop it panicking: {body}\n{}",
+            stderr_of(&output)
+        );
+        assert!(stderr_of(&output).contains("Unfinished-code marker"));
+    }
 }
 
 #[test]
