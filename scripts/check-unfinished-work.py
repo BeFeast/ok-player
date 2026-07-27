@@ -161,16 +161,26 @@ def acceptance_problems(body: str) -> list[tuple[str, str]]:
                     "ends up merged unperformed.",
                 )
             )
-        if not unchecked and not unresolvable and not checked:
+        if prose:
             problems.append(
                 (
                     "Operator acceptance block states a hold in prose",
-                    "This Operator acceptance block has no checkbox at all, so there "
-                    "is nothing to record that it was performed: "
-                    + (summarise(prose) if prose else "(the block is empty)")
-                    + ". State each condition as a checkbox and tick it once it is "
-                    "done, or delete the block if this change needs no operator "
-                    "acceptance.",
+                    "An Operator acceptance block may contain checkboxes and nothing "
+                    "else, because a sentence cannot record that it was performed. "
+                    "This prose states or qualifies a hold: "
+                    + summarise(prose)
+                    + ". Move each condition into its own checkbox and tick it once "
+                    "it is done. A ticked box elsewhere in the block does not cover "
+                    "it.",
+                )
+            )
+        elif not unchecked and not unresolvable and not checked:
+            problems.append(
+                (
+                    "Operator acceptance block is empty",
+                    "This Operator acceptance block states nothing, so nothing can be "
+                    "performed or recorded. State each condition as a checkbox, or "
+                    "delete the block if this change needs no operator acceptance.",
                 )
             )
     return problems

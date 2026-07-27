@@ -29,8 +29,9 @@ blocks the merge until every box is ticked.
 - [ ] Packaged build installed and launched on the target desktop
 - [ ] Behaviour verified by hand, evidence linked
 
-Every item in that block must be a checkbox: a plain bullet states a condition
-that nothing can ever record as performed, and CI rejects it.
+That block may contain checkboxes and nothing else: a plain bullet or a sentence
+states a condition that nothing can ever record as performed, and CI rejects it
+even when other boxes in the block are ticked. Put context above the block.
 
 Never tick a box you did not perform. Never delete an acceptance block to get a
 green check. The same applies to the maestro WIP marker comment: it blocks the

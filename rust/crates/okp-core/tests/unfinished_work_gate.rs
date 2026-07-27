@@ -179,6 +179,21 @@ fn an_acceptance_hold_written_as_a_paragraph_blocks_the_merge() {
 }
 
 #[test]
+fn prose_beside_a_ticked_box_still_blocks_the_merge() {
+    let fixture = Declaration::new("okp-gate-acceptance-mixed");
+    let body = "## Operator acceptance\n\n\
+        - [x] Verified on GNOME\n\n\
+        Also verify the packaged build on Windows before merge.\n";
+
+    let output = fixture.check("Reveal saved Linux screenshots", body);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = stderr_of(&output);
+    assert!(stderr.contains("states a hold in prose"));
+    assert!(stderr.contains("packaged build on Windows"));
+}
+
+#[test]
 fn a_completed_operator_acceptance_block_is_not_blocked() {
     let fixture = Declaration::new("okp-gate-acceptance-done");
     let body = "## What this changes\n\nAdds dual-display handling.\n\n\

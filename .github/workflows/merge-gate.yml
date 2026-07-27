@@ -57,5 +57,5 @@ jobs:
 
       - name: Check for source-text-only tests
         env:
-          BASE_REF: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: python3 scripts/check-source-grep-tests.py --root .

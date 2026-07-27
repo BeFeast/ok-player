@@ -20,10 +20,11 @@ is doing the merging.
   item in an `Operator acceptance` block blocks the merge until it is resolved.
   Resolving means doing the work: never remove a marker or tick a box to turn a
   check green, and never delete an acceptance block that still applies.
-- **Every acceptance item is a checkbox.** A prose acceptance hold - a bullet
-  list of conditions with no box to tick - cannot record that anyone performed
-  it, which is exactly how the historical acceptance holds reached `main`
-  unperformed. CI rejects a plain bullet inside an `Operator acceptance` block.
+- **An acceptance block contains checkboxes and nothing else.** A plain bullet
+  or a sentence cannot record that anyone performed it, which is exactly how the
+  historical acceptance holds reached `main` unperformed. CI rejects any prose
+  or plain bullet inside an `Operator acceptance` block, including prose sitting
+  next to boxes that are already ticked. Put context above the block.
 - **An operator acceptance block is honoured by the operator, not by a worker.**
   If an issue or a pull request says a packaged build must be verified by hand
   before merge, that verification happens before merge.
