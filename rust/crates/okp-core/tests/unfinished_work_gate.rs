@@ -973,6 +973,28 @@ fn blanking_comments_for_the_stub_scan_does_not_hide_a_marker_or_a_real_stub() {
 }
 
 #[test]
+fn a_raw_string_closing_on_a_comment_like_line_cannot_hide_a_stub() {
+    let fixture = Declaration::new("okp-gate-raw-string-comment");
+    // The literal mask runs one line at a time, so a multi-line raw string
+    // survives it. Blanking comments on the joined text then read the closing
+    // line as a comment and erased the rest of that line - the stub after the
+    // delimiter included. The stub must sit on the closing line: on any other
+    // line the comment blanking cannot reach it, and the test proves nothing.
+    let source = fixture.root.path().join("crate/src/lib.rs");
+    fs::create_dir_all(source.parent().expect("parent")).expect("fixture tree");
+    fs::write(
+        &source,
+        "pub fn doc() -> u32 {\n    let _s = r#\"first line\n// text\"#; todo!();\n}\n",
+    )
+    .expect("write");
+
+    let output = fixture.check("Document the format", FINISHED_BODY);
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    assert!(stderr_of(&output).contains("Unfinished-code marker"));
+}
+
+#[test]
 fn a_panicking_stub_with_a_comment_between_its_tokens_blocks_the_merge() {
     let fixture = Declaration::new("okp-gate-commented-stub");
     // rustc treats a comment between the identifier and the bang as whitespace,

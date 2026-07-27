@@ -51,6 +51,9 @@ What this does NOT catch, on purpose or for want of a cheap rule:
     the reason the rules above exist rather than a substitute for honesty.
   * a marker inside a multi-line raw string in shipped source. Literals are
     masked one line at a time, so `r#"... TODO ..."#` spanning lines reports.
+    The *stub* scan does see through them - it blanks raw strings across line
+    boundaries before it blanks comments, because a raw string closing on a
+    line that starts `//` would otherwise hide the code after it.
   * a panicking stub written inside a comment. Comment bodies are blanked for
     the stub scan, because prose that documents *avoiding* a stub invokes
     nothing. A commented-out `todo!()` is therefore not reported - it is also
@@ -236,6 +239,19 @@ BARE_MARKER = re.compile(r"\b(TODO|FIXME)\b(?!\s*\(\s*#\d+\s*\))")
 # use this text: a marker in a comment is exactly what that scan exists to
 # catch, and blanking comments for it would delete the rule.
 LINE_AND_BLOCK_COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.DOTALL)
+# A Rust raw string may span lines, and the literal mask runs one line at a
+# time, so a multi-line one survives it intact. If it closes on a line whose
+# text begins `//`, the comment pass then blanks the rest of that line - a stub
+# after the closing delimiter included:
+#
+#     let _s = r#"first line
+#     // text"#; todo!();
+#
+# compiled and exited 0. Raw strings are blanked across line boundaries first,
+# for the stub scan only, so the comment pass sees code rather than string body.
+# The bare TODO / FIXME scan still reads the per-line mask, so a marker inside a
+# multi-line raw string still reports, as documented above.
+RAW_STRING = re.compile(r'r(#*)"(?s:.*?)"\1')
 HASH_COMMENT = re.compile(r"#[^\n]*")
 XML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 SLASH_COMMENT_SUFFIXES = {".rs", ".cs", ".c", ".h", ".cpp"}
@@ -291,8 +307,8 @@ def comment_syntax(path: Path) -> re.Pattern[str] | None:
     return None
 
 
-def blank_comments(text: str, pattern: re.Pattern[str]) -> str:
-    """Blank comment bodies, preserving newlines so line numbers still hold."""
+def blank_preserving_lines(text: str, pattern: re.Pattern[str]) -> str:
+    """Blank every match, preserving newlines so line numbers still hold."""
     return pattern.sub(
         lambda m: "".join("\n" if ch == "\n" else " " for ch in m.group(0)), text
     )
@@ -589,11 +605,15 @@ def unfinished_code_markers(root: Path) -> list[tuple[str, int, str]]:
         # panicking stub. Search the joined text and report the line the
         # identifier is on.
         joined = "\n".join(masked)
-        # Comments are blanked here and only here. String literals were masked
-        # first, so a `//` inside a string cannot open a comment.
+        # Raw strings, then comments, and both here only. A multi-line raw
+        # string outlives the per-line literal mask, so it has to go first:
+        # otherwise its closing line can look like a comment and blank the
+        # code after it.
+        if path.suffix == ".rs":
+            joined = blank_preserving_lines(joined, RAW_STRING)
         comments = comment_syntax(path)
         if comments:
-            joined = blank_comments(joined, comments)
+            joined = blank_preserving_lines(joined, comments)
         for match in RUST_STUBS.finditer(joined):
             number = joined.count("\n", 0, match.start()) + 1
             hits.setdefault((rel, number), lines[number - 1].strip()[:160])
