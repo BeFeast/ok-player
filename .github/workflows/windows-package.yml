@@ -148,7 +148,14 @@ jobs:
             throw 'The installed application did not exit within 30s of a close request'
           }
           Write-Host "Exit code after close: $($proc.ExitCode)"
-          if ($proc.ExitCode -ne 0) { throw "The installed application exited with $($proc.ExitCode)" }
+          if ($proc.ExitCode -ne 0) {
+            # This is the one failure path that used to throw without showing
+            # anything the app had said, which made an intermittent shutdown
+            # crash undiagnosable from the run log alone.
+            if (Test-Path $stdout) { Get-Content $stdout | Write-Host }
+            if (Test-Path $stderr) { Get-Content $stderr | Write-Host }
+            throw "The installed application exited with $($proc.ExitCode)"
+          }
 
       - uses: actions/upload-artifact@v4
         if: always()
