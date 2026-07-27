@@ -113,3 +113,18 @@ rust/crates/okp-linux-gtk/src/tests.rs::video_hardware_decode_uses_the_shared_se
 rust/crates/okp-linux-gtk/src/tests.rs::media_info_identity_is_app_owned_cairo_geometry
 rust/crates/okp-core/tests/isolated_xvfb_session.rs::portability_media_smokes_use_isolated_sessions_and_wait_for_xfwm
 rust/crates/okp-linux-gtk/src/css.rs::playback_chrome_keeps_the_canonical_redlines
+# Found when this branch was updated from main after #637 and #388 merged. All
+# three tests already existed on main, and each pins a property of a packaging
+# or build artifact that no Rust unit test in this workspace can drive, so
+# there is no cheap behavioural form to rewrite them into:
+#   * native_wayland_screenshots_use_libmpv_advanced_control would need a live
+#     Wayland display and a real libmpv render context to observe;
+#   * fedora_launch_closure_keeps_its_dlopen_requires_and_weak_dependency_exclusions
+#     asserts on the Fedora spec, the RPM workflow and the install gate script;
+#     its behavioural form is the installed-RPM launch job those files describe;
+#   * windows_installed_tree_assertion_keeps_a_size_floor_under_every_required_file
+#     asserts on a PowerShell script and the Windows packaging workflow, neither
+#     of which runs on Linux.
+rust/crates/okp-linux-gtk/src/tests.rs::native_wayland_screenshots_use_libmpv_advanced_control
+rust/crates/okp-linux-gtk/src/tests.rs::fedora_launch_closure_keeps_its_dlopen_requires_and_weak_dependency_exclusions
+rust/crates/okp-linux-gtk/src/tests.rs::windows_installed_tree_assertion_keeps_a_size_floor_under_every_required_file
