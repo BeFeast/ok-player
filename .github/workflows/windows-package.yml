@@ -245,6 +245,32 @@ jobs:
             $proc.Kill()
             throw "Expected the main window title '$expectedTitle', got '$($proc.MainWindowTitle)'"
           }
+          # Do not close until the engine-init outcome is on record. The video panel initialises from
+          # XAML Loaded, which lands *after* input-idle; closing before it lands turns this lane into a
+          # coin flip between "tested nothing" and "tested init" (the 4-red/5-green nondeterminism of
+          # #642/#653). A hosted runner has no OpenGL, so the pass here is the *handled* failure line;
+          # on a GL-capable machine it is the engine-ready line. Absence of both within the deadline is
+          # a failure in its own right - a silent regression must not look identical to success.
+          $logDir = Join-Path $env:LOCALAPPDATA 'OkPlayer\logs'
+          $initPattern = 'render init: done \(engine ready\)|engine init failure handled'
+          $initDeadline = (Get-Date).AddSeconds(60)
+          $initLine = $null
+          while ((Get-Date) -lt $initDeadline -and -not $initLine) {
+            if ($proc.HasExited) {
+              throw "The installed application exited with $($proc.ExitCode) before logging an engine-init outcome"
+            }
+            $newest = Get-ChildItem -Path (Join-Path $logDir 'okplayer-*.log') -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if ($newest) {
+              $initLine = Select-String -Path $newest.FullName -Pattern $initPattern | Select-Object -First 1
+            }
+            if (-not $initLine) { Start-Sleep -Milliseconds 500 }
+          }
+          if (-not $initLine) {
+            $proc.Kill()
+            throw 'Neither "render init: done" nor "engine init failure handled" appeared in the app log within 60s'
+          }
+          Write-Host "Engine init outcome: $($initLine.Line)"
           if (-not $proc.CloseMainWindow()) { throw 'The installed application refused a close request' }
           if (-not $proc.WaitForExit(30000)) {
             $proc.Kill()
@@ -262,6 +288,11 @@ jobs:
             if (Test-Path $stderr) { Get-Content $stderr | Write-Host }
             throw "The installed application exited with $($proc.ExitCode)"
           }
+          # A zero exit with a FATAL entry in this launch's log is still a failure: it means a managed
+          # exception was recorded on the way out and merely didn't take the process down this time.
+          # Scan only this launch's file - an unrelated older log must not fail the lane.
+          $fatal = Select-String -Path $newest.FullName -Pattern '\[FATAL' | Select-Object -First 1
+          if ($fatal) { throw "The app log recorded a FATAL entry: $($fatal.Line)" }
 
       # Runs on the failure path as well - that is the point. The app's own log
       # is written per line and flushed, so it survives both a crash and a hard
