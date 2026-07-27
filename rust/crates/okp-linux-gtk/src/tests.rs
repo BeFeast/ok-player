@@ -2148,6 +2148,30 @@ fn raw_mpv_config_parser_rejects_protected_options() {
 }
 
 #[test]
+fn raw_mpv_config_parser_rejects_window_dragging_override() {
+    // The embedded video plane has no toplevel; letting a user config turn
+    // mpv's own window dragging back on reintroduces the NULL dereference that
+    // killed the process on every non-OSC drag (#627).
+    for line in [
+        "window-dragging=yes",
+        "--window-dragging=yes",
+        "WINDOW-DRAGGING=no",
+    ] {
+        let error =
+            parse_raw_mpv_config(line).expect_err("window dragging must stay managed by the shell");
+        assert!(
+            error.message.contains("managed by OK Player"),
+            "unexpected message for {line}: {}",
+            error.message
+        );
+    }
+
+    // A config that does not touch it still parses, so the escape hatch keeps working.
+    let options = parse_raw_mpv_config("profile=gpu-hq").expect("unrelated options stay allowed");
+    assert_eq!(options, vec![("profile".to_owned(), "gpu-hq".to_owned())]);
+}
+
+#[test]
 fn raw_mpv_config_parser_rejects_nul_values() {
     let error = parse_raw_mpv_config("profile=gpu-hq\0").expect_err("nul should fail");
 
