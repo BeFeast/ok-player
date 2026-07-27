@@ -317,10 +317,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Could not dispatch the Update Feeds workflow' }
           $feedRun = $null
           $findDeadline = (Get-Date).AddMinutes(3)
+          # jq filter built in a variable: escaping embedded quotes inline is
+          # exactly what silently broke the first publishing run's discovery.
+          $feedRunFilter = '[.[] | select(.createdAt >= "' + $dispatchedAfter + '")][0].databaseId'
           while ((Get-Date) -lt $findDeadline -and -not $feedRun) {
             Start-Sleep -Seconds 10
             $feedRun = gh run list --workflow publish-update-feeds.yml `
-              --json databaseId,createdAt,status --jq "[.[] | select(.createdAt >= \"$dispatchedAfter\")][0].databaseId"
+              --json databaseId,createdAt,status --jq $feedRunFilter
           }
           if (-not $feedRun) { throw 'The dispatched Update Feeds run never appeared' }
           $waitDeadline = (Get-Date).AddMinutes(15)
