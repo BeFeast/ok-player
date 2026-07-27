@@ -194,6 +194,17 @@ fn prose_beside_a_ticked_box_still_blocks_the_merge() {
 }
 
 #[test]
+fn a_sentence_that_merely_mentions_operator_acceptance_opens_no_block() {
+    let fixture = Declaration::new("okp-gate-acceptance-sentence");
+    let body = "## Summary\n\nDocumentation only.\n\n\
+        Operator acceptance is not required for this documentation-only change.\n";
+
+    let output = fixture.check("Document the merge gate", body);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+}
+
+#[test]
 fn a_completed_operator_acceptance_block_is_not_blocked() {
     let fixture = Declaration::new("okp-gate-acceptance-done");
     let body = "## What this changes\n\nAdds dual-display handling.\n\n\
@@ -399,6 +410,18 @@ fn renderer_environment_is_selected_before_gtk_initialization() {
 }
 "#;
 
+/// A fixture test with no assertion macro at all: the fallible production call
+/// is the assertion, and it fails the test when the parser cannot handle the
+/// input.
+const EXPECT_ONLY_FIXTURE_TEST: &str = r#"
+#[test]
+fn parses_the_sample_playlist() {
+    let sample = include_str!("../fixtures/playlist.m3u");
+
+    parse_playlist(sample).expect("the sample playlist should parse");
+}
+"#;
+
 struct Workspace {
     root: TempDir,
 }
@@ -526,6 +549,22 @@ fn an_assertion_helper_does_not_launder_a_source_grep() {
     assert!(
         String::from_utf8_lossy(&output.stdout)
             .contains("renderer_environment_is_selected_before_gtk_initialization")
+    );
+}
+
+#[test]
+fn a_fixture_parsed_by_a_fallible_call_alone_is_never_flagged() {
+    let workspace = Workspace::new("okp-gate-expect-only");
+    workspace.write_tests(EXPECT_ONLY_FIXTURE_TEST);
+    workspace.write_allowlist("# empty\n");
+
+    let output = workspace.check();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
     );
 }
 

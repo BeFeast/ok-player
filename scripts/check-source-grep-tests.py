@@ -42,6 +42,9 @@ CONST_BINDING = re.compile(
     r"\b(?:const|static)\s+([A-Za-z_][A-Za-z0-9_]*)\s*:[^=;]*=\s*([^;]*);"
 )
 ASSERT_MACRO = re.compile(r"\bassert(?:_eq|_ne|_matches)?!\s*\(")
+# `parse(sample).expect(..)` asserts too: it fails the test when production code
+# cannot handle the input. So does `source.find(..).expect(..)`, about the text.
+FALLIBLE_CALL = re.compile(r"\.(?:expect\s*\(|unwrap\s*\(\s*\))")
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
@@ -212,7 +215,12 @@ def source_bindings(
 
 
 def assertions(body: str, body_mask: str) -> list[tuple[str, str]]:
-    """(original, masked) argument text of every assert-family call in the body."""
+    """(original, masked) text of every assertion in the body.
+
+    An assertion is an assert-family macro - classified by its arguments - or a
+    fallible call that panics on failure, classified by the whole statement it
+    sits in, since that is what names the value being unwrapped.
+    """
     args = []
     for m in ASSERT_MACRO.finditer(body_mask):
         open_at = body_mask.index("(", m.start())
@@ -220,6 +228,13 @@ def assertions(body: str, body_mask: str) -> list[tuple[str, str]]:
         if end == -1:
             continue
         args.append((body[open_at + 1 : end - 1], body_mask[open_at + 1 : end - 1]))
+    for start, end in statement_spans(body, body_mask):
+        statement_mask = body_mask[start:end]
+        if not FALLIBLE_CALL.search(statement_mask):
+            continue
+        if ASSERT_MACRO.search(statement_mask):
+            continue  # already counted through its arguments
+        args.append((body[start:end], statement_mask))
     return args
 
 

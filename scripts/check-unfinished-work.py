@@ -41,9 +41,15 @@ TITLE_UNFINISHED = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 WIP_MARKER = re.compile(r"<!--\s*maestro:wip\b[^>]*-->", re.IGNORECASE)
+# A real heading or label line, not a sentence that happens to start with the
+# phrase: "Operator acceptance is not required for this change." is prose.
 ACCEPTANCE_HEADING = re.compile(
-    r"^\s*(?:#{1,6}\s*|\*\*\s*|__\s*)?operator\s+(?:acceptance|sign[\s\-]?off)",
-    re.IGNORECASE,
+    r"""^\s*(?:
+          \#{1,6}\s*operator\s+(?:acceptance|sign[\s\-]?off).*
+        | (?:\*\*|__)\s*operator\s+(?:acceptance|sign[\s\-]?off)[^*_]*(?:\*\*|__)\s*:?
+        | operator\s+(?:acceptance|sign[\s\-]?off)[^.!?:]{0,40}:
+    )\s*$""",
+    re.IGNORECASE | re.VERBOSE,
 )
 # What ends a block: a markdown heading, a rule, or a bold/underlined label line
 # used as a heading (pull request bodies in this repository do all three).
