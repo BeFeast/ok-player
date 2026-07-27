@@ -133,6 +133,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     }
     apply_playback_settings_defaults(&state);
     let auto_check_updates = state.borrow().settings.auto_check_updates()
+        && !flatpak_update_managed()
         && env::var_os("OKP_SKIP_UPDATE_CHECK").is_none();
     let updating_seek = Rc::new(Cell::new(false));
     let updating_volume = Rc::new(Cell::new(false));

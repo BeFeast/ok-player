@@ -12,6 +12,7 @@ x86/
 [Pp]ublish/
 *.binlog
 rust/target/
+/.flatpak-builder/
 
 # --- Visual Studio / Rider ---
 .vs/
@@ -75,5 +76,13 @@ secrets.json
 /native/*
 !/native/README.md
 
+# --- Python bytecode from repo tooling scripts ---
+__pycache__/
+*.pyc
+
 # --- Local dev orchestration scratch (never committed) ---
 .maestro/
+
+# Python bytecode cache from the repository scripts
+__pycache__/
+*.pyc

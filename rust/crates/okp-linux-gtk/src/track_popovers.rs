@@ -2457,6 +2457,19 @@ pub(crate) fn drain_mpv_events(
     let mut auto_fit_dimensions = None;
     for event in events {
         match event {
+            MpvEvent::DecoderWarning {
+                path,
+                diagnostic_messages,
+            } => {
+                // Diagnostic only. The engine logged a decoder problem, not a
+                // failed source, so tell the user what it said and let playback
+                // continue; `EndFile` is what fails a source.
+                if let Some(diagnostic) =
+                    runtime_decoder_notice(state, path.as_deref(), &diagnostic_messages)
+                {
+                    status_toast.show_notice(&diagnostic.message);
+                }
+            }
             MpvEvent::FileLoaded { video_dimensions } => {
                 auto_fit_dimensions = auto_fit_dimensions.or(video_dimensions);
                 try_pending_audio_device_restore(state);
@@ -2464,9 +2477,17 @@ pub(crate) fn drain_mpv_events(
                 // Companion launch hints win over remembered track preferences for this open only.
                 try_pending_launch_tracks(state);
                 // A frame is up — the source is playing, not loading anymore.
+                // `Failed` here can only come from a failure libmpv confirmed
+                // (an `EndFile` error, or EOF carrying a codec diagnostic):
+                // opening anything new resets the surface to `Loading` first,
+                // and a decoder log message no longer fails a source at all. So
+                // leave a confirmed failure standing rather than letting a late
+                // `FileLoaded` erase its diagnostic.
                 let mut state = state.borrow_mut();
-                state.media_load_state = network_media::MediaLoadState::Playing;
-                state.last_load_diagnostic = None;
+                if state.media_load_state != network_media::MediaLoadState::Failed {
+                    state.media_load_state = network_media::MediaLoadState::Playing;
+                    state.last_load_diagnostic = None;
+                }
                 if env::var_os("OKP_DEBUG_IDLE_RETURN_SMOKE").is_some() {
                     eprintln!("idle-return-smoke: file-loaded");
                 }

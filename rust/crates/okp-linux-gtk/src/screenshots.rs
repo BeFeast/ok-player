@@ -3,6 +3,7 @@ use std::ffi::CString;
 use std::fs;
 use std::io::{self, Read};
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
@@ -131,7 +132,10 @@ pub fn prepare_saved_capture(
     verify_directory_writable(&directory)?;
 
     let timestamp_millis = unix_millis();
-    let temp_path = unique_temp_path(&directory, "saved-frame", format.extension())?;
+    // Keep libmpv on sandbox-private storage. The worker publishes the validated
+    // image into the externally mounted destination after the command completes.
+    let staging_directory = prepare_screenshot_staging_dir()?;
+    let temp_path = unique_temp_path(&staging_directory, "saved-frame", format.extension())?;
     Ok(SavedCaptureTarget {
         temp_path,
         include_subtitles,
@@ -149,6 +153,18 @@ pub fn publish_saved_capture(target: SavedCaptureTarget) -> io::Result<PathBuf> 
         return Err(error);
     }
 
+    let destination_stage = match copy_to_destination_stage(
+        &target.temp_path,
+        &target.directory,
+        target.format.extension(),
+    ) {
+        Ok(path) => path,
+        Err(error) => {
+            remove_temporary_capture(&target.temp_path);
+            return Err(error);
+        }
+    };
+
     for suffix in 0..MAX_COLLISION_ATTEMPTS {
         let filename = candidate_filename(
             target.media_path.as_deref(),
@@ -158,16 +174,21 @@ pub fn publish_saved_capture(target: SavedCaptureTarget) -> io::Result<PathBuf> 
             suffix,
         );
         let destination = target.directory.join(filename);
-        match rename_noreplace(&target.temp_path, &destination) {
-            Ok(()) => return Ok(destination),
+        match rename_noreplace(&destination_stage, &destination) {
+            Ok(()) => {
+                remove_temporary_capture(&target.temp_path);
+                return Ok(destination);
+            }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(error) => {
+                remove_temporary_capture(&destination_stage);
                 remove_temporary_capture(&target.temp_path);
                 return Err(error);
             }
         }
     }
 
+    remove_temporary_capture(&destination_stage);
     remove_temporary_capture(&target.temp_path);
     Err(io::Error::new(
         io::ErrorKind::AlreadyExists,
@@ -189,8 +210,7 @@ pub fn cancel_saved_capture_if_stale(
 }
 
 pub fn prepare_clipboard_capture() -> io::Result<PathBuf> {
-    let directory = env::temp_dir().join("ok-player");
-    fs::create_dir_all(&directory)?;
+    let directory = prepare_screenshot_staging_dir()?;
     unique_temp_path(&directory, "clipboard-frame", "png")
 }
 
@@ -231,6 +251,163 @@ fn verify_directory_writable(directory: &Path) -> io::Result<()> {
         .create_new(true)
         .open(&probe)?;
     fs::remove_file(probe)
+}
+
+/// Where screenshots are staged before being published to the user's
+/// destination.
+///
+/// A fixed path under a shared `/tmp` is owned by whichever account creates it
+/// first, so on a multi-user machine every later user fails to stage - and
+/// staging is what the sandboxed screenshot path depends on. `XDG_RUNTIME_DIR`
+/// is per-user and 0700 wherever it is set (systemd hosts and the Flatpak
+/// sandbox both set it); the shared-`/tmp` fallback is scoped by effective uid
+/// so it cannot collide between accounts either.
+fn screenshot_staging_dir() -> PathBuf {
+    let (root, relative) = screenshot_staging_layout();
+    root.join(relative)
+}
+
+/// The staging path split into the root this process does not own and the part
+/// it creates - and must therefore validate, level by level.
+fn screenshot_staging_layout() -> (PathBuf, PathBuf) {
+    if let Some(runtime_dir) = env::var_os("XDG_RUNTIME_DIR")
+        && !runtime_dir.is_empty()
+    {
+        return (
+            PathBuf::from(runtime_dir),
+            PathBuf::from("ok-player").join("screenshots"),
+        );
+    }
+    (
+        env::temp_dir(),
+        PathBuf::from(format!("ok-player-{}", current_user_id())).join("screenshots"),
+    )
+}
+
+/// Create the staging directory and refuse anything another account could have
+/// planted there.
+///
+/// The fallback root lives in a shared `/tmp` and its name is predictable, so a
+/// local attacker can pre-create it - as a directory they own, or as a symlink
+/// into somewhere else - before the player first runs. `create_dir_all` would
+/// happily adopt that tree, which is both a denial of staging and, under a
+/// typical 022 umask, a way to read captures in flight. So: create each level
+/// with mode 0700, and require the final directory to be a real directory owned
+/// by this user with no group or other access. Staging fails loudly rather than
+/// silently using someone else's directory.
+fn prepare_screenshot_staging_dir() -> io::Result<PathBuf> {
+    let (root, _) = screenshot_staging_layout();
+    prepare_staging_dir(&root, &screenshot_staging_dir())
+}
+
+/// Create and validate every level below `root`, one at a time.
+///
+/// Recursive creation would adopt an attacker-owned parent and then only the
+/// leaf would be checked - which leaves the attacker able to swap the leaf out
+/// from under the validated path. Each component is created 0700 and validated
+/// before the next one is touched. `root` itself is not created here: it is
+/// either `XDG_RUNTIME_DIR` or the system temporary directory, neither of which
+/// this process owns.
+fn prepare_staging_dir(root: &Path, directory: &Path) -> io::Result<PathBuf> {
+    let relative = directory.strip_prefix(root).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "screenshot staging directory is not under its root",
+        )
+    })?;
+    let mut path = root.to_path_buf();
+    for component in relative.components() {
+        path.push(component);
+        match fs::DirBuilder::new().mode(0o700).create(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+        validate_staging_dir(&path)?;
+    }
+    Ok(path)
+}
+
+fn validate_staging_dir(directory: &Path) -> io::Result<()> {
+    // symlink_metadata, not metadata: a symlink planted at this path must be
+    // rejected rather than followed.
+    let metadata = fs::symlink_metadata(directory)?;
+    if !metadata.file_type().is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotADirectory,
+            "screenshot staging path is not a directory",
+        ));
+    }
+    if metadata.uid() != current_user_id() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "screenshot staging directory is owned by another user",
+        ));
+    }
+    if metadata.permissions().mode() & 0o077 != 0 {
+        // Ours, but too open - typically a directory created by an older
+        // version under the default umask. Tighten it rather than refuse, or
+        // upgrading would break screenshots for everyone who has one.
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
+        let tightened = fs::symlink_metadata(directory)?;
+        if tightened.permissions().mode() & 0o077 != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "screenshot staging directory stayed accessible to other users",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn current_user_id() -> u32 {
+    // SAFETY: geteuid is always safe; it reads process credentials and cannot
+    // fail.
+    unsafe { libc::geteuid() }
+}
+
+fn copy_to_destination_stage(
+    source: &Path,
+    directory: &Path,
+    extension: &str,
+) -> io::Result<PathBuf> {
+    for _ in 0..MAX_COLLISION_ATTEMPTS {
+        let stage = unique_temp_path(directory, "publish", extension)?;
+        let mut destination = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&stage)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        };
+
+        let result = (|| {
+            let mut source = fs::File::open(source)?;
+            if io::copy(&mut source, &mut destination)? == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "screenshot staging copy was empty",
+                ));
+            }
+            Ok(())
+        })();
+        drop(destination);
+
+        match result {
+            Ok(()) => return Ok(stage),
+            Err(error) => {
+                remove_temporary_capture(&stage);
+                return Err(error);
+            }
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not allocate a destination-local screenshot staging file",
+    ))
 }
 
 fn validate_capture_output(path: &Path) -> io::Result<()> {
@@ -336,33 +513,38 @@ mod tests {
 
     #[test]
     fn publish_saved_capture_never_overwrites_a_collision() {
-        let directory = unique_temp_dir("okp-screenshot-collision");
+        let root = unique_temp_dir("okp-screenshot-collision");
+        let directory = root.path().join("destination");
+        let engine_directory = root.path().join("engine-output");
+        fs::create_dir_all(&directory).expect("destination directory");
+        fs::create_dir_all(&engine_directory).expect("engine output directory");
         let first_name = candidate_filename(None, None, 1234, "png", 0);
-        fs::write(directory.path().join(first_name), b"existing").expect("existing screenshot");
-        let temp_path = directory.path().join(".capture.png");
+        fs::write(directory.join(first_name), b"existing").expect("existing screenshot");
+        let temp_path = engine_directory.join(".capture.png");
         fs::write(&temp_path, b"new frame").expect("temporary screenshot");
 
         let published = publish_saved_capture(SavedCaptureTarget {
-            temp_path,
+            temp_path: temp_path.clone(),
             include_subtitles: false,
             request_context: SavedCaptureContext {
                 source_generation: 1,
                 seek_generation: 0,
                 position: None,
             },
-            directory: directory.path().to_owned(),
+            directory: directory.clone(),
             media_path: None,
             timestamp_millis: 1234,
             format: ScreenshotFormat::Png,
         })
         .expect("publish screenshot");
 
-        assert_eq!(published, directory.path().join("ok-player-1234-1.png"));
+        assert_eq!(published, directory.join("ok-player-1234-1.png"));
         assert_eq!(
-            fs::read(directory.path().join("ok-player-1234.png")).unwrap(),
+            fs::read(directory.join("ok-player-1234.png")).unwrap(),
             b"existing"
         );
         assert_eq!(fs::read(published).unwrap(), b"new frame");
+        assert!(!temp_path.exists());
     }
 
     #[test]
@@ -385,7 +567,36 @@ mod tests {
 
         assert!(directory.is_dir());
         assert!(!target.temp_path.exists());
+        assert_eq!(
+            target.temp_path.parent(),
+            Some(screenshot_staging_dir().as_path())
+        );
         assert!(fs::read_dir(directory).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn saved_capture_staging_preserves_clean_and_subtitled_modes() {
+        let root = unique_temp_dir("okp-screenshot-modes");
+        for include_subtitles in [false, true] {
+            let target = prepare_saved_capture(
+                root.path().join("Pictures/OK Player"),
+                None,
+                SavedCaptureContext {
+                    source_generation: 1,
+                    seek_generation: 0,
+                    position: Some(3.0),
+                },
+                ScreenshotFormat::Png,
+                include_subtitles,
+            )
+            .expect("capture target");
+
+            assert_eq!(target.include_subtitles, include_subtitles);
+            assert_eq!(
+                target.temp_path.parent(),
+                Some(screenshot_staging_dir().as_path())
+            );
+        }
     }
 
     #[test]
@@ -526,5 +737,113 @@ XDG_PICTURES_DIR="$HOME/Pictures"
             parse_xdg_pictures_dir(home, user_dirs),
             Some(PathBuf::from("/home/tester/Pictures"))
         );
+    }
+
+    #[test]
+    fn parse_xdg_pictures_dir_reads_flatpak_generated_absolute_path() {
+        let home = Path::new("/home/tester");
+        let user_dirs = r#"XDG_PICTURES_DIR="/srv/user-media/Images""#;
+
+        assert_eq!(
+            parse_xdg_pictures_dir(home, user_dirs),
+            Some(PathBuf::from("/srv/user-media/Images"))
+        );
+    }
+
+    #[test]
+    fn staging_tightens_a_directory_open_to_other_users() {
+        let root = unique_temp_dir("okp-screenshot-staging-mode");
+        let directory = root.path().join("staging");
+        fs::create_dir_all(&directory).expect("staging directory");
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o755))
+            .expect("relax permissions");
+
+        // Ours but too open: tightened in place, because refusing would break
+        // screenshots for anyone upgrading with a 0755 directory already there.
+        validate_staging_dir(&directory).expect("a directory we own is tightened");
+        let mode = fs::symlink_metadata(&directory)
+            .expect("staging metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
+
+    #[test]
+    fn staging_refuses_a_symlink_planted_at_the_path() {
+        let root = unique_temp_dir("okp-screenshot-staging-symlink");
+        let target = root.path().join("elsewhere");
+        fs::create_dir_all(&target).expect("target directory");
+        let link = root.path().join("staging");
+        std::os::unix::fs::symlink(&target, &link).expect("symlink");
+
+        let error = validate_staging_dir(&link).expect_err("symlinked staging");
+        assert_eq!(error.kind(), io::ErrorKind::NotADirectory);
+    }
+
+    #[test]
+    fn staging_refuses_an_attacker_owned_parent_shaped_as_a_symlink() {
+        // Only the leaf used to be checked, so a planted parent was adopted and
+        // the validated leaf could then be swapped out beneath it.
+        let root = unique_temp_dir("okp-screenshot-staging-parent");
+        let elsewhere = root.path().join("elsewhere");
+        fs::create_dir_all(&elsewhere).expect("target directory");
+        std::os::unix::fs::symlink(&elsewhere, root.path().join("ok-player-1"))
+            .expect("symlink parent");
+
+        let error = prepare_staging_dir(root.path(), &root.path().join("ok-player-1/screenshots"))
+            .expect_err("symlinked parent");
+        assert_eq!(error.kind(), io::ErrorKind::NotADirectory);
+    }
+
+    #[test]
+    fn staging_tightens_every_level_it_creates() {
+        let root = unique_temp_dir("okp-screenshot-staging-levels");
+        let parent = root.path().join("ok-player-1");
+        fs::create_dir_all(&parent).expect("parent directory");
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o777)).expect("open parent");
+
+        let staged = prepare_staging_dir(root.path(), &root.path().join("ok-player-1/screenshots"))
+            .expect("staging prepared");
+
+        assert_eq!(staged, parent.join("screenshots"));
+        for level in [parent.as_path(), staged.as_path()] {
+            let mode = fs::symlink_metadata(level)
+                .expect("level metadata")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o700, "{}", level.display());
+        }
+    }
+
+    #[test]
+    fn staging_accepts_a_private_directory_this_user_owns() {
+        let root = unique_temp_dir("okp-screenshot-staging-ok");
+        let directory = root.path().join("staging");
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&directory)
+            .expect("staging directory");
+
+        validate_staging_dir(&directory).expect("private staging directory is accepted");
+    }
+
+    #[test]
+    fn screenshot_staging_is_scoped_to_the_user() {
+        // A fixed directory under a shared /tmp belongs to whichever account
+        // creates it first; every later account then fails to stage a capture.
+        let staged = screenshot_staging_dir();
+        assert_ne!(
+            staged,
+            env::temp_dir().join("ok-player").join("screenshots")
+        );
+
+        match env::var_os("XDG_RUNTIME_DIR").filter(|value| !value.is_empty()) {
+            Some(runtime_dir) => assert!(staged.starts_with(PathBuf::from(runtime_dir))),
+            None => assert!(
+                staged
+                    .starts_with(env::temp_dir().join(format!("ok-player-{}", current_user_id())))
+            ),
+        }
     }
 }

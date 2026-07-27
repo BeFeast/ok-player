@@ -1,0 +1,65 @@
+name: Merge gate
+
+# Fast feedback lane for the two "is this actually finished?" checks. The same
+# two scripts also run inside the required "Rust workspace (Linux)" job, so the
+# gate is enforced on merge even before this workflow is added to the branch
+# protection required-checks list. This lane exists because it re-runs on body
+# and title edits, which the heavy Rust job deliberately does not.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review, converted_to_draft]
+  push:
+    branches: [ main ]
+  # No workflow_dispatch: these two job names are meant to go on the branch
+  # protection required list, and a manual run would publish them green with no
+  # pull request context to check against.
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  unfinished-work:
+    name: No unfinished work declared
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      # Read the declaration live instead of from the event payload: a re-run
+      # replays the original payload, so an author who removed a marker would
+      # otherwise stay blocked until they pushed a commit.
+      - name: Read pull request declaration
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: ./scripts/read-pr-declaration.sh "$PR_NUMBER" "$RUNNER_TEMP"
+
+      - name: Check the pull request does not declare itself unfinished
+        if: github.event_name == 'pull_request'
+        run: >-
+          python3 scripts/check-unfinished-work.py --root .
+          --title-file "$RUNNER_TEMP/pr-title.txt"
+          --body-file "$RUNNER_TEMP/pr-body.txt"
+
+      - name: Check no unfinished-code markers reached the tree
+        if: github.event_name != 'pull_request'
+        run: python3 scripts/check-unfinished-work.py --root .
+
+  behavioural-tests:
+    name: Tests assert behaviour, not source text
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Check for source-text-only tests
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: >-
+          python3 scripts/check-source-grep-tests.py --root .
+          ${{ github.event_name == 'pull_request' && '--require-base-ref' || '' }}
