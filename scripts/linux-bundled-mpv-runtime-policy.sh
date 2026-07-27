@@ -43,6 +43,13 @@ okp_linux_namespaced_media_soname() {
 # different distro era mixes client and plugin ABIs - the first container
 # candidate shipped Debian libpipewire onto Ubuntu hosts and produced
 # garbled audio plus an audio-clock-stalled video path (#670).
+#
+# The AppImage consequently assumes the host provides these client stacks -
+# the same assumption this list has always made for libasound, mesa, and
+# GTK. A desktop capable of running the GTK4 shell without any of
+# pipewire/pulse/jack client libraries is not a supported target; the .deb
+# declares them as Depends and the portability launch gate proves
+# resolvability on both supported distro eras.
 okp_is_linux_platform_runtime() {
   okp_is_linux_glibc_runtime "$1" && return 0
   case "$1" in
