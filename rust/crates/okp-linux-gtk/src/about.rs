@@ -537,10 +537,14 @@ pub(crate) fn linux_os_label() -> String {
 }
 
 pub(crate) fn linux_update_install_status() -> &'static str {
-    match linux_install_lane() {
-        CandidateInstallLane::AppImage => "Self-update enabled",
-        CandidateInstallLane::Debian if deb_self_install_available() => "Deb self-install",
-        CandidateInstallLane::Debian => "Deb installer",
-        CandidateInstallLane::SystemPackage => "DNF package manager",
+    if flatpak_update_managed() {
+        "Flatpak managed"
+    } else {
+        match linux_install_lane() {
+            CandidateInstallLane::AppImage => "Self-update enabled",
+            CandidateInstallLane::Debian if deb_self_install_available() => "Deb self-install",
+            CandidateInstallLane::Debian => "Deb installer",
+            CandidateInstallLane::SystemPackage => "DNF package manager",
+        }
     }
 }

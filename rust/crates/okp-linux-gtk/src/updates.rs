@@ -303,11 +303,15 @@ pub(crate) fn refresh_linux_update_views(state: &Rc<RefCell<PlayerState>>) {
         skip.set_sensitive(can_skip && !checking);
 
         if let Some(check) = view.check.as_ref().and_then(glib::WeakRef::upgrade) {
-            let managed = matches!(update_status, LinuxUpdateStatus::ManagedExternally);
-            check.set_label(if managed {
-                "Managed by DNF"
-            } else {
-                "Check for updates"
+            let manager = match update_status {
+                LinuxUpdateStatus::ManagedExternally(manager) => Some(manager),
+                _ => None,
+            };
+            let managed = manager.is_some();
+            check.set_label(match manager {
+                Some(LinuxExternalUpdateManager::Flatpak) => "Managed by Flatpak",
+                Some(LinuxExternalUpdateManager::Dnf) => "Managed by DNF",
+                None => "Check for updates",
             });
             check.set_sensitive(!managed && !checking && !installing);
         }
@@ -319,6 +323,11 @@ pub(crate) fn settings_updates_section(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) -> gtk::Box {
+    let flatpak_managed = flatpak_update_managed();
+    if flatpak_managed {
+        state.borrow_mut().linux_update_status =
+            LinuxUpdateStatus::ManagedExternally(LinuxExternalUpdateManager::Flatpak);
+    }
     let section = settings_section("Updates");
     section.append(&settings_value_row("Current version", APP_BUILD_VERSION));
     let channel = effective_update_channel(state.borrow().settings.update_channel());
@@ -350,7 +359,7 @@ pub(crate) fn settings_updates_section(
     let row = gtk::Box::new(gtk::Orientation::Vertical, 8);
     row.add_css_class("okp-settings-row");
 
-    let auto_check_enabled = state.borrow().settings.auto_check_updates();
+    let auto_check_enabled = state.borrow().settings.auto_check_updates() && !flatpak_managed;
     let initial_update_status = state.borrow().linux_update_status.clone();
 
     let auto_row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
@@ -361,9 +370,11 @@ pub(crate) fn settings_updates_section(
     auto_label.add_css_class("okp-info-label");
     auto_label.set_xalign(0.0);
     auto_text.append(&auto_label);
-    let auto_detail = gtk::Label::new(Some(
-        "Check the selected Linux feed on startup and keep available updates actionable until you choose.",
-    ));
+    let auto_detail = gtk::Label::new(Some(if flatpak_managed {
+        "Flatpak installs are updated by their configured repository."
+    } else {
+        "Check the selected Linux feed on startup and keep available updates actionable until you choose."
+    }));
     auto_detail.add_css_class("okp-update-status");
     auto_detail.set_xalign(0.0);
     auto_detail.set_width_chars(1);
@@ -378,6 +389,7 @@ pub(crate) fn settings_updates_section(
     auto_row.append(&auto_state_label);
 
     let auto_switch = settings_switch_button(auto_check_enabled, "Automatic checks");
+    auto_switch.set_sensitive(!flatpak_managed);
     let auto_state = Rc::clone(&state);
     let auto_toast = Rc::clone(&status_toast);
     let auto_state_text = auto_state_label.clone();
@@ -520,6 +532,13 @@ pub(crate) fn update_status_intro(auto_check_enabled: bool) -> &'static str {
     } else {
         "Automatic update checks are off. Use Check for updates any time."
     }
+}
+
+pub(crate) fn flatpak_update_managed() -> bool {
+    flatpak_install_detected(
+        env::var_os("FLATPAK_ID").as_deref(),
+        Path::new("/.flatpak-info").is_file(),
+    )
 }
 
 pub(crate) fn start_update_check_for_ui(
@@ -728,7 +747,7 @@ pub(crate) fn apply_update_check_result(
                 status_toast.show("OK Player is up to date");
             }
         }
-        LinuxUpdateCheckResult::ManagedExternally => {}
+        LinuxUpdateCheckResult::ManagedExternally(_) => {}
         LinuxUpdateCheckResult::Available(_) => {
             if show_toast {
                 match status {
@@ -788,9 +807,12 @@ pub(crate) fn check_for_linux_update(channel: UpdateChannel) -> LinuxUpdateCheck
     if let Some(preview) = linux_update_preview_check_result() {
         return preview;
     }
+    if flatpak_update_managed() {
+        return LinuxUpdateCheckResult::ManagedExternally(LinuxExternalUpdateManager::Flatpak);
+    }
     let install_lane = linux_install_lane();
     if install_lane == CandidateInstallLane::SystemPackage {
-        return LinuxUpdateCheckResult::ManagedExternally;
+        return LinuxUpdateCheckResult::ManagedExternally(LinuxExternalUpdateManager::Dnf);
     }
 
     let channel = effective_update_channel(channel);

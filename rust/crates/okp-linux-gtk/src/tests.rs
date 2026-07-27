@@ -31,6 +31,14 @@ fn renderer_environment_is_selected_before_gtk_initialization() {
 }
 
 #[test]
+fn native_wayland_screenshots_use_libmpv_advanced_control() {
+    let bridge = include_str!("mpv_bridge.rs");
+
+    assert!(bridge.contains("mpv.create_render_context(native_wayland_display, true)"));
+    assert!(bridge.contains("mpv.create_render_context(native_wayland_display, false)"));
+}
+
+#[test]
 fn file_association_launches_present_before_media_delivery() {
     let window = include_str!("window.rs");
     let build = window
@@ -1148,7 +1156,9 @@ fn saved_screenshot_toast_is_linked_accessible_and_non_measuring() {
     assert!(main.contains("Reveal screenshot in file manager: {display_path}"));
     assert!(main.contains("path_button.connect_clicked"));
     assert!(main.contains("self.revealer.set_can_target(interactive);"));
-    assert!(main.contains("let duration = if interactive { 5000 } else { 1700 };"));
+    // The reveal-in-file-manager button has to stay clickable, so an
+    // interactive toast outlives a plain confirmation.
+    assert!(INTERACTIVE_TOAST_DWELL > TOAST_DWELL);
     assert!(main.contains("path_button.set_visible(false);"));
     assert!(main.contains("reveal_path.borrow_mut().take();"));
     assert!(main.contains("revealer.set_margin_start(12);"));
@@ -4378,7 +4388,7 @@ fn linux_update_status_reflects_last_check_result() {
     assert!(up_to_date.pending_offer().is_none());
 
     let managed = LinuxUpdateStatus::from_check_result(
-        &LinuxUpdateCheckResult::ManagedExternally,
+        &LinuxUpdateCheckResult::ManagedExternally(LinuxExternalUpdateManager::Dnf),
         UpdateChannel::Public,
         &skipped,
     );
@@ -4387,6 +4397,17 @@ fn linux_update_status_reflects_last_check_result() {
         "Updates are managed by DNF."
     );
     assert!(managed.pending_offer().is_none());
+
+    let flatpak = LinuxUpdateStatus::from_check_result(
+        &LinuxUpdateCheckResult::ManagedExternally(LinuxExternalUpdateManager::Flatpak),
+        UpdateChannel::Public,
+        &skipped,
+    );
+    assert_eq!(
+        flatpak.settings_status_text(true),
+        "Updates are managed by Flatpak"
+    );
+    assert!(flatpak.pending_offer().is_none());
 
     let update = PendingLinuxUpdate {
         manager: None,
@@ -4639,6 +4660,124 @@ fn linux_packages_stamp_their_update_install_lane() {
     assert!(appimage.contains("OKP_PACKAGE_KIND=appimage"));
     assert_eq!(rpm.matches("OKP_PACKAGE_KIND=rpm").count(), 2);
     assert!(rpm.contains("BuildRequires:  procps-ng"));
+}
+
+/// The Fedora package aborts at startup without an explicit `Requires` for a
+/// soname nothing links against, and the job that proves this end to end is
+/// advisory. These are the two lines whose silent removal re-opens that defect,
+/// pinned in a required check.
+#[test]
+fn fedora_launch_closure_keeps_its_dlopen_requires_and_weak_dependency_exclusions() {
+    let spec = include_str!("../../../packaging/fedora/ok-player.spec");
+    // GTK4 reaches OpenGL ES through libepoxy's dlopen, so the binary carries no
+    // DT_NEEDED entry and rpm's automatic dependency extraction cannot find it.
+    // Only this line pulls a provider in with the package.
+    assert!(
+        spec.contains("Requires:       libGLESv2.so.2()(64bit)"),
+        "the Fedora spec must declare the dlopen'ed GLES soname; without it the \
+         installed package aborts with \"Couldn't open libGLESv2.so.2\""
+    );
+
+    // The launch root must carry nothing the package is supposed to bring with
+    // it. On Fedora 44 ffmpeg-free *recommends* libcamera, which requires
+    // libGLESv2.so.2, so weak dependencies drag libglvnd-gles into the harness
+    // root and blind the gate.
+    let rpm_workflow = include_str!("../../../../.github/workflows/rpm.yml");
+    let harness = rpm_workflow
+        .find("xorg-x11-server-Xvfb")
+        .expect("the installed-RPM launch job must install a headless harness");
+    let harness_install = &rpm_workflow[harness.saturating_sub(200)..harness];
+    assert!(
+        harness_install.contains("--setopt=install_weak_deps=False"),
+        "the headless launch harness must be installed without weak dependencies"
+    );
+
+    // The same flag on the package install itself, for the mirror-image reason:
+    // with weak dependencies enabled a `Recommends` would satisfy the gate's
+    // post-install soname assertion, and it would pass a package whose hard
+    // `Requires` are still incomplete.
+    let gate = include_str!("../../../../scripts/smoke-linux-rpm-installed-launch.sh");
+    assert!(
+        gate.contains("dnf install -y --setopt=install_weak_deps=False \"$rpm_path\""),
+        "the launch gate must install the package without weak dependencies"
+    );
+
+    // The gate takes the installed-binary path and the launch harness as
+    // parameters of run_gate so its tests can drive the post-install half, and
+    // pins them to the real ones whenever it is executed. Nothing in the
+    // executed path reads the environment, so no `env:` key in a workflow can
+    // shorten it.
+    assert!(
+        gate.contains("if [[ \"${BASH_SOURCE[0]}\" == \"${0}\" ]]; then"),
+        "the launch gate must run main() whenever it is executed as a program"
+    );
+    assert!(
+        gate.contains("    /usr/bin/ok-player \"$ROOT/scripts/smoke-linux-main-window.sh\""),
+        "main() must pin the real installed binary and the real launch harness"
+    );
+    assert!(
+        !gate.contains("OKP_RPM_LAUNCH_GATE_SELFTEST"),
+        "the launch gate must not carry an environment switch that skips the install"
+    );
+}
+
+/// The Windows installed-tree assertion runs in an advisory lane and its own
+/// tests run in another advisory lane, so the two properties that make it more
+/// than a Test-Path loop are pinned here, in a required check.
+#[test]
+fn windows_installed_tree_assertion_keeps_a_size_floor_under_every_required_file() {
+    let assertion = include_str!("../../../../scripts/assert-windows-installed-tree.ps1");
+
+    // Existence is not enough: the ffmpeg fetch is best-effort, and an
+    // interrupted download leaves a present-but-empty file that Test-Path
+    // accepts. Each required entry carries a floor, and the floors are compared.
+    for entry in ["OkPlayer.exe", "libmpv-2.dll", "ffmpeg.exe"] {
+        assert!(
+            assertion.contains(entry),
+            "the installed-tree assertion must still require {entry}"
+        );
+    }
+    assert!(
+        assertion.contains("MinBytes = 64KB"),
+        "the application binary must carry a size floor"
+    );
+    assert_eq!(
+        assertion.matches("MinBytes = 1MB").count(),
+        2,
+        "both bundled natives - the playback engine and ffmpeg - must carry a \
+         size floor; a zero-byte libmpv-2.dll otherwise passes"
+    );
+    assert!(
+        assertion.contains("if ($size -lt $entry.MinBytes) {"),
+        "the installed-tree assertion must compare each file against its floor"
+    );
+
+    // A floor cannot separate a complete binary from a partial one above it. The
+    // launch step covers libmpv-2.dll - the app does not start without a working
+    // engine - but nothing exercises ffmpeg, so the lane runs it explicitly.
+    let workflow = include_str!("../../../../.github/workflows/windows-package.yml");
+    assert!(
+        workflow.contains("ffmpeg -hide_banner -version")
+            || workflow.contains("$ffmpeg -hide_banner -version"),
+        "the Windows lane must run the bundled ffmpeg, not just measure it"
+    );
+    // And it must cover every project the installer contains, not only the two
+    // the app references directly.
+    assert_eq!(
+        workflow.matches("- 'src/**'").count(),
+        2,
+        "both the pull_request and push path filters must cover all of src/**"
+    );
+    // installer/build-velopack.ps1 copies both of these into the publish tree
+    // with an unconditional Copy-Item, so renaming or deleting either breaks the
+    // pack - and only this lane would notice.
+    for input in ["- 'LICENSE'", "- 'THIRD-PARTY-NOTICES.md'"] {
+        assert_eq!(
+            workflow.matches(input).count(),
+            2,
+            "both path filters must include {input}, which the pack copies unconditionally"
+        );
+    }
 }
 
 #[test]
@@ -5078,6 +5217,127 @@ fn codec_failure_reported_at_eof_stays_on_the_failed_source() {
             .as_ref()
             .map(|diagnostic| diagnostic.kind),
         Some(okp_core::playback_failure::PlaybackFailureKind::MissingCodec)
+    );
+}
+
+#[test]
+fn runtime_decoder_message_does_not_fail_the_playing_source() {
+    // A decoder log line does not say which stream it belongs to, so it is a
+    // notice and not a verdict: the message is still diagnosed for the user,
+    // but the source keeps playing and the failure surface is left untouched.
+    let path = PathBuf::from("/media/h264-aac.mp4");
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(path.clone()),
+        media_load_state: network_media::MediaLoadState::Playing,
+        ..PlayerState::default()
+    }));
+
+    let notice = runtime_decoder_notice(
+        &state,
+        path.to_str(),
+        &["vd: Failed to initialize a decoder for codec h264".to_owned()],
+    )
+    .expect("a decoder message for the current source is still diagnosed");
+    assert_eq!(
+        notice.kind,
+        okp_core::playback_failure::PlaybackFailureKind::MissingCodec
+    );
+
+    let state = state.borrow();
+    assert_eq!(
+        state.media_load_state,
+        network_media::MediaLoadState::Playing
+    );
+    assert!(state.last_load_diagnostic.is_none());
+    assert!(state.retry_load_source.is_none());
+}
+
+#[test]
+fn the_same_decoder_message_is_still_fatal_at_end_of_file() {
+    // The contrast that carries the whole design: identical text, opposite
+    // outcome. During playback it is a guess; at EOF libmpv has confirmed the
+    // file did not play, so the source must still be failed there.
+    let path = PathBuf::from("/media/h264-aac.mp4");
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(path.clone()),
+        media_load_state: network_media::MediaLoadState::Playing,
+        ..PlayerState::default()
+    }));
+
+    assert!(apply_endfile_eof_diagnostic(
+        &state,
+        path.to_str(),
+        &["vd: Failed to initialize a decoder for codec h264".to_owned()],
+    ));
+
+    let state = state.borrow();
+    assert_eq!(
+        state.media_load_state,
+        network_media::MediaLoadState::Failed
+    );
+    assert_eq!(
+        state
+            .last_load_diagnostic
+            .as_ref()
+            .map(|diagnostic| diagnostic.kind),
+        Some(okp_core::playback_failure::PlaybackFailureKind::MissingCodec)
+    );
+    assert_eq!(
+        state.retry_load_source.as_ref(),
+        Some(&network_media::LoadFailureSource::local(path))
+    );
+}
+
+#[test]
+fn runtime_decoder_message_for_a_superseded_source_is_dropped() {
+    // The warning belongs to source A; B is what the user is watching now, so
+    // B must not be told about A's decoder problem.
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(PathBuf::from("/media/source-b.mkv")),
+        media_load_state: network_media::MediaLoadState::Playing,
+        ..PlayerState::default()
+    }));
+
+    assert!(
+        runtime_decoder_notice(
+            &state,
+            Some("/media/source-a.mkv"),
+            &["vd: Failed to initialize a decoder for codec h264".to_owned()],
+        )
+        .is_none()
+    );
+
+    let state = state.borrow();
+    assert_eq!(
+        state.media_load_state,
+        network_media::MediaLoadState::Playing
+    );
+    assert!(state.last_load_diagnostic.is_none());
+    assert_eq!(
+        state.current_file.as_deref(),
+        Some(Path::new("/media/source-b.mkv"))
+    );
+}
+
+#[test]
+fn runtime_message_without_a_decoder_problem_is_not_reported() {
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(PathBuf::from("/media/movie.mkv")),
+        media_load_state: network_media::MediaLoadState::Playing,
+        ..PlayerState::default()
+    }));
+
+    assert!(
+        runtime_decoder_notice(
+            &state,
+            Some("/media/movie.mkv"),
+            &["ao/pipewire: underrun recovered".to_owned()],
+        )
+        .is_none()
+    );
+    assert_eq!(
+        state.borrow().media_load_state,
+        network_media::MediaLoadState::Playing
     );
 }
 

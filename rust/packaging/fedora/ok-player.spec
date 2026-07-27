@@ -36,6 +36,13 @@ BuildRequires:  procps-ng
 
 Requires:       mpv-libs%{?_isa}
 Requires:       xdg-utils
+# GTK4 reaches OpenGL ES through libepoxy's dlopen, so the binary has no
+# DT_NEEDED entry for it and rpm's automatic dependency extraction cannot see
+# it. A root that satisfies only the linked closure has no libGLESv2.so.2 and
+# the application aborts during startup with
+# "Couldn't open libGLESv2.so.2". Declare the dlopen'ed soname explicitly so
+# dnf pulls a provider (libglvnd-gles on current Fedora) with the package.
+Requires:       libGLESv2.so.2()(64bit)
 
 %description
 OK Player is a native GTK4 desktop media player. The Fedora package dynamically
