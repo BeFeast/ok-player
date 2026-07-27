@@ -185,8 +185,16 @@ ACCEPTANCE_LABEL_ONLY = re.compile(
 )
 
 # Unfinished-code markers. A marker that references a tracking issue is fine.
-# Rust tokenises `todo !()` the same as `todo!()`, so the bang may sit apart.
-RUST_STUBS = re.compile(r"\b(?:todo|unimplemented)\s*!\s*[\(\[\{]")
+# Rust tokenises `todo !()` the same as `todo!()`, so the bang may sit apart -
+# and a block comment between the tokens is whitespace to rustc too, so
+# `todo /* pending */ !()` compiles and panics like any other stub. Both gaps
+# are the same gap: anything rustc skips between the identifier, the bang and
+# the delimiter has to be skipped here.
+STUB_GAP = r"(?:\s|/\*.*?\*/)*"
+RUST_STUBS = re.compile(
+    rf"\b(?:todo|unimplemented){STUB_GAP}!{STUB_GAP}[\(\[\{{]",
+    re.DOTALL,
+)
 DOUBLE_QUOTED = r"\"(?:\\.|[^\"\\])*\""
 # A character literal holds exactly one character or one escape. Allowing more
 # let `fn choose<'a /* TODO */, 'b>` read as one literal from `'a` to `'b`,

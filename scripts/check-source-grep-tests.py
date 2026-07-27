@@ -35,6 +35,17 @@ functions called with literal arguments and bind nothing:
 those for a hole an author closes with one token is the wrong trade for a check
 whose purpose is to catch accidents.
 
+KNOWN FALSE POSITIVE, not fixed: source text handed to production code as a
+*receiver* is read as inspection, so `assert!(source.parse::<T>().is_ok())` is
+rejected although it runs code. `passed_into_a_call` recognises the argument
+form, `parse(source)`. Accepting `source.<method>(..)` whenever the method is
+outside TEXT_METHODS also accepts `source.to_uppercase().contains("x")` and
+every other text operation nobody thought to list - TEXT_METHODS is a floor,
+not a closed set - and telling a parser from a text helper by receiver method
+needs type resolution this check does not have. Bind the result first
+(`let parsed = source.parse::<T>();`): a bound call result already counts as
+behaviour. No test in the workspace takes the rejected shape today.
+
 Existing offenders are grandfathered by an explicit allowlist that may only
 shrink. See the allowlist header for the rules and for the full list of what
 this does not detect.
