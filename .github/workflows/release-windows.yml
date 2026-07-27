@@ -41,6 +41,14 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
+      # A workflow_dispatch caller picks the ref. Gate-only dry runs may come
+      # from any ref, but publication writes the stable win channel and must
+      # only ever ship reviewed code: publish requires main.
+      - name: Refuse to publish from a non-main ref
+        if: inputs.publish == true && github.ref != 'refs/heads/main'
+        shell: pwsh
+        run: throw "Publishing is only allowed from refs/heads/main (got '${{ github.ref }}'). Dispatch with publish:false to gate a branch build."
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-dotnet@v4

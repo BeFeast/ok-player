@@ -65,6 +65,13 @@ Write-Host 'ok: release lane is dispatch-only'
 # repack in between - the uploaded bytes must be the gated bytes.
 $publishStep = Get-Step -Yaml $releaseLane -Name 'Publish the versioned release (tag v<version>, channel win)'
 if ($publishStep -notmatch 'if:\s*inputs\.publish\s*==\s*true') { throw 'Publish step is not gated on inputs.publish' }
+
+# Publication must be pinned to main: a dispatch from a feature branch with
+# publish:true would ship unreviewed code to the stable win channel.
+$refGuard = Get-Step -Yaml $releaseLane -Name 'Refuse to publish from a non-main ref'
+if ($refGuard -notmatch [regex]::Escape("github.ref != 'refs/heads/main'")) { throw 'Ref guard does not compare against refs/heads/main' }
+if ($refGuard -notmatch 'inputs\.publish\s*==\s*true') { throw 'Ref guard must only fire on publishing runs' }
+if ($releaseLane.IndexOf('Refuse to publish from a non-main ref') -gt $releaseLane.IndexOf('actions/checkout')) { throw 'Ref guard must run before checkout' }
 $publishIdx = $releaseLane.IndexOf('Publish the versioned release')
 $tail = $releaseLane.Substring($publishIdx)
 foreach ($forbidden in @('build-velopack.ps1', 'vpk pack', 'dotnet publish')) {
