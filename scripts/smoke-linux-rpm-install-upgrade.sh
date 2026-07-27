@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
-# Install, upgrade, launch, remove, and config-preservation smoke for a Fedora RPM.
+# Install, upgrade, remove, and config-preservation smoke for a Fedora RPM.
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/scripts/ok-player-scratch.sh"
 
-CURRENT_RPM="${1:?usage: smoke-linux-rpm-install-upgrade.sh <current.rpm> [previous.rpm] [launch-evidence-dir]}"
+CURRENT_RPM="${1:?usage: smoke-linux-rpm-install-upgrade.sh <current.rpm> [previous.rpm]}"
 PREVIOUS_RPM="${2:-$CURRENT_RPM}"
-LAUNCH_EVIDENCE_DIR="${3:-$ROOT/artifacts/linux/rpm/installed-launch}"
-INSTALLED_BINARY=/usr/bin/ok-player
 
 [[ -f "$CURRENT_RPM" ]] || { echo "Current RPM not found: $CURRENT_RPM" >&2; exit 2; }
 [[ -f "$PREVIOUS_RPM" ]] || { echo "Previous RPM not found: $PREVIOUS_RPM" >&2; exit 2; }
@@ -38,22 +36,7 @@ assert_installed() {
   test -f /usr/share/licenses/ok-player/LICENSE
   test -f /usr/share/doc/ok-player/THIRD-PARTY-NOTICES.md
   rpm -q --requires ok-player | grep '^mpv-libs' >/dev/null
-  ldd "$INSTALLED_BINARY" | grep 'libmpv\.so' >/dev/null
-}
-
-# Packaging metadata is not evidence that the package runs. Start the exact
-# executable dnf put on the system and require the same known-good idle surface
-# the Linux candidate lane requires, so an RPM that installs but cannot launch
-# fails here instead of on a user's machine. This deliberately reuses
-# smoke-linux-main-window.sh rather than adding a second launch mechanism: that
-# script exits 127 when its headless tooling is absent, so a host without Xvfb
-# fails the gate loudly instead of skipping the launch.
-assert_installed_launches() {
-  local mode="$1"
-  echo "Launching the installed RPM binary ($mode): $INSTALLED_BINARY"
-  OKP_MAIN_WINDOW_IDLE_ONLY=1 \
-    "$ROOT/scripts/smoke-linux-main-window.sh" \
-    "$INSTALLED_BINARY" "$LAUNCH_EVIDENCE_DIR/$mode"
+  ldd /usr/bin/ok-player | grep 'libmpv\.so' >/dev/null
 }
 
 "${DNF[@]}" install -y "$PREVIOUS_RPM"
@@ -61,12 +44,10 @@ assert_installed
 
 "${DNF[@]}" upgrade -y "$CURRENT_RPM"
 assert_installed
-assert_installed_launches upgraded
 
 "${DNF[@]}" remove -y ok-player
 test ! -e /usr/bin/ok-player
 test -f "$CONFIG_DIR/ok-player/settings.json"
 grep -q '"preserve":true' "$CONFIG_DIR/ok-player/settings.json"
 
-echo "RPM install/upgrade/launch/removal and config-preservation smoke passed"
-echo "Installed-binary launch evidence: $LAUNCH_EVIDENCE_DIR"
+echo "RPM install/upgrade/removal and config-preservation smoke passed"

@@ -1,5 +1,11 @@
 name: Fedora RPM
 
+# This workflow is NOT in main's required status checks (those are "Unit tests
+# (engine-agnostic Core, headless)", "Rust workspace (Linux)" and "Integration
+# tests (real libmpv + render-thread guard)"). It reports on pull requests but
+# cannot block a merge on its own; making it blocking is a branch-protection
+# change only an operator can make.
+
 on:
   pull_request:
     paths:
@@ -9,8 +15,9 @@ on:
       - 'scripts/package-linux-rpm-source.sh'
       - 'scripts/run-linux-rpm-checks.sh'
       - 'scripts/smoke-linux-rpm-install-upgrade.sh'
-      # The installed-binary launch gate runs these, so a change to any of them
-      # must be exercised by this lane before it merges.
+      # The installed-RPM launch job runs these, so a change to any of them must
+      # be exercised by this lane before it merges.
+      - 'scripts/smoke-linux-rpm-installed-launch.sh'
       - 'scripts/smoke-linux-main-window.sh'
       - 'scripts/assert-linux-idle-osc-absent.sh'
       - 'scripts/run-linux-isolated-dbus-session.sh'
@@ -59,21 +66,7 @@ jobs:
             wayland-devel wayland-protocols-devel mesa-libEGL-devel mesa-libGL-devel \
             desktop-file-utils appstream xdg-utils
 
-      # Everything the installed-binary launch gate needs: a disposable X server
-      # with software GL, a window manager, screen capture, and a session bus.
-      # run-linux-rpm-checks.sh hard-fails when any of these is missing, so this
-      # step is a prerequisite rather than an optional enhancement.
-      - name: Install headless launch tooling
-        run: |
-          dnf install -y \
-            xorg-x11-server-Xvfb xorg-x11-xauth util-linux \
-            xwininfo xprop xdotool xfwm4 \
-            ImageMagick ripgrep ffmpeg-free python3 \
-            dbus-daemon glib2 \
-            mesa-dri-drivers mesa-libEGL mesa-libGL mesa-libGLES libepoxy \
-            dejavu-sans-fonts dejavu-serif-fonts google-noto-sans-fonts
-
-      - name: Build, lint, install, launch, upgrade, and remove
+      - name: Build, lint, install, upgrade, and remove
         env:
           FEDORA_VERSION: ${{ matrix.fedora }}
           CC: /usr/bin/cc
@@ -84,3 +77,61 @@ jobs:
         with:
           name: ok-player-fedora-${{ matrix.fedora }}
           path: artifacts/linux/rpm/fedora-${{ matrix.fedora }}/**
+
+  # Deliberately a separate job in a separate container. The build root cannot
+  # host this check: mesa-libEGL-devel and mesa-libGL-devel pull libglvnd-devel,
+  # which pulls libglvnd-gles, so libGLESv2.so.2 - the library GTK4 dlopens
+  # through libepoxy and the one whose absence aborts startup - is present in
+  # the build root no matter what the package declares. Installing and launching
+  # there proves nothing about the RPM's dependency closure. This job installs
+  # the package into a root carrying only the headless harness, so anything the
+  # application needs at runtime has to arrive through the package's own
+  # Requires. The gate refuses to run if that root is contaminated.
+  rpm-launch:
+    name: Fedora ${{ matrix.fedora }} installed-RPM launch
+    needs: rpm
+    runs-on: ubuntu-latest
+    container: fedora:${{ matrix.fedora }}
+    strategy:
+      fail-fast: false
+      matrix:
+        fedora: ['43', '44']
+    steps:
+      - name: Disable nonessential repositories before checkout
+        run: |
+          dnf install -y dnf-plugins-core
+          dnf config-manager setopt fedora-cisco-openh264.enabled=0
+          dnf install -y git
+
+      - uses: actions/checkout@v4
+
+      # Harness only: a disposable X server, a window manager, input synthesis,
+      # window inspection, screen capture, and a session bus. Nothing here may
+      # be a runtime dependency of the application - if a package added to this
+      # list starts providing a library the RPM is supposed to pull in, the gate
+      # fails with an explicit contamination error instead of passing silently.
+      - name: Install the headless launch harness
+        run: |
+          dnf install -y \
+            xorg-x11-server-Xvfb xorg-x11-xauth util-linux \
+            xwininfo xprop xdotool xfwm4 \
+            ImageMagick ripgrep ffmpeg-free python3 \
+            dbus-daemon glib2
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ok-player-fedora-${{ matrix.fedora }}
+          path: artifacts/linux/rpm/fedora-${{ matrix.fedora }}
+
+      - name: Install and launch the packaged application
+        run: |
+          ./scripts/smoke-linux-rpm-installed-launch.sh \
+            "artifacts/linux/rpm/fedora-${{ matrix.fedora }}/current" \
+            "artifacts/linux/rpm/installed-launch"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ok-player-fedora-${{ matrix.fedora }}-installed-launch
+          path: artifacts/linux/rpm/installed-launch/**
+          if-no-files-found: warn

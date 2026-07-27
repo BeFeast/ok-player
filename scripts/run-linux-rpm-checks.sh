@@ -11,18 +11,6 @@ for tool in dnf rpmbuild rpmlint cmp sha256sum; do
   command -v "$tool" >/dev/null 2>&1 || { echo "Missing required tool: $tool" >&2; exit 127; }
 done
 
-# The installed-binary launch gate at the end of this script needs a headless
-# desktop session. Demand that tooling up front so a host that cannot run the
-# launch fails in seconds instead of building two RPMs and then skipping the
-# only check that proves the package actually starts.
-for tool in Xvfb xauth mcookie flock dbus-run-session gdbus xfwm4 xdotool \
-  xwininfo xprop import magick ffmpeg ffprobe rg stat python3; do
-  command -v "$tool" >/dev/null 2>&1 || {
-    echo "Missing required tool for the installed-binary launch gate: $tool" >&2
-    exit 127
-  }
-done
-
 SOURCE_DIR="$OUT_DIR/source"
 "$ROOT/scripts/package-linux-rpm-source.sh" "$SOURCE_DIR"
 SRPM="$(find "$SOURCE_DIR" -maxdepth 1 -name '*.src.rpm' -print -quit)"
@@ -75,11 +63,10 @@ if [[ "$RPMLINT_STATUS" -ne 0 ]]; then
   echo "rpmlint warnings were recorded; the Fedora beta gate rejects errors and accounts for warnings in the PR." >&2
 fi
 
-"$ROOT/scripts/smoke-linux-rpm-install-upgrade.sh" \
-  "$CURRENT_RPM" "$PREVIOUS_RPM" "$OUT_DIR/installed-launch"
+"$ROOT/scripts/smoke-linux-rpm-install-upgrade.sh" "$CURRENT_RPM" "$PREVIOUS_RPM"
 
 rpm -qpl "$CURRENT_RPM" | sort > "$OUT_DIR/installed-files.txt"
 rpm -qpR "$CURRENT_RPM" | sort > "$OUT_DIR/declared-requires.txt"
 sha256sum "$SRPM" "$PREVIOUS_RPM" "$CURRENT_RPM" > "$OUT_DIR/SHA256SUMS"
 
-echo "Fedora $FEDORA_VERSION RPM checks passed (including installed-binary launch): $CURRENT_RPM"
+echo "Fedora $FEDORA_VERSION RPM checks passed: $CURRENT_RPM"
