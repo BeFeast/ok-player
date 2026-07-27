@@ -909,6 +909,84 @@ fn a_marker_word_inside_a_string_literal_is_not_unfinished_code() {
     assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
 }
 
+#[test]
+fn a_marker_inside_a_single_quoted_string_is_not_unfinished_code() {
+    let fixture = Declaration::new("okp-gate-single-quoted");
+    // A helper that *searches* for the marker text carries it as data, and the
+    // `TODO(#1234)` escape hatch cannot be spelled inside a search pattern.
+    // Where `'...'` delimits a string, its contents are masked exactly like a
+    // double-quoted string's. `.rs` is deliberately not one of those languages:
+    // see `a_marker_between_two_lifetimes_is_not_hidden_by_the_literal_mask`.
+    for (name, contents) in [
+        ("scan.sh", "grep -n 'TODO' /dev/null\n"),
+        ("scan.py", "x = 'FIXME'\nprint(x)\n"),
+        ("scan.ps1", "$marker = 'TODO'\nWrite-Output $marker\n"),
+        ("scan.yml", "jobs:\n  scan:\n    run: rg 'FIXME' .\n"),
+    ] {
+        let path = fixture.root.path().join("scripts").join(name);
+        fs::create_dir_all(path.parent().expect("parent")).expect("fixture tree");
+        fs::write(&path, contents).expect("write");
+
+        let output = fixture.check("Search for marker text", FINISHED_BODY);
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "a marker inside a single-quoted string is data, not a declaration: {name}\n{}",
+            stderr_of(&output)
+        );
+        fs::remove_file(&path).expect("remove");
+    }
+}
+
+#[test]
+fn a_marker_outside_a_single_quoted_string_still_blocks_the_merge() {
+    let fixture = Declaration::new("okp-gate-single-quoted-marker");
+    // Masking the strings on a line must not blank the rest of the line: the
+    // marker below sits in a comment beside a quoted search pattern.
+    for (name, contents) in [
+        ("scan.sh", "grep -n 'pattern' file # TODO: narrow this\n"),
+        ("scan.py", "x = 'pattern'  # FIXME rewrite the loop\n"),
+        ("scan.ps1", "$p = 'pattern' # TODO tighten the filter\n"),
+        ("scan.yml", "# TODO: pin the runner image\njobs: {}\n"),
+    ] {
+        let path = fixture.root.path().join("scripts").join(name);
+        fs::create_dir_all(path.parent().expect("parent")).expect("fixture tree");
+        fs::write(&path, contents).expect("write");
+
+        let output = fixture.check("Search for marker text", FINISHED_BODY);
+
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "a marker outside the quotes is still unfinished work: {name}\n{}",
+            stderr_of(&output)
+        );
+        assert!(stderr_of(&output).contains("Unfinished-code marker"));
+        fs::remove_file(&path).expect("remove");
+    }
+}
+
+#[test]
+fn an_apostrophe_in_prose_does_not_open_a_string_that_hides_a_marker() {
+    let fixture = Declaration::new("okp-gate-apostrophe");
+    // Two apostrophes in a sentence are not a string. A mask that paired them
+    // would blank everything between - the marker included - which is the same
+    // defect the Rust character-literal rule was narrowed to fix.
+    let path = fixture.root.path().join("scripts/harness.sh");
+    fs::create_dir_all(path.parent().expect("parent")).expect("fixture tree");
+    fs::write(
+        &path,
+        "# don't drop the TODO marker: it's tracked\nexit 0\n",
+    )
+    .expect("write");
+
+    let output = fixture.check("Harden the harness", FINISHED_BODY);
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    assert!(stderr_of(&output).contains("Unfinished-code marker"));
+}
+
 // ---------------------------------------------------------------------------
 // Source-text-only test detection: scripts/check-source-grep-tests.py
 // ---------------------------------------------------------------------------

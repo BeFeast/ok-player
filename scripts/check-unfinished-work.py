@@ -16,7 +16,11 @@ Two cheap, mechanical rules that a merge robot cannot talk itself out of:
 2. Tree checks: unfinished-code markers in shipped source and shipped
    configuration - `todo!()`, `unimplemented!()`, and bare TODO / FIXME
    comments. A marker that names a tracking issue (`TODO(#123)`) is accepted:
-   the work is tracked, not lost.
+   the work is tracked, not lost. String literals are masked first, so a
+   helper that *searches* for the marker text - `grep -n 'TODO' file`,
+   `x = 'FIXME'` - is data rather than a declaration. Single quotes are masked
+   only where they delimit a string (shell, Python, PowerShell, YAML, TOML);
+   in Rust and the C family they open a lifetime or a character literal.
 
 *Balanced* fenced code blocks are ignored when scanning the body, so a pull
 request may quote these rules without tripping them; an unbalanced fence is
@@ -46,6 +50,16 @@ What this does NOT catch, on purpose or for want of a cheap rule:
     the reason the rules above exist rather than a substitute for honesty.
   * a marker inside a multi-line raw string in shipped source. Literals are
     masked one line at a time, so `r#"... TODO ..."#` spanning lines reports.
+  * an identifier spelled TODO or FIXME - `const TODO: bool = false;` reports.
+    Only string literals are masked; the marker scan cannot tell a name from a
+    comment, and every rule that could (extract comments, then scan only those)
+    gives up bare markers in code, which are the shape a half-written function
+    leaves behind. Rename the constant, or name a tracking issue.
+  * a marker inside a single-quoted string in a language that is not in
+    `SINGLE_QUOTE_STRING_SUFFIXES` - a C# or C++ verbatim-ish `'...'` does not
+    exist, but a marker inside an XML element's text, e.g.
+    `<Text>TODO</Text>`, reports. That is intentional: shipped UI text saying
+    TODO is unfinished work.
   * unfinished work in Markdown. `.md` is out of scope: prose discusses markers
     legitimately, and a check that fires on documentation gets muted.
   * a setext heading used as a *terminator*. A setext underline opens an
@@ -172,10 +186,33 @@ ACCEPTANCE_LABEL_ONLY = re.compile(
 # Unfinished-code markers. A marker that references a tracking issue is fine.
 # Rust tokenises `todo !()` the same as `todo!()`, so the bang may sit apart.
 RUST_STUBS = re.compile(r"\b(?:todo|unimplemented)\s*!\s*[\(\[\{]")
+DOUBLE_QUOTED = r"\"(?:\\.|[^\"\\])*\""
 # A character literal holds exactly one character or one escape. Allowing more
 # let `fn choose<'a /* TODO */, 'b>` read as one literal from `'a` to `'b`,
 # blanking a real marker sitting between two Rust lifetimes.
-STRING_LITERAL = re.compile(r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\\n])'")
+CHAR_LITERAL = r"'(?:\\.|[^'\\\n])'"
+# Where `'...'` delimits a *string*, its contents are data exactly like a
+# double-quoted string's: `grep -n 'TODO' file` searches for the marker, it does
+# not declare one. Two narrowings keep this from blanking real markers:
+#   * the opening quote may not follow a word character, so the apostrophes in
+#     `# don't drop the TODO marker: it's tracked` do not pair up around it.
+#     A Python string prefix (b/f/r/u) is the one thing allowed in front;
+#   * the string may not span lines, so an unmatched apostrophe masks nothing.
+# There is no escape handling: `'a\'` in shell is a complete string, and
+# treating a backslash as an escape would run the mask past the closing quote.
+# The cost is the safe direction - `'don\'t TODO'` in Python reports.
+SINGLE_QUOTED = r"(?<![A-Za-z0-9_])[bBfFrRuU]{0,2}'[^'\n]*'"
+STRING_LITERAL = re.compile(f"{DOUBLE_QUOTED}|{CHAR_LITERAL}")
+STRING_OR_SINGLE_QUOTED = re.compile(f"{DOUBLE_QUOTED}|{SINGLE_QUOTED}")
+# Languages whose `'...'` is a string. Rust, C, C++ and C# are absent on
+# purpose: there `'a` is a lifetime or a character literal, and pairing two of
+# them blanks whatever sits between - the defect the char-literal rule above
+# was narrowed to fix. XML-family files are absent too: `'` delimits an
+# attribute value there but is also an apostrophe in element text.
+SINGLE_QUOTE_STRING_SUFFIXES = {
+    ".sh", ".spec", ".dockerfile", ".Dockerfile",  # shell command lines
+    ".py", ".ps1", ".psm1", ".yml", ".yaml", ".toml",
+}
 BARE_MARKER = re.compile(r"\b(TODO|FIXME)\b(?!\s*\(\s*#\d+\s*\))")
 # Shipped source and shipped configuration. Workflow and manifest files are
 # here because a half-finished CI job is unfinished work like any other - the
@@ -464,7 +501,12 @@ def unfinished_code_markers(root: Path) -> list[tuple[str, int, str]]:
         # inside a multi-line raw string still reports; that has not happened,
         # and a false positive there is cheap to resolve by naming a tracking
         # issue.
-        masked = [STRING_LITERAL.sub('""', line) for line in lines]
+        literals = (
+            STRING_OR_SINGLE_QUOTED
+            if path.suffix in SINGLE_QUOTE_STRING_SUFFIXES
+            else STRING_LITERAL
+        )
+        masked = [literals.sub('""', line) for line in lines]
         for number, code in enumerate(masked, start=1):
             if BARE_MARKER.search(code):
                 hits[(rel, number)] = lines[number - 1].strip()[:160]
