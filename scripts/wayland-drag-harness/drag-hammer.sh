@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Hammer the app with varied non-OSC drags until it dies or rounds run out.
+set -uo pipefail
+cd /tmp/okp-drag-repro
+export XDG_RUNTIME_DIR=/tmp/okp-drag-repro/xdg WAYLAND_DISPLAY=wayland-1
+ROUNDS="${1:-30}"
+
+gen_round() {
+  local r=$1 sx sy steps dx dy pace
+  case $((r % 5)) in
+    0) sx=640; sy=300; steps=10; dx=18;  dy=12;  pace=70 ;;  # medium diagonal
+    1) sx=300; sy=200; steps=25; dx=30;  dy=2;   pace=25 ;;  # fast long right
+    2) sx=900; sy=350; steps=6;  dx=-40; dy=-20; pace=40 ;;  # up-left, big steps
+    3) sx=640; sy=120; steps=14; dx=4;   dy=35;  pace=30 ;;  # down fast (toward OSC)
+    4) sx=500; sy=300; steps=3;  dx=8;   dy=6;   pace=200 ;; # slow tiny (threshold edge)
+  esac
+  echo "abs $sx $sy"; echo "sleep 250"
+  echo "btn press"; echo "sleep 150"
+  local x=$sx y=$sy i
+  for i in $(seq 1 $steps); do
+    x=$((x+dx)); y=$((y+dy))
+    [ $x -lt 2 ] && x=2; [ $x -gt 1278 ] && x=1278
+    [ $y -lt 2 ] && y=2; [ $y -gt 718 ] && y=718
+    echo "abs $x $y"; echo "sleep $pace"
+  done
+  # every third round: release mid-motion pattern (release immediately, no settle)
+  if [ $((r % 3)) -eq 0 ]; then echo "btn release"; else echo "sleep 200"; echo "btn release"; fi
+  echo "sleep 350"
+}
+
+for r in $(seq 1 "$ROUNDS"); do
+  gen_round "$r" | env XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR WAYLAND_DISPLAY=$WAYLAND_DISPLAY timeout 40 python3 vptr.py >/dev/null 2>&1
+  if ! env XDG_RUNTIME_DIR=/run/user/1000 systemctl --user is-active okp-app >/dev/null 2>&1; then
+    echo "APP DIED at round $r"
+    exit 0
+  fi
+  echo "round $r ok"
+done
+echo "survived all $ROUNDS rounds"
