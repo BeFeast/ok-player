@@ -81,6 +81,48 @@ if [[ "${1:-}" == "--inner" ]]; then
     ' "$3"
   }
 
+  # Every rectangle the shelf checks are about, newest value each, for a failure message
+  # that names what was actually on screen instead of only what was expected.
+  dump_shelf_state() {
+    local log="$1" index=0
+    echo "--- shelf geometry as last reported ---" >&2
+    for part in window welcome; do
+      echo "$part: $(field "$part" local-x "$log")x$(field "$part" local-y "$log") \
+size $(field "$part" w "$log")x$(field "$part" h "$log")" >&2
+    done
+    while (( index < 8 )); do
+      local width
+      width="$(field "recent-card-$index" w "$log")"
+      [[ -z "$width" ]] && break
+      echo "recent-card-$index: at $(field "recent-card-$index" local-x "$log"),\
+$(field "recent-card-$index" local-y "$log") size ${width}x$(field "recent-card-$index" h "$log")" >&2
+      index=$((index + 1))
+    done
+    echo "recents-more-0: at $(field recents-more-0 local-x "$log"),$(field recents-more-0 local-y "$log") \
+size $(field recents-more-0 w "$log")x$(field recents-more-0 h "$log")" >&2
+  }
+
+  # Block until the record stops changing. The reporter publishes only on change, so a
+  # sequence number that stops advancing is the layout settling - and asserting before it
+  # has would test whatever GTK happened to have allocated mid-startup.
+  wait_for_settled() {
+    local log="$1" last="" current="" stable=0
+    for _ in $(seq 1 240); do
+      current="$(field window seq "$log")"
+      if [[ -n "$current" && "$current" == "$last" ]]; then
+        stable=$((stable + 1))
+        if (( stable >= 8 )); then
+          return 0
+        fi
+      else
+        stable=0
+      fi
+      last="$current"
+      sleep 0.25
+    done
+    return 1
+  }
+
   # Fail unless the shelf the record describes is a uniform grid. Called once per window
   # width: a layout that only holds at the width it was designed at is not a grid.
   assert_uniform_shelf() {
@@ -105,10 +147,12 @@ if [[ "${1:-}" == "--inner" ]]; then
       else
         (( width >= first_width - 1 && width <= first_width + 1 )) || {
           echo "$label: card $index is ${width}px wide but card 0 is ${first_width}px" >&2
+          dump_shelf_state "$log"
           return 1
         }
         (( y == first_y )) || {
           echo "$label: card $index sits at y=${y} but card 0 sits at y=${first_y}" >&2
+          dump_shelf_state "$log"
           return 1
         }
         if (( x < left )); then left="$x"; fi
@@ -132,6 +176,7 @@ if [[ "${1:-}" == "--inner" ]]; then
     (( left >= container_x && right <= container_x + container_w )) || {
       echo "$label: the shelf spans ${left}..${right} outside its container" \
         "${container_x}..$((container_x + container_w))" >&2
+      dump_shelf_state "$log"
       return 1
     }
 
@@ -147,6 +192,7 @@ if [[ "${1:-}" == "--inner" ]]; then
     }
     (( more_w > 0 && more_w <= first_width )) || {
       echo "$label: the History affordance is ${more_w}px wide against a ${first_width}px card" >&2
+      dump_shelf_state "$log"
       return 1
     }
     (( more_h > 0 && more_h <= first_width )) || {
@@ -206,6 +252,10 @@ if [[ "${1:-}" == "--inner" ]]; then
   if command -v import >/dev/null 2>&1; then
     import -window "$window_id" "$OUT_DIR/shelf-wide.png" || true
   fi
+  wait_for_settled "$OUT_DIR/app.log" || {
+    echo "the layout never settled at the default window width" >&2
+    exit 1
+  }
   wide_width="$(assert_uniform_shelf "$OUT_DIR/app.log" wide 3)" || exit 1
 
   xdotool windowsize "$window_id" "$NARROW_WIDTH" 680
@@ -221,7 +271,10 @@ if [[ "${1:-}" == "--inner" ]]; then
     echo "the window never reported the narrowed width" >&2
     exit 1
   }
-  sleep 1
+  wait_for_settled "$OUT_DIR/app.log" || {
+    echo "the layout never settled after the window was narrowed" >&2
+    exit 1
+  }
   if command -v import >/dev/null 2>&1; then
     import -window "$window_id" "$OUT_DIR/shelf-narrow.png" || true
   fi
