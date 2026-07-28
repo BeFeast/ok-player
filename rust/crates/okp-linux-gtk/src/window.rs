@@ -258,6 +258,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     }
     overlay.add_overlay(&update_surface);
     overlay.add_overlay(status_toast.widget());
+    let diagnostic_resize_handles = resize_handles.clone();
     for resize_handle in resize_handles {
         overlay.add_overlay(&resize_handle);
     }
@@ -384,6 +385,46 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     });
     let volume_preview = env::var_os("OKP_VOLUME_PREVIEW")
         .map(|mode| (controls.volume.clone(), mode.to_string_lossy().into_owned()));
+    // No Wayland client can be asked where its window is, so an input harness has to be
+    // told. Under OKP_DEBUG_INTERACTIONS the shell reports the toplevel, the video plane
+    // and the chrome planes it must avoid; everything else here stays untouched.
+    connect_geometry_diagnostics(
+        &window,
+        GeometrySurfaces {
+            video: video_host.widget().clone(),
+            // Bottom to top, in the same order the root overlay stacks these surfaces, so
+            // the reported owner of a point is the widget that will receive the press.
+            chrome: [
+                (
+                    "welcome",
+                    empty_surface.widget().clone().upcast::<gtk::Widget>(),
+                ),
+                ("lyrics", lyrics_surface.widget().clone().upcast()),
+                ("media-state", media_state_overlay.widget().clone().upcast()),
+                ("titlebar", window_chrome.widget().clone().upcast()),
+                ("osc", chrome.widget().clone().upcast()),
+                ("up-next", controls.up_next_revealer.clone().upcast()),
+                (
+                    "side-panel",
+                    controls.side_panel_fade_revealer.clone().upcast(),
+                ),
+            ]
+            .into_iter()
+            .chain(compact_mode.diagnostic_planes())
+            .chain([
+                ("update", update_surface.clone().upcast()),
+                ("toast", status_toast.widget().clone().upcast()),
+            ])
+            .map(|(name, widget)| (name.to_owned(), widget))
+            .chain(
+                diagnostic_resize_handles
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, handle)| (format!("resize-handle-{index}"), handle.upcast())),
+            )
+            .collect(),
+        },
+    );
     connect_state_poll(
         &window,
         Rc::clone(&state),
@@ -754,7 +795,7 @@ pub(crate) fn player_window_fit_area_available(
     current_player_fit_area(window, reported_bounds).is_some()
 }
 
-fn current_player_scale(window: &gtk::ApplicationWindow) -> f64 {
+pub(crate) fn current_player_scale(window: &gtk::ApplicationWindow) -> f64 {
     window
         .surface()
         .map(|surface| {

@@ -201,6 +201,19 @@ impl CompactMode {
         ]
     }
 
+    /// The compact overlays as named input planes for the geometry diagnostic.
+    ///
+    /// These sit on top of the video - the play button in the middle of it - so a harness
+    /// that treated the whole video plane as pressable would activate a control instead of
+    /// starting a drag on the video.
+    pub(crate) fn diagnostic_planes(&self) -> [(&'static str, gtk::Widget); 3] {
+        [
+            ("compact-top-bar", self.top_bar.clone().upcast()),
+            ("compact-play", self.play_button.clone().upcast()),
+            ("compact-bottom-bar", self.bottom_bar.clone().upcast()),
+        ]
+    }
+
     pub(crate) fn is_active(&self) -> bool {
         self.active.get()
     }

@@ -65,6 +65,35 @@ Media fixture: any long clip; `ffmpeg -f lavfi -i testsrc2=size=1920x1080:rate=3
 The drag must happen over *playing* video — a held last frame exercises less of
 the render path.
 
+## Aiming at the window (#690)
+
+No Wayland client may ask where another window is, and the shells refuse window
+introspection to unprivileged callers, so a harness that guesses coordinates
+misses the player and reports a round it never delivered. The app answers this
+itself: with `OKP_DEBUG_INTERACTIONS=1` it emits one `interaction: geometry`
+record whenever its geometry changes — the toplevel, the video plane, each piece
+of chrome, and `part=drag-target`, the largest part of the video plane no
+interactive chrome covers, which is where a non-OSC drag has to start.
+
+Coordinates are logical pixels. `local-*` is window-relative and always present;
+`x`/`y`/`center-*` are global and present only when the origin is knowable
+(fullscreen: the monitor origin). `scale`, `monitor-*` and `desktop-*` carry
+what is needed to convert into whatever space the injector moves in.
+
+`aim.py` reads that record and drives ydotool:
+
+```sh
+./aim.py --log <app-stderr> show        # newest record + last pointer sample
+./aim.py --log <app-stderr> click       # aim at drag-target and press once
+```
+
+A windowed toplevel has no knowable origin, so `aim.py` resolves it the way the
+record is designed for: inject at known global points, read back the
+window-local coordinates the app reports for them (`part=pointer`), and fit the
+translation and scale. Turn pointer acceleration off first
+(`gsettings set org.gnome.desktop.peripherals.mouse accel-profile 'flat'`), or
+no absolute injection is faithful — ydotool says so in its own `--help`.
+
 ## What this rig has already established (2026-07-27, #627)
 
 > The reviewable QA record for this campaign (provenance, environments, result
