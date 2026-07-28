@@ -257,7 +257,39 @@ fn compare_build_order(left: &str, right: &str) -> Ordering {
         // A release outranks any prerelease of the same core.
         (None, Some(_)) => Ordering::Greater,
         (Some(_), None) => Ordering::Less,
-        (Some(left_pre), Some(right_pre)) => compare_versions(left_pre, right_pre),
+        (Some(left_pre), Some(right_pre)) => compare_prerelease(left_pre, right_pre),
+    }
+}
+
+/// Orders two prerelease tails identifier by identifier, so the *stage* is
+/// compared before its counter: `alpha.109` precedes `beta.1`, which whole-tail
+/// numeric-run comparison gets backwards by looking at 109 against 1 first.
+///
+/// Within an identifier, two numbers compare numerically (`alpha.9` before
+/// `alpha.10`) and anything else compares lexically; a number sorts before a
+/// word, and a tail that is a prefix of another sorts before it (`beta.2`
+/// before the `beta.2.41` candidate builds cut from it).
+fn compare_prerelease(left: &str, right: &str) -> Ordering {
+    let mut left_parts = left.split('.');
+    let mut right_parts = right.split('.');
+    loop {
+        match (left_parts.next(), right_parts.next()) {
+            (None, None) => return Ordering::Equal,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(left_part), Some(right_part)) => {
+                let order = match (left_part.parse::<u64>(), right_part.parse::<u64>()) {
+                    (Ok(left_number), Ok(right_number)) => left_number.cmp(&right_number),
+                    // A numeric identifier ranks below an alphanumeric one.
+                    (Ok(_), Err(_)) => Ordering::Less,
+                    (Err(_), Ok(_)) => Ordering::Greater,
+                    (Err(_), Err(_)) => left_part.cmp(right_part),
+                };
+                if order != Ordering::Equal {
+                    return order;
+                }
+            }
+        }
     }
 }
 
@@ -531,6 +563,11 @@ pub struct UpdatePresentation {
     pub about_message: String,
     /// The primary action the surface may offer, if any.
     pub action: Option<UpdateAction>,
+    /// Whether the offered actions can be taken right now. A check in flight
+    /// keeps the offer it is refreshing on screen — with its own controls — but
+    /// they are not actionable until the check settles, which is what the GTK
+    /// surface does by disabling rather than hiding them.
+    pub actions_enabled: bool,
     /// Whether taking [`Self::action`] shuts the running player down, for this
     /// install kind. Beyond the actions that always do, this covers the
     /// AppImage lane, where accepting the offer downloads, applies and
@@ -1103,6 +1140,7 @@ impl UpdateLifecycle {
             updates_message,
             about_message,
             action: self.action(),
+            actions_enabled: !matches!(self.state, UpdateState::Checking { .. }),
             action_closes_the_app: self.action_closes_the_app(),
             secondary_action: self.secondary_action(),
             notice: self.notice.clone(),
@@ -1222,7 +1260,19 @@ impl UpdateLifecycle {
         if self.capability() == UpdateCapability::Unmanaged {
             return None;
         }
-        match self.state {
+        // A refresh keeps the offer it is refreshing on screen, controls and
+        // all; `actions_enabled` says they cannot be pressed yet.
+        if let UpdateState::Checking {
+            carried: Some(offer),
+        } = &self.state
+        {
+            return self.action_for(&offer.clone().into_state());
+        }
+        self.action_for(&self.state)
+    }
+
+    fn action_for(&self, state: &UpdateState) -> Option<UpdateAction> {
+        match state {
             UpdateState::Idle | UpdateState::UpToDate | UpdateState::Running { .. } => {
                 Some(UpdateAction::CheckNow)
             }
@@ -1238,7 +1288,8 @@ impl UpdateLifecycle {
             },
             // A system-managed update is announced, never actioned in-app; an
             // install the system owns outright offers not even a check; a
-            // check, download or apply in flight offers nothing.
+            // download or apply in flight offers nothing, and a check with no
+            // offer behind it has nothing to keep on screen.
             UpdateState::AvailableExternally { .. }
             | UpdateState::ManagedExternally { .. }
             | UpdateState::Checking { .. }
@@ -1269,7 +1320,17 @@ impl UpdateLifecycle {
         if self.capability() == UpdateCapability::Unmanaged {
             return None;
         }
-        match &self.state {
+        if let UpdateState::Checking {
+            carried: Some(offer),
+        } = &self.state
+        {
+            return self.secondary_action_for(&offer.clone().into_state());
+        }
+        self.secondary_action_for(&self.state)
+    }
+
+    fn secondary_action_for(&self, state: &UpdateState) -> Option<UpdateAction> {
+        match state {
             UpdateState::Available { .. }
             | UpdateState::AvailableExternally { .. }
             | UpdateState::Failed {
@@ -3031,6 +3092,108 @@ mod tests {
             },
             "a genuinely newer staged payload is still offered"
         );
+    }
+
+    /// Invariant: a refresh keeps the offer it is refreshing on screen, with
+    /// its own controls, and says they are not pressable yet — rather than
+    /// making a shell hide them and put them back.
+    #[test]
+    fn a_check_in_flight_keeps_the_carried_offer_controls() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        lifecycle.start_check().unwrap();
+        lifecycle.check_found("2.0.0").unwrap();
+        lifecycle.start_check().unwrap();
+
+        let presentation = lifecycle.describe();
+        assert_eq!(
+            presentation.action,
+            Some(UpdateAction::DownloadUpdate),
+            "the offer being refreshed keeps its primary control"
+        );
+        assert_eq!(
+            presentation.secondary_action,
+            Some(UpdateAction::SkipVersion),
+            "and its skip"
+        );
+        assert!(
+            !presentation.actions_enabled,
+            "but nothing is pressable while the check is in flight"
+        );
+
+        // A skipped offer keeps its own control through a refresh too.
+        let mut skipped = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        skipped.start_check().unwrap();
+        skipped.check_found("2.0.0").unwrap();
+        skipped.skip_offer().unwrap();
+        skipped.start_check().unwrap();
+        assert_eq!(skipped.describe().action, Some(UpdateAction::InstallAnyway));
+
+        // A first check has no offer to keep, and offers nothing.
+        let mut first = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        first.start_check().unwrap();
+        let presentation = first.describe();
+        assert_eq!(presentation.action, None);
+        assert_eq!(presentation.secondary_action, None);
+        assert!(!presentation.actions_enabled);
+
+        // Everything settled is pressable.
+        let idle = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        assert!(idle.describe().actions_enabled);
+    }
+
+    /// Invariant: a prerelease tail is ordered stage first, counter second, so
+    /// promoting from an alpha to a beta of the same core is an upgrade.
+    #[test]
+    fn a_later_prerelease_stage_outranks_a_higher_counter_in_an_earlier_one() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0-alpha.109");
+        lifecycle.start_check().unwrap();
+        lifecycle.check_found("1.0.0-beta.1").unwrap();
+        lifecycle.start_download().unwrap();
+        lifecycle.download_finished().unwrap();
+        lifecycle.start_apply().unwrap();
+        lifecycle.apply_needs_restart().unwrap();
+
+        assert_eq!(
+            lifecycle.restarted_into("1.0.0-beta.1").unwrap(),
+            &UpdateState::Running {
+                version: "1.0.0-beta.1".to_owned()
+            },
+            "beta.1 is newer than alpha.109, not older"
+        );
+
+        let staged = UpdateLifecycle::resumed_with_staged_update(
+            InstallKind::AppImage,
+            "1.0.0-alpha.109",
+            "1.0.0-beta.1",
+        )
+        .expect("a self-applying install can resume");
+        assert_eq!(
+            staged.state(),
+            &UpdateState::ReadyToApply {
+                version: "1.0.0-beta.1".to_owned()
+            },
+            "and a staged beta is not discarded as stale"
+        );
+
+        // The counter still decides within one stage, and a candidate build cut
+        // from a beta is newer than that beta.
+        let within_stage = UpdateLifecycle::resumed_with_staged_update(
+            InstallKind::AppImage,
+            "0.11.0-beta.2",
+            "0.11.0-beta.2.41",
+        )
+        .expect("a self-applying install can resume");
+        assert!(matches!(
+            within_stage.state(),
+            UpdateState::ReadyToApply { .. }
+        ));
+        let backwards = UpdateLifecycle::resumed_with_staged_update(
+            InstallKind::AppImage,
+            "0.1.0-linux-alpha.109",
+            "0.1.0-linux-alpha.108",
+        )
+        .expect("a self-applying install can resume");
+        assert_eq!(backwards.state(), &UpdateState::Idle);
     }
 
     #[test]
