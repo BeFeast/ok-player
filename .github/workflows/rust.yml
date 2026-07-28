@@ -141,3 +141,6 @@ jobs:
         run: |
           cargo build --manifest-path rust/Cargo.toml -p okp-linux-gtk
           ./scripts/smoke-linux-window-geometry.sh
+
+      - name: Continue-watching shelf stays a grid under a virtual display
+        run: ./scripts/smoke-linux-recents-shelf.sh

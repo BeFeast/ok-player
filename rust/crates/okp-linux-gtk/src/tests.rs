@@ -1,4 +1,6 @@
 use super::*;
+use okp_core::history_format::HistoryStateKind;
+use okp_core::recents_shelf::HistoryItem;
 use okp_core::update_lifecycle::VersionClaim;
 use okp_test_fixtures::unique_temp_dir;
 
@@ -6783,6 +6785,71 @@ fn a_long_saved_path_cannot_widen_the_toast_labels() {
         assert_eq!(
             toast.label.max_width_chars(),
             i32::try_from(TOAST_MESSAGE_MAX_CHARS).expect("toast budget fits an i32")
+        );
+    });
+}
+
+/// A Continue-watching row with caller-chosen text and nothing else remarkable about it.
+fn recents_fixture_item(title: &str, location: &str) -> HistoryItem {
+    HistoryItem {
+        path: format!("/media/{title}.mkv"),
+        title: title.to_owned(),
+        location: location.to_owned(),
+        position: 900.0,
+        duration: 5400.0,
+        progress: 0.16,
+        state_kind: HistoryStateKind::Progress,
+        state_label: "75m left".to_owned(),
+        updated_at_unix: 1_700_000_000,
+        poster_path: None,
+    }
+}
+
+#[test]
+#[ignore = "needs a display server; run via scripts/smoke-linux-toast-behaviour.sh"]
+fn a_long_title_or_path_cannot_widen_a_recents_card() {
+    on_gtk_thread(|| {
+        let state = Rc::new(RefCell::new(PlayerState::default()));
+        let modest = recent_card(&recents_fixture_item("Short", "Videos"), Rc::clone(&state));
+        let long_title = format!(
+            "\u{1f3ac} {}#restored #4k #fanedit",
+            "an-absurdly-long-title-segment ".repeat(24)
+        );
+        let long_location = "Season 04 - Remastered Edition \u{203a} ".repeat(12);
+        let hostile = recent_card(
+            &recents_fixture_item(&long_title, &long_location),
+            Rc::clone(&state),
+        );
+
+        let (modest_min, modest_natural, _, _) = modest.measure(gtk::Orientation::Horizontal, -1);
+        let (hostile_min, hostile_natural, _, _) =
+            hostile.measure(gtk::Orientation::Horizontal, -1);
+
+        // The card is a fixed tile: its natural width is its floor, and the text it holds
+        // makes no difference to either. A shelf of these lays out on a grid; a shelf of
+        // text-shaped cards is the uneven row of #702.
+        assert_eq!(
+            modest_natural, hostile_natural,
+            "a long title and path must not widen the card: modest {modest_natural}px, \
+             hostile {hostile_natural}px"
+        );
+        assert_eq!(modest_min, hostile_min);
+        assert_eq!(
+            modest_min, modest_natural,
+            "the card must ask for exactly its own width, not more"
+        );
+        assert!(modest_min >= RECENT_CARD_WIDTH);
+
+        // The mechanism the card is bounded against, shown to be real: an ellipsized label
+        // still reports its whole text as its natural width, so an unbounded one inside a
+        // card would hand that width straight to the flow box.
+        let unbounded = gtk::Label::new(Some(&long_title));
+        unbounded.set_ellipsize(pango::EllipsizeMode::End);
+        let (_, unbounded_natural, _, _) = unbounded.measure(gtk::Orientation::Horizontal, -1);
+        assert!(
+            unbounded_natural > hostile_natural * 4,
+            "an unbounded ellipsized label should still measure its whole text: \
+             {unbounded_natural}px against a {hostile_natural}px card"
         );
     });
 }
