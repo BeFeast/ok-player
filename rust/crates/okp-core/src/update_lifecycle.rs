@@ -149,6 +149,10 @@ pub struct InstallEvidence {
     pub flatpak_info_present: bool,
     /// Value of `$APPIMAGE`, the absolute path of the running image, when set.
     pub appimage_path: Option<String>,
+    /// Value of `$APPDIR`, the mounted image root, when set. Paired with
+    /// [`Self::executable_path`] it distinguishes *this* process running from
+    /// an image from merely having inherited the variables of one.
+    pub appdir_path: Option<String>,
     /// Absolute path of the running executable as the shell resolved it.
     pub executable_path: Option<String>,
     /// Whether a package manager claims [`Self::executable_path`].
@@ -181,6 +185,30 @@ impl InstallEvidence {
         self.appimage_path
             .as_deref()
             .is_some_and(|path| !path.trim().is_empty())
+    }
+
+    /// `$APPDIR` is set *and* contains the running executable. An AppImage
+    /// launcher exports both variables to whatever it starts, so the variables
+    /// alone would misread an unpackaged build launched from one; only the
+    /// executable's own location settles it.
+    fn executable_inside_appdir(&self) -> bool {
+        let appdir = self
+            .appdir_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty());
+        let executable = self
+            .executable_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty());
+        match (appdir, executable) {
+            (Some(appdir), Some(executable)) => {
+                let appdir = appdir.trim_end_matches('/');
+                !appdir.is_empty() && executable.starts_with(&format!("{appdir}/"))
+            }
+            _ => false,
+        }
     }
 
     /// The install kind implied by a positive package-ownership answer.
@@ -229,7 +257,10 @@ pub fn detect_install_kind(evidence: &InstallEvidence) -> InstallKind {
     if let Some(packaged) = evidence.owning_package() {
         return packaged;
     }
-    if evidence.appimage_variable_set() && evidence.package_ownership == PackageOwnership::Unowned {
+    if evidence.appimage_variable_set()
+        && evidence.executable_inside_appdir()
+        && evidence.package_ownership == PackageOwnership::Unowned
+    {
         return InstallKind::AppImage;
     }
     InstallKind::DevBuild
@@ -941,10 +972,12 @@ impl UpdateLifecycle {
     /// The one-call download-and-apply step succeeded and the new build is on
     /// disk, awaiting the relaunch.
     ///
-    /// The AppImage lane downloads and applies in a single call, so there is no
-    /// separate `ReadyToApply` for the user to act on; this reports the whole
-    /// step at once. Lanes that stage first must go through
-    /// [`Self::download_finished`] and [`Self::start_apply`].
+    /// The AppImage lane can download and apply in a single call, so this
+    /// reports the whole step at once and no separate `ReadyToApply` is left
+    /// for the user to act on. It is the one-call shape, not the only shape
+    /// that lane may use: a shell that stages first still walks
+    /// [`Self::download_finished`] and [`Self::start_apply`]. Lanes that
+    /// cannot apply while downloading are refused here.
     pub fn download_and_apply_needs_restart(
         &mut self,
     ) -> Result<&UpdateState, UpdateTransitionError> {
@@ -1519,9 +1552,10 @@ mod tests {
                 InstallKind::Deb,
             ),
             (
-                "extract-and-run AppImage has no mount path to corroborate it",
+                "extract-and-run AppImage is corroborated by APPDIR holding the executable",
                 InstallEvidence {
                     appimage_path: Some("/home/u/OK_Player-x86_64.AppImage".to_owned()),
+                    appdir_path: Some("/tmp/appimage_extracted_9f1".to_owned()),
                     executable_path: Some(
                         "/tmp/appimage_extracted_9f1/usr/bin/ok-player".to_owned(),
                     ),
@@ -1529,6 +1563,22 @@ mod tests {
                     ..evidence()
                 },
                 InstallKind::AppImage,
+            ),
+            (
+                // Both variables are exported to whatever an AppImage launches,
+                // so an unpackaged build started from one inherits them while
+                // living nowhere near the image.
+                "inherited AppImage variables do not claim an executable outside APPDIR",
+                InstallEvidence {
+                    appimage_path: Some("/home/u/SomeLauncher-x86_64.AppImage".to_owned()),
+                    appdir_path: Some("/tmp/.mount_Launcher".to_owned()),
+                    executable_path: Some(
+                        "/home/u/dev/ok-player/target/release/okp-linux-gtk".to_owned(),
+                    ),
+                    package_ownership: PackageOwnership::Unowned,
+                    ..evidence()
+                },
+                InstallKind::DevBuild,
             ),
             (
                 "an inherited APPIMAGE is not trusted when ownership is unknown",
