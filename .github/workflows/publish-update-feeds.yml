@@ -62,14 +62,49 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The signing key lives in Infisical on the internal network, which GitHub-hosted
+  # runners cannot resolve. Only this job needs it, so only this job runs on the
+  # self-hosted builder; the signed archive travels to the deploy job as an artifact
+  # and no key material ever leaves the internal host.
+  apt-repository:
+    name: Build the signed APT repository
+    runs-on: [self-hosted, mimir]
+    steps:
+      - uses: actions/checkout@v4
+
+      # Fetches the signing key from Infisical into an ephemeral GNUPGHOME, verifies its
+      # fingerprint against the expected one, signs, and publishes only the public key.
+      - name: Build signed APT repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+        run: ./scripts/build-apt-repo.sh "${{ github.repository }}" _site
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apt-repository
+          path: _site
+          retention-days: 1
+          if-no-files-found: error
+
   publish-feeds:
     name: Publish update feeds to GitHub Pages
+    needs: apt-repository
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+
+      # The signed archive was produced on the internal builder, the only machine that can
+      # reach the signing key. It has to land in _site before anything inspects or deploys
+      # it: the verifier below reads _site/apt, and the feed builders never create it.
+      - uses: actions/download-artifact@v4
+        with:
+          name: apt-repository
+          path: _site
 
       # Both scripts stage the shared docs/site skeleton idempotently, then write their own
       # updates/<track>/ subtree. Running both into one _site yields the complete site so the
@@ -91,15 +126,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends dpkg-dev gnupg
-
-      # Fetches the signing key from Infisical into an ephemeral GNUPGHOME, verifies its
-      # fingerprint against the expected one, signs, and publishes only the public key.
-      - name: Build signed APT repository
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
-          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
-        run: ./scripts/build-apt-repo.sh "${{ github.repository }}" _site
 
       # apt itself is the only authority on whether this archive works. A missing container
       # runtime fails the lane rather than skipping the check.
