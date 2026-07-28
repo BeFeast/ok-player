@@ -889,10 +889,24 @@ fn continue_after_offer_accepted(state: Rc<RefCell<PlayerState>>, status_toast: 
     }
 }
 
+/// Whether the offer has to be discovered again before anything can be
+/// fetched. A session that came back from a restart — or from an apply the
+/// previous process staged — knows *which* version it is about, but the
+/// payload that names where to get it died with that process. Discovering it
+/// again is the recovery; reporting the payload missing would replace the
+/// error the user is looking at with an implementation detail.
+pub(crate) fn update_needs_rediscovery(state: &Rc<RefCell<PlayerState>>) -> bool {
+    state.borrow().linux_update.payload.is_none()
+}
+
 pub(crate) fn start_update_download(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) {
+    if update_needs_rediscovery(&state) {
+        start_update_check_for_ui(state, status_toast, true);
+        return;
+    }
     if !transition_update(&state, "start download", UpdateLifecycle::start_download) {
         return;
     }
@@ -924,24 +938,45 @@ fn run_update_download(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusT
                 enter_restart_pending(&state, &status_toast, true);
                 glib::ControlFlow::Break
             }
-            Ok(Err(error)) => {
-                transition_update(&state, "download and apply failed", |lifecycle| {
-                    lifecycle.download_and_apply_failed(error.clone())
-                });
-                refresh_linux_update_views(&state);
+            Ok(Err(failure)) => {
+                report_download_lane_failure(&state, &failure);
                 status_toast.show("Update failed");
                 glib::ControlFlow::Break
             }
             Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
             Err(mpsc::TryRecvError::Disconnected) => {
-                transition_update(&state, "download and apply failed", |lifecycle| {
-                    lifecycle.download_and_apply_failed("update worker channel closed")
-                });
-                refresh_linux_update_views(&state);
+                report_download_lane_failure(
+                    &state,
+                    &UpdateStepFailure {
+                        reason: "update worker channel closed".to_owned(),
+                        // Nothing is known to have landed.
+                        staged: false,
+                    },
+                );
                 glib::ControlFlow::Break
             }
         }
     });
+}
+
+/// Records which half of the one-call step failed, so the retry core offers
+/// repeats that half: a download that never landed is fetched again, an apply
+/// that failed re-applies the payload still on disk.
+pub(crate) fn report_download_lane_failure(
+    state: &Rc<RefCell<PlayerState>>,
+    failure: &UpdateStepFailure,
+) {
+    let reason = failure.reason.clone();
+    if failure.staged {
+        transition_update(state, "download and apply failed", move |lifecycle| {
+            lifecycle.download_and_apply_failed(reason)
+        });
+    } else {
+        transition_update(state, "download failed", move |lifecycle| {
+            lifecycle.download_failed(reason)
+        });
+    }
+    refresh_linux_update_views(state);
 }
 
 /// Applies a payload that is already staged and verified.
@@ -970,9 +1005,10 @@ pub(crate) fn start_update_apply(state: Rc<RefCell<PlayerState>>, status_toast: 
                 enter_restart_pending(&state, &status_toast, false);
                 glib::ControlFlow::Break
             }
-            Ok(Err(error)) => {
-                transition_update(&state, "apply failed", |lifecycle| {
-                    lifecycle.apply_failed(error.clone())
+            Ok(Err(failure)) => {
+                let reason = failure.reason.clone();
+                transition_update(&state, "apply failed", move |lifecycle| {
+                    lifecycle.apply_failed(reason)
                 });
                 refresh_linux_update_views(&state);
                 status_toast.show("Update failed");
@@ -1505,12 +1541,16 @@ fn update_apply_job(state: &Rc<RefCell<PlayerState>>) -> Option<SelfApplyPayload
 /// is already running.
 pub(crate) fn download_and_apply_linux_update(
     payload: &SelfApplyPayload,
-) -> Result<LinuxUpdateApplyResult, String> {
+) -> Result<LinuxUpdateApplyResult, UpdateStepFailure> {
     if let VelopackTarget::Info(info) = &payload.target {
         payload
             .manager
             .download_updates(info.as_ref(), None)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| UpdateStepFailure {
+                reason: error.to_string(),
+                // Nothing landed: recovering means fetching it again.
+                staged: false,
+            })?;
     }
     apply_staged_linux_update(payload)
 }
@@ -1520,11 +1560,15 @@ pub(crate) fn download_and_apply_linux_update(
 /// exits and the new build comes up by itself.
 pub(crate) fn apply_staged_linux_update(
     payload: &SelfApplyPayload,
-) -> Result<LinuxUpdateApplyResult, String> {
+) -> Result<LinuxUpdateApplyResult, UpdateStepFailure> {
     payload
         .manager
         .wait_exit_then_apply_updates(payload.target.asset(), false, true, Vec::<String>::new())
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| UpdateStepFailure {
+            reason: error.to_string(),
+            // The payload is downloaded and verified; only the hand-off failed.
+            staged: true,
+        })?;
     Ok(LinuxUpdateApplyResult::RestartRequired)
 }
 

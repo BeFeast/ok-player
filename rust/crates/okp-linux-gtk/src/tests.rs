@@ -4485,6 +4485,104 @@ fn a_retry_resumes_the_step_that_failed() {
     assert!(nothing_found.lifecycle.start_check().is_ok());
 }
 
+/// Which half of the one-call step failed decides what a retry repeats: a
+/// download that never landed is fetched again, and only a payload that is
+/// really on disk is re-applied.
+#[test]
+fn a_dropped_download_is_not_recorded_as_a_staged_payload() {
+    fn downloading(version: &str) -> Rc<RefCell<PlayerState>> {
+        let mut session = LinuxUpdateSession::for_install_kind(InstallKind::AppImage);
+        session.lifecycle.start_check().expect("check starts");
+        session.lifecycle.check_found(version).expect("found");
+        session.lifecycle.start_download().expect("download starts");
+        Rc::new(RefCell::new(PlayerState {
+            linux_update: session,
+            ..PlayerState::default()
+        }))
+    }
+
+    let dropped = downloading("0.12.0");
+    report_download_lane_failure(
+        &dropped,
+        &UpdateStepFailure {
+            reason: "the connection dropped".to_owned(),
+            staged: false,
+        },
+    );
+    assert!(matches!(
+        dropped.borrow().linux_update.lifecycle.state(),
+        UpdateState::Failed { staged: false, .. }
+    ));
+    dropped
+        .borrow_mut()
+        .linux_update
+        .lifecycle
+        .retry_failed_update()
+        .expect("a dropped download is retryable");
+    assert!(
+        matches!(
+            dropped.borrow().linux_update.lifecycle.state(),
+            UpdateState::Available { .. }
+        ),
+        "a download that never landed must be fetched again, not applied"
+    );
+
+    let handed_off = downloading("0.12.0");
+    report_download_lane_failure(
+        &handed_off,
+        &UpdateStepFailure {
+            reason: "the updater could not be launched".to_owned(),
+            staged: true,
+        },
+    );
+    handed_off
+        .borrow_mut()
+        .linux_update
+        .lifecycle
+        .retry_failed_update()
+        .expect("a staged failure is retryable");
+    assert!(
+        matches!(
+            handed_off.borrow().linux_update.lifecycle.state(),
+            UpdateState::ReadyToApply { .. }
+        ),
+        "a payload that is still on disk must be re-applied, not re-downloaded"
+    );
+}
+
+/// A retry in the process that came back from a failed restart has no payload
+/// left — it died with the previous process — so it re-discovers rather than
+/// reporting the payload missing.
+#[test]
+fn a_retry_after_a_failed_restart_rediscovers_the_offer() {
+    let session = LinuxUpdateSession::resumed(InstallKind::AppImage, Some("99.0.0".to_owned()));
+    let state = Rc::new(RefCell::new(PlayerState {
+        linux_update: session,
+        ..PlayerState::default()
+    }));
+    assert!(matches!(
+        state.borrow().linux_update.lifecycle.state(),
+        UpdateState::Failed { staged: false, .. }
+    ));
+
+    state
+        .borrow_mut()
+        .linux_update
+        .lifecycle
+        .retry_failed_update()
+        .expect("a restart that did not take effect is retryable");
+    assert!(update_needs_rediscovery(&state));
+    assert!(
+        state
+            .borrow_mut()
+            .linux_update
+            .lifecycle
+            .start_check()
+            .is_ok(),
+        "re-discovery is the recovery, and the standing offer allows a check"
+    );
+}
+
 /// A hand-off that failed is an error, not a quieter success.
 #[test]
 fn a_failed_appimage_handoff_is_reported_as_a_failure() {

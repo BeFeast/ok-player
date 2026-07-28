@@ -989,6 +989,18 @@ enum LinuxUpdateApplyResult {
     RestartRequired,
 }
 
+/// A worker step that gave up, and whether it left a verified payload behind.
+///
+/// The one-call lane reports one error for a download and an apply, but the
+/// two recover differently: a payload that never arrived has to be fetched
+/// again, while one that failed to apply is still on disk. Retrying the wrong
+/// half is how a dropped connection becomes an apply of a package that is not
+/// there.
+struct UpdateStepFailure {
+    reason: String,
+    staged: bool,
+}
+
 #[derive(Clone)]
 struct EmptySurface {
     revealer: gtk::Revealer,
