@@ -173,7 +173,7 @@ jobs:
             echo "- heartbeat activity: \`${activity}\`"
             echo "- rolling surface: \`linux-candidate\`"
             if [[ "${{ steps.candidate.outputs.publish_result }}" == "published" ]]; then
-              echo "- public feed: APT candidate suite refreshed (issue #689)"
+              echo "- public feed: APT candidate suite refresh requested (issue #689); the refresh job reports the outcome"
             else
               echo "- public feed: untouched (nothing was published)"
             fi

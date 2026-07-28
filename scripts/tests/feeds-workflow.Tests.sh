@@ -47,7 +47,12 @@ def commands(run):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        for part in re.split(r"&&|\|\||;|\|", line):
+        # Only unconditionally executed commands count. A step written as
+        # `false && ./scripts/verify-apt-repo.sh` mentions the verifier and
+        # parses as a command, yet can never run it, so anything guarded by
+        # a preceding && or || is deliberately not credited.
+        head = re.split(r"&&|\|\|", line)[0]
+        for part in re.split(r";|\|", head):
             try:
                 tokens = shlex.split(part)
             except ValueError:
