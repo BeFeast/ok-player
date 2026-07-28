@@ -691,11 +691,15 @@
                                 <StackPanel>
                                     <TextBlock Text="UPDATES" Style="{StaticResource AboutGroupLabelStyle}" />
                                     <StackPanel Spacing="10">
-                                        <Grid ColumnDefinitions="*,Auto">
+                                        <!-- The status is a full sentence produced by the shared update lifecycle
+                                             (OkPlayer.Core.UpdateLifecycle.Describe), not a one-word verdict the shell
+                                             composes, so it wraps under its label instead of squeezing the row. -->
+                                        <StackPanel Spacing="2">
                                             <TextBlock Text="Status" Style="{StaticResource AboutRowLabelStyle}" />
-                                            <TextBlock Grid.Column="1" x:Name="AboutUpdateStatus" Text="&#x2014;"
+                                            <TextBlock x:Name="AboutUpdateStatus" Text="&#x2014;" TextWrapping="Wrap"
+                                                       TextAlignment="Left" HorizontalAlignment="Left"
                                                        Style="{StaticResource AboutValueWordStyle}" />
-                                        </Grid>
+                                        </StackPanel>
                                         <Grid ColumnDefinitions="*,Auto">
                                             <StackPanel>
                                                 <TextBlock Text="Check automatically" Style="{StaticResource AboutRowLabelStyle}" />

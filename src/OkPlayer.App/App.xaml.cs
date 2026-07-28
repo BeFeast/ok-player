@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using Microsoft.UI.Xaml;
 using Microsoft.Windows.AppLifecycle;
 using OkPlayer.App.Services;
+using OkPlayer.Core;
 
 namespace OkPlayer.App;
 
@@ -28,18 +29,30 @@ public partial class App : Application
     /// "Clear history" from Settings is reflected by the player's recents without a stale second copy.</summary>
     public static HistoryService History { get; } = new();
 
-    /// <summary>The auto-update service (Velopack). A background check runs once on launch; it no-ops on dev and
-    /// portable builds (only a Velopack-installed build can update itself). Shared so Settings → About can drive
-    /// a manual check / restart.</summary>
+    /// <summary>The version this build reports about itself, together with whether that string is the
+    /// complete package version (#694). The informational assembly version is stamped from the same
+    /// csproj <c>&lt;Version&gt;</c> that <c>installer/build-velopack.ps1</c> packs, so it carries the
+    /// prerelease tail — <c>0.11.0-beta.0.15</c> — that the numeric assembly version drops. Only when
+    /// that attribute cannot be read does this fall back to the truncated <c>Major.Minor.Build</c>
+    /// form, and then it says so, so the update ordering refuses to conclude anything the missing
+    /// tail would decide instead of reading a truncated <c>0.11.0</c> as a stable release newer than
+    /// the candidate that is actually running.</summary>
+    public static ReportedVersion RunningVersion { get; } = GetRunningVersion();
+
+    /// <summary>App version for display, from <see cref="RunningVersion"/> — the full package version
+    /// where the build can name it. Shown in Settings → Advanced (About) and the diagnostics text.</summary>
+    public static string AppVersion { get; } = RunningVersion.Text;
+
+    /// <summary>The auto-update service (Velopack) driving the shared update lifecycle. A background check runs
+    /// once on launch; on a dev or portable build it is an unmanaged install whose surfaces say updates are
+    /// disabled. Shared so Settings → About and the player's update banner read one state.
+    /// Declared after <see cref="RunningVersion"/> on purpose: static field initializers run in declaration
+    /// order, and this one reads that version.</summary>
     public static UpdateService Updates { get; } = new();
 
     /// <summary>The release channel this build updates from — every build is a pre-1.0 beta for now, so the feed
     /// is the repo's GitHub pre-releases. Surfaced in Settings → About.</summary>
     public const string ReleaseChannel = "beta";
-
-    /// <summary>App version as Major.Minor.Build, read from the assembly (single-sourced from the csproj
-    /// <c>&lt;Version&gt;</c>). Shown in Settings → Advanced (About) and the Settings nav-rail footer.</summary>
-    public static string AppVersion { get; } = GetAppVersion();
 
     /// <summary>libmpv's human version string (e.g. "mpv 0.39.0"), captured off-thread when the engine
     /// attaches; null until then. Cosmetic — read by the Settings About block. Setting it raises
@@ -56,14 +69,33 @@ public partial class App : Application
     /// dispatcher before touching UI.</summary>
     public static event Action? MpvVersionChanged;
 
-    private static string GetAppVersion()
+    private static ReportedVersion GetRunningVersion()
     {
         try
         {
-            var v = typeof(App).Assembly.GetName().Version;
-            return v is null ? string.Empty : $"{v.Major}.{v.Minor}.{v.Build}";
+            // "0.11.0-beta.0.15+ab12cd3" → "0.11.0-beta.0.15": the build metadata after '+' is the
+            // git SHA (see GitSha), never part of the package version Velopack releases under.
+            string? informational = typeof(App).Assembly
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+            if (!string.IsNullOrWhiteSpace(informational))
+            {
+                int plus = informational.IndexOf('+');
+                string full = (plus >= 0 ? informational[..plus] : informational).Trim();
+                if (full.Length > 0)
+                    return ReportedVersion.Complete(full);
+            }
         }
-        catch { return string.Empty; }
+        catch { /* fall through to the assembly version */ }
+        try
+        {
+            // Major.Minor.Build only: the assembly version has nowhere to keep a prerelease tail, so
+            // whatever it returns is truncated and is reported as such.
+            var v = typeof(App).Assembly.GetName().Version;
+            return v is null
+                ? ReportedVersion.Complete(string.Empty)
+                : ReportedVersion.Truncated($"{v.Major}.{v.Minor}.{v.Build}");
+        }
+        catch { return ReportedVersion.Complete(string.Empty); }
     }
 
     /// <summary>Short git SHA the build was produced from (e.g. "ab12cd3", or "ab12cd3-dirty" when the working

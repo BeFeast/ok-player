@@ -19,6 +19,14 @@
 //!   the only source of user-facing update text and of the action a surface may
 //!   offer, so an Updates panel cannot render a state as a different one and
 //!   the About surface cannot disagree with it.
+//! * **A version comes with what the shell knows about it.** Every version the
+//!   shell reports is a [`ReportedVersion`]: the string it observed plus
+//!   whether that string is the complete package version or a truncated form
+//!   (#694 — the Windows `App.AppVersion` drops the prerelease tail, so
+//!   `0.11.0-beta.0.14` and `.15` both read as a stable `0.11.0`). Ordering
+//!   refuses to conclude anything a truncated string cannot support instead of
+//!   guessing, because a real prerelease-to-stable upgrade and a truncated
+//!   prerelease have exactly the same shape.
 //!
 //! Network access, package downloads, process restarts and every other side
 //! effect stay in the shells; this module only decides.
@@ -332,6 +340,127 @@ fn split_prerelease(version: &str) -> (&str, Option<&str>) {
     }
 }
 
+/// How completely a shell was able to state a version (#694).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum VersionFidelity {
+    /// The exact package version, prerelease tail included. Every conclusion
+    /// the ordering rules can draw is available.
+    #[default]
+    Complete,
+    /// A normalised form: the numeric core is the build's, but any prerelease
+    /// tail was dropped on the way — the Windows `App.AppVersion`, which is
+    /// `Major.Minor.Build` read off the assembly, reports `0.11.0-beta.0.14`
+    /// and `0.11.0-beta.0.15` alike as `0.11.0`. The string looks exactly like
+    /// a stable release, so the ordering rules must not read it as one.
+    Truncated,
+}
+
+/// A version string together with what the shell knows about it.
+///
+/// Shells that can name the exact build (`0.11.0-beta.0.15` from the Velopack
+/// release identity, from the informational assembly version, or from a Linux
+/// package version) report [`VersionFidelity::Complete`] and get the full
+/// ordering. A shell that can only observe a truncated form says so, and the
+/// comparisons that the missing tail would decide return "unknown" rather than
+/// a wrong answer.
+///
+/// `From<&str>` and `From<String>` produce a complete version, so a caller that
+/// has the real thing — every Linux lane, and every test that is not about
+/// truncation — just passes a string.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ReportedVersion {
+    text: String,
+    fidelity: VersionFidelity,
+}
+
+impl ReportedVersion {
+    /// The exact package version of the build.
+    pub fn complete(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            fidelity: VersionFidelity::Complete,
+        }
+    }
+
+    /// A version whose prerelease tail the shell could not observe.
+    pub fn truncated(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            fidelity: VersionFidelity::Truncated,
+        }
+    }
+
+    /// The string as the shell observed it. Always safe to display — only
+    /// ordering conclusions are restricted.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub const fn fidelity(&self) -> VersionFidelity {
+        self.fidelity
+    }
+
+    pub const fn is_complete(&self) -> bool {
+        matches!(self.fidelity, VersionFidelity::Complete)
+    }
+}
+
+impl From<&str> for ReportedVersion {
+    fn from(text: &str) -> Self {
+        Self::complete(text)
+    }
+}
+
+impl From<String> for ReportedVersion {
+    fn from(text: String) -> Self {
+        Self::complete(text)
+    }
+}
+
+impl From<&String> for ReportedVersion {
+    fn from(text: &String) -> Self {
+        Self::complete(text.clone())
+    }
+}
+
+impl fmt::Display for ReportedVersion {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.text)
+    }
+}
+
+/// Orders two reported builds, or answers `None` when the strings on hand
+/// cannot decide it (#694).
+///
+/// A truncated string carries the numeric core and nothing else, so:
+///
+/// * different cores still decide the order — no prerelease tail can lift a
+///   build past a higher core, so the missing tail changes nothing;
+/// * equal cores are undecidable as soon as either side is truncated, because
+///   the truncated string is equally consistent with the stable release and
+///   with every prerelease that led to it. `0.11.0` (truncated) against
+///   `0.11.0-beta.0.15` is the #694 case: read as complete it is a stable
+///   release *newer* than the pending candidate, and the restart check turns a
+///   perfectly good upgrade into a reported downgrade.
+///
+/// Two complete versions are always decided, by [`compare_build_order`].
+pub fn compare_reported_build_order(
+    left: &ReportedVersion,
+    right: &ReportedVersion,
+) -> Option<Ordering> {
+    if left.is_complete() && right.is_complete() {
+        return Some(compare_build_order(&left.text, &right.text));
+    }
+    let (left_core, _) = split_prerelease(&left.text);
+    let (right_core, _) = split_prerelease(&right.text);
+    match compare_versions(left_core, right_core) {
+        // The cores tie, so the answer lives entirely in a tail at least one
+        // side does not have.
+        Ordering::Equal => None,
+        order => Some(order),
+    }
+}
+
 /// One position in the update lifecycle.
 ///
 /// `Idle → Checking → UpToDate | Available | AvailableExternally | Failed`, and
@@ -377,6 +506,12 @@ pub enum UpdateState {
     /// `version` is installed on disk but this process still runs the old
     /// binary. Never a "you are on `version`" state — that conflation is #660.
     RestartPending { version: String },
+    /// The process restarted, and the version it can report about itself is too
+    /// coarse to tell whether it came up on `target` (#694): a truncated
+    /// running version shares its whole string with the prerelease it may still
+    /// be. Neither a success nor the #660 failure — the shell says what it
+    /// could not observe, and a fresh check settles it against the feed.
+    RestartUnverified { target: String },
     /// The process restarted and is running `version`.
     Running { version: String },
     /// A fallible step gave up. Reachable from `Checking`, `Downloading`,
@@ -406,6 +541,9 @@ impl UpdateState {
             | Self::Applying { version }
             | Self::RestartPending { version }
             | Self::Skipped { version, .. } => Some(version),
+            // The version the restart was meant to land on, still the only
+            // build this state is about — the running one is unknown.
+            Self::RestartUnverified { target } => Some(target),
             Self::Failed { target, .. } => target.as_deref(),
             Self::Checking { carried } => carried.as_ref().map(CarriedOffer::version),
             Self::Idle | Self::UpToDate | Self::ManagedExternally { .. } => None,
@@ -624,7 +762,7 @@ pub struct UpdatePresentation {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UpdateLifecycle {
     install_kind: InstallKind,
-    running_version: String,
+    running_version: ReportedVersion,
     state: UpdateState,
     /// What went wrong with the last attempt, when the state itself carried on
     /// regardless — a failed refresh that restored the offer it was
@@ -634,8 +772,10 @@ pub struct UpdateLifecycle {
 
 impl UpdateLifecycle {
     /// Starts at [`UpdateState::Idle`] for `install_kind`, running
-    /// `running_version`.
-    pub fn new(install_kind: InstallKind, running_version: impl Into<String>) -> Self {
+    /// `running_version`. A plain string is taken as the complete package
+    /// version; a shell that can only observe a truncated one passes
+    /// [`ReportedVersion::truncated`].
+    pub fn new(install_kind: InstallKind, running_version: impl Into<ReportedVersion>) -> Self {
         Self {
             install_kind,
             running_version: running_version.into(),
@@ -652,7 +792,7 @@ impl UpdateLifecycle {
     /// Only a [`UpdateCapability::SystemManaged`] install can be in this state.
     pub fn managed_externally(
         install_kind: InstallKind,
-        running_version: impl Into<String>,
+        running_version: impl Into<ReportedVersion>,
     ) -> Result<Self, UpdateTransitionError> {
         if install_kind.capability() != UpdateCapability::SystemManaged {
             return Err(UpdateTransitionError::CapabilityForbids(
@@ -684,8 +824,8 @@ impl UpdateLifecycle {
     /// [`UpdateCapability::SelfApply`] install stages payloads of its own.
     pub fn resumed_with_staged_update(
         install_kind: InstallKind,
-        running_version: impl Into<String>,
-        staged_version: impl Into<String>,
+        running_version: impl Into<ReportedVersion>,
+        staged_version: impl Into<ReportedVersion>,
     ) -> Result<Self, UpdateTransitionError> {
         if install_kind.capability() != UpdateCapability::SelfApply {
             return Err(UpdateTransitionError::CapabilityForbids(
@@ -697,10 +837,17 @@ impl UpdateLifecycle {
         // A record left behind by an earlier run can be stale — the user may
         // have replaced the install by hand since. Applying it would be a
         // downgrade, so a record that is not newer than what is running is
-        // discarded rather than offered.
-        let state = if compare_build_order(&staged_version, &running_version) == Ordering::Greater {
+        // discarded rather than offered. When the versions on hand cannot
+        // decide that (#694), the staged payload is kept: that it exists is an
+        // observed fact rather than an ordering conclusion, and throwing away a
+        // downloaded update on a guess loses a real one silently, while
+        // offering it says which version it is and leaves the choice with the
+        // user.
+        let state = if compare_reported_build_order(&staged_version, &running_version)
+            .is_none_or(|order| order == Ordering::Greater)
+        {
             UpdateState::ReadyToApply {
-                version: staged_version,
+                version: staged_version.text,
             }
         } else {
             UpdateState::Idle
@@ -727,7 +874,7 @@ impl UpdateLifecycle {
     /// [`UpdateCapability::SelfApply`] install can have a pending restart.
     pub fn resumed_after_restart(
         install_kind: InstallKind,
-        running_version: impl Into<String>,
+        running_version: impl Into<ReportedVersion>,
         pending_version: impl Into<String>,
     ) -> Result<Self, UpdateTransitionError> {
         if install_kind.capability() != UpdateCapability::SelfApply {
@@ -763,6 +910,12 @@ impl UpdateLifecycle {
     /// The version this process is executing — not the version an applied but
     /// unrestarted update would run.
     pub fn running_version(&self) -> &str {
+        self.running_version.text()
+    }
+
+    /// The running version together with how completely the shell could state
+    /// it, for a caller that needs the ordering contract rather than the text.
+    pub const fn reported_running_version(&self) -> &ReportedVersion {
         &self.running_version
     }
 
@@ -779,6 +932,9 @@ impl UpdateLifecycle {
             | UpdateState::AvailableExternally { .. }
             | UpdateState::Skipped { .. }
             | UpdateState::Running { .. }
+            // A check is exactly how an unverifiable restart gets settled: the
+            // feed knows whether the target is still on offer.
+            | UpdateState::RestartUnverified { .. }
             | UpdateState::Failed { .. } => {
                 // A re-check must not lose the offer already on screen: if it
                 // fails, that offer comes back exactly as it was.
@@ -1095,30 +1251,40 @@ impl UpdateLifecycle {
     /// update, and the state records the version actually running. Coming back
     /// *older* is #660 itself: the restart ran the old binary, so it becomes
     /// [`UpdateState::Failed`] instead of a silent success.
+    ///
+    /// A running version the shell could only report truncated leaves the two
+    /// indistinguishable (#694): `0.11.0` is what a process running
+    /// `0.11.0-beta.0.15` reports *and* what it would report having failed to
+    /// leave `0.11.0-beta.0.14`. That is [`UpdateState::RestartUnverified`] —
+    /// neither the success nor the downgrade, both of which would be invented.
     pub fn restarted_into(
         &mut self,
-        running_version: impl Into<String>,
+        running_version: impl Into<ReportedVersion>,
     ) -> Result<&UpdateState, UpdateTransitionError> {
         let UpdateState::RestartPending { version } = &self.state else {
             return Err(self.rejected());
         };
         let pending = version.clone();
         let running_version = running_version.into();
-        if compare_build_order(&running_version, &pending) != Ordering::Less {
-            self.running_version = running_version.clone();
-            return Ok(self.enter(UpdateState::Running {
-                version: running_version,
-            }));
-        }
-        self.running_version = running_version.clone();
-        Ok(self.enter(UpdateState::Failed {
-            reason: format!(
-                "restart still runs {running_version}; the update to {pending} did not take effect"
-            ),
-            target: Some(pending),
-            // The apply already consumed the payload; recovering starts over.
-            staged: false,
-        }))
+        let order = compare_reported_build_order(
+            &running_version,
+            &ReportedVersion::complete(pending.clone()),
+        );
+        let text = running_version.text.clone();
+        self.running_version = running_version;
+        let next = match order {
+            Some(Ordering::Greater | Ordering::Equal) => UpdateState::Running { version: text },
+            Some(Ordering::Less) => UpdateState::Failed {
+                reason: format!(
+                    "restart still runs {text}; the update to {pending} did not take effect"
+                ),
+                target: Some(pending),
+                // The apply already consumed the payload; recovering starts over.
+                staged: false,
+            },
+            None => UpdateState::RestartUnverified { target: pending },
+        };
+        Ok(self.enter(next))
     }
 
     /// Restores the offer a failure interrupted, without a fresh discovery
@@ -1167,7 +1333,7 @@ impl UpdateLifecycle {
         UpdatePresentation {
             install_kind: self.install_kind,
             capability,
-            version_in_use: self.running_version.clone(),
+            version_in_use: self.running_version.text().to_owned(),
             target_version,
             claim,
             updates_message,
@@ -1214,6 +1380,9 @@ impl UpdateLifecycle {
             UpdateState::Idle
             | UpdateState::Checking { carried: None }
             | UpdateState::ManagedExternally { .. }
+            // The restart happened; which build came up is precisely what
+            // cannot be told, so nothing may be claimed either way (#694).
+            | UpdateState::RestartUnverified { .. }
             | UpdateState::Failed { target: None, .. } => VersionClaim::Unknown,
         }
     }
@@ -1242,6 +1411,10 @@ impl UpdateLifecycle {
             UpdateState::Running { version } => {
                 format!("OK Player is now running version {version}.")
             }
+            UpdateState::RestartUnverified { target } => format!(
+                "OK Player restarted after installing version {target}, but this build reports its version as {} without the part that would tell the two apart, so whether the update took effect cannot be confirmed. Check for updates to settle it.",
+                self.running_version
+            ),
             UpdateState::Skipped {
                 version,
                 hint: Some(hint),
@@ -1281,6 +1454,9 @@ impl UpdateLifecycle {
             }
             VersionClaim::Unknown => match &self.state {
                 UpdateState::ManagedExternally { hint } => format!("OK Player {running} — {hint}"),
+                UpdateState::RestartUnverified { target } => format!(
+                    "OK Player {running} — the update to {target} could not be confirmed from this build's version."
+                ),
                 _ => format!("OK Player {running}."),
             },
             VersionClaim::NotApplicable => {
@@ -1306,9 +1482,12 @@ impl UpdateLifecycle {
 
     fn action_for(&self, state: &UpdateState) -> Option<UpdateAction> {
         match state {
-            UpdateState::Idle | UpdateState::UpToDate | UpdateState::Running { .. } => {
-                Some(UpdateAction::CheckNow)
-            }
+            UpdateState::Idle
+            | UpdateState::UpToDate
+            | UpdateState::Running { .. }
+            // Nothing can be applied here — the payload is already on disk;
+            // only a check can say which build is running.
+            | UpdateState::RestartUnverified { .. } => Some(UpdateAction::CheckNow),
             UpdateState::Available { .. } => Some(UpdateAction::DownloadUpdate),
             UpdateState::ReadyToApply { .. } => Some(UpdateAction::ApplyAndRestart),
             UpdateState::RestartPending { .. } => Some(UpdateAction::RestartToFinish),
@@ -3244,6 +3423,280 @@ mod tests {
         )
         .expect("a self-applying install can resume");
         assert_eq!(backwards.state(), &UpdateState::Idle);
+    }
+
+    // ------------------------------------------------------ the Windows lane
+
+    #[test]
+    fn the_windows_lane_walks_check_download_apply_restart_and_says_so_at_every_step() {
+        // The Velopack projection end to end (#682): the states are the shared
+        // ones, every string comes out of `describe`, and the restart is the
+        // only step that can make the new version the running one.
+        let mut velopack = UpdateLifecycle::new(InstallKind::WindowsVelopack, "0.11.0-beta.0.14");
+        assert_eq!(velopack.capability(), UpdateCapability::SelfApply);
+        assert_eq!(
+            velopack.describe().updates_message,
+            "OK Player has not checked for updates yet."
+        );
+
+        velopack.start_check().expect("an installed build checks");
+        assert_eq!(velopack.describe().updates_message, "Checking for updates…");
+        assert!(
+            !velopack.describe().actions_enabled,
+            "a check in flight leaves nothing to press"
+        );
+
+        velopack
+            .check_found("0.11.0-beta.0.15")
+            .expect("the feed offered a newer build");
+        let offered = velopack.describe();
+        assert_eq!(offered.action, Some(UpdateAction::DownloadUpdate));
+        assert_eq!(
+            offered.updates_message,
+            "Version 0.11.0-beta.0.15 is available."
+        );
+        assert!(
+            !offered.action_closes_the_app,
+            "Velopack downloads in the background; nothing closes yet"
+        );
+
+        velopack.start_download().expect("the payload is fetched");
+        velopack.download_finished().expect("and verified");
+        let staged = velopack.describe();
+        assert_eq!(staged.action, Some(UpdateAction::ApplyAndRestart));
+        assert!(staged.action_closes_the_app);
+
+        velopack.start_apply().expect("the user accepted");
+        assert_eq!(
+            velopack
+                .apply_needs_restart()
+                .expect("applying can only land on a pending restart"),
+            &UpdateState::RestartPending {
+                version: "0.11.0-beta.0.15".to_owned()
+            }
+        );
+        let pending = velopack.describe();
+        assert_eq!(
+            pending.claim,
+            VersionClaim::Superseded {
+                newer: "0.11.0-beta.0.15".to_owned()
+            },
+            "the bits are on disk; this process is still the old build (#660)"
+        );
+        assert_eq!(pending.version_in_use, "0.11.0-beta.0.14");
+        assert_eq!(pending.action, Some(UpdateAction::RestartToFinish));
+
+        // The relaunch is a new process: the shell hands the pending target and
+        // the complete version it came up as to `resumed_after_restart`.
+        let resumed = UpdateLifecycle::resumed_after_restart(
+            InstallKind::WindowsVelopack,
+            ReportedVersion::complete("0.11.0-beta.0.15"),
+            "0.11.0-beta.0.15",
+        )
+        .expect("Velopack self-applies, so it can resume a pending restart");
+        let done = resumed.describe();
+        assert_eq!(done.claim, VersionClaim::Current);
+        assert_eq!(
+            done.updates_message,
+            "OK Player is now running version 0.11.0-beta.0.15."
+        );
+        assert_eq!(
+            done.about_message,
+            "OK Player 0.11.0-beta.0.15 — up to date."
+        );
+    }
+
+    #[test]
+    fn a_windows_dev_build_reports_updates_disabled_rather_than_a_special_case() {
+        // The shell no longer writes "Unavailable (development build)": with no
+        // Velopack layout around the executable the install is a dev build, and
+        // the projection is the one every unmanaged install gets.
+        let dev = detect_install_kind(&InstallEvidence {
+            executable_path: Some(r"C:\src\ok-player\bin\OkPlayer.exe".to_owned()),
+            velopack_layout_present: false,
+            ..evidence()
+        });
+        assert_eq!(dev, InstallKind::DevBuild);
+
+        let lifecycle = UpdateLifecycle::new(dev, "0.11.0");
+        let presentation = lifecycle.describe();
+        assert_eq!(presentation.capability, UpdateCapability::Unmanaged);
+        assert_eq!(presentation.claim, VersionClaim::NotApplicable);
+        assert_eq!(
+            presentation.updates_message,
+            "Updates are disabled for development builds."
+        );
+        assert_eq!(
+            presentation.about_message,
+            "OK Player 0.11.0 — development build; updates are disabled."
+        );
+        assert_eq!(presentation.action, None);
+    }
+
+    // --------------------------------------------- truncated versions (#694)
+
+    #[test]
+    fn a_truncated_version_only_decides_what_its_numeric_core_can() {
+        let truncated = ReportedVersion::truncated("0.11.0");
+        // The tail is what the ordering would have turned on, and it is gone.
+        assert_eq!(
+            compare_reported_build_order(&truncated, &"0.11.0-beta.0.15".into()),
+            None
+        );
+        assert_eq!(
+            compare_reported_build_order(&"0.11.0-beta.0.15".into(), &truncated),
+            None
+        );
+        assert_eq!(
+            compare_reported_build_order(&truncated, &"0.11.0".into()),
+            None,
+            "even against the same string: the truncated one may be any beta of it"
+        );
+        // A different core is decided by the core alone, so truncation costs
+        // nothing there.
+        assert_eq!(
+            compare_reported_build_order(&truncated, &"0.12.0-beta.1".into()),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            compare_reported_build_order(&truncated, &"0.10.14".into()),
+            Some(Ordering::Greater)
+        );
+        // Two complete versions keep the full ordering, prerelease rules and
+        // all.
+        assert_eq!(
+            compare_reported_build_order(&"0.11.0".into(), &"0.11.0-beta.0.15".into()),
+            Some(Ordering::Greater)
+        );
+        assert!(ReportedVersion::from("0.11.0").is_complete());
+        assert_eq!(
+            ReportedVersion::truncated("0.11.0").fidelity(),
+            VersionFidelity::Truncated
+        );
+    }
+
+    #[test]
+    fn a_truncated_running_version_neither_confirms_nor_denies_the_restart() {
+        // #694 exactly: the process came back on the candidate it was meant to
+        // install, but all it can say about itself is "0.11.0" — which read as
+        // a complete version is a *stable release*, ranking above the pending
+        // prerelease and turning a good upgrade into a reported downgrade.
+        let mut velopack = UpdateLifecycle::new(
+            InstallKind::WindowsVelopack,
+            ReportedVersion::truncated("0.11.0"),
+        );
+        velopack.start_check().unwrap();
+        velopack.check_found("0.11.0-beta.0.15").unwrap();
+        velopack.start_download().unwrap();
+        velopack.download_finished().unwrap();
+        velopack.start_apply().unwrap();
+        velopack.apply_needs_restart().unwrap();
+        velopack
+            .restarted_into(ReportedVersion::truncated("0.11.0"))
+            .expect("the restart is reported either way");
+
+        assert_eq!(
+            velopack.state(),
+            &UpdateState::RestartUnverified {
+                target: "0.11.0-beta.0.15".to_owned()
+            },
+            "neither Running nor the #660 failure — both would be invented"
+        );
+        let presentation = velopack.describe();
+        assert_eq!(
+            presentation.claim,
+            VersionClaim::Unknown,
+            "no claim about the running build is available"
+        );
+        // Not swallowed either: both surfaces say what could not be confirmed,
+        // and name the version it was about.
+        assert!(
+            presentation.updates_message.contains("cannot be confirmed"),
+            "{}",
+            presentation.updates_message
+        );
+        assert!(presentation.updates_message.contains("0.11.0-beta.0.15"));
+        assert!(
+            presentation
+                .about_message
+                .contains("could not be confirmed"),
+            "{}",
+            presentation.about_message
+        );
+        assert_eq!(
+            presentation.target_version.as_deref(),
+            Some("0.11.0-beta.0.15")
+        );
+        // A check is the way out, and it is offered.
+        assert_eq!(presentation.action, Some(UpdateAction::CheckNow));
+        assert!(presentation.actions_enabled);
+        velopack
+            .start_check()
+            .expect("an unverified restart can still be settled against the feed");
+    }
+
+    #[test]
+    fn a_complete_running_version_still_settles_the_restart_both_ways() {
+        // The contract only withholds what a truncated string cannot support:
+        // a shell that reports the whole package version — which the Windows
+        // one does from the Velopack release identity and the informational
+        // assembly version — keeps both verdicts.
+        let landed = UpdateLifecycle::resumed_after_restart(
+            InstallKind::WindowsVelopack,
+            "0.11.0-beta.0.15",
+            "0.11.0-beta.0.15",
+        )
+        .expect("a self-applying install can resume");
+        assert_eq!(
+            landed.state(),
+            &UpdateState::Running {
+                version: "0.11.0-beta.0.15".to_owned()
+            }
+        );
+
+        let stayed = UpdateLifecycle::resumed_after_restart(
+            InstallKind::WindowsVelopack,
+            "0.11.0-beta.0.14",
+            "0.11.0-beta.0.15",
+        )
+        .expect("a self-applying install can resume");
+        assert!(
+            matches!(stayed.state(), UpdateState::Failed { target: Some(target), .. } if target == "0.11.0-beta.0.15"),
+            "the old binary came back up — #660, still caught: {:?}",
+            stayed.state()
+        );
+    }
+
+    #[test]
+    fn a_truncated_running_version_keeps_a_staged_payload_it_cannot_rank() {
+        // A staged payload is an observed fact, not an ordering conclusion.
+        // With the running version truncated the staleness check cannot run, so
+        // the offer survives — losing a downloaded update silently would be the
+        // worse half of the guess.
+        let resumed = UpdateLifecycle::resumed_with_staged_update(
+            InstallKind::WindowsVelopack,
+            ReportedVersion::truncated("0.11.0"),
+            "0.11.0-beta.0.15",
+        )
+        .expect("a self-applying install can resume");
+        assert_eq!(
+            resumed.state(),
+            &UpdateState::ReadyToApply {
+                version: "0.11.0-beta.0.15".to_owned()
+            }
+        );
+        assert_eq!(
+            resumed.describe().action,
+            Some(UpdateAction::ApplyAndRestart)
+        );
+        // A core the truncation cannot hide still discards a stale record.
+        let stale = UpdateLifecycle::resumed_with_staged_update(
+            InstallKind::WindowsVelopack,
+            ReportedVersion::truncated("0.12.0"),
+            "0.11.0-beta.0.15",
+        )
+        .expect("a self-applying install can resume");
+        assert_eq!(stale.state(), &UpdateState::Idle);
     }
 
     #[test]
