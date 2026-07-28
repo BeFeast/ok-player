@@ -249,12 +249,13 @@ fn continue_watching_welcome(
     shelf.set_max_children_per_line(4);
     shelf.set_column_spacing(RECENT_GAP as u32);
     shelf.set_row_spacing(RECENT_GAP as u32);
-    // The shelf is a grid of fixed-width cards, so it asks for exactly the row it wants and
-    // is placed at the start of the column - the Windows shelf is a left-aligned row of
-    // 194px cards too. Filling instead would hand the flow box leftover width to spread
-    // across the cards, which is the uneven row #702 reported.
-    shelf.set_hexpand(false);
-    shelf.set_halign(gtk::Align::Start);
+    // The shelf fills its column so the flow box decides the column count from the width it
+    // actually has. Sizing it to its own natural width instead would put the row at the
+    // mercy of what a given GTK reports a flow box's natural width to be, which is one
+    // column on some versions and the whole line on others. Uniform cards are guaranteed by
+    // the card itself (see `recent_card`), not by starving the box of width.
+    shelf.set_hexpand(true);
+    shelf.set_halign(gtk::Align::Fill);
     for item in items {
         shelf.insert(&recent_card(item, Rc::clone(&state)), -1);
     }
@@ -300,8 +301,9 @@ pub(crate) fn recent_card(item: &HistoryItem, state: Rc<RefCell<PlayerState>>) -
     button.add_css_class("okp-recent-card");
     button.set_has_frame(false);
     button.set_tooltip_text(Some(&item.path));
-    // A card is exactly one grid cell wide however wide its cell is allowed to become, so a
-    // row of cards stays uniform even where the flow box has width left to give away.
+    // A card is exactly this wide however wide its cell turns out to be, so the row stays
+    // uniform even where the flow box has leftover width to hand out. This is the invariant
+    // the shelf's grid rests on: `scripts/smoke-linux-recents-shelf.sh` asserts it.
     button.set_size_request(RECENT_CARD_WIDTH, -1);
     button.set_hexpand(false);
     button.set_halign(gtk::Align::Start);
