@@ -1,10 +1,12 @@
 name: Update Feeds
 
-# The static home of the OK Player update channels (issues #131 Windows, #162 Linux).
+# The static home of the OK Player update channels (issues #131 Windows, #162 Linux) and of
+# the signed APT repository (issue #683).
 # Installed builds read their channel manifest from https://befeast.github.io/ok-player/:
 #   - Windows (Velopack SimpleWebSource):   updates/win/releases.win.json
 #   - Linux AppImage (Velopack HttpSource): updates/linux/releases.linux.json
 #   - Linux .deb self-updater:              updates/linux/deb.linux.json
+#   - Debian/Ubuntu system updater:         apt/ (dists + pool, signed; scripts/build-apt-repo.sh)
 # This workflow is the ONLY writer of that site. It rebuilds the whole site from docs/site plus
 # manifests derived from the newest published release on each track (scripts/build-win-feed.sh and
 # scripts/build-linux-feed.sh) and deploys to GitHub Pages atomically — deploy-pages swaps the
@@ -22,8 +24,18 @@ name: Update Feeds
 #   - push to main touching the site or a generator: content redeploy.
 #   - workflow_dispatch: manual redeploy, first-time bootstrap, belt-and-braces re-runs.
 #   - workflow_call: invoked by release-linux.yml after publishing a linux-v* release.
-# Every run rebuilds both feeds from the current source of truth, so overlapping or repeated
-# triggers are harmless; the concurrency group serializes deploys so the last one wins.
+# Every run rebuilds both feeds AND the APT archive from the current source of truth, so
+# overlapping or repeated triggers are harmless; the concurrency group serializes deploys so the
+# last one wins. The APT archive is regenerated the same way for the same reason: it is derived
+# from the published linux-v* releases, so a rebuild reproduces it rather than mutating it, and
+# a version already published keeps its exact pool bytes and checksums.
+#
+# The APT lane needs the archive signing key, which lives in Infisical and is fetched at run
+# time (issue #683) — it is deliberately not a GitHub Actions secret. Only the two Universal
+# Auth client credentials are, and without them this workflow fails instead of deploying an
+# unsigned archive. That means an outage of the secret store blocks the whole Pages deploy,
+# including the JSON feeds, which is the intended trade: apt clients that have already trusted
+# this archive must never be served something unsigned or signed by an unexpected key.
 
 on:
   release:
@@ -34,6 +46,8 @@ on:
       - 'docs/site/**'
       - 'scripts/build-win-feed.sh'
       - 'scripts/build-linux-feed.sh'
+      - 'scripts/build-apt-repo.sh'
+      - 'scripts/verify-apt-repo.sh'
       - '.github/workflows/publish-update-feeds.yml'
   workflow_dispatch:
   workflow_call:
@@ -69,6 +83,28 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./scripts/build-linux-feed.sh "${{ github.repository }}" _site
+
+      # dpkg-dev carries dpkg-scanpackages, which indexes the pool. Installed explicitly rather
+      # than assumed from the runner image, so a base-image change fails here with a clear
+      # message instead of half way through building the archive.
+      - name: Install APT archive tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends dpkg-dev gnupg
+
+      # Fetches the signing key from Infisical into an ephemeral GNUPGHOME, verifies its
+      # fingerprint against the expected one, signs, and publishes only the public key.
+      - name: Build signed APT repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+        run: ./scripts/build-apt-repo.sh "${{ github.repository }}" _site
+
+      # apt itself is the only authority on whether this archive works. A missing container
+      # runtime fails the lane rather than skipping the check.
+      - name: Verify the APT repository installs from a clean Debian root
+        run: ./scripts/verify-apt-repo.sh _site/apt
 
       # enablement: true creates the Pages site (build type "workflow") on the first run, so no
       # separate admin step is needed. If org policy blocks API enablement, enable it once by

@@ -73,6 +73,9 @@ jobs:
       - name: Installed-RPM launch gate policy tests
         run: ./scripts/tests/rpm-installed-launch-gate.Tests.sh
 
+      - name: APT repository generator policy tests
+        run: ./scripts/tests/apt-repo-generator.Tests.sh
+
       - name: Candidate GTK binary resolution stays correct
         run: ./scripts/tests/candidate-gtk-binary.Tests.sh
 
