@@ -31,6 +31,22 @@ const POINTER_SAMPLE_INTERVAL: Duration = Duration::from_millis(150);
 pub(crate) struct GeometrySurfaces {
     pub(crate) video: gtk::Widget,
     pub(crate) chrome: Vec<(String, gtk::Widget)>,
+    pub(crate) nested: Vec<NestedPlanes>,
+}
+
+/// Planes inside a chrome surface that the shell rebuilds with it, so they cannot be
+/// captured once at construction the way the fixed surfaces are.
+///
+/// They are resolved from the live widget tree on every snapshot and reported directly
+/// above their host, which keeps the plane list in stacking order: a point inside one of
+/// them is owned by the child, exactly as GTK picking would answer.
+pub(crate) struct NestedPlanes {
+    /// Name of the chrome plane these sit inside.
+    pub(crate) host: &'static str,
+    /// Reported plane name, suffixed with the child's index in on-screen order.
+    pub(crate) prefix: &'static str,
+    /// CSS class marking the widgets to report.
+    pub(crate) css_class: &'static str,
 }
 
 struct GeometryReporter {
@@ -145,6 +161,24 @@ impl GeometryReporter {
             if let Some(bounds) = plane_bounds(widget, &window) {
                 planes.push(Plane::new(name.clone(), bounds, widget.can_target()));
             }
+            for nested in self
+                .surfaces
+                .nested
+                .iter()
+                .filter(|nested| nested.host == name)
+            {
+                for (index, child) in
+                    descendants_with_css_class(widget, nested.css_class).enumerate()
+                {
+                    if let Some(bounds) = plane_bounds(&child, &window) {
+                        planes.push(Plane::new(
+                            format!("{}-{index}", nested.prefix),
+                            bounds,
+                            child.can_target(),
+                        ));
+                    }
+                }
+            }
         }
 
         Some(WindowGeometry {
@@ -162,6 +196,31 @@ impl GeometryReporter {
             planes,
         })
     }
+}
+
+/// Every descendant of `root` carrying `css_class`, in document order.
+///
+/// Document order is on-screen order for the surfaces this reports, so the index a plane
+/// name carries is the position a reader sees - the first card is `-0`.
+fn descendants_with_css_class(
+    root: &gtk::Widget,
+    css_class: &str,
+) -> impl Iterator<Item = gtk::Widget> {
+    let mut found = Vec::new();
+    let mut pending = vec![root.clone()];
+    while let Some(widget) = pending.pop() {
+        if widget.has_css_class(css_class) {
+            found.push(widget.clone());
+        }
+        let mut children = Vec::new();
+        let mut child = widget.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            children.push(current);
+        }
+        pending.extend(children.into_iter().rev());
+    }
+    found.into_iter()
 }
 
 fn plane_bounds(widget: &gtk::Widget, window: &gtk::ApplicationWindow) -> Option<Rect> {

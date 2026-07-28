@@ -417,6 +417,21 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
                     .map(|(index, handle)| (format!("resize-handle-{index}"), handle.upcast())),
             )
             .collect(),
+            // The Continue-watching shelf is rebuilt whenever the welcome model changes, so
+            // its cards are resolved per snapshot. Reporting them is what lets a headless
+            // check assert the shelf is a uniform grid instead of a text-shaped row (#702).
+            nested: vec![
+                NestedPlanes {
+                    host: "welcome",
+                    prefix: "recent-card",
+                    css_class: "okp-recent-card",
+                },
+                NestedPlanes {
+                    host: "welcome",
+                    prefix: "recents-more",
+                    css_class: "okp-recents-history-button",
+                },
+            ],
         },
     );
     connect_state_poll(

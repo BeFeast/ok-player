@@ -9,7 +9,7 @@ const HISTORY_SEARCH_THRESHOLD: usize = 5;
 
 const WELCOME_WRAPPER_WIDTH: i32 = 744;
 const WELCOME_HORIZONTAL_PADDING: i32 = 32;
-const RECENT_CARD_WIDTH: i32 = 194;
+pub(crate) const RECENT_CARD_WIDTH: i32 = 194;
 const RECENT_CARD_HEIGHT: i32 = 110;
 const RECENT_SHELF_ROW_HEIGHT: i32 = 148;
 const RECENT_GAP: i32 = 14;
@@ -249,8 +249,12 @@ fn continue_watching_welcome(
     shelf.set_max_children_per_line(4);
     shelf.set_column_spacing(RECENT_GAP as u32);
     shelf.set_row_spacing(RECENT_GAP as u32);
-    shelf.set_hexpand(true);
-    shelf.set_halign(gtk::Align::Fill);
+    // The shelf is a grid of fixed-width cards, so it asks for exactly the row it wants and
+    // is placed at the start of the column - the Windows shelf is a left-aligned row of
+    // 194px cards too. Filling instead would hand the flow box leftover width to spread
+    // across the cards, which is the uneven row #702 reported.
+    shelf.set_hexpand(false);
+    shelf.set_halign(gtk::Align::Start);
     for item in items {
         shelf.insert(&recent_card(item, Rc::clone(&state)), -1);
     }
@@ -285,11 +289,22 @@ fn continue_watching_welcome(
     (content, history_button)
 }
 
-fn recent_card(item: &HistoryItem, state: Rc<RefCell<PlayerState>>) -> gtk::Button {
+/// One Continue-watching card: a fixed-width tile, never a text-shaped one.
+///
+/// Every part of the card is bounded to [`RECENT_CARD_WIDTH`] so the shelf can lay the cards
+/// out on a grid. The thumbnail is a sized frame with its poster as a non-measured overlay
+/// child, and both labels carry a Pango bound - see the comment on the title. Layout dictates
+/// the text here; the text never dictates layout (#702).
+pub(crate) fn recent_card(item: &HistoryItem, state: Rc<RefCell<PlayerState>>) -> gtk::Button {
     let button = gtk::Button::new();
     button.add_css_class("okp-recent-card");
     button.set_has_frame(false);
     button.set_tooltip_text(Some(&item.path));
+    // A card is exactly one grid cell wide however wide its cell is allowed to become, so a
+    // row of cards stays uniform even where the flow box has width left to give away.
+    button.set_size_request(RECENT_CARD_WIDTH, -1);
+    button.set_hexpand(false);
+    button.set_halign(gtk::Align::Start);
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     content.set_size_request(RECENT_CARD_WIDTH, -1);
@@ -314,11 +329,18 @@ fn recent_card(item: &HistoryItem, state: Rc<RefCell<PlayerState>>) -> gtk::Butt
     title.add_css_class("okp-recent-title");
     title.set_xalign(0.0);
     title.set_width_chars(1);
+    // An ellipsized label still reports its whole text as its natural width - the ellipsis
+    // only appears once it is allocated less - so without this Pango bound a long title, or
+    // the long path below it, would set the card's width and every card in the shelf would
+    // come out a different size (#702).
+    title.set_max_width_chars(1);
     title.set_ellipsize(pango::EllipsizeMode::End);
     content.append(&title);
     let location = gtk::Label::new(Some(&item.location));
     location.add_css_class("okp-recent-location");
     location.set_xalign(0.0);
+    location.set_width_chars(1);
+    location.set_max_width_chars(1);
     location.set_ellipsize(pango::EllipsizeMode::Middle);
     content.append(&location);
     button.set_child(Some(&content));
@@ -338,6 +360,12 @@ fn recent_history_column(
     button.add_css_class("okp-recents-history-button");
     button.set_tooltip_text(Some("History"));
     button.set_size_request(HISTORY_BUTTON_SIZE, HISTORY_BUTTON_SIZE);
+    // The round affordance keeps its own size inside the cell the shelf gives it. Filling
+    // would turn it into the cell-sized grey slab #702 reported next to the cards.
+    button.set_hexpand(false);
+    button.set_vexpand(false);
+    button.set_halign(gtk::Align::Center);
+    button.set_valign(gtk::Align::Center);
     button.set_margin_start(HISTORY_BUTTON_INSET);
     button.set_margin_end(HISTORY_BUTTON_INSET + WELCOME_SHELF_TRAILING_SPACE);
     let vertical_margin = (RECENT_SHELF_ROW_HEIGHT - HISTORY_BUTTON_SIZE) / 2;
