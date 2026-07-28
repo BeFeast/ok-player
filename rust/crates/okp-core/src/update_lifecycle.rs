@@ -233,9 +233,16 @@ pub enum UpdateState {
     /// A newer version exists but a system update tool owns it; `hint` says
     /// which one.
     AvailableExternally { version: String, hint: String },
-    /// A discovered version the user chose to skip. The offer is remembered —
-    /// it stays installable on demand — but nothing prompts for it.
-    Skipped { version: String },
+    /// A discovered version the user chose to skip. The offer is remembered in
+    /// full — nothing prompts for it, but everything needed to act on it later
+    /// survives: `hint` keeps telling a system-managed install how to get the
+    /// release anyway, and `staged` keeps a verified payload from being thrown
+    /// away and downloaded again.
+    Skipped {
+        version: String,
+        hint: Option<String>,
+        staged: bool,
+    },
     /// A system update tool owns this install and the app does not discover
     /// versions for it at all — the rpm and flatpak lanes, which report who
     /// updates them and never run a check. Distinct from [`Self::Idle`], whose
@@ -278,7 +285,7 @@ impl UpdateState {
             | Self::ReadyToApply { version }
             | Self::Applying { version }
             | Self::RestartPending { version }
-            | Self::Skipped { version } => Some(version),
+            | Self::Skipped { version, .. } => Some(version),
             Self::Failed { target, .. } => target.as_deref(),
             Self::Checking { carried } => carried.as_ref().map(CarriedOffer::version),
             Self::Idle | Self::UpToDate | Self::ManagedExternally { .. } => None,
@@ -308,6 +315,8 @@ pub enum CarriedOffer {
     },
     Skipped {
         version: String,
+        hint: Option<String>,
+        staged: bool,
     },
 }
 
@@ -317,7 +326,7 @@ impl CarriedOffer {
             Self::Available { version }
             | Self::AvailableExternally { version, .. }
             | Self::ReadyToApply { version }
-            | Self::Skipped { version } => version,
+            | Self::Skipped { version, .. } => version,
         }
     }
 
@@ -328,7 +337,15 @@ impl CarriedOffer {
                 UpdateState::AvailableExternally { version, hint }
             }
             Self::ReadyToApply { version } => UpdateState::ReadyToApply { version },
-            Self::Skipped { version } => UpdateState::Skipped { version },
+            Self::Skipped {
+                version,
+                hint,
+                staged,
+            } => UpdateState::Skipped {
+                version,
+                hint,
+                staged,
+            },
         }
     }
 }
@@ -622,9 +639,15 @@ impl UpdateLifecycle {
                 target: Some(version),
                 ..
             } => version.clone(),
-            UpdateState::Skipped { version } => {
+            UpdateState::Skipped {
+                version,
+                hint,
+                staged,
+            } => {
                 return Some(CarriedOffer::Skipped {
                     version: version.clone(),
+                    hint: hint.clone(),
+                    staged: *staged,
                 });
             }
             _ => return None,
@@ -703,21 +726,26 @@ impl UpdateLifecycle {
     /// stays known so the user can still install it on demand. Mirrors the
     /// per-channel skip the settings already persist.
     pub fn skip_offer(&mut self) -> Result<&UpdateState, UpdateTransitionError> {
-        match &self.state {
+        let (version, staged) = match &self.state {
             UpdateState::Available { version }
-            | UpdateState::AvailableExternally { version, .. } => {
-                let version = version.clone();
-                Ok(self.enter(UpdateState::Skipped { version }))
-            }
+            | UpdateState::AvailableExternally { version, .. } => (version.clone(), false),
+            UpdateState::ReadyToApply { version } => (version.clone(), true),
             UpdateState::Failed {
                 target: Some(version),
+                staged,
                 ..
-            } => {
-                let version = version.clone();
-                Ok(self.enter(UpdateState::Skipped { version }))
-            }
-            _ => Err(self.rejected()),
-        }
+            } => (version.clone(), *staged),
+            _ => return Err(self.rejected()),
+        };
+        // Skipping silences the prompt, not the instructions: a system-managed
+        // install must keep being told how to get the release it skipped.
+        let hint = (self.capability() == UpdateCapability::SystemManaged)
+            .then(|| self.install_kind.system_update_hint_text().to_owned());
+        Ok(self.enter(UpdateState::Skipped {
+            version,
+            hint,
+            staged,
+        }))
     }
 
     /// Installs a version the user had skipped. Only a
@@ -728,9 +756,17 @@ impl UpdateLifecycle {
             return Err(UpdateTransitionError::CapabilityForbids(self.capability()));
         }
         match &self.state {
-            UpdateState::Skipped { version } => {
+            UpdateState::Skipped {
+                version, staged, ..
+            } => {
                 let version = version.clone();
-                Ok(self.enter(UpdateState::Downloading { version }))
+                // A payload kept through the skip is applied, not fetched again.
+                let next = if *staged {
+                    UpdateState::ReadyToApply { version }
+                } else {
+                    UpdateState::Downloading { version }
+                };
+                Ok(self.enter(next))
             }
             _ => Err(self.rejected()),
         }
@@ -933,7 +969,7 @@ impl UpdateLifecycle {
             UpdateState::UpToDate | UpdateState::Running { .. } => VersionClaim::Current,
             UpdateState::Available { version }
             | UpdateState::AvailableExternally { version, .. }
-            | UpdateState::Skipped { version }
+            | UpdateState::Skipped { version, .. }
             | UpdateState::Downloading { version }
             | UpdateState::ReadyToApply { version }
             | UpdateState::Applying { version }
@@ -987,7 +1023,12 @@ impl UpdateLifecycle {
             UpdateState::Running { version } => {
                 format!("OK Player is now running version {version}.")
             }
-            UpdateState::Skipped { version } => {
+            UpdateState::Skipped {
+                version,
+                hint: Some(hint),
+                ..
+            } => format!("Version {version} was skipped. {hint}"),
+            UpdateState::Skipped { version, .. } => {
                 format!("Version {version} was skipped.")
             }
             UpdateState::ManagedExternally { hint } => hint.clone(),
@@ -2112,7 +2153,9 @@ mod tests {
         assert_eq!(
             lifecycle.state(),
             &UpdateState::Skipped {
-                version: "2.0.0".to_owned()
+                version: "2.0.0".to_owned(),
+                hint: None,
+                staged: false,
             },
             "a failed refresh must not un-skip an offer"
         );
@@ -2230,7 +2273,9 @@ mod tests {
         assert_eq!(
             lifecycle.skip_offer().unwrap(),
             &UpdateState::Skipped {
-                version: "2.0.0".to_owned()
+                version: "2.0.0".to_owned(),
+                hint: None,
+                staged: false,
             }
         );
     }
@@ -2399,6 +2444,82 @@ mod tests {
                 "{action:?} does not close the player"
             );
         }
+    }
+
+    /// Invariant: skipping a system-managed offer silences the prompt without
+    /// silencing the instructions — the user must still be told how to get that
+    /// release from their package manager.
+    #[test]
+    fn a_skipped_system_managed_offer_still_says_how_to_get_it() {
+        for (kind, tool) in [
+            (InstallKind::Deb, "apt"),
+            (InstallKind::Rpm, "dnf"),
+            (InstallKind::Flatpak, "flatpak"),
+        ] {
+            let mut lifecycle = UpdateLifecycle::new(kind, "1.0.0");
+            lifecycle.start_check().unwrap();
+            lifecycle.check_found("2.0.0").unwrap();
+            lifecycle.skip_offer().unwrap();
+
+            let presentation = lifecycle.describe();
+            assert!(
+                presentation.updates_message.to_lowercase().contains(tool),
+                "{kind} must keep naming its update tool after a skip, got {}",
+                presentation.updates_message
+            );
+            assert!(
+                presentation.updates_message.contains("2.0.0"),
+                "{kind} must still name the skipped version"
+            );
+            assert_eq!(
+                presentation.action, None,
+                "{kind} still installs nothing in app"
+            );
+        }
+
+        let mut self_apply = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        self_apply.start_check().unwrap();
+        self_apply.check_found("2.0.0").unwrap();
+        self_apply.skip_offer().unwrap();
+        assert_eq!(
+            self_apply.describe().action,
+            Some(UpdateAction::InstallAnyway),
+            "a self-applying install needs no hint — it has an action"
+        );
+    }
+
+    /// Invariant: skipping does not throw away a payload that survived a failed
+    /// apply. Installing it anyway applies what is on disk.
+    #[test]
+    fn installing_anyway_applies_a_payload_the_skip_kept() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        lifecycle.start_check().unwrap();
+        lifecycle.check_found("2.0.0").unwrap();
+        lifecycle.start_download().unwrap();
+        lifecycle.download_finished().unwrap();
+        lifecycle.start_apply().unwrap();
+        lifecycle.apply_failed("permission denied").unwrap();
+        lifecycle.skip_offer().unwrap();
+
+        assert_eq!(
+            lifecycle.install_anyway().unwrap(),
+            &UpdateState::ReadyToApply {
+                version: "2.0.0".to_owned()
+            },
+            "a skipped staged payload must be applied, not downloaded again"
+        );
+
+        let mut never_downloaded = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        never_downloaded.start_check().unwrap();
+        never_downloaded.check_found("2.0.0").unwrap();
+        never_downloaded.skip_offer().unwrap();
+        assert_eq!(
+            never_downloaded.install_anyway().unwrap(),
+            &UpdateState::Downloading {
+                version: "2.0.0".to_owned()
+            },
+            "a skip with nothing staged still has to fetch the payload"
+        );
     }
 
     #[test]
