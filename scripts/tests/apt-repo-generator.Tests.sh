@@ -625,6 +625,37 @@ else
   fail "missing current candidate asset" "status ${nocurrent_status}, output: ${nocurrent_output}"
 fi
 
+# "No rolling candidate yet" and "GitHub did not answer" must not look the same. The first is a
+# legitimate stable-only archive; the second silently un-publishing the QA channel that testers
+# are subscribed to is a failure, not a degraded mode. `gh` is shadowed by a shell function here,
+# so the real discovery path runs against a canned API failure without a network.
+set +e
+absent_release_output="$(
+  ( gh() { printf 'gh: Not Found (HTTP 404)\n' >&2; return 1; }
+    okp_apt_fetch_candidate_rows BeFeast/ok-player "$WORK" "$WORK/rows-no-release" ) 2>&1
+)"
+absent_release_status=$?
+set -e
+if ((absent_release_status == 0)) && [[ ! -s "$WORK/rows-no-release" ]] \
+  && grep -q 'stable suite only' <<<"$absent_release_output"; then
+  pass "a repository with no rolling candidate release plans a stable-only archive"
+else
+  fail "absent candidate release" "status ${absent_release_status}, output: ${absent_release_output}"
+fi
+
+set +e
+outage_output="$(
+  ( gh() { printf 'gh: Server Error (HTTP 503)\n' >&2; return 1; }
+    okp_apt_fetch_candidate_rows BeFeast/ok-player "$WORK" "$WORK/rows-outage" ) 2>&1
+)"
+outage_status=$?
+set -e
+if ((outage_status != 0)) && grep -q 'refusing to drop' <<<"$outage_output"; then
+  pass "an API failure that is not a 404 aborts instead of quietly dropping the candidate suite"
+else
+  fail "candidate discovery outage" "status ${outage_status}, output: ${outage_output}"
+fi
+
 # --- 10. Two suites, one pool, one key -----------------------------------------------------
 seed_secrets
 STAGE_SUITES="$WORK/stage-suites"

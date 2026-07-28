@@ -52,7 +52,20 @@ carry aborts the lane.
 
 Setting `OKP_APT_CANDIDATE_MAX_VERSIONS=0`, or having no `linux-candidate` release at all,
 publishes a `stable`-only archive — including no `ok-player-candidate.sources`, because apt fails
-hard on a source line naming a suite the archive does not have.
+hard on a source line naming a suite the archive does not have. "No candidate release" is decided
+by a 404 and nothing else: any other API failure aborts the lane rather than quietly un-publishing
+the channel testers are subscribed to.
+
+### Why `candidate` is a plain suite, not `NotAutomatic`
+
+Debian's backports idiom (`NotAutomatic: yes` + `ButAutomaticUpgrades: yes`) would let a machine
+carry both source stanzas and still stay on releases until it asked for a candidate. It is
+deliberately not used here, for now. It works by manipulating pin priorities, and the behaviour
+this lane must guarantee — `apt upgrade` moving a subscribed machine from one rolling build to the
+next — is exactly what those priorities make subtle. The plain suite is what the container gate
+actually proves, on the configuration the docs actually recommend (candidate *instead of* stable,
+not beside it). Revisit it if testers turn out to want both channels on one machine; it would need
+its own container case for the upgrade path before it could be trusted.
 
 ### One pool, one key, one generator
 

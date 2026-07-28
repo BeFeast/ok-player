@@ -356,7 +356,7 @@ okp_apt_select_paragraphs() {
     }
     {
       buffer = buffer $0 "\n"
-      if ($0 ~ /^Filename: /) { filename = substr($0, 11) }
+      if ($1 == "Filename:") { filename = $2 }
       if ($0 == "") {
         if (filename in keep) printf "%s", buffer
         buffer = ""
@@ -609,12 +609,20 @@ okp_apt_fetch_candidate_rows() {
     return 0
   fi
 
-  local assets="${work}/candidate-assets.json"
+  # "There is no rolling candidate yet" and "GitHub did not answer" must not look the same. Only
+  # a 404 means the release is absent, which is a legitimate stable-only archive; anything else
+  # is an outage, and silently dropping the candidate suite because of one would quietly
+  # un-publish the QA channel that testers are subscribed to.
+  local assets="${work}/candidate-assets.json" errors="${work}/candidate-assets.err"
   if ! gh api "repos/${repo}/releases/tags/${OKP_APT_CANDIDATE_TAG}" \
-       --jq '[.assets[] | {name: .name, size: .size}]' >"$assets" 2>/dev/null; then
-    printf 'APT candidate: no %s release in %s; publishing the %s suite only.\n' \
-      "$OKP_APT_CANDIDATE_TAG" "$repo" "$OKP_APT_STABLE_SUITE" >&2
-    return 0
+       --jq '[.assets[] | {name: .name, size: .size}]' >"$assets" 2>"$errors"; then
+    if grep -q 'HTTP 404' "$errors"; then
+      printf 'APT candidate: no %s release in %s; publishing the %s suite only.\n' \
+        "$OKP_APT_CANDIDATE_TAG" "$repo" "$OKP_APT_STABLE_SUITE" >&2
+      return 0
+    fi
+    cat "$errors" >&2
+    okp_apt_fail "could not read the ${OKP_APT_CANDIDATE_TAG} release of ${repo}; refusing to drop the ${OKP_APT_CANDIDATE_SUITE} suite from an archive testers are subscribed to because of a transient failure."
   fi
   if ! jq -e --arg name "$OKP_APT_CANDIDATE_POINTER" 'any(.[]; .name == $name)' >/dev/null <"$assets"; then
     printf 'APT candidate: %s carries no %s pointer; publishing the %s suite only.\n' \
