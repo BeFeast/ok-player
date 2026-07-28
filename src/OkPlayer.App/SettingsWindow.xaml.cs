@@ -223,52 +223,58 @@ public sealed partial class SettingsWindow : Window
         RefreshUpdatesUi();
     }
 
-    /// <summary>Drive the status line + button visibility/enabled state from <see cref="App.Updates"/>. Safe to
-    /// call repeatedly and from the <see cref="OnUpdatesChanged"/> handler.</summary>
+    /// <summary>Render the update card from the lifecycle's projection: the status line, which control is
+    /// offered, what it is called and whether it can be pressed all come out of
+    /// <see cref="OkPlayer.Core.UpdateLifecycle.Describe"/> (issue #682). Nothing here composes update text —
+    /// that is what let the card claim "up to date" while an applied update waited for a restart (#660), and
+    /// what made a dev build a hand-written special case. Safe to call repeatedly and from the
+    /// <see cref="OnUpdatesChanged"/> handler.</summary>
     private void RefreshUpdatesUi()
     {
         if (AboutUpdateStatus is null)
             return; // the card isn't realised yet
-        var u = App.Updates;
-        if (!u.IsSupported)
+        UpdatePresentation update = App.Updates.Presentation;
+        AboutUpdateStatus.Text = update.UpdatesMessage;
+
+        // Two controls, split by what the action does: the plain button runs a check, the accent one acts on
+        // a discovered update (and, when it closes the app to do it, says so on its face).
+        UpdateAction? action = update.Action;
+        bool checkAction = action is UpdateAction.CheckNow or UpdateAction.Retry;
+        bool updateAction = action is UpdateAction.DownloadUpdate
+            or UpdateAction.ApplyAndRestart
+            or UpdateAction.RestartToFinish;
+        CheckUpdatesButton.Visibility = checkAction ? Visibility.Visible : Visibility.Collapsed;
+        CheckUpdatesButton.IsEnabled = update.ActionsEnabled;
+        RestartNowButton.Visibility = updateAction ? Visibility.Visible : Visibility.Collapsed;
+        RestartNowButton.IsEnabled = update.ActionsEnabled;
+        if (action is { } offered)
         {
-            // Dev / portable build: there's no installed feed to update from. Be honest rather than implying it works.
-            AboutUpdateStatus.Text = "Unavailable (development build)";
-            CheckUpdatesButton.IsEnabled = false;
-            RestartNowButton.Visibility = Visibility.Collapsed;
-            return;
+            string label = OkPlayer.Core.UpdateLifecycle.Label(offered);
+            if (checkAction)
+                CheckUpdatesButton.Content = label;
+            else if (updateAction)
+                RestartNowButton.Content = label;
         }
-        CheckUpdatesButton.IsEnabled = !u.IsChecking;
-        if (u.UpdateReady)
-        {
-            AboutUpdateStatus.Text = u.PendingVersion is { } v ? $"Update ready · {v}" : "Update ready";
-            RestartNowButton.Visibility = Visibility.Visible;
-            return;
-        }
-        RestartNowButton.Visibility = Visibility.Collapsed;
-        // Only claim "Up to date" after a check actually succeeded — distinguish in-flight, failed, and
-        // not-yet-checked (auto-check off, or before the launch check returns) so we never imply a confirmed
-        // result we don't have.
-        AboutUpdateStatus.Text =
-            u.IsChecking ? "Checking…" :
-            u.LastCheckFailed ? "Couldn't check — try again" :
-            u.CheckedOk ? "Up to date" :
-            "Not checked yet";
     }
 
     // UpdateService.Changed can fire off the UI thread (the background check completes on a worker) — marshal first,
     // and gate on _closed so a callback queued just as the window closes can't write to torn-down elements.
     private void OnUpdatesChanged() => DispatcherQueue?.TryEnqueue(() => { if (!_closed) RefreshUpdatesUi(); });
 
-    private void OnCheckForUpdates(object sender, RoutedEventArgs e)
-    {
-        if (!App.Updates.IsSupported)
-            return;
-        _ = App.Updates.CheckAndDownloadAsync(); // the Changed event drives the UI; reflect "Checking…" immediately
-        RefreshUpdatesUi();
-    }
+    // Both buttons take whatever action the projection is currently offering — the label the user pressed and
+    // the action taken cannot drift apart, and a state that offers nothing does nothing.
+    private void OnCheckForUpdates(object sender, RoutedEventArgs e) => InvokeOfferedAction();
 
-    private void OnRestartNow(object sender, RoutedEventArgs e) => App.Updates.ApplyAndRestart();
+    private void OnRestartNow(object sender, RoutedEventArgs e) => InvokeOfferedAction();
+
+    private void InvokeOfferedAction()
+    {
+        UpdatePresentation update = App.Updates.Presentation;
+        if (!update.ActionsEnabled || update.Action is not { } action)
+            return;
+        App.Updates.Invoke(action);
+        RefreshUpdatesUi(); // the Changed event drives later refreshes; reflect the new state immediately
+    }
 
     private void OnAutoUpdateToggled(object sender, RoutedEventArgs e)
     {
@@ -344,14 +350,15 @@ public sealed partial class SettingsWindow : Window
     /// values shown in the cards.</summary>
     private string BuildDiagnosticsText()
     {
-        string ver = string.IsNullOrEmpty(App.AppVersion) ? Dash : App.AppVersion;
         string buildLine = $"Build {AboutBuildSha.Text}";
 
         bool hw = App.Settings.Current.HardwareDecoding;
         string hwLine = $"{(hw ? "on" : "off")} · {HwdecMethod(hw)}"; // both from the live bool — never "off · d3d11va"
 
         var sb = new System.Text.StringBuilder();
-        sb.Append("OK Player ").Append(ver).Append(" (Stable)\n");
+        // The About surface's own sentence, from the update lifecycle: version plus what is true about it
+        // right now — so a pasted diagnostic cannot claim a build the app is not running (#660).
+        sb.Append(App.Updates.Presentation.AboutMessage).Append('\n');
         sb.Append(buildLine).Append('\n');
         sb.Append("License GPL-3.0-or-later\n\n");
         sb.Append("Engine\n");

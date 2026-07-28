@@ -661,3 +661,47 @@ pure core so the Windows shell renders the same model once its port lands.
   that path no longer matches the current source, so A's stale error can't fail B or arm the
   dialog with A's reason. A missing path tag falls back to applying so a genuine failure is
   never under-reported.
+
+## Update lifecycle → `okp_core::update_lifecycle` (Windows shell adoption, #682/#694)
+
+`OkPlayer.Core/UpdateLifecycle.cs` is the Windows projection of the shared model. Same states,
+same transitions, same user-facing strings, produced only by `Describe()` — the shell renders
+what it returns and writes no update text of its own, which is what keeps the Updates card, the
+About block and the copied diagnostics from disagreeing (#660).
+
+- **Install kinds.** Only `WindowsVelopack` and `DevBuild` exist in the port. The AppImage,
+  deb, rpm and Flatpak lanes have no Windows producer, so porting them would add branches
+  nothing can reach; with them go `SystemManaged`, the skip/`InstallAnyway` lane, the
+  `AvailableExternally`/`ManagedExternally`/`Skipped` states and the one-call
+  download-and-apply step (Velopack stages first, so the shell never uses it). Detection is
+  the same shape — the shell gathers evidence, the core decides — with one signal on Windows:
+  the installed Velopack layout.
+- **Refusals.** Rust returns `Result<&UpdateState, UpdateTransitionError>`; C# returns `bool`.
+  The refusal *reason* is consumed by the Rust surfaces only, and both sides share the rule
+  that matters: a refused transition never changes the state. For the same reason
+  `ResumedWithStagedUpdate`/`ResumedAfterRestart` on a dev build degrade to an `Idle`
+  lifecycle instead of an error — the caller has nothing else to do with one.
+- **Carried offers.** Rust models the offer a re-check protects as a dedicated `CarriedOffer`
+  enum; C# carries the previous `UpdateState`. The restored states, the notice text and the
+  claim over a refreshing check are identical; the Windows shell can carry the `Available`,
+  `Failed`-with-target and `RestartUnverified` forms, which are the ones its lanes produce. An
+  unconfirmed restart carried through a check keeps the claim `Unknown` on both sides — the
+  check is what would settle which build is running, so a failed one settles nothing.
+- **Version fidelity (#694).** Both sides take a `ReportedVersion` — the string the shell
+  observed plus whether it is the complete package version — and both refuse to order two
+  versions whose numeric cores tie when either side is truncated. On Windows the complete
+  version comes from `AssemblyInformationalVersion` (stamped from the same csproj `<Version>`
+  that `installer/build-velopack.ps1` packs, so it carries the prerelease tail); only when
+  that attribute is unreadable does the shell fall back to the `Major.Minor.Build` assembly
+  version, and then it reports it as truncated. `App.AppVersion` is now that same complete
+  string, so About, the diagnostics text and the update ordering all name one version.
+- **Ordering.** `VersionOrder.CompareBuildOrder` ports the private Rust ordering
+  (`compare_build_order` over `okp_core::update_selection::compare_versions`, plus the
+  identifier-by-identifier prerelease rule). C# compares ordinally where Rust compares by
+  bytes; every version identifier in use is ASCII, so the two agree. Numeric runs that
+  overflow `u64`/`ulong` degrade to `0` on both sides.
+- **Restart verification.** The Rust side is handed the pending target by the shell because
+  the self-applying process dies with its lifecycle. On Windows that hand-off is a one-line
+  marker file beside `settings.json`, written before `ApplyUpdatesAndRestart` and consumed by
+  the next launch; Velopack itself remembers the packages but not what the old process was
+  expecting.

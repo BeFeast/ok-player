@@ -935,25 +935,50 @@ public sealed partial class PlayerView : UserControl
     private bool _updateBannerShown; // session guard: surface a ready update once, not on every Changed tick
 
     /// <summary>When a background-downloaded update becomes ready, surface it once per session as an actionable
-    /// banner with an in-place "Restart now" — no trip to Settings. <see cref="UpdateService.Changed"/> can fire
+    /// banner with an in-place restart — no trip to Settings. The banner appears exactly when the shared update
+    /// lifecycle offers an action that installs the update, and says what that state says (issue #682), so it
+    /// cannot announce a readiness the Settings card disagrees with. <see cref="UpdateService.Changed"/> can fire
     /// off the UI thread (the check completes on a worker), so marshal before touching the UI.</summary>
     private void OnUpdateStateChanged() => DispatcherQueue.TryEnqueue(() =>
     {
-        if (_viewUnloaded || _updateBannerShown || !App.Updates.UpdateReady)
+        if (_viewUnloaded)
             return; // skip a callback that landed after the view tore down (Changed can fire from a worker thread)
+        UpdatePresentation update = App.Updates.Presentation;
+        bool visible = UpdateBanner.Visibility == Visibility.Visible;
+        if (update.Action is not (UpdateAction.ApplyAndRestart or UpdateAction.RestartToFinish))
+        {
+            // The state moved on — an apply that failed, a check that started. A banner still
+            // announcing a ready update would be claiming something the Settings card denies, and
+            // its button would no longer do what its label says, so it goes away.
+            if (visible)
+                HideUpdateBanner();
+            return;
+        }
+        // Keep an already-visible banner current: the version it names and the label it offers are
+        // the projection's, not a snapshot from whenever it first appeared.
+        UpdateBannerText.Text = update.UpdatesMessage;
+        UpdateRestartButton.Content = UpdateLifecycle.Label(update.Action.Value);
+        UpdateRestartButton.IsEnabled = update.ActionsEnabled;
+        if (visible || _updateBannerShown)
+            return; // already up, or surfaced once already this session and dismissed
         _updateBannerShown = true;
-        string ver = App.Updates.PendingVersion is { } v ? $"Update ready · {v}" : "Update ready";
-        UpdateBannerText.Text = ver;
         UpdateBanner.Visibility = Visibility.Visible;
         UpdateBannerShowSb.Begin();
     });
 
-    /// <summary>Apply the staged update and relaunch — the banner's primary action. Tears the process down.</summary>
-    private void OnUpdateRestartClick(object sender, RoutedEventArgs e) => App.Updates.ApplyAndRestart();
+    /// <summary>Take the banner's offered action — applying the staged update and relaunching. Tears the process
+    /// down.</summary>
+    private void OnUpdateRestartClick(object sender, RoutedEventArgs e)
+    {
+        if (App.Updates.Presentation.Action is { } action)
+            App.Updates.Invoke(action);
+    }
 
     /// <summary>Dismiss the banner for this session; the update stays staged and is re-offered on the next launch
-    /// (UpdateReady persists), and Settings → About still has the restart action.</summary>
-    private void OnUpdateLaterClick(object sender, RoutedEventArgs e)
+    /// (the staged payload persists), and Settings → About still has the restart action.</summary>
+    private void OnUpdateLaterClick(object sender, RoutedEventArgs e) => HideUpdateBanner();
+
+    private void HideUpdateBanner()
     {
         UpdateBannerHideSb.Completed += HideUpdateBannerOnCompleted;
         UpdateBannerHideSb.Begin();
