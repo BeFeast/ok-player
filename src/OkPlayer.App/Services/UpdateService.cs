@@ -24,7 +24,7 @@ public sealed class UpdateService
     private readonly UpdateManager _mgr;
     private readonly object _gate = new();          // guards _lifecycle; transitions arrive from the check worker and the UI thread
     private readonly UpdateLifecycle _lifecycle;
-    private UpdateInfo? _pending;                   // a downloaded, ready-to-apply update (null until found + downloaded)
+    private volatile UpdateInfo? _pending;           // a downloaded, ready-to-apply update (null until found + downloaded); written by the check worker, read on the UI thread
     private int _checking;                          // 0/1 guard so overlapping background checks don't stack
 
     public UpdateService()
@@ -215,15 +215,17 @@ public sealed class UpdateService
     private bool Transition(Func<UpdateLifecycle, bool> transition)
     {
         bool moved;
+        UpdateStateKind kind;
         UpdatePresentation presentation;
         lock (_gate)
         {
             moved = transition(_lifecycle);
+            kind = _lifecycle.State.Kind;
             presentation = _lifecycle.Describe();
         }
         if (!moved)
             return false;
-        Log.Info($"update: state={presentation.Claim} — {presentation.UpdatesMessage}");
+        Log.Info($"update: state={kind} claim={presentation.Claim} — {presentation.UpdatesMessage}");
         Changed?.Invoke();
         return true;
     }
