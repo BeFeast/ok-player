@@ -63,6 +63,20 @@ okp_apt_has_suite() {
   [[ -s "$(okp_apt_suite_index "$1" "$2")" ]]
 }
 
+# The versions one suite carries and another does not. The shared pool makes overlap legitimate —
+# a candidate promoted unchanged is the same package in both suites — so "the candidate version
+# appears in a stable-only policy listing" is not by itself evidence of a leak. Only a version
+# that exists in `candidate` and NOT in `stable` can leak, and those are the ones worth asserting
+# about. With full overlap the set is empty and there is nothing that could leak.
+okp_apt_versions_only_in() {
+  # okp_apt_versions_only_in <repo-root> <suite> <other suite>
+  local root="$1" suite="$2" other="$3"
+  comm -13 \
+    <(awk '/^Version: / { print $2 }' "$(okp_apt_suite_index "$root" "$other")" | sort -u) \
+    <(awk '/^Version: / { print $2 }' "$(okp_apt_suite_index "$root" "$suite")" | sort -u) \
+    | tr '\n' ' '
+}
+
 okp_apt_archive_version() {
   # okp_apt_archive_version <repo-root> <label> [suite]
   local index version
@@ -107,8 +121,10 @@ okp_apt_has_suite "$REPO_ROOT" stable \
   || { echo "::error::the archive at $REPO_ROOT carries no stable suite" >&2; exit 1; }
 STABLE_VERSION="$(okp_apt_archive_version "$REPO_ROOT" published stable)"
 CANDIDATE_VERSION=""
+CANDIDATE_ONLY_VERSIONS=""
 if okp_apt_has_suite "$REPO_ROOT" candidate; then
   CANDIDATE_VERSION="$(okp_apt_archive_version "$REPO_ROOT" published candidate)"
+  CANDIDATE_ONLY_VERSIONS="$(okp_apt_versions_only_in "$REPO_ROOT" candidate stable)"
 fi
 
 OLDER_STABLE_VERSION=""
@@ -139,6 +155,7 @@ fi
   "${mounts[@]}" \
   -e STABLE_VERSION="$STABLE_VERSION" \
   -e CANDIDATE_VERSION="$CANDIDATE_VERSION" \
+  -e CANDIDATE_ONLY_VERSIONS="$CANDIDATE_ONLY_VERSIONS" \
   -e OLDER_STABLE_VERSION="$OLDER_STABLE_VERSION" \
   -e OLDER_CANDIDATE_VERSION="$OLDER_CANDIDATE_VERSION" \
   -e DEBIAN_FRONTEND=noninteractive \
@@ -274,12 +291,26 @@ if [[ -n "$CANDIDATE_VERSION" ]]; then
   use_archive /repo-new
   apt-get update
   apt-cache policy ok-player
-  if apt-cache policy ok-player | grep -F "$CANDIDATE_VERSION" >/dev/null; then
-    fail "apt-cache policy offered the candidate ${CANDIDATE_VERSION} to a stable-only root"
+
+  # Only a version `candidate` carries and `stable` does not can leak. The shared pool makes
+  # overlap legitimate — a candidate promoted unchanged is literally the same package in both
+  # suites — so asserting on the candidate's version string alone would fail the whole lane the
+  # first time a promotion happened, over a version that came from the stable index.
+  for version in $CANDIDATE_ONLY_VERSIONS; do
+    if apt-cache policy ok-player | grep -F "$version" >/dev/null; then
+      fail "apt-cache policy offered the candidate-only ${version} to a stable-only root"
+    fi
+    if apt-cache madison ok-player | grep -F "$version" >/dev/null; then
+      fail "apt-cache madison listed the candidate-only ${version} for a stable-only root"
+    fi
+  done
+  if [[ -z "${CANDIDATE_ONLY_VERSIONS// /}" ]]; then
+    echo "note: every candidate version is also a stable one, so there is nothing that could leak"
+  else
+    echo "none of the candidate-only versions (${CANDIDATE_ONLY_VERSIONS}) reached a stable-only root"
   fi
-  if apt-cache madison ok-player | grep -F "$CANDIDATE_VERSION" >/dev/null; then
-    fail "apt-cache madison listed the candidate ${CANDIDATE_VERSION} for a stable-only root"
-  fi
+
+  # True whether or not the suites overlap: a stable-only root resolves to the stable head.
   [[ "$(apt-cache policy ok-player | awk '/Candidate:/ { print $2 }')" == "$STABLE_VERSION" ]] \
     || fail "a stable-only root does not resolve ok-player to ${STABLE_VERSION}"
   echo "stable-only root sees ${STABLE_VERSION} and nothing newer"

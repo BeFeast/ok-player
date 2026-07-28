@@ -571,11 +571,22 @@ okp_apt_build_signed_repo() {
 # --- Build discovery ------------------------------------------------------------------
 # Both fetchers emit the same row shape, newest first:
 #
-#   <published>\t<label>\t<pool basename>\t<size in bytes>
+#   <published>\t<label>\t<pool basename>\t<size in bytes>\t<expected sha256>
 #
 # <published> dates the suite's Release file (only the first retained row is used), <label>
 # names the thing in log messages and, for stable, is the release tag the .deb is downloaded
 # from.
+#
+# No column is ever empty: "absent" is the literal "-". `read` splits on tab, and tab is an IFS
+# whitespace character, so a run of tabs collapses into one delimiter — an empty middle field
+# would silently shift every later column into the wrong variable.
+#
+# The digest column is empty for stable and populated for candidate, and that asymmetry is the
+# point rather than an omission: a linux-v* release asset is immutable, so the bytes GitHub
+# serves are the bytes that release was published with, and the releases API publishes no digest
+# to check them against anyway. The rolling candidate release is explicitly mutable — assets are
+# replaced in place — so its pointer's sha256 is the only thing that ties the archive to the
+# artifact the candidate feed authenticated.
 okp_apt_fetch_stable_rows() {
   local repo="$1" out="$2"
   if ! gh api --paginate "repos/${repo}/releases?per_page=100" \
@@ -584,7 +595,7 @@ okp_apt_fetch_stable_rows() {
               | . as $release
               | .assets[]
               | select(.name | test("^ok-player_.*_amd64\\.deb$"))
-              | [ $release.published_at, $release.tag_name, .name, .size ] | @tsv' \
+              | [ $release.published_at, $release.tag_name, .name, .size, "-" ] | @tsv' \
     | sort -r >"$out"; then
     okp_apt_fail "could not list the published releases of ${repo}."
   fi
@@ -638,34 +649,59 @@ okp_apt_fetch_candidate_rows() {
 }
 
 # Split out so the pointer -> rows translation is testable without GitHub.
+#
+# The acceptance gate is the same one the installed .deb applies:
+# okp-core::candidate_channel::select_candidate_update_from_feed refuses a pointer whose
+# acceptance is not Accepted, so a pending or rejected build is never offered to a machine that
+# already has OK Player. apt must not be the one channel that ships it anyway — `apt upgrade`
+# would push a build that failed acceptance to every subscribed tester, and it would do it
+# without asking. So a non-accepted current build is skipped and the suite falls back to the
+# newest accepted build in the pointer's history (okp-core only ever admits accepted builds
+# there). If nothing is left to advertise, the archive is published stable-only rather than
+# with a candidate suite nobody vouched for.
 okp_apt_candidate_rows_from_pointer() {
   local pointer="$1" assets="$2" out="$3"
   : >"$out"
-  local published version name size current=1
-  while IFS=$'\t' read -r published version name size; do
+  local acceptance
+  acceptance="$(jq -r '.acceptance // ""' "$pointer")"
+  local published version name size digest index=0 seen=0
+  while IFS=$'\t' read -r published version name size digest; do
     [[ -n "$name" ]] || continue
-    if [[ -z "$size" || "$size" == "null" ]]; then
-      ((current == 0)) \
+    seen=$((seen + 1))
+    if ((index == 0)) && [[ "$acceptance" != "accepted" ]]; then
+      printf 'APT candidate: the rolling pointer advertises %s with acceptance=%s, which the installed updater refuses; falling back to the newest accepted build.\n' \
+        "$version" "${acceptance:-unset}" >&2
+      index=1
+      continue
+    fi
+    if [[ "$size" == "-" || -z "$size" || "$size" == "null" ]]; then
+      ((index > 0)) \
         || okp_apt_fail "the rolling candidate ${version} names ${name}, which is not attached to the ${OKP_APT_CANDIDATE_TAG} release; refusing to publish a candidate suite that disagrees with the candidate feed."
       printf 'APT candidate: %s is no longer attached to %s; dropping it from the %s suite.\n' \
         "$name" "$OKP_APT_CANDIDATE_TAG" "$OKP_APT_CANDIDATE_SUITE" >&2
+      index=$((index + 1))
       continue
     fi
-    printf '%s\t%s\t%s\t%s\n' "$published" "$version" "$name" "$size" >>"$out"
-    current=0
+    [[ -n "$digest" && "$digest" != "-" && "$digest" != "null" ]] \
+      || okp_apt_fail "${OKP_APT_CANDIDATE_POINTER} names ${name} without a sha256; the rolling release is mutable, so an unauthenticated candidate package cannot be published."
+    printf '%s\t%s\t%s\t%s\t%s\n' "$published" "$version" "$name" "$size" "$digest" >>"$out"
+    index=$((index + 1))
   done < <(
     jq -r --slurpfile assets "$assets" '
       ($assets[0] | map({key: .name, value: .size}) | from_entries) as $size
       | .timestamp_utc as $published
-      | ([{version: .version, name: .package.name}]
-         + [.history[] | {version: .version, name: .package.name}])
+      | ([{version: .version, name: .package.name, sha256: .package.sha256}]
+         + [.history[] | {version: .version, name: .package.name, sha256: .package.sha256}])
       | map(select(.name != null and .name != ""))
       | .[]
-      | [$published, .version, .name, ($size[.name] // "")] | @tsv
+      | [$published, .version, .name, ($size[.name] // "-"), (.sha256 // "-")] | @tsv
     ' "$pointer"
   )
-  [[ -s "$out" ]] \
+  ((seen > 0)) \
     || okp_apt_fail "${OKP_APT_CANDIDATE_POINTER} names no Debian package; refusing to publish a candidate suite from nothing."
+  [[ -s "$out" ]] \
+    || printf 'APT candidate: the rolling pointer has no accepted build to advertise; publishing the %s suite only.\n' \
+         "$OKP_APT_STABLE_SUITE" >&2
 }
 
 # --- Rolling window planning ----------------------------------------------------------
@@ -692,9 +728,11 @@ okp_apt_plan_reset() {
 # retained aborts the lane instead.
 okp_apt_plan_take() {
   local suite="$1" cap="$2" mandatory="$3" out="$4" row="$5"
-  local published label filename size
-  IFS=$'\t' read -r published label filename size <<<"$row"
-  [[ -n "$filename" && -n "$size" ]] || return 1
+  local published label filename size digest
+  IFS=$'\t' read -r published label filename size digest <<<"$row"
+  # A non-numeric size is a malformed row, not a zero-cost package. Mandatory rows turn this
+  # into an abort at the call site rather than a silently shorter window.
+  [[ -n "$filename" && "$size" =~ ^[0-9]+$ ]] || return 1
   [[ -z "${OKP_APT_PLAN_SEEN[${suite}:${filename}]:-}" ]] || return 1
 
   local kept="${OKP_APT_PLAN_KEPT[$suite]:-0}"
@@ -785,37 +823,44 @@ okp_apt_merge_into_pool() {
   done
 }
 
-okp_apt_stage_stable() {
-  local repo="$1" selected="$2" download_dir="$3" pool_staging="$4" epoch_file="$5"
-  local published tag name size newest=''
+# Prove a downloaded package is the artifact the feed authenticated, when the feed says which one
+# that is. The rolling release is mutable: an asset can be replaced after the pointer that names
+# it was written, and nothing downstream would notice — the archive is signed over whatever bytes
+# were in the pool, and the container gate derives its expectations from that same index. This is
+# the only place the two can be tied together.
+okp_apt_require_digest() {
+  local path="$1" expected="$2" suite="$3" label="$4" actual
+  [[ -n "$expected" && "$expected" != "-" ]] || return 0
+  actual="$(sha256sum "$path" | cut -d' ' -f1)"
+  [[ "${actual,,}" == "${expected,,}" ]] \
+    || okp_apt_fail "the ${suite} package for ${label} hashes to ${actual}, but the feed authenticated ${expected}; refusing to publish bytes the update feed did not vouch for."
+}
+
+# okp_apt_stage_suite <repo> <suite> <selected> <download dir> <pool staging> <epoch file> [tag]
+# With <tag> the whole suite comes from one release (the rolling candidate); without it each row's
+# label is the release tag it came from (the stable suite).
+#
+# Every retained package is downloaded into the suite's own directory even when another suite has
+# already staged that filename. Reusing the other suite's copy would assume that one filename
+# means one set of bytes, which is precisely what the merge below exists to verify rather than
+# assume — and an unverified assumption is worth less than one repeated download of a package the
+# two suites genuinely share.
+okp_apt_stage_suite() {
+  local repo="$1" suite="$2" selected="$3" download_dir="$4" pool_staging="$5" epoch_file="$6"
+  local fixed_tag="${7:-}"
+  local published label name size digest newest='' tag
   mkdir -p "$download_dir"
-  while IFS=$'\t' read -r published tag name size; do
-    [[ -n "$tag" ]] || continue
+  while IFS=$'\t' read -r published label name size digest; do
+    [[ -n "$name" ]] || continue
     [[ -n "$newest" ]] || newest="$published"
-    if [[ -e "${pool_staging}/${name}" ]]; then continue; fi
+    tag="${fixed_tag:-$label}"
     gh release download "$tag" --repo "$repo" --dir "$download_dir" \
       --pattern "$name" --clobber \
       || okp_apt_fail "could not download ${name} from ${tag}."
+    okp_apt_require_digest "${download_dir}/${name}" "$digest" "$suite" "$label"
   done <"$selected"
-  okp_apt_merge_into_pool "$download_dir" "$pool_staging" "$OKP_APT_STABLE_SUITE"
-  [[ -n "$newest" ]] || okp_apt_fail "the ${OKP_APT_STABLE_SUITE} suite retained no release."
-  date -u -d "$newest" '+%s' >"$epoch_file"
-}
-
-okp_apt_stage_candidate() {
-  local repo="$1" selected="$2" download_dir="$3" pool_staging="$4" epoch_file="$5"
-  local published version name size newest=''
-  mkdir -p "$download_dir"
-  while IFS=$'\t' read -r published version name size; do
-    [[ -n "$name" ]] || continue
-    [[ -n "$newest" ]] || newest="$published"
-    if [[ -e "${pool_staging}/${name}" ]]; then continue; fi
-    gh release download "$OKP_APT_CANDIDATE_TAG" --repo "$repo" --dir "$download_dir" \
-      --pattern "$name" --clobber \
-      || okp_apt_fail "could not download ${name} from ${OKP_APT_CANDIDATE_TAG}."
-  done <"$selected"
-  okp_apt_merge_into_pool "$download_dir" "$pool_staging" "$OKP_APT_CANDIDATE_SUITE"
-  [[ -n "$newest" ]] || okp_apt_fail "the ${OKP_APT_CANDIDATE_SUITE} suite retained no build."
+  okp_apt_merge_into_pool "$download_dir" "$pool_staging" "$suite"
+  [[ -n "$newest" ]] || okp_apt_fail "the ${suite} suite retained no build."
   date -u -d "$newest" '+%s' >"$epoch_file"
 }
 
@@ -855,15 +900,16 @@ main() {
   fi
   printf '%s\n' "${suites[@]}" >"${plan}/suites"
 
-  okp_apt_stage_stable "$repo" "${plan}/${OKP_APT_STABLE_SUITE}.selected" \
-    "${work}/download-${OKP_APT_STABLE_SUITE}" "$pool_staging" \
-    "${plan}/${OKP_APT_STABLE_SUITE}.epoch"
+  # Stable rows name their own release tag; the whole candidate suite comes from one rolling tag.
+  okp_apt_stage_suite "$repo" "$OKP_APT_STABLE_SUITE" \
+    "${plan}/${OKP_APT_STABLE_SUITE}.selected" "${work}/download-${OKP_APT_STABLE_SUITE}" \
+    "$pool_staging" "${plan}/${OKP_APT_STABLE_SUITE}.epoch"
   cut -f3 "${plan}/${OKP_APT_STABLE_SUITE}.selected" >"${plan}/${OKP_APT_STABLE_SUITE}.members"
 
   if [[ -s "${plan}/${OKP_APT_CANDIDATE_SUITE}.selected" ]]; then
-    okp_apt_stage_candidate "$repo" "${plan}/${OKP_APT_CANDIDATE_SUITE}.selected" \
-      "${work}/download-${OKP_APT_CANDIDATE_SUITE}" "$pool_staging" \
-      "${plan}/${OKP_APT_CANDIDATE_SUITE}.epoch"
+    okp_apt_stage_suite "$repo" "$OKP_APT_CANDIDATE_SUITE" \
+      "${plan}/${OKP_APT_CANDIDATE_SUITE}.selected" "${work}/download-${OKP_APT_CANDIDATE_SUITE}" \
+      "$pool_staging" "${plan}/${OKP_APT_CANDIDATE_SUITE}.epoch" "$OKP_APT_CANDIDATE_TAG"
     cut -f3 "${plan}/${OKP_APT_CANDIDATE_SUITE}.selected" \
       >"${plan}/${OKP_APT_CANDIDATE_SUITE}.members"
   fi

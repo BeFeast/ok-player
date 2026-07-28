@@ -2,8 +2,14 @@ name: Linux Candidate
 
 # Scheduled native-builder handoff for the rolling QA channel (issues #339/#340).
 # The self-hosted Ubuntu x86_64 builder produces one verified bundle from exact
-# origin/main bytes; publication consumes that bundle without rebuilding. The
-# public GitHub Pages feeds are never read or written by this workflow.
+# origin/main bytes; publication consumes that bundle without rebuilding.
+#
+# This workflow does not write the Pages site itself — publish-update-feeds.yml is
+# the only writer — but since issue #689 the site carries an APT `candidate` suite
+# derived from the rolling release, so a publication that did not refresh it would
+# leave testers' `apt upgrade` on the previous build until some unrelated deploy
+# happened to run. The refresh is therefore called below, and only when a candidate
+# was actually published: most scheduled runs are no-ops and must not redeploy.
 
 on:
   schedule:
@@ -37,6 +43,8 @@ jobs:
     name: Native build and rolling publish
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 45
+    outputs:
+      publish_result: ${{ steps.candidate.outputs.publish_result }}
     steps:
       - uses: actions/checkout@v4
 
@@ -159,7 +167,11 @@ jobs:
             echo "- publication requested: \`${publication_requested}\`"
             echo "- heartbeat activity: \`${activity}\`"
             echo "- rolling surface: \`linux-candidate\`"
-            echo "- public feed: untouched"
+            if [[ "${{ steps.candidate.outputs.publish_result }}" == "published" ]]; then
+              echo "- public feed: APT candidate suite refreshed (issue #689)"
+            else
+              echo "- public feed: untouched (nothing was published)"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
           exit 0
 
@@ -176,3 +188,26 @@ jobs:
         env:
           OKP_SCRATCH_SESSION: candidate-${{ github.run_id }}-${{ github.run_attempt }}
         run: ./scripts/reclaim-ok-player-scratch.sh
+
+  # Deliver the candidate to the people it exists for. The APT `candidate` suite is derived from
+  # the rolling release plus its candidate.linux.json pointer (issue #689), and publish-update-feeds
+  # is the only writer of the Pages site, so a rolling publication only reaches `apt upgrade` once
+  # this call redeploys the archive. Gated on an actual publication: this workflow runs every 15
+  # minutes and most runs publish nothing, which must not cost a Pages deploy.
+  #
+  # A refresh failure does NOT unpublish the candidate — the rolling release is already live and
+  # the .deb/AppImage self-updaters read it directly. The refresh is idempotent and re-runnable
+  # (workflow_dispatch on Update Feeds).
+  publish-feed:
+    name: Refresh update feeds
+    needs: build-and-publish
+    if: needs.build-and-publish.outputs.publish_result == 'published'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/publish-update-feeds.yml
+    # The Pages site carries the signed APT archive, whose signing key is fetched at run time with
+    # the Infisical Universal Auth credentials; a reusable workflow does not see the caller's
+    # secrets unless they are passed.
+    secrets: inherit

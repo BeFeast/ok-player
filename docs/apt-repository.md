@@ -50,6 +50,22 @@ history entry whose asset has already been pruned from the release drops out of 
 than becoming an index entry apt cannot download, while a *current* build the release does not
 carry aborts the lane.
 
+**The acceptance gate applies here too.** `okp-core::candidate_channel::select_candidate_update_from_feed`
+refuses a pointer whose `acceptance` is not `Accepted`, so the installed `.deb` never offers a
+`pending` or `rejected` build. apt must not be the one channel that ships it anyway — `apt upgrade`
+would push a build that failed acceptance to every subscribed tester, without asking. A
+non-accepted current build is therefore withheld and the suite falls back to the newest accepted
+build in the pointer's history (okp-core only ever admits accepted builds there). With nothing
+accepted to fall back to, the archive is published `stable`-only.
+
+**Candidate packages are checked against the pointer's digest.** The rolling release is explicitly
+mutable — assets are replaced in place — so an asset could be swapped after the pointer that names
+it was written, and nothing downstream would notice: the archive is signed over whatever ended up
+in the pool, and the container gate derives its expectations from that same index. Each candidate
+`.deb` is therefore hashed after download and compared with the `sha256` the pointer publishes for
+it, before anything is signed. `stable` has no such column and needs none: a `linux-v*` release
+asset is immutable, and the releases API publishes no digest to check it against anyway.
+
 Setting `OKP_APT_CANDIDATE_MAX_VERSIONS=0`, or having no `linux-candidate` release at all,
 publishes a `stable`-only archive — including no `ok-player-candidate.sources`, because apt fails
 hard on a source line naming a suite the archive does not have. "No candidate release" is decided
@@ -181,9 +197,17 @@ signal used by the other Linux gates).
 
 Between the two it asserts the channel separation directly: with only `stable` subscribed, and
 the candidate packages sitting in the same pool apt is reading from, `apt-cache policy` and
-`apt-cache madison` must not mention the candidate version, and `ok-player` must resolve to the
-release version. That is the assertion that separation is a property of the archive rather than
-of which packages happen to be published this week.
+`apt-cache madison` must not mention any version that `candidate` carries and `stable` does not,
+and `ok-player` must resolve to the release version. That is the assertion that separation is a
+property of the archive rather than of which packages happen to be published this week.
+
+The check is deliberately about *candidate-only* versions rather than about the candidate head's
+version string. Overlap between the suites is legitimate — a candidate promoted unchanged is
+literally the same pool file in both — and in that case the stable index rightly contains the
+candidate's version. Asserting on the version string would fail the whole lane the first time a
+promotion happened, over a package that came from `stable`. With full overlap the candidate-only
+set is empty and there is nothing that could leak, which the gate says out loud rather than
+passing silently.
 
 Which signal is required is derived from the packaged binary rather than fixed. Current builds
 log `Renderer policy:` as the first statement of `main()`, before GTK, so for them that line is
@@ -224,9 +248,16 @@ that distinguishes a working archive from a plausible-looking one.
 
 * The lane runs inside *Update Feeds* (`.github/workflows/publish-update-feeds.yml`), which is
   the only writer of the Pages site. `release-linux.yml` calls it with `secrets: inherit` after
-  publishing a `linux-v*` release; a manual `workflow_dispatch` re-runs it at any time. Every run
-  also picks up whatever candidate the pointer currently names, so a `workflow_dispatch` is how
-  a freshly published candidate reaches the archive between releases.
+  publishing a `linux-v*` release; a manual `workflow_dispatch` re-runs it at any time.
+* **`release-linux-candidate.yml` calls it too**, after a rolling publication. This matters more
+  than it looks: replacing assets on the mutable `linux-candidate` release fires no event *Update
+  Feeds* listens for, so without that call a new candidate would sit in the release, be offered by
+  the `.deb` self-updater, and be invisible to `apt upgrade` until some unrelated deploy happened
+  to run — which is the exact "testers cannot get it through apt" failure this suite exists to
+  end. The call is gated on `publish_result == 'published'`: the candidate workflow runs every 15
+  minutes and most runs publish nothing, which must not cost a Pages deploy. A refresh failure
+  does not unpublish the candidate; the rolling release is already live and the refresh is
+  idempotent and re-runnable.
 * A tester subscribes to the QA channel by installing `ok-player-candidate.sources` **instead
   of** `ok-player.sources`, not beside it: with both files present apt sees both suites and will
   offer the candidate anyway, which makes "I am on stable" untrue without saying so. Both stanzas

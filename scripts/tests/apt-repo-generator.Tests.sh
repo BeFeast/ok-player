@@ -563,10 +563,17 @@ cat >"$POINTER" <<'JSON'
   "build": 197,
   "timestamp_utc": "2026-07-28T00:36:09Z",
   "acceptance": "accepted",
-  "package": { "name": "ok-player_0.11.0-beta.0.197_amd64.deb" },
+  "package": {
+    "name": "ok-player_0.11.0-beta.0.197_amd64.deb",
+    "sha256": "bbab4a5a0cc80b335b3965e6e4c74093e958bb6ad41012570e844292dcd17457"
+  },
   "history": [
-    { "version": "0.11.0-beta.0.193", "package": { "name": "ok-player_0.11.0-beta.0.193_amd64.deb" } },
-    { "version": "0.11.0-beta.0.187", "package": { "name": "ok-player_0.11.0-beta.0.187_amd64.deb" } }
+    { "version": "0.11.0-beta.0.193",
+      "package": { "name": "ok-player_0.11.0-beta.0.193_amd64.deb",
+                   "sha256": "3a46972dc90806c3351695de8987b8903019e418382398af0cdb262bfdc8d607" } },
+    { "version": "0.11.0-beta.0.187",
+      "package": { "name": "ok-player_0.11.0-beta.0.187_amd64.deb",
+                   "sha256": "536e4bb36836ce5ff038e3952ce9fd3a470306cdc3806cdb17c3d30ba2ebf632" } }
   ]
 }
 JSON
@@ -584,9 +591,9 @@ pointer_output="$(okp_apt_candidate_rows_from_pointer "$POINTER" "$ASSETS" "$POI
 pointer_status=$?
 set -e
 EXPECTED_ROWS="$(printf '%s\n' \
-  '2026-07-28T00:36:09Z	0.11.0-beta.0.197	ok-player_0.11.0-beta.0.197_amd64.deb	76237684' \
-  '2026-07-28T00:36:09Z	0.11.0-beta.0.193	ok-player_0.11.0-beta.0.193_amd64.deb	76225892' \
-  '2026-07-28T00:36:09Z	0.11.0-beta.0.187	ok-player_0.11.0-beta.0.187_amd64.deb	83929784')"
+  '2026-07-28T00:36:09Z	0.11.0-beta.0.197	ok-player_0.11.0-beta.0.197_amd64.deb	76237684	bbab4a5a0cc80b335b3965e6e4c74093e958bb6ad41012570e844292dcd17457' \
+  '2026-07-28T00:36:09Z	0.11.0-beta.0.193	ok-player_0.11.0-beta.0.193_amd64.deb	76225892	3a46972dc90806c3351695de8987b8903019e418382398af0cdb262bfdc8d607' \
+  '2026-07-28T00:36:09Z	0.11.0-beta.0.187	ok-player_0.11.0-beta.0.187_amd64.deb	83929784	536e4bb36836ce5ff038e3952ce9fd3a470306cdc3806cdb17c3d30ba2ebf632')"
 if ((pointer_status == 0)) && [[ "$(cat "$POINTER_ROWS")" == "$EXPECTED_ROWS" ]]; then
   pass "the candidate window is the pointer's current build followed by its history, newest first"
 else
@@ -623,6 +630,95 @@ if ((nocurrent_status != 0)) && grep -q 'beta.0.197' <<<"$nocurrent_output" \
   pass "a pointer naming a package the rolling release does not carry aborts the lane"
 else
   fail "missing current candidate asset" "status ${nocurrent_status}, output: ${nocurrent_output}"
+fi
+
+# The rolling release is mutable: assets are replaced in place, so the pointer's digest is the
+# only thing tying the archive to the artifact the candidate feed authenticated. A pointer entry
+# without one cannot be published, and bytes that do not match it must never be signed.
+jq 'del(.package.sha256)' "$POINTER" >"$WORK/pointer-nodigest.json"
+set +e
+nodigest_output="$(okp_apt_candidate_rows_from_pointer "$WORK/pointer-nodigest.json" "$ASSETS" \
+  "$WORK/rows-nodigest" 2>&1)"
+nodigest_status=$?
+set -e
+if ((nodigest_status != 0)) && grep -q 'without a sha256' <<<"$nodigest_output"; then
+  pass "a candidate the pointer does not authenticate cannot be published"
+else
+  fail "missing candidate digest" "status ${nodigest_status}, output: ${nodigest_output}"
+fi
+
+DIGEST_FILE="$STAGE_ONE/$(deb_name 1.0.0)"
+REAL_DIGEST="$(sha256sum "$DIGEST_FILE" | cut -d' ' -f1)"
+set +e
+okp_apt_require_digest "$DIGEST_FILE" "$REAL_DIGEST" candidate 0.11.0-beta.0.197
+matching_status=$?
+mismatch_digest_output="$(okp_apt_require_digest "$DIGEST_FILE" \
+  '0000000000000000000000000000000000000000000000000000000000000000' candidate 0.11.0-beta.0.197 2>&1)"
+mismatch_digest_status=$?
+skipped_status=0
+okp_apt_require_digest "$DIGEST_FILE" '' stable linux-v0.1.0 || skipped_status=$?
+set -e
+if ((matching_status == 0)) && ((mismatch_digest_status != 0)) && ((skipped_status == 0)) \
+  && grep -q 'the update feed did not vouch for' <<<"$mismatch_digest_output" \
+  && grep -q "$REAL_DIGEST" <<<"$mismatch_digest_output"; then
+  pass "a downloaded package whose bytes do not match the feed's digest aborts before signing"
+else
+  fail "digest verification" \
+    "match ${matching_status}, mismatch ${mismatch_digest_status}, skipped ${skipped_status}: ${mismatch_digest_output}"
+fi
+
+# The acceptance gate. okp-core::candidate_channel::select_candidate_update_from_feed refuses a
+# pointer that is not Accepted, so the installed .deb never offers a pending or rejected build.
+# apt must not be the one channel that ships it anyway: `apt upgrade` would push a build that
+# failed acceptance to every subscribed tester without asking.
+for state in pending rejected; do
+  jq --arg state "$state" '.acceptance = $state' "$POINTER" >"$WORK/pointer-$state.json"
+  set +e
+  gated_output="$(okp_apt_candidate_rows_from_pointer "$WORK/pointer-$state.json" "$ASSETS" \
+    "$WORK/rows-$state" 2>&1)"
+  gated_status=$?
+  set -e
+  if ((gated_status == 0)) && ! grep -q 'beta.0.197' "$WORK/rows-$state" \
+    && [[ "$(head -n 1 "$WORK/rows-$state" | cut -f2)" == "0.11.0-beta.0.193" ]]; then
+    pass "an acceptance=${state} candidate is withheld and the suite falls back to the newest accepted build"
+  else
+    fail "acceptance gate (${state})" "status ${gated_status}, rows: $(cat "$WORK/rows-$state"), output: ${gated_output}"
+  fi
+  if grep -q "acceptance=${state}" <<<"$gated_output"; then
+    pass "the withheld ${state} candidate is reported with its acceptance state"
+  else
+    fail "acceptance gate message (${state})" "$gated_output"
+  fi
+done
+
+# ...and with nothing accepted to fall back to, the archive is stable-only rather than carrying a
+# candidate suite nobody vouched for.
+jq '.acceptance = "rejected" | .history = []' "$POINTER" >"$WORK/pointer-nothing.json"
+set +e
+nothing_output="$(okp_apt_candidate_rows_from_pointer "$WORK/pointer-nothing.json" "$ASSETS" \
+  "$WORK/rows-nothing" 2>&1)"
+nothing_status=$?
+set -e
+if ((nothing_status == 0)) && [[ ! -s "$WORK/rows-nothing" ]] \
+  && grep -q 'no accepted build' <<<"$nothing_output"; then
+  pass "a pointer with no accepted build at all publishes a stable-only archive"
+else
+  fail "acceptance gate (nothing accepted)" "status ${nothing_status}, output: ${nothing_output}"
+fi
+
+# A pointer that names no package at all is a different thing: that is a malformed input, not a
+# channel with nothing to say, and it must not pass silently.
+printf '{"acceptance":"accepted","timestamp_utc":"2026-07-28T00:36:09Z","history":[]}\n' \
+  >"$WORK/pointer-malformed.json"
+set +e
+malformed_output="$(okp_apt_candidate_rows_from_pointer "$WORK/pointer-malformed.json" "$ASSETS" \
+  "$WORK/rows-malformed" 2>&1)"
+malformed_status=$?
+set -e
+if ((malformed_status != 0)) && grep -q 'names no Debian package' <<<"$malformed_output"; then
+  pass "a pointer that names no Debian package aborts instead of quietly publishing nothing"
+else
+  fail "malformed pointer" "status ${malformed_status}, output: ${malformed_output}"
 fi
 
 # "No rolling candidate yet" and "GitHub did not answer" must not look the same. The first is a
@@ -782,6 +878,63 @@ if [[ "$(okp_apt_archive_version "$WORK/run-two" test candidate)" == "0.11.0-bet
 else
   fail "per-suite version derivation" \
     "stable $(okp_apt_archive_version "$WORK/run-two" test stable), candidate $(okp_apt_archive_version "$WORK/run-two" test candidate)"
+fi
+
+# Overlap is legitimate — a candidate promoted unchanged is the same package in both suites — so
+# the leak check must be about versions `candidate` carries and `stable` does not, never about the
+# candidate version string. Otherwise the first promotion fails the whole lane over a version that
+# came from the stable index.
+if [[ "$(okp_apt_versions_only_in "$WORK/run-two" candidate stable)" \
+      == "0.11.0-beta.0.193 0.11.0-beta.0.197 " ]]; then
+  pass "the leak check targets the versions candidate carries and stable does not"
+else
+  fail "candidate-only versions" "got '$(okp_apt_versions_only_in "$WORK/run-two" candidate stable)'"
+fi
+write_plan "$WORK/plan-overlap" \
+  "stable=${EPOCH}=$(deb_name "$SHARED")" \
+  "candidate=${CANDIDATE_EPOCH}=$(deb_name "$SHARED")"
+stage_from_plan "$WORK/staged-overlap" "$STAGE_SUITES" "$WORK/plan-overlap"
+build_planned "$WORK/staged-overlap" "$WORK/run-overlap" "$WORK/plan-overlap" >/dev/null
+if [[ -z "$(okp_apt_versions_only_in "$WORK/run-overlap" candidate stable)" ]] \
+  && [[ "$(okp_apt_archive_version "$WORK/run-overlap" test candidate)" \
+        == "$(okp_apt_archive_version "$WORK/run-overlap" test stable)" ]]; then
+  pass "two suites whose heads are the same promoted build leave nothing that could leak"
+else
+  fail "fully overlapping suites" \
+    "candidate-only: '$(okp_apt_versions_only_in "$WORK/run-overlap" candidate stable)'"
+fi
+
+# The cross-suite integrity guard: two suites must never advertise one Filename with two different
+# sets of bytes, because exactly one of them would be lying about what apt is about to download.
+COLLIDE_A="$WORK/collide-a"
+COLLIDE_B="$WORK/collide-b"
+COLLIDE_POOL="$WORK/collide-pool"
+rm -rf -- "$COLLIDE_A" "$COLLIDE_B" "$COLLIDE_POOL"
+mkdir -p "$COLLIDE_A" "$COLLIDE_B" "$COLLIDE_POOL"
+cp "$STAGE_SUITES/$(deb_name "$SHARED")" "$COLLIDE_A/$(deb_name "$SHARED")"
+cp "$STAGE_SUITES/$(deb_name 0.11.0-beta.0.197)" "$COLLIDE_B/$(deb_name "$SHARED")"
+set +e
+collision_output="$( ( okp_apt_merge_into_pool "$COLLIDE_A" "$COLLIDE_POOL" stable
+                       okp_apt_merge_into_pool "$COLLIDE_B" "$COLLIDE_POOL" candidate ) 2>&1 )"
+collision_status=$?
+set -e
+if ((collision_status != 0)) && grep -q 'two packages under one Filename' <<<"$collision_output"; then
+  pass "the same Filename with different bytes in two suites aborts the lane"
+else
+  fail "filename collision" "status ${collision_status}, output: ${collision_output}"
+fi
+# The benign case is the whole point of sharing: identical bytes merge into one pool file.
+rm -rf -- "$COLLIDE_A" "$COLLIDE_B" "$COLLIDE_POOL"
+mkdir -p "$COLLIDE_A" "$COLLIDE_B" "$COLLIDE_POOL"
+cp "$STAGE_SUITES/$(deb_name "$SHARED")" "$COLLIDE_A/$(deb_name "$SHARED")"
+cp "$STAGE_SUITES/$(deb_name "$SHARED")" "$COLLIDE_B/$(deb_name "$SHARED")"
+okp_apt_merge_into_pool "$COLLIDE_A" "$COLLIDE_POOL" stable
+okp_apt_merge_into_pool "$COLLIDE_B" "$COLLIDE_POOL" candidate
+if [[ "$(find "$COLLIDE_POOL" -name '*.deb' | wc -l)" == 1 ]] \
+  && cmp -s "$COLLIDE_POOL/$(deb_name "$SHARED")" "$STAGE_SUITES/$(deb_name "$SHARED")"; then
+  pass "a package both suites downloaded identically merges into one pool file"
+else
+  fail "shared merge" "$(find "$COLLIDE_POOL" -type f | tr '\n' ' ')"
 fi
 
 # --- 11. A candidate that ages out leaves the archive completely ---------------------------
