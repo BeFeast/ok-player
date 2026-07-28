@@ -260,6 +260,10 @@ pub enum UpdateState {
     Failed {
         reason: String,
         target: Option<String>,
+        /// Whether the payload for `target` is still downloaded and verified.
+        /// An apply that failed leaves one behind, so retrying re-applies it
+        /// rather than fetching it all over again.
+        staged: bool,
     },
 }
 
@@ -291,9 +295,20 @@ impl UpdateState {
 /// and a skipped one skipped.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CarriedOffer {
-    Available { version: String },
-    AvailableExternally { version: String, hint: String },
-    Skipped { version: String },
+    Available {
+        version: String,
+    },
+    AvailableExternally {
+        version: String,
+        hint: String,
+    },
+    /// A payload already downloaded and verified, waiting to be applied.
+    ReadyToApply {
+        version: String,
+    },
+    Skipped {
+        version: String,
+    },
 }
 
 impl CarriedOffer {
@@ -301,6 +316,7 @@ impl CarriedOffer {
         match self {
             Self::Available { version }
             | Self::AvailableExternally { version, .. }
+            | Self::ReadyToApply { version }
             | Self::Skipped { version } => version,
         }
     }
@@ -311,6 +327,7 @@ impl CarriedOffer {
             Self::AvailableExternally { version, hint } => {
                 UpdateState::AvailableExternally { version, hint }
             }
+            Self::ReadyToApply { version } => UpdateState::ReadyToApply { version },
             Self::Skipped { version } => UpdateState::Skipped { version },
         }
     }
@@ -349,8 +366,9 @@ pub enum UpdateAction {
     CheckNow,
     /// Start downloading the discovered update.
     DownloadUpdate,
-    /// Apply the staged payload.
-    InstallUpdate,
+    /// Apply the staged payload. Both self-applying lanes relaunch the process
+    /// as part of applying, so the label says so.
+    ApplyAndRestart,
     /// Restart to start running the applied version.
     RestartToFinish,
     /// Retry after a failure.
@@ -367,7 +385,7 @@ impl UpdateAction {
         match self {
             Self::CheckNow => "Check for updates",
             Self::DownloadUpdate => "Update now",
-            Self::InstallUpdate => "Install now",
+            Self::ApplyAndRestart => "Install and restart",
             Self::RestartToFinish => "Restart now",
             Self::Retry => "Try again",
             Self::SkipVersion => "Skip this version",
@@ -382,10 +400,18 @@ impl UpdateAction {
         matches!(
             self,
             Self::DownloadUpdate
-                | Self::InstallUpdate
+                | Self::ApplyAndRestart
                 | Self::RestartToFinish
                 | Self::InstallAnyway
         )
+    }
+
+    /// Whether taking this action shuts the running process down. Both ways of
+    /// getting onto a new build do — applying a staged payload relaunches the
+    /// app, and so does finishing an applied one — so a surface can warn before
+    /// it happens instead of closing the player out from under the user.
+    pub const fn closes_the_app(self) -> bool {
+        matches!(self, Self::ApplyAndRestart | Self::RestartToFinish)
     }
 }
 
@@ -581,6 +607,15 @@ impl UpdateLifecycle {
     /// would restore, which is what the surface was showing.
     fn carried_offer(&self) -> Option<CarriedOffer> {
         let version = match &self.state {
+            UpdateState::Failed {
+                target: Some(version),
+                staged: true,
+                ..
+            } => {
+                return Some(CarriedOffer::ReadyToApply {
+                    version: version.clone(),
+                });
+            }
             UpdateState::Available { version }
             | UpdateState::AvailableExternally { version, .. }
             | UpdateState::Failed {
@@ -659,6 +694,7 @@ impl UpdateLifecycle {
             None => Ok(self.enter(UpdateState::Failed {
                 reason,
                 target: None,
+                staged: false,
             })),
         }
     }
@@ -737,6 +773,8 @@ impl UpdateLifecycle {
                 Ok(self.enter(UpdateState::Failed {
                     reason: reason.into(),
                     target,
+                    // The download is what failed; there is nothing staged.
+                    staged: false,
                 }))
             }
             _ => Err(self.rejected()),
@@ -792,6 +830,9 @@ impl UpdateLifecycle {
                 Ok(self.enter(UpdateState::Failed {
                     reason: reason.into(),
                     target,
+                    // `Applying` is only reachable from `ReadyToApply`, so the
+                    // verified payload is still on disk: a retry applies it.
+                    staged: true,
                 }))
             }
             _ => Err(self.rejected()),
@@ -822,6 +863,8 @@ impl UpdateLifecycle {
                 "restart still runs {running_version}; the update to {pending} did not take effect"
             ),
             target: Some(pending),
+            // The apply already consumed the payload; recovering starts over.
+            staged: false,
         }))
     }
 
@@ -840,13 +883,21 @@ impl UpdateLifecycle {
         }
         let UpdateState::Failed {
             target: Some(version),
+            staged,
             ..
         } = &self.state
         else {
             return Err(self.rejected());
         };
         let version = version.clone();
-        Ok(self.enter(UpdateState::Available { version }))
+        // A verified payload is not thrown away because applying it failed
+        // once: the retry re-applies rather than re-downloading.
+        let restored = if *staged {
+            UpdateState::ReadyToApply { version }
+        } else {
+            UpdateState::Available { version }
+        };
+        Ok(self.enter(restored))
     }
 
     /// Everything the surfaces may show for the current state. The only place
@@ -943,10 +994,12 @@ impl UpdateLifecycle {
             UpdateState::Failed {
                 reason,
                 target: Some(version),
+                ..
             } => format!("The update to version {version} failed: {reason}"),
             UpdateState::Failed {
                 reason,
                 target: None,
+                ..
             } => format!("Update failed: {reason}"),
         }
     }
@@ -985,7 +1038,7 @@ impl UpdateLifecycle {
                 Some(UpdateAction::CheckNow)
             }
             UpdateState::Available { .. } => Some(UpdateAction::DownloadUpdate),
-            UpdateState::ReadyToApply { .. } => Some(UpdateAction::InstallUpdate),
+            UpdateState::ReadyToApply { .. } => Some(UpdateAction::ApplyAndRestart),
             UpdateState::RestartPending { .. } => Some(UpdateAction::RestartToFinish),
             UpdateState::Failed { .. } => Some(UpdateAction::Retry),
             // A skipped version stays installable on demand, but only where the
@@ -1553,7 +1606,8 @@ mod tests {
             failing.apply_failed("disk full").unwrap(),
             &UpdateState::Failed {
                 reason: "disk full".to_owned(),
-                target: Some("2.0.0".to_owned())
+                target: Some("2.0.0".to_owned()),
+                staged: true,
             }
         );
     }
@@ -1963,16 +2017,13 @@ mod tests {
             );
             assert_eq!(presentation.action, Some(UpdateAction::Retry));
 
-            assert_eq!(
-                lifecycle.retry_failed_update().unwrap(),
-                &UpdateState::Available {
-                    version: "2.0.0".to_owned()
-                },
-                "{name} failure must be retryable without a fresh check"
-            );
-            assert_eq!(
-                lifecycle.describe().action,
-                Some(UpdateAction::DownloadUpdate)
+            let resumed = lifecycle.retry_failed_update().unwrap().clone();
+            assert!(
+                matches!(
+                    resumed,
+                    UpdateState::Available { .. } | UpdateState::ReadyToApply { .. }
+                ),
+                "{name} failure must be retryable without a fresh check, got {resumed:?}"
             );
         }
     }
@@ -1990,6 +2041,7 @@ mod tests {
             Err(UpdateTransitionError::NotAllowedFrom(UpdateState::Failed {
                 reason: "network unreachable".to_owned(),
                 target: None,
+                staged: false,
             }))
         );
         assert_eq!(lifecycle.start_check().unwrap(), &checking(None));
@@ -2081,6 +2133,7 @@ mod tests {
             &UpdateState::Failed {
                 reason: "network unreachable".to_owned(),
                 target: None,
+                staged: false,
             }
         );
         assert_eq!(lifecycle.describe().action, Some(UpdateAction::Retry));
@@ -2199,7 +2252,7 @@ mod tests {
                 "{kind} must come back ready to apply, not idle"
             );
             let presentation = lifecycle.describe();
-            assert_eq!(presentation.action, Some(UpdateAction::InstallUpdate));
+            assert_eq!(presentation.action, Some(UpdateAction::ApplyAndRestart));
             assert_eq!(presentation.version_in_use, "1.0.0");
             assert_eq!(
                 presentation.claim,
@@ -2233,6 +2286,119 @@ mod tests {
                 UpdateCapability::Unmanaged
             ))
         );
+    }
+
+    /// Invariant: an apply that failed keeps the verified payload. `Applying`
+    /// is only reachable from `ReadyToApply`, so retrying re-applies what is
+    /// already on disk instead of demanding another download — which, offline,
+    /// would mean no retry at all.
+    #[test]
+    fn a_failed_apply_retries_the_staged_payload_instead_of_downloading_again() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        lifecycle.start_check().unwrap();
+        lifecycle.check_found("2.0.0").unwrap();
+        lifecycle.start_download().unwrap();
+        lifecycle.download_finished().unwrap();
+        lifecycle.start_apply().unwrap();
+        lifecycle.apply_failed("permission denied").unwrap();
+
+        assert_eq!(
+            lifecycle.retry_failed_update().unwrap(),
+            &UpdateState::ReadyToApply {
+                version: "2.0.0".to_owned()
+            },
+            "a staged payload must come back ready to apply"
+        );
+        assert_eq!(
+            lifecycle.describe().action,
+            Some(UpdateAction::ApplyAndRestart)
+        );
+        assert_eq!(
+            lifecycle.start_apply().unwrap(),
+            &UpdateState::Applying {
+                version: "2.0.0".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn a_failed_download_retries_from_the_download() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        lifecycle.start_check().unwrap();
+        lifecycle.check_found("2.0.0").unwrap();
+        lifecycle.start_download().unwrap();
+        lifecycle.download_failed("checksum mismatch").unwrap();
+
+        assert_eq!(
+            lifecycle.retry_failed_update().unwrap(),
+            &UpdateState::Available {
+                version: "2.0.0".to_owned()
+            },
+            "a payload that never landed has nothing staged to re-apply"
+        );
+        assert_eq!(
+            lifecycle.describe().action,
+            Some(UpdateAction::DownloadUpdate)
+        );
+    }
+
+    #[test]
+    fn a_failed_refresh_over_a_staged_failure_keeps_the_payload_staged() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        lifecycle.start_check().unwrap();
+        lifecycle.check_found("2.0.0").unwrap();
+        lifecycle.start_download().unwrap();
+        lifecycle.download_finished().unwrap();
+        lifecycle.start_apply().unwrap();
+        lifecycle.apply_failed("permission denied").unwrap();
+
+        lifecycle.start_check().unwrap();
+        lifecycle.check_failed("feed unavailable").unwrap();
+
+        assert_eq!(
+            lifecycle.state(),
+            &UpdateState::ReadyToApply {
+                version: "2.0.0".to_owned()
+            },
+            "a failed refresh must not discard a staged payload"
+        );
+    }
+
+    /// Invariant: applying a staged update relaunches the app, and the action
+    /// says so — both self-applying lanes call apply-and-restart.
+    #[test]
+    fn applying_a_staged_update_announces_that_it_restarts_the_app() {
+        for kind in SELF_APPLY_KINDS {
+            let lifecycle = UpdateLifecycle::resumed_with_staged_update(kind, "1.0.0", "2.0.0")
+                .expect("a self-applying install can stage a payload");
+            let action = lifecycle
+                .describe()
+                .action
+                .expect("a staged payload is actionable");
+
+            assert!(
+                action.closes_the_app(),
+                "{kind} must warn that applying closes the player, got {action:?}"
+            );
+            assert!(
+                action.label().to_lowercase().contains("restart"),
+                "{kind} label must mention the restart, got {}",
+                action.label()
+            );
+        }
+
+        assert!(UpdateAction::RestartToFinish.closes_the_app());
+        for action in [
+            UpdateAction::CheckNow,
+            UpdateAction::DownloadUpdate,
+            UpdateAction::Retry,
+            UpdateAction::SkipVersion,
+        ] {
+            assert!(
+                !action.closes_the_app(),
+                "{action:?} does not close the player"
+            );
+        }
     }
 
     #[test]
