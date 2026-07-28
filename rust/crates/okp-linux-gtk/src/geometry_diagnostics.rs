@@ -23,10 +23,14 @@ const GEOMETRY_SAMPLE_INTERVAL: Duration = Duration::from_millis(100);
 /// sample to resolve the origin it cannot query.
 const POINTER_SAMPLE_INTERVAL: Duration = Duration::from_millis(150);
 
-/// The window-local planes reported alongside the video surface, bottom to top.
+/// The window-local planes reported alongside the video surface.
+///
+/// `chrome` is ordered bottom to top, mirroring the order the root overlay stacks them,
+/// so the plane that owns a point is the last one containing it - the same answer GTK
+/// picking gives.
 pub(crate) struct GeometrySurfaces {
     pub(crate) video: gtk::Widget,
-    pub(crate) chrome: Vec<(&'static str, gtk::Widget)>,
+    pub(crate) chrome: Vec<(String, gtk::Widget)>,
 }
 
 struct GeometryReporter {
@@ -139,7 +143,7 @@ impl GeometryReporter {
         }
         for (name, widget) in &self.surfaces.chrome {
             if let Some(bounds) = plane_bounds(widget, &window) {
-                planes.push(Plane::new(*name, bounds, widget.can_target()));
+                planes.push(Plane::new(name.clone(), bounds, widget.can_target()));
             }
         }
 

@@ -258,6 +258,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     }
     overlay.add_overlay(&update_surface);
     overlay.add_overlay(status_toast.widget());
+    let diagnostic_resize_handles = resize_handles.clone();
     for resize_handle in resize_handles {
         overlay.add_overlay(&resize_handle);
     }
@@ -391,21 +392,36 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         &window,
         GeometrySurfaces {
             video: video_host.widget().clone(),
-            chrome: vec![
+            // Bottom to top, in the same order the root overlay stacks these surfaces, so
+            // the reported owner of a point is the widget that will receive the press.
+            chrome: [
+                (
+                    "welcome",
+                    empty_surface.widget().clone().upcast::<gtk::Widget>(),
+                ),
+                ("lyrics", lyrics_surface.widget().clone().upcast()),
+                ("media-state", media_state_overlay.widget().clone().upcast()),
                 ("titlebar", window_chrome.widget().clone().upcast()),
                 ("osc", chrome.widget().clone().upcast()),
+                ("up-next", controls.up_next_revealer.clone().upcast()),
                 (
                     "side-panel",
                     controls.side_panel_fade_revealer.clone().upcast(),
                 ),
-                ("up-next", controls.up_next_revealer.clone().upcast()),
-                // Full-window surfaces that become targetable above the video: the
-                // welcome/history canvas while no media is loaded, and the error card.
-                ("welcome", empty_surface.widget().clone().upcast()),
-                ("media-state", media_state_overlay.widget().clone().upcast()),
             ]
             .into_iter()
             .chain(compact_mode.diagnostic_planes())
+            .chain([
+                ("update", update_surface.clone().upcast()),
+                ("toast", status_toast.widget().clone().upcast()),
+            ])
+            .map(|(name, widget)| (name.to_owned(), widget))
+            .chain(
+                diagnostic_resize_handles
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, handle)| (format!("resize-handle-{index}"), handle.upcast())),
+            )
             .collect(),
         },
     );

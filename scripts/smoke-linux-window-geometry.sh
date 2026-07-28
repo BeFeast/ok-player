@@ -79,9 +79,12 @@ if [[ "${1:-}" == "--inner" ]]; then
     ' "$3"
   }
 
-  wait_for_geometry() {
-    for _ in $(seq 1 60); do
-      if [[ -n "$(field drag-target center-x "$1")" || -n "$(field drag-target local-x "$1")" ]]; then
+  # Wait for one plane of the record. A cold GTK/libmpv start under Xvfb can take a while,
+  # so this is patient; every caller names the plane its checks actually need.
+  wait_for_plane() {
+    local log="$1" part="$2"
+    for _ in $(seq 1 160); do
+      if [[ -n "$(field "$part" local-x "$log")" ]]; then
         return 0
       fi
       sleep 0.25
@@ -97,7 +100,7 @@ if [[ "${1:-}" == "--inner" ]]; then
   }
   xdotool windowactivate "$window_id" >/dev/null 2>&1 || true
   sleep 3
-  wait_for_geometry "$OUT_DIR/app.log" || {
+  wait_for_plane "$OUT_DIR/app.log" drag-target || {
     echo "no geometry record was published with OKP_DEBUG_INTERACTIONS=1" >&2
     cat "$OUT_DIR/app.log" >&2
     exit 1
@@ -173,6 +176,48 @@ if [[ "${1:-}" == "--inner" ]]; then
   wait "$app_pid" 2>/dev/null || true
   app_pid=""
 
+  # Audio lyrics put a full-window targetable surface over the video; it must be reported
+  # or a drag target would be published under a lyric row.
+  timeout 40s env OKP_DEBUG_INTERACTIONS=1 OKP_OPEN_LYRICS_ON_STARTUP=synced \
+    "$BINARY" "$FIXTURE" >"$OUT_DIR/lyrics-app.log" 2>&1 &
+  app_pid=$!
+  lyrics_window_id="$(wait_for_window)" || {
+    cat "$OUT_DIR/lyrics-app.log" >&2
+    exit 1
+  }
+  xdotool windowactivate "$lyrics_window_id" >/dev/null 2>&1 || true
+  sleep 3
+  xdotool mousemove --window "$lyrics_window_id" 60 200
+  sleep 1
+  wait_for_plane "$OUT_DIR/lyrics-app.log" lyrics || {
+    echo "no lyrics geometry record was published" >&2
+    cat "$OUT_DIR/lyrics-app.log" >&2
+    exit 1
+  }
+  lyrics_x="$(field lyrics local-x "$OUT_DIR/lyrics-app.log")"
+  lyrics_y="$(field lyrics local-y "$OUT_DIR/lyrics-app.log")"
+  lyrics_w="$(field lyrics w "$OUT_DIR/lyrics-app.log")"
+  lyrics_h="$(field lyrics h "$OUT_DIR/lyrics-app.log")"
+  lyrics_interactive="$(field lyrics interactive "$OUT_DIR/lyrics-app.log")"
+  [[ -n "$lyrics_w" && "$lyrics_w" -gt 0 && "$lyrics_interactive" == "1" ]] || {
+    echo "the lyrics surface was not reported as an interactive plane" >&2
+    exit 1
+  }
+  lyrics_drag_w="$(field drag-target w "$OUT_DIR/lyrics-app.log")"
+  if [[ -n "$lyrics_drag_w" && "$lyrics_drag_w" -gt 0 ]]; then
+    lyrics_drag_x="$(field drag-target local-x "$OUT_DIR/lyrics-app.log")"
+    lyrics_drag_y="$(field drag-target local-y "$OUT_DIR/lyrics-app.log")"
+    lyrics_drag_h="$(field drag-target h "$OUT_DIR/lyrics-app.log")"
+    if (( lyrics_drag_x < lyrics_x + lyrics_w && lyrics_x < lyrics_drag_x + lyrics_drag_w \
+          && lyrics_drag_y < lyrics_y + lyrics_h && lyrics_y < lyrics_drag_y + lyrics_drag_h )); then
+      echo "a drag target was published under the lyrics surface" >&2
+      exit 1
+    fi
+  fi
+  kill "$app_pid" 2>/dev/null || true
+  wait "$app_pid" 2>/dev/null || true
+  app_pid=""
+
   # With no media the welcome canvas owns the whole window and takes input, so it must be
   # reported: a drag target published underneath it would be unpressable.
   timeout 40s env OKP_DEBUG_INTERACTIONS=1 "$BINARY" >"$OUT_DIR/idle-app.log" 2>&1 &
@@ -185,6 +230,11 @@ if [[ "${1:-}" == "--inner" ]]; then
   sleep 3
   xdotool mousemove --window "$idle_window_id" 60 200
   sleep 1
+  wait_for_plane "$OUT_DIR/idle-app.log" welcome || {
+    echo "no idle geometry record was published" >&2
+    cat "$OUT_DIR/idle-app.log" >&2
+    exit 1
+  }
   welcome_x="$(field welcome local-x "$OUT_DIR/idle-app.log")"
   welcome_y="$(field welcome local-y "$OUT_DIR/idle-app.log")"
   welcome_w="$(field welcome w "$OUT_DIR/idle-app.log")"
@@ -194,6 +244,27 @@ if [[ "${1:-}" == "--inner" ]]; then
     echo "the welcome surface was not reported as an interactive plane" >&2
     exit 1
   }
+  # The titlebar sits above the welcome canvas, and both take input here. The plane that
+  # owns a point must be the one GTK would deliver the press to, which only holds if the
+  # planes are reported in the order the overlay stacks them.
+  titlebar_center_x=$((actual_width / 2))
+  titlebar_center_y=$(( "$(field titlebar h "$OUT_DIR/idle-app.log")" / 2 ))
+  xdotool mousemove --window "$idle_window_id" "$titlebar_center_x" "$titlebar_center_y"
+  sleep 1
+  titlebar_owner="$(awk '
+    index($0, "interaction: geometry part=pointer ") == 1 {
+      for (i = 1; i <= NF; i++) {
+        split($i, pair, "=")
+        if (pair[1] == "over") { value = pair[2] }
+      }
+    }
+    END { print value }
+  ' "$OUT_DIR/idle-app.log")"
+  [[ "$titlebar_owner" == "titlebar" ]] || {
+    echo "a point on the titlebar was reported as owned by ${titlebar_owner:-nothing}" >&2
+    exit 1
+  }
+
   idle_drag_w="$(field drag-target w "$OUT_DIR/idle-app.log")"
   if [[ -n "$idle_drag_w" && "$idle_drag_w" -gt 0 ]]; then
     idle_drag_x="$(field drag-target local-x "$OUT_DIR/idle-app.log")"
@@ -222,8 +293,9 @@ if [[ "${1:-}" == "--inner" ]]; then
   sleep 3
   xdotool mousemove --window "$compact_window_id" 40 40
   sleep 1
-  wait_for_geometry "$OUT_DIR/compact-app.log" || {
-    echo "no geometry record was published in compact mode" >&2
+  wait_for_plane "$OUT_DIR/compact-app.log" compact-play || {
+    echo "no compact geometry record was published" >&2
+    cat "$OUT_DIR/compact-app.log" >&2
     exit 1
   }
   play_x="$(field compact-play local-x "$OUT_DIR/compact-app.log")"
@@ -267,8 +339,8 @@ if [[ "${1:-}" == "--inner" ]]; then
   app_pid=""
 
   if awk '/panicked at|fatal runtime error|Aborted|core dumped/ { print FILENAME ":" FNR ":" $0; found = 1 } END { exit !found }' \
-      "$OUT_DIR/app.log" "$OUT_DIR/idle-app.log" "$OUT_DIR/compact-app.log" \
-      "$OUT_DIR/quiet-app.log"; then
+      "$OUT_DIR/app.log" "$OUT_DIR/idle-app.log" "$OUT_DIR/lyrics-app.log" \
+      "$OUT_DIR/compact-app.log" "$OUT_DIR/quiet-app.log"; then
     echo "window-geometry smoke observed a fatal process diagnostic" >&2
     exit 1
   fi
@@ -285,6 +357,9 @@ if [[ "${1:-}" == "--inner" ]]; then
     'compact_drag_target_clears_controls=pass' \
     "welcome_plane=${welcome_w}x${welcome_h}+${welcome_x},${welcome_y}" \
     'welcome_surface_owns_the_idle_window=pass' \
+    "titlebar_point_owner=${titlebar_owner}" \
+    "lyrics_plane=${lyrics_w}x${lyrics_h}+${lyrics_x},${lyrics_y}" \
+    'lyrics_surface_owns_the_video_area=pass' \
     'silent_without_diagnostic=pass' \
     'fatal_diagnostics=absent' >"$OUT_DIR/results.txt"
   exit 0
