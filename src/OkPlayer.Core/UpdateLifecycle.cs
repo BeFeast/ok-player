@@ -427,6 +427,10 @@ public sealed class UpdateLifecycle
     {
         UpdateStateKind.Available => _state,
         UpdateStateKind.Failed when _state.Version is not null => _state,
+        // A check is what settles an unconfirmed restart, so a check that fails settles nothing:
+        // the pending target and the fact that nothing is known about it both survive the refresh
+        // instead of collapsing into a generic failure that has forgotten the version.
+        UpdateStateKind.RestartUnverified => _state,
         _ => null,
     };
 
@@ -580,6 +584,10 @@ public sealed class UpdateLifecycle
                 or UpdateStateKind.Applying
                 or UpdateStateKind.RestartPending => VersionClaim.Superseded,
             UpdateStateKind.Failed when _state.Version is not null => VersionClaim.Superseded,
+            // Refreshing an unconfirmed restart does not turn it into a known one: what is being
+            // checked is precisely which build is running.
+            UpdateStateKind.Checking when _state.Carried is { Kind: UpdateStateKind.RestartUnverified }
+                => VersionClaim.Unknown,
             UpdateStateKind.Checking when _state.Carried is not null => VersionClaim.Superseded,
             // The restart happened; which build came up is precisely what cannot be told, so
             // nothing may be claimed either way (#694).

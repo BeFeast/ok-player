@@ -125,6 +125,18 @@ public class UpdateLifecycleTests
         // A check is the way out, and it is offered.
         Assert.Equal(UpdateAction.CheckNow, presentation.Action);
         Assert.True(resumed.StartCheck());
+        // Refreshing an unconfirmed restart does not turn it into a known one…
+        Assert.Equal(VersionClaim.Unknown, resumed.Describe().Claim);
+        // …and a check that fails settles nothing, so the restart stays as unconfirmed as it was
+        // instead of collapsing into a generic failure that has forgotten the version.
+        Assert.True(resumed.CheckFailed("network unreachable"));
+        Assert.Equal(UpdateStateKind.RestartUnverified, resumed.State.Kind);
+        Assert.Equal("0.11.0-beta.0.15", resumed.State.Version);
+        UpdatePresentation afterFailure = resumed.Describe();
+        Assert.Contains("cannot be confirmed", afterFailure.UpdatesMessage);
+        Assert.Contains("Update check failed: network unreachable", afterFailure.UpdatesMessage);
+        Assert.Equal(VersionClaim.Unknown, afterFailure.Claim);
+        Assert.Equal(UpdateAction.CheckNow, afterFailure.Action);
     }
 
     [Fact]

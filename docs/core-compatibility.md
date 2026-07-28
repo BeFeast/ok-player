@@ -683,8 +683,10 @@ About block and the copied diagnostics from disagreeing (#660).
   lifecycle instead of an error — the caller has nothing else to do with one.
 - **Carried offers.** Rust models the offer a re-check protects as a dedicated `CarriedOffer`
   enum; C# carries the previous `UpdateState`. The restored states, the notice text and the
-  claim over a refreshing check are identical; the Windows shell can only carry the
-  `Available` and `Failed`-with-target forms, which are the ones its lanes produce.
+  claim over a refreshing check are identical; the Windows shell can carry the `Available`,
+  `Failed`-with-target and `RestartUnverified` forms, which are the ones its lanes produce. An
+  unconfirmed restart carried through a check keeps the claim `Unknown` on both sides — the
+  check is what would settle which build is running, so a failed one settles nothing.
 - **Version fidelity (#694).** Both sides take a `ReportedVersion` — the string the shell
   observed plus whether it is the complete package version — and both refuse to order two
   versions whose numeric cores tie when either side is truncated. On Windows the complete

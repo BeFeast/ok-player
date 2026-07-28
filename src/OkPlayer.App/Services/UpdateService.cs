@@ -26,6 +26,7 @@ public sealed class UpdateService
     private readonly UpdateLifecycle _lifecycle;
     private volatile UpdateInfo? _pending;           // a downloaded, ready-to-apply update (null until found + downloaded); written by the check worker, read on the UI thread
     private int _checking;                          // 0/1 guard so overlapping background checks don't stack
+    private bool _markerHeld;                       // guarded by _gate: the pending-restart marker is still on disk because the restart it records is unconfirmed
 
     public UpdateService()
     {
@@ -57,11 +58,21 @@ public sealed class UpdateService
     {
         InstallKind kind = UpdateLifecycle.Detect(new InstallEvidence(VelopackLayoutPresent: IsInstalled()));
         ReportedVersion running = App.RunningVersion;
-        if (PendingRestartMarker.Take() is { } target)
+        if (PendingRestartMarker.Read() is { } target)
+        {
             // Settles the restart against the version that actually came up: on the target (or
             // newer) it completes, on the old binary it is the #660 failure, and on a version too
             // coarse to tell them apart it is neither (#694).
-            return UpdateLifecycle.ResumedAfterRestart(kind, running, target);
+            UpdateLifecycle resumed = UpdateLifecycle.ResumedAfterRestart(kind, running, target);
+            // A settled restart consumes the marker. An unconfirmed one does not: it is the only
+            // record of which version this install was told it was getting, and a relaunch before
+            // the settling check succeeds — offline, or with automatic checks off — would otherwise
+            // come up at Idle having quietly forgotten the whole thing.
+            _markerHeld = resumed.State.Kind == UpdateStateKind.RestartUnverified;
+            if (!_markerHeld)
+                PendingRestartMarker.Clear();
+            return resumed;
+        }
         if (StagedVersion() is { } staged)
             return UpdateLifecycle.ResumedWithStagedUpdate(kind, running, ReportedVersion.Complete(staged));
         return new UpdateLifecycle(kind, running);
@@ -163,13 +174,12 @@ public sealed class UpdateService
                 _ = CheckAndDownloadAsync();
                 break;
             case UpdateAction.Retry:
-                // A verified payload survives a failed apply, so the retry re-applies it rather than
-                // fetching it again; anything else goes back through the feed. A check that failed
-                // before finding anything has no offer to restore — a fresh check is its retry.
-                Transition(life => life.RetryFailedUpdate());
-                if (Presentation.Action == UpdateAction.ApplyAndRestart)
-                    ApplyAndRestart();
-                else
+                // Restoring the interrupted offer is all a retry does. A payload that survived a
+                // failed apply comes back as "Install and restart" — the action that says it closes
+                // the app — and the user takes it from there; applying it from here would tear the
+                // session down behind a button labelled "Try again". A check that failed before
+                // finding anything has no offer to restore, so a fresh check is its retry.
+                if (!Transition(life => life.RetryFailedUpdate()))
                     _ = CheckAndDownloadAsync();
                 break;
             case UpdateAction.ApplyAndRestart:
@@ -222,6 +232,14 @@ public sealed class UpdateService
             moved = transition(_lifecycle);
             kind = _lifecycle.State.Kind;
             presentation = _lifecycle.Describe();
+            // The restart the marker recorded is settled the moment the lifecycle leaves the
+            // unconfirmed state — a check that found something, or found nothing — so the record it
+            // was kept for is done. ApplyAndRestart writes its own marker afterwards.
+            if (moved && _markerHeld && kind != UpdateStateKind.RestartUnverified)
+            {
+                PendingRestartMarker.Clear();
+                _markerHeld = false;
+            }
         }
         if (!moved)
             return false;
@@ -254,15 +272,16 @@ public sealed class UpdateService
             catch (Exception ex) { Log.Warn("update: could not record the pending restart: " + ex.Message); }
         }
 
-        /// <summary>Read the marker and remove it, or null when there is none.</summary>
-        public static string? Take()
+        /// <summary>The recorded pending version, or null when there is none. The marker is removed
+        /// by <see cref="Clear"/> once the restart it records has actually been settled — reading it
+        /// is not settling it.</summary>
+        public static string? Read()
         {
             try
             {
                 if (!File.Exists(MarkerPath))
                     return null;
                 string version = File.ReadAllText(MarkerPath).Trim();
-                Clear();
                 return version.Length == 0 ? null : version;
             }
             catch (Exception ex) { Log.Warn("update: could not read the pending restart: " + ex.Message); return null; }

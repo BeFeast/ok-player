@@ -584,6 +584,12 @@ pub enum CarriedOffer {
         reason: String,
         staged: bool,
     },
+    /// A restart the running version could not confirm (#694). A check is what
+    /// settles it, so a check that *fails* settles nothing: the pending target
+    /// and the fact that nothing is known about it both survive the refresh.
+    UnverifiedRestart {
+        target: String,
+    },
 }
 
 impl CarriedOffer {
@@ -594,6 +600,7 @@ impl CarriedOffer {
             | Self::ReadyToApply { version }
             | Self::Skipped { version, .. }
             | Self::Failed { version, .. } => version,
+            Self::UnverifiedRestart { target } => target,
         }
     }
 
@@ -622,6 +629,7 @@ impl CarriedOffer {
                 target: Some(version),
                 staged,
             },
+            Self::UnverifiedRestart { target } => UpdateState::RestartUnverified { target },
         }
     }
 }
@@ -962,6 +970,14 @@ impl UpdateLifecycle {
                     version: version.clone(),
                     reason: reason.clone(),
                     staged: *staged,
+                });
+            }
+            // A failed refresh over an unconfirmed restart leaves it exactly as
+            // unconfirmed as it was, rather than collapsing it into a generic
+            // failure that has forgotten which version it was about.
+            UpdateState::RestartUnverified { target } => {
+                return Some(CarriedOffer::UnverifiedRestart {
+                    target: target.clone(),
                 });
             }
             UpdateState::Available { version }
@@ -1371,6 +1387,11 @@ impl UpdateLifecycle {
             } => VersionClaim::Superseded {
                 newer: version.clone(),
             },
+            // Refreshing an unconfirmed restart does not turn it into a known
+            // one: what is being checked is precisely which build is running.
+            UpdateState::Checking {
+                carried: Some(CarriedOffer::UnverifiedRestart { .. }),
+            } => VersionClaim::Unknown,
             // A refresh does not un-know the offer it is refreshing.
             UpdateState::Checking {
                 carried: Some(offer),
@@ -3633,6 +3654,37 @@ mod tests {
         velopack
             .start_check()
             .expect("an unverified restart can still be settled against the feed");
+        assert_eq!(
+            velopack.describe().claim,
+            VersionClaim::Unknown,
+            "refreshing an unconfirmed restart does not make it a known one"
+        );
+
+        // A check that fails settles nothing, so it must leave the restart as
+        // unconfirmed as it found it rather than collapsing it into a generic
+        // failure that has forgotten which version it was about.
+        velopack
+            .check_failed("network unreachable")
+            .expect("a refresh can fail");
+        assert_eq!(
+            velopack.state(),
+            &UpdateState::RestartUnverified {
+                target: "0.11.0-beta.0.15".to_owned()
+            }
+        );
+        let after_failure = velopack.describe();
+        assert!(
+            after_failure
+                .updates_message
+                .contains("cannot be confirmed")
+                && after_failure
+                    .updates_message
+                    .contains("Update check failed: network unreachable"),
+            "{}",
+            after_failure.updates_message
+        );
+        assert_eq!(after_failure.claim, VersionClaim::Unknown);
+        assert_eq!(after_failure.action, Some(UpdateAction::CheckNow));
     }
 
     #[test]
