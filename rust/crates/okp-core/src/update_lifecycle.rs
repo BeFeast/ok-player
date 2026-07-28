@@ -23,7 +23,10 @@
 //! Network access, package downloads, process restarts and every other side
 //! effect stay in the shells; this module only decides.
 
+use std::cmp::Ordering;
 use std::fmt;
+
+use crate::update_selection::compare_versions;
 
 /// How the running copy of OK Player was installed.
 ///
@@ -877,8 +880,10 @@ impl UpdateLifecycle {
 
     /// The process restarted and reports the version it came back as.
     ///
-    /// Matching the pending target completes the update. A mismatch is #660
-    /// itself — the restart ran the old binary — and becomes
+    /// Coming back on the pending target — or on anything newer, which a
+    /// manual upgrade or a stale pending marker can produce — completes the
+    /// update, and the state records the version actually running. Coming back
+    /// *older* is #660 itself: the restart ran the old binary, so it becomes
     /// [`UpdateState::Failed`] instead of a silent success.
     pub fn restarted_into(
         &mut self,
@@ -889,9 +894,11 @@ impl UpdateLifecycle {
         };
         let pending = version.clone();
         let running_version = running_version.into();
-        if running_version == pending {
-            self.running_version = running_version;
-            return Ok(self.enter(UpdateState::Running { version: pending }));
+        if compare_versions(&running_version, &pending) != Ordering::Less {
+            self.running_version = running_version.clone();
+            return Ok(self.enter(UpdateState::Running {
+                version: running_version,
+            }));
         }
         self.running_version = running_version.clone();
         Ok(self.enter(UpdateState::Failed {
@@ -2519,6 +2526,66 @@ mod tests {
                 version: "2.0.0".to_owned()
             },
             "a skip with nothing staged still has to fetch the payload"
+        );
+    }
+
+    /// Invariant: only coming back *older* is a failed restart. A process that
+    /// relaunches on the pending build, or on something newer still, has
+    /// finished the update.
+    #[test]
+    fn a_restart_onto_a_newer_build_than_the_target_still_completes() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        lifecycle.start_check().unwrap();
+        lifecycle.check_found("2.0.0").unwrap();
+        lifecycle.start_download().unwrap();
+        lifecycle.download_finished().unwrap();
+        lifecycle.start_apply().unwrap();
+        lifecycle.apply_needs_restart().unwrap();
+
+        assert_eq!(
+            lifecycle.restarted_into("3.0.0").unwrap(),
+            &UpdateState::Running {
+                version: "3.0.0".to_owned()
+            },
+            "a newer build than the target is not a failed restart"
+        );
+        assert_eq!(
+            lifecycle.running_version(),
+            "3.0.0",
+            "the state must record what is actually running"
+        );
+        let presentation = lifecycle.describe();
+        assert_eq!(
+            presentation.claim,
+            VersionClaim::Current,
+            "3.0.0 cannot be superseded by the 2.0.0 it overtook"
+        );
+        assert_eq!(presentation.target_version, None);
+        assert_eq!(presentation.action, Some(UpdateAction::CheckNow));
+
+        let resumed =
+            UpdateLifecycle::resumed_after_restart(InstallKind::WindowsVelopack, "3.0.0", "2.0.0")
+                .expect("a self-applying install can resume");
+        assert_eq!(
+            resumed.state(),
+            &UpdateState::Running {
+                version: "3.0.0".to_owned()
+            },
+            "a stale pending marker must not fail a process that is already newer"
+        );
+        assert_eq!(resumed.describe().claim, VersionClaim::Current);
+
+        let mut older = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        older.start_check().unwrap();
+        older.check_found("2.0.0").unwrap();
+        older.start_download().unwrap();
+        older.download_finished().unwrap();
+        older.start_apply().unwrap();
+        older.apply_needs_restart().unwrap();
+        older.restarted_into("1.0.0").unwrap();
+        assert!(
+            matches!(older.state(), UpdateState::Failed { .. }),
+            "only an older build is a failed restart"
         );
     }
 
