@@ -16,7 +16,7 @@ pub(crate) struct AboutDeferredFields {
     pub libmpv: String,
     pub ffmpeg: String,
     pub os: String,
-    pub install: String,
+    pub install: InstallKind,
 }
 
 impl AboutDeferredFields {
@@ -25,7 +25,7 @@ impl AboutDeferredFields {
             libmpv: pkg_config_version("mpv").unwrap_or_else(|| "system".to_owned()),
             ffmpeg: ffmpeg_version().unwrap_or_else(|| "system".to_owned()),
             os: linux_os_label(),
-            install: linux_update_install_status().to_owned(),
+            install: install_kind(),
         }
     }
 
@@ -33,7 +33,7 @@ impl AboutDeferredFields {
         snapshot.libmpv.clone_from(&self.libmpv);
         snapshot.ffmpeg.clone_from(&self.ffmpeg);
         snapshot.os.clone_from(&self.os);
-        snapshot.install.clone_from(&self.install);
+        snapshot.install = self.install.as_str().to_owned();
 
         if let Some(label) = labels.libmpv.as_ref() {
             label.set_text(&self.libmpv);
@@ -45,7 +45,7 @@ impl AboutDeferredFields {
             label.set_text(&self.os);
         }
         if let Some(label) = labels.install.as_ref() {
-            label.set_text(&self.install);
+            label.set_text(self.install.as_str());
         }
     }
 }
@@ -244,6 +244,12 @@ pub(crate) fn about_hero_channel(channel: &str) -> String {
 pub(crate) fn about_app_card(snapshot: &AboutSnapshot) -> gtk::Box {
     let rows = gtk::Box::new(gtk::Orientation::Vertical, 10);
     rows.append(&about_spec_row("Version", &snapshot.version, true, None));
+    rows.append(&about_spec_row(
+        "Updates",
+        &snapshot.update_status,
+        false,
+        None,
+    ));
     rows.append(&about_spec_row("Channel", &snapshot.channel, false, None));
     rows.append(&about_spec_row("Build", &snapshot.build, true, None));
     rows.append(&about_spec_row("License", &snapshot.license, true, None));
@@ -534,17 +540,4 @@ pub(crate) fn linux_os_label() -> String {
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "Linux".to_owned())
-}
-
-pub(crate) fn linux_update_install_status() -> &'static str {
-    if flatpak_update_managed() {
-        "Flatpak managed"
-    } else {
-        match linux_install_lane() {
-            CandidateInstallLane::AppImage => "Self-update enabled",
-            CandidateInstallLane::Debian if deb_self_install_available() => "Deb self-install",
-            CandidateInstallLane::Debian => "Deb installer",
-            CandidateInstallLane::SystemPackage => "DNF package manager",
-        }
-    }
 }

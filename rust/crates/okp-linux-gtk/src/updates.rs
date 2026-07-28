@@ -170,6 +170,215 @@ pub(crate) fn persistent_update_surface(
     surface
 }
 
+/// The install kind of this process, decided by `okp_core` from evidence this
+/// shell gathers. Resolved once: the package-ownership question costs a
+/// subprocess, and the answer cannot change while the process runs.
+static INSTALL_KIND: OnceLock<InstallKind> = OnceLock::new();
+
+/// Blocks until the install kind is known, running the probe if nothing else
+/// has. Never call this from the GTK main thread before
+/// [`start_install_kind_probe`] has had a chance to resolve it — the point of
+/// the probe is that the ownership query does not stall a frame.
+pub(crate) fn install_kind() -> InstallKind {
+    *INSTALL_KIND.get_or_init(detect_process_install_kind)
+}
+
+/// Facts about the running process, gathered for [`detect_install_kind`].
+/// `ask_package_manager` decides whether the ownership question is asked at
+/// all: it costs a subprocess, and the cheap signals settle Flatpak and a
+/// mounted AppImage without it.
+pub(crate) fn process_install_evidence(ask_package_manager: bool) -> InstallEvidence {
+    let executable_path = env::current_exe()
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned());
+    let package_ownership = if ask_package_manager {
+        query_package_ownership(executable_path.as_deref())
+    } else {
+        PackageOwnership::Unknown
+    };
+    InstallEvidence {
+        flatpak_id: env::var("FLATPAK_ID").ok(),
+        flatpak_info_present: Path::new("/.flatpak-info").is_file(),
+        appimage_path: env::var("APPIMAGE").ok(),
+        appdir_path: env::var("APPDIR").ok(),
+        executable_path,
+        package_ownership,
+        // The Velopack `current/` layout is a Windows install; on Linux
+        // Velopack updates the AppImage file itself.
+        velopack_layout_present: false,
+    }
+}
+
+/// Resolves the install kind for this process.
+///
+/// The cheap evidence is collected first, and a package manager is asked only
+/// when that evidence leaves the answer open — which is exactly the deb, rpm
+/// and extract-and-run cases. A Flatpak or a mounted AppImage never spawns
+/// anything.
+pub(crate) fn detect_process_install_kind() -> InstallKind {
+    if let Some(forced) = forced_install_kind() {
+        eprintln!("Update install kind: forced={forced} package-kind={APP_PACKAGE_KIND}");
+        return forced;
+    }
+    let cheap = process_install_evidence(false);
+    let kind = match detect_install_kind(&cheap) {
+        InstallKind::DevBuild => detect_install_kind(&process_install_evidence(true)),
+        settled => settled,
+    };
+    eprintln!(
+        "Update install kind: detected={kind} capability={:?} package-kind={APP_PACKAGE_KIND}",
+        kind.capability()
+    );
+    kind
+}
+
+/// QA override for the install kind. GUI verification of the system-managed
+/// lane must be possible on a host that is not running that package, and the
+/// alternative — believing a build-time stamp — is the parallel decision this
+/// change exists to delete.
+fn forced_install_kind() -> Option<InstallKind> {
+    let value = env::var("OKP_UPDATE_INSTALL_KIND").ok()?;
+    parse_install_kind(value.trim())
+}
+
+pub(crate) fn parse_install_kind(value: &str) -> Option<InstallKind> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "deb" => Some(InstallKind::Deb),
+        "rpm" => Some(InstallKind::Rpm),
+        "appimage" => Some(InstallKind::AppImage),
+        "flatpak" => Some(InstallKind::Flatpak),
+        "dev-build" | "development" => Some(InstallKind::DevBuild),
+        _ => None,
+    }
+}
+
+/// Asks the package managers this system has whether they own `path`. An
+/// absent tool is not an answer, so the result stays `Unknown` unless a
+/// manager was actually asked — core treats a failed query as "not packaged"
+/// rather than guessing.
+fn query_package_ownership(path: Option<&str>) -> PackageOwnership {
+    let Some(path) = path else {
+        return PackageOwnership::Unknown;
+    };
+    let mut asked = false;
+    for (tool, args) in [("dpkg", ["-S"]), ("rpm", ["-qf"])] {
+        let Some(executable) = find_executable(tool) else {
+            continue;
+        };
+        let Ok(output) = Command::new(executable)
+            .args(args)
+            .arg(path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+        else {
+            continue;
+        };
+        asked = true;
+        if output.status.success() {
+            return if tool == "dpkg" {
+                PackageOwnership::Dpkg
+            } else {
+                PackageOwnership::Rpm
+            };
+        }
+    }
+    if asked {
+        PackageOwnership::Unowned
+    } else {
+        PackageOwnership::Unknown
+    }
+}
+
+/// Resolves the install kind off the main thread and adopts it, so the first
+/// frame is never held up by a package-manager query. Until it lands the
+/// session says nothing updates this install, which is the honest answer to
+/// "how was I installed?" before anything has looked.
+pub(crate) fn start_install_kind_probe(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+    then_check: bool,
+) {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send((install_kind(), take_pending_restart()));
+    });
+    glib::timeout_add_local(Duration::from_millis(20), move || {
+        match receiver.try_recv() {
+            Ok((kind, pending)) => {
+                adopt_detected_install_kind(&state, kind, pending);
+                refresh_linux_update_views(&state);
+                if then_check && update_checks_are_possible(kind) {
+                    check_updates_on_startup(Rc::clone(&state), Rc::clone(&status_toast));
+                }
+                glib::ControlFlow::Break
+            }
+            Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+        }
+    });
+}
+
+/// Whether this install kind has anything to check. A system tool that owns
+/// the payload outright is not polled, and a dev build has no feed at all.
+pub(crate) fn update_checks_are_possible(kind: InstallKind) -> bool {
+    kind.capability() != UpdateCapability::Unmanaged && kind.discovers_versions()
+}
+
+/// Replaces the placeholder session with one for the detected install kind,
+/// settling any restart that was pending from the previous process.
+pub(crate) fn adopt_detected_install_kind(
+    state: &Rc<RefCell<PlayerState>>,
+    kind: InstallKind,
+    pending_restart: Option<String>,
+) {
+    let mut state = state.borrow_mut();
+    state.linux_update = LinuxUpdateSession::resumed(kind, pending_restart);
+    if let Some(preview) = linux_update_preview_session(kind) {
+        state.linux_update = preview;
+    }
+    eprintln!(
+        "Update session: {}",
+        state.linux_update.describe().updates_message
+    );
+}
+
+/// The file that carries an in-flight update across the restart that finishes
+/// it. Written before the hand-off, read once by the process that comes back:
+/// without it, a restart that silently came up on the old binary is invisible,
+/// which is #660.
+pub(crate) fn pending_restart_marker_path() -> PathBuf {
+    linux_update_cache_dir().join("pending-restart")
+}
+
+pub(crate) fn record_pending_restart(version: &str) {
+    let path = pending_restart_marker_path();
+    if let Some(parent) = path.parent()
+        && let Err(error) = fs::create_dir_all(parent)
+    {
+        eprintln!("Failed to prepare the pending-restart marker: {error}");
+        return;
+    }
+    if let Err(error) = fs::write(&path, version) {
+        eprintln!("Failed to record the pending update restart: {error}");
+    }
+}
+
+/// Reads the pending target and removes the marker: it settles exactly one
+/// restart, so a stale record cannot keep reporting an update that already
+/// landed — or already failed.
+pub(crate) fn take_pending_restart() -> Option<String> {
+    let path = pending_restart_marker_path();
+    let recorded = fs::read_to_string(&path).ok();
+    if recorded.is_some() {
+        let _ = fs::remove_file(&path);
+    }
+    recorded
+        .map(|version| version.trim().to_owned())
+        .filter(|version| !version.is_empty())
+}
+
 fn build_update_action_surface(
     kind: LinuxUpdateViewKind,
     state: Rc<RefCell<PlayerState>>,
@@ -212,13 +421,22 @@ fn build_update_action_surface(
     skip.connect_clicked(move |_| skip_current_update(&skip_state, &skip_toast));
     actions.append(&skip);
 
+    let system = gtk::Button::with_label(SYSTEM_UPDATER_ACTION_LABEL);
+    system.add_css_class("okp-settings-button");
+    system.update_property(&[gtk::accessible::Property::Label(
+        "Open the system software updater",
+    )]);
+    let system_toast = Rc::clone(&status_toast);
+    system.connect_clicked(move |_| open_system_software_surface(&system_toast));
+    actions.append(&system);
+
     let primary = gtk::Button::with_label("Update");
     primary.add_css_class("okp-update-primary-button");
     primary.update_property(&[gtk::accessible::Property::Label("Update OK Player")]);
     let primary_state = Rc::clone(&state);
     let primary_toast = Rc::clone(&status_toast);
     primary.connect_clicked(move |_| {
-        start_update_download(Rc::clone(&primary_state), Rc::clone(&primary_toast));
+        take_primary_update_action(Rc::clone(&primary_state), Rc::clone(&primary_toast));
     });
     actions.append(&primary);
     root.append(&actions);
@@ -231,26 +449,46 @@ fn build_update_action_surface(
         status: status.downgrade(),
         primary: primary.downgrade(),
         skip: skip.downgrade(),
+        system: system.downgrade(),
         check: check.map(|button| button.downgrade()),
     });
     refresh_linux_update_views(&state);
     root
 }
 
+/// The heading over the update copy. Derived from the shared projection — the
+/// version it is about, or nothing when no version is in play — so it cannot
+/// name a state the message below it is not in.
+pub(crate) fn update_surface_title(presentation: &UpdatePresentation) -> String {
+    match &presentation.target_version {
+        Some(version) => format!("Update · {version}"),
+        None => "Update status".to_owned(),
+    }
+}
+
+/// The action the primary button offers, if any. `CheckNow` is the Settings
+/// page's own dedicated button, so it never doubles as the offer's action.
+pub(crate) fn primary_update_action(presentation: &UpdatePresentation) -> Option<UpdateAction> {
+    presentation
+        .action
+        .filter(|action| *action != UpdateAction::CheckNow)
+}
+
 pub(crate) fn refresh_linux_update_views(state: &Rc<RefCell<PlayerState>>) {
-    let (update_status, auto_check_enabled) = {
+    let (presentation, offer_visible, busy) = {
         let state = state.borrow();
         (
-            state.linux_update_status.clone(),
-            state.settings.auto_check_updates(),
+            state.linux_update.describe(),
+            state.linux_update.offer_surface_visible(),
+            state.linux_update.is_busy(),
         )
     };
-    let offer = update_status.pending_offer();
-    let status_text = update_status.settings_status_text(auto_check_enabled);
-    let checking = matches!(update_status, LinuxUpdateStatus::Checking(_));
-    let installing = offer
-        .as_ref()
-        .is_some_and(|offer| offer.state.is_installing());
+    let primary_action = primary_update_action(&presentation);
+    let checks_possible = update_checks_are_possible(presentation.install_kind);
+    let system_updater = system_software_surface();
+    let system_visible = presentation.capability == UpdateCapability::SystemManaged
+        && presentation.target_version.is_some();
+    let title_text = update_surface_title(&presentation);
 
     state.borrow_mut().linux_update_views.retain(|view| {
         let Some(root) = view.root.upgrade() else {
@@ -268,29 +506,25 @@ pub(crate) fn refresh_linux_update_views(state: &Rc<RefCell<PlayerState>>) {
         let Some(skip) = view.skip.upgrade() else {
             return false;
         };
+        let Some(system) = view.system.upgrade() else {
+            return false;
+        };
 
-        let persistent_visible = offer
-            .as_ref()
-            .is_some_and(|offer| offer.state.persistent_surface_visible());
-        root.set_visible(view.kind == LinuxUpdateViewKind::Settings || persistent_visible);
-        title.set_text(
-            offer
-                .as_ref()
-                .map(LinuxUpdateOffer::title_text)
-                .as_deref()
-                .unwrap_or("Update status"),
-        );
-        status.set_text(&status_text);
+        root.set_visible(view.kind == LinuxUpdateViewKind::Settings || offer_visible);
+        title.set_text(&title_text);
+        status.set_text(&presentation.updates_message);
 
-        let primary_label = offer
-            .as_ref()
-            .and_then(|offer| offer.state.primary_action_label());
-        primary.set_visible(primary_label.is_some());
-        if let Some(label) = primary_label {
-            primary.set_label(label);
-            primary.set_sensitive(!checking && !installing);
+        primary.set_visible(primary_action.is_some());
+        if let Some(action) = primary_action {
+            primary.set_label(action.label());
+            primary.set_sensitive(presentation.actions_enabled);
+            primary.set_tooltip_text(
+                presentation
+                    .action_closes_the_app
+                    .then_some("OK Player closes to finish this update."),
+            );
             primary.update_property(&[gtk::accessible::Property::Label(
-                if label == "Install anyway" {
+                if action == UpdateAction::InstallAnyway {
                     "Install the skipped update anyway"
                 } else {
                     "Update OK Player"
@@ -298,22 +532,20 @@ pub(crate) fn refresh_linux_update_views(state: &Rc<RefCell<PlayerState>>) {
             )]);
         }
 
-        let can_skip = offer.as_ref().is_some_and(|offer| offer.state.can_skip());
+        let can_skip = presentation.secondary_action == Some(UpdateAction::SkipVersion);
         skip.set_visible(can_skip);
-        skip.set_sensitive(can_skip && !checking);
+        skip.set_sensitive(can_skip && presentation.actions_enabled);
+
+        system.set_visible(system_visible);
+        system.set_sensitive(system_updater.is_some());
+        system.set_tooltip_text(match &system_updater {
+            Some(_) => None,
+            None => Some(SYSTEM_UPDATER_ABSENT_HINT),
+        });
 
         if let Some(check) = view.check.as_ref().and_then(glib::WeakRef::upgrade) {
-            let manager = match update_status {
-                LinuxUpdateStatus::ManagedExternally(manager) => Some(manager),
-                _ => None,
-            };
-            let managed = manager.is_some();
-            check.set_label(match manager {
-                Some(LinuxExternalUpdateManager::Flatpak) => "Managed by Flatpak",
-                Some(LinuxExternalUpdateManager::Dnf) => "Managed by DNF",
-                None => "Check for updates",
-            });
-            check.set_sensitive(!managed && !checking && !installing);
+            check.set_visible(checks_possible);
+            check.set_sensitive(checks_possible && presentation.actions_enabled && !busy);
         }
         true
     });
@@ -323,11 +555,6 @@ pub(crate) fn settings_updates_section(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) -> gtk::Box {
-    let flatpak_managed = flatpak_update_managed();
-    if flatpak_managed {
-        state.borrow_mut().linux_update_status =
-            LinuxUpdateStatus::ManagedExternally(LinuxExternalUpdateManager::Flatpak);
-    }
     let section = settings_section("Updates");
     section.append(&settings_value_row("Current version", APP_BUILD_VERSION));
     let channel = effective_update_channel(state.borrow().settings.update_channel());
@@ -341,14 +568,14 @@ pub(crate) fn settings_updates_section(
     let (install_row, install_label) = settings_value_row_with_label("Install", "—");
     section.append(&install_row);
 
-    let (install_sender, install_receiver) = mpsc::channel::<String>();
+    let (install_sender, install_receiver) = mpsc::channel::<InstallKind>();
     std::thread::spawn(move || {
-        let _ = install_sender.send(linux_update_install_status().to_owned());
+        let _ = install_sender.send(install_kind());
     });
     glib::timeout_add_local(Duration::from_millis(10), move || {
         match install_receiver.try_recv() {
-            Ok(status) => {
-                install_label.set_text(&status);
+            Ok(kind) => {
+                install_label.set_text(kind.as_str());
                 glib::ControlFlow::Break
             }
             Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
@@ -356,11 +583,37 @@ pub(crate) fn settings_updates_section(
         }
     });
 
+    // The packages this lane installs come from a real apt repository now, so
+    // a `.deb` install is told where its updates live rather than being handed
+    // a downloaded file.
+    let (repository_row, repository_label) = settings_value_row_with_label("Repository", "—");
+    repository_row.set_visible(false);
+    section.append(&repository_row);
+    let (repository_sender, repository_receiver) = mpsc::channel::<Option<&'static str>>();
+    std::thread::spawn(move || {
+        let _ = repository_sender.send(system_repository_hint(install_kind()));
+    });
+    glib::timeout_add_local(
+        Duration::from_millis(10),
+        move || match repository_receiver.try_recv() {
+            Ok(hint) => {
+                repository_row.set_visible(hint.is_some());
+                repository_label.set_text(hint.unwrap_or("—"));
+                glib::ControlFlow::Break
+            }
+            Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+        },
+    );
+
     let row = gtk::Box::new(gtk::Orientation::Vertical, 8);
     row.add_css_class("okp-settings-row");
 
-    let auto_check_enabled = state.borrow().settings.auto_check_updates() && !flatpak_managed;
-    let initial_update_status = state.borrow().linux_update_status.clone();
+    let auto_check_enabled = state.borrow().settings.auto_check_updates();
+    let already_checked = !matches!(
+        state.borrow().linux_update.lifecycle.state(),
+        UpdateState::Idle
+    );
 
     let auto_row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     auto_row.add_css_class("okp-settings-switch-row");
@@ -370,11 +623,9 @@ pub(crate) fn settings_updates_section(
     auto_label.add_css_class("okp-info-label");
     auto_label.set_xalign(0.0);
     auto_text.append(&auto_label);
-    let auto_detail = gtk::Label::new(Some(if flatpak_managed {
-        "Flatpak installs are updated by their configured repository."
-    } else {
-        "Check the selected Linux feed on startup and keep available updates actionable until you choose."
-    }));
+    let auto_detail = gtk::Label::new(Some(
+        "Check the selected Linux feed on startup and keep available updates actionable until you choose.",
+    ));
     auto_detail.add_css_class("okp-update-status");
     auto_detail.set_xalign(0.0);
     auto_detail.set_width_chars(1);
@@ -389,7 +640,6 @@ pub(crate) fn settings_updates_section(
     auto_row.append(&auto_state_label);
 
     let auto_switch = settings_switch_button(auto_check_enabled, "Automatic checks");
-    auto_switch.set_sensitive(!flatpak_managed);
     let auto_state = Rc::clone(&state);
     let auto_toast = Rc::clone(&status_toast);
     let auto_state_text = auto_state_label.clone();
@@ -426,7 +676,7 @@ pub(crate) fn settings_updates_section(
         start_update_check_for_ui(Rc::clone(&check_state), Rc::clone(&check_toast), true);
     });
     actions.append(&check_button);
-    if auto_check_enabled && matches!(initial_update_status, LinuxUpdateStatus::NotChecked) {
+    if auto_check_enabled && !already_checked {
         let auto_state = Rc::clone(&state);
         let auto_toast = Rc::clone(&status_toast);
         glib::idle_add_local_once(move || {
@@ -453,92 +703,69 @@ pub(crate) fn settings_updates_section(
     section
 }
 
-pub(crate) fn linux_update_preview_status(
-    persisted_skips: &SkippedUpdateVersions,
-) -> Option<LinuxUpdateStatus> {
-    match env::var("OKP_SETTINGS_UPDATE_PREVIEW")
-        .ok()?
-        .trim()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "up-to-date" => Some(LinuxUpdateStatus::UpToDate),
-        "checking" => Some(LinuxUpdateStatus::Checking(None)),
-        "available" => Some(preview_update_offer(persisted_skips.clone(), false)),
+pub(crate) const PREVIEW_UPDATE_VERSION: &str = "0.11.0-beta.2";
+
+/// The visual-smoke hook: drives the shared lifecycle into one state so a
+/// screenshot can be taken of it. Every preview walks real transitions, so a
+/// state the model cannot reach cannot be previewed either.
+pub(crate) fn linux_update_preview_session(kind: InstallKind) -> Option<LinuxUpdateSession> {
+    let preview = env::var("OKP_SETTINGS_UPDATE_PREVIEW").ok()?;
+    // A dev build has no update lane at all, so there is nothing to draw for
+    // it; the self-applying lane stands in, which is what the visual smoke run
+    // is there to photograph. `OKP_UPDATE_INSTALL_KIND` picks a specific lane.
+    let kind = match kind.capability() {
+        UpdateCapability::Unmanaged => InstallKind::AppImage,
+        UpdateCapability::SelfApply | UpdateCapability::SystemManaged => kind,
+    };
+    build_linux_update_preview(kind, preview.trim())
+}
+
+pub(crate) fn build_linux_update_preview(
+    kind: InstallKind,
+    preview: &str,
+) -> Option<LinuxUpdateSession> {
+    let mut session = LinuxUpdateSession::for_install_kind(kind);
+    let lifecycle = &mut session.lifecycle;
+    match preview.to_ascii_lowercase().as_str() {
+        "up-to-date" => {
+            lifecycle.start_check().ok()?;
+            lifecycle.check_found_none().ok()?;
+        }
+        "checking" => {
+            lifecycle.start_check().ok()?;
+        }
+        "available" => {
+            lifecycle.start_check().ok()?;
+            lifecycle.check_found(PREVIEW_UPDATE_VERSION).ok()?;
+        }
         "skipped" => {
-            let mut skipped = persisted_skips.clone();
-            skipped.set(UpdateChannel::Public, Some("0.11.0-beta.2".to_owned()));
-            Some(preview_update_offer(skipped, false))
+            lifecycle.start_check().ok()?;
+            lifecycle.check_found(PREVIEW_UPDATE_VERSION).ok()?;
+            lifecycle.skip_offer().ok()?;
         }
-        "install-error" => Some(preview_update_offer(persisted_skips.clone(), true)),
-        "error" => Some(LinuxUpdateStatus::Failed(
-            "the update feed is temporarily unavailable".to_owned(),
-        )),
-        _ => None,
-    }
-}
-
-fn preview_update_offer(
-    skipped_versions: SkippedUpdateVersions,
-    install_error: bool,
-) -> LinuxUpdateStatus {
-    let result = LinuxUpdateCheckResult::Available(preview_pending_update());
-    let mut status =
-        LinuxUpdateStatus::from_check_result(&result, UpdateChannel::Public, &skipped_versions);
-    if install_error && let LinuxUpdateStatus::Offer(offer) = &mut status {
-        offer.state.start_install();
-        offer
-            .state
-            .install_failed("the package download was interrupted");
-    }
-    status
-}
-
-fn preview_pending_update() -> PendingLinuxUpdate {
-    PendingLinuxUpdate {
-        manager: None,
-        target: LinuxUpdateTarget::Deb(DebUpdate {
-            version: "0.11.0-beta.2".to_owned(),
-            name: "ok-player_0.11.0-beta.2_amd64.deb".to_owned(),
-            url: "https://example.invalid/ok-player.deb".to_owned(),
-            size: Some(42),
-            sums_url: None,
-            expected_sha256: None,
-        }),
-    }
-}
-
-fn linux_update_preview_check_result() -> Option<LinuxUpdateCheckResult> {
-    match env::var("OKP_SETTINGS_UPDATE_PREVIEW")
-        .ok()?
-        .trim()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "up-to-date" => Some(LinuxUpdateCheckResult::UpToDate),
-        "available" | "skipped" | "install-error" => {
-            Some(LinuxUpdateCheckResult::Available(preview_pending_update()))
+        "install-error" => {
+            lifecycle.start_check().ok()?;
+            lifecycle.check_found(PREVIEW_UPDATE_VERSION).ok()?;
+            lifecycle.start_download().ok()?;
+            lifecycle
+                .download_failed("the package download was interrupted")
+                .ok()?;
         }
-        "error" => Some(LinuxUpdateCheckResult::Failed(
-            "the update feed is temporarily unavailable".to_owned(),
-        )),
-        _ => None,
+        "restart-pending" => {
+            lifecycle.start_check().ok()?;
+            lifecycle.check_found(PREVIEW_UPDATE_VERSION).ok()?;
+            lifecycle.start_download().ok()?;
+            lifecycle.download_and_apply_needs_restart().ok()?;
+        }
+        "error" => {
+            lifecycle.start_check().ok()?;
+            lifecycle
+                .check_failed("the update feed is temporarily unavailable")
+                .ok()?;
+        }
+        _ => return None,
     }
-}
-
-pub(crate) fn update_status_intro(auto_check_enabled: bool) -> &'static str {
-    if auto_check_enabled {
-        "Automatic update checks are on. AppImage installs restart in place; .deb installs request admin approval and fall back to opening the installer."
-    } else {
-        "Automatic update checks are off. Use Check for updates any time."
-    }
-}
-
-pub(crate) fn flatpak_update_managed() -> bool {
-    flatpak_install_detected(
-        env::var_os("FLATPAK_ID").as_deref(),
-        Path::new("/.flatpak-info").is_file(),
-    )
+    Some(session)
 }
 
 pub(crate) fn start_update_check_for_ui(
@@ -546,39 +773,38 @@ pub(crate) fn start_update_check_for_ui(
     status_toast: Rc<StatusToast>,
     show_toast: bool,
 ) {
-    if state
-        .borrow()
-        .linux_update_status
-        .pending_offer()
-        .is_some_and(|offer| offer.state.is_installing())
-    {
+    if state.borrow().linux_update.is_busy() {
         return;
     }
-    let previous = state.borrow().linux_update_status.pending_offer();
-    state.borrow_mut().linux_update_status = LinuxUpdateStatus::Checking(previous);
+    if !transition_update(&state, "start check", UpdateLifecycle::start_check) {
+        return;
+    }
     refresh_linux_update_views(&state);
 
     let channel = effective_update_channel(state.borrow().settings.update_channel());
+    let install_kind = state.borrow().linux_update.install_kind();
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = sender.send(check_for_linux_update(channel));
+        let _ = sender.send(check_for_linux_update(channel, install_kind));
     });
 
     glib::timeout_add_local(Duration::from_millis(120), move || {
         match receiver.try_recv() {
-            Ok(result) => {
-                apply_update_check_result(
+            Ok(outcome) => {
+                apply_update_check_outcome(
                     Rc::clone(&state),
                     &status_toast,
                     show_toast,
                     channel,
-                    result,
+                    outcome,
                 );
                 glib::ControlFlow::Break
             }
             Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
             Err(mpsc::TryRecvError::Disconnected) => {
-                restore_after_failed_check(&state, "update check channel closed");
+                transition_update(&state, "check failed", |lifecycle| {
+                    lifecycle.check_failed("update check channel closed")
+                });
                 refresh_linux_update_views(&state);
                 glib::ControlFlow::Break
             }
@@ -586,105 +812,247 @@ pub(crate) fn start_update_check_for_ui(
     });
 }
 
+/// Runs one lifecycle transition, logging a refusal instead of forcing it.
+/// Core refuses a transition by leaving the state untouched, so a refused step
+/// leaves the surface exactly as it was rather than half-moved.
+pub(crate) fn transition_update<F>(state: &Rc<RefCell<PlayerState>>, label: &str, step: F) -> bool
+where
+    F: FnOnce(&mut UpdateLifecycle) -> Result<&UpdateState, UpdateTransitionError>,
+{
+    let mut state = state.borrow_mut();
+    match step(&mut state.linux_update.lifecycle) {
+        Ok(_) => true,
+        Err(error) => {
+            eprintln!("Update lifecycle refused {label}: {error:?}");
+            false
+        }
+    }
+}
+
+/// Takes whatever action the shared projection is offering. The surface never
+/// decides what the button does — the state does.
+pub(crate) fn take_primary_update_action(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) {
+    let presentation = state.borrow().linux_update.describe();
+    if !presentation.actions_enabled {
+        return;
+    }
+    match primary_update_action(&presentation) {
+        Some(UpdateAction::DownloadUpdate) => start_update_download(state, status_toast),
+        Some(UpdateAction::InstallAnyway) => {
+            if transition_update(&state, "install anyway", UpdateLifecycle::install_anyway) {
+                continue_after_offer_accepted(state, status_toast);
+            }
+        }
+        Some(UpdateAction::ApplyAndRestart) => start_update_apply(state, status_toast),
+        Some(UpdateAction::RestartToFinish) => restart_for_pending_update(&state, &status_toast),
+        Some(UpdateAction::Retry) => {
+            if transition_update(&state, "retry", UpdateLifecycle::retry_failed_update) {
+                continue_after_offer_accepted(state, status_toast);
+            }
+        }
+        Some(UpdateAction::CheckNow) | Some(UpdateAction::SkipVersion) | None => {}
+    }
+}
+
+/// Continues from whatever "install anyway" or "try again" restored: a payload
+/// still on disk is applied, one that has to be fetched is downloaded.
+fn continue_after_offer_accepted(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusToast>) {
+    let is_downloading = matches!(
+        state.borrow().linux_update.lifecycle.state(),
+        UpdateState::Downloading { .. }
+    );
+    refresh_linux_update_views(&state);
+    if is_downloading {
+        run_update_download(state, status_toast);
+    } else {
+        start_update_apply(state, status_toast);
+    }
+}
+
 pub(crate) fn start_update_download(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) {
-    let update = {
-        let mut state = state.borrow_mut();
-        let LinuxUpdateStatus::Offer(offer) = &mut state.linux_update_status else {
-            return;
-        };
-        if !offer.state.start_install() {
-            return;
-        }
-        offer.status_message = None;
-        offer.update.clone()
+    if !transition_update(&state, "start download", UpdateLifecycle::start_download) {
+        return;
+    }
+    refresh_linux_update_views(&state);
+    run_update_download(state, status_toast);
+}
+
+/// Fetches the payload. On the AppImage lane accepting the offer downloads,
+/// applies and asks for the restart in one step, which is why the outcome is
+/// reported through the one-call transitions.
+fn run_update_download(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusToast>) {
+    let Some(job) = update_apply_job(&state) else {
+        transition_update(&state, "download failed", |lifecycle| {
+            lifecycle.download_failed(MISSING_PAYLOAD_REASON)
+        });
+        refresh_linux_update_views(&state);
+        return;
     };
     save_current_progress(&state, false);
-    refresh_linux_update_views(&state);
 
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = sender.send(download_and_apply_linux_update(update));
+        let _ = sender.send(download_and_apply_linux_update(&job));
     });
 
-    let toast = Rc::clone(&status_toast);
     glib::timeout_add_local(Duration::from_millis(150), move || {
         match receiver.try_recv() {
-            Ok(Ok(LinuxUpdateApplyResult::Restarting)) => {
-                finish_update_install(&state, "Restarting to apply the update…".to_owned());
-                glib::ControlFlow::Break
-            }
-            Ok(Ok(LinuxUpdateApplyResult::DebInstalled(_path))) => {
-                finish_update_install(&state, "Installed. Restart OK Player to finish.".to_owned());
-                toast.show("Update installed");
-                glib::ControlFlow::Break
-            }
-            Ok(Ok(LinuxUpdateApplyResult::InstallerOpened(_path))) => {
-                defer_update_install(
-                    &state,
-                    "Installer opened. Complete it to update.".to_owned(),
-                );
-                toast.show("Installer opened");
+            Ok(Ok(LinuxUpdateApplyResult::RestartRequired)) => {
+                enter_restart_pending(&state, &status_toast, true);
                 glib::ControlFlow::Break
             }
             Ok(Err(error)) => {
-                fail_update_install(&state, error);
+                transition_update(&state, "download and apply failed", |lifecycle| {
+                    lifecycle.download_and_apply_failed(error.clone())
+                });
+                refresh_linux_update_views(&state);
+                status_toast.show("Update failed");
                 glib::ControlFlow::Break
             }
             Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
             Err(mpsc::TryRecvError::Disconnected) => {
-                fail_update_install(&state, "update worker channel closed".to_owned());
+                transition_update(&state, "download and apply failed", |lifecycle| {
+                    lifecycle.download_and_apply_failed("update worker channel closed")
+                });
+                refresh_linux_update_views(&state);
                 glib::ControlFlow::Break
             }
         }
     });
 }
 
-pub(crate) fn restore_after_failed_check(state: &Rc<RefCell<PlayerState>>, error: &str) {
-    let previous = match &state.borrow().linux_update_status {
-        LinuxUpdateStatus::Checking(offer) => offer.clone(),
-        _ => None,
+/// Applies a payload that is already staged and verified.
+pub(crate) fn start_update_apply(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusToast>) {
+    if !transition_update(&state, "start apply", UpdateLifecycle::start_apply) {
+        return;
+    }
+    refresh_linux_update_views(&state);
+    let Some(job) = update_apply_job(&state) else {
+        transition_update(&state, "apply failed", |lifecycle| {
+            lifecycle.apply_failed(MISSING_PAYLOAD_REASON)
+        });
+        refresh_linux_update_views(&state);
+        return;
     };
-    state.borrow_mut().linux_update_status = previous
-        .map(LinuxUpdateStatus::Offer)
-        .unwrap_or_else(|| LinuxUpdateStatus::Failed(error.to_owned()));
+    save_current_progress(&state, false);
+
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(apply_staged_linux_update(&job));
+    });
+
+    glib::timeout_add_local(Duration::from_millis(150), move || {
+        match receiver.try_recv() {
+            Ok(Ok(LinuxUpdateApplyResult::RestartRequired)) => {
+                enter_restart_pending(&state, &status_toast, false);
+                glib::ControlFlow::Break
+            }
+            Ok(Err(error)) => {
+                transition_update(&state, "apply failed", |lifecycle| {
+                    lifecycle.apply_failed(error.clone())
+                });
+                refresh_linux_update_views(&state);
+                status_toast.show("Update failed");
+                glib::ControlFlow::Break
+            }
+            Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                transition_update(&state, "apply failed", |lifecycle| {
+                    lifecycle.apply_failed("update worker channel closed")
+                });
+                refresh_linux_update_views(&state);
+                glib::ControlFlow::Break
+            }
+        }
+    });
 }
 
-fn finish_update_install(state: &Rc<RefCell<PlayerState>>, message: String) {
-    if let LinuxUpdateStatus::Offer(offer) = &mut state.borrow_mut().linux_update_status {
-        offer.state.install_succeeded();
-        offer.status_message = Some(message);
+/// The payload is installed and this process is still the old build. The
+/// target is recorded first: the process that comes back compares it against
+/// the version it actually came up as, so a hand-off that quietly kept the old
+/// binary is reported as a failure instead of a success (#660).
+fn enter_restart_pending(
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &Rc<StatusToast>,
+    one_call_lane: bool,
+) {
+    let moved = if one_call_lane {
+        transition_update(
+            state,
+            "download and apply",
+            UpdateLifecycle::download_and_apply_needs_restart,
+        )
+    } else {
+        transition_update(state, "apply", UpdateLifecycle::apply_needs_restart)
+    };
+    if !moved {
+        refresh_linux_update_views(state);
+        return;
+    }
+    if let Some(version) = state.borrow().linux_update.describe().target_version {
+        record_pending_restart(&version);
     }
     refresh_linux_update_views(state);
+    status_toast.show("Update installed — restart to switch");
+    // The waiting updater applies the payload once this process exits, so the
+    // hand-off is taken immediately; the restart action stays offered in case
+    // the window declines to close.
+    restart_for_pending_update(state, status_toast);
 }
 
-pub(crate) fn defer_update_install(state: &Rc<RefCell<PlayerState>>, message: String) {
-    if let LinuxUpdateStatus::Offer(offer) = &mut state.borrow_mut().linux_update_status {
-        offer.state.install_deferred();
-        offer.status_message = Some(message);
+/// Finishes a pending restart by closing the player: the Velopack updater is
+/// already waiting on this process and relaunches once it exits.
+pub(crate) fn restart_for_pending_update(
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &StatusToast,
+) {
+    save_current_progress(state, false);
+    if !close_player_window() {
+        eprintln!("Could not close the player window to finish the update restart");
+        status_toast.show("Could not restart OK Player");
     }
-    refresh_linux_update_views(state);
 }
 
-fn fail_update_install(state: &Rc<RefCell<PlayerState>>, error: String) {
-    if let LinuxUpdateStatus::Offer(offer) = &mut state.borrow_mut().linux_update_status {
-        offer.state.install_failed(error);
-    }
-    refresh_linux_update_views(state);
+/// Closes the main player window, which runs the app's ordinary shutdown path.
+/// Returns whether a window was found to close.
+pub(crate) fn close_player_window() -> bool {
+    let Some(application) = gtk::gio::Application::default() else {
+        return false;
+    };
+    let Ok(application) = application.downcast::<gtk::Application>() else {
+        return false;
+    };
+    let Some(window) = application
+        .windows()
+        .into_iter()
+        .find_map(|window| window.downcast::<gtk::ApplicationWindow>().ok())
+    else {
+        return false;
+    };
+    window.close();
+    true
 }
 
 fn skip_current_update(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
     let (channel, version) = {
         let state = state.borrow();
-        let LinuxUpdateStatus::Offer(offer) = &state.linux_update_status else {
-            return;
-        };
-        if !offer.state.can_skip() {
+        let presentation = state.linux_update.describe();
+        if presentation.secondary_action != Some(UpdateAction::SkipVersion) {
             return;
         }
-        (offer.state.channel(), offer.state.version().to_owned())
+        let Some(version) = presentation.target_version else {
+            return;
+        };
+        (
+            effective_update_channel(state.settings.update_channel()),
+            version,
+        )
     };
 
     let save_result = {
@@ -710,91 +1078,113 @@ fn skip_current_update(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusTo
         return;
     }
 
-    if let LinuxUpdateStatus::Offer(offer) = &mut state.borrow_mut().linux_update_status {
-        offer.state.skip();
-    }
+    transition_update(state, "skip offer", UpdateLifecycle::skip_offer);
     refresh_linux_update_views(state);
     status_toast.show(&format!("Skipped version {version}"));
 }
 
-pub(crate) fn apply_update_check_result(
+pub(crate) fn apply_update_check_outcome(
     state: Rc<RefCell<PlayerState>>,
     status_toast: &StatusToast,
     show_toast: bool,
     channel: UpdateChannel,
-    result: LinuxUpdateCheckResult,
+    outcome: LinuxUpdateCheckOutcome,
 ) {
-    let previous_offer = match &state.borrow().linux_update_status {
-        LinuxUpdateStatus::Checking(offer) => offer.clone(),
-        _ => None,
-    };
-    let status = {
-        let state = state.borrow();
-        match (&result, previous_offer) {
-            (LinuxUpdateCheckResult::Failed(_), Some(offer)) => LinuxUpdateStatus::Offer(offer),
-            _ => LinuxUpdateStatus::from_check_result(
-                &result,
-                channel,
-                state.settings.skipped_update_versions(),
-            ),
+    let mut toast = None;
+    match outcome {
+        LinuxUpdateCheckOutcome::UpToDate => {
+            transition_update(&state, "up to date", UpdateLifecycle::check_found_none);
+            toast = Some("OK Player is up to date");
         }
-    };
-    state.borrow_mut().linux_update_status = status.clone();
-    refresh_linux_update_views(&state);
-    match &result {
-        LinuxUpdateCheckResult::UpToDate => {
-            if show_toast {
-                status_toast.show("OK Player is up to date");
+        LinuxUpdateCheckOutcome::Failed(error) => {
+            transition_update(&state, "check failed", |lifecycle| {
+                lifecycle.check_failed(error.clone())
+            });
+            toast = Some("Update check failed");
+        }
+        LinuxUpdateCheckOutcome::Available { version, payload } => {
+            if transition_update(&state, "check found", |lifecycle| {
+                lifecycle.check_found(version.clone())
+            }) {
+                state.borrow_mut().linux_update.payload = payload;
+                toast = Some(if skip_persisted_version(&state, channel, &version) {
+                    "This version was skipped"
+                } else {
+                    "Update available"
+                });
             }
         }
-        LinuxUpdateCheckResult::ManagedExternally(_) => {}
-        LinuxUpdateCheckResult::Available(_) => {
-            if show_toast {
-                match status {
-                    LinuxUpdateStatus::Offer(offer)
-                        if matches!(offer.state.phase(), UpdateOfferPhase::Skipped) =>
-                    {
-                        status_toast.show("This version was skipped");
-                    }
-                    _ => status_toast.show("Update available"),
-                }
-            }
-        }
-        LinuxUpdateCheckResult::Failed(_) => {
-            if show_toast {
-                status_toast.show("Update check failed");
+        LinuxUpdateCheckOutcome::Staged { version, payload } => {
+            // The payload was downloaded and verified in an earlier session, so
+            // the lifecycle walks to the state that describes it rather than
+            // offering a download that has already happened.
+            if transition_update(&state, "check found staged", |lifecycle| {
+                lifecycle.check_found(version.clone())
+            }) {
+                state.borrow_mut().linux_update.payload = Some(payload);
+                transition_update(&state, "staged download", UpdateLifecycle::start_download);
+                transition_update(&state, "staged payload", UpdateLifecycle::download_finished);
+                toast = Some(if skip_persisted_version(&state, channel, &version) {
+                    "This version was skipped"
+                } else {
+                    "Update ready to install"
+                });
             }
         }
     }
+    refresh_linux_update_views(&state);
+    if let Some(message) = toast.filter(|_| show_toast) {
+        status_toast.show(message);
+    }
+}
+
+/// Re-applies a skip the user already made for this exact version, so a
+/// re-check does not resurrect an offer they dismissed.
+fn skip_persisted_version(
+    state: &Rc<RefCell<PlayerState>>,
+    channel: UpdateChannel,
+    version: &str,
+) -> bool {
+    let skipped = state
+        .borrow()
+        .settings
+        .skipped_update_versions()
+        .is_skipped(channel, version);
+    if skipped {
+        transition_update(state, "persisted skip", UpdateLifecycle::skip_offer);
+    }
+    skipped
 }
 
 pub(crate) fn check_updates_on_startup(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) {
-    state.borrow_mut().linux_update_status = LinuxUpdateStatus::Checking(None);
+    if !transition_update(&state, "start startup check", UpdateLifecycle::start_check) {
+        return;
+    }
     refresh_linux_update_views(&state);
     let channel = effective_update_channel(state.borrow().settings.update_channel());
+    let install_kind = state.borrow().linux_update.install_kind();
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = sender.send(check_for_linux_update(channel));
+        let _ = sender.send(check_for_linux_update(channel, install_kind));
     });
 
     glib::timeout_add_local(Duration::from_millis(500), move || {
         match receiver.try_recv() {
-            Ok(result) => {
-                apply_update_check_result(Rc::clone(&state), &status_toast, false, channel, result);
-                match &state.borrow().linux_update_status {
-                    LinuxUpdateStatus::Offer(offer)
-                        if matches!(offer.state.phase(), UpdateOfferPhase::Available) =>
-                    {
-                        eprintln!("Update available: {}", offer.state.version());
-                    }
-                    LinuxUpdateStatus::Failed(error) => {
-                        eprintln!("Startup update check failed: {error}");
-                    }
-                    _ => {}
-                }
+            Ok(outcome) => {
+                apply_update_check_outcome(
+                    Rc::clone(&state),
+                    &status_toast,
+                    false,
+                    channel,
+                    outcome,
+                );
+                eprintln!(
+                    "Startup update check: {}",
+                    state.borrow().linux_update.describe().updates_message
+                );
                 glib::ControlFlow::Break
             }
             Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
@@ -803,57 +1193,71 @@ pub(crate) fn check_updates_on_startup(
     });
 }
 
-pub(crate) fn check_for_linux_update(channel: UpdateChannel) -> LinuxUpdateCheckResult {
-    if let Some(preview) = linux_update_preview_check_result() {
-        return preview;
-    }
-    if flatpak_update_managed() {
-        return LinuxUpdateCheckResult::ManagedExternally(LinuxExternalUpdateManager::Flatpak);
-    }
-    let install_lane = linux_install_lane();
-    if install_lane == CandidateInstallLane::SystemPackage {
-        return LinuxUpdateCheckResult::ManagedExternally(LinuxExternalUpdateManager::Dnf);
-    }
-
+/// Discovers what is published for this install kind. The lane it reads is the
+/// install's own — a `.deb` reads the deb feed even though the app will never
+/// install what it finds, because knowing about a release is what lets the
+/// surface point at the package manager that can.
+pub(crate) fn check_for_linux_update(
+    channel: UpdateChannel,
+    install_kind: InstallKind,
+) -> LinuxUpdateCheckOutcome {
     let channel = effective_update_channel(channel);
+    let lane = candidate_install_lane(install_kind);
     if channel == UpdateChannel::Candidate {
-        return check_for_linux_candidate_channel_update();
+        return check_for_linux_candidate_channel_update(lane);
     }
 
-    if install_lane == CandidateInstallLane::Debian {
+    if lane != CandidateInstallLane::AppImage {
         return match check_for_linux_deb_update() {
-            Ok(Some(update)) => LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
-                manager: None,
-                target: LinuxUpdateTarget::Deb(update),
-            }),
-            Ok(None) => LinuxUpdateCheckResult::UpToDate,
-            Err(error) => LinuxUpdateCheckResult::Failed(error),
+            Ok(Some(update)) => LinuxUpdateCheckOutcome::Available {
+                version: update.version,
+                payload: None,
+            },
+            Ok(None) => LinuxUpdateCheckOutcome::UpToDate,
+            Err(error) => LinuxUpdateCheckOutcome::Failed(error),
         };
     }
 
     let manager = match linux_update_manager(UpdateChannel::Public) {
         Ok(manager) => manager,
-        Err(error) => return LinuxUpdateCheckResult::Failed(error),
+        Err(error) => return LinuxUpdateCheckOutcome::Failed(error),
     };
 
     if let Some(asset) = manager.get_update_pending_restart() {
-        return LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
-            manager: Some(manager),
-            target: LinuxUpdateTarget::Asset(Box::new(asset)),
-        });
+        return LinuxUpdateCheckOutcome::Staged {
+            version: asset.Version.clone(),
+            payload: SelfApplyPayload {
+                manager,
+                target: VelopackTarget::Asset(Box::new(asset)),
+            },
+        };
     }
 
     match manager.check_for_updates() {
-        Ok(UpdateCheck::UpdateAvailable(update)) => {
-            LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
-                manager: Some(manager),
-                target: LinuxUpdateTarget::Info(update),
-            })
-        }
+        Ok(UpdateCheck::UpdateAvailable(update)) => LinuxUpdateCheckOutcome::Available {
+            version: update.TargetFullRelease.Version.clone(),
+            payload: Some(SelfApplyPayload {
+                manager,
+                target: VelopackTarget::Info(update),
+            }),
+        },
         Ok(UpdateCheck::NoUpdateAvailable | UpdateCheck::RemoteIsEmpty) => {
-            LinuxUpdateCheckResult::UpToDate
+            LinuxUpdateCheckOutcome::UpToDate
         }
-        Err(error) => LinuxUpdateCheckResult::Failed(error.to_string()),
+        Err(error) => LinuxUpdateCheckOutcome::Failed(error.to_string()),
+    }
+}
+
+/// The candidate lane an install kind reads. The AppImage lane self-applies;
+/// everything else that discovers versions is served the packaged artifact it
+/// tells the user to install through their package manager.
+pub(crate) fn candidate_install_lane(install_kind: InstallKind) -> CandidateInstallLane {
+    match install_kind {
+        InstallKind::AppImage => CandidateInstallLane::AppImage,
+        InstallKind::Rpm | InstallKind::Flatpak => CandidateInstallLane::SystemPackage,
+        InstallKind::Deb | InstallKind::DevBuild | InstallKind::WindowsVelopack => {
+            CandidateInstallLane::Debian
+        }
     }
 }
 
@@ -935,24 +1339,22 @@ fn linux_candidate_update_manager(candidate: &CandidateUpdate) -> Result<UpdateM
     })
 }
 
-fn check_for_linux_candidate_channel_update() -> LinuxUpdateCheckResult {
+fn check_for_linux_candidate_channel_update(lane: CandidateInstallLane) -> LinuxUpdateCheckOutcome {
     let candidate = match fetch_linux_candidate_update() {
         Ok(Some(candidate)) => candidate,
         Ok(None) => {
             eprintln!("Candidate update stage=selection result=up-to-date");
-            return LinuxUpdateCheckResult::UpToDate;
+            return LinuxUpdateCheckOutcome::UpToDate;
         }
         Err(error) => {
             eprintln!("Candidate update stage=selection result=failed error={error}");
-            return LinuxUpdateCheckResult::Failed(error);
+            return LinuxUpdateCheckOutcome::Failed(error);
         }
     };
     eprintln!(
         "Candidate update stage=selection result=available version={} build={} commit_sha={}",
         candidate.version, candidate.build, candidate.commit_sha
     );
-    let deb_update = candidate_deb_update(&candidate);
-    let lane = linux_install_lane();
     eprintln!("Candidate update stage=install-lane lane={lane:?}");
     match candidate_channel::route_candidate_update(&candidate, lane, None) {
         Ok(CandidateUpdateRoute::Debian) => {
@@ -960,16 +1362,16 @@ fn check_for_linux_candidate_channel_update() -> LinuxUpdateCheckResult {
                 "Candidate update stage=final result=available lane=deb version={}",
                 candidate.version
             );
-            return LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
-                manager: None,
-                target: LinuxUpdateTarget::Deb(deb_update),
-            });
+            return LinuxUpdateCheckOutcome::Available {
+                version: candidate.version,
+                payload: None,
+            };
         }
         Err(candidate_channel::CandidateUpdateRouteError::MissingAppImageCheck) => {}
         Ok(_) => unreachable!("a route without an AppImage result can only select Debian"),
         Err(error) => {
             eprintln!("Candidate update stage=final result=failed error={error}");
-            return LinuxUpdateCheckResult::Failed(error.to_string());
+            return LinuxUpdateCheckOutcome::Failed(error.to_string());
         }
     }
 
@@ -978,7 +1380,7 @@ fn check_for_linux_candidate_channel_update() -> LinuxUpdateCheckResult {
         Err(error) => {
             let error = format!("candidate AppImage updater failed: {error}");
             eprintln!("Candidate update stage=velopack result=failed error={error}");
-            return LinuxUpdateCheckResult::Failed(error);
+            return LinuxUpdateCheckOutcome::Failed(error);
         }
     };
 
@@ -993,15 +1395,18 @@ fn check_for_linux_candidate_channel_update() -> LinuxUpdateCheckResult {
                     "Candidate update stage=final result=pending-restart lane=appimage version={}",
                     candidate.version
                 );
-                LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
-                    manager: Some(manager),
-                    target: LinuxUpdateTarget::Asset(Box::new(asset)),
-                })
+                LinuxUpdateCheckOutcome::Staged {
+                    version: asset.Version.clone(),
+                    payload: SelfApplyPayload {
+                        manager,
+                        target: VelopackTarget::Asset(Box::new(asset)),
+                    },
+                }
             }
             Ok(_) => unreachable!("AppImage pending restart must route to its pending asset"),
             Err(error) => {
                 eprintln!("Candidate update stage=final result=failed error={error}");
-                LinuxUpdateCheckResult::Failed(error.to_string())
+                LinuxUpdateCheckOutcome::Failed(error.to_string())
             }
         };
     }
@@ -1018,15 +1423,18 @@ fn check_for_linux_candidate_channel_update() -> LinuxUpdateCheckResult {
                         "Candidate update stage=final result=available lane=appimage version={}",
                         candidate.version
                     );
-                    LinuxUpdateCheckResult::Available(PendingLinuxUpdate {
-                        manager: Some(manager),
-                        target: LinuxUpdateTarget::Info(update),
-                    })
+                    LinuxUpdateCheckOutcome::Available {
+                        version: update.TargetFullRelease.Version.clone(),
+                        payload: Some(SelfApplyPayload {
+                            manager,
+                            target: VelopackTarget::Info(update),
+                        }),
+                    }
                 }
                 Ok(_) => unreachable!("AppImage update must route to its update information"),
                 Err(error) => {
                     eprintln!("Candidate update stage=final result=failed error={error}");
-                    LinuxUpdateCheckResult::Failed(error.to_string())
+                    LinuxUpdateCheckOutcome::Failed(error.to_string())
                 }
             }
         }
@@ -1040,7 +1448,7 @@ fn check_for_linux_candidate_channel_update() -> LinuxUpdateCheckResult {
         }
         Err(error) => {
             eprintln!("Candidate update stage=velopack result=failed error={error}");
-            LinuxUpdateCheckResult::Failed(error.to_string())
+            LinuxUpdateCheckOutcome::Failed(error.to_string())
         }
     }
 }
@@ -1049,60 +1457,99 @@ fn candidate_appimage_empty_result(
     candidate: &CandidateUpdate,
     lane: CandidateInstallLane,
     check: CandidateAppImageCheck,
-) -> LinuxUpdateCheckResult {
+) -> LinuxUpdateCheckOutcome {
     let result = candidate_channel::route_candidate_update(candidate, lane, Some(&check));
     let error = result.expect_err("a newer accepted AppImage candidate cannot be empty");
     eprintln!("Candidate update stage=velopack result=failed error={error}");
-    LinuxUpdateCheckResult::Failed(error.to_string())
-}
-
-pub(crate) fn linux_install_lane() -> CandidateInstallLane {
-    CandidateInstallLane::from_package_kind(APP_PACKAGE_KIND)
-        .expect("build.rs validates OKP_PACKAGE_KIND")
+    LinuxUpdateCheckOutcome::Failed(error.to_string())
 }
 
 pub(crate) fn linux_update_feed_base_url() -> String {
     env::var("OKP_LINUX_UPDATE_FEED_URL").unwrap_or_else(|_| LINUX_UPDATE_FEED_BASE_URL.to_owned())
 }
 
+/// The reason an apply step gives up when the payload it was going to act on
+/// is not there. Only reachable if a check landed the lifecycle on an offer
+/// without the payload that belongs to it, which is a bug rather than a state
+/// the user can produce — it fails loudly instead of reporting a success.
+pub(crate) const MISSING_PAYLOAD_REASON: &str = "the downloaded update is no longer available";
+
+/// The payload the current state acts on, taken out of the session for the
+/// worker thread.
+fn update_apply_job(state: &Rc<RefCell<PlayerState>>) -> Option<SelfApplyPayload> {
+    state.borrow_mut().linux_update.payload.take()
+}
+
+/// Downloads and applies in one step, the AppImage lane's shape. The updater
+/// is launched to wait for this process, so a success here means the payload
+/// is committed and the restart is what is left — never that the new version
+/// is already running.
 pub(crate) fn download_and_apply_linux_update(
-    update: PendingLinuxUpdate,
+    payload: &SelfApplyPayload,
 ) -> Result<LinuxUpdateApplyResult, String> {
-    match update.target {
-        LinuxUpdateTarget::Info(info) => {
-            let info = info.as_ref();
-            let manager = update
-                .manager
-                .as_ref()
-                .ok_or_else(|| "Self-update manager unavailable.".to_owned())?;
-            manager
-                .download_updates(info, None)
-                .map_err(|error| error.to_string())?;
-            manager
-                .apply_updates_and_restart(info)
-                .map_err(|error| error.to_string())?;
-            Ok(LinuxUpdateApplyResult::Restarting)
-        }
-        LinuxUpdateTarget::Asset(asset) => {
-            let asset = asset.as_ref();
-            let manager = update
-                .manager
-                .as_ref()
-                .ok_or_else(|| "Self-update manager unavailable.".to_owned())?;
-            manager
-                .apply_updates_and_restart(asset)
-                .map_err(|error| error.to_string())?;
-            Ok(LinuxUpdateApplyResult::Restarting)
-        }
-        LinuxUpdateTarget::Deb(update) => {
-            let path = download_deb_update(update)?;
-            if try_install_deb_update(&path)? {
-                Ok(LinuxUpdateApplyResult::DebInstalled(path))
-            } else {
-                open_deb_installer(&path)?;
-                Ok(LinuxUpdateApplyResult::InstallerOpened(path))
-            }
-        }
+    if let VelopackTarget::Info(info) = &payload.target {
+        payload
+            .manager
+            .download_updates(info.as_ref(), None)
+            .map_err(|error| error.to_string())?;
+    }
+    apply_staged_linux_update(payload)
+}
+
+/// Hands a staged payload to the Velopack updater. `restart` is on and the
+/// updater waits for this process, so the swap happens the moment the player
+/// exits and the new build comes up by itself.
+pub(crate) fn apply_staged_linux_update(
+    payload: &SelfApplyPayload,
+) -> Result<LinuxUpdateApplyResult, String> {
+    payload
+        .manager
+        .wait_exit_then_apply_updates(payload.target.asset(), false, true, Vec::<String>::new())
+        .map_err(|error| error.to_string())?;
+    Ok(LinuxUpdateApplyResult::RestartRequired)
+}
+
+pub(crate) const SYSTEM_UPDATER_ACTION_LABEL: &str = "Open software updater";
+pub(crate) const SYSTEM_UPDATER_ABSENT_HINT: &str =
+    "No graphical software updater was found on this desktop.";
+
+/// The desktop's own update surface, in the order a GTK desktop is likely to
+/// have one. Nothing here installs anything: the action hands the user to the
+/// tool that owns the package, and when the desktop has none the surface says
+/// so instead of pretending.
+pub(crate) const SYSTEM_SOFTWARE_SURFACES: [(&str, &[&str]); 5] = [
+    ("gnome-software", &["--mode=updates"]),
+    ("mintupdate", &[]),
+    ("update-manager", &[]),
+    ("gpk-update-viewer", &[]),
+    ("plasma-discover", &["--mode", "update"]),
+];
+
+pub(crate) fn system_software_surface() -> Option<(PathBuf, &'static [&'static str])> {
+    SYSTEM_SOFTWARE_SURFACES
+        .iter()
+        .find_map(|(name, args)| find_executable(name).map(|path| (path, *args)))
+}
+
+fn open_system_software_surface(status_toast: &StatusToast) {
+    let Some((executable, args)) = system_software_surface() else {
+        status_toast.show(SYSTEM_UPDATER_ABSENT_HINT);
+        return;
+    };
+    if let Err(error) = Command::new(&executable).args(args).spawn() {
+        eprintln!("Failed to open {}: {error}", executable.display());
+        status_toast.show("Could not open the software updater");
+    }
+}
+
+/// Where a system-managed install gets its packages, for the surface to show.
+/// Only the apt lane has a repository of OK Player's own; the others are
+/// whatever the user configured, and the app does not guess.
+pub(crate) fn system_repository_hint(install_kind: InstallKind) -> Option<&'static str> {
+    match install_kind {
+        InstallKind::Deb => Some(APT_REPOSITORY_URL),
+        InstallKind::Rpm | InstallKind::Flatpak => None,
+        InstallKind::AppImage | InstallKind::DevBuild | InstallKind::WindowsVelopack => None,
     }
 }
 
@@ -1204,120 +1651,6 @@ pub(crate) fn fetch_linux_candidate_update_from_url(
     ))
 }
 
-fn candidate_deb_update(candidate: &CandidateUpdate) -> DebUpdate {
-    DebUpdate {
-        version: candidate.version.clone(),
-        name: candidate.package.name.clone(),
-        url: candidate.package.url.clone(),
-        size: candidate.package.size,
-        sums_url: candidate.sums_url.clone(),
-        expected_sha256: Some(candidate.package.sha256.clone()),
-    }
-}
-
-pub(crate) fn download_deb_update(update: DebUpdate) -> Result<PathBuf, String> {
-    let cache_dir = linux_update_cache_dir();
-    fs::create_dir_all(&cache_dir)
-        .map_err(|error| format!("Could not create update cache: {error}"))?;
-
-    let manifest = download_deb_checksums(&update)?;
-
-    let mut response = ureq::get(&update.url)
-        .header("User-Agent", "OK Player Linux")
-        .call()
-        .map_err(|error| format!("Download failed: {error}"))?;
-    let bytes = response
-        .body_mut()
-        .with_config()
-        .limit(256 * 1024 * 1024)
-        .read_to_vec()
-        .map_err(|error| format!("Download failed: {error}"))?;
-    if let Some(expected) = update.size
-        && expected > 0
-        && bytes.len() as u64 != expected
-    {
-        return Err(format!(
-            "Download size mismatch: expected {expected} bytes, got {}.",
-            bytes.len()
-        ));
-    }
-
-    stage_verified_deb(&bytes, &manifest, &update.name, &cache_dir)
-}
-
-/// Fetches the release's `SHA256SUMS` manifest. Fails closed when the
-/// release publishes none: a stripped manifest must block the install, not
-/// downgrade it to unverified. Errors here are checksum-download errors,
-/// deliberately distinct from package download and verification errors.
-pub(crate) fn download_deb_checksums(update: &DebUpdate) -> Result<String, String> {
-    let sums_url = update.sums_url.as_deref().ok_or_else(|| {
-        format!("Release {} does not publish {SHA256SUMS_ASSET}; refusing to install an unverifiable update.", update.version)
-    })?;
-    let mut response = ureq::get(sums_url)
-        .header("User-Agent", "OK Player Linux")
-        .call()
-        .map_err(|error| format!("Checksum download failed: {error}"))?;
-    let manifest = response
-        .body_mut()
-        .with_config()
-        .limit(LINUX_SHA256SUMS_MAX_BYTES)
-        .read_to_string()
-        .map_err(|error| format!("Checksum download failed: {error}"))?;
-    verify_deb_feed_identity(update, &manifest)?;
-    Ok(manifest)
-}
-
-pub(crate) fn verify_deb_feed_identity(update: &DebUpdate, manifest: &str) -> Result<(), String> {
-    let Some(expected_sha256) = update.expected_sha256.as_deref() else {
-        return Ok(());
-    };
-    let sums = sha256sums::Sha256Sums::parse(manifest)
-        .map_err(|error| format!("Candidate identity check failed: {error}"))?;
-    let package = candidate_channel::CandidatePackage {
-        name: update.name.clone(),
-        url: update.url.clone(),
-        size: update.size,
-        sha256: expected_sha256.to_owned(),
-    };
-    package
-        .matches_sums(&sums)
-        .map_err(|error| format!("Candidate identity check failed: {error}"))
-}
-
-/// Stages the downloaded package and verifies it against the manifest
-/// before it is renamed into place. A payload that fails verification is
-/// deleted and never becomes the path handed to the privileged installer.
-pub(crate) fn stage_verified_deb(
-    bytes: &[u8],
-    manifest: &str,
-    file_name: &str,
-    cache_dir: &Path,
-) -> Result<PathBuf, String> {
-    let target = cache_dir.join(file_name);
-    let temp = cache_dir.join(format!("{file_name}.part"));
-
-    fs::write(&temp, bytes).map_err(|error| format!("Could not save update: {error}"))?;
-    if let Err(error) = verify_staged_deb(&temp, file_name, manifest) {
-        let _ = fs::remove_file(&temp);
-        return Err(error);
-    }
-    fs::rename(&temp, &target).map_err(|error| format!("Could not finalize update: {error}"))?;
-    Ok(target)
-}
-
-/// Re-reads the staged file from disk so the digest covers the exact bytes
-/// the installer will consume, not the in-memory copy they came from.
-pub(crate) fn verify_staged_deb(
-    path: &Path,
-    file_name: &str,
-    manifest: &str,
-) -> Result<(), String> {
-    let staged = fs::read(path)
-        .map_err(|error| format!("Could not read staged update for verification: {error}"))?;
-    sha256sums::verify_payload(manifest, file_name, &staged)
-        .map_err(|error| format!("Update integrity check failed: {error}"))
-}
-
 pub(crate) fn linux_update_cache_dir() -> PathBuf {
     if let Some(cache_dir) =
         env::var_os("OKP_LINUX_UPDATE_CACHE_DIR").filter(|value| !value.is_empty())
@@ -1331,96 +1664,6 @@ pub(crate) fn linux_update_cache_dir() -> PathBuf {
         return PathBuf::from(home).join(".cache/ok-player/updates");
     }
     env::temp_dir().join("ok-player/updates")
-}
-
-pub(crate) fn deb_self_install_available() -> bool {
-    find_executable("pkexec").is_some()
-        && (find_executable("apt-get").is_some() || find_executable("apt").is_some())
-}
-
-pub(crate) fn try_install_deb_update(path: &Path) -> Result<bool, String> {
-    if env::var_os("OKP_SKIP_DEB_SELF_INSTALL").is_some() {
-        return Ok(false);
-    }
-
-    let Some(pkexec) = find_executable("pkexec") else {
-        return Ok(false);
-    };
-    let Some(apt) = find_executable("apt-get").or_else(|| find_executable("apt")) else {
-        return Ok(false);
-    };
-
-    let mut child = Command::new(pkexec)
-        .arg(apt)
-        .arg("install")
-        .arg("-y")
-        .arg(path)
-        .spawn()
-        .map_err(|error| {
-            format!(
-                "Downloaded to {}, but could not request administrator approval: {error}",
-                path.display()
-            )
-        })?;
-
-    let timeout = deb_self_install_timeout();
-    match wait_for_child_with_timeout(&mut child, timeout).map_err(|error| {
-        format!(
-            "Downloaded to {}, but could not wait for administrator approval: {error}",
-            path.display()
-        )
-    })? {
-        Some(status) if status.success() => Ok(true),
-        Some(status) => {
-            eprintln!(
-                "Privileged .deb install exited with {status}; falling back to installer open."
-            );
-            Ok(false)
-        }
-        None => {
-            let _ = child.kill();
-            let _ = child.wait();
-            eprintln!(
-                "Privileged .deb install timed out after {}s; falling back to installer open.",
-                timeout.as_secs()
-            );
-            Ok(false)
-        }
-    }
-}
-
-pub(crate) fn deb_self_install_timeout() -> Duration {
-    parse_deb_self_install_timeout(
-        env::var("OKP_DEB_SELF_INSTALL_TIMEOUT_SECS")
-            .ok()
-            .as_deref(),
-    )
-}
-
-pub(crate) fn parse_deb_self_install_timeout(value: Option<&str>) -> Duration {
-    value
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .filter(|seconds| *seconds > 0)
-        .map(Duration::from_secs)
-        .unwrap_or(DEB_SELF_INSTALL_TIMEOUT)
-}
-
-pub(crate) fn wait_for_child_with_timeout(
-    child: &mut Child,
-    timeout: Duration,
-) -> Result<Option<ExitStatus>, std::io::Error> {
-    let started = Instant::now();
-    loop {
-        if let Some(status) = child.try_wait()? {
-            return Ok(Some(status));
-        }
-        let elapsed = started.elapsed();
-        if elapsed >= timeout {
-            return Ok(None);
-        }
-        let remaining = timeout.saturating_sub(elapsed);
-        std::thread::sleep(remaining.min(Duration::from_millis(100)));
-    }
 }
 
 pub(crate) fn find_executable(name: &str) -> Option<PathBuf> {
@@ -1445,23 +1688,6 @@ fn is_executable_file(path: &Path) -> bool {
     fs::metadata(path)
         .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
         .unwrap_or(false)
-}
-
-pub(crate) fn open_deb_installer(path: &Path) -> Result<(), String> {
-    if env::var_os("OKP_SKIP_OPEN_INSTALLER").is_some() {
-        return Ok(());
-    }
-
-    Command::new("xdg-open")
-        .arg(path)
-        .spawn()
-        .map_err(|error| {
-            format!(
-                "Downloaded to {}, but could not open installer: {error}",
-                path.display()
-            )
-        })?;
-    Ok(())
 }
 
 pub(crate) fn open_external_url(url: &str) {

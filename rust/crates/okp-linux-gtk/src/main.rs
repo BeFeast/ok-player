@@ -31,19 +31,21 @@ use okp_core::player_commands::{
     PlayerCommandMenuPage, PlayerCommandSurface, ResolvedPlayerCommand,
 };
 use okp_core::playlist::{Playlist, PlaylistItem, QueueInsertMode, RepeatMode};
-use okp_core::settings::{AppearanceTheme, HistoryRetention, SkippedUpdateVersions, UpdateChannel};
+use okp_core::settings::{AppearanceTheme, HistoryRetention, UpdateChannel};
 use okp_core::settings_navigation::{SETTINGS_RAIL_ORDER, SettingsPage, search_settings};
 use okp_core::shortcuts::{
     self, ShortcutAction, ShortcutBinding, ShortcutChord, ShortcutModifiers, ShortcutSlot,
 };
-use okp_core::update_selection::{
-    self, DebFeed, DebUpdate, SHA256SUMS_ASSET, UpdateOfferPhase, UpdateOfferState,
+use okp_core::update_lifecycle::{
+    CarriedOffer, InstallEvidence, InstallKind, PackageOwnership, UpdateAction, UpdateCapability,
+    UpdateLifecycle, UpdatePresentation, UpdateState, UpdateTransitionError, detect_install_kind,
 };
+use okp_core::update_selection::{self, DebFeed, DebUpdate};
 use okp_core::video_geometry::{VideoGeometry, VideoGeometryAction};
 use okp_core::{
     AppIdentity, aspect_resize, chapter_math, fullscreen_toggle, launch_args, lrc, m3u,
     media_formats, natural_compare, network_media, ok_player_uri, online_subtitles,
-    progress_report, scribe_subtitles, seek_readout, sha256sums, subtitle_delay, subtitle_import,
+    progress_report, scribe_subtitles, seek_readout, subtitle_delay, subtitle_import,
     subtitle_search, time_code, timeline_buffer, video_click, volume, window_fit, youtube_open,
 };
 use okp_mpv::{
@@ -160,8 +162,10 @@ const LINUX_DEB_FEED_URL: &str = "https://befeast.github.io/ok-player/updates/li
 // OKP_LINUX_CANDIDATE_FEED_URL.
 const LINUX_CANDIDATE_FEED_URL: &str =
     "https://github.com/BeFeast/ok-player/releases/download/linux-candidate/candidate.linux.json";
-const LINUX_SHA256SUMS_MAX_BYTES: u64 = 1024 * 1024;
-const DEB_SELF_INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
+// The signed APT repository published beside the feeds (issues #687, #689). A
+// `.deb` install is updated by apt out of this repository, so the Updates page
+// points at it instead of at a file the app downloaded.
+const APT_REPOSITORY_URL: &str = "https://befeast.github.io/ok-player/apt";
 const SETTINGS_REFERENCE_WIDTH: i32 = 760;
 const SETTINGS_REFERENCE_HEIGHT: i32 = 560;
 const SETTINGS_TITLEBAR_HEIGHT: i32 = 42;
@@ -248,7 +252,7 @@ struct PlayerState {
     history: history::HistoryStore,
     settings: settings::SettingsStore,
     screenshot_jobs: screenshots::ScreenshotJobs,
-    linux_update_status: LinuxUpdateStatus,
+    linux_update: LinuxUpdateSession,
     linux_update_views: Vec<LinuxUpdateView>,
     pending_audio_device_restore: Option<PendingAudioDeviceRestore>,
     render_target_size: Option<okp_mpv::RenderTargetSize>,
@@ -887,98 +891,66 @@ struct StatePollContext {
     mpris_signals: mpsc::Sender<MprisSignal>,
 }
 
-#[derive(Clone)]
-struct PendingLinuxUpdate {
-    manager: Option<UpdateManager>,
-    target: LinuxUpdateTarget,
+/// The payload the self-applying lane acts on, kept beside the shared
+/// lifecycle. Only a [`UpdateCapability::SelfApply`] install ever holds one:
+/// on every system-managed lane the app downloads and installs nothing.
+struct SelfApplyPayload {
+    manager: UpdateManager,
+    target: VelopackTarget,
 }
 
-#[derive(Clone)]
-enum LinuxUpdateTarget {
+enum VelopackTarget {
+    /// A discovered release that still has to be downloaded.
     Info(Box<UpdateInfo>),
+    /// A payload already downloaded and verified, waiting to be applied.
     Asset(Box<VelopackAsset>),
-    Deb(DebUpdate),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LinuxExternalUpdateManager {
-    Flatpak,
-    Dnf,
+impl VelopackTarget {
+    fn asset(&self) -> &VelopackAsset {
+        match self {
+            Self::Info(info) => &info.TargetFullRelease,
+            Self::Asset(asset) => asset,
+        }
+    }
 }
 
-enum LinuxUpdateCheckResult {
+/// What a completed check found. The shell reports the finding; the shared
+/// lifecycle decides what it means for this install kind.
+enum LinuxUpdateCheckOutcome {
     UpToDate,
-    ManagedExternally(LinuxExternalUpdateManager),
-    Available(PendingLinuxUpdate),
+    /// A newer version exists. `payload` is present only on the self-applying
+    /// lane, where the app is the one that fetches it.
+    Available {
+        version: String,
+        payload: Option<SelfApplyPayload>,
+    },
+    /// A newer version whose payload is already downloaded and verified from an
+    /// earlier session.
+    Staged {
+        version: String,
+        payload: SelfApplyPayload,
+    },
     Failed(String),
 }
 
-#[derive(Clone)]
-struct LinuxUpdateOffer {
-    update: PendingLinuxUpdate,
-    state: UpdateOfferState,
-    status_message: Option<String>,
+/// The update lifecycle of this install plus the payload that belongs to it.
+///
+/// The lifecycle is `okp_core`'s: this shell gathers evidence, reports what
+/// happened, and renders [`UpdateLifecycle::describe`]. It decides nothing
+/// about install kinds, capabilities or wording of its own.
+struct LinuxUpdateSession {
+    lifecycle: UpdateLifecycle,
+    payload: Option<SelfApplyPayload>,
 }
 
-#[derive(Clone, Default)]
-enum LinuxUpdateStatus {
-    #[default]
-    NotChecked,
-    Checking(Option<LinuxUpdateOffer>),
-    UpToDate,
-    ManagedExternally(LinuxExternalUpdateManager),
-    Offer(LinuxUpdateOffer),
-    Failed(String),
-}
-
-impl LinuxUpdateStatus {
-    fn from_check_result(
-        result: &LinuxUpdateCheckResult,
-        channel: UpdateChannel,
-        skipped_versions: &SkippedUpdateVersions,
-    ) -> Self {
-        match result {
-            LinuxUpdateCheckResult::UpToDate => Self::UpToDate,
-            LinuxUpdateCheckResult::ManagedExternally(manager) => Self::ManagedExternally(*manager),
-            LinuxUpdateCheckResult::Available(update) => {
-                let version = update
-                    .target_version()
-                    .unwrap_or_else(|| "new version".to_owned());
-                Self::Offer(LinuxUpdateOffer {
-                    update: update.clone(),
-                    state: UpdateOfferState::discovered(channel, version, skipped_versions),
-                    status_message: None,
-                })
-            }
-            LinuxUpdateCheckResult::Failed(error) => Self::Failed(error.clone()),
-        }
-    }
-
-    fn pending_offer(&self) -> Option<LinuxUpdateOffer> {
-        match self {
-            Self::Offer(offer) => Some(offer.clone()),
-            Self::Checking(offer) => offer.clone(),
-            _ => None,
-        }
-    }
-
-    fn settings_status_text(&self, auto_check_enabled: bool) -> String {
-        match self {
-            Self::NotChecked => update_status_intro(auto_check_enabled).to_owned(),
-            Self::Checking(Some(offer)) => {
-                format!("Checking for a newer version. {}", offer.status_text())
-            }
-            Self::Checking(None) => "Checking the update feed...".to_owned(),
-            Self::UpToDate => "OK Player is up to date".to_owned(),
-            Self::ManagedExternally(LinuxExternalUpdateManager::Flatpak) => {
-                "Updates are managed by Flatpak".to_owned()
-            }
-            Self::ManagedExternally(LinuxExternalUpdateManager::Dnf) => {
-                "Updates are managed by DNF.".to_owned()
-            }
-            Self::Offer(offer) => offer.status_text(),
-            Self::Failed(error) => format!("Update check failed: {error}"),
-        }
+impl Default for LinuxUpdateSession {
+    /// Until the install-kind probe resolves, the session is the one thing that
+    /// is true of every process before it knows how it was installed: nothing
+    /// is known to update it. The probe replaces this within a second of
+    /// startup (see [`adopt_detected_install_kind`]).
+    fn default() -> Self {
+        Self::for_install_kind(InstallKind::DevBuild)
     }
 }
 
@@ -996,13 +968,18 @@ struct LinuxUpdateView {
     status: glib::WeakRef<gtk::Label>,
     primary: glib::WeakRef<gtk::Button>,
     skip: glib::WeakRef<gtk::Button>,
+    /// Opens the desktop's own software surface. Offered only where a system
+    /// tool owns the payload, and disabled when this desktop has none.
+    system: glib::WeakRef<gtk::Button>,
     check: Option<glib::WeakRef<gtk::Button>>,
 }
 
+/// What applying a staged payload did. The self-applying lane hands the
+/// payload to the Velopack updater, which waits for this process to exit
+/// before it swaps the install — so a successful hand-off means "installed,
+/// restart to switch", never "you are now on the new version" (#660).
 enum LinuxUpdateApplyResult {
-    Restarting,
-    DebInstalled(PathBuf),
-    InstallerOpened(PathBuf),
+    RestartRequired,
 }
 
 #[derive(Clone)]
@@ -2070,6 +2047,9 @@ struct AboutSnapshot {
     gtk: String,
     cpu: String,
     install: String,
+    /// What the shared lifecycle says about the running build, so About and the
+    /// Updates page cannot disagree about which version is executing (#660).
+    update_status: String,
 }
 
 impl AboutSnapshot {
@@ -2099,62 +2079,87 @@ impl AboutSnapshot {
             ),
             cpu: env::consts::ARCH.to_owned(),
             install: "—".to_owned(),
+            update_status: state.linux_update.describe().about_message,
         }
     }
 }
 
-impl PendingLinuxUpdate {
-    fn target_version(&self) -> Option<String> {
-        match &self.target {
-            LinuxUpdateTarget::Info(info) => Some(info.TargetFullRelease.Version.clone()),
-            LinuxUpdateTarget::Asset(asset) => Some(asset.Version.clone()),
-            LinuxUpdateTarget::Deb(update) => Some(update.version.clone()),
-        }
-    }
-}
-
-impl LinuxUpdateOffer {
-    fn status_text(&self) -> String {
-        let version = self.state.version();
-        match self.state.phase() {
-            UpdateOfferPhase::Available => self
-                .status_message
-                .clone()
-                .unwrap_or_else(|| format!("Version {version} is available.")),
-            UpdateOfferPhase::Skipped => format!(
-                "Version {version} was skipped on the {} channel. You can still install it manually.",
-                update_channel_label(self.state.channel())
-            ),
-            UpdateOfferPhase::Installing => {
-                format!("Downloading and installing version {version}…")
-            }
-            UpdateOfferPhase::InstallFailed(error) => {
-                format!("Update {version} failed: {error}. You can retry.")
-            }
-            UpdateOfferPhase::Installed => self
-                .status_message
-                .clone()
-                .unwrap_or_else(|| format!("Version {version} was installed.")),
+impl LinuxUpdateSession {
+    /// A session for an install of `kind`, at the start of the shared
+    /// lifecycle. An install a system tool owns outright — one that never
+    /// discovers versions at all — starts by saying who updates it instead of
+    /// offering a check.
+    fn for_install_kind(kind: InstallKind) -> Self {
+        let lifecycle = match UpdateLifecycle::managed_externally(kind, APP_BUILD_VERSION) {
+            Ok(lifecycle) => lifecycle,
+            Err(_) => UpdateLifecycle::new(kind, APP_BUILD_VERSION),
+        };
+        Self {
+            lifecycle,
+            payload: None,
         }
     }
 
-    fn title_text(&self) -> String {
-        match self.state.phase() {
-            UpdateOfferPhase::Skipped => "Skipped update".to_owned(),
-            UpdateOfferPhase::Installing => "Updating OK Player".to_owned(),
-            UpdateOfferPhase::InstallFailed(_) => "Update failed".to_owned(),
-            UpdateOfferPhase::Installed => "Update complete".to_owned(),
-            UpdateOfferPhase::Available => {
-                format!("Update available · {}", self.state.version())
-            }
+    /// The session for a process that came up after a self-applied update.
+    ///
+    /// `pending` is the target recorded before the hand-off (see
+    /// [`record_pending_restart`]). Core compares it against the version this
+    /// process actually came up as, so a restart that silently came back on the
+    /// old binary is reported as the failure it is instead of a success (#660).
+    fn resumed(kind: InstallKind, pending: Option<String>) -> Self {
+        let mut session = Self::for_install_kind(kind);
+        if let Some(pending) = pending
+            && let Ok(lifecycle) =
+                UpdateLifecycle::resumed_after_restart(kind, APP_BUILD_VERSION, pending)
+        {
+            session.lifecycle = lifecycle;
         }
+        session
     }
-}
 
-fn update_channel_label(channel: UpdateChannel) -> &'static str {
-    match channel {
-        UpdateChannel::Public => "public",
-        UpdateChannel::Candidate => "candidate",
+    fn describe(&self) -> UpdatePresentation {
+        self.lifecycle.describe()
+    }
+
+    fn install_kind(&self) -> InstallKind {
+        self.lifecycle.install_kind()
+    }
+
+    /// Whether a download or an apply is in flight. Neither can be interrupted
+    /// by a fresh check, and core refuses one from those states anyway.
+    fn is_busy(&self) -> bool {
+        matches!(
+            self.lifecycle.state(),
+            UpdateState::Downloading { .. } | UpdateState::Applying { .. }
+        )
+    }
+
+    /// Whether the discovered offer is worth interrupting playback for. Derived
+    /// from the shared state, never from what the surface happens to say.
+    fn offer_surface_visible(&self) -> bool {
+        match self.lifecycle.state() {
+            UpdateState::Available { .. }
+            | UpdateState::AvailableExternally { .. }
+            | UpdateState::Downloading { .. }
+            | UpdateState::ReadyToApply { .. }
+            | UpdateState::Applying { .. }
+            | UpdateState::RestartPending { .. }
+            | UpdateState::Failed {
+                target: Some(_), ..
+            } => true,
+            // A refresh keeps the offer it is refreshing on screen; a skipped
+            // one was not on screen and does not appear because of a re-check.
+            UpdateState::Checking {
+                carried: Some(carried),
+            } => !matches!(carried, CarriedOffer::Skipped { .. }),
+            UpdateState::Idle
+            | UpdateState::Checking { carried: None }
+            | UpdateState::UpToDate
+            | UpdateState::Skipped { .. }
+            | UpdateState::ManagedExternally { .. }
+            | UpdateState::Running { .. }
+            | UpdateState::Failed { target: None, .. } => false,
+        }
     }
 }
 
