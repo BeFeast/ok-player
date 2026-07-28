@@ -222,10 +222,10 @@ pub fn detect_install_kind(evidence: &InstallEvidence) -> InstallKind {
 pub enum UpdateState {
     /// Nothing has been checked yet in this session.
     Idle,
-    /// A check is in flight. `previous_target` is the offer that was already
-    /// on screen when the user asked to re-check, so a failed refresh restores
-    /// it instead of dropping a known update.
-    Checking { previous_target: Option<String> },
+    /// A check is in flight. `carried` is the offer that was already on screen
+    /// when the user asked to re-check; a failed refresh puts it back exactly
+    /// as it was instead of dropping a known update or demoting it.
+    Checking { carried: Option<CarriedOffer> },
     /// The check completed and this build is the newest one.
     UpToDate,
     /// A newer version exists and this install can apply it itself.
@@ -276,11 +276,42 @@ impl UpdateState {
             | Self::RestartPending { version }
             | Self::Skipped { version } => Some(version),
             Self::Failed { target, .. } => target.as_deref(),
-            Self::Checking { previous_target } => previous_target.as_deref(),
+            Self::Checking { carried } => carried.as_ref().map(CarriedOffer::version),
             Self::Idle | Self::UpToDate | Self::ManagedExternally { .. } => None,
             // `Running` carries the version that is executing, which is the
             // running version rather than a target still to be reached.
             Self::Running { .. } => None,
+        }
+    }
+}
+
+/// The offer a refresh carries through [`UpdateState::Checking`], restored
+/// intact when the refresh fails. Keeping the whole offer — not just its
+/// version — is what lets a failed re-check leave an available update available
+/// and a skipped one skipped.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CarriedOffer {
+    Available { version: String },
+    AvailableExternally { version: String, hint: String },
+    Skipped { version: String },
+}
+
+impl CarriedOffer {
+    pub fn version(&self) -> &str {
+        match self {
+            Self::Available { version }
+            | Self::AvailableExternally { version, .. }
+            | Self::Skipped { version } => version,
+        }
+    }
+
+    fn into_state(self) -> UpdateState {
+        match self {
+            Self::Available { version } => UpdateState::Available { version },
+            Self::AvailableExternally { version, hint } => {
+                UpdateState::AvailableExternally { version, hint }
+            }
+            Self::Skipped { version } => UpdateState::Skipped { version },
         }
     }
 }
@@ -382,6 +413,11 @@ pub struct UpdatePresentation {
     /// "Skip this version" on a live offer. Kept in the projection so a shell
     /// never has to maintain its own parallel offer model.
     pub secondary_action: Option<UpdateAction>,
+    /// What went wrong with the last attempt while the state carried on — a
+    /// refresh that failed over a standing offer. Already folded into
+    /// [`Self::updates_message`]; exposed separately for surfaces that render
+    /// the offer and its status line as two things, as the GTK one does.
+    pub notice: Option<String>,
 }
 
 /// The update state machine for one install.
@@ -394,6 +430,10 @@ pub struct UpdateLifecycle {
     install_kind: InstallKind,
     running_version: String,
     state: UpdateState,
+    /// What went wrong with the last attempt, when the state itself carried on
+    /// regardless — a failed refresh that restored the offer it was
+    /// refreshing. Cleared by every transition that succeeds.
+    notice: Option<String>,
 }
 
 impl UpdateLifecycle {
@@ -404,6 +444,7 @@ impl UpdateLifecycle {
             install_kind,
             running_version: running_version.into(),
             state: UpdateState::Idle,
+            notice: None,
         }
     }
 
@@ -428,6 +469,7 @@ impl UpdateLifecycle {
             state: UpdateState::ManagedExternally {
                 hint: install_kind.system_update_hint_text().to_owned(),
             },
+            notice: None,
         })
     }
 
@@ -454,6 +496,7 @@ impl UpdateLifecycle {
             state: UpdateState::ReadyToApply {
                 version: staged_version.into(),
             },
+            notice: None,
         })
     }
 
@@ -486,6 +529,7 @@ impl UpdateLifecycle {
             state: UpdateState::RestartPending {
                 version: pending_version.into(),
             },
+            notice: None,
         };
         lifecycle.restarted_into(running_version)?;
         Ok(lifecycle)
@@ -524,12 +568,40 @@ impl UpdateLifecycle {
             | UpdateState::Running { .. }
             | UpdateState::Failed { .. } => {
                 // A re-check must not lose the offer already on screen: if it
-                // fails, the known version is restored rather than dropped.
-                let previous_target = self.state.target_version().map(str::to_owned);
-                Ok(self.enter(UpdateState::Checking { previous_target }))
+                // fails, that offer comes back exactly as it was.
+                let carried = self.carried_offer();
+                Ok(self.enter(UpdateState::Checking { carried }))
             }
             _ => Err(self.rejected()),
         }
+    }
+
+    /// The offer currently on screen, in the form a failed refresh would put
+    /// back. A failure that retained a target comes back as the offer a retry
+    /// would restore, which is what the surface was showing.
+    fn carried_offer(&self) -> Option<CarriedOffer> {
+        let version = match &self.state {
+            UpdateState::Available { version }
+            | UpdateState::AvailableExternally { version, .. }
+            | UpdateState::Failed {
+                target: Some(version),
+                ..
+            } => version.clone(),
+            UpdateState::Skipped { version } => {
+                return Some(CarriedOffer::Skipped {
+                    version: version.clone(),
+                });
+            }
+            _ => return None,
+        };
+        Some(if self.capability() == UpdateCapability::SelfApply {
+            CarriedOffer::Available { version }
+        } else {
+            CarriedOffer::AvailableExternally {
+                version,
+                hint: self.install_kind.system_update_hint_text().to_owned(),
+            }
+        })
     }
 
     /// The check completed and found nothing newer.
@@ -572,17 +644,22 @@ impl UpdateLifecycle {
         &mut self,
         reason: impl Into<String>,
     ) -> Result<&UpdateState, UpdateTransitionError> {
-        match &self.state {
-            // The offer that was on screen before the refresh survives it; a
-            // check that never found anything has none to retain.
-            UpdateState::Checking { previous_target } => {
-                let target = previous_target.clone();
-                Ok(self.enter(UpdateState::Failed {
-                    reason: reason.into(),
-                    target,
-                }))
+        let UpdateState::Checking { carried } = &self.state else {
+            return Err(self.rejected());
+        };
+        let reason = reason.into();
+        // The offer that was on screen before the refresh comes back intact,
+        // with the error carried beside it as a notice. Only a check that had
+        // no offer to protect ends in `Failed`.
+        match carried.clone() {
+            Some(offer) => {
+                let restored = offer.into_state();
+                Ok(self.enter_with_notice(restored, format!("Update check failed: {reason}")))
             }
-            _ => Err(self.rejected()),
+            None => Ok(self.enter(UpdateState::Failed {
+                reason,
+                target: None,
+            })),
         }
     }
 
@@ -753,10 +830,12 @@ impl UpdateLifecycle {
     /// kept its target, so the same version becomes actionable again instead of
     /// vanishing until the next check. A check that failed before finding
     /// anything has nothing to restore and is refused —
-    /// [`Self::start_check`] is its retry. An [`UpdateCapability::Unmanaged`]
-    /// install has no offers at all.
+    /// [`Self::start_check`] is its retry. Only a
+    /// [`UpdateCapability::SelfApply`] install can reach a failure that holds a
+    /// target: the download, apply and restart steps are its own, and a failed
+    /// re-check restores the standing offer directly rather than failing.
     pub fn retry_failed_update(&mut self) -> Result<&UpdateState, UpdateTransitionError> {
-        if self.capability() == UpdateCapability::Unmanaged {
+        if self.capability() != UpdateCapability::SelfApply {
             return Err(UpdateTransitionError::CapabilityForbids(self.capability()));
         }
         let UpdateState::Failed {
@@ -767,17 +846,7 @@ impl UpdateLifecycle {
             return Err(self.rejected());
         };
         let version = version.clone();
-        // The offer comes back exactly as its capability allows: actionable in
-        // app only where the app applies its own updates.
-        let restored = if self.capability() == UpdateCapability::SelfApply {
-            UpdateState::Available { version }
-        } else {
-            UpdateState::AvailableExternally {
-                version,
-                hint: self.install_kind.system_update_hint_text().to_owned(),
-            }
-        };
-        Ok(self.enter(restored))
+        Ok(self.enter(UpdateState::Available { version }))
     }
 
     /// Everything the surfaces may show for the current state. The only place
@@ -786,7 +855,10 @@ impl UpdateLifecycle {
         let capability = self.capability();
         let target_version = self.state.target_version().map(str::to_owned);
         let claim = self.version_claim();
-        let updates_message = self.updates_message(&claim);
+        let updates_message = match &self.notice {
+            Some(notice) => format!("{} {notice}", self.updates_message(&claim)),
+            None => self.updates_message(&claim),
+        };
         let about_message = self.about_message(&claim);
         UpdatePresentation {
             install_kind: self.install_kind,
@@ -798,6 +870,7 @@ impl UpdateLifecycle {
             about_message,
             action: self.action(),
             secondary_action: self.secondary_action(),
+            notice: self.notice.clone(),
         }
     }
 
@@ -823,17 +896,17 @@ impl UpdateLifecycle {
             UpdateState::Failed {
                 target: Some(version),
                 ..
-            }
-            // A refresh does not un-know the offer it is refreshing.
-            | UpdateState::Checking {
-                previous_target: Some(version),
             } => VersionClaim::Superseded {
                 newer: version.clone(),
             },
+            // A refresh does not un-know the offer it is refreshing.
+            UpdateState::Checking {
+                carried: Some(offer),
+            } => VersionClaim::Superseded {
+                newer: offer.version().to_owned(),
+            },
             UpdateState::Idle
-            | UpdateState::Checking {
-                previous_target: None,
-            }
+            | UpdateState::Checking { carried: None }
             | UpdateState::ManagedExternally { .. }
             | UpdateState::Failed { target: None, .. } => VersionClaim::Unknown,
         }
@@ -950,6 +1023,13 @@ impl UpdateLifecycle {
 
     fn enter(&mut self, next: UpdateState) -> &UpdateState {
         self.state = next;
+        self.notice = None;
+        &self.state
+    }
+
+    fn enter_with_notice(&mut self, next: UpdateState, notice: String) -> &UpdateState {
+        self.state = next;
+        self.notice = Some(notice);
         &self.state
     }
 
@@ -977,10 +1057,14 @@ mod tests {
         InstallEvidence::default()
     }
 
-    fn checking(previous: Option<&str>) -> UpdateState {
-        UpdateState::Checking {
-            previous_target: previous.map(str::to_owned),
-        }
+    fn checking(carried: Option<CarriedOffer>) -> UpdateState {
+        UpdateState::Checking { carried }
+    }
+
+    fn carried_available(version: &str) -> Option<CarriedOffer> {
+        Some(CarriedOffer::Available {
+            version: version.to_owned(),
+        })
     }
 
     /// Drives a lifecycle as far as the install kind allows, calling `observe`
@@ -1532,12 +1616,35 @@ mod tests {
             failed_recheck.check_failed("feed unavailable").unwrap();
             assert!(
                 matches!(
-                    failed_recheck.retry_failed_update().unwrap(),
+                    failed_recheck.state(),
                     UpdateState::AvailableExternally { .. }
                 ),
                 "{kind} must come back as an announcement, never an in-app offer"
             );
             assert_eq!(failed_recheck.describe().action, None);
+
+            let mut failed_check = UpdateLifecycle::new(kind, "1.0.0");
+            failed_check.start_check().unwrap();
+            failed_check.check_failed("network unreachable").unwrap();
+            assert_eq!(
+                failed_check.retry_failed_update(),
+                Err(UpdateTransitionError::CapabilityForbids(
+                    UpdateCapability::SystemManaged
+                )),
+                "{kind} resumes no in-app offer of its own"
+            );
+
+            let mut restored = UpdateLifecycle::new(kind, "1.0.0");
+            restored.start_check().unwrap();
+            restored.check_found("2.0.0").unwrap();
+            restored.start_check().unwrap();
+            restored.check_failed("feed unavailable").unwrap();
+            restored.skip_offer().unwrap();
+            assert!(
+                matches!(restored.state(), UpdateState::Skipped { .. }),
+                "{kind} can still skip a restored announcement"
+            );
+            assert_eq!(restored.describe().action, None);
 
             let mut skipped = UpdateLifecycle::new(kind, "1.0.0");
             skipped.start_check().unwrap();
@@ -1898,7 +2005,7 @@ mod tests {
 
         assert_eq!(
             lifecycle.start_check().unwrap(),
-            &checking(Some("2.0.0")),
+            &checking(carried_available("2.0.0")),
             "a refresh must carry the offer it is refreshing"
         );
         assert_eq!(
@@ -1910,13 +2017,89 @@ mod tests {
         );
 
         lifecycle.check_failed("feed unavailable").unwrap();
-        assert_eq!(lifecycle.state().target_version(), Some("2.0.0"));
         assert_eq!(
-            lifecycle.retry_failed_update().unwrap(),
+            lifecycle.state(),
             &UpdateState::Available {
                 version: "2.0.0".to_owned()
             },
-            "the previous offer must survive a failed refresh"
+            "the previous offer must come back intact, not demoted to a failure"
+        );
+
+        let presentation = lifecycle.describe();
+        assert_eq!(
+            presentation.action,
+            Some(UpdateAction::DownloadUpdate),
+            "the offer keeps its own action instead of turning into a retry"
+        );
+        assert_eq!(
+            presentation.secondary_action,
+            Some(UpdateAction::SkipVersion)
+        );
+        let notice = presentation
+            .notice
+            .as_deref()
+            .expect("a failed refresh must still say it failed");
+        assert!(notice.contains("feed unavailable"), "notice was {notice}");
+        assert!(
+            presentation.updates_message.contains("feed unavailable"),
+            "the one-line message must carry the failure too: {}",
+            presentation.updates_message
+        );
+    }
+
+    #[test]
+    fn a_failed_recheck_leaves_a_skipped_offer_skipped() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        lifecycle.start_check().unwrap();
+        lifecycle.check_found("2.0.0").unwrap();
+        lifecycle.skip_offer().unwrap();
+
+        lifecycle.start_check().unwrap();
+        lifecycle.check_failed("feed unavailable").unwrap();
+
+        assert_eq!(
+            lifecycle.state(),
+            &UpdateState::Skipped {
+                version: "2.0.0".to_owned()
+            },
+            "a failed refresh must not un-skip an offer"
+        );
+        assert_eq!(
+            lifecycle.describe().action,
+            Some(UpdateAction::InstallAnyway)
+        );
+    }
+
+    #[test]
+    fn a_check_with_no_offer_to_protect_still_fails() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        lifecycle.start_check().unwrap();
+        lifecycle.check_failed("network unreachable").unwrap();
+
+        assert_eq!(
+            lifecycle.state(),
+            &UpdateState::Failed {
+                reason: "network unreachable".to_owned(),
+                target: None,
+            }
+        );
+        assert_eq!(lifecycle.describe().action, Some(UpdateAction::Retry));
+    }
+
+    #[test]
+    fn a_notice_does_not_outlive_the_next_successful_transition() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        lifecycle.start_check().unwrap();
+        lifecycle.check_found("2.0.0").unwrap();
+        lifecycle.start_check().unwrap();
+        lifecycle.check_failed("feed unavailable").unwrap();
+        assert!(lifecycle.describe().notice.is_some());
+
+        lifecycle.start_download().unwrap();
+        assert_eq!(
+            lifecycle.describe().notice,
+            None,
+            "a stale failure must not follow the user into the next step"
         );
     }
 
