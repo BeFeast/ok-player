@@ -137,6 +137,20 @@ if not refreshers:
         "release-linux-candidate.yml never calls publish-update-feeds.yml; a new rolling candidate "
         "would not reach the APT candidate suite until an unrelated deploy happened to run"
     )
+# 8. The refresh must not hold the native builder's concurrency group. A workflow-level group
+#    covers every job in the run, so a Pages deploy that cannot start — signing runner offline,
+#    secret store down — would stop candidate builds entirely. The QA lane must not be blocked by
+#    the publication of its own archive, so the group belongs to the building job.
+if candidate_wf.get("concurrency"):
+    fail.append(
+        "release-linux-candidate.yml declares a workflow-level concurrency group, which the feed "
+        "refresh would hold for the length of a Pages deploy; scope it to the building job"
+    )
+if not candidate_wf["jobs"].get("build-and-publish", {}).get("concurrency"):
+    fail.append(
+        "the native build/publish job has no concurrency group; two builders would run at once"
+    )
+
 for name, job in refreshers.items():
     if job.get("secrets") != "inherit":
         fail.append(f"{name} must pass secrets: inherit, or the signing key cannot be fetched")

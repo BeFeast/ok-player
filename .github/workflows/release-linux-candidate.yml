@@ -34,15 +34,20 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: linux-candidate-native
-  cancel-in-progress: false
-
 jobs:
   build-and-publish:
     name: Native build and rolling publish
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 45
+    # The serialization the native builder needs, scoped to the job that needs it rather than to
+    # the whole run. It used to be workflow-level, which was equivalent while this workflow had
+    # one job — but the feed refresh added below would then hold the group for as long as a Pages
+    # deploy takes, and a deploy that cannot start (the signing runner is offline, the secret
+    # store is down) would stop candidate builds entirely. The QA lane must not be blocked by the
+    # publication of its own archive.
+    concurrency:
+      group: linux-candidate-native
+      cancel-in-progress: false
     outputs:
       publish_result: ${{ steps.candidate.outputs.publish_result }}
     steps:

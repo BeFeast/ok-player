@@ -257,7 +257,11 @@ that distinguishes a working archive from a plausible-looking one.
   end. The call is gated on `publish_result == 'published'`: the candidate workflow runs every 15
   minutes and most runs publish nothing, which must not cost a Pages deploy. A refresh failure
   does not unpublish the candidate; the rolling release is already live and the refresh is
-  idempotent and re-runnable.
+  idempotent and re-runnable. The candidate lane's `linux-candidate-native` concurrency group was
+  moved from the workflow to the building job when that call was added: a workflow-level group
+  covers every job in the run, so a Pages deploy that could not start — signing runner offline,
+  secret store down — would have stopped candidate builds entirely. The QA lane must not be
+  blocked by the publication of its own archive.
 * A tester subscribes to the QA channel by installing `ok-player-candidate.sources` **instead
   of** `ok-player.sources`, not beside it: with both files present apt sees both suites and will
   offer the candidate anyway, which makes "I am on stable" untrue without saying so. Both stanzas
