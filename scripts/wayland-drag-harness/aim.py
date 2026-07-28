@@ -18,7 +18,9 @@ injector's own translation (and scale, since a pointer tool need not move 1:1).
 
 Aiming never presses a point it has not proved it can reach: it moves there first and
 requires the app to report a fresh sample inside the plane it is aiming at. If that
-cannot be established it recalibrates, and then fails rather than pressing blindly.
+cannot be established it recalibrates, and then fails rather than pressing blindly. The
+press happens from that verified position, without moving again, so nothing can shift
+between the check and the click.
 
 Requires ydotoold (`YDOTOOL_SOCKET`, default /tmp/.ydotool.sock). Pointer acceleration
 must be off, or the fitted transform will not hold across the desktop.
@@ -350,8 +352,10 @@ def main() -> int:
     )
     print(f"target {args.part} global=({x:.1f},{y:.1f})")
     if args.action == "click":
-        move(x, y)
-        time.sleep(args.settle)
+        # The verifying probe already left the pointer here and the app confirmed where it
+        # landed. Moving again and waiting would reopen the gap the verification closed:
+        # the window can move or its chrome can change in between, and the press would go
+        # to a point nothing checked. Press from the position that was verified.
         ydotool("click", "0xC0")
     return 0
 
