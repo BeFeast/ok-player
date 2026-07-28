@@ -59,6 +59,15 @@ impl InstallKind {
         }
     }
 
+    /// Whether taking a discovered offer downloads *and* applies it in one
+    /// step, relaunching the process. The AppImage lane does: one click
+    /// downloads, applies and restarts, with no separate apply the user
+    /// confirms. Velopack downloads in the background and applies later, so
+    /// its download does not close anything.
+    pub const fn applies_while_downloading(self) -> bool {
+        matches!(self, Self::AppImage)
+    }
+
     /// Stable identifier for logs and diagnostics.
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -192,9 +201,12 @@ impl InstallEvidence {
 ///    outranks a bare `$APPIMAGE` because that variable is *inherited*: an
 ///    AppImage-packaged launcher passes it to the packaged OK Player it starts,
 ///    and only the executable's own ownership describes that child.
-/// 5. `$APPIMAGE` with nothing contradicting it — an extract-and-run AppImage
-///    (`APPIMAGE_EXTRACT_AND_RUN`) has no mount path to corroborate it, and no
-///    package owns it either.
+/// 5. `$APPIMAGE` when the shell has *explicitly* established that no package
+///    owns the executable — an extract-and-run AppImage
+///    (`APPIMAGE_EXTRACT_AND_RUN`) has no mount path to corroborate it. An
+///    ownership query that failed ([`PackageOwnership::Unknown`]) is not that
+///    evidence: the executable may well be packaged, and the variable may well
+///    belong to some other image that launched it.
 /// 6. Otherwise a dev build: unowned is not the same as up to date.
 pub fn detect_install_kind(evidence: &InstallEvidence) -> InstallKind {
     if evidence.is_flatpak() {
@@ -209,10 +221,44 @@ pub fn detect_install_kind(evidence: &InstallEvidence) -> InstallKind {
     if let Some(packaged) = evidence.owning_package() {
         return packaged;
     }
-    if evidence.appimage_variable_set() {
+    if evidence.appimage_variable_set() && evidence.package_ownership == PackageOwnership::Unowned {
         return InstallKind::AppImage;
     }
     InstallKind::DevBuild
+}
+
+/// Orders two build versions for the restart check, where a release must
+/// outrank the prereleases that led to it.
+///
+/// [`compare_versions`] compares numeric runs, which is right *within* a lane —
+/// `alpha.109` after `alpha.108` — but reads `1.0.0` as older than
+/// `1.0.0-beta.1`, because the missing fourth run defaults to zero. A
+/// prerelease-to-stable upgrade would then look like a failed restart. So the
+/// numeric core is compared first, a version with no prerelease tail wins a tie
+/// against one that has it, and two prereleases of the same core fall back to
+/// the natural comparison.
+fn compare_build_order(left: &str, right: &str) -> Ordering {
+    let (left_core, left_pre) = split_prerelease(left);
+    let (right_core, right_pre) = split_prerelease(right);
+    match compare_versions(left_core, right_core) {
+        Ordering::Equal => {}
+        order => return order,
+    }
+    match (left_pre, right_pre) {
+        (None, None) => Ordering::Equal,
+        // A release outranks any prerelease of the same core.
+        (None, Some(_)) => Ordering::Greater,
+        (Some(_), None) => Ordering::Less,
+        (Some(left_pre), Some(right_pre)) => compare_versions(left_pre, right_pre),
+    }
+}
+
+/// Splits `1.0.0-beta.1` into its numeric core and its prerelease tail.
+fn split_prerelease(version: &str) -> (&str, Option<&str>) {
+    match version.split_once('-') {
+        Some((core, pre)) => (core, Some(pre)),
+        None => (version, None),
+    }
 }
 
 /// One position in the update lifecycle.
@@ -455,6 +501,12 @@ pub struct UpdatePresentation {
     pub about_message: String,
     /// The primary action the surface may offer, if any.
     pub action: Option<UpdateAction>,
+    /// Whether taking [`Self::action`] shuts the running player down, for this
+    /// install kind. Beyond the actions that always do, this covers the
+    /// AppImage lane, where accepting the offer downloads, applies and
+    /// relaunches in one step — a surface must be able to warn before that,
+    /// whatever the action is called.
+    pub action_closes_the_app: bool,
     /// The secondary action offered beside the primary one — today only
     /// "Skip this version" on a live offer. Kept in the projection so a shell
     /// never has to maintain its own parallel offer model.
@@ -894,7 +946,7 @@ impl UpdateLifecycle {
         };
         let pending = version.clone();
         let running_version = running_version.into();
-        if compare_versions(&running_version, &pending) != Ordering::Less {
+        if compare_build_order(&running_version, &pending) != Ordering::Less {
             self.running_version = running_version.clone();
             return Ok(self.enter(UpdateState::Running {
                 version: running_version,
@@ -963,6 +1015,7 @@ impl UpdateLifecycle {
             updates_message,
             about_message,
             action: self.action(),
+            action_closes_the_app: self.action_closes_the_app(),
             secondary_action: self.secondary_action(),
             notice: self.notice.clone(),
         }
@@ -1104,6 +1157,22 @@ impl UpdateLifecycle {
             | UpdateState::Downloading { .. }
             | UpdateState::Applying { .. } => None,
         }
+    }
+
+    /// Whether the offered action ends the session. An action that always
+    /// restarts does; so does accepting an offer on a lane that applies while
+    /// it downloads.
+    fn action_closes_the_app(&self) -> bool {
+        let Some(action) = self.action() else {
+            return false;
+        };
+        if action.closes_the_app() {
+            return true;
+        }
+        matches!(
+            action,
+            UpdateAction::DownloadUpdate | UpdateAction::InstallAnyway
+        ) && self.install_kind.applies_while_downloading()
     }
 
     /// The secondary action beside [`Self::action`]. A live offer — discovered,
@@ -1311,6 +1380,16 @@ mod tests {
                     ..evidence()
                 },
                 InstallKind::AppImage,
+            ),
+            (
+                "an inherited APPIMAGE is not trusted when ownership is unknown",
+                InstallEvidence {
+                    appimage_path: Some("/opt/launcher/Launcher-x86_64.AppImage".to_owned()),
+                    executable_path: Some("/usr/bin/ok-player".to_owned()),
+                    package_ownership: PackageOwnership::Unknown,
+                    ..evidence()
+                },
+                InstallKind::DevBuild,
             ),
             (
                 "appimage mount path without APPIMAGE set",
@@ -2586,6 +2665,106 @@ mod tests {
         assert!(
             matches!(older.state(), UpdateState::Failed { .. }),
             "only an older build is a failed restart"
+        );
+    }
+
+    /// Invariant: a release outranks the prereleases that led to it, so moving
+    /// from a beta to the stable build it became is a completed update, not a
+    /// failed restart.
+    #[test]
+    fn a_stable_build_counts_as_newer_than_the_prerelease_it_replaced() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0-beta.1");
+        lifecycle.start_check().unwrap();
+        lifecycle.check_found("1.0.0-beta.2").unwrap();
+        lifecycle.start_download().unwrap();
+        lifecycle.download_finished().unwrap();
+        lifecycle.start_apply().unwrap();
+        lifecycle.apply_needs_restart().unwrap();
+
+        assert_eq!(
+            lifecycle.restarted_into("1.0.0").unwrap(),
+            &UpdateState::Running {
+                version: "1.0.0".to_owned()
+            },
+            "the stable 1.0.0 is not older than the 1.0.0-beta.2 it replaced"
+        );
+        assert_eq!(lifecycle.describe().claim, VersionClaim::Current);
+
+        // …and the ordering inside a prerelease lane is unchanged.
+        let mut lane = UpdateLifecycle::new(InstallKind::AppImage, "0.1.0-alpha.108");
+        lane.start_check().unwrap();
+        lane.check_found("0.1.0-alpha.109").unwrap();
+        lane.start_download().unwrap();
+        lane.download_finished().unwrap();
+        lane.start_apply().unwrap();
+        lane.apply_needs_restart().unwrap();
+        lane.restarted_into("0.1.0-alpha.108").unwrap();
+        assert!(
+            matches!(lane.state(), UpdateState::Failed { .. }),
+            "alpha.108 is still older than alpha.109"
+        );
+
+        let mut stable_to_pre = UpdateLifecycle::new(InstallKind::AppImage, "0.9.0");
+        stable_to_pre.start_check().unwrap();
+        stable_to_pre.check_found("1.0.0").unwrap();
+        stable_to_pre.start_download().unwrap();
+        stable_to_pre.download_finished().unwrap();
+        stable_to_pre.start_apply().unwrap();
+        stable_to_pre.apply_needs_restart().unwrap();
+        stable_to_pre.restarted_into("1.0.0-beta.1").unwrap();
+        assert!(
+            matches!(stable_to_pre.state(), UpdateState::Failed { .. }),
+            "a prerelease of 1.0.0 is not the 1.0.0 that was applied"
+        );
+    }
+
+    /// Invariant: a surface can always tell whether the action it offers will
+    /// close the player — including on the AppImage lane, where accepting the
+    /// offer downloads, applies and relaunches in one step.
+    #[test]
+    fn an_offer_that_applies_while_downloading_says_it_closes_the_app() {
+        let mut appimage = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        appimage.start_check().unwrap();
+        appimage.check_found("2.0.0").unwrap();
+        let presentation = appimage.describe();
+        assert_eq!(presentation.action, Some(UpdateAction::DownloadUpdate));
+        assert!(
+            presentation.action_closes_the_app,
+            "accepting an AppImage offer relaunches the player"
+        );
+
+        appimage.skip_offer().unwrap();
+        let presentation = appimage.describe();
+        assert_eq!(presentation.action, Some(UpdateAction::InstallAnyway));
+        assert!(
+            presentation.action_closes_the_app,
+            "installing a skipped AppImage version relaunches it too"
+        );
+
+        let mut velopack = UpdateLifecycle::new(InstallKind::WindowsVelopack, "1.0.0");
+        velopack.start_check().unwrap();
+        velopack.check_found("2.0.0").unwrap();
+        let presentation = velopack.describe();
+        assert_eq!(presentation.action, Some(UpdateAction::DownloadUpdate));
+        assert!(
+            !presentation.action_closes_the_app,
+            "Velopack downloads in the background and applies later"
+        );
+
+        velopack.start_download().unwrap();
+        velopack.download_finished().unwrap();
+        let presentation = velopack.describe();
+        assert_eq!(presentation.action, Some(UpdateAction::ApplyAndRestart));
+        assert!(
+            presentation.action_closes_the_app,
+            "applying the staged payload does close it"
+        );
+
+        let idle = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        assert_eq!(idle.describe().action, Some(UpdateAction::CheckNow));
+        assert!(
+            !idle.describe().action_closes_the_app,
+            "checking for updates closes nothing"
         );
     }
 
