@@ -941,14 +941,27 @@ public sealed partial class PlayerView : UserControl
     /// off the UI thread (the check completes on a worker), so marshal before touching the UI.</summary>
     private void OnUpdateStateChanged() => DispatcherQueue.TryEnqueue(() =>
     {
-        if (_viewUnloaded || _updateBannerShown)
+        if (_viewUnloaded)
             return; // skip a callback that landed after the view tore down (Changed can fire from a worker thread)
         UpdatePresentation update = App.Updates.Presentation;
+        bool visible = UpdateBanner.Visibility == Visibility.Visible;
         if (update.Action is not (UpdateAction.ApplyAndRestart or UpdateAction.RestartToFinish))
-            return; // nothing staged to offer yet
-        _updateBannerShown = true;
+        {
+            // The state moved on — an apply that failed, a check that started. A banner still
+            // announcing a ready update would be claiming something the Settings card denies, and
+            // its button would no longer do what its label says, so it goes away.
+            if (visible)
+                HideUpdateBanner();
+            return;
+        }
+        // Keep an already-visible banner current: the version it names and the label it offers are
+        // the projection's, not a snapshot from whenever it first appeared.
         UpdateBannerText.Text = update.UpdatesMessage;
         UpdateRestartButton.Content = UpdateLifecycle.Label(update.Action.Value);
+        UpdateRestartButton.IsEnabled = update.ActionsEnabled;
+        if (visible || _updateBannerShown)
+            return; // already up, or surfaced once already this session and dismissed
+        _updateBannerShown = true;
         UpdateBanner.Visibility = Visibility.Visible;
         UpdateBannerShowSb.Begin();
     });
@@ -963,7 +976,9 @@ public sealed partial class PlayerView : UserControl
 
     /// <summary>Dismiss the banner for this session; the update stays staged and is re-offered on the next launch
     /// (the staged payload persists), and Settings → About still has the restart action.</summary>
-    private void OnUpdateLaterClick(object sender, RoutedEventArgs e)
+    private void OnUpdateLaterClick(object sender, RoutedEventArgs e) => HideUpdateBanner();
+
+    private void HideUpdateBanner()
     {
         UpdateBannerHideSb.Completed += HideUpdateBannerOnCompleted;
         UpdateBannerHideSb.Begin();

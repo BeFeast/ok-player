@@ -232,10 +232,16 @@ public sealed class UpdateService
             moved = transition(_lifecycle);
             kind = _lifecycle.State.Kind;
             presentation = _lifecycle.Describe();
-            // The restart the marker recorded is settled the moment the lifecycle leaves the
-            // unconfirmed state — a check that found something, or found nothing — so the record it
-            // was kept for is done. ApplyAndRestart writes its own marker afterwards.
-            if (moved && _markerHeld && kind != UpdateStateKind.RestartUnverified)
+            // The marker is released only once the restart it records is actually settled. A check
+            // in flight has settled nothing — it can fail, or the app can close mid-request, and
+            // either way the next process still needs the pending target — so the check itself,
+            // which carries the unconfirmed restart, keeps it. What releases it is the outcome:
+            // a check that found something, or found nothing. ApplyAndRestart writes its own marker
+            // afterwards.
+            bool stillUnsettled = kind == UpdateStateKind.RestartUnverified
+                || (kind == UpdateStateKind.Checking
+                    && _lifecycle.State.Carried is { Kind: UpdateStateKind.RestartUnverified });
+            if (moved && _markerHeld && !stillUnsettled)
             {
                 PendingRestartMarker.Clear();
                 _markerHeld = false;
