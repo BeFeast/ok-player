@@ -59,6 +59,14 @@ impl InstallKind {
         }
     }
 
+    /// Whether the app discovers versions for this install kind at all. The
+    /// rpm and flatpak lanes never ask — they report who updates them — while
+    /// every other kind, the system-managed `.deb` lane included, polls a feed
+    /// of its own.
+    pub const fn discovers_versions(self) -> bool {
+        !matches!(self, Self::Rpm | Self::Flatpak)
+    }
+
     /// Whether taking a discovered offer downloads *and* applies it in one
     /// step, relaunching the process. The AppImage lane does: one click
     /// downloads, applies and restarts, with no separate apply the user
@@ -583,6 +591,12 @@ impl UpdateLifecycle {
                 install_kind.capability(),
             ));
         }
+        if install_kind.discovers_versions() {
+            // The `.deb` lane is system-managed but still discovers versions
+            // from its own feed, so it keeps its check and its announcement;
+            // only lanes that never ask are owned outright.
+            return Err(UpdateTransitionError::NotThisLane(install_kind));
+        }
         Ok(Self {
             install_kind,
             running_version: running_version.into(),
@@ -610,12 +624,23 @@ impl UpdateLifecycle {
                 install_kind.capability(),
             ));
         }
+        let running_version = running_version.into();
+        let staged_version = staged_version.into();
+        // A record left behind by an earlier run can be stale — the user may
+        // have replaced the install by hand since. Applying it would be a
+        // downgrade, so a record that is not newer than what is running is
+        // discarded rather than offered.
+        let state = if compare_build_order(&staged_version, &running_version) == Ordering::Greater {
+            UpdateState::ReadyToApply {
+                version: staged_version,
+            }
+        } else {
+            UpdateState::Idle
+        };
         Ok(Self {
             install_kind,
-            running_version: running_version.into(),
-            state: UpdateState::ReadyToApply {
-                version: staged_version.into(),
-            },
+            running_version,
+            state,
             notice: None,
         })
     }
@@ -2168,6 +2193,16 @@ mod tests {
                 UpdateCapability::Unmanaged
             ))
         );
+
+        // The `.deb` lane is system-managed but discovers versions itself, so
+        // it must keep its check rather than be declared system-owned.
+        assert_eq!(
+            UpdateLifecycle::managed_externally(InstallKind::Deb, "1.0.0").err(),
+            Some(UpdateTransitionError::NotThisLane(InstallKind::Deb)),
+            "the deb lane polls its own feed"
+        );
+        let deb = UpdateLifecycle::new(InstallKind::Deb, "1.0.0");
+        assert_eq!(deb.describe().action, Some(UpdateAction::CheckNow));
     }
 
     /// Invariant: a failure after discovery keeps the offer. The version stays
@@ -2957,6 +2992,47 @@ mod tests {
             &UpdateState::ReadyToApply {
                 version: "2.0.0".to_owned()
             }
+        );
+    }
+
+    /// Invariant: a staged record left by an earlier run is only offered when
+    /// it is actually newer than what is running. A user who replaced the
+    /// install by hand must not be offered a downgrade.
+    #[test]
+    fn a_stale_staged_record_is_discarded_rather_than_offered() {
+        for staged in ["1.0.0", "0.9.0"] {
+            let lifecycle =
+                UpdateLifecycle::resumed_with_staged_update(InstallKind::AppImage, "1.0.0", staged)
+                    .expect("a self-applying install can resume");
+
+            assert_eq!(
+                lifecycle.state(),
+                &UpdateState::Idle,
+                "a {staged} record must not be offered to a 1.0.0 install"
+            );
+            let presentation = lifecycle.describe();
+            assert_eq!(presentation.target_version, None);
+            assert_eq!(presentation.claim, VersionClaim::Unknown);
+            assert_eq!(
+                presentation.action,
+                Some(UpdateAction::CheckNow),
+                "the user can still check for a real update"
+            );
+            assert!(
+                !presentation.action_closes_the_app,
+                "and nothing offered here restarts the player"
+            );
+        }
+
+        let genuine =
+            UpdateLifecycle::resumed_with_staged_update(InstallKind::AppImage, "1.0.0", "2.0.0")
+                .expect("a self-applying install can resume");
+        assert_eq!(
+            genuine.state(),
+            &UpdateState::ReadyToApply {
+                version: "2.0.0".to_owned()
+            },
+            "a genuinely newer staged payload is still offered"
         );
     }
 
