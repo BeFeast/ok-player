@@ -37,8 +37,9 @@ use okp_core::shortcuts::{
     self, ShortcutAction, ShortcutBinding, ShortcutChord, ShortcutModifiers, ShortcutSlot,
 };
 use okp_core::update_lifecycle::{
-    CarriedOffer, InstallEvidence, InstallKind, PackageOwnership, UpdateAction, UpdateCapability,
-    UpdateLifecycle, UpdatePresentation, UpdateState, UpdateTransitionError, detect_install_kind,
+    CarriedOffer, InstallEvidence, InstallKind, PackageOwnership, ReportedVersion, UpdateAction,
+    UpdateCapability, UpdateLifecycle, UpdatePresentation, UpdateState, UpdateTransitionError,
+    detect_install_kind,
 };
 use okp_core::update_selection::{self, DebFeed, DebUpdate};
 use okp_core::video_geometry::{VideoGeometry, VideoGeometryAction};
@@ -2090,15 +2091,27 @@ impl AboutSnapshot {
     }
 }
 
+/// The build this process is running, as this shell can report it.
+///
+/// Every Linux lane knows its full build string: it is compiled in, and the
+/// package version never truncates it the way a Windows `Version` field does
+/// (#694). So the running version is always [`ReportedVersion::complete`], and
+/// [`UpdateState::RestartUnverified`] — the state for a restart whose outcome
+/// the model cannot decide — is unreachable here. The shell still renders it
+/// if it ever appears, rather than pattern-matching around it.
+fn linux_running_version() -> ReportedVersion {
+    ReportedVersion::complete(APP_BUILD_VERSION)
+}
+
 impl LinuxUpdateSession {
     /// A session for an install of `kind`, at the start of the shared
     /// lifecycle. An install a system tool owns outright — one that never
     /// discovers versions at all — starts by saying who updates it instead of
     /// offering a check.
     fn for_install_kind(kind: InstallKind) -> Self {
-        let lifecycle = match UpdateLifecycle::managed_externally(kind, APP_BUILD_VERSION) {
+        let lifecycle = match UpdateLifecycle::managed_externally(kind, linux_running_version()) {
             Ok(lifecycle) => lifecycle,
-            Err(_) => UpdateLifecycle::new(kind, APP_BUILD_VERSION),
+            Err(_) => UpdateLifecycle::new(kind, linux_running_version()),
         };
         Self {
             lifecycle,
@@ -2116,7 +2129,7 @@ impl LinuxUpdateSession {
         let mut session = Self::for_install_kind(kind);
         if let Some(pending) = pending
             && let Ok(lifecycle) =
-                UpdateLifecycle::resumed_after_restart(kind, APP_BUILD_VERSION, pending)
+                UpdateLifecycle::resumed_after_restart(kind, linux_running_version(), pending)
         {
             session.lifecycle = lifecycle;
         }
@@ -2158,7 +2171,12 @@ impl LinuxUpdateSession {
             UpdateState::Checking {
                 carried: Some(carried),
             } => !matches!(carried, CarriedOffer::Skipped { .. }),
-            UpdateState::Idle
+            // An unverifiable restart is settled by the check that follows it,
+            // not by a banner over the video: the surface that can act on it is
+            // the Updates page, whose own action is that check. On Linux the
+            // state is unreachable anyway — see `linux_running_version`.
+            UpdateState::RestartUnverified { .. }
+            | UpdateState::Idle
             | UpdateState::Checking { carried: None }
             | UpdateState::UpToDate
             | UpdateState::Skipped { .. }

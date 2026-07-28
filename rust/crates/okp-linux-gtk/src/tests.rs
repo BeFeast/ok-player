@@ -4530,6 +4530,32 @@ fn a_restart_that_came_back_on_the_old_build_is_a_failure_not_a_success() {
     assert!(presentation.updates_message.contains(APP_BUILD_VERSION));
 }
 
+/// The undecidable restart cannot arise on Linux: the running build is
+/// compiled in whole, so every comparison the model makes across the restart
+/// is decidable and lands on the success or the #660 failure — never on
+/// "could not tell".
+#[test]
+fn a_linux_restart_is_always_decidable() {
+    assert!(linux_running_version().is_complete());
+
+    for pending in [
+        APP_BUILD_VERSION,
+        "99.0.0",
+        "0.11.0",
+        "0.11.0-beta.0.1",
+        &format!("{APP_BUILD_VERSION}.1"),
+    ] {
+        let session = LinuxUpdateSession::resumed(InstallKind::AppImage, Some(pending.to_owned()));
+        assert!(
+            !matches!(
+                session.lifecycle.state(),
+                UpdateState::RestartUnverified { .. }
+            ),
+            "pending {pending} left the restart unverified against {APP_BUILD_VERSION}"
+        );
+    }
+}
+
 /// The marker settles exactly one restart: a stale record cannot keep
 /// reporting an update that already landed.
 #[test]
