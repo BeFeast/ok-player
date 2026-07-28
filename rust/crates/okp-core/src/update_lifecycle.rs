@@ -979,27 +979,20 @@ impl UpdateLifecycle {
     }
 
     /// Applying succeeded: the new version is on disk, this process still runs
-    /// the old one. The only success exit from
-    /// [`UpdateState::Applying`] besides [`Self::apply_finished_running`].
+    /// the old one. The *only* success exit from [`UpdateState::Applying`].
+    ///
+    /// There is deliberately no transition straight to [`UpdateState::Running`]
+    /// here. Becoming the new version means replacing the process, which takes
+    /// this lifecycle with it; anything still executing to call such a
+    /// transition is by definition the old binary, and letting it claim the new
+    /// one is exactly #660. `Running` is reached only by
+    /// [`Self::restarted_into`] or [`Self::resumed_after_restart`], which are
+    /// given the version that actually came up and check it.
     pub fn apply_needs_restart(&mut self) -> Result<&UpdateState, UpdateTransitionError> {
         match &self.state {
             UpdateState::Applying { version } => {
                 let version = version.clone();
                 Ok(self.enter(UpdateState::RestartPending { version }))
-            }
-            _ => Err(self.rejected()),
-        }
-    }
-
-    /// Applying succeeded and the new bits are already the ones executing (an
-    /// installer that re-execs the process before handing control back).
-    /// Advances [`Self::running_version`].
-    pub fn apply_finished_running(&mut self) -> Result<&UpdateState, UpdateTransitionError> {
-        match &self.state {
-            UpdateState::Applying { version } => {
-                let version = version.clone();
-                self.running_version = version.clone();
-                Ok(self.enter(UpdateState::Running { version }))
             }
             _ => Err(self.rejected()),
         }
@@ -1736,11 +1729,12 @@ mod tests {
         assert_eq!(presentation.version_in_use, "1.0.0");
     }
 
-    /// Invariant: `Applying` cannot succeed without moving to `RestartPending`
-    /// or `Running(new)`. Every other transition attempted from `Applying` is
-    /// refused and leaves the state untouched.
+    /// Invariant: `Applying` can only succeed into `RestartPending`. Every
+    /// other transition attempted from it is refused and leaves the state
+    /// untouched — including any that would claim the new version is already
+    /// running, which nothing still executing is in a position to know.
     #[test]
-    fn applying_can_only_succeed_into_restart_pending_or_running() {
+    fn applying_can_only_succeed_into_restart_pending() {
         fn applying() -> UpdateLifecycle {
             let mut lifecycle = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
             lifecycle.start_check().unwrap();
@@ -1814,12 +1808,15 @@ mod tests {
                 version: "2.0.0".to_owned()
             }
         );
-
-        let mut in_place = applying();
         assert_eq!(
-            in_place.apply_finished_running().unwrap(),
-            &UpdateState::Running {
-                version: "2.0.0".to_owned()
+            restarting.running_version(),
+            "1.0.0",
+            "a successful apply does not make this process the new build"
+        );
+        assert_eq!(
+            restarting.describe().claim,
+            VersionClaim::Superseded {
+                newer: "2.0.0".to_owned()
             }
         );
 
