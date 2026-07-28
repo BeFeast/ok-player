@@ -940,3 +940,24 @@ pub(crate) fn mpris_no_track_id() -> OwnedObjectPath {
         .try_into()
         .expect("static MPRIS no-track path")
 }
+
+/// Waits for `child`, giving up after `timeout` and reporting that as
+/// `Ok(None)` so the caller can kill it. Used by the embedded-art extractor,
+/// which must never let a stuck `ffmpeg` hold a worker thread forever.
+pub(crate) fn wait_for_child_with_timeout(
+    child: &mut Child,
+    timeout: Duration,
+) -> Result<Option<ExitStatus>, std::io::Error> {
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(Some(status));
+        }
+        let elapsed = started.elapsed();
+        if elapsed >= timeout {
+            return Ok(None);
+        }
+        let remaining = timeout.saturating_sub(elapsed);
+        std::thread::sleep(remaining.min(Duration::from_millis(100)));
+    }
+}

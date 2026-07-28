@@ -121,11 +121,6 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         Ok(_) => {}
         Err(error) => eprintln!("Failed to apply history retention on launch: {error}"),
     }
-    let update_preview =
-        linux_update_preview_status(state.borrow().settings.skipped_update_versions());
-    if let Some(preview) = update_preview {
-        state.borrow_mut().linux_update_status = preview;
-    }
     // Visual smoke hook for the private welcome state. Private session is transient by
     // design, so this changes only the in-memory session and never writes a setting.
     if env::var_os("OKP_PRIVATE_SESSION_ON_STARTUP").is_some() {
@@ -133,7 +128,6 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     }
     apply_playback_settings_defaults(&state);
     let auto_check_updates = state.borrow().settings.auto_check_updates()
-        && !flatpak_update_managed()
         && env::var_os("OKP_SKIP_UPDATE_CHECK").is_none();
     let updating_seek = Rc::new(Cell::new(false));
     let updating_volume = Rc::new(Cell::new(false));
@@ -562,9 +556,14 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
             );
         });
     }
-    if auto_check_updates {
-        check_updates_on_startup(Rc::clone(&state), Rc::clone(&status_toast));
-    }
+    // The install kind is resolved off the main thread — the package-ownership
+    // question costs a subprocess — and the startup check follows it, because
+    // what a check means depends on how this copy was installed.
+    start_install_kind_probe(
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+        auto_check_updates,
+    );
     if let Some(notice) = launch_reserved_notice {
         eprintln!("Ignoring reserved ok-player:// request: {notice}");
         let notice_toast = Rc::clone(&status_toast);

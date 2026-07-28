@@ -1,4 +1,5 @@
 use super::*;
+use okp_core::update_lifecycle::VersionClaim;
 use okp_test_fixtures::unique_temp_dir;
 
 fn local_item(path: &str) -> PlaylistItem {
@@ -1247,7 +1248,8 @@ fn about_diagnostics_contains_only_app_engine_and_host_groups() {
         os: "Linux".to_owned(),
         gtk: "4.20.0".to_owned(),
         cpu: "x86_64".to_owned(),
-        install: "Deb installer".to_owned(),
+        install: "deb".to_owned(),
+        update_status: "OK Player 0.1.0-linux-alpha.113 — up to date.".to_owned(),
     };
     let text = about_diagnostics_text(&snapshot);
     assert!(text.contains("\nEngine\n"));
@@ -1318,7 +1320,7 @@ fn update_decision_surfaces_are_shared_persistent_and_accessible() {
     assert!(updates.contains("refresh_linux_update_views"));
     assert!(updates.contains("gtk::Button::with_label(\"Update\")"));
     assert!(updates.contains("gtk::Button::with_label(\"Skip this version\")"));
-    assert!(updates.contains("\"Install anyway\""));
+    assert!(updates.contains("UpdateAction::InstallAnyway"));
     assert!(updates.contains("gtk::AccessibleRole::Group"));
     assert!(updates.contains("gtk::accessible::Property::Label(\"Available update actions\")"));
     assert!(updates.contains("gtk::accessible::Property::Label(\"Update OK Player\")"));
@@ -4320,269 +4322,532 @@ fn playlist_drop_target_index_rejects_self_or_existing_slot() {
     assert_eq!(Playlist::drop_target_index(2, 1, true), None);
 }
 
+/// The `.deb` lane is system-managed end to end: the check still discovers a
+/// release, but nothing in the app installs it and the surface says who does.
 #[test]
-fn deb_checksum_download_refuses_release_without_manifest() {
-    let update = DebUpdate {
-        version: "0.1.0-linux-alpha.46".to_owned(),
-        name: "ok-player_0.1.0-linux-alpha.46_amd64.deb".to_owned(),
-        url: "https://example.invalid/update.deb".to_owned(),
-        size: Some(42),
-        sums_url: None,
-        expected_sha256: None,
-    };
+fn a_deb_install_announces_the_package_manager_and_offers_no_in_app_install() {
+    let mut session = LinuxUpdateSession::for_install_kind(InstallKind::Deb);
+    session
+        .lifecycle
+        .start_check()
+        .expect("a deb install still checks its feed");
+    session
+        .lifecycle
+        .check_found("0.12.0")
+        .expect("the feed found a newer release");
 
-    let error = download_deb_checksums(&update).expect_err("missing manifest should refuse");
+    let presentation = session.describe();
+    assert_eq!(presentation.capability, UpdateCapability::SystemManaged);
+    assert_eq!(
+        primary_update_action(&presentation),
+        None,
+        "a system-managed install must not offer an in-app install"
+    );
+    assert!(presentation.updates_message.contains("0.12.0"));
     assert!(
-        error.contains("does not publish SHA256SUMS"),
-        "unexpected error: {error}"
+        presentation.updates_message.contains("package manager"),
+        "unexpected message: {}",
+        presentation.updates_message
+    );
+    assert!(!presentation.action_closes_the_app);
+    assert!(session.offer_surface_visible());
+
+    // Every step that would install something in-app is refused by the model,
+    // so no shell path can reach one.
+    assert!(session.lifecycle.start_download().is_err());
+    assert!(session.lifecycle.start_apply().is_err());
+    assert!(session.lifecycle.retry_failed_update().is_err());
+
+    // And the surface can point at the repository apt actually installs from.
+    assert_eq!(
+        system_repository_hint(InstallKind::Deb),
+        Some(APT_REPOSITORY_URL)
     );
 }
 
+/// A skipped system-managed offer keeps telling the user how to get it; it
+/// just stops occupying the player surface.
 #[test]
-fn staged_deb_with_one_flipped_byte_is_refused_and_discarded() {
-    let cache_dir = unique_temp_dir("okp-deb-verify-tamper");
-    let name = "ok-player_0.1.0-linux-alpha.46_amd64.deb";
-    let payload = b"pretend this is a .deb archive".to_vec();
-    let manifest = format!("{}  {name}\n", sha256sums::sha256_hex(&payload));
-    let mut tampered = payload.clone();
-    tampered[payload.len() / 2] ^= 0x01;
+fn a_skipped_deb_offer_keeps_its_instructions_but_leaves_the_player_surface() {
+    let mut session = LinuxUpdateSession::for_install_kind(InstallKind::Deb);
+    session.lifecycle.start_check().expect("check starts");
+    session.lifecycle.check_found("0.12.0").expect("found");
+    session.lifecycle.skip_offer().expect("offer is skippable");
 
-    let error = stage_verified_deb(&tampered, &manifest, name, cache_dir.path())
-        .expect_err("tampered payload should be refused");
+    let presentation = session.describe();
+    assert!(!session.offer_surface_visible());
+    assert_eq!(primary_update_action(&presentation), None);
+    assert!(presentation.updates_message.contains("apt"));
+}
 
+/// The AppImage lane self-applies, and a successful apply lands in
+/// "installed — restart to switch" rather than claiming the new version is
+/// running (#660).
+#[test]
+fn an_appimage_apply_ends_in_a_pending_restart_that_never_claims_the_new_version() {
+    let mut session = LinuxUpdateSession::for_install_kind(InstallKind::AppImage);
+    session.lifecycle.start_check().expect("check starts");
+    session.lifecycle.check_found("0.12.0").expect("found");
+
+    let offered = session.describe();
+    assert_eq!(
+        primary_update_action(&offered),
+        Some(UpdateAction::DownloadUpdate)
+    );
     assert!(
-        error.contains("Update integrity check failed"),
-        "unexpected error: {error}"
+        offered.action_closes_the_app,
+        "accepting the AppImage offer closes the player, and the surface must be able to warn"
     );
+
+    session.lifecycle.start_download().expect("download starts");
+    session
+        .lifecycle
+        .download_and_apply_needs_restart()
+        .expect("the one-call lane lands on a pending restart");
+
+    let pending = session.describe();
+    assert_eq!(pending.version_in_use, APP_BUILD_VERSION);
+    assert_eq!(
+        pending.claim,
+        VersionClaim::Superseded {
+            newer: "0.12.0".to_owned()
+        }
+    );
+    assert_eq!(
+        primary_update_action(&pending),
+        Some(UpdateAction::RestartToFinish)
+    );
+    assert!(pending.updates_message.contains("Restart"));
     assert!(
-        error.contains("sha256 mismatch"),
-        "unexpected error: {error}"
+        pending.about_message.contains(APP_BUILD_VERSION),
+        "About must keep reporting the running build: {}",
+        pending.about_message
     );
-    // Neither the staged temp file nor the install target may survive:
-    // the install path only ever hands a successfully returned target
-    // path to pkexec, and nothing verifiable-as-bad is left behind.
-    assert!(!cache_dir.path().join(name).exists());
-    assert!(!cache_dir.path().join(format!("{name}.part")).exists());
-    cache_dir.close().expect("cache dir should be removed");
+    assert!(session.offer_surface_visible());
 }
 
+/// A retry resumes where the failure happened: a payload still on disk is
+/// applied, a download that never landed starts over, and a check that failed
+/// before it found anything is simply checked again.
 #[test]
-fn staged_deb_tampered_on_disk_after_write_is_refused() {
-    let cache_dir = unique_temp_dir("okp-deb-verify-disk");
-    let name = "ok-player_0.1.0-linux-alpha.46_amd64.deb";
-    let payload = b"pretend this is a .deb archive".to_vec();
-    let manifest = format!("{}  {name}\n", sha256sums::sha256_hex(&payload));
-    let staged = cache_dir.path().join(name);
-    fs::write(&staged, &payload).expect("staged payload should be written");
+fn a_retry_resumes_the_step_that_failed() {
+    let mut staged = LinuxUpdateSession::for_install_kind(InstallKind::AppImage);
+    staged.lifecycle.start_check().expect("check starts");
+    staged.lifecycle.check_found("0.12.0").expect("found");
+    staged.lifecycle.start_download().expect("download starts");
+    staged
+        .lifecycle
+        .download_and_apply_failed("the updater could not be launched")
+        .expect("the lane reports its own failure");
+    staged
+        .lifecycle
+        .retry_failed_update()
+        .expect("a staged failure is retryable");
+    assert!(matches!(
+        staged.lifecycle.state(),
+        UpdateState::ReadyToApply { .. }
+    ));
 
-    assert!(verify_staged_deb(&staged, name, &manifest).is_ok());
+    let mut unstaged = LinuxUpdateSession::for_install_kind(InstallKind::AppImage);
+    unstaged.lifecycle.start_check().expect("check starts");
+    unstaged.lifecycle.check_found("0.12.0").expect("found");
+    unstaged
+        .lifecycle
+        .start_download()
+        .expect("download starts");
+    unstaged
+        .lifecycle
+        .download_failed("the connection dropped")
+        .expect("a download can fail");
+    unstaged
+        .lifecycle
+        .retry_failed_update()
+        .expect("an unstaged failure is retryable");
+    assert!(matches!(
+        unstaged.lifecycle.state(),
+        UpdateState::Available { .. }
+    ));
 
-    let mut tampered = payload.clone();
-    tampered[0] ^= 0x01;
-    fs::write(&staged, &tampered).expect("tampered payload should be written");
+    // A check that failed before discovery has no target, so there is nothing
+    // to resume; the surface still offers Retry, and checking again is what it
+    // has to repeat.
+    let mut nothing_found = LinuxUpdateSession::for_install_kind(InstallKind::AppImage);
+    nothing_found.lifecycle.start_check().expect("check starts");
+    nothing_found
+        .lifecycle
+        .check_failed("the feed is unreachable")
+        .expect("a check can fail");
+    assert_eq!(
+        primary_update_action(&nothing_found.describe()),
+        Some(UpdateAction::Retry)
+    );
+    assert!(nothing_found.lifecycle.retry_failed_update().is_err());
+    assert!(nothing_found.lifecycle.start_check().is_ok());
+}
 
-    let error = verify_staged_deb(&staged, name, &manifest)
-        .expect_err("on-disk tampering should be refused");
+/// Which half of the one-call step failed decides what a retry repeats: a
+/// download that never landed is fetched again, and only a payload that is
+/// really on disk is re-applied.
+#[test]
+fn a_dropped_download_is_not_recorded_as_a_staged_payload() {
+    fn downloading(version: &str) -> Rc<RefCell<PlayerState>> {
+        let mut session = LinuxUpdateSession::for_install_kind(InstallKind::AppImage);
+        session.lifecycle.start_check().expect("check starts");
+        session.lifecycle.check_found(version).expect("found");
+        session.lifecycle.start_download().expect("download starts");
+        Rc::new(RefCell::new(PlayerState {
+            linux_update: session,
+            ..PlayerState::default()
+        }))
+    }
+
+    let dropped = downloading("0.12.0");
+    report_download_lane_failure(
+        &dropped,
+        &UpdateStepFailure {
+            reason: "the connection dropped".to_owned(),
+            staged: false,
+        },
+    );
+    assert!(matches!(
+        dropped.borrow().linux_update.lifecycle.state(),
+        UpdateState::Failed { staged: false, .. }
+    ));
+    dropped
+        .borrow_mut()
+        .linux_update
+        .lifecycle
+        .retry_failed_update()
+        .expect("a dropped download is retryable");
     assert!(
-        error.contains("sha256 mismatch"),
-        "unexpected error: {error}"
-    );
-    cache_dir.close().expect("cache dir should be removed");
-}
-
-#[test]
-fn staged_deb_matching_manifest_is_finalized() {
-    let cache_dir = unique_temp_dir("okp-deb-verify-ok");
-    let name = "ok-player_0.1.0-linux-alpha.46_amd64.deb";
-    let payload = b"pretend this is a .deb archive".to_vec();
-    let manifest = format!(
-        "{}  {name}\n{}  OK-Player-0.1.0-x86_64.AppImage\n",
-        sha256sums::sha256_hex(&payload),
-        sha256sums::sha256_hex(b"another asset")
+        matches!(
+            dropped.borrow().linux_update.lifecycle.state(),
+            UpdateState::Available { .. }
+        ),
+        "a download that never landed must be fetched again, not applied"
     );
 
-    let target = stage_verified_deb(&payload, &manifest, name, cache_dir.path())
-        .expect("verified payload should be staged");
-
-    assert_eq!(target, cache_dir.path().join(name));
-    assert_eq!(
-        fs::read(&target).expect("target should be readable"),
-        payload
+    let handed_off = downloading("0.12.0");
+    report_download_lane_failure(
+        &handed_off,
+        &UpdateStepFailure {
+            reason: "the updater could not be launched".to_owned(),
+            staged: true,
+        },
     );
-    assert!(!cache_dir.path().join(format!("{name}.part")).exists());
-    cache_dir.close().expect("cache dir should be removed");
-}
-
-#[test]
-fn deb_update_exposes_the_target_version_to_the_shared_offer() {
-    let update = PendingLinuxUpdate {
-        manager: None,
-        target: LinuxUpdateTarget::Deb(DebUpdate {
-            version: "0.1.0-linux-alpha.46".to_owned(),
-            name: "ok-player_0.1.0-linux-alpha.46_amd64.deb".to_owned(),
-            url: "https://example.invalid/update.deb".to_owned(),
-            size: Some(42),
-            sums_url: None,
-            expected_sha256: None,
-        }),
-    };
-
-    assert_eq!(
-        update.target_version().as_deref(),
-        Some("0.1.0-linux-alpha.46")
+    handed_off
+        .borrow_mut()
+        .linux_update
+        .lifecycle
+        .retry_failed_update()
+        .expect("a staged failure is retryable");
+    assert!(
+        matches!(
+            handed_off.borrow().linux_update.lifecycle.state(),
+            UpdateState::ReadyToApply { .. }
+        ),
+        "a payload that is still on disk must be re-applied, not re-downloaded"
     );
 }
 
+/// A retry in the process that came back from a failed restart has no payload
+/// left — it died with the previous process — so it re-discovers rather than
+/// reporting the payload missing.
 #[test]
-fn linux_update_status_reflects_last_check_result() {
-    let skipped = SkippedUpdateVersions::default();
-    let up_to_date = LinuxUpdateStatus::from_check_result(
-        &LinuxUpdateCheckResult::UpToDate,
-        UpdateChannel::Public,
-        &skipped,
-    );
-    assert_eq!(
-        up_to_date.settings_status_text(true),
-        "OK Player is up to date"
-    );
-    assert!(up_to_date.pending_offer().is_none());
-
-    let managed = LinuxUpdateStatus::from_check_result(
-        &LinuxUpdateCheckResult::ManagedExternally(LinuxExternalUpdateManager::Dnf),
-        UpdateChannel::Public,
-        &skipped,
-    );
-    assert_eq!(
-        managed.settings_status_text(true),
-        "Updates are managed by DNF."
-    );
-    assert!(managed.pending_offer().is_none());
-
-    let flatpak = LinuxUpdateStatus::from_check_result(
-        &LinuxUpdateCheckResult::ManagedExternally(LinuxExternalUpdateManager::Flatpak),
-        UpdateChannel::Public,
-        &skipped,
-    );
-    assert_eq!(
-        flatpak.settings_status_text(true),
-        "Updates are managed by Flatpak"
-    );
-    assert!(flatpak.pending_offer().is_none());
-
-    let update = PendingLinuxUpdate {
-        manager: None,
-        target: LinuxUpdateTarget::Deb(DebUpdate {
-            version: "0.1.0-linux-alpha.46".to_owned(),
-            name: "ok-player_0.1.0-linux-alpha.46_amd64.deb".to_owned(),
-            url: "https://example.invalid/update.deb".to_owned(),
-            size: Some(42),
-            sums_url: None,
-            expected_sha256: None,
-        }),
-    };
-    let available = LinuxUpdateStatus::from_check_result(
-        &LinuxUpdateCheckResult::Available(update),
-        UpdateChannel::Public,
-        &skipped,
-    );
-    assert_eq!(
-        available.settings_status_text(true),
-        "Version 0.1.0-linux-alpha.46 is available."
-    );
-    let offer = available.pending_offer().expect("available update offer");
-    assert_eq!(offer.state.primary_action_label(), Some("Update"));
-    assert!(offer.state.can_skip());
-
-    let failed = LinuxUpdateStatus::from_check_result(
-        &LinuxUpdateCheckResult::Failed("no feed".into()),
-        UpdateChannel::Public,
-        &skipped,
-    );
-    assert_eq!(
-        failed.settings_status_text(true),
-        "Update check failed: no feed"
-    );
-}
-
-#[test]
-fn failed_manual_recheck_keeps_the_previous_update_offer() {
-    let update = PendingLinuxUpdate {
-        manager: None,
-        target: LinuxUpdateTarget::Deb(DebUpdate {
-            version: "0.11.0-beta.2".to_owned(),
-            name: "ok-player_0.11.0-beta.2_amd64.deb".to_owned(),
-            url: "https://example.invalid/update.deb".to_owned(),
-            size: Some(42),
-            sums_url: None,
-            expected_sha256: None,
-        }),
-    };
-    let available = LinuxUpdateStatus::from_check_result(
-        &LinuxUpdateCheckResult::Available(update),
-        UpdateChannel::Public,
-        &SkippedUpdateVersions::default(),
-    );
-    let previous = available.pending_offer().expect("available offer");
+fn a_retry_after_a_failed_restart_rediscovers_the_offer() {
+    let session = LinuxUpdateSession::resumed(InstallKind::AppImage, Some("99.0.0".to_owned()));
     let state = Rc::new(RefCell::new(PlayerState {
-        linux_update_status: LinuxUpdateStatus::Checking(Some(previous)),
+        linux_update: session,
         ..PlayerState::default()
     }));
+    assert!(matches!(
+        state.borrow().linux_update.lifecycle.state(),
+        UpdateState::Failed { staged: false, .. }
+    ));
 
-    restore_after_failed_check(&state, "feed unavailable");
-
-    let restored = state
-        .borrow()
-        .linux_update_status
-        .pending_offer()
-        .expect("offer should survive a failed refresh");
-    assert_eq!(restored.state.version(), "0.11.0-beta.2");
-    assert_eq!(restored.state.phase(), &UpdateOfferPhase::Available);
+    state
+        .borrow_mut()
+        .linux_update
+        .lifecycle
+        .retry_failed_update()
+        .expect("a restart that did not take effect is retryable");
+    assert!(update_needs_rediscovery(&state));
+    assert!(
+        state
+            .borrow_mut()
+            .linux_update
+            .lifecycle
+            .start_check()
+            .is_ok(),
+        "re-discovery is the recovery, and the standing offer allows a check"
+    );
 }
 
+/// A hand-off that failed is an error, not a quieter success.
 #[test]
-fn external_installer_handoff_keeps_the_pending_update_retryable() {
-    let update = PendingLinuxUpdate {
-        manager: None,
-        target: LinuxUpdateTarget::Deb(DebUpdate {
-            version: "0.11.0-beta.2".to_owned(),
-            name: "ok-player_0.11.0-beta.2_amd64.deb".to_owned(),
-            url: "https://example.invalid/update.deb".to_owned(),
-            size: Some(42),
-            sums_url: None,
-            expected_sha256: None,
-        }),
-    };
-    let mut status = LinuxUpdateStatus::from_check_result(
-        &LinuxUpdateCheckResult::Available(update),
-        UpdateChannel::Public,
-        &SkippedUpdateVersions::default(),
-    );
-    let LinuxUpdateStatus::Offer(offer) = &mut status else {
-        panic!("available update should create an offer");
-    };
-    assert!(offer.state.start_install());
-    let state = Rc::new(RefCell::new(PlayerState {
-        linux_update_status: status,
-        ..PlayerState::default()
-    }));
+fn a_failed_appimage_handoff_is_reported_as_a_failure() {
+    let mut session = LinuxUpdateSession::for_install_kind(InstallKind::AppImage);
+    session.lifecycle.start_check().expect("check starts");
+    session.lifecycle.check_found("0.12.0").expect("found");
+    session.lifecycle.start_download().expect("download starts");
+    session
+        .lifecycle
+        .download_and_apply_failed("the updater could not be launched")
+        .expect("the lane reports its own failure");
 
-    defer_update_install(
-        &state,
-        "Installer opened. Complete it to update.".to_owned(),
+    let presentation = session.describe();
+    assert!(
+        presentation
+            .updates_message
+            .contains("the updater could not be launched")
     );
-
-    let restored = state
-        .borrow()
-        .linux_update_status
-        .pending_offer()
-        .expect("offer should survive external installer handoff");
-    assert_eq!(restored.state.phase(), &UpdateOfferPhase::Available);
-    assert!(restored.state.persistent_surface_visible());
-    assert_eq!(restored.state.primary_action_label(), Some("Update"));
     assert_eq!(
-        restored.status_text(),
-        "Installer opened. Complete it to update."
+        primary_update_action(&presentation),
+        Some(UpdateAction::Retry)
     );
+    assert_ne!(presentation.claim, VersionClaim::Current);
+}
+
+/// The restart is settled by the process that comes back, across the process
+/// boundary the old lifecycle does not survive.
+#[test]
+fn a_restart_that_came_back_on_the_old_build_is_a_failure_not_a_success() {
+    let stuck = LinuxUpdateSession::resumed(InstallKind::AppImage, Some("99.0.0".to_owned()));
+    let presentation = stuck.describe();
+    assert_ne!(presentation.claim, VersionClaim::Current);
+    assert!(
+        presentation.updates_message.contains("did not take effect"),
+        "unexpected message: {}",
+        presentation.updates_message
+    );
+
+    let landed =
+        LinuxUpdateSession::resumed(InstallKind::AppImage, Some(APP_BUILD_VERSION.to_owned()));
+    let presentation = landed.describe();
+    assert_eq!(presentation.claim, VersionClaim::Current);
+    assert!(presentation.updates_message.contains(APP_BUILD_VERSION));
+}
+
+/// The undecidable restart cannot arise on Linux: the running build is
+/// compiled in whole, so every comparison the model makes across the restart
+/// is decidable and lands on the success or the #660 failure — never on
+/// "could not tell".
+#[test]
+fn a_linux_restart_is_always_decidable() {
+    assert!(linux_running_version().is_complete());
+
+    for pending in [
+        APP_BUILD_VERSION,
+        "99.0.0",
+        "0.11.0",
+        "0.11.0-beta.0.1",
+        &format!("{APP_BUILD_VERSION}.1"),
+    ] {
+        let session = LinuxUpdateSession::resumed(InstallKind::AppImage, Some(pending.to_owned()));
+        assert!(
+            !matches!(
+                session.lifecycle.state(),
+                UpdateState::RestartUnverified { .. }
+            ),
+            "pending {pending} left the restart unverified against {APP_BUILD_VERSION}"
+        );
+    }
+}
+
+/// The marker settles exactly one restart: a stale record cannot keep
+/// reporting an update that already landed.
+#[test]
+fn the_pending_restart_marker_is_consumed_once() {
+    let cache_dir = unique_temp_dir("okp-pending-restart");
+    let previous = env::var_os("OKP_LINUX_UPDATE_CACHE_DIR");
+    // SAFETY: this test is single-threaded over the cache-dir override and
+    // restores whatever it found.
+    unsafe { env::set_var("OKP_LINUX_UPDATE_CACHE_DIR", cache_dir.path()) };
+
+    assert_eq!(take_pending_restart(), None);
+    record_pending_restart("0.12.0");
+    assert_eq!(take_pending_restart().as_deref(), Some("0.12.0"));
+    assert_eq!(take_pending_restart(), None);
+
+    // SAFETY: same single-threaded restore.
+    unsafe {
+        match previous {
+            Some(value) => env::set_var("OKP_LINUX_UPDATE_CACHE_DIR", value),
+            None => env::remove_var("OKP_LINUX_UPDATE_CACHE_DIR"),
+        }
+    }
+    cache_dir.close().expect("cache dir should be removed");
+}
+
+/// Flatpak and rpm are ordinary system-managed installs now, not special
+/// cases: they report who updates them and are never polled.
+#[test]
+fn flatpak_and_rpm_report_their_owner_without_a_check() {
+    for kind in [InstallKind::Flatpak, InstallKind::Rpm] {
+        let session = LinuxUpdateSession::for_install_kind(kind);
+        let presentation = session.describe();
+        assert_eq!(presentation.capability, UpdateCapability::SystemManaged);
+        assert_eq!(presentation.action, None);
+        assert!(!update_checks_are_possible(kind));
+        assert!(!session.offer_surface_visible());
+        assert!(!presentation.updates_message.is_empty());
+    }
+    assert!(
+        LinuxUpdateSession::for_install_kind(InstallKind::Flatpak)
+            .describe()
+            .updates_message
+            .contains("Flatpak")
+    );
+}
+
+/// A build no packaging owns says so instead of pretending to be current.
+#[test]
+fn a_dev_build_says_updates_are_disabled() {
+    let session = LinuxUpdateSession::for_install_kind(InstallKind::DevBuild);
+    let presentation = session.describe();
+    assert_eq!(presentation.capability, UpdateCapability::Unmanaged);
+    assert_eq!(presentation.claim, VersionClaim::NotApplicable);
+    assert_eq!(presentation.action, None);
+    assert!(!update_checks_are_possible(InstallKind::DevBuild));
+}
+
+/// The discovery lane follows the detected install kind, not a build-time
+/// stamp: only the AppImage lane fetches something it can apply itself.
+#[test]
+fn the_discovery_lane_follows_the_detected_install_kind() {
+    assert_eq!(
+        candidate_install_lane(InstallKind::AppImage),
+        CandidateInstallLane::AppImage
+    );
+    assert_eq!(
+        candidate_install_lane(InstallKind::Deb),
+        CandidateInstallLane::Debian
+    );
+    assert_eq!(
+        candidate_install_lane(InstallKind::Rpm),
+        CandidateInstallLane::SystemPackage
+    );
+    assert_eq!(
+        candidate_install_lane(InstallKind::Flatpak),
+        CandidateInstallLane::SystemPackage
+    );
+    assert_eq!(parse_install_kind(" Deb "), Some(InstallKind::Deb));
+    assert_eq!(parse_install_kind("appimage"), Some(InstallKind::AppImage));
+    assert_eq!(parse_install_kind("snap"), None);
+}
+
+/// Detection reads the process, and the ownership question is only asked when
+/// the cheap evidence leaves the answer open — a Flatpak or a mounted AppImage
+/// never spawns a package manager.
+#[test]
+fn install_evidence_is_gathered_from_the_process() {
+    let evidence = process_install_evidence(false);
+    assert_eq!(evidence.package_ownership, PackageOwnership::Unknown);
+    assert_eq!(
+        evidence.executable_path,
+        env::current_exe()
+            .ok()
+            .map(|path| path.to_string_lossy().into_owned())
+    );
+
+    let flatpak = InstallEvidence {
+        flatpak_id: Some("com.befeast.okplayer".to_owned()),
+        ..process_install_evidence(false)
+    };
+    assert_eq!(detect_install_kind(&flatpak), InstallKind::Flatpak);
+
+    let mounted = InstallEvidence {
+        executable_path: Some("/tmp/.mount_OKPlay1a2b3/usr/bin/ok-player".to_owned()),
+        ..InstallEvidence::default()
+    };
+    assert_eq!(detect_install_kind(&mounted), InstallKind::AppImage);
+
+    let packaged = InstallEvidence {
+        executable_path: Some("/usr/bin/ok-player".to_owned()),
+        package_ownership: PackageOwnership::Dpkg,
+        ..InstallEvidence::default()
+    };
+    assert_eq!(detect_install_kind(&packaged), InstallKind::Deb);
+}
+
+/// Every preview state is reached by walking real transitions, so the visual
+/// smoke fixtures cannot show a state the lifecycle cannot produce.
+#[test]
+fn update_previews_walk_real_transitions() {
+    let deb = build_linux_update_preview(InstallKind::Deb, "available")
+        .expect("an available offer previews on the deb lane");
+    assert!(
+        deb.describe()
+            .updates_message
+            .contains(PREVIEW_UPDATE_VERSION)
+    );
+    assert_eq!(primary_update_action(&deb.describe()), None);
+
+    let appimage = build_linux_update_preview(InstallKind::AppImage, "restart-pending")
+        .expect("a pending restart previews on the AppImage lane");
+    assert_eq!(
+        primary_update_action(&appimage.describe()),
+        Some(UpdateAction::RestartToFinish)
+    );
+
+    // A state a lane cannot reach is not previewable there either.
+    assert!(build_linux_update_preview(InstallKind::Deb, "restart-pending").is_none());
+    assert!(build_linux_update_preview(InstallKind::AppImage, "nonsense").is_none());
+
+    for preview in [
+        "up-to-date",
+        "checking",
+        "skipped",
+        "install-error",
+        "error",
+    ] {
+        assert!(
+            build_linux_update_preview(InstallKind::AppImage, preview).is_some(),
+            "{preview} must be previewable on the self-applying lane"
+        );
+    }
+}
+
+/// A refresh over a standing offer keeps it on screen with its controls
+/// disabled, and does not resurrect one the user skipped.
+#[test]
+fn a_refresh_keeps_the_offer_it_is_refreshing() {
+    let mut session = LinuxUpdateSession::for_install_kind(InstallKind::AppImage);
+    session.lifecycle.start_check().expect("check starts");
+    session.lifecycle.check_found("0.12.0").expect("found");
+    session.lifecycle.start_check().expect("a refresh starts");
+
+    let presentation = session.describe();
+    assert!(!presentation.actions_enabled);
+    assert_eq!(presentation.target_version.as_deref(), Some("0.12.0"));
+    assert!(session.offer_surface_visible());
+
+    let mut skipped = LinuxUpdateSession::for_install_kind(InstallKind::AppImage);
+    skipped.lifecycle.start_check().expect("check starts");
+    skipped.lifecycle.check_found("0.12.0").expect("found");
+    skipped.lifecycle.skip_offer().expect("skippable");
+    skipped.lifecycle.start_check().expect("a refresh starts");
+    assert!(
+        !skipped.offer_surface_visible(),
+        "a re-check must not put a skipped version back on the player surface"
+    );
+}
+
+/// The system-managed action hands the user to a real tool or admits there is
+/// none; it never silently does nothing.
+#[test]
+fn the_system_software_action_is_honest_about_what_this_desktop_has() {
+    let discovered = system_software_surface();
+    match discovered {
+        Some((path, _)) => assert!(path.is_absolute() || path.exists()),
+        None => assert!(!SYSTEM_UPDATER_ABSENT_HINT.is_empty()),
+    }
+    assert_eq!(
+        SYSTEM_SOFTWARE_SURFACES.len(),
+        5,
+        "the candidate list is the whole policy; changing it is a deliberate act"
+    );
+    assert!(SYSTEM_UPDATER_ACTION_LABEL.starts_with("Open"));
 }
 
 #[test]
@@ -4667,25 +4932,6 @@ fn candidate_22_check_bypasses_stale_shared_caches_and_selects_23() {
 #[test]
 fn candidate_feed_cache_bust_changes_for_every_check() {
     assert_ne!(candidate_feed_cache_bust(), candidate_feed_cache_bust());
-}
-
-#[test]
-fn candidate_deb_feed_sha_mismatch_is_refused_before_download() {
-    let name = "ok-player_0.11.0-beta.1.42_amd64.deb";
-    let update = DebUpdate {
-        version: "0.11.0-beta.1.42".to_owned(),
-        name: name.to_owned(),
-        url: "https://example.invalid/update.deb".to_owned(),
-        size: Some(42),
-        sums_url: Some("https://example.invalid/SHA256SUMS-42.txt".to_owned()),
-        expected_sha256: Some("a".repeat(64)),
-    };
-    let manifest = format!("{}  {name}\n", "b".repeat(64));
-
-    let error = verify_deb_feed_identity(&update, &manifest)
-        .expect_err("candidate feed and checksum manifest must agree");
-    assert!(error.contains("Candidate identity check failed"));
-    assert!(error.contains("SHA mismatch"));
 }
 
 #[test]
@@ -4969,26 +5215,6 @@ fn audio_only_seek_readout_shows_timecode_without_a_frame() {
     assert_eq!(
         seek_readout::format_readout(target, playback.container_fps),
         "01:03"
-    );
-}
-
-#[test]
-fn deb_self_install_timeout_uses_positive_override_only() {
-    assert_eq!(
-        parse_deb_self_install_timeout(Some("5")),
-        Duration::from_secs(5)
-    );
-    assert_eq!(
-        parse_deb_self_install_timeout(Some("0")),
-        DEB_SELF_INSTALL_TIMEOUT
-    );
-    assert_eq!(
-        parse_deb_self_install_timeout(Some("soon")),
-        DEB_SELF_INSTALL_TIMEOUT
-    );
-    assert_eq!(
-        parse_deb_self_install_timeout(None),
-        DEB_SELF_INSTALL_TIMEOUT
     );
 }
 
@@ -6414,7 +6640,7 @@ fn settings_and_about_open_path_does_not_block_on_metadata_probes() {
         "pkg_config_version",
         "ffmpeg_version",
         "linux_os_label",
-        "linux_update_install_status",
+        "detect_process_install_kind",
     ] {
         assert!(
             !settings_window.contains(probe),
@@ -6441,15 +6667,15 @@ fn settings_and_about_open_path_does_not_block_on_metadata_probes() {
         "about.rs must use the cheap synchronous snapshot for the first frame"
     );
 
-    // The Updates page also resolves the install mode off the main thread.
-    assert!(updates.contains("linux_update_install_status"));
+    // The install kind costs a package-manager query, so the Updates page
+    // resolves it off the main thread just like the About probes.
     let updates_after_spawn = updates
         .split("std::thread::spawn")
         .nth(1)
-        .expect("updates.rs spawns a thread for the install probe");
+        .expect("updates.rs spawns a thread for the install-kind probe");
     assert!(
-        updates_after_spawn.contains("linux_update_install_status"),
-        "updates.rs must probe install status in a background thread"
+        updates_after_spawn.contains("install_kind()"),
+        "updates.rs must resolve the install kind in a background thread"
     );
 }
 

@@ -16,7 +16,7 @@ pub(crate) struct AboutDeferredFields {
     pub libmpv: String,
     pub ffmpeg: String,
     pub os: String,
-    pub install: String,
+    pub install: InstallKind,
 }
 
 impl AboutDeferredFields {
@@ -25,7 +25,7 @@ impl AboutDeferredFields {
             libmpv: pkg_config_version("mpv").unwrap_or_else(|| "system".to_owned()),
             ffmpeg: ffmpeg_version().unwrap_or_else(|| "system".to_owned()),
             os: linux_os_label(),
-            install: linux_update_install_status().to_owned(),
+            install: install_kind(),
         }
     }
 
@@ -33,7 +33,7 @@ impl AboutDeferredFields {
         snapshot.libmpv.clone_from(&self.libmpv);
         snapshot.ffmpeg.clone_from(&self.ffmpeg);
         snapshot.os.clone_from(&self.os);
-        snapshot.install.clone_from(&self.install);
+        snapshot.install = self.install.as_str().to_owned();
 
         if let Some(label) = labels.libmpv.as_ref() {
             label.set_text(&self.libmpv);
@@ -45,7 +45,7 @@ impl AboutDeferredFields {
             label.set_text(&self.os);
         }
         if let Some(label) = labels.install.as_ref() {
-            label.set_text(&self.install);
+            label.set_text(self.install.as_str());
         }
     }
 }
@@ -76,7 +76,7 @@ pub(crate) fn settings_about_section(
     let mut deferred_labels = AboutDeferredLabels::default();
     let sheet = gtk::Box::new(gtk::Orientation::Vertical, 12);
     sheet.add_css_class("okp-about-sheet");
-    sheet.append(&about_app_card(&snapshot.borrow()));
+    sheet.append(&about_app_card(&snapshot.borrow(), &state));
     sheet.append(&about_engine_card(&snapshot.borrow(), &mut deferred_labels));
     sheet.append(&about_host_card(&snapshot.borrow(), &mut deferred_labels));
     pane.append(&sheet);
@@ -241,9 +241,21 @@ pub(crate) fn about_hero_channel(channel: &str) -> String {
         .to_uppercase()
 }
 
-pub(crate) fn about_app_card(snapshot: &AboutSnapshot) -> gtk::Box {
+pub(crate) fn about_app_card(
+    snapshot: &AboutSnapshot,
+    state: &Rc<RefCell<PlayerState>>,
+) -> gtk::Box {
     let rows = gtk::Box::new(gtk::Orientation::Vertical, 10);
     rows.append(&about_spec_row("Version", &snapshot.version, true, None));
+    // The status is registered for refresh, not just snapshotted: this page is
+    // cached, so a check that settles while it is open must reach it too.
+    let (update_row, update_label) =
+        about_spec_row_with_label("Updates", &snapshot.update_status, false, None);
+    state
+        .borrow_mut()
+        .about_update_labels
+        .push(update_label.downgrade());
+    rows.append(&update_row);
     rows.append(&about_spec_row("Channel", &snapshot.channel, false, None));
     rows.append(&about_spec_row("Build", &snapshot.build, true, None));
     rows.append(&about_spec_row("License", &snapshot.license, true, None));
@@ -534,17 +546,4 @@ pub(crate) fn linux_os_label() -> String {
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "Linux".to_owned())
-}
-
-pub(crate) fn linux_update_install_status() -> &'static str {
-    if flatpak_update_managed() {
-        "Flatpak managed"
-    } else {
-        match linux_install_lane() {
-            CandidateInstallLane::AppImage => "Self-update enabled",
-            CandidateInstallLane::Debian if deb_self_install_available() => "Deb self-install",
-            CandidateInstallLane::Debian => "Deb installer",
-            CandidateInstallLane::SystemPackage => "DNF package manager",
-        }
-    }
 }
