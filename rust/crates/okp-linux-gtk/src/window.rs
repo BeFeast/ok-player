@@ -399,6 +399,10 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
                     controls.side_panel_fade_revealer.clone().upcast(),
                 ),
                 ("up-next", controls.up_next_revealer.clone().upcast()),
+                // Full-window surfaces that become targetable above the video: the
+                // welcome/history canvas while no media is loaded, and the error card.
+                ("welcome", empty_surface.widget().clone().upcast()),
+                ("media-state", media_state_overlay.widget().clone().upcast()),
             ]
             .into_iter()
             .chain(compact_mode.diagnostic_planes())

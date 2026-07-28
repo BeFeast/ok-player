@@ -50,25 +50,60 @@ def number(fields: dict[str, str], key: str) -> float | None:
         return None
 
 
-def read_log(path: str) -> tuple[dict[str, dict[str, str]], list[dict[str, str]]]:
-    """Newest complete geometry record, and every pointer sample in order."""
-    record: dict[str, dict[str, str]] = {}
+Record = dict[str, dict[str, str]]
+
+
+def read_log(path: str) -> tuple[Record, list[dict[str, str]]]:
+    """The newest geometry record, and every pointer sample in order.
+
+    A record is several lines, so a read can land between the window line and the plane
+    lines that follow it. Lines still being written are dropped, and callers that need a
+    particular plane use `read_record`, which re-reads instead of concluding the plane is
+    gone.
+    """
+    record: Record = {}
     pointers: list[dict[str, str]] = []
     seq: str | None = None
     with open(path, "r", errors="replace") as handle:
-        for line in handle:
-            if not line.startswith(PREFIX):
-                continue
-            fields = parse_fields(line)
-            part = fields.get("part")
-            if part == "pointer":
-                pointers.append(fields)
-                continue
-            if fields.get("seq") != seq:
-                seq = fields.get("seq")
-                record = {}
-            if part:
-                record[part] = fields
+        data = handle.read()
+    lines = data.split("\n")
+    if data and not data.endswith("\n"):
+        # A line still being written is not a line yet.
+        lines = lines[:-1]
+    for line in lines:
+        if not line.startswith(PREFIX):
+            continue
+        fields = parse_fields(line)
+        part = fields.get("part")
+        if part == "pointer":
+            pointers.append(fields)
+            continue
+        if not part:
+            continue
+        if fields.get("seq") != seq:
+            seq = fields.get("seq")
+            record = {}
+        record[part] = fields
+    return record, pointers
+
+
+def read_record(
+    path: str, part: str | None = None, retries: int = 6, delay: float = 0.05
+) -> tuple[Record, list[dict[str, str]]]:
+    """The newest record, re-read while a wanted plane is missing.
+
+    The app appends a record in one pass, so a plane that is absent because the record is
+    still being written appears within milliseconds; one that is absent because the plane
+    is gone never does. Retrying tells them apart without ever using a stale record.
+    """
+    record: Record = {}
+    pointers: list[dict[str, str]] = []
+    for attempt in range(retries):
+        record, pointers = read_log(path)
+        if part is None or part in record:
+            return record, pointers
+        if attempt + 1 < retries:
+            time.sleep(delay)
     return record, pointers
 
 
@@ -142,7 +177,7 @@ class Transform:
 
 
 def calibrate(path: str, settle: float, verbose: bool) -> Transform:
-    record, _ = read_log(path)
+    record, _ = read_record(path, "window")
     window = record.get("window")
     if not window:
         raise SystemExit("no geometry record: is OKP_DEBUG_INTERACTIONS=1 set?")
@@ -224,9 +259,12 @@ def aim_point(
     """
     transform: Transform | None = None
     for attempt in range(1, attempts + 1):
-        record, _ = read_log(path)
+        record, _ = read_record(path, part)
         plane = record.get(part)
         if plane is None:
+            if attempt < attempts:
+                print(f"attempt {attempt}: no {part} plane in the record; re-reading")
+                continue
             raise SystemExit(f"no {part} plane in the geometry record")
         local_x, local_y = plane_center(plane)
 
@@ -263,7 +301,7 @@ def aim_point(
 
         # The layout may have moved under the probe (revealed chrome shrinks the drag
         # target); require the landing to be inside the rectangle as it is now.
-        record, _ = read_log(path)
+        record, _ = read_record(path, part)
         current = record.get(part)
         if current is None:
             continue

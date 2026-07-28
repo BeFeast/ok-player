@@ -173,6 +173,42 @@ if [[ "${1:-}" == "--inner" ]]; then
   wait "$app_pid" 2>/dev/null || true
   app_pid=""
 
+  # With no media the welcome canvas owns the whole window and takes input, so it must be
+  # reported: a drag target published underneath it would be unpressable.
+  timeout 40s env OKP_DEBUG_INTERACTIONS=1 "$BINARY" >"$OUT_DIR/idle-app.log" 2>&1 &
+  app_pid=$!
+  idle_window_id="$(wait_for_window)" || {
+    cat "$OUT_DIR/idle-app.log" >&2
+    exit 1
+  }
+  xdotool windowactivate "$idle_window_id" >/dev/null 2>&1 || true
+  sleep 3
+  xdotool mousemove --window "$idle_window_id" 60 200
+  sleep 1
+  welcome_x="$(field welcome local-x "$OUT_DIR/idle-app.log")"
+  welcome_y="$(field welcome local-y "$OUT_DIR/idle-app.log")"
+  welcome_w="$(field welcome w "$OUT_DIR/idle-app.log")"
+  welcome_h="$(field welcome h "$OUT_DIR/idle-app.log")"
+  welcome_interactive="$(field welcome interactive "$OUT_DIR/idle-app.log")"
+  [[ -n "$welcome_w" && "$welcome_w" -gt 0 && "$welcome_interactive" == "1" ]] || {
+    echo "the welcome surface was not reported as an interactive plane" >&2
+    exit 1
+  }
+  idle_drag_w="$(field drag-target w "$OUT_DIR/idle-app.log")"
+  if [[ -n "$idle_drag_w" && "$idle_drag_w" -gt 0 ]]; then
+    idle_drag_x="$(field drag-target local-x "$OUT_DIR/idle-app.log")"
+    idle_drag_y="$(field drag-target local-y "$OUT_DIR/idle-app.log")"
+    idle_drag_h="$(field drag-target h "$OUT_DIR/idle-app.log")"
+    if (( idle_drag_x < welcome_x + welcome_w && welcome_x < idle_drag_x + idle_drag_w \
+          && idle_drag_y < welcome_y + welcome_h && welcome_y < idle_drag_y + idle_drag_h )); then
+      echo "a drag target was published under the welcome surface" >&2
+      exit 1
+    fi
+  fi
+  kill "$app_pid" 2>/dev/null || true
+  wait "$app_pid" 2>/dev/null || true
+  app_pid=""
+
   # Compact mode floats its own controls over the video, the play button in the middle of
   # it. Those planes must be reported too, or the drag target would cover a control.
   timeout 50s env OKP_DEBUG_INTERACTIONS=1 OKP_START_COMPACT=1 "$BINARY" "$FIXTURE" \
@@ -231,7 +267,8 @@ if [[ "${1:-}" == "--inner" ]]; then
   app_pid=""
 
   if awk '/panicked at|fatal runtime error|Aborted|core dumped/ { print FILENAME ":" FNR ":" $0; found = 1 } END { exit !found }' \
-      "$OUT_DIR/app.log" "$OUT_DIR/compact-app.log" "$OUT_DIR/quiet-app.log"; then
+      "$OUT_DIR/app.log" "$OUT_DIR/idle-app.log" "$OUT_DIR/compact-app.log" \
+      "$OUT_DIR/quiet-app.log"; then
     echo "window-geometry smoke observed a fatal process diagnostic" >&2
     exit 1
   fi
@@ -246,6 +283,8 @@ if [[ "${1:-}" == "--inner" ]]; then
     "compact_play_plane=${play_w}x${play_h}+${play_x},${play_y}" \
     "compact_drag_target=${compact_drag_w}x${compact_drag_h}+${compact_drag_x},${compact_drag_y}" \
     'compact_drag_target_clears_controls=pass' \
+    "welcome_plane=${welcome_w}x${welcome_h}+${welcome_x},${welcome_y}" \
+    'welcome_surface_owns_the_idle_window=pass' \
     'silent_without_diagnostic=pass' \
     'fatal_diagnostics=absent' >"$OUT_DIR/results.txt"
   exit 0
