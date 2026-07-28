@@ -63,6 +63,7 @@ pub mod time_code;
 pub mod timeline_buffer;
 pub mod track_label;
 pub mod track_tags;
+pub mod update_lifecycle;
 pub mod update_selection;
 pub mod velopack_artifacts;
 pub mod video_click;
