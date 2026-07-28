@@ -173,6 +173,44 @@ if [[ "${1:-}" == "--inner" ]]; then
   wait "$app_pid" 2>/dev/null || true
   app_pid=""
 
+  # Compact mode floats its own controls over the video, the play button in the middle of
+  # it. Those planes must be reported too, or the drag target would cover a control.
+  timeout 50s env OKP_DEBUG_INTERACTIONS=1 OKP_START_COMPACT=1 "$BINARY" "$FIXTURE" \
+    >"$OUT_DIR/compact-app.log" 2>&1 &
+  app_pid=$!
+  compact_window_id="$(wait_for_window)" || {
+    cat "$OUT_DIR/compact-app.log" >&2
+    exit 1
+  }
+  xdotool windowactivate "$compact_window_id" >/dev/null 2>&1 || true
+  sleep 3
+  xdotool mousemove --window "$compact_window_id" 40 40
+  sleep 1
+  wait_for_geometry "$OUT_DIR/compact-app.log" || {
+    echo "no geometry record was published in compact mode" >&2
+    exit 1
+  }
+  play_x="$(field compact-play local-x "$OUT_DIR/compact-app.log")"
+  play_y="$(field compact-play local-y "$OUT_DIR/compact-app.log")"
+  play_w="$(field compact-play w "$OUT_DIR/compact-app.log")"
+  play_h="$(field compact-play h "$OUT_DIR/compact-app.log")"
+  [[ -n "$play_w" && "$play_w" -gt 0 && -n "$play_h" && "$play_h" -gt 0 ]] || {
+    echo "the compact play control was not reported as a plane" >&2
+    exit 1
+  }
+  compact_drag_x="$(field drag-target local-x "$OUT_DIR/compact-app.log")"
+  compact_drag_y="$(field drag-target local-y "$OUT_DIR/compact-app.log")"
+  compact_drag_w="$(field drag-target w "$OUT_DIR/compact-app.log")"
+  compact_drag_h="$(field drag-target h "$OUT_DIR/compact-app.log")"
+  if (( compact_drag_x < play_x + play_w && play_x < compact_drag_x + compact_drag_w \
+        && compact_drag_y < play_y + play_h && play_y < compact_drag_y + compact_drag_h )); then
+    echo "the compact drag target overlaps the compact play control" >&2
+    exit 1
+  fi
+  kill "$app_pid" 2>/dev/null || true
+  wait "$app_pid" 2>/dev/null || true
+  app_pid=""
+
   timeout 40s "$BINARY" "$FIXTURE" >"$OUT_DIR/quiet-app.log" 2>&1 &
   app_pid=$!
   quiet_window_id="$(wait_for_window)" || {
@@ -193,7 +231,7 @@ if [[ "${1:-}" == "--inner" ]]; then
   app_pid=""
 
   if awk '/panicked at|fatal runtime error|Aborted|core dumped/ { print FILENAME ":" FNR ":" $0; found = 1 } END { exit !found }' \
-      "$OUT_DIR/app.log" "$OUT_DIR/quiet-app.log"; then
+      "$OUT_DIR/app.log" "$OUT_DIR/compact-app.log" "$OUT_DIR/quiet-app.log"; then
     echo "window-geometry smoke observed a fatal process diagnostic" >&2
     exit 1
   fi
@@ -205,6 +243,9 @@ if [[ "${1:-}" == "--inner" ]]; then
     "drag_target=${drag_w}x${drag_h}+${drag_x},${drag_y}" \
     "aim_point=${center_x},${center_y}" \
     'aimed_press_reached_video=pass' \
+    "compact_play_plane=${play_w}x${play_h}+${play_x},${play_y}" \
+    "compact_drag_target=${compact_drag_w}x${compact_drag_h}+${compact_drag_x},${compact_drag_y}" \
+    'compact_drag_target_clears_controls=pass' \
     'silent_without_diagnostic=pass' \
     'fatal_diagnostics=absent' >"$OUT_DIR/results.txt"
   exit 0

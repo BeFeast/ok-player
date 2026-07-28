@@ -399,7 +399,10 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
                     controls.side_panel_fade_revealer.clone().upcast(),
                 ),
                 ("up-next", controls.up_next_revealer.clone().upcast()),
-            ],
+            ]
+            .into_iter()
+            .chain(compact_mode.diagnostic_planes())
+            .collect(),
         },
     );
     connect_state_poll(

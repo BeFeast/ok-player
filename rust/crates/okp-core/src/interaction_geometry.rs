@@ -666,6 +666,50 @@ mod tests {
     }
 
     #[test]
+    fn a_control_in_the_middle_of_the_video_pushes_the_drag_surface_aside() {
+        // Compact mode puts a play button in the centre of the video, between two bars.
+        // Aiming at the middle of the video plane would press it instead of the video.
+        let mut geometry = windowed();
+        geometry.client = Rect::new(0.0, 0.0, 480.0, 270.0);
+        geometry.planes = vec![
+            Plane::new(VIDEO_PLANE, Rect::new(0.0, 0.0, 480.0, 270.0), true),
+            Plane::new("compact-top-bar", Rect::new(0.0, 0.0, 480.0, 32.0), true),
+            Plane::new("compact-play", Rect::new(208.0, 103.0, 64.0, 64.0), true),
+            Plane::new(
+                "compact-bottom-bar",
+                Rect::new(0.0, 222.0, 480.0, 48.0),
+                true,
+            ),
+        ];
+
+        let video = geometry.video().expect("video plane").bounds;
+        assert_eq!(
+            geometry
+                .plane_at(video.center())
+                .map(|plane| plane.name.as_str()),
+            Some("compact-play"),
+            "the middle of the video plane is a compact control"
+        );
+
+        let drag = geometry.drag_surface().expect("drag surface");
+        assert_eq!(drag, Rect::new(0.0, 32.0, 208.0, 190.0));
+        for control in ["compact-top-bar", "compact-play", "compact-bottom-bar"] {
+            let bounds = geometry.plane(control).expect(control).bounds;
+            assert_eq!(
+                drag.intersect(bounds),
+                None,
+                "{control} overlaps the drag surface"
+            );
+        }
+        assert_eq!(
+            geometry
+                .plane_at(drag.center())
+                .map(|plane| plane.name.as_str()),
+            Some(VIDEO_PLANE)
+        );
+    }
+
+    #[test]
     fn a_click_through_overlay_does_not_shrink_the_drag_surface() {
         let mut geometry = windowed();
         geometry.planes.push(Plane::new(
