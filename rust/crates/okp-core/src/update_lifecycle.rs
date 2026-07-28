@@ -222,8 +222,10 @@ pub fn detect_install_kind(evidence: &InstallEvidence) -> InstallKind {
 pub enum UpdateState {
     /// Nothing has been checked yet in this session.
     Idle,
-    /// A check is in flight.
-    Checking,
+    /// A check is in flight. `previous_target` is the offer that was already
+    /// on screen when the user asked to re-check, so a failed refresh restores
+    /// it instead of dropping a known update.
+    Checking { previous_target: Option<String> },
     /// The check completed and this build is the newest one.
     UpToDate,
     /// A newer version exists and this install can apply it itself.
@@ -231,6 +233,9 @@ pub enum UpdateState {
     /// A newer version exists but a system update tool owns it; `hint` says
     /// which one.
     AvailableExternally { version: String, hint: String },
+    /// A discovered version the user chose to skip. The offer is remembered —
+    /// it stays installable on demand — but nothing prompts for it.
+    Skipped { version: String },
     /// A system update tool owns this install and the app does not discover
     /// versions for it at all — the rpm and flatpak lanes, which report who
     /// updates them and never run a check. Distinct from [`Self::Idle`], whose
@@ -268,9 +273,11 @@ impl UpdateState {
             | Self::Downloading { version }
             | Self::ReadyToApply { version }
             | Self::Applying { version }
-            | Self::RestartPending { version } => Some(version),
+            | Self::RestartPending { version }
+            | Self::Skipped { version } => Some(version),
             Self::Failed { target, .. } => target.as_deref(),
-            Self::Idle | Self::Checking | Self::UpToDate | Self::ManagedExternally { .. } => None,
+            Self::Checking { previous_target } => previous_target.as_deref(),
+            Self::Idle | Self::UpToDate | Self::ManagedExternally { .. } => None,
             // `Running` carries the version that is executing, which is the
             // running version rather than a target still to be reached.
             Self::Running { .. } => None,
@@ -317,6 +324,10 @@ pub enum UpdateAction {
     RestartToFinish,
     /// Retry after a failure.
     Retry,
+    /// Suppress this exact version so nothing prompts for it again.
+    SkipVersion,
+    /// Install a version the user previously skipped.
+    InstallAnyway,
 }
 
 impl UpdateAction {
@@ -328,6 +339,8 @@ impl UpdateAction {
             Self::InstallUpdate => "Install now",
             Self::RestartToFinish => "Restart now",
             Self::Retry => "Try again",
+            Self::SkipVersion => "Skip this version",
+            Self::InstallAnyway => "Install anyway",
         }
     }
 
@@ -337,7 +350,10 @@ impl UpdateAction {
     pub const fn applies_update_in_app(self) -> bool {
         matches!(
             self,
-            Self::DownloadUpdate | Self::InstallUpdate | Self::RestartToFinish
+            Self::DownloadUpdate
+                | Self::InstallUpdate
+                | Self::RestartToFinish
+                | Self::InstallAnyway
         )
     }
 }
@@ -360,8 +376,12 @@ pub struct UpdatePresentation {
     /// Message for the About surface, derived from the same state so the two
     /// surfaces cannot disagree.
     pub about_message: String,
-    /// The one action the surface may offer, if any.
+    /// The primary action the surface may offer, if any.
     pub action: Option<UpdateAction>,
+    /// The secondary action offered beside the primary one — today only
+    /// "Skip this version" on a live offer. Kept in the projection so a shell
+    /// never has to maintain its own parallel offer model.
+    pub secondary_action: Option<UpdateAction>,
 }
 
 /// The update state machine for one install.
@@ -407,6 +427,32 @@ impl UpdateLifecycle {
             running_version: running_version.into(),
             state: UpdateState::ManagedExternally {
                 hint: install_kind.system_update_hint_text().to_owned(),
+            },
+        })
+    }
+
+    /// Rebuilds the lifecycle in a process that started with an update already
+    /// downloaded and staged but not yet applied — the user downloaded it,
+    /// closed the app, and came back. The payload is still on disk (Velopack
+    /// keeps a pending release; the Linux lane keeps the staged asset), so the
+    /// lifecycle returns to [`UpdateState::ReadyToApply`] instead of pretending
+    /// nothing was found and re-downloading it. Only a
+    /// [`UpdateCapability::SelfApply`] install stages payloads of its own.
+    pub fn resumed_with_staged_update(
+        install_kind: InstallKind,
+        running_version: impl Into<String>,
+        staged_version: impl Into<String>,
+    ) -> Result<Self, UpdateTransitionError> {
+        if install_kind.capability() != UpdateCapability::SelfApply {
+            return Err(UpdateTransitionError::CapabilityForbids(
+                install_kind.capability(),
+            ));
+        }
+        Ok(Self {
+            install_kind,
+            running_version: running_version.into(),
+            state: UpdateState::ReadyToApply {
+                version: staged_version.into(),
             },
         })
     }
@@ -474,8 +520,14 @@ impl UpdateLifecycle {
             | UpdateState::UpToDate
             | UpdateState::Available { .. }
             | UpdateState::AvailableExternally { .. }
+            | UpdateState::Skipped { .. }
             | UpdateState::Running { .. }
-            | UpdateState::Failed { .. } => Ok(self.enter(UpdateState::Checking)),
+            | UpdateState::Failed { .. } => {
+                // A re-check must not lose the offer already on screen: if it
+                // fails, the known version is restored rather than dropped.
+                let previous_target = self.state.target_version().map(str::to_owned);
+                Ok(self.enter(UpdateState::Checking { previous_target }))
+            }
             _ => Err(self.rejected()),
         }
     }
@@ -483,7 +535,7 @@ impl UpdateLifecycle {
     /// The check completed and found nothing newer.
     pub fn check_found_none(&mut self) -> Result<&UpdateState, UpdateTransitionError> {
         match self.state {
-            UpdateState::Checking => Ok(self.enter(UpdateState::UpToDate)),
+            UpdateState::Checking { .. } => Ok(self.enter(UpdateState::UpToDate)),
             _ => Err(self.rejected()),
         }
     }
@@ -500,7 +552,7 @@ impl UpdateLifecycle {
         if self.capability() == UpdateCapability::Unmanaged {
             return Err(UpdateTransitionError::CapabilityForbids(self.capability()));
         }
-        if !matches!(self.state, UpdateState::Checking) {
+        if !matches!(self.state, UpdateState::Checking { .. }) {
             return Err(self.rejected());
         }
         let version = version.into();
@@ -520,12 +572,53 @@ impl UpdateLifecycle {
         &mut self,
         reason: impl Into<String>,
     ) -> Result<&UpdateState, UpdateTransitionError> {
-        match self.state {
-            UpdateState::Checking => Ok(self.enter(UpdateState::Failed {
-                reason: reason.into(),
-                // A check that never found anything has no offer to retain.
-                target: None,
-            })),
+        match &self.state {
+            // The offer that was on screen before the refresh survives it; a
+            // check that never found anything has none to retain.
+            UpdateState::Checking { previous_target } => {
+                let target = previous_target.clone();
+                Ok(self.enter(UpdateState::Failed {
+                    reason: reason.into(),
+                    target,
+                }))
+            }
+            _ => Err(self.rejected()),
+        }
+    }
+
+    /// Suppresses the discovered version: nothing prompts for it again, but it
+    /// stays known so the user can still install it on demand. Mirrors the
+    /// per-channel skip the settings already persist.
+    pub fn skip_offer(&mut self) -> Result<&UpdateState, UpdateTransitionError> {
+        match &self.state {
+            UpdateState::Available { version }
+            | UpdateState::AvailableExternally { version, .. } => {
+                let version = version.clone();
+                Ok(self.enter(UpdateState::Skipped { version }))
+            }
+            UpdateState::Failed {
+                target: Some(version),
+                ..
+            } => {
+                let version = version.clone();
+                Ok(self.enter(UpdateState::Skipped { version }))
+            }
+            _ => Err(self.rejected()),
+        }
+    }
+
+    /// Installs a version the user had skipped. Only a
+    /// [`UpdateCapability::SelfApply`] install can act on it in the app; a
+    /// system-managed one keeps pointing at its package manager.
+    pub fn install_anyway(&mut self) -> Result<&UpdateState, UpdateTransitionError> {
+        if self.capability() != UpdateCapability::SelfApply {
+            return Err(UpdateTransitionError::CapabilityForbids(self.capability()));
+        }
+        match &self.state {
+            UpdateState::Skipped { version } => {
+                let version = version.clone();
+                Ok(self.enter(UpdateState::Downloading { version }))
+            }
             _ => Err(self.rejected()),
         }
     }
@@ -655,27 +748,36 @@ impl UpdateLifecycle {
         }))
     }
 
-    /// Retries the offer a failure interrupted, without a fresh discovery
-    /// round: a download or apply that failed after discovery kept its target,
-    /// so the same version becomes actionable again instead of vanishing until
-    /// the next check. A check that failed before finding anything has nothing
-    /// to retry and is refused — [`Self::start_check`] is its retry. Only a
-    /// [`UpdateCapability::SelfApply`] install has an offer of its own to
-    /// resume.
+    /// Restores the offer a failure interrupted, without a fresh discovery
+    /// round: a download, an apply, or a re-check that failed after discovery
+    /// kept its target, so the same version becomes actionable again instead of
+    /// vanishing until the next check. A check that failed before finding
+    /// anything has nothing to restore and is refused —
+    /// [`Self::start_check`] is its retry. An [`UpdateCapability::Unmanaged`]
+    /// install has no offers at all.
     pub fn retry_failed_update(&mut self) -> Result<&UpdateState, UpdateTransitionError> {
-        if self.capability() != UpdateCapability::SelfApply {
+        if self.capability() == UpdateCapability::Unmanaged {
             return Err(UpdateTransitionError::CapabilityForbids(self.capability()));
         }
-        match &self.state {
-            UpdateState::Failed {
-                target: Some(version),
-                ..
-            } => {
-                let version = version.clone();
-                Ok(self.enter(UpdateState::Available { version }))
+        let UpdateState::Failed {
+            target: Some(version),
+            ..
+        } = &self.state
+        else {
+            return Err(self.rejected());
+        };
+        let version = version.clone();
+        // The offer comes back exactly as its capability allows: actionable in
+        // app only where the app applies its own updates.
+        let restored = if self.capability() == UpdateCapability::SelfApply {
+            UpdateState::Available { version }
+        } else {
+            UpdateState::AvailableExternally {
+                version,
+                hint: self.install_kind.system_update_hint_text().to_owned(),
             }
-            _ => Err(self.rejected()),
-        }
+        };
+        Ok(self.enter(restored))
     }
 
     /// Everything the surfaces may show for the current state. The only place
@@ -695,6 +797,7 @@ impl UpdateLifecycle {
             updates_message,
             about_message,
             action: self.action(),
+            secondary_action: self.secondary_action(),
         }
     }
 
@@ -706,6 +809,7 @@ impl UpdateLifecycle {
             UpdateState::UpToDate | UpdateState::Running { .. } => VersionClaim::Current,
             UpdateState::Available { version }
             | UpdateState::AvailableExternally { version, .. }
+            | UpdateState::Skipped { version }
             | UpdateState::Downloading { version }
             | UpdateState::ReadyToApply { version }
             | UpdateState::Applying { version }
@@ -719,11 +823,17 @@ impl UpdateLifecycle {
             UpdateState::Failed {
                 target: Some(version),
                 ..
+            }
+            // A refresh does not un-know the offer it is refreshing.
+            | UpdateState::Checking {
+                previous_target: Some(version),
             } => VersionClaim::Superseded {
                 newer: version.clone(),
             },
             UpdateState::Idle
-            | UpdateState::Checking
+            | UpdateState::Checking {
+                previous_target: None,
+            }
             | UpdateState::ManagedExternally { .. }
             | UpdateState::Failed { target: None, .. } => VersionClaim::Unknown,
         }
@@ -735,7 +845,7 @@ impl UpdateLifecycle {
         }
         match &self.state {
             UpdateState::Idle => "OK Player has not checked for updates yet.".to_owned(),
-            UpdateState::Checking => "Checking for updates…".to_owned(),
+            UpdateState::Checking { .. } => "Checking for updates…".to_owned(),
             UpdateState::UpToDate => "OK Player is up to date.".to_owned(),
             UpdateState::Available { version } => format!("Version {version} is available."),
             UpdateState::AvailableExternally { version, hint } => {
@@ -752,6 +862,9 @@ impl UpdateLifecycle {
             ),
             UpdateState::Running { version } => {
                 format!("OK Player is now running version {version}.")
+            }
+            UpdateState::Skipped { version } => {
+                format!("Version {version} was skipped.")
             }
             UpdateState::ManagedExternally { hint } => hint.clone(),
             UpdateState::Failed {
@@ -774,6 +887,8 @@ impl UpdateLifecycle {
                     format!("OK Player {running} — restart to finish updating to {newer}.")
                 } else if matches!(self.state, UpdateState::Failed { .. }) {
                     format!("OK Player {running} — updating to {newer} failed.")
+                } else if matches!(self.state, UpdateState::Skipped { .. }) {
+                    format!("OK Player {running} — version {newer} was skipped.")
                 } else {
                     format!("OK Player {running} — version {newer} is available.")
                 }
@@ -800,14 +915,36 @@ impl UpdateLifecycle {
             UpdateState::ReadyToApply { .. } => Some(UpdateAction::InstallUpdate),
             UpdateState::RestartPending { .. } => Some(UpdateAction::RestartToFinish),
             UpdateState::Failed { .. } => Some(UpdateAction::Retry),
+            // A skipped version stays installable on demand, but only where the
+            // app installs anything at all.
+            UpdateState::Skipped { .. } => match self.capability() {
+                UpdateCapability::SelfApply => Some(UpdateAction::InstallAnyway),
+                UpdateCapability::SystemManaged | UpdateCapability::Unmanaged => None,
+            },
             // A system-managed update is announced, never actioned in-app; an
             // install the system owns outright offers not even a check; a
             // check, download or apply in flight offers nothing.
             UpdateState::AvailableExternally { .. }
             | UpdateState::ManagedExternally { .. }
-            | UpdateState::Checking
+            | UpdateState::Checking { .. }
             | UpdateState::Downloading { .. }
             | UpdateState::Applying { .. } => None,
+        }
+    }
+
+    /// The secondary action beside [`Self::action`]. A live offer — discovered,
+    /// or discovered and then failed — can be skipped; nothing else can.
+    fn secondary_action(&self) -> Option<UpdateAction> {
+        if self.capability() == UpdateCapability::Unmanaged {
+            return None;
+        }
+        match &self.state {
+            UpdateState::Available { .. }
+            | UpdateState::AvailableExternally { .. }
+            | UpdateState::Failed {
+                target: Some(_), ..
+            } => Some(UpdateAction::SkipVersion),
+            _ => None,
         }
     }
 
@@ -838,6 +975,12 @@ mod tests {
 
     fn evidence() -> InstallEvidence {
         InstallEvidence::default()
+    }
+
+    fn checking(previous: Option<&str>) -> UpdateState {
+        UpdateState::Checking {
+            previous_target: previous.map(str::to_owned),
+        }
     }
 
     /// Drives a lifecycle as far as the install kind allows, calling `observe`
@@ -880,6 +1023,27 @@ mod tests {
             }),
             Box::new(|life: &mut UpdateLifecycle| {
                 let _ = life.check_failed("network unreachable");
+            }),
+            Box::new(|life: &mut UpdateLifecycle| {
+                let _ = life.retry_failed_update();
+            }),
+            Box::new(|life: &mut UpdateLifecycle| {
+                let _ = life.start_check();
+            }),
+            Box::new(|life: &mut UpdateLifecycle| {
+                let _ = life.check_found("3.0.0");
+            }),
+            Box::new(|life: &mut UpdateLifecycle| {
+                let _ = life.skip_offer();
+            }),
+            Box::new(|life: &mut UpdateLifecycle| {
+                let _ = life.install_anyway();
+            }),
+            Box::new(|life: &mut UpdateLifecycle| {
+                let _ = life.download_failed("checksum mismatch");
+            }),
+            Box::new(|life: &mut UpdateLifecycle| {
+                let _ = life.retry_failed_update();
             }),
         ];
         for attempt in attempts {
@@ -1050,7 +1214,7 @@ mod tests {
     fn self_apply_walks_from_check_to_running_the_new_version() {
         let mut lifecycle = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
 
-        assert_eq!(lifecycle.start_check().unwrap(), &UpdateState::Checking);
+        assert_eq!(lifecycle.start_check().unwrap(), &checking(None));
         assert_eq!(
             lifecycle.check_found("2.0.0").unwrap(),
             &UpdateState::Available {
@@ -1152,9 +1316,11 @@ mod tests {
                 Some(UpdateAction::Retry),
                 "{name} failure should be retryable"
             );
-            assert_eq!(
-                lifecycle.start_check().unwrap(),
-                &UpdateState::Checking,
+            assert!(
+                matches!(
+                    lifecycle.start_check().unwrap(),
+                    UpdateState::Checking { .. }
+                ),
                 "{name} failure should allow another check"
             );
         }
@@ -1359,15 +1525,34 @@ mod tests {
                 "{kind} must refuse an in-app restart handoff"
             );
 
-            let mut failed_check = UpdateLifecycle::new(kind, "1.0.0");
-            failed_check.start_check().unwrap();
-            failed_check.check_failed("network unreachable").unwrap();
+            let mut failed_recheck = UpdateLifecycle::new(kind, "1.0.0");
+            failed_recheck.start_check().unwrap();
+            failed_recheck.check_found("2.0.0").unwrap();
+            failed_recheck.start_check().unwrap();
+            failed_recheck.check_failed("feed unavailable").unwrap();
+            assert!(
+                matches!(
+                    failed_recheck.retry_failed_update().unwrap(),
+                    UpdateState::AvailableExternally { .. }
+                ),
+                "{kind} must come back as an announcement, never an in-app offer"
+            );
+            assert_eq!(failed_recheck.describe().action, None);
+
+            let mut skipped = UpdateLifecycle::new(kind, "1.0.0");
+            skipped.start_check().unwrap();
+            skipped.check_found("2.0.0").unwrap();
+            skipped.skip_offer().unwrap();
             assert_eq!(
-                failed_check.retry_failed_update(),
+                skipped.describe().action,
+                None,
+                "{kind} cannot install a skipped version in app"
+            );
+            assert_eq!(
+                skipped.install_anyway(),
                 Err(UpdateTransitionError::CapabilityForbids(
                     UpdateCapability::SystemManaged
-                )),
-                "{kind} has no in-app offer of its own to resume"
+                ))
             );
 
             sweep_reachable_states(kind, |life| {
@@ -1700,7 +1885,171 @@ mod tests {
                 target: None,
             }))
         );
-        assert_eq!(lifecycle.start_check().unwrap(), &UpdateState::Checking);
+        assert_eq!(lifecycle.start_check().unwrap(), &checking(None));
+    }
+
+    /// Invariant: a re-check never destroys the offer it is refreshing. The
+    /// shell's `Checking(Some(previous))` behaviour, in the model.
+    #[test]
+    fn a_failed_recheck_restores_the_offer_it_was_refreshing() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        lifecycle.start_check().unwrap();
+        lifecycle.check_found("2.0.0").unwrap();
+
+        assert_eq!(
+            lifecycle.start_check().unwrap(),
+            &checking(Some("2.0.0")),
+            "a refresh must carry the offer it is refreshing"
+        );
+        assert_eq!(
+            lifecycle.describe().claim,
+            VersionClaim::Superseded {
+                newer: "2.0.0".to_owned()
+            },
+            "rechecking does not un-know the discovered version"
+        );
+
+        lifecycle.check_failed("feed unavailable").unwrap();
+        assert_eq!(lifecycle.state().target_version(), Some("2.0.0"));
+        assert_eq!(
+            lifecycle.retry_failed_update().unwrap(),
+            &UpdateState::Available {
+                version: "2.0.0".to_owned()
+            },
+            "the previous offer must survive a failed refresh"
+        );
+    }
+
+    #[test]
+    fn a_successful_recheck_that_finds_nothing_clears_the_old_offer() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        lifecycle.start_check().unwrap();
+        lifecycle.check_found("2.0.0").unwrap();
+        lifecycle.start_check().unwrap();
+
+        assert_eq!(
+            lifecycle.check_found_none().unwrap(),
+            &UpdateState::UpToDate
+        );
+        assert_eq!(lifecycle.state().target_version(), None);
+        assert_eq!(lifecycle.describe().claim, VersionClaim::Current);
+    }
+
+    /// Invariant: the projection can express the whole live offer — the primary
+    /// action and the skip beside it — so a shell never needs a second offer
+    /// model of its own.
+    #[test]
+    fn a_live_offer_projects_both_its_primary_action_and_the_skip() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        lifecycle.start_check().unwrap();
+        lifecycle.check_found("2.0.0").unwrap();
+
+        let presentation = lifecycle.describe();
+        assert_eq!(presentation.action, Some(UpdateAction::DownloadUpdate));
+        assert_eq!(
+            presentation.secondary_action,
+            Some(UpdateAction::SkipVersion)
+        );
+
+        lifecycle.skip_offer().unwrap();
+        let presentation = lifecycle.describe();
+        assert_eq!(
+            presentation.action,
+            Some(UpdateAction::InstallAnyway),
+            "a skipped version stays installable on demand"
+        );
+        assert_eq!(
+            presentation.secondary_action, None,
+            "an already skipped offer has nothing left to skip"
+        );
+        assert_eq!(presentation.target_version.as_deref(), Some("2.0.0"));
+        assert_eq!(
+            presentation.claim,
+            VersionClaim::Superseded {
+                newer: "2.0.0".to_owned()
+            },
+            "skipping does not make the running build current"
+        );
+
+        assert_eq!(
+            lifecycle.install_anyway().unwrap(),
+            &UpdateState::Downloading {
+                version: "2.0.0".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn a_failed_offer_can_still_be_skipped() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        lifecycle.start_check().unwrap();
+        lifecycle.check_found("2.0.0").unwrap();
+        lifecycle.start_download().unwrap();
+        lifecycle.download_failed("checksum mismatch").unwrap();
+
+        assert_eq!(
+            lifecycle.describe().secondary_action,
+            Some(UpdateAction::SkipVersion)
+        );
+        assert_eq!(
+            lifecycle.skip_offer().unwrap(),
+            &UpdateState::Skipped {
+                version: "2.0.0".to_owned()
+            }
+        );
+    }
+
+    /// Invariant: an update downloaded in an earlier session comes back staged.
+    /// The user downloaded it, quit before applying, and must not have to
+    /// download it again — least of all offline.
+    #[test]
+    fn a_staged_update_survives_an_ordinary_relaunch() {
+        for kind in SELF_APPLY_KINDS {
+            let mut lifecycle = UpdateLifecycle::resumed_with_staged_update(kind, "1.0.0", "2.0.0")
+                .expect("a self-applying install can resume a staged payload");
+
+            assert_eq!(
+                lifecycle.state(),
+                &UpdateState::ReadyToApply {
+                    version: "2.0.0".to_owned()
+                },
+                "{kind} must come back ready to apply, not idle"
+            );
+            let presentation = lifecycle.describe();
+            assert_eq!(presentation.action, Some(UpdateAction::InstallUpdate));
+            assert_eq!(presentation.version_in_use, "1.0.0");
+            assert_eq!(
+                presentation.claim,
+                VersionClaim::Superseded {
+                    newer: "2.0.0".to_owned()
+                }
+            );
+
+            assert_eq!(
+                lifecycle.start_apply().unwrap(),
+                &UpdateState::Applying {
+                    version: "2.0.0".to_owned()
+                },
+                "{kind} must apply the staged payload without downloading again"
+            );
+        }
+
+        for kind in SYSTEM_MANAGED_KINDS {
+            assert_eq!(
+                UpdateLifecycle::resumed_with_staged_update(kind, "1.0.0", "2.0.0").err(),
+                Some(UpdateTransitionError::CapabilityForbids(
+                    UpdateCapability::SystemManaged
+                )),
+                "{kind} stages nothing of its own"
+            );
+        }
+        assert_eq!(
+            UpdateLifecycle::resumed_with_staged_update(InstallKind::DevBuild, "1.0.0", "2.0.0")
+                .err(),
+            Some(UpdateTransitionError::CapabilityForbids(
+                UpdateCapability::Unmanaged
+            ))
+        );
     }
 
     #[test]
