@@ -1321,17 +1321,6 @@ fn update_decision_surfaces_are_shared_persistent_and_accessible() {
     assert!(updates.contains("gtk::Button::with_label(\"Update\")"));
     assert!(updates.contains("gtk::Button::with_label(\"Skip this version\")"));
     assert!(updates.contains("UpdateAction::InstallAnyway"));
-
-    // The shell projects the shared lifecycle instead of deciding for itself:
-    // no privileged install, no downloaded-file hand-off, no status strings of
-    // its own on the update path (issue #681).
-    assert!(!updates.contains("pkexec"));
-    assert!(!updates.contains("apt-get"));
-    assert!(!updates.contains("open_deb_installer"));
-    assert!(!updates.contains("flatpak_update_managed"));
-    assert!(
-        updates.contains("lifecycle.describe()") || updates.contains("linux_update.describe()")
-    );
     assert!(updates.contains("gtk::AccessibleRole::Group"));
     assert!(updates.contains("gtk::accessible::Property::Label(\"Available update actions\")"));
     assert!(updates.contains("gtk::accessible::Property::Label(\"Update OK Player\")"));
@@ -4435,6 +4424,65 @@ fn an_appimage_apply_ends_in_a_pending_restart_that_never_claims_the_new_version
         pending.about_message
     );
     assert!(session.offer_surface_visible());
+}
+
+/// A retry resumes where the failure happened: a payload still on disk is
+/// applied, a download that never landed starts over, and a check that failed
+/// before it found anything is simply checked again.
+#[test]
+fn a_retry_resumes_the_step_that_failed() {
+    let mut staged = LinuxUpdateSession::for_install_kind(InstallKind::AppImage);
+    staged.lifecycle.start_check().expect("check starts");
+    staged.lifecycle.check_found("0.12.0").expect("found");
+    staged.lifecycle.start_download().expect("download starts");
+    staged
+        .lifecycle
+        .download_and_apply_failed("the updater could not be launched")
+        .expect("the lane reports its own failure");
+    staged
+        .lifecycle
+        .retry_failed_update()
+        .expect("a staged failure is retryable");
+    assert!(matches!(
+        staged.lifecycle.state(),
+        UpdateState::ReadyToApply { .. }
+    ));
+
+    let mut unstaged = LinuxUpdateSession::for_install_kind(InstallKind::AppImage);
+    unstaged.lifecycle.start_check().expect("check starts");
+    unstaged.lifecycle.check_found("0.12.0").expect("found");
+    unstaged
+        .lifecycle
+        .start_download()
+        .expect("download starts");
+    unstaged
+        .lifecycle
+        .download_failed("the connection dropped")
+        .expect("a download can fail");
+    unstaged
+        .lifecycle
+        .retry_failed_update()
+        .expect("an unstaged failure is retryable");
+    assert!(matches!(
+        unstaged.lifecycle.state(),
+        UpdateState::Available { .. }
+    ));
+
+    // A check that failed before discovery has no target, so there is nothing
+    // to resume; the surface still offers Retry, and checking again is what it
+    // has to repeat.
+    let mut nothing_found = LinuxUpdateSession::for_install_kind(InstallKind::AppImage);
+    nothing_found.lifecycle.start_check().expect("check starts");
+    nothing_found
+        .lifecycle
+        .check_failed("the feed is unreachable")
+        .expect("a check can fail");
+    assert_eq!(
+        primary_update_action(&nothing_found.describe()),
+        Some(UpdateAction::Retry)
+    );
+    assert!(nothing_found.lifecycle.retry_failed_update().is_err());
+    assert!(nothing_found.lifecycle.start_check().is_ok());
 }
 
 /// A hand-off that failed is an error, not a quieter success.

@@ -76,7 +76,7 @@ pub(crate) fn settings_about_section(
     let mut deferred_labels = AboutDeferredLabels::default();
     let sheet = gtk::Box::new(gtk::Orientation::Vertical, 12);
     sheet.add_css_class("okp-about-sheet");
-    sheet.append(&about_app_card(&snapshot.borrow()));
+    sheet.append(&about_app_card(&snapshot.borrow(), &state));
     sheet.append(&about_engine_card(&snapshot.borrow(), &mut deferred_labels));
     sheet.append(&about_host_card(&snapshot.borrow(), &mut deferred_labels));
     pane.append(&sheet);
@@ -241,15 +241,21 @@ pub(crate) fn about_hero_channel(channel: &str) -> String {
         .to_uppercase()
 }
 
-pub(crate) fn about_app_card(snapshot: &AboutSnapshot) -> gtk::Box {
+pub(crate) fn about_app_card(
+    snapshot: &AboutSnapshot,
+    state: &Rc<RefCell<PlayerState>>,
+) -> gtk::Box {
     let rows = gtk::Box::new(gtk::Orientation::Vertical, 10);
     rows.append(&about_spec_row("Version", &snapshot.version, true, None));
-    rows.append(&about_spec_row(
-        "Updates",
-        &snapshot.update_status,
-        false,
-        None,
-    ));
+    // The status is registered for refresh, not just snapshotted: this page is
+    // cached, so a check that settles while it is open must reach it too.
+    let (update_row, update_label) =
+        about_spec_row_with_label("Updates", &snapshot.update_status, false, None);
+    state
+        .borrow_mut()
+        .about_update_labels
+        .push(update_label.downgrade());
+    rows.append(&update_row);
     rows.append(&about_spec_row("Channel", &snapshot.channel, false, None));
     rows.append(&about_spec_row("Build", &snapshot.build, true, None));
     rows.append(&about_spec_row("License", &snapshot.license, true, None));

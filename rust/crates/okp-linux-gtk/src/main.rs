@@ -254,6 +254,10 @@ struct PlayerState {
     screenshot_jobs: screenshots::ScreenshotJobs,
     linux_update: LinuxUpdateSession,
     linux_update_views: Vec<LinuxUpdateView>,
+    /// About's copy of the update status. Refreshed from the same projection
+    /// as the Updates page, because a cached About page that kept its first
+    /// snapshot is exactly how the two surfaces come to disagree (#660).
+    about_update_labels: Vec<glib::WeakRef<gtk::Label>>,
     pending_audio_device_restore: Option<PendingAudioDeviceRestore>,
     render_target_size: Option<okp_mpv::RenderTargetSize>,
     native_video_plane: Option<Arc<NativeVideoPlane>>,
@@ -894,11 +898,13 @@ struct StatePollContext {
 /// The payload the self-applying lane acts on, kept beside the shared
 /// lifecycle. Only a [`UpdateCapability::SelfApply`] install ever holds one:
 /// on every system-managed lane the app downloads and installs nothing.
+#[derive(Clone)]
 struct SelfApplyPayload {
     manager: UpdateManager,
     target: VelopackTarget,
 }
 
+#[derive(Clone)]
 enum VelopackTarget {
     /// A discovered release that still has to be downloaded.
     Info(Box<UpdateInfo>),

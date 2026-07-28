@@ -549,6 +549,16 @@ pub(crate) fn refresh_linux_update_views(state: &Rc<RefCell<PlayerState>>) {
         }
         true
     });
+
+    // About reads the same projection, so a cached About page cannot keep
+    // reporting a state the Updates page has moved on from.
+    state.borrow_mut().about_update_labels.retain(|label| {
+        let Some(label) = label.upgrade() else {
+            return false;
+        };
+        label.set_text(&presentation.about_message);
+        true
+    });
 }
 
 pub(crate) fn settings_updates_section(
@@ -849,8 +859,13 @@ pub(crate) fn take_primary_update_action(
         Some(UpdateAction::ApplyAndRestart) => start_update_apply(state, status_toast),
         Some(UpdateAction::RestartToFinish) => restart_for_pending_update(&state, &status_toast),
         Some(UpdateAction::Retry) => {
+            // A failure that kept its target is retried where it failed; a
+            // check that failed before finding anything is retried by checking
+            // again, which is the only thing there is to repeat.
             if transition_update(&state, "retry", UpdateLifecycle::retry_failed_update) {
                 continue_after_offer_accepted(state, status_toast);
+            } else {
+                start_update_check_for_ui(state, status_toast, true);
             }
         }
         Some(UpdateAction::CheckNow) | Some(UpdateAction::SkipVersion) | None => {}
@@ -858,17 +873,19 @@ pub(crate) fn take_primary_update_action(
 }
 
 /// Continues from whatever "install anyway" or "try again" restored: a payload
-/// still on disk is applied, one that has to be fetched is downloaded.
+/// still on disk is applied, and one that has to be fetched is downloaded —
+/// from wherever the restored state left the lifecycle, since the two entry
+/// points restore different ones.
 fn continue_after_offer_accepted(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusToast>) {
-    let is_downloading = matches!(
-        state.borrow().linux_update.lifecycle.state(),
-        UpdateState::Downloading { .. }
-    );
+    let restored = state.borrow().linux_update.lifecycle.state().clone();
     refresh_linux_update_views(&state);
-    if is_downloading {
-        run_update_download(state, status_toast);
-    } else {
-        start_update_apply(state, status_toast);
+    match restored {
+        // `install_anyway` moves an unstaged offer straight into the download.
+        UpdateState::Downloading { .. } => run_update_download(state, status_toast),
+        UpdateState::ReadyToApply { .. } => start_update_apply(state, status_toast),
+        // A retry after a download that never landed starts it over.
+        UpdateState::Available { .. } => start_update_download(state, status_toast),
+        _ => {}
     }
 }
 
@@ -1474,10 +1491,12 @@ pub(crate) fn linux_update_feed_base_url() -> String {
 /// the user can produce — it fails loudly instead of reporting a success.
 pub(crate) const MISSING_PAYLOAD_REASON: &str = "the downloaded update is no longer available";
 
-/// The payload the current state acts on, taken out of the session for the
-/// worker thread.
+/// The payload the current state acts on. Cloned rather than taken: a worker
+/// that fails leaves the offer retryable, and a retry that had to re-discover
+/// the payload would replace the error the user is looking at with a missing
+/// one.
 fn update_apply_job(state: &Rc<RefCell<PlayerState>>) -> Option<SelfApplyPayload> {
-    state.borrow_mut().linux_update.payload.take()
+    state.borrow().linux_update.payload.clone()
 }
 
 /// Downloads and applies in one step, the AppImage lane's shape. The updater
