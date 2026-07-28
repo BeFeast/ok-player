@@ -85,15 +85,32 @@ Because the whole site deploys atomically, a failure here blocks the JSON feeds 
 intended trade: a broken or unsigned APT archive is a worse outcome than a delayed feed refresh,
 and the refresh is idempotent and re-runnable from the *Update Feeds* workflow.
 
+### Why there is no `Valid-Until`
+
+`Release` deliberately carries no `Valid-Until`. The field bounds a freeze or rollback attack —
+an attacker able to intercept the transport could otherwise keep serving an old, signed index
+forever. But apt rejects an archive outright once the field lapses, and OK Player releases on no
+schedule: any window short enough to be worth having is short enough to strand every user
+during a quiet month, turning a security nicety into an outage. The archive is served over HTTPS
+from GitHub Pages and regenerated on every deploy. Revisit this if the release cadence ever
+becomes predictable.
+
 ## Verification
 
 `scripts/verify-apt-repo.sh` runs apt against the generated archive in a throwaway
 `debian:13-slim` container — the archive is bind-mounted and consumed through a `file://` source,
 so nothing has to be deployed first. It adds the published keyring and source, runs `apt-get
 update` and `apt-get install ok-player`, then starts `/usr/bin/ok-player` headless and requires
-it to reach its renderer-policy decision (the process then dies on the absent display, which is
-expected — the log line is the "the packaged binary and its dependency closure are real" signal
-used by the other Linux gates).
+it to reach its GUI initialisation (the process then dies on the absent display, which is
+expected — getting that far is the "the packaged binary and its dependency closure are real"
+signal used by the other Linux gates).
+
+Which signal is required is derived from the packaged binary rather than fixed. Current builds
+log `Renderer policy:` as the first statement of `main()`, before GTK, so for them that line is
+mandatory. Releases published before that line existed — the newest published `linux-v*` release
+is one — can only prove they reached GTK's display connection, and the archive has to stay
+verifiable over the versions it actually carries. An unresolved shared library is a hard failure
+either way, which is what this check exists to catch.
 
 It then runs two negative controls. Both check *two* things, because by default `apt-get update`
 reports a rejected repository as a warning, keeps the previously fetched index and still exits 0

@@ -310,6 +310,11 @@ okp_apt_generate_repo() {
     printf 'Architectures: %s\n' "$OKP_APT_ARCH"
     printf 'Components: %s\n' "$OKP_APT_COMPONENT"
     printf 'Date: %s\n' "$(LC_ALL=C date -u -d "@${epoch}" '+%a, %d %b %Y %H:%M:%S UTC')"
+    # No Valid-Until on purpose. It would bound a freeze/rollback attack, but it also makes apt
+    # reject the archive outright once it lapses — and OK Player releases on no schedule, so any
+    # window short enough to be worth having is short enough to strand every user during a quiet
+    # month. The archive is served over HTTPS from GitHub Pages and regenerated on every deploy;
+    # revisit this if the release cadence ever becomes predictable.
     printf 'Acquire-By-Hash: no\n'
     printf 'Description: OK Player Debian packages (%s)\n' "$OKP_APT_ARCH"
     printf 'MD5Sum:\n'
@@ -465,6 +470,10 @@ main() {
   local base_url="https://${owner,,}.github.io/${name}/apt"
   local repo_root="${out}/apt"
   mkdir -p "$repo_root"
+  # Idempotent, and also staged by the two feed builders — but this script has to stand on its
+  # own: without it a Jekyll pass could rewrite or hide archive files, and apt would be served
+  # something other than what was signed.
+  touch "${out}/.nojekyll"
 
   okp_apt_build_signed_repo "$staging" "$repo_root" "$epoch" "$base_url" okp_apt_infisical_secret
 
