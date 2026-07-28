@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Behavioural tests for scripts/build-apt-repo.sh (issue #683).
+# Behavioural tests for scripts/build-apt-repo.sh (issues #683, #689).
 #
-# The APT archive is only safe while four properties hold, and all four are invisible in a
+# The APT archive is only safe while these properties hold, and none of them is visible in a
 # single successful run:
 #   1. Re-running over an unchanged release set reproduces the archive content byte for byte,
 #      so a rebuild triggered by anything else (a docs push, a Windows release) cannot rewrite
@@ -12,6 +12,12 @@
 #      unexpected key is worse than not publishing at all.
 #   4. A missing or unreadable secret aborts the lane, naming the secret, instead of falling
 #      through to an unsigned archive.
+#   5. The two suites share one pool: a package both carry is stored once, indexed with the
+#      same bytes in both, and charged to the rolling-window budget once.
+#   6. The rolling window is per suite, and neither suite may starve the other or drop its own
+#      current build.
+#   7. Both suites are signed by the same key, in the same generator path — the `candidate`
+#      suite is not a second, parallel archive.
 #
 # These drive the real script: they source it and call okp_apt_build_signed_repo — the same
 # function main() calls — with a throwaway signing key and a test secret reader passed as its
@@ -31,7 +37,7 @@ trap 'rm -rf -- "$WORK"' EXIT
 
 # Named up front so a runner image without dpkg-dev says so, instead of failing somewhere
 # inside the generator with a message about OpenPGP.
-for tool in gpg gpgconf dpkg dpkg-deb dpkg-scanpackages gzip sha256sum md5sum; do
+for tool in gpg gpgconf dpkg dpkg-deb dpkg-scanpackages gzip sha256sum md5sum jq; do
   command -v "$tool" >/dev/null 2>&1 \
     || { printf 'APT repository generator tests require %s, which is not on PATH\n' "$tool" >&2; exit 1; }
 done
@@ -42,7 +48,7 @@ source "$GENERATOR"
 # derivation is asserted below without a container. It exposes okp_apt_verify_main rather than
 # main so both files can be sourced here.
 # shellcheck source=/dev/null
-source "$ROOT/scripts/verify-apt-repo.sh"
+source "$VERIFIER"
 
 failures=0
 pass() { printf 'PASS %s\n' "$1"; }
@@ -123,16 +129,74 @@ make_deb() {
     "$destination/ok-player_${version}_amd64.deb" >/dev/null
 }
 
+deb_name() { printf 'ok-player_%s_amd64.deb' "$1"; }
+
 # Fixed epoch: the Release date is an input, not a clock reading, and pinning it here is what
 # lets two runs be compared byte for byte at all.
 EPOCH=1750000000
 BASE_URL='https://example.invalid/ok-player/apt'
 
+# --- Archive plans ---------------------------------------------------------------------
+# The generator takes the suite layout as a plan directory, so a test can describe an archive
+# without going near GitHub. main() builds the same directory out of the rolling window.
+write_plan() {
+  # write_plan <plan-dir> <suite>=<epoch>=<comma-separated pool basenames> ...
+  local plan="$1"
+  shift
+  rm -rf -- "$plan"
+  mkdir -p "$plan"
+  : >"$plan/suites"
+  local spec suite epoch members
+  for spec in "$@"; do
+    suite="${spec%%=*}"
+    spec="${spec#*=}"
+    epoch="${spec%%=*}"
+    members="${spec#*=}"
+    printf '%s\n' "$suite" >>"$plan/suites"
+    printf '%s\n' "$epoch" >"$plan/$suite.epoch"
+    tr ',' '\n' <<<"$members" >"$plan/$suite.members"
+  done
+}
+
+stage_from_plan() {
+  # stage_from_plan <staging-out> <source-dir> <plan-dir>
+  # main() downloads exactly the packages the window retained, so a test that wants to observe
+  # what the generator does with a plan has to stage exactly the same set.
+  local out="$1" source="$2" plan="$3" suite name
+  rm -rf -- "$out"
+  mkdir -p "$out"
+  while IFS= read -r suite; do
+    [[ -n "$suite" ]] || continue
+    while IFS= read -r name; do
+      [[ -n "$name" ]] || continue
+      cp -- "$source/$name" "$out/$name"
+    done <"$plan/$suite.members"
+  done <"$plan/suites"
+}
+
+stable_plan_for_staging() {
+  # stable_plan_for_staging <plan-dir> <staging> [epoch] — one stable suite over everything staged
+  local plan="$1" staging="$2" epoch="${3:-$EPOCH}"
+  rm -rf -- "$plan"
+  mkdir -p "$plan"
+  printf 'stable\n' >"$plan/suites"
+  printf '%s\n' "$epoch" >"$plan/stable.epoch"
+  ( cd "$staging" && ls -1 -- *.deb ) >"$plan/stable.members"
+}
+
 # A subshell on purpose: okp_apt_build_signed_repo installs its own EXIT trap for the
 # ephemeral signing home, and an abort inside it must end that build, not this suite.
+build_planned() {
+  # build_planned <staging> <repo-root> <plan-dir>
+  ( okp_apt_build_signed_repo "$1" "$2" "$3" "$BASE_URL" test_secret_reader )
+}
+
 build_repo() {
-  # build_repo <staging> <repo-root> [epoch]
-  ( okp_apt_build_signed_repo "$1" "$2" "${3:-$EPOCH}" "$BASE_URL" test_secret_reader )
+  # build_repo <staging> <repo-root> [epoch] — stable-only over everything staged
+  local plan
+  plan="$WORK/plan-$(basename -- "$2")"
+  stable_plan_for_staging "$plan" "$1" "${3:-$EPOCH}"
+  build_planned "$1" "$2" "$plan"
 }
 
 # Everything except the two OpenPGP signatures, which carry their own creation time and are
@@ -142,7 +206,8 @@ content_diff() {
 }
 
 packages_index() {
-  printf '%s/dists/stable/main/binary-amd64/Packages' "$1"
+  # packages_index <repo-root> [suite]
+  printf '%s/dists/%s/main/binary-amd64/Packages' "$1" "${2:-stable}"
 }
 
 paragraph_for() {
@@ -324,20 +389,33 @@ else
   fail "index ordering premise" "the index is now version-ordered; the derivation comment is stale"
 fi
 
-# --- 8. The rolling window may never drop the current release -----------------------------
-# A window that skips the newest release because it does not fit, and keeps older ones, would
-# publish a signed archive advertising an older version than the JSON feeds do. Clients would
-# accept it, which makes it worse than not publishing.
-CANDIDATES="$(printf '%s\n' \
-  '2026-07-15T19:35:55Z	linux-v0.3.0	1	900' \
-  '2026-07-14T19:35:55Z	linux-v0.2.0	1	100' \
-  '2026-07-13T19:35:55Z	linux-v0.1.0	1	100')"
+# --- 8. The rolling window is per suite, and the budget is shared -------------------------
+# Rows are what the two fetchers emit: <published>\t<label>\t<pool basename>\t<size>.
+row() { printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$(deb_name "$3")" "$4"; }
 
-window() { ( OKP_APT_MAX_VERSIONS="$1" OKP_APT_POOL_BUDGET_BYTES="$2" \
-  okp_apt_apply_window <<<"$CANDIDATES" ); }
+plan_window() {
+  # plan_window <stable max> <candidate max> <budget> <stable rows> <candidate rows> \
+  #             <stable out> <candidate out>
+  ( OKP_APT_MAX_VERSIONS="$1" OKP_APT_CANDIDATE_MAX_VERSIONS="$2" OKP_APT_POOL_BUDGET_BYTES="$3" \
+    okp_apt_plan_suites "$4" "$5" "$6" "$7" )
+}
 
+STABLE_ROWS="$WORK/rows-stable"
+CAND_ROWS="$WORK/rows-candidate"
+STABLE_OUT="$WORK/selected-stable"
+CAND_OUT="$WORK/selected-candidate"
+: >"$CAND_ROWS"
+{
+  row '2026-07-15T19:35:55Z' linux-v0.3.0 0.3.0 900
+  row '2026-07-14T19:35:55Z' linux-v0.2.0 0.2.0 100
+  row '2026-07-13T19:35:55Z' linux-v0.1.0 0.1.0 100
+} >"$STABLE_ROWS"
+
+# The current release is not optional: skipping it because it does not fit, and keeping older,
+# smaller ones, would publish a signed archive advertising an older version than the JSON feeds
+# do. Clients would accept it, which makes it worse than not publishing.
 set +e
-oversize_output="$(window 10 500 2>&1)"
+oversize_output="$(plan_window 10 6 500 "$STABLE_ROWS" "$CAND_ROWS" "$STABLE_OUT" "$CAND_OUT" 2>&1)"
 oversize_status=$?
 set -e
 if ((oversize_status != 0)); then
@@ -358,7 +436,7 @@ else
 fi
 
 set +e
-nowindow_output="$(window 0 100000 2>&1)"
+nowindow_output="$(plan_window 0 6 100000 "$STABLE_ROWS" "$CAND_ROWS" "$STABLE_OUT" "$CAND_OUT" 2>&1)"
 nowindow_status=$?
 set -e
 if ((nowindow_status != 0)) && grep -q 'linux-v0.3.0' <<<"$nowindow_output"; then
@@ -370,16 +448,371 @@ fi
 # Positive control: with room for the current release the window still trims the tail rather
 # than failing, and reports what it dropped.
 set +e
-trimmed_output="$(window 10 1000 2>&1)"
+trimmed_output="$(plan_window 10 6 1000 "$STABLE_ROWS" "$CAND_ROWS" "$STABLE_OUT" "$CAND_OUT" 2>&1)"
 trimmed_status=$?
 set -e
-trimmed_tags="$(grep -o 'linux-v[0-9.]*' <<<"$trimmed_output" | sort -u | tr '\n' ' ')"
 if ((trimmed_status == 0)) \
-  && grep -qP 'linux-v0\.3\.0$' <<<"$trimmed_output" \
+  && grep -q 'linux-v0.3.0' "$STABLE_OUT" \
   && grep -q 'does not fit' <<<"$trimmed_output"; then
   pass "the window keeps the current release and drops the tail with a stated reason"
 else
-  fail "window trimming" "status ${trimmed_status}, tags: ${trimmed_tags}"
+  fail "window trimming" "status ${trimmed_status}, output: ${trimmed_output}"
+fi
+
+# The candidate suite is optional: no rolling candidate means a stable-only archive, not a
+# failed lane.
+set +e
+plan_window 10 6 100000 "$STABLE_ROWS" "$CAND_ROWS" "$STABLE_OUT" "$CAND_OUT" >/dev/null 2>&1
+stable_only_status=$?
+set -e
+if ((stable_only_status == 0)) && [[ -s "$STABLE_OUT" && ! -s "$CAND_OUT" ]]; then
+  pass "an archive with no rolling candidate plans the stable suite alone"
+else
+  fail "stable-only plan" "status ${stable_only_status}, candidate rows: $(cat "$CAND_OUT")"
+fi
+
+# A package both suites carry is charged once. Three distinct files of 100 bytes fit a 300-byte
+# budget exactly; counting the shared one twice would need 400 and would push the candidate's
+# oldest build out of the window.
+{
+  row '2026-07-15T00:00:00Z' linux-v1.0.0 1.0.0 100
+  row '2026-07-14T00:00:00Z' linux-v0.9.0 0.9.0 100
+} >"$WORK/rows-stable-shared"
+{
+  row '2026-07-16T00:00:00Z' 0.9.0 0.9.0 100
+  row '2026-07-15T00:00:00Z' 0.8.0 0.8.0 100
+} >"$WORK/rows-candidate-shared"
+set +e
+shared_output="$(plan_window 10 6 300 "$WORK/rows-stable-shared" "$WORK/rows-candidate-shared" \
+  "$STABLE_OUT" "$CAND_OUT" 2>&1)"
+shared_status=$?
+set -e
+if ((shared_status == 0)) && [[ "$(wc -l <"$STABLE_OUT")" == 2 && "$(wc -l <"$CAND_OUT")" == 2 ]]; then
+  pass "a package carried by both suites is charged to the pool budget once"
+else
+  fail "shared pool accounting" \
+    "status ${shared_status}, stable $(wc -l <"$STABLE_OUT") candidate $(wc -l <"$CAND_OUT"): ${shared_output}"
+fi
+
+# Neither suite may starve the other. Heads take 200 of a 500-byte budget; the remaining 300
+# goes to the tails in turn, so stable keeps two tail builds and candidate one. Draining
+# stable's tail first would leave the candidate suite with nothing but its current build.
+{
+  row '2026-07-15T00:00:00Z' linux-v3.0.0 3.0.0 100
+  row '2026-07-14T00:00:00Z' linux-v2.0.0 2.0.0 100
+  row '2026-07-13T00:00:00Z' linux-v1.0.0 1.0.0 100
+  row '2026-07-12T00:00:00Z' linux-v0.9.0 0.9.0 100
+} >"$WORK/rows-stable-fair"
+{
+  row '2026-07-16T00:00:00Z' 9.3.0 9.3.0 100
+  row '2026-07-16T00:00:00Z' 9.2.0 9.2.0 100
+  row '2026-07-16T00:00:00Z' 9.1.0 9.1.0 100
+  row '2026-07-16T00:00:00Z' 9.0.0 9.0.0 100
+} >"$WORK/rows-candidate-fair"
+set +e
+plan_window 10 6 500 "$WORK/rows-stable-fair" "$WORK/rows-candidate-fair" \
+  "$STABLE_OUT" "$CAND_OUT" >/dev/null 2>&1
+fair_status=$?
+set -e
+if ((fair_status == 0)) && [[ "$(wc -l <"$STABLE_OUT")" == 3 && "$(wc -l <"$CAND_OUT")" == 2 ]]; then
+  pass "a tight shared budget is offered to both tails in turn instead of draining one suite"
+else
+  fail "shared budget fairness" \
+    "status ${fair_status}, stable $(wc -l <"$STABLE_OUT") candidate $(wc -l <"$CAND_OUT")"
+fi
+
+# The per-suite version cap is per suite: trimming the candidate tail leaves stable untouched.
+set +e
+plan_window 10 2 100000 "$WORK/rows-stable-fair" "$WORK/rows-candidate-fair" \
+  "$STABLE_OUT" "$CAND_OUT" >/dev/null 2>&1
+cap_status=$?
+set -e
+if ((cap_status == 0)) && [[ "$(wc -l <"$STABLE_OUT")" == 4 && "$(wc -l <"$CAND_OUT")" == 2 ]]; then
+  pass "the rolling window applies per suite: the candidate cap does not shorten stable"
+else
+  fail "per-suite window" \
+    "status ${cap_status}, stable $(wc -l <"$STABLE_OUT") candidate $(wc -l <"$CAND_OUT")"
+fi
+
+# A candidate current build that cannot fit aborts for the same reason stable's does: the
+# candidate suite would otherwise advertise an older build than candidate.linux.json does.
+{
+  row '2026-07-16T00:00:00Z' 9.3.0 9.3.0 100000
+  row '2026-07-16T00:00:00Z' 9.2.0 9.2.0 10
+} >"$WORK/rows-candidate-huge"
+set +e
+huge_output="$(plan_window 10 6 500 "$WORK/rows-stable-fair" "$WORK/rows-candidate-huge" \
+  "$STABLE_OUT" "$CAND_OUT" 2>&1)"
+huge_status=$?
+set -e
+if ((huge_status != 0)) && grep -q 'candidate' <<<"$huge_output" && grep -q '9.3.0' <<<"$huge_output"; then
+  pass "a current candidate build that does not fit aborts, naming it"
+else
+  fail "candidate current build budget" "status ${huge_status}, output: ${huge_output}"
+fi
+
+# --- 9. The candidate suite is derived from the published pointer -------------------------
+# candidate.linux.json is the pointer okp-core uploads last, after the artifacts it names, so
+# the candidate suite advertises exactly what the candidate feed advertises.
+POINTER="$WORK/candidate.linux.json"
+ASSETS="$WORK/candidate-assets.json"
+cat >"$POINTER" <<'JSON'
+{
+  "channel": "candidate",
+  "version": "0.11.0-beta.0.197",
+  "build": 197,
+  "timestamp_utc": "2026-07-28T00:36:09Z",
+  "acceptance": "accepted",
+  "package": { "name": "ok-player_0.11.0-beta.0.197_amd64.deb" },
+  "history": [
+    { "version": "0.11.0-beta.0.193", "package": { "name": "ok-player_0.11.0-beta.0.193_amd64.deb" } },
+    { "version": "0.11.0-beta.0.187", "package": { "name": "ok-player_0.11.0-beta.0.187_amd64.deb" } }
+  ]
+}
+JSON
+cat >"$ASSETS" <<'JSON'
+[
+  { "name": "candidate.linux.json", "size": 7067 },
+  { "name": "ok-player_0.11.0-beta.0.197_amd64.deb", "size": 76237684 },
+  { "name": "ok-player_0.11.0-beta.0.193_amd64.deb", "size": 76225892 },
+  { "name": "ok-player_0.11.0-beta.0.187_amd64.deb", "size": 83929784 }
+]
+JSON
+POINTER_ROWS="$WORK/pointer.rows"
+set +e
+pointer_output="$(okp_apt_candidate_rows_from_pointer "$POINTER" "$ASSETS" "$POINTER_ROWS" 2>&1)"
+pointer_status=$?
+set -e
+EXPECTED_ROWS="$(printf '%s\n' \
+  '2026-07-28T00:36:09Z	0.11.0-beta.0.197	ok-player_0.11.0-beta.0.197_amd64.deb	76237684' \
+  '2026-07-28T00:36:09Z	0.11.0-beta.0.193	ok-player_0.11.0-beta.0.193_amd64.deb	76225892' \
+  '2026-07-28T00:36:09Z	0.11.0-beta.0.187	ok-player_0.11.0-beta.0.187_amd64.deb	83929784')"
+if ((pointer_status == 0)) && [[ "$(cat "$POINTER_ROWS")" == "$EXPECTED_ROWS" ]]; then
+  pass "the candidate window is the pointer's current build followed by its history, newest first"
+else
+  fail "pointer rows" "status ${pointer_status}, output: ${pointer_output}, rows: $(cat "$POINTER_ROWS")"
+fi
+
+# A history entry whose asset has been pruned from the rolling release is dropped rather than
+# indexed: an index entry apt cannot download is worse than a shorter window.
+jq 'del(.[] | select(.name == "ok-player_0.11.0-beta.0.187_amd64.deb"))' "$ASSETS" \
+  >"$WORK/candidate-assets-pruned.json"
+set +e
+pruned_output="$(okp_apt_candidate_rows_from_pointer "$POINTER" "$WORK/candidate-assets-pruned.json" \
+  "$POINTER_ROWS" 2>&1)"
+pruned_status=$?
+set -e
+if ((pruned_status == 0)) && [[ "$(wc -l <"$POINTER_ROWS")" == 2 ]] \
+  && ! grep -q 'beta.0.187' "$POINTER_ROWS"; then
+  pass "a history build whose asset is gone drops out of the candidate suite"
+else
+  fail "pruned history asset" "status ${pruned_status}, rows: $(cat "$POINTER_ROWS"), output: ${pruned_output}"
+fi
+
+# The current build is different: if the pointer names a package the release does not carry,
+# the archive cannot agree with the feed, so the lane aborts.
+jq 'del(.[] | select(.name == "ok-player_0.11.0-beta.0.197_amd64.deb"))' "$ASSETS" \
+  >"$WORK/candidate-assets-nocurrent.json"
+set +e
+nocurrent_output="$(okp_apt_candidate_rows_from_pointer "$POINTER" \
+  "$WORK/candidate-assets-nocurrent.json" "$POINTER_ROWS" 2>&1)"
+nocurrent_status=$?
+set -e
+if ((nocurrent_status != 0)) && grep -q 'beta.0.197' <<<"$nocurrent_output" \
+  && grep -q 'candidate feed' <<<"$nocurrent_output"; then
+  pass "a pointer naming a package the rolling release does not carry aborts the lane"
+else
+  fail "missing current candidate asset" "status ${nocurrent_status}, output: ${nocurrent_output}"
+fi
+
+# --- 10. Two suites, one pool, one key -----------------------------------------------------
+seed_secrets
+STAGE_SUITES="$WORK/stage-suites"
+make_deb 0.1.0-linux-alpha.112 "$STAGE_SUITES"     # stable only
+make_deb 0.11.0-beta.0.193 "$STAGE_SUITES"         # candidate only
+make_deb 0.11.0-beta.0.197 "$STAGE_SUITES"         # candidate only
+# A promoted build: the same package file is a release AND still a retained candidate, which is
+# the case "stored once, referenced twice" exists for.
+SHARED=0.11.0-beta.0.187
+make_deb "$SHARED" "$STAGE_SUITES"
+CANDIDATE_EPOCH=1750500000
+write_plan "$WORK/plan-two" \
+  "stable=${EPOCH}=$(deb_name 0.1.0-linux-alpha.112),$(deb_name "$SHARED")" \
+  "candidate=${CANDIDATE_EPOCH}=$(deb_name 0.11.0-beta.0.197),$(deb_name 0.11.0-beta.0.193),$(deb_name "$SHARED")"
+stage_from_plan "$WORK/staged-two" "$STAGE_SUITES" "$WORK/plan-two"
+build_planned "$WORK/staged-two" "$WORK/run-two" "$WORK/plan-two" >/dev/null
+
+STABLE_INDEX="$(packages_index "$WORK/run-two" stable)"
+CANDIDATE_INDEX="$(packages_index "$WORK/run-two" candidate)"
+
+if [[ -s "$CANDIDATE_INDEX" && -s "$STABLE_INDEX" ]]; then
+  pass "the generator emits dists/stable and dists/candidate from one run"
+else
+  fail "two suites" "one of the suites has no Packages index"
+fi
+
+# The separation the issue exists for, at the index level: the release channel must not carry
+# candidate builds, and the QA channel must carry them.
+if ! grep -q '0.11.0-beta.0.197' "$STABLE_INDEX" && ! grep -q '0.11.0-beta.0.193' "$STABLE_INDEX"; then
+  pass "the stable index carries no candidate build"
+else
+  fail "channel separation" "a candidate build leaked into dists/stable"
+fi
+if grep -q '0.11.0-beta.0.197' "$CANDIDATE_INDEX" && grep -q '0.11.0-beta.0.193' "$CANDIDATE_INDEX"; then
+  pass "the candidate index carries the rolling builds"
+else
+  fail "candidate index" "the candidate suite is missing a rolling build"
+fi
+if ! grep -q '0.1.0-linux-alpha.112' "$CANDIDATE_INDEX"; then
+  pass "the candidate index carries no stable-only release"
+else
+  fail "channel separation" "a stable release leaked into dists/candidate"
+fi
+
+# Shared, not duplicated: one file in the pool, and the same paragraph bytes in both indices.
+if [[ "$(find "$WORK/run-two/pool" -name "$(deb_name "$SHARED")" | wc -l)" == 1 ]]; then
+  pass "a package carried by both suites is stored once in the shared pool"
+else
+  fail "shared pool" "$(deb_name "$SHARED") is not stored exactly once"
+fi
+if [[ -n "$(paragraph_for "$SHARED" "$STABLE_INDEX")" \
+  && "$(paragraph_for "$SHARED" "$STABLE_INDEX")" == "$(paragraph_for "$SHARED" "$CANDIDATE_INDEX")" ]]; then
+  pass "a package carried by both suites is indexed with identical bytes in both"
+else
+  fail "shared paragraph" "the ${SHARED} paragraph differs between the suites"
+fi
+# Every index entry resolves, in both suites — the same orphan check the stable suite gets.
+suite_orphans=0
+for suite in stable candidate; do
+  while IFS= read -r filename; do
+    [[ -f "$WORK/run-two/$filename" ]] || suite_orphans=$((suite_orphans + 1))
+  done < <(awk '/^Filename: / { print $2 }' "$(packages_index "$WORK/run-two" "$suite")")
+done
+if ((suite_orphans == 0)); then
+  pass "every package indexed by either suite resolves to a file in the shared pool"
+else
+  fail "two-suite orphan check" "${suite_orphans} indexed packages have no pool file"
+fi
+
+# One key, both suites. A second signing path is exactly what this archive must not grow.
+for suite in stable candidate; do
+  if GNUPGHOME="$VERIFY_HOME" gpg --batch --status-fd 1 --verify \
+       "$WORK/run-two/dists/${suite}/InRelease" 2>/dev/null \
+       | grep -q "VALIDSIG ${TEST_FINGERPRINT}"; then
+    pass "the ${suite} InRelease is signed by the archive key"
+  else
+    fail "${suite} signature" "dists/${suite}/InRelease does not verify against the published keyring"
+  fi
+  if GNUPGHOME="$VERIFY_HOME" gpg --batch --status-fd 1 --verify \
+       "$WORK/run-two/dists/${suite}/Release.gpg" "$WORK/run-two/dists/${suite}/Release" 2>/dev/null \
+       | grep -q "VALIDSIG ${TEST_FINGERPRINT}"; then
+    pass "the ${suite} Release.gpg is signed by the archive key"
+  else
+    fail "${suite} detached signature" "dists/${suite}/Release.gpg does not verify"
+  fi
+  if grep -qx "Suite: ${suite}" "$WORK/run-two/dists/${suite}/Release" \
+    && grep -qx "Codename: ${suite}" "$WORK/run-two/dists/${suite}/Release"; then
+    pass "the ${suite} Release names its own suite"
+  else
+    fail "${suite} Release identity" "$(grep -E '^(Suite|Codename):' "$WORK/run-two/dists/${suite}/Release" | tr '\n' ' ')"
+  fi
+done
+if grep -qx "Date: $(LC_ALL=C date -u -d "@${CANDIDATE_EPOCH}" '+%a, %d %b %Y %H:%M:%S UTC')" \
+     "$WORK/run-two/dists/candidate/Release"; then
+  pass "each suite's Release is dated from its own newest build, not from the clock"
+else
+  fail "candidate Release date" "$(grep '^Date:' "$WORK/run-two/dists/candidate/Release")"
+fi
+
+# The published source stanzas: the default one must stay stable-only, or a user who follows the
+# README would be enrolled in QA builds by accident.
+if grep -qx 'Suites: stable' "$WORK/run-two/ok-player.sources"; then
+  pass "ok-player.sources subscribes to stable alone"
+else
+  fail "ok-player.sources" "$(cat "$WORK/run-two/ok-player.sources")"
+fi
+if grep -qx 'Suites: candidate' "$WORK/run-two/ok-player-candidate.sources"; then
+  pass "ok-player-candidate.sources subscribes to candidate alone"
+else
+  fail "ok-player-candidate.sources" "$(cat "$WORK/run-two/ok-player-candidate.sources" 2>&1)"
+fi
+# A stable-only archive must not publish a candidate stanza pointing at a suite that is not there:
+# apt fails hard on a missing suite.
+if [[ ! -e "$WORK/run-a/ok-player-candidate.sources" ]]; then
+  pass "a stable-only archive publishes no candidate source stanza"
+else
+  fail "stray candidate stanza" "ok-player-candidate.sources exists without a candidate suite"
+fi
+
+# Per-suite version derivation, which is what the container gate asserts against.
+if [[ "$(okp_apt_archive_version "$WORK/run-two" test candidate)" == "0.11.0-beta.0.197" \
+  && "$(okp_apt_archive_version "$WORK/run-two" test stable)" == "$SHARED" ]]; then
+  pass "the verifier derives each suite's newest version from that suite's index"
+else
+  fail "per-suite version derivation" \
+    "stable $(okp_apt_archive_version "$WORK/run-two" test stable), candidate $(okp_apt_archive_version "$WORK/run-two" test candidate)"
+fi
+
+# --- 11. A candidate that ages out leaves the archive completely ---------------------------
+# The next run's plan no longer names beta.0.193, and it is carried by no other suite, so it
+# must disappear from dists/candidate AND from the pool. A pool file nothing indexes is dead
+# weight against the shared budget.
+make_deb 0.11.0-beta.0.201 "$STAGE_SUITES"
+write_plan "$WORK/plan-rolled" \
+  "stable=${EPOCH}=$(deb_name 0.1.0-linux-alpha.112),$(deb_name "$SHARED")" \
+  "candidate=${CANDIDATE_EPOCH}=$(deb_name 0.11.0-beta.0.201),$(deb_name 0.11.0-beta.0.197),$(deb_name "$SHARED")"
+stage_from_plan "$WORK/staged-rolled" "$STAGE_SUITES" "$WORK/plan-rolled"
+build_planned "$WORK/staged-rolled" "$WORK/run-rolled" "$WORK/plan-rolled" >/dev/null
+ROLLED_INDEX="$(packages_index "$WORK/run-rolled" candidate)"
+if [[ ! -e "$WORK/run-rolled/pool/main/o/ok-player/$(deb_name 0.11.0-beta.0.193)" ]] \
+  && ! grep -q '0.11.0-beta.0.193' "$ROLLED_INDEX"; then
+  pass "a candidate that ages out disappears from dists/candidate and from the pool together"
+else
+  fail "candidate ageing" "beta.0.193 survived the window it left"
+fi
+if grep -q '0.11.0-beta.0.197' "$ROLLED_INDEX" \
+  && [[ "$(paragraph_for "$SHARED" "$(packages_index "$WORK/run-rolled" stable)")" \
+        == "$(paragraph_for "$SHARED" "$STABLE_INDEX")" ]]; then
+  pass "rolling the candidate window leaves the retained builds and the stable suite untouched"
+else
+  fail "candidate ageing (additivity)" "a retained build changed when the window rolled"
+fi
+
+# --- 12. A plan the pool cannot satisfy aborts ---------------------------------------------
+# Both directions are planning bugs that would ship a broken archive: an index entry apt cannot
+# download, or bytes no client can reach.
+write_plan "$WORK/plan-dangling" \
+  "stable=${EPOCH}=$(deb_name 0.1.0-linux-alpha.112)" \
+  "candidate=${CANDIDATE_EPOCH}=$(deb_name 9.9.9)"
+set +e
+dangling_output="$(build_planned "$STAGE_SUITES" "$WORK/run-dangling" "$WORK/plan-dangling" 2>&1)"
+dangling_status=$?
+set -e
+if ((dangling_status != 0)) && grep -q 'not in the pool' <<<"$dangling_output"; then
+  pass "a suite that references a package the pool does not carry aborts the lane"
+else
+  fail "dangling member" "status ${dangling_status}, output: ${dangling_output}"
+fi
+
+write_plan "$WORK/plan-unreferenced" \
+  "stable=${EPOCH}=$(deb_name 0.1.0-linux-alpha.112)"
+set +e
+unreferenced_output="$(build_planned "$STAGE_SUITES" "$WORK/run-unreferenced" \
+  "$WORK/plan-unreferenced" 2>&1)"
+unreferenced_status=$?
+set -e
+if ((unreferenced_status != 0)) && grep -q 'no suite indexes' <<<"$unreferenced_output"; then
+  pass "a pool file no suite indexes aborts the lane instead of wasting the byte budget"
+else
+  fail "unreferenced pool file" "status ${unreferenced_status}, output: ${unreferenced_output}"
+fi
+
+# --- 13. Two suites are as idempotent as one ------------------------------------------------
+build_planned "$WORK/staged-two" "$WORK/run-two-again" "$WORK/plan-two" >/dev/null
+if content_diff "$WORK/run-two" "$WORK/run-two-again" >"$WORK/two-suite-idempotence.diff" 2>&1; then
+  pass "a two-suite archive reproduces byte for byte over an unchanged plan"
+else
+  fail "two-suite idempotence" "$(head -n 20 "$WORK/two-suite-idempotence.diff")"
 fi
 
 if ((failures > 0)); then

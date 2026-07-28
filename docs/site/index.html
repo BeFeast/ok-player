@@ -1,8 +1,8 @@
 <!doctype html>
 <!-- Minimal home for the GitHub Pages site whose real job is serving the OK Player update
      feeds under /updates/ (win: releases.win.json, issue #131; linux: releases.linux.json +
-     deb.linux.json, issue #162) and the signed APT repository under /apt/ (issue #683), all
-     deployed by publish-update-feeds.yml.
+     deb.linux.json, issue #162) and the signed APT repository under /apt/ (stable + candidate
+     suites, issues #683 and #689), all deployed by publish-update-feeds.yml.
      A proper product landing page (PR #105) can replace this file without touching the feeds. -->
 <html lang="en">
 <head>
@@ -38,6 +38,9 @@ curl -fsSL https://befeast.github.io/ok-player/apt/ok-player.sources \
   | sudo tee /etc/apt/sources.list.d/ok-player.sources &gt;/dev/null
 sudo apt update &amp;&amp; sudo apt install ok-player</pre>
     <p>Signed by <code>77D0 FCDE B0D5 94E1 3E50&nbsp; F43A 9337 815E B0F7 8C63</code>.</p>
+    <p>Testing OK Player? The archive also carries a <code>candidate</code> suite with the rolling
+       QA build &mdash; same archive, same key, but these are not releases. Use
+       <code>ok-player-candidate.sources</code> <em>instead of</em> <code>ok-player.sources</code>.</p>
   </main>
 </body>
 </html>

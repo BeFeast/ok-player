@@ -1,12 +1,13 @@
 name: Update Feeds
 
 # The static home of the OK Player update channels (issues #131 Windows, #162 Linux) and of
-# the signed APT repository (issue #683).
+# the signed APT repository (issues #683, #689).
 # Installed builds read their channel manifest from https://befeast.github.io/ok-player/:
 #   - Windows (Velopack SimpleWebSource):   updates/win/releases.win.json
 #   - Linux AppImage (Velopack HttpSource): updates/linux/releases.linux.json
 #   - Linux .deb self-updater:              updates/linux/deb.linux.json
-#   - Debian/Ubuntu system updater:         apt/ (dists + pool, signed; scripts/build-apt-repo.sh)
+#   - Debian/Ubuntu system updater:         apt/ (dists/stable + dists/candidate over a shared
+#                                           pool, signed; scripts/build-apt-repo.sh)
 # This workflow is the ONLY writer of that site. It rebuilds the whole site from docs/site plus
 # manifests derived from the newest published release on each track (scripts/build-win-feed.sh and
 # scripts/build-linux-feed.sh) and deploys to GitHub Pages atomically — deploy-pages swaps the
@@ -27,8 +28,10 @@ name: Update Feeds
 # Every run rebuilds both feeds AND the APT archive from the current source of truth, so
 # overlapping or repeated triggers are harmless; the concurrency group serializes deploys so the
 # last one wins. The APT archive is regenerated the same way for the same reason: it is derived
-# from the published linux-v* releases, so a rebuild reproduces it rather than mutating it, and
-# a version already published keeps its exact pool bytes and checksums.
+# from the published linux-v* releases and from the rolling candidate pointer, so a rebuild
+# reproduces it rather than mutating it, and a version already published keeps its exact pool
+# bytes and checksums. Both suites come out of that one invocation and are signed by one key:
+# there is deliberately no second archive-building step anywhere in this workflow.
 #
 # The APT lane needs the archive signing key, which lives in Infisical and is fetched at run
 # time (issue #683) — it is deliberately not a GitHub Actions secret. Only the two Universal
@@ -73,7 +76,8 @@ jobs:
       - uses: actions/checkout@v4
 
       # Fetches the signing key from Infisical into an ephemeral GNUPGHOME, verifies its
-      # fingerprint against the expected one, signs, and publishes only the public key.
+      # fingerprint against the expected one, signs both suites, and publishes only the public
+      # key. One invocation, one key, two suites (issue #689).
       - name: Build signed APT repository
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -127,8 +131,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends dpkg-dev gnupg
 
-      # apt itself is the only authority on whether this archive works. A missing container
-      # runtime fails the lane rather than skipping the check.
+      # apt itself is the only authority on whether this archive works: it installs from each
+      # suite in turn and proves a stable-only root is never offered a candidate. A missing
+      # container runtime fails the lane rather than skipping the check.
       - name: Verify the APT repository installs from a clean Debian root
         run: ./scripts/verify-apt-repo.sh _site/apt
 
