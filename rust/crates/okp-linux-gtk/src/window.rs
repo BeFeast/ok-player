@@ -384,6 +384,24 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     });
     let volume_preview = env::var_os("OKP_VOLUME_PREVIEW")
         .map(|mode| (controls.volume.clone(), mode.to_string_lossy().into_owned()));
+    // No Wayland client can be asked where its window is, so an input harness has to be
+    // told. Under OKP_DEBUG_INTERACTIONS the shell reports the toplevel, the video plane
+    // and the chrome planes it must avoid; everything else here stays untouched.
+    connect_geometry_diagnostics(
+        &window,
+        GeometrySurfaces {
+            video: video_host.widget().clone(),
+            chrome: vec![
+                ("titlebar", window_chrome.widget().clone().upcast()),
+                ("osc", chrome.widget().clone().upcast()),
+                (
+                    "side-panel",
+                    controls.side_panel_fade_revealer.clone().upcast(),
+                ),
+                ("up-next", controls.up_next_revealer.clone().upcast()),
+            ],
+        },
+    );
     connect_state_poll(
         &window,
         Rc::clone(&state),
@@ -754,7 +772,7 @@ pub(crate) fn player_window_fit_area_available(
     current_player_fit_area(window, reported_bounds).is_some()
 }
 
-fn current_player_scale(window: &gtk::ApplicationWindow) -> f64 {
+pub(crate) fn current_player_scale(window: &gtk::ApplicationWindow) -> f64 {
     window
         .surface()
         .map(|surface| {

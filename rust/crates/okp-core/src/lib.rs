@@ -17,6 +17,7 @@ pub mod history;
 pub mod history_format;
 pub mod hwdec_policy;
 pub mod image_luma;
+pub mod interaction_geometry;
 pub mod key_press;
 pub mod launch_args;
 pub mod linux_renderer;
