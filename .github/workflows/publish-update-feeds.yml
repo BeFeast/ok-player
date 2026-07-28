@@ -72,15 +72,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Fetches the signing key from Infisical into an ephemeral GNUPGHOME, verifies its
+      # fingerprint against the expected one, signs, and publishes only the public key.
       - name: Build signed APT repository
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
           INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
         run: ./scripts/build-apt-repo.sh "${{ github.repository }}" _site
-
-      # apt itself is the only authority on whether this archive works. A missing container
-      # runtime fails the lane rather than skipping the check.
 
       - uses: actions/upload-artifact@v4
         with:
@@ -98,6 +97,14 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+
+      # The signed archive was produced on the internal builder, the only machine that can
+      # reach the signing key. It has to land in _site before anything inspects or deploys
+      # it: the verifier below reads _site/apt, and the feed builders never create it.
+      - uses: actions/download-artifact@v4
+        with:
+          name: apt-repository
+          path: _site
 
       # Both scripts stage the shared docs/site skeleton idempotently, then write their own
       # updates/<track>/ subtree. Running both into one _site yields the complete site so the
@@ -120,22 +127,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends dpkg-dev gnupg
 
-      # Fetches the signing key from Infisical into an ephemeral GNUPGHOME, verifies its
-      # fingerprint against the expected one, signs, and publishes only the public key.
+      # apt itself is the only authority on whether this archive works. A missing container
+      # runtime fails the lane rather than skipping the check.
       - name: Verify the APT repository installs from a clean Debian root
         run: ./scripts/verify-apt-repo.sh _site/apt
 
       # enablement: true creates the Pages site (build type "workflow") on the first run, so no
       # separate admin step is needed. If org policy blocks API enablement, enable it once by
       # hand: Settings -> Pages -> Source: GitHub Actions.
-      # The APT archive was produced on the internal builder because that is where
-      # the signing key is reachable; merge it in before the single deploy so the
-      # site carries both the JSON feeds and the signed repository.
-      - uses: actions/download-artifact@v4
-        with:
-          name: apt-repository
-          path: _site
-
       - uses: actions/configure-pages@v5
         with:
           enablement: true

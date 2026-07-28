@@ -82,6 +82,9 @@ jobs:
       - name: Candidate packaging-mode boundary stays container+required
         run: ./scripts/tests/candidate-packaging-mode.Tests.sh
 
+      - name: Feeds workflow keeps the signed-archive handoff intact
+        run: ./scripts/tests/feeds-workflow.Tests.sh
+
       - name: Container ownership handoff stays runtime-agnostic
         run: ./scripts/tests/container-fixup-ownership.Tests.sh
 
