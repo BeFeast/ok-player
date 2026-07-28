@@ -62,8 +62,36 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The signing key lives in Infisical on the internal network, which GitHub-hosted
+  # runners cannot resolve. Only this job needs it, so only this job runs on the
+  # self-hosted builder; the signed archive travels to the deploy job as an artifact
+  # and no key material ever leaves the internal host.
+  apt-repository:
+    name: Build the signed APT repository
+    runs-on: [self-hosted, mimir]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build signed APT repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+        run: ./scripts/build-apt-repo.sh "${{ github.repository }}" _site
+
+      # apt itself is the only authority on whether this archive works. A missing container
+      # runtime fails the lane rather than skipping the check.
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apt-repository
+          path: _site
+          retention-days: 1
+          if-no-files-found: error
+
   publish-feeds:
     name: Publish update feeds to GitHub Pages
+    needs: apt-repository
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -94,21 +122,20 @@ jobs:
 
       # Fetches the signing key from Infisical into an ephemeral GNUPGHOME, verifies its
       # fingerprint against the expected one, signs, and publishes only the public key.
-      - name: Build signed APT repository
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
-          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
-        run: ./scripts/build-apt-repo.sh "${{ github.repository }}" _site
-
-      # apt itself is the only authority on whether this archive works. A missing container
-      # runtime fails the lane rather than skipping the check.
       - name: Verify the APT repository installs from a clean Debian root
         run: ./scripts/verify-apt-repo.sh _site/apt
 
       # enablement: true creates the Pages site (build type "workflow") on the first run, so no
       # separate admin step is needed. If org policy blocks API enablement, enable it once by
       # hand: Settings -> Pages -> Source: GitHub Actions.
+      # The APT archive was produced on the internal builder because that is where
+      # the signing key is reachable; merge it in before the single deploy so the
+      # site carries both the JSON feeds and the signed repository.
+      - uses: actions/download-artifact@v4
+        with:
+          name: apt-repository
+          path: _site
+
       - uses: actions/configure-pages@v5
         with:
           enablement: true
