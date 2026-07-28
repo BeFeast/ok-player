@@ -367,6 +367,14 @@ pub enum CarriedOffer {
         hint: Option<String>,
         staged: bool,
     },
+    /// An offer that had already failed. A refresh over it must not quietly
+    /// promote it back into a clean offer and drop the error that explains
+    /// what the user is looking at.
+    Failed {
+        version: String,
+        reason: String,
+        staged: bool,
+    },
 }
 
 impl CarriedOffer {
@@ -375,7 +383,8 @@ impl CarriedOffer {
             Self::Available { version }
             | Self::AvailableExternally { version, .. }
             | Self::ReadyToApply { version }
-            | Self::Skipped { version, .. } => version,
+            | Self::Skipped { version, .. }
+            | Self::Failed { version, .. } => version,
         }
     }
 
@@ -395,6 +404,15 @@ impl CarriedOffer {
                 hint,
                 staged,
             },
+            Self::Failed {
+                version,
+                reason,
+                staged,
+            } => UpdateState::Failed {
+                reason,
+                target: Some(version),
+                staged,
+            },
         }
     }
 }
@@ -407,6 +425,10 @@ pub enum UpdateTransitionError {
     NotAllowedFrom(UpdateState),
     /// The install kind's capability forbids the transition anywhere.
     CapabilityForbids(UpdateCapability),
+    /// The transition belongs to a lane this install kind is not on — the
+    /// combined download-and-apply step exists only where accepting an offer
+    /// does both.
+    NotThisLane(InstallKind),
 }
 
 /// What a surface may tell the user about the binary that is executing right
@@ -679,21 +701,22 @@ impl UpdateLifecycle {
     /// would restore, which is what the surface was showing.
     fn carried_offer(&self) -> Option<CarriedOffer> {
         let version = match &self.state {
+            // A failure stays a failure across a refresh: its reason is what
+            // the surface is showing, and promoting it to a clean offer would
+            // erase it.
             UpdateState::Failed {
+                reason,
                 target: Some(version),
-                staged: true,
-                ..
+                staged,
             } => {
-                return Some(CarriedOffer::ReadyToApply {
+                return Some(CarriedOffer::Failed {
                     version: version.clone(),
+                    reason: reason.clone(),
+                    staged: *staged,
                 });
             }
             UpdateState::Available { version }
-            | UpdateState::AvailableExternally { version, .. }
-            | UpdateState::Failed {
-                target: Some(version),
-                ..
-            } => version.clone(),
+            | UpdateState::AvailableExternally { version, .. } => version.clone(),
             UpdateState::Skipped {
                 version,
                 hint,
@@ -848,6 +871,53 @@ impl UpdateLifecycle {
             UpdateState::Downloading { version } => {
                 let version = version.clone();
                 Ok(self.enter(UpdateState::ReadyToApply { version }))
+            }
+            _ => Err(self.rejected()),
+        }
+    }
+
+    /// The one-call download-and-apply step succeeded and the new build is on
+    /// disk, awaiting the relaunch.
+    ///
+    /// The AppImage lane downloads and applies in a single call, so there is no
+    /// separate `ReadyToApply` for the user to act on; this reports the whole
+    /// step at once. Lanes that stage first must go through
+    /// [`Self::download_finished`] and [`Self::start_apply`].
+    pub fn download_and_apply_needs_restart(
+        &mut self,
+    ) -> Result<&UpdateState, UpdateTransitionError> {
+        if !self.install_kind.applies_while_downloading() {
+            return Err(UpdateTransitionError::NotThisLane(self.install_kind));
+        }
+        match &self.state {
+            UpdateState::Downloading { version } => {
+                let version = version.clone();
+                Ok(self.enter(UpdateState::RestartPending { version }))
+            }
+            _ => Err(self.rejected()),
+        }
+    }
+
+    /// The one-call download-and-apply step failed *after* the payload landed.
+    ///
+    /// That lane reports one error for both halves, so the shell says which
+    /// half it was; when the download succeeded the verified payload is still
+    /// on disk and the retry re-applies it instead of fetching it again.
+    pub fn download_and_apply_failed(
+        &mut self,
+        reason: impl Into<String>,
+    ) -> Result<&UpdateState, UpdateTransitionError> {
+        if !self.install_kind.applies_while_downloading() {
+            return Err(UpdateTransitionError::NotThisLane(self.install_kind));
+        }
+        match &self.state {
+            UpdateState::Downloading { version } => {
+                let target = Some(version.clone());
+                Ok(self.enter(UpdateState::Failed {
+                    reason: reason.into(),
+                    target,
+                    staged: true,
+                }))
             }
             _ => Err(self.rejected()),
         }
@@ -2487,11 +2557,16 @@ mod tests {
         lifecycle.check_failed("feed unavailable").unwrap();
 
         assert_eq!(
-            lifecycle.state(),
+            lifecycle.state().target_version(),
+            Some("2.0.0"),
+            "a failed refresh must not discard a staged payload"
+        );
+        assert_eq!(
+            lifecycle.retry_failed_update().unwrap(),
             &UpdateState::ReadyToApply {
                 version: "2.0.0".to_owned()
             },
-            "a failed refresh must not discard a staged payload"
+            "and the retry still applies it rather than downloading again"
         );
     }
 
@@ -2765,6 +2840,123 @@ mod tests {
         assert!(
             !idle.describe().action_closes_the_app,
             "checking for updates closes nothing"
+        );
+    }
+
+    /// Invariant: a refresh over a failed offer restores the failure, not a
+    /// tidied-up version of it. The reason is what the surface is showing.
+    #[test]
+    fn a_failed_refresh_over_a_failed_offer_keeps_the_original_error() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        lifecycle.start_check().unwrap();
+        lifecycle.check_found("2.0.0").unwrap();
+        lifecycle.start_download().unwrap();
+        lifecycle.download_finished().unwrap();
+        lifecycle.start_apply().unwrap();
+        lifecycle.apply_failed("permission denied").unwrap();
+
+        lifecycle.start_check().unwrap();
+        lifecycle.check_failed("feed unavailable").unwrap();
+
+        assert_eq!(
+            lifecycle.state(),
+            &UpdateState::Failed {
+                reason: "permission denied".to_owned(),
+                target: Some("2.0.0".to_owned()),
+                staged: true,
+            },
+            "the apply failure must survive the refresh intact"
+        );
+        assert_eq!(
+            lifecycle.retry_failed_update().unwrap(),
+            &UpdateState::ReadyToApply {
+                version: "2.0.0".to_owned()
+            },
+            "and the payload it kept is still staged"
+        );
+    }
+
+    /// Invariant: the lane that downloads and applies in one call can report
+    /// either half. When the apply half fails the payload has already landed,
+    /// so the retry applies it rather than downloading it again.
+    #[test]
+    fn the_one_call_lane_can_report_an_apply_failure_over_a_landed_payload() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        lifecycle.start_check().unwrap();
+        lifecycle.check_found("2.0.0").unwrap();
+        lifecycle.start_download().unwrap();
+
+        lifecycle
+            .download_and_apply_failed("could not replace the image")
+            .unwrap();
+        assert_eq!(
+            lifecycle.state(),
+            &UpdateState::Failed {
+                reason: "could not replace the image".to_owned(),
+                target: Some("2.0.0".to_owned()),
+                staged: true,
+            }
+        );
+        assert_eq!(
+            lifecycle.retry_failed_update().unwrap(),
+            &UpdateState::ReadyToApply {
+                version: "2.0.0".to_owned()
+            },
+            "the payload that landed is applied, not fetched again"
+        );
+
+        // The download half failing still stages nothing.
+        let mut lost = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        lost.start_check().unwrap();
+        lost.check_found("2.0.0").unwrap();
+        lost.start_download().unwrap();
+        lost.download_failed("connection reset").unwrap();
+        assert_eq!(
+            lost.retry_failed_update().unwrap(),
+            &UpdateState::Available {
+                version: "2.0.0".to_owned()
+            }
+        );
+
+        // And the success side reports the whole step at once.
+        let mut applied = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        applied.start_check().unwrap();
+        applied.check_found("2.0.0").unwrap();
+        applied.start_download().unwrap();
+        assert_eq!(
+            applied.download_and_apply_needs_restart().unwrap(),
+            &UpdateState::RestartPending {
+                version: "2.0.0".to_owned()
+            }
+        );
+        assert_eq!(applied.running_version(), "1.0.0");
+    }
+
+    #[test]
+    fn a_staging_lane_has_no_combined_download_and_apply_step() {
+        let mut velopack = UpdateLifecycle::new(InstallKind::WindowsVelopack, "1.0.0");
+        velopack.start_check().unwrap();
+        velopack.check_found("2.0.0").unwrap();
+        velopack.start_download().unwrap();
+
+        assert_eq!(
+            velopack.download_and_apply_failed("nope"),
+            Err(UpdateTransitionError::NotThisLane(
+                InstallKind::WindowsVelopack
+            )),
+            "Velopack stages first; its apply is a separate step"
+        );
+        assert_eq!(
+            velopack.download_and_apply_needs_restart(),
+            Err(UpdateTransitionError::NotThisLane(
+                InstallKind::WindowsVelopack
+            ))
+        );
+        assert_eq!(
+            velopack.download_finished().unwrap(),
+            &UpdateState::ReadyToApply {
+                version: "2.0.0".to_owned()
+            }
         );
     }
 
