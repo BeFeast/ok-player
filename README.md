@@ -44,7 +44,27 @@ Download the latest installer from [Releases](https://github.com/BeFeast/ok-play
 
 Linux builds are published on the [Releases](https://github.com/BeFeast/ok-player/releases) page under `linux-v*` tags. Two package lanes are supported:
 
-**Debian / Ubuntu (`.deb`)**
+**Debian / Ubuntu (APT repository — recommended)**
+
+Add the signed repository once and OK Player updates with the rest of your system:
+
+```bash
+sudo install -d -m 0755 /usr/share/keyrings
+curl -fsSL https://befeast.github.io/ok-player/apt/ok-player-archive-keyring.gpg \
+  | sudo tee /usr/share/keyrings/ok-player-archive-keyring.gpg >/dev/null
+curl -fsSL https://befeast.github.io/ok-player/apt/ok-player.sources \
+  | sudo tee /etc/apt/sources.list.d/ok-player.sources >/dev/null
+sudo apt update
+sudo apt install ok-player
+```
+
+Updates then arrive through `apt upgrade` (and through your desktop's update notifier) like any
+other package. The archive is signed with the OK Player packaging key
+`77D0 FCDE B0D5 94E1 3E50  F43A 9337 815E B0F7 8C63`; apt refuses it if the signature does not
+match. See [the APT repository lane](docs/apt-repository.md) for what the archive contains and
+how it is produced.
+
+**Debian / Ubuntu (single `.deb`)**
 
 ```bash
 # Download ok-player_<version>_amd64.deb and its SHA256SUMS from the release, then:
@@ -52,7 +72,8 @@ sha256sum -c SHA256SUMS
 sudo apt install ./ok-player_<version>_amd64.deb
 ```
 
-The `.deb` self-updates through the static feed: it fetches the newest release's `.deb`, verifies it against the release's `SHA256SUMS`, and installs it via `pkexec`.
+A `.deb` installed this way self-updates through the static feed: it fetches the newest
+release's `.deb`, verifies it against the release's `SHA256SUMS`, and installs it via `pkexec`.
 
 **AppImage (distro-independent)**
 
@@ -76,11 +97,17 @@ OK Player is not available on Flathub until an external submission is accepted.
 
 **Runtime requirements.** A GTK4 desktop; Debian and AppImage builds carry the pinned libmpv required by the embedded Wayland DMA-BUF path, while Fedora packages use the distro mpv libraries. Hardware video decode uses VA-API where present. OK Player runs under X11 and Wayland; some behaviors (drag/drop, portals, compositor fullscreen) are validated only on GNOME/Wayland — see [Supported environments](#supported-environments).
 
-**Update.** The `.deb` and AppImage lanes check the static feed and apply updates in place; Flatpak updates are owned by the configured Flatpak repository.
+**Update.** Packages installed from the APT repository update through `apt upgrade`; a
+standalone `.deb` and the AppImage check the static feed and apply updates in place; Flatpak
+updates are owned by the configured Flatpak repository.
 
 **Rollback / uninstall.**
 
 ```bash
+# APT repository: roll back to any version the archive still carries
+apt list -a ok-player
+sudo apt install --allow-downgrades ok-player=<older-version>
+
 # .deb: install a specific earlier version to roll back, or remove entirely
 sudo apt install ./ok-player_<older-version>_amd64.deb
 sudo apt remove ok-player

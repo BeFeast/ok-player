@@ -357,3 +357,7 @@ jobs:
       pages: write
       id-token: write
     uses: ./.github/workflows/publish-update-feeds.yml
+    # The Pages site now also carries the signed APT archive, whose signing key is fetched at
+    # run time with the Infisical Universal Auth credentials; a reusable workflow does not see
+    # the caller's secrets unless they are passed.
+    secrets: inherit
