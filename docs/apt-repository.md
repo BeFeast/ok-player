@@ -10,15 +10,92 @@ Served at `https://befeast.github.io/ok-player/apt/`:
 ```
 apt/ok-player-archive-keyring.asc          armored public signing key
 apt/ok-player-archive-keyring.gpg          the same key dearmored, for /usr/share/keyrings
-apt/ok-player.sources                      a ready-made deb822 source stanza
-apt/pool/main/o/ok-player/*.deb            the packages
-apt/dists/stable/Release                   the archive index
-apt/dists/stable/InRelease                 inline-signed Release
-apt/dists/stable/Release.gpg               detached signature over Release
-apt/dists/stable/main/binary-amd64/{Packages,Packages.gz,Release}
+apt/ok-player.sources                      a ready-made deb822 stanza for the stable suite
+apt/ok-player-candidate.sources            the same for the candidate (QA) suite
+apt/pool/main/o/ok-player/*.deb            the packages, shared by both suites
+apt/dists/<suite>/Release                  the archive index
+apt/dists/<suite>/InRelease                inline-signed Release
+apt/dists/<suite>/Release.gpg              detached signature over Release
+apt/dists/<suite>/main/binary-amd64/{Packages,Packages.gz,Release}
 ```
 
 User-facing instructions live in the [README](../README.md#install-on-linux).
+
+## Two suites (issue #689)
+
+| Suite | Built from | Who subscribes | Source stanza |
+|---|---|---|---|
+| `stable` | the published `linux-v*` releases | everyone | `ok-player.sources` |
+| `candidate` | the rolling `linux-candidate` release | testers, deliberately | `ok-player-candidate.sources` |
+
+The two exist because they answer different questions. `stable` means "a version that was
+released", and it is gated behind the acceptance manifest that versioned Linux releases require.
+`candidate` means "the build the QA lane is currently pointing at". Before #689 only `stable` was
+published, so when the release lane stalled — it did, at `0.1.0-linux-alpha.112` on 15 July,
+while the rolling candidate had moved to `0.11.0-beta.0.197` with two P0 fixes in it — testers
+had no way to get the fixes through `apt` and were back to downloading `.deb` files by hand.
+
+The fix is a second suite, **not** a newer `stable`. Pointing `stable` at candidates would make
+the word mean nothing and would push unreleased builds at every subscriber. A machine subscribed
+to `stable` is never offered a candidate: they are separate suites, and the container gate
+asserts exactly that with `apt-cache policy` and `apt-cache madison` on a stable-only root while
+the candidate packages sit in the very same pool it is reading.
+
+`candidate`'s identity comes from `candidate.linux.json`, the pointer asset on the rolling
+release — the same pointer the `.deb` self-updater and the AppImage lane read, and the one
+`okp-core::candidate_build` uploads *last*, after the artifacts it names. So the suite can never
+advertise a half-published build, and it always agrees with the candidate feed. Its window is the
+pointer's current build plus its history (`MAX_RETAINED_PREVIOUS`, so 6 in total by default); a
+history entry whose asset has already been pruned from the release drops out of the suite rather
+than becoming an index entry apt cannot download, while a *current* build the release does not
+carry aborts the lane.
+
+**The acceptance gate applies here too.** `okp-core::candidate_channel::select_candidate_update_from_feed`
+refuses a pointer whose `acceptance` is not `Accepted`, so the installed `.deb` never offers a
+`pending` or `rejected` build. apt must not be the one channel that ships it anyway — `apt upgrade`
+would push a build that failed acceptance to every subscribed tester, without asking. A
+non-accepted current build is therefore withheld and the suite falls back to the newest accepted
+build in the pointer's history (okp-core only ever admits accepted builds there). With nothing
+accepted to fall back to, the archive is published `stable`-only.
+
+**Candidate packages are checked against the pointer's digest.** The rolling release is explicitly
+mutable — assets are replaced in place — so an asset could be swapped after the pointer that names
+it was written, and nothing downstream would notice: the archive is signed over whatever ended up
+in the pool, and the container gate derives its expectations from that same index. Each candidate
+`.deb` is therefore hashed after download and compared with the `sha256` the pointer publishes for
+it, before anything is signed. `stable` has no such column and needs none: a `linux-v*` release
+asset is immutable, and the releases API publishes no digest to check it against anyway.
+
+Setting `OKP_APT_CANDIDATE_MAX_VERSIONS=0`, or having no `linux-candidate` release at all,
+publishes a `stable`-only archive — including no `ok-player-candidate.sources`, because apt fails
+hard on a source line naming a suite the archive does not have. "No candidate release" is decided
+by a 404 and nothing else: any other API failure aborts the lane rather than quietly un-publishing
+the channel testers are subscribed to.
+
+### Why `candidate` is a plain suite, not `NotAutomatic`
+
+Debian's backports idiom (`NotAutomatic: yes` + `ButAutomaticUpgrades: yes`) would let a machine
+carry both source stanzas and still stay on releases until it asked for a candidate. It is
+deliberately not used here, for now. It works by manipulating pin priorities, and the behaviour
+this lane must guarantee — `apt upgrade` moving a subscribed machine from one rolling build to the
+next — is exactly what those priorities make subtle. The plain suite is what the container gate
+actually proves, on the configuration the docs actually recommend (candidate *instead of* stable,
+not beside it). Revisit it if testers turn out to want both channels on one machine; it would need
+its own container case for the upgrade path before it could be trusted.
+
+### One pool, one key, one generator
+
+Both suites are produced by one run of `scripts/build-apt-repo.sh` and signed by one key in one
+loop. There is no second archive and no second signing path;
+`scripts/tests/feeds-workflow.Tests.sh` asserts that `build-apt-repo.sh` appears exactly once in
+the workflow, in the signing job.
+
+They share `pool/`. The pool is indexed **once** with `dpkg-scanpackages`, and each suite's
+`Packages` is a subset of that single index, so a package both suites carry is stored once and
+has literally the same paragraph — same `Size`, same `SHA256` — in both. The rolling-window
+budget charges each distinct pool file once for the same reason; counting a shared package twice
+would shrink both windows for bytes that are not there. A pool file no suite indexes aborts the
+lane: it is dead weight against the budget and invisible to apt.
 
 ## Derived, never authored
 
@@ -46,17 +123,23 @@ Three properties follow, and all three are pinned by `scripts/tests/apt-repo-gen
   about when it was made. The tests compare everything except `InRelease` and `Release.gpg`, and
   separately assert that both verify against the published public key.
 * **Bounded.** GitHub Pages publishes roughly 1 GB per site and a Linux package that bundles
-  libmpv is ~76 MB, so the archive is a rolling window: the newest `OKP_APT_MAX_VERSIONS`
-  (default 10) releases that also fit inside `OKP_APT_POOL_BUDGET_BYTES` (default 900 MiB).
-  Versions outside the window drop out of the pool and the index *together*, so the archive
-  never carries a dangling reference, and they remain downloadable from their own GitHub
-  release — which is what the standalone `.deb` self-updater already uses. The window is the one
-  place where "additive" is bounded by physics; everything inside it is strictly additive.
+  libmpv is ~76 MB, so the archive is a rolling window. Each suite keeps its own newest builds —
+  `OKP_APT_MAX_VERSIONS` (default 10) for `stable`, `OKP_APT_CANDIDATE_MAX_VERSIONS` (default 6)
+  for `candidate` — and both draw on one shared `OKP_APT_POOL_BUDGET_BYTES` (default 900 MiB),
+  charged per distinct pool file. Versions outside the window drop out of the pool and the index
+  *together*, so the archive never carries a dangling reference, and they remain downloadable
+  from their own GitHub release — which is what the standalone `.deb` self-updater already uses.
+  The window is the one place where "additive" is bounded by physics; everything inside it is
+  strictly additive.
 
-  The **current release is not optional**. If it cannot fit — because the budget is too small or
-  the version count is — the lane aborts rather than trimming it and keeping its predecessors.
-  A signed archive advertising an older version than the JSON feeds do is worse than no publish
-  at all, because apt clients would accept it.
+  The **current build of each suite is not optional**. If it cannot fit — because the budget is
+  too small or the version count is — the lane aborts rather than trimming it and keeping its
+  predecessors. A signed archive advertising an older version than the JSON feeds do is worse
+  than no publish at all, because apt clients would accept it.
+
+  After both current builds are reserved, the remaining budget is offered to the two tails **in
+  turn**, not to one suite and then the other. A long release history must not be able to starve
+  the QA channel down to a single build, or the other way round.
 
 ## Signing
 
@@ -104,11 +187,27 @@ becomes predictable.
 
 `scripts/verify-apt-repo.sh` runs apt against the generated archive in a throwaway
 `debian:13-slim` container — the archive is bind-mounted and consumed through a `file://` source,
-so nothing has to be deployed first. It adds the published keyring and source, runs `apt-get
-update` and `apt-get install ok-player`, then starts `/usr/bin/ok-player` headless and requires
-it to reach its GUI initialisation (the process then dies on the absent display, which is
-expected — getting that far is the "the packaged binary and its dependency closure are real"
+so nothing has to be deployed first. It runs **once per suite the archive carries**, subscribing
+to exactly one suite at a time the way a real machine is configured: it adds the published
+keyring and that suite's source, runs `apt-get update` and `apt-get install ok-player`, requires
+apt to select the version that suite advertises, then starts `/usr/bin/ok-player` headless and
+requires it to reach its GUI initialisation (the process then dies on the absent display, which
+is expected — getting that far is the "the packaged binary and its dependency closure are real"
 signal used by the other Linux gates).
+
+Between the two it asserts the channel separation directly: with only `stable` subscribed, and
+the candidate packages sitting in the same pool apt is reading from, `apt-cache policy` and
+`apt-cache madison` must not mention any version that `candidate` carries and `stable` does not,
+and `ok-player` must resolve to the release version. That is the assertion that separation is a
+property of the archive rather than of which packages happen to be published this week.
+
+The check is deliberately about *candidate-only* versions rather than about the candidate head's
+version string. Overlap between the suites is legitimate — a candidate promoted unchanged is
+literally the same pool file in both — and in that case the stable index rightly contains the
+candidate's version. Asserting on the version string would fail the whole lane the first time a
+promotion happened, over a package that came from `stable`. With full overlap the candidate-only
+set is empty and there is nothing that could leak, which the gate says out loud rather than
+passing silently.
 
 Which signal is required is derived from the packaged binary rather than fixed. Current builds
 log `Renderer policy:` as the first statement of `main()`, before GTK, so for them that line is
@@ -117,7 +216,10 @@ is one — can only prove they reached GTK's display connection, and the archive
 verifiable over the versions it actually carries. An unresolved shared library is a hard failure
 either way, which is what this check exists to catch.
 
-It then runs two negative controls. Both check *two* things, because by default `apt-get update`
+It then runs two negative controls, **per suite**. The wrong-key control repeated per suite is
+also what proves both suites are signed by the same key: a suite signed by some other key would
+still be accepted against a keyring holding that other key. Both controls check *two* things,
+because by default `apt-get update`
 reports a rejected repository as a warning, keeps the previously fetched index and still exits 0
 — asserting on its exit status alone would pass even if apt had happily used a forged index. So
 each control asserts that the update fails under `APT::Update::Error-Mode=any` **and** that, with
@@ -126,9 +228,11 @@ every cached index discarded first, the package is genuinely not installable:
 * a tampered `InRelease` is refused;
 * an archive whose signature does not match the keyring is refused.
 
-Given a second, older archive it additionally proves the upgrade path: install from the old
-archive, publish the new one over the same repository, and require `apt-get upgrade` to move to
-the newer version while the older one stays installable by explicit version.
+Given a second, older archive it additionally proves the upgrade path, per suite: install from
+the old archive, publish the new one over the same repository, and require `apt-get upgrade` to
+move to the newer version while the older one stays installable by explicit version. For
+`candidate` that is the acceptance criterion of #689 — a tester's machine moving from one rolling
+build to the next through `apt upgrade` alone.
 
 "Newest" is derived with `dpkg --compare-versions`, not by taking the last paragraph of the
 index. `dpkg-scanpackages` keys its output by package name and version and emits it in
@@ -145,6 +249,23 @@ that distinguishes a working archive from a plausible-looking one.
 * The lane runs inside *Update Feeds* (`.github/workflows/publish-update-feeds.yml`), which is
   the only writer of the Pages site. `release-linux.yml` calls it with `secrets: inherit` after
   publishing a `linux-v*` release; a manual `workflow_dispatch` re-runs it at any time.
+* **`release-linux-candidate.yml` calls it too**, after a rolling publication. This matters more
+  than it looks: replacing assets on the mutable `linux-candidate` release fires no event *Update
+  Feeds* listens for, so without that call a new candidate would sit in the release, be offered by
+  the `.deb` self-updater, and be invisible to `apt upgrade` until some unrelated deploy happened
+  to run — which is the exact "testers cannot get it through apt" failure this suite exists to
+  end. The call is gated on `publish_result == 'published'`: the candidate workflow runs every 15
+  minutes and most runs publish nothing, which must not cost a Pages deploy. A refresh failure
+  does not unpublish the candidate; the rolling release is already live and the refresh is
+  idempotent and re-runnable. The candidate lane's `linux-candidate-native` concurrency group was
+  moved from the workflow to the building job when that call was added: a workflow-level group
+  covers every job in the run, so a Pages deploy that could not start — signing runner offline,
+  secret store down — would have stopped candidate builds entirely. The QA lane must not be
+  blocked by the publication of its own archive.
+* A tester subscribes to the QA channel by installing `ok-player-candidate.sources` **instead
+  of** `ok-player.sources`, not beside it: with both files present apt sees both suites and will
+  offer the candidate anyway, which makes "I am on stable" untrue without saying so. Both stanzas
+  point at the same keyring, so switching channels never means re-trusting a key.
 * Rotating the signing key means updating the four Infisical secrets and letting the next run
   republish `ok-player-archive-keyring.{asc,gpg}`. Existing installs need the new key before the
   first archive signed with it is served, so publish a run with the *old* key still in place

@@ -64,6 +64,26 @@ other package. The archive is signed with the OK Player packaging key
 match. See [the APT repository lane](docs/apt-repository.md) for what the archive contains and
 how it is produced.
 
+**Debian / Ubuntu (candidate channel — QA builds, not releases)**
+
+The repository also publishes a `candidate` suite carrying the rolling QA build. It is the same
+archive and the same signing key, but the builds in it are *not releases*: they are what the QA
+lane is currently testing, they change often, and they can regress. Use it only if you are
+helping test OK Player.
+
+```bash
+# The keyring above is still required; then, INSTEAD OF ok-player.sources:
+curl -fsSL https://befeast.github.io/ok-player/apt/ok-player-candidate.sources \
+  | sudo tee /etc/apt/sources.list.d/ok-player.sources >/dev/null
+sudo apt update
+sudo apt install ok-player
+```
+
+Install it *instead of* `ok-player.sources`, not beside it — with both files present apt sees
+both suites and will offer you the candidate anyway. To go back to releases, put
+`ok-player.sources` back and run `sudo apt install --allow-downgrades ok-player=<release
+version>` (`apt list -a ok-player` shows what the archive still carries).
+
 **Debian / Ubuntu (single `.deb`)**
 
 ```bash
@@ -97,7 +117,9 @@ OK Player is not available on Flathub until an external submission is accepted.
 
 **Runtime requirements.** A GTK4 desktop; Debian and AppImage builds carry the pinned libmpv required by the embedded Wayland DMA-BUF path, while Fedora packages use the distro mpv libraries. Hardware video decode uses VA-API where present. OK Player runs under X11 and Wayland; some behaviors (drag/drop, portals, compositor fullscreen) are validated only on GNOME/Wayland — see [Supported environments](#supported-environments).
 
-**Update.** Packages installed from the APT repository update through `apt upgrade`; a
+**Update.** Packages installed from the APT repository update through `apt upgrade` — within the
+suite you subscribed to, so a `stable` machine moves between releases and a `candidate` machine
+moves between QA builds; a
 standalone `.deb` and the AppImage check the static feed and apply updates in place; Flatpak
 updates are owned by the configured Flatpak repository.
 
