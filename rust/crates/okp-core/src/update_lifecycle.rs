@@ -144,19 +144,30 @@ impl InstallEvidence {
             || self.flatpak_info_present
     }
 
-    fn is_appimage(&self) -> bool {
-        if self
-            .appimage_path
-            .as_deref()
-            .is_some_and(|path| !path.trim().is_empty())
-        {
-            return true;
-        }
-        // An AppImage that lost `$APPIMAGE` still runs out of the squashfs
-        // mount runtime-mounted under a `.mount_*` directory.
+    /// The executable is running out of an AppImage's own mount, which nothing
+    /// else produces and which no inherited variable can fake.
+    fn runs_from_appimage_mount(&self) -> bool {
         self.executable_path
             .as_deref()
             .is_some_and(|path| path.contains("/.mount_"))
+    }
+
+    /// `$APPIMAGE` is set. On its own this only says *some* AppImage is
+    /// involved: the variable is inherited, so a packaged OK Player launched by
+    /// an unrelated AppImage sees it too.
+    fn appimage_variable_set(&self) -> bool {
+        self.appimage_path
+            .as_deref()
+            .is_some_and(|path| !path.trim().is_empty())
+    }
+
+    /// The install kind implied by a positive package-ownership answer.
+    fn owning_package(&self) -> Option<InstallKind> {
+        match self.package_ownership {
+            PackageOwnership::Dpkg => Some(InstallKind::Deb),
+            PackageOwnership::Rpm => Some(InstallKind::Rpm),
+            PackageOwnership::Unowned | PackageOwnership::Unknown => None,
+        }
     }
 }
 
@@ -168,26 +179,35 @@ impl InstallEvidence {
 ///
 /// 1. Flatpak, because inside the sandbox a `dpkg`/`rpm` answer describes the
 ///    runtime rather than OK Player.
-/// 2. AppImage, because the image is self-contained wherever it is parked —
-///    including `/tmp`, where nothing owns the path.
+/// 2. An executable running out of an AppImage mount — the image is
+///    self-contained wherever it is parked, including `/tmp`, where nothing
+///    owns the path.
 /// 3. The Velopack layout, which only a Velopack install has.
-/// 4. A positive package-ownership answer, which separates deb from rpm.
-/// 5. Otherwise a dev build: unowned is not the same as up to date.
+/// 4. A positive package-ownership answer, which separates deb from rpm. It
+///    outranks a bare `$APPIMAGE` because that variable is *inherited*: an
+///    AppImage-packaged launcher passes it to the packaged OK Player it starts,
+///    and only the executable's own ownership describes that child.
+/// 5. `$APPIMAGE` with nothing contradicting it — an extract-and-run AppImage
+///    (`APPIMAGE_EXTRACT_AND_RUN`) has no mount path to corroborate it, and no
+///    package owns it either.
+/// 6. Otherwise a dev build: unowned is not the same as up to date.
 pub fn detect_install_kind(evidence: &InstallEvidence) -> InstallKind {
     if evidence.is_flatpak() {
         return InstallKind::Flatpak;
     }
-    if evidence.is_appimage() {
+    if evidence.runs_from_appimage_mount() {
         return InstallKind::AppImage;
     }
     if evidence.velopack_layout_present {
         return InstallKind::WindowsVelopack;
     }
-    match evidence.package_ownership {
-        PackageOwnership::Dpkg => InstallKind::Deb,
-        PackageOwnership::Rpm => InstallKind::Rpm,
-        PackageOwnership::Unowned | PackageOwnership::Unknown => InstallKind::DevBuild,
+    if let Some(packaged) = evidence.owning_package() {
+        return packaged;
     }
+    if evidence.appimage_variable_set() {
+        return InstallKind::AppImage;
+    }
+    InstallKind::DevBuild
 }
 
 /// One position in the update lifecycle.
@@ -351,6 +371,40 @@ impl UpdateLifecycle {
             running_version: running_version.into(),
             state: UpdateState::Idle,
         }
+    }
+
+    /// Rebuilds the lifecycle in the process that came up after a self-applied
+    /// update, and settles the restart in one step.
+    ///
+    /// A self-apply replaces the process, so the `RestartPending` lifecycle
+    /// that staged the update dies with the old one; the shell persists the
+    /// pending target across the restart (on Windows Velopack keeps its own
+    /// staged-release record) and passes it here together with the version the
+    /// new process actually came up as. The comparison is
+    /// [`Self::restarted_into`]'s, so a restart that silently came back on the
+    /// old binary is caught across the process boundary too (#660) instead of
+    /// being lost with the old lifecycle. Only a
+    /// [`UpdateCapability::SelfApply`] install can have a pending restart.
+    pub fn resumed_after_restart(
+        install_kind: InstallKind,
+        running_version: impl Into<String>,
+        pending_version: impl Into<String>,
+    ) -> Result<Self, UpdateTransitionError> {
+        if install_kind.capability() != UpdateCapability::SelfApply {
+            return Err(UpdateTransitionError::CapabilityForbids(
+                install_kind.capability(),
+            ));
+        }
+        let running_version = running_version.into();
+        let mut lifecycle = Self {
+            install_kind,
+            running_version: running_version.clone(),
+            state: UpdateState::RestartPending {
+                version: pending_version.into(),
+            },
+        };
+        lifecycle.restarted_into(running_version)?;
+        Ok(lifecycle)
     }
 
     pub const fn install_kind(&self) -> InstallKind {
@@ -790,6 +844,28 @@ mod tests {
                 InstallEvidence {
                     appimage_path: Some("/tmp/OK_Player-x86_64.AppImage".to_owned()),
                     executable_path: Some("/tmp/.mount_OKPlay1/usr/bin/ok-player".to_owned()),
+                    package_ownership: PackageOwnership::Unowned,
+                    ..evidence()
+                },
+                InstallKind::AppImage,
+            ),
+            (
+                "an inherited APPIMAGE loses to the executable's own package",
+                InstallEvidence {
+                    appimage_path: Some("/opt/launcher/Launcher-x86_64.AppImage".to_owned()),
+                    executable_path: Some("/usr/bin/ok-player".to_owned()),
+                    package_ownership: PackageOwnership::Dpkg,
+                    ..evidence()
+                },
+                InstallKind::Deb,
+            ),
+            (
+                "extract-and-run AppImage has no mount path to corroborate it",
+                InstallEvidence {
+                    appimage_path: Some("/home/u/OK_Player-x86_64.AppImage".to_owned()),
+                    executable_path: Some(
+                        "/tmp/appimage_extracted_9f1/usr/bin/ok-player".to_owned(),
+                    ),
                     package_ownership: PackageOwnership::Unowned,
                     ..evidence()
                 },
@@ -1331,6 +1407,59 @@ mod tests {
                 }
             });
         }
+    }
+
+    /// Invariant: the restart check survives the process boundary. A self-apply
+    /// replaces the process, so the lifecycle that reached `RestartPending` is
+    /// gone by the time the new binary starts; the pending target is handed to
+    /// the new process, which settles the same comparison.
+    #[test]
+    fn a_resumed_process_settles_the_restart_against_the_pending_target() {
+        let landed =
+            UpdateLifecycle::resumed_after_restart(InstallKind::WindowsVelopack, "2.0.0", "2.0.0")
+                .expect("a self-applying install can resume after a restart");
+        assert_eq!(
+            landed.state(),
+            &UpdateState::Running {
+                version: "2.0.0".to_owned()
+            }
+        );
+        assert_eq!(landed.running_version(), "2.0.0");
+        let presentation = landed.describe();
+        assert_eq!(presentation.claim, VersionClaim::Current);
+        assert_eq!(presentation.version_in_use, "2.0.0");
+
+        let stalled =
+            UpdateLifecycle::resumed_after_restart(InstallKind::AppImage, "1.0.0", "2.0.0")
+                .expect("a self-applying install can resume after a restart");
+        assert!(
+            matches!(stalled.state(), UpdateState::Failed { .. }),
+            "coming back on the old binary must fail, got {:?}",
+            stalled.state()
+        );
+        let presentation = stalled.describe();
+        assert_ne!(presentation.claim, VersionClaim::Current);
+        assert_eq!(presentation.version_in_use, "1.0.0");
+        assert_eq!(presentation.action, Some(UpdateAction::Retry));
+    }
+
+    #[test]
+    fn only_a_self_applying_install_can_resume_a_pending_restart() {
+        for kind in SYSTEM_MANAGED_KINDS {
+            assert_eq!(
+                UpdateLifecycle::resumed_after_restart(kind, "1.0.0", "2.0.0").err(),
+                Some(UpdateTransitionError::CapabilityForbids(
+                    UpdateCapability::SystemManaged
+                )),
+                "{kind} never stages a restart of its own"
+            );
+        }
+        assert_eq!(
+            UpdateLifecycle::resumed_after_restart(InstallKind::DevBuild, "1.0.0", "2.0.0").err(),
+            Some(UpdateTransitionError::CapabilityForbids(
+                UpdateCapability::Unmanaged
+            ))
+        );
     }
 
     #[test]
