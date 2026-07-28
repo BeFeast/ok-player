@@ -25,18 +25,24 @@ set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 GENERATOR="$ROOT/scripts/build-apt-repo.sh"
+VERIFIER="$ROOT/scripts/verify-apt-repo.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf -- "$WORK"' EXIT
 
 # Named up front so a runner image without dpkg-dev says so, instead of failing somewhere
 # inside the generator with a message about OpenPGP.
-for tool in gpg gpgconf dpkg-deb dpkg-scanpackages gzip sha256sum md5sum; do
+for tool in gpg gpgconf dpkg dpkg-deb dpkg-scanpackages gzip sha256sum md5sum; do
   command -v "$tool" >/dev/null 2>&1 \
     || { printf 'APT repository generator tests require %s, which is not on PATH\n' "$tool" >&2; exit 1; }
 done
 
 # shellcheck source=/dev/null
 source "$GENERATOR"
+# The verifier derives "which version should be installed" from the index it is handed, and that
+# derivation is asserted below without a container. It exposes okp_apt_verify_main rather than
+# main so both files can be sourced here.
+# shellcheck source=/dev/null
+source "$ROOT/scripts/verify-apt-repo.sh"
 
 failures=0
 pass() { printf 'PASS %s\n' "$1"; }
@@ -289,6 +295,91 @@ if [[ "$(list_signing_homes)" == "$homes_before" ]]; then
   pass "the ephemeral GNUPGHOME is removed after both a successful and a failed build"
 else
   fail "ephemeral GNUPGHOME" "signing homes leaked under ${SIGNING_BASE}"
+fi
+
+# --- 7. "Newest" means the highest Debian version, not the last paragraph -----------------
+# dpkg-scanpackages emits its index in lexicographic key order, so 0.11.0-beta.10 lands before
+# 0.11.0-beta.2 and 0.11.0-beta.9. Taking the last paragraph would name .9 as the newest while
+# apt installs .10, and the container gate would then assert against a version apt never
+# selected — failing every Pages deploy the first time a version crosses a decimal boundary.
+seed_secrets
+STAGE_ORDER="$WORK/stage-order"
+make_deb 0.11.0-beta.9 "$STAGE_ORDER"
+make_deb 0.11.0-beta.10 "$STAGE_ORDER"
+make_deb 0.11.0-beta.2 "$STAGE_ORDER"
+build_repo "$STAGE_ORDER" "$WORK/run-order" >/dev/null
+ORDER_INDEX="$(packages_index "$WORK/run-order")"
+if [[ "$(okp_apt_newest_indexed_version "$ORDER_INDEX")" == "0.11.0-beta.10" ]]; then
+  pass "the newest advertised version is the highest Debian version, not the last paragraph"
+else
+  fail "newest version derivation" \
+    "got $(okp_apt_newest_indexed_version "$ORDER_INDEX"), expected 0.11.0-beta.10 from: $(awk '/^Version: /{printf "%s ", $2}' "$ORDER_INDEX")"
+fi
+# The premise the test above exists for: the index really is not in version order, so a naive
+# derivation really would be wrong. If dpkg-scanpackages ever starts sorting by version this
+# assertion fails and the comment above can be retired.
+if [[ "$(awk '/^Version: / { v = $2 } END { print v }' "$ORDER_INDEX")" != "0.11.0-beta.10" ]]; then
+  pass "the Packages index is not emitted in Debian version order (why the comparison is needed)"
+else
+  fail "index ordering premise" "the index is now version-ordered; the derivation comment is stale"
+fi
+
+# --- 8. The rolling window may never drop the current release -----------------------------
+# A window that skips the newest release because it does not fit, and keeps older ones, would
+# publish a signed archive advertising an older version than the JSON feeds do. Clients would
+# accept it, which makes it worse than not publishing.
+CANDIDATES="$(printf '%s\n' \
+  '2026-07-15T19:35:55Z	linux-v0.3.0	1	900' \
+  '2026-07-14T19:35:55Z	linux-v0.2.0	1	100' \
+  '2026-07-13T19:35:55Z	linux-v0.1.0	1	100')"
+
+window() { ( OKP_APT_MAX_VERSIONS="$1" OKP_APT_POOL_BUDGET_BYTES="$2" \
+  okp_apt_apply_window <<<"$CANDIDATES" ); }
+
+set +e
+oversize_output="$(window 10 500 2>&1)"
+oversize_status=$?
+set -e
+if ((oversize_status != 0)); then
+  pass "a current release that does not fit the pool budget aborts instead of being skipped"
+else
+  fail "current release budget (exit)" "the window succeeded without the current release"
+fi
+if grep -q 'linux-v0.3.0' <<<"$oversize_output" \
+  && grep -q 'refusing to publish' <<<"$oversize_output"; then
+  pass "the oversize-current-release abort names the release it refused to drop"
+else
+  fail "current release budget (message)" "$oversize_output"
+fi
+if grep -q 'linux-v0.2.0' <<<"$oversize_output"; then
+  fail "current release budget (fallthrough)" "an older release was retained in place of the current one"
+else
+  pass "no older release is retained in place of the current one"
+fi
+
+set +e
+nowindow_output="$(window 0 100000 2>&1)"
+nowindow_status=$?
+set -e
+if ((nowindow_status != 0)) && grep -q 'linux-v0.3.0' <<<"$nowindow_output"; then
+  pass "a version count too small to carry the current release aborts, naming it"
+else
+  fail "zero-width window" "status ${nowindow_status}, output: ${nowindow_output}"
+fi
+
+# Positive control: with room for the current release the window still trims the tail rather
+# than failing, and reports what it dropped.
+set +e
+trimmed_output="$(window 10 1000 2>&1)"
+trimmed_status=$?
+set -e
+trimmed_tags="$(grep -o 'linux-v[0-9.]*' <<<"$trimmed_output" | sort -u | tr '\n' ' ')"
+if ((trimmed_status == 0)) \
+  && grep -qP 'linux-v0\.3\.0$' <<<"$trimmed_output" \
+  && grep -q 'does not fit' <<<"$trimmed_output"; then
+  pass "the window keeps the current release and drops the tail with a stated reason"
+else
+  fail "window trimming" "status ${trimmed_status}, tags: ${trimmed_tags}"
 fi
 
 if ((failures > 0)); then

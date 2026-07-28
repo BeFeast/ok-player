@@ -399,10 +399,10 @@ okp_apt_build_signed_repo() {
 }
 
 # --- Release discovery ----------------------------------------------------------------
-# Newest first, bounded by both the version count and the Pages size budget.
-okp_apt_select_releases() {
-  local repo="$1"
-  local candidates
+# Candidate releases, newest publication first: every published linux-v* release that actually
+# carries a .deb, as "<published_at>\t<tag>\t<deb count>\t<total deb bytes>".
+okp_apt_fetch_release_candidates() {
+  local repo="$1" candidates
   candidates="$(gh api --paginate "repos/${repo}/releases?per_page=100" \
     --jq '.[] | select((.draft | not) and .published_at != null)
               | select(.tag_name | test("^linux-v"))
@@ -413,16 +413,33 @@ okp_apt_select_releases() {
     | awk -F'\t' '$3 > 0' | sort -r)"
   [[ -n "$candidates" ]] \
     || okp_apt_fail "no published linux-v* release carries an ok-player_*_amd64.deb; refusing to build an APT repository from nothing (issue #683)."
+  printf '%s\n' "$candidates"
+}
 
-  local kept=0 total=0 published tag size
+# Apply the rolling window to candidates on stdin, newest first.
+#
+# The current release is not optional. Skipping it because it does not fit and keeping older,
+# smaller ones would leave the archive advertising a version older than the one the JSON feeds
+# advertise — a stale-but-signed repository, which is a worse failure than no publish at all
+# because apt clients would accept it. So a current release that cannot fit aborts the lane
+# instead of falling through to its predecessors. "Newest" is publication order, the same
+# ordering build-linux-feed.sh uses to pick the release its manifests describe.
+okp_apt_apply_window() {
+  local kept=0 total=0 published tag size newest_candidate first=1
   while IFS=$'\t' read -r published tag _ size; do
     [[ -n "$tag" ]] || continue
+    newest_candidate=$first
+    first=0
     if ((kept >= OKP_APT_MAX_VERSIONS)); then
+      ((newest_candidate == 0)) \
+        || okp_apt_fail "OKP_APT_MAX_VERSIONS is ${OKP_APT_MAX_VERSIONS}, so the archive cannot carry the current release ${tag}; refusing to publish an APT repository without it."
       printf 'APT window: %s is outside the newest %s releases; still downloadable from its GitHub release.\n' \
         "$tag" "$OKP_APT_MAX_VERSIONS" >&2
       continue
     fi
     if ((total + size > OKP_APT_POOL_BUDGET_BYTES)); then
+      ((newest_candidate == 0)) \
+        || okp_apt_fail "the current release ${tag} needs ${size} bytes, which does not fit the ${OKP_APT_POOL_BUDGET_BYTES}-byte APT pool budget; refusing to publish an archive that would advertise an older version than the update feeds do."
       printf 'APT window: %s does not fit the %s-byte pool budget; still downloadable from its GitHub release.\n' \
         "$tag" "$OKP_APT_POOL_BUDGET_BYTES" >&2
       continue
@@ -430,10 +447,14 @@ okp_apt_select_releases() {
     total=$((total + size))
     kept=$((kept + 1))
     printf '%s\t%s\n' "$published" "$tag"
-  done <<<"$candidates"
+  done
 
   ((kept > 0)) \
-    || okp_apt_fail "the newest linux-v* release does not fit the ${OKP_APT_POOL_BUDGET_BYTES}-byte APT pool budget; refusing to publish an archive without the current version."
+    || okp_apt_fail "the rolling window retained no release; refusing to publish an empty APT repository."
+}
+
+okp_apt_select_releases() {
+  okp_apt_fetch_release_candidates "$1" | okp_apt_apply_window
 }
 
 main() {

@@ -23,12 +23,48 @@
 # quietly degrades to "we did not check" is how a broken repository reaches users.
 #
 # Usage: verify-apt-repo.sh <repo-root> [older-repo-root]
-# Requires: docker or podman.
+# Requires: docker or podman, and dpkg (for version comparison).
 set -euo pipefail
 
+# The highest version an archive advertises, by Debian version ordering.
+#
+# Not "the last paragraph in Packages": dpkg-scanpackages keys its index by package name and
+# version and emits it in lexicographic key order, not Debian version order. `--multiversion`
+# only promises to allow several versions of one package, it says nothing about sorting them.
+# So 0.11.0-beta.10 is emitted before 0.11.0-beta.2 and 0.11.0-beta.9 — taking the last
+# paragraph would name .9 as newest while apt installs .10, and this gate would then assert
+# against a version apt never selected and fail every Pages deploy. apt itself is unaffected:
+# it parses every paragraph and picks the maximum. Only the expectation was wrong.
+okp_apt_newest_indexed_version() {
+  local index="$1" version best=''
+  while IFS= read -r version; do
+    [[ -n "$version" ]] || continue
+    if [[ -z "$best" ]] || dpkg --compare-versions "$version" gt "$best"; then
+      best="$version"
+    fi
+  done < <(awk '/^Version: / { print $2 }' "$index")
+  [[ -n "$best" ]] || return 1
+  printf '%s' "$best"
+}
+
+okp_apt_archive_version() {
+  # okp_apt_archive_version <repo-root> <label>
+  local index="$1/dists/stable/main/binary-amd64/Packages" version
+  [[ -s "$index" ]] || { echo "::error::no Packages index at $index" >&2; exit 1; }
+  version="$(okp_apt_newest_indexed_version "$index")" \
+    || { echo "::error::the $2 archive advertises no version" >&2; exit 1; }
+  printf '%s' "$version"
+}
+
+# Named, not `main`, so a test can source this file alongside build-apt-repo.sh without the
+# two entry points colliding.
+okp_apt_verify_main() {
 REPO_ROOT="${1:?usage: verify-apt-repo.sh <repo-root> [older-repo-root]}"
 OLDER_ROOT="${2:-}"
 TARGET_IMAGE="${OKP_APT_VERIFY_IMAGE:-debian:13-slim}"
+
+command -v dpkg >/dev/null 2>&1 \
+  || { echo "::error::verifying the APT repository requires dpkg for version comparison." >&2; exit 1; }
 
 [[ -d "$REPO_ROOT" ]] || { echo "::error::APT repository root not found: $REPO_ROOT" >&2; exit 1; }
 REPO_ROOT="$(cd -- "$REPO_ROOT" && pwd)"
@@ -48,19 +84,12 @@ if [[ -z "$CONTAINER_RUNTIME" ]]; then
   exit 127
 fi
 
-# The newest version the archive advertises: dpkg-scanpackages emits paragraphs in ascending
-# version order, so the last Version wins. Read here rather than in the container so a
-# malformed index fails before a container is even started.
-PACKAGES_INDEX="$REPO_ROOT/dists/stable/main/binary-amd64/Packages"
-[[ -s "$PACKAGES_INDEX" ]] || { echo "::error::no Packages index at $PACKAGES_INDEX" >&2; exit 1; }
-EXPECTED_VERSION="$(awk '/^Version: / { version = $2 } END { print version }' "$PACKAGES_INDEX")"
-[[ -n "$EXPECTED_VERSION" ]] || { echo "::error::the Packages index advertises no version" >&2; exit 1; }
+# Read here rather than in the container so a malformed index fails before one is started.
+EXPECTED_VERSION="$(okp_apt_archive_version "$REPO_ROOT" published)"
 
 OLDER_VERSION=""
 if [[ -n "$OLDER_ROOT" ]]; then
-  OLDER_VERSION="$(awk '/^Version: / { version = $2 } END { print version }' \
-    "$OLDER_ROOT/dists/stable/main/binary-amd64/Packages")"
-  [[ -n "$OLDER_VERSION" ]] || { echo "::error::the older archive advertises no version" >&2; exit 1; }
+  OLDER_VERSION="$(okp_apt_archive_version "$OLDER_ROOT" older)"
 fi
 
 echo "Verifying the APT archive at $REPO_ROOT (newest ${EXPECTED_VERSION}) in $TARGET_IMAGE via $CONTAINER_RUNTIME"
@@ -218,3 +247,8 @@ echo "apt repository verification: PASS"
 CONTAINER
 
 echo "APT repository verification PASS (${EXPECTED_VERSION})"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  okp_apt_verify_main "$@"
+fi

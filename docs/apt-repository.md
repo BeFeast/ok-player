@@ -53,6 +53,11 @@ Three properties follow, and all three are pinned by `scripts/tests/apt-repo-gen
   release — which is what the standalone `.deb` self-updater already uses. The window is the one
   place where "additive" is bounded by physics; everything inside it is strictly additive.
 
+  The **current release is not optional**. If it cannot fit — because the budget is too small or
+  the version count is — the lane aborts rather than trimming it and keeping its predecessors.
+  A signed archive advertising an older version than the JSON feeds do is worse than no publish
+  at all, because apt clients would accept it.
+
 ## Signing
 
 The archive signing key never becomes a GitHub Actions secret and never lands in an artifact.
@@ -124,6 +129,13 @@ every cached index discarded first, the package is genuinely not installable:
 Given a second, older archive it additionally proves the upgrade path: install from the old
 archive, publish the new one over the same repository, and require `apt-get upgrade` to move to
 the newer version while the older one stays installable by explicit version.
+
+"Newest" is derived with `dpkg --compare-versions`, not by taking the last paragraph of the
+index. `dpkg-scanpackages` keys its output by package name and version and emits it in
+lexicographic key order — `--multiversion` only allows several versions of one package, it does
+not sort them — so `0.11.0-beta.10` lands before `0.11.0-beta.9`. apt is unaffected: it reads
+every paragraph and picks the maximum. Only an expectation built on paragraph order would be
+wrong, and it would fail the whole lane the first time a version crossed a decimal boundary.
 
 A missing container runtime is a hard failure (exit 127), not a skip. This gate is the only thing
 that distinguishes a working archive from a plausible-looking one.
