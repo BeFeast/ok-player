@@ -71,12 +71,14 @@ impl InstallKind {
     /// How the user updates a [`UpdateCapability::SystemManaged`] install. The
     /// hint travels inside [`UpdateState::AvailableExternally`] so no shell has
     /// to invent one.
-    const fn system_update_hint(self) -> Option<&'static str> {
+    const fn system_update_hint_text(self) -> &'static str {
         match self {
-            Self::Deb => Some("Update OK Player with your package manager (apt)."),
-            Self::Rpm => Some("Update OK Player with your package manager (dnf)."),
-            Self::Flatpak => Some("Update OK Player with Flatpak (flatpak update)."),
-            Self::WindowsVelopack | Self::AppImage | Self::DevBuild => None,
+            Self::Deb => "Update OK Player with your package manager (apt).",
+            Self::Rpm => "Update OK Player with your package manager (dnf).",
+            Self::Flatpak => "Update OK Player with Flatpak (flatpak update).",
+            Self::WindowsVelopack | Self::AppImage | Self::DevBuild => {
+                "Update OK Player with your system update tool."
+            }
         }
     }
 }
@@ -229,6 +231,11 @@ pub enum UpdateState {
     /// A newer version exists but a system update tool owns it; `hint` says
     /// which one.
     AvailableExternally { version: String, hint: String },
+    /// A system update tool owns this install and the app does not discover
+    /// versions for it at all — the rpm and flatpak lanes, which report who
+    /// updates them and never run a check. Distinct from [`Self::Idle`], whose
+    /// surface still offers one.
+    ManagedExternally { hint: String },
     /// The payload for `version` is being fetched.
     Downloading { version: String },
     /// The payload is staged and verified; applying is a user decision.
@@ -241,8 +248,14 @@ pub enum UpdateState {
     /// The process restarted and is running `version`.
     Running { version: String },
     /// A fallible step gave up. Reachable from `Checking`, `Downloading`,
-    /// `Applying` and `RestartPending`.
-    Failed { reason: String },
+    /// `Applying` and `RestartPending`. `target` is the version the failed
+    /// attempt was for, retained whenever the failure happened after discovery
+    /// so the same offer stays known and retryable; a check that failed before
+    /// finding anything has none.
+    Failed {
+        reason: String,
+        target: Option<String>,
+    },
 }
 
 impl UpdateState {
@@ -256,7 +269,8 @@ impl UpdateState {
             | Self::ReadyToApply { version }
             | Self::Applying { version }
             | Self::RestartPending { version } => Some(version),
-            Self::Idle | Self::Checking | Self::UpToDate | Self::Failed { .. } => None,
+            Self::Failed { target, .. } => target.as_deref(),
+            Self::Idle | Self::Checking | Self::UpToDate | Self::ManagedExternally { .. } => None,
             // `Running` carries the version that is executing, which is the
             // running version rather than a target still to be reached.
             Self::Running { .. } => None,
@@ -373,6 +387,30 @@ impl UpdateLifecycle {
         }
     }
 
+    /// Starts an install whose updates a system tool owns outright and which
+    /// the app never queries for versions — the rpm and flatpak lanes, which
+    /// today answer a check with "managed by DNF/Flatpak" rather than a
+    /// version. The lifecycle reports who updates it and offers nothing, which
+    /// [`UpdateState::Idle`] cannot do: an idle install still offers a check.
+    /// Only a [`UpdateCapability::SystemManaged`] install can be in this state.
+    pub fn managed_externally(
+        install_kind: InstallKind,
+        running_version: impl Into<String>,
+    ) -> Result<Self, UpdateTransitionError> {
+        if install_kind.capability() != UpdateCapability::SystemManaged {
+            return Err(UpdateTransitionError::CapabilityForbids(
+                install_kind.capability(),
+            ));
+        }
+        Ok(Self {
+            install_kind,
+            running_version: running_version.into(),
+            state: UpdateState::ManagedExternally {
+                hint: install_kind.system_update_hint_text().to_owned(),
+            },
+        })
+    }
+
     /// Rebuilds the lifecycle in the process that came up after a self-applied
     /// update, and settles the restart in one step.
     ///
@@ -471,11 +509,7 @@ impl UpdateLifecycle {
         } else {
             UpdateState::AvailableExternally {
                 version,
-                hint: self
-                    .install_kind
-                    .system_update_hint()
-                    .unwrap_or("Update OK Player with your system update tool.")
-                    .to_owned(),
+                hint: self.install_kind.system_update_hint_text().to_owned(),
             }
         };
         Ok(self.enter(next))
@@ -489,6 +523,8 @@ impl UpdateLifecycle {
         match self.state {
             UpdateState::Checking => Ok(self.enter(UpdateState::Failed {
                 reason: reason.into(),
+                // A check that never found anything has no offer to retain.
+                target: None,
             })),
             _ => Err(self.rejected()),
         }
@@ -525,10 +561,14 @@ impl UpdateLifecycle {
         &mut self,
         reason: impl Into<String>,
     ) -> Result<&UpdateState, UpdateTransitionError> {
-        match self.state {
-            UpdateState::Downloading { .. } => Ok(self.enter(UpdateState::Failed {
-                reason: reason.into(),
-            })),
+        match &self.state {
+            UpdateState::Downloading { version } => {
+                let target = Some(version.clone());
+                Ok(self.enter(UpdateState::Failed {
+                    reason: reason.into(),
+                    target,
+                }))
+            }
             _ => Err(self.rejected()),
         }
     }
@@ -576,10 +616,14 @@ impl UpdateLifecycle {
         &mut self,
         reason: impl Into<String>,
     ) -> Result<&UpdateState, UpdateTransitionError> {
-        match self.state {
-            UpdateState::Applying { .. } => Ok(self.enter(UpdateState::Failed {
-                reason: reason.into(),
-            })),
+        match &self.state {
+            UpdateState::Applying { version } => {
+                let target = Some(version.clone());
+                Ok(self.enter(UpdateState::Failed {
+                    reason: reason.into(),
+                    target,
+                }))
+            }
             _ => Err(self.rejected()),
         }
     }
@@ -607,7 +651,31 @@ impl UpdateLifecycle {
             reason: format!(
                 "restart still runs {running_version}; the update to {pending} did not take effect"
             ),
+            target: Some(pending),
         }))
+    }
+
+    /// Retries the offer a failure interrupted, without a fresh discovery
+    /// round: a download or apply that failed after discovery kept its target,
+    /// so the same version becomes actionable again instead of vanishing until
+    /// the next check. A check that failed before finding anything has nothing
+    /// to retry and is refused — [`Self::start_check`] is its retry. Only a
+    /// [`UpdateCapability::SelfApply`] install has an offer of its own to
+    /// resume.
+    pub fn retry_failed_update(&mut self) -> Result<&UpdateState, UpdateTransitionError> {
+        if self.capability() != UpdateCapability::SelfApply {
+            return Err(UpdateTransitionError::CapabilityForbids(self.capability()));
+        }
+        match &self.state {
+            UpdateState::Failed {
+                target: Some(version),
+                ..
+            } => {
+                let version = version.clone();
+                Ok(self.enter(UpdateState::Available { version }))
+            }
+            _ => Err(self.rejected()),
+        }
     }
 
     /// Everything the surfaces may show for the current state. The only place
@@ -646,9 +714,18 @@ impl UpdateLifecycle {
             | UpdateState::RestartPending { version } => VersionClaim::Superseded {
                 newer: version.clone(),
             },
-            UpdateState::Idle | UpdateState::Checking | UpdateState::Failed { .. } => {
-                VersionClaim::Unknown
-            }
+            // A failure that kept its target still knows a newer build exists
+            // and that this process is not running it.
+            UpdateState::Failed {
+                target: Some(version),
+                ..
+            } => VersionClaim::Superseded {
+                newer: version.clone(),
+            },
+            UpdateState::Idle
+            | UpdateState::Checking
+            | UpdateState::ManagedExternally { .. }
+            | UpdateState::Failed { target: None, .. } => VersionClaim::Unknown,
         }
     }
 
@@ -676,7 +753,15 @@ impl UpdateLifecycle {
             UpdateState::Running { version } => {
                 format!("OK Player is now running version {version}.")
             }
-            UpdateState::Failed { reason } => format!("Update failed: {reason}"),
+            UpdateState::ManagedExternally { hint } => hint.clone(),
+            UpdateState::Failed {
+                reason,
+                target: Some(version),
+            } => format!("The update to version {version} failed: {reason}"),
+            UpdateState::Failed {
+                reason,
+                target: None,
+            } => format!("Update failed: {reason}"),
         }
     }
 
@@ -687,11 +772,16 @@ impl UpdateLifecycle {
             VersionClaim::Superseded { newer } => {
                 if matches!(self.state, UpdateState::RestartPending { .. }) {
                     format!("OK Player {running} — restart to finish updating to {newer}.")
+                } else if matches!(self.state, UpdateState::Failed { .. }) {
+                    format!("OK Player {running} — updating to {newer} failed.")
                 } else {
                     format!("OK Player {running} — version {newer} is available.")
                 }
             }
-            VersionClaim::Unknown => format!("OK Player {running}."),
+            VersionClaim::Unknown => match &self.state {
+                UpdateState::ManagedExternally { hint } => format!("OK Player {running} — {hint}"),
+                _ => format!("OK Player {running}."),
+            },
             VersionClaim::NotApplicable => {
                 format!("OK Player {running} — development build; updates are disabled.")
             }
@@ -710,9 +800,11 @@ impl UpdateLifecycle {
             UpdateState::ReadyToApply { .. } => Some(UpdateAction::InstallUpdate),
             UpdateState::RestartPending { .. } => Some(UpdateAction::RestartToFinish),
             UpdateState::Failed { .. } => Some(UpdateAction::Retry),
-            // A system-managed update is announced, never actioned in-app; a
+            // A system-managed update is announced, never actioned in-app; an
+            // install the system owns outright offers not even a check; a
             // check, download or apply in flight offers nothing.
             UpdateState::AvailableExternally { .. }
+            | UpdateState::ManagedExternally { .. }
             | UpdateState::Checking
             | UpdateState::Downloading { .. }
             | UpdateState::Applying { .. } => None,
@@ -1210,7 +1302,8 @@ mod tests {
         assert_eq!(
             failing.apply_failed("disk full").unwrap(),
             &UpdateState::Failed {
-                reason: "disk full".to_owned()
+                reason: "disk full".to_owned(),
+                target: Some("2.0.0".to_owned())
             }
         );
     }
@@ -1264,6 +1357,17 @@ mod tests {
             assert!(
                 probe.apply_needs_restart().is_err(),
                 "{kind} must refuse an in-app restart handoff"
+            );
+
+            let mut failed_check = UpdateLifecycle::new(kind, "1.0.0");
+            failed_check.start_check().unwrap();
+            failed_check.check_failed("network unreachable").unwrap();
+            assert_eq!(
+                failed_check.retry_failed_update(),
+                Err(UpdateTransitionError::CapabilityForbids(
+                    UpdateCapability::SystemManaged
+                )),
+                "{kind} has no in-app offer of its own to resume"
             );
 
             sweep_reachable_states(kind, |life| {
@@ -1460,6 +1564,143 @@ mod tests {
                 UpdateCapability::Unmanaged
             ))
         );
+    }
+
+    /// Invariant: an install a system tool owns outright reports who updates
+    /// it and offers nothing — not even the check an `Idle` surface offers.
+    #[test]
+    fn a_system_owned_install_reports_its_manager_instead_of_offering_a_check() {
+        for (kind, tool) in [(InstallKind::Rpm, "dnf"), (InstallKind::Flatpak, "flatpak")] {
+            let mut lifecycle = UpdateLifecycle::managed_externally(kind, "1.0.0")
+                .expect("a system-managed install can be owned outright");
+
+            let presentation = lifecycle.describe();
+            assert_eq!(
+                presentation.action, None,
+                "{kind} must not offer a check it never runs"
+            );
+            assert!(
+                presentation.updates_message.to_lowercase().contains(tool),
+                "{kind} should name its update tool, got {}",
+                presentation.updates_message
+            );
+            assert!(
+                presentation.about_message.to_lowercase().contains(tool),
+                "{kind} About should say the same, got {}",
+                presentation.about_message
+            );
+            assert_ne!(presentation.claim, VersionClaim::Current);
+            assert_eq!(presentation.target_version, None);
+
+            assert!(
+                lifecycle.start_check().is_err(),
+                "{kind} must refuse a check while the system owns updates"
+            );
+
+            let idle = UpdateLifecycle::new(kind, "1.0.0");
+            assert_eq!(
+                idle.describe().action,
+                Some(UpdateAction::CheckNow),
+                "{kind} that does discover versions still offers a check"
+            );
+            assert_ne!(
+                presentation.updates_message,
+                idle.describe().updates_message,
+                "{kind} owned outright must not read like an install that has simply not checked yet"
+            );
+        }
+
+        for kind in SELF_APPLY_KINDS {
+            assert_eq!(
+                UpdateLifecycle::managed_externally(kind, "1.0.0").err(),
+                Some(UpdateTransitionError::CapabilityForbids(
+                    UpdateCapability::SelfApply
+                )),
+                "{kind} applies its own updates"
+            );
+        }
+        assert_eq!(
+            UpdateLifecycle::managed_externally(InstallKind::DevBuild, "1.0.0").err(),
+            Some(UpdateTransitionError::CapabilityForbids(
+                UpdateCapability::Unmanaged
+            ))
+        );
+    }
+
+    /// Invariant: a failure after discovery keeps the offer. The version stays
+    /// known and the same update can be retried without waiting for another
+    /// check to rediscover it.
+    #[test]
+    fn a_failure_after_discovery_keeps_its_target_retryable() {
+        for (name, fail) in [
+            (
+                "download",
+                Box::new(|life: &mut UpdateLifecycle| {
+                    life.start_download().unwrap();
+                    life.download_failed("checksum mismatch").unwrap();
+                }) as Drive,
+            ),
+            (
+                "apply",
+                Box::new(|life: &mut UpdateLifecycle| {
+                    life.start_download().unwrap();
+                    life.download_finished().unwrap();
+                    life.start_apply().unwrap();
+                    life.apply_failed("permission denied").unwrap();
+                }),
+            ),
+        ] {
+            let mut lifecycle = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+            lifecycle.start_check().unwrap();
+            lifecycle.check_found("2.0.0").unwrap();
+            fail(&mut lifecycle);
+
+            assert_eq!(
+                lifecycle.state().target_version(),
+                Some("2.0.0"),
+                "{name} failure must keep the discovered version"
+            );
+            let presentation = lifecycle.describe();
+            assert_eq!(presentation.target_version.as_deref(), Some("2.0.0"));
+            assert_eq!(
+                presentation.claim,
+                VersionClaim::Superseded {
+                    newer: "2.0.0".to_owned()
+                },
+                "{name} failure still knows the running build is not the newest"
+            );
+            assert_eq!(presentation.action, Some(UpdateAction::Retry));
+
+            assert_eq!(
+                lifecycle.retry_failed_update().unwrap(),
+                &UpdateState::Available {
+                    version: "2.0.0".to_owned()
+                },
+                "{name} failure must be retryable without a fresh check"
+            );
+            assert_eq!(
+                lifecycle.describe().action,
+                Some(UpdateAction::DownloadUpdate)
+            );
+        }
+    }
+
+    #[test]
+    fn a_check_that_failed_before_finding_anything_has_no_offer_to_retry() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        lifecycle.start_check().unwrap();
+        lifecycle.check_failed("network unreachable").unwrap();
+
+        assert_eq!(lifecycle.state().target_version(), None);
+        assert_eq!(lifecycle.describe().claim, VersionClaim::Unknown);
+        assert_eq!(
+            lifecycle.retry_failed_update(),
+            Err(UpdateTransitionError::NotAllowedFrom(UpdateState::Failed {
+                reason: "network unreachable".to_owned(),
+                target: None,
+            }))
+        );
+        assert_eq!(lifecycle.start_check().unwrap(), &UpdateState::Checking);
     }
 
     #[test]
