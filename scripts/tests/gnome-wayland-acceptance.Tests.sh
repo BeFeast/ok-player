@@ -195,10 +195,78 @@ else
 fi
 rm -f "$results/desktop-portal.result"
 
+#-- portal attribution --------------------------------------------------------------
+
+# Any application on a logged-in desktop calls the FileChooser portal, so the row has to
+# key on *who* called it. This drives the real resolver against a real session bus: a
+# process owns a connection, writes a capture naming it, and asks whether that call is
+# attributed to itself and denied to anyone else. Nothing here stubs the bus, because the
+# lookup is the thing under test.
+command -v dbus-run-session >/dev/null 2>&1 ||
+  { echo "FAIL: dbus-run-session is required to test portal attribution" >&2; exit 1; }
+
+cat >"$WORK/attribution.py" <<'PY'
+import os, pathlib, subprocess, sys
+import gi
+gi.require_version("Gio", "2.0")
+from gi.repository import Gio
+
+helper, work = sys.argv[1], pathlib.Path(sys.argv[2])
+bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+mine = bus.get_unique_name()
+
+def capture(name, path):
+    path.write_text(
+        f"method call time=1.0 sender={name} -> destination=org.freedesktop.portal.Desktop "
+        "serial=1 path=/org/freedesktop/portal/desktop; "
+        "interface=org.freedesktop.portal.FileChooser; member=OpenFile\n"
+    )
+
+def run(log, pid):
+    return subprocess.run(
+        [sys.executable, helper, "--log", str(log), "--pid", str(pid)],
+        capture_output=True, text=True,
+    )
+
+own = work / "own.log"
+capture(mine, own)
+
+# The call this process made is attributed to this process.
+result = run(own, os.getpid())
+assert result.returncode == 0, f"own call rejected: {result.stdout}{result.stderr}"
+assert "player-calls=1" in result.stdout, result.stdout
+
+# The same call is not attributed to anyone else.
+result = run(own, os.getpid() + 100000)
+assert result.returncode != 0, f"another process claimed the call: {result.stdout}"
+assert "player-calls=0" in result.stdout and "foreign-calls=1" in result.stdout, result.stdout
+
+# A call from a connection that no longer exists is foreign, never a pass.
+gone = work / "gone.log"
+capture(":1.999999", gone)
+result = run(gone, os.getpid())
+assert result.returncode != 0, f"an unresolvable sender passed: {result.stdout}"
+assert "unresolved" in result.stdout, result.stdout
+
+# No traffic at all is not a pass either.
+empty = work / "empty.log"
+empty.write_text("")
+result = run(empty, os.getpid())
+assert result.returncode != 0, f"an empty capture passed: {result.stdout}"
+
+print("attribution ok")
+PY
+
+if dbus-run-session -- python3 "$WORK/attribution.py" "$HARNESS/portal-calls.py" "$WORK" >/dev/null 2>"$WORK/attribution.err"; then
+  ok "portal calls are attributed to the connection that made them, and to no one else"
+else
+  fail "portal attribution is wrong: $(cat "$WORK/attribution.err")"
+fi
+
 #-- the harness refuses a session it must not attest --------------------------------
 
 fake_bin="$WORK/bin"; mkdir -p "$fake_bin"
-for tool in ydotool ydotoold wl-paste wl-copy dbus-monitor gst-launch-1.0; do
+for tool in ydotool ydotoold wl-paste wl-copy dbus-monitor gst-launch-1.0 dconf; do
   printf '#!/bin/sh\nexit 0\n' >"$fake_bin/$tool"
   chmod +x "$fake_bin/$tool"
 done

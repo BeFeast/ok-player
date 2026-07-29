@@ -8,8 +8,10 @@ reads names and roles only: no contents, no user data.
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
+import time
 
 import gi
 
@@ -17,8 +19,7 @@ gi.require_version("Atspi", "2.0")
 from gi.repository import Atspi  # noqa: E402
 
 
-def main() -> int:
-    Atspi.init()
+def toplevels() -> list[dict[str, object]]:
     desktop = Atspi.get_desktop(0)
     windows = []
     for index in range(desktop.get_child_count()):
@@ -43,6 +44,45 @@ def main() -> int:
                 )
         except Exception:  # a client may vanish mid-walk; it simply is not listed
             continue
+    return windows
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--await-window",
+        help="wait for a window with this name to become active before reporting",
+    )
+    parser.add_argument(
+        "--gone",
+        action="store_true",
+        help="with --await-window, wait for that window to disappear instead",
+    )
+    parser.add_argument("--timeout", type=float, default=20.0)
+    args = parser.parse_args()
+
+    Atspi.init()
+    windows = toplevels()
+    if args.await_window:
+        deadline = time.monotonic() + args.timeout
+        while True:
+            present = any(
+                window["window"] == args.await_window and window["showing"] for window in windows
+            )
+            if present != args.gone:
+                break
+            if time.monotonic() >= deadline:
+                state = "disappear" if args.gone else "appear"
+                print(
+                    f"atspi-windows: {args.await_window!r} did not {state} within "
+                    f"{args.timeout:g}s",
+                    file=sys.stderr,
+                )
+                json.dump(windows, sys.stdout, indent=2, sort_keys=True)
+                sys.stdout.write("\n")
+                return 1
+            time.sleep(0.25)
+            windows = toplevels()
     json.dump(windows, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
     return 0

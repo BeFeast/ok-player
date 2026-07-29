@@ -61,7 +61,7 @@ done
   exit 64
 }
 
-for tool in ydotool ydotoold wl-paste wl-copy dbus-monitor python3 gst-launch-1.0 sha256sum; do
+for tool in ydotool ydotoold wl-paste wl-copy dbus-monitor python3 gst-launch-1.0 sha256sum dconf; do
   command -v "$tool" >/dev/null 2>&1 || { echo "missing required tool: $tool" >&2; exit 127; }
 done
 
@@ -137,6 +137,8 @@ dbus-monitor --session "interface='org.freedesktop.portal.FileChooser'" >"$PORTA
 MONITOR_PID=$!
 
 say "player"
+# Portal state is keyed by application id, and the chooser row has to reset it.
+APP_ID="com.befeast.okplayer"
 export OKP_DEBUG_INTERACTIONS=1
 export OKP_DEBUG_WINDOW_FIT=1
 export OKP_SKIP_UPDATE_CHECK=1
@@ -222,59 +224,137 @@ fi
 
 if wants gnome-file-chooser || wants desktop-portal; then
   say "gnome-file-chooser / desktop-portal"
-  CHOSEN="$RUN/chosen-through-the-chooser.mp4"
+  # Beside the fixture rather than inside this run's directory: the portal remembers the
+  # last folder per application, and a remembered folder that has been deleted makes the
+  # *next* run's chooser open on a modal error instead of a file list.
+  CHOSEN="$(cd "$(dirname "$FIXTURE")" && pwd)/okp-chosen-through-the-chooser.mp4"
+  # The shell titles its media chooser; the harness waits for that exact window.
+  CHOOSER_TITLE="Open media"
   cp "$FIXTURE" "$CHOSEN"
-  portal_before="$(grep -c 'member=OpenFile' "$PORTAL_LOG" || true)"
+  # And start from no remembered folder at all, so a run never inherits one an earlier
+  # run left pointing at something that is gone.
+  dconf reset "/org/gnome/portal/filechooser/$APP_ID/last-folder-path" 2>/dev/null || true
   focus_player
+  chooser_appeared=0
+  if python3 "$HARNESS/atspi-windows.py" 2>/dev/null | grep -qF "\"$CHOOSER_TITLE\""; then
+    echo "a chooser from an earlier run is still on the desktop; it would swallow this run's input" >&2
+    exit 75
+  fi
   if stimulus_withheld gnome-file-chooser || stimulus_withheld desktop-portal; then
     echo "negative control: the open-file gesture is withheld"
   else
     key 24:1 24:0                       # O, the Open File binding
-    sleep 3
-    key 29:1 38:1 38:0 29:0             # Ctrl+L, the chooser's location entry
-    sleep 1
-    ydotool type "$CHOSEN"
-    sleep 1
-    key 28:1 28:0                       # Enter commits the typed location
-    sleep 2
-    key 28:1 28:0                       # Enter accepts the selection
-    sleep 4
+    # The chooser is another process and can be cold: typing into a window that has not
+    # appeared yet would leave the keys in the player and make the row race a start-up.
+    if python3 "$HARNESS/atspi-windows.py" --await-window "$CHOOSER_TITLE" \
+        >"$ARTIFACTS/gnome-file-chooser.json" 2>"$RUN/chooser.err"; then
+      chooser_appeared=1
+      key 29:1 38:1 38:0 29:0           # Ctrl+L, the chooser's location entry
+      sleep 1
+      ydotool type "$CHOSEN"
+      sleep 1
+      key 28:1 28:0                     # Enter commits the typed location
+      sleep 2
+      key 28:1 28:0                     # Enter accepts the selection
+      # The chooser closing is what says the selection was accepted rather than dropped.
+      python3 "$HARNESS/atspi-windows.py" --await-window "$CHOOSER_TITLE" --gone \
+        >"$RUN/chooser-after.json" 2>>"$RUN/chooser.err" || true
+      sleep 2
+    else
+      echo "the native chooser never appeared: $(cat "$RUN/chooser.err")"
+    fi
+    # Leaving a chooser open orphans a modal dialog that poisons the next run, so the row
+    # closes it whether the selection worked or not.
+    if python3 "$HARNESS/atspi-windows.py" 2>/dev/null | grep -qF "\"$CHOOSER_TITLE\""; then
+      key 1:1 1:0   # Escape cancels the chooser
+      python3 "$HARNESS/atspi-windows.py" --await-window "$CHOOSER_TITLE" --gone --timeout 10 \
+        >/dev/null 2>&1 || echo "warning: the chooser would not close" >&2
+    fi
   fi
 
-  python3 "$HARNESS/atspi-windows.py" >"$ARTIFACTS/gnome-file-chooser.json" 2>/dev/null || true
-  portal_after="$(grep -c 'member=OpenFile' "$PORTAL_LOG" || true)"
-  grep -A20 'interface=org.freedesktop.portal.FileChooser' "$PORTAL_LOG" | tail -60 \
+  [[ -s "$ARTIFACTS/gnome-file-chooser.json" ]] ||
+    python3 "$HARNESS/atspi-windows.py" >"$ARTIFACTS/gnome-file-chooser.json" 2>/dev/null || true
+  grep -A20 'interface=org.freedesktop.portal.FileChooser' "$PORTAL_LOG" | tail -80 \
     >"$ARTIFACTS/desktop-portal.log" || true
+  # Any application on a logged-in desktop makes this call, so the row asks the bus who
+  # owns the calling connection and counts only the player's own.
+  portal_attribution=""
+  portal_status="unattributable"
+  if portal_attribution="$(python3 "$HARNESS/portal-calls.py" --log "$PORTAL_LOG" --pid "$APP_PID" 2>&1)"; then
+    portal_status="player"
+  else
+    case "$portal_attribution" in
+      player-calls=*) portal_status="not-the-player" ;;
+      *) portal_status="unattributable" ;;
+    esac
+  fi
+  printf '%s\n' "$portal_attribution" >>"$ARTIFACTS/desktop-portal.log"
 
   history="$XDG_STATE_HOME/ok-player/history.json"
-  loaded=0
-  if [[ -f "$history" ]]; then
-    loaded="$(python3 - "$history" "$CHOSEN" <<'PY'
-import json, pathlib, sys
-entry = json.loads(pathlib.Path(sys.argv[1]).read_text()).get("files", {}).get(sys.argv[2])
-# A duration only exists if the demuxer actually opened the file the chooser returned.
-print(1 if entry and float(entry.get("duration") or 0) > 0 else 0)
+  # The entry appears when the file opens and gains its duration when the demuxer reports
+  # it, so this waits for the answer rather than reading once and racing the player.
+  loaded="$(python3 - "$history" "$CHOSEN" <<'PY'
+import json, pathlib, sys, time
+
+history, chosen = pathlib.Path(sys.argv[1]), sys.argv[2]
+deadline = time.monotonic() + 20.0
+while True:
+    try:
+        entry = json.loads(history.read_text()).get("files", {}).get(chosen)
+    except (OSError, ValueError):
+        entry = None
+    # A duration only exists if the demuxer actually opened the file the chooser returned.
+    if entry and float(entry.get("duration") or 0) > 0:
+        print(1)
+        break
+    if time.monotonic() >= deadline:
+        print(0)
+        break
+    time.sleep(0.5)
 PY
 )"
-  fi
 
   if wants gnome-file-chooser; then
     if [[ "$loaded" == "1" ]]; then
       record gnome-file-chooser pass \
         "the native chooser returned the selected file and the player demuxed it"
+    elif (( chooser_appeared == 0 )); then
+      record gnome-file-chooser fail \
+        "the native chooser never appeared, so nothing could be chosen through it"
     else
       record gnome-file-chooser fail \
         "the player never loaded a file through the chooser (no demuxed history entry)"
     fi
   fi
   if wants desktop-portal; then
-    if (( portal_after > portal_before )); then
-      record desktop-portal pass \
-        "the open request travelled over org.freedesktop.portal.FileChooser.OpenFile on the session bus"
-    else
-      record desktop-portal fail \
-        "no org.freedesktop.portal.FileChooser traffic: the chooser did not go through the portal"
-    fi
+    case "$portal_status" in
+      # The call being the player's is half the row; the other half is that the portal
+      # actually returned a file the player then opened.
+      player)
+        if [[ "$loaded" == "1" ]]; then
+          record desktop-portal pass \
+            "the player's own connection called org.freedesktop.portal.FileChooser.OpenFile and opened the file it returned ($portal_attribution)"
+        else
+          record desktop-portal fail \
+            "the player called the portal but no file came back from it ($portal_attribution)"
+        fi
+        ;;
+      not-the-player)
+        # Distinguish silence from someone else's call: they are different failures, and
+        # reporting one as the other is how a reader stops trusting the row.
+        if [[ "$portal_attribution" == *"foreign-calls=0"* ]]; then
+          record desktop-portal fail \
+            "no FileChooser.OpenFile reached the portal at all ($portal_attribution)"
+        else
+          record desktop-portal fail \
+            "FileChooser.OpenFile traffic on the bus came from another process, not the player ($portal_attribution)"
+        fi
+        ;;
+      *)
+        record desktop-portal fail \
+          "portal traffic could not be attributed to a process: $portal_attribution"
+        ;;
+    esac
   fi
 fi
 
