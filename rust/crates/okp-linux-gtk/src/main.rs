@@ -128,6 +128,9 @@ pub(crate) use window::*;
 
 const SPEED_PRESETS: [f64; 6] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 const APP_BUILD_VERSION: &str = env!("OKP_BUILD_VERSION");
+/// The application's D-Bus/GTK identity. One constant, because a restart has
+/// to ask the bus about the same name the application registers.
+const APP_APPLICATION_ID: &str = "com.befeast.okplayer";
 const APP_BUILD_SHA: &str = env!("OKP_BUILD_SHA");
 const APP_PACKAGE_KIND: &str = env!("OKP_PACKAGE_KIND");
 const LINUX_DESKTOP_ID: &str = "com.befeast.okplayer.desktop";
@@ -1990,11 +1993,16 @@ const SIDE_PANEL_BOTTOM_INSET: i32 = 80;
 const SIDE_PANEL_TRANSITION_MS: u32 = 250;
 
 fn main() -> glib::ExitCode {
+    // Before anything else: after a package manager replaces the file this
+    // process was started from, the path can no longer be resolved from
+    // `/proc/self/exe` (#707).
+    record_startup_install();
+    await_replaced_instance_shutdown(APP_APPLICATION_ID);
     configure_linux_renderer_environment();
     VelopackApp::build().set_auto_apply_on_startup(false).run();
 
     let app = gtk::Application::builder()
-        .application_id("com.befeast.okplayer")
+        .application_id(APP_APPLICATION_ID)
         .flags(gtk::gio::ApplicationFlags::HANDLES_COMMAND_LINE)
         .build();
 
@@ -2175,6 +2183,10 @@ impl LinuxUpdateSession {
             | UpdateState::ReadyToApply { .. }
             | UpdateState::Applying { .. }
             | UpdateState::RestartPending { .. }
+            // A package manager moved the install on underneath this session
+            // (#707): the player is running a build that is no longer the one
+            // installed, which is worth saying over the video.
+            | UpdateState::ReplacedOnDisk { .. }
             | UpdateState::Failed {
                 target: Some(_), ..
             } => true,
