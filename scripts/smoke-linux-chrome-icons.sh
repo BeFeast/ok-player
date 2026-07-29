@@ -258,7 +258,7 @@ if [[ "${1:-}" == "--inner" ]]; then
 
   # 4. The surface drew. A screenshot of a blank window would satisfy everything
   #    above, so the captured image has to carry more than one colour.
-  colours="$(magick "$OUT_DIR/settings.png" -format '%k' info:)"
+  colours="$(identify -format '%k' "$OUT_DIR/settings.png" | awk '{ print $1; exit }')"
   (( colours > 16 )) || {
     echo "the Settings screenshot carries only $colours colours" >&2
     exit 1
@@ -287,7 +287,7 @@ fi
 BINARY="${1:-$ROOT/rust/target/debug/okp-linux-gtk}"
 OUT_DIR="${2:-$ROOT/artifacts/manual-ui/linux-chrome-icons-smoke}"
 
-for tool in xfwm4 xdotool xprop xwininfo import magick awk comm timeout; do
+for tool in xfwm4 xdotool xprop xwininfo import identify awk comm timeout; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "Missing required tool: $tool" >&2
     exit 127
