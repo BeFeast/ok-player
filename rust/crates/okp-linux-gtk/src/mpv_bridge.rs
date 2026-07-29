@@ -1500,17 +1500,28 @@ pub(crate) fn connect_state_poll(
         mpris_snapshot,
         mpris_signals,
     } = context;
+    // Whether the previous poll had media, so the return to idle can be recognised as an
+    // edge instead of a state.
+    let playing_media = Cell::new(false);
     glib::timeout_add_local(Duration::from_millis(200), move || {
         let auto_fit_dimensions = drain_mpv_events(&state, &status_toast);
         drain_wayland_presentation_feedback(&state);
         apply_pending_nfo_titles(&state);
-        observe_initial_window_fit(&state, auto_fit_dimensions);
+        // Only a loaded source may size the window. libmpv can still publish a dimension
+        // payload for a source that has just been retired, and taking it used to arm a fit
+        // that fired after the return to idle - re-fitting the window to media that is no
+        // longer on screen, on top of the geometry the return had just restored (#716).
+        let source_loaded = has_loaded_media(&state);
+        if source_loaded {
+            observe_initial_window_fit(&state, auto_fit_dimensions);
+        }
         // Startup payload delivery is gated on the map edge, so initial fitting uses an
         // already-visible toplevel with compositor context. Wayland may publish desktop-wide
         // configure bounds before its output-enter event; retain the one-shot request until the
         // bounds can be tied to one monitor instead of consuming a spanning fit. Fullscreen and
         // maximized loads still consume their deliberate no-resize skip immediately.
-        if window.is_mapped()
+        if source_loaded
+            && window.is_mapped()
             && (window.is_fullscreen()
                 || window.is_maximized()
                 || player_window_fit_area_available(&window, &window_bounds))
@@ -1518,6 +1529,7 @@ pub(crate) fn connect_state_poll(
         {
             fit_player_window_to_video(
                 &window,
+                &state,
                 &window_bounds,
                 request.video,
                 PlayerWindowFitRequest::Initial,
@@ -1542,6 +1554,13 @@ pub(crate) fn connect_state_poll(
         enforce_hwdec_policy(&state, playback);
         run_presentation_exercise(&state, playback);
         let has_media = has_loaded_media(&state);
+        // The window belongs to the idle surface again the moment the media that resized it
+        // is gone, so give back the geometry that media borrowed (#716). This runs on the
+        // edge out of playback rather than on every idle poll, so a window the user resizes
+        // while already idle is left alone.
+        if playing_media.replace(has_media) && !has_media {
+            restore_idle_window_geometry(&window, &state, &window_bounds);
+        }
         sync_native_video_background(&window, &root_surface, has_media);
         let seek_preview = env::var_os("OKP_OPEN_SEEK_PREVIEW_ON_STARTUP").is_some();
         let command_preview = env::var_os("OKP_OPEN_MORE_POPOVER_ON_STARTUP").is_some();

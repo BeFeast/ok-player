@@ -7365,3 +7365,72 @@ fn a_notice_shown_while_a_reveal_is_pending_keeps_its_text() {
         );
     });
 }
+
+// The idle canvas' own width floor, measured through GTK rather than asserted about the
+// source. A run of prose that neither wraps nor ellipsizes reports its whole sentence as its
+// *minimum* width, and a minimum propagates up: the canvas ends up unable to be narrower
+// than its longest line, gets that minimum allocated inside a narrower window, and is
+// cropped instead of compressed. That is how a portrait fit left the Continue-watching
+// surface with its subtitle off the right edge and the settings button cut in half (#716).
+
+const IDLE_SUBTITLE_COPY: &str = "Pick up where you left off — or open something new.";
+
+#[test]
+#[ignore = "needs a display server; run via scripts/smoke-linux-toast-behaviour.sh"]
+fn idle_canvas_copy_stops_setting_a_floor_under_the_window() {
+    on_gtk_thread(|| {
+        let unbounded = gtk::Label::new(Some(IDLE_SUBTITLE_COPY));
+        let (unbounded_min, unbounded_natural, _, _) =
+            unbounded.measure(gtk::Orientation::Horizontal, -1);
+        assert_eq!(
+            unbounded_min, unbounded_natural,
+            "the defect this guards is a label whose minimum is its whole sentence; \
+             if GTK stops reporting that, this test is measuring the wrong thing"
+        );
+
+        let reflowing = gtk::Label::new(Some(IDLE_SUBTITLE_COPY));
+        reflowing_copy(&reflowing);
+        let (min, natural, _, _) = reflowing.measure(gtk::Orientation::Horizontal, -1);
+
+        assert_eq!(
+            natural, unbounded_natural,
+            "the canonical desktop layout renders from the natural width, which must not move"
+        );
+        assert!(
+            min * 2 < natural,
+            "reflowing copy must be able to give up most of its width: minimum {min}px \
+             against a natural {natural}px"
+        );
+        // One Continue-watching card is the widest thing on that surface that cannot be
+        // reflowed, so no run of prose beside it may ask for more.
+        assert!(
+            min < RECENT_CARD_WIDTH,
+            "idle copy asks for {min}px, more than the {RECENT_CARD_WIDTH}px card it sits above"
+        );
+    });
+}
+
+#[test]
+#[ignore = "needs a display server; run via scripts/smoke-linux-toast-behaviour.sh"]
+fn the_idle_footer_gives_up_its_status_text_before_its_buttons() {
+    on_gtk_thread(|| {
+        let (footer, _left, _icon, _label, status) = idle_footer_widgets();
+        let (min, natural, _, _) = footer.measure(gtk::Orientation::Horizontal, -1);
+
+        assert!(
+            natural > min,
+            "the footer must still prefer its full caption at a comfortable width"
+        );
+        // The settings button lives at the far right of this bar, so a footer whose minimum
+        // follows its own prose is a settings button pushed past the window edge.
+        assert!(
+            min < RECENT_CARD_WIDTH,
+            "the idle footer asks for {min}px before it will compress, more than the \
+             {RECENT_CARD_WIDTH}px card the canvas above it is sized by"
+        );
+
+        // The status is the part that gives way; it is compressed, never removed.
+        assert!(status.is_visible(), "the status text stays on the bar");
+        assert_eq!(status.ellipsize(), pango::EllipsizeMode::End);
+    });
+}

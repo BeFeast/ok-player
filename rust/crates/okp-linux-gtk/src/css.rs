@@ -355,8 +355,12 @@ const OKP_STYLESHEET: &str = "
             min-width: 320px;
         }
 
+        /* One Continue-watching card, which is the widest thing on this surface that cannot
+         * be reflowed - everything else wraps or ellipsizes. A wider floor than that is a
+         * minimum window width in disguise: the canvas gets it allocated inside a narrower
+         * window and the overflow is cropped rather than compressed (#716). */
         .okp-welcome-recents {
-            min-width: 300px;
+            min-width: 194px;
         }
 
         .okp-welcome-recents-heading {
@@ -750,8 +754,14 @@ const OKP_STYLESHEET: &str = "
             border-radius: 10px;
         }
 
+        /* The welcome drop target is allocated explicitly by the action row, so its width
+         * at the canonical desktop layout comes from that allocation and not from this
+         * floor. Keeping the first-run target's 280px here instead would make this button
+         * the widest thing on the idle canvas and put a 378px floor under the whole window
+         * - wider than a portrait fit on a 1366x768 laptop, which is how the canvas came to
+         * be cropped inside its own window (#716). */
         button.okp-welcome-drop-target {
-            min-width: 280px;
+            min-width: 148px;
             min-height: 82px;
             padding: 0 16px;
             border-radius: 9px;
