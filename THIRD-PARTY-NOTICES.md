@@ -68,6 +68,21 @@ distributed and licensed independently by Freedesktop/Flathub.
 - **CommunityToolkit.Mvvm** — © .NET Foundation and contributors, MIT License
   (<https://github.com/CommunityToolkit/dotnet>).
 
+## Chrome icon set (first-party)
+
+- **Component:** the symbolic icons the Linux shell resolves for its own chrome
+  (`rust/crates/okp-linux-gtk/icons/okp-*-symbolic.svg`), compiled into the
+  binary as a `GResource`.
+- **Provenance:** original work, drawn for OK Player by
+  [`scripts/generate-chrome-icons.py`](scripts/generate-chrome-icons.py). No file
+  is derived from `adwaita-icon-theme` (CC-BY-SA-3.0 / LGPL-3), from any other
+  icon set, or from a font. Nothing third-party was taken, so there is no
+  upstream notice to reproduce.
+- **License:** GPL-3.0-or-later, the same terms as the rest of OK Player
+  (see [`LICENSE`](LICENSE)).
+- **Not affected:** the application icon and desktop integration
+  (`rust/packaging/linux/`), which are also first-party and unchanged.
+
 ## Obtaining the source
 
 OK Player's source is at <https://github.com/BeFeast/ok-player>. The corresponding source for the

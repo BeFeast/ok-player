@@ -320,7 +320,7 @@ fn player_command_search_entry() -> gtk::Entry {
     gtk::prelude::EntryExt::set_icon_from_icon_name(
         &search,
         gtk::EntryIconPosition::Primary,
-        Some("system-search-symbolic"),
+        Some("okp-system-search-symbolic"),
     );
     search.set_icon_tooltip_text(gtk::EntryIconPosition::Primary, Some("Search"));
     search.set_accessible_role(gtk::AccessibleRole::SearchBox);
@@ -666,7 +666,7 @@ fn player_command_submenu_button(page: PlayerCommandMenuPage) -> gtk::Button {
     label.set_xalign(0.0);
     label.set_hexpand(true);
     row.append(&label);
-    let arrow = gtk::Image::from_icon_name("go-next-symbolic");
+    let arrow = gtk::Image::from_icon_name("okp-go-next-symbolic");
     arrow.add_css_class("okp-command-submenu-arrow");
     row.append(&arrow);
 
@@ -681,7 +681,7 @@ fn player_command_back_button(page: PlayerCommandMenuPage) -> gtk::Button {
     button.add_css_class("okp-command-back-row");
 
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    row.append(&gtk::Image::from_icon_name("go-previous-symbolic"));
+    row.append(&gtk::Image::from_icon_name("okp-go-previous-symbolic"));
     let label = gtk::Label::new(Some(page.label()));
     label.add_css_class("okp-command-row-label");
     label.set_xalign(0.0);

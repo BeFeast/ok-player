@@ -156,3 +156,5 @@ jobs:
         run: ./scripts/smoke-linux-idle-narrow-canvas.sh
       - name: Playback OSC reflows instead of clipping at a narrow window
         run: ./scripts/smoke-linux-osc-narrow-bar.sh
+      - name: Chrome icons come out of the binary, not the host icon theme
+        run: ./scripts/smoke-linux-chrome-icons.sh

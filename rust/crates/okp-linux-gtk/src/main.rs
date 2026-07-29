@@ -65,6 +65,7 @@ use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
 mod about;
 mod branding;
+mod chrome_icons;
 mod compact_mode;
 mod companion_window;
 mod controls;
@@ -99,6 +100,7 @@ mod updates;
 mod window;
 pub(crate) use about::*;
 pub(crate) use branding::*;
+pub(crate) use chrome_icons::*;
 pub(crate) use compact_mode::*;
 pub(crate) use companion_window::*;
 pub(crate) use controls::*;
@@ -1146,7 +1148,7 @@ impl MediaStateOverlay {
         loading.append(&spinner);
         loading.append(&loading_label);
 
-        let error_icon = gtk::Image::from_icon_name("dialog-error-symbolic");
+        let error_icon = gtk::Image::from_icon_name("okp-dialog-error-symbolic");
         error_icon.add_css_class("okp-error-icon");
         let error_title = gtk::Label::new(Some("Playback failed"));
         error_title.add_css_class("okp-error-title");

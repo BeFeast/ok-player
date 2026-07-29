@@ -95,7 +95,9 @@ pub(crate) fn show_media_info_window(
     close_button.add_css_class("okp-media-info-close");
     close_button.set_has_frame(false);
     close_button.set_tooltip_text(Some("Close Media Information"));
-    close_button.set_child(Some(&gtk::Image::from_icon_name("window-close-symbolic")));
+    close_button.set_child(Some(&gtk::Image::from_icon_name(
+        "okp-window-close-symbolic",
+    )));
     header.append(&close_button);
     card.append(&header);
 
@@ -135,7 +137,7 @@ pub(crate) fn show_media_info_window(
     path_label.set_ellipsize(pango::EllipsizeMode::Middle);
     footer.append(&path_label);
 
-    let copy_button = media_info_action_button("Copy all", "edit-copy-symbolic");
+    let copy_button = media_info_action_button("Copy all", "okp-edit-copy-symbolic");
     copy_button.add_css_class("okp-media-info-copy");
     let copy_text = Rc::new(media_info_copy_text(media_info));
     let copy_toast = Rc::clone(&status_toast);

@@ -879,7 +879,7 @@ fn gtk_identity_uses_vector_widgets_instead_of_host_font_marks() {
     assert!(!history.contains("gtk::Label::new(Some(\"▶\"))"));
     assert!(!history.contains("gtk::Label::new(Some(\"OK\"))"));
     assert!(window.contains("canonical_brand_mark(20, 11"));
-    assert!(!window.contains("media-playback-start-symbolic"));
+    assert!(!window.contains("okp-media-playback-start-symbolic"));
     assert!(branding.contains("full_mark_for_icon_size"));
     assert!(branding.contains("CANONICAL_FULL_MARK"));
     assert!(branding.contains("draw_launcher_brand_tile"));
@@ -895,7 +895,7 @@ fn volume_and_audio_track_actions_use_distinct_icon_identities() {
 
     // Volume keeps the speaker/level glyph in both resting and reactive states.
     assert!(
-        controls.contains("gtk::Image::from_icon_name(\"audio-volume-high-symbolic\")"),
+        controls.contains("gtk::Image::from_icon_name(\"okp-audio-volume-high-symbolic\")"),
         "volume control must keep the speaker/level icon"
     );
 
@@ -2929,7 +2929,7 @@ fn command_menu_search_is_a_single_shared_compact_entry_with_icon() {
     assert!(source.contains("fn player_command_search_entry()"));
     assert!(source.contains("gtk::Entry::new()"));
     assert!(source.contains("gtk::EntryIconPosition::Primary"));
-    assert!(source.contains("\"system-search-symbolic\""));
+    assert!(source.contains("\"okp-system-search-symbolic\""));
     assert!(source.contains("set_icon_tooltip_text(gtk::EntryIconPosition::Primary"));
     assert!(source.contains("gtk::AccessibleRole::SearchBox"));
     assert!(!source.contains("gtk::SearchEntry::new()"));
@@ -3006,9 +3006,9 @@ fn video_geometry_toasts_report_the_applied_core_state() {
 fn compact_mode_keeps_the_render_surface_and_restores_standard_chrome() {
     let compact = include_str!("compact_mode.rs");
     for required in [
-        "view-restore-symbolic",
-        "window-close-symbolic",
-        "media-playback-start-symbolic",
+        "okp-view-restore-symbolic",
+        "okp-window-close-symbolic",
+        "okp-media-playback-start-symbolic",
         "okp-compact-seek",
         "COMPACT_DEFAULT_SHORT_EDGE",
         "COMPACT_MIN_SHORT_EDGE",

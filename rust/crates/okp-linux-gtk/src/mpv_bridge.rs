@@ -1673,9 +1673,9 @@ pub(crate) fn connect_state_poll(
             controls.screenshot_button.set_sensitive(has_media);
             controls.fullscreen_button.set_sensitive(has_media);
             controls.play_button.set_icon_name(if playback.paused {
-                "media-playback-start-symbolic"
+                "okp-media-playback-start-symbolic"
             } else {
-                "media-playback-pause-symbolic"
+                "okp-media-playback-pause-symbolic"
             });
             controls
                 .play_button
@@ -1742,7 +1742,7 @@ pub(crate) fn connect_state_poll(
             controls.fullscreen_button.set_sensitive(has_media);
             controls
                 .play_button
-                .set_icon_name("media-playback-start-symbolic");
+                .set_icon_name("okp-media-playback-start-symbolic");
             controls.play_button.set_tooltip_text(Some("Play (Space)"));
             controls.speed_button.set_label("1.00×");
             update_fullscreen_button(&controls.fullscreen_button, window.is_fullscreen());

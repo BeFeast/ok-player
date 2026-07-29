@@ -340,7 +340,7 @@ pub(crate) fn add_bookmark_row() -> gtk::ListBoxRow {
     let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     row_box.set_hexpand(true);
 
-    let icon = gtk::Image::from_icon_name("list-add-symbolic");
+    let icon = gtk::Image::from_icon_name("okp-list-add-symbolic");
     icon.add_css_class("okp-add-bookmark-icon");
     icon.set_pixel_size(16);
     icon.set_valign(gtk::Align::Center);
@@ -371,7 +371,7 @@ pub(crate) fn bookmark_row(
     let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     row_box.set_hexpand(true);
 
-    let icon = gtk::Image::from_icon_name("user-bookmarks-symbolic");
+    let icon = gtk::Image::from_icon_name("okp-user-bookmarks-symbolic");
     icon.add_css_class("okp-bookmark-icon");
     icon.set_pixel_size(15);
     icon.set_valign(gtk::Align::Center);
@@ -391,7 +391,7 @@ pub(crate) fn bookmark_row(
     label_box.append(&title);
     label_box.append(&marker);
 
-    let remove = playlist_action_button("list-remove-symbolic", "Remove bookmark", true);
+    let remove = playlist_action_button("okp-list-remove-symbolic", "Remove bookmark", true);
     remove.connect_clicked(move |_| {
         remove_bookmark_at(&state, &status_toast, time);
     });
@@ -555,7 +555,7 @@ pub(crate) fn add_files_row() -> gtk::ListBoxRow {
     let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     row_box.set_hexpand(true);
 
-    let icon = gtk::Image::from_icon_name("list-add-symbolic");
+    let icon = gtk::Image::from_icon_name("okp-list-add-symbolic");
     icon.add_css_class("okp-add-files-icon");
     icon.set_pixel_size(16);
     icon.set_valign(gtk::Align::Center);
@@ -784,7 +784,7 @@ pub(crate) fn interval_row(index: usize, time: f64) -> gtk::ListBoxRow {
     let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     row_box.set_hexpand(true);
 
-    let icon = gtk::Image::from_icon_name("media-seek-forward-symbolic");
+    let icon = gtk::Image::from_icon_name("okp-media-seek-forward-symbolic");
     icon.add_css_class("okp-interval-icon");
     icon.set_pixel_size(15);
     icon.set_valign(gtk::Align::Center);
@@ -823,7 +823,7 @@ pub(crate) fn detect_chapters_row() -> gtk::ListBoxRow {
     let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     row_box.set_hexpand(true);
 
-    let icon = gtk::Image::from_icon_name("system-search-symbolic");
+    let icon = gtk::Image::from_icon_name("okp-system-search-symbolic");
     icon.add_css_class("okp-detect-icon");
     icon.set_pixel_size(16);
     icon.set_valign(gtk::Align::Center);
@@ -857,7 +857,7 @@ pub(crate) fn detection_status_row(text: &str) -> gtk::ListBoxRow {
     let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     row_box.set_hexpand(true);
 
-    let icon = gtk::Image::from_icon_name("dialog-information-symbolic");
+    let icon = gtk::Image::from_icon_name("okp-dialog-information-symbolic");
     icon.add_css_class("okp-detect-status-icon");
     icon.set_pixel_size(14);
     icon.set_valign(gtk::Align::Center);
@@ -912,7 +912,7 @@ pub(crate) fn chapter_row(
         // placeholder glyph rather than a bare grey rectangle — the row reads as
         // "preview pending" instead of broken.
         thumbnail_box.add_css_class("is-pending");
-        let placeholder = gtk::Image::from_icon_name("image-x-generic-symbolic");
+        let placeholder = gtk::Image::from_icon_name("okp-image-x-generic-symbolic");
         placeholder.add_css_class("okp-chapter-thumb-placeholder");
         placeholder.set_pixel_size(18);
         placeholder.set_hexpand(true);
@@ -1007,7 +1007,7 @@ pub(crate) fn playlist_row(
     } else if is_next {
         lane.append(&up_next_badge("NEXT"));
     } else if is_behind {
-        let watched = gtk::Image::from_icon_name("object-select-symbolic");
+        let watched = gtk::Image::from_icon_name("okp-object-select-symbolic");
         watched.add_css_class("okp-up-next-watched-icon");
         watched.set_pixel_size(13);
         watched.set_hexpand(true);
@@ -1065,7 +1065,7 @@ pub(crate) fn playlist_actions_menu(
     state: Rc<RefCell<PlayerState>>,
 ) -> gtk::MenuButton {
     let menu = gtk::MenuButton::builder()
-        .icon_name("view-more-symbolic")
+        .icon_name("okp-view-more-symbolic")
         .build();
     menu.add_css_class("okp-up-next-actions-menu");
     menu.set_has_frame(false);
@@ -1074,7 +1074,7 @@ pub(crate) fn playlist_actions_menu(
     let content = gtk::Box::new(gtk::Orientation::Vertical, 2);
     content.add_css_class("okp-up-next-actions-popover");
 
-    let move_up = playlist_menu_action("go-up-symbolic", "Move up", index > 0);
+    let move_up = playlist_menu_action("okp-go-up-symbolic", "Move up", index > 0);
     let move_up_state = Rc::clone(&state);
     move_up.connect_clicked(move |_| {
         move_playlist_item(&move_up_state, index, index.saturating_sub(1));
@@ -1084,7 +1084,7 @@ pub(crate) fn playlist_actions_menu(
     let play_next_sensitive =
         current_index.is_some_and(|current| index != current && index != current + 1);
     let play_next = playlist_menu_action(
-        "media-skip-forward-symbolic",
+        "okp-media-skip-forward-symbolic",
         "Play next",
         play_next_sensitive,
     );
@@ -1094,7 +1094,11 @@ pub(crate) fn playlist_actions_menu(
     });
     content.append(&play_next);
 
-    let move_down = playlist_menu_action("go-down-symbolic", "Move down", index + 1 < playlist_len);
+    let move_down = playlist_menu_action(
+        "okp-go-down-symbolic",
+        "Move down",
+        index + 1 < playlist_len,
+    );
     let move_down_state = Rc::clone(&state);
     move_down.connect_clicked(move |_| {
         move_playlist_item(&move_down_state, index, index + 1);
@@ -1102,7 +1106,7 @@ pub(crate) fn playlist_actions_menu(
     content.append(&move_down);
 
     let remove = playlist_menu_action(
-        "list-remove-symbolic",
+        "okp-list-remove-symbolic",
         "Remove from queue",
         !is_current && playlist_len > 1,
     );
@@ -1112,8 +1116,11 @@ pub(crate) fn playlist_actions_menu(
     });
     content.append(&remove);
 
-    let clear_queue =
-        playlist_menu_action("edit-clear-all-symbolic", "Clear queue", playlist_len > 1);
+    let clear_queue = playlist_menu_action(
+        "okp-edit-clear-all-symbolic",
+        "Clear queue",
+        playlist_len > 1,
+    );
     let clear_queue_state = Rc::clone(&state);
     clear_queue.connect_clicked(move |_| {
         clear_playlist_queue(&clear_queue_state);
@@ -1142,8 +1149,8 @@ pub(crate) fn playlist_menu_action(icon_name: &str, label: &str, sensitive: bool
 /// queue reads its source at a glance instead of only from the file name.
 pub(crate) fn playlist_row_icon(item: &PlaylistItem) -> gtk::Image {
     let icon_name = match item {
-        PlaylistItem::Local(_) => "video-x-generic-symbolic",
-        PlaylistItem::Url(_) => "network-server-symbolic",
+        PlaylistItem::Local(_) => "okp-video-x-generic-symbolic",
+        PlaylistItem::Url(_) => "okp-network-server-symbolic",
     };
     let icon = gtk::Image::from_icon_name(icon_name);
     icon.add_css_class("okp-up-next-source-icon");
@@ -1159,7 +1166,7 @@ pub(crate) fn playlist_drag_handle() -> gtk::Box {
     handle.set_valign(gtk::Align::Center);
     handle.set_can_target(true);
 
-    let icon = gtk::Image::from_icon_name("list-drag-handle-symbolic");
+    let icon = gtk::Image::from_icon_name("okp-list-drag-handle-symbolic");
     icon.add_css_class("okp-up-next-drag-handle-icon");
     handle.append(&icon);
 
